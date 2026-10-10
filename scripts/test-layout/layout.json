@@ -1985,15 +1985,13 @@
     "link-supervisor.test.ts": "clients",
     "link-status-projection.test.ts": "clients",
     "link-admission-wait.test.ts": "clients",
-    "link-fingerprint.test.ts": "clients",
-    "cli-link.test.ts": "cli",
-    "link-management-routes.test.ts": "server",
-    "link-compensation.test.ts": "clients",
-    "web-search-run-turn-loop.test.ts": "web-search",
-    "responses-run-turn-web-search.test.ts": "responses",
-    "server-combo-cooldown-recording.test.ts": "server",
-    "injection-routing-drift.test.ts": "codex-integration", "injection-routing-healer.test.ts": "codex-integration",
-    "injection-routing-heal-apply.test.ts": "codex-integration", "cli-start-routing-heal-wiring.test.ts": "cli",
-    "cli-status-codex-routing-drift.test.ts": "cli"
+    "link-fingerprint.test.ts": "clients", "cli-link.test.ts": "cli", "link-management-routes.test.ts": "server",
+    "link-compensation.test.ts": "clients", "web-search-run-turn-loop.test.ts": "web-search", "responses-run-turn-web-search.test.ts": "responses",
+    "server-combo-cooldown-recording.test.ts": "server", "injection-routing-drift.test.ts": "codex-integration", "injection-routing-healer.test.ts": "codex-integration",
+    "injection-routing-heal-apply.test.ts": "codex-integration", "cli-start-routing-heal-wiring.test.ts": "cli", "cli-status-codex-routing-drift.test.ts": "cli",
+    "advisor-settings.test.ts": "advisor", "advisor-core-boundary.test.ts": "advisor", "advisor-continuation-limit.test.ts": "advisor",
+    "advisor-authority-transport.test.ts": "advisor", "advisor-context.test.ts": "advisor", "advisor-state.test.ts": "advisor",
+    "advisor-internal-authority.test.ts": "advisor", "advisor-guard.test.ts": "advisor", "advisor-consult.test.ts": "advisor",
+    "advisor-plan.test.ts": "advisor", "advisor-responses-wiring.test.ts": "advisor", "advisor-routes.test.ts": "server"
   }
 }

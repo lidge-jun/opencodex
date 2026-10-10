@@ -28,6 +28,7 @@ Persisted config, the Codex home it writes into, and the model catalog it publis
 | [`codex-home.md`](codex-home.md) | CODEX_HOME resolution, the files opencodex manages there, and Codex-home diagnostics. |
 | [`catalog.md`](catalog.md) | Shared Codex catalog assembly, account namespaces, pool rotation, and effort ladders. |
 | [`subagents.md`](subagents.md) | Multi-agent surface mode and subagent roster ordering. |
+| [`advisor.md`](advisor.md) | The OpenCodex-owned expert consultation sidecar: synthetic advisor tool, preflight policy, loopback consultation through the routing authority, and the optional-subsystem seam. |
 | [`config-proxy.md`](config-proxy.md) | Global proxy activation, start flags, and credential-safe CLI output. |
 
 ### Tier 3 — Data planes and transports
@@ -126,6 +127,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `scripts/generate-ocx-skill-surface.ts` | [`cli-management.md`](cli-management.md) |
 | `skills/ocx/` | [`cli-management.md`](cli-management.md) |
 | `src/adapters/` | [`runtime.md`](runtime.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`data-planes/inbound-compat.md`](data-planes/inbound-compat.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/cursor.md`](providers/cursor.md)<br>[`providers/chat-compat.md`](providers/chat-compat.md)<br>[`adapters/registry.md`](adapters/registry.md) |
+| `src/advisor/` | [`advisor.md`](advisor.md) |
 | `src/bridge.ts` | [`transports/responses.md`](transports/responses.md) |
 | `src/bridge/` | [`transports/responses.md`](transports/responses.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md) |
 | `src/chat/` | [`runtime.md`](runtime.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`data-planes/inbound-compat.md`](data-planes/inbound-compat.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/chat-compat.md`](providers/chat-compat.md) |
@@ -150,6 +152,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/integrations/` | [`clients/integrations.md`](clients/integrations.md) |
 | `src/lab/` | [`runtime.md`](runtime.md)<br>[`adapters/compatibility-lab.md`](adapters/compatibility-lab.md) |
 | `src/lib/` | [`overview.md`](overview.md)<br>[`runtime.md`](runtime.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`transports/responses-failover.md`](transports/responses-failover.md)<br>[`transports/responses-spend.md`](transports/responses-spend.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`dashboard-and-usage.md`](dashboard-and-usage.md)<br>[`clients/integrations.md`](clients/integrations.md)<br>[`ops/service-and-sidecars.md`](ops/service-and-sidecars.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
+| `src/lib/advisor-activation.ts` | [`advisor.md`](advisor.md) |
 | `src/lib/gui-pair-intent.ts` | [`remote-link.md`](remote-link.md) |
 | `src/lib/windows-owner-acl.ts` | [`remote-link.md`](remote-link.md) |
 | `src/link/` | [`remote-link.md`](remote-link.md) |
@@ -171,6 +174,8 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/index.ts` | [`adapters/compatibility-lab.md`](adapters/compatibility-lab.md) |
 | `src/server/management/anthropic-pool-settings.ts` | [`providers/anthropic-account-pool.md`](providers/anthropic-account-pool.md) |
 | `src/server/management/companion-routes.ts` | [`desktop-shell.md`](desktop-shell.md) |
+| `src/server/responses/advisor-plan-slot.ts` | [`advisor.md`](advisor.md) |
+| `src/server/responses/advisor-slot.ts` | [`advisor.md`](advisor.md) |
 | `src/service-manager-probe.ts` | [`ops/service-and-sidecars.md`](ops/service-and-sidecars.md) |
 | `src/service.ts` | [`runtime.md`](runtime.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `src/service/` | [`runtime.md`](runtime.md) |

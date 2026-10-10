@@ -97,6 +97,7 @@ Usage:
   ocx grok <sub>              Grok Build model selection and apply
   ocx system <sub>            Runtime settings, startup, sync, OpenCodex updates, and Codex CLI inspection
   ocx config [sub]            Validated configuration show/get/set/import/export
+  ocx advisor <status|on|off|set|consent>  Advisor sidecar settings and context-sharing consent
   ocx companion <show|set|reset>  Menu-bar and widget companion usage settings
   ocx lab <sub>               Inspect Lab evidence and control local automation
   ocx chatgpt <sub>          Experimental app-server shim: launch|restore|status (macOS)

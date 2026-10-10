@@ -27,6 +27,10 @@ function response(): Response {
 }
 
 export async function handleCompanionRoutes(ctx: ManagementContext): Promise<Response | null> {
+  if (ctx.url.pathname === "/api/advisor/settings") {
+    const { handleAdvisorRoutes } = await import("./advisor-routes");
+    return handleAdvisorRoutes(ctx);
+  }
   if (ctx.url.pathname === "/api/companion/open-in-browser" && ctx.req.method === "POST") {
     let body: unknown;
     try {

@@ -7,6 +7,9 @@ import type { ResponsesEffects } from "./response-effects";
 import type { ResponsesSendBudget } from "./request-send-budget";
 import { formatErrorResponse } from "../../bridge";
 import { planWebSearch, buildWebSearchTool, runWithWebSearch } from "../../web-search";
+import { createRegisteredAdvisorPlan } from "./advisor-plan-slot";
+import { ADVISOR_TOOL_NAME } from "./advisor-slot";
+import { buildToolBridgeMaps } from "./collaboration";
 import {
   planImageBridge,
   planVideoBridge,
@@ -60,6 +63,7 @@ export async function executeResponsesSidecars(
     | "inboundWire"
     | "selectedForwardHeaders"
     | "translatorBudget"
+    | "toolBridgeMaps"
     | "rememberKiroDeliveredFinalAnswer"
     | "responseStateOptions"
   >,
@@ -167,6 +171,25 @@ export async function executeResponsesSidecars(
         "tool result requires a non-empty string call_id",
       );
     }
+  }
+
+  // Advisor sidecar plan (optional subsystem; null when disabled, unconfigured, or when this
+  // request IS an advisor loopback consultation — the recursion fence). The plan carries
+  // request-scoped state only; preflight keeps fixed policy separate from user-role advice
+  // before the worker is dispatched. Registration seam: the core path sees only
+  // `parsed._advisorGuard`; only an activated factory can load the optional implementation.
+  const advisorPlan = options.advisorInternal === true
+    ? null
+    : await createRegisteredAdvisorPlan({
+      config,
+      workerIdentity: `${route.modelId} (provider ${route.providerName})`,
+      workerModelId: route.modelId,
+      abortSignal: options.abortSignal,
+    });
+  // Preflight only on real worker turns: a routed-compaction turn is a summarization request,
+  // and injecting advice into it would pollute the summary Codex replaces its history with.
+  if (advisorPlan && !routedCompaction) {
+    await advisorPlan.preflightInject(parsed);
   }
 
   // Image / web-search sidecars: plan once, then dispatch with runTurn-aware priority.
@@ -634,6 +657,33 @@ export async function executeResponsesSidecars(
     }
     releaseSearchProbeLease();
     return wsResponse;
+  }
+
+  // Advisor synthetic tool + stream guard: attach ONLY when this function is about to hand the
+  // request back to the normal translated exchange (no sidecar loop claimed the turn, not a
+  // run-turn adapter, not compaction). The web-search/image loops own their own event handling;
+  // run-turn adapters execute their own loop; both would leak the synthetic tool call they
+  // cannot intercept. Preflight (above) still applies to those paths — only the tool does not.
+  if (advisorPlan && !routedCompaction && !transportState.adapter.runTurn && !wsPlan && !imgPlan && !vidPlan) {
+    // A client-declared tool named "advisor" would collide with the synthetic injection (one
+    // wire name, two schemas); the synthetic runtime owns the name for this turn.
+    parsed.context.tools = [
+      ...(parsed.context.tools ?? []).filter(t => !t.advisor && t.name !== ADVISOR_TOOL_NAME),
+      advisorPlan.tool,
+    ];
+    // The advisor tool joined AFTER prepare computed the bridge maps; recompute so the tool is
+    // declared (undeclared-tool guard, tool_choice mapping, schema repair) on this turn.
+    //
+    // Rebuild WITHOUT the budget: prepare already charged every tool in the catalog, and
+    // buildToolBridgeMaps charges each name it registers, so re-passing the budget would bill the
+    // whole catalog a second time and can trip `translation_buffer_limit` for a large MCP catalog.
+    // Charge only the one entry that is genuinely new — the synthetic advisor tool is a bare
+    // function tool, so it retains its wire name and its bare name (collaboration.ts:187, :233).
+    requestState.toolBridgeMaps = buildToolBridgeMaps(parsed);
+    translatorBudget.chargeRetained(new TextEncoder().encode(ADVISOR_TOOL_NAME).byteLength * 2, {
+      kind: "retained_collectors",
+    });
+    advisorPlan.attachGuard(parsed);
   }
 
   return undefined;

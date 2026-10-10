@@ -62,6 +62,7 @@ import {
 } from "../lib/app-owned-memory-stores";
 import { acquireServerBackgroundLifecycle } from "./background-lifecycle";
 import { startPackageRefresh, stopPackageRefresh } from "../update/refresh-scheduler";
+import { activateAdvisor } from "../lib/advisor-activation";
 import { activateLab, labActivationRequired } from "../lib/lab-activation";
 import { runOpenAiTierStartupMigration } from "../providers/openai-tier-startup";
 import { runAlibabaRegionStartupMigration } from "../providers/alibaba-region-startup";
@@ -864,6 +865,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
   // startServer returns, in the same turn as Bun.serve, so a policy route can never be
   // evaluated before its evidence provider is registered. That ordering is load-bearing:
   // the subagent-fallback chain routes synchronously and has nowhere to await.
+  activateAdvisor(config);
   const labConfigDir = getConfigDir();
   if (labActivationRequired(config, labConfigDir)) {
     activateLab(config, labConfigDir);

@@ -28,7 +28,7 @@ These answer in the CLI head and never reach the proxy, so they work with nothin
 | [lifecycle](01_surface_lifecycle.md) | 12 |
 | [providers-models](01_surface_providers-models.md) | 47 |
 | [accounts](01_surface_accounts.md) | 40 |
-| [agents-routing](01_surface_agents-routing.md) | 50 |
+| [agents-routing](01_surface_agents-routing.md) | 51 |
 | [integrations](01_surface_integrations.md) | 41 |
 | [observe-system](01_surface_observe-system.md) | 92 |
 | [access-remote](01_surface_access-remote.md) | 28 |
@@ -618,6 +618,10 @@ Original invocation order. These headings preserve links to the previous single-
 ### `ocx message send`
 
 [State-changing task](01_surface_agents-routing.md#ocx-message-send)
+
+### `ocx advisor`
+
+[State-changing task](01_surface_agents-routing.md#ocx-advisor)
 
 ### `ocx agent status`
 
@@ -1373,6 +1377,6 @@ Original invocation order. These headings preserve links to the previous single-
 
 ## Counts
 
-- declared capabilities: 331
-- of those, state-changing: 200
+- declared capabilities: 332
+- of those, state-changing: 201
 - head-resolved invocations: 2
