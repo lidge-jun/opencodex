@@ -140,4 +140,56 @@ describe("ocx account grok-reset-coupons", () => {
     expect(calls[0]!.path).toBe("/api/grok/reset-coupons?accountId=__main__");
     expect(out.lines.join("\n")).toContain("tok-1");
   });
+  for (const [status, code, carriesId] of [
+    [500, "attempt_mark_failed", false],
+    [409, "operation_token_mismatch", true],
+    [503, "ledger_unavailable", true],
+  ] as const) {
+    test(`${code} keeps the client-minted operation id without another POST`, async () => {
+      const calls: Captured[] = [];
+      const out = capture();
+      try {
+        expect(await handleAccountAuthCommand("grok-reset-coupons", ["main", "--consume", "--yes"], deps(c =>
+          new Response(JSON.stringify({ ...(carriesId ? { operationId: (c.body as { operationId: string }).operationId } : {}),
+            error: { code } }), { status }), calls))).toBeGreaterThan(0);
+      } finally { out.restore(); }
+      expect(calls).toHaveLength(1);
+      expect(out.errors.join("\n")).toContain(`--operation-id ${(calls[0].body as { operationId: string }).operationId}`);
+    });
+  }
+
+  test("a ledger refusal without an operation id stays a plain error", async () => {
+    const calls: Captured[] = [];
+    const out = capture();
+    try {
+      expect(await handleAccountAuthCommand("grok-reset-coupons", ["main", "--consume", "--yes"], deps(() =>
+        new Response(JSON.stringify({ error: { code: "ledger_unavailable" } }), { status: 503 }), calls))).toBeGreaterThan(0);
+    } finally { out.restore(); }
+    expect(out.errors.join("\n")).not.toContain("--operation-id");
+  });
+
+  test("a replayed refusal is reported as a failure, not a redemption", async () => {
+    const calls: Captured[] = [];
+    const out = capture();
+    try {
+      expect(await handleAccountAuthCommand("grok-reset-coupons", ["main", "--consume", "--yes"],
+        deps(() => ({ code: "fetch_resets_failed", replayed: true }), calls))).toBeGreaterThan(0);
+    } finally { out.restore(); }
+    expect(out.errors.join("\n")).toContain("not redeemed");
+    expect(out.errors.join("\n")).not.toContain("--operation-id");
+  });
+
+  for (const body of [{}, { code: "" }, { code: 7 }, { code: "attempt_unresolved" }]) {
+    test(`an unconfirmed 200 ${JSON.stringify(body)} keeps the recovery id`, async () => {
+      const calls: Captured[] = [];
+      const out = capture();
+      try {
+        expect(await handleAccountAuthCommand("grok-reset-coupons", ["main", "--consume", "--yes"],
+          deps(() => body, calls))).toBeGreaterThan(0);
+      } finally { out.restore(); }
+      expect(calls).toHaveLength(1);
+      expect(out.errors.join("\n")).toContain(`--operation-id ${(calls[0].body as { operationId: string }).operationId}`);
+    });
+  }
 });
+

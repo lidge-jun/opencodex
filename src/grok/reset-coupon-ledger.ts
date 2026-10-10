@@ -25,6 +25,8 @@ export interface GrokResetCouponOperationRecord {
   attemptedAt?: number;
   code?: string;
   settledAt?: number;
+  /** Durable status of a replayed record, so callers apply the terminal-replay predicate. */
+  status?: "attempted" | "settled" | "failed";
 }
 
 interface GrokResetCouponOperationState {
@@ -77,7 +79,14 @@ function readGrokCouponLedger(filePath: string): GrokResetCouponLedger {
           op.status = "attempted";
           delete op.code;
         }
+        // A v1 attempted record never carried a confirmed outcome.
+        if (op.status === "attempted") delete op.code;
       }
+    }
+    // Only a settled or failed record carries an outcome. An open or attempted
+    // record with a code would replay an unconfirmed result as definitive.
+    for (const op of Object.values(parsed.operations)) {
+      if ((op.status === "open" || op.status === "attempted") && op.code !== undefined) throw new Error();
     }
     return { version: 2, operations: parsed.operations };
   } catch {
@@ -163,6 +172,7 @@ export function openGrokResetCouponOperation(
           attemptedAt: existing.status === "attempted" ? existing.updatedAt : undefined,
           code: existing.code,
           settledAt: existing.updatedAt,
+          status: existing.status,
         };
       }
       return {
@@ -234,15 +244,28 @@ type GrokResetCouponPreflightResult =
 
 const UNRESOLVED_COUPON_CODES = new Set(["redeem_failed", "attempt_unresolved", "attempt_in_progress", "attempt_reconcile_failed", "operation_state_changed"]);
 
+/**
+ * Whether a durable record is a definitive outcome this account and token may replay:
+ * settled or failed, same account, same token when both are known, and a code that
+ * does not itself mean "unconfirmed".
+ */
+export function isTerminalGrokCouponReplay(
+  record: { status?: string; accountId?: string; tokenId?: string; code?: string } | undefined,
+  accountId: string, tokenId: string | undefined,
+): boolean {
+  if (!record || record.accountId !== accountId) return false;
+  if (tokenId !== undefined && record.tokenId !== undefined && record.tokenId !== tokenId) return false;
+  return (record.status === "settled" || record.status === "failed")
+    && !!record.code && !UNRESOLVED_COUPON_CODES.has(record.code);
+}
+
 /** The durable definitive outcome for this account and token, if the operation has one. */
 function terminalReplay(
   ledger: GrokResetCouponLedger, operationId: string, accountId: string, tokenId: string | undefined,
 ): Extract<GrokResetCouponPreflightResult, { kind: "replay" }> | null {
   const existing = ledger.operations[operationId];
-  if (!existing || existing.accountId !== accountId) return null;
-  if (tokenId !== undefined && existing.tokenId !== undefined && existing.tokenId !== tokenId) return null;
-  if ((existing.status !== "settled" && existing.status !== "failed") || !existing.code || UNRESOLVED_COUPON_CODES.has(existing.code)) return null;
-  return { kind: "replay", code: existing.code, tokenId: existing.tokenId, settledAt: existing.updatedAt };
+  if (!existing || !isTerminalGrokCouponReplay(existing, accountId, tokenId)) return null;
+  return { kind: "replay", code: existing.code!, tokenId: existing.tokenId, settledAt: existing.updatedAt };
 }
 
 /** Settle a refusal or inspect its winner without releasing the mutation transaction. */
@@ -256,6 +279,43 @@ export function settleGrokResetCouponPreflightRefusal(
     const ledger = readGrokCouponLedger(filePath);
     if (recordSettlement(ledger, filePath, settlement, now)) return { kind: "recorded" };
     return terminalReplay(ledger, settlement.operationId, settlement.accountId, settlement.tokenId) ?? { kind: "changed" };
+  });
+}
+
+export type GrokResetCouponPreOpenRefusalResult =
+  | GrokResetCouponPreflightResult
+  | { kind: "identity-mismatch" | "capacity" };
+
+/**
+ * Refuse a request that never opened its supplied operationId. Under the mutation lock
+ * an absent id is reserved as a failed record, so a later open of the same id replays
+ * the refusal and can never be claimed (within the 30-day retention window). An id
+ * that already exists is never overwritten: a definitive outcome replays, anything
+ * else reports "changed" so the caller keeps its hold.
+ */
+export function refuseGrokResetCouponBeforeOpen(
+  refusal: { operationId: string; accountId: string; code: string },
+  now = Date.now(),
+  journalPath?: string,
+): GrokResetCouponPreOpenRefusalResult {
+  return withConfigMutationLockSync(() => {
+    const filePath = journalPath ?? grokCouponJournalPath();
+    const ledger = readGrokCouponLedger(filePath);
+    const retentionCutoff = now - 30 * 24 * 60 * 60_000;
+    ledger.operations = Object.fromEntries(
+      Object.entries(ledger.operations).filter(([, op]) => op.updatedAt > retentionCutoff),
+    );
+    const existing = ledger.operations[refusal.operationId];
+    if (existing) {
+      if (existing.accountId !== refusal.accountId) return { kind: "identity-mismatch" };
+      return terminalReplay(ledger, refusal.operationId, refusal.accountId, undefined) ?? { kind: "changed" };
+    }
+    if (Object.keys(ledger.operations).length >= MAX_GROK_RESET_COUPON_OPERATION_IDS) return { kind: "capacity" };
+    ledger.operations[refusal.operationId] = {
+      accountId: refusal.accountId, status: "failed", code: refusal.code, createdAt: now, updatedAt: now,
+    };
+    writeGrokCouponLedger(filePath, ledger, now);
+    return { kind: "recorded" };
   });
 }
 

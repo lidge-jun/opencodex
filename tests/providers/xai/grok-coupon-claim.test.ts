@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,7 +10,7 @@ import * as oauthStore from "../../../src/oauth/store";
 import { handleAccountAuthCommand } from "../../../src/cli/account-auth";
 import * as coupons from "../../../src/grok/reset-coupons";
 import * as ledger from "../../../src/grok/reset-coupon-ledger";
-import { ConfigMutationLockError, readConfigGenerationInCurrentMutationTransaction } from "../../../src/config/mutation-lock";
+import { ConfigMutationLockError, readConfigGenerationInCurrentMutationTransaction, withConfigMutationLockSync } from "../../../src/config/mutation-lock";
 import { handleGrokCouponRoutes } from "../../../src/server/management/grok-coupon-routes";
 import type { ManagementContext } from "../../../src/server/management/context";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
@@ -54,29 +55,39 @@ function busySettlement() {
 }
 
 for (const tokenId of [null, 42, {}, [], true, "", "   "]) {
-  test(`invalid coupon token ${JSON.stringify(tokenId)} refuses before opening the ledger`, async () => {
+  test(`invalid coupon token ${JSON.stringify(tokenId)} with an operationId keeps the caller on that operation`, async () => {
     const redeem = confirmedRedemption();
     const ctx = request();
     const response = await handleGrokCouponRoutes({ ...ctx, req: new Request(ctx.url, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ...identity(), tokenId }),
     }) });
-    expect(response!.status).toBe(400);
-    expect((await response!.json()).error.code).toBe("invalid_token_id");
+    expect(response!.status).toBe(409);
+    expect(await response!.json()).toMatchObject({ operationId: OP, error: { code: "attempt_in_progress" } });
     expect(fs.existsSync(ledger.grokCouponJournalPath())).toBe(false);
     expect(oauth.getValidAccessSnapshotForAccount).not.toHaveBeenCalled();
     expect((await handleGrokCouponRoutes(request()))!.status).toBe(200);
     expect(redeem).toHaveBeenCalledTimes(1);
+  });
+  test(`invalid coupon token ${JSON.stringify(tokenId)} without an operationId refuses definitively`, async () => {
+    confirmedRedemption();
+    const ctx = request();
+    const response = await handleGrokCouponRoutes({ ...ctx, req: new Request(ctx.url, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ accountId: "fixture-account", tokenId }),
+    }) });
+    expect(response!.status).toBe(400);
+    expect((await response!.json()).error.code).toBe("invalid_token_id");
+    expect(fs.existsSync(ledger.grokCouponJournalPath())).toBe(false);
   });
 }
 
 test("an open-operation retry without a token reuses its journaled coupon", async () => {
   const redeem = confirmedRedemption();
   const remaining = spyOn(coupons, "getGrokRemainingResets")
-    .mockRejectedValueOnce(new Error("fixture list failure"))
     .mockResolvedValue({ tokens: [{ ...TOKEN, tokenId: "fixture-other-coupon" }, TOKEN] });
   spies.push(remaining);
-  expect((await handleGrokCouponRoutes(request()))!.status).toBe(502);
+  expect(ledger.openGrokResetCouponOperation(identity())).toMatchObject({ kind: "execute" });
   const response = await handleGrokCouponRoutes(request(true));
   expect(response!.status).toBe(200);
   expect(redeem).toHaveBeenCalledTimes(1);
@@ -155,8 +166,8 @@ for (const failure of ["file", "directory"] as const) {
     });
     spies.push(remaining);
     const response = await handleGrokCouponRoutes(request());
-    expect(response!.status).toBe(500);
-    expect((await response!.json()).error.code).toBe("attempt_mark_failed");
+    expect(response!.status).toBe(409);
+    expect(await response!.json()).toMatchObject({ operationId: OP, error: { code: "attempt_in_progress" } });
     expect(redeem).not.toHaveBeenCalled();
   });
 }
@@ -543,7 +554,6 @@ for (const [status, code, accountId, tokenId, replay] of [
   ["settled", "redeemed", "fixture-account", TOKEN.tokenId, true],
   ["failed", "coupon_unavailable", "another-account", TOKEN.tokenId, false],
   ["failed", "coupon_unavailable", "fixture-account", "another-token", false],
-  ["attempted", "redeemed", "fixture-account", TOKEN.tokenId, false],
   ["failed", undefined, "fixture-account", TOKEN.tokenId, false],
   ...["redeem_failed", "attempt_unresolved", "attempt_in_progress", "attempt_reconcile_failed", "operation_state_changed"]
     .map(code => ["failed", code, "fixture-account", TOKEN.tokenId, false] as const),
@@ -641,3 +651,256 @@ test("a missing or still-open operation has no terminal replay", () => {
   expect(ledger.readGrokResetCouponTerminalReplay(OP, "fixture-account", TOKEN.tokenId)).toBeNull();
   expect(readFileSync(ledger.grokCouponJournalPath(), "utf8")).toBe(before);
 });
+
+// ---- #6897: post-open uncertainty contract -------------------------------------------------
+
+/** Hold the shared config mutation transaction from a second SQLite connection (real contention). */
+function holdMutationLock(): () => void {
+  withConfigMutationLockSync(() => {});
+  const db = new Database(join(home, "config-mutation.sqlite"));
+  db.exec("PRAGMA busy_timeout=0; BEGIN IMMEDIATE");
+  let held = true;
+  return () => { if (held) { held = false; db.exec("ROLLBACK"); db.close(); } };
+}
+function journal(): Record<string, { status: string; code?: string }> {
+  return JSON.parse(readFileSync(ledger.grokCouponJournalPath(), "utf8")).operations;
+}
+function blockedInspection(result: { tokens: typeof TOKEN[] }) {
+  let release!: () => void;
+  let entered!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const remaining = spyOn(coupons, "getGrokRemainingResets").mockImplementation(async () => {
+    entered();
+    await gate;
+    return result;
+  });
+  spies.push(remaining);
+  return { started, release };
+}
+
+test("a contended claim keeps the caller on its operation without dispatching", async () => {
+  const auth = spyOn(oauth, "getValidAccessSnapshotForAccount").mockResolvedValue({ accessToken: "fixture-access-token" } as never);
+  const redeem = spyOn(coupons, "redeemGrokResetCoupon").mockResolvedValue({ success: true, status: 0 });
+  spies.push(auth, redeem);
+  const inspection = blockedInspection({ tokens: [TOKEN] });
+  const pending = handleGrokCouponRoutes(request());
+  await inspection.started;
+  const unlock = holdMutationLock();
+  try {
+    inspection.release();
+    const response = (await pending)!;
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ operationId: OP, error: { code: "attempt_in_progress" } });
+    expect(redeem).not.toHaveBeenCalled();
+  } finally { unlock(); }
+  expect(journal()[OP]!.status).toBe("open");
+});
+
+for (const omitToken of [false, true]) {
+  test(`a contended late refusal keeps the caller on its operation (omit token ${omitToken})`, async () => {
+    const auth = spyOn(oauth, "getValidAccessSnapshotForAccount").mockResolvedValue({ accessToken: "fixture-access-token" } as never);
+    const redeem = spyOn(coupons, "redeemGrokResetCoupon").mockResolvedValue({ success: true, status: 0 });
+    spies.push(auth, redeem);
+    const inspection = blockedInspection({ tokens: [] });
+    const pending = handleGrokCouponRoutes(request(omitToken));
+    await inspection.started;
+    const unlock = holdMutationLock();
+    try {
+      inspection.release();
+      const response = (await pending)!;
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ operationId: OP, error: { code: "attempt_in_progress" } });
+    } finally { unlock(); }
+    expect(redeem).not.toHaveBeenCalled();
+    expect(journal()[OP]!.status).toBe("open");
+  });
+}
+
+test("a list failure closes the still-open operation before reporting it", async () => {
+  const auth = spyOn(oauth, "getValidAccessSnapshotForAccount").mockResolvedValue({ accessToken: "fixture-access-token" } as never);
+  const remaining = spyOn(coupons, "getGrokRemainingResets").mockRejectedValue(new Error("fixture list failure"));
+  const redeem = spyOn(coupons, "redeemGrokResetCoupon").mockResolvedValue({ success: true, status: 0 });
+  spies.push(auth, remaining, redeem);
+  const first = (await handleGrokCouponRoutes(request()))!;
+  expect(first.status).toBe(502);
+  expect((await first.json()).error.code).toBe("fetch_resets_failed");
+  expect(journal()[OP]).toMatchObject({ status: "failed", code: "fetch_resets_failed" });
+  remaining.mockResolvedValue({ tokens: [TOKEN] });
+  const retry = (await handleGrokCouponRoutes(request()))!;
+  expect(retry.status).toBe(200);
+  expect(await retry.json()).toMatchObject({ code: "fetch_resets_failed", replayed: true });
+  expect(redeem).not.toHaveBeenCalled();
+});
+
+for (const winner of ["attempted", "settled"] as const) {
+  test(`a list failure after a competing ${winner} claim never reports a definitive refusal`, async () => {
+    const auth = spyOn(oauth, "getValidAccessSnapshotForAccount").mockResolvedValue({ accessToken: "fixture-access-token" } as never);
+    const redeem = spyOn(coupons, "redeemGrokResetCoupon").mockResolvedValue({ success: true, status: 0 });
+    const remaining = spyOn(coupons, "getGrokRemainingResets").mockImplementation(async () => {
+      expect(ledger.markGrokResetCouponAttempt(OP, TOKEN.tokenId)).toBe(true);
+      if (winner === "settled") expect(ledger.recordGrokResetCouponSettlement({
+        ...identity(), code: "redeemed", status: "success", expectedStatus: "attempted",
+      })).toBe(true);
+      throw new Error("fixture list failure");
+    });
+    spies.push(auth, redeem, remaining);
+    const response = (await handleGrokCouponRoutes(request()))!;
+    if (winner === "attempted") {
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ operationId: OP, error: { code: "operation_state_changed" } });
+    } else {
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ code: "redeemed", replayed: true });
+    }
+    expect(redeem).not.toHaveBeenCalled();
+  });
+}
+
+test("a contended list-failure closure keeps the caller on its operation", async () => {
+  const auth = spyOn(oauth, "getValidAccessSnapshotForAccount").mockResolvedValue({ accessToken: "fixture-access-token" } as never);
+  const redeem = spyOn(coupons, "redeemGrokResetCoupon").mockResolvedValue({ success: true, status: 0 });
+  let unlock: (() => void) | undefined;
+  const remaining = spyOn(coupons, "getGrokRemainingResets").mockImplementation(async () => {
+    unlock = holdMutationLock();
+    throw new Error("fixture list failure");
+  });
+  spies.push(auth, redeem, remaining);
+  try {
+    const response = (await handleGrokCouponRoutes(request()))!;
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ operationId: OP, error: { code: "attempt_in_progress" } });
+  } finally { unlock?.(); }
+  expect(journal()[OP]!.status).toBe("open");
+  expect(redeem).not.toHaveBeenCalled();
+});
+
+for (const code of ["redeem_failed", "attempt_unresolved", "operation_state_changed"]) {
+  test(`an initial replay never reports the unconfirmed code ${code} as terminal`, async () => {
+    writeFileSync(ledger.grokCouponJournalPath(), JSON.stringify({ version: 2, operations: { [OP]: {
+      accountId: "fixture-account", tokenId: TOKEN.tokenId, status: "failed", code, createdAt: Date.now(), updatedAt: Date.now(),
+    } } }));
+    const redeem = confirmedRedemption();
+    const response = (await handleGrokCouponRoutes(request()))!;
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ operationId: OP, error: { code: "attempt_unresolved" } });
+    expect(redeem).not.toHaveBeenCalled();
+  });
+}
+
+for (const status of ["open", "attempted"] as const) {
+  test(`a ${status} record that carries a code is rejected as malformed with its bytes preserved`, async () => {
+    const before = JSON.stringify({ version: 2, operations: { [OP]: {
+      accountId: "fixture-account", tokenId: TOKEN.tokenId, status, code: "redeemed", createdAt: Date.now(), updatedAt: Date.now(),
+    } } });
+    writeFileSync(ledger.grokCouponJournalPath(), before);
+    const redeem = confirmedRedemption();
+    expect(() => ledger.openGrokResetCouponOperation(identity())).toThrow();
+    const response = (await handleGrokCouponRoutes(request()))!;
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ operationId: OP, error: { code: "ledger_unavailable" } });
+    expect(readFileSync(ledger.grokCouponJournalPath(), "utf8")).toBe(before);
+    expect(redeem).not.toHaveBeenCalled();
+  });
+}
+
+test("a version-one attempted record drops its unconfirmed code during migration", () => {
+  writeFileSync(ledger.grokCouponJournalPath(), JSON.stringify({ version: 1, operations: { [OP]: {
+    accountId: "fixture-account", tokenId: TOKEN.tokenId, status: "attempted", code: "redeemed", createdAt: Date.now(), updatedAt: Date.now(),
+  } } }));
+  const record = ledger.openGrokResetCouponOperation(identity());
+  expect(record).toMatchObject({ kind: "replay", status: "attempted" });
+  expect(record.code).toBeUndefined();
+});
+
+function failingAuth() {
+  const auth = spyOn(oauth, "getValidAccessSnapshotForAccount").mockRejectedValue(new Error("fixture auth failure"));
+  const redeem = spyOn(coupons, "redeemGrokResetCoupon").mockResolvedValue({ success: true, status: 0 });
+  const remaining = spyOn(coupons, "getGrokRemainingResets").mockResolvedValue({ tokens: [TOKEN] });
+  spies.push(auth, redeem, remaining);
+  return { auth, redeem };
+}
+
+test("an auth refusal while the same operation is attempted keeps the caller on it", async () => {
+  const before = JSON.stringify({ version: 2, operations: { [OP]: {
+    accountId: "fixture-account", tokenId: TOKEN.tokenId, status: "attempted", createdAt: Date.now(), updatedAt: Date.now(),
+  } } });
+  writeFileSync(ledger.grokCouponJournalPath(), before);
+  failingAuth();
+  const response = (await handleGrokCouponRoutes(request()))!;
+  expect(response.status).toBe(409);
+  expect(await response.json()).toMatchObject({ operationId: OP, error: { code: "attempt_in_progress" } });
+  expect(readFileSync(ledger.grokCouponJournalPath(), "utf8")).toBe(before);
+});
+
+test("an auth refusal reserves an unused operationId so a later open can never claim it", async () => {
+  const { auth, redeem } = failingAuth();
+  const refused = (await handleGrokCouponRoutes(request()))!;
+  expect(refused.status).toBe(401);
+  expect((await refused.json()).error.code).toBe("auth_failed");
+  expect(journal()[OP]).toMatchObject({ status: "failed", code: "auth_failed" });
+  auth.mockResolvedValue({ accessToken: "fixture-access-token" } as never);
+  const retry = (await handleGrokCouponRoutes(request()))!;
+  expect(retry.status).toBe(200);
+  expect(await retry.json()).toMatchObject({ code: "auth_failed", replayed: true });
+  expect(ledger.markGrokResetCouponAttempt(OP, TOKEN.tokenId)).toBe(false);
+  expect(redeem).not.toHaveBeenCalled();
+});
+
+test("an auth refusal for an operationId owned by another account stays definitive", async () => {
+  writeFileSync(ledger.grokCouponJournalPath(), JSON.stringify({ version: 2, operations: { [OP]: {
+    accountId: "another-account", status: "attempted", createdAt: Date.now(), updatedAt: Date.now(),
+  } } }));
+  failingAuth();
+  const response = (await handleGrokCouponRoutes(request()))!;
+  expect(response.status).toBe(409);
+  expect((await response.json()).error.code).toBe("operation_id_owned_by_another_account");
+});
+
+test("an auth refusal cannot reserve its id in a full ledger and keeps the caller on it", async () => {
+  const operations: Record<string, unknown> = {};
+  for (let i = 0; i < 256; i += 1) operations[`fixture-${i}`] = {
+    accountId: "fixture-account", status: "failed", code: "coupon_unavailable", createdAt: Date.now(), updatedAt: Date.now(),
+  };
+  const before = JSON.stringify({ version: 2, operations });
+  writeFileSync(ledger.grokCouponJournalPath(), before);
+  failingAuth();
+  const response = (await handleGrokCouponRoutes(request()))!;
+  expect(response.status).toBe(409);
+  expect(await response.json()).toMatchObject({ operationId: OP, error: { code: "attempt_in_progress" } });
+  expect(readFileSync(ledger.grokCouponJournalPath(), "utf8")).toBe(before);
+});
+
+test("an auth refusal treats an expired record as unused and reserves the id", async () => {
+  const old = Date.now() - 31 * 24 * 60 * 60_000;
+  writeFileSync(ledger.grokCouponJournalPath(), JSON.stringify({ version: 2, operations: { [OP]: {
+    accountId: "fixture-account", status: "attempted", createdAt: old, updatedAt: old,
+  } } }));
+  failingAuth();
+  const response = (await handleGrokCouponRoutes(request()))!;
+  expect(response.status).toBe(401);
+  expect(journal()[OP]).toMatchObject({ status: "failed", code: "auth_failed" });
+});
+
+function omittedAccountRequest(): ManagementContext {
+  const ctx = request();
+  return { ...ctx, req: new Request(ctx.url, { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tokenId: TOKEN.tokenId, operationId: OP }) }) };
+}
+
+test("an unresolved account with a supplied operationId keeps the caller on it", async () => {
+  const selection = spyOn(oauthStore, "captureOAuthAccountSelection").mockReturnValue(undefined as never);
+  const accounts = spyOn(oauthStore, "listAccounts").mockReturnValue([]);
+  spies.push(selection, accounts);
+  const response = (await handleGrokCouponRoutes(omittedAccountRequest()))!;
+  expect(response.status).toBe(409);
+  expect(await response.json()).toMatchObject({ operationId: OP, error: { code: "attempt_in_progress" } });
+});
+
+test("an unreadable ledger during omitted-account lookup keeps the caller on its operation", async () => {
+  writeFileSync(ledger.grokCouponJournalPath(), "{not json");
+  const response = (await handleGrokCouponRoutes(omittedAccountRequest()))!;
+  expect(response.status).toBe(409);
+  expect(await response.json()).toMatchObject({ operationId: OP, error: { code: "attempt_in_progress" } });
+});
+
