@@ -349,6 +349,7 @@ describe("publication never overwrites an external Codex writer (#2999)", () => 
     expect(JSON.parse(readFileSync(authPath, "utf8")).tokens).toMatchObject({
       access_token: "ocx-staged-access",
       refresh_token: "ocx-staged-refresh",
+      account_id: "account-main",
     });
     expect(codexCredentialMutationEpoch()).toBe(epochBefore + 1);
   });
@@ -376,6 +377,7 @@ describe("publication never overwrites an external Codex writer (#2999)", () => 
     expect(JSON.parse(readFileSync(authPath, "utf8")).tokens).toMatchObject({
       access_token: "ocx-staged-access",
       refresh_token: "ocx-staged-refresh",
+      account_id: "account-main",
     });
     expect(codexCredentialMutationEpoch()).toBe(epochBefore + 1);
   });
