@@ -258,10 +258,18 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
     for (const record of store.links) {
       if (record.direction !== "hub-initiated") continue;
       const before = states.get(record.id) ?? IDLE;
-      const next = setEvent(record.id, { type: "tick", now: current });
       const child = children.get(record.id);
-      if (next.kind === "failed" && !next.inFlight && child && retryInFlight(before)
-        && current - child.spawnedAt < RETRY_GRACE_MS) {
+      // Promotion is checked before the outage limit, so a child that has outlived its grace by the
+      // time this tick runs (at the limit, or late after a sleep) is promoted rather than killed.
+      // An idle Child may send no catalog request for hours; for a retry, staying up past the
+      // retry grace is the proof instead, as five seconds is for a first attempt.
+      if (child && ((before.kind === "connecting" && current - before.since >= SPAWN_GRACE_MS)
+        || (retryInFlight(before) && current - child.spawnedAt >= RETRY_GRACE_MS))) {
+        setEvent(record.id, { type: "ready", now: current });
+        continue;
+      }
+      const next = setEvent(record.id, { type: "tick", now: current });
+      if (next.kind === "failed" && !next.inFlight && child && retryInFlight(before)) {
         // A retry started just before the outage limit has not had its grace yet. It carries on as
         // the failed state's retry instead of being killed with a link that may already be back.
         states.set(record.id, { ...next, inFlight: true });
@@ -269,13 +277,6 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         child.child.kill("SIGTERM");
         children.delete(record.id);
         conditionalRemovePidfile(record.id, child.child.pid);
-      } else if (next.kind === "connecting" && child && current - next.since >= SPAWN_GRACE_MS) {
-        setEvent(record.id, { type: "ready", now: current });
-      } else if (child && retryInFlight(next) && current - child.spawnedAt >= RETRY_GRACE_MS) {
-        // An idle Child may send no catalog request for hours. Staying up past the grace is the
-        // proof instead, as five seconds is for a first attempt, so a healthy reconnect is not
-        // killed at FAILED_AFTER_MS.
-        setEvent(record.id, { type: "ready", now: current });
       } else if (dueForSpawn(next, current)) {
         spawnFor(record);
       }

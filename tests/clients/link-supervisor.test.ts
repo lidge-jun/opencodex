@@ -336,6 +336,47 @@ test("the Home's -R supervisor lets a retry started just before the outage limit
   await supervisor.stop();
 });
 
+test("the Home's -R supervisor promotes a retry whose grace ends at the outage limit or before a late tick", async () => {
+  const fake = fakeRunner();
+  const timers: Array<() => void> = [];
+  let current = 0;
+  const store = baseStore(record("hub-initiated", "lnk_0123456789abcdef"));
+  const supervisor = createLinkSupervisor({
+    readStore: () => store,
+    runner: fake.runner,
+    pidfileDir: "/tmp/opencodex-link-supervisor-test",
+    now: () => current,
+    setTimer: callback => { timers.push(callback); return 1 as unknown as ReturnType<typeof setInterval>; },
+    clearTimer: () => {},
+    random: () => 0.5,
+  });
+  supervisor.start();
+  current = 5_000;
+  timers[0]!();
+  fake.children[0]!.stderr = "client_loop: send disconnect: Broken pipe";
+  fake.children[0]!.resolve(255);
+  await Promise.resolve();
+  await Promise.resolve();
+  // The retry's grace ends on the very tick that reaches the outage limit.
+  current = 290_000;
+  timers[0]!();
+  current = 305_000;
+  timers[0]!();
+  expect(supervisor.status()[0]).toMatchObject({ state: { kind: "connected", since: 305_000 }, pid: fake.children[1]!.child.pid });
+  fake.children[1]!.stderr = "client_loop: send disconnect: Broken pipe";
+  fake.children[1]!.resolve(255);
+  await Promise.resolve();
+  await Promise.resolve();
+  current = 600_000;
+  timers[0]!();
+  expect(fake.children).toHaveLength(3);
+  // The Home sleeps past both deadlines; the retry that kept running is promoted on waking.
+  current = 900_000;
+  timers[0]!();
+  expect(supervisor.status()[0]).toMatchObject({ state: { kind: "connected", since: 900_000 }, pid: fake.children[2]!.child.pid });
+  await supervisor.stop();
+});
+
 test("a reload neither skips the reconnect backoff nor a failed link's retry delay", async () => {
   const fake = fakeRunner();
   const timers: Array<() => void> = [];
