@@ -24,6 +24,7 @@ import {
   sanitizeModelCostsForLoad,
   sanitizeAutoReviewForLoad,
   degradedListenerWarnings,
+  degradedReasoningRetentionWarning,
   degradedCodexAccountPriorityWarnings,
   degradedCodexQuotaAutoRefreshWarning,
   normalizeApiKeyIds,
@@ -70,6 +71,7 @@ import {
   chatgptDesktopSchema,
   chatgptDesktopConfigIssue,
   compactionRoutingSchema,
+  reasoningRetentionSchema,
   skillsConfigSchema,
   memoryModelsSchema,
 } from "./schema/leaf-validators";
@@ -163,6 +165,8 @@ function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown): Conf
   if (codexPoolWarning) warnings.push(codexPoolWarning);
   const spendWarning = malformedSpendWarning(rawParsed);
   if (spendWarning) warnings.push(spendWarning);
+  const retentionWarning = degradedReasoningRetentionWarning(rawParsed, normalized);
+  if (retentionWarning) warnings.push(retentionWarning);
   if (rawPoolAliasesError(rawParsed)) {
     warnings.push("spendPoolAliases invalid: configured pool admission is refused until the mapping is corrected");
   }
@@ -665,6 +669,10 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     return { ok: false, error: "schema_invalid: chatgptDesktop: requires an optional boolean appServerShim and no other fields" };
   }
   const compactionRouting = rawConfigRecord(value)?.compactionRouting;
+  const reasoningRetention = rawConfigRecord(value)?.reasoningRetention;
+  if (reasoningRetention !== undefined && !reasoningRetentionSchema.safeParse(reasoningRetention).success) {
+    return { ok: false, error: "schema_invalid: reasoningRetention: requires maxContextPercent greater than 0 and at most 100 and/or positive integer maxTokens, with no other fields" };
+  }
   if (compactionRouting !== undefined && !compactionRoutingSchema.safeParse(compactionRouting).success) {
     return { ok: false, error: "schema_invalid: compactionRouting: requires a nonblank model, an optional valid reasoningEffort, and optional non-repeating triggers drawn from \"manual\" and \"auto\"" };
   }

@@ -245,7 +245,7 @@ intended.
 
 Repair one thread that was compacted through a routed provider before resuming it through native
 Codex. The command reads the exact thread selected by UUID, saves a private byte-for-byte backup,
-then converts only OpenCodeX-owned `ocx1:` compaction state into a plain summary that native Codex
+then converts only OpenCodeX-owned `ocx1:`/`ocx2:` compaction state into a plain summary that native Codex
 can replay. Native encrypted content and other threads are left unchanged. Close the selected
 thread before running the command; a concurrent rollout change makes recovery stop without
 replacing the file.

@@ -10,6 +10,8 @@ import { isCyberPolicyCode, isTerminalRefusalCode } from "../../lib/errors";
 import { isCanonicalOpenAiForwardProvider, supportsNativeResponsesCompactEndpoint } from "../../providers/openai-tiers";
 import { bridgeToResponsesSSE, formatErrorResponse } from "../../bridge";
 import { buildCompactV1Output, decodeCompactionSummary, encodeCompactionSummary, extractCompactUserMessages } from "../../responses/compaction";
+import { decodeRetainedCompaction, encodeRetainedCompaction } from "../../responses/retained-compaction";
+import { collectReasoningTexts } from "../../responses/reasoning-retention";
 import { finishRequestAttempt, usageFromResponsesPayload, type RequestLogContext } from "../request-log";
 import { linkRequestSessionLane } from "../request-log-conversation";
 import { isNativePassthroughSseResponse, markNativePassthroughSseResponse, isEagerRelaySseResponse, markEagerRelaySseResponse } from "../relay";
@@ -55,7 +57,7 @@ function portableBody(body: Record<string, unknown>): boolean {
   if (!Array.isArray(body.input) || body.store === true || conversationCarriesUploadedFiles(body)) return false;
   // Native ciphertext cannot be summarized by another provider. Never silently replace it with a note.
   if (body.input.some(item => record(item) && ["compaction", "compaction_summary", "context_compaction"].includes(String(item.type))
-    && typeof item.encrypted_content === "string" && !item.encrypted_content.startsWith("ocx1:"))) return false;
+    && typeof item.encrypted_content === "string" && !item.encrypted_content.startsWith("ocx1:") && !decodeRetainedCompaction(item.encrypted_content))) return false;
   const input = body.input.filter(item => !record(item) || item.type !== "compaction_trigger");
   return selfContainedResponsesBody({ ...body, store: false, input });
 }
@@ -289,7 +291,8 @@ export async function runWithCompactionRecovery(
     const compactions = items.filter(value => record(value) && value.type === "compaction");
     const permitted = items.every(value => record(value) && (value.type === "compaction" || value.type === "reasoning"));
     const item = permitted && compactions.length === 1 ? compactions[0] as Record<string, unknown> : undefined;
-    const summary = item && typeof item.encrypted_content === "string" ? decodeCompactionSummary(item.encrypted_content) : null;
+    const structured = item && typeof item.encrypted_content === "string" ? decodeRetainedCompaction(item.encrypted_content) : null;
+    const summary = structured?.summary ?? (item && typeof item.encrypted_content === "string" ? decodeCompactionSummary(item.encrypted_content) : null);
     if (json?.status !== "completed" || !summary?.trim()) {
       void completed.response.body?.cancel().catch(() => undefined);
       restoreSourceLog?.(completed.response.status);
@@ -298,11 +301,13 @@ export async function runWithCompactionRecovery(
     // v1 unpacks this text through buildCompactV1Output, which already re-adds retained user
     // messages as items; embedding them here too would duplicate the same text in the output.
     const preserved = options.compactionRecoveryKind === "compaction-v1" ? summary : (() => {
-      const retained = buildCompactV1Output(extractCompactUserMessages(snapshot.input), summary).slice(0, -1);
+      const usersOnly = Array.isArray(snapshot.input) ? snapshot.input.filter(item => collectReasoningTexts([item]).length === 0) : snapshot.input;
+      const retained = buildCompactV1Output(extractCompactUserMessages(usersOnly), summary).slice(0, -1);
       const userText = extractCompactUserMessages(retained).map((text, index) => `User message ${index + 1}:\n${text}`).join("\n\n");
       return `${summary}\n\nRetained original user messages (verbatim; preserve their goals and constraints):\n${userText}`;
     })();
-    item!.encrypted_content = encodeCompactionSummary(preserved);
+    const encryptedContent = structured ? encodeRetainedCompaction(preserved, structured.reasoning) : encodeCompactionSummary(preserved);
+    item!.encrypted_content = encryptedContent;
     json.model = originalModel;
     void completed.response.body?.cancel().catch(() => undefined);
     void response.body?.cancel().catch(() => undefined);
@@ -310,7 +315,7 @@ export async function runWithCompactionRecovery(
       const usage = usageFromResponsesPayload(json.usage);
       async function* events(): AsyncGenerator<AdapterEvent> {
         yield { type: "text_delta", text: preserved };
-        yield { type: "done", ...(usage ? { usage } : {}) };
+        yield { type: "done", compactionEncryptedContent: encryptedContent, ...(usage ? { usage } : {}) };
       }
       return new Response(bridgeToResponsesSSE(events(), originalModel, undefined, undefined, undefined, undefined, 2_000,
         { compaction: true, translatorBudget: options.translatorBudget, onCompletedResponse: () => options.onResponseComplete?.(originalModel) }), { headers: { "content-type": "text/event-stream" } });

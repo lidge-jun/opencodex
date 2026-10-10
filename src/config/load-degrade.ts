@@ -127,6 +127,8 @@ export function warnDegradedCompactionRouting(rawParsed: unknown, validated: Ocx
  */
 export function warnDegradedTopLevelOptIns(rawParsed: unknown, validated: OcxConfig): void {
   setCodexWsReuseAcrossTurns(validated.codexWsReuseAcrossTurns === true);
+  const retentionWarning = degradedReasoningRetentionWarning(rawParsed, validated);
+  if (retentionWarning) console.warn(retentionWarning);
   if (compactionRecoveryConfigError(rawParsed)) console.warn("⚠️  invalid compactionRecovery disabled; the original compaction failure is preserved");
   if (blockedModelRedirectsError(rawParsed)) console.warn("⚠️  invalid blockedModelRedirects ignored; provider routing remains available");
   const chatgptDesktop = chatgptDesktopConfigIssue(rawParsed);
@@ -139,6 +141,11 @@ export function warnDegradedTopLevelOptIns(rawParsed: unknown, validated: OcxCon
   if (asidePolicy !== undefined && !asideProfileSyncSchema.safeParse(asidePolicy).success) {
     console.warn("⚠️  config.json asideProfileSync is invalid — Aside profile sync falls back to all profiles off; fix the block or inspect `ocx integration client status --client aside`");
   }
+}
+
+export function degradedReasoningRetentionWarning(rawParsed: unknown, validated: OcxConfig): string | null {
+  if (rawConfigRecord(rawParsed)?.reasoningRetention === undefined || validated.reasoningRetention !== undefined) return null;
+  return "config.json reasoningRetention is invalid — using the default 20% share and 100,000 token cap";
 }
 
 /**

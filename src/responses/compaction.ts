@@ -15,6 +15,7 @@
  * routed models get a short "history was compacted" note instead.
  */
 
+import { decodeRetainedCompaction, RETAINED_COMPACTION_PREFIX } from "./retained-compaction";
 import type { TranslatorBudget } from "../lib/translator-budget";
 
 const ciphertextLeases = new WeakMap<object, { budget: TranslatorBudget; bytes: number }>();
@@ -80,6 +81,10 @@ export function encodeCompactionSummary(summary: string): string {
 
 /** Decode an `ocx1:` envelope; returns null for real (OpenAI-encrypted) blobs or garbage. */
 export function decodeCompactionSummary(encryptedContent: string): string | null {
+  if (encryptedContent.startsWith(RETAINED_COMPACTION_PREFIX)) {
+    const retained = decodeRetainedCompaction(encryptedContent);
+    return retained ? [retained.summary, ...retained.reasoning].join("\n\n") : null;
+  }
   if (!encryptedContent.startsWith(OCX_COMPACTION_PREFIX)) return null;
   try {
     return Buffer.from(encryptedContent.slice(OCX_COMPACTION_PREFIX.length), "base64").toString("utf-8");

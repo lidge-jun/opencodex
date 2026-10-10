@@ -4,6 +4,15 @@ import type { TKey } from "./en";
  * Russian i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const ru: Record<TKey, string> = {
+  "reasoningRetention.title": "Сохранение рассуждений",
+  "reasoningRetention.description": "При маршрутизируемом сжатии v1/v2 с читаемой сводкой рассуждения до меньшего из доли контекста и лимита токенов остаются локально и затем возвращаются как исторический контекст. Выше порога они архивируются локально с указанием пути. По умолчанию: 20% и 100 000 токенов. Приватные рассуждения провайдера не расшифровываются; непрозрачный результат сжатия не изменяется.",
+  "reasoningRetention.percent": "Доля контекста (%)",
+  "reasoningRetention.tokens": "Лимит токенов",
+  "reasoningRetention.reset": "Восстановить значения",
+  "reasoningRetention.invalid": "Введите процент больше 0 и не больше 100 и положительное целое число токенов.",
+  "reasoningRetention.loadFailed": "Не удалось загрузить настройки.",
+  "reasoningRetention.saveFailed": "Не удалось сохранить настройки.",
+  "reasoningRetention.saved": "Настройки сохранены.",
   "sidecar.pool": "Пул аккаунтов",
   "sidecar.poolCurrent": "Пул текущего запроса",
   "sidecar.poolA": "Anthropic",

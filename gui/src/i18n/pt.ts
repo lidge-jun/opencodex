@@ -6,6 +6,15 @@ import type { TKey } from "./en";
  * Technical terms and model identifiers intentionally remain English.
  */
 export const pt: Record<TKey, string> = {
+  "reasoningRetention.title": "Retenção de raciocínio",
+  "reasoningRetention.description": "Na compactação v1/v2 roteada com resumo legível, o raciocínio até o menor valor entre a porcentagem do contexto e o limite de tokens fica local, não é enviado ao modelo de compactação e retorna como contexto histórico após o sucesso. Acima do limite, é arquivado localmente com uma indicação do caminho. Padrões: 20% e 100.000 tokens. O raciocínio privado do provedor não é descriptografado; a saída opaca de compactação permanece inalterada.",
+  "reasoningRetention.percent": "Janela de contexto (%)",
+  "reasoningRetention.tokens": "Limite de tokens",
+  "reasoningRetention.reset": "Restaurar padrões",
+  "reasoningRetention.invalid": "Informe uma porcentagem maior que 0 e no máximo 100, e um número inteiro positivo de tokens.",
+  "reasoningRetention.loadFailed": "Não foi possível carregar as configurações de retenção de raciocínio.",
+  "reasoningRetention.saveFailed": "Não foi possível salvar as configurações de retenção de raciocínio.",
+  "reasoningRetention.saved": "Configurações de retenção de raciocínio salvas.",
   "sidecar.pool": "Pool de contas",
   "sidecar.poolCurrent": "Pool da solicitação atual",
   "sidecar.poolA": "Anthropic",

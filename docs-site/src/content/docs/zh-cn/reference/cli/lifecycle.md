@@ -62,7 +62,7 @@ ocx eject back
 
 ### `ocx recover-history --ocx-compaction <thread-id> --yes`
 
-在通过原生 Codex 恢复某个曾由路由提供方压缩的任务前，修复该任务的历史记录。此命令按 UUID 精确选择一个任务，先保存私有的逐字节备份，然后仅将 OpenCodeX 自有的 `ocx1:` 压缩状态转换为原生 Codex 可重放的普通摘要。原生加密内容和其他任务保持不变。运行前请关闭所选任务；如果 rollout 在处理期间发生变化，恢复会停止且不会替换原文件。
+在通过原生 Codex 恢复某个曾由路由提供方压缩的任务前，修复该任务的历史记录。此命令按 UUID 精确选择一个任务，先保存私有的逐字节备份，然后仅将 OpenCodeX 自有的 `ocx1:`/`ocx2:` 压缩状态转换为原生 Codex 可重放的普通摘要。原生加密内容和其他任务保持不变。运行前请关闭所选任务；如果 rollout 在处理期间发生变化，恢复会停止且不会替换原文件。
 
 ### `ocx uninstall` · `ocx remove`
 

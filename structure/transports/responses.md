@@ -332,7 +332,7 @@ again held its entry for the life of the process.
 > Decision record: [ADR-0038](../decisions/ADR-0038-responses-http-sse.md)
 
 A replayed compaction item carries an `encrypted_content` blob only its minting backend can decode,
-and the client replays it on every later turn. The proxy's own `ocx1:` envelopes are transparent
+and the client replays it on every later turn. The proxy's own `ocx1:`/`ocx2:` envelopes are transparent
 base64, so they always lower to plain user messages. A native blob is relayed only when there is no
 known serving-identity mismatch and the destination is known to decode native blobs — the canonical
 ChatGPT forward surface, the official OpenAI API, or a provider with the explicit
@@ -408,12 +408,12 @@ always become unable to serve.
 
 ## Core module ownership
 
-`src/server/responses/core.ts` is the public ingress and compatibility-export surface.
-The parent `src/server/responses.ts` facade retains its existing imports. Per-request execution
-is composed from the following owners in `src/server/responses/`; none is a generated artifact.
+`src/server/responses/core.ts` is the public ingress and compatibility-export surface. The parent `src/server/responses.ts` facade retains its existing imports. Per-request execution is composed from the following owners in `src/server/responses/`; none is a generated artifact.
 
 | Owner | Responsibility |
 | --- | --- |
+| `core-pipeline.ts` | Request-phase composition, native-to-translated adapter handoff and pending admission/unused-hop cleanup; the public ingress remains in `core.ts`. |
+| `compaction-retention.ts` | Local direct-v2 reasoning retention, provisional archives and response-lifetime cleanup under the [routed compaction contract](responses-failover.md#compaction-routing-overrides). |
 | `request-prepare.ts` | Body parsing, combo handoff, final route, encrypted-task recovery and initial admission, retaining [original policy authorization](policy-fallback.md). xAI OAuth model-scope admission previews the billed Fast lane using the serialization decision shared with Chat, Messages and routed compact admission; final normalization rechecks the actual wire destination. |
 | `shadow-target-availability.ts` | Shadow-call target resolution for `request-prepare.ts`: an unavailable target fails once with `409 intercept_target_unavailable` instead of reaching the native source model or the default provider. |
 | `request-transport.ts` | Live credential selection, dispatch bindings, adapter replacement and same-target request identity. Copilot Auto renewal onto Chat (including negotiation-401 refresh) signals the native owner before inference; `passthrough-dispatch.ts` reuses its inference-401/429 adapter handoff so JSON and SSE retain the Responses envelope. |
@@ -448,9 +448,9 @@ lease while a block-local `admission` holds only the acquisition result.
 reads that holder rather than minting a per-phase allowance. Combo recursion is injected through
 `ResponsesDispatchers`: a child re-enters the public handler without a reverse runtime import
 from the combo implementation into `core.ts`. `core-lifetime.ts` owns the shared run-turn response
-marker and translator-budget finalization, so the combo and delivery paths observe one identity. Owned-budget cleanup on request abort, including unread response bodies, follows the [byte-accounting lifetime contract](byte-accounting.md#stream-buffer-accounting).
+marker and translator-budget finalization; cleanup wrappers preserve its run-turn classification and nonreplayable failures, so retention cannot reopen combo retries after a tool effect. Owned-budget cleanup on request abort, including unread response bodies, follows the [byte-accounting lifetime contract](byte-accounting.md#stream-buffer-accounting).
 
-The outer admission `finally` remains in `core.ts`. Native execution explicitly transfers its
+The pending admission `finally` lives in `core-pipeline.ts`. Native execution explicitly transfers its
 pending lease to `passthrough-execution.ts`; both owners await response construction before
 cleanup. Stream body ownership, cancellation and post-commit behavior stay in the delivery owners.
 This decomposition changes ownership boundaries, not credential-selection or retry policy.

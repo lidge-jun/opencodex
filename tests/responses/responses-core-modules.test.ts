@@ -77,7 +77,7 @@ describe("Responses core module boundaries", () => {
   });
 
   test("lease transfer retains both finally owners until response construction settles", () => {
-    const ingress = readResponsesCoreModule("core.ts");
+    const ingress = readResponsesCoreModule("core-pipeline.ts");
     const native = readResponsesCoreModule("passthrough-execution.ts");
     expect(ingress).toContain("const passthroughResult = await executePassthroughResponse(");
     expect(ingress).toContain("if (passthroughResult instanceof Response) return passthroughResult;");

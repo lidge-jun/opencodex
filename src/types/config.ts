@@ -765,6 +765,11 @@ export interface OcxConfig {
   };
   /** Opt-in failure-only recovery; never replaces the initial compaction model. */
   compactionRecovery?: { enabled: boolean; model: string; allowDevinInvalidArgument?: boolean };
+  /** Routed v1 compact holds readable reasoning locally, then replays it as historical context.
+   * Defaults: 20% of the compacting model's context window and 100,000 tokens (the smaller limit).
+   * Unknown windows use maxTokens alone; overflow is archived locally with a path notice.
+   * Native/direct v2 and opaque compaction output keep their existing protocols. */
+  reasoningRetention?: { maxContextPercent?: number; maxTokens?: number };
   /**
    * Destination model for Codex's own memory pipeline, per phase
    * (src/server/responses/memory-models.ts).

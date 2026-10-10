@@ -88,6 +88,7 @@ export function bridgeToResponsesSSE(
      * response.completed — codex-rs collect_compaction_output requires exactly one.
      */
     compaction?: boolean;
+    compactionRetention?: { encode(summary: string): string; commit(): void };
     /** One-shot: first non-empty text/thinking/raw-reasoning/tool-input delta observed. */
     onFirstOutput?: () => void;
     onTerminal?: (status: ResponsesTerminalStatus) => void;
@@ -1233,7 +1234,7 @@ export function bridgeToResponsesSSE(
                 // Exactly one compaction item per turn; codex-rs takes the first and fatals on 0.
                 const item = {
                   type: "compaction", id: `cmp_${uuid()}`,
-                  encrypted_content: event.compactionEncryptedContent ?? encodeCompactionSummary(joinChunks(compaction)),
+                  encrypted_content: event.compactionEncryptedContent ?? (options?.compactionRetention?.encode(joinChunks(compaction)) ?? encodeCompactionSummary(joinChunks(compaction))),
                 };
                 emit("response.output_item.done", { output_index: outputIndex, item });
                 retainFinishedItem(item as OutputItem, event.compactionEncryptedContent ? 0 : compaction.bytes);
@@ -1271,6 +1272,7 @@ export function bridgeToResponsesSSE(
                 emit("response.completed", {
                   response,
                 });
+                if (options?.compaction && !event.compactionEncryptedContent) options.compactionRetention?.commit();
                 reportTerminal("completed");
               }
               terminalEvent = true;

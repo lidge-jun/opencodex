@@ -457,10 +457,10 @@ other providers keep their defaults.
 Authenticated loopback routing normally keeps Codex on its built-in `openai` provider identity.
 That preserves native thread identity, but it also makes Codex request native remote compaction.
 When a routed provider cannot return a native compaction blob, OpenCodeX stores the summary in its
-own `ocx1:` envelope. Native ChatGPT cannot verify that envelope if OpenCodeX is later removed from
+own `ocx1:`/`ocx2:` envelope. Native ChatGPT cannot verify that envelope if OpenCodeX is later removed from
 the request path.
 
-On an authenticated loopback route, enable client-side compaction to keep V2 sub-agent routing while preventing new `ocx1:` compaction summaries. Non-loopback and API-key routes retain their existing provider and authentication behavior:
+On an authenticated loopback route, enable client-side compaction to keep V2 sub-agent routing while preventing new `ocx1:`/`ocx2:` compaction summaries. Non-loopback and API-key routes retain their existing provider and authentication behavior:
 
 ```bash
 ocx system settings --client-compaction on   # or "codexClientCompaction": true in config.json
@@ -488,7 +488,7 @@ selected provider. V2 sub-agent requests keep their existing provider selection 
 accounting. Client-side compaction does not change plaintext delivery, encrypted task passthrough
 through `allowEncryptedV2AgentTasks`, or configured recovery and fallback behavior.
 
-This preference affects future compactions only, and it rewrites no existing `ocx1:` payload in
+This preference affects future compactions only, and it rewrites no existing `ocx1:`/`ocx2:` payload in
 any configuration, so use the explicit history recovery workflow for a thread that needs one.
 
 Whether resume-history metadata is re-tagged depends on which form the injection takes. On its

@@ -1,9 +1,8 @@
+import { handleResponsesInner } from "./core-pipeline";
 import type { OcxConfig } from "../../types";
 import type { RequestLogContext } from "../request-log";
 import type {
   HandleResponsesOptions,
-  ResponsesRequestContext,
-  ResponsesAdmissionState,
   ResponsesDispatchers,
 } from "./core-options";
 import { createTranslatorBudget } from "../../lib/translator-budget";
@@ -13,20 +12,6 @@ import { createInferenceSendBudget } from "../inference/context";
 import { finalizeOwnedTranslatorBudget, finalizeAccountLease } from "./core-lifetime";
 import type { TranslatorBudget } from "../../lib/translator-budget";
 import { executeComboResponses } from "./core-combo";
-import { prepareResponsesRequest } from "./request-prepare";
-import { prepareResponsesTransport } from "./request-transport";
-import { prepareResponsesSidecarAuth } from "./request-sidecar-auth";
-import { createResponsesEffects } from "./response-effects";
-import { createResponsesSendBudget } from "./request-send-budget";
-import { executePassthroughResponse } from "./passthrough-execution";
-import { executeResponsesSidecars } from "./sidecar-execution";
-import { createResponsesCompletionPolicy } from "./completion-policy";
-import { executeResponsesRunTurn } from "./run-turn-execution";
-import { prepareAdapterExchange } from "./adapter-dispatch";
-import { createAdapterContinuations } from "./adapter-continuation";
-import { deliverAdapterResponse } from "./adapter-delivery";
-import { releaseUpstreamHostAdmission } from "../../codex/upstream-host-health";
-import { releaseCodexAuthContextProbeLease } from "../../codex/auth-context";
 import { runWithCompactionRecovery } from "./compaction-recovery";
 /**
  * Route one `/v1/responses` request through the adapter pipeline: recovery loop, passthrough
@@ -62,7 +47,7 @@ export async function handleResponses(
       accountLoad,
       // Once at ingress, spend observer included: a combo child inherits the parent's holder.
       sendBudget: options.sendBudget ?? createInferenceSendBudget(req, logCtx),
-    }, handleResponsesInner);
+    }, (req, config, logCtx, options) => handleResponsesInner(req, config, logCtx, options, requestDispatchers));
     const finalResponse = ownsBudget ? finalizeOwnedTranslatorBudget(response, translatorBudget, abortSignal) : response;
     if (!accountLoad.lease) { release(); return finalResponse; }
     return finalizeAccountLease(finalResponse, release);
@@ -91,104 +76,6 @@ export async function handleComboResponses(
     options,
     requestDispatchers,
   );
-}
-/** Compose request phases while retaining the original admission-finally ownership. */
-async function handleResponsesInner(
-  req: Request,
-  config: OcxConfig,
-  logCtx: RequestLogContext,
-  options: HandleResponsesOptions & { translatorBudget: TranslatorBudget },
-): Promise<Response> {
-  const requestContext: ResponsesRequestContext = { req, config, logCtx, options };
-  const admissionState: ResponsesAdmissionState = {
-    pendingHostAdmissionLease: null,
-    authCtx: { kind: "main", accountId: null },
-  };
-  let releasePendingSend = () => {};
-  try {
-    const requestState = await prepareResponsesRequest(requestContext, admissionState, requestDispatchers);
-    if (requestState instanceof Response) return requestState;
-    const transportState = await prepareResponsesTransport(requestContext, admissionState, requestState);
-    if (transportState instanceof Response) return transportState;
-    options.onCompactionRecoveryRoute?.(requestState.route);
-    const sidecarState = await prepareResponsesSidecarAuth(requestContext, requestState, transportState);
-    if (sidecarState instanceof Response) return sidecarState;
-    const responseEffects = createResponsesEffects(
-      requestContext,
-      admissionState,
-      requestState,
-      sidecarState,
-    );
-    const sendBudgetState = createResponsesSendBudget(requestContext);
-    if (sendBudgetState instanceof Response) return sendBudgetState;
-    if ("passthrough" in transportState.adapter && transportState.adapter.passthrough && !sidecarState.routedCompaction) {
-      const passthroughResult = await executePassthroughResponse(
-        requestContext,
-        admissionState,
-        requestState,
-        transportState,
-        sidecarState,
-        responseEffects,
-        sendBudgetState,
-      );
-      if (passthroughResult instanceof Response) return passthroughResult;
-      const unclaimedHop = sendBudgetState.pendingHopPermit;
-      releasePendingSend = () => { if (sendBudgetState.pendingHopPermit === unclaimedHop) { unclaimedHop?.release(); sendBudgetState.pendingHopPermit = undefined; } };
-    }
-    const sidecarPlans = await executeResponsesSidecars(
-      requestContext,
-      requestState,
-      transportState,
-      sidecarState,
-      responseEffects,
-      sendBudgetState,
-    );
-    if (sidecarPlans instanceof Response) return sidecarPlans;
-    const completionPolicy = createResponsesCompletionPolicy(requestContext, sidecarState);
-    if (transportState.adapter.runTurn) return await executeResponsesRunTurn(
-      requestContext,
-      admissionState,
-      requestState,
-      transportState,
-      sidecarState,
-      responseEffects,
-      sendBudgetState,
-      completionPolicy,
-    );
-    const adapterExchange = await prepareAdapterExchange(
-      requestContext,
-      admissionState,
-      requestState,
-      transportState,
-      responseEffects,
-      sendBudgetState,
-    );
-    if (adapterExchange instanceof Response) return adapterExchange;
-    const continuationState = createAdapterContinuations(
-      requestContext,
-      requestState,
-      transportState,
-      sidecarState,
-      sendBudgetState,
-      adapterExchange,
-    );
-    return await deliverAdapterResponse(
-      requestContext,
-      requestState,
-      transportState,
-      sidecarState,
-      responseEffects,
-      completionPolicy,
-      adapterExchange,
-      continuationState,
-    );
-  } finally {
-    releasePendingSend();
-    if (admissionState.pendingHostAdmissionLease) {
-      releaseUpstreamHostAdmission(admissionState.pendingHostAdmissionLease);
-      releaseCodexAuthContextProbeLease(admissionState.authCtx);
-    }
-  }
 }
 const requestDispatchers: ResponsesDispatchers = { handleResponses, handleComboResponses };
 export { adapterNeedsForcedContinuation } from "./core-replay";

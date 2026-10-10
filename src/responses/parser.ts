@@ -15,7 +15,8 @@ import { createToolChoiceResolver, namespacedToolName } from "../types";
 import { responsesRequestSchema } from "./schema";
 import { providerMetadataFromResponsesFunctionCall } from "./provider-opaque-metadata";
 import { lookupReplayThoughtSignature } from "./thought-signature-replay";
-import { compactionItemToText, isCompactionItemType } from "./compaction";
+import { decodeRetainedCompaction, RETAINED_COMPACTION_PREFIX } from "./retained-compaction";
+import { compactionItemToText, isCompactionItemType, SUMMARY_PREFIX } from "./compaction";
 import { previousResponseReplayPrefixLength } from "./state";
 import { decodeReasoningEnvelope } from "./reasoning-envelope";
 import { hasRoutedIdentity, nameRoutedIdentity } from "../adapters/identity";
@@ -262,6 +263,13 @@ export function parseRequest(
         const encrypted = (item as { encrypted_content?: unknown }).encrypted_content;
         if (effectiveType === "context_compaction" && typeof encrypted !== "string") continue;
         pendingReasoning.length = 0;
+        if (typeof encrypted === "string" && encrypted.startsWith(RETAINED_COMPACTION_PREFIX)) {
+          const retained = decodeRetainedCompaction(encrypted);
+          if (!retained) throw new Error("Invalid OpenCodex retained compaction envelope");
+          messages.push({ role: "user", content: `${SUMMARY_PREFIX}\n\n${retained.summary}`, timestamp: now });
+          messages.push(...retained.reasoning.map(content => ({ role: "user" as const, content, timestamp: now })));
+          continue;
+        }
         messages.push({
           role: "user",
           content: compactionItemToText(typeof encrypted === "string" ? encrypted : undefined),
