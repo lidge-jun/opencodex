@@ -12,6 +12,15 @@ import { journalPathFor } from "../../src/codex/prompt-layers/paths";
 import { encodeJournal, hashBytes } from "../../src/codex/prompt-journal";
 import * as atomic from "../../src/lib/windows-atomic-replace";
 
+/**
+ * Whether a rename destination is this fixture file. The transaction publishes
+ * to the native canonical path, and on Windows runners the plain realpath of a
+ * temp-dir path can keep its 8.3 short form, so compare native resolutions.
+ */
+function sameTarget(destination: string, fixturePath: string): boolean {
+  try { return realpathSync.native(destination) === realpathSync.native(fixturePath); } catch { return false; }
+}
+
 setDefaultTimeout(SPAWN_BUDGET_MS);
 
 const original = '# original config\nmodel_provider = "openai"\n';
@@ -87,7 +96,7 @@ describe("codex-journal recovery diagnostics", () => {
     const rename = atomic.renameAtomicFile;
     let intercepted = false, attempts = 0, peerEdits = 0;
     const hook = spyOn(atomic, "renameAtomicFile").mockImplementation((source, destination, io, publisher, hooks) => {
-      if (destination !== realpathSync(paths.storePath) || intercepted) return rename(source, destination, io, publisher, hooks);
+      if (!sameTarget(destination, paths.storePath) || intercepted) return rename(source, destination, io, publisher, hooks);
       intercepted = true;
       return rename(source, destination, {
         platform: "win32",

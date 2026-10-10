@@ -9,6 +9,15 @@ import * as atomic from "../../src/lib/windows-atomic-replace";
 import { rootKeyValueForm, setRootBool, setRootString, setTableBool, UnsupportedTomlForm } from "../../src/codex/prompt-layers/toml-edit";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
+/**
+ * Whether a rename destination is this fixture file. The transaction publishes
+ * to the native canonical path, and on Windows runners the plain realpath of a
+ * temp-dir path can keep its 8.3 short form, so compare native resolutions.
+ */
+function sameTarget(destination: string, fixturePath: string): boolean {
+  try { return realpathSync.native(destination) === realpathSync.native(fixturePath); } catch { return false; }
+}
+
 const roots: string[] = [];
 afterEach(() => { while (roots.length) removeTreeWithRetry(roots.pop()!); });
 
@@ -166,7 +175,7 @@ for (const entry of ["recovery", "ordinary-write"] as const) {
     const original = atomic.renameAtomicFile;
     let attempts = 0, intercepted = false;
     const hook = spyOn(atomic, "renameAtomicFile").mockImplementation((source, destination, io, publisher, hooks) => {
-      if (destination !== realpathSync(paths.configPath) || intercepted) return original(source, destination, io, publisher, hooks);
+      if (!sameTarget(destination, paths.configPath) || intercepted) return original(source, destination, io, publisher, hooks);
       intercepted = true;
       return original(source, destination, {
         platform: "win32",
@@ -200,12 +209,12 @@ for (const phase of ["fresh commit", "rollback"] as const) {
     let configPublishes = 0, attempts = 0, peerEdits = 0, storeFailed = false;
     let preparedJournal = "";
     const hook = spyOn(atomic, "renameAtomicFile").mockImplementation((source, destination, io, publisher, hooks) => {
-      if (destination === realpathSync(paths.storePath) && phase === "rollback") {
+      if (sameTarget(destination, paths.storePath) && phase === "rollback") {
         // Config has landed; fail the second target to enter transaction rollback.
         storeFailed = true;
         throw Object.assign(new Error("fixture store write failed"), { code: "EIO" });
       }
-      if (destination !== realpathSync(paths.configPath)) return rename(source, destination, io, publisher, hooks);
+      if (!sameTarget(destination, paths.configPath)) return rename(source, destination, io, publisher, hooks);
       configPublishes += 1;
       if (configPublishes !== (phase === "fresh commit" ? 1 : 2)) return rename(source, destination, io, publisher, hooks);
       return rename(source, destination, {
