@@ -6,7 +6,7 @@ deployment or maintainer acceptance of the remote boundary is implied.
 ## Baseline and direction
 
 The contribution branch is rebuilt on upstream `dev`
-`a47a1b52a94ef3d65d8435944bd4e6bf34a2e622`, containing integrated local messaging
+`0dd7451976e40f1e80e023e3c604e38d1966a68e`, containing integrated local messaging
 [PR #6544](https://github.com/lidge-jun/opencodex/pull/6544).
 It does not carry the superseded local PR commits.
 The broader deployed experiment remains separate.
