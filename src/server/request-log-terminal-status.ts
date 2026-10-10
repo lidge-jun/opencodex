@@ -61,6 +61,11 @@ const KNOWN_UPSTREAM_ERROR_TYPES: ReadonlySet<string> = new Set([
   "RESOURCE_EXHAUSTED", "INTERNAL", "UNAVAILABLE", "DEADLINE_EXCEEDED",
 ]);
 
+/** Bare top-level error codes worth keeping: the classes recognizedUpstreamError maps, plus server_error. */
+const KNOWN_BARE_ERROR_CODES: ReadonlySet<string> = new Set([
+  "rate_limit_exceeded", "rate_limit_error", "server_is_overloaded", "overloaded_error", "server_error",
+]);
+
 function noteBoundedDiagnostic(
   logCtx: TerminalStatusContext,
   field: "upstreamErrorCode" | "upstreamErrorType" | "upstreamRequestId",
@@ -81,7 +86,9 @@ export function noteUpstreamRequestId(logCtx: TerminalStatusContext, headers: He
 export function captureUpstreamTerminalDiagnostics(logCtx: TerminalStatusContext, json: UpstreamErrorPayload): void {
   captureTerminalHttpStatus(logCtx, json);
   noteBoundedDiagnostic(logCtx, "upstreamErrorCode",
-    json.error?.code ?? json.last_error?.code ?? json.response?.error?.code ?? json.code);
+    json.error?.code ?? json.last_error?.code ?? json.response?.error?.code
+      // A bare top-level code (new in 2.83.0) has no envelope contract, so only a known class is kept.
+      ?? (typeof json.code === "string" && KNOWN_BARE_ERROR_CODES.has(json.code) ? json.code : undefined));
   noteBoundedDiagnostic(logCtx, "upstreamErrorType",
     json.error?.type ?? json.last_error?.type ?? json.response?.error?.type);
 }

@@ -103,6 +103,16 @@ test("an opaque configured credential echoed as the error type is never recorded
   expect(JSON.stringify(row)).not.toContain(fixture);
 });
 
+test("an unrecognized bare top-level code is never recorded as a diagnostic", () => {
+  const fixture = "private-provider-key-" + "H".repeat(32);
+  const log = context();
+  let row: RequestLogEntry | undefined;
+  inspectResponseLogJson(log, JSON.stringify({ type: "error", code: fixture, message: "fixture" }));
+  addFinalRequestLog("probe", Date.now(), log, 502, undefined, entry => { row = entry; });
+  expect(log.upstreamErrorCode).toBeUndefined();
+  expect(JSON.stringify(row)).not.toContain(fixture);
+});
+
 
 test("final request rows expose original upstream error type, code, request id and mapped status", () => {
   const log = context();
