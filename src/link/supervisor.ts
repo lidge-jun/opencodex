@@ -76,9 +76,11 @@ const TIMER_MS = 1_000;
 const SPAWN_GRACE_MS = 5_000;
 /**
  * A retry runs while the network may still be down, and ssh can wait out its whole ConnectTimeout
- * (10 s for the TCP connect and banner exchange, see ssh-argv.ts) before it exits. A retry is
- * promoted only once it has outlived that, so an attempt that never reached the Child does not
- * read connected and restart the outage clock.
+ * (10 s for the TCP connect, the SSH handshake and key exchange, see ssh-argv.ts) before it exits.
+ * A retry is promoted only once it has outlived that, so an attempt that never reached the Child
+ * does not read connected and restart the outage clock. Like the first attempt's five seconds,
+ * liveness is a heuristic: authentication and the forward request come after ConnectTimeout, so
+ * one that stalls past the grace reads connected until ssh exits.
  */
 const RETRY_GRACE_MS = 15_000;
 
