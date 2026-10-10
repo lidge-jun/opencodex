@@ -3506,6 +3506,8 @@ export const tr: Record<TKey, string> = {
   "connection.pairing.body": "Merkezde oluşturulan tek kullanımlık eşleştirme kodunu yapıştırın.",
   "connection.pairing.relayWarning": "Bu kod sabit merkez aktarımı üzerinden kullanılır. Aktarım hedefi başka bir sunucuya değiştirilemez.",
   "connection.pairing.code": "Tek kullanımlık eşleştirme kodu",
+  "connection.pairing.retryValidation": "Doğrulamayı yeniden dene",
+  "connection.pairing.validationPending": "Kod kullanıldı ancak oturum doğrulaması tamamlanamadı. Bu sayfayı açık tutup Doğrulamayı yeniden dene seçeneğini kullanın; yeni kod gerekmez.",
   "connection.pairing.submit": "Bağlan",
   "connection.pairing.submitting": "Bağlanıyor…",
   "connection.pairing.error": "Merkez kodu reddetti. Kodun süresi dolmuş, kod daha önce kullanılmış veya başka bir tarayıcı kaynağı için oluşturulmuş olabilir. Yöneticiden tam olarak bu HTTPS adresi için yeni bir kod isteyin.",

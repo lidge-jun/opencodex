@@ -3506,6 +3506,8 @@ export const ru: Record<TKey, string> = {
   "connection.pairing.body": "Вставьте одноразовый код сопряжения, созданный на хабе.",
   "connection.pairing.relayWarning": "Код обменивается через фиксированный ретранслятор хаба. Его назначение нельзя изменить на другой хост.",
   "connection.pairing.code": "Одноразовый код сопряжения",
+  "connection.pairing.retryValidation": "Повторить проверку",
+  "connection.pairing.validationPending": "Код обменян, но проверка сеанса не завершена. Оставьте страницу открытой и нажмите «Повторить проверку»; новый код не нужен.",
   "connection.pairing.submit": "Подключить",
   "connection.pairing.submitting": "Подключение…",
   "connection.pairing.error": "Хаб отклонил код. Возможно, срок его действия истёк, он уже использован или создан для другого источника браузера. Попросите оператора выдать новый код для этого точного HTTPS-адреса.",

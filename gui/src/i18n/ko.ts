@@ -3505,6 +3505,8 @@ export const ko: Record<TKey, string> = {
   "connection.pairing.body": "허브에서 만든 일회용 페어링 코드를 붙여 넣으세요.",
   "connection.pairing.relayWarning": "이 코드는 고정 허브 릴레이로 교환됩니다. 릴레이 목적지는 다른 호스트로 바꿀 수 없습니다.",
   "connection.pairing.code": "일회용 페어링 코드",
+  "connection.pairing.retryValidation": "세션 검증 재시도",
+  "connection.pairing.validationPending": "코드는 교환되었지만 세션 검증을 완료하지 못했습니다. 이 페이지를 열어 둔 채 세션 검증 재시도를 누르세요. 새 코드는 필요하지 않습니다.",
   "connection.pairing.submit": "연결",
   "connection.pairing.submitting": "연결 중…",
   "connection.pairing.error": "허브가 코드를 거부했습니다. 만료되었거나 이미 사용되었거나 다른 브라우저 출처용으로 생성되었을 수 있습니다. 운영자에게 이 HTTPS 주소와 정확히 일치하는 새 코드를 요청하세요.",

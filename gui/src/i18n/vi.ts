@@ -3487,6 +3487,8 @@ export const vi: Record<TKey, string> = {
   "connection.pairing.body": "Dán mã ghép nối một lần (one-time pairing code) được tạo trên hub.",
   "connection.pairing.relayWarning": "Mã này được trao đổi thông qua hub relay cố định. Không thể chuyển hướng relay sang một máy chủ khác.",
   "connection.pairing.code": "Mã ghép nối một lần",
+  "connection.pairing.retryValidation": "Thử xác minh lại",
+  "connection.pairing.validationPending": "Mã đã được đổi nhưng chưa thể hoàn tất xác minh phiên. Giữ trang này mở và chọn Thử xác minh lại; không cần mã mới.",
   "connection.pairing.submit": "Kết nối",
   "connection.pairing.submitting": "Đang kết nối…",
   "connection.pairing.error": "Hub từ chối mã. Mã có thể đã hết hạn, đã dùng hoặc được tạo cho origin trình duyệt khác. Hãy xin người vận hành mã mới cho đúng địa chỉ HTTPS này.",

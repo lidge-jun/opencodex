@@ -1,4 +1,4 @@
-import { hasApiSession, installApiSessionFromHtml } from "./api";
+import { beginApiSessionHandoff, fetchApiSessionValidation, hasApiSession } from "./api";
 import type { ApiTarget } from "./api-targets";
 import { parseRemoteLinkStatus } from "./remote-link-api";
 
@@ -56,14 +56,14 @@ async function isHtmlChallenge(response: Response): Promise<boolean> {
  * Separate module from the form that calls it so neither file mixes a component export with
  * a plain one. That mix is what `react-refresh/only-export-components` flags, and the two
  * have no reason to share a file: the transport is testable without React and the form has
- * no logic beyond calling it.
+ * owns the pending handoff's validation and retry lifetime.
  */
 export async function submitConnectPairing(
   target: ApiTarget,
   grant: string,
   fetchImpl?: typeof fetch,
   signal?: AbortSignal,
-): Promise<boolean> {
+): Promise<ReturnType<typeof beginApiSessionHandoff>> {
   signal?.throwIfAborted();
   const code = grant.trim();
   if (!PAIRING_CODE.test(code)) throw new PairingError("invalid-code");
@@ -98,14 +98,18 @@ export async function submitConnectPairing(
   catch (error) { if (signal?.aborted) throw error; throw new PairingError("invalid-response"); }
   signal?.throwIfAborted();
   if (isCloudflareChallenge(response, html)) throw new PairingError("cloudflare-challenge");
-  if (!installApiSessionFromHtml("shared", html)) throw new PairingError("invalid-response");
-  return true;
+  const handoff = beginApiSessionHandoff("shared");
+  if (!handoff.install(html)) {
+    handoff.rollback();
+    throw new PairingError("invalid-response");
+  }
+  return handoff;
 }
 
 /** Accept pairing only after the new browser session can read the protected Remote Link status. */
 export async function validateRemoteLinkSession(apiBase: string, fetchImpl?: typeof fetch, signal?: AbortSignal): Promise<void> {
   signal?.throwIfAborted();
-  const send = fetchImpl ?? ((input, init) => window.fetch(input, init));
+  const send = fetchImpl ?? ((input, init) => fetchApiSessionValidation("shared", input, init ?? {}));
   let response: Response;
   try {
     response = await send(`${apiBase}/api/link/status`, {

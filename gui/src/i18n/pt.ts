@@ -3524,6 +3524,8 @@ export const pt: Record<TKey, string> = {
   "connection.pairing.body": "Cole o código de pareamento de uso único criado no hub.",
   "connection.pairing.relayWarning": "Este código é trocado por meio do relay fixo do hub. O relay não pode ser redirecionado para outro host.",
   "connection.pairing.code": "Código de pareamento de uso único",
+  "connection.pairing.retryValidation": "Tentar validar novamente",
+  "connection.pairing.validationPending": "O código foi trocado, mas a validação da sessão não pôde ser concluída. Mantenha esta página aberta e escolha Tentar validar novamente; não é necessário um novo código.",
   "connection.pairing.submit": "Conectar",
   "connection.pairing.submitting": "Conectando…",
   "connection.pairing.error": "O hub rejeitou o código. Ele pode ter expirado, já ter sido usado ou ter sido criado para outra origem de navegador. Peça ao operador um novo código para este endereço HTTPS exato.",

@@ -567,8 +567,8 @@ POST before a concurrent DELETE settles. Retryable GET/DELETE races preserve sam
 retry, last trusted device details, and the existing poll cadence. Outside same-flow cancellation
 ownership, a GET HTTP failure stops polling without starting a second login POST.
 
-Pairing-grant source limiting applies only to invalid guesses from an allowed browser origin; disallowed
-origins record no limiter state, and a valid grant redeems even from a throttled source. Standalone grant delivery also requires a one-use configuration-write intent; see [Standalone pairing delivery](remote-link.md#standalone-pairing-delivery).
+Pairing-grant source limiting applies only to invalid guesses from an allowed browser origin; disallowed origins record no limiter state, and a valid grant redeems even from a throttled source. Standalone grant delivery also requires a one-use configuration-write intent; see [Standalone pairing delivery](remote-link.md#standalone-pairing-delivery).
+`gui/src/connect-pairing.tsx` retains an opaque, memory-only handoff from `gui/src/api.ts` until validation succeeds. Remote Link validation reads the candidate's protected status without 401 renewal or admin-token fallback. Network, 5xx, challenge and malformed-status failures offer validation retry without another grant exchange; definitive 401/403 rejection or cancellation restores the previous session unless a newer session or target replaced the candidate. Credentials never enter form state, browser storage, errors or session event payloads. Coverage: `gui/tests/connect-pairing.test.ts` and `gui/tests/remote-link-route.test.tsx`.
 
 ## Durable provider PATCH
 

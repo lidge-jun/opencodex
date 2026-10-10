@@ -17,6 +17,7 @@ let root: Root | null = null;
 let linkStatusReads = 0;
 let pairingSessionHtml: string | null = null;
 let pairingStatus = 401;
+let pairingPosts = 0;
 let linkStatusCode = 200;
 let linkStatusFailure: "offline" | "malformed" | null = null;
 let deferredStatus: ((signal?: AbortSignal | null) => Promise<Response>) | null = null;
@@ -63,6 +64,7 @@ function mountWindow(
   const mockFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     if (url.includes("/opencodex-session") && init?.method === "POST") {
+      pairingPosts++;
       if (pairingSessionHtml) return new Response(pairingSessionHtml, { status: 200, headers: { "content-type": "text/html" } });
       return new Response(null, { status: pairingStatus });
     }
@@ -90,6 +92,7 @@ beforeEach(() => {
   linkStatusReads = 0;
   pairingSessionHtml = null;
   pairingStatus = 401;
+  pairingPosts = 0;
   linkStatusCode = 200;
   linkStatusFailure = null;
   deferredStatus = null;
@@ -241,6 +244,30 @@ test("a redeemed code does not close recovery until the new session can manage R
   await waitFor(() => container.querySelector('[role="alert"]') !== null);
   expect(container.querySelector(".connect-pairing")).not.toBeNull();
   expect(container.textContent).toContain("still cannot manage Remote Link");
+});
+
+test("App retries pending Remote Link validation and remounts the page without exchanging another code", async () => {
+  mountWindow("hub", { url: "https://opencodex.rhodiz.net/#remote", linkStatusCode: 403 });
+  await mountApp();
+  await waitFor(() => container.textContent?.includes("Connect this dashboard to the hub") === true);
+  const action = [...container.querySelectorAll("button")].find(button => button.textContent?.trim() === "Connect this dashboard to the hub");
+  await act(async () => { action?.click(); });
+  pairingSessionHtml = '<meta name="opencodex-session-token" content="ocx_session_operator_pairing"><meta name="opencodex-session-csrf" content="operator-csrf"><meta name="opencodex-session-origin" content="https://opencodex.rhodiz.net"><meta name="opencodex-session-server-origin" content="https://opencodex.rhodiz.net">';
+  linkStatusCode = 503;
+  const input = container.querySelector("#connect-pairing-code") as HTMLInputElement;
+  Object.getOwnPropertyDescriptor(testWindow.HTMLInputElement.prototype, "value")!.set!.call(input, `ocx_pair_${"a".repeat(43)}`);
+  await act(async () => { input.dispatchEvent(new testWindow.Event("input", { bubbles: true })); });
+  await act(async () => { input.closest("form")!.dispatchEvent(new testWindow.Event("submit", { bubbles: true, cancelable: true })); });
+  expect(container.querySelector('[role="switch"]')).toBeNull();
+  expect(input.value).toBe("");
+  const retry = [...container.querySelectorAll("button")].find(button => button.textContent?.trim() === "Retry validation");
+  expect(retry).toBeDefined();
+  linkStatusCode = 200;
+  await act(async () => { retry!.click(); });
+  await waitFor(() => container.querySelector(".connect-pairing") === null && container.querySelector('[role="switch"]') !== null);
+  expect(pairingPosts).toBe(1);
+  const { hasApiSession } = await import("../src/api");
+  expect(hasApiSession("shared")).toBe(true);
 });
 
 test("an authenticated remote hub with an automatic session can open manual pairing", async () => {

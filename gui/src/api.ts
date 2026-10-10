@@ -180,6 +180,33 @@ export function installApiSessionFromHtml(plane: ApiPlane, html: string): boolea
   );
 }
 
+/** An opaque, memory-only handoff; callers never receive session credential values. */
+export function beginApiSessionHandoff(plane: ApiPlane) {
+  const state = runtime(plane);
+  let previous: ApiSessionState | null = state.session;
+  let candidate: ApiSessionState | null = null;
+  return {
+    install(html: string): boolean {
+      const accepted = installApiSessionFromHtml(plane, html);
+      candidate = state.session;
+      return accepted;
+    },
+    commit(): void { previous = null; candidate = null; },
+    rollback(): void {
+      // A cancelled/obsolete handoff must not overwrite another target or a newer login.
+      const current = runtime(plane);
+      if (previous && sameTarget(current.target, state.target) && current.session === candidate) updateSession(current, previous);
+      previous = null; candidate = null;
+    },
+  };
+}
+
+/** Inspect this session's response without the normal 401 renewal or admin-token fallback. */
+export function fetchApiSessionValidation(plane: ApiPlane, input: RequestInfo | URL, init: RequestInit): Promise<Response> {
+  const [authenticatedInput, authenticatedInit] = withAuth(plane, input, init);
+  return (rawFetch ?? window.fetch.bind(window))(authenticatedInput, authenticatedInit);
+}
+
 function clearLegacySessionToken(): void {
   try { sessionStorage.removeItem(LEGACY_TOKEN_KEY); } catch { /* storage may be disabled */ }
 }

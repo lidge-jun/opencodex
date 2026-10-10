@@ -3483,6 +3483,8 @@ export const de: Record<TKey, string> = {
   "connection.pairing.body": "Fügen Sie den auf dem Hub erstellten Einmal-Kopplungscode ein.",
   "connection.pairing.relayWarning": "Dieser Code wird über das feste Hub-Relay ausgetauscht. Das Relay-Ziel kann nicht auf einen anderen Host geändert werden.",
   "connection.pairing.code": "Einmal-Kopplungscode",
+  "connection.pairing.retryValidation": "Validierung wiederholen",
+  "connection.pairing.validationPending": "Der Code wurde eingelöst, aber die Sitzungsvalidierung konnte nicht abgeschlossen werden. Lassen Sie diese Seite geöffnet und wählen Sie „Validierung wiederholen“; ein neuer Code ist nicht erforderlich.",
   "connection.pairing.submit": "Verbinden",
   "connection.pairing.submitting": "Verbindung wird hergestellt…",
   "connection.pairing.error": "Der Hub hat den Code abgelehnt. Er ist möglicherweise abgelaufen, bereits verwendet worden oder für einen anderen Browser-Ursprung erstellt worden. Bitten Sie den Betreiber um einen neuen Code für genau diese HTTPS-Adresse.",

@@ -3504,6 +3504,8 @@ export const zh: Record<TKey, string> = {
   "connection.pairing.body": "粘贴在中心创建的一次性配对码。",
   "connection.pairing.relayWarning": "此配对码通过固定的中心中继兑换。中继目标无法更改为其他主机。",
   "connection.pairing.code": "一次性配对码",
+  "connection.pairing.retryValidation": "重试验证",
+  "connection.pairing.validationPending": "代码已兑换，但会话验证未能完成。请保持此页面打开并点击“重试验证”，无需新的代码。",
   "connection.pairing.submit": "连接",
   "connection.pairing.submitting": "正在连接…",
   "connection.pairing.error": "中心拒绝了配对码。它可能已过期、已使用或是为其他浏览器来源创建的。请向管理员索取与此 HTTPS 地址完全一致的新配对码。",

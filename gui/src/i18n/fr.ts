@@ -3472,6 +3472,8 @@ export const fr: Record<TKey, string> = {
   "connection.pairing.body": "Collez le code d'association à usage unique créé sur le hub.",
   "connection.pairing.relayWarning": "Ce code passe par le relais fixe du hub. Le relais ne peut pas viser un autre hôte.",
   "connection.pairing.code": "Code d'association à usage unique",
+  "connection.pairing.retryValidation": "Réessayer la validation",
+  "connection.pairing.validationPending": "Le code a été échangé, mais la validation de la session n’a pas abouti. Gardez cette page ouverte et choisissez « Réessayer la validation » ; aucun nouveau code n’est nécessaire.",
   "connection.pairing.submit": "Connecter",
   "connection.pairing.submitting": "Connexion…",
   "connection.pairing.error": "Le hub a refusé le code. Il peut avoir expiré, avoir déjà été utilisé ou avoir été créé pour une autre origine de navigateur. Demandez au responsable un nouveau code pour cette adresse HTTPS exacte.",

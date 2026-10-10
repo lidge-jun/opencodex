@@ -23,30 +23,55 @@ export function ConnectPairingForm({
   const [grant, setGrant] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<PairingError["kind"] | null>(null);
+  const [validationPending, setValidationPending] = useState(false);
+  const pendingHandoff = useRef<Awaited<ReturnType<typeof submitConnectPairing>> | null>(null);
   const codeInput = useRef<HTMLInputElement>(null);
   useEffect(() => { if (focusOnMount) codeInput.current?.focus(); }, [focusOnMount]);
   const activeRequest = useRef<AbortController | null>(null);
-  useEffect(() => () => activeRequest.current?.abort(), []);
+  useEffect(() => () => {
+    activeRequest.current?.abort();
+    pendingHandoff.current?.rollback();
+  }, []);
   const copyFeedback = useCopyFeedback<string>();
   const command = `ocx gui pair --origin "${window.location.origin}"`;
   const copied = copyFeedback.outcomeFor(command);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (busy) return;
-    onPairingStart?.();
+    if (activeRequest.current) return;
+    if (!pendingHandoff.current) onPairingStart?.();
     setBusy(true);
     setError(null);
     const controller = new AbortController();
     activeRequest.current = controller;
     try {
-      await submitConnectPairing(target, grant, undefined, controller.signal);
-      if (!controller.signal.aborted) {
+      if (!pendingHandoff.current) {
+        pendingHandoff.current = await submitConnectPairing(target, grant, undefined, controller.signal);
+        if (controller.signal.aborted) {
+          pendingHandoff.current.rollback();
+          pendingHandoff.current = null;
+          controller.signal.throwIfAborted();
+        }
         setGrant("");
+        setValidationPending(true);
+      }
+      if (!controller.signal.aborted) {
         await onConnected(controller.signal);
+        controller.signal.throwIfAborted();
+        pendingHandoff.current?.commit();
+        pendingHandoff.current = null;
+        setValidationPending(false);
       }
     } catch (failure) {
-      if (!controller.signal.aborted) setError(failure instanceof PairingError ? failure.kind : "unreachable");
+      if (!controller.signal.aborted) {
+        const kind = failure instanceof PairingError ? failure.kind : "unreachable";
+        if (kind === "remote-link-unauthorized" || kind === "remote-link-forbidden") {
+          pendingHandoff.current?.rollback();
+          pendingHandoff.current = null;
+          setValidationPending(false);
+        }
+        setError(kind);
+      }
     } finally {
       if (!controller.signal.aborted) setBusy(false);
       if (activeRequest.current === controller) activeRequest.current = null;
@@ -68,13 +93,14 @@ export function ConnectPairingForm({
       <label htmlFor="connect-pairing-code" className="field-label">{t("connection.pairing.code")}</label>
       <input ref={codeInput} id="connect-pairing-code" name="pairingCode" value={grant}
         onChange={(event: ChangeEvent<HTMLInputElement>) => setGrant(event.currentTarget.value)}
-        autoComplete="off" spellCheck={false} disabled={busy} className="input mono"
+        autoComplete="off" spellCheck={false} disabled={busy || validationPending} className="input mono"
         aria-invalid={Boolean(error) || undefined} aria-describedby={error ? "connect-pairing-error" : undefined} />
-      <button type="submit" className="btn btn-primary" disabled={busy || !grant.trim()}>
-        {t(busy ? "connection.pairing.submitting" : "connection.pairing.submit")}
+      <button type="submit" className="btn btn-primary" disabled={busy || (!validationPending && !grant.trim())}>
+        {t(busy ? "connection.pairing.submitting" : validationPending ? "connection.pairing.retryValidation" : "connection.pairing.submit")}
       </button>
       {error && <p id="connect-pairing-error" className="alert alert-err" role="alert">
-        {t(error === "invalid-code" ? "connection.pairing.notApiKey"
+        {t(validationPending ? "connection.pairing.validationPending"
+          : error === "invalid-code" ? "connection.pairing.notApiKey"
           : error === "unreachable" ? "connection.pairing.networkError"
           : error === "request-failed" ? "connection.pairing.requestError"
           : error === "origin-denied" ? "connection.pairing.originDenied"

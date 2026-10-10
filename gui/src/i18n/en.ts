@@ -3563,6 +3563,8 @@ export const en = {
   "connection.pairing.body": "Paste the one-time pairing code created on the hub.",
   "connection.pairing.relayWarning": "This code is exchanged through the fixed hub relay. The relay cannot be redirected to another host.",
   "connection.pairing.code": "One-time pairing code",
+  "connection.pairing.retryValidation": "Retry validation",
+  "connection.pairing.validationPending": "The code was exchanged, but session validation could not complete. Keep this page open and use Retry validation; no new code is needed.",
   "connection.pairing.submit": "Connect",
   "connection.pairing.submitting": "Connecting…",
   "connection.pairing.error": "The Hub rejected the code. It may be expired, already used, or created for a different browser origin. Ask the operator for a fresh code for this exact HTTPS address.",

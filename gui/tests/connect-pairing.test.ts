@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act, createElement } from "react";
 
@@ -320,4 +320,135 @@ test("cancelled Remote Link validation forwards the abort signal and rejects a l
   controller.abort();
   release(Response.json({ role: "standalone", listener: { state: "off", port: null }, links: [], child: null }));
   await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+});
+
+async function withPairingValidation(
+  firstValidation: () => Response,
+  check: (fixture: {
+    container: HTMLDivElement; input: HTMLInputElement; submit: () => Promise<void>;
+    retry: () => Promise<void>; close: () => Promise<void>; sessionIs: (kind: string) => Promise<boolean>;
+    counts: { posts: number; validations: number; connected: number; bootstraps: number };
+  }) => Promise<void>,
+) {
+  const keys = ["window", "document", "navigator", "sessionStorage", "localStorage", "fetch", "IS_REACT_ACT_ENVIRONMENT"] as const;
+  const previous = Object.fromEntries(keys.map(key => [key, Reflect.get(globalThis, key)]));
+  const win = new Window({ url: "http://localhost/#remote" });
+  for (const [key, value] of Object.entries({ window: win, document: win.document, navigator: win.navigator,
+    sessionStorage: win.sessionStorage, localStorage: win.localStorage, IS_REACT_ACT_ENVIRONMENT: true })) {
+    Object.defineProperty(globalThis, key, { configurable: true, value });
+  }
+  const counts = { posts: 0, validations: 0, connected: 0, bootstraps: 0 };
+  const html = (kind: string) => [
+    `<meta name="opencodex-session-token" content="ocx_session_${kind}">`,
+    `<meta name="opencodex-session-csrf" content="${kind}-csrf">`,
+    '<meta name="opencodex-session-origin" content="http://localhost">',
+    '<meta name="opencodex-session-server-origin" content="https://hub.example.test">',
+  ].join("");
+  const mockFetch = (async (input, init) => {
+    const url = String(input);
+    if (url.endsWith("/opencodex-session")) {
+      if (init?.method !== "POST") { counts.bootstraps++; return new Response(null, { status: 401 }); }
+      counts.posts++;
+      return new Response(html("candidate"), { headers: { "content-type": "text/html" } });
+    }
+    const headers = new Headers(init?.headers);
+    if (url.endsWith("/api/link/status")) {
+      expect(headers.get("x-opencodex-api-key")).toBe("ocx_session_candidate");
+      if (++counts.validations === 1) return firstValidation();
+      return Response.json({ role: "standalone", listener: { state: "off", port: null }, links: [], child: null });
+    }
+    // Observe the entire restored session through authenticated requests, never a token getter.
+    return Response.json({ previous: headers.get("x-opencodex-api-key") === "ocx_session_previous"
+      && headers.get("x-opencodex-csrf-token") === "previous-csrf"
+      && headers.get("x-opencodex-gui-origin") === "http://localhost",
+      candidate: headers.get("x-opencodex-api-key") === "ocx_session_candidate" });
+  }) as typeof fetch;
+  Object.defineProperty(win, "fetch", { configurable: true, value: mockFetch });
+  Object.defineProperty(globalThis, "fetch", { configurable: true, value: mockFetch });
+  const api = await import("../src/api");
+  const { standaloneApiTargets } = await import("../src/api-targets");
+  const { validateRemoteLinkSession } = await import("../src/connect-pairing-transport");
+  const targets = standaloneApiTargets("https://hub.example.test");
+  api.resetApiAuthFetchForTests();
+  api.configureApiTargets(targets);
+  api.installApiAuthFetch();
+  api.installApiSessionFromHtml("shared", html("previous"));
+  const { LanguageProvider } = await import("../src/i18n/provider");
+  const { ConnectPairingForm } = await import("../src/connect-pairing");
+  const { createRoot } = await import("react-dom/client");
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(createElement(LanguageProvider, null, createElement(ConnectPairingForm, {
+      target: targets.shared,
+      onConnected: async signal => { await validateRemoteLinkSession(targets.shared.baseUrl, undefined, signal); counts.connected++; },
+    }))));
+    const input = container.querySelector("#connect-pairing-code") as HTMLInputElement;
+    Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value")!.set!.call(input, `ocx_pair_${"c".repeat(43)}`);
+    await act(async () => { input.dispatchEvent(new win.Event("input", { bubbles: true })); });
+    await check({ container, input, counts,
+      submit: () => act(async () => { input.closest("form")!.dispatchEvent(new win.Event("submit", { bubbles: true, cancelable: true })); }),
+      retry: () => act(async () => {
+        const button = Array.from(container.querySelectorAll("button")).find(button => button.textContent === "Retry validation");
+        expect(button).toBeDefined();
+        button!.click();
+      }),
+      close: () => act(async () => root.render(null)),
+      sessionIs: async kind => (await (await win.fetch(`${targets.shared.baseUrl}/api/check-session`, { method: "POST" })).json())[kind] === true,
+    });
+  } finally {
+    await act(async () => root.unmount());
+    api.resetApiAuthFetchForTests();
+    win.close();
+    for (const key of keys) Object.defineProperty(globalThis, key, { configurable: true, writable: true, value: previous[key] });
+  }
+}
+
+test.each(["network", "5xx", "malformed"] as const)("%s validation failure retries the installed session without another pairing POST", async failure => {
+  await withPairingValidation(() => {
+    if (failure === "network") throw new Error("offline");
+    return failure === "5xx" ? new Response(null, { status: 503 }) : Response.json({ invalid: true });
+  }, async ({ container, input, submit, retry, close, sessionIs, counts }) => {
+    await submit();
+    expect(counts.connected).toBe(0);
+    expect(input.value).toBe("");
+    expect(input.disabled).toBe(true);
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("Retry validation");
+    expect(await sessionIs("candidate")).toBe(true);
+    await retry();
+    expect(counts).toEqual({ posts: 1, validations: 2, connected: 1, bootstraps: 0 });
+    expect(await sessionIs("candidate")).toBe(true);
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect(winStorageHasSession()).toBe(false);
+    await close();
+    expect(await sessionIs("candidate")).toBe(true);
+  });
+});
+
+test("leaving a pending validation restores the previous session", async () => {
+  await withPairingValidation(() => new Response(null, { status: 503 }), async ({ submit, close, sessionIs }) => {
+    await submit();
+    expect(await sessionIs("candidate")).toBe(true);
+    await close();
+    expect(await sessionIs("previous")).toBe(true);
+  });
+});
+
+function winStorageHasSession(): boolean {
+  return Object.keys(sessionStorage).some(key => /session|token/i.test(key))
+    || Object.keys(localStorage).some(key => /session|token/i.test(key));
+}
+
+test.each([401, 403])("validation HTTP %i restores the previous shared session", async status => {
+  await withPairingValidation(() => new Response(null, { status }), async ({ container, input, submit, sessionIs, counts }) => {
+    await submit();
+    expect(counts).toEqual({ posts: 1, validations: 1, connected: 0, bootstraps: 0 });
+    expect(await sessionIs("previous")).toBe(true);
+    expect(input.value).toBe("");
+    expect(input.disabled).toBe(false);
+    expect(container.textContent).not.toContain("Retry validation");
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("cannot manage Remote Link");
+    expect(winStorageHasSession()).toBe(false);
+  });
 });

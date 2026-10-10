@@ -3469,6 +3469,8 @@ export const zhTW: Record<TKey, string> = {
   "connection.pairing.body": "貼上在 Hub 建立的一次性配對碼。",
   "connection.pairing.relayWarning": "此代碼透過固定 Hub 轉送交換，無法重新導向其他主機。",
   "connection.pairing.code": "一次性配對碼",
+  "connection.pairing.retryValidation": "重試驗證",
+  "connection.pairing.validationPending": "代碼已兌換，但工作階段驗證未能完成。請保持此頁面開啟並點選「重試驗證」，無需新的代碼。",
   "connection.pairing.submit": "連接",
   "connection.pairing.submitting": "連接中…",
   "connection.pairing.error": "中樞拒絕了配對碼。它可能已過期、已使用或是為其他瀏覽器來源建立的。請向管理員索取與此 HTTPS 位址完全一致的新配對碼。",

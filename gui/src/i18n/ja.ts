@@ -3505,6 +3505,8 @@ export const ja: Record<TKey, string> = {
   "connection.pairing.body": "ハブで作成した使い捨てペアリングコードを貼り付けてください。",
   "connection.pairing.relayWarning": "このコードは固定ハブリレーを通じて交換されます。リレーの接続先を別のホストに変更することはできません。",
   "connection.pairing.code": "使い捨てペアリングコード",
+  "connection.pairing.retryValidation": "検証を再試行",
+  "connection.pairing.validationPending": "コードの交換は完了しましたが、セッションの検証を完了できませんでした。このページを開いたまま「検証を再試行」を選んでください。新しいコードは不要です。",
   "connection.pairing.submit": "接続",
   "connection.pairing.submitting": "接続中…",
   "connection.pairing.error": "ハブがコードを拒否しました。有効期限切れ、使用済み、または別のブラウザーオリジン用に作成された可能性があります。このHTTPSアドレスと完全に一致する新しいコードを管理者に依頼してください。",
