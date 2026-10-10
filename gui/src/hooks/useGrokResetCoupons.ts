@@ -275,13 +275,14 @@ export function useGrokResetCoupons({ apiBase, accountIds, enabled }: {
         body: JSON.stringify({ accountId, tokenId: request.tokenId, operationId: request.operationId }),
         signal: bounded.signal,
       });
-      const data: unknown = await response.json().catch(() => null);
       if (!response.ok) {
-        const code = errorCode(data);
-        if (unresolvedCode(code, data)) return hold(request, code);
+        const failure: unknown = await response.json().catch(() => null);
+        const code = errorCode(failure);
+        if (unresolvedCode(code, failure)) return hold(request, code);
         clearMatchingHold();
         return { ok: false, code, replayed: false };
       }
+      const data: unknown = await response.json().catch(() => null);
       const replayed = Boolean(data && typeof data === "object" && (data as { replayed?: unknown }).replayed === true);
       const code = settledCode(data);
       // A settled body never legitimately carries a ledger refusal code.

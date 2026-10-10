@@ -8,7 +8,7 @@
  */
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act } from "react";
+import { act, useLayoutEffect } from "react";
 import type { Root } from "react-dom/client";
 import ProviderAuthPanel from "../src/components/provider-workspace/ProviderAuthPanel";
 import { LanguageProvider } from "../src/i18n/provider";
@@ -485,9 +485,10 @@ test("no more than three coupon reads are in flight at once", async () => {
 
 // Direct controllers exercise admission even when the UI hides the redeem button.
 async function mountController(apiBase = testApiBase, accountId = "acct-a") {
-  let current!: GrokResetCouponController;
+  const seen: { current: GrokResetCouponController | null } = { current: null };
   function Probe() {
-    current = useGrokResetCoupons({ apiBase, accountIds: [accountId], enabled: true });
+    const controller = useGrokResetCoupons({ apiBase, accountIds: [accountId], enabled: true });
+    useLayoutEffect(() => { seen.current = controller; }, [controller]);
     return null;
   }
   const host = testWindow.document.createElement("div");
@@ -497,7 +498,7 @@ async function mountController(apiBase = testApiBase, accountId = "acct-a") {
   mountedRoots.push(root);
   await act(async () => { root.render(<Probe />); await flush(); });
   return {
-    get current() { return current; },
+    get current() { return seen.current!; },
     async unmount() {
       await act(async () => { root.unmount(); await flush(); });
       mountedRoots.splice(mountedRoots.indexOf(root), 1);
