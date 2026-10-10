@@ -6,6 +6,7 @@ import {
   isRateLimitOrQuotaFailureMessage,
   recognizedUpstreamError,
 } from "../lib/errors";
+import { redactSecretString } from "../lib/redact";
 
 /** First bounded upstream diagnostics shared by request contexts and final rows. */
 export interface UpstreamErrorDiagnostics {
@@ -37,13 +38,42 @@ const genuineTerminals = new WeakSet<TerminalStatusContext>();
 
 const UPSTREAM_DIAGNOSTIC_TOKEN = /^[A-Za-z0-9_.:-]{1,128}$/;
 
+/**
+ * Upstream diagnostics are provider-controlled. The token alphabet alone also admits
+ * credential formats (an echoed `sk-...` key fits it), so a value the shared redactor
+ * would change is dropped rather than recorded, warned, or projected into log rows.
+ */
+function isSafeDiagnosticToken(value: unknown): value is string {
+  return typeof value === "string" && UPSTREAM_DIAGNOSTIC_TOKEN.test(value) && redactSecretString(value) === value;
+}
+
+/**
+ * Error classes published by the supported provider APIs (OpenAI/Responses, Anthropic, Gemini).
+ * The type is diagnostic only, so the vocabulary is closed: a gateway can echo anything in
+ * `error.type`, including a configured credential whose format no redactor recognizes, and a
+ * value outside this set is simply not recorded, which is what 2.82.0 did for every type.
+ */
+const KNOWN_UPSTREAM_ERROR_TYPES: ReadonlySet<string> = new Set([
+  "api_error", "authentication_error", "billing_error", "insufficient_quota", "invalid_request_error",
+  "not_found_error", "overloaded_error", "permission_error", "rate_limit_error", "request_too_large",
+  "requests", "server_error", "timeout_error", "tokens",
+  "INVALID_ARGUMENT", "FAILED_PRECONDITION", "PERMISSION_DENIED", "UNAUTHENTICATED", "NOT_FOUND",
+  "RESOURCE_EXHAUSTED", "INTERNAL", "UNAVAILABLE", "DEADLINE_EXCEEDED",
+]);
+
+/** Bare top-level error codes worth keeping: the classes recognizedUpstreamError maps, plus server_error. */
+const KNOWN_BARE_ERROR_CODES: ReadonlySet<string> = new Set([
+  "rate_limit_exceeded", "rate_limit_error", "server_is_overloaded", "overloaded_error", "server_error",
+]);
+
 function noteBoundedDiagnostic(
   logCtx: TerminalStatusContext,
   field: "upstreamErrorCode" | "upstreamErrorType" | "upstreamRequestId",
   value: unknown,
 ): void {
   if (logCtx[field] !== undefined) return;
-  if (typeof value !== "string" || !UPSTREAM_DIAGNOSTIC_TOKEN.test(value)) return;
+  if (!isSafeDiagnosticToken(value)) return;
+  if (field === "upstreamErrorType" && !KNOWN_UPSTREAM_ERROR_TYPES.has(value)) return;
   logCtx[field] = value;
   const status = logCtx.terminalHttpStatus;
   if (status === undefined || status >= 500) console.warn(`[opencodex] upstream failure${status ? ` status=${status}` : ""}${logCtx.upstreamErrorCode ? ` code=${logCtx.upstreamErrorCode}` : ""}${logCtx.upstreamRequestId ? ` request_id=${logCtx.upstreamRequestId}` : ""}`);
@@ -56,7 +86,9 @@ export function noteUpstreamRequestId(logCtx: TerminalStatusContext, headers: He
 export function captureUpstreamTerminalDiagnostics(logCtx: TerminalStatusContext, json: UpstreamErrorPayload): void {
   captureTerminalHttpStatus(logCtx, json);
   noteBoundedDiagnostic(logCtx, "upstreamErrorCode",
-    json.error?.code ?? json.last_error?.code ?? json.response?.error?.code ?? json.code);
+    json.error?.code ?? json.last_error?.code ?? json.response?.error?.code
+      // A bare top-level code (new in 2.83.0) has no envelope contract, so only a known class is kept.
+      ?? (typeof json.code === "string" && KNOWN_BARE_ERROR_CODES.has(json.code) ? json.code : undefined));
   noteBoundedDiagnostic(logCtx, "upstreamErrorType",
     json.error?.type ?? json.last_error?.type ?? json.response?.error?.type);
 }

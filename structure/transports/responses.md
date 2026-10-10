@@ -583,7 +583,7 @@ caller passes `recordBufferedDelivery: false`, which the direct client encoders 
 count their own frames. `src/protocols/encoders/adapter-events.ts` ports the bridge's item state
 machine for those encoders, so a change to item boundaries, tool naming or terminal handling in
 `sse.ts` has to be made there too; the parity tests fail when the two diverge. `src/bridge/errors.ts` (`formatErrorResponse`) formats error responses and
-keeps only allowlisted transport verdict codes. Adapter error events take a different path:
+keeps only allowlisted transport verdict codes and the explicit local `spend_ledger_storage_unavailable` identity ([storage refusal contract](responses-spend.md#durable-spend-reservations)). Adapter error events take a different path:
 `src/bridge/internal.ts` preserves explicit verdicts except cyber-policy and known rate-limit mappings
 ([client retry advice](responses-wire-shapes.md#client-rate-limit-retry-advice)). The shared usage shaping's `input_tokens_details` and
 `output_tokens_details` are always emitted, with zero defaults, because strict Responses clients

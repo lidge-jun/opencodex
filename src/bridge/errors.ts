@@ -12,6 +12,7 @@ import {
   cyberPolicyErrorType,
   CYBER_POLICY_ERROR_CODE,
   isCyberPolicyCode,
+  SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE,
   type OcxErrorPayload,
 } from "../lib/errors";
 
@@ -22,6 +23,10 @@ export function formatErrorResponse(
   options?: { code?: string | null; retryAfter?: string | null },
 ): Response {
   const error = classifyError(status, type, message);
+  if (options?.code === SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE) {
+    error.type = "server_error";
+    error.code = SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE;
+  }
   if (isCyberPolicyCode(options?.code)) {
     error.code = CYBER_POLICY_ERROR_CODE;
     error.type = cyberPolicyErrorType(type);
@@ -36,7 +41,8 @@ export function formatErrorResponse(
   // that would hand the client a 5xx it is configured to retry four times.
   const finalStatus = error.code === CYBER_POLICY_ERROR_CODE
     ? 400
-    : isReplayRefusalCode(error.code) ? REPLAY_REFUSED_STATUS : status;
+    : error.code === SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE ? 503
+      : isReplayRefusalCode(error.code) ? REPLAY_REFUSED_STATUS : status;
   const headers = new Headers({ "Content-Type": "application/json" });
   const retryAfter = options?.retryAfter?.trim();
   if (error.code !== CYBER_POLICY_ERROR_CODE

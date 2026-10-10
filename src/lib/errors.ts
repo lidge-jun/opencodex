@@ -17,6 +17,7 @@ export const ENCRYPTED_FUNCTION_OUTPUT_REJECTION =
  * string for a client to be able to tell this apart from a provider rate limit.
  */
 export const SEND_BUDGET_EXHAUSTED_CODE = "request_send_budget_exhausted";
+export const SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE = "spend_ledger_storage_unavailable";
 
 /** First nonblank string across the canonical upstream error paths, in priority order. */
 export function upstreamErrorMessageFromPayload(payload: unknown): string | undefined {
@@ -357,6 +358,9 @@ export function isUpstreamResetReplayRefusedMessage(text: string): boolean {
 
 export function classifyError(status: number, type: string, message: string): OcxErrorPayload {
   const text = message.toLowerCase();
+  if (type === SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE) {
+    return { message, type: "server_error", code: SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE };
+  }
   if (type === "previous_response_not_found") {
     return { message, type: "invalid_request_error", code: "previous_response_not_found" };
   }
@@ -664,6 +668,7 @@ export function httpStatusFromTerminalError(error: {
   message?: string;
 } | undefined): number {
   if (!error) return 502;
+  if (error.code === SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE) return 503;
   if (error.code === "client_closed_request" || error.code === "client_cancelled") return 499;
   if (isCyberPolicyCode(error.code) || (error.message ? isCyberPolicyMessage(error.message) : false)) {
     return 400;

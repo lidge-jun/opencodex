@@ -135,7 +135,8 @@ describe("local client inference wires on the loopback listener (#4236)", () => 
     const nextRoute = source.indexOf("url.pathname === \"/v1/live\"", chatStart);
     expect(chatStart).toBeGreaterThan(-1);
     const branch = source.slice(chatStart, nextRoute);
-    expect(branch).toContain("handleChatCompletions(req, config, logCtx");
+    // The handler receives the caller-session-promoted request (#6520); CORS still uses req.
+    expect(branch).toContain("handleChatCompletions(sessionReq, config, logCtx");
     expect(branch).toContain("req,\n          policy,\n        )");
     expect(branch).not.toContain("req,\n          config,\n        )");
   });

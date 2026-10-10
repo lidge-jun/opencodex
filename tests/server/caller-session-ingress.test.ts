@@ -7,7 +7,7 @@ import { sessionLaneIdFromRequest } from "../../src/server/request-log-conversat
 import { ACCESS, PROXY_KEY, reserveIngressFixture } from "../helpers/reserve-ingress-fixture";
 
 describe("caller session identity through admitted HTTP ingress", () => {
-  for (const transport of ["responses", "messages"] as const) {
+  for (const transport of ["responses", "messages", "chat"] as const) {
     test(`${transport} uses one promoted request for admission and upstream dispatch`, async () => {
       const fixture = await reserveIngressFixture({ configure: config => {
         config.apiKeys = [{ id: "second-caller", name: "Second fixture", createdAt: "2026-01-01T00:00:00.000Z", key: "caller-ingress-fixture-second" }];

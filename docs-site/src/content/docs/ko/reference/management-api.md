@@ -65,7 +65,7 @@ Authorization: Bearer <admin-token>
 | `PUT /api/grok/selection` | 제외할 Grok 모델을 영속화합니다 | 400 잘못되었거나 너무 큰 선택 |
 | `POST /api/grok/apply` | 관리형 동기화를 통해 영속화된 Grok 구성을 적용합니다 | 409 `grok_apply_busy`; 400/500 적용 실패 |
 | `GET /api/grok/reset-coupons?accountId=...` | 활성 또는 지정된 xAI 계정의 남은 Grok billing reset 토큰과 유효 기간을 읽습니다 | 400 누락된 account; 401 인증되지 않음; 502 upstream gRPC-Web 오류 |
-| `POST /api/grok/reset-coupons/consume` | 사용할 수 있는 reset coupon을 교환합니다. 본문은 `{ accountId?, tokenId?, operationId? }`. 선택적 `operationId`(UUIDv4)는 교환을 멱등하게 만듭니다 — 같은 id를 반복하면 이중 교환 없이 저장된 결과를 재생합니다. | 400 잘못된 JSON/UUID; 401 인증되지 않음; 409 `identity_mismatch`; 502 upstream 오류; 503 ledger 용량 |
+| `POST /api/grok/reset-coupons/consume` | 사용할 수 있는 reset coupon을 교환합니다. 본문은 `{ accountId?, tokenId?, operationId? }`. 선택적 `operationId`(UUIDv4)는 교환을 멱등하게 만듭니다 — 같은 id를 반복하면 이중 교환 없이 저장된 결과를 재생합니다. | 400 잘못된 JSON/UUID; 401 인증되지 않음; 409 `operation_id_owned_by_another_account` / `coupon_unavailable` / `operation_token_mismatch` / `operation_state_changed` / `attempt_in_progress` / `attempt_unresolved`; 502 upstream 오류; 503 ledger 용량 / `ledger_unavailable`; 500 `attempt_mark_failed` |
 | `GET /api/anthropic/reset-grants?accountId=...` | Anthropic OAuth 계정 하나의 Claude 사용량 리셋 grant를 읽습니다. 사용 가능 여부, grant별 남은 리셋 수와 유효 기간, 초기화하는 한도, 아직 다시 보낼 수 있는 미확인 시도를 함께 돌려줍니다 | 400 일치하는 계정 없음; 401 재로그인 필요; 502 upstream 응답 없음 |
 | `POST /api/anthropic/reset-grants/consume` | 리셋 grant 하나를 사용합니다. 본문은 `{ accountId, grantId, operationId }`이고, `operationId`(UUIDv4)는 upstream 요청 ID로 그대로 전송되므로 같은 값을 다시 보내면 같은 요청을 재시도합니다. 대시보드 세션이 필요합니다. | 400 잘못된 본문; 401 재로그인 필요; 403 `session_required`; 409 `grant_not_usable`, `in_flight`, `unresolved_prior_operation`, `unknown_outcome_expired`, `operation_identity_mismatch`; 500 `journal_write_failed`; 502 `unknown_outcome`; 503 저널 사용 중, 열 수 없음, 또는 가득 참 |
 | `GET, PUT /api/claude-desktop` | Claude Desktop 라우팅/네이티브 프로필을 읽거나 저장합니다 | 400 잘못되었거나 사용할 수 없는 할당 |
@@ -73,11 +73,13 @@ Authorization: Bearer <admin-token>
 | `GET /api/claude-desktop/status` | 저장된 프로필과 적용된 프로필, Desktop 상태를 확인합니다 | 400 상태 읽기 실패 |
 | `GET, PUT /api/claude-code` | Claude Code gateway, auth-mode, model-map, context, agent, sidecar 설정을 읽거나 갱신합니다 | 400 잘못된 필드 또는 형태 |
 
-대시보드는 **Providers > xAI Grok > Accounts**에서 두 coupon 경로를 모두 사용합니다. 로그인한 각
-계정 행에는 남은 coupon 개수가 표시된 티켓 배지가 있으며, 이 배지는 유효 기간을 나열하고 만료가
-가장 가까운 coupon을 교환하는 대화 상자를 엽니다. 대화 상자는 클라이언트가 생성한 `operationId`를
-보내며, 재시도하는 대신 타임아웃 후 전송을 중단합니다. 저널 기록이 아직 열린 교환이 다시 실행되기
-때문입니다. `ocx account grok-reset-coupons`는 터미널 대응 명령으로 그대로 남습니다.
+`tokenId`를 보내면 비어 있지 않은 문자열이어야 합니다. 잘못된 값은 자격 증명을 읽거나 원장을 열기 전에 `400 invalid_token_id`로 거절됩니다. 30일 보존 기간 안에서 같은 `operationId` 재시도가 `accountId`를 생략하면 활성 계정이 바뀌어도 기록된 계정을 사용합니다. 실행 가능한 `open` 재시도가 `tokenId`를 생략하면 기록된 토큰을 사용합니다. 다른 계정이나 토큰을 명시하면 계속 거절됩니다. 대시보드는 확정 실패 뒤 해당 대기 요청에서 생긴 추측성 보류를 해제하여 새 작업을 명시적으로 확인할 수 있게 합니다. 실제 불확정 결과는 계속 보류합니다.
+
+교환 전에 ledger에 시도를 기록해 한 요청만 교환을 진행합니다. upstream의 교환 성공 응답이 확인된 경우에만 `redeemed`를 기록하며, 목록에서 쿠폰이 사라졌다는 사실만으로 이 operation의 성공을 판단하지 않습니다. 타임아웃이나 결과 저장 실패 후 재시도는 다시 교환하지 않고 가용성만 조회한 뒤 `attempt_unresolved`를 반환하며, 최근 시도는 `attempt_in_progress`를 반환합니다. 늦게 끝난 검사로 인한 거절은 아직 `open`인 operation에만 기록합니다. 같은 트랜잭션 안에서 계정과 토큰이 일치하는 확정된 최종 결과는 원래 코드와 HTTP 200으로 재생합니다. 결과가 미확정이거나 계정·토큰이 일치하지 않으면 `operation_state_changed`를 반환하며 같은 operation ID를 보존해 복구해야 합니다. ledger를 읽거나 잠글 수 없으면 교환 없이 `ledger_unavailable`을 반환합니다.
+
+결과를 확인하지 못한 사용 요청은 HTTP 502와 `error.code: "attempt_unresolved"`, 실제 `operationId`를 반환합니다. 이 ID를 보존하세요. 새 ID는 다른 작업을 시작합니다. CLI는 전송 전에 ID를 생성하고, 전송이나 응답이 불확실하면 같은 `--operation-id`를 보존하라는 안내를 출력합니다. 구버전 원장의 `open` 기록과 결과가 확인되지 않은 `redeem_failed` 기록은 불확정 상태로 격리되어 재사용 요청을 허용하지 않습니다.
+
+**Providers > xAI Grok > Accounts**의 계정별 티켓 배지에서 남은 쿠폰과 유효 기간을 확인합니다. 대화상자는 클라이언트가 생성한 `operationId`를 전송합니다. 전송이나 결과가 불확정이면 계정 컨트롤러가 마운트되어 있는 동안 같은 시도를 보존하며, 대화상자를 닫았다 다시 열어도 유지합니다. 새로고침은 GET만 보내고 추가 사용 POST를 허용하지 않습니다. `ocx account grok-reset-coupons`는 대응하는 터미널 명령입니다.
 
 Claude 사용량 리셋도 **Providers > Anthropic > Accounts**에서 같은 방식으로 씁니다. 로그인한
 계정 행마다 남은 리셋 수를 보여 주는 티켓 배지가 붙고, 대화상자에서 한 번 더 확인하면 리셋

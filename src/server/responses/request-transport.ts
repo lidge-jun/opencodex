@@ -305,15 +305,40 @@ export async function prepareResponsesTransport(
   let copilotSessionExpiresAt = Infinity;
   let copilotNegotiationRefreshed = false;
   let copilotAutoAdapter: OcxProviderConfig["adapter"] | undefined;
+  /** The operator-configured wire, captured before the first Auto negotiation can rewrite route.provider. */
+  let copilotConfiguredWire: { adapter: OcxProviderConfig["adapter"]; responsesPath?: string;
+    chatCompletionsPath?: string; apiVersion?: string } | undefined;
+  /** Start every negotiation from the configured wire, so a previous credential's Auto adapter,
+   *  endpoint and session headers never carry over to a credential that keeps the named model. */
+  const copilotNegotiationBase = (provider: OcxProviderConfig): OcxProviderConfig => {
+    if (!copilotConfiguredWire) return provider;
+    const headers = new Headers(provider.headers);
+    headers.delete("Copilot-Session-Token");
+    if (copilotConfiguredWire.apiVersion === undefined) headers.delete("X-GitHub-Api-Version");
+    else headers.set("X-GitHub-Api-Version", copilotConfiguredWire.apiVersion);
+    const base: OcxProviderConfig = { ...provider, adapter: copilotConfiguredWire.adapter,
+      headers: Object.fromEntries(headers) };
+    if (copilotConfiguredWire.responsesPath === undefined) delete base.responsesPath;
+    else base.responsesPath = copilotConfiguredWire.responsesPath;
+    if (copilotConfiguredWire.chatCompletionsPath === undefined) delete base.chatCompletionsPath;
+    else base.chatCompletionsPath = copilotConfiguredWire.chatCompletionsPath;
+    return base;
+  };
   /** Resolve the request's ephemeral wire selection and recover at most one OAuth negotiation 401. */
   const resolveCopilotSelection = async (requestParsed: OcxParsedRequest, insideDispatch = false): Promise<void> => {
     if (route.providerName !== "github-copilot" || route.provider.authMode === "forward") return;
+    copilotConfiguredWire ??= {
+      adapter: route.provider.adapter,
+      responsesPath: route.provider.responsesPath,
+      chatCompletionsPath: route.provider.chatCompletionsPath,
+      apiVersion: new Headers(route.provider.headers).get("X-GitHub-Api-Version") ?? undefined,
+    };
     /** Fence control-plane sends to the captured credential; reuse an already-held dispatch concurrency lease. */
     const negotiate = () => {
       const binding: DispatchBinding | undefined = oauthSelection && servingOAuthSnapshot
         ? { kind: "oauth", selection: { ...oauthSelection }, snapshot: servingOAuthSnapshot }
         : { kind: "api-key", provider: { ...route.provider } };
-      return resolveCopilotAuto(route.provider, copilotRequestedModel, requestParsed,
+      return resolveCopilotAuto(copilotNegotiationBase(route.provider), copilotRequestedModel, requestParsed,
         options.abortSignal ?? req.signal, /** Fence each negotiation send against the captured credential binding before touching the network. */
           () => selectionIsCurrent(binding), !insideDispatch);
     };

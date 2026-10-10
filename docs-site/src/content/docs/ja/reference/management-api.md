@@ -65,7 +65,7 @@ Authorization: Bearer <admin-token>
 | `PUT /api/grok/selection` |除外された Grok モデルを永続化します。 400 個の無効な選択またはサイズが大きすぎる選択 |
 | `POST /api/grok/apply` |管理された同期を通じて永続的な Grok 設定を適用する | 409 `grok_apply_busy`; 400/500 適用失敗 |
 | `GET /api/grok/reset-coupons?accountId=...` | アクティブまたは指定された xAI アカウントの残り Grok 請求リセット トークンと有効期限ウィンドウを読む | 400 アカウントがありません; 401 未認証; 502 上流 gRPC-Web エラー |
-| `POST /api/grok/reset-coupons/consume` | 対象となるリセット クーポンを換金します。本文は `{ accountId?, tokenId?, operationId? }`。任意の `operationId`（UUIDv4）により換金は冪等になります: 同じ ID を繰り返すと、二重換金せずに永続化された結果を再生します。 | 400 無効な JSON/UUID; 401 未認証; 409 `identity_mismatch`; 502 上流エラー; 503 台帳容量 |
+| `POST /api/grok/reset-coupons/consume` | 対象となるリセット クーポンを換金します。本文は `{ accountId?, tokenId?, operationId? }`。任意の `operationId`（UUIDv4）により換金は冪等になります: 同じ ID を繰り返すと、二重換金せずに永続化された結果を再生します。 | 400 無効な JSON/UUID; 401 未認証; 409 `operation_id_owned_by_another_account` / `coupon_unavailable` / `operation_token_mismatch` / `operation_state_changed` / `attempt_in_progress` / `attempt_unresolved`; 502 上流エラー; 503 台帳容量 / `ledger_unavailable`; 500 `attempt_mark_failed` |
 | `GET /api/anthropic/reset-grants?accountId=...` | 1 つの Anthropic OAuth アカウントの Claude 使用量上限リセット付与を読み取ります。対象資格、各付与の残り回数、有効期間、リセットされる使用量枠、再試行可能な未確定の試行が含まれます。 | 400 該当するアカウントなし; 401 再認証が必要; 502 上流を利用できません |
 | `POST /api/anthropic/reset-grants/consume` | リセット付与を 1 回分使用します。本文は `{ accountId, grantId, operationId }`。`operationId` はリクエスト ID として上流へ送信する UUIDv4 で、同じ値を繰り返すと同じ請求を再試行します。ダッシュボードセッションが必要です。 | 400 無効な本文; 401 再認証が必要; 403 `session_required`; 409 `grant_not_usable`, `in_flight`, `unresolved_prior_operation`, `unknown_outcome_expired`, `operation_identity_mismatch`; 500 `journal_write_failed`; 502 `unknown_outcome`; 503 ジャーナルが使用中、利用不可、または満杯 |
 | `GET, PUT /api/claude-desktop` | Claude Desktop のルーティング/ネイティブ プロファイルを読み取るか永続化する | 400 無効または使用できない割り当て |
@@ -73,7 +73,13 @@ Authorization: Bearer <admin-token>
 | `GET /api/claude-desktop/status` |保存済みプロファイルと適用済みプロファイルおよびデスクトップの健全性を検査する | 400 ステータス読み取り失敗 |
 | `GET, PUT /api/claude-code` |クロード コードのゲートウェイ、認証モード、モデル マップ、コンテキスト、エージェント、サイドカー設定の読み取りまたは更新 | 400 無効なフィールドまたは図形 |
 
-ダッシュボードは **Providers > xAI Grok > Accounts** から両方のクーポン パスを操作します。サインイン済みの各アカウント行には残りのクーポン数を示すチケット バッジがあり、バッジは有効期限ウィンドウを一覧し、期限が最も近いクーポンを換金するダイアログを開きます。ダイアログはクライアントが発行した `operationId` を送り、再試行せずタイムアウト後に送信を止めます。ジャーナル記録がまだ開いている換金は再実行されてしまうためです。`ocx account grok-reset-coupons` はターミナル側の同等コマンドです。
+`tokenId` を指定する場合は空でない文字列が必要です。不正な値は認証情報の読み取りや台帳を開く前に `400 invalid_token_id` で拒否されます。30 日の保持期間内では、同じ `operationId` の再試行で `accountId` を省略すると、アクティブアカウントが変わっていても記録済みのアカウントを使います。実行可能な `open` の再試行で `tokenId` を省略すると記録済みのトークンを使います。別のアカウントやトークンを明示した場合は引き続き拒否されます。確定した失敗の後、ダッシュボードは該当する保留リクエストの暫定保留を解除し、新しい試行を明示的に確認できるようにします。本当に結果が不明な試行は保留を維持します。
+
+換金前に台帳へ試行を記録し、一つのリクエストだけを実行します。上流から換金成功の応答を確認した場合だけ `redeemed` を記録します。一覧からクーポンが消えても、この操作の成功を示す証拠にはなりません。タイムアウトや結果保存の失敗後は、再換金せずに可用性だけを照会し `attempt_unresolved` を返します。最近の試行は `attempt_in_progress` を返します。遅れて完了した検査による拒否は、まだ `open` の操作だけに記録します。同じトランザクション内で、アカウントとトークンが一致する確定済みの最終結果は元のコードと HTTP 200 で再生します。結果が未確定、またはアカウントやトークンが一致しない場合は `operation_state_changed` を返し、同じ操作 ID を保持して復旧します。台帳を読めない、またはロックできない場合は換金せず `ledger_unavailable` を返します。
+
+使用結果を確認できない場合は HTTP 502 と `error.code: "attempt_unresolved"`、実際の `operationId` を返します。この ID を保持してください。新しい ID は別の操作を開始します。CLI は送信前に ID を生成し、送信や応答が不確かな場合は同じ `--operation-id` を保持するよう案内します。旧バージョンの台帳の `open` 記録と結果未確認の `redeem_failed` 記録は不確定な試行として隔離され、再使用を許可しません。
+
+**Providers > xAI Grok > Accounts** の各アカウントのチケットバッジから、残りのクーポンと有効期間を確認できます。ダイアログはクライアントで生成した `operationId` を送信します。送信や結果が不確定な場合、アカウントコントローラーがマウントされている間は同じ試行を保持し、ダイアログを閉じて開き直しても維持します。更新は GET のみで、追加の使用 POST を許可しません。`ocx account grok-reset-coupons` は対応するターミナルコマンドです。
 
 Claude の使用量リセットも **Providers > Anthropic > Accounts** から同様に操作できます。サインイン済みの各アカウント行には残りのリセット回数を示すチケットバッジがあり、ダイアログで再度確認した後に 1 回分を使用します。リセットすると、週次枠のリセット曜日を変えずに 5 時間枠と週次枠が補充されます。請求に応答がない場合、ダイアログは `operationId` を保持し、10 分間は同じ ID で再試行できます。Claude Code クライアント自体もこの方法で復旧し、その間は同じ付与に対する新しい操作が拒否されます。使用できるのはダッシュボードからのみで、管理者トークンだけでは `403 session_required` が返されます。
 

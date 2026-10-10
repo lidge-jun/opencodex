@@ -84,11 +84,33 @@ test.each(["", "bad type", "secret\nvalue", "x".repeat(129), { unsafe: "type" }]
   },
 );
 
-test("upstream error type accepts the 128-character bound and keeps the first valid type", () => {
+test("upstream error type records only a known class and keeps the first one", () => {
   const log = context();
   inspectResponseLogJson(log, JSON.stringify({ error: { type: "x".repeat(128) } }));
+  expect(log.upstreamErrorType).toBeUndefined();
   inspectResponseLogJson(log, JSON.stringify({ error: { type: "server_error" } }));
-  expect(log.upstreamErrorType).toBe("x".repeat(128));
+  inspectResponseLogJson(log, JSON.stringify({ error: { type: "rate_limit_error" } }));
+  expect(log.upstreamErrorType).toBe("server_error");
+});
+
+test("an opaque configured credential echoed as the error type is never recorded", () => {
+  const fixture = "private-provider-key-" + "G".repeat(32);
+  const log = context();
+  let row: RequestLogEntry | undefined;
+  inspectResponseLogJson(log, JSON.stringify({ error: { type: fixture, message: "fixture" } }));
+  addFinalRequestLog("probe", Date.now(), log, 503, undefined, entry => { row = entry; });
+  expect(log.upstreamErrorType).toBeUndefined();
+  expect(JSON.stringify(row)).not.toContain(fixture);
+});
+
+test("an unrecognized bare top-level code is never recorded as a diagnostic", () => {
+  const fixture = "private-provider-key-" + "H".repeat(32);
+  const log = context();
+  let row: RequestLogEntry | undefined;
+  inspectResponseLogJson(log, JSON.stringify({ type: "error", code: fixture, message: "fixture" }));
+  addFinalRequestLog("probe", Date.now(), log, 502, undefined, entry => { row = entry; });
+  expect(log.upstreamErrorCode).toBeUndefined();
+  expect(JSON.stringify(row)).not.toContain(fixture);
 });
 
 
@@ -162,3 +184,28 @@ test("genuine success clears the provisional policy error code", () => {
   expect(log.terminalHttpStatus).toBeUndefined();
   expect(log.terminalErrorCode).toBeUndefined();
 });
+
+for (const field of ["error", "last_error", "response"] as const) {
+  test(`credential-shaped ${field} type and code never reach the final log row or warning`, () => {
+    const fixture = "sk-" + "A".repeat(48);
+    const envelope = { type: fixture, code: fixture, message: "fixture" };
+    const payload = field === "response" ? { response: { error: envelope } } : { [field]: envelope };
+    const log = context();
+    const warnings: string[] = [];
+    const warn = console.warn;
+    console.warn = ((line: string) => { warnings.push(String(line)); }) as typeof console.warn;
+    let row: RequestLogEntry | undefined;
+    try {
+      noteUpstreamRequestId(log, new Headers({ "x-request-id": fixture }));
+      inspectResponseLogJson(log, JSON.stringify(payload));
+      addFinalRequestLog("probe", Date.now(), log, 502, undefined, entry => { row = entry; });
+    } finally {
+      console.warn = warn;
+    }
+    expect(log.upstreamErrorType).toBeUndefined();
+    expect(log.upstreamErrorCode).toBeUndefined();
+    expect(log.upstreamRequestId).toBeUndefined();
+    expect(JSON.stringify(row)).not.toContain(fixture);
+    expect(warnings.join("\n")).not.toContain(fixture);
+  });
+}

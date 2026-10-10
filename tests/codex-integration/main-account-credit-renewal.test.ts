@@ -59,11 +59,16 @@ function seed(credits: CodexSpendableCredits | null | undefined = {
 
 function usage(restriction?: string): Response {
   return Response.json({ plan_type: "plus", rate_limit: {
+    ...(restriction === "omitted-refusal" ? { allowed: false } : {}),
     primary_window: { used_percent: 100, limit_window_seconds: 604_800,
       reset_at: Math.floor((now + HOUR) / 1000) },
     secondary_window: null, tertiary_window: null,
-  }, ...(restriction === "omitted" ? {} : { credits: restriction === "retracted" ? null : {
-    has_credits: restriction !== "empty", balance: restriction === "empty" ? 0 : 5,
+  }, ...(["omitted", "omitted-refusal"].includes(restriction ?? "") ? {} : { credits: restriction === "retracted" ? null : {
+    has_credits: restriction !== "empty",
+    ...(["no-balance", "approximate"].includes(restriction ?? "") ? {} : {
+      balance: restriction === "recovered" ? "3000" : ["empty", "zero"].includes(restriction ?? "") ? 0 : 5,
+    }),
+    ...(restriction === "approximate" ? { approx_local_messages: [100, 200], approx_cloud_messages: [50, 100] } : {}),
     overage_limit_reached: restriction === "overage",
   } }), spend_control: { reached: restriction === "restricted" } });
 }
@@ -184,17 +189,35 @@ test.each([503, 401, 403])("failed renewal HTTP %s preserves evidence and eventu
   await refused();
 });
 
-test.each(["empty", "restricted", "overage", "retracted", "omitted"])("renewal with %s credits cannot authorize expired evidence", async restriction => {
-  fetchWith(async () => usage(restriction));
+test.each(["empty", "zero", "restricted", "overage", "retracted", "omitted", "omitted-refusal", "no-balance", "approximate"])("renewal with %s credits stays refused and discovers later funds after backoff", async restriction => {
+  let recovered = false;
+  fetchWith(async () => usage(recovered ? "recovered" : restriction));
   await runMainAccountHardLockRecovery(cfg);
   expect(calls).toEqual([whamUrl]);
+  if (restriction === "omitted-refusal" || restriction === "retracted") expect(getMainPolicyQuota()?.credits).toBeNull();
+  if (restriction !== "omitted") await refused();
   now += 120_001;
   await refused();
   await runMainAccountHardLockRecovery(cfg);
   expect(calls).toEqual([whamUrl]);
+  now += 179_999; // First successful-but-blocked observation waits five minutes.
+  await runMainAccountHardLockRecovery(cfg);
+  expect(calls).toEqual([whamUrl, whamUrl]);
+  await refused();
+  recovered = true;
+  now += 599_999; // Continued unavailability doubles the recovery backoff.
+  await runMainAccountHardLockRecovery(cfg);
+  expect(calls).toHaveLength(2);
+  await refused();
+  now++;
+  await runMainAccountHardLockRecovery(cfg);
+  expect(calls).toEqual([whamUrl, whamUrl, whamUrl]);
+  expect(getMainPolicyQuota()?.credits).toMatchObject({ hasCredits: true, balance: 3000, observedAt: now });
+  await expect(resolveCodexAuthContext(new Headers(), cfg, "pool")).resolves.toMatchObject({ kind: "main-pool" });
+  expect(getNativeMainProfileRequestCount()).toBe(0);
 });
 
-test.each(["missing", "retracted", "zero", "negative", "invalid-balance", "no-flags", "no-balance", "has-false", "restricted", "overage", "future", "invalid-time", "negative-time"])("%s credit evidence never initiates renewal", async condition => {
+test.each(["missing", "retracted", "zero", "negative", "invalid-balance", "no-flags", "no-balance", "has-false", "restricted", "overage", "future", "invalid-time", "negative-time"])("%s initial credit evidence stays refused until recovery observes spendable funds", async condition => {
   const credits: CodexSpendableCredits = { hasCredits: true, balance: 5, observedAt: now - 180_000 };
   if (condition === "zero") credits.balance = 0;
   if (condition === "negative") credits.balance = -1;
@@ -210,9 +233,25 @@ test.each(["missing", "retracted", "zero", "negative", "invalid-balance", "no-fl
   seed(condition === "retracted" ? null : credits);
   if (condition === "missing") { clearAccountQuota(MAIN); setAccountQuotaFromParsed(MAIN,
     { weeklyPercent: 100, weeklyResetAt: now + HOUR }, undefined, captureMainQuotaWriter(accountId)); }
+  await refused();
+  fetchWith(async () => usage("recovered"));
   await runMainAccountHardLockRecovery(cfg);
-  expect(calls).toEqual([]);
+  expect(calls).toEqual([whamUrl]);
+  expect(getMainPolicyQuota()?.credits).toMatchObject({ balance: 3000, observedAt: now });
+  await expect(resolveCodexAuthContext(new Headers(), cfg, "pool")).resolves.toMatchObject({ kind: "main-pool" });
   expect(getNativeMainProfileRequestCount()).toBe(0);
+});
+
+test.each([null, { hasCredits: true, balance: 5 }])("exclusion gates also apply to unavailable credits (%j)", async evidence => {
+  for (const condition of ["no-consent", "paused", "reauth"]) {
+    cfg.creditCodexAccountIds = condition === "no-consent" ? [] : [MAIN];
+    cfg.pausedCodexAccountIds = condition === "paused" ? [MAIN] : [];
+    clearAccountNeedsReauth(MAIN);
+    if (condition === "reauth") markAccountNeedsReauth(MAIN);
+    seed(evidence === null ? null : { ...evidence, observedAt: now - 180_000 });
+    await runMainAccountHardLockRecovery(cfg);
+    expect(calls).toEqual([]);
+  }
 });
 
 test.each(["no-consent", "paused", "reauth", "fresh", "reset", "hard-lock", "identity"])("%s excludes credit renewal", async condition => {
@@ -253,13 +292,13 @@ test("failed refresh leaves stale-credit refusal and never calls WHAM", async ()
   await refused();
 });
 
-test.each(["consent", "pause", "credits", "reauth", "identity", "hard-lock"])("eligibility is checked after token preparation changes %s", async change => {
+test.each(["consent", "pause", "fresh-credits", "reauth", "identity", "hard-lock"])("eligibility is checked after token preparation changes %s", async change => {
   const original = mainAccount.getValidMainAccountToken;
   spyOn(mainAccount, "getValidMainAccountToken").mockImplementation(async options => {
     const token = await original(options);
     if (change === "consent") cfg.creditCodexAccountIds = [];
     if (change === "pause") cfg.pausedCodexAccountIds = [MAIN];
-    if (change === "credits") seed(null);
+    if (change === "fresh-credits") seed({ hasCredits: true, balance: 5, observedAt: now });
     if (change === "reauth") markAccountNeedsReauth(MAIN);
     if (change === "identity") writeMain("fixture-replacement");
     if (change === "hard-lock") cfg.codexMainAccountHardLock = true;
@@ -267,6 +306,41 @@ test.each(["consent", "pause", "credits", "reauth", "identity", "hard-lock"])("e
   });
   await runMainAccountHardLockRecovery(cfg);
   expect(calls).toEqual([]);
+});
+
+test("retraction during token preparation still permits a fenced recovery observation", async () => {
+  const original = mainAccount.getValidMainAccountToken;
+  spyOn(mainAccount, "getValidMainAccountToken").mockImplementationOnce(async options => {
+    const token = await original(options);
+    seed(null);
+    return token;
+  });
+  fetchWith(async () => usage("recovered"));
+  await runMainAccountHardLockRecovery(cfg);
+  expect(calls).toEqual([whamUrl]);
+  await expect(resolveCodexAuthContext(new Headers(), cfg, "pool")).resolves.toMatchObject({ kind: "main-pool" });
+});
+
+test.each([false, true])("credit-evidence refusal bounds Retry-After only with consent=%j", async consent => {
+  cfg.creditCodexAccountIds = consent ? [MAIN] : [];
+  const resetAt = now + 6 * 24 * HOUR;
+  setAccountQuotaFromParsed(MAIN, { weeklyPercent: 100, weeklyResetAt: resetAt, credits: null },
+    undefined, captureMainQuotaWriter(accountId));
+  const error = await resolveCodexAuthContext(new Headers(), cfg, "pool").catch(error => error);
+  expect(error).toBeInstanceOf(CodexMainAccountCreditsOffError);
+  expect(error.resetAt).toBe(resetAt);
+  const response = mapCodexAuthContextErrorToResponse(error, { now })!;
+  expect(response.status).toBe(429);
+  expect(response.headers.get("Retry-After")).toBe(consent ? "300" : String(6 * 24 * HOUR / 1000));
+  expect(calls).toEqual([]);
+});
+
+test("consented refusal preserves a sooner included-quota reset", async () => {
+  setAccountQuotaFromParsed(MAIN, { weeklyPercent: 100, weeklyResetAt: now + 90_000, credits: null },
+    undefined, captureMainQuotaWriter(accountId));
+  const error = await resolveCodexAuthContext(new Headers(), cfg, "pool").catch(error => error);
+  expect(error).toBeInstanceOf(CodexMainAccountCreditsOffError);
+  expect(mapCodexAuthContextErrorToResponse(error, { now })!.headers.get("Retry-After")).toBe("90");
 });
 
 test("overlapping sweeps share one credit renewal and release ownership", async () => {
@@ -329,6 +403,21 @@ test.each([401, 403])("terminal passive WHAM %s retains recovery backoff without
   expect(calls).toEqual([whamUrl]);
   expect(isAccountNeedsReauth(MAIN)).toBe(false);
   now += 240_000;
+  await runMainAccountHardLockRecovery(cfg);
+  expect(calls).toEqual([whamUrl, whamUrl]);
+  expect(isAccountNeedsReauth(MAIN)).toBe(false);
+});
+
+test.each([401, 403])("missing credit evidence with WHAM %s still waits for recovery pacing", async status => {
+  seed(null); // Eligibility no longer needs prior spendable evidence, so pacing must hold alone.
+  fetchWith(async () => Response.json({ detail: { code: "invalid_workspace_selected" } }, { status }));
+  await runMainAccountHardLockRecovery(cfg);
+  for (let tick = 0; tick < 4; tick++) {
+    now += 60_000;
+    await runMainAccountHardLockRecovery(cfg);
+  }
+  expect(calls).toEqual([whamUrl]);
+  now += 60_001;
   await runMainAccountHardLockRecovery(cfg);
   expect(calls).toEqual([whamUrl, whamUrl]);
   expect(isAccountNeedsReauth(MAIN)).toBe(false);

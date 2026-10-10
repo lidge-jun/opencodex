@@ -1,3 +1,4 @@
+import { spendLedgerStorageErrorResponse } from "./spend-storage-error";
 import { classifyAnthropic429 } from "../../oauth/anthropic-rate-limit-policy";
 import { rotateAnthropicAccountOnResponseForInstance } from "../../oauth/anthropic-account-refusal";
 import { authorizeResendForRecovery } from "../../lib/request-resend-gate";
@@ -494,6 +495,11 @@ export async function prepareAdapterExchange(
     cleanupUpstreamAbort();
     upstream.abort();
     if (options.abortSignal?.aborted) return clientCancelledResponse();
+    const storageRefusal = spendLedgerStorageErrorResponse(err, logCtx);
+    if (storageRefusal) {
+      releaseCodexAuthContextProbeLease(admissionState.authCtx);
+      return storageRefusal;
+    }
     const refusal = err instanceof UpstreamRetryEvidenceError ? err.cause : err;
     const codexRefusal = mapCodexAuthContextErrorToResponse(unwrapUpstreamRetryEvidenceError(err), {
       now: Date.now(), accountSelector: route.codexAccountNamespace,
@@ -731,6 +737,13 @@ export async function prepareAdapterExchange(
           retryRequest.releaseBodyObservation?.();
         }
       } catch (err) {
+        const storageRefusal = !options.abortSignal?.aborted && spendLedgerStorageErrorResponse(err, logCtx);
+        if (storageRefusal) {
+          cleanupUpstreamAbort();
+          upstream.abort();
+          releaseCodexAuthContextProbeLease(admissionState.authCtx);
+          return { failed: storageRefusal };
+        }
         const codexRefusal = !options.abortSignal?.aborted && mapCodexAuthContextErrorToResponse(unwrapUpstreamRetryEvidenceError(err), {
           now: Date.now(), accountSelector: route.codexAccountNamespace,
         });

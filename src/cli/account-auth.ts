@@ -6,6 +6,7 @@ import { warnIfCodexCatalogRefreshPending } from "./account-catalog-refresh";
 import { isCodexResetCreditOperationId } from "../codex/reset-credit-recovery";
 import { BROWSER_LAUNCH_FAILED_NOTICE } from "../lib/browser-launch-notice";
 import {
+  RuntimeApiError,
   CliUsageError,
   printData,
   readSecretLine,
@@ -465,18 +466,25 @@ async function grokResetCoupons(argv: string[], deps: RuntimeApiDeps): Promise<v
   }
   rejectArgs(args, USAGE);
   const accountId = rawId ? (rawId === "main" ? "__main__" : rawId) : undefined;
-  const result = consume
-    ? await runtimeRequest("/api/grok/reset-coupons/consume", {
-      method: "POST",
-      // Spread, not `operationId: undefined`: the server distinguishes an absent
-      // key from a caller who asked for a stable idempotency identity.
-      body: JSON.stringify({ accountId, tokenId, ...(operationId === undefined ? {} : { operationId }) }),
-    }, deps)
-    : await runtimeRequest(
-      `/api/grok/reset-coupons${accountId ? `?accountId=${encodeURIComponent(accountId)}` : ""}`,
-      {},
-      deps,
-    );
+  const effectiveOperationId = consume ? operationId ?? crypto.randomUUID() : undefined;
+  let result: unknown;
+  try {
+    result = consume
+      ? await runtimeRequest("/api/grok/reset-coupons/consume", {
+        method: "POST", body: JSON.stringify({ accountId, tokenId, operationId: effectiveOperationId }),
+      }, deps)
+      : await runtimeRequest(`/api/grok/reset-coupons${accountId ? `?accountId=${encodeURIComponent(accountId)}` : ""}`, {}, deps);
+  } catch (error) {
+    const apiError = error instanceof RuntimeApiError ? error : undefined;
+    const body = apiError?.body as { error?: { code?: string } } | null | undefined;
+    const code = body && typeof body === "object" ? body.error?.code : undefined;
+    if (consume && (!apiError || (!apiError.code && (
+      (!code && apiError.status >= 500) || ["attempt_unresolved", "attempt_in_progress", "attempt_reconcile_failed", "operation_state_changed", "redeem_failed"].includes(code ?? "")
+    )))) {
+      throw new RuntimeApiError(`Coupon redemption outcome is unconfirmed. Preserve --operation-id ${effectiveOperationId}; reuse it to inspect this attempt and do not create a replacement operation.`, apiError?.status ?? 503, apiError?.body ?? null);
+    }
+    throw error;
+  }
   printData(result, wantsJson);
 }
 

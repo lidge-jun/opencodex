@@ -165,13 +165,14 @@ describe("Non-Codex callers reach the ChatGPT Codex backend with session_id", ()
 });
 
 test("the public routes hand their handlers the caller-promoted request", () => {
-  // Pins the two-line wiring; the cases above call the helper directly.
+  // Pins the three-route wiring; the cases above call the helper directly.
   const source = readFileSync(repoPath("src", "server", "index", "serve-options.ts"), "utf8");
   expect(source).toContain("const sessionReq = withCallerSessionIdentity(withGrokSessionIdentity(req), admission);");
   expect(source).toContain("await handleResponses(sessionReq, config, logCtx, {");
   expect(source).toContain("const sessionReq = withCallerSessionIdentity(req, admission);");
   expect(source).toContain("await handleClaudeMessages(sessionReq, config, logCtx,");
-  expect(source.match(/const sessionReq = withCallerSessionIdentity/g)).toHaveLength(2);
+  expect(source).toContain("await handleChatCompletions(sessionReq, config, logCtx,");
+  expect(source.match(/const sessionReq = withCallerSessionIdentity/g)).toHaveLength(3);
 });
 
 function admitted(key: string, source: "dedicated" | "bearer" = "dedicated"): DataPlaneAdmission {

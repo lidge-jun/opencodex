@@ -46,6 +46,8 @@ export const RESPONSES_CORE_MODULES = [
   "request-send-budget.ts",
   "passthrough-execution.ts",
   "passthrough-dispatch.ts",
+  // Reached from passthrough/adapter dispatch, compact and runTurn: local spend-ledger refusal mapping.
+  "spend-storage-error.ts",
   "reset-replay.ts",
   "passthrough-delivery.ts",
   "buffered-sse-json.ts",

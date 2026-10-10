@@ -23,7 +23,8 @@ function deps(respond: (captured: Captured) => unknown, calls: Captured[]): Runt
         body: init?.body === undefined ? undefined : JSON.parse(String(init.body)),
       };
       calls.push(captured);
-      return new Response(JSON.stringify(respond(captured)), { status: 200 });
+      const reply = respond(captured);
+      return reply instanceof Response ? reply : new Response(JSON.stringify(reply), { status: 200 });
     }) as unknown as typeof fetch,
   };
 }
@@ -39,6 +40,51 @@ function capture(): { lines: string[]; errors: string[]; restore: () => void } {
 }
 
 describe("ocx account grok-reset-coupons", () => {
+  test("consume mints a stable operation id before sending", async () => {
+    const calls: Captured[] = [];
+    const out = capture();
+    try {
+      expect(await handleAccountAuthCommand("grok-reset-coupons", ["main", "--consume", "--yes"],
+        deps(() => ({ code: "redeemed" }), calls))).toBe(0);
+    } finally { out.restore(); }
+    expect(calls).toHaveLength(1);
+    expect((calls[0].body as { operationId: string }).operationId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+  });
+
+  test("an uncertain response prints the same operation id instead of encouraging a new spend", async () => {
+    const calls: Captured[] = [];
+    const out = capture();
+    try {
+      expect(await handleAccountAuthCommand("grok-reset-coupons", ["main", "--consume", "--yes"], deps(c =>
+        new Response(JSON.stringify({ operationId: (c.body as { operationId: string }).operationId,
+          error: { code: "attempt_unresolved" } }), { status: 502 }), calls))).toBeGreaterThan(0);
+    } finally { out.restore(); }
+    expect(calls).toHaveLength(1);
+    expect(out.errors.join("\n")).toContain(`--operation-id ${(calls[0].body as { operationId: string }).operationId}`);
+  });
+
+  test("a changed operation preserves its client-minted recovery id without another POST", async () => {
+    const calls: Captured[] = [];
+    const out = capture();
+    try {
+      expect(await handleAccountAuthCommand("grok-reset-coupons", ["main", "--consume", "--yes"], deps(() =>
+        new Response(JSON.stringify({ error: { code: "operation_state_changed" } }), { status: 409 }), calls))).toBeGreaterThan(0);
+    } finally { out.restore(); }
+    expect(calls).toHaveLength(1);
+    expect(out.errors.join("\n")).toContain(`--operation-id ${(calls[0].body as { operationId: string }).operationId}`);
+  });
+
+  test("a lost response retains its client-minted operation id without another POST", async () => {
+    const calls: Captured[] = [];
+    const out = capture();
+    try {
+      expect(await handleAccountAuthCommand("grok-reset-coupons", ["main", "--consume", "--yes"],
+        deps(() => { throw new Error("fixture connection lost after dispatch"); }, calls))).toBeGreaterThan(0);
+    } finally { out.restore(); }
+    expect(calls).toHaveLength(1);
+    expect(out.errors.join("\n")).toContain(`--operation-id ${(calls[0].body as { operationId: string }).operationId}`);
+  });
+
   test("--consume without --yes refuses locally, before any fetch", async () => {
     const calls: Captured[] = [];
     const out = capture();
