@@ -256,6 +256,8 @@ describe("base variant selection", () => {
     const externalPath = join(root, "raced.md");
     writeFileSync(externalPath, "Raced body.", "utf8");
     const paths = fixture(`model_instructions_file = ${JSON.stringify(externalPath)}\n`);
+    // Exercise canonical publication even on hosts without Windows short paths.
+    paths.configPath = `${dirname(paths.configPath)}/./config.toml`;
 
     const preview = previewBaseImport(paths);
     expect(preview.serialized).toBe("# raced\nRaced body.");
@@ -264,10 +266,12 @@ describe("base variant selection", () => {
     // in the gap between the config rename landing and the transaction's final
     // verify — the exact window the write_superseded path exists for. Spying at
     // node:fs reaches the writes regardless of how the caller bound the import.
+    // The writer resolves aliases, including Windows TEMP's short path spelling.
+    const configTarget = fsModule.realpathSync.native(paths.configPath);
     const realRename = fsModule.renameSync;
     const renameSpy = spyOn(fsModule, "renameSync").mockImplementation((from: unknown, to: unknown) => {
       realRename(from as Parameters<typeof fsModule.renameSync>[0], to as Parameters<typeof fsModule.renameSync>[1]);
-      if (String(to) === paths.configPath) {
+      if (fsModule.realpathSync.native(String(to)) === configTarget) {
         writeFileSync(paths.configPath, `${read(paths.configPath)}# raced\n`, "utf8");
       }
     });
@@ -281,9 +285,9 @@ describe("base variant selection", () => {
     } finally {
       renameSpy.mockRestore();
     }
-    expect(result).toMatchObject({ ok: false, error: "write_superseded" });
     // The injected append is the proof the race was exercised at all.
     expect(read(paths.configPath)!).toContain("# raced");
+    expect(result).toMatchObject({ ok: false, error: "write_superseded" });
 
     // The just-written variant file SURVIVES: the config on disk may already
     // point at it, and deletion would strand the live selection.
@@ -332,24 +336,28 @@ describe("base variant selection", () => {
 
 test("an uncertain import preserves a config-relative live reference", () => {
   const paths = fixture();
+  paths.configPath = `${dirname(paths.configPath)}/./config.toml`;
   const external = join(dirname(paths.configPath), "external.md");
   writeFileSync(external, "External body.");
   writeFileSync(paths.configPath, `model_instructions_file = ${JSON.stringify(external)}\n`);
   const preview = previewBaseImport(paths);
   const revision = rev(paths);
+  const configTarget = fsModule.realpathSync.native(paths.configPath);
   const realRename = fsModule.renameSync;
   const renameSpy = spyOn(fsModule, "renameSync").mockImplementation((from, to) => {
     realRename(from, to);
-    if (String(to) === paths.configPath) {
+    if (fsModule.realpathSync.native(String(to)) === configTarget) {
       const selected = String(Bun.TOML.parse(read(paths.configPath)!).model_instructions_file);
       const local = relative(dirname(paths.configPath), selected).replace(/\\/g, "/");
       writeFileSync(paths.configPath, `model_instructions_file = ${JSON.stringify(local)}\n# concurrent edit\n`);
     }
   });
+  let result;
   try {
-    expect(importBaseVariant({ previewSha256: preview.previewSha256! }, revision, paths))
-      .toMatchObject({ ok: false, error: "write_superseded" });
+    result = importBaseVariant({ previewSha256: preview.previewSha256! }, revision, paths);
   } finally { renameSpy.mockRestore(); }
+  expect(read(paths.configPath)!).toContain("# concurrent edit");
+  expect(result).toMatchObject({ ok: false, error: "write_superseded" });
   const selected = String(Bun.TOML.parse(read(paths.configPath)!).model_instructions_file);
   expect(existsSync(resolve(dirname(paths.configPath), selected))).toBe(true);
   expect(existsSync(journalPathFor(paths.storePath))).toBe(true);
