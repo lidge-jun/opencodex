@@ -121,8 +121,19 @@ export function macAclProbeTrustError(probe: () => MacAclProbeResult): string | 
   }
 }
 
+let pluginAclInspectorForTests: ((path: string) => string | null) | undefined;
+
+/**
+ * Shipped mutable seam, test-only by intent: no config or env path reaches it.
+ * Passing undefined restores the real ACL inspector.
+ */
+export function setPluginAclInspectorForTests(inspector?: (path: string) => string | null): void {
+  pluginAclInspectorForTests = inspector;
+}
+
 /** Refuse extended ACLs: mode bits alone cannot prove who can rewrite a plugin path. */
 function aclTrustError(path: string): string | null {
+  if (pluginAclInspectorForTests) return pluginAclInspectorForTests(path);
   if (process.platform !== "darwin" && process.platform !== "linux") return null;
   const mac = process.platform === "darwin";
   // CI and operator PATHs may put GNU coreutils ahead of the macOS tool.
