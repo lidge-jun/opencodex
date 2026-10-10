@@ -32,7 +32,7 @@ Runnable capability parents also expose their declared descendants. Nested help 
 
 A declaration may carry `usage`, the exact synopsis for a verified leaf. `capabilityInvocation` and matching still use canonical command tokens. `src/cli/capabilities-command.ts` projects `usage` only when present, preserving the previous JSON object shape otherwise. The help renderer then uses the exact Usage line and omits that leaf's incomplete-grammar disclaimer. A declaration without usage keeps the prior Command/partial-grammar presentation. Root aliases, hidden entries, head-only invocations and the models-context special topic retain their existing semantics.
 
-`ocx models auto-review status` and `ocx models auto-review set` read and update the global approval reviewer through the same management route as the Models panel. A refresh that can be retried is reported as pending and points to `ocx sync`; a failed refresh is reported separately, with instructions to resolve the issue before syncing.
+`ocx models auto-review status` and `ocx models auto-review set` read and update the global approval reviewer through the same management route as the Models panel. A refresh that can be retried is reported as pending and points to `ocx sync`; a failed refresh preserves the saved-settings receipt, exits 1, and directs operators to resolve the issue before syncing.
 
 The agents/routing leaf also declares local `message sessions` and `message send`; their command-local transport and receipt contract belongs to [local messaging](local-messaging.md#command-local-cli). These declarations import no messaging handlers and preserve baseline capability order. The operating-reference generator places the two verbs in the agents/routing chapter.
 

@@ -567,7 +567,7 @@ async function shadow(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   printData(result, wantsJson, ["Shadow-call settings updated."]);
 }
 
-async function autoReview(argv: string[], deps: RuntimeApiDeps): Promise<void> {
+async function autoReview(argv: string[], deps: RuntimeApiDeps): Promise<number | void> {
   const args = [...argv];
   const action = (args.shift() ?? "status").toLowerCase();
   const wantsJson = takeFlag(args, "--json");
@@ -597,6 +597,7 @@ async function autoReview(argv: string[], deps: RuntimeApiDeps): Promise<void> {
         ? ["Settings saved, but the Codex model catalog refresh is pending. Run ocx sync to retry."]
         : []),
   ]);
+  if (refresh?.status === "failed") return 1;
 }
 
 export async function handleModelsRuntimeCommand(sub: string, argv: string[], deps: RuntimeApiDeps = {}): Promise<number | null> {
@@ -607,7 +608,7 @@ export async function handleModelsRuntimeCommand(sub: string, argv: string[], de
   // The dispatch below and MODELS_RUNTIME_SUBCOMMANDS must name the same set;
   // tests/cli/cli-models-runtime-dispatch.test.ts fails if they drift (#3094).
   if (!isModelsRuntimeSubcommand(sub)) return null;
-  let action: (() => Promise<void>) | undefined;
+  let action: (() => Promise<number | void>) | undefined;
   if (sub === "live") action = () => live(argv, deps);
   else if (sub === "price") action = () => price(false, argv, deps);
   else if (sub === "set-price") action = () => price(true, argv, deps);
@@ -624,7 +625,9 @@ export async function handleModelsRuntimeCommand(sub: string, argv: string[], de
   else if (sub === "shadow") action = () => shadow(argv, deps);
   else if (sub === "auto-review") action = () => autoReview(argv, deps);
   if (!action) return null;
-  return runCliAction(action);
+  let outcome: number | void = 0;
+  const exit = await runCliAction(async () => { outcome = await action(); });
+  return exit || outcome || 0;
 }
 
 export const MODELS_RUNTIME_USAGE = USAGE;

@@ -510,9 +510,9 @@ must be enabled and name a model. An enabled setting with no model remains pendi
 Codex fallback in effect. The Models page reports when catalog refresh is pending; run `ocx sync`
 to retry. CLI users can read the setting with `ocx models auto-review status` or change it with
 `ocx models auto-review set <model|-> [--enabled <on|off>]`; use `-` to clear the model. CLI output
-recommends `ocx sync` when a refresh can be retried; a failed refresh is reported separately and
-should be resolved before syncing. The [provider guide](/guides/providers/#approval-reviewer-per-provider)
-has the operator workflow and a worked example.
+recommends `ocx sync` when a refresh can be retried. If a refresh fails, the setting remains saved
+and the command exits 1. Resolve the failure before syncing. The [provider
+guide](/guides/providers/#approval-reviewer-per-provider) has the operator workflow and a worked example.
 
 When native OpenAI rows are included and the final catalog has an ordinary bare native row
 other than Reserve (hidden rows count), OpenCodex keeps the hidden `codex-auto-review` row so

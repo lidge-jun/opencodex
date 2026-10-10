@@ -181,14 +181,24 @@ describe("models auto-review settings command", () => {
     const failed = await invoke(["set", "router/reviewer"], {
       ok: true, enabled: true, model: "router/reviewer", catalogRefresh: { status: "failed", reason: "disk" },
     }, 200, "auto-review");
-    expect(failed.code).toBe(0);
+    expect(failed.code).toBe(1);
+    expect(failed.stdout).toContain("Auto-review settings updated.");
     expect(failed.stdout).toContain("catalog refresh failed");
     expect(failed.stdout).toContain("Resolve the refresh issue");
     expect(failed.stdout).not.toContain("catalog refresh is pending");
 
+    const failedJson = await invoke(["set", "router/reviewer", "--json"], {
+      ok: true, enabled: true, model: "router/reviewer", catalogRefresh: { status: "failed", reason: "disk" },
+    }, 200, "auto-review");
+    expect(failedJson.code).toBe(1);
+    expect(JSON.parse(failedJson.stdout)).toMatchObject({
+      ok: true, enabled: true, model: "router/reviewer", catalogRefresh: { status: "failed" },
+    });
+
     const skipped = await invoke(["set", "router/reviewer"], {
       ok: true, enabled: true, model: "router/reviewer", catalogRefresh: { status: "skipped", retryable: false },
     }, 200, "auto-review");
+    expect(skipped.code).toBe(0);
     expect(skipped.stdout).not.toContain("catalog refresh is pending");
     expect(skipped.stdout).not.toContain("catalog refresh failed");
     expect(skipped.stdout).not.toContain("ocx sync");
