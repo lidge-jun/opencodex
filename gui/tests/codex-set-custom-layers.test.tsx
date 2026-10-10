@@ -79,7 +79,7 @@ afterEach(() => {
  */
 interface CallBody { layers?: { id: string; title: string; body: string }[]; revision?: string; enabled?: boolean }
 interface Call { url: string; method: string; body: CallBody }
-function stubRoutes(handler: (call: Call) => Response) {
+function stubRoutes(handler: (call: Call) => Response | Promise<Response>) {
   const calls: Call[] = [];
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const call: Call = { url: String(input), method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : undefined };
@@ -568,6 +568,87 @@ test("an unreadable config refuses custom writes too, not only built-in switches
   await act(async () => { root.unmount(); });
 });
 
+test("the undo window suspends while its restore write is in flight", async () => {
+  // Clicking Undo near the deadline must not have the offer expire underneath a
+  // pending request: the window freezes for the write and restarts on failure.
+  const { setUndoWindowMsForTests } = await import("../src/components/codex-set/custom-layer-state");
+  setUndoWindowMsForTests(120);
+  try {
+    const both = [layer(), layer({ id: "bbbbbb", title: "Keeper" })];
+    let current = both;
+    let releaseRestore: (() => void) | null = null;
+    let restoreFails = false;
+    stubRoutes(call => {
+      if (call.method !== "PUT") return json(snapshot({ custom: current }));
+      // The restore PUT carries the full list back; the delete PUT drops a row.
+      const layers = call.body.layers ?? [];
+      if (layers.length >= 2) {
+        return new Promise<Response>(resolve => {
+          releaseRestore = () => resolve(restoreFails
+            ? json({ ok: false, code: "stale_revision", message: "moved" }, 409)
+            : json({ ok: true, changed: true, snapshot: snapshot({ custom: current = both }) }));
+        });
+      }
+      current = layers as typeof both;
+      return json({ ok: true, changed: true, snapshot: snapshot({ custom: current }) });
+    });
+    const { container, root } = await mount();
+    const deletedNotice = () => container.querySelector(".codex-set-custom__deleted");
+    const sleep = (ms: number) => act(async () => { await Bun.sleep(ms); });
+
+    await act(async () => {
+      (customRow(container, "aaaaaa")!.querySelector(".codex-set-custom__delete") as HTMLButtonElement).click();
+    });
+    await act(async () => {
+      (container.querySelector(".codex-set-custom__confirm .btn-danger") as HTMLButtonElement).click();
+    });
+    expect(deletedNotice()).not.toBeNull();
+
+    // ~40ms in, well inside the 120ms window: click Undo and hold the response
+    // past the ORIGINAL deadline.
+    await sleep(40);
+    restoreFails = true;
+    await act(async () => {
+      (deletedNotice()!.querySelector("button") as HTMLButtonElement).click();
+    });
+    await sleep(140); // past 40+120 - a live timer would have fired already
+    expect(deletedNotice()).not.toBeNull();
+
+    // The failed restore keeps the offer and RESTARTS the window rather than
+    // silently dropping it - it expires a full window after the refusal.
+    await act(async () => { releaseRestore!(); });
+    await sleep(40);
+    expect(deletedNotice()).not.toBeNull();
+    await sleep(140);
+    expect(deletedNotice()).toBeNull();
+
+    // And a restore that lands closes the notice itself, not the timer. The
+    // first row is restored in a fresh two-layer snapshot for this attempt.
+    current = both;
+    const { setClientResourceData } = await import("../src/client-resource");
+    await act(async () => { setClientResourceData("codex-prompt:", snapshot({ custom: both })); });
+    await act(async () => {
+      (customRow(container, "aaaaaa")!.querySelector(".codex-set-custom__delete") as HTMLButtonElement).click();
+    });
+    await act(async () => {
+      (container.querySelector(".codex-set-custom__confirm .btn-danger") as HTMLButtonElement).click();
+    });
+    expect(deletedNotice()).not.toBeNull();
+    restoreFails = false;
+    await act(async () => {
+      (deletedNotice()!.querySelector("button") as HTMLButtonElement).click();
+    });
+    await sleep(140); // the successful response is still held past the original deadline
+    expect(deletedNotice()).not.toBeNull();
+    expect(customRow(container, "aaaaaa")).toBeNull();
+    await act(async () => { releaseRestore!(); await new Promise(r => setTimeout(r, 0)); });
+    expect(deletedNotice()).toBeNull();
+    await act(async () => { root.unmount(); });
+  } finally {
+    setUndoWindowMsForTests(null);
+  }
+});
+
 test("a lone surrogate is refused client-side, like the server refuses it", () => {
   // Not a Unicode scalar value, so it has no UTF-8 encoding at all. Accepting it
   // here left Save enabled on text that could only fail after submission.
@@ -621,9 +702,14 @@ test("20. every drift state renders a Repair action instead of self-healing", as
     expect((banner!.textContent ?? "").length, drift).toBeGreaterThan(30);
 
     await act(async () => { (banner!.querySelector("button") as HTMLButtonElement).click(); });
+    // Every drift — journal-present included — goes through /repair. The route
+    // replays the journal as a locked recovery-only operation; a layers PUT
+    // would have projected the empty custom list over a surviving projection.
     const repair = calls.find(c => c.url.includes("/repair"))!;
+    expect(repair, drift).toBeDefined();
     expect(repair.body.confirm, drift).toBe(true);
     expect(repair.body.revision, drift).toBe("sha256:one");
+    expect(calls.some(c => c.method === "PUT" && c.url.endsWith("/api/codex-prompt/custom")), drift).toBe(false);
     await act(async () => { root.unmount(); });
   }
 });
@@ -651,4 +737,29 @@ test("16. an unsupported adopt names the file and line to move by hand", async (
   expect(refusal!.textContent).toContain("/tmp/config.toml");
   expect(refusal!.textContent).toContain("7");
   await act(async () => { root.unmount(); });
+});
+
+test("Repair refreshes a stale revision before the next explicit attempt", async () => {
+  let revision = "sha256:one";
+  const calls = stubRoutes(call => {
+    if (call.url.endsWith("/repair")) {
+      if (call.body.revision === "sha256:one") {
+        revision = "sha256:two";
+        return json({ ok: false, code: "stale_revision", message: "moved" }, 409);
+      }
+      return json({ ok: true, snapshot: snapshot({ revision, drift: null }) });
+    }
+    return json(snapshot({ revision, drift: "journal-present" }));
+  });
+  const { root, container } = await mount();
+  try {
+    const repair = () => container.querySelector(".codex-set-prompt__drift button") as HTMLButtonElement;
+    await act(async () => { repair().click(); });
+    await act(async () => { repair().click(); });
+    expect(calls.filter(c => c.url.endsWith("/repair")).map(c => c.body.revision))
+      .toEqual(["sha256:one", "sha256:two"]);
+    expect(container.querySelector(".codex-set-prompt__drift")).toBeNull();
+  } finally {
+    await act(async () => { root.unmount(); });
+  }
 });

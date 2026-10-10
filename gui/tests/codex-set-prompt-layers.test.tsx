@@ -503,3 +503,73 @@ test("a row with a condition shows it instead of \"Always on\"", async () => {
 
   await act(async () => { root.unmount(); });
 });
+
+/**
+ * Restore-to-default is the inverse of the override it removes.
+ *
+ * A literal `key = true` for a default-true toggle reads identically today but
+ * freezes the override, so the verb deletes the line entirely (`enabled: null`)
+ * rather than writing the documented default back. The affordance exists only
+ * while the file carries an explicit value - an absent key IS the default.
+ */
+test("an overridden toggle offers a reset that sends enabled: null", async () => {
+  const overridden = {
+    id: "apps", key: "include_apps_instructions",
+    userFileValue: false, defaultedUserValue: false, default: true,
+  };
+  const calls = stubRoutes(call => (call.method === "PUT"
+    ? json({ ok: true, snapshot: snapshot({ revision: "sha256:two" }) })
+    : json(snapshot({
+      toggles: INVENTORY.filter(d => d.class === "config-toggle").map(d => (d.id === "apps"
+        ? overridden
+        : { id: d.id, key: d.key as string, userFileValue: null, defaultedUserValue: true, default: true })),
+    }))));
+  const { container, root } = await mount();
+
+  const appsRow = row(container, "apps")!;
+  // Naming the default in the button tells the user what absent means.
+  const reset = appsRow.querySelector(".codex-set-prompt__reset") as HTMLButtonElement;
+  expect(reset).not.toBeNull();
+  expect(reset.textContent ?? "").toContain("true");
+  // The switch still says off; reset is a separate verb, not a third position.
+  const sw = appsRow.querySelector("button[role=\"switch\"]") as HTMLButtonElement;
+  expect(sw.getAttribute("aria-checked")).toBe("false");
+
+  await act(async () => { reset.click(); });
+  const put = calls.find(c => c.method === "PUT")!;
+  expect(put.url).toContain("/api/codex-prompt/toggle");
+  expect(put.body).toMatchObject({ id: "apps", enabled: null, revision: "sha256:one" });
+  await act(async () => { root.unmount(); });
+});
+
+test("a toggle already on the default offers no reset, and non-toggle rows never do", async () => {
+  stubRoutes(() => json(snapshot()));
+  const { container, root } = await mount();
+  // Every toggle defaulted (userFileValue: null): nothing to restore, so the
+  // affordance must not exist rather than sit disabled.
+  for (const d of INVENTORY.filter(x => x.class === "config-toggle")) {
+    expect(row(container, d.id)!.querySelector(".codex-set-prompt__reset"), d.id).toBeNull();
+  }
+  await act(async () => { root.unmount(); });
+});
+
+test("the dialog offers the same reset beside the file value", async () => {
+  const calls = stubRoutes(call => (call.method === "PUT"
+    ? json({ ok: true, snapshot: snapshot({ revision: "sha256:two" }) })
+    : json(snapshot({
+      toggles: INVENTORY.filter(d => d.class === "config-toggle").map(d => (d.id === "apps"
+        ? { id: "apps", key: "include_apps_instructions", userFileValue: false, defaultedUserValue: false, default: true }
+        : { id: d.id, key: d.key as string, userFileValue: null, defaultedUserValue: true, default: true })),
+    }))));
+  const { container, root } = await mount();
+  await act(async () => {
+    (row(container, "apps")!.querySelector(".codex-set-prompt__name") as HTMLButtonElement).click();
+  });
+  const dialog = document.querySelector("dialog.modal-overlay")!;
+  const reset = dialog.querySelector(".codex-set-prompt__reset") as HTMLButtonElement;
+  expect(reset).not.toBeNull();
+  await act(async () => { reset.click(); });
+  const put = calls.find(c => c.method === "PUT")!;
+  expect(put.body).toMatchObject({ id: "apps", enabled: null });
+  await act(async () => { root.unmount(); });
+});

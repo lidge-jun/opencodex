@@ -29,6 +29,7 @@ export default function PromptLayerRow({
   busy,
   writesRefused,
   onToggle,
+  onReset,
   onSelectBase,
   baseSelection,
   onOpen,
@@ -42,6 +43,12 @@ export default function PromptLayerRow({
   busy: boolean;
   writesRefused: boolean;
   onToggle: (id: string, enabled: boolean) => void;
+  /**
+   * Deletes the key line rather than writing the default back as a literal, so
+   * the row follows Codex's built-in default again. Only rendered when the file
+   * carries an explicit value.
+   */
+  onReset?: (id: string) => void;
   /**
    * The base row's switch. A SEPARATE prop from `onToggle` on purpose: base is not a
    * boolean key in config.toml, it is a variant selection, and `isToggleId` still
@@ -119,20 +126,37 @@ export default function PromptLayerRow({
           <span className="toggle-knob" />
         </button>
       ) : descriptor.class === "config-toggle" ? (
-        // The dashboard's switch is a button with a knob, not a checkbox. A raw
-        // <input type="checkbox"> renders as an actual checkbox here because the
-        // .switch class it was reaching for styles a different element.
-        <button
-          type="button"
-          role="switch"
-          className={`toggle ${checked ? "on" : ""}`}
-          aria-checked={checked}
-          aria-label={label}
-          disabled={busy || writesRefused}
-          onClick={() => { onToggle(descriptor.id, !checked); }}
-        >
-          <span className="toggle-knob" />
-        </button>
+        <>
+          {/* The dashboard's switch is a button with a knob, not a checkbox. A raw
+              <input type="checkbox"> renders as an actual checkbox here because the
+              .switch class it was reaching for styles a different element. */}
+          <button
+            type="button"
+            role="switch"
+            className={`toggle ${checked ? "on" : ""}`}
+            aria-checked={checked}
+            aria-label={label}
+            disabled={busy || writesRefused}
+            onClick={() => { onToggle(descriptor.id, !checked); }}
+          >
+            <span className="toggle-knob" />
+          </button>
+          {/*
+            An explicit value in the file can be removed so the built-in default
+            applies again — writing `true` for a default-true toggle would freeze
+            the override. Offered only when there IS an override to remove.
+          */}
+          {toggle !== undefined && toggle.userFileValue !== null && onReset && (
+            <button
+              type="button"
+              className="link-btn codex-set-prompt__reset"
+              disabled={busy || writesRefused}
+              onClick={() => { onReset(descriptor.id); }}
+            >
+              {t("codexSet.row.resetDefault", { value: String(toggle.default) })}
+            </button>
+          )}
+        </>
       ) : descriptor.class === "feature-gated" ? (
         // Configurable, just not here. Naming the governing key is the whole point -
         // "always on" would be a lie about a setting the user can actually change -

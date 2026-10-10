@@ -115,6 +115,26 @@ function position(dlg: HTMLElement): string {
 function slotKind(dlg: HTMLElement): string | null {
   return dlg.querySelector(".codex-set-base-dialog__pos")?.getAttribute("data-slot-kind") ?? null;
 }
+
+/**
+ * React tracks the previous value on the DOM node, so assigning `.value` directly
+ * makes it skip the change as a no-op. The native setter is what a real keystroke
+ * goes through.
+ */
+function typeInto(el: HTMLInputElement | HTMLTextAreaElement, value: string): void {
+  const proto = el instanceof testWindow.HTMLTextAreaElement
+    ? testWindow.HTMLTextAreaElement.prototype
+    : testWindow.HTMLInputElement.prototype;
+  const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+  setter?.call(el, value);
+  el.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+  el.dispatchEvent(new testWindow.Event("change", { bubbles: true }));
+}
+
+function actionButton(dlg: HTMLElement, needle: string): HTMLButtonElement {
+  return [...dlg.querySelectorAll(".modal-actions button")]
+    .find(b => (b.textContent ?? "").toLowerCase().includes(needle)) as HTMLButtonElement;
+}
 test("the base row carries a switch that reads on for the default", async () => {
   stubRoutes(() => json(snapshot()));
   const { container, root } = await mount();
@@ -304,4 +324,415 @@ test("the dot indicator renders one dot per slot and marks the active one", asyn
   expect(dotsAfter[0]!.classList.contains("active")).toBe(false);
   expect(dotsAfter[1]!.classList.contains("active")).toBe(true);
   await act(async () => { root.unmount(); });
+});
+
+test("a failed delete keeps the parked draft for the variant that survived", async () => {
+  // The write was refused, so nothing was deleted. Reconciling drafts against
+  // the destination text cannot tell that from a real delete, so the check is
+  // the variant id: if the id is still in the snapshot, its draft stays.
+  stubRoutes(call => {
+    if (call.method === "PUT" && call.url.endsWith("/api/codex-prompt/base")) {
+      return json({ ok: false, code: "stale_revision", message: "moved" }, 409);
+    }
+    // The refresh after a stale revision returns the variant list intact.
+    return json(snapshot({ baseVariants: VARIANTS }));
+  });
+  const { container, root } = await mount();
+  const dlg = await openBaseDialog(container);
+  const nav = dlg.querySelectorAll(".codex-set-base-dialog__nav button");
+  const prev = nav[0] as HTMLButtonElement;
+  const next = nav[1] as HTMLButtonElement;
+
+  await act(async () => { next.click(); }); // -> aaa111
+  const input = dlg.querySelector("input") as HTMLInputElement;
+  const textarea = dlg.querySelector("textarea") as HTMLTextAreaElement;
+  await act(async () => {
+    typeInto(input, "Edited title");
+    typeInto(textarea, "Edited body.");
+  });
+  await act(async () => { actionButton(dlg, "delete").click(); });
+  expect(slotKind(dlg)).toBe("variant"); // still on aaa111, not deleted
+
+  // Park the draft by leaving, then come back. The draft rides the id, not the
+  // text, so it survives the failed delete round trip.
+  await act(async () => { next.click(); }); // -> bbb222
+  await act(async () => { prev.click(); }); // -> aaa111
+  expect(input.value).toBe("Edited title");
+  expect(textarea.value).toBe("Edited body.");
+  await act(async () => { root.unmount(); });
+});
+
+test("a draft identical to the DESTINATION text is still parked on its own id", async () => {
+  // Editing aaa111 into a byte copy of bbb222 must not trick the reconciliation
+  // into calling it a landed save - nothing was ever submitted.
+  stubRoutes(() => json(snapshot({ baseVariants: VARIANTS })));
+  const { container, root } = await mount();
+  const dlg = await openBaseDialog(container);
+  const nav = dlg.querySelectorAll(".codex-set-base-dialog__nav button");
+  const prev = nav[0] as HTMLButtonElement;
+  const next = nav[1] as HTMLButtonElement;
+
+  await act(async () => { next.click(); }); // -> aaa111
+  const input = dlg.querySelector("input") as HTMLInputElement;
+  const textarea = dlg.querySelector("textarea") as HTMLTextAreaElement;
+  await act(async () => {
+    typeInto(input, "Formal");
+    typeInto(textarea, "Answer formally.");
+  });
+  await act(async () => { next.click(); }); // -> bbb222, parks the aaa111 draft
+  await act(async () => { prev.click(); }); // -> aaa111
+  expect(input.value).toBe("Formal");
+  expect(textarea.value).toBe("Answer formally.");
+
+  // And the dialog knows the slot is dirty: closing asks before throwing it away.
+  await act(async () => { actionButton(dlg, "close").click(); });
+  expect(dlg.querySelector(".codex-set-custom-dialog__discard")).not.toBeNull();
+  await act(async () => { root.unmount(); });
+});
+
+test("discard-others-and-save clears parked drafts on success, keeps them on failure", async () => {
+  let putOk = false;
+  const calls = stubRoutes(call => {
+    if (call.method === "PUT" && call.url.endsWith("/api/codex-prompt/base")) {
+      if (!putOk) return json({ ok: false, code: "stale_revision", message: "moved" }, 409);
+      return json({ ok: true, snapshot: snapshot({
+        baseVariants: [VARIANTS[0]!, { id: "bbb222", title: "Renamed B", body: "Edited B body." }],
+        revision: "sha256:two",
+      }) });
+    }
+    return json(snapshot({ baseVariants: VARIANTS }));
+  });
+  const { container, root } = await mount();
+  const dlg = await openBaseDialog(container);
+  const nav = dlg.querySelectorAll(".codex-set-base-dialog__nav button");
+  const prev = nav[0] as HTMLButtonElement;
+  const next = nav[1] as HTMLButtonElement;
+
+  // Edit slot A, park it, then edit slot B: the two drafts are the discarded ones.
+  await act(async () => { next.click(); }); // -> aaa111
+  const input = dlg.querySelector("input") as HTMLInputElement;
+  const textarea = dlg.querySelector("textarea") as HTMLTextAreaElement;
+  await act(async () => {
+    typeInto(input, "Draft A");
+    typeInto(textarea, "Draft A body.");
+  });
+  await act(async () => { next.click(); }); // -> bbb222
+  await act(async () => {
+    typeInto(input, "Renamed B");
+    typeInto(textarea, "Edited B body.");
+  });
+
+  // Saving with a parked draft needs the confirmation.
+  await act(async () => { actionButton(dlg, "save").click(); });
+  const confirm = dlg.querySelector(".codex-set-custom-dialog__discard");
+  expect(confirm).not.toBeNull();
+  const confirmSave = [...confirm!.querySelectorAll("button")]
+    .find(b => (b.textContent ?? "").toLowerCase().includes("save")) as HTMLButtonElement;
+
+  // Refused: the confirmation stays open and BOTH drafts survive. "Keep editing"
+  // backs out of the prompt without discarding anything.
+  await act(async () => { confirmSave.click(); });
+  expect(dlg.querySelector(".codex-set-custom-dialog__discard")).not.toBeNull();
+  await act(async () => {
+    [...dlg.querySelectorAll(".codex-set-custom-dialog__discard button")]
+      .find(b => (b.textContent ?? "").toLowerCase().includes("keep editing"))!.click();
+  });
+  await act(async () => { prev.click(); }); // -> aaa111
+  expect(input.value).toBe("Draft A");
+  expect(textarea.value).toBe("Draft A body.");
+  await act(async () => { next.click(); }); // -> bbb222
+  expect(input.value).toBe("Renamed B");
+
+  // Accepted this time: the confirmation dismisses and the parked draft for
+  // aaa111 is gone - going back shows the STORED values, not the draft.
+  putOk = true;
+  await act(async () => { actionButton(dlg, "save").click(); });
+  await act(async () => { [...dlg.querySelectorAll(".codex-set-custom-dialog__discard button")]
+    .find(b => (b.textContent ?? "").toLowerCase().includes("save"))!.click(); });
+  expect(dlg.querySelector(".codex-set-custom-dialog__discard")).toBeNull();
+  const put = calls.find(c => c.method === "PUT")!;
+  expect(put.body).toMatchObject({ id: "bbb222", title: "Renamed B", body: "Edited B body." });
+  await act(async () => { prev.click(); }); // -> aaa111 shows stored values
+  expect(input.value).toBe("Terse");
+  expect(textarea.value).toBe("Be brief.");
+  await act(async () => { root.unmount(); });
+});
+
+for (const mutation of ["delete", "create"] as const) {
+  test(`a successful ${mutation} leaves no outgoing draft to discard`, async () => {
+    let variants = [VARIANTS[0]!];
+    stubRoutes(call => {
+      if (call.method === "PUT") {
+        variants = mutation === "delete" ? [] : [...variants, {
+          id: "ccc333", title: String(call.body?.title), body: String(call.body?.body), bytes: 20,
+        }];
+        return json({ ok: true, snapshot: snapshot({ baseVariants: variants }) });
+      }
+      return json(snapshot({ baseVariants: variants }));
+    });
+    const { container, root } = await mount();
+    try {
+      const dlg = await openBaseDialog(container);
+      const next = dlg.querySelectorAll(".codex-set-base-dialog__nav button")[1] as HTMLButtonElement;
+      await act(async () => { next.click(); });
+      if (mutation === "create") await act(async () => { next.click(); });
+      await act(async () => {
+        typeInto(dlg.querySelector("input") as HTMLInputElement, "New title");
+        typeInto(dlg.querySelector("textarea") as HTMLTextAreaElement, "New body.");
+      });
+      await act(async () => { actionButton(dlg, mutation === "delete" ? "delete" : "save").click(); });
+      await act(async () => { actionButton(dlg, "close").click(); });
+      expect(document.querySelector("dialog.codex-set-base-dialog") === null).toBe(true);
+    } finally {
+      await act(async () => { root.unmount(); });
+    }
+  });
+}
+
+/**
+ * The external state is a dead end no longer: the same preview-then-confirm
+ * shape the developer_instructions adopt flow uses, so the refusal in the
+ * picker stays a refusal to act SILENTLY - not a refusal to adopt.
+ */
+const SHA = "a".repeat(64);
+const PREVIEW = {
+  rawPath: "/etc/somebody-elses.md",
+  resolvedPath: "/etc/somebody-elses.md",
+  serialized: "# somebody-elses\nImported base.",
+  serializedBytes: 36,
+  bodyBytes: 14,
+  suggestedTitle: "somebody-elses",
+  effectiveTitle: "somebody-elses",
+  previewSha256: SHA,
+};
+
+test("an external selection offers a serialized preview before anything is written", async () => {
+  const calls = stubRoutes(call => {
+    if (call.url.includes("/api/codex-prompt/base/import")) {
+      if (call.body?.confirm === true) {
+        return json({
+          ok: true,
+          snapshot: snapshot({
+            revision: "sha256:two",
+            baseVariants: [...VARIANTS, { id: "ccc333", title: "somebody-elses", body: "Imported base.", bytes: 14 }],
+            baseSelection: { kind: "variant", id: "ccc333" },
+          }),
+        });
+      }
+      return json({ ok: true, changed: false, preview: PREVIEW });
+    }
+    return json(snapshot({
+      baseVariants: VARIANTS,
+      baseSelection: { kind: "external", path: "/etc/somebody-elses.md" },
+    }));
+  });
+  const { container, root } = await mount();
+  const dlg = await openBaseDialog(container);
+
+  // The offer sits beside the existing refusal notice.
+  const offer = [...dlg.querySelectorAll("button")]
+    .find(b => (b.textContent ?? "").toLowerCase().includes("import")) as HTMLButtonElement;
+  expect(offer).not.toBeUndefined();
+  await act(async () => { offer.click(); });
+
+  // The preview shows the SERIALIZED file — heading line included — before any write.
+  const pre = dlg.querySelector("pre")!;
+  expect(pre.textContent).toBe("# somebody-elses\nImported base.");
+  expect(calls.filter(c => c.url.includes("/import")).every(c => c.body?.confirm !== true)).toBe(true);
+
+  const confirm = [...dlg.querySelectorAll(".modal-actions button")]
+    .find(b => (b.textContent ?? "").toLowerCase().includes("import")) as HTMLButtonElement;
+  expect(confirm.disabled).toBe(false);
+  await act(async () => { confirm.click(); });
+
+  const written = calls.filter(c => c.url.includes("/import"));
+  expect(written).toHaveLength(2);
+  // The confirmation echoes the preview hash AND the title it was bound to,
+  // so the route can refuse a file — or a title — that moved between them.
+  expect(written[1]!.body).toMatchObject({
+    confirm: true, revision: "sha256:one", title: "somebody-elses", previewSha256: SHA,
+  });
+  await act(async () => { root.unmount(); });
+});
+
+test("a preview that lands after the dialog closed cannot resurrect itself", async () => {
+  let release: ((r: Response) => void) | null = null;
+  stubRoutes(call => {
+    if (call.url.includes("/api/codex-prompt/base/import")) {
+      return new Promise<Response>(resolve => { release = resolve; });
+    }
+    return json(snapshot({ baseSelection: { kind: "external", path: "/etc/somebody-elses.md" } }));
+  });
+  const { container, root } = await mount();
+  let dlg = await openBaseDialog(container);
+  const offer = [...dlg.querySelectorAll("button")]
+    .find(b => (b.textContent ?? "").toLowerCase().includes("import")) as HTMLButtonElement;
+  await act(async () => { offer.click(); });
+
+  // Close while the preview is still in flight, then let it land.
+  const close = [...dlg.querySelectorAll(".modal-actions button")]
+    .find(b => (b.textContent ?? "").toLowerCase().includes("close")) as HTMLButtonElement;
+  await act(async () => { close.click(); });
+  await act(async () => {
+    release!(json({ ok: true, changed: false, preview: PREVIEW }));
+    await Bun.sleep(0);
+  });
+
+  // Reopen: the stale preview must not reappear — only a fresh offer.
+  dlg = await openBaseDialog(container);
+  expect(dlg.querySelector("pre")).toBeNull();
+  const offer2 = [...dlg.querySelectorAll("button")]
+    .find(b => (b.textContent ?? "").toLowerCase().includes("import")) as HTMLButtonElement;
+  expect(offer2).not.toBeUndefined();
+  await act(async () => { root.unmount(); });
+});
+
+test("a lost confirm response reconciles against the file, not the stale preview", async () => {
+  let imported = false;
+  const calls = stubRoutes(call => {
+    if (call.url.includes("/api/codex-prompt/base/import")) {
+      if (call.body?.confirm === true) {
+        // The write landed server-side but the success never reaches the page.
+        imported = true;
+        return Promise.reject(new Error("network dropped"));
+      }
+      return json({ ok: true, changed: false, preview: PREVIEW });
+    }
+    return json(snapshot(imported
+      ? {
+          baseSelection: { kind: "variant", id: "ccc333" },
+          baseVariants: [{ id: "ccc333", title: "somebody-elses", body: "Imported base.", bytes: 14 }],
+        }
+      : { baseSelection: { kind: "external", path: "/etc/somebody-elses.md" } }));
+  });
+  const { container, root } = await mount();
+  const dlg = await openBaseDialog(container);
+  const offer = [...dlg.querySelectorAll("button")]
+    .find(b => (b.textContent ?? "").toLowerCase().includes("import")) as HTMLButtonElement;
+  await act(async () => { offer.click(); });
+  const confirm = [...dlg.querySelectorAll(".modal-actions button")]
+    .find(b => (b.textContent ?? "").toLowerCase().includes("import")) as HTMLButtonElement;
+  const getsBefore = calls.filter(c => c.method === "GET").length;
+  await act(async () => { confirm.click(); });
+  // Uncertain outcome → the panel re-reads the snapshot rather than trusting
+  // the preview it still holds.
+  expect(calls.filter(c => c.method === "GET").length).toBeGreaterThan(getsBefore);
+  await act(async () => { root.unmount(); });
+});
+
+test("a refused import lands beside the affordance rather than the page notice", async () => {
+  stubRoutes(call => {
+    if (call.url.includes("/api/codex-prompt/base/import")) {
+      return json({ ok: false, code: "variant_slots_full", message: "at most 2 base variants" }, 409);
+    }
+    return json(snapshot({ baseSelection: { kind: "external", path: "/etc/somebody-elses.md" } }));
+  });
+  const { container, root } = await mount();
+  const dlg = await openBaseDialog(container);
+  const offer = [...dlg.querySelectorAll("button")]
+    .find(b => (b.textContent ?? "").toLowerCase().includes("import")) as HTMLButtonElement;
+  await act(async () => { offer.click(); });
+  expect(dlg.textContent ?? "").toContain("at most 2 base variants");
+  await act(async () => { root.unmount(); });
+});
+
+function importButton(dlg: HTMLElement): HTMLButtonElement {
+  return [...dlg.querySelectorAll("button")].find(b => (b.textContent ?? "").toLowerCase().includes("import")) as HTMLButtonElement;
+}
+function editImportTitle(dlg: HTMLElement, title: string): void {
+  const input = dlg.querySelector("input") as HTMLInputElement;
+  Object.getOwnPropertyDescriptor(testWindow.HTMLInputElement.prototype, "value")!.set!.call(input, title);
+  input.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+}
+const EXTERNAL = { baseSelection: { kind: "external", path: PREVIEW.rawPath } };
+const IMPORTED = {
+  revision: "sha256:two", baseSelection: { kind: "variant", id: "ccc333" },
+  baseVariants: [{ id: "ccc333", title: PREVIEW.effectiveTitle, body: "Imported base.", bytes: 14 }],
+};
+
+for (const outcome of ["success", "lost-response"] as const) {
+  test(`a confirm ${outcome} after Close reconciles after the earlier GET`, async () => {
+    let imported = false;
+    let release: (() => void) | undefined;
+    const calls = stubRoutes(call => {
+      if (call.url.endsWith("/import")) {
+        if (call.body?.confirm) return new Promise<Response>((resolve, reject) => {
+          release = () => {
+            imported = true;
+            if (outcome === "success") resolve(json({ ok: true, snapshot: snapshot(IMPORTED) }));
+            else reject(new Error("lost response"));
+          };
+        });
+        return json({ ok: true, preview: PREVIEW });
+      }
+      return json(snapshot(imported ? IMPORTED : EXTERNAL));
+    });
+    const { container, root } = await mount();
+    try {
+      const dlg = await openBaseDialog(container);
+      await act(async () => { importButton(dlg).click(); });
+      await act(async () => { importButton(dlg).click(); });
+      await act(async () => {
+        [...dlg.querySelectorAll(".modal-actions button")]
+          .find(b => (b.textContent ?? "").toLowerCase().includes("close"))!.click();
+      });
+      // The close's GET has already returned the pre-write external selection.
+      expect(calls.filter(c => c.url === "/api/codex-prompt").length).toBeGreaterThan(1);
+      await act(async () => { release!(); });
+      const reopened = await openBaseDialog(container);
+      expect(reopened.querySelector(".notice-err") === null).toBe(true);
+      expect((baseRow(container).querySelector('[role="switch"]') as HTMLButtonElement).disabled).toBe(false);
+    } finally { await act(async () => { root.unmount(); }); }
+  });
+}
+
+test("a pending title debounce cannot supersede a confirm", async () => {
+  let release: (() => void) | undefined;
+  const calls = stubRoutes(call => {
+    if (call.url.endsWith("/import")) {
+      if (call.body?.confirm) return new Promise<Response>(resolve => {
+        release = () => resolve(json({ ok: true, snapshot: snapshot(IMPORTED) }));
+      });
+      return json({ ok: true, preview: PREVIEW });
+    }
+    return json(snapshot(EXTERNAL));
+  });
+  const { container, root } = await mount();
+  try {
+    const dlg = await openBaseDialog(container);
+    await act(async () => { importButton(dlg).click(); });
+    await act(async () => { editImportTitle(dlg, "Edited"); });
+    await act(async () => { editImportTitle(dlg, PREVIEW.effectiveTitle); });
+    await act(async () => { importButton(dlg).click(); });
+    await act(async () => { await Bun.sleep(420); });
+    expect(calls.filter(c => c.url.endsWith("/import") && !c.body?.confirm)).toHaveLength(1);
+    await act(async () => { release!(); });
+    expect(dlg.querySelector(".notice-err") === null).toBe(true);
+  } finally { await act(async () => { root.unmount(); }); }
+});
+
+test("a blank title preview refusal preserves the editable title", async () => {
+  stubRoutes(call => {
+    if (call.url.endsWith("/import")) {
+      if (call.body?.title === "") return json({ ok: false, code: "invalid_title", message: "title required" }, 400);
+      const title = String(call.body?.title ?? PREVIEW.effectiveTitle);
+      return json({ ok: true, preview: { ...PREVIEW, effectiveTitle: title, serialized: `# ${title}\nImported base.` } });
+    }
+    return json(snapshot(EXTERNAL));
+  });
+  const { container, root } = await mount();
+  try {
+    const dlg = await openBaseDialog(container);
+    await act(async () => { importButton(dlg).click(); });
+    await act(async () => { editImportTitle(dlg, ""); });
+    await act(async () => { await Bun.sleep(420); });
+    const input = dlg.querySelector("input") as HTMLInputElement;
+    expect(input !== null).toBe(true);
+    expect(input.value).toBe("");
+    expect(importButton(dlg).disabled).toBe(true);
+    await act(async () => { editImportTitle(dlg, "Corrected"); });
+    await act(async () => { await Bun.sleep(420); });
+    expect(importButton(dlg).disabled).toBe(false);
+    expect(input.value).toBe("Corrected");
+  } finally { await act(async () => { root.unmount(); }); }
 });

@@ -42,6 +42,7 @@ import {
   recoverIfNeeded as recoverJournal,
   type JournalRecord,
 } from "./prompt-journal";
+import { readBaseImportSource } from "./prompt-layers/import-source";
 import { release, stillHeld, tryAcquire } from "./prompt-lock";
 import { configWriteLockFailureMessage, withConfigWriteLockHeld, publishConfigWrite, publishConfigWriteTarget, watchConfigWriteTargets, type LockHandle } from "./config-write-lock";
 
@@ -153,7 +154,10 @@ import { activeConfigPath, activeStorePath, activeBaseVariantDir, journalPathFor
 import { readFileOrNull, computeRevision, updateFingerprintField } from "./prompt-layers/revision";
 import { normalizeBody, findInvalidCharacter, decodeBasicString, decodeTomlBasicString } from "./prompt-layers/encoding";
 import { rootArrayEntries, hasRootKey, rootLines, rootValue, tableLines, boolInLines, inspectOwnership } from "./prompt-layers/toml-read";
-import { setRootBool, setRootString, setTableBool, setProjection, removeUnownedProjection } from "./prompt-layers/toml-edit";
+import {
+  setRootBool, setRootString, setTableBool, setProjection, removeUnownedProjection,
+  rootKeyValueForm, UnsupportedTomlForm,
+} from "./prompt-layers/toml-edit";
 
 /**
  * Instruction documents the prompt probe renders out of CODEX_HOME, in the
@@ -448,7 +452,7 @@ export function resolveBaseSelection(
   const dir = activeBaseVariantDir(opts);
   let resolved: string;
   try {
-    resolved = resolve(expandUserPath(raw));
+    resolved = resolve(dirname(activeConfigPath(opts)), expandUserPath(raw));
   } catch {
     return { kind: "external", path: raw };
   }
@@ -640,6 +644,7 @@ export type WriteError =
   | "unknown_layer"
   | "store_unreadable"
   | "invalid_characters"
+  | "body_too_large"
   | "write_superseded"
   // The filesystem refused a rename that passed every precondition: a directory on
   // the store path, a mode change, a full disk. Distinct from write_superseded,
@@ -647,7 +652,14 @@ export type WriteError =
   | "write_failed"
   | "recovery_required"
   | "locked"
-  | "unsafe";
+  | "unsafe"
+  | "import_body_changed"
+  /**
+   * A `key =` line exists but its value is a form the line editor cannot
+   * replace or remove safely (a multi-line string span, an unterminated
+   * quote). Refused before the transaction wrote anything.
+   */
+  | "unsupported_form";
 
 export type WriteResult =
   | { ok: true; changed: boolean; snapshot: PromptLayerSnapshot }
@@ -712,7 +724,18 @@ function commitPrepared(
     }
 
     const snapshot = readPromptLayers({ ...opts, configPath, storePath });
-    const built = build(snapshot, configBytes, storeBytes);
+    let built: Mutation | { error: WriteError; detail?: string };
+    try {
+      built = build(snapshot, configBytes, storeBytes);
+    } catch (error) {
+      // A line editor that cannot see the end of the value span refuses BEFORE
+      // the journal exists — nothing has been written, so a plain error result
+      // is the whole answer.
+      if (error instanceof UnsupportedTomlForm) {
+        return { ok: false, error: "unsupported_form", detail: error.message };
+      }
+      throw error;
+    }
     if ("error" in built) return { ok: false, error: built.error, detail: built.detail };
 
     const { nextConfig, nextStore } = built;
@@ -825,8 +848,16 @@ function rollback(record: JournalRecord, journalPath: string, error: WriteError,
   } catch { return { ok: false, error: "recovery_required" }; }
 }
 
-/** Flip one of the five prompt toggles. */
-export function setToggle(id: string, enabled: boolean, revision: string, opts?: Paths): WriteResult {
+/**
+ * Flip one of the five prompt toggles, or REMOVE its key with `enabled: null`.
+ *
+ * Removal is the "restore default" verb. A toggle's documented default lives in
+ * Codex, not in this file: writing `key = true` for a layer whose default is
+ * true produces the same prompt today but freezes the override - an upstream
+ * change to the default would then never reach this user. Deleting the line is
+ * the only state that keeps following it.
+ */
+export function setToggle(id: string, enabled: boolean | null, revision: string, opts?: Paths): WriteResult {
   if (!isToggleId(id)) return { ok: false, error: "unknown_layer" };
   const spec = TOGGLE_KEYS[id];
   return commit(opts, revision, (_snapshot, configBytes, storeBytes) => ({
@@ -974,6 +1005,274 @@ function newBaseVariantId(existing: readonly BaseVariant[]): string {
     const id = randomBytes(4).toString("hex").slice(0, 6);
     if (!taken.has(id)) return id;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Import — taking ownership of an externally authored model_instructions_file.
+//
+// The picker refuses the `external` state outright, which made it a dead end:
+// the only way to manage that prompt was to delete the line by hand and retype
+// the file. Import copies the external file's body into the variant directory
+// and points the key at our copy — one file, so nothing upstream can edit out
+// from under a stored variant.
+// ---------------------------------------------------------------------------
+
+/**
+ * The single-line cap on a stored variant title — the same 80 characters the
+ * route policy applies to custom-layer titles. It bounds the filename-derived
+ * suggestion as well as any caller-supplied title, so the `# ` heading line
+ * the serialized variant starts with stays a bounded prefix and never swallows
+ * the body's byte budget silently.
+ */
+export const MAX_BASE_TITLE_CHARS = 80;
+
+const IMPORT_FALLBACK_TITLE = "Imported base prompt";
+
+/**
+ * Flatten a title to one line and bound it. Newlines become spaces rather than
+ * throwing because `readBaseVariants` reads the first line back as the title —
+ * a `\n` in the file would mint a second prompt line nobody asked for.
+ * The bound is by UTF-16 units (the same measure the route limit uses); a cut
+ * that lands mid-surrogate drops the dangling half so no unpaired surrogate is
+ * ever written.
+ */
+function boundTitle(raw: string | null | undefined): string | null {
+  if (typeof raw !== "string") return null;
+  const flat = raw.replace(/[\r\n]+/g, " ").trim();
+  if (!flat) return null;
+  let bounded = flat.length > MAX_BASE_TITLE_CHARS ? flat.slice(0, MAX_BASE_TITLE_CHARS) : flat;
+  if (/[\uD800-\uDBFF]$/.test(bounded)) bounded = bounded.slice(0, -1);
+  return bounded || null;
+}
+
+export interface BaseImportPreview {
+  /** The literal value of `model_instructions_file`, as configured. */
+  rawPath: string | null;
+  /** The absolute file the key resolves to, when it could be resolved. */
+  resolvedPath: string | null;
+  /** The normalized body — the file text after CRLF/tab normalization. */
+  body: string | null;
+  /**
+   * The EXACT text a confirm would write to the variant file: the effective
+   * title as a `# ` heading line followed by the normalized body. What the
+   * user previews is what Codex reads — there is no second description.
+   */
+  serialized: string | null;
+  /**
+   * sha256 of `serialized`, and REQUIRED on confirm. The hash covers the title
+   * line as well as the body, so a confirmation is bound to the exact text —
+   * including the selected title — the caller previewed.
+   */
+  previewSha256: string | null;
+  /**
+   * The filename-derived title, already bounded to {@link MAX_BASE_TITLE_CHARS}
+   * so it is displayable and storable as-is. `null` when the path names no
+   * markdown file worth naming after.
+   */
+  suggestedTitle: string | null;
+  /** The title `serialized` was built with: requested, suggested, or fallback. */
+  effectiveTitle: string | null;
+  reason: "ok" | "nothing_to_import" | "file_unreadable" | "invalid_characters"
+    | "slots_full" | "unsupported_form" | "body_too_large";
+  detail?: string;
+}
+
+/**
+ * Read-only. Runs the same steps a confirm would — resolve, read, normalize,
+ * title, serialize — so `serialized` is byte-identical to the stored file and
+ * `previewSha256` binds a confirm to exactly it.
+ *
+ * `title` is the caller's choice for the variant title; omitting it previews
+ * the suggested (or fallback) title. Re-preview with the edited title to get a
+ * hash bound to that spelling.
+ *
+ * `slots_full` still returns the serialized text: the preview is the place to
+ * say "this would be imported if a slot were free", and refusing to show the
+ * text at all would make the cap look like a read failure.
+ */
+export function previewBaseImport(opts?: Paths, title?: string): BaseImportPreview {
+  const configPath = activeConfigPath(opts);
+  const configBytes = readFileOrNull(configPath);
+  const variants = readBaseVariants(opts);
+  const selection = resolveBaseSelection(configBytes, variants, opts);
+  const empty: Omit<BaseImportPreview, "reason"> = {
+    rawPath: selection.kind === "external" ? selection.path : null,
+    resolvedPath: null,
+    body: null,
+    serialized: null,
+    previewSha256: null,
+    suggestedTitle: null,
+    effectiveTitle: null,
+  };
+  if (selection.kind !== "external") {
+    return { ...empty, reason: "nothing_to_import" };
+  }
+  // A key whose value is a form the line editor cannot replace (a multi-line
+  // string span, an unterminated quote) can never be retargeted — say so in the
+  // preview rather than let a confirm discover it inside the transaction.
+  if (rootKeyValueForm(configBytes ?? "", "model_instructions_file") === "unsupported") {
+    return {
+      ...empty,
+      reason: "unsupported_form",
+      detail: "the model_instructions_file value is a TOML form this editor cannot rewrite (for example a multi-line string); edit config.toml by hand",
+    };
+  }
+  const dir = dirname(configPath);
+  let resolved: string;
+  try {
+    resolved = resolve(dir, expandUserPath(selection.path));
+  } catch {
+    return { ...empty, reason: "file_unreadable", detail: `the path could not be resolved: ${selection.path}` };
+  }
+  let raw: string;
+  try {
+    raw = readBaseImportSource(resolved);
+  } catch (error) {
+    const oversized = (error as NodeJS.ErrnoException).code === "EFBIG";
+    return { ...empty, resolvedPath: resolved,
+      reason: oversized ? "body_too_large" : "file_unreadable",
+      detail: oversized ? "the file body exceeds 65536 bytes" : `could not read ${resolved}` };
+  }
+  const normalized = normalizeBody(raw);
+  if (Buffer.byteLength(normalized, "utf8") > 64 * 1024) {
+    return { ...empty, resolvedPath: resolved, reason: "body_too_large", detail: "the file body exceeds 65536 bytes" };
+  }
+  const invalid = findInvalidCharacter(normalized);
+  if (invalid !== null) {
+    return {
+      ...empty,
+      resolvedPath: resolved,
+      reason: "invalid_characters",
+      detail: `code point ${invalid.position} is a ${invalid.reason}`,
+    };
+  }
+  const suggestedTitle = boundTitle(resolved.replace(/\\/g, "/").split("/").pop()!
+    .replace(/\.(md|markdown|txt)$/i, ""));
+  const effectiveTitle = boundTitle(title) ?? suggestedTitle ?? IMPORT_FALLBACK_TITLE;
+  const serialized = `# ${effectiveTitle}\n${normalized}`;
+  return {
+    rawPath: selection.path,
+    resolvedPath: resolved,
+    body: normalized,
+    serialized,
+    previewSha256: createHash("sha256").update(serialized, "utf8").digest("hex"),
+    suggestedTitle,
+    effectiveTitle,
+    reason: variants.length >= MAX_BASE_VARIANTS ? "slots_full" : "ok",
+  };
+}
+
+/**
+ * True when the config still names this variant — or when nothing can be
+ * proved either way. An unreadable config returns true because "the file is
+ * unreferenced" must be ESTABLISHED, not assumed: deleting a variant a live
+ * `model_instructions_file` points at strands the prompt in force.
+ */
+function variantStillReferenced(id: string, path: string, opts?: Paths): boolean {
+  const configBytes = readFileOrNull(activeConfigPath(opts));
+  if (configBytes === null) return true;
+  const selection = resolveBaseSelection(configBytes, readBaseVariants(opts), opts);
+  if (selection.kind === "variant") return selection.id === id;
+  if (selection.kind !== "external") return false;
+  try {
+    return resolve(dirname(activeConfigPath(opts)), expandUserPath(selection.path)) === resolve(path);
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Copy the external file into the variant directory and retarget the key at it.
+ *
+ * Same ordering as `writeBaseVariant` and for the same reason: the .md is
+ * written and verified before `config.toml` is ever pointed at it, and if the
+ * transaction refuses, the file is deleted rather than left behind for a write
+ * the caller was told did not happen — but ONLY when the refusal proves no
+ * config references it. `write_superseded` and `recovery_required` can return
+ * after the post-write state was applied or while its shape is unknown; in
+ * that uncertainty the file AND the recovery evidence (the journal commit()
+ * left behind) are preserved.
+ *
+ * `previewSha256` is REQUIRED — the hash binds the exact serialized text the
+ * caller previewed, title line included, and a confirm without it (or one the
+ * current file no longer matches) is refused without writing.
+ *
+ * The `external` state is RE-CHECKED inside the transaction. Between the
+ * preview and the commit another writer could have adopted or cleared the key,
+ * and silently repointing then would claim an import nobody asked for.
+ */
+export function importBaseVariant(
+  input: { title?: string; previewSha256?: string },
+  revision: string,
+  opts?: Paths,
+): WriteResult {
+  const preview = previewBaseImport(opts, input.title);
+  if (preview.body === null || preview.serialized === null || preview.previewSha256 === null) {
+    return {
+      ok: false,
+      error: preview.reason === "invalid_characters" ? "invalid_characters"
+        : preview.reason === "body_too_large" ? "body_too_large"
+        : preview.reason === "unsupported_form" ? "unsupported_form"
+        : "developer_instructions_not_owned",
+      detail: preview.detail,
+    };
+  }
+  if (typeof input.previewSha256 !== "string" || input.previewSha256 !== preview.previewSha256) {
+    // The caller confirmed text they previewed; a different file, or a
+    // different title, today is a different import they never saw — and a
+    // missing hash means nothing was previewed at all. Refuse rather than
+    // install a surprise.
+    return { ok: false, error: "import_body_changed", detail: "the preview no longer matches; preview it again" };
+  }
+  // Even with a matching hash, refuse BEFORE writing the variant file when the
+  // configured key is a form the line editor cannot retarget — the preview
+  // reported the same reason, so a caller that confirmed anyway hears it too.
+  if (rootKeyValueForm(readFileOrNull(activeConfigPath(opts)) ?? "", "model_instructions_file") === "unsupported") {
+    return { ok: false, error: "unsupported_form", detail: preview.detail };
+  }
+  const dir = activeBaseVariantDir(opts);
+  const existing = readBaseVariants(opts);
+  if (existing.length >= MAX_BASE_VARIANTS) {
+    return { ok: false, error: "unknown_layer", detail: `at most ${MAX_BASE_VARIANTS} variants` };
+  }
+  const targetId = newBaseVariantId(existing);
+  const path = join(dir, `${targetId}.md`);
+  ensureDir(path);
+  try {
+    // The file written is the previewed serialization byte-for-byte: the same
+    // string that produced previewSha256 is what lands on disk.
+    durableWrite(path, preview.serialized);
+  } catch (error) {
+    return { ok: false, error: "write_failed", detail: error instanceof Error ? error.message : String(error) };
+  }
+
+  const result = commit(opts, revision, (snapshot, configBytes, storeBytes) => {
+    if (snapshot.baseSelection.kind !== "external") {
+      return { error: "developer_instructions_not_owned", detail: "model_instructions_file no longer points at an external file" };
+    }
+    return {
+      nextConfig: setRootString(configBytes ?? "", "model_instructions_file", resolve(path)),
+      nextStore: storeBytes,
+    };
+  });
+
+  if (!result.ok) {
+    // `write_superseded`/`recovery_required` can return AFTER the post-write
+    // state was applied or while its shape is unverified. In that uncertainty
+    // the file stays — deleting a file a live config might point at is exactly
+    // the data loss the refusal was protecting against. Refusals that provably
+    // wrote nothing (stale revision, lock, validation) still clean up.
+    const uncertain = result.error === "write_superseded" || result.error === "recovery_required";
+    if (!uncertain || !variantStillReferenced(targetId, path, opts)) {
+      try {
+        durableDelete(path);
+      } catch { /* the returned error already tells the caller to look */ }
+    }
+    return result;
+  }
+  // commit()'s success path already re-reads the full snapshot with the injected
+  // variant directory, so the result lists the file just written.
+  return result;
 }
 
 /** Replace the whole custom-layer list; order is composition order. */
@@ -1170,4 +1469,47 @@ export function salvageProjection(revision: string, opts?: Paths): WriteResult {
       nextStore: serializeStore([salvaged]),
     };
   });
+}
+
+/**
+ * Recovery as a first-class operation, under the same file lock every mutation
+ * takes. This is the journal-present repair: it replays the journal and writes
+ * NOTHING else.
+ *
+ * A byte-identical PUT used to stand in for it, and it was not safe. When the
+ * store file is missing, the snapshot's custom list reads [], so the "no-op"
+ * write projected an empty developer_instructions over whatever the config
+ * still carried — surviving instructions erased by the very repair that was
+ * supposed to touch nothing. Recovery alone preserves exactly the bytes it can
+ * account for — post where the pair proves the commit landed, pre where it
+ * proves it did not — and refuses rather than guess when a target matches
+ * neither image.
+ */
+export function recoverPromptJournal(opts?: Paths): WriteResult {
+  const configPath = activeConfigPath(opts);
+  const storePath = activeStorePath(opts);
+  const journalPath = journalPathFor(storePath);
+
+  for (const path of [configPath, storePath]) prepareCodexHome(dirname(path), 0o700);
+
+  const acquired = tryAcquire(lockPathFor(storePath));
+  if (!acquired.ok) return { ok: false, error: acquired.error, ...(acquired.error === "unsafe" ? { detail: configWriteLockFailureMessage(acquired) } : {}) };
+  const handle = acquired.handle;
+
+  try {
+    // Use the canonical destination witness and explicit held handle used by
+    // normal commits; journal replay must not reacquire its own live lock.
+    const configLocked = withConfigWriteLockHeld(configPath, undefined, configHandle => {
+      watchConfigWriteTargets(configHandle, [storePath, journalPath]);
+      const recovered = recoverJournal(journalPath, { configPath, storePath }, configHandle);
+      if (!recovered.ok) return { ok: false, error: recovered.error, detail: recovered.detail };
+      return {
+        ok: true,
+        // Action "none" means there was no journal to close or replay.
+        changed: recovered.action !== "none",
+        snapshot: readPromptLayers({ ...opts, configPath, storePath }),
+      };
+    });
+    return configLocked.ok ? configLocked.value as WriteResult : { ok: false, error: configLocked.error === "locked" ? "locked" : "unsafe", ...(configLocked.error !== "locked" ? { detail: configWriteLockFailureMessage(configLocked) } : {}) };
+  } finally { release(handle); }
 }

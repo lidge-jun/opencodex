@@ -1203,5 +1203,6 @@
   "web-search-run-turn-loop.test.ts": "web-search", "responses-run-turn-web-search.test.ts": "responses",
   "server-combo-cooldown-recording.test.ts": "server", "injection-routing-drift.test.ts": "codex-integration",
   "injection-routing-healer.test.ts": "codex-integration", "injection-routing-heal-apply.test.ts": "codex-integration",
-  "cli-start-routing-heal-wiring.test.ts": "cli", "cli-status-codex-routing-drift.test.ts": "cli"
+  "cli-start-routing-heal-wiring.test.ts": "cli", "cli-status-codex-routing-drift.test.ts": "cli",
+  "codex-set-prompt.test.ts": "gui", "codex-prompt-writes.test.ts": "codex-integration"
 }

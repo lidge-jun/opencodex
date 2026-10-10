@@ -314,6 +314,10 @@ retry. A changed canonical target refuses recovery, preserves existing journal e
 retains a private preimage file beside the canonical config with its location in the diagnostic.
 Drift is non-retryable and stops further parent publication or alias-based compensation; a
 successful child replacement advances the inode witness before subsequent parent writes.
+Prompt journal recovery uses the same prompt-store then config order as a normal
+prompt commit. A busy config lock preserves config/store/journal bytes; explicit
+retry after release replays only the recorded images, including a missing custom
+config parent. Both leases release on refusal or completion.
 
 `src/codex/prompt-lock-claim.ts` reserves the acquisition/takeover interval with a unique
 PID/token file and bakery ticket. A contender still choosing makes peers refuse, and a
@@ -523,29 +527,13 @@ Codex display-cache expiry, retained blocking main-policy evidence, and reset hi
 
 Plan-based automatic exclusions leave native credential files untouched and preserve the native-main exemption in the [selection policy](providers/openai-accounts.md#automatic-pool-plan-exclusions).
 
+## Base prompt import
+
+The [prompt contract](codex-prompts.md#base-prompt-import) governs base imports and previews.
+
 ## Prompt text probe
 
-`src/codex/prompt-text-probe.ts` reports the prompt Codex assembles for the resolved Codex home. It
-runs `codex debug prompt-input` in that home, bounded in time and in bytes, maps each rendered section
-onto a layer, and takes no caller-supplied directory. Captured process output is never serialized
-back: a failure is a classified kind plus a fixed phrase and the resolved command.
-
-The base prompt is absent from that output, because Codex discards `base_instructions` before
-rendering `prompt.input`. It is read from configuration instead, and it is read before the subprocess
-starts, so an unresolved Codex runtime, a failed probe and a cancelled request all still answer with
-it. Precedence follows Codex: a `model_instructions_file` decides the answer whenever the key is set,
-including when the file it names is missing, blank or unreadable, and otherwise the selected model's
-catalog row supplies `base_instructions`, with `model_messages.instructions_template` as the fallback.
-Only the first form is reported as text Codex sends. A template is reported as a template and the
-legacy `base-instructions` layer slot carries no text for it: that slot has five coarse reasons and no
-representation, and its dialog labels every readable layer as text sent to the model.
-
-Each configured source is opened once, non-blocking, and read to at most the probe's byte ceiling,
-which is what keeps a FIFO, a device node or an oversized file from stalling or ballooning a
-synchronous request. The regular-file check reads the opened descriptor rather than the path, and the
-whole TOML document parses before any key from it is trusted, because Codex rejects a malformed
-config outright. Every failure is a reason on the response rather than an exception, so the
-management read degrades instead of returning an error page.
+The [probe contract](codex-prompts.md#prompt-text-probe) governs prompt capture and bounded sources.
 
 ## Paginated history writer boundary
 

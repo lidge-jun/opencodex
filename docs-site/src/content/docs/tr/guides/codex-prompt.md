@@ -73,6 +73,15 @@ bölümde birleştirilirler; yerleşik katmanların arasına girmezler.
 Satırdaki oklarla veya satırın herhangi bir yerindeyken `Alt` + `Up` / `Alt` +
 `Down` ile sıralamayı değiştirin. Sıra, birleştirme sırasıdır.
 
+Panel, etkin katmanların toplam boyutunu `developer_instructions` için 128 KiB
+sınırına karşı gösterir ve birleştirilmiş metnin daraltılabilir bir önizlemesini
+sunar — bölümü sınırın üzerine taşıyacak bir katman, kaydettikten sonra değil
+kaydetmeden önce görülür.
+
+Bir katmanı silmek önce onay ister, ardından birkaç saniyeliğine **Geri al**
+seçeneği sunar: katman eski konumuna döner; böylece sırası önemli bir liste
+yanlışlıkla yapılan bir hareketi atlatır.
+
 ### Ön ayarlar
 
 **+ Add layer** beş başlangıç noktası sunar: kısa çıktı, düzenlemeden önce plan,
@@ -95,7 +104,10 @@ dönebilirsiniz.
 Düzenleyici, bir katman yazıldığı şekliyle çalışmayacak bir şey söylediğinde
 uyarır: farklı bir kimlik iddia etmek, kayıt defterinin tanımladığı bir aracın
 adını vermek, hiçbir şeyin genişletmediği şablon yer tutucuları kullanmak veya
-Codex'in daha sonra oluşturduğu ortam bilgilerini belirtmek.
+Codex'in daha sonra oluşturduğu ortam bilgilerini belirtmek. Ayrıca yapıştırılmış
+kimlik bilgilerini (bir katmandaki API anahtarı her istekte düz metin olarak
+modele gider), modele önceki talimatlarını bırakmasını söyleyen ifadeleri ve
+Korece yazılmış Codex dışı bir kimliği de işaretler.
 
 Bunlar uyarıdır ve kaydetmeyi asla engellemez. Codex'i geçersiz kılmak
 istiyorsanız bunu yapabilirsiniz; uyarı yalnızca bunun bir kaza değil, bilinçli
@@ -112,8 +124,12 @@ bunun üzerine yazmaz. Bunun yerine metni bir katman olarak içe aktarmayı öne
 Kaydedilen katmanlar ile `config.toml` içindeki değer uyuşmazsa panel bunu
 belirtir ve sessizce düzeltmek yerine **Repair** seçeneğini sunar. Onarım
 yollarından ikisi yazdığınız metni yeniden yazar, bu nedenle işlem bilinçli
-olarak başlatılmalıdır. Bir katman dosyası kaybolmuşsa onarım, herhangi bir şeye
-dokunmadan önce bir yedek yazar.
+olarak başlatılmalıdır. Yarım kalmış bir yazma ("journal present"), kilit altında
+yalnızca günlükte kayıtlı dosya durumlarını kullanarak kurtarılır. Geçerli liste
+yeniden kaydedilmez ve eksik içerik üretilmez. Dosyalar kayıtlı durumların hiçbiriyle
+eşleşmiyorsa kurtarma reddedilir ve tanılama için mevcut veriler korunur. Yenilenen
+panel kalan uyuşmazlıkları gösterir. Bir katman dosyası kaybolmuşsa onarım,
+herhangi bir şeye dokunmadan önce bir yedek yazar.
 
 ## Değişiklikler ne zaman etkili olur?
 
@@ -143,3 +159,7 @@ Bunlar opencodex'in kendi yapılandırmasında değil, Codex'in `config.toml` do
 Yazma işlemi satır bazlıdır: yorumlarınız ve biçimlendirmeniz korunur, opencodex'in tanımadığı bir anahtar silinmek yerine olduğu gibi bırakılır.
 
 Bulunmayan bir anahtar `false` olarak değil, varsayılanı olarak okunur. Panel dosyanızda gerçekten bulunan değeri gösterir ve bir anahtar ayarlanmamışsa bunu belirtir.
+
+Açık bir değer taşıyan satır ayrıca **Varsayılana sıfırla** sunar; bu, varsayılanı geri yazmak yerine
+anahtar satırını siler. Codex varsayılanı daha sonra değiştirirse onu takip etmeye devam eden tek durum
+budur — `key = true` yazmak bugünün varsayılanını bir geçersiz kılma olarak dondurur.

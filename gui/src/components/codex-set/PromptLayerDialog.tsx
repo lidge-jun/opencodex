@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import { useT } from "../../i18n/shared";
-import type { LayerDescriptorDto, ToggleStateDto } from "../../pages/codex-set-prompt";
+import { navigateHash } from "../../hash-routing";
+import type { LayerDescriptorDto, PromptProbeDto, ToggleStateDto } from "../../pages/codex-set-prompt";
 import { CLASS_LABEL_KEYS, LAYER_ABOUT_KEYS, LAYER_CONDITION_KEYS, LAYER_LABEL_KEYS } from "./prompt-layer-copy";
 
 /**
@@ -18,17 +19,25 @@ export default function PromptLayerDialog({
   descriptor,
   toggle,
   text,
+  probe,
   busy,
   onToggle,
+  onReset,
   onClose,
+  onRemeasure,
 }: {
   descriptor: LayerDescriptorDto;
   toggle: ToggleStateDto | undefined;
   /** Rendered source text for this layer, when the probe could read it. */
   text: { text: string | null; reason: string; bytes: number; sourcePath?: string } | undefined;
+  /** The probe response itself - its failure kind says WHY there is no text. */
+  probe: PromptProbeDto | null;
   busy: boolean;
   onToggle: (id: string, enabled: boolean) => void;
+  /** Deletes the key line so the documented default applies again. */
+  onReset?: (id: string) => void;
   onClose: () => void;
+  onRemeasure?: () => void;
 }) {
   const t = useT();
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -124,11 +133,42 @@ export default function PromptLayerDialog({
                   fallback: String(toggle.default),
                 })}
             </span>
+            {/*
+              A literal `key = true` for a default-true toggle reads identical today
+              but freezes the override, so the restore verb deletes the line
+              entirely. Offered only while the file carries an explicit value.
+            */}
+            {toggle.userFileValue !== null && onReset && (
+              <button
+                type="button"
+                className="link-btn codex-set-prompt__reset"
+                disabled={busy}
+                onClick={() => { onReset(descriptor.id); }}
+              >
+                {t("codexSet.row.resetDefault", { value: String(toggle.default) })}
+              </button>
+            )}
           </div>
         )}
 
         {descriptor.class === "runtime-conditional" && conditionKey && (
           <p className="muted small">{t(conditionKey)}</p>
+        )}
+
+        {/*
+          The row links out to the features section; a dialog that opens FROM that
+          row should not strand the user one click short of the same target.
+        */}
+        {descriptor.class === "feature-gated" && (
+          <div className="codex-set-layer-dialog__line">
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => navigateHash("integrations/codex")}
+            >
+              {t("codexSet.row.openFeatures")}
+            </button>
+          </div>
         )}
 
         {/*
@@ -145,21 +185,42 @@ export default function PromptLayerDialog({
           </>
         ) : (
           // Each absent case has a different cause, and saying which one is the
-          // difference between a limit and a bug.
-          <p className="muted small codex-set-layer-dialog__no-text">
-            {text?.reason === "empty-source"
-              // An existing but empty file is a fourth state. Reporting it as
-              // "sent nothing" would describe the layer as idle when the real
-              // answer is that the file the user wrote is blank.
-              ? t("codexSet.dialog.emptySource", { path: text.sourcePath ?? "" })
-              : text?.reason === "not-rendered"
-                ? t("codexSet.dialog.notRendered")
-                : text?.reason === "unmapped"
-                  ? t("codexSet.dialog.unmapped")
-                  : text?.reason === "not-exposed"
-                    ? t("codexSet.dialog.notExposed")
-                    : t("codexSet.dialog.textUnavailable")}
-          </p>
+          // difference between a limit and a bug. When the probe itself failed,
+          // the failure kind names the cause: a missing binary, an old Codex, or
+          // unparseable output are different fixes, and "unavailable" hid all three.
+          <>
+            <p className="muted small codex-set-layer-dialog__no-text">
+              {text?.reason === "empty-source"
+                // An existing but empty file is a fourth state. Reporting it as
+                // "sent nothing" would describe the layer as idle when the real
+                // answer is that the file the user wrote is blank.
+                ? t("codexSet.dialog.emptySource", { path: text.sourcePath ?? "" })
+                : text?.reason === "not-rendered"
+                  ? t("codexSet.dialog.notRendered")
+                  : text?.reason === "unmapped"
+                    ? t("codexSet.dialog.unmapped")
+                    : text?.reason === "not-exposed"
+                      ? t("codexSet.dialog.notExposed")
+                      : probe && probe.ok === false
+                        ? (probe.failure?.kind === "program-not-found"
+                          ? t("codexSet.dialog.probeNotFound")
+                          : probe.failure?.kind === "command-unsupported"
+                            ? t("codexSet.dialog.probeUnsupported")
+                            : probe.failure?.kind === "output-invalid"
+                              ? t("codexSet.dialog.probeInvalid")
+                              : probe.failure?.kind === "execution-failed"
+                                ? t("codexSet.dialog.probeFailed")
+                                : t("codexSet.dialog.probeBusy"))
+                        : t("codexSet.dialog.textUnavailable")}
+            </p>
+            {probe && probe.ok === false && probe.failure === undefined && onRemeasure && (
+              // No failure kind means the probe was busy or cancelled - the one
+              // case where asking again right now is the actual fix.
+              <button type="button" className="btn btn-ghost btn-sm" onClick={onRemeasure}>
+                {t("common.retry")}
+              </button>
+            )}
+          </>
         )}
       </div>
     </dialog>
