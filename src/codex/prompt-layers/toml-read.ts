@@ -118,6 +118,25 @@ export function rootLines(content: string): string[] {
   return first === -1 ? lines : lines.slice(0, first);
 }
 
+/**
+ * Root-scope lines that start outside every string and composite span. Used by
+ * fallbacks that scan lines because the parser refused the file (for example a
+ * Codex-valid i64 Bun cannot represent): prose inside a multiline value must not
+ * be read as a setting. A file whose spans never close keeps the plain scan.
+ */
+export function scopedRootLines(content: string): string[] {
+  const lines = content.split("\n");
+  const starts = lexicalLineStarts(lines);
+  if (starts === null) return rootLines(content);
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    if (!starts[i]) continue;
+    if (TABLE_HEADER.test(lines[i]!)) break;
+    out.push(lines[i]!);
+  }
+  return out;
+}
+
 /** Lines of `[header]`'s body, up to the next table header. */
 export function tableLines(content: string, header: string): string[] | null {
   const lines = content.split("\n");

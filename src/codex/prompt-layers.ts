@@ -153,7 +153,7 @@ export type { Ownership } from "./prompt-layers/toml-read";
 import { activeConfigPath, activeStorePath, activeBaseVariantDir, journalPathFor, lockPathFor, type Paths } from "./prompt-layers/paths";
 import { readFileOrNull, computeRevision, updateFingerprintField } from "./prompt-layers/revision";
 import { normalizeBody, findInvalidCharacter, decodeBasicString, decodeTomlBasicString } from "./prompt-layers/encoding";
-import { rootArrayEntries, hasRootKey, rootLines, rootValue, scopedBool, inspectOwnership } from "./prompt-layers/toml-read";
+import { rootArrayEntries, hasRootKey, rootLines, rootValue, scopedBool, scopedRootLines, inspectOwnership } from "./prompt-layers/toml-read";
 import {
   setRootBool, setRootString, setTableBool, setProjection, removeUnownedProjection,
   rootKeyValueForm, UnsupportedTomlForm,
@@ -375,7 +375,7 @@ function readModelInstructionsFile(configBytes: string | null): string | null {
   const parsed = rootValue(configBytes, "model_instructions_file");
   if (typeof parsed === "string") return parsed;
   if (parsed === undefined) return null;
-  for (const line of rootLines(configBytes)) {
+  for (const line of scopedRootLines(configBytes)) {
     // Capture the whole literal INCLUDING its quotes and decode it, rather than
     // returning the raw inner text. `setRootString` writes this key through
     // `encodeBasicString`, which escapes backslashes, so on Windows the stored

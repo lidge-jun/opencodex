@@ -103,3 +103,14 @@ test("toggle snapshots ignore assignment-shaped prose inside a multiline value",
   expect(parsed).toMatchObject({ include_apps_instructions: false, skills: { include_instructions: false } });
   expect(parsed.developer_instructions).toBe('"include_apps_instructions" = false\n[skills]\n"include_instructions" = false\n');
 });
+for (const quote of ['"""', "'''"]) {
+  test(`the parser fallback ignores a model_instructions_file named inside ${quote} prose`, () => {
+    // Bun refuses this i64 although Codex accepts it, which forces the line-scan fallback.
+    const config = `model_context_window = 9223372036854775807\ndeveloper_instructions = ${quote}\nmodel_instructions_file = "fake.md"\n${quote}\nmodel_instructions_file = "real.md"\n`;
+    const paths = fixture(config);
+    writeFileSync(join(roots.at(-1)!, "real.md"), "Real body.");
+    writeFileSync(join(roots.at(-1)!, "fake.md"), "Fake body.");
+    expect(() => Bun.TOML.parse(config)).toThrow();
+    expect(readPromptLayers(paths).modelInstructionsFile).toBe("real.md");
+  });
+}
