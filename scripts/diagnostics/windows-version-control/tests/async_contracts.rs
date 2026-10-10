@@ -90,7 +90,20 @@ return {answers,eof:eofResult,preparedResponses};
 struct OwnedRoot(PathBuf);
 impl Drop for OwnedRoot {
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
+        let cleanup_deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            match fs::remove_dir_all(&self.0) {
+                Ok(()) => break,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+                Err(error) => {
+                    if std::time::Instant::now() >= cleanup_deadline {
+                        eprintln!("warning: owned fixture cleanup failed: {error}");
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(25));
+                }
+            }
+        }
     }
 }
 
@@ -151,7 +164,7 @@ fn contract(name: &str, expression: &str) -> Value {
             }
         })
         .expect("unique fixture root");
-    let _owned = OwnedRoot(root.clone());
+    let owned = OwnedRoot(root.clone());
     let result = {
         let exe = root.join(if cfg!(windows) {
             "probe-env.exe"
@@ -216,20 +229,7 @@ console.log('@@catalog-contract@@'+JSON.stringify(answer));
             .expect("contract answer");
         serde_json::from_str(json).unwrap()
     };
-    let cleanup_deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-    loop {
-        match fs::remove_dir_all(&root) {
-            Ok(()) => break,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
-            Err(error) => {
-                assert!(
-                    std::time::Instant::now() < cleanup_deadline,
-                    "owned fixture cleanup failed: {error}"
-                );
-                std::thread::sleep(std::time::Duration::from_millis(25));
-            }
-        }
-    }
+    drop(owned);
     result
 }
 

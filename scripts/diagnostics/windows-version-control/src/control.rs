@@ -484,7 +484,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         {
             let bytes = serde_json::to_vec(&json!({"version":1,"command":bin.join("codex.exe"),
                 "source":"configured","selectedVersion":"0.170.0","origin":"pinned","updatedAt":"2026-10-08T01:00:00Z"}))?;
-            fs::write(home.join("codex-runtime.json"), &bytes)?;
+            let tmp = home.join("codex-runtime.json.tmp-ocx");
+            fs::write(&tmp, &bytes)?;
+            fs::rename(tmp, home.join("codex-runtime.json"))?;
             pin_guard_bytes = Some(bytes);
         }
         if (!responsive && count >= 2) || (responsive && Instant::now() >= observation_end) {

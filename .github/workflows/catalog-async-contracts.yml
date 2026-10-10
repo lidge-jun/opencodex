@@ -2,6 +2,7 @@ name: Catalog async contracts
 
 on:
   push:
+    branches: [dev, main, preview]
     paths:
       - src/**
       - scripts/diagnostics/windows-version-control/**
@@ -42,9 +43,9 @@ jobs:
       - uses: ./.github/actions/setup-project-bun
         with:
           role: runtime
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master snapshot; the action publishes no release tags, so the toolchain is pinned explicitly
         with:
-          toolchain: stable
+          toolchain: 1.99.0
           components: rustfmt, clippy
       - name: Install repository dependencies
         run: bun install --frozen-lockfile
