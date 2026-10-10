@@ -222,7 +222,7 @@ caller values are forwarded like an explicit `session_id`, without principal sco
 promoted `x-session-id`. Original ingress headers and affinity computation are unchanged, as are
 custom and API-key destinations. No identity or originator is invented for marker-free requests.
 
-`src/server/caller-session-identity.ts` promotes validated `x-session-id` on HTTP Responses and Messages before turn admission in `src/server/index/serve-options.ts`. Explicit `session_id`, `session-id`, or `thread-id` presence wins, including empty values; managed Grok promotion runs first on Responses. The trimmed marker must start with an ASCII letter/digit, contain only letters, digits, dots, underscores, colons or hyphens, and stay within 128 characters. Loopback admission keeps it; authenticated admission scopes it with the trusted credential principal into an opaque SHA-256 identifier and skips promotion without that principal. Bodies and abort signals are preserved, and the original Request owns Bun timeout lookup. This provides continuity, not authorization or guaranteed cache hits. Existing explicit/Grok identities, Chat Completions, WebSocket frames, compact and count_tokens retain their behavior.
+`src/server/caller-session-identity.ts` promotes validated `x-session-id` on HTTP Responses, Messages and Chat Completions before turn admission in `src/server/index/serve-options.ts`. Explicit `session_id`, `session-id`, or `thread-id` presence wins, including empty values; managed Grok promotion runs first on Responses. The trimmed marker must start with an ASCII letter/digit, contain only letters, digits, dots, underscores, colons or hyphens, and stay within 128 characters. Loopback admission keeps it; authenticated admission scopes it with the trusted credential principal into an opaque SHA-256 identifier and skips promotion without that principal. Bodies and abort signals are preserved, and the original Request owns Bun timeout lookup. This provides continuity, not authorization or guaranteed cache hits. Existing explicit/Grok identities, WebSocket frames, compact and count_tokens retain their behavior.
 
 ## Chat conversation identity forwarding
 
@@ -232,7 +232,8 @@ and per-request `x-client-request-id` under their original names, and additional
 `session_id` from the first present alias, `session-id` then `thread-id`, when safe, using the
 [precedence and validation rules above](#http-caller-conversation-identity). Missing conversation
 identity stays missing; a shared prefix/cache key is not converted into a session. The direct-mode
-outbound contract is covered by `tests/responses/chat-conversation-affinity.test.ts`.
+outbound contract is covered by `tests/responses/chat-conversation-affinity.test.ts`. A promoted
+caller `x-session-id` arrives at this bridge already as `session_id` (see above).
 This transport contract does not prove a client's emission, Pool selection stability or cache hits.
 
 ## Chat streaming client with a JSON upstream result
