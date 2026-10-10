@@ -173,8 +173,8 @@ for (const entry of ["retry helper", "messages ingress"] as const) {
           if (url.href === "https://auth.openai.com/oauth/token") {
             refreshes.push(new URLSearchParams(String(init?.body)).get("refresh_token") ?? "");
             entered.resolve();
-            // Deliberately ignore init.signal: a late endpoint result must be fenced by
-            // the credential owner even if the network operation does not stop on abort.
+            // Deliberately ignore init.signal: a late rotating grant must be saved even
+            // though caller cancellation still prevents subsequent inference.
             return release.promise;
           }
           if (url.hostname === "chatgpt.com" && url.pathname.endsWith("/responses")) {
@@ -213,9 +213,20 @@ for (const entry of ["retry helper", "messages ingress"] as const) {
             expect(after.epoch).toBe(before.epoch + 1);
             expect(after.refused).toBe(false);
           } else {
-            // One aggregate assertion reports every forbidden side effect, including
-            // terminal refusal that leaves bytes intact but poisons later requests.
-            expect({ ...credentialState(), inference }).toEqual({ ...before, inference: initialInference });
+            expect(inference).toEqual(initialInference);
+            if (scenario === "cancel-success") {
+              const after = credentialState();
+              expect(JSON.parse(after.bytes).tokens).toMatchObject({
+                access_token: "fixture-refreshed-main", refresh_token: "fixture-rotated-main",
+              });
+              expect(after.epoch).toBe(before.epoch + 1);
+              expect(after.refused).toBe(false);
+              expect(after.genericReauth).toBe(false);
+            }
+            if (scenario === "cancel-terminal") {
+              // A cancelled terminal refusal must not poison later requests.
+              expect(credentialState()).toEqual(before);
+            }
           }
         } finally {
           release.resolve(refreshReply(false));

@@ -8,7 +8,7 @@ import { requestTextValue } from "../action-dialogs";
  *
  * Both editors used to open `window.prompt()`, which the app's webview cannot draw at all —
  * wry implements no text input panel — so inside the app these two pencil buttons could
- * not be used. See devlog/_plan/260921_app_runtime_ownership/050_webview_dialogs.md.
+ * not be used. See devlog/_fin/260921_app_runtime_ownership/050_webview_dialogs.md.
  */
 export interface AliasEditingDeps {
   apiBase: string;

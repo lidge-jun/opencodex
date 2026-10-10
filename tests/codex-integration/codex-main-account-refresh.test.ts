@@ -329,27 +329,81 @@ describe("publication never overwrites an external Codex writer (#2999)", () => 
     expect(readFileSync(authPath, "utf8")).toContain("ocx-staged-access");
   });
 
-  test("a caller cancelled during the refresh does not commit the late result", async () => {
-    // The refresh seam resolves after the caller aborted (a client that disconnected
-    // mid-/v1/models). The late result must never reach auth.json on behalf of a
-    // request that no longer exists: the publication is fenced before the rename,
-    // the file keeps its prior bytes, and the credential mutation epoch does not
-    // advance for a commit that never happened.
+  test("a caller cancelled during the refresh commits the rotated grant before rejecting", async () => {
+    // A successful exchange retires the old refresh token. Even after a client
+    // disconnect, publication must save the only live grant before reporting cancellation.
     const authPath = join(home, "auth.json");
     seedExpired(authPath);
-    const before = readFileSync(authPath, "utf8");
+    const controller = new AbortController();
+    const abortReason = new Error("client disconnected");
+    const epochBefore = codexCredentialMutationEpoch();
+
+    await expect(getValidMainAccountToken({
+      signal: controller.signal,
+      refreshToken: async () => {
+        controller.abort(abortReason);
+        return refreshOk();
+      },
+    })).rejects.toBe(abortReason);
+
+    expect(JSON.parse(readFileSync(authPath, "utf8")).tokens).toMatchObject({
+      access_token: "ocx-staged-access",
+      refresh_token: "ocx-staged-refresh",
+      account_id: "account-main",
+    });
+    expect(codexCredentialMutationEpoch()).toBe(epochBefore + 1);
+  });
+
+  test("caller cancellation does not abort the token exchange signal", async () => {
+    const authPath = join(home, "auth.json");
+    seedExpired(authPath);
+    const controller = new AbortController();
+    const abortReason = new Error("client disconnected during exchange");
+    const epochBefore = codexCredentialMutationEpoch();
+    let exchangeAborted: boolean | undefined;
+
+    await expect(getValidMainAccountToken({
+      signal: controller.signal,
+      refreshToken: async (_refreshToken, options) => {
+        controller.abort(abortReason);
+        // Recorded rather than asserted here: a throw inside the seam would be masked by the
+        // caller's abort reason on the way out.
+        exchangeAborted = options.signal.aborted;
+        return refreshOk();
+      },
+    })).rejects.toBe(abortReason);
+
+    expect(exchangeAborted).toBe(false);
+    expect(JSON.parse(readFileSync(authPath, "utf8")).tokens).toMatchObject({
+      access_token: "ocx-staged-access",
+      refresh_token: "ocx-staged-refresh",
+      account_id: "account-main",
+    });
+    expect(codexCredentialMutationEpoch()).toBe(epochBefore + 1);
+  });
+
+  test("an external writer during a cancelled exchange still refuses publication", async () => {
+    const authPath = join(home, "auth.json");
+    seedExpired(authPath);
+    const external = JSON.stringify({
+      tokens: { access_token: "external-access", refresh_token: "external-refresh", account_id: "account-external" },
+    });
     const controller = new AbortController();
     const epochBefore = codexCredentialMutationEpoch();
 
     await expect(getValidMainAccountToken({
       signal: controller.signal,
       refreshToken: async () => {
-        controller.abort(new Error("client disconnected"));
+        const swapPath = join(home, "external-auth.json");
+        writeFileSync(swapPath, external);
+        renameSync(swapPath, authPath);
+        controller.abort(new Error("client disconnected after external replacement"));
         return refreshOk();
       },
-    })).rejects.toThrow("client disconnected");
+    })).rejects.toThrow("changed while its token was refreshing");
 
-    expect(readFileSync(authPath, "utf8")).toBe(before);
+    expect(readFileSync(authPath, "utf8")).toBe(external);
+    expect(readdirSync(home).filter(name => name.includes(".tmp"))).toEqual([]);
     expect(codexCredentialMutationEpoch()).toBe(epochBefore);
   });
 });

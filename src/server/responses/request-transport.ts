@@ -53,6 +53,9 @@ import { classifyModelFamilyForQuota } from "../../oauth/account-quota-rank";
 import { expandInferenceOAuthSendBudget } from "../inference/context";
 import { stampOAuthAccountLabel, usesApiKeyAccount } from "../../providers/label";
 import { resolveProviderTransport } from "../../providers/xai-transport";
+import { captureRouteStaticPolicy } from "../../router";
+import { CopilotAutoHttpError, resolveCopilotAuto } from "../../providers/github-copilot-auto";
+import { renameRoutedIdentityInContext } from "../../adapters/identity";
 import { resolveCopilotApiBaseUrl } from "../../oauth/github-copilot";
 import {
   providerApiKeySelectionIsCurrent,
@@ -86,6 +89,13 @@ import { bindAttemptDeliveryRecorder } from "../../usage/attempt-delivery";
 import { resolvePassiveRouteSubjectId } from "../passive-route-linker";
 import { clientCancelledResponse } from "./core-errors";
 import { acquireAccountLease, KIRO_ACCOUNT_WAIT_MS } from "../../oauth/kiro-account-load";
+
+/** Return a renewed Chat wire to the native owner before sending inference. */
+export class CopilotAutoAdapterHandoff extends Error {
+  constructor(readonly adapter: ProviderAdapter) {
+    super("Copilot Auto dispatch requires the Chat adapter");
+  }
+}
 
 /** Owns live credential selection and adapter bindings for one request. */
 export async function prepareResponsesTransport(
@@ -160,6 +170,8 @@ export async function prepareResponsesTransport(
     || route.providerName === "devin"
   ) && route.provider.authMode === "oauth";
   let sentOAuthSnapshot: OAuthAccessSnapshot | undefined;
+  // One inference-401 replay belongs to this request, even when Auto changes exchange wire.
+  let oauth401ReplayAttempted = false;
   let replayOAuthCredentialSnapshot: Pick<OAuthAccessSnapshot, "accountId" | "generation"> | undefined;
   let anthropicPoolAccountId: string | null = null;
   let anthropicPoolFailovers = 0;
@@ -281,6 +293,59 @@ export async function prepareResponsesTransport(
    * the case the fence exists for. Stays 0 for every provider without a passive quota.
    */
   let passiveQuotaWriterGeneration = 0;
+  const copilotRequestedModel = route.modelId;
+  /** Project only bounded Copilot refusal metadata; upstream bodies and session tokens never reach the client. */
+  const copilotRefusalResponse = (error: unknown): Response | undefined => {
+    if (!(error instanceof CopilotAutoHttpError) || ![401, 403, 429].includes(error.status)) return;
+    const response = formatErrorResponse(error.status, error.status === 429 ? "rate_limit_error" : "authentication_error",
+      error.message);
+    if (error.retryAfter) response.headers.set("retry-after", error.retryAfter);
+    return response;
+  };
+  let copilotSessionExpiresAt = Infinity;
+  let copilotNegotiationRefreshed = false;
+  let copilotAutoAdapter: OcxProviderConfig["adapter"] | undefined;
+  /** Resolve the request's ephemeral wire selection and recover at most one OAuth negotiation 401. */
+  const resolveCopilotSelection = async (requestParsed: OcxParsedRequest, insideDispatch = false): Promise<void> => {
+    if (route.providerName !== "github-copilot" || route.provider.authMode === "forward") return;
+    /** Fence control-plane sends to the captured credential; reuse an already-held dispatch concurrency lease. */
+    const negotiate = () => {
+      const binding: DispatchBinding | undefined = oauthSelection && servingOAuthSnapshot
+        ? { kind: "oauth", selection: { ...oauthSelection }, snapshot: servingOAuthSnapshot }
+        : { kind: "api-key", provider: { ...route.provider } };
+      return resolveCopilotAuto(route.provider, copilotRequestedModel, requestParsed,
+        options.abortSignal ?? req.signal, /** Fence each negotiation send against the captured credential binding before touching the network. */
+          () => selectionIsCurrent(binding), !insideDispatch);
+    };
+    let selected: Awaited<ReturnType<typeof resolveCopilotAuto>>;
+    try { selected = await negotiate(); }
+    catch (error) {
+      if (!(error instanceof CopilotAutoHttpError) || error.status !== 401 || copilotNegotiationRefreshed
+        || oauth401ReplayAttempted || route.provider.authMode !== "oauth" || !servingOAuthSnapshot) throw error;
+      copilotNegotiationRefreshed = true;
+      const refreshed = await refreshResolvedOAuthSelection(servingOAuthSnapshot);
+      route.provider = resolveProviderTransport(route.providerName,
+        { ...route.provider, apiKey: refreshed.accessToken }, parsed.options.promptCacheKey,
+        resolveCopilotApiBaseUrl(refreshed.apiBaseUrl));
+      sentOAuthSnapshot = refreshed;
+      replayOAuthCredentialSnapshot = { accountId: refreshed.accountId, generation: refreshed.generation };
+      selected = await negotiate();
+    }
+    copilotSessionExpiresAt = selected.expiresAt ?? Infinity;
+    route.provider = selected.provider;
+    route.modelId = selected.modelId;
+    route.staticPolicy = captureRouteStaticPolicy(route.providerName, route.modelId, route.provider,
+      route.staticPolicy.effectiveAlias, inboundWire);
+    copilotAutoAdapter = selected.auto ? selected.provider.adapter : undefined;
+    for (const target of new Set([parsed, requestParsed])) {
+      target.modelId = selected.modelId;
+      if (target._rawBody && typeof target._rawBody === "object")
+        (target._rawBody as { model?: string }).model = selected.modelId;
+      target.context = renameRoutedIdentityInContext(target.context, selected.modelId);
+    }
+    logCtx.model = selected.modelId;
+    if (logCtx.activeAttempt) logCtx.activeAttempt.model = selected.modelId;
+  };
   /**
    * Apply a rotated account's FULL credential snapshot to the live route (#2568d).
    *
@@ -306,6 +371,7 @@ export async function prepareResponsesTransport(
   const applyFailoverSnapshot = async (
     snapshot: OAuthAccessSnapshot,
     retryParsed: OcxParsedRequest = parsed,
+    insideDispatch = false,
   ): Promise<OAuthAccessSnapshot | null> => {
     requireAnthropicAdmission();
     if (snapshot.provider !== route.providerName) return null;
@@ -342,6 +408,9 @@ export async function prepareResponsesTransport(
     }
     if (snapshot.projectId) rotatedProvider = { ...rotatedProvider, project: snapshot.projectId };
     route.provider = rotatedProvider;
+    await resolveCopilotSelection(retryParsed, insideDispatch);
+    // Negotiation itself may have recovered a 401 with a newer committed credential.
+    if (route.providerName === "github-copilot" && servingOAuthSnapshot) snapshot = servingOAuthSnapshot;
     if (route.providerName === "kiro") {
       const kiroContext = { ...(snapshot.kiro ?? {}) };
       // Terminal-guard continuations are rebuilt from a shallow clone. Updating only the
@@ -411,7 +480,9 @@ export async function prepareResponsesTransport(
       && (anthropicInstance === undefined || !anthropicRouting!.getAnthropicAccountHealthSnapshot(binding.snapshot.accountId) && !anthropicRatePolicy!.anthropicRatePauseUntil(binding.snapshot.accountId) && !anthropicQuota!.anthropicFamilyRejected(binding.snapshot.accountId, route.modelId))
       && credentialGeneration(row.credential) === binding.snapshot.generation;
   };
+  /** Bind the negotiated wire adapter and its built requests to the serving credential's authority. */
   const resolveSelectionAdapter = (provider: OcxProviderConfig, retention = config.cacheRetention): ProviderAdapter => {
+    if (copilotAutoAdapter) provider = { ...provider, adapter: copilotAutoAdapter };
     const resolved = resolveAdapter(provider, retention, route.providerName);
     if (route.provider.authMode === "forward") return resolved;
     const binding: DispatchBinding | undefined = route.provider.authMode === "oauth"
@@ -468,6 +539,7 @@ export async function prepareResponsesTransport(
     }
     return resolved;
   };
+  /** Rebuild a stale queued selection while retaining the caller's dispatch lease and renewing Auto metadata. */
   const refreshDispatchAdapter = async (requestParsed: OcxParsedRequest): Promise<ProviderAdapter> => {
     requireAnthropicAdmission();
     if (route.provider.authMode === "oauth") {
@@ -479,7 +551,7 @@ export async function prepareResponsesTransport(
         const accountId = await anthropicRouting!.resolveAnthropicDispatchAccountId(config, anthropicSessionKey, anthropicRouteDecision, route.modelId);
         candidate = await anthropicRouting!.getAnthropicPoolAccessSnapshot(accountId);
       }
-      if (!candidate || !await applyFailoverSnapshot(candidate, requestParsed)) {
+      if (!candidate || !await applyFailoverSnapshot(candidate, requestParsed, true)) {
         if (anthropicInstance !== undefined) await anthropicRouting!.resolveAnthropicDispatchAccountId(config, anthropicSessionKey, anthropicRouteDecision, route.modelId);
         throw new Error("OAuth account selection changed before dispatch");
       }
@@ -487,6 +559,7 @@ export async function prepareResponsesTransport(
       const current = resolveCurrentProviderApiKeyTransport(config, route.providerName, route.provider);
       if (!current) throw new Error("API key selection is unavailable before dispatch");
       route.provider = current;
+      await resolveCopilotSelection(requestParsed, true);
     }
     adapter = activeAdapter = runTurnAdapter = resolveSelectionAdapter(
       resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
@@ -552,13 +625,14 @@ export async function prepareResponsesTransport(
     throw new Error("Account selection changed repeatedly before turn dispatch");
     } finally { producer?.close(); }
   };
-  const oauthDispatch = (wireRequest: AdapterRequest, requestParsed = parsed): ProviderFetchOptions["dispatchOverride"] => {
+  /** Fence the physical send, with bounded credential/session rebuilds and safe negotiated refusals. */
+  const oauthDispatch = (wireRequest: AdapterRequest, requestParsed = parsed, owner: "adapter" | "passthrough" = "adapter"): ProviderFetchOptions["dispatchOverride"] => {
     if (route.provider.authMode === "forward") return undefined;
-    return async (input, init, execute) => {
+    return /** Dispatch with the current binding and session, rebuilding at most three times before returning a safe refusal. */ async (input, init, execute) => {
       let destination = input;
       let dispatchInit = init;
       for (let attempt = 0; attempt < 3; attempt++) {
-        if (selectionIsCurrent(requestBindings.get(wireRequest))) {
+        if (selectionIsCurrent(requestBindings.get(wireRequest)) && copilotSessionExpiresAt > Date.now() + 1000) {
           const fetchImpl = (route.provider as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch ?? execute;
           const binding = requestBindings.get(wireRequest);
           const snapshot = anthropicInstance !== undefined && binding?.kind === "oauth"
@@ -622,7 +696,16 @@ export async function prepareResponsesTransport(
           if (!response.ok) await recordKeyAttemptFailure(logCtx, response, dispatchInit.signal ?? options.abortSignal);
           return response;
         }
-        const nextAdapter = await refreshDispatchAdapter(requestParsed);
+        let nextAdapter: ProviderAdapter;
+        try { nextAdapter = await refreshDispatchAdapter(requestParsed); }
+        catch (error) {
+          const refusal = copilotRefusalResponse(error);
+          if (refusal) return refusal;
+          throw error;
+        }
+        if (owner === "passthrough" && route.providerName === "github-copilot" && nextAdapter.name === "openai-chat") {
+          throw new CopilotAutoAdapterHandoff(nextAdapter);
+        }
         // Rebind before rebuilding: the rebuild's bridged-search restore and continuation
         // restore key on the serving identity, which must be the refreshed route's, not the
         // credential whose selection just lapsed.
@@ -876,7 +959,15 @@ export async function prepareResponsesTransport(
       ? resolveCopilotApiBaseUrl(sentOAuthSnapshot?.apiBaseUrl)
       : undefined,
   );
+  try { await resolveCopilotSelection(parsed); }
+  catch (error) {
+    if ((options.abortSignal ?? req.signal).aborted) return clientCancelledResponse();
+    const refusal = copilotRefusalResponse(error);
+    if (refusal) return refusal;
+    return formatErrorResponse(502, "provider_error", "GitHub Copilot Auto negotiation failed; retry or check your Copilot account permissions.");
+  }
   let adapterProvider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy);
+  if (copilotAutoAdapter) adapterProvider = { ...adapterProvider, adapter: copilotAutoAdapter };
   const stripClaudeMainAuth = options.stripClaudeMainAuthForNoncanonicalForward === true
     && !isCanonicalOpenAiForwardProvider(adapterProvider)
     && ((adapterProvider.adapter === "openai-responses" && adapterProvider.authMode === "forward")
@@ -1008,6 +1099,8 @@ export async function prepareResponsesTransport(
     set genericFailovers(value: typeof genericFailovers) {
       genericFailovers = value;
     },
+    get oauth401ReplayAttempted(): boolean { return oauth401ReplayAttempted; },
+    set oauth401ReplayAttempted(value: boolean) { oauth401ReplayAttempted = value; },
     get adapter(): ProviderAdapter {
       return adapter;
     },
@@ -1065,6 +1158,8 @@ export async function prepareResponsesTransport(
     applyFailoverSnapshot,
     selectionIsCurrent,
     resolveSelectionAdapter,
+    resolveCopilotSelection,
+    copilotRefusalResponse,
     refreshRunTurnAdapter,
     oauthDispatch,
     noteRoutedAttemptSend,

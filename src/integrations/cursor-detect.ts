@@ -9,7 +9,7 @@
  *
  * Detection is read-only and injectable: the proxy never writes anything into a Cursor
  * install, its state database, or its keychain entries (the T20 exclusion in
- * devlog/_plan/260822_senpi_cursor_transfer/090), and the tests run against a temp tree.
+ * devlog/_fin/260822_senpi_cursor_transfer/090), and the tests run against a temp tree.
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";

@@ -93,7 +93,7 @@ export const CONFIGURED_NATIVE_OPENAI_TEMPLATE_MODEL = NATIVE_GPT61_SOL_MODEL;
  *
  * `gpt-daybreak-blue-latest` stays gated. It has no shipped catalog row anywhere, so absence is
  * the only signal that exists for it, and the ungating decision was scoped to the flagships.
- * Evidence: devlog/_plan/260904_flagship_native_always_visible/.
+ * Evidence: devlog/_fin/260904_flagship_native_always_visible/.
  */
 export const ACCOUNT_GATED_NATIVE_OPENAI_MODELS: ReadonlySet<string> = new Set([
   NATIVE_DAYBREAK_BLUE_MODEL,

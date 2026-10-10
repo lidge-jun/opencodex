@@ -39,6 +39,7 @@ export async function handleResponsesInner(
     authCtx: { kind: "main", accountId: null },
   };
   let retention: ReturnType<typeof prepareCompactionRetention>;
+  let releasePendingSend = () => {};
   try {
     const requestState = await prepareResponsesRequest(requestContext, admissionState, requestDispatchers);
     if (requestState instanceof Response) return requestState;
@@ -63,7 +64,7 @@ export async function handleResponsesInner(
       const sendBudgetState = createResponsesSendBudget(requestContext);
       if (sendBudgetState instanceof Response) return sendBudgetState;
       if ("passthrough" in transportState.adapter && transportState.adapter.passthrough && !sidecarState.routedCompaction) {
-        return await executePassthroughResponse(
+        const passthroughResult = await executePassthroughResponse(
           requestContext,
           admissionState,
           requestState,
@@ -72,6 +73,9 @@ export async function handleResponsesInner(
           responseEffects,
           sendBudgetState,
         );
+        if (passthroughResult instanceof Response) return passthroughResult;
+        const unclaimedHop = sendBudgetState.pendingHopPermit;
+        releasePendingSend = () => { if (sendBudgetState.pendingHopPermit === unclaimedHop) { unclaimedHop?.release(); sendBudgetState.pendingHopPermit = undefined; } };
       }
       const sidecarPlans = await executeResponsesSidecars(
         requestContext,
@@ -128,6 +132,7 @@ export async function handleResponsesInner(
     if (error instanceof InvalidRetainedCompactionSummary) return formatErrorResponse(502, "invalid_compaction_summary", error.message);
     throw error;
   } finally {
+    releasePendingSend();
     if (admissionState.pendingHostAdmissionLease) {
       releaseUpstreamHostAdmission(admissionState.pendingHostAdmissionLease);
       releaseCodexAuthContextProbeLease(admissionState.authCtx);

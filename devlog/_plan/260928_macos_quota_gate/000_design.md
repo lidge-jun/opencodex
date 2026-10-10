@@ -44,7 +44,7 @@ Baseline: `09f8e5ebfee1cf594181dfa8e29befa0bae7e06e` (`dev`).
 4. Baseline `src/codex/desktop-app/darwin.ts:25-66,174-195,249-260` discovers the
    bundle by identifier/realpath, scopes processes to the current uid, and relaunches
    with `open -b`. It carries no app-server transport override. The measured topology
-   in `devlog/_plan/260913_cross_platform_desktop_app_restart/001_platform_topology.md`
+   in `devlog/_fin/260913_cross_platform_desktop_app_restart/001_platform_topology.md`
    places app-server at `Contents/Resources/codex`. Killing it alone can cause respawn.
 5. `src/codex/shim-templates.ts:30-50,152-163` treats app-server as an internal command
    and execs the saved CLI launcher. It is not evidence of intercepting the separately

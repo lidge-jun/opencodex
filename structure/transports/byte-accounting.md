@@ -43,7 +43,9 @@ An already-aborted request or explicitly oversized declaration keeps the existin
 
 The lease covers upload, parsing, downstream awaits and response consumption. It is released on
 response EOF/error or after producer cancellation settles, not when parsing or response headers
-complete. A pending read resolving as EOF during cancellation does not release it early. The
+complete. Request abort after work returns cancels the producer even if the response is unconsumed;
+abort during work waits for its response before cancelling. Abort and explicit cancellation share
+one settlement/finalizer, which removes the abort listener. A pending read resolving as EOF during cancellation does not release it early. The
 outermost response wrapper preserves bytes and metadata and adds no eager pull. Internal direct
 combo/translation calls share their HTTP owner's reservation rather than reserving again.
 

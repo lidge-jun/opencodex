@@ -59,7 +59,7 @@ test("Models exposes provider and per-model context-window controls (#1073)", as
  * These are source-text assertions. The rendered proof - 20/20 cells green across
  * ko/ru/fr/en/de x 1440/1280/1100/1024, containment at -2 on five stress cases, and a
  * 14px chevron - was measured in a real browser over CDP and is recorded in
- * `devlog/_plan/260830_models_provider_header/010_toggle_basis_and_shrink.md`. What this
+ * `devlog/_fin/260830_models_provider_header/010_toggle_basis_and_shrink.md`. What this
  * file can do is stop the specific declarations from being removed or narrowed silently.
  */
 test("the provider toggle keeps a real flex basis so the header can wrap (#2958)", async () => {

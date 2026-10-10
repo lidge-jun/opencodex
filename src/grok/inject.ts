@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { atomicWriteFile } from "../config";
 import { atomicWriteFileNoFollow } from "../config/atomic-write";
+import { assertConfigWriteDestination, publishConfigWrite, withConfigWriteLock, type ConfigWriteLockOutcome } from "../codex/config-write-lock";
 import { applyEol, dominantEol, isLoopbackHostname, providerBaseHost } from "../codex/inject";
 import {
   grokDefaultReasoningEffort,
@@ -23,7 +24,18 @@ export interface GrokInjectResult {
   ok: boolean;
   changed: boolean;
   message: string;
-  skippedReason?: "no-grok-home" | "orphaned-marker" | "non-loopback" | "refresh-only";
+  skippedReason?: "no-grok-home" | "orphaned-marker" | "non-loopback" | "refresh-only" | "locked" | "unsafe";
+  retryable?: boolean;
+}
+
+function grokConfigLockRefusal(failure: Exclude<ConfigWriteLockOutcome<unknown>, { ok: true }>): GrokInjectResult {
+  const retryable = failure.error === "locked";
+  return {
+    ok: false, changed: false, retryable,
+    skippedReason: retryable ? "locked" : "unsafe",
+    message: retryable ? "Grok config write refused: another OpenCodex writer is active; retry shortly."
+      : "Grok config write refused: its destination or lock cannot be verified; files were preserved.",
+  };
 }
 
 const BEGIN_MARKER = "# >>> opencodex managed block — do not edit (removed by `ocx stop`) >>>";
@@ -1155,145 +1167,152 @@ export function injectGrokConfig(
   const configPath = join(grokHome, "config.toml");
   const backupPath = join(grokHome, "config.toml.bak-opencodex");
   try {
-    const configExisted = existsSync(configPath);
-    const rawContent = configExisted ? readFileSync(configPath, "utf8") : "";
-    const eol = dominantEol(rawContent);
-    const originalContent = applyEol(rawContent, "\n");
-    const originalRegion = findManagedRegion(originalContent);
-    if (opts.refreshOnly && (!configExisted || !originalRegion || originalRegion.orphaned
-      || !opts.refreshOnly.admit() || isSymlink(configPath) || isSymlink(backupPath))) {
-      return refreshOnlySkipped();
-    }
-    // Ambiguous fence: refuse before the sweep, or "outside the region" could mean the
-    // entire file.
-    if (originalRegion?.orphaned) return orphanedMarkerResult("injection");
-    const previousManagedModels = managedModelAliases(originalContent, originalRegion);
-
-    // Adopt our own pre-fence entries (#511) BEFORE reserving user aliases, so the stale
-    // duplicate is replaced instead of routed around forever. Runs inside the normalized
-    // window so the user's dominant EOL is still restored below.
-    // Durably marked rows use the full UNFILTERED catalog: explicitly excluded and otherwise
-    // hidden current models must still lose stale generated tables. Ambiguous pre-marker legacy
-    // rows are migrated only when this write emits their replacement. Direct callers that do not
-    // have a separate catalog keep the historical `models` behavior.
-    const catalogModelIds = opts.catalogModelIds ?? new Set(models.map(model => model.id));
-    const emittedModelIds = new Set(models
-      .filter(model => !opts.excluded?.has(model.id))
-      .map(model => model.id));
-    const orphans = findOpencodexOrphans(originalContent, originalRegion)
-      .filter(orphan =>
-        // A provider table carries no alias and no model id: its strict predicate (our key
-        // + loopback + durable marker) is itself the deletion authority, and a leftover
-        // collides with the regenerated provider table (duplicate key).
-        orphan.alias === ""
-        || (orphan.ownership === "legacy"
-          // A legacy fingerprint is not durable deletion authority. Migrate it only when this
-          // same write will replace the row with a marked managed table.
-          ? emittedModelIds.has(orphan.modelId)
-          : catalogModelIds.has(orphan.modelId)
-            || isDisabledProviderModelId(
-              orphan.modelId,
-              opts.disabledProviderNamespaces,
-              opts.comboPublicModelIds,
-            )));
-    const content = removeOrphanTables(originalContent, orphans);
-    // Removing bytes above the fence MOVES it: recompute rather than adjust arithmetic,
-    // so the splice below cannot cut the file in the wrong place.
-    const region = orphans.length > 0 ? findManagedRegion(content) : originalRegion;
-
-    const buildCandidate = (reservedAliases: ReadonlySet<string>): string => {
-      const block = buildGrokManagedBlock(port, models, opts.hostname, reservedAliases, opts.excluded);
-      let candidate: string;
-      if (region) {
-        candidate = content.slice(0, region.start) + block + content.slice(region.end);
-      } else if (content.length === 0) {
-        candidate = `${block}\n`;
-      } else {
-        // One separator newline preserves the user's original terminator for stripping.
-        candidate = `${content}\n${block}\n`;
+    const locked = withConfigWriteLock(configPath, (held): GrokInjectResult => {
+      const configExisted = existsSync(configPath);
+      const rawContent = configExisted ? readFileSync(configPath, "utf8") : "";
+      const eol = dominantEol(rawContent);
+      const originalContent = applyEol(rawContent, "\n");
+      const originalRegion = findManagedRegion(originalContent);
+      if (opts.refreshOnly && (!configExisted || !originalRegion || originalRegion.orphaned
+        || !opts.refreshOnly.admit() || isSymlink(configPath) || isSymlink(backupPath))) {
+        return refreshOnlySkipped();
       }
+      // Ambiguous fence: refuse before the sweep, or "outside the region" could mean the
+      // entire file.
+      if (originalRegion?.orphaned) return orphanedMarkerResult("injection");
+      const previousManagedModels = managedModelAliases(originalContent, originalRegion);
 
-      // Repoint selectors after allocation, so parsing below checks the actual write bytes.
-      const nextManagedModels = managedModelAliases(candidate, findManagedRegion(candidate));
-      const survivors = new Map<string, string>();
-      for (const [alias, modelId] of nextManagedModels) {
-        if (!survivors.has(modelId)) survivors.set(modelId, alias);
-      }
-      const replacements = new Map<string, string | null>();
-      for (const removed of [
-        ...orphans.filter(orphan => orphan.alias !== "")
-          .map(orphan => ({ alias: orphan.alias, modelId: orphan.modelId })),
-        ...[...previousManagedModels].map(([alias, modelId]) => ({ alias, modelId })),
-      ]) {
-        if (nextManagedModels.get(removed.alias) === removed.modelId) continue;
-        const replacement = survivors.get(removed.modelId) ?? null;
-        if (replacement !== removed.alias) replacements.set(removed.alias, replacement);
-      }
-      return rewriteAliasReferences(candidate, replacements);
-    };
+      // Adopt our own pre-fence entries (#511) BEFORE reserving user aliases, so the stale
+      // duplicate is replaced instead of routed around forever. Runs inside the normalized
+      // window so the user's dominant EOL is still restored below.
+      // Durably marked rows use the full UNFILTERED catalog: explicitly excluded and otherwise
+      // hidden current models must still lose stale generated tables. Ambiguous pre-marker legacy
+      // rows are migrated only when this write emits their replacement. Direct callers that do not
+      // have a separate catalog keep the historical `models` behavior.
+      const catalogModelIds = opts.catalogModelIds ?? new Set(models.map(model => model.id));
+      const emittedModelIds = new Set(models
+        .filter(model => !opts.excluded?.has(model.id))
+        .map(model => model.id));
+      const orphans = findOpencodexOrphans(originalContent, originalRegion)
+        .filter(orphan =>
+          // A provider table carries no alias and no model id: its strict predicate (our key
+          // + loopback + durable marker) is itself the deletion authority, and a leftover
+          // collides with the regenerated provider table (duplicate key).
+          orphan.alias === ""
+          || (orphan.ownership === "legacy"
+            // A legacy fingerprint is not durable deletion authority. Migrate it only when this
+            // same write will replace the row with a marked managed table.
+            ? emittedModelIds.has(orphan.modelId)
+            : catalogModelIds.has(orphan.modelId)
+              || isDisabledProviderModelId(
+                orphan.modelId,
+                opts.disabledProviderNamespaces,
+                opts.comboPublicModelIds,
+              )));
+      const content = removeOrphanTables(originalContent, orphans);
+      // Removing bytes above the fence MOVES it: recompute rather than adjust arithmetic,
+      // so the splice below cannot cut the file in the wrong place.
+      const region = orphans.length > 0 ? findManagedRegion(content) : originalRegion;
 
-    const userContent = region ? content.slice(0, region.start) + content.slice(region.end) : content;
-    let userContentValid = false;
-    try {
-      Bun.TOML.parse(userContent);
-      userContentValid = true;
-    } catch {
-      // Preserve the old, conservative reservation and write behavior for malformed user TOML.
-    }
-    let nextContent: string;
-    if (!userContentValid) {
-      nextContent = buildCandidate(userModelAliases(content, region, true));
-    } else {
-      const validCandidate = (includeNested: boolean): string | null => {
+      const buildCandidate = (reservedAliases: ReadonlySet<string>): string => {
+        const block = buildGrokManagedBlock(port, models, opts.hostname, reservedAliases, opts.excluded);
         let candidate: string;
-        try {
-          candidate = buildCandidate(userModelAliases(content, region, includeNested));
-        } catch (error) {
-          if (error instanceof Error && error.message === "Grok config rewrite refused: Bun could not parse the TOML document safely.") return null;
-          throw error;
+        if (region) {
+          candidate = content.slice(0, region.start) + block + content.slice(region.end);
+        } else if (content.length === 0) {
+          candidate = `${block}\n`;
+        } else {
+          // One separator newline preserves the user's original terminator for stripping.
+          candidate = `${content}\n${block}\n`;
         }
-        try {
-          Bun.TOML.parse(applyEol(candidate, eol));
-          return candidate;
-        } catch {
-          return null;
-        }
-      };
-      nextContent = validCandidate(false) ?? validCandidate(true) ?? "";
-      if (nextContent === "") {
-        throw new Error("Grok config injection refused: neither alias choice produced valid TOML after model-reference rewriting.");
-      }
-    }
 
-    const output = applyEol(nextContent, eol);
-    if (output === rawContent) {
-      return { ok: true, changed: false, message: "Grok config already contains the current opencodex managed block." };
-    }
-    // Back up before a first-time fence write AND before any sweep, since adopting an orphan
-    // deletes a table the user has in their file. Previously the adjacent-orphan layout got a
-    // backup only as a side effect of the fence being destroyed (which made `region` falsy);
-    // preserving the fence must not silently drop that safety net.
-    if (opts.refreshOnly) {
-      const refreshOnly = opts.refreshOnly;
-      atomicWriteFileNoFollow(configPath, output, undefined, {
-        validateBeforeRename: () => {
+        // Repoint selectors after allocation, so parsing below checks the actual write bytes.
+        const nextManagedModels = managedModelAliases(candidate, findManagedRegion(candidate));
+        const survivors = new Map<string, string>();
+        for (const [alias, modelId] of nextManagedModels) {
+          if (!survivors.has(modelId)) survivors.set(modelId, alias);
+        }
+        const replacements = new Map<string, string | null>();
+        for (const removed of [
+          ...orphans.filter(orphan => orphan.alias !== "")
+            .map(orphan => ({ alias: orphan.alias, modelId: orphan.modelId })),
+          ...[...previousManagedModels].map(([alias, modelId]) => ({ alias, modelId })),
+        ]) {
+          if (nextManagedModels.get(removed.alias) === removed.modelId) continue;
+          const replacement = survivors.get(removed.modelId) ?? null;
+          if (replacement !== removed.alias) replacements.set(removed.alias, replacement);
+        }
+        return rewriteAliasReferences(candidate, replacements);
+      };
+
+      const userContent = region ? content.slice(0, region.start) + content.slice(region.end) : content;
+      let userContentValid = false;
+      try {
+        Bun.TOML.parse(userContent);
+        userContentValid = true;
+      } catch {
+        // Preserve the old, conservative reservation and write behavior for malformed user TOML.
+      }
+      let nextContent: string;
+      if (!userContentValid) {
+        nextContent = buildCandidate(userModelAliases(content, region, true));
+      } else {
+        const validCandidate = (includeNested: boolean): string | null => {
+          let candidate: string;
           try {
-            if (!refreshOnly.admit() || !lstatSync(configPath).isFile()
-              || readFileSync(configPath, "utf8") !== rawContent) throw new Error();
-          } catch { throw new GrokRefreshOnlyRefusal(); }
-        },
-      });
-    } else {
-      if (configExisted && (!region || orphans.length > 0)) copyBackupOnce(configPath, backupPath);
-      atomicWriteFile(configPath, output);
-    }
-    return {
-      ok: true,
-      changed: true,
-      message: region
-        ? "Updated the opencodex managed block in Grok config."
-        : "Added the opencodex managed block to Grok config.",
-    };
+            candidate = buildCandidate(userModelAliases(content, region, includeNested));
+          } catch (error) {
+            if (error instanceof Error && error.message === "Grok config rewrite refused: Bun could not parse the TOML document safely.") return null;
+            throw error;
+          }
+          try {
+            Bun.TOML.parse(applyEol(candidate, eol));
+            return candidate;
+          } catch {
+            return null;
+          }
+        };
+        nextContent = validCandidate(false) ?? validCandidate(true) ?? "";
+        if (nextContent === "") {
+          throw new Error("Grok config injection refused: neither alias choice produced valid TOML after model-reference rewriting.");
+        }
+      }
+
+      const output = applyEol(nextContent, eol);
+      if (output === rawContent) {
+        return { ok: true, changed: false, message: "Grok config already contains the current opencodex managed block." };
+      }
+      // Back up before a first-time fence write AND before any sweep, since adopting an orphan
+      // deletes a table the user has in their file. Previously the adjacent-orphan layout got a
+      // backup only as a side effect of the fence being destroyed (which made `region` falsy);
+      // preserving the fence must not silently drop that safety net.
+      if (opts.refreshOnly) {
+        const refreshOnly = opts.refreshOnly;
+        publishConfigWrite(configPath, held, (destination, hooks) => atomicWriteFileNoFollow(destination, output, undefined, {
+          ...hooks,
+          validateBeforeRename: () => {
+            try {
+              hooks.validateBeforeRename?.(destination);
+              if (!refreshOnly.admit() || !lstatSync(configPath).isFile()
+                || readFileSync(configPath, "utf8") !== rawContent) throw new Error();
+            } catch { throw new GrokRefreshOnlyRefusal(); }
+          },
+        }));
+      } else {
+        const destination = assertConfigWriteDestination(configPath, held);
+        if (configExisted && (!region || orphans.length > 0)) copyBackupOnce(destination, backupPath);
+        publishConfigWrite(configPath, held, (target, hooks) => atomicWriteFile(target, output, undefined, hooks));
+      }
+      return {
+        ok: true,
+        changed: true,
+        message: region
+          ? "Updated the opencodex managed block in Grok config."
+          : "Added the opencodex managed block to Grok config.",
+      };
+    });
+    if (!locked.ok) return grokConfigLockRefusal(locked);
+    return locked.value;
   } catch (error) {
     if (error instanceof GrokRefreshOnlyRefusal) return refreshOnlySkipped();
     return errorResult("inject", error);
@@ -1317,95 +1336,100 @@ export function stripGrokConfig(opts: { grokHome?: string } = {}): GrokInjectRes
   }
 
   try {
-    const rawContent = readFileSync(configPath, "utf8");
-    const eol = dominantEol(rawContent);
-    const content = applyEol(rawContent, "\n");
-    const originalRegion = findManagedRegion(content);
-    if (originalRegion?.orphaned) return orphanedMarkerResult("cleanup");
+    const locked = withConfigWriteLock(configPath, (held): GrokInjectResult => {
+      const rawContent = readFileSync(configPath, "utf8");
+      const eol = dominantEol(rawContent);
+      const content = applyEol(rawContent, "\n");
+      const originalRegion = findManagedRegion(content);
+      if (originalRegion?.orphaned) return orphanedMarkerResult("cleanup");
 
-    // Remove the fence against its ORIGINAL offsets first. A pre-fence orphan's span is clamped
-    // at the fence start and can include the separator newline injection added. Sweeping that
-    // orphan first and then applying this separator undo would remove one additional USER newline.
-    let stripped: string;
-    let orphanCount = 0;
-    if (originalRegion) {
-      const fullOrphans = findOpencodexOrphans(content, originalRegion)
-        .filter(orphan => orphan.ownership === "explicit");
-      let removalEnd = originalRegion.end;
-      if (content.startsWith("\n", removalEnd)) removalEnd += 1;
-      let prefix = content.slice(0, originalRegion.start);
-      const restOfFile = content.slice(removalEnd);
-      // Undo the single separator newline injection added. Two cases, mirroring inject:
-      //   "X\n"  -> "X\n" + "\n" + block  => prefix ends "\n\n", drop one.
-      //   "X"    -> "X"   + "\n" + block  => prefix ends "\n" at EOF, drop it.
-      // A block the user has appended content after is left alone: we never shrink their bytes.
-      if (prefix.endsWith("\n\n")) prefix = prefix.slice(0, -1);
-      else if (restOfFile.length === 0 && prefix.endsWith("\n")) prefix = prefix.slice(0, -1);
-      // Keep the old fence boundary while sweeping. Concatenating first would let the last
-      // pre-fence orphan absorb comment-only or bare-key user content appended after the fence.
-      const prefixOrphans = findOpencodexOrphans(prefix, null)
-        .filter(orphan => orphan.ownership === "explicit");
-      const tailOrphans = findOpencodexOrphans(restOfFile, null)
-        .filter(orphan => orphan.ownership === "explicit");
-      const removedAliases = new Set(
-        [...fullOrphans, ...prefixOrphans, ...tailOrphans]
-          .map(orphan => orphan.alias)
-          // Provider orphans carry no alias; their ranges above already removed the table.
-          .filter(alias => alias !== ""),
-      );
-      // The backup must cover every removed TABLE, not just aliased rows: provider-only
-      // orphans carry no alias and would otherwise be swept without any backup.
-      orphanCount = new Set(
-        [...fullOrphans, ...prefixOrphans, ...tailOrphans]
-          .flatMap(orphan => orphanRanges([orphan])),
-      ).size;
-      const fullRanges = orphanRanges(fullOrphans);
-      const prefixRanges = [
-        ...orphanRanges(prefixOrphans),
-        ...fullRanges.filter(range => range.end <= originalRegion.start),
-      ];
-      const tailRanges = [
-        ...orphanRanges(tailOrphans),
-        ...fullRanges
-          .filter(range => range.start >= removalEnd)
-          .map(range => ({ start: range.start - removalEnd, end: range.end - removalEnd })),
-      ];
-      // Preserve the original fence as a structural boundary while cleaning references too.
-      // Joining first can re-parent a headerless tail under the last table in `prefix`.
-      stripped = removeAliasReferences(
-        removeTableRanges(prefix, prefixRanges),
-        removedAliases,
-      ) + removeAliasReferences(
-        removeTableRanges(restOfFile, tailRanges),
-        removedAliases,
-        false,
-      );
-    } else {
-      // Retired or otherwise non-emitted OpenCodex tables may intentionally remain outside the
-      // fence while the integration is enabled. Teardown owns those strictly identified tables
-      // even after Grok has re-serialized the file and dropped our marker comments.
-      const orphans = findOpencodexOrphans(content, null)
-        .filter(orphan => orphan.ownership === "explicit");
-      if (orphans.length === 0) {
-        return { ok: true, changed: false, message: "No opencodex managed block found in Grok config." };
+      // Remove the fence against its ORIGINAL offsets first. A pre-fence orphan's span is clamped
+      // at the fence start and can include the separator newline injection added. Sweeping that
+      // orphan first and then applying this separator undo would remove one additional USER newline.
+      let stripped: string;
+      let orphanCount = 0;
+      if (originalRegion) {
+        const fullOrphans = findOpencodexOrphans(content, originalRegion)
+          .filter(orphan => orphan.ownership === "explicit");
+        let removalEnd = originalRegion.end;
+        if (content.startsWith("\n", removalEnd)) removalEnd += 1;
+        let prefix = content.slice(0, originalRegion.start);
+        const restOfFile = content.slice(removalEnd);
+        // Undo the single separator newline injection added. Two cases, mirroring inject:
+        //   "X\n"  -> "X\n" + "\n" + block  => prefix ends "\n\n", drop one.
+        //   "X"    -> "X"   + "\n" + block  => prefix ends "\n" at EOF, drop it.
+        // A block the user has appended content after is left alone: we never shrink their bytes.
+        if (prefix.endsWith("\n\n")) prefix = prefix.slice(0, -1);
+        else if (restOfFile.length === 0 && prefix.endsWith("\n")) prefix = prefix.slice(0, -1);
+        // Keep the old fence boundary while sweeping. Concatenating first would let the last
+        // pre-fence orphan absorb comment-only or bare-key user content appended after the fence.
+        const prefixOrphans = findOpencodexOrphans(prefix, null)
+          .filter(orphan => orphan.ownership === "explicit");
+        const tailOrphans = findOpencodexOrphans(restOfFile, null)
+          .filter(orphan => orphan.ownership === "explicit");
+        const removedAliases = new Set(
+          [...fullOrphans, ...prefixOrphans, ...tailOrphans]
+            .map(orphan => orphan.alias)
+            // Provider orphans carry no alias; their ranges above already removed the table.
+            .filter(alias => alias !== ""),
+        );
+        // The backup must cover every removed TABLE, not just aliased rows: provider-only
+        // orphans carry no alias and would otherwise be swept without any backup.
+        orphanCount = new Set(
+          [...fullOrphans, ...prefixOrphans, ...tailOrphans]
+            .flatMap(orphan => orphanRanges([orphan])),
+        ).size;
+        const fullRanges = orphanRanges(fullOrphans);
+        const prefixRanges = [
+          ...orphanRanges(prefixOrphans),
+          ...fullRanges.filter(range => range.end <= originalRegion.start),
+        ];
+        const tailRanges = [
+          ...orphanRanges(tailOrphans),
+          ...fullRanges
+            .filter(range => range.start >= removalEnd)
+            .map(range => ({ start: range.start - removalEnd, end: range.end - removalEnd })),
+        ];
+        // Preserve the original fence as a structural boundary while cleaning references too.
+        // Joining first can re-parent a headerless tail under the last table in `prefix`.
+        stripped = removeAliasReferences(
+          removeTableRanges(prefix, prefixRanges),
+          removedAliases,
+        ) + removeAliasReferences(
+          removeTableRanges(restOfFile, tailRanges),
+          removedAliases,
+          false,
+        );
+      } else {
+        // Retired or otherwise non-emitted OpenCodex tables may intentionally remain outside the
+        // fence while the integration is enabled. Teardown owns those strictly identified tables
+        // even after Grok has re-serialized the file and dropped our marker comments.
+        const orphans = findOpencodexOrphans(content, null)
+          .filter(orphan => orphan.ownership === "explicit");
+        if (orphans.length === 0) {
+          return { ok: true, changed: false, message: "No opencodex managed block found in Grok config." };
+        }
+        orphanCount = orphans.length;
+        stripped = removeOrphanTables(content, orphans);
+        stripped = removeAliasReferences(
+          stripped,
+          new Set(orphans.map(orphan => orphan.alias).filter(alias => alias !== "")),
+        );
       }
-      orphanCount = orphans.length;
-      stripped = removeOrphanTables(content, orphans);
-      stripped = removeAliasReferences(
-        stripped,
-        new Set(orphans.map(orphan => orphan.alias).filter(alias => alias !== "")),
-      );
-    }
-    if (orphanCount > 0) copyBackupOnce(configPath, join(grokHome, "config.toml.bak-opencodex"));
-    atomicWriteFile(configPath, applyEol(stripped, eol));
+      const destination = assertConfigWriteDestination(configPath, held);
+      if (orphanCount > 0) copyBackupOnce(destination, join(grokHome, "config.toml.bak-opencodex"));
+      publishConfigWrite(configPath, held, (target, hooks) => atomicWriteFile(target, applyEol(stripped, eol), undefined, hooks));
 
-    return {
-      ok: true,
-      changed: true,
-      message: originalRegion
-        ? "Removed the opencodex managed block from Grok config."
-        : "Removed stale opencodex-managed model entries from Grok config.",
-    };
+      return {
+        ok: true,
+        changed: true,
+        message: originalRegion
+          ? "Removed the opencodex managed block from Grok config."
+          : "Removed stale opencodex-managed model entries from Grok config.",
+      };
+    });
+    if (!locked.ok) return grokConfigLockRefusal(locked);
+    return locked.value;
   } catch (error) {
     return errorResult("strip", error);
   }

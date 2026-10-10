@@ -7,9 +7,12 @@ import { RuntimePreflightError, type RuntimePreflightReason } from "../../src/li
 import type { DurableBunRuntime } from "../../src/lib/bun-runtime";
 import { maybeAutoRestoreCodexShim } from "../../src/cli/codex-shim-autorestore";
 import { getDefaultConfig } from "../../src/config";
+import { windowsEnvIndirectBatchValue } from "../../src/lib/win-paths";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const runtime: DurableBunRuntime = { path: process.execPath, source: "override", overrideEnv: "OPENCODEX_BUN_PATH" };
+/** Wrappers write a profile-located Bun as a %LOCALAPPDATA%/%USERPROFILE% token with the shim's suffix escaping. */
+const bunLine = () => `set "OCX_BUN=${windowsEnvIndirectBatchValue(runtime.path, v => v.replace(/%/g, "%%").replace(/\^/g, "^^").replace(/"/g, ""))}"`;
 /** Exercise the Windows shim state machine on every host with only temporary launchers. */
 function fixture(run: (paths: { home: string; wrapper: string; backup: string; state: string }) => void): void {
   const root = mkdtempSync(join(tmpdir(), "ocx-shim-runtime-"));
@@ -83,7 +86,7 @@ describe("Windows shim selected-runtime preflight", () => {
       },
     });
     expect(result.installed).toBe(true); expect(probes).toBe(1);
-    expect(readFileSync(paths.wrapper, "utf8")).toContain(runtime.path);
+    expect(readFileSync(paths.wrapper, "utf8")).toContain(bunLine());
     expect(readFileSync(paths.wrapper, "utf8")).toContain('OCX_BUN_RUNTIME_SOURCE=override');
     expect(readFileSync(paths.wrapper, "utf8")).not.toContain("unprobed.exe");
     expect(readFileSync(paths.backup, "utf8")).toBe(original);
@@ -108,7 +111,7 @@ describe("Windows shim selected-runtime preflight", () => {
     });
     expect(result.status).toBe("restored"); expect(selections).toBe(1); expect(probes).toBe(1);
     const wrapper = readFileSync(paths.wrapper, "utf8");
-    expect(wrapper).toContain(runtime.path); expect(wrapper).toContain('OCX_BUN_RUNTIME_SOURCE=override'); expect(wrapper).not.toContain("unprobed.exe");
+    expect(wrapper).toContain(bunLine()); expect(wrapper).toContain('OCX_BUN_RUNTIME_SOURCE=override'); expect(wrapper).not.toContain("unprobed.exe");
     expect(readFileSync(paths.backup, "utf8")).toContain("replacement");
     expect(existsSync(join(paths.home, "codex-shim.autorestore.lock"))).toBe(false);
   }));

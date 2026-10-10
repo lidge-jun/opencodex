@@ -179,7 +179,7 @@ factory), `relay-eager.ts` (#314 gated eager bounded passthrough relay), `memory
 (warn-only RSS sampler), `management/system-routes.ts` (`/api/system/*`), and `auth-cors.ts` own
 server infrastructure (`src/lib/bun-stream-caps.ts` owns the Bun stream-capability gate); and
 static GUI, WebSocket bridge, port/liveness, decompression, and adapter-resolution helpers live in
-their own files.
+their own files. `src/grok/inject.ts` holds the shared canonical config-write lock across injection and cleanup. It validates the locked destination before backup and every publication, preserves refresh-only admission and no-follow checks, and distinguishes retryable contention from an unsafe namespace. A refresh-only destination change before rename preserves files and returns the existing refresh skip result. Native Grok and manual editors do not participate in this advisory lock. `src/server/management/link-routes.ts` and `src/server/index/link-listener.ts` put their link-store read/decide/write sections under the existing config mutation transaction; SSH and other asynchronous work stays outside it. Link-store coordination follows [Remote Link](remote-link.md).
 
 ## Lifecycle
 

@@ -2,7 +2,7 @@
  * Claude Desktop picker mode: the one server-side controller for every picker mutation.
  *
  * While a server runs, enable, disable and Desktop mode transitions run here, serialized by one
- * lock (devlog/_plan/260924_claude_desktop_picker_mode/030_wp4_picker_activation.md, D11).
+ * lock (devlog/_fin/260924_claude_desktop_picker_mode/030_wp4_picker_activation.md, D11).
  */
 import type { OcxConfig } from "../types";
 import { claudeDesktopIntegrationEnabled } from "../codex/desired-state";

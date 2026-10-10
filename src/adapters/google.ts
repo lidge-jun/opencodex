@@ -20,7 +20,7 @@ import { contentPartsToText, parseDataUrl } from "./image";
 import { getVertexAccessToken } from "../lib/gcp-adc";
 import { fetchAntigravityWithRetry, fetchVertexWithRetry } from "./google-http";
 import { safeAntigravityHttpErrorMessage, safeVertexHttpErrorMessage } from "./google-errors";
-import { isVertexTruncatedTurn, vertexTruncationErrorMessage } from "./google-truncation";
+import { isVertexTruncatedTurn, vertexTruncationErrorEvent } from "./google-truncation";
 import { ANTIGRAVITY_REQUEST_UA, antigravitySessionAnchor, antigravitySessionId, isLikelyRealThoughtSignature, sanitizeAntigravityClaudeSignatures } from "./google-antigravity-wire";
 import { summarizeGoogleWireShape } from "./google-wire-shape";
 import { compileGoogleWireBody } from "./google-wire-compiler";
@@ -1472,7 +1472,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         // an error instead of a silently-incomplete done. Mirrors kiro-truncation.
         if ((provider.googleMode === "vertex" || provider.googleMode === "cloud-code-assist")
           && isVertexTruncatedTurn(lastFinishReason, toolCallsStarted)) {
-          yield { type: "error", message: vertexTruncationErrorMessage(lastFinishReason) };
+          yield vertexTruncationErrorEvent(lastFinishReason, toolCallsStarted, pendingUsage);
           return;
         }
         if (!sawAnyFrame || !sawTerminalSignal) {
@@ -1687,7 +1687,11 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       // (MAX_TOKENS / MALFORMED_FUNCTION_CALL) surfaces an error instead of a silent done.
       if ((provider.googleMode === "vertex" || provider.googleMode === "cloud-code-assist")
         && isVertexTruncatedTurn(candidate.finishReason, toolCallsStarted)) {
-        return finish([{ type: "error", message: vertexTruncationErrorMessage(candidate.finishReason) }]);
+        return finish([vertexTruncationErrorEvent(
+          candidate.finishReason,
+          toolCallsStarted,
+          usageFromGemini(json.usageMetadata as Record<string, number> | undefined),
+        )]);
       }
 
       const usage = json.usageMetadata as Record<string, number> | undefined;

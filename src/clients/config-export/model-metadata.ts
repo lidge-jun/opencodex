@@ -2,6 +2,7 @@
 import { getModelMetadata, resolveMetadataProvider } from "../../generated/model-metadata";
 import { SCHEMA_REQUIRED_OUTPUT_BUDGET } from "./constants";
 import { expandFastExportModels } from "./fast-models";
+import { sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
 import type { OpencodeCatalogModel, ExportModel, ExportClientId, ManagedContribution } from "./contracts";
 import type { OcxConfig } from "../../types";
 import { shouldInjectApiAuthHeader } from "../../codex/inject";
@@ -82,6 +83,21 @@ export function inputModalitiesForClient(
     if (accepted.has(value) && !kept.includes(value)) kept.push(value);
   }
   return kept.length > 0 ? kept : null;
+}
+
+/**
+ * Effort ladder a ZCode surface can offer as picker values, or undefined when the row
+ * has nothing selectable.
+ *
+ * Both ZCode exports — the legacy `v2/config.json` block's `reasoning.variants` and the
+ * `v2/provider_config.json` store's `optionSpecs.reasoningLevel.values` — carry the same
+ * Codex vocabulary: the client validates the chosen level against the emitted list and
+ * forwards it verbatim, and `/v1/responses` reads that vocabulary natively. `none` is a
+ * Codex omit-sentinel, not a picker option, so it never survives into the values.
+ */
+export function zcodeSelectableEfforts(efforts: readonly string[] | undefined): string[] | undefined {
+  const selectable = sanitizeCodexReasoningEfforts(efforts)?.filter(effort => effort !== "none");
+  return selectable && selectable.length > 0 ? selectable : undefined;
 }
 
 /**

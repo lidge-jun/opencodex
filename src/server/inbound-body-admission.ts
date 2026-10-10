@@ -71,20 +71,37 @@ function capacityResponse(pathname: string, error: InboundBodyCapacityError): Re
   }, { status: 503, headers: { "Retry-After": "1" } });
 }
 
-function retainUntilResponseSettles(response: Response, release: () => void): Response {
+function retainUntilResponseSettles(response: Response, signal: AbortSignal, release: () => void): Response {
   if (!response.body) {
     release();
     return response;
   }
   const reader = response.body.getReader();
   let cancelling = false;
+  let cancellation: Promise<void> | undefined;
   let finalized = false;
+  let bodyController!: ReadableStreamDefaultController<Uint8Array>;
+  const onAbort = (): void => {
+    if (finalized) return;
+    bodyController.error(signal.reason);
+    void cancel(signal.reason).catch(() => undefined);
+  };
   const finalize = (): void => {
     if (finalized) return;
     finalized = true;
+    signal.removeEventListener("abort", onAbort);
     try { reader.releaseLock(); } finally { release(); }
   };
+  const cancel = (reason: unknown): Promise<void> => {
+    if (cancellation) return cancellation;
+    if (finalized) return Promise.resolve();
+    cancelling = true;
+    // Share one settlement even if explicit cancellation races request abort.
+    cancellation = Promise.resolve().then(() => reader.cancel(reason)).finally(finalize);
+    return cancellation;
+  };
   const body = new ReadableStream<Uint8Array>({
+    start(controller) { bodyController = controller; },
     async pull(controller) {
       try {
         const result = await reader.read();
@@ -103,18 +120,18 @@ function retainUntilResponseSettles(response: Response, release: () => void): Re
         controller.error(error);
       }
     },
-    async cancel(reason) {
-      cancelling = true;
-      try { await reader.cancel(reason); } finally { finalize(); }
-    },
+    cancel,
   }, { highWaterMark: 0 });
   // This is the outermost HTTP wrapper, after protocol conversion, relay
   // preflight and request logging; no internal relay marker is consumed later.
-  return new Response(body, {
+  const wrapped = new Response(body, {
     status: response.status,
     statusText: response.statusText,
     headers: response.headers,
   });
+  signal.addEventListener("abort", onAbort, { once: true });
+  if (signal.aborted) onAbort();
+  return wrapped;
 }
 
 /**
@@ -155,7 +172,7 @@ export async function withRaisedInboundBodyAdmission(
     reservedInboundBodyBytes -= maxBytes;
   };
   try {
-    return retainUntilResponseSettles(await work(), release);
+    return retainUntilResponseSettles(await work(), req.signal, release);
   } catch (error) {
     release();
     throw error;

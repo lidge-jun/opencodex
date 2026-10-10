@@ -282,6 +282,16 @@ Request logs retain `servedModel` when the upstream identifies the model that an
 shows `wire → served` when those identities differ; its tooltip preserves both values. Missing
 upstream model evidence remains absent rather than being inferred from the requested model.
 
+Failed request rows can include bounded `upstreamErrorType`, `upstreamErrorCode`, and
+`upstreamRequestId` diagnostics. On the Codex upstream WebSocket path, a bare error followed by
+EOF retains recognized rate-limit or overload codes in the synthesized failed terminal.
+Request logs record these as 429 for `rate_limit_exceeded` / `rate_limit_error`, or 503 for
+`server_is_overloaded` / `overloaded_error`. A recognized type without a code uses the same
+status; explicit unknown codes remain generic 502 failures. Bare-error status is provisional:
+a genuine completed, failed, or incomplete terminal replaces it before account-health recording.
+Refusal precedence is unchanged.
+This diagnostic mapping adds no automatic replay or retry.
+
 `GET /api/logs` accepts an optional opaque `cursor` from its previous response. The envelope preserves
 `logs`, `total`, `generatedAt` and `timeZone`, and adds `cursor` and `reset`. Without a cursor it returns
 the full filtered window. A valid unchanged prefix returns only appended rows; `reset: true` replaces

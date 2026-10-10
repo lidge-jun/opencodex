@@ -30,7 +30,7 @@ ocx claude
 | `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | 자동 컨텍스트 압축 임곗값(기본값 `829800`). 자동 컨텍스트가 켜져 있을 때만 주입해요 |
 | `ANTHROPIC_MODEL` | `claudeCode.model` (선택 사항) |
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `claudeCode.tierModels.haiku ?? claudeCode.smallFastModel` (선택 사항, 기존 `ANTHROPIC_SMALL_FAST_MODEL`도 지원) |
-| `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*` (구독으로 실행할 때 설정하지 않으면 네이티브 `claude-opus-5-5[1m]` / `claude-sonnet-5[1m]` / `claude-fable-5-1[1m]`) |
+| `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*` (구독으로 실행할 때 설정하지 않으면 네이티브 `claude-opus-5-5[1m]` / `claude-sonnet-5-5[1m]` / `claude-fable-5-1[1m]`) |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `alwaysEnableEffort`가 켜져 있으면 `1` (조건부) |
 | `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch`가 설정된 경우 (조건부, 기본값은 꺼짐) |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | `maxContextTokens`가 설정된 경우 기존 컨텍스트 재정의 값 (조건부) |

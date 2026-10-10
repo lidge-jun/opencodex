@@ -1,5 +1,5 @@
 /**
- * TokenLab per-model wires (mail from TokenLab, 2026-09-30; devlog/_plan/260930_gpt_6_1_sol_rollout/040).
+ * TokenLab per-model wires (mail from TokenLab, 2026-09-30; devlog/_fin/260930_gpt_6_1_sol_rollout/040).
  *
  * TokenLab publishes each model's accepted request formats in `tokenlab.accepted_request_formats`
  * on GET /v1/models/{id}. The released preset stays on Chat, which every model accepts. Models that

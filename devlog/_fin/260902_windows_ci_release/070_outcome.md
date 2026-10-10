@@ -33,7 +33,7 @@ fuck-powershell: 56e1801, 2f2107d — 87→90 cases, graph 313/643, validate OK.
 
 ## Regression audit (wp4)
 
-Reused `devlog/_plan/260902_bug_label_drawdown/071_regaudit_landing.md` (four reviewers,
+Reused `devlog/_fin/260902_bug_label_drawdown/071_regaudit_landing.md` (four reviewers,
 no regression main..dev at 5bc6939d8) plus the Windows repair reviews above for the delta since.
 
 ## Release (wp5)

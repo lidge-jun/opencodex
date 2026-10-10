@@ -13,7 +13,6 @@ import { finalizeOwnedTranslatorBudget, finalizeAccountLease } from "./core-life
 import type { TranslatorBudget } from "../../lib/translator-budget";
 import { executeComboResponses } from "./core-combo";
 import { runWithCompactionRecovery } from "./compaction-recovery";
-
 /**
  * Route one `/v1/responses` request through the adapter pipeline: recovery loop, passthrough
  * wire, image/web-search bridges, and the terminal-guard continuation.
@@ -60,7 +59,6 @@ export async function handleResponses(
     if (!options.comboInitialSend?.producerOwned) options.comboInitialSend?.permit.release();
   }
 }
-
 export async function handleComboResponses(
   req: Request,
   rawBody: unknown,
@@ -79,10 +77,7 @@ export async function handleComboResponses(
     requestDispatchers,
   );
 }
-
-
 const requestDispatchers: ResponsesDispatchers = { handleResponses, handleComboResponses };
-
 export { adapterNeedsForcedContinuation } from "./core-replay";
 export {
   sidecarOutcomeRecorder, codexLogAccountId, usesCodexForwardPoolAuth, preAuthUpstreamHostCircuitKey,

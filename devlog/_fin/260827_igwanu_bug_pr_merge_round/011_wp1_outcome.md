@@ -99,6 +99,6 @@ runs the native TypeScript 7.0.2 compiler at ~0.44s for a full typecheck.
 2. Review, rebase, and verification of other PRs may proceed in parallel — only
    the merges serialize.
 3. Follow-up outside this round's scope: the same pre-disclosure material exists
-   in `devlog/_plan/260826_wp7e_presence_driven_oauth_failover/` and
+   in `devlog/_fin/260826_wp7e_presence_driven_oauth_failover/` and
    `devlog/_plan/260827_dev_hardening/`. Pre-existing, belongs to other active
    work streams, needs separate authority. **Escalate; do not silently rewrite.**

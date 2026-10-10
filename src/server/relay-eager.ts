@@ -338,6 +338,8 @@ export function relaySseEagerBounded(
                 upstreamError,
                 terminalBoundary.upstreamRefusalCode(),
                 opts?.maskCredential,
+                terminalBoundary.upstreamErrorType(),
+                terminalBoundary.upstreamErrorCode(),
               );
             queuedBytes += upstreamErrorFrame.byteLength + terminalSentinel.byteLength;
             try {

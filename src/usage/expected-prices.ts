@@ -835,7 +835,7 @@ export const CONTEXT_TIERS: readonly ContextTier[] = [
   {
     // xAI documents the same whole-request >=200k band for grok-4.7;
     // priority stacking remains a lower bound. See
-    // devlog/_plan/260923_grok47_parity/010_probe-evidence.md.
+    // devlog/_fin/260923_grok47_parity/010_probe-evidence.md.
     provider: "xai",
     modelId: "grok-4.7",
     thresholdInputTokens: 200_000,

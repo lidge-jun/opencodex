@@ -8,7 +8,7 @@ import type { ResponsesTransport } from "./request-transport";
 import type { ResponsesSidecarAuth } from "./request-sidecar-auth";
 import type { ResponsesEffects } from "./response-effects";
 import type { ResponsesSendBudget } from "./request-send-budget";
-import { preparePassthroughExchange } from "./passthrough-dispatch";
+import { preparePassthroughExchange, type PassthroughAdapterHandoff } from "./passthrough-dispatch";
 import { deliverPassthroughResponse } from "./passthrough-delivery";
 import { guardDirectPassthroughBodyInactivity } from "../../lib/response-body-inactivity";
 import { resolveStallTimeoutMs } from "../../stall-timeout";
@@ -24,7 +24,7 @@ export async function executePassthroughResponse(
   sidecarState: ResponsesSidecarAuth,
   responseEffects: ResponsesEffects,
   sendBudgetState: ResponsesSendBudget,
-): Promise<Response> {
+): Promise<Response | PassthroughAdapterHandoff> {
   const nativeHostState: PassthroughAdmissionState = { lease: admissionState.pendingHostAdmissionLease };
   admissionState.pendingHostAdmissionLease = null;
   try {
@@ -37,7 +37,7 @@ export async function executePassthroughResponse(
       responseEffects,
       sendBudgetState,
     );
-    if (nativeExchange instanceof Response) return nativeExchange;
+    if (nativeExchange instanceof Response || nativeExchange.kind === "adapter-handoff") return nativeExchange;
     const response = await deliverPassthroughResponse(
       requestContext,
       admissionState,

@@ -67,7 +67,7 @@ to the Grok CLI gateway even if its saved base URL differs; custom provider IDs 
 default. API-key requests, translated Chat/Anthropic defaults and other Grok models retain their
 existing wire and tier policy. The OAuth lane is service-tier classified per model
 (`modelSupportsServiceTier` on the registry entry, live-probed 2026-09-13 and 2026-09-23;
-`devlog/_plan/260923_grok47_parity/010_probe-evidence.md` records 4.7): grok-4.7, grok-4.6, grok-4.5,
+`devlog/_fin/260923_grok47_parity/010_probe-evidence.md` records 4.7): grok-4.7, grok-4.6, grok-4.5,
 grok-4.3, grok-4.20-0309-reasoning, grok-4.20-0309-non-reasoning, grok-build-0.1 and
 grok-composer-2.5-fast accept `service_tier: "priority"` over Grok OAuth and echo it, so those
 routes resolve Fast-eligible, publish `--fast` rows, and forward a caller-sent tier on either wire (`chatServiceTier: true`) — except OAuth grok-4.7, whose Fast serializes `grok-4.7-build-fast` with no tier ([xAI Grok](../providers/xai-grok.md#oauth-fast-tier-priority-processing)).
@@ -396,14 +396,14 @@ Native passthrough SSE has TWO shapes, selected per request in
   inspection side-effect set (shared `createSseInspector` factory in `relay.ts`)
   including the #44 late-terminal semantics.
 
-Both client readers retain a bounded, redacted message and the first structured refusal code from a bare upstream `error`.
+Both client readers retain a bounded, redacted message and the first structured refusal code from a bare upstream `error`. EOF synthesis also retains narrowly recognized rate-limit codes (`rate_limit_exceeded`, `rate_limit_error`) and overload codes (`server_is_overloaded`, `overloaded_error`); recognized types apply only without an explicit code.
 At EOF without a real terminal they synthesize `response.failed` rather than `adapter_eof`; a code without a message still
 produces a terminal. Codex retries codes outside its fatal set, so code and message follow the same candidate precedence;
 recognized refusal copy is used only when the event has no code. A read failure after refusal reports that refusal (#5176).
 The shared outbound rewrite masks diagnostics on real failed and incomplete terminals before SSE or buffered JSON delivery,
 while preserving status and output; failed turns are not retained as continuation state. Buffered JSON masks selected credentials in synthetic bare-error fields before log inspection or client formatting; request logs keep transport status.
 The delivering reader owns refusal evidence before EOF; asynchronous tee inspection cannot reliably supply it.
-Inspection still applies the bare-error rule at EOF for account health. Real terminals and caller cancellation take precedence.
+Inspection still applies the bare-error rule at EOF for account health. Real terminals and caller cancellation take precedence. Unknown codes retain `upstream_error` / `upstream_server_error`; refusal precedence is unchanged and classification adds no replay or retry. Bare-error log status is provisional until a genuine terminal supersedes it through `src/server/request-log-terminal-status.ts`.
 Native recovery preflight keeps the rejected body reader and bounded prefix for normal mid-stream failure, without decrypt retry.
 
 Native Responses may rebuild once when encrypted function/custom-tool output or

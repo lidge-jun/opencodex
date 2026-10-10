@@ -538,11 +538,11 @@ Dashboard Fast-row persistence and client refresh follow the [Fast selector rows
 
 ## Account refusal and rotation boundaries
 
-Native Responses uses the existing pre-stream OAuth HTTP-429 account rotation: account quorum and
-cooldown remain in force, while generic OAuth uses the stable snapshot ceiling described below. The
-complete credential/transport/replay identity is refreshed, and usage is attributed to the serving
-account. Single-account installs do not rotate; a missing alternate credential preserves the original
-error while transient recovery remains available. Translated Anthropic exact revoked-token 401s follow [the account-pool contract](../providers/anthropic-account-pool.md#revoked-oauth-access-token-recovery), with existing output and send-budget gates.
+Copilot Auto replacement, OAuth-refresh and native-429 negotiation follow the [Copilot Auto failure contract](../providers-and-adapters.md#github-copilot-auto-selection): safe refusal mapping, abort/lease cleanup, hop refund and sidecar refusal preservation.
+Refreshed or rotated Copilot native Responses may hand off only to the known Chat adapter, retaining the request-owned inference-401 guard and existing admission, translator and send budget without recursive setup; Chat 401 refresh renegotiates before rebuilding.
+Transferred 429 permits are rebooked against the actual Chat target and settled by physical-send reporting; unused or untransferred permits refund even on negotiation failure or early sidecar/build exit.
+Native Responses retains pre-stream OAuth HTTP-429 quorum, cooldown and the generic stable snapshot ceiling below. The complete credential/transport/replay identity refreshes; usage belongs to the serving account.
+Single-account installs do not rotate; a missing alternate credential preserves the original error while transient recovery remains available. Translated Anthropic exact revoked-token 401s follow [the account-pool contract](../providers/anthropic-account-pool.md#revoked-oauth-access-token-recovery), with existing output and send-budget gates.
 
 Kiro adapter additionally classifies bounded HTTP 400/403/429 refusals before output.
 Confirmed monthly exhaustion is persisted for the sent login, suspension is quarantined

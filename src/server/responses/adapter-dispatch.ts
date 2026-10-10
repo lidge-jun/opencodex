@@ -134,12 +134,15 @@ export async function prepareAdapterExchange(
     | "transportToken"
     | "oauthDispatch"
     | "imageTierBias"
+    | "oauth401ReplayAttempted"
     | "isOAuth401ReplayProvider"
     | "sentOAuthSnapshot"
     | "refreshResolvedOAuthSelection"
     | "replayOAuthCredentialSnapshot"
     | "invalidateSameTargetRequest"
     | "resolveSelectionAdapter"
+    | "resolveCopilotSelection"
+    | "copilotRefusalResponse"
     | "anthropicInstance"
     | "currentAnthropicRouteDecision"
     | "anthropicRouteDecision"
@@ -156,6 +159,7 @@ export async function prepareAdapterExchange(
   responseEffects: Pick<ResponsesEffects, "cancelResponseCompletion" | "notifyResponseComplete" | "refreshRequestToolAliases">,
   sendBudgetState: Pick<
     ResponsesSendBudget,
+    | "adapterSendBudget"
     | "adapterDispatchBudget"
     | "noteAdapterPhysicalSend"
     | "noteAdapterRecoveryWithheld"
@@ -182,6 +186,8 @@ export async function prepareAdapterExchange(
     refreshResolvedOAuthSelection,
     invalidateSameTargetRequest,
     resolveSelectionAdapter,
+    resolveCopilotSelection,
+    copilotRefusalResponse,
     anthropicInstance,
     currentAnthropicRouteDecision,
     anthropicSessionKey,
@@ -199,6 +205,7 @@ export async function prepareAdapterExchange(
   } = requestState;
   const { cancelResponseCompletion, notifyResponseComplete, refreshRequestToolAliases } = responseEffects;
   const {
+    adapterSendBudget,
     adapterDispatchBudget,
     noteAdapterPhysicalSend,
     noteAdapterRecoveryWithheld,
@@ -222,6 +229,17 @@ export async function prepareAdapterExchange(
 
   const upstream = new AbortController();
   const cleanupUpstreamAbort = linkAbortSignal(upstream, options.abortSignal);
+  /** Contain replacement negotiation before adapter admission and release its upstream abort link. */
+  const resolveRotatedCopilotSelection = async (): Promise<Response | undefined> => {
+    try { await resolveCopilotSelection(parsed); }
+    catch (error) {
+      cleanupUpstreamAbort();
+      upstream.abort();
+      if ((options.abortSignal ?? req.signal).aborted) return clientCancelledResponse();
+      return copilotRefusalResponse(error)
+        ?? formatErrorResponse(502, "upstream_error", "GitHub Copilot Auto negotiation failed.");
+    }
+  };
   const connectMs = config.connectTimeoutMs ?? 200_000;
   // Bridge stall budget (seconds of silence before upstream_stall_timeout); the retry backoff
   // heartbeat interval is derived from it so the watchdog is always fed during deliberate waits.
@@ -338,10 +356,15 @@ export async function prepareAdapterExchange(
    * is invisible to it and a missed bump would replay a request built with a stale key.
    */
 
+  const initialRecovery = route.providerName === "github-copilot"
+    ? sendBudgetState.pendingHopPermit?.sendClass === "auth-recovery" ? "oauth-account-429"
+      : transportState.oauth401ReplayAttempted ? "oauth-401" : undefined
+    : undefined;
   let upstreamResponse: Response;
+  let handoffPermit: ResponsesSendBudget["pendingHopPermit"];
   try {
     if (transportState.activeAdapter.fetchResponse) {
-      transportState.noteRoutedAttemptSend(inputTokenEstimate);
+      transportState.noteRoutedAttemptSend(inputTokenEstimate, initialRecovery);
       const producer = adapterDispatchBudget?.beginSpendProducer?.();
       try {
       upstreamResponse = await withProviderRequestSlot(route.providerName, route.provider, route.modelId, upstream.signal, pacingSlot =>
@@ -374,7 +397,22 @@ export async function prepareAdapterExchange(
       // reset-only semantics so combo failover hops on the first 5xx.
       const transientPolicy = transientRetryPolicyFor(route.provider);
       const resetPolicy = resetReplayPolicyFor(route.provider);
-      const compactPrepaid = options.compactionRecoveryAttempted ? sendBudgetState.pendingHopPermit : undefined;
+      // Rebook a native Copilot hop against the negotiated destination before dispatch.
+      // Raw externally counted permits settle through the retry helper's send reporter.
+      if (route.providerName === "github-copilot" && adapterSendBudget && sendBudgetState.pendingHopPermit
+        && sendBudgetState.pendingHopPermit.sendClass === "auth-recovery") {
+        const original = sendBudgetState.pendingHopPermit;
+        sendBudgetState.pendingHopPermit = undefined;
+        original.release();
+        const decision = adapterSendBudget.reserveDispatch({
+          sendClass: original.sendClass,
+          targetKey: `${route.providerName}|${builtInitialRequest.url}|${route.modelId}`,
+          countedExternally: true,
+        });
+        if (!decision.allowed) throw new SendBudgetExhaustedError(safeHostLabel(builtInitialRequest.url));
+        handoffPermit = decision.permit;
+      }
+      const compactPrepaid = handoffPermit ?? (options.compactionRecoveryAttempted ? sendBudgetState.pendingHopPermit : undefined);
       if (compactPrepaid) sendBudgetState.pendingHopPermit = undefined;
       let compactPrepaidUsed = false;
       // A combo-owned or compaction-prepaid send is settled by the physical-dispatch receipt
@@ -407,7 +445,7 @@ export async function prepareAdapterExchange(
             if (!compactPrepaid.use()) throw new SendBudgetExhaustedError(safeHostLabel(builtInitialRequest.url));
             compactPrepaidUsed = true;
           }
-          transportState.noteRoutedAttemptSend(inputTokenEstimate, recovery);
+          transportState.noteRoutedAttemptSend(inputTokenEstimate, recovery ?? initialRecovery);
           return fetchWithHeaderTimeout(builtInitialRequest.url, applyUpstreamRecoveryInit({
             method: builtInitialRequest.method,
             headers: builtInitialRequest.headers,
@@ -486,6 +524,7 @@ export async function prepareAdapterExchange(
     const msg = describeUpstreamConnectFailure(err, connectMs);
     return formatErrorResponse(502, "upstream_error", msg);
   } finally {
+    handoffPermit?.release();
     builtInitialRequest.releaseBodyObservation?.();
   }
 
@@ -509,7 +548,7 @@ export async function prepareAdapterExchange(
     // Console Go answers a transient 400 "Invalid upload request." for bodies it accepts
     // moments later; at most one byte-identical replay is allowed per request.
     const consoleGoUploadRetryGuard: { attempted: boolean } = { attempted: false };
-    let oauth401ReplayAttempted = false;
+    let oauth401ReplayAttempted = transportState.oauth401ReplayAttempted;
     let antigravityAuthRotationAttempted = false;
     // At most one reasoning-effort downgrade per request. This sits outside the recovery loop
     // below for the same reason the two guards above do: a guard declared inside it is reset by
@@ -793,7 +832,7 @@ export async function prepareAdapterExchange(
         && !oauth401ReplayAttempted
         && !sendBudgetExhausted()
       ) {
-        oauth401ReplayAttempted = true;
+        oauth401ReplayAttempted = transportState.oauth401ReplayAttempted = true;
         let refreshed: OAuthAccessSnapshot;
         try {
           refreshed = await refreshResolvedOAuthSelection(transportState.sentOAuthSnapshot);
@@ -864,7 +903,7 @@ export async function prepareAdapterExchange(
         if (route.providerName === "kiro") {
           parsed._kiroAuthContext = { ...(refreshed.kiro ?? {}) };
         }
-        const refreshedProvider = resolveProviderTransport(
+        let refreshedProvider = resolveProviderTransport(
           route.providerName,
           {
             ...route.provider,
@@ -877,6 +916,9 @@ export async function prepareAdapterExchange(
             : undefined,
         );
         route.provider = refreshedProvider;
+        const copilotRefusal = await resolveRotatedCopilotSelection();
+        if (copilotRefusal) return copilotRefusal;
+        refreshedProvider = route.provider;
         invalidateSameTargetRequest();
         transportState.activeAdapter = resolveSelectionAdapter(
           resolveWireProtocolOverride(route.providerName, route.modelId, refreshedProvider, inboundWire, route.staticPolicy),
@@ -929,6 +971,8 @@ export async function prepareAdapterExchange(
         // until runtime cleanup (one per rotated key).
         try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
         route.provider = rotated;
+        const selectionFailure = await resolveRotatedCopilotSelection();
+        if (selectionFailure) return selectionFailure;
         invalidateSameTargetRequest();
         transportState.activeAdapter = resolveSelectionAdapter(
           resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
@@ -1075,6 +1119,8 @@ export async function prepareAdapterExchange(
         // until runtime cleanup (one per rotated key under a rate-limit storm).
         try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
         route.provider = rotated;
+        const selectionFailure = await resolveRotatedCopilotSelection();
+        if (selectionFailure) return selectionFailure;
         invalidateSameTargetRequest();
         transportState.activeAdapter = resolveSelectionAdapter(
           resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),

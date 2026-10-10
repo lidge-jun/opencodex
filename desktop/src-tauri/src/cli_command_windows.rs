@@ -571,6 +571,76 @@ fn normalized(s: &str) -> String {
         .to_ascii_lowercase()
 }
 #[cfg(any(windows, test))]
+fn path_from_environment_block(block: &[u16]) -> Result<Option<Vec<String>>> {
+    let end = block
+        .windows(2)
+        .position(|pair| pair == [0, 0])
+        .ok_or("machine-path-unobserved")?;
+    let mut start = 0;
+    while start < end {
+        let finish = block[start..end]
+            .iter()
+            .position(|unit| *unit == 0)
+            .map(|offset| start + offset)
+            .unwrap_or(end);
+        let variable = &block[start..finish];
+        // A drive pseudo-variable such as =C:=C:\x is not an environment name.
+        if variable.first() != Some(&(b'=' as u16)) {
+            if let Some(separator) = variable.iter().position(|unit| *unit == b'=' as u16) {
+                if String::from_utf16(&variable[..separator])
+                    .is_ok_and(|name| name.eq_ignore_ascii_case("PATH"))
+                {
+                    let value = String::from_utf16(&variable[separator + 1..])
+                        .map_err(|_| "machine-path-unobserved")?;
+                    return Ok(Some(parts(&value)));
+                }
+            }
+        }
+        start = finish + 1;
+    }
+    Ok(None)
+}
+#[cfg(any(windows, test))]
+fn unquoted_entry(entry: &str) -> &str {
+    entry
+        .strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .unwrap_or(entry)
+}
+#[cfg(any(windows, test))]
+fn searchable_entry(entry: &str) -> Option<&str> {
+    let entry = unquoted_entry(entry);
+    let bytes = entry.as_bytes();
+    let absolute = (bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'\\' | b'/'))
+        || entry.starts_with("\\\\")
+        || entry.starts_with("//");
+    // cmd searches the working directory before PATH; relative and %-literal entries
+    // are cwd-dependent, so probing them cannot establish a PATH conflict.
+    (!entry.is_empty() && !entry.contains('%') && absolute).then_some(entry)
+}
+#[cfg(any(windows, test))]
+fn conflict_before_desktop(
+    entries: &[String],
+    desktop_dir: &str,
+    mut has_ocx: impl FnMut(&str) -> bool,
+) -> Result<bool> {
+    for entry in entries {
+        let unquoted = unquoted_entry(entry);
+        if normalized(unquoted) == normalized(desktop_dir) {
+            return Ok(false);
+        }
+        if let Some(searchable) = searchable_entry(entry) {
+            if has_ocx(searchable) {
+                return Ok(true);
+            }
+        }
+    }
+    Err("machine-path-unobserved".into())
+}
+#[cfg(any(windows, test))]
 fn parts(s: &str) -> Vec<String> {
     if s.is_empty() {
         Vec::new()
@@ -802,7 +872,7 @@ mod os {
             },
         }
     }
-    pub fn machine_conflict() -> Result<bool> {
+    fn legacy_machine_conflict() -> Result<bool> {
         let k = RegKey::predef(HKEY_LOCAL_MACHINE)
             .open_subkey_with_flags(
                 "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
@@ -825,6 +895,76 @@ mod os {
             }
         }
         Ok(false)
+    }
+    fn fresh_logon_path() -> Result<Option<Vec<String>>> {
+        use std::{ffi::c_void, ptr};
+        type Ptr = *mut c_void;
+        #[link(name = "advapi32")]
+        unsafe extern "system" {
+            fn OpenProcessToken(process: Ptr, access: u32, token: *mut Ptr) -> i32;
+        }
+        #[link(name = "userenv")]
+        unsafe extern "system" {
+            fn CreateEnvironmentBlock(block: *mut Ptr, token: Ptr, inherit: i32) -> i32;
+            fn DestroyEnvironmentBlock(block: Ptr) -> i32;
+        }
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn GetCurrentProcess() -> Ptr;
+            fn CloseHandle(handle: Ptr) -> i32;
+        }
+        struct Token(Ptr);
+        impl Drop for Token {
+            fn drop(&mut self) {
+                unsafe { CloseHandle(self.0) };
+            }
+        }
+        struct Block(Ptr);
+        impl Drop for Block {
+            fn drop(&mut self) {
+                if !self.0.is_null() {
+                    unsafe { DestroyEnvironmentBlock(self.0) };
+                }
+            }
+        }
+        let mut token = ptr::null_mut();
+        if unsafe { OpenProcessToken(GetCurrentProcess(), 0x8 | 0x2, &mut token) } == 0 {
+            return Err("machine-path-unobserved".into());
+        }
+        let token = Token(token);
+        let mut block = ptr::null_mut();
+        let created = unsafe { CreateEnvironmentBlock(&mut block, token.0, 0) };
+        let block = Block(block);
+        if created == 0 || block.0.is_null() {
+            return Err("machine-path-unobserved".into());
+        }
+        let mut words = Vec::new();
+        for index in 0..(1 << 20) {
+            let unit = unsafe { *block.0.cast::<u16>().add(index) };
+            words.push(unit);
+            if unit == 0 && (index == 0 || words[index - 1] == 0) {
+                if index == 0 {
+                    words.push(0);
+                }
+                return path_from_environment_block(&words);
+            }
+        }
+        Err("machine-path-unobserved".into())
+    }
+    fn has_ocx(dir: &str) -> bool {
+        ["ocx.exe", "ocx.com", "ocx.cmd", "ocx.bat"]
+            .iter()
+            .any(|name| Path::new(dir).join(name).is_file())
+    }
+    pub fn machine_conflict(desktop_dir: &str) -> Result<bool> {
+        match fresh_logon_path() {
+            Ok(Some(entries)) => conflict_before_desktop(&entries, desktop_dir, has_ocx),
+            Err(_) | Ok(None) => match legacy_machine_conflict() {
+                Ok(false) => Ok(false),
+                Ok(true) => Err("machine-path-unobserved".into()),
+                Err(e) => Err(e),
+            },
+        }
     }
     fn expand(s: &str) -> Result<String> {
         #[link(name = "kernel32")]
@@ -900,6 +1040,10 @@ pub fn apply_change(c: &Change) -> Result<()> {
     }
     os::write(c)
 }
+#[cfg(windows)]
+pub fn machine_conflict(desktop_dir: &str) -> Result<bool> {
+    os::machine_conflict(desktop_dir)
+}
 #[cfg(not(windows))]
 pub fn apply_change(_: &Change) -> Result<()> {
     Err("registry-unsupported".into())
@@ -918,7 +1062,7 @@ pub fn plan(
         .transpose()?
         .unwrap_or_default();
     let mut next = current.clone();
-    let mut issues = Vec::new();
+    let issues = Vec::new();
     let result = if remove_owned {
         if let Some(owned) = &current.windows {
             remove(&raw, owned)?
@@ -962,13 +1106,6 @@ pub fn plan(
             backup_path: None,
         }]
     };
-    if !remove_owned {
-        match os::machine_conflict() {
-            Ok(true) => issues.push("machine-path-conflict".into()),
-            Ok(false) => {}
-            Err(e) => issues.push(e),
-        }
-    }
     Ok((next, changes, issues))
 }
 #[cfg(windows)]
@@ -982,6 +1119,109 @@ pub fn notify() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn environment_block(variables: &[&str]) -> Vec<u16> {
+        let mut block = Vec::new();
+        for variable in variables {
+            block.extend(variable.encode_utf16());
+            block.push(0);
+        }
+        block.push(0);
+        if variables.is_empty() {
+            block.push(0);
+        }
+        block
+    }
+    #[test]
+    fn fresh_logon_environment_block_path_parsing() {
+        let block = environment_block(&["=C:=C:\\x", "TEMP=C:\\tmp", "Path=C:\\one;;C:\\two;"]);
+        assert_eq!(
+            path_from_environment_block(&block).unwrap(),
+            Some(vec![
+                "C:\\one".into(),
+                "".into(),
+                "C:\\two".into(),
+                "".into()
+            ])
+        );
+        assert_eq!(
+            path_from_environment_block(&environment_block(&["PATH=C:\\upper"])).unwrap(),
+            Some(vec!["C:\\upper".into()])
+        );
+        assert_eq!(
+            path_from_environment_block(&environment_block(&["=C:=C:\\x", "TEMP=x"])).unwrap(),
+            None
+        );
+        assert_eq!(
+            path_from_environment_block(&environment_block(&["Path="])).unwrap(),
+            Some(vec![])
+        );
+        assert_eq!(path_from_environment_block(&[0, 0]).unwrap(), None);
+        assert_eq!(
+            path_from_environment_block(&[]).unwrap_err(),
+            "machine-path-unobserved"
+        );
+        assert_eq!(
+            path_from_environment_block(&"PATH=x\0".encode_utf16().collect::<Vec<_>>())
+                .unwrap_err(),
+            "machine-path-unobserved"
+        );
+        let mut invalid = environment_block(&["PATH="]);
+        invalid.insert(5, 0xd800);
+        assert_eq!(
+            path_from_environment_block(&invalid).unwrap_err(),
+            "machine-path-unobserved"
+        );
+    }
+    #[test]
+    fn fresh_logon_conflict_respects_desktop_order() {
+        let desktop = r"C:\Program Files\OpenCodex";
+        let entries = [
+            r"C:\Windows\system32",
+            "%NVM_HOME%",
+            "%NVM_SYMLINK%",
+            desktop,
+            r"C:\nvm4w\nodejs",
+        ];
+        let entries: Vec<String> = entries.iter().map(|entry| (*entry).into()).collect();
+        assert_eq!(
+            conflict_before_desktop(&entries, desktop, |dir| dir == r"C:\nvm4w\nodejs"),
+            Ok(false)
+        );
+        let before = vec![r"C:\nvm4w\nodejs".into(), desktop.into()];
+        assert_eq!(
+            conflict_before_desktop(&before, desktop, |dir| dir == r"C:\nvm4w\nodejs"),
+            Ok(true)
+        );
+        let after = vec![desktop.into(), r"C:\nvm4w\nodejs".into()];
+        assert_eq!(
+            conflict_before_desktop(&after, desktop, |dir| dir == r"C:\nvm4w\nodejs"),
+            Ok(false)
+        );
+        assert_eq!(
+            conflict_before_desktop(&[r"C:\other".into()], desktop, |_| false).unwrap_err(),
+            "machine-path-unobserved"
+        );
+    }
+    #[test]
+    fn fresh_logon_conflict_ignores_cwd_dependent_entries() {
+        let desktop = r"C:\Program Files\OpenCodex";
+        let entries = vec![
+            "bin".into(),
+            "".into(),
+            "%NVM_HOME%".into(),
+            r"C:\%NVM_HOME%\bin".into(),
+            r#""c:/PROGRAM FILES/OpenCodex/""#.into(),
+        ];
+        let mut probed = Vec::new();
+        assert_eq!(
+            conflict_before_desktop(&entries, desktop, |dir| {
+                probed.push(dir.to_owned());
+                true
+            }),
+            Ok(false)
+        );
+        assert!(probed.is_empty());
+    }
     #[test]
     fn prepend_preserves_raw_expansions_type_and_empty_entries() {
         let raw = r"%APPDATA%\npm;;C:\Tools;";
