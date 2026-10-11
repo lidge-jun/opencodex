@@ -162,13 +162,15 @@ export async function removeRemoteHost(store: RemoteMessageStore, selector: stri
   });
   let remote: "removed" | "unconfirmed" = "unconfirmed";
   if (peer.ssh) {
-    const path = join(store.directory, "revocation_known_hosts"); writeRemoteFile(path, peer.hostKey!);
+    const path = join(store.directory, `revocation_known_hosts-${peer.transaction}-${crypto.randomUUID()}`);
     try {
+      writeRemoteFile(path, peer.hostKey!);
       const reply = exactRecord(JSON.parse(await runner(buildExecArgv({ alias: peer.ssh, knownHostsFile: path,
         argv: remoteOcxArgv(["message", "_control"]) }), budget, capacity, JSON.stringify({ protocol: REMOTE_PROTOCOL,
         action: "remove", params: { machineId: state.machine.id, transaction: peer.transaction } }))), ["protocol", "removed"]);
       if (reply.protocol === REMOTE_PROTOCOL && reply.removed === true) remote = "removed";
     } catch { /* Receipt explicitly preserves unconfirmed remote cleanup. */ }
+    finally { try { removeRemoteFile(path); } catch { /* Scratch cleanup is best-effort and cannot undo local revocation. */ } }
   }
   return { protocol: REMOTE_PROTOCOL, machine: peer.machine, locallyRemoved: true, remote,
     ...(remote === "unconfirmed" ? { remoteCleanupCommand: `ocx message hosts remove ${state.machine.id} --transaction ${peer.transaction} --json` } : {}) };

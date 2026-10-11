@@ -28,8 +28,10 @@ claimed to resist unrestricted same-uid access or privileged path replacement.
 
 `src/messaging/remote-enrollment.ts` uses a private temporary offered known-hosts
 file, an explicit confirmed fingerprint and the existing pinned SSH argument
-builders in `src/link/ssh-argv.ts`. It changes no Remote Link record, provider
-credential or client routing. Both nodes must already be enabled. Versioned
+builders in `src/link/ssh-argv.ts`.
+The builders force `HashKnownHosts=no` for their private alias-prefixed records, independently
+of the user's normal known-hosts policy.
+Enrollment changes no Remote Link record, provider credential or client routing. Both nodes must already be enabled. Versioned
 private SSH stdio exchanges receiver-issued capabilities independently in each
 direction; ordinary CLI receipts omit them. Capability possession authenticates
 an enrollment, not an individual same-uid agent session or user approval.
@@ -48,6 +50,10 @@ An already-completed identical peer can converge without touching a
 newer journal, but a missing journal cannot authorize adding a peer. Unconfirmed remote cleanup is reported
 explicitly and never restores local authorization. Read commands do not enable,
 create an identity, install software, rotate credentials or start the recipient.
+Each outgoing revocation uses its own transaction-and-attempt-qualified known-hosts file after
+local removal releases the mutation lock; concurrent removals cannot overwrite one another's
+pinned keys. Preparation/SSH failure retains the local-removal receipt and explicit remote cleanup
+guidance. Scratch removal runs in `finally`, best-effort, without undoing local revocation.
 
 `src/messaging/remote-enrollment-recovery.ts` projects pending alias, transaction and stale
 generation only. `hosts abandon --transaction` removes exactly the inspected journal under

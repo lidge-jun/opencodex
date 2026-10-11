@@ -38,7 +38,7 @@ test.skipIf(!requested || process.platform !== "linux")("isolated real SSH enrol
     writeFileSync(sshdConfig, `Port ${port}\nListenAddress 127.0.0.1\nHostKey ${hostKey}\nPidFile ${join(root, "sshd.pid")}\nAuthorizedKeysFile ${authorized}\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nUsePAM no\nStrictModes no\nAllowUsers ${userInfo().username}\nAllowTcpForwarding yes\nGatewayPorts no\nForceCommand ${login}\n`, { mode: 0o600 });
     sshd = spawnRemoteHelper(["/usr/sbin/sshd", "-D", "-E", join(root, "sshd.log"), "-f", sshdConfig], capacity);
     const config = join(root, "ssh.conf");
-    writeFileSync(config, `Host fixture\n  HostName 127.0.0.1\n  Port ${port}\n  User ${userInfo().username}\n  IdentityFile ${key}\n  IdentitiesOnly yes\n  IdentityAgent none\n`, { mode: 0o600 });
+    writeFileSync(config, `Host fixture\n  HostName 127.0.0.1\n  Port ${port}\n  User ${userInfo().username}\n  IdentityFile ${key}\n  IdentitiesOnly yes\n  IdentityAgent none\n  HashKnownHosts yes\n`, { mode: 0o600 });
     const argv = (value: readonly string[]) => value[0] === "ssh" ? ["/usr/bin/ssh", "-F", config, ...value.slice(1)] : [...value];
     const run: typeof runRemoteHelper = (args, time, caps, input) => runRemoteHelper(argv(args), time, caps, input);
     const spawn: typeof spawnRemoteHelper = (args, caps, signal, input) => spawnRemoteHelper(argv(args), caps, signal, input);

@@ -8,6 +8,80 @@ import { join } from "node:path";
 import { abandonRemoteEnrollment, pendingRemoteEnrollment } from "../../src/messaging/remote-enrollment-recovery";
 import { parseRemoteMessageArgs } from "../../src/cli/message-remote-args";
 import { repoPath } from "../helpers/repo-root";
+import { readdirSync } from "node:fs";
+
+test.skipIf(process.platform === "win32")("concurrent revocations retain their own pinned keys and clean scratch files", async () => {
+  const pair = remoteMessagingPair(), budget = new MessageBudget(), capacity = new RemoteCapacity();
+  const original = pair.aStore.peer("worker");
+  pair.aStore.mutate(state => {
+    Object.assign(state.peers[0]!, { ssh: "fixture-one", hostKey: "fixture-one ssh-ed25519 first\n", fingerprint: "SHA256:first" });
+    state.peers.push({ ...original, alias: "second", machine: { id: crypto.randomUUID(), name: "second" },
+      transaction: crypto.randomUUID(), incoming: capability(), outgoing: capability(), ssh: "fixture-two",
+      hostKey: "fixture-two ssh-ed25519 second\n", fingerprint: "SHA256:second" });
+  });
+  let release!: () => void, calls = 0;
+  const gate = new Promise<void>(resolve => { release = resolve; }), paths: string[] = [];
+  const runner: RemoteControlRunner = async argv => {
+    const alias = argv[argv.indexOf("--") + 1], path = argv.find(arg => arg.startsWith("UserKnownHostsFile="))!.slice(19);
+    paths.push(path);
+    if (++calls === 1) await gate;
+    expect(readRemoteFile(path)).toBe(alias === "fixture-one" ? "fixture-one ssh-ed25519 first\n" : "fixture-two ssh-ed25519 second\n");
+    return JSON.stringify({ protocol: REMOTE_PROTOCOL, removed: true });
+  };
+  const first = removeRemoteHost(pair.aStore, "worker", budget, capacity, runner);
+  try {
+    expect(await removeRemoteHost(pair.aStore, "second", budget, capacity, runner)).toMatchObject({ locallyRemoved: true, remote: "removed" });
+    release();
+    expect(await first).toMatchObject({ locallyRemoved: true, remote: "removed" });
+    expect(new Set(paths).size).toBe(2); expect(paths.every(path => readRemoteFile(path) === null)).toBe(true);
+    expect(pair.aStore.requireEnabled().peers).toHaveLength(0);
+  } finally { release(); await first; budget.dispose(); await pair.close(); }
+});
+
+test.skipIf(process.platform === "win32")("failed remote revocation retains the recovery receipt and removes its scratch file", async () => {
+  const pair = remoteMessagingPair(), budget = new MessageBudget(), capacity = new RemoteCapacity();
+  pair.aStore.mutate(state => { Object.assign(state.peers[0]!, { ssh: "fixture", hostKey: "fixture ssh-ed25519 key\n", fingerprint: "SHA256:key" }); });
+  let path = "";
+  try {
+    const receipt = await removeRemoteHost(pair.aStore, "worker", budget, capacity, async argv => {
+      path = argv.find(arg => arg.startsWith("UserKnownHostsFile="))!.slice(19);
+      expect(readRemoteFile(path)).toBe("fixture ssh-ed25519 key\n"); throw new Error("remote unavailable");
+    });
+    expect(receipt).toMatchObject({ locallyRemoved: true, remote: "unconfirmed" });
+    expect(receipt.remoteCleanupCommand).toContain("--transaction"); expect(readRemoteFile(path)).toBeNull();
+    expect(pair.aStore.requireEnabled().peers).toHaveLength(0);
+  } finally { budget.dispose(); await pair.close(); }
+});
+
+for (const published of [false, true]) {
+  test.skipIf(process.platform === "win32")(`CLI revocation scratch publication failure preserves local-removal receipt (published=${published})`, async () => {
+    const pair = remoteMessagingPair();
+    pair.aStore.mutate(state => { Object.assign(state.peers[0]!, { ssh: "fixture", hostKey: "fixture ssh-ed25519 key\n", fingerprint: "SHA256:key" }); });
+    const source = `import { mock } from "bun:test";
+      const fs = { ...await import("node:fs") };
+      mock.module("node:fs", () => ({ ...fs, renameSync(from, to) {
+        if (String(to).includes("/revocation_known_hosts")) {
+          if (${published}) fs.renameSync(from, to);
+          throw new Error("private scratch publication diagnostic");
+        }
+        fs.renameSync(from, to);
+      } }));
+      let spawned = false;
+      Bun.spawn = () => { spawned = true; throw new Error("unexpected SSH spawn"); };
+      const { runMessageCommand } = await import(${JSON.stringify(repoPath("src", "cli", "message-command.ts"))});
+      process.exitCode = await runMessageCommand(["hosts", "remove", "worker", "--json"]);
+      if (spawned) throw new Error("scratch publication failure must not start SSH");`;
+    try {
+      const child = Bun.spawn([process.execPath, "-e", source], { env: { ...process.env, OPENCODEX_HOME: join(pair.a.root, "ocx") },
+        stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+      const [code, out, err] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+      expect(code).toBe(3); expect(err).toBe(""); expect(out).not.toContain("private scratch publication diagnostic");
+      expect(JSON.parse(out)).toMatchObject({ locallyRemoved: true, remote: "unconfirmed" });
+      expect(JSON.parse(out).remoteCleanupCommand).toContain("--transaction"); expect(pair.aStore.requireEnabled().peers).toHaveLength(0);
+      expect(readdirSync(pair.aStore.directory).filter(name => name.startsWith("revocation_known_hosts"))).toHaveLength(0);
+    } finally { await pair.close(); }
+  });
+}
 
 test.skipIf(process.platform === "win32")("CLI directory-sync failure reports unknown storage without private diagnostics", async () => {
   const pair = remoteMessagingPair();

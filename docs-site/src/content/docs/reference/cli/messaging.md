@@ -111,6 +111,9 @@ ocx message hosts list --json
 ocx message serve --host worker --json
 ```
 
+Private probe records keep their alias-prefixed format even when your normal SSH
+configuration enables `HashKnownHosts`; your normal known_hosts file is not changed.
+
 Each `serve` is foreground-owned: keep it running and use a separate terminal
 for messaging. At most four distinct `--host` selections may be supplied. Nothing
 installs a service or starts an owner automatically. SSH uses confirmed pinned
@@ -152,7 +155,9 @@ ocx message disable --json
 ```
 
 Removal revokes local admission first; an unconfirmed remote cleanup exits 3 and
-requires removal on that peer too. Generated cleanup guidance uses
+requires removal on that peer too. Each outgoing removal uses an independent pinned-key
+scratch file; a failure preparing that file still reports local removal and unconfirmed
+remote cleanup. Scratch cleanup is attempted on both success and failure. Generated cleanup guidance uses
 `hosts remove <machine-uuid> --transaction <enrollment-uuid> --json`; the transaction
 guard refuses an old receipt rather than removing a newer enrollment. Ordinary removal
 without this optional guard still removes the currently selected peer.
