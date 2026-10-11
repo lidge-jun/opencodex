@@ -34,7 +34,7 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
   const t = useT();
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [effortDrafts, setEffortDrafts] = useState<Record<string, string>>({});
-  const [mirrorRetries, setMirrorRetries] = useState<Record<string, string>>({});
+  const [mirrorRetries, setMirrorRetries] = useState<Record<string, { model: string; effort: string }>>({});
   const [pending, setPending] = useState<string | null>(null);
   const [result, setResult] = useState<{ tone: "ok" | "warn" | "err"; text: string } | null>(null);
 
@@ -88,12 +88,14 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
       setResult(notice
         ? { tone: "warn", text: t(notice, { role, model: picked }) }
         : { tone: "ok", text: t("integrations.lazycodexRoles.saved", { role, model: picked }) });
-      setDrafts(current => Object.fromEntries(Object.entries(current).filter(([key]) => key !== role)));
-      setEffortDrafts(current => Object.fromEntries(Object.entries(current).filter(([key]) => key !== role)));
-      setMirrorRetries(current => {
+      const mirrorFailed = omoStatus === "write_failed";
+      const keepOnFailure = <T,>(current: Record<string, T>, value: T): Record<string, T> => {
         const { [role]: _previous, ...rest } = current;
-        return omoStatus === "write_failed" ? { ...rest, [role]: model } : rest;
-      });
+        return mirrorFailed ? { ...rest, [role]: value } : rest;
+      };
+      setDrafts(current => keepOnFailure(current, model));
+      setEffortDrafts(current => keepOnFailure(current, effort ?? ""));
+      setMirrorRetries(current => keepOnFailure(current, { model, effort: effort ?? "" }));
       await resource.refresh();
       return true;
     } catch {
@@ -149,7 +151,8 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
                 const draft = drafts[row.role] ?? row.model ?? "";
                 const effortDraft = effortDrafts[row.role] ?? row.effort ?? "";
                 const changed = draft !== "" && (draft !== row.model || effortDraft !== (row.effort ?? ""));
-                const retryMirror = !changed && draft !== "" && mirrorRetries[row.role] === draft;
+                const pendingMirror = mirrorRetries[row.role];
+                const retryMirror = pendingMirror !== undefined && pendingMirror.model === draft && pendingMirror.effort === effortDraft;
                 return (
                   <tr key={row.role}>
                     <td><code>{row.role}</code></td>

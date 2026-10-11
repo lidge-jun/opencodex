@@ -17,6 +17,7 @@ let putFailure: { status: number; body: unknown } | null = null;
 let rolesFailure: { status: number; body: unknown } | null = null;
 let rolesBody: unknown;
 let effortsFailure = false;
+let rolesHold: Promise<void> | null = null;
 let fetched: string[] = [];
 
 function json(body: unknown, status = 200): Response {
@@ -43,6 +44,7 @@ beforeEach(() => {
   putFailure = null;
   rolesFailure = null;
   effortsFailure = false;
+  rolesHold = null;
   rolesBody = {
     lazycodex: { detected: true, pluginEnabled: true, pluginInstalled: true },
     omoJsonc: { state: "present" },
@@ -71,6 +73,7 @@ beforeEach(() => {
       return effortsFailure ? json({ error: "unavailable" }, 503) : json({ efforts: ["low", "medium", "high"] });
     }
     if (rolesFailure) return json(rolesFailure.body, rolesFailure.status);
+    if (rolesHold) await rolesHold;
     return json(rolesBody);
   }) as typeof fetch;
   Object.defineProperty(globalThis, "fetch", { configurable: true, value: mockFetch });
@@ -212,6 +215,45 @@ test("a failed omo.jsonc mirror can be retried with the same model", async () =>
   expect(container.textContent).toContain("explorer now runs on xai/grok-4.5.");
   expect(saveButton("explorer").disabled).toBe(true);
   expect(saveButton("explorer").textContent).toBe("Save");
+});
+
+function pinExplorerEffort(effort: string): void {
+  rolesBody = {
+    ...(rolesBody as object),
+    roles: [{ role: "explorer", model: "gpt-5.5", effort, omoJsoncModel: null }],
+  };
+}
+
+async function saveEffortWithFailedMirror(): Promise<void> {
+  omoWriteStatus = "write_failed";
+  await pick("explorer", "high", "Reasoning effort (explorer)");
+  await act(async () => { saveButton("explorer").click(); });
+  await settle();
+}
+
+test("retrying a failed mirror while the reload is still pending resends the saved effort", async () => {
+  pinExplorerEffort("low");
+  await mount();
+  let release = () => {};
+  rolesHold = new Promise<void>(resolve => { release = resolve; });
+  await saveEffortWithFailedMirror();
+  expect(saveButton("explorer").disabled).toBe(false);
+  await act(async () => { saveButton("explorer").click(); });
+  await settle();
+  expect(puts.map(entry => entry.body)).toEqual([{ model: "gpt-5.5", effort: "high" }, { model: "gpt-5.5", effort: "high" }]);
+  await act(async () => { release(); });
+  await settle();
+});
+
+test("retrying a failed mirror after a failed reload resends the saved effort", async () => {
+  pinExplorerEffort("low");
+  await mount();
+  rolesFailure = { status: 500, body: { error: "unavailable" } };
+  await saveEffortWithFailedMirror();
+  expect(container.textContent).toContain("gpt-5.5 · low");
+  await act(async () => { saveButton("explorer").click(); });
+  await settle();
+  expect(puts.map(entry => entry.body)).toEqual([{ model: "gpt-5.5", effort: "high" }, { model: "gpt-5.5", effort: "high" }]);
 });
 
 test("a failed save shows the localized message rather than the server text", async () => {
