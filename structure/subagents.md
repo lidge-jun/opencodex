@@ -321,7 +321,7 @@ the requested model id only; effort remains owned by the caps described under
 Codex overrides a child's spawn-time model with the root `model` key of
 `$CODEX_HOME/agents/<role>.toml`, so that pin decides which model a role runs on.
 `src/codex/agent-role-models.ts` is opencodex's only writer into those files, and it writes only
-that one key, only when a user picks a role's model in the dashboard's omo (Codex / LazyCodex)
+the root `model` and optional `model_reasoning_effort` keys, only when a user saves a role in the dashboard's omo (Codex / LazyCodex)
 section on the omo tab (`PUT /api/codex-agent-roles/{role}`) or with `ocx agent roles set`,
 and only while LazyCodex is detected. No sync, startup, or
 catalog path calls it, and opencodex never creates, repairs, or removes a role file.
@@ -341,9 +341,13 @@ catalog path calls it, and opencodex never creates, repairs, or removes a role f
 - The role name must equal a listed `*.toml` stem, which is also the path-traversal check. The
   target must be a regular file owned by the running user; the replacement is atomic and does
   not follow a symbolic link.
-- `effort` is optional: omitted keeps the role's `model_reasoning_effort`, a level rewrites it, and
-  JSON `null` removes the root line, clearing the role-level override; the effective effort then
-  follows Codex's own resolution (spawn value, `[agents]` default, parent) rather than a fixed model default.
+- On `PUT /api/codex-agent-roles/{role}`, `effort` is optional: omitted keeps the role's
+  `model_reasoning_effort`, a level inserts or replaces it, and JSON `null` removes its root line
+  and trailing comment. Only a one-line string value can be removed; a multiline or non-string
+  value is refused with 409 `unsupported_model_value`, leaving both TOML and omo.jsonc unchanged.
+  Removal preserves the BOM, line endings, and all other bytes; an absent key is a no-op.
+  Clearing the role-level override lets Codex resolve effort normally (spawn value, `[agents]`
+  default, parent). The dashboard offers **Inherit effort** on every row and sends `null` to clear.
 - The same pick is mirrored into LazyCodex's `[codex].agents.<role>` as `model` and, for an effort LazyCodex can express, `reasoning`; that half belongs to
   [client integrations](clients/integrations.md#omo-codex-lazycodex-role-models). The role file is written first
   and stands even when the mirror is skipped.
@@ -376,8 +380,10 @@ the same refusal as the PUT. Applying a proposal is the ordinary
   which keeps a standard role on the cheaper model. Unpriced, unmapped models are never proposed. A role
   gets the lowest sufficient tier, then the lowest price. Effort binds to ladder positions of the chosen
   model (floor, default or middle, the rung above, ceiling), collapsing inside the range; it is proposed
-  for every sized role whose chosen model has a non-empty ladder (none when the ladder is empty), and
-  written by the same span-preserving editor as `model`, located by the same TOML-aware scan. A routed
+  for every sized role whose chosen model has a non-empty ladder. Apply and `--apply` insert or
+  replace `model_reasoning_effort` through the same span-preserving editor as `model`, located by
+  the same TOML-aware scan. An empty ladder gives `proposedEffort: null`, meaning no proposal;
+  Apply omits `effort` and preserves the existing pin. A null proposal never means a null PUT. A routed
   model's ladder is its row's
   `reasoningEfforts`; a row that declares none takes the ladder the written Codex catalog shows for it, an
   explicit empty list stays empty, and a row without its own default takes the catalog's default when that
@@ -395,10 +401,10 @@ most 1500 characters, the role excerpt limit); `proposeDelegationModel` in
 `src/server/management/codex-role-auto-assign.ts` sends it as one role named `delegated-work` with the same
 parser and the role rubric followed by a short addendum (`DELEGATED_WORK_SIZING_SYSTEM_PROMPT`) that has the
 sizer size the described one-shot work rather than a standing role; the role rubric's own text is unchanged.
-It maps the answer with the same `buildRoleProposals`. Two things differ from roles in the mapping,
-both at the call site: candidates are the `available` list `GET /api/injection-model` offers (one helper
-builds both), with effort ladders cut to the Codex levels `PUT /api/injection-model` accepts. Like a
-role, the delegation default always gets an effort proposed, even when none is set. The route writes nothing; the page shows tier, effort, rationale and move triggers,
+It maps the answer with the same `buildRoleProposals`. Candidates are the `available` list
+`GET /api/injection-model` offers (one helper builds both), with effort ladders cut to the Codex
+levels `PUT /api/injection-model` accepts. As with roles, a non-empty ladder gives an effort
+proposal even when no effort is set; an empty ladder gives none. The route writes nothing; the page shows tier, effort, rationale and move triggers,
 and **Use this** goes through the page's ordinary `PUT /api/injection-model` save. It is not
 sibling-refused, like the `PUT` it feeds, since both touch only this instance's config.
 
