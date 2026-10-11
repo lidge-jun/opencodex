@@ -386,6 +386,8 @@ Because `enrichProviderFromRegistry` fills `noVisionModels` all-or-nothing and f
 frozen into any config saved while it was current. `src/providers/stale-vision-classification-migration.ts`
 repairs exactly those two saved values and runs inside the shared startup repair pass in
 `src/providers/model-rename-startup.ts`. Correcting the registry alone fixes new installs only.
+The same pass runs `src/providers/stale-no-vision-seed-migration.ts`: a saved `noVisionModels` list identical, in order, to a retired
+whole-list seed (Qoder Global's roster, before its adapter forwarded images) on a registry-owned row is removed; edited lists stay.
 
 It covers both states that reach a running process, because the sidecar predicate reads
 `noVisionModels` before `modelInputModalities`: the full stale pair (modalities still the stale

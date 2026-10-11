@@ -29,6 +29,7 @@
 import { writeFileSync } from "node:fs";
 import { loadConfig } from "../config";
 import {
+  ClientPathError,
   EXPORT_CLIENTS,
   EXPORT_CLIENT_IDS,
   buildClientConfigText,
@@ -193,6 +194,18 @@ export async function handleExportCommand(argv: string[], deps: ExportCommandDep
     const clientConfig = built.document;
     const text = built.text;
 
+    // Resolve the human-facing destination BEFORE writing anything. A client whose
+    // config location cannot be determined (a relative override, or ZCode bootstrap
+    // settings naming an unknown data root) still exports the document: the export
+    // writes nothing into the client and the destination is advisory text.
+    let destination: string;
+    try {
+      destination = spec.destination(process.env);
+    } catch (error) {
+      if (!(error instanceof ClientPathError)) throw error;
+      destination = `unknown (${error.message})`;
+    }
+
     // Every serializer already ends with exactly one newline.
     if (out !== undefined) writeExport(out, text, force);
     // stderr, so `--json` stdout stays a standalone JSON document.
@@ -208,7 +221,7 @@ export async function handleExportCommand(argv: string[], deps: ExportCommandDep
       ...text.trimEnd().split("\n"),
       "",
       ...(out !== undefined ? [`Wrote ${out}`] : []),
-      `Destination: ${spec.destination(process.env)}`,
+      `Destination: ${destination}`,
       "Merge this generated configuration into that file; do not replace it.",
       `Before launching: ${spec.exportHint}`,
       `${modelCount} model${modelCount === 1 ? "" : "s"}; ${modelsWithoutLimits} omit context limits (the client applies its own defaults).`,
