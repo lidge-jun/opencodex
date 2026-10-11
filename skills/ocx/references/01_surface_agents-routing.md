@@ -77,7 +77,7 @@ JSON mode: `payload`.
 - A bare invocation reads and never writes.
 - Requires Codex-based omo (LazyCodex): the omo@sisyphuslabs Codex plugin enabled in config.toml and installed; otherwise status lists no roles, and set and suggest are refused.
 - set rewrites only the root model value of $CODEX_HOME/agents/<role>.toml, plus model_reasoning_effort with --effort; omo.jsonc gets the same model and, when LazyCodex has that level, the effort as reasoning; it is skipped when absent or when it contains comments.
-- suggest sizes every role with one model call and prints proposals without writing; --apply writes each proposed model, and its effort when the role file already sets model_reasoning_effort.
+- suggest sizes every role with one model call and prints proposals without writing; --apply writes each proposed model and effort.
 
 ### `ocx agent injection`
 

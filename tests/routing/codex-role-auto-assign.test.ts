@@ -103,7 +103,7 @@ describe("buildRoleProposals", () => {
     sizing: { tier, effort, rationale: "r", moveUpIf: "u", moveDownIf: "d" },
   });
 
-  test("proposes effort only for roles whose file already sets one, and keeps unsized reasons", () => {
+  test("proposes an effort for every sized role, set or not, and keeps unsized reasons", () => {
     const classified = classifyRoleModelCandidates([candidate("cheap", 1, FULL, "medium"), candidate("dear", 9)]);
     const proposals = buildRoleProposals(
       [
@@ -115,7 +115,7 @@ describe("buildRoleProposals", () => {
       classified,
     );
     expect(proposals[0]).toMatchObject({ status: "proposed", proposedModel: "cheap", proposedEffort: "low", tier: "fast" });
-    expect(proposals[1]).toMatchObject({ status: "proposed", proposedModel: "dear", proposedEffort: null });
+    expect(proposals[1]).toMatchObject({ status: "proposed", proposedModel: "dear", proposedEffort: "xhigh" });
     expect(proposals[2]).toEqual({ role: "vague", model: null, effort: null, status: "unsized", reason: "no JSON" });
   });
 

@@ -396,9 +396,8 @@ parser and the role rubric followed by a short addendum (`DELEGATED_WORK_SIZING_
 sizer size the described one-shot work rather than a standing role; the role rubric's own text is unchanged.
 It maps the answer with the same `buildRoleProposals`. Two things differ from roles in the mapping,
 both at the call site: candidates are the `available` list `GET /api/injection-model` offers (one helper
-builds both), with effort ladders cut to the Codex levels `PUT /api/injection-model` accepts, and
-`alwaysProposeEffort` proposes an effort even when none is set, because the delegation effort is a
-picker of its own. The route writes nothing; the page shows tier, effort, rationale and move triggers,
+builds both), with effort ladders cut to the Codex levels `PUT /api/injection-model` accepts. Like a
+role, the delegation default always gets an effort proposed, even when none is set. The route writes nothing; the page shows tier, effort, rationale and move triggers,
 and **Use this** goes through the page's ordinary `PUT /api/injection-model` save. It is not
 sibling-refused, like the `PUT` it feeds, since both touch only this instance's config.
 
