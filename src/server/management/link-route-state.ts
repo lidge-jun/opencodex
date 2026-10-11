@@ -183,4 +183,3 @@ export async function compensateNewLink(ctx: ManagementContext, state: LinkRoute
     return compensationFailure(ctx, state, record, "store");
   }
 }
-

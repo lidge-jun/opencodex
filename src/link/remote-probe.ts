@@ -36,4 +36,3 @@ export function isChildHealth(value: unknown, role: "standalone" | "client", exp
   return body.port === expectedPort && body.service === "opencodex" && Number.isInteger(body.pid) && (body.pid as number) > 0
     && (role === "client" ? body.role === "client" : body.role !== "client" && body.restartCapability === "v1");
 }
-

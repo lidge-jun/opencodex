@@ -94,4 +94,3 @@ export async function runLinkEnrollment(command: "probe" | "add", args: string[]
     rl?.close();
   }
 }
-
