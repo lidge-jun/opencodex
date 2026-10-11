@@ -44,12 +44,14 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
       t("integrations.lazycodexRoles.loadFailed"),
     );
     if (roles?.lazycodex?.detected !== true) return { detected: false, roles: [], omoJsonc: null, available: [], efforts: [] };
-    // The effort list is the one the Subagents page offers for its delegation model.
+    // The effort list is the one the Subagents page offers for its delegation model. It only adds
+    // choices, so a failed lookup leaves each row with its pinned effort instead of failing the table.
     const [models, delegation] = await Promise.all([
       fetch(`${apiBase}/api/subagent-models`, { signal })
         .then(response => readJsonOrThrow<{ available?: string[] }>(response, t("integrations.lazycodexRoles.loadFailed"))),
       fetch(`${apiBase}/api/injection-model`, { signal })
-        .then(response => readJsonOrThrow<{ efforts?: string[] }>(response, t("integrations.lazycodexRoles.loadFailed"))),
+        .then(response => readJsonOrThrow<{ efforts?: string[] }>(response, t("integrations.lazycodexRoles.loadFailed")))
+        .catch(() => null),
     ]);
     return {
       detected: true,

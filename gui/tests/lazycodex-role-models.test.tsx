@@ -16,6 +16,7 @@ let omoWriteStatus = "written";
 let putFailure: { status: number; body: unknown } | null = null;
 let rolesFailure: { status: number; body: unknown } | null = null;
 let rolesBody: unknown;
+let effortsFailure = false;
 let fetched: string[] = [];
 
 function json(body: unknown, status = 200): Response {
@@ -41,6 +42,7 @@ beforeEach(() => {
   omoWriteStatus = "written";
   putFailure = null;
   rolesFailure = null;
+  effortsFailure = false;
   rolesBody = {
     lazycodex: { detected: true, pluginEnabled: true, pluginInstalled: true },
     omoJsonc: { state: "present" },
@@ -65,7 +67,9 @@ beforeEach(() => {
       return json({ ok: true, toml: { status: "written" }, omoJsonc: { status: omoWriteStatus } });
     }
     if (url.endsWith("/api/subagent-models")) return json({ available: ["gpt-5.5", "xai/grok-4.5"] });
-    if (url.endsWith("/api/injection-model")) return json({ efforts: ["low", "medium", "high"] });
+    if (url.endsWith("/api/injection-model")) {
+      return effortsFailure ? json({ error: "unavailable" }, 503) : json({ efforts: ["low", "medium", "high"] });
+    }
     if (rolesFailure) return json(rolesFailure.body, rolesFailure.status);
     return json(rolesBody);
   }) as typeof fetch;
@@ -141,6 +145,21 @@ test("picking only a reasoning effort enables Save and sends the effort with the
   expect(container.textContent).toContain("explorer now runs on gpt-5.5 · high.");
   expect(container.textContent).toContain("gpt-5.5 · high");
   expect(saveButton("explorer").disabled).toBe(true);
+});
+
+test("a failed effort list still loads the table and saves a model", async () => {
+  effortsFailure = true;
+  rolesBody = {
+    ...(rolesBody as object),
+    roles: [{ role: "explorer", model: "gpt-5.5", effort: "medium", omoJsoncModel: null }],
+  };
+  await mount();
+  expect(container.textContent).not.toContain("Could not load Codex agent roles.");
+  expect(container.textContent).toContain("gpt-5.5 · medium");
+  await pick("explorer", "xai/grok-4.5");
+  await act(async () => { saveButton("explorer").click(); });
+  await settle();
+  expect(puts).toEqual([{ url: `${apiBase}/api/codex-agent-roles/explorer`, body: { model: "xai/grok-4.5", effort: "medium" } }]);
 });
 
 test("renders nothing and loads no model list when LazyCodex is not detected", async () => {
