@@ -263,6 +263,10 @@ cache hit rates, while requests without a key remain keyless. If an opted-in ups
 field, opencodex does not strip it and retry or mutate saved configuration. Other providers remain
 deny-by-default.
 
+Kimi Code's native Responses route omits explicit content-empty assistant history messages
+to avoid its `assistant must not be empty` rejection. Nonempty text, whitespace, refusals,
+reasoning and tool calls/results are retained; stored client history is not rewritten.
+
 Kimi Coding usage prices for `k3`, `k3[1m]`, and `k3-256k` are **API-reference estimates** across
 `kimi`, `kimi-code`, and `kimi-responses`, using the published default 5-minute cache-write rate.
 They do not reproduce Code Plan billing or quota: K3's 1M variant consumes about twice the quota

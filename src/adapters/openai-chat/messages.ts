@@ -292,7 +292,7 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
           }
         }
         const hasReplayedReasoning = chatMsg.reasoning_content !== undefined || chatMsg.reasoning_details !== undefined;
-        if (chatMsg.content === undefined && toolCalls.length === 0 && !hasReplayedReasoning) break;
+        if (!chatMsg.content && toolCalls.length === 0 && !hasReplayedReasoning) break;
         flushPendingToolCalls();
         const wireToolCalls = toolCalls.map(tc => {
           let id = tc.id;

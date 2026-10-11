@@ -1,5 +1,5 @@
 {
-    "messages-request-id-headers.test.ts": "claude-integration",
+    "messages-request-id-headers.test.ts": "claude-integration", "openai-empty-assistant-history.test.ts": "adapters/openai",
     "messages-request-id-endpoint.test.ts": "claude-integration",
   "anthropic-revoked-token.test.ts": "adapters/anthropic",
   "messages-revoked-token.test.ts": "claude-integration",
