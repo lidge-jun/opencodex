@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { createResponsesPassthroughAdapter } from "../../../src/adapters/openai-responses/passthrough";
 import { parseRequest } from "../../../src/responses/parser";
 import type { OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
+import { CODEX_RESPONSES_LITE_HEADER } from "../../../src/codex/forward-transport-headers";
 import { createTestTranslatorBudget } from "../../helpers/translator-budget";
 import { clearBridgeSearchReplayCacheForTests } from "../../../src/responses/bridge-search-replay-cache";
 
@@ -23,10 +24,10 @@ const fixture = (model = "gpt-6.1-sol"): Record<string, any> => ({ model, stream
     search(1), { type: "message", role: "assistant", content: [{ type: "output_text", text: "prior ordinary answer" }] }, search(2), search(3),
   ],
 });
-function build(raw: Record<string, any>, provider = canonical, prepare?: (parsed: OcxParsedRequest) => void) {
+function build(raw: Record<string, any>, provider = canonical, prepare?: (parsed: OcxParsedRequest) => void, headers = new Headers()) {
   const snapshot = JSON.stringify(raw); const parsed = parseRequest(raw); prepare?.(parsed);
   const budget = createTestTranslatorBudget();
-  const request = createResponsesPassthroughAdapter(provider).buildRequest(parsed, { headers: new Headers(), translatorBudget: budget });
+  const request = createResponsesPassthroughAdapter(provider).buildRequest(parsed, { headers, translatorBudget: budget });
   request.releaseBodyObservation?.();
   expect(JSON.stringify(raw)).toBe(snapshot); expect(JSON.stringify(parsed._rawBody)).toBe(snapshot);
   return { body: JSON.parse(request.body) as Record<string, any>, text: request.body, request, parsed };
@@ -51,11 +52,11 @@ test("bridge memo hits restore destination calls/results first; only misses beco
   const scope = { clientPrincipalId: "fixture-principal", clientThreadId: "fixture-thread", current: {
     providerName: "openai", adapterName: "openai-responses", modelId: "gpt-6.1-sol", providerDestinationIdentity: "fixture-destination", credentialIdentity: "fixture-credential",
   } };
-  rememberBridgeSearchReplay(bridgeSearchReplayScope(scope), "ws_search_0", { callId: "memo-call", name: "read_file", argumentsText: "{}", output: "executed bridge result" });
+  rememberBridgeSearchReplay(bridgeSearchReplayScope(scope), "ws_search_0", { callId: "memo-call", name: "web_search", argumentsText: "{}", output: "executed bridge result" });
   const { body } = build(fixture(), { ...canonical, webSearchBridge: { enabled: true, backend: "openai" } }, parsed => { parsed._reasoningReplayScope = scope; });
   expect(notes(body)).toHaveLength(3);
   const index = body.input.findIndex((item: any) => item.call_id === "memo-call");
-  expect(body.input[index]).toEqual({ type: "function_call", call_id: "memo-call", name: "read_file", arguments: "{}" });
+  expect(body.input[index]).toEqual({ type: "function_call", call_id: "memo-call", name: "web_search", arguments: "{}" });
   expect(body.input[index + 1]).toEqual({ type: "function_call_output", call_id: "memo-call", output: "executed bridge result" });
   expect(body.input.some((item: any) => item.type === "web_search_call")).toBe(false);
   expect(JSON.stringify(notes(body))).not.toContain("reference query");
@@ -68,7 +69,8 @@ test("Lite declarations, choice, schemas and 190 client call/result pairs surviv
   raw.input = [...raw.input.filter((item: any) => item.call_id === undefined), { type: "additional_tools", tools: catalog }, ...pairs];
   raw.tool_choice = { type: "function", name: "tool_189" };
   for (let turn = 0; turn < 3; turn++) {
-    const { body } = build(raw);
+    const { body, request } = build(raw, canonical, undefined, new Headers({ [CODEX_RESPONSES_LITE_HEADER]: "true" }));
+    expect(new Headers(request.headers).get(CODEX_RESPONSES_LITE_HEADER)).toBe("true");
     expect(body.tools).toEqual(raw.tools); expect(body.tool_choice).toEqual(raw.tool_choice); expect(body.parallel_tool_calls).toBe(false);
     expect(body.input.find((item: any) => item.type === "additional_tools")).toEqual({ type: "additional_tools", tools: catalog });
     expect(body.input.filter((item: any) => item.type === "function_call")).toHaveLength(190);
@@ -119,4 +121,11 @@ test("ordinary projection stays active with debug off and unrelated diagnostic m
   } finally {
     resetDebugSettingsForTests(); if (previous === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previous; removeTreeWithRetry(home);
   }
+});
+
+test("non-completed hosted history becomes a status-bearing reference note without a fabricated result", () => {
+  const raw = fixture(); raw.input[2].status = "in_progress"; const { body } = build(raw);
+  const metadata = JSON.parse(notes(body)[0].content[0].text.split("\n").slice(1).join("\n"));
+  expect(metadata.status).toBe("in_progress"); expect(metadata.action).toEqual(raw.input[2].action);
+  expect(metadata).not.toHaveProperty("result"); expect(metadata).not.toHaveProperty("id");
 });

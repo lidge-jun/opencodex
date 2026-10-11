@@ -73,6 +73,15 @@ bölümde birleştirilirler; yerleşik katmanların arasına girmezler.
 Satırdaki oklarla veya satırın herhangi bir yerindeyken `Alt` + `Up` / `Alt` +
 `Down` ile sıralamayı değiştirin. Sıra, birleştirme sırasıdır.
 
+Panel, etkin katmanların toplam boyutunu `developer_instructions` için 128 KiB
+sınırına karşı gösterir ve birleştirilmiş metnin daraltılabilir bir önizlemesini
+sunar — bölümü sınırın üzerine taşıyacak bir katman, kaydettikten sonra değil
+kaydetmeden önce görülür.
+
+Bir katmanı silmek önce onay ister, ardından birkaç saniyeliğine **Geri al**
+seçeneği sunar: katman eski konumuna döner; böylece sırası önemli bir liste
+yanlışlıkla yapılan bir hareketi atlatır.
+
 ### Ön ayarlar
 
 **+ Add layer** beş başlangıç noktası sunar: kısa çıktı, düzenlemeden önce plan,
@@ -95,11 +104,44 @@ dönebilirsiniz.
 Düzenleyici, bir katman yazıldığı şekliyle çalışmayacak bir şey söylediğinde
 uyarır: farklı bir kimlik iddia etmek, kayıt defterinin tanımladığı bir aracın
 adını vermek, hiçbir şeyin genişletmediği şablon yer tutucuları kullanmak veya
-Codex'in daha sonra oluşturduğu ortam bilgilerini belirtmek.
+Codex'in daha sonra oluşturduğu ortam bilgilerini belirtmek. Ayrıca yapıştırılmış
+kimlik bilgilerini (bir katmandaki API anahtarı her istekte düz metin olarak
+modele gider), modele önceki talimatlarını bırakmasını söyleyen ifadeleri ve
+Korece yazılmış Codex dışı bir kimliği de işaretler.
 
 Bunlar uyarıdır ve kaydetmeyi asla engellemez. Codex'i geçersiz kılmak
 istiyorsanız bunu yapabilirsiniz; uyarı yalnızca bunun bir kaza değil, bilinçli
 bir karar olmasını sağlar.
+
+## Temel istem varyantları
+
+Temel istem, ek katmanlardan önce Codex’in kendi talimatlarıdır. Seçici, varsayılan
+istemi ve `~/.codex/opencodex-prompt-base/` içinde saklanan en fazla iki varyantı sunar.
+Varsayılan seçenekte düzenlenecek metin yoktur; onu seçmek `model_instructions_file`
+anahtarını yapılandırmanızdan kaldırır.
+
+:::caution
+Bir varyant Codex’in temel talimatlarının **yerini alır**. Mevcut davranışı koruyarak
+talimat eklemek için özel bir katman kullanın.
+:::
+
+Düzenleyici, seçenekler arasında gezinirken kaydedilmemiş değişiklikleri korur ve
+kapatırken bunları silmeden önce onay ister. Yazarken gövde boyutu ölçülür; her
+varyantın gövdesi en fazla 64 KiB olabilir.
+
+### Temel istemi zaten başka bir dosya değiştiriyorsa
+
+`model_instructions_file` sizin veya başka bir aracın yazdığı bir dosyayı gösteriyorsa,
+seçici yolu gösterir ve anahtarı sessizce başka bir dosyaya yönlendirmez.
+**Varyant olarak içe aktar** önce kurulacak metnin tamamını gösterir: `# ` satırında
+başlık, ardından satır sonları ve sekmeleri normalleştirilmiş gövde. Onaylamadan önce
+başlığı düzenleyebilirsiniz. Normalleştirilmiş gövde en fazla 64 KiB (`bodyBytes`)
+olabilir; başlıkla birlikte dosyanın tamamı biraz daha büyüktür (`serializedBytes`).
+Onay bir hash ile bu önizlemeye bağlanır. Dosya veya başlık değişirse, görmediğiniz
+metni kurmak yerine içe aktarma reddedilir. Varsayılana dönmek için anahtarı kendiniz
+kaldırabilirsiniz.
+
+Değişiklikler yeni oturumlarda geçerli olur; açık oturumlar başlangıçtaki istemi korur.
 
 ## opencodex dışında yazılan talimatlar
 
@@ -112,8 +154,12 @@ bunun üzerine yazmaz. Bunun yerine metni bir katman olarak içe aktarmayı öne
 Kaydedilen katmanlar ile `config.toml` içindeki değer uyuşmazsa panel bunu
 belirtir ve sessizce düzeltmek yerine **Repair** seçeneğini sunar. Onarım
 yollarından ikisi yazdığınız metni yeniden yazar, bu nedenle işlem bilinçli
-olarak başlatılmalıdır. Bir katman dosyası kaybolmuşsa onarım, herhangi bir şeye
-dokunmadan önce bir yedek yazar.
+olarak başlatılmalıdır. Yarım kalmış bir yazma ("journal present"), kilit altında
+yalnızca günlükte kayıtlı dosya durumlarını kullanarak kurtarılır. Geçerli liste
+yeniden kaydedilmez ve eksik içerik üretilmez. Dosyalar kayıtlı durumların hiçbiriyle
+eşleşmiyorsa kurtarma reddedilir ve tanılama için mevcut veriler korunur. Yenilenen
+panel kalan uyuşmazlıkları gösterir. Bir katman dosyası kaybolmuşsa onarım,
+herhangi bir şeye dokunmadan önce bir yedek yazar.
 
 ## Değişiklikler ne zaman etkili olur?
 
@@ -139,7 +185,14 @@ Bunlar opencodex'in kendi yapılandırmasında değil, Codex'in `config.toml` do
 | `include_apps_instructions` | `true` | Uygulamalar |
 | `skills.include_instructions` | `true` | Beceriler |
 | `developer_instructions` | ayarlanmamış | Sırayla birleştirilen özel katmanlarınız |
+| `model_instructions_file` | ayarlanmamış | Bir varyant seçildiğinde temel istem |
 
 Yazma işlemi satır bazlıdır: yorumlarınız ve biçimlendirmeniz korunur, opencodex'in tanımadığı bir anahtar silinmek yerine olduğu gibi bırakılır.
 
 Bulunmayan bir anahtar `false` olarak değil, varsayılanı olarak okunur. Panel dosyanızda gerçekten bulunan değeri gösterir ve bir anahtar ayarlanmamışsa bunu belirtir.
+
+Açık bir değer taşıyan satır ayrıca **Varsayılana sıfırla** sunar; bu, varsayılanı geri yazmak yerine
+anahtar satırını siler. Codex varsayılanı daha sonra değiştirirse onu takip etmeye devam eden tek durum
+budur — `key = true` yazmak bugünün varsayılanını bir geçersiz kılma olarak dondurur.
+
+Basit değer düzenleyicisi, anahtarı yazmadan veya sıfırlamadan önce dizileri, satır içi tabloları ve çok satırlı dizeleri reddederek özgün baytları korur. İçe aktarma, okunamayan yapılandırmayı açıkça bildirir. Salt okunur başlık önizlemesi sırasında alan düzenlenebilir; onay hâlâ o başlığa bağlı bir önizleme gerektirir. Ölçümdeki HTTP veya ağ hataları, başka bir ölçümün sürdüğü mesajı yerine hata olarak gösterilir.

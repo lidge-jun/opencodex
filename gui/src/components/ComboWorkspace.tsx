@@ -24,6 +24,7 @@ export default function ComboWorkspace({
   providerQuotaStates,
   providers,
   models,
+  capabilityModels = models,
   cataloguedComboIds,
   loading,
   onRefresh,
@@ -224,6 +225,7 @@ export default function ComboWorkspace({
             providerQuotaStates={providerQuotaStates}
             providers={providers}
             models={models}
+            capabilityModels={capabilityModels}
             onBack={() => trySelect(null)}
             onSaved={(item) => {
               setDetailDirty(false);
@@ -253,6 +255,7 @@ export default function ComboWorkspace({
             providerQuotaStates={providerQuotaStates}
             providers={providers}
             models={models}
+            capabilityModels={capabilityModels}
             onSaved={(item) => {
               setDetailDirty(false);
               setSelectedId(item.id);
@@ -286,6 +289,7 @@ export default function ComboWorkspace({
           providerQuotaStates={providerQuotaStates}
           providers={providers}
           models={models}
+          capabilityModels={capabilityModels}
           initialDraft={addDraft}
           onClose={onCloseAdd}
           onSubmit={async (item) => {

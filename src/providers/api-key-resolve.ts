@@ -39,17 +39,25 @@ function defaultEntryFactory(service: string, account: string): ProviderKeychain
 let entryFactory: ProviderKeychainEntryFactory = defaultEntryFactory;
 const resolvedCache = new Map<string, string>();
 const warnedAccounts = new Set<string>();
+let resolutionGeneration = 0;
+
+/** Advances whenever cached secrets may have changed, so derived snapshots can rebuild. */
+export function providerKeyResolutionGeneration(): number {
+  return resolutionGeneration;
+}
 
 /** Test seam: swap the OS entry for an in-memory one and drop caches. */
 export function setProviderKeychainEntryFactoryForTests(factory: ProviderKeychainEntryFactory | null): void {
   entryFactory = factory ?? defaultEntryFactory;
   resolvedCache.clear();
+  resolutionGeneration++;
   warnedAccounts.clear();
 }
 
 /** Write-path seam: a store/restore mutated secrets, so cached reads and warnings are stale. */
 export function invalidateResolvedProviderKeyCache(): void {
   resolvedCache.clear();
+  resolutionGeneration++;
   warnedAccounts.clear();
 }
 
@@ -76,7 +84,7 @@ export function providerKeychainEntry(account: string): ProviderKeychainEntry {
   return entryFactory(PROVIDER_KEYCHAIN_SERVICE, account);
 }
 
-function readKeychain(account: string): string | undefined {
+function readKeychain(account: string, quiet = false): string | undefined {
   const cached = resolvedCache.get(account);
   if (cached !== undefined) return cached;
   try {
@@ -88,7 +96,7 @@ function readKeychain(account: string): string | undefined {
   } catch {
     // fall through to the single warning below
   }
-  if (!warnedAccounts.has(account)) {
+  if (!quiet && !warnedAccounts.has(account)) {
     warnedAccounts.add(account);
     console.warn(`[opencodex] provider key reference keychain:${account} could not be read from the OS keychain; requests for this provider have no credential until the keychain is available (no plaintext fallback)`);
   }
@@ -102,6 +110,13 @@ function readKeychain(account: string): string | undefined {
 export function resolveProviderApiKey(value: string | undefined): string | undefined {
   if (!value) return undefined;
   if (isKeychainReference(value)) return readKeychain(keychainAccount(value));
+  return resolveEnvValue(value);
+}
+
+/** The same resolution without the unreadable-reference warning, for observe-only callers. */
+export function resolveProviderApiKeyQuietly(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  if (isKeychainReference(value)) return readKeychain(keychainAccount(value), true);
   return resolveEnvValue(value);
 }
 

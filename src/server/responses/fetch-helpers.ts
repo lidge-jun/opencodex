@@ -28,6 +28,7 @@ import {
   type ProviderEgressBinding,
 } from "../../lib/provider-egress";
 import { redactSecretString } from "../../lib/redact";
+import { outboundCredentials } from "../../lib/outbound-credential-registry";
 
 export { withUpstreamHttpVersion };
 
@@ -205,6 +206,9 @@ export function sendWithConnectionPolicy(
     && /^https:\/\/chatgpt\.com\/backend-api\/codex\/responses(?:\/compact)?$/.test(target)
     && Buffer.byteLength(body, "utf8") >= 1024 * 1024;
   (init as Record<symbol, (() => void) | undefined> | undefined)?.[PHYSICAL_DISPATCH]?.();
+  // Final headers, after plugin rewrites: an upstream can only echo what it received here, so the
+  // request log refuses any diagnostic that repeats one of these values (see request-log-terminal-status).
+  outboundCredentials().remember(headers);
   return physicalFetch(input, {
     ...init,
     ...(largeCodexBody ? { body: Buffer.from(body, "utf8") } : {}),

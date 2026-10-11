@@ -785,9 +785,9 @@ function extractSections(raw: string): Map<string, string> {
     for (const match of text.matchAll(/<([a-zA-Z_][a-zA-Z0-9_ -]*)>([\s\S]*?)<\/\1>/g)) {
       sections.set(match[1]!, match[2]!.trim());
     }
-    // AGENTS.md is NOT tagged: it arrives as a plain `# AGENTS.md instructions
-    // for <path>` block among the tagged sections. Matching only on tags would
-    // report the layer as unrendered while its text sits in the same message.
+    // AGENTS.md is NOT tagged: it arrives as a `# AGENTS.md instructions`
+    // block among the tagged sections. Matching only on tags would report the
+    // layer as unrendered while its text sits in the same message.
     //
     // Bounded at both ends. Capturing to end-of-message swept up any unrelated
     // untagged prose that happened to follow, and stripping tag-shaped blocks
@@ -795,8 +795,25 @@ function extractSections(raw: string): Map<string, string> {
     // AGENTS.md. Codex wraps the body in <INSTRUCTIONS>, so that is the boundary.
     // No line anchor: the block is concatenated directly onto the previous
     // section's closing tag, so requiring a newline before it never matched.
-    const projectDoc = /# AGENTS\.md instructions for [^\n]*\n+<INSTRUCTIONS>\n?([\s\S]*?)\n?<\/INSTRUCTIONS>/.exec(text);
+    //
+    // The `for <path>` suffix is OPTIONAL. Upstream emits three shapes from
+    // `contextual_user_fragment().render()` (core/src/context.rs) and this has
+    // to read all three rather than the one that existed when the probe was
+    // written: the legacy single-root form `# AGENTS.md instructions for
+    // <dir>`, the no-directory form `# AGENTS.md instructions`, and the
+    // multi-environment form where each project's block is labeled `for \`<env>\`
+    // with root <cwd>` INSIDE the INSTRUCTIONS wrapper. The labels are part of
+    // what the model sees, so they stay in the captured body.
+    const projectDoc = /# AGENTS\.md instructions(?: for [^\n]*)?\n+<INSTRUCTIONS>\n?([\s\S]*?)\n?<\/INSTRUCTIONS>/.exec(text);
     if (projectDoc) sections.set("__agents_md", projectDoc[1]!.trim());
+    else if (/# AGENTS\.md instructions/.test(text)) {
+      // The header rendered but in a shape this extractor does not recognize -
+      // a future upstream format, or prose truncated by the output cap. Claiming
+      // the layer "sent nothing" would be a lie about a block that is plainly
+      // present; the sentinel maps it to `unmapped`, the existing honest answer
+      // for "rendered in a form we cannot show".
+      sections.set("__agents_md_unmatched", "");
+    }
   }
   return sections;
 }
@@ -813,6 +830,13 @@ function mapSectionsToLayers(sections: Map<string, string>): Record<string, Laye
       // a diff-rendered section rather than an error.
       ? { text: null, reason: "not-rendered", bytes: 0 }
       : { text, reason: "ok", bytes: Buffer.byteLength(text, "utf8") };
+  }
+  // `__agents_md_unmatched` is the sentinel for "the AGENTS.md header rendered in
+  // a shape the bounded extractor does not recognize". `unmapped` is the honest
+  // answer for it: the text exists but cannot be shown, which `not-rendered`
+  // would deny outright.
+  if (layers["agents-md"]?.reason === "not-rendered" && sections.has("__agents_md_unmatched")) {
+    layers["agents-md"] = { text: null, reason: "unmapped", bytes: 0 };
   }
   return layers;
 }

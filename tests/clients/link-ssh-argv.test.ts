@@ -18,6 +18,7 @@ import {
   linkSshSpawnEnv,
   sshFailureHint,
   sshRunnerErrorHint,
+  SSH_OUTPUT_CAP_BYTES,
   SshRunnerError,
 } from "../../src/link/ssh-runner";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -273,9 +274,57 @@ test("runner still rejects invalid UTF-8 stdout", async () => {
   await expect(runner.run(["ssh"])).rejects.toMatchObject({ code: "decode" });
 });
 
+test("tunnel output retains diagnostics and releases inherited pipes shortly after exit", async () => {
+  let exit!: (code: number) => void;
+  const exited = new Promise<number>(resolve => { exit = resolve; });
+  let stderrController!: ReadableStreamDefaultController<Uint8Array>;
+  let cancelled = 0;
+  // Even an underlying cancellation that never resolves must not block the reader's cleanup.
+  const cancel = () => { cancelled += 1; return new Promise<void>(() => {}); };
+  const stdout = new ReadableStream<Uint8Array>({ cancel });
+  const stderr = new ReadableStream<Uint8Array>({
+    start(controller) { stderrController = controller; controller.enqueue(new TextEncoder().encode("Host key verification")); },
+    cancel,
+  });
+  const spawn = (() => ({ pid: 7, stdout, stderr, exited, kill() {} })) as unknown as typeof Bun.spawn;
+  const child = createSshRunner({ spawn }).spawnTunnel(["ssh", "-N", "--", "host"]);
+  let settled = false;
+  void child.stderr!.then(() => { settled = true; });
+  try {
+    await Bun.sleep(300);
+    expect(settled).toBe(false); // The grace starts at process exit, not spawn.
+    exit(255);
+    await Bun.sleep(20);
+    stderrController.enqueue(new TextEncoder().encode(" failed.\n"));
+    const deadline = Bun.sleep(1_000).then(() => "deadline");
+    expect(await Promise.race([child.stderr!, deadline])).toBe("Host key verification failed.\n");
+    expect(await Promise.race([child.stdout!, deadline])).toBe("");
+    expect(cancelled).toBe(2);
+    expect(stderr.locked).toBe(false);
+    expect(stdout.locked).toBe(false);
+  } finally {
+    exit(255);
+    if (stderr.locked) stderrController.close();
+  }
+});
+
 test("runner enforces stderr byte limit before replacement decoding", async () => {
   const runner = createSshRunner({ spawn: byteSpawn(new Uint8Array(), new Uint8Array([0xa1, 0xad])) });
   await expect(runner.run(["ssh"], { maxOutputBytes: 1 })).rejects.toMatchObject({ code: "output_limit" });
+});
+
+test("tunnel stderr still rejects and cancels output over the byte cap", async () => {
+  let cancelled = false;
+  const stderr = new ReadableStream<Uint8Array>({
+    start(controller) { controller.enqueue(new Uint8Array(SSH_OUTPUT_CAP_BYTES + 1)); },
+    cancel() { cancelled = true; },
+  });
+  const stdout = new ReadableStream<Uint8Array>({ start(controller) { controller.close(); } });
+  const spawn = (() => ({ pid: 7, stdout, stderr, exited: Promise.resolve(255), kill() {} })) as unknown as typeof Bun.spawn;
+  const child = createSshRunner({ spawn }).spawnTunnel(["ssh"]);
+  await expect(child.stderr!).rejects.toMatchObject({ code: "output_limit" });
+  expect(cancelled).toBe(true);
+  expect(stderr.locked).toBe(false);
 });
 
 test("the runner spawns commands and tunnels with the augmented environment", async () => {

@@ -535,6 +535,57 @@ test("disconnect failure opens force confirmation and sends force body", async (
   expect(calls.some(call => call.method === "DELETE" && call.body === JSON.stringify({ force: true }))).toBe(true);
 });
 
+test("Retry on a failed Home link restarts its tunnel instead of only re-reading status", async () => {
+  const calls: Array<{ method: string; path: string }> = [];
+  let state: "failed" | "connecting" = "failed";
+  globalThis.fetch = (async (input, init) => {
+    const path = new URL(String(input)).pathname;
+    calls.push({ method: init?.method ?? "GET", path });
+    if (path === "/api/link/status") return response({ ...baseStatus, links: [
+      { id: "link-1", alias: "child", direction: "hub-initiated", state, since: "now", reason: state === "failed" ? "timeout" : null, tunnelPort: 43110 },
+      { id: "link-2", alias: "home", direction: "client-initiated", state: "failed", since: "now", reason: "timeout", tunnelPort: 43111 },
+    ] });
+    if (path === "/api/link/link-1/reconnect" && init?.method === "POST") { state = "connecting"; return response({ linkId: "link-1" }); }
+    return response({ error: { code: "link_not_home_initiated" } }, 409);
+  }) as typeof fetch;
+  const host = await mount();
+  const retry = [...host.querySelectorAll("button")].find(button => button.textContent === "Retry") as HTMLButtonElement;
+  await act(async () => { retry.click(); });
+  await settleUntil(() => host.querySelector(".remote-link-status[data-state='connecting']") !== null);
+  expect(calls.filter(call => call.method === "POST").map(call => call.path)).toEqual(["/api/link/link-1/reconnect"]);
+  expect(calls.at(-1)).toEqual({ method: "GET", path: "/api/link/status" });
+  expect(host.querySelector(".remote-link-status[data-state='connecting']")).not.toBeNull();
+});
+
+test.each([false, true])("Retry stays disabled through the deferred refresh (POST fails: %s)", async postFails => {
+  const failed = { ...baseStatus, links: [{ id: "link-1", alias: "child", direction: "hub-initiated", state: "failed", since: "now", reason: "timeout", tunnelPort: 43110 }] };
+  let release!: (value: Response) => void;
+  const refreshed = new Promise<Response>(resolve => { release = resolve; });
+  let posts = 0;
+  let gets = 0;
+  globalThis.fetch = (async (_input, init) => {
+    if (init?.method === "POST") {
+      posts += 1;
+      return postFails ? response({ error: { code: "link_unavailable" } }, 503) : response({ linkId: "link-1" });
+    }
+    gets += 1;
+    return gets === 1 ? response(failed) : refreshed;
+  }) as typeof fetch;
+  const host = await mount();
+  const retry = [...host.querySelectorAll("button")].find(button => button.textContent === "Retry") as HTMLButtonElement;
+  await act(async () => { retry.click(); });
+  await settleUntil(() => gets === 2);
+  try {
+    expect(retry.disabled).toBe(true);
+    await act(async () => { retry.click(); });
+    expect(posts).toBe(1);
+  } finally {
+    release(response(failed));
+    await flush();
+  }
+  expect(retry.disabled).toBe(false);
+});
+
 test("readLinkJson preserves unknown server codes and status", async () => {
   let caught: unknown;
   try { await readLinkJson(new Response(JSON.stringify({ error: { code: "future_code" } }), { status: 418 })); } catch (error) { caught = error; }

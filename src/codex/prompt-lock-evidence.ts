@@ -1,9 +1,9 @@
-import { readFileSync, type Stats } from "node:fs";
-import { type OwnerDeps } from "./prompt-lock-owner";
+import { readFileSync } from "node:fs";
+import { type LockStat, type OwnerDeps } from "./prompt-lock-owner";
 import { LockFileBusy, lockFileOperation } from "./prompt-lock-io";
 
 export class ChangedLock extends LockFileBusy {}
-export interface Namespace { path: string; stat: Stats }
+export interface Namespace { path: string; stat: LockStat }
 export interface Entry extends Namespace { body: string }
 export function checkIdentity(saved: Namespace, deps: OwnerDeps): void {
   const current = deps.lstat(saved.path);
