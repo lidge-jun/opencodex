@@ -104,7 +104,10 @@ export function removeTomlRootReasoningEffort(content: string): string {
     throw new AgentRoleModelError("unsupported_model_value", "the existing model_reasoning_effort value is not a one-line string");
   }
   const lines = content.split("\n");
-  lines.splice(location.line, 1);
+  // A terminated line goes with its own newline. An unterminated last line is emptied instead,
+  // so the previous line keeps its terminator (and its \r in a CRLF file).
+  if (location.line < lines.length - 1) lines.splice(location.line, 1);
+  else lines[location.line] = "";
   const bom = location.line === 0 && content.startsWith("\ufeff") ? "\ufeff" : "";
   return bom + lines.join("\n");
 }

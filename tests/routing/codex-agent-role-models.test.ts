@@ -122,6 +122,13 @@ describe("removeTomlRootReasoningEffort", () => {
     expect(removeTomlRootReasoningEffort(content)).toBe(content);
     expect(removeTomlRootReasoningEffort("")).toBe("");
   });
+
+  test("an unterminated last effort line leaves the previous line's terminator intact", () => {
+    expect(removeTomlRootReasoningEffort('model = "m"\r\nkeep = 1\r\nmodel_reasoning_effort = "high"'))
+      .toBe('model = "m"\r\nkeep = 1\r\n');
+    expect(removeTomlRootReasoningEffort('model = "m"\nkeep = 1\nmodel_reasoning_effort = "high" # pin'))
+      .toBe('model = "m"\nkeep = 1\n');
+  });
 });
 
 describe("writeCodexAgentRoleModel", () => {
