@@ -320,6 +320,6 @@ Anthropic 来源的失败会以 Anthropic 的错误封装呈现，因此该方�
 
 发往标准 ChatGPT Codex `/responses` 的普通请求中，所有模型（包括 Sol、Luna、Astra）都会把未被同输入引用的剩余 `web_search_call` 历史转为带标签的 assistant 参考说明。新 thread、fork、跨模型续聊、缓存未命中或重启后都适用，不依赖诊断设置。只有有效同 scope bridge memo 能证明并先恢复原函数调用及结果；ID 前缀、模型名或 memo 缺失不能判断来源。若同输入的 `item_reference.id` 精确指向某 hosted cell，该 cell 保留；`store:false` 会先移除引用，剩余 hosted 历史可投影。工具声明、Lite `additional_tools`、选择、call/result 配对、推理/原生密文、非 hosted 顺序及调用方 raw 历史保持原契约。
 
-这是用户明确选择的**有损历史策略**，不是 hosted schema 非法或所有上游错误已修复的断言。说明标为不可信参考数据，复制 status/action 及 action 或顶层 sources 中允许的 URL/title/type，不是指令或网页正文；每字符串最多 2,048 个 UTF-16 单元、每列表 20 项、全部已投影说明共 65,536 字节，超出的 action 用省略说明替代，转换项不复制 ID 或未知字段。HTTP/SSE 与 WS 共用普通请求的最终 builder。
+这是当前实现默认采用的**有损历史策略**，不是 hosted schema 非法或所有上游错误已修复的断言。说明标为不可信参考数据，复制 status/action 及 action 或顶层 sources 中允许的 URL/title/type，不是指令或网页正文；每字符串最多 2,048 个 UTF-16 单元、每列表 20 项、全部已投影说明共 65,536 字节，超出的 action 用省略说明替代，转换项不复制 ID 或未知字段。HTTP/SSE 与 WS 共用普通请求的最终 builder。
 
 公开 OpenAI API 及其他目的地不新增普通或 native compact 投影。原生 `/responses/compact` 保持既有端点、账户清理及官方 opaque 输出路径，保留结构化 hosted 历史。portable/routed 摘要仍沿用原有触发条件与默认引用行为；共享 renderer 在这些既有路径中也补充顶层 sources 白名单保留。本次不增加重试、来源分类或新的 compaction summarizer。
