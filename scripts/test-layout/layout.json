@@ -1831,6 +1831,7 @@
     "tray-proxy.test.ts": "windows",
     "types-barrel-identity.test.ts": "config",
     "ultrafast-tier-honesty.test.ts": "codex-integration",
+    "configured-ultrafast-picker.test.ts": "codex-integration",
     "umans-provider.test.ts": "providers",
     "uninstall.test.ts": "cli",
     "update-async-routes.test.ts": "server",

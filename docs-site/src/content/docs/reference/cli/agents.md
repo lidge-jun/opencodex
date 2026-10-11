@@ -1043,15 +1043,6 @@ to the exact provider/model slug; they are not copied to other models. The setti
 does not create missing declarations or restore removed models. Turning it off
 removes Ultra Fast from ordinary routed rows on the next catalog regeneration.
 
-In the dashboard, open **Models → Model settings** to find **Ultra Fast service
-tier** beside **Show Fast model rows**, regardless of the picker ordering mode.
-The existing Codex multi-auth Advanced setting controls the same flag.
-The switch reads back the saved value from the selected management target before
-showing success. An unreadable setting disables the switch until **Retry**
-succeeds. This confirms the retention preference, not a new speed choice or a
-client reload; Ultra Fast still requires an existing operator-supplied declaration
-for that exact routed model.
-
 ```bash
 ocx system settings --json
 ocx system settings --show-codex-credits on --json

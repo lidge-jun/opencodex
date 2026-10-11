@@ -1112,6 +1112,7 @@
   "translator-budget.test.ts": "adapters", "translator-budget-lifetime.test.ts": "adapters", "catalog-async-lifetime.test.ts": "codex-integration", "transport-null-body.test.ts": "lib",
   "tray-proxy-deadline.test.ts": "windows", "tray-proxy.test.ts": "windows",
   "types-barrel-identity.test.ts": "config", "ultrafast-tier-honesty.test.ts": "codex-integration",
+  "configured-ultrafast-picker.test.ts": "codex-integration",
   "umans-provider.test.ts": "providers", "uninstall.test.ts": "cli",
   "update-async-routes.test.ts": "server", "update-badge.test.ts": "update",
   "update-bun-ownership-lease.test.ts": "update", "update-desktop-badge.test.ts": "update",

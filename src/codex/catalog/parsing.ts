@@ -139,6 +139,8 @@ export interface CatalogModel {
   supportsVerbosity?: boolean;
   /** Whether this exact routed model has a verified OpenAI-compatible service tier. */
   supportsServiceTier?: boolean;
+  /** Captured eligible service-tier wire explicitly maps ultrafast to ultrafast. */
+  supportsUltraFastTier?: boolean;
   /** Optional provider-specific copy for the advertised Fast tier. */
   fastTierDescription?: string;
   supportsReasoningSummaries?: boolean;

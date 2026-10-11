@@ -243,18 +243,6 @@ Codex 앱 안에서 실행 중이면 넘길 수 없는 handoff를 약속하지 �
 ocx system settings --stream-mode eager-relay
 ```
 
-Ultra Fast 보존 설정은 대시보드의 **모델 → 모델 설정**에서 **빠른 모델 행 표시**
-옆에 있는 **Ultra Fast 서비스 티어**로 변경할 수 있습니다. 모델 정렬 방식을
-사용자 지정으로 바꾸지 않아도 보이며, 기존 Codex 다중 인증의 고급 설정과 같은
-값을 사용합니다. CLI에서는 `ocx system settings --ultra-fast-tier on|off`로 변경합니다.
-
-이 설정은 해당 provider/model에 직접 선언한 `ultrafast` 서비스 티어를 카탈로그
-재생성 시 보존합니다. 미지원 모델에 새 속도 선택지를 만들거나 사용 권한을
-부여하지 않으며, 끄면 다음 카탈로그 재생성 때 선언이 제거됩니다.
-대시보드는 선택한 관리 대상에서 저장값을 다시 읽은 뒤 성공을 표시합니다.
-설정값을 읽지 못하면 **다시 시도**가 성공할 때까지 스위치가 비활성화됩니다.
-설정 저장 확인은 Codex 앱이 카탈로그를 다시 읽었다는 뜻은 아닙니다.
-
 `ocx system update`는 OpenCodex 자체를 업데이트합니다. Codex CLI는 다음의 별도 읽기 전용 명령으로 점검합니다.
 
 ```bash

@@ -1,7 +1,8 @@
 # Dashboard Surfaces And Usage
 
-Dashboard page contracts, usage accounting, request metrics and their management settings.
-Serving, authentication and `/api/*` ownership are in [GUI and management API](gui-and-management-api.md).
+Dashboard page contracts, usage accounting and request metrics, and the management settings that
+back individual dashboard surfaces. Serving, authentication boundaries, and `/api/*` ownership are
+in [GUI and management API](gui-and-management-api.md).
 
 ## UX boundary
 
@@ -17,19 +18,16 @@ Codex account panels expose no Spark quota toggle or setting and retain quota re
 
 ## Dashboard surfaces
 
-Models exposes [Ultra Fast retention](catalog.md#shared-catalog) beside Fast rows in Model settings for
-every picker order; Codex multi-auth Advanced retains the same control. No provider capability is added.
-The switch requires boolean GET observations; PUT omits `ultraFastTier`, so only an accepted write and
-matching same-target read-back reports success. Unreadable state disables writes until retry; stale polls
-and other-target completions are fenced. Coverage: `gui/tests/ultrafast-tier-setting.test.tsx`.
+Dashboard localization uses the English `gui/src/i18n/en.ts` catalog as the complete key and
+placeholder contract. Every registered locale, including Vietnamese and Brazilian Portuguese (`pt`, HTML `pt-BR`), supplies the same keys;
+locale-specific Compatibility Lab, log-guard, routing, vision, status-code, and quota-formatting
+maps remain total rather than silently falling back to English.
 
-Dashboard localization follows `gui/src/i18n/en.ts`'s complete key and placeholder contract.
-Every locale, including Vietnamese and Brazilian Portuguese (`pt`, HTML `pt-BR`), has the same keys and
-total Compatibility Lab, log-guard, routing, vision, status-code and quota-formatting maps without English fallback.
-
-The Models catalog distinguishes hub save, client fetch and runtime activation. A successful mutation
-confirms only hub save. `gui/src/api-targets.ts` supplies `catalogSyncedAt` to `gui/src/pages/Models.tsx` as
-the last client fetch, not proof it contains a later save. Process/file age cannot acknowledge runtime activation.
+The Models catalog names three distinct delivery states. A successful management mutation confirms
+only that the catalog is saved on the hub. `gui/src/api-targets.ts` carries the local machine's
+`catalogSyncedAt` into `gui/src/pages/Models.tsx` as the time this client last fetched a catalog; the
+timestamp does not prove that fetch contains a later hub save. Runtime activation remains explicitly
+unverified because process age and catalog-file age are not client acknowledgement.
 
 `src/server/management/api-access.ts` publishes an `audio` projection through the
 existing `/api/keys` response in `src/server/management/oauth-account-routes.ts`.

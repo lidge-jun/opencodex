@@ -112,9 +112,9 @@ to the native default singleton. A default must belong to the projected list. Fu
 is still not inferred from a GPT name. Stored configuration and native capability maps are
 unchanged. Request-time native effort clamps remain canonical-forward only.
 
-The shared merge preserves operator-supplied Ultra Fast metadata through `src/codex/catalog/operator-tiers.ts` when the writer explicitly passes the enabled `ultraFastTier` setting. Only an exact persisted routed slug supplies that
-metadata; native templates, baseline backups, account rows and combo aliases are not sources. The overlay runs after admission and fresh capability generation, preserves Fast policy, and never creates a row or invents a tier. Disabling the
-flag removes Ultra Fast from ordinary routed rows. An explicit operator Ultra Fast default is retained only alongside a supplied tier declaration. Coverage: `tests/codex-integration/ultrafast-tier-honesty.test.ts`.
+The shared merge uses `src/codex/catalog/configured-tiers.ts` to project Ultra Fast into Codex's native speed picker only for an eligible captured service-tier wire explicitly mapping `ultrafast` to `ultrafast`. Both writers pass current exact routed slugs; templates, native/account rows and combos cannot grant the capability. Generated choices carry an exact-slug ownership marker so removing the declaration also removes stale generated tiers, even with operator retention enabled; publication leaves the default unchanged. Coverage: `tests/codex-integration/configured-ultrafast-picker.test.ts`.
+Separately, `src/codex/catalog/operator-tiers.ts` preserves a hand-supplied Ultra Fast tier from the exact persisted routed row only when `ultraFastTier` is enabled. Baselines and native templates cannot supply it. Current configured capability takes precedence; previously generated tiers cannot become operator evidence. Both overlays run after admission, preserve Fast policy and never create rows.
+Disabling `ultraFastTier` removes only independently supplied operator tiers; disabling the wire declaration removes generated ones. Operator defaults are retained only alongside an independently supplied tier declaration. Coverage: `tests/codex-integration/ultrafast-tier-honesty.test.ts`.
 
 The observed-state merge tracks the current invocation's freshly generated custom row objects
 after detaching its inputs. Those rows already own their complete reasoning projection, so the
