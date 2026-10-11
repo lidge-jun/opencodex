@@ -443,6 +443,8 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
   if (oauthBinding) logCtx.provider = formatAnthropicProviderForLog(route.providerName, oauthBinding.snapshot.accountId, config);
   const spendTracker = attachRequestSpendTracker(req, logCtx);
   const physicalBudget = createInferenceSendBudget(req, logCtx);
+  // Observe-only spend is already booked by the tracker; count billing sends without booking again.
+  let physicalSendsUsed = 0;
   let activeRequest: AnthropicMessagesPassthroughRequest;
   let retainedRequestBytes = 0;
   const releaseRetainedRequest = () => {
@@ -591,6 +593,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
               // exact incarnation across its await; a returned response can never reserve one.
               sendOwner = snapshot ? captureAnthropicPhysicalSendOwnership(snapshot) : null;
               if (snapshot && !sendOwner) throw new NativeOAuthSelectionChangedError();
+              physicalSendsUsed++;
               dispatched = await sendWithConnectionPolicy(
                 anthropicBillingPhysicalFetch((activeProvider as OcxProviderTransport).fetch ?? execute, route.providerName, activeProvider),
                 wire.url,
@@ -598,7 +601,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
                 { providerName: route.providerName, provider: activeProvider },
               );
             } finally {
-              try { spendReport(1); }
+              try { if (physicalBudget.spendEnforced) spendReport(1); }
               finally {
                 try { spendReport.close?.(); }
                 finally { releaseFamily(); }
@@ -644,7 +647,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     let retries = 0;
     let billingRecoveryActive = false;
     const keySendAvailable = () => transientSendAvailable()
-      && (!billingRecoveryActive || physicalBudget.used < physicalBudget.policy.maxTotalModelSends);
+      && (!billingRecoveryActive || Math.max(physicalSendsUsed, physicalBudget.used) < physicalBudget.policy.maxTotalModelSends);
     for (;;) {
       const priorResponse = response;
       // A credential-scoped 401 on a static key pool says nothing about the sibling keys.

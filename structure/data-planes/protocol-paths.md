@@ -257,7 +257,7 @@ transport side (send budget, failover, logging) is in
 
 ## Managed native Messages
 
-Native key-pool credit-balance refusals follow the same [Anthropic API-key billing contract](../providers-and-adapters.md#anthropic-api-key-billing-recovery) as translated Responses: immutable outgoing-key ownership, bounded pre-output inspection, key-401 cooldown and a shared physical-send ceiling, including under concurrency pacing. Cancellation and emitted text/tools never authorize another billing send.
+Native key-pool credit-balance refusals follow the same [Anthropic API-key billing contract](../providers/anthropic-key-billing.md) as translated Responses: immutable outgoing-key ownership, bounded pre-output inspection, key-401 cooldown and a shared physical-send ceiling, including under concurrency pacing. Cancellation and emitted text/tools never authorize another billing send.
 
 Behind `protocols.rollout.managedMessagesNative` (explicit policy defaults off). An enabled Anthropic
 pool supplies absent native flags for its settled provider under the [pool native preference](../providers/anthropic-account-pool.md#native-request-preference); explicit false/malformed flags remain off. A Messages request whose settled

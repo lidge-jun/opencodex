@@ -333,6 +333,18 @@
       ]
     },
     {
+      "path": "providers/anthropic-key-billing.md",
+      "tier": 4,
+      "title": "Anthropic API-key Billing Recovery",
+      "scope": "Exact billing refusal evidence, immutable physical credential ownership, pacing provenance and bounded pre-output key recovery.",
+      "documents": [
+        "src/providers/anthropic-billing-refusal.ts",
+        "src/providers/anthropic-billing-ownership.ts",
+        "src/providers/anthropic-billing-recovery.ts",
+        "src/providers/request-pacing.ts"
+      ]
+    },
+    {
       "path": "providers/anthropic-account-pool.md",
       "tier": 4,
       "title": "Anthropic Account Pool",
