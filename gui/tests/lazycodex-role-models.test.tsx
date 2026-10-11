@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
+import { validateAgentRoleEffort } from "../../src/codex/agent-role-models";
 
 const globals = ["document", "window", "navigator", "localStorage", "sessionStorage", "fetch", "IS_REACT_ACT_ENVIRONMENT"] as const;
 
@@ -60,6 +61,13 @@ beforeEach(() => {
       const body = JSON.parse(String(init.body));
       puts.push({ url, body });
       if (putFailure) return json(putFailure.body, putFailure.status);
+      if (body.effort !== undefined) {
+        try {
+          validateAgentRoleEffort(body.effort);
+        } catch {
+          return json({ error: "invalid effort", code: "invalid_effort" }, 400);
+        }
+      }
       const role = decodeURIComponent(url.slice(url.lastIndexOf("/") + 1));
       const current = rolesBody as { roles: Array<{ role: string; model: string | null; effort?: string | null }> };
       rolesBody = {
@@ -162,7 +170,7 @@ test("a failed effort list still loads the table and saves a model", async () =>
   await pick("explorer", "xai/grok-4.5");
   await act(async () => { saveButton("explorer").click(); });
   await settle();
-  expect(puts).toEqual([{ url: `${apiBase}/api/codex-agent-roles/explorer`, body: { model: "xai/grok-4.5", effort: "medium" } }]);
+  expect(puts).toEqual([{ url: `${apiBase}/api/codex-agent-roles/explorer`, body: { model: "xai/grok-4.5" } }]);
 });
 
 test("renders nothing and loads no model list when LazyCodex is not detected", async () => {
@@ -255,6 +263,43 @@ test("retrying a failed mirror after a failed reload resends the saved effort", 
   await settle();
   expect(puts.map(entry => entry.body)).toEqual([{ model: "gpt-5.5", effort: "high" }, { model: "gpt-5.5", effort: "high" }]);
 });
+
+test("a model-only save keeps an unchanged effort out of the PUT, even one the server would refuse", async () => {
+  pinExplorerEffort("future-provider-effort");
+  await mount();
+  expect(container.textContent).toContain("gpt-5.5 · future-provider-effort");
+  await pick("explorer", "xai/grok-4.5");
+  await act(async () => { saveButton("explorer").click(); });
+  await settle();
+  expect(puts.map(entry => entry.body)).toEqual([{ model: "xai/grok-4.5" }]);
+  expect(container.textContent).toContain("xai/grok-4.5 · future-provider-effort");
+  expect(container.textContent).not.toContain("Could not save");
+});
+
+test("none, minimal and ultra are efforts the role write accepts", () => {
+  for (const effort of ["none", "minimal", "ultra"]) expect(validateAgentRoleEffort(effort)).toBe(effort);
+  expect(() => validateAgentRoleEffort("future-provider-effort")).toThrow();
+});
+
+for (const reload of ["pending", "failed"] as const) {
+  test(`a model-only mirror retry still omits the effort after a ${reload} reload`, async () => {
+    pinExplorerEffort("future-provider-effort");
+    await mount();
+    omoWriteStatus = "write_failed";
+    let release = () => {};
+    if (reload === "pending") rolesHold = new Promise<void>(resolve => { release = resolve; });
+    else rolesFailure = { status: 500, body: { error: "unavailable" } };
+    await pick("explorer", "xai/grok-4.5");
+    await act(async () => { saveButton("explorer").click(); });
+    await settle();
+    expect(saveButton("explorer").textContent).toBe("Retry omo.jsonc");
+    await act(async () => { saveButton("explorer").click(); });
+    await settle();
+    expect(puts.map(entry => entry.body)).toEqual([{ model: "xai/grok-4.5" }, { model: "xai/grok-4.5" }]);
+    await act(async () => { release(); });
+    await settle();
+  });
+}
 
 test("a failed save shows the localized message rather than the server text", async () => {
   putFailure = { status: 500, body: { error: "EACCES: permission denied, open '/secret/path'", code: "write_failed" } };
