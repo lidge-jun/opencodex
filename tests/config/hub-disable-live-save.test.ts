@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { armClaudeCodeBaseline, getConfigPath, loadConfig, mutatePersistedConfig, saveConfig, saveConfigPreservingClaudeCode } from "../../src/config";
+import { armClaudeCodeBaseline, getConfigPath, loadConfig, mutatePersistedConfig, reconcileLiveConfigFromDisk, saveConfig, saveConfigPreservingClaudeCode } from "../../src/config";
 import { disableHubConfig, parseHubDisableArgs } from "../../src/cli/hub-disable";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -11,17 +11,19 @@ const key = (id: string) => ({ id, name: id, key: `ocx_data_${id.padEnd(40, "a")
 const seed = (): OcxConfig => ({
   port: 10100, hostname: "100.64.0.10", runtimeRole: "hub", logLevel: "debug",
   hub: { managementIngress: { enabled: true, port: 10102 } },
+  unauthenticatedLoopbackListener: { enabled: true, port: 10103 },
   providers: { fixture: { adapter: "openai-chat", baseUrl: "https://fixture.example.test" } },
   defaultProvider: "fixture", apiKeys: [key("client"), key("integration")],
 } as OcxConfig);
 
-function scenario(change: (live: OcxConfig) => void, changeDisk?: (disk: OcxConfig) => void): { live: OcxConfig; saved: OcxConfig } {
+function scenario(change: (live: OcxConfig) => void, changeDisk?: (disk: OcxConfig) => void, oauth = false): { live: OcxConfig; saved: OcxConfig } {
   const oldHome = process.env.OPENCODEX_HOME;
   const home = mkdtempSync(join(tmpdir(), "ocx-hub-live-save-"));
   process.env.OPENCODEX_HOME = home;
   try {
     saveConfig(seed());
     const live = loadConfig();
+    const persistedBaseline = structuredClone(live);
     armClaudeCodeBaseline(live);
     expect(mutatePersistedConfig(config => ({ changed: true, value: disableHubConfig(config, parseHubDisableArgs(["--revoke-clients", "--client-key", "client"])) })).status).toBe("committed");
     // Another cooperating writer adds a disjoint key before the stale live save.
@@ -30,6 +32,7 @@ function scenario(change: (live: OcxConfig) => void, changeDisk?: (disk: OcxConf
       changeDisk?.(config);
       return { changed: true, value: null };
     }).status).toBe("committed");
+    if (oauth) reconcileLiveConfigFromDisk(live, persistedBaseline);
     change(live);
     saveConfigPreservingClaudeCode(live);
     // Repeated saves must not consume the disk's desired listener deletion.
@@ -51,6 +54,9 @@ function expectDisabled(result: { live: OcxConfig; saved: OcxConfig }) {
   expect(result.saved.hostname).toBeUndefined();
   expect(result.saved.port).toBe(10100);
   expect(result.live.hostname).toBe("100.64.0.10"); // actual open socket identity
+  expect(result.live.runtimeRole).toBe("hub");
+  expect(result.live.hub).toEqual(seed().hub);
+  expect(result.live.unauthenticatedLoopbackListener).toEqual(seed().unauthenticatedLoopbackListener);
   expect(result.saved.configRebaseProvenance?.deletedTopLevelKeys).toContain("hostname");
 }
 
@@ -90,4 +96,14 @@ test("retained keys merge a live rename with a concurrent persisted rotation", (
   const result = scenario(live => { live.apiKeys![1]!.name = "live rename"; }, disk => { disk.apiKeys![0]!.pendingRotation = rotation; });
   expectDisabled(result);
   expect(result.saved.apiKeys!.find(entry => entry.id === "integration")).toMatchObject({ name: "live rename", pendingRotation: rotation });
+});
+
+test("persisted API-key order survives a live rename without membership or order edits", () => {
+  const result = scenario(live => { live.apiKeys![1]!.name = "live rename"; }, disk => { disk.apiKeys!.reverse(); });
+  expect(result.saved.apiKeys!.map(entry => entry.id)).toEqual(["external", "integration"]);
+  expect(result.saved.apiKeys![1]!.name).toBe("live rename");
+});
+
+test("OAuth disk adoption keeps the running hub topology until restart", () => {
+  expectDisabled(scenario(live => { live.logLevel = "info"; }, undefined, true));
 });

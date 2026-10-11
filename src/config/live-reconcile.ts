@@ -43,6 +43,7 @@ const claudeCodeBaseline = new WeakMap<OcxConfig, unknown>();
  * reconciliation paths below.
  */
 const liveConfigBaseline = new WeakMap<OcxConfig, OcxConfig>();
+const LIVE_TOPOLOGY_KEYS = new Set(["hostname", "port", "runtimeRole", "hub", "unauthenticatedLoopbackListener"]);
 
 /** Adopt a committed manual selection without advancing unrelated live merge baselines. */
 export function adoptPersistedCodexAccountSelection(
@@ -407,7 +408,7 @@ export function reconcileLiveConfigFromDisk(config: OcxConfig, persistedBaseline
     config as unknown as Record<string, unknown>,
     persistedBaseline as unknown as Record<string, unknown>,
     persisted as unknown as Record<string, unknown>,
-    new Set(["hostname", "port", ...(claudeGuardArmed ? ["claudeCode"] : [])]),
+    new Set([...LIVE_TOPOLOGY_KEYS, ...(claudeGuardArmed ? ["claudeCode"] : [])]),
   );
   applyConfigObjectChildDeletions(config, childDeletions);
 
@@ -490,14 +491,14 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
         diskDeletedKeys = configRebaseDeletionKeys(persistedDiagnostics.config);
         // Preserve explicit pending live edits; stale retention is not an edit.
         if (!detached) for (const key of diskDeletedKeys) {
-          if (key !== "hostname" && key !== "port" && !deepEqual(
+          if (!LIVE_TOPOLOGY_KEYS.has(key) && !deepEqual(
             ownConfigValue(config as unknown as Record<string, unknown>, key),
             ownConfigValue(baseline as unknown as Record<string, unknown>, key))) diskDeletedKeys.delete(key);
         }
         const deletedKeys = new Set([...diskDeletedKeys, ...configRebaseDeletionKeys(config)]);
         const skipped = detached
           ? new Set(["claudeCode"])
-          : new Set(["hostname", "port", "claudeCode", CONFIG_REBASE_PROVENANCE_KEY]);
+          : new Set([...LIVE_TOPOLOGY_KEYS, "claudeCode", CONFIG_REBASE_PROVENANCE_KEY]);
         if (!detached) {
           const provenanceExists = configHasRebaseProvenance(config) || configHasRebaseProvenance(persistedDiagnostics.config);
           // Only keys this live config is actually known to have diverged on may be
@@ -528,7 +529,7 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
           skipped,
         );
         for (const key of deletedKeys) {
-          if (!detached && (key === "hostname" || key === "port")) continue;
+          if (!detached && LIVE_TOPOLOGY_KEYS.has(key)) continue;
           delete (config as unknown as Record<string, unknown>)[key];
         }
       }
@@ -554,7 +555,7 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
     const provenanceProjection = projectConfigRebaseProvenance(durableProjection);
     const projectedConfig = projectCustomModelCatalogMigration(
       onDisk,
-      config,
+      durableProjection,
     );
     if (provenanceProjection.configRebaseProvenance === undefined) delete projectedConfig.configRebaseProvenance;
     else projectedConfig.configRebaseProvenance = provenanceProjection.configRebaseProvenance;

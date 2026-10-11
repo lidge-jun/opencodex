@@ -20,7 +20,10 @@ export function reconcileApiKeys(
   const before = index(baseline), pending = index(live), disk = index(persisted);
   if (!before || !pending || !disk) return null;
   const merged: KeyRecord[] = [];
-  for (const id of new Set([...pending.keys(), ...disk.keys()])) {
+  const liveOrder = [...pending.keys()], diskOrder = [...disk.keys()];
+  const order = JSON.stringify(liveOrder) === JSON.stringify([...before.keys()])
+    ? [...diskOrder, ...liveOrder] : [...liveOrder, ...diskOrder];
+  for (const id of new Set(order)) {
     const local = pending.get(id), saved = disk.get(id);
     if (before.has(id) && (!local || !saved)) continue;
     const row = structuredClone(local ?? saved!);
