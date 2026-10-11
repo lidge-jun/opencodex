@@ -51,8 +51,7 @@ function fixture(platform = "Darwin") {
   };
 }
 
-test.skipIf(process.platform === "win32")("remote sh tries Desktop, system, PATH and generic candidates in order, skipping failed versions", () => {
-  for (let winner = 0; winner < 9; winner++) {
+test.skipIf(process.platform === "win32").each([0, 1, 2, 3, 4, 5, 6, 7, 8])("remote sh chooses candidate %i in Desktop/system/PATH order, skipping failed versions", winner => {
     const f = fixture(winner % 2 ? "Linux" : "Darwin");
     for (let index = 0; index < 9; index++) f.install(index, index < winner);
     const args = ["link", "issue", "--alias", "it's x", "two\nlines", "火🔥", "x;$(echo no)", "", "--json"];
@@ -60,7 +59,6 @@ test.skipIf(process.platform === "win32")("remote sh tries Desktop, system, PATH
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toEqual(new TextEncoder().encode(`${winner}\n${args.join("\0")}\0`));
     expect(result.stderr.toString()).toBe("");
-  }
 });
 
 test.skipIf(process.platform === "win32")("remote sh skips absent and non-executable Desktop candidates", () => {

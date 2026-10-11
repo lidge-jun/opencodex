@@ -89,3 +89,6 @@ ocx link reconnect --link-id <id> [--json]
 
 - [Развёртывание Remote Hub](/ru/guides/remote-hub/)
 - [Удалённое рабочее пространство](/ru/guides/remote-workspace/)
+
+
+`ocx link probe <alias> --json` · `ocx link add <alias> --expect-fingerprint SHA256:… --json` — [CLI, restart, relay verification and recovery](/guides/remote-link/#add-a-child-from-the-terminal).

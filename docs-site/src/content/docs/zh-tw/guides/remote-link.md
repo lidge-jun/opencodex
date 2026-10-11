@@ -89,3 +89,6 @@ ocx link reconnect --link-id <id> [--json]
 
 - [Remote Hub 部署](/zh-tw/guides/remote-hub/)
 - [遠端工作區](/zh-tw/guides/remote-workspace/)
+
+
+`ocx link probe <alias> --json` · `ocx link add <alias> --expect-fingerprint SHA256:… --json` — [CLI, restart, relay verification and recovery](/guides/remote-link/#add-a-child-from-the-terminal).

@@ -273,10 +273,12 @@ describe("ocx link", () => {
     }
   });
 
-  test("registers the canonical command and all five capability leaves", () => {
+  test("registers the canonical command and all seven capability leaves", () => {
     expect(findCommand("link")?.name).toBe("link");
     expect(DISPATCH_COMMANDS).toContain("link");
     expect(CAPABILITIES.filter(cap => cap.command[0] === "link").map(cap => cap.command.join(" "))).toEqual([
+      "link probe",
+      "link add",
       "link port",
       "link issue",
       "link status",

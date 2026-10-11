@@ -89,3 +89,6 @@ ocx link reconnect --link-id <id> [--json]
 
 - [Remote Hub のデプロイ](/ja/guides/remote-hub/)
 - [リモートワークスペース](/ja/guides/remote-workspace/)
+
+
+端末では `ocx link probe <alias> --json` で指紋とバージョンを確認し、`ocx link add <alias> --expect-fingerprint SHA256:… --json` で接続できます。指紋を省略すると対話端末で明示的な確認が必要です。Home は Child の再起動サポートと curl を事前確認し、接続後に再起動と実際のリレーを検証します。Child 設定が残った場合は Child で `ocx disconnect` と `ocx restart` を実行してください。[詳細（英語）](/guides/remote-link/#add-a-child-from-the-terminal)。
