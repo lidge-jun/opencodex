@@ -79,13 +79,15 @@ Child использует через связь провайдеров и уч�
 
 ```text
 ocx link probe <alias> [--json]
-ocx link add <alias> --expect-fingerprint SHA256:… [--json]
+ocx link add <alias> [--expect-fingerprint SHA256:…] [--json]
 ocx link port [--json]
 ocx link issue --alias <alias> --tunnel-port <port> [--json]
 ocx link status [--json]
 ocx link revoke --link-id <id> [--json]
 ocx link reconnect --link-id <id> [--json]
 ```
+
+Без интерактивного терминала (TTY) параметр `--expect-fingerprint` обязателен. В интерактивном терминале его можно опустить, если явно подтвердить предложенный отпечаток.
 
 ## Связанные руководства
 

@@ -79,13 +79,15 @@ Child, bağlantı üzerinden Home bilgisayarının sağlayıcılarını ve sağl
 
 ```text
 ocx link probe <alias> [--json]
-ocx link add <alias> --expect-fingerprint SHA256:… [--json]
+ocx link add <alias> [--expect-fingerprint SHA256:…] [--json]
 ocx link port [--json]
 ocx link issue --alias <alias> --tunnel-port <port> [--json]
 ocx link status [--json]
 ocx link revoke --link-id <id> [--json]
 ocx link reconnect --link-id <id> [--json]
 ```
+
+TTY olmayan kullanımda `--expect-fingerprint` zorunludur. Etkileşimli bir terminalde sunulan parmak izini açıkça onaylayarak bu seçeneği atlayabilirsiniz.
 
 ## İlgili kılavuzlar
 

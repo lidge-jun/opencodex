@@ -79,13 +79,15 @@ Child はリンクを通じて Home コンピューターのプロバイダー�
 
 ```text
 ocx link probe <alias> [--json]
-ocx link add <alias> --expect-fingerprint SHA256:… [--json]
+ocx link add <alias> [--expect-fingerprint SHA256:…] [--json]
 ocx link port [--json]
 ocx link issue --alias <alias> --tunnel-port <port> [--json]
 ocx link status [--json]
 ocx link revoke --link-id <id> [--json]
 ocx link reconnect --link-id <id> [--json]
 ```
+
+対話型端末（TTY）でない場合、`--expect-fingerprint` は必須です。対話型端末では省略できますが、提示されたフィンガープリントを明示的に承認する必要があります。
 
 ## 関連ガイド
 

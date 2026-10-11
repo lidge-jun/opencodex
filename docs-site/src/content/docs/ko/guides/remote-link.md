@@ -79,13 +79,15 @@ Child는 링크를 통해 Home 컴퓨터의 프로바이더와 프로바이더 �
 
 ```text
 ocx link probe <alias> [--json]
-ocx link add <alias> --expect-fingerprint SHA256:… [--json]
+ocx link add <alias> [--expect-fingerprint SHA256:…] [--json]
 ocx link port [--json]
 ocx link issue --alias <alias> --tunnel-port <port> [--json]
 ocx link status [--json]
 ocx link revoke --link-id <id> [--json]
 ocx link reconnect --link-id <id> [--json]
 ```
+
+비대화형 실행(TTY 없음)에서는 `--expect-fingerprint`가 필수입니다. 대화형 터미널에서는 옵션을 생략할 수 있지만, 제시된 지문을 명시적으로 확인해야 합니다.
 
 ## 관련 가이드
 

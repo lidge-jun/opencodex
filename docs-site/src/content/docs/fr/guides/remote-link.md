@@ -79,13 +79,15 @@ Child utilise les fournisseurs et les identifiants de fournisseur de l’ordinat
 
 ```text
 ocx link probe <alias> [--json]
-ocx link add <alias> --expect-fingerprint SHA256:… [--json]
+ocx link add <alias> [--expect-fingerprint SHA256:…] [--json]
 ocx link port [--json]
 ocx link issue --alias <alias> --tunnel-port <port> [--json]
 ocx link status [--json]
 ocx link revoke --link-id <id> [--json]
 ocx link reconnect --link-id <id> [--json]
 ```
+
+Sans terminal interactif (TTY), `--expect-fingerprint` est obligatoire. Dans un terminal interactif, vous pouvez l’omettre si vous confirmez explicitement l’empreinte proposée.
 
 ## Guides associés
 
