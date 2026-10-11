@@ -34,5 +34,5 @@ export function isChildHealth(value: unknown, role: "standalone" | "client", exp
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const body = value as Record<string, unknown>;
   return body.port === expectedPort && body.service === "opencodex" && Number.isInteger(body.pid) && (body.pid as number) > 0
-    && (role === "client" ? body.role === "client" : body.role !== "client" && body.restartCapability === "v1");
+    && (role === "client" ? body.role === "client" : (body.role === undefined || body.role === "standalone") && body.restartCapability === "v1");
 }

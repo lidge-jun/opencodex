@@ -26,6 +26,8 @@ export interface LinkStatusDto {
   };
 }
 
+export interface ClientLinkIdentity { direction: "hub-initiated" | "client-initiated"; alias?: string }
+
 export interface LinkListenerStatusProjection {
   state: "off" | "listening" | "failed";
   port: number | null;
@@ -72,6 +74,7 @@ export function projectLinkStatus(
   config: LinkStatusConfig,
   compensation: CompensationStore = readCompensation(),
   clientChild: LinkStatusDto["child"] = null,
+  identity: ClientLinkIdentity | null = null,
 ): LinkStatusDto {
   const byId = new Map(supervisorStates.map(status => [status.linkId, status]));
   const links = store.links.map(record => ({
@@ -93,9 +96,9 @@ export function projectLinkStatus(
   // identity and port, while an optional caller observation supplies live tunnel state.
   const client = config.runtimeRole === "client" && config.client?.transport === "link" ? config.client : undefined;
   const child = projectedClientChild ?? (childRecord && childStatus ? { alias: childRecord.alias, ...childStatus }
-    : client?.link ? { alias: client.serverUrl, state: "idle" as const, since: client.connectedAt, reason: null } : null);
-  if (links.length === 0 && client?.link && child) {
-    links.push({ id: client.link.linkId, direction: "hub-initiated", tunnelPort: client.link.tunnelPort, ...child });
+    : client?.link ? { alias: identity?.alias ?? client.serverUrl, state: "idle" as const, since: client.connectedAt, reason: null } : null);
+  if (links.length === 0 && client?.link && child && identity) {
+    links.push({ id: client.link.linkId, direction: identity.direction, tunnelPort: client.link.tunnelPort, ...child, alias: identity.alias ?? child.alias });
   }
   return {
     role,

@@ -83,7 +83,7 @@ function harness() {
         : command === "true" ? "probe"
         : command === ocx(["--version"]) ? "version"
         : command === ocx(["link", "port"]) ? "port"
-        : command === ocx(["config", "get", "port"]) ? "config"
+        : command === ocx(["config", "show", "--json"]) ? "config"
         : command.includes("ocx-curl-preflight") ? "curl"
         : command.includes("'connect' '--link' '--key-stdin'") ? "connect"
         : command === ocx(["restart"]) ? "restart"
@@ -112,7 +112,7 @@ function harness() {
         case "fingerprint": return result(`256 ${fingerprint} child (ED25519)`);
         case "version": return result("opencodex 2.83.0\n");
         case "port": return result('{"port":2200}');
-        case "config": return result("10100\n");
+        case "config": return result('{"port":10100}\n');
         case "curl": case "connect": return result();
         case "before": return health("standalone");
         case "restart": return result();
@@ -272,6 +272,9 @@ describe("Home enrollment of a standalone Child", () => {
   });
 
   for (const [name, step, output, code, status] of [
+    ["effective Hub configuration", "config", result('{"port":10100,"runtimeRole":"hub"}'), "child_restart_unsupported", 409],
+    ["explicit Hub health", "before", health("hub"), "child_restart_unsupported", 409],
+    ["effective client configuration", "config", result('{"port":10100,"runtimeRole":"client"}'), "child_restart_unsupported", 409],
     ["missing restart capability", "before", health("standalone", null), "child_restart_unsupported", 409],
     ["health on a different configured port", "before", http({ service: "opencodex", pid: 4321, port: 10101, role: "standalone", restartCapability: "v1" }), "child_restart_unsupported", 409],
     ["missing curl", "curl", result("", 127), "child_curl_missing", 409],

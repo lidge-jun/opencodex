@@ -138,9 +138,12 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
       const remotePort = parsePort(chosen.stdout);
       if (!remotePort) return fail("remote_port_failed", "The remote link port could not be determined.", 502);
       phase = "child_preflight";
-      const configured = await run(remoteOcxArgv(["config", "get", "port"]));
-      const childPort = /^\d{1,5}$/.test(configured.stdout.trim()) ? Number(configured.stdout.trim()) : 0;
-      if (configured.code !== 0 || !port(childPort)) return fail("child_preflight_failed", "The Child configured port could not be read.", 502);
+      const configured = await run(remoteOcxArgv(["config", "show", "--json"]));
+      let childConfig: unknown = null;
+      try { if (configured.code === 0) childConfig = JSON.parse(configured.stdout); } catch { /* fail closed */ }
+      if (!isRecord(childConfig) || !port(childConfig.port)) return fail("child_preflight_failed", "The Child effective configuration could not be read.", 502);
+      if ((childConfig.runtimeRole ?? "standalone") !== "standalone") return fail("child_restart_unsupported", "The Child must run standalone OpenCodex; an existing Hub or Child cannot be converted by Add Child.", 409);
+      const childPort = childConfig.port;
       if ((await run(REMOTE_CURL_PREFLIGHT)).code !== 0) return fail("child_curl_missing", "Install curl on the Child before connecting a Remote Link.", 409);
       const before = await run(remoteChildHttpArgv(childPort, "healthz"));
       const beforeHealth = before.code === 0 ? parseChildHttp(before.stdout) : null;

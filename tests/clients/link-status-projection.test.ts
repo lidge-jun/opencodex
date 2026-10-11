@@ -1,3 +1,9 @@
+import { mkdtempSync, writeFileSync, unlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { clientLinkStatusIdentity } from "../../src/client/link-status";
+import { clientLinkStatePath, childLinkMarkerPath, writeClientLinkState } from "../../src/client/link-state";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { expect, test } from "bun:test";
 import { projectLinkStatus } from "../../src/link/status-projection";
 import type { LinkStore } from "../../src/link/store";
@@ -83,7 +89,7 @@ test.each(["connected", "reconnecting", "failed"] as const)("an empty-store Home
     runtimeRole: "client",
     client: { transport: "link", serverUrl: "http://127.0.0.1:19002", connectedAt: store.links[0]!.createdAt,
       link: { linkId: store.links[0]!.id, tunnelPort: 19002 } },
-  }, { version: 1, entries: {} }, clientChild);
+  }, { version: 1, entries: {} }, clientChild, { direction: "hub-initiated" });
   expect(dto).toEqual({
     role: "child", listener: { state: "off", port: null },
     links: [{ id: store.links[0]!.id, direction: "hub-initiated", tunnelPort: 19002, ...clientChild }],
@@ -95,10 +101,30 @@ test("an empty-store link config identifies a Child without claiming a live tunn
   const config = { runtimeRole: "client" as const,
     client: { transport: "link" as const, serverUrl: "http://127.0.0.1:19002", connectedAt: store.links[0]!.createdAt,
       link: { linkId: store.links[0]!.id, tunnelPort: 19002 } } };
-  const dto = projectLinkStatus({ ...store, links: [] }, [], { state: "off", port: null }, config, { version: 1, entries: {} });
+  const dto = projectLinkStatus({ ...store, links: [] }, [], { state: "off", port: null }, config, { version: 1, entries: {} }, null, { direction: "hub-initiated" });
   expect(dto.child).toEqual({ alias: "http://127.0.0.1:19002", state: "idle", since: store.links[0]!.createdAt, reason: null });
   expect(dto.links[0]).toMatchObject({ direction: "hub-initiated", tunnelPort: 19002, state: "idle" });
   expect(projectLinkStatus({ ...store, links: [] }, [], { state: "off", port: null }, {
     ...config, runtimeRole: "standalone",
   }, { version: 1, entries: {} }).role).toBe("standalone");
+});
+
+test("client-owned sidecar distinguishes normal Child initiation; unreadable/mismatched evidence stays unknown", () => {
+  const oldHome = process.env.OPENCODEX_HOME;
+  const home = mkdtempSync(join(tmpdir(), "ocx-link-direction-")); process.env.OPENCODEX_HOME = home;
+  try {
+    const linkId = store.links[0]!.id;
+    const config = { runtimeRole: "client" as const, client: { transport: "link" as const,
+      serverUrl: "http://127.0.0.1:19002", connectedAt: store.links[0]!.createdAt, link: { linkId, tunnelPort: 19002 } } };
+    const project = () => projectLinkStatus({ ...store, links: [] }, [], { state: "off", port: null }, config,
+      { version: 1, entries: {} }, null, clientLinkStatusIdentity(linkId));
+    expect(project().links[0]?.direction).toBe("hub-initiated");
+    writeClientLinkState({ linkId, alias: "known-home", hubHostKeyFingerprint: "SHA256:abcdefghijklmnop", peerListenerPort: 19001, tunnelPort: 19002 });
+    expect(project().links[0]).toMatchObject({ direction: "client-initiated", alias: "known-home", tunnelPort: 19002 });
+    expect(project().child?.alias).toBe("known-home");
+    expect(clientLinkStatusIdentity("lnk_ffffffffffffffff")).toBeNull();
+    writeFileSync(clientLinkStatePath(), "broken"); expect(project().links).toEqual([]);
+    unlinkSync(clientLinkStatePath()); writeFileSync(childLinkMarkerPath(), "broken");
+    expect(project().links).toEqual([]);
+  } finally { if (oldHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = oldHome; removeTreeWithRetry(home); }
 });

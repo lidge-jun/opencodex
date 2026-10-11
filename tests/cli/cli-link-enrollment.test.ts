@@ -98,6 +98,7 @@ describe("CLI Remote Link enrollment", () => {
       delete h.deps.baseUrl; h.deps.findLiveProxy = async () => null;
       h.deps.readStore = () => ({ version: 1, listenerPort: null, links: [] });
       h.deps.readConfig = () => ({ runtimeRole: "client", client: { transport: "link", serverUrl: "http://127.0.0.1:19200", connectedAt: "2026-10-11T00:00:00Z", link: { linkId, tunnelPort: 19200 } } });
+      h.deps.readClientLinkIdentity = () => ({ direction: "hub-initiated" });
       h.deps.readChildStatus = () => ({ alias: "Home", state: "failed", since: "2026-10-11T01:00:00Z", reason: "sidecar_invalid" });
       expect(await runLinkCommand(["status", "--json"], h.deps)).toBe(0);
       const value = JSON.parse(h.out[0]!); expect(value.role).toBe("child"); expect(value.links[0]).toMatchObject({ id: linkId, tunnelPort: 19200, state: "failed" }); expect(value.child.state).toBe("failed");

@@ -127,6 +127,8 @@ export function writeCachedHubState(owner: HubStateOwner, state: HubStateDTO, fe
 export function hubStateFailureReason(error: unknown): string {
   if (error instanceof HubClientError) {
     switch (error.code) {
+      case "hub_state_not_a_hub":
+        return "Remote Link Home does not publish hub state";
       case "hub_state_unsupported":
         return "this hub is too old to report its state; upgrade the hub";
       case "hub_state_unauthorized":
@@ -214,6 +216,7 @@ export async function resolveHubState(options: ResolveHubStateOptions): Promise<
   } catch (error) {
     // Deliberately no local-state fallback here. A stale cache is still the HUB's state; the
     // client's own providers and logins are not, at any age.
+    if (error instanceof HubClientError && error.code === "hub_state_not_a_hub") return withAge("unavailable", null, undefined, now, hubStateFailureReason(error));
     return fromCache(hubStateFailureReason(error));
   }
   const fetchedAt = new Date(now).toISOString();

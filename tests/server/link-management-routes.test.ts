@@ -89,7 +89,7 @@ function harness() {
 }
 
 function childProbe(remote: string, h: ReturnType<typeof harness>): SshRunResult | null {
-  if (remote === remoteOcx(["config", "get", "port"])) return { code: 0, stdout: "10100", stderr: "" };
+  if (remote === remoteOcx(["config", "show", "--json"])) return { code: 0, stdout: '{"port":10100}', stderr: "" };
   if (remote === quoteRemote(REMOTE_CURL_PREFLIGHT)) return { code: 0, stdout: "", stderr: "" };
   if (remote === remoteOcx(["restart"])) { h.events.push("child-restart"); return { code: 0, stdout: "", stderr: "" }; }
   if (remote === quoteRemote(remoteChildHttpArgv(10100, "healthz"))) return { code: 0, stdout: JSON.stringify({ service: "opencodex", pid: 123, port: 10100, ...(h.events.includes("child-restart") ? { role: "client" } : { restartCapability: "v1" }) }) + "\n200", stderr: "" };

@@ -1,6 +1,7 @@
+import { clientLinkStatusIdentity } from "../client/link-status";
 import { clientLinkTunnelStatus } from "../client/link-tunnel";
 import { loadConfig } from "../config";
-import { projectLinkStatus, type LinkStatusConfig, type LinkStatusDto } from "../link/status-projection";
+import { projectLinkStatus, type ClientLinkIdentity, type LinkStatusConfig, type LinkStatusDto } from "../link/status-projection";
 import { runLinkEnrollment } from "./link-enrollment";
 import { assertSshAlias } from "../link/ssh-argv";
 import { linkStorePath } from "../link/paths";
@@ -68,6 +69,7 @@ export interface LinkCliDeps extends RuntimeApiDeps {
   enrollmentTimeoutMs?: number;
   choosePort?: () => Promise<number>;
   readConfig?: () => LinkStatusConfig;
+  readClientLinkIdentity?: (linkId: string) => ClientLinkIdentity | null;
   readChildStatus?: () => LinkStatusDto["child"];
   confirmFingerprint?: (host: { alias: string; fingerprint: string; keyType: string }) => Promise<boolean>;
   readStore?: () => LinkStore;
@@ -185,8 +187,11 @@ function validateRevoke(value: unknown, expectedLinkId: string): void {
 }
 
 function localStatus(store: LinkStore, deps: LinkCliDeps): LinkStatusPayload {
+  const config = (deps.readConfig ?? loadConfig)();
+  const identity = config.client?.transport === "link" && config.client.link
+    ? (deps.readClientLinkIdentity ?? clientLinkStatusIdentity)(config.client.link.linkId) : null;
   return projectLinkStatus(store, [], { state: store.links.length > 0 && store.listenerPort !== null ? "listening" : "off", port: store.links.length > 0 ? store.listenerPort : null },
-    (deps.readConfig ?? loadConfig)(), { version: 1, entries: {} }, (deps.readChildStatus ?? clientLinkTunnelStatus)());
+    config, { version: 1, entries: {} }, (deps.readChildStatus ?? clientLinkTunnelStatus)(), identity);
 }
 
 async function linkRequest<T>(path: string, init: RequestInit, deps: LinkCliDeps): Promise<T> {

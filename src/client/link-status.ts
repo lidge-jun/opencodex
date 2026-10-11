@@ -1,3 +1,5 @@
+import { readClientLinkState, isChildInitiatedLink } from "./link-state";
+import type { ClientLinkIdentity } from "../link/status-projection";
 import type { LinkStatusDto } from "../link/status-projection";
 import type { ClientLinkState } from "./link-state";
 import type { ClientLinkSupervisorStatus } from "./link-tunnel";
@@ -36,4 +38,13 @@ function childState(sidecar: ClientLinkSidecarRead, supervisor: ClientLinkSuperv
     // a failed tunnel shows its own reason.
     reason: supervisor.probe ?? (tunnel.kind === "failed" ? tunnel.reason : null),
   };
+}
+
+/** Only client-owned evidence can establish who owns the tunnel. Unreadable evidence stays unknown. */
+export function clientLinkStatusIdentity(linkId: string): ClientLinkIdentity | null {
+  try {
+    const sidecar = readClientLinkState();
+    if (sidecar) return sidecar.linkId === linkId ? { direction: "client-initiated", alias: sidecar.alias } : null;
+    return isChildInitiatedLink(linkId) ? null : { direction: "hub-initiated" };
+  } catch { return null; }
 }
