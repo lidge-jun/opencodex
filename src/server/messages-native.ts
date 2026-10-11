@@ -115,6 +115,8 @@ import {
   type RequestLogContext,
 } from "./request-log";
 import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, sendWithConnectionPolicy } from "./responses/fetch-helpers";
+import { anthropicBillingPhysicalFetch } from "../providers/anthropic-billing-ownership";
+import { rotateAnthropicBillingKeyOnResponse } from "../providers/anthropic-billing-recovery";
 import { linkAbortSignal } from "./responses/core-lifetime";
 import { attachRequestSpendTracker } from "./responses/request-spend";
 import { workflowRefusalResponse } from "./workflow-refusal";
@@ -590,13 +592,13 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
               sendOwner = snapshot ? captureAnthropicPhysicalSendOwnership(snapshot) : null;
               if (snapshot && !sendOwner) throw new NativeOAuthSelectionChangedError();
               dispatched = await sendWithConnectionPolicy(
-                (activeProvider as OcxProviderTransport).fetch ?? execute,
+                anthropicBillingPhysicalFetch((activeProvider as OcxProviderTransport).fetch ?? execute, route.providerName, activeProvider),
                 wire.url,
                 applyUpstreamRecoveryInit({ ...init, method: "POST", headers, body: wire.body }, transportRecovery),
                 { providerName: route.providerName, provider: activeProvider },
               );
             } finally {
-              try { if (physicalBudget.spendEnforced) spendReport(1); }
+              try { spendReport(1); }
               finally {
                 try { spendReport.close?.(); }
                 finally { releaseFamily(); }
@@ -638,49 +640,67 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
   let response: Response;
   try {
     response = await send();
-    // A credential-scoped 401 on a static key pool says nothing about the sibling keys.
-    while (response.status === 401 && hasKeyPoolFailover(activeProvider) && transientSendAvailable()) {
-      const rotated = rotateProviderTransportOn401(config, route.providerName, activeProvider, {
-        now: Date.now(),
-        attemptedKey: activeProvider.apiKey,
-      });
-      if (!rotated) break;
-      discard(response);
-      rebuildFor(rotated);
-      response = await send("key-401");
-    }
     const retryPolicy = oauthBinding ? undefined : rateLimitRetryPolicyFor(activeProvider);
     let retries = 0;
-    // A refusal this proxy synthesized for a reset replay is not a provider rate limit.
-    while (
-      response.status === 429
-      && !isNonReplayableResponse(response)
-      && retryPolicy
-      && retries < retryPolicy.attempts
-      && transientSendAvailable()
-    ) {
-      retries += 1;
-      for await (const _ of prepareSameTarget429Wait({
-        body: response.body,
-        signal: upstream.signal,
-        delayMs: rateLimitRetryDelayMs(retryPolicy, response.headers.get("retry-after"), Date.now()),
-      })) { /* pre-stream wait */ }
-      if (upstream.signal.aborted) throw upstream.signal.reason;
-      response = await send("rate-limit-429");
-    }
-    while (response.status === 429 && !isNonReplayableResponse(response) && hasKeyPoolFailover(activeProvider)) {
-      const rotated = rotateProviderTransportOn429(config, route.providerName, activeProvider, {
-        retryAfter: response.headers.get("retry-after"),
-        now: Date.now(),
-        attemptedKey: activeProvider.apiKey,
-        attemptedSelection: activeProvider._apiKeyAttempt,
-      });
-      if (!rotated) break;
-      // Rotation already recorded the cooldown; keep the terminal 429 when no send remains.
-      if (!transientSendAvailable()) break;
-      discard(response);
-      rebuildFor(rotated);
-      response = await send("key-429");
+    let billingRecoveryActive = false;
+    const keySendAvailable = () => transientSendAvailable()
+      && (!billingRecoveryActive || physicalBudget.used < physicalBudget.policy.maxTotalModelSends);
+    for (;;) {
+      const priorResponse = response;
+      // A credential-scoped 401 on a static key pool says nothing about the sibling keys.
+      while (response.status === 401 && hasKeyPoolFailover(activeProvider) && keySendAvailable()) {
+        const rotated = rotateProviderTransportOn401(config, route.providerName, activeProvider, {
+          now: Date.now(),
+          attemptedKey: activeProvider.apiKey,
+        });
+        if (!rotated) break;
+        discard(response);
+        rebuildFor(rotated);
+        response = await send("key-401");
+      }
+      while ((response.status === 400 || response.status === 402) && hasKeyPoolFailover(activeProvider)) {
+        const rotated = await rotateAnthropicBillingKeyOnResponse(response, config, route.providerName, activeProvider, { signal: upstream.signal });
+        if (!rotated) break;
+        billingRecoveryActive = true;
+        if (!keySendAvailable()) break;
+        discard(response);
+        rebuildFor(rotated);
+        response = await send("key-401");
+      }
+      // A refusal this proxy synthesized for a reset replay is not a provider rate limit.
+      while (
+        response.status === 429
+        && !isNonReplayableResponse(response)
+        && retryPolicy
+        && retries < retryPolicy.attempts
+        && keySendAvailable()
+      ) {
+        retries += 1;
+        for await (const _ of prepareSameTarget429Wait({
+          body: response.body,
+          signal: upstream.signal,
+          delayMs: rateLimitRetryDelayMs(retryPolicy, response.headers.get("retry-after"), Date.now()),
+        })) { /* pre-stream wait */ }
+        if (upstream.signal.aborted) throw upstream.signal.reason;
+        response = await send("rate-limit-429");
+      }
+      while (response.status === 429 && !isNonReplayableResponse(response) && hasKeyPoolFailover(activeProvider)) {
+        const rotated = rotateProviderTransportOn429(config, route.providerName, activeProvider, {
+          retryAfter: response.headers.get("retry-after"),
+          now: Date.now(),
+          attemptedKey: activeProvider.apiKey,
+          attemptedSelection: activeProvider._apiKeyAttempt,
+        });
+        if (!rotated) break;
+        // Rotation already recorded the cooldown; keep the terminal 429 when no send remains.
+        if (!keySendAvailable()) break;
+        discard(response);
+        rebuildFor(rotated);
+        response = await send("key-429");
+      }
+      // A sibling's next refusal may change class; the same counters survive that transition.
+      if (billingRecoveryActive && response !== priorResponse && [400, 402, 401, 429].includes(response.status)) continue;
+      break;
     }
     const oauthRetryKey = {};
     const triedAccountIds = new Set<string>();

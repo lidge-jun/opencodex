@@ -2,6 +2,10 @@
   "version": 1,
   "root": "tests",
   "explicit": {
+    "anthropic-billing-ownership.test.ts": "adapters/anthropic",
+    "server-anthropic-billing.test.ts": "server",
+    "router-anthropic-billing-failover.test.ts": "routing",
+    "anthropic-billing-refusal.test.ts": "adapters/anthropic",
     "messages-request-id-headers.test.ts": "claude-integration",
     "messages-request-id-endpoint.test.ts": "claude-integration",
     "anthropic-revoked-token.test.ts": "adapters/anthropic",

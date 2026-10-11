@@ -29,6 +29,7 @@ import { redactSecretString } from "../../lib/redact";
 import { rewriteUpstreamPolicyRefusal } from "./policy-refusal";
 import { withProviderRequestSlot } from "../../providers/request-pacing";
 import { providerFetch, fetchWithHeaderTimeout, safeHostLabel } from "./fetch-helpers";
+import { rotateAnthropicBillingKeyOnResponse } from "../../providers/anthropic-billing-recovery";
 import {
   transientRetryPolicyFor,
   resetReplayPolicyFor,
@@ -372,6 +373,7 @@ export async function prepareAdapterExchange(
       : transportState.oauth401ReplayAttempted ? "oauth-401" : undefined
     : undefined;
   let upstreamResponse: Response;
+  let billingRecoveryActive = false;
   let handoffPermit: ResponsesSendBudget["pendingHopPermit"];
   try {
     if (transportState.activeAdapter.fetchResponse) {
@@ -483,6 +485,7 @@ export async function prepareAdapterExchange(
           label: safeHostLabel(builtInitialRequest.url),
           claimAmbiguousResend: claimPreHeaderResend,
           ...(sendBudgetState.adapterSendBudget?.spendEnforced || options.comboDispatchPermit || transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt
+            || (route.provider.adapter === "anthropic" && hasKeyPoolFailover(route.provider))
             ? {
               // A pending compaction permit already booked this leg's first physical send.
               ...(transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt
@@ -691,7 +694,8 @@ export async function prepareAdapterExchange(
           const refetchWithPolicy = (route.provider.adapter === "google" || refetchTransientPolicy)
             ? fetchWithTransientRetry
             : fetchWithResetRetry;
-          const helperCountsSends = sendBudgetState.adapterSendBudget?.spendEnforced === true || refetchTransientPolicy !== null || resetReplayPolicyFor(route.provider) !== null;
+          const helperCountsSends = sendBudgetState.adapterSendBudget?.spendEnforced === true || refetchTransientPolicy !== null || resetReplayPolicyFor(route.provider) !== null
+            || billingRecoveryActive;
           const prepaid = sendBudgetState.pendingHopPermit;
           const configuredTotal = refetchTransientPolicy?.attempts;
           const refetchCap = transientSendCapFor(configuredTotal, sendBudgetState.targetSendsUsed);
@@ -1025,6 +1029,36 @@ export async function prepareAdapterExchange(
         if (isNonReplayableResponse(upstreamResponse)) continue recovery;
      }
 
+      while ((upstreamResponse.status === 400 || upstreamResponse.status === 402) && hasKeyPoolFailover(route.provider)) {
+        const rotated = await rotateAnthropicBillingKeyOnResponse(upstreamResponse, config, route.providerName, route.provider,
+          { signal: upstream.signal, promptCacheKey: parsed.options.promptCacheKey });
+        if (upstream.signal.aborted || options.abortSignal?.aborted) {
+          cleanupUpstreamAbort(); upstream.abort(); return clientCancelledResponse();
+        }
+        if (!rotated) break;
+        billingRecoveryActive = true;
+        const hop = reserveCredentialHop("auth-recovery", `${route.providerName}|${route.modelId}|key-401`,
+          transportState.activeAdapter.fetchResponse === undefined);
+        if (!hop.allowed) break;
+        const failedResponse = upstreamResponse;
+        try {
+          route.provider = rotated;
+          invalidateSameTargetRequest();
+          transportState.activeAdapter = resolveSelectionAdapter(
+            resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy), config.cacheRetention);
+          bindRouteReasoningReplayScope({ parsed, providerName: route.providerName, provider: route.provider, adapterName: transportState.activeAdapter.name });
+          sendBudgetState.pendingHopPermit = hop.permit;
+          const result = await rebuildAndRefetch("key-401", () => { hop.permit?.use(); }, failedResponse);
+          if ("failed" in result) {
+            if (result.failed !== failedResponse) return result.failed;
+            break;
+          }
+          try { void failedResponse.body?.cancel().catch(() => {}); } catch { /* closed */ }
+          upstreamResponse = result;
+          continue recovery;
+        } finally { sendBudgetState.pendingHopPermit = undefined; hop.permit?.release(); }
+      }
+
       // Anthropic fast mode refused (no usage credits, organization not enabled, model outside
       // the lane, fast pool empty): resend once at standard speed, as Claude Code does. This
       // sits before every 429 arm because the refusal says nothing about the account's standard
@@ -1168,7 +1202,8 @@ export async function prepareAdapterExchange(
        upstreamResponse = result;
         // Rotating on the refusal would also write a cooldown against a key that rate-limited
         // nothing, which outlives the request.
-        if (isNonReplayableResponse(upstreamResponse)) continue recovery;
+        if (isNonReplayableResponse(upstreamResponse)
+          || (billingRecoveryActive && [400, 402, 401].includes(upstreamResponse.status))) continue recovery;
      }
 
       // Anthropic OAuth: recover a rate limit or proven account entitlement refusal

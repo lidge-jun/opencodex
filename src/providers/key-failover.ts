@@ -865,6 +865,19 @@ export function rotateProviderTransportOn401(
   return applyRotatedTransport(providerName, routedProvider, rotated, options.promptCacheKey);
 }
 
+/** Exact Anthropic billing refusal: reuse the bounded ten-minute credential cooldown. */
+export function rotateProviderTransportOnAnthropicBilling(
+  config: OcxConfig,
+  providerName: string,
+  routedProvider: OcxProviderTransport,
+  options: Omit<RotateProviderTransportOptions, "retryAfter"> = {},
+): OcxProviderTransport | null {
+  if (routedProvider.adapter !== "anthropic"
+    || (routedProvider.authMode !== undefined && routedProvider.authMode !== "key")
+    || !hasKeyPoolFailover(routedProvider)) return null;
+  return rotateProviderTransportOn401(config, providerName, routedProvider, options);
+}
+
 function applyRotatedTransport(
   providerName: string,
   routedProvider: OcxProviderTransport,

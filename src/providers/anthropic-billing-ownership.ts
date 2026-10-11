@@ -1,0 +1,60 @@
+import type { OcxProviderConfig } from "../types";
+import { resolveAnthropicMessagesUrl } from "../adapters/anthropic";
+import { providerApiKeySelectionIsCurrent } from "./api-key-selection";
+import { hasKeyPoolFailover } from "./key-failover";
+import type { OcxConfig } from "../types";
+import { registerProviderResponseProvenance } from "./request-pacing";
+
+interface BillingSendOwnership {
+  readonly providerName: string;
+  readonly provider: OcxProviderConfig;
+  readonly target: string;
+}
+const responseOwners = new WeakMap<Response, BillingSendOwnership | null>();
+registerProviderResponseProvenance(responseOwners);
+
+/** Runs inside connection policy, after plugin/header rewrites, at the physical fetch. */
+export function anthropicBillingPhysicalFetch(
+  physicalFetch: typeof globalThis.fetch,
+  providerName: string,
+  provider: OcxProviderConfig,
+): typeof globalThis.fetch {
+  return (async (input, init) => {
+    const target = input instanceof Request ? input.url : String(input);
+    const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+    const selection = provider._apiKeyAttempt;
+    const ownsKey = provider.adapter === "anthropic" && (provider.authMode === undefined || provider.authMode === "key")
+      && hasKeyPoolFailover(provider) && selection !== undefined && provider.apiKey !== undefined
+      && headers.get("x-api-key") === provider.apiKey && !headers.has("authorization")
+      && target === resolveAnthropicMessagesUrl(provider);
+    const owner: BillingSendOwnership | null = ownsKey ? Object.freeze({
+      providerName, target,
+      provider: Object.freeze({ ...provider,
+        _apiKeyAttempt: Object.freeze({ ...selection }),
+        headers: Object.freeze({ ...provider.headers }),
+        apiKeyPool: provider.apiKeyPool?.map(entry => Object.freeze({ ...entry })),
+      }),
+    }) : null;
+    // No await between capturing the selected credential and invoking the actual send.
+    const response = await physicalFetch(input, init);
+    // An executor reusing a Response across physical sends cannot assign it two owners.
+    responseOwners.set(response, responseOwners.has(response) ? null : owner);
+    return response;
+  }) as typeof globalThis.fetch;
+}
+
+/** Immutable response ownership, matched to the attempted route and still-current selection. */
+export function anthropicBillingResponseOwner(
+  response: Response, config: OcxConfig, providerName: string, attemptedProvider: OcxProviderConfig,
+): OcxProviderConfig | null {
+  const owner = responseOwners.get(response);
+  if (!owner || owner.providerName !== providerName || owner.target !== resolveAnthropicMessagesUrl(attemptedProvider)) return null;
+  const sent = owner.provider;
+  const attempted = attemptedProvider._apiKeyAttempt;
+  if (!attempted || attemptedProvider.apiKey !== sent.apiKey || attemptedProvider.baseUrl !== sent.baseUrl
+    || attemptedProvider.authMode !== sent.authMode || attemptedProvider.adapter !== sent.adapter
+    || attempted.entryId !== sent._apiKeyAttempt?.entryId || attempted.reference !== sent._apiKeyAttempt?.reference
+    || attempted.revision !== sent._apiKeyAttempt?.revision
+    || !providerApiKeySelectionIsCurrent(config, providerName, sent)) return null;
+  return sent;
+}

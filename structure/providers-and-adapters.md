@@ -11,6 +11,14 @@ A shared-quota Anthropic 429 or classified pre-output account 403 records the se
 
 The Anthropic helper sends share the same routing authority: `getAnthropicSidecarAccessToken` resolves the vision-describe and web-search sidecars' helper model through the same first-match route decision, so a routed send authenticates as the route's own account rather than whatever pool account happens to be active. A strict route with no eligible account fails the helper locally instead of silently falling back to the active outsider, matching the primary-traffic contract; callers without a pool config keep the plain stored-credential path.
 
+## Anthropic API-key billing recovery
+
+`src/providers/anthropic-billing-refusal.ts` accepts only a complete error envelope on HTTP 400 or 402, an allowlisted error type/code, and the whole credit-balance refusal message. Its shared bounded-body reader inspects a clone with fatal UTF-8 decoding, an 8 KiB byte limit and a 250 ms deadline combined with client cancellation; inspection leaves the original terminal body readable. Truncated, malformed, oversized, stalled, unrelated and unreadable errors grant no recovery authority.
+
+`src/providers/anthropic-billing-ownership.ts` captures the actual outgoing `x-api-key`, selected provider, resolved key, target and selection reference/revision synchronously at the physical fetch, after connection-policy/plugin header rewrites. A private response WeakMap retains that frozen binding; the owned response-body wrapper in `src/providers/request-pacing.ts` carries registered provenance without creating a marker on unmarked responses. Recovery compares this immutable send against the attempted route and current selection, never against rebuilt headers. Missing/conflicting ownership, credential overrides and selection drift preserve the refusal without cooling or selecting another key.
+
+`src/providers/anthropic-billing-recovery.ts` and `src/providers/key-failover.ts` reuse the ten-minute key-401 cooldown and recovery attribution for Anthropic key pools with at least two entries. Native Messages and translated Responses recover only before output, within their shared physical-send/hop allowance; exhaustion keeps the terminal upstream body and cancellation sends no replacement. Ordinary 400s, same-key retry settings and OAuth account routing retain their contracts. `tests/server/server-anthropic-billing.test.ts` exercises both lanes, concurrency leases, overrides, exhaustion, mixed refusal classes, cancellation and text/tool commit boundaries.
+
 ## GitHub Copilot Auto selection
 
 `src/providers/github-copilot-transport.ts` retains the credential-specific destination and headers. Automatic selection requires a nonempty catalog whose every valid row explicitly has `model_picker_enabled: false`; missing or malformed permissions retain named routes. Named picker projection removes only explicitly false rows.
