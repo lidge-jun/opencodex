@@ -184,10 +184,13 @@ l'abonnement avec un avertissement lorsque la détection n'est pas concluante. V
 Codex utilise de petits modèles auxiliaires pour des tâches telles que les titres et les messages de commit. Activez
 `shadowCallIntercept` pour rediriger les préfixes de modèle source reconnus vers un autre modèle configuré. Le
 modèle de remplacement conserve l'effort de raisonnement configuré pour la requête. Définissez `sourceModels` uniquement lorsqu'un client utilise d'autres identifiants de modèles auxiliaires.
-L'interception dépend du modèle : toute requête dont l'identifiant de modèle nu correspond à `sourceModels`
-peut être redirigée, y compris une requête normale portant `request_kind: "turn"`. Les requêtes marquées
-comme enfants générés par `x-openai-subagent: collab_spawn` ou par `subagent_kind: "thread_spawn"` dans
-l'en-tête JSON `x-codex-turn-metadata` sont exemptées, afin qu'un sous-agent explicitement généré conserve son modèle.
+Un identifiant de modèle nu correspondant à `sourceModels` peut être intercepté, mais un tour utilisateur
+conserve son modèle si `x-codex-turn-metadata` contient à la fois `request_kind: "turn"` et `thread_source: "user"`.
+Les enfants identifiés par l'en-tête de connexion `x-openai-subagent: collab_spawn` (requête HTTP ou ouverture WebSocket) ou par les métadonnées
+`subagent_kind: "thread_spawn"` conservent aussi leur modèle. Sur WebSocket, seules les métadonnées de chaque
+trame dans `client_metadata["x-codex-turn-metadata"]` décident, jamais les métadonnées de tour de la connexion initiale.
+Des métadonnées absentes ou mal formées conservent le comportement d'interception existant. Les auxiliaires
+peuvent porter `request_kind: "turn"` ; ce champ seul ne les exempte pas. Ces règles couvrent les modèles et les combos.
 
 ```json
 {

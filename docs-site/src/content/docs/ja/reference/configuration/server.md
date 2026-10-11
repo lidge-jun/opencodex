@@ -114,7 +114,7 @@ ssh -L 20100:localhost:10100 -L 1455:localhost:1455 you@remote
 
 Codex は、タイトルやコミット メッセージなどのタスクに小さなヘルパー モデルを使用します。 `shadowCallIntercept` を有効にして、認識されたソース モデル プレフィックスを別の構成済みモデルにリダイレクトします。置換後も、リクエストに設定された推論エフォートは維持されます。クライアントが異なるヘルパー ID を使用する場合にのみ、`sourceModels` を設定します。
 
-モデルによるインターセプトです。裸のモデル ID が `sourceModels` に一致するリクエストは、通常の `request_kind: "turn"` も含めてリダイレクトできます。`x-openai-subagent: collab_spawn` または `x-codex-turn-metadata` の JSON ヘッダー内の `subagent_kind: "thread_spawn"` で生成された子としてマークされたリクエストは対象外となり、明示的に生成されたサブエージェントはモデルを維持します。
+裸のモデル ID が `sourceModels` に一致するとインターセプト対象になりますが、`x-codex-turn-metadata` に `request_kind: "turn"` と `thread_source: "user"` の両方があるユーザーターンは選択したモデルを維持します。接続ヘッダー `x-openai-subagent: collab_spawn`（HTTP リクエストまたは WebSocket ハンドシェイク） またはメタデータの `subagent_kind: "thread_spawn"` で識別された子もモデルを維持します。WebSocket ではターンメタデータを各フレームの `client_metadata["x-codex-turn-metadata"]` のみで判定し、ハンドシェイクのターンメタデータは後続フレームに使いません。メタデータがない場合や不正な場合は従来のインターセプト動作を維持します。ヘルパーも `request_kind: "turn"` を使うため、このフィールドだけでは除外されません。これらの規則は具体的なモデルとコンボの両方に適用されます。
 
 ```json
 {

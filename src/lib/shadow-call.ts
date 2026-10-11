@@ -82,18 +82,57 @@ export function shadowCallTargetsIntersect(
 }
 
 /**
+ * Preserve explicit user turns and spawned children before either intercept site.
+ * HTTP provenance is `x-codex-turn-metadata` or `x-openai-subagent: collab_spawn`.
+ * `x-openai-subagent` is connection-level on both transports: a child session opens
+ * its own connection, so a `collab_spawn` upgrade header still names every frame.
+ * Turn metadata is per-frame on WebSocket (`CODEX_WS_FRAME_HEADERS`): only the frame's
+ * `client_metadata["x-codex-turn-metadata"]` describes this turn, because the
+ * upgrade's copy can describe an earlier user or helper turn.
+ * `request_kind: "turn"` alone is not user provenance (#1684). Maintenance
+ * markers such as `x-openai-subagent: compact`/`review` and metadata naming
+ * `memory_consolidation` remain eligible helpers, subject to memory routing.
+ * Missing/malformed metadata retains the legacy opt-in source-prefix behavior.
+ */
+export function shadowCallPreservesSelectedModel(
+  body: unknown,
+  headers: Headers,
+  transport?: "websocket",
+): boolean {
+  if (headers.get("x-openai-subagent") === "collab_spawn") return true;
+  let metadata: unknown = headers.get("x-codex-turn-metadata");
+  if (transport === "websocket") {
+    const client = body && typeof body === "object" && !Array.isArray(body)
+      ? (body as Record<string, unknown>).client_metadata : undefined;
+    metadata = client && typeof client === "object" && !Array.isArray(client)
+      && Object.hasOwn(client, "x-codex-turn-metadata")
+      ? (client as Record<string, unknown>)["x-codex-turn-metadata"] : undefined;
+  }
+  if (typeof metadata !== "string") return false;
+  try {
+    const parsed: unknown = JSON.parse(metadata);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+    const turn = parsed as Record<string, unknown>;
+    return turn.subagent_kind === "thread_spawn"
+      || (turn.request_kind === "turn" && turn.thread_source === "user");
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Decide whether a matching source model should use the opt-in intercept.
  *
  * Before Codex 0.147.0 this checked x-codex-turn-metadata and exempted
  * request_kind "turn". Codex 0.147.0 can label background helper calls as
- * "turn", causing them to bypass the intercept (#1684). The fix is to
- * intercept every configured shadow source model regardless of request kind.
+ * "turn", causing them to bypass the intercept (#1684). Request kind alone
+ * cannot exempt a configured source model: callers first preserve explicit
+ * user/child provenance with `shadowCallPreservesSelectedModel` (#6921).
  * A replacement intersecting the same provider+model source set remains a
  * no-op because rewriting it would only create self-interception (#2706).
  *
- * Callers skip this check entirely for spawned sub-agent turns
- * (`isThreadSpawnRequest`): `gpt-6-luna` is both the helper slug and a default
- * sub-agent model, and an explicitly spawned child must keep the model it chose.
+ * `gpt-6-luna` is both the helper slug and a selectable user/sub-agent model;
+ * explicit user turns and spawned children must keep the model they chose.
  */
 export function shouldInterceptShadowCall(
   modelId: string,

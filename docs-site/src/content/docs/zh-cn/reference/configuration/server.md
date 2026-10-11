@@ -126,7 +126,7 @@ ssh -L 20100:localhost:10100 -L 1455:localhost:1455 you@remote
 Codex 会为标题、提交信息等任务使用较小的辅助模型。启用
 `shadowCallIntercept` 后，可将识别出的源模型前缀重定向到另一个已配置模型。替换后仍会保留为请求配置的推理强度。只有当客户端使用不同的辅助 ID 时，才设置 `sourceModels`。
 
-拦截依据模型进行：裸模型 ID 与 `sourceModels` 匹配的请求（包括普通的 `request_kind: "turn"` 请求）都可以被重定向。通过 `x-openai-subagent: collab_spawn` 或 `x-codex-turn-metadata` JSON 标头中的 `subagent_kind: "thread_spawn"` 标记为已生成子代理的请求不受拦截，因此显式生成的子代理会保留其模型。
+裸模型 ID 与 `sourceModels` 匹配的请求可以被拦截，但 `x-codex-turn-metadata` 同时包含 `request_kind: "turn"` 和 `thread_source: "user"` 的用户轮次保留所选模型。连接标头 `x-openai-subagent: collab_spawn`（HTTP 请求或 WebSocket 握手） 或元数据中的 `subagent_kind: "thread_spawn"` 标记的子代理也保留模型。WebSocket 的轮次元数据仅依据每帧的 `client_metadata["x-codex-turn-metadata"]`，不使用握手中的轮次元数据来分类后续帧。元数据缺失或格式错误时保留原有拦截行为。辅助调用也可能带有 `request_kind: "turn"`，因此仅凭该字段不能豁免。这些规则适用于具体模型和 combo 目标。
 
 ```json
 {
