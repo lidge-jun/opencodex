@@ -17,6 +17,11 @@ type Feedback = { tone: "ok" | "err"; message: string } | null;
  * same defect in a new place.
  */
 export default function UltraFastTierSetting({ apiBase }: { apiBase: string }) {
+  return <UltraFastTierControl key={apiBase} apiBase={apiBase} />;
+}
+
+/** Bind pending reads and writes to one management target for this mount. */
+function UltraFastTierControl({ apiBase }: { apiBase: string }) {
   const t = useT();
   const [enabled, setEnabled] = useState(false);
   const [hydrated, setHydrated] = useState(false);
@@ -35,9 +40,10 @@ export default function UltraFastTierSetting({ apiBase }: { apiBase: string }) {
     try {
       const res = await fetch(`${apiBase}/api/settings`, { signal: bounded.signal });
       if (!res.ok) throw new Error("load");
-      const payload = await res.json() as { ultraFastTier?: unknown };
+      const payload = await res.json() as { ultraFastTier?: unknown } | null;
       if (savingRef.current || generation !== loadGenerationRef.current) return;
-      setEnabled(payload.ultraFastTier === true);
+      if (typeof payload?.ultraFastTier !== "boolean") throw new Error("shape");
+      setEnabled(payload.ultraFastTier);
       setHydrated(true);
       setLoadError(false);
     } catch {
@@ -51,6 +57,7 @@ export default function UltraFastTierSetting({ apiBase }: { apiBase: string }) {
     const timeout = window.setTimeout(() => { void load(); }, 0);
     const stop = startVisibilityPoll(() => { void load(); }, 30_000);
     return () => {
+      loadGenerationRef.current += 1;
       window.clearTimeout(timeout);
       stop();
     };
@@ -59,12 +66,14 @@ export default function UltraFastTierSetting({ apiBase }: { apiBase: string }) {
   const toggle = useCallback(async () => {
     if (savingRef.current || !hydrated || loadError) return;
     const requested = !enabled;
+    const generation = ++loadGenerationRef.current;
     savingRef.current = true;
     setSaving(true);
     setFeedback(null);
     // Optimistic, then reconciled with what the server actually stored.
     setEnabled(requested);
     const bounded = createBoundedFetch(15_000);
+    let accepted = false;
     try {
       const res = await fetch(`${apiBase}/api/settings`, {
         method: "PUT",
@@ -73,17 +82,39 @@ export default function UltraFastTierSetting({ apiBase }: { apiBase: string }) {
         signal: bounded.signal,
       });
       if (!res.ok) throw new Error("save");
-      const payload = await res.json() as { ultraFastTier?: unknown };
-      const confirmed = typeof payload.ultraFastTier === "boolean" ? payload.ultraFastTier : requested;
-      setEnabled(confirmed);
-      setFeedback({ tone: "ok", message: t(confirmed ? "codexAuth.ultraFastEnabled" : "codexAuth.ultraFastDisabled") });
+      const payload = await res.json() as { ok?: unknown } | null;
+      accepted = payload?.ok === true;
     } catch {
-      setEnabled(!requested);
-      setFeedback({ tone: "err", message: t("codexAuth.ultraFastFailed") });
+      // The server may have saved even if its response was lost. Read its state below.
     } finally {
       bounded.clear();
-      savingRef.current = false;
-      setSaving(false);
+    }
+    if (generation !== loadGenerationRef.current) return;
+    // PUT deliberately omits ultraFastTier. Only a same-target GET confirms the value.
+    const readback = createBoundedFetch(15_000);
+    try {
+      const res = await fetch(`${apiBase}/api/settings`, { signal: readback.signal });
+      if (!res.ok) throw new Error("readback");
+      const payload = await res.json() as { ultraFastTier?: unknown } | null;
+      if (typeof payload?.ultraFastTier !== "boolean") throw new Error("shape");
+      if (generation !== loadGenerationRef.current) return;
+      const confirmed = payload.ultraFastTier;
+      setEnabled(confirmed);
+      setLoadError(false);
+      setFeedback(accepted && confirmed === requested
+        ? { tone: "ok", message: t(confirmed ? "codexAuth.ultraFastEnabled" : "codexAuth.ultraFastDisabled") }
+        : { tone: "err", message: t("codexAuth.ultraFastFailed") });
+    } catch {
+      if (generation !== loadGenerationRef.current) return;
+      setEnabled(!requested);
+      setLoadError(true);
+      setFeedback({ tone: "err", message: t("codexAuth.ultraFastFailed") });
+    } finally {
+      readback.clear();
+      if (generation === loadGenerationRef.current) {
+        savingRef.current = false;
+        setSaving(false);
+      }
     }
   }, [apiBase, enabled, hydrated, loadError, t]);
 
