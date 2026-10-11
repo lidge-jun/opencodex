@@ -51,10 +51,13 @@ async function mount(props: Partial<React.ComponentProps<typeof RemoteLink>> = {
   return host;
 }
 
-test("LINK_ERROR_CODES stays in exact parity with link-routes.ts", async () => {
-  const source = await Bun.file("../src/server/management/link-routes.ts").text();
+test("translated link errors remain implemented across route and enrollment owners", async () => {
+  const source = (await Promise.all(["link-routes", "link-enrollment", "link-route-state"].map(name =>
+    Bun.file(`../src/server/management/${name}.ts`).text()))).join("\n");
   const fromRoutes = [...source.matchAll(/fail\("([a-z_]+)"/g)].map(match => match[1]).filter((value, index, all) => all.indexOf(value) === index).sort();
-  expect([...LINK_ERROR_CODES].sort()).toEqual(fromRoutes);
+  // New enrollment phase errors use the existing generic translation; legacy specific codes
+  // must still name real server errors after helpers move out of the route adapter.
+  expect(fromRoutes.filter(code => (LINK_ERROR_CODES as readonly string[]).includes(code))).toEqual([...LINK_ERROR_CODES].sort());
 });
 
 test("parses every wire state without changing the DTO", () => {

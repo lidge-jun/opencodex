@@ -78,6 +78,8 @@ Child는 링크를 통해 Home 컴퓨터의 프로바이더와 프로바이더 �
 ## CLI 레퍼런스
 
 ```text
+ocx link probe <alias> [--json]
+ocx link add <alias> --expect-fingerprint SHA256:… [--json]
 ocx link port [--json]
 ocx link issue --alias <alias> --tunnel-port <port> [--json]
 ocx link status [--json]

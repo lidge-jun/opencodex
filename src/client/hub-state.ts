@@ -128,7 +128,7 @@ export function hubStateFailureReason(error: unknown): string {
   if (error instanceof HubClientError) {
     switch (error.code) {
       case "hub_state_not_a_hub":
-        return "Remote Link Home does not publish hub state";
+        return "the remote host does not publish hub state";
       case "hub_state_unsupported":
         return "this hub is too old to report its state; upgrade the hub";
       case "hub_state_unauthorized":

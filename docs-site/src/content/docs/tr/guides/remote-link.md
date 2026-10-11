@@ -78,6 +78,8 @@ Child, bağlantı üzerinden Home bilgisayarının sağlayıcılarını ve sağl
 ## CLI başvurusu
 
 ```text
+ocx link probe <alias> [--json]
+ocx link add <alias> --expect-fingerprint SHA256:… [--json]
 ocx link port [--json]
 ocx link issue --alias <alias> --tunnel-port <port> [--json]
 ocx link status [--json]

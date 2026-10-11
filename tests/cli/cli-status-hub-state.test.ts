@@ -347,7 +347,7 @@ describe("ocx status end to end on a connected client", () => {
       findChild: async () => ({ pid: 123, port: 10100, source: "runtime", role: "client" }),
       fetchImpl: (async () => Response.json({ error: { type: "invalid_request_error", code: "hub_state_not_a_hub", message: "role required" } }, { status: 404 })) as typeof fetch,
     });
-    expect(remote.stateSource).toBe("unavailable"); expect(remote.reason).toBe("Remote Link Home does not publish hub state");
+    expect(remote.stateSource).toBe("unavailable"); expect(remote.reason).toBe("the remote host does not publish hub state");
     expect(remoteHubBannerLine(remote, "link")).toContain("Remote Link Home");
     expect(remoteHubBannerLine(remote, "link")).not.toContain("upgrade");
   });

@@ -78,6 +78,8 @@ Child 會透過連結使用 Home 電腦上的供應商與供應商憑證。Home 
 ## CLI 參考
 
 ```text
+ocx link probe <alias> [--json]
+ocx link add <alias> --expect-fingerprint SHA256:… [--json]
 ocx link port [--json]
 ocx link issue --alias <alias> --tunnel-port <port> [--json]
 ocx link status [--json]

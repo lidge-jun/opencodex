@@ -84,7 +84,9 @@ export function projectLinkStatus(
     ...stateDetails(record, byId.get(record.id), compensation),
     tunnelPort: record.tunnelPort,
   }));
-  const childRecord = config.runtimeRole === "client" ? store.links[0] : undefined;
+  const childRecord = config.runtimeRole === "client"
+    ? (config.client?.transport === "link" ? store.links.find(record => record.id === config.client?.link?.linkId) : store.links[0])
+    : undefined;
   const projectedClientChild = config.runtimeRole === "client" ? clientChild : null;
   const childStatus = childRecord
     ? stateDetails(childRecord, byId.get(childRecord.id), compensation)
@@ -97,8 +99,11 @@ export function projectLinkStatus(
   const client = config.runtimeRole === "client" && config.client?.transport === "link" ? config.client : undefined;
   const child = projectedClientChild ?? (childRecord && childStatus ? { alias: childRecord.alias, ...childStatus }
     : client?.link ? { alias: identity?.alias ?? client.serverUrl, state: "idle" as const, since: client.connectedAt, reason: null } : null);
-  if (links.length === 0 && client?.link && child && identity) {
-    links.push({ id: client.link.linkId, direction: identity.direction, tunnelPort: client.link.tunnelPort, ...child, alias: identity.alias ?? child.alias });
+  if (client?.link && child && identity) {
+    const active = links.find(link => link.id === client.link!.linkId);
+    const projected = { id: client.link.linkId, direction: identity.direction, tunnelPort: client.link.tunnelPort, ...child, alias: identity.alias ?? child.alias };
+    if (active) Object.assign(active, projected, compensation.entries[active.id] && childRecord ? stateDetails(childRecord, byId.get(active.id), compensation) : {});
+    else links.push(projected);
   }
   return {
     role,

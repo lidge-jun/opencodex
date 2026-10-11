@@ -539,7 +539,7 @@ export async function fetchHubState(
     let body: unknown = null;
     try { body = JSON.parse(await boundedText(response, 4096, { inactivityTimeoutMs: safeTimeout(options.timeoutMs) })); } catch { /* legacy/non-JSON 404 stays unsupported */ }
     if (body && typeof body === "object" && !Array.isArray(body) && (body as { error?: { code?: unknown } }).error?.code === "hub_state_not_a_hub") {
-      throw new HubClientError("hub_state_not_a_hub", "Remote Link Home does not publish hub state", 404);
+      throw new HubClientError("hub_state_not_a_hub", "the remote host does not publish hub state", 404);
     }
     throw new HubClientError("hub_state_unsupported", "Hub does not serve /v1/hub-state; upgrade the hub", 404);
   }

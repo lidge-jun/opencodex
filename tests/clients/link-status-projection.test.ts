@@ -130,3 +130,21 @@ test("client-owned sidecar distinguishes normal Child initiation; unreadable/mis
     expect(project().links).toEqual([]);
   } finally { if (oldHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = oldHome; removeTreeWithRetry(home); }
 });
+
+
+test.each([false, true])("stored active Child link uses observed state without changing unrelated links (compensation=%s)", failed => {
+  const record = store.links[0]!;
+  const unrelated = { ...record, id: "lnk_ffffffffffffffff", alias: "unrelated" };
+  const since = "2026-09-25T00:01:00.000Z";
+  const child = { alias: "Home", state: "connected" as const, since, reason: null };
+  const compensation: CompensationStore = { version: 1, entries: failed ? { [record.id]: { reason: "compensation_failed", since } } : {} };
+  const dto = projectLinkStatus({ ...store, links: [unrelated, record] }, [], { state: "off", port: null }, {
+    runtimeRole: "client", client: { transport: "link", serverUrl: "http://127.0.0.1:19003", connectedAt: record.createdAt,
+      link: { linkId: record.id, tunnelPort: 19003 } },
+  }, compensation, child, { direction: "client-initiated", alias: "verified-home" });
+  expect(dto.links).toHaveLength(2);
+  expect(dto.links[0]).toMatchObject({ id: unrelated.id, alias: "unrelated", state: "idle", tunnelPort: 19002 });
+  expect(dto.links[1]).toMatchObject({ id: record.id, alias: "verified-home", direction: "client-initiated", tunnelPort: 19003,
+    state: failed ? "failed" : "connected", since, reason: failed ? "compensation_failed" : null });
+  expect(dto.child).toEqual(child);
+});
