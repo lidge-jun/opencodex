@@ -27,6 +27,8 @@ import { win32 } from "node:path";
 import { serviceDiagnosticsSummary } from "./diagnostics";
 import { runServiceClaim } from "./claim";
 import { createSupervisionLatch, desktopServiceCommandRefusal } from "./desktop-command-guard";
+import { linuxServiceBootHint } from "./linux-linger";
+import { diagnoseDesktopStartup, desktopLoginStatusSummary } from "./desktop-startup";
 
 /**
  * `restart` is NO LONGER folded into `repair`.
@@ -336,7 +338,7 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
       // and the baked one cannot have diverged yet — unlike `start`, which reads the
       // installed artifact instead.
       await reportServiceServing("installed", { port: resolveServiceListenPort() });
-      if (process.platform === "linux") console.log("   For auto-start on boot: loginctl enable-linger $USER");
+      if (process.platform === "linux") console.log(linuxServiceBootHint());
       // Service users never reach the `ocx start` prompt: the proxy they run is the
       // supervised child, which always carries OCX_SERVICE=1. This command, though, is
       // hand-typed in a real terminal, so it is the one interactive moment they get.
@@ -433,6 +435,8 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
       const lease = ownershipMutationLeaseStatusLine(serviceStatePaths());
       if (lease) console.log(lease);
       console.log(`Diagnostics: ${serviceDiagnosticsSummary()}`);
+      const desktop = diagnoseDesktopStartup();
+      if (desktop) console.log(desktopLoginStatusSummary(desktop));
       break;
     }
     case "uninstall":
