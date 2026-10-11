@@ -571,13 +571,15 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       // here, on the serialized body, not on the parsed selector. One place covers both the
       // HTTP and the WebSocket outbound, because the WS path transports this same request
       // instead of rebuilding it.
-      // Native Sol compatibility: replay hosted actions as untrusted metadata,
+      // Codex-native history policy: replay remaining hosted actions as untrusted metadata,
       // after bridge restoration/tool validation. Tool declarations and other input stay intact.
-      if (url === `${CODEX_FORWARD_BASE_URL}/responses` && parsed.modelId === "gpt-6.1-sol"
+      if (url === `${CODEX_FORWARD_BASE_URL}/responses`
         && !parsed._compactionRequest && !parsed._portableCompaction
-        && isPlainObject(finalBody) && finalBody.model === "gpt-6.1-sol" && Array.isArray(finalBody.input)
+        && isPlainObject(finalBody) && Array.isArray(finalBody.input)
         && finalBody.input.some(item => isPlainObject(item) && item.type === "web_search_call")) {
-        finalBody = { ...finalBody, input: renderCompactionSearchHistoryItems(finalBody.input) };
+        const referencedIds = new Set(finalBody.input.flatMap(item => isPlainObject(item)
+          && item.type === "item_reference" && typeof item.id === "string" ? [item.id] : []));
+        finalBody = { ...finalBody, input: renderCompactionSearchHistoryItems(finalBody.input, referencedIds) };
       }
       observeOutbound(parsed._rawBody, finalBody, headers);
       if (!isCanonicalOpenAiForwardProvider(provider)) {

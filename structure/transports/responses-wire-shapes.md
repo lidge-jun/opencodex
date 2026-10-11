@@ -153,7 +153,7 @@ does not set `modelResponsesUpstreamStreaming`: client `stream: true` remains re
 streaming until a current-runtime reproduction justifies a separate bounded-JSON compatibility
 policy.
 
-Native Sol normal-request hosted-history lowering follows [the hosted-search continuation boundary](../providers-and-adapters.md#hosted-search-continuation-binding); native compact, portable compaction, other models and destinations retain their existing contracts. Go's non-forward Responses request path moves valid `additional_tools` wrappers into top-level
+All-model Codex ordinary unreferenced hosted-history lowering follows [the hosted-search continuation boundary](../providers-and-adapters.md#hosted-search-continuation-binding); native compact and public API retain structural history; portable compaction keeps its existing trigger and default projection. Go's non-forward Responses request path moves valid `additional_tools` wrappers into top-level
 `tools` through `src/adapters/opencode-go-additional-tools.ts`. Placement runs after existing
 custom/search/namespace lowering and before code-mode, compaction and final hosted-tool pruning.
 It does not recalculate wire identities or response aliases. The matcher reads the constructed

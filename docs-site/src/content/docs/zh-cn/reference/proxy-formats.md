@@ -316,8 +316,10 @@ Anthropic 来源的失败会以 Anthropic 的错误封装呈现，因此该方�
 
 这项恢复适用于所有使用 Responses 协议的 adapter，因此 `openai-responses` 和 `azure-openai` 的行为相同。恢复成功后，该对话在同一目标上的后续轮次会在接下来五分钟内于首次发送前移除这些状态。重发计入请求的常规发送预算。普通的 400 和 429 不会以这种方式重发，5xx 也不会，只有一个狭窄的例外：对于携带加密工具输出的请求，响应体恰好是该解密拒绝的 502 会得到同样的一次重发。第二次拒绝会原样返回给客户端。遇到这种情况，请在目标 provider 上开始新的对话。
 
-## 原生 Sol 搜索历史
+## Codex 原生普通请求的搜索历史
 
-原生 Sol 兼容路径会将发往标准 ChatGPT Codex `/responses` 的普通 `gpt-6.1-sol` 请求中的历史 `web_search_call` 转为标注为不可信参考资料的 assistant 文本，适用于所有 thread，也包括 Sol 新生成后回放的搜索历史。它不依赖诊断 marker、debug、TTL 或抓包额度；原生 compact、portable compaction、其他模型和目的地保持原行为。它不禁用新搜索工具或 action 声明，不额外删除 Lite `additional_tools`、工具选择、call/result 配对、推理 summary/原生密文或调用方历史。bridge memo 命中时先恢复原函数调用和结果，仅剩余 hosted 历史会转为说明。
+发往标准 ChatGPT Codex `/responses` 的普通请求中，所有模型（包括 Sol、Luna、Astra）都会把未被同输入引用的剩余 `web_search_call` 历史转为带标签的 assistant 参考说明。新 thread、fork、跨模型续聊、缓存未命中或重启后都适用，不依赖诊断设置。只有有效同 scope bridge memo 能证明并先恢复原函数调用及结果；ID 前缀、模型名或 memo 缺失不能判断来源。若同输入的 `item_reference.id` 精确指向某 hosted cell，该 cell 保留；`store:false` 会先移除引用，剩余 hosted 历史可投影。工具声明、Lite `additional_tools`、选择、call/result 配对、推理/原生密文、非 hosted 顺序及调用方 raw 历史保持原契约。
 
-这些说明是**有损且有上限的历史元数据**，不是网页正文或当前指令：仅复制 status 及允许的 query/URL/pattern/source 字段，每个字符串最多 2,048 个 UTF-16 单元、每个列表 20 项、全部说明共 65,536 字节；超出的后续 action 用省略说明替代，不复制 ID 或未知字段。HTTP/SSE 和 WebSocket 共用最终输入。此补丁不增加重试，也不证明原生上游错误根因或全部错误已修复；历史转换不保证中断的原生请求一定恢复成功。
+这是用户明确选择的**有损历史策略**，不是 hosted schema 非法或所有上游错误已修复的断言。说明标为不可信参考数据，复制 status/action 及 action 或顶层 sources 中允许的 URL/title/type，不是指令或网页正文；每字符串最多 2,048 个 UTF-16 单元、每列表 20 项、全部已投影说明共 65,536 字节，超出的 action 用省略说明替代，转换项不复制 ID 或未知字段。HTTP/SSE 与 WS 共用普通请求的最终 builder。
+
+公开 OpenAI API 及其他目的地不新增普通或 native compact 投影。原生 `/responses/compact` 保持既有端点、账户清理及官方 opaque 输出路径，保留结构化 hosted 历史。portable/routed 摘要仍沿用原有触发条件与默认引用行为；共享 renderer 在这些既有路径中也补充顶层 sources 白名单保留。本次不增加重试、来源分类或新的 compaction summarizer。
