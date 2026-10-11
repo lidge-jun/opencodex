@@ -1,13 +1,14 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { saveConfig } from "../../../src/config";
+import { loadConfig, saveConfig } from "../../../src/config";
+import { setPersistedConfigMutationBeforeCommitForTests } from "../../../src/config/persisted-mutation";
 import { routedProviderConfig } from "../../../src/router";
 import { anthropicBillingPhysicalFetch, anthropicBillingResponseOwner } from "../../../src/providers/anthropic-billing-ownership";
 import { rotateAnthropicBillingKeyOnResponse } from "../../../src/providers/anthropic-billing-recovery";
 import { clearKeyCooldowns, getKeyCooldownUntil, rotateProviderTransportOnAnthropicBilling } from "../../../src/providers/key-failover";
-import type { OcxConfig } from "../../../src/types";
+import type { OcxConfig, OcxProviderConfig } from "../../../src/types";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
 import { isEgressTransparentExecutor, markEgressTransparentExecutor, providerEgressSendInit } from "../../../src/lib/provider-egress";
 import { trackProviderRequestSlotBody } from "../../../src/providers/request-pacing";
@@ -29,6 +30,7 @@ beforeEach(() => {
   saveConfig(config);
 });
 afterEach(() => {
+  setPersistedConfigMutationBeforeCommitForTests(null);
   clearKeyCooldowns();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
@@ -173,6 +175,95 @@ for (const mutation of ["adapter", "authMode", "pool", "headers"] as const) test
   expect(getKeyCooldownUntil("anth", "A")).toBeNull();
   expect(config.providers.anth!.apiKey).toBe("fixture-key-A");
   expect(await response.text()).toContain(message);
+});
+
+const persistedAuthorityChanges: { name: string; mutate: (provider: OcxProviderConfig) => void }[] = [
+  { name: "adapter", mutate: provider => { provider.adapter = "openai-chat"; } },
+  { name: "transport", mutate: provider => { provider.apiKeyTransport = "bearer"; } },
+  { name: "account headers", mutate: provider => { provider.headers = { "x-org-account": "fixture-other-org" }; } },
+  { name: "base URL", mutate: provider => { provider.baseUrl = "https://other.test"; } },
+  { name: "OAuth auth", mutate: provider => { provider.authMode = "oauth"; } },
+  { name: "local auth", mutate: provider => { provider.authMode = "local"; } },
+  { name: "disabled provider", mutate: provider => { provider.disabled = true; } },
+  { name: "selection revision", mutate: provider => { provider.apiKeySelectionRevision = "operator-revision"; } },
+  { name: "single-key pool", mutate: provider => { provider.apiKeyPool = provider.apiKeyPool!.slice(0, 1); } },
+  { name: "replaced A key", mutate: provider => {
+    provider.apiKey = "fixture-key-A-replaced";
+    provider.apiKeyPool![0]!.key = "fixture-key-A-replaced";
+  } },
+  { name: "operator selected B", mutate: provider => {
+    provider.apiKey = "fixture-key-B";
+    provider.apiKeySelectionRevision = "operator-selected-B";
+  } },
+];
+
+for (const phase of ["persisted row", "mutation rebase"] as const) {
+  for (const { name, mutate } of persistedAuthorityChanges) {
+    test(`${phase} ${name} change revokes billing recovery authority`, async () => {
+      const routed = routedProviderConfig("anth", config.providers.anth);
+      const response = await anthropicBillingPhysicalFetch(physical(refusal()), "anth", routed)(url,
+        { headers: { "x-api-key": "fixture-key-A" } });
+      const competing = loadConfig();
+      mutate(competing.providers.anth!);
+      const competingKey = competing.providers.anth!.apiKey;
+      const path = join(home, "config.json");
+      let authoritativeBytes = "";
+      let rebases = 0;
+      if (phase === "persisted row") {
+        saveConfig(competing);
+        authoritativeBytes = readFileSync(path, "utf8");
+      } else {
+        setPersistedConfigMutationBeforeCommitForTests(() => {
+          rebases++;
+          config.providers.anth = structuredClone(competing.providers.anth!);
+          authoritativeBytes = JSON.stringify(competing, null, 2);
+          // Direct bytes model a competing writer; saveConfig would acquire the active lock.
+          writeFileSync(path, authoritativeBytes);
+        });
+      }
+      // The physically sent selection is still owned before the persisted transaction starts.
+      expect(anthropicBillingResponseOwner(response, config, "anth", routed)?.apiKey).toBe("fixture-key-A");
+      let replacement: OcxProviderConfig | null;
+      try {
+        replacement = await rotateAnthropicBillingKeyOnResponse(response, config, "anth", routed);
+      } finally {
+        setPersistedConfigMutationBeforeCommitForTests(null);
+      }
+      expect(rebases).toBe(phase === "mutation rebase" ? 1 : 0);
+      expect({ replacement, cooldown: getKeyCooldownUntil("anth", "A"),
+        persistedKey: loadConfig().providers.anth!.apiKey, bytes: readFileSync(path, "utf8") })
+        .toEqual({ replacement: null, cooldown: null, persistedKey: competingKey, bytes: authoritativeBytes });
+      expect(await response.json()).toEqual({ type: "error", error: { type: "invalid_request_error", message } });
+    });
+  }
+}
+
+for (const explicitTransport of [false, true]) test(`unchanged billing authority permits a real rebase (explicit transport: ${explicitTransport})`, async () => {
+  const routed = routedProviderConfig("anth", config.providers.anth);
+  const response = await anthropicBillingPhysicalFetch(physical(refusal()), "anth", routed)(url,
+    { headers: { "x-api-key": "fixture-key-A" } });
+  let rebases = 0;
+  setPersistedConfigMutationBeforeCommitForTests(() => {
+    rebases++;
+    const competing = loadConfig();
+    competing.defaultModel = "fixture-unrelated-model";
+    if (explicitTransport) competing.providers.anth!.apiKeyTransport = "x-api-key";
+    config.providers.anth = structuredClone(competing.providers.anth!);
+    writeFileSync(join(home, "config.json"), JSON.stringify(competing, null, 2));
+  });
+  let replacement: OcxProviderConfig | null;
+  try {
+    replacement = await rotateAnthropicBillingKeyOnResponse(response, config, "anth", routed);
+  } finally {
+    setPersistedConfigMutationBeforeCommitForTests(null);
+  }
+  expect(rebases).toBe(1);
+  expect(replacement?.apiKey).toBe("fixture-key-B");
+  expect(getKeyCooldownUntil("anth", "A")).not.toBeNull();
+  expect(getKeyCooldownUntil("anth", "B")).toBeNull();
+  expect(loadConfig().providers.anth!.apiKey).toBe("fixture-key-B");
+  expect(loadConfig().defaultModel).toBe("fixture-unrelated-model");
+  expect(await response.json()).toEqual({ type: "error", error: { type: "invalid_request_error", message } });
 });
 
 for (const egress of ["proxy", "direct", "noProxy"] as const) test(`billing wrapper preserves transparent ${egress} admission`, () => {

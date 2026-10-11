@@ -8,7 +8,7 @@
  *
  * Modelled after src/codex/routing.ts cooldown logic but scoped to plain API-key pools.
  */
-import { commitProviderApiKeySelection } from "./api-key-selection";
+import { commitProviderApiKeySelection, providerApiKeySelectionIsCurrent } from "./api-key-selection";
 import type { ProviderApiKeySelection } from "../types/provider";
 import { routedProviderConfig } from "../router";
 import { getProviderRegistryEntry } from "./registry";
@@ -694,6 +694,7 @@ function rotateKeyAfterFailure(
   attemptedKey?: string,
   attemptedSelection?: ProviderApiKeySelection,
   quotaResetAt?: number,
+  acceptsFreshProvider?: (provider: OcxProviderConfig) => boolean,
 ): OcxProviderConfig | null {
   const provider = config.providers[providerName];
   if (!provider) return null;
@@ -704,6 +705,11 @@ function rotateKeyAfterFailure(
     | { failedId?: string; candidateId?: string }
     | { exhaustedCount: number; failedId?: string };
   const outcome = commitProviderApiKeySelection<Rotation | null>(config, providerName, freshProvider => {
+    // Run on every persisted transaction attempt, including a freshness rebase.
+    if (acceptsFreshProvider) {
+      try { if (!acceptsFreshProvider(freshProvider)) return { changed: false, value: null }; }
+      catch { return { changed: false, value: null }; }
+    }
     const pool = freshProvider.apiKeyPool;
     if (!pool || pool.length < 2) return { changed: false, value: null };
 
@@ -741,6 +747,8 @@ function rotateKeyAfterFailure(
   }, attemptedSelection);
   if (outcome.status === "unavailable") return null;
   if (outcome.status === "superseded") {
+    // Billing authority is bound to the sent selection; a newer manual choice grants no replay.
+    if (acceptsFreshProvider) return null;
     // A newer manual selection (including A→B→A) owns subsequent dispatch. Reusing the
     // same failed key here would loop forever; preserve its original failure instead.
     return outcome.provider.apiKey !== failedKey ? structuredClone(outcome.provider) : null;
@@ -875,7 +883,17 @@ export function rotateProviderTransportOnAnthropicBilling(
   if (routedProvider.adapter !== "anthropic"
     || (routedProvider.authMode !== undefined && routedProvider.authMode !== "key")
     || !hasKeyPoolFailover(routedProvider)) return null;
-  return rotateProviderTransportOn401(config, providerName, routedProvider, options);
+  const headerShape = (provider: OcxProviderConfig) => JSON.stringify(Object.entries(provider.headers ?? {}).sort(([a], [b]) => a.localeCompare(b)));
+  const sentHeaders = headerShape(routedProvider);
+  const acceptsFreshProvider = (fresh: OcxProviderConfig): boolean => fresh.adapter === routedProvider.adapter
+    && (fresh.authMode === undefined || fresh.authMode === "key") && hasKeyPoolFailover(fresh)
+    && (fresh.apiKeyTransport ?? "x-api-key") === (routedProvider.apiKeyTransport ?? "x-api-key")
+    && headerShape(fresh) === sentHeaders
+    && providerApiKeySelectionIsCurrent({ ...config, providers: { ...config.providers, [providerName]: fresh } },
+      providerName, routedProvider);
+  const rotated = rotateKeyAfterFailure(config, providerName, 401, null, options.now,
+    options.attemptedKey, options.attemptedSelection ?? routedProvider._apiKeyAttempt, undefined, acceptsFreshProvider);
+  return rotated ? applyRotatedTransport(providerName, routedProvider, rotated, options.promptCacheKey) : null;
 }
 
 function applyRotatedTransport(
