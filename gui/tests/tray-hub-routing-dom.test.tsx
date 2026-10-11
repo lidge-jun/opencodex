@@ -137,3 +137,29 @@ test('unmounting while targets resolve cancels resolution and polls nothing', as
   await settle(5);
   expect(requests).toEqual([]);
 });
+
+test('unmounting during an account switch aborts the request and starts no refresh', async () => {
+  const base = 'https://hub.example.test';
+  render(async () => base, base);
+  await settle();
+  const reads = stubFetch(base);
+  const put = deferred<Response>();
+  let putSignal: AbortSignal | undefined;
+  Object.defineProperty(globalThis, 'fetch', { configurable: true, writable: true, value: async (input: RequestInfo | URL, init?: RequestInit) => {
+    if ((init?.method ?? 'GET').toUpperCase() !== 'PUT') return reads(input, init);
+    requests.push({ url: String(input), method: 'PUT' });
+    putSignal = init?.signal ?? undefined;
+    return put.promise;
+  } });
+  const use = container.querySelector('button.tray-use') as unknown as HTMLButtonElement | null;
+  expect(use).not.toBeNull();
+  await act(async () => { use!.click(); });
+  expect(putSignal?.aborted).toBe(false);
+  act(() => root!.unmount());
+  root = null;
+  expect(putSignal?.aborted).toBe(true);
+  const settled = requests.length;
+  put.resolve(Response.json({ ok: true }));
+  await settle(5);
+  expect(requests.length).toBe(settled);
+});
