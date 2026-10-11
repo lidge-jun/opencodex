@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { accessSync, constants, readFileSync, realpathSync } from "node:fs";
+import { accessSync, constants, lstatSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { readPid } from "../config/process-state";
@@ -59,23 +59,41 @@ export function desktopStartupOwnership(deps: DesktopStartupDeps = {}): DesktopS
 function macLoginRegistration(deps: DesktopStartupDeps) {
   const execute = deps.run ?? run;
   const path = join(deps.home ?? homedir(), "Library", "LaunchAgents", "OpenCodex.plist");
-  const plist = JSON.parse(execute("/usr/bin/plutil", ["-convert", "json", "-o", "-", path]));
-  const args = plist.ProgramArguments;
-  if (plist.Label !== "OpenCodex" || plist.RunAtLoad !== true || !Array.isArray(args)
-    || args.length !== 2 || args[1] !== "--autostart" || typeof args[0] !== "string"
-    || !args[0].endsWith("/Contents/MacOS/opencodex-desktop")
-    || (plist.Program !== undefined && plist.Program !== args[0])) return null;
-  const app = realpathSync(args[0]);
-  const proxy = realpathSync(join(dirname(app), "ocx"));
-  accessSync(app, constants.X_OK);
-  accessSync(proxy, constants.X_OK);
   const domain = `gui/${deps.uid ?? process.getuid!()}`;
-  const disabled = execute("/bin/launchctl", ["print-disabled", domain]);
-  const override = /"OpenCodex"\s*=>\s*(\w+)/.exec(disabled)?.[1];
-  const enabled = /^\s*disabled services = \{[\s\S]*\}\s*$/.test(disabled)
-    && !/"OpenCodex"\s*=>\s*(?:disabled|true)/.test(disabled)
-    && (override === "enabled" || override === "false" || !disabled.includes('"OpenCodex"'));
-  if (!enabled) return { app, proxy, loginEnabled: false };
+  const identity = (file: string) => {
+    const stat = lstatSync(file, { bigint: true });
+    return [stat.dev, stat.ino, stat.size, stat.mode, stat.mtimeNs, stat.ctimeNs].map(String).join(":");
+  };
+  const capture = () => {
+    const registrationPath = realpathSync(path);
+    const plistIdentity = identity(path), targetIdentity = identity(registrationPath);
+    const definition = execute("/usr/bin/plutil", ["-convert", "json", "-o", "-", path]);
+    const plist = JSON.parse(definition);
+    const args = plist.ProgramArguments;
+    if (plist.Label !== "OpenCodex" || plist.RunAtLoad !== true || !Array.isArray(args)
+      || args.length !== 2 || args[1] !== "--autostart" || typeof args[0] !== "string"
+      || !args[0].endsWith("/Contents/MacOS/opencodex-desktop")
+      || (plist.Program !== undefined && plist.Program !== args[0])
+      || (plist.Disabled !== undefined && typeof plist.Disabled !== "boolean")) return null;
+    const app = realpathSync(args[0]);
+    const proxy = realpathSync(join(dirname(app), "ocx"));
+    accessSync(app, constants.X_OK);
+    accessSync(proxy, constants.X_OK);
+    const appIdentity = identity(app), proxyIdentity = identity(proxy);
+    const disabled = execute("/bin/launchctl", ["print-disabled", domain]);
+    const mentions = disabled.match(/"OpenCodex"/g)?.length ?? 0;
+    const override = /"OpenCodex"\s*=>\s*(enabled|false|disabled|true)(?=\s*(?:\r?\n|[,;}]|$))/.exec(disabled)?.[1];
+    const loginEnabled = /^\s*disabled services = \{[\s\S]*\}\s*$/.test(disabled)
+      && (mentions === 0 ? plist.Disabled !== true : mentions === 1 && (override === "enabled" || override === "false"));
+    if (registrationPath !== realpathSync(path) || plistIdentity !== identity(path) || targetIdentity !== identity(registrationPath)
+      || app !== realpathSync(args[0]) || proxy !== realpathSync(join(dirname(app), "ocx"))
+      || appIdentity !== identity(app) || proxyIdentity !== identity(proxy)) return null;
+    return { app, proxy, loginEnabled, registrationPath, plistIdentity, targetIdentity, definition, appIdentity, proxyIdentity, disabled };
+  };
+  const first = capture();
+  if (!first) return null;
+  const { app, proxy } = first;
+  if (!first.loginEnabled) return { app, proxy, loginEnabled: false };
   let loaded: string;
   try { loaded = execute("/bin/launchctl", ["print", `${domain}/OpenCodex`]); }
   catch (error) {
@@ -88,12 +106,16 @@ function macLoginRegistration(deps: DesktopStartupDeps) {
     const missing = failure?.status === 113 && !failure.signal && !failure.code
       && [message, `Bad request.\n${message}`].includes(stderr.trim());
     if (!missing) throw error;
+    // The absent job supplies no durable registration evidence. Re-read the entire
+    // registration and enabled state; replacement or ambiguity revokes login credit.
+    const final = capture();
+    if (!final || JSON.stringify(first) !== JSON.stringify(final)) return { app, proxy, loginEnabled: false };
     return { app, proxy, loginEnabled: true, loginRegistration: "registered-not-loaded" as const };
   }
   const program = /^\s*program = (.+)$/m.exec(loaded)?.[1];
   const loadedPath = /^\s*path = (.+)$/m.exec(loaded)?.[1];
   const loginEnabled = program !== undefined && realpathSync(program) === app
-    && loadedPath !== undefined && realpathSync(loadedPath) === realpathSync(path);
+    && loadedPath !== undefined && realpathSync(loadedPath) === first.registrationPath;
   return { app, proxy, loginEnabled, ...(loginEnabled ? { loginRegistration: "loaded" as const } : {}) };
 }
 
