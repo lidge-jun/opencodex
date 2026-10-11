@@ -68,7 +68,7 @@ export async function runRemoteMessageCommand(args: RemoteMessageArgs, env: Node
     } finally { budget.dispose(); }
   } catch (error) {
     // Control errors never echo stdin, SSH output, keys or paths; a failed enrollment keeps its transaction.
-    const failure = messageFailure(error), unknown = ["enrollment_unknown", "remote_control_unknown", "cleanup_incomplete"].includes(failure.code);
+    const failure = messageFailure(error), unknown = ["enrollment_unknown", "remote_control_unknown", "remote_storage_unknown", "cleanup_incomplete"].includes(failure.code);
     emit({ schema: "ocx-message-error/1", ...(unknown ? { status: "unknown" } : args.action === "remote-operation" && args.local.action === "send" ? { status: "not_sent" } : {}), error: failure }); return unknown ? 3 : 1;
   } finally { process.removeListener("SIGINT", cancel); process.removeListener("SIGTERM", cancel); }
 }

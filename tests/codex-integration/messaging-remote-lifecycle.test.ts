@@ -276,7 +276,7 @@ test.skipIf(process.platform === "win32")("idempotent close shares one cleanup f
   const helper = spawnRemoteHelper([process.execPath, "-e", 'setInterval(() => {}, 1000)'], capacity);
   expect(helper.close()).toBe(helper.close()); await helper.close();
   const budget = new MessageBudget();
-  try { await expect(runRemoteHelper([process.execPath, "-e", 'console.log("x".repeat(65537))'], budget, capacity)).rejects.toThrow("cleanup budget"); }
+  try { await expect(runRemoteHelper([process.execPath, "-e", 'console.log("x".repeat(65537))'], budget, capacity)).rejects.toThrow("output exceeded"); }
   finally { budget.dispose(); }
-  expect(capacity.snapshot().helpers).toBe(1); expect(capacity.snapshot().outputBytes).toBe(0);
+  expect(capacity.snapshot().helpers).toBe(0); expect(capacity.snapshot().outputBytes).toBe(0);
 });

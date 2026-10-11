@@ -1,12 +1,64 @@
 import { expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, fsyncSync, fstatSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RemoteMessageStore, parseRemoteState } from "../../src/messaging/remote-store";
-import { readRemoteFile, withRemoteLock } from "../../src/messaging/remote-files";
+import { readRemoteFile, removeRemoteFile, withRemoteLock, writeRemoteFile } from "../../src/messaging/remote-files";
 import { remoteMessagingPair } from "../helpers/messaging-remote";
 
 const unixTest = test.skipIf(process.platform === "win32");
+unixTest("publication syncs the file before rename and its directory afterwards, closing both descriptors", () => {
+  const root = mkdtempSync(join(tmpdir(), "ocx-remote-sync-")), path = join(root, "journal.json");
+  const synced: { fd: number; directory: boolean }[] = [];
+  try {
+    writeRemoteFile(path, "durable", fd => {
+      const directory = fstatSync(fd).isDirectory();
+      expect(existsSync(path)).toBe(directory);
+      synced.push({ fd, directory }); fsyncSync(fd);
+    });
+    expect(synced.map(item => item.directory)).toEqual([false, true]);
+    expect(readRemoteFile(path)).toBe("durable");
+    for (const item of synced) expect(() => fstatSync(item.fd)).toThrow();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+unixTest("a failed directory sync reports uncertain durability without erasing the published journal", () => {
+  const root = mkdtempSync(join(tmpdir(), "ocx-remote-sync-fail-")), path = join(root, "journal.json");
+  let directoryFd = -1;
+  try {
+    expect(() => writeRemoteFile(path, "retained", fd => {
+      if (fstatSync(fd).isDirectory()) { directoryFd = fd; throw new Error("private sync diagnostic"); }
+      fsyncSync(fd);
+    })).toThrow("durability could not be confirmed");
+    expect(readRemoteFile(path)).toBe("retained"); expect(() => fstatSync(directoryFd)).toThrow();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+unixTest("file sync failure cannot publish a replacement or reach the directory sync", () => {
+  const root = mkdtempSync(join(tmpdir(), "ocx-remote-file-fail-")), path = join(root, "journal.json");
+  let fileFd = -1;
+  try {
+    writeRemoteFile(path, "old");
+    expect(() => writeRemoteFile(path, "new", fd => {
+      fileFd = fd; expect(fstatSync(fd).isFile()).toBe(true); throw new Error("fixture file sync failed");
+    })).toThrow("fixture file sync failed");
+    expect(readRemoteFile(path)).toBe("old"); expect(() => fstatSync(fileFd)).toThrow();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+unixTest("journal removal syncs its absence and reports a failed durability barrier", () => {
+  const root = mkdtempSync(join(tmpdir(), "ocx-remote-remove-sync-")), path = join(root, "journal.json");
+  let directoryFd = -1;
+  try {
+    writeRemoteFile(path, "old");
+    removeRemoteFile(path, undefined, fd => {
+      directoryFd = fd; expect(fstatSync(fd).isDirectory()).toBe(true); expect(existsSync(path)).toBe(false); fsyncSync(fd);
+    });
+    expect(() => fstatSync(directoryFd)).toThrow();
+    writeRemoteFile(path, "new");
+    expect(() => removeRemoteFile(path, undefined, fd => {
+      directoryFd = fd; throw new Error("private removal sync error");
+    })).toThrow("durability could not be confirmed");
+    expect(existsSync(path)).toBe(false); expect(() => fstatSync(directoryFd)).toThrow();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 unixTest("enable preserves a trusted 0755 configuration home and creates private messaging state", () => {
   const root = mkdtempSync(join(tmpdir(), "ocx-remote-home-")), home = join(root, "ocx"), store = new RemoteMessageStore(home);
   try {

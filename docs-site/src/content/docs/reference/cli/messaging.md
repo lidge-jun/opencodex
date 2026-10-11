@@ -186,6 +186,12 @@ temporary unreachability can permit takeover, not replay. Unexpected tunnel loss
 retires the foreground owner; deliberate peer removal leaves unrelated routes running.
 Crash mutation locks fail closed and need operator recovery;
 the wrapper never guesses that an old lock is abandoned.
+State and recovery-journal publication sync the file and containing directory before dependent
+remote work; journal removal also syncs its directory. `remote_storage_unknown` (exit 3) means
+the storage change's crash durability could not be confirmed: inspect state before explicit
+recovery rather than automatically retrying. A safely readable journal with malformed JSON or
+schema does not block peer removal, but is retained for operator recovery; unsafe storage and
+failure to invalidate a matching journal still refuse removal.
 
 The foreground owner shares finite connection/request/helper/buffer limits across
 all peers and rejects overload without an unbounded queue: at most eight tunnel
@@ -199,6 +205,10 @@ Cleanup joins withdrawn tunnel routes too. Direct-child exit and natural pipe EO
 both settle within the three-second cleanup ceiling; otherwise cleanup is incomplete and
 the helper reservation remains charged. Cancelling retained pipes does not prove descendants
 exited. Detached descendants or descendants that close inherited pipes are not tracked.
+Helper stdout capture is limited to 64 KiB; stderr is discarded without being printed or stored.
+After capture overflow, the helper is stopped and discarded output is drained to natural EOF.
+Successful cleanup reports the original output error; genuinely incomplete cleanup remains
+`cleanup_incomplete` and keeps its helper reservation charged.
 Same-uid processes can read private enrollment state; machine authentication does
 not establish non-forgeable per-agent identity. Native traffic bypassing this gateway
 is not controlled by it.

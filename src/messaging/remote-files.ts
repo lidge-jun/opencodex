@@ -39,6 +39,20 @@ export function remotePathExists(path: string): boolean {
   try { lstatSync(path); return true; }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
 }
+/** A published directory entry must reach storage before dependent remote work starts. */
+function syncRemoteDirectory(path: string, sync = fsyncSync): void {
+  let fd: number | undefined;
+  try {
+    fd = openSync(realpathSync(path), constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+    sync(fd);
+  } catch { throw remoteError("remote_storage_unknown", "Messaging storage changed, but its crash durability could not be confirmed; inspect state before explicit recovery."); }
+  finally { if (fd !== undefined) closeSync(fd); }
+}
+/** Remove only an already-validated journal and persist its absence under the mutation lock. */
+export function removeRemoteFile(path: string, remove = unlinkSync, sync = fsyncSync): void {
+  assertNotRealHomeUnderTest(path); readRemoteFile(path);
+  remove(path); syncRemoteDirectory(dirname(path), sync);
+}
 /** Create only explicitly requested state, refusing an unsafe existing configuration home. */
 export function createRemoteDirectory(path: string): void {
   assertNotRealHomeUnderTest(path);
@@ -47,9 +61,10 @@ export function createRemoteDirectory(path: string): void {
     if (!remotePathExists(dirname(parent))) throw remoteError("unsafe_remote_storage", "Messaging configuration parent must already exist.");
     checkDirectory(dirname(parent), false);
     mkdirSync(parent, { mode: 0o700 });
+    syncRemoteDirectory(dirname(parent));
   }
   checkDirectory(parent, false);
-  if (!remotePathExists(path)) mkdirSync(path, { mode: 0o700 });
+  if (!remotePathExists(path)) { mkdirSync(path, { mode: 0o700 }); syncRemoteDirectory(parent); }
   checkRemoteDirectory(path);
 }
 /** Bounded, fatal-UTF-8, no-follow regular file reads never open SQLite or create absent state. */
@@ -75,7 +90,7 @@ export function readRemoteFile(path: string): string | null {
   finally { closeSync(fd); }
 }
 /** Publish a private file atomically; this primitive is called while its store lock is owned. */
-export function writeRemoteFile(path: string, text: string): void {
+export function writeRemoteFile(path: string, text: string, sync = fsyncSync): void {
   assertNotRealHomeUnderTest(path);
   checkRemoteDirectory(dirname(path));
   if (Buffer.byteLength(text) > REMOTE_LIMITS.storeBytes) throw remoteError("remote_capacity", "Messaging state exceeds its byte limit.");
@@ -83,8 +98,9 @@ export function writeRemoteFile(path: string, text: string): void {
   const temporary = join(dirname(path), `.write-${crypto.randomUUID()}`);
   const fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
   try {
-    try { writeFileSync(fd, text, "utf8"); fsyncSync(fd); } finally { closeSync(fd); }
+    try { writeFileSync(fd, text, "utf8"); sync(fd); } finally { closeSync(fd); }
     renameSync(temporary, path);
+    syncRemoteDirectory(dirname(path), sync);
   } finally { if (remotePathExists(temporary)) unlinkSync(temporary); }
 }
 /** Serialize cooperating mutations. Crash residue fails closed; it is never reaped by age. */

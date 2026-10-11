@@ -6,7 +6,7 @@ import { parseFingerprintLine } from "../link/fingerprint";
 import { MessageBudget } from "./budget";
 import { capability, exactRecord, RemoteCapacity, REMOTE_PROTOCOL, remoteError, validAlias,
   validCapability, validMachine, validPort, REMOTE_LIMITS, type RemoteState } from "./remote-contract";
-import { readRemoteFile, withRemoteLock, writeRemoteFile } from "./remote-files";
+import { readRemoteFile, removeRemoteFile, withRemoteLock, writeRemoteFile } from "./remote-files";
 import { runRemoteHelper } from "./remote-process";
 import { RemoteMessageStore } from "./remote-store";
 import { isThreadId } from "./types";
@@ -18,10 +18,13 @@ export type RemoteControlRunner = (argv: readonly string[], budget: MessageBudge
 function forgetPendingTransaction(store: RemoteMessageStore, transaction: string, removeJournal = unlinkSync): void {
   const path = join(store.directory, "enrollment.json"), text = readRemoteFile(path);
   if (text === null) return;
-  const saved = exactRecord(JSON.parse(text), ["alias", "ssh", "fingerprint", "generation", "request"]);
-  const request = exactRecord(saved.request, ["protocol", "action", "params"]);
-  const params = exactRecord(request.params, ["machine", "transaction", "returnCapability", "port"]);
-  if (params.transaction === transaction) removeJournal(path);
+  let pendingTransaction: unknown;
+  try {
+    const saved = exactRecord(JSON.parse(text), ["alias", "ssh", "fingerprint", "generation", "request"]);
+    const request = exactRecord(saved.request, ["protocol", "action", "params"]);
+    pendingTransaction = exactRecord(request.params, ["machine", "transaction", "returnCapability", "port"]).transaction;
+  } catch { return; } // Uninterpretable text cannot match a valid in-flight saved journal.
+  if (pendingTransaction === transaction) removeRemoteFile(path, removeJournal);
 }
 /** Offer one host fingerprint without enrollment or persistent state; clean only this probe's scratch directory. */
 export async function probeRemoteHost(ssh: string, budget: MessageBudget, capacity: RemoteCapacity,

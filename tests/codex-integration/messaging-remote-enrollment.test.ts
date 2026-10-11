@@ -9,6 +9,44 @@ import { abandonRemoteEnrollment, pendingRemoteEnrollment } from "../../src/mess
 import { parseRemoteMessageArgs } from "../../src/cli/message-remote-args";
 import { repoPath } from "../helpers/repo-root";
 
+test.skipIf(process.platform === "win32")("CLI directory-sync failure reports unknown storage without private diagnostics", async () => {
+  const pair = remoteMessagingPair();
+  const source = `import { mock } from "bun:test";
+    const fs = { ...await import("node:fs") };
+    mock.module("node:fs", () => ({ ...fs, fsyncSync(fd) {
+      if (fs.fstatSync(fd).isDirectory()) throw new Error("private directory sync diagnostic");
+      fs.fsyncSync(fd);
+    } }));
+    const { runMessageCommand } = await import(${JSON.stringify(repoPath("src", "cli", "message-command.ts"))});
+    process.exitCode = await runMessageCommand(["enable", "--json"]);`;
+  try {
+    const child = Bun.spawn([process.execPath, "-e", source], { env: { ...process.env, OPENCODEX_HOME: join(pair.a.root, "ocx") },
+      stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    const [code, out, err] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    expect(code).toBe(3); expect(err).toBe(""); expect(out).not.toContain("private directory sync diagnostic");
+    expect(JSON.parse(out)).toMatchObject({ status: "unknown", error: { code: "remote_storage_unknown" } });
+    expect(pair.aStore.requireEnabled().peers).toHaveLength(1);
+  } finally { await pair.close(); }
+});
+
+for (const removal of ["local", "control"] as const) {
+  for (const malformed of ["{", "{}", '{"request":null}']) {
+    test.skipIf(process.platform === "win32")(`${removal} revocation ignores an unrelated malformed journal (${malformed})`, async () => {
+      const pair = remoteMessagingPair(), budget = new MessageBudget(), capacity = new RemoteCapacity();
+      const peer = pair.aStore.peer("worker"), path = join(pair.aStore.directory, "enrollment.json");
+      try {
+        writeRemoteFile(path, malformed);
+        if (removal === "local") expect(await removeRemoteHost(pair.aStore, "worker", budget, capacity)).toMatchObject({ locallyRemoved: true });
+        else expect(handleEnrollmentControl(pair.aStore, { protocol: REMOTE_PROTOCOL, action: "remove",
+          params: { machineId: peer.machine.id, transaction: peer.transaction } })).toMatchObject({ removed: true });
+        expect(pair.aStore.requireEnabled().peers).toHaveLength(0);
+        expect(readRemoteFile(path)).toBe(malformed);
+        expect(() => pendingRemoteEnrollment(pair.aStore)).toThrow("cannot be safely interpreted");
+      } finally { budget.dispose(); await pair.close(); }
+    });
+  }
+}
+
 test.skipIf(process.platform === "win32")("CLI abandonment reports unconfirmed remote cleanup and never changes an enrolled peer", async () => {
   const pair = remoteMessagingPair(), state = pair.aStore.requireEnabled(), peer = pair.aStore.peer("worker");
   const transaction = crypto.randomUUID(), key = capability();

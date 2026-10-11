@@ -1,6 +1,7 @@
 import { linkSshSpawnEnv } from "../link/ssh-runner";
 import { MessageBudget } from "./budget";
 import { RemoteCapacity, remoteError, REMOTE_LIMITS } from "./remote-contract";
+import { LocalMessagingError } from "./types";
 
 export interface RemoteHelper {
   readonly pid: number; readonly exited: Promise<number>; readonly output: Promise<string>;
@@ -52,7 +53,11 @@ export function spawnRemoteHelper(argv: readonly string[], capacity: RemoteCapac
       await Promise.race([physicallyClosed, new Promise<never>((_, reject) => {
         timer = setTimeout(() => reject(remoteError("cleanup_incomplete", "An owned messaging helper or its pipes did not settle within cleanup budget.")), REMOTE_LIMITS.shutdownMs);
       })]);
-    } catch (error) { cleanupFailure = error; throw error; }
+    } catch (error) {
+      cleanupFailure = error;
+      if (error instanceof Error && failure) error.cause = failure;
+      throw error; // Incomplete cleanup remains visible even when an earlier failure triggered it.
+    }
     finally {
       clearTimeout(force); clearTimeout(timer);
       // Escaped descendants retaining a pipe cannot hold shutdown open forever.
@@ -68,19 +73,26 @@ export function spawnRemoteHelper(argv: readonly string[], capacity: RemoteCapac
   if (signal?.aborted) abort();
   const drain = async (index: number): Promise<string> => {
     const chunks: Uint8Array[] = [], reservations: (() => void)[] = [];
-    let bytes = 0;
+    let bytes = 0, discarding = false;
     try {
       for (;;) {
         const next = await readers[index]!.read();
         if (next.done) { if (!cancelledPipes[index]) pipeEnds[index]!(); break; }
-        bytes += next.value.byteLength;
-        if (bytes > 64 * 1024) throw remoteError("ssh_output_limit", "Messaging helper output exceeded its limit.");
-        const free = capacity.reserve("outputBytes", next.value.byteLength || 1);
-        if (index === 0) { reservations.push(free); chunks.push(next.value); } else free();
+        if (index === 1 || discarding) continue; // stderr is never retained or returned.
+        try {
+          bytes += next.value.byteLength;
+          if (bytes > 64 * 1024) throw remoteError("ssh_output_limit", "Messaging helper output exceeded its limit.");
+          reservations.push(capacity.reserve("outputBytes", next.value.byteLength || 1)); chunks.push(next.value);
+        } catch (error) {
+          failure ??= error instanceof LocalMessagingError ? error : remoteError("ssh_incomplete", "Messaging helper output could not be captured safely.");
+          discarding = true; chunks.length = 0;
+          for (const free of reservations.splice(0)) free();
+          abort(); // Continue discarding until natural EOF proves cleanup, rather than abandoning the reader.
+        }
       }
       return index === 0 ? new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks)) : "";
     } catch {
-      failure = remoteError("ssh_incomplete", "Messaging helper output could not be captured safely.");
+      failure ??= remoteError("ssh_incomplete", "Messaging helper output could not be captured safely.");
       abort(); return "";
     } finally { for (const free of reservations) free(); readers[index]!.releaseLock(); }
   };
@@ -88,7 +100,7 @@ export function spawnRemoteHelper(argv: readonly string[], capacity: RemoteCapac
     if (stdin !== undefined) await child.stdin.write(stdin);
     await child.stdin.end();
   })().catch(() => {
-    failure = remoteError("ssh_incomplete", "Messaging control input could not be written.");
+    failure ??= remoteError("ssh_incomplete", "Messaging control input could not be written.");
     abort(); throw failure;
   });
   const output = Promise.race([stopped, Promise.all([drain(0), drain(1), input]).then(([out]) => {

@@ -36,7 +36,7 @@ test("Linux inspection allows absent IPv6 tables but refuses failed or public li
   } finally { budget.dispose(); }
 });
 
-function fakeProcess(options: { exitCode?: number; output?: string; inputFailure?: boolean; asyncInputFailure?: boolean; exitOnSignal?: boolean; holdPipes?: boolean } = {}) {
+function fakeProcess(options: { exitCode?: number; output?: string; stderr?: string; inputFailure?: boolean; asyncInputFailure?: boolean; exitOnSignal?: boolean; holdPipes?: boolean } = {}) {
   let finish!: (code: number) => void, exitCode = options.exitCode ?? null;
   const signals: NodeJS.Signals[] = [];
   const exited = new Promise<number>(resolve => { finish = resolve; });
@@ -47,7 +47,7 @@ function fakeProcess(options: { exitCode?: number; output?: string; inputFailure
     if (exitCode !== null) controller.close();
   } });
   const child: RemoteHelperProcess = { pid: 12345, get exitCode() { return exitCode; }, exited,
-    stdout: stream(options.output), stderr: stream(), stdin: {
+    stdout: stream(options.output), stderr: stream(options.stderr), stdin: {
       write() { if (options.inputFailure) throw new Error("private fixture input diagnostic"); return 0; },
       end() { return options.asyncInputFailure ? Promise.reject(new Error("private fixture input diagnostic")) : 0; },
     } };
@@ -59,6 +59,51 @@ function fakeProcess(options: { exitCode?: number; output?: string; inputFailure
   } };
   return { child, deps, signals, exit, endPipes };
 }
+
+test("stdout overflow drains to natural EOF and preserves the output-limit failure", async () => {
+  const fixture = fakeProcess({ output: "x".repeat(65537), exitOnSignal: true }), capacity = new RemoteCapacity(), budget = new MessageBudget();
+  try {
+    const error = await runRemoteHelper(["fixture"], budget, capacity, undefined, {}, fixture.deps).catch(error => error);
+    expect(error.code).toBe("ssh_output_limit"); expect(fixture.signals).toEqual(["SIGTERM"]);
+    expect(capacity.snapshot()).toEqual({ connections: 0, requests: 0, helpers: 0, outputBytes: 0 });
+  } finally { budget.dispose(); }
+}, 6000);
+test("stderr is discarded without a lifetime capture limit or retained output reservation", async () => {
+  const fixture = fakeProcess({ output: "ok", stderr: "private diagnostic".repeat(10000), exitCode: 0 });
+  const capacity = new RemoteCapacity(), budget = new MessageBudget();
+  try {
+    expect(await runRemoteHelper(["fixture"], budget, capacity, undefined, {}, fixture.deps)).toBe("ok");
+    expect(fixture.signals).toEqual([]); expect(capacity.snapshot().helpers).toBe(0);
+    expect(capacity.snapshot().outputBytes).toBe(0);
+  } finally { budget.dispose(); }
+}, 6000);
+test("a later input failure cannot replace the original stdout overflow", async () => {
+  const fixture = fakeProcess({ output: "x".repeat(65537), exitOnSignal: true }), capacity = new RemoteCapacity(), budget = new MessageBudget();
+  fixture.child.stdin.end = async () => { await Bun.sleep(1); throw new Error("private later input failure"); };
+  try {
+    const error = await runRemoteHelper(["fixture"], budget, capacity, undefined, {}, fixture.deps).catch(error => error);
+    expect(error.code).toBe("ssh_output_limit"); expect(error.message).not.toContain("private");
+    expect(capacity.snapshot().helpers).toBe(0);
+  } finally { budget.dispose(); }
+});
+test("aggregate capture exhaustion drains discarded stdout and releases only its owned reservations", async () => {
+  const capacity = new RemoteCapacity(), free = capacity.reserve("outputBytes", REMOTE_LIMITS.outputBytes);
+  const fixture = fakeProcess({ output: "overflow", exitOnSignal: true }), budget = new MessageBudget();
+  try {
+    const error = await runRemoteHelper(["fixture"], budget, capacity, undefined, {}, fixture.deps).catch(error => error);
+    expect(error.code).toBe("remote_capacity"); expect(capacity.snapshot().helpers).toBe(0);
+    expect(capacity.snapshot().outputBytes).toBe(REMOTE_LIMITS.outputBytes);
+  } finally { free(); budget.dispose(); }
+  expect(capacity.snapshot().outputBytes).toBe(0);
+});
+test("overflow with a genuinely non-exiting helper preserves its cause but still reports incomplete cleanup", async () => {
+  const fixture = fakeProcess({ output: "x".repeat(65537) }), capacity = new RemoteCapacity(), budget = new MessageBudget();
+  try {
+    const error = await runRemoteHelper(["fixture"], budget, capacity, undefined, {}, fixture.deps).catch(error => error);
+    expect(error.code).toBe("cleanup_incomplete"); expect(error.cause?.code).toBe("ssh_output_limit");
+    expect(capacity.snapshot().helpers).toBe(1); expect(capacity.snapshot().outputBytes).toBe(0);
+  } finally { fixture.exit(0); budget.dispose(); }
+}, 6000);
 
 for (const inputFailure of [false, true]) {
   test(`a non-exiting helper settles bounded cleanup after ${inputFailure ? "input failure" : "cancellation"}`, async () => {

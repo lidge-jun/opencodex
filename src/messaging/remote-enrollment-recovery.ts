@@ -1,8 +1,7 @@
-import { unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { isSshAlias } from "../link/ssh-argv";
 import { exactRecord, remoteError, REMOTE_PROTOCOL, validAlias, validCapability, validMachine, validPort } from "./remote-contract";
-import { readRemoteFile, withRemoteLock } from "./remote-files";
+import { readRemoteFile, removeRemoteFile, withRemoteLock } from "./remote-files";
 import type { RemoteMessageStore } from "./remote-store";
 import { isThreadId } from "./types";
 
@@ -38,7 +37,7 @@ export function abandonRemoteEnrollment(store: RemoteMessageStore, transaction: 
   return withRemoteLock(store.directory, () => {
     const pending = readPending(store);
     if (!pending || pending.transaction !== transaction) throw remoteError("enrollment_pending", "Pending enrollment changed; inspect it before abandoning the exact transaction.");
-    unlinkSync(join(store.directory, "enrollment.json"));
+    removeRemoteFile(join(store.directory, "enrollment.json"));
     return { protocol: REMOTE_PROTOCOL, transaction, locallyAbandoned: true, remote: "unconfirmed",
       remoteCleanupCommand: `ocx message hosts remove ${pending.machineId} --transaction ${transaction} --json`,
       message: "Only the local recovery journal was removed. Existing peers are unchanged; the remote node may retain an enrollment requiring explicit cleanup." };

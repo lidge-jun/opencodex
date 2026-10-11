@@ -20,7 +20,10 @@ OS directory aliases are allowed only with trusted resolved ancestors. An existi
 configuration parent may be 0755; only the owned messaging subtree must be 0700, and enable
 does not chmod the existing parent.
 Mutations acquire an exclusive directory lock and atomically publish private
-files. Crash locks are not automatically reaped by age. Filesystem calls are not
+files, syncing the file before rename and its parent directory before dependent work.
+Creation persists new directory entries; journal removal also syncs the parent before reporting success.
+A failed publication/removal directory sync reports `remote_storage_unknown`; the operation is not
+automatically retried and the visible state is retained for explicit recovery. Crash locks are not automatically reaped by age. Filesystem calls are not
 claimed to resist unrestricted same-uid access or privileged path replacement.
 
 `src/messaging/remote-enrollment.ts` uses a private temporary offered known-hosts
@@ -38,6 +41,9 @@ admission and forgets its matching journal before attempting remote cleanup. Com
 checks exact journal ownership under the state mutation lock; enrollment publication
 precedes journal cleanup. Revocation instead invalidates its matching journal before
 publishing peer absence; cleanup failure leaves the prior state and reports failure.
+Malformed JSON/schema in an otherwise safely readable journal is nonmatching and cannot block
+peer revocation: it cannot equal a valid in-flight journal. It remains available for operator
+recovery. Unsafe/unreadable storage and failure to invalidate a matching journal still refuse.
 An already-completed identical peer can converge without touching a
 newer journal, but a missing journal cannot authorize adding a peer. Unconfirmed remote cleanup is reported
 explicitly and never restores local authorization. Read commands do not enable,
@@ -115,7 +121,8 @@ The owner shares fixed total limits across peers and both route directions:
 16 connections, 32 active/pending requests, ten helpers (eight persistent tunnel children
 plus two transient control/inspection children) and 2 MiB accounted
 retained output/input buffers. Per-connection RPC concurrency is four; frames are
-at most 1 MiB, helper streams 64 KiB and persistent state 128 KiB. There is no
+at most 1 MiB, captured helper stdout 64 KiB and persistent state 128 KiB. stderr is discarded
+without retention or a cumulative lifetime capture limit. There is no
 overload waiting queue. Capacity is reserved before tracked work and released once.
 Transport/parser buffers have their separate fixed frame/connection bounds; the
 2 MiB counter is not a measurement of the runtime's total heap usage.
@@ -133,6 +140,10 @@ cleanup flight even if direct-child exit or natural pipe EOF remains unresolved;
 retain their reservation and report incomplete cleanup, not proven absence. Cancelling a
 pipe is not natural EOF. A historical process-group ID is not signalled after its leader exits;
 descendants that detach or close inherited pipes are outside the observed child/pipe guarantee.
+Stdout capture overflow/exhaustion preserves its first authored error, discards further bytes and
+continues reading both pipes to natural EOF. Successful cleanup releases the helper reservation;
+genuinely incomplete cleanup retains it and reports `cleanup_incomplete` with the original error
+as its sanitized cause, rather than concealing cleanup failure behind the capture error.
 Published tunnel
 pairs remain owned after route withdrawal, so owner shutdown joins their cleanup and
 reports its failures. Existing daemons, proxies and unrelated SSH clients
