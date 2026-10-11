@@ -6,7 +6,7 @@ import { loadConfig, saveConfig } from "../../src/config";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
 import { handleResponses } from "../../src/server/responses";
 import { clearKeyCooldowns, getKeyCooldownUntil } from "../../src/providers/key-failover";
-import { resetProviderRequestPacingForTest, setProviderRequestPacingLimitsForTest, providerRequestPacingStatus } from "../../src/providers/request-pacing";
+import { resetProviderRequestPacingForTest, setProviderRequestPacingLimitsForTest, setProviderRequestPacingRuntimeForTest, providerRequestPacingStatus, waitForProviderRequestSlot, type ProviderRequestSlot } from "../../src/providers/request-pacing";
 import { createRequestExecutionBudget, CODEX_TEXT_GUARDED_BUDGET_POLICY } from "../../src/lib/request-execution-budget";
 import type { OcxConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
@@ -83,6 +83,167 @@ async function send(lane: Lane, config: OcxConfig, signal?: AbortSignal, budget?
     ? handleClaudeMessages(request, config, { model: "", provider: "" })
     : handleResponses(request, config, { model: "", provider: "" }, { abortSignal: signal, sendBudget: budget });
 }
+
+function threeSendBudget() {
+  return createRequestExecutionBudget({ ...CODEX_TEXT_GUARDED_BUDGET_POLICY,
+    maxTotalModelSends: 3, baseSendAllowance: 3, finalRecoveryAllowance: 0, maxTargetTransitions: 2 });
+}
+
+// Observe the real pacer without replacing its clock, queue, timers, or slot admission.
+function observeRecoveryQueued(config: OcxConfig, hasCompetingLease: () => boolean, signal: AbortSignal) {
+  const queued = Promise.withResolvers<void>();
+  const check = () => {
+    if (hasCompetingLease() && providerRequestPacingStatus("anth", config.providers.anth!).queued === 1) {
+      signal.removeEventListener("abort", abort);
+      queued.resolve();
+    }
+  };
+  const abort = () => queued.reject(signal.reason);
+  signal.addEventListener("abort", abort, { once: true });
+  setProviderRequestPacingRuntimeForTest({
+    now: Date.now,
+    setTimer(callback, delayMs) { const timer = setTimeout(callback, delayMs); check(); return timer; },
+    clearTimer: timer => clearTimeout(timer as ReturnType<typeof setTimeout>),
+    enqueueMicrotask: callback => queueMicrotask(() => { callback(); check(); }),
+  });
+  return queued.promise;
+}
+
+for (const ending of ["expires", "caller aborts"] as const) test(`translated queued billing replacement ${ending} without a phantom send`, async () => {
+  const config = fixture(() => { throw new Error("queued fixture must use the isolated fetch fake"); });
+  config.providers.anth!.requestPacing = { enabled: true, maxConcurrentRequests: 1 };
+  saveConfig(config);
+  setProviderRequestPacingLimitsForTest({ maxQueueAgeMs: ending === "expires" ? 150 : 5_000 });
+  const budget = threeSendBudget();
+  const caller = new AbortController();
+  const deadline = AbortSignal.timeout(2_000);
+  const signal = AbortSignal.any([caller.signal, deadline]);
+  const competingCaller = new AbortController();
+  let competingSlot: ProviderRequestSlot | undefined;
+  let competing: Promise<void> | undefined;
+  const recoveryQueued = observeRecoveryQueued(config, () => competingSlot !== undefined, deadline);
+  const priorFetch = globalThis.fetch;
+  globalThis.fetch = (async (input, init) => {
+    const request = new Request(input, init);
+    const apiKey = request.headers.get("x-api-key");
+    const authorization = request.headers.get("authorization");
+    seen.push({ key: apiKey, apiKey, authorization, body: await request.json() });
+    if (seen.length === 1) {
+      // A still owns the physical request lease. Queue a genuine competing request
+      // before its exact billing 400 lets recovery consume A's body and release it.
+      competing = waitForProviderRequestSlot("anth", config.providers.anth!, "claude-x", competingCaller.signal)
+        .then(slot => { competingSlot = slot; });
+      expect(providerRequestPacingStatus("anth", config.providers.anth!)).toMatchObject({ inFlight: 1, queued: 1 });
+    }
+    return refusal();
+  }) as typeof globalThis.fetch;
+  const pending = send("translated", config, signal, budget);
+  try {
+    await recoveryQueued;
+    await competing;
+    expect(competingSlot?.leased).toBe(true);
+    expect(competingSlot?.released).toBe(false);
+    expect(providerRequestPacingStatus("anth", config.providers.anth!)).toMatchObject({ inFlight: 1, queued: 1 });
+    if (ending === "caller aborts") caller.abort(new DOMException("fixture queued caller cancelled", "AbortError"));
+    const response = await pending;
+    const body = await response.text();
+    expect({ status: response.status, physicalFetches: seen.length, used: budget.used })
+      .toEqual({ status: ending === "expires" ? 400 : 499, physicalFetches: 1, used: 1 });
+    if (ending === "expires") expect(body).toContain(creditMessage);
+    expect(body).not.toContain("send_budget_exhausted");
+    expect(seen.map(entry => ({ apiKey: entry.apiKey, authorization: entry.authorization })))
+      .toEqual([{ apiKey: "fixture-key-0", authorization: null }]);
+    expect(getKeyCooldownUntil("anth", "k0")).not.toBeNull();
+    expect(getKeyCooldownUntil("anth", "k1")).toBeNull();
+    expect(providerRequestPacingStatus("anth", config.providers.anth!)).toMatchObject({ inFlight: 1, queued: 0 });
+  } finally {
+    caller.abort();
+    await pending.catch(() => undefined);
+    competingCaller.abort();
+    await competing?.catch(() => undefined);
+    competingSlot?.release();
+    globalThis.fetch = priorFetch;
+    await Promise.resolve();
+    expect(competingSlot?.released).toBe(true);
+    expect(providerRequestPacingStatus("anth", config.providers.anth!)).toMatchObject({ inFlight: 0, queued: 0 });
+  }
+});
+
+test("translated initial queued request expires without any physical fetch or budget charge", async () => {
+  const config = fixture(() => { throw new Error("queued fixture must use the isolated fetch fake"); });
+  config.providers.anth!.requestPacing = { enabled: true, maxConcurrentRequests: 1 };
+  saveConfig(config);
+  setProviderRequestPacingLimitsForTest({ maxQueueAgeMs: 150 });
+  const competingSlot = await waitForProviderRequestSlot("anth", config.providers.anth!, "claude-x");
+  const budget = threeSendBudget();
+  const priorFetch = globalThis.fetch;
+  let physicalFetches = 0;
+  globalThis.fetch = (async () => { physicalFetches++; return success(); }) as typeof globalThis.fetch;
+  try {
+    const response = await send("translated", config, AbortSignal.timeout(2_000), budget);
+    expect(response.ok).toBe(false);
+    expect(await response.text()).toContain("maximum queued age");
+    expect(physicalFetches).toBe(0);
+    expect(budget.used).toBe(0);
+    expect(providerRequestPacingStatus("anth", config.providers.anth!)).toMatchObject({ inFlight: 1, queued: 0 });
+    expect(getKeyCooldownUntil("anth", "k0")).toBeNull();
+    expect(getKeyCooldownUntil("anth", "k1")).toBeNull();
+    expect(loadConfig().providers.anth!.apiKey).toBe("fixture-key-0");
+  } finally {
+    competingSlot.release();
+    globalThis.fetch = priorFetch;
+    await Promise.resolve();
+    expect(competingSlot.released).toBe(true);
+    expect(providerRequestPacingStatus("anth", config.providers.anth!)).toMatchObject({ inFlight: 0, queued: 0 });
+  }
+});
+
+test("translated billing replacement allows one physical reset replay within the shared send budget", async () => {
+  const config = fixture(() => { throw new Error("reset fixture must use the isolated fetch fake"); });
+  config.providers.anth!.retryOnReset = { enabled: true, replacements: 1 };
+  config.providers.anth!.requestPacing = { enabled: true, maxConcurrentRequests: 1 };
+  saveConfig(config);
+  expect(loadConfig().providers.anth!.retryOnReset).toEqual({ enabled: true, replacements: 1 });
+  const budget = threeSendBudget();
+  const priorFetch = globalThis.fetch;
+  globalThis.fetch = (async (input, init) => {
+    const request = new Request(input, init);
+    const apiKey = request.headers.get("x-api-key");
+    const authorization = request.headers.get("authorization");
+    seen.push({ key: apiKey, apiKey, authorization, body: await request.json() });
+    if (seen.length === 1) return refusal();
+    if (seen.length === 2) throw Object.assign(new Error("The socket connection was closed unexpectedly."), { code: "ECONNRESET" });
+    return success();
+  }) as typeof globalThis.fetch;
+  try {
+    // Explicitly disable storage: this complete, tool-free request is eligible for
+    // the configured one-request-wide ambiguous resend grant.
+    const signal = AbortSignal.timeout(2_000);
+    const request = new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" }, signal,
+      body: JSON.stringify({ model: "anth/claude-x", input: "hello", store: false, stream: false }),
+    });
+    const response = await handleResponses(request, config, { model: "", provider: "" }, { abortSignal: signal, sendBudget: budget });
+    expect({ status: response.status, physicalFetches: seen.length, used: budget.used })
+      .toEqual({ status: 200, physicalFetches: 3, used: 3 });
+    expect(await response.text()).toContain("billing recovered");
+    expect(seen.map(entry => ({ apiKey: entry.apiKey, authorization: entry.authorization })))
+      .toEqual([
+        { apiKey: "fixture-key-0", authorization: null },
+        { apiKey: "fixture-key-1", authorization: null },
+        { apiKey: "fixture-key-1", authorization: null },
+      ]);
+    expect(seen[1]!.body).toEqual(seen[0]!.body);
+    expect(seen[2]!.body).toEqual(seen[1]!.body);
+    expect(budget.ambiguousResendSpent).toBe(true);
+    expect(getKeyCooldownUntil("anth", "k0")).not.toBeNull();
+    expect(getKeyCooldownUntil("anth", "k1")).toBeNull();
+    expect(loadConfig().providers.anth!.apiKey).toBe("fixture-key-1");
+  } finally {
+    globalThis.fetch = priorFetch;
+    expect(providerRequestPacingStatus("anth", config.providers.anth!)).toMatchObject({ inFlight: 0, queued: 0 });
+  }
+});
 
 for (const lane of ["native", "translated"] as const) describe(`${lane} Anthropic billing sends`, () => {
   for (const status of [400, 402]) test(`Bearer ${status} billing refusal recovers A→B with identical content`, async () => {

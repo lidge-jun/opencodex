@@ -53,6 +53,8 @@ async function probe(firstStatus: 401 | 429 | 400) {
   const physicalSends: string[] = [];
   const physicalBodies: string[] = [];
   const transportFetch = markEgressTransparentExecutor((async (_url, init) => {
+    // This transparent fixture is the final executor and must deliver its physical receipt.
+    (init as Record<symbol, (() => void) | undefined> | undefined)?.[Symbol.for("opencodex.physical-dispatch")]?.();
     physicalSends.push(new Headers(init?.headers).get("x-api-key") ?? "");
     physicalBodies.push(String(init?.body));
     const index = physicalSends.length - 1;

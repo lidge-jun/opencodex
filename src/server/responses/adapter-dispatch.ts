@@ -1,3 +1,4 @@
+import { deferPhysicalSendReporter } from "./deferred-send-reporter";
 import { spendLedgerStorageErrorResponse } from "./spend-storage-error";
 import { classifyAnthropic429 } from "../../oauth/anthropic-rate-limit-policy";
 import { rotateAnthropicAccountOnResponseForInstance } from "../../oauth/anthropic-account-refusal";
@@ -462,6 +463,8 @@ export async function prepareAdapterExchange(
       const fetchWithRetryPolicy = (route.provider.adapter === "google" || transientPolicy)
         ? fetchWithTransientRetry
         : fetchWithResetRetry;
+      const initialReporter = transientSendReporter(compactPrepaid ?? options.comboDispatchPermit);
+      const deferredInitial = billingPoolRequest && !receiptMode ? deferPhysicalSendReporter(initialReporter) : undefined;
       try { upstreamResponse = await fetchWithRetryPolicy(
         recovery => {
           // Unconfigured generic sends may omit the counting reporter. Capture policy
@@ -470,11 +473,11 @@ export async function prepareAdapterExchange(
             poolId: logCtx.spendPoolId ?? route.providerName, identityId: logCtx.accountLogLabel,
           });
           // Receipt mode books the physical send at executor admission instead of here.
-          if (!receiptMode && compactPrepaid && !compactPrepaidUsed) {
+          if (!deferredInitial && !receiptMode && compactPrepaid && !compactPrepaidUsed) {
             if (!compactPrepaid.use()) throw new SendBudgetExhaustedError(safeHostLabel(builtInitialRequest.url));
             compactPrepaidUsed = true;
           }
-          transportState.noteRoutedAttemptSend(inputTokenEstimate, recovery ?? initialRecovery);
+          if (!deferredInitial) transportState.noteRoutedAttemptSend(inputTokenEstimate, recovery ?? initialRecovery);
           return fetchWithHeaderTimeout(builtInitialRequest.url, applyUpstreamRecoveryInit({
             method: builtInitialRequest.method,
             headers: builtInitialRequest.headers,
@@ -485,6 +488,14 @@ export async function prepareAdapterExchange(
               providerName: route.providerName,
               modelId: route.modelId,
               onPhysicalDispatch: () => {
+                if (deferredInitial) {
+                  if (!deferredInitial.beforeDispatch()) throw new SendBudgetExhaustedError(safeHostLabel(builtInitialRequest.url));
+                  if (compactPrepaid && !compactPrepaidUsed) {
+                    if (!compactPrepaid.use()) throw new SendBudgetExhaustedError(safeHostLabel(builtInitialRequest.url));
+                    compactPrepaidUsed = true;
+                  }
+                  transportState.noteRoutedAttemptSend(inputTokenEstimate, recovery ?? initialRecovery);
+                }
                 // Preserve the unconfigured direct-adapter accounting contract; Combo admission
                 // and explicit retry/compaction budgets require a receipt for their booked send.
                 if (receiptMode) {
@@ -514,7 +525,7 @@ export async function prepareAdapterExchange(
               // settled by `onPhysicalDispatch`, so a reporter here would count them twice.
               ...(receiptMode
                 ? {}
-                : { onSendsConsumed: transientSendReporter(compactPrepaid ?? options.comboDispatchPermit) }),
+                : { onSendsConsumed: deferredInitial?.report ?? initialReporter }),
             }
             : {}),
         },
@@ -726,27 +737,38 @@ export async function prepareAdapterExchange(
               { allowFinalRecoveryReserve: configuredTotal === undefined },
             )
             : undefined;
+          let refetchPermitUsed = false;
+          const refetchReporter = refetchAllowance ? transientSendReporter(refetchAllowance.permit) : undefined;
+          const deferredRefetch = billingPoolRequest && refetchReporter ? deferPhysicalSendReporter(refetchReporter) : undefined;
           try {
             return await refetchWithPolicy(
               recoveryKind => {
                 sendBudgetState.adapterSendBudget?.startRequest?.({
                   poolId: logCtx.spendPoolId ?? route.providerName, identityId: logCtx.accountLogLabel,
                 });
-                if (refetchAllowance?.permit && !refetchAllowance.permit.use()) {
-                  throw new SendBudgetExhaustedError(safeHostLabel(retryRequest.url));
-                }
-                transportState.noteRoutedAttemptSend(retryEstimate, recoveryKind ?? recovery);
-                // Same boundary on the helper path: the thunk is what reaches the wire, and it
-                // can be refused above before it does. use() past the first attempt is a no-op.
-                onDispatch?.();
-                if (preserveFailureResponse) replacementAdmitted = true;
-                if (!refetchAllowance) chargeFastDowngradeWorkflowSend();
+                const confirmDispatch = () => {
+                  if (refetchAllowance?.permit && !refetchPermitUsed) {
+                    if (!refetchAllowance.permit.use()) throw new SendBudgetExhaustedError(safeHostLabel(retryRequest.url));
+                    refetchPermitUsed = true;
+                  }
+                  transportState.noteRoutedAttemptSend(retryEstimate, recoveryKind ?? recovery);
+                  // Eligible pools confirm after pacing at the physical executor; legacy
+                  // helper paths retain their existing thunk admission boundary.
+                  onDispatch?.();
+                  if (preserveFailureResponse) replacementAdmitted = true;
+                  if (!refetchAllowance) chargeFastDowngradeWorkflowSend();
+                };
+                if (!deferredRefetch) confirmDispatch();
                 return fetchWithHeaderTimeout(retryRequest.url,
                   applyUpstreamRecoveryInit({
                     method: retryRequest.method, headers: retryRequest.headers, body: retryRequest.body,
                   }, recoveryKind), upstream.signal, connectMs, parsed.stream,
                   providerFetch(route.provider, options.codexWsRuntimeIdentity, {
                     dispatchOverride: oauthDispatch(retryRequest),
+                    onPhysicalDispatch: deferredRefetch ? () => {
+                      if (!deferredRefetch.beforeDispatch()) throw new SendBudgetExhaustedError(safeHostLabel(retryRequest.url));
+                      confirmDispatch();
+                    } : undefined,
                     providerName: route.providerName,
                     modelId: route.modelId,
                     beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
@@ -760,14 +782,14 @@ export async function prepareAdapterExchange(
                 ...(refetchAllowance
                   ? {
                     attempts: refetchAllowance.attempts,
-                    onSendsConsumed: transientSendReporter(refetchAllowance.permit),
+                    onSendsConsumed: deferredRefetch?.report ?? refetchReporter,
                   }
                   : {}),
               },
             );
           } finally {
-            // Refunds only a reservation whose send never happened -- an abort settled before
-            // the thunk ran. A used or externally settled permit ignores this.
+            // Refund only a reservation whose send never reached its admission boundary.
+            // A used or externally settled permit ignores this.
             refetchAllowance?.permit?.release();
           }
         } finally {
