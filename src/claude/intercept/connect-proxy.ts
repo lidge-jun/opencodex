@@ -124,7 +124,7 @@ function respond(
 
 // Plain proxied HTTP (often loopback MCP traffic missing a NO_PROXY bypass) lands here; say why.
 const CONNECT_ONLY_BODY = "OpenCodex Claude intercept proxy accepts only CONNECT tunnels. "
-  + "Exclude this host via NO_PROXY (loopback: 127.0.0.1,localhost,::1,0.0.0.0).\n";
+  + "Exclude this host via NO_PROXY (loopback and unspecified hosts: 127.0.0.1,localhost,::1,0.0.0.0).\n";
 
 function splice(client: Socket, upstream: Socket, pending: Uint8Array): void {
   const teardown = () => {

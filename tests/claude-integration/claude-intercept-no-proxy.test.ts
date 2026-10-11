@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { firstPartyProxyStatus } from "../../src/claude/first-party-settings";
@@ -154,6 +154,22 @@ test("O11: an apply that starts a new episode drops a receipt left by an earlier
   expect(existsSync(receipt(configDir))).toBe(false);
   removeClaudeInterceptSettings(CA, configDir);
   expect(settings(configDir)).toEqual({ env: { NO_PROXY: LOOPBACK } });
+});
+
+test("a removal whose settings write fails puts the receipt back", () => {
+  const configDir = dir();
+  seed(configDir, { env: { NO_PROXY: "" } });
+  applyClaudeInterceptSettings(env, configDir);
+  const proof = readFileSync(receipt(configDir), "utf8");
+  const settingsFile = join(configDir, "settings.json");
+  restores.push(setNoProxyReceiptIoForTests({ unlink: path => {
+    unlinkSync(path);
+    // A non-empty directory cannot be replaced by a file, so the settings write that follows fails.
+    rmSync(settingsFile);
+    mkdirSync(join(settingsFile, "blocker"), { recursive: true });
+  } }));
+  expect(() => removeClaudeInterceptSettings(CA, configDir)).toThrow();
+  expect(readFileSync(receipt(configDir), "utf8")).toBe(proof);
 });
 
 test("O6: a non-string NO_PROXY keeps the block stale and is never rewritten", () => {

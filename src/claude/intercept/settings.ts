@@ -271,12 +271,21 @@ export function removeClaudeInterceptSettings(
   const env = envRecord(read.doc);
   if (!isOwnedCaPath(env.NODE_EXTRA_CA_CERTS, ownedCaPath)) return { ok: true, changed: false, path };
   const receipt = readNoProxyReceipt(configDir);
+  const receiptBytes = readNoProxyReceiptBytes(configDir);
   delete env.NODE_EXTRA_CA_CERTS;
   if (isClaudeInterceptProxyUrl(env.HTTPS_PROXY)) delete env.HTTPS_PROXY;
   if (receipt && env.NO_PROXY === receipt.written) setOrDelete(env, "NO_PROXY", receipt.hadKey ? receipt.previous : undefined);
   if (!invalidateNoProxyReceipt(configDir)) return { ok: false, reason: "unreadable", path: noProxyReceiptPath(configDir) };
   if (Object.keys(env).length === 0) delete read.doc.env;
   else read.doc.env = env;
-  writeSettings(path, read.doc);
+  try {
+    writeSettings(path, read.doc);
+  } catch (error) {
+    // A removal that did not happen has not ended the episode, so its receipt stays valid.
+    if (receiptBytes !== null) {
+      try { writeNoProxyReceiptBytes(configDir, receiptBytes); } catch { /* keep the original error */ }
+    }
+    throw error;
+  }
   return { ok: true, changed: true, path };
 }
