@@ -318,7 +318,7 @@ export function recoverIfNeeded(
       };
     }
     try {
-      publishConfigWrite(expectedTargets.configPath, held, (destination, hooks) => restore(destination, record.preConfigBytes, hooks));
+      publishConfigWrite(expectedTargets.configPath, held, (destination, hooks) => restore(destination, record.preConfigBytes, expectingImage(hooks, record.postConfig)));
     } catch (error) {
       return {
         ok: false,
@@ -336,7 +336,7 @@ export function recoverIfNeeded(
       };
     }
     try {
-      publishConfigWriteTarget(expectedTargets.configPath, held, expectedTargets.storePath, (destination, hooks) => restore(destination, record.preStoreBytes, hooks));
+      publishConfigWriteTarget(expectedTargets.configPath, held, expectedTargets.storePath, (destination, hooks) => restore(destination, record.preStoreBytes, expectingImage(hooks, record.postStore)));
     } catch (error) {
       return {
         ok: false,
@@ -362,4 +362,22 @@ export function recoverIfNeeded(
 function restore(path: string, bytes: string | null, hooks: AtomicWriteHooks): void {
   if (bytes === null) durableDelete(path, hooks);
   else durableWrite(path, bytes, hooks);
+}
+
+/**
+ * Bind a write to the image the caller classified. The rename retry hooks check
+ * path and inode identity only; an in-place edit by another process during a
+ * Windows sharing-violation retry keeps the inode, so without this re-read a
+ * later attempt would replace newer bytes. Checked before every attempt.
+ */
+export function expectingImage(hooks: AtomicWriteHooks, expectedHash: string): AtomicWriteHooks {
+  return {
+    ...hooks,
+    validateBeforeRename: (targetPath: string) => {
+      hooks.validateBeforeRename?.(targetPath);
+      if (hashBytes(readOrNull(targetPath)) !== expectedHash) {
+        throw new Error(targetPath + " changed during the write; refusing to overwrite it. Files and recovery evidence were preserved.");
+      }
+    },
+  };
 }

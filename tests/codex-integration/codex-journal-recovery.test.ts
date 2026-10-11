@@ -1,12 +1,25 @@
-import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoRoot } from "../helpers/repo-root";
 import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
+import { recoverPromptJournal } from "../../src/codex/prompt-layers";
+import { journalPathFor } from "../../src/codex/prompt-layers/paths";
+import { encodeJournal, hashBytes } from "../../src/codex/prompt-journal";
+import * as atomic from "../../src/lib/windows-atomic-replace";
+
+/**
+ * Whether a rename destination is this fixture file. The transaction publishes
+ * to the native canonical path, and on Windows runners the plain realpath of a
+ * temp-dir path can keep its 8.3 short form, so compare native resolutions.
+ */
+function sameTarget(destination: string, fixturePath: string): boolean {
+  try { return realpathSync.native(destination) === realpathSync.native(fixturePath); } catch { return false; }
+}
 
 setDefaultTimeout(SPAWN_BUDGET_MS);
 
@@ -64,6 +77,54 @@ describe("codex-journal recovery diagnostics", () => {
     writeFileSync(join(testDir, "opencodex-journal.json"), journal);
     return journal;
   }
+
+  test("recovery: store retry refuses newer in-place peer bytes and keeps the journal", () => {
+    const paths = { configPath: join(testDir, "config.toml"), storePath: join(testDir, "store.json") };
+    const preStore = JSON.stringify({ version: 1, layers: [] });
+    const postStore = JSON.stringify({ version: 1, layers: [{ id: "active", title: "Custom", body: "attempt", enabled: true }] });
+    const newer = JSON.stringify({ version: 1, layers: [{ id: "peer", title: "Peer", body: "newer draft", enabled: false }] });
+    writeFileSync(paths.storePath, postStore);
+    const journal = journalPathFor(paths.storePath);
+    // Config is already pre-image, but store needs restoring from post-image.
+    const preparedJournal = encodeJournal({
+      ...paths, preConfig: hashBytes(original), postConfig: hashBytes(injected),
+      preStore: hashBytes(preStore), postStore: hashBytes(postStore),
+      preConfigBytes: original, postConfigBytes: injected,
+      preStoreBytes: preStore, postStoreBytes: postStore,
+    });
+    writeFileSync(journal, preparedJournal);
+    const rename = atomic.renameAtomicFile;
+    let intercepted = false, attempts = 0, peerEdits = 0;
+    const hook = spyOn(atomic, "renameAtomicFile").mockImplementation((source, destination, io, publisher, hooks) => {
+      if (!sameTarget(destination, paths.storePath) || intercepted) return rename(source, destination, io, publisher, hooks);
+      intercepted = true;
+      return rename(source, destination, {
+        platform: "win32",
+        rename: (a, b) => {
+          attempts += 1;
+          if (attempts === 1) throw Object.assign(new Error("fixture sharing violation"), { code: "EBUSY" });
+          renameSync(a, b);
+        },
+        sleep: () => {
+          const inode = statSync(paths.storePath).ino;
+          writeFileSync(paths.storePath, newer);
+          expect(statSync(paths.storePath).ino).toBe(inode);
+          peerEdits += 1;
+        },
+      }, publisher, hooks);
+    });
+    let result;
+    try { result = recoverPromptJournal(paths); }
+    finally { hook.mockRestore(); }
+    expect(intercepted).toBe(true);
+    expect(peerEdits).toBe(1);
+    expect(readFileSync(paths.storePath, "utf8")).toBe(newer);
+    expect(existsSync(journal)).toBe(true);
+    expect(readFileSync(journal, "utf8")).toBe(preparedJournal);
+    expect(result).toMatchObject({ ok: false, error: "recovery_required" });
+    expect(readFileSync(paths.configPath, "utf8")).toBe(original);
+    expect(attempts).toBe(1);
+  });
 
   for (const owner of ["process", "client"] as const) {
     test(`reconcileJournal stays silent when a ${owner === "process" ? "dead-owner" : "client-owner"} journal needs no rewrite`, () => {

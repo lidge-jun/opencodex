@@ -42,7 +42,7 @@ replacement, and turn cleanup release reservations; Qoder shares one budgeted em
 index closes the previous block only when its arguments form a complete JSON object;
 an unindexed delta or stop cannot be attributed to an indexed block, and a nonempty
 argument delta that cannot be attributed fails immediately. Tool-bridge completion requires every opened block to close, preserving the downstream single-open-call contract.
-The authoritative completion signal is adapter-selected: existing shared coding-agent bridges default to `message_stop`, while Qoder selects only the final complete assistant frame's `message.stop_reason === "tool_use"` (its last sibling only). Qoder does not treat `message_stop` as its completion signal. Silence never ends the tool leg. An incomplete call fails closed with `protocol_error`; otherwise the bridge emits one `done(tool_use)` with usage and terminates the parked CLI; the external client owns execution.
+The authoritative completion signal is adapter-selected: existing shared coding-agent bridges default to `message_stop`, while Qoder selects only the final complete assistant frame's `message.stop_reason === "tool_use"` (its last sibling only). Qoder does not treat `message_stop` as its completion signal. Silence never ends the tool leg. An incomplete call fails closed with `protocol_error`; otherwise the bridge emits one `done(tool_use)` with usage and terminates the parked CLI; the external client owns execution. Anthropic-shaped coding-agent usage (`usageFromAnthropicShape` in `src/adapters/coding-agent/protocol.ts`) is inclusive: `inputTokens` is `input_tokens` plus cache read plus cache write, and the partial fold maximizes fresh input before adding the folded cache counters once.
 An indexless argument delta belongs to the sole open block; with multiple blocks open,
 the parser fails the turn before releasing their buffered calls.
 The capture-only bridge checks raw starts, complete tool-use frames and synthesized completion against the init handshake before
@@ -386,6 +386,8 @@ Because `enrichProviderFromRegistry` fills `noVisionModels` all-or-nothing and f
 frozen into any config saved while it was current. `src/providers/stale-vision-classification-migration.ts`
 repairs exactly those two saved values and runs inside the shared startup repair pass in
 `src/providers/model-rename-startup.ts`. Correcting the registry alone fixes new installs only.
+The same pass runs `src/providers/stale-no-vision-seed-migration.ts`: a saved `noVisionModels` list identical, in order, to a retired
+whole-list seed (Qoder Global's roster, before its adapter forwarded images) on a registry-owned row is removed; edited lists stay.
 
 It covers both states that reach a running process, because the sidecar predicate reads
 `noVisionModels` before `modelInputModalities`: the full stale pair (modalities still the stale

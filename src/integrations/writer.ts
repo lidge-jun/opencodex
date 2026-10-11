@@ -39,6 +39,7 @@ import {
   assertDroidPathsUnambiguous,
   isLoopbackOnly,
   resolveIntegrationPaths,
+  type ResolvedIntegrationPaths,
   restoreOwnershipCollision,
   type IntegrationClientId,
 } from "./registry";
@@ -643,8 +644,15 @@ export function restoreIntegration(input: IntegrationRestoreInput): WriteOutcome
   if (entry.clientId !== input.clientId) throw new Error("restore input names a different client than the operation");
 
   const clientId = entry.clientId;
-  const resolvedPath = input.resolvedPaths?.configPath
-    ?? INTEGRATION_CLIENTS[clientId].configPath(input.env, input.home);
+  let resolvedPath: string;
+  try {
+    resolvedPath = clientId === "zcode" || !input.resolvedPaths
+      ? resolveIntegrationPaths(clientId, input.env, input.home, undefined, io).configPath
+      : input.resolvedPaths.configPath;
+  } catch (error) {
+    if (!(error instanceof ClientPathError)) throw error;
+    return refuse(clientId, "unsafe", "unsafe", error.message);
+  }
   const configPath = entry.configPath;
   /*
    * Restore acts on the path the operation was journaled against. Resolving a
@@ -655,7 +663,7 @@ export function restoreIntegration(input: IntegrationRestoreInput): WriteOutcome
    * shape those bytes are in, which is what the state below is measured against.
    */
   const rowTarget = declaredIntegrationTarget({
-    clientId, configPath, resolvedConfigPath: resolvedPath, env: input.env, home: input.home,
+    clientId, configPath, resolvedConfigPath: resolvedPath, env: input.env, home: input.home, io,
   });
   if (rowTarget === null) {
     return refuse(clientId, "conflict", "conflict",
@@ -814,7 +822,7 @@ type FrozenIntegrationInput = IntegrationWriteInput & {
   io: IntegrationIO;
   env: NodeJS.ProcessEnv;
   home: string;
-  resolvedPaths: { configPath: string; detectDir: string };
+  resolvedPaths: ResolvedIntegrationPaths;
 };
 
 /**
@@ -854,7 +862,7 @@ function freezeIntegrationInput(input: IntegrationWriteInput): FrozenIntegration
    */
   const resolvedPaths = input.resolvedPaths
     ? { ...input.resolvedPaths }
-    : resolveIntegrationPaths(input.clientId, env, home, exportContextOf({ ...input, config, models: models.value }));
+    : resolveIntegrationPaths(input.clientId, env, home, exportContextOf({ ...input, config, models: models.value }), io);
   /*
    * The configuration and the roster are seams like the others, and they were the two still held
    * by reference. A coordinated write plans from this input, awaits the writer lock and a
@@ -899,7 +907,7 @@ function storeLockFile(frozen: FrozenIntegrationInput): string | null {
   if (!declared?.lockFile) return null;
   let storePath: string;
   try {
-    storePath = declared.path(frozen.env, frozen.home);
+    storePath = declared.path(frozen.env, frozen.home, frozen.io);
   } catch (error) {
     if (error instanceof ClientPathError) return null;
     throw error;

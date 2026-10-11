@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { createOllamaNativeAdapter } from "../../../src/adapters/ollama-native";
+import { TranslatorBudgetExceededError } from "../../../src/lib/translator-budget";
+import { createOllamaNativeAdapter, OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE } from "../../../src/adapters/ollama-native";
 import { parseRequest } from "../../../src/responses/parser";
-import type { OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
+import { handleResponses } from "../../../src/server/responses/core";
+import type { RequestLogContext } from "../../../src/server/request-log";
+import { acquireOwnedSpendHome } from "../../helpers/owned-spend-home";
+import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
 
 const provider = { adapter: "ollama-native", baseUrl: "https://ollama.com/v1", authMode: "key",
   apiKey: "inert-fixture-key", liveModels: false, models: ["deepseek-v4.1-flash"] } as OcxProviderConfig;
@@ -87,5 +91,108 @@ describe("Ollama code-mode additional output replay (#6574)", () => {
     const ghost = { type: "custom_tool_call_output", call_id: "never-issued", output: "ghost" };
     expect(() => build([user("start"), ghost])).toThrow(/orphan tool result/);
     expect(() => build([exec, output("done"), wait, ghost])).toThrow(/has no originating call/);
+  });
+});
+
+
+/** Replayed identities occur once in input; late carriers must not replicate them without a bound. */
+describe("Ollama late-result attribution budget", () => {
+  const commentary = { type: "message", role: "assistant", content: [{ type: "output_text", text: "settled" }] };
+  const history = (name: string, count: number, id = "bounded-call", namespace?: string): unknown[] => [
+    { type: "function_call", call_id: id, name, ...(namespace === undefined ? {} : { namespace }), arguments: "{}" },
+    { type: "function_call_output", call_id: id, output: "first" },
+    commentary,
+    ...Array.from({ length: count }, () => ({ type: "function_call_output", call_id: id, output: "late" })),
+  ];
+
+  test("long replayed names cannot grow one request through repeated late carriers", () => {
+    expect(() => build(history("a".repeat(32_768), 16))).toThrow(TranslatorBudgetExceededError);
+  });
+
+  test("namespace bytes count toward the same generated-attribution budget", () => {
+    expect(() => build(history("exec", 32, "namespaced-call", "n".repeat(8_192))))
+      .toThrow(TranslatorBudgetExceededError);
+  });
+
+  test("JSON escapes count as wire bytes, not only string length", () => {
+    expect(() => build(history("\u0000".repeat(1_024), 48))).toThrow(TranslatorBudgetExceededError);
+  });
+
+  test("the budget is shared by distinct settled calls in the request", () => {
+    const first = history("a".repeat(8_192), 20, "call-one");
+    const second = history("b".repeat(8_192), 20, "call-two");
+    expect(build(first).at(-1).content).toContain("call-one");
+    expect(build(second).at(-1).content).toContain("call-two");
+    expect(() => build([...first, ...second])).toThrow(TranslatorBudgetExceededError);
+  });
+
+  test("ordinary repeated progress retains its complete attribution and content", () => {
+    const messages = build(history("exec", 1_024));
+    expect(messages.at(-1).content).toBe(
+      '[ocx] additional output for previously issued tool "exec" (bounded-call):\nlate',
+    );
+    expect(messages.filter((message: { role: string }) => message.role === "user")).toHaveLength(1_024);
+  });
+
+  test.each([false, true])("an overflowing replay surfaces HTTP 413 with the late-attribution guidance, not a 400 (stream=%s)", async stream => {
+    // The budget throw leaves the builder inside handleResponses' adapter-dispatch. The
+    // established refusal for a translator-budget error is 413 translation_buffer_limit;
+    // a 400 invalid_request_error would hide the size verdict from the client.
+    const config = {
+      port: 0,
+      defaultProvider: "local-llm",
+      providers: {
+        // A name outside the provider registry: the builtin "ollama" entry resolves to
+        // openai-chat, which is not the adapter under test.
+        "local-llm": {
+          adapter: "ollama-native",
+          baseUrl: "http://127.0.0.1:11434",
+          authMode: "local",
+          allowPrivateNetwork: true,
+          models: ["deepseek-v4.1-flash"],
+        },
+      },
+    } as unknown as OcxConfig;
+    const upstreamCalls: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      upstreamCalls.push(String(input));
+      return new Response("unexpected upstream contact", { status: 500 });
+    }) as typeof fetch;
+    // Direct dispatch needs the writer lease that prevents spend-ledger ownership failures.
+    const releaseSpendHome = acquireOwnedSpendHome();
+    try {
+      const response = await handleResponses(
+        new Request("http://localhost/v1/responses", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            model: "local-llm/deepseek-v4.1-flash",
+            stream,
+            input: history("a".repeat(32_768), 16),
+          }),
+        }),
+        config,
+        { model: "", provider: "" } as RequestLogContext,
+        {},
+      );
+      expect(response.status).toBe(413);
+      const json = await response.json() as { error?: { message?: string; type?: string; code?: string } };
+      // The established local-budget wire (413 request_too_large) with the proxy-owned guidance:
+      // it names the cause and the 256 KiB limit, and points to a new thread, since a compaction
+      // on the same route would resend the same history. It is not a context overflow.
+      expect(json.error).toEqual({
+        message: OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE,
+        type: "request_too_large",
+        code: "request_too_large",
+      });
+      expect(OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE).toContain("256 KiB");
+      expect(OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE).toContain("new thread");
+      // A local refusal never reaches Ollama.
+      expect(upstreamCalls).toEqual([]);
+    } finally {
+      releaseSpendHome();
+      globalThis.fetch = originalFetch;
+    }
   });
 });

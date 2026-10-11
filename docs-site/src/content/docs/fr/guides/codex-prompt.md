@@ -70,6 +70,14 @@ section dans cet ordre ; elles ne s’intercalent pas avec les couches intégré
 Réorganisez-les avec les flèches de la ligne, ou avec `Alt` + `Up` / `Alt` + `Down` depuis
 n’importe quel emplacement de la ligne. L’ordre correspond à l’ordre de composition.
 
+Le panneau affiche la taille combinée des couches actives par rapport à la limite de 128 Kio
+pour `developer_instructions`, ainsi qu’un aperçu repliable du texte assemblé : une couche
+qui ferait dépasser la limite à la section est visible avant l’enregistrement, pas après.
+
+La suppression d’une couche demande d’abord confirmation, puis propose **Annuler** pendant
+quelques secondes : la couche revient à son ancienne position, donc une liste dont l’ordre
+compte survit à un faux pas.
+
 ### Préréglages
 
 **+ Add layer** propose cinq points de départ : sortie concise, planification avant modification,
@@ -91,10 +99,43 @@ en cours de modification, puis revenir sans perdre ce que vous avez saisi.
 L’éditeur avertit lorsqu’une couche contient une instruction qui ne fonctionnera pas telle quelle :
 revendiquer une autre identité, nommer un outil défini par le registre, utiliser des espaces réservés
 de modèle que rien ne développe ou énoncer des informations sur l’environnement que Codex génère
-ultérieurement.
+ultérieurement. Il signale aussi les identifiants collés (une clé API dans une couche part en clair
+au modèle à chaque requête), les formulations qui ordonnent au modèle d’abandonner ses instructions
+précédentes et une identité non-Codex revendiquée en coréen.
 
 Ces avertissements ne bloquent jamais l’enregistrement. Si vous souhaitez remplacer le comportement
 de Codex, vous le pouvez ; l’avertissement permet simplement d’en faire une décision plutôt qu’un accident.
+
+## Variantes du prompt de base
+
+Le prompt de base est le texte propre à Codex, avant les couches additionnelles.
+Le sélecteur propose le prompt par défaut et jusqu’à deux variantes enregistrées dans
+`~/.codex/opencodex-prompt-base/`. L’option par défaut ne contient aucun texte à modifier :
+la choisir supprime `model_instructions_file` de votre configuration.
+
+:::caution
+Une variante **remplace** les instructions de base de Codex. Pour ajouter des consignes
+sans perdre ce comportement, utilisez plutôt une [couche personnalisée](#couches-personnalisées).
+:::
+
+L’éditeur conserve les modifications non enregistrées quand vous passez d’une option à
+l’autre et demande confirmation avant de les abandonner à la fermeture. Le corps est
+mesuré pendant la saisie et limité à 64 KiB par variante.
+
+### Si un autre fichier remplace déjà le prompt de base
+
+Si `model_instructions_file` désigne un fichier écrit par vous ou par un autre outil,
+le sélecteur indique son chemin et refuse de modifier silencieusement la clé.
+**Importer comme variante** affiche d’abord le texte exact qui sera installé : un titre
+sur une ligne `# `, puis le corps avec les fins de ligne et les tabulations normalisées.
+Vous pouvez modifier le titre avant de confirmer. Le corps normalisé est limité à
+64 KiB (`bodyBytes`) ; le fichier complet, titre compris, est légèrement plus grand
+(`serializedBytes`). Un hash lie la confirmation à cet aperçu. Si le fichier ou le titre
+change, l’importation refuse d’installer un texte que vous n’avez pas vu. Vous pouvez
+également supprimer la clé vous-même pour revenir au prompt par défaut.
+
+Les changements s’appliquent aux nouvelles sessions ; les sessions déjà ouvertes
+conservent leur prompt initial.
 
 ## Instructions écrites en dehors d’opencodex
 
@@ -106,8 +147,12 @@ valeur existante, et rien n’est écrit avant votre confirmation.
 
 Si les couches enregistrées et la valeur de `config.toml` divergent, le panneau le signale et
 propose **Repair** au lieu de corriger le problème silencieusement. Deux des méthodes de réparation
-réécrivent votre texte et restent donc intentionnelles. Lorsqu’un fichier de couche a disparu, la
-réparation crée une sauvegarde avant toute modification.
+réécrivent votre texte et restent donc intentionnelles. Une écriture interrompue (« journal present »)
+exécute uniquement une récupération sous verrou à partir des états de fichiers enregistrés dans
+le journal ; elle ne réenregistre pas la liste actuelle et n’invente aucun contenu manquant.
+Si les fichiers ne correspondent à aucun état enregistré, elle refuse et conserve les éléments
+de diagnostic. Le panneau actualisé signale toute divergence restante. Lorsqu’un fichier de couche
+a disparu, la réparation crée une sauvegarde avant toute modification.
 
 ## Quand les modifications prennent effet
 
@@ -132,7 +177,15 @@ Elles se trouvent dans le `config.toml` de Codex, pas dans la configuration prop
 | `include_apps_instructions` | `true` | Applications |
 | `skills.include_instructions` | `true` | Compétences |
 | `developer_instructions` | non défini | Vos couches personnalisées, jointes dans l'ordre |
+| `model_instructions_file` | non défini | Prompt de base lorsqu’une variante est sélectionnée |
 
 L'écriture se fait ligne par ligne : vos commentaires et votre mise en forme sont conservés, et une clé qu'opencodex ne connaît pas est laissée telle quelle plutôt que supprimée.
 
 Une clé absente est lue comme sa valeur par défaut, et non comme `false`. Le panneau affiche la valeur réellement présente dans votre fichier et indique lorsqu'une clé n'est pas définie.
+
+Une ligne portant une valeur explicite propose aussi **Réinitialiser**, qui supprime la ligne de la clé
+plutôt que d'y réécrire la valeur par défaut. C'est le seul état qui continue de suivre la valeur par
+défaut si Codex la change plus tard — écrire `key = true` figerait la valeur d'aujourd'hui comme un
+remplacement.
+
+Cet éditeur de valeurs simples refuse les tableaux, les tables en ligne et les chaînes sur plusieurs lignes avant d’écrire ou de réinitialiser une clé, en conservant les octets d’origine. Un import signale explicitement une configuration illisible. Les aperçus du titre en lecture seule laissent le champ modifiable ; la confirmation reste liée à un aperçu de ce titre. Un échec HTTP ou réseau de la mesure est signalé comme un échec, pas comme une autre mesure en cours.

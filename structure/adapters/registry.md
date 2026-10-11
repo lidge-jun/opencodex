@@ -151,6 +151,24 @@ owned by the selected adapter's final compiler and cannot affect adapter selecti
 
 The shared Responses path follows the [bounded multipart recovery contract](../subagents.md#multipart-encrypted-task-recovery); credential admission and retry policy remain unchanged.
 
+## Empty assistant history
+
+`src/adapters/openai-chat/messages.ts` omits an assistant turn whose joined text is empty and
+that carries neither tool calls nor serialized reasoning while earlier tool calls still await
+their results, so the empty turn cannot split a call from its result. Outside that window, a
+standalone answer made of explicit blank text parts keeps `content: ""`, because dropping it
+would put two user turns next to each other on chat templates that require strict alternation.
+A message with no text parts at all (`content: ""` or `[]` on input) is still omitted, as it
+was before. Whitespace and nonempty answer text stay byte-exact; tool-call and reasoning-only
+continuations keep their existing content shape.
+
+On native Responses, `src/adapters/openai-responses/empty-assistant.ts` removes only explicit
+content-empty assistant message items sent to `api.kimi.com/coding/v1/responses`. Refusals,
+nonempty annotations, unknown parts/fields, reasoning and tools are retained. A same-input `item_reference` keeps its target message, even
+when empty, so filtering cannot create a dangling reference. Independent
+reasoning/call/result items, caller-owned raw history and other destinations are unchanged.
+`tests/adapters/openai/openai-empty-assistant-history.test.ts` covers both final wires.
+
 ## Moonshot `$ref`-with-siblings normalization
 
 Moonshot/Kimi enforce the draft-07 reading where `$ref` must stand alone and 400 the whole

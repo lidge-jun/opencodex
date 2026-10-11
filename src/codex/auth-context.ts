@@ -1,5 +1,6 @@
 import { bindPoolCreditPolicy, poolCreditHoldResetAt, poolContextCreditHoldResetAt } from "./pool-credit-policy";
 import { hasSpendableCodexCredits } from "./quota-types";
+import { nextQuotaQueryDelay } from "./quota-query-backoff";
 import { noteMainAccountActivity } from "./main-account-external-usage";
 import { codexAccountPriorityFailbackEnabled } from "./account-priority";
 import type { PoolQuotaWriter } from "./quota-types";
@@ -553,8 +554,11 @@ function assertPoolAccountCredits(accountId: string, resetAt: number | undefined
 export class CodexMainAccountCreditsOffError extends CodexAccountCooldownError {
   readonly resetAt?: number;
 
-  constructor(resetAt?: number) {
-    super(MAIN_CODEX_ACCOUNT_ID, resetAt ?? 0);
+  constructor(resetAt?: number, creditRecovery = false) {
+    // Keep the included reset as policy evidence, but let consented callers retry
+    // within the base metadata recovery interval even when backoff grows longer.
+    super(MAIN_CODEX_ACCOUNT_ID, creditRecovery
+      ? Math.min(resetAt ?? Infinity, Date.now() + nextQuotaQueryDelay()) : resetAt ?? 0);
     this.name = "CodexMainAccountCreditsOffError";
     this.resetAt = resetAt;
     this.message = "Codex main account reached its usage limit, and spending ChatGPT credits is off or no fresh spendable balance is available."
@@ -778,7 +782,8 @@ function assertMainAccountPolicy(
     const status = getMainAccountHardLockStatus(config);
     if (status.state === "blocked") throw new CodexMainAccountHardLockError(status.resetAt, status.thresholds);
     const creditsResetAt = mainCreditsHoldResetAt(config);
-    if (creditsResetAt !== undefined) throw new CodexMainAccountCreditsOffError(creditsResetAt);
+    if (creditsResetAt !== undefined) throw new CodexMainAccountCreditsOffError(creditsResetAt,
+      codexAccountUsesCreditsAfterLimit(config, MAIN_CODEX_ACCOUNT_ID));
   }
   // Only an admitted request is opencodex's own use of the main account. Counting a refused one
   // would hide outside usage from the warning exactly while the lock is holding.

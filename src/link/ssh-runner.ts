@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 
 const DEFAULT_OUTPUT_BYTES = 64 * 1024;
+const TUNNEL_OUTPUT_EXIT_GRACE_MS = 250;
 const HINT_MAX_CHARS = 160;
 // Written as escapes on purpose: invisible and bidi controls must never sit literally in source.
 const ANSI_SEQUENCE = /\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)|\u001b\[[0-?]*[ -/]*[@-~]|\u001b[@-_]/g;
@@ -93,10 +94,19 @@ export class SshRunnerError extends Error {
   }
 }
 
-async function readOutput(stream: ReadableStream<Uint8Array>, maxBytes: number, kill?: () => void, fatalUtf8 = true): Promise<string> {
+async function readOutput(stream: ReadableStream<Uint8Array>, maxBytes: number, kill?: () => void, fatalUtf8 = true, exited?: Promise<number>): Promise<string> {
   const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
+  let finished = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const cancel = (): void => { void reader.cancel().catch(() => {}); };
+  const onExit = (): void => {
+    if (!finished) timer = setTimeout(cancel, TUNNEL_OUTPUT_EXIT_GRACE_MS);
+  };
+  // A descendant may inherit a pipe after ssh exits. Cancellation completes pending reads
+  // immediately; do not await the underlying source's possibly unbounded cancel promise.
+  void exited?.then(onExit, onExit);
   try {
     for (;;) {
       const next = await reader.read();
@@ -104,11 +114,14 @@ async function readOutput(stream: ReadableStream<Uint8Array>, maxBytes: number, 
       total += next.value.byteLength;
       if (total > maxBytes) {
         kill?.();
+        cancel();
         throw new SshRunnerError("output_limit", `ssh output exceeded ${maxBytes} bytes`);
       }
       chunks.push(next.value);
     }
   } finally {
+    finished = true;
+    if (timer !== undefined) clearTimeout(timer);
     reader.releaseLock();
   }
   const bytes = new Uint8Array(total);
@@ -149,8 +162,8 @@ export function createSshRunner(deps: { spawn?: typeof Bun.spawn; timeoutMs?: nu
     } catch (error) {
       throw new SshRunnerError("spawn", `could not spawn ${argv[0] ?? "ssh"}`, { cause: error });
     }
-    const stdout = readOutput(outputStream(child.stdout), DEFAULT_OUTPUT_BYTES, () => defaultKill(child, "SIGTERM"));
-    const stderr = readOutput(outputStream(child.stderr), DEFAULT_OUTPUT_BYTES, () => defaultKill(child, "SIGTERM"), false);
+    const stdout = readOutput(outputStream(child.stdout), DEFAULT_OUTPUT_BYTES, () => defaultKill(child, "SIGTERM"), true, child.exited);
+    const stderr = readOutput(outputStream(child.stderr), DEFAULT_OUTPUT_BYTES, () => defaultKill(child, "SIGTERM"), false, child.exited);
     void stdout.catch(() => {});
     void stderr.catch(() => {});
     return {

@@ -297,7 +297,7 @@
   "claude-intercept-model-bindings.test.ts": "claude-integration",
   "claude-intercept-proxy.test.ts": "claude-integration", "claude-intercept-client-class.test.ts": "claude-integration",
   "claude-intercept-proxy-auth.test.ts": "claude-integration",
-  "claude-intercept-settings.test.ts": "claude-integration", "claude-management-api.test.ts": "claude-integration",
+  "claude-intercept-settings.test.ts": "claude-integration", "claude-intercept-no-proxy.test.ts": "claude-integration", "claude-management-api.test.ts": "claude-integration",
   "claude-manual-env.test.ts": "gui", "claude-messages-endpoint.test.ts": "claude-integration",
   "claude-messages-thread.test.ts": "claude-integration", "messages-native.test.ts": "claude-integration",
   "messages-native-decline-trace.test.ts": "claude-integration", "messages-native-oauth.test.ts": "claude-integration",
@@ -635,7 +635,9 @@
   "grok-effort-inject.test.ts": "providers/xai", "grok-lifecycle.test.ts": "providers/xai",
   "grok-management-api.test.ts": "providers/xai", "grok-models-effort-list.test.ts": "providers/xai",
   "grok-orphan-adoption.test.ts": "providers/xai", "grok-reset-coupon-cli.test.ts": "providers/xai",
-  "grok-reset-coupons.test.ts": "providers/xai", "grok-selection.test.ts": "providers/xai",
+  "grok-reset-coupons.test.ts": "providers/xai",
+    "grok-coupon-reconcile.test.ts": "providers/xai",
+    "grok-coupon-claim.test.ts": "providers/xai", "grok-selection.test.ts": "providers/xai",
   "grok-session-identity.test.ts": "providers/xai", "grok-status.test.ts": "providers/xai",
   "grok-sync.test.ts": "providers/xai", "grok-writer-boundary.test.ts": "providers/xai",
   "gui-api-error.test.ts": "gui", "html-lang-boot-script.test.ts": "gui",
@@ -816,7 +818,7 @@
   "openai-api-virtual-models.test.ts": "adapters/openai", "openai-chat-bounded-tool-names.test.ts": "adapters/openai",
   "openai-chat-dangling-toolcalls.test.ts": "adapters/openai",
   "openai-chat-developer-position.test.ts": "adapters/openai", "openai-chat-eof.test.ts": "adapters/openai",
-  "openai-chat-hardening.test.ts": "adapters/openai", "openai-chat-image-normalization.test.ts": "adapters/openai",
+  "openai-chat-hardening.test.ts": "adapters/openai", "openai-empty-assistant-history.test.ts": "adapters/openai", "openai-chat-image-normalization.test.ts": "adapters/openai",
   "openai-chat-inline-think-tags.test.ts": "adapters/openai",
   "openai-chat-invalid-tool-call-diagnostics.test.ts": "adapters/openai",
   "openai-chat-model-suffix.test.ts": "adapters/openai", "openai-chat-native-policy.test.ts": "adapters/openai",
@@ -1211,5 +1213,6 @@
   "web-search-run-turn-loop.test.ts": "web-search", "responses-run-turn-web-search.test.ts": "responses",
   "server-combo-cooldown-recording.test.ts": "server", "injection-routing-drift.test.ts": "codex-integration",
   "injection-routing-healer.test.ts": "codex-integration", "injection-routing-heal-apply.test.ts": "codex-integration",
-  "cli-start-routing-heal-wiring.test.ts": "cli", "cli-status-codex-routing-drift.test.ts": "cli"
+  "cli-start-routing-heal-wiring.test.ts": "cli", "cli-status-codex-routing-drift.test.ts": "cli",
+  "codex-set-prompt.test.ts": "gui", "codex-prompt-writes.test.ts": "codex-integration", "codex-prompt-scalar-scope.test.ts": "codex-integration"
 }

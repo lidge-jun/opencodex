@@ -151,6 +151,7 @@ export function TargetEditor({
   strategy,
   providers,
   models,
+  capabilityModels = models,
   providerQuotaStates,
   onChange,
 }: {
@@ -158,6 +159,7 @@ export function TargetEditor({
   strategy: ComboStrategy;
   providers: ProviderOption[];
   models: ModelOption[];
+  capabilityModels?: ModelOption[];
   providerQuotaStates: ProviderQuotaStates;
   onChange: (next: ComboTarget[]) => void;
 }) {
@@ -212,7 +214,7 @@ export function TargetEditor({
         const dragging = dragIndex === index;
         const dropTarget = overIndex === index && dragIndex !== null && dragIndex !== index;
         const quotaState = providerQuotaStates[row.provider.trim()] ?? "unknown";
-        const advertisedReasoningEfforts = models.find(
+        const advertisedReasoningEfforts = capabilityModels.find(
           model => model.provider === row.provider && model.id === row.model,
         )?.reasoningEfforts;
         const advertisedEffortSet = advertisedReasoningEfforts === undefined ? undefined : new Set(advertisedReasoningEfforts);

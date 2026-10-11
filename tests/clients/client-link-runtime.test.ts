@@ -96,6 +96,7 @@ test("an ended link recycles a connected sibling after listener cleanup", async 
   let clientPort = freePort();
   while (clientPort === ownerPort) clientPort = freePort();
   let child: ReturnType<typeof Bun.spawn> | null = null;
+  let drained: Promise<unknown> | null = null;
   let replacementPid: number | null = null;
   try {
     const linkId = "lnk_0123456789abcdef";
@@ -122,13 +123,30 @@ test("an ended link recycles a connected sibling after listener cleanup", async 
     writeClientLinkState({ linkId, alias: "fixture", hubHostKeyFingerprint: `SHA256:${"A".repeat(43)}`,
       peerListenerPort: 34569, tunnelPort: 34567 });
 
-    child = Bun.spawn([process.execPath, fixturePath("client-sibling-recycle-child.ts")], {
+    const spawned = Bun.spawn([process.execPath, fixturePath("client-sibling-recycle-child.ts")], {
       env: { ...process.env, HOME: userHome, USERPROFILE: userHome, CODEX_HOME: codexHome,
         OPENCODEX_HOME: home, OCX_TEST_OWNER_PORT: String(ownerPort), OCX_TEST_CLIENT_PORT: String(clientPort) },
       cwd: root, stdout: "pipe", stderr: "pipe",
     });
-    const clientPid = child.pid;
-    await waitFor(() => existsSync(join(home, "client-runtime-ready")) ? true : null, "connected client readiness");
+    child = spawned;
+    const clientPid = spawned.pid;
+    // Keep the child's recent output from spawn on, so a child that stalls (#4956) fails with
+    // its own state and output instead of a bare timeout. Each buffer keeps the last 4000 chars.
+    const output = { stdout: "", stderr: "" };
+    const drain = async (stream: ReadableStream<Uint8Array>, key: "stdout" | "stderr") => {
+      const decoder = new TextDecoder();
+      try {
+        for await (const chunk of stream) output[key] = (output[key] + decoder.decode(chunk, { stream: true })).slice(-4000);
+      } catch (error) {
+        output[key] += `\npipe read failed: ${String(error)}`;
+      }
+    };
+    drained = Promise.all([drain(spawned.stdout, "stdout"), drain(spawned.stderr, "stderr")]);
+    const withChild = <T>(wait: Promise<T>): Promise<T> => wait.catch(error => {
+      throw new Error(`${error instanceof Error ? error.message : String(error)}; client pid=${clientPid} `
+        + `exit=${spawned.exitCode}\nclient stdout: ${output.stdout.slice(-700)}\nclient stderr: ${output.stderr.slice(-700)}`);
+    });
+    await withChild(waitFor(() => existsSync(join(home, "client-runtime-ready")) ? true : null, "connected client readiness"));
     const initial = JSON.parse(readFileSync(join(home, "runtime-port.json"), "utf8")) as { pid: number; siblingOfPort?: number };
     expect(initial).toMatchObject({ pid: clientPid, siblingOfPort: ownerPort });
 
@@ -136,16 +154,14 @@ test("an ended link recycles a connected sibling after listener cleanup", async 
     delete standalone.client;
     saveConfig(standalone);
     unlinkSync(clientLinkStatePath());
-    const oldExit = await waitFor(() => child?.exitCode ?? null, "connected client recycle exit");
+    const oldExit = await withChild(waitFor(() => spawned.exitCode ?? null, "connected client recycle exit"));
     expect(oldExit).toBe(0);
-    const replacement = await waitFor(() => {
+    const replacement = await withChild(waitFor(() => {
       try {
         const state = JSON.parse(readFileSync(join(home, "runtime-port.json"), "utf8")) as { pid: number; port: number; siblingOfPort?: number };
         return state.pid !== clientPid ? state : null;
       } catch { return null; }
-    }, "standalone replacement runtime").catch(async error => {
-      throw new Error(`${error instanceof Error ? error.message : String(error)}; client stderr: ${(await new Response(child.stderr).text()).slice(-700)}`);
-    });
+    }, "standalone replacement runtime"));
     replacementPid = replacement.pid;
     expect(replacement).toMatchObject({ port: clientPort, siblingOfPort: ownerPort });
     const health = await fetch(`http://127.0.0.1:${clientPort}/healthz`).then(response => response.json()) as { pid?: number };
@@ -153,6 +169,8 @@ test("an ended link recycles a connected sibling after listener cleanup", async 
   } finally {
     if (child?.exitCode === null) child.kill("SIGTERM");
     if (child) await child.exited;
+    // The replacement logs to a file rather than these pipes, so they close with the child.
+    if (drained) await Promise.race([drained, Bun.sleep(2000)]);
     if (replacementPid !== null) {
       try { process.kill(replacementPid, "SIGTERM"); } catch { /* already exited */ }
       await waitFor(() => {

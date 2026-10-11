@@ -162,7 +162,7 @@ ssh -L 20100:localhost:10100 -L 1455:localhost:1455 you@remote
 
 Codex는 제목과 커밋 메시지 같은 작업에 작은 보조 모델을 사용합니다. 인식된 source-model prefix를 다른 구성된 모델로 돌리려면 `shadowCallIntercept`를 활성화합니다. 대체 호출은 요청에 설정된 reasoning effort를 유지합니다. 클라이언트가 다른 helper id를 사용할 때만 `sourceModels`를 설정합니다.
 
-가로채기는 모델을 기준으로 합니다. 모델 ID가 `sourceModels`와 일치하는 모든 요청은 일반 `request_kind: "turn"` 요청을 포함해 다시 보낼 수 있습니다. `x-openai-subagent: collab_spawn` 또는 `x-codex-turn-metadata` JSON 헤더의 `subagent_kind: "thread_spawn"`로 생성된 자식으로 표시된 요청은 예외이므로, 명시적으로 생성된 서브에이전트는 모델을 유지합니다.
+한정되지 않은 모델 ID가 `sourceModels`와 일치하면 가로채기 대상이지만, `x-codex-turn-metadata`에 `request_kind: "turn"`과 `thread_source: "user"`가 함께 명시된 사용자 턴은 선택한 모델을 유지합니다. 연결 헤더 `x-openai-subagent: collab_spawn`(HTTP 요청 또는 WebSocket 핸드셰이크) 또는 메타데이터의 `subagent_kind: "thread_spawn"`으로 표시된 자식도 모델을 유지합니다. WebSocket에서 턴 메타데이터는 각 프레임의 `client_metadata["x-codex-turn-metadata"]`만 사용하며 핸드셰이크의 턴 메타데이터는 이후 프레임을 분류하지 않습니다. 메타데이터가 없거나 잘못된 형식이면 기존 가로채기 동작을 유지합니다. 헬퍼도 `request_kind: "turn"`을 사용할 수 있으므로 이 필드만으로는 예외가 되지 않습니다. 이 규칙은 구체적 모델 대상과 콤보 대상에 모두 적용됩니다.
 
 ```json
 {

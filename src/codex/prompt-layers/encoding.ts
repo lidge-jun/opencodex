@@ -119,3 +119,52 @@ export function decodeTomlBasicString(literal: string): string | null {
   }
   return out;
 }
+
+/** Shared scalar assignment matching; quoted and escaped keys retain their spelling. */
+export function matchKeyHead(line: string, key: string): { prefix: string; rest: string } | null {
+  const m = /^\s*("(?:[^"\\]|\\.)*"|'[^']*'|[A-Za-z0-9_-]+)\s*=\s*/.exec(line);
+  if (!m) return null;
+  const token = m[1]!;
+  const decoded = token.startsWith('"') ? decodeTomlBasicString(token)
+    : token.startsWith("'") ? token.slice(1, -1) : token;
+  return decoded === key ? { prefix: m[0], rest: line.slice(m[0].length) } : null;
+}
+
+/**
+ * For each line, whether it begins outside every string and composite span, or
+ * `null` when a span never closes and the scope of later lines is unknown.
+ *
+ * Line matchers for assignments and table headers must only look at lines that
+ * start at top level: `"model_instructions_file" = "x"` written inside a
+ * `"""…"""` value or a multi-line array is prose, not syntax. Readers and
+ * editors share this so a write and the snapshot read back agree.
+ */
+export function lexicalLineStarts(lines: readonly string[]): boolean[] | null {
+  const starts: boolean[] = [];
+  let open: string | null = null;
+  let depth = 0;
+  for (const line of lines) {
+    starts.push(open === null && depth === 0);
+    for (let i = 0; i < line.length; i += 1) {
+      const char = line[i]!;
+      if (open !== null) {
+        if (char === "\\" && (open === '"' || open === '"""')) { i += 1; continue; }
+        if (char !== open[0]) continue;
+        if (open.length === 1) { open = null; continue; }
+        let run = 0;
+        while (line[i + run] === char) run += 1;
+        // Up to two quotes may sit inside the value just before the closing three.
+        if (run >= 3) open = null;
+        i += run - 1;
+      } else if (char === "#") break;
+      else if (char === '"' || char === "'") {
+        open = line.startsWith(char.repeat(3), i) ? char.repeat(3) : char;
+        i += open.length - 1;
+      } else if (char === "[" || char === "{") depth += 1;
+      else if (char === "]" || char === "}") { depth -= 1; if (depth < 0) return null; }
+    }
+    // Single-line strings cannot cross a newline.
+    if (open !== null && open.length === 1) return null;
+  }
+  return open === null && depth === 0 ? starts : null;
+}

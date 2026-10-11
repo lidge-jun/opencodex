@@ -13,6 +13,9 @@ temporary, translocated, debug and unpackaged launches do not install it.
 `desktop/src-tauri/src/cli_command_record.rs` owns the private `.opencodex-desktop/cli.json`
 record (64 KiB cap), OS-backed lock and external pending journals with before/after digests.
 The record grants generated-file ownership only, never runtime, service or shutdown authority.
+Lock acquisition is nonblocking and excludes a second open in the same process. An owning guard
+explicitly unlocks before closing, including on failed opens: Unix releases the shared file
+description with `LOCK_UN`; Windows releases offset 0, length 1 with `UnlockFileEx`.
 An enabled record carries a validated host-platform bundle even on its first pending save;
 disabled intent wins over pending work. Invalid records and journal conflicts block mutation;
 unreferenced journals are deleted only under the lock after a valid (or absent) record read.

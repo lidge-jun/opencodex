@@ -29,3 +29,29 @@ export function createBoundedFetch(ms: number): BoundedFetch {
     clear: () => clearTimeout(timeoutId),
   };
 }
+
+/** Bound headers and body work even when a transport ignores abort; late writers must check signal. */
+export async function withFetchDeadline<T>(ms: number, caller: AbortSignal | undefined, work: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  caller?.throwIfAborted();
+  const bounded = createBoundedFetch(ms);
+  const cancel = () => bounded.controller.abort(caller?.reason);
+  caller?.addEventListener("abort", cancel, { once: true });
+  let onAbort!: () => void;
+  const aborted = new Promise<never>((_, reject) => {
+    onAbort = () => reject(bounded.signal.reason ?? new DOMException("Aborted", "AbortError"));
+    bounded.signal.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    const operation = (async () => {
+      bounded.signal.throwIfAborted();
+      return work(bounded.signal);
+    })();
+    const result = await Promise.race([operation, aborted]);
+    bounded.signal.throwIfAborted();
+    return result;
+  } finally {
+    bounded.clear();
+    caller?.removeEventListener("abort", cancel);
+    bounded.signal.removeEventListener("abort", onAbort);
+  }
+}

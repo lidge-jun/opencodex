@@ -363,6 +363,17 @@ one directory entry, owned by the process user. A refusal raises `SpendLedgerFil
 content (#6314). Before this, one sentence covered five conditions and two files. A macOS sync
 daemon briefly holding a second link to a journal inside a synced folder could then only be
 diagnosed from an instrumented build. The guard is unchanged.
+Responses dispatch maps this local refusal, including nested retry causes, to HTTP 503 with
+`type: "server_error"` and `code: "spend_ledger_storage_unavailable"`. The sanitized role,
+condition and synced-folder guidance reach the client without a "Provider unreachable" prefix.
+Passthrough and compact release admission leases without recording host or account-health
+failures; translated initial/recovery dispatch uses the same mapping. runTurn preserves the code
+in buffered HTTP 503 responses and Combo preflight; an already committed SSE response carries
+it in a structured terminal error. Generic upstream 503 remains `server_is_overloaded`.
+The request log marks this as a synthetic `local-refusal`, preserves the storage code, and
+releases only admission/probe leases: existing spend debt and dispatched-send charges remain.
+Both 502 and 503 already belong to the internal transient-status and Combo-hop sets, so
+this response correction does not change those retry sets.
 `src/lib/synced-state-location.ts` is the advisory half. `acquireSpendLedgerServerLifecycle`
 warns once at startup when the state directory resolves inside iCloud Drive, a File Provider
 folder, Desktop/Documents with iCloud Desktop & Documents sync detected, or Desktop/Documents

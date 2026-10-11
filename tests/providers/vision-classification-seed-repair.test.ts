@@ -13,6 +13,8 @@ import {
   STALE_VISION_CLASSIFICATIONS,
 } from "../../src/providers/stale-vision-classification-migration";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
+import { projectStaleNoVisionSeeds, STALE_NO_VISION_SEEDS } from "../../src/providers/stale-no-vision-seed-migration";
+import { projectStartupConfigRepairs } from "../../src/providers/model-rename-startup";
 import { requiresVisionPreprocessing } from "../../src/vision/plan";
 import type { OcxConfig } from "../../src/types";
 
@@ -153,6 +155,69 @@ describe("stale vision classification migration", () => {
       expect(registry?.modelInputModalities?.[entry.model], entry.model).toEqual(entry.toModalities);
       expect(registry?.noVisionModels ?? [], entry.model).not.toContain(entry.model);
       expect(entry.fromModalities).not.toEqual(entry.toModalities);
+    }
+  });
+});
+
+describe("stale whole-list noVisionModels seed (#6906)", () => {
+  const QODER_SEED = ["Qwen3.8-Max", "Qwen3.7-Max", "Qwen3.7-Plus", "Kimi-K3", "Kimi-K2.7-Code", "GLM-5.3", "GLM-5.2"];
+  const qoderRow = (noVisionModels: string[] | undefined, overrides: Record<string, unknown> = {}) => ({
+    adapter: "qoder",
+    baseUrl: "https://qoder.com",
+    ...(noVisionModels ? { noVisionModels: [...noVisionModels] } : {}),
+    ...overrides,
+  });
+  const qoderConfig = (row: Record<string, unknown>): OcxConfig =>
+    ({ providers: { qoder: row } } as unknown as OcxConfig);
+
+  test("removes an untouched Qoder Global seed so images reach the adapter", () => {
+    const config = qoderConfig(qoderRow(QODER_SEED));
+    const row = config.providers.qoder;
+    expect(requiresVisionPreprocessing(config, row, "Qwen3.8-Max", "qoder")).toBe(true);
+    const projection = projectStaleNoVisionSeeds(config);
+    expect(projection.changed).toBe(true);
+    expect(projection.warnings).toHaveLength(1);
+    expect(Object.hasOwn(row, "noVisionModels")).toBe(false);
+    expect(requiresVisionPreprocessing(config, row, "Qwen3.8-Max", "qoder")).toBe(false);
+  });
+
+  test("removes the earlier seed that still listed DeepSeek-V4-Pro", () => {
+    const config = qoderConfig(qoderRow([...QODER_SEED, "DeepSeek-V4-Pro"]));
+    expect(projectStaleNoVisionSeeds(config).changed).toBe(true);
+    expect(Object.hasOwn(config.providers.qoder, "noVisionModels")).toBe(false);
+  });
+
+  test("leaves an edited, reordered or partial list alone", () => {
+    for (const list of [[...QODER_SEED, "Custom-Model"], [...QODER_SEED].reverse(), QODER_SEED.slice(1), []]) {
+      const config = qoderConfig(qoderRow(list));
+      expect(projectStaleNoVisionSeeds(config).changed, list.join(",")).toBe(false);
+      expect(config.providers.qoder.noVisionModels).toEqual(list);
+    }
+  });
+
+  test("leaves rows the registry no longer owns alone", () => {
+    for (const overrides of [{ baseUrl: "https://qoder.cn" }, { baseUrl: "https://gateway.example" }, { adapter: "openai-chat" }]) {
+      const config = qoderConfig(qoderRow(QODER_SEED, overrides));
+      expect(projectStaleNoVisionSeeds(config).changed, JSON.stringify(overrides)).toBe(false);
+      expect(config.providers.qoder.noVisionModels).toEqual(QODER_SEED);
+    }
+  });
+
+  test("keeps per-model declarations and runs in the shared startup pass", () => {
+    const capabilities = { "Qwen3.8-Max": { inputModalities: ["text" as const] } };
+    const config = qoderConfig(qoderRow(QODER_SEED, { modelCapabilities: capabilities }));
+    const projection = projectStartupConfigRepairs(config);
+    expect(projection.changed).toBe(true);
+    expect(Object.hasOwn(projection.config.providers.qoder, "noVisionModels")).toBe(false);
+    expect(projection.config.providers.qoder.modelCapabilities).toEqual(capabilities);
+  });
+
+  test("every entry targets a registry row that no longer seeds the list", () => {
+    for (const entry of STALE_NO_VISION_SEEDS) {
+      const registry = PROVIDER_REGISTRY.find(row => row.id === entry.provider);
+      expect(registry, entry.provider).toBeDefined();
+      expect(registry?.noVisionModels, entry.provider).toBeUndefined();
+      expect(entry.seeds.length).toBeGreaterThan(0);
     }
   });
 });

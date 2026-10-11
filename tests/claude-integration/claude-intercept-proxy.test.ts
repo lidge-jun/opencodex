@@ -293,6 +293,11 @@ test("malformed destination restrictions fail before a listener starts", () => {
 test("plain proxied HTTP, loopback targets and oversized heads are refused", async () => {
   const { proxy } = await startPair();
   expect(await rawRequest(proxy.port, "GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\n\r\n")).toStartWith("HTTP/1.1 405");
+  // The #6936 shape: loopback MCP over plain HTTP. The refusal names the NO_PROXY fix.
+  const mcp = await rawRequest(proxy.port, "POST http://127.0.0.1:3773/mcp HTTP/1.1\r\nHost: 127.0.0.1:3773\r\nContent-Length: 0\r\n\r\n");
+  expect(mcp).toStartWith("HTTP/1.1 405");
+  expect(mcp).toContain("Allow: CONNECT\r\n");
+  expect(mcp.slice(mcp.indexOf("\r\n\r\n") + 4)).toContain("NO_PROXY");
   expect(await rawRequest(proxy.port, `CONNECT 127.0.0.1:22 HTTP/1.1\r\n${AUTH_HEADER}\r\n`)).toStartWith("HTTP/1.1 403");
   expect(await rawRequest(proxy.port, `CONNECT localhost:443 HTTP/1.1\r\n${AUTH_HEADER}\r\n`)).toStartWith("HTTP/1.1 403");
   expect(await rawRequest(proxy.port, `CONNECT [::ffff:127.0.0.1]:22 HTTP/1.1\r\n${AUTH_HEADER}\r\n`)).toStartWith("HTTP/1.1 403");

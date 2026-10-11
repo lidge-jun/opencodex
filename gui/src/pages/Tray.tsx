@@ -8,6 +8,7 @@ import { quotaSeverity } from '../quota-summary';
 import { UsageCompanionChart } from './usage-companion-chart';
 import { companionTimelineQuery, companionTimelineProjection, type CompanionSettings, type CompanionSettingsResponse, type UsageTimeline } from './usage-companion-utils';
 import { accountSwitchRequest, fetchTrayJson, parseTrayUsage, filterUsage, measuredTotals, finite, parseAccounts, providerSources, quotaWindows, relativeReset, type TrayProvider, type TraySwitchKind, type TrayTotals, type TrayUsage } from './tray-data';
+import { resolveTrayApiBase } from './tray-targets';
 
 declare global { interface Window { __OPENCODEX_TRAY_VISIBLE__?: boolean } }
 
@@ -16,8 +17,16 @@ const SWITCH_TIMEOUT_MS = 20_000;
 
 const incomplete = (data: TrayUsage | null | undefined) => data?.usageIncomplete || data?.historyTruncated || data?.entriesTruncated;
 
-export default function Tray() {
+export interface TrayProps {
+  /** Where tray requests go; the default runs App's discovery and hub-session bootstrap. */
+  resolveApiBase?: (signal: AbortSignal) => Promise<string>;
+}
+
+export default function Tray({ resolveApiBase = resolveTrayApiBase }: TrayProps = {}) {
   const { t, locale } = useI18n();
+  // Null until the runtime's targets are known: nothing is polled before then (#6920).
+  const [apiBase, setApiBase] = useState<string | null>(null);
+  const [targetError, setTargetError] = useState(false);
   const [settings, setSettings] = useState<CompanionSettings | null>(null);
   const [settingsError, setSettingsError] = useState(false);
   const [usage, setUsage] = useState<(TrayUsage | null)[]>([null, null]);
@@ -31,33 +40,59 @@ export default function Tray() {
   const [revision, setRevision] = useState(0);
   const [switching, setSwitching] = useState<string | null>(null);
   const [switchError, setSwitchError] = useState<string | null>(null);
-  const retry = () => setRevision(value => value + 1);
+  const retry = () => { setTargetError(false); setRevision(value => value + 1); };
   // Set after a successful switch: the pending row stays busy until the reload it started lands.
   const awaitingRefresh = useRef(false);
+  // A switch still in flight when the popup unmounts is cancelled and writes no state.
+  const switchController = useRef<AbortController | null>(null);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    document.documentElement.classList.add('tray-document');
+    return () => {
+      mounted.current = false;
+      switchController.current?.abort();
+      document.documentElement.classList.remove('tray-document');
+    };
+  }, []);
+  useEffect(() => {
+    if (apiBase !== null) return;
+    const controller = new AbortController();
+    resolveApiBase(controller.signal).then(
+      base => { if (!controller.signal.aborted) setApiBase(base); },
+      () => { if (!controller.signal.aborted) setTargetError(true); },
+    );
+    return () => controller.abort();
+  }, [revision, apiBase, resolveApiBase]);
   // The same route and body the native panel sends; the dashboard session supplies the
   // credentials. The switch settles only when the reload shows the runtime's own selection.
   const switchAccount = async (provider: string, kind: TraySwitchKind, accountId: string) => {
+    if (apiBase === null) return;
     setSwitching(`${provider}:${accountId}`);
     setSwitchError(null);
     const bounded = createBoundedFetch(SWITCH_TIMEOUT_MS);
+    switchController.current = bounded.controller;
     try {
       const request = accountSwitchRequest(provider, kind, accountId);
-      const response = await fetch(request.path, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request.body), signal: bounded.signal });
+      const response = await fetch(`${apiBase}${request.path}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request.body), signal: bounded.signal });
       if (!response.ok) throw new Error(String(response.status));
+      if (!mounted.current) return;
       awaitingRefresh.current = true;
       retry();
     } catch {
+      if (!mounted.current) return;
       setSwitching(null);
       setSwitchError(t(kind === 'codex' ? 'codexAuth.switchFailed' : 'prov.accountSwitchFail'));
     } finally {
       bounded.clear();
+      if (switchController.current === bounded.controller) switchController.current = null;
     }
   };
 
   // Every post-await state write checks both effect disposal and the request's AbortSignal.
   // react-doctor-disable-next-line react-doctor/no-set-state-after-await-in-effect
   useEffect(() => {
-    document.documentElement.classList.add('tray-document');
+    if (apiBase === null) return;
     let controller: AbortController | null = null;
     let busy = false;
     let focused = true;
@@ -70,7 +105,7 @@ export default function Tray() {
       let hadSuccess = false;
       const current = new AbortController();
       controller = current;
-      const json = <T,>(path: string) => fetchTrayJson<T>(path, current.signal);
+      const json = <T,>(path: string) => fetchTrayJson<T>(`${apiBase}${path}`, current.signal);
       const active = () => !disposed && !current.signal.aborted;
       try {
         // Quotas load independently: usage/settings failures must not hide account limits.
@@ -148,12 +183,11 @@ export default function Tray() {
     window.addEventListener('opencodex:tray-visibility', nativeVisibility);
     return () => {
       disposed = true; controller?.abort(); clearInterval(timer);
-      document.documentElement.classList.remove('tray-document');
       document.removeEventListener('visibilitychange', changed);
       window.removeEventListener('blur', blur); window.removeEventListener('focus', focus);
       window.removeEventListener('opencodex:tray-visibility', nativeVisibility);
     };
-  }, [revision]);
+  }, [revision, apiBase]);
 
   const number = (value: unknown) => finite(value) ? formatTokens(value, locale) : '—';
   const totals = (raw: TrayTotals | undefined) => {
@@ -172,8 +206,9 @@ export default function Tray() {
   const hiddenProviders = new Set(settings?.hiddenProviders ?? []);
   return <main className="tray-page">
     <header><strong>OpenCodex</strong><a href="/?desktop=open#/usage" aria-label={t('sub.settings')} title={t('sub.settings')}>⚙</a></header>
+    {targetError && <p role="alert" className="tray-error">{t('startup.tray.unavailable')} <button onClick={retry}>{t('common.retry')}</button></p>}
     {settingsError && <p role="alert" className="tray-error">{t('usage.companion.settingsUnavailable')} <button onClick={retry}>{t('common.retry')}</button></p>}
-    {!settings && !settingsError && <p role="status">{t('common.loading')}</p>}
+    {!settings && !settingsError && !targetError && <p role="status">{t('common.loading')}</p>}
     {settings && <section className="tray-totals">
       {settings.showToday && <div><h2>{t('tray.today')}{incomplete(usage[0]) && <span title={t('usage.incomplete')} aria-label={t('usage.incomplete')}> *</span>}</h2>{totals(usage[0]?.summary)}</div>}
       <div><h2>{t('usage.range.30d')}{incomplete(usage[1]) && <span title={t('usage.incomplete')} aria-label={t('usage.incomplete')}> *</span>}</h2>{totals(usage[1]?.summary)}</div>

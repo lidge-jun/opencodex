@@ -14,7 +14,7 @@ import {
 import type { ManagementApiDeps } from "../../src/server/management/context";
 import type { OcxConfig } from "../../src/types";
 import type { LinkStore } from "../../src/link/store";
-import type { LinkSupervisor } from "../../src/link/supervisor";
+import { createLinkSupervisor, type LinkSupervisor } from "../../src/link/supervisor";
 import type { SshRunner, SshChild, SshRunResult } from "../../src/link/ssh-runner";
 import { quoteRemote, remoteOcxArgv } from "../../src/link/ssh-argv";
 import { trustedLoopbackForIngress, type ServerIngress } from "../../src/server/index/serve-options";
@@ -466,6 +466,130 @@ describe("link management routes", () => {
     expect(h.store.links.map(link => link.alias)).toEqual(["other"]);
   });
 
+  test("R1c: force DELETE and POST reconnect cannot recreate a removed tunnel", async () => {
+    temp = mkdtempSync(join(tmpdir(), "ocx-link-force-remove-drain-"));
+    const h = harness();
+    const id = "lnk_0123456789abcdef";
+    h.deps.writeLinkStore!({ ...h.store, links: [{ id, alias: "child", direction: "hub-initiated", hostKeyFingerprint: "SHA256:abcdefghijklmnop", tunnelPort: 2200, apiKeyId: "key-1", createdAt: "2026-09-25T00:00:00.000Z" }] });
+    let exitOld!: (code: number) => void;
+    const oldExit = new Promise<number>(resolve => { exitOld = resolve; });
+    let killed!: () => void;
+    const draining = new Promise<void>(resolve => { killed = resolve; });
+    const live = new Set<SshChild>();
+    let spawned = 0;
+    let tick!: () => void;
+    const runner: SshRunner = {
+      async run() { throw new Error("force removal must skip remote disconnect"); },
+      spawnTunnel(argv) {
+        const first = spawned === 0;
+        let finish!: (code: number) => void;
+        const exited = first ? oldExit : new Promise<number>(resolve => { finish = resolve; });
+        const child: SshChild = { pid: 400 + spawned++, argv: [...argv], exited,
+          kill: () => { if (first) killed(); else finish(143); },
+        };
+        live.add(child);
+        void exited.then(() => live.delete(child));
+        return child;
+      },
+    };
+    const real = createLinkSupervisor({ readStore: () => h.store, runner,
+      readPidfile: () => null, writePidfile: () => {}, removePidfile: () => {},
+      setTimer: callback => { tick = callback; return 1 as unknown as ReturnType<typeof setInterval>; }, clearTimer: () => {},
+    });
+    real.start();
+    let closed = false;
+    let removalEntered!: () => void;
+    const removalStopping = new Promise<void>(resolve => { removalEntered = resolve; });
+    const stopLink = real.stopLink;
+    real.stopLink = linkId => {
+      const stopped = stopLink(linkId);
+      removalEntered();
+      return stopped;
+    };
+    const deps: ManagementApiDeps = { ...h.deps, sshRunner: runner, linkSupervisor: () => real,
+      revokeApiKey: () => true,
+      linkListener: () => ({ ...h.listener, close: async () => { closed = true; h.setListenerState("off"); } }),
+    };
+    const reconnect = call(`/api/link/${id}/reconnect`, "POST", undefined, deps, "admin-token", true, null, true, h.config);
+    await draining;
+    let removed = false;
+    const removal = call(`/api/link/${id}`, "DELETE", { force: true }, deps, "admin-token", true, null, true, h.config)
+      .then(response => { removed = true; return response; });
+    await removalStopping;
+    for (let turn = 0; turn < 12; turn += 1) await Promise.resolve();
+    const removedBeforeExit = removed;
+    const closedBeforeExit = closed;
+    const liveBeforeExit = live.size;
+    const spawnedBeforeExit = spawned;
+    exitOld(143);
+    try {
+      const [reconnected, deleted] = await Promise.all([reconnect, removal]);
+      expect(deleted?.status).toBe(200);
+      expect(reconnected?.status).toBe(503);
+      expect(await reconnected!.json()).toMatchObject({ error: { code: "link_unavailable" } });
+      expect(removedBeforeExit).toBe(false);
+      expect(closedBeforeExit).toBe(false);
+      expect(liveBeforeExit).toBe(1);
+      expect(spawnedBeforeExit).toBe(1);
+      expect(h.store.links).toHaveLength(0);
+      expect(closed).toBe(true);
+      tick();
+      expect(spawned).toBe(1);
+      expect(live.size).toBe(0);
+      expect(real.status()).toEqual([]);
+    } finally { await Promise.all([reconnect, removal]); await real.stop(); }
+  });
+
+  test.each([0, 1])("DELETE holds the real supervisor through remote cleanup (exit %s)", async code => {
+    temp = mkdtempSync(join(tmpdir(), "ocx-link-remove-hold-"));
+    const h = harness();
+    const id = "lnk_0123456789abcdef";
+    h.deps.writeLinkStore!({ ...h.store, links: [{ id, alias: "child", direction: "hub-initiated", hostKeyFingerprint: "SHA256:abcdefghijklmnop", tunnelPort: 2200, apiKeyId: "key-1", createdAt: "2026-09-25T00:00:00.000Z" }] });
+    let release!: (value: SshRunResult) => void;
+    const remote = new Promise<SshRunResult>(resolve => { release = resolve; });
+    let entered!: () => void;
+    const waiting = new Promise<void>(resolve => { entered = resolve; });
+    const live = new Set<SshChild>();
+    let spawned = 0;
+    let tick!: () => void;
+    const runner: SshRunner = {
+      async run() { entered(); return remote; },
+      spawnTunnel(argv) {
+        let exit!: (code: number) => void;
+        const exited = new Promise<number>(resolve => { exit = resolve; });
+        const child: SshChild = { pid: 400 + spawned++, argv: [...argv], exited, kill: () => exit(143) };
+        live.add(child);
+        void exited.then(() => live.delete(child));
+        return child;
+      },
+    };
+    const real = createLinkSupervisor({ readStore: () => h.store, runner,
+      readPidfile: () => null, writePidfile: () => {}, removePidfile: () => {},
+      setTimer: callback => { tick = callback; return 1 as unknown as ReturnType<typeof setInterval>; }, clearTimer: () => {},
+    });
+    real.start();
+    const deps = { ...h.deps, sshRunner: runner, linkSupervisor: () => real };
+    const removal = call(`/api/link/${id}`, "DELETE", {}, deps, "admin-token", true, null, true, h.config);
+    await waiting;
+    try {
+      expect(await real.reconnect(id)).toBe(false);
+      await real.reload();
+      tick();
+      expect(spawned).toBe(1);
+      expect(live.size).toBe(0);
+      release({ code, stdout: "", stderr: code ? "disconnect failed" : "" });
+      expect((await removal)?.status).toBe(code ? 502 : 200);
+      tick();
+      expect(spawned).toBe(code ? 2 : 1);
+      expect(live.size).toBe(code ? 1 : 0);
+      if (!code) expect(await real.reconnect(id)).toBe(false);
+    } finally {
+      release({ code, stdout: "", stderr: code ? "disconnect failed" : "" });
+      await removal;
+      await real.stop();
+    }
+  });
+
   test("restarts a hub tunnel before reporting a failed remote disconnect", async () => {
     temp = mkdtempSync(join(tmpdir(), "ocx-link-disconnect-failed-"));
     const h = harness();
@@ -487,6 +611,62 @@ describe("link management routes", () => {
     expect(await response!.json()).toMatchObject({ error: { code: "remote_disconnect_failed" } });
     expect(h.events).toContain("reload");
     expect(h.store.links).toHaveLength(1);
+  });
+
+  test("reconnect restarts a Home-initiated tunnel for either principal and refuses everything else", async () => {
+    temp = mkdtempSync(join(tmpdir(), "ocx-link-reconnect-"));
+    const h = harness();
+    const reconnected: string[] = [];
+    let restartable = true;
+    const deps: ManagementApiDeps = {
+      ...h.deps,
+      linkSupervisor: () => ({ ...supervisor(h.events), reconnect: async (id: string) => { reconnected.push(id); return restartable; } }),
+    };
+    h.deps.writeLinkStore!({ ...h.store, links: [{
+      id: "lnk_0123456789abcdef",
+      alias: "child",
+      direction: "hub-initiated",
+      hostKeyFingerprint: "SHA256:abcdefghijklmnop",
+      tunnelPort: 2200,
+      apiKeyId: "key-1",
+      createdAt: "2026-09-25T00:00:00.000Z",
+    }, {
+      id: "lnk_fedcba9876543210",
+      alias: "home",
+      direction: "client-initiated",
+      hostKeyFingerprint: null,
+      tunnelPort: 2201,
+      apiKeyId: "key-2",
+      createdAt: "2026-09-25T00:00:00.000Z",
+    }] });
+    const path = "/api/link/lnk_0123456789abcdef/reconnect";
+    const ok = await call(path, "POST", undefined, deps, "admin-token", true, null, true, h.config);
+    expect(ok?.status).toBe(200);
+    expect(await ok!.json()).toEqual({ linkId: "lnk_0123456789abcdef" });
+    expect(h.events).toContain("supervisor");
+    expect((await call(path, "POST", undefined, deps, "gui-session", true, "pairing", true, h.config))?.status).toBe(200);
+    expect(reconnected).toEqual(["lnk_0123456789abcdef", "lnk_0123456789abcdef"]);
+    expect((await call(path, "POST", undefined, deps, "admin-token", false, null, true, h.config))?.status).toBe(403);
+    expect((await call(path, "POST", undefined, deps, "admin-token", true, "tailscale-identity", true, h.config))?.status).toBe(403);
+    const childOwned = await call("/api/link/lnk_fedcba9876543210/reconnect", "POST", undefined, deps, "admin-token", true, null, true, h.config);
+    expect(childOwned?.status).toBe(409);
+    expect(await childOwned!.json()).toMatchObject({ error: { code: "link_not_home_initiated" } });
+    const missing = await call("/api/link/lnk_0000000000000000/reconnect", "POST", undefined, deps, "admin-token", true, null, true, h.config);
+    expect(missing?.status).toBe(404);
+    expect(await missing!.json()).toMatchObject({ error: { code: "link_not_found" } });
+    expect((await call("/api/link/not-a-link/reconnect", "POST", undefined, deps, "admin-token", true, null, true, h.config))?.status).toBe(400);
+    h.setListenerState("failed");
+    const unbound = await call(path, "POST", undefined, deps, "admin-token", true, null, true, h.config);
+    expect(unbound?.status).toBe(503);
+    expect(await unbound!.json()).toMatchObject({ error: { code: "listener_unavailable" } });
+    expect(reconnected).toHaveLength(2);
+    h.setListenerState("listening");
+    restartable = false;
+    const refused = await call(path, "POST", undefined, deps, "admin-token", true, null, true, h.config);
+    expect(refused?.status).toBe(503);
+    expect(await refused!.json()).toMatchObject({ error: { code: "link_unavailable" } });
+    expect(reconnected).toHaveLength(3);
+    expect(h.store.links).toHaveLength(2);
   });
 
   test("issue starts the supervisor once a recovered listener binds", async () => {

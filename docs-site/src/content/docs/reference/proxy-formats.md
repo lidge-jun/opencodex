@@ -172,7 +172,7 @@ non-empty `model`. `input` may be a string or an array of Responses items.
 
 ### Caller conversation header
 
-For HTTP `POST /v1/responses` and `POST /v1/messages`, a client can send a stable
+For HTTP `POST /v1/responses`, `POST /v1/messages`, and `POST /v1/chat/completions`, a client can send a stable
 `x-session-id` for each conversation. When no `session_id`, `session-id`, or `thread-id`
 header is present, opencodex promotes the marker to `session_id`. Managed Grok identity
 on Responses takes precedence too. Even an empty explicit header suppresses promotion.
@@ -186,7 +186,7 @@ requests without a trusted principal are left unchanged.
 
 Use distinct markers for distinct conversations. This preserves conversation continuity
 for downstream consumers, but does not guarantee an upstream cache hit or measured savings.
-Chat Completions, WebSocket frames, compact, and count_tokens do not use this promotion.
+WebSocket frames, compact, and count_tokens do not use this promotion.
 
 On canonical ChatGPT-backed Responses dispatch, a non-empty explicit `session_id` wins.
 Otherwise, the first non-empty alias among `session-id`, then `thread-id`, supplies

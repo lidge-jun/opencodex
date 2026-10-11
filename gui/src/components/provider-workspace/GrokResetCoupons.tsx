@@ -3,9 +3,8 @@
  *
  * The dialog is deliberately conservative about the one irreversible thing it
  * does. It always names the coupon it is spending, it holds one client-minted
- * operation id per confirmation, and when a redemption aborts it stops posting
- * entirely: the route re-executes a redemption whose journal record is still
- * open, so a retry after a timeout can spend a second coupon.
+ * operation id per confirmation. Unconfirmed delivery stops posting and keeps
+ * that attempt in the account controller across modal close/reopen.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n, type Locale, type TFn, type TKey } from "../../i18n/shared";
@@ -125,8 +124,8 @@ export function GrokResetCouponModal({ accountId, accountLabel, entry, controlle
   const [confirming, setConfirming] = useState(false);
   const [redeeming, setRedeeming] = useState(false);
   const [checking, setChecking] = useState(false);
-  /** Set by an aborted redemption; while it holds, the dialog posts nothing. */
-  const [unknown, setUnknown] = useState<{ tokenId: string } | null>(null);
+  /** The controller clears this hold when the original request definitively completes. */
+  const unknown = controller.uncertain[accountId];
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const operationIdRef = useRef<string | undefined>(undefined);
 
@@ -179,9 +178,10 @@ export function GrokResetCouponModal({ accountId, accountLabel, entry, controlle
       setOutcome({ tone: "ok", key: result.replayed ? "grokCoupon.redeemReplayed" : "grokCoupon.redeemSuccess" });
       return;
     }
-    if (result.code === "aborted") {
+    if (result.uncertain || result.code === "aborted") {
+      if (result.operationId) operationIdRef.current = result.operationId;
       // Outcome unknown: hold the id, stop posting, and let the user re-read.
-      setUnknown({ tokenId: next.tokenId });
+      setConfirming(false);
       setOutcome(null);
       void controller.refresh(accountId);
       return;

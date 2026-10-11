@@ -318,12 +318,16 @@ warmup remains conservative and does not spend paid credits to validate an exhau
 
 For an opted-in, unpaused main account with a currently full usage window, the existing
 `src/codex/auth-api/pool-mode-gate.ts` recovery sweep renews credit observations from three minutes
-of age, leaving time for token preparation before the five-minute freshness limit. Only valid,
-previously spendable positive or unlimited evidence bound to the same physical account schedules
-renewal; missing, zero, restricted or retracted credits do not. Admission still uses the actual
-clock and original spending controls. Native profile ownership, generation fences, single-flight,
+of age, leaving time for token preparation before the five-minute freshness limit. Missing, zero,
+restricted or retracted evidence remains eligible for recovery discovery bound to the same physical
+account; a negative observation never stops later probes. Admission still requires fresh positive
+or unlimited evidence and the original spending controls; flags or approximate message counts alone
+cannot authorize spending. Native profile ownership, generation fences, single-flight,
 query pacing and failure backoff remain in force, including upstream Retry-After. Eligibility is
 checked again after token preparation. The independent hard lock still applies.
+When consent is on but spendable evidence is unavailable, the local credit refusal caps Retry-After
+at the base five-minute metadata recovery interval (or a sooner included reset), even when probe
+backoff grows longer. Without consent, Retry-After retains the included-quota reset deadline.
 
 Credit renewal supplies the passive option to `src/codex/auth-api/main-account-probe.ts`, including
 identity retries: WHAM success and terminal 401/403 responses never set or clear needs-reauth in

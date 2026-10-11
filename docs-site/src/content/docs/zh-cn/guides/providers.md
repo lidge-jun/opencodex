@@ -136,6 +136,11 @@ Nous refresh 发生终止性失败后，请运行 `ocx login nous` 重新认证�
 若已 opt-in 的上游拒绝该字段，opencodex 不会删除字段后重试，也不会改动已保存配置；其他
 provider 仍保持 deny-by-default。
 
+Kimi Code 原生 Responses 路由会省略明确正文为空的 assistant 历史消息，避免
+`assistant must not be empty` 拒绝。非空文本、空白字符、拒绝内容、推理与工具调用/结果
+保持原样；不会改写客户端存储的历史。被同一输入中的 `item_reference` 引用的空消息也会保留，
+避免留下悬空引用。
+
 `kimi`、`kimi-code` 和 `kimi-responses` 中 `k3`、`k3[1m]`、`k3-256k` 的费用是 **API 参考价格估算**，
 采用已公布的默认 5 分钟缓存写入价格，不代表 Code Plan 的实际账单或额度消耗：K3 的 1M 版本消耗
 约为 `k3-256k` 两倍的额度。`kimi-for-coding` 已切换为 K2.8 Preview，因此不再使用旧 K2.7 价格；

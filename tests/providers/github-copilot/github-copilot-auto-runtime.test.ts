@@ -573,3 +573,49 @@ describe("Copilot Auto through the Responses pipeline", () => {
     expect(sent.filter(call => call.path === "/models/session").map(call => call.host)).toEqual(["a.githubcopilot.com", "b.githubcopilot.com"]);
   });
 });
+
+for (const bDiscovery of ["named", "outage"] as const) test(`leaving Auto on account rotation restores the configured Chat wire (${bDiscovery} discovery)`, async () => {
+  await accounts();
+  const sent: Array<{ account: string; path: string; model?: string; token: string | null; apiVersion: string | null }> = [];
+  const executor = (async (url, init) => {
+    const destination = new URL(String(url));
+    const headers = new Headers(init?.headers);
+    const account = headers.get("authorization")?.includes("-b") ? "b" : "a";
+    if (destination.hostname === "api.github.com") return Response.json({ login: account });
+    const body = init?.body ? JSON.parse(String(init.body)) : {};
+    sent.push({ account, path: destination.pathname, model: body.model, token: headers.get("copilot-session-token"),
+      apiVersion: headers.get("x-github-api-version") });
+    if (destination.pathname === "/models" && account === "b" && bDiscovery === "outage")
+      return Response.json({ error: { message: "unavailable" } }, { status: 503 });
+    if (destination.pathname === "/models") return Response.json({ data: account === "a"
+      ? [{ id: "gpt-5.4", model_picker_enabled: false, supported_endpoints: ["/responses"] }]
+      : [{ id: "gpt-4o", model_picker_enabled: true, supported_endpoints: ["/chat/completions"] }] });
+    if (destination.pathname === "/models/session")
+      return Response.json({ session_token: "synthetic-session-a", expires_at: Date.now() / 1000 + 10, available_models: ["gpt-5.4"] });
+    if (destination.pathname === "/models/session/intent") return Response.json({ candidate_models: ["gpt-5.4"] });
+    if (account === "a") return Response.json({ error: { message: "limited" } }, { status: 429, headers: { "retry-after": "1" } });
+    if (destination.pathname !== "/chat/completions") return Response.json({ error: { message: "wrong wire" } }, { status: 404 });
+    return Response.json({ id: "chat-fixture", model: "gpt-4o", choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 2, completion_tokens: 1 } });
+  }) as typeof fetch;
+  globalThis.fetch = executor;
+  const config = { port: 0, defaultProvider: "github-copilot", providers: { "github-copilot": {
+    adapter: "openai-chat", authMode: "oauth", baseUrl: "https://api.githubcopilot.com", models: ["gpt-4o"],
+    defaultModel: "gpt-4o", selectedModels: ["gpt-4o"], fetch: executor,
+  } }, oauthAccountFailover: { enabled: true } } as OcxConfig;
+  await saveConfig(config);
+  const response = await handleResponses(new Request("http://localhost/v1/responses", { method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "github-copilot/gpt-4o", input: "hello", stream: false }) }), config, { model: "", provider: "" });
+  expect(response.status).toBe(200);
+  const inference = sent.filter(call => ["/chat/completions", "/responses"].includes(call.path));
+  expect(inference.map(call => [call.account, call.path, call.model])).toEqual([
+    ["a", "/responses", "gpt-5.4"],
+    ["b", "/chat/completions", "gpt-4o"],
+  ]);
+  const named = inference[1]!;
+  expect(named.token).toBeNull();
+  expect(named.apiVersion).not.toBe("2026-08-01");
+});
+
+

@@ -227,6 +227,38 @@ describe("section extraction", () => {
     expect(sections.has("div")).toBe(false);
     expect(sections.get("__agents_md")).toContain("<div>");
   });
+
+  test("the no-directory AGENTS.md header is still extracted", () => {
+    // Upstream emits `# AGENTS.md instructions` with no `for <dir>` when the
+    // working set carries no path (core/src/context.rs). The `for` suffix is
+    // optional in the pattern for exactly this shape.
+    const raw = message("# AGENTS.md instructions\n\n<INSTRUCTIONS>\nAnswer tersely.\n</INSTRUCTIONS>");
+    expect(extractSectionsForTests(raw).get("__agents_md")).toBe("Answer tersely.");
+  });
+
+  test("the multi-environment form keeps its labels inside the capture", () => {
+    // The newer render labels each project's block `for \`<env>\` with root
+    // <cwd>` INSIDE the <INSTRUCTIONS> wrapper rather than in the header. Those
+    // labels are what the model sees, so the body keeps them.
+    const body = "for `prod` with root /srv/a\n\nRules for prod.\n\nfor `dev` with root /srv/b\n\nRules for dev.";
+    const raw = message(`# AGENTS.md instructions\n\n<INSTRUCTIONS>\n${body}\n</INSTRUCTIONS>`);
+    expect(extractSectionsForTests(raw).get("__agents_md")).toBe(body);
+  });
+
+  test("an unrecognized AGENTS.md header maps to unmapped, not not-rendered", () => {
+    // A header that renders without its INSTRUCTIONS wrapper — a future
+    // upstream shape — must not be reported as "sent nothing": the text exists,
+    // it just cannot be shown. `unmapped` is the honest bucket for that.
+    const raw = message("# AGENTS.md instructions for /x\n\nThe whole file inline, no wrapper.");
+    const sections = extractSectionsForTests(raw);
+    expect(sections.has("__agents_md")).toBe(false);
+    expect(sections.has("__agents_md_unmatched")).toBe(true);
+    expect(mapSectionsToLayersForTests(sections)["agents-md"]).toEqual({
+      text: null,
+      reason: "unmapped",
+      bytes: 0,
+    });
+  });
 });
 
 /**

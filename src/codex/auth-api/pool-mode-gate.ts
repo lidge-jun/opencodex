@@ -88,14 +88,13 @@ export async function runMainAccountHardLockRecovery(config: OcxConfig): Promise
     const now = Date.now();
     const quota = getMainPolicyQuota();
     const observedAt = quota?.credits?.observedAt;
-    // getMainPolicyQuota binds evidence to the observed physical identity. Only renew
-    // valid formerly spendable funds; admission retains the actual five-minute clock.
+    // Positive evidence renews before expiry; unavailable evidence keeps discovery
+    // eligible under the same pacing. Admission still requires fresh spendable funds.
     return codexAccountUsesCreditsAfterLimit(config, MAIN_CODEX_ACCOUNT_ID)
       && !isCodexAccountPaused(config, MAIN_CODEX_ACCOUNT_ID)
       && codexUsageLimitResetAt(quota, undefined, now) !== undefined
-      && observedAt !== undefined && observedAt > 0
-      && now - observedAt >= MAIN_CREDIT_RENEWAL_AGE_MS
-      && hasSpendableCodexCredits(quota, observedAt);
+      && (!hasSpendableCodexCredits(quota, now)
+        || (observedAt !== undefined && now - observedAt >= MAIN_CREDIT_RENEWAL_AGE_MS));
   };
   const status = getMainAccountHardLockStatus(config);
   if (status.state !== "blocked" && !creditRecoveryNeeded()) { mainHardLockRecoveryAttempt = undefined; return; }

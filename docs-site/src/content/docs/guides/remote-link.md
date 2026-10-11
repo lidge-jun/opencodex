@@ -51,13 +51,15 @@ The Child waits for its configured port while the old process releases it. If a 
 
 If **Child** says to pair this machine first, open this computer's configured literal-loopback HTTP dashboard, for example `http://127.0.0.1:<configured-port>`. The local pairing form appears only when pairing is missing and the dashboard and API use the same loopback origin. Copy the form's `ocx gui pair --origin "http://127.0.0.1:<configured-port>"` command, run it in a terminal on this computer, and paste the one-use code into the form. Use the exact origin shown in the form; a provider API key or admin token is not a pairing code. Missing pairing is separate from a configured-port mismatch.
 
+On a Hub dashboard opened through a non-loopback address, the browser may have no loopback session or may have a shared session that cannot manage machine links. When Remote Link reports that session or permission problem, choose **Connect this dashboard to the hub** in the Remote Link page to open the one-time pairing form. Run the displayed command on the Hub and enter its code. The page validates the new session's Remote Link access before it closes the form.
+
 The **Child** role also requires a standalone OpenCodex runtime running on its configured port, because the Child restarts on exactly that port. If the dashboard says OpenCodex is not running on its configured port, restart it there first.
 
 ## Link status
 
 - **Connected** means the SSH tunnel is ready and the Child can use the Home link.
 - **Reconnecting** means the tunnel is being retried. Requests can temporarily return `503` with `Retry-After` while the retry is in progress. On a Child that connected from its own dashboard, a request first waits up to 15 seconds for the tunnel to come back.
-- **Failed** means the link needs attention. Check SSH authentication, the confirmed host key, forwarding, or the timeout reason shown in the dashboard. A Child that connected from its own dashboard keeps retrying by itself, after sleep, an outage or a restart: about once a minute after a timeout or forwarding error, and every five minutes after an authentication error. A changed host key is never retried.
+- **Failed** means the link needs attention. Check SSH authentication, the confirmed host key, forwarding, or the timeout reason shown in the dashboard. The side that runs the SSH tunnel keeps retrying by itself, after sleep, an outage or a restart: Home for a Child it added, and the Child for a link it joined from its own dashboard. It retries about once a minute after a timeout or forwarding error, and every five minutes after an authentication error. A changed host key is never retried. To try again at once, select **Retry** in the Home's dashboard or run `ocx link reconnect --link-id <id>` on the Home. It restarts that link's tunnel without restarting OpenCodex.
 
 A failed link does not silently switch to a local provider.
 The Child returns a retryable `503` without forwarding the link key or request when its tunnel is failed, stopped, or not supervised.
@@ -95,6 +97,7 @@ ocx link port [--json]
 ocx link issue --alias <alias> --tunnel-port <port> [--json]
 ocx link status [--json]
 ocx link revoke --link-id <id> [--json]
+ocx link reconnect --link-id <id> [--json]
 ```
 
 ## Related guides

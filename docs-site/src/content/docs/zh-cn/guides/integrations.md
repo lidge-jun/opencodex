@@ -184,6 +184,8 @@ ocx integration client restore --client aside --profile 1 --op <opId>
 
 ## ZCode 3.14 及更新版本
 
+以上路径为默认值。在默认主目录的 `~/.zcode/v2/setting.json` 中设置绝对路径 `dataBaseDir` 后，存储路径变为 `<dataBaseDir>/.zcode/v2/provider_config.json`。`ZCODE_DATA_DIR` 直接指定 `.zcode` 根目录并优先于设置；`ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` 优先指定提供商文件。设置格式错误、不可读或使用相对路径时，新应用和刷新会被拒绝。已有所有权和恢复记录保留。参见[路径与恢复规则的英文原文](https://opencodex.me/guides/integrations/#zcode-314-and-later)。
+
 ZCode 3.14 将自定义提供商移至 `~/.zcode/v2/provider_config.json`，而 `~/.zcode/v2/config.json` 只能通过新文件缺失时运行的一次性导入影响它。ZCode 首次运行就会创建新文件，因此任何已启动过的安装都已经用完导入机会；写入 `config.json` 不会生效。
 
 可以时，opencodex 会直接写入 `provider_config.json`。启用集成会向该文件添加 `opencodex` 提供商规则，目录刷新会更新它，禁用时则准确移除 opencodex 写入的内容。文件中的其他规则保持不变，包括其他提供商针对也出现在我们目录中的模型 id 所保留的规则。如果某条规则带有 `opencodex` id 却并非由 opencodex 写入，它会被视为冲突，而不会被直接接管；请在 ZCode 中解决，或明确选择覆盖。

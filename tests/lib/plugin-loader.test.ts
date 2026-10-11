@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { resetOptionalShutdownHooksForTests, runOptionalShutdownHooks } from "../../src/lib/optional-shutdown-hooks";
-import { loadOcxPlugins, macAclListingTrustError, macAclProbeTrustError, pluginDirectoryTrustError, pluginFileTrustError } from "../../src/plugins/loader";
+import { loadOcxPlugins, macAclListingTrustError, macAclProbeTrustError, pluginDirectoryTrustError, pluginFileTrustError, setPluginAclInspectorForTests } from "../../src/plugins/loader";
 import {
   hasUpstreamRewriters,
   resetUpstreamRewritersForTests,
@@ -39,10 +39,17 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setPluginAclInspectorForTests();
   resetUpstreamRewritersForTests();
   delete process.env["OCX_PLUGINS"];
   rmSync(dir, { recursive: true, force: true });
 });
+
+// Tests in this file are serial; the module-global override must never be used concurrently.
+async function withNoAclInspector(fn: () => Promise<void>): Promise<void> {
+  setPluginAclInspectorForTests(() => null);
+  try { await fn(); } finally { setPluginAclInspectorForTests(); }
+}
 
 function writePlugin(file: string, source: string, mode = 0o600): string {
   const path = join(dir, file);
@@ -65,13 +72,13 @@ test.skipIf(process.platform === "win32")("a missing plugin directory loads noth
   expect(hasUpstreamRewriters()).toBe(false);
 });
 
-test.skipIf(process.platform === "win32")("a valid plugin registers its upstream rewriter", async () => {
+test.skipIf(process.platform === "win32")("a valid plugin registers its upstream rewriter", () => withNoAclInspector(async () => {
   writePlugin("redirect.ts", REDIRECT_PLUGIN);
   const results = await loadOcxPlugins(dir);
   expect(results.map(result => [result.name, result.loaded])).toEqual([["redirect", true]]);
   expect(rewriteUpstream("https://api.example.com/v1/responses", undefined, "http").url)
     .toBe("http://127.0.0.1:8787/v1/responses");
-});
+}));
 
 test("OCX_PLUGINS=0 skips loading", async () => {
   writePlugin("redirect.ts", REDIRECT_PLUGIN);
@@ -93,14 +100,14 @@ test("Windows does not auto-load plugins without an ACL trust check", async () =
   }
 });
 
-test.skipIf(process.platform === "win32")("plugin setup exceptions expose only a bounded category", async () => {
+test.skipIf(process.platform === "win32")("plugin setup exceptions expose only a bounded category", () => withNoAclInspector(async () => {
   const marker = "private plugin error marker";
   writePlugin("throws.ts", `export default { setup() { throw new Error("${marker}"); } };`);
   const results = await loadOcxPlugins(dir);
   expect(results[0]?.loaded).toBe(false);
   expect(results[0]?.error).toBe("setup_failed");
   expect(JSON.stringify(results)).not.toContain(marker);
-});
+}));
 
 test.skipIf(process.platform === "win32")("a group- or world-writable plugin is refused", async () => {
   const path = writePlugin("redirect.ts", REDIRECT_PLUGIN, 0o664);
@@ -363,7 +370,7 @@ test.skipIf(process.platform === "win32")("a plugin directory under a group-writ
   expect(hasUpstreamRewriters()).toBe(false);
 });
 
-test.skipIf(process.platform === "win32")("a wrong export shape or a throwing setup is skipped and leaves no hooks behind", async () => {
+test.skipIf(process.platform === "win32")("a wrong export shape or a throwing setup is skipped and leaves no hooks behind", () => withNoAclInspector(async () => {
   writePlugin("a-shape.ts", "export default { name: 'shape' };");
   writePlugin("b-throws.ts", `
 export default {
@@ -382,7 +389,7 @@ export default {
   ]);
   expect(results[1]?.error).toBe("setup_failed");
   expect(rewriteUpstream("https://api.example.com/v1/x", undefined, "http").url).toBe("http://127.0.0.1:8787/v1/x");
-});
+}));
 
 test.skipIf(process.platform === "win32")("a plugin path that cannot be read is reported, not treated as empty", async () => {
   const notADirectory = writePlugin("file-not-dir", "x");
@@ -393,7 +400,7 @@ test.skipIf(process.platform === "win32")("a plugin path that cannot be read is 
   expect(results[0]?.error).toBe("directory_read_failed");
 });
 
-test.skipIf(process.platform === "win32")("two plugins with the same name keep separate shutdown teardowns", async () => {
+test.skipIf(process.platform === "win32")("two plugins with the same name keep separate shutdown teardowns", () => withNoAclInspector(async () => {
   const ran: string[] = [];
   (globalThis as Record<string, unknown>)["__ocxTeardownLog"] = ran;
   const source = (tag: string) => `
@@ -414,9 +421,9 @@ export default {
     resetOptionalShutdownHooksForTests();
     delete (globalThis as Record<string, unknown>)["__ocxTeardownLog"];
   }
-});
+}));
 
-test.skipIf(process.platform === "win32")("one plugin can register several shutdown teardowns", async () => {
+test.skipIf(process.platform === "win32")("one plugin can register several shutdown teardowns", () => withNoAclInspector(async () => {
   const ran: string[] = [];
   (globalThis as Record<string, unknown>)["__ocxTeardownLog"] = ran;
   writePlugin("multi.ts", `
@@ -436,9 +443,9 @@ export default {
     resetOptionalShutdownHooksForTests();
     delete (globalThis as Record<string, unknown>)["__ocxTeardownLog"];
   }
-});
+}));
 
-test.skipIf(process.platform === "win32")("a setup that resumes after its deadline cannot leave registrations behind", async () => {
+test.skipIf(process.platform === "win32")("a setup that resumes after its deadline cannot leave registrations behind", () => withNoAclInspector(async () => {
   writePlugin("slow.ts", `
 export default {
   name: "slow",
@@ -459,7 +466,7 @@ export default {
     console.error = originalError;
   }
   expect(hasUpstreamRewriters()).toBe(false);
-});
+}));
 
 test.skipIf(process.platform === "win32")("hidden, underscore-prefixed and declaration files are ignored", async () => {
   writePlugin(".hidden.ts", REDIRECT_PLUGIN);
@@ -467,4 +474,30 @@ test.skipIf(process.platform === "win32")("hidden, underscore-prefixed and decla
   writePlugin("types.d.ts", "export {};");
   writePlugin("notes.md", "# not a plugin");
   expect(await loadOcxPlugins(dir)).toEqual([]);
+});
+
+test.skipIf(process.platform === "win32").each([
+  ["directory", "directory_untrusted"],
+  ["ancestor", "ancestor_untrusted"],
+  ["file", "file_untrusted"],
+] as const)("an injected ACL refusal reaches the %s check", async (kind, error) => {
+  const nested = join(dir, "plugins");
+  mkdirSync(nested, { mode: 0o700 });
+  const file = join(nested, "redirect.ts");
+  writeFileSync(file, REDIRECT_PLUGIN, { mode: 0o600 });
+  const realDir = realpathSync(nested);
+  const refused = kind === "directory" ? nested : kind === "ancestor" ? dirname(realDir) : join(realDir, "redirect.ts");
+  const inspected: string[] = [];
+  setPluginAclInspectorForTests(path => {
+    inspected.push(path);
+    return path === refused ? "injected ACL refusal" : null;
+  });
+  try {
+    const results = await loadOcxPlugins(nested);
+    expect(inspected).toContain(refused);
+    expect(results).toHaveLength(1);
+    expect(results[0]?.loaded).toBe(false);
+    expect(results[0]?.error).toBe(error);
+    expect(hasUpstreamRewriters()).toBe(false);
+  } finally { setPluginAclInspectorForTests(); }
 });

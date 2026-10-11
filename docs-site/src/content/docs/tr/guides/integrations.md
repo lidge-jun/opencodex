@@ -301,6 +301,8 @@ araştırma notlarına bakın.
 
 ## ZCode 3.14 ve sonrası
 
+Bu yollar varsayılandır. Varsayılan ev dizininde kalan `~/.zcode/v2/setting.json` içindeki mutlak `dataBaseDir`, depoyu `<dataBaseDir>/.zcode/v2/provider_config.json` konumuna taşır. `ZCODE_DATA_DIR` doğrudan `.zcode` kökünü belirtir ve ayardan önceliklidir; `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` sağlayıcı dosyası için önceliklidir. Okunamayan, bozuk veya göreli ayarlar yeni uygulamaları ve yenilemeleri engeller. Mevcut sahiplik ve geri alma kayıtları korunur. [İngilizce yol ve geri alma kurallarına](https://opencodex.me/guides/integrations/#zcode-314-and-later) bakın.
+
 ZCode 3.14 özel sağlayıcılarını `~/.zcode/v2/provider_config.json` dosyasına taşıdı; bu
 entegrasyonun yazdığı `~/.zcode/v2/config.json` dosyasına artık yalnızca, yeni dosya yokken bir kez
 çalışan bir içe aktarma üzerinden ulaşıyor. ZCode yeni dosyayı ilk çalıştırmada oluşturduğu için,
