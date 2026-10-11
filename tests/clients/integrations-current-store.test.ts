@@ -407,6 +407,20 @@ function installResolvedStore(request: IntegrationWriteInput): string {
   return paths.storePath!;
 }
 
+/**
+ * restoreIntegration re-stamps the restored ownership record with its own opId and time (see the
+ * record written in src/integrations/writer.ts). Every other field -- path, fingerprints,
+ * fragments, refreshable paths -- must be exactly the original record's.
+ */
+function expectRestoreRestamped(restored: ReturnType<typeof restoreIntegration>, prior: object): void {
+  expect(restored.ok).toBe(true);
+  if (!restored.ok || !restored.opId) throw new Error("restore did not return an operation id");
+  const entry = store.findOperation(restored.opId);
+  expect(entry).toMatchObject({ kind: "restore", opId: restored.opId });
+  const record: unknown = store.readRecords().zcode;
+  expect(record).toEqual({ ...prior, opId: restored.opId, appliedAt: entry!.at });
+}
+
 describe("ZCode bootstrap dataBaseDir (#6932)", () => {
   test("default roots and an absent dataBaseDir preserve current-store detection", () => {
     const path = installWithStore();
@@ -555,9 +569,9 @@ describe("ZCode bootstrap dataBaseDir (#6932)", () => {
     if (!disabled.ok) return;
     expect(readFileSync(legacy, "utf8")).not.toContain("opencodex");
     expect(previewIntegration(request, { operation: "restore", opId: disabled.opId! }).canApply).toBe(true);
-    expect(restoreIntegration({ ...request, opId: disabled.opId! }).ok).toBe(true);
+    const restored = restoreIntegration({ ...request, opId: disabled.opId! });
     expect(readFileSync(legacy, "utf8")).toBe(original);
-    expect(store.readRecords().zcode).toEqual(prior);
+    expectRestoreRestamped(restored, prior);
     expect(readFileSync(path, "utf8")).toBe(newStore);
   });
 
@@ -576,10 +590,10 @@ describe("ZCode bootstrap dataBaseDir (#6932)", () => {
     expect(disabled.ok).toBe(true);
     if (!disabled.ok) return;
     expect(previewIntegration(request, { operation: "restore", opId: disabled.opId! }).canApply).toBe(true);
-    expect(restoreIntegration({ ...request, opId: disabled.opId! }).ok).toBe(true);
+    const restored = restoreIntegration({ ...request, opId: disabled.opId! });
     expect(readFileSync(originalPath, "utf8")).toBe(original);
     expect(readFileSync(relocatedPath, "utf8")).toBe(relocatedBytes);
-    expect(store.readRecords().zcode).toEqual(prior);
+    expectRestoreRestamped(restored, prior);
   });
 
   test("legacy ownership does not refresh into a moved root whose store is absent", () => {
@@ -606,8 +620,8 @@ describe("ZCode bootstrap dataBaseDir (#6932)", () => {
     expect(disabled.ok).toBe(true);
     if (!disabled.ok) return;
     expect(previewIntegration(request, { operation: "restore", opId: disabled.opId! }).canApply).toBe(true);
-    expect(restoreIntegration({ ...request, opId: disabled.opId! }).ok).toBe(true);
-    expect(store.readRecords().zcode).toEqual(prior);
+    const restored = restoreIntegration({ ...request, opId: disabled.opId! });
+    expectRestoreRestamped(restored, prior);
   });
 
   test("an older legacy undo cannot orphan the relocated store's ownership", () => {

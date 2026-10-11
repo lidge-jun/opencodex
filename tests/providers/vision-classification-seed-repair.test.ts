@@ -204,7 +204,7 @@ describe("stale whole-list noVisionModels seed (#6906)", () => {
   });
 
   test("keeps per-model declarations and runs in the shared startup pass", () => {
-    const capabilities = { "Qwen3.8-Max": { inputModalities: ["text"] } };
+    const capabilities = { "Qwen3.8-Max": { inputModalities: ["text" as const] } };
     const config = qoderConfig(qoderRow(QODER_SEED, { modelCapabilities: capabilities }));
     const projection = projectStartupConfigRepairs(config);
     expect(projection.changed).toBe(true);
