@@ -61,7 +61,7 @@ beforeEach(() => {
       const body = JSON.parse(String(init.body));
       puts.push({ url, body });
       if (putFailure) return json(putFailure.body, putFailure.status);
-      if (body.effort !== undefined) {
+      if (body.effort !== undefined && body.effort !== null) {
         try {
           validateAgentRoleEffort(body.effort);
         } catch {
@@ -72,7 +72,7 @@ beforeEach(() => {
       const current = rolesBody as { roles: Array<{ role: string; model: string | null; effort?: string | null }> };
       rolesBody = {
         ...current,
-        roles: current.roles.map(row => row.role === role ? { ...row, model: body.model, effort: body.effort ?? row.effort ?? null } : row),
+        roles: current.roles.map(row => row.role === role ? { ...row, model: body.model, effort: body.effort === undefined ? row.effort ?? null : body.effort, omoJsoncModel: omoWriteStatus === "written" ? body.model : (row as { omoJsoncModel?: string | null }).omoJsoncModel } : row),
       };
       return json({ ok: true, toml: { status: "written" }, omoJsonc: { status: omoWriteStatus } });
     }
@@ -81,8 +81,9 @@ beforeEach(() => {
       return effortsFailure ? json({ error: "unavailable" }, 503) : json({ efforts: ["low", "medium", "high"] });
     }
     if (rolesFailure) return json(rolesFailure.body, rolesFailure.status);
+    const snapshot = rolesBody;
     if (rolesHold) await rolesHold;
-    return json(rolesBody);
+    return json(snapshot);
   }) as typeof fetch;
   Object.defineProperty(globalThis, "fetch", { configurable: true, value: mockFetch });
   container = testWindow.document.createElement("div") as unknown as HTMLElement;
@@ -258,7 +259,7 @@ test("retrying a failed mirror after a failed reload resends the saved effort", 
   await mount();
   rolesFailure = { status: 500, body: { error: "unavailable" } };
   await saveEffortWithFailedMirror();
-  expect(container.textContent).toContain("gpt-5.5 · low");
+  expect(current("explorer")).toBe("gpt-5.5 · high");
   await act(async () => { saveButton("explorer").click(); });
   await settle();
   expect(puts.map(entry => entry.body)).toEqual([{ model: "gpt-5.5", effort: "high" }, { model: "gpt-5.5", effort: "high" }]);
@@ -309,4 +310,114 @@ test("a failed save shows the localized message rather than the server text", as
   await settle();
   expect(container.textContent).toContain("Could not save the model for explorer.");
   expect(container.textContent).not.toContain("EACCES");
+});
+
+function roleRow(role: string): HTMLElement {
+  return [...container.querySelectorAll("tbody tr")].find(tr => tr.querySelector("td")?.textContent === role) as HTMLElement;
+}
+
+function current(role: string): string | null {
+  return roleRow(role).querySelectorAll("td")[1]!.textContent;
+}
+
+async function effortOptions(role: string): Promise<Array<string | null>> {
+  const trigger = container.querySelector(`[aria-label="Reasoning effort (${role})"]`) as HTMLButtonElement;
+  await act(async () => { trigger.click(); });
+  const options = [...testWindow.document.querySelectorAll('[role="option"]')].map(node => node.textContent);
+  await act(async () => { trigger.click(); });
+  return options;
+}
+
+for (const reloadFails of [false, true]) {
+  test(`Inherit clears a pinned effort and preserves a null mirror retry (reload fails: ${reloadFails})`, async () => {
+    pinExplorerEffort("high");
+    await mount();
+    expect(await effortOptions("explorer")).toEqual(["Inherit effort", "high", "low", "medium"]);
+    expect(saveButton("explorer").disabled).toBe(true);
+    await pick("explorer", "Inherit effort", "Reasoning effort (explorer)");
+    expect(saveButton("explorer").disabled).toBe(false);
+    omoWriteStatus = "write_failed";
+    if (reloadFails) rolesFailure = { status: 503, body: { error: "unavailable" } };
+    await act(async () => { saveButton("explorer").click(); });
+    await settle();
+    expect(current("explorer")).toBe("gpt-5.5");
+    expect(await effortOptions("explorer")).toEqual(["Inherit effort", "low", "medium", "high"]);
+    expect(saveButton("explorer").disabled).toBe(false);
+    omoWriteStatus = "written";
+    await act(async () => { saveButton("explorer").click(); });
+    await settle();
+    expect(puts.map(entry => entry.body)).toEqual([{ model: "gpt-5.5", effort: null }, { model: "gpt-5.5", effort: null }]);
+    expect(current("explorer")).toBe("gpt-5.5");
+    expect(saveButton("explorer").disabled).toBe(true);
+  });
+}
+
+for (const reloadFails of [false, true]) {
+  test(`model changes retain an outstanding effort mirror write (reload fails: ${reloadFails})`, async () => {
+    pinExplorerEffort("low");
+    await mount();
+    if (reloadFails) rolesFailure = { status: 503, body: { error: "unavailable" } };
+    await saveEffortWithFailedMirror();
+    expect(current("explorer")).toBe("gpt-5.5 · high");
+    expect(await effortOptions("explorer")).toEqual(["Inherit effort", "high", "low", "medium"]);
+    expect(saveButton("explorer").disabled).toBe(false);
+    await pick("explorer", "xai/grok-4.5");
+    omoWriteStatus = "written";
+    await act(async () => { saveButton("explorer").click(); });
+    await settle();
+    expect(puts.map(entry => entry.body)).toEqual([{ model: "gpt-5.5", effort: "high" }, { model: "xai/grok-4.5", effort: "high" }]);
+    expect(current("explorer")).toBe("xai/grok-4.5 · high");
+    expect(saveButton("explorer").disabled).toBe(true);
+  });
+}
+
+test("a new effort choice outranks an outstanding mirror effort", async () => {
+  pinExplorerEffort("low");
+  await mount();
+  await saveEffortWithFailedMirror();
+  await pick("explorer", "xai/grok-4.5");
+  await pick("explorer", "Inherit effort", "Reasoning effort (explorer)");
+  expect(saveButton("explorer").disabled).toBe(false);
+  omoWriteStatus = "written";
+  await act(async () => { saveButton("explorer").click(); });
+  await settle();
+  expect(puts.map(entry => entry.body)).toEqual([{ model: "gpt-5.5", effort: "high" }, { model: "xai/grok-4.5", effort: null }]);
+  expect(current("explorer")).toBe("xai/grok-4.5");
+  expect(saveButton("explorer").disabled).toBe(true);
+});
+
+test("a successful mirror with a failed reload publishes its confirmed model and effort", async () => {
+  pinExplorerEffort("low");
+  await mount();
+  rolesFailure = { status: 503, body: { error: "unavailable" } };
+  await pick("explorer", "xai/grok-4.5");
+  await pick("explorer", "high", "Reasoning effort (explorer)");
+  await act(async () => { saveButton("explorer").click(); });
+  await settle();
+  expect(puts.map(entry => entry.body)).toEqual([{ model: "xai/grok-4.5", effort: "high" }]);
+  expect(current("explorer")).toBe("xai/grok-4.5 · high");
+  expect(await effortOptions("explorer")).toEqual(["Inherit effort", "high", "low", "medium"]);
+  expect(saveButton("explorer").disabled).toBe(true);
+  await pick("explorer", "Inherit effort", "Reasoning effort (explorer)");
+  expect(saveButton("explorer").disabled).toBe(false);
+});
+
+test("a pre-save GET resolving late cannot overwrite a confirmed save", async () => {
+  pinExplorerEffort("low");
+  await mount();
+  let release = () => {};
+  rolesHold = new Promise<void>(resolve => { release = resolve; });
+  const { invalidateClientResource } = await import("../src/client-resource");
+  await act(async () => { invalidateClientResource(`lazycodex-role-models:${apiBase}`); });
+  await settle();
+  rolesFailure = { status: 503, body: { error: "unavailable" } };
+  await pick("explorer", "high", "Reasoning effort (explorer)");
+  await act(async () => { saveButton("explorer").click(); });
+  await settle();
+  await act(async () => { release(); });
+  await settle();
+  expect(puts.map(entry => entry.body)).toEqual([{ model: "gpt-5.5", effort: "high" }]);
+  expect(current("explorer")).toBe("gpt-5.5 · high");
+  expect(await effortOptions("explorer")).toEqual(["Inherit effort", "high", "low", "medium"]);
+  expect(saveButton("explorer").disabled).toBe(true);
 });

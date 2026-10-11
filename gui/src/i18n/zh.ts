@@ -1785,7 +1785,7 @@ export const zh: Record<TKey, string> = {
   "integrations.lazycodexRoles.modelFor": "{role} 的模型",
   "integrations.lazycodexRoles.effort": "推理强度",
   "integrations.lazycodexRoles.effortFor": "推理强度 ({role})",
-  "integrations.lazycodexRoles.effortDefault": "模型默认",
+  "integrations.lazycodexRoles.effortDefault": "继承推理强度",
   "integrations.lazycodexRoles.none": "未固定模型",
   "integrations.lazycodexRoles.choose": "选择模型",
   "integrations.lazycodexRoles.empty": "未找到 Codex 智能体角色。",

@@ -2379,7 +2379,7 @@ export const en = {
   "integrations.lazycodexRoles.modelFor": "Model for {role}",
   "integrations.lazycodexRoles.effort": "Reasoning effort",
   "integrations.lazycodexRoles.effortFor": "Reasoning effort ({role})",
-  "integrations.lazycodexRoles.effortDefault": "Model default",
+  "integrations.lazycodexRoles.effortDefault": "Inherit effort",
   "integrations.lazycodexRoles.none": "No model pin",
   "integrations.lazycodexRoles.choose": "Choose a model",
   "integrations.lazycodexRoles.empty": "No Codex agent roles were found.",

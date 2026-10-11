@@ -2201,7 +2201,7 @@ export const ja: Record<TKey, string> = {
   "integrations.lazycodexRoles.modelFor": "{role} のモデル",
   "integrations.lazycodexRoles.effort": "推論負荷",
   "integrations.lazycodexRoles.effortFor": "推論負荷 ({role})",
-  "integrations.lazycodexRoles.effortDefault": "モデル既定",
+  "integrations.lazycodexRoles.effortDefault": "推論エフォートを継承",
   "integrations.lazycodexRoles.none": "モデル指定なし",
   "integrations.lazycodexRoles.choose": "モデルを選択",
   "integrations.lazycodexRoles.empty": "Codex エージェントロールが見つかりません。",

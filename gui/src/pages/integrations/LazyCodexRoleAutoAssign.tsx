@@ -36,7 +36,7 @@ export default function LazyCodexRoleAutoAssign({
 }: {
   apiBase: string;
   busy: boolean;
-  apply: (role: string, model: string, effort: string | null) => Promise<boolean>;
+  apply: (role: string, model: string, effort: string | undefined) => Promise<boolean>;
 }) {
   const t = useT();
   const [running, setRunning] = useState(false);
@@ -71,7 +71,7 @@ export default function LazyCodexRoleAutoAssign({
     p.status === "proposed" && p.proposedModel && !applied[p.role] && !alreadySet(p));
 
   const applyOne = async (proposal: RoleProposal): Promise<boolean> => {
-    const ok = await apply(proposal.role, proposal.proposedModel!, proposal.proposedEffort ?? null);
+    const ok = await apply(proposal.role, proposal.proposedModel!, proposal.proposedEffort ?? undefined);
     if (ok) setApplied(current => ({ ...current, [proposal.role]: true }));
     return ok;
   };

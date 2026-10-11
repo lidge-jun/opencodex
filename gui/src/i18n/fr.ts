@@ -2306,7 +2306,7 @@ export const fr: Record<TKey, string> = {
   "integrations.lazycodexRoles.modelFor": "Modèle pour {role}",
   "integrations.lazycodexRoles.effort": "Effort de raisonnement",
   "integrations.lazycodexRoles.effortFor": "Effort de raisonnement ({role})",
-  "integrations.lazycodexRoles.effortDefault": "Valeur par défaut du modèle",
+  "integrations.lazycodexRoles.effortDefault": "Hériter de l’effort",
   "integrations.lazycodexRoles.none": "Aucun modèle épinglé",
   "integrations.lazycodexRoles.choose": "Choisir un modèle",
   "integrations.lazycodexRoles.empty": "Aucun rôle d’agent Codex trouvé.",

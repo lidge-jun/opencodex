@@ -2318,7 +2318,7 @@ export const tr: Record<TKey, string> = {
   "integrations.lazycodexRoles.modelFor": "{role} için model",
   "integrations.lazycodexRoles.effort": "Akıl yürütme çabası",
   "integrations.lazycodexRoles.effortFor": "Akıl yürütme çabası ({role})",
-  "integrations.lazycodexRoles.effortDefault": "Model varsayılanı",
+  "integrations.lazycodexRoles.effortDefault": "Çabayı devral",
   "integrations.lazycodexRoles.none": "Sabitlenmiş model yok",
   "integrations.lazycodexRoles.choose": "Bir model seçin",
   "integrations.lazycodexRoles.empty": "Codex ajan rolü bulunamadı.",

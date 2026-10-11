@@ -2292,7 +2292,7 @@ export const ru: Record<TKey, string> = {
   "integrations.lazycodexRoles.modelFor": "Модель для {role}",
   "integrations.lazycodexRoles.effort": "Уровень рассуждений",
   "integrations.lazycodexRoles.effortFor": "Уровень рассуждений ({role})",
-  "integrations.lazycodexRoles.effortDefault": "По умолчанию для модели",
+  "integrations.lazycodexRoles.effortDefault": "Наследовать усилие",
   "integrations.lazycodexRoles.none": "Модель не закреплена",
   "integrations.lazycodexRoles.choose": "Выберите модель",
   "integrations.lazycodexRoles.empty": "Роли агентов Codex не найдены.",

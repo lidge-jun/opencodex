@@ -2327,7 +2327,7 @@ export const vi: Record<TKey, string> = {
   "integrations.lazycodexRoles.modelFor": "Mô hình cho {role}",
   "integrations.lazycodexRoles.effort": "Effort lý luận",
   "integrations.lazycodexRoles.effortFor": "Effort lý luận ({role})",
-  "integrations.lazycodexRoles.effortDefault": "Mặc định của Model",
+  "integrations.lazycodexRoles.effortDefault": "Kế thừa mức suy luận",
   "integrations.lazycodexRoles.none": "Chưa ghim mô hình",
   "integrations.lazycodexRoles.choose": "Chọn mô hình",
   "integrations.lazycodexRoles.empty": "Không tìm thấy vai trò tác tử Codex nào.",

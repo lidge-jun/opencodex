@@ -1,4 +1,5 @@
-import { useCallback, useState } from "react";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { setClientResourceData } from "../../client-resource";
 import { useDataSurface } from "../../data-surface";
 import { readJsonOrThrow } from "../../fetch-json";
 import { useT, type TKey } from "../../i18n/shared";
@@ -34,7 +35,7 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
   const t = useT();
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [effortDrafts, setEffortDrafts] = useState<Record<string, string>>({});
-  const [mirrorRetries, setMirrorRetries] = useState<Record<string, { model: string; effort: string; sent: string | null }>>({});
+  const [mirrorRetries, setMirrorRetries] = useState<Record<string, { sent: string | null | undefined }>>({});
   const [pending, setPending] = useState<string | null>(null);
   const [result, setResult] = useState<{ tone: "ok" | "warn" | "err"; text: string } | null>(null);
 
@@ -62,13 +63,16 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
     };
   }, [apiBase, t]);
 
-  const resource = useDataSurface<RoleModels>(`lazycodex-role-models:${apiBase}`, [apiBase], load, {
+  const resourceKey = `lazycodex-role-models:${apiBase}`;
+  const resource = useDataSurface<RoleModels>(resourceKey, [apiBase], load, {
     isEmpty: data => data.roles.length === 0,
     enabled: active,
   });
   const data = resource.state.data;
+  const latestData = useRef(data);
+  useLayoutEffect(() => { latestData.current = data; }, [data]);
 
-  const save = async (role: string, model: string, effort: string | null = null, displayedEffort = effort ?? ""): Promise<boolean> => {
+  const save = async (role: string, model: string, effort: string | null | undefined = undefined, displayedEffort?: string): Promise<boolean> => {
     if (pending !== null) return false;
     setPending(role);
     setResult(null);
@@ -76,15 +80,34 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
       const response = await fetch(`${apiBase}/api/codex-agent-roles/${encodeURIComponent(role)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(effort ? { model, effort } : { model }),
+        body: JSON.stringify(effort === undefined ? { model } : { model, effort }),
       });
       const payload = await readJsonOrThrow<{ omoJsonc?: { status?: OmoWriteStatus } }>(
         response,
         t("integrations.lazycodexRoles.saveFailed", { role }),
       );
       const omoStatus = payload?.omoJsonc?.status;
+      const confirmed = latestData.current;
+      const confirmedRow = confirmed?.roles.find(row => row.role === role);
+      const confirmedEffort = effort === undefined
+        ? confirmedRow ? confirmedRow.effort ?? null : displayedEffort || null
+        : effort;
+      const shownEffort = confirmedEffort ?? "";
+      if (confirmed) {
+        const next = {
+          ...confirmed,
+          roles: confirmed.roles.map(row => row.role === role ? {
+            ...row,
+            model,
+            effort: confirmedEffort,
+            omoJsoncModel: omoStatus === "written" || omoStatus === "unchanged" ? model : row.omoJsoncModel,
+          } : row),
+        };
+        latestData.current = next;
+        setClientResourceData(resourceKey, next);
+      }
       const notice = omoStatus ? OMO_WRITE_NOTICE[omoStatus] : undefined;
-      const picked = displayedEffort ? `${model} · ${displayedEffort}` : model;
+      const picked = shownEffort ? `${model} · ${shownEffort}` : model;
       setResult(notice
         ? { tone: "warn", text: t(notice, { role, model: picked }) }
         : { tone: "ok", text: t("integrations.lazycodexRoles.saved", { role, model: picked }) });
@@ -94,8 +117,8 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
         return mirrorFailed ? { ...rest, [role]: value } : rest;
       };
       setDrafts(current => keepOnFailure(current, model));
-      setEffortDrafts(current => keepOnFailure(current, displayedEffort));
-      setMirrorRetries(current => keepOnFailure(current, { model, effort: displayedEffort, sent: effort }));
+      setEffortDrafts(current => keepOnFailure(current, shownEffort));
+      setMirrorRetries(current => keepOnFailure(current, { sent: effort }));
       await resource.refresh();
       return true;
     } catch {
@@ -152,7 +175,7 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
                 const effortDraft = effortDrafts[row.role] ?? row.effort ?? "";
                 const changed = draft !== "" && (draft !== row.model || effortDraft !== (row.effort ?? ""));
                 const pendingMirror = mirrorRetries[row.role];
-                const retryMirror = pendingMirror !== undefined && pendingMirror.model === draft && pendingMirror.effort === effortDraft;
+                const retryMirror = pendingMirror !== undefined && draft !== "";
                 const effortChanged = effortDraft !== (row.effort ?? "");
                 return (
                   <tr key={row.role}>
@@ -174,7 +197,7 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
                         <Select
                           value={effortDraft}
                           options={[
-                            ...(row.effort === null ? [{ value: "", label: t("integrations.lazycodexRoles.effortDefault") }] : []),
+                            { value: "", label: t("integrations.lazycodexRoles.effortDefault") },
                             ...[...new Set([...(row.effort ? [row.effort] : []), ...data.efforts])].map(value => ({ value, label: value })),
                           ]}
                           label={t("integrations.lazycodexRoles.effortFor", { role: row.role })}
@@ -185,13 +208,12 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
                           type="button"
                           className="btn btn-primary btn-sm"
                           disabled={!(changed || retryMirror) || pending !== null}
-                          onClick={() => void (retryMirror
-                            ? save(row.role, pendingMirror.model, pendingMirror.sent, pendingMirror.effort)
-                            : save(row.role, draft, effortChanged ? effortDraft || null : null, effortDraft))}
+                          onClick={() => void save(row.role, draft,
+                            effortChanged ? effortDraft || null : pendingMirror?.sent, row.effort ?? "")}
                         >
                           {pending === row.role
                             ? t("common.saving")
-                            : retryMirror ? t("integrations.lazycodexRoles.retryMirror") : t("common.save")}
+                            : retryMirror && !changed ? t("integrations.lazycodexRoles.retryMirror") : t("common.save")}
                         </button>
                       </div>
                     </td>
