@@ -547,10 +547,26 @@ available. Fully quit and reopen Aside to load changed model files.
 
 ## ZCode 3.14 and later
 
-ZCode 3.14 moved its custom providers to `~/.zcode/v2/provider_config.json` and left
+By default, ZCode 3.14 stores its custom providers in `~/.zcode/v2/provider_config.json` and left
 `~/.zcode/v2/config.json` reachable only through a one-shot import that runs when the new file is
 missing. ZCode creates the new file the first time it runs, so on any install that has ever been
 launched the import is already spent and a write to `config.json` reaches nothing.
+
+ZCode can relocate its data root with an absolute `dataBaseDir` in
+`~/.zcode/v2/setting.json`. This bootstrap file always stays under the default home;
+the provider store moves to `<dataBaseDir>/.zcode/v2/provider_config.json`.
+`ZCODE_DATA_DIR` takes precedence and names the `.zcode` root directly, while
+`ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` takes precedence for the provider file.
+`ZCODE_DATA_BASE_DIR` is a separate native selector and is not an alias for `ZCODE_DATA_DIR`.
+
+Unreadable, malformed or relative bootstrap settings leave the active root unknown.
+Apply, overwrite and refresh refuse with a repair message instead of claiming a successful
+legacy write. An existing explicit provider file can still establish the active store.
+Ownership recorded at the original default config or store keeps its path, fingerprints
+and undo history; disable removes that original block before a later enable can use the
+relocated store. An older undo also refuses while another path owns the integration.
+If an earlier explicit selector no longer identifies the owned file, restore that selector
+before disabling; opencodex retains the record and refuses to abandon the block.
 
 opencodex writes `provider_config.json` directly where it can. Enabling the integration adds the
 `opencodex` provider rule to that file, a catalog refresh updates it, and disabling removes exactly

@@ -32,6 +32,7 @@ import {
   assertDroidRecordedSettingsUnambiguous,
   isLoopbackOnly,
   resolveIntegrationPaths,
+  type ResolvedIntegrationPaths,
   restoreOwnershipCollision,
   type IntegrationClientId,
 } from "./registry";
@@ -567,7 +568,7 @@ export function restoreStoreDirectoryRefusal(
   if (!declared?.lockFile) return null;
   let storePath: string;
   try {
-    storePath = declared.path(input.env, input.home);
+    storePath = declared.path(input.env, input.home, io);
   } catch (error) {
     if (error instanceof ClientPathError) return null;
     throw error;
@@ -602,10 +603,11 @@ export function observeRestore(
   const store = selectedOperation?.store ?? input.store ?? createIntegrationStateStore();
   let io = input.io ?? defaultIntegrationIO(store);
   const clientId = input.clientId;
-  let resolved: { configPath: string; detectDir: string };
+  let resolved: ResolvedIntegrationPaths;
   try {
     const context = exportContextOf(input);
-    resolved = input.resolvedPaths ?? resolveIntegrationPaths(clientId, input.env, input.home, context);
+    resolved = clientId === "zcode" || !input.resolvedPaths
+      ? resolveIntegrationPaths(clientId, input.env, input.home, context, io) : input.resolvedPaths;
     if (clientId === "droid" && input.resolvedPaths) assertDroidPathsUnambiguous(resolved.detectDir, context);
   } catch (error) {
     if (!(error instanceof ClientPathError)) throw error;
@@ -630,7 +632,7 @@ export function observeRestore(
    * config file. The answer also carries the document shape those bytes are in.
    */
   const rowTarget = declaredIntegrationTarget({
-    clientId, configPath, resolvedConfigPath: resolved.configPath, env: input.env, home: input.home,
+    clientId, configPath, resolvedConfigPath: resolved.configPath, env: input.env, home: input.home, io,
   });
   if (rowTarget === null) {
     return {
@@ -848,7 +850,7 @@ export interface IntegrationWriteInput {
   store?: IntegrationStateStore;
   io?: IntegrationIO;
   /** Frozen once by the async coordinator; synchronous callers may omit it. */
-  resolvedPaths?: { configPath: string; detectDir: string };
+  resolvedPaths?: ResolvedIntegrationPaths;
 }
 
 /** A refusal in the planner's own vocabulary, so observation does not depend on the writer's result type. */
@@ -922,7 +924,8 @@ export function observeIntegration(
      * verify account 1 was installed and then write account 0's catalog.
      */
     const context = exportContextOf(input);
-    const resolved = input.resolvedPaths ?? resolveIntegrationPaths(clientId, input.env, input.home, context);
+    const resolved = clientId === "zcode" || !input.resolvedPaths
+      ? resolveIntegrationPaths(clientId, input.env, input.home, context, io) : input.resolvedPaths;
     if (clientId === "droid" && input.resolvedPaths) assertDroidPathsUnambiguous(resolved.detectDir, context);
     detectDir = resolved.detectDir;
     if (clientId === "cline") io = createClineIO(io, resolved.configPath, store, effects.recover);
@@ -945,9 +948,12 @@ export function observeIntegration(
      * collection route.
      */
     effective = resolveIntegrationTarget({
-      clientId, configPath: recordedPath, io, record: stored, env: input.env, home: input.home,
+      clientId, configPath: recordedPath, io, record: stored, env: input.env, home: input.home, resolvedPaths: resolved,
     });
     configPath = effective.configPath;
+    if (effective.pathError && operation !== "disable") {
+      return { failed: observationFailure("unsafe", "unsafe", effective.pathError) } as const;
+    }
   } catch (error) {
     if (error instanceof ClineTransactionError) {
       return { failed: { ...observationFailure("unsafe", "unsafe", error.message, error.snapshotPath), residual: true } } as const;

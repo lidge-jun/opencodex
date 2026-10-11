@@ -214,6 +214,8 @@ ocx export --client opencode --out ~/opencodex-opencode.json
 | `commandcode` | `~/.commandcode/providers.json` (в Windows при использовании домашнего каталога по умолчанию: использовать `HOME ?? USERPROFILE`, только если значение не пустое, не состоит из пробелов и является абсолютным путём Windows, иначе `homedir()`; отдельно переданный домашний каталог сохраняется; добавить `.commandcode\providers.json`) | `providers.json` | только loopback; `apiKey: false`; переменная окружения не нужна |
 | `droid` | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` on Windows) | `factory-settings.json` | только loopback; переменная окружения не нужна |
 
+Эти пути указаны по умолчанию. Абсолютный `dataBaseDir` в `~/.zcode/v2/setting.json`, который всегда остаётся в домашнем каталоге по умолчанию, переносит хранилище в `<dataBaseDir>/.zcode/v2/provider_config.json`. `ZCODE_DATA_DIR` задаёт сам корень `.zcode` и имеет приоритет над настройкой; `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` имеет приоритет для файла провайдеров. Нечитаемая, некорректная или относительная настройка блокирует новое применение и обновление. Существующие записи владения и восстановления сохраняются. См. [правила путей и восстановления на английском](https://opencodex.me/guides/integrations/#zcode-314-and-later).
+
 Экспорт для Raycast — это отдельный документ `providers.yaml` с одним элементом `id: opencodex` в
 последовательности `providers`: `name: OpenCodex`, базовый URL прокси с `/v1` и каждая маршрутизируемая
 модель с её `abilities` (`tools` и `system_message` поддерживаются всегда, `vision` берётся из входных

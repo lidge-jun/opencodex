@@ -261,6 +261,8 @@ consultez les notes de recherche dans
 
 ## ZCode 3.14 et versions ultérieures
 
+Ces chemins sont les valeurs par défaut. Un `dataBaseDir` absolu dans `~/.zcode/v2/setting.json`, toujours dans le dossier personnel par défaut, déplace le stockage vers `<dataBaseDir>/.zcode/v2/provider_config.json`. `ZCODE_DATA_DIR` désigne directement la racine `.zcode` et prime sur ce réglage ; `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` prime pour le fichier des fournisseurs. Un réglage illisible, mal formé ou relatif bloque les nouvelles applications et actualisations. Les droits de propriété et les données de restauration existants sont conservés. Voir les [règles de chemin et de restauration en anglais](https://opencodex.me/guides/integrations/#zcode-314-and-later).
+
 ZCode 3.14 a déplacé ses fournisseurs personnalisés vers `~/.zcode/v2/provider_config.json` et ne
 lit plus `~/.zcode/v2/config.json` qu'au travers d'un import unique, exécuté seulement quand le
 nouveau fichier est absent. ZCode crée ce nouveau fichier au premier lancement : sur toute

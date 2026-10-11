@@ -190,6 +190,8 @@ ocx integration client restore --client aside --profile 1 --op <opId>
 
 ## ZCode 3.14 이상
 
+위 경로는 기본값입니다. 기본 홈의 `~/.zcode/v2/setting.json`에 절대 경로 `dataBaseDir`를 지정하면 저장소는 `<dataBaseDir>/.zcode/v2/provider_config.json`으로 이동합니다. `ZCODE_DATA_DIR`는 `.zcode` 루트 자체를 지정하며 설정값보다 우선하고, `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`는 제공자 파일 경로에 우선합니다. 잘못되거나 읽을 수 없는 설정, 상대 경로는 새 적용과 갱신을 거부합니다. 기존 소유권과 복구 기록은 보존됩니다. [경로와 복구 규칙의 원문](https://opencodex.me/guides/integrations/#zcode-314-and-later)을 참고하세요.
+
 ZCode 3.14는 사용자 정의 프로바이더를 `~/.zcode/v2/provider_config.json`으로 옮겼습니다. `~/.zcode/v2/config.json`은 새 파일이 없을 때 한 번 실행되는 가져오기 경로로만 남았습니다. ZCode를 처음 실행하면 새 파일을 만들므로 한 번이라도 실행한 설치에서는 가져오기 기회가 이미 지나갔고 `config.json`에 써도 반영되지 않습니다.
 
 opencodex는 가능할 때 `provider_config.json`에 직접 기록합니다. 연동을 활성화하면 그 파일에 `opencodex` 프로바이더 규칙을 추가하고, 카탈로그 갱신 시 이를 갱신하며, 비활성화하면 opencodex가 넣은 내용만 제거합니다. opencodex 아래에도 있는 모델 ID를 다른 프로바이더가 규칙으로 사용하더라도 파일의 다른 모든 규칙은 유지됩니다. opencodex가 기록하지 않은 `opencodex` ID 규칙은 가져오지 않고 충돌로 처리합니다. ZCode에서 해결하거나 명시적 덮어쓰기를 사용하세요.

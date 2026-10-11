@@ -186,6 +186,8 @@ ocx integration client restore --client aside --profile 1 --op <opId>
 
 ## ZCode 3.14 以降
 
+上記のパスは既定値です。既定のホームにある `~/.zcode/v2/setting.json` に絶対パスの `dataBaseDir` を指定すると、保存先は `<dataBaseDir>/.zcode/v2/provider_config.json` に移ります。`ZCODE_DATA_DIR` は `.zcode` ルートそのものを指定して設定値より優先され、`ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` はプロバイダーファイルのパスで優先されます。不正な設定、読み取れない設定、相対パスでは新しい適用と更新を拒否します。既存の所有権と復元記録は保持されます。[パスと復元規則の原文](https://opencodex.me/guides/integrations/#zcode-314-and-later)を参照してください。
+
 ZCode 3.14 はカスタムプロバイダーの保存先を `~/.zcode/v2/provider_config.json` に移しました。`~/.zcode/v2/config.json` からは、新しいファイルがない場合に一度だけ行われるインポートでしか参照されません。ZCode は初回起動時に新しいファイルを作るため、一度でも起動した環境ではインポートは済んでおり、`config.json` に書いても反映されません。
 
 opencodex は可能な場合、`provider_config.json` に直接書き込みます。統合を有効にすると `opencodex` プロバイダーの規則が追加され、カタログ更新でその内容が更新され、無効化では opencodex が書いた内容だけを削除します。ファイル内のその他の規則は維持されます。他のプロバイダーが opencodex と同じモデル ID に対して保持する規則も対象です。opencodex が書いていない `opencodex` ID の規則は、引き継ぐ対象ではなく競合です。ZCode 内で解決するか、明示的な上書きを使ってください。
