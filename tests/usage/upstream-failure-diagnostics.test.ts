@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { afterEach, beforeEach, describe } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, statSync, utimesSync, writeFileSync, type Stats } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -734,14 +734,62 @@ describe("configured credential source", () => {
     expect(configuredCredentials().complete).toBe(true);
     writeConfig("null");
     expect(configuredCredentials().complete).toBe(false);
-    // A different byte length from the next write: the cache signature is ino:size:mtimeMs, and
-    // two same-size in-place rewrites can share one mtime tick on Windows.
     writeConfig({ providers: [null] });
     expect(configuredCredentials().complete).toBe(false);
     writeConfig({ providers: {} });
     expect(configuredCredentials().complete).toBe(true);
     writeFileSync(join(home, "auth.json"), "[]");
     expect(configuredCredentials().complete).toBe(false);
+  });
+
+  // #6923: freshness must come from content. Each rewrite below keeps the byte length and has its
+  // mtime pinned back to the same whole second, so inode, size and mtime are all unchanged: what a
+  // same-tick rewrite on Windows, or a writer that preserves timestamps, leaves behind.
+  describe("same-length rewrites with an unchanged mtime", () => {
+    const pinned = new Date(Math.floor(Date.now() / 1000) * 1000 - 60_000);
+    const rewrite = (file: string, text: string): Stats => {
+      const path = join(home, file);
+      writeFileSync(path, text);
+      utimesSync(path, pinned, pinned);
+      return statSync(path);
+    };
+    const sameMetadata = (before: Stats, after: Stats) => {
+      expect(after.size).toBe(before.size);
+      expect(after.mtimeMs).toBe(before.mtimeMs);
+    };
+
+    test("a config credential swap is seen and the replaced key is no longer matched", () => {
+      const keyA = "cfg-a-" + randomBytes(12).toString("hex");
+      const keyB = "cfg-b-" + randomBytes(12).toString("hex");
+      const before = rewrite("config.json", JSON.stringify({ providers: { p: { apiKey: keyA } } }));
+      expect(configuredCredentials().matches(keyA)).toBe(true);
+      sameMetadata(before, rewrite("config.json", JSON.stringify({ providers: { p: { apiKey: keyB } } })));
+      const swapped = configuredCredentials();
+      expect(swapped.complete).toBe(true);
+      expect(swapped.matches(keyB)).toBe(true);
+      expect(swapped.matches(keyA)).toBe(false);
+    });
+
+    test("a malformed config of the same length fails closed instead of keeping the complete view", () => {
+      const valid = JSON.stringify({ providers: { p: { apiKey: "cfg-" + randomBytes(12).toString("hex") } } });
+      const malformed = `{"providers":["${"x".repeat(valid.length - 18)}"]}`;
+      expect(malformed.length).toBe(valid.length);
+      const before = rewrite("config.json", valid);
+      expect(configuredCredentials().complete).toBe(true);
+      sameMetadata(before, rewrite("config.json", malformed));
+      expect(configuredCredentials().complete).toBe(false);
+    });
+
+    test("an OAuth store token swap is seen and the replaced token is no longer matched", () => {
+      const tokenA = "tok-a-" + randomBytes(12).toString("hex");
+      const tokenB = "tok-b-" + randomBytes(12).toString("hex");
+      const before = rewrite("auth.json", JSON.stringify({ p: { type: "oauth", access: tokenA } }));
+      expect(configuredCredentials().matches(tokenA)).toBe(true);
+      sameMetadata(before, rewrite("auth.json", JSON.stringify({ p: { type: "oauth", access: tokenB } })));
+      const swapped = configuredCredentials();
+      expect(swapped.matches(tokenB)).toBe(true);
+      expect(swapped.matches(tokenA)).toBe(false);
+    });
   });
 
   test("only credential fields are collected, not labels such as authMode", () => {

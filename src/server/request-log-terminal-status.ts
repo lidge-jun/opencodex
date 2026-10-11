@@ -116,9 +116,15 @@ export function captureUpstreamTerminalDiagnostics(logCtx: TerminalStatusContext
 }
 
 export function upstreamDiagnosticLogFields(logCtx: UpstreamErrorDiagnostics): UpstreamErrorDiagnostics {
+  // One verification per projection: the three fields are checked at the same instant, so they
+  // share one snapshot of each source, taken only once a field is actually populated (a row with
+  // no upstream diagnostic reads no credential store).
+  let sources: { registry: OutboundCredentialRegistry; configured: ConfiguredCredentials } | undefined;
   const allowed = (field: keyof UpstreamErrorDiagnostics): string | undefined => {
     const value = logCtx[field];
-    return value && diagnosticValueAllowed(value) ? value : undefined;
+    if (!value) return undefined;
+    sources ??= { registry: outboundCredentials(), configured: configuredCredentials() };
+    return diagnosticValueAllowed(value, sources.registry, sources.configured) ? value : undefined;
   };
   const code = allowed("upstreamErrorCode");
   const type = allowed("upstreamErrorType");
