@@ -500,7 +500,7 @@
   "protocol-settings.test.ts": "config", "config-mutation-lock.test.ts": "config",
   "config-non-object-backup.test.ts": "config", "config-ownership-uninstall.test.ts": "config",
   "config-rebase-provenance-writers.test.ts": "config", "config-save-boundary.test.ts": "config",
-  "config-spend-ceilings.test.ts": "config", "config-spend-pool-collision.test.ts": "config", "config-user-edits.test.ts": "config",
+  "config-spend-ceilings.test.ts": "config", "config-spend-pool-collision.test.ts": "config", "config-user-edits.test.ts": "config", "hub-disable-live-save.test.ts": "config",
   "config.test.ts": "server", "configured-native-models.test.ts": "codex-integration",
   "gui-desktop-sidecar-signing.test.ts": "gui", "linux-desktop-packaged-ci.test.ts": "ci-workflows",
   "probe-timeout-env.test.ts": "server", "subagent-roster-migration.test.ts": "routing",

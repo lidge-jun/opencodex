@@ -93,7 +93,7 @@ export async function runHubDisable(args: string[], deps: HubDisableDeps = {}): 
       ...safe.keys.map(key => `${key.revoked ? "Revoked" : "Retained"} saved key: ${key.id} (${key.name})`),
       "Saved keys have no verified client origin; revocation uses only explicitly selected IDs.",
       restart, PUBLISHING_NOTE,
-      "The running proxy and existing sessions are unchanged until restart.",
+      "Restart is required to apply all saved settings; this command does not terminate existing sessions.",
     ]);
   });
 }
