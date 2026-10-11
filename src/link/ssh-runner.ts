@@ -237,7 +237,7 @@ export function createSshRunner(deps: { spawn?: typeof Bun.spawn; timeoutMs?: nu
       } catch (error) {
         cancellation.abort();
         // Only terminate this local SSH child. A kill failure must not hide the original error.
-        try { defaultKill(child, "SIGTERM"); } catch {}
+        try { defaultKill(child, "SIGTERM"); } catch { /* Preserve the command failure when an already-gone child cannot be signalled. */ }
         if (error instanceof SshRunnerError) throw error;
         throw new SshRunnerError("spawn", "ssh command failed", { cause: error });
       } finally {

@@ -46,7 +46,7 @@ function fixture(options: { blockWrite?: boolean; blockEnd?: boolean; openOutput
     stdout, stderr, cancelled, signals, inputs, ends: () => ends,
     release() {
       write.resolve(1); end.resolve(0); exit.resolve(0);
-      for (const controller of controllers) { try { controller.close(); } catch {} }
+      for (const controller of controllers) { try { controller.close(); } catch { /* A cancelled or already-closed fixture stream needs no further cleanup. */ } }
     },
   };
 }
