@@ -1,5 +1,5 @@
 import { warnPlaintextV2AgentMessagesStartup } from "../../src/server";
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, jest, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -408,36 +408,49 @@ describe("plaintext v2 agent messages at the Responses server boundary", () => {
 
   test("fails closed when a headerless body drip-feeds bytes that never classify", async () => {
     takeInheritedSpendHome();
-    const encoder = new TextEncoder();
-    const timers: Array<ReturnType<typeof setTimeout>> = [];
+    jest.useFakeTimers();
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    let nextRead = Promise.withResolvers<void>();
     let cancelled = false;
-    globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
-      start(controller) {
-        const tick = (): void => {
-          if (cancelled) return;
-          controller.enqueue(encoder.encode("x"));
-          timers.push(setTimeout(tick, 300));
-        };
-        timers.push(setTimeout(tick, 300));
-      },
+    const body = new ReadableStream<Uint8Array>({
+      start(value) { controller = value; },
+      pull() { nextRead.resolve(); },
       cancel() { cancelled = true; },
-    }), { status: 200 })) as typeof fetch;
-
-    const started = performance.now();
+    }, { highWaterMark: 0 });
+    globalThis.fetch = (async () => new Response(body, { status: 200 })) as typeof fetch;
+    let settled = false;
+    const pending = handleResponses(
+      collaborationRequest(), config(true, false, undefined, 1), { model: "", provider: "" },
+    ).then(response => { settled = true; return response; });
     try {
-      const response = await handleResponses(
-        collaborationRequest(),
-        config(true, false, undefined, 1),
-        { model: "", provider: "" },
-      );
-      const clientBody = await response.text();
-
+      // highWaterMark 0 anchors time to the probe's first read, not fetch or stream creation.
+      await nextRead.promise;
+      for (let byte = 0; byte < 3; byte++) {
+        jest.advanceTimersByTime(300);
+        nextRead = Promise.withResolvers<void>();
+        controller.enqueue(new TextEncoder().encode("x"));
+        // The next pull acknowledges consumption and renewal of the inactivity window.
+        await nextRead.promise;
+      }
+      jest.advanceTimersByTime(99);
+      // Drain pending microtasks so a premature settlement at 999 ms would be observed.
+      for (let turn = 0; turn < 50; turn++) await Promise.resolve();
+      expect(settled).toBe(false);
+      expect(cancelled).toBe(false);
+      jest.advanceTimersByTime(1);
+      const response = await pending;
+      // The probe cancels the upstream before it answers, so cancellation is settled here.
+      expect(cancelled).toBe(true);
       expect(response.status).toBe(502);
-      expect(clientBody).toContain("unsupported content type");
-      expect(performance.now() - started).toBeLessThan(3_000);
+      expect(await response.text()).toContain("unsupported content type");
     } finally {
-      cancelled = true;
-      for (const timer of timers) clearTimeout(timer);
+      try {
+        if (!cancelled) controller.close();
+        await pending;
+      } finally {
+        jest.clearAllTimers();
+        jest.useRealTimers();
+      }
     }
   });
 

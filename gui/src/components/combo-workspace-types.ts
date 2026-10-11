@@ -28,6 +28,8 @@ export interface ComboWorkspaceProps {
   providerQuotaStates: ProviderQuotaStates;
   providers: ProviderOption[];
   models: ModelOption[];
+  /** Full catalog metadata, including rows hidden from the new-member picker. */
+  capabilityModels?: ModelOption[];
   /** Combo ids currently present in the live catalog (`provider === "combo"`). */
   cataloguedComboIds?: ReadonlySet<string>;
   loading?: boolean;

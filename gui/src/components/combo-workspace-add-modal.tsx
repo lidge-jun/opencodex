@@ -30,6 +30,7 @@ export function AddComboModal({
   providerQuotaStates,
   providers,
   models,
+  capabilityModels = models,
   initialDraft,
   onClose,
   onSubmit,
@@ -43,6 +44,7 @@ export function AddComboModal({
   providerQuotaStates: ProviderQuotaStates;
   providers: ProviderOption[];
   models: ModelOption[];
+  capabilityModels?: ModelOption[];
   initialDraft?: ComboItem;
   onClose: () => void;
   onSubmit: (item: ComboItem) => Promise<{ ok: boolean; error?: string }>;
@@ -56,11 +58,11 @@ export function AddComboModal({
   const [error, setError] = useState("");
   const effortMap = useMemo(() => {
     const map = new Map<string, string[] | undefined>();
-    for (const model of models) {
+    for (const model of capabilityModels) {
       map.set(`${model.provider}/${model.id}`, model.reasoningEfforts);
     }
     return map;
-  }, [models]);
+  }, [capabilityModels]);
   const allowedEfforts = useMemo(
     () => intersectComboEfforts(draft.targets, effortMap, draft.reasoningEffortMode ?? "strict"),
     [draft.targets, effortMap, draft.reasoningEffortMode],
@@ -248,6 +250,7 @@ export function AddComboModal({
               strategy={draft.strategy}
               providers={providers}
               models={models}
+              capabilityModels={capabilityModels}
               providerQuotaStates={providerQuotaStates}
               onChange={(targets) => setDraft((d) => ({ ...d, targets }))}
             />
@@ -257,7 +260,7 @@ export function AddComboModal({
           </div>
           <ComboCapabilities
             targets={draft.targets}
-            models={models}
+            models={capabilityModels}
             imageInput={draft.imageInput ?? "auto"}
             reasoningEffortMode={draft.reasoningEffortMode ?? "strict"}
             disabled={busy}

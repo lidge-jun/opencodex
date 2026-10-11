@@ -2,6 +2,56 @@ use serde_json::Value;
 use std::{env, fs, path::PathBuf, process::Command};
 
 #[test]
+fn eager_eof_releases_upstream_abort_listeners_and_reader() {
+    let result = contract(
+        "eager-eof-listeners",
+        r#"
+const {relaySseEagerBounded}=await import(pathToFileURL(join(process.env.CONTRACT_REPO,'src/server/relay-eager.ts')).href);
+const {getEventListeners}=await import('node:events');
+const upstream=new AbortController();
+const payload='data: '+JSON.stringify({type:'response.output_text.delta',delta:'x'.repeat(1024*1024)})+'\n\n'+'data: {"type":"response.completed"}\n\n';
+const server=Bun.serve({hostname:'127.0.0.1',port:0,fetch(){return new Response(payload,{headers:{'content-type':'text/event-stream'}})}});
+const baseline=getEventListeners(upstream.signal,'abort').length;
+let readerRef, readers=0, doneCalls=0;
+try {
+ async function exchange() {
+  const source=await fetch('http://127.0.0.1:'+server.port,{signal:upstream.signal});
+  const body=source.body;
+  const original=body.getReader;
+  body.getReader=function(...args){const reader=original.apply(this,args);readers++;readerRef=new WeakRef(reader);return reader};
+  let finish;
+  const done=new Promise(resolve=>{finish=resolve});
+  const stream=relaySseEagerBounded(body,upstream,{inspectChunk(){},finishInspection(){},sawTerminal(){return true},onSynthetic(){throw Error('unexpected synthetic terminal')},onClientCancel(){throw Error('unexpected cancellation')},onDone(){doneCalls++;finish()}});
+  const bytes=await new Response(stream).text();
+  await done;
+  const events=bytes.split(/\r?\n/).filter(line=>line.startsWith('data: ')&&line!=='data: [DONE]').map(line=>JSON.parse(line.slice(6)));
+  return events.find(event=>event.type==='response.output_text.delta')?.delta==='x'.repeat(1024*1024)&&events.some(event=>event.type==='response.completed');
+ }
+ const bytesPreserved=await exchange();
+ // End the WeakRef keep-alive job before collecting; the controller intentionally remains live.
+ for(let i=0;i<3;i++){await new Promise(resolve=>setTimeout(resolve,0));Bun.gc(true)}
+ return {baseline,remainingListeners:getEventListeners(upstream.signal,'abort').length,readerCollected:readerRef.deref()===undefined,readers,doneCalls,bytesPreserved,upstreamAborted:upstream.signal.aborted};
+} finally {upstream.abort();await server.stop(true)}
+"#,
+    );
+    assert_eq!(
+        result["readers"], 1,
+        "the actual native response reader must be observed"
+    );
+    assert_eq!(result["doneCalls"], 1);
+    assert_eq!(result["upstreamAborted"], false);
+    assert_eq!(
+        result["remainingListeners"], result["baseline"],
+        "completed relay retained upstream abort listeners: {result}"
+    );
+    assert_eq!(result["bytesPreserved"], true);
+    assert_eq!(
+        result["readerCollected"], true,
+        "a live controller retained the completed native response reader"
+    );
+}
+
+#[test]
 fn aborted_unread_responses_release_owned_budgets_before_cancel_settles() {
     let result = contract(
         "aborted-unread-budget",

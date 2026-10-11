@@ -87,6 +87,19 @@ describe("Kimi empty assistant history on the final Responses wire", () => {
     ]).body.input).toEqual([call, result, user]);
   });
 
+  test("retains an empty message targeted by a same-input item reference without keeping unreferenced empties", () => {
+    const target = assistant("", { id: "msg_referenced" });
+    const reference = { type: "item_reference", id: "msg_referenced" };
+    expect(build([target, assistant("", { id: "msg_unreferenced" }), reference, user]).body.input)
+      .toEqual([target, reference, user]);
+  });
+
+  test("keeps multimodal and opaque non-text assistant parts", () => {
+    const kept = [assistant([{ type: "output_image", image_url: "https://example.test/fixture.png" }]),
+      assistant([{ type: "output_audio", data: "synthetic-audio" }])];
+    expect(build([...kept, user]).body.input).toEqual([...kept, user]);
+  });
+
   test.each([
     "https://api.openai.com/v1", "https://api.deepseek.com/v1",
     "https://api.minimax.io/v1", "https://api.moonshot.ai/v1",

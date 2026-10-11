@@ -483,3 +483,51 @@ test("management API maps config mutation lock contention to retryable 503", asy
     }
   }
 });
+
+test("own-state writers honor the shared mutation lock (grok coupon ledger)", async () => {
+  saveConfig(config());
+  const readyPath = join(testRoot, "own-state-holder-ready");
+  const releasePath = join(testRoot, "own-state-holder-release");
+  const configModuleUrl = pathToFileURL(repoPath("src/config.ts")).href;
+  const childSource = `
+    import { existsSync, writeFileSync } from "node:fs";
+    import { withConfigMutationLockSync } from ${JSON.stringify(configModuleUrl)};
+    withConfigMutationLockSync(() => {
+      writeFileSync(${JSON.stringify(readyPath)}, "ready");
+      while (!existsSync(${JSON.stringify(releasePath)})) Bun.sleepSync(10);
+    });
+  `;
+  const child = Bun.spawn([process.execPath, "-e", childSource], {
+    cwd: repoRoot(),
+    env: { ...process.env, OPENCODEX_HOME: testRoot },
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  let childKilled = false;
+  try {
+    try {
+      await waitForOwnedChildReady(child, readyPath);
+    } catch (error) {
+      childKilled = true;
+      child.kill();
+      await child.exited;
+      const stderr = await new Response(child.stderr).text().catch(() => "");
+      throw new Error(`${(error as Error).message}\nchild stderr: ${stderr}`);
+    }
+    const { openGrokResetCouponOperation } = await import("../../src/grok/reset-coupon-ledger");
+    const journalPath = join(testRoot, "grok-reset-coupon-ledger.json");
+    expect(() => openGrokResetCouponOperation(
+      { accountId: "acct-1", operationId: crypto.randomUUID() },
+      Date.now(),
+      journalPath,
+    )).toThrow(ConfigMutationLockError);
+    expect(existsSync(journalPath)).toBe(false);
+  } finally {
+    writeFileSync(releasePath, "release");
+    if (!childKilled) {
+      expect(await waitForOwnedChild(child)).toBe(0);
+    }
+  }
+});

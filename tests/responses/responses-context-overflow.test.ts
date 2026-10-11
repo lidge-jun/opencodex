@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
 import { PROVIDER_INPUT_TOO_LARGE_MESSAGE } from "../../src/server/responses/context-overflow";
+import { OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE } from "../../src/adapters/ollama-native";
+import { isLateAttributionRefusal } from "../../src/server/responses/core-combo-failure";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -58,6 +60,19 @@ function freePromptCap413(onHit?: () => void): ReturnType<typeof Bun.serve> {
       return Response.json({
         detail: "err_free_prompt_cap: prompt exceeds this tier; echoed private request marker should-not-reach-client",
       }, { status: 413 });
+    },
+  });
+  upstreams.push(upstream);
+  return upstream;
+}
+
+function upstreamEnvelope(error: Record<string, unknown>, onHit?: () => void): ReturnType<typeof Bun.serve> {
+  const upstream = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch() {
+      onHit?.();
+      return Response.json({ error, detail: "sibling private marker should-not-reach-client" }, { status: 413 });
     },
   });
   upstreams.push(upstream);
@@ -332,5 +347,74 @@ describe("Responses provider input overflow", () => {
     } finally {
       await server.stop(true);
     }
+  });
+});
+
+describe("combo handling of the Ollama late-attribution refusal", () => {
+  const localShape = { message: OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE, type: "request_too_large", code: "request_too_large" };
+
+  async function runCombo(firstError: Record<string, unknown>, stream: boolean) {
+    let firstHits = 0;
+    let secondHits = 0;
+    const first = upstreamEnvelope({ ...firstError, nested: { note: "nested private marker should-not-reach-client" } },
+      () => { firstHits += 1; });
+    const second = upstream413(() => { secondHits += 1; });
+    const next = config({ first: provider("openai-chat", first), second: provider("openai-chat", second) });
+    next.combos = { fallback: { strategy: "failover", targets: [
+      { provider: "first", model: "kimi-k3" }, { provider: "second", model: "kimi-k3" },
+    ] } };
+    saveConfig(next);
+    const server = startServer(0);
+    try {
+      const response = await request(String(server.url), "combo/fallback", stream);
+      const text = await response.text();
+      return { status: response.status, text, firstHits, secondHits };
+    } finally {
+      await server.stop(true);
+    }
+  }
+
+  // comboFailureDecision stops on a plain 413 (only a target-local cap marker hops), so the
+  // late-attribution refusal reaches the stop site; the exhaustion and child-stop sites are
+  // unreachable for it and keep their existing overflow mapping.
+  test.each([false, true])("the refusal reaches the client only as the literal constant envelope (stream=%s)", async stream => {
+    const result = await runCombo(localShape, stream);
+    expect(result.status).toBe(413);
+    expect(JSON.parse(result.text)).toEqual({ error: localShape });
+    expect(result.text).not.toContain("should-not-reach-client");
+    expect(result.firstHits).toBe(1);
+    expect(result.secondHits).toBe(0);
+  });
+
+  test.each([false, true])("a suffixed message is not the constant and keeps the generic overflow mapping (stream=%s)", async stream => {
+    const result = await runCombo({ ...localShape, message: `${OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE} private suffix should-not-reach-client` }, stream);
+    expect(result.text).not.toContain("should-not-reach-client");
+    expect(result.text).not.toContain(OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE);
+    expect(result.text).toContain("context_length_exceeded");
+    expect(result.secondHits).toBe(0);
+  });
+
+  test("a conflicting envelope with the constant but another code is not replaced and keeps dev's handling", async () => {
+    // Same outcome as origin/dev for this envelope (verified with an identical probe on both):
+    // model_unavailable hops to the next target and the combo maps the 413 as a generic overflow.
+    const result = await runCombo({ ...localShape, code: "model_unavailable" }, false);
+    expect(result.text).not.toContain("should-not-reach-client");
+    expect(result.text).not.toContain(OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE);
+    expect(result.text).toContain(PROVIDER_INPUT_TOO_LARGE_MESSAGE);
+    expect(result.firstHits).toBe(1);
+    expect(result.secondHits).toBe(1);
+  });
+
+  test("the selector requires the exact constant, the local wire code, status 413 and a replayable attempt", () => {
+    const failure = (overrides: Record<string, unknown>) => ({
+      response: new Response(null, { status: 413 }), classificationText: "x",
+      upstreamCode: "request_too_large", upstreamMessage: OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE, ...overrides,
+    }) as Parameters<typeof isLateAttributionRefusal>[0];
+    expect(isLateAttributionRefusal(failure({}))).toBe(true);
+    expect(isLateAttributionRefusal(failure({ nonReplayable: true }))).toBe(false);
+    expect(isLateAttributionRefusal(failure({ upstreamCode: "model_unavailable" }))).toBe(false);
+    expect(isLateAttributionRefusal(failure({ upstreamMessage: OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE + " " }))).toBe(false);
+    expect(isLateAttributionRefusal(failure({ response: new Response(null, { status: 400 }) }))).toBe(false);
+    expect(isLateAttributionRefusal(failure({ upstreamMessage: undefined }))).toBe(false);
   });
 });

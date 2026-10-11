@@ -46,6 +46,16 @@ or signs them.
   `src/lib/optional-shutdown-hooks.ts` under a per-file, per-registration key, so plugins sharing a
   display name, and several teardowns from one plugin, all run.
 
+## ACL inspector test seam
+
+`setPluginAclInspectorForTests(inspector?)` in `src/plugins/loader.ts` is a shipped mutable
+seam, test-only by intent, with no configuration or environment path. When installed, its
+result replaces ACL inspection for plugin directories, ancestors and files; owner and mode
+checks still run. Passing `undefined` restores the real inspector. Tests scope installation
+with `finally` and an `afterEach` reset and run serially because the override is module-global.
+Production callers must leave it unset; an in-process caller can misuse this export to bypass
+ACL inspection, so the test-only intent is a convention rather than an enforced boundary.
+
 ## Upstream rewrite slot
 
 `src/plugins/upstream-hooks.ts` is the only core-owned seam plugins attach to. It imports nothing,

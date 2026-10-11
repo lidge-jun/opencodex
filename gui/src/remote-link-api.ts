@@ -23,6 +23,7 @@ export const LINK_ERROR_CODES = [
   "link_apply_failed",
   "link_exists",
   "link_not_found",
+  "link_not_home_initiated",
   "link_remove_failed",
   "link_unavailable",
   "listener_unavailable",

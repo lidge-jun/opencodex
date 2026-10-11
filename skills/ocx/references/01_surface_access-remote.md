@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 28.
+Declared capabilities: 29.
 
 ### `ocx link port`
 
@@ -96,6 +96,29 @@ JSON mode: `envelope`.
 - Ordinary revoke always emits {linkId} JSON; forced revoke has human output or a JSON cleanup receipt. Already-revoked link_not_found is idempotent success.
 - Ordinary revoke retains its no-body and idempotent behavior. Forced success reports remoteCleanup:skipped from invocation intent; already-missing link reports unverified. Neither proves the remote client disconnected.
 - If forced cleanup was needed, run ocx disconnect on the remote client. No new enrollment, SSH trust or credential action is implied.
+
+### `ocx link reconnect`
+
+Usage: `ocx link reconnect --link-id <id> [--json]`
+
+Restart a Home-initiated link's SSH tunnel now.
+
+State-changing: yes.
+
+| Method | Route |
+|---|---|
+| POST | `/api/link/{id}/reconnect` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--link-id` | string | Home-initiated link id whose tunnel to restart. |
+| `--json` | boolean | Emit the restarted link id as JSON. |
+
+JSON mode: `envelope`.
+
+- Requires a valid link ID and loopback admin authority. Stops the current ssh child, clears any backoff or failed state and starts a fresh attempt; read ocx link status for the outcome.
+- A Child-initiated link is refused with link_not_home_initiated: its own computer owns and retries that tunnel.
+- Always emits {linkId} JSON.
 
 ### `ocx remote-workspace pair`
 

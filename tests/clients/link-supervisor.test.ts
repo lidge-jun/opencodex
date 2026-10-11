@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { createLinkSupervisor } from "../../src/link/supervisor";
-import type { SshChild, SshRunner } from "../../src/link/ssh-runner";
+import { createSshRunner, type SshChild, type SshRunner } from "../../src/link/ssh-runner";
 import type { LinkStore } from "../../src/link/store";
 
 function deferred<T>() {
@@ -45,6 +45,150 @@ function fakeRunner() {
 function baseStore(...links: LinkStore["links"]): LinkStore {
   return { version: 1, listenerPort: 19001, links };
 }
+
+test.each([
+  ["Host key verification failed.", "hostkey"],
+  ["Permission denied (publickey).", "auth"],
+  ["Connection refused", "network"],
+] as const)("an inherited stderr pipe does not stall the supervisor after %s", async (diagnostic, reason) => {
+  const children: Array<{ exit: (code: number) => void; stderr: ReadableStream<Uint8Array> }> = [];
+  let cancelled = 0;
+  const spawn = (() => {
+    const exit = deferred<number>();
+    const stderr = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new TextEncoder().encode(diagnostic)); },
+      cancel() { cancelled += 1; },
+    });
+    const child = { pid: 400 + children.length, stdout: new ReadableStream<Uint8Array>({ start(c) { c.close(); } }),
+      stderr, exited: exit.promise, kill() { exit.resolve(143); } };
+    children.push({ exit: exit.resolve, stderr });
+    return child;
+  }) as unknown as typeof Bun.spawn;
+  let current = 0;
+  let tick!: () => void;
+  const supervisor = createLinkSupervisor({
+    readStore: () => baseStore(record("hub-initiated", "lnk_0123456789abcdef")),
+    runner: createSshRunner({ spawn }), now: () => current, random: () => 0.5,
+    readPidfile: () => null, writePidfile: () => {}, removePidfile: () => {},
+    setTimer: callback => { tick = callback; return 1 as unknown as ReturnType<typeof setInterval>; }, clearTimer: () => {},
+  });
+  supervisor.start();
+  try {
+    children[0]!.exit(255);
+    await Bun.sleep(500);
+    expect(cancelled).toBe(1);
+    expect(children[0]!.stderr.locked).toBe(false);
+    if (reason === "network") {
+      expect(supervisor.status()[0]!.state).toMatchObject({ kind: "reconnecting", retryAt: 1_000 });
+      current = 300_000;
+      tick();
+      expect(supervisor.status()[0]!.state).toEqual({ kind: "failed", since: 300_000, reason: "timeout", retryAt: 360_000, inFlight: false });
+      current = 360_000;
+    } else {
+      expect(supervisor.status()[0]!.state).toMatchObject({ kind: "failed", reason });
+      current = 1_000;
+      tick();
+      expect(children).toHaveLength(1); // Never use the transient retry cadence for these diagnostics.
+      current = 300_000;
+    }
+    tick();
+    expect(children).toHaveLength(reason === "hostkey" ? 1 : 2);
+  } finally {
+    await supervisor.stop();
+  }
+});
+
+test.each(["remove", "reload", "R1 reload removal", "R1b client-owned reload", "R2 stop", "store removal", "store record change", "store listener change"] as const)("reconnect with deferred exit cannot outrun %s", async action => {
+  const fake = fakeRunner();
+  const link = record("hub-initiated", "lnk_0123456789abcdef");
+  let store = baseStore(link);
+  const live = new Set<SshChild>();
+  const supervisor = createLinkSupervisor({
+    readStore: () => store,
+    runner: { ...fake.runner, spawnTunnel(argv) {
+      const child = fake.runner.spawnTunnel(argv);
+      live.add(child);
+      void child.exited.then(() => live.delete(child));
+      return child;
+    } },
+    readPidfile: () => null, writePidfile: () => {}, removePidfile: () => {},
+    setTimer: () => 1 as unknown as ReturnType<typeof setInterval>, clearTimer: () => {},
+  });
+  supervisor.start();
+  fake.children[0]!.child.kill = () => {};
+  const reconnect = supervisor.reconnect(link.id);
+  // Let reconnect reach the deferred exit, even if lifecycle work is queued.
+  for (let turn = 0; turn < 4; turn += 1) await Promise.resolve();
+  let mutation: Promise<void>;
+  let settled = false;
+  if (action === "remove") {
+    mutation = supervisor.stopLink(link.id);
+    store = baseStore();
+  } else if (action === "reload") {
+    store = { ...baseStore({ ...link, alias: "new-child", tunnelPort: 19003 }), listenerPort: 19004 };
+    mutation = supervisor.reload();
+  } else if (action === "R1 reload removal" || action === "R1b client-owned reload") {
+    store = action === "R1 reload removal" ? baseStore()
+      : baseStore({ ...link, direction: "client-initiated", hostKeyFingerprint: null });
+    mutation = supervisor.reload();
+  } else if (action === "R2 stop") mutation = supervisor.stop();
+  else {
+    store = action === "store removal" ? baseStore()
+      : action === "store record change" ? baseStore({ ...link, alias: "new-child", tunnelPort: 19003 })
+      : { ...baseStore(link), listenerPort: 19004 };
+    mutation = reconnect.then(() => {});
+  }
+  void mutation.then(() => { settled = true; });
+  for (let turn = 0; turn < 4; turn += 1) await Promise.resolve();
+  const settledBeforeExit = settled;
+  const spawnedBeforeExit = fake.children.length;
+  const liveBeforeExit = live.size;
+  fake.children[0]!.resolve(143);
+  try {
+    expect(await reconnect).toBe(false);
+    await mutation;
+    expect(settledBeforeExit).toBe(false);
+    expect(spawnedBeforeExit).toBe(1);
+    expect(liveBeforeExit).toBe(1);
+    expect(live.size).toBe(action === "reload" ? 1 : 0);
+    expect(fake.children).toHaveLength(action === "reload" ? 2 : 1);
+    if (action === "reload") {
+      expect(fake.children[1]!.child.argv).toContain("new-child");
+      expect(fake.children[1]!.child.argv).toContain("127.0.0.1:19003:127.0.0.1:19004");
+      expect(supervisor.status()[0]!.pid).toBe(fake.children[1]!.child.pid);
+    }
+    if (action === "R1 reload removal") expect(supervisor.status()).toEqual([]);
+    if (action === "R1b client-owned reload") expect(supervisor.status()).toEqual([
+      { linkId: link.id, direction: "client-initiated", state: "client-owned", pid: null },
+    ]);
+  } finally { await mutation; await supervisor.stop(); }
+});
+
+test("reconnect queued behind a draining reload uses its updated tunnel port", async () => {
+  const fake = fakeRunner();
+  const link = record("hub-initiated", "lnk_0123456789abcdef");
+  let store = baseStore(link);
+  const supervisor = createLinkSupervisor({ readStore: () => store, runner: fake.runner,
+    readPidfile: () => null, writePidfile: () => {}, removePidfile: () => {},
+    setTimer: () => 1 as unknown as ReturnType<typeof setInterval>, clearTimer: () => {},
+  });
+  supervisor.start();
+  fake.children[0]!.child.kill = () => {};
+  store = baseStore({ ...link, tunnelPort: 19003 });
+  const reloading = supervisor.reload();
+  for (let turn = 0; turn < 4; turn += 1) await Promise.resolve();
+  const restarting = supervisor.reconnect(link.id);
+  expect(fake.children).toHaveLength(1);
+  fake.children[0]!.resolve(143);
+  try {
+    await reloading;
+    expect(await restarting).toBe(true);
+    expect(fake.children).toHaveLength(3);
+    expect(fake.children[2]!.child.argv).toContain("127.0.0.1:19003:127.0.0.1:19001");
+    expect(supervisor.status()[0]!.pid).toBe(fake.children[2]!.child.pid);
+    await expect(fake.children[1]!.child.exited).resolves.toBe(143);
+  } finally { await reloading; await restarting; await supervisor.stop(); }
+});
 
 test("spawns only hub links with the exact reverse forward argv", () => {
   const fake = fakeRunner();
@@ -127,21 +271,48 @@ test("marks a live tunnel connected after the grace period or authenticated cata
   await grace.stop();
 });
 
-test("auth and host ownership failures do not retry, and client links stay client-owned", async () => {
+test("auth failures retry every five minutes, a changed host key never does, and client links stay client-owned", async () => {
   const fake = fakeRunner();
+  const timers: Array<() => void> = [];
+  let current = 0;
   const store = baseStore(record("hub-initiated", "lnk_0123456789abcdef"), record("client-initiated", "lnk_fedcba9876543210"));
-  const supervisor = createLinkSupervisor({ readStore: () => store, runner: fake.runner, pidfileDir: "/tmp/opencodex-link-supervisor-test" });
+  const supervisor = createLinkSupervisor({
+    readStore: () => store,
+    runner: fake.runner,
+    pidfileDir: "/tmp/opencodex-link-supervisor-test",
+    now: () => current,
+    setTimer: callback => { timers.push(callback); return 1 as unknown as ReturnType<typeof setInterval>; },
+    clearTimer: () => {},
+  });
   supervisor.start();
   fake.children[0]!.stderr = "Permission denied";
   fake.children[0]!.resolve(1);
   await Promise.resolve();
   await Promise.resolve();
-  expect(supervisor.status()[0]!.state).toEqual({ kind: "failed", since: expect.any(Number), reason: "auth" });
+  expect(supervisor.status()[0]!.state).toEqual({ kind: "failed", since: 0, reason: "auth", retryAt: 300_000, inFlight: false });
   expect(supervisor.status()[1]).toMatchObject({ state: "client-owned", pid: null });
+  current = 299_999;
+  timers[0]!();
+  expect(fake.children).toHaveLength(1);
+  current = 300_000;
+  timers[0]!();
+  expect(fake.children).toHaveLength(2);
+  fake.children[1]!.stderr = "Host key verification failed.";
+  fake.children[1]!.resolve(255);
+  await Promise.resolve();
+  await Promise.resolve();
+  const failed = supervisor.status()[0]!.state;
+  expect(failed).toEqual({ kind: "failed", since: 0, reason: "hostkey" });
+  for (let second = 0; second < 2 * 60 * 60; second += 10) {
+    current += 10_000;
+    timers[0]!();
+  }
+  expect(fake.children).toHaveLength(2);
+  expect(supervisor.status()[0]!.state).toEqual(failed);
   await supervisor.stop();
 });
 
-test("the Home's -R supervisor keeps the old policy: a failed tunnel is not retried and a live one is promoted after five seconds", async () => {
+test("the Home's -R supervisor retries a failed forward once a minute and promotes a retry that stays up", async () => {
   const fake = fakeRunner();
   const timers: Array<() => void> = [];
   let current = 0;
@@ -159,18 +330,451 @@ test("the Home's -R supervisor keeps the old policy: a failed tunnel is not retr
   current = 5_000;
   timers[0]!();
   expect(supervisor.status()[0]!.state).toEqual({ kind: "connected", since: 5_000 });
+  // The Child's sshd still holds the forward of the session that just died.
   fake.children[0]!.stderr = "Error: remote port forwarding failed for listen port 19002";
   fake.children[0]!.resolve(255);
   await Promise.resolve();
   await Promise.resolve();
-  const failed = supervisor.status()[0]!.state;
-  expect(failed).toEqual({ kind: "failed", since: 5_000, reason: "forward" });
-  for (let second = 0; second < 2 * 60 * 60; second += 10) {
-    current += 10_000;
+  expect(supervisor.status()[0]!.state).toEqual({ kind: "failed", since: 5_000, reason: "forward", retryAt: 65_000, inFlight: false });
+  current = 64_999;
+  timers[0]!();
+  expect(fake.children).toHaveLength(1);
+  current = 65_000;
+  timers[0]!();
+  expect(fake.children).toHaveLength(2);
+  expect(supervisor.status()[0]!.state).toMatchObject({ kind: "failed", reason: "forward", inFlight: true });
+  fake.children[1]!.stderr = "Error: remote port forwarding failed for listen port 19002";
+  fake.children[1]!.resolve(255);
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(supervisor.status()[0]!.state).toEqual({ kind: "failed", since: 5_000, reason: "forward", retryAt: 125_000, inFlight: false });
+  current = 125_000;
+  timers[0]!();
+  expect(fake.children).toHaveLength(3);
+  // A retry in flight is not killed for reading failed, and staying up past the retry grace proves it.
+  current = 139_999;
+  timers[0]!();
+  expect(supervisor.status()[0]!.state).toMatchObject({ kind: "failed", inFlight: true });
+  current = 140_000;
+  timers[0]!();
+  expect(supervisor.status()[0]!.state).toEqual({ kind: "connected", since: 140_000 });
+  expect(supervisor.status()[0]!.pid).toBe(fake.children[2]!.child.pid);
+  await supervisor.stop();
+});
+
+test("the Home's -R supervisor keeps a reconnected tunnel past the outage limit without a catalog request", async () => {
+  const fake = fakeRunner();
+  const timers: Array<() => void> = [];
+  let current = 0;
+  const store = baseStore(record("hub-initiated", "lnk_0123456789abcdef"));
+  const supervisor = createLinkSupervisor({
+    readStore: () => store,
+    runner: fake.runner,
+    pidfileDir: "/tmp/opencodex-link-supervisor-test",
+    now: () => current,
+    setTimer: callback => { timers.push(callback); return 1 as unknown as ReturnType<typeof setInterval>; },
+    clearTimer: () => {},
+    random: () => 0.5,
+  });
+  supervisor.start();
+  current = 5_000;
+  timers[0]!();
+  fake.children[0]!.stderr = "client_loop: send disconnect: Broken pipe";
+  fake.children[0]!.resolve(255);
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(supervisor.status()[0]!.state).toMatchObject({ kind: "reconnecting", since: 5_000, retryAt: 6_000 });
+  current = 6_000;
+  timers[0]!();
+  expect(fake.children).toHaveLength(2);
+  // Still inside ssh's ConnectTimeout, a live retry proves nothing yet.
+  current = 16_000;
+  timers[0]!();
+  expect(supervisor.status()[0]!.state).toMatchObject({ kind: "reconnecting", inFlight: true });
+  current = 21_000;
+  timers[0]!();
+  expect(supervisor.status()[0]!.state).toEqual({ kind: "connected", since: 21_000 });
+  // Past the five-minute outage limit, where the unpromoted retry used to be killed.
+  for (; current < 400_000; current += 1_000) timers[0]!();
+  expect(fake.children).toHaveLength(2);
+  expect(supervisor.status()[0]!.state).toEqual({ kind: "connected", since: 21_000 });
+  await supervisor.stop();
+});
+
+test("the Home's -R supervisor fails a long outage at five minutes, then retries it once a minute", async () => {
+  const fake = fakeRunner();
+  const timers: Array<() => void> = [];
+  let current = 0;
+  const store = baseStore(record("hub-initiated", "lnk_0123456789abcdef"));
+  const supervisor = createLinkSupervisor({
+    readStore: () => store,
+    runner: fake.runner,
+    pidfileDir: "/tmp/opencodex-link-supervisor-test",
+    now: () => current,
+    setTimer: callback => { timers.push(callback); return 1 as unknown as ReturnType<typeof setInterval>; },
+    clearTimer: () => {},
+    random: () => 0.5,
+  });
+  supervisor.start();
+  current = 5_000;
+  timers[0]!();
+  let exited = 0;
+  // Every attempt hits a dead network until the link has been down for five minutes.
+  while (current < 5_000 + 5 * 60_000) {
+    for (; exited < fake.children.length; exited += 1) {
+      fake.children[exited]!.stderr = "ssh: connect to host child.example port 22: Network is unreachable";
+      fake.children[exited]!.resolve(255);
+      await Promise.resolve();
+      await Promise.resolve();
+    }
+    current += 1_000;
     timers[0]!();
   }
-  expect(fake.children).toHaveLength(1);
+  expect(supervisor.status()[0]!.state).toEqual({ kind: "failed", since: 305_000, reason: "timeout", retryAt: 365_000, inFlight: false });
+  const attempts = fake.children.length;
+  current = 364_999;
+  timers[0]!();
+  expect(fake.children).toHaveLength(attempts);
+  current = 365_000;
+  timers[0]!();
+  expect(fake.children).toHaveLength(attempts + 1);
+  supervisor.notifyAuthenticatedRequest!("lnk_0123456789abcdef-key");
+  expect(supervisor.status()[0]!.state).toEqual({ kind: "connected", since: 365_000 });
+  await supervisor.stop();
+});
+
+test("the Home's -R supervisor lets a retry started just before the outage limit finish its grace", async () => {
+  const fake = fakeRunner();
+  const timers: Array<() => void> = [];
+  let current = 0;
+  const store = baseStore(record("hub-initiated", "lnk_0123456789abcdef"));
+  const supervisor = createLinkSupervisor({
+    readStore: () => store,
+    runner: fake.runner,
+    pidfileDir: "/tmp/opencodex-link-supervisor-test",
+    now: () => current,
+    setTimer: callback => { timers.push(callback); return 1 as unknown as ReturnType<typeof setInterval>; },
+    clearTimer: () => {},
+    random: () => 0.5,
+  });
+  supervisor.start();
+  current = 5_000;
+  timers[0]!();
+  fake.children[0]!.stderr = "client_loop: send disconnect: Broken pipe";
+  fake.children[0]!.resolve(255);
+  await Promise.resolve();
+  await Promise.resolve();
+  // The Home slept through the backoff; the first tick after waking starts the retry.
+  current = 300_000;
+  timers[0]!();
+  expect(fake.children).toHaveLength(2);
+  current = 305_000;
+  timers[0]!();
+  expect(supervisor.status()[0]).toMatchObject({
+    state: { kind: "failed", reason: "timeout", inFlight: true },
+    pid: fake.children[1]!.child.pid,
+  });
+  current = 315_000;
+  timers[0]!();
+  expect(supervisor.status()[0]!.state).toEqual({ kind: "connected", since: 315_000 });
+  await supervisor.stop();
+});
+
+test("the Home's -R supervisor promotes a retry whose grace ends at the outage limit or before a late tick", async () => {
+  const fake = fakeRunner();
+  const timers: Array<() => void> = [];
+  let current = 0;
+  const store = baseStore(record("hub-initiated", "lnk_0123456789abcdef"));
+  const supervisor = createLinkSupervisor({
+    readStore: () => store,
+    runner: fake.runner,
+    pidfileDir: "/tmp/opencodex-link-supervisor-test",
+    now: () => current,
+    setTimer: callback => { timers.push(callback); return 1 as unknown as ReturnType<typeof setInterval>; },
+    clearTimer: () => {},
+    random: () => 0.5,
+  });
+  supervisor.start();
+  current = 5_000;
+  timers[0]!();
+  fake.children[0]!.stderr = "client_loop: send disconnect: Broken pipe";
+  fake.children[0]!.resolve(255);
+  await Promise.resolve();
+  await Promise.resolve();
+  // The retry's grace ends on the very tick that reaches the outage limit.
+  current = 290_000;
+  timers[0]!();
+  current = 305_000;
+  timers[0]!();
+  expect(supervisor.status()[0]).toMatchObject({ state: { kind: "connected", since: 305_000 }, pid: fake.children[1]!.child.pid });
+  fake.children[1]!.stderr = "client_loop: send disconnect: Broken pipe";
+  fake.children[1]!.resolve(255);
+  await Promise.resolve();
+  await Promise.resolve();
+  current = 600_000;
+  timers[0]!();
+  expect(fake.children).toHaveLength(3);
+  // The Home sleeps past both deadlines; the retry that kept running is promoted on waking.
+  current = 900_000;
+  timers[0]!();
+  expect(supervisor.status()[0]).toMatchObject({ state: { kind: "connected", since: 900_000 }, pid: fake.children[2]!.child.pid });
+  await supervisor.stop();
+});
+
+test("a host-key exit still draining stderr at the outage limit stays terminal", async () => {
+  const fake = fakeRunner();
+  const timers: Array<() => void> = [];
+  let current = 0;
+  const store = baseStore(record("hub-initiated", "lnk_0123456789abcdef"));
+  const supervisor = createLinkSupervisor({
+    readStore: () => store,
+    runner: fake.runner,
+    pidfileDir: "/tmp/opencodex-link-supervisor-test",
+    now: () => current,
+    setTimer: callback => { timers.push(callback); return 1 as unknown as ReturnType<typeof setInterval>; },
+    clearTimer: () => {},
+    random: () => 0.5,
+  });
+  supervisor.start();
+  current = 5_000;
+  timers[0]!();
+  fake.children[0]!.stderr = "client_loop: send disconnect: Broken pipe";
+  fake.children[0]!.resolve(255);
+  await Promise.resolve();
+  await Promise.resolve();
+  current = 300_000;
+  timers[0]!();
+  expect(fake.children).toHaveLength(2);
+  const stderr = deferred<string>();
+  Object.defineProperty(fake.children[1]!.child, "stderr", { value: stderr.promise });
+  current = 305_000;
+  fake.children[1]!.resolve(255);
+  await Promise.resolve();
+  await Promise.resolve();
+  // The outage limit is reached while the exit's stderr is still being read.
+  timers[0]!();
+  expect(supervisor.status()[0]!.state).toMatchObject({ kind: "reconnecting", since: 5_000 });
+  stderr.resolve("Host key verification failed.");
+  await Promise.resolve();
+  await Promise.resolve();
+  const failed = supervisor.status()[0]!.state;
+  expect(failed).toEqual({ kind: "failed", since: 305_000, reason: "hostkey" });
+  for (; current < 2 * 60 * 60_000; current += 10_000) timers[0]!();
+  expect(fake.children).toHaveLength(2);
   expect(supervisor.status()[0]!.state).toEqual(failed);
+  await supervisor.stop();
+});
+
+test("reconnect restarts a Home tunnel at once, from a failed state or over a live child", async () => {
+  const fake = fakeRunner();
+  const timers: Array<() => void> = [];
+  let current = 0;
+  const store = baseStore(record("hub-initiated", "lnk_0123456789abcdef"), record("client-initiated", "lnk_fedcba9876543210"));
+  const supervisor = createLinkSupervisor({
+    readStore: () => store,
+    runner: fake.runner,
+    pidfileDir: "/tmp/opencodex-link-supervisor-test",
+    now: () => current,
+    setTimer: callback => { timers.push(callback); return 1 as unknown as ReturnType<typeof setInterval>; },
+    clearTimer: () => {},
+  });
+  expect(await supervisor.reconnect("lnk_0123456789abcdef")).toBe(false);
+  supervisor.start();
+  current = 5_000;
+  timers[0]!();
+  fake.children[0]!.stderr = "Error: remote port forwarding failed for listen port 19002";
+  fake.children[0]!.resolve(255);
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(supervisor.status()[0]!.state).toMatchObject({ kind: "failed", retryAt: 65_000 });
+  current = 10_000;
+  expect(await supervisor.reconnect("lnk_0123456789abcdef")).toBe(true);
+  expect(fake.children).toHaveLength(2);
+  expect(supervisor.status()[0]!.state).toEqual({ kind: "connecting", since: 10_000 });
+  current = 12_000;
+  expect(await supervisor.reconnect("lnk_0123456789abcdef")).toBe(true);
+  await expect(fake.children[1]!.child.exited).resolves.toBe(143);
+  expect(fake.children).toHaveLength(3);
+  expect(supervisor.status()[0]).toMatchObject({ state: { kind: "connecting", since: 12_000 }, pid: fake.children[2]!.child.pid });
+  expect(await supervisor.reconnect("lnk_fedcba9876543210")).toBe(false);
+  expect(await supervisor.reconnect("lnk_0000000000000000")).toBe(false);
+  expect(fake.children).toHaveLength(3);
+  await supervisor.stop();
+  expect(await supervisor.reconnect("lnk_0123456789abcdef")).toBe(false);
+});
+
+test("an old exit still draining after a reconnect never rewrites the new child's state", async () => {
+  const fake = fakeRunner();
+  const timers: Array<() => void> = [];
+  let current = 0;
+  const store = baseStore(record("hub-initiated", "lnk_0123456789abcdef"));
+  const supervisor = createLinkSupervisor({
+    readStore: () => store,
+    runner: fake.runner,
+    pidfileDir: "/tmp/opencodex-link-supervisor-test",
+    now: () => current,
+    setTimer: callback => { timers.push(callback); return 1 as unknown as ReturnType<typeof setInterval>; },
+    clearTimer: () => {},
+    random: () => 0.5,
+  });
+  supervisor.start();
+  current = 5_000;
+  timers[0]!();
+  const oldStderr = deferred<string>();
+  Object.defineProperty(fake.children[0]!.child, "stderr", { value: oldStderr.promise });
+  fake.children[0]!.resolve(255);
+  await Promise.resolve();
+  await Promise.resolve();
+  current = 6_000;
+  expect(await supervisor.reconnect("lnk_0123456789abcdef")).toBe(true);
+  expect(fake.children).toHaveLength(2);
+  fake.children[1]!.stderr = "client_loop: send disconnect: Broken pipe";
+  fake.children[1]!.resolve(255);
+  await Promise.resolve();
+  await Promise.resolve();
+  const reconnecting = supervisor.status()[0]!.state;
+  expect(reconnecting).toMatchObject({ kind: "reconnecting", since: 6_000, retryAt: 7_000 });
+  oldStderr.resolve("Host key verification failed.");
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(supervisor.status()[0]!.state).toEqual(reconnecting);
+  current = 7_000;
+  timers[0]!();
+  expect(fake.children).toHaveLength(3);
+  await supervisor.stop();
+});
+
+test("overlapping reconnects for one link restart it once and keep the new child supervised", async () => {
+  const fake = fakeRunner();
+  const timers: Array<() => void> = [];
+  let current = 0;
+  const store = baseStore(record("hub-initiated", "lnk_0123456789abcdef"));
+  const supervisor = createLinkSupervisor({
+    readStore: () => store,
+    runner: fake.runner,
+    pidfileDir: "/tmp/opencodex-link-supervisor-test",
+    now: () => current,
+    setTimer: callback => { timers.push(callback); return 1 as unknown as ReturnType<typeof setInterval>; },
+    clearTimer: () => {},
+  });
+  supervisor.start();
+  current = 5_000;
+  timers[0]!();
+  // The live child takes a while to exit after SIGTERM.
+  (fake.children[0]!.child as { kill: () => void }).kill = () => {};
+  current = 8_000;
+  const first = supervisor.reconnect("lnk_0123456789abcdef");
+  const second = supervisor.reconnect("lnk_0123456789abcdef");
+  fake.children[0]!.resolve(143);
+  expect(await Promise.all([first, second])).toEqual([true, true]);
+  expect(fake.children).toHaveLength(2);
+  expect(supervisor.status()[0]).toMatchObject({ state: { kind: "connecting", since: 8_000 }, pid: fake.children[1]!.child.pid });
+  current = 13_000;
+  timers[0]!();
+  expect(supervisor.status()[0]!.state).toEqual({ kind: "connected", since: 13_000 });
+  await supervisor.stop();
+});
+
+test("a reload neither skips the reconnect backoff nor a failed link's retry delay", async () => {
+  const fake = fakeRunner();
+  const timers: Array<() => void> = [];
+  let current = 0;
+  const store = baseStore(record("hub-initiated", "lnk_0123456789abcdef"));
+  const supervisor = createLinkSupervisor({
+    readStore: () => store,
+    runner: fake.runner,
+    pidfileDir: "/tmp/opencodex-link-supervisor-test",
+    now: () => current,
+    setTimer: callback => { timers.push(callback); return 1 as unknown as ReturnType<typeof setInterval>; },
+    clearTimer: () => {},
+    random: () => 0.5,
+  });
+  supervisor.start();
+  current = 5_000;
+  timers[0]!();
+  fake.children[0]!.stderr = "client_loop: send disconnect: Broken pipe";
+  fake.children[0]!.resolve(255);
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(supervisor.status()[0]!.state).toMatchObject({ kind: "reconnecting", retryAt: 6_000 });
+  await supervisor.reload();
+  expect(fake.children).toHaveLength(1);
+  current = 6_000;
+  timers[0]!();
+  expect(fake.children).toHaveLength(2);
+  fake.children[1]!.stderr = "Error: remote port forwarding failed for listen port 19002";
+  fake.children[1]!.resolve(255);
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(supervisor.status()[0]!.state).toEqual({ kind: "failed", since: 6_000, reason: "forward", retryAt: 66_000, inFlight: false });
+  await supervisor.reload();
+  expect(fake.children).toHaveLength(2);
+  await supervisor.stop();
+});
+
+test("the Home's -R supervisor keeps the retry cadence when ssh cannot be started", async () => {
+  const fake = fakeRunner();
+  let spawnError: Error | null = null;
+  const runner: SshRunner = {
+    ...fake.runner,
+    spawnTunnel(argv) {
+      if (spawnError) throw spawnError;
+      return fake.runner.spawnTunnel(argv);
+    },
+  };
+  const timers: Array<() => void> = [];
+  let current = 0;
+  const store = baseStore(record("hub-initiated", "lnk_0123456789abcdef"));
+  const supervisor = createLinkSupervisor({
+    readStore: () => store,
+    runner,
+    pidfileDir: "/tmp/opencodex-link-supervisor-test",
+    now: () => current,
+    setTimer: callback => { timers.push(callback); return 1 as unknown as ReturnType<typeof setInterval>; },
+    clearTimer: () => {},
+  });
+  supervisor.start();
+  current = 5_000;
+  timers[0]!();
+  fake.children[0]!.stderr = "Error: remote port forwarding failed for listen port 19002";
+  fake.children[0]!.resolve(255);
+  await Promise.resolve();
+  await Promise.resolve();
+  spawnError = new Error("spawn ssh ENOENT");
+  current = 65_000;
+  timers[0]!();
+  expect(supervisor.status()[0]!.state).toEqual({ kind: "failed", since: 5_000, reason: "forward", retryAt: 125_000, inFlight: false });
+  spawnError = null;
+  current = 125_000;
+  timers[0]!();
+  expect(fake.children).toHaveLength(2);
+  await supervisor.stop();
+});
+
+test("an exit whose stderr cannot be read still reaches the reducer", async () => {
+  const fake = fakeRunner();
+  const timers: Array<() => void> = [];
+  let current = 0;
+  const store = baseStore(record("hub-initiated", "lnk_0123456789abcdef"));
+  const supervisor = createLinkSupervisor({
+    readStore: () => store,
+    runner: fake.runner,
+    pidfileDir: "/tmp/opencodex-link-supervisor-test",
+    now: () => current,
+    setTimer: callback => { timers.push(callback); return 1 as unknown as ReturnType<typeof setInterval>; },
+    clearTimer: () => {},
+    random: () => 0.5,
+  });
+  supervisor.start();
+  current = 5_000;
+  timers[0]!();
+  // The runner rejects stderr once it passes its size cap.
+  const unreadable = Promise.reject(new Error("ssh stderr exceeded its limit"));
+  unreadable.catch(() => {});
+  Object.defineProperty(fake.children[0]!.child, "stderr", { value: unreadable });
+  fake.children[0]!.resolve(255);
+  for (let turn = 0; turn < 4; turn += 1) await Promise.resolve();
+  expect(supervisor.status()[0]!.state).toMatchObject({ kind: "reconnecting", since: 5_000, retryAt: 6_000 });
   await supervisor.stop();
 });
 

@@ -22,6 +22,11 @@ export function stripKimiEmptyAssistantMessages(body: unknown, responseUrl: stri
   try { url = new URL(responseUrl); } catch { return body; }
   if (url.hostname !== "api.kimi.com" || !/^\/coding\/v1\/responses\/?$/.test(url.pathname)) return body;
   if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
-  const input = body.input.filter(item => !isEmptyAssistantMessage(item));
+  const referencedIds = new Set<string>();
+  for (const item of body.input) {
+    if (isPlainObject(item) && item.type === "item_reference" && typeof item.id === "string") referencedIds.add(item.id);
+  }
+  const input = body.input.filter(item => !isEmptyAssistantMessage(item)
+    || (isPlainObject(item) && typeof item.id === "string" && referencedIds.has(item.id)));
   return input.length === body.input.length ? body : { ...body, input };
 }

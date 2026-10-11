@@ -47,6 +47,18 @@ import { googleVertexLocationConfigError } from "../providers/google-vertex-loca
 import { xaiResponsesOptInState } from "../providers/xai-responses-opt-in";
 
 let _corsOrigin = "http://localhost:10100";
+// Listener identity is process-local. Never infer this trust from forwarded headers: the
+// request handler marks a Request only after resolving the actual Bun Server instance.
+const trustedHubManagementRequests = new WeakSet<Request>();
+
+export function markTrustedHubManagementRequest(req: Request): void {
+  trustedHubManagementRequests.add(req);
+}
+
+export function inheritTrustedHubManagementRequest(source: Request, target: Request): void {
+  if (trustedHubManagementRequests.has(source)) trustedHubManagementRequests.add(target);
+}
+
 export function setCorsOrigin(port: number): void { _corsOrigin = `http://localhost:${port}`; }
 /** The proxy's own listening port. No admission check uses it: both loopback predicates key on hostname alone. */
 export function configuredPort(): string {
@@ -140,6 +152,24 @@ export function managementRequestOrigin(req: Request, config: OcxConfig): string
       const protocol = new URL(req.url).protocol;
       if (protocol !== "http:" && protocol !== "https:") return null;
       return new URL(`${protocol}//${host}`).origin;
+    } catch {
+      return null;
+    }
+  }
+  if (trustedHubManagementRequests.has(req)) {
+    if (config.runtimeRole !== "hub") return null;
+    const canonical = canonicalHubManagementOrigin(config.hub?.managementPublicOrigin);
+    if (!canonical) return null;
+    try {
+      // The dedicated listener may receive HTTP from a local TLS terminator, so its URL
+      // scheme is not authoritative. Host must still name exactly the configured public
+      // authority; forwarded host/proto headers are deliberately ignored.
+      const requestAuthority = new URL(`https://${host}`);
+      if (requestAuthority.username || requestAuthority.password || requestAuthority.pathname !== "/"
+        || requestAuthority.search || requestAuthority.hash || requestAuthority.host !== new URL(canonical).host) {
+        return null;
+      }
+      return canonical;
     } catch {
       return null;
     }
@@ -435,6 +465,18 @@ export function resolveDataPlaneAdmissionSecret(
     }
   }
   return null;
+}
+
+function canonicalHubManagementOrigin(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.pathname !== "/"
+      || parsed.search || parsed.hash) return null;
+    return parsed.origin;
+  } catch {
+    return null;
+  }
 }
 
 /** The principal an authenticated admission belongs to, or undefined for loopback. */

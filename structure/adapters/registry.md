@@ -159,7 +159,8 @@ stay byte-exact; tool-call and reasoning-only continuations keep their existing 
 
 On native Responses, `src/adapters/openai-responses/empty-assistant.ts` removes only explicit
 content-empty assistant message items sent to `api.kimi.com/coding/v1/responses`. Refusals,
-nonempty annotations, unknown parts/fields, reasoning and tools are retained. Independent
+nonempty annotations, unknown parts/fields, reasoning and tools are retained. A same-input `item_reference` keeps its target message, even
+when empty, so filtering cannot create a dangling reference. Independent
 reasoning/call/result items, caller-owned raw history and other destinations are unchanged.
 `tests/adapters/openai/openai-empty-assistant-history.test.ts` covers both final wires.
 
