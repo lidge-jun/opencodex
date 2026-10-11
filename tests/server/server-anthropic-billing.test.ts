@@ -32,7 +32,7 @@ let previousHome: string | undefined;
 let home = "";
 let releaseSpend: (() => void) | undefined;
 let upstream: ReturnType<typeof Bun.serve> | undefined;
-let seen: { key: string | null; body: unknown }[];
+let seen: { key: string | null; authorization: string | null; apiKey: string | null; body: unknown }[];
 
 beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME;
@@ -58,7 +58,9 @@ afterEach(async () => {
 function fixture(reply: (index: number, stream: boolean) => Response, keys = 2): OcxConfig {
   upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     const body = await request.json() as { stream?: boolean };
-    seen.push({ key: request.headers.get("x-api-key"), body });
+    const apiKey = request.headers.get("x-api-key");
+    const authorization = request.headers.get("authorization");
+    seen.push({ key: apiKey ?? authorization?.replace(/^Bearer /, "") ?? null, authorization, apiKey, body });
     return reply(seen.length - 1, body.stream === true);
   } });
   const config = { port: 0, defaultProvider: "anth", protocols: { rollout: { managedMessagesNative: true } }, providers: { anth: {
@@ -83,6 +85,43 @@ async function send(lane: Lane, config: OcxConfig, signal?: AbortSignal, budget?
 }
 
 for (const lane of ["native", "translated"] as const) describe(`${lane} Anthropic billing sends`, () => {
+  for (const status of [400, 402]) test(`Bearer ${status} billing refusal recovers A→B with identical content`, async () => {
+    const config = fixture((index, stream) => index === 0 ? refusal(status) : success(stream));
+    config.providers.anth!.apiKeyTransport = "bearer";
+    saveConfig(config);
+    expect(loadConfig().providers.anth!.apiKeyTransport).toBe("bearer");
+    const response = await send(lane, config);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("billing recovered");
+    expect(seen.map(entry => entry.authorization)).toEqual(["Bearer fixture-key-0", "Bearer fixture-key-1"]);
+    expect(seen.map(entry => entry.apiKey)).toEqual([null, null]);
+    expect(seen[1]!.body).toEqual(seen[0]!.body);
+    expect(loadConfig().providers.anth!.apiKey).toBe("fixture-key-1");
+    expect(loadConfig().providers.anth!.apiKeyTransport).toBe("bearer");
+    const remaining = getKeyCooldownUntil("anth", "k0")! - Date.now();
+    expect(remaining).toBeGreaterThan(590_000);
+    expect(remaining).toBeLessThanOrEqual(600_000);
+    expect(getKeyCooldownUntil("anth", "k1")).toBeNull();
+  });
+
+  for (const kind of ["override", "conflict"] as const) test(`Bearer runtime header ${kind} cannot cool A or commit B`, async () => {
+    const config = fixture(() => refusal());
+    config.providers.anth!.apiKeyTransport = "bearer";
+    saveConfig(config);
+    // Auth-header overrides are runtime-only: persisted config rejects them.
+    config.providers.anth!.headers = kind === "override"
+      ? { Authorization: "Bearer fixture-key-C" } : { "x-api-key": "fixture-key-C" };
+    const response = await send(lane, config);
+    expect(response.status).toBe(400);
+    expect(await response.text()).toContain(creditMessage);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.authorization).toBe(kind === "override" ? "Bearer fixture-key-C" : "Bearer fixture-key-0");
+    expect(seen[0]!.apiKey).toBe(kind === "conflict" ? "fixture-key-C" : null);
+    expect(loadConfig().providers.anth!.apiKey).toBe("fixture-key-0");
+    expect(getKeyCooldownUntil("anth", "k0")).toBeNull();
+    expect(getKeyCooldownUntil("anth", "k1")).toBeNull();
+  });
+
   for (const status of [400, 402]) test(`rotates a proven ${status} billing refusal once with identical request content`, async () => {
     const config = fixture((index, stream) => index === 0 ? refusal(status) : success(stream));
     const response = await send(lane, config);

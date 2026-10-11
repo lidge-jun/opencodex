@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../../src/config";
 import { routedProviderConfig } from "../../../src/router";
-import { anthropicBillingPhysicalFetch } from "../../../src/providers/anthropic-billing-ownership";
+import { anthropicBillingPhysicalFetch, anthropicBillingResponseOwner } from "../../../src/providers/anthropic-billing-ownership";
 import { rotateAnthropicBillingKeyOnResponse } from "../../../src/providers/anthropic-billing-recovery";
 import { clearKeyCooldowns, getKeyCooldownUntil, rotateProviderTransportOnAnthropicBilling } from "../../../src/providers/key-failover";
 import type { OcxConfig } from "../../../src/types";
@@ -36,6 +36,60 @@ afterEach(() => {
 });
 const physical = (response: Response) => (async () => response) as typeof fetch;
 const url = "https://example.test/v1/messages";
+
+for (const transport of [undefined, "x-api-key", "bearer"] as const) test(`physical ${transport ?? "default"} key transport owns billing recovery`, async () => {
+  config.providers.anth!.apiKeyTransport = transport;
+  saveConfig(config);
+  const routed = routedProviderConfig("anth", config.providers.anth);
+  const headers: Record<string, string> = transport === "bearer" ? { Authorization: "Bearer fixture-key-A" } : { "x-api-key": "fixture-key-A" };
+  const response = await anthropicBillingPhysicalFetch(physical(refusal()), "anth", routed)(url, { headers });
+  expect(anthropicBillingResponseOwner(response, config, "anth", routed)?.apiKey).toBe("fixture-key-A");
+  const replacement = await rotateAnthropicBillingKeyOnResponse(response, config, "anth", routed);
+  expect(replacement?.apiKey).toBe("fixture-key-B");
+  expect(getKeyCooldownUntil("anth", "A")).not.toBeNull();
+});
+
+for (const transport of ["x-api-key", "bearer"] as const) {
+  const invalidHeaders: Record<string, string>[] = transport === "bearer"
+    ? [{ Authorization: "Bearer fixture-key-C" }, { Authorization: "Bearer fixture-key-A", "x-api-key": "fixture-key-A" },
+      { "x-api-key": "fixture-key-A" }]
+    : [{ "x-api-key": "fixture-key-C" }, { "x-api-key": "fixture-key-A", Authorization: "Bearer fixture-key-A" },
+      { Authorization: "Bearer fixture-key-A" }];
+  for (const [index, headers] of invalidHeaders.entries()) test(`physical ${transport} override/conflict/wrong transport ${index} has no authority`, async () => {
+    config.providers.anth!.apiKeyTransport = transport;
+    saveConfig(config);
+    const routed = routedProviderConfig("anth", config.providers.anth);
+    const response = await anthropicBillingPhysicalFetch(physical(refusal()), "anth", routed)(url, { headers });
+    expect(anthropicBillingResponseOwner(response, config, "anth", routed)).toBeNull();
+    expect(await rotateAnthropicBillingKeyOnResponse(response, config, "anth", routed)).toBeNull();
+    expect(getKeyCooldownUntil("anth", "A")).toBeNull();
+    expect(config.providers.anth!.apiKey).toBe("fixture-key-A");
+    expect(await response.text()).toContain(message);
+  });
+}
+
+for (const scope of ["current", "attempted"] as const) for (const transport of ["x-api-key", "bearer"] as const)
+  test(`late ${scope} ${transport} transport change revokes billing ownership`, async () => {
+    config.providers.anth!.apiKeyTransport = transport;
+    saveConfig(config);
+    const routed = routedProviderConfig("anth", config.providers.anth);
+    const headers: Record<string, string> = transport === "bearer" ? { Authorization: "Bearer fixture-key-A" } : { "x-api-key": "fixture-key-A" };
+    const response = await anthropicBillingPhysicalFetch(physical(refusal()), "anth", routed)(url, { headers });
+    (scope === "current" ? config.providers.anth! : routed).apiKeyTransport = transport === "bearer" ? "x-api-key" : "bearer";
+    expect(await rotateAnthropicBillingKeyOnResponse(response, config, "anth", routed)).toBeNull();
+    expect(getKeyCooldownUntil("anth", "A")).toBeNull();
+    expect(config.providers.anth!.apiKey).toBe("fixture-key-A");
+    expect(await response.text()).toContain(message);
+  });
+
+test("default and explicit x-api-key transport remain equivalent to the sent snapshot", async () => {
+  const routed = routedProviderConfig("anth", config.providers.anth);
+  const response = await anthropicBillingPhysicalFetch(physical(refusal()), "anth", routed)(url,
+    { headers: { "x-api-key": "fixture-key-A" } });
+  config.providers.anth!.apiKeyTransport = "x-api-key";
+  routed.apiKeyTransport = "x-api-key";
+  expect(anthropicBillingResponseOwner(response, config, "anth", routed)?.apiKey).toBe("fixture-key-A");
+});
 
 test("an unmarked response has no cooldown or rotation authority", async () => {
   const routed = routedProviderConfig("anth", config.providers.anth);

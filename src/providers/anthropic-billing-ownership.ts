@@ -24,9 +24,12 @@ export function anthropicBillingPhysicalFetch(
     const target = input instanceof Request ? input.url : String(input);
     const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
     const selection = provider._apiKeyAttempt;
+    const ownsCredential = provider.apiKeyTransport === "bearer"
+      ? headers.get("authorization") === `Bearer ${provider.apiKey}` && !headers.has("x-api-key")
+      : headers.get("x-api-key") === provider.apiKey && !headers.has("authorization");
     const ownsKey = provider.adapter === "anthropic" && (provider.authMode === undefined || provider.authMode === "key")
       && hasKeyPoolFailover(provider) && selection !== undefined && provider.apiKey !== undefined
-      && headers.get("x-api-key") === provider.apiKey && !headers.has("authorization")
+      && ownsCredential
       && target === resolveAnthropicMessagesUrl(provider);
     const owner: BillingSendOwnership | null = ownsKey ? Object.freeze({
       providerName, target,
@@ -55,6 +58,9 @@ export function anthropicBillingResponseOwner(
   const current = config.providers[providerName];
   if (!current || current.adapter !== sent.adapter || current.adapter !== "anthropic"
     || (current.authMode !== undefined && current.authMode !== "key") || !hasKeyPoolFailover(current)) return null;
+  const sentTransport = sent.apiKeyTransport ?? "x-api-key";
+  if ((current.apiKeyTransport ?? "x-api-key") !== sentTransport
+    || (attemptedProvider.apiKeyTransport ?? "x-api-key") !== sentTransport) return null;
   // Configured headers can change billing/account ownership independently of key selection.
   const headerShape = (provider: OcxProviderConfig) => JSON.stringify(Object.entries(provider.headers ?? {}).sort(([a], [b]) => a.localeCompare(b)));
   if (headerShape(current) !== headerShape(sent)) return null;

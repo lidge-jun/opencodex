@@ -387,6 +387,9 @@ export async function prepareAdapterExchange(
   };
   const billingPoolRequest = route.provider.adapter === "anthropic" && hasKeyPoolFailover(route.provider);
   let billingRecoveryActive = false;
+  const genericRefetchCountsSends = () => sendBudgetState.adapterSendBudget?.spendEnforced === true
+    || transientRetryPolicyFor(route.provider) !== null || resetReplayPolicyFor(route.provider) !== null
+    || billingPoolRequest || billingRecoveryActive;
   let handoffPermit: ResponsesSendBudget["pendingHopPermit"];
   try {
     if (transportState.activeAdapter.fetchResponse) {
@@ -707,8 +710,7 @@ export async function prepareAdapterExchange(
           const refetchWithPolicy = (route.provider.adapter === "google" || refetchTransientPolicy)
             ? fetchWithTransientRetry
             : fetchWithResetRetry;
-          const helperCountsSends = sendBudgetState.adapterSendBudget?.spendEnforced === true || refetchTransientPolicy !== null || resetReplayPolicyFor(route.provider) !== null
-            || billingPoolRequest || billingRecoveryActive;
+          const helperCountsSends = genericRefetchCountsSends();
           const prepaid = sendBudgetState.pendingHopPermit;
           const configuredTotal = refetchTransientPolicy?.attempts;
           const refetchCap = transientSendCapFor(configuredTotal, sendBudgetState.targetSendsUsed);
@@ -1110,7 +1112,7 @@ export async function prepareAdapterExchange(
         const hop = reserveCredentialHop(
           "repair",
           `${route.providerName}|${route.modelId}|anthropic-fast-downgrade`,
-          !adapterOwnsDispatch && (transientRetryPolicyFor(route.provider) !== null || resetReplayPolicyFor(route.provider) !== null),
+          !adapterOwnsDispatch && genericRefetchCountsSends(),
         );
         if (hop.allowed) {
           anthropicFastDowngradeGuard.attempted = true;
