@@ -124,7 +124,9 @@ test("client-owned sidecar distinguishes normal Child initiation; unreadable/mis
     expect(project().child?.alias).toBe("known-home");
     expect(clientLinkStatusIdentity("lnk_ffffffffffffffff")).toBeNull();
     writeFileSync(clientLinkStatePath(), "broken"); expect(project().links).toEqual([]);
-    unlinkSync(clientLinkStatePath()); writeFileSync(childLinkMarkerPath(), "broken");
+    unlinkSync(clientLinkStatePath()); writeFileSync(childLinkMarkerPath(), JSON.stringify({ linkId: "lnk_ffffffffffffffff" }));
+    expect(project().links).toEqual([]);
+    writeFileSync(childLinkMarkerPath(), "broken");
     expect(project().links).toEqual([]);
   } finally { if (oldHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = oldHome; removeTreeWithRetry(home); }
 });

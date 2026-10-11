@@ -1,4 +1,6 @@
-import { readClientLinkState, isChildInitiatedLink } from "./link-state";
+import { lstatSync } from "node:fs";
+import { isMissingPathError } from "../config/atomic-write";
+import { readClientLinkState, childLinkMarkerPath } from "./link-state";
 import type { ClientLinkIdentity } from "../link/status-projection";
 import type { LinkStatusDto } from "../link/status-projection";
 import type { ClientLinkState } from "./link-state";
@@ -45,6 +47,7 @@ export function clientLinkStatusIdentity(linkId: string): ClientLinkIdentity | n
   try {
     const sidecar = readClientLinkState();
     if (sidecar) return sidecar.linkId === linkId ? { direction: "client-initiated", alias: sidecar.alias } : null;
-    return isChildInitiatedLink(linkId) ? null : { direction: "hub-initiated" };
+    try { lstatSync(childLinkMarkerPath()); return null; }
+    catch (error) { return isMissingPathError(error) ? { direction: "hub-initiated" } : null; }
   } catch { return null; }
 }
