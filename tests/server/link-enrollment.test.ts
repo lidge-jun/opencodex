@@ -416,22 +416,33 @@ describe("server-owned confirmation and authority", () => {
   test("different-alias confirmations use private candidate files and preserve sibling committed trust", async () => {
     const h = harness(); h.seed("first"); h.seed("second");
     writeFileSync(h.knownHosts, "existing ssh-ed25519 EXISTING\n");
-    const started = deferred<void>(), pending = deferred<SshRunResult>();
+    const started = deferred<{ error?: unknown }>(), pending = deferred<SshRunResult>();
+    let fixtureFailure: { error: unknown } | undefined;
     const candidates: string[] = [];
     h.overrides.version = call => {
-      const candidate = candidateFile(call.argv); candidates.push(candidate);
-      expect(candidate).not.toBe(h.knownHosts);
-      expect(statSync(candidate).mode & 0o777).toBe(0o600);
-      expect(readFileSync(candidate, "utf8")).toBe(`${aliasOf(call.argv)} ssh-ed25519 AAAA\n`);
-      if (aliasOf(call.argv) === "first") { started.resolve(); return pending.promise; }
-      return result("opencodex 2.83.0\n");
+      try {
+        const candidate = candidateFile(call.argv); candidates.push(candidate);
+        expect(candidate).not.toBe(h.knownHosts);
+        expect(existsSync(candidate)).toBe(true);
+        if (process.platform !== "win32") expect(statSync(candidate).mode & 0o777).toBe(0o600);
+        expect(readFileSync(candidate, "utf8")).toBe(`${aliasOf(call.argv)} ssh-ed25519 AAAA\n`);
+        if (aliasOf(call.argv) === "first") { started.resolve({}); return pending.promise; }
+        return result("opencodex 2.83.0\n");
+      } catch (error) {
+        fixtureFailure = { error }; started.resolve(fixtureFailure); throw error;
+      }
     };
     const first = h.call("confirm-host", { alias: "first", fingerprint });
-    await started.promise;
     try {
-      expect((await h.call("confirm-host", { alias: "second", fingerprint })).status).toBe(200);
+      const signal = await Promise.race([started.promise, first.then(response => {
+        throw new Error(`First confirmation completed before the fixture started: ${response.status}`);
+      })]);
+      if ("error" in signal) throw signal.error;
+      const second = await h.call("confirm-host", { alias: "second", fingerprint });
+      if (fixtureFailure) throw fixtureFailure.error;
+      expect(second.status).toBe(200);
       expect(readFileSync(h.knownHosts, "utf8")).toBe("existing ssh-ed25519 EXISTING\nsecond ssh-ed25519 AAAA\n");
-    } finally { pending.resolve(result("opencodex 2.65.0\n")); }
+    } finally { pending.resolve(result("opencodex 2.65.0\n")); await first; }
     await denied(await first, "remote_ocx_outdated", 409);
     expect(readFileSync(h.knownHosts, "utf8")).toBe("existing ssh-ed25519 EXISTING\nsecond ssh-ed25519 AAAA\n");
     expect(new Set(candidates).size).toBe(2);
