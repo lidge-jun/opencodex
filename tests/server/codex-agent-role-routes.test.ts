@@ -86,7 +86,7 @@ describe("/api/codex-agent-roles", () => {
     expect(JSON.parse(readFileSync(omoPath, "utf8"))["[codex]"].agents.explorer).toEqual({ model: "gpt-5.5" });
   });
 
-  test("a null effort returns the role to its model default in both files", async () => {
+  test("a null effort removes the role-level effort override from both files", async () => {
     const omoPath = join(root, "home", ".omo", "omo.jsonc");
     writeFileSync(omoPath, '{ "[codex]": { "agents": { "explorer": { "model": "gpt-5.5", "reasoning": "high" } } } }\n');
     await call("/api/codex-agent-roles/explorer", { method: "PUT", body: JSON.stringify({ model: "gpt-5.5", effort: "high" }) });

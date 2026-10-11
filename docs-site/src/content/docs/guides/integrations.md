@@ -707,8 +707,9 @@ ocx agent roles set explorer xai/grok-4.5
 rewrites the role file's `model_reasoning_effort` line and writes `[codex].agents.<role>.reasoning`
 in omo.jsonc when LazyCodex has that level (`ultra` stays in the role file only, and an older
 `reasoning` is removed). A Save that changes only the model leaves both effort values as they were. A PUT with `"effort": null`
-removes the role file's `model_reasoning_effort` line and the omo.jsonc `reasoning`, so the role runs
-on its model's default effort.
+removes the role file's `model_reasoning_effort` line and the omo.jsonc `reasoning`. That clears only the
+role's own override: Codex then resolves the effort as it does for any role without one (an explicit
+spawn value, the `[agents]` default, or the parent session), not a fixed model default.
 
 ### Auto-assign
 
