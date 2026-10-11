@@ -16,7 +16,7 @@ const seed = (): OcxConfig => ({
   defaultProvider: "fixture", apiKeys: [key("client"), key("integration")],
 } as OcxConfig);
 
-function scenario(change: (live: OcxConfig) => void, changeDisk?: (disk: OcxConfig) => void, oauth = false): { live: OcxConfig; saved: OcxConfig } {
+function scenario(change: (live: OcxConfig) => void, changeDisk?: (disk: OcxConfig) => void, oauth = false, disable = true): { live: OcxConfig; saved: OcxConfig } {
   const oldHome = process.env.OPENCODEX_HOME;
   const home = mkdtempSync(join(tmpdir(), "ocx-hub-live-save-"));
   process.env.OPENCODEX_HOME = home;
@@ -25,7 +25,7 @@ function scenario(change: (live: OcxConfig) => void, changeDisk?: (disk: OcxConf
     const live = loadConfig();
     const persistedBaseline = structuredClone(live);
     armClaudeCodeBaseline(live);
-    expect(mutatePersistedConfig(config => ({ changed: true, value: disableHubConfig(config, parseHubDisableArgs(["--revoke-clients", "--client-key", "client"])) })).status).toBe("committed");
+    if (disable) expect(mutatePersistedConfig(config => ({ changed: true, value: disableHubConfig(config, parseHubDisableArgs(["--revoke-clients", "--client-key", "client"])) })).status).toBe("committed");
     // Another cooperating writer adds a disjoint key before the stale live save.
     expect(mutatePersistedConfig(config => {
       config.apiKeys!.push(key("external"));
@@ -106,4 +106,17 @@ test("persisted API-key order survives a live rename without membership or order
 
 test("OAuth disk adoption keeps the running hub topology until restart", () => {
   expectDisabled(scenario(live => { live.logLevel = "info"; }, undefined, true));
+});
+
+test.each([false, true])("desired topology additions/updates survive repeated saves (OAuth adoption=%s)", oauth => {
+  const result = scenario(live => { live.logLevel = "info"; }, disk => {
+    disk.hub!.managementPublicOrigin = "https://new-hub.example.test";
+    disk.hub!.managementIngress!.port = 10112;
+    disk.unauthenticatedLoopbackListener!.port = 10113;
+  }, oauth, false);
+  expect(result.saved.hub!.managementPublicOrigin).toBe("https://new-hub.example.test");
+  expect(result.saved.hub!.managementIngress!.port).toBe(10112);
+  expect(result.saved.unauthenticatedLoopbackListener!.port).toBe(10113);
+  expect(result.live.hub).toEqual(seed().hub);
+  expect(result.live.unauthenticatedLoopbackListener).toEqual(seed().unauthenticatedLoopbackListener);
 });
