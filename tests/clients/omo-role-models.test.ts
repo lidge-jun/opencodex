@@ -42,15 +42,15 @@ describe("omo role models", () => {
   });
 
   test("reasoning is set, kept, or removed with the model", () => {
-    const path = file('{ "[codex]": { "agents": { "plan": { "model": "a", "reasoning": "low" } } } }');
+    const path = file('{ "[codex]": { "agents": { "plan": { "model": "a", "reasoning": "low", "temperature": 0.2 } } } }');
     const entry = () => JSON.parse(readFileSync(path, "utf8"))["[codex]"].agents.plan;
     expect(writeOmoRoleModel("plan", "a", path, "low")).toBe("unchanged");
     expect(writeOmoRoleModel("plan", "b", path)).toBe("written");
-    expect(entry()).toEqual({ model: "b", reasoning: "low" });
+    expect(entry()).toEqual({ model: "b", reasoning: "low", temperature: 0.2 });
     expect(writeOmoRoleModel("plan", "b", path, "xhigh")).toBe("written");
-    expect(entry()).toEqual({ model: "b", reasoning: "xhigh" });
+    expect(entry()).toEqual({ model: "b", reasoning: "xhigh", temperature: 0.2 });
     expect(writeOmoRoleModel("plan", "b", path, null)).toBe("written");
-    expect(entry()).toEqual({ model: "b" });
+    expect(entry()).toEqual({ model: "b", temperature: 0.2 });
   });
 
   test("Codex efforts map to the levels LazyCodex accepts", () => {
