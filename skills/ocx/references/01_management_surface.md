@@ -31,7 +31,7 @@ These answer in the CLI head and never reach the proxy, so they work with nothin
 | [agents-routing](01_surface_agents-routing.md) | 50 |
 | [integrations](01_surface_integrations.md) | 41 |
 | [observe-system](01_surface_observe-system.md) | 92 |
-| [access-remote](01_surface_access-remote.md) | 30 |
+| [access-remote](01_surface_access-remote.md) | 32 |
 | [lab](01_surface_lab.md) | 21 |
 
 ## Read-only capabilities
@@ -50,6 +50,14 @@ Original invocation order. These headings preserve links to the previous single-
 ### `ocx chatgpt`
 
 [State-changing task](01_surface_lifecycle.md#ocx-chatgpt)
+
+### `ocx link probe`
+
+[State-changing task](01_surface_access-remote.md#ocx-link-probe)
+
+### `ocx link add`
+
+[State-changing task](01_surface_access-remote.md#ocx-link-add)
 
 ### `ocx link port`
 
@@ -1381,6 +1389,6 @@ Original invocation order. These headings preserve links to the previous single-
 
 ## Counts
 
-- declared capabilities: 333
-- of those, state-changing: 202
+- declared capabilities: 335
+- of those, state-changing: 204
 - head-resolved invocations: 2
