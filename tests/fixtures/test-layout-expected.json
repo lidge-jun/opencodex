@@ -1,4 +1,5 @@
 {
+  "sol-hosted-search-history.test.ts": "adapters/openai",
     "messages-request-id-headers.test.ts": "claude-integration",
     "messages-request-id-endpoint.test.ts": "claude-integration",
   "anthropic-revoked-token.test.ts": "adapters/anthropic",

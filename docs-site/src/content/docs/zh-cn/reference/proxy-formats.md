@@ -315,3 +315,9 @@ Anthropic 来源的失败会以 Anthropic 的错误封装呈现，因此该方�
 重放的推理项携带的 `encrypted_content` 只有生成它的 provider 和凭据才能读取。如果 opencodex 知道该对话上一次由另一个 provider 处理，它会在发送前移除这个 blob，并保留该项的摘要。如果那个 provider 还使用了不同的 endpoint 或凭据，该项的 `rs_…` id 也会被移除，因为它指向新目标无法查到的项。如果 opencodex 无从得知，例如代理重启之后，新目标会拒绝这个 blob：OpenAI 和 Azure OpenAI 返回 `400 invalid_encrypted_content`。此时 opencodex 会去掉上一个 provider 的推理状态（blob 和 `rs_…` id）后只重发一次请求；保留 id 会导致 `Item with id 'rs_…' not found`。
 
 这项恢复适用于所有使用 Responses 协议的 adapter，因此 `openai-responses` 和 `azure-openai` 的行为相同。恢复成功后，该对话在同一目标上的后续轮次会在接下来五分钟内于首次发送前移除这些状态。重发计入请求的常规发送预算。普通的 400 和 429 不会以这种方式重发，5xx 也不会，只有一个狭窄的例外：对于携带加密工具输出的请求，响应体恰好是该解密拒绝的 502 会得到同样的一次重发。第二次拒绝会原样返回给客户端。遇到这种情况，请在目标 provider 上开始新的对话。
+
+## 原生 Sol 搜索历史
+
+原生 Sol 兼容路径会将发往标准 ChatGPT Codex `/responses` 的普通 `gpt-6.1-sol` 请求中的历史 `web_search_call` 转为标注为不可信参考资料的 assistant 文本，适用于所有 thread，也包括 Sol 新生成后回放的搜索历史。它不依赖诊断 marker、debug、TTL 或抓包额度；原生 compact、portable compaction、其他模型和目的地保持原行为。它不禁用新搜索工具或 action 声明，不额外删除 Lite `additional_tools`、工具选择、call/result 配对、推理 summary/原生密文或调用方历史。bridge memo 命中时先恢复原函数调用和结果，仅剩余 hosted 历史会转为说明。
+
+这些说明是**有损且有上限的历史元数据**，不是网页正文或当前指令：仅复制 status 及允许的 query/URL/pattern/source 字段，每个字符串最多 2,048 个 UTF-16 单元、每个列表 20 项、全部说明共 65,536 字节；超出的后续 action 用省略说明替代，不复制 ID 或未知字段。HTTP/SSE 和 WebSocket 共用最终输入。此补丁不增加重试，也不证明原生上游错误根因或全部错误已修复；历史转换不保证中断的原生请求一定恢复成功。

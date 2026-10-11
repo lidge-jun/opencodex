@@ -32,6 +32,12 @@ the same serialized request and records the recovery in Logs. Other 400 errors,
 custom destinations, cancellations and repeated upload rejections remain failures.
 This does not retry filtered model responses or interrupted streams.
 
+## Native Sol hosted-search history
+
+The native Sol compatibility path converts replayed `web_search_call` items to labeled assistant reference notes on ordinary `gpt-6.1-sol` requests sent to the canonical ChatGPT Codex `/responses` endpoint. It applies across threads, including newly generated Sol search history, without a diagnostic marker, debug flag, TTL or capture quota. Native compact, portable compaction, other models and other destinations keep their existing behavior. New search tool declarations and actions are not disabled; client tools, Lite `additional_tools`, choices, tool call/result pairs, reasoning summaries/native ciphertext and caller history are not removed by this projection. Bridged cells with a valid memo restore their original function call/result first; only remaining hosted cells become notes.
+
+The notes retain **lossy, bounded metadata**, not fetched page content or current instructions: status and allowlisted action query/URL/pattern/source fields, at most 2,048 UTF-16 units per string, 20 entries per list and 65,536 serialized bytes for all notes. Remaining actions beyond the budget receive an omission note. IDs and unknown fields are dropped. Both HTTP/SSE and WebSocket use the same final input. This does not add a retry or establish the cause of a native upstream error; converting history does not guarantee that an interrupted native request will succeed.
+
 ## Empty search answers
 
 After hosted search, a clean but empty forced-answer pass receives one additional answer

@@ -461,6 +461,8 @@ The shared Responses path follows the [bounded multipart recovery contract](suba
 
 ## Hosted-search continuation binding
 
+The native Sol compatibility path in `src/adapters/openai-responses/passthrough.ts` projects remaining `web_search_call` history through `src/adapters/openai-responses/compaction-search-history.ts` after bridge restoration, query backfill and tool/schema normalization. Only exact canonical ChatGPT `/responses`, parsed/final `gpt-6.1-sol`, and ordinary non-portable/non-compaction requests opt in, across all threads independently of diagnostic controls. Notes are labeled untrusted metadata, not instructions or fetched page content; IDs/unknown fields are omitted, strings cap at 2,048 UTF-16 units, lists at 20 and serialized notes at 65,536 bytes with an overflow omission note. Tool declarations, Lite `additional_tools`, choices, non-hosted order, call/results, opaque reasoning and caller raw input keep their existing semantics. `tests/adapters/openai/sol-hosted-search-history.test.ts` pins memo hit/miss precedence, repeated 190-pair continuations and shared HTTP/WS construction. No retry or provenance inference is added.
+
 The opt-in key-auth Responses hosted-search bridge in `src/server/responses/passthrough-delivery.ts` captures the
 request binding that served the first leg, after any permitted initial reselection. Before every
 continuation dispatch, after provider pacing, that binding must remain an API-key selection matching
