@@ -4,6 +4,7 @@ import { providerApiKeySelectionIsCurrent } from "./api-key-selection";
 import { hasKeyPoolFailover } from "./key-failover";
 import type { OcxConfig } from "../types";
 import { registerProviderResponseProvenance } from "./request-pacing";
+import { isEgressTransparentExecutor, markEgressTransparentExecutor } from "../lib/provider-egress";
 
 interface BillingSendOwnership {
   readonly providerName: string;
@@ -19,7 +20,7 @@ export function anthropicBillingPhysicalFetch(
   providerName: string,
   provider: OcxProviderConfig,
 ): typeof globalThis.fetch {
-  return (async (input, init) => {
+  const wrapped = (async (input, init) => {
     const target = input instanceof Request ? input.url : String(input);
     const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
     const selection = provider._apiKeyAttempt;
@@ -41,6 +42,7 @@ export function anthropicBillingPhysicalFetch(
     responseOwners.set(response, responseOwners.has(response) ? null : owner);
     return response;
   }) as typeof globalThis.fetch;
+  return isEgressTransparentExecutor(physicalFetch) ? markEgressTransparentExecutor(wrapped) : wrapped;
 }
 
 /** Immutable response ownership, matched to the attempted route and still-current selection. */
@@ -50,6 +52,12 @@ export function anthropicBillingResponseOwner(
   const owner = responseOwners.get(response);
   if (!owner || owner.providerName !== providerName || owner.target !== resolveAnthropicMessagesUrl(attemptedProvider)) return null;
   const sent = owner.provider;
+  const current = config.providers[providerName];
+  if (!current || current.adapter !== sent.adapter || current.adapter !== "anthropic"
+    || (current.authMode !== undefined && current.authMode !== "key") || !hasKeyPoolFailover(current)) return null;
+  // Configured headers can change billing/account ownership independently of key selection.
+  const headerShape = (provider: OcxProviderConfig) => JSON.stringify(Object.entries(provider.headers ?? {}).sort(([a], [b]) => a.localeCompare(b)));
+  if (headerShape(current) !== headerShape(sent)) return null;
   const attempted = attemptedProvider._apiKeyAttempt;
   if (!attempted || attemptedProvider.apiKey !== sent.apiKey || attemptedProvider.baseUrl !== sent.baseUrl
     || attemptedProvider.authMode !== sent.authMode || attemptedProvider.adapter !== sent.adapter

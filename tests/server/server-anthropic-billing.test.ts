@@ -172,9 +172,9 @@ for (const lane of ["native", "translated"] as const) describe(`${lane} Anthropi
     expect(getKeyCooldownUntil("anth", "k0")).toBeNull();
   });
 
-  for (const statuses of [[400, 401], [400, 429, 400]]) test(`mixed ${statuses.join("→")} refusals share billing recovery`, async () => {
+  for (const statuses of [[400, 401], [400, 429], [400, 429, 400], [429, 400], [429, 402]]) test(`mixed ${statuses.join("→")} refusals share billing recovery`, async () => {
     const config = fixture((index, stream) => index < statuses.length
-      ? refusal(statuses[index]!, statuses[index] === 400 ? creditMessage : "fixture credential/rate refusal",
+      ? refusal(statuses[index]!, [400, 402].includes(statuses[index]!) ? creditMessage : "fixture credential/rate refusal",
         statuses[index] === 401 ? "authentication_error" : statuses[index] === 429 ? "rate_limit_error" : "invalid_request_error")
       : success(stream), statuses.length + 1);
     const response = await send(lane, config);
@@ -182,6 +182,23 @@ for (const lane of ["native", "translated"] as const) describe(`${lane} Anthropi
     expect(response.status).toBe(200);
     expect(await response.text()).toContain("billing recovered");
     expect(seen).toHaveLength(statuses.length + 1);
+  });
+
+  if (lane === "translated") for (const status of [401, 429]) test(`mixed billing→${status} keeps B's terminal body at an exact two-send budget`, async () => {
+    const terminalMessage = `fixture terminal ${status} from B`;
+    const config = fixture((index, stream) => index === 0 ? refusal()
+      : index === 1 ? refusal(status, terminalMessage, status === 401 ? "authentication_error" : "rate_limit_error")
+      : success(stream), 3);
+    const budget = createRequestExecutionBudget({ ...CODEX_TEXT_GUARDED_BUDGET_POLICY,
+      maxTotalModelSends: 2, baseSendAllowance: 2, finalRecoveryAllowance: 0 });
+    const response = await send(lane, config, undefined, budget);
+    expect(response.status).toBe(status);
+    const body = await response.text();
+    expect(body).toContain(terminalMessage);
+    expect(body).not.toContain("send_budget_exhausted");
+    expect(seen.map(entry => entry.key)).toEqual(["fixture-key-0", "fixture-key-1"]);
+    expect(seen[1]!.body).toEqual(seen[0]!.body);
+    expect(budget.used).toBe(2);
   });
 
   test("client cancellation during the refusal peek never sends B", async () => {

@@ -9,6 +9,7 @@ import { rotateAnthropicBillingKeyOnResponse } from "../../../src/providers/anth
 import { clearKeyCooldowns, getKeyCooldownUntil, rotateProviderTransportOnAnthropicBilling } from "../../../src/providers/key-failover";
 import type { OcxConfig } from "../../../src/types";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
+import { isEgressTransparentExecutor, markEgressTransparentExecutor, providerEgressSendInit } from "../../../src/lib/provider-egress";
 import { trackProviderRequestSlotBody } from "../../../src/providers/request-pacing";
 
 let previousHome: string | undefined;
@@ -105,4 +106,30 @@ test("billing wrapper is key/Anthropic/multi-key only", () => {
     expect(rotateProviderTransportOnAnthropicBilling(config, "anth", provider)).toBeNull();
   }
   expect(getKeyCooldownUntil("anth", "A")).toBeNull();
+});
+
+for (const mutation of ["adapter", "authMode", "pool", "headers"] as const) test(`late ${mutation} changes revoke billing ownership`, async () => {
+  const routed = routedProviderConfig("anth", config.providers.anth);
+  const response = await anthropicBillingPhysicalFetch(physical(refusal()), "anth", routed)(url, { headers: { "x-api-key": routed.apiKey! } });
+  if (mutation === "adapter") config.providers.anth!.adapter = "openai-chat";
+  if (mutation === "authMode") config.providers.anth!.authMode = "oauth";
+  if (mutation === "pool") config.providers.anth!.apiKeyPool = config.providers.anth!.apiKeyPool!.slice(0, 1);
+  if (mutation === "headers") config.providers.anth!.headers = { "x-api-key": "fixture-key-C" };
+  expect(await rotateAnthropicBillingKeyOnResponse(response, config, "anth", routed)).toBeNull();
+  expect(getKeyCooldownUntil("anth", "A")).toBeNull();
+  expect(config.providers.anth!.apiKey).toBe("fixture-key-A");
+  expect(await response.text()).toContain(message);
+});
+
+for (const egress of ["proxy", "direct", "noProxy"] as const) test(`billing wrapper preserves transparent ${egress} admission`, () => {
+  const transparent = markEgressTransparentExecutor(physical(refusal()));
+  const provider = { ...config.providers.anth!, ...(egress === "proxy" ? { proxy: "http://proxy.example.test:8080" }
+    : egress === "direct" ? { proxy: "direct" } : { proxy: "http://proxy.example.test:8080", noProxy: "example.test" }) };
+  const wrapped = anthropicBillingPhysicalFetch(transparent, "anth", provider);
+  expect(isEgressTransparentExecutor(wrapped)).toBe(true);
+  expect(providerEgressSendInit({ providerName: "anth", provider }, wrapped, url))
+    .toEqual(providerEgressSendInit({ providerName: "anth", provider }, transparent, url));
+  const opaque = anthropicBillingPhysicalFetch(physical(refusal()), "anth", provider);
+  expect(isEgressTransparentExecutor(opaque)).toBe(false);
+  expect(() => providerEgressSendInit({ providerName: "anth", provider }, opaque, url)).toThrow();
 });

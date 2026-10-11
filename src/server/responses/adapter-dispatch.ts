@@ -1002,32 +1002,53 @@ export async function prepareAdapterExchange(
           promptCacheKey: parsed.options.promptCacheKey,
         });
         if (!rotated) break;
-        // Release the failed response's socket before retrying; unread bodies otherwise linger
-        // until runtime cleanup (one per rotated key).
-        try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
-        route.provider = rotated;
-        const selectionFailure = await resolveRotatedCopilotSelection();
-        if (selectionFailure) return selectionFailure;
-        invalidateSameTargetRequest();
-        transportState.activeAdapter = resolveSelectionAdapter(
-          resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
-          config.cacheRetention,
-        );
-        bindRouteReasoningReplayScope({
-          parsed,
-          providerName: route.providerName,
-          provider: route.provider,
-          adapterName: transportState.activeAdapter.name,
-        });
-       const result = await rebuildAndRefetch("key-401");
-       if ("failed" in result) return result.failed;
-       upstreamResponse = result;
-        // A recovery refetch can itself die on an ambiguous pre-header reset, and the refusal
-        // that answers it is a 429. Every arm below keys on 429, so letting it fall through
-        // hands the marked refusal to the next waiting arm and replays the send it exists to
-        // stop. Re-enter the loop guard instead, which returns it unchanged.
-        if (isNonReplayableResponse(upstreamResponse)) continue recovery;
-     }
+        if (billingRecoveryActive && (options.abortSignal?.aborted || upstream.signal.aborted)) {
+          cleanupUpstreamAbort(); upstream.abort(); return clientCancelledResponse();
+        }
+        const billingHop = billingRecoveryActive
+          ? reserveCredentialHop("auth-recovery", `${route.providerName}|${route.modelId}|key-401`,
+            transportState.activeAdapter.fetchResponse === undefined)
+          : undefined;
+        if (billingHop && !billingHop.allowed) break;
+        const failedResponse = billingRecoveryActive ? upstreamResponse : undefined;
+        try {
+          // Release the failed response's socket before retrying; unread bodies otherwise linger
+          // until runtime cleanup (one per rotated key).
+          if (!failedResponse) try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+          route.provider = rotated;
+          const selectionFailure = await resolveRotatedCopilotSelection();
+          if (selectionFailure) return selectionFailure;
+          invalidateSameTargetRequest();
+          transportState.activeAdapter = resolveSelectionAdapter(
+            resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
+            config.cacheRetention,
+          );
+          bindRouteReasoningReplayScope({
+            parsed,
+            providerName: route.providerName,
+            provider: route.provider,
+            adapterName: transportState.activeAdapter.name,
+          });
+          if (billingHop) sendBudgetState.pendingHopPermit = billingHop.permit;
+          const result = await rebuildAndRefetch("key-401",
+            billingHop ? () => { billingHop.permit?.use(); } : undefined, failedResponse);
+          if ("failed" in result) {
+            if (result.failed !== failedResponse) return result.failed;
+            break;
+          }
+          if (failedResponse) {
+            try { void failedResponse.body?.cancel().catch(() => {}); } catch { /* closed */ }
+          }
+          upstreamResponse = result;
+          // A recovery refetch can itself die on an ambiguous pre-header reset, and the refusal
+          // that answers it is a 429. Every arm below keys on 429, so letting it fall through
+          // hands the marked refusal to the next waiting arm and replays the send it exists to
+          // stop. Re-enter the loop guard instead, which returns it unchanged.
+          if (isNonReplayableResponse(upstreamResponse)) continue recovery;
+        } finally {
+          if (billingHop) { sendBudgetState.pendingHopPermit = undefined; billingHop.permit?.release(); }
+        }
+      }
 
       while ((upstreamResponse.status === 400 || upstreamResponse.status === 402) && hasKeyPoolFailover(route.provider)) {
         const rotated = await rotateAnthropicBillingKeyOnResponse(upstreamResponse, config, route.providerName, route.provider,
@@ -1145,7 +1166,9 @@ export async function prepareAdapterExchange(
        upstreamResponse = result;
         // The refusal is a 429 too: without this the while condition is still true and the
         // next configured attempt replays it on the same target.
-        if (isNonReplayableResponse(upstreamResponse)) continue recovery;
+        if (isNonReplayableResponse(upstreamResponse)
+          || (route.provider.adapter === "anthropic" && hasKeyPoolFailover(route.provider)
+            && [400, 402].includes(upstreamResponse.status))) continue recovery;
      }
 
       // Multi-key 429 failover: rotate to the next pool key (cooldown-aware) and retry the
@@ -1180,31 +1203,53 @@ export async function prepareAdapterExchange(
           quotaResetAt,
         });
         if (!rotated) break;
-        // Release the failed response's socket before retrying; unread bodies otherwise linger
-        // until runtime cleanup (one per rotated key under a rate-limit storm).
-        try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
-        route.provider = rotated;
-        const selectionFailure = await resolveRotatedCopilotSelection();
-        if (selectionFailure) return selectionFailure;
-        invalidateSameTargetRequest();
-        transportState.activeAdapter = resolveSelectionAdapter(
-          resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
-          config.cacheRetention,
-        );
-        bindRouteReasoningReplayScope({
-          parsed,
-          providerName: route.providerName,
-          provider: route.provider,
-          adapterName: transportState.activeAdapter.name,
-        });
-       const result = await rebuildAndRefetch("key-429");
-       if ("failed" in result) return result.failed;
-       upstreamResponse = result;
-        // Rotating on the refusal would also write a cooldown against a key that rate-limited
-        // nothing, which outlives the request.
-        if (isNonReplayableResponse(upstreamResponse)
-          || (billingRecoveryActive && [400, 402, 401].includes(upstreamResponse.status))) continue recovery;
-     }
+        if (billingRecoveryActive && (options.abortSignal?.aborted || upstream.signal.aborted)) {
+          cleanupUpstreamAbort(); upstream.abort(); return clientCancelledResponse();
+        }
+        const billingHop = billingRecoveryActive
+          ? reserveCredentialHop("auth-recovery", `${route.providerName}|${route.modelId}|key-429`,
+            transportState.activeAdapter.fetchResponse === undefined)
+          : undefined;
+        if (billingHop && !billingHop.allowed) break;
+        const failedResponse = billingRecoveryActive ? upstreamResponse : undefined;
+        try {
+          // Release the failed response's socket before retrying; unread bodies otherwise linger
+          // until runtime cleanup (one per rotated key under a rate-limit storm).
+          if (!failedResponse) try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+          route.provider = rotated;
+          const selectionFailure = await resolveRotatedCopilotSelection();
+          if (selectionFailure) return selectionFailure;
+          invalidateSameTargetRequest();
+          transportState.activeAdapter = resolveSelectionAdapter(
+            resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
+            config.cacheRetention,
+          );
+          bindRouteReasoningReplayScope({
+            parsed,
+            providerName: route.providerName,
+            provider: route.provider,
+            adapterName: transportState.activeAdapter.name,
+          });
+          if (billingHop) sendBudgetState.pendingHopPermit = billingHop.permit;
+          const result = await rebuildAndRefetch("key-429",
+            billingHop ? () => { billingHop.permit?.use(); } : undefined, failedResponse);
+          if ("failed" in result) {
+            if (result.failed !== failedResponse) return result.failed;
+            break;
+          }
+          if (failedResponse) {
+            try { void failedResponse.body?.cancel().catch(() => {}); } catch { /* closed */ }
+          }
+          upstreamResponse = result;
+          // Rotating on the refusal would also write a cooldown against a key that rate-limited
+          // nothing, which outlives the request.
+          if (isNonReplayableResponse(upstreamResponse)
+            || (billingRecoveryActive && upstreamResponse.status === 401)
+            || (route.provider.adapter === "anthropic" && [400, 402].includes(upstreamResponse.status))) continue recovery;
+        } finally {
+          if (billingHop) { sendBudgetState.pendingHopPermit = undefined; billingHop.permit?.release(); }
+        }
+      }
 
       // Anthropic OAuth: recover a rate limit or proven account entitlement refusal
       // before output, within the shared request and account rotation limits.

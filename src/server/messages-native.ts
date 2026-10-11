@@ -702,7 +702,10 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
         response = await send("key-429");
       }
       // A sibling's next refusal may change class; the same counters survive that transition.
-      if (billingRecoveryActive && response !== priorResponse && [400, 402, 401, 429].includes(response.status)) continue;
+      if (response !== priorResponse && (
+        (billingRecoveryActive && [401, 429].includes(response.status))
+        || (activeProvider.adapter === "anthropic" && hasKeyPoolFailover(activeProvider) && [400, 402].includes(response.status))
+      )) continue;
       break;
     }
     const oauthRetryKey = {};
