@@ -31,6 +31,7 @@ ocx claude
 | `ANTHROPIC_MODEL` | `claudeCode.model` (任意) |
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `claudeCode.tierModels.haiku ?? claudeCode.smallFastModel` (任意、従来の `ANTHROPIC_SMALL_FAST_MODEL` もサポート) |
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`（サブスクリプション起動で未設定の場合はネイティブの `claude-opus-5-5[1m]` / `claude-sonnet-5-5[1m]` / `claude-fable-5-1[1m]`） |
+| `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE,HAIKU}_MODEL_NAME` | OpenCodex がルーティングエイリアスを設定した Tier スロットの `/model` ラベル（例: `ocx-claude-native--gpt-6.1-sol` → `gpt-6.1-sol (native)`）。launchd のシステム環境とシェルフックにも同じ組で書き込みます。モデル ID はエイリアスのままです。自分で設定したスロットやラベルは変更しません |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `alwaysEnableEffort` がオンなら `1` (条件付き) |
 | `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch` が設定されている場合 (条件付き、既定はオフ) |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | `maxContextTokens` が設定された場合の従来コンテキスト上書き値 (条件付き) |

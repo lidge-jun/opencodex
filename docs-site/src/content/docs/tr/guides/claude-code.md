@@ -69,6 +69,7 @@ bağlanmış olarak Claude Code'u başlatır:
 | `ANTHROPIC_MODEL` | `claudeCode.model` (isteğe bağlı) |
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `claudeCode.tierModels.haiku ?? claudeCode.smallFastModel` (isteğe bağlı; eski `ANTHROPIC_SMALL_FAST_MODEL` da geçerlidir) |
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`; abonelikle başlatmada ayarlanmamışsa yerel `claude-opus-5-5[1m]` / `claude-sonnet-5-5[1m]` / `claude-fable-5-1[1m]` |
+| `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE,HAIKU}_MODEL_NAME` | OpenCodex'in yönlendirilmiş bir takma ada ayarladığı katman yuvasının `/model` etiketi (örneğin `ocx-claude-native--gpt-6.1-sol` → `gpt-6.1-sol (native)`). Aynı çift launchd sistem ortamına ve kabuk kancasına da yazılır. Model kimliği takma ad olarak kalır. Kendi ayarladığınız yuva veya etiket değiştirilmez |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `alwaysEnableEffort` açık olduğunda `1` (koşullu) |
 | `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch` ayarlandığında (koşullu; varsayılan olarak kapalı) |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | `maxContextTokens` ayarlandığında eski bağlam geçersiz kılma (koşullu) |
