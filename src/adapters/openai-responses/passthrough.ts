@@ -7,7 +7,7 @@ import { applyGithubCopilotContextTier } from "../../providers/github-copilot-co
 import { Buffer } from "node:buffer";
 import type { IncomingMeta, ProviderAdapter } from "../base";
 import { namespacedToolName, type AdapterEvent, type OcxParsedRequest, type OcxProviderConfig, type OcxUsage, type TierDecision } from "../../types";
-import { applyCodexRoutingHint, CODEX_RESPONSES_LITE_HEADER, CODEX_ROUTING_HINT_HEADER } from "../../codex/forward-transport-headers";
+import { applyCodexRoutingHint, CODEX_RESPONSES_LITE_HEADER, CODEX_RESPONSES_LITE_METADATA_KEY, CODEX_ROUTING_HINT_HEADER } from "../../codex/forward-transport-headers";
 import { COMPACT_PROMPT, compactionItemToText, decodeCompactionSummary, isCompactionItemType, transferCompactionCiphertextLease } from "../../responses/compaction";
 import { decodeServerSentEvents } from "../../lib/sse-decoder";
 import {
@@ -123,6 +123,16 @@ function stripInputImagesDeep(value: unknown): unknown {
   const out: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(value)) out[key] = stripInputImagesDeep(entry);
   return out;
+}
+
+function codexResponsesLiteSelected(headers: Record<string, string>, body: unknown): boolean {
+  const lite = new Headers(headers).get(CODEX_RESPONSES_LITE_HEADER);
+  if (lite === "true" || lite === "false") return lite === "true";
+  // Match existing canonical WS preparation: explicit HTTP intent wins, otherwise native
+  // string-map frame metadata survives. This reads intent without rewriting the transport.
+  if (!isPlainObject(body) || !isPlainObject(body.client_metadata)) return false;
+  return Object.values(body.client_metadata).every(value => typeof value === "string")
+    && body.client_metadata[CODEX_RESPONSES_LITE_METADATA_KEY] === "true";
 }
 
 /**
@@ -571,10 +581,11 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       // here, on the serialized body, not on the parsed selector. One place covers both the
       // HTTP and the WebSocket outbound, because the WS path transports this same request
       // instead of rebuilding it.
-      // Codex-native history policy: replay remaining hosted actions as untrusted metadata,
+      // Codex Lite history policy: replay remaining hosted actions as untrusted metadata,
       // after bridge restoration/tool validation. Tool declarations and other input stay intact.
       if (url === `${CODEX_FORWARD_BASE_URL}/responses`
         && !parsed._compactionRequest && !parsed._portableCompaction
+        && codexResponsesLiteSelected(headers, finalBody)
         && isPlainObject(finalBody) && Array.isArray(finalBody.input)
         && finalBody.input.some(item => isPlainObject(item) && item.type === "web_search_call")) {
         const referencedIds = new Set(finalBody.input.flatMap(item => isPlainObject(item)

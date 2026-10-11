@@ -2092,7 +2092,7 @@ describe("OpenAI Responses passthrough sanitization", () => {
       { item: { type: "tool_search_call", id: "fc_old_search", call_id: "call_4", execution: "client", arguments: {} }, expectedId: undefined },
       { item: { type: "tool_search_call", id: "tsc_1", call_id: "call_5", execution: "client", arguments: {} }, expectedId: "tsc_1" },
       { item: { type: "web_search_call", id: "fc_wrong", status: "completed" }, expectedId: undefined },
-      { item: { type: "web_search_call", id: "ws_valid", status: "completed" }, expectedId: undefined },
+      { item: { type: "web_search_call", id: "ws_valid", status: "completed" }, expectedId: "ws_valid" },
       { item: { type: "agent_message", id: "msg_wrong-dialect", content: [{ type: "output_text", text: "routed reply" }] }, expectedId: undefined },
       { item: { type: "agent_message", id: "amsg_1", content: [{ type: "output_text", text: "routed reply" }] }, expectedId: "amsg_1" },
     ];
@@ -2110,7 +2110,7 @@ describe("OpenAI Responses passthrough sanitization", () => {
       else expect(body.input[index].id).toBe(expectedId);
     });
     expect(body.input[5]).toEqual(input[5]);
-    for (const index of [8, 9]) expect(body.input[index]).toMatchObject({ type: "message", role: "assistant" });
+    for (const index of [8, 9]) expect(body.input[index]).toMatchObject({ type: "web_search_call", status: "completed" });
     expect(input).toEqual(savedInput);
   });
   test("strips all item ids when store is false and preserves them otherwise", () => {

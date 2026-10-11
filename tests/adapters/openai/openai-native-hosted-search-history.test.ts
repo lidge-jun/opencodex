@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { createResponsesPassthroughAdapter } from "../../../src/adapters/openai-responses/passthrough";
 import { parseRequest } from "../../../src/responses/parser";
 import type { OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
-import { CODEX_RESPONSES_LITE_HEADER } from "../../../src/codex/forward-transport-headers";
+import { CODEX_RESPONSES_LITE_HEADER, CODEX_RESPONSES_LITE_METADATA_KEY } from "../../../src/codex/forward-transport-headers";
 import { createTestTranslatorBudget } from "../../helpers/translator-budget";
 import { clearBridgeSearchReplayCacheForTests } from "../../../src/responses/bridge-search-replay-cache";
 
@@ -24,7 +24,7 @@ const fixture = (model = "gpt-6.1-sol"): Record<string, any> => ({ model, stream
     search(1), { type: "message", role: "assistant", content: [{ type: "output_text", text: "prior ordinary answer" }] }, search(2), search(3),
   ],
 });
-function build(raw: Record<string, any>, provider = canonical, prepare?: (parsed: OcxParsedRequest) => void, headers = new Headers()) {
+function build(raw: Record<string, any>, provider = canonical, prepare?: (parsed: OcxParsedRequest) => void, headers = new Headers({ [CODEX_RESPONSES_LITE_HEADER]: "true" })) {
   const snapshot = JSON.stringify(raw); const parsed = parseRequest(raw); prepare?.(parsed);
   const budget = createTestTranslatorBudget();
   const request = createResponsesPassthroughAdapter(provider).buildRequest(parsed, { headers, translatorBudget: budget });
@@ -36,7 +36,7 @@ const notes = (body: Record<string, any>) => body.input.filter((item: any) => it
   && item.role === "assistant" && item.content?.[0]?.text?.startsWith("Historical hosted web search metadata"));
 afterEach(() => clearBridgeSearchReplayCacheForTests());
 
-test.each(["gpt-6.1-sol", "gpt-6-luna", "gpt-6-astra"])("ordinary Codex %s projects four hosted history cells without changing declarations or other input", model => {
+test.each(["gpt-6.1-sol", "gpt-6-luna", "gpt-6-astra"])("ordinary Codex Lite %s projects four hosted history cells without changing declarations or other input", model => {
   const raw = fixture(model); const { body } = build(raw);
   expect(body.input.filter((item: any) => item.type === "web_search_call")).toHaveLength(0);
   expect(notes(body)).toHaveLength(4);
@@ -87,11 +87,14 @@ test.each([
   { model: "gpt-6.1-sol", provider: { ...canonical, baseUrl: "https://chatgpt.com.evil.test/backend-api/codex" } },
   { model: "gpt-6-luna", provider: { ...canonical, authMode: "key" as const, apiKey: "fixture-only", responsesPath: "/other/responses" } },
 ])("public API/other destination keeps structural hosted history: $model $provider.baseUrl", ({ model, provider }) => {
-  const { body } = build(fixture(model), provider);
-  expect(body.input.filter((item: any) => item.type === "web_search_call")).toHaveLength(4); expect(notes(body)).toHaveLength(0);
+  for (const metadata of [undefined, { [CODEX_RESPONSES_LITE_METADATA_KEY]: "true" }]) {
+    const raw = fixture(model); if (metadata) raw.client_metadata = metadata;
+    const { body } = build(raw, provider);
+    expect(body.input.filter((item: any) => item.type === "web_search_call")).toHaveLength(4); expect(notes(body)).toHaveLength(0);
+  }
 });
 
-test("model changes still project ordinary Codex history; native triggers and portable compact keep their existing builder contracts", () => {
+test("model changes still project explicitly selected ordinary Codex Lite history; native triggers and portable compact keep their existing builder contracts", () => {
   const mismatchParsed = build(fixture(), canonical, parsed => { parsed.modelId = "gpt-6-luna"; }).body;
   const mismatchWire = build(fixture("gpt-6-luna"), canonical, parsed => { parsed.modelId = "gpt-6.1-sol"; }).body;
   const native = build(fixture(), canonical, parsed => { parsed._compactionRequest = true; }).body;
@@ -181,4 +184,71 @@ test("native notes observe singular-only and batch-only query repair before the 
   const raw=fixture("gpt-6-luna");raw.input[2].action={type:"search",query:"single"};raw.input[5].action={type:"search",queries:["first","second"]};
   const metadata=notes(build(raw).body).map((note:any)=>JSON.parse(note.content[0].text.split("\n").slice(1).join("\n")));
   expect(metadata[0].action).toEqual({type:"search",query:"single",queries:["single"]});expect(metadata[1].action).toEqual({type:"search",query:"first",queries:["first","second"]});
+});
+
+test.each([
+  { name: "HTTP true", header: "true", lite: true },
+  { name: "HTTP false", header: "false", lite: false },
+  { name: "HTTP absent", lite: false },
+  { name: "HTTP invalid", header: "TRUE", lite: false },
+  { name: "WS metadata true", metadata: { [CODEX_RESPONSES_LITE_METADATA_KEY]: "true" }, lite: true },
+  { name: "WS metadata false", metadata: { [CODEX_RESPONSES_LITE_METADATA_KEY]: "false" }, lite: false },
+  { name: "HTTP true wins WS false", header: "true", metadata: { [CODEX_RESPONSES_LITE_METADATA_KEY]: "false" }, lite: true },
+  { name: "HTTP false wins WS true", header: "false", metadata: { [CODEX_RESPONSES_LITE_METADATA_KEY]: "true" }, lite: false },
+  { name: "invalid HTTP retains WS true", header: "yes", metadata: { [CODEX_RESPONSES_LITE_METADATA_KEY]: "true" }, lite: true },
+  { name: "malformed WS map", metadata: { [CODEX_RESPONSES_LITE_METADATA_KEY]: "true", unrelated: 1 }, lite: false },
+  { name: "HTTP true with malformed WS map keeps HTTP intent", header: "true", metadata: { [CODEX_RESPONSES_LITE_METADATA_KEY]: "true", unrelated: 1 }, lite: true },
+  { name: "invalid WS flag", metadata: { [CODEX_RESPONSES_LITE_METADATA_KEY]: "TRUE" }, lite: false },
+  { name: "boolean WS flag", metadata: { [CODEX_RESPONSES_LITE_METADATA_KEY]: true }, lite: false },
+  { name: "null WS metadata", metadata: null, lite: false },
+  { name: "array WS metadata", metadata: [], lite: false },
+  { name: "unknown WS flag", metadata: { [CODEX_RESPONSES_LITE_METADATA_KEY]: "yes" }, lite: false },
+])("ordinary history projection follows the final Lite protocol signal: $name", async ({ header, metadata, lite }) => {
+  const { prepareCodexWsRequest } = await import("../../../src/server/responses/codex-ws-request");
+  const raw = fixture(); if (metadata !== undefined) raw.client_metadata = metadata;
+  const headers = new Headers(); if (header !== undefined) headers.set("X-OpenAI-Internal-Codex-Responses-Lite", header);
+  const { body, request } = build(raw, canonical, undefined, headers);
+  expect(notes(body)).toHaveLength(lite ? 4 : 0);
+  expect(body.input.filter((item: any) => item.type === "web_search_call")).toHaveLength(lite ? 0 : 4);
+  expect(body.tools).toEqual(raw.tools); expect(body.client_metadata).toEqual(raw.client_metadata);
+  expect(new Headers(request.headers).get(CODEX_RESPONSES_LITE_HEADER)).toBe(header ?? null);
+  const ws = prepareCodexWsRequest(request.url, { headers: request.headers, body: request.body });
+  const validMetadata = metadata === undefined || (metadata !== null && !Array.isArray(metadata) && Object.values(metadata).every(value => typeof value === "string"));
+  expect(ws === null).toBe(!validMetadata);
+  if (ws) {
+    const frame = JSON.parse(ws.frameText);
+    expect(frame.input).toEqual(body.input);
+    const expected = header === "true" || header === "false" ? header : metadata?.[CODEX_RESPONSES_LITE_METADATA_KEY];
+    expect(frame.client_metadata?.[CODEX_RESPONSES_LITE_METADATA_KEY]).toBe(expected);
+  }
+});
+
+test("unknown/non-Lite stays structural even without hosted declarations or with additional_tools", () => {
+  const raw = fixture(); delete raw.tools;
+  raw.input.push({ type: "additional_tools", tools: [{ type: "function", name: "web_search", parameters: { type: "object" } }] });
+  for (const headers of [new Headers(), new Headers({ [CODEX_RESPONSES_LITE_HEADER]: "false" })]) {
+    const { body } = build(raw, canonical, undefined, headers);
+    expect(notes(body)).toHaveLength(0); expect(body.input.filter((item: any) => item.type === "web_search_call")).toHaveLength(4);
+  }
+});
+
+test("genuine mixed-case caller Lite overrides configured intent before projection", () => {
+  for (const [caller, configured, expected] of [["false", "true", 0], ["true", "false", 4]] as const) {
+    const { body, request } = build(fixture(), { ...canonical, headers: { "X-OpenAI-Internal-Codex-Responses-Lite": configured } }, undefined,
+      new Headers({ "X-OPENAI-INTERNAL-CODEX-RESPONSES-LITE": caller }));
+    expect(notes(body)).toHaveLength(expected); expect(new Headers(request.headers).get(CODEX_RESPONSES_LITE_HEADER)).toBe(caller);
+  }
+});
+
+test("configured final Lite signal is honored without inventing a caller header", () => {
+  const { body, request } = build(fixture(), { ...canonical, headers: { "X-OpenAI-Internal-Codex-Responses-Lite": "true" } }, undefined, new Headers());
+  expect(notes(body)).toHaveLength(4); expect(new Headers(request.headers).get(CODEX_RESPONSES_LITE_HEADER)).toBe("true");
+});
+
+test.each(["true", "false"])("native compaction flags preserve hosted history for explicit Lite=%s", lite => {
+  for (const metadata of [undefined, { [CODEX_RESPONSES_LITE_METADATA_KEY]: "true" }]) {
+    const raw=fixture(); if (metadata) raw.client_metadata=metadata;
+    const {body}=build(raw,canonical,parsed=>{parsed._compactionRequest=true;},new Headers({[CODEX_RESPONSES_LITE_HEADER]:lite}));
+    expect(notes(body)).toHaveLength(0); expect(body.input.filter((x:any)=>x.type==="web_search_call")).toHaveLength(4);
+  }
 });
