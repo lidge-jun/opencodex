@@ -3,6 +3,7 @@
   "service-health-sentinel-runner.test.ts": "service",
   "service-health-sentinel-launch.test.ts": "service",
   "service-health-sentinel-process.test.ts": "service",
+  "responses-anthropic-billing-send-budget.test.ts": "responses",
   "anthropic-billing-ownership.test.ts": "adapters/anthropic",
   "server-anthropic-billing.test.ts": "server",
   "router-anthropic-billing-failover.test.ts": "routing",

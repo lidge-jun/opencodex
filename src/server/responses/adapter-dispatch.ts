@@ -373,6 +373,7 @@ export async function prepareAdapterExchange(
       : transportState.oauth401ReplayAttempted ? "oauth-401" : undefined
     : undefined;
   let upstreamResponse: Response;
+  const billingPoolRequest = route.provider.adapter === "anthropic" && hasKeyPoolFailover(route.provider);
   let billingRecoveryActive = false;
   let handoffPermit: ResponsesSendBudget["pendingHopPermit"];
   try {
@@ -695,7 +696,7 @@ export async function prepareAdapterExchange(
             ? fetchWithTransientRetry
             : fetchWithResetRetry;
           const helperCountsSends = sendBudgetState.adapterSendBudget?.spendEnforced === true || refetchTransientPolicy !== null || resetReplayPolicyFor(route.provider) !== null
-            || billingRecoveryActive;
+            || billingPoolRequest || billingRecoveryActive;
           const prepaid = sendBudgetState.pendingHopPermit;
           const configuredTotal = refetchTransientPolicy?.attempts;
           const refetchCap = transientSendCapFor(configuredTotal, sendBudgetState.targetSendsUsed);
@@ -1005,12 +1006,12 @@ export async function prepareAdapterExchange(
         if (billingRecoveryActive && (options.abortSignal?.aborted || upstream.signal.aborted)) {
           cleanupUpstreamAbort(); upstream.abort(); return clientCancelledResponse();
         }
-        const billingHop = billingRecoveryActive
+        const billingHop = (billingPoolRequest || billingRecoveryActive)
           ? reserveCredentialHop("auth-recovery", `${route.providerName}|${route.modelId}|key-401`,
             transportState.activeAdapter.fetchResponse === undefined)
           : undefined;
         if (billingHop && !billingHop.allowed) break;
-        const failedResponse = billingRecoveryActive ? upstreamResponse : undefined;
+        const failedResponse = billingPoolRequest || billingRecoveryActive ? upstreamResponse : undefined;
         try {
           // Release the failed response's socket before retrying; unread bodies otherwise linger
           // until runtime cleanup (one per rotated key).
@@ -1206,12 +1207,12 @@ export async function prepareAdapterExchange(
         if (billingRecoveryActive && (options.abortSignal?.aborted || upstream.signal.aborted)) {
           cleanupUpstreamAbort(); upstream.abort(); return clientCancelledResponse();
         }
-        const billingHop = billingRecoveryActive
+        const billingHop = (billingPoolRequest || billingRecoveryActive)
           ? reserveCredentialHop("auth-recovery", `${route.providerName}|${route.modelId}|key-429`,
             transportState.activeAdapter.fetchResponse === undefined)
           : undefined;
         if (billingHop && !billingHop.allowed) break;
-        const failedResponse = billingRecoveryActive ? upstreamResponse : undefined;
+        const failedResponse = billingPoolRequest || billingRecoveryActive ? upstreamResponse : undefined;
         try {
           // Release the failed response's socket before retrying; unread bodies otherwise linger
           // until runtime cleanup (one per rotated key under a rate-limit storm).
@@ -1637,9 +1638,13 @@ export async function prepareAdapterExchange(
         imageRetryAttempted = true;
         transportState.imageTierBias = 1;
         invalidateSameTargetRequest();
-        try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
-        const result = await rebuildAndRefetch("image-413");
-        if ("failed" in result) return result.failed;
+        const failedResponse = upstreamResponse;
+        const result = await rebuildAndRefetch("image-413", undefined, failedResponse);
+        if ("failed" in result) {
+          if (result.failed !== failedResponse) return result.failed;
+          break recovery;
+        }
+        try { void failedResponse.body?.cancel().catch(() => {}); } catch { /* closed */ }
         upstreamResponse = result;
         continue recovery;
       }
