@@ -169,6 +169,8 @@ export interface ResolveHubStateOptions {
    * token for a different connection, and the operator acts on that difference.
    */
   withheldTokenReason?: string;
+  /** Identity-checked local Child transport that strips credentials and owns Home admission. */
+  localRelayFetchImpl?: typeof fetch;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
   now?: number;
@@ -203,15 +205,15 @@ export async function resolveHubState(options: ResolveHubStateOptions): Promise<
       ? withAge("cache", cached.state, cached.fetchedAt, now, reason)
       : withAge("unavailable", null, undefined, now, reason);
   };
-  if (!options.token) {
+  if (!options.token && !options.localRelayFetchImpl) {
     return fromCache(options.withheldTokenReason ?? "this client has no usable data-plane token");
   }
   if (options.allowNetwork === false) return fromCache("a live hub read was not attempted");
   let state: HubStateDTO;
   try {
-    state = await fetchHubState(options.owner.serverUrl, options.token, {
+    state = await fetchHubState(options.owner.serverUrl, options.localRelayFetchImpl ? null : options.token, {
       timeoutMs: options.timeoutMs ?? DEFAULT_HUB_STATE_TIMEOUT_MS,
-      ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+      ...((options.localRelayFetchImpl ?? options.fetchImpl) ? { fetchImpl: options.localRelayFetchImpl ?? options.fetchImpl } : {}),
     });
   } catch (error) {
     // Deliberately no local-state fallback here. A stale cache is still the HUB's state; the

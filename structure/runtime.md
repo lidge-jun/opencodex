@@ -370,8 +370,8 @@ config/secret ACL hardening.
 `src/cli/status.ts` rereads the persisted client connection and `service-api-token` state before
 requesting hub state. It passes a usable token only when the current connection matches the
 status snapshot's `serverUrl`, `apiKeyId`, and `connectedAt`, and the token fingerprint matches
-the current connection's `tokenFingerprint`. Otherwise it skips the live request and uses the
-snapshot owner's matching cached hub state, or reports `unavailable`.
+the current connection's `tokenFingerprint`. Otherwise a direct Hub transport skips the live request and uses the
+snapshot owner's matching cached hub state, or reports `unavailable`. Remote Link rechecks the saved connection owner after Child discovery and uses its credential-free local relay even when the CLI token file is missing, unsafe, or mismatched; a changed owner still suppresses the live read.
 A withheld token carries its own cause into the reported `reason` through
 `resolveHubState`'s `withheldTokenReason`, so a changed connection, a missing token file, and a
 fingerprint mismatch are named separately rather than all reported as a missing data key.

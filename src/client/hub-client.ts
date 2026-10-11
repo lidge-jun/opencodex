@@ -527,13 +527,13 @@ export async function fetchHubUsage(
  */
 export async function fetchHubState(
   serverUrl: string,
-  admissionToken: string,
+  admissionToken: string | null,
   options: { timeoutMs?: number; fetchImpl?: typeof fetch } = {},
 ): Promise<HubStateDTO> {
   const origin = normalizeHubOrigin(serverUrl);
   const response = await fetchBounded(options.fetchImpl ?? fetch, `${origin}/v1/hub-state`, {
     method: "GET",
-    headers: new Headers({ Accept: "application/json", "x-opencodex-api-key": admissionToken }),
+    headers: new Headers({ Accept: "application/json", ...(admissionToken === null ? {} : { "x-opencodex-api-key": admissionToken }) }),
   }, options.timeoutMs, "headers");
   if (response.status === 404) {
     let body: unknown = null;

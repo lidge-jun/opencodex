@@ -517,19 +517,22 @@ export async function collectRemoteHubStatus(
   // without a credential; its connection-bound relay authenticates the actual Home connection.
   let fetchImpl = options.fetchImpl;
   let allowNetwork = true;
+  let localRelayFetchImpl: typeof fetch | undefined;
   if (connection.transport === "link") {
     const live = await (options.findChild ?? findLiveProxy)();
-    allowNetwork = live?.role === "client";
-    if (live?.role === "client") {
+    const current = readClientConnectionState();
+    allowNetwork = live?.role === "client" && current.kind === "connected" && sameClientConnectionOwner(current.value, owner);
+    if (allowNetwork && live) {
       const localOrigin = `http://${probeHostname(live.hostname)}:${live.port}`;
-      fetchImpl = ((_, init) => (options.fetchImpl ?? fetch)(localOrigin + "/v1/hub-state", {
+      localRelayFetchImpl = ((_, init) => (options.fetchImpl ?? fetch)(localOrigin + "/v1/hub-state", {
         method: "GET", redirect: "manual", signal: init?.signal, headers: { Accept: "application/json" },
       })) as typeof fetch;
     }
   }
   const resolved = await resolveHubState({
     owner,
-    token: bound.token,
+    token: connection.transport === "link" ? null : bound.token,
+    ...(localRelayFetchImpl ? { localRelayFetchImpl } : {}),
     ...(bound.withheldReason ? { withheldTokenReason: bound.withheldReason } : {}),
     ...(fetchImpl ? { fetchImpl } : {}),
     allowNetwork,
