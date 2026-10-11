@@ -57,11 +57,15 @@ beforeEach(() => {
       puts.push({ url, body });
       if (putFailure) return json(putFailure.body, putFailure.status);
       const role = decodeURIComponent(url.slice(url.lastIndexOf("/") + 1));
-      const current = rolesBody as { roles: Array<{ role: string; model: string | null }> };
-      rolesBody = { ...current, roles: current.roles.map(row => row.role === role ? { ...row, model: body.model } : row) };
+      const current = rolesBody as { roles: Array<{ role: string; model: string | null; effort?: string | null }> };
+      rolesBody = {
+        ...current,
+        roles: current.roles.map(row => row.role === role ? { ...row, model: body.model, effort: body.effort ?? row.effort ?? null } : row),
+      };
       return json({ ok: true, toml: { status: "written" }, omoJsonc: { status: omoWriteStatus } });
     }
     if (url.endsWith("/api/subagent-models")) return json({ available: ["gpt-5.5", "xai/grok-4.5"] });
+    if (url.endsWith("/api/injection-model")) return json({ efforts: ["low", "medium", "high"] });
     if (rolesFailure) return json(rolesFailure.body, rolesFailure.status);
     return json(rolesBody);
   }) as typeof fetch;
@@ -104,8 +108,8 @@ function saveButton(role: string): HTMLButtonElement {
   return row!.querySelector("button.btn-primary") as HTMLButtonElement;
 }
 
-async function pick(role: string, model: string): Promise<void> {
-  const trigger = testWindow.document.querySelector(`[aria-label="Model for ${role}"]`) as unknown as HTMLButtonElement;
+async function pick(role: string, model: string, label = `Model for ${role}`): Promise<void> {
+  const trigger = testWindow.document.querySelector(`[aria-label="${label}"]`) as unknown as HTMLButtonElement;
   await act(async () => { trigger.click(); });
   const option = [...testWindow.document.querySelectorAll('[role="option"]')].find(node => node.textContent === model) as unknown as HTMLElement;
   await act(async () => { option.click(); });
@@ -124,6 +128,19 @@ test("lists roles with their pins and saves a picked model for one row", async (
   await settle();
   expect(puts).toEqual([{ url: `${apiBase}/api/codex-agent-roles/explorer`, body: { model: "xai/grok-4.5" } }]);
   expect(container.textContent).toContain("explorer now runs on xai/grok-4.5.");
+});
+
+test("picking only a reasoning effort enables Save and sends the effort with the current model", async () => {
+  await mount();
+  expect(saveButton("explorer").disabled).toBe(true);
+  await pick("explorer", "high", "Reasoning effort (explorer)");
+  expect(saveButton("explorer").disabled).toBe(false);
+  await act(async () => { saveButton("explorer").click(); });
+  await settle();
+  expect(puts).toEqual([{ url: `${apiBase}/api/codex-agent-roles/explorer`, body: { model: "gpt-5.5", effort: "high" } }]);
+  expect(container.textContent).toContain("explorer now runs on gpt-5.5 · high.");
+  expect(container.textContent).toContain("gpt-5.5 · high");
+  expect(saveButton("explorer").disabled).toBe(true);
 });
 
 test("renders nothing and loads no model list when LazyCodex is not detected", async () => {
