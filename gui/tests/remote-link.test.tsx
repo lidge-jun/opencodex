@@ -51,13 +51,15 @@ async function mount(props: Partial<React.ComponentProps<typeof RemoteLink>> = {
   return host;
 }
 
-test("translated link errors remain implemented across route and enrollment owners", async () => {
+test("current translated link errors remain implemented across route and enrollment owners", async () => {
   const source = (await Promise.all(["link-routes", "link-enrollment", "link-route-state"].map(name =>
     Bun.file(`../src/server/management/${name}.ts`).text()))).join("\n");
-  const fromRoutes = [...source.matchAll(/fail\("([a-z_]+)"/g)].map(match => match[1]).filter((value, index, all) => all.indexOf(value) === index).sort();
-  // New enrollment phase errors use the existing generic translation; legacy specific codes
-  // must still name real server errors after helpers move out of the route adapter.
-  expect(fromRoutes.filter(code => (LINK_ERROR_CODES as readonly string[]).includes(code))).toEqual([...LINK_ERROR_CODES].sort());
+  const fromRoutes = [...source.matchAll(/(?:fail\(|remoteFailure\([^,\n]+,\s*)"([a-z_]+)"/g)].map(match => match[1]).filter((value, index, all) => all.indexOf(value) === index).sort();
+  // New phase errors use generic text. These two old-server translations remain compatible
+  // although enrollment now reports child_relay_timeout and phase-specific failures instead.
+  const legacyOnly = new Set(["admission_timeout", "link_apply_failed"]);
+  expect(fromRoutes.filter(code => (LINK_ERROR_CODES as readonly string[]).includes(code))).toEqual(
+    LINK_ERROR_CODES.filter(code => !legacyOnly.has(code)).sort());
 });
 
 test("parses every wire state without changing the DTO", () => {
