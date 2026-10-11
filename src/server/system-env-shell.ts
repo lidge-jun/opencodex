@@ -1,7 +1,7 @@
 import { accessSync, constants, readFileSync, writeFileSync, unlinkSync, mkdirSync, statSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { getConfigDir } from "../config";
-import { claudeToolSearchEnv, resolveAutoContext, type AutoContextMode } from "../claude/context-windows";
+import { claudeTierDisplayName, claudeToolSearchEnv, isClaudeTierLabelSlot, resolveAutoContext, type AutoContextMode } from "../claude/context-windows";
 import { PROXY_MARKER, defaultAuthDetectDeps, detectClaudeAuth, ownAdmissionTokens, type AuthDetectDeps } from "../claude/auth-detect";
 import { resolveClaudeAuthMode } from "../claude/auth-mode";
 import { ANTHROPIC_PARENT_ENV_SLOTS, trustedNodeLauncherContext, type AnthropicParentEnvSlot } from "../cli/launcher-context";
@@ -115,7 +115,12 @@ export function writeShellEnvFile(
   }
   for (const [name, value] of Object.entries(modelEnv)) {
     if (name === "ANTHROPIC_MODEL") continue;
-    lines.push(conditional(name, value));
+    // An alias tier slot carries its picker label (#6926) in the same branch, so the label is
+    // exported only when this file writes the slot and the shell has no label of its own.
+    const label = isClaudeTierLabelSlot(name) ? claudeTierDisplayName(value) : undefined;
+    lines.push(label === undefined
+      ? conditional(name, value)
+      : `${conditional(name, value)} && [ -z "\${${name}_NAME+x}" ] && export ${name}_NAME=${shellValue(label)}`);
   }
   const maxCtx = config.claudeCode?.maxContextTokens;
   if (typeof maxCtx === "number" && Number.isFinite(maxCtx) && maxCtx > 0) {

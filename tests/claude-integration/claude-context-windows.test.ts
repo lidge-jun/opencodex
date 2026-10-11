@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { AUTO_COMPACT_WINDOW_DEFAULT, boundedContextWindows, buildClaudeContextWindows, effectiveModelEnv, nativeClaudePassthroughFor, resolveAutoContext, shouldMarkOneMillion, withOneMillionMarker } from "../../src/claude/context-windows";
+import { AUTO_COMPACT_WINDOW_DEFAULT, boundedContextWindows, buildClaudeContextWindows, claudeTierDisplayName, claudeTierDisplayNameEnv, effectiveModelEnv, nativeClaudePassthroughFor, resolveAutoContext, shouldMarkOneMillion, withOneMillionMarker } from "../../src/claude/context-windows";
+import { resolveAlias } from "../../src/claude/alias";
 import { desktop3pAlias } from "../../src/claude/desktop-3p";
+import { buildAnthropicModelInfos } from "../../src/claude/model-info";
 import type { CatalogModel } from "../../src/codex/catalog";
 
 describe("claude context-window map (devlog 260712 B2)", () => {
@@ -257,5 +259,67 @@ describe("native Claude tiers on the passthrough (#5755)", () => {
     expect(nativeClaudePassthroughFor(undefined, "subscription")).toEqual({ modelMap: undefined });
     expect(nativeClaudePassthroughFor({ nativePassthrough: false }, "subscription")).toBeUndefined();
     expect(nativeClaudePassthroughFor(undefined, "proxy")).toBeUndefined();
+  });
+});
+
+describe("Claude Code tier-slot picker labels (#6926)", () => {
+  test("an alias tier label spells exactly what the discovery row calls the same id", () => {
+    const infos = buildAnthropicModelInfos(
+      ["gpt-5.6-sol"],
+      [
+        { provider: "cursor", id: "gpt-5.6-luna", contextWindow: 1_000_000 },
+        { provider: "anthropic", id: "claude-fable-5-1", contextWindow: 1_000_000 },
+        { provider: "openrouter", id: "vendor/model~x", contextWindow: 128_000 },
+      ],
+      undefined,
+      "readable",
+      undefined,
+      undefined,
+      undefined,
+      () => true,
+    );
+    // Fast siblings are covered separately below: a label cannot tell them from a real `--fast` id.
+    const aliased = infos.filter(info => !info.id.endsWith("--fast") && resolveAlias(info.id.replace(/\[1m\]$/i, "")) !== null);
+    // Base and 1M rows for native, routed, escaped and the Anthropic Fable picker alias.
+    expect(aliased.map(info => info.id)).toEqual(expect.arrayContaining([
+      "ocx-claude-native--gpt-5.6-sol",
+      "ocx-claude-cursor--gpt-5.6-luna",
+      "ocx-claude-cursor--gpt-5.6-luna[1m]",
+      "ocx-claude-native--claude-fable-5-1[1m]",
+      "ocx-claude2-openrouter--vendor~smodel~tx",
+    ]));
+    for (const info of aliased) expect(claudeTierDisplayName(info.id)).toBe(info.display_name);
+    expect(claudeTierDisplayName("ocx-claude-native--claude-fable-5-1[1m]")).toBe("claude-fable-5-1 (anthropic) · 1M");
+  });
+
+  test("a trailing --fast stays in the label, so a real `--fast` model is never renamed", () => {
+    // fixture/foo--fast is a real model in the Fast collision fixture; discovery calls it "foo--fast (fixture)".
+    const [real] = buildAnthropicModelInfos([], [{ provider: "fixture", id: "foo--fast" }], undefined, "readable");
+    expect(claudeTierDisplayName(real!.id)).toBe(real!.display_name);
+    expect(claudeTierDisplayName("ocx-claude-fixture--foo--fast")).toBe("foo--fast (fixture)");
+    // A synthetic Fast sibling keeps its exact id in the label as well.
+    expect(claudeTierDisplayName("ocx-claude-native--gpt-5.6-sol--fast")).toBe("gpt-5.6-sol--fast (native)");
+  });
+
+  test("only aliases are labelled, legacy spellings included", () => {
+    expect(claudeTierDisplayName("claude-ocx-native--gpt-6.1-sol")).toBe("gpt-6.1-sol (native)");
+    expect(claudeTierDisplayName(" ocx-claude-native--gpt-6.1-sol[1M] ")).toBe("gpt-6.1-sol (native) · 1M");
+    for (const notAlias of ["claude-opus-5-5[1m]", "cursor/gpt-5.6-luna", "gpt-5.6-sol", "opus", "", "ocx-claude-native--"]) {
+      expect(claudeTierDisplayName(notAlias)).toBeUndefined();
+    }
+  });
+
+  test("the label map covers the four tier slots and nothing else", () => {
+    expect(claudeTierDisplayNameEnv({
+      ANTHROPIC_MODEL: "ocx-claude-native--gpt-6.1-sol",
+      ANTHROPIC_SMALL_FAST_MODEL: "ocx-claude-native--gpt-6-luna",
+      ANTHROPIC_DEFAULT_OPUS_MODEL: "ocx-claude-native--gpt-6.1-sol[1m]",
+      ANTHROPIC_DEFAULT_SONNET_MODEL: "claude-sonnet-5-5[1m]",
+      ANTHROPIC_DEFAULT_FABLE_MODEL: undefined,
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: "ocx-claude-native--gpt-6-luna",
+    })).toEqual({
+      ANTHROPIC_DEFAULT_OPUS_MODEL_NAME: "gpt-6.1-sol (native) · 1M",
+      ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME: "gpt-6-luna (native)",
+    });
   });
 });
