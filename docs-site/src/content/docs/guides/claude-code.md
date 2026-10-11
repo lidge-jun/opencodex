@@ -252,8 +252,9 @@ a `*.localhost` name, `::1` or `0.0.0.0`, off the proxy, which only tunnels HTTP
 hosts. A server on another `127.x` address needs that address added to `NO_PROXY` yourself.
 If you already set `NO_PROXY`, OpenCodex appends
 only the missing loopback entries and records its change in `opencodex-no-proxy.json` next to
-`settings.json`; turning first-party off puts your original value back, and a value you edited
-in the meantime is left as it is.
+`settings.json`. Turning first-party off puts your original value back when OpenCodex could
+record it and you have not changed it since; otherwise the current value, including the added
+entries, is kept.
 
 Claude Desktop first-party routes its Code tab and subagents through OpenCodex. The standalone Claude Code CLI has a separate first-party switch. Both clients read the same `~/.claude/settings.json` proxy and CA settings: if only one switch is on, the other client still transits the local proxy, where TLS terminates, but its Messages requests relay to Anthropic unchanged. Other Anthropic paths relay unchanged and unrelated hosts remain blind tunnels. With the CLI switch on, the standalone `claude` also lists routed models in `/model`; see [Model picker in the CLI](#model-picker-in-the-cli).
 

@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { firstPartyProxyStatus } from "../../src/claude/first-party-settings";
@@ -10,6 +10,7 @@ import {
   inspectClaudeInterceptSettings,
   migrateClaudeInterceptSettings,
   removeClaudeInterceptSettings,
+  setClaudeSettingsPersistForTests,
 } from "../../src/claude/intercept/settings";
 import { NO_PROXY_RECEIPT_FILE, setNoProxyReceiptIoForTests } from "../../src/claude/intercept/settings-no-proxy";
 
@@ -156,20 +157,36 @@ test("O11: an apply that starts a new episode drops a receipt left by an earlier
   expect(settings(configDir)).toEqual({ env: { NO_PROXY: LOOPBACK } });
 });
 
-test("a removal whose settings write fails puts the receipt back", () => {
+function failingPersist(): void {
+  restores.push(setClaudeSettingsPersistForTests(() => { throw new Error("settings write failed"); }));
+}
+
+test("O14: an uncommitted removal keeps the episode, so a retry restores the user's value", () => {
   const configDir = dir();
   seed(configDir, { env: { NO_PROXY: "" } });
   applyClaudeInterceptSettings(env, configDir);
+  const applied = bytes(configDir);
   const proof = readFileSync(receipt(configDir), "utf8");
-  const settingsFile = join(configDir, "settings.json");
-  restores.push(setNoProxyReceiptIoForTests({ unlink: path => {
-    unlinkSync(path);
-    // A non-empty directory cannot be replaced by a file, so the settings write that follows fails.
-    rmSync(settingsFile);
-    mkdirSync(join(settingsFile, "blocker"), { recursive: true });
-  } }));
-  expect(() => removeClaudeInterceptSettings(CA, configDir)).toThrow();
+  failingPersist();
+  expect(() => removeClaudeInterceptSettings(CA, configDir)).toThrow("settings write failed");
+  expect(bytes(configDir)).toBe(applied);
   expect(readFileSync(receipt(configDir), "utf8")).toBe(proof);
+  restores.pop()!();
+  expect(removeClaudeInterceptSettings(CA, configDir)).toMatchObject({ ok: true, changed: true });
+  expect(settings(configDir)).toEqual({ env: { NO_PROXY: "" } });
+  expect(existsSync(receipt(configDir))).toBe(false);
+});
+
+test("O13: when the receipt cannot be put back either, the settings error still surfaces", () => {
+  const configDir = dir();
+  seed(configDir, { env: { NO_PROXY: "" } });
+  applyClaudeInterceptSettings(env, configDir);
+  const applied = bytes(configDir);
+  failingPersist();
+  failing("write");
+  expect(() => removeClaudeInterceptSettings(CA, configDir)).toThrow("settings write failed");
+  expect(bytes(configDir)).toBe(applied);
+  expect(existsSync(receipt(configDir))).toBe(false);
 });
 
 test("O6: a non-string NO_PROXY keeps the block stale and is never rewritten", () => {
