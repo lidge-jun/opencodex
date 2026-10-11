@@ -10,6 +10,17 @@ const base = {
   serviceConflict: false, serviceSupported: true, shimInstalled: false, shimHealthy: false,
 };
 
+test("enabled next-login registration is protected and distinguished in restart safety", () => {
+  const desktop = deriveDesktopStartup({
+    owned: false, loginEnabled: true, loginRegistration: "registered-not-loaded", running: true,
+    supervisor: { supervisorPid: 3131, runtimePid: 4242, app: "/fixture/opencodex-desktop" },
+  });
+  const health = deriveStartupHealth({ ...base, desktop });
+  expect(health).toMatchObject({ status: "protected", protection: "desktop", rebootSafe: true });
+  expect(startupHealthSummary(health)).toContain("Start at Login registered; not loaded in this session");
+  expect(startupHealthSummary(health)).not.toContain("AT RISK");
+});
+
 test("desktop ownership keeps failed and stale diagnostics from recommending a competing service", () => {
   const desktop = deriveDesktopStartup({ owned: true, loginEnabled: true, running: false });
   const health = deriveStartupHealth({ ...base, desktop });

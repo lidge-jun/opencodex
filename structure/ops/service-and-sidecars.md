@@ -516,7 +516,7 @@ endpoint can never restart. Focused coverage is `tests/update/update-stop-classi
 
 ## Restart handoff
 
-During drain, `src/server/index.ts` rejects new data-plane work with HTTP 503 and
+During drain, `src/server/index.ts` rejects new data-plane work with HTTP 503 and `src/service/linux-linger.ts` observes boot lingering without changing it; enabled, disabled and unknown states receive distinct install advice. Desktop startup distinguishes enabled next-login registration from current loaded state, preserving identity/disabled/supervisor checks. `src/cli/hub-disable.ts` changes persisted hub settings only, prints Desktop/service/manual restart guidance and reminds the operator to review external publishing to old ports.
 an explicit JSON envelope: `error.type` is `server_error`, `error.code` is
 `server_restarting`, and `error.message` is "OpenCodex is restarting; retry this request."
 The response keeps `Content-Type: application/json`, `Retry-After: 5`, and the

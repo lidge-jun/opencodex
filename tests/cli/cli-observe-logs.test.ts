@@ -1,5 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { handleObserveCommand } from "../../src/cli/observe";
+import { queryRequestLogs } from "../../src/server/request-log-filter";
+import { log } from "../helpers/request-log-entry";
 
 /**
  * #4057: `ocx logs` gained an `--account` filter so an operator running several accounts behind
@@ -78,4 +80,32 @@ describe("ocx logs --account", () => {
     // A provider with a single account stamps no label; the column is absent rather than blank.
     expect(captured.lines[1]).not.toContain("acct=");
   });
+});
+
+test("logs round-trips its printed provider/model through the server filter", async () => {
+  const rows = [log({ provider: "anthropic", model: "claude-test" }), log({ provider: "other", model: "claude-test" })];
+  const captured = spyOn(console, "log").mockImplementation(() => {});
+  try {
+    const code = await handleObserveCommand(["logs", "--model", "anthropic/claude-test", "--json"], {
+      baseUrl: "http://cli.test",
+      fetchImpl: async input => Response.json(queryRequestLogs(rows, new URL(String(input)).searchParams).logs),
+    });
+    expect(code).toBe(0);
+    expect(JSON.parse(String(captured.mock.calls[0]![0])).map((row: { provider: string }) => row.provider)).toEqual(["anthropic"]);
+  } finally { captured.mockRestore(); }
+});
+
+test("an empty filtered window reports no matches only in human output", async () => {
+  for (const flags of [[], ["--json"], ["--jsonl"]]) {
+    const lines: string[] = [];
+    const captured = spyOn(console, "log").mockImplementation((...parts: unknown[]) => { lines.push(parts.map(String).join(" ")); });
+    try {
+      expect(await handleObserveCommand(["logs", "--model", "missing/model", ...flags], {
+        baseUrl: "http://cli.test", fetchImpl: async () => Response.json([]),
+      })).toBe(0);
+    } finally { captured.mockRestore(); }
+    if (!flags.length) expect(lines).toEqual(["No log entry matched the filters."]);
+    else if (flags[0] === "--json") expect(JSON.parse(lines.join(""))).toEqual([]);
+    else expect(lines).toEqual([]);
+  }
 });

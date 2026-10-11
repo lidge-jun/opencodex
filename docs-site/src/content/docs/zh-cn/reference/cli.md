@@ -40,3 +40,5 @@ opencodex 的 CLI 是 `ocx`。它会根据第一个命令名进行分发；文�
 `ocx --version`、`ocx -v` 和 `ocx version` 会打印一行适合脚本读取的版本信息并退出。
 
 有两个分发目标会刻意不出现在普通帮助中：`__refresh-version [preview]` 会在分离进程中刷新更新通知缓存，而 `__gui-update-worker <job-id> [latest|preview] [restart]` 会运行一个仪表盘更新任务。它们是实现细节，不是稳定的面向用户命令。仪表盘会记录 worker PID，恢复 worker 已死亡但仍处于活动状态的任务，把更早的、没有 PID 的活动记录在十分钟后视为过期，并保护存活的 worker 不受并发更新影响。
+
+`ocx logs --model` 同时接受显示的 `provider/model` 和裸模型 ID。过滤在行数限制之前进行，`--follow` 使用同一过滤器。空匹配仅在人类可读输出中提示，JSON/JSONL 保持不变。`ocx hub disable` 参见 [Remote Hub](/guides/remote-hub/#return-a-hub-to-standalone)。

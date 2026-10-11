@@ -113,8 +113,12 @@ async function logs(argv: string[], deps: ObserveStreamDeps): Promise<number> {
     return followLogs({ query: new URLSearchParams(query(params)), limit, jsonl: wantsJsonl, events: wantsEvents, formatRow: formatLog }, deps);
   }
   const data = await runtimeRequest(`/api/logs${query(params)}`, {}, deps);
+  const rows = logRows(data);
+  if (!wantsJson && !wantsJsonl && rows.length === 0 && [provider, model, status, conversationId, account].some(Boolean)) {
+    console.log("No log entry matched the filters.");
+  }
   if (wantsJson) printData(data, true);
-  else for (const row of logRows(data)) {
+  else for (const row of rows) {
     if (wantsJsonl) console.log(JSON.stringify(row));
     else console.log(formatLog(row));
   }

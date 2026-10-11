@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 29.
+Declared capabilities: 30.
 
 ### `ocx link port`
 
@@ -293,6 +293,28 @@ JSON mode: `payload`.
 
 - A bare invocation reads and never writes.
 - A setting flag changes the operator's config; run it only when the operator asks for that change.
+
+### `ocx hub disable`
+
+Usage: `ocx hub disable [--revoke-clients --client-key <id> ...] [--json]`
+
+Return a hub to standalone in one validated config write.
+
+State-changing: yes.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--revoke-clients` | boolean | Revoke only explicitly selected saved client key IDs. |
+| `--client-key` | string | Exact saved key ID to revoke; repeatable, requires --revoke-clients. |
+| `--json` | boolean | Emit the result and restart guidance as JSON. |
+
+JSON mode: `envelope`.
+
+- Removes hub, unauthenticatedLoopbackListener, runtimeRole and hostname atomically after validation; non-hub roles refuse without changes.
+- Existing keys have no verified client origin. Names never select keys; --revoke-clients requires exact --client-key IDs when keys exist. Unselected keys remain.
+- Prints only safe key metadata, never plaintext keys or pending rotations. Restart advice is informational; the running proxy and external publishing are unchanged.
 
 ### `ocx access key`
 

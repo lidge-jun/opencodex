@@ -215,7 +215,9 @@ function classifyStartupHealthSummary(health: StartupHealth): string {
     ? "custom remote Codex routing (no local restart dependency)"
     : "native Codex routing (no opencodex restart dependency)";
   if (health.protection === "service") return "protected by background service";
-  if (health.protection === "desktop") return "protected by desktop app at login and its proxy supervisor";
+  if (health.protection === "desktop") return health.desktop?.loginRegistration === "registered-not-loaded"
+    ? "protected by desktop app at next login and its proxy supervisor (Start at Login registered; not loaded in this session)"
+    : "protected by desktop app at login and its proxy supervisor";
   const command = health.recommendedCommand ?? health.commands.restoreNative;
   if (health.routingKind === "unknown") return `AT RISK after restart (Codex routing could not be verified; run '${command}')`;
   if (health.routingKind === "custom-local") return `AT RISK after restart (custom local gateway lifecycle is not managed by opencodex; run '${command}')`;

@@ -246,8 +246,8 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "hub",
-    usage: "ocx hub invite [--json] [--data-url <origin>] [--management-url <origin>] [--clients codex,claude]",
-    summary: "Hub-side commands. `invite` prints a ready-to-run `ocx connect` line for one more machine.",
+    usage: "ocx hub invite [--json] [--data-url <origin>] [--management-url <origin>] [--clients codex,claude]\n  ocx hub disable [--revoke-clients --client-key <id> ...] [--json]",
+    summary: "Invite another machine, or disable hub mode in one validated config write.",
     details: [
       "Topology: a hub serves ONE port. Remote machines dial `hostname:port` with their own per-client",
       "key; the hub's own local processes dial `127.0.0.1:<same port>` with no credential, through the",
