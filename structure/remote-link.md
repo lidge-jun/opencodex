@@ -34,6 +34,8 @@ The client tunnel pidfile is `<configDir>/link/client-tunnel.pid` with `{ versio
 
 ## Dashboard presentation
 
+For an empty-store Home-initiated Child, `src/link/status-projection.ts` derives identity and tunnel port from the client-role link configuration, preserving the K16 DTO and its legacy `hub-initiated` direction spelling. A caller-supplied child observation (including `clientLinkTunnelStatus` failures) supplies state, timestamp and reason; configuration alone reports idle because it cannot prove a live tunnel. `ocx status` names Remote Link Home and skips Hub-state requests and cached Hub facts on link transport; ordinary Hub clients retain their Hub report.
+
 `gui/src/pages/RemoteLink.tsx` distinguishes loading, successful empty discovery, and failed discovery. Add Child explains Home-to-Child SSH prerequisites and the Home's `~/.ssh/config`, with a Host example, setup guide, rescan and manual alias entry. Find Home names the initiating computer instead. Rescan preserves the alias but resets fingerprint review; cancelled or superseded requests cannot restore stale state. Failed discovery offers Retry without claiming the host list is empty. Action errors and retries appear only in the active sheet while it is open; the server-code translation and sanitized hint remain intact. Probe recovery includes a display-only SSH diagnostic, and connecting still requires explicit fingerprint confirmation. Retry on a failed or reconnecting Home link stays disabled through both the reconnect POST and its subsequent status refresh, including POST failures. `gui/tests/remote-link.test.tsx` covers these presentation states and native control focus.
 
 ## Dashboard admission

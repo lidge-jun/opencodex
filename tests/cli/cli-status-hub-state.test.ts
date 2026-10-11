@@ -308,6 +308,49 @@ describe("ocx status end to end on a connected client", () => {
     return { stdout, stderr, exitCode };
   }
 
+  test("link transport names Remote Link Home and never reads live or cached Hub state", async () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-status-link-"));
+    const codexHome = join(home, "codex");
+    mkdirSync(codexHome, { recursive: true });
+    let hubStateReads = 0;
+    const homeServer = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+      if (new URL(request.url).pathname === "/v1/hub-state") {
+        hubStateReads++;
+        return Response.json(hubState());
+      }
+      return new Response("not found", { status: 404 });
+    } });
+    try {
+      const origin = `http://127.0.0.1:${homeServer.port}`;
+      const config = { ...connectedConfig(origin), client: { ...connectedConfig(origin).client,
+        transport: "link" as const, link: { linkId: "lnk_0123456789abcdef", tunnelPort: homeServer.port! } } };
+      writeFileSync(join(home, "config.json"), JSON.stringify(config));
+      writeFileSync(join(home, "service-api-token"), FIXTURE_TOKEN, { mode: 0o600 });
+      const oldHome = process.env.OPENCODEX_HOME;
+      process.env.OPENCODEX_HOME = home;
+      try { expect(writeCachedHubState(config.client, hubState(), "2026-09-06T00:00:00.000Z")).toBe(true); }
+      finally { process.env.OPENCODEX_HOME = oldHome; }
+      const json = await runStatus(home, codexHome, true);
+      expect({ exitCode: json.exitCode, stderr: json.stderr }).toEqual({ exitCode: 0, stderr: "" });
+      const parsed = JSON.parse(json.stdout);
+      expect(parsed.connection.transport).toBe("link");
+      expect(parsed.remoteHub.stateSource).toBe("unavailable");
+      expect(parsed.remoteHub.providers).toEqual([]);
+      expect(parsed.remoteHub.origin).toBe(origin);
+      const human = await runStatus(home, codexHome, false);
+      expect(human.exitCode).toBe(0);
+      expect(human.stdout.split("\n")[0]).toBe(`🔗 Remote Link Home ${origin}: provider credentials and routing come from Home. Hub state is unavailable over Remote Link.`);
+      expect(human.stdout).toContain(`   Remote Link Home: connected (${origin})`);
+      expect(human.stdout).not.toContain("Remote hub:");
+      expect(human.stdout).not.toContain("OAuth logins (hub");
+      expect(human.stdout).not.toContain("NOT the hub's");
+      expect(hubStateReads).toBe(0);
+    } finally {
+      await homeServer.stop(true);
+      removeTreeWithRetry(home);
+    }
+  }, SPAWN_BUDGET_MS);
+
   test("a live hub drives the banner, the hub block and the (local) tags", async () => {
     const home = mkdtempSync(join(tmpdir(), "ocx-status-hub-live-"));
     const codexHome = join(home, "codex");
@@ -350,6 +393,8 @@ describe("ocx status end to end on a connected client", () => {
       expect(human.exitCode).toBe(0);
       const lines = human.stdout.split("\n");
       expect(lines[0]).toContain("State from hub");
+      expect(human.stdout).toContain(`   Remote hub: connected (${origin})`);
+      expect(human.stdout).not.toContain("Remote Link Home:");
       // The hub's logins print ABOVE the local block, which is labelled as unused.
       const hubHeading = lines.findIndex(line => line.includes("OAuth logins (hub"));
       const localHeading = lines.findIndex(line => line.includes("Local-only (not used for routing while connected)"));

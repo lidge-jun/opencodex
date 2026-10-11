@@ -152,6 +152,7 @@ export type CliStatusJson = {
   };
   connection: {
     state: "disconnected" | "connected" | "invalid" | "mismatched";
+    transport?: "hub" | "link";
     reason?: string;
     serverUrl?: string;
     managementUrl?: string;
@@ -499,11 +500,17 @@ function boundHubStateToken(
  * degradation.
  */
 export async function collectRemoteHubStatus(
-  connection: Pick<ClientConnectionStatus, "state" | "serverUrl" | "apiKeyId" | "connectedAt">,
+  connection: Pick<ClientConnectionStatus, "state" | "serverUrl" | "apiKeyId" | "connectedAt"> & { transport?: "hub" | "link" },
   options: { fetchImpl?: typeof fetch; timeoutMs?: number; now?: number } = {},
 ): Promise<CliRemoteHubStatus> {
   if (connection.state !== "connected" || !connection.serverUrl || !connection.apiKeyId || !connection.connectedAt) {
     return disconnectedRemoteHubStatus();
+  }
+  // The link ingress has no Hub-state route. Neither its cache nor a direct request describes
+  // this Home, and a status read must not spend the link key on that unsupported route.
+  if (connection.transport === "link") {
+    return { ...disconnectedRemoteHubStatus(), connected: true, origin: connection.serverUrl,
+      reason: "Hub state is unavailable over Remote Link" };
   }
   const { resolveHubState } = await import("../client/hub-state");
   const owner = {
@@ -546,8 +553,11 @@ export async function collectRemoteHubStatus(
  * A buried `Remote hub: connected (<url>)` line — which is all this report had — does not stop
  * that, as #4236 demonstrated.
  */
-export function remoteHubBannerLine(remoteHub: CliRemoteHubStatus): string | null {
+export function remoteHubBannerLine(remoteHub: CliRemoteHubStatus, transport?: "hub" | "link"): string | null {
   if (!remoteHub.connected) return null;
+  if (transport === "link") {
+    return `🔗 Remote Link Home ${remoteHub.origin ?? "unknown"}: provider credentials and routing come from Home. Hub state is unavailable over Remote Link.`;
+  }
   const origin = remoteHub.origin ?? "the hub";
   if (remoteHub.stateSource === "unavailable") {
     return `⚠️  Hub ${origin}: state unavailable (${remoteHub.reason ?? "unknown reason"}) — provider and login lines below are LOCAL and do not describe the hub.`;
@@ -562,8 +572,8 @@ export function remoteHubBannerLine(remoteHub: CliRemoteHubStatus): string | nul
  * The hub-sourced provider/login/model block, owned here so the sentences are testable without
  * spawning the CLI. Indentation is the caller's. Empty when nothing true is known.
  */
-export function remoteHubStatusLines(remoteHub: CliRemoteHubStatus): string[] {
-  if (!remoteHub.connected || remoteHub.stateSource === "unavailable") return [];
+export function remoteHubStatusLines(remoteHub: CliRemoteHubStatus, transport?: "hub" | "link"): string[] {
+  if (transport === "link" || !remoteHub.connected || remoteHub.stateSource === "unavailable") return [];
   const origin = remoteHub.origin ?? "hub";
   const lines = [
     `OAuth logins (hub ${origin}):`,
@@ -760,7 +770,7 @@ export async function collectStatus(options: { mainAccountPolicy?: boolean } = {
   // Asked before the local probes below so a connected client's report is hub-sourced from its
   // first line. Bounded and failure-tolerant: an offline hub degrades the remoteHub block, it
   // does not fail `ocx status`.
-  const remoteHub = await collectRemoteHubStatus(clientConnection);
+  const remoteHub = await collectRemoteHubStatus({ ...clientConnection, transport: config.client?.transport });
   // Prefer identity-verified liveness (runtime-port + /healthz) over ocx.pid alone (#618).
   // Pass the already-resolved diagnostics config so findLiveProxy does not re-load and
   // warn on malformed config.json (status --json must stay stderr-clean).
@@ -960,6 +970,7 @@ export async function collectStatus(options: { mainAccountPolicy?: boolean } = {
       },
       connection: {
         state: clientConnection.state,
+        ...(config.client?.transport ? { transport: config.client.transport } : {}),
         ...(clientConnection.reason ? { reason: clientConnection.reason } : {}),
         ...(clientConnection.serverUrl ? { serverUrl: clientConnection.serverUrl } : {}),
         ...(clientConnection.managementUrl ? { managementUrl: clientConnection.managementUrl } : {}),

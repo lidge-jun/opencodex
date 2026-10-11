@@ -1717,7 +1717,7 @@ async function handleStatus() {
   // are tagged `(local)`. A reader who sees neither draws the wrong conclusion from a correct
   // report — an agent read `xai ✗ not logged in` off a client and decided the hub could not
   // serve grok.
-  const remoteHubBanner = remoteHubBannerLine(status.json.remoteHub);
+  const remoteHubBanner = remoteHubBannerLine(status.json.remoteHub, status.json.connection.transport);
   if (remoteHubBanner) console.log(remoteHubBanner);
   // `(local)` only while connected: on a standalone install every line is local, and tagging
   // them all would be noise that trains the reader to skip the tag.
@@ -1798,7 +1798,7 @@ async function handleStatus() {
   if (status.json.hub) {
     for (const line of hubStatusLines(status.json.hub)) console.log(`   ${line}`);
   }
-  console.log(`   Remote hub: ${status.json.connection.state}${status.json.connection.serverUrl ? ` (${status.json.connection.serverUrl})` : ""}`);
+  console.log(`   ${status.json.connection.transport === "link" ? "Remote Link Home" : "Remote hub"}: ${status.json.connection.state}${status.json.connection.serverUrl ? ` (${status.json.connection.serverUrl})` : ""}`);
   if (status.json.connection.state === "invalid" || status.json.connection.state === "mismatched") {
     console.log(`   ⚠️  ${status.json.connection.reason}`);
   }
@@ -1854,10 +1854,12 @@ async function handleStatus() {
   // that decide what a request can route to. The local block still prints — an operator debugging
   // a half-migrated machine needs to see it — but under a heading that says it is not in use, and
   // below the hub's, so the hub's is what a reader (or an agent) encounters first (#4236).
-  for (const line of remoteHubStatusLines(status.json.remoteHub)) console.log(`   ${line}`);
+  for (const line of remoteHubStatusLines(status.json.remoteHub, status.json.connection.transport)) console.log(`   ${line}`);
   if (status.json.remoteHub.connected) {
     console.log(status.json.remoteHub.stateSource === "unavailable"
-      ? "   Local-only credential state (this is NOT the hub's; the hub's state could not be read):"
+      ? status.json.connection.transport === "link"
+        ? "   Local-only credential state (Home state is unavailable over Remote Link):"
+        : "   Local-only credential state (this is NOT the hub's; the hub's state could not be read):"
       : "   Local-only (not used for routing while connected):");
   }
   console.log(`   OAuth logins${local}:`);

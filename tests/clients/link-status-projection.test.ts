@@ -76,3 +76,29 @@ test("a client caller's invalid-sidecar child overrides the record, and only in 
   const hub = projectLinkStatus(store, [], { state: "listening", port: 19001 }, { runtimeRole: "hub" }, empty, invalid);
   expect(hub.child).toBeNull();
 });
+
+test.each(["connected", "reconnecting", "failed"] as const)("an empty-store Home-initiated Child projects %s from its client status", state => {
+  const clientChild = { alias: "Home", state, since: "2026-09-25T00:01:00.000Z", reason: state === "failed" ? "sidecar_invalid" : null };
+  const dto = projectLinkStatus({ ...store, links: [] }, [], { state: "off", port: null }, {
+    runtimeRole: "client",
+    client: { transport: "link", serverUrl: "http://127.0.0.1:19002", connectedAt: store.links[0]!.createdAt,
+      link: { linkId: store.links[0]!.id, tunnelPort: 19002 } },
+  }, { version: 1, entries: {} }, clientChild);
+  expect(dto).toEqual({
+    role: "child", listener: { state: "off", port: null },
+    links: [{ id: store.links[0]!.id, direction: "hub-initiated", tunnelPort: 19002, ...clientChild }],
+    child: clientChild,
+  });
+});
+
+test("an empty-store link config identifies a Child without claiming a live tunnel", () => {
+  const config = { runtimeRole: "client" as const,
+    client: { transport: "link" as const, serverUrl: "http://127.0.0.1:19002", connectedAt: store.links[0]!.createdAt,
+      link: { linkId: store.links[0]!.id, tunnelPort: 19002 } } };
+  const dto = projectLinkStatus({ ...store, links: [] }, [], { state: "off", port: null }, config, { version: 1, entries: {} });
+  expect(dto.child).toEqual({ alias: "http://127.0.0.1:19002", state: "idle", since: store.links[0]!.createdAt, reason: null });
+  expect(dto.links[0]).toMatchObject({ direction: "hub-initiated", tunnelPort: 19002, state: "idle" });
+  expect(projectLinkStatus({ ...store, links: [] }, [], { state: "off", port: null }, {
+    ...config, runtimeRole: "standalone",
+  }, { version: 1, entries: {} }).role).toBe("standalone");
+});
