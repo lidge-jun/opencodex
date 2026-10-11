@@ -6,6 +6,7 @@ import {
   AgentRoleModelError,
   listCodexAgentRoleModels,
   readCodexAgentRoleEffort,
+  removeTomlRootReasoningEffort,
   setTomlRootModel,
   setTomlRootReasoningEffort,
   writeCodexAgentRoleModel,
@@ -93,6 +94,36 @@ describe("setTomlRootReasoningEffort", () => {
   });
 });
 
+describe("removeTomlRootReasoningEffort", () => {
+  test("keeps a leading BOM when the effort is on line 0", () => {
+    const content = '\ufeffmodel_reasoning_effort = "high"\nname = "r"\n';
+    expect(removeTomlRootReasoningEffort(content)).toBe('\ufeffname = "r"\n');
+    expect(removeTomlRootReasoningEffort('\ufeffmodel_reasoning_effort = "high"')).toBe('\ufeff');
+  });
+
+  test("removes the whole effort line and its comment, preserving CRLF and all other bytes", () => {
+    const content = "\ufeff# rôle\r\nmodel_reasoning_effort   = 'high' # tuned\r\nname = 'r'\r\n\r\nkeep = 1";
+    expect(removeTomlRootReasoningEffort(content)).toBe("\ufeff# rôle\r\nname = 'r'\r\n\r\nkeep = 1");
+  });
+
+  test("leaves an effort assignment in instructions prose untouched", () => {
+    const content = 'developer_instructions = """\nmodel_reasoning_effort = "low"\n"""\nmodel_reasoning_effort = "high" # pin\n';
+    expect(removeTomlRootReasoningEffort(content)).toBe('developer_instructions = """\nmodel_reasoning_effort = "low"\n"""\n');
+  });
+
+  test("leaves a nested table effort key untouched", () => {
+    const nested = '[profile]\nmodel_reasoning_effort = "low"\n';
+    expect(removeTomlRootReasoningEffort(nested)).toBe(nested);
+    expect(removeTomlRootReasoningEffort('model_reasoning_effort = "high"\n' + nested)).toBe(nested);
+  });
+
+  test("an absent effort key is a byte-for-byte no-op", () => {
+    const content = '\ufeff# model_reasoning_effort = "high"\r\nname = "r"';
+    expect(removeTomlRootReasoningEffort(content)).toBe(content);
+    expect(removeTomlRootReasoningEffort("")).toBe("");
+  });
+});
+
 describe("writeCodexAgentRoleModel", () => {
   let home: string | null = null;
   afterEach(() => {
@@ -162,5 +193,26 @@ describe("writeCodexAgentRoleModel", () => {
       expect(() => writeCodexAgentRoleModel("explorer", "xai/grok-4.5", dir, effort)).toThrow(AgentRoleModelError);
     }
     expect(readFileSync(join(dir, "agents", "explorer.toml"), "utf8")).toBe(IMPORTED_ROLE);
+  });
+
+  test.each([
+    ["multiline basic", '"""\nhigh\n"""'],
+    ["multiline literal", "'''\nhigh\n'''"],
+    ["non-string", "5"],
+  ])("refuses clearing a %s effort and leaves the file unchanged", (_kind, value) => {
+    const dir = codexHome();
+    const path = join(dir, "agents", "explorer.toml");
+    const content = `model = "old"\nmodel_reasoning_effort = ${value}\nkeep = 1\n`;
+    writeFileSync(path, content);
+    const before = readFileSync(path);
+    let caught: unknown;
+    try {
+      writeCodexAgentRoleModel("explorer", "new", dir, null);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(AgentRoleModelError);
+    expect((caught as AgentRoleModelError).code).toBe("unsupported_model_value");
+    expect(readFileSync(path)).toEqual(before);
   });
 });
