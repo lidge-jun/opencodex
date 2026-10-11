@@ -477,7 +477,8 @@ export async function prepareAdapterExchange(
             if (!compactPrepaid.use()) throw new SendBudgetExhaustedError(safeHostLabel(builtInitialRequest.url));
             compactPrepaidUsed = true;
           }
-          if (!deferredInitial) transportState.noteRoutedAttemptSend(inputTokenEstimate, recovery ?? initialRecovery);
+          // Key transport keeps this metadata pending until it binds the actual selection.
+          transportState.noteRoutedAttemptSend(inputTokenEstimate, recovery ?? initialRecovery);
           return fetchWithHeaderTimeout(builtInitialRequest.url, applyUpstreamRecoveryInit({
             method: builtInitialRequest.method,
             headers: builtInitialRequest.headers,
@@ -494,7 +495,6 @@ export async function prepareAdapterExchange(
                     if (!compactPrepaid.use()) throw new SendBudgetExhaustedError(safeHostLabel(builtInitialRequest.url));
                     compactPrepaidUsed = true;
                   }
-                  transportState.noteRoutedAttemptSend(inputTokenEstimate, recovery ?? initialRecovery);
                 }
                 // Preserve the unconfigured direct-adapter accounting contract; Combo admission
                 // and explicit retry/compaction budgets require a receipt for their booked send.
@@ -746,12 +746,15 @@ export async function prepareAdapterExchange(
                 sendBudgetState.adapterSendBudget?.startRequest?.({
                   poolId: logCtx.spendPoolId ?? route.providerName, identityId: logCtx.accountLogLabel,
                 });
+                // Prepare key metadata before the guarded transport commits its attempt;
+                // counters and permits still wait for the physical executor after pacing.
+                if (deferredRefetch) transportState.noteRoutedAttemptSend(retryEstimate, recoveryKind ?? recovery);
                 const confirmDispatch = () => {
                   if (refetchAllowance?.permit && !refetchPermitUsed) {
                     if (!refetchAllowance.permit.use()) throw new SendBudgetExhaustedError(safeHostLabel(retryRequest.url));
                     refetchPermitUsed = true;
                   }
-                  transportState.noteRoutedAttemptSend(retryEstimate, recoveryKind ?? recovery);
+                  if (!deferredRefetch) transportState.noteRoutedAttemptSend(retryEstimate, recoveryKind ?? recovery);
                   // Eligible pools confirm after pacing at the physical executor; legacy
                   // helper paths retain their existing thunk admission boundary.
                   onDispatch?.();

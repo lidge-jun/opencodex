@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { loadConfig, saveConfig } from "../../src/config";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
 import { handleResponses } from "../../src/server/responses";
+import type { RequestLogContext } from "../../src/server/request-log";
 import { clearKeyCooldowns, getKeyCooldownUntil } from "../../src/providers/key-failover";
 import { resetProviderRequestPacingForTest, setProviderRequestPacingLimitsForTest, setProviderRequestPacingRuntimeForTest, providerRequestPacingStatus, waitForProviderRequestSlot, type ProviderRequestSlot } from "../../src/providers/request-pacing";
 import { createRequestExecutionBudget, CODEX_TEXT_GUARDED_BUDGET_POLICY } from "../../src/lib/request-execution-budget";
@@ -88,6 +89,35 @@ function threeSendBudget() {
   return createRequestExecutionBudget({ ...CODEX_TEXT_GUARDED_BUDGET_POLICY,
     maxTotalModelSends: 3, baseSendAllowance: 3, finalRecoveryAllowance: 0, maxTargetTransitions: 2 });
 }
+
+for (const status of [401, 429, 400]) test(`translated A${status}→B200 attributes recovery to B without extra sends or charges`, async () => {
+  const config = fixture((index, stream) => index === 0
+    ? refusal(status, status === 400 ? creditMessage : "fixture credential/rate refusal",
+      status === 401 ? "authentication_error" : status === 429 ? "rate_limit_error" : "invalid_request_error")
+    : success(stream));
+  config.providers.anth!.requestPacing = { enabled: true, maxConcurrentRequests: 1 };
+  saveConfig(config);
+  const budget = threeSendBudget();
+  const logCtx: RequestLogContext = { model: "", provider: "" };
+  const signal = AbortSignal.timeout(2_000);
+  const request = new Request("http://localhost/v1/responses", {
+    method: "POST", headers: { "content-type": "application/json" }, signal,
+    body: JSON.stringify({ model: "anth/claude-x", input: "hello", store: false, stream: false }),
+  });
+  const response = await handleResponses(request, config, logCtx, { abortSignal: signal, sendBudget: budget });
+  expect(response.status).toBe(200);
+  expect(await response.text()).toContain("billing recovered");
+  expect(seen.map(entry => entry.key)).toEqual(["fixture-key-0", "fixture-key-1"]);
+  expect(seen[1]!.body).toEqual(seen[0]!.body);
+  expect(budget.used).toBe(2);
+  expect(logCtx.attempts?.[0]?.status).toBe(status);
+  expect(logCtx.attempts?.map(attempt => ({ ordinal: attempt.ordinal,
+    sendCount: attempt.sendCount, recoveryKinds: attempt.recoveryKinds }))).toEqual([
+    { ordinal: 1, sendCount: 1, recoveryKinds: [] },
+    { ordinal: 2, sendCount: 1, recoveryKinds: [status === 429 ? "key-429" : "key-401"] },
+  ]);
+  expect(providerRequestPacingStatus("anth", config.providers.anth!)).toMatchObject({ inFlight: 0, queued: 0 });
+});
 
 // Observe the real pacer without replacing its clock, queue, timers, or slot admission.
 function observeRecoveryQueued(config: OcxConfig, hasCompetingLease: () => boolean, signal: AbortSignal) {
