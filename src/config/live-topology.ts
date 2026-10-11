@@ -1,6 +1,6 @@
 import type { OcxConfig } from "../types";
 
-export const LIVE_TOPOLOGY_KEYS = new Set(["hostname", "port", "runtimeRole", "hub", "unauthenticatedLoopbackListener"]);
+export const LIVE_TOPOLOGY_KEYS = new Set(["hostname", "port", "runtimeRole", "hub", "client", "unauthenticatedLoopbackListener"]);
 const baselines = new WeakMap<OcxConfig, Record<string, unknown>>();
 
 function snapshot(config: OcxConfig): Record<string, unknown> {

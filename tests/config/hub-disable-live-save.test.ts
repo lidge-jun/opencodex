@@ -2,7 +2,8 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { armClaudeCodeBaseline, getConfigPath, loadConfig, mutatePersistedConfig, reconcileLiveConfigFromDisk, saveConfig, saveConfigPreservingClaudeCode } from "../../src/config";
+import { armClaudeCodeBaseline, getConfigPath, loadConfig, mutatePersistedConfig, reconcileLiveConfigFromDisk, saveConfig, saveConfigPreservingClaudeCode, validateConfigCandidate } from "../../src/config";
+import { clearClientConnection, commitClientConnection } from "../../src/client/state";
 import { disableHubConfig, parseHubDisableArgs } from "../../src/cli/hub-disable";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -16,12 +17,12 @@ const seed = (): OcxConfig => ({
   defaultProvider: "fixture", apiKeys: [key("client"), key("integration")],
 } as OcxConfig);
 
-function scenario(change: (live: OcxConfig) => void, changeDisk?: (disk: OcxConfig) => void, oauth = false, disable = true): { live: OcxConfig; saved: OcxConfig } {
+function scenario(change: (live: OcxConfig) => void, changeDisk?: (disk: OcxConfig) => void, oauth = false, disable = true, initial = seed(), afterDiskChange?: () => void): { live: OcxConfig; saved: OcxConfig } {
   const oldHome = process.env.OPENCODEX_HOME;
   const home = mkdtempSync(join(tmpdir(), "ocx-hub-live-save-"));
   process.env.OPENCODEX_HOME = home;
   try {
-    saveConfig(seed());
+    saveConfig(initial);
     const live = loadConfig();
     const persistedBaseline = structuredClone(live);
     armClaudeCodeBaseline(live);
@@ -32,6 +33,7 @@ function scenario(change: (live: OcxConfig) => void, changeDisk?: (disk: OcxConf
       changeDisk?.(config);
       return { changed: true, value: null };
     }).status).toBe("committed");
+    afterDiskChange?.();
     if (oauth) reconcileLiveConfigFromDisk(live, persistedBaseline);
     change(live);
     saveConfigPreservingClaudeCode(live);
@@ -57,6 +59,7 @@ function expectDisabled(result: { live: OcxConfig; saved: OcxConfig }) {
   expect(result.live.runtimeRole).toBe("hub");
   expect(result.live.hub).toEqual(seed().hub);
   expect(result.live.unauthenticatedLoopbackListener).toEqual(seed().unauthenticatedLoopbackListener);
+  expect(result.saved.unauthenticatedLoopbackListener).toBeUndefined();
   expect(result.saved.configRebaseProvenance?.deletedTopLevelKeys).toContain("hostname");
 }
 
@@ -119,4 +122,33 @@ test.each([false, true])("desired topology additions/updates survive repeated sa
   expect(result.saved.unauthenticatedLoopbackListener!.port).toBe(10113);
   expect(result.live.hub).toEqual(seed().hub);
   expect(result.live.unauthenticatedLoopbackListener).toEqual(seed().unauthenticatedLoopbackListener);
+});
+
+test.each([false, true])("client connect/disconnect remain paired through repeated saves (OAuth adoption=%s)", oauth => {
+  const initial = seed();
+  delete initial.runtimeRole;
+  delete initial.hub;
+  delete initial.unauthenticatedLoopbackListener;
+  const connection: NonNullable<OcxConfig["client"]> = {
+    serverUrl: "https://hub.example.test", managementUrl: "https://hub.example.test",
+    managementTransport: "direct", selectedClients: ["codex"], tokenEnv: "OPENCODEX_API_AUTH_TOKEN",
+    apiKeyId: "fixture-client", tokenFingerprint: "a".repeat(64), protocolVersion: 1,
+    connectedAt: "2026-01-01T00:00:00.000Z",
+  };
+  const connected = scenario(live => { live.logLevel = "info"; }, undefined, oauth, false, initial,
+    () => { expect(commitClientConnection(connection)).toBe("committed"); });
+  expect(connected.saved.runtimeRole).toBe("client");
+  expect(connected.saved.client).toEqual(connection);
+  expect(validateConfigCandidate(connected.saved).ok).toBe(true);
+  expect(connected.live.runtimeRole).toBeUndefined();
+  expect(connected.live.client).toBeUndefined();
+  initial.runtimeRole = "client";
+  initial.client = structuredClone(connection);
+  const disconnected = scenario(live => { live.logLevel = "info"; }, undefined, oauth, false, initial,
+    () => { expect(clearClientConnection(connection)).toBe("committed"); });
+  expect(disconnected.saved.runtimeRole).toBeUndefined();
+  expect(disconnected.saved.client).toBeUndefined();
+  expect(validateConfigCandidate(disconnected.saved).ok).toBe(true);
+  expect(disconnected.live.runtimeRole).toBe("client");
+  expect(disconnected.live.client).toEqual(connection);
 });
