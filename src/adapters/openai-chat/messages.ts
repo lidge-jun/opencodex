@@ -292,7 +292,11 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
           }
         }
         const hasReplayedReasoning = chatMsg.reasoning_content !== undefined || chatMsg.reasoning_details !== undefined;
-        if (chatMsg.content === undefined && toolCalls.length === 0 && !hasReplayedReasoning) break;
+        // A turn with no answer text, tools or reasoning carries nothing. Between a call and its
+        // result it would also split the pair, so drop it there; a standalone empty answer keeps
+        // its slot so templates that require strict user/assistant alternation still accept it.
+        const carriesNothing = !chatMsg.content && toolCalls.length === 0 && !hasReplayedReasoning;
+        if (carriesNothing && (chatMsg.content === undefined || pendingToolCalls.length > 0)) break;
         flushPendingToolCalls();
         const wireToolCalls = toolCalls.map(tc => {
           let id = tc.id;
