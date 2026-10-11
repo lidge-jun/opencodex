@@ -76,11 +76,14 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
     if (pending !== null) return false;
     setPending(role);
     setResult(null);
+    // An omitted effort still carries a pending omo.jsonc retry's effort, so a later save from any
+    // path (the row or auto-assign) cannot drop it. An explicit effort replaces the retry.
+    const sent = effort === undefined ? mirrorRetries[role]?.sent : effort;
     try {
       const response = await fetch(`${apiBase}/api/codex-agent-roles/${encodeURIComponent(role)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(effort === undefined ? { model } : { model, effort }),
+        body: JSON.stringify(sent === undefined ? { model } : { model, effort: sent }),
       });
       const payload = await readJsonOrThrow<{ omoJsonc?: { status?: OmoWriteStatus } }>(
         response,
@@ -89,9 +92,9 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
       const omoStatus = payload?.omoJsonc?.status;
       const confirmed = latestData.current;
       const confirmedRow = confirmed?.roles.find(row => row.role === role);
-      const confirmedEffort = effort === undefined
+      const confirmedEffort = sent === undefined
         ? confirmedRow ? confirmedRow.effort ?? null : displayedEffort || null
-        : effort;
+        : sent;
       const shownEffort = confirmedEffort ?? "";
       if (confirmed) {
         const next = {
@@ -118,7 +121,7 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
       };
       setDrafts(current => keepOnFailure(current, model));
       setEffortDrafts(current => keepOnFailure(current, shownEffort));
-      setMirrorRetries(current => keepOnFailure(current, { sent: effort }));
+      setMirrorRetries(current => keepOnFailure(current, { sent }));
       await resource.refresh();
       return true;
     } catch {
@@ -208,8 +211,7 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
                           type="button"
                           className="btn btn-primary btn-sm"
                           disabled={!(changed || retryMirror) || pending !== null}
-                          onClick={() => void save(row.role, draft,
-                            effortChanged ? effortDraft || null : pendingMirror?.sent, row.effort ?? "")}
+                          onClick={() => void save(row.role, draft, effortChanged ? effortDraft || null : undefined, row.effort ?? "")}
                         >
                           {pending === row.role
                             ? t("common.saving")

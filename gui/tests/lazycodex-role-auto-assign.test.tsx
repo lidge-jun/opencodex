@@ -216,3 +216,22 @@ test("Apply all merges both confirmed rows when every reload fails", async () =>
   }
   expect(button("Apply all").disabled).toBe(true);
 });
+test("applying a no-ladder proposal resends an effort whose omo.jsonc mirror is still pending", async () => {
+  roleRows = roleRows.map(row => row.role === "worker" ? { ...row, model: "gpt-5.5", effort: "high" } : row);
+  mirrorStatus = "write_failed";
+  await mount();
+  const trigger = container.querySelector('[aria-label="Reasoning effort (worker)"]') as HTMLButtonElement;
+  await act(async () => { trigger.click(); });
+  const low = [...testWindow.document.querySelectorAll('[role="option"]')].find(node => node.textContent === "low") as unknown as HTMLElement;
+  await act(async () => { low.click(); });
+  await click(roleRow("worker").querySelector("button.btn-primary") as HTMLButtonElement);
+  mirrorStatus = "written";
+  await click(button("Auto-assign"));
+  await click(button("Apply", proposal("worker")));
+  expect(requests.filter(r => r.method === "PUT").map(r => r.body)).toEqual([
+    { model: "gpt-5.5", effort: "low" },
+    { model: "a/mid", effort: "low" },
+  ]);
+  expect(roleRow("worker").querySelectorAll("td")[1]!.textContent).toBe("a/mid · low");
+  expect((roleRow("worker").querySelector("button.btn-primary") as HTMLButtonElement).disabled).toBe(true);
+});
