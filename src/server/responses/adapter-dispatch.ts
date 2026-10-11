@@ -373,6 +373,18 @@ export async function prepareAdapterExchange(
       : transportState.oauth401ReplayAttempted ? "oauth-401" : undefined
     : undefined;
   let upstreamResponse: Response;
+  // Preserve bounded terminal bytes without retaining the refused send's pacing lease.
+  // Reading the owned body to EOF (or cancelling on its bound) frees capacity BEFORE
+  // replacement admission; keeping that live body would wait on its own concurrency slot.
+  const retainFailureResponse = async (): Promise<Response> => {
+    const original = upstreamResponse;
+    const text = await readDisplaySafeErrorText(original, upstream.signal, "");
+    const headers = new Headers(original.headers);
+    headers.delete("content-length");
+    headers.delete("content-encoding");
+    upstreamResponse = new Response(text, { status: original.status, statusText: original.statusText, headers });
+    return upstreamResponse;
+  };
   const billingPoolRequest = route.provider.adapter === "anthropic" && hasKeyPoolFailover(route.provider);
   let billingRecoveryActive = false;
   let handoffPermit: ResponsesSendBudget["pendingHopPermit"];
@@ -1011,7 +1023,7 @@ export async function prepareAdapterExchange(
             transportState.activeAdapter.fetchResponse === undefined)
           : undefined;
         if (billingHop && !billingHop.allowed) break;
-        const failedResponse = billingPoolRequest || billingRecoveryActive ? upstreamResponse : undefined;
+        const failedResponse = billingPoolRequest || billingRecoveryActive ? await retainFailureResponse() : undefined;
         try {
           // Release the failed response's socket before retrying; unread bodies otherwise linger
           // until runtime cleanup (one per rotated key).
@@ -1062,7 +1074,7 @@ export async function prepareAdapterExchange(
         const hop = reserveCredentialHop("auth-recovery", `${route.providerName}|${route.modelId}|key-401`,
           transportState.activeAdapter.fetchResponse === undefined);
         if (!hop.allowed) break;
-        const failedResponse = upstreamResponse;
+        const failedResponse = await retainFailureResponse();
         try {
           route.provider = rotated;
           invalidateSameTargetRequest();
@@ -1212,7 +1224,7 @@ export async function prepareAdapterExchange(
             transportState.activeAdapter.fetchResponse === undefined)
           : undefined;
         if (billingHop && !billingHop.allowed) break;
-        const failedResponse = billingPoolRequest || billingRecoveryActive ? upstreamResponse : undefined;
+        const failedResponse = billingPoolRequest || billingRecoveryActive ? await retainFailureResponse() : undefined;
         try {
           // Release the failed response's socket before retrying; unread bodies otherwise linger
           // until runtime cleanup (one per rotated key under a rate-limit storm).
@@ -1638,7 +1650,7 @@ export async function prepareAdapterExchange(
         imageRetryAttempted = true;
         transportState.imageTierBias = 1;
         invalidateSameTargetRequest();
-        const failedResponse = upstreamResponse;
+        const failedResponse = await retainFailureResponse();
         const result = await rebuildAndRefetch("image-413", undefined, failedResponse);
         if ("failed" in result) {
           if (result.failed !== failedResponse) return result.failed;

@@ -6,6 +6,7 @@ import { loadConfig, saveConfig } from "../../src/config";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
 import { handleResponses } from "../../src/server/responses";
 import { clearKeyCooldowns, getKeyCooldownUntil } from "../../src/providers/key-failover";
+import { resetProviderRequestPacingForTest, setProviderRequestPacingLimitsForTest, providerRequestPacingStatus } from "../../src/providers/request-pacing";
 import { createRequestExecutionBudget, CODEX_TEXT_GUARDED_BUDGET_POLICY } from "../../src/lib/request-execution-budget";
 import type { OcxConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
@@ -40,6 +41,7 @@ beforeEach(() => {
   releaseSpend = acquireOwnedSpendHome();
   seen = [];
   clearKeyCooldowns();
+  resetProviderRequestPacingForTest();
 });
 afterEach(async () => {
   await upstream?.stop(true);
@@ -47,6 +49,7 @@ afterEach(async () => {
   releaseSpend?.();
   releaseSpend = undefined;
   clearKeyCooldowns();
+  resetProviderRequestPacingForTest();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   removeTreeWithRetry(home);
@@ -222,4 +225,24 @@ for (const lane of ["native", "translated"] as const) describe(`${lane} Anthropi
     expect(getKeyCooldownUntil("anth", "k0")).toBeNull();
     expect(loadConfig().providers.anth!.apiKey).toBe("fixture-key-0");
   });
+});
+
+for (const statusCode of [401, 429, 413]) test(`translated ${statusCode} recovery releases the refused response concurrency lease`, async () => {
+  setProviderRequestPacingLimitsForTest({ maxQueueAgeMs: 200 });
+  const config = fixture((index, stream) => index === 0
+    ? refusal(statusCode, statusCode === 429 ? "fixture rate refusal" + " ".repeat(5_000) : "fixture credential/image refusal",
+      statusCode === 401 ? "authentication_error" : statusCode === 429 ? "rate_limit_error" : "request_too_large")
+    : success(stream));
+  config.providers.anth!.requestPacing = { enabled: true, maxConcurrentRequests: 1 };
+  saveConfig(config);
+  const request = new Request("http://localhost/v1/responses", { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "anth/claude-x", stream: false, input: statusCode === 413
+      ? [{ role: "user", content: [{ type: "input_text", text: "hi" }, { type: "input_image",
+        image_url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2G0AAAAAASUVORK5CYII=" }] }]
+      : "hello" }) });
+  const response = await handleResponses(request, config, { model: "", provider: "" }, { abortSignal: AbortSignal.timeout(2_000) });
+  expect(response.status).toBe(200);
+  expect(await response.text()).toContain("billing recovered");
+  expect(seen.map(entry => entry.key)).toEqual(statusCode === 413 ? ["fixture-key-0", "fixture-key-0"] : ["fixture-key-0", "fixture-key-1"]);
+  expect(providerRequestPacingStatus("anth", config.providers.anth!)).toMatchObject({ inFlight: 0, queued: 0 });
 });
