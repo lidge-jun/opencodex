@@ -139,9 +139,7 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
               <tr>
                 <th>{t("integrations.lazycodexRoles.role")}</th>
                 <th>{t("integrations.lazycodexRoles.current")}</th>
-                <th>{t("integrations.lazycodexRoles.model")}</th>
-                <th>{t("integrations.lazycodexRoles.effort")}</th>
-                <th><span className="sr-only">{t("common.save")}</span></th>
+                <th>{t("integrations.lazycodexRoles.model")} · {t("integrations.lazycodexRoles.effort")}</th>
               </tr>
             </thead>
             <tbody>
@@ -159,37 +157,35 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
                         : <span className="integration-meta">{t("integrations.lazycodexRoles.none")}</span>}
                     </td>
                     <td>
-                      <Select
-                        value={draft}
-                        options={optionsFor(row, draft)}
-                        label={t("integrations.lazycodexRoles.modelFor", { role: row.role })}
-                        disabled={pending !== null}
-                        onChange={value => setDrafts(current => ({ ...current, [row.role]: value }))}
-                      />
-                    </td>
-                    <td>
-                      <Select
-                        value={effortDraft}
-                        options={[
-                          ...(row.effort === null ? [{ value: "", label: t("integrations.lazycodexRoles.effortDefault") }] : []),
-                          ...[...new Set([...(row.effort ? [row.effort] : []), ...data.efforts])].map(value => ({ value, label: value })),
-                        ]}
-                        label={t("integrations.lazycodexRoles.effortFor", { role: row.role })}
-                        disabled={pending !== null}
-                        onChange={value => setEffortDrafts(current => ({ ...current, [row.role]: value }))}
-                      />
-                    </td>
-                    <td>
-                      <button
-                        type="button"
-                        className="btn btn-primary btn-sm"
-                        disabled={!(changed || retryMirror) || pending !== null}
-                        onClick={() => void save(row.role, draft, effortDraft || null)}
-                      >
-                        {pending === row.role
-                          ? t("common.saving")
-                          : retryMirror ? t("integrations.lazycodexRoles.retryMirror") : t("common.save")}
-                      </button>
+                      <div className="lazycodex-role-models-edit">
+                        <Select
+                          value={draft}
+                          options={optionsFor(row, draft)}
+                          label={t("integrations.lazycodexRoles.modelFor", { role: row.role })}
+                          disabled={pending !== null}
+                          onChange={value => setDrafts(current => ({ ...current, [row.role]: value }))}
+                        />
+                        <Select
+                          value={effortDraft}
+                          options={[
+                            ...(row.effort === null ? [{ value: "", label: t("integrations.lazycodexRoles.effortDefault") }] : []),
+                            ...[...new Set([...(row.effort ? [row.effort] : []), ...data.efforts])].map(value => ({ value, label: value })),
+                          ]}
+                          label={t("integrations.lazycodexRoles.effortFor", { role: row.role })}
+                          disabled={pending !== null}
+                          onChange={value => setEffortDrafts(current => ({ ...current, [row.role]: value }))}
+                        />
+                        <button
+                          type="button"
+                          className="btn btn-primary btn-sm"
+                          disabled={!(changed || retryMirror) || pending !== null}
+                          onClick={() => void save(row.role, draft, effortDraft || null)}
+                        >
+                          {pending === row.role
+                            ? t("common.saving")
+                            : retryMirror ? t("integrations.lazycodexRoles.retryMirror") : t("common.save")}
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 );
