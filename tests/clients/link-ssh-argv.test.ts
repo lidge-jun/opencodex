@@ -140,10 +140,9 @@ test("quoteRemote allows only sh in command position and rejects NUL", () => {
 });
 
 test("remote ocx argv runs ocx through a single-quoted sh PATH prelude", () => {
-  expect(REMOTE_OCX_SCRIPT).toBe('PATH="$PATH:$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"; exec ocx "$@"');
   expect(remoteOcxArgv(["link", "port"])).toEqual(["sh", "-c", REMOTE_OCX_SCRIPT, "ocx", "link", "port"]);
   const argv = buildExecArgv({ alias: "delta.example.test", argv: remoteOcxArgv(["link", "issue", "--alias", "it's x", "--json"]), knownHostsFile: tempPath("remote-ocx") });
-  expect(argv.at(-1)).toBe(`sh '-c' 'PATH="$PATH:$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"; exec ocx "$@"' 'ocx' 'link' 'issue' '--alias' 'it'"'"'s x' '--json'`);
+  expect(argv.at(-1)).toBe(`sh '-c' '${REMOTE_OCX_SCRIPT.replaceAll("'", `'"'"'`)}' 'ocx' 'link' 'issue' '--alias' 'it'"'"'s x' '--json'`);
 });
 
 test.skipIf(process.platform !== "win32")("PowerShell parses the remote command as sh invocation", () => {
@@ -170,15 +169,23 @@ function fakeOcx(dir: string, label: string): void {
 }
 
 /**
- * A remote PATH that resolves `sh` and nothing else. A system PATH such as /usr/bin:/bin may
- * already hold a real ocx (the Linux desktop package installs /usr/bin/ocx), and the prelude
- * deliberately lets that one win, so the stub under ~/.bun/bin would never run.
+ * A remote PATH with only sh and a controlled uname. System directories may hold a real ocx;
+ * fixtureRemoteCommand maps the fixed Desktop/system candidates into the fixture as well.
  */
 function shOnlyRemotePath(home: string): string {
   const dir = join(home, "remote-bin");
   mkdirSync(dir, { recursive: true });
   symlinkSync("/bin/sh", join(dir, "sh"));
+  writeFileSync(join(dir, "uname"), "#!/bin/sh\nprintf 'Darwin\\n'\n", { mode: 0o755 });
   return dir;
+}
+
+/** Keep fixed system candidates inside the fixture, regardless of the host's installed ocx. */
+function fixtureRemoteCommand(home: string, args: string[]): string {
+  const argv = remoteOcxArgv(args);
+  argv[2] = REMOTE_OCX_SCRIPT.replaceAll("/Applications/OpenCodex.app/Contents/MacOS/ocx", join(home, "app-ocx"))
+    .replaceAll("/usr/bin/ocx", join(home, "system-ocx"));
+  return quoteRemote(argv);
 }
 
 test.skipIf(process.platform === "win32")("the remote prelude appends ~/.bun/bin after the remote PATH and keeps every argument", () => {
@@ -186,7 +193,7 @@ test.skipIf(process.platform === "win32")("the remote prelude appends ~/.bun/bin
   roots.push(home);
   fakeOcx(join(home, ".bun", "bin"), "bun");
   const remotePath = shOnlyRemotePath(home);
-  const command = quoteRemote(remoteOcxArgv(["link", "issue", "--alias", "it's x", "--json"]));
+  const command = fixtureRemoteCommand(home, ["link", "issue", "--alias", "it's x", "--json"]);
   const result = Bun.spawnSync(["/bin/sh", "-c", command], { env: { HOME: home, PATH: remotePath } });
   expect(result.exitCode).toBe(0);
   const lines = result.stdout.toString().trim().split("\n");
@@ -200,7 +207,7 @@ test.skipIf(process.platform === "win32")("an ocx the remote PATH already resolv
   roots.push(home);
   fakeOcx(join(home, "first"), "first");
   fakeOcx(join(home, ".bun", "bin"), "bun");
-  const result = Bun.spawnSync(["/bin/sh", "-c", quoteRemote(remoteOcxArgv(["--version"]))], { env: { HOME: home, PATH: `${home}/first:/usr/bin:/bin` } });
+  const result = Bun.spawnSync(["/bin/sh", "-c", fixtureRemoteCommand(home, ["--version"])], { env: { HOME: home, PATH: `${home}/first:${shOnlyRemotePath(home)}` } });
   expect(result.exitCode).toBe(0);
   expect(result.stdout.toString().split("\n")[0]).toBe("first");
 });
@@ -212,7 +219,7 @@ test.skipIf(process.platform === "win32")("the constructed remote command preser
   mkdirSync(bin, { recursive: true });
   writeFileSync(join(bin, "ocx"), "#!/bin/sh\nprintf '%s\\0' \"$@\"\n", { mode: 0o755 });
   const args = ["it's x", "two\nlines", "火🔥", "x;$(echo no)", ""];
-  const remote = quoteRemote(remoteOcxArgv(args));
+  const remote = fixtureRemoteCommand(home, args);
   const result = Bun.spawnSync(["/bin/sh", "-c", remote], { env: { HOME: home, PATH: shOnlyRemotePath(home) } });
   expect(result.exitCode).toBe(0);
   expect(result.stdout).toEqual(new TextEncoder().encode(args.join("\0") + "\0"));
