@@ -55,8 +55,13 @@ local removal releases the mutation lock; concurrent removals cannot overwrite o
 pinned keys. Preparation/SSH failure retains the local-removal receipt and explicit remote cleanup
 guidance. Scratch removal runs in `finally`, best-effort, without undoing local revocation.
 
-`src/messaging/remote-enrollment-recovery.ts` projects pending alias, transaction and stale
-generation only. `hosts abandon --transaction` removes exactly the inspected journal under
+`src/messaging/remote-enrollment-recovery.ts` shares its strict local-journal parser with
+enrollment retries. Malformed JSON, outer/nested schemas or invalid field values return
+`invalid_enrollment_journal` with authored operator-recovery guidance; original bytes remain
+untouched and no enrollment control exchange occurs (the preliminary host-key probe may run).
+Safe reads and mutation locking remain outside that interpretation catch, preserving their
+storage/busy errors. Recovery projects pending alias, transaction and stale generation only.
+`hosts abandon --transaction` removes exactly the inspected journal under
 the mutation lock, including while disabled; a different or missing transaction refuses.
 It does not remove enrolled peers, retry enrollment or claim remote cleanup. Old completions
 cannot publish from an abandoned journal or remove a replacement journal. Stale journals are

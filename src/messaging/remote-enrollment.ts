@@ -7,6 +7,7 @@ import { MessageBudget } from "./budget";
 import { capability, exactRecord, RemoteCapacity, REMOTE_PROTOCOL, remoteError, validAlias,
   validCapability, validMachine, validPort, REMOTE_LIMITS, type RemoteState } from "./remote-contract";
 import { readRemoteFile, removeRemoteFile, withRemoteLock, writeRemoteFile } from "./remote-files";
+import { parseEnrollmentJournal } from "./remote-enrollment-recovery";
 import { runRemoteHelper } from "./remote-process";
 import { RemoteMessageStore } from "./remote-store";
 import { isThreadId } from "./types";
@@ -90,7 +91,7 @@ export async function enrollRemoteHost(store: RemoteMessageStore, alias: string,
   const pending = withRemoteLock(store.directory, () => {
     const existing = readRemoteFile(pendingPath);
     if (existing !== null) {
-      const saved = exactRecord(JSON.parse(existing), ["alias", "ssh", "fingerprint", "generation", "request"]);
+      const saved = parseEnrollmentJournal(existing);
       if (saved.alias !== alias || saved.ssh !== ssh || saved.fingerprint !== fingerprint) throw remoteError("enrollment_pending", "Reconcile the existing messaging enrollment before starting another.");
       return saved;
     }
@@ -102,8 +103,7 @@ export async function enrollRemoteHost(store: RemoteMessageStore, alias: string,
       params: { machine: state.machine, transaction: crypto.randomUUID(), returnCapability: capability(), port: state.port } } };
     budget.throwIfEnded(); writeRemoteFile(pendingPath, JSON.stringify(saved)); return saved;
   });
-  const request = exactRecord(pending.request, ["protocol", "action", "params"]);
-  const params = exactRecord(request.params, ["machine", "transaction", "returnCapability", "port"]);
+  const request = pending.request, params = request.params;
   if (pending.generation !== state.generation || request.protocol !== REMOTE_PROTOCOL || request.action !== "enroll" || !validMachine(params.machine)
     || params.machine.id !== state.machine.id || !isThreadId(params.transaction) || !validCapability(params.returnCapability)
     || params.port !== state.port) throw remoteError("enrollment_pending", "Pending enrollment no longer matches this node; reconcile it explicitly.");

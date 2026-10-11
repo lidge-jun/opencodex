@@ -170,7 +170,13 @@ transaction: repeat the exact same add command to reconcile, rather than enrolli
 under another name within the same enabled generation. Disable/re-enable or port
 changes invalidate that recovery generation. Completed or revoked transactions cannot
 restore a removed peer or erase another enrollment's recovery record.
-If reconciliation is no longer possible, inspect `ocx message hosts list --json` or
+If the saved local journal has malformed JSON, record shapes or field values,
+`hosts add`, `hosts list`, `status` and `hosts abandon` refuse with
+`invalid_enrollment_journal`. Its bytes are preserved for explicit operator recovery;
+OpenCodex does not repair, replace or delete it automatically. `hosts add` sends no
+enrollment control request in this case, although its preliminary host-key probe may run.
+Unsafe storage or a busy mutation lock retains its separate error classification.
+If a valid journal can no longer be reconciled, inspect `ocx message hosts list --json` or
 `ocx message status --json` for `pendingEnrollment` (alias, transaction UUID and whether
 its generation is stale), then explicitly abandon that exact local journal:
 

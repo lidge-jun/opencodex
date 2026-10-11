@@ -8,7 +8,89 @@ import { join } from "node:path";
 import { abandonRemoteEnrollment, pendingRemoteEnrollment } from "../../src/messaging/remote-enrollment-recovery";
 import { parseRemoteMessageArgs } from "../../src/cli/message-remote-args";
 import { repoPath } from "../helpers/repo-root";
-import { readdirSync } from "node:fs";
+import { chmodSync, mkdirSync, readdirSync, rmdirSync } from "node:fs";
+
+function enrollmentJournal(pair: ReturnType<typeof remoteMessagingPair>) {
+  const state = pair.aStore.requireEnabled();
+  return { alias: "worker", ssh: "fixture", fingerprint: "SHA256:fixture", generation: state.generation,
+    request: { protocol: REMOTE_PROTOCOL, action: "enroll", params: { machine: state.machine,
+      transaction: crypto.randomUUID(), returnCapability: capability(), port: state.port } } };
+}
+
+const malformedJournals = {
+  truncated: () => '{"private-diagnostic":',
+  outer: () => JSON.stringify({ "private-diagnostic": "not a journal" }),
+  request: (saved: ReturnType<typeof enrollmentJournal>) => JSON.stringify({ ...saved, request: null }),
+  params: (saved: ReturnType<typeof enrollmentJournal>) => JSON.stringify({ ...saved, request: { ...saved.request, params: null } }),
+  capability: (saved: ReturnType<typeof enrollmentJournal>) => JSON.stringify({ ...saved,
+    request: { ...saved.request, params: { ...saved.request.params, returnCapability: "private-diagnostic" } } }),
+};
+const journalFailure = { code: "invalid_enrollment_journal",
+  message: "Pending enrollment cannot be safely interpreted; explicit operator recovery is required." };
+
+for (const [kind, malformed] of Object.entries(malformedJournals)) {
+  test.skipIf(process.platform === "win32")(`malformed ${kind} journal refuses enrollment without changing evidence or exchanging control`, async () => {
+    const pair = remoteMessagingPair(), budget = new MessageBudget(), capacity = new RemoteCapacity(), ssh = fakeSsh(pair);
+    const path = join(pair.aStore.directory, "enrollment.json"), bytes = `\n${malformed(enrollmentJournal(pair))}\n`;
+    const before = pair.aStore.read(), remoteBefore = pair.bStore.read();
+    writeRemoteFile(path, bytes);
+    try {
+      await expect(enrollRemoteHost(pair.aStore, "worker", "fixture", "SHA256:fixture", budget, capacity, ssh.runner))
+        .rejects.toMatchObject(journalFailure);
+      expect(() => pendingRemoteEnrollment(pair.aStore)).toThrow(journalFailure.message);
+      expect(readRemoteFile(path)).toBe(bytes); expect(pair.aStore.read()).toEqual(before);
+      expect(pair.bStore.read()).toEqual(remoteBefore); expect(ssh.controls).toBe(0); expect(ssh.requests).toEqual([]);
+      expect(readRemoteFile(join(pair.aStore.directory, "enrollment_known_hosts"))).toBeNull();
+    } finally { budget.dispose(); await pair.close(); }
+  });
+
+  test.skipIf(process.platform === "win32")(`CLI malformed ${kind} journal emits only the authored local error`, async () => {
+    const pair = remoteMessagingPair(), saved = enrollmentJournal(pair);
+    const path = join(pair.aStore.directory, "enrollment.json"), bytes = `\n${malformed(saved)}\n`, before = pair.aStore.read();
+    writeRemoteFile(path, bytes);
+    const source = `import { mock } from "bun:test";
+      const fs = await import("node:fs");
+      const helpers = { ...await import(${JSON.stringify(repoPath("src", "messaging", "remote-process.ts"))}) };
+      let controls = 0;
+      mock.module(${JSON.stringify(repoPath("src", "messaging", "remote-process.ts"))}, () => ({ ...helpers,
+        async runRemoteHelper(argv, _budget, _capacity, stdin) {
+          if (stdin !== undefined) { controls++; throw new Error("unexpected enrollment control exchange"); }
+          if (argv[0] === "ssh-keygen") return "256 SHA256:fixture fake (ED25519)\\n";
+          if (argv.at(-1) !== "true") throw new Error("unexpected fixture SSH command");
+          const path = argv.find(arg => arg.startsWith("UserKnownHostsFile=")).slice(19);
+          fs.writeFileSync(path, "fixture ssh-ed25519 Zml4dHVyZQ==\\n", { mode: 0o600 }); return "";
+        } }));
+      const { runMessageCommand } = await import(${JSON.stringify(repoPath("src", "cli", "message-command.ts"))});
+      process.exitCode = await runMessageCommand(["hosts", "add", "worker", "--ssh", "fixture", "--fingerprint", "SHA256:fixture", "--json"]);
+      if (controls) throw new Error("malformed journal sent an enrollment control request");`;
+    try {
+      const child = Bun.spawn([process.execPath, "-e", source], { env: { ...process.env, OPENCODEX_HOME: join(pair.a.root, "ocx") },
+        stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+      const [code, out, err] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+      expect(code).toBe(1); expect(err).toBe("");
+      expect(JSON.parse(out)).toEqual({ schema: "ocx-message-error/1", error: journalFailure });
+      for (const privateText of ["private-diagnostic", saved.request.params.returnCapability, path]) expect(out).not.toContain(privateText);
+      expect(readRemoteFile(path)).toBe(bytes); expect(pair.aStore.read()).toEqual(before);
+    } finally { await pair.close(); }
+  });
+}
+
+for (const failure of ["unsafe-file", "busy-lock"] as const) {
+  test.skipIf(process.platform === "win32")(`journal interpretation does not relabel ${failure}`, async () => {
+    const pair = remoteMessagingPair(), budget = new MessageBudget(), capacity = new RemoteCapacity(), ssh = fakeSsh(pair);
+    const path = join(pair.aStore.directory, "enrollment.json"), lock = join(pair.aStore.directory, "mutation.lock");
+    writeRemoteFile(path, "{");
+    if (failure === "unsafe-file") chmodSync(path, 0o644); else mkdirSync(lock, { mode: 0o700 });
+    try {
+      await expect(enrollRemoteHost(pair.aStore, "worker", "fixture", "SHA256:fixture", budget, capacity, ssh.runner))
+        .rejects.toMatchObject({ code: failure === "unsafe-file" ? "unsafe_remote_storage" : "remote_state_busy" });
+      expect(ssh.controls).toBe(0);
+    } finally {
+      if (failure === "unsafe-file") chmodSync(path, 0o600); else rmdirSync(lock);
+      expect(readRemoteFile(path)).toBe("{"); budget.dispose(); await pair.close();
+    }
+  });
+}
 
 test.skipIf(process.platform === "win32")("concurrent revocations retain their own pinned keys and clean scratch files", async () => {
   const pair = remoteMessagingPair(), budget = new MessageBudget(), capacity = new RemoteCapacity();

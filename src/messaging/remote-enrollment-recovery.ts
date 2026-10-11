@@ -1,14 +1,18 @@
 import { join } from "node:path";
 import { isSshAlias } from "../link/ssh-argv";
-import { exactRecord, remoteError, REMOTE_PROTOCOL, validAlias, validCapability, validMachine, validPort } from "./remote-contract";
+import { exactRecord, remoteError, REMOTE_PROTOCOL, validAlias, validCapability, validMachine, validPort, type MessageMachine } from "./remote-contract";
 import { readRemoteFile, removeRemoteFile, withRemoteLock } from "./remote-files";
 import type { RemoteMessageStore } from "./remote-store";
 import { isThreadId } from "./types";
 
-/** Validate a recovery journal before exposing metadata or authorizing its exact removal. */
-function readPending(store: RemoteMessageStore) {
-  const text = readRemoteFile(join(store.directory, "enrollment.json"));
-  if (text === null) return null;
+interface EnrollmentJournal {
+  alias: string; ssh: string; fingerprint: string; generation: string;
+  request: { protocol: typeof REMOTE_PROTOCOL; action: "enroll";
+    params: { machine: MessageMachine; transaction: string; returnCapability: string; port: number } };
+}
+
+/** Interpret only safely read local journal text; storage/lock failures keep their own classification. */
+export function parseEnrollmentJournal(text: string): EnrollmentJournal {
   try {
     const saved = exactRecord(JSON.parse(text), ["alias", "ssh", "fingerprint", "generation", "request"]);
     const request = exactRecord(saved.request, ["protocol", "action", "params"]);
@@ -18,8 +22,18 @@ function readPending(store: RemoteMessageStore) {
       || !isThreadId(saved.generation) || request.protocol !== REMOTE_PROTOCOL || request.action !== "enroll"
       || !validMachine(params.machine) || !isThreadId(params.transaction) || !validCapability(params.returnCapability)
       || !validPort(params.port)) throw new Error();
-    return { alias: saved.alias, generation: saved.generation, transaction: params.transaction, machineId: params.machine.id };
+    // Preserve the parsed record's property order for exact saved-transaction ownership checks.
+    return saved as unknown as EnrollmentJournal;
   } catch { throw remoteError("invalid_enrollment_journal", "Pending enrollment cannot be safely interpreted; explicit operator recovery is required."); }
+}
+
+/** Validate a recovery journal before exposing metadata or authorizing its exact removal. */
+function readPending(store: RemoteMessageStore) {
+  const text = readRemoteFile(join(store.directory, "enrollment.json"));
+  if (text === null) return null;
+  const saved = parseEnrollmentJournal(text);
+  return { alias: saved.alias, generation: saved.generation,
+    transaction: saved.request.params.transaction, machineId: saved.request.params.machine.id };
 }
 
 /** Read only bounded non-secret recovery metadata; absent storage remains absent. */
