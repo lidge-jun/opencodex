@@ -319,9 +319,12 @@ export function setAccountQuotaFromParsed(
       credentialGeneration: historyEvidence.writer.credentialGeneration, windows: historyWindows(historyEvidence.raw),
     }, updatedAt);
   }
-  // Legacy rotation keeps its existing carry behavior, but never inherits policy-only
+  // Rotation shares validated main-window retirement, but never inherits policy-only
   // evidence that outlived its disk TTL. Policy has a separate, identity-checked base.
-  const next = mergeAccountQuota(quota, legacyExisting, updatedAt);
+  const displayQuota: MainPolicyQuotaObservation = isMain && mainWriter && policyQuota?.shortWindowAbsent === true
+    ? { ...quota, shortWindowAbsent: true }
+    : quota;
+  const next = mergeAccountQuota(displayQuota, legacyExisting, updatedAt);
   accountQuota.set(accountId, next);
   if (isMain) {
     if (mainWriter && policyQuota && snapshotHasUsage(policyQuota)) {
@@ -440,7 +443,7 @@ function mergeAccountQuota(
     }
     if (quota.shortResetAt !== undefined) next.shortResetAt = quota.shortResetAt;
     if (quota.shortWindowSeconds !== undefined) next.shortWindowSeconds = quota.shortWindowSeconds;
-  } else if (!policyEvidence || quota.shortWindowAbsent !== true) {
+  } else if (quota.shortWindowAbsent !== true) {
     // Unknown usage is not a lower reading. Retain the entire known tuple: pairing
     // its percentage with new metadata would silently extend or shorten its reset.
     // An elapsed reset is the exception. It describes a window that has already rolled over,
@@ -879,14 +882,17 @@ function filterMainPolicyMonthlyQuota(
 /**
  * Parse ordinary main-policy usage, rejecting messages with invalid numeric window percentages.
  * A measured long primary, or explicitly absent primary with measured weekly secondary,
- * proves replacement only with complete long/null topology. Null supplies no usable evidence.
+ * proves replacement with long/null topology; an allowed two-window response may omit tertiary.
+ * Null supplies no usable evidence.
  */
 export function parseMainPolicyUsageQuota(data: WhamUsageResponse): MainPolicyQuotaObservation | null {
   const windows = [data.rate_limit?.primary_window, data.rate_limit?.secondary_window, data.rate_limit?.tertiary_window];
   if (windows.some(window => isInvalidPolicyUsagePercent(window?.used_percent))) return null;
   const quota = filterMainPolicyMonthlyQuota(parseUsageQuota(data), isThirtyDayOnlyCodexPlan(data.plan_type));
   const [primary, secondary, tertiary] = windows;
-  // WHAM explicitly reports absent windows as null; omissions cannot prove replacement.
+  // Primary and secondary must explicitly report their topology. WHAM also sends
+  // two-window responses without tertiary; an explicit allowed verdict disambiguates those
+  // from partial observations. A present tertiary still requires measured long/null evidence.
   // Policy trusts one complete snapshot only when every non-null window is >=24h AND
   // carries a valid usage reading: a long window without used_percent leaves that
   // window's usage unknown, and unknown usage must never release a block.
@@ -894,7 +900,8 @@ export function parseMainPolicyUsageQuota(data: WhamUsageResponse): MainPolicyQu
   if (quota && (isMeasuredLongWindow(primary)
       || (primary === null && isMeasuredLongWindow(secondary) && quota.weeklyPercent !== undefined))
     && (secondary === null || isMeasuredLongWindow(secondary))
-    && (tertiary === null || isMeasuredLongWindow(tertiary))) {
+    && (tertiary === null || isMeasuredLongWindow(tertiary)
+      || (tertiary === undefined && data.rate_limit?.allowed === true))) {
     return { ...quota, shortWindowAbsent: true };
   }
   return quota;

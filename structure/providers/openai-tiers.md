@@ -414,18 +414,22 @@ hard-lock tests registered in `scripts/test-layout/layout.json`, including
 
 A single fresh valid WHAM response with a measured long primary, or an explicitly null primary and
 measured secondary that supplies parsed weekly usage, can replace an obsolete short-window tuple.
-Secondary and tertiary must each be explicitly null or explicitly long with a valid usage reading.
+Secondary must be explicitly null or explicitly long with a valid usage reading. Tertiary follows
+the same rule when present; a two-window response may omit it only with `rate_limit.allowed === true`.
 Long means **at least 24 hours**, matching the parser's short/long discriminator; a one-day primary
 qualifies, not only a seven-day or monthly window. The policy trusts that one reported topology;
 it does not require repeated observations or independently confirm upstream window completeness.
-Any omitted window field, an unreadable long window, an unknown duration, partial headers, or invalid usage
+An omitted primary/secondary, omitted tertiary without that verdict, unreadable long window, unknown duration, partial headers, or invalid usage
 cannot prove that the short window disappeared. All-null credits-only and tertiary-only Go/Free responses remain insufficient. Replacement proof belongs only to that observation and is never persisted;
 the resulting weekly/monthly window still blocks at its long threshold (98% by default). This prevents old short-window exhaustion
-from surviving indefinitely on a now weekly/monthly account. Coverage lives in
+from surviving indefinitely on a now weekly/monthly account. A live main writer applies that same
+retirement proof to the display/rotation cache, so account selection cannot keep refusing the
+recovered main account on its old short tuple. Coverage lives in
 `tests/codex-integration/main-quota-evidence-validation.test.ts`,
 `tests/codex-integration/main-account-hard-lock-retirement.test.ts`,
 `tests/codex-integration/main-quota-provenance.test.ts`, and
-`tests/codex-integration/main-account-hard-lock-recovery.test.ts`.
+`tests/codex-integration/main-account-hard-lock-recovery.test.ts`; request admission without credit
+consent is covered by `tests/codex-integration/main-account-credit-renewal.test.ts`.
 
 The policy reads a separately retained identity-tagged quota snapshot, so the legacy rotation
 cache's six-hour expiry does not silently release a known block. A confirmed account transition

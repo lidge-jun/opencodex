@@ -9,10 +9,10 @@ in [GUI and management API](gui-and-management-api.md).
 The dashboard is a local control surface, not a separate service. It should reflect the same config
 and catalog invariants documented in this folder rather than inventing parallel state.
 
-Codex quota cards consume the display cache from `src/codex/quota.ts`. A partial refresh
-removes an omitted short tuple whose reset deadline has elapsed, so a stale model-derived
-5h row does not persist on a weekly-only account. This is independent of the main-account
-blocking hard-lock evidence and reset-notification history; their retention rules are documented in
+Codex quota cards consume the display cache from `src/codex/quota.ts`. Partial refreshes remove
+omitted short tuples after their reset deadline; validated main-window absence also removes
+future-reset short tuples. Main-account hard-lock evidence and reset-notification history follow
+separate retention rules in
 [OpenAI account modes](providers/openai-tiers.md#quota-cache-and-short-window-history).
 Codex account panels expose no Spark quota toggle or setting and retain quota refresh, pause/resume, selection order, reset-credit confirmation and Advanced settings; account/provider quota DTOs suppress retired windows upstream of the generic quota renderer, under [OpenAI quota scopes](providers/openai-tiers.md#public-provider-contract).
 

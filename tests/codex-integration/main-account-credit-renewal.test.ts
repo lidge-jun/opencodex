@@ -9,7 +9,7 @@ import { MAIN_CODEX_ACCOUNT_ID as MAIN } from "../../src/codex/account-id";
 import { reconcileMainCodexAccountRuntimeState, resetMainCodexAccountIdentityTrackingForTests } from "../../src/codex/account-lifecycle";
 import { clearAccountNeedsReauth, isAccountNeedsReauth, markAccountNeedsReauth } from "../../src/codex/account-runtime-state";
 import { captureMainQuotaWriter, clearMainAccountInfoCache, getMainAccountInfoCache, isMainAccountIdentityGenerationLive, observeMainQuotaCredential, setMainAccountInfoCache } from "../../src/codex/main-account-cache";
-import { clearAccountQuota, getMainPolicyQuota, setAccountQuotaFromParsed } from "../../src/codex/quota";
+import { clearAccountQuota, getAccountQuota, getMainPolicyQuota, setAccountQuotaFromParsed } from "../../src/codex/quota";
 import { hasSpendableCodexCredits, type CodexSpendableCredits } from "../../src/codex/quota-types";
 import { resetQuotaQueryBackoffForTests } from "../../src/codex/quota-query-backoff";
 import { clearCodexUpstreamHealth } from "../../src/codex/routing";
@@ -156,6 +156,35 @@ test("without renewal, five-minute credit expiry produces a local 429", async ()
   await refused();
   expect(calls).toEqual([]);
 });
+
+test.each([[false, false], [true, false], [false, true], [true, true]] as const)(
+  "plan upgrade retires an exhausted short window without credit consent (hard lock=%j, tertiary null=%j)",
+  async (hardLock, tertiaryNull) => {
+    cfg.codexMainAccountHardLock = hardLock;
+    cfg.creditCodexAccountIds = [];
+    clearAccountQuota(MAIN);
+    setAccountQuotaFromParsed(MAIN, { shortPercent: 100, shortWindowSeconds: 18_000,
+      shortResetAt: Math.floor((now + HOUR) / 1000), weeklyPercent: 20 }, undefined,
+      captureMainQuotaWriter(accountId));
+    fetchWith(async () => Response.json({ plan_type: "prolite", rate_limit: {
+      allowed: true,
+      primary_window: { used_percent: 3, limit_window_seconds: 604_800,
+        reset_at: Math.floor((now + 7 * 24 * HOUR) / 1000) },
+      secondary_window: null,
+      ...(tertiaryNull ? { tertiary_window: null } : {}),
+    }, credits: { has_credits: false, unlimited: false, balance: "0" } }));
+    const result = await fetchMainAccountInfoAttempt(true, 0);
+    expect(result.info.plan).toBe("prolite");
+    expect(result.info.quota?.weeklyPercent).toBe(3);
+    expect(getMainPolicyQuota()?.shortPercent).toBeUndefined();
+    await expect(resolveCodexAuthContext(new Headers(), cfg, "pool")).resolves.toMatchObject({ kind: "main-pool" });
+    for (const field of ["shortPercent", "shortObservedAt", "shortResetAt", "shortWindowSeconds"] as const) {
+      expect(getMainPolicyQuota()?.[field]).toBeUndefined();
+      expect(getAccountQuota(MAIN)?.[field]).toBeUndefined();
+    }
+    expect(calls).toEqual([whamUrl]);
+  },
+);
 
 test.each([false, true])("hidden-dashboard sweep renews at three minutes and admits past original expiry (unlimited=%j)", async unlimited => {
   const original = now;

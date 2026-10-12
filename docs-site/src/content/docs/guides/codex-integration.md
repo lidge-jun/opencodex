@@ -1056,6 +1056,15 @@ For an opted-in, unpaused main account with a full usage window, the background 
 
 Background revalidation is separate and off by default. It requires Token Guardian, the `openai` provider's `proactive` refresh policy, and `tokenGuardian.codexWarmupEnabled`. It skips accounts awaiting deferred registration validation.
 
+### After a ChatGPT plan upgrade
+
+Refresh the main account's quota in Codex Auth after changing your ChatGPT plan. When the
+authenticated usage response confirms a long window has replaced the five-hour window,
+opencodex removes the old five-hour reading from both request admission and account selection.
+An allowed response with primary and secondary windows can omit the optional tertiary window.
+This recovery uses your included plan allowance and does not require enabling **Use credits**.
+Partial or invalid usage data retains the previous block until recovery is confirmed.
+
 ### Cancelling main-account device reauthentication
 
 When cancelling main-account device reauthentication, a temporary DELETE or network failure, or a response with an unknown or nonterminal status, keeps the active flow and the cancellation-failure indication so cancellation can be retried. Status polling normally continues so a login that completes can still be detected. If a retryable cancellation failure overlaps a non-2xx GET status response while the flow is `pending` or `committing`, either response order preserves cancellation retry on that same flow, with its last server-provided device code, verification URL, and phase. The GET HTTP failure still stops polling, but cancellation can be retried without starting a second login POST. A terminal `failed` response releases the flow and displays the normalized failure reason; only `succeeded` reports login success. A confirmed `cancelled` response releases the flow so a new device login can be started. A definitive HTTP 404 response with code `unknown_flow` also releases the expired flow ID so a new device login can be started, but does not report a successful login or confirmed cancellation. Late POST, GET, or DELETE responses from an earlier flow cannot change the new flow or report login success for it.
