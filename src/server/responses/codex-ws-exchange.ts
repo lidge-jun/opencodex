@@ -11,7 +11,8 @@ import type { CodexWsSession } from "./codex-ws-session";
 import { UPGRADE_DEADLINE_MS, CODEX_WS_LIVENESS_PING_INTERVAL_MS, CODEX_WS_RESPONSE_PRELUDE_TIMEOUT_MS, MAX_CODEX_WS_FRAME_BYTES,
   MAX_CODEX_WS_QUEUE_BYTES, markCodexWsResponse, markCodexWsPreludeProjection, normalizeResponsesWsRelayEvent, closedBeforeTerminalMessage,
   codexWsCreateFrameExceedsLimit, codexWsFailureDetail, codexWsPreResponseFailure, markCodexWsStage, codexWsOcxVersion,
-  markCodexWsSocketDeath, type CodexWsFailureStage, type CodexWsStageRecord } from "./codex-ws-wire";
+  markCodexWsSocketDeath, codexWsWrapperStatus, isCodexWsTerminalEvent, type CodexWsFailureStage, type CodexWsStageRecord,
+  type CodexWsTerminalEvent } from "./codex-ws-wire";
 
 interface ExchangeOptions {
   nativeControl?: NativeResponseControl;
@@ -120,6 +121,9 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
     // Numeric close code for the durable stage record; the reason string stays
     // out of it on purpose (#4191 content-free contract).
     let closeCode: number | null = null;
+    // #6740: which terminal frame the upstream itself sent, before any synthetic tail.
+    let terminalEvent: CodexWsTerminalEvent | null = null;
+    let terminalErrorStatus: number | null = null;
     let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
     const encoder = new TextEncoder();
     const metadata = url === CODEX_RESPONSES_HTTP_URL ? new CodexWsMetadata(onQuota) : null;
@@ -200,6 +204,8 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
       reused: session.reused,
       ocxVersion: codexWsOcxVersion(),
       bunVersion: bunVersion ?? "unknown",
+      terminalEvent,
+      terminalErrorStatus,
     });
 
     const commitResponse = () => {
@@ -521,6 +527,12 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
           }
         }
         commitResponse();
+        // Record the terminal the upstream sent as soon as it is accepted, before the relay-size and
+        // queue checks below: a body failure that follows is still an exchange that received it.
+        if (!nativeControl && isCodexWsTerminalEvent(type)) {
+          terminalEvent = type;
+          terminalErrorStatus = type === "error" ? (codexWsWrapperStatus(normalized.payload) ?? null) : null;
+        }
       }
       const prefix = encoder.encode(`event: ${type}\ndata: `);
       const suffix = encoder.encode("\n\n");

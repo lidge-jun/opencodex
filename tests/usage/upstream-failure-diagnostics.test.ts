@@ -146,6 +146,67 @@ test("final request rows expose original upstream error type, code, request id a
   expect(rows[0]!.upstreamRequestId).toBe("req_diagnostic_fixture");
 });
 
+// #6740: the Codex WebSocket wraps a backend failure as {type:"error", status|status_code, error}.
+// The native client maps that status; the canonical log path used to drop it and write 502.
+const wrappedError = (fields: Record<string, unknown>, error: Record<string, unknown> = {
+  type: "server_error", code: "server_error", message: "An error occurred while processing your request.",
+}) => JSON.stringify({ type: "error", ...fields, error });
+
+test.each([
+  [{ status: 503 }, 503],
+  [{ status_code: 503 }, 503],
+  [{ status: 500 }, 500],
+  [{ status_code: 504 }, 504],
+])("a bare error keeps the server status its WebSocket wrapper states (%o)", (fields, status) => {
+  const log = context();
+  inspectResponseLogJson(log, wrappedError(fields));
+  expect(log.terminalHttpStatus).toBe(status);
+  // Provisional, like every bare-error status: a genuine terminal still replaces it.
+  inspectResponseLogJson(log, JSON.stringify({ type: "response.failed",
+    response: { error: { type: "upstream_error", code: "upstream_server_error", message: "later terminal" } } }));
+  expect(log.terminalHttpStatus).toBe(502);
+});
+
+test.each([
+  ["a client status", { status: 429 }],
+  ["a not-found status", { status_code: 404 }],
+  ["a numeric string", { status: "503" }],
+  ["a fractional number", { status: 503.5 }],
+  ["both aliases", { status: 503, status_code: 503 }],
+  ["an alias outside the wrapper contract", { http_status: 503 }],
+  ["no wrapper status", {}],
+] as const)("a bare error with %s records no wrapper status", (_label, fields) => {
+  const log = context();
+  inspectResponseLogJson(log, wrappedError(fields));
+  expect(log.terminalHttpStatus).toBeUndefined();
+});
+
+test("a nested error status is not the wrapper status", () => {
+  const log = context();
+  inspectResponseLogJson(log, wrappedError({}, { type: "server_error", code: "server_error", status: 503, message: "nested" }));
+  expect(log.terminalHttpStatus).toBeUndefined();
+});
+
+test("a recognized class outranks the wrapper status", () => {
+  const log = context();
+  inspectResponseLogJson(log, wrappedError({ status: 500 }, { type: "server_error", code: "server_is_overloaded", message: "busy" }));
+  expect(log.terminalHttpStatus).toBe(503);
+});
+
+test("a wrapped 503 reaches the final row as an upstream overload instead of a generic 502", () => {
+  const log = context();
+  inspectResponseLogJson(log, wrappedError({ status: 503 }));
+  const rows: RequestLogEntry[] = [];
+  addFinalRequestLog("wrapped-fixture", Date.now(), log, httpStatusForRequestLogTerminal("failed", log),
+    { terminalStatus: "failed", closeReason: "terminal" }, entry => rows.push(entry));
+  expect(rows[0]!.status).toBe(503);
+  expect(rows[0]!.errorCode).toBe("server_is_overloaded");
+  expect(rows[0]!.failureCause).toBe("upstream-declined");
+  expect(rows[0]!.upstreamErrorCode).toBe("server_error");
+  // Same transient class as the 502 it replaces: account health and rotation do not move.
+  expect(classifyCodexUpstreamOutcome(503)).toBe(classifyCodexUpstreamOutcome(502));
+});
+
 test("an explicit unknown code outranks a recognized class in a lower-priority envelope", () => {
   const log = context();
   inspectResponseLogJson(log, JSON.stringify({ type: "error",

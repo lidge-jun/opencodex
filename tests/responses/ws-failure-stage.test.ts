@@ -380,6 +380,8 @@ describe("codex ws stage record marker (#4191)", () => {
     reused: false,
     ocxVersion: "2.52.0",
     bunVersion: "1.4.0",
+    terminalEvent: null,
+    terminalErrorStatus: null,
   };
 
   test("mark/read round trip on the resolved Response", () => {
@@ -582,6 +584,45 @@ describe("native-control attach conflict", () => {
       expect(((await response.json()) as { error: { message: string } }).error.message).toContain("already owned");
       expect(ws.closed).toBe(true);
       expect([...ws.listeners.values()].every(listeners => listeners.length === 0)).toBe(true);
+    } finally { session.dispose(); }
+  });
+});
+
+describe("native-control exchanges leave the terminal kind unrecorded (#6740)", () => {
+  test("an acknowledgement-driven exchange records no terminal kind or wrapper status", async () => {
+    installFake(ws => {
+      const send = ws.send.bind(ws);
+      ws.send = (data: string) => {
+        send(data);
+        queueMicrotask(() => {
+          ws.emit("message", { data: JSON.stringify({ type: "response.created", response: { id: "resp_native" } }) });
+          ws.emit("message", { data: JSON.stringify({ type: "error", status: 503, error: { code: "server_error", message: "fixture" } }) });
+        });
+      };
+      ws.emit("open", {});
+    });
+    const init = streamingInit();
+    const prepared = prepareCodexWsRequest(CODEX_URL, init)!;
+    const session = new CodexWsSession("wss://chatgpt.com/backend-api/codex/responses", prepared.headers, true);
+    const nativeControl = {
+      kind: "injection" as const,
+      relayActive: false,
+      attached: true,
+      ended: false,
+      attach() { return () => {}; },
+      observe(payload: Record<string, unknown>) { return payload.type === "error"; },
+      steer() { throw new Error("unreachable"); },
+      continue() { return false; },
+    };
+    try {
+      expect(session.reserve()).toBe(true);
+      const response = await codexWsExchange({ session, url: CODEX_URL, init, prepared, nativeControl,
+        sseFallback: (async () => { throw new Error("no fallback"); }) as typeof fetch });
+      await response.text();
+      const stage = readCodexWsStage(response);
+      expect(stage?.relayedEvents).toBe(2);
+      expect(stage?.terminalEvent).toBeNull();
+      expect(stage?.terminalErrorStatus).toBeNull();
     } finally { session.dispose(); }
   });
 });

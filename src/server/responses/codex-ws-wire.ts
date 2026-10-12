@@ -107,7 +107,49 @@ export type CodexWsStageRecord = Omit<CodexWsFailureStage, "requestBytes"> & {
   ocxVersion: string;
   /** Bun runtime version the exchange gated on. */
   bunVersion: string;
+  /**
+   * Normalized type of the Responses terminal frame that ended a plain exchange, as the upstream
+   * sent it and before any tail this proxy synthesizes (#6740). It is what separates an upstream
+   * `error` frame from a genuine `response.failed` when both reach a row as the same synthetic 502.
+   * Null when no terminal frame arrived, and on native-control exchanges, which can end on an
+   * acknowledgement instead. Records written before it existed read as null.
+   */
+  terminalEvent: CodexWsTerminalEvent | null;
+  /** Wrapper status of a terminal `error` frame ({@link codexWsWrapperStatus}); null otherwise. */
+  terminalErrorStatus: number | null;
 };
+
+/** The frames a plain exchange ends on, closed so a stage record can never carry free text. */
+export const CODEX_WS_TERMINAL_EVENTS = [
+  "response.completed",
+  "response.failed",
+  "response.incomplete",
+  "error",
+] as const;
+export type CodexWsTerminalEvent = typeof CODEX_WS_TERMINAL_EVENTS[number];
+
+export function isCodexWsTerminalEvent(value: unknown): value is CodexWsTerminalEvent {
+  return typeof value === "string" && (CODEX_WS_TERMINAL_EVENTS as readonly string[]).includes(value);
+}
+
+/**
+ * The HTTP status a Codex WebSocket `error` frame states on its wrapper, or undefined.
+ *
+ * The backend wraps a failure as `{type:"error", status|status_code, error}` and the native client
+ * turns that status into an HTTP error of the same status
+ * (codex-rs/codex-api/src/endpoint/responses_websocket.rs map_wrapped_websocket_error_event). Only
+ * that contract is read: a top-level integer in 100..599 under exactly one of the two aliases, the
+ * same rule the pre-commit rejection projection applies.
+ */
+export function codexWsWrapperStatus(payload: Record<string, unknown>): number | undefined {
+  if (payload.type !== "error") return undefined;
+  const hasStatus = Object.hasOwn(payload, "status");
+  if (hasStatus === Object.hasOwn(payload, "status_code")) return undefined;
+  const status = hasStatus ? payload.status : payload.status_code;
+  return typeof status === "number" && Number.isInteger(status) && status >= 100 && status <= 599
+    ? status
+    : undefined;
+}
 
 const codexWsStageByResponse = new WeakMap<Response, CodexWsStageRecord>();
 

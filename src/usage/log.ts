@@ -23,7 +23,7 @@ import { normalizeRouteDecisionTrace, type RouteDecisionTraceV1 } from "../routi
 import { parseProtocolTraceV1, type ProtocolTraceV1 } from "../protocols/dto";
 import { ACCOUNT_LOG_LABEL_RE, CODEX_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
 import { claudeCompatibilityReason, normalizeClaudeFeatureCodes, type ClaudeFeatureCode } from "../claude/compatibility";
-import type { CodexWsStageRecord } from "../server/responses/codex-ws-wire";
+import type { CodexWsStageRecord, CodexWsTerminalEvent } from "../server/responses/codex-ws-wire";
 import {
   ATTEMPT_RECOVERY_KIND_ROSTER,
   ATTEMPT_RECOVERY_WITHHELD_ROSTER,
@@ -805,6 +805,15 @@ function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
  * injected free-form field — drops the whole record rather than passing
  * attacker text into the DTO.
  */
+// Total over the terminal union by `satisfies`; a type-only import keeps the WS transport out of
+// this module's runtime graph.
+const CODEX_WS_TERMINAL_EVENT_NAMES = {
+  "response.completed": true,
+  "response.failed": true,
+  "response.incomplete": true,
+  error: true,
+} as const satisfies Record<CodexWsTerminalEvent, true>;
+
 function normalizeCodexWsStageRecord(value: unknown): CodexWsStageRecord | undefined {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
   const stage = value as Record<string, unknown>;
@@ -839,6 +848,15 @@ function normalizeCodexWsStageRecord(value: unknown): CodexWsStageRecord | undef
     reused: stage.reused,
     ocxVersion: stage.ocxVersion,
     bunVersion: stage.bunVersion,
+    // #6740 fields are newer than the record: absent or malformed values read as unobserved
+    // rather than costing the row the rest of its stage evidence.
+    terminalEvent: typeof stage.terminalEvent === "string" && Object.hasOwn(CODEX_WS_TERMINAL_EVENT_NAMES, stage.terminalEvent)
+      ? stage.terminalEvent as CodexWsTerminalEvent
+      : null,
+    terminalErrorStatus: typeof stage.terminalErrorStatus === "number" && Number.isInteger(stage.terminalErrorStatus)
+      && stage.terminalErrorStatus >= 100 && stage.terminalErrorStatus <= 599
+      ? stage.terminalErrorStatus
+      : null,
   };
 }
 
