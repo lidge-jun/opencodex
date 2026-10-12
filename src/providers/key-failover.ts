@@ -33,9 +33,11 @@ const MAX_COOLDOWN_MS = 10 * 60_000; // cap at 10 min for api-key rotation
 /**
  * Anthropic credit-balance refusal (#6958). An empty prepaid balance is account state, not a
  * rate signal: it clears only when someone buys credits or auto-reload fires, so the
- * ten-minute credential cap would probe a dead key six times an hour. One hour bounds that
- * to a single refused, zero-output request per key per hour, and still notices a top-up
- * without a restart. The hold is in memory; key management through the dashboard clears it.
+ * ten-minute credential cap would hand a dead key back to rotation six times an hour. One hour
+ * keeps it out of replacement and proactive selection while a funded sibling exists, and still
+ * notices a top-up without a restart. When every key is held, requests keep using the active
+ * key and return Anthropic's original refusal. The hold is in memory; dashboard key management
+ * clears it.
  */
 export const ANTHROPIC_BILLING_COOLDOWN_MS = 60 * 60_000;
 
