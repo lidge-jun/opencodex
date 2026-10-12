@@ -10,7 +10,7 @@ import { codexAccountPinDrainReason, resetCodexRoutingForClearedSelection, reset
 import { jsonResponse } from "./http";
 
 class SelectionRejected extends Error {
-  constructor(message: string, readonly status: number) { super(message); }
+  constructor(message: string, readonly status: number, readonly code?: string) { super(message); }
 }
 
 function validateSelection(config: OcxConfig, accountId: string | null): void {
@@ -42,8 +42,14 @@ function applySelection(config: OcxConfig, accountId: string | null): boolean {
   return changed;
 }
 
+function validateExpectedPin(config: OcxConfig, expectedPinnedAccountId: string | undefined): void {
+  if (expectedPinnedAccountId !== undefined && config.activeCodexAccountPinned !== expectedPinnedAccountId) {
+    throw new SelectionRejected("The pin changed; reload accounts before releasing it", 409, "account_pin_changed");
+  }
+}
+
 /** A manual selection is an explicit command, even when equal to the live merge baseline. */
-export function persistCodexAccountSelection(config: OcxConfig, accountId: string | null): Response {
+export function persistCodexAccountSelection(config: OcxConfig, accountId: string | null, expectedPinnedAccountId?: string): Response {
   const unknown = () => jsonResponse({
     error: "Account selection could not be confirmed; reload settings before retrying",
     code: "account_selection_unavailable",
@@ -63,7 +69,9 @@ export function persistCodexAccountSelection(config: OcxConfig, accountId: strin
       const normalized = validateConfigCandidate(mergeConfigDefaults(config));
       if (!normalized.ok) return unknown();
       const initial = normalized.config;
-      applySelection(initial, accountId);
+      validateExpectedPin(initial, expectedPinnedAccountId);
+      // Conditional release must keep the baseline pin until the locked mutation checks it.
+      if (expectedPinnedAccountId === undefined) applySelection(initial, accountId);
       initializePersistedConfigIfMissing(initial);
     }
     const result = mutatePersistedConfig(persisted => {
@@ -71,12 +79,13 @@ export function persistCodexAccountSelection(config: OcxConfig, accountId: strin
       // A removed or paused account must not be resurrected by a stale UI snapshot.
       validateSelection(config, accountId);
       validateSelection(persisted, accountId);
+      validateExpectedPin(persisted, expectedPinnedAccountId);
       return { changed: applySelection(persisted, accountId), value: persisted };
     });
     if (result.status === "unavailable") return unknown();
     committed = result.value;
   } catch (error) {
-    if (error instanceof SelectionRejected) return jsonResponse({ error: error.message }, error.status);
+    if (error instanceof SelectionRejected) return jsonResponse({ error: error.message, ...(error.code ? { code: error.code } : {}) }, error.status);
     // Atomic publication may succeed before generation/bookkeeping fails. Confirm the exact
     // durable selection instead of rolling live state back behind an already published write.
     const snapshot = readConfigFileSnapshot();

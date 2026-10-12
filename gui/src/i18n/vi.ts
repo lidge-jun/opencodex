@@ -2447,6 +2447,8 @@ export const vi: Record<TKey, string> = {
   "codexAuth.unpinDesc": "Có hiệu lực ngay lập tức. Các luồng đã gắn với tài khoản và các request đang thực thi giữ nguyên tài khoản cũ; các request mới hoặc chưa gán sẽ tự động chọn tài khoản theo thứ tự lựa chọn và ngưỡng.",
   "codexAuth.unpinAction": "Bỏ ghim",
   "codexAuth.unpinned": "Đã bỏ ghim — quay lại chọn tự động",
+  "codexAuth.unpinFailed": "Không thể xác nhận việc bỏ ghim. Hãy làm mới các tài khoản và kiểm tra lựa chọn hiện tại trước khi thử lại.",
+  "codexAuth.unpinChanged": "Tài khoản được ghim đã thay đổi khi hộp xác nhận này đang mở. Hãy làm mới các tài khoản và kiểm tra lựa chọn hiện tại trước khi bỏ ghim.",
   "codexAuth.fiveHour": "5h",
   "codexAuth.weekly": "Tuần",
   "codexAuth.quotaAutoRefresh": "Tự động kích hoạt cửa sổ",

@@ -1881,6 +1881,8 @@ export const de: Record<TKey, string> = {
   "codexAuth.unpinDesc": "Wird sofort wirksam. Bereits an ein Konto gebundene Threads und laufende Anfragen behalten ihr Konto; neue oder ungebundene Anfragen wählen das Konto automatisch anhand von Auswahlreihenfolge und Schwellenwerten.",
   "codexAuth.unpinAction": "Fixierung lösen",
   "codexAuth.unpinned": "Fixierung gelöst — automatische Auswahl ist wieder aktiv",
+  "codexAuth.unpinFailed": "Das Aufheben der Fixierung konnte nicht bestätigt werden. Aktualisiere die Konten und prüfe die aktuelle Auswahl, bevor du es erneut versuchst.",
+  "codexAuth.unpinChanged": "Das fixierte Konto wurde geändert, während diese Bestätigung geöffnet war. Aktualisiere die Konten und prüfe die aktuelle Auswahl, bevor du eine Fixierung aufhebst.",
   "codexAuth.fiveHour": "5 Std.",
   "codexAuth.weekly": "Woche",
   "codexAuth.quotaAutoRefresh": "Automatische Fensteraktivierung",

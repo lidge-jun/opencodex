@@ -3245,6 +3245,8 @@ export const zhTW: Record<TKey, string> = {
   "codexAuth.unpinDesc": "立即生效。已繫結帳號的現有執行緒與進行中的請求保留原帳號；新或未繫結的請求會依選取順序與閾值規則自動挑選帳號。",
   "codexAuth.unpinAction": "解除固定",
   "codexAuth.unpinned": "已解除固定——回復自動選取",
+  "codexAuth.unpinFailed": "無法確認帳戶固定是否已解除。請重新整理帳戶並檢查目前選擇後再重試。",
+  "codexAuth.unpinChanged": "此確認視窗開啟期間，固定帳戶已變更。解除固定前請重新整理帳戶並檢查目前選擇。",
   "codexAuth.requestUserInput": "在 Default 模式中要求輸入",
   "codexAuth.requestUserInputDesc": "讓 Codex 暫停 Default 模式工作階段，並使用 request_user_input 工具向你提問。",
   "codexAuth.requestUserInputUpdated": "功能旗標已更新 - 適用於新工作階段。",

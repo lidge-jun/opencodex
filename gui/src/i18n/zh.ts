@@ -1898,6 +1898,8 @@ export const zh: Record<TKey, string> = {
   "codexAuth.unpinDesc": "立即生效。已绑定账号的现有线程和进行中的请求保留原账号；新的或未绑定的请求会按选择顺序与阈值规则自动挑选账号。",
   "codexAuth.unpinAction": "解除固定",
   "codexAuth.unpinned": "已解除固定——恢复自动选择",
+  "codexAuth.unpinFailed": "无法确认账户固定是否已解除。请刷新账户并检查当前选择后再重试。",
+  "codexAuth.unpinChanged": "此确认窗口打开期间，固定账户已更改。解除固定前请刷新账户并检查当前选择。",
   "codexAuth.fiveHour": "5 小时",
   "codexAuth.weekly": "每周",
   "codexAuth.quotaAutoRefresh": "自动激活额度窗口",

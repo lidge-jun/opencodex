@@ -1,7 +1,10 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { getConfigPath } from "../../src/config";
+import { setPersistedConfigMutationBeforeCommitForTests } from "../../src/config/persisted-mutation";
+import * as mutationLock from "../../src/config/mutation-lock";
 import { handleCodexAuthAPI } from "../../src/codex/auth-api";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import {
@@ -62,6 +65,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setPersistedConfigMutationBeforeCommitForTests(null);
   clearCodexUpstreamHealth();
   clearThreadAccountMap();
   clearPoolRotationState();
@@ -128,4 +132,98 @@ describe("PUT /api/codex-auth/active release", () => {
     // A bound thread keeps its captured account.
     expect(getThreadAffinity("release-thread")?.accountId).toBe("work");
   });
+});
+
+async function pin(config: OcxConfig, id: string): Promise<void> {
+  const request = put({ accountId: id });
+  expect((await handleCodexAuthAPI(request, new URL(request.url), config))!.status).toBe(200);
+}
+
+function guardedPool(): OcxConfig {
+  const config = makeConfig();
+  seedPoolAccount(config, { id: "work", email: "work@example.test" });
+  seedPoolAccount(config, { id: "pool-x", email: "x@example.test" });
+  return config;
+}
+
+test("release refuses a pin replaced after the confirmation was opened", async () => {
+  const config = guardedPool();
+  await pin(config, "work");
+  await pin(config, "pool-x");
+  const before = readFileSync(getConfigPath(), "utf8");
+  const request = put({ accountId: null, expectedPinnedAccountId: "work" });
+  const response = (await handleCodexAuthAPI(request, new URL(request.url), config))!;
+  expect(response.status).toBe(409);
+  expect(await response.json()).toMatchObject({ code: "account_pin_changed" });
+  expect(readFileSync(getConfigPath(), "utf8")).toBe(before);
+  expect(config.activeCodexAccountPinned).toBe("pool-x");
+});
+
+test("release rechecks the expected pin after a competing disk publication", async () => {
+  const config = guardedPool();
+  await pin(config, "work");
+  let competing = "";
+  setPersistedConfigMutationBeforeCommitForTests(() => {
+    const raw = JSON.parse(readFileSync(getConfigPath(), "utf8"));
+    competing = JSON.stringify({ ...raw, activeCodexAccountId: "pool-x", activeCodexAccountPinned: "pool-x" });
+    writeFileSync(getConfigPath(), competing);
+  });
+  const request = put({ accountId: null, expectedPinnedAccountId: "work" });
+  const response = (await handleCodexAuthAPI(request, new URL(request.url), config))!;
+  expect(response.status).toBe(409);
+  expect(await response.json()).toMatchObject({ code: "account_pin_changed" });
+  expect(readFileSync(getConfigPath(), "utf8")).toBe(competing);
+  expect(config.activeCodexAccountPinned).toBe("work");
+});
+
+test("an unconfirmed release may already be present in published bytes", async () => {
+  const config = guardedPool();
+  await pin(config, "work");
+  const path = getConfigPath();
+  const published = path + ".publication-fixture";
+  const fault = spyOn(mutationLock, "bumpGenerationForCooperatingConfigWrite").mockImplementation(() => {
+    renameSync(path, published);
+    mkdirSync(path);
+    throw new Error("Injected post-publication confirmation failure");
+  });
+  try {
+    const request = put({ accountId: null });
+    const response = (await handleCodexAuthAPI(request, new URL(request.url), config))!;
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: "account_selection_unavailable" });
+    expect(JSON.parse(readFileSync(published, "utf8")).activeCodexAccountPinned).toBeUndefined();
+    expect(config.activeCodexAccountPinned).toBe("work");
+  } finally { fault.mockRestore(); }
+});
+
+test.each(["work", MAIN_CODEX_ACCOUNT_ID])("guarded release accepts the matching %s pin", async id => {
+  const config = guardedPool();
+  writeFileSync(join(TEST_CODEX_HOME, "auth.json"), JSON.stringify({ tokens: { access_token: "fixture-native-access", account_id: "fixture-native" } }));
+  await pin(config, id);
+  const request = put({ accountId: null, expectedPinnedAccountId: id });
+  const response = (await handleCodexAuthAPI(request, new URL(request.url), config))!;
+  expect(response.status).toBe(200);
+  expect(config.activeCodexAccountPinned).toBeUndefined();
+  expect(JSON.parse(readFileSync(getConfigPath(), "utf8")).activeCodexAccountPinned).toBeUndefined();
+});
+
+test("transient guarded release checks its pin before initializing the baseline", async () => {
+  const config = guardedPool();
+  config.activeCodexAccountId = config.activeCodexAccountPinned = "work";
+  const request = put({ accountId: null, expectedPinnedAccountId: "work" });
+  expect((await handleCodexAuthAPI(request, new URL(request.url), config))!.status).toBe(200);
+  expect(config.activeCodexAccountPinned).toBeUndefined();
+});
+
+test.each([
+  { accountId: null, expectedPinnedAccountId: 42 },
+  { accountId: null, expectedPinnedAccountId: "../invalid" },
+  { accountId: "pool-x", expectedPinnedAccountId: "work" },
+])("release validates its optional precondition: %j", async body => {
+  const config = guardedPool();
+  await pin(config, "work");
+  const before = readFileSync(getConfigPath(), "utf8");
+  const request = put(body);
+  expect((await handleCodexAuthAPI(request, new URL(request.url), config))!.status).toBe(400);
+  expect(readFileSync(getConfigPath(), "utf8")).toBe(before);
 });

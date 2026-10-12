@@ -2314,6 +2314,8 @@ export const ja: Record<TKey, string> = {
   "codexAuth.unpinDesc": "すぐに反映されます。アカウントに紐付いた既存スレッドと処理中のリクエストは現在のアカウントを維持し、新規または未紐付けのリクエストは選択順序としきい値のルールに従って自動的にアカウントを選びます。",
   "codexAuth.unpinAction": "固定を解除",
   "codexAuth.unpinned": "固定を解除しました。自動選択に戻ります。",
+  "codexAuth.unpinFailed": "アカウントの固定解除を確認できませんでした。アカウントを更新して現在の選択を確認してから、再試行してください。",
+  "codexAuth.unpinChanged": "この確認画面を開いている間に固定アカウントが変更されました。アカウントを更新して現在の選択を確認してから、固定を解除してください。",
   "codexAuth.fiveHour": "5時間",
   "codexAuth.weekly": "週",
   "codexAuth.quotaAutoRefresh": "利用枠の自動開始",

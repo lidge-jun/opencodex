@@ -2492,6 +2492,8 @@ export const en = {
   "codexAuth.unpinDesc": "Takes effect immediately. Threads already bound to an account and requests in flight keep their captured account; new or unbound requests pick an account automatically from the selection order and thresholds.",
   "codexAuth.unpinAction": "Release pin",
   "codexAuth.unpinned": "Pin released — automatic selection is back on",
+  "codexAuth.unpinFailed": "Could not confirm the pin release. Refresh accounts and check the current selection before trying again.",
+  "codexAuth.unpinChanged": "The pin changed while this confirmation was open. Refresh accounts and review the current selection before releasing a pin.",
   "codexAuth.fiveHour": "5h",
   "codexAuth.weekly": "Week",
   "codexAuth.quotaAutoRefresh": "Automatic window activation",

@@ -256,10 +256,14 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   };
 
   const unpinAccount = async () => {
-    const result = await controller.switchAccount(null);
+    if (!unpinFor) return;
+    const result = await controller.switchAccount(null, { expectedPinnedAccountId: unpinFor.id });
     if (!result.ok) {
       if (result.reason === "busy") return;
-      showActionFeedback(t("codexAuth.switchFailed"), "err");
+      // The confirmation described an old pin, or the saved result is uncertain.
+      // A fresh attempt must start from the refreshed card and a new confirmation.
+      setUnpinFor(null);
+      showActionFeedback(t(result.reason === "pin_changed" ? "codexAuth.unpinChanged" : "codexAuth.unpinFailed"), "err");
       return;
     }
     setUnpinFor(null);

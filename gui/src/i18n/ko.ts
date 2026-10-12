@@ -1925,6 +1925,8 @@ export const ko: Record<TKey, string> = {
   "codexAuth.unpinDesc": "즉시 적용됩니다. 계정에 바인딩된 기존 스레드와 이미 진행 중인 요청은 기존 계정을 유지하고, 새 요청과 바인딩 없는 요청은 선택 순서·임계값 규칙에 따라 자동으로 계정을 고릅니다.",
   "codexAuth.unpinAction": "고정 해제",
   "codexAuth.unpinned": "고정을 해제했습니다. 자동 선택으로 돌아갑니다.",
+  "codexAuth.unpinFailed": "계정 고정 해제 결과를 확인하지 못했습니다. 계정을 새로고침하고 현재 선택을 확인한 뒤 다시 시도하세요.",
+  "codexAuth.unpinChanged": "확인 창이 열린 동안 고정된 계정이 변경되었습니다. 계정을 새로고침하고 현재 선택을 확인한 뒤 고정을 해제하세요.",
   "codexAuth.fiveHour": "5시간",
   "codexAuth.weekly": "주간",
   "codexAuth.quotaAutoRefresh": "할당량 창 자동 활성화",

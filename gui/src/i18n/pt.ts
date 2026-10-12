@@ -2466,6 +2466,8 @@ export const pt: Record<TKey, string> = {
   "codexAuth.unpinDesc": "Vale imediatamente. As threads com afinidade de conta e as requisições em andamento mantêm a conta capturada; as requisições novas ou sem vínculo escolhem automaticamente uma conta pela ordem de seleção e pelos limites.",
   "codexAuth.unpinAction": "Remover fixação",
   "codexAuth.unpinned": "Fixação removida — a seleção automática voltou",
+  "codexAuth.unpinFailed": "Não foi possível confirmar a liberação da fixação. Atualize as contas e verifique a seleção atual antes de tentar novamente.",
+  "codexAuth.unpinChanged": "A conta fixada mudou enquanto esta confirmação estava aberta. Atualize as contas e confira a seleção atual antes de liberar uma fixação.",
   "codexAuth.fiveHour": "5h",
   "codexAuth.weekly": "Semana",
   "codexAuth.quotaAutoRefresh": "Ativação automática da janela",

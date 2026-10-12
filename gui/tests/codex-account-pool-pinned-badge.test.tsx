@@ -898,11 +898,11 @@ test("confirming the release sends a null selection and reports the return to au
 });
 
 test("the app login's pin releases the same way", async () => {
-  const calls: Array<string | null> = [];
+  const calls: Array<[string | null, unknown]> = [];
   await mountPool(makeController({
     activeId: null,
     activePinnedId: "__main__",
-    switchAccount: async (id) => { calls.push(id); return { ok: true, activeId: null }; },
+    switchAccount: async (id, options) => { calls.push([id, options]); return { ok: true, activeId: null }; },
   }));
 
   const badge = pinnedBadge(cardFor("main@example.test"));
@@ -914,10 +914,73 @@ test("the app login's pin releases the same way", async () => {
   const confirmButton = [...host.querySelectorAll<HTMLButtonElement>("dialog .modal-actions button")]
     .find((b) => (b.textContent ?? "").includes(en["codexAuth.unpinAction"]));
   await act(async () => { confirmButton!.click(); });
-  expect(calls).toEqual([null]);
+  expect(calls).toEqual([[null, { expectedPinnedAccountId: "__main__" }]]);
 });
 
 test("an unpinned card offers no release affordance", async () => {
   await mountPool(makeController({ activeId: "pool-1", activePinnedId: null }));
   expect(pinnedBadge(host)).toBeNull();
+});
+
+let releaseHarnessId = 0;
+async function mountReleasePool() {
+  const apiBase = `/release-review-${++releaseHarnessId}`;
+  let pin: string | null = "pool-1";
+  let heldRead: ((response: Response) => void) | undefined;
+  let failureReads = 0;
+  let written: unknown;
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: async (url: string, init?: RequestInit) => {
+      const path = String(url).split("/api/")[1];
+      if (path === "codex-auth/active" && init?.method === "PUT") {
+        written = JSON.parse(String(init.body));
+        pin = null; // The release landed, but its response did not reach the client.
+        throw new Error("Injected lost release response");
+      }
+      if (path === "codex-auth/active") {
+        if (written) {
+          failureReads++;
+          return new Promise<Response>(resolve => { heldRead = resolve; });
+        }
+        return Response.json({ activeCodexAccountId: pin, pinnedAccountId: pin, autoSwitchThreshold: 80 });
+      }
+      if (path?.startsWith("codex-auth/accounts")) return Response.json({ accounts: [mainAccount, account] });
+      if (path?.startsWith("usage?")) return Response.json({ accounts: [] });
+      if (path === "settings") return Response.json({ showCodexSparkQuota: false, codexQuotaAutoRefresh: {} });
+      throw new Error(`Unexpected release fixture path: ${path}`);
+    },
+  });
+  function Pool() {
+    const live = useCodexAccountPool(apiBase);
+    return <CodexAccountPool apiBase={apiBase} controller={live} />;
+  }
+  const { createRoot } = await import("react-dom/client");
+  await act(async () => { root = createRoot(host); root.render(<LanguageProvider><Pool /></LanguageProvider>); });
+  return {
+    get written() { return written; },
+    get failureReads() { return failureReads; },
+    async finishRead() {
+      expect(heldRead).toBeDefined();
+      await act(async () => { heldRead!(Response.json({ activeCodexAccountId: null, pinnedAccountId: null, autoSwitchThreshold: 80 })); });
+    },
+  };
+}
+
+test("a lost release reply reloads active state before reporting an uncertain outcome", async () => {
+  const fixture = await mountReleasePool();
+  await act(async () => { pinnedBadge(cardFor("pool@example.test"))!.click(); });
+  const button = [...host.querySelectorAll<HTMLButtonElement>("dialog .modal-actions button")]
+    .find(b => b.textContent === en["codexAuth.unpinAction"])!;
+  await act(async () => { button.click(); await Promise.resolve(); });
+  expect({ activeReads: fixture.failureReads, manualSwitchFailureShown: host.textContent!.includes(en["codexAuth.switchFailed"]) }).toEqual({ activeReads: 1, manualSwitchFailureShown: false });
+  expect(fixture.written).toEqual({ accountId: null, expectedPinnedAccountId: "pool-1" });
+  expect(host.textContent).not.toContain(en["codexAuth.switchFailed"]);
+  expect(button.disabled).toBe(true);
+  await fixture.finishRead();
+  expect(pinnedBadge(host)).toBeNull();
+  expect(host.querySelector("dialog")).toBeNull();
+  expect(host.textContent).not.toContain(en["codexAuth.unpinned"]);
+  expect(host.textContent).toContain(en["codexAuth.unpinFailed"]);
+  expect(host.textContent).not.toContain(en["codexAuth.switchFailed"]);
 });

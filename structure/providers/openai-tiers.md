@@ -507,7 +507,7 @@ selection: it clears the pin and the stored active id, unwinds the steering a se
 (one-shot manual preference, runtime cursor, and the rotation seeds on the shared and independent
 quota-scope rings), and leaves bound threads on their captured account and quota-avoidance health
 standing — nothing was named, so nothing new applies immediately, which is why the route reports
-`appliesImmediately: false` there.
+`appliesImmediately: false` there. A release may include `expectedPinnedAccountId`: the lock-protected persisted mutation checks that exact pin again before publication, returning `account_pin_changed` if a newer pin replaced it. Callers that omit the precondition retain the explicit global release contract.
 Without that last rule a pin made before any order existed, which is just an ordinary account switch,
 would outrank every order set afterwards for as long as the account kept headroom.
 

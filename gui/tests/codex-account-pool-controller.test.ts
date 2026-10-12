@@ -127,7 +127,7 @@ test("selecting the pin again releases it through the null selection write", asy
   // state and sends the null selection the server reads as an unpin.
   for (const card of [mainCard, addedCards]) expect(card).toContain("onUnpin");
   expect(pool.match(/onUnpin=\{setUnpinFor\}/g)?.length).toBe(2);
-  expect(pool).toContain("controller.switchAccount(null)");
+  expect(pool).toContain("controller.switchAccount(null, { expectedPinnedAccountId: unpinFor.id })");
   expect(pool).toContain('t("codexAuth.unpinned")');
   expect(modal).toContain("unpin");
 

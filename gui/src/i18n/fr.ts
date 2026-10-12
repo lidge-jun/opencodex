@@ -2419,6 +2419,8 @@ export const fr: Record<TKey, string> = {
   "codexAuth.unpinDesc": "Prend effet immédiatement. Les fils liés à un compte et les requêtes en cours conservent le compte capturé ; les requêtes nouvelles ou non liées choisissent automatiquement un compte selon l’ordre de sélection et les seuils.",
   "codexAuth.unpinAction": "Lever l’épinglage",
   "codexAuth.unpinned": "Épinglage levé — la sélection automatique est rétablie",
+  "codexAuth.unpinFailed": "La suppression du compte épinglé n’a pas pu être confirmée. Actualisez les comptes et vérifiez la sélection actuelle avant de réessayer.",
+  "codexAuth.unpinChanged": "Le compte épinglé a changé pendant que cette confirmation était ouverte. Actualisez les comptes et vérifiez la sélection actuelle avant de retirer une épingle.",
   "codexAuth.fiveHour": "5 h",
   "codexAuth.weekly": "Semaine",
   "codexAuth.quotaAutoRefresh": "Activation automatique des fenêtres",

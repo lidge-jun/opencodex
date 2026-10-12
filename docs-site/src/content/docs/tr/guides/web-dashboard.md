@@ -212,6 +212,7 @@ ve diğer sağlayıcılardan ayrıdır.
   Rozete yeniden tıklamak sabitlemeyi kaldırmak için onay ister. Onay seçim bilgisini temizler;
   bağlı iş parçacıkları mevcut hesaplarını korur, yeni veya bağlanmamış istekler yeniden seçim
   sırasını ve eşikleri izler.
+  Onay açıkken sabitlenen hesap değişirse bu onay yeni sabitlemeyi kaldıramaz. İşlem reddedilirse veya sonuç belirsizse hesap görünümü yenilenir; yeniden onaylamadan önce mevcut seçimi kontrol edin.
 - Her hesap kartı bir **Seçim sırası (Selection order)** kontrolü taşır (İlk,
   Daha Önce, Normal, Daha Sonra, Son). Daha yüksek sıra önce kullanılır ve havuz
   ancak üzerindeki her hesap boşaldığında veya kullanılamaz olduğunda daha düşük

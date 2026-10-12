@@ -254,7 +254,11 @@ export async function handleCodexAuthAPI(
       || !("accountId" in body) || (body.accountId !== null && typeof body.accountId !== "string")) {
       return jsonResponse({ error: "accountId must be an account id or null" }, 400);
     }
-    return persistCodexAccountSelection(getRuntimeConfig(config), body.accountId);
+    const expectedPin = "expectedPinnedAccountId" in body ? body.expectedPinnedAccountId : undefined;
+    if (expectedPin !== undefined && (body.accountId !== null || !isCodexAccountPriorityKey(expectedPin))) {
+      return jsonResponse({ error: "expectedPinnedAccountId must be a valid account id for a release" }, 400);
+    }
+    return persistCodexAccountSelection(getRuntimeConfig(config), body.accountId, expectedPin as string | undefined);
   }
 
   if (url.pathname === "/api/codex-auth/active" && req.method === "GET") {
