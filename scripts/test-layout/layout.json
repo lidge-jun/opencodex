@@ -1245,6 +1245,7 @@
     "moonshot-endpoints.test.ts": "providers",
     "moonshot-tool-schema.test.ts": "providers",
     "multi-agent-compat.test.ts": "codex-integration",
+    "code-mode-collab-surface.test.ts": "codex-integration",
     "multi-agent-keep-native-v1.test.ts": "codex-integration",
     "multi-agent-origin.test.ts": "codex-integration",
     "muse-passive-quota-cache.test.ts": "providers",

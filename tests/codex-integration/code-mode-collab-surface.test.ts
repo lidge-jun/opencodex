@@ -1,0 +1,233 @@
+/**
+ * Collaboration surface detection when Codex nests its collaboration tools inside code mode (#6844).
+ *
+ * Fixtures follow codex-rs build_exec_tool_description in code-mode-only mode: every ENABLED nested
+ * tool is a top-level heading, its description, and an "exec tool declaration:" ts fence, with
+ * namespaced tools flattened to <namespace>__<name>. When the model supports tool search codex-rs
+ * DEFERS the V1 tools and renders none of them, which is the shape every OpenCodex catalog row
+ * produces; that case must stay null because the request carries no V1 evidence.
+ * Requests go through parseRequest so buildTools' flattening of the functions namespace and the
+ * additional_tools envelope are exercised.
+ */
+import { describe, expect, test } from "bun:test";
+import { collabSurface, multiAgentGuidanceText } from "../../src/server/responses";
+import { MULTI_AGENT_MODE_HINT_RECOMMENDATION } from "../../src/codex/multi-agent-mode-policy";
+import { effortCapAppliesTo } from "../../src/server/effort-policy";
+import { parseRequest } from "../../src/responses/parser";
+import type { OcxConfig } from "../../src/types";
+
+const V1_PROACTIVE = `<multi_agent_mode>${MULTI_AGENT_MODE_HINT_RECOMMENDATION.text}</multi_agent_mode>`;
+const TICK = "`";
+const FENCE = "```";
+
+const EXEC_TEMPLATE = [
+  "Run JavaScript code to orchestrate/compose tool calls",
+  "- All nested tools are available on the global " + TICK + "tools" + TICK + " object.",
+  "- " + TICK + "ALL_TOOLS" + TICK + ": metadata for the enabled nested tools as { name, description } entries.",
+].join("\n");
+const DEFERRED_SENTENCE = "Some deferred nested tools may be omitted from this description. They are still available on the global "
+  + TICK + "tools" + TICK + " object and listed in " + TICK + "ALL_TOOLS" + TICK + ".";
+
+/** One nested tool section as codex-rs renders it, with a multi-line declaration. */
+function nested(flatName: string, description = "Tool guidance."): string {
+  return [
+    "### " + TICK + flatName + TICK,
+    description,
+    "",
+    "exec tool declaration:",
+    FENCE + "ts",
+    "declare const tools: { " + flatName + "(args: {",
+    "  // Message for the agent.",
+    "  message?: string;",
+    "}): Promise<unknown>; };",
+    FENCE,
+  ].join("\n");
+}
+
+/** V1 spawn_agent's real description carries its own non-tool ### headings. */
+const SPAWN_DESCRIPTION = [
+  "Spawn a sub-agent for a well-scoped task.",
+  "### When to delegate vs. do the subtask yourself",
+  "- Delegate independent work.",
+  "### After you delegate",
+  "- Keep working.",
+].join("\n");
+
+const V1_SECTIONS = [
+  "## multi_agent_v1\nTools for spawning and managing sub-agents.",
+  nested("multi_agent_v1__close_agent"),
+  nested("multi_agent_v1__resume_agent"),
+  nested("multi_agent_v1__send_input"),
+  nested("multi_agent_v1__spawn_agent", SPAWN_DESCRIPTION),
+  nested("multi_agent_v1__wait_agent"),
+];
+const V2_SECTIONS = [
+  nested("collaboration__followup_task"),
+  nested("collaboration__interrupt_agent"),
+  nested("collaboration__list_agents"),
+  nested("collaboration__send_message"),
+  nested("collaboration__spawn_agent"),
+  nested("collaboration__wait_agent"),
+];
+const HELPER_SECTIONS = [nested("exec_command"), nested("write_stdin"), nested("clock__curr_time")];
+
+function execDescription(...sections: string[]): string {
+  return [EXEC_TEMPLATE, DEFERRED_SENTENCE, ...sections].join("\n\n");
+}
+
+function fn(name: string): Record<string, unknown> {
+  return { type: "function", name, description: name + ".", parameters: { type: "object", properties: {} } };
+}
+
+/** The issue's envelope: functions (exec, wait, request_user_input), clock, and an MCP namespace. */
+function codeModeTools(description: string, extra: unknown[] = []): unknown[] {
+  return [
+    { type: "namespace", name: "functions", description: "", tools: [
+      { type: "custom", name: "exec", description, format: { type: "grammar", syntax: "lark", definition: "start: /.+/" } },
+      fn("wait"),
+      fn("request_user_input"),
+    ] },
+    { type: "namespace", name: "clock", description: "", tools: [fn("sleep")] },
+    { type: "namespace", name: "mcp__cua_repl", description: "", tools: [fn("js"), fn("js_reset")] },
+    ...extra,
+  ];
+}
+
+function request(tools: unknown[], effort = "max", viaAdditionalTools = false) {
+  const user = { type: "message", role: "user", content: [{ type: "input_text", text: "split this work" }] };
+  return parseRequest(viaAdditionalTools
+    ? { model: "gpt-6.1-sol", stream: true, reasoning: { effort }, input: [{ type: "additional_tools", role: "developer", tools }, user] }
+    : { model: "gpt-6.1-sol", stream: true, reasoning: { effort }, tools, input: [user] });
+}
+
+const surfaceOf = (tools: unknown[]) => collabSurface(request(tools));
+
+describe("code mode that renders the V1 tools (#6844)", () => {
+  const v1 = codeModeTools(execDescription(...HELPER_SECTIONS, ...V1_SECTIONS));
+
+  test.each(["max", "ultra"])("%s emits the V1 proactive guidance", async effort => {
+    const parsed = request(v1, effort);
+    expect(collabSurface(parsed)).toBe("v1");
+    expect(await multiAgentGuidanceText(parsed, { multiAgentGuidanceEnabled: true })).toBe(V1_PROACTIVE);
+  });
+
+  test("the additional_tools envelope is read the same way", async () => {
+    const parsed = request(v1, "ultra", true);
+    expect(collabSurface(parsed)).toBe("v1");
+    expect(await multiAgentGuidanceText(parsed, { multiAgentGuidanceEnabled: true })).toBe(V1_PROACTIVE);
+  });
+
+  test("Medium stays silent and the disabled switch wins", async () => {
+    expect(await multiAgentGuidanceText(request(v1, "medium"), { multiAgentGuidanceEnabled: true })).toBeNull();
+    expect(await multiAgentGuidanceText(request(v1, "max"), { multiAgentGuidanceEnabled: false })).toBeNull();
+  });
+
+  test("the V1 spawn tool alone is enough; companions alone are not", () => {
+    expect(surfaceOf(codeModeTools(execDescription(nested("multi_agent_v1__spawn_agent"))))).toBe("v1");
+    expect(surfaceOf(codeModeTools(execDescription(nested("multi_agent_v1__send_input"), nested("multi_agent_v1__close_agent"))))).toBeNull();
+  });
+
+  test("direct V1 tools beside the rendered listing agree", () => {
+    const direct = { type: "namespace", name: "multi_agent_v1", description: "", tools: [fn("spawn_agent"), fn("send_input")] };
+    expect(surfaceOf(codeModeTools(execDescription(...V1_SECTIONS), [direct]))).toBe("v1");
+  });
+
+  test("a heading-shaped line inside a fenced example does not cut the spawn section", () => {
+    const example = [SPAWN_DESCRIPTION, FENCE + "md", "### " + TICK + "worker" + TICK, "Report back.", FENCE].join("\n");
+    expect(surfaceOf(codeModeTools(execDescription(nested("multi_agent_v1__spawn_agent", example))))).toBe("v1");
+  });
+});
+
+describe("code mode without V1 evidence stays null", () => {
+  test("deferred V1 (every OpenCodex catalog row): the listing names no collaboration tool", async () => {
+    const parsed = request(codeModeTools(execDescription(...HELPER_SECTIONS)), "ultra");
+    expect(collabSurface(parsed)).toBeNull();
+    expect(await multiAgentGuidanceText(parsed, { multiAgentGuidanceEnabled: true })).toBeNull();
+  });
+
+  test("code mode with no nested listing at all", () => {
+    expect(surfaceOf(codeModeTools(EXEC_TEMPLATE))).toBeNull();
+  });
+
+  test("a heading without its own declaration is prose", () => {
+    const prose = "### " + TICK + "multi_agent_v1__spawn_agent" + TICK + "\nMentioned in a guide.";
+    expect(surfaceOf(codeModeTools(execDescription(prose, ...HELPER_SECTIONS)))).toBeNull();
+  });
+
+  test("a complete V1 section quoted inside another tool's fenced example", () => {
+    const quoted = nested("docs__lookup", ["Example:", FENCE + "md", nested("multi_agent_v1__spawn_agent"), FENCE].join("\n"));
+    expect(surfaceOf(codeModeTools(execDescription(quoted)))).toBeNull();
+  });
+
+  test("an unprefixed MCP server imitating the V1 tool names", () => {
+    expect(surfaceOf(codeModeTools(execDescription(nested("agents__spawn_agent"), nested("agents__send_input"))))).toBeNull();
+  });
+});
+
+describe("code-mode V2 is distinct from V1 and keeps today's behaviour", () => {
+  const v2 = codeModeTools(execDescription(...V2_SECTIONS));
+
+  test("rendered V2 tools are not V1 evidence", async () => {
+    const parsed = request(v2, "ultra");
+    expect(collabSurface(parsed)).toBeNull();
+    expect(await multiAgentGuidanceText(parsed, { multiAgentGuidanceEnabled: true })).toBeNull();
+    expect(surfaceOf(codeModeTools(execDescription(nested("spawn_agent"), nested("send_message"))))).toBeNull();
+  });
+
+  test("the V2 effort-cap gate still sees no V2 surface", () => {
+    const config = { multiAgentMode: "v2", effortCap: "high" } as unknown as OcxConfig;
+    expect(effortCapAppliesTo(collabSurface(request(v2)), new Headers(), config)).toBe(false);
+  });
+});
+
+describe("contradictory signals stay null", () => {
+  test("V1 spawn beside a V2 companion", () => {
+    expect(surfaceOf(codeModeTools(execDescription(...V1_SECTIONS, nested("collaboration__send_message"))))).toBeNull();
+    expect(surfaceOf(codeModeTools(execDescription(...V1_SECTIONS, nested("multi_agent_v1__list_agents"))))).toBeNull();
+  });
+
+  test("V1 spawn beside another spawn_agent", () => {
+    expect(surfaceOf(codeModeTools(execDescription(...V1_SECTIONS, nested("collaboration__spawn_agent"))))).toBeNull();
+    expect(surfaceOf(codeModeTools(execDescription(...V1_SECTIONS, nested("server__spawn_agent"))))).toBeNull();
+  });
+
+  test("a direct flat spawn_agent beside the rendered V1 listing", () => {
+    expect(surfaceOf(codeModeTools(execDescription(...V1_SECTIONS), [fn("spawn_agent")]))).toBeNull();
+  });
+
+  test("a direct V2 surface beside the rendered V1 listing", () => {
+    const direct = { type: "namespace", name: "collaboration", description: "", tools: [fn("spawn_agent"), fn("send_message")] };
+    expect(surfaceOf([direct])).toBe("v2");
+    const contradictory = surfaceOf(codeModeTools(execDescription(...V1_SECTIONS), [direct]));
+    expect(contradictory).toBeNull();
+    // Deliberate: the contradiction also withdraws the V2 main-turn effort cap that direct V2 alone gets.
+    const config = { multiAgentMode: "v2", effortCap: "high" } as unknown as OcxConfig;
+    expect(effortCapAppliesTo("v2", new Headers(), config)).toBe(true);
+    expect(effortCapAppliesTo(contradictory, new Headers(), config)).toBe(false);
+  });
+
+  test("an MCP tool named spawn_agent does not contradict native V1", () => {
+    expect(surfaceOf(codeModeTools(execDescription(...V1_SECTIONS, nested("mcp__agents__spawn_agent"))))).toBe("v1");
+  });
+});
+
+describe("a caller-defined exec contributes no nested evidence", () => {
+  const description = execDescription(...V1_SECTIONS);
+
+  test("a structured function named exec", () => {
+    expect(surfaceOf([{ type: "function", name: "exec", description, parameters: { type: "object", properties: {} } }])).toBeNull();
+  });
+
+  test("a namespaced exec", () => {
+    expect(surfaceOf([{ type: "namespace", name: "mcp__sandbox", description: "", tools: [{ type: "custom", name: "exec", description }] }])).toBeNull();
+  });
+
+  test("exec beside a bare shell bridge is the flat-bridge shape", () => {
+    expect(surfaceOf([{ type: "custom", name: "exec", description }, fn("exec_command")])).toBeNull();
+  });
+
+  test("a freeform exec without the codex-rs template", () => {
+    const foreign = ["Runs a script.", ...V1_SECTIONS].join("\n\n");
+    expect(surfaceOf([{ type: "custom", name: "exec", description: foreign }])).toBeNull();
+  });
+});

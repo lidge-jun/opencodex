@@ -433,6 +433,23 @@ at `max` or `ultra`. Only the separate explicit delegation-request trigger chang
 authority, task-scope and collaboration-tool rules remain applicable. This is guidance,
 not an enforcement mechanism or a change to native settings or tool access.
 
+Both guidance paths start from `collabSurface()`, which reads only what the request declares. A
+directly declared `spawn_agent` and its companions decide the surface as before. Codex
+code-mode-only turns declare no collaboration tool on the wire, so
+`src/server/responses/code-mode-collab-surface.ts` also reads the nested listing that codex-rs
+renders inside the custom `exec` description: a tool heading, its description, and a final
+`exec tool declaration:` fence naming the same tool. It accepts only a freeform, un-namespaced
+`exec` that starts with the codex-rs template line, ignores headings inside fences or without their
+own declaration, and counts only `multi_agent_v1__spawn_agent` as V1 evidence. Any other
+`spawn_agent` or V2 companion beside it, or a different direct surface, makes the turn
+contradictory (`null`), which also withdraws a direct V2 surface's designation and effort cap.
+Nested evidence never produces `v2`. When the model supports tool search (every OpenCodex catalog
+row), codex-rs defers the V1 tools and leaves them out of the description, and no other
+per-request V1 signal exists: codex-rs sends its own `<multi_agent_mode>` item only on V2 and pins the
+version per session, so neither the saved mode nor the catalog stamp proves a conversation's
+surface. Those turns stay `null` and receive no V1 proactive text (#6844). A tool description that
+copies a complete V1 section verbatim cannot be told apart from the host's own rendering.
+
 Replay deduplication compares the latest exact generated developer text separately for
 each tag family, preserving built-in ??custom ??built-in transitions without duplicating
 unchanged proxy metadata after a native policy change. Native and legacy-tagged history

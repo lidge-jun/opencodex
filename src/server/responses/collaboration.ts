@@ -9,6 +9,7 @@ import {
 import { parseRequest } from "../../responses/parser";
 import { externalTaskInputContent } from "../../responses/task-input";
 import { MULTI_AGENT_MODE_HINT_RECOMMENDATION } from "../../codex/multi-agent-mode-policy";
+import { codeModeV1Evidence } from "./code-mode-collab-surface";
 import { buildCompactV1Output, COMPACT_PROMPT, decodeCompactionSummary, extractCompactUserMessages } from "../../responses/compaction";
 import { FORWARD_HEADERS, sanitizeReasoningInputContent } from "../../adapters/openai-responses";
 import { expandPreviousResponseInput, previousResponseProviderState, rememberResponseState } from "../../responses/state";
@@ -316,11 +317,24 @@ export function isV1CollabSurface(parsed: OcxParsedRequest): boolean {
 
 
 export function collabSurface(parsed: OcxParsedRequest): "v1" | "v2" | null {
+  const direct = directCollabSurface(parsed.context.tools);
+  // #6844: code-mode-only turns nest the collaboration tools inside `exec`. Only a rendered V1
+  // listing counts, and it never overrides or blends with a different direct surface.
+  const nested = codeModeV1Evidence(parsed.context.tools);
+  if (nested === null) return direct.surface;
+  if (nested === "ambiguous") return null;
+  return !direct.sawCollabTool || direct.surface === "v1" ? "v1" : null;
+}
+
+function directCollabSurface(tools: OcxParsedRequest["context"]["tools"]): {
+  surface: "v1" | "v2" | null;
+  sawCollabTool: boolean;
+} {
   let namespacedSpawn = false;
   let flatSpawn = false;
   let v1Only = false;
   let v2Only = false;
-  for (const t of parsed.context.tools ?? []) {
+  for (const t of tools ?? []) {
     if (t.name === "spawn_agent") {
       if (t.namespace) namespacedSpawn = true;
       else flatSpawn = true;
@@ -330,12 +344,16 @@ export function collabSurface(parsed: OcxParsedRequest): "v1" | "v2" | null {
       v2Only = true;
     }
   }
-  if (!namespacedSpawn && !flatSpawn) return null; // no spawn_agent -> no collab surface
-  if (namespacedSpawn && flatSpawn) return null;   // contradictory spawn shapes
-  if (v1Only && v2Only) return null;               // contradictory companions
-  if (v1Only) return "v1";
-  if (v2Only) return "v2";
-  return namespacedSpawn ? "v1" : "v2"; // companionless fallbacks (legacy defaults)
+  const sawCollabTool = namespacedSpawn || flatSpawn || v1Only || v2Only;
+  const surface = (): "v1" | "v2" | null => {
+    if (!namespacedSpawn && !flatSpawn) return null; // no spawn_agent -> no collab surface
+    if (namespacedSpawn && flatSpawn) return null;   // contradictory spawn shapes
+    if (v1Only && v2Only) return null;               // contradictory companions
+    if (v1Only) return "v1";
+    if (v2Only) return "v2";
+    return namespacedSpawn ? "v1" : "v2"; // companionless fallbacks (legacy defaults)
+  };
+  return { surface: surface(), sawCollabTool };
 }
 
 
