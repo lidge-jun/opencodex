@@ -88,6 +88,13 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   "claudeDesktop.family.haiku",
   "claudeDesktop.family.opus",
   "claudeDesktop.family.sonnet",
+  // Mirasim quota rows expose the same model-family proper nouns. Taiwan usage keeps these
+  // canonical English model names, while the surrounding quota/time-window copy is localized.
+  "quota.modelFamily.claude",
+  "quota.modelFamily.fable",
+  "quota.modelFamily.sonnet",
+  "quota.modelFamily.opus",
+  "quota.modelFamily.haiku",
   "claudeDesktop.supports1m",
   "claudeDesktop.title",
   // Claude fast-mode toggle states (short ON/OFF/Auto labels kept in English)

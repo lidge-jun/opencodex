@@ -16,6 +16,7 @@ import { dataPayload, frame } from "../helpers/custom-tool-repair-fixtures";
 
 const CODE_MODE = new Set(["exec"]);
 const MCP_NAME = "mcp__codex_app__get_usage_limits";
+const CUA_MCP_NAME = "mcp__cua_repl__js";
 const CALL = { type: "function_call", id: "fc_mcp", call_id: "call_mcp", name: MCP_NAME, arguments: "{}" };
 const CUSTOM_EXEC = { type: "namespace", name: "functions", tools: [{ type: "custom", name: "exec", format: { type: "text" } }] };
 const FUNCTION_EXEC = { type: "namespace", name: "functions", tools: [{ type: "function", name: "exec", parameters: { type: "object" } }] };
@@ -167,6 +168,92 @@ describe("code-mode direct mcp tool-call recovery", () => {
       input: 'const result = await tools.mcp__codex_app__get_usage_limits({});\ntext(result);',
     }]);
     expect(undeclaredToolCallNameInResponse(restored, CODE_MODE)).toBeUndefined();
+  });
+
+  test("restores a direct cua_repl call when exec stays native custom", () => {
+    const native = rewriteRoutedCustomToolsForUpstream(
+      { tools: [CUSTOM_EXEC] },
+      undefined,
+      CODE_MODE,
+    );
+    expect(native.names).toEqual(new Set());
+    expect(native.repairNames).toEqual(CODE_MODE);
+
+    const source = {
+      output: [{
+        type: "function_call",
+        id: "fc_cua",
+        call_id: "call_cua",
+        name: CUA_MCP_NAME,
+        arguments: '{"code":"1+1"}',
+      }],
+    };
+    const withoutRecovery = restoreRoutedCustomCallsInJson(
+      JSON.stringify(source),
+      native.names,
+      native.repairNames,
+      CODE_MODE,
+    );
+    expect(JSON.parse(withoutRecovery).output[0]).toMatchObject({
+      type: "function_call",
+      name: CUA_MCP_NAME,
+    });
+
+    const restored = JSON.parse(restoreRoutedCustomCallsInJson(
+      JSON.stringify(source),
+      native.names,
+      native.repairNames,
+      CODE_MODE,
+      CODE_MODE,
+    ));
+    expect(restored.output[0]).toMatchObject({
+      type: "custom_tool_call",
+      name: "exec",
+      call_id: "call_cua",
+      input: 'const result = await tools.mcp__cua_repl__js({"code":"1+1"});\ntext(result);',
+    });
+  });
+
+  test("native custom exec SSE recovery compiles direct cua_repl into exec", () => {
+    const native = rewriteRoutedCustomToolsForUpstream(
+      { tools: [CUSTOM_EXEC] },
+      undefined,
+      CODE_MODE,
+    );
+    const rewrite = createRoutedCustomToolRestoreBlockRewrite(
+      native.names,
+      undefined,
+      native.repairNames,
+      CODE_MODE,
+      CODE_MODE,
+    );
+    const added = rewrite(frame("response.output_item.added", {
+      output_index: 0,
+      item: {
+        type: "function_call",
+        id: "fc_cua",
+        call_id: "call_cua",
+        name: CUA_MCP_NAME,
+        arguments: "",
+        status: "in_progress",
+      },
+    }));
+    expect(dataPayload(added[0]!).item).toMatchObject({
+      type: "custom_tool_call",
+      name: "exec",
+      call_id: "call_cua",
+    });
+    const done = rewrite(frame("response.function_call_arguments.done", {
+      output_index: 0,
+      item_id: "fc_cua",
+      arguments: '{"code":"1+1"}',
+    }));
+    expect(dataPayload(done[0]!)).toMatchObject({
+      type: "response.custom_tool_call_input.done",
+      item_id: "ctc_cua",
+      input: 'const result = await tools.mcp__cua_repl__js({"code":"1+1"});\ntext(result);',
+    });
+    rewrite.dispose?.();
   });
 
   test("native SSE restoration compiles only a converted custom exec call", () => {

@@ -28,6 +28,7 @@ import { deliverAdapterResponse } from "./adapter-delivery";
 import { releaseUpstreamHostAdmission } from "../../codex/upstream-host-health";
 import { releaseCodexAuthContextProbeLease } from "../../codex/auth-context";
 import { runWithCompactionRecovery } from "./compaction-recovery";
+import { adapterIsPassthrough } from "../../adapters/base";
 /**
  * Route one `/v1/responses` request through the adapter pipeline: recovery loop, passthrough
  * wire, image/web-search bridges, and the terminal-guard continuation.
@@ -41,8 +42,7 @@ export async function handleResponses(
   const ownsBudget = options.translatorBudget === undefined;
   const translatorBudget = options.translatorBudget ?? createTranslatorBudget();
   const abortSignal = options.abortSignal ?? req.signal;
-  const accountLoad = { lease: null as import("../../oauth/kiro-account-load").AccountLease | null,
-    cancelled: abortSignal.aborted };
+  const accountLoad = { lease: null as import("../../oauth/kiro-account-load").AccountLease | null, cancelled: abortSignal.aborted };
   function release() { accountLoad.lease?.release(); accountLoad.lease = null; abortSignal.removeEventListener("abort", cancel); }
   function cancel() { accountLoad.cancelled = true; release(); }
   abortSignal.addEventListener("abort", cancel, { once: true });
@@ -121,7 +121,7 @@ async function handleResponsesInner(
     );
     const sendBudgetState = createResponsesSendBudget(requestContext);
     if (sendBudgetState instanceof Response) return sendBudgetState;
-    if ("passthrough" in transportState.adapter && transportState.adapter.passthrough && !sidecarState.routedCompaction) {
+    if (adapterIsPassthrough(transportState.adapter, requestState.parsed) && !sidecarState.routedCompaction) {
       const passthroughResult = await executePassthroughResponse(
         requestContext,
         admissionState,

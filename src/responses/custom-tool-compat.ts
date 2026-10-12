@@ -1,4 +1,9 @@
-import { namespacedToolName, normalizeDeclaredToolName } from "../types";
+import {
+  CODE_MODE_EXEC_TOOL_NAME,
+  isCodeModeMcpDirectName,
+  namespacedToolName,
+  normalizeDeclaredToolName,
+} from "../types";
 import {
   normalizeApplyPatchDelimiters,
   repairFreeformToolInput,
@@ -13,8 +18,10 @@ const BUILTIN_FUNCTIONS_NAMESPACE = "functions";
 function routedCustomToolPassesThrough(
   name: string,
   supportsResponsesCustomTools: boolean | undefined,
+  requestPassthroughNames?: ReadonlySet<string>,
 ): boolean {
-  return supportsResponsesCustomTools !== false && ROUTED_CUSTOM_TOOL_PASSTHROUGH.has(name);
+  return supportsResponsesCustomTools !== false
+    && (ROUTED_CUSTOM_TOOL_PASSTHROUGH.has(name) || requestPassthroughNames?.has(name) === true);
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -71,11 +78,34 @@ export function routedCustomToolTargetName(
   value: unknown,
   names: ReadonlySet<string>,
   declaredNames?: ReadonlySet<string>,
+  directMcpRecoveryNames?: ReadonlySet<string>,
 ): string | undefined {
   const wireName = routedCustomToolWireName(value);
   if (wireName === undefined) return undefined;
   if (names.has(wireName)) return wireName;
-  if (!isPlainObject(value) || typeof value.namespace === "string") return undefined;
+  if (!isPlainObject(value)) return undefined;
+
+  const directName = wireName.startsWith("default.")
+    ? wireName.slice("default.".length)
+    : wireName;
+  if (
+    directMcpRecoveryNames?.has(CODE_MODE_EXEC_TOOL_NAME) === true
+    && isCodeModeMcpDirectName(directName)
+  ) {
+    const directTarget = normalizeDeclaredToolName(
+      wireName,
+      declaredNames,
+      undefined,
+      directMcpRecoveryNames,
+    );
+    if (directTarget !== wireName && directMcpRecoveryNames.has(directTarget)) {
+      return directTarget;
+    }
+  }
+
+  // Ordinary namespaced identities keep their namespace. Only the direct-MCP recovery above may
+  // cross that boundary, and only with a request-proven bare custom exec.
+  if (typeof value.namespace === "string") return undefined;
   const normalized = normalizeDeclaredToolName(wireName, declaredNames, undefined, names);
   return normalized !== wireName && names.has(normalized) ? normalized : undefined;
 }
@@ -88,6 +118,7 @@ function collectRoutedCustomToolWireNames(
   body: unknown,
   supportsResponsesCustomTools?: boolean,
   passthrough = false,
+  requestPassthroughNames?: ReadonlySet<string>,
 ): Set<string> {
   const names = new Set<string>();
   const groups = collectResponsesToolGroups(body);
@@ -108,7 +139,7 @@ function collectRoutedCustomToolWireNames(
       if (
         tool.type === "custom"
         && typeof tool.name === "string"
-        && routedCustomToolPassesThrough(tool.name, supportsResponsesCustomTools) === passthrough
+        && routedCustomToolPassesThrough(tool.name, supportsResponsesCustomTools, requestPassthroughNames) === passthrough
       ) {
         names.add(tool.name);
         continue;
@@ -121,7 +152,7 @@ function collectRoutedCustomToolWireNames(
           isPlainObject(child)
           && child.type === "custom"
           && typeof child.name === "string"
-          && routedCustomToolPassesThrough(child.name, supportsResponsesCustomTools) === passthrough
+          && routedCustomToolPassesThrough(child.name, supportsResponsesCustomTools, requestPassthroughNames) === passthrough
           && (!passthrough || tool.name === BUILTIN_FUNCTIONS_NAMESPACE)
           && !(tool.name === BUILTIN_FUNCTIONS_NAMESPACE && bareWireNames.has(child.name))
         ) names.add(customToolWireName(tool.name, child.name));
@@ -138,6 +169,7 @@ export function customToolItemId(id: unknown): unknown {
 export function collectRoutedCustomToolNames(
   body: unknown,
   supportsResponsesCustomTools?: boolean,
+  requestPassthroughNames?: ReadonlySet<string>,
 ): Set<string> {
   const names = new Set<string>();
   const visit = (value: unknown): void => {
@@ -149,7 +181,7 @@ export function collectRoutedCustomToolNames(
     if (
       value.type === "custom"
       && typeof value.name === "string"
-      && !routedCustomToolPassesThrough(value.name, supportsResponsesCustomTools)
+      && !routedCustomToolPassesThrough(value.name, supportsResponsesCustomTools, requestPassthroughNames)
     ) {
       names.add(value.name);
     }
@@ -398,14 +430,29 @@ export function validateFinalCustomToolCompatibility(
 export function rewriteRoutedCustomToolsForUpstream(
   body: unknown,
   supportsResponsesCustomTools?: boolean,
+  requestPassthroughNames?: ReadonlySet<string>,
 ): {
   body: unknown;
   names: Set<string>;
   repairNames: Set<string>;
 } {
-  const conversionNames = collectRoutedCustomToolNames(body, supportsResponsesCustomTools);
-  const names = collectRoutedCustomToolWireNames(body, supportsResponsesCustomTools);
-  const repairNames = collectRoutedCustomToolWireNames(body, supportsResponsesCustomTools, true);
+  const conversionNames = collectRoutedCustomToolNames(
+    body,
+    supportsResponsesCustomTools,
+    requestPassthroughNames,
+  );
+  const names = collectRoutedCustomToolWireNames(
+    body,
+    supportsResponsesCustomTools,
+    false,
+    requestPassthroughNames,
+  );
+  const repairNames = collectRoutedCustomToolWireNames(
+    body,
+    supportsResponsesCustomTools,
+    true,
+    requestPassthroughNames,
+  );
   for (const name of repairNames) {
     if (!toolChoiceAllowsRoutedCustomTool(body, name, repairNames)) repairNames.delete(name);
   }
@@ -457,13 +504,19 @@ export function restoreRoutedCustomCalls(
   names: ReadonlySet<string>,
   repairNames: ReadonlySet<string> = new Set(),
   declaredNames?: ReadonlySet<string>,
+  directMcpRecoveryNames?: ReadonlySet<string>,
 ): { value: unknown; changed: boolean } {
   if (!isPlainObject(value)) return { value, changed: false };
 
   const restoreItem = (item: unknown): { value: unknown; changed: boolean } => {
     if (!isPlainObject(item)) return { value: item, changed: false };
     const wireName = routedCustomToolWireName(item);
-    const targetName = routedCustomToolTargetName(item, names, declaredNames);
+    const targetName = routedCustomToolTargetName(
+      item,
+      names,
+      declaredNames,
+      directMcpRecoveryNames,
+    );
     if (
       (item.type === "function_call" || item.type === "custom_tool_call")
       && typeof item.name === "string"
@@ -473,10 +526,17 @@ export function restoreRoutedCustomCalls(
       const sourceInput = item.type === "function_call" ? item.arguments : item.input;
       const aliased = targetName !== wireName;
       const itemNamespace = typeof item.namespace === "string" ? item.namespace : undefined;
+      // A namespace restore may have already split a flattened direct-MCP identity into
+      // {namespace, name}. When that call is recovered through code-mode exec, the nested host
+      // helper is the full wire identity, not only the local child name ("js"). Ordinary aliases
+      // keep their historical local-name behavior.
+      const aliasHelperName = aliased && isCodeModeMcpDirectName(wireName)
+        ? wireName
+        : String(item.name);
       // Name-based alias first; otherwise let a raw patch envelope submitted as the `exec`
       // body resolve to the same apply_patch helper (devlog/_plan/260905_apply_patch_envelope_gap).
       const helper = aliased && sourceInput !== ""
-        ? item.name
+        ? aliasHelperName
         : resolveCodeModeHelperName(undefined, targetName, sourceInput, itemNamespace, declaredNames);
       // Native custom input is already the tool's raw grammar. Only a recognized
       // helper/envelope may reinterpret it; a JSON-looking native body is not a wrapper.
@@ -494,7 +554,7 @@ export function restoreRoutedCustomCalls(
         id: customToolItemId(item.id),
         name: aliased ? targetName : item.name,
         input: helper
-          ? compileCodeModeHelperInput(sourceInput, helper, aliased ? String(item.name) : targetName)
+          ? compileCodeModeHelperInput(sourceInput, helper, aliased ? aliasHelperName : targetName)
           : repairFreeformToolInput(
             sourceInput,
             targetName,
@@ -553,7 +613,13 @@ export function restoreRoutedCustomCalls(
     && value.type.startsWith("response.")
     && isPlainObject(value.response)
   ) {
-    const response = restoreRoutedCustomCalls(value.response, names, repairNames, declaredNames);
+    const response = restoreRoutedCustomCalls(
+      value.response,
+      names,
+      repairNames,
+      declaredNames,
+      directMcpRecoveryNames,
+    );
     if (response.changed) {
       restored.response = response.value;
       changed = true;
@@ -568,6 +634,7 @@ export function restoreRoutedCustomCallsInJson(
   names: ReadonlySet<string>,
   repairNames: ReadonlySet<string> = new Set(),
   declaredNames?: ReadonlySet<string>,
+  directMcpRecoveryNames?: ReadonlySet<string>,
 ): string {
   if (names.size === 0 && repairNames.size === 0) return text;
   let payload: unknown;
@@ -576,7 +643,13 @@ export function restoreRoutedCustomCallsInJson(
   } catch {
     return text;
   }
-  const restored = restoreRoutedCustomCalls(payload, names, repairNames, declaredNames);
+  const restored = restoreRoutedCustomCalls(
+    payload,
+    names,
+    repairNames,
+    declaredNames,
+    directMcpRecoveryNames,
+  );
   return restored.changed ? JSON.stringify(restored.value) : text;
 }
 

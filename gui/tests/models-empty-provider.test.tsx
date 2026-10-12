@@ -589,6 +589,15 @@ test("failed HTTP discovery renders an amber status badge and reason", () => {
   expect(html).toContain('class="link-btn"');
 });
 
+test("HTTP 429 discovery renders a rate-limited badge and reason", () => {
+  const html = renderHint(true, { status: "failed", reason: "http", httpStatus: 429 });
+  expect(html).toContain("Discovery limited");
+  expect(html).toContain("temporarily rate-limited");
+  expect(html).toContain("HTTP 429");
+  expect(html).toContain('class="badge badge-amber"');
+  expect(html).not.toContain(">Discovery failed<");
+});
+
 test("failed discovery renders each server-owned reason without provider detail", () => {
   const cases: Array<[ProviderDiscoverySummary, string]> = [
     [{ status: "failed", reason: "blocked" }, "blocked by the destination policy"],

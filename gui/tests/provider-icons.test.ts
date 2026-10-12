@@ -73,6 +73,7 @@ test("the MiniMax and Xiaomi MiMo provider ids resolve to their brand's mark", (
   expect(providerIconSrc("mimo")).toBe("/provider-icons/xiaomi-color.svg");
   // The precedent that makes the two above consistent rather than novel.
   expect(providerIconSrc("mimo-free")).toBe("/provider-icons/xiaomi-color.svg");
+  expect(providerIconSrc("mirasim")).toBe("/provider-icons/mirasim.svg");
 });
 
 /*

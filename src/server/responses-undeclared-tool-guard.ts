@@ -255,6 +255,46 @@ export function collectDeclaredBareCustomWireToolNames(body: unknown): Set<strin
   return names;
 }
 
+/**
+ * Exact flattened wire identities declared under one namespace.
+ *
+ * Unlike collectDeclaredWireToolNames, this intentionally returns neither dotted nor bare aliases:
+ * callers use it to classify one namespace's execution semantics, not to authorize provider echoes.
+ */
+export function collectDeclaredNamespacedWireToolNames(
+  body: unknown,
+  namespace: string,
+): Set<string> {
+  const names = new Set<string>();
+  if (!isPlainObject(body) || !namespace || namespace === BUILTIN_FUNCTIONS_NAMESPACE) return names;
+  const specGroups: unknown[] = [body.tools];
+  if (Array.isArray(body.input)) {
+    for (const item of body.input) {
+      if (
+        isPlainObject(item)
+        && (item.type === "additional_tools" || item.type === "tool_search_output")
+      ) specGroups.push(item.tools);
+    }
+  }
+  for (const specs of specGroups) {
+    if (!Array.isArray(specs)) continue;
+    for (const spec of specs) {
+      if (
+        !isPlainObject(spec)
+        || spec.type !== "namespace"
+        || spec.name !== namespace
+        || !Array.isArray(spec.tools)
+      ) continue;
+      for (const inner of spec.tools) {
+        if (!isPlainObject(inner)) continue;
+        const name = wireToolInnerName(inner);
+        if (name) names.add(namespacedToolName(namespace, name));
+      }
+    }
+  }
+  return names;
+}
+
 function addNamelessClientCallTypes(callTypes: Set<string>, specs: unknown): void {
   if (!Array.isArray(specs)) return;
   for (const spec of specs) {

@@ -71,6 +71,7 @@ import {
   THREAD_OPTION_SET,
   THREAD_OPTIONS,
   writeCollapsedProviders,
+  discoveryFailureBadgeLabel,
   discoveryFailureLabel,
   filterFreeModelRows,
   freeOnlyInForce,
@@ -1477,7 +1478,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
              role="status"
              title={discoveryFailureLabel(t, discoveryFailure)}
            >
-             {t("models.discoveryFailedBadge")}
+             {discoveryFailureBadgeLabel(t, discoveryFailure)}
            </span>
          )}
           <span className="muted mono text-label">{t("models.active", { active: activeCount, total: scoped.length })}</span>
