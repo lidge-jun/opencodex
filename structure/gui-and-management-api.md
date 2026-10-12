@@ -595,6 +595,6 @@ keep their existing no-catalog-refresh behavior. The regression suite is
 
 > Decision record: [Publication-aware rollback](decisions/ADR-0120-provider-patch-publication-boundary.md)
 
-Automatic account exhaustion and recovery use the [spendable Codex credit evidence contract](providers/openai-tiers.md#spendable-codex-credits), including independent freshness, upstream refusal, and reset-ticket separation.
+Automatic account exhaustion and recovery use the [spendable Codex credit evidence contract](providers/openai-tiers.md#spendable-codex-credits), including independent freshness, upstream refusal, and reset-ticket separation. The PINNED badge confirms before sending a null selection, which clears the pin and returns routing to automatic while bound threads keep their captured account.
 
 `src/server/management/subagent-model-routes.ts` owns roster/picker and optional Claude force updates. The route registry declares its GET/PUT ownership; `agent-settings-routes.ts` only lazy-loads and delegates the matching path. GET includes `force`, exposed-only `forceAvailable`, and bounded `forceStatus`; PUT accepts force alone, null clears, and omission preserves it. Force-only updates do not regenerate the roster or converge Codex catalogs. The Subagents page keeps save failures visible and disables overlapping force writes.

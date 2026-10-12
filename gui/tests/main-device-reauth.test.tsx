@@ -45,6 +45,7 @@ function cardProps(state: MainDeviceReauthState, calls: { starts: number; cancel
     onPriorityChange: () => {},
     priorityUpdatingId: null,
     switchingId: null,
+    onUnpin: () => {},
     mainReauth: {
       state,
       start: async () => { calls.starts += 1; },

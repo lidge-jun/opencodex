@@ -25,6 +25,24 @@ export function CodexCreditItem({ index, grantedAt, expiresAt, isNext, locale, t
   );
 }
 
+/**
+ * The pin marker is the release affordance too: selecting it again asks the operator to
+ * confirm dropping the manual selection, which the server resolves as an unpin back to
+ * automatic selection. Kept as a badge-button like the reset-credit one above.
+ */
+export function CodexPinnedBadge({ t, onUnpin }: { t: TFn; onUnpin: () => void }) {
+  return (
+    <button type="button"
+      className="badge badge-muted badge-clickable"
+      onClick={(e) => { e.stopPropagation(); onUnpin(); }}
+      title={`${t("codexAuth.pinnedHint")} ${t("codexAuth.unpinHint")}`}
+      aria-label={`${t("codexAuth.pinned")} — ${t("codexAuth.unpinHint")}`}
+    >
+      {t("codexAuth.pinned")}
+    </button>
+  );
+}
+
 export function CodexTicketBadge({ account, onClick, t }: { account: CodexAccountEntry; onClick: () => void; t: TFn }) {
   const credits = account.quota?.resetCredits;
   // Reserve badge width while WHAM quota is still null so the card-head does not grow

@@ -77,7 +77,7 @@ const account: CodexAccountEntry = {
 const common = {
   accountModeState: null, threshold: 80, switchActionLabel: "switch", onSwitch: () => {}, onTogglePause: () => {},
   pauseUpdatingId: null, pauseBusy: false, onPriorityChange: () => {}, priorityUpdatingId: null,
-  onAutoSwitchThresholdChange: async () => true, autoSwitchDisabled: false, switchingId: null, onOpenReset: () => {},
+  onAutoSwitchThresholdChange: async () => true, autoSwitchDisabled: false, switchingId: null, onUnpin: () => {}, onOpenReset: () => {},
 };
 test.each(["main", "pool"])("%s card gates the DTO on visibility and handles credits-only accounts", kind => {
   const card = (visible?: boolean, loading = false, credits = account.credits) => kind === "main"

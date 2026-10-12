@@ -79,7 +79,11 @@ test("both cards expose the selection-order control, and pin writes cannot overl
   // place to edit when the span's classes change.
   expect(mainCard).toMatch(/pinnedId === "__main__" && !main\?\.paused/);
   expect(addedCards).toMatch(/a\.id === pinnedId && !a\.paused/);
-  for (const card of [mainCard, addedCards]) expect(card).toContain('t("codexAuth.pinned")');
+  // The chip lives in CodexPinnedBadge so both cards share the same release affordance.
+  const helpers = await read("../src/components/codex-account-pool-helpers.tsx");
+  for (const card of [mainCard, addedCards]) expect(card).toContain("<CodexPinnedBadge");
+  expect(helpers).toContain('t("codexAuth.pinned")');
+  expect(helpers).toContain('t("codexAuth.unpinHint")');
   expect(pool).toContain("pinnedId={activePinnedId}");
 
   expect(hook).toContain("/api/codex-auth/accounts/priority");
@@ -110,6 +114,30 @@ test("both cards expose the selection-order control, and pin writes cannot overl
     expect(card).toContain("disabled={priorityUpdatingId !== null || switchingId !== null}");
   }
   expect(pool).toContain("orderBusy={priorityUpdatingId !== null}");
+});
+
+test("selecting the pin again releases it through the null selection write", async () => {
+  const pool = await read("../src/components/CodexAccountPool.tsx");
+  const mainCard = await read("../src/components/codex-account-pool-main-card.tsx");
+  const addedCards = await read("../src/components/codex-account-pool-cards.tsx");
+  const modal = await read("../src/components/codex-account-switch-modal.tsx");
+  const hook = await read("../src/hooks/useCodexAccountPool.ts");
+
+  // Both cards route the badge through the same onUnpin open; the pool owns the confirm
+  // state and sends the null selection the server reads as an unpin.
+  for (const card of [mainCard, addedCards]) expect(card).toContain("onUnpin");
+  expect(pool.match(/onUnpin=\{setUnpinFor\}/g)?.length).toBe(2);
+  expect(pool).toContain("controller.switchAccount(null)");
+  expect(pool).toContain('t("codexAuth.unpinned")');
+  expect(modal).toContain("unpin");
+
+  // A null selection must not mark anything pinned: the server cleared the pin.
+  const switchStart = hook.indexOf("const switchAccount");
+  const switchEnd = hook.indexOf("const saveAlias");
+  expect(switchStart).toBeGreaterThanOrEqual(0);
+  expect(switchEnd).toBeGreaterThan(switchStart);
+  const switchMutation = hook.slice(switchStart, switchEnd);
+  expect(switchMutation).toContain("setActivePinnedId(selectedId ?? null)");
 });
 
 test("the pool header exposes one bulk action backed by the atomic endpoint", async () => {

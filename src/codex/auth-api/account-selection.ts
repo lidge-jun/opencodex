@@ -6,7 +6,7 @@ import { deleteConfigTopLevelKey, fileBackedConfigPath, recordFileBackedConfig }
 import { MAIN_CODEX_ACCOUNT_ID, hasLegacyMainCodexPoolAccount, isSelectableCodexPoolAccount, isValidCodexAccountId } from "../account-id";
 import { isCodexAccountPaused } from "../account-pause";
 import { readCodexAccountRecord } from "../account-store";
-import { codexAccountPinDrainReason, resetCodexRoutingForManualSelection } from "../routing";
+import { codexAccountPinDrainReason, resetCodexRoutingForClearedSelection, resetCodexRoutingForManualSelection } from "../routing";
 import { jsonResponse } from "./http";
 
 class SelectionRejected extends Error {
@@ -95,12 +95,13 @@ export function persistCodexAccountSelection(config: OcxConfig, accountId: strin
   adoptPersistedCodexAccountSelection(config, committed);
   recordFileBackedConfig(config, configPath);
   // No failed save may clear affinity, spend the manual preference, or move the RR cursor.
-  resetCodexRoutingForManualSelection(accountId ?? MAIN_CODEX_ACCOUNT_ID);
+  if (accountId === null) resetCodexRoutingForClearedSelection();
+  else resetCodexRoutingForManualSelection(accountId);
   const pinDrainReason = accountId === null ? undefined : codexAccountPinDrainReason(config, accountId);
   return jsonResponse({
     ok: true,
     activeCodexAccountId: config.activeCodexAccountId ?? null,
-    appliesImmediately: true,
+    appliesImmediately: accountId !== null,
     ...(pinDrainReason !== undefined ? { pinDrained: true, pinDrainReason } : {}),
     ...(warning ? { warning: "config_bookkeeping_failed" } : {}),
   });

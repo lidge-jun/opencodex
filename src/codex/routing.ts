@@ -215,7 +215,7 @@ export {
   pickAlternateCodexAccount,
 } from "./routing/selection";
 export {
-  resetCodexRoutingForManualSelection,
+  resetCodexRoutingForManualSelection, resetCodexRoutingForClearedSelection,
   getEffectiveActiveCodexAccountId,
   isEffectiveCodexAccountPinned,
 } from "./routing/active-account";

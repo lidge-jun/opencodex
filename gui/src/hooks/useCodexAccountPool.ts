@@ -498,8 +498,9 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
       setActiveId(selectedId ?? null);
       // A manual selection pins its target until the account drains or routing moves off
       // it. The badge follows the id, not /active's `pinned` boolean, so a same-tier
-      // sibling's turn does not make the operator's choice look released.
-      setActivePinnedId(selectedId ?? "__main__");
+      // sibling's turn does not make the operator's choice look released. A null request
+      // is the unpin path — the server cleared the pin, so nothing is marked.
+      setActivePinnedId(selectedId ?? null);
       // Reconcile in the background: the switch is already accepted upstream, so a slow
       // reload must not hold the caller's confirmation dialog open.
       void load();

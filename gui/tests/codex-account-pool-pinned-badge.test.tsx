@@ -846,3 +846,78 @@ test("eligible next-session badge coexists with reset tickets while plan exclusi
   expect([...excluded.querySelectorAll(".badge")].some(el => el.textContent === en["codexAuth.nextSession"])).toBe(false);
   expect(excluded.querySelector(".badge-clickable")).not.toBeNull();
 });
+
+/** The PINNED chip is a button: text matches the badge rule, but selecting it again
+ *  is the release affordance. */
+function pinnedBadge(scope: ParentNode): HTMLButtonElement | null {
+  return [...scope.querySelectorAll<HTMLButtonElement>("button.badge")]
+    .find((el) => (el.textContent ?? "").trim() === en["codexAuth.pinned"]) ?? null;
+}
+
+test("selecting the pin again asks before releasing it", async () => {
+  const calls: Array<string | null> = [];
+  await mountPool(makeController({
+    activeId: "pool-1",
+    activePinnedId: "pool-1",
+    switchAccount: async (id) => { calls.push(id); return { ok: true, activeId: null }; },
+  }));
+
+  const badge = pinnedBadge(cardFor("pool@example.test"));
+  expect(badge).toBeTruthy();
+  expect(badge!.getAttribute("title")).toContain(en["codexAuth.unpinHint"]);
+  await act(async () => { badge!.click(); });
+
+  const dialog = host.querySelector("dialog");
+  expect(dialog?.textContent).toContain(en["codexAuth.unpinTitle"]);
+  expect(dialog?.textContent).toContain(en["codexAuth.unpinDesc"]);
+  expect(dialog?.textContent).not.toContain(en["codexAuth.cacheWarning"]);
+  expect(dialog?.textContent).toContain("pool@example.test");
+  // Release confirms only after the operator says so — no write from the badge alone.
+  expect(calls).toEqual([]);
+});
+
+test("confirming the release sends a null selection and reports the return to automatic", async () => {
+  const calls: Array<string | null> = [];
+  await mountPool(makeController({
+    activeId: "pool-1",
+    activePinnedId: "pool-1",
+    switchAccount: async (id) => { calls.push(id); return { ok: true, activeId: null }; },
+  }));
+
+  await act(async () => { pinnedBadge(cardFor("pool@example.test"))!.click(); });
+  const confirmButton = [...host.querySelectorAll<HTMLButtonElement>("dialog .modal-actions button")]
+    .find((b) => (b.textContent ?? "").includes(en["codexAuth.unpinAction"]));
+  expect(confirmButton).toBeTruthy();
+  expect(confirmButton!.disabled).toBe(false);
+  await act(async () => { confirmButton!.click(); });
+
+  // Null is the unpin write: the server clears the pin and automatic selection resumes.
+  expect(calls).toEqual([null]);
+  expect(host.querySelector("dialog")).toBeNull();
+  expect(host.textContent).toContain(en["codexAuth.unpinned"]);
+});
+
+test("the app login's pin releases the same way", async () => {
+  const calls: Array<string | null> = [];
+  await mountPool(makeController({
+    activeId: null,
+    activePinnedId: "__main__",
+    switchAccount: async (id) => { calls.push(id); return { ok: true, activeId: null }; },
+  }));
+
+  const badge = pinnedBadge(cardFor("main@example.test"));
+  expect(badge).toBeTruthy();
+  await act(async () => { badge!.click(); });
+
+  const dialog = host.querySelector("dialog");
+  expect(dialog?.textContent).toContain(en["codexAuth.unpinTitle"]);
+  const confirmButton = [...host.querySelectorAll<HTMLButtonElement>("dialog .modal-actions button")]
+    .find((b) => (b.textContent ?? "").includes(en["codexAuth.unpinAction"]));
+  await act(async () => { confirmButton!.click(); });
+  expect(calls).toEqual([null]);
+});
+
+test("an unpinned card offers no release affordance", async () => {
+  await mountPool(makeController({ activeId: "pool-1", activePinnedId: null }));
+  expect(pinnedBadge(host)).toBeNull();
+});
