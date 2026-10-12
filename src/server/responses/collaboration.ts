@@ -323,28 +323,34 @@ export function collabSurface(parsed: OcxParsedRequest): "v1" | "v2" | null {
   const nested = codeModeV1Evidence(parsed.context.tools);
   if (nested === null) return direct.surface;
   if (nested === "ambiguous") return null;
-  return !direct.sawCollabTool || direct.surface === "v1" ? "v1" : null;
+  return !direct.sawNativeCollabTool || direct.surface === "v1" ? "v1" : null;
 }
 
 function directCollabSurface(tools: OcxParsedRequest["context"]["tools"]): {
   surface: "v1" | "v2" | null;
-  sawCollabTool: boolean;
+  sawNativeCollabTool: boolean;
 } {
   let namespacedSpawn = false;
   let flatSpawn = false;
   let v1Only = false;
   let v2Only = false;
+  // Collaboration-named direct tools outside an MCP namespace; an MCP server's own send_message or
+  // spawn_agent says nothing about the native surface, matching the nested check.
+  let sawNativeCollabTool = false;
   for (const t of tools ?? []) {
+    const native = !t.namespace?.startsWith("mcp__");
     if (t.name === "spawn_agent") {
       if (t.namespace) namespacedSpawn = true;
       else flatSpawn = true;
+      if (native) sawNativeCollabTool = true;
     } else if (t.name === "send_input" || t.name === "resume_agent" || t.name === "close_agent") {
       v1Only = true;
+      if (native) sawNativeCollabTool = true;
     } else if (t.name === "send_message" || t.name === "followup_task" || t.name === "interrupt_agent" || t.name === "list_agents") {
       v2Only = true;
+      if (native) sawNativeCollabTool = true;
     }
   }
-  const sawCollabTool = namespacedSpawn || flatSpawn || v1Only || v2Only;
   const surface = (): "v1" | "v2" | null => {
     if (!namespacedSpawn && !flatSpawn) return null; // no spawn_agent -> no collab surface
     if (namespacedSpawn && flatSpawn) return null;   // contradictory spawn shapes
@@ -353,7 +359,7 @@ function directCollabSurface(tools: OcxParsedRequest["context"]["tools"]): {
     if (v2Only) return "v2";
     return namespacedSpawn ? "v1" : "v2"; // companionless fallbacks (legacy defaults)
   };
-  return { surface: surface(), sawCollabTool };
+  return { surface: surface(), sawNativeCollabTool };
 }
 
 

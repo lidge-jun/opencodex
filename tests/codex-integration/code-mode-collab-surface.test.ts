@@ -142,6 +142,14 @@ describe("code mode that renders the V1 tools (#6844)", () => {
     expect(surfaceOf(codeModeTools(execDescription(...V1_SECTIONS), [direct]))).toBe("v1");
   });
 
+  test("a direct MCP server tool with a companion's name does not veto the rendered listing", () => {
+    // code-mode-only keeps direct-only MCP namespaces top-level; a messaging server's send_message is not V2.
+    const mcp = { type: "namespace", name: "mcp__slack", description: "", tools: [fn("send_message"), fn("list_agents")] };
+    expect(surfaceOf(codeModeTools(execDescription(...V1_SECTIONS), [mcp]))).toBe("v1");
+    const unprefixed = { type: "namespace", name: "messaging", description: "", tools: [fn("send_message")] };
+    expect(surfaceOf(codeModeTools(execDescription(...V1_SECTIONS), [unprefixed]))).toBeNull();
+  });
+
   test("a heading-shaped line inside a fenced example does not cut the spawn section", () => {
     const example = [SPAWN_DESCRIPTION, FENCE + "md", "### " + TICK + "worker" + TICK, "Report back.", FENCE].join("\n");
     expect(surfaceOf(codeModeTools(execDescription(nested("multi_agent_v1__spawn_agent", example))))).toBe("v1");

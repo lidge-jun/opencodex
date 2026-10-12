@@ -443,6 +443,8 @@ renders inside the custom `exec` description: a tool heading, its description, a
 own declaration, and counts only `multi_agent_v1__spawn_agent` as V1 evidence. Any other
 `spawn_agent` or V2 companion beside it, or a different direct surface, makes the turn
 contradictory (`null`), which also withdraws a direct V2 surface's designation and effort cap.
+Collaboration-named tools in an `mcp__` namespace, direct or nested, are MCP server tools and
+neither prove nor contradict a native surface.
 The two checks are asymmetric on purpose: evidence needs a rendered section, while the
 contradiction check reads every heading and declaration line, quoted or not, so text copied into
 the listing can push a turn toward `null` but cannot hide another surface.
