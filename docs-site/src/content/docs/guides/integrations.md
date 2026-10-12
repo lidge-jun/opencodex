@@ -697,6 +697,11 @@ effort on a row and press Save:
   set the value there by hand. Symlinks and non-regular files are rejected; on macOS and Linux,
   a FIFO is rejected without waiting for a writer. A skipped mirror does not undo the role-file save.
 
+If the role-file save succeeds but the omo.jsonc write fails, the row's button becomes
+**Retry omo.jsonc**, which resends the same effort choice, including an **Inherit effort** clear
+(`null`). Until that retry succeeds, a later Save or Auto-assign Apply for the role that leaves the
+effort alone carries the pending choice with it; an explicitly picked effort takes its place.
+
 Nothing happens until you press Save; syncing or restarting opencodex never changes a role file.
 New Codex sessions pick up the change. The same controls exist on the command line:
 
