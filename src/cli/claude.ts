@@ -32,7 +32,7 @@ import { DEFAULT_CATALOG_PATH } from "../codex/paths";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { aliasForNative, aliasForRoute, legacyAliasForNative, legacyAliasForRoute } from "../claude/alias";
-import { desktop3pAlias } from "../claude/desktop-3p";
+import { desktop3pAlias, isRealDesktop3pModelId, resolveDesktop3pAlias } from "../claude/desktop-3p";
 import { inspectDesktopFirstParty } from "../claude/desktop-first-party";
 import { isClaudeInterceptProxyUrl, type ClaudeInterceptSettingsState } from "../claude/intercept/settings";
 import { withoutSiblingMarker } from "../codex/sibling-start";
@@ -620,9 +620,22 @@ const MODEL_ENV_SLOT_NAMES = [
 
 const DESKTOP_3P_ALIAS = /^claude-(?:opus-4(?:-8)?-[a-z][0-9a-z]{2}|(?:opus-4-8|fable-5)-p[0-9a-z]{3})(?:--fast)?$/;
 
-export function isProxyOnlyModelId(value: string, providerNames: readonly string[] = []): boolean {
+function nativeClaudeModelIds(config: OcxConfig): string[] {
+  const routes = Object.keys(config.claudeCode?.desktopProfile?.assignments ?? {});
+  return [...new Set([
+    ...routes.filter(route => route.startsWith("anthropic/claude-")).map(route => route.slice("anthropic/".length)),
+    ...[...(config.providers.anthropic?.models ?? []), ...(config.providers.anthropic?.selectedModels ?? [])]
+      .filter(id => id.startsWith("claude-")),
+  ])];
+}
+
+export function isProxyOnlyModelId(value: string, providerNames: readonly string[] = [], realAnthropicIds: readonly string[] = []): boolean {
   const id = value.trim().replace(/\[1m\]$/, "");
   if (!id) return false;
+  if (isRealDesktop3pModelId(id)) return false;
+  const base = id.endsWith("--fast") ? id.slice(0, -"--fast".length) : id;
+  if (resolveDesktop3pAlias(id) || resolveDesktop3pAlias(base)) return true;
+  if (realAnthropicIds.includes(id)) return false;
   const aliasPrefixes = [CLAUDE_ALIAS_PREFIX_CURRENT, CLAUDE_ALIAS_PREFIX_CURRENT_V2, CLAUDE_ALIAS_PREFIX_V1, CLAUDE_ALIAS_PREFIX_V2];
   if (aliasPrefixes.some(prefix => id.startsWith(prefix)) || DESKTOP_3P_ALIAS.test(id)) {
     return true;
@@ -684,9 +697,10 @@ export function buildNativeClaudeEnv(
   // otherwise settings.env can replace the destination while retaining the credential.
   if (hasOwnedAdmission) delete env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST;
   const providerNames = Object.keys(config.providers);
+  const realAnthropicIds = nativeClaudeModelIds(config);
   for (const name of MODEL_ENV_SLOT_NAMES) {
     const value = env[name];
-    if (!value || !isProxyOnlyModelId(value, providerNames)) continue;
+    if (!value || !isProxyOnlyModelId(value, providerNames, realAnthropicIds)) continue;
     delete env[name];
     // The label opencodex paired with this slot names a proxy route the native session cannot use.
     const labelName = `${name}_NAME`;
@@ -702,11 +716,12 @@ export function nativeModelOverride(
   configuredModel: string | undefined,
   args: readonly string[],
   providerNames: readonly string[] = [],
+  realAnthropicIds: readonly string[] = [],
 ): { flag?: string[]; warning?: string } {
-  if (!pickedModel || !isProxyOnlyModelId(pickedModel, providerNames)) return {};
+  if (!pickedModel || !isProxyOnlyModelId(pickedModel, providerNames, realAnthropicIds)) return {};
   if (args.some(arg => arg === "--model" || arg.startsWith("--model="))) return {};
   const fallback = configuredModel?.trim();
-  if (fallback && !isProxyOnlyModelId(fallback, providerNames)) {
+  if (fallback && !isProxyOnlyModelId(fallback, providerNames, realAnthropicIds)) {
     return {
       flag: ["--model", fallback],
       warning: `ℹ️ The saved model (${pickedModel}) requires the proxy. This native session will use ${fallback}.`,
@@ -867,6 +882,7 @@ async function launchNativeClaude(config: OcxConfig, args: string[], notice: str
     config.claudeCode?.model,
     args,
     providerNames,
+    nativeClaudeModelIds(config),
   );
   if (override.warning) console.error(override.warning);
   const allowRootSkipPermissions = shouldAllowRootSkipPermissions(args);

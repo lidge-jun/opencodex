@@ -362,6 +362,11 @@ export function isKnownDesktop3pModelId(id: string): boolean {
   return desktop3pRegistry.has(id) || desktop3pRealAnthropicIds.has(id);
 }
 
+/** Real catalog IDs retain identity even when their spelling resembles an alias. */
+export function isRealDesktop3pModelId(id: string): boolean {
+  return desktop3pRealAnthropicIds.has(id);
+}
+
 /** Only missing IDs in the emitted Desktop namespaces are managed-alias errors. */
 export function isUnresolvedDesktop3pAlias(id: string): boolean {
   if (isKnownDesktop3pModelId(id)) return false;
@@ -377,6 +382,13 @@ export function isUnresolvedDesktop3pAlias(id: string): boolean {
 /** Alias selected by the installed profile registry, falling back to the legacy hash shape. */
 export function activeDesktop3pAlias(provider: string, modelId: string): string {
   return desktop3pAliasesByRoute.get(`${provider}/${modelId}`) ?? desktop3pAlias(provider, modelId);
+}
+
+/** Discovery cannot offer a skipped alias or one owned by a different route. */
+export function resolvableDesktop3pAlias(provider: string, modelId: string): string | undefined {
+  if (provider === "anthropic" && modelId.startsWith("claude-")) return modelId;
+  const alias = activeDesktop3pAlias(provider, modelId);
+  return resolveDesktop3pAlias(alias) === `${provider}/${modelId}` ? alias : undefined;
 }
 
 /**

@@ -400,8 +400,11 @@ route before rendering. If any synthetic or compatibility alias matches an activ
 the conflicting routed row or compatibility binding is omitted with a warning, and the real
 Anthropic identity remains unclaimed; a profile alias can never overwrite native routing.
 `src/claude/desktop-profile.ts` owns the slot range and wire conversion.
-The native Claude CLI launcher in `src/cli/claude.ts` classifies both profile wire
-namespaces as proxy-only, so it clears these IDs before launching outside the proxy.
+The native launcher (`src/cli/claude.ts`) clears proxy-only profile IDs, except genuine
+IDs known from the registry or declared models/profile. Active synthetic bindings take
+priority over stale declarations. Discovery uses `resolvableDesktop3pAlias` in
+`src/claude/desktop-3p.ts`: synthetic IDs must decode to their advertised route;
+real Anthropic IDs retain identity passthrough.
 
 Persisted date-shaped Desktop IDs can overlap genuine native model IDs. When available discovery and
 mapping evidence cannot resolve one, Messages and count-tokens return HTTP 503 with the fixed

@@ -16,6 +16,7 @@ import {
   shouldAllowRootSkipPermissions,
 } from "../../src/cli/claude";
 import { buildClaudeContextWindows } from "../../src/claude/context-windows";
+import { buildDesktop3pRegistry } from "../../src/claude/desktop-3p";
 import { commandInvocation } from "../../src/lib/win-exec";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -249,6 +250,51 @@ describe("ocx claude native fallback", () => {
     expect(nativeModelOverride("claude-ocx2-abcd", "mock/model", [], ["mock"]).flag).toBeUndefined();
     expect(nativeModelOverride("claude-ocx2-abcd", "opus", ["--model", "sonnet"], ["mock"]))
       .toEqual({});
+  });
+
+  test("genuine Anthropic IDs are not replaced or stripped when they resemble profile aliases", () => {
+    try {
+      for (const id of ["claude-fable-5-p000", "claude-opus-4-8-p000"]) {
+        buildDesktop3pRegistry([], [{ provider: "anthropic", id }]);
+        expect(isProxyOnlyModelId(id)).toBe(false);
+        expect(nativeModelOverride(id, "opus", [])).toEqual({});
+        expect(buildNativeClaudeEnv(cfg(), { ANTHROPIC_MODEL: `${id}[1m]` }).ANTHROPIC_MODEL).toBe(`${id}[1m]`);
+        buildDesktop3pRegistry([], []);
+        const configured = cfg({
+          providers: { anthropic: { adapter: "anthropic", models: [`${id}--fast`] } },
+          claudeCode: { desktopProfile: {
+            version: 1, assignments: { [`anthropic/${id}`]: { family: "opus", alias: id } },
+            defaults: { opus: `anthropic/${id}`, fable: null, sonnet: null, haiku: null },
+          } },
+        });
+        const env = buildNativeClaudeEnv(configured, {
+          ANTHROPIC_MODEL: id, ANTHROPIC_DEFAULT_FABLE_MODEL: `${id}--fast[1m]`,
+        });
+        expect(env.ANTHROPIC_MODEL).toBe(id);
+        expect(env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe(`${id}--fast[1m]`);
+        configured.providers.anthropic!.models = undefined;
+        configured.providers.anthropic!.selectedModels = [`${id}--fast`];
+        expect(buildNativeClaudeEnv(configured, { ANTHROPIC_MODEL: `${id}--fast` }).ANTHROPIC_MODEL)
+          .toBe(`${id}--fast`);
+        expect(nativeModelOverride(id, "opus", [], ["anthropic"], [id])).toEqual({});
+        // The same spelling without genuine-model evidence is still proxy-only.
+        expect(isProxyOnlyModelId(id)).toBe(true);
+      }
+    } finally { buildDesktop3pRegistry([], []); }
+  });
+
+  test("an active synthetic binding takes priority over stale genuine-model declarations", () => {
+    const id = "claude-fable-5-p000";
+    const profile = { version: 1 as const,
+      assignments: { "mock/model": { family: "opus" as const, alias: "claude-opus-4-8-20260101" } },
+      defaults: { opus: "mock/model", fable: null, sonnet: null, haiku: null },
+    };
+    try {
+      buildDesktop3pRegistry([], [{ provider: "mock", id: "model" }], profile);
+      expect(isProxyOnlyModelId(id, [], [id])).toBe(true);
+      expect(isProxyOnlyModelId(`${id}--fast[1m]`, [], [`${id}--fast`])).toBe(true);
+      expect(nativeModelOverride(id, "opus", [], [], [id])).toMatchObject({ flag: ["--model", "opus"] });
+    } finally { buildDesktop3pRegistry([], []); }
   });
 
   test("a connected client's window map keeps legacy claude-ocx selectors next to the current ones", () => {
