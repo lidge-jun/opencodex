@@ -648,6 +648,21 @@ export function metricsExportConfigError(value: unknown): string | null {
   return null;
 }
 
+/** Load degrades a malformed service health recovery section to off; live writes reject it. */
+export function serviceHealthRecoveryConfigError(value: unknown): string | null {
+  const raw = rawConfigRecord(value);
+  if (!raw || !Object.hasOwn(raw, "serviceHealthRecovery") || raw.serviceHealthRecovery === undefined) return null;
+  const section = rawConfigRecord(raw.serviceHealthRecovery);
+  if (!section) return "schema_invalid: serviceHealthRecovery: must be an object or omitted";
+  if (Object.keys(section).some(key => key !== "enabled")) {
+    return "schema_invalid: serviceHealthRecovery: contains an unsupported field";
+  }
+  if (section.enabled !== undefined && typeof section.enabled !== "boolean") {
+    return "schema_invalid: serviceHealthRecovery.enabled: must be a boolean";
+  }
+  return null;
+}
+
 
 function skillsConfigError(value: unknown): string | null {
   const raw = rawConfigRecord(value);
@@ -710,6 +725,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? loopbackListenerPortError(value)
     ?? managementIngressConfigError(value)
     ?? metricsExportConfigError(value)
+    ?? serviceHealthRecoveryConfigError(value)
     ?? skillsConfigError(value);
   if (boundaryError) return { ok: false, error: boundaryError };
   const result = configSchema.safeParse(value);

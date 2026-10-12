@@ -17,6 +17,11 @@ export function metricsExportEnabled(config: Pick<OcxConfig, "metricsExport">): 
   return config.metricsExport?.enabled === true;
 }
 
+/** Default-off service health recovery (#6671); read once when the proxy starts. */
+export function serviceHealthRecoveryEnabled(config: Pick<OcxConfig, "serviceHealthRecovery">): boolean {
+  return config.serviceHealthRecovery?.enabled === true;
+}
+
 /**
  * Default cadence for catalog auto-refresh (issue #3630): one converge pass
  * per hour. Each pass spends a live /models call against every enabled provider, and

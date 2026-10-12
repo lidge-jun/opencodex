@@ -1,4 +1,8 @@
 {
+  "service-health-sentinel-policy.test.ts": "service",
+  "service-health-sentinel-runner.test.ts": "service",
+  "service-health-sentinel-launch.test.ts": "service",
+  "service-health-sentinel-process.test.ts": "service",
     "messages-request-id-headers.test.ts": "claude-integration",
     "messages-request-id-endpoint.test.ts": "claude-integration",
   "anthropic-revoked-token.test.ts": "adapters/anthropic",
