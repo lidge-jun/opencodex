@@ -443,6 +443,9 @@ renders inside the custom `exec` description: a tool heading, its description, a
 own declaration, and counts only `multi_agent_v1__spawn_agent` as V1 evidence. Any other
 `spawn_agent` or V2 companion beside it, or a different direct surface, makes the turn
 contradictory (`null`), which also withdraws a direct V2 surface's designation and effort cap.
+The two checks are asymmetric on purpose: evidence needs a rendered section, while the
+contradiction check reads every heading and declaration line, quoted or not, so text copied into
+the listing can push a turn toward `null` but cannot hide another surface.
 Nested evidence never produces `v2`. When the model supports tool search (every OpenCodex catalog
 row), codex-rs defers the V1 tools and leaves them out of the description, and no other
 per-request V1 signal exists: codex-rs sends its own `<multi_agent_mode>` item only on V2 and pins the

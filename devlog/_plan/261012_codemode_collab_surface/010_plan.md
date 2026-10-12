@@ -131,3 +131,9 @@ AGENTS.md resource exception, recorded in the PR). No live service is touched.
   outermost, and a suffix must differ from the heading and normalize to it); `(...)` and empty
   `Promise<>` declarations were accepted (now a named typed parameter and a non-empty return are
   required). Each fix has a regression that fails without it.
+- Code review round 4 (GPT-6.1-Sol high) FAIL: an orphan heading in an earlier namespace description
+  could borrow a later genuine V2 companion declaration and hide the contradiction. Rather than
+  another ownership patch (four rounds of the same class), the contradiction check is now liberal:
+  it reads every heading (name and raw suffix) and every `declare const tools: { X(` line, quoted
+  or not, while V1 evidence stays strict. Copied text can only move a turn toward null. The
+  outermost-owner rule no longer changes any outcome and has no dedicated test.

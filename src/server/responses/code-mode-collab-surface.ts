@@ -147,9 +147,28 @@ function isForeignCollabName(name: string): boolean {
   return V2_COMPANIONS.some(companion => name === companion || name.endsWith("__" + companion));
 }
 
+/** Every name a heading or declaration line mentions, quoted or not. */
+function mentionedToolNames(description: string): string[] {
+  const names: string[] = [];
+  for (const line of description.split("\n")) {
+    const heading = TOOL_HEADING.exec(line);
+    if (heading) {
+      names.push(heading[1]!);
+      if (heading[2] !== undefined) names.push(heading[2]);
+    }
+    for (const match of line.matchAll(/declare const tools: \{ ([A-Za-z_$][\w$]*)\(/g)) names.push(match[1]!);
+  }
+  return names;
+}
+
 /**
  * "v1" when a genuine code-mode exec renders the V1 spawn tool and nothing that claims another
  * collaboration surface; "ambiguous" when it renders both; null when it proves nothing.
+ *
+ * The two halves are deliberately asymmetric. V1 evidence needs a rendered section (a heading
+ * followed by its complete declaration). The contradiction check reads every heading and
+ * declaration line, inside fences or not and whoever "owns" it, so text copied into the listing
+ * can only push a turn toward null; it cannot hide another surface.
  */
 export function codeModeV1Evidence(tools: readonly OcxTool[] | undefined): CodeModeV1Evidence {
   if (!tools || tools.length === 0) return null;
@@ -158,12 +177,9 @@ export function codeModeV1Evidence(tools: readonly OcxTool[] | undefined): CodeM
   let foreign = false;
   for (const tool of tools) {
     if (!isCodeModeExec(tool)) continue;
-    for (const { raw } of renderedNestedTools(tool.description)) {
-      // Classify by the name the host registered; the normalized identifier can collapse a foreign
-      // namespace such as multi-agent-v1 onto multi_agent_v1.
-      if (raw === MULTI_AGENT_V1_SPAWN) v1Spawn = true;
-      else if (isForeignCollabName(raw)) foreign = true;
-    }
+    // A rendered V1 spawn heading carries no raw-name suffix: the identifier needs no normalization.
+    if (renderedNestedTools(tool.description).some(rendered => rendered.raw === MULTI_AGENT_V1_SPAWN)) v1Spawn = true;
+    if (mentionedToolNames(tool.description).some(isForeignCollabName)) foreign = true;
   }
   if (!v1Spawn) return null;
   return foreign ? "ambiguous" : "v1";

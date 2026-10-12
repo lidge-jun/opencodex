@@ -158,9 +158,15 @@ describe("code mode that renders the V1 tools (#6844)", () => {
     expect(surfaceOf(codeModeTools(execDescription(nested("multi_agent_v1__spawn_agent", described))))).toBe("v1");
   });
 
-  test("a same-name heading quoted in the spawn description does not replace the genuine owner", () => {
-    const quoted = [SPAWN_DESCRIPTION, heading("multi_agent_v1__spawn_agent", "multi-agent-v1__spawn_agent")].join("\n");
+  test("a same-name V1 heading quoted in the spawn description does not replace the genuine owner", () => {
+    const quoted = [SPAWN_DESCRIPTION, heading("multi_agent_v1__spawn_agent")].join("\n");
     expect(surfaceOf(codeModeTools(execDescription(nested("multi_agent_v1__spawn_agent", quoted))))).toBe("v1");
+  });
+
+  test("a foreign-looking heading quoted in the spawn description fails closed", () => {
+    // Copied text may push a turn toward null, never away from it.
+    const quoted = [SPAWN_DESCRIPTION, heading("multi_agent_v1__spawn_agent", "multi-agent-v1__spawn_agent")].join("\n");
+    expect(surfaceOf(codeModeTools(execDescription(nested("multi_agent_v1__spawn_agent", quoted))))).toBeNull();
   });
 
   test("an example declaration inside the spawn description leaves the spawn section open", () => {
@@ -274,6 +280,17 @@ describe("contradictory signals stay null", () => {
   test("a same-name heading inside a V2 companion's description does not hide the contradiction", () => {
     const quoted = ["Send a message.", heading("collaboration__send_message", "collaboration-_send_message")].join("\n");
     expect(surfaceOf(codeModeTools(execDescription(...V1_SECTIONS, nested("collaboration__send_message", quoted))))).toBeNull();
+  });
+
+  test("an orphan heading in an earlier namespace description does not hide a later V2 companion", () => {
+    const orphan = "## a_docs\n" + heading("collaboration__send_message", "collaboration-_send_message");
+    const listing = execDescription(orphan, nested("a_docs__lookup"), "## collaboration", nested("collaboration__send_message"), ...V1_SECTIONS);
+    expect(surfaceOf(codeModeTools(listing))).toBeNull();
+  });
+
+  test("a V2 declaration quoted inside a fence still counts as a contradiction", () => {
+    const example = ["Example:", FENCE + "ts", "declare const tools: { collaboration__send_message(args: {}): Promise<unknown>; };", FENCE].join("\n");
+    expect(surfaceOf(codeModeTools(execDescription(...V1_SECTIONS, nested("docs__lookup", example))))).toBeNull();
   });
 
   test("an example closed with trailing whitespace does not swallow the next section", () => {
