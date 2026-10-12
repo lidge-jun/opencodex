@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   inspectNpmCacheDirectory,
+  inspectNpmCacheRoot,
+  npmCachePreflightFailureMessage,
+  resolveNpmCachePath,
   runNpmCachePreflight,
 } from "../../src/update/npm-cache-preflight.mjs";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -123,8 +126,8 @@ describe("npm cache access pre-flight", () => {
   });
 
   // Unix mode semantics: a Windows directory reports 0o666 with no execute bit, so the
-  // owner-rwx accessibility check can never pass there. Production already skips Windows
-  // entirely (runNpmCachePreflight returns windows_skip), so this proves nothing there.
+  // owner-rwx accessibility check can never pass there. Production runs only the cache-root
+  // check on Windows (the worker's --root-only mode), so this proves nothing there.
   test.skipIf(process.platform === "win32")("an inspection budget that runs out lets the update proceed", () => {
     // A mature npm cache legitimately holds hundreds of thousands of entries. "We ran out of
     // budget looking" is not evidence of a broken cache, and treating it as failure locked
@@ -239,17 +242,160 @@ describe("npm cache access pre-flight", () => {
     })).toEqual({ ok: true, reason: "cache_accessible" });
   });
 
-  test("Windows skips explicitly without spawning npm or a worker", () => {
-    let spawned = false;
-    const spawn = (() => {
-      spawned = true;
-      throw new Error("must not spawn");
+  test("Windows runs the root-only worker against the resolved cache instead of skipping (#6288)", () => {
+    let workerArgs: string[] = [];
+    const spawn = ((_file: string, args: string[]) => {
+      workerArgs = args;
+      return { status: 0, signal: null, stdout: JSON.stringify({ protocol: 1, ok: false, reason: "cache_root_dangling_link" }), stderr: "" };
     }) as never;
 
-    expect(runNpmCachePreflight({ platform: "win32", spawnSyncFn: spawn })).toEqual({
-      ok: true,
-      reason: "windows_skip",
+    expect(runNpmCachePreflight({ platform: "win32", cachePath: "C:\\cache\\npm-cache", spawnSyncFn: spawn })).toEqual({
+      ok: false,
+      reason: "cache_root_dangling_link",
     });
-    expect(spawned).toBe(false);
+    expect(workerArgs.slice(1)).toEqual(["--ocx-npm-cache-preflight-worker", "--root-only", "C:\\cache\\npm-cache"]);
+  });
+});
+
+describe("npm cache root usability (#6288)", () => {
+  const runWorker = (cachePath: string) => runNpmCachePreflight({ platform: "win32", cachePath });
+
+  test("a usable or not-yet-created cache root passes", () => {
+    const parent = tempRoot("root-usable");
+    mkdirSync(join(parent, "npm-cache"));
+    expect(inspectNpmCacheRoot(join(parent, "npm-cache"))).toEqual({ ok: true, reason: "cache_accessible" });
+    // npm creates a missing root itself; only what it would mkdir under has to be a directory.
+    expect(inspectNpmCacheRoot(join(parent, "missing", "npm-cache"))).toEqual({ ok: true, reason: "cache_accessible" });
+  });
+
+  test("a file where the root or one of its parents should be is classified, on every platform", () => {
+    const parent = tempRoot("root-file");
+    const fileRoot = join(parent, "npm-cache");
+    writeFileSync(fileRoot, "not a directory");
+    const notDirectory = { ok: false, reason: "cache_root_not_directory" };
+    expect(inspectNpmCacheRoot(fileRoot)).toEqual(notDirectory);
+    expect(inspectNpmCacheRoot(join(fileRoot, "nested", "cache"))).toEqual(notDirectory);
+    // The POSIX deep inspection used to walk past a file root and report it accessible.
+    expect(inspectNpmCacheDirectory(fileRoot)).toEqual(notDirectory);
+    // Same answer through the real worker in its Windows (root-only) mode.
+    expect(runWorker(fileRoot)).toEqual(notDirectory);
+  });
+
+  test("a junction-shaped root whose target is gone is a dangling link, not a generic failure", () => {
+    // Simulates the reported Windows shape: lstat sees a reparse point, following it fails.
+    const junction = { isSymbolicLink: () => true, isDirectory: () => false };
+    const missing = () => { throw Object.assign(new Error("ENOENT"), { code: "ENOENT" }); };
+    expect(inspectNpmCacheRoot("/synthetic/npm-cache", { lstatFn: () => junction, statFn: missing })).toEqual({
+      ok: false,
+      reason: "cache_root_dangling_link",
+    });
+    // A relocated root whose target exists is ordinary configuration.
+    const directory = { isSymbolicLink: () => false, isDirectory: () => true };
+    expect(inspectNpmCacheRoot("/synthetic/npm-cache", { lstatFn: () => junction, statFn: () => directory })).toEqual({
+      ok: true,
+      reason: "cache_accessible",
+    });
+  });
+
+  test.skipIf(!canSymlink)("a real dangling link root fails before the proxy stop, through the worker", () => {
+    const home = tempRoot("root-dangling");
+    const target = join(tempRoot("root-dangling-target"), "npm-cache");
+    mkdirSync(target);
+    const link = join(home, "npm-cache");
+    symlinkSync(target, link, WINDOWS ? "junction" : "dir");
+    expect(runWorker(link)).toEqual({ ok: true, reason: "cache_accessible" });
+
+    rmSync(target, { recursive: true });
+    expect(inspectNpmCacheRoot(link)).toEqual({ ok: false, reason: "cache_root_dangling_link" });
+    expect(runWorker(link)).toEqual({ ok: false, reason: "cache_root_dangling_link" });
+  });
+
+  test.skipIf(!WINDOWS)("Windows: a real directory junction to a removed target is detected", () => {
+    // Junctions need no symlink privilege, so this runs on every Windows host.
+    const home = tempRoot("junction-home");
+    const target = join(tempRoot("junction-target"), "npm-cache");
+    mkdirSync(target);
+    const junction = join(home, "npm-cache");
+    symlinkSync(target, junction, "junction");
+    expect(runNpmCachePreflight({ cachePath: junction })).toEqual({ ok: true, reason: "cache_accessible" });
+    rmSync(target, { recursive: true });
+    expect(runNpmCachePreflight({ cachePath: junction })).toEqual({ ok: false, reason: "cache_root_dangling_link" });
+  });
+
+  test("the worker refuses a supplied cache path that is not absolute", () => {
+    expect(runNpmCachePreflight({ platform: "linux", cachePath: "relative/npm-cache" }))
+      .toEqual({ ok: false, reason: "cache_path_malformed" });
+  });
+
+  test("Windows keeps the pre-#6288 skip for inconclusive results and blocks only a broken root", () => {
+    const emit = (status: number | null, payload?: Record<string, unknown>) => (() => ({
+      status, signal: null, stdout: payload ? JSON.stringify(payload) : "", stderr: "",
+    })) as never;
+    const skip = { ok: true, reason: "windows_skip" };
+    expect(runNpmCachePreflight({ platform: "win32", spawnSyncFn: emit(null) })).toEqual(skip);
+    expect(runNpmCachePreflight({ platform: "win32", spawnSyncFn: emit(1) })).toEqual(skip);
+    for (const reason of ["npm_config_failed", "npm_unavailable", "cache_entry_inaccessible"]) {
+      expect(runNpmCachePreflight({ platform: "win32", spawnSyncFn: emit(0, { protocol: 1, ok: false, reason }) })).toEqual(skip);
+    }
+    for (const reason of ["cache_root_dangling_link", "cache_root_not_directory"]) {
+      expect(runNpmCachePreflight({ platform: "win32", spawnSyncFn: emit(0, { protocol: 1, ok: false, reason }) }))
+        .toEqual({ ok: false, reason });
+    }
+    // POSIX still fails closed on the same inconclusive results.
+    expect(runNpmCachePreflight({ platform: "linux", spawnSyncFn: emit(null) })).toEqual({ ok: false, reason: "worker_timeout" });
+  });
+
+  test("resolveNpmCachePath returns npm's configured cache with the caller's environment", () => {
+    const invocation = (args: string[]) => ({ file: "npm", args, options: {} });
+    let seenEnv: NodeJS.ProcessEnv | undefined;
+    let seenArgs: string[] = [];
+    let seenCwd: string | undefined;
+    const answer = (stdout: string, status = 0) => ((_file: string, args: string[], options: { env: NodeJS.ProcessEnv; cwd?: string }) => {
+      seenEnv = options.env;
+      seenArgs = args;
+      seenCwd = options.cwd;
+      return { status, signal: null, stdout, stderr: "" };
+    }) as never;
+    const env = { FIXTURE_ENV: "1" };
+    const configured = join(tmpdir(), "configured-npm-cache");
+
+    expect(resolveNpmCachePath({ env, invocationFn: invocation, spawnSyncFn: answer(configured + "\n") })).toEqual({
+      ok: true,
+      path: configured,
+    });
+    expect(seenEnv).toBe(env);
+    // Global mode from the home directory: a project .npmrc in the caller's cwd cannot pick the
+    // cache that the global staging install is pinned to.
+    expect(seenArgs).toEqual(["config", "get", "cache", "--global"]);
+    expect(seenCwd).toBe(homedir());
+    expect(resolveNpmCachePath({ invocationFn: invocation, spawnSyncFn: answer("", 1) })).toEqual({ ok: false, reason: "npm_config_failed" });
+    expect(resolveNpmCachePath({ invocationFn: invocation, spawnSyncFn: answer("a\nb") })).toEqual({ ok: false, reason: "cache_path_malformed" });
+    expect(resolveNpmCachePath({ invocationFn: () => null })).toEqual({ ok: false, reason: "npm_unavailable" });
+  });
+
+  test("Windows refuses to pin a cache path carrying cmd.exe metacharacters", () => {
+    const invocation = (args: string[]) => ({ file: "npm", args, options: {} });
+    const answer = (stdout: string) => (() => ({ status: 0, signal: null, stdout, stderr: "" })) as never;
+    const absolute = join(tmpdir(), "npm-cache");
+    for (const unsafe of ['" & calc & "', "%PATH%", "a!b", "a^b", "a|b", "a<b", "a>b"]) {
+      expect(resolveNpmCachePath({ platform: "win32", invocationFn: invocation, spawnSyncFn: answer(absolute + unsafe) }))
+        .toEqual({ ok: false, reason: "cache_path_malformed" });
+    }
+    expect(resolveNpmCachePath({ platform: "win32", invocationFn: invocation, spawnSyncFn: answer(absolute) }))
+      .toEqual({ ok: true, path: absolute });
+    // POSIX passes argv without a shell, so the same characters stay a literal path there.
+    expect(resolveNpmCachePath({ platform: "linux", invocationFn: invocation, spawnSyncFn: answer(absolute + "&x") }))
+      .toEqual({ ok: true, path: absolute + "&x" });
+  });
+
+  test("root failures carry fixed, path-free guidance", () => {
+    const dangling = npmCachePreflightFailureMessage("cache_root_dangling_link");
+    const notDirectory = npmCachePreflightFailureMessage("cache_root_not_directory");
+    expect(dangling).toContain("target is missing");
+    expect(notDirectory).toContain("ENOTDIR");
+    for (const message of [dangling, notDirectory]) {
+      expect(message).toContain("npm config get cache");
+      expect(message).not.toContain("ownership");
+    }
   });
 });

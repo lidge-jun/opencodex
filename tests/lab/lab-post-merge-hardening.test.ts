@@ -26,6 +26,7 @@ import type { ObservationEvent, ProtocolSubjectV1 } from "../../src/lab/events/t
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const HOMES: string[] = [];
+const previousHome = process.env.OPENCODEX_HOME;
 
 function tempHome(): string {
   const dir = join(tmpdir(), `ocx-lab-hardening-${process.pid}-${Math.random().toString(16).slice(2)}`);
@@ -42,7 +43,8 @@ afterEach(() => {
       /* ignore */
     }
   }
-  delete process.env.OPENCODEX_HOME;
+  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = previousHome;
 });
 
 function createHashHex(value: string): string {
@@ -221,6 +223,42 @@ test("event privacy admission rejects raw filesystem path bypass forms", () => {
     expect(() => enforceEventStructureLimits({ detail })).not.toThrow();
   }
 });
+
+test("event privacy admission stays linear on pathological path strings", () => {
+  // RAW_POSIX_PATH_RE once alternated `\/` with `[^/]+` under a shared `+` — the
+  // polynomial-ReDoS shape static analysis flags — though the group cannot in
+  // practice fail mid-run, so no input separates the old verdicts from the new.
+  // These cases therefore pin the contract rather than a measurable slowdown:
+  // each stays under the 4 KiB field cap so it reaches the regex, and any rewrite
+  // that changes one of these verdicts is wrong regardless of speed. The elapsed
+  // assertion below measures the new shape on these inputs instead of relying on
+  // a timeout that the old shape would not have hit either.
+  const rejected = [
+    `cwd=/${"a/".repeat(2000)}`,        // long segment chain
+    `cwd=/${"a//".repeat(1300)}`,       // slash-dense chain
+    `cwd=/${"a".repeat(3000)}/`,        // trailing slash after a maxed segment
+    "cwd=/a//b",                        // interior double slash keeps matching
+    "cwd=/a\tb",                       // a tab inside a segment is still a path
+  ];
+  const startedAt = performance.now();
+  for (const detail of rejected) {
+    try {
+      enforceEventStructureLimits({ detail });
+      throw new Error(`expected raw_path rejection for ${detail.slice(0, 40)}`);
+    } catch (err) {
+      expect((err as { code?: string }).code).toBe("raw_path");
+    }
+  }
+
+  const allowed = [
+    `https://example.com/${"a/".repeat(2000)}`, // a URL, not a POSIX path
+    "cwd=//",                                  // a leading double slash never starts a path
+  ];
+  for (const detail of allowed) {
+    expect(() => enforceEventStructureLimits({ detail })).not.toThrow();
+  }
+  expect(performance.now() - startedAt).toBeLessThan(1_000);
+}, 10_000);
 
 test("invalid JSON contract artifacts classify as artifact_mismatch", () => {
   const home = tempHome();

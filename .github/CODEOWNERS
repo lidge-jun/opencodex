@@ -14,6 +14,7 @@
 /bunfig.toml @lidge-jun @Ingwannu
 /scripts/release.ts @lidge-jun @Ingwannu
 /scripts/release-notes.ts @lidge-jun @Ingwannu
+/scripts/release-version-sources.ts @lidge-jun @Ingwannu
 /scripts/prepare-package.ts @lidge-jun @Ingwannu
 /package.json @lidge-jun @Ingwannu
 /bun.lock @lidge-jun @Ingwannu

@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { sanitizeGeminiToolParameters } from "../../../src/adapters/google-tool-schema";
+import {
+  sanitizeGeminiToolParameters,
+  sanitizeGeminiToolParametersWithReport,
+} from "../../../src/adapters/google-tool-schema";
 
 function countSchemaNodes(value: unknown): number {
   if (!value || typeof value !== "object" || Array.isArray(value)) return 0;
@@ -10,6 +13,24 @@ function countSchemaNodes(value: unknown): number {
   }
   if (schema.items !== undefined) count += countSchemaNodes(schema.items);
   return count;
+}
+
+/**
+ * Gemini rejects an array declaration that carries no `items` (#5689), which fails the whole tool
+ * request. Returns the path of every emitted array that lacks them, walking the same places as
+ * `countSchemaNodes`.
+ */
+function findArraysWithoutItems(value: unknown, path = "root"): string[] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+  const schema = value as Record<string, unknown>;
+  const offenders = schema.type === "array" && schema.items === undefined ? [path] : [];
+  if (schema.properties && typeof schema.properties === "object" && !Array.isArray(schema.properties)) {
+    for (const [name, child] of Object.entries(schema.properties)) {
+      offenders.push(...findArraysWithoutItems(child, `${path}.${name}`));
+    }
+  }
+  offenders.push(...findArraysWithoutItems(schema.items, `${path}.items`));
+  return offenders;
 }
 
 describe("sanitizeGeminiToolParameters", () => {
@@ -452,7 +473,7 @@ describe("sanitizeGeminiToolParameters", () => {
     expect(choice).toEqual({ description: "kept" });
   });
 
-  test("does not read items after earlier traversal exhausts the budget", () => {
+  test("omits an array left without items after earlier traversal exhausts the budget", () => {
     const container: Record<string, unknown> = {
       type: "array",
       properties: Object.fromEntries(Array.from(
@@ -469,18 +490,145 @@ describe("sanitizeGeminiToolParameters", () => {
       },
     });
 
-    const out = sanitizeGeminiToolParameters({
+    const result = sanitizeGeminiToolParametersWithReport({
       type: "object",
       properties: { container },
-    });
-    const sanitized = (out.properties as Record<string, Record<string, unknown>>).container;
+    }, { endpointClass: "ai-studio" });
+    const properties = result.parameters.properties as Record<string, Record<string, unknown>>;
+    // The traversal stops before the `items` keyword is read, and the array it can no longer
+    // complete is omitted rather than emitted without them.
     expect(readItems).toBe(false);
-    expect(sanitized.items).toBeUndefined();
-    expect(countSchemaNodes(out)).toBe(1_024);
+    expect(findArraysWithoutItems(result.parameters)).toEqual([]);
+    expect(properties.container).toBeUndefined();
+    expect(result.lossReport.categories["node-budget-widened"]).toBe(1);
+  });
+
+  test("charges synthesized array items to the node budget", () => {
+    const names = Array.from({ length: 2_000 }, (_, index) => `field_${index}`);
+    const result = sanitizeGeminiToolParametersWithReport({
+      type: "object",
+      properties: Object.fromEntries(names.map(name => [name, { type: "array" }])),
+    }, { endpointClass: "ai-studio" });
+
+    // Every retained array leaf costs two nodes: the leaf and the `items` synthesized for it, and no
+    // retained leaf may be an array the budget left without them.
+    expect(countSchemaNodes(result.parameters)).toBeLessThanOrEqual(1_024);
+    expect(findArraysWithoutItems(result.parameters)).toEqual([]);
+    const properties = result.parameters.properties as Record<string, Record<string, unknown>>;
+    const retained = Object.keys(properties);
+    expect(retained).toHaveLength(511);
+    expect(retained.map(name => properties[name])).toEqual(
+      retained.map(() => ({ type: "array", items: { type: "string" } })),
+    );
+    expect(result.lossReport.categories["node-budget-widened"]).toBeGreaterThan(0);
+  });
+
+  test("omits a nested array whose items cannot be completed inside the node budget", () => {
+    // Each `grid` costs three nodes: the outer array, its inner array, and the item synthesized for
+    // the inner one. The one-node `pad` property puts the boundary mid-grid, so the last grid can
+    // complete neither level: the inner array is omitted for want of an item node and the outer one
+    // follows it, rather than the inner array being nested into a retained outer array without them.
+    const properties: Record<string, unknown> = { pad: { type: "string" } };
+    for (let index = 0; index < 2_000; index++) {
+      properties[`grid_${index}`] = { type: "array", items: { type: "array" } };
+    }
+    const result = sanitizeGeminiToolParametersWithReport({
+      type: "object",
+      properties,
+    }, { endpointClass: "ai-studio" });
+
+    expect(countSchemaNodes(result.parameters)).toBeLessThanOrEqual(1_024);
+    // The inner array cannot pay for its item node, so it is omitted; the outer array that lost its
+    // `items` this way is omitted with it instead of being retained bare.
+    expect(findArraysWithoutItems(result.parameters)).toEqual([]);
+    const retained = result.parameters.properties as Record<string, Record<string, unknown>>;
+    expect(Object.keys(retained)).toHaveLength(341);
+    expect(retained.pad).toEqual({ type: "string" });
+    expect(retained.grid_339).toEqual({
+      type: "array",
+      items: { type: "array", items: { type: "string" } },
+    });
+    expect(retained.grid_340).toBeUndefined();
+    expect(result.lossReport.categories["node-budget-widened"]).toBe(1);
   });
 
   test("falls back to an object schema for non-object input", () => {
     expect(sanitizeGeminiToolParameters(undefined)).toEqual({ type: "object", properties: {} });
     expect(sanitizeGeminiToolParameters("nope")).toEqual({ type: "object", properties: {} });
+  });
+
+  test("materializes items on an array left without them (issue #5689)", () => {
+    const result = sanitizeGeminiToolParametersWithReport({
+      type: "object",
+      required: ["values"],
+      properties: { values: { type: "array" } },
+    }, { endpointClass: "ai-studio" });
+    const values = (result.parameters.properties as Record<string, Record<string, unknown>>).values;
+    expect(values.items).toEqual({ type: "string" });
+    expect(values).toEqual({ type: "array", items: { type: "string" } });
+    // Gemini needs the item type present; adding it widens nothing, so `lossy` stays false.
+    expect(result.lossReport.lossy).toBe(false);
+    expect(result.lossReport.categories).toEqual({});
+  });
+
+  test("materializes items for an array nested in array items", () => {
+    const out = sanitizeGeminiToolParameters({
+      type: "object",
+      properties: { grid: { type: "array", items: { type: "array" } } },
+    });
+    const grid = (out.properties as Record<string, Record<string, unknown>>).grid;
+    expect(grid).toEqual({ type: "array", items: { type: "array", items: { type: "string" } } });
+  });
+
+  test("materializes items when a tuple's prefix list is dropped", () => {
+    const result = sanitizeGeminiToolParametersWithReport({
+      type: "object",
+      properties: { pair: { type: "array", items: [{ type: "string" }, { type: "number" }] } },
+    }, { endpointClass: "ai-studio" });
+    const pair = (result.parameters.properties as Record<string, Record<string, unknown>>).pair;
+    expect(pair).toEqual({ type: "array", items: { type: "string" } });
+    expect(result.lossReport.categories).toEqual({ "tuple-prefix-dropped": 1 });
+  });
+
+  test("materializes items for an array collapsed from a nullable anyOf", () => {
+    const out = sanitizeGeminiToolParameters({
+      type: "object",
+      properties: { ids: { anyOf: [{ type: "array" }, { type: "null" }] } },
+    });
+    expect((out.properties as Record<string, Record<string, unknown>>).ids).toEqual({
+      type: "array",
+      items: { type: "string" },
+      nullable: true,
+    });
+  });
+
+  test("leaves valid array items unchanged", () => {
+    const out = sanitizeGeminiToolParameters({
+      type: "object",
+      properties: {
+        list: { type: "array", items: { type: "integer", description: "kept" }, minItems: 1 },
+        enumList: { type: "array", items: { enum: ["a", "b"] } },
+      },
+    });
+    const props = out.properties as Record<string, Record<string, unknown>>;
+    expect(props.list).toEqual({ type: "array", items: { type: "integer", description: "kept" } });
+    expect(props.enumList).toEqual({ type: "array", items: { enum: ["a", "b"] } });
+  });
+
+  test("does not add items to a non-array property", () => {
+    const out = sanitizeGeminiToolParameters({
+      type: "object",
+      properties: {
+        text: { type: "string" },
+        widened: {},
+        nested: { type: "object", properties: { inner: { type: "array" } } },
+      },
+    });
+    const props = out.properties as Record<string, Record<string, unknown>>;
+    expect(Object.hasOwn(props.text, "items")).toBe(false);
+    expect(Object.hasOwn(props.widened, "items")).toBe(false);
+    expect(Object.hasOwn(props.nested, "items")).toBe(false);
+    const inner = (props.nested.properties as Record<string, Record<string, unknown>>).inner;
+    expect(inner.items).toEqual({ type: "string" });
   });
 });

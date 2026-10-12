@@ -4,6 +4,7 @@ import { readJsonOrThrow } from "../fetch-json";
 import { IconLink, IconMonitor, IconPlus, IconRefresh, IconTerminal, IconTrash } from "../icons";
 import { type TKey, useT } from "../i18n/shared";
 import { Notice, Select } from "../ui";
+import { confirmAction } from "../action-dialogs";
 import { remoteWorkspacePairingCommands } from "../remote-workspace-command";
 
 type RuntimeProfile = "codex" | "claude" | "pi";
@@ -249,7 +250,7 @@ export default function RemoteWorkspace({ apiBase, hubOrigin }: { apiBase: strin
   };
 
   const revokeDevice = async (device: RemoteDevice) => {
-    if (!confirm(t("remote.revokeConfirm", { name: device.name }))) return;
+    if (!(await confirmAction({ message: t("remote.revokeConfirm", { name: device.name }), confirmLabel: t("common.remove"), tone: "danger" }))) return;
     setBusy("revoke");
     try {
       await mutate(`/api/remote-workspace/devices/${device.id}`, { method: "DELETE" }, t("remote.requestFailed"));

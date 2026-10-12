@@ -434,12 +434,6 @@
   margin-bottom: 18px;
 }
 
-.swi-save-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
 /* ── Detail view ──────────────────────────────────────── */
 
 .swi-detail {
@@ -603,4 +597,22 @@
   .swi-fallback-controls { width: 100%; }
   .swi-ultra-mode-editor { grid-template-columns: minmax(0, 1fr) auto; }
   .swi-ultra-mode-textarea { grid-column: 1 / -1; }
+}
+
+/* Suggest: describe the delegated work, review one sized proposal, accept through the save. */
+.swi-suggest { display: flex; flex-direction: column; gap: var(--space-2); flex: 1 1 auto; min-width: 0; }
+.swi-suggest-label { font-weight: 600; }
+.swi-suggest-input { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-2); align-items: start; }
+.swi-suggest-input > textarea { width: 100%; min-width: 0; resize: vertical; }
+.swi-suggest-result { display: flex; flex-direction: column; gap: 4px; padding: var(--space-3); border: 1px solid var(--border-soft); border-radius: var(--radius-sm); min-width: 0; }
+.swi-suggest-result p { margin: 0; overflow-wrap: anywhere; }
+.swi-suggest-head { display: flex; align-items: baseline; gap: 6px 10px; flex-wrap: wrap; }
+.swi-suggest-change { display: flex; align-items: center; gap: 6px 8px; flex-wrap: wrap; overflow-wrap: anywhere; }
+.swi-suggest-actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-2); margin-top: 4px; }
+.swi-suggest-done { color: var(--green); font-weight: 600; margin-right: auto; }
+@media (max-width: 640px) {
+  .swi-suggest-input { grid-template-columns: minmax(0, 1fr); }
+  .swi-suggest-input > .btn { justify-self: end; }
+  .swi-delegation-model-row { flex-direction: column; align-items: stretch; gap: var(--space-2); }
+  .swi-delegation-model-row .swi-delegation-controls { justify-content: flex-start; }
 }

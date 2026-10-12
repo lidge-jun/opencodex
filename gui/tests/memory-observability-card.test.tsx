@@ -4,10 +4,10 @@ import { act } from "react";
 import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
 import MemoryObservabilityCard from "../src/components/MemoryObservabilityCard";
+import { acceptActionDialog, actionDialogOpen, dismissActionDialog } from "./helpers/action-dialog";
 
 const originalFetch = globalThis.fetch;
 let restoreGlobals: (() => void) | undefined;
-let originalConfirm: typeof window.confirm | undefined;
 
 beforeEach(() => {
   Object.defineProperty(globalThis.navigator, "language", { configurable: true, value: "en-US" });
@@ -32,8 +32,6 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
-  if (originalConfirm && typeof window !== "undefined") window.confirm = originalConfirm;
-  originalConfirm = undefined;
   restoreGlobals?.();
 });
 
@@ -152,7 +150,7 @@ test("a non-OK response degrades to the unavailable note instead of crashing", a
   await act(async () => { root.unmount(); });
 });
 
-test("Drain & restart posts /api/system/restart after confirm", async () => {
+test("Drain & restart posts /api/system/restart only after the in-page dialog is accepted", async () => {
   let restartPosts = 0;
   const { root, container, testWindow } = await mountCard((url) => {
     if (url.includes("/api/system/restart")) {
@@ -167,9 +165,6 @@ test("Drain & restart posts /api/system/restart after confirm", async () => {
     return defaultRespond(url);
   });
 
-  originalConfirm = window.confirm;
-  window.confirm = () => true;
-
   const button = Array.from(container.querySelectorAll("button")).find(
     (el) => (el.textContent ?? "").includes("Drain & restart"),
   );
@@ -180,8 +175,43 @@ test("Drain & restart posts /api/system/restart after confirm", async () => {
     await new Promise(resolve => testWindow.setTimeout(resolve, 0));
   });
 
+  // The click alone must not restart anything: the consent is a real dialog now, and
+  // inside the app the platform one drew nothing, so nothing could answer it.
+  expect(actionDialogOpen(testWindow.document as unknown as Document)).toBe(true);
+  expect(restartPosts).toBe(0);
+
+  await act(async () => {
+    acceptActionDialog(testWindow.document as unknown as Document);
+    await new Promise(resolve => testWindow.setTimeout(resolve, 0));
+  });
+
   expect(restartPosts).toBe(1);
   expect(container.textContent ?? "").toContain("Draining");
+
+  await act(async () => { root.unmount(); });
+});
+
+test("dismissing the restart dialog sends no request", async () => {
+  let restartPosts = 0;
+  const { root, container, testWindow } = await mountCard((url) => {
+    if (url.includes("/api/system/restart")) { restartPosts += 1; return Response.json({ success: true }, { status: 202 }); }
+    return defaultRespond(url);
+  });
+
+  const button = Array.from(container.querySelectorAll("button")).find(
+    (el) => (el.textContent ?? "").includes("Drain & restart"),
+  );
+  await act(async () => {
+    button!.dispatchEvent(new testWindow.MouseEvent("click", { bubbles: true }));
+    await new Promise(resolve => testWindow.setTimeout(resolve, 0));
+  });
+  await act(async () => {
+    dismissActionDialog(testWindow.document as unknown as Document);
+    await new Promise(resolve => testWindow.setTimeout(resolve, 0));
+  });
+
+  expect(restartPosts).toBe(0);
+  expect(container.textContent ?? "").not.toContain("Draining");
 
   await act(async () => { root.unmount(); });
 });
@@ -205,8 +235,6 @@ test("restart reconnect polls authenticated management health instead of denied 
     return new Response(null, { status: 404 });
   });
 
-  originalConfirm = window.confirm;
-  window.confirm = () => true;
   const button = Array.from(container.querySelectorAll("button")).find(
     (el) => (el.textContent ?? "").includes("Drain & restart"),
   );
@@ -214,6 +242,10 @@ test("restart reconnect polls authenticated management health instead of denied 
 
   await act(async () => {
     button!.dispatchEvent(new testWindow.MouseEvent("click", { bubbles: true }));
+    await new Promise(resolve => testWindow.setTimeout(resolve, 0));
+  });
+  await act(async () => {
+    acceptActionDialog(testWindow.document as unknown as Document);
     for (let attempt = 0; attempt < 20; attempt += 1) {
       await new Promise(resolve => testWindow.setTimeout(resolve, 0));
       if (calls().some(call => call.includes("/api/system/health"))) break;

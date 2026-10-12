@@ -8,6 +8,7 @@ import type {
 import type { TFn } from "../i18n/shared";
 import { readJsonIfOk, readJsonOrThrow } from "../fetch-json";
 import { openBrowserRequestField } from "../oauth-open-browser-pref";
+import { parseBrowserLaunch } from "../oauth-browser-launch";
 import { startVisibilityPoll } from "../visibility-poll";
 
 /**
@@ -171,6 +172,7 @@ export function useAddCodexAccountOAuth({
         status?: string;
         deviceCode?: string;
         instructions?: string;
+        browserLaunch?: unknown;
       };
       let resp = await requestLogin();
       if (!aliveRef.current) return;
@@ -201,6 +203,7 @@ export function useAddCodexAccountOAuth({
           authUrl: data.url,
           deviceCode: data.deviceCode,
           instructions: data.instructions,
+          browserLaunch: parseBrowserLaunch(data.browserLaunch),
         });
         dispatch({ type: "set-step", step: "oauth-waiting" });
         stopPolling();

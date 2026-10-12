@@ -1,3 +1,5 @@
+import type { BrowserLaunch } from "../oauth-browser-launch";
+
 export type AddCodexAccountStep = "pick" | "oauth-waiting";
 export type ManualCodeState = "idle" | "submitting" | "waiting";
 export type StatusTone = "ok" | "warn";
@@ -11,6 +13,8 @@ export interface AddCodexAccountUiState {
   deviceCode: string;
   /** Provider-supplied prose that accompanies the code. */
   instructions: string;
+  /** What the proxy reported about opening the browser for this login. */
+  browserLaunch?: BrowserLaunch;
   manualCode: string;
   manualCodeState: ManualCodeState;
   statusNotice: string;
@@ -37,7 +41,7 @@ export type AddCodexAccountUiAction =
   | { type: "set-id"; id: string }
   | { type: "set-error"; error: string }
   | { type: "set-auth-url"; authUrl: string }
-  | { type: "set-login-hint"; authUrl: string; deviceCode?: string; instructions?: string }
+  | { type: "set-login-hint"; authUrl: string; deviceCode?: string; instructions?: string; browserLaunch?: BrowserLaunch }
   | { type: "set-manual-code"; manualCode: string }
   | { type: "set-manual-code-state"; manualCodeState: ManualCodeState }
   | { type: "set-status-notice"; statusNotice: string; statusTone?: StatusTone }
@@ -62,6 +66,7 @@ export function addCodexAccountUiReducer(state: AddCodexAccountUiState, action: 
         authUrl: action.authUrl,
         deviceCode: action.deviceCode ?? "",
         instructions: action.instructions ?? "",
+        browserLaunch: action.browserLaunch,
       };
     case "set-manual-code":
       return { ...state, manualCode: action.manualCode };
@@ -74,7 +79,9 @@ export function addCodexAccountUiReducer(state: AddCodexAccountUiState, action: 
     case "clear-manual-code":
       return { ...state, manualCode: "", manualCodeState: "idle", statusNotice: "", statusTone: "ok" };
     case "reset-oauth-start":
-      return { ...state, error: "", statusNotice: "", statusTone: "ok", flowId: null };
+      // The launch outcome belongs to the login being replaced: a restart (for instance into the
+      // device flow after a failed launch) must not keep warning about a browser it never tried.
+      return { ...state, error: "", statusNotice: "", statusTone: "ok", flowId: null, browserLaunch: undefined };
     case "oauth-code-submitted":
       return { ...state, error: "", manualCode: "", manualCodeState: "waiting", statusTone: "ok", statusNotice: "" };
     default:

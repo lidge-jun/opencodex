@@ -64,20 +64,27 @@ export function stripStatefulResponsesParams(body: unknown): unknown {
 }
 
 /**
- * Remove top-level parameters the ChatGPT backend (`authMode: "forward"`) rejects
- * with `{"detail":"Unsupported parameter: …"}` (strict allowlist). Codex CLI never
+ * Remove top-level parameters a forward destination rejects with
+ * `{"detail":"Unsupported parameter: …"}` (strict allowlist). Codex CLI never
  * sends these — it controls output length via `reasoning.effort` — but third-party
  * Responses API clients (GJC, SDK wrappers) include `max_output_tokens` per the
- * public spec. `metadata` is likewise absent from the allowlist. No-op when the
- * body carries neither field, keeping the common Codex path allocation-free.
+ * public spec. No-op when the body carries none of the dropped fields, keeping the
+ * common Codex path allocation-free.
+ *
+ * The canonical ChatGPT backend rejects `metadata`, so the forwarding path removes it on every
+ * forward route for compatibility.
+ * `max_output_tokens` does not: it is the caller's cost cap on the turn, and a
+ * self-hosted or third-party gateway may honour it — dropping it there silently
+ * removes the cap. Only the canonical ChatGPT backend rejects it outright, so only
+ * `canonical` callers strip it.
  */
-export function stripUnsupportedForwardParams(body: unknown): unknown {
+export function stripUnsupportedForwardParams(body: unknown, canonical: boolean): unknown {
   if (!isPlainObject(body)) return body;
-  const hasMot = Object.prototype.hasOwnProperty.call(body, "max_output_tokens");
-  const hasMeta = Object.prototype.hasOwnProperty.call(body, "metadata");
-  if (!hasMot && !hasMeta) return body;
-  const { max_output_tokens: _mot, metadata: _meta, ...rest } = body;
-  return rest;
+  const drop = canonical ? (["metadata", "max_output_tokens"] as const) : (["metadata"] as const);
+  if (!drop.some(key => Object.hasOwn(body, key))) return body;
+  const next: Record<string, unknown> = { ...body };
+  for (const key of drop) delete next[key];
+  return next;
 }
 
 /** Sampling controls the canonical ChatGPT backend rejects; other forward gateways accept them. */

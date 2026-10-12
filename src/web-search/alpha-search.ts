@@ -1,3 +1,4 @@
+import { AnthropicHelperUnavailableError } from "../sidecar/auth";
 /**
  * Serve Codex's built-in `/v1/alpha/search` when no ChatGPT forward provider exists.
  *
@@ -12,10 +13,14 @@
  * and pulling it in recreates the cycle sidecar-providers.ts exists to avoid.
  */
 import { formatErrorResponse } from "../bridge";
+import { signalWithTimeout } from "../lib/abort";
 import { redactSecretString } from "../lib/redact";
 import { sidecarEnter } from "../lib/sidecar-tracker";
+import { admissionScopeDenial } from "../server/admission-model-scope";
+import type { DataPlaneAdmission } from "../server/auth-cors";
 import type { OcxConfig, OcxProviderConfig, OcxWebSearchSidecarConfig } from "../types";
 import { runAnthropicWebSearch } from "./anthropic-executor";
+import { resolveDevinWebSearchSnapshot, runDevinWebSearch } from "./devin-executor";
 import { runExaWebSearch } from "./exa-executor";
 import type { SidecarOutcome, SidecarSettings } from "./executor";
 import { runGeminiWebSearch } from "./gemini-executor";
@@ -58,7 +63,7 @@ const DEFAULT_BACKEND_MODELS = {
 export type AlphaSearchSidecarBackend = keyof typeof DEFAULT_BACKEND_MODELS;
 
 type ResolvedAlphaSearchSidecar =
-  | { backend: "anthropic"; providerName: string; provider: OcxProviderConfig }
+  | { backend: "anthropic"; providerName: string; provider: OcxProviderConfig; config: OcxConfig }
   | { backend: "xai"; providerName: string; provider: OcxProviderConfig }
   | { backend: "gemini"; providerName: string; provider: OcxProviderConfig }
   | { backend: "exa"; apiKey: string };
@@ -97,9 +102,14 @@ export function resolveAlphaSearchSidecar(config: OcxConfig): AlphaSearchSidecar
   if (backend === "openai") return { status: "unconfigured" };
   switch (backend) {
     case "anthropic": {
-      const found = findAnthropicSidecarProvider(config);
+      let found;
+      try { found = findAnthropicSidecarProvider(config); }
+      catch (error) {
+        if (error instanceof AnthropicHelperUnavailableError) return { status: "missing-credential", backend };
+        throw error;
+      }
       return found
-        ? { status: "ready", sidecar: { backend, providerName: found.providerName, provider: found.provider } }
+        ? { status: "ready", sidecar: { backend, providerName: found.providerName, provider: found.provider, config } }
         : { status: "missing-credential", backend };
     }
     case "xai": {
@@ -184,7 +194,7 @@ async function runAlphaSearchQuery(
 ): Promise<SidecarOutcome> {
   switch (resolved.backend) {
     case "anthropic":
-      return runAnthropicWebSearch(query, resolved.providerName, resolved.provider, settings, signal);
+      return runAnthropicWebSearch(query, resolved.providerName, resolved.provider, settings, signal, config);
     case "xai":
       return runXaiWebSearch(
         query,
@@ -198,6 +208,75 @@ async function runAlphaSearchQuery(
       return runGeminiWebSearch(query, resolved.providerName, resolved.provider, settings, signal);
     case "exa":
       return runExaWebSearch(query, resolved.apiKey, settings, signal);
+  }
+}
+
+function raceAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      value => { signal.removeEventListener("abort", onAbort); resolve(value); },
+      error => { signal.removeEventListener("abort", onAbort); reject(error); },
+    );
+  });
+}
+
+export async function handleDevinAlphaSearch(
+  body: unknown,
+  providerName: string,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<Response> {
+  const queries = extractAlphaSearchQueries(body);
+  if (queries.length === 0) {
+    return formatErrorResponse(
+      400,
+      "invalid_request_error",
+      "Built-in web search request is missing a usable query (commands.search_query, query, q, or search_query).",
+    );
+  }
+  const deadline = signalWithTimeout(timeoutMs, signal);
+  try {
+    const resolved = await raceAbort(resolveDevinWebSearchSnapshot(providerName), deadline.signal);
+    if ("error" in resolved) {
+      return formatErrorResponse(502, "upstream_error", `devin web search failed: ${redactSecretString(resolved.error)}`);
+    }
+    const texts: string[] = [];
+    const sources: SidecarOutcome["sources"] = [];
+    for (const query of queries) {
+      const outcome = await runDevinWebSearch(query, resolved.snapshot, deadline.signal);
+      if (outcome.error) {
+        if (signal?.aborted) {
+          return formatErrorResponse(499, "client_closed_request", "search request canceled by client");
+        }
+        if (deadline.signal.aborted) {
+          return formatErrorResponse(504, "upstream_error", "devin web search timed out");
+        }
+        const detail = redactSecretString(outcome.error);
+        return formatErrorResponse(502, "upstream_error", `devin web search failed: ${detail}`);
+      }
+      texts.push(queries.length > 1 ? `Results for "${query}":\n${outcome.text}` : outcome.text);
+      for (const source of outcome.sources) {
+        if (!sources.some(existing => existing.url === source.url)) sources.push(source);
+      }
+    }
+    return new Response(JSON.stringify(formatAlphaSearchBody(texts.join("\n\n"), sources)), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  } catch (error) {
+    if (signal?.aborted) {
+      return formatErrorResponse(499, "client_closed_request", "search request canceled by client");
+    }
+    if (deadline.signal.aborted) {
+      return formatErrorResponse(504, "upstream_error", "devin web search timed out");
+    }
+    const detail = redactSecretString(error instanceof Error ? error.message : String(error));
+    return formatErrorResponse(502, "upstream_error", `devin web search failed: ${detail}`);
+  } finally {
+    deadline.cleanup();
   }
 }
 
@@ -252,6 +331,7 @@ export async function handleAlphaSearchSidecarFallback(
   config: OcxConfig,
   signal?: AbortSignal,
   logCtx?: { provider: string },
+  admission?: DataPlaneAdmission,
 ): Promise<Response> {
   const resolution = resolveAlphaSearchSidecar(config);
   if (resolution.status === "missing-credential") {
@@ -266,6 +346,24 @@ export async function handleAlphaSearchSidecarFallback(
   const resolved = resolution.sidecar;
   if (logCtx) logCtx.provider = resolved.backend;
 
+  // This backend is a paid destination like any other, and the operator's
+  // configuration -- not the caller -- decides which one and which model. A key
+  // scoped away from it must not spend it by asking the search endpoint instead
+  // of the inference one. Exa has no configured provider entry, so its own
+  // backend name is the destination.
+  const settings = sidecarSettingsForAlphaSearch(resolved.backend, config);
+  const requestedModel = (body as { model?: unknown } | null)?.model;
+  const denial = admissionScopeDenial(
+    config,
+    admission,
+    typeof requestedModel === "string" && requestedModel.trim() ? requestedModel : undefined,
+    {
+      providerName: resolved.backend === "exa" ? resolved.backend : resolved.providerName,
+      modelId: settings.model,
+    },
+  );
+  if (denial) return denial;
+
   const queries = extractAlphaSearchQueries(body);
   if (queries.length === 0) {
     return formatErrorResponse(
@@ -275,7 +373,6 @@ export async function handleAlphaSearchSidecarFallback(
     );
   }
 
-  const settings = sidecarSettingsForAlphaSearch(resolved.backend, config);
   const sidecarExit = sidecarEnter("search");
   try {
     const texts: string[] = [];

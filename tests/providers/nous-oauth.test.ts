@@ -7,12 +7,66 @@ import { getCredential, listAccounts, saveCredential } from "../../src/oauth/sto
 import type { OAuthController } from "../../src/oauth/types";
 import * as configModule from "../../src/config";
 import { BOUNDED_BODY_MAX_BYTES } from "../../src/lib/bounded-body";
-import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { createTempHome, type TempHome } from "../helpers/temp-home";
+import { flushConfigDirHardeningAndReaps, hardenConfigDir } from "../../src/config/paths";
+import { resetHardenedStateForTests, setAsyncIcaclsRunnerForTests, setPlatformForTests } from "../../src/lib/windows-secret-acl";
 
-const TEST_DIR = join(import.meta.dir, ".tmp-nous-oauth-test");
+let TEST_DIR: string;
+let testHome: TempHome;
 const TEST_PORTAL = "https://portal.test";
-let previousOpencodexHome: string | undefined;
 let previousPortalBase: string | undefined;
+
+beforeEach(() => {
+  testHome = createTempHome("ocx-nous-oauth-");
+  TEST_DIR = testHome.root;
+});
+
+async function cleanupNousHome(home: TempHome): Promise<void> {
+  // Optional ACL subprocesses must finish before Windows can remove their working tree.
+  await flushConfigDirHardeningAndReaps(home.root);
+  home.remove();
+}
+
+afterEach(async () => {
+  await cleanupNousHome(testHome);
+});
+
+test("Nous fixture cleanup waits for pending Windows directory hardening", async () => {
+  let release!: () => void;
+  let started!: () => void;
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  const entered = new Promise<void>(resolve => { started = resolve; });
+  resetHardenedStateForTests();
+  setPlatformForTests("win32");
+  setAsyncIcaclsRunnerForTests(async () => {
+    started();
+    await blocked;
+    return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+  });
+  let cleanup: Promise<void> | undefined;
+  try {
+    hardenConfigDir();
+    await entered;
+    cleanup = cleanupNousHome(testHome);
+    await Promise.resolve();
+    expect(existsSync(TEST_DIR)).toBe(true);
+    expect(process.env.OPENCODEX_HOME).toBe(TEST_DIR);
+    release();
+    await cleanup;
+    expect(existsSync(TEST_DIR)).toBe(false);
+    expect(process.env.OPENCODEX_HOME).not.toBe(TEST_DIR);
+  } finally {
+    release();
+    try {
+      await flushConfigDirHardeningAndReaps(TEST_DIR);
+      await cleanup;
+    } finally {
+      setAsyncIcaclsRunnerForTests(null);
+      setPlatformForTests(null);
+      resetHardenedStateForTests();
+    }
+  }
+});
 
 function jwtWithClaims(claims: Record<string, unknown>): string {
   // A real Nous inference JWT carries the inference:invoke scope; callers that
@@ -62,23 +116,13 @@ describe("Nous token-response wiring", () => {
 
   beforeEach(() => {
     previousPortalBase = process.env.NOUS_PORTAL_BASE_URL;
-    previousOpencodexHome = process.env.OPENCODEX_HOME;
     process.env.NOUS_PORTAL_BASE_URL = TEST_PORTAL;
-    // Isolate durable refresh-intent state so this block never leaves intent
-    // files in the developer/runner config tree (review: 1st wiring test must
-    // isolate OPENCODEX_HOME).
-    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
-    mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
   });
 
   afterEach(() => {
     globalThis.fetch = realFetch;
     if (previousPortalBase === undefined) delete process.env.NOUS_PORTAL_BASE_URL;
     else process.env.NOUS_PORTAL_BASE_URL = previousPortalBase;
-    if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = previousOpencodexHome;
-    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
   });
 
   test("refreshNousToken posts the refresh token in the x-nous-refresh-token header and keeps the rotated token", async () => {
@@ -451,17 +495,8 @@ describe("Nous device-flow error handling", () => {
 
 describe("Nous Portal base URL hardening", () => {
   const realFetch = globalThis.fetch;
-  beforeEach(() => {
-    previousOpencodexHome = process.env.OPENCODEX_HOME;
-    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
-    mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
-  });
   afterEach(() => {
     globalThis.fetch = realFetch;
-    if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = previousOpencodexHome;
-    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
   });
 
   test("an HTTP override fails before fetch is invoked", async () => {
@@ -579,20 +614,13 @@ describe("Nous refresh token safety", () => {
 
   beforeEach(() => {
     previousPortalBase = process.env.NOUS_PORTAL_BASE_URL;
-    previousOpencodexHome = process.env.OPENCODEX_HOME;
-    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
-    mkdirSync(TEST_DIR, { recursive: true });
     process.env.NOUS_PORTAL_BASE_URL = TEST_PORTAL;
-    process.env.OPENCODEX_HOME = TEST_DIR;
   });
 
   afterEach(() => {
     globalThis.fetch = realFetch;
     if (previousPortalBase === undefined) delete process.env.NOUS_PORTAL_BASE_URL;
     else process.env.NOUS_PORTAL_BASE_URL = previousPortalBase;
-    if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = previousOpencodexHome;
-    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
   });
 
   test("rejecting a missing replacement refresh token does not reuse the consumed one", async () => {
@@ -647,19 +675,6 @@ describe("Nous refresh token safety", () => {
 });
 
 describe("Nous multiauth via saveCredential", () => {
-  beforeEach(() => {
-    previousOpencodexHome = process.env.OPENCODEX_HOME;
-    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
-    mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
-  });
-
-  afterEach(() => {
-    if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = previousOpencodexHome;
-    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
-  });
-
   test("two distinct subs append two nous accounts", async () => {
     const accessA = jwtWithClaims({ sub: "nous-a" });
     const accessB = jwtWithClaims({ sub: "nous-b" });
@@ -703,25 +718,16 @@ describe("Nous multiauth via saveCredential", () => {
 
 describe("Nous refresh failure-atomicity + terminal errors", () => {
   const realFetch = globalThis.fetch;
-  let intentHome: string | undefined;
 
   beforeEach(() => {
     previousPortalBase = process.env.NOUS_PORTAL_BASE_URL;
     process.env.NOUS_PORTAL_BASE_URL = TEST_PORTAL;
-    // Isolate the refresh-intent dir under a temp OPENCODEX_HOME.
-    previousOpencodexHome = process.env.OPENCODEX_HOME;
-    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
-    mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
   });
 
   afterEach(() => {
     globalThis.fetch = realFetch;
     if (previousPortalBase === undefined) delete process.env.NOUS_PORTAL_BASE_URL;
     else process.env.NOUS_PORTAL_BASE_URL = previousPortalBase;
-    if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = previousOpencodexHome;
-    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
   });
 
   test("a successful rotation leaves the intent submitted until the store persists", async () => {
@@ -847,20 +853,9 @@ describe("Nous refresh failure-atomicity + terminal errors", () => {
 
 describe("Nous refresh-intent schema is validated fail-closed", () => {
   const realFetch = globalThis.fetch;
-  let previousHome: string | undefined;
-
-  beforeEach(() => {
-    previousHome = process.env.OPENCODEX_HOME;
-    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
-    mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
-  });
 
   afterEach(() => {
     globalThis.fetch = realFetch;
-    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = previousHome;
-    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
   });
 
   // Each corrupt/unknown shape must block replay (fail-closed): the intent file
@@ -925,20 +920,9 @@ describe("Nous refresh-intent schema is validated fail-closed", () => {
 
 describe("Nous HTTP refresh failure-atomicity classification", () => {
   const realFetch = globalThis.fetch;
-  let previousHome: string | undefined;
-
-  beforeEach(() => {
-    previousHome = process.env.OPENCODEX_HOME;
-    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
-    mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
-  });
 
   afterEach(() => {
     globalThis.fetch = realFetch;
-    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = previousHome;
-    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
   });
 
   test("an ambiguous 5xx response leaves the old token blocked (never replayable)", async () => {

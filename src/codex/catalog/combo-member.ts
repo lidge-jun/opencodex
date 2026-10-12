@@ -218,6 +218,7 @@ export function resolveComboCatalogMember(
   contextCap?: number,
   callerFallback?: ComboCatalogMemberFallback,
   metadataModelIdCaseFold?: boolean,
+  metadataConfigDir?: string,
 ): CatalogModel | undefined {
   const existing = memberByKey.get(targetKey(target));
   const prov = providers.get(target.provider);
@@ -275,7 +276,7 @@ export function resolveComboCatalogMember(
     // supplies a vision sidecar. Apply the same provider hints used for thin
     // rows before deriving a combo from this complete row.
     const hinted = prov && isModelVisionSidecarConsumer(prov, existing.id)
-      ? applyProviderConfigHints(target.provider, prov, existing, contextCap, metadataModelIdCaseFold)
+      ? applyProviderConfigHints(target.provider, prov, existing, contextCap, metadataModelIdCaseFold, undefined, metadataConfigDir)
       : existing;
     const capped = applyProviderContextCap(hinted.contextWindow, contextCap);
     if (capped === undefined || capped === existing.contextWindow) {
@@ -298,7 +299,7 @@ export function resolveComboCatalogMember(
     provider: target.provider,
   };
   const hinted = prov
-    ? applyProviderConfigHints(target.provider, prov, base, contextCap, metadataModelIdCaseFold)
+    ? applyProviderConfigHints(target.provider, prov, base, contextCap, metadataModelIdCaseFold, undefined, metadataConfigDir)
     : base;
   const hintedContext = typeof hinted.contextWindow === "number" && hinted.contextWindow > 0
     ? hinted.contextWindow

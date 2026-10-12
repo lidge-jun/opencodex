@@ -53,18 +53,18 @@ describe("catalog prewarm on handleStart bind", () => {
     }
   });
 
-  test("handleStart schedules catalog prewarm immediately after a successful bind", async () => {
+  test("handleStart schedules catalog prewarm after ownership publication", async () => {
     const cli = (await readText("src/cli/index.ts")).replace(/\r\n/g, "\n");
-    const bindIdx = cli.indexOf("server = startServer(port");
+    const transactionIdx = cli.indexOf("boundStart = await bindAndPublishStartOwnership({");
+    const publishedIdx = cli.indexOf("const { server, serverModule, port, readinessGate, config } = boundStart", transactionIdx);
     const prewarmIdx = cli.indexOf("scheduleCatalogPrewarm()");
-    const breakIdx = cli.indexOf("\n      break;", bindIdx);
+    const guardianIdx = cli.indexOf("const guardian = startTokenGuardian()", prewarmIdx);
 
     expect(cli).toContain('from "./catalog-prewarm"');
-    expect(bindIdx).toBeGreaterThan(-1);
-    expect(prewarmIdx).toBeGreaterThan(bindIdx);
-    expect(breakIdx).toBeGreaterThan(prewarmIdx);
-    // Must stay inside the successful-bind try path, not only on a later sync.
-    expect(cli.slice(bindIdx, breakIdx)).toContain("scheduleCatalogPrewarm()");
+    expect(transactionIdx).toBeGreaterThan(-1);
+    expect(publishedIdx).toBeGreaterThan(transactionIdx);
+    expect(prewarmIdx).toBeGreaterThan(publishedIdx);
+    expect(guardianIdx).toBeGreaterThan(prewarmIdx);
     expect(cli).not.toContain('void import("../codex/catalog").then(({ gatherRoutedModels })');
   });
 });

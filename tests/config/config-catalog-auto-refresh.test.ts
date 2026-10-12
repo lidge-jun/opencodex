@@ -75,12 +75,13 @@ test("resolveCatalogAutoRefreshIntervalMs clamps below the floor and honours val
     .toBe(120 * 60_000);
 });
 
-test("isCatalogAutoRefreshEnabled reads true only for an explicit enabled:true", () => {
-  // The house === true idiom keeps an absent key, an explicit false, and a hand-edited
-  // truthy string all reading off, so a malformed edit cannot start a live timer.
-  expect(isCatalogAutoRefreshEnabled({})).toBe(false);
-  expect(isCatalogAutoRefreshEnabled({ catalogAutoRefresh: {} })).toBe(false);
+test("isCatalogAutoRefreshEnabled defaults on while explicit false or zero disables", () => {
+  // Missing settings enable discovery; malformed enabled values still fail closed.
+  expect(isCatalogAutoRefreshEnabled({})).toBe(true);
+  expect(isCatalogAutoRefreshEnabled({ catalogAutoRefresh: {} })).toBe(true);
   expect(isCatalogAutoRefreshEnabled({ catalogAutoRefresh: { enabled: false } })).toBe(false);
+  expect(isCatalogAutoRefreshEnabled({ catalogAutoRefresh: { intervalMinutes: 0 } })).toBe(false);
+  expect(isCatalogAutoRefreshEnabled({ catalogAutoRefresh: { intervalMinutes: 30 } })).toBe(true);
   expect(isCatalogAutoRefreshEnabled({ catalogAutoRefresh: { enabled: "yes" as never } })).toBe(false);
   expect(isCatalogAutoRefreshEnabled({ catalogAutoRefresh: { enabled: true } })).toBe(true);
 });

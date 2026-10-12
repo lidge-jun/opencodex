@@ -117,6 +117,8 @@ describe("GitHub Actions hardening", () => {
     expect(ci.jobs?.["select-windows-runner"]?.["timeout-minutes"]).toBe(2);
     expect(ci.jobs?.test?.["timeout-minutes"]).toBe(15);
     expect(ci.jobs?.gates?.["timeout-minutes"]).toBe(15);
+    // 20 with three shards, not a longer cap on two: two halves reached their
+    // 20-minute wall with tests still passing (#6978). See the rationale in ci.yml.
     expect(ci.jobs?.["platform-macos"]?.["timeout-minutes"]).toBe(20);
     // 75, not 30: the unsharded control measured 50m39s for a complete run and had
     // therefore never finished inside 30. See the rationale in ci.yml and #4905.
@@ -137,18 +139,16 @@ describe("GitHub Actions hardening", () => {
 
     const keyringJob = ci.jobs?.["keyring-smoke"] as {
       "runs-on"?: string;
-      strategy?: {
-        matrix?: {
-          include?: Array<{ name: string; runner: string }>;
-        };
-      };
+      strategy?: { matrix?: { include?: unknown } };
     } | undefined;
     expect(keyringJob?.["runs-on"]).toBe("${{ matrix.runner }}");
-    expect(keyringJob?.strategy?.matrix?.include).toEqual([
-      { name: "ubuntu", runner: "ubuntu-latest" },
-      { name: "windows", runner: "windows-latest" },
-      { name: "macos", runner: "macos-latest" },
-    ]);
+    // The macOS leg must come and go with the native selection, so the include
+    // list is a JSON output of the changes job read through fromJSON instead of
+    // a literal here. Which legs that output carries is pinned in
+    // ci-scope-reduction.test.ts.
+    expect(String(keyringJob?.strategy?.matrix?.include)).toMatch(
+      /fromJSON\(needs\.changes\.outputs\.[A-Za-z][A-Za-z_-]*\)/,
+    );
     expectSecureLinuxKeyringBootstrap(workflow);
     // Every job must stay bounded — an unbounded job can hang a queue for hours.
     // Asserted structurally rather than by counting the string: a count passes if
@@ -252,47 +252,44 @@ describe("GitHub Actions hardening", () => {
     expect(hasExactShellCommand(gatesGuiRun, "cd gui && bun test --isolate tests")).toBe(true);
     expect(hasExactShellCommand(gatesGuiRun, "cd gui && bun test tests")).toBe(false);
 
-    // macOS shards cover every CI-relevant change. They may skip
-    // only when the shared path filter says the entire expensive suite is out of
-    // scope (for example a docs-site-only PR).
+    // macOS shards cover every CI-relevant change that can reach the native
+    // surface. They may skip when the shared path filter puts the whole
+    // expensive suite out of scope, or when a PR touches no native path.
     const macosSteps = (ci.jobs?.["platform-macos"] as { steps?: { name?: string; env?: Record<string, string>; run?: string }[] })?.steps ?? [];
     // The 60s per-test ceiling is part of the pinned shape: dropping it silently
     // restores the timing-flake class this lane kept surfacing.
-    const macosTestStep = macosSteps.find(step => step.name === "Test");
-    expect(macosTestStep?.env?.MACOS_TEST_SHARD).toBe("${{ matrix.shard }}");
-    expect(hasShellCommandHead(macosTestStep?.run, 'bun test --isolate --timeout 60000 "$@"')).toBe(true);
-    expect(hasExactShellCommand(macosTestStep?.run, 'run_macos_suite tests "--shard=$MACOS_TEST_SHARD/2" "${ignore_args[@]}"')).toBe(true);
-    expect(hasExactShellCommand(macosTestStep?.run, 'run_macos_suite --parallel=1 "./tests/$file"')).toBe(true);
-    expect(macosTestStep?.run).toContain('import { SERIAL_FULL_SUITE_FILES } from "./scripts/test.ts"');
-    const macosShards = (ci.jobs?.["platform-macos"] as {
-      strategy?: { "fail-fast"?: boolean; matrix?: { shard?: number[] } };
-    })?.strategy;
-    expect(macosShards?.["fail-fast"]).toBe(false);
-    expect(macosShards?.matrix?.shard).toEqual([1, 2]);
+    const macosTestStep = macosSteps.find(step => step.name === "Test in fresh-process batches");
+    expect(macosTestStep?.env).toMatchObject({
+      TEST_SHARD: "${{ matrix.shard }}/3", BUN_TEST_FILE_SCOPE: "all", BUN_TEST_BATCH_SIZE: "12",
+      BUN_TEST_PARALLEL: "1", BUN_TEST_BATCH_TIMEOUT_SECONDS: "300", OCX_TEST_NO_QUEUE: "1", OCX_TEST_FULL_SUITE: "1",
+    });
+    expect(macosTestStep?.run).toBe('bash scripts/ci/run-bun-test-batches.sh "$TEST_SHARD"');
+    expect(macosSteps.some(step => step.run?.includes("coreutils") && step.run.includes("GITHUB_PATH"))).toBe(true);
+    const macosJob = (ci.jobs?.["platform-macos"] as {
+      name?: string; strategy?: { "fail-fast"?: boolean; matrix?: { shard?: number[] } };
+    });
+    expect(macosJob?.strategy?.["fail-fast"]).toBe(false);
+    expect(macosJob?.strategy?.matrix?.shard).toEqual([1, 2, 3]);
+    // The divisor is written twice; a matrix that grows without both would run a
+    // shard selection that skips or repeats files under a misleading check name.
+    const macosShardCount = macosJob?.strategy?.matrix?.shard?.length;
+    expect(macosJob?.name).toBe(`macos \${{ matrix.shard }}/${macosShardCount}`);
+    expect(macosTestStep?.env?.TEST_SHARD).toBe(`\${{ matrix.shard }}/${macosShardCount}`);
 
-    // The macOS leg retries NOTHING. It carried a crash-only retry until
-    // 2026-09-17, on the reasoning that a Bun panic is a runtime defect rather than a
-    // test result. Both halves of that are true and the conclusion still does not
-    // follow: a panic is process death a user would have seen, and a second execution
-    // that happens not to die does not un-kill the first. Pin the absence of the loop
-    // and of its vocabulary, so it cannot return in a renamed form.
-    const macosTestRun = macosTestStep?.run ?? "";
-    // Actions invokes multiline `run:` blocks with `bash -e`. The retry loop
-    // is gone but errexit must still be disabled before the crash-prone command:
-    // otherwise exit 133 aborts the step before PIPESTATUS can be inspected and the
-    // failure is reported without saying what kind it was.
-    expect(hasExactShellCommand(macosTestRun, "set +e")).toBe(true);
-    // The crash signatures themselves moved to scripts/ci/bun-crash-signatures.sh; that one
-    // definition and every lane that sources it are pinned by ci-bun-crash-classifier.test.ts.
-    expect(macosTestRun).toContain("it fails this leg on the first occurrence");
-    expect(macosTestRun).not.toContain("for attempt in");
-    expect(macosTestRun).not.toContain("while true");
+    // Failure disposition belongs to the shared runner; the workflow has no recovery loop.
+    expect(macosTestStep?.run).not.toContain("for attempt in");
+    expect(macosTestStep?.run).not.toContain("while true");
     expect((ci.jobs?.["platform-macos"] as { needs?: string; if?: string })?.needs).toBe("changes");
-    expect((ci.jobs?.["platform-macos"] as { if?: string })?.if)
-      .toBe("github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'");
+    // Native-gated together with widget and desktop-shell: on a pull request the
+    // job additionally requires the native path filter, so a src-only PR stops
+    // paying for a macOS shard. ci-scope-reduction.test.ts evaluates this
+    // condition against the events that select the job.
+    expect((ci.jobs?.["platform-macos"] as { if?: string })?.if).toBe(
+      "github.event_name != 'pull_request' || (needs.changes.outputs.ci == 'true' && needs.changes.outputs.native == 'true')",
+    );
 
     // Whole-pool control lives on dispatch so every push does not pay the
-    // unsharded macOS critical path. Keep the unsharded bun test line and the
+    // unsharded macOS critical path. Keep the unsharded full-membership control and the
     // 30-minute budget; do not sneak a shard divisor into this job.
     const macosControlJob = ci.jobs?.["macos-control"] as {
       name?: string;
@@ -301,45 +298,42 @@ describe("GitHub Actions hardening", () => {
       "runs-on"?: string;
       "timeout-minutes"?: number;
       strategy?: unknown;
-      steps?: { run?: string }[];
+      steps?: { name?: string; env?: Record<string, string>; run?: string }[];
     } | undefined;
     expect(macosControlJob?.name).toBe("macos control");
     expect(macosControlJob?.needs).toBe("changes");
-    expect(macosControlJob?.if).toBe("github.event_name == 'workflow_dispatch'");
+    expect(macosControlJob?.if).toBe("github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all' || github.event.inputs.lane == 'macos-control')");
     expect(macosControlJob?.["runs-on"]).toBe("macos-latest");
     expect(macosControlJob?.strategy).toBeUndefined();
     const macosControlSteps = macosControlJob?.steps ?? [];
-    expect(macosControlSteps.some(step => step.run?.includes("bun test --isolate --timeout 60000 tests"))).toBe(true);
+    const controlTest = macosControlSteps.find(step => step.name === "Test in unsharded fresh-process batches");
+    expect(controlTest?.run).toBe('bash scripts/ci/run-bun-test-batches.sh "$TEST_SHARD"');
+    expect(controlTest?.env).toMatchObject({
+      TEST_SHARD: "1/1", BUN_TEST_FILE_SCOPE: "all", BUN_TEST_BATCH_SIZE: "12",
+      BUN_TEST_PARALLEL: "1", BUN_TEST_BATCH_TIMEOUT_SECONDS: "300",
+      OCX_TEST_NO_QUEUE: "1", OCX_TEST_FULL_SUITE: "1",
+    });
     expect(macosControlSteps.some(step => step.run?.includes("--shard"))).toBe(false);
-    const macosControlTestRun = macosControlSteps.find(step => step.run?.includes("bun test --isolate --timeout 60000 tests"))?.run ?? "";
-    expect(hasExactShellCommand(macosControlTestRun, "set +e")).toBe(true);
-    expect(macosControlTestRun).not.toContain("for attempt in");
-    expect(macosControlTestRun).not.toContain("while true");
-    expect(macosControlTestRun).toContain("it fails this leg on the first occurrence");
+    expect(macosControlSteps.some(step => step.run?.includes("coreutils") && step.run.includes("GITHUB_PATH"))).toBe(true);
 
-    // Windows is dispatch-only: it gates nothing, not even the shipping
-    // boundary. The sharded promotion run surfaced ~207 Windows-only failures
-    // that pre-date every released version, so the leg became a measurement
-    // tool a maintainer runs by hand, not a gate. Assert the positive
-    // condition and the absence of every automatic trigger — a stray
-    // `|| github.ref == ...` would restore a red leg to the release path.
+    // Windows-sensitive PRs and the daily schedule request Windows; release
+    // pushes still do not. Keep branch-ref shortcuts off this condition.
     const windowsIf = String((ci.jobs?.["platform-windows"] as { if?: string })?.if ?? "");
     expect(windowsIf).toBe(
-      "github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all')",
+      "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all') || github.event_name == 'pull_request' && needs.changes.outputs.windows == 'true'",
     );
     expect(windowsIf).not.toContain("refs/heads/main");
     expect(windowsIf).not.toContain("refs/heads/preview");
     expect(windowsIf).not.toContain("refs/heads/dev");
-    expect(windowsIf).not.toContain("pull_request");
 
     // A lane=macos-control dispatch must skip Windows so a red Windows burn-down
     // cannot fail the unsharded macOS control run. A plain dispatch still runs
     // everything, including Windows, which is what empty-or-all encodes.
     expect(ci.on?.workflow_dispatch?.inputs?.lane).toEqual({
-      description: "all (default) or macos-control",
+      description: "all (default), release-gates, or macos-control",
       type: "choice",
       default: "all",
-      options: ["all", "macos-control"],
+      options: ["all", "release-gates", "macos-control"],
     });
 
     // Windows runs the same suite, sharded like the Linux legs, and keeps the
@@ -363,7 +357,7 @@ describe("GitHub Actions hardening", () => {
     const batchRunner = await readText("scripts/ci/run-bun-test-batches.sh");
     expect(batchRunner).toContain('readonly BATCH_SIZE="${BUN_TEST_BATCH_SIZE:-12}"');
     expect(batchRunner).toContain('readonly BATCH_TIMEOUT_SECONDS="${BUN_TEST_BATCH_TIMEOUT_SECONDS:-120}"');
-    expect(batchRunner).toContain('"$BUN_BIN" test --isolate --timeout 60000 "${files[@]}"');
+    expect(batchRunner).toContain('"$BUN_BIN" test --isolate ${PARALLEL_ARG:+"$PARALLEL_ARG"} --timeout 60000 "${files[@]}"');
     expect(batchRunner).not.toContain("for attempt in");
     expect(batchRunner).not.toContain("while true");
     expect(batchRunner).toContain("fail this shard on their first occurrence");
@@ -400,160 +394,6 @@ describe("GitHub Actions hardening", () => {
       .find(step => step.run?.includes("git clean -xffd"));
     expect(wipe?.run).not.toContain("|| true");
     expect(wipe?.run).toContain("git rev-parse --is-inside-work-tree");
-  });
-
-  test("PR checks reach every branch the target gate accepts", async () => {
-    // These lists have to move together with enforce-pr-target.yml. A PR that
-    // passes the gate but triggers no checks is worse than one that is blocked:
-    // it looks reviewable and has nothing behind it (commit 5229717b1).
-    //
-    // The gate accepts more than `ALLOWED_BASES`. It also exempts a STACKED
-    // child — a PR whose base is another open PR's head branch — from the
-    // wrong-base failure. That exemption has no fixed branch list, so a
-    // `branches:` allow-list on the check workflow can never cover it, and
-    // `ci.yml` therefore carries no base filter at all. `service-lifecycle.yml`
-    // keeps its list: it gates the release service path, not review.
-    const gate = await readText(".github/workflows/enforce-pr-target.yml");
-    const allowed = gate.match(/const ALLOWED_BASES = \[([^\]]*)\];/);
-    expect(allowed).not.toBeNull();
-    const bases = [...(allowed?.[1] ?? "").matchAll(/"([^"]+)"/g)].map(m => m[1]);
-    expect(bases).toEqual(["dev"]);
-
-    // The gate itself must stay unfiltered by base, or the stacked exemption it
-    // implements would never be evaluated for the branches it exempts.
-    expect(gate).not.toMatch(/pull_request_target:[\s\S]{0,200}?branches:/);
-
-    for (const [path, expectedKeys] of [
-      // No `branches`: the stacked-base exemption has no enumerable branch list.
-      [".github/workflows/ci.yml", []],
-      [".github/workflows/service-lifecycle.yml", ["branches", "paths"]],
-    ] as const) {
-      const workflow = Bun.YAML.parse(await readText(path)) as {
-        on?: { pull_request?: Record<string, unknown> };
-      };
-      const trigger = workflow.on?.pull_request ?? {};
-      if (expectedKeys.includes("branches")) {
-        const branches = (trigger.branches as string[] | undefined) ?? [];
-        expect([...branches].sort()).toEqual(["dev", "main"]);
-      }
-
-      // Narrowing a default is a mutation that deletes nothing. Omitting
-      // `types` means opened + synchronize + reopened; writing
-      // `types: [opened]` keeps the workflow, keeps the branch list, and stops
-      // running checks on every commit pushed after the PR was opened — the
-      // review then reads a green tick that belongs to an older tree. An
-      // absent key is only pinned by asserting the key set, so assert it.
-      expect(Object.keys(trigger).sort()).toEqual([...expectedKeys].sort());
-      if ("types" in trigger) {
-        // If a future change genuinely needs `types`, it must still cover the
-        // three events the default covers.
-        expect([...(trigger.types as string[])].sort()).toEqual(["opened", "reopened", "synchronize"]);
-      }
-    }
-
-    // The push trigger stays pinned to the release-relevant lines: release.yml
-    // gates on main and preview, so widening this one would pull an unrelated
-    // branch into that path.
-    const ci = Bun.YAML.parse(await readText(".github/workflows/ci.yml")) as {
-      on?: {
-        push?: { branches?: string[]; paths?: string[] };
-        pull_request?: { branches?: string[]; paths?: string[] };
-      };
-      jobs?: Record<string, Record<string, unknown> | undefined>;
-    };
-    expect([...(ci.on?.push?.branches ?? [])].sort())
-      .toEqual(["dev", "main", "preview"]);
-
-    // The PR trigger must carry NO base-branch filter, and the two triggers
-    // differ on purpose. GitHub matches `branches:` against the BASE ref, so
-    // `[main, dev]` silently excluded stacked child PRs — whose base is another
-    // open PR's head branch. The #951-#955 stack merged with `enforce-target`,
-    // `label`, and `react-doctor` as its only check-runs and no test job at
-    // all, for 24 changed files under `src/`; the type annotation above did not
-    // even model `branches` on this trigger, so no assertion could have caught
-    // it.
-    //
-    // Re-adding an allowlist is the regression this pins, and it cannot be
-    // written correctly: stacked bases carry contributor prefixes (`fix/`,
-    // `feat/`, `agent/`) as readily as `codex/`, so any list leaves some stack
-    // silently unverified. Pull requests also carry no workflow-level path
-    // filter: every head needs an aggregate `ci` check.
-    expect(ci.on?.pull_request?.branches).toBeUndefined();
-    expect(ci.on?.pull_request?.paths).toBeUndefined();
-
-    // The push trigger and pull-request `changes` job share one expensive-CI
-    // allowlist. PRs always create the workflow and aggregate check; this list
-    // decides whether the costly jobs run. Pin the entire list on both paths.
-    const ciPaths = [
-      ".dockerignore",
-      ".gitattributes",
-      ".github/workflows/ci.yml",
-      ".github/workflows/enforce-pr-target.yml",
-      ".github/workflows/release.yml",
-      ".github/workflows/stale-needs-info.yml",
-      ".npmignore",
-      "Dockerfile",
-      "LICENSE",
-      "README.md",
-      "assets/**",
-      "bin/**",
-      "bun.lock",
-      "compose.yaml",
-      "docker/**",
-      "gui/**",
-      "package.json",
-      "scripts/**",
-      "src/**",
-      "tests/**",
-      "tsconfig.json",
-    ];
-    expect([...(ci.on?.push?.paths ?? [])].sort()).toEqual(ciPaths);
-
-    const filterStep = (ci.jobs?.changes as {
-      steps?: { with?: Record<string, string> }[];
-    })?.steps?.find(step => step.with?.filters);
-    const areaFilters = Bun.YAML.parse(String(filterStep?.with?.filters ?? "")) as {
-      ci?: string[];
-    };
-    expect([...(areaFilters.ci ?? [])].sort()).toEqual(ciPaths);
-
-    const changesJob = ci.jobs?.changes as {
-      outputs?: Record<string, string>;
-      steps?: Array<{
-        name?: string;
-        id?: string;
-        shell?: string;
-        env?: Record<string, string>;
-        run?: string;
-        with?: Record<string, string>;
-      }>;
-    } | undefined;
-    const scopeStep = changesJob?.steps?.find(
-      step => step.name === "Assert the scope output is usable",
-    );
-    expect(changesJob?.outputs?.ci).toBe("${{ steps.scope.outputs.ci }}");
-    expect(scopeStep?.id).toBe("scope");
-    expect(scopeStep?.shell).toBe("bash");
-    expect(scopeStep?.env?.CI_SCOPE).toBe("${{ steps.filter.outputs.ci }}");
-    expect(scopeStep?.run).not.toContain("${{");
-    expect(scopeStep?.run).toContain('case "$CI_SCOPE" in');
-    expect(scopeStep?.run).toContain("true|false)");
-    expect(scopeStep?.run).toContain(`printf 'ci=%s\\n' "$CI_SCOPE" >> "$GITHUB_OUTPUT"`);
-    expect(scopeStep?.run).toContain("exit 1");
-    const filterIndex = changesJob?.steps?.findIndex(step => step.id === "filter") ?? -1;
-    const scopeIndex = changesJob?.steps?.findIndex(step => step.id === "scope") ?? -1;
-    expect(filterIndex).toBeGreaterThanOrEqual(0);
-    expect(scopeIndex).toBeGreaterThan(filterIndex);
-
-    const scopedCondition = "github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'";
-    for (const jobName of ["test", "storage-policy", "gates", "platform-macos", "keyring-smoke", "docker-smoke"]) {
-      const job = ci.jobs?.[jobName] as { needs?: string; if?: string } | undefined;
-      expect(`${jobName}:${job?.needs}`).toBe(`${jobName}:changes`);
-      expect(`${jobName}:${job?.if}`).toBe(`${jobName}:${scopedCondition}`);
-    }
-    const macosControlIf = ci.jobs?.["macos-control"] as { needs?: string; if?: string } | undefined;
-    expect(macosControlIf?.needs).toBe("changes");
-    expect(macosControlIf?.if).toBe("github.event_name == 'workflow_dispatch'");
   });
 
   test("Docker smoke executes the source-build lifecycle and gates its result", async () => {
@@ -797,7 +637,22 @@ describe("GitHub Actions hardening", () => {
     expect(targetFreeness?.env?.INTENDED).toBe("${{ steps.target.outputs.version }}");
     expect(targetFreeness?.run).toContain("git fetch --force --tags origin");
     expect(targetFreeness?.run).toContain('npm view "@bitkyc08/opencodex@${INTENDED#v}" version');
-    expect(chosenFreeness?.run).toBe("bun test tests/ci-workflows/release-version-line.test.ts");
+    // The chosen version must fail on its own tag, not on the shared detector's
+    // release-commit exception. This job's HEAD is the workflow's main checkout while
+    // only package.json came from dev, so "the tag names HEAD" would wrongly allow a
+    // version that is already released. The explicit tag check must run before the
+    // detector sees the copied metadata.
+    expect(chosenFreeness?.env?.NEXT_VERSION).toBe("${{ steps.decide.outputs.version }}");
+    expect(chosenFreeness?.run).toContain('git rev-parse -q --verify "refs/tags/v${NEXT_VERSION#v}"');
+    expect(chosenFreeness?.run).toContain("git fetch --force --tags origin");
+    const tagCheck = chosenFreeness?.run?.indexOf('refs/tags/v${NEXT_VERSION#v}') ?? -1;
+    expect(tagCheck).toBeGreaterThanOrEqual(0);
+    expect(tagCheck).toBeLessThan(chosenFreeness?.run?.indexOf("cp dev-tree/package.json package.json") ?? -1);
+    // The trusted detector still runs against the bumped metadata copied out of the dev
+    // tree: the tag check proves the candidate's own tag is absent, the detector proves
+    // it is not behind any higher release tag.
+    expect(chosenFreeness?.run).toContain("cp dev-tree/package.json package.json");
+    expect(chosenFreeness?.run).toContain("bun test tests/ci-workflows/release-version-line.test.ts");
     expect(openPr?.env).toMatchObject({
       MODE: "${{ steps.target.outputs.mode }}",
       TARGET_VERSION: "${{ steps.target.outputs.version }}",
@@ -826,7 +681,7 @@ describe("GitHub Actions hardening", () => {
         };
         publish?: {
           "runs-on"?: string;
-          needs?: string;
+          needs?: string[];
           permissions?: Record<string, string>;
         };
       };
@@ -841,7 +696,10 @@ describe("GitHub Actions hardening", () => {
       contents: "read",
     });
     
-    expect(release.jobs?.publish?.needs).toBe("validate-dispatch");
+    // Publication is the irreversible public act, so it waits for the pre-publication
+    // verification of everything it will publish; the full ordering contract is in
+    // tests/ci-workflows/release-pipeline-contract.test.ts.
+    expect(release.jobs?.publish?.needs).toEqual(["validate-dispatch", "verify-release"]);
     expect(release.jobs?.publish?.["runs-on"]).toBe("ubuntu-latest");
     expect(release.jobs?.publish?.permissions).toEqual({
       contents: "write",
@@ -914,11 +772,44 @@ describe("GitHub Actions hardening", () => {
     expect(workflow).toContain("actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e");
     expect(workflow).not.toMatch(/uses:\s+\S+@(?:v\d+|main|master)\b/);
 
+    // The post-release bump has write authority, but dev is a mutable integration
+    // branch rather than the audited release input. Executable automation must stay
+    // on the exact caller SHA, and checkout credentials must remain absent until the
+    // final trusted push invocation.
+    const bumpWorkflow = await readText(".github/workflows/dev-version-bump.yml");
+    expect(bumpWorkflow).toContain("- name: Checkout trusted automation");
+    expect(bumpWorkflow).toContain("ref: ${{ github.sha }}");
+    expect(bumpWorkflow).toContain("- name: Checkout dev as data");
+    expect(bumpWorkflow).toContain("path: dev-tree");
+    expect(count(bumpWorkflow, "persist-credentials: false")).toBe(2);
+    expect(bumpWorkflow).toContain(
+      'bun scripts/bump-dev-version.ts "${RELEASED_VERSION}" dev-tree/package.json',
+    );
+    expect(bumpWorkflow).toContain("cp dev-tree/package.json package.json");
+    expect(bumpWorkflow).toContain("working-directory: dev-tree");
+    // The credentialed push must be one command: a trailing line break runs
+    // `git -c` alone (usage, nonzero) and `push origin` as a bare shell word,
+    // so the branch never reaches the remote under `set -euo pipefail`.
+    expect(bumpWorkflow).toContain(
+      'git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" push origin "${branch}"',
+    );
+    // Version-source checks run from the trusted checkout against the dev tree;
+    // executing inside dev-tree would let mutable input steer the runtime, and
+    // GH_TOKEN is dropped for the check so the token outlives only the push.
+    expect(count(bumpWorkflow, 'env -u GH_TOKEN bun scripts/release-version-sources.ts check "${NEXT_VERSION}" --root dev-tree')).toBe(2);
+    expect(bumpWorkflow).not.toContain("bun ../scripts/release-version-sources.ts");
+
     // Workflow-dispatch inputs must reach shell code via env, never by direct
     // interpolation into run: source (script-injection hardening).
+    // The split alone does not bound a block: the last step of a job runs on into the next
+    // job's header, so a job-level `if: ${{ inputs.dry-run != true }}` — which is a condition,
+    // not shell — read as an injection in the step above it. Each block is cut at the first
+    // line that dedents to job level, which is where the step's script actually ends.
     const runBlocks = workflow.split(/\n {6,}- name: /).filter(block => block.includes("run: |"));
     for (const block of runBlocks) {
-      const runSource = block.slice(block.indexOf("run: |"));
+      const afterRun = block.slice(block.indexOf("run: |"));
+      const jobBoundary = afterRun.search(/\n {2}\S/);
+      const runSource = jobBoundary === -1 ? afterRun : afterRun.slice(0, jobBoundary);
       expect(runSource).not.toContain("${{ inputs.");
     }
 
@@ -1033,7 +924,14 @@ describe("GitHub Actions hardening", () => {
     expect(releaseNotesBuilder).toContain("release changelog failed coverage validation");
 
     expect(workflow).toMatch(/gh release create[\s\S]*?--notes-file "\$notes_file"/);
-    expect(workflow).not.toContain("gh release edit");
+    // The release is created as a draft and published only after the verified
+    // bundle is attached, because a published release is immutable and rejects
+    // every later upload. That draft flip is the one edit allowed: notes still
+    // come from the validated notes file, never from an edit or a regeneration.
+    for (const edit of workflow.match(/gh release edit[^\n]*/g) ?? []) {
+      expect(edit).toContain("--draft=false");
+      expect(edit).not.toContain("--notes");
+    }
     expect(workflow).not.toContain("--generate-notes");
 
     const createStep = workflow
@@ -1575,7 +1473,9 @@ describe("GitHub Actions hardening", () => {
           // Hygiene reassessment reads the changed-file list; not a write.
           name !== "github.rest.pulls.listFiles" &&
           // Carry attribution reads the branch's commit messages; not a write.
-          name !== "github.rest.pulls.listCommits",
+          name !== "github.rest.pulls.listCommits" &&
+          // Pre-ready re-attestation readback re-reads the saved gate comment; not a write.
+          name !== "github.rest.issues.getComment",
       );
     expect([...new Set(restWrites)].sort()).toEqual([
       "github.rest.issues.addLabels",
@@ -1657,7 +1557,7 @@ describe("GitHub Actions hardening", () => {
     const CHECKLIST_START = "<!-- pr-quality-readiness-checklist:start -->";
     const CHECKLIST_END = "<!-- pr-quality-readiness-checklist:end -->";
     const CHECKLIST_ITEMS = [
-      "All CI tests are green on my local testing.",
+      "Required local validation passed; commands, results, and any full-suite exception are documented.",
       "I pushed my PR to the latest dev commit.",
       "I resolved all correct Codex and CodeRabbit findings.",
       "My PR is ready for review.",
@@ -1783,7 +1683,7 @@ describe("GitHub Actions hardening", () => {
       const [injected] = callsTo(result, "pulls.update") as [{ body: string }];
       expect(injected.body).toContain(CHECKLIST_START);
       expect(injected.body).toContain(CHECKLIST_END);
-      expect(injected.body).toContain("- [ ] All CI tests are green on my local testing.");
+      expect(injected.body).toContain("- [ ] Required local validation passed; commands, results, and any full-suite exception are documented.");
       expect(injected.body).toContain("- [ ] My PR is ready for review.");
 
       const [draft] = callsTo(result, "graphql") as [{ query: string }];
@@ -1842,6 +1742,7 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(result)).toEqual(readsAllowedBase([
         "graphql",
         "pulls.listReviews",
+        "pulls.get",
         "issues.addLabels",
         "graphql",
         "issues.createComment",
@@ -1943,6 +1844,7 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(result)).toEqual(readsAllowedBase([
         "graphql",
         "pulls.listReviews",
+        "pulls.get",
         "issues.addLabels",
         "graphql",
         "issues.createComment",
@@ -1991,7 +1893,7 @@ describe("GitHub Actions hardening", () => {
       ]));
       const [resetBody] = callsTo(result, "pulls.update") as [{ body: string }];
       expect(resetBody.body).toContain(CHECKLIST_START);
-      expect(resetBody.body).toContain("- [ ] All CI tests are green on my local testing.");
+      expect(resetBody.body).toContain("- [ ] Required local validation passed; commands, results, and any full-suite exception are documented.");
       expect(resetBody.body).toContain("- [ ] My PR is ready for review.");
       expect(resetBody.body).not.toContain("- [x]");
 
@@ -2035,6 +1937,7 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(result)).toEqual(readsAllowedBase([
         "graphql",
         "pulls.listReviews",
+        "pulls.get",
         "issues.addLabels",
         "issues.createComment",
         "issues.deleteComment",
@@ -2186,6 +2089,7 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(result)).toEqual(readsAllowedBase([
         "graphql",
         "pulls.listReviews",
+        "pulls.get",
         "issues.addLabels",
         "graphql",
         "issues.createComment",
@@ -2258,7 +2162,7 @@ describe("GitHub Actions hardening", () => {
       ]));
       const [bodyUpdate] = callsTo(result, "pulls.update") as [{ body: string }];
       // Only the latest-dev box is unticked; local CI stays checked.
-      expect(bodyUpdate.body).toContain("- [x] All CI tests are green on my local testing.");
+      expect(bodyUpdate.body).toContain("- [x] Required local validation passed; commands, results, and any full-suite exception are documented.");
       expect(bodyUpdate.body).toContain("- [ ] I pushed my PR to the latest dev commit.");
       expect(bodyUpdate.body).toContain("- [x] My PR is ready for review.");
       const drafts = callsTo(result, "graphql") as [{ query: string }];
@@ -2289,6 +2193,7 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(result)).toEqual(readsAllowedBase([
         "graphql",
         "pulls.listReviews",
+        "pulls.get",
         "issues.addLabels",
         "graphql",
         "issues.createComment",
@@ -2352,7 +2257,7 @@ describe("GitHub Actions hardening", () => {
       ]));
       const [bodyUpdate] = callsTo(result, "pulls.update") as [{ body: string }];
       // Only the findings box is unticked; CI and latest-dev stay checked.
-      expect(bodyUpdate.body).toContain("- [x] All CI tests are green on my local testing.");
+      expect(bodyUpdate.body).toContain("- [x] Required local validation passed; commands, results, and any full-suite exception are documented.");
       expect(bodyUpdate.body).toContain("- [x] I pushed my PR to the latest dev commit.");
       expect(bodyUpdate.body).toContain("- [ ] I resolved all correct Codex and CodeRabbit findings.");
       expect(bodyUpdate.body).toContain("- [x] My PR is ready for review.");
@@ -2408,6 +2313,7 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(result)).toEqual(readsAllowedBase([
         "graphql",
         "pulls.listReviews",
+        "pulls.get",
         "issues.addLabels",
         "graphql",
         "issues.createComment",
@@ -2449,6 +2355,7 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(result)).toEqual(readsAllowedBase([
         "graphql",
         "pulls.listReviews",
+        "pulls.get",
         "issues.addLabels",
         "graphql",
         "issues.createComment",
@@ -2512,6 +2419,7 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(result)).toEqual(readsAllowedBase([
         "graphql",
         "pulls.listReviews",
+        "pulls.get",
         "issues.addLabels",
         "graphql",
         "issues.createComment",
@@ -2540,6 +2448,7 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(result)).toEqual(readsAllowedBase([
         "graphql",
         "pulls.listReviews",
+        "pulls.get",
         "issues.addLabels",
         "graphql",
         "issues.createComment",
@@ -2895,6 +2804,7 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(result)).toEqual(readsAllowedBase([
         "graphql",
         "pulls.listReviews",
+        "pulls.get",
         "issues.addLabels",
         "graphql",
         "issues.createComment",
@@ -3360,13 +3270,68 @@ describe("GitHub Actions hardening", () => {
         eventName: "status",
         statusSha: headSha,
         associatedPullRequests: [
-          { number: 42, state: "open", head: { sha: headSha } },
+          {
+            number: 42,
+            state: "open",
+            head: { sha: headSha },
+            base: { repo: { name: "opencodex", owner: { login: "lidge-jun" } } },
+          },
         ],
       });
 
       expect(result.outputs).toEqual([{ name: "pull-number", value: "42" }]);
       // A unique index hit must not need the open-PR fallback.
       expect(callsTo(result, "pulls.list")).toEqual([]);
+    });
+
+    test("the resolver ignores associated PRs based on another fork-network repo", async () => {
+      const headSha = "5fa700fb7f7247cbc000038652c60297f868517c";
+      const result = await runResolver({
+        pr: { base: { ref: "dev" }, number: 42, head: { sha: headSha } },
+        eventName: "status",
+        statusSha: headSha,
+        associatedPullRequests: [
+          // The commit-to-PR index spans the fork network: this number belongs
+          // to a PR in another repository and 404s on pulls.get here.
+          { number: 6086, state: "open", head: { sha: headSha }, base: { repo: { name: "opencodex", owner: { login: "fork-parent" } } } },
+          { number: 42, state: "open", head: { sha: headSha }, base: { repo: { name: "opencodex", owner: { login: "lidge-jun" } } } },
+        ],
+      });
+
+      expect(result.outputs).toEqual([{ name: "pull-number", value: "42" }]);
+      expect(result.logs.join(" ")).toContain("other repositories in the fork network");
+      expect(callsTo(result, "pulls.list")).toEqual([]);
+    });
+
+    test.each([
+      { repo: { name: "opencodex", owner: { login: "other-owner" } } },
+      { repo: { name: "other-repo", owner: { login: "lidge-jun" } } },
+      undefined,
+    ])("a lone foreign or incomplete index result uses the repository-scoped fallback (%j)", async base => {
+      const headSha = "5fa700fb7f7247cbc000038652c60297f868517c";
+      const result = await runResolver({
+        pr: { base: { ref: "dev" }, number: 42, head: { sha: headSha } },
+        eventName: "status", statusSha: headSha,
+        associatedPullRequests: [{ number: 6086, state: "open", head: { sha: headSha }, base }],
+        openPulls: [{ number: 42, state: "open", head: { sha: headSha } }],
+      });
+      expect(result.outputs).toEqual([{ name: "pull-number", value: "42" }]);
+      expect(callsTo(result, "pulls.list")).toHaveLength(1);
+      expect(callsTo(result, "pulls.list")[0]).toMatchObject({ owner: "lidge-jun", repo: "opencodex", state: "open" });
+    });
+
+    test("a foreign-only status with no local PR emits no write-job identity", async () => {
+      const headSha = "5fa700fb7f7247cbc000038652c60297f868517c";
+      const result = await runResolver({
+        pr: { base: { ref: "dev" }, number: 42, head: { sha: headSha } },
+        eventName: "status", statusSha: headSha,
+        associatedPullRequests: [{ number: 6086, state: "open", head: { sha: headSha },
+          base: { repo: { name: "opencodex", owner: { login: "other-owner" } } } }],
+        openPulls: [],
+      });
+      expect(result.outputs).toEqual([]);
+      expect(callsTo(result, "pulls.list")).toHaveLength(1);
+      expect(callsTo(result, "pulls.get")).toEqual([]);
     });
 
     test("the resolver fails closed when both resolution paths error", async () => {
@@ -3689,6 +3654,7 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(result)).toEqual(readsAllowedBase([
         "graphql",
         "pulls.listReviews",
+        "pulls.get",
         "issues.addLabels",
         "graphql",
         "issues.createComment",
@@ -3746,6 +3712,7 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(result)).toEqual(readsAllowedBase([
         "graphql",
         "pulls.listReviews",
+        "pulls.get",
         "issues.addLabels",
         "pulls.update",
         "graphql",
@@ -3954,6 +3921,59 @@ describe("GitHub Actions hardening", () => {
       expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(false);
     });
 
+    test("an open PR with an unavailable head repo is not a stacked parent", async () => {
+      const result = await run({
+        pr: {
+          number: 42,
+          base: {
+            ref: "main",
+            repo: { name: "opencodex", owner: { login: "lidge-jun" } },
+          },
+          title: "Wrong-base child",
+          draft: false,
+        },
+        openPulls: [
+          {
+            number: 41,
+            head: { ref: "main", repo: null },
+          },
+        ],
+      });
+
+      expect(methodsOf(result)).toEqual(readsWrongBase([
+        "pulls.update",
+        "pulls.update",
+        "issues.createComment",
+        "graphql",
+      ]));
+      expect(result.logs.join(" ")).not.toContain("treating as stacked");
+      expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(true);
+    });
+
+    test("a fork PR whose head branch shares the base name is not a stacked parent", async () => {
+      // pulls.list returns fork PRs too; their head ref names only the fork's branch.
+      const result = await run({
+        pr: {
+          number: 42,
+          base: {
+            ref: "main",
+            repo: { name: "opencodex", owner: { login: "lidge-jun" } },
+          },
+          title: "Wrong-base child",
+          draft: false,
+        },
+        openPulls: [
+          {
+            number: 41,
+            head: { ref: "main", repo: { name: "opencodex", owner: { login: "fork-owner" } } },
+          },
+        ],
+      });
+
+      expect(result.logs.join(" ")).not.toContain("treating as stacked");
+      expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(true);
+    });
+
     test("a non-dev base with no open parent PR is still wrong-base", async () => {
       const result = await run({
         pr: { base: { ref: "feature/orphan" }, title: "Orphan stack", draft: false },
@@ -4046,6 +4066,7 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(result)).toEqual(readsAllowedBase([
         "graphql",
         "pulls.listReviews",
+        "pulls.get",
         "issues.addLabels",
         "pulls.update",
         "graphql",
@@ -4196,6 +4217,7 @@ describe("GitHub Actions hardening", () => {
         "graphql",
         "pulls.listReviews",
         "pulls.listReviews",
+        "pulls.get",
         "issues.addLabels",
         "pulls.update",
         "graphql",
@@ -4317,6 +4339,7 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(result)).toEqual(readsAllowedBase([
         "graphql",
         "pulls.listReviews",
+        "pulls.get",
         "issues.addLabels",
         "graphql",
         "issues.createComment",
@@ -4409,6 +4432,7 @@ describe("GitHub Actions hardening", () => {
         expect(methodsOf(restored)).toEqual(readsAllowedBase([
         "graphql",
         "pulls.listReviews",
+        "pulls.get",
         "issues.addLabels",
         "pulls.update",
         "graphql",
@@ -4467,6 +4491,7 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(loose)).toEqual(readsAllowedBase([
         "graphql",
         "pulls.listReviews",
+        "pulls.get",
         "issues.addLabels",
         "pulls.update",
         "graphql",
@@ -4491,6 +4516,7 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(falsy)).toEqual(readsAllowedBase([
         "graphql",
         "pulls.listReviews",
+        "pulls.get",
         "issues.addLabels",
         "graphql",
         "issues.createComment",
@@ -4663,6 +4689,7 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(result)).toEqual(readsAllowedBase([
         "graphql",
         "pulls.listReviews",
+        "pulls.get",
         "issues.addLabels",
         "pulls.update",
         "graphql",
@@ -5265,8 +5292,8 @@ describe("GitHub Actions hardening", () => {
     expect(rootPkg).toContain('"doctor:gui:if-changed": "bun scripts/doctor-gui-if-changed.ts"');
     expect(rootPkg).toContain('"lint:gui": "cd gui && bun run lint"');
     expect(rootPkg).toContain('"lint:gui:if-changed": "bun scripts/lint-gui-if-changed.ts"');
-    // Gating steps include lint and React Doctor only on gui/ pushes.
-    expect(rootPkg).toContain("bun run typecheck && bun run lint:gui:if-changed && bun run test");
+    // Gating steps include the gui typecheck, lint, and React Doctor only on gui/ pushes.
+    expect(rootPkg).toContain("bun run typecheck && bun run typecheck:gui:if-changed && bun run lint:gui:if-changed && bun run test");
     expect(rootPkg).toContain("bun run privacy:scan && bun run doctor:gui:if-changed");
   });
 });
@@ -5409,91 +5436,6 @@ describe("lint-gui-if-changed", () => {
   });
 });
 
-describe("gui exhaustive-deps suppression stays scoped and effective", () => {
-  // `bun run doctor:gui` exited 1 on dev for one deliberate exception at
-  // gui/src/pages/Models.tsx, and doctor:gui runs inside `prepush`, so every
-  // gui-touching push needed --no-verify. Two config edits fixed it, and each has a
-  // failure mode that is silent rather than loud, which is what these assertions cover.
-
-  test("the oxlint override carries its own react plugin, or it resolves to nothing", async () => {
-    const oxlintrc = JSON.parse(await readText("gui/.oxlintrc.json")) as {
-      overrides?: Array<{ files?: string[]; rules?: Record<string, unknown>; plugins?: string[] }>;
-    };
-    const overrides = oxlintrc.overrides ?? [];
-    const scoped = overrides.filter(entry => (entry.files ?? []).includes("src/pages/Models.tsx"));
-
-    expect(scoped).toHaveLength(1);
-    const override = scoped[0]!;
-
-    // Rule id must match the style the rest of this config uses ("react/..."). The
-    // eslint-style "react-hooks/..." id silently matches nothing here.
-    expect(override.rules?.["react/exhaustive-deps"]).toBe("off");
-    expect(override.rules).not.toHaveProperty("react-hooks/exhaustive-deps");
-
-    // Without a per-override plugins key the override is inert: the rule stays on and
-    // the warning comes back. This is the assertion that catches a well-meaning cleanup
-    // that deletes a key looking redundant next to the top-level plugin list.
-    expect(override.plugins).toContain("react");
-
-    // Narrow by construction: the override turns off exactly one rule. rules-of-hooks and
-    // react-compiler must keep firing in that file, and a probe confirmed they do.
-    expect(Object.keys(override.rules ?? {})).toEqual(["react/exhaustive-deps"]);
-  });
-
-  test("react-doctor scopes the ignore to one file instead of going blind everywhere", async () => {
-    const config = JSON.parse(await readText("gui/doctor.config.json")) as {
-      blocking?: string;
-      ignore?: { overrides?: Array<{ files?: string[]; rules?: string[] }> };
-      rules?: Record<string, unknown>;
-    };
-
-    // A global rules entry was tried first and rejected: it silenced the rule repo-wide,
-    // proven by injecting a missing-dep violation into Startup.tsx and watching doctor
-    // report "No issues". ignore.overrides keeps that violation failing.
-    expect(config.rules).not.toHaveProperty("react-doctor/exhaustive-deps");
-    expect(config.rules).not.toHaveProperty("react-hooks/exhaustive-deps");
-
-    const overrides = config.ignore?.overrides ?? [];
-    const scoped = overrides.filter(entry => (entry.files ?? []).includes("src/pages/Models.tsx"));
-    expect(scoped).toHaveLength(1);
-    expect(scoped[0]!.rules).toContain("react-hooks/exhaustive-deps");
-
-    // Every ignore override must name at least one file. An empty or missing files list
-    // would apply the ignore to the whole scan, which is the failure this pair guards.
-    for (const entry of overrides) {
-      expect((entry.files ?? []).length).toBeGreaterThan(0);
-      expect((entry.rules ?? []).length).toBeGreaterThan(0);
-    }
-
-    // blocking must stay at warning; flipping it to error would hide the next finding
-    // instead of this one. scripts/doctor-gui-if-changed.ts documents that contract.
-    expect(config.blocking).toBe("warning");
-  });
-
-  test("the effect keeps the in-file record of why the dep array stays short", async () => {
-    const models = await readText("gui/src/pages/Models.tsx");
-    const effectEnd = models.indexOf("}, [catalogActive, loadShadowCall, loadV2]);");
-    expect(effectEnd).toBeGreaterThan(-1);
-
-    // The reasoning has to sit on the effect, not in a commit message. Read the comment
-    // block immediately above the dep array rather than the whole file, or this passes on
-    // any incidental mention elsewhere.
-    const preceding = models.slice(0, effectEnd).split(/\r?\n/).slice(-8).join("\n");
-    expect(preceding).toContain("PreserveManualMemo");
-    expect(preceding).toContain("five react-compiler");
-
-    // Both suppressions are config-side, so the note must point at the two files a reader
-    // would otherwise have to find by grep.
-    expect(preceding).toContain("gui/.oxlintrc.json");
-    expect(preceding).toContain("gui/doctor.config.json");
-
-    // An in-file react-doctor disable was tried and removed: doctor passes without it, and
-    // react/react-compiler penalises a component merely for carrying suppressions. If one
-    // reappears, the config route has been misunderstood.
-    expect(models).not.toContain("react-doctor-disable-next-line");
-  });
-});
-
 
 interface PublicationStep { name: string; id?: string; if?: string; run?: string; env?: Record<string, string> }
 async function publicationSteps(): Promise<PublicationStep[]> {
@@ -5573,8 +5515,10 @@ test.skipIf(process.platform === "win32")("release shell recovers only unverifie
       const script = prelude + (scenario.mode === "missing-receipt" ? "" : publish) + '\n'
         + (scenario.dry ? "" : `PUBLISHED=$(sed -n 's/^published=//p' "$GITHUB_OUTPUT")\n${smoke}`);
       const child = Bun.spawn(["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script], {
+        // RESUME mirrors the workflow, where the env always defines it; the
+        // non-resume branches are what every scenario here exercises.
         env: { ...process.env, SCENARIO: scenario.mode, DRY_RUN: String(scenario.dry),
-          NPM_DIST_TAG: "latest", RELEASE_VERSION: "9.8.7", GITHUB_OUTPUT: output,
+          NPM_DIST_TAG: "latest", RELEASE_VERSION: "9.8.7", RESUME: "false", GITHUB_SHA: "a".repeat(40), GITHUB_OUTPUT: output,
           GITHUB_STEP_SUMMARY: summary, CALLS: calls, COUNTER: join(dir, "counter") },
         stdin: "ignore", stdout: "pipe", stderr: "pipe",
       });

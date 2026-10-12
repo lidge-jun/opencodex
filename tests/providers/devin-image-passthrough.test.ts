@@ -53,6 +53,17 @@ describe("user image passthrough", () => {
     const user = items.find(i => i.role === "user")!;
     expect(user.content).toEqual([{ type: "text", text: "[image url: https://example.com/pic.png]" }]);
   });
+
+  test("an oversized remote image URL is not copied into prompt text", () => {
+    const attackerControlledSuffix = "a".repeat(9_000);
+    const items = mapOcxMessagesToDevin(parsedWith([{
+      role: "user",
+      content: [{ type: "image", imageUrl: `https://example.com/${attackerControlledSuffix}` }],
+    }]));
+    const user = items.find(i => i.role === "user")!;
+    expect(user.content).toEqual([{ type: "text", text: "[image omitted: unsupported or oversized URL]" }]);
+    expect(JSON.stringify(user.content)).not.toContain(attackerControlledSuffix);
+  });
 });
 
 describe("tool-result image passthrough", () => {
@@ -70,7 +81,7 @@ describe("tool-result image passthrough", () => {
     expect(parts.some(p => p.type === "image" && p.base64Data === "iVBORw0KGgoAAAANSUhEUg")).toBe(true);
   });
 
-  test("an error tool result still carries the ERROR prefix alongside images", () => {
+  test("an error tool result is flagged, keeps the ERROR marker, and still carries its images", () => {
     const items = mapOcxMessagesToDevin(parsedWith([{
       role: "toolResult",
       toolCallId: "call_1",
@@ -79,6 +90,7 @@ describe("tool-result image passthrough", () => {
     } as unknown as OcxMessage]));
     const tool = items.find(i => i.role === "tool")!;
     const parts = tool.content as Array<Record<string, unknown>>;
+    expect(tool.is_error).toBe(true);
     expect(parts[0]).toMatchObject({ type: "text", text: "ERROR:" });
     expect(parts.some(p => p.type === "image")).toBe(true);
   });

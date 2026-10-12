@@ -28,9 +28,28 @@ interface ScanResult {
   lineStart: boolean;
 }
 
+// Probe with ASCII-only case folding rather than toLowerCase(): Unicode lowercasing can expand
+// a code point (İ, ŉ, ligatures), shifting folded-text offsets away from `text` positions and
+// silently disabling detection. `expected` must already be lowercase.
+function asciiFold(code: number): number {
+  return code >= 0x41 && code <= 0x5a ? code + 0x20 : code;
+}
+
+function startsWithFolded(text: string, index: number, expected: string): boolean {
+  if (index + expected.length > text.length) return false;
+  for (let i = 0; i < expected.length; i++) {
+    if (asciiFold(text.charCodeAt(index + i)) !== expected.charCodeAt(i)) return false;
+  }
+  return true;
+}
+
 function prefixAtEnd(text: string, at: number, expected: string): boolean {
-  const rest = text.slice(at).toLowerCase();
-  return rest.length < expected.length && expected.startsWith(rest);
+  const remaining = text.length - at;
+  if (remaining > expected.length) return false;
+  for (let i = 0; i < remaining; i++) {
+    if (asciiFold(text.charCodeAt(at + i)) !== expected.charCodeAt(i)) return false;
+  }
+  return true;
 }
 
 /**
@@ -65,8 +84,7 @@ function scan(
       }
 
       if (!fence) {
-        const lowered = text.slice(index).toLowerCase();
-        if (lowered.startsWith(DSML_CALLS_LINE)) {
+        if (startsWithFolded(text, index, DSML_CALLS_LINE)) {
           const afterCalls = index + DSML_CALLS_LINE.length;
           let invokeAt = -1;
           if (text[afterCalls] === "\n") invokeAt = afterCalls + 1;
@@ -76,12 +94,11 @@ function scan(
           }
 
           if (invokeAt >= 0) {
-            const invokeRest = text.slice(invokeAt).toLowerCase();
-            const invokeNameStart = invokeRest[DSML_INVOKE_PREFIX.length];
-            if (invokeRest.startsWith(DSML_INVOKE_PREFIX) && invokeNameStart && !/[\s"]/.test(invokeNameStart)) {
+            const invokeNameStart = text[invokeAt + DSML_INVOKE_PREFIX.length];
+            if (startsWithFolded(text, invokeAt, DSML_INVOKE_PREFIX) && invokeNameStart && !/[\s"]/.test(invokeNameStart)) {
               return { safe: text.slice(0, index), held: "", fail: true, fence, lineStart };
             }
-            if (invokeRest.length === 0 || DSML_INVOKE_PREFIX.startsWith(invokeRest)) {
+            if (invokeAt === text.length || prefixAtEnd(text, invokeAt, DSML_INVOKE_PREFIX)) {
               return { safe: text.slice(0, index), held: text.slice(index), fail: false, fence, lineStart };
             }
           }

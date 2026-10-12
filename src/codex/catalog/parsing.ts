@@ -1,3 +1,4 @@
+import { isCodexControlPlaneModel } from "../control-plane-models";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
@@ -36,6 +37,7 @@ import { clampAutoCompactTokenLimit } from "../../providers/auto-compact-budget"
 import { trustedAccountBoundNativeCatalogSlug } from "./account-models";
 import { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "./kinds";
 import { NATIVE_GPT6_ASTRA_MODEL } from "./native-models";
+import { recordOwnedConfigPath } from "../../lib/config-ownership";
 
 export function legacyCatalogBackupPath(): string {
   return join(getConfigDir(), "catalog-backup.json");
@@ -112,6 +114,8 @@ export interface CatalogModel {
   displayName?: string;
   owned_by?: string;
   reasoningEfforts?: string[];
+  /** Exact CCA family evidence, retained through the in-memory discovery cache. */
+  antigravityEffortWireModelIds?: Partial<Record<"low" | "medium" | "high", string>>;
   /** Suppress only catalog synthesis of a missing max rung; provider-declared max survives. */
   suppressSyntheticMax?: boolean;
   defaultReasoningEffort?: string;
@@ -194,6 +198,8 @@ export const ROUTED_MODEL_COMPATIBILITY_EXCLUSIONS = new Set([
    * keep appearing with its capabilities broken. Excluding the slug is what actually takes
    * it out of the routed catalog.
    */
+  "deepseek/deepseek-v4-pro",
+  "opencode-go/deepseek-v4-pro",
   "command-code/deepseek-deepseek-v4-pro",
   "commandcode/deepseek-deepseek-v4-pro",
   "orcarouter/deepseek-deepseek-v4-pro",
@@ -579,9 +585,10 @@ export function applyNativeOpenAiContextOverride(entry: RawEntry, limits?: Nativ
   }
 }
 
+/** Normalize a row for Codex's catalog parser, stripping native eligibility from routed rows unless explicitly preserved. */
 export function ensureStrictCatalogFields(
   entry: RawEntry,
-  options: { preserveExactInputModalities?: boolean; isRouted?: boolean } = {},
+  options: { preserveExactInputModalities?: boolean; isRouted?: boolean; preserveNativeAccessPrograms?: boolean } = {},
 ): RawEntry {
   if (entry.shell_type === "default" || entry.shell_type === "local" || entry.shell_type === "shell_command") {
     entry.shell_type = "unified_exec";
@@ -629,9 +636,12 @@ export function ensureStrictCatalogFields(
     entry.max_context_window = contextWindow;
   }
   if (typeof entry.effective_context_window_percent !== "number") entry.effective_context_window_percent = 95;
-  if (typeof entry.comp_hash !== "string") entry.comp_hash = "opencodex";
+  // Unknown compatibility is not an incompatibility marker. Codex compares hashes only
+  // when both turns supply one; a synthetic value forces native/routed switches to compact
+  // even below the token limit. Keep authoritative strings and represent unknown as null.
+  if (typeof entry.comp_hash !== "string") entry.comp_hash = null;
   // Routed rows must not carry NATIVE eligibility metadata. `deriveEntry` deep-clones a
-  // native template and deletes a fixed denylist, so these five survive onto rows backed
+  // native template and deletes a fixed denylist, so these eligibility fields survive onto rows backed
   // by unrelated provider credentials — advertising ChatGPT plan eligibility for a model
   // that never touches a ChatGPT account (#2813).
   //
@@ -641,6 +651,9 @@ export function ensureStrictCatalogFields(
   // leave already-contaminated rows contaminated forever.
   if (options.isRouted === true) {
     entry.supported_in_api = true;
+    // Exact Codex-forward aliases still use a ChatGPT credential and may retain their native
+    // source metadata. Other routed rows cannot claim that account's access programs.
+    if (!options.preserveNativeAccessPrograms) delete entry.available_access_programs;
     delete entry.available_in_plans;
     delete entry.minimal_client_version;
     delete entry.availability_nux;
@@ -688,7 +701,7 @@ export function catalogEntryIsNativeChatGpt(entry: RawEntry): boolean {
     && entry.use_responses_lite === true
     && hasNativeOpenAiCapabilityMetadata(routedNativeSlug)
   ) return true;
-  if (UPSTREAM_NATIVE_ENTRIES.has(slug) || SUPPORTED_NATIVE_OPENAI_SLUGS.has(slug)) return true;
+  if (isCodexControlPlaneModel(slug) || UPSTREAM_NATIVE_ENTRIES.has(slug) || SUPPORTED_NATIVE_OPENAI_SLUGS.has(slug)) return true;
   return false;
 }
 
@@ -729,6 +742,7 @@ export function applyMultiAgentMode(
 ): RawEntry[] {
   if (mode === "v2" && options.keepNativeChatGptOnV1 === true) {
     for (const entry of entries) {
+      recordMultiAgentOrigin(entry);
       entry.multi_agent_version = catalogEntryIsNativeChatGpt(entry) ? "v1" : "v2";
     }
     return entries;
@@ -737,6 +751,9 @@ export function applyMultiAgentMode(
     // Restore upstream defaults: clear any stale forced multi_agent_version and
     // re-apply upstream pins from the snapshot for native entries that have one.
     for (const entry of entries) {
+      // A forced mode recorded what this row carried before it was overwritten; returning
+      // to default consumes that record whichever branch below decides the row.
+      const origin = takeMultiAgentOrigin(entry);
       if (options.preserveDefaultMultiAgentVersion?.(entry)) continue;
       const slug = typeof entry.slug === "string" ? entry.slug : "";
       const nativeAlias = entry.opencodex_catalog_kind === CODEX_NATIVE_ALIAS_CATALOG_KIND;
@@ -775,7 +792,17 @@ export function applyMultiAgentMode(
         && isNativeCatalogEntry
         && !hasNativeDefault
         && typeof entry.multi_agent_version === "string") {
-        continue;
+        // The baseline predates this native row, so it cannot say whether the live pin
+        // is genuine. With a recorded origin it no longer has to guess: restore what the
+        // row carried before the first forced mode (issue 5636). A row without a record
+        // (older catalogs) keeps the non-destructive read.
+        if (origin === undefined) continue;
+        if (typeof origin === "string") {
+          entry.multi_agent_version = origin;
+          continue;
+        }
+        if (v2FeatureEnabled) entry.multi_agent_version = "v2";
+        else delete entry.multi_agent_version;
       } else if (v2FeatureEnabled) {
         entry.multi_agent_version = "v2";
       } else {
@@ -785,9 +812,33 @@ export function applyMultiAgentMode(
     return entries;
   }
   for (const entry of entries) {
+    recordMultiAgentOrigin(entry);
     entry.multi_agent_version = mode;
   }
   return entries;
+}
+
+/**
+ * Provenance for a forced multi-agent stamp: the value the row carried before the first
+ * forced v1/v2 pass, or null when it carried none. Repeated forced passes never replace it,
+ * so a v1 -> v2 -> default round trip still restores the original. Codex ignores unknown
+ * catalog fields, as it does opencodex_catalog_kind.
+ */
+export const MULTI_AGENT_ORIGIN_FIELD = "opencodex_multi_agent_version_origin";
+
+function recordMultiAgentOrigin(entry: RawEntry): void {
+  if (Object.hasOwn(entry, MULTI_AGENT_ORIGIN_FIELD)) return;
+  (entry as Record<string, unknown>)[MULTI_AGENT_ORIGIN_FIELD] = typeof entry.multi_agent_version === "string"
+    ? entry.multi_agent_version
+    : null;
+}
+
+/** Remove and return the recorded origin: a string pin, null for "no pin", undefined when unrecorded. */
+function takeMultiAgentOrigin(entry: RawEntry): string | null | undefined {
+  if (!Object.hasOwn(entry, MULTI_AGENT_ORIGIN_FIELD)) return undefined;
+  const raw = (entry as Record<string, unknown>)[MULTI_AGENT_ORIGIN_FIELD];
+  delete (entry as Record<string, unknown>)[MULTI_AGENT_ORIGIN_FIELD];
+  return typeof raw === "string" ? raw : raw === null ? null : undefined;
 }
 
 export function normalizeRoutedCatalogEntry(
@@ -929,14 +980,17 @@ export function catalogHasRoutedEntries(catalog: RawCatalog | null): boolean {
 }
 
 export function writePristineCatalogBackup(backupPath: string, catalogPath: string, catalog: RawCatalog): void {
+  // An existing name is not evidence of ownership; keep pre-ledger/user backups unclaimed.
   if (existsSync(backupPath)) return;
   const onDisk = readCatalog(catalogPath);
   if (onDisk && !catalogHasRoutedEntries(onDisk)) {
     copyFileSync(catalogPath, backupPath);
+    recordOwnedConfigPath(getConfigDir(), backupPath);
     return;
   }
   if (!catalogHasRoutedEntries(catalog)) {
     atomicWriteFile(backupPath, JSON.stringify(catalog, null, 2) + "\n");
+    recordOwnedConfigPath(getConfigDir(), backupPath);
   }
 }
 

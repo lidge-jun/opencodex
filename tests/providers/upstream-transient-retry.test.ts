@@ -9,6 +9,7 @@ import {
 import { transientRetryPolicyFor } from "../../src/providers/key-failover";
 import { handleChatCompletions } from "../../src/server/chat-completions";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 function bodyResponse(status: number, headers?: Record<string, string>): Response {
   // ReadableStream body so cancel() is observable.
@@ -290,24 +291,31 @@ describe("native Chat completions and the replay refusal", () => {
       },
     } as unknown as OcxConfig;
 
-    const response = await handleChatCompletions(
-      new Request("http://localhost/v1/chat/completions", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          model: "replay-refusal-fixture/model",
-          messages: [{ role: "user", content: "ping" }],
+    // Taken after the inherited test home is in effect so native Chat can record its send.
+    const releaseSpendHome = acquireOwnedSpendHome();
+    try {
+      const response = await handleChatCompletions(
+        new Request("http://localhost/v1/chat/completions", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            model: "replay-refusal-fixture/model",
+            messages: [{ role: "user", content: "ping" }],
+          }),
         }),
-      }),
-      config,
-      { model: "", provider: "" },
-    );
+        config,
+        { model: "", provider: "" },
+      );
 
-    expect(sends).toBe(1);
-    expect(response.status).toBe(429);
-    expect(response.headers.get("Retry-After")).toBeNull();
-    expect(await response.json()).toMatchObject({
-      error: { code: "upstream_reset_replay_refused" },
-    });
+      expect(sends).toBe(1);
+      expect(response.status).toBe(429);
+      expect(response.headers.get("Retry-After")).toBeNull();
+      expect(await response.json()).toMatchObject({
+        error: { code: "upstream_reset_replay_refused" },
+      });
+    } finally {
+      // Released after the response body is consumed so no stream retains the ledger owner.
+      releaseSpendHome();
+    }
   });
 });

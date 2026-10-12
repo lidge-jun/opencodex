@@ -7,6 +7,7 @@
  * expected document; unsupported YAML fails closed and never falls back to a
  * whole-document serializer.
  */
+import { parseSegment, selectIndex, type SelectorCriterion } from "./merge";
 import { renderYaml } from "./serialize";
 
 interface SourceLine {
@@ -80,8 +81,87 @@ function isComment(line: string): boolean {
   return line.trimStart().startsWith("#");
 }
 
+/**
+ * The lexical state a scalar scan carries out of a line. Quoted and plain
+ * scalars may both continue onto later physical lines, so the state persists
+ * across the owned range: a continuation line opening with the scalar's
+ * closing quote is not a new opener — a ` #` behind it is a real comment —
+ * and a `#` on a line still inside an open quote is scalar content, not a
+ * comment.
+ */
+interface ScalarScan {
+  comment: boolean;
+  quote: "'" | "\"" | null;
+  scalarStarted: boolean;
+}
+
+/**
+ * Quote tracking has to work in both directions: a `#` inside a quoted scalar
+ * is content (`"model#variant"`), but a quote inside a plain scalar is also
+ * content — `user's model` is one plain scalar, and treating its `'` as an
+ * opener would hide a real ` #` comment behind quote mode.
+ */
+function scanScalarLine(line: string, quote: "'" | "\"" | null, scalarStarted: boolean): ScalarScan {
+  // A `'` or `"` opens a quoted scalar only where a scalar may begin — after
+  // `key:`, `- `, or a flow indicator — never inside a plain scalar already
+  // in progress.
+  let flowDepth = 0;
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index]!;
+    if (quote === "\"") {
+      if (character === "\\") index += 1;
+      else if (character === quote) quote = null;
+      continue;
+    }
+    if (quote === "'") {
+      if (character !== quote) continue;
+      if (line[index + 1] === quote) index += 1;
+      else quote = null;
+      continue;
+    }
+    if (character === "#" && /\s/u.test(line[index - 1] ?? "")) {
+      return { comment: true, quote, scalarStarted };
+    }
+    const next = line[index + 1] ?? "";
+    if (scalarStarted) {
+      // `:` ends a plain scalar where a value boundary follows; inside flow
+      // collections `,`, `]`, and `}` do too.
+      if (character === ":" && (next === "" || /\s/u.test(next))) scalarStarted = false;
+      else if (flowDepth > 0 && (character === "," || character === "]" || character === "}")) {
+        scalarStarted = false;
+        if (character !== ",") flowDepth -= 1;
+      }
+      continue;
+    }
+    if (/\s/u.test(character)) continue;
+    if (character === "'" || character === "\"") {
+      quote = character;
+      continue;
+    }
+    if (character === "[" || character === "{") {
+      flowDepth += 1;
+      continue;
+    }
+    if (character === "]" || character === "}") {
+      flowDepth -= 1;
+      continue;
+    }
+    if (character === ",") continue;
+    // `key:`, `- `, `? `: indicators only where a value boundary follows.
+    if ((character === ":" || character === "-" || character === "?")
+      && (next === "" || /\s/u.test(next))) continue;
+    // Anchors, aliases, and tags decorate the scalar that follows them.
+    if (character === "&" || character === "*" || character === "!") {
+      while (index + 1 < line.length && !/\s/u.test(line[index + 1]!)) index += 1;
+      continue;
+    }
+    scalarStarted = true;
+  }
+  return { comment: false, quote, scalarStarted };
+}
+
 function hasInlineComment(line: string): boolean {
-  return line.includes("#");
+  return scanScalarLine(line, null, false).comment;
 }
 
 function regexpEscape(value: string): string {
@@ -171,16 +251,43 @@ function childEnd(
   parentEnd: number,
   indent: number,
 ): number | null {
+  // Scalar state carries across physical lines: a scalar continuation is
+  // always deeper than the leaf's indent, so a `spaces <= indent` line can
+  // never be one. Inside an open quote a blank or `#`-leading line is scalar
+  // content; inside a plain scalar a blank line folds but a `#` line is still
+  // a real comment.
+  let quote: "'" | "\"" | null = null;
+  let scalarStarted = false;
   for (let index = start + 1; index < parentEnd; index += 1) {
     const body = lines[index]!.body;
     const spaces = leadingSpaces(body);
     if (spaces === null) return null;
     // Blank lines and same-level comments remain outside our replacement.
     // Deeper comments belong to the leaf and would be destroyed, so refuse.
-    if (isBlank(body)) return index;
-    if (isComment(body)) return spaces <= indent ? index : null;
+    if (isBlank(body)) {
+      if (quote !== null) continue;
+      if (!scalarStarted) return index;
+      // A plain scalar's blank line folds only when deeper content follows;
+      // otherwise it is the separator before a sibling and stays outside.
+      let ahead = index + 1;
+      while (ahead < parentEnd && isBlank(lines[ahead]!.body)) ahead += 1;
+      if (ahead >= parentEnd) return index;
+      const nextSpaces = leadingSpaces(lines[ahead]!.body);
+      if (nextSpaces === null) return null;
+      if (nextSpaces <= indent) return index;
+      index = ahead - 1;
+      continue;
+    }
+    if (quote === null && isComment(body)) return spaces <= indent ? index : null;
     if (spaces <= indent) return index;
-    if (hasInlineComment(body)) return null;
+    // A block sequence indicator opens a new node: scalar state never carries
+    // across item boundaries. Inside an open quote a leading `- ` is content.
+    const trimmed = body.trimStart();
+    if (quote === null && (trimmed === "-" || trimmed.startsWith("- "))) scalarStarted = false;
+    const scan = scanScalarLine(body, quote, scalarStarted);
+    if (scan.comment) return null;
+    quote = scan.quote;
+    scalarStarted = scan.scalarStarted;
   }
   return parentEnd;
 }
@@ -336,6 +443,7 @@ function upsertSource(
   path: readonly string[],
   value: unknown,
 ): string | null {
+  if (leadingSelector(path) !== null) return upsertSequenceEntry(text, parsed, path, value);
   const located = locatePath(text, parsed, path);
   if (located === null || located.kind === "unsupported-style") return null;
   const eol = lineEnding(text);
@@ -361,6 +469,178 @@ function upsertSource(
   return preserveFinalNewline(candidate, text, eol);
 }
 
+/**
+ * The criteria of a path whose first segment selects one entry of a top-level
+ * sequence, or null for an ordinary block-map path.
+ *
+ * DSH 0.1.7+ keeps settings in a profile patch: a YAML list of loader rows,
+ * `- id: llm-pi-ai` among them. The entry is patched as the block map it is
+ * once its `- ` indicator and two-space continuation indent are set aside, and
+ * both are put back byte for byte. Every other list shape fails closed.
+ */
+function leadingSelector(path: readonly string[]): readonly SelectorCriterion[] | null {
+  if (path.length === 0) return null;
+  const segment = parseSegment(path[0]!);
+  return segment.kind === "select" ? segment.criteria : null;
+}
+
+/** Line ranges of a block sequence's top-level entries, or null for any other document shape. */
+function topLevelEntries(lines: readonly SourceLine[]): Array<{ start: number; end: number }> | null {
+  const entries: Array<{ start: number; end: number }> = [];
+  let open = false;
+  for (let index = 0; index < lines.length; index += 1) {
+    const body = lines[index]!.body;
+    if (isBlank(body)) continue;
+    const spaces = leadingSpaces(body);
+    if (spaces === null) return null;
+    if (spaces > 0) {
+      // Continuation of the open entry; deeper text anywhere else is not a list we can place.
+      if (!open) return null;
+      continue;
+    }
+    if (open) entries[entries.length - 1]!.end = index;
+    open = false;
+    if (isComment(body)) continue;
+    if (!/^- \S/u.test(body)) return null;
+    entries.push({ start: index, end: lines.length });
+    open = true;
+  }
+  return entries;
+}
+
+/** The entry's text as the block map it holds, or null when it is not in the two-space form. */
+function entrySource(text: string, lines: readonly SourceLine[], start: number, end: number): string | null {
+  let source = "";
+  for (let index = start; index < end; index += 1) {
+    const line = lines[index]!;
+    const raw = text.slice(line.start, line.end);
+    if (index === start) source += raw.slice(2);
+    else if (isBlank(line.body)) source += raw;
+    else if ((leadingSpaces(line.body) ?? 0) >= 2) source += raw.slice(2);
+    else return null;
+  }
+  return source;
+}
+
+/** Put an entry back: `- ` on its first line, two spaces on every other non-blank line. */
+function reindentEntry(source: string): string {
+  return sourceLines(source).map((line, index) => {
+    const raw = source.slice(line.start, line.end);
+    if (index === 0) return `- ${raw}`;
+    return isBlank(line.body) ? raw : `  ${raw}`;
+  }).join("");
+}
+
+function firstLine(text: string): string {
+  return text.split(/\r?\n/u, 1)[0] ?? "";
+}
+
+type SequenceEntry =
+  | {
+      kind: "found";
+      criteria: readonly SelectorCriterion[];
+      rest: readonly string[];
+      /** Byte range of the entry, trailing blank lines included. */
+      startOffset: number;
+      endOffset: number;
+      source: string;
+      parsed: Record<string, unknown>;
+      /** Entries the list keeps if this one is removed. */
+      siblings: number;
+    }
+  | {
+      kind: "missing";
+      criteria: readonly SelectorCriterion[];
+      rest: readonly string[];
+      /** Where a new entry goes, and the end of the `[]` line it replaces, if any. */
+      insertAt: number;
+      replaceEnd: number | null;
+    };
+
+function sequenceEntry(text: string, parsed: unknown, path: readonly string[]): SequenceEntry | null {
+  const criteria = leadingSelector(path);
+  if (criteria === null || !Array.isArray(parsed)) return null;
+  const lines = sourceLines(text);
+  const rest = path.slice(1);
+  const found = selectIndex(parsed, criteria);
+  const entries = topLevelEntries(lines);
+  if (entries === null) {
+    // `[]` is how DSH writes a profile patch with no rows yet: the one flow form adopted.
+    const content = lines.filter(line => !isBlank(line.body) && !isComment(line.body));
+    if (found >= 0 || parsed.length !== 0 || content.length !== 1 || content[0]!.body.trimEnd() !== "[]") return null;
+    return { kind: "missing", criteria, rest, insertAt: content[0]!.start, replaceEnd: content[0]!.end };
+  }
+  if (entries.length !== parsed.length) return null;
+  if (found < 0) return { kind: "missing", criteria, rest, insertAt: text.length, replaceEnd: null };
+  const element = parsed[found];
+  const { start, end } = entries[found]!;
+  const source = entrySource(text, lines, start, end);
+  if (!isPlainRecord(element) || source === null) return null;
+  return {
+    kind: "found",
+    criteria,
+    rest,
+    startOffset: lines[start]!.start,
+    endOffset: end < lines.length ? lines[end]!.start : text.length,
+    source,
+    parsed: element,
+    siblings: entries.length - 1,
+  };
+}
+
+function spliceEntry(text: string, entry: Extract<SequenceEntry, { kind: "found" }>, replacement: string): string {
+  return `${text.slice(0, entry.startOffset)}${replacement}${text.slice(entry.endOffset)}`;
+}
+
+function upsertSequenceEntry(text: string, parsed: unknown, path: readonly string[], value: unknown): string | null {
+  const entry = sequenceEntry(text, parsed, path);
+  if (entry === null) return null;
+  const eol = lineEnding(text);
+  if (entry.kind === "found") {
+    if (entry.rest.length === 0) return null;
+    const patched = upsertSource(entry.source, entry.parsed, entry.rest, value);
+    // The `- ` belongs to the entry's first line; a patch that rewrote that line cannot take it back.
+    if (patched === null || firstLine(patched) !== firstLine(entry.source)) return null;
+    return preserveFinalNewline(spliceEntry(text, entry, reindentEntry(patched)), text, eol);
+  }
+  // The same element `setPath` seeds: the selector's own fields, then the fragment beneath them.
+  const seeded = Object.fromEntries(entry.criteria.map(criterion => [criterion.field, criterion.value]));
+  const element = entry.rest.length === 0 ? value : { ...seeded, ...nestedValue(entry.rest, value) };
+  if (!isPlainRecord(element)) return null;
+  const item = reindentEntry(rendered(element, 0, eol));
+  if (entry.replaceEnd !== null) {
+    return preserveFinalNewline(`${text.slice(0, entry.insertAt)}${item}${text.slice(entry.replaceEnd)}`, text, eol);
+  }
+  const prefix = text.length > 0 && !text.endsWith("\n") ? eol : "";
+  return preserveFinalNewline(`${text}${prefix}${item}`, text, eol);
+}
+
+function removeSequenceEntryPath(
+  text: string,
+  parsed: unknown,
+  path: readonly string[],
+  requireEmpty: boolean,
+): string | null {
+  const entry = sequenceEntry(text, parsed, path);
+  if (entry === null || entry.kind !== "found") return null;
+  if (entry.rest.length > 0) {
+    const patched = removeExactPath(entry.source, entry.rest, requireEmpty);
+    if (patched === null || firstLine(patched) !== firstLine(entry.source)) return null;
+    return spliceEntry(text, entry, reindentEntry(patched));
+  }
+  if (requireEmpty) {
+    // A pruned entry may still hold what its selector seeded, and nothing else.
+    const seededOnly = Object.keys(entry.parsed).length === entry.criteria.length
+      && selectIndex([entry.parsed], entry.criteria) === 0;
+    if (!seededOnly || sourceLines(entry.source).some(line => hasInlineComment(line.body) || isComment(line.body))) {
+      return null;
+    }
+  }
+  // A list left with no entries goes back to the `[]` DSH writes for an empty one.
+  const eol = lineEnding(text);
+  return preserveFinalNewline(spliceEntry(text, entry, entry.siblings === 0 ? `[]${eol}` : ""), text, eol);
+}
+
 function removeExactPath(text: string, path: readonly string[], requireEmpty: boolean): string | null {
   let parsed: unknown;
   try {
@@ -368,6 +648,7 @@ function removeExactPath(text: string, path: readonly string[], requireEmpty: bo
   } catch {
     return null;
   }
+  if (leadingSelector(path) !== null) return removeSequenceEntryPath(text, parsed, path, requireEmpty);
   const located = locatePath(text, parsed, path);
   if (located === null || located.kind !== "existing") return null;
   const { lines, index, endIndex } = located.entry;
@@ -400,7 +681,7 @@ function planSourceRemoval(
     next = pruned;
     prunedContainers.push(encoded);
   }
-  return { text: next, prunedContainers };
+  return { text: preserveFinalNewline(next, text, lineEnding(text)), prunedContainers };
 }
 
 /** Containers whose source ranges are still empty and safe to prune. */
@@ -453,6 +734,11 @@ export function yamlFragmentUnsupportedStyle(text: string, path: readonly string
     parsed = text.trim().length === 0 ? {} : Bun.YAML.parse(text);
   } catch {
     return false;
+  }
+  if (leadingSelector(path) !== null) {
+    const entry = sequenceEntry(text, parsed, path);
+    return entry?.kind === "found" && entry.rest.length > 0
+      && locatePath(entry.source, entry.parsed, entry.rest)?.kind === "unsupported-style";
   }
   return locatePath(text, parsed, path)?.kind === "unsupported-style";
 }

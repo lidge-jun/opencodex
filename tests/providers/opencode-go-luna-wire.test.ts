@@ -13,9 +13,15 @@ import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { createResponsesPassthroughAdapter } from "../../src/adapters/openai-responses";
 import { parseRequest } from "../../src/responses/parser";
 import { withTestTranslatorBudget } from "../helpers/translator-budget";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 const MODEL = "gpt-5.6-luna";
 const GO_RESPONSES_MODELS = [MODEL, "grok-4.6", "muse-spark-1.3-contributor"];
+let releaseSpendHome: (() => void) | undefined;
+
+// Direct dispatch needs the writer lease that startServer normally owns for this home.
+const takeSpendHome = (): void => { releaseSpendHome ??= acquireOwnedSpendHome(); };
+const dropSpendHome = (): void => { releaseSpendHome?.(); releaseSpendHome = undefined; };
 
 function opencodeGo(overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig {
   const entry = getProviderRegistryEntry("opencode-go");
@@ -102,7 +108,11 @@ describe("OpenCode Go stateless Responses", () => {
 
 describe("OpenCode Go stateless reasoning and continuation routes", () => {
   const originalFetch = globalThis.fetch;
-  afterEach(() => { globalThis.fetch = originalFetch; });
+  afterEach(() => {
+    // Release the preload-home lease before later teardown can replace or remove that home.
+    dropSpendHome();
+    globalThis.fetch = originalFetch;
+  });
 
   const continuations = [
     { id: "full", name: "full history", fullHistory: true, summary: "auto" },
@@ -147,6 +157,7 @@ describe("OpenCode Go stateless reasoning and continuation routes", () => {
       }) as typeof fetch;
       const config = { providers: { "opencode-go": opencodeGo() } } as unknown as OcxConfig;
       const drive = async (body: Record<string, unknown>) => {
+        takeSpendHome();
         const response = await handleResponses(new Request("http://localhost/v1/responses", {
           method: "POST", headers: { "content-type": "application/json" },
           body: JSON.stringify({ model: `opencode-go/${model}`, stream: streaming, reasoning: { summary: continuation.summary },
@@ -214,7 +225,10 @@ describe("OpenCode Go stateless reasoning and continuation routes", () => {
 
 describe("OpenCode Go Luna Responses route (#1482)", () => {
   const originalFetch = globalThis.fetch;
-  afterEach(() => { globalThis.fetch = originalFetch; });
+  afterEach(() => {
+    dropSpendHome();
+    globalThis.fetch = originalFetch;
+  });
 
   test("handleResponses sends Luna to the documented /responses endpoint", async () => {
     const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
@@ -234,6 +248,7 @@ describe("OpenCode Go Luna Responses route (#1482)", () => {
     const config = {
       providers: { "opencode-go": opencodeGo() },
     } as unknown as OcxConfig;
+    takeSpendHome();
     const response = await handleResponses(
       new Request("http://localhost/v1/responses", {
         method: "POST",

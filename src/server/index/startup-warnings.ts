@@ -6,6 +6,13 @@ import {
   type OwnershipInspection,
 } from "../../integrations/native/ownership-preflight";
 import { registerCodexQuotaAutoRefreshWorker } from "../../codex/quota-auto-refresh";
+import type {
+  ObservePackageTree,
+  PackageTreeIntegrityOptions,
+  PackageTreeRuntimeInstall,
+} from "../../lib/package-tree-integrity";
+import type { PackageTreeRetargetOptions } from "../../lib/package-tree-retarget";
+import type { MiseLauncherTargetWatchPlan } from "../../update/mise-launcher-target";
 import {
   consumeForInspection,
   relaySseWithHeartbeat,
@@ -56,6 +63,11 @@ import {
   type PackageTreeIntegrityGuard,
 } from "../../lib/package-tree-integrity";
 import type { LiveSidebandWebSocketFactory } from "./live-sideband";
+import {
+  MAX_CONFIGURABLE_INBOUND_BODY_BYTES,
+  MIN_CONFIGURABLE_INBOUND_BODY_BYTES,
+  resolveInboundBodyLimitBytes,
+} from "../request-decompress";
 
 // GUI static serving extracted to ./server/gui-static. Re-exported below to keep the
 // "../src/server" import surface stable for tests/callers.
@@ -87,6 +99,25 @@ import type { LiveSidebandWebSocketFactory } from "./live-sideband";
 // export function relaySseWithHeartbeat
 
 const REQUEST_LOG_ID_RESPONSE_HEADER = "x-opencodex-request-id";
+
+/** Messages clients persist request-id; the upstream diagnostic id has a separate namespace. */
+export function withMessagesRequestLogId(response: Response, requestId: string): Response {
+  const upstreamId = response.headers.get("request-id");
+  const correlated = withRequestLogId(response, requestId);
+  correlated.headers.delete("x-opencodex-upstream-request-id");
+  if (upstreamId && /^req_[A-Za-z0-9_-]{1,128}$/.test(upstreamId)) {
+    correlated.headers.set("x-opencodex-upstream-request-id", upstreamId);
+  }
+  correlated.headers.set("request-id", requestId);
+  const exposed = correlated.headers.get("Access-Control-Expose-Headers") ?? "";
+  const names = exposed.split(",").map(name => name.trim().toLowerCase());
+  const additions = ["request-id", ...(correlated.headers.has("x-opencodex-upstream-request-id")
+    ? ["x-opencodex-upstream-request-id"] : [])].filter(name => !names.includes(name));
+  if (additions.length) {
+    correlated.headers.set("Access-Control-Expose-Headers", [exposed, ...additions].filter(Boolean).join(", "));
+  }
+  return correlated;
+}
 
 export function withRequestLogId(response: Response, requestId: string): Response {
   const headers = new Headers(response.headers);
@@ -136,6 +167,22 @@ export interface StartServerDeps {
   readinessGate?: ReadinessGate;
   /** Test-only package-tree observation; production captures package.json identity at boot. */
   packageTreeIntegrity?: PackageTreeIntegrityGuard;
+  /** Test-only default-guard options; production observes the installed package manifest. */
+  packageTreeIntegrityOptions?: PackageTreeIntegrityOptions;
+  /** Test-only installed-package identity; production detects the current install. */
+  packageTreeInstaller?: PackageTreeRuntimeInstall;
+  /** Test-only manifest observer; production stats the installed package.json. */
+  observePackageTree?: ObservePackageTree;
+  /** Test-only restart acceptor; production uses the normal drain-and-restart path. */
+  acceptSystemRestart?: typeof import("../management/system-restart").acceptSystemRestart;
+  /** Test-only: whether this process is a service child, for the package-tree restart. */
+  packageTreeServiceChild?: () => boolean;
+  /** Test-only: whether this service child still owns its service home. */
+  packageTreeServiceHomeOwned?: () => boolean;
+  /** Test-only launcher plan; production plans from the mise owner and service state. Null disables. */
+  packageTreeLauncherTarget?: MiseLauncherTargetWatchPlan | null;
+  /** Test-only retarget-watch timing and version seams. */
+  packageTreeRetargetOptions?: PackageTreeRetargetOptions;
   /** Test-only seam for observing quota-worker registration ownership. */
   registerCodexQuotaAutoRefreshWorker?: typeof registerCodexQuotaAutoRefreshWorker;
 }
@@ -203,6 +250,25 @@ export function warnAgentTaskRecoveryStartup(config: {
   console.warn("⚠️  Experimental encrypted V2 task recovery is enabled.");
   console.warn("   A scoped cache miss may send an additional authenticated request to ChatGPT and may consume quota or add latency; concurrent misses can share one request.");
   console.warn("   Recovered plaintext assignment data is retained only in a bounded, process-local in-memory cache; exact fidelity is not guaranteed and the path depends on undocumented backend behavior.");
+}
+
+/**
+ * Resolved once, before any listener binds. The clamp is silent inside the resolver so it
+ * stays pure and per-request cheap; the operator is told here instead, once, because a
+ * config value that was quietly reduced is exactly the thing they would otherwise debug
+ * against the wrong limit.
+ */
+export function resolveInboundBodyLimitWithWarning(config: { maxInboundBodyBytes?: number }): number {
+  const limit = resolveInboundBodyLimitBytes(config.maxInboundBodyBytes);
+  const requested = config.maxInboundBodyBytes;
+  if (requested !== undefined && requested > 0 && requested !== limit) {
+    console.warn(
+      `[server] maxInboundBodyBytes=${requested} is outside the supported range `
+      + `[${MIN_CONFIGURABLE_INBOUND_BODY_BYTES}, ${MAX_CONFIGURABLE_INBOUND_BODY_BYTES}]; `
+      + `using ${limit} bytes.`,
+    );
+  }
+  return limit;
 }
 
 export function warnPlaintextV2AgentMessagesStartup(config: { plaintextV2AgentMessages?: boolean }): void {

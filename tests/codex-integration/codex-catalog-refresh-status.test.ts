@@ -12,6 +12,15 @@ afterEach(() => {
   resetCatalogAutoRefreshStatusForTests();
 });
 
+test("reloadRequired is exposed as a frozen boolean without copying caller details", () => {
+  const committed: CatalogDisposition = { status: "committed", changed: true, degraded: false, notices: [] };
+  expect(recordCatalogAutoRefreshOutcome(committed, true)?.reloadRequired).toBe(false);
+  expect(recordCatalogAutoRefreshOutcome(committed, true, true)?.reloadRequired).toBe(true);
+  expect(lastCatalogAutoRefreshOutcome()?.reloadRequired).toBe(true);
+  expect(Object.isFrozen(lastCatalogAutoRefreshOutcome())).toBe(true);
+  expect(recordCatalogAutoRefreshOutcome(committed, true, "private detail" as never)?.reloadRequired).toBe(false);
+});
+
 describe("catalogRefreshIsPending", () => {
   test("only committed catalog state is complete", () => {
     const committed: CatalogDisposition = {

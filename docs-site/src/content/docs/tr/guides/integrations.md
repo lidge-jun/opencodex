@@ -1,10 +1,10 @@
 ---
 title: Entegrasyonlar
-description: Kontrol panelinden OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast ve omo'yu opencodex'e bağlayın — istemci başına tek bir anahtar ve her yazmadan önce alınan bir yedek.
+description: Kontrol panelinden OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline CLI, Kilo, Command Code ve Factory Droid'u opencodex'e bağlayın — istemci başına tek bir anahtar ve her yazmadan önce alınan bir yedek.
 ---
 
-**Entegrasyonlar** sekmesi, opencodex'in sağlayıcı bloğunu istemcinin kendi
-yapılandırma dosyasına yazar ve tekrar kaldırır. On beş istemci bu şekilde
+**Bağlantı** sekmesi, opencodex'in sağlayıcı bloğunu istemcinin kendi
+yapılandırma dosyasına yazar ve tekrar kaldırır. On sekiz istemci bu şekilde
 çalışır, her biri bir anahtarla:
 
 | İstemci | Yapılandırma dosyası | Format | Değişiklik ne zaman geçerli olur? | Kimlik bilgisi |
@@ -16,17 +16,27 @@ yapılandırma dosyasına yazar ve tekrar kaldırır. On beş istemci bu şekild
 | OpenClaw | `~/.openclaw/openclaw.json` | JSON5 | hemen, çalışan bir ağ geçidinde | `OPENCODEX_OPENCLAW_API_KEY` |
 | Kimi Code | `~/.kimi-code/config.toml` | TOML | yeniden başlatmada veya `/reload` ile | geri döngü (loopback) yer tutucusu |
 | gjc | `~/.gjc/agent/models.yml` | YAML | yeni oturumlarda veya `/model` açtığınızda | non-secret loopback placeholder |
-| DeepSeek Harness (DSH) | `$DSH_HOME/settings.yaml` (varsayılan `~/.dsh/settings.yaml`) | YAML | çalışırken yeniden yükleme | gizli olmayan geri döngü bearer yer tutucusu |
+| DeepSeek Harness (DSH) | `$DSH_HOME/profiles/desktop/cordis.patch.yml` (varsayılan `~/.dsh/profiles/desktop/cordis.patch.yml`); DSH Desktop bu profili oluşturana kadar `$DSH_HOME/settings.yaml` | YAML | çalışırken yeniden yükleme | gizli olmayan geri döngü bearer yer tutucusu |
 | MiniMax Code | `~/.minimax/config.yaml` | YAML | yeni oturumlarda veya model seçici açıldıktan sonra | geri döngü (loopback) yer tutucusu |
 | Prime Agent | `~/.prime/agent/models.json` | JSON | yeni oturumlarda | geri döngü yer tutucusu |
-| ZCode | `~/.zcode/v2/config.json` | JSON | yeniden başlatmada | geri döngü yer tutucusu |
+| ZCode | `~/.zcode/v2/provider_config.json` (schemaVersion 1); eski biçim için yedek yol: `~/.zcode/v2/config.json` | JSON | yeniden başlatmada | geri döngü yer tutucusu |
 | Aside | `~/.aside/u/<account>/models.json` | JSON | Aside tamamen kapatılıp yeniden açıldıktan sonra | geri döngü yer tutucusu |
 | Raycast | `~/.config/raycast/ai/providers.yaml` | YAML | kaydedildiği anda — Raycast dosyayı izler | yok — yalnızca geri döngü |
 | omo | `~/.omo/agent/models.json` | JSON | yeni oturumlarda | geri döngü yer tutucusu |
 | Cline CLI | `~/.cline/data/settings/providers.json` + `models.json` | JSON | kapatıp yeniden başlattıktan sonra | yalnızca loopback |
+| Kilo | `~/.config/kilo` altında ilk bulunan `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json` veya `config.json` (`XDG_CONFIG_HOME` bu dizini taşır; hiçbiri yoksa `kilo.jsonc` oluşturulur) | JSONC | yeni oturumlarda | `OPENCODEX_KILO_API_KEY` |
+| Command Code | `~/.commandcode/providers.json` (Windows’ta varsayılan ana dizin kullanılırken: `HOME ?? USERPROFILE` değerini yalnızca boş veya sırf boşluklardan oluşmayan mutlak bir Windows yoluysa kullanır, aksi halde `homedir()` kullanılır; ayrıca verilen ana dizin korunur; sonuna `.commandcode\providers.json` eklenir) | JSON | Command Code'un sonraki başlatılmasında | yok — anahtarsız geri döngü (`apiKey: false`) |
+| Factory Droid | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` Windows'ta) | JSON | dosya değişince hemen | anahtarsız geri döngü |
 
-Yönetilen DSH desteğinin en düşük uyumlu sürümü **DSH 0.1.0-rc.6**'dır. OpenCodex yalnızca
-`llm-pi-ai.providers.opencodex` bölümünü yönetir: Uygula ve Yenile bu bölümü değiştirir, Devre Dışı
+Desteklenen akıl yürütme düzeylerine sahip GJC modelleri, GJC'nin düzey seçimi sunabilmesi için `reasoning: true`, `thinking.levels` ve `compat.supportsReasoningEffort` alanlarını dışa aktarır. Yerel Codex modelleri, katalogda belirtilmese bile standart düzeylerini alır. Bilinen düzeyi olmayan modellerde bu alanlar bulunmaz. `none` düzey göndermez ve `ultra` gönderimde `max` düzeyine dönüşür; bu yüzden seçeneklerde yer almazlar. Model seçeneklerini güncellemek için entegrasyonu yenileyin.
+
+Yönetilen DSH desteğinin en düşük uyumlu sürümü **DSH 0.1.0-rc.6**'dır. DSH 0.1.7 ve üzeri, sağlayıcı rotalarını
+`$DSH_HOME/profiles/desktop/cordis.patch.yml` dosyasındaki `[id=llm-pi-ai].config.providers.opencodex` satırından okur.
+Desktop profili ve yaması varsa OpenCodex yalnızca bu satırı yazar.
+`$DSH_HOME/profiles/desktop/package.json` varsa ancak `cordis.patch.yml` yoksa Uygula işlemi reddedilir:
+`[]` içeren bir `cordis.patch.yml` oluşturun (DSH’nin yeni bir profil için yazdığı boş yama), ardından
+entegrasyonu yeniden etkinleştirin. Yalnızca Desktop profili yoksa
+`$DSH_HOME/settings.yaml` içindeki `llm-pi-ai.providers.opencodex` bölümünü kullanır. Uygula ve Yenile seçilen yönetilen bölümü değiştirir, Devre Dışı
 Bırak yalnızca bu bölümü kaldırır, Geri Yükle ise kaydedilmiş bir anlık görüntüyü geri koyar. DSH
 sağlayıcı değişikliklerini çalışırken yeniden yükler. Bu işlemler kullanıcının varsayılan modelini
 veya yerel `deepseek-official` sağlayıcısını değiştirmez. Yönetilen DSH entegrasyonu şu anda yalnızca
@@ -43,7 +53,7 @@ yönettiği geçerli çaba seçimi korunur.
 
 Raycast'in iki ön koşulu vardır. Özel sağlayıcılar (Custom Providers) bir **Raycast Pro**
 özelliğidir: ücretsiz planda dosya yine yazılır, ancak Raycast onu okumayacağı için
-`ocx integration client status --client raycast` ve Entegrasyonlar sayfası bir uyarı
+`ocx integration client status --client raycast` ve **Bağlantı** sayfası bir uyarı
 bildirir. Ayrıca Raycast `ai` klasörünü yalnızca Raycast → Settings → AI →
 **Reveal Providers Config** seçeneğini bir kez açtığınızda oluşturur; opencodex bu
 klasörü kurulum sinyali olarak kullanır ve klasör var olana kadar istemciyi kurulu değil
@@ -155,13 +165,35 @@ Kimi Code, gjc, MiniMax Code, Raycast — bütün belge olarak yazılan YAML, JS
 kendi girdilerimiz düzenlenmişse, anahtar kilitlenir ve hangi düzenlemelerin
 size ait olduğunu tahmin etmek yerine devre dışı bırakmayı reddeder.
 
+Hermes istisnası: yönetilen bloğa yalnızca `session_affinity_header: session-id` eklenmişse **Apply** ile benimsenebilir; diğer yönetilen alan değişiklikleri çakışma olarak kalır. Uygulanana kadar arka plandaki model listesi güncellemeleri de bekletilir. Ayar provider içindeki tüm modeller için geçerlidir ve bu özelliği destekleyen bir Hermes sürümü gerektirir; önbellek isabet oranı garanti edilmez. [İngilizce yükseltme açıklamasına](/guides/integrations/#hermes-session-affinity) bakın.
+
+## Değişiklikleri önizleyin ve onaylayın
+
+Uygula, Değiştir, Devre dışı bırak ve Geri yükle işlemleri artık bir önizlemeyle başlar. İletişim
+kutusu, yönetilen ayarlardan tam olarak hangilerinin değişeceğini, sınırlı değişiklik yollarını ve
+her değişikliğin bir değer eklediğini, güncellediğini veya kaldırdığını gösterir. Onaylamadan önce bu
+planı inceleyin.
+
+Bir plan değişiklik olmadığını bildiriyorsa yönetilen istemci belgesi zaten istenen durumdadır. Seçili
+bir Aside profilinde onaylama, yönetilen belge değişmese bile profilin eşitleme tercihini kaydedebilir.
+
+Dosya siz inceledikten sonra değişirse yazma işlemi eski plan nedeniyle reddedilir. İletişim kutusu
+eski planı güncel planla değiştirir ve yeniden açıkça onaylamanızı ister; yazma işlemini hiçbir zaman
+otomatik olarak yeniden denemez. Önizleme geçici olarak kullanılamıyorsa sayfayı normal şekilde
+yenileyin ve işlemi yeniden başlatın.
+
+Aside, aynı önizleme ve onay akışını bir defada seçili tek bir profil için kullanır. **Tüm profilleri
+eşitle** ayrı bir toplu işlem olarak kalır ve tek bir birleşik önizlemeye bağlı değildir.
+
 ## Dürüstçe ne beklenmeli?
 
 **Biçimlendirme genellikle korunmaz.** Uygulama işlemi bir yapılandırmayı
 ayrıştırır ve geri yazar, bu nedenle JSON, JSON5 ve TOML yeniden
 biçimlendirilebilir ve JSON5 veya TOML içindeki yorumlar kaybolur. OMP ve DSH
-istisnadır: YAML yazıcıları sırasıyla yalnızca `providers.opencodex` ve
-`llm-pi-ai.providers.opencodex` kısımlarını yamalar,
+istisnadır: OMP YAML yazıcısı yalnızca `providers.opencodex` bölümünü yamalar.
+DSH yazıcısı, Desktop profili varsa `$DSH_HOME/profiles/desktop/cordis.patch.yml` içindeki
+`[id=llm-pi-ai].config.providers.opencodex` satırını, profil yoksa
+`$DSH_HOME/settings.yaml` içindeki `llm-pi-ai.providers.opencodex` bölümünü yamalar;
 ilgisiz sağlayıcı yorumlarını ve biçimlendirmesini bayt bayt korur. Bu tam
 kaynak aralığı güvenli bir şekilde tanımlanamazsa işlem bunun yerine reddeder.
 Diğer istemciler için önceki dosya baytlarına ihtiyacınız olduğunda Geri
@@ -199,7 +231,10 @@ asla gerçek bir kimlik bilgisi yazılmaz.
 **`ocx opencode` için başlatıcının sağlayıcı bloğu kazanır.** Bu başlatıcı,
 `provider.opencodex`'i diskteki aynı girdiden üstün olan
 `OPENCODE_CONFIG_CONTENT` aracılığıyla enjekte eder — opencode yapılandırmanızın
-geri kalanı her zamanki gibi geçerli olmaya devam eder. Buradaki anahtar,
+geri kalanı her zamanki gibi geçerli olmaya devam eder. Başlatıcının yazdığı bloklar,
+dışa aktarımlarla aynı geçerli kanonik model meta verisinden (bilinen yetenekler ve
+akıl yürütme seçenekleri) kurulur; bilinmeyen değerler uydurulmaz, yalnızca çıkış sınırı
+bilinmiyorsa şemanın zorunlu 32000 yedeğine (bağlama göre kırpılmış) düşer. Buradaki anahtar,
 `opencode`'u doğrudan başlattığınızda önemlidir.
 
 ## Terminalden
@@ -232,11 +267,12 @@ ocx mcode
 ```
 
 Bağlandıktan sonra `ocx sync` ve `POST /api/sync`, yönetilen MCode, Pi, Aside,
-Raycast ve omo kataloglarını yeniler. Proxy başlangıcı da yönetilen Raycast
+Raycast, omo, OpenCode ve Kilo kataloglarını yeniler. Proxy başlangıcı da yönetilen Raycast
 kataloğunu yeniler. Model görünürlüğü, sağlayıcı veya ön ayar değişiklikleri Pi,
-Aside, Raycast ve omo kataloglarını günceller. Eksik, dışarıdan düzenlenmiş, güvenli olmayan
+Aside, Raycast, omo, OpenCode ve Kilo kataloglarını günceller. Eksik, dışarıdan düzenlenmiş, güvenli olmayan
 veya elle kaldırılmış bloklara dokunmaz; yeniden bağlamak istediğinizde
-entegrasyonu açıkça etkinleştirin.
+entegrasyonu açıkça etkinleştirin. Güncellenen dosyayı yüklemek için yeni bir
+Pi, OpenCode veya Kilo oturumu başlatın.
 
 Ayrı MiniMax platform CLI'si (`mmx`) bir dosya anahtarı entegrasyonu değildir.
 Metin komutları MiniMax'ın Anthropic uyumlu uç noktasını kullandığı için OpenCodex,
@@ -263,6 +299,36 @@ doğrulanmıştır; neyin ne zaman denetlendiğine ilişkin
 `devlog/_fin/260802_client_toggle_api/002_client_toggle_matrix.md` içindeki
 araştırma notlarına bakın.
 
+## ZCode 3.14 ve sonrası
+
+Bu yollar varsayılandır. Varsayılan ev dizininde kalan `~/.zcode/v2/setting.json` içindeki mutlak `dataBaseDir`, depoyu `<dataBaseDir>/.zcode/v2/provider_config.json` konumuna taşır. `ZCODE_DATA_DIR` doğrudan `.zcode` kökünü belirtir ve ayardan önceliklidir; `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` sağlayıcı dosyası için önceliklidir. Okunamayan, bozuk veya göreli ayarlar yeni uygulamaları ve yenilemeleri engeller. Mevcut sahiplik ve geri alma kayıtları korunur. [İngilizce yol ve geri alma kurallarına](https://opencodex.me/guides/integrations/#zcode-314-and-later) bakın.
+
+ZCode 3.14 özel sağlayıcılarını `~/.zcode/v2/provider_config.json` dosyasına taşıdı; bu
+entegrasyonun yazdığı `~/.zcode/v2/config.json` dosyasına artık yalnızca, yeni dosya yokken bir kez
+çalışan bir içe aktarma üzerinden ulaşıyor. ZCode yeni dosyayı ilk çalıştırmada oluşturduğu için,
+bir kez bile başlatılmış her kurulumda bu içe aktarma çoktan tükenmiştir ve `config.json` dosyasına
+yazmak hiçbir şeye ulaşmaz.
+
+opencodex artık mümkün olduğunda `provider_config.json` dosyasını doğrudan yazıyor. Entegrasyonu
+etkinleştirmek bu dosyaya `opencodex` sağlayıcı kuralını ekler, katalog yenilemesi onu günceller ve
+devre dışı bırakmak opencodex'in oraya koyduğu şeyi tam olarak kaldırır. Dosyadaki diğer her kural
+olduğu gibi kalır; buna başka bir sağlayıcının, bizde de bulunan bir model kimliği için tuttuğu
+kural da dahildir. opencodex'in yazmadığı, `opencodex` kimliğini taşıyan bir kural devralınacak bir
+şey değil, bir çakışmadır: ZCode içinde çözün ya da açık üzerine yazmayı kullanın.
+
+İki durum hâlâ yazmak yerine reddeder. ZCode deposunu taşımadan önce opencodex'in yazdığı bir blok,
+entegrasyonu `config.json` üzerinde tutar: önce orada devre dışı bırakın, sonra yeni depoyu yazmak
+için yeniden etkinleştirin. `schemaVersion` değeri opencodex'in gözlemlediklerinden biri olmayan
+bir `provider_config.json` ise birleştirilmez, bildirilir: o dosya ZCode'un tüm sağlayıcılarını
+tutar ve oraya bir şekil dayatmak sessiz bir etkisizliği sessiz bir kayıpla değiştirirdi. Durum
+ekranı, entegrasyon o dosyayı yazmadığı her durumda ZCode'un okuduğu dosyayı adlandırır.
+
+Bu ikinci durumda sağlayıcıyı ZCode'un kendi ayarlarından ekleyin: temel URL
+`http://127.0.0.1:10100/v1` (bağlantı noktasını kendi bağınıza göre ayarlayın), boş olmayan
+herhangi bir anahtar ve `ocx export --client zcode` çıktısındaki model kimlikleri. ZCode'un içe
+aktarmasını yeniden tetiklemek için `provider_config.json` dosyasını silmek desteklenmez: bu,
+ZCode'un orada sakladığı tüm sağlayıcıları yok eder.
+
 ## Cline CLI
 
 Cline CLI providers.json ve models.json kullanır. Değişiklik veya eşitleme öncesinde Cline’ı kapatın, sonra yeniden başlatın. Geri al iki özgün dosyayı geri yükler. Varsayılan sağlayıcı değişmez. Eski VS Code uzantısının depolaması taşınmaz.
@@ -274,3 +340,29 @@ ocx integration client restore --op <operation-id>
 ```
 
 [CLI / rollback / CLINE_PROVIDER_SETTINGS_PATH](/guides/integrations/#cline-cli).
+
+## omo (Codex / LazyCodex) rol akıl yürütme çabası
+
+LazyCodex algılandığında omo sekmesindeki **omo (Codex / LazyCodex)** bölümünde `$CODEX_HOME/agents/*.toml` içindeki her rol için model ve akıl yürütme çabası seçip **Kaydet** düğmesine basabilirsiniz. Model sabitlemesi olmayan bir rolün satırı yalnızca çabayı kaydedebilir; rol modelini devralmaya devam eder. opencodex, rol dosyasında yalnızca kökteki `model` ve `model_reasoning_effort` anahtarlarını günceller ve eksik sabitlemeleri dosyanın başına yakın bir yere ekler. Rolün talimatları, diğer yorumlar ve diğer anahtarlar olduğu gibi kalır. Yalnızca modeli değiştiren kayıt `effort` göndermez; bu yüzden iki dosyadaki çaba değerleri korunur. Bir düzey seçmek rol dosyasındaki `model_reasoning_effort` değerini ekler veya değiştirir; LazyCodex bu düzeyi destekliyorsa değer `~/.omo/omo.jsonc` içindeki `[codex].agents.<role>.reasoning` alanına da yazılır (`ultra` yalnızca rol dosyasında kalır ve eski `reasoning` kaldırılır). Komut satırında aynı işi `ocx agent roles set <role> <model> --effort <level>` yapar.
+
+Çabası zaten sabitlenmiş roller dahil her satırda **Çabayı devral** seçeneği vardır. Sabitlenmiş bir çabayı bununla değiştirip kaydetmek `"effort": null` gönderir: rol dosyasındaki kök `model_reasoning_effort` satırı ve satır sonu yorumu ile omo.jsonc içindeki `[codex].agents.<role>.reasoning` kaldırılır. Model sabitlemesi yerinde kalır. Ardından Codex çabayı, kendi değeri olmayan herhangi bir rolde olduğu gibi belirler (açıkça verilen bir başlatma değeri, `[agents]` varsayılanı veya üst oturum); modelin sabit bir varsayılanını kullanmaz. Yalnızca var olan tek satırlık bir dize değeri kaldırılabilir; çok satırlı veya dize olmayan bir değer 409 `unsupported_model_value` ile reddedilir ve iki dosya da değişmez.
+
+`PUT /api/codex-agent-roles/{role}` isteğinde `model` atlanırsa rol dosyasındaki `model` sabitlemesi ve omo.jsonc içindeki `model` olduğu gibi kalır; böylece sabitlemesi olmayan bir rol, çabası değişirken veya temizlenirken modelini devralmaya devam eder. Kontrol paneli böyle bir satır için yalnızca çaba içeren bu isteği gönderir ve omo.jsonc içinde girdisi olmayan bir rol için, LazyCodex'in desteklediği bir çaba düzeyi kaydedildiğinde yalnızca `reasoning` içeren bir girdi oluşturulur. Kayıt hiçbir zaman model sabitlemesini kaldırmadığı için `null` model 400 `invalid_model` ile reddedilir; ne `model` ne de `effort` içeren bir istek, rol dosyası veya omo.jsonc okunmadan önce 400 `empty_update` ile reddedilir. `ocx agent roles set` her zaman bir model alır.
+
+`~/.omo/omo.jsonc` yoksa oluşturulmaz. Yorum içeriyorsa, kaydetmek yorumları sileceği için dosyaya dokunulmaz; bu durumda değeri elle ayarlayın. Atlanan bir yansıtma, rol dosyasının kaydını geri almaz. Rol dosyası kaydedilir ama omo.jsonc yazımı başarısız olursa satırdaki düğme **omo.jsonc'yi yeniden dene** olur ve **Çabayı devral** ile yapılan temizleme (`null`) dahil aynı çaba seçimini yeniden gönderir. Bu yeniden deneme başarılı olana kadar, o rol için çabaya dokunmayan sonraki bir **Kaydet** veya **Otomatik ata** **Uygula** işlemi bekleyen seçimi de birlikte gönderir; açıkça seçilen bir çaba onun yerine geçer.
+
+**Otomatik ata**, seçilen modelin çaba listesi boş olmayan gereksinimleri değerlendirilmiş her rol için bir çaba önerir; **Uygula**, **Tümünü uygula** veya `ocx agent roles suggest --apply` o rolün `model_reasoning_effort` değerini ekler ya da değiştirir. Çaba, seçilen modelin kendi düzeylerine yerleştirilir: en düşük, varsayılan, varsayılanın bir üstü veya en yüksek. Liste boşsa çaba önerilmez (`proposedEffort: null`); **Uygula** bu durumda `effort` göndermez ve mevcut sabitlenmiş çabayı olduğu gibi bırakır. `null` bir öneri hiçbir zaman sabitlenmiş çabayı temizlemez.
+
+## Kilo
+
+Kilo yalnızca `~/.config/kilo` altındaki ilk mevcut genel dosyada `provider.opencodex` yazar (`XDG_CONFIG_HOME` bu dizini taşır; hiçbir aday yoksa `kilo.jsonc` oluşturulur). Başka bir aday dosya da `provider.opencodex` tanımlıyorsa durum çakışma bildirir ve Uygula işlemi reddedilir. Diğer anahtarlar değişmez. Modellerin akıl yürütme seçenekleri, sağlayıcı bloğu içinde bir varyant haritası olarak OpenCode dışa aktarımıyla aynı geçerli kanonik meta veriden yazılır. `ocx sync` ve `POST /api/sync` OpenCodex'e ait Kilo bloğunu yeniler; güncellenen dosyayı yeni bir Kilo oturumu yükler. Uygula dosyanın tamamını yeniden yazar; yorumlar ve sondaki virgüller korunmaz. Kilo’da `opencodex/<model>` seçin.
+
+Başka bir aday çakışsa veya ayrıştırılamasa bile Devre Dışı Bırak, kaydedilen dosyadaki OpenCodex'e ait bloğu kaldırabilir; diğer aday dosya değişmez.
+
+```bash
+ocx integration client enable --client kilo
+```
+
+## Factory Droid
+
+Factory Droid, `~/.factory/settings.json` dosyasını (Windows'ta `%USERPROFILE%\.factory\settings.json`) kullanır. `ocx integration client enable --client droid` komutuyla açıkça etkinleştirin, ardından `/model` içinde özel bir model seçin. Yönetilen satırlar anahtarsızdır ve yalnızca geri döngü bağlantısında çalışır. Devre dışı bırakma yönetilen satırları kaldırır; Undo kaydedilen baytları geri yükler. Eski `config.json` dosyasında OpenCodex satırları varsa veya `settings.local.json`, `customModels` değerini geçersiz kılıyorsa etkinleştirmeden önce çakışmayı giderin. [Factory BYOK belgelerine](https://docs.factory.ai/model-independence/byok) bakın.

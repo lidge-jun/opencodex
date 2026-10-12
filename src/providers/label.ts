@@ -1,9 +1,11 @@
-import { CODEX_ACCOUNT_LOG_LABEL_RE, KEY_ACCOUNT_LOG_LABEL_RE, apiKeyAccountLogLabel, oauthAccountLogLabel } from "../codex/account-label";
+import { ACCOUNT_LOG_LABEL_RE, CODEX_ACCOUNT_LOG_LABEL_RE, KEY_ACCOUNT_LOG_LABEL_RE, apiKeyAccountLogLabel, oauthAccountLogLabel } from "../codex/account-label";
 import type { OcxProviderConfig } from "../types";
 
 export function canonicalUsageProviderLabel(provider: string): string {
   return provider === "chatgpt" || provider === "openai-multi" ? "openai" : provider;
 }
+
+const LEGACY_MAIN_ACCOUNT_PROVIDER_LABELS = new Set(["openai-main", "chatgpt-main", "openai-multi-main"]);
 
 export function usesApiKeyAccount(provider: Pick<OcxProviderConfig, "authMode" | "_apiKeyAttempt">): boolean {
   return provider.authMode === "key"
@@ -23,17 +25,39 @@ export function stampApiKeyAccountLabel(
   }
 }
 
+/**
+ * The account-qualified provider label a pool dispatch stamped for this request, or undefined.
+ *
+ * An account pool rewrites the logged provider to name the account that served the turn
+ * (`anthropic-p2e22d0`, `openai-main`); the configured provider name never does, so a label that
+ * differs from the configured one AND ends in an account label identifies exactly one account.
+ *
+ * Deliberately NOT `accountLogLabel`: that is stamped for a lone configured API key too, so it
+ * cannot tell a pooled account apart from a provider that has no pool to rotate within.
+ */
+export function poolAccountProviderLabel(
+  loggedProvider: string | undefined,
+  configuredProvider: string,
+): string | undefined {
+  if (!loggedProvider?.startsWith(`${configuredProvider}-`)) return undefined;
+  return ACCOUNT_LOG_LABEL_RE.test(loggedProvider.slice(configuredProvider.length + 1))
+    ? loggedProvider : undefined;
+}
+
 export function baseProviderLabel(provider: string): string {
   const canonical = canonicalUsageProviderLabel(provider);
   if (canonical !== provider) return canonical;
   const cut = provider.lastIndexOf("-");
   if (cut <= 0) return canonicalUsageProviderLabel(provider);
   const suffix = provider.slice(cut + 1);
-  // `-main` is the legacy log label for the main Codex account (MAIN_CODEX_ACCOUNT_ID). New entries
-  // log under the base provider name, but historical `<provider>-main` entries must still collapse.
+  // `-main` was the legacy log label for the main Codex account (MAIN_CODEX_ACCOUNT_ID). Restrict
+  // that compatibility mapping to the known Codex provider labels so configured providers whose
+  // names naturally end in `-main` remain distinct.
   // ChatGPT auth-pool and OpenAI passthrough are the same Codex/OpenAI usage surface, so display
   // summaries normalize them to one `openai` row after recognized main/pool suffixes are removed.
-  if (suffix === "main") return canonicalUsageProviderLabel(provider.slice(0, cut));
+  if (LEGACY_MAIN_ACCOUNT_PROVIDER_LABELS.has(provider)) {
+    return canonicalUsageProviderLabel(provider.slice(0, cut));
+  }
   return CODEX_ACCOUNT_LOG_LABEL_RE.test(suffix) ? canonicalUsageProviderLabel(provider.slice(0, cut)) : provider;
 }
 
@@ -65,6 +89,6 @@ export function stampOAuthAccountLabel(
   if (!accountId) return;
   if (provider.authMode !== "oauth") return;
   const base = baseProviderLabel(providerName);
-  if (base === "openai" || base === "anthropic") return;
+  if (base === "openai" || (base === "anthropic" || base === "anthropic2")) return;
   logCtx.accountLogLabel = oauthAccountLogLabel(accountId, base);
 }

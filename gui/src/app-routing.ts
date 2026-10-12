@@ -1,6 +1,6 @@
 /** Pure hash → page resolution used by App route state. */
 
-import { normalizeHashPath } from "./hash-routing";
+import { normalizeHashPath, splitHashQuery } from "./hash-routing";
 
 export type Page =
   | "dashboard"
@@ -12,8 +12,10 @@ export type Page =
   | "usage"
   | "storage"
   | "remote"
+  | "remote-workspace"
   | "codex-set"
-  | "integrations";
+  | "integrations"
+  | "claude";
 
 export const VALID_PAGES = new Set<Page>([
   "dashboard",
@@ -25,14 +27,16 @@ export const VALID_PAGES = new Set<Page>([
   "usage",
   "storage",
   "remote",
+  "remote-workspace",
   "codex-set",
   "integrations",
+  "claude",
 ]);
 
 export function readPageFromHash(hash?: string): Page {
-  const raw = normalizeHashPath(
+  const raw = splitHashQuery(normalizeHashPath(
     hash ?? (typeof window !== "undefined" ? window.location.hash : ""),
-  );
+  )).path;
   // Sub-views use a "/" suffix (e.g. #logs/debug); the first segment is the page id.
   const pageId = raw.split("/")[0] as Page;
   // Legacy: Debug used to be a standalone page; it now lives as a tab on Logs.
@@ -51,9 +55,24 @@ export function readPageFromHash(hash?: string): Page {
   // the destination page here keeps the initial hook state aligned until the
   // resolver replaces the hash with the exact nested destination.
   if (pageId === ("api" as Page)
-    || pageId === ("claude" as Page)
     || pageId === ("grok" as Page)) return "integrations";
+  if (raw === "integrations/claude" || raw === "integrations/claude/desktop") return "claude";
+  // Claude accounts live on Providers now; the old Account sub-tab bookmark opens them there.
+  if (raw === "claude/account") return "providers";
   return VALID_PAGES.has(pageId) ? pageId : "dashboard";
+}
+
+/**
+ * The hash a page will end up on once the resolver's passive rewrite lands. The route
+ * hook applies that rewrite with replaceState, which emits no event, so a component that
+ * reads the hash during the same mount (Connect's tab strip, the Providers deep link) has
+ * to read the destination rather than the legacy spelling: #integrations/claude/desktop
+ * must select the Claude Desktop tab on a cold load, not Overview, and #claude/account
+ * must open Anthropic's Accounts tab.
+ */
+export function canonicalHashPath(hash: string): string {
+  const raw = normalizeHashPath(hash);
+  return resolveAppHashChange(raw).replaceTo ?? raw;
 }
 
 /**
@@ -69,6 +88,24 @@ export const DASHBOARD_TAB_HASHES = ["dashboard/providers", "dashboard/models"] 
  * uses for Overview and Logs uses for the log list.
  */
 export const MODELS_TAB_HASHES = ["models/combos", "models/routing", "models/compatibility"] as const;
+/** Action deep link that opens the editable JEV Auto template in the Combos tab. */
+export const JEV_AUTO_CREATE_HASH = "models/combos/jev-auto";
+
+/** JEV Auto deep link; a self-hosted `jev-decision` row rides along as `?decisionProvider=`. */
+export function jevAutoCreateHash(decisionProvider?: string | null): string {
+  const id = decisionProvider?.trim();
+  return id && id !== "jev"
+    ? `${JEV_AUTO_CREATE_HASH}?${new URLSearchParams({ decisionProvider: id })}`
+    : JEV_AUTO_CREATE_HASH;
+}
+
+/** The decision provider a JEV Auto deep link pre-fills, or undefined when it is not one. */
+export function jevAutoCreateDecisionProvider(hash: string): string | null | undefined {
+  const { path, query } = splitHashQuery(normalizeHashPath(hash));
+  if (path !== JEV_AUTO_CREATE_HASH) return undefined;
+  const id = new URLSearchParams(query).get("decisionProvider")?.trim();
+  return id && id !== "jev" ? id : null;
+}
 
 /**
  * `#dashboard/update` is an action deep link, not a tab: the sidebar update button uses
@@ -100,18 +137,38 @@ export const INTEGRATION_TAB_HASHES = [
   "integrations/dsh",
   "integrations/mcode",
   "integrations/zcode",
+  "integrations/commandcode",
   "integrations/prime",
   "integrations/aside",
   "integrations/raycast",
   "integrations/omo",
   "integrations/cline",
+  "integrations/kilo",
+  "integrations/droid",
 ] as const;
+
+/**
+ * Routes that own a `?query` suffix: provider settings for one provider
+ * (`#providers?provider=<name>`), a protocol-pair prefilter on the compatibility matrix
+ * (`#models/compatibility?inbound=chat&upstream=messages`), and the decision service a JEV Auto
+ * deep link pre-fills (`#models/combos/jev-auto?decisionProvider=<name>`). Anywhere else the
+ * query is dropped.
+ */
+export const QUERY_HASH_PATHS: readonly string[] = ["providers", "models/compatibility", JEV_AUTO_CREATE_HASH];
+
+/** Where the retired `#claude/account` bookmark lands: Anthropic's Accounts tab on Providers. */
+export const CLAUDE_ACCOUNT_REDIRECT = "providers?provider=anthropic&tab=accounts";
 
 export function hashBelongsToPage(rawHash: string, page: Page): boolean {
   return rawHash === page
+    || (page === "claude" && ["claude/code", "claude/desktop"].includes(rawHash))
     || (page === "logs" && rawHash === "logs/debug")
+    || (page === "usage" && rawHash === "usage/companion")
     || (page === "codex-set" && rawHash === "codex-set/prompt")
-    || (page === "models" && (MODELS_TAB_HASHES as readonly string[]).includes(rawHash))
+    || (page === "models" && (
+      (MODELS_TAB_HASHES as readonly string[]).includes(rawHash)
+      || rawHash === JEV_AUTO_CREATE_HASH
+    ))
     || (page === "dashboard"
       && (rawHash === DASHBOARD_UPDATE_HASH || (DASHBOARD_TAB_HASHES as readonly string[]).includes(rawHash)))
     || (page === "integrations"
@@ -131,6 +188,14 @@ export type AppHashChangeAction = {
  * push, so Back is never trapped on a hash the router immediately corrects.
  */
 export function resolveAppHashChange(rawHash: string): AppHashChangeAction {
+  const { path, query } = splitHashQuery(rawHash);
+  if (query || path !== rawHash) {
+    // Route on the path alone; keep the query only where a page owns it, so Back/Forward
+    // restores it and an unrelated page never carries a stale one.
+    const action = resolveAppHashChange(path);
+    if (action.replaceTo === null && QUERY_HASH_PATHS.includes(path)) return action;
+    return { page: action.page, replaceTo: action.replaceTo ?? path };
+  }
   const nextPage = readPageFromHash(rawHash);
 
   // Legacy: Debug used to be a standalone page.
@@ -156,7 +221,12 @@ export function resolveAppHashChange(rawHash: string): AppHashChangeAction {
 
   /* Legacy top-level integration pages. */
   if (rawHash === "api") return { page: "integrations", replaceTo: "integrations/keys" };
-  if (rawHash === "claude") return { page: "integrations", replaceTo: "integrations/claude" };
+  if (rawHash === "integrations/claude") return { page: "claude", replaceTo: "claude/code" };
+  if (rawHash === "integrations/claude/desktop") return { page: "claude", replaceTo: "claude/desktop" };
+  // The Claude page lost its Account sub-tab; Anthropic's Accounts tab on Providers replaces it.
+  if (rawHash === "claude/account") return { page: "providers", replaceTo: CLAUDE_ACCOUNT_REDIRECT };
+  // The read-only Settings sub-tab folded into Code, which already holds its controls.
+  if (rawHash === "claude/settings") return { page: "claude", replaceTo: "claude/code" };
   if (rawHash === "grok") return { page: "integrations", replaceTo: "integrations/grok" };
 
   // Legacy deep link from the removed dual-layout era.

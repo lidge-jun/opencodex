@@ -4,7 +4,57 @@ import { createRequestExecutionBudget } from "../../../src/lib/request-execution
 import { budgetOwner } from "../../helpers/send-budget-owner";
 import type { AdapterRequest } from "../../../src/adapters/base";
 import { fetchAntigravityWithRetry, fetchDirectGeminiWithRetry, fetchVertexWithRetry } from "../../../src/adapters/google-http";
-import { safeVertexHttpErrorMessage, retryableGoogleStatus } from "../../../src/adapters/google-errors";
+import { ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX, safeVertexHttpErrorMessage, retryableGoogleStatus } from "../../../src/adapters/google-errors";
+import { isAntigravityValidationRefusal } from "../../../src/server/responses/antigravity-validation-refusal";
+
+describe("Antigravity 403 body boundary", () => {
+  test("a complete structured reason inside 4096 bytes survives normalization", async () => {
+    const payload = JSON.stringify({ error: { status: "PERMISSION_DENIED", message: "validate",
+      details: [{ reason: "VALIDATION_REQUIRED" }] } });
+    const result = await fetchAntigravityWithRetry(request, {
+      executor: (async () => new Response(payload, { status: 403 })) as typeof fetch,
+    });
+    expect((await result.text()).startsWith(`${ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX}:`)).toBe(true);
+  });
+
+  test("only a complete normalized marker admits rotation and inspection preserves the response", async () => {
+    const accepted = new Response(`${ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX}: validation needed`, { status: 403 });
+    expect(await isAntigravityValidationRefusal(accepted)).toBe(true);
+    expect(await accepted.text()).toContain("validation needed");
+    for (const text of [ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX, `${ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX}x: fake`,
+      `Antigravity access denied: ${ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX}: fake`]) {
+      const refused = new Response(text, { status: 403 });
+      expect(await isAntigravityValidationRefusal(refused)).toBe(false);
+      expect(await refused.text()).toBe(text);
+    }
+    const controller = new AbortController();
+    controller.abort();
+    const aborted = new Response(`${ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX}: validation needed`, { status: 403 });
+    expect(await isAntigravityValidationRefusal(aborted, controller.signal)).toBe(false);
+    expect(await aborted.text()).toContain("validation needed");
+  });
+
+  test("an oversized validation body is discarded before formatting", async () => {
+    const payload = JSON.stringify({ error: { status: "PERMISSION_DENIED", message: "secret-canary",
+      filler: "x".repeat(4200), details: [{ reason: "VALIDATION_REQUIRED" }] } });
+    const result = await fetchAntigravityWithRetry(request, {
+      executor: (async () => new Response(payload, { status: 403 })) as typeof fetch,
+    });
+    const text = await result.text();
+    expect(text).toBe("Antigravity access denied: HTTP 403");
+    expect(text).not.toContain("secret-canary");
+  });
+
+  test("a stalled validation body falls back after the 2 second bound", async () => {
+    const stalled = new ReadableStream<Uint8Array>({ start() {} });
+    const start = performance.now();
+    const result = await fetchAntigravityWithRetry(request, {
+      executor: (async () => new Response(stalled, { status: 403 })) as typeof fetch,
+    });
+    expect(performance.now() - start).toBeLessThan(3500);
+    expect(await result.text()).toBe("Antigravity access denied: HTTP 403");
+  });
+});
 
 const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
@@ -33,6 +83,21 @@ function vertexError(code: number, status: string, message: string): string {
 }
 
 describe("vertex retry fetch", () => {
+  test("Google preserves the executor TypeError after its header deadline", async () => {
+    const original = new TypeError("google executor deadline rejection");
+    let sends = 0;
+    const executor = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      sends += 1;
+      return await new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        if (signal?.aborted) reject(original);
+        else signal?.addEventListener("abort", () => reject(original), { once: true });
+      });
+    }) as typeof fetch;
+    await expect(fetchVertexWithRetry(request, { executor, timeoutMs: 1 })).rejects.toBe(original);
+    expect(sends).toBe(retry.TRANSIENT_RETRY_MAX_ATTEMPTS);
+  });
+
   for (const [name, fetchResponse] of [["Vertex", fetchVertexWithRetry], ["Antigravity", fetchAntigravityWithRetry]] as const) {
     test.each([400, 429, 503, "reset"] as const)(`${name} prepaid final send prevents another inference or backoff (%s)`, async status => {
       const parent = createRequestExecutionBudget();

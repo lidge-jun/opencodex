@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="../assets/banner.png" alt="opencodex — Codex, Claude Code, Claude Desktop, Grok Build를 위한 범용 프로바이더 프록시" width="100%">
+</p>
+
 <h3 align="center">make codex open!</h3>
 <p align="center"><b>OpenAI Codex, Claude Code, Claude Desktop, Grok Build를 위한 범용 프로바이더 프록시</b><br>
 명령어 두 줄이면, 그 모두가 지정한 LLM으로 돌아갑니다.</p>
@@ -13,6 +17,13 @@
 npm install -g @bitkyc08/opencodex
 ocx start
 ```
+
+<p align="center">
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/macOS-.dmg-24292f?logo=apple&logoColor=white" alt="macOS용 다운로드 (.dmg)"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Windows-.msi-24292f?logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0id2hpdGUiPjxwYXRoIGQ9Ik0zIDNoOC41djguNUgzem05LjUgMEgyMXY4LjVoLTguNXpNMyAxMi41aDguNVYyMUgzem05LjUgMEgyMVYyMWgtOC41eiIvPjwvc3ZnPg==" alt="Windows용 다운로드 (.msi)"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Linux-.AppImage-24292f?logo=linux&logoColor=white" alt="Linux용 다운로드 (.AppImage)"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Linux-.deb-24292f?logo=debian&logoColor=white" alt="Linux용 다운로드 (.deb)"></a>
+</p>
 
 <table>
 <tr>
@@ -78,7 +89,7 @@ DeepSeek, Kimi, Qwen, Ollama를 비롯한 어떤 LLM이든 Codex, Claude Code, C
 
 ## 빠른 시작
 
-### 개인 설치
+### 개인 설치 (CLI)
 
 ```bash
 npm install -g @bitkyc08/opencodex   # Node 18+; Bun 런타임은 자동으로 번들됩니다
@@ -89,12 +100,40 @@ ocx start                         # 프록시 + 대시보드: localhost:10100
 
 **http://localhost:10100**을 열고 웹 대시보드에서 전부 설정하세요. 프로바이더 추가(내장 40개 이상,
 또는 OpenAI 호환 엔드포인트), 모델 선택, 계정 관리까지 모두 여기서 합니다. `ocx gui`로 대시보드를 언제든 다시 엽니다.
-Codex 인증용 **ChatGPT 계정 풀**도 관리합니다. ChatGPT / Codex 계정을 여러 개 넣고, 대시보드에서
-5시간 / 주간 / 30일 쿼터를 갱신합니다. 쿼터 라우팅을 켜면 새 세션은 사용량이 가장 적은 정상 계정을 쓰고,
-round-robin과 fill-first는 각자 정책을 따릅니다. 기존 Codex 스레드는 기본적으로 시작한 계정에 붙어
-있어서, 긴 SSH·tmux·모바일 세션이 대화 도중에 계정을 바꾸지 않습니다. 다만 쿼터 재평가, failover,
-계정 제외, affinity 만료, 401/403·429 복구가 일어나면 다시 묶일 수 있습니다. Codex Desktop 로그인처럼
-다른 계정이 소진된 뒤에만 쓰고 싶은 계정이 있으면, 계정에 선택 순서를 지정하세요.
+
+<details>
+<summary><b>데스크톱 앱 (베타)</b></summary>
+
+데스크톱 앱은 같은 프록시와 대시보드를 네이티브 창에 담은 것으로, 트레이와 번들된 `ocx`를 갖춥니다.
+이미 실행 중인 프록시에 붙거나 번들된 프록시를 시작하며, 대시보드는 프록시 포트에서 열립니다
+(다른 포트를 설정하지 않았다면 **http://localhost:10100**). 플랫폼에 맞는 파일을
+[최신 릴리스](https://github.com/lidge-jun/opencodex/releases/latest)에서 고르세요.
+
+| 플랫폼 | 파일 | 참고 |
+|---|---|---|
+| macOS 13+ (Apple Silicon 및 Intel) | `OpenCodex-<version>-macos.dmg` | 유니버설 빌드, Developer ID로 서명 및 공증됨 |
+| Windows (x64) | `OpenCodex-<version>-windows-x64.msi` | 아직 코드 서명되지 않음: SmartScreen이 한 번 물으면 **추가 정보 → 실행**을 선택 |
+| Linux (x86_64) | `OpenCodex-<version>-linux-x86_64.AppImage` 또는 `-linux-amd64.deb` | 트레이는 AppIndicator를 지원하는 데스크톱이 필요 |
+
+릴리스 페이지에서 모든 파일 옆에 `.sha256`이 함께 있습니다. macOS 14 이상에서는 프록시 상태,
+오늘의 사용량, 프로바이더 쿼터를 보여 주는 WidgetKit 확장도 함께 설치됩니다. 위젯이 그리는
+스냅샷 모델은 [`app/`](../app)의 `MenuBarCore`에 있습니다. 앱을 직접 빌드하려면 저장소 루트에서
+`bun install && bun run build:gui`를 실행한 다음,
+`desktop/`에서 macOS라면 `bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local`을, Windows와 Linux라면 `bun install && bun run prepare-sidecar && bun run build:local`을 실행하세요. 위젯 빌드 단계는 macOS에서만 돌아갑니다.
+[데스크톱 앱 가이드](https://opencodex.me/ko/guides/desktop-app/)와
+[macOS 메뉴 막대 앱 가이드](https://opencodex.me/ko/guides/macos-menu-bar/)에서 첫 실행 안내를 볼 수 있고,
+[`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed)에는 디스크에 쓰는 모든 항목이 정리되어 있습니다.
+
+</details>
+
+### ChatGPT 계정 풀
+
+opencodex는 Codex 인증용 **ChatGPT 계정 풀**도 관리합니다. ChatGPT / Codex 계정을 여러 개 넣고,
+대시보드에서 5시간 / 주간 / 30일 쿼터를 갱신합니다. 쿼터 라우팅을 켜면 새 세션은 사용량이 가장 적은
+정상 계정을 쓰고, round-robin과 fill-first는 각자 정책을 따릅니다. 기존 Codex 스레드는 기본적으로
+시작한 계정에 붙어 있어서 긴 SSH·tmux·모바일 세션이 대화 도중에 계정을 바꾸지 않습니다. 다만 쿼터
+재평가, failover, 계정 제외, affinity 만료, 401/403·429 복구가 일어나면 다시 묶일 수 있습니다.
+Codex Desktop 로그인처럼 다른 계정이 소진된 뒤에만 쓰고 싶은 계정이 있으면 계정에 선택 순서를 지정하세요.
 
 ### 스폰서
 
@@ -113,6 +152,10 @@ round-robin과 fill-first는 각자 정책을 따릅니다. 기존 Codex 스레�
 <tr>
 <td width="180"><a href="https://www.packyapi.com/register?aff=k5KT"><img src="../assets/sponsors/packycode.png" alt="PackyCode" width="150"></a></td>
 <td><a href="https://www.packyapi.com/register?aff=k5KT">PackyCode</a>의 후원에 감사합니다. PackyCode는 안정적인 고성능 API 릴레이 프로바이더로, Claude Code, Codex, Gemini 등의 릴레이를 제공합니다. 자동 failover, 스마트 라우팅, 무제한 동시성으로 AI를 실제 생산성 도구로 만듭니다. <a href="https://www.packyapi.com/register?aff=k5KT">이 링크로 등록</a>하고 바로 시작하세요. Add provider 선택기에서 <code>PackyCode</code>를 고르거나 <code>ocx provider add packycode</code>를 실행하세요.<br><sub>PackyCode 是一家稳定、高效的 API 中转服务商，提供 Claude Code、Codex、Gemini 等多种中转服务。具备自动故障转移、智能路由和无限并发等多种功能，让 AI 编程成为真正的生产力工具。<a href="https://www.packyapi.com/register?aff=k5KT">点此链接注册</a>，立即开始使用！</sub></td>
+</tr>
+<tr>
+<td width="180"><a href="https://tokenlab.sh/r/OPENCODEX"><picture><source media="(prefers-color-scheme: dark)" srcset="../assets/sponsors/tokenlab-dark.png"><img src="../assets/sponsors/tokenlab-light.png" alt="TokenLab" width="150"></picture></a></td>
+<td><a href="https://tokenlab.sh/r/OPENCODEX">TokenLab</a>의 후원에 감사합니다. TokenLab은 코딩 에이전트에게 주요 모델용 API 키 하나를 제공하며, OpenAI Responses와 Chat Completions, Anthropic Messages, Gemini 네이티브 API 형식을 스트리밍과 도구 호출까지 지원합니다. MCP 서버와 에이전트 Skills도 제공해 쉽게 연동할 수 있습니다. 전달 모드를 고르고 쓴 만큼 결제하세요. Add provider 선택기에서 <code>TokenLab</code>을 고르거나 <code>ocx provider add tokenlab</code>을 실행하세요.<br><sub>TokenLab 为编程智能体提供统一的多模型 API，一枚 API Key 即可接入主流模型，支持 OpenAI Responses、Chat Completions、Anthropic Messages 和 Gemini 原生 API 格式，以及流式输出和工具调用。同时提供 MCP 服务器和 Agent Skills，方便接入现有工作流；交付模式可选，按量付费。</sub></td>
 </tr>
 </tbody>
 </table>
@@ -175,8 +218,9 @@ services:
 
 ```bash
 curl -fsSL https://bun.sh/install | bash
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex && ~/.bun/bin/bun install
+~/.bun/bin/bun run build:gui
 ~/.bun/bin/bun run src/cli/index.ts start
 ```
 
@@ -184,8 +228,9 @@ cd opencodex && ~/.bun/bin/bun install
 
 ```powershell
 irm bun.sh/install.ps1 | iex
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex; bun install
+bun run build:gui
 bun run src/cli/index.ts start
 ```
 
@@ -216,13 +261,13 @@ ocx init      # 대화형 설정: ~/.opencodex/config.json을 쓰고 Codex를 �
 
 ## 지원 플랫폼
 
-| OS | 지원 상태 | 서비스 관리자 |
-|---|---|---|
-| macOS (arm64 / x64) | 완전 지원 | launchd |
-| Linux (x64 / arm64) | 완전 지원 | systemd (user unit) |
-| Windows (x64) | 완전 지원 | Task Scheduler (숨김) / 선택적 네이티브 서비스 (`--native`, WinSW) |
+| OS | 지원 상태 | 서비스 관리자 | 데스크톱 앱 (베타) |
+|---|---|---|---|
+| macOS (arm64 / x64) | 완전 지원 | launchd | 유니버설 `.dmg` |
+| Linux (x64 / arm64) | 완전 지원 | systemd (user unit) | x86_64 `.AppImage` / `.deb` |
+| Windows (x64) | 완전 지원 | Task Scheduler (숨김) / 선택적 네이티브 서비스 (`--native`, WinSW) | x64 `.msi` |
 
-[Node](https://nodejs.org) 18 이상이 필요합니다. Bun 런타임은 `npm install` 때 번들되므로 따로 설치할
+CLI 설치에는 [Node](https://nodejs.org) 18 이상이 필요하고, 데스크톱 앱은 Node와 Bun 모두 필요 없습니다. Bun 런타임은 `npm install` 때 번들되므로 따로 설치할
 필요가 없고, Windows에서도 WSL이 필요 없습니다. npm이 번들 런타임의 설치 스크립트를 막았다면
 [설치 문서](https://opencodex.me/ko/getting-started/installation/)를 보세요.
 
@@ -258,14 +303,14 @@ ocx init      # 대화형 설정: ~/.opencodex/config.json을 쓰고 Codex를 �
 <details>
 <summary>메모리 소유권 상세</summary>
 
-OpenCodex는 프로세스가 붙잡고 있는 상태 36종을 추적합니다. 각각에 문서화된 한도가 있습니다:
+OpenCodex는 프로세스가 붙잡고 있는 상태를 아래 항목에서 추적합니다. 각각에 문서화된 한도가 있습니다:
 
-- **유지 저장소 12개**(요청 로그, debug ring, image cache, model cache, vision 설명, cursor blob,
+- **유지 저장소 14개**(요청 로그, debug ring, image cache, model cache, vision 설명, cursor blob,
   responses continuation 등)는 바이트 단위로 집계되며, 앱이 소유한 메모리 예산(기본 256 MiB)이
-  eviction합니다.
+  eviction합니다. 단, native control replay 저장소는 고정되어 eviction되지 않습니다.
 - **관측 버퍼 4개**(translator accumulator, image/OAuth/Grok tail)는 진행 중 바이트 압력을 감시만
   하고 eviction하지 않습니다.
-- **state-store 등록 24개**는 만료 sweep(60초 간격)과 config-generation reconciliation을 돌려,
+- **state-store 등록 31개**는 만료 sweep(60초 간격)과 config-generation reconciliation을 돌려,
   낡은 프로바이더/계정 키를 지웁니다.
 - **경로·fingerprint 메모**(워크스페이스 메타데이터, hardened identity, 설치 salt, mode-hint
   capability)는 삽입 순서 LRU cap(8–128개)을 씁니다.
@@ -292,12 +337,29 @@ codex -m "ollama/llama3" "이 함수를 리팩터링해 줘"
 프로바이더 모델 id는 안쪽 슬래시를 `-`로 alias해서 노출하고, 슬래시를 그대로 둔 원본 형태도 계속
 동작합니다. 자세한 내용은 [모델 라우팅 문서](https://opencodex.me/ko/guides/model-routing/)를 보세요.
 
+### JEV Auto 라우팅 (선택)
+
+TypeSafe JEV는 명시적으로 켠 Combo에서 첫 모델과 reasoning effort를 고를 수 있습니다. 일반 모델
+선택기와 직접 라우트는 그대로입니다. 자격 증명은 `ocx login jev`, **Providers → TypeSafe JEV → Add API key**,
+또는 `TYPESAFE_API_KEY`/`JEV_API_KEY`로 추가합니다. 그다음 **Models → Combos → Create JEV Auto**에서
+허용할 대상 모델을 고르고, 대상마다 JEV가 고를 수 있는 effort를 체크하세요. effort 설정을 건드리지
+않은 대상은 그 모델이 현재 광고하는 effort를 모두 허용합니다.
+
+JEV는 `jev-auto`에서만, 논리적 모델 호출당 한 번만 호출됩니다. 자격 증명이 없거나 네트워크가
+실패하거나 결정이 잘못되면 현재 적격인 첫 대상으로 fail-open하며, 호출자 취소는 여전히 요청을
+취소합니다. 자동 테스트는 모의 TypeSafe 엔드포인트를 쓰며 실제 JEV 계정은 검증하지 않습니다.
+
+JEV Combo는 키가 필요 없는 Ollama `tev1` 같은 자체 호스팅 결정 모델을 대신 쓸 수도 있습니다.
+`baseUrl`이 전체 `/v1/systemone` 엔드포인트인 `jev-decision` 프로바이더를 추가하고 Combo의
+`decisionProvider`에 지정하세요. TypeSafe 자격 증명은 그곳으로 전송되지 않습니다. 자세한 내용은
+[자체 호스팅 결정 모델](https://opencodex.me/ko/guides/combos/)을 보세요.
+
 ## 프로바이더 및 adapter
 
 <!-- sponsors:main-first-mention -->
 OpenAI (ChatGPT 로그인 또는 API 키), Anthropic, Google Gemini, xAI, Kimi, Azure OpenAI, Ollama
 (로컬 + Cloud), Cursor (experimental), OpenAI 호환 엔드포인트 전부 — 여기에 DeepSeek,
-Groq, OpenRouter, Together, Fireworks, Cerebras, Mistral, Hugging Face, NVIDIA NIM, MiniMax,
+Groq, OpenRouter, OpenGateway, Together, Fireworks, Cerebras, Mistral, Hugging Face, NVIDIA NIM, MiniMax,
 Qwen Cloud, Qoder Global과 CN (공식 PAT + CLI), SiliconFlow 등이 더 있습니다. 전체 목록은 `ocx init` 또는
 [프로바이더 문서](https://opencodex.me/ko/guides/providers/)에서 확인하세요.
 
@@ -381,8 +443,8 @@ npm uninstall -g @bitkyc08/opencodex
 
 ## 개발
 
-소스 개발에는 `PATH`에 `bun` CLI가 있어야 합니다. 배포된 npm 패키지가 번들하는 Bun 런타임과는
-별개이며, 그 런타임은 설치된 `ocx` 명령만 씁니다.
+소스 개발에는 `PATH`에 `bun` CLI가 있어야 합니다. 배포된 npm 패키지는 설치된 `ocx` 명령용 Bun
+런타임을 번들하며, package script도 이 번들 의존성에서 Bun을 선택할 수 있습니다.
 
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git

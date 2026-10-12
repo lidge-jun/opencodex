@@ -1,3 +1,4 @@
+import { isAnthropicInstanceId, type AnthropicInstanceId } from "../providers/anthropic-instance-id";
 import type { OcxAccountPoolRotationStrategy } from "../types";
 import type { GenerationContext } from "../lib/state-store-sweeper";
 
@@ -277,7 +278,7 @@ export function clearPoolRotationState(poolKey?: string): void {
 
 export function reconcilePoolRotationState(context: GenerationContext): number {
   if (context.generation <= lastReconciledGeneration) return 0;
-  const anthropicIds = new Set<string>();
+  const anthropicIds = new Map<AnthropicInstanceId, Set<string>>();
   // Live account ids per generic OAuth provider, built from the same
   // `provider\0id` roster the Anthropic pass already walks. Without this the
   // `generic:*` entries fall through as unknown and are never swept, so a removed
@@ -288,8 +289,10 @@ export function reconcilePoolRotationState(context: GenerationContext): number {
     if (separator <= 0) continue;
     const provider = key.slice(0, separator);
     const accountId = key.slice(separator + 1);
-    if (provider === "anthropic") {
-      anthropicIds.add(accountId);
+    if (isAnthropicInstanceId(provider)) {
+      let ids = anthropicIds.get(provider);
+      if (!ids) { ids = new Set(); anthropicIds.set(provider, ids); }
+      ids.add(accountId);
       continue;
     }
     let bucket = genericIds.get(provider);
@@ -301,8 +304,8 @@ export function reconcilePoolRotationState(context: GenerationContext): number {
   }
   let removed = 0;
   for (const [poolKey, state] of selectionState) {
-    const valid = poolKey === POOL_KEY_ANTHROPIC
-      ? anthropicIds
+    const valid = isAnthropicInstanceId(poolKey)
+      ? anthropicIds.get(poolKey) ?? new Set<string>()
       : poolKey === POOL_KEY_CODEX || poolKey.startsWith(`${POOL_KEY_CODEX}:`)
         ? context.codexAccountIds
         : poolKey.startsWith("generic:")
@@ -328,3 +331,6 @@ export function reconcilePoolRotationState(context: GenerationContext): number {
   lastReconciledGeneration = context.generation;
   return removed;
 }
+
+/** Separate cursor and weights for each Anthropic OAuth instance. */
+export function anthropicPoolKey(instance: AnthropicInstanceId): string { return instance; }

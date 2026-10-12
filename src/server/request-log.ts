@@ -2,6 +2,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { stampApiKeyAccountLabel, usesApiKeyAccount } from "../providers/label";
 import { KEY_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
+import { attemptAccountChanged, sealRequestAttemptIdentity } from "./request-log-account-rotation";
+export { sealRequestAttemptIdentity };
+import { captureUpstreamTerminalDiagnostics, upstreamDiagnosticLogFields, type UpstreamErrorDiagnostics, type UpstreamErrorPayload } from "./request-log-terminal-status";
+export { noteUpstreamRequestId } from "./request-log-terminal-status";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import type { ResponsesTerminalStatus } from "../bridge";
 import {
@@ -10,8 +14,7 @@ import {
   httpStatusFromTerminalError as httpStatusFromClassifiedTerminalError,
   isClientClosedMessage,
   isCyberPolicyCode,
-  isCyberPolicyMessage,
-  isRateLimitOrQuotaFailureMessage,
+  isUpstreamResetReplayRefusedMessage,
   upstreamErrorMessageFromPayload,
 } from "../lib/errors";
 import { CODEX_CONFIG_PATH, readRootTomlString } from "../codex/paths";
@@ -19,9 +22,12 @@ import type { CodexAffinityMove, CodexAffinityReason } from "../codex/routing";
 import { readCodexCatalogPath } from "../codex/catalog";
 import type { AttemptTierOutcome, OcxProviderConfig, OcxUsage } from "../types";
 import { normalizeRouteDecisionTrace, type RouteDecisionTraceV1 } from "../routing/trace";
+import { parseProtocolTraceV1, type ProtocolTraceV1 } from "../protocols/dto";
+import { protocolTraceForRequest } from "../protocols/trace";
 import type { AdapterRequest } from "../adapters/base";
 import type { RequestSpendSettlement } from "./responses/request-spend";
 import type { AdapterTierMetadata } from "../providers/fastwire";
+import { UPSTREAM_RESET_REPLAY_REFUSED_CODE } from "../lib/upstream-retry";
 import { redactSecretString, sanitizeLogMetadataString } from "../lib/redact";
 import {
   appendUsageEntry,
@@ -38,8 +44,10 @@ import {
   isLogicalRequestId,
   isValidReasoningWireValue,
   normalizeClaudeCompatibilityUsageLog,
+  normalizeRequestFailureAttribution,
   normalizeRequestSpend,
   readRecentUsageEntries,
+  modelIdentityLogFields, recordObservedServedModel,
   usageForFinalLog,
   usageStatusForFinalLog,
   usageTotalTokens,
@@ -50,9 +58,14 @@ import {
   type PersistedUsageAttempt,
   type PersistedUsageEntry,
   type PersistedClaudeCompatibilityLog,
+  type RequestFailureCause,
+  type RequestFailureStage,
   type UsageStatus,
 } from "../usage/log";
 import type { RequestExecutionBudget } from "../lib/request-execution-budget";
+import type { WorkflowSpendDenialDetail } from "../lib/workflow-budget";
+import { attributeFinalRequest, attributeSealedAttempt } from "./request-log-failure-attribution";
+import { debugAttemptDeliverySummary } from "../lib/debug";
 import {
   appendUsageDebug,
   isUsageDebugEnabled,
@@ -60,22 +73,51 @@ import {
   USAGE_DEBUG_BODY_SAMPLE_BYTES,
   type UsageDebugBodyKind,
 } from "../usage/debug";
-import { matchesLogConversationId } from "./request-log-conversation";
+import { MAX_LOG_SIZE } from "./request-log-filter";
+export { filterRequestLogs, filteredRequestLogCount, queryRequestLogs } from "./request-log-filter";
 import { enforceAppOwnedMemoryBudget, type RetainedStoreSnapshot } from "../lib/app-owned-memory";
 import { capEstimateAtContextWindow } from "../lib/token-estimate";
 import { inferCursorContextWindow } from "../adapters/cursor/discovery";
 import { KIRO_MODEL_CONTEXT_WINDOWS, normalizeKiroModelId } from "../providers/kiro-models";
+import { kiroObservedContextWindow } from "../providers/kiro-model-catalog";
 import { DEVIN_MODEL_CONTEXT_WINDOWS } from "../adapters/devin/live-models";
 import { modelRecordValue } from "../reasoning-effort";
+import {
+  normalizePersistedJevDecision,
+  type PersistedJevDecisionV1,
+} from "../usage/jev-stats";
+import { generationWindowFields, recordGenerationEvent } from "./request-log-generation-window";
+import type { RequestMetricsRecorder } from "./request-metrics";
+import type {
+  CacheDiagnosticDraft,
+  CacheDiagnosticFinalFacts,
+  PromptCacheKeySource,
+} from "../usage/cache-diagnostic";
 
-export interface RequestLogContext {
+const CACHE_DIAGNOSTIC_HOOK = Symbol.for("opencodex.cache-diagnostic.v1");
+interface CacheDiagnosticHooks {
+  observeInbound(body: unknown, headers: Headers, source: PromptCacheKeySource): CacheDiagnosticDraft;
+  rebind(body: unknown, draft: CacheDiagnosticDraft | undefined): void;
+  finalize(facts: CacheDiagnosticFinalFacts): void;
+}
+function cacheDiagnosticHooks(): CacheDiagnosticHooks | undefined {
+  return (globalThis as Record<symbol, CacheDiagnosticHooks | undefined>)[CACHE_DIAGNOSTIC_HOOK];
+}
+
+export interface RequestLogContext extends UpstreamErrorDiagnostics {
   model: string;
   provider: string;
+  /** Optional process-lifetime aggregate sink, injected by the server composition owner. */
+  requestMetricsRecorder?: RequestMetricsRecorder;
+  /** Bounded terminal enum observed while inspecting a buffered response body. */
+  observedTerminalStatus?: ResponsesTerminalStatus;
   /**
    * Identity of the ONE logical request this context serves (#4546). Set from the execution
    * budget minted at ingress; a retry leg, a repair refetch and a combo child share it.
    */
   logicalRequestId?: string;
+  /** Process-local privacy-bounded cache diagnostic; never persisted with request logs. */
+  cacheDiagnosticDraft?: CacheDiagnosticDraft;
   /**
    * Internal live reference to this request's execution budget; omitted from RequestLogEntry and
    * JSONL. Read at final-log time so the row reports the budget's FINAL state rather than a
@@ -96,6 +138,9 @@ export interface RequestLogContext {
   affinityMoveReasons?: CodexAffinityReason[];
   /** TTFT: ms from request start to the first non-empty model output delta (WP4, devlog 040). */
   firstOutputMs?: number;
+  /** Epoch ms of the first output item and of the last output delta; see request-log-generation-window.ts. */
+  generationStartedAt?: number;
+  lastOutputAt?: number;
   /** Best-effort chat/session correlation for Logs grouping (#330). Opaque; omit when unknown. */
   conversationId?: string;
   surface?: "claude" | "claude-desktop" | "grok";
@@ -139,8 +184,15 @@ export interface RequestLogContext {
   /** Final-attempt tier summary; attempt rows remain the accounting source of truth. */
   tierOutcome?: AttemptTierOutcome;
   resolvedModel?: string;
+  /** Upstream served model, retained beside resolvedModel so an upstream reroute stays visible. */
+  servedModel?: string;
+  /** The exact model id sent upstream; recorded when a route/virtual rewrite makes it differ
+   * from the client-facing `model`, so a served-model mismatch can be judged against the wire. */
+  wireModel?: string;
   /** Internal: client-facing response metadata must not replace the physical routed model. */
   preserveResolvedModelFromRoute?: boolean;
+  /** Internal: client-facing selector written into response.model; never an upstream observation. */
+  responseModelEcho?: string;
   usage?: OcxUsage;
   usageLogInputTokens?: number;
   /**
@@ -150,6 +202,12 @@ export interface RequestLogContext {
    * is reserved up front and settlement corrects it.
    */
   spendOutputCeilingTokens?: number;
+  /** Pre-send input estimate reserved for spend only; unlike usageLogInputTokens it never enters usage. */
+  spendInputEstimateTokens?: number;
+  /** Canonical provider-pool spend identity; independent of mutable, account-specific log labels. */
+  spendPoolId?: string;
+  /** Internal safe refusal detail for a request whose ceiling includes unidentified old pool spend. */
+  spendRefusalDetail?: WorkflowSpendDenialDetail;
   /** Settles this request's durable spend entries from `addFinalRequestLog`. */
   spendTracker?: RequestSpendSettlement;
   attempts?: PersistedUsageAttempt[];
@@ -196,13 +254,37 @@ export interface RequestLogContext {
   conversationStateScrub?: "account-change";
   transportPhase?: "pre_headers" | "mid_stream" | "terminal_sse";
   terminalSource?: "upstream" | "synthetic";
+  /** Closed failure evidence supplied by the transport, never inferred from provider text. */
+  causeHint?: RequestFailureCause;
   /** Bounded route-decision trace (RI-01); never contains secrets. */
   routeDecision?: RouteDecisionTraceV1;
+  /** Full eligible provider/model membership from a policy route; never logged. */
+  policyEligibility?: ReadonlySet<string>;
+  /** Privacy-bounded JEV selection metadata; downstream usage is recorded on attempts[]. */
+  jevDecision?: PersistedJevDecisionV1;
   /** Opt-in shadow evidence, normalized again at the logging boundary. */
   claudeCompatibility?: PersistedClaudeCompatibilityLog;
 }
 
-export interface RequestLogEntry {
+export function observeCacheDiagnosticInbound(
+  logCtx: RequestLogContext,
+  body: unknown,
+  headers: Headers,
+  source: PromptCacheKeySource,
+): void {
+  const draft = cacheDiagnosticHooks()?.observeInbound(body, headers, source);
+  if (draft) logCtx.cacheDiagnosticDraft = draft;
+}
+
+/** Alias a rebuilt form of the request body to the request's diagnostic draft. */
+export function rebindCacheDiagnosticBody(
+  body: unknown,
+  draft: CacheDiagnosticDraft | undefined,
+): void {
+  cacheDiagnosticHooks()?.rebind(body, draft);
+}
+
+export interface RequestLogEntry extends UpstreamErrorDiagnostics {
   requestId: string;
   /** The logical request this row belongs to (#4546); absent on rows written without a budget. */
   logicalRequestId?: string;
@@ -211,6 +293,9 @@ export interface RequestLogEntry {
   provider: string;
   /** TTFT: ms from request start to the first non-empty model output delta; unset for non-streaming/tool-only. */
   firstOutputMs?: number;
+  /** Request-relative generation window (#6309): first output item of any kind, then the last output delta. */
+  genStartMs?: number;
+  lastOutputMs?: number;
   surface?: "claude" | "claude-desktop" | "grok";
   /**
    * Set when the proxy answered this turn locally and sent nothing upstream. Without it a zero-send
@@ -248,6 +333,10 @@ export interface RequestLogEntry {
   responseServiceTier?: string;
   tierOutcome?: AttemptTierOutcome;
   resolvedModel?: string;
+  /** Model the upstream actually served (openai-model header or response body). */
+  servedModel?: string;
+  /** The exact model id sent upstream when it differs from the client-facing `model`. */
+  wireModel?: string;
   status: number;
   durationMs: number;
   errorCode?: string;
@@ -286,12 +375,23 @@ export interface RequestLogEntry {
   terminalSource?: "upstream" | "synthetic";
   /** Bounded route-decision trace (RI-01); never contains secrets. */
   routeDecision?: RouteDecisionTraceV1;
+  /** Privacy-bounded JEV selection metadata; downstream usage is recorded on attempts[]. */
+  jevDecision?: PersistedJevDecisionV1;
   /** Closed Claude protocol codes; no request or header values. */
   claudeCompatibility?: PersistedClaudeCompatibilityLog;
+  /**
+   * How far this request got and why it failed, in the shared stage and cause vocabulary
+   * (#2366). Derived once at the single finalization seam and carried on the row so the
+   * dashboard, the durable ledger and the exporter read one answer instead of three.
+   */
+  failureStage?: RequestFailureStage;
+  failureCause?: RequestFailureCause;
+  /** Observed protocol path (PF-02, `src/protocols/trace.ts`); absent when nothing was observed. */
+  protocolTrace?: ProtocolTraceV1;
 }
 
 const requestLog: RequestLogEntry[] = [];
-const MAX_LOG_SIZE = 2000;
+const requestLogObserversForTests = new Set<(entry: RequestLogEntry) => void>();
 const requestLogEntryBytes = new WeakMap<RequestLogEntry, number>();
 let requestLogBytes = 0;
 /** True after hydrateRequestLogsFromDisk ran once in this process. */
@@ -356,8 +456,10 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
   const terminalStatus = asTerminalStatus(entry.terminalStatus);
   const closeReason = asCloseReason(entry.closeReason);
   const routeDecision = normalizeRouteDecisionTraceForLog(entry.routeDecision);
+  const jevDecision = normalizePersistedJevDecision(entry.jevDecision);
   const claudeCompatibility = normalizeClaudeCompatibilityUsageLog(entry.claudeCompatibility);
   const spend = normalizeRequestSpend(entry.spend);
+  const protocolTrace = parseProtocolTraceV1(entry.protocolTrace);
   return {
     requestId: entry.requestId,
     ...(isLogicalRequestId(entry.logicalRequestId) ? { logicalRequestId: entry.logicalRequestId } : {}),
@@ -365,6 +467,8 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
     model: entry.model,
     provider: entry.provider,
     ...(entry.firstOutputMs !== undefined ? { firstOutputMs: entry.firstOutputMs } : {}),
+    ...(entry.genStartMs !== undefined ? { genStartMs: entry.genStartMs } : {}),
+    ...(entry.lastOutputMs !== undefined ? { lastOutputMs: entry.lastOutputMs } : {}),
     ...(isKnownUsageSurface(entry.surface) ? { surface: entry.surface } : {}),
     ...(entry.conversationId ? { conversationId: entry.conversationId } : {}),
     ...(isCodexUsageAccountLogLabel(entry.accountLogLabel)
@@ -389,7 +493,7 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
       : {}),
     ...(entry.responseServiceTier ? { responseServiceTier: entry.responseServiceTier } : {}),
     ...(entry.tierOutcome ? { tierOutcome: entry.tierOutcome } : {}),
-    ...(entry.resolvedModel ? { resolvedModel: entry.resolvedModel } : {}),
+    ...modelIdentityLogFields(entry),
     status: entry.status,
     durationMs: entry.durationMs,
     ...(entry.errorCode ? { errorCode: entry.errorCode } : {}),
@@ -408,10 +512,13 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
     ...(isKnownTransportPhase(entry.transportPhase) ? { transportPhase: entry.transportPhase } : {}),
     ...(isKnownTerminalSource(entry.terminalSource) ? { terminalSource: entry.terminalSource } : {}),
     ...(routeDecision ? { routeDecision } : {}),
+    ...(jevDecision ? { jevDecision } : {}),
     ...(claudeCompatibility ? { claudeCompatibility } : {}),
     ...(entry.conversationStateScrub === "account-change"
       ? { conversationStateScrub: "account-change" }
       : {}),
+    ...normalizeRequestFailureAttribution(entry),
+    ...(protocolTrace ? { protocolTrace } : {}),
   };
 }
 
@@ -472,6 +579,24 @@ export function hydrateRequestLogsFromDisk(
   }
 }
 
+/**
+ * Rebuild the Logs ring after retention deleted rows from the ledger.
+ *
+ * Without this a compaction is invisible where an operator actually looks: the ring holds up to
+ * 2,000 entries independently of the file, so rows deleted from disk keep serving through
+ * /api/logs until eviction or a restart -- the dashboard showing history the ledger no longer
+ * has. Observers are deliberately not replayed; they exist to watch NEW rows arrive, and
+ * replaying a rehydration through them would announce two thousand arrivals that did not happen.
+ */
+export function rehydrateRequestLogsAfterLedgerReplacement(
+  reader: () => PersistedUsageEntry[] = () => readRecentUsageEntries(MAX_LOG_SIZE),
+): number {
+  requestLog.length = 0;
+  requestLogBytes = 0;
+  requestLogsHydratedFromDisk = false;
+  return hydrateRequestLogsFromDisk(reader);
+}
+
 export function addRequestLog(entry: RequestLogEntry) {
   // Sanitize ONCE, at the ingress, and use that one value for both destinations.
   //
@@ -482,15 +607,29 @@ export function addRequestLog(entry: RequestLogEntry) {
   // line-oriented viewer — while `usage.jsonl` looked clean, which is the worst shape for a
   // sanitization bug because the safe surface is the one you check.
   const shadowCallRewrittenFrom = sanitizeLogMetadataString(entry.shadowCallRewrittenFrom);
+  const servedModel = modelIdentityLogFields(entry).servedModel;
   const claudeCompatibility = normalizeClaudeCompatibilityUsageLog(entry.claudeCompatibility);
-  const retained: RequestLogEntry = shadowCallRewrittenFrom === entry.shadowCallRewrittenFrom && entry.claudeCompatibility === undefined
+  const jevDecision = normalizePersistedJevDecision(entry.jevDecision);
+  const retained: RequestLogEntry = shadowCallRewrittenFrom === entry.shadowCallRewrittenFrom
+    && servedModel === entry.servedModel
+    && entry.claudeCompatibility === undefined
+    && entry.jevDecision === undefined
     ? entry
     : { ...entry, ...(shadowCallRewrittenFrom ? { shadowCallRewrittenFrom } : {}) };
   if (!shadowCallRewrittenFrom && retained !== entry) delete retained.shadowCallRewrittenFrom;
+  if (!servedModel && retained !== entry) {
+    delete retained.servedModel;
+    if (retained.resolvedModel === entry.servedModel) delete retained.resolvedModel;
+  }
   if (claudeCompatibility) retained.claudeCompatibility = claudeCompatibility;
   else if (retained !== entry) delete retained.claudeCompatibility;
+  if (jevDecision) retained.jevDecision = jevDecision;
+  else if (retained !== entry) delete retained.jevDecision;
   entry = retained;
   retainRequestLogEntry(entry);
+  for (const observer of requestLogObserversForTests) {
+    try { observer(entry); } catch { /* test observation must never fail request logging */ }
+  }
   try {
     // Failure diagnostics survive the 200-entry ring buffer by riding the persisted
     // usage entry (devlog/_plan/260716_claudecode_hardening/030). Success rows stay
@@ -521,6 +660,8 @@ export function addRequestLog(entry: RequestLogEntry) {
         : {}),
       ...(entry.conversationId ? { conversationId: entry.conversationId } : {}),
       ...(entry.resolvedModel ? { resolvedModel: entry.resolvedModel } : {}),
+      ...(entry.servedModel ? { servedModel: entry.servedModel } : {}),
+      ...(entry.wireModel ? { wireModel: entry.wireModel } : {}),
       ...(entry.requestedModel ? { requestedModel: entry.requestedModel } : {}),
       ...(entry.requestedAlias ? { requestedAlias: entry.requestedAlias } : {}),
       ...(entry.shadowCallRewrittenFrom
@@ -543,6 +684,8 @@ export function addRequestLog(entry: RequestLogEntry) {
       status: entry.status,
       durationMs: entry.durationMs,
       ...(entry.firstOutputMs !== undefined ? { firstOutputMs: entry.firstOutputMs } : {}),
+      ...(entry.genStartMs !== undefined ? { genStartMs: entry.genStartMs } : {}),
+      ...(entry.lastOutputMs !== undefined ? { lastOutputMs: entry.lastOutputMs } : {}),
       usageStatus: entry.usageStatus,
       ...(entry.usage ? { usage: entry.usage } : {}),
       ...(entry.totalTokens !== undefined ? { totalTokens: entry.totalTokens } : {}),
@@ -555,8 +698,14 @@ export function addRequestLog(entry: RequestLogEntry) {
       ...(isKnownTransportPhase(entry.transportPhase) ? { transportPhase: entry.transportPhase } : {}),
       ...(isKnownTerminalSource(entry.terminalSource) ? { terminalSource: entry.terminalSource } : {}),
       ...failureDiagnostics,
+      // Rebuilt explicitly, like every other field here: this function does not spread the
+      // entry, so a pair omitted at this line would reach /api/logs and never reach
+      // usage.jsonl, which is the surface the derived failure projection reads.
+      ...normalizeRequestFailureAttribution(entry),
       ...(entry.routeDecision ? { routeDecision: entry.routeDecision } : {}),
+      ...(entry.jevDecision ? { jevDecision: entry.jevDecision } : {}),
       ...(entry.claudeCompatibility ? { claudeCompatibility: entry.claudeCompatibility } : {}),
+      ...(entry.protocolTrace ? { protocolTrace: entry.protocolTrace } : {}),
       ...(entry.conversationStateScrub === "account-change"
         ? { conversationStateScrub: "account-change" }
         : {}),
@@ -564,6 +713,12 @@ export function addRequestLog(entry: RequestLogEntry) {
   } catch {
     /* request logging must never fail a user request */
   }
+}
+
+/** Test-only finalized-row observation without polling the management projection. */
+export function observeRequestLogsForTests(observer: (entry: RequestLogEntry) => void): () => void {
+  requestLogObserversForTests.add(observer);
+  return () => { requestLogObserversForTests.delete(observer); };
 }
 
 export function nextRequestLogId(_timestamp = Date.now()): string {
@@ -687,6 +842,7 @@ export function requestLogErrorCode(
   status: number,
   upstreamError?: string,
   terminalErrorCode?: string,
+  replayRefusal = false,
 ): string | undefined {
   if (status >= 200 && status < 400) return undefined;
   // A structured terminal code is authoritative even when the provider message is localized,
@@ -714,7 +870,13 @@ export function requestLogErrorCode(
     }
     return "permission_denied";
   }
-  if (status === 429) return "rate_limit_exceeded";
+  if (status === 429) {
+    // Prefer transport provenance; retain the legacy message fallback for older callers.
+    if (replayRefusal || (upstreamError?.trim() && isUpstreamResetReplayRefusedMessage(upstreamError))) {
+      return UPSTREAM_RESET_REPLAY_REFUSED_CODE;
+    }
+    return "rate_limit_exceeded";
+  }
   if (status === 503) return "server_is_overloaded";
   if (status >= 500) return "upstream_server_error";
   return `http_${status}`;
@@ -766,16 +928,27 @@ export function catalogModelSupportsServiceTier(modelId: string, serviceTier: st
 
 export function applyResponseLogMetadata(logCtx: RequestLogContext, payload: unknown): void {
   if (!payload || typeof payload !== "object") return;
+  if (logCtx.observedTerminalStatus === undefined) {
+    const eventType = (payload as { type?: unknown }).type;
+    const response = (payload as { response?: unknown }).response;
+    const responseStatus = response && typeof response === "object"
+      ? (response as { status?: unknown }).status
+      : (payload as { status?: unknown }).status;
+    if (eventType === "response.completed") {
+      logCtx.observedTerminalStatus = "completed";
+    } else if (eventType === "response.failed") {
+      logCtx.observedTerminalStatus = "failed";
+    } else if (eventType === "response.incomplete") {
+      logCtx.observedTerminalStatus = "incomplete";
+    } else if (responseStatus === "completed" || responseStatus === "failed" || responseStatus === "incomplete") {
+      logCtx.observedTerminalStatus = responseStatus;
+    }
+  }
   const source = "response" in payload && typeof (payload as { response?: unknown }).response === "object"
     ? (payload as { response?: unknown }).response
     : payload;
   if (!source || typeof source !== "object") return;
-  const model = (source as { model?: unknown }).model;
-  if (
-    !logCtx.preserveResolvedModelFromRoute
-    && typeof model === "string"
-    && model.trim()
-  ) logCtx.resolvedModel = model;
+  recordObservedServedModel(logCtx, (source as { model?: unknown }).model);
   const serviceTier = (source as { service_tier?: unknown }).service_tier;
   if (typeof serviceTier === "string" && serviceTier.trim()) {
     const sanitized = sanitizeLogMetadataString(serviceTier);
@@ -900,6 +1073,7 @@ export function inspectResponseLogSsePayloadParsed(
   if (!payload || payload.trim() === "[DONE]") return;
   const debugEnabled = isUsageDebugEnabled();
   const sseAlreadyMarked = logCtx.usageDebugBodyKind === "sse";
+  if (parsed !== undefined) recordGenerationEvent(logCtx, (parsed as { type?: unknown } | null)?.type);
   if (parsed !== undefined) applyResponseLogMetadata(logCtx, parsed);
   else logCtx.activeTierMetadata?.markResponseUnparseable();
   captureUpstreamErrorParsed(logCtx, payload, parsed);
@@ -939,16 +1113,8 @@ function captureUpstreamErrorParsed(
   parsed: unknown | undefined,
 ): void {
   if (parsed !== undefined && parsed !== null) {
-    const json = parsed as {
-      type?: unknown;
-      error?: { message?: unknown };
-      last_error?: { message?: unknown };
-      response?: {
-        error?: { type?: unknown; code?: unknown; message?: unknown };
-        incomplete_details?: { reason?: unknown; message?: unknown };
-      };
-    };
-    captureTerminalHttpStatus(logCtx, json);
+    const json = parsed as UpstreamErrorPayload;
+    captureUpstreamTerminalDiagnostics(logCtx, json);
     const reason = json?.response?.incomplete_details?.reason;
     if (json.type === "response.incomplete"
       && logCtx.terminalIncompleteReason === undefined
@@ -990,75 +1156,6 @@ function incompleteReasonLabel(reason: string): string {
     default:
       return `Upstream incomplete: ${reason}`;
   }
-}
-
-function captureTerminalHttpStatus(
-  logCtx: RequestLogContext,
-  json: {
-    type?: unknown;
-    code?: unknown;
-    message?: unknown;
-    error?: { type?: unknown; code?: unknown; message?: unknown };
-    last_error?: { type?: unknown; code?: unknown; message?: unknown };
-    response?: {
-      error?: { type?: unknown; code?: unknown; message?: unknown };
-      incomplete_details?: { code?: unknown; message?: unknown; reason?: unknown };
-    };
-  },
-): void {
-  if (logCtx.terminalHttpStatus !== undefined) return;
-  const type = json.type;
-  if (type !== "response.failed" && type !== "response.incomplete" && type !== "error") return;
-  const responseError = json.response?.error;
-  const responseDetails = json.response?.incomplete_details;
-  const candidates: Array<{ type?: unknown; code?: unknown; message?: unknown } | undefined> = [
-    json.error, json.last_error, responseError, responseDetails, json,
-  ];
-  const policy = candidates.some(candidate => (
-    candidate?.code === null || typeof candidate?.code === "string"
-  ) && isCyberPolicyCode(candidate.code as string | null | undefined))
-    || candidates.some(candidate => (
-      typeof candidate?.message === "string"
-      && candidate.message.trim().length > 0
-      && isCyberPolicyMessage(candidate.message)
-    ));
-  if (policy) {
-    logCtx.terminalErrorCode = CYBER_POLICY_ERROR_CODE;
-    logCtx.terminalHttpStatus = 400;
-    return;
-  }
-  // A quota terminal can carry only a structured reason, without an error message.
-  // Keep this separate from normal output limits and from the policy precedence above.
-  const quotaTag = (value: unknown): boolean => value === "usage_limit_reached"
-    || value === "rate_limit_exceeded" || value === "insufficient_quota";
-  const structuredRefusal = candidates.some(candidate => [400, 401, 403, 499].includes(
-    httpStatusFromTerminalError({
-      type: typeof candidate?.type === "string" ? candidate.type : undefined,
-      code: typeof candidate?.code === "string" ? candidate.code : undefined,
-    }),
-  ));
-  const ordinaryIncompleteReason = typeof responseDetails?.reason === "string"
-    && ["max_output_tokens", "content_filter", "steered", "upstream_stall_timeout", "adapter_eof"].includes(responseDetails.reason);
-  if (type === "response.incomplete" && !structuredRefusal && (quotaTag(responseDetails?.reason) || candidates.some(candidate =>
-    quotaTag(candidate?.code)
-    || quotaTag(candidate?.type) || candidate?.type === "rate_limit_error"
-    || (!ordinaryIncompleteReason && typeof candidate?.message === "string" && isRateLimitOrQuotaFailureMessage(candidate.message))
-  ))) {
-    // The shared quota classifier also accepts a numeric HTTP status as its message.
-    // Preserve explicit payment-required evidence rather than relabeling it as 429.
-    logCtx.terminalHttpStatus = candidates.some(candidate => typeof candidate?.message === "string"
-      && Number(candidate.message.trim()) === 402) ? 402 : 429;
-    return;
-  }
-  if (type !== "response.failed" || !responseError || typeof responseError !== "object") return;
-  const responseCode = responseError.code === null || typeof responseError.code === "string"
-    ? responseError.code
-    : undefined;
-  logCtx.terminalHttpStatus = httpStatusFromTerminalError({
-    type: typeof responseError.type === "string" ? responseError.type : undefined,
-    code: responseCode,
-    message: typeof responseError.message === "string" ? responseError.message : undefined,
-  });
 }
 
 /** Map a terminal Responses error object to the HTTP status we record in /api/logs. */
@@ -1267,12 +1364,12 @@ export function addFinalRequestLog(
   const effectiveStatus = status >= 500 && logCtx.upstreamError && isClientClosedMessage(logCtx.upstreamError)
     ? 499
     : status;
-  // A locally assigned code wins: it names a refusal this proxy made itself, which no
-  // status-plus-upstream-message classification can reconstruct.
+  // Locally assigned codes name proxy refusals that status and upstream text cannot reconstruct.
   const errorCode = logCtx.errorCode ?? requestLogErrorCode(
     effectiveStatus,
     logCtx.upstreamError,
     logCtx.terminalErrorCode,
+    logCtx.causeHint === "transport-ambiguous" && logCtx.terminalSource === "synthetic",
   );
   // A response.failed whose classified status is 499 is still a client cancel, not an upstream
   // terminal failure — keep /api/logs closeReason aligned with that.
@@ -1293,6 +1390,19 @@ export function addFinalRequestLog(
     if (errorCode) logCtx.activeAttempt.errorCode = errorCode;
     else delete logCtx.activeAttempt.errorCode;
   }
+  // Derived and stamped in a sibling module, before the attempt snapshot below. Every input is
+  // a closed value; the open error strings are deliberately not among them.
+  const attribution = attributeFinalRequest({
+    status: effectiveStatus,
+    ...(meta?.terminalStatus ? { terminalStatus: meta.terminalStatus } : {}),
+    ...(closeReason ? { closeReason } : {}),
+    ...(logCtx.transportPhase ? { transportPhase: logCtx.transportPhase } : {}),
+    ...(logCtx.terminalSource ? { terminalSource: logCtx.terminalSource } : {}),
+    outputObserved: logCtx.firstOutputMs !== undefined,
+    ...(logCtx.causeHint ? { causeHint: logCtx.causeHint } : {}),
+    locallyAnswered: logCtx.localTerminalReason !== undefined,
+    ...(logCtx.activeAttempt ? { attempt: logCtx.activeAttempt } : {}),
+  });
   // The one seam every request passes exactly once, whatever transport served it and however
   // it ended. The terminal usage belongs to the last send that left; the ledger resolves every
   // earlier send of this request as unresolved spend rather than handing its tokens back.
@@ -1310,6 +1420,10 @@ export function addFinalRequestLog(
     ...(attempt.recoveryWithheld?.length ? { recoveryWithheld: [...attempt.recoveryWithheld] } : {}),
     ...(attempt.usage ? { usage: { ...attempt.usage } } : {}),
     ...(attempt.tierOutcome ? { tierOutcome: { ...attempt.tierOutcome } } : {}),
+    // Detached, like every mutable field beside it: the live summary keeps counting if the
+    // stream is still draining, and a shared reference would let a finalized row change after
+    // it was written.
+    ...(attempt.deliverySummary ? { deliverySummary: { ...attempt.deliverySummary } } : {}),
   }));
   const isCombo = logCtx.comboId !== undefined && (attempts?.length ?? 0) > 0;
   const aggregate = isCombo ? aggregateAttemptUsage(attempts ?? []) : null;
@@ -1317,10 +1431,40 @@ export function addFinalRequestLog(
   const usageStatus = aggregate?.status ?? existing.status;
   const totalTokens = aggregate?.totalTokens ?? existing.totalTokens;
   const spend = requestSpendRecord(logCtx, attempts);
+  const durationMs = Date.now() - start;
+  logCtx.requestMetricsRecorder?.recordFinalRequest({
+    ...(logCtx.inboundProtocol ? { protocol: logCtx.inboundProtocol } : {}),
+    status: effectiveStatus,
+    durationMs,
+    ...(logCtx.firstOutputMs !== undefined ? { firstOutputMs: logCtx.firstOutputMs } : {}),
+    ...(meta?.terminalStatus ? { terminalStatus: meta.terminalStatus } : {}),
+    ...(closeReason ? { closeReason } : {}),
+    ...(attempts !== undefined ? { attempts } : {}),
+    ...(spend ? { spendSends: spend.sends } : {}),
+    ...(attribution.failureCause ? { failureCause: attribution.failureCause } : {}),
+  });
   const cacheProvenance = classifyCacheTelemetryProvenance(loggedUsage, {
     wireParsed: logCtx.usageWireParsed === true,
   });
   const logicalRequestId = logCtx.logicalRequestId ?? logCtx.executionBudget?.logicalRequestId;
+  const normalizedCacheValue = loggedUsage?.cacheReadInputTokens ?? loggedUsage?.cachedInputTokens;
+  cacheDiagnosticHooks()?.finalize({
+    requestId,
+    ...(isLogicalRequestId(logicalRequestId) ? { logicalRequestId } : {}),
+    protocol: logCtx.inboundProtocol ?? "responses",
+    provider: logCtx.provider,
+    model: logCtx.model,
+    ...(isCodexUsageAccountLogLabel(logCtx.accountLogLabel) ? { accountLogLabel: logCtx.accountLogLabel } : {}),
+    ...(logCtx.affinity ? { affinityMove: logCtx.affinity } : {}),
+    ...(logCtx.affinityReason ? { affinityReason: logCtx.affinityReason } : {}),
+    // loggedUsage carries the upstream cache counter by reference all the way from the
+    // adapter extraction for the native Responses route, so an undefined read here is a
+    // genuinely absent counter rather than a defaulted one.
+    ...(normalizedCacheValue !== undefined ? { rawCacheCounterValue: normalizedCacheValue } : {}),
+    ...(normalizedCacheValue !== undefined ? { normalizedCacheValue } : {}),
+    cacheProvenance,
+    ...(logCtx.cacheDiagnosticDraft ? { draft: logCtx.cacheDiagnosticDraft } : {}),
+  });
   // Sanitize at the logging layer, not only at the one call site that populates this today.
   // The value originates in an upstream-supplied model id, so an unsanitized newline would
   // let a single field forge a record boundary in any line-oriented log viewer. Doing it here
@@ -1328,6 +1472,9 @@ export function addFinalRequestLog(
   // the in-memory /api/logs row matches what usage.jsonl already stores.
   const shadowCallRewrittenFrom = sanitizeLogMetadataString(logCtx.shadowCallRewrittenFrom);
   const claudeCompatibility = normalizeClaudeCompatibilityUsageLog(logCtx.claudeCompatibility);
+  const jevDecision = normalizePersistedJevDecision(logCtx.jevDecision);
+  // Keyed by the live attempt objects, not the detached copies above.
+  const protocolTrace = protocolTraceForRequest(logCtx, logCtx.attempts);
   addLog({
     requestId,
     ...(isLogicalRequestId(logicalRequestId) ? { logicalRequestId } : {}),
@@ -1362,14 +1509,16 @@ export function addFinalRequestLog(
     ...((attempts?.at(-1)?.tierOutcome ?? logCtx.tierOutcome)
       ? { tierOutcome: attempts?.at(-1)?.tierOutcome ?? { ...logCtx.tierOutcome! } }
       : {}),
-    ...(logCtx.resolvedModel ? { resolvedModel: logCtx.resolvedModel } : {}),
+    ...modelIdentityLogFields(logCtx),
     status: effectiveStatus,
-    durationMs: Date.now() - start,
+    durationMs,
     ...(logCtx.firstOutputMs !== undefined ? { firstOutputMs: logCtx.firstOutputMs } : {}),
+    ...generationWindowFields(logCtx, start),
     ...(errorCode ? { errorCode } : {}),
     ...(meta?.terminalStatus ? { terminalStatus: meta.terminalStatus } : {}),
     ...(closeReason ? { closeReason } : {}),
     ...(logCtx.upstreamError ? { upstreamError: logCtx.upstreamError } : {}),
+    ...upstreamDiagnosticLogFields(logCtx),
     usageStatus,
     ...(loggedUsage ? { usage: loggedUsage } : {}),
     ...(totalTokens !== undefined ? { totalTokens } : {}),
@@ -1387,8 +1536,13 @@ export function addFinalRequestLog(
     ...(logCtx.transportPhase ? { transportPhase: logCtx.transportPhase } : {}),
     ...(logCtx.terminalSource ? { terminalSource: logCtx.terminalSource } : {}),
     ...(logCtx.routeDecision ? { routeDecision: logCtx.routeDecision } : {}),
+    ...(jevDecision ? { jevDecision } : {}),
     ...(claudeCompatibility ? { claudeCompatibility } : {}),
+    ...(protocolTrace ? { protocolTrace } : {}),
+    ...attribution,
   });
+  // Formatted from the finalized snapshot, so the ring shows exactly what the ledger holds.
+  for (const attempt of attempts ?? []) debugAttemptDeliverySummary(requestId, attempt);
   if (isUsageDebugEnabled()) {
     appendUsageDebug({
       ts: Date.now(),
@@ -1402,73 +1556,6 @@ export function addFinalRequestLog(
       extractedUsage: loggedUsage ?? null,
     });
   }
-}
-
-export function filterRequestLogs(logs: RequestLogEntry[], params: URLSearchParams): RequestLogEntry[] {
-  let filtered = logs;
-  const provider = params.get("provider")?.trim();
-  if (provider) {
-    filtered = filtered.filter(entry => entry.provider === provider
-      || entry.attempts?.some(attempt => attempt.provider === provider));
-  }
-  const conversationId = params.get("conversationId")?.trim() || params.get("conversation")?.trim();
-  if (conversationId) {
-    filtered = filtered.filter(entry => matchesLogConversationId(entry.conversationId, conversationId));
-  }
-  // #2704: there was no `model` clause at all, so `?model=x` was ACCEPTED and silently
-  // ignored -- worse than an error, because it yields wrong conclusions from output that
-  // looks correct. Attempts are matched for the same reason `provider` matches them: a
-  // request that failed over should be findable by the model that actually served it.
-  const model = params.get("model")?.trim();
-  if (model) {
-    filtered = filtered.filter(entry => entry.model === model
-      || entry.attempts?.some(attempt => attempt.model === model));
-  }
-  // #4057: "which account served this request" is the first question asked when one provider
-  // holds several accounts, and until now the only way to answer it was to grep usage.jsonl by
-  // hand. Attempts are matched for the same reason `provider` and `model` match them: when a
-  // request failed over between pool accounts, a search for the account that finally served it
-  // has to find that request, not only the account that first refused it.
-  const account = params.get("account")?.trim();
-  if (account) {
-    filtered = filtered.filter(entry => entry.accountLogLabel === account
-      || entry.attempts?.some(attempt => attempt.accountLogLabel === account));
-  }
-  const status = params.get("status")?.trim().toLowerCase();
-  if (status) {
-    filtered = /^[1-5]xx$/.test(status)
-      ? filtered.filter(entry => Math.floor(entry.status / 100) === Number(status[0]))
-      : filtered.filter(entry => String(entry.status) === status);
-  }
-  const tailRaw = params.get("tail")?.trim();
-  if (tailRaw) {
-    const tail = Number.parseInt(tailRaw, 10);
-    if (Number.isFinite(tail) && tail > 0) filtered = filtered.slice(-Math.min(tail, MAX_LOG_SIZE));
-  }
-  const offsetRaw = params.get("offset")?.trim();
-  const limitRaw = params.get("limit")?.trim();
-  if (limitRaw) {
-    const limit = Number.parseInt(limitRaw, 10);
-    const offset = offsetRaw ? Number.parseInt(offsetRaw, 10) : 0;
-    if (Number.isFinite(limit) && limit > 0) {
-      const capped = Math.min(limit, MAX_LOG_SIZE);
-      const startOffset = Number.isFinite(offset) && offset > 0 ? offset : 0;
-      const end = filtered.length - startOffset;
-      if (end <= 0) filtered = [];
-      else {
-        const begin = Math.max(0, end - capped);
-        filtered = filtered.slice(begin, end);
-      }
-    }
-  }
-  return filtered;
-}
-
-export function filteredRequestLogCount(logs: RequestLogEntry[], params: URLSearchParams): number {
-  const withoutPagination = new URLSearchParams(params);
-  withoutPagination.delete("limit");
-  withoutPagination.delete("offset");
-  return filterRequestLogs(logs, withoutPagination).length;
 }
 
 interface FinalizedUsageResult {
@@ -1489,7 +1576,8 @@ function contextWindowForModel(adapter: string, modelId: string | undefined): nu
   if (adapter === "kiro" || adapter.startsWith("kiro-")) {
     const normalized = normalizeKiroModelId(modelId);
     if (normalized === "auto") return undefined;
-    return modelRecordValue(KIRO_MODEL_CONTEXT_WINDOWS, modelId)
+    return kiroObservedContextWindow(modelId)
+      ?? modelRecordValue(KIRO_MODEL_CONTEXT_WINDOWS, modelId)
       ?? modelRecordValue(KIRO_MODEL_CONTEXT_WINDOWS, normalized);
   }
   if (adapter === "cursor" || adapter.startsWith("cursor-")) {
@@ -1571,20 +1659,6 @@ export function beginRequestAttempt(
   };
 }
 
-export function sealRequestAttemptIdentity(
-  attempt: PersistedUsageAttempt | undefined,
-  provider: string,
-  adapter: string,
-  accountLogLabel?: string,
-): void {
-  if (!attempt) return;
-  if (attempt.provider !== provider || attempt.adapter !== adapter) delete attempt.credentialSource;
-  attempt.provider = provider;
-  attempt.adapter = adapter;
-  if (isCodexUsageAccountLogLabel(accountLogLabel)) attempt.accountLogLabel = accountLogLabel;
-  else delete attempt.accountLogLabel;
-}
-
 /** Preserve metered JSON failures before key recovery consumes/cancels their body. */
 export async function recordKeyAttemptFailure(logCtx: RequestLogContext, response: Response, signal?: AbortSignal): Promise<void> {
   const attempt = logCtx.activeAttempt;
@@ -1628,15 +1702,20 @@ export function noteProviderAttemptSend(
   stampApiKeyAccountLabel(logCtx, providerName, provider);
   const next = logCtx.accountLogLabel;
   if (attempt && usesApiKeyAccount(provider)) keyUsageOwners.add(attempt);
-  if (attempt && attempt.sendCount > 0 && previous !== next
-    && (KEY_ACCOUNT_LOG_LABEL_RE.test(previous ?? "") || KEY_ACCOUNT_LOG_LABEL_RE.test(next ?? ""))) {
+  if (attempt && attempt.sendCount > 0 && attemptAccountChanged(previous, next, attempt.provider, logCtx.provider)) {
     // An input estimate is not evidence that a failed send used that many tokens.
     delete attempt.inputTokenEstimate;
     finishRequestAttempt(attempt, attempt.status >= 100 ? attempt.status
       : recovery === "key-401" ? 401 : recovery?.includes("429") ? 429 : 502,
     Date.now() - (logCtx.activeAttemptStartedAt ?? Date.now()), attempt.usage);
+    // This attempt is being sealed because a NAMED recovery rejected it, so the recovery kind
+    // is direct evidence here rather than an inference from history. Without this the sealed
+    // attempt would reach the ledger with no attribution at all: the finalization seam below
+    // only ever sees the last attempt of the request.
+    attributeSealedAttempt(attempt, recovery);
     const completed = { ...attempt, recoveryKinds: [...attempt.recoveryKinds],
       ...(attempt.usage ? { usage: { ...attempt.usage } } : {}),
+      ...(attempt.deliverySummary ? { deliverySummary: { ...attempt.deliverySummary } } : {}),
       ...(attempt.tierOutcome ? { tierOutcome: { ...attempt.tierOutcome } } : {}) };
     const attempts = logCtx.attempts ??= [attempt];
     const index = attempts.indexOf(attempt);
@@ -1774,7 +1853,7 @@ export function aggregateAttemptUsage(
 
   const sumOptional = (
     key: "cachedInputTokens" | "cacheReadInputTokens" | "cacheCreationInputTokens"
-      | "reasoningOutputTokens",
+      | "reasoningOutputTokens" | "providerCredits",
   ): number | undefined => {
     const present = usages.flatMap(usage => (
       typeof usage[key] === "number" ? [usage[key] as number] : []
@@ -1785,6 +1864,7 @@ export function aggregateAttemptUsage(
   const cacheReadInputTokens = sumOptional("cacheReadInputTokens");
   const cacheCreationInputTokens = sumOptional("cacheCreationInputTokens");
   const reasoningOutputTokens = sumOptional("reasoningOutputTokens");
+  const providerCredits = sumOptional("providerCredits");
   const totalTokens = usages.reduce(
     (sum, usage) => sum + (usageTotalTokens(usage) ?? 0),
     0,
@@ -1797,6 +1877,7 @@ export function aggregateAttemptUsage(
     ...(cacheReadInputTokens !== undefined ? { cacheReadInputTokens } : {}),
     ...(cacheCreationInputTokens !== undefined ? { cacheCreationInputTokens } : {}),
     ...(reasoningOutputTokens !== undefined ? { reasoningOutputTokens } : {}),
+    ...(providerCredits !== undefined ? { providerCredits } : {}),
     ...(status === "estimated" ? { estimated: true } : {}),
   };
   return { usage: aggregate, status, totalTokens };
@@ -1809,4 +1890,5 @@ export function clearRequestLogsForTests(): void {
   requestLog.length = 0;
   requestLogBytes = 0;
   requestLogsHydratedFromDisk = false;
+  requestLogObserversForTests.clear();
 }

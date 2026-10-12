@@ -1,4 +1,5 @@
 import { useT } from "../../i18n/shared";
+import { utf8Length } from "./custom-layer-state";
 import type { CustomLayerDto } from "../../pages/codex-set-prompt";
 
 /**
@@ -55,6 +56,20 @@ export default function CustomLayerRow({
       <button type="button" className="link-btn codex-set-prompt__name" onClick={() => onEdit(layer.id)}>
         {layer.title}
       </button>
+
+      {/*
+        The same byte budget the built-in rows get. A custom layer is composed
+        text like any other, so hiding its size here asked the user to guess what
+        their own layer costs.
+      */}
+      <span
+        className="codex-set-prompt__bytes"
+        title={t("codexSet.dialog.sourceBytes", { bytes: utf8Length(layer.body) })}
+      >
+        {utf8Length(layer.body) >= 1024
+          ? Math.round(utf8Length(layer.body) / 1024) + " KB"
+          : utf8Length(layer.body) + " B"}
+      </span>
 
       <span className="codex-set-custom__reorder">
         <button

@@ -3,6 +3,9 @@ import { providerConfigSeed } from "../../src/providers/derive";
 import { getProviderRegistryEntry } from "../../src/providers/registry";
 import { handleResponses } from "../../src/server/responses/core";
 import type { OcxConfig } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+
+let releaseSpendHome: (() => void) | undefined;
 
 /**
  * The passthrough relay for DeepSeek's native /responses endpoint emits
@@ -42,7 +45,12 @@ const JSON_UPSTREAM = {
   ],
 };
 
-async function runHandleResponses(body: Record<string, unknown>, upstreamBody: unknown, contentType: string) {
+async function runHandleResponses(
+  body: Record<string, unknown>,
+  upstreamBody: unknown,
+  contentType: string,
+  provider: Record<string, unknown> = {},
+) {
   const encoder = new TextEncoder();
   const payload = typeof upstreamBody === "string"
     ? upstreamBody
@@ -58,7 +66,9 @@ async function runHandleResponses(body: Record<string, unknown>, upstreamBody: u
       : payload,
     { status: 200, headers: { "content-type": contentType } },
   )) as typeof fetch;
-  const config = { providers: { deepseek: deepseekSeed() } } as unknown as OcxConfig;
+  const config = { providers: { deepseek: { ...deepseekSeed(), ...provider } } } as unknown as OcxConfig;
+  // Direct dispatch needs the writer lease that prevents spend-ledger ownership failures.
+  releaseSpendHome = acquireOwnedSpendHome();
   return handleResponses(
     new Request("http://localhost/v1/responses", {
       method: "POST",
@@ -73,7 +83,12 @@ async function runHandleResponses(body: Record<string, unknown>, upstreamBody: u
 
 describe("passthrough reasoning summary rewrite honors hideThinkingSummary", () => {
   const originalFetch = globalThis.fetch;
-  afterEach(() => { globalThis.fetch = originalFetch; });
+  afterEach(() => {
+    // Release the lease before later teardown can replace the preload sandbox home.
+    releaseSpendHome?.();
+    releaseSpendHome = undefined;
+    globalThis.fetch = originalFetch;
+  });
 
   test("SSE: hidden thinking stays on the content channel", async () => {
     // No reasoning.summary in the request -> parseRequest sets hideThinkingSummary.
@@ -120,5 +135,21 @@ describe("passthrough reasoning summary rewrite honors hideThinkingSummary", () 
     const text = await response.text();
     expect(text).toContain('"content":[{"type":"reasoning_text","text":"think"}]');
     expect(text).not.toContain('"summary":[{"type":"summary_text"');
+  });
+
+  test("SSE: hideRawReasoning stays inert on the native passthrough relay", async () => {
+    // hideRawReasoning suppresses the routed chain of thought before it enters the client wire.
+    // A native /responses route never reaches that encoder: its frames are relayed exactly as
+    // upstream sent them, on the content channel and in the closing item alike.
+    const response = await runHandleResponses(
+      { model: "deepseek-v4-flash", input: "ping", stream: true },
+      SSE_UPSTREAM_FRAMES.join(""),
+      "text/event-stream",
+      { hideRawReasoning: true },
+    );
+    const text = await response.text();
+    expect(text).toContain("response.reasoning_text.delta");
+    expect(text).not.toContain("response.reasoning_summary_text.delta");
+    expect(text).toContain('"content":[{"type":"reasoning_text","text":"think"}]');
   });
 });

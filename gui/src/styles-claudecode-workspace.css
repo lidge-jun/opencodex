@@ -1,5 +1,5 @@
 /* ============================================================================
-   claudecode-workspace — isolated stylesheet (mirrors providers-workspace layout DNA)
+   claudecode-workspace — Claude Code settings as one vertical page
    Namespace: claudecode-workspace-  |  widgets: ccw-
    Uses only design tokens from styles.css. No gradients.
    ============================================================================ */
@@ -11,15 +11,6 @@
 .claudecode-workspace-shell {
   width: 100%;
   min-width: 0;
-}
-
-.claudecode-workspace-root {
-  display: grid;
-  grid-template-columns: minmax(240px, 280px) minmax(0, 1fr);
-  gap: var(--space-4);
-  width: 100%;
-  max-width: 100%;
-  min-height: 0;
 }
 
 .claude-effective-auth {
@@ -44,113 +35,6 @@
   text-transform: uppercase;
   letter-spacing: 0.04em;
   font-size: 10.5px;
-}
-
-/* ── Rail ─────────────────────────────────────────────── */
-
-.claudecode-workspace-rail {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  border-right: 1px solid var(--border);
-  padding-right: var(--space-3);
-  min-width: 0;
-}
-
-.claudecode-workspace-rail-list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-height: 0;
-}
-
-.claudecode-workspace-rail-row {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-0-5);
-  width: 100%;
-  min-height: 46px;
-  appearance: none;
-  background: none;
-  border: none;
-  border-radius: var(--radius-sm);
-  padding: var(--space-1-5) var(--space-2);
-  cursor: pointer;
-  text-align: left;
-  color: inherit;
-  font: inherit;
-  overflow: hidden;
-}
-
-.claudecode-workspace-rail-row:hover {
-  background: var(--raised);
-}
-
-.claudecode-workspace-rail-row--selected {
-  background: var(--raised);
-  box-shadow: inset 0 0 0 1px var(--border);
-}
-
-.claudecode-workspace-rail-name {
-  font-size: var(--text-body);
-  font-weight: var(--weight-medium);
-  color: var(--text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* ── Main pane ────────────────────────────────────────── */
-
-.claudecode-workspace-main {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  min-width: 0;
-}
-
-/*
-  One pane head for every rail tab: same title baseline under the Code/Desktop selector,
-  and a permanently reserved Save slot so editable panes cannot shove the rail down.
-*/
-.ccw-main-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  min-height: 32px;
-  min-width: 0;
-}
-
-.ccw-main-title {
-  margin: 0;
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  min-width: 0;
-  font-size: var(--text-control);
-  font-weight: var(--weight-semibold);
-  line-height: var(--leading-ui);
-  color: var(--text);
-}
-
-.ccw-main-title .count {
-  color: var(--muted);
-  font-weight: var(--weight-medium);
-  font-family: var(--font-code);
-  font-size: var(--text-label);
-}
-
-.claudecode-workspace-save[data-visible="false"] {
-  visibility: hidden;
-  pointer-events: none;
-}
-
-.ccw-body {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  min-width: 0;
 }
 
 /* Available models — dense chip grid instead of one card per alias. */
@@ -239,23 +123,93 @@
   max-width: 100%;
 }
 
-.claudecode-workspace-save {
+/* ── Single page ──────────────────────────────────────── */
+
+.claudecode-doc {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+/* The flex gap owns the spacing between blocks now. */
+.claudecode-doc > .claudecode-connection-card {
+  margin-bottom: 0;
+}
+
+.ccw-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.ccw-section-title {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: var(--text-control);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-ui);
+  color: var(--text);
+}
+
+.ccw-section-title .count {
+  color: var(--muted);
+  font-weight: var(--weight-medium);
+  font-family: var(--font-code);
+  font-size: var(--text-label);
+}
+
+/* Immediate-commit master switch: last on the page, set apart from the Save-gated sections. */
+.claudecode-master-card {
+  overflow: hidden;
+  border-color: color-mix(in srgb, var(--red) 35%, var(--border));
+}
+
+/*
+  One Save bar for the whole page. Opaque so content scrolling under it never shows
+  through; it stays in flow, so the page ends with it rather than hiding the last card.
+*/
+.ccw-savebar {
+  position: sticky;
+  bottom: 0;
+  z-index: 6;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--space-2);
+  padding: var(--space-2) 0 var(--space-3);
+  background: var(--bg);
+  border-top: 1px solid var(--border-soft, var(--border));
 }
 
-/* ── Responsive ───────────────────────────────────────── */
-
-@media (max-width: 768px) {
-  .claudecode-workspace-root {
-    grid-template-columns: 1fr;
-  }
-
-  .claudecode-workspace-rail {
-    border-right: none;
-    border-bottom: 1px solid var(--border);
-    padding-right: 0;
-    padding-bottom: var(--space-3);
-  }
+.ccw-savebar-error {
+  flex: 1 1 100%;
+  color: var(--red);
+  font-size: var(--text-label);
 }
+
+.ccw-savebar-state {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--text-label);
+}
+
+.ccw-savebar-state.dirty {
+  color: var(--amber);
+  font-weight: var(--weight-medium);
+}
+
+/* A focused control near the bottom must not end up under the sticky bar. */
+html:has(.ccw-savebar) {
+  scroll-padding-bottom: 72px;
+}
+
+
+/* Sidecar copy and controls wrap independently instead of competing for a fixed width. */
+.claudecode-sidecar-row { flex-wrap: wrap; align-items: flex-start; }
+.claudecode-sidecar-row .setting-copy { flex: 1 1 16rem; }
+.claudecode-sidecar-row .setting-controls { display: flex; flex-wrap: wrap; gap: var(--space-2); flex: 0 1 auto; min-width: 0; max-width: 100%; }
+.claudecode-sidecar-row .setting-controls .input { flex: 1 1 13rem; min-width: 0; }

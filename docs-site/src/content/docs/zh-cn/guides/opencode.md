@@ -86,7 +86,7 @@ loopback 示例：
 
 真实值只会通过子进程环境传递。`OPENCODEX_API_AUTH_TOKEN` 优先，然后是加固后的服务 token 文件，最后才是配置的 API key - 而非 loopback 绑定正是需要这个 API key。
 
-loopback 绑定（`127.0.0.1`，默认值）不会进行任何认证，所以 `{env:…}` 引用是惰性的，你可以不设置该变量。它只在 `hostname` 超出 loopback 范围时才有意义；参见 [Remote access](/reference/configuration/#remote-access)。这个 admission key 是 opencodex 自己的，与在 [Providers](/guides/providers/) 下配置的上游 provider keys 无关。
+loopback 绑定（`127.0.0.1`，默认值）不会进行任何认证，所以 `{env:…}` 引用是惰性的，你可以不设置该变量。它只在 `hostname` 超出 loopback 范围时才有意义；参见 [Remote access](/zh-cn/reference/configuration/server/#远程访问)。这个 admission key 是 opencodex 自己的，与在 [Providers](/guides/providers/) 下配置的上游 provider keys 无关。
 
 ## 回滚
 
@@ -96,7 +96,7 @@ loopback 绑定（`127.0.0.1`，默认值）不会进行任何认证，所以 `{
 
 只有当目录报告了权威的 context window 时，才会写入 `limit.context`；如果没有报告，整个 `limit` block 会被省略，opencode 则继续使用自己的默认值。
 
-opencode 的 schema 会拒绝一个包含 `context` 但不包含 `output` 的 `limit` block，而目录没有按模型粒度提供权威的 output 字段，因此会同时写入一个 `32000` 的 `output` budget，并将其钳制到 context window 以内，确保不会给小 context 模型分配 `output > context`。这个数值只是为了满足 schema - 它并不是对任何具体模型真实上限的声明。
+输出上限使用目录或生成元数据中已知的模型上限，仅在未知时回退到 `32000`。输出上限始终不超过 context window；已知低于 `32000` 的上限也会保留。
 
 `opencodex` provider block 会在每次启动时重新生成，所以在其中做的逐模型调整不会保留。若要自定义条目，请把它们放到你自己的 provider key 下。
 

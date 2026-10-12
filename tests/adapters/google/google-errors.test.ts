@@ -5,7 +5,58 @@ import {
   safeAntigravityHttpErrorMessage,
   safeGoogleHttpErrorMessage,
   safeVertexHttpErrorMessage,
+  ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX,
 } from "../../../src/adapters/google-errors";
+import { adapterFailureFromMessage, classifyError } from "../../../src/lib/errors";
+
+describe("Google input token overflow", () => {
+  for (const [label, format] of [["Antigravity", safeAntigravityHttpErrorMessage], ["Vertex", safeVertexHttpErrorMessage]] as const) {
+    test.each([
+      "The input token count exceeds the maximum number of tokens allowed 1048576.",
+      "The input token count (1,100,000) exceeds the maximum number of tokens allowed (1048576).",
+      "The input token count\nexceeds the maximum number of tokens allowed 1048576.",
+    ])(`${label} preserves context overflow through the adapter error envelope: %s`, detail => {
+      const message = format(400, JSON.stringify({ error: { code: 400, status: "INVALID_ARGUMENT", message: detail } }));
+      expect(classifyError(400, "invalid_request_error", message).code).toBe("context_length_exceeded");
+      expect(adapterFailureFromMessage(message)).toMatchObject({
+        httpStatus: 400, error: { type: "invalid_request_error", code: "context_length_exceeded", message },
+      });
+    });
+  }
+  test("output limits and protected statuses do not become input overflow", () => {
+    const output = safeAntigravityHttpErrorMessage(400, "The output token count exceeds the maximum number of tokens allowed 65536.");
+    expect(adapterFailureFromMessage(output).error.code).not.toBe("context_length_exceeded");
+    const detail = "The input token count exceeds the maximum number of tokens allowed 1048576.";
+    for (const [status, upstreamStatus, type] of [[401, "UNAUTHENTICATED", "authentication_error"],
+      [403, "PERMISSION_DENIED", "permission_error"], [429, "RESOURCE_EXHAUSTED", "rate_limit_error"]] as const) {
+      const message = safeAntigravityHttpErrorMessage(status, JSON.stringify({ error: { code: status, status: upstreamStatus, message: detail } }));
+      expect(classifyError(status, type, detail).type).toBe(type);
+      expect(adapterFailureFromMessage(message).error.code).not.toBe("context_length_exceeded");
+    }
+  });
+});
+
+describe("Antigravity validation classification", () => {
+  const validated = JSON.stringify({ error: { status: "PERMISSION_DENIED", message: "Validate this account",
+    details: [{ reason: "VALIDATION_REQUIRED" }] } });
+
+  test("only structured Antigravity HTTP 403 gets the formatter marker", () => {
+    const normalized = safeAntigravityHttpErrorMessage(403, validated);
+    expect(normalized.startsWith(`${ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX}:`)).toBe(true);
+    expect(safeVertexHttpErrorMessage(403, validated)).not.toContain(ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX);
+    expect(safeAntigravityHttpErrorMessage(400, validated)).not.toContain(ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX);
+  });
+
+  test("message text and unrelated reason cannot forge validation", () => {
+    for (const body of [
+      JSON.stringify({ error: { status: "PERMISSION_DENIED", message: ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX } }),
+      JSON.stringify({ error: { status: "PERMISSION_DENIED", message: "denied", details: [{ reason: "OTHER" }] } }),
+    ]) {
+      const normalized = safeAntigravityHttpErrorMessage(403, body);
+      expect(normalized.startsWith(`${ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX}:`)).toBe(false);
+    }
+  });
+});
 
 describe("google error classification & quota exhaustion", () => {
   const antigravityPhrases = [
@@ -136,7 +187,26 @@ describe("google location denial classification (#3467)", () => {
     const denied = JSON.stringify({
       error: { code: 403, status: "PERMISSION_DENIED", message: "location is not supported for this project" },
     });
-    expect(safeAntigravityHttpErrorMessage(403, denied)).toContain("Antigravity access denied");
+    expect(safeAntigravityHttpErrorMessage(403, denied)).toContain("Antigravity access denied (PERMISSION_DENIED)");
+  });
+
+  test("preserves an explicit permission enum through downstream error classification", () => {
+    const body = JSON.stringify({
+      error: {
+        code: 400,
+        status: "PERMISSION_DENIED",
+        message: "User location is not supported for this project",
+      },
+    });
+    const message = safeAntigravityHttpErrorMessage(400, body);
+
+    expect(message).toBe(
+      "Antigravity access denied (PERMISSION_DENIED): User location is not supported for this project",
+    );
+    expect(classifyError(400, "upstream_error", message)).toMatchObject({
+      type: "permission_error",
+      code: "permission_denied",
+    });
   });
 
   test("server statuses and explicit non-location enums do not infer a location reason", () => {
@@ -150,7 +220,7 @@ describe("google location denial classification (#3467)", () => {
       );
     }
     for (const [status, prefix] of [
-      ["PERMISSION_DENIED", "access denied"],
+      ["PERMISSION_DENIED", "access denied (PERMISSION_DENIED)"],
       ["INVALID_ARGUMENT", "invalid request"],
       ["UNAVAILABLE", "server overloaded"],
     ]) {

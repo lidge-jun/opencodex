@@ -1,11 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { collectStartupHealth, deriveStartupHealth, formatStartupRoutingDetail, startupHealthSummary } from "../../src/codex/autostart-health";
+import { deriveDesktopStartup } from "../../src/service/desktop-startup";
+import { collectStartupHealth, deriveStartupHealth, formatStartupRoutingDetail, injectedRoutingRestartWarningLines, startupHealthSummary } from "../../src/codex/autostart-health";
 import { unusedProxyWarningLines } from "../../src/cli/status";
 import { classifyCodexRouting, hasInjectedCodexRouting } from "../../src/codex/inject";
 import { isCodexClientProcess, listCodexClientProcesses } from "../../src/codex/native-profile-processes";
 import { collectRoutingAdoption, deriveRoutingAdoption } from "../../src/codex/routing-adoption";
 import { handleManagementAPI } from "../../src/server/management-api";
-import { getCachedStartupHealth, getStartupHealthSnapshot, invalidateStartupHealthCache, markStartupHealthDiagnosticStale } from "../../src/server/startup-health-cache";
+import { getCachedStartupHealth, getStartupHealthSnapshot, invalidateStartupHealthCache, markStartupHealthDiagnosticStale, resetStartupHealthCacheForTests } from "../../src/server/startup-health-cache";
 import type { OcxConfig } from "../../src/types";
 
 const base = {
@@ -226,6 +227,7 @@ describe("Codex startup health", () => {
     expect(typeof body.rebootSafe).toBe("boolean");
     expect(typeof body.routingInjected).toBe("boolean");
     expect(body.diagnosticStale).toBe(false);
+    expect(body.recommendedAction).toBeNull();
     expect(body.routingKind).toBe("native");
     expect(probeCalls).toBe(1);
     expect(body.commands).toEqual({
@@ -278,6 +280,40 @@ describe("Codex startup health", () => {
     releaseProbe(deriveStartupHealth({ ...base, routingKind: "native" }));
     await pendingProbe;
     invalidateStartupHealthCache();
+  });
+
+  test("invalidation keeps the last reading for the snapshot instead of a not-installed fallback", async () => {
+    // A settings PUT invalidates, then reads the snapshot. Answering with the synthetic
+    // fallback (serviceInstalled: false, at-risk) flashed a healthy service as at risk
+    // until the dedicated probe finished.
+    resetStartupHealthCacheForTests();
+    const healthy = {
+      ...base,
+      routingKind: "native" as const,
+      serviceInstalled: true,
+      serviceViable: true,
+      serviceEnabled: true,
+      serviceRunning: true,
+    };
+    const reading = await getCachedStartupHealth(
+      { codexAutoStart: true },
+      { probe: async () => deriveStartupHealth(healthy) },
+    );
+    expect(reading.diagnosticStale).toBe(false);
+    expect(reading.serviceInstalled).toBe(true);
+
+    invalidateStartupHealthCache();
+    let releaseProbe!: (value: ReturnType<typeof deriveStartupHealth>) => void;
+    const pendingProbe = new Promise<ReturnType<typeof deriveStartupHealth>>(resolve => {
+      releaseProbe = resolve;
+    });
+    const snapshot = getStartupHealthSnapshot({ codexAutoStart: true }, { probe: async () => pendingProbe });
+    expect(snapshot).toEqual(markStartupHealthDiagnosticStale(reading));
+    expect(snapshot.serviceInstalled).toBe(true);
+
+    releaseProbe(deriveStartupHealth(healthy));
+    await pendingProbe;
+    resetStartupHealthCacheForTests();
   });
 
   test("settings snapshot starts a probe without waiting for it", async () => {
@@ -395,6 +431,37 @@ describe("routing visibility (#2411)", () => {
     expect(unusedProxyWarningLines({ proxyUp: true, routingKind: "custom-remote" })).toEqual([]);
     expect(unusedProxyWarningLines({ proxyUp: true, routingKind: "custom-local" })).toEqual([]);
     expect(unusedProxyWarningLines({ proxyUp: true, routingKind: "unknown" })).toEqual([]);
+  });
+
+  // #5261: setup writes routing that outlives the session and then ends on a success line.
+  // The warning reuses the health model rather than re-deriving the condition, so it cannot
+  // disagree with what status and doctor say about the same install.
+  test("injectedRoutingRestartWarningLines speaks exactly when the install is restart-unsafe", () => {
+    const atRisk = deriveStartupHealth(base);
+    expect(atRisk.status).toBe("at-risk");
+    const lines = injectedRoutingRestartWarningLines(atRisk);
+    expect(lines.length).toBeGreaterThan(0);
+    const joined = lines.join(" ");
+    expect(joined).toContain("survives a restart");
+    expect(joined).toContain(startupHealthSummary(atRisk));
+    // The way out that does not require the proxy to come back first.
+    expect(joined).toContain("ocx restore");
+
+    // A CLI-only shim still leaves Codex Desktop uncovered, which is the reported shape.
+    const shimmed = deriveStartupHealth({ ...base, shimInstalled: true, shimHealthy: true });
+    expect(shimmed.status).toBe("at-risk");
+    expect(injectedRoutingRestartWarningLines(shimmed).length).toBeGreaterThan(0);
+    // ...and the warning must stay true in that case: a healthy shim DOES restart the proxy, for
+    // CLI launches. Claiming nothing will would contradict the summary line printed beneath it.
+    expect(injectedRoutingRestartWarningLines(shimmed).join(" ")).not.toContain("nothing here will restart");
+    expect(injectedRoutingRestartWarningLines(shimmed).join(" ")).toContain(startupHealthSummary(shimmed));
+
+    // Native routing has no opencodex restart dependency, so there is nothing to warn about.
+    expect(injectedRoutingRestartWarningLines(deriveStartupHealth({ ...base, routingKind: "native" }))).toEqual([]);
+    // Neither does a viable service, which is the state the warning is steering toward.
+    const served = deriveStartupHealth({ ...base, serviceInstalled: true, serviceViable: true, serviceEnabled: true, serviceRunning: true });
+    expect(served.status).toBe("protected");
+    expect(injectedRoutingRestartWarningLines(served)).toEqual([]);
   });
 });
 
@@ -610,4 +677,46 @@ describe("routing adoption (#4550)", () => {
       ],
     })).toEqual({ status: "enumerated", processes: [{ pid: 4242, commandLine: "codex chat" }] });
   });
+});
+
+describe("macOS desktop startup protection", () => {
+  const facts = { owned: true, loginEnabled: true, running: true };
+  test("credits verified desktop supervision without claiming a CLI service", () => {
+    const desktop = deriveDesktopStartup(facts);
+    const health = deriveStartupHealth({ ...base, platform: "darwin", desktop });
+    expect(health).toMatchObject({ protection: "desktop", rebootSafe: true, status: "protected", serviceInstalled: false });
+    expect(startupHealthSummary(health)).toContain("desktop app");
+  });
+  test("missing ownership, login registration or running supervisor never grants protection", () => {
+    for (const key of ["owned", "loginEnabled", "running"] as const) {
+      const desktop = deriveDesktopStartup({ ...facts, [key]: false });
+      expect(deriveStartupHealth({ ...base, platform: "darwin", desktop }).rebootSafe).toBe(false);
+    }
+  });
+  test("desktop evidence cannot protect another OS or an unrelated gateway", () => {
+    const desktop = deriveDesktopStartup(facts);
+    expect(deriveStartupHealth({ ...base, desktop }).status).toBe("at-risk");
+    expect(deriveStartupHealth({ ...base, platform: "darwin", routingKind: "custom-local", desktop }).status).toBe("at-risk");
+  });
+  test("a failed follow-up probe revokes the desktop protection claim", () => {
+    const health = deriveStartupHealth({ ...base, platform: "darwin", desktop: deriveDesktopStartup(facts) });
+    expect(markStartupHealthDiagnosticStale(health)).toMatchObject({ protection: "none", rebootSafe: false, diagnosticStale: true });
+  });
+});
+
+
+test("desktop recovery guidance is scoped to routing owned by OpenCodex", () => {
+  const desktop = { owned: false, loginEnabled: false, running: true, viable: false,
+    supervisor: { supervisorPid: 3131, runtimePid: 4242, app: "/fixture/opencodex-desktop" } };
+  const local = deriveStartupHealth({ ...base, platform: "darwin", desktop });
+  expect(local.recommendedCommand).toBeNull();
+  expect(local.recommendedAction).toContain("Turn on Start at Login");
+  const stopped = deriveStartupHealth({ ...base, platform: "darwin",
+    desktop: { owned: true, loginEnabled: true, running: false, viable: false } });
+  expect(stopped.recommendedAction).toBe("Reopen OpenCodex and check Start at Login.");
+  for (const routingKind of ["native", "custom-remote", "custom-local", "unknown"] as const) {
+    const other = deriveStartupHealth({ ...base, platform: "darwin", desktop, routingKind });
+    expect(other.recommendedAction).toBeNull();
+    expect(other.recommendedCommand).toBe(routingKind === "custom-local" || routingKind === "unknown" ? "ocx restore" : null);
+  }
 });

@@ -1,12 +1,39 @@
 import { isClaudeWebSearchToolName } from "./outbound";
 import { AnthropicRequestError, isRec, type Rec } from "./inbound-records";
 
+/**
+ * Claude Code opens its system prompt with a per-request billing line
+ * (`x-anthropic-billing-header: cc_version=…; cc_entrypoint=…; cch=…;`) whose `cch` value
+ * changes on every request. Anthropic excludes it from caching; a translated Responses
+ * destination does not, so the first bytes of `instructions` — and the system-derived
+ * fallback `prompt_cache_key` — rotated every turn and prefix caching never hit (#6627).
+ * Native Anthropic passthrough never reaches this translation and keeps the line.
+ *
+ * Anchored at the prompt start without the multiline flag, like the Antigravity strip in
+ * `src/adapters/google.ts`, so a mention later in the prompt is never touched.
+ */
+function stripClaudeBillingHeader(text: string): string {
+  return text.replace(/^x-anthropic-billing-header:[^\n]*\n*/, "");
+}
+
 export function systemToInstructions(system: unknown): string | undefined {
-  if (typeof system === "string") return system.length > 0 ? system : undefined;
+  if (typeof system === "string") {
+    const text = stripClaudeBillingHeader(system);
+    return text.length > 0 ? text : undefined;
+  }
   if (Array.isArray(system)) {
     const parts: string[] = [];
+    let first = true;
     for (const block of system) {
-      if (isRec(block) && block.type === "text" && typeof block.text === "string") parts.push(block.text);
+      if (!isRec(block) || block.type !== "text" || typeof block.text !== "string") continue;
+      if (first) {
+        first = false;
+        // Only the first text block can carry the billing line; drop it if nothing else remains.
+        const text = stripClaudeBillingHeader(block.text);
+        if (text.length > 0) parts.push(text);
+        continue;
+      }
+      parts.push(block.text);
     }
     return parts.length > 0 ? parts.join("\n\n") : undefined;
   }
@@ -35,6 +62,12 @@ export function toolsToResponses(tools: unknown): Rec[] | undefined {
         // call, so carry the source intent instead of the destination default. A
         // non-boolean value is not a valid Anthropic opt-in and must not become one.
         strict: typeof raw.strict === "boolean" ? raw.strict : false,
+        // Anthropic restricts who may invoke a tool through allowed_callers. Nothing read it,
+        // so the restriction never reached the internal tool and every destination rebuilt the
+        // declaration without it while the request still succeeded (#5210).
+        ...(Array.isArray(raw.allowed_callers)
+          ? { allowed_callers: raw.allowed_callers.filter((c): c is string => typeof c === "string") }
+          : {}),
       });
       continue;
     }

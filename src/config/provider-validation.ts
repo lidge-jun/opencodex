@@ -6,6 +6,7 @@ import {
 } from "../providers/model-discovery-limits";
 import { isDeclaredReasoningEffort, modelRecordValue } from "../reasoning-effort";
 import { encodeRoutedModelId } from "../providers/slug-codec";
+import { providerForwardClientHeadersConfigError } from "../lib/provider-client-headers";
 import {
   isWirePinnedModel,
   MODEL_ADAPTER_OVERRIDE_ALLOWED,
@@ -125,6 +126,8 @@ export function providerHeadersConfigError(headers: unknown): string | null {
   return null;
 }
 
+export { providerForwardClientHeadersConfigError };
+
 /** Keep the configured API-key header style scoped to Anthropic-compatible key auth. */
 export function apiKeyTransportConfigError(
   provider: Pick<OcxProviderConfig, "adapter" | "authMode" | "apiKeyTransport">,
@@ -140,6 +143,15 @@ export function apiKeyTransportConfigError(
     return "apiKeyTransport requires Anthropic API-key authentication";
   }
   return null;
+}
+
+/** Keep local project-file disclosure specific to the Command Code native adapter. */
+export function projectContextConfigError(provider: Pick<OcxProviderConfig, "adapter" | "projectContext">): string | null {
+  if (provider.projectContext === undefined) return null;
+  if (provider.projectContext !== "off" && provider.projectContext !== "on") {
+    return 'projectContext must be "off" or "on"';
+  }
+  return provider.adapter === "command-code" ? null : "projectContext is supported only by the command-code adapter";
 }
 
 /** Shared strict boundary for the per-provider upstream HTTP-version pin. */
@@ -370,7 +382,7 @@ export function modelAdapterRecordConfigError(
     if (typeof entry !== "string" || !MODEL_ADAPTER_OVERRIDE_ALLOWED.has(entry)) {
       return `${field}.${key} must be one of: ${[...MODEL_ADAPTER_OVERRIDE_ALLOWED].join(", ")}`;
     }
-    if (isWirePinnedModel(providerName, key.trim())) {
+    if (isWirePinnedModel(providerName, key.trim(), provider)) {
       return `${field}.${key} cannot be overridden: the upstream only speaks one wire for this model`;
     }
   }
@@ -381,6 +393,19 @@ export function modelAdapterRecordConfigError(
 function capabilityRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     && [Object.prototype, null].includes(Object.getPrototypeOf(value));
+}
+
+/** Strict per-model context-tier values; PATCH accepts null to clear the entire map. */
+export function contextTierRecordConfigError(value: unknown, allowClear = false): string | null {
+  if (value === undefined || (allowClear && value === null)) return null;
+  if (!capabilityRecord(value)) return "modelContextTiers must be a plain object";
+  if (Object.keys(value).length > MODEL_DISCOVERY_MAX_MODELS) return "modelContextTiers has too many models";
+  for (const [id, tier] of Object.entries(value)) {
+    if (!isValidModelDiscoveryModelId(id) || ["__proto__", "prototype", "constructor"].includes(id))
+      return "modelContextTiers keys must be exact non-reserved model ids";
+    if (tier !== "default" && tier !== "long_context") return "modelContextTiers values must be default or long_context";
+  }
+  return null;
 }
 
 /** Strict writes; only PATCH may carry deletion tombstones. Model IDs are exact. */

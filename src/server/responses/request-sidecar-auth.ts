@@ -3,6 +3,7 @@ import type { PreparedResponsesRequest } from "./request-prepare";
 import type { ResponsesTransport } from "./request-transport";
 import type { ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
+import { omitEarlierCompactionImages } from "../../responses/compaction-images";
 import {
   shouldResolveOpenAiVisionSidecar,
   resolveOpenAiVisionModel,
@@ -50,12 +51,18 @@ export async function prepareResponsesSidecarAuth(
   let openAiSidecar: ResolvedOpenAiForwardSidecar | undefined;
   const visionDescribeTerminal = options.visionDescribeTerminal === true;
   const routedCompaction = parsed._compactionRequest === true
-    && !isCanonicalOpenAiForwardProvider(route.provider);
+    && (!isCanonicalOpenAiForwardProvider(route.provider) || parsed._portableCompaction === true);
+  if (routedCompaction) parsed.context.messages = omitEarlierCompactionImages(parsed.context.messages);
   const needsOpenAiVision = !visionDescribeTerminal
     && shouldResolveOpenAiVisionSidecar(config, route.provider, route.modelId, parsed, route.providerName);
-  const needsOpenAiSearch = !routedCompaction && !transportState.adapter.runTurn
-    && (shouldResolveOpenAiWebSearchSidecar(config, parsed, isPassthrough)
-      || shouldResolveOpenAiPassthroughWebSearchBridge(route.provider, parsed, isPassthrough));
+  // LOCAL PATCH (runturn-websearch): runTurn adapters can run the web-search
+  // sidecar through src/web-search/run-turn-loop.ts, so resolve the helper
+  // credential for them too. The passthrough bridge stays fetch-only.
+  const needsOpenAiSearch = !routedCompaction
+    && (transportState.adapter.runTurn
+      ? shouldResolveOpenAiWebSearchSidecar(config, parsed, isPassthrough)
+      : (shouldResolveOpenAiWebSearchSidecar(config, parsed, isPassthrough)
+        || shouldResolveOpenAiPassthroughWebSearchBridge(route.provider, parsed, isPassthrough)));
   if (needsOpenAiVision || needsOpenAiSearch) {
     try {
       const candidates = listOpenAiForwardSidecarCandidates(config);

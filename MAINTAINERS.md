@@ -32,11 +32,14 @@ when a maintainer steps down.
   `main` happens only from `dev`. The target-branch check accepts `dev` alone.
 - The **`enforce-target`** CI check rejects pull requests whose head
   ancestry sits on the **`main`** tip while far behind **`dev`**, and rejects
-  empty, thin, or malformed descriptions; PRs whose title or description
-  mentions `gui` must include a screenshot of the UI change in the description.
+  empty, thin, or malformed descriptions; PRs that change files under `gui/`
+  must include a screenshot of the UI change in the description. Drag the image
+  into the description instead of committing it to the PR branch; command-line
+  uploads use the `pr-assets` branch and a commit-SHA link.
   Contributor PRs (authors without repository push permission) open in draft
   and stay there until a four-box review-readiness checklist in the
-  description is complete: local CI green, branch on the latest `dev` commit,
+  description is complete: required local validation passed with its scope documented,
+  branch on the latest `dev` commit,
   all correct Codex and CodeRabbit findings fixed, and the ready-for-review
   confirmation. When all four boxes are ticked the gate marks the PR ready and
   notifies the maintainers listed in `MAINTAINERS.md` (excluding the author).
@@ -47,8 +50,11 @@ when a maintainer steps down.
   Before a completion is accepted, the gate verifies the checklist claims
   it can check itself: the branch must be on the latest `dev` commit or at
   most 10 commits behind it, and Codex/CodeRabbit findings must be resolved.
-  The local-CI box is an author attestation only — fork contributors cannot
-  start repository CI; a maintainer has to — so the gate never disproves it;
+  The local-validation box follows the full-suite default and documented resource
+  exception in [AGENTS.md](./AGENTS.md#commands); focused regression tests remain
+  mandatory under that exception. It is an author attestation only — fork
+  contributors cannot start repository CI; a maintainer has to — so the gate
+  never disproves it;
   a new push still resets every box. A disproved claim unticks the matching
   box and keeps the PR a draft.
   Authors with repository push permission skip the ancestry heuristic only. As

@@ -284,7 +284,12 @@ describe("enforce-pr-target workflow", () => {
     assert.match(workflow, /stackedBase/);
     assert.match(workflow, /github\.rest\.pulls\.list/);
     assert.match(workflow, /treating as stacked/);
-    assert.match(workflow, /other\.base\?\.repo\?\.owner/);
+    assert.match(workflow, /other\.head\?\.repo\?\.owner/);
+    assert.doesNotMatch(
+      workflow,
+      /other\.head\?\.repo\?\.(?:owner\?\.login|name)\s*\?\?/,
+      "stacked-base detection must fail closed when an open PR head repo is unavailable",
+    );
     const qualityCall = workflow.match(
       /collectPrQualityFailures\(\{([\s\S]*?)\}\);/,
     );

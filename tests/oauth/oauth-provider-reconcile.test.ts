@@ -504,6 +504,43 @@ describe("OAuth provider reconciliation", () => {
     expect(config.providers.kimi.requiresReasoningPlaceholderModels).toEqual([]);
   });
 
+  test("preserves an operator output budget that no OAuth preset declares", () => {
+    // The devin preset declares neither output field, so the delete branch was
+    // the only branch either of them ever took: a hand-edited budget was gone
+    // before the next startup finished, leaving the adapter's own fallback as
+    // the only reachable cap (#5190). Reconciliation still owns the input-side
+    // catalog, which is why modelContextWindows is asserted alongside.
+    const preset = OAUTH_PROVIDERS.devin.providerConfig;
+    expect(preset.defaultMaxOutputTokens).toBeUndefined();
+    expect(preset.modelMaxOutputTokens).toBeUndefined();
+    const config = {
+      port: 10100,
+      defaultProvider: "devin",
+      googleAntigravityStaticCatalogVersion: 1,
+      providers: {
+        devin: {
+          ...structuredClone(preset),
+          defaultMaxOutputTokens: 64_000,
+          modelMaxOutputTokens: { "swe-2": 32_000 },
+          modelContextWindows: { "swe-2": 1 },
+        },
+      },
+    } satisfies OcxConfig;
+
+    reconcileOAuthProviders(config, false);
+
+    expect(config.providers.devin.defaultMaxOutputTokens).toBe(64_000);
+    expect(config.providers.devin.modelMaxOutputTokens).toEqual({ "swe-2": 32_000 });
+    expect(config.providers.devin.modelContextWindows).toEqual(preset.modelContextWindows!);
+
+    // A preset that does declare a budget still refreshes the saved row: this
+    // is a narrower delete branch, not an exemption from reconciliation.
+    config.providers.devin.defaultMaxOutputTokens = 1;
+    reconcileOAuthProviders(config, false);
+    expect(config.providers.devin.defaultMaxOutputTokens).toBe(1);
+    expect(OAUTH_PROVIDERS.anthropic.providerConfig.defaultMaxOutputTokens).toBeGreaterThan(0);
+  });
+
   test("refreshes Grok 4.6 levels while runtime fills the default without overwriting user intent", () => {
     const home = mkdtempSync(join(tmpdir(), "ocx-grok-46-reconcile-"));
     homes.push(home);

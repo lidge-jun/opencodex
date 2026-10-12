@@ -15,13 +15,25 @@ import { clearKeyCooldowns } from "../../../src/providers/key-failover";
 import { fastPolicyForModel } from "../../../src/providers/service-tier";
 import { handleChatCompletions } from "../../../src/server/chat-completions";
 import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
+import { acquireOwnedSpendHome } from "../../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
 
 const PROVIDER_NAME = "native-tier-fixture";
 const MODEL_ID = "model";
 const originalFetch = globalThis.fetch;
+let releaseSpendHome: (() => void) | undefined;
+const takeSpendHome = (): void => {
+  // Taken only for direct Chat dispatches so pure policy cases do not open the journal.
+  releaseSpendHome ??= acquireOwnedSpendHome();
+};
+const dropSpendHome = (): void => {
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
+};
 
 afterEach(() => {
+  // Released first so a failed assertion cannot leave the active home lease live.
+  dropSpendHome();
   globalThis.fetch = originalFetch;
   clearKeyCooldowns(PROVIDER_NAME);
 });
@@ -219,6 +231,7 @@ describe("native Chat passthrough service-tier policy", () => {
       providers: { [PROVIDER_NAME]: target },
     } as OcxConfig;
 
+    takeSpendHome();
     const response = await handleChatCompletions(
       new Request("http://localhost/v1/chat/completions", {
         method: "POST",
@@ -233,9 +246,13 @@ describe("native Chat passthrough service-tier policy", () => {
       { model: "", provider: "" },
     );
 
-    expect(response.status).toBe(200);
-    expect(captured).toHaveLength(1);
-    expect(captured[0]).not.toHaveProperty("service_tier");
+    try {
+      expect(response.status).toBe(200);
+      expect(captured).toHaveLength(1);
+      expect(captured[0]).not.toHaveProperty("service_tier");
+    } finally {
+      await response.body?.cancel();
+    }
   });
 
   test("forced Fast injects the policy wire value and forced default drops the caller tier", () => {
@@ -250,6 +267,8 @@ describe("native Chat passthrough service-tier policy", () => {
     const previousHome = process.env.OPENCODEX_HOME;
     const home = mkdtempSync(join(tmpdir(), "ocx-native-tier-failover-"));
     process.env.OPENCODEX_HOME = home;
+    // Taken after this case installs its home so key-failover dispatch owns that journal.
+    takeSpendHome();
     const captured: Array<{ authorization: string | null; body: Record<string, unknown> }> = [];
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       captured.push({
@@ -301,11 +320,17 @@ describe("native Chat passthrough service-tier policy", () => {
         { model: "", provider: "" },
       );
 
-      expect(response.status).toBe(200);
-      expect(captured.map(entry => entry.authorization)).toEqual(["Bearer key-one", "Bearer key-two"]);
-      expect(captured).toHaveLength(2);
-      for (const entry of captured) expect(entry.body).not.toHaveProperty("service_tier");
+      try {
+        expect(response.status).toBe(200);
+        expect(captured.map(entry => entry.authorization)).toEqual(["Bearer key-one", "Bearer key-two"]);
+        expect(captured).toHaveLength(2);
+        for (const entry of captured) expect(entry.body).not.toHaveProperty("service_tier");
+      } finally {
+        await response.body?.cancel();
+      }
     } finally {
+      // Released before this case restores and removes its home so no live database is unlinked.
+      dropSpendHome();
       if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousHome;
       removeTreeWithRetry(home);
@@ -420,6 +445,7 @@ describe("main and native Chat tier authorization parity", () => {
     const target = provider({
       modelCapabilities: { [MODEL_ID]: { inputModalities: ["text", "image"] } },
     });
+    takeSpendHome();
     const response = await handleChatCompletions(
       new Request("http://localhost/v1/chat/completions", {
         method: "POST",
@@ -439,15 +465,19 @@ describe("main and native Chat tier authorization parity", () => {
       { model: "", provider: "" },
     );
 
-    expect(response.status).toBe(200);
-    expect(captured).toHaveLength(1);
-    const parts = (JSON.parse(captured[0]!) as { messages: Array<{ content: unknown }> })
-      .messages.flatMap(m => (Array.isArray(m.content) ? m.content : []))
-      .filter((p): p is { type: string; image_url: { url: string } } =>
-        typeof p === "object" && p !== null && (p as { type?: unknown }).type === "image_url");
-    // Well over the 3.5MiB image budget, and still byte-identical on the wire.
-    expect(parts).toHaveLength(4);
-    for (const part of parts) expect(part.image_url.url).toBe(url);
+    try {
+      expect(response.status).toBe(200);
+      expect(captured).toHaveLength(1);
+      const parts = (JSON.parse(captured[0]!) as { messages: Array<{ content: unknown }> })
+        .messages.flatMap(m => (Array.isArray(m.content) ? m.content : []))
+        .filter((p): p is { type: string; image_url: { url: string } } =>
+          typeof p === "object" && p !== null && (p as { type?: unknown }).type === "image_url");
+      // Well over the 3.5MiB image budget, and still byte-identical on the wire.
+      expect(parts).toHaveLength(4);
+      for (const part of parts) expect(part.image_url.url).toBe(url);
+    } finally {
+      await response.body?.cancel();
+    }
   });
 });
 

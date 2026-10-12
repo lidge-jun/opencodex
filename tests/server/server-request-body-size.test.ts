@@ -17,8 +17,10 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-server-request-body-size-test");
 let isolatedCodexHome: IsolatedCodexHome | null = null;
+let previousHome: string | undefined;
 
 beforeEach(() => {
+  previousHome = process.env.OPENCODEX_HOME;
   if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
   mkdirSync(TEST_DIR, { recursive: true });
   process.env.OPENCODEX_HOME = TEST_DIR;
@@ -26,6 +28,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = previousHome;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
   if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
@@ -56,7 +60,7 @@ describe("server maxRequestBodySize (Issue #1601)", () => {
       // Drain the response so the connection closes cleanly.
       await res.text();
     } finally {
-      void server.stop(true);
+      await server.stop(true);
     }
   });
 });
@@ -92,7 +96,7 @@ describe("configurable listener body size (Issue #3573)", () => {
       expect(result.refused).toBe(false);
       expect(result.status).not.toBeNull();
     } finally {
-      void server.stop(true);
+      await server.stop(true);
     }
   });
 
@@ -105,7 +109,7 @@ describe("configurable listener body size (Issue #3573)", () => {
     try {
       expect((await postFixedBody(server.port)).refused).toBe(true);
     } finally {
-      void server.stop(true);
+      await server.stop(true);
     }
   });
 });
@@ -270,6 +274,112 @@ describe("raised inbound body admission lifetime", () => {
     } finally { complete.resolve(); await first; }
     await assertBodyCapacity(204);
   });
+
+  for (const rejects of [false, true]) {
+    test(`request abort cancels an unconsumed response and waits for settlement (rejects=${rejects})`, async () => {
+      const abort = new AbortController();
+      const finishCancel = bodyDeferred();
+      const reason = new Error("fixture request abort");
+      let cancelledWith: unknown;
+      let cancellations = 0;
+      let pulls = 0;
+      const response = await admittedBodyWork(async () => new Response(new ReadableStream<Uint8Array>({
+        pull() { pulls++; },
+        async cancel(value) {
+          cancellations++;
+          cancelledWith = value;
+          await finishCancel.promise;
+          if (rejects) throw new Error("fixture producer cancellation failure");
+        },
+      }, { highWaterMark: 0 })), admissionRequest("/v1/responses", "{}", { signal: abort.signal }));
+      try {
+        await assertBodyCapacity(503);
+        abort.abort(reason);
+        await assertBodyCapacity(503);
+        assert.equal(cancellations, 1);
+        assert.equal(cancelledWith, reason);
+        assert.equal(pulls, 0);
+        assert.equal(response.bodyUsed, false);
+        finishCancel.resolve();
+        await Bun.sleep(0); // Let cancellation and the admission finalizer settle.
+        await assertBodyCapacity(204);
+      } finally {
+        finishCancel.resolve();
+        await response.body?.cancel().catch(() => undefined);
+      }
+    });
+  }
+
+  test("request abort during work cancels its eventual body before releasing capacity", async () => {
+    const abort = new AbortController();
+    const started = bodyDeferred();
+    const complete = bodyDeferred();
+    const finishCancel = bodyDeferred();
+    let cancellations = 0;
+    const first = admittedBodyWork(async () => {
+      started.resolve();
+      await complete.promise;
+      return new Response(new ReadableStream<Uint8Array>({
+        cancel() { cancellations++; return finishCancel.promise; },
+      }, { highWaterMark: 0 }));
+    }, admissionRequest("/v1/responses", "{}", { signal: abort.signal }));
+    try {
+      await started.promise;
+      abort.abort();
+      await assertBodyCapacity(503);
+      assert.equal(cancellations, 0);
+      complete.resolve();
+      await first;
+      await assertBodyCapacity(503);
+      assert.equal(cancellations, 1);
+      finishCancel.resolve();
+      await Bun.sleep(0);
+      await assertBodyCapacity(204);
+    } finally {
+      complete.resolve();
+      finishCancel.resolve();
+      await (await first).body?.cancel().catch(() => undefined);
+    }
+  });
+
+  for (const abortFirst of [false, true]) {
+    test(`request abort and explicit cancel release exactly once (abortFirst=${abortFirst})`, async () => {
+      const abort = new AbortController();
+      const finishCancel = bodyDeferred();
+      const reason = new Error("fixture request abort race");
+      let cancellations = 0;
+      let cancelledWith: unknown;
+      const response = await admittedBodyWork(async () => new Response(new ReadableStream<Uint8Array>({
+        cancel(value) {
+          cancellations++;
+          cancelledWith = value;
+          return finishCancel.promise;
+        },
+      }, { highWaterMark: 0 })), admissionRequest("/v1/responses", "{}", { signal: abort.signal }));
+      let next: Response | undefined;
+      try {
+        if (abortFirst) abort.abort(reason);
+        const cancelled = response.body!.cancel("fixture explicit cancel").catch(error => error);
+        if (!abortFirst) abort.abort(reason);
+        await assertBodyCapacity(503);
+        assert.equal(cancellations, 1);
+        assert.equal(cancelledWith, abortFirst ? reason : "fixture explicit cancel");
+        finishCancel.resolve();
+        await cancelled;
+        await Bun.sleep(0);
+        await assertBodyCapacity(204);
+        next = await admittedBodyWork(async () => new Response("next reservation"));
+        assert.equal(next.status, 200);
+        await assertBodyCapacity(503); // A double release would admit this peer.
+        assert.equal(cancellations, 1);
+      } finally {
+        finishCancel.resolve();
+        await response.body?.cancel().catch(() => undefined);
+        await next?.body?.cancel();
+      }
+      await assertBodyCapacity(204);
+    });
+  }
 
   test("preserves pre-aborted requests' existing error path", async () => {
     const holder = await admittedBodyWork(async () => new Response("held"));

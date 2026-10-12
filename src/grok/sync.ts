@@ -31,7 +31,7 @@ async function defaultFetchAllModels(config: OcxConfig): Promise<CatalogModel[]>
 export async function syncGrokConfig(
   port: number,
   config: OcxConfig,
-  opts: { hostname?: string; grokHome?: string } = {},
+  opts: { hostname?: string; grokHome?: string; refreshOnly?: { admit: () => boolean } } = {},
   deps: GrokSyncDeps = { fetchAllModels: defaultFetchAllModels, injectGrokConfig },
 ): Promise<GrokInjectResult> {
   let projection: ReturnType<typeof projectGrokCatalog>;
@@ -58,6 +58,7 @@ export async function syncGrokConfig(
       ? (opts.hostname ?? config.hostname)
       : targetUrl.hostname,
     ...(opts.grokHome !== undefined ? { grokHome: opts.grokHome } : {}),
+    ...opts.refreshOnly ? { refreshOnly: opts.refreshOnly } : {},
     excluded: new Set(config.grokExcludedModels ?? []),
     catalogModelIds: projection.catalogModelIds,
     disabledProviderNamespaces: projection.disabledProviderNamespaces,

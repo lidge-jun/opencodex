@@ -11,12 +11,15 @@ export type { CodexRestartCode, CodexRestartResponse };
 // rewrites the catalog first, so this is slower than an ordinary management call.
 const DEFAULT_TIMEOUT_MS = 30_000;
 
-export interface CodexRestartOutcome {
-  ok: boolean;
-  result?: CodexRestartResponse;
-  /** Localized by the caller through the format* options. */
-  message?: string;
-}
+/**
+ * Success carries the response, failure carries the reason, and neither carries both.
+ * Stated as a union so the reporting surface never has to invent a message for a failure
+ * it was handed without one — which is the shape `alert()` let through unnoticed.
+ */
+export type CodexRestartOutcome =
+  | { ok: true; result: CodexRestartResponse; message?: undefined }
+  /** `message` is localized by the caller through the format* options. */
+  | { ok: false; result?: undefined; message: string };
 
 export interface CodexRestartOptions {
   fetchFn?: typeof fetch;

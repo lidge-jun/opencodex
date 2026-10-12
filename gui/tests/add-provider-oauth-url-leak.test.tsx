@@ -149,6 +149,8 @@ function ProvidersOAuthHarness({ provider = "orcarouter-oauth", apiBase = "", on
       <button onClick={() => { void cancelLoginOAuth(provider); }}>Cancel login</button>
       <span data-testid="oauth-busy">{busy ?? "idle"}</span>
       <span data-testid="oauth-login-info">{loginInfo?.url ?? "no-login-info"}</span>
+      <span data-testid="oauth-device-code">{loginInfo?.deviceCode ?? ""}</span>
+      <span data-testid="oauth-instructions">{loginInfo?.instructions ?? ""}</span>
       <button
         type="button"
         disabled={busy === provider}
@@ -561,6 +563,39 @@ function raceServer() {
 }
 
 for (const surface of ["providers", "modal"] as const) {
+  test(`${surface}: polling replaces a device hint with the current manual continuation`, async () => {
+    const server = raceServer();
+    try {
+      await mountRaceSurface(surface);
+      await server.answerLogin(0, A_URL);
+      server.holdStatus(Promise.resolve(Response.json({ loggedIn: false, hint: {
+        url: B_URL, deviceCode: "ABCD-EFGH", instructions: "Approve this device",
+      } })));
+      await server.tick();
+      expect(host.textContent).toContain(B_URL);
+      expect(host.textContent).not.toContain(A_URL);
+      expect(host.textContent).toContain("ABCD-EFGH");
+      expect(host.textContent).toContain("Approve this device");
+      if (surface === "modal") expect(host.querySelector(".login-hint-paste")).toBeNull();
+
+      server.holdStatus(Promise.resolve(Response.json({ loggedIn: false, hint: {
+        url: A_URL, instructions: "Use the manual fallback",
+      } })));
+      await server.tick();
+      expect(host.textContent).toContain(A_URL);
+      expect(host.textContent).not.toContain(B_URL);
+      expect(host.textContent).not.toContain("ABCD-EFGH");
+      expect(host.textContent).not.toContain("Approve this device");
+      expect(host.textContent).toContain("Use the manual fallback");
+      if (surface === "modal") expect(host.querySelector(".login-hint-paste-input")).not.toBeNull();
+
+      server.holdStatus(undefined);
+      await server.finish();
+      expect(host.textContent).not.toContain("Use the manual fallback");
+      expect(host.textContent).not.toContain(A_URL);
+    } finally { await server.dispose(); }
+  });
+
   for (const trigger of ["pagehide", "remount", "explicit"] as const) {
     test(`F2 ${surface}: ${trigger} waits for cancel delivery and replacement completes`, async () => {
       const server = raceServer();
@@ -743,9 +778,13 @@ for (const surface of ["providers", "modal"] as const) {
       await server.deliverCancel();
       await server.answerLogin(1, B_URL);
       server.holdStatus(undefined);
-      await act(async () => { status.resolve(Response.json({ loggedIn: true, done: true })); });
+      await act(async () => { status.resolve(Response.json({ loggedIn: true, done: true, hint: {
+        url: A_URL, deviceCode: "STALE-CODE", instructions: "Stale login instructions",
+      } })); });
       expect(settled).toEqual([]);
       expect(host.textContent).toContain(B_URL);
+      expect(host.textContent).not.toContain("STALE-CODE");
+      expect(host.textContent).not.toContain("Stale login instructions");
       await server.finish();
       expect(settled).toEqual(["claude"]);
     } finally {

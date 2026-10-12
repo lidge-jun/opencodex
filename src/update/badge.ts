@@ -1,20 +1,7 @@
-/**
- * Cached "is an update available?" answer for the GUI sidebar badge.
- *
- * `/api/update/check` spawns the installing manager's `view` command on every call
- * (~1s, network-bound), so a
- * sidebar that polls it would spawn a process per tick on every page of the GUI.
- * The badge instead READS the 20h version cache the CLI update prompt already
- * maintains (`~/.opencodex/version.json`).
- *
- * This is deliberately read-only: it must never trigger a registry refresh. The GUI
- * polls it, so a refresh-on-read would let repeated polls launch repeated manager `view`
- * helpers with no coalescing. Cache warming stays with `ocx start`
- * (`triggerBackgroundRefreshIfStale` in `src/update/notify.ts`) and with the explicit
- * `/api/update/check` the user reaches by clicking the sidebar update button.
- */
+/** The badge only reads package cache. Server and explicit checks produce it;
+ * missing, wrong-channel, and 40-hour-old cache answers are unknown. */
 import { currentVersion, defaultUpdateTag, detectInstall, type Channel } from "./index";
-import { isNewer, isSourceBuildVersion, readVersionCache } from "./notify";
+import { CACHE_MAX_AGE_MS, isNewer, isSourceBuildVersion, readVersionCache } from "./notify";
 
 export interface UpdateBadge {
   /** True only when a newer version exists on the current channel. */
@@ -22,6 +9,7 @@ export interface UpdateBadge {
   currentVersion: string;
   latestVersion: string | null;
   channel: Channel;
+  installer: ReturnType<typeof detectInstall> | "desktop";
   /** False for source checkouts, where the GUI cannot offer a one-click update. */
   canUpdate: boolean;
   /** True when no cached registry answer exists yet, so "no update" is unproven. */
@@ -32,12 +20,14 @@ export interface UpdateBadgeDeps {
   currentVersion: () => string;
   detectInstall: () => ReturnType<typeof detectInstall>;
   readCache: (channel: Channel) => ReturnType<typeof readVersionCache>;
+  now?: () => number;
 }
 
 const defaultDeps: UpdateBadgeDeps = {
   currentVersion,
   detectInstall,
   readCache: readVersionCache,
+  now: Date.now,
 };
 
 /**
@@ -53,7 +43,8 @@ export function readUpdateBadge(deps: UpdateBadgeDeps = defaultDeps): UpdateBadg
     currentVersion: current,
     latestVersion: null,
     channel,
-    canUpdate: installer !== "source",
+    installer,
+    canUpdate: installer !== "source" && installer !== "mise",
     unknown: true,
   };
   // A source checkout has nothing to compare against, so "unknown" is not useful there.
@@ -63,6 +54,9 @@ export function readUpdateBadge(deps: UpdateBadgeDeps = defaultDeps): UpdateBadg
 
   const cache = deps.readCache(channel);
   if (!cache) return base;
+  const checked = Date.parse(cache.last_checked_at);
+  const now = deps.now?.() ?? Date.now();
+  if (!Number.isFinite(checked) || checked > now || now - checked >= CACHE_MAX_AGE_MS) return base;
 
   return {
     ...base,

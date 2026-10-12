@@ -113,7 +113,7 @@ column.
 ├──────────────────────────────────────┤
 │ LAST 7 DAYS                          │  range echoed from the response
 │ REQUESTS      TOKENS         COST    │  micro labels, 10px, letterspaced
-│ 1,746         12.4M         $8.21    │  tabular-nums, 13px
+│ 1,746         12M           $8.21    │  tabular-nums, 13px
 │ ▁▂▃▅▂▁▃                              │  7d usage trend from usage.days[]
 ├──────────────────────────────────────┤
 │ OpenAI          ▓▓▓▓▓░░░░░  44%      │  quota rows, one per provider
@@ -170,7 +170,7 @@ Live data reaches `requests: 232507`, `totalTokens: 36536664705`,
 `estimatedCostUsd: 34018.25`. Rules:
 
 - Counts: `1,746` → `12.4K` → `1.2M` (3 significant figures, SI suffix at 10 000).
-- Tokens: always suffixed (`12.4M`, `36.5B`).
+- Tokens: always suffixed with integer values (`12M`, `37B`).
 - Cost: `$8.21` below 1 000, `$34.0K` above.
 - All numerics use `tabular-nums` so digits do not reflow while polling.
 - Timestamps normalize by magnitude: values below `1e12` are seconds, at or above are

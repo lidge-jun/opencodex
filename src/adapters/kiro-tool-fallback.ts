@@ -9,7 +9,7 @@ function contentText(content: string | OcxContentPart[]): string {
   if (typeof content === "string") return content;
   return content
     .map(part => {
-      if (part.type === "text") return part.text;
+      if (part.type === "text" || part.type === "document") return part.text;
       if (part.type === "image") return `[image:${part.detail ?? "auto"}]`;
       return "";
     })

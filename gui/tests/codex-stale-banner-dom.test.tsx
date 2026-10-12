@@ -7,6 +7,8 @@ import { LanguageProvider } from "../src/i18n/provider";
 import { CodexStaleBanner } from "../src/components/codex-stale-banner";
 import { useCodexRestart } from "../src/use-codex-restart";
 import type { CodexRestartResponse } from "../src/codex-restart";
+import type { NoticeTone } from "../src/ui";
+import { acceptActionDialog, actionDialogOpen, dismissActionDialog } from "./helpers/action-dialog";
 
 /**
  * Real DOM behavior for the staleness surface.
@@ -15,16 +17,39 @@ import type { CodexRestartResponse } from "../src/codex-restart";
  * while a restart from the page-head button left the banner on screen — the
  * refresh only ran from the banner's own click handler. Source-text assertions
  * cannot see that, so these render the components and drive them.
+ *
+ * It also stubbed `confirm()` to true and `alert()` to a no-op, which is how the
+ * desktop defect stayed invisible: inside the app neither draws, so both controls
+ * were dead there while this file was green. Every platform dialog is now a trap —
+ * reaching one fails the test — and consent is answered through the real in-page
+ * dialog instead.
  */
 
-const globals = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
+const globals = ["document", "window", "navigator", "localStorage", "HTMLElement", "IS_REACT_ACT_ENVIRONMENT",
+  "confirm", "alert", "prompt"] as const;
 let previous: Record<(typeof globals)[number], unknown>;
 let win: Window;
 let host: HTMLElement;
 let root: Root | null = null;
 let originalFetch: typeof globalThis.fetch;
-let originalConfirm: typeof globalThis.confirm;
-let originalAlert: typeof globalThis.alert;
+/** Outcome messages the controller published, in order. */
+let reports: Array<{ message: string; tone: NoticeTone }>;
+/** Platform dialogs reached, which must stay empty. */
+let touched: string[];
+
+/** The document the components render into, which is where the dialog is mounted. */
+const dialogDocument = () => win.document as unknown as Document;
+
+/** Opens the consent dialog by clicking, then answers it. */
+async function clickAndAnswer(button: HTMLButtonElement, answer: "accept" | "dismiss"): Promise<void> {
+  await act(async () => { button.click(); });
+  expect(actionDialogOpen(dialogDocument())).toBe(true);
+  await act(async () => {
+    if (answer === "accept") acceptActionDialog(dialogDocument());
+    else dismissActionDialog(dialogDocument());
+    await Promise.resolve();
+  });
+}
 
 function restartBody(overrides: Partial<CodexRestartResponse> = {}): CodexRestartResponse {
   return {
@@ -43,8 +68,8 @@ function restartBody(overrides: Partial<CodexRestartResponse> = {}): CodexRestar
 beforeEach(() => {
   previous = Object.fromEntries(globals.map(k => [k, Reflect.get(globalThis, k)])) as typeof previous;
   originalFetch = globalThis.fetch;
-  originalConfirm = globalThis.confirm;
-  originalAlert = globalThis.alert;
+  reports = [];
+  touched = [];
   win = new Window({ url: "http://localhost/" });
   Object.defineProperty(win.navigator, "language", { configurable: true, value: "en-US" });
   Object.defineProperties(globalThis, {
@@ -52,10 +77,14 @@ beforeEach(() => {
     window: { configurable: true, value: win },
     navigator: { configurable: true, value: win.navigator },
     localStorage: { configurable: true, value: win.localStorage },
+    HTMLElement: { configurable: true, value: win.HTMLElement },
   });
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  Object.defineProperty(globalThis, "confirm", { configurable: true, value: () => true });
-  Object.defineProperty(globalThis, "alert", { configurable: true, value: () => {} });
+  for (const name of ["confirm", "alert", "prompt"] as const) {
+    const trap = () => { touched.push(name); throw new Error(`${name}() must not be reached`); };
+    Object.defineProperty(globalThis, name, { configurable: true, value: trap });
+    Object.defineProperty(win, name, { configurable: true, value: trap });
+  }
 
   host = win.document.createElement("div") as unknown as HTMLElement;
   win.document.body.appendChild(host as never);
@@ -65,11 +94,10 @@ afterEach(() => {
   if (root) act(() => root!.unmount());
   root = null;
   Object.defineProperty(globalThis, "fetch", { configurable: true, value: originalFetch });
-  Object.defineProperty(globalThis, "confirm", { configurable: true, value: originalConfirm });
-  Object.defineProperty(globalThis, "alert", { configurable: true, value: originalAlert });
   for (const key of globals) {
     Object.defineProperty(globalThis, key, { configurable: true, value: previous[key] });
   }
+  expect(touched).toEqual([]);
 });
 
 /** Mirrors how Models.tsx wires the controller, banner, and head action. */
@@ -77,7 +105,11 @@ function Harness(props: {
   initialState: "fresh" | "stale" | "not_running" | "unknown" | null;
   onReload: () => void;
 }) {
-  const controller = useCodexRestart("", { onSettled: () => props.onReload() });
+  const controller = useCodexRestart("", {
+    onSettled: () => props.onReload(),
+    // Models routes this to the shell, which outlives the page; the test just records it.
+    report: (message, tone) => { reports.push({ message, tone }); },
+  });
   return (
     <div>
       <button type="button" data-testid="head" onClick={() => { void controller.restart(); }}
@@ -120,7 +152,7 @@ test("a restart from the PAGE-HEAD button refreshes staleness", async () => {
 
   render(<Harness initialState="stale" onReload={() => { reloads += 1; }} />);
   const head = host.querySelector('[data-testid="head"]') as HTMLButtonElement;
-  await act(async () => { head.click(); });
+  await clickAndAnswer(head, "accept");
 
   expect(reloads).toBe(1);
 });
@@ -137,7 +169,7 @@ test("a restart from the BANNER button refreshes staleness through the same path
 
   render(<Harness initialState="stale" onReload={() => { reloads += 1; }} />);
   const button = host.querySelector(".codex-stale-banner button") as HTMLButtonElement;
-  await act(async () => { button.click(); });
+  await clickAndAnswer(button, "accept");
 
   expect(reloads).toBe(1);
 });
@@ -157,7 +189,7 @@ test("nothing_running also counts as settled", async () => {
 
   render(<Harness initialState="stale" onReload={() => { reloads += 1; }} />);
   const head = host.querySelector('[data-testid="head"]') as HTMLButtonElement;
-  await act(async () => { head.click(); });
+  await clickAndAnswer(head, "accept");
 
   expect(reloads).toBe(1);
 });
@@ -178,16 +210,15 @@ test("an unresolved outcome does not clear the banner", async () => {
 
   render(<Harness initialState="stale" onReload={() => { reloads += 1; }} />);
   const head = host.querySelector('[data-testid="head"]') as HTMLButtonElement;
-  await act(async () => { head.click(); });
+  await clickAndAnswer(head, "accept");
 
   expect(reloads).toBe(0);
   expect(host.querySelector(".codex-stale-banner")).not.toBeNull();
 });
 
-test("a declined confirm sends no request and does not refresh", async () => {
+test("a dismissed consent dialog sends no request and does not refresh", async () => {
   let fetches = 0;
   let reloads = 0;
-  Object.defineProperty(globalThis, "confirm", { configurable: true, value: () => false });
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
     value: async () => {
@@ -198,10 +229,11 @@ test("a declined confirm sends no request and does not refresh", async () => {
 
   render(<Harness initialState="stale" onReload={() => { reloads += 1; }} />);
   const head = host.querySelector('[data-testid="head"]') as HTMLButtonElement;
-  await act(async () => { head.click(); });
+  await clickAndAnswer(head, "dismiss");
 
   expect(fetches).toBe(0);
   expect(reloads).toBe(0);
+  expect(reports).toEqual([]);
 });
 
 test("both controls disable while one restart is pending", async () => {
@@ -223,6 +255,7 @@ test("both controls disable while one restart is pending", async () => {
   const bannerButton = host.querySelector(".codex-stale-banner button") as HTMLButtonElement;
 
   await act(async () => { head.click(); });
+  await act(async () => { acceptActionDialog(dialogDocument()); await Promise.resolve(); });
   // One controller drives both, so the banner's button is disabled too — the two
   // controls on this page can never disagree about whether a restart is running.
   expect(head.disabled).toBe(true);
@@ -248,6 +281,7 @@ test("unmounting during a pending restart does not throw", async () => {
   render(<Harness initialState="stale" onReload={() => {}} />);
   const head = host.querySelector('[data-testid="head"]') as HTMLButtonElement;
   await act(async () => { head.click(); });
+  await act(async () => { acceptActionDialog(dialogDocument()); await Promise.resolve(); });
 
   act(() => root!.unmount());
   root = null;
@@ -258,11 +292,6 @@ test("unmounting during a pending restart does not throw", async () => {
 test("a timeout is localized, not left as the transport's English default", async () => {
   // The hook once dropped formatTimeout when it was rewritten, which silently
   // reverted this string to the helper's hardcoded English.
-  let seen = "";
-  Object.defineProperty(globalThis, "alert", {
-    configurable: true,
-    value: (message: string) => { seen = message; },
-  });
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
     value: async () => { throw new DOMException("timed out", "TimeoutError"); },
@@ -270,10 +299,38 @@ test("a timeout is localized, not left as the transport's English default", asyn
 
   render(<Harness initialState="stale" onReload={() => {}} />);
   const head = host.querySelector('[data-testid="head"]') as HTMLButtonElement;
-  await act(async () => { head.click(); });
+  await clickAndAnswer(head, "accept");
 
   // The English catalog entry, not the transport fallback sentence.
-  expect(seen).toContain("It may still be stopping app-servers");
+  expect(reports).toHaveLength(1);
+  expect(reports[0].message).toContain("It may still be stopping app-servers");
+  expect(reports[0].tone).toBe("err");
+});
+
+test("unmounting while the consent is open withdraws it and sends nothing", async () => {
+  /*
+   * The consent is asynchronous now, so the surface can disappear while the question is on
+   * screen. Answering it afterwards would send a stop against the closure's captured base —
+   * a target the user is no longer looking at.
+   */
+  let fetches = 0;
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: async () => { fetches += 1; return new Response("{}", { status: 200 }); },
+  });
+
+  render(<Harness initialState="stale" onReload={() => {}} />);
+  const head = host.querySelector('[data-testid="head"]') as HTMLButtonElement;
+  await act(async () => { head.click(); });
+  expect(actionDialogOpen(dialogDocument())).toBe(true);
+
+  act(() => root!.unmount());
+  root = null;
+  await act(async () => { await Promise.resolve(); });
+
+  expect(actionDialogOpen(dialogDocument())).toBe(false);
+  expect(fetches).toBe(0);
+  expect(reports).toEqual([]);
 });
 
 test("a settled restart does not call back after unmount", async () => {
@@ -296,6 +353,7 @@ test("a settled restart does not call back after unmount", async () => {
   render(<Harness initialState="stale" onReload={() => { settled += 1; }} />);
   const head = host.querySelector('[data-testid="head"]') as HTMLButtonElement;
   await act(async () => { head.click(); });
+  await act(async () => { acceptActionDialog(dialogDocument()); await Promise.resolve(); });
 
   act(() => root!.unmount());
   root = null;

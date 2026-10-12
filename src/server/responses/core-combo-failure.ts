@@ -1,3 +1,4 @@
+import { codexAccountModelRefusal, codexAccountModelRefusalHardStopCode, type CodexAccountModelRefusal } from "../../combos/failover";
 import { parseRetryAfterMs } from "../../combos";
 import type { ConsumedComboFailure, HandleResponsesOptions } from "./core-options";
 import type { OcxUsage } from "../../types";
@@ -13,6 +14,8 @@ import {
 import { normalizeUpstreamErrorText } from "./core-errors";
 import { resolveClientRetryAfter } from "../../lib/retry-after";
 import { formatErrorResponse } from "../../bridge";
+import { OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE } from "../../adapters/ollama-native";
+import { isNonReplayableResponse, markResponseNonReplayable } from "../../lib/upstream-retry";
 import { usageFromResponsesPayload } from "../request-log";
 import type { ResponsesTerminalStatus } from "../../bridge";
 
@@ -30,8 +33,12 @@ export async function consumeComboFailure(
   signal?: AbortSignal,
   now = Date.now(),
 ): Promise<ConsumedComboFailure> {
+  // Read before the body: the marker lives on this Response object, and the failure below is
+  // rebuilt as a new one that would otherwise lose it.
+  const nonReplayable = isNonReplayableResponse(response);
   const fallback = `Provider error ${response.status}`;
   let classificationText = fallback;
+  let codexModelRefusal: CodexAccountModelRefusal | undefined;
   let usage: OcxUsage | undefined;
   let upstreamCode: string | undefined;
   let upstreamMessage: string | undefined;
@@ -41,27 +48,29 @@ export async function consumeComboFailure(
   // a second body read, so this mirrors its normalization: raw 402/429, or a 5xx whose intact,
   // display-safe body carries a recognized quota message.
   let quotaConfirmedByBody = false;
+  const serverError = response.status >= 500 && response.status < 600;
   try {
-    const body = await readBoundedResponseBody(response, {
-      signal,
-      // Match shouldRetryCodexPoolAccountQuota before treating a 5xx body as quota evidence.
-      fatalUtf8: response.status >= 500 && response.status < 600,
-    });
-    usage = usageFromComboFailureText(body.text);
-    if (
-      response.status >= 500 && response.status < 600
-      && body.displaySafe && !body.truncated
-    ) {
+    const body = await readBoundedResponseBody(response, { signal, reportUtf8Validity: serverError });
+    // A 5xx body counts as quota or classification evidence only when it decoded as valid
+    // UTF-8, matching shouldRetryCodexPoolAccountQuota. A malformed byte keeps the status-only
+    // fallback, with one exception: a cyber-policy refusal must still stop the combo, so the
+    // replacement-decoded text may carry that verdict and nothing else.
+    const utf8Trusted = !serverError || body.utf8Valid === true;
+    if (utf8Trusted) usage = usageFromComboFailureText(body.text);
+    if (serverError && utf8Trusted && body.displaySafe && !body.truncated) {
       const quotaMessage = codexQuotaFailureMessage(body.text);
       quotaConfirmedByBody = quotaMessage !== undefined
         && isRateLimitOrQuotaFailureMessage(quotaMessage);
     }
-    if (body.displaySafe) {
+    if (body.displaySafe && !body.truncated) {
+      if (response.status === 400) codexModelRefusal = codexAccountModelRefusal(response.status, body.text);
       const normalized = normalizeUpstreamErrorText(body.text, fallback);
-      classificationText = normalized.safeText;
-      upstreamCode = normalized.code;
-      upstreamMessage = normalized.message;
-      upstreamType = normalized.type;
+      if (utf8Trusted || isCyberPolicyCode(normalized.code) || isCyberPolicyMessage(normalized.safeText)) {
+        classificationText = normalized.safeText;
+        upstreamCode = codexAccountModelRefusalHardStopCode(response.status, body.text) ?? normalized.code;
+        upstreamMessage = normalized.message;
+        upstreamType = normalized.type;
+      }
     }
   } catch (error) {
     if (signal?.aborted) throw error;
@@ -97,18 +106,24 @@ export async function consumeComboFailure(
     now,
     includeDefault: false,
   });
+  const failureResponse = formatErrorResponse(
+    response.status,
+    cyberFailure ? (upstreamType ?? CYBER_POLICY_ERROR_CODE) : "upstream_error",
+    message,
+    {
+      ...(normalizedUpstreamCode !== undefined ? { code: normalizedUpstreamCode } : {}),
+      ...(clientRetryAfter !== undefined ? { retryAfter: clientRetryAfter } : {}),
+    },
+  );
+  if (nonReplayable) markResponseNonReplayable(failureResponse);
   return {
-    response: formatErrorResponse(
-      response.status,
-      cyberFailure ? (upstreamType ?? CYBER_POLICY_ERROR_CODE) : "upstream_error",
-      message,
-      {
-        ...(normalizedUpstreamCode !== undefined ? { code: normalizedUpstreamCode } : {}),
-        ...(clientRetryAfter !== undefined ? { retryAfter: clientRetryAfter } : {}),
-      },
-    ),
+    response: failureResponse,
+    ...(nonReplayable ? { nonReplayable: true } : {}),
     classificationText,
+    ...(codexModelRefusal !== undefined ? { codexModelRefusal } : {}),
     ...(normalizedUpstreamCode !== undefined ? { upstreamCode: normalizedUpstreamCode } : {}),
+    ...(upstreamMessage !== undefined ? { upstreamMessage } : {}),
+    ...(upstreamType !== undefined ? { upstreamType } : {}),
     ...(!cyberFailure && cooldownRetryAfter !== undefined ? { retryAfter: cooldownRetryAfter } : {}),
     // The EFFECTIVE classification decides, not the raw status. An upstream that wraps a quota
     // refusal in a 5xx still carries `x-codex-*-reset-at`, and gating on 402/429 alone threw
@@ -207,4 +222,16 @@ export function buildComboChildHeaders(parentHeaders: HeadersInit): Headers {
   childHeaders.delete("content-length");
   childHeaders.delete("content-encoding");
   return childHeaders;
+}
+
+/**
+ * A member's local Ollama late-attribution refusal: the exact proxy-owned constant on the exact
+ * local wire shape, from a replayable attempt. The caller replaces only the client response with
+ * the literal constant envelope; classification inputs are never rewritten.
+ */
+export function isLateAttributionRefusal(failure: ConsumedComboFailure): boolean {
+  return !failure.nonReplayable
+    && failure.response.status === 413
+    && failure.upstreamCode === "request_too_large"
+    && failure.upstreamMessage === OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE;
 }

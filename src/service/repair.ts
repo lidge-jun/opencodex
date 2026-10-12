@@ -1,3 +1,7 @@
+import { existsSync } from "node:fs";
+import { getConfigDir } from "../config";
+import { durableBunRuntime, type DurableBunRuntime } from "../lib/bun-runtime";
+import { assertSelectedRuntimeWritable, type RuntimePreflightDeps } from "../lib/bun-runtime-preflight";
 import { randomUUID } from "node:crypto";
 import { defaultWinswEntry, installWinswService } from "../lib/winsw";
 import { resolveWindowsTaskDiagnosticUserId, diagnoseService } from "./diagnostics";
@@ -5,7 +9,8 @@ import type { ServiceDiagnostic } from "./diagnostics";
 import { assertServiceEnvironmentMatchesInstall, assertServiceAuthEnvironment } from "./guards";
 import { installLaunchd, restartLaunchdJob } from "./launchd";
 import type { LaunchdInstallOutcome } from "./launchd";
-import { TASK, writeServiceInstallState, serviceSourceDir } from "./state";
+import { TASK, writeServiceInstallState, serviceSourceDir, resolveServiceOwnership, serviceLauncherPathDiagnostic } from "./state";
+import type { ServiceOwnership, ServiceOwnershipResolution } from "./state";
 import { installSystemd } from "./systemd";
 import { writeWindowsSchedulerAssets, reregisterWindowsSchedulerTask, windowsSchedulerRegistrationMatchesSnapshot, restoreWindowsSchedulerTaskIfAbsent, startWindows, stopWindows, statusWindowsXml } from "./windows-ops";
 import { probeWindowsSchedulerTask, SCHEDULER_SETTLE_DELAYS_MS, settleDelay } from "./windows-scheduler";
@@ -13,6 +18,7 @@ import type { WindowsSchedulerTaskProbe } from "./windows-scheduler";
 import { taskXmlSection, taskXmlWithoutCommentsAndCdata, taskXmlElementCount, taskXmlOptionalValueEquals, windowsTaskRegistrationOwnedByAttempt, windowsTaskHasSessionRecoveryTriggers, windowsTaskRegistrationHealthy, windowsTaskRegistrationRefreshableLegacy } from "./windows-taskxml";
 import type { ExpectedWindowsTaskUserId } from "./windows-taskxml";
 import { win32 } from "node:path";
+import { assertNoDesktopSupervision, createSupervisionLatch, type SupervisionInspector, type SupervisionLatch } from "./desktop-command-guard";
 
 /**
  * The two CLI verbs `repairService` serves. They differ on ONE platform and ONE case: a
@@ -21,20 +27,24 @@ import { win32 } from "node:path";
  */
 export type ServiceRepairVerb = "repair" | "restart";
 
-export interface RepairServiceDeps {
+export interface RepairServiceDeps extends RuntimePreflightDeps {
+  inspectSupervision?: SupervisionInspector;
+  supervisionLatch?: SupervisionLatch;
   diagnose?: () => ServiceDiagnostic;
   assertEnv?: () => void;
   assertAuth?: () => void;
-  writeSchedulerAssets?: () => void;
+  writeSchedulerAssets?: (runtime: DurableBunRuntime) => void;
   stopScheduler?: () => void;
   startScheduler?: () => void;
-  writeSchedulerState?: () => void;
-  writeNativeState?: () => void;
-  repairNative?: () => void | Promise<void>;
+  writeSchedulerState?: (runtime: DurableBunRuntime) => void;
+  writeNativeState?: (runtime: DurableBunRuntime) => void;
+  repairNative?: (runtime: DurableBunRuntime) => void | Promise<void>;
   repairLaunchd?: () => LaunchdInstallOutcome | void;
   repairSystemd?: () => void;
   /** Restarts a launchd job the install path deliberately left alone. `restart` only. */
   restartLaunchd?: () => void;
+  /** Resolves the recorded runtime owner across every state path. */
+  readOwnership?: () => ServiceOwnershipResolution;
   /**
    * Which CLI verb is being served. `repair` must leave a healthy service alone — that no-op
    * IS the #4236 fix — while `restart` promises a new process, so on darwin it kicks the job
@@ -59,6 +69,39 @@ export interface RepairServiceDeps {
   schedulerLauncher?: string;
   /** Test seam — defaults to process.platform so Linux CI cannot hit real installSystemd. */
   platform?: NodeJS.Platform;
+  /** Test seam for a recorded temporary launcher. */
+  launcherPathDiagnostic?: () => string | null;
+}
+
+/**
+ * Why a repair stops when something other than this CLI owns the runtime.
+ *
+ * The npm service registration is KEPT — the maintainer's decision is that a user's install
+ * is never deleted — so the recorded owner is the only thing standing between a takeover the
+ * user consented to and the next `ocx service repair`, which would re-enable and restart the
+ * npm launcher without mentioning it. Repair runs incidentally: a tray helper, `ocx update`,
+ * a doctor suggestion. `install` is the deliberate act, so `install` is the verb that takes
+ * ownership back.
+ */
+export function foreignServiceOwnerRefusal(ownership: ServiceOwnership, action = "repair"): string {
+  return `Background service ${action} stopped: the desktop app owns the runtime `
+    + `(install ${ownership.installId}, consent generation ${ownership.consentGeneration}).\n`
+    + "The service registration was left exactly as it is — not re-enabled, not rewritten and not restarted.\n"
+    + "Quit the desktop app and run 'ocx service install' to hand the runtime back to this CLI.";
+}
+
+/**
+ * Why an unreadable or contradictory record stops a repair too.
+ *
+ * Collapsing "I could not read the claim" into "there is no claim" is how a consented
+ * takeover gets reactivated by a permissions error. `ocx service install` is deliberately
+ * not gated, so this never leaves an operator without a way forward.
+ */
+export function unknownServiceOwnerRefusal(reason: string, action = "repair"): string {
+  return `Background service ${action} stopped: ${reason}, so the runtime's recorded owner could `
+    + "not be determined.\n"
+    + "The service registration was left exactly as it is — not re-enabled, not rewritten and not restarted.\n"
+    + "Repair the service-state file or its permissions, then run 'ocx service install' to take the runtime back.";
 }
 
 async function assertSchedulerSnapshotBeforeStart(
@@ -112,6 +155,8 @@ export async function assertSchedulerRegistrationBeforeStart(
  * macOS/Linux: re-run the user-level install/reload path.
  */
 export async function repairService(deps: RepairServiceDeps = {}): Promise<void> {
+  const latch = deps.supervisionLatch ?? createSupervisionLatch();
+  assertNoDesktopSupervision(deps.inspectSupervision, latch);
   const diagnose = deps.diagnose ?? diagnoseService;
   const platform = deps.platform ?? process.platform;
   const diag = diagnose();
@@ -128,13 +173,30 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
     throw new Error("Background service is not installed. Run 'ocx service install' first.");
   }
 
+  // Before anything is asserted, written, stopped or started. A repair that has already
+  // rewritten the assets has changed the thing it was supposed to leave alone.
+  const ownership = (deps.readOwnership ?? resolveServiceOwnership)();
+  if (ownership.kind === "unknown") throw new Error(unknownServiceOwnerRefusal(ownership.reason));
+  // `!== "cli"` rather than `=== "desktop"`: this is the CLI's own repair path, so any owner
+  // that is not this CLI is one whose runtime it must not touch.
+  if (ownership.kind === "owned" && ownership.ownership.owner !== "cli") {
+    throw new Error(foreignServiceOwnerRefusal(ownership.ownership));
+  }
+
   (deps.assertEnv ?? assertServiceEnvironmentMatchesInstall)();
   (deps.assertAuth ?? assertServiceAuthEnvironment)();
+  const runtime = Object.freeze({ ...(deps.selectRuntime ?? durableBunRuntime)() });
+  const configDir = (deps.configDir ?? getConfigDir)();
+  (deps.assertRuntimeWritable ?? assertSelectedRuntimeWritable)(runtime, configDir, { platform, rootWasAbsent: !existsSync(configDir) });
+
+  const temporaryLauncher = (deps.launcherPathDiagnostic ?? (() => serviceLauncherPathDiagnostic(undefined, platform, true)))();
+  if (temporaryLauncher) console.warn(`⚠️ ${temporaryLauncher}`);
 
   if (platform === "win32") {
     if (diag.backend === "native") {
-      await (deps.repairNative ?? (() => installWinswService(defaultWinswEntry(serviceSourceDir))))();
-      (deps.writeNativeState ?? (() => writeServiceInstallState("native")))();
+      await (deps.repairNative ?? ((selected: DurableBunRuntime) => installWinswService(defaultWinswEntry(serviceSourceDir, selected))))(runtime);
+      assertNoDesktopSupervision(deps.inspectSupervision, latch);
+      (deps.writeNativeState ?? ((selected: DurableBunRuntime) => writeServiceInstallState("native", undefined, {}, selected)))(runtime);
       return;
     }
     const readSchedulerXml = deps.readSchedulerXml ?? statusWindowsXml;
@@ -194,7 +256,7 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
       );
     }
     try { (deps.stopScheduler ?? stopWindows)(); } catch { /* not running */ }
-    (deps.writeSchedulerAssets ?? writeWindowsSchedulerAssets)();
+    (deps.writeSchedulerAssets ?? writeWindowsSchedulerAssets)(runtime);
     // Rewriting the on-disk assets does not touch the definition Task Scheduler holds, so a
     // task registered by an older version keeps its old triggers forever: status reports it
     // stale, tells the user to run repair, and repair changes nothing it complains about.
@@ -262,6 +324,7 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
             }
             if (probe.status === "absent") {
               try {
+                assertNoDesktopSupervision(deps.inspectSupervision, latch);
                 await (deps.restoreSchedulerIfAbsent ?? restoreWindowsSchedulerTaskIfAbsent)(registeredXml);
                 restartExpectedXml = registeredXml;
               } catch (error) {
@@ -284,6 +347,7 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
               "The Task Scheduler registration changed again before restart; the newer definition was preserved and not started.",
               "Task Scheduler state remained unreadable before restart; the registration was preserved and not started.",
             );
+            assertNoDesktopSupervision(deps.inspectSupervision, latch);
             (deps.startScheduler ?? startWindows)();
           } catch (error) {
             recoveryErrors.push(error);
@@ -309,8 +373,9 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
       "Task Scheduler registration changed before restart; the current definition was preserved and not started.",
       "Task Scheduler registration became unreadable before restart; it was preserved and not started.",
     );
+    assertNoDesktopSupervision(deps.inspectSupervision, latch);
     (deps.startScheduler ?? startWindows)();
-    (deps.writeSchedulerState ?? (() => writeServiceInstallState("scheduler")))();
+    (deps.writeSchedulerState ?? ((selected: DurableBunRuntime) => writeServiceInstallState("scheduler", undefined, {}, selected)))(runtime);
     return;
   }
   if (platform === "darwin") {

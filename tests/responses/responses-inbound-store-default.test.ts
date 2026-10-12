@@ -18,6 +18,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { CODEX_FORWARD_BASE_URL } from "../../src/providers/openai-tiers";
 import { handleResponses } from "../../src/server/responses";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 function providerConfig(overrides: Partial<OcxProviderConfig> = {}): OcxConfig {
   return {
@@ -36,7 +37,13 @@ function providerConfig(overrides: Partial<OcxProviderConfig> = {}): OcxConfig {
 
 describe("/v1/responses defaults store:false only for the canonical forward Codex backend", () => {
   const originalFetch = globalThis.fetch;
-  afterEach(() => { globalThis.fetch = originalFetch; });
+  let releaseSpendHome: (() => void) | undefined;
+  afterEach(() => {
+    // Release first so a failed dispatch cannot leak writer ownership into the next case.
+    releaseSpendHome?.();
+    releaseSpendHome = undefined;
+    globalThis.fetch = originalFetch;
+  });
 
   function captureUpstream(): { urls: string[]; bodies: string[] } {
     const urls: string[] = [];
@@ -61,7 +68,9 @@ describe("/v1/responses defaults store:false only for the canonical forward Code
     store: unknown,
   ): Promise<{ url: string; body: Record<string, unknown> | null }> {
     const { urls, bodies } = captureUpstream();
-    await handleResponses(
+    // Direct dispatch needs the writer lease to prevent spend-ledger ownership failures.
+    releaseSpendHome = acquireOwnedSpendHome();
+    const turn = await handleResponses(
       new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -75,6 +84,10 @@ describe("/v1/responses defaults store:false only for the canonical forward Code
       config,
       { model: "", provider: "" },
     );
+    // Every row here asks for a stream and then reads only the captured upstream REQUEST, so
+    // the turn's own body was left live. Draining it lets the parser, the completion callbacks
+    // and the lifetime cleanup finish before the teardown below hands back the writer lease.
+    await turn.text();
     let parsed: Record<string, unknown> | null = null;
     try { parsed = bodies[0] ? (JSON.parse(bodies[0]) as Record<string, unknown>) : null; } catch { parsed = null; }
     return { url: urls[0] ?? "", body: parsed };

@@ -1,36 +1,49 @@
-import { useI18n, type TKey } from "../i18n/shared";
+import { useI18n } from "../i18n/shared";
 
-function formatFetchTime(value: string | undefined, locale: string): string | null {
+function formatSyncTime(value: string | undefined, locale: string): string | null {
   if (!value) return null;
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return null;
   return new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(date);
 }
 
-export function ModelCatalogStateSummary({
-  subtitleKey,
-  catalogSyncedAt,
-}: {
-  subtitleKey: TKey;
-  catalogSyncedAt?: string;
-}) {
+/*
+ * How a saved catalog reaches Codex, folded to one line under the Models subtitle.
+ * Standalone installs have two steps (save here, Codex loads it on restart). An `ocx connect`
+ * client adds the hub sync in between; `catalogSyncedAt` exists only in that mode.
+ * The honesty contract from #5031 stays: a sync time does not prove it includes the latest
+ * hub save, and OpenCodex cannot see which list a running Codex uses.
+ */
+export function ModelCatalogDelivery({ connected, catalogSyncedAt }: { connected: boolean; catalogSyncedAt?: string }) {
   const { locale, t } = useI18n();
-  if (subtitleKey !== "models.subtitle") return <p className="page-sub">{t(subtitleKey)}</p>;
-  const fetchedAt = formatFetchTime(catalogSyncedAt, locale);
-  const rows: Array<[string, string]> = [
-    [t("models.catalogState.saved"), t("models.catalogState.savedDetail")],
-    [t("models.catalogState.fetched"), fetchedAt
-      ? t("models.catalogState.fetchedAt", { time: fetchedAt })
-      : t("models.catalogState.fetchedUnknown")],
-    [t("models.catalogState.active"), t("models.catalogState.activeUnverified")],
-  ];
-  return <>
-    <p className="page-sub">{t(subtitleKey)}</p>
-    <dl className="card" aria-label={t("models.catalogState.label")} style={{ margin: "-10px 0 22px", maxWidth: "var(--prose-measure)" }}>
-      {rows.map(([label, detail], index) => <div key={label} className="card-row" style={{ alignItems: "flex-start", gap: 12, borderBottom: index < rows.length - 1 ? "1px solid var(--border-soft)" : undefined }}>
-        <dt style={{ flex: "0 1 180px", fontWeight: "var(--weight-semibold)" }}>{label}</dt>
-        <dd className="card-sub" style={{ flex: "1 1 280px", margin: 0, padding: 0 }}>{detail}</dd>
-      </div>)}
-    </dl>
-  </>;
+  const syncedAt = formatSyncTime(catalogSyncedAt, locale);
+  const steps: Array<{ id: string; chip: string; title: string; body: string }> = connected
+    ? [
+      { id: "saved", chip: t("models.delivery.chip.savedHub"), title: t("models.delivery.savedHub.title"), body: t("models.delivery.savedHub.body") },
+      {
+        id: "synced",
+        chip: syncedAt ? t("models.delivery.chip.synced", { time: syncedAt }) : t("models.delivery.chip.syncedUnknown"),
+        title: t("models.delivery.synced.title"),
+        body: syncedAt ? t("models.delivery.synced.bodyAt", { time: syncedAt }) : t("models.delivery.synced.bodyUnknown"),
+      },
+    ]
+    : [{ id: "saved", chip: t("models.delivery.chip.saved"), title: t("models.delivery.saved.title"), body: t("models.delivery.saved.body") }];
+  steps.push({ id: "loaded", chip: t("models.delivery.chip.loaded"), title: t("models.delivery.loaded.title"), body: t("models.delivery.loaded.body") });
+  return (
+    <details className="models-delivery">
+      <summary>
+        <span className="models-delivery-title">{t("models.delivery.title")}</span>
+        <span className="models-delivery-flow">{steps.map(step => step.chip).join(" → ")}</span>
+      </summary>
+      <ol className="models-delivery-steps">
+        {steps.map(step => (
+          <li key={step.id} data-step={step.id}>
+            <strong>{step.title}</strong>
+            <p>{step.body}</p>
+          </li>
+        ))}
+      </ol>
+      <p className="models-delivery-hint">{t("models.delivery.hint")}</p>
+    </details>
+  );
 }

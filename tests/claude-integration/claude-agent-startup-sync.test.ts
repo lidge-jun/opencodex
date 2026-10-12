@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { markSiblingStart, resetSiblingStartForTests } from "../../src/codex/sibling-start";
 import { mkdtempSync, readdirSync, readFileSync} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -16,7 +17,21 @@ const config = (claudeCode: OcxConfig["claudeCode"] = {}): OcxConfig => ({
   claudeCode,
 } as OcxConfig);
 
+afterEach(() => resetSiblingStartForTests());
+
 describe("Claude agent roster proxy-start synchronization (#2200)", () => {
+  test("a sibling skips both roster injection and OFF pruning", async () => {
+    markSiblingStart(10101);
+    for (const claudeCode of [{}, { injectAgents: false }]) {
+      let writes = 0;
+      const result = await syncClaudeAgentDefsAtProxyStartup(config(claudeCode), 10102, {
+        fetchContextWindows: async () => { throw new Error("sibling fetched roster"); },
+        injectAgentDefs: () => { writes++; return []; },
+      });
+      expect(result).toBeNull();
+      expect(writes).toBe(0);
+    }
+  });
   test("keeps readiness pending until the fourth registry callback settles", async () => {
     const gate = createReadinessGate();
     let releaseRegistry!: () => void;

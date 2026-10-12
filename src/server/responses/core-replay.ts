@@ -19,8 +19,12 @@ import {
   reasoningReplayCodexCredentialIdentity,
   reasoningReplayKeyCredentialIdentity,
   durableReplayDestinationIdentity,
+  nativeReasoningTag,
+  nativeReasoningTagMatches,
+  type NativeReasoningOwner,
   bindReasoningReplayScope,
   reasoningReplayServingIdentityChanged,
+  reasoningReplayItemStoreChanged,
   reasoningReplayOpaqueBlobRejectionMemoized,
 } from "../../responses/reasoning-replay-cache";
 import type { OAuthAccessSnapshot } from "../../oauth";
@@ -34,6 +38,11 @@ import { requiresPlaintextReasoningReplay } from "../../adapters/openai-response
  */
 export function adapterNeedsForcedContinuation(name: string): boolean {
   return name === "kiro" || name === "cursor";
+}
+
+/** Adapters opting into restricted store:false replay for pending client function calls. */
+export function adapterNeedsToolCallContinuation(name: string): boolean {
+  return name === "qoder";
 }
 
 
@@ -112,6 +121,16 @@ export function bindRouteReasoningReplayScope(args: {
     ...args,
     modelId: parsed.modelId,
   });
+  const owner = nativeReasoningOwnerForRoute(args);
+  if (owner) parsed._nativeReasoningBoundOwner = owner;
+  else delete parsed._nativeReasoningBoundOwner;
+  if (parsed._nativeReasoningReplay?.size) {
+    for (const [blob, tag] of parsed._nativeReasoningReplay) {
+      if (!nativeReasoningTagMatches(nativeReasoningTag(owner, blob), tag)) {
+        stripNativeReasoningBlob(parsed, blob);
+      }
+    }
+  }
   const continuationDestinationIdentity = providerContinuationDestinationIdentity(parsed, provider);
   const continuationOwner = providerContinuationOwnerFromReplayIdentity(
     replayIdentity && continuationDestinationIdentity
@@ -137,11 +156,77 @@ export function bindRouteReasoningReplayScope(args: {
   // after the first mismatch, but it cannot make history minted by the prior route decodable.
   if (reasoningReplayServingIdentityChanged(parsed._reasoningReplayScope)) {
     parsed._stripReasoningEncryptedContent = true;
+    // Only a different destination or credential makes the replayed item ids unresolvable; a
+    // model change on the same store keeps them.
+    if (reasoningReplayItemStoreChanged(parsed._reasoningReplayScope)) {
+      parsed._dropForeignReasoningItemIds = true;
+    }
   }
   if (reasoningReplayOpaqueBlobRejectionMemoized(parsed._reasoningReplayScope)) {
     parsed._stripReasoningEncryptedContent = true;
+    parsed._dropForeignReasoningItemIds = true;
   }
   bindProviderContinuationForRoute(parsed, continuationOwner);
+}
+
+function stripNativeReasoningBlob(parsed: OcxParsedRequest, blob: string): void {
+  const input = (parsed._rawBody as { input?: unknown } | undefined)?.input;
+  if (Array.isArray(input)) {
+    for (const item of input) {
+      if (item && typeof item === "object" && item.type === "reasoning" && item.encrypted_content === blob) {
+        delete item.encrypted_content;
+        delete item.id;
+      }
+    }
+  }
+  for (const message of parsed.context.messages) {
+    if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
+    for (const part of message.content) {
+      if (part.type !== "thinking" || typeof part.signature !== "string") continue;
+      try {
+        const item: unknown = JSON.parse(part.signature);
+        if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+        const reasoning = item as Record<string, unknown>;
+        if (reasoning.type !== "reasoning" || reasoning.encrypted_content !== blob) continue;
+        delete reasoning.encrypted_content;
+        delete reasoning.id;
+        part.signature = JSON.stringify(reasoning);
+        delete part.itemId;
+      } catch { /* A provider signature is not the parser's JSON carrier. */ }
+    }
+  }
+}
+
+export function nativeReasoningOwnerForRoute(args: {
+  provider: OcxProviderConfig;
+  oauthCredentialSnapshot?: Pick<OAuthAccessSnapshot, "accountId" | "generation">;
+  codexAuthContext?: CodexAuthContext;
+}): NativeReasoningOwner | undefined {
+  const { provider } = args;
+  const salt = thoughtSignatureReplaySalt();
+  if (!salt || salt.length < 16) return undefined;
+  const destination = durableReplayDestinationIdentity(JSON.stringify([
+    provider.baseUrl.trim().replace(/\/+$/, ""), provider.responsesPath ?? "",
+  ]));
+  let credential: string | undefined;
+  if (provider.authMode === "oauth") {
+    const snapshot = args.oauthCredentialSnapshot;
+    if (snapshot?.accountId && snapshot.generation !== undefined) credential = durableReplayCredentialIdentity(
+      "oauth", `${snapshot.accountId}\0${snapshot.generation}`, provider.headers, salt,
+    );
+  } else if (provider.authMode === "forward") {
+    const context = args.codexAuthContext;
+    if (context && (context.kind === "pool" || context.kind === "main-pool")
+      && context.accountId && context.writerGeneration !== undefined
+      && (context.kind !== "pool" || context.generation !== undefined)) {
+      credential = durableReplayCredentialIdentity("codex", JSON.stringify([
+        context.accountId, context.kind === "pool" ? context.generation : null, context.writerGeneration,
+      ]), provider.headers, salt);
+    }
+  } else if (provider.authMode !== "local") {
+    credential = durableReplayCredentialIdentity("key", nonEmptyProviderApiKey(provider), provider.headers, salt);
+  }
+  return destination && credential ? { destination, credential } : undefined;
 }
 
 

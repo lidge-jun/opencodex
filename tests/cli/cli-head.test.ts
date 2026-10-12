@@ -1,8 +1,47 @@
-import { describe, expect, test } from "bun:test";
-import { parseCliHead } from "../../src/cli/root";
+import { describe, expect, spyOn, test } from "bun:test";
+import { parseCliHead, runCli } from "../../src/cli/root";
+import * as autorestore from "../../src/cli/codex-shim-autorestore";
 import { DEFAULT_READY_WAIT_TIMEOUT_SECONDS } from "../../src/cli/ready";
 
 describe("parseCliHead (pure CLI head, Phase 1)", () => {
+  test("preserves explicit nested help paths and original argv", () => {
+    for (const args of [["help", "models", "context"], ["models", "context", "--help"], ["models", "context", "-h"]]) {
+      const head = parseCliHead(args);
+      expect(head).toMatchObject({ kind: "help", helpTarget: "models", helpPath: ["models", "context"] });
+      expect(head.args).toBe(args);
+    }
+  });
+
+  test("full-reference help is explicit", () => {
+    for (const args of [["help", "--all"], ["--help", "--all"]]) {
+      expect(parseCliHead(args)).toEqual({ kind: "help", command: args[0], args, helpAll: true });
+    }
+  });
+
+  test("help-valued operands and passthrough flags remain ordinary argv", () => {
+    for (const args of [
+      ["alias", "set", "demo", "help"], ["config", "set", "defaultModel", "help"],
+      ["claude", "--", "--help"], ["claude", "--", "help"], ["models", "--all"],
+    ]) {
+      expect(parseCliHead(args)).toEqual({ kind: "command", command: args[0], args });
+      expect(parseCliHead(args).args).toBe(args);
+    }
+  });
+
+  test("head scanning stops at the delimiter and the first option ends the topic", () => {
+    expect(parseCliHead(["help", "models", "context", "--", "shadow"]))
+      .toMatchObject({ helpPath: ["models", "context"] });
+    expect(parseCliHead(["models", "--provider", "help", "--help"]))
+      .toEqual({ kind: "help", command: "models", args: ["models", "--provider", "help", "--help"], helpTarget: "models" });
+    expect(parseCliHead(["help", "--", "--all"])).not.toHaveProperty("helpAll");
+  });
+
+  test("unknown option-like roots retain their error target", () => {
+    for (const args of [["--nosuch", "--help"], ["help", "--nosuch"]]) {
+      expect(parseCliHead(args)).toEqual({ kind: "help", command: args[0], args, helpTarget: "--nosuch" });
+    }
+  });
+
   test("version flags exit as version", () => {
     expect(parseCliHead(["--version"])).toEqual({ kind: "version", command: "--version", args: ["--version"] });
     expect(parseCliHead(["-v"])).toEqual({ kind: "version", command: "-v", args: ["-v"] });
@@ -132,5 +171,43 @@ describe("parseCliHead (pure CLI head, Phase 1)", () => {
       args: ["provider", "list"],
     });
     expect(parseCliHead([""])).toEqual({ kind: "command", command: "", args: [""] });
+  });
+});
+
+describe("uninstall argument validation", () => {
+  test("uninstall and remove reject trailing arguments before shim preflight", async () => {
+    const preflight = spyOn(autorestore, "maybeAutoRestoreCodexShim").mockImplementation(() => {});
+    const error = spyOn(console, "error").mockImplementation(() => {});
+    const exit = spyOn(process, "exit").mockImplementation((() => { throw new Error("usage-exit"); }) as never);
+    try {
+      for (const command of ["uninstall", "remove"]) {
+        for (const trailing of [["--dry-run"], ["--yes"], ["extra"], ["--", "--help"]]) {
+          await expect(runCli([command, ...trailing])).rejects.toThrow("usage-exit");
+          expect(exit).toHaveBeenLastCalledWith(2);
+          expect(error.mock.calls.at(-1)?.[0]).toContain("No changes were made.");
+          expect(error.mock.calls.at(-1)?.[0]).toContain(`ocx help ${command}`);
+        }
+      }
+      expect(preflight).not.toHaveBeenCalled();
+    } finally { preflight.mockRestore(); error.mockRestore(); exit.mockRestore(); }
+  });
+
+  test("uninstall help bypasses preflight and bare commands retain it", async () => {
+    const preflight = spyOn(autorestore, "maybeAutoRestoreCodexShim").mockImplementation(() => {});
+    const output = spyOn(console, "log").mockImplementation(() => {});
+    const exit = spyOn(process, "exit").mockImplementation((() => { throw new Error("help-exit"); }) as never);
+    try {
+      for (const command of ["uninstall", "remove"]) {
+        for (const args of [[command, "--help"], [command, "-h"], [command, "help"], ["help", command]]) {
+          await expect(runCli(args)).rejects.toThrow("help-exit");
+          expect(exit).toHaveBeenLastCalledWith(0);
+        }
+      }
+      expect(preflight).not.toHaveBeenCalled();
+      for (const command of ["uninstall", "remove"]) {
+        expect(await runCli([command])).toMatchObject({ kind: "command", command });
+      }
+      expect(preflight).toHaveBeenCalledTimes(2);
+    } finally { preflight.mockRestore(); output.mockRestore(); exit.mockRestore(); }
   });
 });

@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, saveConfig } from "../../src/config";
+import { flushConfigDirHardeningAndReaps } from "../../src/config/paths";
 import { readRecentUsageEntries } from "../../src/usage/log";
 import { buildDesktop3pRegistry } from "../../src/claude/desktop-3p";
 import type { DesktopProfile } from "../../src/claude/desktop-profile";
@@ -31,6 +32,7 @@ import { estimateTokens } from "../../src/lib/token-estimate";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { SERVER_BUDGET_MS } from "../helpers/test-budget";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
 import {
@@ -62,7 +64,9 @@ beforeEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-afterEach(() => {
+afterEach(async () => {
+  if (testDir) await flushConfigDirHardeningAndReaps(testDir);
+  if (isolatedCodexHome) await flushConfigDirHardeningAndReaps(isolatedCodexHome.path);
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   if (previousDesktopConfigDir === undefined) delete process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
@@ -382,11 +386,18 @@ test("fetchWithHeaderDeadline classifies expiry as timeout and still clears exac
 });
 
 test("native Anthropic passthrough returns 502 when the upstream connection is refused (reject-path activation)", async () => {
-  const closed = Bun.serve({ port: 0, fetch: () => new Response() });
-  const closedOrigin = closed.url.toString().replace(/\/$/, "");
-  closed.stop(true);
+  const refusedOrigin = "http://127.0.0.1:1";
+  let rejected = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    if (url.origin === refusedOrigin) {
+      rejected += 1;
+      throw Object.assign(new TypeError("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
+    }
+    return originalFetch(input, init);
+  }) as typeof globalThis.fetch;
   const config = mockConfig("http://127.0.0.1:1/v1", {
-    anthropicBaseUrl: closedOrigin,
+    anthropicBaseUrl: refusedOrigin,
   });
   config.connectTimeoutMs = 60_000;
   saveConfig(config);
@@ -402,10 +413,12 @@ test("native Anthropic passthrough returns 502 when the upstream connection is r
       }),
     });
     expect(response.status).toBe(502);
+    expect(rejected).toBe(1);
     const json = await response.json() as Record<string, any>;
     expect(json.error?.type).toBe("api_error");
     expect(String(json.error?.message)).toContain("anthropic passthrough failed");
   } finally {
+    globalThis.fetch = originalFetch;
     await server.stop(true);
   }
 });
@@ -415,10 +428,10 @@ test("native Anthropic passthrough returns 502 when the upstream connection is r
 const sseEncoder = new TextEncoder();
 
 function spyFinalize() {
-  const calls: Array<{ status: number; closeReason: string }> = [];
+  const calls: Array<{ status: number; closeReason: string; terminalStatus?: string }> = [];
   return {
     calls,
-    finalize: (status: number, meta: { closeReason: string }) => calls.push({ status, closeReason: meta.closeReason }),
+    finalize: (status: number, meta: { closeReason: string; terminalStatus?: string }) => calls.push({ status, ...meta }),
   };
 }
 
@@ -469,7 +482,7 @@ test("A1: stalled upstream body gets an Anthropic timeout_error tail and body_st
   expect(text).toContain("message_start"); // prior bytes preserved
   expect(text).toContain("\n\nevent: error\ndata: ");
   expect(text).toContain('"type":"timeout_error"');
-  expect(calls).toEqual([{ status: 200, closeReason: "body_stall" }]);
+  expect(calls).toEqual([{ status: 502, closeReason: "body_stall", terminalStatus: "incomplete" }]);
 });
 
 test("A2: unbounded upstream body gets an api_error tail and body_overflow close reason", async () => {
@@ -484,7 +497,7 @@ test("A2: unbounded upstream body gets an api_error tail and body_overflow close
   expect(text).toContain("\n\nevent: error\ndata: ");
   expect(text).toContain('"type":"api_error"');
   expect(text).toContain("exceeded 120 bytes");
-  expect(calls).toEqual([{ status: 200, closeReason: "body_overflow" }]);
+  expect(calls).toEqual([{ status: 502, closeReason: "body_overflow", terminalStatus: "incomplete" }]);
 });
 
 test("A3: client abort mid-body finalizes 499 client_cancel, not 200 terminal (misclassification regression)", async () => {
@@ -1132,6 +1145,10 @@ test("routed Claude requests give OpenAI sidecars main auth without leaking it t
       turnAdmissionLease.release();
     }
   };
+  // One lease for the whole case rather than one per invocation: both turns run against the same
+  // home, and re-taking it between them would discard the ledger this case is still accounting
+  // into. File-wide would be wrong the other way, since most cases here start a real server.
+  const releaseSpendHome = acquireOwnedSpendHome();
   try {
     expect(await invokeMessages()).toBe(200);
 
@@ -1161,6 +1178,8 @@ test("routed Claude requests give OpenAI sidecars main auth without leaking it t
   } finally {
     await forward.stop(true);
     await routed.stop(true);
+    // After both upstreams are down, so nothing is still settling against the journal.
+    releaseSpendHome();
   }
 });
 
@@ -1557,7 +1576,7 @@ test("native passthrough precedes even invalid compatibility mode", async () => 
 test("compatibility survives management toggles and rejects Desktop source features", async () => {
   const { server: upstream, urls } = mockChatUpstreamCapturing();
   saveConfig(mockConfig(new URL("/v1", upstream.url).href, { compatibility: "enforce" }));
-  const server = startServer(0);
+  const server = startServer(0, { managementApi: { claudeAgentConfigDir: join(testDir, "claude-agents") } });
   try {
     for (const enabled of [false, true]) {
       const toggle = await fetch(new URL("/api/native-integrations/claude", server.url), {
@@ -1659,7 +1678,7 @@ test("generated agent effort directive restores exact xhigh and max after Claude
         max_tokens: 32000,
         stream: true,
         system: [
-          { type: "text", text: "<!-- ocx-route: claude-ocx-mock--test-model -->" },
+          { type: "text", text: "<!-- ocx-route: ocx-claude-mock--test-model -->" },
           { type: "text", text: `<!-- ocx-effort: ${effort} -->` },
         ],
         thinking: { type: "enabled", budget_tokens: 31999 },
@@ -1719,7 +1738,7 @@ test("generated agent effort directive preserves routed Anthropic structured out
       max_tokens: 32000,
       stream: true,
       system: [
-        { type: "text", text: "<!-- ocx-route: claude-ocx-mock-anthropic--claude-sonnet-5 -->" },
+        { type: "text", text: "<!-- ocx-route: ocx-claude-mock-anthropic--claude-sonnet-5 -->" },
         { type: "text", text: "<!-- ocx-effort: max -->" },
       ],
       thinking: { type: "enabled", budget_tokens: 31999 },

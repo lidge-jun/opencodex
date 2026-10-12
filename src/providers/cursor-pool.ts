@@ -1,4 +1,5 @@
 /** Cursor OAuth account-pool kernel. No configuration or HTTP surface lives here. */
+import { debugProviderDiagnostic } from "../lib/debug";
 import { getAccountSet } from "../oauth/store";
 
 export const CURSOR_POOL_KEY = "cursor";
@@ -236,6 +237,12 @@ export class CursorPoolKernel {
       ? { accountRef: state.ref, token: a.token, generation: snap.generation }
       : null;
   }
+  noteAffinity429(owner: string, thread: string, capability: symbol, now = this.now()): boolean {
+    if (capability !== this.capability || !owner || !thread) return false;
+    const ref = this.affinity.get(this.key(owner, thread));
+    if (!ref) return false;
+    return this.note429(ref, owner, thread, capability, now);
+  }
   note429(
     accountRef: string,
     owner: string,
@@ -311,6 +318,56 @@ export class CursorPoolKernel {
 }
 export function createCursorPoolCapability(): symbol {
   return Symbol(`cursor-pool:${crypto.randomUUID()}`);
+}
+
+const sharedCursorPoolCapability = createCursorPoolCapability();
+let sharedCursorPoolKernel: CursorPoolKernel | undefined;
+
+function sharedKernel(): CursorPoolKernel {
+  sharedCursorPoolKernel ??= new CursorPoolKernel(sharedCursorPoolCapability);
+  return sharedCursorPoolKernel;
+}
+
+/** Test seam. Drops the process-local pool so the next pick builds a fresh one. */
+export function resetSharedCursorPoolKernelForTests(): void {
+  sharedCursorPoolKernel = undefined;
+}
+
+/**
+ * Install the process-local pool with the same capability the adapter uses.
+ * The capability itself stays inside this module.
+ */
+export function installSharedCursorPoolKernelForTests(
+  now: () => number,
+  options: CursorPoolKernelOptions = {},
+): void {
+  sharedCursorPoolKernel = new CursorPoolKernel(sharedCursorPoolCapability, now, options);
+}
+
+/**
+ * Bounded activation entry. Empty owner or thread fails closed. Fewer than two usable
+ * accounts yields undefined so the caller keeps its configured credential.
+ */
+export function selectCursorPoolToken(owner: string, thread: string): string | undefined {
+  if (!owner || !thread) return undefined;
+  try {
+    return sharedKernel().pick(owner, thread, sharedCursorPoolCapability)?.token;
+  } catch {
+    // A store failure must not replace a configured credential with a request error.
+    debugProviderDiagnostic("cursor", "pool-selection-failed", {});
+    return undefined;
+  }
+}
+
+/** Cool the account this owner/thread is bound to after that account rate-limits a send. */
+export function noteCursorPoolRateLimit(owner: string, thread: string): boolean {
+  if (!owner || !thread) return false;
+  try {
+    return sharedKernel().noteAffinity429(owner, thread, sharedCursorPoolCapability);
+  } catch {
+    debugProviderDiagnostic("cursor", "pool-cooldown-failed", {});
+    return false;
+  }
 }
 
 /** Legacy weighted router; generic 429 rotation is owned elsewhere. */

@@ -252,9 +252,10 @@ export abstract class OAuthCallbackFlow {
                 if (!parsed.code) return null;
                 // Kind-aware state enforcement: url/query-shaped input is an authorization
                 // RESPONSE and must carry a matching state — missing state is rejected, not
-                // downgraded to raw. Only a syntactically raw code (same PKCE session) is
-                // exempt, so the CLI/GUI paste fallback still works.
-                if (parsed.kind !== "raw" && expectedState && parsed.state !== expectedState) return null;
+                // downgraded to raw. A raw paste with an explicit code#state suffix is
+                // state-bearing too. Only a syntactically raw code WITHOUT a state suffix
+                // (same PKCE session) is exempt, so the CLI/GUI paste fallback still works.
+                if ((parsed.kind !== "raw" || parsed.state !== undefined) && expectedState && parsed.state !== expectedState) return null;
                 return { code: parsed.code, state: parsed.state ?? expectedState };
               })
               .catch((): CallbackResult | null => null),

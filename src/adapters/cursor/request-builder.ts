@@ -26,7 +26,7 @@ import {
   isCursorExecutionPathTool,
   isCursorWaitTool,
 } from "./tool-definitions";
-import { lookupCursorThreadConversation } from "./thread-continuity";
+import { lookupCursorThreadConversation, resolveCursorConversationRewrite } from "./thread-continuity";
 import {
   getCursorCheckpoint,
   getCursorCheckpointForPrefix,
@@ -102,8 +102,8 @@ export function applyCursorToolBudget(
   const tryKeep = (tool: OcxTool): boolean => {
     if (keptSet.has(tool) || kept.length >= CURSOR_TOOL_COUNT_LIMIT) return keptSet.has(tool);
     // Repeated protobuf message fields serialize as concatenated tag/length/value entries,
-    // so each one-entry wrapper size is the exact additive contribution to McpTools.
-    const candidateBytes = cursorMcpToolEncodedSize(tool, toolChoice);
+    // so each wrapper uses the same catalog-dependent names and choice as registration.
+    const candidateBytes = cursorMcpToolEncodedSize(tool, toolChoice, eligible);
     if (keptBytes + candidateBytes > CURSOR_TOOL_BYTES_LIMIT) return false;
     kept.push(tool);
     keptSet.add(tool);
@@ -129,7 +129,7 @@ export function applyCursorToolBudget(
       if (!occupant || isCursorExecutionPathTool(occupant)) continue;
       kept.splice(i, 1);
       keptSet.delete(occupant);
-      keptBytes -= cursorMcpToolEncodedSize(occupant, toolChoice);
+      keptBytes -= cursorMcpToolEncodedSize(occupant, toolChoice, eligible);
       if (kept.length < CURSOR_TOOL_COUNT_LIMIT && keptBytes + needBytes <= CURSOR_TOOL_BYTES_LIMIT) {
         return;
       }
@@ -141,7 +141,7 @@ export function applyCursorToolBudget(
   // earlier same-priority pins; evict wait/patch/filler rather than ship wait-only.
   for (const tool of eligible) {
     if (!isCursorExecutionPathTool(tool) || keptSet.has(tool)) continue;
-    const need = cursorMcpToolEncodedSize(tool, toolChoice);
+    const need = cursorMcpToolEncodedSize(tool, toolChoice, eligible);
     if (need > CURSOR_TOOL_BYTES_LIMIT) continue;
     evictNonExecutionPath(need);
     tryKeep(tool);
@@ -157,7 +157,7 @@ export function applyCursorToolBudget(
       keptSet.delete(tool);
       const index = kept.indexOf(tool);
       if (index >= 0) kept.splice(index, 1);
-      keptBytes -= cursorMcpToolEncodedSize(tool, toolChoice);
+      keptBytes -= cursorMcpToolEncodedSize(tool, toolChoice, eligible);
     }
   }
 
@@ -171,8 +171,8 @@ export function applyCursorToolBudget(
 
 function catalogLimitNote(kept: readonly OcxTool[], omitted: readonly OcxTool[]): string | undefined {
   if (omitted.length === 0) return undefined;
-  const recoverable = kept.some(tool => tool.toolSearch || cursorToolWireName(tool) === "tool_search");
-  const names = omitted.slice(0, 12).map(cursorToolWireName);
+  const recoverable = kept.some(tool => tool.toolSearch || cursorToolWireName(tool, kept) === "tool_search");
+  const names = omitted.slice(0, 12).map(tool => cursorToolWireName(tool, kept));
   const remainder = omitted.length - names.length;
   const omittedSummary = `${names.join(", ")}${remainder > 0 ? `, and ${remainder} more` : ""}`;
   return recoverable
@@ -209,11 +209,12 @@ export function cursorRequestEmitsFastVariant(parsed: OcxParsedRequest): boolean
 
 /**
  * Resolve a `cursor/<model>` selection + Codex reasoning effort to Cursor's requested model shape.
- * Most models encode effort in a flat id (`claude-4.6-opus-high`). Grok Fast is parameterized
- * instead: current Cursor clients send the matching Grok base id plus `effort` and `fast` parameters.
+ * Most models encode effort in a flat id (`claude-4.6-opus-high`). Grok 4.5/4.6 Fast is
+ * parameterized: current Cursor clients send the matching base id plus `effort` and `fast` parameters;
+ * Grok 4.7 (no wirePrefix) instead uses the flattened effort-fast id.
  * A fully-qualified id (one that is not a known effort base) passes through unchanged.
  */
-function normalizeCursorModelId(modelId: string, reasoning?: string, fast?: boolean): {
+function normalizeCursorModelId(modelId: string, reasoning?: string, fast?: boolean, liveRosterScope?: string): {
   modelId: string;
   requestedModelParameters?: readonly CursorRequestedModelParameter[];
   routingLevel?: CursorRoutingLevel;
@@ -226,8 +227,8 @@ function normalizeCursorModelId(modelId: string, reasoning?: string, fast?: bool
   // resolver owns effort composition, variant dimensions, the synthetic -1m
   // marker (ultra -> Max Mode, evidence-gated), and the cursor- wire prefix.
   const id = selection.modelId;
-  // Grok Fast stays parameterized: current Cursor clients send the base id
-  // plus effort/fast parameters instead of the flattened -fast id.
+  // Grok 4.5/4.6 Fast stays parameterized: current Cursor clients send the base id
+  // plus effort/fast parameters; 4.7 (no wirePrefix) uses the flattened effort-fast id.
   const grokFast = cursorGrokFastSelection(id, reasoning, fast);
   if (grokFast) {
     return {
@@ -239,7 +240,7 @@ function normalizeCursorModelId(modelId: string, reasoning?: string, fast?: bool
       ],
     };
   }
-  const resolved = resolveCursorSelection(id, reasoning, undefined, { fast });
+  const resolved = resolveCursorSelection(id, reasoning, undefined, { fast, liveRosterScope });
   return {
     ...selection,
     ...(resolved.maxMode ? { maxMode: true } : {}),
@@ -250,6 +251,9 @@ function normalizeCursorModelId(modelId: string, reasoning?: string, fast?: bool
 function contentPartToText(part: OcxContentPart | OcxAssistantContentPart): string | undefined {
   switch (part.type) {
     case "text":
+      return part.text;
+    case "document":
+      // Cursor has no document carrier; the marker keeps the turn from serializing to nothing.
       return part.text;
     case "thinking":
       return part.thinking;
@@ -363,11 +367,16 @@ export function resolveCursorConversationId(
   // the override check has to exclude it explicitly rather than rely on that flag.
   if (threadId && parsed._compactionRequest !== true) {
     const recovered = lookupCursorThreadConversation(threadId, parsed._cursorIdentityScope);
-    if (recovered) return recovered;
+    if (recovered) return resolveCursorConversationRewrite(recovered, parsed._cursorIdentityScope);
   }
-  if (parsed._cursorConversationId) return parsed._cursorConversationId;
+  if (parsed._cursorConversationId) {
+    return resolveCursorConversationRewrite(parsed._cursorConversationId, parsed._cursorIdentityScope);
+  }
   if (threadId) {
-    return cursorConversationIdFromClientThread(`thread:${threadId}`, parsed._cursorIdentityScope);
+    return resolveCursorConversationRewrite(
+      cursorConversationIdFromClientThread(`thread:${threadId}`, parsed._cursorIdentityScope),
+      parsed._cursorIdentityScope,
+    );
   }
   return generatedCursorConversationId();
 }
@@ -386,6 +395,8 @@ function updateFramed(hash: ReturnType<typeof createHash>, value: string): void 
 
 export function cursorInstructionDigest(parsed: OcxParsedRequest): string {
   const hash = createHash("sha256").update("ocx:cursor:sys:");
+  updateFramed(hash, "text-format");
+  updateFramed(hash, JSON.stringify(parsed.options.textFormat ?? null));
   for (const line of parsed.context.systemPrompt ?? []) updateFramed(hash, line);
   for (const message of parsed.context.messages) {
     if (message.role !== "developer") continue;
@@ -407,6 +418,8 @@ export function cursorCoveredPrefixDigest(parsed: OcxParsedRequest, coveredMessa
 export interface CreateCursorRequestOptions {
   /** Force a brand-new Cursor conversation id even when remembered state exists. */
   forceFreshConversation?: boolean;
+  /** Credential-bound scope for live Cursor model spelling and Max-Mode evidence. */
+  liveRosterScope?: string;
 }
 
 function lookupPrefixSnapshot(
@@ -476,7 +489,13 @@ function resolveCursorCheckpoint(
   if (cursorCheckpointModelAffinityId(snapshot.modelId) !== cursorCheckpointModelAffinityId(request.modelId)) {
     return { reason: "model_changed" };
   }
-  if (parsed.context.messages.at(-1)?.role !== "toolResult" && cursorState?.checkpointUsable === false) {
+  // The continuation state only exists on the ref path; a ref-less prefix hit carries
+  // the suspension on the snapshot itself, or a non-toolResult request could resume
+  // bytes upstream serialized mid-tool-call.
+  if (
+    parsed.context.messages.at(-1)?.role !== "toolResult"
+    && (snapshot.toolSuspended === true || cursorState?.checkpointUsable === false)
+  ) {
     return { reason: "trailing_tool_result" };
   }
   const lineage = lineageMismatch(parsed, snapshot);
@@ -490,11 +509,30 @@ export function createCursorRequest(
 ): CursorRunRequest {
   const messages = cursorRequestMessagesFromRaw(parsed.context.messages);
   const activeText = [...messages].reverse().find(message => message.role === "user" || message.role === "developer")?.content ?? "";
-  const visibleTools = cursorToolsForActivePrompt(parsed.context.tools, activeText, parsed.options.toolChoice);
-  const budget = applyCursorToolBudget(visibleTools, parsed.options.toolChoice);
+  const catalog = parsed.context.tools ?? [];
+  const originalChoice = parsed.options.toolChoice;
+  // Resolve accepted bare wire aliases before filtering can remove their shell-bridge context.
+  // Keep the original selection so a semantic name cannot widen to a namespaced sibling.
+  const selectedTools = catalog.filter(tool => cursorToolAllowedByChoice(tool, originalChoice, catalog));
+  const semanticChoiceName = (name: string): string => selectedTools.find(tool =>
+    !tool.namespace && cursorToolWireName(tool, catalog) === name
+    && cursorToolAllowedByChoice(tool, { name }, catalog))?.name ?? name;
+  const toolChoice = originalChoice && typeof originalChoice === "object"
+    ? "name" in originalChoice
+      ? { ...originalChoice, name: semanticChoiceName(originalChoice.name) }
+      : { ...originalChoice, allowedTools: originalChoice.allowedTools.map(semanticChoiceName) }
+    : originalChoice;
+  const visibleTools = cursorToolsForActivePrompt(selectedTools, activeText, toolChoice);
+  const budget = applyCursorToolBudget(visibleTools, toolChoice);
   const limitNote = catalogLimitNote(budget.tools, budget.omitted);
-  const model = normalizeCursorModelId(parsed.modelId, parsed.options.reasoning, cursorFastRequested(parsed));
+  const model = normalizeCursorModelId(
+    parsed.modelId,
+    parsed.options.reasoning,
+    cursorFastRequested(parsed),
+    options.liveRosterScope,
+  );
   const request: CursorRunRequest = {
+    ...(parsed.options.textFormat ? { textFormat: parsed.options.textFormat } : {}),
     modelId: model.modelId,
     ...(model.requestedModelParameters ? { requestedModelParameters: model.requestedModelParameters } : {}),
     ...(model.routingLevel ? { routingLevel: model.routingLevel } : {}),
@@ -511,7 +549,7 @@ export function createCursorRequest(
     ...(budget.tools.length === 0 && !cursorClientThreadOwner(parsed)
       ? { suppressDefaultCursorToolCatalog: true }
       : {}),
-    ...(parsed.options.toolChoice ? { toolChoice: parsed.options.toolChoice } : {}),
+    ...(toolChoice ? { toolChoice } : {}),
     ...(parsed.options.parallelToolCalls !== undefined ? { parallelToolCalls: parsed.options.parallelToolCalls } : {}),
   };
   const resolved = resolveCursorCheckpoint(parsed, request, options);

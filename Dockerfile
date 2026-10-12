@@ -1,7 +1,12 @@
 # syntax=docker/dockerfile:1
 
 # Keep the runtime aligned with package.json and pin the multi-platform image index.
-ARG BUN_IMAGE=oven/bun:1.4.0@sha256:5ff609364c049b54eb0ff560ec96319729a972078ef2c755d758f0c6ef89c2d6
+# Runtime 1.4.2 fixes #6684's Windows Bun.fetch streaming; CI tests stay on 1.4.0
+# because 1.4.2 segfaults reloading preloads in multi-file --isolate (#4821;
+# #6713 run 37631558263: Linux 1/4, macOS 2/2, Windows 9/9). Rejoin after the
+# upstream crash fix passes a unified-version lane=all dispatch, then delete
+# package.json's testRunnerBun pin and setup-project-bun's role input.
+ARG BUN_IMAGE=oven/bun:1.4.2@sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895
 
 FROM ${BUN_IMAGE} AS manifest
 WORKDIR /home/bun/app

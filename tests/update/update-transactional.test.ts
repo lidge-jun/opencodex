@@ -100,6 +100,44 @@ describe("#1942 transactional update", () => {
     expect(installArgs).not.toContain("--ignore-scripts");
   });
 
+  test("staging pins the pre-flight's npm cache instead of npm's default root (#6288)", () => {
+    // --prefix <stage> moves npm's globalconfig into the stage, so a cache= from the operator's
+    // global npmrc would be dropped; the stage must use the root the pre-flight checked.
+    const calls: string[][] = [];
+    const recording = (version: string) => {
+      const stage = stagingNpm(version);
+      return (args: string[]) => { calls.push(args); return stage(args); };
+    };
+    const cachePath = join(scopeDir, "configured cache");
+
+    expect(transactionalNpmUpdate({
+      packageDir, pkgName: PKG, targetVersion: "2.0.0", tag: "latest", cachePath, runNpm: recording("2.0.0"),
+    }).ok).toBe(true);
+    expect(calls[0]![calls[0]!.indexOf("--cache") + 1]).toBe(cachePath);
+
+    // Without a resolved cache the arguments stay as before.
+    expect(transactionalNpmUpdate({
+      packageDir, pkgName: PKG, targetVersion: "3.0.0", tag: "latest", runNpm: recording("3.0.0"),
+    }).ok).toBe(true);
+    expect(calls[1]).not.toContain("--cache");
+  });
+
+  test("npm's strict script policy finds the stage's global root in place (#5760)", () => {
+    // With strict-allow-scripts, npm 11.19 plans the global tree before it creates the prefix
+    // layout and fails with ENOENT on <prefix>/lib when the stage is bare.
+    const stage = stagingNpm("2.0.0");
+    const result = transactionalNpmUpdate({
+      packageDir, pkgName: PKG, targetVersion: "2.0.0", tag: "latest",
+      runNpm: (args: string[]) => {
+        const stageRoot = args[args.indexOf("--prefix") + 1]!;
+        if (process.platform !== "win32" && !existsSync(join(stageRoot, "lib"))) return { status: 254 };
+        return stage(args);
+      },
+    });
+    expect(result.ok).toBe(true);
+    expect(liveVersion(packageDir)).toBe("2.0.0");
+  });
+
   test("stage install failure leaves live untouched (D4 row 1)", () => {
     const result = transactionalNpmUpdate({
       packageDir, pkgName: PKG, targetVersion: "2.0.0", tag: "latest",

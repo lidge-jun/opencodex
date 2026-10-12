@@ -14,6 +14,7 @@ import {
   resetCodexRestartInFlightForTests,
 } from "../../src/codex/app-server-restart-service";
 import type { CodexRestartServiceIo } from "../../src/codex/app-server-restart-service";
+import { resetCodexAppServerCatalogStateCache } from "../../src/codex/app-server-processes";
 import type { CodexAppServerProcess } from "../../src/codex/app-server-processes";
 import { isCodexRestartResponse } from "../../src/lib/codex-restart-contract";
 
@@ -275,8 +276,8 @@ describe("performCodexRestart", () => {
 });
 
 describe("readCodexAppServerState", () => {
-  test("reports the classifier verdict and a running count", () => {
-    const state = readCodexAppServerState({
+  test("reports the classifier verdict and a running count", async () => {
+    const state = await readCodexAppServerState({
       collectState: () => ({
         state: "stale",
         processes: [{ pid: 1, startedAtMs: 1 }, { pid: 2, startedAtMs: 2 }],
@@ -287,12 +288,67 @@ describe("readCodexAppServerState", () => {
     expect(state).toEqual({ state: "stale", runningCount: 2 });
   });
 
-  test("passes unknown through instead of guessing not_running", () => {
-    const state = readCodexAppServerState({
+  test("passes unknown through instead of guessing not_running", async () => {
+    const state = await readCodexAppServerState({
       collectState: () => ({ state: "unknown", processes: [], catalogMtimeMs: null }),
     });
 
     expect(state).toEqual({ state: "unknown", runningCount: 0 });
+  });
+
+  test("the default classifier yields to the event loop while Windows enumeration is slow", async () => {
+    // The dashboard route calls this with no collectState. The synchronous classifier
+    // parked the event loop for the whole CIM walk (4-7s on Windows), stalling proxy
+    // traffic every time the Models page opened.
+    resetCodexAppServerCatalogStateCache();
+    let releaseSnapshots: ((snapshots: CodexAppServerProcess[]) => void) | undefined;
+    const snapshots = new Promise<CodexAppServerProcess[]>(resolve => {
+      releaseSnapshots = resolve;
+    });
+    const reading = readCodexAppServerState({
+      stateDeadlineMs: 60_000,
+      processIo: {
+        platform: "win32",
+        listSnapshotsAsync: () => snapshots,
+        readStartMsBatchAsync: async pids => new Map(pids.map(pid => [pid, 500])),
+        catalogMtimeMs: () => 1_000,
+      },
+    });
+
+    const first = await Promise.race([
+      reading.then(() => "reading"),
+      new Promise<"timer">(resolve => setTimeout(() => resolve("timer"), 10)),
+    ]);
+    expect(first).toBe("timer");
+
+    releaseSnapshots?.([proc(42, "/usr/local/bin/codex app-server")]);
+    await expect(reading).resolves.toEqual({ state: "stale", runningCount: 1 });
+    resetCodexAppServerCatalogStateCache();
+  });
+
+  test("a probe slower than the deadline answers unknown, then serves the finished reading", async () => {
+    resetCodexAppServerCatalogStateCache();
+    let releaseSnapshots: ((snapshots: CodexAppServerProcess[]) => void) | undefined;
+    const snapshots = new Promise<CodexAppServerProcess[]>(resolve => {
+      releaseSnapshots = resolve;
+    });
+    const processIo = {
+      platform: "win32" as const,
+      listSnapshotsAsync: () => snapshots,
+      readStartMsBatchAsync: async (pids: readonly number[]) => new Map(pids.map(pid => [pid, 500])),
+      catalogMtimeMs: () => 1_000,
+    };
+
+    await expect(readCodexAppServerState({ stateDeadlineMs: 20, processIo }))
+      .resolves.toEqual({ state: "unknown", runningCount: 0 });
+
+    // The probe kept running behind the deadline; once it lands, the next read is served
+    // from the cache it wrote instead of starting another walk.
+    releaseSnapshots?.([proc(42, "/usr/local/bin/codex app-server")]);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await expect(readCodexAppServerState({ stateDeadlineMs: 20, processIo }))
+      .resolves.toEqual({ state: "stale", runningCount: 1 });
+    resetCodexAppServerCatalogStateCache();
   });
 });
 

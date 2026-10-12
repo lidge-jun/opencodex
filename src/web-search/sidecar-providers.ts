@@ -5,7 +5,7 @@
  * evaluating when the bridge asks for these names).
  */
 import type { OcxConfig, OcxProviderConfig, OcxWebSearchSidecarConfig } from "../types";
-import { resolveSidecarAuth } from "../sidecar/auth";
+import { resolveSidecarAuth, resolveAnthropicHelperInstance } from "../sidecar/auth";
 import { getAccountSet } from "../oauth/store";
 import type { XaiSearchOptions } from "./xai-executor";
 
@@ -35,6 +35,7 @@ export function resolveSidecarBackend(
 export interface AnthropicSidecarProvider {
   providerName: string;
   provider: OcxProviderConfig;
+  config: OcxConfig;
 }
 
 /**
@@ -45,16 +46,17 @@ export interface AnthropicSidecarProvider {
  * Delegates to the shared sidecar auth module (#2188) so web-search and vision
  * cannot drift on what "Anthropic auth present" means.
  */
-export function findAnthropicSidecarProvider(config: OcxConfig): AnthropicSidecarProvider | undefined {
-  const auth = resolveSidecarAuth(config);
+export function findAnthropicSidecarProvider(config: OcxConfig, parentProviderName?: string): AnthropicSidecarProvider | undefined {
+  const instance = resolveAnthropicHelperInstance(config, { backendFamily: "anthropic", anthropicInstance: config.webSearchSidecar?.anthropicInstance, parentProviderName });
+  const auth = resolveSidecarAuth(config, instance);
   if (!auth.isAnthropicAuth || !auth.anthropicProviderName || !auth.anthropicProvider) return undefined;
-  return { providerName: auth.anthropicProviderName, provider: auth.anthropicProvider };
+  return { providerName: auth.anthropicProviderName, provider: auth.anthropicProvider, config };
 }
 
 /**
- * First enabled provider whose stored Grok OAuth account is active and not marked for
- * reauth — the only credential the xai web-search executor may spend. Same account-set
- * predicate the shared sidecar auth module applies to Anthropic.
+ * First enabled provider whose stored Grok OAuth account is active, not paused by the
+ * operator and not marked for reauth — the only credential the xai web-search executor may
+ * spend. Same account-set predicate the shared sidecar auth module applies to Anthropic.
  */
 export function findXaiSidecarProvider(config: OcxConfig): { providerName: string; provider: OcxProviderConfig } | undefined {
   // The stored Grok credential lives under the provider named "xai" (registry id);
@@ -63,7 +65,7 @@ export function findXaiSidecarProvider(config: OcxConfig): { providerName: strin
   if (!provider || provider.disabled === true || provider.authMode !== "oauth") return undefined;
   const set = getAccountSet("xai");
   const active = set?.accounts.find(account => account.id === set.activeAccountId);
-  if (active && active.needsReauth !== true) return { providerName: "xai", provider };
+  if (active && active.needsReauth !== true && active.paused !== true) return { providerName: "xai", provider };
   return undefined;
 }
 
@@ -78,7 +80,7 @@ export function findGeminiSidecarProvider(config: OcxConfig): { providerName: st
   if (!provider || provider.disabled === true || provider.authMode !== "oauth") return undefined;
   const set = getAccountSet("google-antigravity");
   const active = set?.accounts.find(account => account.id === set.activeAccountId);
-  if (!active || active.needsReauth === true) return undefined;
+  if (!active || active.needsReauth === true || active.paused === true) return undefined;
   const projectId = (active.credential as { projectId?: string } | undefined)?.projectId;
   if (!projectId) return undefined;
   return { providerName: "google-antigravity", provider };

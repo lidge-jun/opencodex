@@ -36,6 +36,32 @@ export interface ReasoningEnvelope {
    * same way a signature does.
    */
   krc?: string;
+  /**
+   * A Responses provider's own `encrypted_content` for one reasoning item, minted while serving
+   * `model` (the client-facing model the Claude route was asked for). The Claude route has no
+   * other channel to hand a provider its reasoning back: the body is `store: false` and Claude
+   * Code replays only the thinking block. `src/claude/inbound.ts` restores it only for a request
+   * naming the same model, so a model switch cannot carry it to a provider that cannot decrypt it.
+   */
+  nat?: NativeReasoning;
+}
+
+export interface NativeReasoning {
+  /** The provider's opaque `encrypted_content`, verbatim. */
+  enc: string;
+  /** Client-facing model the item was produced for. */
+  model: string;
+  /** Route-bound HMAC for this exact ciphertext. */
+  tag: string;
+  /** The provider's reasoning item id, when it sent one. */
+  id?: string;
+}
+
+function decodeNativeReasoning(value: unknown): NativeReasoning | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const { enc, model, id, tag } = value as { enc?: unknown; model?: unknown; id?: unknown; tag?: unknown };
+  if (typeof enc !== "string" || enc.length === 0 || typeof model !== "string" || model.length === 0 || typeof tag !== "string" || tag.length === 0) return undefined;
+  return typeof id === "string" && id.length > 0 ? { enc, model, tag, id } : { enc, model, tag };
 }
 
 export function encodeReasoningEnvelope(envelope: ReasoningEnvelope, budget?: TranslatorBudget): string {
@@ -63,6 +89,36 @@ export function encodeReasoningEnvelope(envelope: ReasoningEnvelope, budget?: Tr
   }
 }
 
+/**
+ * Whether a thinking part's `signature` is an attestation some provider issued, rather than
+ * the serialized reasoning item the parser parks in the same field.
+ *
+ * `src/responses/parser.ts` stores `JSON.stringify(reasoningItem)` on an UNSIGNED thinking
+ * part so the opaque item survives a same-provider round trip. Every adapter that forwards a
+ * signature upstream is forwarding an opaque attestation, and a provider asked to verify our
+ * own parser state cannot recognize it. The predicate lives beside the envelope code that owns
+ * this field's representation rather than in one adapter, because a private second copy is how
+ * the side that writes the field and a side that reads it come to disagree about what it holds.
+ *
+ * This is a deny-list for exactly that one shape, not a guess at what an attestation looks
+ * like. `src/adapters/anthropic.ts` applies a stricter allow-list on top of it, because an
+ * Anthropic signature has a known base64 spelling; that shape is a fact about Anthropic's wire
+ * and is not assumed of any other provider's token here.
+ */
+export function isProviderIssuedThinkingSignature(
+  signature: string | undefined,
+): signature is string {
+  if (typeof signature !== "string" || signature.length === 0) return false;
+  if (!signature.startsWith("{")) return true;
+  try {
+    const parsed: unknown = JSON.parse(signature);
+    return !parsed || typeof parsed !== "object" || Array.isArray(parsed)
+      || (parsed as { type?: unknown }).type !== "reasoning";
+  } catch {
+    return true;
+  }
+}
+
 /** Decode an ocxr1 envelope; returns null for native (OpenAI-encrypted) blobs or garbage. */
 export function decodeReasoningEnvelope(encryptedContent: string, budget?: TranslatorBudget): ReasoningEnvelope | null {
   if (!encryptedContent.startsWith(OCX_REASONING_PREFIX)) return null;
@@ -86,7 +142,9 @@ export function decodeReasoningEnvelope(encryptedContent: string, budget?: Trans
       if (hasTxt) envelope.txt = txt;
       const krc = (parsed as { krc?: unknown }).krc;
       if (typeof krc === "string" && krc.length > 0) envelope.krc = krc;
-      return envelope.sig || envelope.red || hasTxt || envelope.krc ? envelope : null;
+      const nat = decodeNativeReasoning((parsed as { nat?: unknown }).nat);
+      if (nat) envelope.nat = nat;
+      return envelope.sig || envelope.red || hasTxt || envelope.krc || envelope.nat ? envelope : null;
     } catch {
       return null;
     } finally {

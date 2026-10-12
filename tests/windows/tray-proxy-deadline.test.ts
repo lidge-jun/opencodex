@@ -1,7 +1,40 @@
 import { describe, expect, test } from "bun:test";
-import { discoverStableProxyForRestart } from "../../src/cli/tray-proxy";
+import { discoverStableProxyForRestart, recheckRestartFailedStart, runProxyRestart } from "../../src/cli/tray-proxy";
 
 describe("restart discovery deadline", () => {
+  test("production recovery binding retries an exited child after the shared deadline", async () => {
+    const sharedDeadline = Date.now() - 1;
+    const previous = { pid: 10, port: 10100, source: "runtime" } as const;
+    let launches = 0;
+    let freshEnd = 0;
+    const result = await runProxyRestart({
+      findLive: async () => ({ status: "live", live: previous }),
+      startWhenStopped: async recovering => {
+        expect(recovering).toBe(true);
+        return ++launches === 1
+        ? { status: "failed", launch: "exited" }
+        : { status: "started" };
+      },
+      requestInPlaceRestart: async () => ({ accepted: true }),
+      waitForReplacement: async () => null,
+      reobserveAfterReplacement: async () => ({ status: "absent" }),
+      waitBetweenAttempts: async () => {},
+      recheckAfterFailedStart: () => recheckRestartFailedStart(end => {
+        freshEnd = end;
+        return discoverStableProxyForRestart({
+          // Absent after the exited first child; the second launch's confirmation sees it.
+          findLive: async () => launches >= 2 ? { pid: 20, port: 10100, source: "runtime" } : null,
+          waitBetweenChecks: async () => {},
+          expired: () => Date.now() >= end,
+        });
+      }),
+    });
+    expect(sharedDeadline).toBeLessThan(Date.now());
+    expect(freshEnd).toBeGreaterThan(sharedDeadline);
+    expect(freshEnd).toBeGreaterThan(Date.now() + 4_000);
+    expect(result).toEqual({ ok: true, mode: "started" });
+    expect(launches).toBe(2);
+  });
   test("fails closed when the deadline expires after the first absence observation", async () => {
     let calls = 0;
     let expiryChecks = 0;

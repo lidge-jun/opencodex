@@ -15,7 +15,7 @@ Assistant de configuration interactif (`setup` est un alias de `init`). Il deman
 
 ### `ocx start [--port <port>] [--socks5 [host:port] | --socks5-off]`
 
-Démarre le serveur proxy, de préférence sur le port `10100`. La commande écrit l’état du PID et du port d’exécution, et refuse de démarrer une deuxième instance active. Lorsque le port préféré est occupé, `start` interroge le processus qui l’occupe puis s’arrête dans tous les cas : elle refuse de démarrer si un processus opencodex y répond et signale sinon que le processus est inconnu. Elle ne déplace jamais l’écouteur vers un autre port d’elle-même, car cela laisserait le premier proxy en cours d’exécution et redirigerait Codex vers le second. Indiquez un autre port avec `--port`, ou définissez `port: 0` dans la configuration pour demander au système d’exploitation d’en attribuer un. Au démarrage, elle synchronise dans le catalogue Codex les modèles de chaque fournisseur. À l’arrêt, elle rétablit le fonctionnement natif de Codex, sauf si le proxy a été lancé comme service géré (`OCX_SERVICE=1`).
+Démarre le serveur proxy, de préférence sur le port `10100`. La commande écrit l’état du PID et du port d’exécution, et refuse de démarrer une deuxième instance active. Lorsque le port préféré est occupé, `start` interroge le processus qui l’occupe puis s’arrête dans tous les cas : elle refuse de démarrer si un processus opencodex y répond et signale sinon que le processus est inconnu. Elle ne déplace jamais l’écouteur vers un autre port d’elle-même, car cela laisserait le premier proxy en cours d’exécution et redirigerait Codex vers le second. Un autre `--port` explicite est également refusé avec le même `OPENCODEX_HOME`, car les modes d’observation et de plafond écrivent tous deux dans le même journal de dépenses. Utilisez un `OPENCODEX_HOME` distinct pour une instance sœur indépendante ; `port: 0` ne sépare que l’attribution du port, pas l’état. Au démarrage, elle synchronise dans le catalogue Codex les modèles de chaque fournisseur. À l’arrêt, elle rétablit le fonctionnement natif de Codex, sauf si le proxy a été lancé comme service géré (`OCX_SERVICE=1`). Une instance sœur démarrée à côté d’un proxy déjà actif ne fait ni l’un ni l’autre, même lorsqu’elle est arrêtée avec `ocx stop` ou par un signal : elle ne sert que les requêtes directes sur son propre port, et Codex, Grok et Claude restent dirigés vers le proxy qui tournait déjà.
 
 `--socks5` (par défaut `127.0.0.1:10808`) enregistre l’URL SOCKS5 dans `config.proxy` et achemine
 les requêtes HTTP(S) sortantes dans un véritable tunnel SOCKS5. `--socks5-off` supprime uniquement
@@ -133,6 +133,8 @@ Exemple de structure abrégée :
 
 L’objet réel comprend également `listen` (port, nom d’hôte, source du runtime et de la configuration), les diagnostics de chargement de la configuration et les diagnostics du plug-in Codex intégré. Le schéma JSON est uniquement extensible : de futures versions peuvent ajouter des champs, mais les champs existants doivent rester stables. Les clés d’API, jetons OAuth, en-têtes d’autorisation, contenus de requêtes, adresses électroniques et identités de compte en sont volontairement exclus.
 
+La lecture en direct laisse la sonde de service à durée limitée se terminer : jusqu’à 6,5 secondes sous macOS/Linux et 16,5 secondes sous Windows lorsque le cache de diagnostic est vide ou expiré. Les lectures depuis le cache renvoient rapidement leur résultat. En cas de dépassement du délai, la commande se replie toujours sur les diagnostics locaux ; un `/healthz` sain ne suffit pas à confirmer que la protection contre les redémarrages est active.
+
 ### `ocx health [--json]`
 
 Vérifie l’identité du proxy actif. La sortie destinée aux utilisateurs indique le PID et le port ; `--json` produit `{ok, pid, port}`. La commande renvoie 0 uniquement lorsque le proxy est sain, et 1 dans le cas contraire, ce qui permet de l’utiliser comme sonde de service.
@@ -199,6 +201,31 @@ L’ancienne priorité d’arrière-plan (`7`, également la valeur par défaut 
 aux contrôles de santé en cas de contention CPU : la zone de notification affiche alors Offline même si le processus fonctionne.
 Après la mise à jour, exécutez `ocx service repair` pour migrer cette priorité enregistrée et redémarrer le service.
 Une confirmation UAC peut être nécessaire. Une priorité déjà normale ou haute ne déclenche pas, à elle seule, de réenregistrement.
+
+Sous Linux, l’unité systemd invoque le premier fichier `ocx` ordinaire et exécutable trouvé dans `PATH`
+au moment de l’installation, plutôt que les chemins Bun et CLI à l’intérieur de l’arborescence du paquet
+installé. Les gestionnaires de versions comme **mise** et **asdf** installent dans un répertoire
+versionné et suppriment l’ancien lors d’une mise à niveau ; leur shim stable permet à l’unité de
+continuer à résoudre. Les checkouts de source sans lanceur `ocx` conservent la forme directe Bun + CLI.
+Un `OPENCODEX_BUN_PATH` de confiance choisi avant le démarrage de Bun est conservé à travers le shim ;
+les chemins du Bun embarqué dans le paquet sont redécouverts après les mises à niveau.
+
+Sous macOS, launchd utilise à la place les chemins Bun et CLI propres au paquet choisis lors de
+l’installation ou de la réparation. Cela empêche un shim PATH mutable de recevoir le jeton d’API du
+service et l’environnement de proxy configuré lors d’un redémarrage ultérieur. Après la mise à niveau
+d’une installation gérée par un gestionnaire de versions, exécutez `ocx service repair` pour
+actualiser ces chemins avant de redémarrer le service.
+
+Les définitions installées avant ce changement portent encore les anciens chemins versionnés et ne
+peuvent pas migrer d’elles-mêmes — une fois l’ancien exécutable supprimé, aucun code opencodex ne
+s’exécute pour le réparer. Exécutez `ocx service repair` une fois après la mise à niveau. Les
+démarrages du service Linux suivent alors le lanceur ; la réparation macOS écrit les nouveaux chemins
+du paquet dans la définition launchd. Un proxy déjà en cours d’exécution n’est pas remplacé par une
+mise à niveau externe : lorsque la CLI installée est plus récente que le proxy en cours, exécutez
+`ocx service restart` pour que la nouvelle version serve. Sous macOS, `repair` ne suffit pas dans ce
+cas : la définition n’a pas changé, et une réparation qui ne change rien ne recharge rien. Si c’est le
+proxy qui est plus récent, vérifiez l’installation de la CLI et le `PATH` comme décrit sous
+[`ocx status`](#ocx-status---json).
 
 | Sous-commande | Action |
 | --- | --- |
@@ -271,30 +298,42 @@ Lors d’une nouvelle installation où l’absence de la tâche OpenCodex dans l
 
 Ainsi, l’annulation ou le refus de l’UAC, comme l’impossibilité de revendiquer une nouvelle racine en toute sécurité, laisse en place le proxy fonctionnel et son routage Codex. Les inscriptions existantes ou conflictuelles continuent d’échouer de manière sûre au lieu d’être supprimées dans le cadre d’une annulation approximative.
 
+Si le démarrage signale `another process owns the runtime mutation lease` ou si `ocx service status` affiche `Runtime mutation lease busy`, le bail bloque le démarrage ou les modifications du service, même lorsque le proxy ne tourne pas. Le message indique le chemin du verrou, le PID enregistré, si ce PID est encore actif, le nom de l’exécutable lorsqu’il est disponible et l’âge du bail. L’identité du processus n’est pas vérifiée : le PID a pu être réutilisé, si bien que l’état actif et le nom de l’exécutable décrivent le processus qui occupe ce PID à présent. Attendez la fin de l’opération puis réessayez ; ne supprimez pas le verrou et n’arrêtez aucun processus sur la seule foi de ce PID. Une tentative de modification ultérieure peut récupérer un bail périmé dès que son âge dépasse 30 secondes et que le PID enregistré n’est plus actif ; `ocx service status` se contente de l’inspecter.
+
 ### `ocx codex-shim <install|status|uninstall|remove>`
 
-Entoure un lanceur `codex` basé sur un script et présent dans PATH avec un script léger de démarrage automatique. Les cibles réelles `codex.exe` restent intactes afin de ne pas casser les appels qui visent précisément cet exécutable.
+Sur macOS et Linux, `ocx codex-shim install` crée un wrapper privé dans `<OPENCODEX_HOME>/bin/codex` et le fichier à sourcer `<OPENCODEX_HOME>/codex-shell-env.sh`, dans le répertoire OpenCodex résolu. Le lanceur natif reste à l’emplacement installé par brew, npm ou fnm : mises à niveau et retours à une version précédente fonctionnent sans réécrire ce lanceur. Sur Windows, les lanceurs à base de scripts restent enveloppés sur place ; les vrais `codex.exe` restent intacts. Pour une installation Windows ne proposant que `codex.exe`, utilisez `ocx service install`.
+
+Après la configuration PATH de brew/fnm, exécutez la commande d’activation affichée par l’installation. Avec le répertoire par défaut :
+
+```sh
+. "$HOME/.opencodex/codex-shell-env.sh"
+```
+
+Pour un répertoire personnalisé, utilisez le chemin entre guillemets affiché. Le sourçage est idempotent : il retire les doublons du répertoire privé et le place en tête de PATH. Ajoutez vous-même cette ligne après la configuration PATH dans votre fichier de démarrage pour les futures sessions ; OpenCodex ne modifie jamais ces fichiers. Un wrapper exécutable suffit pour réussir l’installation, même s’il n’est pas encore actif dans le shell courant. Une installation refusée ou un wrapper inutilisable reste un échec. `ocx status`, `ocx codex-shim status`, `ocx doctor` et `ocx connect` signalent **not active** avec la commande d’activation si PATH ne sélectionne pas le wrapper ; les avertissements de connect ne changent pas son code de sortie. Les alias, fonctions et lancements depuis le bureau ou les services nécessitent leur propre configuration.
 
 Avant de valider une installation ou une réparation, OpenCodex exécute le lanceur enregistré avec `--version` en désactivant le démarrage du service. La modification est refusée et annulée si le lanceur résout `codex` vers le shim lui-même, renvoie un code non nul, dépasse cinq secondes, laisse des processus descendants actifs, ou ne peut pas être validé et nettoyé en toute sécurité. `codex-shim install` n’est donc pas inconditionnel. En cas de refus, réinstallez Codex afin que l’entrée PATH désigne un exécutable ou un lanceur concret, puis recommencez. Utilisez plutôt `ocx service install` lorsqu’un lanceur dynamique fourni par un gestionnaire de commandes ne peut pas satisfaire ces contrôles.
 
-Pendant une mise à niveau, un shim Unix installé qui ne contient pas la garde de validation actuelle est régénéré et testé. Si son lanceur enregistré n’est pas sûr, OpenCodex supprime le shim obsolète et rétablit le lanceur d’origine au lieu de conserver l’enveloppe dangereuse.
+Un ancien shim Unix installé sur place n’est migré que par un `ocx codex-shim install` explicite. Le lanceur natif enregistré est restauré sans remplacer un lanceur plus récent déjà présent, puis le wrapper privé est installé. Si cette installation échoue après la restauration, le lanceur natif reste restauré et vous pouvez recommencer. Si le lanceur enregistré manque ou ne fonctionne plus, réparez l’installation avec le gestionnaire de paquets ; OpenCodex ne choisit pas une autre installation et ne réenveloppe pas le chemin du gestionnaire.
 
-L’installation du lanceur ne prouve pas à elle seule que les requêtes Codex passeront par OpenCodex. Après une installation saine, la commande examine le routage Codex actuel et affiche un avertissement plutôt qu’un résultat positif lorsque le routage est externe, appartient à l’utilisateur ou ne peut pas être vérifié. Elle avertit aussi lorsque des variables de proxy sortant n’existent que dans le processus actuel alors que `config.proxy` est absent ou non résolu, car les lanceurs Codex et les services d’arrière-plan peuvent ne pas hériter de cet environnement. Ces contrôles sont en lecture seule et n’affichent jamais la valeur du proxy. Corrigez le transfert signalé et exécutez `ocx doctor` avant de compter sur le démarrage automatique.
+L’installation du lanceur ne prouve pas à elle seule que les requêtes Codex passeront par OpenCodex. Après une installation dont le wrapper est exécutable, la commande examine le routage Codex actuel et affiche un avertissement plutôt qu’un résultat positif lorsque le routage est externe, appartient à l’utilisateur ou ne peut pas être vérifié. Elle avertit aussi lorsque des variables de proxy sortant n’existent que dans le processus actuel alors que `config.proxy` est absent ou non résolu, car les lanceurs Codex et les services d’arrière-plan peuvent ne pas hériter de cet environnement. Ces contrôles sont en lecture seule et n’affichent jamais la valeur du proxy. Corrigez le transfert signalé et exécutez `ocx doctor` avant de compter sur le démarrage automatique.
 
-Si une mise à jour externe achevée de Codex remplace un shim installé, la prochaine commande `ocx` ordinaire sauvegarde le nouveau lanceur stable et rétablit le shim avant de répartir la commande. La commande d’inspection sans effet `ocx system codex-cli-update check` et les invocations mal formées de son espace de noms réservé `ocx system codex-cli-update` n’effectuent jamais cette réparation. Un lanceur encore en cours de modification reste intact et sera réexaminé plus tard. Un échec de réparation produit un avertissement sans faire échouer la commande demandée. Repli manuel : `ocx codex-shim install`. Définissez `codexShimAutoRestore` sur `false`, ou `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0` pour désactiver ce comportement au niveau du processus.
+Sur Unix, la réparation automatique ne rafraîchit que le wrapper privé ; elle ne réécrit jamais les lanceurs du gestionnaire de paquets et ne migre pas les anciens shims installés sur place. Sur Windows, après une mise à jour externe achevée qui remplace le shim, la prochaine commande `ocx` ordinaire sauvegarde le nouveau lanceur stable et rétablit le shim. Un lanceur encore en cours de modification reste intact et sera réexaminé plus tard. `ocx status`, `ocx doctor`, `ocx codex-shim status`, `ocx system codex-cli-update check` et les invocations mal formées de son espace de noms réservé ne déclenchent pas cette réparation. Un échec produit un avertissement sans faire échouer la commande demandée. Repli manuel : `ocx codex-shim install`. Définissez `codexShimAutoRestore` sur `false`, ou `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0` pour désactiver ce comportement au niveau du processus.
 
 | Sous-commande | Action |
 | --- | --- |
 | `install` | Installe le shim, ou le répare s’il est obsolète. |
-| `uninstall` | Supprime le shim et rétablit le binaire Codex d’origine. |
+| `uninstall` | Supprime les fichiers privés Unix sans modifier Codex natif ; sur Windows, restaure le lanceur d’origine. |
 | `remove` | Alias de `uninstall`. |
-| `status` | Indique si le shim est installé, obsolète ou absent. |
+| `status` | Indique l’état du shim et si le wrapper privé est actif dans PATH. |
 
 ```bash
 ocx codex-shim install
 ocx codex-shim status
 ocx codex-shim uninstall
 ```
+
+Après la désinstallation Unix, retirez la ligne de sourçage de votre fichier de démarrage et redémarrez le shell ou retirez le répertoire privé de PATH. Seuls le wrapper, le fichier d’environnement et l’état détenus par OpenCodex sont supprimés ; le lanceur du gestionnaire reste intact. Un ancien shim Unix installé sur place est libéré à l’aide de ses données de restauration enregistrées.
 
 :::tip[Service ou shim]
 Utilisez `ocx service` pour maintenir un proxy d’arrière-plan toujours actif, ce qui est recommandé. Utilisez `ocx codex-shim` pour un démarrage léger à la demande, sans démon : le proxy ne démarre que lorsque `codex` est lancé.
@@ -303,6 +342,8 @@ Utilisez `ocx service` pour maintenir un proxy d’arrière-plan toujours actif,
 ### `ocx tray <install|start|stop|status|uninstall|remove> [--json] [--no-start]`
 
 Installe et contrôle l’icône OpenCodex dans la zone de notification Windows. Elle démarre à l’ouverture de session et fournit des commandes du proxy accessibles en un clic. `start` et `stop` contrôlent uniquement l’icône ; utilisez son menu pour contrôler le proxy. `--no-start` s’applique à `install` et installe l’icône sans la lancer immédiatement.
+Obsolète : l’application OpenCodex fournit la zone de notification sous Windows, macOS et Linux ; `ocx tray` reste disponible pour les installations sans l’application de bureau.
+Lorsqu'une version plus récente du paquet est connue, la zone de notification ajoute un point bleu à l'icône en ligne, d'avertissement ou hors ligne et affiche **Update available**. Elle vérifie le badge mis en cache localement environ une fois par minute ; les résultats obsolètes ou indisponibles retirent le point. L'élément ouvre le tableau de bord, où vous pouvez lancer la mise à jour du paquet. L'installation automatique est désactivée.
 
 ## Tableau de bord
 
@@ -315,6 +356,10 @@ Ouvre le [tableau de bord Web](/fr/guides/web-dashboard/) à l’adresse `http:/
 `ocx update` met à jour OpenCodex lui-même, et non la CLI Codex. Utilisez `ocx system codex-cli-update check` parmi les [commandes d’inspection système](/fr/reference/cli/agents/) pour vérifier, de façon bornée et en lecture seule, la provenance du candidat Codex CLI configuré. Cette commande n’interroge aucun registre de paquets et n’installe aucune mise à jour.
 
 ### `ocx update [--tag latest|preview]`
+
+Lorsque OpenCodex est installé avec mise, cette commande échoue avant d'arrêter le proxy ou de modifier les fichiers du paquet et affiche `mise upgrade <outil>` avec l'alias mise local vérifié. La vérification des mises à jour reste disponible et signale une gestion externe. Des métadonnées de propriété mise illisibles ou incohérentes bloquent aussi toute modification sans deviner le nom de l'outil, et `--tag preview` ne change jamais la sélection configurée dans mise.
+
+Sous Linux, un service en arrière-plan dont le lanceur enregistré est le lanceur de paquet de mise (`<tool>/latest/node_modules/.bin/ocx`, et non un shim mise) suit `mise upgrade` tout seul : une dizaine de secondes après la stabilisation de la nouvelle version, il draine les requêtes actives et redémarre sur celle-ci, et il se rétablit de la même façon si mise supprime plus tard la version qu'il exécutait. Sous macOS, pour un service installé via un shim mise et pour un proxy au premier plan, redémarrez-le vous-même après la mise à jour (sous macOS, d'abord `ocx service repair`).
 
 Met à jour opencodex depuis npm. Les installations stables utilisent `@latest` ; les préversions restent sur `@preview`, sauf si vous indiquez `--tag latest|preview`. La commande détecte un dépôt de sources et vous invite alors à exécuter `git pull && bun install`. Elle ne fait rien si la version la plus récente correspondant à cette balise est déjà installée.
 
@@ -329,4 +374,4 @@ Les nouvelles versions deviennent disponibles lorsque le [workflow de publicatio
 
 ## Cycle de vie du client Remote Hub
 
-Utilisez `ocx connect <url> --pairing-code-stdin`, `ocx connect status`, `ocx sync` et `ocx connect rotate --pairing-code-stdin`. `ocx disconnect` restaure l'état local hors ligne sans révoquer la clé du hub. Tant que le client est connecté, `ocx connect revoke --admin-token-stdin` révoque l'`apiKeyId` enregistré; après déconnexion, utilisez **Integrations → API Keys** sur le hub. Les secrets passent uniquement par stdin, jamais par argv.
+Utilisez `ocx connect <url> --pairing-code-stdin`, `ocx connect status`, `ocx sync` et `ocx connect rotate --pairing-code-stdin`. `ocx disconnect` restaure l'état local hors ligne sans révoquer la clé du hub. Tant que le client est connecté, `ocx connect revoke --admin-token-stdin` révoque l'`apiKeyId` enregistré; après déconnexion, utilisez **Connexion → Clés API** sur le hub. Les secrets passent uniquement par stdin, jamais par argv.

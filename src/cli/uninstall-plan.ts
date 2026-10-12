@@ -84,3 +84,12 @@ export function everyEndpointProvenDown(
   if (endpoints.length === 0) return false;
   return endpoints.every(e => probe(e) === "dead");
 }
+
+export async function everyEndpointProvenDownAsync(
+  endpoints: readonly ProbeEndpoint[],
+  probe: (e: ProbeEndpoint) => Promise<"live" | "dead" | "unknown"> | "live" | "dead" | "unknown",
+): Promise<boolean> {
+  if (endpoints.length === 0) return false;
+  const results = await Promise.all(endpoints.map(e => probe(e)));
+  return results.every(result => result === "dead");
+}

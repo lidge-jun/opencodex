@@ -3,6 +3,7 @@ import { diagnoseCodexShim, installCodexShim, uninstallCodexShim } from "../code
 import { readManagementJsonBody } from "../server/management/body";
 import type { OcxClientConnectionConfig } from "../types";
 import { disconnectClient, syncConnectedClient } from "./connect";
+import { isLinkConnection } from "./state";
 
 export type HubReachability = "unknown" | "online" | "offline" | "unauthorized";
 
@@ -23,7 +24,7 @@ export interface MachineStatusV1 {
 export interface MachineApiDeps {
   sync: typeof syncConnectedClient;
   disconnect: typeof disconnectClient;
-  scheduleStandaloneRecycle: () => void;
+  scheduleStandaloneRecycle: (disconnectedTokenFingerprint: string) => void;
   hubReachability?: () => HubReachability;
   setHubReachability?: (value: HubReachability) => void;
 }
@@ -50,14 +51,19 @@ async function jsonBody(req: Request): Promise<unknown | Response> {
 
 function statusPayload(req: Request, state: OcxClientConnectionConfig, deps: MachineApiDeps): MachineStatusV1 {
   const machineBase = new URL(req.url).origin;
+  // A link Child's management URL is the tunnel, whose hub-link ingress serves no /api/* and no
+  // session bootstrap. Its dashboard reads the Child's own listener instead (`/api/link/status`).
+  const linkMode = isLinkConnection(state);
   return {
     mode: "client",
     connected: true,
     machineBase,
-    sharedBase: state.managementTransport === "relay"
-      ? `${machineBase}/api/machine/hub-relay`
-      : state.managementUrl,
-    sharedServerOrigin: state.managementUrl,
+    sharedBase: linkMode
+      ? machineBase
+      : state.managementTransport === "relay"
+        ? `${machineBase}/api/machine/hub-relay`
+        : state.managementUrl,
+    sharedServerOrigin: linkMode ? machineBase : state.managementUrl,
     managementTransport: state.managementTransport,
     apiKeyId: state.apiKeyId,
     protocolVersion: state.protocolVersion,
@@ -130,7 +136,7 @@ export async function handleMachineApi(
     }
     try {
       const result = await deps.disconnect(input.keepCatalog === undefined ? {} : { keepCatalog: input.keepCatalog });
-      deps.scheduleStandaloneRecycle();
+      deps.scheduleStandaloneRecycle(state.tokenFingerprint);
       return Response.json({ success: true, ...result }, { status: 202 });
     } catch (error) {
       return Response.json({ success: false, error: error instanceof Error ? error.message : "disconnect failed" }, { status: 409 });

@@ -1,0 +1,374 @@
+import { createHash, generateKeyPairSync, createPrivateKey, createPublicKey, sign, X509Certificate, type KeyObject } from "node:crypto";
+import { join } from "node:path";
+import { withLocalCaPublication, type LocalCaFiles } from "./local-ca-files";
+
+/**
+ * Local certificate authority for the Claude intercept listener.
+ *
+ * Claude Code opens `CONNECT api.anthropic.com:443` through `HTTPS_PROXY` and then expects a
+ * TLS server that presents a certificate for that name. This module mints that authority and
+ * its leaves with nothing but `node:crypto`: no OpenSSL shell-out, no third-party ASN.1
+ * library. The CA is trusted by the Claude Code process alone via `NODE_EXTRA_CA_CERTS`; it is
+ * never installed into an OS trust store.
+ *
+ * Only the subset of X.509 needed for a v3 CA and a serverAuth leaf is encoded. ECDSA P-256 is
+ * used for both, which Node's TLS stack accepts without any additional configuration.
+ */
+
+export const CLAUDE_INTERCEPT_CA_COMMON_NAME = "opencodex Claude Intercept CA";
+const ORGANIZATION = "opencodex";
+const CA_VALIDITY_DAYS = 3650;
+const LEAF_VALIDITY_DAYS = 365;
+
+// ── DER encoding ────────────────────────────────────────────────────────────────
+
+function derLength(length: number): Uint8Array {
+  if (length < 0x80) return Uint8Array.of(length);
+  const bytes: number[] = [];
+  let rest = length;
+  while (rest > 0) {
+    bytes.unshift(rest & 0xff);
+    rest >>= 8;
+  }
+  return Uint8Array.of(0x80 | bytes.length, ...bytes);
+}
+
+function concat(...parts: Uint8Array[]): Uint8Array {
+  const total = parts.reduce((sum, part) => sum + part.length, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.length;
+  }
+  return out;
+}
+
+function tlv(tag: number, body: Uint8Array): Uint8Array {
+  return concat(Uint8Array.of(tag), derLength(body.length), body);
+}
+
+const sequence = (...parts: Uint8Array[]) => tlv(0x30, concat(...parts));
+const set = (...parts: Uint8Array[]) => tlv(0x31, concat(...parts));
+const boolean = (value: boolean) => tlv(0x01, Uint8Array.of(value ? 0xff : 0x00));
+const octetString = (body: Uint8Array) => tlv(0x04, body);
+const utf8String = (text: string) => tlv(0x0c, new TextEncoder().encode(text));
+const contextTag = (n: number, body: Uint8Array, constructed = true) => tlv((constructed ? 0xa0 : 0x80) | n, body);
+
+function integer(bytes: Uint8Array): Uint8Array {
+  return tlv(0x02, (bytes[0]! & 0x80) !== 0 ? concat(Uint8Array.of(0), bytes) : bytes);
+}
+
+function bitString(bytes: Uint8Array, unusedBits = 0): Uint8Array {
+  return tlv(0x03, concat(Uint8Array.of(unusedBits), bytes));
+}
+
+function objectIdentifier(dotted: string): Uint8Array {
+  const arcs = dotted.split(".").map(Number);
+  const bytes: number[] = [arcs[0]! * 40 + arcs[1]!];
+  for (const arc of arcs.slice(2)) {
+    const encoded: number[] = [arc & 0x7f];
+    let rest = arc >> 7;
+    while (rest > 0) {
+      encoded.unshift((rest & 0x7f) | 0x80);
+      rest >>= 7;
+    }
+    bytes.push(...encoded);
+  }
+  return tlv(0x06, Uint8Array.from(bytes));
+}
+
+function utcTime(date: Date): Uint8Array {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const text = `${pad(date.getUTCFullYear() % 100)}${pad(date.getUTCMonth() + 1)}${pad(date.getUTCDate())}`
+    + `${pad(date.getUTCHours())}${pad(date.getUTCMinutes())}${pad(date.getUTCSeconds())}Z`;
+  return tlv(0x17, new TextEncoder().encode(text));
+}
+
+const OID = {
+  commonName: "2.5.4.3",
+  organization: "2.5.4.10",
+  ecdsaWithSha256: "1.2.840.10045.4.3.2",
+  basicConstraints: "2.5.29.19",
+  nameConstraints: "2.5.29.30",
+  keyUsage: "2.5.29.15",
+  subjectAltName: "2.5.29.17",
+  extendedKeyUsage: "2.5.29.37",
+  subjectKeyIdentifier: "2.5.29.14",
+  authorityKeyIdentifier: "2.5.29.35",
+  serverAuth: "1.3.6.1.5.5.7.3.1",
+} as const;
+
+function distinguishedName(commonName: string): Uint8Array {
+  return sequence(
+    set(sequence(objectIdentifier(OID.organization), utf8String(ORGANIZATION))),
+    set(sequence(objectIdentifier(OID.commonName), utf8String(commonName))),
+  );
+}
+
+function extension(oid: string, critical: boolean, value: Uint8Array): Uint8Array {
+  return critical
+    ? sequence(objectIdentifier(oid), boolean(true), octetString(value))
+    : sequence(objectIdentifier(oid), octetString(value));
+}
+
+/** iPAddress bases (address + mask, all zero) that cover every IPv4 and every IPv6 address. */
+export const ALL_IP_ADDRESS_BASES: readonly Uint8Array[] = [new Uint8Array(8), new Uint8Array(32)];
+
+/**
+ * RFC 5280 NameConstraints. permittedSubtrees holds one dNSName base per name. A DNS-only permitted
+ * list leaves other name forms unconstrained, so excludedSubtrees names every IPv4 and IPv6
+ * address unless the caller opts out.
+ */
+function nameConstraints(permitted: readonly string[], excludeAllIpAddresses: boolean): Uint8Array {
+  const subtrees = permitted.map(name => sequence(contextTag(2, new TextEncoder().encode(name), false)));
+  const excluded = ALL_IP_ADDRESS_BASES.map(base => sequence(contextTag(7, base, false)));
+  return sequence(
+    contextTag(0, concat(...subtrees)),
+    ...(excludeAllIpAddresses ? [contextTag(1, concat(...excluded))] : []),
+  );
+}
+
+function subjectPublicKeyInfo(key: KeyObject): Uint8Array {
+  return new Uint8Array(key.export({ type: "spki", format: "der" }));
+}
+
+/** RFC 5280 permits any unique octet string; a truncated SHA-256 of the SPKI is stable and collision-safe. */
+function keyIdentifier(key: KeyObject): Uint8Array {
+  return new Uint8Array(createHash("sha256").update(subjectPublicKeyInfo(key)).digest()).subarray(0, 20);
+}
+
+function randomSerial(): Uint8Array {
+  const serial = crypto.getRandomValues(new Uint8Array(16));
+  serial[0]! &= 0x7f;
+  if (serial[0] === 0) serial[0] = 1;
+  return serial;
+}
+
+function toPem(label: string, der: Uint8Array): string {
+  const base64 = Buffer.from(der).toString("base64").replace(/(.{64})/g, "$1\n").trimEnd();
+  return `-----BEGIN ${label}-----\n${base64}\n-----END ${label}-----\n`;
+}
+
+interface IssueOptions {
+  subject: Uint8Array;
+  issuer: Uint8Array;
+  subjectKey: KeyObject;
+  signingKey: KeyObject;
+  validityDays: number;
+  extensions: Uint8Array[];
+}
+
+function issueCertificate(options: IssueOptions): Uint8Array {
+  // Back-date slightly so a client whose clock trails ours by a few minutes still accepts it.
+  const notBefore = new Date(Date.now() - 5 * 60_000);
+  const notAfter = new Date(notBefore.getTime() + options.validityDays * 86_400_000);
+  const algorithm = sequence(objectIdentifier(OID.ecdsaWithSha256));
+  const tbsCertificate = sequence(
+    contextTag(0, tlv(0x02, Uint8Array.of(2))),
+    integer(randomSerial()),
+    algorithm,
+    options.issuer,
+    sequence(utcTime(notBefore), utcTime(notAfter)),
+    options.subject,
+    subjectPublicKeyInfo(options.subjectKey),
+    contextTag(3, sequence(...options.extensions)),
+  );
+  const signature = new Uint8Array(sign("sha256", tbsCertificate, { key: options.signingKey, dsaEncoding: "der" }));
+  return sequence(tbsCertificate, algorithm, bitString(signature));
+}
+
+// ── Authority + leaves ──────────────────────────────────────────────────────────
+
+export interface PemKeyPair {
+  certPem: string;
+  keyPem: string;
+}
+
+export interface LocalInterceptCa extends PemKeyPair {
+  publicKey: KeyObject;
+  privateKey: KeyObject;
+}
+
+export interface AuthorityOptions {
+  commonName: string;
+  /** Optional whole-day lifetime for short-lived authorities; defaults to the existing 3650 days. */
+  validityDays?: number;
+  permittedDnsNames?: readonly string[];
+  /** With permittedDnsNames: also exclude every IP address (default true). */
+  excludeAllIpAddresses?: boolean;
+ }
+
+export function createCertificateAuthority(options: AuthorityOptions): LocalInterceptCa {
+  const validityDays = options.validityDays ?? CA_VALIDITY_DAYS;
+  if (!Number.isInteger(validityDays) || validityDays < 1 || validityDays > CA_VALIDITY_DAYS) {
+    throw new Error("CA validityDays must be an integer between 1 and 3650");
+  }
+  const { publicKey, privateKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+  const name = distinguishedName(options.commonName);
+  const der = issueCertificate({
+    subject: name,
+    issuer: name,
+    subjectKey: publicKey,
+    signingKey: privateKey,
+    validityDays,
+    extensions: [
+      extension(OID.basicConstraints, true, sequence(boolean(true), tlv(0x02, Uint8Array.of(0)))),
+      // keyCertSign | cRLSign
+      extension(OID.keyUsage, true, bitString(Uint8Array.of(0x06), 1)),
+      extension(OID.subjectKeyIdentifier, false, octetString(keyIdentifier(publicKey))),
+      ...(options.permittedDnsNames?.length
+        ? [extension(OID.nameConstraints, true, nameConstraints(options.permittedDnsNames, options.excludeAllIpAddresses !== false))]
+        : []),
+    ],
+  });
+  return {
+    certPem: toPem("CERTIFICATE", der),
+    keyPem: privateKey.export({ type: "pkcs8", format: "pem" }) as string,
+    publicKey,
+    privateKey,
+  };
+}
+
+export function createLocalInterceptCa(): LocalInterceptCa {
+  return createCertificateAuthority({ commonName: CLAUDE_INTERCEPT_CA_COMMON_NAME });
+}
+
+/**
+ * Test hook for trust-boundary suites: mint a self-signed authority carrying an arbitrary list of
+ * DER-encoded Extension items so adversarial profiles still bear a valid signature. Production
+ * issuance always goes through createCertificateAuthority's fixed extension set.
+ */
+export function mintAuthorityWithExtensionsForTests(commonName: string, extensions: Uint8Array[]): LocalInterceptCa {
+  const { publicKey, privateKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+  const name = distinguishedName(commonName);
+  const der = issueCertificate({
+    subject: name,
+    issuer: name,
+    subjectKey: publicKey,
+    signingKey: privateKey,
+    validityDays: CA_VALIDITY_DAYS,
+    extensions,
+  });
+  return {
+    certPem: toPem("CERTIFICATE", der),
+    keyPem: privateKey.export({ type: "pkcs8", format: "pem" }) as string,
+    publicKey,
+    privateKey,
+  };
+}
+
+/** IPv4 literal to its four octets, or null. Only the leaf SAN encoder needs it. */
+function ipv4Octets(host: string): Uint8Array | null {
+  const parts = host.split(".");
+  if (parts.length !== 4 || !parts.every(part => /^\d{1,3}$/.test(part) && Number(part) <= 255)) return null;
+  return Uint8Array.from(parts.map(Number));
+}
+
+/**
+ * Issue a serverAuth leaf for `hosts` (first entry becomes the CN). Names become SAN dNSNames and
+ * IPv4 literals become iPAddress entries.
+ */
+export function issueServerLeaf(ca: LocalInterceptCa, issuerCommonName: string, hosts: readonly string[]): PemKeyPair {
+  if (hosts.length === 0) throw new Error("intercept leaf requires at least one host");
+  const { publicKey, privateKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+  const der = issueCertificate({
+    subject: distinguishedName(hosts[0]!),
+    issuer: distinguishedName(issuerCommonName),
+    subjectKey: publicKey,
+    signingKey: ca.privateKey,
+    validityDays: LEAF_VALIDITY_DAYS,
+    extensions: [
+      extension(OID.basicConstraints, true, sequence()),
+      // digitalSignature
+      extension(OID.keyUsage, true, bitString(Uint8Array.of(0x80), 7)),
+      extension(OID.extendedKeyUsage, false, sequence(objectIdentifier(OID.serverAuth))),
+      extension(OID.subjectAltName, false, sequence(
+        ...hosts.map(host => {
+          const octets = ipv4Octets(host);
+          return octets ? contextTag(7, octets, false) : contextTag(2, new TextEncoder().encode(host), false);
+        }),
+      )),
+      extension(OID.authorityKeyIdentifier, false, sequence(contextTag(0, keyIdentifier(ca.publicKey), false))),
+    ],
+  });
+  return {
+    certPem: toPem("CERTIFICATE", der),
+    keyPem: privateKey.export({ type: "pkcs8", format: "pem" }) as string,
+  };
+}
+
+export function issueLocalInterceptLeaf(ca: LocalInterceptCa, hosts: readonly string[]): PemKeyPair {
+  return issueServerLeaf(ca, CLAUDE_INTERCEPT_CA_COMMON_NAME, hosts);
+}
+
+// ── Persistence ─────────────────────────────────────────────────────────────────
+
+export const CLAUDE_INTERCEPT_STATE_DIR = "claude-intercept";
+export const CLAUDE_INTERCEPT_CA_CERT_FILE = "ca.pem";
+
+export function claudeInterceptStateDir(configDir: string): string {
+  return join(configDir, CLAUDE_INTERCEPT_STATE_DIR);
+}
+
+/** Path Claude Code must see in `NODE_EXTRA_CA_CERTS`. Stable across restarts. */
+export function claudeInterceptCaCertPath(configDir: string): string {
+  return join(claudeInterceptStateDir(configDir), CLAUDE_INTERCEPT_CA_CERT_FILE);
+}
+
+function loadPersistedCa(files: LocalCaFiles, accept?: (cert: X509Certificate) => boolean): LocalInterceptCa | null {
+  // Filesystem safety and access errors must escape; only benign PEM corruption regenerates.
+  const pair = files.readPair();
+  if (!pair) return null;
+  const { certPem, keyPem } = pair;
+  try {
+    const privateKey = createPrivateKey(keyPem);
+    const publicKey = createPublicKey(keyPem);
+    const certificate = new X509Certificate(certPem);
+    if (!certificate.ca || !certificate.checkPrivateKey(privateKey) || !certificate.verify(publicKey)
+      || (accept && !accept(certificate))) return null;
+    return { certPem, keyPem, publicKey, privateKey };
+  } catch { // no-excuse-ok: catch -- malformed PEM in validated owner-controlled files is regenerated below.
+    return null;
+  }
+}
+
+/** Persist an authority under its own lease, replacing corrupt or rejected safe pairs. */
+export function ensurePersistedAuthority(
+  dir: string,
+  options: AuthorityOptions,
+  lockName = "ca-publication.sqlite",
+  accept?: (cert: X509Certificate) => boolean,
+): LocalInterceptCa {
+  // A separate SQLite namespace binds exclusion to the explicit CA directory.
+  // The OS releases it on crash; a contending caller fails before touching either
+  // PEM. Readers also take the lease so they cannot observe half a publication.
+  return withLocalCaPublication(dir, lockName, files => {
+    const existing = loadPersistedCa(files, accept);
+    if (existing) return existing;
+    const ca = createCertificateAuthority(options);
+    files.writePair(ca);
+    return ca;
+  });
+}
+
+/** Preserve the original intercept CA path, name, permissions and extension set. */
+export function ensureLocalInterceptCa(configDir: string): LocalInterceptCa {
+  return ensurePersistedAuthority(
+    claudeInterceptStateDir(configDir),
+    { commonName: CLAUDE_INTERCEPT_CA_COMMON_NAME },
+  );
+}
+
+/** Startup may race a settings apply publishing the same CA. Retry only lease
+ * contention, before binding listeners, without blocking the main event loop. */
+export async function ensureLocalInterceptCaForStartup(configDir: string): Promise<LocalInterceptCa> {
+  for (let attempt = 0; ; attempt += 1) {
+    try { return ensureLocalInterceptCa(configDir); }
+    catch (error) {
+      if (attempt >= 49 || !(error instanceof Error)
+        || !("code" in error) || error.code !== "client_lifecycle_busy") throw error;
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+  }
+}

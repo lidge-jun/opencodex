@@ -6,6 +6,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "../../src/codex/catalog/native-models";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { withConfigMutationLockSync } from "../../src/config/mutation-lock";
+import { NEUTRAL_IDENTITY_LINE } from "../../src/adapters/identity";
 
 const repoRoot = dirname(fileURLToPath(new URL("../../package.json", import.meta.url)));
 
@@ -24,6 +26,9 @@ function runScript(
       ...extraEnv,
     },
     encoding: "utf8",
+    // Scripts print whole catalogs; with the GPT-6 roster rows (full instructions) a
+    // three-catalog dump passes spawnSync's 1 MiB default and gets truncated (ENOBUFS).
+    maxBuffer: 64 * 1024 * 1024,
   });
   const diagnostics = [result.stderr ?? ""];
   if (result.error) {
@@ -36,6 +41,24 @@ function runScript(
     stderr: diagnostics.filter(Boolean).join("\n"),
     status: result.status ?? 1,
   };
+}
+
+/**
+ * Run a catalog sync the way a provider deletion really reaches it: through config.json on disk.
+ * The catalog refuses to drop a provider's rows unless the file agrees the provider is gone (#6529).
+ */
+function syncWithSavedConfig(
+  codexHome: string,
+  opencodexHome: string,
+  config: Record<string, unknown>,
+  prelude = "",
+): { stdout: string; status: number; stderr: string } {
+  writeFileSync(join(opencodexHome, "config.json"), JSON.stringify(config));
+  return runScript(codexHome, opencodexHome, `
+    ${prelude}
+    const { syncCatalogModels } = require("./src/codex/catalog");
+    syncCatalogModels(${JSON.stringify(config)}).then(res => console.log(JSON.stringify(res)));
+  `);
 }
 
 function createCodexCatalogFixture(dir: string, models = [nativeEntry("gpt-5.5", 0)]): string {
@@ -133,7 +156,7 @@ describe("Codex catalog sync hardening", () => {
         nativeEntry("gpt-5.6-luna", 6),
         nativeEntry("gpt-5.3-codex", 104),   // legacy -> drop
         nativeEntry("gpt-5.2", 104),          // legacy -> drop
-        nativeEntry("codex-auto-review", 104),// legacy -> drop
+        nativeEntry("codex-auto-review", 104),// control plane -> keep hidden
         nativeEntry("user-native", 10),       // user-added -> keep
       ],
     }, null, 2) + "\n");
@@ -164,7 +187,8 @@ describe("Codex catalog sync hardening", () => {
     expect(slugs).toContain("user-native");           // genuine user native preserved
     expect(slugs).not.toContain("gpt-5.3-codex");      // legacy dropped
     expect(slugs).not.toContain("gpt-5.2");            // legacy dropped
-    expect(slugs).not.toContain("codex-auto-review");  // legacy dropped
+    expect(slugs).toContain("codex-auto-review");      // control plane retained
+    expect(JSON.parse(readFileSync(catalogPath, "utf8")).models.find((row: { slug: string }) => row.slug === "codex-auto-review").visibility).toBe("hide");
   });
 
   test.each(["bare-cache", "account-cache", "account-catalog"])(
@@ -228,8 +252,13 @@ describe("Codex catalog sync hardening", () => {
       expect(passes).toHaveLength(2);
       expect(passes[0]!.written).toBe(true);
       expect(passes[1]!.catalog).toEqual(passes[0]!.catalog);
+      // The first pass rewrites both files; the second reproduces byte-identical content,
+      // so the cache no-op guard skips it and must report that honestly. This is the same
+      // no-op the catalog half already asserts above, and it is what keeps the startup
+      // stale-app-server warning from firing on a start where nothing changed.
+      expect(passes[0]!.invalidated).toBe(true);
+      expect(passes[1]!.invalidated).toBe(false);
       for (const pass of passes) {
-        expect(pass.invalidated).toBe(true);
         for (const rows of [pass.catalog, pass.cache]) {
           expect(rows.some(row => row.slug === "gpt-5.3-codex-spark" || row.slug.endsWith("/gpt-5.3-codex-spark"))).toBe(false);
           expect(rows.some(row => row.slug === "desktop/gpt-future-native")).toBe(true);
@@ -638,7 +667,8 @@ describe("Codex catalog sync hardening", () => {
       multi_agent_version: "v2",
       opencodex_catalog_kind: "custom-model-v1",
     });
-    expect(daybreak?.base_instructions).toContain("powered by the gpt-daybreak-blue-latest");
+    expect(daybreak?.base_instructions).toContain(NEUTRAL_IDENTITY_LINE);
+    expect(daybreak?.base_instructions).not.toContain("powered by the");
     // The explicit custom row is independent of native account entitlement. With no confirmed
     // account roster, the account-gated bare row stays absent instead of collapsing into it.
     expect(rows.filter(row => row.slug === "gpt-daybreak-blue-latest")).toHaveLength(0);
@@ -980,19 +1010,16 @@ describe("Codex catalog sync hardening", () => {
       ],
     }, null, 2) + "\n");
 
-    const r = runScript(codexHome, opencodexHome, `
-      const { syncCatalogModels } = require("./src/codex/catalog");
-      syncCatalogModels({
-        providers: {
-          openai: {
-            adapter: "openai-chat",
-            baseUrl: "https://api.example.test/v1",
-            liveModels: false,
-            models: ["fresh-model"]
-          }
-        }
-      }).then(res => console.log(JSON.stringify(res)));
-    `);
+    const r = syncWithSavedConfig(codexHome, opencodexHome, {
+      providers: {
+        openai: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.example.test/v1",
+          liveModels: false,
+          models: ["fresh-model"],
+        },
+      },
+    });
     expect(r.status).toBe(0);
 
     const slugs = (JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<{ slug: string }>).map(m => m.slug);
@@ -1015,19 +1042,16 @@ describe("Codex catalog sync hardening", () => {
 
     // Static discovery is authoritative even when its configured allowlist is empty. Both the
     // configured provider's stale row and the deleted provider's ghost must go; foreign rows stay.
-    const r = runScript(codexHome, opencodexHome, `
-      const { syncCatalogModels } = require("./src/codex/catalog");
-      syncCatalogModels({
-        providers: {
-          openai: {
-            adapter: "openai-chat",
-            baseUrl: "https://api.example.test/v1",
-            liveModels: false,
-            models: []
-          }
-        }
-      }).then(res => console.log(JSON.stringify(res)));
-    `);
+    const r = syncWithSavedConfig(codexHome, opencodexHome, {
+      providers: {
+        openai: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.example.test/v1",
+          liveModels: false,
+          models: [],
+        },
+      },
+    });
     expect(r.status).toBe(0);
 
     const slugs = (JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<{ slug: string }>).map(m => m.slug);
@@ -1049,23 +1073,19 @@ describe("Codex catalog sync hardening", () => {
       ],
     }, null, 2) + "\n");
 
-    const r = runScript(codexHome, opencodexHome, `
-      globalThis.fetch = async () => new Response("{}", { status: 503 });
-      const { syncCatalogModels } = require("./src/codex/catalog");
-      syncCatalogModels({
-        disabledModels: ["offline/disabled-model"],
-        providers: {
-          offline: {
-            adapter: "openai-chat",
-            authMode: "key",
-            apiKey: "fixture-key",
-            baseUrl: "https://api.example.test/v1",
-            allowPrivateNetwork: true,
-            models: ["fallback-model"]
-          }
-        }
-      }).then(res => console.log(JSON.stringify(res)));
-    `);
+    const r = syncWithSavedConfig(codexHome, opencodexHome, {
+      disabledModels: ["offline/disabled-model"],
+      providers: {
+        offline: {
+          adapter: "openai-chat",
+          authMode: "key",
+          apiKey: "fixture-key",
+          baseUrl: "https://api.example.test/v1",
+          allowPrivateNetwork: true,
+          models: ["fallback-model"],
+        },
+      },
+    }, `globalThis.fetch = async () => new Response("{}", { status: 503 });`);
     expect(r.status).toBe(0);
     expect(r.stderr).toContain("provider discovery degraded; preserving 1 existing routed entry");
 
@@ -1089,19 +1109,16 @@ describe("Codex catalog sync hardening", () => {
     }, null, 2) + "\n");
 
     // Partial-gather branch: another provider is configured and gathers rows.
-    const partial = runScript(codexHome, opencodexHome, `
-      const { syncCatalogModels } = require("./src/codex/catalog");
-      syncCatalogModels({
-        providers: {
-          openai: {
-            adapter: "openai-chat",
-            baseUrl: "https://api.example.test/v1",
-            liveModels: false,
-            models: ["fresh-model"]
-          }
-        }
-      }).then(res => console.log(JSON.stringify(res)));
-    `);
+    const partial = syncWithSavedConfig(codexHome, opencodexHome, {
+      providers: {
+        openai: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.example.test/v1",
+          liveModels: false,
+          models: ["fresh-model"],
+        },
+      },
+    });
     expect(partial.status).toBe(0);
     let slugs = (JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<{ slug: string }>).map(m => m.slug);
     expect(slugs).not.toContain("future-grok/legacy-model");
@@ -1115,10 +1132,7 @@ describe("Codex catalog sync hardening", () => {
         routedEntry("cursor/composer-2.5", 6),
       ],
     }, null, 2) + "\n");
-    const empty = runScript(codexHome, opencodexHome, `
-      const { syncCatalogModels } = require("./src/codex/catalog");
-      syncCatalogModels({ providers: {} }).then(res => console.log(JSON.stringify(res)));
-    `);
+    const empty = syncWithSavedConfig(codexHome, opencodexHome, { providers: {} });
     expect(empty.status).toBe(0);
     slugs = (JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<{ slug: string }>).map(m => m.slug);
     expect(slugs).not.toContain("future-grok/legacy-model");
@@ -1144,19 +1158,16 @@ describe("Codex catalog sync hardening", () => {
     // Partial-gather branch: a PHYSICAL combo provider bypasses the generic
     // combo cleanup, so only the ownership matcher can remove the alias.
     seed();
-    const partial = runScript(codexHome, opencodexHome, `
-      const { syncCatalogModels } = require("./src/codex/catalog");
-      syncCatalogModels({
-        providers: {
-          combo: {
-            adapter: "openai-chat",
-            baseUrl: "https://api.example.test/v1",
-            liveModels: false,
-            models: ["fresh-model"]
-          }
-        }
-      }).then(res => console.log(JSON.stringify(res)));
-    `);
+    const partial = syncWithSavedConfig(codexHome, opencodexHome, {
+      providers: {
+        combo: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.example.test/v1",
+          liveModels: false,
+          models: ["fresh-model"],
+        },
+      },
+    });
     expect(partial.status).toBe(0);
     let slugs = (JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<{ slug: string }>).map(m => m.slug);
     expect(slugs).not.toContain("vendor/fast");
@@ -1164,24 +1175,166 @@ describe("Codex catalog sync hardening", () => {
 
     // Empty-gather branch: physical combo present but gathers zero rows.
     seed();
-    const empty = runScript(codexHome, opencodexHome, `
-      const { syncCatalogModels } = require("./src/codex/catalog");
-      syncCatalogModels({
-        providers: {
-          combo: {
-            adapter: "openai-chat",
-            baseUrl: "https://api.example.test/v1",
-            liveModels: false,
-            models: []
-          }
-        }
-      }).then(res => console.log(JSON.stringify(res)));
-    `);
+    const empty = syncWithSavedConfig(codexHome, opencodexHome, {
+      providers: {
+        combo: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.example.test/v1",
+          liveModels: false,
+          models: [],
+        },
+      },
+    });
     expect(empty.status).toBe(0);
     slugs = (JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<{ slug: string }>).map(m => m.slug);
     expect(slugs).not.toContain("vendor/fast");
     expect(slugs).toContain("cursor/composer-2.5");
   });
+
+  describe("a refresh that would empty a provider without config.json agreeing (#6529)", () => {
+    const seeded = () => JSON.stringify({
+      models: [
+        nativeEntry("gpt-5.5", 0),
+        ocxAuthoredEntry("ark/glm-5.3", 5),
+        routedEntry("cursor/composer-2.5", 6),
+      ],
+    }, null, 2) + "\n";
+    const ark = { adapter: "openai-chat", baseUrl: "https://api.example.test/v1", liveModels: false, models: ["glm-5.3"] };
+    const cacheBytes = () => JSON.stringify({
+      fetched_at: "2026-01-01T00:00:00Z",
+      client_version: "fixture-cache-version",
+      models: JSON.parse(seeded()).models,
+    }, null, 2) + "\n";
+    beforeEach(() => writeFileSync(join(codexHome, "models_cache.json"), cacheBytes()));
+    const syncDriving = (driving: Record<string, unknown>) => runScript(codexHome, opencodexHome, `
+      const { refreshCodexModelCatalog } = require("./src/codex/refresh");
+      refreshCodexModelCatalog(${JSON.stringify(driving)}).then(res => console.log(JSON.stringify(res)));
+    `);
+
+    test("keeps the catalog byte-for-byte when config.json is missing", () => {
+      const catalogPath = join(codexHome, "catalog.json");
+      writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
+      writeFileSync(catalogPath, seeded());
+      // The incident: a process with an empty OPENCODEX_HOME reads defaults, which configure no
+      // routed provider, and used to publish the native-only catalog with exit 0.
+      const r = syncDriving({ providers: {} });
+      expect(r.status).toBe(0);
+      expect(readFileSync(catalogPath, "utf8")).toBe(seeded());
+      expect(readFileSync(join(codexHome, "models_cache.json"), "utf8")).toBe(cacheBytes());
+      const result = JSON.parse(r.stdout.split("\n").at(-1) ?? "{}") as Record<string, unknown>;
+      expect(result.catalogWritten).toBe(false);
+      expect(result.refreshOutcome).toBe("refused");
+      expect(result.skippedReason).toBe("unbacked_routed_removal");
+      expect(result.protectedRoutedNamespaces).toBe(1);
+    });
+
+    test("keeps the catalog when config.json still enables the provider", () => {
+      const catalogPath = join(codexHome, "catalog.json");
+      writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
+      writeFileSync(catalogPath, seeded());
+      // A driving config that is not the file on disk (a stale or foreign one) cannot speak for it.
+      writeFileSync(join(opencodexHome, "config.json"), JSON.stringify({ providers: { ark } }));
+      const r = syncDriving({ providers: {} });
+      expect(r.status).toBe(0);
+      expect(readFileSync(catalogPath, "utf8")).toBe(seeded());
+      expect(readFileSync(join(codexHome, "models_cache.json"), "utf8")).toBe(cacheBytes());
+      const result = JSON.parse(r.stdout.split("\n").at(-1) ?? "{}") as Record<string, unknown>;
+      expect(result.skippedReason).toBe("unbacked_routed_removal");
+    });
+
+    test("keeps the catalog while another process holds the config lock", () => {
+      const catalogPath = join(codexHome, "catalog.json");
+      writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
+      writeFileSync(catalogPath, seeded());
+      writeFileSync(join(opencodexHome, "config.json"), JSON.stringify({ providers: {} }));
+      // config.json backs the removal, but a save may be landing: the check and the write share C,
+      // so a held C refuses rather than writing past a provider that is being enabled.
+      const r = withConfigMutationLockSync(() => syncDriving({ providers: {} }), opencodexHome);
+      expect(r.status).toBe(0);
+      expect(readFileSync(catalogPath, "utf8")).toBe(seeded());
+      expect(readFileSync(join(codexHome, "models_cache.json"), "utf8")).toBe(cacheBytes());
+      const result = JSON.parse(r.stdout.split("\n").at(-1) ?? "{}") as Record<string, unknown>;
+      expect(result.skippedReason).toBe("unbacked_routed_removal");
+    });
+
+    for (const [label, contents] of [
+      ["unreadable", null],
+      ["salvaged", '{"providers":'],
+    ] as const) {
+      test(`keeps catalog and cache bytes when config.json is ${label}`, () => {
+        const catalogPath = join(codexHome, "catalog.json");
+        writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n');
+        writeFileSync(catalogPath, seeded());
+        const configPath = join(opencodexHome, "config.json");
+        if (contents === null) mkdirSync(configPath);
+        else writeFileSync(configPath, contents);
+        const r = syncDriving({ providers: {} });
+        expect(r.status).toBe(0);
+        expect(readFileSync(catalogPath, "utf8")).toBe(seeded());
+        expect(readFileSync(join(codexHome, "models_cache.json"), "utf8")).toBe(cacheBytes());
+        const result = JSON.parse(r.stdout.split("\n").at(-1) ?? "{}");
+        expect(result.skippedReason).toBe("unbacked_routed_removal");
+        expect(result.cacheSynced).toBe(false);
+      });
+    }
+
+    test("drops the rows once config.json disables the provider", () => {
+      const catalogPath = join(codexHome, "catalog.json");
+      writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
+      writeFileSync(catalogPath, seeded());
+      const r = syncWithSavedConfig(codexHome, opencodexHome, { providers: { ark: { ...ark, disabled: true } } });
+      expect(r.status).toBe(0);
+      const slugs = (JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<{ slug: string }>).map(m => m.slug);
+      expect(slugs).not.toContain("ark/glm-5.3");
+      expect(slugs).toContain("cursor/composer-2.5");
+      expect(slugs).toContain("gpt-5.5");
+    });
+  });
+
+  for (const slug of ["fast-chat", "vendor/flash"]) {
+    for (const state of ["saved", "missing", "deleted"] as const) {
+      test(`combo alias ${slug} retained sync ${state} config protects exact catalog/cache bytes`, () => {
+        const catalogPath = join(codexHome, "catalog.json");
+        const cachePath = join(codexHome, "models_cache.json");
+        writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n');
+        const models = [nativeEntry("gpt-5.5", 0), { ...ocxAuthoredEntry(slug, 5), owned_by: "combo" }];
+        const catalogBytes = `${JSON.stringify({ models }, null, 2)}\n`;
+        const cacheBytes = `${JSON.stringify({ fetched_at: "2026-01-01T00:00:00Z",
+          client_version: "fixture-cache-version", models }, null, 2)}\n`;
+        writeFileSync(catalogPath, catalogBytes);
+        writeFileSync(cachePath, cacheBytes);
+        if (state !== "missing") writeFileSync(join(opencodexHome, "config.json"), JSON.stringify({
+          defaultProvider: "ark", providers: { ark: {
+            adapter: "openai-chat", baseUrl: "https://api.example.test/v1", liveModels: false, models: ["a"],
+          } }, combos: state === "saved"
+            ? { fast: { alias: slug, targets: [{ provider: "ark", model: "a" }] } } : {},
+        }));
+        const r = runScript(codexHome, opencodexHome, `
+          globalThis.fetch = async () => { throw new Error("unexpected fetch"); };
+          const { readConfigAdmissionSnapshot } = require("./src/config/diagnostics");
+          if (${state !== "missing"} && readConfigAdmissionSnapshot().diagnostics.source !== "file") {
+            throw new Error("fixture config must parse without salvage");
+          }
+          const { refreshCodexModelCatalog } = require("./src/codex/refresh");
+          refreshCodexModelCatalog({ providers: {} }).then(res => console.log(JSON.stringify(res)));
+        `, { CODEX_CLI_PATH: createCodexCatalogFixture(opencodexHome) });
+        expect(r.status, r.stderr).toBe(0);
+        const result = JSON.parse(r.stdout.split("\n").at(-1) ?? "{}");
+        if (state === "deleted") {
+          expect(result.catalogWritten).toBe(true);
+          for (const target of [catalogPath, cachePath]) {
+            expect(JSON.parse(readFileSync(target, "utf8")).models.some((row: { slug: string }) => row.slug === slug))
+              .toBe(false);
+          }
+        } else {
+          expect(result.skippedReason).toBe("unbacked_routed_removal");
+          expect(result.cacheSynced).toBe(false);
+          expect(readFileSync(catalogPath, "utf8")).toBe(catalogBytes);
+          expect(readFileSync(cachePath, "utf8")).toBe(cacheBytes);
+        }
+      });
+    }
+  }
 
   test("preserves existing routed entries for providers absent from the current sync config", () => {
     const catalogPath = join(codexHome, "catalog.json");
@@ -1306,6 +1459,59 @@ describe("Codex catalog sync hardening", () => {
     expect(out.thirdWritten).toBe(true);
     expect(out.realChangeBumpedMtime).toBe(true);
   }, 15_000);
+
+  test("an identical cache resync leaves models_cache untouched, so the startup stale warning stays quiet", () => {
+    // `refreshCodexModelCatalog` reports `invalidateCodexModelsCache`'s return value as
+    // `cacheSynced`, and `handleStart` ORs that into the stale-app-server warning. The
+    // catalog got this no-op rule in #1459/#1460, but the models cache kept rewriting
+    // identical bytes and returning true on every `ocx start`, so the warning announced
+    // "Disk catalog/cache were updated" and told the operator their Codex model list might
+    // be stale on a start where nothing on disk had changed.
+    const catalogPath = join(codexHome, "catalog.json");
+    const cachePath = join(codexHome, "models_cache.json");
+    writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
+    writeFileSync(catalogPath, JSON.stringify({
+      models: [nativeEntry("gpt-5.5", 0)],
+    }, null, 2) + "\n");
+
+    const r = runScript(codexHome, opencodexHome, `
+      const { statSync, readFileSync } = require("node:fs");
+      const { syncCatalogModels, invalidateCodexModelsCache } = require("./src/codex/catalog");
+      const path = ${JSON.stringify(cachePath)};
+      const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+      (async () => {
+        await syncCatalogModels({ providers: {} });
+        const first = invalidateCodexModelsCache();
+        const afterFirst = statSync(path).mtimeMs;
+        const bytesAfterFirst = readFileSync(path, "utf8");
+        await sleep(1100);
+        await syncCatalogModels({ providers: {} });
+        const second = invalidateCodexModelsCache();
+        const afterSecond = statSync(path).mtimeMs;
+        console.log(JSON.stringify({
+          firstWritten: first,
+          secondWritten: second,
+          identicalResyncKeptMtime: afterFirst === afterSecond,
+          bytesUnchanged: readFileSync(path, "utf8") === bytesAfterFirst,
+        }));
+      })();
+    `);
+    expect(r.status, r.stderr).toBe(0);
+
+    const out = JSON.parse(r.stdout) as {
+      firstWritten: boolean;
+      secondWritten: boolean;
+      identicalResyncKeptMtime: boolean;
+      bytesUnchanged: boolean;
+    };
+    // The first pass is a real change (the bare catalog is rewritten into Codex's cache
+    // wrapper), so it must still write. That is what keeps this test from passing on a
+    // guard that simply refuses every write.
+    expect(out.firstWritten).toBe(true);
+    expect(out.secondWritten).toBe(false);
+    expect(out.identicalResyncKeptMtime).toBe(true);
+    expect(out.bytesUnchanged).toBe(true);
+  }, 20_000);
 
   test("the no-op guard compares bytes, so a malformed byte decoding to U+FFFD is still repaired", () => {
     // The guard above must not preserve corruption. `readFileSync(path, "utf8")`

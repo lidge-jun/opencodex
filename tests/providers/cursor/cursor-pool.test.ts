@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { providerConfigSchema } from "../../../src/config/schema/leaf-validators";
 import {
   CursorCredentialRouter,
   CursorPoolKernel,
@@ -6,6 +7,10 @@ import {
   createCursorPoolCapability,
   CURSOR_POOL_COOLDOWN_MS,
   CURSOR_POOL_TTL_MS,
+  installSharedCursorPoolKernelForTests,
+  noteCursorPoolRateLimit,
+  resetSharedCursorPoolKernelForTests,
+  selectCursorPoolToken,
 } from "../../../src/providers/cursor-pool";
 
 describe("CursorCredentialRouter", () => {
@@ -342,5 +347,73 @@ describe("CursorPoolKernel", () => {
     expect(activated).not.toBeNull();
     expect(listAccountsCalls).toBe(2);
     expect(resolveCalls).toBe(4);
+  });
+});
+
+describe("Cursor pool bounded activation", () => {
+  const accounts = [
+    { id: "account-a", access: "access-a", expires: Number.MAX_SAFE_INTEGER },
+    { id: "account-b", access: "access-b", expires: Number.MAX_SAFE_INTEGER },
+  ];
+
+  afterEach(() => {
+    resetSharedCursorPoolKernelForTests();
+  });
+
+  test("refuses an empty owner or thread and a single usable account", () => {
+    installSharedCursorPoolKernelForTests(() => 1_000, { listAccounts: () => accounts });
+    expect(selectCursorPoolToken("", "thread")).toBeUndefined();
+    expect(selectCursorPoolToken("owner", "")).toBeUndefined();
+    expect(noteCursorPoolRateLimit("", "thread")).toBe(false);
+    resetSharedCursorPoolKernelForTests();
+    installSharedCursorPoolKernelForTests(() => 1_000, {
+      listAccounts: () => [accounts[0]!],
+    });
+    expect(selectCursorPoolToken("owner", "thread")).toBeUndefined();
+  });
+
+  test("a pool failure leaves selection and cooldown unset", () => {
+    installSharedCursorPoolKernelForTests(() => {
+      throw new Error("clock unavailable");
+    }, { listAccounts: () => accounts });
+    expect(selectCursorPoolToken("owner", "thread")).toBeUndefined();
+    expect(noteCursorPoolRateLimit("owner", "thread")).toBe(false);
+  });
+
+  test("keeps thread affinity and cools only that owner after a rate limit", () => {
+    installSharedCursorPoolKernelForTests(() => 1_000, { listAccounts: () => accounts });
+    const first = selectCursorPoolToken("owner-a", "thread");
+    const sibling = selectCursorPoolToken("owner-b", "thread");
+    expect(first).toBe(sibling);
+    expect(["access-a", "access-b"]).toContain(first);
+    expect(noteCursorPoolRateLimit("owner-a", "thread")).toBe(true);
+    expect(selectCursorPoolToken("owner-a", "thread")).not.toBe(first);
+    expect(selectCursorPoolToken("owner-b", "thread")).toBe(sibling);
+    expect(noteCursorPoolRateLimit("owner-a", "absent")).toBe(false);
+  });
+
+  test("accepts only an exact Cursor pool opt-in", () => {
+    const cursor = { adapter: "cursor", baseUrl: "https://api2.cursor.sh" };
+    expect(providerConfigSchema.parse({
+      ...cursor,
+      cursorAccountPool: { enabled: true },
+    }).cursorAccountPool).toEqual({ enabled: true });
+    expect(providerConfigSchema.parse({
+      ...cursor,
+      cursorAccountPool: { enabled: false },
+    }).cursorAccountPool).toEqual({ enabled: false });
+    expect(providerConfigSchema.parse({
+      ...cursor,
+      cursorAccountPool: { enabled: "yes" },
+    }).cursorAccountPool).toBeUndefined();
+    expect(providerConfigSchema.parse({
+      ...cursor,
+      cursorAccountPool: { enabled: true, strategy: "round-robin" },
+    }).cursorAccountPool).toBeUndefined();
+    expect(() => providerConfigSchema.parse({
+      adapter: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      cursorAccountPool: { enabled: true },
+    })).toThrow(/cursorAccountPool is supported only by the Cursor adapter/);
   });
 });

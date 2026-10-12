@@ -88,7 +88,8 @@ describe("workspace account integration seam", () => {
     expect(poolBindings?.split(",").map(binding => binding.trim())).toContain("useProviderAccountPools");
     expect(page).toContain("const pools = useProviderAccountPools({");
     expect(source).toContain("accountLoadState={accountLoadStates[item.name]");
-    expect(source).toContain("switchingAccountId={switchingAccount?.provider === item.name");
+    // Switching state is tracked per provider, so Pool 2 and the primary pool can switch independently.
+    expect(source).toContain("switchingAccountId={switchingAccounts[item.name]?.accountId ?? null}");
     expect(source).toContain("onRetryAccounts: async provider => { await fetchAccountSets([provider]); }");
     expect(source).toContain("key={item.name}");
     expect(source).toContain("switchingAccountRef.current");

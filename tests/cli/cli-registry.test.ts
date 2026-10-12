@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { printFullUsage } from "../../src/cli/help";
 import { CLI_COMMANDS, findCommand } from "../../src/cli/registry";
 import { DISPATCH_ALIASES, DISPATCH_COMMANDS } from "../../src/cli/dispatch";
 
@@ -71,6 +70,7 @@ describe("CLI command registry parity", () => {
       "__tray-host",
       "__tray-restart",
       "__tray-start",
+      "__update-badge",
     ]);
     for (const entry of hidden) {
       expect(caseSet.has(entry.name)).toBe(true);
@@ -86,6 +86,7 @@ describe("CLI command registry parity", () => {
       "__tray-host",
       "__gui-update-worker",
       "__refresh-version",
+      "__update-badge",
     ];
     for (const name of internalRunners) {
       expect(DISPATCH_COMMANDS).toContain(name);
@@ -127,8 +128,12 @@ describe("help banner command coverage", () => {
   // The banner is curated (aliases shown inline, subcommands elided), so it is
   // not required to match the registry exactly. It must never drop a visible
   // command entirely: every visible canonical command has to appear.
-  test("every visible canonical command appears in the printUsage banner", () => {
-    const helpSrc = readFileSync(fileURLToPath(new URL("../../src/cli/help.ts", import.meta.url)), "utf8");
+  test("every visible canonical command appears in the rendered full reference", () => {
+    const lines: string[] = [];
+    const original = console.log;
+    console.log = value => { lines.push(String(value)); };
+    try { printFullUsage(); } finally { console.log = original; }
+    const full = lines.join("\n");
 
     // Commands whose `name` is only ever used as another entry's alias
     // (setup/eject/remove/model) are shown inline as "(alias: ...)" rather
@@ -145,7 +150,7 @@ describe("help banner command coverage", () => {
       // line or its canonical name at the start of an `ocx <name>` banner line.
       const escaped = entry.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       const commandLine = new RegExp(`^\\s*ocx\\s+${escaped}(?:\\s|$)`, "m");
-      return !helpSrc.includes(entry.usage) && !commandLine.test(helpSrc);
+      return !full.includes(entry.usage) && !commandLine.test(full);
     }).map(entry => entry.name);
 
     expect(missing).toEqual([]);

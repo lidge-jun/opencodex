@@ -1,8 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import { parseRequest } from "../../src/responses/parser";
 import { cursorRequestUsesCodeMode } from "../../src/adapters/cursor/tool-definitions";
+import { bridgeToResponsesSSE, buildResponseJSON } from "../../src/bridge";
 import type { AdapterEvent } from "../../src/types";
-import { jsonItemTypes, jsonToolItems, streamedView } from "../helpers/responses-conformance";
+import { collectSse, jsonItemTypes, jsonToolItems, replay, streamedView } from "../helpers/responses-conformance";
 
 /**
  * Responses tool round-trip conformance
@@ -465,5 +466,48 @@ describe("parallel tool-call capability", () => {
     // payload is the JSON its provider actually sent.
     expect(view.snapshot[0]?.payload).toBe("{\"path\":\"a");
     expect(view.snapshot[1]?.payload).toBe("{\"path\":\"b.txt\"}");
+  });
+});
+
+describe("declared tool enforcement at the bridge", () => {
+  /** Compare authorization and failure details across buffered and streamed responses. */
+  it("fails closed without a catalog only when enforcement is active on both response shapes", async () => {
+    const events: AdapterEvent[] = [
+      { type: "tool_call_start", id: "call_1", name: "read_file" },
+      { type: "tool_call_delta", arguments: "{}" },
+      { type: "tool_call_end" },
+      { type: "done" },
+    ];
+    const cases = [
+      { label: "explicit missing", options: { enforceDeclaredToolNames: true }, refused: true },
+      { label: "explicit null", options: { enforceDeclaredToolNames: true, declaredToolNames: null as unknown as ReadonlySet<string> }, refused: true },
+      { label: "explicit empty", options: { enforceDeclaredToolNames: true, declaredToolNames: new Set<string>() }, refused: true },
+      { label: "implicit catalog", options: { declaredToolNames: new Set(["other_tool"]) }, refused: true },
+      { label: "declared", options: { enforceDeclaredToolNames: true, declaredToolNames: new Set(["read_file"]) }, refused: false },
+      { label: "chat/Anthropic scope", options: { enforceDeclaredToolNames: false, declaredToolNames: new Set(["other_tool"]) }, refused: false },
+      { label: "unscoped bridge", options: {}, refused: false },
+      { label: "unscoped null", options: { declaredToolNames: null as unknown as ReadonlySet<string> }, refused: false },
+    ];
+    for (const { label, options, refused } of cases) {
+      const frames = await collectSse(bridgeToResponsesSSE(replay(events), MODEL, undefined, undefined, undefined, undefined, 2_000, options));
+      const json = buildResponseJSON(events, MODEL, options);
+      expect(frames.some(frame => frame.event === "response.failed"), label).toBe(refused);
+      expect(frames.some(frame => frame.event === "response.output_item.added"), label).toBe(!refused);
+      expect(json.status, label).toBe(refused ? "failed" : "completed");
+      if (refused) {
+        const expectedError = {
+          type: "upstream_error",
+          message: expect.stringContaining("undeclared client tool"),
+        };
+        expect(json.error, label).toMatchObject(expectedError);
+        const failed = frames.find(frame => frame.event === "response.failed");
+        expect(failed?.data, label).toMatchObject({ response: { error: {
+          type: "server_error",
+          code: "upstream_server_error",
+          message: expectedError.message,
+        } } });
+      } else expect(json.error, label).toBeUndefined();
+      expect((json.output as unknown[]).length, label).toBe(refused ? 0 : 1);
+    }
   });
 });

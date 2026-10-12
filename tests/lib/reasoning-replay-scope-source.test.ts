@@ -12,7 +12,9 @@ describe("reasoning replay scope propagation", () => {
     const core = readResponsesCoreSource();
     const images = source("images/loop.ts");
     const webSearch = source("web-search/loop.ts");
-    expect(core.match(/replayCacheScope: parsed\._reasoningReplayScope,/g)).toHaveLength(4);
+    // Five: the fifth is the direct client encoder's fold in adapter-delivery.ts (PF-09), which
+    // runs the same buildResponseJSON replay-cache effects the bridge would have run.
+    expect(core.match(/replayCacheScope: parsed\._reasoningReplayScope,/g)).toHaveLength(5);
     expect(images.match(/replayCacheScope: parsed\._reasoningReplayScope,/g)).toHaveLength(1);
     expect(webSearch.match(/replayCacheScope: parsed\._reasoningReplayScope,/g)).toHaveLength(1);
     expect(`${core}\n${images}\n${webSearch}`).not.toContain("replayCacheScope: parsed._clientThreadId");

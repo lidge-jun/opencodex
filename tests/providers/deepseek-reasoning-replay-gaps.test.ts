@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createOpenAIChatAdapter } from "../../src/adapters/openai-chat";
 import { buildResponseJSON } from "../../src/bridge";
 import { parseRequest } from "../../src/responses/parser";
+import { encodeReasoningEnvelope } from "../../src/responses/reasoning-envelope";
 import {
   clearReasoningReplayCacheForTests,
   peekReasoningForCall as peekReasoningForCallRaw,
@@ -127,6 +128,30 @@ describe("issue #950 — tool-call reasoning replay invariant (openai-chat wire)
     const assistant = toolCallAssistant(messages);
     expect(assistant).toBeDefined();
     expect(assistant!["reasoning_content"]).toBe(REASONING);
+  });
+
+  test("GAP F (issue #5421): signed thinking-only turn without tools gets a placeholder", () => {
+    const { messages } = wireFor([
+      {
+        type: "reasoning",
+        id: "rs_empty",
+        summary: [],
+        encrypted_content: encodeReasoningEnvelope({ sig: "opaque-signature" }),
+      },
+      {
+        type: "agent_message",
+        author: "parent",
+        recipient: "child",
+        content: [{ type: "input_text", text: "return OK" }],
+      },
+    ]);
+
+    const assistantIndex = messages.findIndex(message => message.role === "assistant");
+    const taskIndex = messages.findIndex(message => message.role === "user" && message.content === "return OK");
+    expect(assistantIndex).toBeGreaterThanOrEqual(0);
+    expect(assistantIndex).toBeLessThan(taskIndex);
+    expect(messages[assistantIndex]!["reasoning_content"]).toBe(" ");
+    expect(messages[assistantIndex]!.content).toBe("");
   });
 
   test("GAP A: reasoning item arriving AFTER its function_call is attached to its turn", () => {
@@ -287,6 +312,23 @@ describe("issue #950 — tool-call reasoning replay invariant (openai-chat wire)
     const miss = toolCallAssistant(missResult.wire.messages);
     expect(miss).toBeDefined();
     expect(miss!["reasoning_content"]).toBeUndefined();
+    // Signed thinking without plaintext also stays omitted for an explicit
+    // placeholder opt-out, even though the parser preserves the thinking turn.
+    const thinkingOnly = minimaxWire([
+      {
+        type: "reasoning",
+        id: "rs_minimax_empty",
+        summary: [],
+        encrypted_content: encodeReasoningEnvelope({ sig: "opaque-signature" }),
+      },
+      {
+        type: "agent_message",
+        author: "parent",
+        recipient: "child",
+        content: [{ type: "input_text", text: "return OK" }],
+      },
+    ]).wire.messages;
+    expect(thinkingOnly.some(message => message.role === "assistant")).toBeFalse();
     // Cache hit on the same path: the recorded reasoning still replays.
     rememberReasoningForCall("call_1", REASONING, missResult.replayScope);
     const hit = toolCallAssistant(minimaxWire([userMessage(), functionCallOutputItem()]).wire.messages);

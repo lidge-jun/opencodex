@@ -1,3 +1,5 @@
+import { getEffectiveCodexAutoSwitchThreshold } from "../account-auto-switch";
+import { codexAccountUsesCreditsAfterLimit, isCodexAccountHeldForCredits } from "../account-credit-use";
 import { isCodexAccountPaused } from "../account-pause";
 import { codexAccountPriorityLookup, pinnedCodexAccountId } from "../account-priority";
 import { isSelectableCodexPoolAccount } from "../account-id";
@@ -14,14 +16,16 @@ import {
 } from "../pool-rotation";
 import { CODEX_UNKNOWN_USAGE_SCORE, getAccountQuota, resetAtToMs } from "../quota";
 import { codexPlanKey } from "../plan";
-import { MAIN_CODEX_ACCOUNT_ID, getMainAccountPlan, hasMainAccountRefreshGrant } from "../main-account";
+import { MAIN_CODEX_ACCOUNT_ID, getMainAccountPlan } from "../main-account";
 import type { OcxConfig } from "../../types";
 import { CODEX_FAILURE_WINDOW_MS, computeCodexUsageScore } from "./cooldown-math";
+import { failureWindowSteersNewThreads } from "./failure-window";
 import {
   codexPoolKeyForScope,
   dropSpentCredentialFailure,
   getAccountHealth,
   getCodexQuotaHealthSnapshot,
+  hasUnrecoveredCodexQuotaRefusal,
   isCodexAccountSoftAvoided,
   isCodexQuotaAvoided,
   isIndependentCodexQuotaScope,
@@ -80,6 +84,37 @@ export function isCodexAccountPlanExcluded(
   return plan !== undefined && excluded.has(plan);
 }
 
+/**
+ * Whether the operator turned credits off for this account and one of its usage windows is full
+ * now (#6334). Checked wherever plan exclusion is checked, for the reason given there: an account
+ * that is already active or bound is served without passing through the eligible list.
+ */
+export function isCodexAccountHeldAtUsageLimit(
+  config: OcxConfig,
+  accountId: string,
+  now: number,
+  selectionOptions?: CodexAccountUsabilityOptions,
+): boolean {
+  return isCodexAccountHeldForCredits(
+    config,
+    accountId,
+    getAccountQuota(accountId),
+    getPoolAccountPlanForSelection(config, accountId, selectionOptions),
+    now,
+  );
+}
+
+/** The automatic-rotation policies that also bind the legacy keep-the-active-account fallback. */
+export function isCodexAccountRotationExcluded(
+  config: OcxConfig,
+  accountId: string,
+  now: number,
+  selectionOptions?: CodexAccountUsabilityOptions,
+): boolean {
+  return isCodexAccountPlanExcluded(config, accountId)
+    || isCodexAccountHeldAtUsageLimit(config, accountId, now, selectionOptions);
+}
+
 export function isCodexAccountSelectable(
   config: OcxConfig,
   accountId: string,
@@ -89,6 +124,7 @@ export function isCodexAccountSelectable(
 ): boolean {
   return !isCodexAccountPaused(config, accountId)
     && !isCodexAccountPlanExcluded(config, accountId)
+    && !isCodexAccountHeldAtUsageLimit(config, accountId, now, selectionOptions)
     && getCodexQuotaHealthSnapshot(accountId, quotaScope, now) === null
     && !isCodexQuotaAvoided(accountId, quotaScope, now)
     && !isCodexAccountSoftAvoided(accountId, now)
@@ -115,6 +151,7 @@ export function codexAccountBlockReason(
 ): CodexAffinityReason | undefined {
   if (isCodexAccountPaused(config, accountId)) return "paused";
   if (isCodexAccountPlanExcluded(config, accountId)) return "plan_excluded";
+  if (isCodexAccountHeldAtUsageLimit(config, accountId, now, selectionOptions)) return "credits_off";
   if (getCodexQuotaHealthSnapshot(accountId, quotaScope, now) !== null) return "cooldown";
   if (isCodexQuotaAvoided(accountId, quotaScope, now)) return "quota_avoided";
   if (isCodexAccountSoftAvoided(accountId, now)) return "transient";
@@ -170,10 +207,12 @@ export function getEligiblePoolAccounts(
       && account.id !== excludeId
       && !isCodexAccountPaused(config, account.id)
       && !isCodexAccountPlanExcluded(config, account.id, excludedPlans)
+      && !isCodexAccountHeldAtUsageLimit(config, account.id, now, selectionOptions)
       && !isAccountNeedsReauth(account.id)
       && (!skipFailoverReadyCandidates || !shouldFailover(config, account.id, now)))
     .filter(account => getCodexQuotaHealthSnapshot(account.id, quotaScope, now) === null)
     .filter(account => !isCodexAccountSoftAvoided(account.id, now))
+    .filter(account => !failureWindowSteersNewThreads(config, account.id, now))
     .filter(account => !isCodexQuotaAvoided(account.id, quotaScope, now))
     .filter(account => !isCodexPoolRefreshCooling(account.id, now))
     .filter(account => isCodexAccountUsable(config, account.id, selectionOptions))
@@ -183,9 +222,9 @@ export function getEligiblePoolAccounts(
   if (
     excludeId !== MAIN_CODEX_ACCOUNT_ID
     && !isCodexAccountPaused(config, MAIN_CODEX_ACCOUNT_ID)
-    && (!isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID) || hasMainAccountRefreshGrant())
     && getCodexQuotaHealthSnapshot(MAIN_CODEX_ACCOUNT_ID, quotaScope, now) === null
     && !isCodexAccountSoftAvoided(MAIN_CODEX_ACCOUNT_ID, now)
+    && !failureWindowSteersNewThreads(config, MAIN_CODEX_ACCOUNT_ID, now)
     // The main login is not in `config.codexAccounts`, so it never passes through the
     // filters above and this is the only place an avoidance window can exclude it. Without
     // this the window a refusal announced applies to the pool but not to the account that
@@ -193,6 +232,7 @@ export function getEligiblePoolAccounts(
     // in between the main account returns as a first-class candidate.
     && !isCodexQuotaAvoided(MAIN_CODEX_ACCOUNT_ID, quotaScope, now)
     && !isCodexPoolRefreshCooling(MAIN_CODEX_ACCOUNT_ID, now)
+    && !isCodexAccountHeldAtUsageLimit(config, MAIN_CODEX_ACCOUNT_ID, now, selectionOptions)
     && (!skipFailoverReadyCandidates || !shouldFailover(config, MAIN_CODEX_ACCOUNT_ID, now))
     && isCodexAccountUsable(config, MAIN_CODEX_ACCOUNT_ID, selectionOptions)
   ) {
@@ -249,12 +289,13 @@ export function hasCodexQuotaHeadroom(
   selectionOptions?: CodexAccountUsabilityOptions,
   now: number = Date.now(),
 ): boolean {
-  const threshold = config.autoSwitchThreshold ?? 80;
+  const threshold = getEffectiveCodexAutoSwitchThreshold(config, accountId);
   if (threshold <= 0) return true;
   const usage = computeCodexUsageScore(
     getAccountQuota(accountId),
     getPoolAccountPlanForSelection(config, accountId, selectionOptions),
     now,
+    codexAccountUsesCreditsAfterLimit(config, accountId),
   );
   if (isUnknownUsage(usage)) return true;
   return usage < threshold;
@@ -274,6 +315,41 @@ export function hasCodexQuotaHeadroom(
  */
 export function isCacheAffinityEnabled(config: OcxConfig): boolean {
   return config.pool?.cacheAffinity !== false;
+}
+
+/**
+ * Whether quota may retire shared state while cache affinity is active.
+ *
+ * A threshold crossing is a hint that an account is getting busy, not evidence it cannot
+ * serve — the same bar {@link mayRebindAffinityForQuota} applies to a live binding. Shared
+ * state held across a model detour gets that exhaustion boundary for the same reason: the
+ * detour is request-scoped, so retiring the binding over a hint pays a cold prefix for
+ * nothing. New/unbound selection still reads {@link hasCodexQuotaHeadroom}; only
+ * preservation of an existing shared selection or thread binding qualifies here. Like the
+ * live-binding rule, the configured threshold plays no role once retention applies: a
+ * genuinely exhausted (>=100%) account releases even with threshold switching disabled,
+ * while the fallback above keeps a disabled threshold's "never drained on quota alone".
+ */
+export function hasCodexSharedStateQuotaHeadroom(
+  config: OcxConfig,
+  accountId: string,
+  quotaScope: CodexQuotaScope | undefined,
+  selectionOptions?: CodexAccountUsabilityOptions,
+  now: number = Date.now(),
+): boolean {
+  if (
+    !isCacheAffinityEnabled(config)
+    || accountPoolStrategyForScope(config, quotaScope) !== "quota"
+  ) {
+    return hasCodexQuotaHeadroom(config, accountId, selectionOptions, now);
+  }
+  const usage = computeCodexUsageScore(
+    getAccountQuota(accountId),
+    getPoolAccountPlanForSelection(config, accountId, selectionOptions),
+    now,
+    codexAccountUsesCreditsAfterLimit(config, accountId),
+  );
+  return isUnknownUsage(usage) || usage < 100;
 }
 
 /** Earliest future shared short/weekly reset; missing evidence and ties use usage order. */
@@ -405,7 +481,7 @@ export function pickUnboundStrategyAccount(
     }
     picked = pickRoundRobinAccount(poolKey, eligible, limit);
     if (!picked) return null;
-    if (commitSharedActive) {
+    if (commitSharedActive && sharesActiveSelection(picked, selectionOptions)) {
       if (!isIndependentCodexQuotaScope(quotaScope)
         && !manualPreferenceBlocks(codexPoolKeyForScope(quotaScope), picked)) {
         rememberActiveCodexAccount(config, picked);
@@ -421,7 +497,7 @@ export function pickUnboundStrategyAccount(
       ? pickResetFirstCodexAccount(config, listEligibleCodexAccountIds(config, now, quotaScope, selectionOptions), now, selectionOptions)
       : pickFillFirstCodexAccount(config, now, quotaScope, selectionOptions);
     if (!picked) return null;
-    if (commitSharedActive) {
+    if (commitSharedActive && sharesActiveSelection(picked, selectionOptions)) {
       if (!isIndependentCodexQuotaScope(quotaScope)
         && !manualPreferenceBlocks(codexPoolKeyForScope(quotaScope), picked)) {
         rememberActiveCodexAccount(config, picked);
@@ -440,13 +516,21 @@ export function getPoolAccountPlan(config: OcxConfig, accountId: string): string
     .find(account => isSelectableCodexPoolAccount(account) && account.id === accountId)?.plan;
 }
 
-/** Selection-only main routing must not lazily read the fenced native credential for its plan. */
+/**
+ * Selection-only main routing must not lazily read the fenced native credential for its plan, and
+ * neither may a request whose main candidacy comes from its own bearer (#5019): that request is
+ * forbidden to read the physical main credential, so main is ranked without a plan.
+ */
 export function getPoolAccountPlanForSelection(
   config: OcxConfig,
   accountId: string,
   selectionOptions?: CodexAccountUsabilityOptions,
 ): string | undefined {
-  if (accountId === MAIN_CODEX_ACCOUNT_ID && selectionOptions?.nativeMainSelectionOnly === true) {
+  if (
+    accountId === MAIN_CODEX_ACCOUNT_ID
+    && (selectionOptions?.nativeMainSelectionOnly === true
+      || selectionOptions?.requestOwnedMainCredential === true)
+  ) {
     return undefined;
   }
   return getPoolAccountPlan(config, accountId);
@@ -457,7 +541,7 @@ export function sharedStateSelectionOptions(
   selectionOptions?: CodexAccountUsabilityOptions,
 ): Pick<
   CodexAccountUsabilityOptions,
-  "nativeMainSelectionOnly" | "isMainAccountTokenLive"
+  "nativeMainSelectionOnly" | "isMainAccountTokenLive" | "requestOwnedMainCredential"
 > | undefined {
   if (!selectionOptions) return undefined;
   return {
@@ -467,7 +551,22 @@ export function sharedStateSelectionOptions(
     ...(selectionOptions.isMainAccountTokenLive
       ? { isMainAccountTokenLive: selectionOptions.isMainAccountTokenLive }
       : {}),
+    ...(selectionOptions.requestOwnedMainCredential !== undefined
+      ? { requestOwnedMainCredential: selectionOptions.requestOwnedMainCredential }
+      : {}),
   };
+}
+
+/**
+ * A main that is live only through this request's own credential serves this request alone.
+ * Recording it as the shared active account would route later requests through a credential
+ * they do not carry (see CodexAccountUsabilityOptions.requestOwnedMainCredential).
+ */
+export function sharesActiveSelection(
+  accountId: string,
+  selectionOptions?: CodexAccountUsabilityOptions,
+): boolean {
+  return !(accountId === MAIN_CODEX_ACCOUNT_ID && selectionOptions?.requestOwnedMainCredential === true);
 }
 
 export function pickLowerUsageAccount(
@@ -493,6 +592,7 @@ export function pickLowerUsageAccount(
       getAccountQuota(id),
       getPoolAccountPlanForSelection(config, id, selectionOptions),
       now,
+      codexAccountUsesCreditsAfterLimit(config, id),
     );
     if (usage < bestUsage) {
       best = id;
@@ -516,6 +616,7 @@ export function pickLowestUsageAmong(
       getAccountQuota(id),
       getPoolAccountPlanForSelection(config, id, selectionOptions),
       now,
+      codexAccountUsesCreditsAfterLimit(config, id),
     );
     if (usage < bestUsage) {
       best = id;
@@ -646,7 +747,7 @@ export function preferModelEntitledAccount(
  *
  * Downward moves are deliberately left to {@link applyQuotaAutoSwitch}: this only
  * fires when the tier filter has already excluded `active`, and only toward a
- * tier that strictly outranks it. Threads bound by affinity never reach here.
+ * tier that strictly outranks it. Bound threads reach it only through explicit priority failback.
  */
 export function pickPriorityPreemption(
   config: OcxConfig,
@@ -686,13 +787,14 @@ export function applyQuotaAutoSwitch(
   selectionOptions?: CodexAccountUsabilityOptions,
   commitSharedSelection = true,
 ): string {
-  const threshold = config.autoSwitchThreshold ?? 80;
+  const threshold = getEffectiveCodexAutoSwitchThreshold(config, active);
   if (threshold <= 0) return active;
   const quota = getAccountQuota(active);
   const activeUsage = computeCodexUsageScore(
     quota,
     getPoolAccountPlanForSelection(config, active, selectionOptions),
     now,
+    codexAccountUsesCreditsAfterLimit(config, active),
   );
   // Unknown usage is not evidence that a user's explicit selection crossed the
   // threshold. Wait for quota priming instead of rotating among guesses.
@@ -700,7 +802,8 @@ export function applyQuotaAutoSwitch(
   if (activeUsage < threshold) return active;
   const best = pickLowerUsageAccount(config, active, activeUsage, now, quotaScope, selectionOptions);
   if (best !== active) {
-    if (commitSharedSelection && !isIndependentCodexQuotaScope(quotaScope)) {
+    if (commitSharedSelection && !isIndependentCodexQuotaScope(quotaScope)
+      && sharesActiveSelection(best, selectionOptions)) {
       setActiveCodexAccount(config, best);
     }
     return best;
@@ -726,7 +829,8 @@ export function isHealthySharedCodexSelection(
   selectionOptions: CodexAccountUsabilityOptions | undefined,
 ): boolean {
   return isCodexAccountSelectable(config, accountId, now, quotaScope, selectionOptions)
-    && hasCodexQuotaHeadroom(config, accountId, selectionOptions, now)
+    && hasCodexSharedStateQuotaHeadroom(config, accountId, quotaScope, selectionOptions, now)
+    && !hasUnrecoveredCodexQuotaRefusal(accountId, quotaScope)
     && !shouldFailover(config, accountId, now);
 }
 
@@ -762,7 +866,7 @@ export function applyFailureFailover(
   selectionOptions?: CodexAccountUsabilityOptions,
   commitSharedSelection = true,
 ): string {
-  if (!shouldFailover(config, active, now)) return active;
+  if (!shouldFailover(config, active, now) && !failureWindowSteersNewThreads(config, active, now)) return active;
   const best = pickAlternateCodexAccount(config, active, now, quotaScope, selectionOptions);
   if (best) {
     // The scope still routes away from the failing account — that is this request's
@@ -771,7 +875,8 @@ export function applyFailureFailover(
     // the moment of the failure; the streak outlives the soft avoid, so a later
     // scoped resolve reaches here with the streak still tripped and would otherwise
     // move the shared cursor after all.
-    if (commitSharedSelection && !isIndependentCodexQuotaScope(quotaScope)) {
+    if (commitSharedSelection && !isIndependentCodexQuotaScope(quotaScope)
+      && sharesActiveSelection(best, selectionOptions)) {
       promoteActiveCodexAccount(config, best);
     }
     return best;

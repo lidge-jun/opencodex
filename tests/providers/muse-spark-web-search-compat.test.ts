@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createResponsesPassthroughAdapter as createResponsesPassthroughAdapterProduction } from "../../src/adapters/openai-responses";
+import { stripMuseSparkUnsupportedWebSearchFields } from "../../src/adapters/openai-responses/web-search";
 import { getProviderRegistryEntry } from "../../src/providers/registry";
 import type { OcxProviderConfig } from "../../src/types";
 import { withTestTranslatorBudget } from "../helpers/translator-budget";
@@ -265,5 +266,35 @@ describe("#2617/#3378 Muse Spark web_search compatibility", () => {
     const tool = toolsOf(body)[0]!;
     expect(Object.hasOwn(tool, "search_content_types")).toBe(false);
     expect(Object.hasOwn(tool, "indexed_web_access")).toBe(false);
+  });
+
+  /**
+   * Both direct-Meta providers ship a non-Contributor `defaultModel`, and Meta's refusal is a
+   * gateway schema rule that holds for every Muse model it serves. Keying the strip on the
+   * Contributor-only id list left `muse-spark-1.3` 400ing on every Codex turn whose client
+   * attaches its default web_search tool — the same equality-shaped hole the 1.3 id hit on the
+   * Zen wire, one tier over.
+   */
+  test("direct Meta strips the fields on the non-Contributor tiers too", () => {
+    for (const modelId of ["muse-spark-1.3", "muse-spark-1.2"]) {
+      const body = buildForProvider(META_PROVIDER, modelId, {
+        tools: [webSearchTool(), { ...webSearchTool(), type: "web_search_preview" }],
+      });
+      const [plain, preview] = toolsOf(body);
+      expect(Object.hasOwn(plain!, "search_content_types")).toBe(false);
+      expect(Object.hasOwn(plain!, "indexed_web_access")).toBe(false);
+      // The destination is the predicate here, not the id: it must not swallow the preview shape.
+      expect(preview!.search_content_types).toEqual(["text", "image"]);
+      expect(preview!.indexed_web_access).toBe(true);
+    }
+  });
+
+  test("direct Meta remains destination-scoped when the model id is unavailable", () => {
+    const body = { tools: [webSearchTool()] };
+    const rewritten = stripMuseSparkUnsupportedWebSearchFields(body, undefined, "https://api.meta.ai/v1/responses") as {
+      tools: Array<Record<string, unknown>>;
+    };
+    expect(Object.hasOwn(rewritten.tools[0]!, "search_content_types")).toBe(false);
+    expect(Object.hasOwn(rewritten.tools[0]!, "indexed_web_access")).toBe(false);
   });
 });

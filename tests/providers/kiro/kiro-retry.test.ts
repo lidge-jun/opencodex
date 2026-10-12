@@ -71,7 +71,9 @@ describe("kiro retry fetch", () => {
       });
     }) as typeof fetch;
 
-    await expect(fetchKiroWithRetry(request, { timeoutMs: 1 })).rejects.toMatchObject({ name: "TimeoutError" });
+    const response = await fetchKiroWithRetry(request, { timeoutMs: 1 });
+    expect(response.status).toBe(504);
+    expect(await response.text()).toBe("Kiro upstream gateway timeout");
     expect(calls).toBe(1);
     expect(timeoutReasons).toHaveLength(1);
     expect((timeoutReasons[0] as Error).name).toBe("TimeoutError");
@@ -234,11 +236,11 @@ describe("kiro retry fetch", () => {
 
   test("does not replay ordinary 5xx responses", async () => {
     const mock = mockFetch([
-      new Response("temporarily unavailable", { status: 503, headers: { "Retry-After": "0" } }),
+      new Response("temporarily unavailable", { status: 500, headers: { "Retry-After": "0" } }),
       new Response("ok", { status: 200 }),
     ]);
     const res = await fetchKiroWithRetry(request, { timeoutMs: 5_000 });
-    expect(res.status).toBe(503);
+    expect(res.status).toBe(500);
     expect(mock.calls).toHaveLength(1);
   });
 

@@ -42,6 +42,7 @@ import {
 import { workflowDecisionRefusalResponse, workflowRefusalResponse } from "../../src/server/workflow-refusal";
 import { getConfigDir } from "../../src/config/paths";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { acquireSpendLedgerOwner, type SpendLedgerOwnerLease } from "../../src/lib/spend-ledger-owner";
 
 const memoryJournal = (): SpendJournal & { lines: string[] } => {
   const lines: string[] = [];
@@ -69,6 +70,7 @@ const watched = (inner: SpendReservationLedger, asked: string[]): SpendReservati
   markLost: (sendId) => inner.markLost(sendId),
   snapshot: (scope, scopeId) => inner.snapshot(scope, scopeId),
   exhausted: (scope, scopeId) => { asked.push("exhausted"); return inner.exhausted(scope, scopeId); },
+  hasUnboundPositivePoolHistory: () => inner.hasUnboundPositivePoolHistory(),
   prune: (at) => inner.prune(at),
   knows: (sendId) => inner.knows(sendId),
   reconfigure: (next) => inner.reconfigure(next),
@@ -80,17 +82,21 @@ const watched = (inner: SpendReservationLedger, asked: string[]): SpendReservati
 
 let home = "";
 let previousHome: string | undefined;
+let owner: SpendLedgerOwnerLease | null = null;
 
 beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME;
   home = mkdtempSync(join(tmpdir(), "ocx-spend-ceiling-"));
   process.env.OPENCODEX_HOME = home;
+  owner = acquireSpendLedgerOwner();
   resetSharedSpendLedgerForTest();
   resetWorkflowBudgetsForTest();
 });
 
 afterEach(() => {
   resetSharedSpendLedgerForTest();
+  owner?.release();
+  owner = null;
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   removeTreeWithRetry(home);
@@ -256,7 +262,7 @@ describe("a token refusal is legible on the wire", () => {
     expect(summary.message).toContain("account token ceiling of 100,000");
     expect(summary.message).toContain("112,500");
     expect(summary.message).toContain("spend.identity.maxTokens");
-    expect(summary.message).toContain("no provider was contacted");
+    expect(summary.message).toContain("this send was refused before contacting a provider");
   });
 
   test("without a denial in hand the sentence is the one it always was", () => {

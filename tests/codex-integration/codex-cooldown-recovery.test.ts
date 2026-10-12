@@ -32,6 +32,7 @@ import {
 } from "../../src/codex/routing";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { resetQuotaQueryBackoffForTests } from "../../src/codex/quota-query-backoff";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-codex-cooldown-recovery-test");
 const TEST_CODEX_HOME = join(TEST_DIR, "codex");
@@ -97,6 +98,7 @@ describe("Codex cooldown recovery worker", () => {
     clearAccountQuota();
     clearCodexUpstreamHealth();
     clearCodexCooldownRecoveryProbeState();
+    resetQuotaQueryBackoffForTests();
   });
 
   afterEach(() => {
@@ -104,12 +106,35 @@ describe("Codex cooldown recovery worker", () => {
     clearAccountQuota();
     clearCodexUpstreamHealth();
     clearCodexCooldownRecoveryProbeState();
+    resetQuotaQueryBackoffForTests();
     if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousOpencodexHome;
     if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = previousCodexHome;
     if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
   });
+
+  test("a paid account remains bound at 100% but real cooldowns still select an alternate", () => {
+    const config = makeConfig();
+    config.creditCodexAccountIds = ["a"];
+    config.autoSwitchThreshold = 99;
+    config.accountPoolStrategy = "quota";
+    saveCredential("a");
+    saveCredential("b");
+    updateAccountQuota("a", 99);
+    updateAccountQuota("b", 100);
+    expect(resolveCodexAccountForThread("paid-affinity", config)).toBe("a");
+    setAccountQuotaFromParsed("a", parseUsageQuota({
+      rate_limit: { allowed: true, primary_window: { used_percent: 100, limit_window_seconds: 604800 } },
+      credits: { has_credits: true, unlimited: false, balance: "42.5" },
+    }));
+    expect(resolveCodexAccountForThread("paid-affinity", config)).toBe("a");
+    updateAccountQuota("b", 30);
+    expect(resolveCodexAccountForThread("new-included-capacity", config)).toBe("b");
+    recordCodexUpstreamOutcome(config, "a", 429, { retryAfter: "60" });
+    expect(resolveCodexAccountForThread("paid-affinity", config)).toBe("b");
+  });
+
 
   test("manual reset bypasses pacing but does not steal a live background lease", () => {
     const config = makeConfig(["a"]); saveCredential("a"); cool(config, "a");

@@ -1,11 +1,22 @@
-/** Hosted tools rejected by specific native model slugs or exact provider destinations. */
+/**
+ * Hosted tools rejected by specific native model slugs or exact provider destinations.
+ *
+ * Add a row only for a destination that refuses the tool itself.
+ */
 const UNSUPPORTED_HOSTED_TOOLS: ReadonlyArray<{
   match: (model: string, baseUrl?: string) => boolean;
   tools: ReadonlySet<string>;
 }> = [
   {
-    match: (model, baseUrl) => model === "grok-4.6"
-      && baseUrl?.replace(/\/+$/, "") === "https://opencode.ai/zen/go/v1",
+    // MiMo rejects hosted search with "tool type 'web_search' is not supported by this gateway phase" (#5501).
+    match: (_model, baseUrl) => {
+      if (!baseUrl) return false;
+      try {
+        return /(?:^|\.)xiaomimimo\.com$/i.test(new URL(baseUrl).hostname);
+      } catch {
+        return false;
+      }
+    },
     tools: new Set(["web_search", "web_search_preview"]),
   },
 ];

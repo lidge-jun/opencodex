@@ -100,11 +100,20 @@ describe("fast-row eligibility", () => {
   });
 
   test("an adapter without the wire does not publish", () => {
-    // The anthropic-speed wire kind has an empty adapter set by design.
+    // No declared wire: the anthropic adapter has no default FastWire (its fast lane is the
+    // declared anthropic-speed wire, never an inherited service_tier), so nothing publishes.
     expect(fastRowEligible(
       provider({ adapter: "anthropic", supportsServiceTier: true }),
       "m",
     )).toBe(false);
+    expect(fastRowEligible(
+      provider({
+        adapter: "anthropic",
+        fastWire: { kind: "anthropic-speed", canonicalToWire: { priority: "fast" }, foreignCallerTiers: "drop" },
+        modelSupportsServiceTier: { m: true },
+      }),
+      "m",
+    )).toBe(true);
   });
 
   test("exact-model capability is honoured over the provider default", () => {

@@ -1,0 +1,98 @@
+---
+title: 遠端連結
+description: 透過 SSH 連接 OpenCodex Home 電腦與 Child 電腦。
+---
+
+機器連結透過 SSH 連接 OpenCodex **Home** 電腦與 **Child** 電腦。Home 透過 SSH 通道為 Child 提供服務，兩台電腦各自繼續在 `10100` 連接埠執行本機 OpenCodex 服務。儀表板會透過 SSH 傳送 Child 專用的連結金鑰，因此不需要手動輸入權杖。
+
+## 需求
+
+- Home 可以使用 OpenSSH 金鑰登入 Child。
+- 對於由 Child 發起的連結，Child 必須能使用 OpenSSH 金鑰登入 Home（不支援密碼登入）。
+- Child 已安裝 OpenCodex 2.66.0 或更新版本（由 Child 發起的連結也要求 Home 符合）。
+- 兩台電腦執行 macOS 或 Linux。
+- 從 Home 新增 Child 的儀表板需在 Home 上開啟，或使用已配對的 Hub 工作階段。將目前電腦轉換為 Child 需要由操作者配對的儀表板工作階段；未經憑證簽發的本機工作階段不能提交這項路由變更。
+
+密碼 SSH 和 Windows 不在目前流程中。連結可以從任一端發起：依下文從 Home 發起，或依「將這台電腦連線為 Child」一節從 Child 發起。
+
+## 從 `#remote` 新增 Child
+
+1. 開啟儀表板的 `#remote`，開啟 Remote Link。
+2. 選擇 **Home**，然後按 **Continue**。SSH 主機列表會開啟。
+3. 從 SSH 候選主機選擇主機，或輸入 SSH 設定別名。
+4. 執行連線測試，並將顯示的主機指紋與目標電腦的指紋比較。比較指紋可在 SSH 信任主機前發現錯誤的電腦或已變更的主機金鑰。
+5. 確認指紋，然後連接 Child。
+
+儀表板不會要求輸入權杖。它會先探測主機，只有明確確認指紋後才能套用連結。
+
+新增 Child 視窗會說明 Child 透過 SSH 使用此 Home 的供應商，並列出上述必要條件。別名來自執行 OpenCodex 的 Home 上的 `~/.ssh/config`，不一定是顯示瀏覽器的電腦。如果探索成功但沒有主機，請新增如下 `Host` 項目後重新掃描。也可以手動輸入現有別名；選取或輸入別名後即可啟用連線測試。視窗還提供本指南的連結。
+
+```sshconfig
+Host devbox
+  HostName devbox.example.com
+  User you
+  IdentityFile ~/.ssh/id_ed25519
+```
+
+如果探索失敗，視窗會顯示載入失敗、可用的請求原因和重試按鈕，而不是聲稱清單為空。連線測試失敗的具體原因與清理後的 SSH 提示只在作用中視窗顯示，不會在背後重複顯示。檢查原因，必要時使用下方 SSH 診斷方法，然後重試。重新掃描會保留輸入的別名，但連線前必須重新檢查指紋。
+
+## 將這台電腦連線為 Child
+
+在要使用 Home 供應商的電腦上：
+
+1. 在儀表板中開啟 `#remote` 並開啟 Remote Link。
+2. 選擇 **Child**。SSH 主機清單會開啟。
+3. 選擇 Home 的 SSH 主機，執行連線測試，然後比較並確認其主機指紋。
+4. 閱讀提示後選擇 **Connect as Child**。
+
+連線會重新啟動這台電腦上的 OpenCodex。已在執行的 Codex 請求會先完成，重新啟動期間新的請求可能在最多一分鐘內失敗。之後儀表板會自動重新載入並顯示 Child 連結。Codex 會繼續使用這台電腦上的 `http://127.0.0.1:<port>/v1`，不需要設定權杖或環境變數：本機 OpenCodex 會把每個請求轉送給 Home，由 Home 以它自己的供應商與帳戶提供服務。
+
+如果 **Child** 提示先配對這台電腦，請在這台電腦上開啟設定的 HTTP 回環 IP 位址儀表板，例如 `http://127.0.0.1:<configured-port>`。只有在缺少配對且儀表板與 API 使用相同的回環來源時，才會顯示本機配對表單。複製表單中的 `ocx gui pair --origin "http://127.0.0.1:<configured-port>"` 命令，在這台電腦的終端機中執行，再將一次性代碼貼到表單中。必須使用表單顯示的確切來源；供應商 API 金鑰或管理員權杖不是配對代碼。缺少配對與設定的連接埠不符是不同的原因。
+
+選擇 **Child** 角色還要求 OpenCodex 以獨立執行模式在其設定的連接埠上執行，因為 Child 會在正好這個連接埠上重新啟動。如果儀表板提示 OpenCodex 未在其設定的連接埠上執行，請先在該連接埠上重新啟動它。
+
+## 連結狀態
+
+- **Connected** 表示 SSH 通道已準備好，Child 可以使用 Home 連結。
+- **Reconnecting** 表示正在重試通道。重試期間請求可能暫時回傳帶有 `Retry-After` 的 `503`。在從自己的儀表板連線的 Child 上，請求會先最多等待 15 秒讓通道恢復。
+- **Failed** 表示連結需要處理。請檢查 SSH 驗證、已確認的主機金鑰、轉送或逾時原因。建立 SSH 通道的一方會在睡眠、故障或重新啟動後自動重試（Home 新增的 Child 由 Home 重試，從自己的儀表板連線的 Child 由 Child 重試）：逾時或轉送錯誤後大約每分鐘一次，驗證錯誤後每五分鐘一次。主機金鑰變更時不會重試。要立即重新連線，請在 Home 的儀表板中選擇 **Retry**，或在 Home 上執行 `ocx link reconnect --link-id <id>`。這只會重新啟動該連結的通道，不會重新啟動 OpenCodex。
+
+連結失敗時不會靜默切換到本機供應商。
+
+## 移除 Child
+
+選擇 Child 的 **Disconnect** 並確認別名。Home 會停止通道、撤銷該 Child 的連結金鑰，並刪除已儲存的連結記錄。
+
+如果 Home 無法連到 Child 來執行中斷連線命令，請選擇 **Remove here only**。這只會刪除本機的通道、金鑰與記錄。然後登入 Child 並執行：
+
+```bash
+ocx disconnect
+```
+
+若要中斷由 Child 發起的連結，請在 Child 上執行 `ocx disconnect`。這個命令會中斷用戶端通道，並透過 SSH 在 Home 上撤銷連結。如果 Home 撤銷失敗，命令會輸出：`Home revoke failed; run ocx link revoke --link-id <linkId> on the home.`
+
+## 安全性
+
+Child 會透過連結使用 Home 電腦上的供應商與供應商憑證。Home 會為每個 Child 建立獨立的連結金鑰；移除連結會撤銷該金鑰。確認前請比較主機指紋，避免誤接受錯誤電腦或已變更的主機金鑰。由 Tailscale 身分簽發的儀表板工作階段無法管理機器連結。 在 Child 上，金鑰只保留在 OpenCodex 內部：Codex 或 Claude Code 在 Child 上傳送的憑證不會轉送給 Home，Child 上任何能存取 `127.0.0.1:<port>` 的程式都可以不用金鑰使用 Home，這與獨立安裝給予本機程式的信任相同。來自其他網站的網頁會被拒絕。
+
+## CLI 參考
+
+```text
+ocx link probe <alias> [--json]
+ocx link add <alias> [--expect-fingerprint SHA256:…] [--json]
+ocx link port [--json]
+ocx link issue --alias <alias> --tunnel-port <port> [--json]
+ocx link status [--json]
+ocx link revoke --link-id <id> [--json]
+ocx link reconnect --link-id <id> [--json]
+```
+
+非互動式終端（非 TTY）必須提供 `--expect-fingerprint`。互動式終端中可省略此參數，但必須明確確認提供的指紋。
+
+## 相關指南
+
+- [Remote Hub 部署](/zh-tw/guides/remote-hub/)
+- [遠端工作區](/zh-tw/guides/remote-workspace/)
+
+
+`ocx link probe <alias> --json` · `ocx link add <alias> --expect-fingerprint SHA256:… --json` — [CLI, restart, relay verification and recovery](/guides/remote-link/#add-a-child-from-the-terminal).

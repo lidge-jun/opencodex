@@ -30,6 +30,7 @@ const RESTRICTED_FILES = new Set([
   // Release and packaging automation executed by the release workflow.
   "scripts/release.ts",
   "scripts/release-notes.ts",
+  "scripts/release-version-sources.ts",
   "scripts/prepare-package.ts",
   // Authentication, credential, and secret handling. Mirrors the CODEOWNERS
   // security boundary.

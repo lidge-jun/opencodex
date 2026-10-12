@@ -2,15 +2,11 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { browserSecurityHeaders } from "./auth-cors";
 import type { GuiSessionBootstrap } from "./gui-session";
+import { packageVersion } from "../lib/package-version";
+import { isStandaloneBinary, standaloneRoot } from "../lib/standalone";
 
 /** opencodex version, read from the packaged package.json (same source as the server bootstrap). */
-const VERSION = (() => {
-  try {
-    return JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")).version as string;
-  } catch {
-    return "0.0.0";
-  }
-})();
+const VERSION = packageVersion("0.0.0");
 
 const MIME_TYPES: Record<string, string> = {
   ".html": "text/html", ".js": "application/javascript", ".css": "text/css",
@@ -24,11 +20,47 @@ const MIME_TYPES: Record<string, string> = {
  */
 const HASHED_ASSET_PATTERN = /-[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9]+$/;
 
-function findGuiDist(): string | null {
+/** `productName` in desktop/src-tauri/tauri.conf.json; Linux packages install resources under `lib/<productName>`. */
+export const DESKTOP_PRODUCT_NAME = "OpenCodex";
+
+/**
+ * Where a compiled `ocx` looks for `gui/dist`, given the directory holding the executable.
+ *
+ * Beside the binary covers a release archive and the Windows desktop install. The desktop shell
+ * ships `ocx` as a sidecar and its resources where Tauri's `resource_dir` puts them: `../Resources`
+ * inside a macOS app bundle, `../lib/<productName>` for a Linux package (`/usr/bin`, `/usr/local/bin`,
+ * an AppImage's `usr/bin`). The shell passes that directory as OPENCODEX_GUI_DIST only to the sidecar
+ * it starts itself; `ocx ensure` from the Codex shim and the login service start the same binary
+ * without the variable, so they find the dashboard here.
+ */
+export function standaloneGuiDistCandidates(executableDir: string, platform: NodeJS.Platform = process.platform): string[] {
+  const candidates = [join(executableDir, "gui", "dist")];
+  if (platform === "darwin") candidates.push(join(executableDir, "..", "Resources", "gui", "dist"));
+  if (platform === "linux") candidates.push(join(executableDir, "..", "lib", DESKTOP_PRODUCT_NAME, "gui", "dist"));
+  return candidates;
+}
+
+/** Overrides for tests; production callers pass nothing and get this process's own layout. */
+export interface GuiDistLookup {
+  /** Directory holding a compiled `ocx`, or null when running from source. */
+  standaloneDir?: string | null;
+  platform?: NodeJS.Platform;
+  /** Directory of this module; a source checkout's `gui/dist` is resolved from it. */
+  moduleDir?: string;
+}
+
+/** Lookup only: checks for `index.html` and never creates, copies or builds anything. */
+export function findGuiDist(lookup: GuiDistLookup = {}): string | null {
+  const standaloneDir = lookup.standaloneDir === undefined
+    ? (isStandaloneBinary() ? standaloneRoot() : null)
+    : lookup.standaloneDir;
+  const moduleDir = lookup.moduleDir ?? import.meta.dir;
   const candidates = [
-    join(import.meta.dir, "..", "..", "gui", "dist"),
-    join(import.meta.dir, "..", "..", "..", "gui", "dist"),
-  ];
+    process.env.OPENCODEX_GUI_DIST,
+    ...(standaloneDir === null ? [] : standaloneGuiDistCandidates(standaloneDir, lookup.platform)),
+    join(moduleDir, "..", "..", "gui", "dist"),
+    join(moduleDir, "..", "..", "..", "gui", "dist"),
+  ].filter((candidate): candidate is string => Boolean(candidate));
   for (const c of candidates) {
     if (existsSync(join(c, "index.html"))) return c;
   }

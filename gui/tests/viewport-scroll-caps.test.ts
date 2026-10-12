@@ -12,6 +12,14 @@ import { allRuleBodies, effectiveDeclaration, ruleBodies, withoutComments } from
 
 const cssUrl = new URL("../src/styles.css", import.meta.url);
 
+test("ordinary pages keep one document scroller and the mobile drawer locks it", async () => {
+  const css = withoutComments(await Bun.file(cssUrl).text());
+  // hidden on one axis computes auto on the other and creates the second body
+  // scroller. The standalone built-CSS Chromium test proves the geometry.
+  expect(effectiveDeclaration(css, "body", "overflow-x")).toBe("clip");
+  expect(effectiveDeclaration(css, "html:has(.sidebar.open)", "overflow-y")).toBe("hidden");
+});
+
 
 test("the log table caps its scroll height against the dynamic viewport", async () => {
   const css = withoutComments(await Bun.file(cssUrl).text());

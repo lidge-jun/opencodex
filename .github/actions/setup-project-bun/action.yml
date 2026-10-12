@@ -1,8 +1,18 @@
 name: Setup project Bun
 description: >-
-  Install the Bun runtime for a job. Installs the version declared in
-  package.json (dependencies.bun), keeping the runtime SOT in one place so
-  version bumps only touch package.json and bun.lock.
+  Install the package.json Bun pin for a job's role: dependencies.bun for
+  runtime (default), or testRunnerBun for test-runner.
+
+# Runtime 1.4.2 fixes #6684's Windows Bun.fetch stream truncation. The test runner
+# stays on 1.4.0: #4821 reverted #4064 after 1.4.2's multi-file --isolate preload
+# segfault; #6713 run 37631558263 reproduces it on Linux 1/4, macOS 2/2, Windows 9/9.
+# Rejoin only after the upstream runner crash is fixed and a green lane=all
+# dispatch proves the unified version; then delete testRunnerBun and this role input.
+inputs:
+  role:
+    description: Bun role to install (runtime or test-runner).
+    required: false
+    default: runtime
 
 outputs:
   version:
@@ -15,14 +25,28 @@ runs:
     - name: Resolve project Bun version
       id: resolve
       shell: bash
+      env:
+        BUN_ROLE: ${{ inputs.role }}
       run: |
-        version="$(node -p "require('./package.json').dependencies.bun")"
-        if [ -z "$version" ]; then
-          echo "::error::Could not resolve Bun version from package.json"
-          exit 1
-        fi
-        echo "version=$version" >> "$GITHUB_OUTPUT"
-        echo "Using Bun $version from package.json"
+        node <<'NODE'
+        const pkg = require('./package.json');
+        const role = process.env.BUN_ROLE;
+        let key;
+        let version;
+        switch (role) {
+          case 'runtime': key = 'dependencies.bun'; version = pkg.dependencies?.bun; break;
+          case 'test-runner': key = 'testRunnerBun'; version = pkg.testRunnerBun; break;
+          default:
+            console.error(`::error::Unknown Bun role: ${role}`);
+            process.exit(1);
+        }
+        if (typeof version !== 'string' || version !== version.trim() || !/^\d+\.\d+\.\d+$/.test(version)) {
+          console.error(`::error::Missing or invalid package.json ${key} for Bun role ${role}`);
+          process.exit(1);
+        }
+        require('node:fs').appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);
+        console.log(`Using Bun ${version} from package.json ${key} (${role})`);
+        NODE
 
     - name: Setup Bun
       uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2

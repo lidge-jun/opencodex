@@ -71,9 +71,9 @@ describe("Command Code provider", () => {
       apiKeyValidation: "unknown",
       reasoningEfforts: [],
       modelReasoningEfforts: {
-        "deepseek/deepseek-v4-flash-vision-exp": ["high", "max"],
+        "deepseek/deepseek-v4-flash-vision-exp": ["low", "medium", "high", "xhigh", "max"],
         "gpt-5.6-luna": ["low", "medium", "high", "xhigh", "max"],
-        "google/gemini-3.7-flash": ["low", "medium", "high"],
+        "google/gemini-3.7-flash": ["low", "medium", "high", "xhigh", "max"],
       },
       modelDiscovery: {
         path: "models",
@@ -204,23 +204,19 @@ describe("Command Code provider", () => {
 
     const config = withStubbedProviderFetch(commandcodeConfig());
     const models = (await gatherRoutedModels(config)).filter(row => row.provider === "commandcode");
-    // Full authenticated catalog snapshot: 59 rows, including the free-tier entries.
-    //
-    // #2647's fixture carried 60 because it predates 328931265, which removed Ox Alpha
-    // entirely — both ids, the Zen slug for the same stealth model, the context
-    // constant, the effort profile, and the OpenRouter entry. That stealth window has
-    // closed, so `stealth/ox-alpha` is dropped from the snapshot rather than being
-    // silently resurrected by a regenerated fixture.
-    expect(models).toHaveLength(59);
+    // Authenticated 2026-09-23 catalog snapshot, including endpoint metadata.
+    expect(models).toHaveLength(77);
     expect(models.map(row => row.id)).toContain("deepseek/deepseek-v4-flash");
     expect(models.map(row => row.id)).toContain("moonshotai/Kimi-K2.7-Code");
     expect(models.map(row => row.id)).toContain("poolside/laguna-s-2.1-free");
+    expect(models.map(row => row.id)).toContain("xiaomi/mimo-v2.6-flash");
+    expect(models.map(row => row.id)).not.toContain("minimax/minimax-m3-free");
 
     const deepseek = models.find(row => row.id === "deepseek/deepseek-v4-flash")!;
     expect(deepseek.contextWindow).toBe(1_000_000);
     expect(deepseek.owned_by).toBe("command-code");
     // #1800: discovered models now surface the curated effort table (command-code-efforts.ts).
-    expect(deepseek.reasoningEfforts).toEqual(["high", "max"]);
+    expect(deepseek.reasoningEfforts).toEqual(["low", "medium", "high", "xhigh", "max"]);
 
     const haiku = models.find(row => row.id === "claude-haiku-4-5-20251001")!;
     expect(haiku.contextWindow).toBe(200_000);
@@ -232,7 +228,7 @@ describe("Command Code provider", () => {
     expect(models.find(row => row.id === "deepseek/deepseek-v4-flash-vision-exp"))
       .toMatchObject({
         id: "deepseek/deepseek-v4-flash-vision-exp",
-        reasoningEfforts: ["high", "max"],
+        reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
       });
     expect(models.find(row => row.id === "gpt-5.6-luna")).toMatchObject({
       id: "gpt-5.6-luna",
@@ -240,8 +236,12 @@ describe("Command Code provider", () => {
     });
     expect(models.find(row => row.id === "google/gemini-3.7-flash")).toMatchObject({
       id: "google/gemini-3.7-flash",
-      reasoningEfforts: ["low", "medium", "high"],
+      reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
     });
+    expect(models.find(row => row.id === "Qwen/Qwen3.8-Flash")?.reasoningEfforts)
+      .toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(models.find(row => row.id === "meta/muse-spark-1.3-contributor")?.reasoningEfforts)
+      .toEqual(["low", "medium", "high", "xhigh", "max"]);
 
     expect(routedSlug("commandcode", deepseek.id)).toBe("commandcode/deepseek-deepseek-v4-flash");
     expect(routeModel(config, "commandcode/deepseek/deepseek-v4-flash").modelId)

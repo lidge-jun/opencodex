@@ -15,8 +15,8 @@
  * is what ruled out an unjoined worker of ours: Bun destroyed the VM while
  * native work that had left the thread was still outstanding.
  *
- * Bun 1.4.0 — the version this repository pins (package.json `dependencies.bun`,
- * consumed by .github/actions/setup-project-bun) — rewrote that lifetime model:
+ * Bun 1.4.0 introduced the lifetime model retained by the bundled runtime
+ * (package.json `dependencies.bun`, consumed by .github/actions/setup-project-bun):
  * worker threads are parent-owned and joined before the parent VM disappears,
  * native resources including bun:sqlite are torn down before JSC is destroyed,
  * and a termination gate stops native callbacks entering a stopping worker

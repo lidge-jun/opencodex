@@ -1,9 +1,10 @@
 import { spyOn } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { MAIN_CODEX_ACCOUNT_ID } from "../../src/codex/account-id";
 
 interface Fixture {
-  scenario: "owned-99" | "owned-98" | "foreign" | "unknown" | "recovery" | "second-listener"
+  scenario: "owned-97" | "owned-98" | "owned-99" | "foreign" | "unknown" | "recovery" | "second-listener"
     | "invalid-access-token" | "invalid-account-id" | "invalid-id-token" | "mismatched-identity" | "renewed-listener"
     | "stage-retry" | "manual-recovery" | "stale-sweep" | "retained-unknown-binding"
     | "conflicting-token-identities" | "conflicting-claims" | "owned-opaque-99";
@@ -31,8 +32,12 @@ globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: Request
   throw new Error("Unexpected network request in startup policy fixture");
 }, { preconnect() {} }) as typeof fetch;
 
-const { setIcaclsRunnerForTests } = await import("../../src/lib/windows-secret-acl");
+const { setIcaclsRunnerForTests, setAsyncIcaclsRunnerForTests } = await import("../../src/lib/windows-secret-acl");
+// Both runners, not only the sync one: startServer hardens its state files through the async path,
+// and on a loaded Windows runner a real icacls stall there (30 s budget) outran this child's whole
+// spawn budget. ACLs are not what this fixture measures.
 setIcaclsRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
+setAsyncIcaclsRunnerForTests(async () => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
 const authCollision = await import("../../src/codex/auth-collision");
 const readTokens = authCollision.readCodexTokensResult;
 const tokenReads: Array<string | undefined> = [];
@@ -153,7 +158,9 @@ const admit = async (
   options: Parameters<typeof resolveCodexAuthContext>[3] = {},
   policy = config,
 ) => {
-  try { const context = await resolveCodexAuthContext(headers(), policy, mode, options); return { admitted: true, kind: context.kind }; }
+  // These probes record the admission decision at the instant a request arrives, so they spend no
+  // grace wait on a pending policy binding; main-account-policy-binding-wait.test.ts covers the wait.
+  try { const context = await resolveCodexAuthContext(headers(), policy, mode, { mainAccountPolicyBindingWaitMs: 0, ...options }); return { admitted: true, kind: context.kind, accountId: context.accountId }; }
   catch (error) { return { admitted: false, error: (error as Error).name }; }
 };
 const wire = async (token = fixture.bearer, id = fixture.accountId) => {
@@ -276,6 +283,7 @@ try {
   }
   console.log("POLICY_STARTUP_RESULT=" + JSON.stringify({
     scenario: fixture.scenario, before, listeners, firstServerSettled, firstAdmission, heldRecovery, laterRecovery,
+    thresholds: { global: config.autoSwitchThreshold, mainOverride: config.codexAccountAutoSwitchThresholds?.[MAIN_CODEX_ACCOUNT_ID] ?? null },
     retainedUnknown, validReplacement,
     settled, after, settledAdmission, response, beforePrimaryUpstreamCalls, primaryUpstreamCalls, originalResponse,
     unexpectedNetwork,

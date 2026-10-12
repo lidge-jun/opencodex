@@ -1,8 +1,8 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { setTrustedWindowsElevationExecutablesForTests } from "../../src/lib/windows-elevation";
+import { resolveTrustedWindowsPowerShellExe, setTrustedWindowsElevationExecutablesForTests } from "../../src/lib/windows-elevation";
 import {
   createWindowsPowerShellFixture,
   probeWindowsPowerShellFixture,
@@ -677,6 +677,8 @@ describe("Codex app-server process matching (#476)", () => {
     const snapshots = [{ pid: 7, commandLine: "codex app-server --listen unix://x" }];
     const io = {
       listSnapshots: () => snapshots,
+      readStartMs: () => 1_000,
+      catalogMtimeMs: () => 2_000,
       kill: () => {},
       isAlive: () => false,
       waitExit: () => true,
@@ -699,6 +701,55 @@ describe("Codex app-server process matching (#476)", () => {
     expect(restarted.warned).toBe(false);
     expect(restarted.restart?.stopped).toEqual([7]);
     expect(logs.some(line => line.includes("Stopping Codex app-server"))).toBe(true);
+  });
+
+  test("afterCatalogWriteHandleAppServers warns only for processes proven stale", () => {
+    const errors: string[] = [];
+    const snapshots = [
+      { pid: 7, commandLine: "codex app-server --listen unix://stale" },
+      { pid: 8, commandLine: "codex app-server --listen unix://fresh" },
+    ];
+    const result = afterCatalogWriteHandleAppServers({
+      restart: false,
+      log: { log: () => {}, error: line => errors.push(String(line)) },
+      io: {
+        listSnapshots: () => snapshots,
+        readStartMs: pid => pid === 7 ? 1_000 : 3_000,
+        catalogMtimeMs: () => 2_000,
+      },
+    });
+    expect(result.warned).toBe(true);
+    expect(result.processes.map(process => process.pid)).toEqual([7]);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain("PID: 7");
+    expect(errors[0]).not.toContain("8");
+  });
+
+  test("afterCatalogWriteHandleAppServers stays quiet for fresh and unknown observations", () => {
+    const errors: string[] = [];
+    const base = {
+      restart: false,
+      log: { log: () => {}, error: line => errors.push(String(line)) },
+    } as const;
+    const fresh = afterCatalogWriteHandleAppServers({
+      ...base,
+      io: {
+        listSnapshots: () => [{ pid: 7, commandLine: "codex app-server --listen unix://fresh" }],
+        readStartMs: () => 3_000,
+        catalogMtimeMs: () => 2_000,
+      },
+    });
+    const unknown = afterCatalogWriteHandleAppServers({
+      ...base,
+      io: {
+        listSnapshots: () => [{ pid: 8, commandLine: "codex app-server --listen unix://unknown" }],
+        readStartMs: () => null,
+        catalogMtimeMs: () => 2_000,
+      },
+    });
+    expect(fresh.warned).toBe(false);
+    expect(unknown.warned).toBe(false);
+    expect(errors).toEqual([]);
   });
 });
 
@@ -772,8 +823,8 @@ describe("CLI /api sync wiring for stale app-servers (#476)", () => {
     // write actually landed, never on a refused/failed serialization attempt.
     expect(syncCacheCase).toContain("withCatalogWriteSerialization");
     // #1931: explicit sync-cache refreshes even when injection is OFF (side profiles).
-    expect(syncCacheCase).toContain("invalidateCodexModelsCacheWithPermit(permit, owningCodexHome, { allowWhenDesiredDisabled: true })");
-    const gate = 'if (invalidated.kind === "completed" && invalidated.value)';
+    expect(syncCacheCase).toContain("invalidateCodexModelsCacheWithPermitOutcome(permit, owningCodexHome, { allowWhenDesiredDisabled: true })");
+    const gate = 'if (invalidated.kind === "completed" && invalidated.value === "written")';
     expect(syncCacheCase).toContain(gate);
     expect(syncCacheCase).toContain("handleRestartScopeAfterWrite");
     expect(syncCacheCase.indexOf(gate))
@@ -905,39 +956,45 @@ describe("Windows Win32_Process owner enumeration (#476)", () => {
     () => {
       // Keep a live process whose CommandLine contains a Codex basename token.
       const child = spawn(
-        "powershell.exe",
+        resolveTrustedWindowsPowerShellExe(),
         [
           "-NoProfile", "-NoLogo", "-NonInteractive",
           "-Command",
-          "Start-Sleep -Seconds 45 # codex app-server integration-probe",
+          "Start-Sleep -Seconds 90 # codex app-server integration-probe",
         ],
         { stdio: "ignore", windowsHide: true },
       );
       try {
         expect(child.pid).toBeGreaterThan(1);
-        // Brief settle so Win32_Process can observe the child. A loaded Windows
-        // runner can also exhaust one CIM enumeration deadline, so tolerate one
-        // transient empty result OR one thrown deadline (ETIMEDOUT propagates by
-        // design) while keeping the production timeout unchanged.
-        Bun.sleepSync(250);
-        const enumerate = (): ReturnType<typeof listWindowsSnapshots> | undefined => {
-          try {
-            return listWindowsSnapshots();
-          } catch {
-            return undefined; // transient CIM deadline on a contended runner
-          }
-        };
-        let snapshots = enumerate() ?? [];
+        // This verifies native enumeration, not the product's 8s latency bound.
+        // Limit the native query to this fixture; host job count must not set its cost.
+        // Keep the trusted executable, owner/candidate checks and parser unchanged;
+        // the fixture's explicit finally owns its lifetime, and lookup errors propagate.
+        const deadline = performance.now() + 55_000;
+        const enumerate = () => listWindowsSnapshots(psCommand => {
+          const query = "Get-CimInstance Win32_Process -ErrorAction Stop";
+          expect(psCommand).toContain(query);
+          const fixtureCommand = psCommand.replace(query,
+            `Get-CimInstance Win32_Process -Filter "ProcessId=${child.pid}" -ErrorAction Stop`);
+          const executable = resolveTrustedWindowsPowerShellExe();
+          const remaining = Math.floor(deadline - performance.now());
+          if (remaining <= 0) throw new Error("native enumeration fixture deadline expired");
+          return execFileSync(
+            executable,
+            ["-NoProfile", "-NoLogo", "-NonInteractive", "-Command", fixtureCommand],
+            { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: Math.min(45_000, remaining), windowsHide: true },
+          );
+        });
+        let snapshots = enumerate();
         let match = snapshots.find(snapshot => snapshot.pid === child.pid);
-        if (!match) {
-          Bun.sleepSync(250);
-          snapshots = enumerate() ?? [];
-          match = snapshots.find(snapshot => snapshot.pid === child.pid);
-        }
-        if (!match) {
-          Bun.sleepSync(1_000);
-          snapshots = enumerate() ?? [];
-          match = snapshots.find(snapshot => snapshot.pid === child.pid);
+        // Only a successful scan missing this PID is retried; errors propagate.
+        // Both scans and the visibility delay share the same monotonic budget.
+        if (!match && performance.now() < deadline) {
+          Bun.sleepSync(Math.min(250, Math.max(0, Math.floor(deadline - performance.now()))));
+          if (performance.now() < deadline) {
+            snapshots = enumerate();
+            match = snapshots.find(snapshot => snapshot.pid === child.pid);
+          }
         }
         expect(match).toBeDefined();
         expect(match!.owner).toMatch(/\\/);
@@ -951,7 +1008,7 @@ describe("Windows Win32_Process owner enumeration (#476)", () => {
         }
       }
     },
-    { timeout: 35_000 },
+    { timeout: 60_000 },
   );
 });
 

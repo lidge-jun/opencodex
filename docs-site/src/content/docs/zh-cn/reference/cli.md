@@ -23,9 +23,15 @@ opencodex 的 CLI 是 `ocx`。它会根据第一个命令名进行分发；文�
 
 在语义明确时，默认操作是 `list` 或 `status`。使用 `--json` 获取结构化快照，使用 `ocx observe logs --follow --jsonl` 获取流式请求日志。主题、语言、导航以及其他纯视觉浏览器状态都没有 CLI 对应项；Cloudflare Tunnel 的设置不在这组命令之内。
 
+## 存活探测上限覆盖
+
+`ocx health`、`ocx status`、`ocx account *`、`ocx login codex` 和 `ocx ready` 通过短时存活探测查找正在运行的代理：默认每次 750 ms，停止和启动判断使用带重试的 1500 ms。如果安全层（内容过滤器或 EDR 类网络扩展）给每个回环连接增加固定延迟，健康的代理可能来不及响应就已超时。
+
+在这类主机上可设置 `OCX_PROBE_TIMEOUT_MS` 提高上限，例如 `OCX_PROBE_TIMEOUT_MS=5000 ocx status`。取值为 1 到 30000 的整数毫秒。覆盖只会提高上限：750 ms 默认值和 1500 ms 停止/启动预算保留下限，因此 `1000` 只会延长默认探测。未设置、空值、小数、负数、0 或更大的值都会被忽略。
+
 ## 退出码与确认
 
-成功的命令退出码为 0。无效用法、未知命令或资源、API 操作失败，以及必需服务不可用时，退出码都非零。`ocx health` 只有在代理健康时才以 0 退出，否则以 1 退出，因此可作为服务探针。脚本应检查退出码，而不是解析人类可读输出。
+成功的命令退出码为 0。无效用法、未知命令或资源、API 操作失败，以及必需服务不可用时，退出码都非零。`ocx health` 只有在代理健康时才以 0 退出，找不到健康的代理时以 1 退出，参数无效时以 2 退出，因此可作为服务探针。脚本应检查退出码，而不是解析人类可读输出。
 
 声明需要确认的破坏性删除、导入、额度消耗和更新操作，在非交互用法中都要求 `--yes`。该标志是显式选择加入；省略它时，绝不能在静默情况下确认该操作。
 
@@ -34,3 +40,5 @@ opencodex 的 CLI 是 `ocx`。它会根据第一个命令名进行分发；文�
 `ocx --version`、`ocx -v` 和 `ocx version` 会打印一行适合脚本读取的版本信息并退出。
 
 有两个分发目标会刻意不出现在普通帮助中：`__refresh-version [preview]` 会在分离进程中刷新更新通知缓存，而 `__gui-update-worker <job-id> [latest|preview] [restart]` 会运行一个仪表盘更新任务。它们是实现细节，不是稳定的面向用户命令。仪表盘会记录 worker PID，恢复 worker 已死亡但仍处于活动状态的任务，把更早的、没有 PID 的活动记录在十分钟后视为过期，并保护存活的 worker 不受并发更新影响。
+
+`ocx logs --model` 同时接受显示的 `provider/model` 和裸模型 ID。过滤在行数限制之前进行，`--follow` 使用同一过滤器。空匹配仅在人类可读输出中提示，JSON/JSONL 保持不变。`ocx hub disable` 参见 [Remote Hub](/guides/remote-hub/#return-a-hub-to-standalone)。

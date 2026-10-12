@@ -38,6 +38,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
 
 const HOMES: string[] = [];
+const previousHome = process.env.OPENCODEX_HOME;
 const COMPAT_VERSION = "9".repeat(64);
 
 function tempHome(): string {
@@ -165,7 +166,8 @@ afterEach(() => {
   stopLabAutomationScheduler();
   resetLabAutomationSchedulerStateForTests();
   resetCompatibilityVersionCacheForTests();
-  delete process.env.OPENCODEX_HOME;
+  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = previousHome;
   for (const dir of HOMES.splice(0)) removeTreeWithRetry(dir);
 });
 

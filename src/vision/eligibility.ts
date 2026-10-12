@@ -35,6 +35,54 @@ import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers-dest
  */
 export type VisionSidecarBackend = "openai" | "anthropic" | "routed";
 
+/**
+ * Input modalities an explicit custom row declares for one routed model.
+ *
+ * A custom row is the operator's own definition of that model, so its declaration outranks the
+ * provider-level hints the predicates below read. Without this the two halves of one config
+ * disagreed in production: the catalog overlay in `src/codex/catalog/routed-gather.ts` copies
+ * `customModels[].inputModalities` onto the row and the dashboard showed "text, image", while
+ * the request path consulted only `providers[].noVisionModels` / `modelInputModalities` and
+ * stripped the image before dispatch. A model the operator had declared image-capable therefore
+ * received an omission marker instead of its attachment.
+ *
+ * Precedence, highest first: `modelCapabilities` (the documented per-model capability
+ * declaration), then this custom-row declaration, then `noVisionModels`, then
+ * `modelInputModalities`, then registry/vendor metadata. `modelCapabilities` stays on top
+ * because it is the dedicated capability axis and the CLI `--text-only` flag writes it; when the
+ * two explicit forms contradict each other the more specific axis wins.
+ *
+ * Matching is exact on the routed identity — provider name and native model id, the pair the
+ * custom-model API keys rows by. A row that declares no modalities returns `undefined` rather
+ * than `["text"]`, so it stays silent instead of turning into a text-only claim.
+ */
+export function customRowInputModalities(
+  config: Pick<OcxConfig, "customModels">,
+  providerName: string,
+  modelId: string,
+): string[] | undefined {
+  for (const row of config.customModels ?? []) {
+    if (row.provider !== providerName || row.modelId !== modelId) continue;
+    if (Array.isArray(row.inputModalities) && row.inputModalities.length > 0) {
+      return [...row.inputModalities];
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The custom row's verdict for one model, in the shape the predicates need:
+ * `true`/`false` when the row declares modalities, `undefined` when it declares none.
+ */
+function customRowAcceptsImageInput(
+  config: Pick<OcxConfig, "customModels">,
+  providerName: string,
+  modelId: string,
+): boolean | undefined {
+  const declared = customRowInputModalities(config, providerName, modelId);
+  return declared === undefined ? undefined : declared.includes("image");
+}
+
 /** The two sides every deployment has; also the empty-auth fallback set. */
 export type UniversalVisionBackend = "openai" | "anthropic";
 
@@ -59,6 +107,14 @@ export interface VisionCandidateModel {
   inputModalities?: string[];
   native?: boolean;
 }
+
+/**
+ * The config slice the capability predicates need. `customModels` is optional so provider-only
+ * callers and unit tests keep compiling; a caller that omits it is simply silent about custom
+ * rows rather than wrong about them.
+ */
+export type VisionCapabilityConfig =
+  Pick<OcxConfig, "providers"> & { customModels?: OcxConfig["customModels"] };
 
 export interface VisionModelOption {
   value: string;
@@ -142,20 +198,31 @@ function enrichedProviderForVision(
 }
 
 function isVisionSidecarConsumerWithCache(
-  config: Pick<OcxConfig, "providers">,
+  config: VisionCapabilityConfig,
   providerName: string,
   modelId: string,
   cache: EnrichedProviderCache,
 ): boolean {
   const provider = enrichedProviderForVision(config, providerName, cache);
-  return provider !== undefined && isModelVisionSidecarConsumer(provider, modelId);
+  if (provider === undefined) return false;
+  // Documented precedence, highest first: the dedicated per-model capability axis, then the
+  // operator's own custom row, then the provider-level hints. Reading the custom row ahead of
+  // `modelCapabilities` would let it override the more specific axis.
+  const capabilityDeclared = Object.hasOwn(provider.modelCapabilities ?? {}, modelId)
+    ? provider.modelCapabilities?.[modelId]?.inputModalities : undefined;
+  if (capabilityDeclared !== undefined) {
+    return capabilityDeclared.includes("text") && !capabilityDeclared.includes("image");
+  }
+  const customDeclared = customRowInputModalities(config, providerName, modelId);
+  if (customDeclared !== undefined) return customDeclared.includes("text") && !customDeclared.includes("image");
+  return isModelVisionSidecarConsumer(provider, modelId);
 }
 
 /**
  * Is this model listed as one the sidecar describes FOR? Such a model cannot be
  * the describer, and its advertised modalities are untrustworthy.
  */
-export function isVisionSidecarConsumer(config: Pick<OcxConfig, "providers">, providerName: string, modelId: string): boolean {
+export function isVisionSidecarConsumer(config: VisionCapabilityConfig, providerName: string, modelId: string): boolean {
   return isVisionSidecarConsumerWithCache(config, providerName, modelId, new Map());
 }
 
@@ -165,23 +232,30 @@ export function isVisionSidecarConsumer(config: Pick<OcxConfig, "providers">, pr
  * which callers treat as eligible.
  */
 export function modelAcceptsImageInput(
-  config: Pick<OcxConfig, "providers">,
+  config: VisionCapabilityConfig,
   candidate: VisionCandidateModel,
 ): boolean | undefined {
   return modelAcceptsImageInputWithCache(config, candidate, new Map());
 }
 
 function modelAcceptsImageInputWithCache(
-  config: Pick<OcxConfig, "providers">,
+  config: VisionCapabilityConfig,
   candidate: VisionCandidateModel,
   cache: EnrichedProviderCache,
 ): boolean | undefined {
   if (candidate.native === true || (candidate.provider === "openai" && SUPPORTED_NATIVE_OPENAI_SLUGS.has(candidate.id))) {
     const nativeProvider = enrichedProviderForVision(config, candidate.provider, cache);
-    if (nativeProvider && isModelVisionSidecarConsumer(nativeProvider, candidate.id)) return false;
     const declared = Object.hasOwn(nativeProvider?.modelCapabilities ?? {}, candidate.id)
       ? nativeProvider?.modelCapabilities?.[candidate.id]?.inputModalities : undefined;
     if (declared !== undefined) return declared.includes("image");
+    // The catalog already lets an explicit custom row replace the native modality list for the
+    // same slug; consult it here too or the row would advertise what the request path ignores.
+    const fromCustomRow = customRowAcceptsImageInput(config, candidate.provider, candidate.id);
+    if (fromCustomRow !== undefined) return fromCustomRow;
+    // The sidecar hints come after both explicit declarations, matching the documented order.
+    // Ahead of them a `noVisionModels` membership would short-circuit to text-only before the
+    // operator's own row was read.
+    if (nativeProvider && isModelVisionSidecarConsumer(nativeProvider, candidate.id)) return false;
     return advertisesImageInput(nativeInputModalities(candidate.id)) ?? true;
   }
   if (isVisionSidecarConsumerWithCache(config, candidate.provider, candidate.id, cache)) return false;
@@ -189,6 +263,11 @@ function modelAcceptsImageInputWithCache(
   const declared = Object.hasOwn(provider?.modelCapabilities ?? {}, candidate.id)
     ? provider?.modelCapabilities?.[candidate.id]?.inputModalities : undefined;
   if (declared !== undefined) return declared.includes("image");
+  // Ahead of the provider's own hints: this row is the operator's definition of this exact model,
+  // and the catalog overlay reads the same field. Behind modelCapabilities, which is the dedicated
+  // capability axis the CLI `--text-only` writes.
+  const fromCustomRow = customRowAcceptsImageInput(config, candidate.provider, candidate.id);
+  if (fromCustomRow !== undefined) return fromCustomRow;
   const configuredModalities = provider ? modelRecordValue(provider.modelInputModalities, candidate.id) : undefined;
   const fromConfiguredModalities = advertisesImageInput(configuredModalities);
   if (fromConfiguredModalities !== undefined) return fromConfiguredModalities;
@@ -206,14 +285,14 @@ function modelAcceptsImageInputWithCache(
 
 /** Eligible = not a sidecar consumer, and not positively known to be text-only. */
 export function isVisionEligibleModel(
-  config: Pick<OcxConfig, "providers">,
+  config: VisionCapabilityConfig,
   candidate: VisionCandidateModel,
 ): boolean {
   return isVisionEligibleModelWithCache(config, candidate, new Map());
 }
 
 function isVisionEligibleModelWithCache(
-  config: Pick<OcxConfig, "providers">,
+  config: VisionCapabilityConfig,
   candidate: VisionCandidateModel,
   cache: EnrichedProviderCache,
 ): boolean {
@@ -274,7 +353,7 @@ function baselineCandidate(
  * backend, and only `value` reaches the client, so first-wins costs nothing.
  */
 export function visionEligibleModelOptions(
-  config: Pick<OcxConfig, "providers">,
+  config: VisionCapabilityConfig,
   candidates: readonly VisionCandidateModel[],
   enabledBackends: readonly VisionSidecarBackend[],
   anthropicProviderName?: string,

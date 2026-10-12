@@ -198,7 +198,7 @@ turlarını işler.
 - `codex/catalog.ts` cephesi aracılığıyla dışa aktarılan
   `codex/catalog/sync.ts`, yönlendirilen modelleri ad alanlı girdiler olarak
   Codex'in kataloğuyla birleştirir, öne çıkan [alt ajan
-  modellerini](/tr/guides/codex-integration/#the-subagent-picker) ilk sıraya
+  modellerini](/tr/guides/codex-integration/#alt-ajan-seçicisi) ilk sıraya
   koyar, `disabledModels`'ı filtreler ve bozulmamış kataloğu tek seferlik bir
   yedekten tamamen geri yükleyebilir.
 

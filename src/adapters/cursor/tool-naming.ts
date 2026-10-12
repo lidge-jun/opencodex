@@ -67,11 +67,11 @@ function cursorToolChoiceMatches(
     if (catalogHasBareCodexShellBridge(catalog)) {
       return isBareCodexShellBridgeTool(tool);
     }
-    return tool.name === choiceName || cursorToolWireName(tool) === choiceName;
+    return tool.name === choiceName || cursorToolWireName(tool, catalog) === choiceName;
   }
   if (tool.name === choiceName) return true;
   if (cursorToolChoiceAliases(tool).includes(choiceName)) return true;
-  return cursorToolWireName(tool) === choiceName
+  return cursorToolWireName(tool, catalog) === choiceName
     && !catalog.some(candidate => candidate.name === choiceName);
 }
 
@@ -178,16 +178,49 @@ const CURSOR_PROXY_OWNED_BARE_TOOL_NAMES = new Set([
   CODEX_TOOL_SEARCH_TOOL,
 ]);
 
-/** Avoid collisions with Cursor's private bare-tool namespace. */
-function isCursorBareClientToolWireAliased(
-  tool: Pick<OcxTool, "namespace" | "name">,
-): boolean {
-  return !tool.namespace
-    && !CURSOR_PROXY_OWNED_BARE_TOOL_NAMES.has(tool.name);
+export const CLAUDE_CLIENT_BARE_TOOL_NAMES = new Set([
+  "Bash",
+  "Read",
+  "Write",
+  "Edit",
+  "Grep",
+  "Glob",
+  "Task",
+  "GetDynamicTools",
+  "EnterMode",
+  "ExitMode",
+  "Todo",
+  "AddTodo",
+  "UpdateTodo",
+  "ViewTodo",
+  "WebSearch",
+  "FetchUrl",
+  "KillProcess",
+  "ListProcesses",
+  "ViewProcessOutput",
+]);
+
+export function isClaudeClientBareToolName(name: string): boolean {
+  return CLAUDE_CLIENT_BARE_TOOL_NAMES.has(name);
 }
 
-export function cursorToolWireName(tool: Pick<OcxTool, "namespace" | "name">): string {
-  if (isCursorBareClientToolWireAliased(tool)) {
+/** Avoid collisions with Cursor's private bare-tool namespace. */
+export function isCursorBareClientToolWireAliased(
+  tool: Pick<OcxTool, "namespace" | "name">,
+  catalog?: readonly Pick<OcxTool, "namespace" | "name">[],
+): boolean {
+  if (tool.namespace || CURSOR_PROXY_OWNED_BARE_TOOL_NAMES.has(tool.name)) return false;
+  if (isClaudeClientBareToolName(tool.name)) {
+    return catalog ? catalogHasBareCodexShellBridge(catalog) : false;
+  }
+  return true;
+}
+
+export function cursorToolWireName(
+  tool: Pick<OcxTool, "namespace" | "name">,
+  catalog?: readonly Pick<OcxTool, "namespace" | "name">[],
+): string {
+  if (isCursorBareClientToolWireAliased(tool, catalog)) {
     return `${CURSOR_CLIENT_TOOL_WIRE_PREFIX}${tool.name}`;
   }
   return namespacedToolName(tool.namespace, tool.name);

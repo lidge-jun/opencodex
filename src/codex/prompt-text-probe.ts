@@ -49,6 +49,9 @@ const LAYER_SECTION_TAGS: Record<string, string> = {
   skills: "skills_instructions",
   apps: "apps_instructions",
   plugins: "plugins_instructions",
+  // Context-dependent: it is absent when the active collaboration mode adds no
+  // instructions, but Codex wraps it in this tag when it does render.
+  collaboration: "collaboration_mode",
   environment: "environment_context",
   permissions: "permissions instructions",
   // Synthetic: the project doc carries no tag of its own (see extractSections).
@@ -71,11 +74,10 @@ const UNMAPPED_LAYER_IDS = [
   // truth is that this extractor has no verified tag for them.
   "personality",
   "realtime",
-  "collaboration",
   // The Rust source names a <git_attribution> marker pair, but a world-state section is
   // DIFF-rendered: it emits nothing on a turn where its state has not changed. Live
   // `codex debug prompt-input` (codex-cli 0.145.0, 32978 bytes) showed no such block and
-  // no attribution text. Listing the id here reports "not exposed" honestly instead of
+  // no attribution text. Listing the id here reports "unmapped" honestly instead of
   // claiming a tag this extractor has never actually matched - the same mistake the
   // header above records for permissions.
   "git-attribution",
@@ -85,7 +87,7 @@ export interface LayerText {
   /** Rendered text, when this layer produced a section on the probed turn. */
   text: string | null;
   /** Why the text is absent, when it is. */
-  reason: "ok" | "empty-source" | "not-rendered" | "not-exposed" | "unavailable";
+  reason: "ok" | "empty-source" | "not-rendered" | "not-exposed" | "unmapped" | "unavailable";
   bytes: number;
   /**
    * `expanded` is text Codex sends as written. `template` is a catalog
@@ -103,7 +105,7 @@ export interface LayerText {
 
 /**
  * Why the base prompt is or is not readable, at the granularity a reader can act
- * on. `LayerText.reason` has five coarse values and cannot express any of this,
+ * on. `LayerText.reason` has six coarse values and cannot express any of this,
  * which is why the detailed answer travels on its own record.
  */
 export type BasePromptReason =
@@ -374,7 +376,7 @@ function readBasePrompt(codexHome: string): BasePromptText {
 /**
  * Project the base prompt onto the legacy `base-instructions` layer slot.
  *
- * The slot is lossy by construction - five coarse reasons, no renderer that reads
+ * The slot is lossy by construction - six coarse reasons, no renderer that reads
  * `representation` - so it carries only what it can carry honestly: published text
  * when the source is text Codex sends, and otherwise no text at all. A template is
  * deliberately NOT `ok` here, because the dialog labels every `ok` layer "Text
@@ -783,9 +785,9 @@ function extractSections(raw: string): Map<string, string> {
     for (const match of text.matchAll(/<([a-zA-Z_][a-zA-Z0-9_ -]*)>([\s\S]*?)<\/\1>/g)) {
       sections.set(match[1]!, match[2]!.trim());
     }
-    // AGENTS.md is NOT tagged: it arrives as a plain `# AGENTS.md instructions
-    // for <path>` block among the tagged sections. Matching only on tags would
-    // report the layer as unrendered while its text sits in the same message.
+    // AGENTS.md is NOT tagged: it arrives as a `# AGENTS.md instructions`
+    // block among the tagged sections. Matching only on tags would report the
+    // layer as unrendered while its text sits in the same message.
     //
     // Bounded at both ends. Capturing to end-of-message swept up any unrelated
     // untagged prose that happened to follow, and stripping tag-shaped blocks
@@ -793,14 +795,54 @@ function extractSections(raw: string): Map<string, string> {
     // AGENTS.md. Codex wraps the body in <INSTRUCTIONS>, so that is the boundary.
     // No line anchor: the block is concatenated directly onto the previous
     // section's closing tag, so requiring a newline before it never matched.
-    const projectDoc = /# AGENTS\.md instructions for [^\n]*\n+<INSTRUCTIONS>\n?([\s\S]*?)\n?<\/INSTRUCTIONS>/.exec(text);
+    //
+    // The `for <path>` suffix is OPTIONAL. Upstream emits three shapes from
+    // `contextual_user_fragment().render()` (core/src/context.rs) and this has
+    // to read all three rather than the one that existed when the probe was
+    // written: the legacy single-root form `# AGENTS.md instructions for
+    // <dir>`, the no-directory form `# AGENTS.md instructions`, and the
+    // multi-environment form where each project's block is labeled `for \`<env>\`
+    // with root <cwd>` INSIDE the INSTRUCTIONS wrapper. The labels are part of
+    // what the model sees, so they stay in the captured body.
+    const projectDoc = /# AGENTS\.md instructions(?: for [^\n]*)?\n+<INSTRUCTIONS>\n?([\s\S]*?)\n?<\/INSTRUCTIONS>/.exec(text);
     if (projectDoc) sections.set("__agents_md", projectDoc[1]!.trim());
+    else if (/# AGENTS\.md instructions/.test(text)) {
+      // The header rendered but in a shape this extractor does not recognize -
+      // a future upstream format, or prose truncated by the output cap. Claiming
+      // the layer "sent nothing" would be a lie about a block that is plainly
+      // present; the sentinel maps it to `unmapped`, the existing honest answer
+      // for "rendered in a form we cannot show".
+      sections.set("__agents_md_unmatched", "");
+    }
   }
   return sections;
 }
 
 /** Test seam: the extraction is the part worth pinning, not the spawn. */
 export const extractSectionsForTests = extractSections;
+
+function mapSectionsToLayers(sections: Map<string, string>): Record<string, LayerText> {
+  const layers: Record<string, LayerText> = {};
+  for (const [layerId, tag] of Object.entries(LAYER_SECTION_TAGS)) {
+    const text = sections.get(tag) ?? null;
+    layers[layerId] = text === null
+      // Registered but not rendered on this turn, which is an ordinary state for
+      // a diff-rendered section rather than an error.
+      ? { text: null, reason: "not-rendered", bytes: 0 }
+      : { text, reason: "ok", bytes: Buffer.byteLength(text, "utf8") };
+  }
+  // `__agents_md_unmatched` is the sentinel for "the AGENTS.md header rendered in
+  // a shape the bounded extractor does not recognize". `unmapped` is the honest
+  // answer for it: the text exists but cannot be shown, which `not-rendered`
+  // would deny outright.
+  if (layers["agents-md"]?.reason === "not-rendered" && sections.has("__agents_md_unmatched")) {
+    layers["agents-md"] = { text: null, reason: "unmapped", bytes: 0 };
+  }
+  return layers;
+}
+
+/** Test seam: pin section-to-layer projection independently of the subprocess. */
+export const mapSectionsToLayersForTests = mapSectionsToLayers;
 
 /**
  * Probe once and map every known layer to its rendered text.
@@ -915,15 +957,7 @@ export async function probePromptText(
       detail: "prompt output could not be parsed",
     };
   }
-  const layers: Record<string, LayerText> = {};
-  for (const [layerId, tag] of Object.entries(LAYER_SECTION_TAGS)) {
-    const text = sections.get(tag) ?? null;
-    layers[layerId] = text === null
-      // Registered but not rendered on this turn, which is an ordinary state for
-      // a diff-rendered section rather than an error.
-      ? { text: null, reason: "not-rendered", bytes: 0 }
-      : { text, reason: "ok", bytes: Buffer.byteLength(text, "utf8") };
-  }
+  const layers = mapSectionsToLayers(sections);
 
   // A file that exists and is empty is not the same as a layer that chose to send
   // nothing. Reporting "sent nothing" for an empty AGENTS.md tells the user their
@@ -944,9 +978,12 @@ export async function probePromptText(
 
   // Layers whose rendered tag we have not confirmed against live output. Leaving
   // them absent made the GUI fall through to "unavailable", which claims the probe
-  // failed when it succeeded. Saying we have no mapping is the smaller claim.
+  // failed when it succeeded. Keep this distinct from the base prompt's
+  // "not-exposed", which is confirmed to travel outside the printable message
+  // list - reusing it showed a base-prompt-specific explanation for unrelated
+  // layers.
   for (const id of UNMAPPED_LAYER_IDS) {
-    layers[id] ??= { text: null, reason: "not-exposed", bytes: 0 };
+    layers[id] ??= { text: null, reason: "unmapped", bytes: 0 };
   }
   return { ok: true, codexHome, layers, base, ...(reportedRuntime ? { runtime: reportedRuntime } : {}) };
 }

@@ -1,10 +1,12 @@
 # 100 — Per-PR verdicts
 
 Full classification of the 53 pull requests open when the campaign started.
-Method: fetch each PR head, take the files it touches
-(`git diff --name-only origin/dev...<head>`), then compare those exact paths
-two-dot against `origin/dev`. Remaining differences mean the work has not
-landed.
+Method: fetch each PR head, take the files it touches, then compare those exact
+paths two-dot against `origin/dev`. Remaining differences mean the work has not
+landed. The verdicts below were produced with
+`git diff --name-only origin/dev...<head>`; any rerun must use
+`git diff --no-renames --name-only origin/dev...<head>` so a rename cannot hide
+the deleted source side from the path set (2026-09-21; see 010_method.md).
 
 ## Closed
 

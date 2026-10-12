@@ -1,3 +1,5 @@
+import { rotateAnthropicAccountOn429 } from "../../helpers/anthropic-shared-quota";
+import { bindAnthropicRefusalCredential, rotateAnthropicAccountOnResponse } from "../../../src/oauth/anthropic-account-refusal";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
@@ -5,6 +7,8 @@ import { join } from "node:path";
 import { clearPoolRotationState, notePoolRotationFailure, POOL_KEY_ANTHROPIC } from "../../../src/codex/pool-rotation";
 import {
   anthropicQuotaWindow,
+  pickAlternateAnthropicAccount,
+  rotateAnthropicAccountOnRefusal,
   anthropicSessionKeyFromParts,
   bindAnthropicSessionAffinity,
   clearAnthropicAccountPoolState,
@@ -15,7 +19,6 @@ import {
   parseAccountPoolQuotaWindow,
   resolveAnthropicAccountForSession,
   resetAnthropicRoutingForManualSelection,
-  rotateAnthropicAccountOn429,
   getAnthropicPoolAccessSnapshot,
   promoteAnthropicActiveAccount,
   anthropicSessionAffinitySizeForTests,
@@ -252,13 +255,24 @@ describe("anthropic account pool", () => {
     expect(resolveAnthropicAccountForSession("uncommitted", quota).accountId).toBe(bId);
   });
 
-  test("default off always returns the active account", async () => {
+  test("default off retains the healthy active account", async () => {
     const { aId, bId } = await seedTwoAccounts();
     expect(isAnthropicAccountPoolEnabled(cfg(false))).toBe(false);
     const sel = resolveAnthropicAccountForSession("session-1", cfg(false));
     expect(sel.accountId).toBe(aId);
     expect(sel.reason).toBe("pool-disabled");
     expect(sel.accountId).not.toBe(bId);
+  });
+
+  test("pool-off ignores proactive preferences but names recovery from an upstream 429", async () => {
+    const { aId, bId } = await seedTwoAccounts();
+    const config = cfg(false, 80, { strategy: "round-robin" });
+    setCachedProviderAccountQuotaForTests("anthropic", aId, { fiveHourPercent: 95 });
+    setCachedProviderAccountQuotaForTests("anthropic", bId, { fiveHourPercent: 5 });
+    expect(resolveAnthropicAccountForSession("new", config)).toMatchObject({ accountId: aId, reason: "pool-disabled" });
+    expect(rotateAnthropicAccountOn429(config, aId, "60")).toBe(bId);
+    expect(resolveAnthropicAccountForSession("new", config)).toMatchObject({ accountId: bId, reason: "only-eligible" });
+    expect(getAccountSet("anthropic")!.activeAccountId).toBe(aId); // A proposal is not a committed send.
   });
 
   test("affinity sticks across resolves until cooled", async () => {
@@ -317,6 +331,14 @@ describe("anthropic account pool", () => {
       sessionIdHeader: "sess-a",
       promptCacheKey: "cache-b",
     })).toBe("sess-a");
+  });
+
+  test("session key skips blank ids while preserving usable id priority", () => {
+    expect(anthropicSessionKeyFromParts({ clientThreadId: " ", sessionIdHeader: " session ", threadIdHeader: "thread" })).toBe("session");
+    expect(anthropicSessionKeyFromParts({ clientThreadId: "", sessionIdHeader: "\t", threadIdHeader: " thread ", promptCacheKeyIsSharedCohort: true })).toBe("thread");
+    expect(anthropicSessionKeyFromParts({ clientThreadId: " client ", sessionIdHeader: "session", threadIdHeader: "thread" })).toBe("client");
+    expect(anthropicSessionKeyFromParts({ clientThreadId: " ", sessionIdHeader: " ", threadIdHeader: " ", promptCacheKey: " cache " })).toBe("cache");
+    expect(anthropicSessionKeyFromParts({ clientThreadId: " ", sessionIdHeader: " ", threadIdHeader: " ", promptCacheKey: "cohort", promptCacheKeyIsSharedCohort: true })).toBeNull();
   });
 
   test("shared Desktop cache cohort alone does not create affinity key", () => {
@@ -800,4 +822,52 @@ describe("anthropic account pool quota window scoring", () => {
     expect(resolveAnthropicAccountForSession("weekly-empty-keep", config).accountId).toBe(aId);
     expect(rotateAnthropicAccountOn429(config, aId, "30", "weekly-empty-failover")).toBe(bId);
   });
+});
+
+
+describe("request-local alternate exclusions", () => {
+  for (const strategy of ["quota", "round-robin", "fill-first"] as const) {
+    test(`${strategy} filters tried accounts before ranking and preserves omitted behavior`, async () => {
+      const { aId, bId, cId } = await seedThreeAccounts();
+      const config = cfg(true, 80, { strategy });
+      setCachedProviderAccountQuotaForTests("anthropic", bId, { fiveHourPercent: 1 });
+      setCachedProviderAccountQuotaForTests("anthropic", cId, { fiveHourPercent: 50 });
+      const decision = { position: 1, accounts: [aId, bId, cId], fallback: false };
+      const now = Date.now();
+      const ordinary = pickAlternateAnthropicAccount(config, aId, now, decision);
+      expect(pickAlternateAnthropicAccount(config, aId, now, decision, undefined, new Set())).toBe(ordinary);
+      expect(pickAlternateAnthropicAccount(config, aId, now, decision, undefined, new Set([bId]))).toBe(cId);
+      expect(pickAlternateAnthropicAccount(config, aId, now, decision, undefined, new Set([bId, cId]))).toBeNull();
+    });
+    test(`${strategy} does not widen fallback because healthy routed accounts were tried`, async () => {
+      const { aId, bId, cId } = await seedThreeAccounts();
+      const config = cfg(true, 80, { strategy });
+      const decision = { position: 1, accounts: [aId, bId], fallback: true };
+      expect(pickAlternateAnthropicAccount(config, aId, Date.now(), decision, undefined, new Set([bId]))).toBeNull();
+      expect(pickAlternateAnthropicAccount(config, aId, Date.now(), { ...decision, accounts: ["fixture-missing"] }, undefined, new Set([bId]))).toBe(cId);
+    });
+  }
+  test("reactive pool-off refusal passes exclusions into the canonical quota picker", async () => {
+    const { aId, bId, cId } = await seedThreeAccounts();
+    const config = cfg(false, 80, { strategy: "fill-first" });
+    setCachedProviderAccountQuotaForTests("anthropic", bId, { fiveHourPercent: 1 });
+    setCachedProviderAccountQuotaForTests("anthropic", cId, { fiveHourPercent: 50 });
+    expect(rotateAnthropicAccountOnRefusal(config, aId, 403, "30", null, Date.now(), null, null, undefined, new Set([bId]))).toBe(cId);
+  });
+});
+
+test("tried-account exclusions preserve the shared same-account throttle retry", async () => {
+  const { aId, bId } = await seedTwoAccounts();
+  const config = cfg(true);
+  const snapshot = await getAnthropicPoolAccessSnapshot(aId);
+  const requestKey = {};
+  const excludedAccountIds = new Set([aId, bId]);
+  const refused = () => {
+    const response = new Response(null, { status: 429, headers: { "retry-after": "0.001" } });
+    bindAnthropicRefusalCredential(response, snapshot);
+    return response;
+  };
+  const options = { config, accountId: aId, canRetry: true, requestKey, excludedAccountIds };
+  expect(await rotateAnthropicAccountOnResponse(refused(), options)).toBe(aId);
+  expect(await rotateAnthropicAccountOnResponse(refused(), options)).toBeNull();
 });

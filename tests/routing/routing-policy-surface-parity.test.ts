@@ -11,6 +11,7 @@ import type { AdapterEvent, OcxConfig, OcxProviderConfig } from "../../src/types
 import { clearRequestLogsForTests, type RequestLogContext } from "../../src/server/request-log";
 import { readUsageEntries } from "../../src/usage/log";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 const MODEL = "policy/daily";
 const EXPECTED_RICH_EVIDENCE = {
@@ -113,20 +114,32 @@ describe("routing policy request evidence parity (translator-level coverage)", (
 // ---- Handler-level parity tests (via dev handler entry points) ----
 
 const actualResolver = await import("../../src/server/adapter-resolve");
+// Capture the real function before the override. `mock.module` rewrites the namespace's live
+// binding in place, so a lookup through `actualResolver` inside the wrapper would reach
+// whichever override is current, including this one, once another file in the same process
+// has mocked this module too.
+const actualResolveAdapter = actualResolver.resolveAdapter;
 let adapterFactory: ((provider: OcxProviderConfig) => ProviderAdapter) | undefined;
 
 mock.module("../../src/server/adapter-resolve", () => ({
   ...actualResolver,
   resolveAdapter(provider: OcxProviderConfig, cacheRetention?: "none" | "short" | "long") {
-    return adapterFactory?.(provider) ?? actualResolver.resolveAdapter(provider, cacheRetention);
+    return adapterFactory?.(provider) ?? actualResolveAdapter(provider, cacheRetention);
   },
 }));
 
 const { handleResponses, handleResponsesCompact } = await import("../../src/server/responses");
 const { handleChatCompletions } = await import("../../src/server/chat-completions");
 const { handleClaudeMessages } = await import("../../src/server/claude-messages");
+let releaseSpendHome: (() => void) | undefined;
+
+// Taken only by handler rows whose fixture adapter produces a dispatched response.
+const takeSpendHome = (): void => { releaseSpendHome = acquireOwnedSpendHome(); };
 
 afterEach(() => {
+  // Released first so a failed handler row cannot leak ownership into the next case.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   adapterFactory = undefined;
 });
 
@@ -224,6 +237,7 @@ describe("routing policy request evidence parity (via dev handlers)", () => {
     }
   });
   test("rich evidence (tools + image) produces identical route decision across all three surfaces", async () => {
+    takeSpendHome();
     adapterFactory = minimalSuccessAdapter;
     const config = testConfig();
 
@@ -345,6 +359,7 @@ describe("routing policy request evidence parity (via dev handlers)", () => {
   });
 
   test("plain text with no tools produces no hard requirements on every surface", async () => {
+    takeSpendHome();
     adapterFactory = minimalSuccessAdapter;
     const config = testConfig();
 

@@ -72,6 +72,13 @@ transport；这些凭证路径互不 fallback。
   仍保留在目录中，但会改为 `visibility: "hide"`。它**不会**拒绝对该模型的直接请求。
 - 提供商的非空 `selectedModels` 是另一层目录 allowlist。实时发现和直接路由仍然有效；它只会缩小
   目录和 `/v1/models` 输出的模型范围。
+- 当 `modelDiscovery.newModelPolicy` 为 `"off"` 时，首次成功的实时发现建立基准，后续新增
+  模型会加入 `disabledModels`。此策略会在通过 `/v1/models`、仪表盘、客户端配置导出或
+  Codex 目录同步（包括服务启动）发布新模型之前生效。手动启用的模型在后续刷新和导出中仍保持
+  启用。新安装默认使用 `"off"`，已有安装在主动更改前保持 `"on"`。使用
+  `ocx models new-policy off` 设置全局策略，添加 `--provider <name>` 覆盖单个提供商的设置；
+  使用 `ocx models new-arrivals [--json]` 查看新增模型。失败或降级的发现不会改变基准。
+  非空 `selectedModels` 已经限定了提供商的模型列表，因此此策略不会再自动禁用模型。
 - `provider.disabled: true` 会把该提供商排除在目录发现之外。显式 `provider/model` 请求会失败，
   `defaultModel` / `models[]` 扫描也会跳过它。
 - `providerContextCaps` 为各提供商设置 Codex 可见的上下文上限。`contextCapValue` 是仪表盘的默认值，

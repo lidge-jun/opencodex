@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -29,6 +29,27 @@ function fixture() {
   mkdirSync(join(workspace, "project"), { recursive: true });
   writeFileSync(outside, "must-not-be-visible");
   return { root, workspace, outside };
+}
+
+function privateBubblewrapFixture(): string {
+  // These argv tests never execute bubblewrap. On Unix, use a system executable
+  // whose ancestors are trusted even when the test's Bun binary lives under /tmp.
+  // Minimal images may hard-link env, so choose a single-link executable.
+  if (process.platform !== "win32") {
+    for (const candidate of ["/usr/bin/env", "/bin/true", "/usr/bin/true", "/bin/cat", "/bin/ls"]) {
+      try {
+        const canonical = realpathSync(candidate);
+        const file = statSync(canonical);
+        if (file.isFile() && file.nlink === 1) return canonical;
+      } catch { /* Candidate is absent on this image. */ }
+    }
+    throw new Error("no single-link system executable for the bubblewrap argv fixture");
+  }
+  const root = mkdtempSync(join(dirname(realpathSync(process.execPath)), "ocx-bwrap-fixture-"));
+  roots.push(root);
+  const path = join(root, "bwrap");
+  writeFileSync(path, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+  return path;
 }
 
 function fakeNativeHelper(root: string, response: Record<string, unknown>, requestPath?: string) {
@@ -83,14 +104,15 @@ describe("remote workspace Linux command sandbox", () => {
 
   test("builds a minimal bubblewrap argv with one writable workspace", () => {
     const state = fixture();
+    const bubblewrapPath = privateBubblewrapFixture();
     const argv = linuxRemoteWorkspaceCommandArgv({
       command: ["/bin/sh", "-lc", "pwd"],
       root: state.workspace,
       cwd: join(state.workspace, "project"),
       timeoutMs: 1_000,
       maxOutputBytes: 4_096,
-    }, { bubblewrapPath: process.execPath });
-    expect(argv[0]).toBe(process.execPath);
+    }, { bubblewrapPath });
+    expect(argv[0]).toBe(realpathSync(bubblewrapPath));
     expect(argv).toContain("--unshare-net");
     expect(argv).toContain("--clearenv");
     expect(argv).toContain("--bind");
@@ -291,7 +313,7 @@ describe("remote workspace Linux command sandbox", () => {
       timeoutMs: 1_000,
       maxOutputBytes: 4_096,
     }, {
-      bubblewrapPath: process.execPath,
+      bubblewrapPath: privateBubblewrapFixture(),
       toolchainRoots: [substituted],
     })).toThrow("remain a real directory");
   });

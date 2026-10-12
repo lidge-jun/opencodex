@@ -41,5 +41,11 @@ test("an admin token cannot initialize a consent-bearing workspace mutation", as
   const url = new URL("http://127.0.0.1:10100/api/remote-workspace/pairing");
   const result = await handleManagementAPI(new Request(url, { method: "POST", headers: { host: url.host } }), url, config, deps, "admin-token");
   expect(result?.status).toBe(403);
-  expect(await result?.json()).toEqual({ error: "A dashboard session is required for Remote Workspace changes." });
+  expect(await result?.json()).toEqual({ error: "A paired dashboard session is required for Remote Workspace changes." });
+
+  // An unpaired dashboard session carries no operator consent either: without a
+  // paired sessionControl the mutation is refused identically.
+  const unpaired = await handleManagementAPI(new Request(url, { method: "POST", headers: { host: url.host } }), url, config, deps, "gui-session");
+  expect(unpaired?.status).toBe(403);
+  expect(await unpaired?.json()).toEqual({ error: "A paired dashboard session is required for Remote Workspace changes." });
 });

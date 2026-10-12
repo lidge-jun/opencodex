@@ -75,6 +75,7 @@ export function createResponsesEffects(
   // message, and leave Codex fataling on a missing compaction item (#422).
   const commitReasoningReplayServingRoute = (outboundHeaders?: HeadersInit): void => {
     commitReasoningReplayServingIdentity(parsed._reasoningReplayScope);
+    if (parsed._nativeReasoningMint) parsed._nativeReasoningMint.owner = parsed._nativeReasoningBoundOwner;
     rememberServingConversationStateIssuer(admissionState.authCtx, poolAffinityKey);
     // History has no model namespace. Record the account that actually accepted this
     // final attempt, after refresh/failover, rather than guessing from mutable affinity.
@@ -100,7 +101,10 @@ export function createResponsesEffects(
     if (parsed._rawBody && typeof parsed._rawBody === "object") {
       delete (parsed._rawBody as Record<string, unknown>).text;
     }
-    parsed.context.messages.push({ role: "user", content: COMPACT_PROMPT, timestamp: Date.now() });
+    parsed.context.messages = [
+      ...parsed.context.messages,
+      { role: "user", content: COMPACT_PROMPT, timestamp: Date.now() },
+    ];
   }
 
   let routedNamespaceToolAliases: RoutedNamespaceToolAliases = new Map();

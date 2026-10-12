@@ -83,6 +83,15 @@ model ID は変更しません。`openai-apikey/<model>` は API key transport �
   ブロックしません。
 - プロバイダーの `selectedModels` が空でなければカタログ許可リストとして動作します。ライブモデル探索と
   直接ルーティングはそのままに、カタログと `/v1/models` に公開するモデルだけ絞ります。
+- `modelDiscovery.newModelPolicy` が `"off"` の場合、最初の成功したライブ探索で基準を確立し、
+  その後に追加されたモデルを `disabledModels` に入れます。これは `/v1/models`、ダッシュボード、
+  クライアント設定のエクスポート、サービス起動時を含む Codex カタログ同期で公開する前に
+  適用されます。手動で有効化したモデルは、その後の更新やエクスポートでも有効なままです。
+  新規インストールの既定値は `"off"`、既存のインストールは変更するまで `"on"` です。
+  `ocx models new-policy off` で全体に適用し、`--provider <name>` で個別に上書きします。
+  `ocx models new-arrivals [--json]` で追加モデルを確認できます。失敗または縮退した探索では
+  基準は変わりません。`selectedModels` が空でないプロバイダーはすでに選別済みのため、
+  このポリシーによる自動無効化は行いません。
 - `provider.disabled: true` のプロバイダーはカタログ探索から除外されます。明示的 `provider/model` リクエストは
   失敗し、`defaultModel` / `models[]` 検査でもスキップします。
 - `providerContextCaps` はプロバイダーごとに Codex に表示するコンテキスト上限を指定します。

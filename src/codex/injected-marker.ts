@@ -8,11 +8,35 @@
  * two public predicates, so external callers see no change.
  */
 import { parseTomlString } from "./paths";
+import { rootAssignmentKey, rootSourceLines, sourceText } from "./toml-source-lines";
 
 export const OCX_SECTION_MARKER = "# Auto-injected by opencodex";
 
+/**
+ * The marker line actually written above ROUTING keys, carrying the command that undoes them.
+ *
+ * #5261: a Windows user whose proxy had stopped was locked out of Codex sign-in, because the
+ * root `openai_base_url` we write keeps pointing Codex's built-in openai provider at a port
+ * nothing is listening on. The only surface such a user can still read is `config.toml` itself,
+ * and it said nothing but "Auto-injected by opencodex" — so the recovery they found was to
+ * hand-delete lines and the catalog file, which is strictly worse than `ocx restore`.
+ *
+ * Root routing predicates and lossless provider table capture/removal accept either exact marker
+ * line directly above structural routing syntax; they do not claim user comments or opaque value
+ * lines that merely contain the marker. Keeping the hint on the same
+ * line lets those transforms remove it together with the routing they own.
+ *
+ * Scope is routing only. Prompt layers keep the bare marker: `ocx restore` is not their undo.
+ */
+export const OCX_ROUTING_MARKER_LINE = `${OCX_SECTION_MARKER} (undo: ocx restore)`;
+
+export function isOcxRoutingMarkerLine(line: string): boolean {
+  const text = line.trim();
+  return text === OCX_SECTION_MARKER || text === OCX_ROUTING_MARKER_LINE;
+}
+
 export function isRootOpenaiBaseUrlLine(line: string): boolean {
-  return /^\s*openai_base_url\s*=/.test(line);
+  return rootAssignmentKey(line) === "openai_base_url";
 }
 
 /**
@@ -26,7 +50,7 @@ export function isRootOpenaiBaseUrlLine(line: string): boolean {
 export const REALTIME_WS_BASE_URL_KEY = "experimental_realtime_ws_base_url";
 
 export function isRootRealtimeWsBaseUrlLine(line: string): boolean {
-  return /^\s*experimental_realtime_ws_base_url\s*=/.test(line);
+  return rootAssignmentKey(line) === REALTIME_WS_BASE_URL_KEY;
 }
 
 export function tomlStringPattern(key: string): RegExp {
@@ -40,13 +64,13 @@ export function tomlStringPattern(key: string): RegExp {
 }
 
 export function rootTomlString(content: string, key: string): string | null {
-  const lines = content.split("\n");
-  const firstTable = lines.findIndex(line => /^\s*\[/.test(line));
-  const rootLines = lines.slice(0, firstTable === -1 ? lines.length : firstTable);
-  const pattern = tomlStringPattern(key);
-  for (const line of rootLines) {
-    const match = pattern.exec(line);
-    if (match?.[1]) return parseTomlString(match[1]).trim();
+  const { lines, rootEnd } = rootSourceLines(content);
+  for (const line of lines.slice(0, rootEnd)) {
+    if (!line.structural || rootAssignmentKey(line.text) !== key) continue;
+    try {
+      const value = (Bun.TOML.parse(line.text) as Record<string, unknown>)[key];
+      if (typeof value === "string") return value.trim();
+    } catch { /* Incomplete multiline assignments are not single-line ownership evidence. */ }
   }
   return null;
 }
@@ -85,12 +109,11 @@ export function stripJournaledOpenaiBaseUrl(
   injectedRealtimeWsUrl: string | null = null,
 ): string {
   if (!injectedUrl && !injectedRealtimeWsUrl) return content;
-  const lines = content.split(String.fromCharCode(10));
-  const firstTable = lines.findIndex(l => /^\s*\[/.test(l));
-  const rootEnd = firstTable === -1 ? lines.length : firstTable;
+  const { bom, lines, rootEnd } = rootSourceLines(content);
   const drop = new Set<number>();
   for (let i = 0; i < rootEnd; i++) {
-    const line = lines[i]!;
+    if (!lines[i]!.structural) continue;
+    const line = lines[i]!.text;
     // Each key is matched against ITS OWN recorded value. The realtime override is
     // journaled separately so a user-owned override that happens to equal the proxy
     // URL is never mistaken for ours.
@@ -104,18 +127,18 @@ export function stripJournaledOpenaiBaseUrl(
     drop.add(i);
     // Take an ownership marker directly above it too, so repeated cycles cannot
     // accumulate orphaned comments.
-    if (i > 0 && lines[i - 1]!.includes(OCX_SECTION_MARKER)) drop.add(i - 1);
+    if (i > 0 && lines[i - 1]!.structural && isOcxRoutingMarkerLine(lines[i - 1]!.text)) drop.add(i - 1);
   }
   if (drop.size === 0) return content;
-  return lines.filter((_, i) => !drop.has(i)).join(String.fromCharCode(10));
+  return bom + sourceText(lines.filter((_, i) => !drop.has(i)));
 }
 
 export function hasInjectedOpenaiBaseUrl(content: string): boolean {
-  const lines = content.split("\n");
-  const firstTable = lines.findIndex(l => /^\s*\[/.test(l));
-  const rootEnd = firstTable === -1 ? lines.length : firstTable;
+  const { lines, rootEnd } = rootSourceLines(content);
   for (let i = 1; i < rootEnd; i++) {
-    if (isRootOpenaiBaseUrlLine(lines[i]!) && lines[i - 1]!.includes(OCX_SECTION_MARKER)) return true;
+    if (lines[i]!.structural && lines[i - 1]!.structural
+      && isRootOpenaiBaseUrlLine(lines[i]!.text) && rootTomlString(lines[i]!.text, "openai_base_url") !== null
+      && isOcxRoutingMarkerLine(lines[i - 1]!.text)) return true;
   }
   return false;
 }

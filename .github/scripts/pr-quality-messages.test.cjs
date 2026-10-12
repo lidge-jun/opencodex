@@ -208,7 +208,7 @@ describe("buildStaleNotice", () => {
     // The notice must describe the exact state the reset produces: a fresh
     // unticked section from pr-quality.cjs.
     const section = buildReviewReadinessSection();
-    assert.match(section, /\[ \] All CI tests are green on my local testing\./);
+    assert.match(section, /\[ \] Required local validation passed; commands, results, and any full-suite exception are documented\./);
   });
 });
 

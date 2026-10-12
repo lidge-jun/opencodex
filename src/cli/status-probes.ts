@@ -1,5 +1,5 @@
 import { readPidFileValue, readRuntimePort } from "../config/process-state";
-import { isOpencodexHealthz, probeHostname } from "../server/proxy-liveness";
+import { isConnectionRefused, isOpencodexHealthz, probeHostname } from "../server/proxy-liveness";
 import { directLocalHttpFetch } from "../server/direct-local-http";
 import { isProcessAlive } from "../lib/process-control";
 
@@ -26,23 +26,7 @@ export function proxyHealthFailureReason(error: unknown, signal: AbortSignal): "
     : "unreachable";
 }
 
-/**
- * "Nothing is listening" is narrower than "the probe failed". `unreachable` covers every
- * non-abort failure, including a socket that was ACCEPTED and then reset — which is what
- * an in-flight start looks like mid-bind. Only a connect-phase refusal proves the port is
- * free, so this reads the underlying errno instead of the display string.
- */
-export function isConnectionRefused(error: unknown): boolean {
-  for (let current: unknown = error, depth = 0; current instanceof Error && depth < 4; depth++) {
-    const code = (current as { code?: unknown }).code;
-    if (code === "ECONNREFUSED" || code === "ConnectionRefused") return true;
-    // Bun surfaces the refusal as a plain message on some platforms; the errno name is
-    // still the discriminator, not a substring of arbitrary prose.
-    if (typeof code === "string" && code.endsWith("ECONNREFUSED")) return true;
-    current = (current as { cause?: unknown }).cause;
-  }
-  return false;
-}
+export { isConnectionRefused } from "../server/proxy-liveness";
 
 /**
  * A proxy killed by a native trap or SIGKILL never runs the exit cleanup that removes

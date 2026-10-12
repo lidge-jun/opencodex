@@ -12,6 +12,11 @@
  * the pool needs those two answers to decide how long to cool a 429'd account.
  */
 import { getValidAccessSnapshotForAccount } from "../oauth";
+import { resolveKiroRequestProfile } from "../oauth/kiro";
+import { credentialGeneration, getAccountSet } from "../oauth/store";
+import type { ProviderAccount } from "../oauth/types";
+import { hydrateKiroAccountState, kiroEvidenceIdentity, type KiroPersistedVerdict } from "./kiro-account-state-disk";
+import { accountCacheKey, accountQuotaCache } from "./quota/account-cache";
 import type { ProviderQuota, ProviderQuotaWindow } from "./quota-types";
 import {
   ACCOUNT_QUOTA_TTL_MS,
@@ -46,6 +51,8 @@ export interface KiroUsageContext {
   accountId: string;
   access: string;
   profileArn?: string;
+  /** The ARN is the Builder ID service profile, not the account's; it must not pick the region. */
+  builderIdFallback?: boolean;
   apiRegion?: string;
   ssoRegion?: string;
 }
@@ -61,7 +68,8 @@ export interface KiroUsageSnapshot {
 interface KiroUsageStateEntry {
   exhausted: boolean;
   nextResetAt?: number;
-  ts: number;
+  observedAt: number;
+  identity: string;
 }
 
 /**
@@ -82,7 +90,10 @@ function safeRegion(value: string | undefined): string | undefined {
  * the SSO session that minted the token.
  */
 function usageRegion(ctx: KiroUsageContext): string {
-  return safeRegion(ctx.profileArn?.split(":")[3])
+  // The Builder ID service profile is Amazon's fixed us-east-1 ARN, not the account's own, so it
+  // must not pin the region, as kiro-constants.ts requires for the runtime path.
+  const arnRegion = ctx.builderIdFallback ? undefined : ctx.profileArn?.split(":")[3];
+  return safeRegion(arnRegion)
     ?? safeRegion(ctx.apiRegion)
     ?? safeRegion(ctx.ssoRegion)
     ?? "us-east-1";
@@ -90,6 +101,10 @@ function usageRegion(ctx: KiroUsageContext): string {
 
 export function kiroUsageManagementUrl(region: string): string {
   return `https://management.${region}.kiro.dev/`;
+}
+
+export function kiroManagementHost(ctx: KiroUsageContext): string {
+  return kiroUsageManagementUrl(usageRegion(ctx));
 }
 
 /** Credit balances are fractional; the integer fields round 695.17 down to 695. */
@@ -115,7 +130,8 @@ function parseKiroUsage(body: unknown): KiroUsageSnapshot | null {
 
   const used = preciseNumber(breakdown, "currentUsageWithPrecision", "currentUsage");
   const limit = preciseNumber(breakdown, "usageLimitWithPrecision", "usageLimit");
-  if (used === undefined || limit === undefined || limit <= 0) return null;
+  if (used === undefined || !Number.isFinite(used) || used < 0
+    || limit === undefined || !Number.isFinite(limit) || limit <= 0) return null;
 
   const percent = normalizePercent((used / limit) * 100);
   if (percent === undefined) return null;
@@ -137,6 +153,8 @@ function parseKiroUsage(body: unknown): KiroUsageSnapshot | null {
 
   const quota: ProviderQuota = {
     monthlyPercent: percent,
+    kiroCreditsUsed: used,
+    kiroCreditsLimit: limit,
     ...(nextResetAt !== undefined ? { monthlyResetAt: nextResetAt } : {}),
     ...(customWindows.length > 0 ? { customWindows } : {}),
     updatedAt: Date.now(),
@@ -144,13 +162,12 @@ function parseKiroUsage(body: unknown): KiroUsageSnapshot | null {
 
   // Enterprise accounts with overage enabled keep serving past the included limit, so
   // "used >= limit" is not by itself a reason to stop routing to the account.
-  const overageEnabled = String(asRecord(payload.overageConfiguration)?.overageStatus ?? "")
-    .trim()
-    .toUpperCase() === "ENABLED";
+  const overageStatus = String(asRecord(payload.overageConfiguration)?.overageStatus ?? "")
+    .trim().toUpperCase();
 
   return {
     quota,
-    exhausted: used >= limit && !overageEnabled,
+    exhausted: used >= limit && overageStatus === "DISABLED",
     ...(nextResetAt !== undefined ? { nextResetAt } : {}),
   };
 }
@@ -164,17 +181,18 @@ function parseKiroUsage(body: unknown): KiroUsageSnapshot | null {
  * a log line.
  */
 export async function fetchKiroUsageSnapshot(ctx: KiroUsageContext): Promise<KiroUsageSnapshot | null> {
+  if (!ctx.profileArn) return null;
   const region = usageRegion(ctx);
   const url = new URL(kiroUsageManagementUrl(region));
   url.searchParams.set("origin", "AI_EDITOR");
   url.searchParams.set("isEmailRequired", "true");
-  if (ctx.profileArn) url.searchParams.set("profileArn", ctx.profileArn);
+  url.searchParams.set("profileArn", ctx.profileArn);
 
   // The modeled arguments appear in BOTH the query string and the body. That duplication is
   // the observed Kiro CLI contract, not an oversight; we have no way to test which side the
   // service actually reads, so we reproduce both.
   const body: Record<string, unknown> = { origin: "AI_EDITOR", isEmailRequired: true };
-  if (ctx.profileArn) body.profileArn = ctx.profileArn;
+  body.profileArn = ctx.profileArn;
 
   try {
     const response = await fetch(url, {
@@ -207,26 +225,54 @@ export async function fetchKiroUsageSnapshot(ctx: KiroUsageContext): Promise<Kir
  */
 export async function kiroUsageContextForAccount(accountId: string): Promise<KiroUsageContext> {
   const snapshot = await getValidAccessSnapshotForAccount("kiro", accountId);
+  // Builder ID accounts never get an account-scoped ARN, and GetUsageLimits rejects a missing one
+  // with 400 "Invalid profileArn". Ask the same resolver the runtime path uses, so the usage probe
+  // sends exactly the ARN a generation request would. An account object is always passed, so the
+  // accountless env/local-import fallbacks never apply to a pooled account.
+  const profile = resolveKiroRequestProfile({
+    profileArn: snapshot.kiro?.profileArn,
+    authType: snapshot.kiro?.authType,
+  });
   return {
     accountId,
     access: snapshot.accessToken,
-    ...(snapshot.kiro?.profileArn ? { profileArn: snapshot.kiro.profileArn } : {}),
+    ...(profile.profileArn ? { profileArn: profile.profileArn } : {}),
+    ...(profile.builderIdFallback ? { builderIdFallback: true } : {}),
     ...(snapshot.kiro?.apiRegion ? { apiRegion: snapshot.kiro.apiRegion } : {}),
     ...(snapshot.kiro?.ssoRegion ? { ssoRegion: snapshot.kiro.ssoRegion } : {}),
   };
 }
 
 /** Record exhaustion for a probed account. Called from the quota cache's commit guard. */
-export function commitKiroAccountUsageState(key: string, snapshot: KiroUsageSnapshot | null): void {
+export function commitKiroAccountUsageState(key: string, snapshot: KiroUsageSnapshot | null, identity?: string): void {
   if (!snapshot) {
     usageState.delete(key);
     return;
   }
+  if (!identity) return;
   usageState.set(key, {
     exhausted: snapshot.exhausted,
     ...(snapshot.nextResetAt !== undefined ? { nextResetAt: snapshot.nextResetAt } : {}),
-    ts: Date.now(),
+    observedAt: Date.now(), identity,
   });
+}
+
+export function* kiroPersistableVerdicts(now = Date.now()): IterableIterator<[string, KiroPersistedVerdict]> {
+  const live = new Map(getAccountSet("kiro")?.accounts.map(account =>
+    [accountCacheKey("kiro", account.id), kiroEvidenceIdentity(account)]) ?? []);
+  for (const [key, entry] of usageState) {
+    if (live.get(key) !== entry.identity || entry.observedAt > now
+      || now - entry.observedAt >= ACCOUNT_QUOTA_TTL_MS
+      || (entry.nextResetAt !== undefined && entry.nextResetAt <= now)) continue;
+    yield [key, { exhausted: entry.exhausted, observedAt: entry.observedAt, identity: entry.identity,
+      ...(entry.nextResetAt !== undefined ? { resetAt: entry.nextResetAt } : {}) }];
+  }
+}
+
+export function hydrateKiroUsageVerdict(key: string, verdict: KiroPersistedVerdict, account: ProviderAccount): void {
+  if (usageState.has(key) || verdict.identity !== kiroEvidenceIdentity(account)) return;
+  usageState.set(key, { exhausted: verdict.exhausted, observedAt: verdict.observedAt,
+    identity: verdict.identity, ...(verdict.resetAt !== undefined ? { nextResetAt: verdict.resetAt } : {}) });
 }
 
 /**
@@ -237,16 +283,74 @@ export function commitKiroAccountUsageState(key: string, snapshot: KiroUsageSnap
  */
 export function getKiroAccountExhaustion(
   key: string,
+  account: ProviderAccount,
   now = Date.now(),
 ): { exhausted: boolean; nextResetAt?: number } | null {
   const entry = usageState.get(key);
-  if (!entry) return null;
-  if (now - entry.ts >= ACCOUNT_QUOTA_TTL_MS) return null;
+  if (!entry || entry.identity !== kiroEvidenceIdentity(account)) return null;
+  if (entry.observedAt > now || now - entry.observedAt >= ACCOUNT_QUOTA_TTL_MS) return null;
   if (entry.nextResetAt !== undefined && entry.nextResetAt <= now) return null;
   return {
     exhausted: entry.exhausted,
     ...(entry.nextResetAt !== undefined ? { nextResetAt: entry.nextResetAt } : {}),
   };
+}
+
+/** The only Kiro routing evidence read; each half expires on its own clock. */
+export function kiroAccountEvidence(account: ProviderAccount, now = Date.now(), opts: { hydrate?: boolean } = {}):
+  { quotaPercent?: number; creditsUsed?: number; creditsLimit?: number; exhausted?: boolean; resetAt?: number } {
+  // Routing hydrates saved evidence on first use; the metrics scrape passes hydrate:false so a
+  // scrape never touches the disk snapshot and simply reports nothing until routing has loaded it.
+  if (opts.hydrate !== false) hydrateKiroAccountState();
+  const key = accountCacheKey("kiro", account.id);
+  const row = accountQuotaCache.get(key);
+  const quota = row?.identity === kiroEvidenceIdentity(account) && row.quota
+    && typeof row.quota.monthlyPercent === "number" && Number.isFinite(row.quota.monthlyPercent)
+    && row.quota.monthlyPercent >= 0 && row.quota.monthlyPercent <= 100
+    && row.quota.updatedAt <= now && now - row.quota.updatedAt < ACCOUNT_QUOTA_TTL_MS
+    && (row.quota.monthlyResetAt === undefined || (row.quota.monthlyResetAt > now
+      && Number.isFinite(new Date(row.quota.monthlyResetAt).getTime()))) ? row.quota : null;
+  const verdict = getKiroAccountExhaustion(key, account, now);
+  return {
+    ...(quota?.monthlyPercent !== undefined ? { quotaPercent: quota.monthlyPercent } : {}),
+    ...(typeof quota?.kiroCreditsUsed === "number" && Number.isFinite(quota.kiroCreditsUsed)
+      && quota.kiroCreditsUsed >= 0 ? { creditsUsed: quota.kiroCreditsUsed } : {}),
+    ...(typeof quota?.kiroCreditsLimit === "number" && Number.isFinite(quota.kiroCreditsLimit)
+      && quota.kiroCreditsLimit > 0 ? { creditsLimit: quota.kiroCreditsLimit } : {}),
+    ...(verdict ? { exhausted: verdict.exhausted } : {}),
+    ...(verdict?.nextResetAt !== undefined ? { resetAt: verdict.nextResetAt }
+      : quota?.monthlyResetAt !== undefined ? { resetAt: quota.monthlyResetAt } : {}),
+  };
+}
+
+/** A confirmed refusal supersedes only older evidence from the same login. */
+export function noteKiroMonthlyRefusal(accountId: string, generation: string, observedAt = Date.now()): number {
+  hydrateKiroAccountState();
+  const live = getAccountSet("kiro")?.accounts.find(row => row.id === accountId);
+  if (!live || credentialGeneration(live.credential) !== generation) return 0;
+  const key = accountCacheKey("kiro", accountId);
+  const identity = kiroEvidenceIdentity(live);
+  const old = usageState.get(key);
+  if (old?.identity === identity && old.observedAt >= observedAt)
+    return Math.max(0, (old.nextResetAt ?? observedAt) - observedAt);
+  const resetAt = kiroAccountEvidence(live, observedAt).resetAt;
+  const until = Math.min(resetAt ?? observedAt + ACCOUNT_QUOTA_TTL_MS, observedAt + ACCOUNT_QUOTA_TTL_MS);
+  usageState.set(key, { identity, exhausted: true, observedAt,
+    ...(resetAt !== undefined ? { nextResetAt: resetAt } : {}) });
+  return Math.max(0, until - observedAt);
+}
+
+/** Completion clears an older verdict only for the credential that actually served. */
+export function noteKiroServedSuccess(accountId: string, generation: string, observedAt = Date.now()): boolean {
+  hydrateKiroAccountState();
+  const live = getAccountSet("kiro")?.accounts.find(row => row.id === accountId);
+  if (!live || credentialGeneration(live.credential) !== generation) return false;
+  const key = accountCacheKey("kiro", accountId);
+  const old = usageState.get(key);
+  if (!old || old.identity !== kiroEvidenceIdentity(live) || old.observedAt >= observedAt || !old.exhausted)
+    return false;
+  usageState.set(key, { ...old, exhausted: false, observedAt });
+  return true;
 }
 
 /** Drop rows for one provider prefix, or all of them. Mirrors clearAccountQuotaCache. */

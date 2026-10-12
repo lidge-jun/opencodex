@@ -16,6 +16,7 @@ import type { OcxProviderConfig } from "../../src/types";
 const ZEN_GO: OcxProviderConfig = {
   adapter: "openai-chat",
   baseUrl: "https://opencode.ai/zen/go/v1",
+  apiKey: "test-zen-go-key",
 } as OcxProviderConfig;
 
 const MUSE_SPARK = "muse-spark-1.3-contributor";
@@ -63,8 +64,8 @@ function metadataFileV2(providers: Record<string, unknown>, apis: Record<string,
   };
 }
 
-function supportFile(rows: Record<string, unknown>): Record<string, string> {
-  return { "reasoning-support-cache.json": JSON.stringify({ version: 1, rows }) };
+function supportFile(rows: Record<string, unknown>, version = 2): Record<string, string> {
+  return { "reasoning-support-cache.json": JSON.stringify({ version, rows }) };
 }
 
 afterEach(() => {
@@ -77,6 +78,59 @@ afterEach(() => {
 });
 
 describe("models.dev reasoning metadata", () => {
+  test("an expired snapshot read refreshes in the background with Codex integration off; a missing snapshot does not", async () => {
+    const stale = snapshotFile({
+      "opencode-go": {
+        [MUSE_SPARK]: { reasoning: true, options: [{ type: "effort", values: ["low", "high"] }] },
+      },
+    });
+    stale.fetchedAt = Date.now() - 25 * 60 * 60 * 1000;
+    const { effort, metadata } = await load({
+      "config.json": JSON.stringify({ clientIntegrations: { codex: false } }),
+      "reasoning-metadata-cache.json": JSON.stringify(stale),
+    });
+    const previousFetch = globalThis.fetch;
+    let requests = 0;
+    try {
+      globalThis.fetch = (() => {
+        requests += 1;
+        return Promise.reject(new Error("offline fixture"));
+      }) as typeof fetch;
+      expect(effort.configuredReasoningEfforts(ZEN_GO, MUSE_SPARK)).toEqual(["low", "high"]);
+      expect(requests).toBe(1);
+
+      await load({ "config.json": JSON.stringify({ clientIntegrations: { codex: false } }) });
+      expect(effort.configuredReasoningEfforts(ZEN_GO, MUSE_SPARK)).toBeUndefined();
+      expect(effort.configuredReasoningEfforts({ ...ZEN_GO, thinkingToggleModels: [MUSE_SPARK] }, MUSE_SPARK)).toEqual(["low", "medium", "high", "xhigh", "max"]);
+      expect(requests).toBe(1);
+    } finally {
+      globalThis.fetch = previousFetch;
+      metadata.resetReasoningMetadataCachesForTests();
+    }
+  });
+
+  test("a hung fetch cannot hold either a new or coalesced bounded refresh", async () => {
+    const { metadata } = await load();
+    const previousFetch = globalThis.fetch;
+    let releaseFetch: (() => void) | undefined;
+    try {
+      globalThis.fetch = (() => new Promise((_resolve, reject) => {
+        releaseFetch = () => reject(new Error("fixture released"));
+      })) as typeof fetch;
+      const fresh = metadata.refreshReasoningMetadata({ force: true, waitMs: 25 });
+      const coalesced = metadata.refreshReasoningMetadata({ force: true, waitMs: 25 });
+      expect(await Promise.all([fresh, coalesced])).toEqual([
+        { ok: false, reason: "wait budget exceeded" },
+        { ok: false, reason: "wait budget exceeded" },
+      ]);
+    } finally {
+      releaseFetch?.();
+      globalThis.fetch = previousFetch;
+      await new Promise(resolve => setTimeout(resolve, 0));
+      metadata.resetReasoningMetadataCachesForTests();
+    }
+  });
+
   test("advertises the published effort rungs and strips the none/minimal sentinels", async () => {
     const { effort } = await load(metadataFile({
       "opencode-go": {
@@ -130,23 +184,134 @@ describe("models.dev reasoning metadata", () => {
 });
 
 describe("learned rung refusals", () => {
-  const refused = () => ({
-    ["opencode-go|" + DEEPSEEK_FLASH + "|max"]: { effort: "max", at: Date.now() },
-  });
-
   test("drops a refused rung from a metadata-derived ladder", async () => {
-    const { effort } = await load({
+    const { effort, metadata } = await load({
       ...metadataFile({ "opencode-go": { [DEEPSEEK_FLASH]: { reasoning: true, options: [{ type: "effort", values: ["low", "high", "max"] }] } } }),
-      ...supportFile(refused()),
     });
+    expect(metadata.recordUnsupportedReasoningEffort(ZEN_GO, DEEPSEEK_FLASH, "max")).toBe(true);
     expect(effort.configuredReasoningEfforts(ZEN_GO, DEEPSEEK_FLASH)).toEqual(["low", "high"]);
     expect(effort.mapReasoningEffort(ZEN_GO, DEEPSEEK_FLASH, "max")).toBe("high");
   });
 
   test("drops a refused rung from a ladder pinned in the registry too", async () => {
-    const { effort } = await load(supportFile(refused()));
+    const { effort, metadata } = await load();
+    expect(metadata.recordUnsupportedReasoningEffort(ZEN_GO, DEEPSEEK_FLASH, "max")).toBe(true);
     const pinned = { ...ZEN_GO, modelReasoningEfforts: { [DEEPSEEK_FLASH]: ["low", "high", "max"] } } as OcxProviderConfig;
     expect(effort.configuredReasoningEfforts(pinned, DEEPSEEK_FLASH)).toEqual(["low", "high"]);
+  });
+
+  test("keeps learned refusals isolated between credentials at the same destination", async () => {
+    const { effort, metadata } = await load(metadataFile({
+      "opencode-go": { [DEEPSEEK_FLASH]: { reasoning: true, options: [{ type: "effort", values: ["low", "high", "max"] }] } },
+    }));
+    const lowEntitlement = { ...ZEN_GO, apiKey: "low-entitlement-key" } as OcxProviderConfig;
+    const highEntitlement = { ...ZEN_GO, apiKey: "high-entitlement-key" } as OcxProviderConfig;
+    expect(metadata.recordUnsupportedReasoningEffort(lowEntitlement, DEEPSEEK_FLASH, "max")).toBe(true);
+    expect(effort.configuredReasoningEfforts(lowEntitlement, DEEPSEEK_FLASH)).toEqual(["low", "high"]);
+    expect(effort.configuredReasoningEfforts(highEntitlement, DEEPSEEK_FLASH)).toEqual(["low", "high", "max"]);
+  });
+
+  // The catalog path carries the configured expression in apiKey; the request path carries the
+  // resolved secret in apiKey and the configured expression in _apiKeyAttempt.reference. Both
+  // must hash the same wire credential, or a refusal learned at request time never clamps the
+  // advertised ladder for env/keychain users.
+  test("a refusal learned under the resolved request key applies to the catalog's env reference", async () => {
+    const { effort, metadata } = await load(metadataFile({
+      "opencode-go": { [DEEPSEEK_FLASH]: { reasoning: true, options: [{ type: "effort", values: ["low", "high", "max"] }] } },
+    }));
+    process.env["OCX_REASONING_METADATA_TEST_KEY"] = "resolved-env-secret";
+    try {
+      const catalogSide = { ...ZEN_GO, apiKey: "${OCX_REASONING_METADATA_TEST_KEY}" } as OcxProviderConfig;
+      const requestSide = {
+        ...ZEN_GO,
+        apiKey: "resolved-env-secret",
+        _apiKeyAttempt: { reference: "${OCX_REASONING_METADATA_TEST_KEY}" },
+      } as OcxProviderConfig;
+      expect(metadata.recordUnsupportedReasoningEffort(requestSide, DEEPSEEK_FLASH, "max")).toBe(true);
+      expect(effort.configuredReasoningEfforts(catalogSide, DEEPSEEK_FLASH)).toEqual(["low", "high"]);
+    } finally {
+      delete process.env["OCX_REASONING_METADATA_TEST_KEY"];
+    }
+  });
+
+  test("a refusal learned under the catalog's env reference applies to the resolved request key", async () => {
+    const { effort, metadata } = await load(metadataFile({
+      "opencode-go": { [DEEPSEEK_FLASH]: { reasoning: true, options: [{ type: "effort", values: ["low", "high", "max"] }] } },
+    }));
+    process.env["OCX_REASONING_METADATA_TEST_KEY"] = "resolved-env-secret";
+    try {
+      const catalogSide = { ...ZEN_GO, apiKey: "${OCX_REASONING_METADATA_TEST_KEY}" } as OcxProviderConfig;
+      const requestSide = {
+        ...ZEN_GO,
+        apiKey: "resolved-env-secret",
+        _apiKeyAttempt: { reference: "${OCX_REASONING_METADATA_TEST_KEY}" },
+      } as OcxProviderConfig;
+      expect(metadata.recordUnsupportedReasoningEffort(catalogSide, DEEPSEEK_FLASH, "max")).toBe(true);
+      expect(effort.configuredReasoningEfforts(requestSide, DEEPSEEK_FLASH)).toEqual(["low", "high"]);
+    } finally {
+      delete process.env["OCX_REASONING_METADATA_TEST_KEY"];
+    }
+  });
+
+  test("a keychain-referenced key scopes refusals to the resolved secret on both paths", async () => {
+    const { effort, metadata } = await load(metadataFile({
+      "opencode-go": { [DEEPSEEK_FLASH]: { reasoning: true, options: [{ type: "effort", values: ["low", "high", "max"] }] } },
+    }));
+    const keyStore = await import("../../src/providers/api-key-resolve");
+    const store = new Map<string, string>();
+    store.set("opencodex.provider-api-key.v1 zen-go", "resolved-keychain-secret");
+    keyStore.setProviderKeychainEntryFactoryForTests((service, account) => ({
+      getPassword: () => store.get(service + " " + account) ?? null,
+      setPassword: (password) => { store.set(service + " " + account, password); },
+      deletePassword: () => store.delete(service + " " + account),
+    }));
+    try {
+      const catalogSide = { ...ZEN_GO, apiKey: "keychain:zen-go" } as OcxProviderConfig;
+      const requestSide = {
+        ...ZEN_GO,
+        apiKey: "resolved-keychain-secret",
+        _apiKeyAttempt: { reference: "keychain:zen-go" },
+      } as OcxProviderConfig;
+      expect(metadata.recordUnsupportedReasoningEffort(requestSide, DEEPSEEK_FLASH, "max")).toBe(true);
+      expect(effort.configuredReasoningEfforts(catalogSide, DEEPSEEK_FLASH)).toEqual(["low", "high"]);
+    } finally {
+      keyStore.setProviderKeychainEntryFactoryForTests(null);
+    }
+  });
+
+  // The request path must hash the credential that served the request, not a live re-read of
+  // the reference: a rotation between routing and refusal recording would otherwise bind the
+  // learned refusal to the rotated credential and leave the refused one unclamped.
+  test("a refusal learned at request time stays bound to the serving credential after rotation", async () => {
+    const { effort, metadata } = await load(metadataFile({
+      "opencode-go": { [DEEPSEEK_FLASH]: { reasoning: true, options: [{ type: "effort", values: ["low", "high", "max"] }] } },
+    }));
+    process.env["OCX_REASONING_METADATA_TEST_KEY"] = "serving-secret";
+    const requestSide = {
+      ...ZEN_GO,
+      apiKey: "serving-secret",
+      _apiKeyAttempt: { reference: "${OCX_REASONING_METADATA_TEST_KEY}" },
+    } as OcxProviderConfig;
+    // Rotate behind the stable reference after routing but before the refusal is recorded.
+    process.env["OCX_REASONING_METADATA_TEST_KEY"] = "rotated-secret";
+    try {
+      expect(metadata.recordUnsupportedReasoningEffort(requestSide, DEEPSEEK_FLASH, "max")).toBe(true);
+      const served = { ...ZEN_GO, apiKey: "serving-secret" } as OcxProviderConfig;
+      const rotated = { ...ZEN_GO, apiKey: "rotated-secret" } as OcxProviderConfig;
+      expect(effort.configuredReasoningEfforts(served, DEEPSEEK_FLASH)).toEqual(["low", "high"]);
+      expect(effort.configuredReasoningEfforts(rotated, DEEPSEEK_FLASH)).toEqual(["low", "high", "max"]);
+    } finally {
+      delete process.env["OCX_REASONING_METADATA_TEST_KEY"];
+    }
+  });
+
+  test("ignores legacy destination-wide support rows", async () => {
+    const legacyRows = { ["opencode-go|" + DEEPSEEK_FLASH + "|max"]: { effort: "max", at: Date.now() } };
+    const { effort } = await load({
+      ...metadataFile({ "opencode-go": { [DEEPSEEK_FLASH]: { reasoning: true, options: [{ type: "effort", values: ["low", "high", "max"] }] } } }),
+      ...supportFile(legacyRows, 1),
+    });
+    expect(effort.configuredReasoningEfforts(ZEN_GO, DEEPSEEK_FLASH)).toEqual(["low", "high", "max"]);
   });
 
   test("records the refusal and plans the next lower published rung once", async () => {

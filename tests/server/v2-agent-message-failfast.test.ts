@@ -7,18 +7,23 @@ import {
 } from "../../src/server/responses";
 import type { OcxConfig } from "../../src/types";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 const originalFetch = globalThis.fetch;
+let releaseSpendHome: (() => void) | undefined;
+// Direct dispatch needs the writer lease that prevents spend-ledger ownership failures.
+const takeSpendHome = (): void => { releaseSpendHome ??= acquireOwnedSpendHome(); };
 
 /**
  * Structurally faithful Fernet fixture: version + timestamp + IV + one AES-CBC
  * block + HMAC. Bytes are synthetic, so this validates wire shape without
  * publishing a real captured task or claiming the HMAC is authentic.
  */
-function fernetFixture(ciphertextBytes = 16, version = 0x80): string {
+function fernetFixture(ciphertextBytes = 16, version = 0x80, variant = 0): string {
   const raw = Buffer.alloc(57 + ciphertextBytes, 0x5a);
   raw[0] = version;
   raw.writeBigUInt64BE(1_720_000_000n, 1);
+  if (variant !== 0) raw.writeUInt32BE(variant, 25);
   const unpadded = raw.toString("base64url");
   return `${unpadded}${"=".repeat((4 - (unpadded.length % 4)) % 4)}`;
 }
@@ -38,8 +43,20 @@ const ROUTING_ENVELOPE = [
 // The same envelope a delegated agent uses to REPLY, as opposed to being spawned.
 // #3021 saw one of these reach the parent conversation as raw `gAAAA...` text.
 const MESSAGE_ROUTING_ENVELOPE = ROUTING_ENVELOPE.replace("NEW_TASK", "MESSAGE");
+// FOLLOWUP_TASK shares the four-line header; a FINAL_ANSWER completion may omit the
+// Task name line entirely, in which case the envelope names no recipient.
+const FOLLOWUP_ROUTING_ENVELOPE = ROUTING_ENVELOPE.replace("NEW_TASK", "FOLLOWUP_TASK");
+const FINAL_ANSWER_ENVELOPE = [
+  "Message Type: FINAL_ANSWER",
+  "Sender: /root",
+  "Payload:",
+  "",
+].join("\n");
 
 afterEach(() => {
+  // Release the lease before later teardown can replace the preload sandbox home.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   globalThis.fetch = originalFetch;
 });
 
@@ -128,6 +145,16 @@ async function post(
   }), config, { model: "", provider: "" });
 }
 
+async function dispatchPost(
+  config: OcxConfig,
+  model: string,
+  input: unknown[],
+  headers: HeadersInit = {},
+): Promise<Response> {
+  takeSpendHome();
+  return post(config, model, input, headers);
+}
+
 describe("V2 routed agent-message ciphertext guard", () => {
   test("blocks a pure Fernet-only agent task", () => {
     expect(hasUnreadableEncryptedAgentTask(agentMessage([
@@ -151,9 +178,8 @@ describe("V2 routed agent-message ciphertext guard", () => {
    * as surviving text. The envelope pattern matched only NEW_TASK, so a MESSAGE whose
    * entire body was one Fernet token measured as READABLE and was forwarded verbatim.
    *
-   * This is the detection half only. Recovery stays NEW_TASK-only on purpose:
-   * decrypting a MESSAGE on the parent's behalf would build a plaintext oracle out of
-   * a payload the parent's session may not be entitled to read.
+   * This is the detection half only. The opt-in recovery recognises the same envelope
+   * types; its admission gate, not the detector, is the trust boundary for decryption.
    */
   test("blocks a MESSAGE reply envelope followed only by a Fernet payload", () => {
     expect(hasUnreadableEncryptedAgentTask(agentMessage([
@@ -178,6 +204,40 @@ describe("V2 routed agent-message ciphertext guard", () => {
     // blocked one -- only the ones with nothing left after the header comes off.
     expect(hasUnreadableEncryptedAgentTask(agentMessage([
       { type: "input_text", text: `${MESSAGE_ROUTING_ENVELOPE}the worker finished the migration` },
+      { type: "encrypted_content", encrypted_content: FERNET_TASK },
+    ]))).toBe(false);
+  });
+
+  test("blocks a FOLLOWUP_TASK envelope followed only by a Fernet payload", () => {
+    expect(hasUnreadableEncryptedAgentTask(agentMessage([
+      { type: "input_text", text: FOLLOWUP_ROUTING_ENVELOPE },
+      { type: "encrypted_content", encrypted_content: FERNET_TASK },
+    ]))).toBe(true);
+  });
+
+  test.each([
+    FOLLOWUP_ROUTING_ENVELOPE,
+    FINAL_ANSWER_ENVELOPE,
+  ])("blocks an encrypted envelope with a blank line after its type", envelope => {
+    const input = agentMessage([
+      { type: "input_text", text: envelope.replace("\n", "\n\n") },
+      { type: "encrypted_content", encrypted_content: FERNET_TASK },
+    ]);
+    expect(hasUnreadableEncryptedAgentTask(input)).toBe(true);
+  });
+
+  test("blocks a FINAL_ANSWER envelope without a Task name followed only by a Fernet payload", () => {
+    expect(hasUnreadableEncryptedAgentTask(agentMessage([
+      { type: "input_text", text: FINAL_ANSWER_ENVELOPE },
+      { type: "encrypted_content", encrypted_content: FERNET_TASK },
+    ]))).toBe(true);
+  });
+
+  test("a FINAL_ANSWER reply that carries real text stays readable", () => {
+    // The control. The widened strip must not turn a FINAL_ANSWER carrying real text
+    // into a blocked one.
+    expect(hasUnreadableEncryptedAgentTask(agentMessage([
+      { type: "input_text", text: `${FINAL_ANSWER_ENVELOPE}the worker finished the migration` },
       { type: "encrypted_content", encrypted_content: FERNET_TASK },
     ]))).toBe(false);
   });
@@ -213,6 +273,29 @@ describe("V2 routed agent-message ciphertext guard", () => {
     expect(raw).not.toContain("gAAAA");
   });
 
+  test("65 Fernet runs in a tail task are refused before upstream dispatch", async () => {
+    const tokens = Array.from({ length: 65 }, (_, index) => fernetFixture(16, 0x80, index));
+    const input = agentMessage([
+      { type: "input_text", text: ROUTING_ENVELOPE },
+      { type: "encrypted_content", encrypted_content: tokens.join(".") },
+    ]);
+    expect(new Set(tokens).size).toBe(65);
+    expect(hasUnreadableEncryptedAgentTask(input)).toBe(true);
+
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      throw new Error("provider dispatch must not happen");
+    }) as typeof fetch;
+
+    const response = await post(routedConfig(), "xai/grok-4.5", input);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: { type: "invalid_request_error", code: "unreadable_encrypted_agent_task" },
+    });
+    expect(fetchCalls).toBe(0);
+  });
+
   test("filters a combo to a decrypt-capable native target before dispatch", async () => {
     const fetchedUrls: string[] = [];
     const nativeToken = fakeChatGptJwt({ chatgpt_account_id: "native-combo-caller" });
@@ -233,7 +316,7 @@ describe("V2 routed agent-message ciphertext guard", () => {
       });
     }) as typeof fetch;
 
-    const response = await post(
+    const response = await dispatchPost(
       mixedComboConfig(),
       "combo/mixed",
       agentMessage([
@@ -313,7 +396,7 @@ describe("V2 routed agent-message ciphertext guard", () => {
       });
     }) as typeof fetch;
 
-    const response = await post(
+    const response = await dispatchPost(
       config,
       "combo/mixed",
       agentMessage([
@@ -500,7 +583,7 @@ describe("V2 routed agent-message ciphertext guard", () => {
       { type: "input_text", text: ROUTING_ENVELOPE },
       { type: "encrypted_content", encrypted_content: FERNET_TASK },
     ]);
-    const response = await post(nativeConfig(), "gpt-5.5", input, {
+    const response = await dispatchPost(nativeConfig(), "gpt-5.5", input, {
       authorization: "Bearer caller-codex-token",
     });
 
@@ -585,7 +668,7 @@ describe("routed Responses agent-message ciphertext repair", () => {
   test("repairs a mixed child result replayed behind a later user turn", async () => {
     const outbound = captureOutbound("relay-model");
 
-    const response = await post(routedResponsesConfig(), "relay/child-model", [mixedChildResult(), userTurn]);
+    const response = await dispatchPost(routedResponsesConfig(), "relay/child-model", [mixedChildResult(), userTurn]);
 
     expect(response.status).toBe(200);
     expect(outbound()).toHaveLength(1);
@@ -604,7 +687,7 @@ describe("routed Responses agent-message ciphertext repair", () => {
     expect(hasUnreadableEncryptedAgentTask(input)).toBe(false);
     const outbound = captureOutbound("relay-model");
 
-    const response = await post(routedResponsesConfig(), "relay/child-model", input);
+    const response = await dispatchPost(routedResponsesConfig(), "relay/child-model", input);
 
     expect(response.status).toBe(200);
     expect(outbound()[0]).not.toContain(FERNET_TASK);
@@ -618,7 +701,7 @@ describe("routed Responses agent-message ciphertext repair", () => {
     expect(hasUnreadableEncryptedAgentTask(input)).toBe(false);
     const outbound = captureOutbound("relay-model");
 
-    const response = await post(routedResponsesConfig(), "relay/child-model", input);
+    const response = await dispatchPost(routedResponsesConfig(), "relay/child-model", input);
 
     expect(response.status).toBe(200);
     expect(outbound()[0]).not.toContain(FERNET_TASK);
@@ -638,7 +721,7 @@ describe("routed Responses agent-message ciphertext repair", () => {
   test("leaves a fully readable child result exactly as the adapter already lowered it", async () => {
     const outbound = captureOutbound("relay-model");
 
-    const response = await post(routedResponsesConfig(), "relay/child-model", [{
+    const response = await dispatchPost(routedResponsesConfig(), "relay/child-model", [{
       type: "agent_message",
       author: "/root/child",
       recipient: "/root",
@@ -666,7 +749,7 @@ describe("routed Responses agent-message ciphertext repair", () => {
       });
     }) as typeof fetch;
 
-    const response = await post(routedConfig(), "xai/grok-4.5", [mixedChildResult(), userTurn]);
+    const response = await dispatchPost(routedConfig(), "xai/grok-4.5", [mixedChildResult(), userTurn]);
 
     expect(response.status).toBe(200);
     expect(forwardedBody).toContain("the child finished the migration");
@@ -688,7 +771,7 @@ describe("routed Responses agent-message ciphertext repair", () => {
       });
     }) as typeof fetch;
 
-    const response = await post(nativeConfig(), "gpt-5.5", [mixedChildResult(), userTurn], {
+    const response = await dispatchPost(nativeConfig(), "gpt-5.5", [mixedChildResult(), userTurn], {
       authorization: "Bearer caller-codex-token",
     });
 
@@ -710,7 +793,7 @@ describe("routed Responses agent-message ciphertext repair", () => {
     } as OcxConfig;
     const outbound = captureOutbound("relay-model");
 
-    const response = await post(config, "relayfwd/child-model", [mixedChildResult(), userTurn]);
+    const response = await dispatchPost(config, "relayfwd/child-model", [mixedChildResult(), userTurn]);
 
     expect(response.status).toBe(200);
     expect(outbound()[0]).not.toContain(FERNET_TASK);
@@ -736,7 +819,7 @@ describe("routed Responses agent-message ciphertext repair", () => {
     } as OcxConfig;
     const outbound = captureOutbound("relay-model");
 
-    const response = await post(config, "combo/routed", [mixedChildResult(), userTurn]);
+    const response = await dispatchPost(config, "combo/routed", [mixedChildResult(), userTurn]);
 
     expect(response.status).toBe(200);
     expect(outbound()).toHaveLength(1);
@@ -755,7 +838,7 @@ describe("routed Responses agent-message ciphertext repair", () => {
     expect(structurallyValidFernetTokens(`${first}${second}`)).toEqual([FERNET_TASK]);
     const outbound = captureOutbound("relay-model");
 
-    const response = await post(routedResponsesConfig(), "relay/child-model", [{
+    const response = await dispatchPost(routedResponsesConfig(), "relay/child-model", [{
       type: "agent_message",
       author: "/root/child",
       recipient: "/root",
@@ -776,7 +859,7 @@ describe("routed Responses agent-message ciphertext repair", () => {
   test("repairs a token embedded inside a text part and keeps the prose around it", async () => {
     const outbound = captureOutbound("relay-model");
 
-    const response = await post(routedResponsesConfig(), "relay/child-model", [{
+    const response = await dispatchPost(routedResponsesConfig(), "relay/child-model", [{
       type: "agent_message",
       author: "/root/child",
       recipient: "/root",
@@ -801,7 +884,7 @@ describe("routed Responses agent-message ciphertext repair", () => {
     for (const [name, text] of Object.entries(readable)) {
       const outbound = captureOutbound("relay-model");
 
-      const response = await post(routedResponsesConfig(), "relay/child-model", [{
+      const response = await dispatchPost(routedResponsesConfig(), "relay/child-model", [{
         type: "agent_message",
         author: "/root/child",
         recipient: "/root",
@@ -819,7 +902,7 @@ describe("routed Responses agent-message ciphertext repair", () => {
     // two ordinary encoded fragments do not become a marker merely by being adjacent.
     const outbound = captureOutbound("relay-model");
 
-    const response = await post(routedResponsesConfig(), "relay/child-model", [{
+    const response = await dispatchPost(routedResponsesConfig(), "relay/child-model", [{
       type: "agent_message",
       author: "/root/child",
       recipient: "/root",
@@ -847,7 +930,7 @@ describe("routed Responses agent-message ciphertext repair", () => {
       expect(structurallyValidFernetTokens(blob)).toEqual([]);
       const outbound = captureOutbound("relay-model");
 
-      const response = await post(routedResponsesConfig(), "relay/child-model", [{
+      const response = await dispatchPost(routedResponsesConfig(), "relay/child-model", [{
         type: "agent_message",
         author: "/root/child",
         recipient: "/root",

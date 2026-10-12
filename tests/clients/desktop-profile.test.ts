@@ -64,6 +64,41 @@ describe("Claude Desktop profile", () => {
     expect(() => setDesktopFamilyDefault(selected, "opus", null)).toThrow(DesktopProfileError);
   });
 
+  test("reallocates a managed slot claimed by a newly active real Anthropic id", () => {
+    const datedId = "claude-opus-4-8-20260101";
+    const profile = parseDesktopProfile({
+      version: 1,
+      assignments: {
+        "test/routed": { family: "opus", alias: datedId },
+      },
+      defaults: { opus: "test/routed", fable: null, sonnet: null, haiku: null },
+    });
+    const reconciled = reconcileDesktopProfile(profile, [
+      { route: "test/routed", label: "Routed" },
+      { route: `anthropic/${datedId}`, label: "Real Anthropic" },
+    ]);
+    expect(reconciled.assignments["test/routed"]?.alias).not.toBe(datedId);
+    expect(reconciled.assignments[`anthropic/${datedId}`]?.alias).toBe(datedId);
+    const rendered = renderDesktopProfile(reconciled, [
+      { route: "test/routed", label: "Routed" },
+      { route: `anthropic/${datedId}`, label: "Real Anthropic" },
+    ]);
+    expect(new Set(rendered.map(model => model.name)).size).toBe(2);
+    expect(rendered.find(model => model.route === `anthropic/${datedId}`)?.name).toBe(datedId);
+  });
+
+  test("keeps a genuine dated Anthropic model id unchanged", () => {
+    const id = "claude-opus-4-8-20260101";
+    const profile = {
+      version: 1 as const,
+      assignments: {
+        [`anthropic/${id}`]: { family: "opus" as const, alias: id },
+      },
+      defaults: { opus: `anthropic/${id}`, fable: null, sonnet: null, haiku: null },
+    };
+    expect(renderDesktopProfile(profile, [{ route: `anthropic/${id}`, label: "Real Anthropic" }])[0]!.name).toBe(id);
+  });
+
   test("retains unavailable routes and promotes an active sibling only while rendering", () => {
     let profile = reconcileDesktopProfile(undefined, models);
     profile = setDesktopFamilyDefault(profile, "opus", "native/gpt-5.6-sol");
@@ -103,6 +138,9 @@ describe("Claude Desktop profile", () => {
       label: `Model ${index}`,
     }));
     const full = reconcileDesktopProfile(emptyDesktopProfile(), encoded);
+    const rendered = renderDesktopProfile(full, encoded);
+    expect(new Set(rendered.map(model => model.name)).size).toBe(TOTAL_ALIAS_SLOTS);
+    expect(rendered.every(model => /^claude-opus-4-8-p[0-9a-z]{3}$/.test(model.name))).toBe(true);
     const snapshot = structuredClone(full);
     expect(Object.keys(full.assignments)).toHaveLength(TOTAL_ALIAS_SLOTS);
     expect(() => reconcileDesktopProfile(full, [...encoded, { route: "test/overflow", label: "Overflow" }])).toThrow("encoded date slots");
@@ -120,10 +158,8 @@ describe("Claude Desktop profile", () => {
   });
 
   // The apply route writes `appliedFingerprint`/`appliedAt` back onto the stored profile so the
-  // GUI can show applied-vs-saved state. Every rebuild in this module must accept AND carry them:
-  // rejecting them broke the Desktop tab outright after the first apply, and silently dropping
-  // them would make a saved edit — or a single drag between families — report "not applied" for a
-  // config that is applied on disk.
+  // GUI can show applied-vs-saved state. Parsing and no-op rebuilds retain them, while a change to
+  // the desired Desktop config must clear them so the old on-disk config is not reported as current.
   describe("applied-state markers", () => {
     const applied = {
       appliedFingerprint: "0123456789abcdef",
@@ -140,23 +176,28 @@ describe("Claude Desktop profile", () => {
       expect(parsed.appliedAt).toBe(applied.appliedAt);
     });
 
-    test("reconcileDesktopProfile keeps them across a catalog change", () => {
+    test("reconcileDesktopProfile clears them across a catalog change", () => {
       const next = reconcileDesktopProfile(seeded(), [...models, { route: "test/new-model", label: "New" }]);
-      expect(next.appliedFingerprint).toBe(applied.appliedFingerprint);
-      expect(next.appliedAt).toBe(applied.appliedAt);
+      expect(next).not.toHaveProperty("appliedFingerprint");
+      expect(next).not.toHaveProperty("appliedAt");
     });
 
-    test("moveDesktopRoute keeps them — the drag-and-drop path", () => {
-      const moved = moveDesktopRoute(seeded(), "cursor/gpt-5.6-luna", "sonnet");
-      expect(moved.appliedFingerprint).toBe(applied.appliedFingerprint);
-      expect(moved.appliedAt).toBe(applied.appliedAt);
+    test("reconcileDesktopProfile keeps them when profile content is unchanged", () => {
+      expect(reconcileDesktopProfile(seeded(), models)).toMatchObject(applied);
     });
 
-    test("setDesktopFamilyDefault keeps them", () => {
+    test("moveDesktopRoute clears them — the drag-and-drop path", () => {
       const moved = moveDesktopRoute(seeded(), "cursor/gpt-5.6-luna", "sonnet");
-      const next = setDesktopFamilyDefault(moved, "sonnet", "cursor/gpt-5.6-luna");
-      expect(next.appliedFingerprint).toBe(applied.appliedFingerprint);
-      expect(next.appliedAt).toBe(applied.appliedAt);
+      expect(moved).not.toHaveProperty("appliedFingerprint");
+      expect(moved).not.toHaveProperty("appliedAt");
+    });
+
+    test("setDesktopFamilyDefault clears them only when the default changes", () => {
+      const changed = setDesktopFamilyDefault(seeded(), "opus", "native/gpt-5.6-sol");
+      expect(changed).not.toHaveProperty("appliedFingerprint");
+      expect(changed).not.toHaveProperty("appliedAt");
+      expect(setDesktopFamilyDefault(seeded(), "opus", "anthropic/claude-fable-5"))
+        .toMatchObject(applied);
     });
 
     test("a profile without the markers stays without them", () => {

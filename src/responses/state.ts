@@ -6,22 +6,32 @@ import { windowsSecretAclApplies } from "../lib/windows-secret-acl";
 import type { OcxProviderContinuationState } from "../types";
 import {
   deleteResponseSpill,
+  inspectResponseSpillDir,
   noteStubSwapForTest,
   readResponseSpill,
   recoverOrphanedResponseSpills,
+  resetPeriodicSpillSweepCursorForTests,
   responseSpillDirectory,
   responseSpillPayloadCap,
+  sweepOrphanedResponseSpillsPeriodically,
+  type ResponseSpillDirInspection,
   type ResponseSpillRef,
   writeResponseSpillDurably,
 } from "./spill-store";
+import { collectReferencedSpillFileNames, snapshotReferencedSpillFileNames } from "./state/spill-inspect";
+import { selectSnapshotEntries, snapshotPayload } from "./state/snapshot-select";
 import { clientCarriedPrefixLength, providerIssuedIdentity } from "./state/replay-fingerprint";
+import { hasPendingClientToolCall, allowsUnforcedStoreFalseReplay } from "./state/unforced-store-false";
+import { computeResponseStateMetrics, type ResponseStateMetrics } from "./state/metrics";
+export type { ResponseStateMetrics } from "./state/metrics";
 export type { ResponseStateTempRecoveryResult, ResponseStateTempRecoveryOptions } from "./state/temp-recovery";
+export type { ResponseSpillDirInspection } from "./spill-store";
 export { recoverStaleResponseStateTemps, reclaimAbandonedResponseStateTemps, inspectAbandonedResponseStateTemps, sweepAbandonedResponseStateTemps } from "./state/temp-recovery";
 import { recoverStaleResponseStateTemps } from "./state/temp-recovery";
 export type { ResponseSpillWriteFailureCode, ResponseSpillWriteStatus, ResponseSpillWriteFailureOrigin } from "./state/spill-failure";
 import type { ResponseSpillWriteFailureCode, ResponseSpillWriteStatus, ResponseSpillWriteFailureOrigin } from "./state/spill-failure";
 export { responseAdmissionCountersForTests } from "./state/spill-failure";
-import { admissionCounters, noteSpillWriteFailure, noteSpillWriteSuccess, spillCounters, spillWriteHealth } from "./state/spill-failure";
+import { admissionCounters, noteSpillWriteFailure, noteSpillWriteSuccess, resetSpillCountersForTests, spillCounters, spillWriteHealth } from "./state/spill-failure";
 import { loadSnapshotEntry } from "./state/snapshot-codec";
 import { isBodyNonPersistable } from "./state/body-policy";
 export { isBodyNonPersistable, markBodyNonPersistable } from "./state/body-policy";
@@ -36,6 +46,7 @@ import {
   spillQueueAccounting,
   spillQueueHoldsResidentCandidate,
   spillQueuePendingBytes,
+  spillQueueReferencedSpillFileNames,
   spillQueueResidentCandidates,
   spillQueueSupersededSpillFor,
 } from "./state/spill-queue";
@@ -110,6 +121,7 @@ export interface ResidentResponseState {
   /** Index in `items` where provider output begins; see clientCarriedPrefixLength. */
   providerOutputStart?: number;
   providers?: OcxProviderContinuationState;
+  unforcedStoreFalse?: boolean;
   sizeBytes: number;
 }
 
@@ -120,6 +132,7 @@ export interface SpilledResponseState {
   /** Mirrors the spilled payload boundary so a spilled entry keeps its anchor. */
   providerOutputStart?: number;
   providers?: OcxProviderContinuationState;
+  unforcedStoreFalse?: boolean;
   spill: ResponseSpillRef;
   sizeBytes: number;
 }
@@ -144,6 +157,7 @@ let residentResponseBytes = 0;
 let oldestResidentId: string | undefined;
 let oldestResidentAt: number | null = null;
 let byteCapOverride: number | null = null;
+let snapshotTotalCapOverride: number | null = null;
 let stateRevision = 0;
 /** Byte length and digest of the last snapshot actually written, for the
  *  identical-payload skip and the size-scaled debounce. The payload itself is not
@@ -213,6 +227,15 @@ function byteCap(): number {
 /** Test-only: lower/restore the in-memory byte cap (null restores the default). */
 export function setResponseStateByteCapForTests(bytes: number | null): void {
   byteCapOverride = bytes;
+}
+
+function snapshotTotalBytes(): number {
+  return snapshotTotalCapOverride ?? SNAPSHOT_TOTAL_MAX_BYTES;
+}
+
+/** Test-only: lower/restore the durable snapshot byte budget (null restores the default). */
+export function setResponseStateSnapshotByteCapForTests(bytes: number | null): void {
+  snapshotTotalCapOverride = bytes;
 }
 
 /** Test-only: current in-memory byte accounting (proves evictions release their bytes). */
@@ -297,6 +320,7 @@ function measureResidentEntry(id: string, entry: ResidentInput): ResidentRespons
     items: entry.items,
     ...(entry.providerOutputStart !== undefined ? { providerOutputStart: entry.providerOutputStart } : {}),
     ...(entry.providers ? { providers: entry.providers } : {}),
+    ...(entry.unforcedStoreFalse ? { unforcedStoreFalse: entry.unforcedStoreFalse } : {}),
   });
   return sizeBytes === null ? null : { kind: "resident", ...entry, sizeBytes };
 }
@@ -399,7 +423,9 @@ function swapResidentForSpill(id: string, expected: ResidentResponseState, ref: 
     kind: "spill",
     createdAt: expected.createdAt,
     ...(expected.clientThreadId ? { clientThreadId: expected.clientThreadId } : {}),
+    ...(expected.providerOutputStart !== undefined ? { providerOutputStart: expected.providerOutputStart } : {}),
     ...(expected.providers ? { providers: expected.providers } : {}),
+    ...(expected.unforcedStoreFalse ? { unforcedStoreFalse: expected.unforcedStoreFalse } : {}),
     spill: ref,
   };
   const next: SpilledResponseState = { ...base, sizeBytes: stubSize(id, base) };
@@ -423,6 +449,7 @@ function replaceSpillEntryAtomically(
       items: candidate.items,
       ...(candidate.providerOutputStart !== undefined ? { providerOutputStart: candidate.providerOutputStart } : {}),
       ...(candidate.providers ? { providers: candidate.providers } : {}),
+      ...(candidate.unforcedStoreFalse ? { unforcedStoreFalse: candidate.unforcedStoreFalse } : {}),
     });
     const base: Omit<SpilledResponseState, "sizeBytes"> = {
       kind: "spill",
@@ -430,6 +457,7 @@ function replaceSpillEntryAtomically(
       ...(candidate.clientThreadId ? { clientThreadId: candidate.clientThreadId } : {}),
       ...(candidate.providerOutputStart !== undefined ? { providerOutputStart: candidate.providerOutputStart } : {}),
       ...(candidate.providers ? { providers: candidate.providers } : {}),
+      ...(candidate.unforcedStoreFalse ? { unforcedStoreFalse: candidate.unforcedStoreFalse } : {}),
       spill: ref,
     };
     const next: SpilledResponseState = { ...base, sizeBytes: stubSize(id, base) };
@@ -515,6 +543,7 @@ function admitOversizedCandidate(
       items: candidate.items,
       ...(candidate.providerOutputStart !== undefined ? { providerOutputStart: candidate.providerOutputStart } : {}),
       ...(candidate.providers ? { providers: candidate.providers } : {}),
+      ...(candidate.unforcedStoreFalse ? { unforcedStoreFalse: candidate.unforcedStoreFalse } : {}),
     });
     // Enforce the ceiling against the REAL envelope: the spill payload adds
     // the {version, responseId, ...} wrapper, so a candidate within the
@@ -529,7 +558,9 @@ function admitOversizedCandidate(
       kind: "spill",
       createdAt: candidate.createdAt,
       ...(candidate.clientThreadId ? { clientThreadId: candidate.clientThreadId } : {}),
+      ...(candidate.providerOutputStart !== undefined ? { providerOutputStart: candidate.providerOutputStart } : {}),
       ...(candidate.providers ? { providers: candidate.providers } : {}),
+      ...(candidate.unforcedStoreFalse ? { unforcedStoreFalse: candidate.unforcedStoreFalse } : {}),
       spill: ref,
     };
     const next: SpilledResponseState = { ...base, sizeBytes: stubSize(id, base) };
@@ -655,12 +686,25 @@ function ensureLoaded(): void {
   } catch {
     /* missing/corrupt snapshot: start empty */
   }
-  const referenced = new Set<string>();
-  for (const state of states.values()) {
-    if (state.kind === "spill") referenced.add(state.spill.fileName);
-  }
-  try { recoverOrphanedResponseSpills(referenced); } catch { /* best effort */ }
+  try { recoverOrphanedResponseSpills(ownedSpillFileNames()); } catch { /* best effort */ }
   pruneResponses();
+}
+
+/** Every file name the process still needs: live stubs, deferred unlinks, and queued publications. */
+function ownedSpillFileNames(): Set<string> {
+  const referenced = collectReferencedSpillFileNames(states.values(), pendingSpillUnlinks);
+  for (const name of spillQueueReferencedSpillFileNames()) referenced.add(name);
+  return referenced;
+}
+
+/** Liveness-tick counterpart of the orphan GC in ensureLoaded; a no-op until first load. */
+export function sweepOrphanedResponseSpills(): number {
+  if (!loaded) return 0;
+  try {
+    return sweepOrphanedResponseSpillsPeriodically(ownedSpillFileNames()).removed;
+  } catch {
+    return 0;
+  }
 }
 
 type SnapshotWriteOutcome = "stable" | "unstable" | "failed";
@@ -674,29 +718,7 @@ async function writeBoundedSnapshot(path: string, attemptLimit: number): Promise
   try {
     for (let attempt = 0; attempt < attemptLimit; attempt += 1) {
       const revision = stateRevision;
-      const entries: Array<[string, unknown]> = [];
-      let total = 0;
-      // Newest-first so the most recent chains survive both legacy snapshot caps.
-      for (const [id, state] of [...states].reverse()) {
-        let persistable: unknown;
-        if (state.kind === "resident") {
-          const { sizeBytes: _sizeBytes, kind: _kind, ...resident } = state;
-          persistable = resident;
-        } else {
-          const { sizeBytes: _sizeBytes, ...smallState } = state;
-          persistable = smallState;
-        }
-        const persistEntry: [string, unknown] = [id, persistable];
-        // UTF-8 bytes, not UTF-16 code units: multibyte items otherwise slip
-        // past both snapshot caps at up to 2x the intended size.
-        const size = Buffer.byteLength(JSON.stringify(persistEntry), "utf8");
-        if (state.kind === "resident" && size > SNAPSHOT_ENTRY_MAX_BYTES) continue;
-        if (total + size > SNAPSHOT_TOTAL_MAX_BYTES) break;
-        total += size;
-        entries.push(persistEntry);
-      }
-      entries.reverse();
-      const payload = JSON.stringify({ version: 2, states: entries });
+      const payload = snapshotPayload(selectSnapshotEntries(states, snapshotTotalBytes(), SNAPSHOT_ENTRY_MAX_BYTES));
       const payloadBytes = Buffer.byteLength(payload, "utf8");
       const payloadDigest = Bun.hash(payload).toString(36);
       // A mutation does not always change what gets persisted: entries past the
@@ -854,20 +876,29 @@ export function replayOverlapSkipsForTests(): number {
  * This ceiling therefore bounds what the store owns, which is every file it can
  * account for, and not the directory as a whole.
  */
-function enforceSpilledResponseBudget(): number {
+function enforceSpilledResponseBudget(requiredHeadroomBytes?: number): number {
   // Price in-flight publications too: a file being created by
   // `writeResponseSpillDurablyAsync` occupies the volume before it reaches `states`.
   let spilledBytes = accountedResponseSpillBytes();
-  if (spilledBytes <= spillByteCap()) return 0;
+  // Admission (#6747) passes the room its publication needs, 0 included. Evict only while that
+  // room is still reachable: re-read accounting after each attempt, since a failed unlink stays
+  // charged, and stop the moment the publication cannot fit so no unrelated continuation pays.
+  const admission = requiredHeadroomBytes !== undefined;
+  const headroom = admission && requiredHeadroomBytes > 0 ? requiredHeadroomBytes : 0;
+  const feasible = (): boolean => !admission
+    || (spilledBytes = accountedResponseSpillBytes()) - spilledResponseBytes() + headroom <= spillByteCap();
+  if (!feasible() || spilledBytes <= spillByteCap() - headroom) return 0;
   const before = spilledBytes;
   // Deferred generations go first. They are already superseded, so releasing one
   // costs only the crash window the queue exists to cover — the same trade
   // PENDING_SPILL_UNLINKS_MAX already makes against unbounded disk. Evicting a
   // live continuation to make room for a dead file would be the wrong order.
-  while (spilledBytes > spillByteCap() && pendingSpillUnlinks.length > 0) {
+  while (spilledBytes > spillByteCap() - headroom && pendingSpillUnlinks.length > 0) {
     const ref = pendingSpillUnlinks.shift()!;
     spilledBytes -= ref.payloadBytes;
     deleteResponseSpill(ref);
+    if (admission) spillCounters.headroomEvictions += 1;
+    if (!feasible()) return before - spilledBytes;
   }
   // Ordered by createdAt, not by map order. `states` is not an age index:
   // demotion and spill replacement delete and reinsert entries, and
@@ -884,9 +915,11 @@ function enforceSpilledResponseBudget(): number {
     .sort((a, b) => a[1].createdAt - b[1].createdAt
       || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
   for (const [id, entry] of spilled) {
-    if (spilledBytes <= spillByteCap()) break;
+    if (spilledBytes <= spillByteCap() - headroom) break;
     spilledBytes -= entry.spill.payloadBytes;
     deleteEntry(id);
+    if (admission) spillCounters.headroomEvictions += 1;
+    if (!feasible()) return before - spilledBytes;
   }
   return before - spilledBytes;
 }
@@ -926,6 +959,7 @@ function pruneResponses(at = now()): void {
         items: entry.items,
         ...(entry.providerOutputStart !== undefined ? { providerOutputStart: entry.providerOutputStart } : {}),
         ...(entry.providers ? { providers: entry.providers } : {}),
+        ...(entry.unforcedStoreFalse ? { unforcedStoreFalse: entry.unforcedStoreFalse } : {}),
       });
       if (swapResidentForSpill(oldestId, entry, ref)) noteSpillWriteSuccess();
     } catch (error) {
@@ -985,6 +1019,7 @@ export function evictOldestResponseContinuationForBudget(): number {
       items: entry.items,
       ...(entry.providerOutputStart !== undefined ? { providerOutputStart: entry.providerOutputStart } : {}),
       ...(entry.providers ? { providers: entry.providers } : {}),
+      ...(entry.unforcedStoreFalse ? { unforcedStoreFalse: entry.unforcedStoreFalse } : {}),
     });
     if (swapResidentForSpill(id, entry, ref)) noteSpillWriteSuccess();
   } catch (error) {
@@ -1021,6 +1056,15 @@ function materializeEntry(
     schedulePersist();
     return { ok: false, failure };
   }
+  // A restricted snapshot stub must agree with the validated spill's provenance.
+  if (entry.unforcedStoreFalse && (result.payload.unforcedStoreFalse !== true
+    || entry.providerOutputStart === undefined || entry.providerOutputStart > result.payload.items.length
+    || entry.providerOutputStart !== result.payload.providerOutputStart)) {
+    spillCounters.readFailures += 1;
+    replaceWithSpillFailure(id, entry);
+    schedulePersist();
+    return { ok: false, failure: { code: "previous_response_not_found", reason: "spill_corrupt" } };
+  }
   const state = measureResidentEntry(id, {
     createdAt: result.payload.createdAt,
     ...(result.payload.clientThreadId ? { clientThreadId: result.payload.clientThreadId } : {}),
@@ -1029,6 +1073,7 @@ function materializeEntry(
       ? { providerOutputStart: result.payload.providerOutputStart }
       : {}),
     ...(result.payload.providers ? { providers: result.payload.providers } : {}),
+    ...(result.payload.unforcedStoreFalse ? { unforcedStoreFalse: result.payload.unforcedStoreFalse } : {}),
   });
   if (!state) {
     spillCounters.readFailures += 1;
@@ -1066,6 +1111,15 @@ export function expandPreviousResponseInput(body: unknown, clientThreadId?: stri
     replayScopeMismatchDrops += 1;
     return body;
   }
+  const clientInput = inputItems(request.input);
+  const stored = materialized.state.items;
+  const carried = clientCarriedPrefixLength(stored, clientInput);
+  if (
+    materialized.state.unforcedStoreFalse
+    && !allowsUnforcedStoreFalseReplay(stored, materialized.state.providerOutputStart, clientInput, carried)
+  ) {
+    return body;
+  }
   // The client already replayed this history verbatim. Prepending the stored copy would
   // double it, and the doubled turn is stored again, so the next turn triples (#1412 saw
   // 127k of real context reach 1.3M tokens this way).
@@ -1078,10 +1132,7 @@ export function expandPreviousResponseInput(body: unknown, clientThreadId?: stri
   // There is no invariant that provider output always carries ids, so an entry whose output
   // has none simply never skips.
   {
-    const clientInput = inputItems(request.input);
-    const stored = materialized.state.items;
     const anchor = materialized.state.providerOutputStart;
-    const carried = clientCarriedPrefixLength(stored, clientInput);
     if (
       carried === stored.length
       && anchor !== undefined
@@ -1101,9 +1152,9 @@ export function expandPreviousResponseInput(body: unknown, clientThreadId?: stri
   }
   const expanded = {
     ...request,
-    input: [...materialized.state.items, ...inputItems(request.input)],
+    input: [...stored, ...clientInput],
   };
-  replayedInputPrefixLengths.set(expanded, materialized.state.items.length);
+  replayedInputPrefixLengths.set(expanded, stored.length);
   return expanded;
 }
 
@@ -1147,29 +1198,6 @@ export function previousResponseProviderState(responseId: string | undefined): O
   return providers ? structuredClone(providers) : undefined;
 }
 
-export interface ResponseStateMetrics {
-  count: number;
-  residentCount: number;
-  spillStubCount: number;
-  tombstoneCount: number;
-  totalBytes: number;
-  spillPayloadBytes: number;
-  largestBytes: number;
-  oldestAgeMs: number;
-  spillWrites: number;
-  spillWriteFailures: number;
-  spillWriteStatus: ResponseSpillWriteStatus;
-  spillWriteConsecutiveFailures: number;
-  spillLastWriteFailureCode: ResponseSpillWriteFailureCode | null;
-  spillLastWriteFailureOrigin: ResponseSpillWriteFailureOrigin | null;
-  spillAclRetryReturnedTimeouts: number;
-  spillAclTimeoutMemoRefusals: number;
-  spillLastWriteFailureAt: number | null;
-  spillLastWriteSuccessAt: number | null;
-  spillReadFailures: number;
-  replayScopeMismatchDrops: number;
-}
-
 /**
  * Observe-only snapshot of the in-RAM continuation store, surfaced via GET /api/system/memory.
  * Additive and side-effect free — it does NOT lazy-load the disk snapshot, prune, or evict — so a
@@ -1180,50 +1208,37 @@ export interface ResponseStateMetrics {
  * store (JS heap) or in the runtime allocator (native).
  */
 export function responseStateMetrics(): ResponseStateMetrics {
-  const at = now();
-  let largestBytes = 0;
-  let oldestCreatedAt = at;
-  let residentCount = 0;
-  let spillStubCount = 0;
-  let tombstoneCount = 0;
-  let spillPayloadBytes = 0;
-  for (const state of states.values()) {
-    const bytes = state.sizeBytes;
-    if (bytes > largestBytes) largestBytes = bytes;
-    if (state.createdAt < oldestCreatedAt) oldestCreatedAt = state.createdAt;
-    if (state.kind === "resident") {
-      residentCount += 1;
-    } else if (state.kind === "spill") {
-      spillStubCount += 1;
-      spillPayloadBytes += state.spill.payloadBytes;
-    } else tombstoneCount += 1;
-  }
-  return {
-    count: states.size,
-    residentCount,
-    spillStubCount,
-    tombstoneCount,
+  return computeResponseStateMetrics({
+    states: states.values(),
+    stateCount: states.size,
+    now: now(),
     totalBytes: responseContinuationRetainedStoreSnapshot().bytes,
-    spillPayloadBytes,
-    largestBytes,
-    oldestAgeMs: states.size > 0 ? at - oldestCreatedAt : 0,
     spillWrites: spillCounters.writes,
     spillWriteFailures: spillCounters.writeFailures,
-    spillWriteStatus: spillWriteHealth.consecutiveFailures > 0
-      ? "degraded"
-      : spillWriteHealth.lastSuccessAt !== null
-        ? "healthy"
-        : "initial",
     spillWriteConsecutiveFailures: spillWriteHealth.consecutiveFailures,
-    spillLastWriteFailureCode: spillWriteHealth.lastFailureCode,
-    spillLastWriteFailureOrigin: spillWriteHealth.lastFailureOrigin,
+    spillLastFailureCode: spillWriteHealth.lastFailureCode,
+    spillLastFailureOrigin: spillWriteHealth.lastFailureOrigin,
+    spillLastSuccessAt: spillWriteHealth.lastSuccessAt,
     spillAclRetryReturnedTimeouts: spillCounters.aclRetryReturnedTimeouts,
     spillAclTimeoutMemoRefusals: spillCounters.aclTimeoutMemoRefusals,
-    spillLastWriteFailureAt: spillWriteHealth.lastFailureAt,
-    spillLastWriteSuccessAt: spillWriteHealth.lastSuccessAt,
+    spillCapacityRefusals: spillCounters.capacityRefusals, spillHeadroomEvictions: spillCounters.headroomEvictions,
+    spillLastFailureAt: spillWriteHealth.lastFailureAt,
     spillReadFailures: spillCounters.readFailures,
     replayScopeMismatchDrops,
-  };
+  });
+}
+
+/**
+ * Read-only spill report for `ocx doctor` and /api/system/memory. Owned = live
+ * stubs, deferred unlinks, queued publications, and snapshot references (what a
+ * restart re-owns). Shares the reclaim's orphan predicate; never unlinks.
+ */
+export function inspectResponseSpillStorage(): ResponseSpillDirInspection {
+  const referenced = ownedSpillFileNames();
+  for (const name of snapshotReferencedSpillFileNames(snapshotPath(), SNAPSHOT_FILE_MAX_BYTES)) {
+    referenced.add(name);
+  }
+  return inspectResponseSpillDir(referenced);
 }
 
 /**
@@ -1234,7 +1249,7 @@ export function rememberResponseState(
   requestBody: unknown,
   response: { id?: unknown; output?: unknown; status?: unknown; incomplete_details?: unknown },
   providerState?: OcxProviderContinuationState | string,
-  opts?: { force?: boolean; clientThreadId?: string },
+  opts?: { force?: boolean; clientThreadId?: string; retainForToolContinuation?: boolean },
 ): void {
   if (!requestBody || typeof requestBody !== "object" || Array.isArray(requestBody)) return;
   const request = requestBody as Record<string, unknown>;
@@ -1244,8 +1259,10 @@ export function rememberResponseState(
   // The passthrough branch records with force so those chains can be expanded locally; the
   // store stays in-memory under RESPONSE_TTL_MS, so this is a proxy-internal continuation cache, not
   // real server-side response storage.
-  if (request.store === false && !opts?.force) return;
   if (typeof response.id !== "string" || !Array.isArray(response.output)) return;
+  // Only an explicitly opted-in adapter may retain pending client calls despite store:false.
+  const unforcedStoreFalse = request.store === false && !opts?.force;
+  if (unforcedStoreFalse && !(opts?.retainForToolContinuation === true && hasPendingClientToolCall(response.output))) return;
   if (response.status === "incomplete") {
     const details = response.incomplete_details;
     if (!details || typeof details !== "object" || Array.isArray(details)
@@ -1278,6 +1295,7 @@ export function rememberResponseState(
     // incomplete agent turn on the Cursor side (we suspended without a real mcpResult), so its
     // checkpoint must not be reused — but the conversation id string itself is still valid.
     ...(Object.keys(normalizedProviderState).length > 0 ? { providers: normalizedProviderState } : {}),
+    ...(unforcedStoreFalse ? { unforcedStoreFalse: true } : {}),
   });
   enforceAppOwnedMemoryBudget();
   schedulePersist();
@@ -1307,6 +1325,7 @@ export function clearResponseStateMemoryForTests(): void {
   }
   pendingPersistPath = null;
   resetSpillQueueForTests();
+  resetPeriodicSpillSweepCursorForTests();
   states.clear();
   storedResponseBytes = 0;
   residentResponseBytes = 0;
@@ -1314,11 +1333,7 @@ export function clearResponseStateMemoryForTests(): void {
   oldestResidentAt = null;
   stateRevision = 0;
   pendingSpillUnlinks.length = 0;
-  spillCounters.writes = 0;
-  spillCounters.writeFailures = 0;
-  spillCounters.readFailures = 0;
-  spillCounters.aclRetryReturnedTimeouts = 0;
-  spillCounters.aclTimeoutMemoRefusals = 0;
+  resetSpillCountersForTests();
   spillWriteHealth.consecutiveFailures = 0;
   spillWriteHealth.lastFailureCode = null;
   spillWriteHealth.lastFailureOrigin = null;

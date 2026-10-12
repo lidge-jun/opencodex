@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { repoPath } from "../helpers/repo-root";
 import {
   buildWindowsTaskXml,
   decodeSchtasksOutput,
@@ -135,6 +137,30 @@ describe("windowsSchedulerCsvIncludesTask", () => {
     expect(windowsSchedulerCsvIncludesTask(csv, "opencodex-proxy")).toBe(true);
     expect(windowsSchedulerCsvIncludesTask(csv, "missing-task")).toBe(false);
     expect(windowsSchedulerCsvIncludesTask(csv, "opencodex")).toBe(false);
+  });
+
+  test("a same-named task inside a folder is not the root task", () => {
+    // Every schtasks /tn operation this caller performs resolves the name in the
+    // ROOT folder only — verified on a live host: `schtasks /query /tn
+    // opencodex-proxy` fails while `\DevinProbe\opencodex-proxy` exists. Reading
+    // a foldered task as "present" leaves every bound operation failing on a
+    // task the CLI can neither read nor stop.
+    const csv = [
+      `"TaskName","Next Run Time","Status"`,
+      `"\\DevinProbe\\opencodex-proxy","N/A","Ready"`,
+    ].join("\n");
+    expect(windowsSchedulerCsvIncludesTask(csv, "opencodex-proxy")).toBe(false);
+    const unquoted = `HostName,\\DevinProbe\\opencodex-proxy,"Ready"`;
+    expect(windowsSchedulerCsvIncludesTask(unquoted, "opencodex-proxy")).toBe(false);
+  });
+
+  test("unquoted root task entries still match", () => {
+    expect(windowsSchedulerCsvIncludesTask(
+      `HostName,\\opencodex-proxy,"Ready"`, "opencodex-proxy",
+    )).toBe(true);
+    expect(windowsSchedulerCsvIncludesTask(
+      `HostName,opencodex-proxy,"Ready"`, "opencodex-proxy",
+    )).toBe(true);
   });
 });
 
@@ -404,5 +430,19 @@ describe("evaluateWindowsSchedulerInstallVerification", () => {
     expect(result.ok).toBe(false);
     expect(result.taskInstalled).toBe(false);
     expect(result.detail).toContain("not installed");
+  });
+
+  test("every schtasks execFileSync runs under a bounded timeout", () => {
+    // A wedged Task Scheduler service used to hang the CLI forever inside a
+    // guarded stop. runFile is the single execFileSync site for schtasks; a
+    // killed command throws into the same fail-closed classification a nonzero
+    // exit would, so the bound never weakens a verdict.
+    const source = readFileSync(repoPath("src/service/windows-scheduler.ts"), "utf8");
+    const runFile = source.slice(
+      source.indexOf("function runFile"),
+      source.indexOf("return decodeSchtasksOutput(buffer);"),
+    );
+    expect(runFile).toContain("execFileSync(file, args, {");
+    expect(runFile).toContain("timeout: SCHTASKS_TIMEOUT_MS");
   });
 });

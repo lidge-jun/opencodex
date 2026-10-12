@@ -6,13 +6,18 @@ import ProviderSettings from "../src/components/provider-workspace/ProviderSetti
 import type { ProviderUpdatePatch } from "../src/components/provider-workspace/types";
 import { LanguageProvider } from "../src/i18n/provider";
 import type { WorkspaceItem } from "../src/provider-workspace/catalog";
+import { acceptActionDialog, actionDialogOpen, dismissActionDialog } from "./helpers/action-dialog";
 
-const globals = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
+const globals = ["document", "window", "navigator", "localStorage", "HTMLElement", "IS_REACT_ACT_ENVIRONMENT",
+  "confirm", "alert", "prompt"] as const;
 let previousGlobals: Record<(typeof globals)[number], unknown>;
 let testWindow: Window;
+/** Platform dialogs reached, which must stay empty: the app's webview draws none of them. */
+let touched: string[];
 
 beforeEach(() => {
   previousGlobals = Object.fromEntries(globals.map(key => [key, Reflect.get(globalThis, key)])) as typeof previousGlobals;
+  touched = [];
   testWindow = new Window({ url: "http://localhost/#providers/workspace" });
   Object.defineProperty(testWindow.navigator, "language", { configurable: true, value: "en-US" });
   Object.defineProperties(globalThis, {
@@ -20,8 +25,13 @@ beforeEach(() => {
     window: { configurable: true, value: testWindow },
     navigator: { configurable: true, value: testWindow.navigator },
     localStorage: { configurable: true, value: testWindow.localStorage },
+    HTMLElement: { configurable: true, value: testWindow.HTMLElement },
   });
-  setConfirm(true);
+  for (const name of ["confirm", "alert", "prompt"] as const) {
+    const trap = () => { touched.push(name); throw new Error(`${name}() must not be reached`); };
+    Object.defineProperty(globalThis, name, { configurable: true, value: trap });
+    Object.defineProperty(testWindow, name, { configurable: true, value: trap });
+  }
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 });
 
@@ -30,11 +40,10 @@ afterEach(() => {
   for (const key of globals) {
     Object.defineProperty(globalThis, key, { configurable: true, value: previousGlobals[key] });
   }
+  expect(touched).toEqual([]);
 });
 
-function setConfirm(result: boolean): void {
-  Object.defineProperty(testWindow, "confirm", { configurable: true, value: () => result });
-}
+const dialogDocument = () => testWindow.document as unknown as Document;
 
 function openAiItem(mode: "pool" | "direct" = "pool"): WorkspaceItem {
   return {
@@ -90,11 +99,22 @@ function modeSelect(container: HTMLElement): HTMLSelectElement {
   return select!;
 }
 
-async function chooseMode(select: HTMLSelectElement, value: string): Promise<void> {
+/**
+ * Picks a mode and answers the in-page consent dialog. The gate used to be `confirm()`,
+ * which this file stubbed — and which the desktop webview answers false without drawing,
+ * so the control could not be used there at all.
+ */
+async function chooseMode(select: HTMLSelectElement, value: string, answer: "accept" | "dismiss" = "accept"): Promise<void> {
   await act(async () => {
     Object.getOwnPropertyDescriptor(testWindow.HTMLSelectElement.prototype, "value")!
       .set!.call(select, value);
     select.dispatchEvent(new testWindow.Event("change", { bubbles: true }));
+  });
+  expect(actionDialogOpen(dialogDocument())).toBe(true);
+  await act(async () => {
+    if (answer === "accept") acceptActionDialog(dialogDocument());
+    else dismissActionDialog(dialogDocument());
+    await Promise.resolve();
   });
 }
 
@@ -110,12 +130,11 @@ test("a confirmed mode change sends the exact standalone codexAccountMode patch"
   await act(async () => { root.unmount(); });
 });
 
-test("a cancelled confirmation sends no patch and snaps the select back", async () => {
+test("a dismissed consent dialog sends no patch and snaps the select back", async () => {
   const { root, container, patches } = await mountSettings(openAiItem("pool"));
   const select = modeSelect(container);
-  setConfirm(false);
 
-  await chooseMode(select, "direct");
+  await chooseMode(select, "direct", "dismiss");
 
   expect(patches).toHaveLength(0);
   expect(select.value).toBe("pool");

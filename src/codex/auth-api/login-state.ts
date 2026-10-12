@@ -36,21 +36,11 @@ export function pruneCodexLoginState(now = Date.now()): void {
   }
 }
 
-export function expireCodexAuthFlow(flowId: string | null, error = "Login cancelled"): void {
-  const ids = flowId
-    ? [flowId]
-    : [...codexAuthLoginState].filter(([, state]) => state.status === "pending").map(([id]) => id);
-  for (const id of ids) {
-    let owner = codexAuthLoginState.get(id);
-    if (!owner) {
-      pruneCodexLoginState();
-      if (codexAuthLoginState.size >= MAX_CODEX_LOGIN_STATE_ROWS) continue;
-      owner = { status: "error", startedAt: Date.now() };
-      codexAuthLoginState.set(id, owner);
-    }
-    Object.assign(owner, { status: "error", error, doneAt: Date.now() });
-    setTimeout(() => { if (codexAuthLoginState.get(id) === owner) codexAuthLoginState.delete(id); }, 30_000);
-  }
+export function expireCodexAuthFlow(flowId: string, error = "Login cancelled"): void {
+  const owner = codexAuthLoginState.get(flowId);
+  if (!owner || owner.status !== "pending") return;
+  Object.assign(owner, { status: "error", error, doneAt: Date.now() });
+  setTimeout(() => { if (codexAuthLoginState.get(flowId) === owner) codexAuthLoginState.delete(flowId); }, 30_000);
 }
 /** Package-internal admission-test seam: seed synthetic login-flow rows and return a prefix-scoped cleanup. */
 export function seedLoginRowsForTests(prefix: string, count: number): () => void {
@@ -61,4 +51,3 @@ export function seedLoginRowsForTests(prefix: string, count: number): () => void
     for (const key of [...codexAuthLoginState.keys()]) if (key.startsWith(prefix)) codexAuthLoginState.delete(key);
   };
 }
-

@@ -46,6 +46,9 @@ let testDir = "";
 let previousHome: string | undefined;
 
 beforeEach(() => {
+  // The request log is process-wide: start empty so the first case does not read a row an
+  // earlier file left behind (a one-process tests/server run handed it a Kiro entry).
+  clearRequestLogsForTests();
   // addRequestLog persists to usage.jsonl; without a scratch OPENCODEX_HOME a bare
   // `bun test <file>` run from outside the repo (no bunfig preload) writes these
   // fixture rows into the real ~/.opencodex log and poisons the GUI Usage page.
@@ -493,7 +496,7 @@ describe("estimated decode rate (#4038)", () => {
     }));
     const [dto] = await readLogs();
     // 240 tokens over the 8s AFTER the first token.
-    expect(dto!.displayMetrics.decodeTokPerSecond).toEqual({ kind: "value", value: 30, estimated: true });
+    expect(dto!.displayMetrics.decodeTokPerSecond).toEqual({ kind: "value", value: 30, estimated: true, timingBasis: "legacy-post-visible-output" });
     // The e2e rate still divides by the whole 10s: 24. This metric is additive, not a correction.
     expect(dto!.displayMetrics.tokPerSecond).toEqual({ kind: "value", value: 24, estimated: false });
     // Derived at response time only, exactly like the metrics beside it.
@@ -595,7 +598,7 @@ describe("estimated decode rate (#4038)", () => {
     // The parent has no TTFT of its own, so it reports none rather than the attempt's.
     expect(dto!.displayMetrics.decodeTokPerSecond).toEqual({ kind: "unavailable", reason: "ttft_missing" });
     expect(dto!.attempts[0].displayMetrics.decodeTokPerSecond)
-      .toEqual({ kind: "value", value: 30, estimated: true });
+      .toEqual({ kind: "value", value: 30, estimated: true, timingBasis: "legacy-post-visible-output" });
   });
 
   test("request history opts out of the decode rate, parent and attempts alike", async () => {
@@ -627,7 +630,7 @@ describe("estimated decode rate (#4038)", () => {
 
     // The default is still to include it, so /api/logs is unaffected by the opt-out existing.
     const logs = requestLogDto(entry) as Record<string, any>;
-    expect(logs.displayMetrics.decodeTokPerSecond).toEqual({ kind: "value", value: 30, estimated: true });
+    expect(logs.displayMetrics.decodeTokPerSecond).toEqual({ kind: "value", value: 30, estimated: true, timingBasis: "legacy-post-visible-output" });
   });
 
   test("the request-history route actually passes the opt-out", async () => {

@@ -26,10 +26,11 @@ import { selectEagerPath } from "../../lib/bun-stream-caps";
 import { reportedBunRuntimeSource } from "../../lib/bun-runtime";
 import { getActiveTurnCount, isDraining } from "../lifecycle";
 import { getActiveMemoryWatchdog, observedMemoryCounter } from "../memory-watchdog";
-import { responseStateMetrics } from "../../responses/state";
+import { inspectResponseSpillStorage, responseStateMetrics, type ResponseSpillDirInspection } from "../../responses/state";
 import { appOwnedBytesSnapshot } from "../../lib/app-owned-memory";
 import { readWindowsReplaceRetryCounters } from "../../lib/windows-atomic-replace";
 import {
+  MEMORY_DRAIN_RESTART_MS,
   SYSTEM_RESTART_EXPECTED_PID_HEADER,
   parseExpectedSystemRestartPid,
 } from "../../lib/system-restart-contract";
@@ -39,14 +40,28 @@ import {
 } from "../../lib/codex-restart-contract";
 import { jsonResponse } from "../auth-cors";
 import { getInspectionCounters } from "../relay";
+import { spendLedgerDiagnosticsSnapshot } from "../../lib/spend-reservation-ledger";
 import type {
   performCodexRestart,
   readCodexAppServerState,
 } from "../../codex/app-server-restart-service";
 import type { ManagementContext } from "./context";
 import { acceptSystemRestart } from "./system-restart";
+import { readOptionalManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 
 const ENDPOINT_SAMPLE_LIMIT = 60;
+// The spill report reads the snapshot and walks the spill directory synchronously,
+// so a polled memory endpoint reuses one result per window instead of rescanning.
+const RESPONSE_SPILL_REPORT_TTL_MS = 30_000;
+let responseSpillReport: { at: number; value: ResponseSpillDirInspection } | null = null;
+
+function cachedResponseSpillReport(): ResponseSpillDirInspection {
+  const now = Date.now();
+  if (!responseSpillReport || now - responseSpillReport.at >= RESPONSE_SPILL_REPORT_TTL_MS) {
+    responseSpillReport = { at: now, value: inspectResponseSpillStorage() };
+  }
+  return responseSpillReport.value;
+}
 
 export async function handleSystemRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, version } = ctx;
@@ -60,6 +75,7 @@ export async function handleSystemRoutes(ctx: ManagementContext): Promise<Respon
       version,
       uptime: process.uptime(),
       pid: process.pid,
+      spendLedger: spendLedgerDiagnosticsSnapshot(),
     });
   }
   if (url.pathname === "/api/system/memory" && req.method === "GET") {
@@ -119,6 +135,11 @@ export async function handleSystemRoutes(ctx: ManagementContext): Promise<Respon
 	      observedMetric: observed.observedMetric,
 	      jscHeap,
       responseState: responseStateMetrics(),
+      // Dry-run spill-directory counters: owned vs orphan-candidate bytes, same
+      // predicate the startup reclaim uses. Sibling of responseState, not a field
+      // in it — that block's key count is pinned. Still scalar-only. Cached for
+      // RESPONSE_SPILL_REPORT_TTL_MS.
+      responseSpill: cachedResponseSpillReport(),
       appOwnedBytes: appOwnedBytesSnapshot(),
       inspectionCounters: getInspectionCounters(),
       streamMode,
@@ -160,8 +181,28 @@ export async function handleSystemRoutes(ctx: ManagementContext): Promise<Respon
       }, 409, req, config);
     }
 
-    // Longer informed drain than /api/stop; does not tear down Codex/Grok injection.
-    const result = acceptSystemRestart();
+    let body: unknown;
+    try { body = await readOptionalManagementJsonBody(req); }
+    catch (error) {
+      rethrowManagementBodyTooLarge(error);
+      return jsonResponse({ success: false, error: "Invalid restart JSON body." }, 400, req, config);
+    }
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return jsonResponse({ success: false, error: "Invalid restart JSON body." }, 400, req, config);
+    }
+    const drainGraceMs = (body as Record<string, unknown>).drainGraceMs;
+    if (drainGraceMs !== undefined && (
+      typeof drainGraceMs !== "number" || !Number.isSafeInteger(drainGraceMs)
+      || drainGraceMs < 1 || drainGraceMs > MEMORY_DRAIN_RESTART_MS
+    )) {
+      return jsonResponse({ success: false, error: "drainGraceMs must be an integer from 1 to 60000." }, 400, req, config);
+    }
+    // The process capability signs the restart target, not this new body option.
+    if (drainGraceMs !== undefined && ctx.principal === "system-restart-capability") {
+      return jsonResponse({ success: false, error: "Short grace requires management authentication." }, 403, req, config);
+    }
+    // Omission retains the informed 60s drain; only an explicit API request shortens it.
+    const result = acceptSystemRestart(undefined, {}, { drainGraceMs });
     return jsonResponse({
       success: true,
       message: result.alreadyDraining
@@ -198,7 +239,7 @@ export async function handleSystemRoutes(ctx: ManagementContext): Promise<Respon
       };
     }
     if (req.method === "GET") {
-      return jsonResponse(service.readState(), 200, req, config);
+      return jsonResponse(await service.readState(), 200, req, config);
     }
     return jsonResponse(await service.performRestart(), 200, req, config);
   }

@@ -18,6 +18,7 @@ import {
 } from "../routing-profile-editor-data";
 import { readJsonIfOk } from "../fetch-json";
 import { Notice } from "../ui";
+import { confirmAction } from "../action-dialogs";
 import { useI18n, useT } from "../i18n/shared";
 import { ROUTING_COMPATIBILITY_FIELD_LABELS } from "../i18n/routing-compatibility-labels";
 
@@ -486,7 +487,7 @@ export default function RoutingProfiles({
 
   const removeProfile = async () => {
     if (!selected || saving) return;
-    if (!window.confirm(t("routing.removeConfirm", { id: selected.id }))) return;
+    if (!(await confirmAction({ message: t("routing.removeConfirm", { id: selected.id }), confirmLabel: t("common.remove"), tone: "danger" }))) return;
     setSaving(true);
     setStatus(null);
     try {

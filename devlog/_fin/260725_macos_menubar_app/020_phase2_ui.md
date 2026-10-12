@@ -184,7 +184,7 @@ shown as selectable text — displayed, never executed (`002` §3).
 
 Three columns from `/api/usage?range=7d`: REQUESTS, TOKENS, COST. Labels in
 `Theme.micro` uppercase with 0.5pt tracking; values in `Theme.numeric`. All values
-through `Format` (`010`), so `36536664705` becomes `36.5B` and `nil` becomes `—`.
+through `Format` (`010`), so `36536664705` becomes `37B` and `nil` becomes `—`.
 
 **The range label is rendered from the response, not the request.** `002` §3 records that
 `parseRange` silently falls back to `30d` for any unrecognized value, so a UI that

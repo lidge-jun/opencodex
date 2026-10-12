@@ -61,8 +61,11 @@ const INITIAL_OWNED_PATHS = [
   "opencodex-service-task.xml",
   "opencodex-service.cmd",
   "opencodex-tray-offline.ico",
+  "opencodex-tray-offline-update.ico",
   "opencodex-tray-online.ico",
+  "opencodex-tray-online-update.ico",
   "opencodex-tray-warning.ico",
+  "opencodex-tray-warning-update.ico",
   "opencodex-tray.ps1",
   "responses-state.json",
   "runtime-port.json",
@@ -264,9 +267,8 @@ function removeOwnedEntry(root: string, path: string): void {
   rmdirSync(path);
 }
 
-export function recordOwnedConfigPath(configDir: string, candidatePath: string): boolean {
-  const rel = manifestRelativePath(configDir, candidatePath);
-  if (!rel) return false;
+/** Initialize only an empty or already-owned root; do not claim a candidate path. */
+export function initializeConfigOwnership(configDir: string): boolean {
   const cacheKey = ownershipCacheKey(configDir);
   if (!existsSync(configDir)) {
     ownershipCache.delete(cacheKey);
@@ -277,6 +279,15 @@ export function recordOwnedConfigPath(configDir: string, candidatePath: string):
     ownership = loadOwnership(configDir) ?? createOwnership(configDir);
     ownershipCache.set(cacheKey, ownership);
   }
+  return ownership !== null;
+}
+
+export function recordOwnedConfigPath(configDir: string, candidatePath: string): boolean {
+  const rel = manifestRelativePath(configDir, candidatePath);
+  if (!rel) return false;
+  if (!initializeConfigOwnership(configDir)) return false;
+  const cacheKey = ownershipCacheKey(configDir);
+  const ownership = ownershipCache.get(cacheKey);
   if (!ownership) return false;
   if (ownership.manifest.paths.includes(rel)) return true;
   const manifest = {
@@ -329,25 +340,6 @@ export function removeOwnedConfigState(configDir: string): ConfigRemovalResult {
       return {
         status: "partial",
         reason: `could not remove owned path ${rel}: ${error instanceof Error ? error.message : String(error)}`,
-        residualPaths: [path],
-      };
-    }
-  }
-
-  // Per-catalog backups are named `catalog-backup-<16 hex>.json` (catalogBackupPathFor), one per
-  // CODEX_HOME, so they cannot be enumerated as literal manifest entries the way every other
-  // owned file can. Without this, `ocx uninstall` always reported "unowned files remain" and
-  // refused to remove a home OpenCodex created itself — the file is unambiguously ours, produced
-  // by our own writer, and the strict hex shape keeps the match from widening.
-  for (const name of readdirSync(configDir)) {
-    if (!/^catalog-backup-[0-9a-f]{16}\.json$/.test(name)) continue;
-    const path = join(configDir, name);
-    try {
-      removeOwnedEntry(rootPath, path);
-    } catch (error) {
-      return {
-        status: "partial",
-        reason: `could not remove owned path ${name}: ${error instanceof Error ? error.message : String(error)}`,
         residualPaths: [path],
       };
     }

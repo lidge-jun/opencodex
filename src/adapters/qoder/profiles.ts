@@ -3,6 +3,8 @@ import { clearCodingAgentBinaryCache, resolveProfileByBaseUrl, type CodingAgentP
 /** Official Qoder CLI profile. Region variants are separate profiles and credentials. */
 export interface QoderProfile extends CodingAgentProviderProfile {
   family: "qoder";
+  /** Required for this family: the CLI is driven with a personal access token. */
+  tokenEnv: string;
 }
 
 export const QODER_GLOBAL_PROFILE: QoderProfile = {

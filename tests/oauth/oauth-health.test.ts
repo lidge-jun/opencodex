@@ -7,11 +7,21 @@ import {
   CODEX_REAUTH_ACTION,
   collectOAuthHealthEntries,
   collectOAuthHealthEntriesForCli,
+  oauthHealthLabel,
+  oauthHealthSummary,
   projectOAuthAccountHealth,
   projectCodexAccountHealth,
+  projectMainAccountPolicyHealth,
 } from "../../src/oauth/health";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
-import { getAccountSet, markAccountNeedsReauth, saveCredential } from "../../src/oauth/store";
+import {
+  credentialGeneration,
+  getAccountSet,
+  markAccountNeedsReauth,
+  markAccountNeedsReauthIfGeneration,
+  mergeAccountCredential,
+  saveCredential,
+} from "../../src/oauth/store";
 import {
   clearAccountNeedsReauth,
   markAccountNeedsReauth as markCodexAccountNeedsReauth,
@@ -78,6 +88,14 @@ describe("projectOAuthAccountHealth", () => {
       reauthReason: "refresh_failed",
       cooldownUntilMs: Date.now() + 60_000,
     })).toEqual({ status: "reauth_required", reason: "refresh_failed" });
+  });
+
+  test("a verify_account cause projects distinctly from a dead credential", () => {
+    const health = projectOAuthAccountHealth({ needsReauth: true, reauthReason: "verify_account" });
+    expect(health).toEqual({ status: "reauth_required", reason: "verify_account" });
+    expect(oauthHealthLabel(health)).toBe("Verification required");
+    expect(oauthHealthSummary("google-antigravity", "abc", health))
+      .toContain("reauthentication required (verify account)");
   });
 
   test("active cooldown projects until ISO timestamp", () => {
@@ -166,6 +184,25 @@ describe("projectCodexAccountHealth", () => {
       .toEqual({ status: "healthy" });
   });
 
+  test.each([
+    ["http_status:401", "unauthorized"],
+    ["http_status:403", "forbidden"],
+  ] as const)("a stored verification failure surfaces %s as %s", async (validationError, reason) => {
+    withPoolStoreDir();
+    const { markCodexAccountValidationFailed, readCodexAccountRecord, saveCodexAccountCredential } =
+      await import("../../src/codex/account-store");
+    const accountId = "pool-stored-" + reason;
+    saveCodexAccountCredential(accountId, {
+      accessToken: "a", refreshToken: "r", expiresAt: Date.now() + 3_600_000, chatgptAccountId: "cg",
+    }, { validationPending: true });
+    markCodexAccountValidationFailed(accountId, validationError, {
+      expectedGeneration: readCodexAccountRecord(accountId)!.generation,
+    });
+
+    expect(projectCodexAccountHealth({ accountId, needsReauth: false }))
+      .toEqual({ status: "reauth_required", reason });
+  });
+
   test("the CLI collector reports the terminal verdict too", async () => {
     withPoolStoreDir();
     const { markCodexAccountValidationFailed, readCodexAccountRecord, saveCodexAccountCredential } =
@@ -217,6 +254,74 @@ describe("collectOAuthHealthEntries", () => {
       health: { status: "reauth_required", reason: "refresh_failed" },
       action: "run `ocx login kimi`",
     });
+  });
+
+  test("a verify_account mark survives the store round-trip with its own action", async () => {
+    await saveCredential("kimi", {
+      access: "kimi-access",
+      refresh: "kimi-refresh",
+      expires: Date.now() + 3_600_000,
+      accountId: "kimi-acct-verify",
+    });
+    const accountId = getAccountSet("kimi")!.activeAccountId;
+    await markAccountNeedsReauth("kimi", accountId, true, "verify_account");
+    expect(getAccountSet("kimi")!.accounts.find(a => a.id === accountId))
+      .toMatchObject({ needsReauth: true, needsReauthReason: "verify_account" });
+
+    const entry = collectOAuthHealthEntries()
+      .find(e => e.provider === "kimi" && e.accountId === accountId);
+    expect(entry).toEqual({
+      provider: "kimi",
+      accountId,
+      health: { status: "reauth_required", reason: "verify_account" },
+      action: "verify the account with the provider in a browser, then run `ocx login kimi`",
+    });
+  });
+
+  test("a stale generation never marks: late 403 cannot quarantine a fresh login", async () => {
+    await saveCredential("kimi", {
+      access: "kimi-access",
+      refresh: "kimi-refresh",
+      expires: Date.now() + 3_600_000,
+      accountId: "kimi-acct-stale",
+    });
+    const accountId = getAccountSet("kimi")!.activeAccountId;
+    const staleGeneration = credentialGeneration(getAccountSet("kimi")!.accounts
+      .find(a => a.id === accountId)!.credential);
+    // The credential rotates (refresh or re-login) before the late 403 arrives.
+    await mergeAccountCredential("kimi", accountId, {
+      access: "kimi-access-2",
+      refresh: "kimi-refresh",
+      expires: Date.now() + 3_600_000,
+      accountId: "kimi-acct-stale",
+    });
+    expect(await markAccountNeedsReauthIfGeneration("kimi", accountId, staleGeneration, undefined, "verify_account"))
+      .toBe(false);
+    const row = getAccountSet("kimi")!.accounts.find(a => a.id === accountId)!;
+    expect(row.needsReauth).toBeUndefined();
+    expect(row.needsReauthReason).toBeUndefined();
+  });
+
+  test("a silent refresh preserves a verify_account quarantine", async () => {
+    await saveCredential("kimi", {
+      access: "kimi-access",
+      refresh: "kimi-refresh",
+      expires: Date.now() + 3_600_000,
+      accountId: "kimi-acct-keep",
+    });
+    const accountId = getAccountSet("kimi")!.activeAccountId;
+    const generation = credentialGeneration(getAccountSet("kimi")!.accounts
+      .find(a => a.id === accountId)!.credential);
+    expect(await markAccountNeedsReauthIfGeneration("kimi", accountId, generation, undefined, "verify_account"))
+      .toBe(true);
+    await mergeAccountCredential("kimi", accountId, {
+      access: "kimi-access-2",
+      refresh: "kimi-refresh",
+      expires: Date.now() + 3_600_000,
+      accountId: "kimi-acct-keep",
+    });
+    expect(getAccountSet("kimi")!.accounts.find(a => a.id === accountId))
+      .toMatchObject({ needsReauth: true, needsReauthReason: "verify_account" });
   });
 
   test("Codex reauth action points at the dashboard pool, not ocx login codex", () => {
@@ -427,5 +532,52 @@ describe("getCodexAccountHealthSnapshot", () => {
       cooldownSource: "retry-after",
     });
     expect(getCodexAccountHealthSnapshot("missing", now)).toBeNull();
+  });
+});
+
+describe("projectMainAccountPolicyHealth", () => {
+  const valid = { enabled: true, state: "ready", thresholds: { short: 90, long: 98 } };
+
+  test("projects a valid policy and copies only whitelisted fields", () => {
+    expect(projectMainAccountPolicyHealth({ ...valid, window: "short", resetAt: 1_000, accountId: "leak" }))
+      .toEqual({ enabled: true, state: "ready", thresholds: { short: 90, long: 98 }, window: "short", resetAt: 1_000 });
+  });
+
+  test("rejects a state that does not match enabled", () => {
+    expect(projectMainAccountPolicyHealth({ ...valid, enabled: false })).toBeUndefined();
+    expect(projectMainAccountPolicyHealth({ ...valid, state: "off" })).toBeUndefined();
+    expect(projectMainAccountPolicyHealth({ enabled: false, state: "off", thresholds: valid.thresholds }))
+      .toEqual({ enabled: false, state: "off", thresholds: { short: 90, long: 98 } });
+  });
+
+  test("rejects thresholds that are out of range, unordered, fractional or missing", () => {
+    for (const thresholds of [
+      { short: 79, long: 98 },
+      { short: 99, long: 98 },
+      { short: 90.5, long: 98 },
+      { short: 90, long: 101 },
+      { short: "90", long: 98 },
+      undefined,
+    ]) {
+      expect(projectMainAccountPolicyHealth({ ...valid, thresholds })).toBeUndefined();
+    }
+    expect(projectMainAccountPolicyHealth(null)).toBeUndefined();
+    expect(projectMainAccountPolicyHealth([valid])).toBeUndefined();
+  });
+
+  test("drops a malformed external-usage warning but keeps the policy", () => {
+    for (const externalUsage of [
+      { window: "monthly", fromPercent: 10, toPercent: 20, observedAt: 1 },
+      { window: "short", fromPercent: -1, toPercent: 20, observedAt: 1 },
+      { window: "short", fromPercent: 10, toPercent: 120, observedAt: 1 },
+      { window: "short", fromPercent: 10, toPercent: 20, observedAt: Number.NaN },
+    ]) {
+      const projected = projectMainAccountPolicyHealth({ ...valid, externalUsage });
+      expect(projected).toEqual({ enabled: true, state: "ready", thresholds: { short: 90, long: 98 } });
+    }
+    expect(projectMainAccountPolicyHealth({
+      ...valid,
+      externalUsage: { window: "long", fromPercent: 10, toPercent: 20, observedAt: 5, extra: "x" },
+    })?.externalUsage).toEqual({ window: "long", fromPercent: 10, toPercent: 20, observedAt: 5 });
   });
 });

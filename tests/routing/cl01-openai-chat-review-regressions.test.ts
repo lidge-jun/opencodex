@@ -7,6 +7,10 @@ const baseProvider: OcxProviderConfig = {
   baseUrl: "https://api.openai.com/v1",
   apiKey: "sk-test",
   authMode: "key",
+  // The wire role folds to `system` unless a destination is recorded as accepting
+  // `developer`; this case is about placement after a tool result, so it declares the
+  // destination rather than asserting the default.
+  foldDeveloperRoleToSystem: false,
 };
 
 function bodyFor(provider: OcxProviderConfig, parsed: OcxParsedRequest): Record<string, unknown> {

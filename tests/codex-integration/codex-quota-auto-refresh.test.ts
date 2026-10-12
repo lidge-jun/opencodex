@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -22,6 +22,7 @@ import type { OcxConfig } from "../../src/types";
 import { startupHealthFixture } from "../helpers/startup-health";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { clearAccountNeedsReauth, isAccountNeedsReauth } from "../../src/codex/account-runtime-state";
+import { drainAndRemoveFixtureRoots } from "../helpers/fixture-teardown";
 
 const NOW = 1_800_000_000_000;
 const RESET_SECONDS = NOW / 1000;
@@ -114,14 +115,20 @@ beforeEach(() => {
   resetCodexQuotaAutoRefreshForTests();
 });
 
-afterEach(() => {
+afterEach(async () => {
   globalThis.fetch = previousFetch;
   clearAccountNeedsReauth("pool-a");
   clearAccountQuota();
   resetCodexQuotaAutoRefreshForTests();
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
-  if (testHome && existsSync(testHome)) rmSync(testHome, { recursive: true, force: true });
+  // Windows may still hold credential-hardening handles after a quota assertion. Drain their
+  // owners before removal; synchronous EBUSY retries alone cannot deliver an async child reap.
+  await drainAndRemoveFixtureRoots({
+    roots: testHome ? [{ path: testHome }] : [],
+    restoreEnvironment: () => {
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+    },
+  });
 });
 
 describe("Codex quota window auto refresh", () => {
@@ -224,6 +231,110 @@ describe("Codex quota window auto refresh", () => {
     await runCodexQuotaAutoRefresh(cfg, NOW + 600_000, deps);
     expect(probes).toBe(2);
     expect(warmups).toBe(0);
+  });
+
+  test.each(["pool-a", "__main__"])("known deadlines need no metadata polling for %s, including after restart", async accountId => {
+    let cfg = config();
+    cfg.codexQuotaAutoRefresh = { [accountId]: { fiveHour: true, weekly: true } };
+    writeFileSync(join(testHome, "config.json"), JSON.stringify(cfg));
+    let observed: StoredAccountQuota | null = quota({
+      shortResetAt: RESET_SECONDS + 18_000, weeklyResetAt: RESET_SECONDS + 18_000,
+      updatedAt: NOW - 600_000,
+    });
+    let probes = 0;
+    let warmups = 0;
+    const deps = {
+      getQuota: () => observed,
+      refreshQuota: async () => { probes++; },
+      warmAccount: async () => {
+        warmups++;
+        observed = quota({ shortResetAt: RESET_SECONDS + 36_000, weeklyResetAt: RESET_SECONDS + 604_800 });
+      },
+    };
+    await runCodexQuotaAutoRefresh(cfg, NOW, deps);
+    resetCodexQuotaAutoRefreshForTests();
+    cfg = loadConfig();
+    observed = null; // Durable deadlines must work without an in-memory quota snapshot.
+    for (let elapsed = 60_000; elapsed < 18_000_000; elapsed += 60_000) {
+      await runCodexQuotaAutoRefresh(cfg, NOW + elapsed, deps);
+    }
+    expect(probes).toBe(0);
+    expect(warmups).toBe(0);
+    await runCodexQuotaAutoRefresh(cfg, NOW + 18_000_000, deps);
+    expect(warmups).toBe(1);
+    expect(probes).toBe(0);
+    expect(loadConfig().codexQuotaAutoRefresh?.[accountId]).toMatchObject({
+      lastFiveHourResetAt: NOW + 18_000_000, lastWeeklyResetAt: NOW + 18_000_000,
+      nextFiveHourResetAt: NOW + 36_000_000, nextWeeklyResetAt: NOW + 604_800_000,
+    });
+    await runCodexQuotaAutoRefresh(cfg, NOW + 18_060_000, deps);
+    expect(probes).toBe(0);
+    expect(warmups).toBe(1);
+  });
+
+  test("missing-window discovery backs off to an hour and stops when passive headers supply it", async () => {
+    const cfg = config();
+    let observed = quota({ shortResetAt: RESET_SECONDS + 86_400, weeklyResetAt: undefined, updatedAt: NOW - 600_000 });
+    let probes = 0;
+    const deps = {
+      getQuota: () => observed,
+      refreshQuota: async () => { probes++; }, // A successful read without the missing field also backs off.
+      warmAccount: async () => { throw new Error("not due"); },
+    };
+    let elapsed = 0;
+    await runCodexQuotaAutoRefresh(cfg, NOW, deps);
+    for (const delay of [5, 10, 20, 40, 60, 60]) {
+      await runCodexQuotaAutoRefresh(cfg, NOW + elapsed + delay * 60_000 - 1, deps);
+      const before = probes;
+      elapsed += delay * 60_000;
+      await runCodexQuotaAutoRefresh(cfg, NOW + elapsed, deps);
+      expect(probes).toBe(before + 1);
+    }
+    expect(probes).toBe(7);
+    observed = { ...observed, weeklyResetAt: RESET_SECONDS + 604_800 };
+    await runCodexQuotaAutoRefresh(cfg, NOW + elapsed + 60_000, deps);
+    await runCodexQuotaAutoRefresh(cfg, NOW + elapsed + 3_600_000, deps);
+    expect(probes).toBe(7);
+  });
+
+  test("activation without next-window headers discovers the next deadline once", async () => {
+    const cfg = config();
+    cfg.codexQuotaAutoRefresh = { "pool-a": { fiveHour: true } };
+    let observed = quota();
+    let probes = 0;
+    let warmups = 0;
+    const deps = {
+      getQuota: () => observed,
+      refreshQuota: async () => {
+        probes++;
+        observed = quota({ shortResetAt: RESET_SECONDS + 18_000 });
+      },
+      warmAccount: async () => { warmups++; },
+      persistCompleted: recordMarkers,
+    };
+    await runCodexQuotaAutoRefresh(cfg, NOW, deps);
+    await runCodexQuotaAutoRefresh(cfg, NOW + 300_000, deps);
+    await runCodexQuotaAutoRefresh(cfg, NOW + 600_000, deps);
+    expect(warmups).toBe(1);
+    expect(probes).toBe(1);
+  });
+
+  test("failed activations back off without probing known deadlines", async () => {
+    const cfg = config();
+    let probes = 0;
+    let warmups = 0;
+    const deps = {
+      getQuota: () => quota({ updatedAt: NOW - 600_000 }),
+      refreshQuota: async () => { probes++; },
+      warmAccount: async () => { warmups++; throw new Error("fixture failure"); },
+    };
+    await runCodexQuotaAutoRefresh(cfg, NOW, deps);
+    await runCodexQuotaAutoRefresh(cfg, NOW + 300_000, deps);
+    await runCodexQuotaAutoRefresh(cfg, NOW + 600_000, deps);
+    expect(warmups).toBe(2);
+    await runCodexQuotaAutoRefresh(cfg, NOW + 900_000, deps);
+    expect(warmups).toBe(3);
+    expect(probes).toBe(0);
   });
 
   test("regression: inference 401 quarantines a time-valid bearer and stops retries", async () => {

@@ -140,7 +140,7 @@ afterEach(async () => {
 });
 
 describe("shellStreamExec completion acknowledgement", () => {
-  test("appends structured shellResult and streamClose after the exit event", async () => {
+  test("denied foreground execution still appends shellResult and streamClose after exit", async () => {
     const execMsg = create(ExecServerMessageSchema, {
       id: 42,
       execId: "7",
@@ -151,7 +151,7 @@ describe("shellStreamExec completion acknowledgement", () => {
     const execMessages = replies.filter(r => r.message.case === "execClientMessage");
     const cases = execMessages.map(r => (r.message.case === "execClientMessage" ? r.message.value.message.case : undefined));
 
-    // Stream events precede the structured result: start ... stdout ... exit, then shellResult.
+    // Rejection keeps the completion protocol but must not emit command output.
     expect(cases[0]).toBe("shellStream");
     expect(cases.at(-1)).toBe("shellResult");
 
@@ -161,10 +161,12 @@ describe("shellStreamExec completion acknowledgement", () => {
     expect(shellResult.message.value.execId).toBe("7");
     const resultMsg = shellResult.message.value.message;
     if (resultMsg.case !== "shellResult") throw new Error("missing shellResult");
-    expect(resultMsg.value.result.case).toBe("success");
-    if (resultMsg.value.result.case === "success") {
-      expect(resultMsg.value.result.value.stdout).toContain("OCX_STREAM_OK");
-      expect(resultMsg.value.result.value.exitCode).toBe(0);
+    expect(resultMsg.value.result.case).toBe("failure");
+    if (resultMsg.value.result.case === "failure") {
+      expect(resultMsg.value.result.value.stdout).toBe("");
+      expect(resultMsg.value.result.value.exitCode).toBe(1);
+      expect(resultMsg.value.result.value.aborted).toBe(true);
+      expect(resultMsg.value.result.value.stderr).toContain("kernel-backed descendant ownership");
     }
 
     // The very last frame closes the exec stream (Cursor treats deltas/exit alone as still-pending).
@@ -190,6 +192,12 @@ describe("shellStreamExec completion acknowledgement", () => {
       throw new Error("missing shellResult");
     }
     expect(shellResult.message.value.message.value.result.case).toBe("failure");
+    const result = shellResult.message.value.message.value.result;
+    if (result.case === "failure") {
+      expect(result.value.exitCode).toBe(1); // Rejected before `exit 3` executes, on every OS.
+      expect(result.value.aborted).toBe(true);
+      expect(result.value.stderr).toContain("kernel-backed descendant ownership");
+    }
     expect(replies.at(-1)?.message.case).toBe("execClientControlMessage");
   });
 });

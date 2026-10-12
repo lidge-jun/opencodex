@@ -20,6 +20,7 @@ const validStage: CodexWsStageRecord = {
   controlFrames: 1,
   relayedEvents: 1,
   firstFrameMs: 40,
+  firstResponseMs: 90,
   elapsedMs: 900,
   pings: 0,
   pongs: 0,
@@ -27,6 +28,8 @@ const validStage: CodexWsStageRecord = {
   reused: true,
   ocxVersion: "2.52.0",
   bunVersion: "1.4.0",
+  terminalEvent: "error",
+  terminalErrorStatus: 503,
 };
 
 function entryWithStage(stage: unknown): PersistedUsageEntry {
@@ -64,6 +67,29 @@ describe("usage log persists the codex ws stage record (#4191)", () => {
     const roundTripped = normalizeUsageEntryForTest(entryWithStage(stage));
     expect(roundTripped.attempts?.[0]?.codexWsStage?.requestBytes).toBeNull();
     expect(roundTripped.attempts?.[0]?.codexWsStage?.closeCode).toBeNull();
+  });
+
+  test("a stage persisted before firstResponseMs existed still hydrates", () => {
+    const { firstResponseMs: _omitted, ...legacy } = validStage;
+    const roundTripped = normalizeUsageEntryForTest(entryWithStage(legacy));
+    expect(roundTripped.attempts?.[0]?.codexWsStage).toEqual({ ...validStage, firstResponseMs: null });
+  });
+
+  test("a stage persisted before the terminal fields existed reads them as unobserved (#6740)", () => {
+    const { terminalEvent: _event, terminalErrorStatus: _status, ...legacy } = validStage;
+    const roundTripped = normalizeUsageEntryForTest(entryWithStage(legacy));
+    expect(roundTripped.attempts?.[0]?.codexWsStage).toEqual({ ...validStage, terminalEvent: null, terminalErrorStatus: null });
+  });
+
+  test("malformed terminal fields become null without dropping the stage (#6740)", () => {
+    const malformed = { ...validStage, terminalEvent: "upstream said things", terminalErrorStatus: "503" };
+    const roundTripped = normalizeUsageEntryForTest(entryWithStage(malformed));
+    expect(roundTripped.attempts?.[0]?.codexWsStage).toEqual({ ...validStage, terminalEvent: null, terminalErrorStatus: null });
+    expect(JSON.stringify(roundTripped)).not.toContain("upstream said things");
+    for (const status of [99, 600, 503.5]) {
+      const stage = normalizeUsageEntryForTest(entryWithStage({ ...validStage, terminalErrorStatus: status })).attempts?.[0]?.codexWsStage;
+      expect(stage?.terminalErrorStatus).toBeNull();
+    }
   });
 
   test("corrupt stage shapes are dropped, not passed through", () => {

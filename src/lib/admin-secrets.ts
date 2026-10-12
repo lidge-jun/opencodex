@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "node:crypto";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "../config";
@@ -26,6 +26,14 @@ export function configuredAdminToken(configDir = getConfigDir(), env: NodeJS.Pro
 }
 
 export const ADMIN_TOKEN_PREFIX = "ocx_admin_";
+
+/**
+ * Derive the bearer used by the OpenCode launcher for its one management read.
+ * A listener that captures this value cannot recover or replay the administrator token.
+ */
+export function opencodeCatalogToken(adminToken: string): string {
+  return `ocx_catalog_${createHmac("sha256", adminToken).update("opencode:/api/models:v1").digest("base64url")}`;
+}
 
 function secretTextEquals(left: string, right: string): boolean {
   const a = Buffer.from(left);

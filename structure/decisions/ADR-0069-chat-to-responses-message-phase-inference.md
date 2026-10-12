@@ -1,6 +1,6 @@
 # ADR-0069 — decision recorded under "Chat-to-Responses message phase inference"
 
-- Contract owner: [transports/responses.md](../transports/responses.md#chat-to-responses-message-phase-inference)
+- Contract owner: [transports/responses-failover.md](../transports/responses-failover.md#chat-to-responses-message-phase-inference)
 
 ## Decision record
 

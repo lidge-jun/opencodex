@@ -72,6 +72,26 @@ describe("systemd detection tolerates a no-DBUS SSH session (F9)", () => {
     // The version probe passing + a runtime dir existing is enough — not a hard fail on the --user probe.
     expect(src).toMatch(/catch \{ \/\* no user bus in this session \*\/ \}\s*\n\s*return userRuntimeDir\(\) !== null;/);
   });
+  test("isSystemd rejects an empty runtime dir when discovery and the user-bus probe fail", () => {
+    const detection = src.slice(src.indexOf("function userRuntimeDir()"), src.indexOf("export function installSystemd()"));
+    const code = new Bun.Transpiler({ loader: "ts" }).transformSync(detection.replace(/export /g, ""));
+    const commands: string[] = [];
+    const paths: string[] = [];
+    const env = { XDG_RUNTIME_DIR: "", DBUS_SESSION_BUS_ADDRESS: "" };
+    const isSystemd = new Function("process", "existsSync", "execSync", `${code}\nreturn isSystemd;`)(
+      { env, getuid: () => 12345 },
+      (path: string) => { paths.push(path); return false; },
+      (command: string) => {
+        commands.push(command);
+        if (command === "systemctl --version") return "systemd 255";
+        throw new Error("No user bus");
+      },
+    ) as () => boolean;
+    expect(isSystemd()).toBe(false);
+    expect(commands).toEqual(["systemctl --version", "systemctl --user show-environment"]);
+    expect(paths).toEqual(["/run/user/12345", "/run/user/12345"]);
+    expect(env).toEqual({ XDG_RUNTIME_DIR: "", DBUS_SESSION_BUS_ADDRESS: "" });
+  });
   test("install ensures the user-bus env before touching systemctl --user", () => {
     expect(src).toMatch(/function installSystemd\(\): void \{\s*\n\s*ensureUserBusEnv\(\);/);
   });
@@ -81,7 +101,7 @@ describe("server bind canonicalizes explicit localhost but preserves wildcards (
   const src = read("src/server/index.ts");
   test("literal localhost binds to 127.0.0.1; 0.0.0.0/:: exposure is untouched", () => {
     expect(src).toContain("const configuredHost = config.hostname?.trim();");
-    expect(src).toContain('!configuredHost || /^localhost$/i.test(configuredHost) ? "127.0.0.1"');
+    expect(src).toContain('!configuredHost || /^localhost\\.?$/i.test(configuredHost) ? "127.0.0.1"');
     // Must not blanket-rewrite the PUBLIC bind host — that would break intentional 0.0.0.0
     // exposure, which is the regression this guards.
     //
@@ -90,7 +110,14 @@ describe("server bind canonicalizes explicit localhost but preserves wildcards (
     // loopback-only, so a bare substring ban would forbid the fix rather than the defect.
     // Pin the assertion to the public serve call instead: it must take bindHost and nothing
     // else.
-    expect(src).toContain("server = Bun.serve<WsData>({ ...serveOptions, port: listenPort, hostname: bindHost });");
+    // Wrapper-aware, because the public listener is now handed to a lifecycle registrar as it is
+    // created. Both halves of the original claim are kept: the serve call's argument object is
+    // pinned exactly, so the public bind still takes bindHost and nothing else, and `server` is
+    // still what that call is assigned to, through at most one registrar call.
+    expect(src).toContain("Bun.serve<WsData>({ ...serveOptions, port: listenPort, hostname: bindHost })");
+    expect(src).toMatch(
+      /\bserver = (?:[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*\()?Bun\.serve<WsData>\(\{ \.\.\.serveOptions, port: listenPort, hostname: bindHost \}\)/,
+    );
     expect(src).not.toMatch(/port: listenPort,\s*\n\s*hostname: "127\.0\.0\.1"/);
     expect(src).not.toContain("port: listenPort, hostname: \"127.0.0.1\"");
   });

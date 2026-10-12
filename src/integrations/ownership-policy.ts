@@ -12,12 +12,109 @@ import {
   type ManagedContribution,
   type ManagedFragment,
 } from "../clients/config-export";
-import { canonicalContribution, fingerprint, semanticContribution } from "./ownership";
+import { canonicalContribution, fingerprint, semanticContribution, type OwnershipRecord } from "./ownership";
+import { readPath } from "./merge";
+import { serializeDocument } from "./serialize";
 
 type JsonObject = Record<string, unknown>;
 
 function isObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * One-way Hermes upgrade: the old owned block is unchanged, or has only gained
+ * the supported dynamic affinity setting. Once applied, that field is protected
+ * like every other field; this is not a permanent refreshable-path exemption.
+ * Callers must first establish the record's client and config-path ownership.
+ */
+export function isHermesAffinityUpgrade(
+  doc: unknown,
+  record: OwnershipRecord,
+  desired: ManagedContribution,
+): boolean {
+  if (record.clientId !== "hermes" || desired.clientId !== "hermes") return false;
+  const path = ["providers", OPENCODE_PROVIDER_ID];
+  const matchesPath = (candidate: readonly string[]) => (
+    candidate.length === path.length && candidate.every((key, index) => key === path[index])
+  );
+  if (record.fragmentPaths.length !== 1 || !matchesPath(record.fragmentPaths[0]!)) return false;
+  const fragment = desired.fragments.find(item => matchesPath(item.path));
+  if (!isObject(fragment?.value) || fragment.value.session_affinity_header !== "session-id") return false;
+  const observed = readPath(doc, path);
+  if (!isObject(observed)) return false;
+  if (Object.hasOwn(observed, "session_affinity_header") && observed.session_affinity_header !== "session-id") return false;
+  const value = { ...observed };
+  delete value.session_affinity_header;
+  const predecessor: ManagedContribution = { clientId: "hermes", fragments: [{ path, value }] };
+  return fingerprint(canonicalContribution(predecessor)) === record.blockFingerprint
+    || (typeof record.semanticBlockFingerprint === "string"
+      && fingerprint(semanticContribution(predecessor)) === record.semanticBlockFingerprint);
+}
+
+function removeDroidNormalizationFields(row: Record<string, unknown>): boolean {
+  let projected = false;
+  if (Object.hasOwn(row, "id")) {
+    delete row.id;
+    projected = true;
+  }
+  if (Object.hasOwn(row, "index")) {
+    delete row.index;
+    projected = true;
+  }
+  return projected;
+}
+
+function projectObservedDroidContribution(
+  contribution: ManagedContribution,
+): ManagedContribution {
+  if (contribution.clientId !== "droid") return contribution;
+  let projected = false;
+  const fragments = contribution.fragments.map(fragment => {
+    if (
+      fragment.path.length !== 2
+      || fragment.path[0] !== "customModels"
+      || !isObject(fragment.value)
+    ) return fragment;
+    const value = { ...fragment.value };
+    if (!removeDroidNormalizationFields(value)) return fragment;
+    projected = true;
+    return { ...fragment, value };
+  });
+  return projected ? { ...contribution, fragments } : contribution;
+}
+
+export function droidNormalizedContributionMatchesRecord(
+  observed: ManagedContribution,
+  record: OwnershipRecord,
+): boolean {
+  const projectedObserved = projectObservedDroidContribution(observed);
+  return projectedObserved !== observed
+    && (
+      fingerprint(canonicalContribution(projectedObserved)) === record.blockFingerprint
+      || (typeof record.semanticBlockFingerprint === "string"
+        && fingerprint(semanticContribution(projectedObserved)) === record.semanticBlockFingerprint)
+    );
+}
+
+export function droidNormalizedFileMatchesRecord(
+  document: unknown,
+  record: OwnershipRecord,
+): boolean {
+  if (record.clientId !== "droid") return false;
+  try {
+    const normalized = structuredClone(document);
+    let projected = false;
+    for (const path of record.fragmentPaths) {
+      if (path.length !== 2 || path[0] !== "customModels") return false;
+      const row = readPath(normalized, path);
+      if (!isObject(row)) return false;
+      if (removeDroidNormalizationFields(row)) projected = true;
+    }
+    return projected && fingerprint(serializeDocument(normalized, "json")) === record.fileFingerprint;
+  } catch {
+    return false;
+  }
 }
 
 function pathStartsWith(path: readonly string[], prefix: readonly string[]): boolean {

@@ -4,12 +4,13 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { resolveCodexHistoryJobTarget } from "../../src/codex/history-job";
-import { historyBackupPathFor } from "../../src/codex/history-provider";
+import { legacyHistoryBackupPathFor, resolveExistingHistoryBackupPath } from "../../src/codex/history-provider";
 import { resolveCodexLogsDbPath, resolveCodexSqliteHome, resolveCodexStateDbPath } from "../../src/codex/paths";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const originalCodexHome = process.env.CODEX_HOME;
 const originalSqliteHome = process.env.CODEX_SQLITE_HOME;
+const originalOpenCodexHome = process.env.OPENCODEX_HOME;
 const roots: string[] = [];
 
 afterEach(() => {
@@ -17,6 +18,8 @@ afterEach(() => {
   else process.env.CODEX_HOME = originalCodexHome;
   if (originalSqliteHome === undefined) delete process.env.CODEX_SQLITE_HOME;
   else process.env.CODEX_SQLITE_HOME = originalSqliteHome;
+  if (originalOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = originalOpenCodexHome;
   for (const root of roots.splice(0)) removeTreeWithRetry(root);
 });
 
@@ -108,11 +111,31 @@ describe("Codex SQLite home resolution", () => {
 
     const configured = resolveCodexHistoryJobTarget();
     expect(configured.canonicalStateDbPath).toBe(join(configSqliteHome, "state_5.sqlite"));
-    expect(configured.canonicalBackupPath).toBe(historyBackupPathFor(configured.canonicalStateDbPath));
+    expect(configured.canonicalBackupPath).toBe(resolveExistingHistoryBackupPath(configured.canonicalStateDbPath));
 
     unlinkSync(join(codexHome, "config.toml"));
     const fromEnv = resolveCodexHistoryJobTarget();
     expect(fromEnv.canonicalStateDbPath).toBe(join(envSqliteHome, "state_5.sqlite"));
-    expect(fromEnv.canonicalBackupPath).toBe(historyBackupPathFor(fromEnv.canonicalStateDbPath));
+    expect(fromEnv.canonicalBackupPath).toBe(resolveExistingHistoryBackupPath(fromEnv.canonicalStateDbPath));
+  });
+
+  test.skipIf(process.platform !== "win32")("history jobs preserve a pre-normalization extended-path manifest", () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-sqlite-home-legacy-"));
+    roots.push(root);
+    const codexHome = join(root, "codex");
+    const configHome = join(root, "opencodex");
+    const sqliteHome = join(root, "sqlite");
+    mkdirSync(codexHome);
+    mkdirSync(configHome);
+    mkdirSync(sqliteHome);
+    process.env.CODEX_HOME = codexHome;
+    process.env.OPENCODEX_HOME = configHome;
+    process.env.CODEX_SQLITE_HOME = `\\\\?\\${sqliteHome}`;
+
+    const stateDb = resolveCodexStateDbPath({ codexHome });
+    const legacyBackup = legacyHistoryBackupPathFor(stateDb);
+    writeFileSync(legacyBackup, "{}\n");
+
+    expect(resolveCodexHistoryJobTarget().canonicalBackupPath).toBe(legacyBackup);
   });
 });

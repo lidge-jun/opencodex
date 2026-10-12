@@ -37,7 +37,6 @@ import {
   restartLaunchdJob,
   reusePreviousPlistPathVariable,
   runLaunchctl,
-  stableLauncherEntry,
 } from "../../src/service";
 import type {
   LaunchdLoadProbe,
@@ -143,7 +142,7 @@ function fixturePlist(): string {
 
 /** The plist `installLaunchd` will render in this process, for the byte-identical case. */
 function renderedPlist(): string {
-  return buildPlist(resolvedProxyEnv(), { launcher: stableLauncherEntry() });
+  return buildPlist(resolvedProxyEnv());
 }
 
 /** Collect `console.log` lines for the one case whose contract IS the printed line. */
@@ -211,6 +210,59 @@ describe("installLaunchd: repair must not be an outage (#4236 defect 1)", () => 
     } finally {
       if (previousPath === undefined) delete process.env.PATH;
       else process.env.PATH = previousPath;
+    }
+  });
+
+  test("cleans stale fnm PATH and reloads the live definition", () => {
+    const plistPath = fixturePlist();
+    const originalPath = process.env.PATH;
+    try {
+      process.env.PATH = "/usr/bin:/bin";
+      const rendered = renderedPlist();
+      const stalePath = "/tmp/fnm_multishells/1/bin:/usr/bin:/bin";
+      writeFileSync(plistPath, rendered.replace(
+        /(<key>PATH<\/key><string>)[^\n]*(<\/string>)/,
+        (_match, open: string, close: string) => `${open}${stalePath}${close}`,
+      ), "utf8");
+      const { argv, launchctl } = recordingLaunchctl({ bootstrap: [ok()] });
+      const outcome = installLaunchd({ launchctl, plistPath, probe: loadedCurrent().probe, sleepSync: () => {} });
+      expect(outcome.reloaded).toBe(true);
+      expect(verbs(argv)).toContain("bootout");
+      expect(verbs(argv)).toContain("bootstrap");
+      expect(readFileSync(plistPath, "utf8")).toBe(rendered);
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+    }
+  });
+
+  test("a proxy change survives stale PATH cleanup and reaches the reloaded plist", () => {
+    const plistPath = fixturePlist();
+    const originalPath = process.env.PATH;
+    const originalProxy = process.env.HTTPS_PROXY;
+    try {
+      process.env.PATH = "/usr/bin:/bin";
+      delete process.env.HTTPS_PROXY;
+      let previous = renderedPlist();
+      previous = previous.replace(
+        /(<key>PATH<\/key><string>)[^\n]*(<\/string>)/,
+        (_match, open: string, close: string) => `${open}/tmp/fnm_multishells/1/bin:/usr/bin:/bin${close}`,
+      );
+      writeFileSync(plistPath, previous, "utf8");
+      process.env.HTTPS_PROXY = "http://proxy.example:8080";
+      const { argv, launchctl } = recordingLaunchctl({ bootstrap: [ok()] });
+      const outcome = installLaunchd({ launchctl, plistPath, probe: loadedCurrent().probe, sleepSync: () => {} });
+      const repaired = readFileSync(plistPath, "utf8");
+      expect(outcome.reloaded).toBe(true);
+      expect(verbs(argv)).toContain("bootstrap");
+      expect(repaired).toContain("<key>HTTPS_PROXY</key><string>http://proxy.example:8080</string>");
+      expect(repaired).not.toContain("fnm_multishells");
+      expect(reusePreviousPlistPathVariable(previous, repaired)).toBeNull();
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+      if (originalProxy === undefined) delete process.env.HTTPS_PROXY;
+      else process.env.HTTPS_PROXY = originalProxy;
     }
   });
 
@@ -992,7 +1044,7 @@ describe("the surfaces around the repair (#4236 defects 1f, 1h, 2)", () => {
     // Without the catch, a throw escaped through src/cli/dispatch.ts to the top level and
     // the one command that can evict a hub never reached its own serving check.
     expect(branch).toContain("try {");
-    expect(branch).toContain("await repairService({ verb });");
+    expect(branch).toContain("await repairService({ verb, supervisionLatch });");
     expect(branch).toContain("} catch (error) {");
     expect(branch).toContain('await reportServiceServing(verb === "restart" ? "restarted" : "repaired", {}, repairError);');
     // ONE outcome (#4914). The failure text has to reach the report, because printing it in
@@ -1052,7 +1104,10 @@ describe("the surfaces around the repair (#4236 defects 1f, 1h, 2)", () => {
     expect(filter).toContain("isProtectedHomeUnderTest(dirname(path))");
     expect(filter).toContain("paths.filter(");
     expect(filter).toContain("refusing to write service install state");
-    expect(slice(state, "function writeServiceInstallState(", "function readServiceInstallState("))
+    // The fail-loud path resolution moved into the compare-and-swap writer when ownership
+    // became a preserved field. Same invariant, one layer down: nothing commits the record
+    // without resolving the write paths that refuse to write nowhere.
+    expect(slice(state, "export function swapServiceInstallState(", "/** The recorded owner of ONE"))
       .toContain("serviceStateWritePaths()");
   });
 
@@ -1089,17 +1144,18 @@ describe("the surfaces around the repair (#4236 defects 1f, 1h, 2)", () => {
   });
 
   /**
-   * Review nit 8. `stableLauncherEntry` is shared with `installSystemd`, so "the recorded
-   * launcher wins over a fresh PATH walk" changed Linux too. The behavioural half lives in
-   * `tests/service/service.test.ts`; this pins that the two installers really do call the
-   * same resolver, which is what makes that coverage transferable.
+   * Review nit 8, updated for the launchd pinning change. `stableLauncherEntry` remains
+   * the systemd resolver — "the recorded launcher wins over a fresh PATH walk" is a
+   * Linux-only contract now: launchd deliberately never resolves one, because a mutable
+   * PATH shim would inherit the service token and proxy environment. The behavioural
+   * halves live in `tests/service/service.test.ts`; this pins the split itself.
    */
-  test("the recorded-launcher preference is shared with the systemd installer (nit 8)", () => {
+  test("the recorded-launcher preference is systemd-only — launchd resolves none (nit 8)", () => {
     const systemdInstall = slice(systemd, "function installSystemd()", "function startSystemd(");
     expect(systemdInstall).toContain("stableLauncherEntry()");
     expect(systemdInstall).toContain("buildUnit(resolvedProxyEnv(), { launcher })");
     expect(slice(launchd, "export function installLaunchd(", " * Deps are named for the layer they replace"))
-      .toContain("stableLauncherEntry()");
+      .not.toContain("stableLauncherEntry");
   });
 });
 

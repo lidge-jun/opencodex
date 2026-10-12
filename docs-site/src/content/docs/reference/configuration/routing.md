@@ -13,6 +13,39 @@ Routing turns the model id sent by a client into one concrete provider and upstr
 | `combos?` | `Record<string, OcxComboConfig>` | `{}` | Virtual `combo/<id>` models built from ordered provider/model targets. |
 | `routingProfiles?` | `Record<string, OcxRoutingProfileConfig>` | `{}` | Virtual `policy/<id>` models that select among an explicit candidate allowlist using hard capability requirements and deterministic scoring. |
 
+### Codex Pool low-quota protection
+
+`codexPool.lowQuotaProtection` applies only to stored Codex Pool accounts. The Desktop/main
+account keeps its separate 98% hard lock. The optional shape is:
+
+```json
+{"codexPool":{"lowQuotaProtection":{"enabled":true,"threshold":80,"actions":{"pause":true,"notify":true},"windows":{"short":true,"weekly":true}}}}
+```
+
+Absence or `enabled: false` disables it. `threshold` is a finite inclusive percentage from 1
+through 100. An enabled policy needs at least one true action and one true window. A selected
+5-hour or weekly window triggers at `usage >= threshold`; either selected window is enough.
+Only fresh accepted observations qualify: there is no extra polling, and credits-only,
+cached, expired, monthly, custom-window-only, and raw out-of-range usage observations are ignored
+for this policy. Display bars may still clamp invalid upstream percentages. The policy is independent
+of proactive account switching.
+
+With `pause`, the account leaves Pool selection in memory before the next request. The server
+coalesces a config save after the observation turn and retries failed saves for a bounded time.
+Normal shutdown waits briefly for pending saves. A timed-out save that is already running remains
+`pending` until it actually succeeds or fails; a queued save is cancelled. A failed save is visible
+in the event history. A restart before a successful save cannot preserve the pause. In-flight requests keep their
+captured account. Manual resume suppresses repause across all currently high windows for that
+account until a below-threshold reading or a new reset boundary re-arms a window. A reset never resumes an account automatically.
+
+With `notify`, the server writes a local log line with window and percentage but no account id
+and records a bounded event. Authenticated `GET /api/codex-auth/low-quota-events` exposes only
+that server’s events, including account id, window, usage percentage, known reset time, timestamp,
+and status. The default status is `logged`: the alert reached the log and event history only.
+There is no desktop or OS notification. Each account/window logs once per server-local episode.
+If an injected notification sink fails, its failure is recorded and a later eligible observation
+can retry it; only a successful sink is marked `delivered`.
+
 ## Model resolution order
 
 opencodex resolves the requested model in this order:
@@ -37,9 +70,29 @@ more than one provider, so use explicit namespaces when a bare model could be am
 ### Blocked-model redirects
 
 `blockedModelRedirects` is an optional top-level `Record<string, string>` of exact resolved
-model-id replacements, unset by default. It runs **after** the resolution order above: a match
-keeps the provider and account route already selected, replaces only the upstream model id, and
-records the route reason `blocked-model-redirect`. Omitting the key leaves routing unchanged.
+model-id replacements, unset by default. Bare keys still match the native model **after** provider,
+account, and alias resolution. A target without an explicit, different configured provider keeps
+that selected provider and account and replaces only the upstream model id, once. This preserves
+existing bare and slash-valued mappings, including mappings on provider-qualified requests.
+
+A target explicitly naming a **different configured provider** (for example,
+`google-antigravity/gemini-3.8-flash-high`) instead routes through that provider. An exact
+`<source-provider>/<resolved-model>` key with such a target takes precedence over a bare key;
+other qualified keys have no effect. Cross-provider redirects can chain through resolved aliases,
+with one shared five-edge limit and cycle detection. A pinned account selector never leaves its
+account: a cross-provider target fails closed, whether its key is bare or account-qualified.
+The destination uses its own credentials and quota, and never inherits source account fields;
+a caller `Authorization` header addressed to the source route is stripped, as for combo and policy routes.
+A disabled destination, a forward destination, or a key/OAuth destination without usable stored
+credentials keeps the source route's legacy behavior. Under a routing policy, every redirect target
+must itself be a declared eligible candidate, even when it keeps the same provider.
+The initial evaluation's eligible provider/model set remains fixed through fallback and subagent
+recovery. Retries use concrete candidates, so a combo alias cannot replace a candidate's destination.
+Different candidates that resolve to a destination already attempted do not send the turn there again.
+An eligible virtual model keeps its normal wire-model mapping without adding that wire id to the
+profile's allowed candidates. If a local replacement is skipped, fallback retains the last upstream failure.
+Malformed redirect maps are ignored with a warning on load and rejected on configuration writes.
+Redirected routes record `blocked-model-redirect`; omitting the setting leaves routing unchanged.
 
 ```json
 {
@@ -85,11 +138,12 @@ namespace, and cannot use reserved bare native families such as `gpt-*`, `o1-*`,
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `targets` | `{ provider: string; model: string; weight?: number }[]` | required | Ordered concrete routes. `weight` is 1–10000 and defaults to `1`. |
-| `strategy?` | `"failover" \| "round-robin" \| "random" \| "least-used" \| "reset-window"` | `"failover"` | Selection strategy. Target order is failover priority; weights shape round-robin and random draws; least-used follows recorded successes; reset-window follows the soonest quota reset. |
+| `targets` | `{ provider: string; model: string; weight?: number; lastResort?: boolean }[]` | required | Ordered concrete routes. `weight` is 1–10000 and defaults to `1`. `lastResort` marks an emergency-only target; see `cooldownWaitPolicy`. |
+| `strategy?` | `"failover" \| "round-robin" \| "random" \| "least-used" \| "reset-window" \| "jev"` | `"failover"` | Selection strategy. Target order is failover priority; weights shape round-robin and random draws; least-used follows recorded successes; reset-window follows the soonest quota reset; JEV makes one bounded decision for the initial eligible target and effort, then uses ordinary ordered fallback. |
 | `stickyLimit?` | `number` | `1` | Successful requests retained in one round-robin batch. Range 1–100. Applies only to round-robin. |
-| `cooldownMs?` | `number` | unset → upstream fallback (5 s for request-rate 429 codes `1302`/`1305`, otherwise 60 s) | Range 1–600000. When set, applies whenever no usable upstream `Retry-After` or Codex reset signal exists, including request-rate 429s; when unset, uses the upstream fallback. Upstream signals take precedence and all cooldowns are capped at 10 minutes. |
+| `cooldownMs?` | `number` | unset → upstream fallback (5 s for request-rate 429 codes `1302`/`1305`, otherwise 60 s) | Range 1–600000. When set, applies whenever no usable upstream `Retry-After` or Codex reset signal exists, including request-rate 429s; when unset, uses the upstream fallback. Upstream signals take precedence. An explicit upstream `Retry-After` is capped at 24 hours; reset-derived, configured, and fallback cooldowns are capped at 10 minutes. |
 | `waitForCooldownMs?` | `number` | `0` | Maximum wait for the earliest eligible cooling target on each selection attempt. Range 0–600000; an abort cancels the wait. A single-target combo with a nonzero wait holds the request up to this ceiling and retries the same target instead of failing immediately; if no target was ever dispatched the wait ends in `combo_unavailable`, otherwise the last upstream failure is returned. |
+| `cooldownWaitPolicy?` | `"before-last-resort"` | unset | Defers targets marked `lastResort`: they are used only when no normal target is available, for every strategy. `waitForCooldownMs` only adds the wait for a cooling normal target, so at its `0` default nothing waits and the last resort is used as soon as no normal target is available. The deferral and the ordinary wait share one `waitForCooldownMs` budget per selection attempt. Only that exact string opts in; `lastResort` is inert without it. |
 | `defaultEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| null` | unset | `defaultEffort` fills an absent `reasoning.effort` in fallback mode, or overrides valid caller effort in explicit force mode when the combo has a non-null default and the selected target has a known, nonempty supported ladder. If the target supports the configured value, it is retained; otherwise the highest supported rung at or below it is used, or the lowest supported rung when none is lower. Unknown or empty ladders omit the default. |
 | `defaultEffortMode?` | `"fallback" \| "force"` | `"fallback"` | Preserves caller precedence by default. Explicit force requires a valid non-null default, respects target capability and can increase cost and latency. `reasoningEffortMode` remains independent. |
 | `reasoningEffortMode?` | `"strict" \| "adaptive"` | `"strict"` | `"strict"` intersects all known target ladders, including empty ones; `"adaptive"` excludes empty ladders. Unknown ladders are catalog wildcards in both modes. At dispatch, explicit empty ladders remove effort/thinking controls in both modes; unknown ladders do so only in adaptive. `reasoning.summary` is preserved. Known nonempty targets retain their effort resolution, and target selection/order is unchanged. |
@@ -97,6 +151,9 @@ namespace, and cannot use reserved bare native families such as `gpt-*`, `o1-*`,
 | `alias?` | `string` | — | Optional public model id in place of the canonical picker slug. |
 | `nativeAlias?` | `boolean` | `false` | Let a currently supported bare native id take precedence only for that unqualified id. Bare `gpt-5.6-*` ids use Codex Pool/Direct credentials. Account-qualified routes remain distinct. Provider-qualified routes such as `openai-apikey/gpt-5.6-*` use their configured API-key route and never fall through to the native alias. |
 | `displayName?` | `string` | — | Display-only catalog label, required and non-empty for a native alias. |
+| `decisionProvider?` | `string` | `"jev"` | `strategy: "jev"` only. `"jev"` (the same as omitting it, and stored as omission) is the TypeSafe decision service, valid without a provider row; any other value must name a configured provider with `adapter: "jev-decision"` and a full HTTPS decision `baseUrl` (any path) or a local HTTP `/systemone` endpoint. Userinfo, query strings, and fragments are refused. |
+| `decisionModel?` | `string` | unset | `strategy: "jev"` only, mutually exclusive with `decisionProvider`. An ordinary opencodex route (for example `ollama/qwen3:4b`) asked to pick one offered option as JSON. It runs with the selected provider's stored credentials, never the caller's, and cannot resolve to this combo, any JEV combo, or a `jev-decision` row. |
+| `decisionTimeoutMs?` | `number` | `4000` | `strategy: "jev"` only. Decision deadline before failing open, 1000–120000 ms. |
 
 ```json
 {
@@ -117,6 +174,62 @@ namespace, and cannot use reserved bare native families such as `gpt-*`, `o1-*`,
 
 For strategy behavior, retryable failures, cooldowns, encrypted v2 task limits, and management
 commands, see [Combos](/guides/combos/).
+
+The `jev` strategy is optional. Only the TypeSafe method, used when neither `decisionProvider` nor
+`decisionModel` is set, requires the canonical `jev` provider credential. That provider
+is a decision service, publishes no directly routable model, and cannot be a Combo target. JEV sees
+only currently eligible members of `targets`; missing, failed, or invalid decisions use the first
+eligible member, while caller cancellation remains terminal. Adding the provider or Combo never
+changes `defaultProvider` or hides direct model rows. See
+[Decision method](/guides/combos/#decision-method) for the three methods, setup, privacy bounds, and
+the one-decision-per-call contract. API-key provider/model scopes also apply to TypeSafe and
+self-hosted decision destinations, before their credentials or request state are read. If the key
+denies the optional decision destination, no decision request is sent; the ordinary eligible
+inference fallback still has to satisfy that key's scope.
+
+### Self-hosted decision model (e.g. Ollama tev1)
+
+`decisionProvider` can point a JEV Combo at a self-hosted Jev-API-compatible decision model such as
+Ollama's `tev1` (Ollama 0.35+, `POST /v1/systemone`, no API key):
+
+```json
+{
+  "providers": {
+    "ollama-tev1": {
+      "adapter": "jev-decision",
+      "baseUrl": "http://127.0.0.1:11434/v1/systemone",
+      "allowPrivateNetwork": true,
+      "defaultModel": "tev1:4b",
+      "liveModels": false
+    }
+  },
+  "combos": {
+    "jev-local": {
+      "strategy": "jev",
+      "decisionProvider": "ollama-tev1",
+      "decisionTimeoutMs": 60000,
+      "targets": [
+        { "provider": "openai", "model": "gpt-5.6-sol" },
+        { "provider": "openai", "model": "gpt-5.6-luna" }
+      ]
+    }
+  }
+}
+```
+
+The row's `baseUrl` is the full decision endpoint and must end in `/systemone`; its model is
+`defaultModel`, else `models[0]` (a row with neither fails open without a request). Loopback needs
+the row's own explicit `allowPrivateNetwork: true`, and plain `http:` is accepted only for `localhost`
+or a loopback/RFC 1918/ULA address literal reached without a proxy. Only the row's own `apiKey` is
+sent — none when it is unset — and a key referencing the TypeSafe environment variables or another
+provider's keychain entry is refused, so TypeSafe credentials never reach it. Options are sent as
+description strings, which Ollama requires. `tev1` was trained on 2–24 options, so keep target ×
+effort pairs at 24 or fewer (fewer than 2 or more than 26 fail open without a request);
+its effective context is about 2k tokens and OpenCodex clips the task text to 500 characters. Keep the
+model resident (`OLLAMA_KEEP_ALIVE=-1`) and raise `decisionTimeoutMs` for slow services; see
+[System One-compatible server](/guides/combos/#system-one-compatible-server).
+In the dashboard, choose **System One-compatible server** in the JEV Combo's **Decision method**
+section under **Models → Combos**, then pick the row and set **Decision timeout (ms)**.
 
 ## Routing policy profiles (`config.routingProfiles`)
 
@@ -201,8 +314,8 @@ echoed as given. The CLI dry-run cannot supply these per-candidate account field
 ### Combos vs policy profiles
 
 - A **combo** is explicit target routing with a selectable strategy (ordered failover, smooth
-  weighted or random balancing, least-used, or reset-window): the configured strategy decides,
-  and retryable failures advance through the list.
+  weighted or random balancing, least-used, reset-window, or one bounded JEV first-pick decision):
+  the configured strategy decides, and retryable failures advance through the list.
 - A **policy profile** is evidence-based selection among configured candidates: hard capability
   requirements filter first, then deterministic scoring ranks the survivors.
 

@@ -6,9 +6,21 @@ import { responsesJsonToChatCompletion, collectChatCompletion, responsesSseToCha
 import { jsonCompletionSse } from "../../src/server/chat-native-sse";
 import { getRequestLogEntries } from "../../src/server/request-log";
 import { readUsageEntries } from "../../src/usage/log";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 let upstream: ReturnType<typeof Bun.serve> | undefined;
-afterEach(async () => { await upstream?.stop(true); upstream = undefined; });
+let releaseSpendHome: (() => void) | undefined;
+const takeSpendHome = (): void => {
+  // Taken only for direct Chat dispatches so mixed pure-converter cases do not open the journal.
+  releaseSpendHome ??= acquireOwnedSpendHome();
+};
+afterEach(async () => {
+  // Released first so a failed assertion cannot leave the inherited sandbox lease live.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
+  await upstream?.stop(true);
+  upstream = undefined;
+});
 
 interface Chunk {
   choices: Array<{ index: number; delta: {
@@ -34,6 +46,7 @@ async function streamFixture(output: unknown[], status = "completed", cancel = f
     adapter: "openai-responses", baseUrl: `http://127.0.0.1:${upstream.port}/v1`,
     authMode: "key", apiKey: "fixture-key", allowPrivateNetwork: true, models: ["model"],
   } } };
+  takeSpendHome();
   const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ model: "fixture/model", stream: !delivery.jsonFinish, messages: [{ role: "user", content: "fixture" }],
@@ -327,6 +340,7 @@ describe("service_tier echo relay", () => {
       body: JSON.stringify({ model: "fixture/model", stream, messages: [{ role: "user", content: "ping" }] }),
     }), config, { model: "", provider: "" }, { requestId: `tier-relay-${stream}`, start: Date.now() });
 
+    takeSpendHome();
     const jsonResponse = await post(false);
     expect(jsonResponse.status).toBe(200);
     expect(await jsonResponse.json()).toMatchObject({ service_tier: "priority", choices: [{ finish_reason: "stop" }] });

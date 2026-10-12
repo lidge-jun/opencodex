@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { createResponsesPassthroughAdapter as createResponsesPassthroughAdapterProduction } from "../../src/adapters/openai-responses";
 import {
   buildMuseToolNameAliasPlan,
@@ -9,9 +9,22 @@ import {
   rewriteMuseToolNamesForUpstream,
 } from "../../src/responses/muse-tool-name-alias";
 import { expandPreviousResponseInput } from "../../src/responses/state";
+import { GROK_REFUSED_TERMINAL_EVENT_TYPE } from "../../src/server/grok-responses-snapshot-repair";
 import { handleResponses } from "../../src/server/responses";
 import type { OcxConfig } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { withTestTranslatorBudget } from "../helpers/translator-budget";
+
+let releaseSpendHome: (() => void) | undefined;
+
+// Direct physical dispatch needs the writer lease to prevent spend-ledger ownership failures.
+const takeSpendHome = (): void => { releaseSpendHome ??= acquireOwnedSpendHome(); };
+
+afterEach(() => {
+  // Release first so a failed dispatch cannot leak ownership into the next case.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
+});
 
 const createResponsesPassthroughAdapter = (...args: Parameters<typeof createResponsesPassthroughAdapterProduction>) =>
   withTestTranslatorBudget(createResponsesPassthroughAdapterProduction(...args));
@@ -257,7 +270,18 @@ describe("muse tool-name inbound restore through handleResponses", () => {
   const frame = (event: string, payload: Record<string, unknown>): string =>
     `event: ${event}\ndata: ${JSON.stringify({ type: event, ...payload })}`;
 
-  test("non-stream function_call and tool_choice restore the original MCP name", async () => {
+  const ssePayloads = (text: string): Array<Record<string, unknown>> => text
+    .split(/\r?\n\r?\n/u)
+    .flatMap(block => {
+      const data = block.split(/\r?\n/u)
+        .filter(line => line.startsWith("data: "))
+        .map(line => line.slice("data: ".length))
+        .join("");
+      if (data.length === 0 || data === "[DONE]") return [];
+      return [JSON.parse(data) as Record<string, unknown>];
+    });
+
+  test("non-stream function_call restores the original MCP name", async () => {
     const savedFetch = globalThis.fetch;
     let outbound: Record<string, unknown> | undefined;
     globalThis.fetch = (async (_input, init) => {
@@ -265,11 +289,12 @@ describe("muse tool-name inbound restore through handleResponses", () => {
       return new Response(JSON.stringify({
         id: "resp_json",
         status: "completed",
-        tool_choice: { type: "function", name: wire },
+        tool_choice: "auto",
         output: [{ type: "function_call", name: wire, call_id: "c1", arguments: "{\"q\":\"x\"}" }],
       }), { headers: { "content-type": "application/json" } });
     }) as typeof fetch;
     try {
+      takeSpendHome();
       const response = await handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -278,14 +303,14 @@ describe("muse tool-name inbound restore through handleResponses", () => {
           stream: false,
           input: "search",
           tools: [{ type: "function", name: original, parameters: { type: "object" } }],
-          tool_choice: { type: "function", name: original },
+          tool_choice: "auto",
         }),
       }), config, { model: "", provider: "" });
-      const json = await response.json() as { output: Array<Record<string, unknown>>; tool_choice?: { name: string } };
+      const json = await response.json() as { output: Array<Record<string, unknown>>; tool_choice?: string };
       expect((outbound?.tools as Array<{ name: string }>)[0]!.name).toBe(wire);
-      expect((outbound?.tool_choice as { name: string }).name).toBe(wire);
+      expect(outbound?.tool_choice).toBe("auto");
       expect(json.output[0]).toMatchObject({ type: "function_call", name: original });
-      expect(json.tool_choice?.name).toBe(original);
+      expect(json.tool_choice).toBe("auto");
     } finally {
       globalThis.fetch = savedFetch;
     }
@@ -304,6 +329,7 @@ describe("muse tool-name inbound restore through handleResponses", () => {
       return new Response(upstream, { headers: { "content-type": "text/event-stream" } });
     }) as typeof fetch;
     try {
+      takeSpendHome();
       const response = await handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -317,6 +343,120 @@ describe("muse tool-name inbound restore through handleResponses", () => {
       const clientSse = await response.text();
       expect(clientSse).toContain(`"name":"${original}"`);
       expect(clientSse).not.toContain(`"name":"${wire}"`);
+    } finally {
+      globalThis.fetch = savedFetch;
+    }
+  });
+
+  test("sparse terminal reconstruction keeps the restored identity with auto selection", async () => {
+    const savedFetch = globalThis.fetch;
+    let outbound: Record<string, unknown> | undefined;
+    const itemId = "fc_sparse";
+    const callId = "call_sparse";
+    globalThis.fetch = (async (_input, init) => {
+      outbound = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      const wireName = (outbound.tools as Array<{ name: string }>)[0]!.name;
+      const item = {
+        type: "function_call",
+        id: itemId,
+        call_id: callId,
+        name: wireName,
+        arguments: "{}",
+        status: "completed",
+      };
+      const upstream = [
+        frame("response.output_item.done", { output_index: 0, item }),
+        frame("response.completed", { response: { id: "resp_sparse", status: "completed", output: [] } }),
+        "data: [DONE]",
+      ].join("\n\n") + "\n\n";
+      return new Response(upstream, { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+    try {
+      takeSpendHome();
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "fixture/muse-spark-1.3",
+          stream: true,
+          input: "search",
+          tools: [{ type: "function", name: original, parameters: { type: "object" } }],
+          tool_choice: "auto",
+        }),
+      }), config, { model: "", provider: "", surface: "grok" });
+      const wireName = (outbound?.tools as Array<{ name: string }>)[0]!.name;
+      expect(wireName).not.toBe(original);
+      expect((outbound?.tools as Array<{ name: string }>)[0]!.name).toBe(wireName);
+
+      const terminal = ssePayloads(await response.text())
+        .find(payload => payload.type === "response.completed");
+      expect(terminal).toBeDefined();
+      expect((terminal!.response as { output: unknown[] }).output).toEqual([expect.objectContaining({
+        type: "function_call",
+        id: itemId,
+        call_id: callId,
+        name: original,
+      })]);
+    } finally {
+      globalThis.fetch = savedFetch;
+    }
+  });
+
+  test("non-Meta named selection still refuses an unselected tool", async () => {
+    const savedFetch = globalThis.fetch;
+    const selected = original;
+    const unselected = "mcp__plugin_android-emulator_android-emulator__android_install_app";
+    const nonMetaConfig = {
+      ...config,
+      providers: {
+        fixture: {
+          adapter: "openai-responses",
+          baseUrl: "https://api.x.ai/v1",
+          authMode: "key",
+          apiKey: "test-key",
+        },
+      },
+    } as OcxConfig;
+    globalThis.fetch = (async (_input, init) => {
+      const outbound = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      const selectedWire = (outbound.tool_choice as { name: string }).name;
+      const wireNames = (outbound.tools as Array<{ name: string }>).map(tool => tool.name);
+      const unselectedWire = wireNames.find(name => name !== selectedWire)!;
+      const item = {
+        type: "function_call",
+        id: "fc_unselected",
+        call_id: "call_unselected",
+        name: unselectedWire,
+        arguments: "{}",
+        status: "completed",
+      };
+      const upstream = [
+        frame("response.output_item.done", { output_index: 0, item }),
+        frame("response.completed", { response: { id: "resp_unselected", status: "completed", output: [] } }),
+        "data: [DONE]",
+      ].join("\n\n") + "\n\n";
+      return new Response(upstream, { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+    try {
+      takeSpendHome();
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "fixture/muse-spark-1.3",
+          stream: true,
+          input: "search",
+          tools: [
+            { type: "function", name: selected, parameters: { type: "object" } },
+            { type: "function", name: unselected, parameters: { type: "object" } },
+          ],
+          tool_choice: { type: "function", name: selected },
+        }),
+      }), nonMetaConfig, { model: "", provider: "", surface: "grok" });
+      const terminal = ssePayloads(await response.text())
+        .find(payload => payload.type === GROK_REFUSED_TERMINAL_EVENT_TYPE);
+      expect(terminal).toBeDefined();
+      expect((terminal!.response as { output: unknown[] }).output).toEqual([]);
     } finally {
       globalThis.fetch = savedFetch;
     }
@@ -338,6 +478,7 @@ describe("muse tool-name inbound restore through handleResponses", () => {
       return new Response(upstream, { headers: { "content-type": "text/event-stream" } });
     }) as typeof fetch;
     try {
+      takeSpendHome();
       const response = await handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -389,6 +530,7 @@ describe("muse tool-name inbound restore through handleResponses", () => {
       return new Response(upstream, { headers: { "content-type": "text/event-stream" } });
     }) as typeof fetch;
     try {
+      takeSpendHome();
       const turn1 = await handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },

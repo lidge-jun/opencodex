@@ -21,7 +21,7 @@ l'identifiant du fournisseur `openai` intégré à Codex et fait pointer ce four
 ```toml
 # root keys, before the first table
 model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
-# Auto-injected by opencodex
+# Auto-injected by opencodex (undo: ocx restore)
 openai_base_url = "http://127.0.0.1:10100/v1"
 
 # only when fastMode is set; unset adds no [features] table
@@ -119,7 +119,7 @@ model_provider = "opencodex"
 model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
 
 # appended at the end of the file
-# Auto-injected by opencodex
+# Auto-injected by opencodex (undo: ocx restore)
 [model_providers.opencodex]
 name = "OpenCodex Proxy"
 base_url = "http://your-host:10100/v1"
@@ -153,7 +153,8 @@ $CODEX_HOME/opencodex-catalog.json
 $CODEX_HOME/models_cache.json
 ```
 
-Sous WSL, si `CODEX_HOME` n'est pas défini et que `~/.codex/config.toml` n'existe pas côté Linux, opencodex
+Sous WSL, si `CODEX_HOME` n'est pas défini et que le répertoire `~/.codex` côté Linux est absent ou ne contient aucun état Codex
+(`config.toml`, `auth.json`, `sessions`, `history.jsonl`), opencodex
 recherche également un unique répertoire personnel de Codex Desktop pour Windows à l'emplacement
 `/mnt/c/Users/*/.codex/config.toml`. S'il trouve exactement un candidat, il utilise ce répertoire afin que le
 mode app-server sous WSL et Codex Desktop sous Windows partagent les mêmes fichiers de configuration et
@@ -382,6 +383,8 @@ Si la lecture authentifiée des quotas avec le nouveau jeton OAuth confirme un q
 
 `ocx account refresh openai` et `ocx account list openai --quota --refresh` consultent uniquement les quotas. La validation du modèle consomme du quota et nécessite une session humaine du tableau de bord : après récupération, ouvrez `ocx gui` et cliquez sur **Refresh quotas**. Sur un hôte sans interface graphique, accédez à son tableau de bord depuis votre navigateur ; le jeton administrateur seul n’autorise pas la validation. Un compte en pause peut être validé sans être repris ni sélectionné. Les erreurs d’autorisation restent visibles jusqu’à une validation ou une réauthentification réussie.
 
+Dans **Codex Set → Multi-auth**, activez le commutateur **Crédits Codex** dans l’en-tête **Codex Auth** pour afficher la dernière observation de chaque compte principal et du pool juste sous Week. Désactivé par défaut, il est enregistré dans `showCodexCredits`. Le solde utilise le format numérique local ; les mentions illimité ou plafond de dépassement atteint apparaissent si elles sont signalées. Sans plafond total fourni, la barre indique la disponibilité et non un pourcentage. Le commutateur ne contrôle que l’affichage ; une nouvelle connexion attend sa propre observation.
+
 La revalidation en arrière-plan est distincte et désactivée par défaut. Elle nécessite Token Guardian, la politique `proactive` du fournisseur `openai` et `tokenGuardian.codexWarmupEnabled`, et ignore les comptes dont la validation d’inscription est en attente.
 
 ### Pourquoi un compte a cessé de servir les requêtes
@@ -413,13 +416,13 @@ ocx restore    # restore without stopping  (alias: ocx eject)
 ocx restore back # point plain Codex at the running proxy again
 ```
 
-Lorsque opencodex s'exécute comme [service d'arrière-plan géré](/fr/reference/cli/lifecycle/#ocx-service-installrepairstartstopstatusuninstallremove), il définit
+Lorsque opencodex s'exécute comme [service d'arrière-plan géré](/fr/reference/cli/lifecycle/#ocx-service-installrepairrestartstartstopstatusuninstallremove), il définit
 `OCX_SERVICE=1` afin qu'un redémarrage déclenché par le service ne modifie **pas** sans cesse la configuration
 Codex. Seule l'exécution explicite de `ocx stop` ou `ocx service stop` restaure Codex natif.
 
 ## Refus de sécurité pour l’historique paginé
 
-Une transition de fournisseur peut renvoyer `history_paginated_requires_native_writer` si le stockage concerné prend en charge la pagination, même pour ses lignes legacy. Cette raison ne refuse plus la configuration Codex, le profil de référence ni le catalogue de modèles. `ocx sync` et `ocx start` écrivent toujours ces fichiers et définissent `model_catalog_json`, afin que le sélecteur de modèles Codex continue d’afficher tous les modèles routés par OpenCodex. Seule cette raison interrompt le réétiquetage de l’historique des conversations, car Codex attribue les numéros d’historique paginé dans son propre processus d’écriture et aucune nouvelle tentative n’y change rien. Toute autre raison de contrôle préalable de l’historique — une base d’état illisible, un historique dont l’identité a changé, ou un contrôle préalable qui n’a pas pu s’exécuter — refuse encore toute la transition et l’annule, car ces cas peuvent réussir plus tard. Dans cet état, OpenCodex ne modifie jamais les fichiers d’historique paginé ni les lignes de conversation. Les conversations existantes conservent le fournisseur déjà associé et ne sont pas migrées ; les nouvelles conversations passent par le proxy. Lorsque le réétiquetage est interrompu, une table `[model_providers.opencodex]` déjà présente dans le répertoire d’accueil est conservée plutôt que retirée, y compris sous la forme root-override (loopback), afin que les conversations dont les lignes sont étiquetées `opencodex` gardent un identifiant de fournisseur qui existe encore. Le CLI affiche `Codex resume history: left to Codex's native writer (history_paginated_requires_native_writer)`. `ocx restore` et la suppression de la configuration Codex refusent toujours sur `history_paginated_requires_native_writer`. Retirer la définition `[model_providers.opencodex]` alors que des lignes de conversation la référencent encore rendrait ces conversations irrésolubles, et le chemin de restauration n’a aucun moyen de conserver une table de fournisseur de compatibilité. Un répertoire d’accueil déjà paginé ne peut pas actuellement être désinstallé par le produit ; c’est un travail ouvert connu, et non le comportement voulu.
+Une transition de fournisseur peut renvoyer `history_paginated_requires_native_writer` si le stockage concerné prend en charge la pagination, même pour ses lignes legacy. Cette raison ne refuse plus la configuration Codex, le profil de référence ni le catalogue de modèles. `ocx sync` et `ocx start` écrivent toujours ces fichiers et définissent `model_catalog_json`, afin que le sélecteur de modèles Codex continue d’afficher tous les modèles routés par OpenCodex. Seule cette raison interrompt le réétiquetage de l’historique des conversations, car Codex attribue les numéros d’historique paginé dans son propre processus d’écriture et aucune nouvelle tentative n’y change rien. Toute autre raison de contrôle préalable de l’historique — une base d’état illisible, un historique dont l’identité a changé, ou un contrôle préalable qui n’a pas pu s’exécuter — refuse encore toute la transition et l’annule, car ces cas peuvent réussir plus tard. Dans cet état, OpenCodex ne modifie jamais les fichiers d’historique paginé ni les lignes de conversation. Les conversations existantes conservent le fournisseur déjà associé et ne sont pas migrées ; les nouvelles conversations passent par le proxy. Lorsque le réétiquetage est interrompu, une table `[model_providers.opencodex]` déjà présente dans le répertoire d’accueil est conservée plutôt que retirée, y compris sous la forme root-override (loopback), afin que les conversations dont les lignes sont étiquetées `opencodex` gardent un identifiant de fournisseur qui existe encore. Le CLI affiche `Codex resume history: left to Codex's native writer (history_paginated_requires_native_writer)`. `ocx restore`, `ocx stop` et `ocx uninstall` ne refusent plus sur `history_paginated_requires_native_writer`. Ils retirent toutes les clés de routage racine d'OpenCodex et conservent la définition `[model_providers.opencodex]` sur le disque : les conversations dont les lignes nomment encore ce fournisseur restent résolubles, tandis que `codex` seul cesse de pointer vers le proxy. Le résultat est signalé comme une restauration partielle qui nomme les lignes conservées, et `ocx restore --remove-codex-provider-table` les supprime aussi, après quoi ces conversations ne s'ouvrent plus. Par ailleurs, activer l'intégration sous sa forme table de fournisseur sur un répertoire d'accueil dont les conversations marquées `openai` ont déjà été paginées par Codex était auparavant refusé d'emblée avec `history_paginated_openai_requires_native_writer` : rien n'était écrit et l'intégration restait désactivée. OpenCodex termine désormais cette transition en conservant la redéfinition racine gérée `openai_base_url` à côté de la table `[model_providers.opencodex]`. Codex fusionne cette redéfinition avec son fournisseur `openai` intégré, donc ces conversations continuent d'atteindre le proxy sans être réétiquetées, et aucun octet d'historique ni ligne de conversation n'est modifié. Seule une forme de routage exigeant l'en-tête d'admission `x-opencodex-api-key` refuse encore, car le fournisseur intégré de Codex ne peut pas porter cet en-tête ; son message nomme les deux réglages qui résolvent la situation — router Codex par l'écouteur loopback pour conserver la redéfinition, ou mettre `syncResumeHistory` à `false` en acceptant que ces conversations reprennent sur le point de terminaison OpenAI propre à Codex.
 
 Lors du retour au mode de remplacement de l’URL racine, OpenCodex conserve la définition `[model_providers.opencodex]` existante avant de valider la configuration, même si la vérification préalable de l’historique réussit. Les anciennes conversations `opencodex` peuvent ainsi toujours retrouver leur fournisseur si Codex migre l’historique après cette validation ou pendant le démarrage du traitement en arrière-plan. Les nouvelles conversations utilisent le fournisseur racine sélectionné ; la restauration explicite conserve ses contrôles de suppression distincts.
 

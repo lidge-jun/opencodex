@@ -6,11 +6,18 @@ import {
   CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS,
   clearCodexUpstreamHealth,
   clearThreadAccountMap,
+  previewCodexAccountForRequest,
   resolveCodexAccountForThread,
   resolveCodexAccountForThreadDetailed,
 } from "../../src/codex/routing";
 import { clearPoolRotationState } from "../../src/codex/pool-rotation";
-import { saveCodexAccountCredential } from "../../src/codex/account-store";
+import { readCodexAccountRecord, saveCodexAccountCredential } from "../../src/codex/account-store";
+import { getEffectiveActiveCodexAccountId, rememberActiveCodexAccount } from "../../src/codex/routing/active-account";
+import {
+  cachedDeniedCodexAccountIdsForModel,
+  recordCodexModelDenialEvidence,
+  resetCodexModelEntitlementCacheForTests,
+} from "../../src/codex/model-entitlements";
 import {
   clearAccountNeedsReauth,
   clearAccountQuota,
@@ -102,6 +109,8 @@ function installScratchState(): void {
   clearCodexUpstreamHealth();
   clearAccountQuota();
   clearPoolRotationState();
+  resetCodexModelEntitlementCacheForTests();
+  clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
   clearAccountNeedsReauth("a");
   clearAccountNeedsReauth("b");
   saveTestCredential("a");
@@ -114,6 +123,8 @@ async function removeScratchState(): Promise<void> {
     clearCodexUpstreamHealth();
     clearThreadAccountMap();
     clearPoolRotationState();
+    resetCodexModelEntitlementCacheForTests();
+    clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
     clearAccountNeedsReauth("a");
     clearAccountNeedsReauth("b");
   } finally {
@@ -124,6 +135,44 @@ async function removeScratchState(): Promise<void> {
 describe("model entitlement ordering (#4768)", () => {
   beforeEach(installScratchState);
   afterEach(removeScratchState);
+
+  test.each([
+    ["observed Astra denial selects available main", true, MAIN_CODEX_ACCOUNT_ID],
+    ["unknown Astra access preserves the exhausted automatic cursor", false, "a"],
+  ] as const)("fill-first with threshold zero: %s", (_name, observedDenial, expectedAccountId) => {
+    const now = Date.now();
+    const modelId = "gpt-6-astra";
+    const config = makeConfig({
+      accountPoolStrategy: "fill-first",
+      autoSwitchThreshold: 0,
+      activeCodexAccountId: MAIN_CODEX_ACCOUNT_ID,
+      codexAccounts: [{ id: "a", email: "a@test", isMain: false, plan: "free" }],
+    });
+    updateAccountQuota("a", undefined, undefined, 100); // Free's governing monthly window.
+    updateAccountQuota(MAIN_CODEX_ACCOUNT_ID, 6); // 94% remaining.
+    // An automatic cursor is not a manual pin, including when persisted active is main.
+    rememberActiveCodexAccount(config, "a");
+    expect(config.activeCodexAccountPinned).toBeUndefined();
+    expect(cachedDeniedCodexAccountIdsForModel(modelId, now)).toBeUndefined();
+    if (observedDenial) {
+      recordCodexModelDenialEvidence("a", modelId, readCodexAccountRecord("a")!.generation, now);
+    }
+    const deniedModelAccountIds = cachedDeniedCodexAccountIdsForModel(modelId, now);
+    if (observedDenial) expect([...(deniedModelAccountIds ?? [])]).toEqual(["a"]);
+    else expect(deniedModelAccountIds).toBeUndefined();
+    const selectionOptions = { isMainAccountTokenLive: () => true, deniedModelAccountIds };
+
+    // Preview must neither advance the automatic cursor nor manufacture a user selection.
+    expect(previewCodexAccountForRequest("initial-astra", config, now, "shared", selectionOptions, modelId))
+      .toBe(expectedAccountId);
+    expect(getEffectiveActiveCodexAccountId(config)).toBe("a");
+    expect(resolveCodexAccountForThreadDetailed(
+      "initial-astra", config, now, "shared", selectionOptions, modelId,
+    )).toMatchObject({ status: "selected", accountId: expectedAccountId });
+    expect(getEffectiveActiveCodexAccountId(config)).toBe(expectedAccountId);
+    expect(config.activeCodexAccountId).toBe(MAIN_CODEX_ACCOUNT_ID);
+    expect(config.activeCodexAccountPinned).toBeUndefined();
+  });
 
   /** `a` is ordered above `b`; the persisted operator selection is the lower tier. */
   function orderedConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {

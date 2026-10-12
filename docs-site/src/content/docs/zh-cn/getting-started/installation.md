@@ -42,6 +42,18 @@ ocx --version
 opencodex --version
 ```
 
+## 独立二进制文件（无需 npm）
+
+发布包还包含适用于 macOS、Linux 和 Windows 的独立 `ocx` 二进制文件。
+它内置 Bun 运行时和仪表盘，因此无需安装 npm、Node 或单独的 Bun。下载适合你平台的压缩包，解压后运行：
+
+```bash
+./ocx --version
+./ocx start
+```
+
+为了让仪表盘可用，请将解压后的 `gui/dist` 目录保留在二进制文件旁边。
+
 ### 发布渠道
 
 稳定的 `latest` 渠道已经包含 ChatGPT、OpenAI API key、OpenRouter 以及实验性 Cursor 路由所需的

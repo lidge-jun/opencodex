@@ -284,17 +284,27 @@ describe("the Responses WebSocket handshake", () => {
           headers: { "X-OpenCodex-API-Key": "ocx_data_secondsecret" },
         } as unknown as string[]);
         let settled = false;
+        let opened = false;
+        let failed = false;
         const finish = (value: boolean) => {
           if (settled) return;
           settled = true;
           clearTimeout(timer);
-          try { socket.close(); } catch { /* already closed */ }
           resolve(value);
         };
-        socket.addEventListener("open", () => finish(true));
-        socket.addEventListener("error", () => finish(false));
-        socket.addEventListener("close", () => finish(false));
-        const timer = setTimeout(() => finish(false), 5_000);
+        socket.addEventListener("open", () => {
+          opened = true;
+          try { socket.close(); } catch { finish(false); }
+        });
+        socket.addEventListener("error", () => {
+          failed = true;
+          try { socket.close(); } catch { finish(false); }
+        });
+        socket.addEventListener("close", () => finish(opened && !failed));
+        const timer = setTimeout(() => {
+          try { socket.close(); } catch { /* already closed */ }
+          finish(false);
+        }, 5_000);
       });
       // The handshake now branches on the resolver rather than the boolean
       // wrapper, so this pins that the rewrite did not change who gets in.

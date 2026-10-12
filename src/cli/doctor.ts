@@ -7,13 +7,16 @@
  * it never sets proxy env, relocates state dirs, mutates quota, or changes
  * networking. See devlog/_plan/260630_wsl-account-autoswitch/30_*.
  */
+import { cliCommandDoctorChecks, collectCliPathDiagnostics } from "./cli-path-diagnostics";
 import { accessSync, constants, existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { getConfigDir, getConfigPath, readConfigDiagnostics } from "../config";
 import { readPid } from "../config/process-state";
-import { probeUncleanExitState } from "./status";
+import { inspectDesktopSupervision } from "../service/desktop-supervision.mjs";
+import { fetchLiveStartupHealth, probeUncleanExitState, selectStatusStartupHealth } from "./status";
 import { findLiveProxy, probeHostname, type LiveProxy } from "../server/proxy-liveness";
+import { directLocalHttpFetch } from "../server/direct-local-http";
 import { BUN_RUNTIME_SOURCES } from "../lib/bun-runtime";
 import type { BunRuntimeSource } from "../lib/bun-runtime";
 import { maskAccountId } from "../lib/privacy";
@@ -32,6 +35,7 @@ import {
 } from "../codex/subagent-model-fallback";
 import { readCatalog, readCodexCatalogPath, readConfiguredDefaultModel } from "../codex/catalog/parsing";
 import { diagnoseCodexShim, findCodexOnPath, isWindowsInteropDir, type CodexShimDiagnostic } from "../codex/shim";
+import { overlayActivationHint } from "../codex/shim-overlay";
 import { providerTableString, rootTomlString } from "../codex/injected-marker";
 import { countPendingOpencodexHistory } from "../codex/history-provider";
 import {
@@ -41,7 +45,9 @@ import {
 } from "../codex/coordinator-doctor";
 import {
   inspectAbandonedResponseStateTemps,
+  inspectResponseSpillStorage,
   reclaimAbandonedResponseStateTemps,
+  type ResponseSpillDirInspection,
   type ResponseStateTempRecoveryResult,
 } from "../responses/state";
 import {
@@ -58,6 +64,7 @@ import {
   formatLegacyCodexConfigKeyDiagnosticsForDoctor,
 } from "../codex/legacy-config-keys";
 import { collectStartupHealth, formatStartupRoutingDetail, startupHealthSummary } from "../codex/autostart-health";
+import { collectDesktopSystemProxy, formatDesktopSystemProxyLines } from "../claude/desktop-system-proxy";
 import {
   displayCodexRuntimePath,
   effortClampAppliesToRuntime,
@@ -477,10 +484,18 @@ export function collectProviderApiKeyDiagnostics(
 
 export type CodexEnvKeyReadinessDiagnostic = {
   envName: string;
-  shimState: "missing" | "unhealthy";
+  shimState: "missing" | "unhealthy" | "inactive";
   detail: string;
   action: string;
 };
+
+/** Shell activation and legacy migration are independent of admission-token readiness. */
+export function formatCodexShimDoctorLines(shim: CodexShimDiagnostic, platform = process.platform): string[] {
+  if (platform === "win32" || !shim.installed) return [];
+  const inactiveOverlay = shim.runnable === true && shim.active === false;
+  const healthyLegacy = shim.healthy && shim.runnable === undefined;
+  return inactiveOverlay || healthyLegacy ? shim.summary.split("\n").map(line => `       ${line}`) : [];
+}
 
 /** Warn when routed Codex cannot obtain its configured admission token at launch. */
 export function collectCodexEnvKeyReadiness(
@@ -488,17 +503,22 @@ export function collectCodexEnvKeyReadiness(
   env: EnvMap,
   shim: CodexShimDiagnostic,
   serviceTokenPresent: boolean,
+  shimActivationShown = false,
 ): CodexEnvKeyReadinessDiagnostic | null {
   if (!configText || rootTomlString(configText, "model_provider") !== "opencodex") return null;
   const envName = providerTableString(configText, "opencodex", "env_key")?.trim();
   const envValue = envName ? ownEnvValue(env, envName) : undefined;
   if (!envName || envValue?.trim() || shim.healthy || !serviceTokenPresent) return null;
-  const shimState = shim.installed ? "unhealthy" : "missing";
+  const shimState = shim.runnable && shim.active === false ? "inactive" : shim.installed ? "unhealthy" : "missing";
   return {
     envName,
     shimState,
     detail: `Codex uses env_key ${envName}, but that variable is unset and the OpenCodex shim is ${shimState}; the service token file exists but plain Codex does not load it`,
-    action: `Run 'ocx codex-shim install' to repair launch-time token injection, or export ${envName} in the process that starts Codex`,
+    action: shimState === "inactive"
+      ? shimActivationShown
+        ? `Activate the PATH shim as shown under Codex restart safety, or export ${envName} in the process that starts Codex`
+        : `${overlayActivationHint()} Or export ${envName} in the process that starts Codex`
+      : `Run 'ocx codex-shim install' to repair launch-time token injection, or export ${envName} in the process that starts Codex`,
   };
 }
 
@@ -860,6 +880,34 @@ export function formatResponseTempLines(
   return lines;
 }
 
+/**
+ * Render the response-state spill section (testable without console capture).
+ *
+ * Always dry-run: doctor reports what the disk looks like, it never unlinks
+ * spill files. "Owned" counts union the live store and the persisted snapshot,
+ * so a file a restart would re-own is never reported as garbage.
+ */
+export function formatResponseSpillLines(result: ResponseSpillDirInspection): string[] {
+  // A truncated scan saw only a prefix of the directory, so zero orphans there is
+  // not a clean bill of health: the unscanned tail may still hold them.
+  if (result.orphanFiles === 0 && result.truncated) {
+    return [
+      `  !!  No orphaned response-state spill files in the first ${result.scanned} entries (${result.files} file(s), ${mb(result.bytes)} scanned).`,
+      "      Scan stopped at its entry budget; the rest of the directory was not checked.",
+    ];
+  }
+  if (result.orphanFiles === 0) {
+    return [`  ok  No orphaned response-state spill files (${result.files} file(s), ${mb(result.bytes)} on disk).`];
+  }
+  const lines = [
+    `  !!  ${result.orphanFiles} unreferenced response-state spill file(s), ${mb(result.orphanBytes)} reclaimable.`,
+    `      ${result.ownedFiles} file(s), ${mb(result.ownedBytes)} still owned by the store or the persisted snapshot.`,
+    "      The running proxy reclaims orphans on its periodic sweep; do not delete spill files manually.",
+  ];
+  if (result.truncated) lines.push("      Scan stopped at its entry budget; the real total is higher.");
+  return lines;
+}
+
 export function formatCoordinatorDoctorLines(diagnostic: CodexCoordinatorDiagnostic): string[] {
   const pathLine = diagnostic.path ? [`       path: ${diagnostic.path}`] : [];
   const evidenceLines = "evidence" in diagnostic && diagnostic.evidence
@@ -1073,12 +1121,15 @@ export interface DefaultModelExposure {
 
 /** Exactly the catalog's own `RawEntry` shape, so an on-disk row needs no conversion. */
 type CatalogVisibilityRow = Record<string, unknown>;
+type ExposedModelsFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+const EXPOSED_MODELS_MAX_ROWS = 10_000;
+const EXPOSED_MODEL_ID_MAX_LENGTH = 1_024;
 
 export interface DefaultModelExposureDeps {
   readConfiguredModelFn?: () => string | null;
   /** The live proxy doctor already resolved, or null/absent when none is running. */
   live?: LiveProxy | null;
-  fetchFn?: typeof fetch;
+  fetchFn?: ExposedModelsFetch;
   readCatalogModelsFn?: () => readonly CatalogVisibilityRow[] | null;
 }
 
@@ -1091,18 +1142,24 @@ export interface DefaultModelExposureDeps {
  * data-plane admission on a non-loopback bind (`isApiAuthRequired`), and doctor deliberately
  * holds no data-plane key, so a remote-bound proxy always falls through to the catalog.
  */
-async function fetchExposedModelIds(live: LiveProxy, fetchFn: typeof fetch): Promise<Set<string> | null> {
+async function fetchExposedModelIds(live: LiveProxy, fetchFn: ExposedModelsFetch): Promise<Set<string> | null> {
   try {
+    // directLocalHttpFetch never follows redirects and aborts past its byte cap, so the
+    // unbounded-body and redirect cases are covered below the JSON parse, not by options here.
     const res = await fetchFn(`http://${probeHostname(live.hostname)}:${live.port}/v1/models`, {
       signal: AbortSignal.timeout(EXPOSED_MODELS_TIMEOUT_MS),
     });
     if (!res.ok) return null;
     const body = await res.json() as { data?: unknown };
     if (!Array.isArray(body?.data)) return null;
+    if (body.data.length > EXPOSED_MODELS_MAX_ROWS) return null;
     const ids = new Set<string>();
     for (const row of body.data) {
       const id = (row as { id?: unknown } | null)?.id;
-      if (typeof id === "string" && id.length > 0) ids.add(id);
+      if (typeof id !== "string") return null;
+      if (id.length === 0) continue;
+      if (id.length > EXPOSED_MODEL_ID_MAX_LENGTH) return null;
+      ids.add(id);
     }
     return ids;
   } catch {
@@ -1158,7 +1215,7 @@ export async function collectDefaultModelExposure(
   }
 
   const live = deps.live ?? null;
-  const proxyIds = live ? await fetchExposedModelIds(live, deps.fetchFn ?? fetch) : null;
+  const proxyIds = live ? await fetchExposedModelIds(live, deps.fetchFn ?? directLocalHttpFetch) : null;
   const catalogIds = catalogExposedModelIds((deps.readCatalogModelsFn ?? defaultCatalogModels)());
   if (proxyIds === null && catalogIds === null) {
     return {
@@ -1269,6 +1326,12 @@ export async function runDoctor(args: string[] = []): Promise<void> {
     console.log(`  ${row.exists ? "ok " : "-- "} ${row.label}: ${row.path}${flags ? `  (${flags})` : ""}`);
   }
 
+  console.log("\nocx command selection");
+  for (const check of cliCommandDoctorChecks(collectCliPathDiagnostics())) {
+    console.log(`  ${check.level === "OK" ? "ok " : "!! "} ${check.message}`);
+    if (check.level === "FAIL") recordDoctorFailure();
+  }
+
   // Runs without the proxy on purpose: the worst accumulation happens when the proxy will
   // not start, which is exactly when the in-process periodic reclaim never ticks.
   const reclaimTemps = args.includes(RECLAIM_RESPONSE_TEMPS_FLAG);
@@ -1289,6 +1352,9 @@ export async function runDoctor(args: string[] = []): Promise<void> {
     reclaimTemps,
   )) console.log(line);
 
+  console.log("\nResponse-state spill files");
+  for (const line of formatResponseSpillLines(inspectResponseSpillStorage())) console.log(line);
+
   const orcaHome = collectOrcaCodexHomeDiagnostic();
   console.log("\nCodex app home targeting");
   console.log(`  ${orcaHome.mismatch ? "!! " : "ok "} Effective Codex home: ${orcaHome.effectiveCodexHome}`);
@@ -1305,16 +1371,28 @@ export async function runDoctor(args: string[] = []): Promise<void> {
     try { return readFileSync(codexConfigPath, "utf8"); } catch { return null; }
   })();
   const serviceTokenPresent = Boolean(readInstalledServiceToken()?.trim());
+  const codexShim = diagnoseCodexShim();
+  const codexShimLines = formatCodexShimDoctorLines(codexShim);
   const codexEnvKeyReadiness = collectCodexEnvKeyReadiness(
     codexConfigText,
     process.env,
-    diagnoseCodexShim(),
+    codexShim,
     serviceTokenPresent,
+    codexShimLines.length > 0,
   );
-  const startup = collectStartupHealth(doctorConfig);
+  // Use the same attested live startup verdict as `ocx status` when the proxy is already
+  // identity-verified. A shell-local systemd probe can be a false negative for a system-wide
+  // service because the shell does not inherit the manager-owned environment.
+  const live = await findLiveProxy({
+    configFn: () => ({ port: doctorConfig.port, hostname: doctorConfig.hostname }),
+  });
+  const liveStartup = live ? await fetchLiveStartupHealth(live) : null;
+  const { startup } = selectStatusStartupHealth(liveStartup, () => collectStartupHealth(doctorConfig),
+    live?.pid != null ? () => inspectDesktopSupervision({ targetPid: live.pid! }) : undefined, live?.pid);
   console.log("\nCodex restart safety");
   console.log(`  ${startup.rebootSafe ? "ok " : "!! "} ${startupHealthSummary(startup)}`);
   console.log(`       ${formatStartupRoutingDetail(startup)}`);
+  for (const line of codexShimLines) console.log(line);
 
   console.log("\nCodex runtime selection");
   {
@@ -1350,12 +1428,6 @@ export async function runDoctor(args: string[] = []): Promise<void> {
     }
   }
 
-  // #618: identity-verified liveness first so pid-file absence does not hide a live service.
-  // Reuse the diagnostics config already loaded above so doctor stays read-only on malformed JSON.
-  const live = await findLiveProxy({
-    configFn: () => ({ port: doctorConfig.port, hostname: doctorConfig.hostname }),
-  });
-
   // Mirrors `ocx status` through the same comparison rather than a second implementation:
   // two diagnostics disagreeing about whether an install is stale is worse than one (#2701).
   // No extra probe -- findLiveProxy already carried the version back.
@@ -1383,6 +1455,14 @@ export async function runDoctor(args: string[] = []): Promise<void> {
 
   console.log("\nConfigured proxy (value hidden)");
   console.log(`  ${configuredProxy.present ? "set    " : "unset  "} ${configuredProxy.key} (${configuredProxy.source}; ${configuredProxy.detail})`);
+
+  // Observe-only and warning-level: a bypassed Desktop first-party install still serves the
+  // CLI and every non-Desktop client, so this never records a doctor failure.
+  const desktopSystemProxyLines = formatDesktopSystemProxyLines(collectDesktopSystemProxy(doctorConfig));
+  if (desktopSystemProxyLines.length > 0) {
+    console.log("\nClaude Desktop first-party vs Windows system proxy");
+    for (const line of desktopSystemProxyLines) console.log(line);
+  }
 
   const providerApiKeys = collectProviderApiKeyDiagnostics(doctorConfig.providers);
   console.log("\nProvider API keys (value hidden)");
@@ -1614,8 +1694,12 @@ export async function runDoctor(args: string[] = []): Promise<void> {
   const anyDrvfs = paths.some(p => detectFsType(p.path, mounts).isDrvfs || detectFsType(p.path, mounts).isMntDrive);
   const noProxy = currentProxyEnv.every(p => !p.present) && !configuredProxy.present;
   if (!startup.rebootSafe) {
-    const command = startup.recommendedCommand ?? startup.commands.restoreNative;
-    hints.push(`Codex is pinned to the local proxy without persistent startup protection. After restart, requests can reconnect indefinitely. Run '${command}'.`);
+    if (startup.recommendedAction || startup.desktop?.supervisor) {
+      hints.push(`Codex is pinned to the local proxy without persistent startup protection. ${startup.recommendedAction ?? "Reopen OpenCodex and check Start at Login."}`);
+    } else {
+      const command = startup.recommendedCommand ?? startup.commands.restoreNative;
+      hints.push(`Codex is pinned to the local proxy without persistent startup protection. After restart, requests can reconnect indefinitely. Run '${command}'.`);
+    }
   }
   if (anyDrvfs) {
     hints.push("State dir is on a Windows-mounted (/mnt) drive. Prefer the Linux home (~) under WSL for token/lock reliability.");

@@ -6,6 +6,10 @@
   ],
   "absentPaths": [
     {
+      "path": "docs/",
+      "reason": "the root docs/ folder is retired; ops/docs-and-release.md documents where its material went and that no docs/ tree is tracked"
+    },
+    {
       "path": "go/",
       "reason": "the Go native-runtime experiment is retired; ops/docs-and-release.md documents that no go/ tree is tracked"
     }
@@ -49,7 +53,9 @@
       "title": "Overview",
       "scope": "Product boundary, local state ownership, and the non-negotiable invariants index.",
       "documents": [
+        "app/",
         "gui/",
+        "src/companion/",
         "scripts/",
         "src/config.ts",
         "src/lib/"
@@ -96,7 +102,8 @@
         "src/update/",
         "src/usage/",
         "src/vision/",
-        "src/web-search/"
+        "src/web-search/",
+        "src/config/persisted-mutation.ts"
       ]
     },
     {
@@ -122,6 +129,26 @@
       ]
     },
     {
+      "path": "codex-prompts.md",
+      "tier": 2,
+      "title": "Codex Prompts",
+      "scope": "Prompt-layer repair, base import previews and bounded text-probe sources.",
+      "documents": [
+        "src/codex/",
+        "src/server/"
+      ]
+    },
+    {
+      "path": "local-messaging.md",
+      "tier": 3,
+      "title": "Local Codex Messaging",
+      "scope": "Command-local metadata discovery, Unix RPC queued submission, peer envelopes, receipts and owned lifecycle bounds.",
+      "documents": [
+        "src/messaging/",
+        "src/cli/"
+      ]
+    },
+    {
       "path": "catalog.md",
       "tier": 2,
       "title": "Model Catalog",
@@ -131,6 +158,13 @@
         "src/routing/",
         "src/server/"
       ]
+    },
+    {
+      "path": "catalog-effort-clamp.md",
+      "tier": 2,
+      "title": "Effort-clamp observations",
+      "scope": "Persisted effort-clamp observation identity and idempotent sync notices.",
+      "documents": ["src/codex/runtime.ts", "src/codex/catalog/effort.ts"]
     },
     {
       "path": "subagents.md",
@@ -147,23 +181,67 @@
       "path": "transports/byte-accounting.md",
       "tier": 3,
       "title": "Byte Accounting",
-      "scope": "Request-copy and stream-buffer byte accounting shared by parsing, SSE rewriting, the adapters, and the translator budget.",
+      "scope": "Request-copy and stream-buffer byte accounting shared by parsing, SSE rewriting, the adapters, and the translator budget, plus durable spill admission.",
       "documents": [
         "src/adapters/",
+        "src/chat/",
         "src/lib/",
-        "src/server/"
+        "src/server/",
+        "src/responses/"
       ]
     },
     {
       "path": "transports/responses.md",
       "tier": 3,
       "title": "Responses Transport",
-      "scope": "The Responses HTTP/SSE data plane, combo failover, and streaming commit boundaries.",
+      "scope": "The Responses HTTP/SSE endpoint, dispatch, credential and upload boundaries, and core module ownership.",
+      "documents": [
+        "src/bridge.ts",
+        "src/bridge/",
+        "src/responses/",
+        "src/server/"
+      ]
+    },
+    {
+      "path": "transports/responses-wire-shapes.md",
+      "tier": 3,
+      "title": "Responses Wire Shapes",
+      "scope": "Mixed-wire model defaults, xAI agent-message continuation, declared-tool membership, and passthrough SSE stream shapes.",
       "documents": [
         "src/adapters/",
+        "src/bridge/",
         "src/lib/",
         "src/responses/",
         "src/server/"
+      ]
+    },
+    {
+      "path": "transports/responses-failover.md",
+      "tier": 3,
+      "title": "Responses Failover And Replay",
+      "scope": "Upstream reset retry, the ambiguous-resend gate, combo failover and commit boundaries, compaction routing, and output headroom.",
+      "documents": [
+        "src/lib/",
+        "src/server/",
+        "src/codex/"
+      ]
+    },
+    {
+        "path": "transports/policy-fallback.md",
+        "tier": 3,
+        "title": "Policy Candidate Fallback",
+        "scope": "Original policy authorization, concrete candidate retries and physical destination deduplication.",
+        "documents": [
+          "src/server/"
+        ]
+      },
+      {
+        "path": "transports/responses-spend.md",
+      "tier": 3,
+      "title": "Responses Spend Reservations",
+      "scope": "Credential-hop and durable spend reservations, and what a spent budget tells the client.",
+      "documents": [
+        "src/lib/"
       ]
     },
     {
@@ -194,7 +272,7 @@
       "path": "data-planes/images.md",
       "tier": 3,
       "title": "Images Data Plane",
-      "scope": "Standalone image generation and edit relay.",
+      "scope": "Standalone image generation/edit relay and local hosted Responses image display.",
       "documents": [
         "src/server/"
       ]
@@ -218,6 +296,22 @@
       ]
     },
     {
+      "path": "data-planes/protocol-paths.md",
+      "tier": 3,
+      "title": "Protocol Paths",
+      "scope": "Shared protocol vocabulary, declared feature dispositions, the ingress-by-upstream baseline, plan/trace shapes, and protocol settings.",
+      "documents": [
+        "src/protocols/"
+      ]
+    },
+    {
+      "path": "providers/anthropic-account-thresholds.md",
+      "tier": 4,
+      "title": "Anthropic Account Thresholds",
+      "scope": "Account-owned usage thresholds, inheritance, routing boundaries and durable policy changes.",
+      "documents": ["src/oauth/"]
+    },
+    {
       "path": "providers-and-adapters.md",
       "tier": 4,
       "title": "Providers And Adapters",
@@ -230,14 +324,60 @@
         "src/providers/",
         "src/responses/",
         "src/server/",
+        "src/types/",
         "src/web-search/"
+      ]
+    },
+    {
+      "path": "providers/jev-decision.md",
+      "tier": 4,
+      "title": "JEV Decision Routing",
+      "scope": "JEV Combo decision methods (TypeSafe, self-hosted System One rows, opencodex models), the decision request path, dashboard surfaces, and the content-free statistics projection.",
+      "documents": [
+        "src/combos/",
+        "src/server/",
+        "src/usage/"
+      ]
+    },
+    {
+      "path": "providers/anthropic-key-billing.md",
+      "tier": 4,
+      "title": "Anthropic API-key Billing Recovery",
+      "scope": "Exact billing refusal evidence, immutable physical credential ownership, pacing provenance and bounded pre-output key recovery.",
+      "documents": [
+        "src/providers/anthropic-billing-refusal.ts",
+        "src/providers/anthropic-billing-ownership.ts",
+        "src/providers/anthropic-billing-recovery.ts",
+        "src/providers/request-pacing.ts"
+      ]
+    },
+    {
+      "path": "providers/anthropic-account-pool.md",
+      "tier": 4,
+      "title": "Anthropic Account Pool",
+      "scope": "Anthropic OAuth instances (primary and Pool 2), account pause, model routes, quota labels, and pool-bound helpers, quota, reset grants and management surfaces.",
+      "documents": [
+        "src/oauth/",
+        "src/providers/",
+        "src/providers/quota/anthropic-account-quota.ts",
+        "src/server/management/anthropic-pool-settings.ts",
+        "src/sidecar/anthropic-binding.ts"
       ]
     },
     {
       "path": "providers/openai-tiers.md",
       "tier": 4,
       "title": "OpenAI Provider Account Modes",
-      "scope": "Pool/Direct account modes, API-key separation, wire identity, and quota evidence.",
+      "scope": "Pool/Direct account modes, API-key separation, and the public provider and quota contract.",
+      "documents": [
+        "src/codex/"
+      ]
+    },
+    {
+      "path": "providers/openai-accounts.md",
+      "tier": 4,
+      "title": "OpenAI Account Identity And Pool Operations",
+      "scope": "Migration and restore, wire identity, store concurrency, pool ordering and exclusions, quota observations, and account-bound retention.",
       "documents": [
         "src/codex/",
         "src/config.ts"
@@ -287,6 +427,7 @@
       "scope": "Cross-vendor Chat Completions behavior: reasoning, tool results, structured output, parallel tools.",
       "documents": [
         "src/adapters/",
+        "src/chat/",
         "src/responses/"
       ]
     },
@@ -310,27 +451,54 @@
       ]
     },
     {
-    "path": "adapters/compatibility-lab.md",
-    "tier": 4,
-    "title": "Compatibility Lab",
-    "scope": "Optional Lab evidence, automation, and its core-runtime isolation boundary.",
-    "documents": [
-      "src/lab/",
-      "src/server/index.ts"
-    ]
+      "path": "adapters/compatibility-lab.md",
+      "tier": 4,
+      "title": "Compatibility Lab",
+      "scope": "Optional Lab evidence, automation, and its core-runtime isolation boundary.",
+      "documents": [
+        "src/lab/",
+        "src/server/index.ts"
+      ]
+    },
+    {
+      "path": "cli-management.md",
+      "tier": 5,
+      "title": "CLI management and discovery",
+      "scope": "Terminal help and capability metadata, management-client output and the generated operating reference.",
+      "documents": [
+        "src/cli/",
+        "scripts/generate-ocx-skill-surface.ts",
+        "skills/ocx/"
+      ]
     },
     {
       "path": "gui-and-management-api.md",
       "tier": 5,
       "title": "GUI And Management API",
-      "scope": "Dashboard serving, authentication boundaries, /api/* ownership, and usage accounting.",
+      "scope": "Dashboard serving, authentication boundaries, /api/* ownership, and startup safety.",
       "documents": [
         "gui/",
+        "src/companion/",
         "src/codex/",
         "src/lib/",
         "src/server/",
         "src/usage/",
+        "src/usage/timeline.ts",
         "src/vision/"
+      ]
+    },
+    {
+      "path": "dashboard-and-usage.md",
+      "tier": 5,
+      "title": "Dashboard Surfaces And Usage",
+      "scope": "Dashboard page contracts, usage accounting and request metrics, and per-surface management settings.",
+      "documents": [
+        "gui/",
+        "src/codex/",
+        "src/lib/",
+        "src/quota/",
+        "src/server/",
+        "src/usage/"
       ]
     },
     {
@@ -339,9 +507,21 @@
       "title": "Client Integrations",
       "scope": "Third-party client config ownership, snapshots, refresh, disable, and restore.",
       "documents": [
+        "src/cli/",
         "src/clients/",
         "src/integrations/",
         "src/lib/"
+      ]
+    },
+    {
+      "path": "clients/chatgpt-desktop.md",
+      "tier": 5,
+      "title": "ChatGPT Desktop",
+      "scope": "Experimental macOS app-server stdout shim, opt-in launch, restore and failure boundaries.",
+      "documents": [
+        "src/chatgpt/",
+        "src/cli/",
+        "src/codex/"
       ]
     },
     {
@@ -357,12 +537,62 @@
       ]
     },
     {
+      "path": "desktop-shell.md",
+      "tier": 6,
+      "title": "Desktop shell",
+      "scope": "Tauri desktop shell, proxy attachment and sidecar lifecycle, tray controls, bootstrap navigation, and desktop companion presence.",
+      "documents": [
+        "desktop/",
+        "src/server/management/companion-routes.ts"
+      ]
+    },
+    {
+      "path": "desktop-terminal-command.md",
+      "tier": 6,
+      "title": "Desktop-owned terminal command",
+      "scope": "Desktop-owned ocx command on PATH: record and journal, POSIX shim and shell blocks, Windows user Path, private-path ACL policy, and the local Terminal command page.",
+      "documents": [
+        "desktop/src-tauri/src/cli_command.rs",
+        "desktop/src-tauri/src/cli_command_record.rs",
+        "desktop/src-tauri/src/cli_command_posix.rs",
+        "desktop/src-tauri/src/cli_command_windows.rs",
+        "desktop/ui/cli.html",
+        "desktop/ui/cli.js"
+      ]
+    },
+    {
       "path": "ops/service-and-sidecars.md",
       "tier": 6,
       "title": "Background Service And Sidecars",
       "scope": "Service install/repair, platform launchers, tray, and sidecar processes.",
       "documents": [
-        "src/server/"
+        "src/lib/",
+        "src/server/",
+        "src/service-manager-probe.ts",
+        "src/sidecar/",
+        "src/update/"
+      ]
+    },
+    {
+      "path": "ops/service-health-recovery.md",
+      "tier": 6,
+      "title": "Service Health Recovery",
+      "scope": "Opt-in sentinel that turns a hung but listening managed service proxy into an exit its manager restarts.",
+      "documents": [
+        "src/service/health-sentinel-launch.ts",
+        "src/service/health-sentinel-main.ts",
+        "src/service/health-sentinel-policy.ts",
+        "src/service/health-sentinel-probe.ts",
+        "src/service/health-sentinel-windows.ts"
+      ]
+    },
+    {
+      "path": "ops/plugins.md",
+      "tier": 6,
+      "title": "Local Plugins",
+      "scope": "Plugin loading from OPENCODEX_HOME/plugins and the upstream rewrite slot plugins attach to.",
+      "documents": [
+        "src/plugins/"
       ]
     },
     {
@@ -399,6 +629,61 @@
       "documents": [
         "src/remote-control/"
       ]
+    },
+    {
+      "path": "remote-link.md",
+      "tier": 3,
+      "title": "Remote Link",
+      "scope": "SSH machine-link building blocks: OpenSSH argument policy, ssh_config candidates, tunnel lifecycle reducer, the private link store, and standalone pairing-grant delivery.",
+      "documents": [
+        "src/link/",
+        "src/lib/gui-pair-intent.ts",
+        "src/lib/windows-owner-acl.ts",
+        "src/server/gui-pair-delivery.ts"
+      ]
+    },
+    {
+      "path": "companion.md",
+      "tier": 5,
+      "title": "Companion usage",
+      "scope": "Shared timeline filtering, usage/quotas, native and web tray title, and WidgetKit display contracts.",
+      "documents": [
+        "src/companion/",
+        "src/usage/",
+        "gui/",
+        "app/",
+        "desktop/"
+      ]
+    },
+    {
+      "path": "config-proxy.md",
+      "tier": 2,
+      "title": "Proxy Configuration",
+      "scope": "Global proxy activation, start flags, and credential-safe CLI output.",
+      "documents": []
+    },
+    {
+      "path": "codex-account-controls.md",
+      "tier": 5,
+      "title": "Codex Account Controls",
+      "scope": "Account selection order, custom usage thresholds, and stable account-card editing.",
+      "documents": []
+    },
+    {
+      "path": "ops/cross-platform-ci.md",
+      "tier": 6,
+      "title": "Cross-platform CI",
+      "scope": "Test lanes, platform coverage, aggregate gating, and release CI proof.",
+      "documents": []
+    },
+    {
+      "path": "ops/test-sandbox-cleanup.md",
+      "tier": 6,
+      "title": "Test Sandbox Cleanup",
+      "scope": "Test-runner home and case-scoped lifecycle teardown ordering.",
+      "documents": [
+        "tests/"
+      ]
     }
   ],
   "contracts": {
@@ -413,9 +698,9 @@
         "dependents": [
           "catalog.md",
           "config.md",
-          "gui-and-management-api.md",
+          "dashboard-and-usage.md",
           "ops/docs-and-release.md",
-          "providers/openai-tiers.md",
+          "providers/openai-accounts.md",
           "runtime.md",
           "subagents.md"
         ]
@@ -473,32 +758,7 @@
     ]
   },
   "grace": {
-    "undocumentedSourceAreas": [
-      {
-        "path": "src/bridge.ts",
-        "reason": "no doc names this file; it is the legacy adapter bridge entry and its behavior is described under the adapter registry without a path reference"
-      },
-      {
-        "path": "src/bridge/",
-        "reason": "no doc names this directory; it holds the leaves moved out of the src/bridge.ts facade and inherits the same adapter-registry description the facade has"
-      },
-      {
-        "path": "src/quota/",
-        "reason": "no doc names a path here; quota evidence is described in providers/openai-tiers.md in prose only"
-      },
-      {
-        "path": "src/service-manager-probe.ts",
-        "reason": "no doc names this file; service probing is described in ops/service-and-sidecars.md without a path reference"
-      },
-      {
-        "path": "src/sidecar/",
-        "reason": "no doc names a path here; ops/service-and-sidecars.md describes sidecar behavior in prose only"
-      },
-      {
-        "path": "src/types/",
-        "reason": "shared declarations plus the tool-name and wire-pin resolvers, which no doc currently describes"
-      }
-    ],
+    "undocumentedSourceAreas": [],
     "unboundInvariants": [
       {
         "id": "INV-HOME-01",
@@ -509,11 +769,7 @@
         "reason": "no test constrains routed slug shape; the ten files that mention provider/model consume slugs rather than enforcing the form"
       }
     ],
-    "oversizeDocs": [
-      "gui-and-management-api.md",
-      "providers/openai-tiers.md",
-      "transports/responses.md"
-    ],
+    "oversizeDocs": [],
     "staleRefs": []
   }
 }

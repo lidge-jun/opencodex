@@ -352,7 +352,7 @@ describe("Cursor native exec bridge", () => {
     expect(deleted.message.value.result.case).toBe("success");
   });
 
-  test("runs harmless shell commands", async () => {
+  test("refuses foreground shell commands even with trusted-local opt-in", async () => {
     const dir = mkdtempSync(join(tmpdir(), "ocx-cursor-shell-"));
     const shell = decode((await handleCursorNativeExec(execMessage({
       case: "shellArgs",
@@ -363,9 +363,11 @@ describe("Cursor native exec bridge", () => {
     }), { unsafeAllowNativeLocalExec: true }))[0]);
 
     expect(shell.message.case).toBe("shellResult");
-    expect(shell.message.value.result.case).toBe("success");
-    if (shell.message.value.result.case === "success") {
-      expect(shell.message.value.result.value.stdout).toBe("cursor-ok");
+    expect(shell.message.value.result.case).toBe("failure");
+    if (shell.message.value.result.case === "failure") {
+      expect(shell.message.value.result.value.stdout).toBe("");
+      expect(shell.message.value.result.value.aborted).toBe(true);
+      expect(shell.message.value.result.value.stderr).toContain("kernel-backed descendant ownership");
     }
   });
 
@@ -386,7 +388,11 @@ describe("Cursor native exec bridge", () => {
     expect(cases[0]).toBe("shellStream");
     const events = execFrames
       .flatMap(frame => (frame.message.case === "shellStream" ? [frame.message.value.event.case] : []));
-    expect(events).toEqual(expect.arrayContaining(["start", "stdout", "exit"]));
+    expect(events).toEqual(["start", "exit"]);
+    const completion = execFrames.at(-1)!.message;
+    if (completion.case !== "shellResult" || completion.value.result.case !== "failure") throw new Error("expected foreground denial");
+    expect(completion.value.result.value.aborted).toBe(true);
+    expect(completion.value.result.value.stdout).toBe("");
     // Completion acknowledgement: structured shellResult then exec streamClose — without these
     // Cursor keeps the turn pending forever (heartbeat-only stall). See native-exec-shell.ts.
     expect(cases).toContain("shellResult");

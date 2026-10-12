@@ -3,7 +3,7 @@ import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createKiroAdapter } from "../../../src/adapters/kiro";
-import { normalizeKiroImages, KIRO_IMAGE_BASE64_BUDGET, KIRO_MAX_IMAGES_PER_MESSAGE, type KiroImage } from "../../../src/adapters/kiro-images";
+import { normalizeKiroImages, KIRO_IMAGE_BASE64_BUDGET, KIRO_MAX_IMAGES_PER_MESSAGE, KIRO_MAX_IMAGES_PER_REQUEST, type KiroImage } from "../../../src/adapters/kiro-images";
 import { resetNormalizeStateForTests, TIER_SPECS, type EncodeFn } from "../../../src/adapters/anthropic-image-normalize";
 import { sniffImageDimensions } from "../../../src/adapters/anthropic-image-guard";
 import type { OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
@@ -155,6 +155,103 @@ describe("kiro generous image pipeline", () => {
     const uim = (payload.conversationState as Record<string, any>).currentMessage.userInputMessage;
     expect(uim.images).toHaveLength(KIRO_MAX_IMAGES_PER_MESSAGE);
     expect(uim.content).toContain("per-message cap");
+  });
+
+  test("K2d: exactly 100 images across history and current remain unchanged", async () => {
+    const payload = kiroPayload(Array.from({ length: 5 }, (_, i) => ({
+      content: `m${i}`, images: Array.from({ length: 20 }, () => img(ONE_PX_PNG)),
+    })));
+    await normalizeKiroImages(payload);
+    const state = payload.conversationState as Record<string, any>;
+    const carriers = [...state.history.map((h: any) => h.userInputMessage), state.currentMessage.userInputMessage];
+    expect(carriers.flatMap((c: any) => c.images ?? [])).toHaveLength(KIRO_MAX_IMAGES_PER_REQUEST);
+    expect(carriers.map((c: any) => c.content)).toEqual(["m0", "m1", "m2", "m3", "m4"]);
+  });
+
+  test("K2e: 101 images drop the oldest history image and preserve the current image", async () => {
+    const payload = kiroPayload([
+      ...Array.from({ length: 5 }, (_, i) => ({ content: `history${i}`, images: Array.from({ length: 20 }, () => img(ONE_PX_PNG)) })),
+      { content: "current", images: [img(ONE_PX_PNG)] },
+    ]);
+    await normalizeKiroImages(payload);
+    const state = payload.conversationState as Record<string, any>;
+    const history = state.history.map((h: any) => h.userInputMessage);
+    expect(history[0].images).toHaveLength(19);
+    expect(history[0].content).toContain("100-image request cap");
+    expect(history[0].content).toContain("oldest images in this message were dropped");
+    expect(history.slice(1).every((c: any) => c.images.length === 20 && !c.content.includes("omitted"))).toBe(true);
+    expect(state.currentMessage.userInputMessage).toEqual({ content: "current", images: [img(ONE_PX_PNG)] });
+  });
+
+  test("K2e2: an undecodable current image does not evict valid history at the request cap", async () => {
+    const payload = kiroPayload([
+      ...Array.from({ length: 5 }, (_, i) => ({ content: `history${i}`, images: Array.from({ length: 20 }, () => img(ONE_PX_PNG)) })),
+      { content: "current", images: [img(Buffer.from("not an image").toString("base64"))] },
+    ]);
+    await normalizeKiroImages(payload);
+    const state = payload.conversationState as Record<string, any>;
+    const history = state.history.map((h: any) => h.userInputMessage);
+    expect(history.flatMap((c: any) => c.images ?? [])).toHaveLength(KIRO_MAX_IMAGES_PER_REQUEST);
+    expect(history.every((c: any) => c.images.length === 20 && !c.content.includes("request cap"))).toBe(true);
+    expect(state.currentMessage.userInputMessage.images).toBeUndefined();
+    expect(state.currentMessage.userInputMessage.content).toContain("undecodable");
+  });
+
+  test("K2f: request cap removes whole oldest carriers and leaves omission markers", async () => {
+    const payload = kiroPayload([
+      { content: "oldest", images: [img(ONE_PX_PNG)] },
+      { content: "second", images: [img(ONE_PX_PNG), img(ONE_PX_PNG)] },
+      ...Array.from({ length: 5 }, (_, i) => ({ content: `m${i}`, images: Array.from({ length: 20 }, () => img(ONE_PX_PNG)) })),
+    ]);
+    await normalizeKiroImages(payload);
+    const state = payload.conversationState as Record<string, any>;
+    const carriers = [...state.history.map((h: any) => h.userInputMessage), state.currentMessage.userInputMessage];
+    expect(carriers.flatMap((c: any) => c.images ?? [])).toHaveLength(KIRO_MAX_IMAGES_PER_REQUEST);
+    for (const carrier of carriers.slice(0, 2)) {
+      expect(carrier.images).toBeUndefined();
+      expect(carrier.content).toContain("100-image request cap");
+      expect(carrier.content).toContain("no images remain in this message");
+    }
+    expect(carriers.at(-1).images).toHaveLength(20);
+  });
+
+  test("K2g: per-message trimming runs before the request-wide count", async () => {
+    const payload = kiroPayload([
+      { content: "oldest", images: Array.from({ length: 21 }, () => img(ONE_PX_PNG)) },
+      ...Array.from({ length: 4 }, (_, i) => ({ content: `m${i}`, images: Array.from({ length: 20 }, () => img(ONE_PX_PNG)) })),
+    ]);
+    await normalizeKiroImages(payload);
+    const state = payload.conversationState as Record<string, any>;
+    const oldest = state.history[0].userInputMessage;
+    expect(oldest.images).toHaveLength(20);
+    expect(oldest.content).toContain("per-message cap");
+    expect(oldest.content).not.toContain("request cap");
+  });
+
+  test("K2h: count surplus cannot consume byte budget or pin a surviving image to a lower tier", async () => {
+    const imageSize = 184 * 1024; // 100 fit 18 MiB; 101 exceed it.
+    const originals = Array.from({ length: 101 }, (_, i) => fakePngB64(100 + i, 100, imageSize / 4 * 3));
+    let encodes = 0;
+    const encode: EncodeFn = async () => {
+      encodes++;
+      return { data: fakePngB64(100, 100, 100 * 1024 / 4 * 3), mediaType: "image/jpeg" };
+    };
+    const options = { encode, validate: async () => {} };
+    const payload = kiroPayload(originals.map((bytes, i) => ({ content: `m${i}`, images: [img(bytes)] })));
+    await normalizeKiroImages(payload, options);
+    const state = payload.conversationState as Record<string, any>;
+    expect(state.history[0].userInputMessage.images).toBeUndefined();
+    expect(state.history[0].userInputMessage.content).toContain("100-image request cap");
+    expect(state.history[1].userInputMessage.images[0]).toEqual(img(originals[1]));
+    expect(state.currentMessage.userInputMessage.images[0]).toEqual(img(originals[100]));
+    expect(encodes).toBe(0);
+
+    // A later turn reuses the same source bytes; the discarded image must not
+    // have pinned the oldest survivor to a demoted emitted tier.
+    const later = kiroPayload(originals.slice(1).map((bytes, i) => ({ content: `later${i}`, images: [img(bytes)] })));
+    await normalizeKiroImages(later, options);
+    expect((later.conversationState as Record<string, any>).history[0].userInputMessage.images[0]).toEqual(img(originals[1]));
+    expect(encodes).toBe(0);
   });
 
   test("K2c: a message whose sole image is undecodable loses the images field entirely", async () => {

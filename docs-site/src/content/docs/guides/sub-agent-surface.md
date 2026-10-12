@@ -34,6 +34,23 @@ routed one arrives encrypted and fails. The dashboard asks before either, and li
 [Why v1 is the default](/guides/subagent-v1-default/).
 :::
 
+## Model switches and side-chat compaction
+
+Codex can compact inherited history before the first turn of a side chat or after a model switch.
+One trigger compares the previous and destination models' `comp_hash` compatibility markers:
+when both are present and differ, Codex compacts even if the history fits the destination's context.
+
+OpenCodex represents unknown compatibility for routed models as `comp_hash: null`, instead of
+inventing an `"opencodex"` marker or copying one from a native template. Catalog rebuilds also clear
+those old markers on OpenCodex rows retained during a provider discovery outage. Native models and
+explicit Codex-forward aliases keep their upstream markers, so genuine native incompatibility
+checks still apply. This behavior is independent of the v1/v2 sub-agent surface and the model
+configured to perform compaction.
+
+Normal context and token-limit compaction still applies. This change removes the synthetic
+hash mismatch; it does not select which visible messages a side chat inherits or restore original
+messages from an already compacted context. Provider content support remains a separate constraint.
+
 ## External task input
 
 Codex can deliver a task's initial input or follow-up in a result-shaped envelope
@@ -45,8 +62,7 @@ Generated developer guidance is placed before the current task in both parsed
 messages and saved raw history, preserving the same order when that history is replayed.
 
 Malformed, empty, opaque or incomplete envelopes still fail validation. Actual tool
-results keep their required `call_id`; native passthrough and compaction retain their
-existing raw-input handling. See [the adapter contract](/reference/adapters/#external-task-input-on-translated-responses-routes).
+results keep their required `call_id`; native passthrough and routed (portable) compaction apply the same user-turn mapping to their raw bodies; the direct native `/responses/compact` forward keeps its existing raw-input handling. See [the adapter contract](/reference/adapters/#external-task-input-on-translated-responses-routes).
 
 ## How it works
 
@@ -70,6 +86,13 @@ The dashboard's **Sub-agent delegation** controls three related settings:
 - `injectionModel` is the preferred worker model named in opencodex guidance.
 - `injectionEffort` is the optional `reasoning_effort` to request for that model.
 - `injectionPrompt` replaces the built-in v2 guidance text.
+
+Not sure which model to delegate to? **Suggest** beside the delegation model asks for a short
+description of the work Codex usually hands off, sizes it with one call to your default Codex model,
+and proposes the cheapest sufficient model and an effort from the list the picker offers, with the
+reasoning and the signals that would move it up or down. Nothing changes until you choose
+**Use this**, which saves exactly like picking the model and effort by hand. Tiers come from
+`codexRoleTiers` or price, as in [role auto-assign](/guides/integrations/#auto-assign).
 
 `multiAgentGuidanceEnabled` defaults to on and is the master switch for opencodex-authored guidance
 on both surfaces. Turning it off suppresses both the v2 designation block and v1 proactive text.
@@ -105,6 +128,9 @@ On v1, opencodex injects the same proactive delegation guidance as the v2 recomm
 at `max` or `ultra` effort. Only the delegation trigger changes: no separate delegation request is
 needed; user instructions, authority, task scope, and collaboration-tool rules still apply.
 It does not add a preferred model, roster, fallback list, or custom prompt on v1.
+In Codex code mode, opencodex can see the v1 tools only when the `exec` tool description lists
+them. When Codex defers them for tool search, which it does for every opencodex catalog model,
+the request does not show that v1 is available, so the proactive guidance is not added.
 
 The default-off `syncCodexSubagentDefaults` option is separate from guidance. When opencodex owns
 active Codex routing, sync or restart can write the selected values as marker-owned
@@ -226,6 +252,7 @@ Use `ocx agent` for delegation, roster, effort-cap, and fallback settings:
 ```bash
 ocx agent status
 ocx agent injection set --model anthropic/claude-sonnet-5 --effort xhigh
+ocx agent injection suggest "read-only searches across the repo" --apply
 ocx agent subagents set gpt-5.6-sol,anthropic/claude-sonnet-5
 ocx agent fallback set gpt-5.6-luna,xai/grok-4.5 --poll-ms 60000
 ocx effort set --subagent max
@@ -344,3 +371,8 @@ encrypted, but task text can be retained in Codex history, routed-provider reque
 response/debug state. Existing ciphertext is unchanged, and the option depends on undocumented
 ChatGPT and Codex behavior. See
 [Agent configuration: Plaintext v2 agent messages](/reference/configuration/agents/#plaintext-v2-agent-messages).
+If a streamed ChatGPT response carries no content type, or one that is neither `application/json`
+nor a recognizable event stream, opencodex checks a bounded Responses event prefix before restoring
+the message-tool names. An `application/json` response takes the bounded JSON path instead. The
+probe waits at most `stallTimeoutSec` for its prefix, and a body that stays silent, unrecognized, or
+unreadable fails closed rather than reaching Codex as a successful response.

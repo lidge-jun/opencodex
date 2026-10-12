@@ -1,8 +1,14 @@
 import { describe, expect, test } from "bun:test";
+import { inspectResponseLogJson, type RequestLogContext } from "../../src/server/request-log";
 import { relaySseWithFailedTail, relayWithAbort } from "../../src/server";
 import { relaySseEagerBounded, type EagerRelayHooks } from "../../src/server/relay-eager";
-import { MAX_TAIL_ERROR_MESSAGE_CHARS } from "../../src/server/relay";
+import { consumeForInspection, createSseInspector, MAX_TAIL_ERROR_MESSAGE_CHARS, upstreamErrorTailFrame } from "../../src/server/relay";
+import { classifyCodexUpstreamOutcome } from "../../src/codex/routing/cooldown-math";
+import { codexWsUpstreamFetch, streamingInit } from "../helpers/ws-upstream-fixtures";
+import { readCodexWsStage } from "../../src/server/responses/codex-ws-wire";
+import { TERMINAL_REFUSAL_FALLBACK_MESSAGE } from "../../src/lib/errors";
 import { TranslatorBudgetExceededError } from "../../src/lib/translator-budget";
+import { createOutboundCredentialMask } from "../../src/server/responses/terminal-error-redaction";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -63,6 +69,26 @@ function doneEvents(text: string): string[] {
 }
 
 describe("relaySseWithFailedTail", () => {
+  test.each(["tee", "eager"] as const)("masks a JSON-escaped selected credential in a %s synthetic failure", async mode => {
+    const credential = 'fixture"quoted\\token';
+    const maskCredential = createOutboundCredentialMask({ authorization: `Bearer ${credential}` });
+    const src = sourceStream([], { failAfter: true, error: new Error(`reset after ${credential}`) });
+    const out = await drain(mode === "tee"
+      ? relaySseWithFailedTail(src, new AbortController(), undefined, { maskCredential })
+      : relaySseEagerBounded(src, new AbortController(), parityHooks, { maskCredential }));
+    expect(failedMessage(out)).toContain("[REDACTED]");
+    expect(failedMessage(out)).not.toContain(credential);
+  });
+
+  test("masks selected credentials in every synthetic refusal field", () => {
+    const credential = "fixture-selected-credential";
+    const maskCredential = createOutboundCredentialMask({ authorization: `Bearer ${credential}` });
+    const frame = decoder.decode(upstreamErrorTailFrame(
+      encoder, `refused ${credential}`, `invalid_${credential}`, maskCredential,
+    ));
+    expect(frame).not.toContain(credential);
+    expect(frame).toContain("[REDACTED]");
+  });
   test("relays a healthy stream verbatim with no injected frame", async () => {
     const upstream = new AbortController();
     const src = sourceStream(["event: response.completed\n", 'data: {"type":"response.completed"}\n\n', "data: [DONE]\n\n"]);
@@ -461,4 +487,468 @@ describe("optional Codex hint filtering preserves relay semantics", () => {
       expect(text).not.toContain("safety_buffering");
     });
   }
+});
+
+/**
+ * #5176: a final upstream refusal must end the turn rather than restart it.
+ *
+ * Codex classifies a `response.failed` terminal by `error.code` alone
+ * (codex-rs/codex-api/src/sse/responses.rs:417-467). Only the codes collected in
+ * CODEX_TERMINAL_CODES below end the turn; every other code falls through to the
+ * trailing `_ => ApiError::Retryable` arm, which the client retries up to
+ * `stream_max_retries` and renders as `Reconnecting N/5`. Codex has no handler
+ * for a bare `error` event at all, so the terminal this relay synthesizes is the
+ * only thing that carries the refusal to the client.
+ *
+ * `upstreamErrorTailFrame` (src/server/relay.ts) used to stamp
+ * `upstream_server_error` on that terminal unconditionally, so the upstream
+ * message survived and its verdict did not, and a refusal arrived as a retryable
+ * transport failure. It now carries the verdict when the upstream gave one, and
+ * leaves everything else classified exactly as before.
+ */
+describe("upstream refusal terminal mapping (#5176)", () => {
+  // codex-rs/codex-api/src/sse/responses.rs:423-450, in branch order.
+  const CODEX_TERMINAL_CODES = new Set([
+    "context_length_exceeded",
+    "insufficient_quota",
+    "usage_not_included",
+    "cyber_policy",
+    "misalignment_policy_violation",
+    "invalid_prompt",
+    "bio_policy",
+  ]);
+
+  // The upstream copy quoted in #5176, and the code Codex pairs with safety-refusal
+  // copy in its own fixture (responses.rs:1358-1366).
+  const SAFETY_REFUSAL_MESSAGE =
+    "This request was blocked by our safety systems. Reason: Potentially unintended activity.";
+  const SAFETY_REFUSAL_CODE = "invalid_prompt";
+
+  const synthesizedError = (out: string): { code: string; message: string; type: string } => {
+    const dataLine = out.split("event: response.failed\ndata: ")[1]?.split("\n")[0];
+    if (!dataLine) throw new Error("missing synthesized response.failed payload");
+    const parsed = JSON.parse(dataLine) as {
+      response: { error: { code: string; message: string; type: string } };
+    };
+    return parsed.response.error;
+  };
+
+  const relayFor = (mode: "tee" | "eager", chunks: string[]) => mode === "tee"
+    ? relaySseWithFailedTail(sourceStream(chunks), new AbortController())
+    : relaySseEagerBounded(sourceStream(chunks), new AbortController(), parityHooks);
+
+  test.each([
+    ["tee", "flat"],
+    ["tee", "nested"],
+    ["eager", "flat"],
+    ["eager", "nested"],
+  ] as const)("%s %s bare refusal ends the turn with the upstream verdict", async (mode, shape) => {
+    const bare = shape === "flat"
+      ? { type: "error", code: SAFETY_REFUSAL_CODE, message: SAFETY_REFUSAL_MESSAGE }
+      : {
+        type: "error",
+        error: {
+          type: "invalid_request_error",
+          code: SAFETY_REFUSAL_CODE,
+          message: SAFETY_REFUSAL_MESSAGE,
+        },
+      };
+    const original = 'data: {"type":"response.in_progress"}\n\n'
+      + "data: " + JSON.stringify(bare) + "\n\n";
+
+    const out = await drain(relayFor(mode, [original]));
+    const error = synthesizedError(out);
+
+    // The refusal text survives, which is why the client quotes it verbatim.
+    expect(error.message).toBe(SAFETY_REFUSAL_MESSAGE);
+    // ... and so does the verdict, so the client stops instead of reconnecting.
+    expect(error.code).toBe(SAFETY_REFUSAL_CODE);
+    expect(CODEX_TERMINAL_CODES.has(error.code)).toBe(true);
+    expect(error.type).toBe("invalid_request_error");
+    expect(out).toContain('"retryable":false');
+  });
+
+  test.each(["tee", "eager"] as const)(
+    "%s recognizes refusal copy the upstream sent without a code",
+    async (mode) => {
+      const original = 'data: {"type":"response.in_progress"}\n\n'
+        + "data: " + JSON.stringify({ type: "error", message: SAFETY_REFUSAL_MESSAGE }) + "\n\n";
+
+      const error = synthesizedError(await drain(relayFor(mode, [original])));
+
+      expect(error.code).toBe(SAFETY_REFUSAL_CODE);
+      expect(CODEX_TERMINAL_CODES.has(error.code)).toBe(true);
+    },
+  );
+
+  // The mirror-image defect this fix must not introduce: a real outage is not a
+  // refusal, and giving it a terminal code would strand a turn that a reconnect
+  // would have completed.
+  test.each(["tee", "eager"] as const)(
+    "%s leaves a transient upstream failure retryable",
+    async (mode) => {
+      const original = 'data: {"type":"response.in_progress"}\n\n'
+        + "data: " + JSON.stringify({
+          type: "error",
+          code: "upstream_reset",
+          message: "Upstream stream terminated unexpectedly: socket closed",
+        }) + "\n\n";
+
+      const out = await drain(relayFor(mode, [original]));
+      const error = synthesizedError(out);
+
+      expect(error.code).toBe("upstream_server_error");
+      expect(error.type).toBe("upstream_error");
+      expect(CODEX_TERMINAL_CODES.has(error.code)).toBe(false);
+      expect(out).not.toContain('"retryable":false');
+    },
+  );
+
+  // Refusal copy quoted inside a transport diagnostic must not outrank the code
+  // the upstream actually sent, or the mirror-image defect returns through text.
+  test.each(["tee", "eager"] as const)(
+    "%s keeps an explicit non-refusal code over refusal copy in its message",
+    async (mode) => {
+      const original = 'data: {"type":"response.in_progress"}\n\n'
+        + "data: " + JSON.stringify({
+          type: "error",
+          code: "upstream_reset",
+          message: "Transport failed while forwarding: " + SAFETY_REFUSAL_MESSAGE,
+        }) + "\n\n";
+
+      const out = await drain(relayFor(mode, [original]));
+      const error = synthesizedError(out);
+
+      expect(error.code).toBe("upstream_server_error");
+      expect(CODEX_TERMINAL_CODES.has(error.code)).toBe(false);
+      expect(out).not.toContain('"retryable":false');
+    },
+  );
+
+  // Codex accepts a refusal code with no message and supplies its own copy
+  // (sse/responses.rs:446-451), so this shape must still end the turn rather
+  // than fall through to the adapter_eof incomplete.
+  test.each(["tee", "eager"] as const)(
+    "%s ends the turn on a refusal code sent without a message",
+    async (mode) => {
+      const original = 'data: {"type":"response.in_progress"}\n\n'
+        + "data: " + JSON.stringify({ type: "error", code: SAFETY_REFUSAL_CODE }) + "\n\n";
+
+      const out = await drain(relayFor(mode, [original]));
+      const error = synthesizedError(out);
+
+      expect(error.code).toBe(SAFETY_REFUSAL_CODE);
+      expect(error.message).toBe(TERMINAL_REFUSAL_FALLBACK_MESSAGE);
+      expect(out).not.toContain('"reason":"adapter_eof"');
+    },
+  );
+
+  // Code and message must be read from the same places. When the message is
+  // nested under response.error and the code scan does not look there, the
+  // event contributes text while its verdict goes unseen.
+  test.each(["tee", "eager"] as const)(
+    "%s reads a refusal nested under response.error",
+    async (mode) => {
+      const original = 'data: {"type":"response.in_progress"}\n\n'
+        + "data: " + JSON.stringify({
+          type: "error",
+          response: {
+            error: {
+              type: "invalid_request_error",
+              code: SAFETY_REFUSAL_CODE,
+              message: "Invalid prompt.",
+            },
+          },
+        }) + "\n\n";
+
+      const error = synthesizedError(await drain(relayFor(mode, [original])));
+
+      expect(error.code).toBe(SAFETY_REFUSAL_CODE);
+      expect(error.message).toBe("Invalid prompt.");
+    },
+  );
+
+  // Code and message share one precedence order. When two envelopes disagree,
+  // the one that supplies the message supplies the verdict, so a refusal nested
+  // below a transient code cannot promote the turn to terminal.
+  test.each(["tee", "eager"] as const)(
+    "%s takes the verdict from the envelope that supplied the message",
+    async (mode) => {
+      const original = 'data: {"type":"response.in_progress"}\n\n'
+        + "data: " + JSON.stringify({
+          type: "error",
+          error: { type: "upstream_error", code: "upstream_reset", message: "socket closed" },
+          response: {
+            error: { code: SAFETY_REFUSAL_CODE, message: "Invalid prompt." },
+          },
+        }) + "\n\n";
+
+      const out = await drain(relayFor(mode, [original]));
+      const error = synthesizedError(out);
+
+      expect(error.message).toBe("socket closed");
+      expect(error.code).toBe("upstream_server_error");
+      expect(CODEX_TERMINAL_CODES.has(error.code)).toBe(false);
+      expect(out).not.toContain('"retryable":false');
+    },
+  );
+
+  // The upstream ended the turn before the socket did, so the reset that
+  // followed must not replace the refusal with a retryable upstream_reset.
+  test.each(["tee", "eager"] as const)(
+    "%s keeps a captured refusal when the upstream read then fails",
+    async (mode) => {
+      const chunks = ['data: {"type":"response.in_progress"}\n\n'
+        + "data: " + JSON.stringify({
+          type: "error",
+          code: SAFETY_REFUSAL_CODE,
+          message: SAFETY_REFUSAL_MESSAGE,
+        }) + "\n\n"];
+      const source = () => sourceStream(chunks, { failAfter: true });
+      const out = await drain(mode === "tee"
+        ? relaySseWithFailedTail(source(), new AbortController())
+        : relaySseEagerBounded(source(), new AbortController(), parityHooks));
+      const error = synthesizedError(out);
+
+      expect(error.code).toBe(SAFETY_REFUSAL_CODE);
+      expect(error.message).toBe(SAFETY_REFUSAL_MESSAGE);
+      expect(out).not.toContain('"code":"upstream_reset"');
+    },
+  );
+});
+
+
+describe("bare upstream rate-limit/overload EOF diagnostics (#6740)", () => {
+  const cases = [
+    ["server_error", "server_is_overloaded", "server_error", "server_is_overloaded", 503],
+    ["overloaded_error", "overloaded_error", "overloaded_error", "overloaded_error", 503],
+    ["rate_limit_error", "rate_limit_exceeded", "rate_limit_error", "rate_limit_exceeded", 429],
+    ["rate_limit_error", "rate_limit_error", "rate_limit_error", "rate_limit_error", 429],
+    ["overloaded_error", undefined, "overloaded_error", "server_is_overloaded", 503],
+    ["rate_limit_error", undefined, "rate_limit_error", "rate_limit_exceeded", 429],
+    ["server_error", "server_error", "upstream_error", "upstream_server_error", 502],
+    ["rate_limit_error", "unknown_code", "upstream_error", "upstream_server_error", 502],
+    ["server_error", undefined, "upstream_error", "upstream_server_error", 502],
+  ] as const;
+  for (const mode of ["tee", "eager"] as const) {
+    test.each(cases)(`${mode} preserves only recognized class %s / %s`, async (type, code, expectedType, expectedCode, status) => {
+      const message = "upstream diagnostic fixture";
+      const bare = `event: error\ndata: ${JSON.stringify({ type: "error", error: { type, code, message } })}\n\n`;
+      const src = sourceStream([bare.slice(0, 15), bare.slice(15)]);
+      const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+      const out = await drain(mode === "tee"
+        ? relaySseWithFailedTail(src, new AbortController())
+        : relaySseEagerBounded(src, new AbortController(), parityHooks));
+      const payload = out.split("event: response.failed\ndata: ")[1]!.split("\n")[0]!;
+      const terminal = JSON.parse(payload).response;
+      expect(terminal.error).toEqual({ type: expectedType, code: expectedCode, message });
+      expect(terminal.last_error).toEqual(terminal.error);
+      expect(terminalEvents(out)).toEqual(["response.failed"]);
+      expect(doneEvents(out)).toHaveLength(1);
+      expect(out).not.toContain('"retryable":false');
+      inspectResponseLogJson(log, payload);
+      expect(log.terminalHttpStatus).toBe(status);
+    });
+  }
+});
+
+
+describe("genuine relay terminals supersede provisional bare errors", () => {
+  for (const mode of ["tee", "eager"] as const) {
+    test.each([
+      ["rate_limit_error", "rate_limit_exceeded", "server_error", "server_is_overloaded", 503, "transient"],
+      ["server_error", "server_is_overloaded", "invalid_request_error", "invalid_prompt", 400, "caller"],
+    ] as const)(`${mode} reports the genuine terminal to the pool classifier after %s`, async (bareType, bareCode, type, code, status, healthClass) => {
+      const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+      const outcomes: number[] = [];
+      const onTerminal = () => outcomes.push(log.terminalHttpStatus ?? 502);
+      const src = sourceStream([
+        `event: error\ndata: ${JSON.stringify({ type: "error", error: { type: bareType, code: bareCode, message: "bare diagnostic" } })}\n\n`,
+        `event: response.failed\ndata: ${JSON.stringify({ type: "response.failed", response: { status: "failed", error: { type, code, message: "genuine terminal" } } })}\n\n`,
+      ]);
+      let relayed: ReadableStream<Uint8Array>;
+      let inspectionDone: Promise<void> = Promise.resolve();
+      if (mode === "tee") {
+        const [client, inspection] = src.tee();
+        inspectionDone = new Promise(resolve => consumeForInspection(inspection, onTerminal, undefined, resolve, log));
+        relayed = relaySseWithFailedTail(client, new AbortController());
+      } else {
+        const inspector = createSseInspector({ logCtx: log, onTerminal });
+        relayed = relaySseEagerBounded(src, new AbortController(), { ...parityHooks,
+          inspectChunk: chunk => inspector.feed(chunk), finishInspection: () => inspector.finish(),
+          sawTerminal: () => inspector.reported(),
+        });
+      }
+      const text = await drain(relayed);
+      await inspectionDone;
+      expect(outcomes).toEqual([status]);
+      expect(classifyCodexUpstreamOutcome(outcomes[0]!)).toBe(healthClass);
+      expect(log.terminalHttpStatus).toBe(status);
+      expect(terminalEvents(text)).toEqual(["response.failed"]);
+      expect(doneEvents(text)).toHaveLength(1);
+    });
+  }
+});
+
+describe("Codex WebSocket bare-error diagnostics never dispatch a second request", () => {
+  for (const mode of ["tee", "eager"] as const) {
+    test.each([
+      ["rate_limit_error", "rate_limit_exceeded"],
+      ["server_error", "server_is_overloaded"],
+      ["server_error", "server_error"],
+    ] as const)(`${mode} retains one response.create after %s / %s`, async (type, code) => {
+      const originalWebSocket = globalThis.WebSocket;
+      let httpDispatches = 0;
+      const sockets: DiagnosticWebSocket[] = [];
+      class DiagnosticWebSocket extends EventTarget {
+        sent: string[] = [];
+        readyState = 0;
+        constructor() {
+          super();
+          sockets.push(this);
+          queueMicrotask(() => { this.readyState = 1; this.dispatchEvent(new Event("open")); });
+        }
+        send(frame: string) {
+          this.sent.push(frame);
+          queueMicrotask(() => this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({
+            type: "error", error: { type, code, message: "upstream diagnostic fixture" },
+          }) })));
+        }
+        close() { this.readyState = 3; }
+      }
+      globalThis.WebSocket = DiagnosticWebSocket as unknown as typeof WebSocket;
+      try {
+        const response = await codexWsUpstreamFetch("https://chatgpt.com/backend-api/codex/responses", streamingInit(),
+          (async () => { httpDispatches++; throw new Error("post-send HTTP replay is forbidden"); }) as typeof fetch);
+        const body = response.body!;
+        const text = await drain(mode === "tee" ? relaySseWithFailedTail(body, new AbortController())
+          : relaySseEagerBounded(body, new AbortController(), parityHooks));
+        await Promise.resolve();
+        expect(sockets).toHaveLength(1);
+        expect(sockets[0]!.sent).toHaveLength(1);
+        expect(JSON.parse(sockets[0]!.sent[0]!).type).toBe("response.create");
+        expect(httpDispatches).toBe(0);
+        expect(terminalEvents(text)).toEqual(["response.failed"]);
+        expect(doneEvents(text)).toHaveLength(1);
+      } finally { globalThis.WebSocket = originalWebSocket; }
+    });
+  }
+});
+
+describe("Codex WebSocket wrapper status and terminal kind reach the log (#6740)", () => {
+  const frames = (terminal: Record<string, unknown>) => [
+    { type: "response.created", response: { id: "resp_fixture", status: "in_progress" } },
+    { type: "response.in_progress", response: { id: "resp_fixture", status: "in_progress" } },
+    terminal,
+  ];
+  const generic = { type: "server_error", code: "server_error", message: "An error occurred while processing your request." };
+  test.each([
+    ["a wrapped 503 error", { type: "error", status: 503, error: generic }, "error", 503, 503],
+    ["a wrapped 500 error", { type: "error", status_code: 500, error: generic }, "error", 500, 500],
+    ["an unwrapped error", { type: "error", error: generic }, "error", null, 502],
+    ["a genuine failed terminal", { type: "response.failed", response: { id: "resp_fixture", status: "failed", error: generic } },
+      "response.failed", null, 502],
+  ] as const)("%s", async (_label, terminal, terminalEvent, terminalErrorStatus, loggedStatus) => {
+    const originalWebSocket = globalThis.WebSocket;
+    let httpDispatches = 0;
+    const sockets: StageWebSocket[] = [];
+    class StageWebSocket extends EventTarget {
+      sent: string[] = [];
+      readyState = 0;
+      constructor() {
+        super();
+        sockets.push(this);
+        queueMicrotask(() => { this.readyState = 1; this.dispatchEvent(new Event("open")); });
+      }
+      send(frame: string) {
+        this.sent.push(frame);
+        for (const event of frames(terminal)) {
+          queueMicrotask(() => this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(event) })));
+        }
+      }
+      close() { this.readyState = 3; }
+    }
+    globalThis.WebSocket = StageWebSocket as unknown as typeof WebSocket;
+    try {
+      const response = await codexWsUpstreamFetch("https://chatgpt.com/backend-api/codex/responses", streamingInit(),
+        (async () => { httpDispatches++; throw new Error("post-send HTTP replay is forbidden"); }) as typeof fetch);
+      const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+      const outcomes: number[] = [];
+      const inspector = createSseInspector({ logCtx: log, onTerminal: (_status, override) => outcomes.push(override ?? log.terminalHttpStatus ?? 502) });
+      const text = await drain(relaySseEagerBounded(response.body!, new AbortController(), { ...parityHooks,
+        inspectChunk: chunk => inspector.feed(chunk), finishInspection: () => inspector.finish(),
+        sawTerminal: () => inspector.reported(),
+        onSynthetic: () => { if (!inspector.reported()) outcomes.push(log.terminalHttpStatus ?? 502); },
+      }));
+      const stage = readCodexWsStage(response);
+      expect(stage?.terminalEvent).toBe(terminalEvent);
+      expect(stage?.terminalErrorStatus).toBe(terminalErrorStatus);
+      expect(stage?.relayedEvents).toBe(3);
+      expect(stage?.closeCode).toBeNull();
+      expect(outcomes).toEqual([loggedStatus]);
+      expect(classifyCodexUpstreamOutcome(outcomes[0]!)).toBe("transient");
+      // The client tail is unchanged: an unrecognized code stays the generic retryable class.
+      const payload = text.split("event: response.failed\ndata: ")[1]!.split("\n")[0]!;
+      expect(JSON.parse(payload).response.error.code).toBe(terminal.type === "error" ? "upstream_server_error" : "server_error");
+      expect(terminalEvents(text)).toEqual(["response.failed"]);
+      expect(sockets[0]!.sent).toHaveLength(1);
+      expect(httpDispatches).toBe(0);
+    } finally { globalThis.WebSocket = originalWebSocket; }
+  });
+});
+
+describe("Codex WebSocket terminal kind covers every plain-exchange ending (#6740)", () => {
+  async function stageAfter(events: readonly Record<string, unknown>[], readBody = true) {
+    const originalWebSocket = globalThis.WebSocket;
+    class ScriptWebSocket extends EventTarget {
+      readyState = 0;
+      constructor() {
+        super();
+        queueMicrotask(() => { this.readyState = 1; this.dispatchEvent(new Event("open")); });
+      }
+      send() {
+        for (const event of events) {
+          queueMicrotask(() => this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(event) })));
+        }
+      }
+      close() { this.readyState = 3; }
+    }
+    globalThis.WebSocket = ScriptWebSocket as unknown as typeof WebSocket;
+    try {
+      const response = await codexWsUpstreamFetch("https://chatgpt.com/backend-api/codex/responses", streamingInit(),
+        (async () => { throw new Error("post-send HTTP replay is forbidden"); }) as typeof fetch);
+      if (readBody) await response.text().catch(() => "");
+      else for (let tick = 0; tick < 20; tick++) await Promise.resolve();
+      return readCodexWsStage(response);
+    } finally { globalThis.WebSocket = originalWebSocket; }
+  }
+  const created = { type: "response.created", response: { id: "resp_fixture", status: "in_progress" } };
+
+  test.each([
+    ["response.completed", { type: "response.completed", response: { id: "resp_fixture", status: "completed" } }],
+    ["response.incomplete", { type: "response.incomplete", response: { id: "resp_fixture", status: "incomplete" } }],
+    // WebSocket-only discriminator, normalized before it is recorded.
+    ["response.incomplete", { type: "response.done", response: { id: "resp_fixture", status: "incomplete" } }],
+    ["response.failed", { type: "response.done", response: { id: "resp_fixture", status: "failed" } }],
+  ] as const)("records %s", async (expected, terminal) => {
+    const stage = await stageAfter([created, terminal]);
+    expect(stage?.terminalEvent).toBe(expected);
+    expect(stage?.terminalErrorStatus).toBeNull();
+  });
+
+  test("an exchange with no terminal frame records none", async () => {
+    const stage = await stageAfter([created], false);
+    expect(stage?.terminalEvent).toBeNull();
+    expect(stage?.terminalErrorStatus).toBeNull();
+  });
+
+  test("a terminal that arrives but overflows the relay queue is still recorded", async () => {
+    const delta = (index: number) => ({ type: "response.output_text.delta", item_id: `item_${index}`, delta: "x".repeat(3_900_000) });
+    const stage = await stageAfter([created, delta(1), delta(2),
+      { type: "error", status: 503, error: { type: "server_error", code: "server_error", message: "y".repeat(700_000) } }], false);
+    expect(stage?.relayedEvents).toBe(3);
+    expect(stage?.requestBytes).not.toBeNull();
+    expect(stage?.terminalEvent).toBe("error");
+    expect(stage?.terminalErrorStatus).toBe(503);
+  });
 });

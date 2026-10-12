@@ -3,7 +3,7 @@ import {
   CODEX_UNKNOWN_USAGE_SCORE,
 } from "../quota";
 import { isThirtyDayOnlyCodexPlan } from "../plan";
-import { isTerminalShortWindow } from "../quota-types";
+import { hasSpendableCodexCredits, isTerminalShortWindow, type CodexSpendableCredits } from "../quota-types";
 import type { CodexQuotaScope } from "./health-store";
 import type { TransientProbeGrant } from "./thread-affinity";
 
@@ -107,7 +107,8 @@ export function computeCodexUsageScore(quota: {
   shortPercent?: number;
   shortResetAt?: number;
   shortObservedAt?: number;
-} | null, plan?: unknown, now: number = Date.now()): number {
+  credits?: CodexSpendableCredits | null;
+} | null, plan?: unknown, now: number = Date.now(), allowCredits = false): number {
   if (!quota) return CODEX_UNKNOWN_USAGE_SCORE;
   const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
   const longWindows = isThirtyDayOnlyCodexPlan(plan)
@@ -126,10 +127,15 @@ export function computeCodexUsageScore(quota: {
   // correct for uncertainty and wrong for a measured refusal: the account stays selected,
   // `applyQuotaAutoSwitch` never fires, and the pool wedges on an exhausted credential.
   if (knownLong.length === 0) {
-    return isTerminalShortWindow(quota, now) ? CODEX_EXHAUSTED_USAGE_PERCENT : CODEX_UNKNOWN_USAGE_SCORE;
+    return isTerminalShortWindow(quota, now)
+      ? (allowCredits && hasSpendableCodexCredits(quota, now)) ? CODEX_EXHAUSTED_USAGE_PERCENT - 1 : CODEX_EXHAUSTED_USAGE_PERCENT
+      : CODEX_UNKNOWN_USAGE_SCORE;
   }
   const values = finite(quota.shortPercent) ? [...knownLong, quota.shortPercent] : knownLong;
-  return Math.max(...values);
+  const score = Math.max(...values);
+  // Keep included-capacity accounts ahead of a paid overage account, but do not
+  // classify the latter as exhausted solely from its subscription percentages.
+  return (allowCredits && hasSpendableCodexCredits(quota, now)) ? Math.min(score, CODEX_EXHAUSTED_USAGE_PERCENT - 1) : score;
 }
 
 // `isTerminalShortWindow` moved to ../quota-types, the leaf the dashboard can import. Routing

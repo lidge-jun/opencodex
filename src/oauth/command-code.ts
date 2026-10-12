@@ -172,8 +172,9 @@ function parsePastedCommandCodeInput(input: string, expectedState: string): Comm
   if (!apiKey) return undefined;
   // A URL/query-shaped paste is an authorization response and must carry a matching state,
   // mirroring the shared OAuth callback flow; a stale or attacker-supplied URL from another
-  // session must not be accepted. Raw in-session keys are exempt (no state to compare).
-  if (parsed.kind !== "raw" && parsed.state !== expectedState) return undefined;
+  // session must not be accepted. A raw paste with an explicit #state suffix is state-bearing
+  // too, as in the shared submit gate; only a bare in-session key has no state to compare.
+  if ((parsed.kind !== "raw" || parsed.state !== undefined) && parsed.state !== expectedState) return undefined;
   return { apiKey, state: expectedState, userId: "", userName: "", keyName: "manual" };
 }
 

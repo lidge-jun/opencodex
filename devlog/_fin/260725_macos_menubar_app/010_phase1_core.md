@@ -399,7 +399,7 @@ seconds and anthropic milliseconds both resolve to sane 2026 dates · `ProxySett
 decodes without a `defaultProvider` field and `ProxyConfigSummary` supplies it.
 
 `FormattingTests`: the `002` magnitudes (`232507`, `36536664705`, `34018.25`) render as
-`232K`, `36.5B`, `$34.0K` · `nil` renders `—` · zero renders `0`, not `—`.
+`232K`, `37B`, `$34.0K` · `nil` renders `—` · zero renders `0`, not `—`.
 
 ## `app/.gitignore`
 

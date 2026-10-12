@@ -3,6 +3,8 @@ title: Remote Hub 部署
 description: 使用仅回环管理入口、Tailscale Serve 和无头 OAuth 运行 opencodex hub。
 ---
 
+有关 SSH 机器链接，请参阅[远程链接](/zh-cn/guides/remote-link/)。
+
 Remote Hub 将提供商凭据、模型目录和使用记录保存在一台主机上，经过身份验证的客户端直接访问其数据平面。管理平面相互独立：可选管理监听器只绑定 `127.0.0.1`，仅提供控制台和 `/api/*`。它不提供 `/v1/*`、`/healthz`、`/readyz` 或 WebSocket。不要直接发布 `10101`，也不要使用 Tailscale Funnel。
 
 ## 角色与信任边界
@@ -18,6 +20,7 @@ ocx sync
 面向人阅读的就绪诊断会把目录值中的 C0/C1 控制字符、DEL 以及 Unicode 行分隔符和段落分隔符（U+2028、U+2029）显示为可见的十六进制转义，首次连接时如此，`ocx sync` 拒绝重新获取的 hub 目录时也一样。JSON 状态仍保留原始的诊断值。
 
 客户端密钥写入仅所有者可读的 `service-api-token`，绝不会写入 `config.json`。连接期间，使用记录来自 hub 并按稳定的 `apiKeyId` 过滤；断开后显示本地记录。两者不会镜像。
+`ocx service uninstall` 会移除本地服务，但在客户端处于连接状态、其连接元数据无效或不匹配，或待处理的连接标记与当前密钥一致时保留现有密钥。旧密钥的有效标记不会保留无关的服务密钥。如果标记不安全、格式错误或无法读取，则无法确认令牌清理结果，此时命令会发出警告，而不会声称密钥已保留。要移除已连接客户端的本地密钥和状态，请使用 `ocx disconnect`。
 
 Admin token 只能执行普通管理，永远不能创建用户同意会话。用户同意操作必须使用服务器签发的 `gui-session`、匹配的 Origin 和 CSRF。`Tailscale-User-Login` 只在独立管理入口可信；请在 `remoteGui.allowedTailscaleUsers` 中填写准确登录名。
 
@@ -108,7 +111,7 @@ ocx connect rotate --admin-token-stdin
 
 轮换期间，旧密钥和新密钥在同一个 `apiKeyId` 下最多同时有效十分钟。旧密钥备份到 `service-api-token.prev`，新密钥以原子方式安装，并通过 `/v1/catalog` 验证后提交。如果提交结果不确定，请使用临时权限重新运行命令；在验证两个候选密钥前不要删除任何文件。
 
-`ocx disconnect` 即使 hub 离线也能恢复本地状态，但不会吊销 hub 密钥。断开后，唯一的吊销入口是 hub 的 **Integrations → API Keys**。`ocx connect revoke --admin-token-stdin` 只能在仍连接时使用。
+`ocx disconnect` 即使 hub 离线也能恢复本地状态，但不会吊销 hub 密钥。断开后，唯一的吊销入口是 hub 的 **连接 → API 密钥**。`ocx connect revoke --admin-token-stdin` 只能在仍连接时使用。
 
 ## Docker、回滚与排障
 
@@ -170,3 +173,7 @@ services:
 - `/readyz` 返回 `200` 而 `/v1/catalog` 返回 `403 origin_rejected`：说明数据监听器绑在回环地址上却位于 TLS 前端之后，参见上文“为数据监听器提供 TLS”。
 - 浏览器 logout/expiry 只影响会话，不会吊销数据密钥。
 - `tailscale serve reset` 会删除节点上的所有映射，请先查看 `tailscale serve status`。
+
+## 关闭 Hub
+
+`ocx hub disable [--json]` 在一次经过验证的写入中移除 Hub 专用设置。现有密钥没有可信的客户端来源标记；先用 `ocx access key list --json` 查看 ID，再运行 `ocx hub disable --revoke-clients --client-key <id> [--json]`，可重复 `--client-key`。密钥名称不用于判断来源，未知 ID 或未选择 ID 的撤销请求会在修改前被拒绝。未选中的密钥保留。命令不会重启代理或修改外部发布配置；请按输出的提示重启，并检查 `tailscale serve status`。参见[英文详情](/guides/remote-hub/#return-a-hub-to-standalone)。

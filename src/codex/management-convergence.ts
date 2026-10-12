@@ -2,6 +2,7 @@ import type { OcxConfig } from "../types";
 import { resolvePendingInitialModelSelection } from "../providers/initial-model-selection-runtime";
 import { captureCatalogAdmissionSnapshot } from "./catalog-admission";
 import { convergeCodexCatalog } from "./convergence";
+import { siblingOfLivePort } from "./sibling-start";
 import type {
   CatalogDisposition,
   CatalogFailureCause,
@@ -142,6 +143,7 @@ export function projectCatalogOnlyOutcome({
  */
 export function createManagementConvergeCodex(
   config: Readonly<OcxConfig>,
+  options: Readonly<{ beforeCommit?: () => boolean; expectedCatalogPath?: string }> = {},
 ): ConvergeCodex {
   const retainedConfig = config;
   return async request => {
@@ -155,9 +157,19 @@ export function createManagementConvergeCodex(
       }
       // Registration choices are committed independently, before sealing catalog authority.
       await resolvePendingInitialModelSelection(retainedConfig as OcxConfig);
+      // The catalog and models cache live in the shared `CODEX_HOME`; a sibling instance leaves
+      // them to the live owner. This funnel serves every management caller and the auto-refresh tick.
+      if (siblingOfLivePort() !== null) {
+        return projectCatalogOnlyOutcome({
+          changed: false,
+          catalogRefresh: { status: "skipped", reason: "refused", retryable: false },
+        });
+      }
       const snapshot = captureCatalogAdmissionSnapshot(retainedConfig);
       const result = await convergeCodexCatalog(snapshot, request, {
         onCommitBegin: () => { commitBegan = true; },
+        beforeCommit: options.beforeCommit,
+        expectedCatalogPath: options.expectedCatalogPath,
       });
       return projectCatalogOnlyOutcome(result);
     } catch (error) {

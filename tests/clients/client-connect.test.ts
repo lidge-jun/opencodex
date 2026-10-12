@@ -1,9 +1,10 @@
 import { beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { MANAGED_AGENTS_TABLE_MARKER, MANAGED_SUBAGENT_DEFAULT_MARKER } from "../../src/codex/subagent-defaults";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   downloadClientCatalog,
   exchangeConnectPairingGrant,
@@ -237,8 +238,12 @@ describe("remote hub client boundary", () => {
   test("canonicalizes origin and terminal /v1 only", () => {
     expect(normalizeHubOrigin("https://hub.example.test/v1")).toBe("https://hub.example.test");
     expect(normalizeHubOrigin("https://hub.example.test/v1/")).toBe("https://hub.example.test");
+    expect(normalizeHubOrigin("http://localhost:10100/v1")).toBe("http://localhost:10100");
+    expect(normalizeHubOrigin("http://127.0.0.1:10100")).toBe("http://127.0.0.1:10100");
+    expect(normalizeHubOrigin("http://[::1]:10100")).toBe("http://[::1]:10100");
     for (const value of [
       "ftp://hub.example.test",
+      "http://hub.example.test",
       "https://user@hub.example.test",
       "https://hub.example.test/private",
       "https://hub.example.test/?secret=1",
@@ -263,9 +268,17 @@ describe("remote hub client boundary", () => {
     }
   });
 
+  test("rejects plaintext remote discovery before sending a request", async () => {
+    let calls = 0;
+    await expect(fetchHubReady("http://hub.example.test", {
+      fetchImpl: async () => { calls += 1; return Response.json(readyBody()); },
+    })).rejects.toThrow("plaintext remote HTTP is not permitted");
+    expect(calls).toBe(0);
+  });
+
   test("admin key issuance is HTTPS-only and pairing exchanges into a full GUI session", async () => {
     let calls = 0;
-    await expect(issueClientKey("http://hub.example.test", {
+    await expect(issueClientKey("http://localhost:10100", {
       kind: "admin",
       value: new TextEncoder().encode("ocx_admin_secret"),
     }, "client", {
@@ -379,8 +392,9 @@ describe("remote hub client boundary", () => {
 /** A catalog the user already had before ever connecting. */
 const PRIOR_CATALOG_BYTES = '{"models":[{"slug":"local/only-model"}]}';
 
+/** Exercise enrollment and rollback in a fresh process with isolated client homes. */
 function runTransactionScenario(
-  stage: "success" | "catalog" | "preflight" | "commit" | "prior-catalog" | "coordinator",
+  stage: "success" | "catalog" | "preflight" | "commit" | "prior-catalog" | "coordinator" | "uninstall-during-catalog",
   options: { script?: string; timeoutMs?: number } = {},
 ) {
   const opencodexHome = mkdtempSync(join(tmpdir(), "ocx-client-connect-home-"));
@@ -392,7 +406,11 @@ function runTransactionScenario(
     defaultProvider: "openai",
   };
   writeFileSync(configPath, `${JSON.stringify(originalConfig, null, 2)}\n`, "utf8");
-  if (stage !== "preflight") writeFileSync(join(codexHome, "config.toml"), 'model_provider = "openai"\n', "utf8");
+  // A missing config.toml is bootstrapped now (issue 5422), so the preflight fault is a
+  // deterministic injection refusal instead: ambiguous OpenCodex-managed sub-agent markers.
+  writeFileSync(join(codexHome, "config.toml"), stage === "preflight"
+    ? [MANAGED_AGENTS_TABLE_MARKER, "[agents]", MANAGED_SUBAGENT_DEFAULT_MARKER, "", 'default_subagent_model = "gpt-5.6-sol"', ""].join("\n")
+    : 'model_provider = "openai"\n', "utf8");
   // A catalog the user already had. Connect overwrites it; disconnect has to put it back.
   if (stage === "prior-catalog") {
     writeFileSync(join(codexHome, "opencodex-catalog.json"), PRIOR_CATALOG_BYTES, "utf8");
@@ -413,6 +431,7 @@ function runTransactionScenario(
     const stage = ${JSON.stringify(stage)};
     markTransaction("module_ready");
     let commitFaultTriggered = false;
+    let uninstallDuringCatalog = null;
     const catalog = '{"models":[]}';
     const etag = '"sha256-' + createHash("sha256").update(catalog).digest("base64url") + '"';
     const calls = [];
@@ -430,6 +449,13 @@ function runTransactionScenario(
       if (url.endsWith("/api/keys") && init.method === "DELETE") return Response.json({ success: true });
       if (url.endsWith("/v1/catalog")) {
         if (stage === "catalog") return Response.json({ error: "down" }, { status: 503 });
+        if (stage === "uninstall-during-catalog") {
+          const { removeServiceTokenAfterUninstall } = require("./src/service/cli");
+          uninstallDuringCatalog = {
+            cleanup: removeServiceTokenAfterUninstall({ lockPath: process.env.OPENCODEX_HOME + "/lifecycle.sqlite" }),
+            tokenExists: existsSync(serviceApiTokenFilePath()),
+          };
+        }
         return new Response(catalog, { headers: { ETag: etag, "Content-Type": "application/json" } });
       }
       throw new Error("unexpected request " + url);
@@ -483,7 +509,7 @@ function runTransactionScenario(
       if ((stage === "success" || stage === "prior-catalog") && connected) disconnected = await disconnectClient({}, { lifecycleLockDeps: { lockPath: process.env.OPENCODEX_HOME + "/lifecycle.sqlite" } });
       const catalogAfter = existsSync(DEFAULT_CATALOG_PATH) ? readFileSync(DEFAULT_CATALOG_PATH, "utf8") : null;
       const hubStateCacheAfter = existsSync(hubStateCachePath());
-      writeSync(1, JSON.stringify({ connected, error, coordinatorUnavailable, beforeDisconnect, artifacts, disconnected, catalogAfter, hubStateCacheBefore, hubStateCacheAfter, after: readClientConnectionState(), calls, commitFaultTriggered }) + "\\n");
+      writeSync(1, JSON.stringify({ connected, error, coordinatorUnavailable, beforeDisconnect, artifacts, disconnected, catalogAfter, hubStateCacheBefore, hubStateCacheAfter, after: readClientConnectionState(), calls, commitFaultTriggered, uninstallDuringCatalog, pendingAtResult: existsSync(process.env.OPENCODEX_HOME + "/client-connect-pending") }) + "\\n");
       markTransaction("result_published");
     })();
   `;
@@ -652,7 +678,19 @@ describe("connect transaction and offline disconnect", () => {
       expect(run.parsed.after).toEqual({ kind: "disconnected" });
       expect(run.parsed.calls.filter((call: any) => call.method === "DELETE")).toEqual([]);
     } finally { run.cleanup(); }
-  });
+  }, SPAWN_BUDGET_MS);
+
+  test("service uninstall during catalog download retains the pending client key", () => {
+    const run = runTransactionScenario("uninstall-during-catalog");
+    try {
+      expect(run.status).toBe(0);
+      expect(run.parsed.uninstallDuringCatalog).toEqual({ cleanup: "retained", tokenExists: true });
+      expect(run.parsed.error).toBeNull();
+      expect(run.parsed.connected.apiKeyId).toBe("issued-id");
+      expect(run.parsed.beforeDisconnect.kind).toBe("connected");
+      expect(run.parsed.pendingAtResult).toBe(false);
+    } finally { run.cleanup(); }
+  }, SPAWN_BUDGET_MS);
 
   test("disconnect puts back the catalog the user had before connecting", () => {
     // Connect overwrites whatever catalog is already on disk. Disconnect used to delete the
@@ -667,7 +705,7 @@ describe("connect transaction and offline disconnect", () => {
       expect(run.parsed.catalogAfter).toBe(PRIOR_CATALOG_BYTES);
       expect(run.parsed.after).toEqual({ kind: "disconnected" });
     } finally { run.cleanup(); }
-  });
+  }, SPAWN_BUDGET_MS);
 
   test("disconnect removes the catalog when the user had none", () => {
     // The other half of the same contract: `priorCatalog: ""` records "there genuinely was
@@ -677,7 +715,7 @@ describe("connect transaction and offline disconnect", () => {
       expect(run.parsed.disconnected).toMatchObject({ catalogRemoved: true, catalogRestored: false });
       expect(run.parsed.catalogAfter).toBeNull();
     } finally { run.cleanup(); }
-  });
+  }, SPAWN_BUDGET_MS);
 
   for (const stage of ["catalog", "preflight", "commit"] as const) {
     test(`rolls back local artifacts when ${stage} fails before final commit`, () => {
@@ -687,11 +725,13 @@ describe("connect transaction and offline disconnect", () => {
         expect(run.parsed.connected).toBeNull();
         expect(run.parsed.beforeDisconnect).toEqual({ kind: "disconnected" });
         expect(run.parsed.artifacts.token).toBe(false);
+        expect(run.parsed.pendingAtResult).toBe(false);
         expect(run.parsed.artifacts.catalog).toBe(false);
         expect(run.parsed.artifacts.credentialZeroed).toBe(true);
         expect(run.parsed.calls.some((call: any) => call.method === "DELETE")).toBe(true);
         if (stage === "commit") {
           expect(run.parsed.commitFaultTriggered).toBe(true);
+          expect(run.parsed.error).not.toContain("client cleanup ownership unavailable");
           expect(run.parsed.calls.some((call: any) => call.method === "POST" && call.url.endsWith("/api/keys"))).toBe(true);
         }
         expect(run.configBytes).not.toContain("issued-id");
@@ -1356,5 +1396,42 @@ describe("Desktop copy coherence across client lifecycle", () => {
     expect(r.statusInside.backupPresent).toBe(true);
     expect(r.statusOutside.kind).toBe(mode === "status-lock" ? "orphan-cleaned" : "recovery-required");
     expect(r.backupPresent).toBe(mode === "status-receipt");
+  });
+});
+
+describe("a sibling instance never connects, syncs or disconnects the shared Codex home", () => {
+  /**
+   * A sibling (`ocx start --port <other>` beside a live proxy) shares CODEX_HOME with that proxy.
+   * Connecting writes the shared `opencodex-catalog.json` BEFORE the injector runs, so a refusal
+   * at injection would come after the owner's catalog was already replaced. The refusal has to be
+   * the first thing each entry point does. In-process on purpose: the mark is process-local, and
+   * CODEX_HOME here is the preload sandbox.
+   */
+  test("every entry point refuses before any catalog, journal or network write", async () => {
+    const { connectClient, disconnectClient, syncConnectedClient } = await import("../../src/client/connect");
+    const { DEFAULT_CATALOG_PATH } = await import("../../src/codex/paths");
+    const { markSiblingStart, resetSiblingStartForTests, siblingSkipMessage } = await import("../../src/codex/sibling-start");
+    const ownerCatalog = JSON.stringify({ models: [{ slug: "owner-model" }] });
+    mkdirSync(dirname(DEFAULT_CATALOG_PATH), { recursive: true });
+    writeFileSync(DEFAULT_CATALOG_PATH, ownerCatalog);
+    let fetches = 0;
+    const deps = { fetchImpl: (async () => { fetches += 1; return new Response("{}"); }) as unknown as typeof fetch };
+    markSiblingStart(10100);
+    try {
+      const message = siblingSkipMessage();
+      await expect(connectClient({
+        serverUrl: "https://hub.example.test",
+        credential: { kind: "invite", token: "x" },
+        selectedClients: ["codex"],
+        managementTransport: "direct",
+      } as unknown as Parameters<typeof connectClient>[0], deps)).rejects.toThrow(message);
+      await expect(syncConnectedClient({}, deps)).rejects.toThrow(message);
+      await expect(disconnectClient({})).rejects.toThrow(message);
+      expect(fetches).toBe(0);
+      expect(readFileSync(DEFAULT_CATALOG_PATH, "utf8")).toBe(ownerCatalog);
+    } finally {
+      resetSiblingStartForTests();
+      rmSync(DEFAULT_CATALOG_PATH, { force: true });
+    }
   });
 });

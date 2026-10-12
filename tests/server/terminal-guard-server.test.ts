@@ -7,6 +7,12 @@ import { clearKeyCooldowns } from "../../src/providers/key-failover";
 import { handleResponses } from "../../src/server/responses";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { saveCredential, setActiveAccount, getAccountSet } from "../../src/oauth/store";
+
+let releaseInheritedSpendHome: (() => void) | undefined;
+// Taken per inherited-home dispatch because one row below installs a different home.
+const takeInheritedSpendHome = (): void => { releaseInheritedSpendHome = acquireOwnedSpendHome(); };
 
 const config = {
   port: 0,
@@ -98,10 +104,14 @@ describe("server terminal guard integration", () => {
   });
 
   afterEach(() => {
+    // Released first so a failed row cannot carry its writer lease into the next case.
+    releaseInheritedSpendHome?.();
+    releaseInheritedSpendHome = undefined;
     globalThis.fetch = originalFetch;
   });
 
   test("re-asks Claude once inside the same Responses turn and forwards the tool call", async () => {
+    takeInheritedSpendHome();
     const response = await handleResponses(new Request("http://localhost/v1/responses", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -124,6 +134,7 @@ describe("server terminal guard integration", () => {
   });
 
   test("terminal-guard continuation 429 replays on the same key before surfacing", async () => {
+    takeInheritedSpendHome();
     const retryConfig = {
       ...config,
       providers: {
@@ -175,6 +186,8 @@ describe("server terminal guard integration", () => {
     const previousHome = process.env.OPENCODEX_HOME;
     const home = mkdtempSync(join(tmpdir(), "ocx-terminal-guard-failover-"));
     process.env.OPENCODEX_HOME = home;
+    // Taken after this case installs its home so the direct dispatch owns that journal.
+    const releaseSpendHome = acquireOwnedSpendHome();
     clearKeyCooldowns("claude-se");
     const budgetConfig = {
       ...config,
@@ -221,6 +234,8 @@ describe("server terminal guard integration", () => {
       // A per-iteration budget would replay on the second key too (5+ sends).
       expect(sends).toBe(4);
     } finally {
+      // Released before restoring or removing the home so its lease files can be deleted.
+      releaseSpendHome();
       clearKeyCooldowns("claude-se");
       if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousHome;
@@ -229,6 +244,7 @@ describe("server terminal guard integration", () => {
   });
 
   test("terminal-guard continuation shares the request-wide 429 budget with the main loop", async () => {
+    takeInheritedSpendHome();
     const budgetConfig = {
       ...config,
       providers: {
@@ -279,6 +295,7 @@ describe("server terminal guard integration", () => {
   });
 
   test("terminal-guard continuation preserves structured cyber_policy semantics", async () => {
+    takeInheritedSpendHome();
     const secret = `OpenAI flagged this request for potential high-risk cybersecurity activity. Authorization: ${["Bear", "er"].join("")} continuationsecret123456`;
     let sends = 0;
     globalThis.fetch = (async () => {
@@ -316,6 +333,7 @@ describe("server terminal guard integration", () => {
   });
 
   test("terminal-guard continuation abort during the 429 wait yields 499 without replaying", async () => {
+    takeInheritedSpendHome();
     const abortConfig = {
       ...config,
       providers: {
@@ -364,6 +382,7 @@ describe("server terminal guard integration", () => {
   });
 
   test("a stalled continuation body reports 504 even when cancelling it aborts the client signal", async () => {
+    takeInheritedSpendHome();
     // Cancelling the stalled source can disconnect the client in the same tick. The
     // classifier has to read the thrown error first, or this timeout is reported as a
     // client cancellation and the caller loses the upstream stall signal.
@@ -397,6 +416,7 @@ describe("server terminal guard integration", () => {
   });
 
   test("a stalled initial body fails with a 504 upstream error instead of a proxy error", async () => {
+    takeInheritedSpendHome();
     // The initial stream has no continuation classifier: without one the bridge catch
     // reports this upstream timeout as a 500 proxy_error.
     const stallConfig = { ...config, stallTimeoutSec: 1 } as unknown as OcxConfig;
@@ -424,6 +444,7 @@ describe("server terminal guard integration", () => {
   });
 
   test("terminal-guard 429 wait longer than the stall budget still succeeds (heartbeats)", async () => {
+    takeInheritedSpendHome();
     const stallConfig = {
       ...config,
       stallTimeoutSec: 1,
@@ -471,6 +492,7 @@ describe("server terminal guard integration", () => {
   }, 5_000);
 
   test("openai-chat provider without terminalContinuationGuard does not re-ask", async () => {
+    takeInheritedSpendHome();
     const chatConfig = openAiChatConfig();
     let sends = 0;
     globalThis.fetch = (async () => {
@@ -497,6 +519,7 @@ describe("server terminal guard integration", () => {
   });
 
   test("openai-chat provider with terminalContinuationGuard false does not re-ask", async () => {
+    takeInheritedSpendHome();
     const chatConfig = openAiChatConfig(false);
     let sends = 0;
     globalThis.fetch = (async () => {
@@ -522,6 +545,7 @@ describe("server terminal guard integration", () => {
   });
 
   test("openai-chat provider with terminalContinuationGuard re-asks once and forwards the tool call", async () => {
+    takeInheritedSpendHome();
     const chatConfig = openAiChatConfig(true);
     let sends = 0;
     const bodies: Record<string, unknown>[] = [];
@@ -552,7 +576,56 @@ describe("server terminal guard integration", () => {
     expect(messages.some(m => m.role === "developer" || m.role === "system")).toBe(true);
   });
 
+  test("synthetic Antigravity continuation 401 does not rotate accounts", async () => {
+    const priorHome = process.env.OPENCODEX_HOME;
+    const isolated = mkdtempSync(join(tmpdir(), "ocx-antigravity-continuation-"));
+    process.env.OPENCODEX_HOME = isolated;
+    try {
+      await saveCredential("google-antigravity", { access: "access-a", refresh: "refresh-a",
+        expires: Date.now() + 3_600_000, accountId: "account-a", projectId: "project-a", source: "oauth" });
+      const a = getAccountSet("google-antigravity")!.activeAccountId;
+      await saveCredential("google-antigravity", { access: "access-b", refresh: "refresh-b",
+        expires: Date.now() + 3_600_000, accountId: "account-b", projectId: "project-b", source: "oauth" }, { addAccount: true });
+      await setActiveAccount("google-antigravity", a);
+      takeInheritedSpendHome();
+      const antigravityConfig: OcxConfig = { port: 0, defaultProvider: "google-antigravity", providers: {
+        "google-antigravity": {
+          adapter: "google", modelAdapters: { "gemini-3.8-flash": "openai-chat" },
+          baseUrl: "https://example.test/v1", authMode: "oauth", googleMode: "cloud-code-assist",
+          terminalContinuationGuard: true, models: ["gemini-3.8-flash"],
+        },
+      } } as OcxConfig;
+      const auth: string[] = [];
+      globalThis.fetch = (async (_input, init) => {
+        auth.push(new Headers(init?.headers).get("authorization") ?? "");
+        if (auth.length === 1) return chatSse(chatFirstTurn);
+        if (auth.length === 2) return Response.json({ error: { message: "unauthorized" } }, { status: 401 });
+        return chatSse(chatContinuationTurn);
+      }) as typeof fetch;
+
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "google-antigravity/gemini-3.8-flash",
+          input: "Please fix the file", stream: true,
+          tools: [{ type: "function", name: "exec_command", description: "run a command",
+            parameters: { type: "object" } }] }),
+      }), antigravityConfig, { model: "", provider: "" });
+      const body = await response.text();
+      expect(response.status).toBe(200);
+      expect(body).toContain("Provider continuation error 401");
+      expect(body).not.toContain("exec_command");
+      expect(auth).toEqual(["Bearer access-a", "Bearer access-a"]);
+    } finally {
+      releaseInheritedSpendHome?.();
+      releaseInheritedSpendHome = undefined;
+      if (priorHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = priorHome;
+      removeTreeWithRetry(isolated);
+    }
+  });
+
   test("combo attempts do not run an opted-in openai-chat terminal guard", async () => {
+    takeInheritedSpendHome();
     const comboConfig = {
       ...openAiChatConfig(true),
       combos: {
@@ -586,6 +659,7 @@ describe("server terminal guard integration", () => {
   });
 
   test("routed compaction does not run an opted-in openai-chat terminal guard", async () => {
+    takeInheritedSpendHome();
     const chatConfig = openAiChatConfig(true);
     let sends = 0;
     globalThis.fetch = (async () => {

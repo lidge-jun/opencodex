@@ -4,7 +4,8 @@ import {
   UPSTREAM_CLOSED_BEFORE_RESPONSE_CODE,
   UPSTREAM_NO_RESPONSE_CODE,
 } from "../../lib/upstream-retry";
-import { readFileSync } from "node:fs";
+import type { RequestFailureCause, RequestFailureStage } from "../../lib/request-failure-model";
+import { packageVersion } from "../../lib/package-version";
 // If the 101 never arrives (network black hole), give SSE a chance well before
 // the caller's connect timeout (default 200s) would fire.
 export const UPGRADE_DEADLINE_MS = 10_000;
@@ -48,6 +49,7 @@ const WS_CLOSE_MESSAGE_TOO_BIG = 1009;
 
 const codexWsUpstreamResponses = new WeakSet<Response>();
 const quotaObservedResponses = new WeakSet<Response>();
+const codexWsPreludeProjections = new WeakSet<Response>();
 
 /** Quota arrived directly at its captured account; do not replay old HTTP prelude headers. */
 export function isCodexWsQuotaObservedResponse(response: Response): boolean {
@@ -59,6 +61,14 @@ export function isCodexWsUpstreamResponse(response: Response): boolean {
   return codexWsUpstreamResponses.has(response);
 }
 
+/** Pre-response projection; its headers retain the exchange's prelude snapshot. */
+export function markCodexWsPreludeProjection(response: Response): void {
+  codexWsPreludeProjections.add(response);
+}
+
+export function isCodexWsPreludeProjection(response: Response): boolean {
+  return codexWsPreludeProjections.has(response);
+}
 
 export function markCodexWsResponse(response: Response, observed: boolean): void {
   codexWsUpstreamResponses.add(response);
@@ -72,13 +82,7 @@ export function markCodexWsResponse(response: Response, observed: boolean): void
  * importing management-api from the transport layer would invert the
  * layering and pull the management surface into every WS exchange.
  */
-const OCX_VERSION = (() => {
-  try {
-    return JSON.parse(readFileSync(new URL("../../../package.json", import.meta.url), "utf8")).version as string;
-  } catch {
-    return "0.0.0";
-  }
-})();
+const OCX_VERSION = packageVersion("0.0.0");
 
 /**
  * The durable form of the stage counters, carried out of the exchange on the
@@ -103,7 +107,49 @@ export type CodexWsStageRecord = Omit<CodexWsFailureStage, "requestBytes"> & {
   ocxVersion: string;
   /** Bun runtime version the exchange gated on. */
   bunVersion: string;
+  /**
+   * Normalized type of the Responses terminal frame that ended a plain exchange, as the upstream
+   * sent it and before any tail this proxy synthesizes (#6740). It is what separates an upstream
+   * `error` frame from a genuine `response.failed` when both reach a row as the same synthetic 502.
+   * Null when no terminal frame arrived, and on native-control exchanges, which can end on an
+   * acknowledgement instead. Records written before it existed read as null.
+   */
+  terminalEvent: CodexWsTerminalEvent | null;
+  /** Wrapper status of a terminal `error` frame ({@link codexWsWrapperStatus}); null otherwise. */
+  terminalErrorStatus: number | null;
 };
+
+/** The frames a plain exchange ends on, closed so a stage record can never carry free text. */
+export const CODEX_WS_TERMINAL_EVENTS = [
+  "response.completed",
+  "response.failed",
+  "response.incomplete",
+  "error",
+] as const;
+export type CodexWsTerminalEvent = typeof CODEX_WS_TERMINAL_EVENTS[number];
+
+export function isCodexWsTerminalEvent(value: unknown): value is CodexWsTerminalEvent {
+  return typeof value === "string" && (CODEX_WS_TERMINAL_EVENTS as readonly string[]).includes(value);
+}
+
+/**
+ * The HTTP status a Codex WebSocket `error` frame states on its wrapper, or undefined.
+ *
+ * The backend wraps a failure as `{type:"error", status|status_code, error}` and the native client
+ * turns that status into an HTTP error of the same status
+ * (codex-rs/codex-api/src/endpoint/responses_websocket.rs map_wrapped_websocket_error_event). Only
+ * that contract is read: a top-level integer in 100..599 under exactly one of the two aliases, the
+ * same rule the pre-commit rejection projection applies.
+ */
+export function codexWsWrapperStatus(payload: Record<string, unknown>): number | undefined {
+  if (payload.type !== "error") return undefined;
+  const hasStatus = Object.hasOwn(payload, "status");
+  if (hasStatus === Object.hasOwn(payload, "status_code")) return undefined;
+  const status = hasStatus ? payload.status : payload.status_code;
+  return typeof status === "number" && Number.isInteger(status) && status >= 100 && status <= 599
+    ? status
+    : undefined;
+}
 
 const codexWsStageByResponse = new WeakMap<Response, CodexWsStageRecord>();
 
@@ -181,6 +227,14 @@ export type CodexWsFailureStage = {
   relayedEvents: number;
   /** Milliseconds from send to the first upstream frame; null when none arrived. */
   firstFrameMs: number | null;
+  /**
+   * Milliseconds from send to the first non-control Responses event (a
+   * `response.*` or `error` frame the relay would hand downstream); null when
+   * none arrived. `firstFrameMs` alone cannot separate "the peer answered with
+   * quota metadata and went quiet" from "the peer was still working": the
+   * first measures any frame, this one measures the turn's own start (#4191).
+   */
+  firstResponseMs: number | null;
   /** Milliseconds from send to this failure; null when the failure predates the send. */
   elapsedMs: number | null;
   /** Liveness pings the exchange sent while waiting for the first response event. */
@@ -211,6 +265,60 @@ export function classifyCodexWsFailure(stage: CodexWsFailureStage): CodexWsFailu
 }
 
 /**
+ * The same four outcomes said in the shared stage-and-cause vocabulary (#4191).
+ *
+ * A projection, not a second classifier: {@link classifyCodexWsFailure} stays the one place that
+ * reads the counters, and this only restates its answer in the words the durable log, the metrics
+ * projection and the HTTP path already use. Without it the WebSocket transport is the one surface
+ * whose failures cannot be compared with anything else, which is the reported symptom -- every
+ * such failure reached the user as one of two bare sentences.
+ *
+ * It does not relax the transport's own rule. The stage below reports where the exchange got to,
+ * and `resendPermission` agrees that everything past `before-send` is refused. When a socket dies
+ * under the send, this stage is what the resend gate is asked with (#4191), so the operator's
+ * `retryOnReset` grant is the only way past that refusal, as it is for an HTTP reset.
+ */
+export const CODEX_WS_FAILURE_PROJECTION = {
+  /** The create frame never left, so the origin provably never saw this turn. */
+  "before-send": { stage: "pre-header", cause: "transport-unsent" },
+  /** The frame left and the socket said nothing at all. The turn may be running upstream. */
+  "no-upstream-frame": { stage: "pre-header", cause: "transport-ambiguous" },
+  /** Control frames only: the peer is alive and answered, but no Responses event arrived. */
+  "no-response-event": { stage: "protocol-prelude", cause: "transport-ambiguous" },
+  /** Events already reached the caller, so a resend would duplicate output they have seen. */
+  "after-response-started": { stage: "semantic-output", cause: "transport-ambiguous" },
+} as const satisfies Record<CodexWsFailureCause, { stage: RequestFailureStage; cause: RequestFailureCause }>;
+
+export function projectCodexWsFailure(
+  stage: CodexWsFailureStage,
+): { stage: RequestFailureStage; cause: RequestFailureCause } {
+  return CODEX_WS_FAILURE_PROJECTION[classifyCodexWsFailure(stage)];
+}
+
+const socketDeathStages = new WeakMap<Response, RequestFailureStage>();
+
+/**
+ * Record that a pre-response settle came from the socket closing or failing under the send (#4191),
+ * rather than from silence, a refused frame or a local limit.
+ *
+ * A fact about how the exchange ended, not a grant. The settle is the same non-replayable 502
+ * either way; whether the turn may go out once more is the resend gate's question, and only the
+ * operator's `retryOnReset` grant can answer it yes.
+ */
+export function markCodexWsSocketDeath(response: Response, stage: CodexWsFailureStage): void {
+  socketDeathStages.set(response, projectCodexWsFailure(stage).stage);
+}
+
+/**
+ * Where the send stood when its socket died: `pre-header` when nothing came back and
+ * `protocol-prelude` when frames arrived but none was a Responses event. Undefined for every other
+ * response.
+ */
+export function codexWsSocketDeathStage(response: Response): RequestFailureStage | undefined {
+  return socketDeathStages.get(response);
+}
+
+/**
  * Render the stage as a suffix appended to an existing failure message.
  *
  * It is a suffix, not an interpolation, on purpose: the close-code tail these
@@ -222,7 +330,8 @@ export function codexWsFailureDetail(stage: CodexWsFailureStage): string {
   return ` [cause=${classifyCodexWsFailure(stage)} request=${stage.requestBytes}B`
     + ` sent=${stage.sent ? "yes" : "no"} frames=${stage.upstreamFrames}`
     + ` control=${stage.controlFrames} relayed=${stage.relayedEvents}`
-    + ` first-frame=${duration(stage.firstFrameMs)} elapsed=${duration(stage.elapsedMs)}`
+    + ` first-frame=${duration(stage.firstFrameMs)} first-response=${duration(stage.firstResponseMs)}`
+    + ` elapsed=${duration(stage.elapsedMs)}`
     + ` pings=${stage.pings} pongs=${stage.pongs}]`;
 }
 

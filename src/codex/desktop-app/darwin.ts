@@ -1,7 +1,7 @@
 /**
  * macOS adapter for the Codex desktop-app restart.
  *
- * Measured shape (devlog/_plan/260913_cross_platform_desktop_app_restart/001_platform_topology.md):
+ * Measured shape (devlog/_fin/260913_cross_platform_desktop_app_restart/001_platform_topology.md):
  *
  *   15901     1  /Applications/ChatGPT.app/Contents/MacOS/ChatGPT
  *   16733 15901  /Applications/ChatGPT.app/Contents/Resources/codex ... app-server ...

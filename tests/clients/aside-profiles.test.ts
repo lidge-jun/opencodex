@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExportModel } from "../../src/clients/config-export";
@@ -245,6 +245,92 @@ describe("Aside profile desired state, ownership and history", () => {
     expect(await refreshAsideProfiles(input())).toEqual([]);
     expect(readFileSync(path(1), "utf8")).toBe(original);
     expect((await getAsideProfileState(input(), 1)).enabled).toBe(false);
+  });
+
+  test("a captured stored copy survives lookup-only divergence without bypassing source guards", async () => {
+    // Pin profile 0 to the legacy root: profile 1 must stay on its own child store even after
+    // its historical row is copied into the root journal.
+    config.asideProfileSync = { allProfiles: false, legacyProfileId: 0 };
+    const original = readFileSync(path(1), "utf8");
+    const enabled = await mutateAsideProfiles(input(), { profileId: 1, enabled: true });
+    const applied = enabled.results[0]!;
+    if (!applied.ok || !applied.opId) throw new Error("fixture enable failed");
+    const opId = applied.opId;
+    const profileStore = createIntegrationStateStore(join(store.root, "aside-profiles", "1"));
+    const entry = profileStore.findOperation(opId);
+    if (!entry) throw new Error("fixture operation missing from profile store");
+    const snapshot = profileStore.readSnapshot(entry);
+    if (snapshot.kind !== "stored") throw new Error("fixture snapshot is not stored");
+    expect(snapshot.text).toBe(original);
+    expect(store.findOperation(opId)).toBeNull();
+    store.captureSnapshot("aside", opId, snapshot.text);
+    store.appendJournal(structuredClone(entry));
+    rmSync(snapshot.path);
+    expect(profileStore.readSnapshot(entry).kind).toBe("expired");
+
+    let hideRootCopy = false;
+    const lookupStore: IntegrationStateStore = {
+      ...store,
+      // Only enumeration diverges. Source revalidation and snapshot reads remain real.
+      listOperations(clientId, limit) {
+        const rows = store.listOperations(clientId, Number.MAX_SAFE_INTEGER);
+        return rows.filter(row => !hideRootCopy || row.opId !== opId).slice(0, limit ?? 50);
+      },
+    };
+    const fixture = input({ store: lookupStore });
+    const captured = findAsideOperation(fixture, opId, 1);
+    if (!captured) throw new Error("fixture capture failed");
+    expect(captured.profileId).toBe(1);
+    expect(captured.store.root).toBe(store.root);
+    expect(captured.store.readSnapshot(captured.entry)).toMatchObject({ kind: "stored", text: original });
+
+    const treeBytes = (dir: string): string => !existsSync(dir) ? "" : readdirSync(dir, { recursive: true })
+      .map(String).sort().map(name => {
+        const full = join(dir, name);
+        return statSync(full).isDirectory() ? name + "/" : name + ":" + readFileSync(full, "utf8");
+      }).join("\u0000");
+    const siblingDir = join(store.root, "aside-profiles", "2");
+    createIntegrationStateStore(siblingDir).captureSnapshot("aside", "sibling-witness", "untouched");
+    const siblingBefore = treeBytes(siblingDir);
+    const siblingDocuments = [0, 2].map(id => readFileSync(path(id), "utf8"));
+    const sourceWitness = () => ["journal.jsonl", "records.json", "maintenance.json", join("snapshots", "aside", opId)]
+      .map(name => existsSync(join(store.root, name)) ? readFileSync(join(store.root, name), "utf8") : null);
+    const sourceBefore = sourceWitness();
+    const profileBefore = treeBytes(profileStore.root);
+    const appliedBytes = readFileSync(path(1), "utf8");
+    const savesBefore = saves;
+
+    hideRootCopy = true;
+    const fresh = findAsideOperation(fixture, opId, 1);
+    if (!fresh) throw new Error("fixture fresh lookup failed");
+    expect(fresh.store.root).toBe(profileStore.root);
+    expect(fresh.store.readSnapshot(fresh.entry).kind).toBe("expired");
+    expect(captured.store.findOperation(opId)).toEqual(captured.entry);
+    expect(captured.store.readSnapshot(captured.entry)).toMatchObject({ kind: "stored", text: original });
+    // Counterfactual through the real public entry point: re-resolution refuses before any write.
+    expect(await restoreAsideProfile(fixture, { opId, profileId: 1 })).toMatchObject({
+      ok: false, clientId: "aside", profileId: 1, reason: "snapshot_expired",
+    });
+    expect(saves).toBe(savesBefore);
+    expect(treeBytes(profileStore.root)).toBe(profileBefore);
+    expect(readFileSync(path(1), "utf8")).toBe(appliedBytes);
+    expect(sourceWitness()).toEqual(sourceBefore);
+
+    const restored = await restoreAsideProfile(fixture, { opId, profileId: 1, selectedOperation: captured });
+    expect(restored).toMatchObject({ ok: true, changed: true, clientId: "aside", profileId: 1 });
+    if (!restored.ok || !restored.opId) throw new Error("captured restore did not commit");
+    expect(readFileSync(path(1), "utf8")).toBe(original);
+    const finalRows = profileStore.listOperations("aside");
+    expect(finalRows.map(row => ({ kind: row.kind, opId: row.opId }))).toEqual([
+      { kind: "restore", opId: restored.opId }, { kind: "apply", opId },
+    ]);
+    expect(finalRows[0]!.configPath).toBe(path(1));
+    expect(profileStore.readSnapshot(finalRows[0]!)).toMatchObject({ kind: "stored", text: appliedBytes });
+    expect(profileStore.readSnapshot(entry)).toMatchObject({ kind: "stored", text: original });
+    expect(sourceWitness()).toEqual(sourceBefore);
+    expect(captured.store.findOperation(opId)).toEqual(captured.entry);
+    expect([0, 2].map(id => readFileSync(path(id), "utf8"))).toEqual(siblingDocuments);
+    expect(treeBytes(siblingDir)).toBe(siblingBefore);
   });
 
   test("disable then Undo restores target intent without changing sibling overrides", async () => {

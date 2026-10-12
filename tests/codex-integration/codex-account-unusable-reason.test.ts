@@ -1,3 +1,4 @@
+import { CodexPoolAuthenticationError } from "../../src/codex/auth-context";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -8,8 +9,9 @@ import {
 } from "../../src/codex/account-usability";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { clearAccountNeedsReauth, markAccountNeedsReauth } from "../../src/codex/account-runtime-state";
+import { CODEX_MAIN_SIGN_IN_REQUIRED_MESSAGE } from "../../src/server/responses/codex-auth-error";
 import { MAIN_CODEX_ACCOUNT_ID, MainAccountTokenRefreshError } from "../../src/codex/main-account";
-import { nativeMainRefreshFailureResponse } from "../../src/server/responses/codex-auth-error";
+import { mapCodexAuthContextErrorToResponse, nativeMainRefreshFailureResponse } from "../../src/server/responses/codex-auth-error";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -155,6 +157,21 @@ describe("native main refresh refusal", () => {
     const response = nativeMainRefreshFailureResponse(new MainAccountTokenRefreshError("reauth"));
     expect(response.status).toBe(401);
     const message = ((await response.json()) as { error: { message: string } }).error.message;
-    expect(message).toBe("Codex main account needs reauthentication");
+    // Names the provider as the refuser and the command that fixes it: a bare "needs
+    // reauthentication" reads as a proxy fault for the operator whose plan was downgraded.
+    expect(message).toBe(CODEX_MAIN_SIGN_IN_REQUIRED_MESSAGE);
+    expect(message).toContain("codex login");
   });
+
+  test("an unrelated pool refusal does not borrow the global main quarantine cause", async () => {
+    markAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+    const ordinary = new CodexPoolAuthenticationError();
+    const response = mapCodexAuthContextErrorToResponse(ordinary, { now: Date.now() })!;
+    expect(((await response.json()) as { error: { message: string } }).error.message).toBe(ordinary.message);
+    const main = mapCodexAuthContextErrorToResponse(
+      new CodexPoolAuthenticationError(undefined, { quarantinedMain: true }), { now: Date.now() },
+    )!;
+    expect(((await main.json()) as { error: { message: string } }).error.message).toBe(CODEX_MAIN_SIGN_IN_REQUIRED_MESSAGE);
+  });
+
 });

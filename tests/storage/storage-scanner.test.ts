@@ -3,8 +3,14 @@ import { Database } from "bun:sqlite";
 import { mkdirSync, mkdtempSync, readdirSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { scanStorage, type StorageBucket, type StorageReport } from "../../src/storage/scanner";
+import { scanStorage, scanStorageAsync, type StorageBucket, type StorageReport } from "../../src/storage/scanner";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { logGuardResultMayHaveChangedStorage, sharedStorageScan } from "../../src/server/management/storage-log-guard-routes";
+import {
+  noteStorageMutationCompleted,
+  storageMutationEpoch,
+  tryBeginStorageMutation,
+} from "../../src/storage/storage-mutation-coordinator";
 
 const OLD_MTIME = new Date("2026-01-02T03:04:05Z");
 const MID_MTIME = new Date("2026-03-04T05:06:07Z");
@@ -268,4 +274,116 @@ describe("scanStorage", () => {
     const otherPaths = (bucket(withTrash, "other").largest ?? []).map(e => e.path);
     expect(otherPaths.some(p => p.includes(".trash"))).toBe(false);
   }, 15_000);
+});
+
+describe("scanStorageAsync", () => {
+  const withoutTimestamp = (report: StorageReport) => ({ ...report, generatedAt: 0 });
+
+  test("produces the same report as the synchronous scan", async () => {
+    fixtureHome = buildFixtureHome();
+    mkdirSync(join(fixtureHome, ".trash", "123"), { recursive: true });
+    writeFileSync(join(fixtureHome, ".trash", "123", "rollout-quarantined.jsonl"), "q".repeat(5000));
+
+    const asyncReport = await scanStorageAsync(fixtureHome);
+    expect(withoutTimestamp(asyncReport)).toEqual(withoutTimestamp(scanStorage(fixtureHome)));
+  }, 15_000);
+
+  test("reports zeros for a missing home and rejects a home that is a file", async () => {
+    fixtureHome = buildFixtureHome();
+    const missing = await scanStorageAsync(join(fixtureHome, "does-not-exist"));
+    expect(missing.total).toEqual({ bytes: 0, fileCount: 0 });
+
+    const filePath = join(fixtureHome, "not-a-dir");
+    writeFileSync(filePath, "x");
+    await expect(scanStorageAsync(filePath)).rejects.toThrow();
+  }, 15_000);
+
+  test("yields to the event loop while walking the tree", async () => {
+    // GET /api/storage runs this on the server's event loop; the synchronous walk parked
+    // it for the whole CODEX_HOME tree (~3.7s on a 40k-file home). A timer queued before
+    // the scan must get to run before the scan finishes.
+    fixtureHome = buildFixtureHome();
+    let ticked = false;
+    setTimeout(() => { ticked = true; }, 0);
+    let tickedBeforeDone = false;
+    await scanStorageAsync(fixtureHome).then(() => { tickedBeforeDone = ticked; });
+    expect(tickedBeforeDone).toBe(true);
+  }, 15_000);
+
+  test("performs zero writes under CODEX_HOME (read-only invariant)", async () => {
+    fixtureHome = buildFixtureHome();
+    const before = snapshotTree(fixtureHome);
+
+    await scanStorageAsync(fixtureHome);
+
+    const after = snapshotTree(fixtureHome);
+    expect([...after.keys()].sort()).toEqual([...before.keys()].sort());
+    for (const [path, stat] of before) {
+      expect(after.get(path)).toEqual(stat);
+    }
+  }, 15_000);
+});
+
+describe("shared storage scan flights", () => {
+  const report = (bytes: number): StorageReport => ({
+    codexHome: "home",
+    generatedAt: 1,
+    total: { bytes, fileCount: 1 },
+    buckets: [],
+  });
+
+  test("a read after a completed storage mutation starts a new scan instead of joining the old one", async () => {
+    const home = join(tmpdir(), `ocx-scan-flight-${process.pid}-${Date.now()}`);
+    const releases: Array<(value: StorageReport) => void> = [];
+    let calls = 0;
+    const scan = () => {
+      calls += 1;
+      return new Promise<StorageReport>(resolve => releases.push(resolve));
+    };
+
+    const first = sharedStorageScan(home, scan);
+    const joined = sharedStorageScan(home, scan);
+    expect(calls).toBe(1);
+
+    // e.g. /api/storage/codex-logs/compact finishing while the first walk is still running
+    noteStorageMutationCompleted();
+    const afterMutation = sharedStorageScan(home, scan);
+    expect(calls).toBe(2);
+
+    // The older walk settling must not retire the newer flight.
+    releases[0]!(report(100));
+    expect(await first).toEqual(report(100));
+    expect(await joined).toEqual(report(100));
+    const laterRead = sharedStorageScan(home, scan);
+    expect(calls).toBe(2);
+
+    releases[1]!(report(40));
+    expect(await afterMutation).toEqual(report(40));
+    expect(await laterRead).toEqual(report(40));
+  });
+
+  test("only Log Guard results that may have changed storage invalidate scans", () => {
+    // A refused compact (e.g. unsupported_schema) exits before touching the database;
+    // invalidating on it let repeated refused requests start overlapping scans.
+    for (const error of ["unsupported_schema", "codex_running", "process_enumeration_failed", "unsafe_path", "auto_vacuum_not_incremental"] as const) {
+      expect(logGuardResultMayHaveChangedStorage({ ok: false, error })).toBe(false);
+    }
+    expect(logGuardResultMayHaveChangedStorage({ ok: false, error: "trigger_collision" })).toBe(false);
+    expect(logGuardResultMayHaveChangedStorage({ ok: false, error: "integrity_check_failed", phase: "before" })).toBe(false);
+
+    expect(logGuardResultMayHaveChangedStorage({ ok: false, error: "integrity_check_failed", phase: "after" })).toBe(true);
+    expect(logGuardResultMayHaveChangedStorage({ ok: false, error: "busy" })).toBe(true);
+    expect(logGuardResultMayHaveChangedStorage({ ok: false, error: "database_error" })).toBe(true);
+    expect(logGuardResultMayHaveChangedStorage({ ok: false, error: "config_write_failed" })).toBe(true);
+  });
+
+  test("releasing a coordinated mutation lease advances the storage mutation epoch", () => {
+    const home = join(tmpdir(), `ocx-scan-epoch-${process.pid}-${Date.now()}`);
+    const before = storageMutationEpoch();
+    const gate = tryBeginStorageMutation("cleanup", home);
+    expect(gate.acquired).toBe(true);
+    expect(storageMutationEpoch()).toBe(before);
+    if (gate.acquired) gate.lease.release();
+    expect(storageMutationEpoch()).toBe(before + 1);
+  });
 });

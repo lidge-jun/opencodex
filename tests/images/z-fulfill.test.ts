@@ -10,11 +10,18 @@ const PREV_HOME = process.env.OPENCODEX_HOME;
 let fulfillImageCall: typeof import("../../src/images/fulfill")["fulfillImageCall"];
 let imageFulfillmentTailSnapshot: typeof import("../../src/images/fulfill")["imageFulfillmentTailSnapshot"];
 let testHome = "";
+// `mock.restore()` does not undo `mock.module`: Bun keeps both overrides below for every
+// file that runs after this one in the same process. Keep the real modules to put back,
+// and restore only the ones captured: a setup that failed partway must not install an empty module.
+let realXaiClient: Record<string, unknown> | undefined;
+let realArtifacts: Record<string, unknown> | undefined;
 
 beforeAll(async () => {
   testHome = join(tmpdir(), "ocx-test-" + randomUUID());
   process.env.OPENCODEX_HOME = testHome;
   mock.restore();
+  realXaiClient = { ...(await import("../../src/images/xai-client")) };
+  realArtifacts = { ...(await import("../../src/images/artifacts")) };
   mock.module("../../src/images/xai-client", () => ({
     callXaiImages: async (req: XaiImageRequest, _auth: unknown, _signal?: AbortSignal, timeoutMs?: number) => {
       xaiCalls.push(req);
@@ -37,7 +44,12 @@ beforeAll(async () => {
   }));
   ({ fulfillImageCall, imageFulfillmentTailSnapshot } = await import(`../../src/images/fulfill?fulfill=${Date.now()}`));
 });
-afterAll(() => { if (PREV_HOME === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = PREV_HOME; mock.restore(); });
+afterAll(() => {
+  if (PREV_HOME === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = PREV_HOME;
+  mock.restore();
+  if (realXaiClient) { const real = realXaiClient; mock.module("../../src/images/xai-client", () => real); }
+  if (realArtifacts) { const real = realArtifacts; mock.module("../../src/images/artifacts", () => real); }
+});
 
 // --- Mutable mock state (reset() restores defaults before each test) ---
 let xaiResult: { images: Array<{ b64_json?: string; url?: string }> } = { images: [{ b64_json: "dGVzdA==" }] };

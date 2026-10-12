@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createCursorAdapter as createCursorAdapterProduction } from "../../../src/adapters/cursor";
 import { clearCursorCheckpointsForTests, cursorCheckpointShape, getCursorCheckpoint } from "../../../src/adapters/cursor/checkpoint-store";
+import { createCursorRequest } from "../../../src/adapters/cursor/request-builder";
 import { create, toBinary } from "@bufbuild/protobuf";
 import { ConversationStateStructureSchema } from "../../../src/adapters/cursor/gen/agent_pb";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
@@ -55,7 +56,25 @@ describe("tool-suspended checkpoint commit (devlog 260826 050)", () => {
     if (done?.type !== "done") throw new Error("expected done");
     expect(done.providerState?.cursor?.checkpointRef).toBeDefined();
     expect(done.providerState?.cursor?.checkpointUsable).toBe(false);
-    expect(getCursorCheckpoint(done.providerState?.cursor?.checkpointRef)).toBeDefined();
+    expect(getCursorCheckpoint(done.providerState?.cursor?.checkpointRef)?.toolSuspended).toBe(true);
+
+    // A ref-less prefix lookup sees the suspension on the snapshot itself: a request
+    // whose trailing message is not a toolResult must not resume bytes that upstream
+    // serialized mid-tool-call.
+    const retry = createCursorRequest(body("cursor/grok-4.6"));
+    expect(retry.continuationMode).toBe("full-replay");
+    expect(retry.checkpointInvalidationReason).toBe("trailing_tool_result");
+
+    const continuation = body("cursor/grok-4.6");
+    continuation.context.messages.push({
+      role: "toolResult",
+      toolCallId: "call_x",
+      content: "sunny",
+      timestamp: 2,
+    });
+    const resumed = createCursorRequest(continuation);
+    expect(resumed.continuationMode).toBe("checkpoint");
+    expect(resumed.checkpointBytes).toEqual(checkpointBytes);
     clearCursorCheckpointsForTests();
   });
 

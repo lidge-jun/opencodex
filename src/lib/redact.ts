@@ -7,7 +7,7 @@ export const REDACTED_SECRET = "[REDACTED]";
  * credentials over an unsafe channel (e.g. plaintext non-loopback HTTP) rather than
  * re-deriving a narrower local list.
  */
-export const SENSITIVE_KEY_PATTERN = /^(?:authorization|proxy-authorization|cookie|set-cookie|set-cookie2|api[-_]?key|x-api-key|x-goog-api-key|x-amz-security-token|access[-_]?token|refresh[-_]?token|id[-_]?token|token|secret|client[-_]?secret|password|profile[-_]?arn|exa[-_]?api[-_]?key)$/i;
+export const SENSITIVE_KEY_PATTERN = /^(?:authorization|proxy-authorization|cookie|set-cookie|set-cookie2|api[-_]?key|x-api-key|x-goog-api-key|x-amz-security-token|copilot[-_]?session[-_]?token|session[-_]?token|access[-_]?token|refresh[-_]?token|id[-_]?token|token|secret|client[-_]?secret|password|profile[-_]?arn|exa[-_]?api[-_]?key)$/i;
 
 /**
  * Colon-labelled credential headers echoed back inside an error body
@@ -40,7 +40,7 @@ export const SENSITIVE_KEY_PATTERN = /^(?:authorization|proxy-authorization|cook
 // Every letter position also accepts \u0001, the placeholder the fold emits for
 // an unresolved HTML named reference: `author&ii;zation` is the label with one
 // character we cannot name, and that is still the label.
-const CREDENTIAL_HEADER_LABEL_RAW = "x-api-key|x-goog-api-key|x-amz-security-token|api[_-]?key|apiKey|exa[_-]?api[_-]?key|exaApiKey|access[_-]?token|accessToken|refresh[_-]?token|refreshToken|id[_-]?token|client[_-]?secret|clientSecret|authorization|proxy-authorization|cookie|set-cookie|password|secret|token";
+const CREDENTIAL_HEADER_LABEL_RAW = "copilot[_-]?session[_-]?token|session[_-]?token|sessionToken|x-api-key|x-goog-api-key|x-amz-security-token|api[_-]?key|apiKey|exa[_-]?api[_-]?key|exaApiKey|access[_-]?token|accessToken|refresh[_-]?token|refreshToken|id[_-]?token|client[_-]?secret|clientSecret|authorization|proxy-authorization|cookie|set-cookie|password|secret|token";
 
 const CREDENTIAL_HEADER_LABEL = CREDENTIAL_HEADER_LABEL_RAW
   .replace(/(?<![\[\\])([A-Za-z])(?![\]\-])/g, "[$1\u0001]");
@@ -100,13 +100,6 @@ const OTHER_FRAMED_CREDENTIALS: Array<[RegExp, string]> = [
     ),
     "element",
   ],
-  [
-    new RegExp(
-      `(<[^\\S\\r\\n]*(?:[A-Za-z_][\\w.-]*:)?[A-Za-z_][\\w:.-]*)(?=[^>]*?(?<![\\w:.-])(?:name|key|id)[^\\S]*=[^\\S]*["']?(?:${CREDENTIAL_HEADER_LABEL})["']?(?=[\\s/>]))[\\s\\S]*`,
-      "gi",
-    ),
-    "element",
-  ],
   // Multipart part: everything from a credential-named part header to the end
   // of the input. Part-based, not line-based — a body can span lines and the
   // blank line is often missing in a malformed echo.
@@ -136,7 +129,60 @@ const OTHER_FRAMED_CREDENTIALS: Array<[RegExp, string]> = [
 function maskOtherFramings(value: string): string {
   // Same union rule as the header pass: decoding may add coverage, never
   // remove it.
-  return maskOtherFramingsOnce(maskOtherFramingsOnce(value, true), false);
+  const decoded = maskOtherFramingsOnce(value, true);
+  const decodedXml = maskXmlIdentifyingAttribute(decoded, true);
+  const plain = maskOtherFramingsOnce(decodedXml, false);
+  return maskXmlIdentifyingAttribute(plain, false);
+}
+
+const XML_TAG_NAME = /<[^\S\r\n]*(?:[A-Za-z_][\w.-]*:)?[A-Za-z_][\w:.-]*/y;
+const XML_CREDENTIAL_ATTRIBUTE = new RegExp(
+  `(?<![\\w:.-])(?:name|key|id)[^\\S]*=[^\\S]*["']?(?:${CREDENTIAL_HEADER_LABEL})["']?(?=[\\s/>])`,
+  "i",
+);
+
+/** Find a tag terminator without treating a quoted attribute's `>` as syntax. */
+function findXmlTagClose(text: string, from: number): number {
+  let quote = "";
+  for (let index = from; index < text.length; index += 1) {
+    const character = text.charAt(index);
+    if (quote) {
+      if (character === quote) quote = "";
+    } else if (character === '"' || character === "'") {
+      quote = character;
+    } else if (character === ">") {
+      return index;
+    }
+  }
+  return -1;
+}
+
+/** Scan each tag once; a suffix-searching lookahead here makes unterminated tags quadratic. */
+function maskXmlIdentifyingAttribute(value: string, decodeEscapes: boolean): string {
+  const { folded, map } = foldForMatching(value, decodeEscapes);
+  let searchFrom = 0;
+  while (searchFrom < folded.length) {
+    const relativeStart = folded.indexOf("<", searchFrom);
+    if (relativeStart === -1) return value;
+    const tagStart = relativeStart;
+    XML_TAG_NAME.lastIndex = tagStart;
+    const tagName = XML_TAG_NAME.exec(folded);
+    if (!tagName) {
+      searchFrom = tagStart + 1;
+      continue;
+    }
+    const close = findXmlTagClose(folded, tagStart + tagName[0].length);
+    const tagEnd = close === -1 ? folded.length : close + 1;
+    const attributes = folded.slice(tagStart + tagName[0].length, tagEnd);
+    if (XML_CREDENTIAL_ATTRIBUTE.test(attributes)) {
+      const start = map[tagStart] ?? value.length;
+      const headEnd = map[tagStart + tagName[0].length] ?? value.length;
+      return value.slice(0, start) + value.slice(start, headEnd) + REDACTED_SECRET;
+    }
+    if (close === -1) return value;
+    searchFrom = tagEnd;
+  }
+  return value;
 }
 
 function maskOtherFramingsOnce(value: string, decodeEscapes: boolean): string {

@@ -155,7 +155,7 @@ Codex context compaction 同样适用于路由模型。`server/responses/compact
   与 Codex 自身缓存一致），获取失败时会回退到旧数据。
 - `codex/catalog.ts` facade 导出的 `codex/catalog/sync.ts` 把路由模型作为带命名空间的条目
   合并进 Codex 目录，优先排列精选的
-  [subagent 模型](/zh-cn/guides/codex-integration/#subagent-选择器)，过滤
+  [subagent 模型](/zh-cn/guides/codex-integration/#sub-agent-选择器)，过滤
   `disabledModels`，并可从一次性备份中完整恢复原始目录。
 
 ## Reasoning effort

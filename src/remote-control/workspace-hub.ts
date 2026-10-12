@@ -478,13 +478,14 @@ export class RemoteWorkspaceHub {
   }
 
   revokeDevice(deviceId: string): boolean {
-    const before = this.state.devices.length;
-    this.state = { ...this.state, devices: this.state.devices.filter(device => device.id !== deviceId) };
-    if (this.state.devices.length === before) return false;
+    const next = { ...this.state, devices: this.state.devices.filter(device => device.id !== deviceId) };
+    if (next.devices.length === this.state.devices.length) return false;
+    // Publish only after durable removal: a failed save must remain visible and retryable.
+    this.store.save(next);
+    this.state = next;
     const connection = this.connections.get(deviceId);
     this.connections.delete(deviceId);
     connection?.close("remote workspace device was revoked");
-    this.store.save(this.state);
     return true;
   }
 

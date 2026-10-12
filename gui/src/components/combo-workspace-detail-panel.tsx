@@ -15,12 +15,17 @@ import { useT } from "../i18n/shared";
 import { Notice } from "../ui";
 import type { ModelOption, ProviderOption } from "./combo-workspace-types";
 import { ComboCapabilities, EffortSelect, StrategySeg, TargetEditor } from "./combo-workspace-controls";
+import { ComboJevDecisionSection } from "./combo-workspace-jev-decision";
 import { COMBO_STRATEGY_HINT_KEYS, COMBO_TARGETS_HINT_KEYS } from "../combo-workspace-data";
-import { clampedNumberInput } from "./combo-workspace-utils";
+import { clampedNumberInput, comboDraftErrorText } from "./combo-workspace-utils";
+import type { JevDecisionRow } from "../jev-decision-service";
+import { JevStatsPanel } from "./jev-stats-panel";
+import { ComboProtocolPlan } from "./protocols/ComboProtocolPlan";
 
-type DetailTab = "config" | "about";
+type DetailTab = "config" | "stats" | "about";
 
 const DETAIL_TABS: readonly DetailTab[] = ["config", "about"];
+const JEV_DETAIL_TABS: readonly DetailTab[] = ["config", "stats", "about"];
 
 /*
  * A combo id can be any string, so it cannot go in a DOM id without escaping. These
@@ -29,9 +34,13 @@ const DETAIL_TABS: readonly DetailTab[] = ["config", "about"];
  */
 const detailTabDomId = (tab: DetailTab) => `cws-detail-tab-${tab}`;
 const detailPanelDomId = (tab: DetailTab) => `cws-detail-panel-${tab}`;
+/** Stable default so an omitted combo list does not change identity every render. */
+const NO_COMBOS: readonly ComboItem[] = [];
 
 export function DetailPanel({
+  apiBase,
   baseline,
+  combos = NO_COMBOS,
   isCreate = false,
   otherIds,
   otherAliases,
@@ -39,22 +48,28 @@ export function DetailPanel({
   providerQuotaStates,
   providers,
   models,
+  capabilityModels = models,
   onBack,
   onSaved,
   onRequestRemove,
   onSave,
   onDirtyChange,
 }: {
+  /** Management API target; without it the candidate path preview is not offered and JEV stats use same-origin paths. */
+  apiBase?: string;
   baseline: ComboItem;
+  /** All OTHER combos; a JEV decision model may not name this combo or any JEV combo. */
+  combos?: readonly ComboItem[];
   isCreate?: boolean;
   /** Ids of all OTHER combos — rename collisions validate against these. */
   otherIds: string[];
   /** Aliases of all OTHER combos — alias uniqueness validates against these. */
   otherAliases: string[];
-  providerMap: Readonly<Record<string, { disabled?: boolean }>>;
+  providerMap: Readonly<Record<string, JevDecisionRow>>;
   providerQuotaStates: ProviderQuotaStates;
   providers: ProviderOption[];
   models: ModelOption[];
+  capabilityModels?: ModelOption[];
   onBack?: () => void;
   onSaved: (item: ComboItem) => void;
   onRequestRemove?: () => void;
@@ -63,6 +78,7 @@ export function DetailPanel({
 }) {
   const t = useT();
   const [tab, setTab] = useState<DetailTab>("config");
+  const detailTabs = !isCreate && baseline.strategy === "jev" ? JEV_DETAIL_TABS : DETAIL_TABS;
 
   /*
    * Arrow/Home/End traversal, matching ProviderDetails. Without it the tablist is two
@@ -70,31 +86,31 @@ export function DetailPanel({
    */
   const onDetailTabKeyDown = useCallback((event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
     let next: number;
-    if (event.key === "ArrowRight") next = (index + 1) % DETAIL_TABS.length;
-    else if (event.key === "ArrowLeft") next = (index - 1 + DETAIL_TABS.length) % DETAIL_TABS.length;
+    if (event.key === "ArrowRight") next = (index + 1) % detailTabs.length;
+    else if (event.key === "ArrowLeft") next = (index - 1 + detailTabs.length) % detailTabs.length;
     else if (event.key === "Home") next = 0;
-    else if (event.key === "End") next = DETAIL_TABS.length - 1;
+    else if (event.key === "End") next = detailTabs.length - 1;
     else return;
     event.preventDefault();
-    setTab(DETAIL_TABS[next]!);
+    setTab(detailTabs[next]!);
     event.currentTarget.parentElement
       ?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]
       ?.focus();
-  }, []);
+  }, [detailTabs]);
   const [draft, setDraft] = useState<ComboItem>(baseline);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [copied, setCopied] = useState(false);
   const dirty = !draftEquals(draft, baseline);
   const allTargetsExhausted = comboQuotaState(draft.targets, providerQuotaStates, providerMap) === "exhausted";
-  const baselineSyncKey = `${baseline.id}:${baseline.alias ?? ""}:${baseline.nativeAlias}:${baseline.displayName ?? ""}:${baseline.strategy}:${baseline.stickyLimit}:${baseline.defaultEffort}:${baseline.imageInput ?? "auto"}:${baseline.reasoningEffortMode ?? "strict"}:${baseline.targets.map((t) => `${t.provider}/${t.model}:${t.weight ?? 1}`).join(",")}`;
+  const baselineSyncKey = JSON.stringify([baseline.id, baseline.alias, baseline.nativeAlias, baseline.displayName, baseline.strategy, baseline.stickyLimit, baseline.defaultEffort, baseline.imageInput, baseline.reasoningEffortMode, baseline.decisionProvider, baseline.decisionModel, baseline.decisionTimeoutMs, baseline.targets.map(t => [t.provider, t.model, t.weight, t.reasoningEfforts, t.modelProfile])]);
   const effortMap = useMemo(() => {
     const map = new Map<string, string[] | undefined>();
-    for (const model of models) {
+    for (const model of capabilityModels) {
       map.set(`${model.provider}/${model.id}`, model.reasoningEfforts);
     }
     return map;
-  }, [models]);
+  }, [capabilityModels]);
   const allowedEfforts = useMemo(
     () => intersectComboEfforts(draft.targets, effortMap, draft.reasoningEffortMode ?? "strict"),
     [draft.targets, effortMap, draft.reasoningEffortMode],
@@ -132,11 +148,12 @@ export function DetailPanel({
     const code = validateComboDraft(draft, {
       existingIds: otherIds,
       existingAliases: otherAliases,
+      combos,
       isCreate,
       providers: providerMap,
     });
     if (code) {
-      setMsg({ ok: false, text: t(`cws.err.${code}`) });
+      setMsg({ ok: false, text: comboDraftErrorText(t, code, draft, providerMap) });
       return;
     }
     setBusy(true);
@@ -149,6 +166,8 @@ export function DetailPanel({
       alias,
       displayName,
       model: comboPublicModelId(trimmedId, alias),
+      // The server keeps these only for JEV, so the saved baseline must not carry stale ones.
+      ...(draft.strategy === "jev" ? {} : { decisionProvider: null, decisionModel: null, decisionTimeoutMs: null }),
     };
     const renameFrom = !isCreate && trimmedId !== baseline.id ? baseline.id : undefined;
     try {
@@ -216,7 +235,7 @@ export function DetailPanel({
         `radiogroup` shape used by `.models-segmented` would misdescribe the widget.
       */}
       <div className="segmented combos-workspace-segmented" role="tablist" aria-label={t("cws.tabsLabel")}>
-        {DETAIL_TABS.map((candidate, index) => (
+        {detailTabs.map((candidate, index) => (
           <button
             key={candidate}
             type="button"
@@ -230,13 +249,17 @@ export function DetailPanel({
             onClick={() => setTab(candidate)}
             onKeyDown={event => onDetailTabKeyDown(event, index)}
           >
-            {t(candidate === "config" ? "cws.tab.config" : "cws.tab.about")}
+            {t(candidate === "config"
+              ? "cws.tab.config"
+              : candidate === "stats"
+                ? "cws.jev.stats.tab"
+                : "cws.tab.about")}
           </button>
         ))}
       </div>
 
       {/*
-        Both panels stay in the tree, the inactive one `hidden`. A single panel whose id
+        All panels stay in the tree, the inactive ones `hidden`. A single panel whose id
         followed the active tab left the OTHER tab's `aria-controls` pointing at an
         element that did not exist — a broken IDREF on whichever tab was not selected.
       */}
@@ -321,6 +344,21 @@ export function DetailPanel({
                 {t(COMBO_STRATEGY_HINT_KEYS[draft.strategy])}
               </p>
             </div>
+            {draft.strategy === "jev" && (
+              <ComboJevDecisionSection
+                idPrefix="cwi-edit"
+                apiBase={apiBase}
+                combo={draft}
+                combos={combos}
+                providers={providers}
+                models={models}
+                decisionProvider={draft.decisionProvider ?? null}
+                decisionModel={draft.decisionModel ?? null}
+                decisionTimeoutMs={draft.decisionTimeoutMs ?? null}
+                disabled={busy}
+                onChange={(patch) => updateDraft((d) => ({ ...d, ...patch }))}
+              />
+            )}
             <div className="cwi-field">
               <label htmlFor="cwi-effort">{t("cws.field.defaultEffort")}</label>
               <EffortSelect
@@ -360,6 +398,7 @@ export function DetailPanel({
                 strategy={draft.strategy}
                 providers={providers}
                 models={models}
+                capabilityModels={capabilityModels}
                 providerQuotaStates={providerQuotaStates}
                 onChange={(targets) => updateDraft((d) => ({ ...d, targets }))}
               />
@@ -369,7 +408,7 @@ export function DetailPanel({
             </div>
             <ComboCapabilities
               targets={draft.targets}
-              models={models}
+              models={capabilityModels}
               imageInput={draft.imageInput ?? "auto"}
               reasoningEffortMode={draft.reasoningEffortMode ?? "strict"}
               disabled={busy}
@@ -377,7 +416,20 @@ export function DetailPanel({
             />
           </div>
         )}
+        {!isCreate && apiBase !== undefined && <ComboProtocolPlan apiBase={apiBase} model={baseline.model} dirty={dirty} />}
       </div>
+
+      {!isCreate && baseline.strategy === "jev" && (
+        <div
+          className="combos-workspace-tab-content"
+          role="tabpanel"
+          id={detailPanelDomId("stats")}
+          aria-labelledby={detailTabDomId("stats")}
+          hidden={tab !== "stats"}
+        >
+          <JevStatsPanel apiBase={apiBase ?? ""} comboId={baseline.id} active={tab === "stats"} />
+        </div>
+      )}
 
       {/*
         `tabIndex={0}` because this panel holds no focusable descendants: without it,

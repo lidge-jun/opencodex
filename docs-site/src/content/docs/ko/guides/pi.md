@@ -28,7 +28,8 @@ ocx export --client pi
       "api": "openai-completions",
       "apiKey": "$OPENCODEX_API_KEY",
       "compat": {
-        "sendSessionAffinityHeaders": true
+        "sendSessionAffinityHeaders": true,
+        "supportsDeveloperRole": false
       },
       "models": [
         {
@@ -36,7 +37,7 @@ ocx export --client pi
           "name": "Claude Opus 5 (anthropic)",
           "input": ["text"],
           "contextWindow": 200000,
-          "maxTokens": 32000
+          "maxTokens": 128000
         }
       ]
     }
@@ -45,6 +46,8 @@ ocx export --client pi
 ```
 
 생성된 Pi provider에는 `compat.sendSessionAffinityHeaders`가 활성화됩니다. provider를 병합하거나 직접 수정할 때 이 설정을 유지하세요. Pi가 안정적인 세션 식별자를 보내면 OpenCodex가 이를 바탕으로 정규 OpenCode Go 대상의 affinity를 계산합니다. `cacheRetention`이 `none`이면 Pi가 식별자를 보내지 않을 수 있습니다.
+
+생성된 Pi provider는 `compat.supportsDeveloperRole`도 `false`로 설정합니다. 그래서 Pi는 시스템 프롬프트를 `developer`가 아닌 `system` 역할로 보냅니다. OpenCodex는 Chat Completions 역할을 받은 그대로 전달하는데, OpenAI 호환 업스트림 중 일부는 `developer`를 400으로 거부합니다. `system`은 모든 업스트림이 받습니다.
 
 모델 id는 프록시의 정규 선택자이므로, 라우팅된 모델은 `provider/model`
 (`anthropic/claude-opus-5`) 형태로 나타나고, 네이티브 OpenAI slug는 접두사 없이
@@ -96,7 +99,7 @@ export OPENCODEX_API_KEY=<your key>
 바인드하고 그곳에서는 아무 것도 인증하지 않으므로, `$OPENCODEX_API_KEY` 참조는
 실제로는 비어 있어도 됩니다. 이 값은 `hostname`이 루프백 바깥으로 설정될 때만
 의미가 있으며, 그 경우에는 프록시가 토큰 없이 시작하지 않습니다. 자세한 내용은
-[Remote access](/reference/configuration/#remote-access)를 보세요.
+[Remote access](/ko/reference/configuration/server/#remote-access)를 보세요.
 
 ## 모델 메타데이터
 
@@ -104,9 +107,7 @@ export OPENCODEX_API_KEY=<your key>
 출력됩니다. 그렇지 않으면 두 필드 모두 해당 모델에서 생략되고, Pi는 자체 기본값을
 적용합니다. `ocx export`는 그 경우가 몇 줄이었는지도 함께 출력합니다.
 
-`maxTokens`는 스키마를 만족시키기 위한 `32000` 예산이며, context window보다 더 크게
-잡히지 않도록 아래로 잘립니다. 즉, 작은 context 모델에 그보다 많은 출력을 주겠다는
-의미가 아닙니다.
+출력 한도는 카탈로그 또는 생성된 메타데이터의 알려진 모델 한도를 사용합니다. 알 수 없는 경우에만 `32000`을 사용합니다. 출력 한도는 항상 context window 이하로 제한되며, `32000`보다 작은 알려진 한도도 유지됩니다.
 
 의도적으로 빠진 필드도 두 개 있습니다. `cost`는 네 개의 가격 필드가 모두 있어야
 하는데, opencodex는 라우팅된 모델의 가격 데이터를 갖고 있지 않습니다. 0을 넣으면

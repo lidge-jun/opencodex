@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "ownerId": "12345678-1234-4234-8234-123456789abc",
+  "installId": "fixture-install",
+  "generation": 1,
+  "enabled": true,
+  "bundle": {
+    "platform": "darwin",
+    "kind": "linux-appimage",
+    "appExecutable": "/Applications/OpenCodex.app/Contents/MacOS/OpenCodex",
+    "cliExecutable": "/Applications/OpenCodex.app/Contents/MacOS/ocx",
+    "version": "2.82.0"
+  },
+  "posix": null,
+  "windows": null,
+  "pending": null
+}

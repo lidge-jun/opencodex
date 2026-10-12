@@ -73,7 +73,7 @@ describe("catalog slug uniqueness at the write boundary (#4730)", () => {
     // Ordering is load-bearing: the effort clamp splices whole rows out, so deduping first can
     // drop the row the clamp would have kept and then lose the slug entirely.
     const guardAt = retained.indexOf("enforceCatalogSlugUniqueness(");
-    const clampAt = retained.indexOf("clampCatalogModelsToCodexSupport(catalog.models)");
+    const clampAt = retained.indexOf("clampCatalogModelsToCodexSupport(catalog.models");
     const serializeAt = retained.indexOf("JSON.stringify(catalog, null, 2)");
     expect(clampAt).toBeGreaterThan(-1);
     expect(guardAt).toBeGreaterThan(clampAt);

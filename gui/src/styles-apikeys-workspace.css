@@ -177,6 +177,99 @@
   border-radius: var(--radius-sm);
 }
 
+/* Click-to-reveal key. Reads as a control (pointer, hover tint) without
+   becoming a button-shaped box that would outweigh the name column. */
+.awi-keylist-panel .awi-keylist-keywrap {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2, 8px);
+  min-width: 0;
+}
+
+.awi-keylist-panel .awi-keylist-key {
+  appearance: none;
+  background: none;
+  border: none;
+  margin: -2px -6px;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.awi-keylist-panel .awi-keylist-key code {
+  overflow-wrap: anywhere;
+}
+
+.awi-keylist-panel .awi-keylist-key:hover:not(:disabled),
+.awi-keylist-panel .awi-keylist-key.is-revealed {
+  background: var(--raised);
+}
+
+.awi-keylist-panel .awi-keylist-key:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+.awi-keylist-panel .awi-keylist-key:focus-visible,
+.awi-keylist-panel .awi-keylist-delete:focus-visible {
+  outline: 2px solid var(--accent-ring);
+  outline-offset: 2px;
+}
+
+/* Row delete stays visible at rest: a hover-only control has no affordance on
+   touch and was exactly what operators looked for and could not find. */
+.awi-keylist-panel .awi-keylist-actions-col,
+.awi-keylist-panel .awi-keylist-actions {
+  width: 1%;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.awi-keylist-panel .awi-keylist-delete {
+  appearance: none;
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.awi-keylist-panel .awi-keylist-delete:hover:not(:disabled) {
+  color: var(--red);
+  background: var(--red-soft);
+}
+
+.awi-keylist-panel .awi-keylist-delete:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.awi-keylist-panel .awi-keylist-confirm {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.awi-keylist-panel .awi-keylist-inline-error {
+  display: block;
+  margin-top: 4px;
+  font-size: var(--text-label);
+  white-space: normal;
+}
+
+@container apikeys-workspace (max-width: 560px) {
+  .awi-keylist-panel .awi-keylist-delete { width: 44px; height: 44px; }
+}
+
 /* The rail's styles lived here. It was replaced by the pinned `SectionTabs`
    strip (shared with Usage / Logs / Subagents) plus a key table in the Keys
    section, so nothing below renders `.apikeys-workspace-rail*` any more. */
@@ -828,4 +921,115 @@
 @media (max-width: 760px) {
   .apikeys-workspace-shell .section-tabs { top: 53px; }
   .apikeys-workspace-shell .awi-section-anchor { scroll-margin-top: 108px; }
+}
+
+/* Request path preview (components/protocols). Delivery mode badges carry their label as
+   text, so colour only repeats what the words already say. */
+.protocol-plan-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+.protocol-plan-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  flex: 1 1 220px;
+}
+.protocol-plan-field .input { max-width: 100%; }
+.protocol-plan-features {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1-5) var(--space-3);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.protocol-plan-features legend { padding: 0; margin-bottom: var(--space-1); }
+.protocol-plan-feature {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+}
+.protocol-plan-result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.protocol-plan-chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+.protocol-plan-result code { overflow-wrap: anywhere; }
+.protocol-plan-candidates {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.protocol-plan-candidate {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.protocol-plan-candidate-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.protocol-feature-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.protocol-feature-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* API surface cards (PF-04): one card per public API. Inherits the endpoint URL styling from
+   .api-endpoints; a closed surface stays visible, dimmed rather than hidden. */
+.api-endpoints.api-surface-cards {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.api-surface-card {
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.api-surface-card-off {
+  border-style: dashed;
+}
+.api-surface-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.api-surface-card-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: var(--weight-semibold);
+}
+.api-surface-invalid {
+  color: var(--red);
+}
+.api-surface-card-link {
+  align-self: flex-start;
+}
+@media (max-width: 960px) {
+  .api-endpoints.api-surface-cards { grid-template-columns: minmax(0, 1fr); }
 }

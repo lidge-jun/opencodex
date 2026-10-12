@@ -1,4 +1,3 @@
-// mock.module replacements require file isolation (bun test --isolate).
 import { describe, test, expect, mock, beforeEach, afterAll } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -33,6 +32,15 @@ let outgoingAccount = "test-only";
 let accountMode = "pool";
 let validated=0;
 let probe=false;let released=0;let directError=false;let duringSelection:(()=>void)|undefined;
+// `mock.module` outlives this file: Bun keeps all six overrides below for every file that runs
+// after this one in the same process. Keep the real modules, captured before anything here is
+// mocked, and put them back.
+const realAuthContext = { ...(await import("../../src/codex/auth-context")) };
+const realRouting = { ...(await import("../../src/codex/routing")) };
+const realSidecar = { ...(await import("../../src/providers/openai-sidecar")) };
+const realAuthCors = { ...(await import("../../src/server/auth-cors")) };
+const realResponses = { ...(await import("../../src/server/responses")) };
+const realLifecycle = { ...(await import("../../src/server/lifecycle")) };
 const errors = {
   CodexAccountCooldownError: class extends Error {},
   CodexMainSubstitutionUnavailableError: class extends Error {},
@@ -61,7 +69,6 @@ mock.module("../../src/codex/auth-context",()=>({
   cooldownErrorResponse:()=>new Response("cooldown",{status:429}),
   codexMainProfileDrainingResponse:()=>new Response("draining",{status:503}),
 }));
-const realRouting = await import("../../src/codex/routing");
 mock.module("../../src/codex/routing",()=>({...realRouting, formatCodexProviderForLog:()=>"openai-test"}));
 mock.module("../../src/providers/openai-sidecar",()=>({listOpenAiForwardSidecarCandidates:()=>[{providerName:"openai",provider:{baseUrl:"https://chatgpt.com/backend-api/codex"},accountMode}]}));
 class ForwardAdmissionCredentialError extends Error {}
@@ -92,7 +99,14 @@ const originalFetch=globalThis.fetch;
 function setFetch(handler: (input: string | URL | Request, init?: RequestInit) => Promise<Response>): void {
   globalThis.fetch = Object.assign(handler, { preconnect: originalFetch.preconnect });
 }
-afterAll(()=>{if(previousCodexHome===undefined)delete process.env.CODEX_HOME;else process.env.CODEX_HOME=previousCodexHome;resetContextRelayActivationForTests();clearContextSessionOwnersForTests();globalThis.fetch=originalFetch;mock.restore();});
+afterAll(()=>{try{if(previousCodexHome===undefined)delete process.env.CODEX_HOME;else process.env.CODEX_HOME=previousCodexHome;resetContextRelayActivationForTests();clearContextSessionOwnersForTests();globalThis.fetch=originalFetch;mock.restore();}finally{
+  mock.module("../../src/codex/auth-context",()=>realAuthContext);
+  mock.module("../../src/codex/routing",()=>realRouting);
+  mock.module("../../src/providers/openai-sidecar",()=>realSidecar);
+  mock.module("../../src/server/auth-cors",()=>realAuthCors);
+  mock.module("../../src/server/responses",()=>realResponses);
+  mock.module("../../src/server/lifecycle",()=>realLifecycle);
+}});
 beforeEach(()=>{clearContextSessionOwnersForTests();for (const id of ["root", "root-test", "s"]) seedOwner(id);outgoingAccount="test-only";globalThis.fetch=originalFetch;materialized=undefined;materializationError=undefined;selection=undefined;validated=0;materializationOptions=undefined;outgoingBearer="test-only";accountMode="pool";probe=false;released=0;directError=false;duringSelection=undefined;setContextFeature(true);});
 
 describe("context relay contract",()=>{

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { INTERNAL_DEADLINE_MS, STORE_BUDGET_MS } from "../helpers/test-budget";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as atomicWrite from "../../src/config/atomic-write";
 import * as oauthStore from "../../src/oauth/store";
@@ -28,9 +29,11 @@ import {
   reconcileOAuthReauthState,
   removeAccount,
   removeCredential,
+  resetOAuthReauthReconcileStateForTests,
   replaceProviderAccountSet,
   saveAccountCredential,
   saveCredential,
+  setAccountPaused,
   setAccountAlias,
   setActiveAccount,
   upsertCredentialByIdentity,
@@ -39,7 +42,7 @@ import type { OAuthCredentials } from "../../src/oauth/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { recordOwnedConfigPath, removeOwnedConfigState } from "../../src/lib/config-ownership";
 
-const TEST_DIR = join(import.meta.dir, ".tmp-oauth-store-multi-test");
+let TEST_DIR: string;
 let previousOpencodexHome: string | undefined;
 const ICACLS_OK = { success: true, exitCode: 0, timedOut: false, stdout: "" };
 
@@ -48,6 +51,7 @@ async function cleanupOAuthStoreFixture(): Promise<void> {
   setIcaclsRunnerForTests(null);
   setAsyncIcaclsRunnerForTests(null);
   resetHardenedStateForTests();
+  resetOAuthReauthReconcileStateForTests();
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousOpencodexHome;
   if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
@@ -74,8 +78,7 @@ async function selectionAccounts() {
 describe("multi-account auth store", () => {
   beforeEach(() => {
     previousOpencodexHome = process.env.OPENCODEX_HOME;
-    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
-    mkdirSync(TEST_DIR, { recursive: true });
+    TEST_DIR = mkdtempSync(join(tmpdir(), "ocx-oauth-store-multi-"));
     process.env.OPENCODEX_HOME = TEST_DIR;
     resetHardenedStateForTests();
     setIcaclsRunnerForTests(() => ICACLS_OK);
@@ -83,6 +86,44 @@ describe("multi-account auth store", () => {
   });
 
   afterEach(cleanupOAuthStoreFixture);
+
+  test("each login write rotates loginId even when account id is reused", async () => {
+    const first = await oauthStore.saveCredentialWithReceipt("kiro", cred());
+    const account = getAccountSet("kiro")!.accounts[0]!;
+    expect(account.loginId).toMatch(SELECTION_UUID);
+    const second = await oauthStore.saveCredentialWithReceipt("kiro", cred({ access: "second", refresh: "second" }));
+    expect(second!.accountId).toBe(first!.accountId);
+    expect(getAccountSet("kiro")!.accounts[0]!.loginId).not.toBe(account.loginId);
+  });
+
+  test("normalizeAuthStore keeps a valid loginId and drops an invalid one", async () => {
+    await saveCredential("kiro", cred());
+    const path = join(TEST_DIR, "auth.json");
+    const file = JSON.parse(readFileSync(path, "utf8"));
+    const valid = getAccountSet("kiro")!.accounts[0]!.loginId;
+    expect(valid).toMatch(SELECTION_UUID);
+    expect(getAccountSet("kiro")!.accounts[0]!.loginId).toBe(valid);
+    file.kiro.accounts[0].loginId = "invalid";
+    writeFileSync(path, JSON.stringify(file));
+    expect(getAccountSet("kiro")!.accounts[0]!.loginId).toBeUndefined();
+  });
+
+  test("refresh writers preserve loginId", async () => {
+    await saveCredential("kiro", cred());
+    const first = getAccountSet("kiro")!.accounts[0]!;
+    await saveAccountCredential("kiro", first.id, cred({ access: "refreshed" }));
+    expect(getAccountSet("kiro")!.accounts[0]!.loginId).toBe(first.loginId);
+    await mergeAccountCredential("kiro", first.id, cred({ access: "merged" }));
+    expect(getAccountSet("kiro")!.accounts[0]!.loginId).toBe(first.loginId);
+  });
+
+  test("replaceProviderAccountSet preserves loginId", async () => {
+    await saveCredential("kiro", cred());
+    const set = getAccountSet("kiro")!;
+    const loginId = set.accounts[0]!.loginId;
+    await replaceProviderAccountSet("kiro", set);
+    expect(getAccountSet("kiro")!.accounts[0]!.loginId).toBe(loginId);
+  });
 
   test("fixture cleanup waits for a held config-directory ACL flight before restoring home or deleting files", async () => {
     let release!: () => void;
@@ -208,6 +249,180 @@ describe("multi-account auth store", () => {
       await flushConfigDirHardeningForTests();
       expect(removeOwnedConfigState(dir).status).toBe("partial");
       expect(readFileSync(`${path}.pre-multiauth`, "utf8")).toBe("prior-recovery-fixture");
+    } finally {
+      process.env.OPENCODEX_HOME = TEST_DIR;
+    }
+  });
+
+  test("logout migrates a legacy store without retaining its credential backup", async () => {
+    const authPath = join(TEST_DIR, "auth.json");
+    mkdirSync(TEST_DIR, { recursive: true, mode: 0o700 });
+    writeFileSync(authPath, JSON.stringify({
+      xai: { access: "legacy-access", refresh: "legacy-refresh", expires: Date.now() + 1000 },
+    }));
+
+    expect(await removeCredential("xai")).toBe("removed");
+
+    expect(JSON.parse(readFileSync(authPath, "utf-8"))).toEqual({});
+    expect(existsSync(`${authPath}.pre-multiauth`)).toBe(false);
+  });
+
+  test("account deletion removes an existing legacy credential backup", async () => {
+    const authPath = join(TEST_DIR, "auth.json");
+    mkdirSync(TEST_DIR, { recursive: true, mode: 0o700 });
+    const legacy = {
+      xai: { access: "legacy-access", refresh: "legacy-refresh", expires: Date.now() + 1000 },
+    };
+    writeFileSync(authPath, JSON.stringify(legacy));
+    writeFileSync(`${authPath}.pre-multiauth`, JSON.stringify(legacy));
+    const accountId = getAccountSet("xai")!.activeAccountId;
+
+    expect(await removeAccount("xai", accountId)).toBe(true);
+
+    expect(JSON.parse(readFileSync(authPath, "utf-8"))).toEqual({});
+    expect(existsSync(`${authPath}.pre-multiauth`)).toBe(false);
+  });
+
+  test("logout on a migrated store still removes a stale credential backup", async () => {
+    const authPath = join(TEST_DIR, "auth.json");
+    mkdirSync(TEST_DIR, { recursive: true, mode: 0o700 });
+    await saveCredential("xai", cred({ email: "a@example.test" }));
+    // A backup left over from an earlier migration holds copies of removed credentials.
+    writeFileSync(`${authPath}.pre-multiauth`, JSON.stringify({ xai: { access: "stale", refresh: "stale", expires: 1 } }));
+
+    expect(await removeCredential("xai")).toBe("removed");
+
+    expect(existsSync(`${authPath}.pre-multiauth`)).toBe(false);
+  });
+
+  test("a logout that removed nothing keeps the downgrade backup", async () => {
+    const authPath = join(TEST_DIR, "auth.json");
+    mkdirSync(TEST_DIR, { recursive: true, mode: 0o700 });
+    await saveCredential("xai", cred({ email: "a@example.test" }));
+    // The backup is a whole-store copy, so a no-op removal for one provider must
+    // not destroy downgrade recovery for every other provider in it.
+    writeFileSync(`${authPath}.pre-multiauth`, JSON.stringify({ xai: { access: "stale", refresh: "stale", expires: 1 } }));
+
+    expect(await removeCredential("anthropic")).toBe("not-found");
+
+    expect(existsSync(`${authPath}.pre-multiauth`)).toBe(true);
+  });
+
+  test("an account deletion that matched nothing keeps the downgrade backup", async () => {
+    const authPath = join(TEST_DIR, "auth.json");
+    mkdirSync(TEST_DIR, { recursive: true, mode: 0o700 });
+    await saveCredential("xai", cred({ email: "a@example.test" }));
+    writeFileSync(`${authPath}.pre-multiauth`, JSON.stringify({ xai: { access: "stale", refresh: "stale", expires: 1 } }));
+
+    expect(await removeAccount("xai", "no-such-account")).toBe(false);
+
+    expect(existsSync(`${authPath}.pre-multiauth`)).toBe(true);
+  });
+
+  test("provider deletion drops the downgrade backup; a no-op clear or a replacement keeps it", async () => {
+    const authPath = join(TEST_DIR, "auth.json");
+    const backup = `${authPath}.pre-multiauth`;
+    mkdirSync(TEST_DIR, { recursive: true, mode: 0o700 });
+    await saveCredential("xai", cred({ email: "a@example.test" }));
+    writeFileSync(backup, JSON.stringify({ xai: { access: "stale", refresh: "stale", expires: 1 } }));
+
+    await replaceProviderAccountSet("anthropic", null);
+    expect(existsSync(backup)).toBe(true);
+    await replaceProviderAccountSet("xai", getAccountSet("xai")!);
+    expect(existsSync(backup)).toBe(true);
+
+    // The management provider-delete route clears credentials this way.
+    await replaceProviderAccountSet("xai", null);
+    expect(getAccountSet("xai")).toBeNull();
+    expect(existsSync(backup)).toBe(false);
+  });
+
+  test("a backup that cannot be removed warns without failing the completed logout", async () => {
+    const authPath = join(TEST_DIR, "auth.json");
+    mkdirSync(TEST_DIR, { recursive: true, mode: 0o700 });
+    await saveCredential("xai", cred({ email: "a@example.test" }));
+    // A directory in the backup's place makes unlink fail with a non-ENOENT code on every OS.
+    mkdirSync(`${authPath}.pre-multiauth`);
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(await removeCredential("xai")).toBe("removed");
+      expect(getAccountSet("xai")).toBeNull();
+      expect(warning.mock.calls.some(call => String(call[0]).includes("could not remove deleted credentials from the legacy credential backup"))).toBe(true);
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
+  test("logout keeps other providers' downgrade recovery in a legacy backup", async () => {
+    const authPath = join(TEST_DIR, "auth.json");
+    const backup = `${authPath}.pre-multiauth`;
+    mkdirSync(TEST_DIR, { recursive: true, mode: 0o700 });
+    writeFileSync(authPath, JSON.stringify({
+      xai: { access: "xai-access", refresh: "xai-refresh", expires: Date.now() + 1000 },
+      anthropic: { access: "anthropic-access", refresh: "anthropic-refresh", expires: Date.now() + 1000 },
+    }));
+
+    expect(await removeCredential("xai")).toBe("removed");
+
+    // An older loader cannot read the migrated auth.json, so the backup must still hold the
+    // provider the user kept, and must no longer hold the one the user removed.
+    const kept = JSON.parse(readFileSync(backup, "utf-8")) as Record<string, { refresh?: string }>;
+    expect(Object.keys(kept)).toEqual(["anthropic"]);
+    expect(kept.anthropic?.refresh).toBe("anthropic-refresh");
+    expect(readFileSync(backup, "utf-8")).not.toContain("xai-refresh");
+  });
+
+  test.skipIf(process.platform === "win32")("a symlinked backup is removed without touching its target", async () => {
+    const authPath = join(TEST_DIR, "auth.json");
+    const backup = `${authPath}.pre-multiauth`;
+    const target = join(TEST_DIR, "elsewhere.json");
+    mkdirSync(TEST_DIR, { recursive: true, mode: 0o700 });
+    await saveCredential("xai", cred({ email: "a@example.test" }));
+    const outside = JSON.stringify({ xai: { access: "x", refresh: "x", expires: 1 }, other: { access: "o", refresh: "o", expires: 1 } });
+    writeFileSync(target, outside);
+    symlinkSync(target, backup);
+
+    expect(await removeCredential("xai")).toBe("removed");
+
+    expect(() => lstatSync(backup)).toThrow();
+    expect(readFileSync(target, "utf-8")).toBe(outside);
+  });
+
+  test.skipIf(process.platform === "win32")("a dangling backup link is never written through", async () => {
+    const authPath = join(TEST_DIR, "auth.json");
+    const backup = `${authPath}.pre-multiauth`;
+    const missing = join(TEST_DIR, "not-yet-created.json");
+    mkdirSync(TEST_DIR, { recursive: true, mode: 0o700 });
+    writeFileSync(authPath, JSON.stringify({
+      xai: { access: "legacy-access", refresh: "legacy-refresh", expires: Date.now() + 1000 },
+    }));
+    symlinkSync(missing, backup);
+
+    expect(await removeCredential("xai")).toBe("removed");
+
+    expect(existsSync(missing)).toBe(false);
+    expect(() => lstatSync(backup)).toThrow();
+  });
+
+  test("scrubbing a backup this install never registered leaves it unclaimed", async () => {
+    const dir = join(TEST_DIR, "unclaimed-backup");
+    const path = join(dir, "auth.json");
+    const backup = `${path}.pre-multiauth`;
+    process.env.OPENCODEX_HOME = dir;
+    try {
+      expect(recordOwnedConfigPath(dir, path)).toBe(true);
+      await saveCredential("xai", cred({ email: "a@example.test" }));
+      writeFileSync(backup, JSON.stringify({
+        xai: { access: "stale", refresh: "stale", expires: 1 },
+        anthropic: { access: "kept", refresh: "kept", expires: 1 },
+      }));
+
+      expect(await removeCredential("xai")).toBe("removed");
+      expect(Object.keys(JSON.parse(readFileSync(backup, "utf8")))).toEqual(["anthropic"]);
+
+      await flushConfigDirHardeningForTests();
+      removeOwnedConfigState(dir);
+      expect(readFileSync(backup, "utf8")).toContain("kept");
     } finally {
       process.env.OPENCODEX_HOME = TEST_DIR;
     }
@@ -411,12 +626,78 @@ describe("multi-account auth store", () => {
     expect(getAccountSet("xai")).toBeNull();
   });
 
+  test("removing the active account skips paused survivors when promoting", async () => {
+    await saveCredential("xai", cred({ accountId: "acct-a", access: "access-a" }));
+    await saveCredential("xai", cred({ accountId: "acct-b", access: "access-b" }));
+    await saveCredential("xai", cred({ accountId: "acct-c", access: "access-c" }));
+    const before = getAccountSet("xai")!;
+    const activeId = before.activeAccountId;
+    const survivors = before.accounts.filter(account => account.id !== activeId);
+    expect(survivors).toHaveLength(2);
+    await setAccountPaused("xai", survivors[0]!.id, true);
+
+    expect(await removeAccount("xai", activeId)).toBe(true);
+
+    const after = getAccountSet("xai")!;
+    expect(after.activeAccountId).toBe(survivors[1]!.id);
+    expect(after.accounts.find(account => account.id === after.activeAccountId)?.paused).not.toBe(true);
+  });
+
+  test("removing the active account retains a first survivor if every survivor is unusable", async () => {
+    await saveCredential("xai", cred({ accountId: "acct-a", access: "access-a" }));
+    await saveCredential("xai", cred({ accountId: "acct-b", access: "access-b" }));
+    const before = getAccountSet("xai")!;
+    const activeId = before.activeAccountId;
+    const survivorId = before.accounts.find(account => account.id !== activeId)!.id;
+    await setAccountPaused("xai", survivorId, true);
+
+    expect(await removeAccount("xai", activeId)).toBe(true);
+
+    expect(getAccountSet("xai")?.activeAccountId).toBe(survivorId);
+  });
+
   test("removeCredential removes only the active account", async () => {
     await saveCredential("anthropic", cred({ email: "a@example.com", accountId: "acct-a", access: "access-a" }));
     await saveCredential("anthropic", cred({ email: "b@example.com", accountId: "acct-b", access: "access-b" }));
     await removeCredential("anthropic"); // active is b
     expect(listAccounts("anthropic").length).toBe(1);
     expect(getCredential("anthropic")?.access).toBe("access-a");
+  });
+
+  test("removeCredential promotes the first usable survivor", async () => {
+    await saveCredential("xai", cred({ accountId: "logout-a", access: "access-a" }));
+    await saveCredential("xai", cred({ accountId: "logout-b", access: "access-b" }));
+    await saveCredential("xai", cred({ accountId: "logout-c", access: "access-c" }));
+    await saveCredential("xai", cred({ accountId: "logout-active", access: "access-active" }));
+    const before = getAccountSet("xai")!;
+    const survivors = before.accounts.filter(account => account.id !== before.activeAccountId);
+    await setAccountPaused("xai", survivors[0]!.id, true);
+    await markAccountNeedsReauth("xai", survivors[1]!.id, true);
+
+    expect(await removeCredential("xai")).toBe("removed");
+
+    const after = getAccountSet("xai")!;
+    expect(after.activeAccountId).toBe(survivors[2]!.id);
+    const survivor = after.accounts.find(account => account.id === after.activeAccountId);
+    expect(survivor?.paused).not.toBe(true);
+    expect(survivor?.needsReauth).not.toBe(true);
+  });
+
+  test("reauthenticating the only other account takes over from a paused active account", async () => {
+    await saveCredential("xai", cred({ accountId: "held-a", access: "access-a" }));
+    await saveCredential("xai", cred({ accountId: "stale-b", access: "access-b" }));
+    const set = getAccountSet("xai")!;
+    const activeId = set.activeAccountId;
+    const otherId = set.accounts.find(account => account.id !== activeId)!.id;
+    await markAccountNeedsReauth("xai", otherId, true);
+    // No usable fallback: the paused account stays selected.
+    await setAccountPaused("xai", activeId, true);
+    expect(getAccountSet("xai")!.activeAccountId).toBe(activeId);
+
+    await saveAccountCredential("xai", otherId, cred({ accountId: "stale-b", access: "access-b2" }));
+    const after = getAccountSet("xai")!;
+    expect(after.activeAccountId).toBe(otherId);
+    expect(after.accounts.find(account => account.id === activeId)?.paused).toBe(true);
   });
 
   test("needsReauth flag persists and clears on fresh save", async () => {
@@ -441,6 +722,33 @@ describe("multi-account auth store", () => {
     const set = getAccountSet("xai")!;
     expect(set.accounts.length).toBe(1);
     expect(set.activeAccountId).toBe("ok"); // dangling active healed
+  });
+
+  test("resuming an account repairs a dangling active pointer to a usable account", async () => {
+    const { idA, idB } = await selectionAccounts();
+    await setAccountPaused("xai", idA, true);
+    await setAccountPaused("xai", idB, true);
+    await mutateStore(store => { store.xai!.activeAccountId = "missing-account"; });
+
+    await setAccountPaused("xai", idB, false);
+
+    expect(getAccountSet("xai")?.activeAccountId).toBe(idB);
+    expect(getAccountSet("xai")?.accounts.find(account => account.id === idB)?.paused).toBeUndefined();
+  });
+
+  test("re-authenticating a paused account does not select it", async () => {
+    const { idA, idB } = await selectionAccounts();
+    await markAccountNeedsReauth("xai", idB, true);
+    await setAccountPaused("xai", idB, true);
+
+    await saveCredential("xai", cred({ accountId: "selection-b", access: "fresh-b" }));
+
+    const set = getAccountSet("xai")!;
+    const account = set.accounts.find(candidate => candidate.id === idB)!;
+    expect(set.activeAccountId).toBe(idA);
+    expect(account.credential.access).toBe("fresh-b");
+    expect(account.needsReauth).toBeUndefined();
+    expect(account.paused).toBe(true);
   });
 
   test("selection revision rejects an automatic promotion after manual A-B-A", async () => {

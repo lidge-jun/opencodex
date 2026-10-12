@@ -8,13 +8,17 @@ import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../sr
 import { createTestTranslatorBudget, withTestTranslatorBudget } from "../helpers/translator-budget";
 
 const AUDIO = { type: "input_audio", audio_url: "data:audio/wav;base64,YWJj" };
-const FILE = { type: "input_file", filename: "private.pdf", file_data: "data:application/pdf;base64,JVBERi0=" };
+// A reference this route cannot dereference: there are no bytes to carry anywhere.
+const FILE = { type: "input_file", filename: "private.pdf", file_id: "file-private" };
+// The same attachment with its bytes. User content has a carrier for it (#5212); no other
+// position does, because every other converter reduces its content to text.
+const INLINE_FILE = { type: "input_file", filename: "private.pdf", file_data: "data:application/pdf;base64,JVBERi0=" };
 
 function request(content: unknown[]): OcxParsedRequest {
   return parseRequest({ model: "test-model", input: [{ type: "message", role: "user", content }] });
 }
 
-function fakeAdapter() {
+function fakeAdapter(wire: "openai-chat" | "cursor" = "openai-chat") {
   const seen = { builds: 0, runs: 0, terminals: 0 };
   const adapter: ProviderAdapter = {
     name: "stub",
@@ -26,7 +30,7 @@ function fakeAdapter() {
     async runTurn(_parsed, _incoming, emit) { seen.runs++; emit({ type: "done", endTurn: true }); },
     localTerminal() { seen.terminals++; return { reason: "already answered" }; },
   };
-  return { adapter: withInputMediaGuard(adapter), seen };
+  return { adapter: withInputMediaGuard(adapter, wire), seen };
 }
 
 describe("typed input media inspection", () => {
@@ -39,6 +43,43 @@ describe("typed input media inspection", () => {
     for (const type of ["function_call_output", "custom_tool_call_output"]) {
       expect(untranslatedResponsesInputMedia({ input: [{ type, call_id: "call1", output: [AUDIO] }] })).toBe("audio");
       expect(untranslatedResponsesInputMedia({ input: [{ type, call_id: "call1", output: [FILE] }] })).toBe("file");
+      // Bytes do not help here: the tool-output converter flattens its content to text.
+      expect(untranslatedResponsesInputMedia({ input: [{ type, call_id: "call1", output: [INLINE_FILE] }] })).toBe("file");
+    }
+  });
+
+  test("an inline document is permitted only where a converter carries it", () => {
+    expect(untranslatedResponsesInputMedia(request([INLINE_FILE])._rawBody)).toBeUndefined();
+    for (const role of ["developer", "user"]) {
+      expect(untranslatedResponsesInputMedia({ input: [{ type: "message", role, content: [INLINE_FILE] }] }))
+        .toBeUndefined();
+    }
+    for (const role of ["system", "assistant"]) {
+      expect(untranslatedResponsesInputMedia({ input: [{ type: "message", role, content: [INLINE_FILE] }] }))
+        .toBe("file");
+    }
+  });
+
+  test("a document still has to reach a wire that can hold its bytes", () => {
+    const incoming = { headers: new Headers(), translatorBudget: createTestTranslatorBudget() };
+    const carrier = fakeAdapter("openai-chat");
+    carrier.adapter.buildRequest(request([INLINE_FILE]), incoming);
+    expect(carrier.seen.builds).toBe(1);
+
+    // Cursor rebuilds user content as text, so admitting the bytes there would put the request
+    // upstream with only the marker and return a normal completion.
+    const nonCarrier = fakeAdapter("cursor");
+    let failure: unknown;
+    try { nonCarrier.adapter.buildRequest(request([INLINE_FILE]), incoming); } catch (error) { failure = error; }
+    expect((failure as Error).message).toContain("OpenCodex cannot translate document input");
+    expect((failure as Error).message).not.toContain("private.pdf");
+    expect(nonCarrier.seen.builds).toBe(0);
+  });
+
+  test("a base64 look-alike parameter is not an inline payload", () => {
+    for (const fileData of ["data:text/plain;notbase64,abc", "data:text/plain;x=base64,abc", "data:text/plain,abc"]) {
+      expect(untranslatedResponsesInputMedia(request([{ type: "input_file", file_data: fileData }])._rawBody))
+        .toBe("file");
     }
   });
 

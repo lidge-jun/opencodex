@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { EventEmitter } from "node:events";
 import { Readable, Writable } from "node:stream";
 import type { ChildProcess } from "node:child_process";
@@ -15,6 +16,7 @@ const enc = new TextEncoder();
 beforeEach(() => clearCodeBuddyBinaryCache());
 
 interface FakeChild extends EventEmitter {
+  pid?: number;
   stdout: Readable;
   stderr: Readable;
   stdin: Writable;
@@ -114,14 +116,16 @@ describe("codebuddy headless arguments keep tool ownership with Codex", () => {
     expect(args[args.indexOf("--model") + 1]).toBe("glm-5.3");
   });
 
-  test("maps Codex reasoning effort onto --effort and folds the system prompt", () => {
+  test("maps Codex reasoning effort and references a private system-prompt file", () => {
     const args = buildArgs(
       CODEBUDDY_GLOBAL_PROFILE,
       parsed({ options: { reasoning: "high" }, context: { systemPrompt: ["Be terse."], messages: [] } }),
       provider(),
+      "/private/system-prompt.txt",
     );
     expect(args[args.indexOf("--effort") + 1]).toBe("high");
-    expect(args[args.indexOf("--append-system-prompt") + 1]).toBe("Be terse.");
+    expect(args[args.indexOf("--system-prompt-file") + 1]).toBe("/private/system-prompt.txt");
+    expect(args).not.toContain("Be terse.");
   });
 });
 
@@ -185,6 +189,7 @@ describe("codebuddy runTurn fails closed before any spawn", () => {
     let command = "";
     let args: readonly string[] = [];
     let options: import("node:child_process").SpawnOptions | undefined;
+    let promptFile = "";
     const adapter = createCodeBuddyAdapter(provider(), {
       platform: "win32",
       which: () => "C:\\npm\\codebuddy.cmd",
@@ -192,6 +197,10 @@ describe("codebuddy runTurn fails closed before any spawn", () => {
         command = seenCommand;
         args = seenArgs;
         options = seenOptions;
+        const commandLine = seenArgs[3] ?? "";
+        const match = commandLine.match(/--system-prompt-file\s+"([^"]+)"/);
+        promptFile = match?.[1] ?? "";
+        expect(readFileSync(promptFile, "utf8")).toBe('Say "hello" & stop');
         return fakeChild([enc.encode('{"type":"result","subtype":"success"}\n')]) as unknown as ChildProcess;
       },
       killGraceMs: 20,
@@ -201,8 +210,30 @@ describe("codebuddy runTurn fails closed before any spawn", () => {
     expect(command.toLowerCase()).toContain("cmd.exe");
     expect(args.slice(0, 3)).toEqual(["/d", "/s", "/c"]);
     expect(args[3]).toContain("codebuddy.cmd");
-    expect(args[3]).toContain("Say");
+    expect(args[3]).not.toContain("Say");
     expect(options?.windowsVerbatimArguments).toBe(true);
+    expect(existsSync(promptFile)).toBe(false);
+  });
+
+  test("keeps request-derived prompts out of argv and removes the private staging file", async () => {
+    let promptFile = "";
+    const secret = "private-system-instruction";
+    const adapter = createCodeBuddyAdapter(provider(), {
+      which: () => "/usr/bin/codebuddy",
+      spawn: (_command, args) => {
+        expect(args).not.toContain(secret);
+        const index = args.indexOf("--system-prompt-file");
+        expect(index).toBeGreaterThanOrEqual(0);
+        promptFile = args[index + 1] ?? "";
+        expect(readFileSync(promptFile, "utf8")).toBe(secret);
+        if (process.platform !== "win32") expect(statSync(promptFile).mode & 0o777).toBe(0o600);
+        return fakeChild([enc.encode('{"type":"result","subtype":"success"}\n')]) as unknown as ChildProcess;
+      },
+      killGraceMs: 20,
+    });
+
+    await run(adapter, parsed({ context: { systemPrompt: [secret], messages: [] } }));
+    expect(existsSync(promptFile)).toBe(false);
   });
 });
 
@@ -249,6 +280,37 @@ describe("codebuddy runTurn streams a headless turn", () => {
       status: 502,
     });
     expect(JSON.stringify(events)).not.toContain("secret-command");
+  });
+
+  test("the projected history ceiling follows the model context window", async () => {
+    const stdout = [
+      enc.encode('{"type":"system","subtype":"init"}\n'),
+      enc.encode('{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":7,"output_tokens":2}}\n'),
+    ];
+    const history = Array.from({ length: 5 }, (_, index) => ({
+      role: "user" as const,
+      content: "EARLY-MARKER-" + String(index) + " " + "a".repeat(50_000),
+      timestamp: index,
+    }));
+    const messages = [...history, { role: "user", content: "final request", timestamp: 5 }];
+
+    const wide = fakeChild(stdout);
+    const wideAdapter = createCodeBuddyAdapter(
+      provider({ modelContextWindows: { "glm-5.3": 1_000_000 } }),
+      { spawn: () => wide as unknown as ChildProcess, which: () => "/usr/bin/codebuddy", killGraceMs: 20 },
+    );
+    await run(wideAdapter, parsed({ context: { messages } }));
+    expect(wide.written.join("")).toContain("EARLY-MARKER-0");
+    expect(wide.written.join("")).not.toContain("truncated for length");
+
+    const flat = fakeChild(stdout);
+    const flatAdapter = createCodeBuddyAdapter(
+      provider(),
+      { spawn: () => flat as unknown as ChildProcess, which: () => "/usr/bin/codebuddy", killGraceMs: 20 },
+    );
+    await run(flatAdapter, parsed({ context: { messages } }));
+    expect(flat.written.join("")).not.toContain("EARLY-MARKER-0");
+    expect(flat.written.join("")).toContain("truncated for length");
   });
 
   test.each(["Bash", "exec", "shell", "apply_patch"])("refuses a bare %s DSML invoke", name => {
@@ -344,6 +406,39 @@ describe("codebuddy runTurn streams a headless turn", () => {
       { type: "text_delta", text: answer },
       { type: "done", stopReason: "stop" },
     ]);
+  });
+
+  test("scans a large multiline delta in time linear in its length", () => {
+    const run = (lines: number): { events: AdapterEvent[]; elapsed: number } => {
+      const events: AdapterEvent[] = [];
+      const guarded = guardCodeBuddyScaffolding(event => events.push(event));
+      const answer = "a\n".repeat(lines);
+      const startedAt = performance.now();
+      guarded({ type: "text_delta", text: answer });
+      return { events, elapsed: performance.now() - startedAt };
+    };
+
+    const baseline = run(40_000);
+    const scaled = run(160_000);
+
+    // Four times the input must stay near 4x cost; a scan re-walking its suffix could not fit.
+    expect(scaled.elapsed).toBeLessThan(Math.max(baseline.elapsed * 8, 250));
+    expect(baseline.events).toEqual([{ type: "text_delta", text: "a\n".repeat(40_000) }]);
+    expect(scaled.events).toEqual([{ type: "text_delta", text: "a\n".repeat(160_000) }]);
+  });
+
+  test("still refuses scaffolding after a code point that expands when lowercased", () => {
+    const events: AdapterEvent[] = [];
+    const guarded = guardCodeBuddyScaffolding(event => events.push(event));
+
+    // İ (U+0130) lowercases to two code units, so folded-text offsets no longer match `text`.
+    guarded({
+      type: "text_delta",
+      text: "note İ here\n<｜｜DSML｜｜ calls>\n<｜｜DSML｜｜ invoke name=\"exec\">private-body",
+    });
+
+    expect(events.at(-1)).toEqual(expect.objectContaining({ type: "error", code: "vendor_scaffold_detected" }));
+    expect(JSON.stringify(events)).not.toContain("private-body");
   });
 
   test("delivers quoted and inline-code DSML literals unchanged", () => {
@@ -614,8 +709,80 @@ describe("codebuddy runTurn streams a headless turn", () => {
     expect(events.some(e => e.type === "done")).toBe(false);
   });
 
+  test("a Windows abort terminates the cmd shim process tree", async () => {
+    const controller = new AbortController();
+    const stdoutStream = new Readable({
+      read() { setTimeout(() => controller.abort(), 5); },
+    });
+    const child = new EventEmitter() as FakeChild;
+    child.pid = 4242;
+    child.stdout = stdoutStream;
+    child.stderr = Readable.from([]);
+    child.written = [];
+    child.stdin = new Writable({ write(_c, _e, cb) { cb(); } });
+    child.killed = false;
+    child.exitCode = null;
+    const directSignals: string[] = [];
+    child.kill = signal => { directSignals.push(signal ?? "SIGTERM"); return true; };
+    const killedTrees: number[] = [];
+
+    const adapter = createCodeBuddyAdapter(provider(), {
+      platform: "win32",
+      spawn: () => child as unknown as ChildProcess,
+      which: () => "C:\\npm\\codebuddy.cmd",
+      killWindowsProcessTree: pid => {
+        killedTrees.push(pid);
+        child.exitCode = 1;
+        child.emit("close", 1);
+      },
+      killGraceMs: 20,
+    });
+    const events = await run(adapter, parsed(), incoming(controller.signal));
+
+    expect(killedTrees).toEqual([4242]);
+    expect(directSignals).toEqual([]);
+    expect(events).toContainEqual(expect.objectContaining({ type: "error", retryable: false }));
+  });
+
   test("a timeout destroys a stalled stdout stream and returns even when close never arrives", async () => {
+    type TimingPhase = "entry" | "spawn" | "sigterm" | "stdout_close" | "stdout_error" | "timeout" | "return";
+    type TimingClassification =
+      | "within_budget"
+      | "pre_spawn_late"
+      | "timeout_dispatch_missing"
+      | "timeout_dispatch_late"
+      | "timeout_event_missing"
+      | "stdout_settlement_missing"
+      | "stdout_settlement_late"
+      | "reap_or_return_late";
+    const phaseOrder: readonly TimingPhase[] = [
+      "entry", "spawn", "sigterm", "stdout_close", "stdout_error", "timeout", "return",
+    ];
+    const phaseMs: Partial<Record<TimingPhase, number>> = {};
+    let startedAt = 0;
+    const boundedElapsed = (): number => Math.min(1_000, Math.max(0, Date.now() - startedAt));
+    const mark = (phase: TimingPhase): void => { phaseMs[phase] ??= boundedElapsed(); };
+    const classify = (elapsed: number): TimingClassification => {
+      if (elapsed < 250) return "within_budget";
+      if ((phaseMs.spawn ?? 0) >= 250) return "pre_spawn_late";
+      if (phaseMs.sigterm === undefined) return "timeout_dispatch_missing";
+      if (phaseMs.sigterm >= 250) return "timeout_dispatch_late";
+      if (phaseMs.timeout === undefined) return "timeout_event_missing";
+      const streamSettledAt = Math.min(
+        phaseMs.stdout_close ?? Number.POSITIVE_INFINITY,
+        phaseMs.stdout_error ?? Number.POSITIVE_INFINITY,
+      );
+      if (!Number.isFinite(streamSettledAt)) return "stdout_settlement_missing";
+      if (streamSettledAt >= 250) return "stdout_settlement_late";
+      return "reap_or_return_late";
+    };
+    const diagnostic = (elapsed: number): string => {
+      const phases = phaseOrder.map(phase => `${phase}_ms=${phaseMs[phase] ?? -1}`).join(",");
+      return `codebuddy_timeout_timing classification=${classify(elapsed)} total_ms=${elapsed} ${phases}`;
+    };
     const stdoutStream = new Readable({ read() { /* stays open until timeout destroys it */ } });
+    stdoutStream.once("close", () => mark("stdout_close"));
+    stdoutStream.once("error", () => mark("stdout_error"));
     const child = new EventEmitter() as FakeChild;
     child.stdout = stdoutStream;
     child.stderr = Readable.from([]);
@@ -625,22 +792,34 @@ describe("codebuddy runTurn streams a headless turn", () => {
     child.exitCode = null;
     const signals: string[] = [];
     child.kill = (sig?: string) => {
+      if ((sig ?? "SIGTERM") === "SIGTERM") mark("sigterm");
       child.killed = true;
       signals.push(sig ?? "SIGTERM");
       return true;
     };
 
     const adapter = createCodeBuddyAdapter(provider(), {
-      spawn: () => child as unknown as ChildProcess,
+      spawn: () => {
+        mark("spawn");
+        return child as unknown as ChildProcess;
+      },
       which: () => "/usr/bin/codebuddy",
       timeoutMs: 10,
       killGraceMs: 10,
       reapTimeoutMs: 35,
     });
-    const startedAt = Date.now();
-    const events = await run(adapter, parsed());
+    startedAt = Date.now();
+    mark("entry");
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn!(parsed(), incoming(), event => {
+      if (event.type === "error" && event.status === 504 && event.code === "timeout") mark("timeout");
+      events.push(event);
+    });
+    mark("return");
+    // The measured assertion uses the raw elapsed time; clamping would hide a genuine overrun.
+    const elapsed = Date.now() - startedAt;
 
-    expect(Date.now() - startedAt).toBeLessThan(250);
+    expect(elapsed, diagnostic(elapsed)).toBeLessThan(250);
     expect(stdoutStream.destroyed).toBe(true);
     expect(signals).toContain("SIGTERM");
     expect(events).toContainEqual(expect.objectContaining({ type: "error", status: 504, code: "timeout" }));

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
-  existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, renameSync,
+  existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync,
   rmSync, symlinkSync, writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -131,6 +131,54 @@ describe("Aside profile filesystem boundary", () => {
     assertAsideProfileBoundary(selected, profiles, true);
     guardAsideProfileIO(selected, ioFor(home).io, profiles).writeText(selected.configPath, "{}");
     expect(readFileSync(join(actual, ".aside", "u", "0", "models.json"), "utf8")).toBe("{}");
+  }));
+
+  test("accepts a relocated Aside root behind a top-level ~/.aside link (#5648)", () => fixture((home, root) => {
+    const relocated = join(home, "external-volume", ".aside");
+    mkdirSync(join(home, "external-volume"));
+    renameSync(root, relocated);
+    directoryLink(relocated, root);
+    const profiles = listAsideProfiles({}, home);
+    const selected = profiles[0]!;
+    expect(selected.root).toBe(realpathSync.native(relocated));
+    assertAsideProfileBoundary(selected, profiles, true);
+    guardAsideProfileIO(selected, ioFor(home).io, profiles).writeText(selected.configPath, "{}");
+    expect(readFileSync(join(relocated, "u", "0", "models.json"), "utf8")).toBe("{}");
+  }));
+
+  for (const component of ["u", "account"] as const) {
+    test(`a relocated root still rejects a linked ${component} directory below it`, () => fixture((home, root) => {
+      const relocated = join(home, "external-volume", ".aside");
+      mkdirSync(join(home, "external-volume"));
+      renameSync(root, relocated);
+      directoryLink(relocated, root);
+      const path = component === "u" ? join(relocated, "u") : join(relocated, "u", "0");
+      const moved = join(home, `moved-${component}`);
+      renameSync(path, moved);
+      directoryLink(moved, path);
+      const profiles = listAsideProfiles({}, home);
+      expect(() => assertAsideProfileBoundary(profiles[0]!, profiles)).toThrow(ClientPathError);
+    }));
+  }
+
+  test("a relocated root still rejects a linked model catalog", () => fixture((home, root) => {
+    const relocated = join(home, "external-volume", ".aside");
+    mkdirSync(join(home, "external-volume"));
+    renameSync(root, relocated);
+    directoryLink(relocated, root);
+    const outside = join(home, "outside-models.json");
+    writeFileSync(outside, "{}");
+    symlinkSync(outside, join(relocated, "u", "0", "models.json"), "file");
+    const profiles = listAsideProfiles({}, home);
+    expect(() => assertAsideProfileBoundary(profiles[0]!, profiles)).toThrow(ClientPathError);
+  }));
+
+  test("a ~/.aside link to a regular file is still refused", () => fixture((home, root) => {
+    const file = join(home, "not-a-directory");
+    writeFileSync(file, "x");
+    rmSync(root, { recursive: true, force: true });
+    symlinkSync(file, root, "file");
+    expect(() => listAsideProfiles({}, home)).toThrow(ClientPathError);
   }));
 
   for (const component of ["root", "u", "account"] as const) {

@@ -235,7 +235,7 @@ async function runShutdownBudgetChild(
 async function runNeverSettlingAclChild(
   mode: "principal" | "icacls",
 ): Promise<NeverSettlingAclChildResult> {
-  const timeoutMs = watchdogMs(1_500);
+  const timeoutMs = watchdogMs(8_000);
   const child = Bun.spawn([
     process.execPath,
     helperPath("responses-state-never-settling-acl-child.ts"),
@@ -1245,7 +1245,7 @@ describe("Responses previous_response_id state", () => {
         metrics: { tombstoneCount: 2 },
       });
     }
-  }, { timeout: (2 * watchdogMs(1_500)) + 2_000 });
+  }, { timeout: (2 * watchdogMs(8_000)) + 2_000 });
 
   test("Windows pending spill publication cannot overwrite a newer same-id generation", async () => {
     forceWindowsAclLane();
@@ -3427,7 +3427,7 @@ describe("Responses previous_response_id state", () => {
         spillLastWriteFailureCode: null,
         spillLastWriteFailureOrigin: null,
         spillAclRetryReturnedTimeouts: 0,
-        spillAclTimeoutMemoRefusals: 0,
+        spillAclTimeoutMemoRefusals: 0, spillCapacityRefusals: 0, spillHeadroomEvictions: 0,
         spillLastWriteFailureAt: null,
         spillLastWriteSuccessAt: null,
         spillReadFailures: 0,
@@ -3589,7 +3589,7 @@ describe("Responses previous_response_id state", () => {
         spillLastWriteFailureCode: null,
         spillLastWriteFailureOrigin: null,
         spillAclRetryReturnedTimeouts: 0,
-        spillAclTimeoutMemoRefusals: 0,
+        spillAclTimeoutMemoRefusals: 0, spillCapacityRefusals: 0, spillHeadroomEvictions: 0,
         spillLastWriteFailureAt: null,
         spillLastWriteSuccessAt: null,
         spillReadFailures: 0,

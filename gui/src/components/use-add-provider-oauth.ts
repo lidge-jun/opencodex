@@ -3,6 +3,9 @@ import type { TFn } from "../i18n/shared";
 import { readJsonIfOk } from "../fetch-json";
 import { openBrowserRequestField } from "../oauth-open-browser-pref";
 import { afterOAuthCancellation, cancelOAuthLogin } from "../oauth-cancellation-barrier";
+import type { LoginHintData } from "./login-url-block";
+import { parseBrowserLaunch, type BrowserLaunch } from "../oauth-browser-launch";
+import { loginPollAttempts } from "../oauth-login-budget";
 
 export const OAUTH_LOGIN_POLL_INTERVAL_MS = 2_000;
 
@@ -10,7 +13,7 @@ type OAuthLoginSetters = {
   setOauthBusy: (v: boolean) => void;
   setOauthMsg: (v: string) => void;
   setOauthMsgTone: (v: "ok" | "warn") => void;
-  setOauthUrl: (url: string, providerId: string, deviceCode?: string, instructions?: string) => void;
+  setOauthUrl: (url: string, providerId: string, deviceCode?: string, instructions?: string, browserLaunch?: BrowserLaunch) => void;
   setManualCode: (v: string) => void;
   setManualCodeMsg: (v: string) => void;
   setManualCodeOk: (v: boolean) => void;
@@ -114,16 +117,18 @@ export function useAddProviderOAuth({
       // A device flow may return a user code with no URL, and `instructions` may
       // carry the only human-readable step. Keep all three: the hint renderer
       // decides what to show, rather than this hook deciding what to discard.
-      const data = await res.json() as { url?: string; instructions?: string; deviceCode?: string; error?: string };
+      const data = await res.json() as { url?: string; instructions?: string; deviceCode?: string; error?: string; browserLaunch?: unknown };
       if (!aliveRef.current || !isCurrent()) return;
-      setOauthUrl(data.url ?? "", providerId, data.deviceCode, data.instructions);
+      setOauthUrl(data.url ?? "", providerId, data.deviceCode, data.instructions, parseBrowserLaunch(data.browserLaunch));
       if (data.url || data.deviceCode) setOauthMsg(t("modal.waitingLogin"));
       else setOauthMsg(data.instructions || t("modal.loggingIn"));
-      for (let i = 0; i < 100; i++) {
+      // A device grant outlives the browser budget; see oauth-login-budget.ts.
+      let deviceFlow = Boolean(data.deviceCode);
+      for (let i = 0; i < loginPollAttempts(deviceFlow, OAUTH_LOGIN_POLL_INTERVAL_MS, 100); i++) {
         await new Promise(r => setTimeout(r, OAUTH_LOGIN_POLL_INTERVAL_MS));
         if (!aliveRef.current || !isCurrent()) return;
         const sRes = await fetch(`${apiBase}/api/oauth/status?provider=${providerId}`).catch(() => null);
-        const s = sRes ? await readJsonIfOk<{ loggedIn?: boolean; error?: string }>(sRes) : null;
+        const s = sRes ? await readJsonIfOk<{ loggedIn?: boolean; error?: string; hint?: LoginHintData }>(sRes) : null;
         if (!aliveRef.current || !isCurrent()) return;
         if (s?.error) {
           activeProvidersRef.current.delete(providerId);
@@ -133,8 +138,17 @@ export function useAddProviderOAuth({
         }
         if (s?.loggedIn) {
           activeProvidersRef.current.delete(providerId);
+          setOauthMsg("");
           onAdded(providerId);
           return;
+        }
+        const hint = s?.hint;
+        if (hint) {
+          if (hint.deviceCode) deviceFlow = true;
+          setOauthUrl(hint.url ?? "", providerId, hint.deviceCode, hint.instructions);
+          setOauthMsg(hint.url || hint.deviceCode
+            ? t("modal.waitingLogin")
+            : (hint.instructions || t("modal.loggingIn")));
         }
       }
       await cancelServerLogin(providerId);
@@ -150,7 +164,10 @@ export function useAddProviderOAuth({
         setOauthMsg(t("modal.networkError"));
       }
     } finally {
-      if (aliveRef.current && isCurrent()) setOauthBusy(false);
+      if (aliveRef.current && isCurrent()) {
+        setOauthBusy(false);
+        setOauthUrl("", providerId);
+      }
     }
   }, [aliveRef, apiBase, bumpLoginGeneration, cancelServerLogin, onAdded, t]);
 

@@ -13,8 +13,10 @@ import { useT, type TKey } from "../../i18n/shared";
 import { formatNamespacedModelId } from "../../provider-icons";
 import type { DelegationPatch, DelegationModelOption } from "../../pages/use-subagent-delegation";
 import type { UltraModePatch, UltraModeState } from "../../pages/use-subagent-delegation";
+import DelegationSuggest from "./DelegationSuggest";
 
 export interface SubagentDelegationSectionProps {
+  apiBase: string;
   model: string;
   effort: string;
   efforts: string[];
@@ -38,6 +40,7 @@ export interface SubagentDelegationSectionProps {
 }
 
 export default function SubagentDelegationSection({
+  apiBase,
   model,
   effort,
   efforts,
@@ -71,6 +74,7 @@ export default function SubagentDelegationSection({
     setPollDraft({ pollMs: fallbackPollMs, text: Number.isFinite(fallbackPollMs) ? String(fallbackPollMs) : "" });
   }
   const fallbackControlsRef = useRef<HTMLDivElement>(null);
+  const [suggestOpen, setSuggestOpen] = useState(false);
   const [identity, setIdentity] = useState(() => ({
     models: fallback,
     rows: fallback.map((rowModel, id) => ({ model: rowModel, id })),
@@ -126,7 +130,7 @@ export default function SubagentDelegationSection({
           </button>
         </div>
       )}
-      <div className="swi-delegation-row">
+      <div className="swi-delegation-row swi-delegation-model-row">
         <div className="setting-copy">
           <div className="font-semibold">{t("sub.delegation.model")}</div>
           <div className="muted setting-hint">{t("sub.delegation.modelHint")}</div>
@@ -156,8 +160,28 @@ export default function SubagentDelegationSection({
               align="right"
             />
           )}
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            aria-expanded={suggestOpen}
+            onClick={() => setSuggestOpen(open => !open)}
+          >
+            {t("sub.suggest.button")}
+          </button>
         </div>
       </div>
+      {suggestOpen && (
+        <div className="swi-delegation-row">
+          <DelegationSuggest
+            apiBase={apiBase}
+            model={model}
+            effort={effort}
+            available={available}
+            saving={saving}
+            onAccept={onSave}
+          />
+        </div>
+      )}
 
       {showV2Compatibility && (
         <div className="swi-delegation-row swi-v2-compatibility" role="note">

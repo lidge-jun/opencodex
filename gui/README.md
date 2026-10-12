@@ -53,6 +53,18 @@ bun run setup:hooks             # pre-push runs doctor when gui/ changed
 
 Fix ESLint errors first. Use `doctor` / `doctor:full` for deeper React triage.
 
+## Quota popover hover browser regression
+
+```bash
+cd gui
+bun run build
+bun run test:quota-hover
+```
+
+This opt-in check is not part of CI. It moves a real pointer from a quota chip into its popover in an
+installed Chrome/Chromium (`CHROME_BIN` when not on PATH), which happy-dom unit tests cannot hit-test.
+Rebuild after changing CSS: it uses the production CSS in `dist`.
+
 ## Sidebar version browser regression
 
 ```bash

@@ -15,6 +15,7 @@ import {
   UnsupportedOAuthProviderError,
 } from "../oauth";
 import type { OcxConfig } from "../types";
+import { configuredAnthropicInstance, isAnthropicOAuthInstance } from "../providers/anthropic-instance";
 import { createCredentialLease } from "../lab/live/credential-lease";
 import {
   liveUpstreamRequestPath,
@@ -34,7 +35,8 @@ export interface ProductionLabRouteExecutorDeps {
   loadConfig: () => OcxConfig;
 }
 
-async function buildLabProviderAuthHeaders(
+/** @internal exported for the Pool 2 ownership regression test. */
+export async function buildLabProviderAuthHeaders(
   routeContext: LabRouteContext,
   config: OcxConfig,
 ): Promise<Record<string, string>> {
@@ -63,6 +65,12 @@ async function buildLabProviderAuthHeaders(
     }
     if (protocol !== "https:") {
       throw new TransportError("auth_blocked", "OAuth lab probes require HTTPS");
+    }
+    // The Pool 2 credential namespace belongs to the marked builtin row only; an unmarked or
+    // orphaned `anthropic2` OAuth row must never obtain its bearer through this generic path.
+    if (isAnthropicOAuthInstance(routeContext.providerId)
+      && configuredAnthropicInstance(config, routeContext.providerId) !== routeContext.providerId) {
+      throw new TransportError("auth_blocked", "anthropic instance unavailable");
     }
     try {
       const snapshot = await getValidAccessTokenSnapshot(routeContext.providerId);

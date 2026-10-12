@@ -1,10 +1,15 @@
+import { MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT } from "../../codex/quota-types";
 import * as z from "zod/v4";
+import { anthropicAccountPoolSchema } from "./anthropic-account-pool";
+import { compactionRecoverySchema } from "./compaction-recovery";
+import { blockedModelRedirectsSchema } from "./blocked-model-redirects";
 import {
   agentTaskRecoverySchema,
   catalogAutoRefreshSchema,
   clientConnectionSchema,
   CODEX_ACCOUNT_PIN_PATTERN,
   codexAccountPrioritiesSchema,
+  salvageCodexAccountAutoSwitchThresholds,
   codexPoolSchema,
   codexQuotaAutoRefreshSchema,
   credentialGroupsSchema,
@@ -14,6 +19,8 @@ import {
   remoteGuiConfigSchema,
   runtimeRoleSchema,
   spendSchema,
+  chatgptDesktopSchema,
+  skillsConfigSchema,
   configuredCodexPoolAccountIds,
   apiKeyEntrySchema,
   asideProfileSyncSchema,
@@ -21,6 +28,9 @@ import {
   CODEX_ACCOUNT_NAMESPACE_ACCOUNT_ID_COLLISION_ERROR,
   codexAccountNamespacesSchema,
   modelPinnedEffortsSchema,
+  compactionRoutingSchema,
+  memoryModelSettingSchema,
+  memoryModelsSchema,
   modelPreferHostedToolsConfigError,
   providerModelCostsConfigError,
   providerRelativeSendPathConfigError,
@@ -36,6 +46,7 @@ import {
   positiveIntegerRecordConfigError,
   providerBaseUrlConfigError,
   providerHeadersConfigError,
+  providerForwardClientHeadersConfigError,
   reasoningSummaryDeliveryRecordConfigError,
 } from "../provider-validation";
 import {
@@ -45,10 +56,14 @@ import {
   MAIN_CODEX_ACCOUNT_NAMESPACE_TARGET,
 } from "../../codex/account-namespace-match";
 import { UPSTREAM_HOST_CIRCUIT_MAX_THRESHOLD } from "../../codex/upstream-host-health";
-import { COMBO_NAMESPACE, comboConfigIssues } from "../../combos/types";
+import { MIN_USAGE_LEDGER_MAX_BYTES } from "../../usage/retention-contract";
+// The schema boundary uses a string-only stand-in for the ingress grammar: importing the server
+// parser here would cycle back through config loading and run Cursor detection during validation.
+import { COMBO_NAMESPACE, comboConfigIssues, lexicalDecisionModelBase } from "../../combos/types";
 import { routingProfileIssues } from "../../routing/profile";
 import { POLICY_NAMESPACE } from "../../routing/profile-namespace";
 import { providerDestinationConfigError } from "../../lib/destination-policy";
+import { providerTlsProfileConfigError } from "../../lib/provider-tls-profile";
 import { redactSecretString } from "../../lib/redact";
 import { openRouterRoutingConfigError } from "../../providers/openrouter-routing";
 import { vercelGatewayRoutingConfigError } from "../../providers/vercel-gateway-routing";
@@ -57,9 +72,23 @@ import { OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import { modelAutoCompactTokenLimitsConfigError } from "../../providers/auto-compact-budget";
 import { hasFastWireCapabilityConflict } from "../../providers/fastwire";
 import { parseDesktopProfile } from "../../claude/desktop-profile";
+import { isInterceptBindingId, isInterceptBindingRoute } from "../../claude/intercept/model-bindings";
 import { DEFAULT_APP_OWNED_MEMORY_BUDGET_BYTES, MAX_APP_OWNED_MEMORY_BUDGET_MB, MIN_APP_OWNED_MEMORY_BUDGET_MB } from "../../lib/app-owned-memory";
 
+/** Strict write contract; file-load recovery is applied only by the enclosing schema. */
+export const protocolConfigSchema = z.object({
+  unrepresentable: z.enum(["legacy", "reject"]).optional(),
+  rollout: z.object({
+    nativeChatCombos: z.boolean().optional(),
+    managedMessagesNative: z.boolean().optional(),
+    managedMessagesNativeOAuth: z.boolean().optional(),
+    directEncoders: z.boolean().optional(),
+    shadowPlan: z.boolean().optional(),
+  }).strict().optional(),
+}).strict();
+
 export const configSchema = z.object({
+  chatgptDesktop: chatgptDesktopSchema.optional().catch(undefined),
   codexNativeSteering: z.boolean().optional().catch(false),
   codexNativeInjection: z.boolean().optional().catch(false),
   port: z.number().int().min(0).max(65535).default(10100),
@@ -73,12 +102,46 @@ export const configSchema = z.object({
   // A malformed privacy block must never be read as "unmask": .catch(undefined) drops it and
   // emailMaskingEnabled then falls back to masked, which is also what an absent block means.
   privacy: z.object({ maskEmails: z.boolean().optional() }).strict().optional().catch(undefined),
+  skills: skillsConfigSchema.optional().catch(undefined),
+  // Malformed hand edits disable this opt-in exporter. Live writes reject them in diagnostics.ts.
+  metricsExport: z.object({ enabled: z.boolean().optional() }).strict().optional().catch(undefined),
+  // Same contract as metricsExport: a malformed hand edit leaves recovery off; live writes reject it.
+  serviceHealthRecovery: z.object({ enabled: z.boolean().optional() }).strict().optional().catch(undefined),
+  // Kept raw on purpose: `.catch(undefined)` would turn a mistyped `enabled` into "inherit",
+  // which can reopen a surface the operator meant to close. src/protocols/settings.ts parses it
+  // and fails closed instead.
+  apiSurfaces: z.unknown().optional(),
+  // Keep malformed native policy disabled even when an enabled pool supplies defaults.
+  protocols: protocolConfigSchema.optional().catch(ctx => {
+    const raw = ctx.input;
+    const protocols = raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
+    const rollout = protocols.rollout;
+    const fields = rollout && typeof rollout === "object" && !Array.isArray(rollout) ? rollout as Record<string, unknown> : {};
+    return {
+      unrepresentable: protocols.unrepresentable === "reject" ? "reject" as const : "legacy" as const,
+      rollout: {
+        nativeChatCombos: fields.nativeChatCombos === true,
+        managedMessagesNative: false,
+        managedMessagesNativeOAuth: false,
+        directEncoders: fields.directEncoders === true,
+        shadowPlan: fields.shadowPlan === true,
+      },
+    };
+  }),
   // A malformed present client block must remain diagnosable from raw config and
   // fail closed through src/client/state.ts; unrelated provider state still loads.
   client: clientConnectionSchema.optional().catch(undefined),
   managementUsageMaxReadBytes: z.number().int().positive().default(64 * 1024 * 1024).describe(
     "Deprecated compatibility limit for bounded legacy usage readers; GET /api/usage always aggregates the complete ledger",
   ),
+  // Opt-in ledger ceiling. A hand edit below the floor, or a non-safe integer, disables only
+  // this limit rather than failing the config: refusing to start because history retention was
+  // mistyped would be a worse outcome than not trimming history.
+  usageLedgerMaxBytes: z.number().int()
+    .min(MIN_USAGE_LEDGER_MAX_BYTES)
+    .max(Number.MAX_SAFE_INTEGER)
+    .optional()
+    .catch(undefined),
   // Invalid hand edits disable only this opt-in circuit. Live writes remain strict.
   upstreamHostCircuitThreshold: z.number().int()
     .min(0)
@@ -125,6 +188,19 @@ export const configSchema = z.object({
   ]).optional().catch(undefined),
   providers: z.record(z.string(), providerConfigSchema),
   modelPinnedEfforts: modelPinnedEffortsSchema.optional(),
+  compactionRouting: compactionRoutingSchema.optional().catch(undefined),
+  compactionRecovery: compactionRecoverySchema.optional().catch(undefined),
+  // A hand-edited malformed phase disables only that phase instead of rejecting
+  // providers/apiKeys, matching the load-time degradation notice; the management write
+  // boundary (validateConfigCandidate) still refuses the bad value through the shared,
+  // catch-free memoryModelsSchema.
+  memoryModels: z
+    .object({
+      extract: memoryModelSettingSchema.optional().catch(undefined),
+      consolidation: memoryModelSettingSchema.optional().catch(undefined),
+    })
+    .optional()
+    .catch(undefined),
   defaultProvider: z.string().min(1).default("openai"),
   defaultModelAliases: z.boolean().optional(),
   // Malformed hand edits disable this opt-in projection without rejecting providers.
@@ -134,7 +210,13 @@ export const configSchema = z.object({
   // Ultra Fast is opt-in for the same reason and degrades the same way: a malformed hand
   // edit turns the tier off rather than rejecting the config that carries it.
   ultraFastTier: z.boolean().optional().catch(false),
-  codexMainAccountHardLock: z.boolean().optional().catch(false),
+  // Default-on policy (#5694): absence and malformed hand edits both mean "on", and only an
+  // explicit `false` written by the settings PUT opts out.
+  codexMainAccountHardLock: z.boolean().optional().catch(undefined),
+  codexMainAccountHardLockThresholds: z.object({
+    short: z.number().int().min(MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT).max(100).optional().catch(undefined),
+    long: z.number().int().min(MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT).max(100).optional().catch(undefined),
+  }).optional().catch(undefined),
   // Future versions remain opaque through passthrough-compatible whole-config saves.
   // Only version 1 grants deletion authority in the rebase path.
   configRebaseProvenance: z.unknown().optional(),
@@ -145,6 +227,7 @@ export const configSchema = z.object({
   // A malformed hand edit must not silently stop opening the browser: fall back
   // to undefined, which resolves to the historical auto-open behavior.
   oauthOpenBrowser: z.boolean().optional().catch(undefined),
+  showCodexCredits: z.boolean().optional().catch(false),
   openaiProviderTierVersion: z.union([z.literal(1), z.literal(2)]).optional(),
   // Invalid hand edits must not discard an otherwise usable config.
   googleAntigravityStaticCatalogVersion: z.union([z.literal(1), z.literal(2)]).optional().catch(undefined),
@@ -185,6 +268,12 @@ export const configSchema = z.object({
     z.string(),
     z.array(z.string().trim().min(1)).min(1),
   ).optional().catch(undefined),
+  // Advisory input to role auto-assign only; a malformed block falls back to price ranking.
+  codexRoleTiers: z.object({
+    fast: z.array(z.string().trim().min(1)).optional(),
+    standard: z.array(z.string().trim().min(1)).optional(),
+    frontier: z.array(z.string().trim().min(1)).optional(),
+  }).strict().optional().catch(undefined),
   codexShimAutoRestore: z.boolean().optional(),
   codexDesktopAuthless: z.boolean().optional().catch(undefined),
   codexClientCompaction: z.boolean().optional().catch(undefined),
@@ -193,6 +282,10 @@ export const configSchema = z.object({
   // would refuse to load — the provider id routing depends on is never derived from it.
   codexProviderDisplayName: z.string().trim().min(1).max(128).optional().catch(undefined),
   pausedCodexAccountIds: z.array(z.string().regex(/^[a-zA-Z0-9._-]{1,64}$/)).optional(),
+  // A malformed allow-list degrades to "no account spends credits" rather than failing the parse,
+  // so a hand-edited typo cannot trip the backup-and-defaults repair path; the write path rejects
+  // it (creditCodexAccountIdsError in diagnostics).
+  creditCodexAccountIds: z.array(z.string().regex(/^[a-zA-Z0-9._-]{1,64}$/)).optional().catch(undefined),
   // A malformed policy degrades to "no policy" rather than failing the parse, so a hand-edited
   // typo cannot trip the backup-and-defaults repair path and wipe providers or pool accounts.
   // Silently ignoring it would be its own trap, so the write path rejects it and loadConfig warns.
@@ -204,6 +297,14 @@ export const configSchema = z.object({
   // typo cannot trip the backup-and-defaults repair path and wipe providers or
   // pool accounts. Warning emitted in loadConfig.
   codexAccountPriorities: codexAccountPrioritiesSchema.optional().catch(undefined),
+  // A bad hand-edited entry must not retire valid overrides on the next unrelated save.
+  codexAccountAutoSwitchThresholds: z.unknown().optional().transform(salvageCodexAccountAutoSwitchThresholds),
+  // An invalid optional preference must not discard providers or credential rows.
+  codexAccountPriorityFailback: z.boolean().optional().catch(false),
+  // Absent or invalid keeps the sliding window on. Explicit false restores consecutive-only steering.
+  codexFailureWindow: z.boolean().optional().catch(undefined),
+  codexPinnedTransientPolicy: z.enum(["hold", "detour-new-threads"]).optional().catch("hold"),
+  codexWsReuseAcrossTurns: z.boolean().optional().catch(false),
   activeCodexAccountPinned: z.string().regex(CODEX_ACCOUNT_PIN_PATTERN).optional().catch(undefined),
   // A malformed hand edit must degrade to false without discarding providers, accounts,
   // or the exact selector map. Live writes remain strict.
@@ -230,7 +331,10 @@ export const configSchema = z.object({
   // parse: a hand-edited typo must never trip the backup-and-defaults repair
   // path below and wipe providers/pool accounts. Warning emitted in loadConfig.
   streamMode: z.enum(["auto", "legacy-tee", "eager-relay"]).optional().catch(undefined),
-  blockedModelRedirects: z.record(z.string(), z.string()).optional().catch(undefined),
+  blockedModelRedirects: blockedModelRedirectsSchema.optional().catch(undefined),
+  // Degrade malformed hand edits locally; candidate writes reject them before parsing.
+  // An invalid native preference retains the legacy route instead of enabling native by default.
+  anthropicAccountPool: anthropicAccountPoolSchema,
   // Same degrade-don't-reject rationale as the fields above: a hand-edited
   // non-string must not trip the backup-and-defaults repair path. Unset then
   // takes the canonical sideband path (src/server/live.ts normalizeSidebandRoot).
@@ -253,11 +357,49 @@ export const configSchema = z.object({
       .map(row => apiKeyEntrySchema.parse(row) as OcxApiKeyEntry);
   }),
 }).passthrough().superRefine((config, ctx) => {
+  // Helper `anthropicInstance` is deliberately not refined here. A document-level issue would send
+  // loadConfig through salvage (which refuses pathless issues) to the backup-and-defaults path, so
+  // one hand-edited helper preference would hide every provider. Writes reject it explicitly in
+  // validateConfigCandidate, diagnostics report it from the raw file, and loadConfig drops only the
+  // offending key (sanitizeAnthropicSidecarInstanceForLoad).
   const claudeCode = (config as { claudeCode?: unknown }).claudeCode;
   if (claudeCode !== undefined && (!claudeCode || typeof claudeCode !== "object" || Array.isArray(claudeCode))) {
     ctx.addIssue({ code: "custom", path: ["claudeCode"], message: "claudeCode must be an object" });
   } else if (claudeCode) {
-    const claude = claudeCode as { desktopProfile?: unknown };
+    const claude = claudeCode as { desktopProfile?: unknown; desktopMode?: unknown; intercept?: unknown };
+    if (claude.desktopMode !== undefined && claude.desktopMode !== "first-party" && claude.desktopMode !== "gateway") {
+      ctx.addIssue({ code: "custom", path: ["claudeCode", "desktopMode"], message: "desktopMode must be \"first-party\" or \"gateway\"" });
+    }
+    if (claude.intercept !== undefined) {
+      const intercept = claude.intercept;
+      if (!intercept || typeof intercept !== "object" || Array.isArray(intercept)) {
+        ctx.addIssue({ code: "custom", path: ["claudeCode", "intercept"], message: "intercept must be an object" });
+      } else {
+        const { enabled, port, picker, modelMap } = intercept as { enabled?: unknown; port?: unknown; picker?: unknown; modelMap?: unknown };
+        if (enabled !== undefined && typeof enabled !== "boolean") {
+          ctx.addIssue({ code: "custom", path: ["claudeCode", "intercept", "enabled"], message: "intercept.enabled must be a boolean" });
+        }
+        if (picker !== undefined && typeof picker !== "boolean") {
+          ctx.addIssue({ code: "custom", path: ["claudeCode", "intercept", "picker"], message: "intercept.picker must be a boolean" });
+        }
+        if (port !== undefined && (typeof port !== "number" || !Number.isInteger(port) || port < 1 || port > 65535)) {
+          ctx.addIssue({ code: "custom", path: ["claudeCode", "intercept", "port"], message: "intercept.port must be an integer between 1 and 65535" });
+        }
+        if (modelMap !== undefined) {
+          if (!modelMap || typeof modelMap !== "object" || Array.isArray(modelMap)) {
+            ctx.addIssue({ code: "custom", path: ["claudeCode", "intercept", "modelMap"], message: "intercept.modelMap must be an object of picker id to route" });
+          } else {
+            for (const [id, route] of Object.entries(modelMap as Record<string, unknown>)) {
+              if (!isInterceptBindingId(id)) {
+                ctx.addIssue({ code: "custom", path: ["claudeCode", "intercept", "modelMap", id], message: "intercept.modelMap keys must be claude- picker model ids" });
+              } else if (!isInterceptBindingRoute(route)) {
+                ctx.addIssue({ code: "custom", path: ["claudeCode", "intercept", "modelMap", id], message: "intercept.modelMap values must be non-empty routes without whitespace" });
+              }
+            }
+          }
+        }
+      }
+    }
     if (claude.desktopProfile !== undefined) {
       try {
         parseDesktopProfile(claude.desktopProfile);
@@ -379,12 +521,30 @@ export const configSchema = z.object({
         });
       }
     }
+    const tlsProfileError = providerTlsProfileConfigError(name, provider);
+    if (tlsProfileError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "tlsProfile"],
+        message: tlsProfileError,
+      });
+    }
     const headersError = providerHeadersConfigError((provider as { headers?: unknown }).headers);
     if (headersError) {
       ctx.addIssue({
         code: "custom",
         path: ["providers", redactSecretString(name), "headers"],
         message: headersError,
+      });
+    }
+    const forwardClientHeadersError = providerForwardClientHeadersConfigError(
+      (provider as { forwardClientHeaders?: unknown }).forwardClientHeaders,
+    );
+    if (forwardClientHeadersError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "forwardClientHeaders"],
+        message: forwardClientHeadersError,
       });
     }
     const modelCostsError = providerModelCostsConfigError((provider as { modelCosts?: unknown }).modelCosts);
@@ -629,6 +789,7 @@ export const configSchema = z.object({
         for (const issue of comboConfigIssues(id, raw, config.providers, {
           combos: combos as Record<string, import("../../types").OcxComboConfig>,
           excludeComboId: id,
+          normalizeDecisionModel: model => lexicalDecisionModelBase(model, config.cursorEffortRows === true),
         })) {
           ctx.addIssue({
             code: "custom",

@@ -61,7 +61,7 @@ a known configured model id. Cursor may require a model-list refresh or restart 
 
 `fastRows` is an optional boolean and defaults to `true`. The raw OpenAI-style
 `/v1/models` list, Claude Code discovery, and client config exports (including pi, OpenCode,
-OMP, Hermes, OpenClaw, Kimi, gjc, DSH, MCode, ZCode, Prime, Aside, Raycast, and omo) add a `<base-id>--fast` selector for every model whose
+OMP, Hermes, OpenClaw, Kimi, gjc, DSH, MCode, ZCode, Prime, Aside, Raycast, omo, Cline, Kilo, and Command Code) add a `<base-id>--fast` selector for every model whose
 resolved Fast policy is eligible. Selecting one routes the base model and requests the `priority`
 service tier — the same Fast the Codex app exposes through its picker toggle. The base row stays
 listed, so the row is an addition rather than a replacement.
@@ -123,4 +123,6 @@ opencodex writes managed `config.toml` and `opencodex-catalog.json` files throug
 followed by rename (`atomicWriteFile`).
 This prevents partial files when concurrent writers, such as `ocx stop` and the proxy shutdown handler,
 restore Codex at the same time.
+If a managed TOML file contains an integer outside JavaScript's safe range, the rewrite is refused
+instead of rounding the value, and the file is left unchanged.
 :::

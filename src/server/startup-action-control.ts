@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { join } from "node:path";
 import { durableBunPath } from "../lib/bun-runtime";
+import { selfLaunchArgv } from "../lib/self-launch-argv";
 import {
   WINDOWS_SCHTASKS_CREATE_ACCESS_DENIED_MARKER,
   isWindowsSchtasksCreateAccessDenied,
@@ -59,6 +60,18 @@ let finalizeImpl: FinalizeFn = finalizeWindowsSchedulerServiceRegistration;
 /** Test-only seam so elevation retry tests do not mock.module the service package. */
 export function setStartupInstallFinalizeForTests(next: FinalizeFn | null): void {
   finalizeImpl = next ?? finalizeWindowsSchedulerServiceRegistration;
+}
+
+interface StartupInstallLaunch {
+  execFile?: typeof execFile;
+  /** Overrides Bun's own standalone detection, which a source-mode test cannot flip. */
+  isStandaloneExecutable?: boolean;
+}
+let installLaunch: StartupInstallLaunch = {};
+
+/** Test-only seam: observe the installer child's argv and simulate a compiled `ocx`. */
+export function setStartupInstallLaunchForTests(next: StartupInstallLaunch | null): void {
+  installLaunch = next ?? {};
 }
 
 /** Snapshot of the install lock for diagnostics and tests. */
@@ -162,12 +175,19 @@ function runCliInstall(
 ): Promise<{ stdout: string; stderr: string }> {
   const bun = durableBunPath();
   const cli = join(import.meta.dir, "..", "cli", "index.ts");
-  const argv = [cli, ...startupInstallArgv(action, options)];
+  // The Desktop app and the Linux deb run a compiled `ocx`, where `process.execPath` is the CLI
+  // itself: prefixing the source entrypoint made it an unknown command and every dashboard
+  // Install/Repair failed (#6963). Same builder as the startup-health probe.
+  const argv = selfLaunchArgv(startupInstallArgv(action, options), {
+    sourceEntrypoint: cli,
+    isStandaloneExecutable: installLaunch.isStandaloneExecutable,
+  });
+  const run = installLaunch.execFile ?? execFile;
   return new Promise((resolve, reject) => {
     const timeout = process.platform === "win32" && action === "install-service"
       ? 0
       : 60_000;
-    execFile(bun, argv, {
+    run(bun, argv, {
       encoding: "utf8",
       env: process.env,
       // A fresh Windows scheduler install now owns its UAC prompt inside this CLI

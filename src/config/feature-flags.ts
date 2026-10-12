@@ -12,8 +12,18 @@ export function ultraFastTierEnabled(config: Pick<OcxConfig, "ultraFastTier">): 
   return config.ultraFastTier === true;
 }
 
+/** Default-off aggregate request metrics; activation is fixed for one server process lifetime. */
+export function metricsExportEnabled(config: Pick<OcxConfig, "metricsExport">): boolean {
+  return config.metricsExport?.enabled === true;
+}
+
+/** Default-off service health recovery (#6671); read once when the proxy starts. */
+export function serviceHealthRecoveryEnabled(config: Pick<OcxConfig, "serviceHealthRecovery">): boolean {
+  return config.serviceHealthRecovery?.enabled === true;
+}
+
 /**
- * Default cadence for the opt-in catalog auto-refresh (issue #3630): one converge pass
+ * Default cadence for catalog auto-refresh (issue #3630): one converge pass
  * per hour. Each pass spends a live /models call against every enabled provider, and
  * provider catalogs are themselves cached upstream for minutes, so an hour is fresh
  * enough for newly released models to appear without an `ocx sync`.
@@ -28,15 +38,17 @@ export const CATALOG_AUTO_REFRESH_DEFAULT_INTERVAL_MS: number = 60 * 60_000;
 export const CATALOG_AUTO_REFRESH_MIN_INTERVAL_MS: number = 15 * 60_000;
 
 /**
- * Opt-in master switch, read with the house `=== true` idiom so an absent key and a
- * malformed one both mean off. Pure on purpose: the scheduler calls this from a
+ * Enabled by default; explicit false or a zero cadence disables background work.
+ * Malformed enabled values still mean off. Pure on purpose: the scheduler calls this from a
  * dynamically imported context, so it takes an explicit config slice and reads nothing
  * global.
  */
 export function isCatalogAutoRefreshEnabled(
   config: Pick<OcxConfig, "catalogAutoRefresh">,
 ): boolean {
-  return config.catalogAutoRefresh?.enabled === true;
+  const section = config.catalogAutoRefresh;
+  return (section?.enabled === undefined || section.enabled === true)
+    && section?.intervalMinutes !== 0;
 }
 
 /**

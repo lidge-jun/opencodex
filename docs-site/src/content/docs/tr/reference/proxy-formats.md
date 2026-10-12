@@ -27,6 +27,12 @@ genel model kimliği birkaç hedef arasından seçim yapması gerektiğinde
 
 Kimlik bilgisi taşıyan model, görsel, video ve arama istekleri, aynı origin içindeki yönlendirmeler dâhil HTTP yönlendirmelerini otomatik izlemez. Yönlendiren bir adres yerine son API URL’sini yapılandırın. Sunucu, kimlik bilgilerini veya istek gövdesini yönlendirme hedefine yeniden göndermez. Mevcut hata işleme ve yanıt aktarma davranışı korunur; native Responses ve compact yolları, özgün 3xx ve `Location` değerini istemciye döndürebilir. İstemcinin yönlendirme davranışı bu sunucu aktarım politikasından ayrıdır.
 
+## xAI policy refusals
+
+Bazı xAI Chat Completions retleri, HTTP 200 ve `finish_reason: content_filter` yerine `I can't help with that request.` gibi tam bir ret cümlesiyle HTTP 403 olarak gelir. Codex 403'ü taşıma hatası sayar; kullanıcı turu kaydedilmez ve aynı istek yeniden gönderilir.
+
+Kombo olmayan bir Responses isteğinde OpenCodex, izin listesindeki bu 403'ü `status: "incomplete"` ve `incomplete_details.reason: "content_filter"` içeren bir HTTP 200 Responses yanıtına dönüştürür. Dönüştürme openai-chat bağdaştırıcı yolunda ve openai-responses geçişinde (grok-4.6 / grok-4.5 OAuth) çalışır. Akış da aynı incomplete sınırını kullanır. Boş veya yalnızca boşluk içeren 403 gövdeleri hata olarak kalır. Abonelik, kredi, yetki ve `not allowed to use this model` 403'leri hata olarak kalır. Kombo yük devretmesi özgün HTTP 403'ü görmeye devam eder.
+
 ## Uç nokta genel bakışı
 
 | İstemci yüzeyi | Uç nokta | Başarılı akışsız sonuç | Başarılı akış veya soket sonucu |
@@ -74,6 +80,17 @@ olayı gibi Responses olaylarını yayar. Normal bir akış `data: [DONE]` ile b
 `stream: false` veya `stream` olmadığında aynı adaptör olayları tek bir
 Responses JSON nesnesinde toplanır. Her iki form da seçilen modeli, çıktı
 öğelerini, terminal durumunu ve kullanımı korur.
+
+Canonical ChatGPT Codex rotasının yukarı akışı yalnızca SSE kabul ettiğinden,
+yalnızca yukarı akış isteği `stream: true` kullanır. OpenCodex terminal akışı
+sınırlı boyutlar içinde doğrular ve istemcinin istediği JSON biçimine katlar;
+açık bir `store` değeri değişmez. Doğrulama başarısız olursa HTTP 200 ile kısmi
+JSON yerine hata döner. Sınırlar çerçeve başına 4 MiB, transcript ve yeniden
+oluşturma kaynağı için ayrı ayrı 32 MiB, 100.000 SSE çerçevesi ve 10.000 yeniden
+oluşturulmuş çıktı öğesidir. `stallTimeoutSec` hem ilk body byte'ını hem de
+sonraki sessiz aralıkları sınırlar. Değer `0` olduğunda veya yerel upstream için
+varsayılan olarak devre dışı bırakıldığında hemen zaman aşımına uğramaz; yalnızca
+bağımsız 15 dakikalık toplam tur sınırı kalır. Streaming istemcileri değişmez.
 
 İstemciye yönelik Responses SSE çerçeveleri, SSE blok sınırlayıcısından önceki
 ham bayt cinsinden ölçülen çerçeve başına 4 MiB ile sınırlandırılmıştır. HTTP
@@ -389,3 +406,22 @@ okuyamazsa opencodex bu sağlayıcıya okunamayan baytlar göndermek yerine
 `unreadable_encrypted_agent_task` ile başarısız olur. Çalışan görevleri
 etrafındaki istemci davranışı için [Alt Ajan
 Arayüzü](/tr/guides/sub-agent-surface/) sayfasına bakın.
+
+### Mevcut bir konuşmada sağlayıcı değiştirmek
+
+Yeniden gönderilen bir akıl yürütme öğesi, yalnızca onu üreten sağlayıcı ve kimlik bilgisinin
+okuyabildiği bir `encrypted_content` taşır. opencodex konuşmaya en son başka bir sağlayıcının hizmet
+verdiğini biliyorsa bu blob'u göndermeden önce kaldırır ve öğenin özetini korur. O sağlayıcı farklı bir
+uç nokta veya kimlik bilgisi de kullandıysa öğenin `rs_…` kimliği de kaldırılır, çünkü yeni hedefin
+bulamayacağı bir öğeyi gösterir. opencodex bunu bilemediğinde, örneğin proxy yeniden başlatıldıktan
+sonra, yeni hedef blob'u reddeder: OpenAI ve Azure OpenAI `400 invalid_encrypted_content` döndürür.
+opencodex bu durumda isteği önceki sağlayıcının akıl yürütme durumu olmadan, yani blob ve `rs_…` kimliği
+olmadan yalnızca bir kez yeniden gönderir; aksi hâlde yanıt `Item with id 'rs_…' not found` olurdu.
+
+Bu kurtarma Responses protokolünü konuşan her adaptör için geçerlidir, bu nedenle `openai-responses` ve
+`azure-openai` aynı şekilde davranır. Başarılı bir kurtarmadan sonra aynı hedefteki sonraki turlar,
+sonraki beş dakika boyunca bu durumu ilk gönderimden önce kaldırır. Yeniden gönderim, isteğin normal
+gönderim bütçesinden düşülür. Sıradan bir 400 ve bir 429 bu yolla yeniden gönderilmez; 5xx de öyle, tek
+bir dar istisnayla: şifreli araç çıktısı taşıyan bir istek için gövdesi tam olarak o şifre çözme reddi
+olan bir 502 aynı tek yeniden gönderimi alır. İkinci ret istemciye değiştirilmeden ulaşır. Bu durumda
+hedef sağlayıcıda yeni bir konuşma başlatın.

@@ -167,10 +167,32 @@ function importOperation(row: AsideOperation, scope: AsideProfileScope): void {
 
 export function restoreAsideProfile(
   input: AsideProfilesInput,
-  request: { opId: string; profileId?: number; confirmDrift?: boolean },
+  request: {
+    opId: string;
+    profileId?: number;
+    confirmDrift?: boolean;
+    /**
+     * The row a caller already selected. Aside can hold more than one valid copy, so resolving
+     * again here could act on a different one than the plan the operator confirmed described.
+     */
+    selectedOperation?: AsideOperation;
+  },
+  options?: {
+    revalidate?: (prepared: IntegrationWriteInput) => Promise<AsideProfileWriteOutcome | null>;
+    /**
+     * Checked after the preference write, once before the selected history is copied into this
+     * profile's store and once more immediately before the restore itself.
+     *
+     * The preference write and that copy both sit between the first check and the restore they
+     * authorize, and Aside takes no writer lock. The snapshot checks below still hold, but they
+     * say nothing about the target file, which can be edited in either window; without this, a
+     * confirmation about the earlier file still overwrote the later one.
+     */
+    revalidateBeforeWrite?: (prepared: IntegrationWriteInput) => Promise<AsideProfileWriteOutcome | null>;
+  },
 ): Promise<AsideProfileWriteOutcome> {
   return runAsideProfileAction<AsideProfileWriteOutcome>(input, request.profileId, `restore:${request.opId}:${Boolean(request.confirmDrift)}`, async ctx => {
-    const row = requiredOperation(ctx, request.opId, request.profileId);
+    const row = request.selectedOperation ?? requiredOperation(ctx, request.opId, request.profileId);
     const profile = selectAsideProfiles(ctx, row.profileId)[0]!;
     const scope = asideProfileScope(ctx, profile);
     assertAsideSnapshotEntry(row.entry);
@@ -188,6 +210,16 @@ export function restoreAsideProfile(
       return { clientId: "aside", profileId: profile.id, ok: false, reason: "drift_requires_confirm", state: "conflict", message: "This profile changed after that operation; confirm to replace it" };
     }
     const restoredText = snapshot.kind === "stored" ? snapshot.text : null;
+    /*
+     * Checked before the preference write and before importOperation, which captures a snapshot
+     * and appends a journal row. Both happen ahead of the coordinated restore, so a confirmation
+     * checked under the writer lock would already have rewritten the user's preference and their
+     * history by the time it was consulted.
+     */
+    // The input this restore will actually write from, so the check cannot be answering about a
+    // view it rebuilt from the live configuration while the write uses this one.
+    const stale = await options?.revalidate?.(bound);
+    if (stale) return stale;
     await persistAsidePolicy(ctx, { profileId: profile.id, enabled: snapshotWasOwned(row.entry, restoredText, bound) });
     try {
       scope.assertBoundary();
@@ -197,8 +229,41 @@ export function restoreAsideProfile(
         || (currentSnapshot.kind === "stored" && currentSnapshot.text !== restoredText)) {
         throw new AsideProfileError("aside_operation_changed", 409, "Aside operation or snapshot changed while saving preferences");
       }
+      /*
+       * Looked at twice, because the two moments answer different questions and neither covers
+       * the other.
+       *
+       * Here, before the import, so that a confirmation already stale by this point is refused
+       * without copying anything: the import writes the selected row and its snapshot into this
+       * profile's own store, and a refusal from inside the coordinated restore returns before the
+       * restore transaction begins, so nothing would compensate that copy.
+       */
+      const beforeImport = await options?.revalidateBeforeWrite?.(bound);
+      if (beforeImport) return beforeImport;
       importOperation(row, scope);
-      return { ...await restoreIntegrationCoordinated({ ...bound, opId: request.opId, confirmDrift: request.confirmDrift }, { lockSeams: input.lockSeams }), profileId: profile.id };
+      return {
+        ...await restoreIntegrationCoordinated(
+          { ...bound, opId: request.opId, confirmDrift: request.confirmDrift },
+          {
+            lockSeams: input.lockSeams,
+            /*
+             * And again inside the coordinated restore, immediately before it runs. The import
+             * sits between the two, and Aside takes no writer lock, so that path still awaits
+             * before the restore begins: a target edited after the copy would otherwise be
+             * rewritten by a confirmation that never described it.
+             *
+             * A refusal here leaves the copied history and the saved preference in place. That is
+             * deliberate: the copy is this operation's own history rather than a change to the
+             * operator's file, and unwinding it would need a transaction across two stores and a
+             * configuration write for no gain the operator can see.
+             */
+            ...(options?.revalidateBeforeWrite
+              ? { revalidate: (frozen: IntegrationWriteInput) => options.revalidateBeforeWrite!(frozen) }
+              : {}),
+          },
+        ),
+        profileId: profile.id,
+      };
     } catch (error) { return asideProfileFailure(profile.id, error); }
   });
 }

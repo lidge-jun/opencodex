@@ -4,12 +4,13 @@ import { resolve } from "node:path";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
+import { en } from "../src/i18n/en";
 import { clearClientResourceStoresForTests } from "../src/client-resource";
 import Usage from "../src/pages/Usage";
 
 const globals = ["document", "window", "navigator", "localStorage", "sessionStorage", "ResizeObserver", "IS_REACT_ACT_ENVIRONMENT"] as const;
 const originalFetch = globalThis.fetch;
-let previousGlobals: Record<(typeof globals)[number], unknown>;
+let previousGlobals: Record<(typeof globals)[number], PropertyDescriptor | undefined>;
 let testWindow: Window;
 let root: Root | undefined;
 let container: HTMLElement;
@@ -19,7 +20,7 @@ type RequestGate = { url: string; resolve: (response: Response) => void };
 let requests: RequestGate[];
 
 beforeEach(() => {
-  previousGlobals = Object.fromEntries(globals.map(key => [key, Reflect.get(globalThis, key)])) as typeof previousGlobals;
+  previousGlobals = Object.fromEntries(globals.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)])) as typeof previousGlobals;
   clearClientResourceStoresForTests();
   testWindow = new Window({ url: "http://localhost/" });
   testWindow.localStorage.setItem("ocx-lang", "en");
@@ -46,7 +47,11 @@ afterEach(async () => {
   globalThis.fetch = originalFetch;
   clearClientResourceStoresForTests();
   testWindow.close();
-  for (const key of globals) Object.defineProperty(globalThis, key, { configurable: true, value: previousGlobals[key] });
+  for (const key of globals) {
+    const descriptor = previousGlobals[key];
+    if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+    else Reflect.deleteProperty(globalThis, key);
+  }
 });
 
 async function mount(connected = false) {
@@ -81,9 +86,103 @@ function report(gate: RequestGate, marker: string, date = "2020-09-15") {
   };
 }
 
+test("Usage model table renders cache breakdown and marks unavailable telemetry", async () => {
+  await mount();
+  const data = report(requests[0], "cache-model");
+  data.models = [
+    {
+      ...data.models[0]!,
+      model: "cache-model",
+      totalTokens: 1_120,
+      inputTokens: 1_000,
+      outputTokens: 120,
+      cachedInputTokens: 600,
+      cacheReadInputTokens: 600,
+      cacheCreationInputTokens: 100,
+      cacheHitRate: 0.6,
+      cacheObservedInputTokens: 1_000,
+    },
+    {
+      ...data.models[0]!,
+      model: "partial-cache-model",
+      totalTokens: 1_000,
+      inputTokens: 1_000,
+      outputTokens: 0,
+      cachedInputTokens: 450,
+      cacheReadInputTokens: 450,
+      cacheCreationInputTokens: 0,
+      cacheHitRate: 0.9,
+      cacheObservedInputTokens: 500,
+    },
+    {
+      ...data.models[0]!,
+      model: "unknown-cache-model",
+      totalTokens: 110,
+      inputTokens: 100,
+      outputTokens: 10,
+    },
+  ];
+  await act(async () => { requests[0]!.resolve(Response.json(data)); });
+
+  const table = container.querySelector<HTMLElement>("#usage-section-models table");
+  expect(table).not.toBeNull();
+  // Header labels come from the catalog the page renders, so a copy change stays a
+  // one-place edit and this case keeps asserting the column ORDER it cares about --
+  // identity, then the three comparison figures, then the per-request detail with the
+  // five cache columns last.
+  expect([...table!.querySelectorAll("thead th")].map(cell => cell.textContent?.trim())).toEqual([
+    "logs.col.model", "logs.col.provider", "usage.col.share", "usage.col.tokens",
+    "usage.col.apiListPrice", "usage.col.requests", "usage.col.measured",
+    "usage.col.inputTokens", "usage.col.outputTokens", "usage.col.tokPerSec", "usage.col.cacheHits",
+    "usage.col.cacheWrites", "usage.col.cacheHitRate",
+  ].map(key => en[key as keyof typeof en]));
+  const rows = table!.querySelectorAll("tbody tr");
+  expect(rows).toHaveLength(3);
+  const cells = (row: Element) => [...row.querySelectorAll("td")].map(cell => cell.textContent?.trim());
+  // The hit-rate cell carries the rate and, when coverage is partial or absent, the same
+  // sentence twice over: a `title` for a pointer and an `sr-only` span for everyone else.
+  const hitRateCell = (row: Element) => row.querySelectorAll("td")[12]!;
+  const hitRate = (row: Element) => hitRateCell(row).querySelector(".usage-hit-rate")?.textContent?.trim();
+  const coverageNote = (row: Element) => hitRateCell(row).querySelector(".sr-only")?.textContent ?? null;
+  expect(cells(rows[0]!).slice(7, 12)).toEqual(["1000", "120", "—", "600", "100"]);
+  expect(hitRate(rows[0]!)).toBe("60%");
+  // A row whose cache detail covers its whole input needs no coverage caveat.
+  expect(hitRateCell(rows[0]!).getAttribute("title")).toBeNull();
+  expect(coverageNote(rows[0]!)).toBeNull();
+  // Half this row's input never reported cache detail. The rate is still an average over the
+  // half that did, so it is reported with its coverage rather than withheld.
+  const partialNote = en["usage.cacheHitRate.partial"].replace("{measured}", "500").replace("{total}", "1000");
+  expect(cells(rows[1]!).slice(10, 12)).toEqual(["450", "0"]);
+  expect(hitRate(rows[1]!)).toBe("90%");
+  expect(hitRateCell(rows[1]!).getAttribute("title")).toBe(partialNote);
+  expect(coverageNote(rows[1]!)).toBe(partialNote);
+  // Nothing in this row reported cache detail at all, which is the one case with no basis.
+  expect(cells(rows[2]!).slice(10, 12)).toEqual(["—", "—"]);
+  expect(hitRate(rows[2]!)).toBe("—");
+  expect(hitRateCell(rows[2]!).getAttribute("title")).toBe(en["usage.cacheHitRate.unmeasured"]);
+  expect(coverageNote(rows[2]!)).toBe(en["usage.cacheHitRate.unmeasured"]);
+});
+
 async function respond(index: number, marker: string, date?: string) {
   await act(async () => { requests[index].resolve(Response.json(report(requests[index], marker, date))); });
 }
+
+test("a stale connected report identifies ledger read failure instead of a hub outage", async () => {
+  await mount(true);
+  await respond(0, "last-readable-marker");
+  await act(async () => { root!.unmount(); });
+  root = undefined;
+  clearClientResourceStoresForTests();
+
+  await mount(true);
+  await act(async () => {
+    requests[1]!.resolve(Response.json({ error: "read_failed" }, { status: 500 }));
+  });
+
+  expect(container.textContent).toContain("last-readable-marker");
+  expect(container.textContent).toContain(en["usage.loadError"]);
+  expect(container.textContent).not.toContain(en["usage.hubOffline"]);
+});
 
 test("incomplete usage notice survives held cache and remains visible with no readable rows", async () => {
   await mount();
@@ -452,3 +551,44 @@ test("closing the panel retires a validation error instead of parking it out of 
   expect(requests).toHaveLength(1);
   expect(container.textContent).toContain("held-report-marker");
 });
+
+test("throughput renders in summary, Models and Providers with honest missing-sample feedback", async () => {
+  await mount();
+  const base = report(requests[0], "measured-model");
+  const measured = { throughputTokensPerSec: 20, throughputSamples: 2 };
+  const data = { ...base, summary: { ...base.summary, ...measured },
+    models: [{ ...base.models[0], ...measured }, { ...base.models[0], model: "unmeasured-model" }],
+    providers: [{ ...base.models[0], ...measured }, { ...base.models[0], provider: "anthropic" }],
+  };
+  await act(async () => { requests[0].resolve(Response.json(data)); });
+  const note = en["usage.throughput.title"].replace("{samples}", "2");
+  expect(container.querySelector(`.usage-cost-row[title]`)?.textContent).toContain("20.0");
+  for (const section of ["models", "providers"]) {
+    const rows = container.querySelectorAll(`#usage-section-${section} tbody tr`);
+    expect(rows[0]?.textContent).toContain("20.0 tok/s");
+    expect(rows[0]?.querySelector(`[title="${note}"]`)).not.toBeNull();
+    expect(rows[1]?.querySelector(`[title="${en["usage.throughput.unmeasured"]}"]`)?.textContent).toContain("—");
+  }
+});
+
+for (const invalid of [null, "20", "Infinity", NaN, Infinity, -Infinity, 0, -5]) {
+  test(`invalid throughput ${String(invalid)} is unavailable in every display`, async () => {
+    await mount();
+    const base = report(requests[0], "invalid-throughput-model");
+    const metric = { throughputTokensPerSec: invalid, throughputSamples: 2 };
+    const data = { ...base, summary: { ...base.summary, ...metric },
+      models: [{ ...base.models[0], ...metric }], providers: [{ ...base.models[0], ...metric }],
+    };
+    // A custom response keeps nonfinite values visible at the GUI boundary; JSON encodes them as null.
+    const response = Response.json(data);
+    response.json = async () => data;
+    await act(async () => { requests[0].resolve(response); });
+    const title = en["usage.throughput.unmeasured"];
+    expect(container.querySelector(`.usage-cost-row[title="${title}"] .stat-value`)?.textContent).toBe("—");
+    for (const section of ["models", "providers"]) {
+      const cell = container.querySelector(`#usage-section-${section} tbody td[title="${title}"]`);
+      expect(cell?.textContent).toBe("—");
+      expect(cell?.querySelector(".sr-only")).toBeNull();
+    }
+  });
+}

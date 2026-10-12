@@ -22,9 +22,9 @@ import { statSync } from "node:fs";
 
 import { getConfigPath, readConfigDiagnostics } from "../config";
 import type { OcxConfig, OcxProviderConfig } from "../types";
+import { refreshConfigDerivedRegistries } from "../config/derived-registries";
 import {
   refreshPreservedProviderOwner,
-  refreshUserCostOverlays,
   registerPreservedProviderOwner,
   setPreservedDiskOnlyProviders,
   unregisterPreservedProviderOwner,
@@ -169,7 +169,7 @@ export function reconcileUserCostOverlaysFromDisk(liveConfig?: OcxConfig | null)
   }
   // Refresh from the DISK config: overlays for providers only added by the
   // external edit are display-only and must still resolve for historical rows.
-  refreshUserCostOverlays(disk);
+  refreshConfigDerivedRegistries(disk);
   return true;
 }
 
@@ -190,7 +190,7 @@ function reconcileForOwners(): void {
     // cache resurrect providers that were intentionally removed.
     setPreservedDiskOnlyProviders(null);
   }
-  refreshUserCostOverlays(disk);
+  refreshConfigDerivedRegistries(disk);
 }
 
 /** Test-only observation that proves the timer actually read an invalid config fallback. */

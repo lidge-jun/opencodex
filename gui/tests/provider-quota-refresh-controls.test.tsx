@@ -14,6 +14,7 @@ import { createRoot, type Root } from "react-dom/client";
 import ProviderUsage from "../src/components/provider-workspace/ProviderUsage";
 import ProviderAuthPanel from "../src/components/provider-workspace/ProviderAuthPanel";
 import { LanguageProvider } from "../src/i18n/provider";
+import { en } from "../src/i18n/en";
 import type { WorkspaceItem } from "../src/provider-workspace/catalog";
 import type { ProviderAuthHandlers } from "../src/components/provider-workspace/types";
 
@@ -89,6 +90,23 @@ test("the usage tab reports the real outcome, not the click", async () => {
 
   await act(async () => { settle(true); await Promise.resolve(); });
   expect(host.textContent).toContain("Quota check completed");
+});
+
+test("Anthropic account threshold editor uses its pool default, preserves zero, and resets with null", async () => {
+  const calls: Array<number | null> = [];
+  const item = { ...oauthItem, name: "anthropic", adapter: "anthropic" };
+  const handlers = authHandlers({ onAccountThreshold: async (_provider, _account, value) => { calls.push(value); return true; } });
+  const row = { id: "threshold-account", active: true, autoSwitchThresholdOverride: null, autoSwitchThreshold: 65 };
+  await render(<ProviderAuthPanel item={item} apiBase="" accounts={[row]} authHandlers={handlers} />);
+  const toggle = () => host.querySelector('[aria-label^="Override global usage threshold"]') as HTMLButtonElement;
+  expect(toggle()).not.toBeNull();
+  await act(async () => { toggle().click(); }); expect(calls).toEqual([65]);
+  await render(<ProviderAuthPanel item={item} apiBase="" accounts={[{ ...row, autoSwitchThresholdOverride: 0 }]} authHandlers={handlers} />);
+  const input = host.querySelector('#anthropic-threshold-threshold-account') as HTMLInputElement;
+  expect(input.value).toBe("0");
+  await act(async () => { toggle().click(); }); expect(calls).toEqual([65, null]);
+  await render(<ProviderAuthPanel item={item} apiBase="" accounts={[{ id: row.id, active: true }]} authHandlers={handlers} />);
+  expect(toggle()).toBeNull(); // Old servers do not acquire a synthetic capability.
 });
 
 test("a failed read is reported as a failure", async () => {
@@ -169,6 +187,34 @@ test("the accounts surface omits the control when the page cannot force a read",
     <ProviderAuthPanel item={oauthItem} apiBase="" accounts={[account]} authHandlers={authHandlers()} />,
   );
   expect(findButton("Refresh quotas")).toBeNull();
+});
+
+test.each(["google-antigravity", "anthropic"])("%s OAuth accounts expose pause and resume controls", async provider => {
+  const calls: Array<{ provider: string; accountId: string; paused: boolean }> = [];
+  const handlers = authHandlers({
+    onPauseAccount: async (provider, row, paused) => { calls.push({ provider, accountId: row.id, paused }); },
+  });
+  const item = { ...oauthItem, name: provider };
+
+  await render(<ProviderAuthPanel item={item} apiBase="" accounts={[
+    { id: "ga-active", email: "a@example.test", active: true, paused: false },
+  ]} authHandlers={handlers} />);
+  const pause = findButton("Pause");
+  expect(pause).not.toBeNull();
+  await act(async () => { pause!.click(); });
+  expect(calls).toEqual([{ provider, accountId: "ga-active", paused: true }]);
+
+  await render(<ProviderAuthPanel item={item} apiBase="" accounts={[
+    { id: "ga-active", email: "a@example.test", active: true, paused: true },
+  ]} authHandlers={handlers} />);
+  const resume = findButton("Resume");
+  expect(resume).not.toBeNull();
+  expect(resume!.getAttribute("title")).toBe(en["pws.accountPausedHint"]);
+  expect(host.textContent).toContain(en["pws.accountPausedHint"]);
+  expect(host.textContent).not.toContain(en["codexAuth.pausedHint"]);
+  expect(en["pws.accountPausedHint"]).not.toBe(en["codexAuth.pausedHint"]);
+  await act(async () => { resume!.click(); });
+  expect(calls[1]).toEqual({ provider, accountId: "ga-active", paused: false });
 });
 
 test("API-key rows use independent shared credit readings and the same awaited refresh control", async () => {

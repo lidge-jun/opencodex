@@ -14,7 +14,7 @@
 import { loadConfig } from "../config";
 import type { OcxConfig, OcxTokenGuardianConfig } from "../types";
 import { listAccounts } from "./store";
-import { getValidAccessTokenForAccount, listOAuthProviders, OAuthLoginRequiredError, resolveRefreshPolicy } from "./index";
+import { getValidAccessTokenForAccount, listOAuthProviders, OAuthAccountPausedError, OAuthLoginRequiredError, resolveRefreshPolicy } from "./index";
 import {
   getValidCodexToken,
   listCodexAccountIds,
@@ -29,6 +29,7 @@ import { codexWarmupFailureReason, warmCodexAccount } from "../codex/warmup";
 import { getMainAccountToken, MAIN_CODEX_ACCOUNT_ID } from "../codex/main-account";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
 import { providerCodexAccountMode } from "../providers/registry";
+import { configuredAnthropicInstance } from "../providers/anthropic-instance";
 import { captureConfigGeneration, type GenerationContext } from "../lib/state-store-sweeper";
 import { tryAcquireNativeMainProfileClaim } from "../codex/native-main-admission";
 
@@ -141,11 +142,13 @@ export async function guardianSweep(nowMs: number = Date.now()): Promise<Guardia
   const tasks: Array<() => Promise<void>> = [];
 
   // A) OAuth providers — every account in each provider's set (multiauth keep-alive),
-  // skipping accounts already marked needsReauth (terminal; only a re-login fixes them).
+  // skipping accounts already marked needsReauth (terminal; only a re-login fixes them) or
+  // paused by the operator (manual exclusion from all automatic account use).
   for (const provider of listOAuthProviders()) {
+    if (provider === "anthropic2" && configuredAnthropicInstance(config, provider) === undefined) continue;
     if (resolveRefreshPolicy(provider, config) !== "proactive") continue;
     for (const account of listAccounts(provider)) {
-      if (account.needsReauth) continue;
+      if (account.needsReauth || account.paused) continue;
       if (account.credential.expires > nowMs + horizonMs) continue;
       const key = `oauth:${provider}:${account.id}`;
       if (inBackoff(key, nowMs)) { result.skippedBackoff.push(key); continue; }
@@ -155,6 +158,9 @@ export async function guardianSweep(nowMs: number = Date.now()): Promise<Guardia
           backoff.delete(key);
           result.refreshed.push(key);
         } catch (err) {
+          // The account may have been paused after this task was queued. It is no longer an
+          // automatic refresh failure and must not acquire retry backoff.
+          if (err instanceof OAuthAccountPausedError) return;
           // Terminal grant failures surface as OAuthLoginRequiredError (account marked
           // needsReauth by the resolver) — back off at the ceiling; transient errors backoff exponentially.
           const permanent = err instanceof OAuthLoginRequiredError;

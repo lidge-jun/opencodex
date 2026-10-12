@@ -1,10 +1,19 @@
-import { describe, expect, mock, test } from "bun:test";
+import { afterAll, describe, expect, mock, test } from "bun:test";
 
 // The default downloader inside connectPublicHttps used to forward `maxBytes: undefined`
 // to pinnedHttpGet, whose cap is optional — so a caller that omitted a limit removed the
 // byte ceiling entirely instead of inheriting MAX_DOWNLOAD_BYTES. Both production callers
 // happen to pass an explicit limit today, which is why the existing suites (they all
 // inject `pinnedDownload` and bypass the default path) could not see it.
+
+// `mock.module` outlives this file: Bun keeps both overrides below for every file that
+// runs after this one in the same process. Keep the real modules and put them back.
+const realDns = { ...(await import("node:dns/promises")) };
+const realPinnedHttp = { ...(await import("../../src/lib/pinned-http")) };
+afterAll(() => {
+  mock.module("node:dns/promises", () => realDns);
+  mock.module("../../src/lib/pinned-http", () => realPinnedHttp);
+});
 
 const lookupMock = mock(async (): Promise<{ address: string; family: number }[]> => [
   { address: "93.184.216.34", family: 4 },

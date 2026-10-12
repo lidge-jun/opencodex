@@ -51,14 +51,28 @@ account before the request is forwarded upstream. The rule is intentionally spli
   coalesces simultaneous windows into one request, and durably persists both reset timestamps to
   prevent duplicate work after restarts. Paused accounts and accounts
   requiring reauthentication are skipped. Activation captures successful response quota headers;
-  opted-in idle accounts also refresh stale quota metadata at most once every five minutes,
-  without needing an open dashboard. Observed reset boundaries are retained across restarts
+  known reset times are checked locally each minute without periodic quota queries, even when
+  the cached usage is old or the proxy restarts. Only missing reset times need a metadata query
+  after the five-minute freshness guard. Unresolved discovery and failed activations retry after
+  5, 10, 20, 40, then at most every 60 minutes; these retry delays reset on proxy restart.
+  Successful response headers seed the next window without an extra query when available.
+  Dashboard refreshes and optional reset-notification polling remain independent.
+  Observed reset boundaries are retained across restarts
   until completed, so a moving idle-window timestamp cannot erase a pending activation.
   Metadata refresh uses the existing bounded authentication recovery; an inference 401 marks
   the rejected credential for reauthentication instead of repeatedly spending retries on it.
   Failures log only an opaque account label and a status-only reason.
   This is separate from reset-window routing: routing chooses an account for incoming work, while
   activation sends one request to a specific opted-in account only after its own reset is due.
+
+**Quota-query pacing:** Main-account hard-lock recovery waits for the known blocking reset,
+then queries to confirm recovery; time alone never unlocks the account. Without a future reset,
+background recovery uses capped 5/10/20/40/60-minute backoff while the account remains blocked. In Pool mode, ordinary main/pool usage queries
+share failure backoff (5, 10, 20, 40, then 60 minutes) for transport failures, non-auth HTTP failures, and unusable 200 bodies,
+including forced refreshes; `Retry-After` can extend that wait. Existing 401/403 authentication
+handling remains unchanged. Only usable usage clears backoff; concurrent same-key queries share the
+settled result of one read. Replaced credentials have separate
+retry state, and stale snapshots are never marked fresh. These delays are process-local; main forced refreshes outside Pool mode retain their independent behavior.
 
 **Downgrade note:** Before running an older version, remove only `nextFiveHourResetAt` and
 `nextWeeklyResetAt` from automatic activation settings. Older strict readers reject these new

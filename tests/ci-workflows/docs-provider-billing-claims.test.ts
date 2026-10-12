@@ -89,7 +89,7 @@ describe("provider billing claims", () => {
 
   test("the login-only providers are named so their absence is not read as an omission", async () => {
     const section = await billingSection();
-    expect(section).toContain("Cursor, Kiro and Nous Portal are login-only");
+    expect(section).toContain("Cursor, Kiro, Zed Hosted AI and Nous Portal are login-only");
     // Antigravity is the provider a reader is most likely to mistake for a dual-mode one, because
     // a `google` preset sits beside it in the catalog. It is a different product, so it belongs
     // here rather than in the table above -- a row there would contradict its own heading.

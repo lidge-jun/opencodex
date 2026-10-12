@@ -1,0 +1,499 @@
+import { mkdirSync, readFileSync, unlinkSync } from "node:fs";
+import { join } from "node:path";
+import { atomicWriteFile } from "../config/atomic-write";
+import { linkDir, linkKnownHostsPath, linkStorePath } from "./paths";
+import { buildTunnelArgv } from "./ssh-argv";
+import { createSshRunner, type SshChild, type SshRunner } from "./ssh-runner";
+import {
+  classifySshStderr,
+  dueForSpawn,
+  failedTunnel,
+  HOME_TUNNEL_RETRY_POLICY,
+  IDLE,
+  reduceTunnel,
+  type TunnelState,
+} from "./tunnel-state";
+import { emptyLinkStore, readLinkStore, type LinkRecord, type LinkStore } from "./store";
+
+export type LinkTunnelStatus =
+  | {
+    linkId: string;
+    direction: "hub-initiated";
+    state: TunnelState;
+    pid: number | null;
+    orphan?: "orphan-unverified";
+  }
+  | {
+    linkId: string;
+    direction: "client-initiated";
+    state: "client-owned";
+    pid: null;
+  };
+
+export interface LinkSupervisor {
+  start(): void;
+  ensureStarted(): Promise<void>;
+  reload(): Promise<void>;
+  stopLink(linkId: string): Promise<void>;
+  /** Reserve a link against reconnects and automatic spawns for a removal transaction. */
+  holdLink?(linkId: string): () => void;
+  /**
+   * Restart one Home-initiated tunnel now: stop its child, forget the backoff or failed state,
+   * and spawn a fresh attempt. False when the link is not a Home-initiated link of this store.
+   */
+  reconnect(linkId: string): Promise<boolean>;
+  status(): readonly LinkTunnelStatus[];
+  notifyAuthenticatedRequest?(apiKeyId: string): void;
+  stop(): Promise<void>;
+}
+
+interface Pidfile {
+  version: 1;
+  linkId: string;
+  pid: number;
+  argv: string[];
+}
+
+export interface LinkSupervisorDeps {
+  readStore?: () => LinkStore;
+  writeStore?: (store: LinkStore) => void;
+  runner?: SshRunner;
+  now?: () => number;
+  setTimer?: (callback: () => void, ms: number) => ReturnType<typeof setInterval>;
+  clearTimer?: (timer: ReturnType<typeof setInterval>) => void;
+  readProcessArgv?: (pid: number) => readonly string[] | null;
+  killProcess?: (pid: number) => void;
+  pidfileDir?: string;
+  readPidfile?: (path: string) => Pidfile | null;
+  writePidfile?: (path: string, pidfile: Pidfile) => void;
+  removePidfile?: (path: string) => void;
+  platform?: NodeJS.Platform;
+  random?: () => number;
+  apiKeys?: () => readonly { id: string; name: string }[];
+  revokeApiKey?: (id: string) => boolean;
+  warn?: (message: string) => void;
+}
+
+const TIMER_MS = 1_000;
+const SPAWN_GRACE_MS = 5_000;
+/**
+ * A retry runs while the network may still be down, and ssh can wait out its whole ConnectTimeout
+ * (10 s for the TCP connect, the SSH handshake and key exchange, see ssh-argv.ts) before it exits.
+ * A retry is promoted only once it has outlived that, so an attempt that never reached the Child
+ * does not read connected and restart the outage clock. Like the first attempt's five seconds,
+ * liveness is a heuristic: authentication and the forward request come after ConnectTimeout, so
+ * one that stalls past the grace reads connected until ssh exits.
+ */
+const RETRY_GRACE_MS = 15_000;
+
+/** A retry whose ssh child is still running: reconnecting, or failed under the retry policy. */
+function retryInFlight(state: TunnelState): boolean {
+  return (state.kind === "reconnecting" || state.kind === "failed") && state.inFlight === true;
+}
+
+function sameArgv(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function parsePidfile(text: string): Pidfile | null {
+  try {
+    const raw: unknown = JSON.parse(text);
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    const body = raw as Record<string, unknown>;
+    if (body.version !== 1 || typeof body.linkId !== "string" || typeof body.pid !== "number"
+      || !Number.isSafeInteger(body.pid) || body.pid < 1 || !Array.isArray(body.argv)
+      || body.argv.some(value => typeof value !== "string")) return null;
+    return { version: 1, linkId: body.linkId, pid: body.pid, argv: body.argv as string[] };
+  } catch {
+    return null;
+  }
+}
+
+function linuxProcessArgv(pid: number): readonly string[] | null {
+  try {
+    const values = readFileSync(`/proc/${pid}/cmdline`).toString().split("\0");
+    if (values.at(-1) === "") values.pop();
+    return values.length > 0 ? values : null;
+  } catch {
+    return null;
+  }
+}
+
+function defaultKillProcess(pid: number): void {
+  try { process.kill(pid, "SIGTERM"); } catch { /* the process may already have exited */ }
+}
+
+export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervisor {
+  const storePath = linkStorePath();
+  const storeDir = deps.pidfileDir ?? linkDir();
+  const readStore = deps.readStore ?? (() => readLinkStore(storePath));
+  const runner = deps.runner ?? createSshRunner();
+  const now = deps.now ?? (() => Date.now());
+  const setTimer = deps.setTimer ?? ((callback, ms) => setInterval(callback, ms));
+  const clearTimer = deps.clearTimer ?? ((timer: ReturnType<typeof setInterval>) => clearInterval(timer));
+  const platform = deps.platform ?? process.platform;
+  const readProcessArgv = deps.readProcessArgv ?? (platform === "linux" ? linuxProcessArgv : () => null);
+  const killProcess = deps.killProcess ?? defaultKillProcess;
+  const readPidfile = deps.readPidfile ?? ((path: string) => {
+    try { return parsePidfile(readFileSync(path, "utf8")); } catch { return null; }
+  });
+  const writePidfile = deps.writePidfile ?? ((path: string, pidfile: Pidfile) => {
+    mkdirSync(storeDir, { recursive: true, mode: 0o700 });
+    atomicWriteFile(path, `${JSON.stringify(pidfile)}\n`);
+  });
+  const removePidfile = deps.removePidfile ?? ((path: string) => {
+    try { unlinkSync(path); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  });
+  const warn = deps.warn ?? ((message: string) => console.warn(message));
+
+  let store: LinkStore = emptyLinkStore();
+  let started = false;
+  let stopping = false;
+  let lifecycleFlight: Promise<void> | undefined;
+  let lifecycleRevision = 0;
+  let timer: ReturnType<typeof setInterval> | undefined;
+  const states = new Map<string, TunnelState>();
+  const children = new Map<string, { child: SshChild; argv: readonly string[]; spawnedAt: number }>();
+  /** Per-link generation, advanced by spawns and explicit stop/removal reservations. */
+  const generations = new Map<string, number>();
+  const linkRevisions = new Map<string, number>();
+  /** Reconnects in flight, so overlapping requests for one link restart it once. */
+  const reconnects = new Map<string, Promise<boolean>>();
+  const holds = new Map<string, number>();
+  const orphanUnverified = new Set<string>();
+  /** The generation of the child whose exit is still being classified, per link. */
+  const exiting = new Map<string, number>();
+  const recordInstances = new Map<string, string>();
+
+  const reconcileApiKeys = (): void => {
+    const keys = deps.apiKeys?.() ?? [];
+    if (!deps.revokeApiKey || keys.length === 0) return;
+    const referenced = new Set(store.links.map(link => link.apiKeyId));
+    for (const key of keys) {
+      if (!key.name.startsWith("link:") || referenced.has(key.id)) continue;
+      try {
+        if (deps.revokeApiKey(key.id)) warn(`[link] revoked orphaned link key id=${key.id}`);
+      } catch (error) {
+        warn(`[link] orphaned link key revoke failed id=${key.id}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  };
+
+  const pidfilePath = (linkId: string): string => join(storeDir, `${linkId}.pid`);
+
+  const recordInstance = (record: LinkRecord, listenerPort: number | null): string => JSON.stringify([
+    record.id,
+    record.alias,
+    record.direction,
+    record.hostKeyFingerprint,
+    record.tunnelPort,
+    record.apiKeyId,
+    record.createdAt,
+    listenerPort,
+  ]);
+
+  const conditionalRemovePidfile = (linkId: string, pid: number): void => {
+    const path = pidfilePath(linkId);
+    const current = readPidfile(path);
+    if (current?.linkId === linkId && current.pid === pid) removePidfile(path);
+  };
+
+  const reapOrphans = (): void => {
+    for (const record of store.links) {
+      const pidfile = readPidfile(pidfilePath(record.id));
+      if (!pidfile || pidfile.linkId !== record.id) continue;
+      // macOS deliberately has no exact argv source here. A ps rendering is not an identity proof.
+      if (platform !== "linux") {
+        orphanUnverified.add(record.id);
+        continue;
+      }
+      const actualArgv = readProcessArgv(pidfile.pid);
+      if (actualArgv && sameArgv(actualArgv, pidfile.argv)) {
+        try { killProcess(pidfile.pid); } finally { removePidfile(pidfilePath(record.id)); }
+      } else {
+        orphanUnverified.add(record.id);
+      }
+    }
+  };
+
+  const setEvent = (linkId: string, event: Parameters<typeof reduceTunnel>[1]): TunnelState => {
+    const next = reduceTunnel(states.get(linkId) ?? IDLE, event, deps.random, HOME_TUNNEL_RETRY_POLICY);
+    states.set(linkId, next);
+    return next;
+  };
+
+  const spawnFor = (record: LinkRecord): void => {
+    if (stopping || holds.has(record.id) || record.direction !== "hub-initiated" || children.has(record.id)) return;
+    // Only a fresh link or a due attempt spawns. A reload must neither skip the backoff nor start
+    // a second child while an exited one is still reporting its stderr.
+    const prior = states.get(record.id);
+    if (prior && prior.kind !== "idle" && !dueForSpawn(prior, now())) return;
+    if (store.listenerPort === null) {
+      states.set(record.id, { kind: "failed", since: now(), reason: "forward" });
+      return;
+    }
+    let argv: string[];
+    try {
+      argv = buildTunnelArgv({
+        alias: record.alias,
+        direction: "R",
+        bindPort: record.tunnelPort,
+        targetPort: store.listenerPort,
+        knownHostsFile: linkKnownHostsPath(),
+      });
+      const child = runner.spawnTunnel(argv);
+      const generation = (generations.get(record.id) ?? 0) + 1;
+      generations.set(record.id, generation);
+      // An older child's exit still being classified no longer speaks for this link.
+      exiting.delete(record.id);
+      children.set(record.id, { child, argv, spawnedAt: now() });
+      orphanUnverified.delete(record.id);
+      setEvent(record.id, { type: "spawn", now: now() });
+      writePidfile(pidfilePath(record.id), { version: 1, linkId: record.id, pid: child.pid, argv });
+      void child.exited.then(async () => {
+        if (children.get(record.id)?.child !== child) return;
+        children.delete(record.id);
+        conditionalRemovePidfile(record.id, child.pid);
+        if (stopping) return;
+        exiting.set(record.id, generation);
+        try {
+          let stderr = "";
+          // An unreadable stderr (the runner rejects it past its size cap) still reports the exit.
+          try { stderr = child.stderr ? await child.stderr : ""; } catch { /* classified as unknown */ }
+          // A reconnect may have started a fresh child meanwhile; its own lifecycle owns the state.
+          if (generations.get(record.id) !== generation) return;
+          setEvent(record.id, { type: "exit", now: now(), stderrClass: classifySshStderr(stderr) });
+        } finally {
+          if (exiting.get(record.id) === generation) exiting.delete(record.id);
+        }
+      }).catch(() => {
+        if (children.get(record.id)?.child !== child) return;
+        children.delete(record.id);
+        conditionalRemovePidfile(record.id, child.pid);
+        if (!stopping) setEvent(record.id, { type: "exit", now: now(), stderrClass: "network" });
+      });
+    } catch {
+      const at = now();
+      states.set(record.id, failedTunnel("forward", at, HOME_TUNNEL_RETRY_POLICY, prior?.kind === "failed" ? prior.since : at));
+    }
+  };
+
+  const tick = (): void => {
+    if (stopping || lifecycleFlight) return;
+    const current = now();
+    for (const record of store.links) {
+      if (record.direction !== "hub-initiated") continue;
+      if (holds.has(record.id)) continue;
+      // The exit is still being classified. Failing the link on the outage clock now would make
+      // a later host-key or auth exit land on a failed state that ignores it.
+      if (exiting.has(record.id)) continue;
+      const before = states.get(record.id) ?? IDLE;
+      const child = children.get(record.id);
+      // Promotion is checked before the outage limit, so a child that has outlived its grace by the
+      // time this tick runs (at the limit, or late after a sleep) is promoted rather than killed.
+      // An idle Child may send no catalog request for hours; for a retry, staying up past the
+      // retry grace is the proof instead, as five seconds is for a first attempt.
+      if (child && ((before.kind === "connecting" && current - before.since >= SPAWN_GRACE_MS)
+        || (retryInFlight(before) && current - child.spawnedAt >= RETRY_GRACE_MS))) {
+        setEvent(record.id, { type: "ready", now: current });
+        continue;
+      }
+      const next = setEvent(record.id, { type: "tick", now: current });
+      if (next.kind === "failed" && !next.inFlight && child && retryInFlight(before)) {
+        // A retry started just before the outage limit has not had its grace yet. It carries on as
+        // the failed state's retry instead of being killed with a link that may already be back.
+        states.set(record.id, { ...next, inFlight: true });
+      } else if (next.kind === "failed" && !next.inFlight && child) {
+        child.child.kill("SIGTERM");
+        children.delete(record.id);
+        conditionalRemovePidfile(record.id, child.child.pid);
+      } else if (dueForSpawn(next, current)) {
+        spawnFor(record);
+      }
+    }
+  };
+
+  const syncTimer = (): void => {
+    const hasHubLinks = store.links.some(record => record.direction === "hub-initiated");
+    if (hasHubLinks && timer === undefined && !stopping) timer = setTimer(tick, TIMER_MS);
+    if (!hasHubLinks && timer !== undefined) {
+      clearTimer(timer);
+      timer = undefined;
+    }
+  };
+
+  const begin = (): void => {
+    if (started || stopping) return;
+    store = readStore();
+    reconcileApiKeys();
+    reapOrphans();
+    started = true;
+    for (const record of store.links) recordInstances.set(record.id, recordInstance(record, store.listenerPort));
+    for (const record of store.links) {
+      if (record.direction === "hub-initiated") spawnFor(record);
+    }
+    syncTimer();
+  };
+
+  const runLifecycle = (operation: () => void | Promise<void>): Promise<void> => {
+    // Every caller keeps its own operation and completion; no later reload can replace a stop.
+    const flight = (lifecycleFlight ?? Promise.resolve()).catch(() => {}).then(operation).finally(() => {
+      if (lifecycleFlight === flight) lifecycleFlight = undefined;
+    });
+    lifecycleFlight = flight;
+    return flight;
+  };
+
+  const stopChild = async (linkId: string): Promise<void> => {
+    const current = children.get(linkId);
+    if (!current) {
+      states.set(linkId, IDLE);
+      return;
+    }
+    const generation = generations.get(linkId);
+    children.delete(linkId);
+    current.child.kill("SIGTERM");
+    await current.child.exited;
+    conditionalRemovePidfile(linkId, current.child.pid);
+    // A stop or removal reservation made while this child exited owns the next state.
+    if (generations.get(linkId) === generation) states.set(linkId, IDLE);
+  };
+
+  const invalidateLink = (linkId: string): void => {
+    linkRevisions.set(linkId, (linkRevisions.get(linkId) ?? 0) + 1);
+    generations.set(linkId, (generations.get(linkId) ?? 0) + 1);
+  };
+
+  const holdLink = (linkId: string): (() => void) => {
+    holds.set(linkId, (holds.get(linkId) ?? 0) + 1);
+    invalidateLink(linkId);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const remaining = (holds.get(linkId) ?? 1) - 1;
+      if (remaining) holds.set(linkId, remaining); else holds.delete(linkId);
+    };
+  };
+
+  return {
+    start() {
+      if (lifecycleFlight) return;
+      begin();
+    },
+    ensureStarted() {
+      return runLifecycle(begin);
+    },
+    async reload() {
+      lifecycleRevision += 1;
+      await runLifecycle(async () => {
+        if (stopping) return;
+        if (!started) {
+          begin();
+          return;
+        }
+        const nextStore = readStore();
+        const nextInstances = new Map(nextStore.links.map(record => [record.id, recordInstance(record, nextStore.listenerPort)]));
+        const changed = new Set<string>();
+        for (const record of nextStore.links) {
+          if (recordInstances.get(record.id) !== undefined && recordInstances.get(record.id) !== nextInstances.get(record.id)) {
+            changed.add(record.id);
+          }
+        }
+        store = nextStore;
+        for (const [linkId] of [...children]) {
+          if (nextInstances.has(linkId) && !changed.has(linkId)) continue;
+          await stopChild(linkId);
+          states.delete(linkId);
+          orphanUnverified.delete(linkId);
+          recordInstances.delete(linkId);
+          if (stopping) return;
+        }
+        for (const record of nextStore.links) {
+          if (changed.has(record.id)) {
+            states.delete(record.id);
+            orphanUnverified.delete(record.id);
+          }
+        }
+        recordInstances.clear();
+        for (const [linkId, instance] of nextInstances) recordInstances.set(linkId, instance);
+        for (const record of nextStore.links) {
+          if (stopping || record.direction !== "hub-initiated" || children.has(record.id)) continue;
+          spawnFor(record);
+        }
+        syncTimer();
+      });
+    },
+    stopLink(linkId: string) {
+      invalidateLink(linkId);
+      return runLifecycle(() => stopChild(linkId));
+    },
+    holdLink,
+    reconnect(linkId: string) {
+      const inFlight = reconnects.get(linkId);
+      if (inFlight) return inFlight;
+      const linkRevision = linkRevisions.get(linkId);
+      let restarted = false;
+      const flight = runLifecycle(async () => {
+        if (stopping || !started || holds.has(linkId) || linkRevisions.get(linkId) !== linkRevision) return;
+        const record = store.links.find(link => link.id === linkId && link.direction === "hub-initiated");
+        if (!record) return;
+        // A preceding reload may have spawned a new generation; it is the current one we drain.
+        const generation = generations.get(linkId);
+        const revision = lifecycleRevision;
+        const instance = recordInstance(record, store.listenerPort);
+        await stopChild(linkId);
+        const latest = readStore();
+        const fresh = latest.links.find(link => link.id === linkId && link.direction === "hub-initiated");
+        if (stopping || holds.has(linkId) || generations.get(linkId) !== generation
+          || lifecycleRevision !== revision || !fresh || recordInstance(fresh, latest.listenerPort) !== instance) return;
+        spawnFor(fresh);
+        restarted = true;
+      }).then(() => restarted).finally(() => { reconnects.delete(linkId); });
+      reconnects.set(linkId, flight);
+      return flight;
+    },
+    notifyAuthenticatedRequest(apiKeyId: string) {
+      for (const record of store.links) {
+        if (record.direction === "hub-initiated" && record.apiKeyId === apiKeyId && children.has(record.id)) {
+          const state = states.get(record.id);
+          if (state?.kind === "connecting" || state?.kind === "reconnecting" || (state && retryInFlight(state))) {
+            setEvent(record.id, { type: "ready", now: now() });
+          }
+        }
+      }
+    },
+    status() {
+      return store.links.map(record => {
+        if (record.direction === "client-initiated") {
+          return { linkId: record.id, direction: record.direction, state: "client-owned", pid: null };
+        }
+        const child = children.get(record.id);
+        return {
+          linkId: record.id,
+          direction: record.direction,
+          state: states.get(record.id) ?? IDLE,
+          pid: child?.child.pid ?? null,
+          ...(orphanUnverified.has(record.id) ? { orphan: "orphan-unverified" as const } : {}),
+        };
+      });
+    },
+    async stop() {
+      stopping = true;
+      if (timer !== undefined) {
+        clearTimer(timer);
+        timer = undefined;
+      }
+      await runLifecycle(async () => {
+        await Promise.all([...children.keys()].map(stopChild));
+        for (const record of store.links) {
+          if (record.direction === "hub-initiated") states.set(record.id, IDLE);
+        }
+      });
+    },
+  };
+}
+
+export type { Pidfile };

@@ -1,51 +1,52 @@
 import { expect, test } from "bun:test";
 
-test("ClaudeCode renders the denser workspace rail layout", async () => {
+test("ClaudeCode renders every section on one page without an inner rail", async () => {
   const page = await Bun.file(new URL("../src/pages/ClaudeCode.tsx", import.meta.url)).text();
   const app = await Bun.file(new URL("../src/App.tsx", import.meta.url)).text();
   // The Claude nav entry mounts a Code/Desktop tab wrapper; ClaudeCode itself is
-  // the Code tab body with a section rail to cut scroll.
+  // the Code tab body, laid out as one vertical page.
   const claude = await Bun.file(new URL("../src/pages/Claude.tsx", import.meta.url)).text();
 
-  expect(page).toContain("claudecode-workspace");
-  expect(page).toContain("ccw-body");
-  expect(page).toContain("ccw-main-head");
-  expect(page).toContain("selectedSection");
-  expect(page).toContain("claude.workspace.settings");
-  // Save stays in the pane head (visibility-toggled) so the Code/Desktop chrome does not jump.
-  expect(page).toContain('data-visible={sectionEditable ? "true" : "false"}');
+  expect(page).toContain("claudecode-workspace-shell claudecode-doc");
+  // The inner section rail made a second sidebar beside the app's own; it must not return.
+  expect(page).not.toContain("claudecode-workspace-rail");
+  expect(page).not.toContain("selectedSection");
+  // One Save bar for the page, with its own polite status line.
+  expect(page).toContain('className="ccw-savebar" role="region"');
+  expect(page).toContain('aria-live="polite" aria-atomic="true"');
 
-  // Claude is now a panel of the Integrations tab strip rather than its own
-  // top-level page, so App renders the shell and the shell renders Claude.
-  expect(app).toContain('<Integrations apiBase={sharedBase} machineApiBase={machineBase} connected={targets.connected} />');
+  // Claude lives as a tab inside Connect (Integrations), not as its own App slot.
+  expect(app).not.toContain("<Claude ");
   const integrations = await Bun.file(new URL("../src/pages/Integrations.tsx", import.meta.url)).text();
-  expect(integrations).toContain("<Claude apiBase={apiBase} active={active} />");
-  // Title/subtitle sit above the Code/Desktop strip (not inside each panel).
-  expect(claude).toContain("claude-page-intro");
-  expect(claude).toContain("claude.pageTitle");
-  expect(claude.indexOf("claude-page-intro")).toBeLessThan(claude.indexOf("claude-tabs"));
-  // Both children stay mounted so drafts survive a tab switch; `active` is what keeps the hidden
-  // one from fetching, so the two panels must be wired symmetrically.
-  // The inner gate is now ANDed with the outer panel's own `active`: a hidden
-  // Integrations tab must not leave its selected inner panel polling.
-  expect(claude).toContain("<ClaudeCode key={apiBase} apiBase={apiBase} active={active && tab === \"code\"} />");
-  expect(claude).toContain("active={active && tab === \"desktop\"}");
-  expect(claude).toContain("onPortChange={setDesktopPort}");
+  expect(integrations).toContain("<Claude apiBase={apiBase} active={active} embedded />");
+  // Standalone, one page head; embedded in Connect, the Connect strip names the page instead.
+  expect(claude).toContain('<h2>{t("nav.claude")}</h2>');
+  expect(claude).toContain("claude.pageSub");
+  // No sub-tab strip: Claude renders the Code content directly.
+  expect(claude).not.toContain('role="tablist"');
+  expect(claude).toContain("<ClaudeCode key={apiBase} apiBase={apiBase} active={active} />");
+  // Claude Desktop is its own Connect tab, rendered by Integrations rather than by Claude.
+  expect(claude).not.toContain("<ClaudeDesktop");
+  expect(integrations).toContain("<ClaudeDesktop key={apiBase} apiBase={apiBase} active={active} />");
 });
 
-test("ClaudeCode workspace sections remain available in source order", async () => {
+test("ClaudeCode sections follow the page order, master switch and Save bar last", async () => {
   const src = await Bun.file(new URL("../src/pages/ClaudeCode.tsx", import.meta.url)).text();
+  const render = src.slice(src.indexOf('<div className="claudecode-workspace-shell claudecode-doc">'));
 
   const order = [
-    "<ClaudeCodeSettingsCard",
+    "claude.firstParty.label",
     "<ClaudeCodeQuickstartSection",
+    "<ClaudeCodeSettingsCard",
     "<SmallFastModelSetting",
     "<ClaudeCodeModelMapSection",
     "<ClaudeCodeAliasesSection",
+    "{connectionRow}",
+    'className="ccw-savebar"',
   ];
   let cursor = -1;
   for (const marker of order) {
-    const at = src.indexOf(marker);
+    const at = render.indexOf(marker);
     expect(at).toBeGreaterThan(cursor);
     cursor = at;
   }

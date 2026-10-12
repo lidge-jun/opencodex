@@ -25,8 +25,12 @@ import {
   findExpectedPriceOverlay,
   findVerifiedPriceOverride,
   findPriorityPricingRule,
+  cursorFastPriceMultiplier,
+  cursorFastPriceSource,
+  cursorFastPriceSupported,
   findContextTier,
   isLongContext,
+  pricingFamilyProvider,
   type Cost4,
   type ExpectedPriceOverlay,
   type ExpectedPriceStatus,
@@ -257,18 +261,20 @@ function resolveMatchedPriceExact(
   // operator's explicit price is authoritative for the ~$ estimate.
   const userOverlay = userOverlayMatch(provider, modelId, userOverlays);
   if (userOverlay) return userOverlay;
+  if (!cursorFastPriceSupported(provider, modelId)) return null;
   const verifiedOverride = overlays === EXPECTED_PRICE_OVERLAYS
-    ? findVerifiedPriceOverride(provider, modelId)
+    ? findVerifiedPriceOverride(pricingFamilyProvider(provider), modelId)
     : undefined;
   if (verifiedOverride && verifiedOverride.status !== "unverified" && validCost4(verifiedOverride.cost4) && hasNonZeroCost(verifiedOverride.cost4)) {
     return {
       provider,
       modelId,
-      cost4: verifiedOverride.cost4,
+      cost4: multiplyCursorFastCost(verifiedOverride.cost4, provider, modelId),
       source: "expected",
       sourceRef: verifiedOverride.source,
       verifiedAt: verifiedOverride.verifiedAt,
       status: verifiedOverride.status,
+      ...cursorFastPriceProvenance(provider, modelId),
     };
   }
   const metadataProvider = resolveMetadataProvider(provider);
@@ -280,26 +286,48 @@ function resolveMatchedPriceExact(
       provider,
       modelId,
       jawcodeProvider: metadataProvider,
-      cost4: bundled.cost,
+      cost4: multiplyCursorFastCost(bundled.cost, provider, modelId),
       source: "jawcode",
       status: "verified",
+      ...cursorFastPriceProvenance(provider, modelId),
     };
   }
-  const overlay = findExpectedPriceOverlay(provider, modelId, overlays);
+  const overlay = findExpectedPriceOverlay(overlays === EXPECTED_PRICE_OVERLAYS ? pricingFamilyProvider(provider) : provider, modelId, overlays);
   if (!overlay || !validCost4(overlay.cost4) || !hasNonZeroCost(overlay.cost4)) {
-    return options.allowModelLevelFallback === false ? null : resolveModelLevelPrice(provider, modelId);
+    if (options.allowModelLevelFallback === false) return null;
+    const fallback = resolveModelLevelPrice(provider, modelId);
+    return fallback
+      ? { ...fallback, cost4: multiplyCursorFastCost(fallback.cost4, provider, modelId), ...cursorFastPriceProvenance(provider, modelId) }
+      : null;
   }
   if (overlay.status === "unverified") return null;
   return {
     provider,
     modelId,
     ...(metadataProvider ? { jawcodeProvider: metadataProvider } : {}),
-    cost4: overlay.cost4,
+    cost4: multiplyCursorFastCost(overlay.cost4, provider, modelId),
     source: "expected",
     sourceRef: overlay.source,
     verifiedAt: overlay.verifiedAt,
     status: overlay.status,
+    ...cursorFastPriceProvenance(provider, modelId),
   };
+}
+
+function multiplyCursorFastCost(cost4: Cost4, provider: string, modelId: string): Cost4 {
+  const multiplier = cursorFastPriceMultiplier(provider, modelId);
+  if (multiplier === 1) return cost4;
+  return {
+    input: cost4.input * multiplier,
+    output: cost4.output * multiplier,
+    cacheRead: cost4.cacheRead * multiplier,
+    cacheWrite: cost4.cacheWrite * multiplier,
+  };
+}
+
+function cursorFastPriceProvenance(provider: string, modelId: string): Pick<MatchedPrice, "sourceRef" | "status"> | Record<never, never> {
+  const sourceRef = cursorFastPriceSource(provider, modelId);
+  return sourceRef ? { sourceRef, status: "verified" } : {};
 }
 
 /** User-configured overlay match; explicit zero rates are authoritative too. */
@@ -412,13 +440,16 @@ export function serviceTierContext(entry: ServiceTierContext): ServiceTierContex
 
 /** Convert one adapter-observed attempt outcome into the existing pricing provenance shape. */
 export function serviceTierContextFromOutcome(outcome: AttemptTierOutcome): ServiceTierContext {
-  if (outcome.canonical === "priority" && outcome.confirmation === "confirmed") {
+  const responseAuthoritative = outcome.responseTierAuthoritative !== false;
+  if (responseAuthoritative && outcome.canonical === "priority" && outcome.confirmation === "confirmed") {
     return { responseServiceTier: "priority" };
   }
-  if (outcome.responseServiceTier !== undefined) {
+  // Non-authoritative echoes remain in the log, but cannot become pricing confirmation either.
+  if (responseAuthoritative && outcome.responseServiceTier !== undefined) {
     return { responseServiceTier: outcome.responseServiceTier };
   }
-  if (outcome.canonical === "priority" && outcome.confirmation === "assumed") {
+  if (outcome.canonical === "priority"
+    && (outcome.confirmation === "assumed" || (!responseAuthoritative && outcome.confirmation === "confirmed"))) {
     return { requestedServiceTier: "priority" };
   }
   // An unclassified route makes no canonical Fast claim, but its adapter can still prove that

@@ -7,6 +7,7 @@ import { handleClaudeMessages } from "../../src/server/claude-messages";
 import type { OcxConfig, OcxClaudeCodeConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { beforeEach, afterEach, describe, expect, test } from "bun:test";
 import { stabilizeClaudeInstructionsForPromptCache } from "../../src/claude/inbound-cache-stabilize";
 import { anthropicToResponsesTranslation } from "../../src/claude/inbound";
@@ -94,7 +95,7 @@ describe("stabilizeClaudeInstructionsForPromptCache", () => {
     });
   });
 
-  test("three trailing total_tokens footers keep only the latest in the notice", () => {
+  test("three trailing total_tokens footers are all dropped", () => {
     const stable = "You are Claude Code.";
     const first = footer(1000);
     const second = footer(4000);
@@ -104,7 +105,7 @@ describe("stabilizeClaudeInstructionsForPromptCache", () => {
     );
     expect(result.instructions).toBe(stable);
     expect(result.instructions).not.toContain("<total_tokens>");
-    expect(result.dynamicNotice).toBe(third);
+    expect(result.dynamicNotice).toBeNull();
   });
 
   test("real Claude Code 15000000 tokens left trailing footer peels", () => {
@@ -112,7 +113,7 @@ describe("stabilizeClaudeInstructionsForPromptCache", () => {
     const harness = footer(15_000_000);
     const result = stabilizeClaudeInstructionsForPromptCache(`${stable}\n\n${harness}`);
     expect(result.instructions).toBe(stable);
-    expect(result.dynamicNotice).toBe("<total_tokens>15000000 tokens left</total_tokens>");
+    expect(result.dynamicNotice).toBeNull();
   });
 
   test("bare numeric total_tokens without tokens left is not a harness footer", () => {
@@ -122,12 +123,12 @@ describe("stabilizeClaudeInstructionsForPromptCache", () => {
     expect(result.dynamicNotice).toBeNull();
   });
 
-  test("mid-document total_tokens stays; only the trailing harness footer relocates", () => {
+  test("mid-document total_tokens stays; only the trailing harness footer is dropped", () => {
     const result = stabilizeClaudeInstructionsForPromptCache(
       `System.\n${footer(1)}\nMore system.\n${footer(3)}`,
     );
     expect(result.instructions).toBe(`System.\n${footer(1)}\nMore system.`);
-    expect(result.dynamicNotice).toBe(footer(3));
+    expect(result.dynamicNotice).toBeNull();
   });
 
   test("TaskCreate nudge is stripped from instructions and kept in the notice", () => {
@@ -151,10 +152,10 @@ describe("stabilizeClaudeInstructionsForPromptCache", () => {
     expect(result.instructions).toBe(stable);
     expect(result.instructions).not.toContain("<total_tokens>");
     expect(result.instructions).not.toContain("TaskCreate");
-    expect(result.dynamicNotice).toBe(`${latest}\n\n${TASKCREATE_NUDGE_CC_2_1_263}`);
+    expect(result.dynamicNotice).toBe(TASKCREATE_NUDGE_CC_2_1_263);
   });
 
-  test("latest footer and latest nudge both surface in the notice", () => {
+  test("latest nudge surfaces in the notice without the footer", () => {
     const stable = "Stay stable.";
     const older = footer(10);
     const latest = footer(50);
@@ -162,7 +163,7 @@ describe("stabilizeClaudeInstructionsForPromptCache", () => {
       [stable, older, TASKCREATE_NUDGE, latest].join("\n\n"),
     );
     expect(result.instructions).toBe(stable);
-    expect(result.dynamicNotice).toBe(`${latest}\n\n${TASKCREATE_NUDGE}`);
+    expect(result.dynamicNotice).toBe(TASKCREATE_NUDGE);
   });
 
   test("legacy and 2.1.263 nudges both leave the same stable instructions prefix", () => {
@@ -198,22 +199,22 @@ describe("stabilizeClaudeInstructionsForPromptCache", () => {
     expect(result.dynamicNotice).toBeNull();
   });
 
-  test("docs plus a real trailing footer keep the docs and move only the latest footer", () => {
+  test("docs plus a real trailing footer keep the docs and drop all trailing footers", () => {
     const docs = "Describe <total_tokens>0</total_tokens> in the protocol guide.";
     const latest = footer(8000);
     const result = stabilizeClaudeInstructionsForPromptCache(
       [docs, footer(1), latest].join("\n\n"),
     );
     expect(result.instructions).toBe(docs);
-    expect(result.dynamicNotice).toBe(latest);
+    expect(result.dynamicNotice).toBeNull();
   });
 
-  test("fenced example plus a trailing harness footer moves only the footer", () => {
+  test("fenced example plus a trailing harness footer drops only the footer", () => {
     const docs = ["Docs:", "```", footer(123), "```"].join("\n");
     const latest = footer(8000);
     const result = stabilizeClaudeInstructionsForPromptCache(`${docs}\n\n${latest}`);
     expect(result.instructions).toBe(docs);
-    expect(result.dynamicNotice).toBe(latest);
+    expect(result.dynamicNotice).toBeNull();
   });
 
   test("unclosed fence through EOF is not a harness suffix", () => {
@@ -244,18 +245,18 @@ describe("linear canonical notice extraction", () => {
 
   test("retains prefix trailing spaces after a successful peel and failed next candidate", () => {
     expect(stabilizeClaudeInstructionsForPromptCache(`System.  \n\n${footer(1)}`)).toEqual({
-      instructions: "System.  ", dynamicNotice: footer(1),
+      instructions: "System.  ", dynamicNotice: null,
     });
   });
-  test("CRLF separators and horizontal padding retain the canonical notice", () => {
+  test("CRLF separators and horizontal padding still peel the canonical footer", () => {
     expect(stabilizeClaudeInstructionsForPromptCache(`System.\r\n\r\n \t${footer(1)}\t \r\n`)).toEqual({
-      instructions: "System.", dynamicNotice: footer(1),
+      instructions: "System.", dynamicNotice: null,
     });
   });
   test("malformed notice before a valid suffix remains byte-for-byte", () => {
     const prefix = `System.  \n<total_tokens>123\ntokens left</total_tokens>  `;
     expect(stabilizeClaudeInstructionsForPromptCache(`${prefix}\n${footer(2)}`)).toEqual({
-      instructions: prefix, dynamicNotice: footer(2),
+      instructions: prefix, dynamicNotice: null,
     });
   });
   test("a whitespace-only trailing line and lone CR are not canonical separators", () => {
@@ -263,11 +264,11 @@ describe("linear canonical notice extraction", () => {
       expect(stabilizeClaudeInstructionsForPromptCache(system)).toEqual({ instructions: system, dynamicNotice: null });
     }
   });
-  test("twenty thousand notices after many fences keep only the latest without repeated prefix scans", () => {
+  test("twenty thousand footers after many fences are dropped without repeated prefix scans", () => {
     const prefix = "System.\n" + ("```xml\nexample\n```\n").repeat(2_000) + "Stable.  ";
     const notices = Array.from({ length: 20_000 }, (_, index) => footer(index));
     expect(stabilizeClaudeInstructionsForPromptCache(`${prefix}\n\n${notices.join("\n")}`)).toEqual({
-      instructions: prefix, dynamicNotice: footer(19_999),
+      instructions: prefix, dynamicNotice: null,
     });
   });
 });
@@ -292,20 +293,16 @@ describe("anthropicToResponsesTranslation cache-stabilize wire-in", () => {
     ]);
   });
 
-  test("opted-in harness relocates the latest total_tokens footer onto a trailing input user message", () => {
+  test("opted-in harness drops all total_tokens footers without adding a user message", () => {
     const first = footer(1000);
     const latest = footer(8000);
     const { body } = translateHarness(["You are Claude Code.", first, latest].join("\n\n"));
     expect(body.instructions).toBe("You are Claude Code.");
     expect(String(body.instructions)).not.toContain("<total_tokens>");
     const input = userTurns(body);
-    const last = input[input.length - 1]!;
-    expect(last).toEqual({
-      type: "message",
-      role: "user",
-      content: [{ type: "input_text", text: latest }],
-    });
-    expect(input.some(item => item.role === "user" && item !== last)).toBe(true);
+    expect(input).toEqual([
+      { type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] },
+    ]);
   });
 
   test("opted-in peel does not require metadata.user_id", () => {
@@ -313,11 +310,9 @@ describe("anthropicToResponsesTranslation cache-stabilize wire-in", () => {
     const { body } = translateHarness(["You are Claude Code.", latest].join("\n\n"));
     expect(body.instructions).toBe("You are Claude Code.");
     const input = userTurns(body);
-    expect(input[input.length - 1]).toEqual({
-      type: "message",
-      role: "user",
-      content: [{ type: "input_text", text: latest }],
-    });
+    expect(input).toEqual([
+      { type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] },
+    ]);
   });
 
   test("fenced standalone total_tokens example is a translator no-op when opted in", () => {
@@ -338,17 +333,15 @@ describe("anthropicToResponsesTranslation cache-stabilize wire-in", () => {
     ]);
   });
 
-  test("real footer after a closed fence still relocates when opted in", () => {
+  test("real footer after a closed fence is dropped when opted in", () => {
     const docs = ["Docs:", "```", footer(123), "```"].join("\n");
     const latest = footer(8000);
     const { body } = translateHarness(`${docs}\n\n${latest}`);
     expect(body.instructions).toBe(docs);
     const input = userTurns(body);
-    expect(input[input.length - 1]).toEqual({
-      type: "message",
-      role: "user",
-      content: [{ type: "input_text", text: latest }],
-    });
+    expect(input).toEqual([
+      { type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] },
+    ]);
   });
 
   test("whitespace-only system without a footer is preserved byte-for-byte", () => {
@@ -404,14 +397,22 @@ describe("Messages operator opt-in at the outbound boundary", () => {
   let isolatedHome: IsolatedCodexHome | undefined;
   let previousHome: string | undefined;
   let configHome: string | undefined;
+  let releaseSpendHome: (() => void) | undefined;
 
   beforeEach(() => {
     previousHome = process.env.OPENCODEX_HOME;
     isolatedHome = installIsolatedCodexHome("ocx-prefix-contract-");
     configHome = mkdtempSync(join(tmpdir(), "ocx-prefix-config-"));
     process.env.OPENCODEX_HOME = configHome;
+    // Dispatches without starting a server, so it takes the spend-journal lease itself. Taken
+    // last because the lease binds the home in effect at the moment it is taken.
+    releaseSpendHome = acquireOwnedSpendHome();
   });
   afterEach(() => {
+    // Released before this case's home is removed: an open lease inside a directory being
+    // deleted fails the removal on Windows and leaves an unlinked live database on POSIX.
+    releaseSpendHome?.();
+    releaseSpendHome = undefined;
     globalThis.fetch = originalFetch;
     isolatedHome?.restore();
     if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
@@ -456,12 +457,14 @@ describe("Messages operator opt-in at the outbound boundary", () => {
   }
 
   for (const notice of [footer(15_000_000), TASKCREATE_NUDGE, TASKCREATE_NUDGE_CC_2_1_263]) {
-    test(`explicit HTTP opt-in relocates supported notice ${notice.slice(0, 35)}`, async () => {
+    test(`explicit HTTP opt-in drops token footers and retains supported nudges ${notice.slice(0, 35)}`, async () => {
       const wire = await outbound(`System.\n\n${notice}`, true);
       expect(wire.instructions).toBe("System.");
       expect(wire.input).toEqual([
         { type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] },
-        { type: "message", role: "user", content: [{ type: "input_text", text: notice }] },
+        ...(notice.startsWith("<total_tokens>") ? [] : [
+          { type: "message", role: "user", content: [{ type: "input_text", text: notice }] },
+        ]),
       ]);
     });
   }

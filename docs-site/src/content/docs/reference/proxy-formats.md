@@ -39,6 +39,21 @@ attempt with tools removed and existing results retained. This can incur another
 request. A second empty answer fails; malformed calls and provider refusal or truncation
 outcomes are preserved without this retry.
 
+## xAI policy refusals
+
+Some xAI Chat Completions refusals arrive as HTTP 403 with an exact model-refusal
+sentence such as `I can't help with that request.` instead of HTTP 200 plus
+`finish_reason: content_filter`. Codex treats a 403 as a transport failure, so the
+user turn is never recorded and the same request is retried.
+
+On a non-combo Responses request, OpenCodex rewrites that allowlisted 403 to an
+HTTP 200 Responses payload with `status: "incomplete"` and
+`incomplete_details.reason: "content_filter"`. The rewrite runs on the openai-chat
+adapter path and on openai-responses passthrough (grok-4.6 / grok-4.5 OAuth).
+Streaming uses the same incomplete boundary. Empty or whitespace 403 bodies stay
+errors. Subscription, credit, entitlement, and `not allowed to use this
+model` 403s stay errors. Combo failover still sees the original HTTP 403.
+
 ## Cursor context overflow
 
 Cursor's first bare context overflow is surfaced to the client. Later eligible requests
@@ -155,6 +170,44 @@ for final text and `session.updated` with `session.status="closed"`.
 This is the native opencodex data-plane shape. The request body must be a JSON object with a
 non-empty `model`. `input` may be a string or an array of Responses items.
 
+### Caller conversation header
+
+For HTTP `POST /v1/responses`, `POST /v1/messages`, and `POST /v1/chat/completions`, a client can send a stable
+`x-session-id` for each conversation. When no `session_id`, `session-id`, or `thread-id`
+header is present, opencodex promotes the marker to `session_id`. Managed Grok identity
+on Responses takes precedence too. Even an empty explicit header suppresses promotion.
+
+Use 1–128 ASCII letters, digits, `.`, `_`, `:`, or `-`, starting with a letter or digit.
+Surrounding whitespace is trimmed; missing or invalid markers are ignored. Loopback
+admission preserves the marker. Authenticated admission derives an opaque identifier
+from the marker and the admitted credential principal, so different credentials do not
+share a newly promoted identifier. Rotation changes this identifier; authenticated
+requests without a trusted principal are left unchanged.
+
+Use distinct markers for distinct conversations. This preserves conversation continuity
+for downstream consumers, but does not guarantee an upstream cache hit or measured savings.
+WebSocket frames, compact, and count_tokens do not use this promotion.
+
+On canonical ChatGPT-backed Responses dispatch, a non-empty explicit `session_id` wins.
+Otherwise, the first non-empty alias among `session-id`, then `thread-id`, supplies
+`session_id` if its value is safe; an invalid winning alias suppresses weaker identity.
+Empty header values are dropped before this step on every path (Responses auth header
+selection and the Claude Messages and Chat Completions bridges), so an empty header counts as
+absent: an empty `session-id` lets a valid `thread-id` win. The Claude metadata-derived
+session applies only when no non-empty canonical header or alias remains.
+Aliases keep their original names on the wire; their validated raw caller values are forwarded
+like an explicit `session_id`, without the principal scoping used for promoted `x-session-id`.
+This egress conversion does not change ingress affinity. Custom and API-key destinations are
+unchanged, and no identity is invented for requests without a conversation marker.
+
+For third-party clients, keep one caller-owned marker per conversation, including repeated
+`curl` requests. A shared `prompt_cache_key` or identical system/tools prefix is a cache cohort,
+not proof that two requests belong to one conversation. Requests without a conversation marker
+receive no invented stable session. OpenCodex also does not impersonate Codex by synthesizing
+an `originator`; a caller-supplied originator retains its normal forwarding rules. Header
+continuity does not establish a cache hit: compare the upstream's reported cached input tokens
+for your own repeated-prefix requests. An omitted cache-write count is not evidence of no write.
+
 ### Accepted request fields
 
 | Area | Accepted shape |
@@ -177,6 +230,9 @@ top-level `instructions`, and `truncation` is removed because that destination r
 Responses shapes. Other Responses destinations preserve them.
 The same canonical boundary removes nested client-only `prompt_cache_breakpoint` markers and drops
 `item_reference` entries only on `store: false` continuations; tool call/result pairing is unchanged.
+`metadata` is removed on every forward route for compatibility with the canonical ChatGPT backend, which rejects it. `max_output_tokens`
+is removed only on that canonical route, which rejects the field outright; every other forward destination
+receives the caller's output cap unchanged, but the cap bounds the turn only when the destination enforces it.
 
 Image file IDs are provider-scoped references, not portable image bytes. Responses passthrough
 retains them; translating adapters receive an `[image: file_id]` text marker for file-only image
@@ -194,6 +250,18 @@ With `stream: true`, the response is `text/event-stream`. The bridge emits Respo
 
 With `stream: false` or no `stream`, the same adapter events are collected into one Responses JSON
 object. Both forms preserve the selected model, output items, terminal status, and usage.
+The canonical ChatGPT Codex route still uses `stream: true` on its upstream-only request because that
+destination is SSE-only; OpenCodex boundedly validates and folds the terminal stream back into the
+JSON shape the client requested. This transport coercion does not alter an explicit `store` value.
+The first terminal must be valid; a later terminal cannot replace an invalid first one. Output indices
+must be contiguous and covered by a completed item or the terminal output, so a text/tool delta left
+open by a sparse terminal fails closed rather than becoming partial JSON. The path caps each frame at
+4 MiB, each transcript and reconstruction source at 32 MiB, the stream at 100,000 frames, and
+reconstructed output at 10,000 items. The configured `stallTimeoutSec` governs both the first upstream
+body byte and later silent gaps. When that stall clock is disabled (`0`, including the default for a
+local upstream), it does not expire immediately; only the independent 15-minute buffered-turn ceiling
+remains. An EOF, malformed or oversized frame, read error, stall, cancellation, or missing terminal
+returns an error instead of partial JSON with HTTP 200. Streaming callers are unchanged.
 
 When a provider filters or truncates a response, an unfinished tool call remains `incomplete`
 in both JSON and SSE. Partial output is preserved, and the bridge does not emit an argument
@@ -217,6 +285,10 @@ If native passthrough rewriting fails, including when it exceeds the translation
 buffer budget, the relay reports the failure without waiting for upstream inspection
 to finish. It cancels the upstream work and emits `response.failed` followed by
 `data: [DONE]`; a budget overflow uses the `translation_buffer_limit` error code.
+
+Responses SSE accepts CR, LF and CRLF line endings, including mixed endings and CRLF split across
+network chunks. Tool validation, Chat translation, terminal inspection and WebSocket projection
+use the same event boundaries. A CR-only completion does not wait for the upstream connection to close.
 
 Client-facing Responses SSE frames are limited to 4 MiB per frame, measured in raw bytes before the
 SSE block delimiter. On HTTP, an unterminated upstream frame that exceeds the limit fails closed
@@ -283,6 +355,11 @@ When available, `input_tokens_details` can also include `cache_write_tokens`. Th
 detail objects are a compatibility guarantee for strict Responses clients; zero can mean "not
 reported," not necessarily "the provider performed no such work."
 
+For Anthropic upstreams, a reported `usage.output_tokens_details.thinking_tokens` is preserved as
+Responses `output_tokens_details.reasoning_tokens` and Chat `completion_tokens_details.reasoning_tokens`,
+for JSON and streaming replies. It is already included in the output-token total, not added again;
+missing or invalid detail is not estimated from visible thinking text. See [Anthropic's usage contract](https://platform.claude.com/docs/en/build-with-claude/thinking-steering-and-cost).
+
 ### Correlating a response with its request log
 
 Every admitted HTTP Responses reply carries an `x-opencodex-request-id` header holding a
@@ -295,8 +372,23 @@ named in `Access-Control-Expose-Headers`, which is what lets browser JavaScript 
 cross-origin — a custom `x-` header is otherwise invisible to `response.headers.get()` even when
 it is on the wire.
 
-Responses rejected at authentication or origin admission never reach this wrapper and carry no id,
-so a missing header means the request was refused before it was logged.
+Responses rejected at authentication or origin admission never reach this wrapper and carry no id.
+
+Logged `POST /v1/messages` replies carry the same OCX request-history id in **both**
+`request-id` and `x-opencodex-request-id`. This applies to native and translated replies,
+streaming and JSON, and logged refusals. Claude Code can use its persisted `requestId`
+metadata from `request-id` to join future transcripts to that OCX history row.
+
+On native delivered replies and upstream HTTP errors, an opaque Anthropic upstream
+`request-id` matching `req_[A-Za-z0-9_-]{1,128}` is preserved separately as
+`x-opencodex-upstream-request-id`. It is a provider diagnostic id, not an OCX ledger key.
+Missing or nonconforming upstream ids, and translated adapter ids, are omitted. These
+response headers are readable through CORS alongside existing exposed headers.
+
+No OCX id is added to authentication, origin, drain or active-turn refusals that have no
+request-log owner, or to count_tokens. Streaming headers identify the turn's eventual
+history row; they do not attest that final usage has already been saved. Old transcripts
+without a shared key remain unlinked; timestamp or token similarity is not an exact join.
 
 ### WebSocket upgrade on the same path
 
@@ -709,3 +801,25 @@ and can read those bytes; a `forward` provider pointed at any other origin is no
 Explicitly trusted `allowEncryptedV2AgentTasks` routes and translated Chat or Anthropic wires are
 unaffected, as are other item types such as reasoning and tool-output blobs, which keep their
 existing decrypt-failure recovery.
+
+### Switching providers in an existing conversation
+
+A replayed reasoning item carries `encrypted_content` that only the provider and credential that
+produced it can read. When opencodex knows the conversation was last served by a different
+provider, it removes that blob before sending and keeps the item's summary. If that provider also
+used a different endpoint or credential, the item's `rs_…` id is removed too, because it names an
+item the new destination cannot look up. When it cannot know,
+for example after a proxy restart, the new destination rejects the blob instead: OpenAI and Azure
+OpenAI answer `400 invalid_encrypted_content`. opencodex then resends the request once without the
+previous provider's reasoning state. The blob goes, and so does the reasoning item's `rs_…` id,
+because that id names an item the previous provider stored and the new destination would answer
+`Item with id 'rs_…' not found`.
+
+This recovery applies to every adapter that speaks the Responses wire, so `openai-responses` and
+`azure-openai` behave the same way. After a successful recovery, later turns of that conversation
+on the same destination drop the foreign state before the first send for the next five minutes,
+without another rejected round trip. The resend counts against the request's normal send budget.
+An ordinary 400 and a 429 are never retried this way, and neither is a 5xx, with one narrow
+exception: a 502 whose body is the exact encrypted tool-output decrypt rejection, sent for a request
+that carries encrypted tool output, gets the same single resend. A second rejection reaches the
+client unchanged. If that happens, start a new conversation on the destination provider.

@@ -35,7 +35,7 @@ test("a change under structure/ selects a job that runs the structure gate", () 
   // The whole defect was that nothing satisfied this. Read the condition off the
   // job rather than naming the job, so renaming it does not quietly pass.
   expect(filters.structure).toContain("structure/**");
-  expect(changes?.outputs?.structure).toBe("${{ steps.filter.outputs.structure }}");
+  expect(changes?.outputs?.structure).toBe("${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.structure }}");
 
   const selected = Object.entries(workflow.jobs ?? {})
     .filter(([, job]) => job.if?.includes("needs.changes.outputs.structure == 'true'"))
@@ -67,8 +67,21 @@ test("the aggregate gate expects the job instead of ignoring it", () => {
   // job missing from `expected_for` reads as `undeclared`, not as skipped.
   const gate = workflow.jobs?.ci;
   expect(Array.isArray(gate?.needs) ? gate?.needs : []).toContain("structure-gate");
+  expect(Array.isArray(gate?.needs) ? gate?.needs : []).toContain("widget");
   const script = (gate?.steps ?? []).map(step => step.run ?? "").join("\n");
   expect(script).toContain("structure-gate) echo \"$structure\" ;;");
-  expect(script).toContain("GATED_JOBS=\"$GATED_JOBS structure-gate\"");
+  expect(script).toContain("GATED_JOBS=\"$GATED_JOBS structure-gate widget\"");
+  // widget is gated through the native arm rather than the ci-scoped one now,
+  // so match it as a pattern inside expected_for instead of pinning which arm
+  // it shares or where it sits in the grouping.
+  expect(script).toMatch(/case "\$1" in[\s\S]*?\bwidget\b[\s\S]*?esac/);
   expect(script).toContain("CHANGES_STRUCTURE");
+});
+
+test("app changes select the macOS widget job", () => {
+  expect(filters.ci).toContain("app/**");
+  expect(filters.ci).toContain("desktop/**");
+  const widget = workflow.jobs?.widget;
+  expect(widget?.if).toContain("needs.changes.outputs.ci == 'true'");
+  expect(Array.isArray(widget?.needs) ? widget?.needs : []).toContain("changes");
 });

@@ -41,10 +41,13 @@ fn native_helper_keeps_windows_command_execution_fail_closed() {
     });
     assert_eq!(run_probe(), unavailable);
     let root = std::env::current_dir().expect("test cwd");
-    assert_eq!(run_helper(&serde_json::json!({
-        "version": 1, "operation": "run", "root": root, "cwd": root,
-        "command": ["cmd.exe", "/c", "exit"], "timeoutMs": 1000, "maxOutputBytes": 4096
-    })), unavailable);
+    assert_eq!(
+        run_helper(&serde_json::json!({
+            "version": 1, "operation": "run", "root": root, "cwd": root,
+            "command": ["cmd.exe", "/c", "exit"], "timeoutMs": 1000, "maxOutputBytes": 4096
+        })),
+        unavailable
+    );
 }
 
 #[cfg(target_os = "macos")]

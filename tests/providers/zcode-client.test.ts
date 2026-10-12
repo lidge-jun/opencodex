@@ -7,9 +7,11 @@ import {
   buildClientConfig,
   buildClientConfigText,
   buildClientContribution,
+  buildZcodeStoreContribution,
   zcodeConfigPath,
   zcodeHomeDir,
   type ExportContext,
+  type ManagedFragment,
   type ZcodeGeneratedConfig,
 } from "../../src/clients/config-export";
 import type { OcxConfig } from "../../src/types";
@@ -159,6 +161,84 @@ describe("ZCode reasoning export", () => {
     });
     expect(models["a/none-only"]).not.toHaveProperty("reasoning");
     expect(models["a/empty"]).not.toHaveProperty("reasoning");
+  });
+});
+
+describe("ZCode provider store", () => {
+  /** The model-rule fragments of one store contribution, keyed by modelId. */
+  function modelRules(ctx: ExportContext): Map<string, unknown> {
+    const rules = new Map<string, unknown>();
+    for (const fragment of buildZcodeStoreContribution(ctx).fragments as readonly ManagedFragment[]) {
+      if (fragment.path[0] !== "config" || fragment.path[1] !== "modelConfigRules") continue;
+      rules.set((fragment.value as { modelId: string }).modelId, fragment.value);
+    }
+    return rules;
+  }
+
+  test("model rules carry the catalog's image support and effort ladder, not just the context window", () => {
+    const rules = modelRules({
+      ...context(),
+      models: [
+        {
+          namespaced: "opencode-go/mimo-v2.6-pro",
+          provider: "opencode-go",
+          id: "mimo-v2.6-pro",
+          contextWindow: 600_000,
+          inputModalities: ["text", "image"],
+          reasoningEfforts: ["max", "low", "high", "none", "medium", "xhigh"],
+          defaultReasoningEffort: "medium",
+        },
+      ],
+    });
+    expect(rules.get("opencode-go/mimo-v2.6-pro")).toEqual({
+      providerId: OPENCODE_PROVIDER_ID,
+      modelId: "opencode-go/mimo-v2.6-pro",
+      config: {
+        properties: { contextWindow: 600_000, inputFormat: { supportsImage: true } },
+        optionSpecs: { reasoningLevel: { values: ["low", "medium", "high", "xhigh", "max"] } },
+      },
+    });
+  });
+
+  test("a text-only row asserts no inputFormat and keeps the client's own defaults", () => {
+    const rules = modelRules({
+      ...context(),
+      models: [{ namespaced: "xai/grok-5", provider: "xai", id: "grok-5", contextWindow: 262_144 }],
+    });
+    expect(rules.get("xai/grok-5")).toEqual({
+      providerId: OPENCODE_PROVIDER_ID,
+      modelId: "xai/grok-5",
+      config: { properties: { contextWindow: 262_144 } },
+    });
+  });
+
+  test("a row without a context window still ships a rule when it has capabilities to assert", () => {
+    const rules = modelRules({
+      ...context(),
+      models: [
+        { namespaced: "mystery/vision", provider: "mystery", id: "vision", inputModalities: ["text", "image"], reasoningEfforts: ["low", "high"] },
+      ],
+    });
+    expect(rules.get("mystery/vision")).toEqual({
+      providerId: OPENCODE_PROVIDER_ID,
+      modelId: "mystery/vision",
+      config: {
+        properties: { inputFormat: { supportsImage: true } },
+        optionSpecs: { reasoningLevel: { values: ["low", "high"] } },
+      },
+    });
+  });
+
+  test("a row with nothing authoritative to assert ships no rule, and audio-only ships none either", () => {
+    const rules = modelRules({
+      ...context(),
+      models: [
+        { namespaced: "mystery/model", provider: "mystery", id: "model" },
+        { namespaced: "zenmux/audio-only", provider: "zenmux", id: "audio-only", inputModalities: ["audio"], contextWindow: 100_000, reasoningEfforts: ["low"] },
+      ],
+    });
+    expect(rules.has("mystery/model")).toBe(false);
+    expect(rules.has("zenmux/audio-only")).toBe(false);
   });
 });
 

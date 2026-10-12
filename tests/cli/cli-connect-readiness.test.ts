@@ -13,14 +13,16 @@
 import { beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmColdSpawn } from "../helpers/cold-spawn-warmup";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoRoot } from "../helpers/repo-root";
 import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
-import { connectCompletionReport } from "../../src/cli/connect";
+import { codexShimReadinessLine, connectCompletionReport } from "../../src/cli/connect";
+import { codexConnectShimReadiness, inspectCodexShimForConnect } from "../../src/cli/codex-shim-readiness";
+import { findFirstCodexOnPath } from "../../src/codex/shim-path-resolution";
 import { dispatchCommand } from "../../src/cli/dispatch";
 import type { CliDispatchDeps } from "../../src/cli/dispatch";
 import { ClientCatalogIncompatibleError } from "../../src/client/catalog-compatibility";
@@ -55,6 +57,10 @@ type ProbeResult = {
     newerVersion?: string;
     selectionUnchanged: boolean;
     failures: RuntimeProbeFailure[];
+    installedIsolation?: Record<"isolated" | "inherited", {
+      sentinelCalls: Array<{ args: string[]; completed: boolean }>;
+      lowerCalls: string[];
+    }>;
   };
 };
 
@@ -104,6 +110,8 @@ function runStatusProbe(options: {
   preferred?: "valid" | "failed" | "missing";
   persisted?: boolean;
   fullDiagnostics?: boolean;
+  /** Windows-only negative control; always a test-owned external install root. */
+  externalInstalledRoot?: string;
   /** "connect" drives `ocx connect status`; "status" drives the general `ocx status` collector. */
   surface?: "connect" | "status";
   /**
@@ -151,6 +159,10 @@ function runStatusProbe(options: {
       const rejectedDir = join(opencodexHome, "rejected");
       const selected = writeRuntimeFixture(selectedDir, "0.145.0");
       writeRuntimeFixture(lowerDir, "99.0.0");
+      if (options.externalInstalledRoot && process.platform === "win32") {
+        // Use a real executable for the Windows-only installed-root control.
+        copyFileSync(process.execPath, join(lowerDir, "codex.exe"));
+      }
       const preferred = options.preferred ?? "valid";
       runtimeEnv.CODEX_CLI_PATH = preferred === "valid" ? selected
         : preferred === "failed" ? writeRuntimeFixture(rejectedDir, "", false)
@@ -158,6 +170,8 @@ function runStatusProbe(options: {
       runtimeEnv.PATH = [selectedDir, lowerDir].join(delimiter);
       runtimeEnv.HOME = opencodexHome;
       runtimeEnv.USERPROFILE = opencodexHome;
+      // Installed Windows runtimes are discovered outside PATH under LOCALAPPDATA.
+      runtimeEnv.LOCALAPPDATA = join(opencodexHome, "local-app-data");
       runtimeEnv.FIXTURE_RUNTIME_DIRS = JSON.stringify({ selected: selectedDir, lower: lowerDir, rejected: rejectedDir });
       runtimeEnv.FIXTURE_FULL_DIAGNOSTICS = options.fullDiagnostics ? "1" : "0";
       if (options.persisted) writeFileSync(join(opencodexHome, "codex-runtime.json"), JSON.stringify({
@@ -189,8 +203,20 @@ function runStatusProbe(options: {
       (async () => {
         let exitCode, catalogUnchanged, commandCode;
         if (process.env.FIXTURE_SURFACE === "status") {
+          // General status also probes the hub. Keep this readiness fixture offline,
+          // and assert the request so swallowed transport failures cannot hide drift.
+          const requests = [];
+          globalThis.fetch = async input => {
+            const url = input instanceof Request ? input.url : String(input);
+            requests.push(url);
+            if (url !== "https://hub.example.test/v1/hub-state") throw new Error("unexpected fixture request: " + url);
+            return Response.json({ error: "offline fixture" }, { status: 503 });
+          };
           const { collectStatus } = require("./src/cli/status");
           const view = await collectStatus();
+          if (JSON.stringify(requests) !== JSON.stringify(["https://hub.example.test/v1/hub-state"])) {
+            throw new Error("unexpected status fixture requests: " + JSON.stringify(requests));
+          }
           const observed = calls();
           console.log(JSON.stringify({
             lines: [], commandCode: 0, status: view.json.connection,
@@ -259,6 +285,34 @@ function runStatusProbe(options: {
           }
           runtime = { beforeDiagnostics, afterDiagnostics: calls(), diagnosticsCached, newerVersion,
             selectionUnchanged: selectionBefore === readOptional(selectionPath), failures };
+          const externalRoot = process.env.FIXTURE_EXTERNAL_INSTALLED_ROOT;
+          if (externalRoot) {
+            const { execFileSync } = require("node:child_process");
+            const sentinel = join(externalRoot, "OpenAI", "Codex", "bin", "fixture-installed", "codex.exe");
+            const lowerExecutable = join(dirs.lower, "codex.exe");
+            const observeInstalled = env => {
+              const sentinelCalls = [];
+              const lowerCalls = [];
+              resolveCodexRuntime({
+                env,
+                execFileSync: (file, args, options) => {
+                  // Record attempts too: a failed external launch still violates isolation.
+                  const call = file === sentinel ? { args: [...args], completed: false } : null;
+                  if (call) sentinelCalls.push(call);
+                  const output = execFileSync(file, args, options);
+                  if (call) call.completed = true;
+                  if (file === lowerExecutable) lowerCalls.push(args.join(" "));
+                  return output;
+                },
+              });
+              return { sentinelCalls, lowerCalls };
+            };
+            // Explicit deps make both observations cold without altering the ordinary cache oracle.
+            runtime.installedIsolation = {
+              isolated: observeInstalled({ ...process.env }),
+              inherited: observeInstalled({ ...process.env, LOCALAPPDATA: externalRoot }),
+            };
+          }
         }
         console.log(JSON.stringify({ lines: captured, commandCode, status, runtime, exitCode, errors, catalogUnchanged }));
       })();
@@ -282,6 +336,7 @@ function runStatusProbe(options: {
         OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR: join(opencodexHome, "desktop"),
         FIXTURE_LADDER: JSON.stringify(options.ladder),
         FIXTURE_SURFACE: options.surface ?? "connect",
+        FIXTURE_EXTERNAL_INSTALLED_ROOT: options.externalInstalledRoot ?? "",
         ...runtimeEnv,
       },
     });
@@ -423,6 +478,30 @@ describe("connected-client runtime probe scope", () => {
     });
   }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
 
+  test.skipIf(process.platform !== "win32")("isolates inherited Windows installs without disabling full discovery", () => {
+    const externalRoot = mkdtempSync(join(tmpdir(), "ocx-readiness-external-"));
+    try {
+      const installed = join(externalRoot, "OpenAI", "Codex", "bin", "fixture-installed");
+      mkdirSync(installed, { recursive: true });
+      // A real PE executable: Bun answers --version and is harmless as an unselected candidate.
+      copyFileSync(process.execPath, join(installed, "codex.exe"));
+      const probe = runStatusProbe({ connected: true, ladder: "observed", externalInstalledRoot: externalRoot });
+      expect(probe.status.readiness).toBe("ready");
+      expect(probe.runtime?.beforeDiagnostics.selected).toEqual([
+        "--version", "debug models --bundled", "debug models --bundled",
+      ]);
+      expect(probe.runtime?.beforeDiagnostics.lower).toEqual([]);
+      expect(probe.runtime?.selectionUnchanged).toBe(true);
+      expect(probe.runtime?.installedIsolation).toEqual({
+        isolated: { sentinelCalls: [], lowerCalls: ["--version"] },
+        // Removing only the environment isolation must execute the external sentinel.
+        inherited: { sentinelCalls: [{ args: ["--version"], completed: true }], lowerCalls: ["--version"] },
+      });
+    } finally {
+      removeTreeWithRetry(externalRoot);
+    }
+  }, SPAWN_BUDGET_MS);
+
   test("observes only the selected runtime and leaves full diagnostics available", () => {
     const probe = runStatusProbe({ connected: true, ladder: "observed", fullDiagnostics: true });
 
@@ -558,6 +637,128 @@ describe("#4207 what ocx connect reports when the local CLI cannot use the catal
     expect(report.failure).toBeNull();
     expect(report.lines.join(" ")).toContain("nothing here launches Codex");
     expect(report.lines[0]).toContain("Connected to");
+  });
+});
+
+describe("Codex shim readiness on connect", () => {
+  test("readiness scans Windows-style PATH entries independently of the host", () => {
+    const shim = "C:\\Tools\\codex";
+    expect(findFirstCodexOnPath({
+      pathValue: "C:\\Tools;D:\\Other", posixPaths: false, wsl: false,
+      exists: path => path === shim, isShimFile: () => true, isDirectory: () => false,
+    })).toEqual({ path: shim, isShim: true });
+  });
+
+  test("a healthy tracked shim without a PATH command is reported as inactive", () => {
+    const readiness = codexConnectShimReadiness({
+      diagnosis: { installed: true, healthy: true, summary: "unused" },
+      commandPath: null,
+    });
+    expect(readiness.status).toBe("missing");
+    expect(readiness.message).toContain("installed but not active");
+    expect(readiness.message).toContain("no 'codex' executable was found on PATH");
+    expect(readiness.message).toContain("directory of the tracked shim");
+    expect(readiness.message).toContain("OPENCODEX_API_AUTH_TOKEN");
+    expect(codexShimReadinessLine(["codex"], () => readiness)).not.toContain("installed and healthy");
+  });
+
+  test("a failed PATH scan reports unverified activation without claiming no command", () => {
+    const readiness = inspectCodexShimForConnect({
+      diagnose: () => ({ installed: true, healthy: true, summary: "fixture shim present" }),
+      findOnPath: () => { throw new Error("private scan failure"); },
+    });
+    expect(readiness.status).toBe("unverified");
+    expect(readiness.message).toContain("PATH activation could not be verified");
+    expect(readiness.message).toContain("fixture shim present");
+    expect(readiness.message).not.toContain("no 'codex' executable");
+    expect(readiness.message).not.toContain("private scan failure");
+  });
+
+  test("a healthy shim remains ready when it is first on PATH", () => {
+    const shim = "/home/u/.npm-global/bin/codex";
+    const native = "/opt/homebrew/bin/codex";
+    const candidate = findFirstCodexOnPath({
+      pathValue: `/home/u/.npm-global/bin:/opt/homebrew/bin`,
+      wsl: false,
+      posixPaths: true,
+      exists: path => path === shim || path === native,
+      isShimFile: path => path === shim,
+      isDirectory: () => false,
+    });
+    expect(candidate).toEqual({ path: shim, isShim: true });
+
+    const readiness = codexConnectShimReadiness({
+      diagnosis: { installed: true, healthy: true, summary: "unused" },
+      commandPath: candidate?.path ?? null,
+      commandIsShim: candidate?.isShim,
+    });
+    expect(readiness).toEqual({ status: "ready", message: "installed and healthy" });
+  });
+
+  test("a user wrapper before the shim is reported as shadowing it", () => {
+    const wrapper = "/home/u/.local/bin/codex";
+    const shim = "/home/u/.npm-global/bin/codex";
+    const candidate = findFirstCodexOnPath({
+      pathValue: `/home/u/.local/bin:/home/u/.npm-global/bin`,
+      wsl: false,
+      posixPaths: true,
+      exists: path => path === wrapper || path === shim,
+      isShimFile: path => path === shim,
+      isDirectory: () => false,
+    });
+    expect(candidate).toEqual({ path: wrapper, isShim: false });
+
+    const readiness = codexConnectShimReadiness({
+      diagnosis: { installed: true, healthy: true, summary: "unused" },
+      commandPath: candidate?.path ?? null,
+      commandIsShim: candidate?.isShim,
+    });
+    expect(readiness.status).toBe("missing");
+    expect(readiness.message).toContain(wrapper);
+  });
+
+  test("a missing shim or user PATH wrapper gives a secret-free repair hint", () => {
+    const readiness = codexConnectShimReadiness({
+      diagnosis: { installed: false, healthy: false, summary: "Codex autostart shim is not installed." },
+      commandPath: "/home/u/.local/bin/codex-wrapper",
+    });
+    expect(readiness.status).toBe("missing");
+    expect(readiness.message).toContain("codex-wrapper");
+    expect(readiness.message).toContain("OPENCODEX_API_AUTH_TOKEN");
+    expect(readiness.message).toContain("Missing environment variable");
+    expect(readiness.message).toContain("ocx codex-shim install");
+    expect(readiness.message).not.toContain("ocx_data_");
+
+    const shadowed = codexConnectShimReadiness({
+      diagnosis: { installed: true, healthy: true, summary: "unused" },
+      commandPath: "/home/u/bin/codex-wrapper",
+    });
+    expect(shadowed.status).toBe("missing");
+    expect(shadowed.message).toContain("PATH resolves");
+    // An installed, healthy shim cannot be repaired by reinstalling: say so and carry the
+    // diagnostic summary instead of the generic "run install" advice.
+    expect(shadowed.message).toContain("Shim state: unused");
+    expect(shadowed.message).toContain("will not change PATH order");
+    expect(shadowed.message).not.toContain("to repair it");
+  });
+
+  test("an installed but unhealthy shim is actionable and does not print a token", () => {
+    const readiness = codexConnectShimReadiness({
+      diagnosis: { installed: true, healthy: false, summary: "wrapper missing; original backup present" },
+      commandPath: null,
+    });
+    expect(readiness.status).toBe("unhealthy");
+    expect(readiness.message).toContain("wrapper missing");
+    expect(readiness.message).toContain("OPENCODEX_API_AUTH_TOKEN");
+    expect(readiness.message).toContain("ocx codex-shim install");
+    expect(readiness.message).not.toContain("secret-token");
+  });
+
+  test("Claude-only connect never inspects or reports Codex shim state", () => {
+    const line = codexShimReadinessLine(["claude"], () => {
+      throw new Error("Codex shim must not be inspected for Claude-only connect");
+    });
+    expect(line).toBeNull();
   });
 });
 

@@ -17,6 +17,9 @@ import { getProviderRegistryEntry } from "../../../src/providers/registry";
 import { resolveWireProtocolOverride } from "../../../src/server/adapter-resolve";
 import { handleResponses } from "../../../src/server/responses/core";
 import type { OcxConfig, OcxProviderConfig } from "../../../src/types";
+import { acquireOwnedSpendHome } from "../../helpers/owned-spend-home";
+
+let releaseSpendHome: (() => void) | undefined;
 
 const RESPONSES_ONLY = [
   "gpt-5.3-codex",
@@ -27,6 +30,8 @@ const RESPONSES_ONLY = [
   "gpt-5.6-sol",
   "gpt-5.6-terra",
   "gpt-6-astra",
+  "gpt-6-sol",
+  "gpt-6-luna",
   "grok-4.5",
   "grok-4.6",
   "mai-code-1.1-flash",
@@ -42,6 +47,10 @@ describe("Copilot discovery-only models do not widen the cold-start seed", () =>
   for (const authMode of ["key", "oauth"] as const) {
     test(`${authMode} discovery exposes new models but failure retains the configured seed`, async () => {
       const auth = spyOn(oauth, "resolveModelsAuthToken").mockResolvedValue("test-token");
+      // Refreshing OAuth discovery takes the token and its origin from one snapshot.
+      const snapshot = spyOn(oauth, "getValidAccessTokenSnapshot").mockResolvedValue({
+        provider: "github-copilot", accountId: "acct-test", generation: "gen-test", accessToken: "test-token",
+      });
       const original = globalThis.fetch;
       const provider = { ...providerConfigSeed(getProviderRegistryEntry("github-copilot")!), authMode, apiKey: "test-token" };
       try {
@@ -57,6 +66,7 @@ describe("Copilot discovery-only models do not widen the cold-start seed", () =>
       } finally {
         globalThis.fetch = original;
         auth.mockRestore();
+        snapshot.mockRestore();
         clearModelCache("github-copilot");
       }
     });
@@ -137,7 +147,12 @@ describe("the registry default is isolated to the copilot provider", () => {
 
 describe("the wire default survives the handleResponses replay", () => {
   const originalFetch = globalThis.fetch;
-  afterEach(() => { globalThis.fetch = originalFetch; });
+  afterEach(() => {
+    // Release the preload-home lease before later teardown can replace or remove that home.
+    releaseSpendHome?.();
+    releaseSpendHome = undefined;
+    globalThis.fetch = originalFetch;
+  });
 
   function captureUpstreamUrl(): string[] {
     const urls: string[] = [];
@@ -154,6 +169,8 @@ describe("the wire default survives the handleResponses replay", () => {
   async function drive(model: string, inboundWire?: "responses" | "chat" | "anthropic"): Promise<string> {
     const urls = captureUpstreamUrl();
     const config = { providers: { "github-copilot": copilotProvider() } } as unknown as OcxConfig;
+    // Direct dispatch needs the writer lease that startServer normally owns for this home.
+    releaseSpendHome = acquireOwnedSpendHome();
     await handleResponses(
       new Request("http://localhost/v1/responses", {
         method: "POST",

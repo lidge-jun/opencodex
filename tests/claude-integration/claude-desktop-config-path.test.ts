@@ -118,7 +118,7 @@ describe("Claude Desktop status reports whether our profile is the active one", 
       const res = await fetch(new URL("/api/claude-desktop/status", server.url));
       return await res.json() as { activeProfile: boolean | null };
     } finally {
-      server.stop(true);
+      await server.stop(true);
       if (previous === undefined) delete process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
       else process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = previous;
       removeTreeWithRetry(dir);

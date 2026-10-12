@@ -6,7 +6,9 @@
  * proxy event loop stays responsive.
  */
 import type { CleanupMode, CleanupResult } from "./cleanup";
+import { spawnWorker } from "../lib/worker-embed";
 import { resolveCodexHomeDir } from "../codex/home";
+import { siblingOfLivePort } from "../codex/sibling-start";
 import {
   tryBeginStorageMutation,
 } from "./storage-mutation-coordinator";
@@ -63,6 +65,8 @@ export interface PolicyJobTestHooks {
    * policy load, so concurrent PUTs can race completion metadata writes.
    */
   blockMs?: number;
+  /** Test-only shared barrier after the Worker has loaded its initial policy. */
+  workerLoadGate?: Int32Array;
   /**
    * When true, run on the main thread via `queueMicrotask` + optional sleep.
    * Used only for unit tests that cannot spawn workers; responsiveness tests
@@ -302,7 +306,7 @@ function applyMutationBusy(): void {
   };
 }
 
-function runInWorker(opts: RequestPolicyRunOptions & { blockMs?: number }): Promise<PolicyRunResult> {
+function runInWorker(opts: RequestPolicyRunOptions & { blockMs?: number; workerLoadGate?: Int32Array }): Promise<PolicyRunResult> {
   const reservation = tryReserveStorageWorker();
   if (!reservation) return Promise.reject(new StorageWorkerAdmissionBusyError());
   return withStorageWorkerSpawnGate(() => new Promise<PolicyRunResult>((resolve, reject) => {
@@ -310,7 +314,7 @@ function runInWorker(opts: RequestPolicyRunOptions & { blockMs?: number }): Prom
     let settled = false;
     let worker: Worker;
     try {
-      worker = new Worker(new URL("./policy-worker.ts", import.meta.url).href);
+      worker = spawnWorker(new URL("./policy-worker.ts", import.meta.url).href, "policy-worker");
       reservation.bind(worker);
     } catch (error) {
       reservation.release();
@@ -367,6 +371,7 @@ function runInWorker(opts: RequestPolicyRunOptions & { blockMs?: number }): Prom
       ...(opts.codexHome ? { codexHome: opts.codexHome } : {}),
       ...(opts.busyTimeoutMs !== undefined ? { busyTimeoutMs: opts.busyTimeoutMs } : {}),
       ...(opts.blockMs !== undefined ? { blockMs: opts.blockMs } : {}),
+      ...(opts.workerLoadGate ? { workerLoadGate: opts.workerLoadGate } : {}),
       env: {
         ...(process.env.CODEX_HOME ? { CODEX_HOME: process.env.CODEX_HOME } : {}),
         ...(process.env.OPENCODEX_HOME ? { OPENCODEX_HOME: process.env.OPENCODEX_HOME } : {}),
@@ -408,6 +413,7 @@ async function executeJob(opts: RequestPolicyRunOptions): Promise<void> {
         ...opts,
         codexHome,
         ...(typeof blockMs === "number" && blockMs > 0 ? { blockMs } : {}),
+        ...(testHooks?.workerLoadGate ? { workerLoadGate: testHooks.workerLoadGate } : {}),
       });
     }
 
@@ -451,11 +457,14 @@ export function requestStorageCleanupPolicyRun(
 /**
  * Fire-and-forget entry for startup / schedule ticks.
  * Skips the single-flight slot when disabled or not due so manual runs stay free.
+ * A sibling instance never runs one: the archived sessions belong to the shared CODEX_HOME the
+ * live owner serves (`src/codex/sibling-start.ts`), and the manual run route is refused there too.
  */
 export function maybeRequestStorageCleanupPolicyRun(
   reason: PolicyRunReason,
   opts?: Omit<RequestPolicyRunOptions, "reason">,
 ): void {
+  if (siblingOfLivePort() !== null) return;
   try {
     const policy = readStorageCleanupPolicyFromConfig();
     if (!policy.enabled) return;

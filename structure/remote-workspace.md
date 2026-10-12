@@ -6,17 +6,34 @@
 
 `src/remote-control/workspace-agent-connection.ts` intersects presence with enrollment authority and negotiates explicit session grants. `src/remote-control/workspace-rpc.ts` snapshots session/device/root/capabilities and rejects mismatches before invoking the executor. The paired Hub is trusted to select an approved root over authenticated WSS; workspace control traffic is not an untrusted opaque relay protocol.
 
+Encrypted RPC v2 prepares a request with a bounded executor lifetime without invoking it. Only a
+separate authenticated grant admits execution. The coordinator sends that grant after prepare
+delivery settles, checking the original pending request again when the serialized grant send starts.
+A prepare whose send is still backpressured at coordinator timeout therefore cannot execute later.
+The endpoint starts its relative deadline on prepare receipt, never resets it on grant, and removes
+ungranted requests on cancellation or expiry. Granted work receives the same abort signal through
+the executor queue. The default 65-second RPC window exceeds the supported 60-second command ceiling.
+Timeout requests cancellation but does not confirm it: an already-sent grant can still be delayed
+in transit or its operation can already be running. The wire framing and encryption are unchanged;
+RPC v1 peers fail closed and must upgrade together rather than fall back to immediate execution.
+
+> Decision record: [ADR-0108](decisions/ADR-0108-remote-workspace-rpc-deadlines.md)
+
+> Decision record: [ADR-0121](decisions/ADR-0121-remote-workspace-execution-grants.md)
+
 `src/remote-control/workspace-executor.ts` checks approved root identity, relative paths, file size and write preconditions. File reads and write preconditions open descriptors nonblocking before verifying regular-file identity, so special files cannot wait for a peer during open. Its optional command runner lives in `src/remote-control/workspace-command-runner.ts`. Linux uses bubblewrap outside writable workspace roots and checks executable/parent permissions before invocation. The official Windows and macOS native helpers refuse commands; file tools remain independent of command availability.
 
 `src/remote-control/workspace-hub.ts`, `src/remote-control/workspace-device.ts` and `src/remote-control/workspace-sessions.ts` own separate persisted state. `src/remote-control/workspace-secret-store.ts` requires private permissions and rejects access failures rather than treating them as first-run absence. Publication reuses `src/config/atomic-write.ts`; workspace file publication uses the remote-workspace publisher in `src/lib/windows-atomic-replace.ts`.
 
 `src/remote-control/workspace-runtime.ts` is the lazy composition owner for Hub services. Codex, Claude and Pi adapters keep model processes on the Hub and expose selected remote tools. Their source configuration is not evidence of live CLI confinement. `src/cli/remote-workspace.ts` contains registered executor pair/agent/status handling; the machine-readable entries live in `src/cli/capabilities.ts`.
 
+The explicit hub status/runtimes/sessions branch selects `src/cli/remote-workspace-hub.ts` before executor storage. It performs fixed management reads and projects public devices/root labels, named runtime availability and session events; it exposes no pairing or session mutation. The outer management dispatcher returns available:false with HTTP200 when activation is off; CLI reports that observation with exit1 and fixed recovery guidance, distinct from an available Hub with empty lists. Client-role refusal, transport errors and malformed observations remain nonzero.
+
 The optional terminal prototype in `src/remote-control/host.ts` invokes only a caller-supplied factory after authenticated traffic. `src/remote-control/relay.ts` routes opaque prototype envelopes after caller authorization. Neither is a production terminal service.
 
 Regression coverage lives in `tests/clients/remote-workspace-session-binding.test.ts`, `tests/clients/remote-workspace-secret-store.test.ts` and the adjacent protocol, agent-wire, device, hub, sessions and command-runner tests. Real CLI and native confinement tests require their explicit environments; generic suite success does not certify those paths. Windows command support remains unavailable pending a verified lifecycle owner.
 
-`src/server/index.ts` admits the opt-in pair exchange and bearer-authenticated agent upgrade after Origin and role checks. The unauthenticated loopback companion does not expose either endpoint. `src/server/management-api.ts` answers disabled workspace status before importing services; mutations require a dashboard session. `src/server/management/remote-workspace-routes.ts` reads bounded management JSON and uses the initialized Hub/session services.
+`src/server/index.ts` admits the opt-in pair exchange and bearer-authenticated agent upgrade after Origin and role checks. The unauthenticated loopback companion does not expose either endpoint. `src/server/management-api.ts` answers disabled workspace status before importing services; mutations require a dashboard session issued through the operator-mediated GUI pairing flow. Sessions bootstrapped from an unauthenticated loopback page or inferred Tailscale identity may read status but cannot create grants, control devices, start sessions, or submit prompts. `src/server/management/remote-workspace-routes.ts` reads bounded management JSON and uses the initialized Hub/session services.
 
 The listener retains an awaited shutdown callback only after optional activation. It refuses initialization once stop begins, starts listener admission closure and workspace cleanup concurrently, and awaits session shutdown before closing Hub connections in a finally path. Listener drain completes after these owned sockets close; cleanup failures still propagate. `src/server/ws-bridge.ts` carries structural receive/open/close callbacks without importing concrete workspace services.
 
@@ -25,3 +42,15 @@ The listener retains an awaited shutdown callback only after optional activation
 Hub runtime admission counts pending create/resume starts as well as live handles against global and per-device limits; every outcome releases its reservation. Stop and shutdown reclaim late resumed handles before clearing ownership. Coordinator result size limits normalize both response text and success, so bridge and MCP callers receive consistent errors.
 
 Prompt HTTP admission returns 202 with the existing session/event cursor; tracked operations publish terminal status for polling and attach a rejection observer immediately. Reconnect/resume cannot publish ready while a turn is active. The dashboard prefers newer local event cursors over stale polling, favors authoritative polling on ties, retains unconfirmed draft text with an uncertainty notice, and never retries prompt POSTs automatically.
+
+## Durable device revocation
+
+`RemoteWorkspaceHub.revokeDevice` persists a candidate enrollment list before publishing it
+or closing the executor connection. A failed save leaves the device listed, its token valid,
+and its connection unchanged, matching durable authority and allowing the same revoke to retry.
+Successful retry removes the enrollment before closing the connection; a freshly loaded Hub
+rejects the original token. Unknown/already removed devices return false without writing.
+`tests/clients/remote-workspace-hub.test.ts` injects a save failure and checks retry, reload,
+connection lifetime, and token admission.
+
+> Decision record: [Durable device revocation](decisions/ADR-0103-durable-device-revocation.md)

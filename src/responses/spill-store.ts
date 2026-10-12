@@ -13,6 +13,7 @@ import {
   readFileSync,
   unlinkSync,
   writeSync,
+  type Stats,
 } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
 import { dirname, join } from "node:path";
@@ -34,6 +35,20 @@ export const RESPONSE_SPILL_DIR_NAME = "responses-state-spill";
 export const RESPONSE_SPILL_ORPHAN_GRACE_MS = 15 * 60_000;
 export const RESPONSE_SPILL_SCAN_MAX = 4_096;
 export const RESPONSE_SPILL_CLEANUP_MAX = 512;
+// The liveness-tick sweep runs synchronously on the serving event loop every
+// 60 s, so it gets a tighter bound than the startup pass that blocks one call.
+export const PERIODIC_SPILL_SWEEP_OPTS = {
+  scanMax: 512,
+  cleanupMax: 64,
+  deadlineMs: 25,
+} as const;
+
+/** Open directory iterator the next liveness-tick sweep resumes from; null
+ *  after a full pass, an iteration error, or a directory change. Holding the
+ *  real iterator (instead of an offset re-skipped from a fresh opendir) keeps
+ *  each tick's cost bounded by its own budget, so a slow enumeration cannot
+ *  pin the cursor at the same prefix forever. */
+let periodicSweepCursor: { dir: string; scan: SpillDirScan } | null = null;
 
 const RESPONSE_SPILL_PUBLISH_RETRIES = 64;
 const OWNED_SPILL_NAME = /^([A-Za-z0-9._-]{1,80})\.([0-9a-f]{12})\.([0-9a-f]{24})\.(\d+)\.(\d+)\.spill\.json$/;
@@ -57,6 +72,7 @@ export interface ResponseSpillPayload {
    */
   providerOutputStart?: number;
   providers?: OcxProviderContinuationState;
+  unforcedStoreFalse?: boolean;
 }
 
 export interface ResponseSpillRef {
@@ -95,6 +111,8 @@ export interface ResponseSpillCleanupResult {
   removed: number;
   failed: number;
   bytesRemoved: number;
+  /** The scan reached the end of the directory. */
+  exhausted?: boolean;
 }
 
 export interface ResponseSpillIoForTest {
@@ -479,6 +497,7 @@ function serializedSpill(
     items: state.items,
     ...(state.providerOutputStart !== undefined ? { providerOutputStart: state.providerOutputStart } : {}),
     ...(state.providers ? { providers: state.providers } : {}),
+    ...(state.unforcedStoreFalse ? { unforcedStoreFalse: state.unforcedStoreFalse } : {}),
   };
   const serialized = JSON.stringify(payload);
   if (serialized === undefined) throw new Error("Response spill serialization failed");
@@ -532,12 +551,14 @@ function validPayload(value: unknown, responseId: string): value is ResponseSpil
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const payload = value as Record<string, unknown>;
   const keys = Object.keys(payload);
-  if (keys.some(key => !["version", "responseId", "createdAt", "clientThreadId", "items", "providerOutputStart", "providers"].includes(key))) return false;
+  if (keys.some(key => !["version", "responseId", "createdAt", "clientThreadId", "items", "providerOutputStart", "providers", "unforcedStoreFalse"].includes(key))) return false;
   if (payload.version !== 1 || payload.responseId !== responseId) return false;
   if (typeof payload.createdAt !== "number" || !Number.isFinite(payload.createdAt)) return false;
   if (payload.clientThreadId !== undefined
     && (typeof payload.clientThreadId !== "string" || payload.clientThreadId.trim().length === 0)) return false;
+  if (payload.unforcedStoreFalse !== undefined && typeof payload.unforcedStoreFalse !== "boolean") return false;
   if (!Array.isArray(payload.items)) return false;
+  if (payload.unforcedStoreFalse === true && payload.providerOutputStart === undefined) return false;
   // A malformed boundary must degrade to "never skip", never to a bad index: reject the
   // payload outright so materialization treats it as corrupt rather than trusting it.
   if (payload.providerOutputStart !== undefined) {
@@ -744,63 +765,213 @@ export function readResponseSpill(responseId: string, ref: ResponseSpillRef): Re
 export function deleteResponseSpill(ref: ResponseSpillRef): void {
   if (!validSpillRef(ref)) return;
   const dir = responseSpillDirectory();
+  const path = join(dir, ref.fileName);
   try {
-    unlink(join(dir, ref.fileName));
+    unlink(path);
     fsyncDirectoryBestEffort(dir);
-  } catch { /* best effort */ }
+  } catch (error) {
+    // Still best effort, but no longer invisible: a file a failed unlink left behind occupies
+    // the volume, so the accounting owner keeps pricing it until the path is gone (#6747).
+    if (!isErrno(error, "ENOENT")) spillUnlinkFailureObserver?.(path, ref.payloadBytes);
+  }
+}
+
+type SpillUnlinkFailureObserver = (path: string, bytes: number) => void;
+let spillUnlinkFailureObserver: SpillUnlinkFailureObserver | null = null;
+
+/** The owner of spill accounting registers here so a failed unlink cannot under-report disk use. */
+export function setResponseSpillUnlinkFailureObserver(next: SpillUnlinkFailureObserver | null): void {
+  spillUnlinkFailureObserver = next;
+}
+
+type SpillDirNameKind = "spill" | "temp";
+
+/** Directory-iteration plumbing shared by reclaim and the dry-run inspector.
+ *  ONE loop serves both the real directory handle and the injected test seam
+ *  (review C2-2: two duplicated loops let the test prove only its own copy).
+ *  Callers must request the next name strictly AFTER their scan-cap check, so
+ *  entry SCAN_MAX+1 is never requested from either source. */
+interface SpillDirScan { nextName: () => string | null; close: () => void }
+
+function openSpillDirScan(dir: string): SpillDirScan | null {
+  let handle: ReturnType<typeof opendirSync> | null = null;
+  const injected = spillIoForTest?.readdirEntry;
+  if (!injected) {
+    try { handle = opendirSync(dir); } catch { return null; }
+  }
+  return {
+    nextName: () => {
+      if (injected) return injected();
+      const entry = handle!.readSync();
+      return entry ? entry.name : null;
+    },
+    close: () => { try { handle?.closeSync(); } catch { /* best effort */ } },
+  };
+}
+
+/** Orphan predicate, name half: a spill-shaped name nobody references. Shared by
+ *  reclaim and the dry-run inspector so the report and the unlink cannot disagree. */
+function orphanSpillNameKind(name: string, referencedFileNames: ReadonlySet<string>): SpillDirNameKind | null {
+  if (referencedFileNames.has(name)) return null;
+  if (OWNED_SPILL_NAME.test(name)) return "spill";
+  if (OWNED_SPILL_TEMP_NAME.test(name)) return "temp";
+  return null;
+}
+
+/** Orphan predicate, stat half: a regular file (never a symlink) past the grace window. */
+function spillEntryPastGrace(stat: Stats, graceMs: number): boolean {
+  return stat.isFile() && !stat.isSymbolicLink() && Date.now() - stat.mtimeMs >= graceMs;
+}
+
+export interface ResponseSpillDirInspection {
+  scanned: number;
+  /** The walk stopped at RESPONSE_SPILL_SCAN_MAX, so every count describes a
+   *  prefix of the directory and the real totals are higher. */
+  truncated: boolean;
+  /** Every regular file present, spill-shaped or not — the honest disk total. */
+  files: number;
+  bytes: number;
+  /** Regular files named in the caller's referenced set. */
+  ownedFiles: number;
+  ownedBytes: number;
+  /** Spill/temp-shaped regular files unreferenced and past the orphan grace. */
+  orphanFiles: number;
+  orphanBytes: number;
+}
+
+/**
+ * Dry-run counterpart of recoverOrphanedResponseSpills: same directory walk and
+ * the same orphan predicate, but it counts and never unlinks. It stats every
+ * entry (bounded by RESPONSE_SPILL_SCAN_MAX) because `bytes` is the disk total
+ * an operator sizes the directory by — reclaim only stats orphan candidates.
+ */
+export function inspectResponseSpillDir(
+  referencedFileNames: ReadonlySet<string>,
+  dir = responseSpillDirectory(),
+  opts?: { graceMs?: number },
+): ResponseSpillDirInspection {
+  const result: ResponseSpillDirInspection = {
+    scanned: 0, truncated: false, files: 0, bytes: 0,
+    ownedFiles: 0, ownedBytes: 0, orphanFiles: 0, orphanBytes: 0,
+  };
+  const graceMs = opts?.graceMs ?? RESPONSE_SPILL_ORPHAN_GRACE_MS;
+  const scan = openSpillDirScan(dir);
+  if (!scan) return result;
+  try {
+    while (result.scanned < RESPONSE_SPILL_SCAN_MAX) {
+      const name = scan.nextName();
+      if (name === null) break;
+      result.scanned += 1;
+      const path = join(dir, name);
+      let stat: Stats;
+      try { stat = lstatSync(path); } catch { continue; }
+      if (!stat.isFile() || stat.isSymbolicLink()) continue;
+      result.files += 1;
+      result.bytes += stat.size;
+      if (referencedFileNames.has(name)) {
+        result.ownedFiles += 1;
+        result.ownedBytes += stat.size;
+      } else if (orphanSpillNameKind(name, referencedFileNames) !== null && spillEntryPastGrace(stat, graceMs)) {
+        result.orphanFiles += 1;
+        result.orphanBytes += stat.size;
+      }
+    }
+  } finally {
+    scan.close();
+  }
+  result.truncated = result.scanned >= RESPONSE_SPILL_SCAN_MAX;
+  return result;
 }
 
 export function recoverOrphanedResponseSpills(
   referencedFileNames: ReadonlySet<string>,
   dir = responseSpillDirectory(),
-  opts?: { graceMs?: number },
+  opts?: { graceMs?: number; scanMax?: number; cleanupMax?: number; deadlineMs?: number },
+): ResponseSpillCleanupResult {
+  const scan = openSpillDirScan(dir);
+  if (!scan) return { scanned: 0, removed: 0, failed: 0, bytesRemoved: 0 };
+  try {
+    return reclaimFromSpillDirScan(scan, referencedFileNames, dir, opts);
+  } finally {
+    scan.close();
+  }
+}
+
+/** Reclaim loop over an already-open scan. It never reads a name it will not
+ *  process, so a caller that keeps the scan open resumes at the first entry the
+ *  previous call left untouched. Throws only if the iterator itself throws. */
+function reclaimFromSpillDirScan(
+  scan: SpillDirScan,
+  referencedFileNames: ReadonlySet<string>,
+  dir: string,
+  opts?: { graceMs?: number; scanMax?: number; cleanupMax?: number; deadlineMs?: number },
 ): ResponseSpillCleanupResult {
   const result: ResponseSpillCleanupResult = { scanned: 0, removed: 0, failed: 0, bytesRemoved: 0 };
   const graceMs = opts?.graceMs ?? RESPONSE_SPILL_ORPHAN_GRACE_MS;
-  // ONE loop serves both the real directory handle and the injected test seam
-  // (review C2-2: two duplicated loops let the test prove only its own copy).
-  // The reader is called strictly AFTER the scan-cap check, so entry
-  // SCAN_MAX+1 is never requested from either source.
-  let handle: ReturnType<typeof opendirSync> | null = null;
-  const injected = spillIoForTest?.readdirEntry;
-  if (!injected) {
-    try { handle = opendirSync(dir); } catch { return result; }
-  }
-  const nextName = (): string | null => {
-    if (injected) return injected();
-    const entry = handle!.readSync();
-    return entry ? entry.name : null;
-  };
-  try {
-    while (result.scanned < RESPONSE_SPILL_SCAN_MAX) {
-      const name = nextName();
-      if (name === null) break;
-      result.scanned += 1;
-      if (result.removed + result.failed >= RESPONSE_SPILL_CLEANUP_MAX) break;
-      const spillMatch = OWNED_SPILL_NAME.exec(name);
-      const isOwnedTemp = OWNED_SPILL_TEMP_NAME.test(name);
-      if ((!spillMatch && !isOwnedTemp) || referencedFileNames.has(name)) continue;
-      const path = join(dir, name);
-      let stat: ReturnType<typeof lstatSync>;
-      try { stat = lstatSync(path); } catch { continue; }
-      if (!stat.isFile() || stat.isSymbolicLink() || Date.now() - stat.mtimeMs < graceMs) continue;
-      try {
-        // Orphaned publish temps get the full ephemeral release; stable
-        // orphaned spills keep destination-keyed timeout memos.
-        if (isOwnedTemp) unlinkEphemeral(path);
-        else unlink(path);
-        result.removed += 1;
-        result.bytesRemoved += stat.size;
-      } catch {
-        result.failed += 1;
-      }
+  const scanMax = opts?.scanMax ?? RESPONSE_SPILL_SCAN_MAX;
+  const cleanupMax = opts?.cleanupMax ?? RESPONSE_SPILL_CLEANUP_MAX;
+  const deadline = opts?.deadlineMs === undefined ? Infinity : Date.now() + opts.deadlineMs;
+  while (result.scanned < scanMax && result.removed + result.failed < cleanupMax && Date.now() < deadline) {
+    const name = scan.nextName();
+    if (name === null) { result.exhausted = true; break; }
+    result.scanned += 1;
+    const orphanKind = orphanSpillNameKind(name, referencedFileNames);
+    if (orphanKind === null) continue;
+    const path = join(dir, name);
+    let stat: Stats;
+    try { stat = lstatSync(path); } catch { continue; }
+    if (!spillEntryPastGrace(stat, graceMs)) continue;
+    try {
+      // Orphaned publish temps get the full ephemeral release; stable
+      // orphaned spills keep destination-keyed timeout memos.
+      if (orphanKind === "temp") unlinkEphemeral(path);
+      else unlink(path);
+      result.removed += 1;
+      result.bytesRemoved += stat.size;
+    } catch {
+      result.failed += 1;
     }
-  } finally {
-    try { handle?.closeSync(); } catch { /* best effort */ }
   }
   return result;
 }
 
 export function responseSpillExistsForTests(ref: ResponseSpillRef): boolean {
   return validSpillRef(ref) && existsSync(join(responseSpillDirectory(), ref.fileName));
+}
+
+/**
+ * Bounded liveness-tick reclaim that resumes where the previous tick stopped,
+ * so orphans behind the first `scanMax` owned entries are still reached. The
+ * directory iterator stays open between ticks; it is dropped at end of
+ * directory, on an iteration error, or when the spill directory changes.
+ */
+export function sweepOrphanedResponseSpillsPeriodically(
+  referencedFileNames: ReadonlySet<string>,
+  dir = responseSpillDirectory(),
+): ResponseSpillCleanupResult {
+  if (periodicSweepCursor && periodicSweepCursor.dir !== dir) closePeriodicSweepCursor();
+  if (!periodicSweepCursor) {
+    const scan = openSpillDirScan(dir);
+    if (!scan) return { scanned: 0, removed: 0, failed: 0, bytesRemoved: 0 };
+    periodicSweepCursor = { dir, scan };
+  }
+  let result: ResponseSpillCleanupResult;
+  try {
+    result = reclaimFromSpillDirScan(periodicSweepCursor.scan, referencedFileNames, dir, PERIODIC_SPILL_SWEEP_OPTS);
+  } catch {
+    closePeriodicSweepCursor();
+    return { scanned: 0, removed: 0, failed: 0, bytesRemoved: 0 };
+  }
+  // A full pass restarts from a fresh listing so files created mid-pass are seen.
+  if (result.exhausted) closePeriodicSweepCursor();
+  return result;
+}
+
+function closePeriodicSweepCursor(): void {
+  periodicSweepCursor?.scan.close();
+  periodicSweepCursor = null;
+}
+
+export function resetPeriodicSpillSweepCursorForTests(): void {
+  closePeriodicSweepCursor();
 }

@@ -20,6 +20,10 @@
  * enumeration of those was already incomplete once. Hashing the computed
  * candidate bytes closes the class instead of the instance — an input that
  * changes the output changes the id whether or not anyone remembered to list it.
+ * The pre-lock comparison id admits the original candidate. If a native feature
+ * transition changes that candidate under the lock, the coordinator publishes
+ * a new id derived from the bytes it commits; admission remains the stale-input
+ * guard and is not reused as a committed-byte witness.
  */
 import { createHash } from "node:crypto";
 

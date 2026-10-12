@@ -113,6 +113,15 @@ export interface GatherRoutedModelsOptions {
   providerModelOutcomes?: CatalogGatherProviderModelOutcome[];
   /** Internal convergence sink for the immutable policy that produced the returned rows. */
   discoveryPolicySnapshots?: CatalogProviderDiscoveryPolicySnapshot[];
+  /**
+   * Each provider's cache content revision as of the moment its rows were chosen.
+   *
+   * A caller that derives something from these rows and wants to know later whether the rows are
+   * still current must use this, not a revision sampled after the gather returns: another flight
+   * can publish between the choice and the sample, and the derived value would then carry that
+   * flight's identity while holding these rows.
+   */
+  providerContentRevisions?: Map<string, string>;
 }
 
 interface GatherFlightResult {
@@ -121,6 +130,7 @@ interface GatherFlightResult {
   providerAuthOutcomes: readonly CatalogGatherProviderAuthOutcome[];
   providerModelOutcomes: readonly CatalogGatherProviderModelOutcome[];
   discoveryPolicySnapshots: readonly CatalogProviderDiscoveryPolicySnapshot[];
+  providerContentRevisions: ReadonlyMap<string, string>;
 }
 interface GatherInflightEntry {
   readonly discoveryPolicyIdentity: string;
@@ -256,6 +266,7 @@ async function gatherRoutedModelsWithAuth(
     providerAuthOutcomes,
     providerModelOutcomes,
     discoveryPolicySnapshots,
+    providerContentRevisions,
   } = await entry.promise;
   if (options?.comboOmissions) {
     options.comboOmissions.length = 0;
@@ -268,6 +279,12 @@ async function gatherRoutedModelsWithAuth(
   if (options?.providerModelOutcomes) {
     options.providerModelOutcomes.length = 0;
     options.providerModelOutcomes.push(...providerModelOutcomes);
+  }
+  if (options?.providerContentRevisions) {
+    options.providerContentRevisions.clear();
+    for (const [provider, revision] of providerContentRevisions) {
+      options.providerContentRevisions.set(provider, revision);
+    }
   }
   if (options?.discoveryPolicySnapshots) {
     options.discoveryPolicySnapshots.length = 0;
@@ -330,6 +347,7 @@ async function gatherRoutedModelsUncached(
     lists.flat(),
     config,
     capture.openAiApiPolicy,
+    activeProviders.find(provider => provider.name === OPENAI_API_PROVIDER_ID)?.metadataConfigDir,
   );
   const apiProvider = activeProviders.find(provider => provider.name === OPENAI_API_PROVIDER_ID);
   // Trusted reconstruction replaces whole rows, including the earlier Fast hints.
@@ -346,12 +364,16 @@ async function gatherRoutedModelsUncached(
   const metadataModelIdCaseFoldByProvider = new Map(
     activeProviders.map(provider => [provider.name, provider.metadataModelIdCaseFold]),
   );
+  const metadataConfigDirByProvider = new Map(
+    activeProviders.map(provider => [provider.name, provider.metadataConfigDir]),
+  );
   const all = augmentRoutedModelsWithMetadata(
     apiAugmented,
     activeProviders.map(provider => provider.name),
     config.providers,
     config,
     metadataModelIdCaseFoldByProvider,
+    metadataConfigDirByProvider,
   )
     // Drop image/video generation models (e.g. Grok image/video) by default. Cursor's static catalog
     // intentionally mirrors Cursor's public model table, including Gemini image preview, so the
@@ -494,6 +516,7 @@ async function gatherRoutedModelsUncached(
         providerContextCap(config, target.provider),
         nativeAliasFallback,
         metadataModelIdCaseFoldByProvider.get(target.provider),
+        metadataConfigDirByProvider.get(target.provider),
       ))
       .filter((member): member is CatalogModel => member !== undefined);
     const derived = deriveComboCatalogModel(id, combo, members);
@@ -511,7 +534,16 @@ async function gatherRoutedModelsUncached(
     else warnUncataloguedComboOnce(id, combo, members, localOmissions);
   }
   replaceLastComboCatalogOmissions(localOmissions);
-  all.sort((a, b) => (a.provider === b.provider ? a.id.localeCompare(b.id) : a.provider.localeCompare(b.provider)));
+  // Preserve declaratively ordered discovery (and cold-start seed order); other presets
+  // retain their historical alphabetical order. Renamed/custom transport scoping still applies.
+  // Read the captured discovery policy, never the live registry: a flight must keep the
+  // authority it was captured under even if the registry changes mid-gather.
+  const orderedProviders = new Set(activeProviders
+    .filter(({ discovery }) => (discovery.spec?.preferFirst?.length ?? 0) > 0)
+    .map(({ name }) => name));
+  all.sort((a, b) => (a.provider === b.provider
+    ? orderedProviders.has(a.provider) ? 0 : a.id.localeCompare(b.id)
+    : a.provider.localeCompare(b.provider)));
   // Provider-derived rows keyed by their Codex-facing slug: a custom override replaces the row
   // with the same slug below, so that row's provider capability metadata is the inheritance source.
   const replacedByRoutedSlug = new Map(all.map(model => [routedSlug(model.provider, model.id), model]));
@@ -565,7 +597,7 @@ async function gatherRoutedModelsUncached(
         id: cm.modelId,
         provider: cm.provider,
         ...(nativeAliasMaxOutputTokens !== undefined ? { maxOutputTokens: nativeAliasMaxOutputTokens } : {}),
-      }, cm.modelId, metadataModelIdCaseFoldByProvider.get(cm.provider))
+      }, cm.modelId, metadataModelIdCaseFoldByProvider.get(cm.provider), metadataConfigDirByProvider.get(cm.provider))
       : nativeAliasMaxOutputTokens;
     const configuredAutoCompact = configuredAutoCompactTokenLimit(rawProvider, cm.modelId);
     const customAutoCompactTokenLimit = codexForwardNativeCapabilityAlias
@@ -720,10 +752,26 @@ async function gatherRoutedModelsUncached(
     }
     return mergedWithAutoCompact;
   });
-  // Custom rows override discovered rows that encode to the same Codex-facing slug.
-  const customKeys = new Set(customModels.map(c => routedSlug(c.provider, c.id)));
-  const deduped = all.filter(m => !customKeys.has(routedSlug(m.provider, m.id)));
-  const models = [...deduped, ...customModels];
+  // Custom rows override discovered rows that encode to the same Codex-facing slug. A provider whose
+  // captured discovery declares an order (preferFirst) keeps each replacement in the discovered row's
+  // slot; every other provider keeps the historical order of discovered rows followed by custom rows.
+  const customBySlug = new Map<string, CatalogModel[]>();
+  for (const custom of customModels) {
+    const key = routedSlug(custom.provider, custom.id);
+    const bucket = customBySlug.get(key);
+    if (bucket) bucket.push(custom);
+    else customBySlug.set(key, [custom]);
+  }
+  const placedInSlot = new Set<string>();
+  const models: CatalogModel[] = all.flatMap(model => {
+    const key = routedSlug(model.provider, model.id);
+    const replacements = customBySlug.get(key);
+    if (!replacements) return [model];
+    if (!orderedProviders.has(model.provider) || placedInSlot.has(key)) return [];
+    placedInSlot.add(key);
+    return replacements;
+  });
+  models.push(...customModels.filter(custom => !placedInSlot.has(routedSlug(custom.provider, custom.id))));
   // ponytail: catalog-scale scan; index ids by provider if catalog growth makes this measurable.
   const aliasDisplayNames = new Map(activeProviders.flatMap(({ name, provider }) => {
     const providerModels = models.filter(model => model.provider === name);
@@ -763,6 +811,8 @@ async function gatherRoutedModelsUncached(
     providerAuthOutcomes: localProviderAuthOutcomes,
     providerModelOutcomes,
     discoveryPolicySnapshots: capture.discoveryPolicySnapshots,
+    // Stamped by each provider at the moment it chose its rows, not sampled here.
+    providerContentRevisions: new Map(providerResults.map(result => [result.outcome.provider, result.contentRevision])),
   };
 }
 
@@ -783,6 +833,7 @@ function augmentRoutedModelsWithCapturedOpenAiApiRows(
   models: CatalogModel[],
   config: OcxConfig,
   policy: CatalogTrustedOpenAiApiPolicySnapshot,
+  metadataConfigDir?: string,
 ): CatalogModel[] {
   if (policy.state !== "captured" || !policy.models) return models;
   const configured = config.providers[OPENAI_API_PROVIDER_ID];
@@ -818,6 +869,8 @@ function augmentRoutedModelsWithCapturedOpenAiApiRows(
         ? { provider: OPENAI_API_PROVIDER_ID, id, maxOutputTokens: policy.modelMaxOutputTokens[id] }
         : existingById.get(id) ?? { provider: OPENAI_API_PROVIDER_ID, id },
       policy.virtualModels?.[id]?.wireModelId ?? id,
+      undefined,
+      metadataConfigDir,
     );
     return {
       provider: OPENAI_API_PROVIDER_ID,
@@ -876,6 +929,7 @@ export function augmentRoutedModelsWithMetadata(
   providers?: Record<string, OcxProviderConfig>,
   caps?: Pick<OcxConfig, "providerContextCaps">,
   metadataModelIdCaseFoldByProvider?: ReadonlyMap<string, boolean>,
+  metadataConfigDirByProvider?: ReadonlyMap<string, string>,
 ): CatalogModel[] {
   const out = [...models];
   const indexByKey = new Map(out.map((model, index) => [`${model.provider}/${model.id}`, index]));
@@ -903,6 +957,8 @@ export function augmentRoutedModelsWithMetadata(
             seeded,
             contextCap,
             metadataModelIdCaseFoldByProvider?.get(provider),
+            undefined,
+            metadataConfigDirByProvider?.get(provider),
           )
           : seeded;
         continue;
@@ -925,6 +981,8 @@ export function augmentRoutedModelsWithMetadata(
             model,
             contextCap,
             metadataModelIdCaseFoldByProvider?.get(provider),
+            undefined,
+            metadataConfigDirByProvider?.get(provider),
           )
           : {}),
       });

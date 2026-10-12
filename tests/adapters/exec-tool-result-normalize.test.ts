@@ -5,7 +5,11 @@ import { parseRequest } from "../../src/responses/parser";
 import {
   CODE_MODE_HOST_CONTRACT_SENTENCE,
   CODE_MODE_HOST_FAILURE_GUIDANCE,
+  EMPTY_EXEC_OUTPUT_MESSAGE,
+  EMPTY_EXEC_OUTPUT_REGEX,
   annotateCodeModeHostFailure,
+  isEmptyExecToolResult,
+  normalizeEmptyExecToolResultText,
 } from "../../src/adapters/exec-tool-result-normalize";
 
 // Live host strings (Codex 0.153.2, probed 2026-09-07) and the rule each one names. The pre-call
@@ -112,3 +116,61 @@ describe("code-mode host failure annotation", () => {
   });
 });
 
+describe("empty exec output wrapper detection", () => {
+  test("recognizes each optional section and their combinations", () => {
+    for (const text of [
+      "Script completed\nWall time 0.1 seconds\nOutput:\n",
+      "Script completed\nWall time 0.1 seconds\nOutput:\n<empty>\n",
+      "Command finished\nOutput:\n",
+      "Execution finished\n\n\nWall time 1s\n\nOutput:\n\n<empty>\n\n",
+      "Wall time 5s\n",
+      "Wall time 5s\nOutput:\n<empty>",
+      "Output:<empty>",
+      "Output:\n\n\n",
+      "<empty>",
+      "\n\n\n",
+    ]) {
+      expect(EMPTY_EXEC_OUTPUT_REGEX.test(text)).toBe(true);
+    }
+    for (const text of [
+      "Script completed",
+      "Script completed\nreal output\n",
+      "Script failed\nOutput:\n",
+      "Output: hi\n",
+      "text\n<empty>",
+      "x<empty>",
+      "Script completed\nWall time\nOutput:\n<empty>x",
+      "Wall time\n<empty> trailing",
+    ]) {
+      expect(EMPTY_EXEC_OUTPUT_REGEX.test(text)).toBe(false);
+    }
+  });
+
+  // The previous pattern let adjacent `\n+`/`\s*` quantifiers repartition a newline block
+  // combinatorially; these inputs keep that a timeout-scale regression rather than a silent one.
+  test("stays linear on pathological whitespace runs", () => {
+    const newlines = "\n".repeat(200_000);
+    const start = performance.now();
+    expect(EMPTY_EXEC_OUTPUT_REGEX.test(`Script completed\n${newlines}!`)).toBe(false);
+    expect(EMPTY_EXEC_OUTPUT_REGEX.test(`Output:${newlines}`)).toBe(true);
+    expect(EMPTY_EXEC_OUTPUT_REGEX.test(`Script completed\nWall time x\n${newlines}trailing`)).toBe(false);
+    // Generous bound: the previous pattern hung on this shape; a second is far above linear cost.
+    expect(performance.now() - start).toBeLessThan(1_000);
+  });
+
+  // The bare regex tolerates one trailing newline, but the real path trims first — "Wall time 5s"
+  // then lacks the newline its section requires and "Script completed" alone is not a wrapper.
+  // Pinning the divergence keeps the example rows above from being read as callable behaviour.
+  test("real path trims before matching, so a lone trailing newline is not empty", () => {
+    for (const text of ["Wall time 5s\n", "Script completed\n"]) {
+      expect(EMPTY_EXEC_OUTPUT_REGEX.test(text)).toBe(true);
+      expect(normalizeEmptyExecToolResultText(text, { toolName: "exec" })).toBeUndefined();
+      expect(isEmptyExecToolResult(text, { toolName: "exec" })).toBe(false);
+    }
+    // A wrapper whose structure survives the trim still normalizes through the same path.
+    expect(normalizeEmptyExecToolResultText(
+      "Script completed\nWall time 0.1 seconds\nOutput:\n",
+      { toolName: "exec" },
+    )).toBe(EMPTY_EXEC_OUTPUT_MESSAGE);
+  });
+});

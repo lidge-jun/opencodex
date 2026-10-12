@@ -20,8 +20,9 @@
  *    how this incident happened.
  */
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 const GUARD_ENV = "OCX_TEST_HOME_GUARD";
 /**
@@ -30,6 +31,8 @@ const GUARD_ENV = "OCX_TEST_HOME_GUARD";
  * loads, so the true home is only knowable from this hand-off.
  */
 const REAL_HOME_ENV = "OCX_REAL_HOME";
+/** Set by `scripts/test.ts` to the developer's own Claude config directory before it sandboxes one. */
+const REAL_CLAUDE_CONFIG_DIR_ENV = "OCX_REAL_CLAUDE_CONFIG_DIR";
 
 /**
  * Resolve symlinks so two spellings of one location compare equal — macOS hands out
@@ -62,6 +65,25 @@ const REAL_HOME = process.env[REAL_HOME_ENV]?.trim() || homedir();
 const PROTECTED_HOME = canonicalize(join(REAL_HOME, ".opencodex"));
 const PROTECTED_CODEX_HOME = canonicalize(join(REAL_HOME, ".codex"));
 /**
+ * The developer's Claude config directory: the default `<real home>/.claude`, plus their own
+ * `CLAUDE_CONFIG_DIR` when they set one. `scripts/test.ts` hands the original over as
+ * `OCX_REAL_CLAUDE_CONFIG_DIR` because its child already starts with a sandboxed
+ * `CLAUDE_CONFIG_DIR`; a bare run imports this module before the preload rewrites the
+ * environment, so `CLAUDE_CONFIG_DIR` still holds the developer's value here.
+ *
+ * Claude agent sync prunes generated `agents/ocx-*.md`, and a bare `bun test` once did that
+ * to a live directory: Bun's `os.homedir()` ignores a HOME rewritten after startup (#6775).
+ */
+const REAL_CLAUDE_CONFIG_DIRS = [...new Set([
+  join(REAL_HOME, ".claude"),
+  process.env[REAL_CLAUDE_CONFIG_DIR_ENV]?.trim() || process.env.CLAUDE_CONFIG_DIR?.trim() || join(REAL_HOME, ".claude"),
+])];
+const PROTECTED_CLAUDE_TREES = REAL_CLAUDE_CONFIG_DIRS.map(path => ({
+  path: canonicalize(path),
+  lexical: resolve(path),
+  label: "the real Claude config directory",
+}));
+/**
  * `~/Library/LaunchAgents` needs its own entry because HOME isolation does not reach it:
  * `os.homedir()` reads the password database, not `$HOME`, so a macOS test that rewrites
  * HOME still resolves `plistPath()` to the developer's real LaunchAgents directory. The
@@ -80,6 +102,11 @@ export function protectedHomeForTests(): string {
 /** The production Codex home this process protects when tests write native credentials. */
 export function protectedCodexHomeForTests(): string {
   return PROTECTED_CODEX_HOME;
+}
+
+/** The Claude config directories this process protects. Exported for the guard's own tests. */
+export function protectedClaudeConfigDirsForTests(): readonly string[] {
+  return PROTECTED_CLAUDE_TREES.map(tree => tree.path);
 }
 
 export function isTestHomeGuardArmed(): boolean {
@@ -149,8 +176,57 @@ export function assertNotRealCodexHomeUnderTest(dir: string): void {
   if (canonicalize(dir) !== PROTECTED_CODEX_HOME) return;
   throw new Error(
     `refusing to write the real Codex home (${PROTECTED_CODEX_HOME}) from a test process. `
-    + "Point CODEX_HOME at a temp directory for this test before writing native auth.json.",
+    + "Point CODEX_HOME at a temp directory for this test before writing Codex files "
+    + "(auth.json, the catalog, models_cache.json, the journal or config.toml).",
   );
+}
+
+/**
+ * Throw when an armed test process is about to write or prune inside the real Claude config
+ * directory. Unlike the OpenCodex and Codex homes this refuses descendants too, and callers pass
+ * every directory they are about to touch (the config root AND its `agents`/`cache` child), so a
+ * sandbox child that is a link into the real directory is judged by where it resolves.
+ *
+ * The protected roots are resolved at check time rather than at import, so a custom directory
+ * created after this module loaded still compares by its current identity. On macOS and Windows,
+ * whose default filesystems ignore case, paths compare case-insensitively: `.CLAUDE` is the same
+ * directory there. Comparing too broadly only refuses more, which is the safe direction here.
+ *
+ * Call FIRST, outside any best-effort catch, so a refusal is visible and nothing is touched.
+ */
+export function assertNotRealClaudeConfigUnderTest(...paths: string[]): void {
+  if (!isTestHomeGuardArmed()) return;
+  const roots = currentClaudeConfigRoots();
+  for (const path of paths) {
+    for (const candidate of [canonicalize(path), resolve(path)]) {
+      for (const root of roots) {
+        if (!isSameOrInsideIgnoringPlatformCase(root, candidate)) continue;
+        throw new Error(
+          `refusing to write the real Claude config directory (${root}) from a test process. `
+          + "Set CLAUDE_CONFIG_DIR to a temp directory, or pass an explicit config directory "
+          + "(for a server, startServer's managementApi.claudeAgentConfigDir).",
+        );
+      }
+    }
+  }
+}
+
+function currentClaudeConfigRoots(): string[] {
+  return REAL_CLAUDE_CONFIG_DIRS.flatMap(path => [canonicalize(path), resolve(path)]);
+}
+
+function foldPlatformCase(path: string): string {
+  return process.platform === "darwin" || process.platform === "win32" ? path.toLowerCase() : path;
+}
+
+function isSameOrInsideIgnoringPlatformCase(root: string, candidate: string): boolean {
+  const parent = foldPlatformCase(root);
+  const child = foldPlatformCase(candidate);
+  if (parent === child) return true;
+  const rel = relative(parent, child);
+  // Only a leading ".." COMPONENT leaves the root, split on this platform's separator: a child
+  // named "..fixture", or "..\\fixture" on POSIX where a backslash is a filename character, is inside.
+  return rel !== "" && !isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`);
 }
 
 /**
@@ -170,6 +246,7 @@ const PROTECTED_TREES: ReadonlyArray<{ path: string; lexical: string; label: str
     lexical: resolve(join(REAL_HOME, "Library", "LaunchAgents")),
     label: "the real LaunchAgents directory",
   },
+  ...PROTECTED_CLAUDE_TREES,
 ];
 const PROTECTED_REAL_HOME = canonicalize(REAL_HOME);
 const LEXICAL_REAL_HOME = resolve(REAL_HOME);
@@ -185,16 +262,57 @@ function isInside(parent: string, child: string): boolean {
   return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
 }
 
+let checkoutRootSpellings: readonly string[] | undefined;
+
+/**
+ * Both spellings of the checkout that loaded this module (`src/lib` -> repository root).
+ *
+ * Lazy so a production process, which never removes anything through this guard, does no work
+ * for it at module load. In a compiled binary the module URL sits under a virtual root, so the
+ * result names no real checkout and the exemption below can never apply.
+ */
+function checkoutRoots(): readonly string[] {
+  if (checkoutRootSpellings === undefined) {
+    let lexical: string | null = null;
+    try {
+      lexical = resolve(fileURLToPath(new URL("../..", import.meta.url)));
+    } catch {
+      // A non-file module URL names no checkout: no exemption.
+    }
+    checkoutRootSpellings = lexical === null ? [] : [...new Set([canonicalize(lexical), lexical])];
+  }
+  return checkoutRootSpellings;
+}
+
+/**
+ * Whether `candidate` is repository content of a checkout that itself lives inside `protectedPath`.
+ *
+ * A Codex-app worktree is a checkout under `~/.codex/worktrees/`, and forty suites keep their
+ * fixture directory beside the test file. Refusing every path inside `~/.codex` refused those
+ * suites' own cleanup, 863 failures in one run, although nothing there is Codex state. The lift
+ * is deliberately narrow: it applies to one tree, only when a checkout spelling is strictly
+ * inside that tree and the candidate is strictly inside that checkout. The checkout root itself,
+ * its ancestors and every sibling stay refused, and a checkout that merely CONTAINS a protected
+ * tree (one at `$HOME`, or the virtual root of a compiled build) never qualifies.
+ */
+function isOwnCheckoutContent(protectedPath: string, candidate: string): boolean {
+  return checkoutRoots().some(root => isInside(protectedPath, root) && isInside(root, candidate));
+}
+
 /**
  * Why removing `target` is refused, or `null` when it is not a protected location.
  *
  * Three relations are refused, not one. Equality alone would still permit
  * `rmSync(getConfigPath())` against a live `config.json`, and it would permit
  * `rmSync(homedir())`, which takes the protected tree with it. So a target is refused when it
- * IS a protected tree, when it sits INSIDE one, or when it is an ANCESTOR of one.
+ * IS a protected tree, when it sits INSIDE one, or when it is an ANCESTOR of one. The one lift is
+ * content of the running checkout when that checkout lives inside the tree
+ * ({@link isOwnCheckoutContent}); it never applies to equality or ancestry.
  *
  * Canonicalization is what makes a symlink useless as a bypass: a temp path that merely points
- * at the real home resolves to the real home before any comparison happens.
+ * at the real home resolves to the real home before any comparison happens. Each spelling is
+ * judged on its own and any refusal wins, so a link inside the checkout that resolves into the
+ * protected tree is refused through its canonical form.
  */
 export function protectedRemovalReason(target: string): string | null {
   // Both spellings are judged, not just the canonical one. Canonicalization is what defeats a
@@ -209,9 +327,22 @@ export function protectedRemovalReason(target: string): string | null {
     for (const tree of PROTECTED_TREES) {
       for (const protectedPath of [tree.path, tree.lexical]) {
         if (candidate === protectedPath) return `${tree.label} (${protectedPath})`;
-        if (isInside(protectedPath, candidate)) return `a path inside ${tree.label} (${protectedPath})`;
+        if (isInside(protectedPath, candidate) && !isOwnCheckoutContent(protectedPath, candidate)) {
+          return `a path inside ${tree.label} (${protectedPath})`;
+        }
         if (isInside(candidate, protectedPath)) return `an ancestor of ${tree.label} (${protectedPath})`;
       }
+    }
+    // The Claude directory is judged like its writer guard: roots resolved now, case folded
+    // where the filesystem folds it, so an alias created after import is still refused.
+    for (const root of currentClaudeConfigRoots()) {
+      if (isSameOrInsideIgnoringPlatformCase(root, candidate)) {
+        // Same narrow lift as the trees above: content of the running checkout when that
+        // checkout itself lives inside the directory. Never the root itself.
+        if (foldPlatformCase(root) !== foldPlatformCase(candidate) && isOwnCheckoutContent(root, candidate)) continue;
+        return `the real Claude config directory or a path inside it (${root})`;
+      }
+      if (isSameOrInsideIgnoringPlatformCase(candidate, root)) return `an ancestor of the real Claude config directory (${root})`;
     }
   }
   return null;

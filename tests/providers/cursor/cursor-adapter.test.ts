@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { describe, expect, spyOn, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import {
   createCursorAdapter as createCursorAdapterProduction,
   cursorExecDeniedMessage,
@@ -44,6 +44,10 @@ import { resetDebugSettingsForTests, setDebugSettings } from "../../../src/lib/d
 import { encodeCursorCallId, resetCursorCallIdProvenanceForTests } from "../../../src/adapters/cursor/call-id";
 import { handleCursorNativeKv, resetCursorBlobStateForTests } from "../../../src/adapters/cursor/native-exec";
 import { CURSOR_MISSING_TOOL_RESULT, encodeCursorRunRequest } from "../../../src/adapters/cursor/protobuf-request";
+import {
+  installSharedCursorPoolKernelForTests,
+  resetSharedCursorPoolKernelForTests,
+} from "../../../src/providers/cursor-pool";
 
 const createCursorAdapter = (...args: Parameters<typeof createCursorAdapterProduction>) =>
   withTestTranslatorBudget(createCursorAdapterProduction(...args));
@@ -272,6 +276,104 @@ describe("Cursor adapter live transport", () => {
       () => {},
     );
     expect(fallbackScopeCalls[1]?.[0]).toBe(expectedScope);
+  });
+
+  describe("bounded account-pool activation", () => {
+    const poolAccounts = [
+      { id: "account-a", access: "access-a", expires: Number.MAX_SAFE_INTEGER },
+      { id: "account-b", access: "access-b", expires: Number.MAX_SAFE_INTEGER },
+    ];
+    const scopedRequest: OcxParsedRequest = {
+      ...parsed,
+      context: { messages: [{ role: "user", content: "hi", timestamp: 1 }] },
+      _cursorIdentityScope: "owner-scope",
+      _clientThreadId: "thread-scope",
+    };
+
+    afterEach(() => {
+      resetSharedCursorPoolKernelForTests();
+    });
+
+    test("stays on the configured credential unless the pool is exactly enabled", async () => {
+      installSharedCursorPoolKernelForTests(() => 1_000, { listAccounts: () => poolAccounts });
+      const inputs: CursorTransportFactoryInput[] = [];
+      const adapter = createCursorAdapter(
+        { ...provider, apiKey: "original-token", cursorAccountPool: { enabled: false } },
+        { createTransport: makeTransportMock(inputs) },
+      );
+      await adapter.runTurn?.(scopedRequest, { headers: new Headers() }, () => {});
+      expect(inputs[0]?.provider.apiKey).toBe("original-token");
+    });
+
+    test("uses the pooled credential and rotates only that owner after a rate limit", async () => {
+      installSharedCursorPoolKernelForTests(() => 1_000, { listAccounts: () => poolAccounts });
+      const inputs: CursorTransportFactoryInput[] = [];
+      let calls = 0;
+      const adapter = createCursorAdapter(
+        { ...provider, apiKey: "original-token", cursorAccountPool: { enabled: true } },
+        {
+          createTransport(input) {
+            inputs.push(input);
+            return {
+              async *run() {
+                calls += 1;
+                if (calls === 1) throw new Error("Cursor rate limit exceeded");
+                yield { type: "done" } satisfies CursorServerMessage;
+              },
+              writeClient() {},
+            };
+          },
+        },
+      );
+      const events: AdapterEvent[] = [];
+      await adapter.runTurn?.(scopedRequest, { headers: new Headers() }, event => events.push(event));
+      expect(events[0]).toMatchObject({ type: "error" });
+      const cooled = inputs[0]?.provider.apiKey;
+      expect(["access-a", "access-b"]).toContain(cooled);
+      expect(cooled).not.toBe("original-token");
+
+      const otherOwner: CursorTransportFactoryInput[] = [];
+      const sibling = createCursorAdapter(
+        { ...provider, apiKey: "other-token", cursorAccountPool: { enabled: true } },
+        { createTransport: makeTransportMock(otherOwner) },
+      );
+      await sibling.runTurn?.(
+        { ...scopedRequest, _cursorIdentityScope: "other-owner" },
+        { headers: new Headers() },
+        () => {},
+      );
+      expect(otherOwner[0]?.provider.apiKey).toBe(cooled);
+
+      await adapter.runTurn?.(scopedRequest, { headers: new Headers() }, () => {});
+      expect(inputs[1]?.provider.apiKey).not.toBe(cooled);
+      expect(["access-a", "access-b"]).toContain(inputs[1]?.provider.apiKey);
+    });
+
+    test("does not cool the pool when the failure is not a rate limit", async () => {
+      installSharedCursorPoolKernelForTests(() => 1_000, { listAccounts: () => poolAccounts });
+      const inputs: CursorTransportFactoryInput[] = [];
+      let calls = 0;
+      const adapter = createCursorAdapter(
+        { ...provider, apiKey: "original-token", cursorAccountPool: { enabled: true } },
+        {
+          createTransport(input) {
+            inputs.push(input);
+            return {
+              async *run() {
+                calls += 1;
+                if (calls === 1) throw new Error("Cursor authentication failed: invalid token");
+                yield { type: "done" } satisfies CursorServerMessage;
+              },
+              writeClient() {},
+            };
+          },
+        },
+      );
+      await adapter.runTurn?.(scopedRequest, { headers: new Headers() }, () => {});
+      const first = inputs[0]?.provider.apiKey;
+      await adapter.runTurn?.(scopedRequest, { headers: new Headers() }, () => {});
+      expect(inputs[1]?.provider.apiKey).toBe(first);
+    });
   });
 
   // #1527: the envelope rejection is raised locally while building the request, so it surfaces

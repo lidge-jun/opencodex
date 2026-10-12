@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { saveCredential } from "../../src/oauth/store";
+import { getAccountSet, saveCredential, setAccountPaused } from "../../src/oauth/store";
 import { getConfigPath } from "../../src/config";
 import { flushConfigDirHardening } from "../../src/config/paths";
 import { markCodexAccountValidated, readCodexAccountRecord, saveCodexAccountCredential } from "../../src/codex/account-store";
@@ -109,6 +109,24 @@ describe("token guardian", () => {
     // Multiauth keys are oauth:<provider>:<accountId>
     expect(res.refreshed.some(k => k.startsWith("oauth:kimi:"))).toBe(true);
     expect(mock.count()).toBeGreaterThan(0);
+  });
+
+  test("paused OAuth account is excluded from proactive refresh", async () => {
+    const mock = mockFetchOk(OK_TOKEN);
+    writeConfig({
+      tokenGuardian: { enabled: true, tickSeconds: 60, leadSeconds: 60 },
+      providers: { kimi: kimiProvider("proactive") },
+    });
+    await saveCredential("kimi", { access: "a", refresh: "r", expires: Date.now() + 5_000 });
+    const accountId = getAccountSet("kimi")!.accounts[0]!.id;
+    await setAccountPaused("kimi", accountId, true);
+
+    const res = await guardianSweep(Date.now());
+
+    expect(res.refreshed).toEqual([]);
+    expect(res.failed).toEqual([]);
+    expect(res.skippedBackoff).toEqual([]);
+    expect(mock.count()).toBe(0);
   });
 
   test("lazy-only policy is left untouched even when enabled", async () => {

@@ -7,14 +7,17 @@ export const CONTEXT_BACKEND_PREFIX = "/backend-api/codex";
 
 /** The single definition of the opt-in, shared by injection and the runtime gate. */
 export function contextExperimentalEnabled(configContent: string): boolean {
-  let parsed: { features?: { context_management?: { experimental_mode?: boolean } } };
+  let parsed: { features?: { context_management?: boolean | { experimental_mode?: boolean } } };
   try {
     parsed = Bun.TOML.parse(configContent) as typeof parsed;
   } catch {
     // Injection tolerates incomplete user config; malformed TOML is not an opt-in.
     return false;
   }
-  return parsed.features?.context_management?.experimental_mode === true;
+  // Codex FeatureToml accepts either a boolean or the experimental_mode table.
+  // Keep strict true checks: malformed values must not activate a credentialed relay.
+  const setting = parsed.features?.context_management;
+  return setting === true || (typeof setting === "object" && setting?.experimental_mode === true);
 }
 
 let activation: { key: string; active: boolean } | undefined;

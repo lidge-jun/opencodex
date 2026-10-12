@@ -26,17 +26,19 @@ async function bodyOf(p: OcxParsedRequest, configuredProvider = provider): Promi
 }
 
 describe("anthropic extended-thinking gate", () => {
-  test("reasoning 'none' does NOT enable thinking and preserves temperature/top_p", async () => {
+  // Sonnet 4.5 takes temperature or top_p alone but 400s on both (live 2026-09-29), so a request
+  // carrying both keeps temperature; each field alone survives.
+  test("reasoning 'none' does NOT enable thinking and preserves temperature", async () => {
     const b = await bodyOf(parsed("none", { temperature: 0.3, topP: 0.9 }));
     expect(b.thinking).toBeUndefined();
     expect(b.temperature).toBe(0.3);
-    expect(b.top_p).toBe(0.9);
+    expect(b.top_p).toBeUndefined();
   });
 
   test("reasoning absent does NOT enable thinking and preserves sampling", async () => {
-    const b = await bodyOf(parsed(undefined, { temperature: 0.5, topP: 0.8 }));
+    expect((await bodyOf(parsed(undefined, { temperature: 0.5 }))).temperature).toBe(0.5);
+    const b = await bodyOf(parsed(undefined, { topP: 0.8 }));
     expect(b.thinking).toBeUndefined();
-    expect(b.temperature).toBe(0.5);
     expect(b.top_p).toBe(0.8);
   });
 
@@ -98,13 +100,17 @@ describe("anthropic extended-thinking gate", () => {
     "claude-opus-4-8.1",
   ])("adaptive-thinking model %s sends thinking.adaptive + output_config.effort", async (modelId) => {
     const b = await bodyOf(parsed("xhigh", { temperature: 0.3, topP: 0.9 }, modelId));
-    expect(b.thinking).toEqual({ type: "adaptive" });
+    expect(b.thinking).toEqual({ type: "adaptive", display: "summarized" });
     expect(b.output_config).toEqual({ effort: "xhigh" });
     expect(b.temperature).toBeUndefined();
     expect(b.top_p).toBeUndefined();
   });
 
   test("adaptive-thinking model maps unsupported 'minimal' effort to 'low'", async () => {
+    // #5824: summarized thinking keeps a long think visible as reasoning deltas; a caller that
+    // hides the summary keeps the provider default instead.
+    const hidden = await bodyOf(parsed("high", { hideThinkingSummary: true }, "claude-opus-4-8"));
+    expect(hidden.thinking).toEqual({ type: "adaptive" });
     const b = await bodyOf(parsed("minimal", {}, "claude-fable-5"));
     expect(b.output_config).toEqual({ effort: "low" });
     expect(b.max_tokens).toBe(12_288);
@@ -259,7 +265,7 @@ describe("anthropic extended-thinking gate", () => {
     // Exact regression: effort=max budget is 32000; adaptive ceiling adds OUTPUT_HEADROOM (8192)
     // so max_tokens = 40192, genuinely above the reasoning budget at full effort.
     expect(b.max_tokens as number).toBe(40_192);
-    expect(b.thinking).toEqual({ type: "adaptive" });
+    expect(b.thinking).toEqual({ type: "adaptive", display: "summarized" });
     expect(b.output_config).toEqual({ effort: "max" });
   });
 
@@ -279,6 +285,50 @@ describe("anthropic extended-thinking gate", () => {
     const b = await bodyOf(parsed("max", { maxOutputTokens: 64000 }, "claude-fable-5"));
     // Explicit caller values above 32k must not be silently capped.
     expect(b.max_tokens as number).toBe(64000);
+  });
+
+  // The adaptive branch above already honours an explicit limit above 32k. Budget thinking did
+  // not: it clamped to a flat REASONING_MAX_TOKENS_CEILING (32000) even for Opus 4.6 and Sonnet
+  // 4.6, which document 128K output, so a caller asking for 128000 silently got a quarter of it.
+  test("budget thinking clamps to the model's real maximum, not a flat 32k", async () => {
+    const seeded = {
+      ...provider,
+      defaultMaxOutputTokens: 64_000,
+      modelMaxOutputTokens: { "claude-opus-4-6": 128_000, "claude-sonnet-4-6": 128_000 },
+    };
+    for (const modelId of ["claude-opus-4-6", "claude-sonnet-4-6"]) {
+      for (const asked of [undefined, 128_000]) {
+        const b = await bodyOf(parsed("high", asked === undefined ? {} : { maxOutputTokens: asked }, modelId), seeded);
+        expect(b.max_tokens as number, modelId).toBe(128_000);
+        expect(b.max_tokens as number).toBeGreaterThan((b.thinking as { budget_tokens: number }).budget_tokens);
+      }
+    }
+    // Haiku 4.5 really is 64K, so it must be capped there rather than raised to 128000.
+    const haiku = await bodyOf(parsed("high", { maxOutputTokens: 128_000 }, "claude-haiku-4-5"), seeded);
+    expect(haiku.max_tokens as number).toBe(64_000);
+    // A small explicit limit is still only lifted to budget+headroom, exactly as before.
+    expect((await bodyOf(parsed("high", { maxOutputTokens: 10_000 }, "claude-opus-4-6"), seeded)).max_tokens).toBe(24_576);
+    // With no configured maxima the flat 32k ceiling remains the fallback.
+    const bare = { adapter: "anthropic", baseUrl: "https://api.anthropic.com", apiKey: "sk-x", authMode: "apiKey" } as unknown as OcxProviderConfig;
+    expect((await bodyOf(parsed("high", { maxOutputTokens: 128_000 }, "claude-opus-4-6"), bare)).max_tokens).toBe(32_000);
+  });
+
+  // `defaultMaxOutputTokens` is a fallback budget for omitted requests, not a statement that the
+  // model cannot emit more. Reading it as a capability ceiling would let a deliberately cheap
+  // budget clamp an explicit request BELOW what this path sent before, squeezing the thinking
+  // budget with it, so the configured value may only ever raise the ceiling.
+  test("a low fallback budget never lowers the ceiling for a larger explicit request", async () => {
+    const cheap = { ...provider, defaultMaxOutputTokens: 8192 } as unknown as OcxProviderConfig;
+    const b = await bodyOf(parsed("high", { maxOutputTokens: 128_000 }, "claude-opus-4-6"), cheap);
+    // Regression: this returned max_tokens 8192 / budget 4096, worse than the 32000/16384 the
+    // flat ceiling produced, because the fallback budget was treated as a capability.
+    expect(b.max_tokens as number).toBe(32_000);
+    expect((b.thinking as { budget_tokens: number }).budget_tokens).toBe(16_384);
+    // The budget still decides an OMITTED request, which is what it is actually for.
+    expect((await bodyOf(parsed("none", {}, "claude-opus-4-6"), cheap)).max_tokens).toBe(8192);
+    // A model whose stated maximum really is higher still gets it.
+    const seeded = { ...cheap, modelMaxOutputTokens: { "claude-opus-4-6": 128_000 } } as unknown as OcxProviderConfig;
+    expect((await bodyOf(parsed("high", { maxOutputTokens: 128_000 }, "claude-opus-4-6"), seeded)).max_tokens).toBe(128_000);
   });
 
   test("configured provider output budget replaces the 8192 default when the caller omits max_output_tokens", async () => {
@@ -354,7 +404,7 @@ describe("anthropic extended-thinking gate", () => {
     "claude-opus-4-8/vendor-suffix",
   ])("adaptive-thinking model %s keeps the adaptive wire shape", async (modelId) => {
     const b = await bodyOf(parsed("high", {}, modelId));
-    expect(b.thinking).toEqual({ type: "adaptive" });
+    expect(b.thinking).toEqual({ type: "adaptive", display: "summarized" });
     expect(b.output_config).toEqual({ effort: "high" });
   });
 
@@ -362,7 +412,8 @@ describe("anthropic extended-thinking gate", () => {
     const b = await bodyOf(parsed("none", { temperature: 0.3 }, "claude-fable-5"));
     expect(b.thinking).toBeUndefined();
     expect(b.output_config).toBeUndefined();
-    expect(b.temperature).toBe(0.3);
+    // Fable rejects any non-default temperature (live 2026-09-29), so the adapter drops it.
+    expect(b.temperature).toBeUndefined();
   });
 
   // #545: Claude Desktop's Auto Mode classifier sends thinking:{type:"disabled"} with
@@ -449,6 +500,21 @@ describe("anthropic extended-thinking gate", () => {
 });
 
 describe("Anthropic Messages stored-OAuth round trip", () => {
+  test("Messages adaptive display omission survives the stored OAuth round trip", async () => {
+    const inbound = anthropicToResponsesBody({
+      model: "claude-opus-4-8",
+      max_tokens: 256,
+      messages: [{ role: "user", content: "Keep thinking hidden" }],
+      thinking: { type: "adaptive", display: "omitted" },
+      output_config: { effort: "high" },
+    });
+
+    const body = await bodyOf(parseRequest(inbound), { ...provider, authMode: "oauth" });
+
+    expect(body.thinking).toEqual({ type: "adaptive" });
+    expect(body.output_config).toEqual({ effort: "high" });
+  });
+
   test("Messages structured output survives the stored OAuth round trip", async () => {
     const schema = {
       type: "object",

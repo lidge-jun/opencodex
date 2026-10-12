@@ -1,9 +1,12 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import * as derivedRegistries from "../../src/config/derived-registries";
+import * as mutationLock from "../../src/config/mutation-lock";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { managementFetch as fetch } from "../helpers/management-auth";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleCodexAuthAPI } from "../../src/codex/auth-api";
+import { setPersistedConfigMutationBeforeCommitForTests } from "../../src/config/persisted-mutation";
 import { loadConfig, saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
 import type { OcxConfig } from "../../src/types";
@@ -177,6 +180,57 @@ describe("Anthropic account pool strategy management API", () => {
     isolatedCodexHome?.restore();
     isolatedCodexHome = null;
     if (testDir) removeTreeWithRetry(testDir);
+  });
+
+  test("both settings GETs flag malformed stored Anthropic routes without treating them as valid", async () => {
+    const path = join(testDir, "config.json");
+    const stored = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    const malformed = [{ name: "broken", match: "[", accounts: ["removed-id"] }];
+    stored.anthropicAccountPool = { enabled: true, routes: malformed };
+    writeFileSync(path, JSON.stringify(stored), { mode: 0o600 });
+    const server = startServer(0);
+    try {
+      const unified = await fetch(new URL("/api/pool/settings?provider=anthropic", server.url));
+      const legacy = await fetch(new URL("/api/oauth/accounts/pool?provider=anthropic", server.url));
+      expect(unified.status).toBe(200);
+      expect(legacy.status).toBe(200);
+      const unifiedBody = await unified.json() as Record<string, unknown>;
+      const legacyBody = await legacy.json() as Record<string, unknown>;
+      expect(unifiedBody.routes).toBeNull();
+      expect(legacyBody.routes).toBeNull();
+      expect(unifiedBody.routesError).toEqual(expect.any(String));
+      expect(legacyBody.routesError).toBe(unifiedBody.routesError);
+      expect(JSON.parse(readFileSync(path, "utf8")).anthropicAccountPool.routes).toEqual(malformed);
+    } finally { await server.stop(true); }
+  });
+
+  test("both Anthropic settings writers preserve, replace and clear model routes", async () => {
+    let server = startServer(0);
+    const routes = [{ name: "sonnet", match: "claude-sonnet-*", accounts: ["removed-id"] }];
+    const send = (path: string, body: Record<string, unknown>) => fetch(new URL(path, server.url), {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+    });
+    try {
+      const unified = await send("/api/pool/settings", { provider: "anthropic", routes });
+      expect(unified.status).toBe(200);
+      expect((await unified.json()).routes).toEqual(routes);
+      expect(loadConfig().anthropicAccountPool?.routes).toEqual(routes);
+      await server.stop(true);
+      server = startServer(0);
+      const reloaded = await fetch(new URL("/api/pool/settings?provider=anthropic", server.url));
+      expect((await reloaded.json()).routes).toEqual(routes);
+      const legacy = await send("/api/oauth/accounts/pool", { provider: "anthropic", strategy: "round-robin" });
+      expect(legacy.status).toBe(200);
+      expect((await legacy.json()).routes).toEqual(routes);
+      const bad = await send("/api/pool/settings", { provider: "anthropic", routes: [{ name: "bad", match: "[", accounts: ["id"] }] });
+      expect(bad.status).toBe(400);
+      const other = await send("/api/pool/settings", { provider: "openai", routes });
+      expect(other.status).toBe(400);
+      const clear = await send("/api/oauth/accounts/pool", { provider: "anthropic", routes: null });
+      expect(clear.status).toBe(200);
+      expect((await clear.json()).routes).toBeNull();
+      expect(loadConfig().anthropicAccountPool?.routes).toBeUndefined();
+    } finally { await server.stop(true); }
   });
 
   test("GET /api/oauth/accounts/pool surfaces strategy defaults", async () => {
@@ -569,6 +623,8 @@ describe("legacy pool contract goldens (#wp5)", () => {
         strategy: "quota",
         stickyLimit: 1,
         quotaWindow: "five-hour",
+        routes: null,
+        nativeMessages: true,
         experimental: true,
       });
     } finally {
@@ -596,6 +652,8 @@ describe("legacy pool contract goldens (#wp5)", () => {
         strategy: "round-robin",
         stickyLimit: 4,
         quotaWindow: "five-hour",
+        routes: null,
+        nativeMessages: true,
         experimental: true,
       });
     } finally {
@@ -603,11 +661,15 @@ describe("legacy pool contract goldens (#wp5)", () => {
     }
   });
 
-  test("a bad strategy and a bad stickyLimit are rejected identically on every kind", async () => {
+  test("a bad strategy and a bad stickyLimit are rejected identically on every kind, with one null exception", async () => {
     // One validator, three adapters. The kinds keep their own request and response shapes --
     // that is what the goldens above pin -- but the VALUE rules are now a single implementation,
     // so "quota, round-robin, fill-first" and the 1..100 sticky bound cannot drift apart per
     // kind. Before this, the generic kind carried a private copy of both.
+    // ONE deliberate exception: `strategy: null` is not a bad value on the legacy generic
+    // endpoint -- it clears the saved strategy and answers 200. Codex, Anthropic, and the
+    // unified /api/pool/settings route all reject the same null with 400. A future reader
+    // who sees the 200 must not "fix" it back without deciding that contract first.
     const codex = async (payload: Record<string, unknown>) => {
       const req = new Request("http://localhost/api/codex-auth/pool-strategy", {
         method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
@@ -615,19 +677,45 @@ describe("legacy pool contract goldens (#wp5)", () => {
       const resp = await handleCodexAuthAPI(req, new URL(req.url), makeCodexConfig());
       return resp!.status;
     };
-    const server = startServer(0);
+    const previousHome = process.env.OPENCODEX_HOME;
+    const testDir = mkdtempSync(join(tmpdir(), "ocx-pool-validator-"));
+    let server: ReturnType<typeof startServer> | undefined;
     try {
+      process.env.OPENCODEX_HOME = testDir;
+      saveConfig({
+        port: 0,
+        hostname: "127.0.0.1",
+        defaultProvider: "google-antigravity",
+        providers: {
+          "google-antigravity": { adapter: "google", baseUrl: "https://daily-cloudcode-pa.googleapis.com", authMode: "oauth" },
+        },
+      } as OcxConfig);
+      server = startServer(0);
       const oauth = async (payload: Record<string, unknown>) => {
         const res = await fetch(new URL("/api/oauth/accounts/pool", server.url), {
           method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
         });
         return res.status;
       };
-      for (const strategy of ["weighted", "", 3, null]) {
+      const oauthJson = async (payload: Record<string, unknown>) => {
+        const res = await fetch(new URL("/api/oauth/accounts/pool", server.url), {
+          method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
+        });
+        return { status: res.status, body: await res.json() as { strategy?: unknown } };
+      };
+      for (const strategy of ["weighted", "", 3]) {
         expect(await codex({ strategy })).toBe(400);
         expect(await oauth({ provider: "anthropic", strategy })).toBe(400);
         expect(await oauth({ provider: "google-antigravity", strategy })).toBe(400);
       }
+      expect(await codex({ strategy: null })).toBe(400);
+      expect(await oauth({ provider: "anthropic", strategy: null })).toBe(400);
+      // The generic legacy contract: null clears the saved strategy. Prove the clear actually
+      // happened -- a 200 that left the old strategy in place would be a silent no-op.
+      expect(await oauth({ provider: "google-antigravity", strategy: "round-robin" })).toBe(200);
+      const cleared = await oauthJson({ provider: "google-antigravity", strategy: null });
+      expect(cleared.status).toBe(200);
+      expect(cleared.body).toHaveProperty("strategy", null);
       // 0 and 101 sit just outside the shared bound; 1 and 100 are the edges that must pass.
       for (const stickyLimit of [0, 101, 1.5]) {
         expect(await codex({ stickyLimit })).toBe(400);
@@ -638,7 +726,13 @@ describe("legacy pool contract goldens (#wp5)", () => {
         expect(await codex({ stickyLimit })).toBe(200);
       }
     } finally {
-      await server.stop(true);
+      try {
+        await server?.stop(true);
+      } finally {
+        if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+        else process.env.OPENCODEX_HOME = previousHome;
+        removeTreeWithRetry(testDir);
+      }
     }
   });
 
@@ -742,17 +836,18 @@ describe("unified pool-settings contract (#695 wp5c)", () => {
     try {
       for (const [provider, kind, supported] of [
         ["openai", "codex", ["strategy", "stickyLimit", "autoSwitchThreshold"]],
-        ["anthropic", "anthropic", ["enabled", "strategy", "stickyLimit", "autoSwitchThreshold", "quotaWindow"]],
+        ["anthropic", "anthropic", ["enabled", "strategy", "stickyLimit", "autoSwitchThreshold", "quotaWindow", "routes", "nativeMessages"]],
         ["google-antigravity", "generic", ["enabled", "strategy", "stickyLimit", "autoSwitchThreshold"]],
       ] as const) {
         const res = await fetch(new URL(`/api/pool/settings?provider=${provider}`, server.url));
         expect(res.status).toBe(200);
         const dto = await res.json() as Record<string, unknown>;
-        // Same key set for every kind. An unsupported field is a declared null, not an absence,
+        // Valid and absent routes keep the fixed key set; routesError appears only for malformed stored rules.
+        // An unsupported field is a declared null, not an absence,
         // which is the whole difference between a consolidation and a fourth contract.
         expect(Object.keys(dto).sort()).toEqual([
-          "autoSwitchThreshold", "enabled", "enabledEffective", "kind", "provider",
-          "quotaWindow", "stickyLimit", "strategy", "supported",
+          "autoSwitchThreshold", "enabled", "enabledEffective", "kind", "maxConcurrentPerAccount", "nativeMessages",
+          "provider", "quotaWindow", "routes", "stickyLimit", "strategy", "supported",
         ]);
         expect(dto.kind).toBe(kind);
         expect(dto.supported).toEqual([...supported]);
@@ -843,4 +938,136 @@ describe("unified pool-settings contract (#695 wp5c)", () => {
       await server.stop(true);
     }
   });
+  test("Anthropic native preference defaults true, persists false and rejects unsupported or malformed writes", async () => {
+    const server = startServer(0);
+    try {
+      const initial = await (await fetch(new URL("/api/pool/settings?provider=anthropic", server.url))).json();
+      expect(initial.nativeMessages).toBe(true);
+      for (const endpoint of ["/api/pool/settings", "/api/oauth/accounts/pool"]) {
+        const write = await fetch(new URL(endpoint, server.url), { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider: "anthropic", enabled: true, nativeMessages: false }) });
+        expect(write.status).toBe(200);
+        expect((await write.json()).nativeMessages).toBe(false);
+        expect(loadConfig().anthropicAccountPool?.nativeMessages).toBe(false);
+        for (const payload of [{ provider: "anthropic", nativeMessages: "false" }, { provider: "google-antigravity", nativeMessages: true }, { provider: "openai", nativeMessages: true }]) {
+          const invalid = await fetch(new URL(endpoint, server.url), { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
+          expect(invalid.status).toBe(400);
+          await invalid.text();
+        }
+      }
+    } finally { await server.stop(true); }
+  });
+
+  test("native preference writes rebase competing pool edits and fail closed without changing the live DTO", async () => {
+    const server = startServer(0);
+    try {
+      const configPath = join(dir, "config.json");
+      const write = async (endpoint: string, nativeMessages: boolean) => fetch(new URL(endpoint, server.url), { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider: "anthropic", nativeMessages }) });
+      for (const endpoint of ["/api/pool/settings", "/api/oauth/accounts/pool"]) {
+        setPersistedConfigMutationBeforeCommitForTests(() => {
+          const current = JSON.parse(readFileSync(configPath, "utf8"));
+          current.anthropicAccountPool = { ...current.anthropicAccountPool, stickyLimit: 7, quotaWindow: "weekly", strategy: "round-robin" };
+          current.protocols = { rollout: { managedMessagesNative: false } };
+          current.providers.deepseek.note = "concurrent provider edit";
+          current.autoSwitchThreshold = 36;
+          writeFileSync(configPath, JSON.stringify(current));
+        });
+        const saved = await write(endpoint, false);
+        expect(saved.status).toBe(200);
+        await saved.text();
+        expect(loadConfig().anthropicAccountPool).toMatchObject({ nativeMessages: false, stickyLimit: 7, quotaWindow: "weekly", strategy: "round-robin" });
+        expect(loadConfig().protocols?.rollout?.managedMessagesNative).toBe(false);
+        expect(loadConfig().providers.deepseek.note).toBe("concurrent provider edit");
+        expect(loadConfig().autoSwitchThreshold).toBe(36);
+        const validBytes = readFileSync(configPath, "utf8");
+        setPersistedConfigMutationBeforeCommitForTests(() => writeFileSync(configPath, "{fixture-invalid"));
+        const refused = await write(endpoint, true);
+        expect(refused.status).toBe(409);
+        await refused.text();
+        const live = await (await fetch(new URL("/api/pool/settings?provider=anthropic", server.url))).json();
+        expect(live.nativeMessages).toBe(false);
+        writeFileSync(configPath, validBytes);
+      }
+    } finally { setPersistedConfigMutationBeforeCommitForTests(null); await server.stop(true); }
+  });
+
+  for (const endpoint of ["/api/pool/settings", "/api/oauth/accounts/pool"]) {
+    test(`${endpoint} rejects pre-publication failure without changing disk or live state`, async () => {
+      const server = startServer(0);
+      try {
+        const path = join(dir, "config.json");
+        const bytes = readFileSync(path, "utf8");
+        setPersistedConfigMutationBeforeCommitForTests(() => { throw new Error("fixture secret must not reach DTO"); });
+        const response = await fetch(new URL(endpoint, server.url), { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider: "anthropic", nativeMessages: false }) });
+        expect(response.status).toBe(500);
+        expect(await response.text()).not.toContain("fixture secret");
+        expect(readFileSync(path, "utf8")).toBe(bytes);
+        const dto = await (await fetch(new URL("/api/pool/settings?provider=anthropic", server.url))).json();
+        expect(dto.nativeMessages).toBe(true);
+      } finally { setPersistedConfigMutationBeforeCommitForTests(null); await server.stop(true); }
+    });
+    test(`${endpoint} adopts saved state after real post-rename bookkeeping failure`, async () => {
+      const server = startServer(0);
+      let fault: ReturnType<typeof spyOn> | undefined;
+      setPersistedConfigMutationBeforeCommitForTests(() => {
+        fault = spyOn(derivedRegistries, "refreshConfigDerivedRegistries").mockImplementationOnce(() => { throw new Error("fixture private bookkeeping details"); });
+      });
+      try {
+        const response = await fetch(new URL(endpoint, server.url), { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider: "anthropic", nativeMessages: false, enabled: true }) });
+        expect(response.status).toBe(200);
+        expect(await response.json()).toMatchObject({ nativeMessages: false, enabled: true, warning: "config_bookkeeping_failed" });
+        const disk = JSON.parse(readFileSync(join(dir, "config.json"), "utf8"));
+        expect(disk.anthropicAccountPool).toMatchObject({ nativeMessages: false, enabled: true });
+        const dto = await (await fetch(new URL("/api/pool/settings?provider=anthropic", server.url))).json();
+        expect(dto).toMatchObject({ nativeMessages: false, enabled: true });
+      } finally { fault?.mockRestore(); setPersistedConfigMutationBeforeCommitForTests(null); await server.stop(true); }
+    });
+    test(`${endpoint} confirms an untyped post-publication mutation failure against disk`, async () => {
+      const server = startServer(0);
+      const fault = spyOn(mutationLock, "bumpGenerationForCooperatingConfigWrite").mockImplementation(() => { throw new Error("fixture generation failure"); });
+      try {
+        const response = await fetch(new URL(endpoint, server.url), { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider: "anthropic", nativeMessages: false, routes: null }) });
+        expect(response.status).toBe(200);
+        expect(await response.json()).toMatchObject({ nativeMessages: false, routes: null, warning: "config_bookkeeping_failed" });
+        expect(JSON.parse(readFileSync(join(dir, "config.json"), "utf8")).anthropicAccountPool.nativeMessages).toBe(false);
+      } finally { fault?.mockRestore(); setPersistedConfigMutationBeforeCommitForTests(null); await server.stop(true); }
+    });
+    test(`${endpoint} returns reload-required unknown state when publication cannot be confirmed`, async () => {
+      const server = startServer(0);
+      const path = join(dir, "config.json");
+      let fault: ReturnType<typeof spyOn> | undefined;
+      setPersistedConfigMutationBeforeCommitForTests(() => {
+        fault = spyOn(derivedRegistries, "refreshConfigDerivedRegistries").mockImplementationOnce(() => {
+          writeFileSync(path, "{fixture-invalid");
+          throw new Error("fixture unknown publication");
+        });
+      });
+      try {
+        const response = await fetch(new URL(endpoint, server.url), { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider: "anthropic", nativeMessages: false }) });
+        expect(response.status).toBe(409);
+        expect(await response.json()).toMatchObject({ code: "config_save_state_unknown" });
+        expect(readFileSync(path, "utf8")).toBe("{fixture-invalid");
+      } finally { fault?.mockRestore(); setPersistedConfigMutationBeforeCommitForTests(null); await server.stop(true); }
+    });
+    test(`${endpoint} never calls a conflicting published pool saved`, async () => {
+      const server = startServer(0);
+      const path = join(dir, "config.json");
+      let fault: ReturnType<typeof spyOn> | undefined;
+      setPersistedConfigMutationBeforeCommitForTests(() => {
+        fault = spyOn(derivedRegistries, "refreshConfigDerivedRegistries").mockImplementationOnce(() => {
+          const disk = JSON.parse(readFileSync(path, "utf8"));
+          disk.anthropicAccountPool.nativeMessages = true;
+          writeFileSync(path, JSON.stringify(disk));
+          throw new Error("fixture conflicting published preference");
+        });
+      });
+      try {
+        const response = await fetch(new URL(endpoint, server.url), { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider: "anthropic", nativeMessages: false }) });
+        expect(response.status).toBe(409);
+        expect(await response.json()).toMatchObject({ code: "config_save_state_unknown" });
+        expect(JSON.parse(readFileSync(path, "utf8")).anthropicAccountPool.nativeMessages).toBe(true);
+      } finally { fault?.mockRestore(); setPersistedConfigMutationBeforeCommitForTests(null); await server.stop(true); }
+    });
+
+  }
+
 });

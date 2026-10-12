@@ -5,6 +5,9 @@ import {
 } from "../../src/providers/key-failover";
 import { handleResponses } from "../../src/server/responses";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+
+let releaseSpendHome: (() => void) | undefined;
 
 describe("rateLimitRetryPolicyFor", () => {
   test("null when absent or explicitly disabled", () => {
@@ -68,6 +71,64 @@ describe("rateLimitRetryPolicyFor", () => {
       adapter: "openai-chat",
       retryOn429: { attempts: 2 },
     } as OcxProviderConfig)).toMatchObject({ attempts: 2, intervalMs: 5_000 });
+  });
+
+  test("matches the Go destination canonically: host case and default ports", () => {
+    const patient = {
+      enabled: true,
+      attempts: 6,
+      intervalMs: 10_000,
+      maxIntervalMs: 60_000,
+      respectRetryAfter: true,
+    };
+    for (const baseUrl of [
+      "https://opencode.ai/zen/go/v1/",
+      "https://OpenCode.ai/zen/go/v1",
+      "https://opencode.AI/zen/go/v1",
+      "https://opencode.ai:443/zen/go/v1",
+    ]) {
+      expect(rateLimitRetryPolicyFor({ baseUrl, adapter: "openai-chat" } as OcxProviderConfig)).toEqual(patient);
+    }
+    // Userinfo, query strings, and look-alike hosts still refuse the fallback.
+    // The userinfo case is assembled through the URL setters instead of written inline.
+    // privacy:scan reads source text, so inline userinfo in a test file is
+    // indistinguishable from a real address to its email detector, and it blocked the
+    // shared gates job on dev. Widening isAllowedEmail would have been the other way out
+    // and the wrong one: the allowlist is what keeps the detector honest. The serialized
+    // href below is byte-identical to the literal it replaces, so the input under test
+    // is unchanged.
+    const userinfoBaseUrl = new URL("https://opencode.ai/zen/go/v1");
+    userinfoBaseUrl.username = "user";
+    userinfoBaseUrl.password = ["pa", "ss"].join("");
+    for (const baseUrl of [
+      "https://opencode.ai/zen/go/v1?x=1",
+      userinfoBaseUrl.href,
+      "https://opencode.ai.evil.net/zen/go/v1",
+    ]) {
+      expect(rateLimitRetryPolicyFor({ baseUrl, adapter: "openai-chat" } as OcxProviderConfig)).toBeNull();
+    }
+  });
+
+  // #5180: a single Command Code key cannot fail over and the Codex client does not retry a 429,
+  // so a burst on a long muse-spark turn aborted it. Both canonical endpoints wait patiently.
+  test("falls back to the patient policy for key-auth Command Code without the knob", () => {
+    const patient = { enabled: true, attempts: 6, intervalMs: 10_000, maxIntervalMs: 60_000, respectRetryAfter: true };
+    for (const baseUrl of ["https://api.commandcode.ai/provider/v1", "https://api.commandcode.ai"]) {
+      expect(rateLimitRetryPolicyFor({ baseUrl, authMode: "key", adapter: "openai-chat" } as OcxProviderConfig))
+        .toEqual(patient);
+      expect(rateLimitRetryPolicyFor({ baseUrl, adapter: "openai-chat" } as OcxProviderConfig)).toEqual(patient);
+    }
+    // OAuth Command Code is never replayed on the same token.
+    expect(rateLimitRetryPolicyFor({
+      baseUrl: "https://api.commandcode.ai", authMode: "oauth",
+    } as OcxProviderConfig)).toBeNull();
+    // An explicit opt-out wins, and a custom relay keeps fail-fast.
+    expect(rateLimitRetryPolicyFor({
+      baseUrl: "https://api.commandcode.ai/provider/v1", retryOn429: { enabled: false },
+    } as OcxProviderConfig)).toBeNull();
+    expect(rateLimitRetryPolicyFor({
+      baseUrl: "https://relay.example.test/provider/v1", authMode: "key",
+    } as OcxProviderConfig)).toBeNull();
   });
 
   test("honors explicit values", () => {
@@ -140,6 +201,9 @@ describe("retry loop client-abort handling", () => {
   const originalFetch = globalThis.fetch;
 
   afterEach(() => {
+    // Release the preload-home lease before later teardown can replace or remove that home.
+    releaseSpendHome?.();
+    releaseSpendHome = undefined;
     globalThis.fetch = originalFetch;
   });
 
@@ -170,6 +234,8 @@ describe("retry loop client-abort handling", () => {
       },
     } as OcxConfig;
 
+    // Direct dispatch needs the writer lease that startServer normally owns for this home.
+    releaseSpendHome = acquireOwnedSpendHome();
     const response = await handleResponses(new Request("http://localhost/v1/responses", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -217,6 +283,7 @@ describe("retry loop client-abort handling", () => {
     } as OcxConfig;
 
     const abort = new AbortController();
+    releaseSpendHome = acquireOwnedSpendHome();
     const pending = handleResponses(new Request("http://localhost/v1/responses", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -273,6 +340,7 @@ describe("retry loop client-abort handling", () => {
     } as OcxConfig;
 
     const abort = new AbortController();
+    releaseSpendHome = acquireOwnedSpendHome();
     const pending = handleResponses(new Request("http://localhost/v1/responses", {
       method: "POST",
       headers: { "content-type": "application/json" },

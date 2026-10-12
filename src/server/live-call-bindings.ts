@@ -9,6 +9,12 @@ export interface LiveCallBinding {
   upstreamCallId: string;
   joinStyle: "frameless-path" | "realtime-query";
   providerName: string;
+  /**
+   * The model this call settled on when it was created. A join names no model
+   * of its own, so this is what a per-key scope is judged against on reconnect
+   * — without it, a call created for one model could be rejoined as another.
+   */
+  model?: string;
   accountId?: string;
   chatgptAccountId?: string;
   keyedCredentialDigest?: string;

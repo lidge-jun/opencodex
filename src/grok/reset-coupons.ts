@@ -52,27 +52,48 @@ export function encodeVarint(value: number | bigint): Uint8Array {
   return new Uint8Array(bytes);
 }
 
+const MAX_PROTOBUF_VARINT_BYTES = 10;
+
 /**
  * Decodes a protobuf varint from bytes at offset.
  */
 export function decodeVarint(bytes: Uint8Array, offset: number): { value: number; bytesRead: number } {
+  if (!Number.isInteger(offset) || offset < 0 || offset >= bytes.length) {
+    throw new Error("Invalid protobuf varint offset");
+  }
+
   let result = 0;
-  let shift = 0;
   let count = 0;
 
   while (offset + count < bytes.length) {
-    const b = bytes[offset + count];
-    count++;
-    result |= (b & 0x7f) << shift;
-    if ((b & 0x80) === 0) break;
-    shift += 7;
-    if (shift > 35) {
-      // For timestamps seconds, JS safe integers suffice.
-      break;
+    // Protobuf caps a varint at the ten bytes a 64-bit value needs. The safe-integer guard
+    // below cannot stand in for this bound, because a continuation byte carrying no payload
+    // bits contributes a part of zero, which IS a safe integer: without an explicit length
+    // limit an arbitrarily long run of 0x80 followed by 0x00 decoded as a valid zero, and an
+    // overlong zero length can normalize a malformed body into an empty coupon list.
+    if (count >= MAX_PROTOBUF_VARINT_BYTES) {
+      throw new Error("Overlong protobuf varint");
     }
+    const b = bytes[offset + count];
+    const part = (b & 0x7f) * (2 ** (7 * count));
+    if (!Number.isSafeInteger(part) || result > Number.MAX_SAFE_INTEGER - part) {
+      throw new Error("Protobuf varint exceeds JavaScript safe integer range");
+    }
+    result += part;
+    count++;
+    if ((b & 0x80) === 0) return { value: result, bytesRead: count };
   }
 
-  return { value: result, bytesRead: count };
+  throw new Error("Truncated protobuf varint");
+}
+
+function decodeLength(bytes: Uint8Array, offset: number): { start: number; end: number } {
+  const { value: length, bytesRead } = decodeVarint(bytes, offset);
+  const start = offset + bytesRead;
+  if (!Number.isSafeInteger(length) || length < 0 || length > bytes.length - start) {
+    throw new Error("Invalid protobuf length-delimited field");
+  }
+  return { start, end: start + length };
 }
 
 /**
@@ -109,8 +130,8 @@ function decodeTimestamp(bytes: Uint8Array): number {
       offset += bytesRead;
       if (fieldNum === 1) seconds = value;
     } else if (wireType === 2) {
-      const { value: len, bytesRead } = decodeVarint(bytes, offset);
-      offset += bytesRead + len;
+      const { end } = decodeLength(bytes, offset);
+      offset = end;
     } else {
       break;
     }
@@ -135,10 +156,9 @@ function decodeConsumerResetToken(bytes: Uint8Array): GrokResetCoupon | null {
     const wireType = tag & 0x7;
 
     if (wireType === 2) {
-      const { value: len, bytesRead: lenRead } = decodeVarint(bytes, offset);
-      offset += lenRead;
-      const sub = bytes.subarray(offset, offset + len);
-      offset += len;
+      const { start, end } = decodeLength(bytes, offset);
+      const sub = bytes.subarray(start, end);
+      offset = end;
 
       if (fieldNum === 10) {
         tokenId = new TextDecoder("utf-8").decode(sub);
@@ -178,10 +198,9 @@ export function decodeGetRemainingResetsResponse(payload: Uint8Array): GrokReset
     const wireType = tag & 0x7;
 
     if (wireType === 2) {
-      const { value: len, bytesRead: lenRead } = decodeVarint(payload, offset);
-      offset += lenRead;
-      const sub = payload.subarray(offset, offset + len);
-      offset += len;
+      const { start, end } = decodeLength(payload, offset);
+      const sub = payload.subarray(start, end);
+      offset = end;
 
       if (fieldNum === 10) {
         const token = decodeConsumerResetToken(sub);
@@ -211,6 +230,19 @@ function buildGrokHeaders(accessToken: string): Record<string, string> {
 /**
  * Reads available Grok reset tokens for the authenticated xAI account.
  */
+function assertConfirmedCouponStatus(decoded: ReturnType<typeof decodeGrpcWebResponse>): void {
+  const rawStatus = decoded.statusValues[0];
+  // The shared decoder defaults a missing/malformed status to zero. Coupon
+  // availability and an irreversible redemption need affirmative confirmation.
+  if (decoded.framingComplete !== true || rawStatus === undefined
+    || decoded.statusValues.some((value) => !/^\d+$/.test(value)
+      || !Number.isSafeInteger(Number(value)) || value !== rawStatus)) {
+    throw new Error("Grok coupon response has no confirmed gRPC status");
+  }
+  const status = Number(rawStatus);
+  if (status !== 0) throw new GrpcWebError(status, decoded.statusMessage ?? "Unknown gRPC error");
+}
+
 export async function getGrokRemainingResets(options: GetRemainingResetsOptions): Promise<{ tokens: GrokResetCoupon[] }> {
   const fetchImpl = options.fetchFn ?? globalThis.fetch;
   const endpoint = options.endpoint ?? GROK_GET_REMAINING_RESETS_ENDPOINT;
@@ -232,9 +264,7 @@ export async function getGrokRemainingResets(options: GetRemainingResetsOptions)
   const rawBytes = new Uint8Array(await res.arrayBuffer());
   const decoded = decodeGrpcWebResponse(rawBytes);
 
-  if (decoded.status !== 0) {
-    throw new GrpcWebError(decoded.status, decoded.statusMessage ?? "Unknown gRPC error");
-  }
+  assertConfirmedCouponStatus(decoded);
 
   if (decoded.messages.length === 0) {
     return { tokens: [] };
@@ -266,9 +296,7 @@ export async function redeemGrokResetCoupon(options: RedeemResetOptions): Promis
   const rawBytes = new Uint8Array(await res.arrayBuffer());
   const decoded = decodeGrpcWebResponse(rawBytes);
 
-  if (decoded.status !== 0) {
-    throw new GrpcWebError(decoded.status, decoded.statusMessage ?? "Unknown gRPC error");
-  }
+  assertConfirmedCouponStatus(decoded);
 
   return {
     success: true,

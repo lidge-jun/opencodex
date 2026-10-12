@@ -1,17 +1,22 @@
+import { isolateCodexShimEnvironment, withInstalledShim } from "../helpers/codex-shim-install-fixture";
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { codexShimReadinessWarnings } from "../../src/cli/codex-shim-readiness";
+import { diagnoseCodexShim } from "../../src/codex/shim-diagnostics";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
+
+isolateCodexShimEnvironment();
 
 const repoRoot = dirname(fileURLToPath(new URL("../../package.json", import.meta.url)));
 const cliPath = join(repoRoot, "src", "cli", "index.ts");
@@ -30,6 +35,67 @@ const ready = {
 };
 
 describe("Codex shim install readiness", () => {
+  test("a refused install exits unsuccessfully and preserves its reason", () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-shim-refused-"));
+    const binDir = join(root, "bin");
+    mkdirSync(binDir);
+    mkdirSync(join(root, "codex-home"));
+    mkdirSync(join(root, "ocx-home"));
+    if (process.platform === "win32") writeFileSync(join(binDir, "codex.exe"), "fixture executable");
+    try {
+      const result = spawnSync(process.execPath, [cliPath, "codex-shim", "install"], {
+        cwd: repoRoot,
+        env: { ...process.env, CODEX_HOME: join(root, "codex-home"),
+          OPENCODEX_HOME: join(root, "ocx-home"), PATH: process.platform === "win32"
+            ? `${binDir}${delimiter}${join(process.env.SystemRoot ?? "C:\\Windows", "System32")}` : binDir },
+        encoding: "utf8", timeout: SHIM_INSTALL_CHILD_MS,
+      });
+      expect(result.error).toBeUndefined();
+      if (!result.stdout) throw new Error(result.stderr);
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain(process.platform === "win32"
+        ? "Refusing to rename a real .exe" : "Native Codex launcher not found");
+    } finally { removeTreeWithRetry(root); }
+  }, SHIM_INSTALL_CASE_MS);
+
+  test("a runnable inactive install succeeds with activation guidance and becomes green on PATH", () => {
+    if (process.platform === "win32") return;
+    withInstalledShim(({ home, binDir, launchers }) => {
+      const nativeBefore = readFileSync(launchers[0]);
+      const env = { ...process.env, PATH: binDir, OPENCODEX_HOME: home };
+      const inactive = spawnSync(process.execPath, [cliPath, "codex-shim", "install"], { env, encoding: "utf8" });
+      expect(inactive.status).toBe(0);
+      expect(inactive.stdout).toStartWith("⚠️");
+      expect(inactive.stdout).not.toContain("✅");
+      expect(inactive.stderr).toContain("codex-shell-env.sh");
+      const active = spawnSync(process.execPath, [cliPath, "codex-shim", "install"], {
+        env: { ...env, PATH: `${join(home, "bin")}:${binDir}` }, encoding: "utf8",
+      });
+      expect(active.status).toBe(0);
+      expect(active.stdout).toStartWith("✅");
+      expect(readFileSync(launchers[0])).toEqual(nativeBefore);
+    });
+  }, 20_000);
+
+  test("refuses a foreign private launcher even when a previous overlay was runnable", () => {
+    if (process.platform === "win32") return;
+    withInstalledShim(({ home, wrappers, launchers, statePath }) => {
+      const stateBefore = readFileSync(statePath);
+      const nativeBefore = readFileSync(launchers[0]);
+      const foreign = "#!/bin/sh\n# foreign launcher\nexit 0\n";
+      writeFileSync(wrappers[0], foreign);
+      const result = spawnSync(process.execPath, [cliPath, "codex-shim", "install"], {
+        env: { ...process.env, OPENCODEX_HOME: home }, encoding: "utf8",
+      });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("installation was refused");
+      expect(result.stdout).not.toContain("✅");
+      expect(readFileSync(wrappers[0], "utf8")).toBe(foreign);
+      expect(readFileSync(launchers[0])).toEqual(nativeBefore);
+      expect(readFileSync(statePath)).toEqual(stateBefore);
+    });
+  }, 20_000);
+
   test("keeps a clean install green for native and managed routing", () => {
     expect(codexShimReadinessWarnings(ready)).toEqual([]);
     expect(codexShimReadinessWarnings({
@@ -101,6 +167,10 @@ describe("Codex shim install readiness", () => {
     mkdirSync(opencodexHome);
     mkdirSync(binDir);
     try {
+      // A base-url-less provider table is the Codex app's own routing placeholder, not an
+      // external gateway, so the readiness verdict falls to the routing kind ("unknown"
+      // here) rather than an external-owner label. A REAL external provider must carry a
+      // base_url to count.
       writeFileSync(join(codexHome, "config.toml"), [
         'model_provider = "custom"',
         "",
@@ -139,8 +209,8 @@ describe("Codex shim install readiness", () => {
       });
 
       expect(result.status).toBe(0);
-      expect(result.stdout).toStartWith("⚠️  Codex autostart shim installed");
-      expect(result.stderr).toContain('external model_provider "custom"');
+      expect(result.stdout).toStartWith(process.platform === "win32" ? "⚠️  Codex autostart shim installed" : "⚠️  Codex PATH shim installed");
+      expect(result.stderr).toContain("Codex routing could not be verified");
       expect(result.stderr).toContain("config.proxy");
       expect(`${result.stdout}\n${result.stderr}`).not.toContain(proxyUrl);
       expect(`${result.stdout}\n${result.stderr}`).not.toContain("user:secret");
@@ -184,10 +254,66 @@ describe("Codex shim install readiness", () => {
         throw new Error(`Shim install fixture did not complete: error=${result.error?.name ?? "none"} signal=${result.signal ?? "none"}`);
       }
       expect(result.status).toBe(0);
-      expect(result.stdout).toStartWith("⚠️  Codex autostart shim installed");
+      expect(result.stdout).toStartWith(process.platform === "win32" ? "⚠️  Codex autostart shim installed" : "⚠️  Codex PATH shim installed");
       expect(result.stderr).toContain("Codex routing could not be verified");
+      // A healthy no-op reports installed:false internally but must still exit successfully.
+      const repeat = spawnSync(process.execPath, [cliPath, "codex-shim", "install"], {
+        cwd: repoRoot,
+        env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: opencodexHome,
+          PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}` },
+        encoding: "utf8", timeout: SHIM_INSTALL_CHILD_MS, killSignal: "SIGKILL",
+      });
+      expect(repeat.error).toBeUndefined();
+      expect(repeat.status).toBe(0);
+      expect(repeat.stdout).toContain("already installed");
+      expect(repeat.stderr).toContain("Codex routing could not be verified");
+      // Keep the marker and backing file, but break the launch-time ensure contract.
+      const wrapper = process.platform === "win32" ? codex : join(opencodexHome, "bin", "codex");
+      writeFileSync(wrapper, readFileSync(wrapper, "utf8").replaceAll("ensure", "broken"));
+      const diagnosis = spawnSync(process.execPath, [cliPath, "codex-shim", "status"], {
+        env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: opencodexHome, PATH: binDir },
+        encoding: "utf8",
+      });
+      expect(diagnosis.stdout).toContain("unhealthy");
+      const damaged = spawnSync(process.execPath, [cliPath, "codex-shim", "install"], {
+        cwd: repoRoot,
+        env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: opencodexHome,
+          PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}` },
+        encoding: "utf8", timeout: SHIM_INSTALL_CHILD_MS, killSignal: "SIGKILL",
+      });
+      expect(damaged.error).toBeUndefined();
+      expect(damaged.status).toBe(process.platform === "win32" ? 1 : 0);
+      if (process.platform === "win32") expect(damaged.stderr).toContain("unhealthy");
+      else expect(readFileSync(wrapper, "utf8")).toContain("ensure");
     } finally {
       removeTreeWithRetry(root);
     }
-  }, SHIM_INSTALL_CASE_MS);
+  }, SHIM_INSTALL_CASE_MS * 3);
+});
+
+describe("in-place Windows shim status verdict", () => {
+  test("a damaged in-place wrapper says unhealthy instead of only 'shim present'", () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-shim-inplace-verdict-"));
+    const previous = process.env.OPENCODEX_HOME;
+    try {
+      const home = join(root, "ocx"); const bin = join(root, "bin"); mkdirSync(home); mkdirSync(bin);
+      const wrapperPath = join(bin, "codex.cmd"); const backupPath = join(bin, "codex.opencodex-real.cmd");
+      writeFileSync(backupPath, "@echo off\r\n");
+      // Legacy in-place record, as Windows installs write it; readable on every host.
+      writeFileSync(join(home, "codex-shim.json"), JSON.stringify({ platform: "win32", wrapperPath, originalPath: wrapperPath, backupPath }));
+      process.env.OPENCODEX_HOME = home;
+      const body = `@echo off\r\nrem opencodex codex autostart shim${"\r\nrem padding".repeat(20)}\r\n`;
+      writeFileSync(wrapperPath, `${body}ocx codex-shim ensure\r\n`);
+      expect(diagnoseCodexShim()).toMatchObject({ installed: true, healthy: true });
+      expect(diagnoseCodexShim().summary).not.toContain("unhealthy");
+      writeFileSync(wrapperPath, `${body}ocx codex-shim broken\r\n`);
+      const damaged = diagnoseCodexShim();
+      expect(damaged).toMatchObject({ installed: true, healthy: false });
+      expect(damaged.summary).toContain("wrapper shim present");
+      expect(damaged.summary).toContain("Codex autostart shim is unhealthy. Run ocx codex-shim install to repair it.");
+    } finally {
+      if (previous === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previous;
+      removeTreeWithRetry(root);
+    }
+  });
 });

@@ -48,9 +48,12 @@ function seedCatalog(...entries: Buffer[]): void {
 // A cache miss must fail the test, never dial Cognition: every case here is
 // supposed to be served by the seeded catalog, so the network is a bug.
 let realFetch: typeof globalThis.fetch;
+let networkCalls = 0;
 beforeEach(() => {
+  networkCalls = 0;
   realFetch = globalThis.fetch;
   globalThis.fetch = (() => {
+    networkCalls++;
     throw new Error("devin-live-models.test.ts reached the network — the seeded catalog cache missed");
   }) as typeof globalThis.fetch;
   setCachedCatalogForTests(null);
@@ -62,6 +65,7 @@ afterEach(() => {
   setCachedCatalogForTests(null);
   clearModelCache("devin-test");
   providerCacheGenerations.delete("devin-test");
+  expect(networkCalls).toBe(0);
 });
 
 describe("devin live model discovery", () => {
@@ -124,12 +128,14 @@ describe("devin live model discovery", () => {
 });
 
 describe("devin advertised catalog input modalities", () => {
-  // Devin is an oauth provider, so discovery resolves its bearer through
-  // resolveModelsAuthToken; the tests lend it a token rather than an account
-  // store (the same seam the Copilot oauth cases use).
+  // Devin discovery resolves token and tenant destination from one account
+  // snapshot. Keep that pair together rather than mocking the token-only seam.
+  const snapshot = (accessToken = KEY, apiBaseUrl = HOST, accountId = "fixture"): oauth.OAuthAccessSnapshot => ({
+    provider: "devin-test", accountId, generation: `generation-${accountId}`, accessToken, apiBaseUrl,
+  });
   let authSpy: ReturnType<typeof spyOn> | undefined;
   beforeEach(() => {
-    authSpy = spyOn(oauth, "resolveModelsAuthToken").mockResolvedValue(KEY);
+    authSpy = spyOn(oauth, "getValidAccessTokenSnapshot").mockResolvedValue(snapshot());
   });
   afterEach(() => {
     authSpy?.mockRestore();
@@ -184,5 +190,46 @@ describe("devin advertised catalog input modalities", () => {
     const models = await fetchProviderModels("devin-test", devinProvider(), 60_000);
     expect(models.map((model) => model.id)).toEqual(["plain-model"]);
     expect(models[0]?.inputModalities).toEqual(["text"]);
+  });
+
+  test("a family's catalog default member becomes the advertised default effort", async () => {
+    // Real swe-1.7 shape: bare swe-1-7 is Max, swe-1-7-medium is the default.
+    const member = (uid: string, order: number, name: string, isDefault: boolean) => Buffer.concat([
+      catalogEntry(uid),
+      encodeMessage(23, encodeString(23, "swe-1.7")),
+      encodeMessage(30, Buffer.concat([
+        encodeMessage(2, Buffer.concat([
+          encodeString(1, "Reasoning Effort"),
+          encodeMessage(2, Buffer.concat([encodeVarintField(1, order), encodeString(2, name)])),
+        ])),
+      ])),
+      ...(isDefault ? [encodeVarintField(31, 1)] : []),
+    ]);
+    seedCatalog(member("swe-1-7", 5, "Max", false), member("swe-1-7-medium", 2, "Medium", true));
+    const models = await fetchProviderModels("devin-test", devinProvider(), 60_000);
+    expect(models.map((model) => model.id)).toEqual(["swe-1-7"]);
+    expect(models[0]?.reasoningEfforts).toEqual(["medium", "max"]);
+    expect(models[0]?.defaultReasoningEffort).toBe("medium");
+  });
+
+  test("a credential change cannot reuse the previous account's live roster", async () => {
+    // The live catalog is entitlement-specific: an observation made under one
+    // credential must not be served to the next. Before the roster cache was
+    // bound to the credential fingerprint, account B read account A's fresh
+    // entry and never resolved its own token.
+    const tenantHost = "https://eu.windsurf.com/_route/api_server";
+    let account = snapshot("acct-a-key", tenantHost, "account-a");
+    authSpy?.mockImplementation(async () => account);
+    setCachedCatalogForTests(parseCatalogBuffer(encodeMessage(1, catalogEntry("acct-a-model")), "acct-a-key", tenantHost));
+    const accountA = await fetchProviderModels("devin-test", devinProvider(), 60_000);
+
+    account = snapshot("acct-b-key", HOST, "account-b");
+    setCachedCatalogForTests(parseCatalogBuffer(encodeMessage(1, catalogEntry("acct-b-model")), "acct-b-key", HOST));
+    const accountB = await fetchProviderModels("devin-test", devinProvider(), 60_000);
+
+    expect(accountA.map((model) => model.id)).toEqual(["acct-a-model"]);
+    expect(accountB.map((model) => model.id)).toEqual(["acct-b-model"]);
+    expect(authSpy?.mock.calls.length).toBe(2);
+    expect(authSpy?.mock.calls).toEqual([["devin-test"], ["devin-test"]]);
   });
 });

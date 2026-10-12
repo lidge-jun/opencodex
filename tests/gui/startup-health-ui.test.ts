@@ -1,7 +1,14 @@
 import { describe, expect, test } from "bun:test";
+import { createElement } from "../../gui/node_modules/react";
+import { renderToStaticMarkup } from "../../gui/node_modules/react-dom/server";
+import { DICTS, I18nContext, type TFn } from "../../gui/src/i18n/shared";
+import { StartupHeroSection } from "../../gui/src/pages/startup-sections";
+import type { StartupHealthData } from "../../gui/src/pages/startup-shared";
 import {
   PROJECT_CONFIG_DIAGNOSTICS_POLL_MS,
   beginPollEpochs,
+  desktopBadgeKey,
+  desktopManagesStartup,
   mapStartupHealthProbe,
   probeNeedsFastRetry,
   seedStartupHealthFromSettings,
@@ -17,6 +24,102 @@ describe("startup health UI decisions", () => {
       .toBe("startup.riskDetailWindowsShim");
     expect(startupRiskDetailKey({ routingKind: "unknown", shimCoverage: "none" }))
       .toBe("startup.riskDetail");
+  });
+
+  test("desktop startup management requires ownership or verified supervision", () => {
+    const supervisor = { supervisorPid: 123, runtimePid: 456, app: "/Applications/OpenCodex.app" };
+    expect(desktopManagesStartup({})).toBe(false);
+    expect(desktopManagesStartup({ desktop: { owned: false } })).toBe(false);
+    expect(desktopManagesStartup({ desktop: { owned: false, supervisor: undefined } })).toBe(false);
+    expect(desktopManagesStartup({ desktop: { owned: true } })).toBe(true);
+    expect(desktopManagesStartup({ desktop: { owned: false, supervisor } })).toBe(true);
+    expect(desktopManagesStartup({ desktop: { owned: true, supervisor } })).toBe(true);
+  });
+
+  test("desktop risk details distinguish ownership from live supervision", () => {
+    const base = { routingKind: "opencodex-local", shimCoverage: "cli-only" } as const;
+    const supervisor = { supervisorPid: 123, runtimePid: 456, app: "/Applications/OpenCodex.app" };
+    expect(startupRiskDetailKey({ ...base, desktop: { owned: true } })).toBe("startup.desktopRecovery");
+    expect(startupRiskDetailKey({ ...base, desktop: { owned: false, supervisor } }))
+      .toBe("startup.desktopSupervisedRecovery");
+    expect(startupRiskDetailKey({ ...base, desktop: { owned: true, supervisor } }))
+      .toBe("startup.desktopRecovery");
+    expect(startupRiskDetailKey({ ...base, desktop: { owned: false } }))
+      .toBe("startup.riskDetailWindowsShim");
+    expect(startupRiskDetailKey({ ...base, routingKind: "custom-local", desktop: { owned: false, supervisor } }))
+      .toBe("startup.riskDetailCustomLocal");
+  });
+
+  test("a running desktop app with unverified Start at Login is not labelled unhealthy (#6963)", () => {
+    const supervisor = { supervisorPid: 123, runtimePid: 456, app: "/Applications/OpenCodex.app" };
+    const loginOff = { running: true, loginEnabled: false, viable: false };
+    expect(desktopBadgeKey({ owned: false, supervisor, ...loginOff }, false)).toBe("startup.desktopLoginUnverified");
+    expect(desktopBadgeKey({ owned: true, ...loginOff }, false)).toBe("startup.desktopLoginUnverified");
+    // A failed or stale read never vouches for the running process it last saw.
+    expect(desktopBadgeKey({ owned: false, supervisor, ...loginOff }, true)).toBe("startup.unhealthy");
+    expect(desktopBadgeKey({ owned: true, running: true, loginEnabled: true, viable: true }, true)).toBe("startup.unhealthy");
+    // Stopped, or neither owned nor supervised, stays unhealthy.
+    expect(desktopBadgeKey({ owned: true, running: false, loginEnabled: false, viable: false }, false)).toBe("startup.unhealthy");
+    expect(desktopBadgeKey({ owned: true, running: false, loginEnabled: true, viable: false }, false)).toBe("startup.unhealthy");
+    expect(desktopBadgeKey({ owned: false, ...loginOff }, false)).toBe("startup.unhealthy");
+    expect(desktopBadgeKey({ owned: false, supervisor, running: true, loginEnabled: true, viable: true }, false)).toBe("startup.viable");
+  });
+
+  test("custom-local guidance takes precedence over stale owned or supervised desktop guidance", () => {
+    const base = { routingKind: "custom-local", shimCoverage: "none" } as const;
+    const supervisor = { supervisorPid: 123, runtimePid: 456, app: "/Applications/OpenCodex.app" };
+    for (const diagnosticStale of [false, true]) {
+      expect(startupRiskDetailKey({ ...base, diagnosticStale, desktop: { owned: false, supervisor } }))
+        .toBe("startup.riskDetailCustomLocal");
+      expect(startupRiskDetailKey({ ...base, diagnosticStale, desktop: { owned: true } }))
+        .toBe("startup.riskDetailCustomLocal");
+    }
+    expect(startupRiskDetailKey(base)).toBe("startup.riskDetailCustomLocal");
+  });
+
+  test("desktop guidance only applies to opencodex-local routing", () => {
+    const supervisor = { supervisorPid: 123, runtimePid: 456, app: "/Applications/OpenCodex.app" };
+    for (const desktop of [{ owned: true }, { owned: false, supervisor }]) {
+      expect(startupRiskDetailKey({ routingKind: "opencodex-local", shimCoverage: "none", diagnosticStale: true, desktop }))
+        .toBe("startup.desktopReopenRecovery");
+      for (const routingKind of ["native", "custom-remote", "unknown"] as const) {
+        for (const diagnosticStale of [false, true]) {
+          expect(startupRiskDetailKey({ routingKind, shimCoverage: "none", diagnosticStale, desktop }))
+            .toBe("startup.riskDetail");
+          expect(startupRiskDetailKey({ routingKind, shimCoverage: "cli-only", diagnosticStale, desktop }))
+            .toBe("startup.riskDetailWindowsShim");
+        }
+      }
+    }
+  });
+
+  test("startup hero localizes desktop guidance and never displays the server action", () => {
+    const data: StartupHealthData = {
+      status: "at-risk", routingKind: "opencodex-local", routingInjected: true,
+      localRoutingDependency: true, autostartEnabled: true, rebootSafe: false, protection: "none",
+      serviceInstalled: false, serviceViable: false, serviceEnabled: false, serviceRunning: false,
+      serviceStale: false, serviceConflict: false, serviceSupported: true,
+      shimInstalled: false, shimHealthy: false, shimCoverage: "none", platform: "darwin",
+      recommendedCommand: null, recommendedAction: "Server English guidance must not reach the GUI",
+      diagnosticStale: false,
+      desktop: { owned: false, loginEnabled: false, running: true, viable: false,
+        supervisor: { supervisorPid: 123, runtimePid: 456, app: "/Applications/OpenCodex.app" } },
+      commands: { installService: "ocx service install", repairService: "ocx service repair",
+        installShim: "ocx codex-shim install", restoreNative: "ocx restore" },
+    };
+    for (const locale of Object.keys(DICTS) as (keyof typeof DICTS)[]) {
+      const t: TFn = key => DICTS[locale][key];
+      for (const diagnosticStale of [false, true]) {
+        const markup = renderToStaticMarkup(createElement(I18nContext.Provider,
+          { value: { locale, setLocale: () => {}, t } },
+          createElement(StartupHeroSection, { failed: false, data: { ...data, diagnosticStale } })));
+        const guidance = diagnosticStale ? "startup.desktopReopenRecovery" : "startup.desktopSupervisedRecovery";
+        const localized = t(guidance);
+        expect(typeof localized).toBe("string");
+        expect(markup).toContain(renderToStaticMarkup(createElement("p", null, localized)));
+        expect(markup).not.toContain(data.recommendedAction!);
+      }
+    }
   });
 
   test("rejects stale or mutation-racing settings polls", () => {
@@ -38,7 +141,9 @@ describe("startup health UI decisions", () => {
   test("settings may seed while unknown or hard-error, but not overwrite a real status", () => {
     expect(seedStartupHealthFromSettings(null, { status: "protected", diagnosticStale: false })).toBe("protected");
     expect(seedStartupHealthFromSettings("error", { status: "protected", diagnosticStale: false })).toBe("protected");
-    expect(seedStartupHealthFromSettings(null, { status: "at-risk", diagnosticStale: true })).toBe("at-risk");
+    // A stale seed is a server-side placeholder and must not color the chip.
+    expect(seedStartupHealthFromSettings(null, { status: "at-risk", diagnosticStale: true })).toBeNull();
+    expect(seedStartupHealthFromSettings("error", { status: "at-risk", diagnosticStale: true })).toBe("error");
     expect(seedStartupHealthFromSettings("at-risk", { status: "protected", diagnosticStale: false })).toBe("at-risk");
   });
 });

@@ -77,7 +77,7 @@ export async function refreshOwnedIntegration(
         client: input.clientId,
         ok: true,
         changed: result.changed,
-        ...(result.state === "absent" ? { reason: result.message } : {}),
+        ...(result.state !== "current" ? { reason: result.message } : {}),
       }
     : { client: input.clientId, ok: false, reason: result.message, refusalReason: result.reason, state: result.state,
         ...(result.snapshotPath ? { snapshotPath: result.snapshotPath } : {}),

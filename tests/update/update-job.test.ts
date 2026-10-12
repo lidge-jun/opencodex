@@ -1941,3 +1941,20 @@ describe("service recovery is health-gated, not viability-gated", () => {
     expect(spawned).toEqual([18765]);
   });
 });
+
+test("startUpdateJob uses injected prechecked result without a second registry call", () => {
+  let checks = 0;
+  const prechecked = {
+    currentVersion: "2.7.40", latestVersion: "2.7.41", channel: "latest" as const,
+    installer: "bun" as const, updateAvailable: true, canUpdate: true,
+    command: "bun add -g @bitkyc08/opencodex@2.7.41",
+    releaseNotesUrl: "https://github.com/lidge-jun/opencodex/releases/latest",
+  };
+  const job = startUpdateJob("latest", false, {
+    checkForUpdateFn: channel => { checks++; expect(channel).toBe("latest"); return prechecked; },
+    spawnWorkerFn: () => ({ pid: 8123, unref() {}, once() {} }),
+  });
+  expect(checks).toBe(1);
+  expect(job.latestVersion).toBe(prechecked.latestVersion);
+  expect(job.pid).toBe(8123);
+});

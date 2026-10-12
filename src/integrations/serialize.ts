@@ -177,7 +177,17 @@ export function quoteTomlKey(key: string): string {
 function tomlScalar(value: unknown): string {
   if (typeof value === "string") return tomlString(value);
   if (typeof value === "boolean") return value ? "true" : "false";
-  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (typeof value === "number" && Number.isFinite(value)) {
+    // Bun.TOML.parse returns TOML integers as JavaScript numbers. Values outside
+    // the safe range may already have been rounded, so writing them back would
+    // silently alter a user-owned config rather than merely reformatting it.
+    if (Number.isInteger(value) && !Number.isSafeInteger(value)) {
+      throw new UnserializableValueError(
+        "TOML cannot safely rewrite an integer outside JavaScript's safe range",
+      );
+    }
+    return String(value);
+  }
   /*
    * Arrays of ANY scalar, not just strings. The string-only check was written
    * against our own builder output; a user's config legitimately holds

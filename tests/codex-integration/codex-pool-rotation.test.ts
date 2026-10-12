@@ -457,6 +457,51 @@ describe("accountPoolStrategy new-session routing", () => {
     expect(resolveCodexAccountForThread("bound", config, now)).toBe("c");
   });
 
+  test.each([false, true])("reset-first account override zero preserves affinity but not cooldown eligibility with cacheAffinity=%s", cacheAffinity => {
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "reset-first",
+      autoSwitchThreshold: 80,
+      codexAccountAutoSwitchThresholds: { a: 0 },
+      pool: { cacheAffinity },
+    });
+    const now = Date.now();
+    for (const [index, id] of THREE_ACCOUNT_IDS.entries()) {
+      setAccountQuotaFromParsed(id, { weeklyPercent: 10 + index * 10, weeklyResetAt: now / 1000 + 300 * (index + 1) });
+    }
+    expect(resolveCodexAccountForThread("account-zero-reset", config, now)).toBe("a");
+    setAccountQuotaFromParsed("a", { weeklyPercent: 100 });
+    for (const later of [now + 1, now + CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS + 1]) {
+      expect(previewCodexAccountForRequest("account-zero-reset", config, later)).toBe("a");
+      expect(resolveCodexAccountForThread("account-zero-reset", config, later)).toBe("a");
+    }
+    const failedAt = now + CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS + 2;
+    recordCodexUpstreamOutcome(config, "a", 429, { now: failedAt, retryAfter: "60" });
+    expect(previewCodexAccountForRequest("account-zero-reset", config, failedAt + 1)).toBe("b");
+    expect(resolveCodexAccountForThread("account-zero-reset", config, failedAt + 1)).toBe("b");
+  });
+
+  test.each([
+    { global: 0, scope: undefined },
+    { global: 95, scope: undefined },
+    { global: 0, scope: "reserve" as const },
+    { global: 95, scope: "reserve" as const },
+  ])("reset-first account override controls affinity with global=$global scope=$scope", ({ global, scope }) => {
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "reset-first",
+      pool: { cacheAffinity: false },
+      autoSwitchThreshold: global,
+      codexAccountAutoSwitchThresholds: { a: 60 },
+    });
+    const now = Date.now();
+    for (const [index, id] of THREE_ACCOUNT_IDS.entries()) {
+      setAccountQuotaFromParsed(id, { weeklyPercent: 10 + index * 10, weeklyResetAt: now / 1000 + 300 * (index + 1) });
+    }
+    expect(resolveCodexAccountForThread("account-override-reset", config, now, scope)).toBe("a");
+    setAccountQuotaFromParsed("a", { weeklyPercent: 70 });
+    expect(previewCodexAccountForRequest("account-override-reset", config, now + 1, scope)).toBe("b");
+    expect(resolveCodexAccountForThread("account-override-reset", config, now + 1, scope)).toBe("b");
+  });
+
   test("reset-first ignores past/missing resets and breaks ties by usage", () => {
     const config = makeThreeAccountConfig({ accountPoolStrategy: "reset-first" });
     const now = Date.now();

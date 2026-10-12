@@ -25,6 +25,7 @@ import { MAX_SYNTHESIZED_OUTPUT_ITEMS } from "../../src/server/responses-json-ev
 import type { ResponsesTerminalRepairScheduler } from "../../src/server/responses-terminal-repair";
 import { sendResponseToWebSocket } from "../../src/server/ws-bridge";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { withTestTranslatorBudget } from "../helpers/translator-budget";
 
 const createResponsesPassthroughAdapter = (...args: Parameters<typeof createResponsesPassthroughAdapterProduction>) =>
@@ -33,6 +34,13 @@ const createResponsesPassthroughAdapter = (...args: Parameters<typeof createResp
 const MODEL = "deepseek-v4-flash";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
+let releaseSpendHome: (() => void) | undefined;
+
+// Direct physical dispatch needs the writer lease to prevent spend-ledger ownership failures.
+const takeSpendHome = (): void => { releaseSpendHome ??= acquireOwnedSpendHome(); };
+
+// Release before the next case so a failed dispatch cannot leave an ownership conflict.
+const dropSpendHome = (): void => { releaseSpendHome?.(); releaseSpendHome = undefined; };
 
 class ManualTerminalScheduler implements ResponsesTerminalRepairScheduler {
   private current = 0;
@@ -165,7 +173,10 @@ describe("DeepSeek wire selection is scoped to the inbound protocol", () => {
 
 describe("the inbound scope survives the handleResponses replay", () => {
   const originalFetch = globalThis.fetch;
-  afterEach(() => { globalThis.fetch = originalFetch; });
+  afterEach(() => {
+    dropSpendHome();
+    globalThis.fetch = originalFetch;
+  });
 
   function captureUpstreamRequests(): Array<{ url: string; body: Record<string, unknown> }> {
     const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
@@ -190,7 +201,8 @@ describe("the inbound scope survives the handleResponses replay", () => {
   ): Promise<{ url: string; body: Record<string, unknown> }> {
     const requests = captureUpstreamRequests();
     const config = { providers: { deepseek: deepseekProvider() } } as unknown as OcxConfig;
-    await handleResponses(
+    takeSpendHome();
+    const turn = await handleResponses(
       new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -203,6 +215,9 @@ describe("the inbound scope survives the handleResponses replay", () => {
         ...(inboundTransport === undefined ? {} : { inboundTransport }),
       },
     );
+    // The turn's body is a live stream. Releasing it here means no reader is still attached
+    // when the lease is dropped, which is what turns a finished case into a pending one.
+    await turn.body?.cancel();
     return requests[0] ?? { url: "", body: {} };
   }
 
@@ -250,6 +265,7 @@ describe("the inbound scope survives the handleResponses replay", () => {
       abortSignal: testAbort.signal,
       responsesTerminalRepairScheduler: scheduler,
     } as Parameters<typeof handleResponses>[3];
+    takeSpendHome();
     const response = await handleResponses(
       new Request("http://localhost/v1/responses", {
         method: "POST",
@@ -329,6 +345,7 @@ describe("the inbound scope survives the handleResponses replay", () => {
     }) as typeof fetch;
     const config = { providers: { deepseek: deepseekProvider() } } as unknown as OcxConfig;
     const abort = new AbortController();
+    takeSpendHome();
     const response = await handleResponses(
       new Request("http://localhost/v1/responses", {
         method: "POST",
@@ -441,6 +458,7 @@ describe("the inbound scope survives the handleResponses replay", () => {
 
     const config = { providers: { deepseek: deepseekProvider() } } as unknown as OcxConfig;
     const deadline = AbortSignal.timeout(5_000);
+    takeSpendHome();
     const response = await handleResponses(
       new Request("http://localhost/v1/responses", {
         method: "POST",
@@ -498,6 +516,7 @@ describe("the inbound scope survives the handleResponses replay", () => {
     // The plain provider seed carries no explicit repair config; the registry's
     // { repairInvalidIds: true } policy must reach the live route via backfill.
     const config = { providers: { deepseek: deepseekProvider() } } as unknown as OcxConfig;
+    takeSpendHome();
     const response = await handleResponses(
       new Request("http://localhost/v1/responses", {
         method: "POST",
@@ -525,6 +544,7 @@ describe("the inbound scope survives the handleResponses replay", () => {
     })) as typeof fetch;
     const config = { providers: { deepseek: deepseekProvider() } } as unknown as OcxConfig;
     const abort = new AbortController();
+    takeSpendHome();
     const response = await handleResponses(
       new Request("http://localhost/v1/responses", {
         method: "POST",
@@ -610,6 +630,7 @@ describe("the bounded-JSON mechanism stays alive behind a synthetic registry ent
     });
   });
   afterEach(() => {
+    dropSpendHome();
     globalThis.fetch = originalFetch;
     const index = mutableRegistry.findIndex(entry => entry.id === FIXTURE_ID);
     if (index >= 0) mutableRegistry.splice(index, 1);
@@ -655,6 +676,7 @@ describe("the bounded-JSON mechanism stays alive behind a synthetic registry ent
     options: { stream?: boolean; websocket?: boolean } = {},
   ): Promise<Response> {
     const config = { providers: { [FIXTURE_ID]: provider } } as unknown as OcxConfig;
+    takeSpendHome();
     return handleResponses(
       new Request("http://localhost/v1/responses", {
         method: "POST",

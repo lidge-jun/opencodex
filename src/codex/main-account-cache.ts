@@ -1,4 +1,5 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { codexCredentialMutationEpoch } from "./credential-mutation-epoch";
 import type { StoredAccountQuota } from "./quota-types";
 import { truncateRetainedUtf8 } from "../lib/admission";
 
@@ -71,6 +72,48 @@ export function matchesMainQuotaCredential(accessToken: string, effectiveAccount
 export function isMainQuotaWriterLive(writer: MainQuotaWriter): boolean {
   return writer.identityKey === observedMainQuotaIdentityKey
     && writer.identityGeneration === mainAccountIdentityGeneration;
+}
+
+/** Proof that a dispatch used the observed main credential; process-local, never persisted. */
+export type MainQuotaDispatch = Readonly<{
+  writer: MainQuotaWriter;
+  credentialGeneration: number;
+  credentialMutationEpoch: number;
+  configGeneration: number;
+}>;
+
+// WS quota frames publish through their observer; prelude quota can only come from those frames.
+// A real HTTP fallback after a failed upgrade never invokes the observer and stays unclaimed.
+const wsObservedMainDispatches = new WeakSet<MainQuotaDispatch>();
+
+export function claimMainQuotaDispatchForWs(dispatch: MainQuotaDispatch): void {
+  wsObservedMainDispatches.add(dispatch);
+}
+
+export function isMainQuotaDispatchWsClaimed(dispatch: MainQuotaDispatch): boolean {
+  return wsObservedMainDispatches.has(dispatch);
+}
+
+/** Give a replacement physical attempt its own quota ownership without recapturing credential fences. */
+export function renewMainQuotaDispatchForAttempt(dispatch: MainQuotaDispatch): MainQuotaDispatch {
+  return { ...dispatch };
+}
+
+export function captureMainQuotaDispatch(
+  accessToken: string, accountId: string | undefined, configGeneration: number,
+): MainQuotaDispatch | undefined {
+  if (!accountId || !matchesMainQuotaCredential(accessToken, accountId)) return undefined;
+  const writer = captureMainQuotaWriter(accountId);
+  return writer ? { writer, credentialGeneration: mainQuotaCredentialGeneration,
+    credentialMutationEpoch: codexCredentialMutationEpoch(), configGeneration } : undefined;
+}
+
+export function isMainQuotaDispatchLive(dispatch: MainQuotaDispatch): boolean {
+  // Other OpenCodex-owned credential publications also advance this epoch;
+  // dropping a main quota update after any such publication is the intended safe direction.
+  return isMainQuotaWriterLive(dispatch.writer)
+    && dispatch.credentialGeneration === mainQuotaCredentialGeneration
+    && dispatch.credentialMutationEpoch === codexCredentialMutationEpoch();
 }
 
 export function getObservedMainQuotaIdentityKey(): string | undefined {

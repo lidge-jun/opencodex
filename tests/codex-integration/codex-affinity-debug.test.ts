@@ -13,12 +13,20 @@ function diagnosticPayload(): Record<string, unknown> {
   return JSON.parse(line.slice(prefix.length)) as Record<string, unknown>;
 }
 
+let savedDebug: string | undefined;
+let savedFramesDebug: string | undefined;
 beforeEach(() => {
+  savedDebug = process.env.OCX_DEBUG;
+  savedFramesDebug = process.env.OCX_DEBUG_FRAMES;
+  delete process.env.OCX_DEBUG;
+  delete process.env.OCX_DEBUG_FRAMES;
   resetDebugSettingsForTests();
   resetDebugLogBufferForTests();
 });
 
 afterEach(() => {
+  if (savedDebug === undefined) delete process.env.OCX_DEBUG; else process.env.OCX_DEBUG = savedDebug;
+  if (savedFramesDebug === undefined) delete process.env.OCX_DEBUG_FRAMES; else process.env.OCX_DEBUG_FRAMES = savedFramesDebug;
   resetDebugSettingsForTests();
   resetDebugLogBufferForTests();
 });

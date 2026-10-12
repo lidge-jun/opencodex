@@ -8,6 +8,7 @@ import {
 import { hostname } from "node:os";
 import { atomicWriteFile, loadConfig, withConfigMutationLockSync } from "../config";
 import { claudeDesktopIntegrationEnabledNow } from "../codex/desired-state";
+import { siblingOfLivePort, siblingSkipMessage } from "../codex/sibling-start";
 import {
   inspectRemoteDesktopStore, readDesktopDisconnectReceipt, writeDesktopDisconnectReceipt,
   replaceRemoteDesktopCredential, restoreRemoteDesktopStore, finishRemoteDesktopCleanup,
@@ -22,6 +23,7 @@ import {
   injectCodexConfig,
   currentExternalCodexModelProvider,
   isCodexRoutingInjected,
+  standaloneCodexRoutingTarget,
   type CodexRoutingTarget,
 } from "../codex/inject";
 import {
@@ -37,12 +39,14 @@ import {
   replaceServiceApiTokenFile,
   restoreTokenBackup,
   serviceApiTokenBackupPath,
+  serviceApiTokenFingerprint,
   writeTokenBackup,
   writeServiceApiTokenFile,
 } from "../lib/service-secrets";
 import { MAX_REMOTE_CATALOG_BYTES } from "../server/catalog-download";
 import type {
   OcxClientConnectionConfig,
+  OcxConfig,
   OcxConnectedClientId,
 } from "../types";
 import {
@@ -65,10 +69,14 @@ import {
   clearClientConnection,
   commitClientConnection,
   readClientConnectionState,
+  isLinkConnection,
+  markClientConnectPending, clearClientConnectPending, pendingClientConnectMayOwnToken,
   assertNoClientDisconnectPending, assertClientConnectionUnchanged, sameClientConnectionOwner,
 } from "./state";
 import { assertClientCatalogCompatible, type CatalogCompatibilityDeps } from "./catalog-compatibility";
 import { hubStateCachePath } from "./hub-state";
+import { ClientLinkStateError, clearClientLinkState, readClientLinkState } from "./link-state";
+import { isLinkPort } from "../link/ports";
 
 class RotationRecoveryRequiredError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -80,14 +88,24 @@ class RotationRecoveryRequiredError extends Error {
 export interface ConnectOptions {
   serverUrl: string;
   managementUrl?: string;
-  credential: OneTimeConnectCredential;
+  credential: OneTimeConnectCredential | LinkClientCredential;
   selectedClients: OcxConnectedClientId[];
   managementTransport: "direct" | "relay";
+  transport?: "hub" | "link";
+  link?: { tunnelPort: number; linkId: string };
   noSync?: boolean;
   catalogTimeoutMs?: number;
 }
 
+export interface LinkClientCredential {
+  kind: "link";
+  apiKeyId: string;
+  key: string;
+}
+
 export interface ClientConnectDeps {
+  /** Abort enrollment network work and refuse subsequent writes; rollback still drains. */
+  signal?: AbortSignal;
   fetchImpl?: typeof fetch;
   now?: () => Date;
   lifecycleLockDeps?: ClientLifecycleLockDeps;
@@ -156,11 +174,31 @@ function catalogMatchesFingerprint(body: string, fingerprint: string | undefined
   return createHash("sha256").update(body).digest("base64url") === fingerprint;
 }
 
-function routingTarget(serverUrl: string): CodexRoutingTarget {
+/**
+ * Codex routing for a connected client. A hub client points Codex at the hub with the admission
+ * token in `env_key`. A link Child (`localPort` given) keeps exactly the standalone loopback form,
+ * root `openai_base_url = "http://127.0.0.1:<port>/v1"` with no provider table and no `env_key`:
+ * its own listener relays to the Home and attaches the link key itself, so a GUI-launched Codex
+ * that never saw the key's environment variable still works, and joining changes no Codex bytes.
+ */
+export function routingTarget(
+  serverUrl: string,
+  localPort?: number,
+  config?: Pick<OcxConfig, "codexDesktopAuthless" | "codexClientCompaction">,
+): CodexRoutingTarget & { link?: true } {
+  if (localPort === undefined) {
+    return { baseUrl: `${serverUrl}/v1`, requiresAdmissionToken: true, tokenEnv: "OPENCODEX_API_AUTH_TOKEN" };
+  }
+  if (!Number.isInteger(localPort) || localPort < 1 || localPort > 65535) {
+    throw new Error("link mode requires a valid local config port");
+  }
   return {
-    baseUrl: `${serverUrl}/v1`,
-    requiresAdmissionToken: true,
-    tokenEnv: "OPENCODEX_API_AUTH_TOKEN",
+    ...standaloneCodexRoutingTarget(localPort, {
+      hostname: "127.0.0.1",
+      codexDesktopAuthless: config?.codexDesktopAuthless,
+      codexClientCompaction: config?.codexClientCompaction,
+    }),
+    link: true as const,
   };
 }
 
@@ -176,6 +214,10 @@ function clientKeyName(): string {
 
 function releaseCredential(credential: OneTimeConnectCredential): void {
   credential.value.fill(0);
+}
+
+function releaseConnectCredential(credential: ConnectOptions["credential"]): void {
+  if (credential.kind !== "link") releaseCredential(credential);
 }
 
 async function rotationAuthority(
@@ -347,6 +389,7 @@ export async function recoverPendingClientRotation(
       assertNoClientDisconnectPending();
       const state = readClientConnectionState();
       if (state.kind !== "connected" || !state.value.pendingOperation) throw new Error("no pending client key rotation to recover");
+      if (isLinkConnection(state.value)) throw new Error("connect rotate is unavailable in link mode");
       const authority = await rotationAuthority(state.value, options, deps);
       assertClientConnectionUnchanged(state.value);
       return recoverRotationWithAuthority(held, state.value, authority, deps);
@@ -379,6 +422,7 @@ async function rotateConnectedClientKeyHeld(
     const state = readClientConnectionState();
     if (state.kind !== "connected") throw new Error("connect rotate is available only while connected");
     connection = state.value;
+    if (isLinkConnection(connection)) throw new Error("connect rotate is unavailable in link mode");
     const current = readServiceApiTokenState();
     if (current.kind !== "present") throw new Error("connected service token unavailable");
     if (!connection.pendingOperation) {
@@ -492,58 +536,141 @@ function assertConnectingState(expectedTokenFingerprint?: string): void {
   }
 }
 
+/** Enroll a client key, keeping its pending ownership visible until commit or rollback. */
 export async function connectClient(
   options: ConnectOptions,
   deps: ClientConnectDeps = {},
 ): Promise<OcxClientConnectionConfig> {
+  deps.signal?.throwIfAborted();
+  const rawFetch = deps.fetchImpl ?? fetch;
+  const fetchImpl: typeof fetch = deps.signal ? Object.assign(async (...[input, init = {}]: Parameters<typeof fetch>) => {
+    deps.signal!.throwIfAborted();
+    const signals = [deps.signal, init.signal, input instanceof Request ? input.signal : undefined]
+      .filter((signal): signal is AbortSignal => signal != null);
+    return rawFetch(input, { ...init, signal: AbortSignal.any(signals), redirect: "manual" });
+  }, { preconnect: rawFetch.preconnect }) : rawFetch;
+  const assertActiveConnectingState = (fingerprint?: string) => {
+    deps.signal?.throwIfAborted();
+    assertConnectingState(fingerprint);
+  };
   let serverUrl = "";
   let managementUrl = "";
+  let linkAdmissionToken: string | null = null;
+  let linkMode = false;
+  let linkMetadata: { tunnelPort: number; linkId: string } | undefined;
   let issued: IssuedClientKey | null = null;
   let cleanupCredential: { kind: "admin"; value: Uint8Array } | { kind: "gui-session"; value: ConnectGuiSession } | null = null;
   let tokenFingerprint: string | null = null;
+  let pendingConnectFingerprint: string | null = null;
   let priorCatalog: CatalogSnapshot | null = null;
   let writtenCatalogFingerprint: string | null = null;
   let injectionCommitted = false;
   let committed = false;
+  // Before any catalog, journal, client-state or credential write: `CODEX_HOME` is shared with the
+  // live proxy a sibling instance runs beside, and connecting re-points it (`sibling-start.ts`).
+  if (siblingOfLivePort() !== null) throw new Error(siblingSkipMessage());
   try {
-    serverUrl = normalizeHubOrigin(options.serverUrl);
-    if (options.managementUrl) managementUrl = normalizeHubOrigin(options.managementUrl);
+    linkMode = (options.transport ?? "hub") === "link";
+    if (linkMode) {
+      if (options.credential.kind !== "link" || !options.link
+        || !isLinkPort(options.link.tunnelPort)
+        || !/^lnk_[0-9a-f]{16}$/.test(options.link.linkId)
+        || !/^ocx_data_[0-9a-f]{40}$/.test(options.credential.key)
+        || !options.credential.apiKeyId.trim() || options.credential.apiKeyId.length > 256) {
+        throw new Error("invalid link credential");
+      }
+      linkMetadata = { ...options.link };
+      serverUrl = `http://127.0.0.1:${linkMetadata.tunnelPort}`;
+      if ((options.managementUrl && options.managementUrl !== serverUrl) || options.managementTransport !== "direct") {
+        throw new Error("link mode requires direct management on the tunnel origin");
+      }
+      managementUrl = serverUrl;
+    } else {
+      if (options.credential.kind === "link" || options.link) throw new Error("link credential requires link transport");
+      serverUrl = normalizeHubOrigin(options.serverUrl);
+      if (options.managementUrl) managementUrl = normalizeHubOrigin(options.managementUrl);
+    }
     if (options.selectedClients.length < 1 || new Set(options.selectedClients).size !== options.selectedClients.length) {
       throw new Error("at least one unique connected client is required");
     }
+    // Only link mode needs the local port before the hub is contacted; hub mode keeps reading config
+    // after the catalog download, so its stderr order (catalog refusal first) is unchanged.
+    const earlyConfig = linkMode ? loadConfig() : undefined;
+    if (earlyConfig && (!Number.isInteger(earlyConfig.port) || earlyConfig.port < 1 || earlyConfig.port > 65535)) {
+      throw new Error("link mode requires a valid local config port");
+    }
     withClientLifecycleSync(() => withConfigMutationLockSync(() => {
-      assertConnectingState();
+      assertActiveConnectingState();
       const externalProvider = currentExternalCodexModelProvider();
       if (externalProvider) throw new Error("connect refused: an external Codex provider owns config.toml");
+      if (linkMode) {
+        const credential = options.credential;
+        if (credential.kind !== "link") throw new Error("invalid link credential");
+        const persisted = writeServiceApiTokenFile(credential.key);
+        pendingConnectFingerprint = persisted.fingerprint;
+        const reread = readServiceApiTokenState();
+        if (reread.kind !== "present" || reread.fingerprint !== persisted.fingerprint) {
+          throw new Error("invalid link credential");
+        }
+        markClientConnectPending(persisted.fingerprint);
+        linkAdmissionToken = reread.token;
+      }
     }), deps.lifecycleLockDeps);
 
-    const ready = await fetchHubReady(serverUrl, { fetchImpl: deps.fetchImpl });
+    const upstreamFetch = fetchImpl;
+    const readinessFetch = linkMode
+      ? (async (input, init = {}) => {
+        const url = input instanceof Request ? input.url : String(input);
+        if (!url.endsWith("/readyz")) return upstreamFetch(input, init);
+        const headers = new Headers(init.headers);
+        headers.set("x-opencodex-api-key", linkAdmissionToken!);
+        return upstreamFetch(input, { ...init, headers });
+      }) as typeof fetch
+      : upstreamFetch;
+    const ready = await fetchHubReady(serverUrl, { fetchImpl: readinessFetch });
     if (ready.status !== "ready") throw new Error(`hub is not ready (${ready.status})`);
-    managementUrl = managementUrl || ready.metadata.managementUrl;
+    if (!linkMode) managementUrl = managementUrl || ready.metadata.managementUrl;
 
-    if (options.credential.kind === "pairing-grant") {
+    if (!linkMode && options.credential.kind === "pairing-grant") {
       const session = await exchangeConnectPairingGrant(
         managementUrl,
         localGuiOrigin(),
         options.credential.value,
-        { fetchImpl: deps.fetchImpl },
+        { fetchImpl },
       );
       cleanupCredential = { kind: "gui-session", value: session };
-    } else {
+    } else if (!linkMode && options.credential.kind === "admin") {
       cleanupCredential = { kind: "admin", value: options.credential.value };
     }
-    issued = await issueClientKey(managementUrl, cleanupCredential, clientKeyName(), { fetchImpl: deps.fetchImpl });
+    if (!linkMode) {
+      issued = await issueClientKey(managementUrl, cleanupCredential!, clientKeyName(), { fetchImpl });
+    }
 
     const initialFiles = withClientLifecycleSync(() => withConfigMutationLockSync(() => {
-      assertConnectingState();
-      return { prior: catalogSnapshot(), persisted: writeServiceApiTokenFile(issued!.key) };
+      assertActiveConnectingState(linkMode ? pendingConnectFingerprint! : undefined);
+      const persisted = linkMode
+        ? (() => {
+          const current = readServiceApiTokenState();
+          if (current.kind !== "present") throw new Error("invalid link credential");
+          return { fingerprint: current.fingerprint };
+        })()
+        : writeServiceApiTokenFile(issued!.key);
+      const fingerprint = persisted.fingerprint;
+      if (!pendingConnectFingerprint) {
+        markClientConnectPending(fingerprint);
+        pendingConnectFingerprint = fingerprint;
+      }
+      return { prior: catalogSnapshot(), persisted };
     }), deps.lifecycleLockDeps);
     priorCatalog = initialFiles.prior;
     const persisted = initialFiles.persisted;
     tokenFingerprint = persisted.fingerprint;
 
-    const catalog = await downloadClientCatalog(serverUrl, issued.key, {
-      fetchImpl: deps.fetchImpl,
+    const admissionToken = linkMode ? linkAdmissionToken : issued?.key;
+    if (!admissionToken) throw new Error("client admission credential unavailable");
+    const apiKeyId = linkMode ? (options.credential as LinkClientCredential).apiKeyId : issued!.id;
+    const catalog = await downloadClientCatalog(serverUrl, admissionToken, {
+      fetchImpl,
       timeoutMs: options.catalogTimeoutMs,
     });
     // Fail closed BEFORE the write (#4207). The hub being reachable and the credential working
@@ -553,20 +680,20 @@ export async function connectClient(
     // than writing one and restoring it afterwards.
     assertClientCatalogCompatible(catalog.body, deps.catalogCompatibility);
     writtenCatalogFingerprint = withClientLifecycleSync(() => withConfigMutationLockSync(() => {
-      assertConnectingState(persisted.fingerprint);
+      assertActiveConnectingState(persisted.fingerprint);
       atomicWriteFile(DEFAULT_CATALOG_PATH, catalog.body);
       return sha256(catalog.body);
     }), deps.lifecycleLockDeps);
 
-    const config = loadConfig();
-    const target = routingTarget(serverUrl);
+    const config = earlyConfig ?? loadConfig();
+    const target = routingTarget(serverUrl, linkMode ? config.port : undefined, config);
     const injectConfig = { ...config, syncResumeHistory: false };
     const preflight = await injectCodexConfig(config.port, injectConfig, {
       validateOnly: true,
       routingTarget: target,
       catalogPath: DEFAULT_CATALOG_PATH,
-      journalOwner: { kind: "client", apiKeyId: issued.id },
-      beforeClientWrite: () => assertConnectingState(persisted.fingerprint),
+      journalOwner: { kind: "client", apiKeyId },
+      beforeClientWrite: () => assertActiveConnectingState(persisted.fingerprint),
     });
     if (!preflight.success) throw new Error(preflight.message);
 
@@ -574,8 +701,8 @@ export async function connectClient(
       const injected = await injectCodexConfig(config.port, injectConfig, {
         routingTarget: target,
         catalogPath: DEFAULT_CATALOG_PATH,
-        journalOwner: { kind: "client", apiKeyId: issued.id },
-        beforeClientWrite: () => assertConnectingState(persisted.fingerprint),
+        journalOwner: { kind: "client", apiKeyId },
+        beforeClientWrite: () => assertActiveConnectingState(persisted.fingerprint),
       });
       if (!injected.success || injected.status === "skipped") throw new Error(injected.message);
       injectionCommitted = true;
@@ -589,7 +716,7 @@ export async function connectClient(
       managementTransport: options.managementTransport,
       selectedClients: [...options.selectedClients],
       tokenEnv: "OPENCODEX_API_AUTH_TOKEN",
-      apiKeyId: issued.id,
+      apiKeyId,
       tokenFingerprint: persisted.fingerprint,
       protocolVersion: 1,
       connectedAt: now,
@@ -599,9 +726,11 @@ export async function connectClient(
       // back in the same run.
       priorCatalog: priorCatalog.kind === "file" ? Buffer.from(priorCatalog.body, "utf8").toString("base64") : "",
       catalogSyncedAt: now,
+      ...(linkMode ? { transport: "link" as const, link: linkMetadata } : {}),
     };
     withClientLifecycleSync(() => withConfigMutationLockSync(() => {
-      assertConnectingState(persisted.fingerprint);
+      assertActiveConnectingState(persisted.fingerprint);
+      clearClientConnectPending(persisted.fingerprint);
       commitClientConnection(connection);
       committed = true;
     }), deps.lifecycleLockDeps);
@@ -618,9 +747,11 @@ export async function connectClient(
         if (priorCatalog && writtenCatalogFingerprint && !restoreCatalogSnapshot(priorCatalog, writtenCatalogFingerprint)) {
           rollbackFailures.push("catalog rollback did not match the written artifact");
         }
-        if (tokenFingerprint) {
-          const removed = removeServiceApiTokenFileIfOwned(tokenFingerprint);
+        if (pendingConnectFingerprint) {
+          const removed = removeServiceApiTokenFileIfOwned(pendingConnectFingerprint);
           if (removed === "changed") rollbackFailures.push("service token changed during rollback");
+          // Final commit may fail after this attempt already cleared its marker under the same lock.
+          else if (pendingClientConnectMayOwnToken(pendingConnectFingerprint)) clearClientConnectPending(pendingConnectFingerprint);
         }
       }), deps.lifecycleLockDeps);
     } catch { rollbackFailures.push("client cleanup ownership unavailable"); }
@@ -635,7 +766,7 @@ export async function connectClient(
     ];
     throw new Error(details.length > 0 ? `${base}. ${details.join(" ")}` : base, { cause: error });
   } finally {
-    releaseCredential(options.credential);
+    releaseConnectCredential(options.credential);
     cleanupCredential = null;
     issued = null;
     if (!committed) {
@@ -650,6 +781,7 @@ export async function syncConnectedClient(
   _options: { restartCodex?: boolean } = {},
   deps: ClientConnectDeps = {},
 ): Promise<{ catalogWritten: boolean; cacheSynced: boolean; injected: boolean; stale: boolean }> {
+  if (siblingOfLivePort() !== null) throw new Error(siblingSkipMessage());
   const initial = withClientLifecycleSync(() => withConfigMutationLockSync(() => {
     assertNoClientDisconnectPending();
     const state = readClientConnectionState();
@@ -696,7 +828,7 @@ export async function syncConnectedClient(
   if (next.selectedClients.includes("codex")) {
     const config = loadConfig();
     const result = await injectCodexConfig(config.port, { ...config, syncResumeHistory: false }, {
-      routingTarget: routingTarget(next.serverUrl), catalogPath: DEFAULT_CATALOG_PATH,
+      routingTarget: routingTarget(next.serverUrl, isLinkConnection(next) ? config.port : undefined, config), catalogPath: DEFAULT_CATALOG_PATH,
       journalOwner: { kind: "client", apiKeyId: next.apiKeyId }, beforeClientWrite,
     });
     if (!result.success || result.status === "skipped") throw new Error(result.message);
@@ -791,6 +923,7 @@ export async function disconnectClient(
   desktopRestoration?: "owned_projection" | "standard_fallback" | "selection_preserved";
   restartRequired: boolean;
 }> {
+  if (siblingOfLivePort() !== null) throw new Error(siblingSkipMessage());
   const keepCatalog = options.keepCatalog === true;
   const prepared = withClientLifecycleSync(held => withConfigMutationLockSync(() => {
     const read = readDesktopDisconnectReceipt();
@@ -892,6 +1025,17 @@ export async function disconnectClient(
     if (!disconnectAtLeast(receipt, "clearing_connection")) advance("clearing_connection");
     if (clearClientConnection(receipt.owner) === "conflict") throw new Error("client_disconnect_owner_changed");
     if (!disconnectAtLeast(receipt, "connection_cleared")) advance("connection_cleared");
+    if (connection?.transport === "link" && connection.link) {
+      // A corrupt sidecar is left in place: the connection is already cleared, the client runtime
+      // will not start a tunnel for a disconnected client, and the next join overwrites the file.
+      let sidecarLinkId: string | null = null;
+      try {
+        sidecarLinkId = readClientLinkState()?.linkId ?? null;
+      } catch (error) {
+        if (!(error instanceof ClientLinkStateError)) throw error;
+      }
+      if (sidecarLinkId === connection.link.linkId) clearClientLinkState(connection.link.linkId);
+    }
     removeHubStateCache();
     requireDesktopResult(finishRemoteDesktopCleanup(held, receipt.owner));
     if (receipt.phase !== "complete") advance("complete");
@@ -930,6 +1074,7 @@ export async function revokeConnectedClientKey(
       assertNoClientDisconnectPending();
       const state = readClientConnectionState();
       if (state.kind !== "connected" || state.value.pendingOperation) throw new Error("connect revoke requires a settled connection");
+      if (isLinkConnection(state.value)) throw new Error("connect revoke is unavailable in link mode");
       await revokeClientKey(state.value.managementUrl, credential, state.value.apiKeyId, { fetchImpl: deps.fetchImpl });
       assertClientConnectionUnchanged(state.value);
       return { apiKeyId: state.value.apiKeyId };

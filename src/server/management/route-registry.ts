@@ -30,6 +30,8 @@ export type ExemptionReason =
   | "gui-invalidation"
   /** Requires a dashboard browser session. Includes the user-consent star boundary. */
   | "session-only"
+  /** Opens a browser view; data operations remain independently CLI-addressable. */
+  | "browser-navigation"
   /** Deliberately returns 405; there is nothing to drive. */
   | "disabled"
   /** Gated on a process-scoped capability principal, not an operator action. */
@@ -38,10 +40,19 @@ export type ExemptionReason =
   | "test-seam"
   /** The CLI reaches the same data through a local transport instead of HTTP. */
   | "local-transport"
+  /** Machine scrape target whose HTTP exposition is the operator contract. */
+  | "scrape-target"
   /** Older clients use this alias; the current CLI drives its declared replacement. */
   | "compatibility-alias"
+  /**
+   * An interactive-only preview that lacks a supported terminal confirmation workflow.
+   * Named CLI preview/commit workflows are operational capabilities, not this exemption.
+   */
+  | "interactive-preview"
   /** Unreachable in the live dispatch order; delete rather than expose. */
   | "dead"
+  /** Desktop shell internal display-state POST; the CLI has no app updater state to publish. */
+  | "desktop-internal"
   /**
    * A verb is owed but belongs to a later work-phase. BOUNDED: requires `owner` and
    * `ownerDoc`, and the parity test asserts that tracked doc exists and names the route.
@@ -92,6 +103,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/codex-auth/login-status", module: "codex/auth-api/routes", mutates: false },
   { method: "GET", path: "/api/codex-auth/quota", module: "codex/auth-api/routes", mutates: false },
   { method: "GET", path: "/api/codex-auth/quota/history", module: "codex/auth-api/routes", mutates: false },
+  { method: "GET", path: "/api/codex-auth/low-quota-events", module: "server/management/low-quota-routes", mutates: false, exempt: { reason: "deferred-verb", why: "The authenticated event history is an operator diagnostic with no CLI verb yet.", owner: "rt5 low-quota", ownerDoc: "structure/gui-and-management-api.md" } },
   { method: "GET", path: "/api/codex-auth/reset-credits", module: "codex/auth-api/routes", mutates: false },
   { method: "PATCH", path: "/api/codex-auth/pool-strategy", module: "codex/auth-api/routes", mutates: true },
   { method: "POST", path: "/api/codex-auth/accounts", module: "codex/auth-api/routes", mutates: true },
@@ -109,6 +121,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "PUT", path: "/api/codex-auth/accounts/alias", module: "codex/auth-api/routes", mutates: true },
   { method: "PUT", path: "/api/codex-auth/accounts/pause", module: "codex/auth-api/routes", mutates: true },
   { method: "PUT", path: "/api/codex-auth/accounts/pause-exhausted", module: "codex/auth-api/routes", mutates: true },
+  { method: "PUT", path: "/api/codex-auth/accounts/credits", module: "codex/auth-api/routes", mutates: true },
   { method: "PUT", path: "/api/codex-auth/accounts/priority", module: "codex/auth-api/routes", mutates: true },
   { method: "PUT", path: "/api/codex-auth/active", module: "codex/auth-api/routes", mutates: true },
   { method: "PUT", path: "/api/codex-auth/auto-switch", module: "codex/auth-api/routes", mutates: true },
@@ -132,22 +145,37 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/effort-caps", module: "server/management/agent-settings-routes", mutates: false },
   { method: "GET", path: "/api/grok", module: "server/management/agent-settings-routes", mutates: false },
   { method: "GET", path: "/api/injection-model", module: "server/management/agent-settings-routes", mutates: false },
+  { method: "POST", path: "/api/injection-model/suggest", module: "server/management/agent-settings-routes", mutates: false },
   { method: "GET", path: "/api/subagent-model-fallback", module: "server/management/agent-settings-routes", mutates: false },
-  { method: "GET", path: "/api/subagent-models", module: "server/management/agent-settings-routes", mutates: false },
   { method: "GET", path: "/api/v2", module: "server/management/agent-settings-routes", mutates: false },
   { method: "POST", path: "/api/claude-desktop/apply", module: "server/management/agent-settings-routes", mutates: true },
   { method: "POST", path: "/api/grok/apply", module: "server/management/agent-settings-routes", mutates: true },
   { method: "GET", path: "/api/grok/reset-coupons", module: "server/management/grok-coupon-routes", mutates: false },
   { method: "POST", path: "/api/grok/reset-coupons/consume", module: "server/management/grok-coupon-routes", mutates: true },
+  { method: "GET", path: "/api/anthropic/reset-grants", module: "server/management/anthropic-reset-grant-routes", mutates: false },
+  { method: "POST", path: "/api/anthropic/reset-grants/consume", module: "server/management/anthropic-reset-grant-routes", mutates: true, exempt: { reason: "session-only", why: "Spending a Claude reset grant requires the gui-session principal (anthropic-reset-grant-routes.ts handleConsume); the admin token is refused." } },
   { method: "PUT", path: "/api/claude-code", module: "server/management/agent-settings-routes", mutates: true },
   { method: "PUT", path: "/api/claude-desktop", module: "server/management/agent-settings-routes", mutates: true },
+  { method: "PUT", path: "/api/claude-desktop/first-party-bindings", module: "server/management/agent-settings-routes", mutates: true },
+  // server/management/claude-intercept-routes
+  { method: "POST", path: "/api/claude-intercept/start", module: "server/management/claude-intercept-routes", mutates: true },
+
+  // server/management/claude-desktop-picker-routes
+  { method: "GET", path: "/api/claude-desktop/picker", module: "server/management/claude-desktop-picker-routes", mutates: false },
+  { method: "PUT", path: "/api/claude-desktop/picker", module: "server/management/claude-desktop-picker-routes", mutates: true },
   { method: "PUT", path: "/api/codex-auth/features/default-mode-request-user-input", module: "server/management/agent-settings-routes", mutates: true },
   { method: "PUT", path: "/api/effort-caps", module: "server/management/agent-settings-routes", mutates: true },
   { method: "PUT", path: "/api/grok/selection", module: "server/management/agent-settings-routes", mutates: true },
   { method: "PUT", path: "/api/injection-model", module: "server/management/agent-settings-routes", mutates: true },
   { method: "PUT", path: "/api/subagent-model-fallback", module: "server/management/agent-settings-routes", mutates: true },
-  { method: "PUT", path: "/api/subagent-models", module: "server/management/agent-settings-routes", mutates: true },
   { method: "PUT", path: "/api/v2", module: "server/management/agent-settings-routes", mutates: true },
+  // server/management/subagent-model-routes
+  { method: "GET", path: "/api/subagent-models", module: "server/management/subagent-model-routes", mutates: false },
+  { method: "PUT", path: "/api/subagent-models", module: "server/management/subagent-model-routes", mutates: true },
+  // server/management/codex-agent-role-routes
+  { method: "GET", path: "/api/codex-agent-roles", module: "server/management/codex-agent-role-routes", mutates: false },
+  { method: "POST", path: "/api/codex-agent-roles/auto-assign", module: "server/management/codex-agent-role-routes", mutates: false, mechanism: "path-constant" },
+  { method: "PUT", path: "/api/codex-agent-roles/{role}", module: "server/management/codex-agent-role-routes", mutates: true, mechanism: "prefix-decode" },
   // server/management/aside-profile-routes
   { method: "GET", path: "/api/client-integrations/aside", module: "server/management/aside-profile-routes", mutates: false, mechanism: "path-constant", exempt: { reason: "compatibility-alias", why: "Legacy Aside status alias; the current CLI reads the same aggregate through GET /api/client-integrations/aside/profiles." } },
   { method: "PUT", path: "/api/client-integrations/aside", module: "server/management/aside-profile-routes", mutates: true, mechanism: "path-constant", exempt: { reason: "compatibility-alias", why: "Legacy Aside toggle alias; the current CLI uses PUT /api/client-integrations/aside/profiles so older servers cannot mistake a bulk request for a current-account toggle." } },
@@ -157,9 +185,10 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/client-integrations/aside/profiles/{profileId}", module: "server/management/aside-profile-routes", mutates: false, mechanism: "prefix-decode" },
   { method: "PUT", path: "/api/client-integrations/aside/profiles/{profileId}", module: "server/management/aside-profile-routes", mutates: true, mechanism: "prefix-decode" },
   { method: "GET", path: "/api/client-integrations/aside/profiles/journal", module: "server/management/aside-profile-routes", mutates: false, mechanism: "prefix-decode" },
-  { method: "DELETE", path: "/api/client-integrations/aside/profiles/journal", module: "server/management/aside-profile-routes", mutates: true, mechanism: "prefix-decode", exempt: { reason: "deferred-verb", why: "Aside history deletion uses the dashboard journal cleanup; the CLI has history and restore but no deletion verb yet.", owner: "260904_priority65_closeout WP7", ownerDoc: "devlog/_fin/260904_priority65_closeout/060_wp7_rollback_journal_crud.md" } },
+  { method: "DELETE", path: "/api/client-integrations/aside/profiles/journal", module: "server/management/aside-profile-routes", mutates: true, mechanism: "prefix-decode" },
   { method: "GET", path: "/api/client-integrations/aside/profiles/{profileId}/journal", module: "server/management/aside-profile-routes", mutates: false, mechanism: "prefix-decode" },
-  { method: "DELETE", path: "/api/client-integrations/aside/profiles/{profileId}/journal", module: "server/management/aside-profile-routes", mutates: true, mechanism: "prefix-decode", exempt: { reason: "deferred-verb", why: "Aside profile history deletion uses the dashboard journal cleanup; the CLI has scoped history and restore but no deletion verb yet.", owner: "260904_priority65_closeout WP7", ownerDoc: "devlog/_fin/260904_priority65_closeout/060_wp7_rollback_journal_crud.md" } },
+  { method: "POST", path: "/api/client-integrations/aside/profiles/{profileId}/preview", module: "server/management/aside-profile-routes", mutates: false, mechanism: "prefix-decode" },
+  { method: "DELETE", path: "/api/client-integrations/aside/profiles/{profileId}/journal", module: "server/management/aside-profile-routes", mutates: true, mechanism: "prefix-decode" },
   { method: "POST", path: "/api/client-integrations/aside/profiles/{profileId}/restore", module: "server/management/aside-profile-routes", mutates: true, mechanism: "prefix-decode" },
   // server/management/codex-prompt-routes
   { method: "GET", path: "/api/codex-prompt", module: "server/management/codex-prompt-routes", mutates: false },
@@ -168,12 +197,16 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "POST", path: "/api/codex-prompt/repair", module: "server/management/codex-prompt-routes", mutates: true, exempt: { reason: "session-only", why: "Prompt repair requires the gui-session principal (codex-prompt-routes.ts:298)." } },
   { method: "PUT", path: "/api/codex-prompt/base", module: "server/management/codex-prompt-routes", mutates: true, exempt: { reason: "session-only", why: "Base prompt write requires the gui-session principal (codex-prompt-routes.ts:298)." } },
   { method: "PUT", path: "/api/codex-prompt/base/select", module: "server/management/codex-prompt-routes", mutates: true, exempt: { reason: "session-only", why: "Base prompt selection requires the gui-session principal (codex-prompt-routes.ts:298)." } },
+  { method: "POST", path: "/api/codex-prompt/base/import", module: "server/management/codex-prompt-routes", mutates: true, exempt: { reason: "session-only", why: "Base prompt import requires the gui-session principal (codex-prompt-routes.ts:298)." } },
   { method: "PUT", path: "/api/codex-prompt/custom", module: "server/management/codex-prompt-routes", mutates: true, exempt: { reason: "session-only", why: "Custom prompt write requires the gui-session principal (codex-prompt-routes.ts:298)." } },
   { method: "PUT", path: "/api/codex-prompt/toggle", module: "server/management/codex-prompt-routes", mutates: true, exempt: { reason: "session-only", why: "Prompt toggle requires the gui-session principal (codex-prompt-routes.ts:298)." } },
   // server/management/combo-routes
   { method: "DELETE", path: "/api/combos", module: "server/management/combo-routes", mutates: true },
   { method: "GET", path: "/api/combos", module: "server/management/combo-routes", mutates: false },
   { method: "PUT", path: "/api/combos", module: "server/management/combo-routes", mutates: true },
+  // server/management/decision-routes
+  { method: "GET", path: "/api/combos/decision-discovery", module: "server/management/decision-routes", mutates: false },
+  { method: "POST", path: "/api/combos/decision-test", module: "server/management/decision-routes", mutates: true },
   // server/management/config-routes
   { method: "GET", path: "/api/config", module: "server/management/config-routes", mutates: false },
   { method: "GET", path: "/api/diagnostics/project-config", module: "server/management/config-routes", mutates: false },
@@ -195,13 +228,17 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   // server/management/integration-routes
   { method: "GET", path: "/api/client-integrations", module: "server/management/integration-routes", mutates: false },
   { method: "GET", path: "/api/client-integrations/journal", module: "server/management/integration-routes", mutates: false },
-  { method: "DELETE", path: "/api/client-integrations/journal", module: "server/management/integration-routes", mutates: true, exempt: { reason: "deferred-verb", why: "Retiring one rollback row is a dashboard-local cleanup; the CLI verb that would drive it is owed by a later work-phase and is not implemented here.", owner: "260904_priority65_closeout WP7", ownerDoc: "devlog/_fin/260904_priority65_closeout/060_wp7_rollback_journal_crud.md" } },
+  { method: "DELETE", path: "/api/client-integrations/journal", module: "server/management/integration-routes", mutates: true },
   { method: "POST", path: "/api/client-integrations/restore", module: "server/management/integration-routes", mutates: true },
+  { method: "POST", path: "/api/client-integrations/preview", module: "server/management/integration-routes", mutates: false },
+  { method: "POST", path: "/api/client-integrations/restore/preview", module: "server/management/integration-routes", mutates: false },
+  { method: "POST", path: "/api/client-integrations/commandcode/restore", module: "server/management/integration-routes", mutates: true },
+  { method: "POST", path: "/api/client-integrations/commandcode/restore/preview", module: "server/management/integration-routes", mutates: false },
   // server/management/lab-automation-routes
   { method: "GET", path: "/api/lab/automation", module: "server/management/lab-automation-routes", mutates: false, exempt: { reason: "local-transport", why: "ocx lab reads the same rows from the local SQLite projection; src/cli/lab.ts imports ../lab/query directly and never fetches /api/lab." } },
   { method: "GET", path: "/api/lab/automation/runs", module: "server/management/lab-automation-routes", mutates: false, exempt: { reason: "local-transport", why: "ocx lab reads the same rows from the local SQLite projection; src/cli/lab.ts imports ../lab/query directly and never fetches /api/lab." } },
-  { method: "POST", path: "/api/lab/automation/run", module: "server/management/lab-automation-routes", mutates: true, exempt: { reason: "deferred-verb", why: "Lab automation run has no CLI verb yet. A local SQLite read cannot drive it, so local-transport does not apply.", owner: "wp7", ownerDoc: "devlog/_plan/260828_ocx_agentic_control/060_phase_gui_parity.md" } },
-  { method: "PUT", path: "/api/lab/automation", module: "server/management/lab-automation-routes", mutates: true, exempt: { reason: "deferred-verb", why: "Lab automation config update has no CLI verb yet. A local SQLite read cannot drive it, so local-transport does not apply.", owner: "wp7", ownerDoc: "devlog/_plan/260828_ocx_agentic_control/060_phase_gui_parity.md" } },
+  { method: "POST", path: "/api/lab/automation/run", module: "server/management/lab-automation-routes", mutates: true, exempt: { reason: "deferred-verb", why: "ocx lab run explicitly executes a local scenario. The local invocation does not control the selected running proxy; this HTTP operation remains deferred.", owner: "wp7", ownerDoc: "devlog/_plan/260828_ocx_agentic_control/060_phase_gui_parity.md" } },
+  { method: "PUT", path: "/api/lab/automation", module: "server/management/lab-automation-routes", mutates: true, exempt: { reason: "deferred-verb", why: "ocx lab automation enable/disable updates local policy. The local invocation does not control the selected running proxy; this HTTP operation remains deferred.", owner: "wp7", ownerDoc: "devlog/_plan/260828_ocx_agentic_control/060_phase_gui_parity.md" } },
   // server/management/lab-routes
   { method: "GET", path: "/api/lab/artifacts", module: "server/management/lab-routes", mutates: false, exempt: { reason: "local-transport", why: "ocx lab reads the same rows from the local SQLite projection; src/cli/lab.ts imports ../lab/query directly and never fetches /api/lab." } },
   { method: "GET", path: "/api/lab/catalog", module: "server/management/lab-routes", mutates: false, exempt: { reason: "local-transport", why: "ocx lab reads the same rows from the local SQLite projection; src/cli/lab.ts imports ../lab/query directly and never fetches /api/lab." } },
@@ -212,10 +249,10 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/lab/status", module: "server/management/lab-routes", mutates: false, exempt: { reason: "local-transport", why: "ocx lab reads the same rows from the local SQLite projection; src/cli/lab.ts imports ../lab/query directly and never fetches /api/lab." } },
   { method: "GET", path: "/api/lab/subjects", module: "server/management/lab-routes", mutates: false, exempt: { reason: "local-transport", why: "ocx lab reads the same rows from the local SQLite projection; src/cli/lab.ts imports ../lab/query directly and never fetches /api/lab." } },
   { method: "GET", path: "/api/lab/verdicts", module: "server/management/lab-routes", mutates: false, exempt: { reason: "local-transport", why: "ocx lab reads the same rows from the local SQLite projection; src/cli/lab.ts imports ../lab/query directly and never fetches /api/lab." } },
-  { method: "POST", path: "/api/lab/public/community/import", module: "server/management/lab-routes", mutates: true, exempt: { reason: "deferred-verb", why: "Community evidence import has no CLI verb yet. A local SQLite read cannot drive it, so local-transport does not apply.", owner: "wp7", ownerDoc: "devlog/_plan/260828_ocx_agentic_control/060_phase_gui_parity.md" } },
-  { method: "POST", path: "/api/lab/public/export", module: "server/management/lab-routes", mutates: true, exempt: { reason: "deferred-verb", why: "Public evidence export has no CLI verb yet. A local SQLite read cannot drive it, so local-transport does not apply.", owner: "wp7", ownerDoc: "devlog/_plan/260828_ocx_agentic_control/060_phase_gui_parity.md" } },
-  { method: "POST", path: "/api/lab/public/preview", module: "server/management/lab-routes", mutates: true, exempt: { reason: "deferred-verb", why: "Public evidence preview has no CLI verb yet. A local SQLite read cannot drive it, so local-transport does not apply.", owner: "wp7", ownerDoc: "devlog/_plan/260828_ocx_agentic_control/060_phase_gui_parity.md" } },
-  { method: "POST", path: "/api/lab/public/verify", module: "server/management/lab-routes", mutates: true, exempt: { reason: "deferred-verb", why: "Public evidence verification has no CLI verb yet. A local SQLite read cannot drive it, so local-transport does not apply.", owner: "wp7", ownerDoc: "devlog/_plan/260828_ocx_agentic_control/060_phase_gui_parity.md" } },
+  { method: "POST", path: "/api/lab/public/community/import", module: "server/management/lab-routes", mutates: true, exempt: { reason: "deferred-verb", why: "ocx lab public import reads a local bundle file. The local invocation does not control the selected running proxy; this HTTP operation remains deferred.", owner: "wp7", ownerDoc: "devlog/_plan/260828_ocx_agentic_control/060_phase_gui_parity.md" } },
+  { method: "POST", path: "/api/lab/public/export", module: "server/management/lab-routes", mutates: true, exempt: { reason: "deferred-verb", why: "ocx lab public export uses local evidence. The local invocation does not control the selected running proxy; this HTTP operation remains deferred.", owner: "wp7", ownerDoc: "devlog/_plan/260828_ocx_agentic_control/060_phase_gui_parity.md" } },
+  { method: "POST", path: "/api/lab/public/preview", module: "server/management/lab-routes", mutates: true, exempt: { reason: "deferred-verb", why: "ocx lab public preview uses local evidence. The local invocation does not control the selected running proxy; this HTTP operation remains deferred.", owner: "wp7", ownerDoc: "devlog/_plan/260828_ocx_agentic_control/060_phase_gui_parity.md" } },
+  { method: "POST", path: "/api/lab/public/verify", module: "server/management/lab-routes", mutates: true, exempt: { reason: "deferred-verb", why: "ocx lab public verify reads a local bundle file. The local invocation does not control the selected running proxy; this HTTP operation remains deferred.", owner: "wp7", ownerDoc: "devlog/_plan/260828_ocx_agentic_control/060_phase_gui_parity.md" } },
   // server/management/logs-usage-routes
   { method: "GET", path: "/api/claude/inbound-debug", module: "server/management/logs-usage-routes", mutates: false },
   { method: "GET", path: "/api/debug", module: "server/management/logs-usage-routes", mutates: false },
@@ -228,12 +265,20 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/storage/trash", module: "server/management/logs-usage-routes", mutates: false },
   { method: "GET", path: "/api/storage/trash/restore/test-stream", module: "server/management/logs-usage-routes", mutates: false, exempt: { reason: "test-seam", why: "Opt-in streaming seam declared at src/storage/restore-job.ts:34." } },
   { method: "GET", path: "/api/usage", module: "server/management/logs-usage-routes", mutates: false },
+  // server/management/usage-timeline-routes
+  { method: "GET", path: "/api/usage/timeline", module: "server/management/usage-timeline-routes", mutates: false },
+  // server/management/companion-routes
+  { method: "POST", path: "/api/companion/open-in-browser", module: "server/management/companion-routes", mutates: true, exempt: { reason: "browser-navigation", why: "Opens the companion's current view in the system browser under normal management admission; the CLI reads the underlying settings and usage directly." } },
+  { method: "GET", path: "/api/companion/settings", module: "server/management/companion-routes", mutates: false },
+  { method: "PUT", path: "/api/companion/settings", module: "server/management/companion-routes", mutates: true },
   { method: "POST", path: "/api/storage/cleanup", module: "server/management/logs-usage-routes", mutates: true },
   { method: "POST", path: "/api/storage/cleanup-policy/run", module: "server/management/logs-usage-routes", mutates: true },
   { method: "POST", path: "/api/storage/cleanup/preview", module: "server/management/logs-usage-routes", mutates: true },
   { method: "POST", path: "/api/storage/trash/restore", module: "server/management/logs-usage-routes", mutates: true },
   { method: "PUT", path: "/api/debug", module: "server/management/logs-usage-routes", mutates: true },
   { method: "PUT", path: "/api/storage/cleanup-policy", module: "server/management/logs-usage-routes", mutates: true },
+  // server/management/metrics-routes
+  { method: "GET", path: "/api/metrics", module: "server/management/metrics-routes", mutates: false, exempt: { reason: "scrape-target", why: "This machine scrape target exposes authenticated text exposition for monitoring systems; a CLI JSON verb would be a different contract." } },
   // server/management/model-routes
   { method: "GET", path: "/api/aliases", module: "server/management/model-routes", mutates: false },
   { method: "GET", path: "/api/catalog", module: "server/management/model-routes", mutates: false },
@@ -249,6 +294,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "PUT", path: "/api/disabled-models", module: "server/management/model-routes", mutates: true },
   { method: "PUT", path: "/api/model-discovery", module: "server/management/model-routes", mutates: true },
   { method: "PUT", path: "/api/model-presets", module: "server/management/model-routes", mutates: true },
+  { method: "PUT", path: "/api/model-settings", module: "server/management/model-routes", mutates: true },
   { method: "PUT", path: "/api/model-visibility", module: "server/management/model-routes", mutates: true },
   { method: "PUT", path: "/api/selected-models", module: "server/management/model-routes", mutates: true },
   // server/management/native-integration-routes
@@ -259,6 +305,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "PUT", path: "/api/native-integrations/grok", module: "server/management/native-integration-routes", mutates: true },
   // server/management/cursor-integration-routes
   { method: "GET", path: "/api/native-integrations/cursor", module: "server/management/cursor-integration-routes", mutates: false },
+  { method: "GET", path: "/api/native-integrations/cursor/local-installer", module: "server/management/cursor-integration-routes", mutates: false },
   // server/management/oauth-account-routes
   { method: "DELETE", path: "/api/keys", module: "server/management/oauth-account-routes", mutates: true },
   { method: "DELETE", path: "/api/keys/rotate", module: "server/management/oauth-account-routes", mutates: true },
@@ -271,7 +318,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/oauth/accounts/pool", module: "server/management/oauth-account-routes", mutates: false },
   { method: "GET", path: "/api/pool/settings", module: "server/management/oauth-account-routes", mutates: false },
   { method: "PUT", path: "/api/pool/settings", module: "server/management/oauth-account-routes", mutates: true },
-  { method: "PATCH", path: "/api/pool/settings", module: "server/management/oauth-account-routes", mutates: true },
+  { method: "PATCH", path: "/api/pool/settings", module: "server/management/oauth-account-routes", mutates: true, exempt: { reason: "compatibility-alias", why: "Handled by the same partial settings branch as PUT /api/pool/settings; current CLI strategy, sticky and routes commands use PUT, not PATCH." } },
   { method: "GET", path: "/api/oauth/providers", module: "server/management/oauth-account-routes", mutates: false },
   { method: "GET", path: "/api/oauth/status", module: "server/management/oauth-account-routes", mutates: false },
   { method: "GET", path: "/api/providers/keys", module: "server/management/oauth-account-routes", mutates: false },
@@ -280,6 +327,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "PATCH", path: "/api/keys", module: "server/management/oauth-account-routes", mutates: true },
   { method: "PATCH", path: "/api/oauth/accounts/pool", module: "server/management/oauth-account-routes", mutates: true },
   { method: "POST", path: "/api/keys", module: "server/management/oauth-account-routes", mutates: true },
+  { method: "POST", path: "/api/keys/reveal", module: "server/management/oauth-account-routes", mutates: false, exempt: { reason: "session-only", why: "Stored-key reads require a current pairing or trusted Tailscale-identity session; automatic loopback sessions and admin tokens are refused." } },
   { method: "POST", path: "/api/keys/rotate", module: "server/management/oauth-account-routes", mutates: true },
   { method: "POST", path: "/api/keys/rotate/commit", module: "server/management/oauth-account-routes", mutates: true },
   { method: "POST", path: "/api/oauth/accounts/clear-cooldown", module: "server/management/oauth-account-routes", mutates: true },
@@ -291,6 +339,8 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "POST", path: "/api/providers/keys", module: "server/management/oauth-account-routes", mutates: true },
   { method: "PUT", path: "/api/oauth/accounts/active", module: "server/management/oauth-account-routes", mutates: true },
   { method: "PUT", path: "/api/oauth/accounts/alias", module: "server/management/oauth-account-routes", mutates: true },
+  { method: "PUT", path: "/api/oauth/accounts/pause", module: "server/management/oauth-account-routes", mutates: true },
+  { method: "PUT", path: "/api/oauth/accounts/auto-switch", module: "server/management/oauth-account-routes", mutates: true },
   { method: "PUT", path: "/api/oauth/accounts/pool", module: "server/management/oauth-account-routes", mutates: true },
   { method: "PUT", path: "/api/providers/keys/active", module: "server/management/oauth-account-routes", mutates: true },
   { method: "PUT", path: "/api/providers/keys/alias", module: "server/management/oauth-account-routes", mutates: true },
@@ -304,13 +354,16 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "PATCH", path: "/api/providers", module: "server/management/provider-routes", mutates: true },
   { method: "POST", path: "/api/providers", module: "server/management/provider-routes", mutates: true },
   { method: "POST", path: "/api/providers/test", module: "server/management/provider-routes", mutates: true },
-  { method: "PUT", path: "/api/providers", module: "server/management/provider-routes", mutates: true, exempt: { reason: "deferred-verb", why: "Issue #3280 scopes this atomic batch endpoint to the GUI JSON editor; a matching CLI verb is outside wp5 and remains owed.", owner: "wp5-followup", ownerDoc: "devlog/_fin/260903_bug_drawdown_bcda/050_phase5.md" } },
+  { method: "PUT", path: "/api/providers", module: "server/management/provider-routes", mutates: true },
   { method: "PUT", path: "/api/provider-context-caps", module: "server/management/provider-routes", mutates: true },
   // server/management/quota-reset-routes
   { method: "GET", path: "/api/quota-resets", module: "server/management/quota-reset-routes", mutates: false, mechanism: "negated-guard" },
   // server/management/workflow-budget-routes
-  { method: "GET", path: "/api/workflow-budget", module: "server/management/workflow-budget-routes", mutates: false, exempt: { reason: "deferred-verb", why: "Reading a root's live budget is owed a CLI verb -- an operator staring at a 429 is usually already in a terminal -- but the ledger is process memory with no local transport to read it through, so the verb has to be an HTTP call the CLI does not yet make.", owner: "260915_workflow_budget_window wfc", ownerDoc: "devlog/_plan/260915_workflow_budget_window/030_wfc_diff_plan.md" } },
-  { method: "POST", path: "/api/workflow-budget/clear", module: "server/management/workflow-budget-routes", mutates: true, exempt: { reason: "deferred-verb", why: "Clearing one root is owed the same verb as the read above and for the same reason. It is deliberately not shipped as a verb in this work-phase: the read comes first, because an operator who cannot see which ceiling fired has no basis for deciding to forgive it.", owner: "260915_workflow_budget_window wfc", ownerDoc: "devlog/_plan/260915_workflow_budget_window/030_wfc_diff_plan.md" } },
+  { method: "GET", path: "/api/protocols", module: "server/management/protocol-routes", mutates: false },
+  { method: "POST", path: "/api/protocols/plan", module: "server/management/protocol-routes", mutates: false },
+  { method: "PATCH", path: "/api/protocols/settings", module: "server/management/protocol-routes", mutates: true },
+  { method: "GET", path: "/api/workflow-budget", module: "server/management/workflow-budget-routes", mutates: false, exempt: { reason: "deferred-verb", why: "Reading a root's live budget is owed a CLI verb -- an operator staring at a 429 is usually already in a terminal -- but the ledger is process memory with no local transport to read it through, so the verb has to be an HTTP call the CLI does not yet make.", owner: "260915_workflow_budget_window wfc", ownerDoc: "devlog/_fin/260915_workflow_budget_window/030_wfc_diff_plan.md" } },
+  { method: "POST", path: "/api/workflow-budget/clear", module: "server/management/workflow-budget-routes", mutates: true, exempt: { reason: "deferred-verb", why: "Clearing one root is owed the same verb as the read above and for the same reason. It is deliberately not shipped as a verb in this work-phase: the read comes first, because an operator who cannot see which ceiling fired has no basis for deciding to forgive it.", owner: "260915_workflow_budget_window wfc", ownerDoc: "devlog/_fin/260915_workflow_budget_window/030_wfc_diff_plan.md" } },
   // server/management/request-history-routes
   { method: "GET", path: "/api/request-history", module: "server/management/request-history-routes", mutates: false },
   // server/management/routing-analytics-routes
@@ -324,6 +377,10 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   // server/management/sidebar-routes
   { method: "GET", path: "/api/github/star", module: "server/management/sidebar-routes", mutates: false },
   { method: "GET", path: "/api/update/badge", module: "server/management/sidebar-routes", mutates: false },
+  { method: "POST", path: "/api/update/desktop-snapshot",
+    module: "server/management/sidebar-routes", mutates: true,
+    exempt: { reason: "desktop-internal",
+      why: "Only the Tauri shell has signed-updater state to publish; a CLI verb could only forge that state and would not create an operator action." } },
   { method: "POST", path: "/api/github/star", module: "server/management/sidebar-routes", mutates: true, exempt: { reason: "session-only", why: "User-consent boundary in AGENTS_INSTALL.md: starring spends the user's identity. Must never gain a CLI verb." } },
   // server/management/storage-log-guard-routes
   { method: "GET", path: "/api/storage/codex-logs", module: "server/management/storage-log-guard-routes", mutates: false },
@@ -331,10 +388,20 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "POST", path: "/api/storage/codex-logs/protect", module: "server/management/storage-log-guard-routes", mutates: true },
   { method: "POST", path: "/api/storage/codex-logs/repair", module: "server/management/storage-log-guard-routes", mutates: true },
   { method: "POST", path: "/api/storage/codex-logs/unprotect", module: "server/management/storage-log-guard-routes", mutates: true },
+  // server/management/link-routes
+  { method: "GET", path: "/api/link/status", module: "server/management/link-routes", mutates: false },
+  { method: "GET", path: "/api/link/candidates", module: "server/management/link-routes", mutates: false, exempt: { reason: "session-only", why: "SSH candidates are a dashboard surface: a paired session, or on a standalone runtime the current loopback dashboard session on trusted loopback ingress; admin-token and Tailscale identity sessions are refused." } },
+  { method: "POST", path: "/api/link/probe", module: "server/management/link-routes", mutates: true },
+  { method: "POST", path: "/api/link/confirm-host", module: "server/management/link-routes", mutates: true },
+  { method: "POST", path: "/api/link/join", module: "server/management/link-routes", mutates: true, exempt: { reason: "session-only", why: "Joining a confirmed Home issues a link credential and restarts this standalone runtime as a client on its configured port, which briefly interrupts running Codex turns. It requires an operator-paired dashboard session and a pre-join notice; unpaired standalone loopback, admin-token and Tailscale identity sessions are refused." } },
+  { method: "POST", path: "/api/link/apply", module: "server/management/link-routes", mutates: true },
+  { method: "DELETE", path: "/api/link/{id}", module: "server/management/link-routes", mutates: true, mechanism: "regex" },
+  { method: "POST", path: "/api/link/{id}/reconnect", module: "server/management/link-routes", mutates: true, mechanism: "regex" },
+  { method: "POST", path: "/api/link/issue", module: "server/management/link-routes", mutates: true },
   // server/management/remote-workspace-routes
-  { method: "GET", path: "/api/remote-workspace", module: "server/management/remote-workspace-routes", mutates: false, exempt: { reason: "deferred-verb", why: "The first Remote Workspace slice exposes Hub status through the authenticated dashboard; a distinct CLI Hub-status verb is still owed and must not be confused with the Executor-local status command.", owner: "remote-workspace-cli-followup", ownerDoc: "docs-site/src/content/docs/reference/management-api.md" } },
-  { method: "GET", path: "/api/remote-workspace/runtimes", module: "server/management/remote-workspace-routes", mutates: false, exempt: { reason: "deferred-verb", why: "The first Remote Workspace slice exposes Hub runtime availability through the authenticated dashboard; a distinct CLI Hub-status verb is still owed.", owner: "remote-workspace-cli-followup", ownerDoc: "docs-site/src/content/docs/reference/management-api.md" } },
-  { method: "GET", path: "/api/remote-workspace/sessions", module: "server/management/remote-workspace-routes", mutates: false, exempt: { reason: "deferred-verb", why: "The first Remote Workspace slice exposes Hub session snapshots through the authenticated dashboard; a distinct CLI Hub-status verb is still owed.", owner: "remote-workspace-cli-followup", ownerDoc: "docs-site/src/content/docs/reference/management-api.md" } },
+  { method: "GET", path: "/api/remote-workspace", module: "server/management/remote-workspace-routes", mutates: false },
+  { method: "GET", path: "/api/remote-workspace/runtimes", module: "server/management/remote-workspace-routes", mutates: false },
+  { method: "GET", path: "/api/remote-workspace/sessions", module: "server/management/remote-workspace-routes", mutates: false },
   { method: "POST", path: "/api/remote-workspace/pairing", module: "server/management/remote-workspace-routes", mutates: true, exempt: { reason: "session-only", why: "Creating a device enrollment grant authorizes another computer, so only a dashboard consent session may request one." } },
   { method: "POST", path: "/api/remote-workspace/sessions", module: "server/management/remote-workspace-routes", mutates: true, exempt: { reason: "session-only", why: "Starting a Hub-authenticated model session against a remote computer requires an interactive dashboard consent session." } },
   { method: "POST", path: "/api/remote-workspace/sessions/{id}/prompt", module: "server/management/remote-workspace-routes", mutates: true, mechanism: "regex", exempt: { reason: "session-only", why: "A prompt can execute tools on the selected remote computer and therefore requires an interactive dashboard consent session." } },
@@ -360,6 +427,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "PUT", path: "/api/providers/{provider}/model-aliases", module: "server/management/model-routes", mutates: true, mechanism: "regex" },
   { method: "GET", path: "/api/providers/{provider}/model-costs", module: "server/management/model-routes", mutates: false, mechanism: "regex" },
   { method: "PUT", path: "/api/providers/{provider}/model-costs", module: "server/management/model-routes", mutates: true, mechanism: "regex" },
+  { method: "PUT", path: "/api/providers/{provider}/model-display-names", module: "server/management/model-routes", mutates: true, mechanism: "regex" },
   { method: "PUT", path: "/api/custom-models/{id}", module: "server/management/model-routes", mutates: true, mechanism: "regex" },
   { method: "DELETE", path: "/api/custom-models/{id}", module: "server/management/model-routes", mutates: true, mechanism: "regex" },
   { method: "GET", path: "/api/lab/subjects/{id}", module: "server/management/lab-routes", mutates: false, mechanism: "regex", exempt: { reason: "local-transport", why: "ocx lab reads the same rows from the local SQLite projection; src/cli/lab.ts imports ../lab/query directly and never fetches /api/lab." } },

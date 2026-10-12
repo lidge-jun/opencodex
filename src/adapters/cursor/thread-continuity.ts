@@ -6,10 +6,56 @@
  * recovered id instead of recomputing the stale deterministic thread hash.
  */
 
+import { createHash } from "node:crypto";
+
 const OVERRIDE_TTL_MS = 60 * 60 * 1000;
 const OVERRIDE_MAX_ENTRIES = 2048;
 
 const overrides = new Map<string, { conversationId: string; updatedAt: number }>();
+const conversationRewrites = new Map<string, { to: string; root: string; updatedAt: number }>();
+
+function rewriteKey(conversationId: string, identityScope?: string): string {
+  const identity = createHash("sha256").update(identityScope?.trim() || "local").digest("hex");
+  return `${identity}\0${conversationId}`;
+}
+
+function pruneRewrites(at: number): void {
+  for (const [key, entry] of conversationRewrites) {
+    if (at - entry.updatedAt > OVERRIDE_TTL_MS) conversationRewrites.delete(key);
+  }
+  while (conversationRewrites.size > OVERRIDE_MAX_ENTRIES) {
+    const oldest = conversationRewrites.keys().next().value;
+    if (oldest === undefined) break;
+    conversationRewrites.delete(oldest);
+  }
+}
+
+export function rememberCursorConversationRewrite(from: string, to: string, identityScope?: string): void {
+  if (!from || !to || from === to) return;
+  const at = now();
+  pruneRewrites(at);
+  const scope = rewriteKey("", identityScope);
+  const root = conversationRewrites.get(rewriteKey(from, identityScope))?.root ?? from;
+  const redirects = [...conversationRewrites].filter(([key, entry]) => key.startsWith(scope) && entry.root === root);
+  for (const [key] of redirects) {
+    conversationRewrites.delete(key);
+    conversationRewrites.set(key, { to, root, updatedAt: at });
+  }
+  conversationRewrites.set(rewriteKey(from, identityScope), { to, root, updatedAt: at });
+  conversationRewrites.set(rewriteKey(to, identityScope), { to, root, updatedAt: at });
+  pruneRewrites(at);
+}
+
+export function resolveCursorConversationRewrite(conversationId: string, identityScope?: string): string {
+  const at = now();
+  pruneRewrites(at);
+  const key = rewriteKey(conversationId, identityScope);
+  const entry = conversationRewrites.get(key);
+  if (!entry) return conversationId;
+  conversationRewrites.delete(key);
+  conversationRewrites.set(key, { ...entry, updatedAt: at });
+  return entry.to;
+}
 
 function now(): number {
   return Date.now();
@@ -64,6 +110,7 @@ export function lookupCursorThreadConversation(
 
 export function clearCursorThreadContinuityForTests(): void {
   overrides.clear();
+  conversationRewrites.clear();
 }
 
 /** Max conversation-id remints after the first surfaced overflow per retained scope. */
@@ -278,7 +325,13 @@ const envelopeEchoRemintBudget = createCursorRemintBudget(
 export function cursorEnvelopeEchoRemintScopeKey(
   threadOwner: string | undefined,
   identityScope?: string,
+  conversationId?: string,
 ): string | null {
+  if (conversationId) {
+    pruneRewrites(now());
+    const root = conversationRewrites.get(rewriteKey(conversationId, identityScope))?.root ?? conversationId;
+    return `echo\0${rewriteKey(root, identityScope)}`;
+  }
   return cursorOverflowRemintScopeKey(threadOwner, identityScope);
 }
 

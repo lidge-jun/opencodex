@@ -85,6 +85,11 @@ Routing and catalog visibility are separate controls:
 - Fresh installs set `modelDiscovery.newModelPolicy` to `"off"`. After the first successful live
   fetch establishes a baseline, later arrivals are appended to `disabledModels` and carry a **NEW**
   dashboard badge until enabled or acknowledged. Existing installs remain `"on"` until opted in.
+  The policy applies before publishing newly discovered models through `/v1/models`, the dashboard,
+  client configuration exports, or a Codex catalog sync (including service startup).
+  Enabling an arrival manually keeps it enabled on later refreshes and exports.
+  If the running provider configuration differs from disk, model lists still apply the policy
+  using a temporary projection; they leave the running configuration and saved choices untouched.
   Use `ocx models new-policy off` globally, add `--provider <name>` for an override, and inspect
   `ocx models new-arrivals [--json]`. Failed/degraded fetches never change the baseline. Providers
   with a non-empty `selectedModels` (including preset mode) are already curated, so this policy is
@@ -105,6 +110,15 @@ Routing and catalog visibility are separate controls:
   switching it on restores that selection. A remembered selection never applies a limit while disabled.
   Sending `{ "setAll": true }` without `value` enables all configured providers at the current
   global value and replaces their remembered selections.
+- A GitHub Copilot model that supports the upstream long-context tier can opt in with
+  `providers.github-copilot.modelContextTiers.<model> = "long_context"` or
+  `ocx provider edit github-copilot --model-context-tier <model>=long_context`.
+  The tier sends `contextTier: "long_context"` on Copilot Chat and Responses requests.
+  It raises the advertised window only when that exact model has a known per-model window
+  in `modelContextWindows` (for example, `1000000`); an unknown model keeps its live window.
+  An explicit per-model window wins, then the existing provider cap applies.
+  The `"default"` tier retains normal live context metadata.
+  The dashboard control is planned separately.
 
 ```json
 {
@@ -129,3 +143,14 @@ Routing and catalog visibility are separate controls:
   name (e.g. `anthropic` or `groq`) is actually configured.
 
 See [Configuration](/reference/configuration/) for the provider fields these rules read.
+
+
+## Structured output on Cursor routes
+
+Cursor routes translate Responses `text.format` (`json_object` or `json_schema`) into explicit
+final-answer instructions in the system context and active request, including tool-result
+continuations. This is a prompt fallback: Cursor does not provide native constrained JSON decoding
+on this transport, and models can still return an invalid answer. The adapter does not turn prose
+into an approval decision. Auto-review callers should validate the returned JSON and use a
+structured-output-capable route when strict enforcement is required. Ordinary text requests and
+intermediate tool calls keep their existing behavior.

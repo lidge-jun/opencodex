@@ -37,6 +37,9 @@ export type ReplacePublisher =
   | "storage-cleanup"
   | "tray";
 
+/** Called immediately before every rename attempt, including each Windows retry. */
+export interface RenameValidationHooks { validateBeforeRename?: (destination: string) => void }
+
 /** The Windows error codes this module treats as a momentary hold. */
 export type ReplaceRetryCode = "EBUSY" | "EPERM" | "EACCES";
 
@@ -97,13 +100,39 @@ const MAX_RETRIES = 2;
  * Windows sharing violations only, returning the code so the caller can record
  * which one. Any other error is the caller's to see, immediately.
  */
-function transientWindowsReplaceCode(
+export function transientWindowsReplaceCode(
   platform: NodeJS.Platform,
   error: unknown,
 ): ReplaceRetryCode | null {
   if (platform !== "win32") return null;
   const code = (error as NodeJS.ErrnoException).code;
   return code === "EBUSY" || code === "EPERM" || code === "EACCES" ? code : null;
+}
+
+/** One filesystem operation plus its retry observers, carried as members (not free callbacks). */
+export interface WindowsFileOperationStep<T> {
+  run: () => T;
+  onRetry?: (code: ReplaceRetryCode, exhausted: boolean) => void;
+  beforeAttempt?: () => void;
+}
+
+/** Bounded sharing-violation retries for one filesystem operation, never a transaction. */
+export function retryWindowsFileOperation<T>(
+  step: WindowsFileOperationStep<T>,
+  io: Pick<AtomicRenameIO, "platform" | "sleep"> = { platform: process.platform, sleep: Bun.sleepSync },
+): T {
+  for (let attempt = 0; ; attempt += 1) {
+    step.beforeAttempt?.();
+    try { return step.run(); }
+    catch (error) {
+      const code = transientWindowsReplaceCode(io.platform, error);
+      if (!code) throw error;
+      const exhausted = attempt >= MAX_RETRIES;
+      step.onRetry?.(code, exhausted);
+      if (exhausted) throw error;
+      io.sleep(25 * (attempt + 1));
+    }
+  }
 }
 
 export function renameAtomicFile(
@@ -115,30 +144,23 @@ export function renameAtomicFile(
     sleep: Bun.sleepSync,
   },
   publisher: ReplacePublisher = "config",
+  hooks: RenameValidationHooks = {},
 ): void {
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      io.rename(source, destination);
-      return;
-    } catch (error) {
-      const code = transientWindowsReplaceCode(io.platform, error);
-      if (!code) throw error;
-      if (attempt >= MAX_RETRIES) {
-        bump(publisher, code, "exhausted");
-        throw error;
-      }
-      bump(publisher, code, "retried");
-      io.sleep(25 * (attempt + 1));
-    }
-  }
+  retryWindowsFileOperation({
+    run: () => io.rename(source, destination),
+    onRetry: (code, exhausted) => bump(publisher, code, exhausted ? "exhausted" : "retried"),
+    beforeAttempt: () => hooks.validateBeforeRename?.(destination),
+  }, io);
 }
 
 export async function renameAtomicFileAsync(
   source: string,
   destination: string,
   publisher: ReplacePublisher = "config",
+  hooks: RenameValidationHooks = {},
 ): Promise<void> {
   for (let attempt = 0; ; attempt += 1) {
+    hooks.validateBeforeRename?.(destination);
     try {
       renameSync(source, destination);
       return;

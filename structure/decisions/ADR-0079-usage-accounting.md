@@ -1,6 +1,6 @@
 # ADR-0079 — decision recorded under "Usage accounting"
 
-- Contract owner: [gui-and-management-api.md](../gui-and-management-api.md#usage-accounting)
+- Contract owner: [dashboard-and-usage.md](../dashboard-and-usage.md#usage-accounting)
 
 ## Decision record
 

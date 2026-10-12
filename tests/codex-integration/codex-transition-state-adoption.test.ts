@@ -16,6 +16,7 @@ const CHILD = helperPath("codex-adoption-crash-child.ts");
 let root = "";
 let codexHome = "";
 let opencodexHome = "";
+const previousHome = process.env.OPENCODEX_HOME;
 let coordinatorPath = "";
 
 beforeEach(() => {
@@ -32,7 +33,8 @@ beforeEach(() => {
 
 afterEach(() => {
   delete process.env.CODEX_HOME;
-  delete process.env.OPENCODEX_HOME;
+  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = previousHome;
   rmSync(coordinatorPath, { force: true });
   removeTreeWithRetry(root);
 });

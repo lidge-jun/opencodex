@@ -55,7 +55,7 @@ describe("WS endpoint re-framer (120/132)", () => {
       "src/server/index/websocket-handler.ts",
     ].map(rel => readFileSync(new URL("../../" + rel, import.meta.url), "utf8")).join("\n");
     expect(source).toContain("const WEBSOCKET_IDLE_TIMEOUT_SECONDS = 0;");
-    expect(source).toContain("websocket: createWebsocketHandler(ctx),");
+    expect(source).toContain("websocket: createWebsocketHandler(ctx, requestMetrics),");
     expect(source).toContain("idleTimeout: WEBSOCKET_IDLE_TIMEOUT_SECONDS,");
     expect(source).toContain("finalizeLog(httpStatusForRequestLogTerminal(status, logCtx), {");
     expect(source).toContain("if (!logged) finalizeLog(turnAbort.signal.aborted ? 499 : response.status);");

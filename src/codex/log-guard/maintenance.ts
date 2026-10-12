@@ -100,6 +100,7 @@ export interface CodexLogGuardMaintenanceDeps {
   ) => CodexLogGuardLockOutcome<T>;
   quickCheck?: (db: Database) => string[];
   openDatabase?: (databasePath: string, flags: number) => Database;
+  statDatabasePath?: (databasePath: string) => DatabasePathStat;
   batchPages?: number;
   maxPagesPerRun?: number;
 }
@@ -112,15 +113,30 @@ interface CheckpointRow {
 }
 
 interface DatabaseFileIdentity {
-  dev: number;
-  ino: number;
+  dev: bigint;
+  ino: bigint;
   realPath: string;
 }
 
-function databasePathIdentity(databasePath: string): DatabaseFileIdentity | null {
+interface DatabasePathStat {
+  dev?: bigint | null;
+  ino?: bigint | null;
+  isFile(): boolean;
+  isSymbolicLink(): boolean;
+}
+
+function databasePathIdentity(
+  databasePath: string,
+  deps: CodexLogGuardMaintenanceDeps,
+): DatabaseFileIdentity | null {
   try {
-    const stat = lstatSync(databasePath);
-    if (!stat.isFile() || stat.isSymbolicLink()) return null;
+    const stat = deps.statDatabasePath
+      ? deps.statDatabasePath(databasePath)
+      : lstatSync(databasePath, { bigint: true });
+    // Windows file IDs are 64-bit; a number can round adjacent IDs equal.
+    // Missing or zero means the filesystem did not supply an identity, so fail closed.
+    if (!stat.isFile() || stat.isSymbolicLink()
+      || typeof stat.dev !== "bigint" || typeof stat.ino !== "bigint" || stat.ino === 0n) return null;
     const realPath = realpathSync.native(databasePath);
     if (!sameLogGuardPathIdentity(realPath, databasePath)) return null;
     return { dev: stat.dev, ino: stat.ino, realPath };
@@ -129,15 +145,16 @@ function databasePathIdentity(databasePath: string): DatabaseFileIdentity | null
   }
 }
 
-function databasePathIsSafe(databasePath: string): boolean {
-  return databasePathIdentity(databasePath) !== null;
+function databasePathIsSafe(databasePath: string, deps: CodexLogGuardMaintenanceDeps): boolean {
+  return databasePathIdentity(databasePath, deps) !== null;
 }
 
 function databasePathStillMatches(
   databasePath: string,
   before: DatabaseFileIdentity,
+  deps: CodexLogGuardMaintenanceDeps,
 ): boolean {
-  const after = databasePathIdentity(databasePath);
+  const after = databasePathIdentity(databasePath, deps);
   return after !== null
     && after.dev === before.dev
     && after.ino === before.ino
@@ -228,15 +245,15 @@ function runCompaction(
   let probeOpen = false;
   let reportBusyPartial: (() => CodexLogGuardCompactionResult) | undefined;
   try {
-    const beforeOpenIdentity = databasePathIdentity(databasePath);
+    const beforeOpenIdentity = databasePathIdentity(databasePath, deps);
     if (!beforeOpenIdentity) return { ok: false, error: "unsafe_path" };
     const openDatabase = deps.openDatabase
       ?? ((path: string, flags: number) => new Database(path, flags));
     db = openDatabase(databasePath, sqliteConstants.SQLITE_OPEN_READWRITE);
     // The path is user-writable foreign state. Re-check its regular-file,
-    // canonical-path and st_dev/st_ino identity immediately after SQLite opens
-    // it, before issuing any pragma or write-capable statement.
-    if (!databasePathStillMatches(databasePath, beforeOpenIdentity)) {
+    // canonical-path and full-width st_dev/st_ino identity immediately after
+    // SQLite opens it, before issuing any pragma or write-capable statement.
+    if (!databasePathStillMatches(databasePath, beforeOpenIdentity, deps)) {
       return { ok: false, error: "unsafe_path" };
     }
     db.exec("PRAGMA busy_timeout = 0");
@@ -373,7 +390,7 @@ export function compactCodexLogs(
   if (inspection.capabilities.reclaim.state !== "supported") {
     return { ok: false, error: "unsupported_schema" };
   }
-  if (!databasePathIsSafe(databasePath)) return { ok: false, error: "unsafe_path" };
+  if (!databasePathIsSafe(databasePath, deps)) return { ok: false, error: "unsafe_path" };
 
   const checkProcesses = deps.processCheck ?? listRunningCodexProcesses;
   const firstRefusal = processRefusal(checkProcesses());

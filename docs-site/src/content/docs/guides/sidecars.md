@@ -45,6 +45,14 @@ When Codex requests hosted `web_search` for a non-passthrough routed model, open
    (default 3), then removes the search tool and forces a final answer. Real client tools such as
    `apply_patch` or shell finalize the turn so those calls reach Codex.
 
+When the model batches several queries into one `web_search` call, their results share one
+8,000-character tool result. The budget is divided across the queries before anything is cut, so no
+query disappears from the result. Shortened answers and unlisted sources are marked
+with their original sizes, which lets the model tell trimmed results from searches that found
+nothing. Structured-output turns receive the same information as one valid JSON document. If a call
+asks for more queries than one result can describe, opencodex lists each query's status without its
+content and counts any queries it could not list.
+
 Every routed-model iteration requests upstream `stream: true`, but by default opencodex fully
 buffers semantic events internally before deciding whether to search or return the final answer.
 Only the first iteration's final headers/status and 429 key rotations are acquired eagerly. Thus
@@ -59,6 +67,13 @@ deciding to search — which buffered mode silently drops — becomes visible an
 in the post-search answer. The Dashboard overview page exposes this as the **Stream answers live**
 toggle on the web-search sidecar card (`PUT /api/sidecar-settings` with
 `webSearch.streamRoutedModelOutput`).
+
+This option also applies to adapters that manage their own turns, including Devin and Cursor.
+When search and image/video sidecars are both eligible, search takes priority. A first-event
+OAuth 429 rotates the account on the initial request and on each post-search answer request,
+replaying the request with the search tool and the gathered results. Cancelling a request
+stops subsequent searches, and retained search-loop output shares the request's translation-buffer
+limit; exceeding that limit fails the response instead of starting another model iteration.
 
 Kiro commentary is independent of this option: commentary-phase text already streams ahead of the
 terminal event in buffered mode, and that bypass is unchanged — with or without
@@ -207,9 +222,32 @@ timeout, and limit.
 omitted keys unchanged. `timeoutMs` uses the runtime integer bounds
 (1–2147483647 ms).
 
+The web-search sidecar card carries the same control shape: the model picker's first row is
+**Off**. Off does two things, and the second one is the reason the row exists. OpenCodex stops
+intercepting `web_search`, and the Codex integration writes Codex's own
+`web_search = "disabled"` mode into `~/.codex/config.toml` — because Codex keeps declaring its
+native hosted `web_search` tool until its own mode says otherwise, and the tool a client
+advertises is the one the model reaches for. An operator who wants an MCP search server to be
+the only search path needs both halves; otherwise the model keeps calling the native tool.
+
+`web_search` is Codex's key with its own value space (`disabled`, `cached`, `indexed`, `live`).
+OpenCodex only ever writes `disabled` while the sidecar is off, and removes its marker-owned line
+again once the sidecar is back on — a re-enabled sidecar whose client still had the native tool
+switched off would have nothing to intercept. The write needs a managed `~/.codex/config.toml` (`ocx
+sync`); the management response reports it as `codexWebSearch`, and both surfaces that can show it
+do: the Dashboard's web-search card warns when the write did not happen, and `ocx agent sidecar web
+--enabled off` prints whether it happened. Only a save that moves the switch triggers the write, so
+the ordinary "nothing changed" answer reports `not_requested` and prints nothing extra. A root
+`web_search` line the operator set by hand is replaced while the sidecar is off, since two root keys
+of the same name are not valid TOML. Its exact text is recorded in the Codex journal and put back in
+its place when the sidecar is switched on again — including for a line added after the journal
+snapshot was taken, which `ocx restore` alone cannot cover. The same record is what still
+recognizes our own `disabled` line when the Codex app has rewritten `config.toml` and dropped the
+comment that named its owner.
+
 You can still set `enabled: false` in `config.json` if you prefer to edit the
 file directly. Anthropic-OAuth search and image description reuse the existing
 Claude Code OAuth fingerprint precedent, but should be soak-tested with the
 intended account and workload.
 
-See the [Configuration reference](/reference/configuration/#sidecars) for every field.
+See the [Configuration reference](/reference/configuration/server/#sidecars) for every field.

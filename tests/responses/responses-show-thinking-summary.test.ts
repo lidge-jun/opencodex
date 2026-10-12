@@ -6,6 +6,11 @@ import { providerConfigSeed } from "../../src/providers/derive";
 import { getProviderRegistryEntry } from "../../src/providers/registry";
 import { handleResponses } from "../../src/server/responses/core";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+
+let releaseInheritedSpendHome: (() => void) | undefined;
+// Taken per inherited-home dispatch so mixed custom-home rows bind to their own directory.
+const takeInheritedSpendHome = (): void => { releaseInheritedSpendHome = acquireOwnedSpendHome(); };
 
 // Provider-opted visible thinking (showThinkingSummary): a provider that serves
 // genuine user-facing reasoning surfaces it on the summary channel even when the
@@ -57,9 +62,15 @@ async function runHandleResponses(body: Record<string, unknown>, seed: OcxProvid
 
 describe("showThinkingSummary provider option", () => {
   const originalFetch = globalThis.fetch;
-  afterEach(() => { globalThis.fetch = originalFetch; });
+  afterEach(() => {
+    // Released first so a failed row cannot leak ownership into the next sandbox case.
+    releaseInheritedSpendHome?.();
+    releaseInheritedSpendHome = undefined;
+    globalThis.fetch = originalFetch;
+  });
 
   test("provider opt-in never relabels raw content as a summary", async () => {
+    takeInheritedSpendHome();
     const response = await runHandleResponses(
       { model: "deepseek-v4-flash", input: "ping", stream: true },
       shownSeed(),
@@ -70,6 +81,7 @@ describe("showThinkingSummary provider option", () => {
   });
 
   test("explicit client summary none keeps thinking hidden", async () => {
+    takeInheritedSpendHome();
     const response = await runHandleResponses(
       { model: "deepseek-v4-flash", input: "ping", stream: true, reasoning: { summary: "none" } },
       shownSeed(),
@@ -80,6 +92,7 @@ describe("showThinkingSummary provider option", () => {
   });
 
   test("without the provider option, omitted summary stays hidden", async () => {
+    takeInheritedSpendHome();
     const seed = { ...providerConfigSeed(getProviderRegistryEntry("deepseek")!), apiKey: "sk-test" } as OcxProviderConfig;
     const response = await runHandleResponses(
       { model: "deepseek-v4-flash", input: "ping", stream: true },
@@ -101,6 +114,8 @@ describe("showThinkingSummary provider option", () => {
     const home = mkdtempSync(join(tmpdir(), "ocx-show-thinking-"));
     const prevHome = process.env.OPENCODEX_HOME;
     process.env.OPENCODEX_HOME = home;
+    // Taken after this row installs its home so the direct dispatch owns that journal.
+    const releaseSpendHome = acquireOwnedSpendHome();
     writeFileSync(join(home, "auth.json"), JSON.stringify({
       "google-antigravity": {
         activeAccountId: "active",
@@ -165,6 +180,8 @@ describe("showThinkingSummary provider option", () => {
       if (stream) expect(text).toContain("response.completed");
       expect(text).toContain("OK");
     } finally {
+      // Released before restoring or removing the home so its lease files can be deleted.
+      releaseSpendHome();
       if (prevHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = prevHome;
       rmSync(home, { recursive: true, force: true });

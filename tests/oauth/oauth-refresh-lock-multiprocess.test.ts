@@ -138,3 +138,28 @@ describe("slow multi-process OAuth refresh lock", () => {
     expect(writerOut).toContain("writer-done");
   }, SPAWN_BUDGET_MS);
 });
+
+describe("a pause committed while a refresh waits for its lock", () => {
+  for (const provider of ["kimi", "xai"] as const) {
+    test(`${provider} refresh re-reads pause under the lock and never calls the IdP`, async () => {
+      const oauth = await import("../../src/oauth");
+      const { setAccountPaused } = await import("../../src/oauth/store");
+      await saveCredential(provider, { access: "stale", refresh: "rt", expires: Date.now() - 1_000, accountId: `${provider}-acct` });
+      const accountId = getAccountSet(provider)!.activeAccountId;
+      const stale = getAccountCredential(provider, accountId)!;
+      const def = OAUTH_PROVIDERS[provider]!;
+      const originalRefresh = def.refresh;
+      let idpCalls = 0;
+      def.refresh = async () => { idpCalls++; throw new Error("IdP must not be called for a paused account"); };
+      // The lock stand-in commits the pause exactly where a concurrent operator action would land.
+      const intentLock = { acquire: async () => { await setAccountPaused(provider, accountId, true); return { release() {} }; } };
+      try {
+        const refresh = provider === "xai"
+          ? oauth.refreshXaiAccountWithLock(provider, accountId, def, stale, { intentLock } as never)
+          : refreshGenericAccountWithLock(provider, accountId, def, stale, { intentLock } as never);
+        await expect(refresh).rejects.toBeInstanceOf(oauth.OAuthAccountPausedError);
+      } finally { def.refresh = originalRefresh; }
+      expect(idpCalls).toBe(0);
+    });
+  }
+});

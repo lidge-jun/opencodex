@@ -254,6 +254,78 @@ describe("createGrokResponsesSparseTerminalBlockRewrite", () => {
     expect(terminal.output).toEqual([call]);
   });
 
+  test("Grok compatibility does not reconstruct client calls excluded by tool_choice", () => {
+    const message = {
+      type: "message",
+      id: "msg_1",
+      role: "assistant",
+      status: "completed",
+      content: [{ type: "output_text", text: "answer", annotations: [] }],
+    };
+    const calls = [
+      { type: "function_call", id: "fc_1", status: "completed", call_id: "call_1", name: "shell", arguments: "{}" },
+      { type: "custom_tool_call", id: "ctc_1", status: "completed", call_id: "call_1", name: "shell", input: "{}" },
+    ];
+    const choices = [
+      "none",
+      { type: "function", name: "search" },
+      { type: "allowed_tools", tools: [{ type: "function", name: "search" }] },
+    ];
+
+    for (const choice of choices) {
+      for (const call of calls) {
+        const rewrite = createGrokResponsesSparseTerminalBlockRewrite(
+          createTestTranslatorBudget(),
+          { tool_choice: choice },
+        );
+        rewrite(dataBlock({ type: "response.output_item.done", output_index: 0, item: message }));
+        rewrite(dataBlock({ type: "response.output_item.done", output_index: 1, item: call }));
+        const terminalBlock = dataBlock({
+          type: "response.completed",
+          response: { id: "resp_1", status: "completed", output: [] },
+        });
+        const out = rewrite(terminalBlock);
+        expect(out).toHaveLength(1);
+        const terminal = eventsOf(out)[0]!;
+        expect(terminal.type).toBe("response.incomplete");
+        expect(terminal.response.output).toEqual([message]);
+        expect(terminal.response.incomplete_details).toMatchObject({
+          reason: "forbidden_tool_call",
+        });
+      }
+    }
+  });
+
+  test("Grok compatibility reconstructs only an exactly selected client tool identity", () => {
+    const call = {
+      type: "custom_tool_call",
+      id: "ctc_1",
+      status: "completed",
+      call_id: "call_1",
+      name: "shell",
+      namespace: "workspace",
+      input: "{}",
+    };
+    const rewrite = createGrokResponsesSparseTerminalBlockRewrite(
+      createTestTranslatorBudget(),
+      { tool_choice: { type: "allowed_tools", tools: [{ type: "custom", name: "shell", namespace: "workspace" }] } },
+    );
+    rewrite(dataBlock({ type: "response.output_item.done", output_index: 0, item: call }));
+    const message = {
+      type: "message",
+      id: "msg_1",
+      role: "assistant",
+      status: "completed",
+      content: [{ type: "output_text", text: "answer", annotations: [] }],
+    };
+    rewrite(dataBlock({ type: "response.output_item.done", output_index: 1, item: message }));
+    const out = rewrite(dataBlock({
+      type: "response.completed",
+      response: { id: "resp_1", status: "completed", output: [] },
+    }));
+    expect((eventsOf(out)[0]!.response as Record<string, unknown>).output).toEqual([call, message]);
+  });
+
   test("Grok compatibility rejects missing, empty, or whitespace function_call call_id", () => {
     const callIds = [undefined, "", "   "] as const;
     for (const callId of callIds) {

@@ -5,6 +5,7 @@ import { VISION_REASONING_EFFORTS, isVisionReasoningEffort } from "../reasoning-
 import type { OcxConfig } from "../types";
 import { normalizeVisionReasoningForModel } from "../vision/reasoning";
 import type { ServiceApiTokenState } from "../lib/service-secrets";
+import { redactUrlForLog } from "../lib/redact";
 import { CliUsageError, printData, rejectArgs, runCliAction, takeFlag } from "./runtime-api";
 
 const USAGE = `Usage:
@@ -13,16 +14,17 @@ const USAGE = `Usage:
   ocx config set <dot.path> <json-or-string> [--json]
   ocx config unset <dot.path> [--json]
   ocx config validate [path|-] [--json]
-  ocx config export <path|->
+  ocx config export <path|-> [--json]
   ocx config import <path|-> --yes [--json]`;
 
 /**
- * Keys whose VALUE is a credential and must never be printed or exported.
+ * Keys whose VALUE is a credential and must never be printed by display commands.
+ * `config export` writes the raw config so an export can restore credentials; it does
+ * not call `redact`.
  *
- * `webhookUrl` is here because for Slack and Discord the URL itself is the authorization:
- * anyone holding it can post to the channel. It looks like configuration rather than a secret,
- * which is exactly why it needs to be named explicitly — none of the other patterns match it,
- * so `ocx config show` printed it and `config export` wrote it to disk in the clear.
+ * URL-valued credentials must be named explicitly: `webhookUrl` matches none of the
+ * other patterns, and a proxy URL's userinfo is handled by the `proxy` branch in
+ * `redact` rather than by masking the whole value.
  */
 const SECRET_KEYS = /^(apiKey|key|accessToken|refreshToken|idToken|token|password|clientSecret|webhookUrl)$/i;
 const BLOCKED_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
@@ -97,6 +99,19 @@ async function readRemoteHubConfigNote(config: OcxConfig): Promise<ReturnType<ty
 }
 
 function redact(value: unknown, key = ""): unknown {
+  if (key === "proxy" && typeof value === "string") {
+    // "direct" and credential-less proxy URLs carry no secret and stay readable; only a
+    // URL with userinfo is masked, and then only its credentials — host and port stay
+    // visible so the output still says WHERE traffic goes. A non-URL value that is not
+    // "direct" cannot be proven credential-free, so it is masked whole.
+    if (!value || value === "direct") return value;
+    try {
+      const parsed = new URL(value);
+      return parsed.username || parsed.password ? redactUrlForLog(value) : value;
+    } catch {
+      return "********";
+    }
+  }
   if (SECRET_KEYS.test(key) && typeof value === "string") return value ? "********" : value;
   // `client.priorCatalog` is the base64 catalog snapshot connect took before overwriting the
   // local one — up to 64 MB of it (src/config.ts). Printed in full it buried `runtimeRole` and
@@ -144,14 +159,16 @@ function setPath(root: Record<string, unknown>, path: string, value: unknown, re
   else current[leaf] = value;
 }
 
+/** Interpret config-set input as JSON when valid, otherwise preserve it as a string. */
 function parseValue(raw: string): unknown {
   try { return JSON.parse(raw); }
   catch { return raw; }
 }
 
+/** Accept one UTF-8 BOM from Windows JSON files or piped input. */
 function loadInput(path: string): unknown {
   const raw = path === "-" ? readFileSync(0, "utf8") : readFileSync(path, "utf8");
-  try { return JSON.parse(raw); }
+  try { return JSON.parse(raw.replace(/^\uFEFF/, "")); }
   catch { throw new CliUsageError(`invalid JSON in ${path}`); }
 }
 
@@ -188,14 +205,21 @@ function validate(value: unknown): OcxConfig {
 }
 
 export async function handleConfigCommand(argv: string[]): Promise<number> {
-  return runCliAction(async () => {
+  let outcome = 0;
+  const status = await runCliAction(async () => {
     const args = [...argv];
-    const action = (args.shift() ?? "show").toLowerCase();
     const wantsJson = takeFlag(args, "--json");
+    const source = takeFlag(args, "--source");
+    if (args.includes("--json") || args.includes("--source")) throw new CliUsageError("config flags may only be specified once", USAGE);
+    const action = (args.shift() ?? "show").toLowerCase();
+    if (source && action !== "show") throw new CliUsageError("--source is only supported for config show", USAGE);
     if (action === "show") {
-      const source = takeFlag(args, "--source");
       rejectArgs(args, USAGE);
       const diagnostics = readConfigDiagnostics();
+      if (diagnostics.source === "fallback" || diagnostics.error) {
+        console.error(`Warning: Config at ${getConfigPath()} is invalid or unreadable; defaults are being shown for invalid settings. Run: ocx config validate. Inspect: ocx config show --source.`);
+        if (!source) outcome = 1;
+      }
       const redacted = redact(diagnostics.config);
       const note = await readRemoteHubConfigNote(diagnostics.config);
       // First key, not last: it has to be read before the empty `providers` map that misled a
@@ -211,7 +235,12 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
       const path = args.shift();
       if (!path) throw new CliUsageError("config path is required", USAGE);
       rejectArgs(args, USAGE);
-      const value = redact(getPath(readConfigDiagnostics().config, path), path.split(".").at(-1));
+      const diagnostics = readConfigDiagnostics();
+      if (diagnostics.source === "fallback" || diagnostics.error) {
+        console.error(`Warning: Config at ${getConfigPath()} is invalid or unreadable; defaults are being shown for invalid settings. Run: ocx config validate. Inspect: ocx config show --source.`);
+        outcome = 1;
+      }
+      const value = redact(getPath(diagnostics.config, path), pathSegments(path).at(-1));
       if (wantsJson || typeof value === "object") console.log(JSON.stringify(value, null, 2));
       else console.log(String(value));
       return;
@@ -219,7 +248,7 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
     if (action === "set" || action === "unset") {
       const path = args.shift();
       const raw = action === "set" ? args.shift() : undefined;
-      if (!path || (action === "set" && raw === undefined)) throw new CliUsageError("config path and value are required", USAGE);
+      if (!path || (action === "set" && raw === undefined)) throw new CliUsageError(action === "unset" ? "config path is required" : "config path and value are required", USAGE);
       rejectArgs(args, USAGE);
       // #1835/#1838: the read used to happen OUTSIDE the mutation lock, so a concurrent
       // edit landing between it and the save was reverted by this whole-snapshot write.
@@ -257,7 +286,7 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
           ? "config changed while applying this update; retry"
           : `config is ${outcome.reason}`);
       }
-      printData({ ok: true, path, value: redact(savedValue, path.split(".").at(-1)) }, wantsJson,
+      printData({ ok: true, path, value: redact(savedValue, pathSegments(path).at(-1)) }, wantsJson,
         [`${action === "unset" ? "Unset" : "Set"} ${path}.`]);
       return;
     }
@@ -271,7 +300,7 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
       })();
       printData(result.ok ? { ok: true, source: path ?? getConfigPath() } : result, wantsJson,
         [result.ok ? "Config is valid." : `Config is invalid: ${result.error}`]);
-      if (!result.ok) process.exitCode = 1;
+      if (!result.ok) outcome = 1;
       return;
     }
     if (action === "export") {
@@ -280,7 +309,10 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
       rejectArgs(args, USAGE);
       const content = `${JSON.stringify(readConfigDiagnostics().config, null, 2)}\n`;
       if (path === "-") process.stdout.write(content);
-      else { writeFileSync(path, content, { encoding: "utf8", mode: 0o600 }); console.log(`Exported config to ${path}.`); }
+      else {
+        writeFileSync(path, content, { encoding: "utf8", mode: 0o600 });
+        printData({ ok: true, path }, wantsJson, [`Exported config to ${path}.`]);
+      }
       return;
     }
     if (action === "import") {
@@ -295,6 +327,7 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
     }
     throw new CliUsageError(`unknown config command ${action}`, USAGE);
   });
+  return status || outcome;
 }
 
 export const CONFIG_USAGE = USAGE;

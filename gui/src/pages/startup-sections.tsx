@@ -1,5 +1,6 @@
 import { useI18n, type TKey } from "../i18n/shared";
-import { startupRiskDetailKey } from "../startup-health-ui";
+import { confirmAction } from "../action-dialogs";
+import { desktopBadgeKey, desktopManagesStartup, startupRiskDetailKey } from "../startup-health-ui";
 import { IconAlert, IconCheck, IconPower, IconTerminal } from "../icons";
 import type {
   StartupHealthData,
@@ -87,7 +88,7 @@ export function StartupDetailsSection({
   // Repair only rewrites stale assets — conflict/disabled need uninstall/reinstall, not repair.
   const serviceNeedsRepair = data.serviceSupported && data.serviceInstalled && data.serviceStale && !data.serviceConflict;
   const shimNeedsRepair = data.shimInstalled && !data.shimHealthy;
-  const actionsDisabled = installBusy !== null || failed || loading;
+  const actionsDisabled = installBusy !== null || failed || loading || desktopManagesStartup(data);
 
   return (
     <section className="panel startup-details">
@@ -95,6 +96,14 @@ export function StartupDetailsSection({
         <h3 className="panel-title">{t("startup.details")}</h3>
         <span className="muted mono">{data.platform}</span>
       </div>
+      {data.desktop && (
+        <div className="startup-detail-row">
+          <div><strong>{t("startup.protection.desktop")}</strong><span>{t(!failed && data.desktop.viable ? "startup.desktopHint" : startupRiskDetailKey(data))}</span></div>
+          <div className="startup-detail-actions">
+            <StartupStateBadge ok={!failed && data.desktop.viable} yes={t("startup.viable")} no={t(desktopBadgeKey(data.desktop, failed))} />
+          </div>
+        </div>
+      )}
       <div className="startup-detail-row">
         <div><strong>{t("startup.service")}</strong><span>{t("startup.serviceHint")}</span></div>
         <div className="startup-detail-actions">
@@ -165,6 +174,17 @@ export function StartupTraySection({
 }) {
   const { t } = useI18n();
 
+  /**
+   * Uninstalling removes the tray helper, so it asks first. Written as a named async
+   * function rather than a promise chain inside the handler: a floating `.then` in a JSX
+   * handler has no rejection path, which is what `no-floating-then-in-jsx-handler` catches.
+   */
+  const requestTrayUninstall = async () => {
+    if (await confirmAction({ message: t("startup.tray.uninstall"), tone: "danger" })) {
+      onTrayAction("uninstall");
+    }
+  };
+
   return (
     <section className="panel startup-actions">
       <div className="panel-head">
@@ -196,9 +216,7 @@ export function StartupTraySection({
           <button type="button" className="btn btn-ghost" disabled={trayBusy} onClick={() => onTrayAction("stop")}>{t("startup.tray.stop")}</button>
         )}
         {!trayLoading && !trayError && tray && (tray.installed || tray.stale) && (
-          <button type="button" className="btn btn-danger" disabled={trayBusy} onClick={() => {
-            if (window.confirm(t("startup.tray.uninstall"))) onTrayAction("uninstall");
-          }}>{t("startup.tray.uninstall")}</button>
+          <button type="button" className="btn btn-danger" disabled={trayBusy} onClick={() => { void requestTrayUninstall(); }}>{t("startup.tray.uninstall")}</button>
         )}
       </div>
       {(trayError || tray?.stale) && (
@@ -238,9 +256,10 @@ export function StartupRecoverySection({
         commands are the fallback. Open by default only while protection is missing.
       */}
       <details className="startup-recovery-details" open={data.status !== "protected"}>
-        <summary className="muted">{t("startup.recoveryHint")}</summary>
+        <summary className="muted">{t(desktopManagesStartup(data) ? "startup.protection.desktop" : "startup.recoveryHint")}</summary>
+      {desktopManagesStartup(data) && <p className="muted">{t(startupRiskDetailKey(data))}</p>}
       <div className="startup-command-list">
-        {data.serviceSupported && (
+        {data.serviceSupported && !desktopManagesStartup(data) && (
           <div className="startup-command-row">
             <div>
               <strong>{t("startup.command.service")}</strong>
@@ -251,7 +270,7 @@ export function StartupRecoverySection({
             </button>
           </div>
         )}
-        <div className="startup-command-row">
+        {!desktopManagesStartup(data) && <div className="startup-command-row">
           <div>
             <strong>{t("startup.command.shim")}</strong>
             <code>{data.commands.installShim}</code>
@@ -259,7 +278,7 @@ export function StartupRecoverySection({
           <button type="button" className="btn btn-ghost btn-sm" onClick={() => onCopy(data.commands.installShim)}>
             {copied === data.commands.installShim ? t("startup.copied") : t("startup.copy")}
           </button>
-        </div>
+        </div>}
         <div className="startup-command-row">
           <div>
             <strong>{t("startup.command.native")}</strong>
@@ -270,9 +289,9 @@ export function StartupRecoverySection({
           </button>
         </div>
       </div>
-      {data.status === "at-risk" && (
+      {data.status === "at-risk" && data.recommendedCommand && !desktopManagesStartup(data) && (
         <div className="notice notice-warn startup-action-notice" role="alert">
-          <IconPower /> {t("startup.recommended", { cmd: data.recommendedCommand ?? data.commands.installService })}
+          <IconPower /> {t("startup.recommended", { cmd: data.recommendedCommand })}
         </div>
       )}
       </details>

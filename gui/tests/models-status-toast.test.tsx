@@ -134,9 +134,11 @@ test("apply feedback renders as a fixed toast, not an inline notice before the w
   expect(toast!.className).toContain("notice-ok");
   expect(toast!.getAttribute("role")).toBe("status");
   expect(toast!.textContent).toContain(en["models.applied"]);
-  // No inline notice sits in the flow before the workspace anymore.
+  // No inline notice sits in the flow before the workspace anymore: the toast is a fixed
+  // sibling in the shell, and the element directly above the workspace is the settings panel.
   const workspace = container.querySelector<HTMLElement>(".models-workspace-root");
-  expect(workspace?.previousElementSibling?.classList.contains("action-toast")).toBe(true);
+  expect(toast!.parentElement).toBe(workspace!.parentElement);
+  expect(workspace?.previousElementSibling?.classList.contains("models-settings")).toBe(true);
 });
 
 test("success toast expires after 6s and a repeated action re-arms it", async () => {
@@ -611,6 +613,31 @@ test("leaving Models aborts its pending picker save", async () => {
   expect(signal?.aborted).toBe(true);
   await act(async () => { finish(Response.json({ ok: true, pickerOrder: [], pickerOrderMode: null })); });
   expect(container.querySelector(".action-toast")).toBeNull();
+});
+
+test("changing Models tabs preserves the pending app-server status read", async () => {
+  const baseFetch = globalThis.fetch;
+  let statusSignal: AbortSignal | null | undefined;
+  let releaseStatus!: (response: Response) => void;
+  globalThis.fetch = (async (input, init) => {
+    if (String(input).endsWith("/api/system/codex-app-server")) {
+      statusSignal = init?.signal;
+      return new Promise<Response>(resolve => { releaseStatus = resolve; });
+    }
+    return baseFetch(input, init);
+  }) as typeof fetch;
+
+  await mountModelsForRefreshWarning();
+  await waitForModelsFeedback(() => releaseStatus !== undefined);
+  const combosTab = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
+    .find(button => button.textContent?.startsWith("Combos"));
+  expect(combosTab).toBeDefined();
+  await act(async () => { combosTab!.click(); });
+
+  expect(statusSignal?.aborted).toBe(false);
+  await act(async () => { releaseStatus(Response.json({ state: "stale", runningCount: 1 })); });
+  await waitForModelsFeedback(() => container.querySelector(".codex-stale-banner") !== null);
+  expect(container.querySelector(".codex-stale-banner")).not.toBeNull();
 });
 
 

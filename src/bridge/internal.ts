@@ -15,6 +15,7 @@ import {
   type OcxErrorPayload,
 } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
+import { formatRetryAfterAdvice } from "../lib/retry-delay";
 import { usageDisplayTotalTokens } from "../usage/totals";
 
 export function uuid(): string {
@@ -114,6 +115,26 @@ export function toolCallArgumentsUsable(args: string): boolean {
   }
 }
 
+/**
+ * Whether an in-progress function-call argument buffer could still become valid JSON.
+ * The first non-whitespace byte must be one that can begin a JSON value. A stream that
+ * already lost its leading `{"` (observed from coding-agent CLIs as `code":"…}`) can only
+ * fail `toolCallArgumentsUsable` at completion, so streaming those fragments publishes
+ * bytes a failed item cannot take back — the same #765 rule that refuses completion.
+ */
+export function toolCallArgumentsCouldBeJson(args: string): boolean {
+  const first = args.trimStart().charAt(0);
+  if (first === "") return true;
+  return first === "{"
+    || first === "["
+    || first === "\""
+    || first === "-"
+    || (first >= "0" && first <= "9")
+    || first === "t"
+    || first === "f"
+    || first === "n";
+}
+
 export function adapterFailureFromEvent(event: Extract<AdapterEvent, { type: "error" }>): { httpStatus: number; error: OcxErrorPayload } {
   const message = redactSecretString(event.message);
   if (event.status === undefined && event.errorType === undefined && event.code === undefined) {
@@ -124,6 +145,17 @@ export function adapterFailureFromEvent(event: Extract<AdapterEvent, { type: "er
   const error = classifyError(httpStatus, event.errorType ?? fallback.error.type, message);
   if (event.errorType !== undefined) error.type = event.errorType;
   if (event.code !== undefined) error.code = event.code;
+  // Codex only parses a streamed retry delay for these canonical rate-limit codes.
+  // Preserve other typed verdicts (quota, auth, local send budgets) verbatim.
+  if (httpStatus === 429 && error.type === "rate_limit_error"
+    && ["resource_exhausted", "rate_limit_exceeded", "slow_down"].includes(error.code ?? "")) {
+    // Without a usable delay, retain the original code and existing client behavior.
+    const advice = formatRetryAfterAdvice(message);
+    if (advice !== undefined) {
+      error.code = "rate_limit_exceeded";
+      error.message = advice;
+    }
+  }
   // Codex maps cyber_policy on HTTP 400 (body) or mid-stream code; never leave it as 502.
   if (isCyberPolicyCode(error.code) || isCyberPolicyCode(event.code)) {
     error.code = CYBER_POLICY_ERROR_CODE;

@@ -9,6 +9,7 @@ import { jsonCompletionSse, nativeChatSse } from "../../src/server/chat-native-s
 import type { OcxConfig } from "../../src/types";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { resetProviderRequestPacingForTest } from "../../src/providers/request-pacing";
 
 type Rec = Record<string, unknown>;
@@ -400,13 +401,19 @@ describe("refusal handler delivery matrix", () => {
   const originalFetch = globalThis.fetch;
   let isolatedHome: IsolatedCodexHome | undefined;
   let previousOcxHome: string | undefined;
+  let releaseSpendHome: (() => void) | undefined;
   beforeEach(() => {
     previousOcxHome = process.env.OPENCODEX_HOME;
     isolatedHome = installIsolatedCodexHome("ocx-refusal-fixture-");
     process.env.OPENCODEX_HOME = isolatedHome.path;
+    // Taken after this matrix installs its home so direct Chat dispatch owns that journal.
+    releaseSpendHome = acquireOwnedSpendHome();
     globalThis.fetch = (async () => { throw new Error("unstubbed external transport"); }) as typeof fetch;
   });
   afterEach(() => {
+    // Released before the matrix restores its home so no live database survives teardown.
+    releaseSpendHome?.();
+    releaseSpendHome = undefined;
     globalThis.fetch = originalFetch;
     resetProviderRequestPacingForTest();
     if (previousOcxHome === undefined) delete process.env.OPENCODEX_HOME;

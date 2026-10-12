@@ -11,7 +11,7 @@
  * zero across the suite would need a finalizer that aggregates many short-lived
  * sharded processes, which does not exist. This file covers the route.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { handleManagementAPI } from "../../src/server/management-api";
 import {
@@ -56,6 +56,11 @@ function flakyIo(failures: number, code = "EBUSY", platform: NodeJS.Platform = "
     sleep: () => {},
   };
 }
+
+// The counters are process-wide: start from zero so an earlier file's retries are not read here.
+beforeEach(() => {
+  resetWindowsReplaceRetryCountersForTests();
+});
 
 afterEach(() => {
   resetWindowsReplaceRetryCountersForTests();

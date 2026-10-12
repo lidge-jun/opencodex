@@ -199,7 +199,7 @@ export async function runReady(args: ReadyArgs, io: ReadyIo = {}): Promise<numbe
   if (!args.wait) {
     // Default: exactly one identity-checked readiness probe. No wait deadline —
     // bounded only by the probe's own default timeout (remainingMs=undefined so
-    // the production defaults keep their built-in 750ms ceiling; no semantic
+    // the production defaults keep their built-in DEFAULT_PROBE_TIMEOUT_MS ceiling; no semantic
     // regression vs. the single-probe behavior).
     const live = await find(undefined);
     if (!live) {

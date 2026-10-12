@@ -72,6 +72,14 @@ section in that order — they do not interleave with the built-in layers.
 Reorder with the arrows on the row, or with `Alt` + `Up` / `Alt` + `Down` from
 anywhere in the row. Order is composition order.
 
+The panel shows the combined size of the enabled layers against the 128 KiB
+limit for `developer_instructions`, and a collapsible preview of the joined
+text — a layer that would push the section over the limit is visible before you
+save, not after.
+
+Deleting a layer asks first, then offers **Undo** for a few seconds. The layer
+comes back at its old position, so an order-sensitive list survives the slip.
+
 ### Presets
 
 **+ Add layer** offers five starting points: concise output, plan before editing,
@@ -87,12 +95,17 @@ anyone's prompt. Each names its source.
 The editor has prev/next controls and a position indicator. Unsaved edits are kept
 while you move, so you can compare two layers mid-edit and come back without
 losing what you typed.
+Closing with edits on another layer asks before discarding them. Saving one layer also asks before
+discarding edits parked on other layers; the confirmation's **Save** button saves only the displayed layer.
 
 ### Compatibility warnings
 
 The editor warns when a layer says something that will not work as written —
 claiming a different identity, naming a tool the registry defines, using template
 placeholders nothing expands, or stating environment facts Codex generates later.
+It also flags pasted credentials (an API key in a layer ships to the model in
+plain text on every request), phrasing that tells the model to drop its earlier
+instructions, and a non-Codex identity claimed in Korean.
 
 These are warnings and never block a save. If you mean to override Codex, you can;
 the warning only makes it a decision rather than an accident.
@@ -138,11 +151,27 @@ discipline, no verification habits, none of what Codex normally brings. If you w
 to *add* guidance, use a [custom layer](#custom-layers) instead — those are additive.
 :::
 
+The variant editor has the same guardrails as the custom-layer editor: unsaved
+edits are kept while you move between options, closing with edits asks before
+discarding them, and the body is counted against the 64 KiB per-variant limit
+while you type.
+
 ### If something else already replaced your base prompt
 
 If `model_instructions_file` points at a file opencodex did not write, the picker
 refuses to act and says where the key points. It will not silently retarget a key
-you or another tool set. Clear it yourself first, then choose here.
+you or another tool set.
+
+You do not have to clear it by hand, though. **Import it as a variant** converts
+the file: the preview shows the *exact* text that will be installed — a `# `
+heading line holding the variant title, then the file's body with line endings
+and tabs normalized — and you can edit the title before confirming. The body
+may use at most 64 KiB after normalization (`bodyBytes` in the preview); the
+complete file on disk, heading included, is a little larger (`serializedBytes`).
+The confirm is bound to the previewed text by a hash, so if the file — or your
+chosen title — changed in between, the import refuses rather than install text
+you never saw. Clear the key yourself instead if you would rather start from
+the default.
 
 This is the same principle as importing `developer_instructions`: the panel reports
 what it finds, and you decide.
@@ -159,13 +188,48 @@ you see the existing value first, and nothing is written until you confirm.
 
 If the saved layers and the value in `config.toml` disagree, the panel says so and
 offers **Repair** rather than fixing it silently. Two of the repair paths rewrite
-text you wrote, so they stay deliberate. Where a layer file has gone missing, the
-repair writes a backup before it touches anything.
+text you wrote, so they stay deliberate. An interrupted write ("journal present")
+runs a locked recovery-only operation using the journal's recorded file images;
+it does not re-save the current layer list or invent missing content. If the
+live files match none of the recorded states, recovery refuses and preserves
+the evidence. The refreshed panel reports any remaining drift. Where a layer
+file has gone missing, the repair writes a backup before it touches anything.
 
 ## When changes take effect
 
 Changes apply to newly started sessions. A session already running keeps the
 prompt settings it started with.
+
+## Keeping the skills catalog stable
+
+The proxy defaults to `skills.catalog_refresh: "per_session"`: the first
+`<skills_instructions>` catalog received for a conversation is reused on later
+requests in that conversation. This keeps skill discovery and `SKILL.md` edits
+from changing that part of the upstream prompt cache prefix mid-session.
+A request that carries more than one `<skills_instructions>` block is passed
+through unchanged, and a request the proxy rejects does not set the catalog.
+
+To use the catalog supplied by the client on every turn, set this in opencodex's
+`$OPENCODEX_HOME/config.json` (normally `~/.opencodex/config.json`), then restart
+the proxy:
+
+```json
+{
+  "skills": {
+    "catalog_refresh": "per_turn"
+  }
+}
+```
+
+The supported values are `"per_session"` (default) and `"per_turn"`. This is a
+proxy setting, separate from Codex's `skills.include_instructions` toggle.
+Requests without a reliable conversation identity use the catalog supplied by
+the client. Snapshots are held in memory and do not survive a proxy restart.
+They expire after four hours of inactivity and may be evicted when the bounded
+cache fills. An initial catalog block larger than 512 KiB is forwarded without caching.
+After expiry or eviction, the next received catalog becomes the new snapshot.
+The dashboard's prompt preview still reads the current files; it does not show
+the snapshot retained for an ongoing conversation.
 
 ## What this page reads, and what it does not
 
@@ -192,3 +256,10 @@ does not recognise is left alone rather than removed.
 
 An absent key reads as its default rather than as `false`. The panel shows the
 value your file actually holds, and says when a key is not set.
+
+A row that carries an explicit value also offers **Reset to <default>**, which
+deletes the key line rather than writing the default back. That is the only
+state that keeps following the default if Codex changes it later — writing
+`key = true` would freeze today's default as an override.
+
+This scalar editor refuses arrays, inline tables and multiline strings before writing or resetting a key, preserving the original bytes. An import reports an unreadable configuration explicitly. Read-only title previews keep the title field editable; confirmation still requires a preview bound to that title. HTTP or network measurement failures are shown as failures rather than as another probe being busy.

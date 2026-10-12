@@ -1,7 +1,10 @@
+import { beginCodexWriteSection, publishCodexArtifact } from "./config-write-section";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { normalizeStructuralWhitespace, rootAssignmentKey, rootSourceLines, sourceAssignment, sourceText } from "../toml-source-lines";
 import { atomicWriteFile } from "../../config";
+import { ConfigWriteLockRefusal, configWriteLockFailureMessage, withConfigWriteLockHeld } from "../config-write-lock";
+import type { LockHandle } from "../config-write-lock";
 import {
-  OCX_SECTION_MARKER,
   REALTIME_WS_BASE_URL_KEY,
   hasInjectedOpenaiBaseUrl,
   rootTomlString,
@@ -11,131 +14,25 @@ import { HISTORY_RELABEL_STANDS_DOWN, preflightCodexHistoryInjection } from "../
 import {
   journaledInjectedOpenaiBaseUrl,
   journaledInjectedRealtimeWsBaseUrl,
+  journaledInjectedRootWebSearch,
+  journaledReplacedRootWebSearch,
 } from "../journal";
-import { CODEX_CONFIG_PATH, CODEX_PROFILE_PATH, readRootTomlString } from "../paths";
+import { CODEX_CONFIG_PATH, CODEX_PROFILE_PATH } from "../paths";
+import { getCodexHome } from "../paths";
+import { codexHomeIsAbsent } from "../codex-home-owner";
 import { transformManagedSubagentDefaults } from "../subagent-defaults";
 import {
   applyEol,
   dominantEol,
+  ensureRootWebSearchDisabled,
   removeProfileSection,
   stripInjectedOpenaiBaseUrl,
   stripOpencodexCatalogPath,
   stripRootRoutedModel,
 } from "./config-toml";
 
-/**
- * Sub-table headers like `[model_providers.opencodex.env_http_headers]` appear when a Codex app
- * config rewrite re-serializes the provider's inline `env_http_headers` table. They define the
- * same `model_providers.opencodex` provider, so cleanup must remove them too — otherwise the
- * provider survives with no `name` and Codex rejects the whole config
- * ("provider name must not be empty"). The dot terminator keeps a user's
- * `[model_providers.opencodex_backup]`-style tables out of scope.
- */
-function isOcxProviderHeaderLine(trimmedLine: string): boolean {
-  // Root form matched by regex, not equality: TOML v1.0 allows a trailing comment
-  // (`[model_providers.opencodex] # comment`), and an exact compare would miss that form.
-  // The sub-table prefix check already tolerates trailing comments by construction.
-  return (
-    /^\[model_providers\.opencodex\]\s*(?:#.*)?$/.test(trimmedLine) ||
-    trimmedLine.startsWith("[model_providers.opencodex.")
-  );
-}
-
-export function hasOcxProviderTable(content: string): boolean {
-  return content
-    .split("\n")
-    .some((line) => isOcxProviderHeaderLine(line.trim()));
-}
-
-export function removeOcxSection(content: string): string {
-  const lines = content.split("\n");
-  const filtered: string[] = [];
-  let inOcxSection = false;
-  for (const line of lines) {
-    if (
-      line.includes(OCX_SECTION_MARKER) ||
-      isOcxProviderHeaderLine(line.trim())
-    ) {
-      inOcxSection = true;
-      continue;
-    }
-    if (inOcxSection) {
-      // End the injected section at the next table header that ISN'T our own. Exact match on the
-      // provider name (plus our own sub-tables) so a user's
-      // "[model_providers.opencodex_backup]" (or similar) is preserved, not swallowed.
-      if (/^\s*\[/.test(line) && !isOcxProviderHeaderLine(line.trim())) {
-        inOcxSection = false;
-        filtered.push(line);
-      }
-      continue;
-    }
-    filtered.push(line);
-  }
-  return (
-    filtered
-      .join("\n")
-      .replace(/\n{3,}/g, "\n\n")
-      .trimEnd() + "\n"
-  );
-}
-
-/**
- * Capture `[model_providers.opencodex]` verbatim so it can survive a restore that only
- * takes routing down (#4812).
- *
- * This is deliberately NOT a mirror of `removeOcxSection`'s scan. That one opens a
- * section on any line containing `OCX_SECTION_MARKER`, which is safe there only because
- * `stripInjectedOpenaiBaseUrl` has already consumed the identical marker that annotates
- * the root `openai_base_url`. Capture runs against the untouched file, so the same rule
- * would collect that marker and the routing line under it — and re-appending the result
- * would restore the exact base-url override the caller just removed.
- *
- * So the anchor is the provider header itself, via the shared `isOcxProviderHeaderLine`,
- * with an immediately preceding marker line pulled in as its comment. Sharing that
- * predicate is what keeps capture and removal from disagreeing about what our table is.
- */
-export function extractOcxProviderTableBlock(content: string): string | null {
-  const lines = content.split("\n");
-  const collected: string[] = [];
-  let capturing = false;
-  for (let index = 0; index < lines.length; index++) {
-    const line = lines[index]!;
-    if (isOcxProviderHeaderLine(line.trim())) {
-      if (!capturing) {
-        const previous = lines[index - 1];
-        if (previous !== undefined && previous.includes(OCX_SECTION_MARKER)) collected.push(previous);
-        capturing = true;
-      }
-      collected.push(line);
-      continue;
-    }
-    if (!capturing) continue;
-    // A foreign table header closes ours, exactly as in `removeOcxSection`. A later
-    // `[model_providers.opencodex.*]` sub-table reopens capture on the next iteration,
-    // which is why the two are separate passes over the same predicate.
-    if (/^\s*\[/.test(line)) {
-      capturing = false;
-      continue;
-    }
-    collected.push(line);
-  }
-  if (collected.length === 0) return null;
-  return collected.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";
-}
-
-/**
- * Append a captured provider table to stripped content, as one buffer.
- *
- * Pure on purpose. Upstream resolves `model_provider` against the merged provider map and
- * fails the WHOLE config load on a miss — not the one thread — so a config carrying root
- * `model_provider = "opencodex"` without this table breaks every `codex` invocation. The
- * strip and the re-append therefore have to reach disk in a single write, which they can
- * only do if the append is a transform rather than a second file operation.
- */
-export function appendOcxProviderTableBlock(content: string, block: string): string {
-  if (hasOcxProviderTable(content)) return content;
-  return `${content.replace(/\n+$/, "")}\n\n${block.replace(/\n+$/, "")}\n`;
-}
+import { appendOcxProviderTableBlock, extractOcxProviderTableBlock, hasOcxProviderTable, removeOcxSection } from "./provider-table";
+export { appendOcxProviderTableBlock, extractOcxProviderTableBlock, hasOcxProviderTable, removeOcxSection } from "./provider-table";
 
 /** Read the provider table straight off disk, before anything has transformed it. */
 export function readOcxProviderTableBlock(): string | null {
@@ -153,19 +50,36 @@ export function readOcxProviderTableBlock(): string | null {
  * writes leaves a fully native config, which is the direction this whole change is trying
  * to reach anyway.
  */
-export function retainOcxProviderTableOnDisk(block: string): string[] | null {
-  if (!existsSync(CODEX_CONFIG_PATH)) return null;
-  const rawContent = readFileSync(CODEX_CONFIG_PATH, "utf-8");
-  const eol = dominantEol(rawContent);
-  const content = applyEol(rawContent, "\n");
-  const next = appendOcxProviderTableBlock(content, block);
-  if (next !== content) atomicWriteFile(CODEX_CONFIG_PATH, applyEol(next, eol));
-  return block.replace(/\n+$/, "").split("\n");
+export function retainOcxProviderTableOnDisk(block: string, heldConfigWriteLock?: LockHandle): string[] | null {
+  // The read, the append, and the rename are one section under the shared
+  // write lock; an unlocked read+rename here could discard a concurrent
+  // scalar or projection write.
+  const locked = withConfigWriteLockHeld(CODEX_CONFIG_PATH, heldConfigWriteLock, held => {
+    beginCodexWriteSection(held);
+    if (!existsSync(CODEX_CONFIG_PATH)) return null;
+    const rawContent = readFileSync(CODEX_CONFIG_PATH, "utf-8");
+    const eol = dominantEol(rawContent);
+    const content = applyEol(rawContent, "\n");
+    const next = appendOcxProviderTableBlock(content, block);
+    if (next !== content) publishCodexArtifact(CODEX_CONFIG_PATH, held, (path, hooks) => atomicWriteFile(path, applyEol(next, eol), undefined, hooks));
+    return block.replace(/\n+$/, "").split("\n");
+  });
+  if (!locked.ok) throw new ConfigWriteLockRefusal(locked);
+  return locked.value;
 }
 
 interface StripOpencodexConfigResult {
   content: string;
   managedDefaultsError: string | null;
+}
+
+function hasRootOcxProvider(content: string): boolean {
+  const { lines, rootEnd } = rootSourceLines(content);
+  return lines.slice(0, rootEnd).some((line, index) => {
+    if (!line.structural || rootAssignmentKey(line.text) !== "model_provider") return false;
+    const value = sourceAssignment(lines, index, rootEnd)?.value;
+    return typeof value === "string" && value.trim() === "opencodex";
+  });
 }
 
 /**
@@ -177,16 +91,25 @@ function stripOpencodexConfigResult(
   content: string,
   journaledBaseUrl: string | null = null,
   journaledRealtimeWsBaseUrl: string | null = null,
+  journaledRootWebSearch: string | null = null,
+  journaledReplacedWebSearch: string | null = null,
 ): StripOpencodexConfigResult {
   let out = content;
   const hadRootOcxProvider =
-    readRootTomlString(out, "model_provider") === "opencodex";
+    hasRootOcxProvider(out);
   // #1798: marker adjacency is FORMATTING evidence, and a Codex app rewrite keeps values
   // while dropping comments. Fall back to VALUE evidence -- the exact URL we recorded
   // writing -- so an app-rewritten config is still recognized as ours.
   const hadInjectedBaseUrl = hasInjectedOpenaiBaseUrl(out)
     || (journaledBaseUrl !== null && rootTomlString(out, "openai_base_url") === journaledBaseUrl);
   out = stripInjectedOpenaiBaseUrl(out); // before removeOcxSection — it keys on the marker line too
+  // The enabled direction of the web-search transform is also the purge: it drops our pair, drops a
+  // marker-less `disabled` the journal proves we wrote, and puts back the operator line we had to
+  // remove for as long as the switch was off. Nothing of ours is written here.
+  out = ensureRootWebSearchDisabled(out, false, {
+    injectedValue: journaledRootWebSearch,
+    replacedUserLine: journaledReplacedWebSearch,
+  }).content;
   out = stripJournaledOpenaiBaseUrl(out, journaledBaseUrl, journaledRealtimeWsBaseUrl);
   if (hasOcxProviderTable(out)) {
     out = removeOcxSection(out);
@@ -194,10 +117,15 @@ function stripOpencodexConfigResult(
   out = removeProfileSection(out);
   // Regex (not exact-string) removal so compact `model_provider="opencodex"` is stripped too —
   // must match the detection regex above, or a detected line could survive un-removed.
-  out = out
-    .split("\n")
-    .filter((l) => !/^\s*model_provider\s*=\s*"opencodex"\s*$/.test(l))
-    .join("\n");
+  const routingSource = rootSourceLines(out);
+  const providerLines = new Set<number>();
+  routingSource.lines.forEach((line, index) => {
+    if (!line.structural || rootAssignmentKey(line.text) !== "model_provider") return;
+    const assignment = sourceAssignment(routingSource.lines, index);
+    if (!assignment || typeof assignment.value !== "string" || assignment.value.trim() !== "opencodex") return;
+    for (let at = index; at < assignment.end; at++) providerLines.add(at);
+  });
+  out = routingSource.bom + sourceText(routingSource.lines.filter((_, index) => !providerLines.has(index)));
   // Routed root model ids (`model = "provider/slug"`) only make sense while the proxy serves
   // them — strip on both the legacy re-tag form and the Design B injected-base-url form.
   if (hadRootOcxProvider || hadInjectedBaseUrl) out = stripRootRoutedModel(out);
@@ -205,7 +133,7 @@ function stripOpencodexConfigResult(
   if (managedDefaults.ok) out = managedDefaults.content;
   out = stripOpencodexCatalogPath(out);
   return {
-    content: out.replace(/\n{3,}/g, "\n\n").trimEnd() + "\n",
+    content: normalizeStructuralWhitespace(out),
     managedDefaultsError: !managedDefaults.ok ? managedDefaults.error : null,
   };
 }
@@ -218,7 +146,7 @@ export function stripOpencodexConfig(content: string): string {
 function hasOpencodexRouting(content: string): boolean {
   return (
     hasOcxProviderTable(content) ||
-    /^\s*model_provider\s*=\s*"opencodex"/m.test(content) ||
+    hasRootOcxProvider(content) ||
     hasInjectedOpenaiBaseUrl(content)
   );
 }
@@ -247,9 +175,12 @@ export type RemoveCodexConfigHistoryDisposition =
 export interface RemoveCodexConfigOptions {
   preserveProfile?: boolean;
   historyDisposition?: RemoveCodexConfigHistoryDisposition;
+  /** Run under a config write lock this process already holds (restore's single section). */
+  heldConfigWriteLock?: LockHandle;
 }
 
 export interface RemoveCodexConfigResult {
+  retryable?: boolean;
   success: boolean;
   message: string;
   /** The exact lines left on disk when the disposition was `stand-down-retain`. */
@@ -259,6 +190,10 @@ export interface RemoveCodexConfigResult {
 export function removeCodexConfig(
   options: RemoveCodexConfigOptions = {},
 ): RemoveCodexConfigResult {
+  if (codexHomeIsAbsent(getCodexHome())) return {
+    success: true,
+    message: `Codex config not found; no native restore was needed${options.preserveProfile ? "." : ", and the opencodex profile was removed if present."}`,
+  };
   const historyDisposition = options.historyDisposition ?? "refuse-on-any";
   const historyError = preflightCodexHistoryInjection(false, false);
   // The preflight answers "may I rewrite conversation history?". Routing removal is a
@@ -269,9 +204,11 @@ export function removeCodexConfig(
   if (historyError && !(historyDisposition !== "refuse-on-any" && historyError === HISTORY_RELABEL_STANDS_DOWN)) {
     return { success: false, message: `Codex configuration preserved: ${historyError}. Native writer coordination is required.` };
   }
+  const locked = withConfigWriteLockHeld(CODEX_CONFIG_PATH, options.heldConfigWriteLock, held => {
+  beginCodexWriteSection(held);
   if (!existsSync(CODEX_CONFIG_PATH)) {
     if (!options.preserveProfile && existsSync(CODEX_PROFILE_PATH))
-      unlinkSync(CODEX_PROFILE_PATH);
+      publishCodexArtifact(CODEX_PROFILE_PATH, held, (path, hooks) => { hooks.validateBeforeRename?.(path); unlinkSync(path); hooks.afterRename?.(path); });
     return {
       success: true,
       message: `Codex config not found; no native restore was needed${options.preserveProfile ? "." : ", and the opencodex profile was removed if present."}`,
@@ -286,11 +223,19 @@ export function removeCodexConfig(
   // ownership verdict, which must agree with what was actually removed.
   const journaledBaseUrl = journaledInjectedOpenaiBaseUrl();
   const journaledRealtimeWsBaseUrl = journaledInjectedRealtimeWsBaseUrl();
+  const journaledRootWebSearch = journaledInjectedRootWebSearch();
+  const journaledReplaced = journaledReplacedRootWebSearch();
   const had = hasOpencodexRouting(content)
     || (journaledBaseUrl !== null && rootTomlString(content, "openai_base_url") === journaledBaseUrl)
     || (journaledRealtimeWsBaseUrl !== null
       && rootTomlString(content, REALTIME_WS_BASE_URL_KEY) === journaledRealtimeWsBaseUrl);
-  const stripped = stripOpencodexConfigResult(content, journaledBaseUrl, journaledRealtimeWsBaseUrl);
+  const stripped = stripOpencodexConfigResult(
+    content,
+    journaledBaseUrl,
+    journaledRealtimeWsBaseUrl,
+    journaledRootWebSearch,
+    journaledReplaced,
+  );
   // Captured from the pre-strip bytes: the strip is what removes the table, so reading it
   // afterwards would find nothing.
   const retainedBlock = historyDisposition === "stand-down-retain"
@@ -300,10 +245,10 @@ export function removeCodexConfig(
     ? stripped.content
     : appendOcxProviderTableBlock(stripped.content, retainedBlock);
   if (had || finalContent !== content) {
-    atomicWriteFile(CODEX_CONFIG_PATH, applyEol(finalContent, eol));
+    publishCodexArtifact(CODEX_CONFIG_PATH, held, (path, hooks) => atomicWriteFile(path, applyEol(finalContent, eol), undefined, hooks));
   }
   if (!options.preserveProfile && existsSync(CODEX_PROFILE_PATH))
-    unlinkSync(CODEX_PROFILE_PATH);
+    publishCodexArtifact(CODEX_PROFILE_PATH, held, (path, hooks) => { hooks.validateBeforeRename?.(path); unlinkSync(path); hooks.afterRename?.(path); });
   const retainedNote = retainedBlock === null
     ? ""
     : " Kept [model_providers.opencodex] so conversations already tagged opencodex still open;"
@@ -327,4 +272,7 @@ export function removeCodexConfig(
     message: removedMessage,
     ...(retainedBlock === null ? {} : { retainedProviderTable: retainedBlock.replace(/\n+$/, "").split("\n") }),
   };
+  });
+  if (!locked.ok) return { success: false, retryable: locked.error === "locked", message: configWriteLockFailureMessage(locked) };
+  return locked.value;
 }

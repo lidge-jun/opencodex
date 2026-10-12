@@ -96,7 +96,7 @@ test("fresh routed rows do not inherit a previously ordered native template's gu
 
   applyFullModelPickerOrder(rows, order);
   expect(effectiveSubagentRoster(featured, "v2", rows)).toEqual(before);
-  expect(rows.toSorted((a, b) => Number(a.priority) - Number(b.priority)).map(row => row.slug)).toEqual(order);
+  expect(rows.filter(row => row.visibility === "list").toSorted((a, b) => Number(a.priority) - Number(b.priority)).map(row => row.slug)).toEqual(order);
   expect(template).toEqual(previousTemplate);
 });
 
@@ -182,6 +182,10 @@ describe("picker ordering through production catalog writers", () => {
   let catalogPath: string;
   let fetchCalls: number;
   let runtimeCommand: string;
+  let fixtureCase = 0;
+  const phase = (name: string) => {
+    if (process.env.CI) process.stderr.write(`[catalog-picker-fixture] case=${fixtureCase} phase=${name}\n`);
+  };
 
   // Same executable-fixture protocol as codex-convergence-account-selectors.test.ts:
   // a forced resolver refresh must receive the same version and catalog as a warm read.
@@ -216,6 +220,8 @@ describe("picker ordering through production catalog writers", () => {
   }
 
   beforeEach(() => {
+    fixtureCase += 1;
+    phase("setup:start");
     previousEnv = envKeys.map(key => process.env[key]);
     previousFetch = globalThis.fetch;
     root = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-picker-writers-")));
@@ -236,21 +242,27 @@ describe("picker ordering through production catalog writers", () => {
     runtimeCommand = createRuntimeFixture(catalog);
     process.env.CODEX_CLI_PATH = runtimeCommand;
     // Resolve the real fixture executable before admission captures runtime provenance.
+    phase("setup:catalog-probe:start");
     expect(loadBundledCodexCatalog()?.models?.[0]?.slug).toBe("gpt-5.5");
+    phase("setup:catalog-probe:end");
     assertRuntimeIdentity();
+    phase("setup:identity:end");
     writeFileSync(catalogPath, JSON.stringify(catalog));
     fetchCalls = 0;
     globalThis.fetch = (async () => {
       fetchCalls += 1;
       throw new Error("catalog writer fixture must not make a network request");
     }) as typeof fetch;
+    phase("setup:end");
   });
 
   afterEach(() => {
+    phase("cleanup:database:start");
     try {
       const database = resolveCodexCatalogSerializationDatabasePath(resolveEffectiveUserIdentity(), codexHome);
       for (const suffix of ["", "-journal", "-wal", "-shm"]) rmSync(`${database}${suffix}`, { force: true });
     } finally {
+      phase("cleanup:restore:start");
       globalThis.fetch = previousFetch;
       envKeys.forEach((key, index) => {
         const value = previousEnv[index];
@@ -260,7 +272,9 @@ describe("picker ordering through production catalog writers", () => {
       resetCatalogRuntimeStateForTests();
       resetCodexRuntimeResolveCacheForTests();
       resetCodexModelEntitlementCacheForTests();
+      phase("cleanup:remove:start");
       removeTreeWithRetry(root);
+      phase("cleanup:end");
     }
   });
 
@@ -285,7 +299,9 @@ describe("picker ordering through production catalog writers", () => {
   }
 
   async function writeCatalog(writer: "convergence" | "retained", next: OcxConfig, degraded = false): Promise<RawEntry[]> {
+    phase(`${writer}:identity:start`);
     assertRuntimeIdentity();
+    phase(`${writer}:config:start`);
     const requestedRoster = [...next.subagentModels!];
     saveConfig(next);
     const saved = loadConfig();
@@ -298,15 +314,18 @@ describe("picker ordering through production catalog writers", () => {
       markModelsFetchFailure("opencode-go");
     }
     if (writer === "convergence") {
+      phase("convergence:write:start");
       const result = await convergeCodexCatalog(captureCatalogAdmissionSnapshot(next), {
         action: "converge", scope: "catalog", reason: "management-mutation", mode: "explicit", deadlineMs: 5_000,
       });
       expect(result.catalogRefresh).toMatchObject({ status: "committed", degraded });
     } else {
+      phase("retained:write:start");
       const result = await syncCatalogModels(next);
       expect(result.path).toBe(catalogPath);
       expect(result.skippedReason).toBeUndefined();
     }
+    phase(`${writer}:write:end`);
     assertRuntimeIdentity();
     expect(fetchCalls).toBe(0);
     return (JSON.parse(readFileSync(catalogPath, "utf8")) as RawCatalog).models ?? [];
@@ -438,7 +457,7 @@ test("public catalog wrapper applies saved full order while preserving guidance 
   const natural = build([]);
   const order = ["gpt-5.5", "p/f", "p/e", "p/d", "p/c", "p/b", "p/a"];
   const ordered = build(order);
-  expect(ordered.toSorted((a, b) => Number(a.priority) - Number(b.priority)).map(row => row.slug)).toEqual(order);
+  expect(ordered.filter(row => row.visibility === "list").toSorted((a, b) => Number(a.priority) - Number(b.priority)).map(row => row.slug)).toEqual(order);
   expect(effectiveSubagentRoster(featured, "v1", ordered)).toEqual(effectiveSubagentRoster(featured, "v1", natural));
   // Independently mirror the upstream description's visible-priority window, not the OCX helper.
   const nativeDescription = ordered.toSorted((a, b) => Number(a.priority) - Number(b.priority))

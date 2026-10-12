@@ -11,8 +11,12 @@
  */
 import { findLiveProxy, probeHostname, type LivenessIo, type LiveProxy } from "../server/proxy-liveness";
 import { runningProxyUpdateHeaders } from "../oauth/login-cli";
+import { redactSecretArgs } from "./secret-args";
+export { redactSecretArgs };
 
 export type CliStdin = NodeJS.ReadableStream & { isTTY?: boolean; readableEnded?: boolean };
+
+export const MAX_LINK_CREDENTIAL_BYTES = 4 * 1024;
 
 export interface RuntimeApiDeps {
   baseUrl?: string;
@@ -20,6 +24,8 @@ export interface RuntimeApiDeps {
   /** Test injection for commands that read a secret from stdin instead of argv. */
   stdinImpl?: CliStdin;
   stdinTimeoutMs?: number;
+  /** Cancellation for bounded secret-byte reads; line readers retain their contract. */
+  stdinSignal?: AbortSignal;
   /** Optional proxy liveness probe injection for commands that check or fall back around live runtime state. */
   findLiveProxy?: (io?: LivenessIo) => Promise<LiveProxy | null>;
 }
@@ -31,11 +37,15 @@ export class CliUsageError extends Error {
   }
 }
 
+export const PROXY_NOT_RUNNING_MESSAGE = "Proxy is not running. Start the intended proxy with: ocx start. No request was sent.";
+
 export class RuntimeApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
     readonly body: unknown,
+    /** Local discovery refusals occur before the management request is sent. */
+    readonly code?: "proxy_not_running" | "client_role_management_unavailable",
   ) {
     super(message);
     this.name = "RuntimeApiError";
@@ -68,12 +78,12 @@ function clientRoleManagementRefusal(port: number): string {
 export async function runtimeBaseUrl(deps: RuntimeApiDeps = {}): Promise<string> {
   if (deps.baseUrl) return deps.baseUrl.replace(/\/$/, "");
   const live = await (deps.findLiveProxy ?? findLiveProxy)();
-  if (!live) throw new RuntimeApiError("Proxy is not running. Start it with: ocx start", 503, null);
+  if (!live) throw new RuntimeApiError(PROXY_NOT_RUNNING_MESSAGE, 503, null, "proxy_not_running");
   // The role comes from the same identity-checked /healthz body liveness already parsed, so
   // this costs no extra request. Only the client role is refused: an absent role is a
   // standalone or hub proxy (or a legacy body that predates the field), and both serve /api/*.
   if (live.role === "client") {
-    throw new RuntimeApiError(clientRoleManagementRefusal(live.port), 503, null);
+    throw new RuntimeApiError(clientRoleManagementRefusal(live.port), 503, null, "client_role_management_unavailable");
   }
   return `http://${probeHostname(live.hostname)}:${live.port}`;
 }
@@ -81,6 +91,33 @@ export async function runtimeBaseUrl(deps: RuntimeApiDeps = {}): Promise<string>
 function stringField(record: Record<string, unknown>, key: string): string | undefined {
   const value = record[key];
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function integrationRecoveryMessage(reason: string | undefined): string | undefined {
+  switch (reason) {
+    case "not_installed": return "The client is not installed. Run: ocx integration client status.";
+    case "non_loopback": return "The integration requires a loopback destination. Run: ocx integration client status.";
+    case "drift_requires_confirm": return "The client configuration changed. Run `ocx integration client status` before explicitly confirming restore.";
+    case "snapshot_expired": return "The recovery snapshot expired. Run `ocx integration client status` before creating a new change.";
+    case "superseded_store": return "The client uses a different configuration store. Run `ocx integration client status`, then disable and enable the selected client.";
+    case "unsafe": return "The client config path is unsafe to edit (for example a link or a competing file). Run `ocx integration client status` to see the affected path.";
+    case "conflict": return "The client config no longer matches the recorded ownership. Run `ocx integration client status`; add --overwrite-conflict to enable only if replacing it is intended.";
+    case "write_failed": return "The client config write failed. Run `ocx integration client status` before retrying.";
+    default: return undefined;
+  }
+}
+
+/**
+ * Integration writer detail is the only server prose this client appends beside the primary
+ * error. Scope it to the normalized request pathname (dot segments resolved, no query) and to
+ * an unredirected response so no other route's body can ride along.
+ */
+function isIntegrationRoute(path: string, response: Response): boolean {
+  if (response.redirected) return false;
+  let pathname: string;
+  try { pathname = new URL(path.startsWith("/") ? path : "/" + path, "http://cli.invalid").pathname; }
+  catch { return false; }
+  return /^\/api\/client-integrations(?:\/|$)/.test(pathname);
 }
 
 /**
@@ -100,7 +137,7 @@ function stringField(record: Record<string, unknown>, key: string): string | und
  * (#4662). Name the route instead, so any listener that does not serve a path stays legible
  * even if another one starts answering this way.
  */
-function responseMessage(body: unknown, status: number): string {
+function responseMessage(body: unknown, status: number, integrationRoute = false): string {
   if (typeof body === "string" && body.trim()) return body.trim().slice(0, 400);
   if (!body || typeof body !== "object") return `Management request failed (${status})`;
   const record = body as Record<string, unknown>;
@@ -117,6 +154,13 @@ function responseMessage(body: unknown, status: number): string {
     if (primary) break;
   }
   const parts = [primary ?? `Management request failed (${status})`];
+  // Integration mutation routes carry a writer explanation beside a generic error. Its prose is
+  // server text (paths, upstream errors), so render fixed guidance keyed on the closed reason
+  // code instead of echoing it; other management bodies keep their presentation contract.
+  if (integrationRoute && stringField(record, "message") && stringField(record, "message") !== primary) {
+    const fixed = integrationRecoveryMessage(stringField(record, "reason"));
+    if (fixed) parts.push(`Details: ${fixed}`);
+  }
   const reason = stringField(record, "reason");
   // A body of {ok:false, reason:"…"} with no `error` key used to degrade to the
   // generic line, discarding the only actionable field.
@@ -156,7 +200,9 @@ export async function runtimeRequest<T = unknown>(
     try { body = JSON.parse(text); }
     catch { body = text; }
   }
-  if (!response.ok) throw new RuntimeApiError(responseMessage(body, response.status), response.status, body);
+  if (!response.ok) {
+    throw new RuntimeApiError(responseMessage(body, response.status, isIntegrationRoute(path, response)), response.status, body);
+  }
   return body as T;
 }
 
@@ -198,6 +244,7 @@ export function takeOption(args: string[], flag: string): string | undefined {
   return value;
 }
 
+/** Consume one boolean option using the supported on/off synonyms; reject other values. */
 export function takeBooleanOption(args: string[], flag: string): boolean | undefined {
   const raw = takeOption(args, flag);
   if (raw === undefined) return undefined;
@@ -206,11 +253,13 @@ export function takeBooleanOption(args: string[], flag: string): boolean | undef
   throw new CliUsageError(`${flag} must be on or off`);
 }
 
+/** Parse a decimal safe integer, allowing separators only between digits. */
 export function takeIntegerOption(args: string[], flag: string, options: { min?: number } = {}): number | undefined {
   const raw = takeOption(args, flag);
   if (raw === undefined) return undefined;
-  const value = Number(raw.replace(/[_,]/g, ""));
-  if (!Number.isInteger(value) || value < (options.min ?? Number.MIN_SAFE_INTEGER)) {
+  const decimal = raw.trim();
+  const value = /^[+-]?\d+(?:[_,]\d+)*$/.test(decimal) ? Number(decimal.replace(/[_,]/g, "")) : NaN;
+  if (!Number.isSafeInteger(value) || value < (options.min ?? Number.MIN_SAFE_INTEGER)) {
     throw new CliUsageError(`${flag} must be an integer${options.min !== undefined ? ` >= ${options.min}` : ""}`);
   }
   return value;
@@ -219,79 +268,6 @@ export function takeIntegerOption(args: string[], flag: string, options: { min?:
 export function csv(value: string | undefined): string[] | undefined {
   if (value === undefined) return undefined;
   return [...new Set(value.split(",").map(item => item.trim()).filter(Boolean))];
-}
-
-/**
- * Options whose VALUE is a credential (or can carry one), listed here so a parse
- * error never prints one. `--headers` belongs on the list defensively: custom
- * headers are documented as non-secret metadata and the validator rejects the
- * standard credential names, but it cannot recognize an arbitrary one such as
- * `X-My-Token`, so a parse error must not echo the value back either way.
- *
- * `takeOption` only understands `--flag value`. `--flag=value` therefore falls
- * through to `rejectArgs`, which reports the offending argument verbatim — for
- * `--code=https://…?code=SECRET` that writes the authorization code to stderr,
- * which is the exact exposure the stdin path exists to avoid.
- */
-const SECRET_OPTIONS = [
-  "--code",
-  "--headers",
-  "--token",
-  "--admin-token",
-  "--pairing-code",
-  "--credential-env",
-  "--admin-token-env",
-  "--pairing-code-env",
-];
-
-/**
- * Replace credential values before they are reported back.
- *
- * Both spellings have to be covered, and the space-separated one spans two
- * tokens: mistyping `ocx account cancel <p> --code <secret>` on a command that
- * does not parse `--code` leaves the flag AND its value in the leftovers, and
- * reporting them verbatim writes the credential to stderr. Repeating the
- * option does the same with the second value, since the parser takes only the
- * first occurrence.
- *
- * The token after the option is redacted whatever it looks like. Skipping
- * `--`-prefixed tokens read as "that is a flag, not a value", but the shell
- * hands over whatever was typed: `--code --SUPERSECRET` and
- * `--code -- SUPERSECRET` both put the credential straight in the message. A
- * mistaken `--code --json` now reads `--code <redacted>`, which is worse
- * diagnostics for a case that already prints the usage text, and better than
- * printing a credential.
- *
- * `redactValues` extends that to bare leftovers, for commands whose positional
- * argument is itself a credential.
- */
-function redactSecretArgs(args: string[], redactValues = false): string[] {
-  const out: string[] = [];
-  for (let index = 0; index < args.length; index++) {
-    const arg = args[index] as string;
-    const inline = SECRET_OPTIONS.find(option => arg.startsWith(`${option}=`));
-    if (inline) {
-      out.push(`${inline}=<redacted>`);
-      continue;
-    }
-    if (SECRET_OPTIONS.includes(arg)) {
-      out.push(arg);
-      // Swallow the value that belongs to it. `--` is an end-of-options
-      // separator, so the value is the token after it.
-      let valueIndex = index + 1;
-      if (args[valueIndex] === "--") {
-        out.push("--");
-        valueIndex++;
-      }
-      if (args[valueIndex] !== undefined) {
-        out.push("<redacted>");
-        index = valueIndex;
-      }
-      continue;
-    }
-    out.push(redactValues && !arg.startsWith("-") ? "<redacted>" : arg);
-  }
-  return out;
 }
 
 export interface RejectArgsOptions {
@@ -389,9 +365,109 @@ export async function readSecretLine(deps: RuntimeApiDeps, label: string): Promi
   return line;
 }
 
+/** Read a bounded secret payload while keeping the original bytes available for zeroing. */
+export async function readSecretBytes(
+  deps: RuntimeApiDeps,
+  label: string,
+  maxBytes = MAX_LINK_CREDENTIAL_BYTES,
+): Promise<Uint8Array<ArrayBuffer>> {
+  const input: CliStdin = deps.stdinImpl ?? process.stdin;
+  const timeoutMs = deps.stdinTimeoutMs ?? 120_000;
+  const signal = deps.stdinSignal;
+  signal?.throwIfAborted();
+  if (input.readableEnded === true) throw new CliUsageError(`${label} input was empty`);
+  return await new Promise<Uint8Array<ArrayBuffer>>((resolve, reject) => {
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    let settled = false;
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      input.removeListener("data", onData);
+      input.removeListener("end", onEnd);
+      input.removeListener("error", onError);
+    };
+    const wipeChunks = () => {
+      for (const chunk of chunks) chunk.fill(0);
+    };
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      try { fn(); }
+      finally { wipeChunks(); }
+    };
+    const onData = (chunk: unknown) => {
+      const source = chunk instanceof Uint8Array ? chunk : undefined;
+      let bytes: Uint8Array | undefined;
+      let retained = false;
+      try {
+        bytes = typeof chunk === "string"
+          ? new TextEncoder().encode(chunk)
+          : source
+            ? new Uint8Array(source)
+            : new TextEncoder().encode(String(chunk));
+        total += bytes.byteLength;
+        if (total > maxBytes) {
+          finish(() => reject(new CliUsageError(`${label} exceeds ${maxBytes} bytes`)));
+          return;
+        }
+        chunks.push(bytes);
+        retained = true;
+      } finally {
+        source?.fill(0);
+        if (!retained) bytes?.fill(0);
+      }
+    };
+    const onEnd = () => finish(() => {
+      if (total === 0) {
+        reject(new CliUsageError(`${label} input was empty`));
+        return;
+      }
+      const result = new Uint8Array(total);
+      let offset = 0;
+      for (const chunk of chunks) {
+        result.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      resolve(result);
+    });
+    const onError = (error: Error) => finish(() => reject(error));
+    const onAbort = () => finish(() => reject(signal?.reason));
+    const timer = setTimeout(
+      () => finish(() => reject(new CliUsageError(`timed out waiting for ${label} on stdin`))),
+      timeoutMs,
+    );
+    input.on("data", onData);
+    input.on("end", onEnd);
+    input.on("error", onError);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) onAbort();
+  });
+}
+
 export function printData(value: unknown, wantsJson: boolean, lines?: string[]): void {
   if (wantsJson || !lines) console.log(JSON.stringify(value, null, 2));
-  else for (const line of lines) console.log(line);
+  else for (const line of lines) console.log(terminalSafeText(line));
+}
+
+/**
+ * Operator text for the Codex-config apply report a management write returns.
+ *
+ * The report shape is shared by every route that re-runs the injection on the spot: the Desktop
+ * switches (`ocx system settings`) and the web-search sidecar's master switch. One vocabulary for
+ * both, so the same failure cannot read as two different things depending on which command the
+ * operator used -- and because the reason codes are internal, the human line never prints them.
+ */
+export function desktopSwitchApplyReason(reason: unknown): string {
+  if (reason === "not_requested") return "no desktop switch rewrite was requested";
+  if (reason === "proxy_not_running") return "the proxy is not running";
+  if (reason === "integration_disabled") return "Codex integration is disabled";
+  if (reason === "external_provider") return "an external model provider owns config.toml";
+  if (reason === "ownership_undetermined") return "config.toml ownership could not be determined";
+  if (reason === "write_lock_busy") return "the Codex config write lock is busy";
+  if (reason === "injection_refused") return "Codex config injection was refused";
+  return "the rewrite could not be completed";
 }
 
 /**

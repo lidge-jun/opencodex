@@ -174,4 +174,37 @@ describe("null-body statuses on the raw outbound transports", () => {
       await Promise.all([close(proxy), close(target)]);
     }
   });
+  test("the SOCKS transport answers HEAD with no body even when the peer advertises one", async () => {
+    let targetConnection: Socket | undefined;
+    /*
+     * A HEAD answer carries the headers the GET would have carried, including the length of a
+     * body it will never send. Reading that many bytes would park the transport on a body that is
+     * not coming, with the answer already in hand.
+     */
+    const target = replyingTarget(
+      "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 128\r\nConnection: keep-alive\r\n\r\n",
+      socket => { targetConnection = socket; },
+    );
+    const proxy = socksProxy();
+    const [targetPort, proxyPort] = await Promise.all([listen(target), listen(proxy)]);
+    try {
+      const response = await socks5Fetch(
+        "http://provider.invalid:" + targetPort + "/head",
+        { method: "HEAD" },
+        "socks5://127.0.0.1:" + proxyPort,
+      );
+      expect(response.status).toBe(200);
+      expect(response.body).toBeNull();
+      // The advertised length survives: it describes the representation, and a caller reading
+      // these headers is entitled to it.
+      expect(response.headers.get("content-length")).toBe("128");
+      // The peer asked to keep the connection alive, so an observed close is the transport
+      // releasing it rather than the fixture tearing it down.
+      expect(await awaitDestroyed(targetConnection)).toBe(true);
+    } finally {
+      targetConnection?.destroy();
+      await Promise.all([close(proxy), close(target)]);
+    }
+  });
+
 });

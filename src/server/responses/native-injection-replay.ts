@@ -1,4 +1,4 @@
-import { MAX_NATIVE_STEERING_REPLAY_BYTES, type NativeSteeringReplayObserver } from "./native-steering-replay";
+import { MAX_NATIVE_STEERING_REPLAY_BYTES, admitNativeControlReplayJournal, registerNativeControlReplayJournal, type NativeSteeringReplayObserver } from "./native-steering-replay";
 import { injectionRecord as record, type InjectionFrame as Frame, type FunctionResult } from "./native-injection-protocol";
 
 import { nativeResultFingerprint } from "./native-tool-results";
@@ -16,6 +16,9 @@ export class NativeInjectionReplay implements NativeSteeringReplayObserver {
   private acceptedBatchBytes: number[] = [];
   private explicit: unknown[] = [];
   private previous: unknown[] = [];
+  private unregisterAccounting?: () => void;
+
+  get retainedBytes(): number { return this.bytes; }
 
   /** Capture a private initial prefix; existing persistence eligibility is checked by the caller. */
   constructor(input: unknown, private readonly remember: (input: unknown[], response: Frame) => void) {
@@ -23,12 +26,19 @@ export class NativeInjectionReplay implements NativeSteeringReplayObserver {
       ? [{ type: "message", role: "user", content: [{ type: "input_text", text: input }] }]
       : Array.isArray(input) ? [...input] : [];
     this.reserve(this.prefix);
+    this.unregisterAccounting = registerNativeControlReplayJournal(this);
   }
   /** Charge serialized bytes, refusing rather than truncating an over-budget transcript. */
   private reserve(value: unknown): number {
     const bytes = Buffer.byteLength(JSON.stringify(value));
     if (this.bytes + bytes > MAX_NATIVE_STEERING_REPLAY_BYTES) throw new Error("Native injection replay exceeded its history budget.");
     this.bytes += bytes;
+    try {
+      admitNativeControlReplayJournal(this);
+    } catch (error) {
+      this.bytes -= bytes;
+      throw error;
+    }
     return bytes;
   }
   /** Journal before physical send, with rollback usable only for a known unsent frame. */
@@ -99,6 +109,8 @@ export class NativeInjectionReplay implements NativeSteeringReplayObserver {
   }
   /** Drop all retained bodies at cancellation, connection teardown or unknown delivery. */
   dispose(): void {
+    this.unregisterAccounting?.();
+    this.unregisterAccounting = undefined;
     this.prefix = []; this.output.clear(); this.accepted.clear(); this.pending = undefined; this.pendingBytes = 0; this.acceptedBatchBytes = [];
     this.explicit = []; this.previous = []; this.bytes = 0;
   }

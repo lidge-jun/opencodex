@@ -28,7 +28,8 @@ d’exportation de la variable d’environnement et le nombre de modèles dotés
       "api": "openai-completions",
       "apiKey": "$OPENCODEX_API_KEY",
       "compat": {
-        "sendSessionAffinityHeaders": true
+        "sendSessionAffinityHeaders": true,
+        "supportsDeveloperRole": false
       },
       "models": [
         {
@@ -36,7 +37,7 @@ d’exportation de la variable d’environnement et le nombre de modèles dotés
           "name": "Claude Opus 5 (anthropic)",
           "input": ["text"],
           "contextWindow": 200000,
-          "maxTokens": 32000
+          "maxTokens": 128000
         }
       ]
     }
@@ -45,6 +46,8 @@ d’exportation de la variable d’environnement et le nombre de modèles dotés
 ```
 
 Les fournisseurs Pi générés activent `compat.sendSessionAffinityHeaders`. Conservez ce réglage lors de la fusion ou de la modification manuelle du fournisseur : Pi transmet un identifiant de session stable, dont OpenCodex dérive l’affinité pour la destination canonique OpenCode Go. Pi peut omettre cet identifiant lorsque `cacheRetention` vaut `none`.
+
+Les fournisseurs Pi générés définissent aussi `compat.supportsDeveloperRole` à `false` : Pi envoie alors son prompt système avec le rôle `system` au lieu de `developer`. OpenCodex transmet les rôles Chat Completions tels quels, et plusieurs amonts compatibles OpenAI refusent `developer` avec une erreur 400 ; tous acceptent `system`.
 
 Les identifiants de modèle sont les sélecteurs canoniques du proxy : les modèles routés apparaissent donc sous la forme `provider/model`
 (`anthropic/claude-opus-5`) et les slugs natifs OpenAI restent sans préfixe (`gpt-5.6-sol`). Le `name`
@@ -103,9 +106,7 @@ refuse de démarrer sans jeton — voir [Accès à distance](/fr/reference/confi
 faisant autorité. Dans le cas contraire, les deux champs sont omis pour ce modèle et Pi applique ses propres valeurs par défaut ;
 `ocx export` affiche le nombre de lignes concernées.
 
-`maxTokens` est un budget de `32000` destiné à satisfaire le schéma. Il est plafonné à la fenêtre de contexte, de sorte qu’un
-modèle doté d’un petit contexte ne reçoive jamais davantage de sortie que de contexte. Cette valeur ne constitue pas une affirmation sur la
-limite maximale réelle d’un modèle donné.
+La limite de sortie utilise le maximum connu du modèle dans le catalogue ou les métadonnées générées. La valeur `32000` ne sert que de repli si cette limite est inconnue. La limite est toujours plafonnée à la fenêtre de contexte, et les limites connues inférieures à `32000` sont conservées.
 
 Le champ `cost` est volontairement absent. Il exige les quatre champs de prix, alors qu’OpenCodex ne possède
 aucune donnée tarifaire pour les modèles routés ; émettre des zéros reviendrait à affirmer que tous les

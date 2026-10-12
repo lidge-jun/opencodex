@@ -1,3 +1,4 @@
+import { rotateAnthropicAccountOn429 } from "../helpers/anthropic-shared-quota";
 /**
  * The quorum predicate must not read the auth store on every request.
  *
@@ -23,7 +24,6 @@ import {
   forgetAnthropicFailoverQuorum,
   hasAnthropicFailoverQuorum,
   resetAnthropicRoutingForManualSelection,
-  rotateAnthropicAccountOn429,
 } from "../../src/oauth/anthropic-routing";
 import { getAccountSet, markAccountNeedsReauth, removeAccount, saveCredential } from "../../src/oauth/store";
 import { removeTreeWithRetry } from "../helpers/remove-tree";

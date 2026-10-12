@@ -259,38 +259,45 @@ function memberMatches(member: string, ref: CredentialDomainRef): boolean {
 }
 
 /**
- * Every way a declared grouping can be ambiguous, as operator-readable messages. The
- * config write path rejects on any of these and the load path drops the list, so an
- * ambiguous declaration is reported rather than resolved by whichever group came first.
+ * Every way a declared grouping can be ambiguous, reported by position only. Messages
+ * name group and member indexes, never the operator-supplied strings — a malformed
+ * credential pasted into this list would otherwise be printed verbatim into shared
+ * logs. The config write path rejects on any of these and the load path drops the
+ * list, so an ambiguous declaration is reported rather than resolved by whichever
+ * group came first.
  */
 export function credentialGroupIssues(groups: readonly DeclaredCredentialGroup[]): string[] {
   const issues: string[] = [];
-  const seenIds = new Set<string>();
-  const owner = new Map<string, string>();
-  for (const group of groups) {
+  const seenIds = new Map<string, number>();
+  const owner = new Map<string, { groupIndex: number; memberIndex: number }>();
+  for (const [groupIndex, group] of groups.entries()) {
     // A duplicate id is not cosmetic: both groups key to `declared:<id>`, so the second
     // group's members join the first group's quota domain without anyone saying so.
-    if (seenIds.has(group.id)) issues.push(`duplicate group id ${JSON.stringify(group.id)}`);
-    seenIds.add(group.id);
-    if (group.credentials.length === 0) {
-      issues.push(`group ${JSON.stringify(group.id)} lists no credentials`);
+    const firstGroupIndex = seenIds.get(group.id);
+    if (firstGroupIndex !== undefined) {
+      issues.push(`duplicate group id at group index ${groupIndex} (first declared at group index ${firstGroupIndex})`);
+    } else {
+      seenIds.set(group.id, groupIndex);
     }
-    for (const member of group.credentials) {
+    if (group.credentials.length === 0) {
+      issues.push(`group at index ${groupIndex} lists no credentials`);
+    }
+    for (const [memberIndex, member] of group.credentials.entries()) {
       if (splitMember(member) === undefined) {
         issues.push(
-          `group ${JSON.stringify(group.id)} member ${JSON.stringify(member)} must be provider-qualified as "<provider>:<credential-id>"`,
+          `credential at member index ${memberIndex} in group index ${groupIndex} must be provider-qualified as "<provider>:<credential-id>"`,
         );
         continue;
       }
       const existing = owner.get(canonicalMember(member));
-      if (existing === group.id) {
-        issues.push(`credential ${JSON.stringify(member)} is listed twice in group ${JSON.stringify(group.id)}`);
+      if (existing?.groupIndex === groupIndex) {
+        issues.push(`credential at member index ${memberIndex} is listed twice in group index ${groupIndex}`);
       } else if (existing !== undefined) {
         issues.push(
-          `credential ${JSON.stringify(member)} is declared in more than one group (${existing}, ${group.id})`,
+          `credential at member index ${memberIndex} in group index ${groupIndex} is declared in more than one group (first declared at group index ${existing.groupIndex}, member index ${existing.memberIndex})`,
         );
       } else {
-        owner.set(canonicalMember(member), group.id);
+        owner.set(canonicalMember(member), { groupIndex, memberIndex });
       }
     }
   }

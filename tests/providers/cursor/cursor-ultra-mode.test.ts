@@ -83,11 +83,18 @@ describe("cursor ultra (-1m / Max Mode) toggle (devlog 260826 070)", () => {
     expect(decoded.modelDetails?.maxMode ?? false).toBe(false);
   });
 
-  test("account filter admits the synthetic row through its base availability", () => {
+  test("account filter admits the synthetic row only with base and Max Mode availability", () => {
+    const configured = [{ id: "kimi-k3-1m" }, { id: "kimi-k3" }];
+    const live = ["kimi-k3-high", "kimi-k3-max"];
+    const filtered = filterCursorConfiguredModelsByLiveDiscovery(configured, live, ["kimi-k3-max"]);
+    expect(filtered.map(model => model.id)).toEqual(["kimi-k3-1m", "kimi-k3"]);
+  });
+
+  test("account filter hides the synthetic row without discovered Max Mode capability", () => {
     const configured = [{ id: "kimi-k3-1m" }, { id: "kimi-k3" }];
     const live = ["kimi-k3-high", "kimi-k3-max"];
     const filtered = filterCursorConfiguredModelsByLiveDiscovery(configured, live);
-    expect(filtered.map(model => model.id)).toEqual(["kimi-k3-1m", "kimi-k3"]);
+    expect(filtered.map(model => model.id)).toEqual(["kimi-k3"]);
   });
 
   test("ultra id set stays narrow and every entry rides its base's static row", () => {

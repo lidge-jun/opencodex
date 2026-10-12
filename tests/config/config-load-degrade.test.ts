@@ -1,3 +1,4 @@
+import { resolveProtocolSettings } from "../../src/protocols/settings";
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -82,6 +83,25 @@ test("config validation accepts only safe provider model display names", () => {
   const invalid = validateConfigCandidate(candidate({ "grok-4.6": "Grok/4.6" }));
   expect(invalid.ok).toBe(false);
   if (!invalid.ok) expect(invalid.error).toContain("modelDisplayNames");
+});
+
+test("config validation accepts the optional codex pool idle-window setting", () => {
+  const defaults = getDefaultConfig();
+  const enabled = validateConfigCandidate({
+    ...defaults,
+    codexPool: { startIdleWindows: true },
+  });
+  expect(enabled).toMatchObject({
+    ok: true,
+    config: { codexPool: { startIdleWindows: true } },
+  });
+
+  const invalid = validateConfigCandidate({
+    ...defaults,
+    codexPool: { startIdleWindows: "true" },
+  });
+  expect(invalid.ok).toBe(false);
+  if (!invalid.ok) expect(invalid.error).toContain("codexPool.startIdleWindows");
 });
 
 test("load keeps a provider and valid labels when one hand edited label is invalid", () => {
@@ -368,6 +388,41 @@ test("a malformed credentialGroups entry costs the list, not the rest of pool (#
   } finally { warn.mockRestore(); }
 });
 
+test("a malformed credentialGroups warning never includes operator-supplied identifiers", () => {
+  const pastedCredential = ["opaque", "provider", "credential", "value"].join("-");
+  const privateGroupId = ["private", "billing", "group"].join("-");
+  writePoolConfig([{ id: privateGroupId, credentials: [pastedCredential] }]);
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    expect(loadConfig().pool?.credentialGroups).toBeUndefined();
+    const output = warn.mock.calls.flat().join("\n");
+    expect(output).toContain("provider-qualified");
+    expect(output).toContain("group index 0");
+    expect(output).not.toContain(pastedCredential);
+    expect(output).not.toContain(privateGroupId);
+  } finally { warn.mockRestore(); }
+});
+
+test("every credentialGroups issue shape keeps operator strings out of the warning", () => {
+  // The provider-qualified case above only covers one message template. Duplicate ids,
+  // empty groups, and members listed twice all flow through the same warning join, so
+  // each must be proven identifier-free too.
+  const groupId = ["sensitive", "team", "name"].join("-");
+  const memberId = "anthropic:secret-credential-handle";
+  writePoolConfig([
+    { id: groupId, credentials: [memberId, memberId] },
+    { id: groupId, credentials: [] },
+  ]);
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    expect(loadConfig().pool?.credentialGroups).toBeUndefined();
+    const output = warn.mock.calls.flat().join("\n");
+    expect(output).toContain("pool.credentialGroups");
+    expect(output).not.toContain(groupId);
+    expect(output).not.toContain("secret-credential-handle");
+  } finally { warn.mockRestore(); }
+});
+
 test("an ambiguous credentialGroups declaration is rejected on write, never ordered away (#4546)", () => {
   const base = candidate(undefined);
   const withGroups = (credentialGroups: unknown) => ({ ...base, pool: { kernel: true, credentialGroups } });
@@ -398,4 +453,82 @@ test("an ambiguous credentialGroups declaration is rejected on write, never orde
   ]));
   expect(valid.ok).toBe(true);
   expect(valid.ok === true && valid.config.pool?.credentialGroups).toHaveLength(1);
+});
+
+
+test("malformed native pool preferences preserve providers on file load but reject candidate writes", () => {
+  for (const nativeMessages of ["false", null, 0]) {
+    const config = {
+      ...candidate(undefined),
+      providers: { xai: { ...candidate(undefined).providers.xai, apiKey: "fixture-key-preserved" } },
+      anthropicAccountPool: { enabled: true, nativeMessages, stickyLimit: 3 },
+    };
+    writeFileSync(getConfigPath(), JSON.stringify(config), "utf8");
+    const loaded = loadConfig();
+    expect(loaded.providers.xai).toMatchObject({ note: "keep me", baseUrl: "https://api.x.ai/v1", apiKey: "fixture-key-preserved" });
+    expect(loaded.anthropicAccountPool).toMatchObject({ enabled: true, nativeMessages: false, stickyLimit: 3 });
+    expect(readConfigDiagnostics().config.providers.xai).toMatchObject({ note: "keep me" });
+    const rejected = validateConfigCandidate(config);
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok) expect(rejected.error).toContain("anthropicAccountPool.nativeMessages");
+  }
+});
+
+test("malformed native pool blocks preserve unrelated providers on file load", () => {
+  for (const anthropicAccountPool of [null, "false", 0]) {
+    const config = { ...candidate(undefined), anthropicAccountPool };
+    writeFileSync(getConfigPath(), JSON.stringify(config), "utf8");
+    expect(loadConfig().providers.xai).toMatchObject({ note: "keep me", baseUrl: "https://api.x.ai/v1" });
+    expect(readConfigDiagnostics().config.providers.xai).toMatchObject({ note: "keep me" });
+    expect(validateConfigCandidate(config).ok).toBe(false);
+  }
+});
+
+
+test("malformed protocol containers and siblings retain disabled native policy and providers on load", () => {
+  for (const protocols of [null, "on", [], { rollout: null }, { rollout: [] },
+    { unrepresentable: "bad", rollout: { managedMessagesNative: false, managedMessagesNativeOAuth: true } },
+    { rollout: { managedMessagesNative: false, shadowPlan: "true" } },
+    { rollout: { managedMessagesNative: "true", managedMessagesNativeOAuth: true } },
+    { extra: true, rollout: { managedMessagesNative: false } },
+  ]) {
+    const raw = { ...candidate(undefined), protocols, anthropicAccountPool: { enabled: true, stickyLimit: 4 } };
+    writeFileSync(getConfigPath(), JSON.stringify(raw), "utf8");
+    for (const loaded of [loadConfig(), readConfigDiagnostics().config]) {
+      expect(loaded.providers.xai).toMatchObject({ note: "keep me" });
+      expect(loaded.anthropicAccountPool).toMatchObject({ enabled: true, stickyLimit: 4 });
+      expect(resolveProtocolSettings(loaded, "anthropic").rollout).toMatchObject({ managedMessagesNative: false, managedMessagesNativeOAuth: false });
+      expect(loaded.protocols?.rollout?.managedMessagesNative).toBe(false);
+    }
+    expect(validateConfigCandidate(raw).ok).toBe(false);
+  }
+});
+
+test("a malformed Aside profile sync policy warns once without echoing it and keeps the all-off fallback", () => {
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const raw = { ...candidate(undefined), asideProfileSync: { profiles: { "0": "secret-shaped-aside-off" } } };
+    const bytes = JSON.stringify(raw);
+    writeFileSync(getConfigPath(), bytes, "utf8");
+    const loaded = loadConfig();
+    expect(loaded.asideProfileSync).toEqual({ allProfiles: false });
+    expect(loaded.providers.xai).toMatchObject({ note: "keep me" });
+    const messages = warn.mock.calls.flat().join("\n");
+    expect(messages.match(/asideProfileSync is invalid/g)).toHaveLength(1);
+    expect(messages).toContain("ocx integration client status --client aside");
+    expect(messages).not.toContain("secret-shaped-aside-off");
+    expect(readFileSync(getConfigPath(), "utf8")).toBe(bytes);
+    for (const invalid of [null, [], "on", { allProfiles: "yes" }, { profiles: { "01": true } }, { legacyProfileId: -1 }]) {
+      warn.mockClear();
+      writeFileSync(getConfigPath(), JSON.stringify({ ...candidate(undefined), asideProfileSync: invalid }), "utf8");
+      expect(loadConfig().asideProfileSync).toEqual({ allProfiles: false });
+      expect(warn.mock.calls.flat().join("\n").match(/asideProfileSync is invalid/g)).toHaveLength(1);
+    }
+    for (const valid of [undefined, { allProfiles: true }, { profiles: { "0": false } }, { allProfiles: false, futureKey: "kept" }]) {
+      warn.mockClear();
+      writeFileSync(getConfigPath(), JSON.stringify({ ...candidate(undefined), asideProfileSync: valid }), "utf8");
+      loadConfig();
+      expect(warn.mock.calls.flat().join("\n")).not.toContain("asideProfileSync");
+    }
+  } finally { warn.mockRestore(); }
 });

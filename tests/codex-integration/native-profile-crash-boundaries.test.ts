@@ -160,6 +160,17 @@ async function stopStartup(
   if (exit !== 0) throw new Error(`startup child exited ${exit}`);
 }
 
+async function reapSwitchChild(child: Bun.Subprocess): Promise<void> {
+  if (child.exitCode !== null) return;
+  child.kill();
+  const exited = await Promise.race([child.exited, Bun.sleep(KILL_GRACE_MS).then(() => null)]);
+  if (exited !== null) return;
+  child.kill("SIGKILL");
+  if (await Promise.race([child.exited, Bun.sleep(KILL_GRACE_MS).then(() => null)]) === null) {
+    throw new Error("switch child did not exit after forced termination");
+  }
+}
+
 function spawnSwitch(f: Awaited<ReturnType<typeof fixture>>, options: { boundary?: NativeProfileSwitchBoundary; marker?: string; release?: string; contention?: string; result: string }) {
   return Bun.spawn([process.execPath, helperPath("native-profile-switch-child.ts")], {
     cwd: repoRoot(),
@@ -224,12 +235,12 @@ const boundaries: Array<{
 ];
 
 describe("native profile OpenCodex process-exit phases", () => {
-  test("hard OpenCodex process exit after each published transaction phase converges exact auth, vault, journal, gate, and runtime bearer", async () => {
-    for (const scenario of boundaries) {
-      const f = await fixture();
-      const marker = join(f.root, `crash-${scenario.boundary}`);
-      const result = join(f.root, `result-${scenario.boundary}`);
-      const child = spawnSwitch(f, { boundary: scenario.boundary, marker, result });
+  test.each(boundaries)("hard process exit converges auth, vault, journal, gate and bearer at %j", async scenario => {
+    const f = await fixture();
+    const marker = join(f.root, `crash-${scenario.boundary}`);
+    const result = join(f.root, `result-${scenario.boundary}`);
+    const child = spawnSwitch(f, { boundary: scenario.boundary, marker, result });
+    try {
       await Promise.race([
         waitFor(marker),
         child.exited.then(async exit => {
@@ -240,43 +251,45 @@ describe("native profile OpenCodex process-exit phases", () => {
       ]);
       expect(await child.exited).toBe(86);
       expect(existsSync(result)).toBe(false);
-
-      expect(readFileSync(f.manager.context.authPath, "utf8")).toBe(scenario.auth === "source" ? f.source : f.target);
-      const vault = readNativeProfileVault(f.manager.context)!;
-      expect(vault.activeProfileId).toBe(scenario.owner === "source" ? f.sourceProfile.id : f.targetProfile.id);
-      expect(vault.revision).toBe(f.initialRevision + (scenario.owner === "target" ? 1 : 0));
-      const rawVault = readFileSync(f.manager.context.vaultPath, "utf8");
-      expect(rawVault).not.toContain("opaque-access");
-      expect(rawVault).not.toContain("opaque-refresh");
-      const journal = readNativeProfileJournal(f.manager.context);
-      expect(journal?.phase ?? null).toBe(scenario.phase);
-
-      const p = startupPaths(f);
-      const restart = spawnStartup(f, p);
-      try {
-        await waitFor(p.port);
-        const port = Number(readFileSync(p.port, "utf8"));
-        if (scenario.phase) {
-          expect((await mainRequest(port)).status).toBeGreaterThanOrEqual(400);
-          expect(existsSync(p.upstream)).toBe(false);
-          writeFileSync(p.release, "recover");
-        }
-        expect(await waitForJson(p.settled)).toMatchObject({ gate: { status: "ready" } });
-        expect((await mainRequest(port)).status).toBe(200);
-        await waitFor(p.upstream);
-        const receipt = JSON.parse(readFileSync(p.upstream, "utf8").trim().split("\n").at(-1)!);
-        const finalTarget = scenario.boundary !== "journal-prepared";
-        expect(receipt.authorization).toBe(`Bearer opaque-access-${finalTarget ? "target" : "source"}`);
-        expect(readFileSync(f.manager.context.authPath, "utf8")).toBe(finalTarget ? f.target : f.source);
-        const recoveredVault = readNativeProfileVault(f.manager.context)!;
-        expect(recoveredVault.activeProfileId).toBe(finalTarget ? f.targetProfile.id : f.sourceProfile.id);
-        expect(recoveredVault.revision).toBe(f.initialRevision + (finalTarget ? 1 : 0));
-        expect(readNativeProfileJournal(f.manager.context)).toBeNull();
-      } finally {
-        await stopStartup(restart, p);
-      }
+    } finally {
+      await reapSwitchChild(child);
     }
-  }, 90_000);
+
+    expect(readFileSync(f.manager.context.authPath, "utf8")).toBe(scenario.auth === "source" ? f.source : f.target);
+    const vault = readNativeProfileVault(f.manager.context)!;
+    expect(vault.activeProfileId).toBe(scenario.owner === "source" ? f.sourceProfile.id : f.targetProfile.id);
+    expect(vault.revision).toBe(f.initialRevision + (scenario.owner === "target" ? 1 : 0));
+    const rawVault = readFileSync(f.manager.context.vaultPath, "utf8");
+    expect(rawVault).not.toContain("opaque-access");
+    expect(rawVault).not.toContain("opaque-refresh");
+    const journal = readNativeProfileJournal(f.manager.context);
+    expect(journal?.phase ?? null).toBe(scenario.phase);
+
+    const p = startupPaths(f);
+    const restart = spawnStartup(f, p);
+    try {
+      await waitFor(p.port);
+      const port = Number(readFileSync(p.port, "utf8"));
+      if (scenario.phase) {
+        expect((await mainRequest(port)).status).toBeGreaterThanOrEqual(400);
+        expect(existsSync(p.upstream)).toBe(false);
+        writeFileSync(p.release, "recover");
+      }
+      expect(await waitForJson(p.settled)).toMatchObject({ gate: { status: "ready" } });
+      expect((await mainRequest(port)).status).toBe(200);
+      await waitFor(p.upstream);
+      const receipt = JSON.parse(readFileSync(p.upstream, "utf8").trim().split("\n").at(-1)!);
+      const finalTarget = scenario.boundary !== "journal-prepared";
+      expect(receipt.authorization).toBe(`Bearer opaque-access-${finalTarget ? "target" : "source"}`);
+      expect(readFileSync(f.manager.context.authPath, "utf8")).toBe(finalTarget ? f.target : f.source);
+      const recoveredVault = readNativeProfileVault(f.manager.context)!;
+      expect(recoveredVault.activeProfileId).toBe(finalTarget ? f.targetProfile.id : f.sourceProfile.id);
+      expect(recoveredVault.revision).toBe(f.initialRevision + (finalTarget ? 1 : 0));
+      expect(readNativeProfileJournal(f.manager.context)).toBeNull();
+    } finally {
+      await stopStartup(restart, p);
+    }
+  }, STARTUP_CHILD_BUDGET_MS);
 
   test("two concurrent real switches serialize to one commit without credential overlap", async () => {
     const f = await fixture();

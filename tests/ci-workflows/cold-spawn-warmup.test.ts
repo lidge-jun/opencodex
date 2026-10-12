@@ -6,11 +6,12 @@ import {
   COLD_SPAWN_WARMUP_HOOK_BUDGET_MS,
   moduleGraphSpecifiers,
   resetColdSpawnWarmupForTests,
+  spawnModuleGraphWarmupChild,
   warmColdSpawn,
   warmModuleGraph,
 } from "../helpers/cold-spawn-warmup";
 import { repoPath, repoRoot } from "../helpers/repo-root";
-import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
+import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
 import {
   analyzeWarmupRegistration,
   dispositionComplaints,
@@ -54,9 +55,26 @@ type Disposition = WarmupDisposition;
  * `tests/helpers/cold-spawn-warmup.ts`. `warmed: false` needs a reason that survives review.
  */
 const DISPOSITIONS: Readonly<Record<string, Disposition>> = {
+  "tests/ci-workflows/ci-gui-typecheck-gate.test.ts": {
+    warmed: false,
+    why:
+      "Its children run scripts/typecheck-gui-if-changed.ts, which imports only node builtins, "
+      + "or git itself, so an import scan has no repository module graph to warm and a registered "
+      + "warm-up would fail closed. The spawnSync bounds exist because an unbounded child pinned "
+      + "Linux test 1/4 batch 4 until the 120s shard deadline cut it (run 37730984813).",
+  },
   "tests/ci-workflows/test-runner.test.ts": {
     warmed: true,
     why: "one throwaway lane pays Bun's test-runner bootstrap before the captured-output lane is timed",
+  },
+  "tests/ci-workflows/release-version-sources.test.ts": {
+    warmed: false,
+    why:
+      "Its children run scripts/release-version-sources.ts, which imports only node builtins, "
+      + "or a bash -c guard fragment, so an import scan has no repository module graph to warm "
+      + "and a registered warm-up would fail closed. The spawnSync bounds exist because an "
+      + "unbounded child pinned Linux test 1/4 batch 6 until the 120s shard deadline cut it "
+      + "(run 37736425700).",
   },
   "tests/cli/cli-connect-readiness.test.ts": {
     warmed: true,
@@ -65,6 +83,10 @@ const DISPOSITIONS: Readonly<Record<string, Disposition>> = {
   "tests/cli/cli-models.test.ts": {
     warmed: true,
     why: "every ocx subcommand here loads the same src/cli/index.ts static graph",
+  },
+  "tests/cli/cli-update-badge.test.ts": {
+    warmed: true,
+    why: "the badge child loads the same src/cli/index.ts static graph as the other ocx commands",
   },
   "tests/clients/client-connect.test.ts": {
     warmed: true,
@@ -78,14 +100,13 @@ const DISPOSITIONS: Readonly<Record<string, Disposition>> = {
     warmed: true,
     why: "the first resetAt iteration loads src/codex/quota.ts and src/codex/main-account-cache.ts",
   },
-  "tests/codex-integration/codex-shim.test.ts": {
+  "tests/codex-integration/codex-shim-ensure-failure.test.ts": {
     warmed: false,
     why:
-      "Its Windows children are a cmd.exe or PowerShell driver tree, so the cold cost is shell and "
-      + "process startup rather than a repository module graph, and an import scan has nothing to warm. "
-      + "The file also sits exactly on its file-size ratchet cap of 2388 lines in "
-      + "tests/fixtures/file-size-baseline.json, and that cap only moves downward, so a warm-up cannot "
-      + "be added here without unrelated deletions. Left for a separate change.",
+      "Its children are two throwaway /bin/sh scripts standing in for ensure and for the real Codex "
+      + "launcher, so the cold cost is shell and process startup rather than a repository module "
+      + "graph, and an import scan has nothing to warm. The generated shim never loads a repository "
+      + "module in the child: the point of the file is what the shell does with an exit status.",
   },
 };
 
@@ -255,6 +276,44 @@ describe("warm-up failure policy", () => {
     await expect(warmModuleGraph({ graph: "cold-spawn-warmup-test/unresolvable" }))
       .rejects.toThrow("needs either an entry or a source");
   });
+
+  test("a warm-up child that never exits is killed at the deadline, not awaited forever", async () => {
+    resetColdSpawnWarmupForTests();
+    // Run 35511743422's macos 2/2 leg held this shape for eighteen silent minutes: a child
+    // that could not be observed to exit, waited on through a synchronous spawn whose own
+    // timeout rode the dead event loop. The bound has to live on the parent's live loop —
+    // SIGKILL at the deadline, then settle.
+    const startedAt = performance.now();
+    const result = await spawnModuleGraphWarmupChild(
+      "setInterval(() => undefined, 60_000)",
+      repoRoot(),
+      undefined,
+      1_000,
+    );
+    expect(performance.now() - startedAt).toBeLessThan(INTERNAL_DEADLINE_MS);
+    expect(result.timedOut).toBe(true);
+    expect(result.exitCode).not.toBe(0);
+  });
+
+  test("a descendant holding the child's pipes does not turn exit into a wait for EOF", async () => {
+    resetColdSpawnWarmupForTests();
+    // `close` is what a clean exit earns. A grandchild that keeps the write end open must not
+    // convert it into an unbounded wait, so exit starts a reap grace instead.
+    const script = [
+      'const { spawn } = require("node:child_process");',
+      'spawn(process.execPath, ["--eval", "setTimeout(() => process.exit(0), 8_000)"], { detached: true, stdio: "inherit" }).unref();',
+      'process.stdout.write("ok\\n");',
+      "process.exit(0);",
+    ].join("\n");
+    const startedAt = performance.now();
+    // The parent exits before its short deadline; the descendant keeps the pipe open
+    // past that deadline, so only reap grace should settle the completed child.
+    const result = await spawnModuleGraphWarmupChild(script, repoRoot(), undefined, 1_000);
+    expect(performance.now() - startedAt).toBeLessThan(INTERNAL_DEADLINE_MS);
+    expect(result.exitCode).toBe(0);
+    expect(result.timedOut).toBe(false);
+    expect(result.stdout).toContain("ok");
+  }, INTERNAL_DEADLINE_MS);
 
   test("a real module graph loads, and reports what it loaded", async () => {
     resetColdSpawnWarmupForTests();

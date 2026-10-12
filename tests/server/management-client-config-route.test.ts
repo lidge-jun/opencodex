@@ -8,7 +8,7 @@ import {
   seedCodexModelEntitlementsForTests,
 } from "../../src/codex/model-entitlements";
 import { handleManagementAPI } from "../../src/server/management-api";
-import { listManagementModelRows, loadExportModels } from "../../src/server/management/model-rows";
+import { listManagementModelRows, loadExportModels, toExportModel, type ManagementModelRow } from "../../src/server/management/model-rows";
 import {
   OPENCODE_API_KEY_ENV,
   OPENCODE_CONFIG_SCHEMA,
@@ -78,20 +78,7 @@ interface ClientConfigEnvelope {
   config: unknown;
 }
 
-interface ModelRow {
-  provider: string;
-  id: string;
-  namespaced: string;
-  disabled: boolean;
-  native?: boolean;
-  fastRowAvailable?: boolean;
-  displayName?: string;
-  displayNameSource?: "operator" | "provider" | "fallback";
-  contextWindow?: number;
-  inputModalities?: string[];
-  reasoningEfforts?: string[];
-  defaultReasoningEffort?: string;
-}
+type ModelRow = ManagementModelRow;
 
 /**
  * Static provider catalogs (`liveModels: false`) so the model list is deterministic and no
@@ -127,8 +114,8 @@ function baseConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
   } as OcxConfig;
 }
 
-async function clientConfigApi(config: OcxConfig, query: string): Promise<Response> {
-  const url = new URL(`http://127.0.0.1:10100/api/client-config${query}`);
+async function clientConfigApi(config: OcxConfig, query: string, port = 10100): Promise<Response> {
+  const url = new URL(`http://127.0.0.1:${port}/api/client-config${query}`);
   const response = await handleManagementAPI(
     new Request(url, { headers: { Host: url.host } }),
     url,
@@ -150,21 +137,19 @@ async function modelRows(config: OcxConfig): Promise<ModelRow[]> {
   return await response!.json() as ModelRow[];
 }
 
-function toExportModel(row: ModelRow): ExportModel {
-  return {
-    namespaced: row.namespaced,
-    provider: row.provider,
-    id: row.id,
-    fastRowAvailable: row.fastRowAvailable === true,
-    ...(row.native ? { native: true } : {}),
-    ...(row.displayName && row.displayNameSource !== "fallback" ? { displayName: row.displayName } : {}),
-    ...(row.contextWindow !== undefined ? { contextWindow: row.contextWindow } : {}),
-    ...(row.inputModalities ? { inputModalities: row.inputModalities } : {}),
-    ...(row.reasoningEfforts ? { reasoningEfforts: row.reasoningEfforts } : {}),
-    ...(row.defaultReasoningEffort ? { defaultReasoningEffort: row.defaultReasoningEffort } : {}),
-  };
-}
-
+test.each(["opencode", "pi"])("management ingress must not become %s inference destination (#6598)", async client => {
+  const config = baseConfig({
+    runtimeRole: "hub",
+    hostname: "100.64.0.2",
+    unauthenticatedLoopbackListener: { enabled: true },
+    hub: { managementIngress: { enabled: true, port: 10101 } },
+  } as Partial<OcxConfig>);
+  const response = await clientConfigApi(config, `?client=${client}`, 10101);
+  expect(response.status).toBe(200);
+  const body = await response.json() as ClientConfigEnvelope;
+  expect(body.text).toContain("http://127.0.0.1:10100/v1");
+  expect(body.text).not.toContain("http://127.0.0.1:10101/v1");
+});
 
 describe("native Anthropic image input reaches client documents", () => {
   test.each(["anthropic", "anthropic-apikey"])("all capability-aware exports advertise image input for %s", async (provider) => {
@@ -178,6 +163,8 @@ describe("native Anthropic image input reaches client documents", () => {
           baseUrl: "https://api.anthropic.com",
           authMode: provider === "anthropic" ? "oauth" : "key",
           liveModels: false,
+          // Anthropic Fast is opt-in; enable it so the export roster includes the --fast selectors.
+          fastEnabled: true,
         },
       },
     } as unknown as OcxConfig;
@@ -186,21 +173,31 @@ describe("native Anthropic image input reaches client documents", () => {
       .filter(model => model.provider === provider);
     expect(models.length).toBeGreaterThan(0);
     const context = { baseUrl: "http://127.0.0.1:10100/v1", config, models };
-    const expectedInputs = models.map(model => ({ id: model.namespaced, input: ["text", "image"] }));
+    // Client exports must include exactly the documented Anthropic Fast selectors. Keep this
+    // roster explicit so new base catalog models cannot silently change the assertion.
+    const expectedInputs = models
+      .map(model => ({ id: model.namespaced, input: ["text", "image"] }))
+      .sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+    const expectedFastInputs = ["claude-opus-4-8", "claude-opus-5", "claude-opus-5-5"]
+      .map(model => ({ id: `${provider}/${model}--fast`, input: ["text", "image"] }))
+      .sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+    const expectImageInputs = (rows: Array<{ id: string; input: string[] }>) => {
+      const baseRows = rows.filter(row => !row.id.endsWith("--fast"));
+      const fastRows = rows.filter(row => row.id.endsWith("--fast"));
+      expect(baseRows).toEqual(expectedInputs);
+      expect(fastRows).toEqual(expectedFastInputs);
+    };
 
     for (const client of ["aside", "pi", "gajae", "prime", "omo", "omp"] as const) {
       const document = buildClientConfig(client, context) as PiGeneratedConfig;
       const rows = document.providers[OPENCODE_PROVIDER_ID]!.models;
-      expect({ client, inputs: rows.map(({ id, input }) => ({ id, input })) })
-        .toEqual({ client, inputs: expectedInputs });
+      expectImageInputs(rows.map(({ id, input }) => ({ id, input })));
     }
     const dsh = buildClientConfig("dsh", context) as DshGeneratedConfig;
-    expect(dsh["llm-pi-ai"].providers[OPENCODE_PROVIDER_ID]!.models.map(({ id, input }) => ({ id, input })))
-      .toEqual(expectedInputs);
+    expectImageInputs(dsh["llm-pi-ai"].providers[OPENCODE_PROVIDER_ID]!.models.map(({ id, input }) => ({ id, input })));
 
     const openclaw = buildClientConfig("openclaw", context) as OpenclawGeneratedConfig;
-    expect(openclaw.models.providers[OPENCODE_PROVIDER_ID]!.models.map(({ id, input }) => ({ id, input })))
-      .toEqual(expectedInputs);
+    expectImageInputs(openclaw.models.providers[OPENCODE_PROVIDER_ID]!.models.map(({ id, input }) => ({ id, input })));
     const kimi = buildClientConfig("kimi", context) as KimiGeneratedConfig;
     const opencode = buildClientConfig("opencode", context) as OpencodeGeneratedConfig;
     const zcode = buildClientConfig("zcode", context) as ZcodeGeneratedConfig;
@@ -209,9 +206,15 @@ describe("native Anthropic image input reaches client documents", () => {
     const raycast = buildClientConfig("raycast", context) as RaycastGeneratedConfig;
     for (const model of models) {
       expect(kimi.models[`${OPENCODE_PROVIDER_ID}/${model.namespaced}`]?.capabilities).toEqual(["image_in"]);
-      for (const block of [opencode.provider, opencode.providers]) {
-        expect(block[OPENCODE_PROVIDER_ID]!.models[model.namespaced]?.modalities?.input).toEqual(["text", "image"]);
-        expect(block[OPENCODE_PROVIDER_ID]!.models[model.namespaced]?.attachment).toBe(true);
+      expect(opencode.provider[OPENCODE_PROVIDER_ID]!.models[model.namespaced]?.modalities?.input).toEqual(["text", "image"]);
+      expect(opencode.provider[OPENCODE_PROVIDER_ID]!.models[model.namespaced]?.attachment).toBe(true);
+      const nativeCapabilities = opencode.providers[OPENCODE_PROVIDER_ID]!.models[model.namespaced]?.capabilities;
+      if (typeof model.supportsTools === "boolean") {
+        expect(nativeCapabilities?.input).toEqual(["text", "image"]);
+      } else {
+        // V2 requires tools in this object. Legacy modality migration preserves attachments
+        // without inventing tool support or discarding the native variants block.
+        expect(nativeCapabilities).toBeUndefined();
       }
       expect(zcode.provider[OPENCODE_PROVIDER_ID]!.models[model.namespaced]?.modalities.input).toEqual(["text", "image"]);
       const clineModel = cline.catalog.providers[OPENCODE_PROVIDER_ID]!.models[model.namespaced];
@@ -277,9 +280,9 @@ describe("native Anthropic effort ladder reaches the Aside document", () => {
   });
 });
 describe("GET /api/client-config", () => {
-  for (const hostname of ["0.0.0.0", "::", "192.0.2.40"]) {
-    test(`Raycast export refuses authenticated bind ${hostname} before generating a document`, async () => {
-      const response = await clientConfigApi(baseConfig({ hostname }), "?client=raycast");
+  for (const client of ["raycast", "droid"]) for (const hostname of ["0.0.0.0", "::", "192.0.2.40"]) {
+    test(`${client} export refuses authenticated bind ${hostname} before generating a document`, async () => {
+      const response = await clientConfigApi(baseConfig({ hostname }), `?client=${client}`);
       expect(response.status).toBe(400);
       const body = await response.json() as Record<string, unknown>;
       expect(body.reason).toBe("non_loopback");
@@ -287,6 +290,18 @@ describe("GET /api/client-config", () => {
       expect(body.text).toBeUndefined();
     });
   }
+
+  test("Droid export uses the declared unauthenticated listener", async () => {
+    const response = await clientConfigApi(baseConfig({
+      hostname: "0.0.0.0", unauthenticatedLoopbackListener: { enabled: true, port: 10237 },
+    }), "?client=droid");
+    expect(response.status).toBe(200);
+    const body = await response.json() as ClientConfigEnvelope;
+    const rows = (body.config as { customModels: Array<{ baseUrl: string }> }).customModels;
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every(row => row.baseUrl === "http://127.0.0.1:10237/v1")).toBe(true);
+    expect(body.text).not.toContain(REAL_LOOKING_KEY);
+  });
 
   test("Raycast export uses the declared unauthenticated listener instead of the management port", async () => {
     const response = await clientConfigApi(baseConfig({
@@ -349,14 +364,17 @@ describe("GET /api/client-config", () => {
     const models = document.provider[OPENCODE_PROVIDER_ID].models;
     // The row's declared modalities now reach opencode's own capability fields; without them
     // opencode gates attachments client-side and the image never leaves the TUI (#4286).
-    expect(models["a/m1"]).toEqual({
+    expect(models["a/m1"]).toMatchObject({
       name: "m1 (a)", limit: { context: 128_000, output: 32_000 },
       attachment: true, modalities: { input: ["text", "image"], output: ["text"] },
+      reasoning: true, tool_call: true, interleaved: { field: "reasoning_content" },
+      variants: { none: { reasoningEffort: "none" }, minimal: { reasoningEffort: "minimal" },
+        low: { reasoningEffort: "low" }, high: { reasoningEffort: "high" } },
     });
     // m2 declares text-only in `modelInputModalities`, which is exactly what routes it through
     // the vision sidecar: the catalog advertises image so the attachment can reach the proxy.
     expect(models["a/m2"]!.modalities).toEqual({ input: ["text", "image"], output: ["text"] });
-    expect(models["b/no-context"]).toEqual({ name: "no-context (b)" });
+    expect(models["b/no-context"]).toEqual({ name: "no-context (b)", tool_call: true });
   }, 15_000);
 
   test("pi returns a models ARRAY under the same provider id", async () => {

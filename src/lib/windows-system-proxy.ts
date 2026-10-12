@@ -10,13 +10,14 @@ import { decodeWindowsTextBytes } from "./windows-text";
  * normalized `http://host:port` URL when a static proxy is enabled. PAC/WPAD, per-request
  * resolution, ProxyOverride, live refresh, and direct fallback are deliberately out of scope:
  * this is the piece an operator can audit from one log line, and everything else needs the
- * transport boundary the reviewer asked for first.
+ * transport boundary the reviewer asked for first. The bypass readers further down serve
+ * `ocx doctor` only; egress discovery does not consult them.
  */
 
 const INTERNET_SETTINGS_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
 
 export type WindowsSystemProxyResult =
-  | { kind: "proxy"; url: string }
+  | { kind: "proxy"; httpUrl?: string; httpsUrl?: string }
   | { kind: "disabled" }
   | { kind: "socks-only" }
   | { kind: "unsupported" }
@@ -63,35 +64,40 @@ export function readWindowsProxyRegistry(): WindowsProxyRegistryValues | null {
 
 /**
  * `ProxyServer` is either a bare `host:port` (applies to every scheme) or a semicolon list of
- * `scheme=host:port` entries. Prefer the https entry, then http; a SOCKS-only value cannot be
- * mirrored into HTTP_PROXY/HTTPS_PROXY.
+ * `scheme=host:port` entries. Bare values apply to both HTTP and HTTPS destinations; per-scheme
+ * values retain their WinINET scope. A SOCKS-only value cannot be mirrored into HTTP(S)_PROXY.
  */
-export function parseWindowsProxyServer(value: string): { kind: "proxy"; url: string } | { kind: "socks-only" } | { kind: "disabled" } {
+export function parseWindowsProxyServer(value: string): Extract<WindowsSystemProxyResult, { kind: "proxy" | "socks-only" | "disabled" }> {
   const trimmed = value.trim();
   if (!trimmed) return { kind: "disabled" };
-  if (!trimmed.includes("=")) return normalize(trimmed);
+  if (!trimmed.includes("=")) {
+    const url = normalize(trimmed);
+    return url ? { kind: "proxy", httpUrl: url, httpsUrl: url } : { kind: "disabled" };
+  }
   const entries = new Map<string, string>();
   for (const part of trimmed.split(";")) {
     const eq = part.indexOf("=");
     if (eq <= 0) continue;
     entries.set(part.slice(0, eq).trim().toLowerCase(), part.slice(eq + 1).trim());
   }
-  const candidate = entries.get("https") || entries.get("http");
-  if (candidate) return normalize(candidate);
+  const httpUrl = normalize(entries.get("http") ?? "");
+  const httpsUrl = normalize(entries.get("https") ?? "");
+  if (httpUrl || httpsUrl) return { kind: "proxy", ...(httpUrl && { httpUrl }), ...(httpsUrl && { httpsUrl }) };
   if (entries.has("socks")) return { kind: "socks-only" };
   return { kind: "disabled" };
 }
 
-function normalize(hostPort: string): { kind: "proxy"; url: string } | { kind: "disabled" } {
+function normalize(hostPort: string): string | undefined {
+  if (!hostPort) return undefined;
   const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(hostPort) ? hostPort : `http://${hostPort}`;
   try {
     const url = new URL(withScheme);
-    if (!url.hostname || (url.protocol !== "http:" && url.protocol !== "https:")) return { kind: "disabled" };
+    if (!url.hostname || (url.protocol !== "http:" && url.protocol !== "https:")) return undefined;
     // Keep userinfo: a credentialed proxy is valid in HTTP_PROXY. Only the log strips it.
     const auth = url.username ? `${url.username}${url.password ? `:${url.password}` : ""}@` : "";
-    return { kind: "proxy", url: `${url.protocol}//${auth}${url.host}` };
+    return `${url.protocol}//${auth}${url.host}`;
   } catch {
-    return { kind: "disabled" };
+    return undefined;
   }
 }
 
@@ -107,6 +113,105 @@ export function readWindowsSystemProxy(
   if (!enabled) return { kind: "disabled" };
   if (!values.proxyServer) return { kind: "disabled" };
   return parseWindowsProxyServer(values.proxyServer);
+}
+
+/**
+ * The two values that decide whether a host skips the static proxy: `ProxyOverride` (the bypass
+ * list) and `AutoConfigURL` (a PAC script, which takes over the decision entirely), plus the
+ * "Automatically detect settings" (WPAD) flag, which can also pick a proxy per request. Read on
+ * demand by diagnostics only; startup discovery above still ignores all three.
+ */
+export interface WindowsProxyBypassValues {
+  proxyOverride: string | null;
+  autoConfigUrl: string | null;
+  /** `null` when the connection-settings blob could not be read: detection may be on. */
+  autoDetect: boolean | null;
+}
+
+/** Output lines of `reg query <key>`, or `null` when the key could not be read at all. */
+export type WindowsRegistryKeyLister = (key: string) => string | null;
+
+function listRegistryKey(key: string): string | null {
+  try {
+    const stdout = execFileSync(registryExe(), ["query", key], {
+      encoding: "buffer",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 2000,
+      maxBuffer: 256 * 1024,
+      windowsHide: true,
+    });
+    return decodeWindowsTextBytes(stdout);
+  } catch {
+    return null;
+  }
+}
+
+function registryValue(listing: string, name: string): string | null {
+  for (const row of listing.split(/\r?\n/)) {
+    // "    Name    REG_TYPE    data" (data is absent for an empty string)
+    const match = row.match(/^ {4}(\S.*?) {4}(REG_[A-Z_]+)(?: {4}(.*))?$/);
+    if (match && match[1]!.toLowerCase() === name.toLowerCase()) return (match[3] ?? "").trim();
+  }
+  return null;
+}
+
+/**
+ * WinINET `DefaultConnectionSettings` stores its flags in the ninth byte; 0x08 is
+ * "Automatically detect settings". Anything unparseable returns `null` (unknown), never `false`.
+ */
+export function parseWindowsAutoDetect(hex: string | null): boolean | null {
+  if (!hex || !/^[0-9a-f]{18,}$/i.test(hex)) return null;
+  return (Number.parseInt(hex.slice(16, 18), 16) & 0x08) !== 0;
+}
+
+/**
+ * Reads the bypass values from one listing of the Internet Settings key, so an absent value
+ * (`null`) is distinguishable from a failed read (the whole result is `null`).
+ */
+export function readWindowsProxyBypassRegistry(
+  list: WindowsRegistryKeyLister = listRegistryKey,
+): WindowsProxyBypassValues | null {
+  const settings = list(INTERNET_SETTINGS_KEY);
+  if (settings === null) return null;
+  const connections = list(`${INTERNET_SETTINGS_KEY}\\Connections`);
+  return {
+    proxyOverride: registryValue(settings, "ProxyOverride"),
+    autoConfigUrl: registryValue(settings, "AutoConfigURL") || null,
+    autoDetect: connections === null ? null : parseWindowsAutoDetect(registryValue(connections, "DefaultConnectionSettings")),
+  };
+}
+
+/**
+ * Whether a WinINET `ProxyOverride` list exempts an HTTPS `host` (port 443). Entries are
+ * semicolon separated, case-insensitive, and may use `*` wildcards, a leading `.` for
+ * subdomains, an optional `scheme://` prefix and an optional `:port`. `<local>` matches only
+ * dotless names, so it never exempts a public API host.
+ */
+export function windowsProxyOverrideBypasses(proxyOverride: string | null, host: string): boolean {
+  if (!proxyOverride) return false;
+  const target = host.toLowerCase();
+  for (const raw of proxyOverride.split(";")) {
+    let entry = raw.trim().toLowerCase();
+    if (!entry) continue;
+    if (entry === "<local>") {
+      if (!target.includes(".")) return true;
+      continue;
+    }
+    const scheme = entry.match(/^([a-z][a-z0-9+.-]*):\/\//);
+    if (scheme) {
+      if (scheme[1] !== "https") continue;
+      entry = entry.slice(scheme[0].length);
+    }
+    const port = entry.match(/:(\d+)$/);
+    if (port) {
+      if (port[1] !== "443") continue;
+      entry = entry.slice(0, -port[0].length);
+    }
+    if (entry.startsWith(".")) entry = `*${entry}`;
+    const pattern = new RegExp(`^${entry.split("*").map(part => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`);
+    if (pattern.test(target)) return true;
+  }
+  return false;
 }
 
 /** Log-safe form: origin only, so a credentialed value can never reach the console. */

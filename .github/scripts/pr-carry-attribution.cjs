@@ -54,8 +54,131 @@ function carryWindow(text, from) {
 
 const TRAILER_RE = /^[ \t]*co-authored-by:[ \t]*(.+)$/gim;
 
-const FENCED_CODE_RE = /^[ \t]*(\u0060{3,}|~{3,})[\s\S]*?^[ \t]*\1[ \t]*$/gm;
 const INLINE_CODE_RE = /\u0060[^\u0060\n]*\u0060/g;
+
+/**
+ * Remove fenced blocks in linear time.
+ *
+ * A regex that searches lazily for a closing fence has to retry from every
+ * opening-looking line when no close exists. Pull request and commit text is
+ * untrusted workflow input, so that quadratic failure mode is significant
+ * here. Index the pure fence lines -- the only lines that can close a block --
+ * then walk the lines once: an opener pairs with the longest closing run no
+ * longer than its own, and an opener with no such line remains ordinary text,
+ * so a later opener can still pair with its own close.
+ *
+ * Line boundaries follow the same rule the regex's ^ and $ did: CR, LF, and
+ * the Unicode separators all end a line, with CRLF as one terminator. The
+ * closing-length rule is what the backreference produced by backtracking: it
+ * captured the full greedy run first and shortened it one delimiter at a
+ * time, so the longest close length still ahead wins and the earliest line
+ * carrying it ends the block.
+ *
+ * That closing-length rule is a deliberate parity choice, not GitHub's
+ * display rule. GitHub closes a block only on a fence at least as long as
+ * the opener; this keeps the old regex's shorter-close matching so the
+ * gate reads exactly the text the previous check read. The HTML-comment
+ * rule below does follow the renderer.
+ */
+function stripFencedCode(text) {
+  const lineStarts = [0];
+  const lineEnds = [text.length];
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === "\n" || c === "\r" || c === "\u2028" || c === "\u2029") {
+      lineEnds[lineStarts.length - 1] = i;
+      if (c === "\r" && text[i + 1] === "\n") i++;
+      lineStarts.push(i + 1);
+      lineEnds.push(text.length);
+    }
+  }
+
+  const openRun = new Array(lineStarts.length).fill(null);
+  const closeLists = { "`": new Map(), "~": new Map() };
+  for (let i = 0; i < lineStarts.length; i++) {
+    const line = text.slice(lineStarts[i], lineEnds[i]);
+    const opening = /^[ \t]*(\u0060{3,}|~{3,})/.exec(line);
+    if (opening) openRun[i] = { fence: opening[1][0], len: opening[1].length };
+    const closing = /^[ \t]*(\u0060{3,}|~{3,})[ \t]*$/.exec(line);
+    if (closing) {
+      const lists = closeLists[closing[1][0]];
+      const len = closing[1].length;
+      const list = lists.get(len);
+      if (list) list.push(i);
+      else lists.set(len, [i]);
+    }
+  }
+
+  // For each delimiter, the distinct close lengths and a disjoint set that
+  // permanently skips a length once every line carrying it is behind the
+  // scan. Scanning only moves forward, so each removal is final and total
+  // work stays near-linear.
+  const fenceIndex = {};
+  for (const fence of ["\u0060", "~"]) {
+    const lengths = [...closeLists[fence].keys()].sort((a, b) => a - b);
+    fenceIndex[fence] = {
+      lengths,
+      lists: lengths.map((len) => closeLists[fence].get(len)),
+      cursors: new Array(lengths.length).fill(0),
+      parent: lengths.map((_, index) => index),
+    };
+  }
+
+  // Largest member of index's set still reachable -- the disjoint-set
+  // "previous element" trick; a linked root below index is the answer.
+  function aliveAt(scan, index) {
+    let root = index;
+    while (root >= 0 && scan.parent[root] !== root) root = scan.parent[root];
+    while (index >= 0 && scan.parent[index] !== index) {
+      const next = scan.parent[index];
+      scan.parent[index] = root;
+      index = next;
+    }
+    return root;
+  }
+
+  // First pure-fence line after `after` carrying the longest close length
+  // that is at most openerLen; -1 when no close length qualifies.
+  // `pos` itself never changes: when a length's lines are exhausted,
+  // `parent` links that length to the next-lower length still alive, so
+  // each pass through the loop advances to a strictly shorter length (or
+  // -1) and the walk cannot stall on one position.
+  function closeFor(fence, openerLen, after) {
+    const scan = fenceIndex[fence];
+    let lo = 0;
+    let hi = scan.lengths.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (scan.lengths[mid] <= openerLen) lo = mid + 1;
+      else hi = mid;
+    }
+    const pos = lo - 1;
+    while (pos >= 0) {
+      const index = aliveAt(scan, pos);
+      if (index < 0) return -1;
+      const list = scan.lists[index];
+      let cursor = scan.cursors[index];
+      while (cursor < list.length && list[cursor] <= after) cursor++;
+      scan.cursors[index] = cursor;
+      if (cursor < list.length) return list[cursor];
+      scan.parent[index] = aliveAt(scan, index - 1);
+    }
+    return -1;
+  }
+
+  let output = "";
+  let copiedThrough = 0;
+  for (let i = 0; i < lineStarts.length; i++) {
+    const run = openRun[i];
+    if (run === null) continue;
+    const close = closeFor(run.fence, run.len, i);
+    if (close === -1) continue;
+    output += text.slice(copiedThrough, lineStarts[i]);
+    copiedThrough = lineEnds[close];
+    i = close;
+  }
+  return output + text.slice(copiedThrough);
+}
 /**
  * HTML comments, which GitHub never renders.
  *
@@ -81,8 +204,7 @@ const HTML_COMMENT_RE = /<!--[\s\S]*?(?:-->|$)/g;
  */
 function strippedText(text) {
   if (typeof text !== "string") return "";
-  return text
-    .replace(FENCED_CODE_RE, "")
+  return stripFencedCode(text)
     .replace(HTML_COMMENT_RE, "")
     .replace(INLINE_CODE_RE, "");
 }

@@ -25,7 +25,14 @@ import {
   recoverySse,
   routedConfig,
 } from "../helpers/agent-task-recovery";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+
+// Direct handler dispatch never takes the writer lease that startServer would take, so it is
+// refused. Taken inside the block below rather than here, because that block installs its own
+// OPENCODEX_HOME after this hook would have run, and a lease binds the directory in effect when
+// it was taken.
+let releaseSpendHome: (() => void) | undefined;
 
 function providerCompletion(): Response {
   return Response.json({
@@ -58,6 +65,7 @@ describe("combo path encrypted agent task recovery", () => {
   beforeEach(() => {
     home = mkdtempSync(join(tmpdir(), "ocx-agent-task-combo-"));
     process.env["OPENCODEX_HOME"] = home;
+    releaseSpendHome = acquireOwnedSpendHome();
     clearResponseStateMemoryForTests();
     resetAgentTaskRecoveryState();
     clearCachedProviderQuotas();
@@ -70,6 +78,9 @@ describe("combo path encrypted agent task recovery", () => {
     clearCachedProviderQuotas();
     clearComboTargetCooldowns();
     clearResponseStateForTests();
+    // Released after the state flush and before the directory holding it is removed.
+    releaseSpendHome?.();
+    releaseSpendHome = undefined;
     removeTreeWithRetry(home);
     if (priorHome === undefined) delete process.env["OPENCODEX_HOME"];
     else process.env["OPENCODEX_HOME"] = priorHome;

@@ -39,6 +39,28 @@ yalnızca bellekte tutar ve `localStorage` veya `sessionStorage`'a yazmaz;
 kaydedilip kaydedilmeyeceği tamamen tarayıcının veya şifre yöneticisinin
 kararıdır.
 
+## Kota özeti çubuğu
+
+Başlangıç güvenliği sayfası dışındaki her sayfanın üst kısmındaki tek satırlık özet, her
+sağlayıcının geçerli kota kullanımını gösterir; örneğin
+`OpenAI 31% | Claude 54% | xAI 12% | Google 8%`. Sağlayıcı çalışma alanıyla aynı kota
+raporlarını okur (`GET /api/provider-quotas`, sekme görünürken 60 saniyede bir) ve hiçbir
+zaman yukarı akışta yenilemeye zorlamaz.
+
+- Her etiket, bildirilen pencereler arasında tercih edileni gösterir: önce haftalık, sonra
+  aylık, sonra 5 saatlik, sonra sağlayıcı adlı bir pencere veya ön ödemeli krediler.
+- Etiket %70 kullanımda amber rengine, %90 kullanımda kırmızıya döner.
+- Bildirilen tüm pencereleri sıfırlama saati ve okuma zamanıyla görmek için etiketin
+  üzerine gelin veya klavyeyle odaklayın. Dokunmatik ekranda ilk dokunuş bu ayrıntıları gösterir.
+- Etikete tıklamak (dokunmatik ekranda ikinci dokunuş) Sağlayıcılar'da o sağlayıcının Hesaplar
+  sekmesini açar; hesaplar veya API anahtarları orada yönetilir.
+- Çubuk her zaman tek satırdır. Etiketler sığmadığında yatay kaydırın veya iki uçtaki « ve »
+  düğmelerini kullanın.
+- Kota penceresi bildirmeyen sağlayıcılar gösterilmez. Hiçbir sağlayıcı bildirmiyorsa
+  çubuk gizlenir.
+- Sağ kenar, kontrol panelinin raporları en son ne zaman okuduğunu gösterir. Son okuma
+  başarısız olduğunda ve önceki değer hâlâ gösterildiğinde amber renge döner.
+
 ## Neler yapabilirsiniz
 
 | Alan | Ne yapar |
@@ -46,7 +68,7 @@ kararıdır.
 | **Kontrol paneli özeti** | Çoklu ajan modu, çevrimiçi durum, sürüm, çalışma süresi, sağlayıcı sayısı, 30 günlük token toplamı, aktif sağlayıcılar ve kullanılabilir yerel/yönlendirilen modeller. |
 | **Alt ajan yetkilendirmesi** | OpenCodex yetkilendirme rehberliği ve ayrı yerel varsayılan katılımı tarafından paylaşılan yerel veya yönlendirilen bir model ve isteğe bağlı akıl yürütme çabası seçin. Bu, proxy tarafında spawn başına bir yönlendirici değildir; aşağıya bakın. |
 | **Sidecar'lar** | Web arama modelini ve çabasını artı vizyon açıklama modelini seçin. Değişiklikler bir sonraki istekte geçerli olur. |
-| **Bakım** | Codex model kataloğunu yeniden senkronize edin, projeye özel yapılandırma atlama uyarılarını inceleyin, en son veya önizleme sürümünü kontrol edin ve isteğe bağlı proxy yeniden başlatmasıyla bir güncelleme çalıştırın. |
+| **Bakım** | Codex model kataloğunu yeniden senkronize edin, projeye özel yapılandırma atlama uyarılarını inceleyin, en son veya önizleme sürümünü kontrol edin ve isteğe bağlı proxy yeniden başlatmasıyla bir güncelleme çalıştırın. Masaüstü kabuğunda güncelleme öğesi, paket güncelleyicisini çalıştırmak yerine yerel uygulama güncelleme sayfasını açar. |
 | **Başlangıç güvenliği** | Ayrı servis ve başlatıcı dolgu sağlığı artı tam onarım komutlarıyla enjekte edilen Codex yönlendirmesinin yeniden başlatmada hayatta kalıp kalmadığını gösterin. |
 | **Windows sistem tepsisi** | Tek tıklamayla proxy başlatma, durdurma, yeniden başlatma, kontrol paneli erişimi ve durum için kullanıcı başına bir oturum açma tepsisi yükleyin. Tepsi bir kontrolördür, bir proxy yeniden başlatma servisi değildir. |
 | **Codex otomatik başlatma** | Zaten kurulu bir Codex başlatıcı dolgusunun `ocx ensure` çalıştırmasına izin verin. Bu anahtar bir dolgu veya arka plan servisi kurmaz. |
@@ -140,7 +162,27 @@ için [Alt Ajan Arayüzü](/tr/guides/sub-agent-surface/) sayfasına bakın.
 
 ## Remote Hub oturumları, anahtarları ve kullanımı
 
-Pano yönetim düzlemi doğrudan client→hub model trafiğinden ayrıdır. **Integrations → API Keys** bekleyen döndürmeyi gösterir, yeni sırrı bir kez görüntüler ve açık onay veya iptal ister. Tarayıcı logout yalnızca mevcut oturumu geçersiz kılar. Bağlı kullanım hub üzerinde `apiKeyId` ile filtrelenir; bağlantı kesilince yerel kayıt kullanılır ve yansıtma yapılmaz.
+Pano yönetim düzlemi doğrudan client→hub model trafiğinden ayrıdır. **Bağlantı → API Anahtarları** bekleyen döndürmeyi gösterir, yeni sırrı bir kez görüntüler ve açık onay veya iptal ister. Tarayıcı logout yalnızca mevcut oturumu geçersiz kılar. Bağlı kullanım hub üzerinde `apiKeyId` ile filtrelenir; bağlantı kesilince yerel kayıt kullanılır ve yansıtma yapılmaz.
+
+### Kaydedilmiş bir API anahtarını görüntüleme
+
+Kaydedilmiş bir anahtarın tam değerini göstermek için açık eşleştirme veya güvenilir Tailscale
+kimlik doğrulamasıyla oluşturulmuş bir pano oturumu gerekir. Otomatik yerel oturum maskelenmiş
+listeyi okuyabilir, ancak kaydedilmiş değerleri gösteremez. Yönetici belirteci de yalnızca oturumlara
+izin verilen bu işlemi çağıramaz. Mevcut Remote Hub eşleştirme akışını veya varsa güvenilir Tailscale girişini kullanın.
+
+Yerel eşleştirme formu yalnızca HTTP üzerinden doğrudan `127.0.0.1` veya `[::1]` IP adresinde açılmış,
+aynı origin'e sahip bağımsız panoda sunulur. Origin, sunucunun yapılandırılmış geri döngü IP bağlama
+adresine uymalıdır. `localhost` veya bir takma adres kullanıyorsanız sunucunun bağlama adresini kontrol edin:
+`127.0.0.1` için `http://127.0.0.1:<port>`, `::1` için `http://[::1]:<port>` adresinde yeniden açıp
+eşleştirin. hostname değeri `localhost` olan sunucuda uygun bir yerel eşleştirme origin'i yoktur.
+Pano, takma adresli URL'den gerçek bağlama adresini belirleyemediği için başka bir URL önermeden genel ret açıklamasını gösterir.
+
+Eşleştirmeden sonra değeri istemek için anahtara yeniden tıklayın. Eşleştirme tek başına anahtarı göstermez.
+Paylaşılan oturum temizlendiğinde veya değiştirildiğinde, eşleştirme başladığında, panelden ayrıldığınızda,
+tarayıcı sekmesi ya da masaüstü penceresi gizlendiğinde veya sunucu değiştiğinde gösterilen değerler ve
+kopyalama durumu temizlenir. Bir kez gösterilen yeni ve yedek anahtar değerleri de temizlenir.
+Yetkili oturumun süresi dolarsa veya iptal edilirse yeniden eşleştirin.
 
 Spawn geçersiz kılma garantisi **yerleşik** v2 rehberlik metni için geçerlidir.
 Özel bir `injectionPrompt` bu metnin yerini tamamen alır ve `{{model}}` ve
@@ -167,6 +209,10 @@ ve diğer sağlayıcılardan ayrıdır.
   **PINNED** rozeti gösterir ve boşaltılana, başka bir hesap seçene kadar veya
   herhangi bir hesabın seçim sırasını değiştirene kadar daha yüksek bir seçim
   sırası bu hesabı öncelikleyemez.
+  Rozete yeniden tıklamak sabitlemeyi kaldırmak için onay ister. Onay seçim bilgisini temizler;
+  bağlı iş parçacıkları mevcut hesaplarını korur, yeni veya bağlanmamış istekler yeniden seçim
+  sırasını ve eşikleri izler.
+  Onay açıkken sabitlenen hesap değişirse bu onay yeni sabitlemeyi kaldıramaz. İşlem reddedilirse veya sonuç belirsizse hesap görünümü yenilenir; yeniden onaylamadan önce mevcut seçimi kontrol edin.
 - Her hesap kartı bir **Seçim sırası (Selection order)** kontrolü taşır (İlk,
   Daha Önce, Normal, Daha Sonra, Son). Daha yüksek sıra önce kullanılır ve havuz
   ancak üzerindeki her hesap boşaldığında veya kullanılamaz olduğunda daha düşük
@@ -222,7 +268,7 @@ Sağlayıcılar genel bakışı, etkin hesabın ham kotası ve bir sonraki kapas
 kurtarmasının yanı sıra Havuz modu kullanımını salt görüntüleme amaçlı ağırlıklı
 bir kapasite tahmini olarak ayrı ayrı özetler. Görünür alanlar, eksik kapsam
 anlamı ve yönlendirme sınırı için [Sağlayıcılar genel bakış havuz
-kapasitesi](/tr/guides/providers/#saglayicilar-genel-bakis-havuz-kapasitesi)
+kapasitesi](/tr/guides/providers/#sağlayıcılar-genel-bakış-havuz-kapasitesi)
 bölümüne bakın.
 
 ## Yıldız vermek ajanın değil sizin kararınızdır

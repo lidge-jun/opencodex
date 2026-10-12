@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { nativeModelRows } from "../../src/codex/catalog";
 import { loadConfig, saveConfig } from "../../src/config";
@@ -10,6 +10,8 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { ManagementRequest as Request } from "../helpers/management-auth";
 import { listManagementModelRows, type ManagementModelRow } from "../../src/server/management/model-rows";
 import { routedSlug } from "../../src/providers/slug-codec";
+import { clearModelCache } from "../../src/codex/model-cache";
+import { fetchAllModels } from "../../src/server/management/shared";
 
 const TEST_DIR = join(import.meta.dir, `.tmp-model-visibility-management-${process.pid}`);
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
@@ -486,6 +488,55 @@ test("manual models replace management rows with the same provider/id and deleti
   expect(restored.filter(row=>row.provider==="openai" && row.id==="gpt-5.5")).toEqual([
     expect.objectContaining({namespaced:"gpt-5.5",native:true}),
   ]);
+});
+
+test("drifted file-backed model reads project arrival disables without changing live config or disk", async () => {
+  const provider = "fixture-drift";
+  const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () =>
+    Response.json({ data: ["a", "b", "c"].map(id => ({ id })) }),
+  });
+  clearModelCache(provider);
+  try {
+    saveConfig({
+      port: 0, defaultProvider: provider,
+      providers: { [provider]: {
+        adapter: "openai-chat", baseUrl: new URL("/v1", upstream.url).href,
+        apiKey: "fixture-key", allowPrivateNetwork: true, liveModels: true,
+        models: ["a", "b"], newModelPolicy: "off",
+      } },
+      disabledModels: [`${provider}/b`],
+      modelDiscovery: { knownModels: {
+        [provider]: { ids: ["a", "b"], removed: [], updatedAt: "2026-01-01T00:00:00Z" },
+      } },
+    });
+    const config = loadConfig();
+    config.providers[provider]!.models!.push("local-extra");
+    const before = structuredClone(config);
+    const diskBefore = readFileSync(join(TEST_DIR, "config.json"), "utf8");
+    // The same inventory is publishable as a synthetic caller: provenance is the difference.
+    const syntheticRows = await listManagementModelRows(structuredClone(config), { entitlementWaitMs: 0 });
+    expect(syntheticRows.find(row => row.namespaced === `${provider}/c`)?.disabled).toBe(true);
+
+    for (let read = 0; read < 2; read++) {
+      const url = new URL("http://localhost/api/models");
+      const response = await handleManagementAPI(new Request(url), url, config);
+      expect(response?.status).toBe(200);
+      const rows = await response!.json() as ManagementModelRow[];
+      expect(rows.find(row => row.namespaced === `${provider}/a`)?.disabled).toBe(false);
+      expect(rows.find(row => row.namespaced === `${provider}/b`)?.disabled).toBe(true);
+      expect(rows.find(row => row.namespaced === `${provider}/c`)).toMatchObject({ disabled: true, fastRowAvailable: false });
+      expect(config).toEqual(before);
+      expect(readFileSync(join(TEST_DIR, "config.json"), "utf8")).toBe(diskBefore);
+    }
+    // Shared fetch consumers that cannot render the projection must never expose the arrival.
+    const publicRows = await fetchAllModels(config);
+    expect(publicRows.filter(row => row.provider === provider).map(row => row.id)).toEqual(["a"]);
+    expect(config).toEqual(before);
+    expect(readFileSync(join(TEST_DIR, "config.json"), "utf8")).toBe(diskBefore);
+  } finally {
+    clearModelCache(provider);
+    upstream.stop(true);
+  }
 });
 
 test("manual OpenAI visibility preserves the pending-selection error contract", async () => {

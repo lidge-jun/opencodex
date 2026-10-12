@@ -8,7 +8,7 @@
  * the same as no gate at all.
  */
 import type { OcxConfig } from "../../types";
-import { findAnthropicVisionProvider, type AnthropicVisionProvider } from "../../vision";
+import { type AnthropicVisionProvider } from "../../vision";
 import { VISION_BACKENDS } from "../../vision/backends";
 import {
   modelAcceptsImageInput,
@@ -18,7 +18,7 @@ import {
   type VisionSidecarBackend,
 } from "../../vision/eligibility";
 import { pickerVisibleSidecarCandidates } from "../../sidecar/candidates";
-import { resolveSidecarAuth } from "../../sidecar/auth";
+import { sidecarOptionsAuth } from "./web-search-sidecar-options";
 
 /**
  * Backends whose executor could actually run (#2188 roadmap 170): openai
@@ -38,7 +38,7 @@ export function enabledVisionBackends(
   config: OcxConfig,
   anthropicSidecar: AnthropicVisionProvider | undefined,
 ): VisionSidecarBackend[] {
-  const auth = resolveSidecarAuth(config);
+  const auth = sidecarOptionsAuth(config, config.visionSidecar?.anthropicInstance);
   // Preserve the caller's resolution for the anthropic side: the descriptor
   // reads the shared auth module, but a caller that already resolved "no
   // executor" must not see anthropic options it cannot dispatch. The filter
@@ -52,7 +52,7 @@ export function enabledVisionBackends(
   // the UNIVERSAL sides: when neither resolves, both are offered so the picker
   // stays populated (permissive-unknown rule; test 6 pins it).
   if (!active.includes("openai") && !active.includes("anthropic")) {
-    return ["openai", "anthropic", ...active];
+    return ["openai", ...(config.visionSidecar?.anthropicInstance ? [] : ["anthropic" as const]), ...active];
   }
   return active;
 }
@@ -67,7 +67,7 @@ export function enabledVisionBackends(
  * pre-filtering here would deaden the gate (review F1: reject → allow flip).
  */
 export async function visionCandidateRows(config: OcxConfig): Promise<VisionCandidateModel[]> {
-  const auth = resolveSidecarAuth(config);
+  const auth = sidecarOptionsAuth(config, config.visionSidecar?.anthropicInstance);
   const all = await pickerVisibleSidecarCandidates(config, auth);
   return all.map(candidate => ({
     provider: candidate.provider,
@@ -158,10 +158,13 @@ export function visionDescriberRejection(
   config: OcxConfig,
   candidates: readonly VisionCandidateModel[],
 ): { error: string; allowed: string[] } {
+  const auth = sidecarOptionsAuth(config, config.visionSidecar?.anthropicInstance);
+  const anthropic = auth.anthropicProviderName && auth.anthropicProvider
+    ? { providerName: auth.anthropicProviderName, provider: auth.anthropicProvider, config } : undefined;
   return {
     error: `${field} "${requested}" cannot describe images: it has no image input support, or it is a model the vision sidecar describes FOR.`,
     // The rejection path is not hot, so it resolves the executor itself rather than
     // making every 400 caller thread one through.
-    allowed: visionModelOptionsFrom(config, candidates, findAnthropicVisionProvider(config)).map(option => option.value),
+    allowed: visionModelOptionsFrom(config, candidates, anthropic).map(option => option.value),
   };
 }

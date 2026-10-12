@@ -7,7 +7,7 @@
  * AUMID. The shape is DesktopAppAdapter so the ladder, not this file, owns
  * PID-reuse re-verification and the fail-closed sequencing.
  *
- * Measured (devlog/_plan/260913_cross_platform_desktop_app_restart/001_platform_topology.md §3):
+ * Measured (devlog/_fin/260913_cross_platform_desktop_app_restart/001_platform_topology.md §3):
  * OpenAI.Codex MSIX, ChatGPT.exe, InstallLocation under WindowsApps.
  */
 import { execFileSync } from "node:child_process";

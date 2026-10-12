@@ -18,6 +18,27 @@ const reauthAccounts = new Map<string, number | undefined>();
 let lastReconciledGeneration = 0;
 let liveAccountIds = new Set<string>();
 
+// Refusal evidence is independent of the ordinary quarantine flag. Profile switches make a key
+// inapplicable, not forgotten; the oldest of at most 64 records is evicted to bound process state.
+const refusedMainRefreshGrants = new Set<string>();
+const MAX_REFUSED_MAIN_REFRESH_GRANTS = 64;
+
+export function markMainRefreshGrantRejected(key: string): void {
+  refusedMainRefreshGrants.add(key);
+  if (refusedMainRefreshGrants.size > MAX_REFUSED_MAIN_REFRESH_GRANTS) {
+    refusedMainRefreshGrants.delete(refusedMainRefreshGrants.values().next().value!);
+  }
+}
+
+export function isMainRefreshGrantRejected(key: string): boolean {
+  return refusedMainRefreshGrants.has(key);
+}
+
+export function clearMainRefreshGrantRejection(key: string): void {
+  refusedMainRefreshGrants.delete(key);
+}
+
+
 export function markAccountNeedsReauth(
   id: string,
   writerGeneration = captureConfigGeneration(),

@@ -2,7 +2,9 @@ import type { TFn, TKey } from "./i18n/shared";
 
 const PROVIDER_ICON_ALIASES: Record<string, string> = {
   anthropic: "claude-color.svg",
+  anthropic2: "claude-green.svg",
   "anthropic-apikey": "claude-color.svg",
+  "claude-cli": "claude-color.svg",
   "azure-openai": "openai.svg",
   chatgpt: "openai.svg",
  "cloudflare-ai-gateway": "cloudflare-ai-gateway-color.svg",
@@ -34,6 +36,7 @@ const PROVIDER_ICON_ALIASES: Record<string, string> = {
   huggingface: "huggingface-color.svg",
   kimi: "kimi-color.svg",
   "kimi-code": "kimi-color.svg",
+  "kimi-responses": "kimi-color.svg",
   kiro: "kiro-color.svg",
   "lm-studio": "lm-studio-color.svg",
   "meta-model": "meta.svg",
@@ -51,6 +54,7 @@ const PROVIDER_ICON_ALIASES: Record<string, string> = {
   "opencode-go": "opencode.svg",
   "opencode-zen": "opencode.svg",
   openrouter: "openrouter-color.svg",
+  opengateway: "opengateway.svg",
   opper: "opper.svg",
   qianfan: "qianfan-color.svg",
   /*
@@ -81,9 +85,11 @@ const PROVIDER_ICON_ALIASES: Record<string, string> = {
   orcarouter: "orcarouter.svg",
   "orcarouter-oauth": "orcarouter.svg",
   packycode: "packycode.svg",
+  tokenlab: "tokenlab.svg",
   parallel: "parallel.svg",
   sambanova: "sambanova.svg",
   scaleway: "scaleway.svg",
+  stepfun: "stepfun-color.svg",
   siliconflow: "siliconflow.svg",
   synthetic: "synthetic.svg",
   together: "together.svg",
@@ -135,6 +141,7 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   xiaomi: "Xiaomi",
   cursor: "Cursor",
   deepseek: "DeepSeek",
+  zed: "Zed",
   // "Devin", not the registry's "Cognition (Devin/Windsurf)". This label sits in
   // a narrow provider rail beside one-word names like Cursor and Kimi, and the
   // long form is the registry's disambiguation for an add-provider list, not a
@@ -145,6 +152,7 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   "github-copilot": "GitHub Copilot",
   "gitlab-duo": "GitLab Duo",
   openrouter: "OpenRouter",
+  opengateway: "OpenGateway",
   opper: "Opper",
   "opencode-go": "OpenCode Go",
   "opencode-free": "OpenCode Free",
@@ -152,6 +160,7 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   orcarouter: "OrcaRouter - API",
   "orcarouter-oauth": "OrcaRouter - Auth",
   packycode: "PackyCode",
+  tokenlab: "TokenLab",
   mistral: "Mistral",
   groq: "Groq",
   "meta-model": "Meta Model API",
@@ -161,6 +170,7 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   "alibaba-token-plan-intl": "Alibaba Token Plan (Intl)",
   kimi: "Kimi",
   "kimi-code": "Kimi",
+  "kimi-responses": "Kimi",
   moonshot: "Moonshot",
   google: "Google",
   "google-vertex": "Google Vertex",
@@ -168,6 +178,7 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   huggingface: "Hugging Face",
   "qwen-cloud": "Qwen Cloud",
   siliconflow: "SiliconFlow",
+  stepfun: "StepFun",
   "tencent-coding-plan": "Tencent Cloud Coding Plan",
   codebuddy: "CodeBuddy",
   "codebuddy-cn": "CodeBuddy CN",
@@ -179,6 +190,7 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
 };
 
 const PROVIDER_DISPLAY_NAME_KEYS: Record<string, TKey> = {
+  anthropic2: "provider.name.anthropic2",
   "command-code": "provider.name.commandCodeAuth",
   commandcode: "provider.name.commandCodeApi",
   orcarouter: "provider.name.orcaRouterApi",
@@ -201,6 +213,15 @@ type ProviderIconHints = {
 function providerIconAlias(provider: string): string | undefined {
   const key = provider.toLowerCase();
   return Object.hasOwn(PROVIDER_ICON_ALIASES, key) ? PROVIDER_ICON_ALIASES[key] : undefined;
+}
+
+/**
+ * Every provider id that has a mark, with its file. The native menu bar panel embeds the same
+ * table in desktop/src-tauri/src/provider_icons.rs; gui/tests/provider-icons-native.test.ts keeps
+ * the two identical.
+ */
+export function providerIconAliasEntries(): Array<[provider: string, file: string]> {
+  return Object.entries(PROVIDER_ICON_ALIASES);
 }
 
 /** Optional hints kept for call-site compatibility; resolution is name-based for now. */
@@ -233,7 +254,9 @@ const MASKED_PROVIDER_ICONS: ReadonlySet<string> = new Set([
   "nous.svg",
   "novita.svg",
   "packycode.svg",
+  "tokenlab.svg",
   "opper.svg",
+  "opengateway.svg",
   "siliconflow.svg",
   "synthetic.svg",
   "zenmux.svg",

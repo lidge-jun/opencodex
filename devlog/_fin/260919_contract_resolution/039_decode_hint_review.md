@@ -1,0 +1,29 @@
+# Registry decode-hint review
+
+Issue #5115 is owned by the runtime lane following the explicit ownership handoff. Prepared head `b56511bc6d21a20928d8cfe66e97fbbe8a860ba9` is based on `8a030721b3ffc909ca7d8b05ca0b7c873c1493a1`. It adds a registry-owned exhaustive field classification and replaces only the router's manual identity-map list, with existing-file regression additions and structure documentation.
+
+Independent source review passed: direct and nested model-key maps contribute only their intended identity keys; non-model records and virtual wire-target values remain excluded; existing configured, cached and custom identity sources remain; the transport guard precedes registry hints; no catalog availability or entitlement is inferred. Separate test/documentation review and exact-head hosted execution remain required.
+
+The layer can be prepared independently because #5174 leaves the known-model hint function unchanged. Final integration remains after #5171 and #5174, with a current integration base, reviewed union and fresh hosted proof. No local execution and no completed-issue claim.
+
+Test review found missing public-boundary coverage: all maps are enumerated through the helper, but the actual route-decoding table covers only the seven newly omitted direct maps. Owner was asked to extend that same bounded table to all classified direct maps, add the shipped map-only provider decode case and verify the declared frozen-result contract. Existing transport, ambiguity, unknown pass-through and no-availability negatives were accepted. No implementation defect or cap violation was claimed.
+
+Correction `3918a95040` extends public routing coverage to all fifteen direct maps and checks frozen output. A new shipped-entry example used a transport-mismatched custom configuration and slash-free IDs, so its route equality could pass without activating registry hints. Main review requested a canonical configuration and an explicit map-only known-ID assertion, with accurate naming; the synthetic slash-ID matrix remains the proof of decoding. No production source change was requested.
+
+The independent test review passed the overall corrected coverage. It also corrected the preceding transport inference: this provider uses the non-key registry-owned matching path, so the custom fixture does not demonstrate transport exclusion. The actual issue is the slash-free selector assertion not proving decode activation. Existing synthetic public cases and shipped helper provenance are sufficient; the shipped example needs accurate wording, not a new production transport change or expanded acceptance contract.
+
+Final narrow test correction `8502bf99aa` removes only the newly added vacuous slash-free route example and its unused import. All fifteen synthetic public decode cases, the nested case, negatives and frozen-result checks remain; shipped-entry collection parity remains in the separate provider test. Source and test reviews are accepted for publication with exact-head hosted verification; final integration order is unchanged.
+
+Published as [PR #5177](https://github.com/lidge-jun/opencodex/pull/5177), base dev, exact head `8502bf99aaae6785eac4fe86d818fc454f79872d`. Template and reviewed test scope checked; attached to the coordinator task. Exact-head hosted CI and future integration with the earlier policy layers remain required before #5115 closure.
+
+Initial #5177 hosted run35448915385 failed the gates job on TS2352 at model-ids.ts:152 (registry entry cast to an indexed record), and a production-graph type-contract test exited nonzero. Completed job logs were retrieved directly before the overall run finished. Owner received the exact diagnostic and is correcting typed iteration/casting without changing classification semantics or removing the contract test. New-head hosted proof is required.
+
+The prepared type correction iterates keys of the exhaustive classification with the registry key type, reads direct maps through that key and reads the sole nested owner explicitly. Main source review found the current classification semantics preserved without the invalid index-signature cast. A syntax search returning no error-node matches is not a compiler pass; the corrected head still needs hosted type and suite proof.
+
+Type correction published at `a654ee8e4469f2c431b378a4ec42c68765e74a90` on #5177. Main reviewed the one-file typed-iteration delta; an independent narrow check and fresh hosted compiler/suite proof are pending. Existing public decoding and immutable-output regression coverage is unchanged.
+
+Independent one-file review of `a654ee8e4469f2c431b378a4ec42c68765e74a90` passed: role iteration order, selected-field access, sole nested owner, exclusion, deduplication and frozen output remain unchanged. Hosted compiler and suite verification is still pending; no local execution occurred.
+
+At corrected head `a654ee8e4469f2c431b378a4ec42c68765e74a90`, hosted run35449601489 gates and Linux shard4 passed. The shard log explicitly shows the previously failing production-graph translator-budget type contract passing. The original two failures are cleared; remaining applicable jobs and final integration still require completion.
+
+Verified integration: #5177 merged as `838af40f1b2fe32596b207ff85afcda40636f4d9` at 2026-09-19T15:00:41Z. Exact-head run35449601489 passed all applicable checks and aggregate; public decode cases were observed in macOS logs. Independent source/test/type correction and integration review passed, no public threads or maintainer objections remained, and all six files were preserved in the clean union with no overlapping dev changes. The former policy-first order was explicitly revised after both independent source review and the policy owner confirmed no semantic dependency. Later policy integration must preserve the helper/import and obtain fresh union proof. Issue #5115 closed at 2026-09-19T15:01:16Z after actual dev ancestry verification.

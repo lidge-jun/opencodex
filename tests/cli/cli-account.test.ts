@@ -492,8 +492,9 @@ describe("account login --device", () => {
   test("is rejected for providers that have no device flow", async () => {
     const result = await run(["login", "anthropic", "--device", "--no-wait"]);
 
-    expect(result.code).not.toBe(0);
-    expect(result.output).toContain("--device is not supported for provider 'anthropic'");
+    expect(result.code).toBe(2);
+    expect(result.output).toContain("--device is not supported for this provider");
+    expect(requests).toHaveLength(0);
   });
 
   test("is accepted as a no-op for providers that are already device flows", async () => {
@@ -1089,13 +1090,13 @@ describe("ocx account CLI (issue #180 matrix)", () => {
     });
   });
 
-  test("21: auto-switch rejects wrong providers, invalid thresholds and missing providers", async () => {
-    const wrongProvider = await run(["auto-switch", "anthropic", "on"]);
+  test("21: auto-switch rejects missing Anthropic account selectors, invalid thresholds and missing providers", async () => {
+    const missingAnthropicAccount = await run(["auto-switch", "anthropic", "on"]);
     const invalidThreshold = await run(["auto-switch", "openai", "threshold", "101"]);
     const missingProvider = await run(["auto-switch"]);
 
-    expect(wrongProvider.code).toBe(1);
-    expect(wrongProvider.stderr).toContain("auto-switch only applies to the openai Codex account pool or a generic OAuth provider pool");
+    expect(missingAnthropicAccount.code).toBe(2);
+    expect(missingAnthropicAccount.stderr).toContain("--account <id>");
     expect(invalidThreshold.code).toBe(1);
     expect(invalidThreshold.stderr).toContain("integer 0-100");
     expect(missingProvider.code).toBe(1);
@@ -1924,9 +1925,9 @@ describe("ocx account CLI (issue #180 matrix)", () => {
     const sleepSpy = spyOn(Bun, "sleep").mockImplementation(async () => {});
     try {
       const result = await run(["login", "anthropic"]);
-
-      expect(result.code).toBe(2);
-      expect(result.stderr).toContain("provider entry was not written");
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain("Management operation did not return a usable outcome");
+      expect(result.output).not.toContain("provider entry was not written");
       expect(result.stdout).not.toContain("Logged in to anthropic");
     } finally {
       sleepSpy.mockRestore();
@@ -2194,12 +2195,13 @@ describe("ocx account CLI (issue #180 matrix)", () => {
     const sleepSpy = spyOn(Bun, "sleep").mockImplementation(async () => {});
     try {
       const human = await run(["login", "openai"]);
-      expect(human.code).toBe(0);
+      expect(human.code).toBe(1);
       expect(human.stdout).toContain("validation pending (routing disabled)");
       expect(human.stdout).toContain("ocx gui");
       expect(human.stdout).not.toContain("Logged in");
       expect(human.stdout).not.toContain("ocx models");
       const machine = await run(["login", "openai", "--json"]);
+      expect(machine.code).toBe(1);
       expect(JSON.parse(machine.stdout)).toMatchObject({ validationPending: true, recoveryCommand: "ocx gui" });
       expect(JSON.parse(machine.stdout)).not.toHaveProperty("modelSelection");
     } finally {
@@ -2207,7 +2209,7 @@ describe("ocx account CLI (issue #180 matrix)", () => {
     }
   });
 
-  test("pending Codex login keeps success and prints generic recovery guidance", async () => {
+  test("pending Codex login preserves registration and returns incomplete status", async () => {
     codexLoginStatus = {
       status: "done",
       catalogRefreshPending: true,
@@ -2216,8 +2218,7 @@ describe("ocx account CLI (issue #180 matrix)", () => {
     const sleepSpy = spyOn(Bun, "sleep").mockImplementation(async () => {});
     try {
       const result = await run(["login", "openai"]);
-
-      expect(result.code).toBe(0);
+      expect(result.code).toBe(1);
       expect(result.stdout).toContain("Logged in.");
       expect(result.stderr).toContain("ocx sync");
       expect(result.output).not.toContain("private-login-detail");
@@ -2231,10 +2232,9 @@ describe("ocx account CLI (issue #180 matrix)", () => {
     const sleepSpy = spyOn(Bun, "sleep").mockImplementation(async () => {});
     try {
       const result = await run(["login", "openai", "--json"]);
-
-      expect(result.code).toBe(0);
+      expect(result.code).toBe(1);
       expect(JSON.parse(result.stdout)).toEqual({
-        status: "done",
+        status: "done", flowId: "flow-mock",
         catalogRefreshPending: true,
         modelSelection: {
           provider: "openai", afterLogin: false, requiresRunningProxy: true,

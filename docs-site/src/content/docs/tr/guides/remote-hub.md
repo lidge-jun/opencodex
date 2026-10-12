@@ -3,6 +3,8 @@ title: Remote Hub Dağıtımı
 description: Loopback yönetimi, Tailscale Serve ve başsız OAuth ile opencodex hub çalıştırma.
 ---
 
+SSH makine bağlantıları için [Uzak Bağlantı](/tr/guides/remote-link/) kılavuzuna bakın.
+
 Remote Hub sağlayıcı kimlik bilgilerini, kataloğu ve kullanım kayıtlarını tek ana bilgisayarda tutar. Kimliği doğrulanmış istemciler veri düzlemine doğrudan bağlanır. Yönetim düzlemi ayrıdır: isteğe bağlı dinleyici yalnızca `127.0.0.1` üzerinde çalışır ve pano ile `/api/*` yollarını sunar; `/v1/*`, `/healthz`, `/readyz` veya WebSocket sunmaz. `10101` portunu yayımlamayın ve Tailscale Funnel kullanmayın.
 
 ## Roller ve güven sınırı
@@ -18,6 +20,7 @@ ocx sync
 İnsanın okuyacağı hazırlık tanılarında katalog değerlerindeki denetim karakterleri görünür onaltılık kaçış dizileri olarak yazılır; bu hem ilk bağlanışta hem de `ocx sync` yenilenen hub kataloğunu reddettiğinde geçerlidir. JSON durumu özgün tanı değerini olduğu gibi korur.
 
 İstemci anahtarı yalnızca sahibinin okuyabildiği `service-api-token` dosyasına yazılır, `config.json` içine yazılmaz. Bağlı kullanım hub deposundan aynı `apiKeyId` ile filtrelenir; bağlantı kesilince yerel depo kullanılır. İki depo birbirini yansıtmaz.
+`ocx service uninstall` yerel servisi kaldırır ancak istemci bağlıysa, bağlantı meta verisi geçersiz veya uyuşmuyorsa ya da bekleyen bir bağlantı işaretleyicisi geçerli anahtarla eşleşiyorsa mevcut anahtarı korur. Eski bir anahtara ait geçerli bir işaretleyici, ilgisiz bir servis anahtarını korumaz. Bir işaretleyici güvenli değilse, bozuksa veya okunamıyorsa anahtar temizliği doğrulanamaz; komut anahtarın korunduğunu iddia etmek yerine uyarır. Bağlı bir istemcinin yerel anahtarını ve durumunu kaldırmak için `ocx disconnect` kullanın.
 
 Admin token sıradan yönetim yapabilir ancak hiçbir zaman onay oturumu oluşturamaz. Onay işlemleri sunucu tarafından verilen `gui-session`, eşleşen Origin ve CSRF ister. `Tailscale-User-Login` yalnızca ayrı yönetim girişinde güvenilirdir; tam kimlikleri `remoteGui.allowedTailscaleUsers` içinde belirtin.
 
@@ -109,7 +112,7 @@ OAuth'u `POST /api/oauth/login` ile başlatın. Callback hub'a ulaşamıyorsa so
 
 Döndürme sırasında eski ve yeni anahtar aynı `apiKeyId` altında en fazla on dakika geçerlidir. Eski anahtar `service-api-token.prev` dosyasına alınır, yeni anahtar atomik olarak kurulur ve `/v1/catalog` ile doğrulanıp onaylanır. Sonuç belirsizse geçici yetkiyle komutu yeniden çalıştırın; iki adayı da doğrulamadan silmeyin.
 
-`ocx disconnect` hub çevrimdışıyken yerel durumu geri yükler ama hub anahtarını iptal etmez. Bağlantıdan sonra tek iptal yolu hub üzerindeki **Integrations → API Keys** sayfasıdır. `ocx connect revoke --admin-token-stdin` yalnızca bağlantı sürerken kullanılabilir.
+`ocx disconnect` hub çevrimdışıyken yerel durumu geri yükler ama hub anahtarını iptal etmez. Bağlantıdan sonra tek iptal yolu hub üzerindeki **Bağlantı → API Anahtarları** sayfasıdır. `ocx connect revoke --admin-token-stdin` yalnızca bağlantı sürerken kullanılabilir.
 
 ## Docker ve sorun giderme
 

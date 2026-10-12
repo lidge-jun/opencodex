@@ -7,7 +7,7 @@
  * PID-reuse and fail-closed reasoning from being re-derived three times, once per
  * operating system, with two of the three getting it subtly wrong.
  *
- * Design and audit history: `devlog/_plan/260913_cross_platform_desktop_app_restart/`.
+ * Design and audit history: `devlog/_fin/260913_cross_platform_desktop_app_restart/`.
  */
 import { sep } from "node:path";
 

@@ -23,5 +23,5 @@ This file applies to `scripts/` and inherits the repository-wide rules in `/AGEN
 - Run focused tests or probes for the changed script.
 - Run `bun run typecheck`.
 - Run `bun run privacy:scan` when the script handles configuration, credentials, requests, logs, or account data.
-- Run `bun run prepush` for release, packaging, dependency, or cross-platform tooling changes.
+- Follow the root validation policy: run the suite by default; if a full run is too costly, run at least focused regression tests and document the reason and remaining coverage. `bun run prepush` is available as an explicit comprehensive check.
 - Report any platform-specific validation that was not executed.

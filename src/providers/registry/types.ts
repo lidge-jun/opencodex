@@ -30,6 +30,7 @@ export interface ResponsesTerminalRepairPolicy {
 
 export type ProviderModelDiscoveryScalar = string | number | boolean;
 
+/** Path segment `*` projects at most 256 array elements; containsAny/All match projected scalars exactly. */
 export type ProviderModelDiscoveryPredicate =
   | {
       path: readonly string[];
@@ -70,6 +71,8 @@ interface ProviderModelDiscoverySharedSpec {
   idField?: string;
   /** Declarative eligibility rules evaluated against each untrusted model row. */
   filter?: ProviderModelDiscoveryFilter;
+  /** Stable partition: admitted original rows matching ANY predicate precede other rows. Registry-only. */
+  preferFirst?: readonly ProviderModelDiscoveryPredicate[];
   /** Optional lower byte ceiling; the process-wide hard ceiling still wins. */
   maxResponseBytes?: number;
   /** Optional lower raw-row ceiling; the process-wide hard ceiling still wins. */
@@ -112,6 +115,12 @@ export interface ProviderRegistryEntry {
   apiKeyTransport?: OcxProviderConfig["apiKeyTransport"];
   alias?: string;
   authKind: ProviderAuthKind;
+  /**
+   * Credential preset for an auxiliary service rather than a model transport.
+   * Its adapter is an identity marker and is intentionally absent from the
+   * routable adapter registry.
+   */
+  credentialOnly?: boolean;
   codexAccountMode?: CodexAccountMode;
   /** OAuth preset may explicitly honor a persisted API-key billing mode. */
   allowKeyAuthOverride?: boolean;
@@ -258,12 +267,23 @@ export interface ProviderRegistryEntry {
   /** Provider-specific copy for the Codex catalog's Fast tier. */
   fastTierDescription?: string;
   /**
+   * The Fast lane is billed beyond the plan, so it stays off until the operator sets
+   * `providers.<name>.fastEnabled: true` (see `providerFastSwitchOff`).
+   */
+  fastOptIn?: boolean;
+  /**
    * Registry-only destination guard for `modelSupportsServiceTier`. This scopes vendor evidence
    * without changing provider ownership, routing, authentication, or config validation.
    */
   modelServiceTierCapabilityBaseUrlGuard?: (baseUrl: string) => boolean;
   /** Registry default for plaintext reasoning replay; see `OcxProviderConfig.preserveResponsesReasoningContent`. Registry-only like `supportsServiceTier`. */
   preserveResponsesReasoningContent?: boolean;
+  /** Registry default for preserving input item IDs; see `OcxProviderConfig.preserveResponsesInputItemIds`. */
+  preserveResponsesInputItemIds?: boolean;
+  /** Registry default for preserving per-item chat metadata; see `OcxProviderConfig.preserveResponsesMessageMetadata`. */
+  preserveResponsesMessageMetadata?: boolean;
+  /** Registry default for dropping replayed reasoning items for Responses upstreams that reject them. */
+  dropResponsesReasoningItems?: boolean;
   /** Registry defaults for per-model Codex reasoning propagation; explicit user keys win during enrichment. */
   modelSupportsReasoningSummaries?: Record<string, boolean>;
   /** Registry defaults for per-model Codex Responses verbosity support. */
@@ -306,6 +326,7 @@ export interface ProviderRegistryEntry {
   noReasoningModels?: string[];
   noTemperatureModels?: string[];
   noTopPModels?: string[];
+  noStopModels?: string[];
   noPenaltyModels?: string[];
   /**
    * Registry-only seed for `OcxProviderConfig.noJsonSchemaModels`. Merged into the
@@ -333,11 +354,15 @@ export interface ProviderRegistryEntry {
    */
   showThinkingSummary?: boolean;
   reasoningSplitModels?: string[];
+  /** See OcxProviderConfig.inlineThinkTagModels. */
+  inlineThinkTagModels?: string[];
   reasoningDetailsModels?: string[];
   thinkingToggleModels?: string[];
   thinkingBudgetModels?: string[];
   escapeBuiltinToolNames?: boolean;
   oauthId?: string;
+  /** OAuth implementation family; instance identity remains the exact id/oauthId. */
+  oauthFamily?: "anthropic";
   virtualModels?: Record<string, { wireModelId: string; reasoningMode: "pro" }>;
   modelMaxInputTokens?: Record<string, number>;
   jawcodeBundle?: string;
@@ -350,12 +375,13 @@ export interface ProviderRegistryEntry {
 
 export type ProviderConfigSeed = Pick<
   OcxProviderConfig,
+  "anthropicOAuthInstance" |
   "adapter" | "baseUrl" | "apiKeyTransport" | "responsesPath" | "chatCompletionsPath" | "authMode" | "keyOptional" | "freeTier" | "modelSuffixBracketStrip" | "defaultModel" | "models"
   | "liveModels" | "contextWindow" | "modelContextWindows" | "modelInputModalities"
   | "modelDisplayNames"
   | "modelMaxInputTokens" | "defaultMaxOutputTokens" | "modelMaxOutputTokens"
   | "reasoningEfforts" | "modelReasoningEfforts" | "modelDefaultReasoningEfforts" | "reasoningEffortMap" | "modelReasoningEffortMap" | "reasoningWireFormat"
-  | "noVisionModels" | "noReasoningModels" | "noTemperatureModels" | "noTopPModels" | "noPenaltyModels"
-  | "autoToolChoiceOnlyModels" | "preserveReasoningContentModels" | "requiresReasoningPlaceholderModels" | "reasoningSplitModels" | "reasoningDetailsModels" | "thinkingToggleModels" | "thinkingBudgetModels" | "escapeBuiltinToolNames" | "openaiChatEofTolerance" | "showThinkingSummary"
+  | "noVisionModels" | "noReasoningModels" | "noTemperatureModels" | "noTopPModels" | "noStopModels" | "noPenaltyModels"
+  | "autoToolChoiceOnlyModels" | "preserveReasoningContentModels" | "requiresReasoningPlaceholderModels" | "reasoningSplitModels" | "inlineThinkTagModels" | "reasoningDetailsModels" | "thinkingToggleModels" | "thinkingBudgetModels" | "escapeBuiltinToolNames" | "openaiChatEofTolerance" | "showThinkingSummary"
   | "googleMode" | "project" | "location" | "headers"
 >;

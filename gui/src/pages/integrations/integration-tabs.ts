@@ -17,6 +17,7 @@ export type IntegrationTab =
   | "keys"
   | "codex"
   | "claude"
+  | "claudeDesktop"
   | "grok"
   | "cursor"
   | FileIntegrationClientId;
@@ -31,7 +32,10 @@ export const TABS: readonly TabDefinition[] = [
   { id: "overview", hash: "integrations", labelKey: "integrations.tab.overview" },
   { id: "keys", hash: "integrations/keys", labelKey: "integrations.tab.keys" },
   { id: "codex", hash: "integrations/codex", labelKey: "integrations.tab.codex" },
-  { id: "claude", hash: "integrations/claude", labelKey: "integrations.tab.claude" },
+  // Claude keeps its own #claude/* hashes; Integrations maps that family onto this tab.
+  { id: "claude", hash: "claude", labelKey: "nav.claude" },
+  // Its own Connect tab; the hash is the one the Desktop sub-tab always had.
+  { id: "claudeDesktop", hash: "claude/desktop", labelKey: "claudeDesktop.title" },
   { id: "grok", hash: "integrations/grok", labelKey: "integrations.tab.grok" },
   { id: "cursor", hash: "integrations/cursor", labelKey: "integrations.tab.cursor" },
   { id: "opencode", hash: "integrations/opencode", labelKey: "integrations.tab.opencode" },
@@ -44,11 +48,14 @@ export const TABS: readonly TabDefinition[] = [
   { id: "dsh", hash: "integrations/dsh", labelKey: "integrations.tab.dsh" },
   { id: "mcode", hash: "integrations/mcode", labelKey: "integrations.tab.mcode" },
   { id: "zcode", hash: "integrations/zcode", labelKey: "integrations.tab.zcode" },
+  { id: "commandcode", hash: "integrations/commandcode", labelKey: "integrations.tab.commandcode" },
   { id: "prime", hash: "integrations/prime", labelKey: "integrations.tab.prime" },
   { id: "aside", hash: "integrations/aside", labelKey: "integrations.tab.aside" },
   { id: "raycast", hash: "integrations/raycast", labelKey: "integrations.tab.raycast" },
   { id: "omo", hash: "integrations/omo", labelKey: "integrations.tab.omo" },
   { id: "cline", hash: "integrations/cline", labelKey: "integrations.tab.cline" },
+  { id: "kilo", hash: "integrations/kilo", labelKey: "integrations.tab.kilo" },
+  { id: "droid", hash: "integrations/droid", labelKey: "integrations.tab.droid" },
 ] as const;
 
 export const FILE_CLIENTS = new Set<FileIntegrationClientId>([
@@ -62,9 +69,12 @@ export const FILE_CLIENTS = new Set<FileIntegrationClientId>([
   "dsh",
   "mcode",
   "zcode",
+  "commandcode",
   "prime",
   "aside",
   "raycast",
   "omo",
   "cline",
+  "kilo",
+  "droid",
 ]);

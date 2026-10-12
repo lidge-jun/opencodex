@@ -4,21 +4,43 @@ import {
   rejectArgs,
   runCliAction,
   runtimeRequest,
+  runtimeBaseUrl,
   takeFlag,
   takeOption,
   type RuntimeApiDeps,
 } from "./runtime-api";
 
+import { handleSelectedKeyTest, type SelectedKeyTestDeps } from "./access-data-plane";
+import { handleAccessAudioCommand } from "./access-audio";
+
 const USAGE = `Usage:
   ocx access key [list] [--json]
   ocx access key create [name] [--json]
+  ocx access key get <id-or-name> [--json]
+  ocx access key rename <id-or-name> <name> [--json]
+  ocx access key set <id-or-name> [--allow-provider <name>]... [--allow-model <id>]... [--clear] [--json]
   ocx access key rotate <id> [--json]
   ocx access key rotate commit <id> <rotation-id> [--json]
   ocx access key rotate abort <id> <rotation-id> [--json]
   ocx access key remove <id> --yes [--json]
   ocx access endpoints [--json]
   ocx access models [--json]
-  ocx access test <model> [--protocol <chat|responses|messages>] [--json]`;
+  ocx access test <model> [--protocol <chat|responses|messages>] [--api-key-stdin] [--json]
+  ocx access audio transcribe <file> --model <id> --api-key-stdin [--json]
+  ocx access audio live-check --model <id> --api-key-stdin [--json]`;
+
+const UTC_ISO_INSTANT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
+
+/**
+ * The server emits `attributionSince` with `toISOString()`. `Date.parse` alone also accepts
+ * strings such as "0", so require the ISO-8601 UTC shape and an instant that round-trips to the
+ * same second, which also rejects impossible dates the parser would roll over.
+ */
+function isUtcIsoInstant(value: unknown): value is string {
+  if (typeof value !== "string" || !UTC_ISO_INSTANT_RE.test(value)) return false;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString().slice(0, 19) === value.slice(0, 19);
+}
 
 /**
  * Render the key table with the usage fields the API already returns (#2705).
@@ -36,6 +58,10 @@ const USAGE = `Usage:
  */
 function formatKeyRows(payload: Record<string, unknown>, keys: Array<Record<string, unknown>>): string[] {
   const cells: string[][] = [["ID", "NAME", "PREFIX", "REQ 7D", "TOTAL", "LAST USED"]];
+  // A string that is not an ISO-8601 UTC instant is not attribution data: treat it like an
+  // absent field so malformed payloads still render "unavailable" instead of usage values.
+  const attributionSince = isUtcIsoInstant(payload.attributionSince) ? payload.attributionSince : undefined;
+  const usageAvailable = attributionSince !== undefined;
   for (const entry of keys) {
     const usage = (entry.usage ?? {}) as Record<string, unknown>;
     const ambiguous = usage.ambiguous === true;
@@ -45,16 +71,16 @@ function formatKeyRows(payload: Record<string, unknown>, keys: Array<Record<stri
       String(entry.name ?? ""),
       String(entry.prefix ?? ""),
       // One marker spanning both numeric columns: the union guarantees neither exists.
-      ambiguous ? "ambiguous" : num(usage.requests7d),
-      ambiguous ? "" : num(usage.totalRequests),
-      ambiguous ? "" : (typeof usage.lastUsedAt === "string" ? usage.lastUsedAt : "never"),
+      !usageAvailable ? "unavailable" : ambiguous ? "ambiguous" : num(usage.requests7d),
+      !usageAvailable || ambiguous ? "" : num(usage.totalRequests),
+      !usageAvailable || ambiguous ? "" : (typeof usage.lastUsedAt === "string" ? usage.lastUsedAt : "never"),
     ]);
   }
   const widths = cells[0]!.map((_, column) => Math.max(...cells.map(row => (row[column] ?? "").length)));
   const lines = cells.map(row => row.map((cell, i) => (cell ?? "").padEnd(widths[i]!)).join("  ").trimEnd());
   const footer: string[] = [];
-  if (typeof payload.attributionSince === "string") {
-    footer.push(`attribution since ${payload.attributionSince}`);
+  if (attributionSince !== undefined) {
+    footer.push(`attribution since ${attributionSince}`);
   }
   if (payload.historyTruncated === true) {
     footer.push("older history truncated");
@@ -63,6 +89,51 @@ function formatKeyRows(payload: Record<string, unknown>, keys: Array<Record<stri
     footer.push("ambiguous: two configured keys share an id, so per-key totals do not exist");
   }
   return footer.length > 0 ? [...lines, "", ...footer] : lines;
+}
+
+/**
+ * Repeatable option values, in the order given.
+ *
+ * takeOption removes one occurrence, so a scope with several entries needs the
+ * loop: reading it once would silently keep only the first `--allow-model` and
+ * write a narrower scope than the operator typed.
+ */
+function takeAllOptions(args: string[], name: string): string[] {
+  const values: string[] = [];
+  for (;;) {
+    const value = takeOption(args, name);
+    if (value === undefined) break;
+    values.push(value);
+  }
+  return values;
+}
+
+/**
+ * Find a key by id or by name, without ever reading the secret.
+ *
+ * The management API keys every mutation by id, so a name has to be resolved
+ * here. An ambiguous name is refused rather than resolved to the first match:
+ * silently scoping one of two keys that share a name is the kind of mistake
+ * only discovered when the wrong client stops working.
+ */
+function findKeyRow(keys: Array<Record<string, unknown>>, selector: string): Record<string, unknown> {
+  const wanted = selector.trim().toLowerCase();
+  const byId = keys.filter(entry => String(entry.id ?? "").toLowerCase() === wanted);
+  if (byId.length === 1) return byId[0]!;
+  const byName = keys.filter(entry => String(entry.name ?? "").trim().toLowerCase() === wanted);
+  if (byName.length === 1) return byName[0]!;
+  if (byName.length > 1) throw new CliUsageError("key name " + selector + " is ambiguous; use the id", USAGE);
+  throw new CliUsageError("no API key matches " + selector, USAGE);
+}
+
+function scopeLines(entry: Record<string, unknown>): string[] {
+  const list = (value: unknown): string =>
+    Array.isArray(value) && value.length > 0 ? (value as string[]).join(", ") : "(any)";
+  return [
+    "API key " + String(entry.name ?? "") + " (" + String(entry.id ?? "") + ")",
+    "  allowed providers: " + list(entry.allowedProviders),
+    "  allowed models:    " + list(entry.allowedModels),
+  ];
 }
 
 async function key(argv: string[], deps: RuntimeApiDeps): Promise<void> {
@@ -88,6 +159,46 @@ async function key(argv: string[], deps: RuntimeApiDeps): Promise<void> {
       `Created API key ${String(result.name ?? name)} (${String(result.id ?? "")}).`,
       `Key (shown once): ${String(result.key ?? "")}`,
     ]);
+    return;
+  }
+  if (action === "get") {
+    const selector = args.shift();
+    if (!selector) throw new CliUsageError("key id or name is required", USAGE);
+    rejectArgs(args, USAGE);
+    const result = await runtimeRequest<Record<string, unknown>>("/api/keys", {}, deps);
+    const entry = findKeyRow(Array.isArray(result.keys) ? result.keys as Array<Record<string, unknown>> : [], selector);
+    // The list response carries the masked prefix and never the secret, so the
+    // row is safe to print as-is under --json.
+    printData(entry, wantsJson, scopeLines(entry));
+    return;
+  }
+  if (action === "set") {
+    const selector = args.shift();
+    if (!selector) throw new CliUsageError("key id or name is required", USAGE);
+    const clear = takeFlag(args, "--clear");
+    const providers = takeAllOptions(args, "--allow-provider");
+    const models = takeAllOptions(args, "--allow-model");
+    rejectArgs(args, USAGE);
+    if (!clear && providers.length === 0 && models.length === 0) {
+      throw new CliUsageError("set requires --allow-provider, --allow-model, or --clear", USAGE);
+    }
+    const listed = await runtimeRequest<Record<string, unknown>>("/api/keys", {}, deps);
+    const target = findKeyRow(Array.isArray(listed.keys) ? listed.keys as Array<Record<string, unknown>> : [], selector);
+    // A set REPLACES the named dimension rather than appending to it, and
+    // --clear removes both. Naming one dimension leaves the other alone, so
+    // narrowing providers cannot accidentally widen models.
+    const body: Record<string, unknown> = { id: target.id };
+    if (clear) {
+      body.allowedProviders = null;
+      body.allowedModels = null;
+    }
+    if (providers.length > 0) body.allowedProviders = providers;
+    if (models.length > 0) body.allowedModels = models;
+    const result = await runtimeRequest<Record<string, unknown>>("/api/keys", {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }, deps);
+    printData(result, wantsJson, scopeLines(result));
     return;
   }
   if (action === "rotate") {
@@ -130,6 +241,56 @@ async function key(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   throw new CliUsageError(`unknown key command ${action}`, USAGE);
 }
 
+/** Rename never sends or prints a secret, and cannot silently choose duplicate ids. */
+async function renameKey(argv: string[], deps: RuntimeApiDeps): Promise<number> {
+  const args = [...argv];
+  const wantsJson = takeFlag(args, "--json");
+  const [selector, rawName] = args;
+  if (args.length !== 2 || !selector?.trim() || selector.startsWith("-") || !rawName
+    || /[\u0000-\u001f\u007f]/.test(rawName) || !rawName.trim() || rawName.trim().length > 64) {
+    console.error("Error: Supply one key id or unambiguous name and a new name of 1–64 characters without controls.");
+    return 2;
+  }
+  const name = rawName.trim();
+  try {
+    const pinned = { ...deps, baseUrl: await runtimeBaseUrl(deps) };
+    const before = await runtimeRequest<unknown>("/api/keys", { redirect: "error", credentials: "omit" }, pinned);
+    if (!before || typeof before !== "object" || !("keys" in before) || !Array.isArray(before.keys)
+      || before.keys.some(row => !row || typeof row !== "object" || Array.isArray(row)
+        || typeof row.id !== "string" || !row.id || typeof row.name !== "string")) throw new Error();
+    const rows = before.keys as Array<Record<string, unknown>>;
+    const wanted = selector.trim().toLowerCase();
+    if (rows.filter(row => (row.id as string).toLowerCase() === wanted).length > 1) {
+      throw new CliUsageError("Ambiguous key identity.");
+    }
+    const target = findKeyRow(rows, selector);
+    if (rows.filter(row => (row.id as string).toLowerCase() === (target.id as string).toLowerCase()).length !== 1) {
+      throw new CliUsageError("Ambiguous key identity.");
+    }
+    const result = await runtimeRequest<Record<string, unknown>>("/api/keys", {
+      method: "PATCH", body: JSON.stringify({ id: target.id, name }), redirect: "error", credentials: "omit",
+    }, pinned);
+    if (!result || typeof result !== "object" || Array.isArray(result) || result.id !== target.id || result.name !== name
+      || typeof result.createdAt !== "string" || !isUtcIsoInstant(result.createdAt)) throw new Error();
+    const projected: Record<string, unknown> = { id: result.id, name: result.name, createdAt: result.createdAt };
+    for (const scope of ["allowedProviders", "allowedModels"] as const) {
+      if (result[scope] === undefined) continue;
+      const value = result[scope];
+      if (!Array.isArray(value) || value.some(item => typeof item !== "string" || !item.trim() || item.length > 256)) throw new Error();
+      projected[scope] = [...value];
+    }
+    printData(projected, wantsJson, ["API key renamed.", ...scopeLines(projected)]);
+    return 0;
+  } catch (error) {
+    if (error instanceof CliUsageError) {
+      console.error("Error: API key selector is missing or ambiguous. List keys and use a unique id.");
+      return 2;
+    }
+    console.error("Error: API key rename was not confirmed. List keys to check the current name before retrying.");
+    return 1;
+  }
+}
+
 async function endpoints(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const wantsJson = takeFlag(args, "--json");
@@ -167,7 +328,13 @@ async function testModel(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   printData(result, wantsJson, [`${model}: ${protocol} request succeeded.`]);
 }
 
-export async function handleAccessCommand(argv: string[], deps: RuntimeApiDeps = {}): Promise<number> {
+export async function handleAccessCommand(argv: string[], deps: SelectedKeyTestDeps = {}): Promise<number> {
+  const [command, ...args] = argv;
+  if (command === "audio") return handleAccessAudioCommand(args, deps);
+  if (command === "test" && args.some(arg => arg === "--api-key-stdin" || arg.startsWith("--api-key-stdin="))) {
+    return handleSelectedKeyTest(args, deps);
+  }
+  if ((command === "key" || command === "keys") && args[0] === "rename") return renameKey(args.slice(1), deps);
   return runCliAction(async () => {
     const [sub = "key", ...rest] = argv;
     if (sub === "key" || sub === "keys") await key(rest, deps);

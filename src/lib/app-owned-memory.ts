@@ -209,14 +209,14 @@ function warnPinnedSaturation(): void {
   console.warn("[app-owned-memory] retained state remains over budget with no evictable candidate");
 }
 
-export function enforceAppOwnedMemoryBudget(): AppOwnedBytesSnapshot {
+export function enforceAppOwnedMemoryBudget(reservedPinnedBytes = 0): AppOwnedBytesSnapshot {
   if (isEnforcing) return appOwnedBytesSnapshot();
   isEnforcing = true;
   enforcementCounters.runs += 1;
   try {
     const ineligible = new Set<string>();
     const current = retainedSnapshots();
-    while (current.total > budgetBytes) {
+    while (current.total + reservedPinnedBytes > budgetBytes) {
       const candidate = nextCandidate(current.stores, ineligible);
       if (!candidate) {
         enforcementCounters.noEvictableCandidate += 1;
@@ -248,6 +248,17 @@ export function enforceAppOwnedMemoryBudget(): AppOwnedBytesSnapshot {
   } finally {
     isEnforcing = false;
   }
+}
+
+/**
+ * Admission for a pinned allocation the owner cannot demote later. The proposal is
+ * counted against the shared target BEFORE the normal eviction pass runs, so
+ * reclaimable logs, caches, blobs and continuations are demoted first and only a
+ * projected total still above budget — pinned state that cannot fit — is refused.
+ */
+export function admitAppOwnedPinnedBytes(proposedPinnedBytes: number): boolean {
+  const snapshot = enforceAppOwnedMemoryBudget(Math.max(0, proposedPinnedBytes));
+  return snapshot.retainedBytes + Math.max(0, proposedPinnedBytes) <= snapshot.budgetBytes;
 }
 
 export function resetAppOwnedMemoryForTests(): void {

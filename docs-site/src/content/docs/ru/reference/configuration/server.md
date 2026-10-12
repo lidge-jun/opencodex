@@ -15,7 +15,7 @@ description: Listener, удалённый доступ, admission key, тайм�
 | `proxy?` | `string` | — | URL исходящего HTTP(S) или SOCKS5-прокси (`socks5://host:port`) или `${ENV_VAR}`. HTTP URL пишутся в `HTTP_PROXY` / `HTTPS_PROXY`, если те не заданы. SOCKS5 используют встроенный SOCKS5-туннель и также пишутся в `ALL_PROXY` (`ocx start --socks5`); унаследованные `HTTP(S)_PROXY` сбрасываются в этом процессе. Loopback всегда остаётся в `NO_PROXY`. |
 | `emptyCompletionRetry?` | `boolean` | `false` | Явно включает один идентичный повтор Responses, если в turn нет ни текста, ни tool call, включая случай, когда stream завершается до terminal event. Повтор может тарифицироваться. `OCX_EMPTY_COMPLETION_RETRY=0` отключает его без изменения config; combo и routed-compaction turn исключены. |
 | `dropCodexSafetyBuffering?` | `boolean` | `false` | Удаляет подсказки Codex safety-buffering из passthrough-ответов Codex Responses: заголовки `x-codex-safety-buffering-enabled` / `x-codex-safety-buffering-faster-model`, SSE-события `response.metadata` типа `safety_buffering` и поле `safety_buffering` в других SSE-событиях. Codex TUI отображает их как предложение повторить запрос с более быстрой моделью, действие по умолчанию в котором переключает сессию на более слабую модель. Остальные заголовки `x-codex-*` и содержимое других SSE-событий передаются без изменений, кроме удаления этого поля. По умолчанию выключено. |
-| `stallTimeoutSec?` | `number` | `300` | Секунды без полезного прогресса upstream для Responses и нативного Chat. Минимум 1. |
+| `stallTimeoutSec?` | `number` | `300` (public) / выкл. (local) | Секунды без полезного прогресса upstream (Responses и нативный Chat) до обрыва потока. Без настройки **локальный** upstream (loopback, private, имя `.local`/`.lan`) по умолчанию выключен, публичный — 300 с; положительное значение действует на оба (минимум 1 с); `0` отключает watchdog тишины везде. Для Responses, которые сворачивают canonical ChatGPT SSE в непотоковый JSON, даже при выключенном watchdog остаётся отдельный общий предел 15 минут. Ожидающие чтения тела `/v1/responses/compact` используют этот же бюджет, но по умолчанию 300 с даже для локального upstream; явное значение, включая `0`, имеет приоритет. |
 | `connectTimeoutMs?` | `number` | `200000` | Дедлайн одной попытки DNS/TCP/TLS/final-header; он завершается до генерации тела ответа. |
 | `shutdownTimeoutMs?` | `number` | `5000` | Дедлайн graceful-drain до принудительного прерывания активных turn'ов. |
 | `websockets?` | `boolean` | `false` | Объявляет и разрешает клиентский WebSocket-путь Responses. При false клиенты используют HTTP/SSE; это не отключает подходящую upstream WS-оптимизацию canonical ChatGPT. |
@@ -23,10 +23,12 @@ description: Listener, удалённый доступ, admission key, тайм�
 | `apiKeys?` | `OcxApiKey[]` | `[]` | Сгенерированные credentials `ocx_…` для data-plane admission на не-loopback bind'ах. Они не авторизуют management API; доступ к management использует отдельный credential, описанный в [management reference](/ru/reference/management-api/). Управляются через дашборд. |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | disabled | Opt-in policy очистки архивированных сессий. Никогда не включается неявно. |
 | `appOwnedMemoryBudgetMb?` | `number` | `256` | Лимит в MiB для eviction-friendly app-owned log'ов, cache'ей, blob'ов и continuation payload'ов. Это не RSS-cap. Диапазон 64–4096. |
+| `metricsExport.enabled?` | `boolean` | `false` | Включает локальные для процесса агрегированные метрики запросов на аутентифицированном `GET /api/metrics`. Требуется перезапуск; в выключенном состоянии маршрут возвращает 404 и экспортёр не запускает никакой активности. |
+| `serviceHealthRecovery.enabled?` | `boolean` | `false` | Необязательное восстановление фоновой службы: небольшой процесс-наблюдатель опрашивает `/healthz` и, если прокси жив, но около минуты не отвечает на идущие подряд пробы, завершает его, чтобы менеджер службы (Планировщик заданий, launchd, systemd, WinSW) перезапустил его. Запускается только в дочернем процессе управляемой службы; запросы зависшего процесса не повторяются. Не более трёх восстановлений в час. Требуется перезапуск. |
 | `codexAutoStart?` | `boolean` | `true` | Разрешает shim'у Codex запускать `ocx ensure` перед стартом Codex. При false `ensure` становится no-op. |
 | `codexShimAutoRestore?` | `boolean` | `true` | Восстанавливает установленный shim после завершённого внешнего обновления Codex, которое заменило его. Для отключения через окружение: `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`. |
 | `syncResumeHistory?` | `boolean` | `true` | Обратимый режим совместимости истории Codex App. Исходные metadata резервируются и восстанавливаются через `ocx stop` / `ocx restore`. |
-| `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; sourceModels?: string[] }` | off | Перенаправляет распознанные helper/shadow-call'ы Codex на выбранную модель с сохранением настроенного для запроса reasoning effort. Source-prefix по умолчанию: `gpt-5.6-luna`; клиенты до 0.144.x включительно использовали `gpt-5.4-mini`, который можно восстановить через `sourceModels`. |
+| `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; sourceModels?: string[] }` | off | Перенаправляет распознанные helper/shadow-call'ы Codex на выбранную модель с сохранением настроенного для запроса reasoning effort. Source-prefix по умолчанию: `gpt-6-luna`, `gpt-5.6-luna`; клиенты до 0.144.x включительно использовали `gpt-5.4-mini`, который можно восстановить через `sourceModels`. |
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | on when usable | Настройки sidecar'а web-search. |
 | `visionSidecar?` | `OcxVisionSidecarConfig` | on when usable | Настройки sidecar'а описания изображений. |
 | `images?` | `OcxImagesConfig` | automatic OpenAI selection | Настройки standalone Images relay для Codex `image_gen`. |
@@ -140,15 +142,23 @@ Codex использует маленькие helper-model'и для задач 
 модель. Замещающая модель сохраняет настроенный для запроса reasoning effort. `sourceModels` задавайте только если клиент
 использует другие helper-id.
 
+Запрос с неквалифицированным идентификатором модели, совпадающим с `sourceModels`, может быть перехвачен. Пользовательский ход сохраняет выбранную модель, если `x-codex-turn-metadata` содержит одновременно `request_kind: "turn"` и `thread_source: "user"`. Дочерние агенты, отмеченные заголовком соединения `x-openai-subagent: collab_spawn` (HTTP-запрос или установка WebSocket) или метаданными `subagent_kind: "thread_spawn"`, тоже сохраняют модель. Для WebSocket метаданные хода берутся только из `client_metadata["x-codex-turn-metadata"]` каждого кадра, а не из начального соединения. Отсутствующие или некорректные метаданные сохраняют прежнее поведение перехвата. Вспомогательные вызовы тоже могут иметь `request_kind: "turn"`, поэтому одного этого поля недостаточно для исключения. Правила действуют для конкретных моделей и combo.
+
 ```json
 {
   "shadowCallIntercept": {
     "enabled": true,
     "model": "gpt-5.5",
-    "sourceModels": ["gpt-5.6-luna"]
+    "sourceModels": ["gpt-6-luna", "gpt-5.6-luna"]
   }
 }
 ```
+
+### Когда цель недоступна
+
+Замена — это единственная точка назначения, выбранная оператором, поэтому цель, которая перестала разрешаться, приводит к ошибке вспомогательного вызова, а не к отправке в другое место. Если провайдер цели отключён или удалён либо её комбо больше не существует, перехваченный запрос возвращает `409` с кодом ошибки `intercept_target_unavailable` до какой-либо отправки в апстрим. Журнал запросов записывает тот же код. Запрос не передаётся нативной вспомогательной модели и не уходит к провайдеру по умолчанию: и то и другое сменило бы точку назначения, учётные данные и стоимость без вашего выбора. Цель-комбо или цель профиля маршрутизации по-прежнему переключается между своими участниками. Полная цель вида `provider/model`, у которой часть провайдера не указывает ни на что настроенное, обрабатывается так же, и API настроек отказывается её сохранять. Голый идентификатор модели, разрешаемый через провайдера по умолчанию, остаётся допустимым.
+
+Отключение (`PATCH /api/providers?name=<provider>` с `disabled: true`) или удаление провайдера, к которому разрешается цель, по-прежнему выполняется успешно; в ответ добавляется `dependentShadowIntercept: { model, enabled }`, а панель показывает предупреждение. Повторное включение провайдера или выбор другой цели восстанавливает перехват.
 
 ## Sidecar'ы
 
@@ -167,7 +177,7 @@ Codex использует маленькие helper-model'и для задач 
 
 | Поле | Тип | По умолчанию | Значение |
 | --- | --- | --- | --- |
-| `enabled?` | `boolean` | on when usable | Главный переключатель. |
+| `enabled?` | `boolean` | on when usable | Главный переключатель. При `false` OpenCodex перестаёт перехватывать `web_search`, а интеграция Codex записывает `web_search = "disabled"` в `~/.codex/config.toml`. |
 | `backend?` | `"openai" \| "anthropic" \| "xai" \| "gemini" \| "exa"` | `openai` | Явный выбор выигрывает; отсутствие значения всегда означает `openai`. `anthropic` и `xai` запускаются только при явной настройке; `gemini` и `exa` зарезервированы до появления executor. |
 | `model?` | `string` | backend-dependent | `gpt-5.6-luna` для OpenAI, `claude-sonnet-5` для Anthropic или `grok-4.6` для xAI. Старый явный `gpt-5.4-mini` мигрирует при старте. |
 | `exaApiKey?` | `string` | отсутствует | Ключ оператора для backend `exa`. Только для записи: management-read никогда не возвращает сохранённое значение. |
@@ -223,6 +233,74 @@ opencodex. Перед использованием прогоните soak-test 
 
 ## Сетевая диагностика квоты Codex
 
-Поле `quotaRefresh` в строке основного аккаунта Codex описывает получение квоты, а не её остаток или право доступа к модели. Оно может отсутствовать при чтении кэша или если запрос не выполнялся. Используется окружение работающего прокси-сервиса, а не текущего терминала. Если `proxy` не задан, существующее окружение сохраняется; `"auto"` читает только статические настройки прокси Windows при запуске. PAC/WPAD, настройки только SOCKS и изменения во время работы автоматически не учитываются. Успех через TUN сам по себе не подтверждает исправность пути HTTP-прокси. См. [команды и состояния на английском](/reference/configuration/server/#codex-quota-network-diagnostics).
+Поле `quotaRefresh` в строке основного аккаунта Codex описывает получение квоты, а не её остаток или право доступа к модели. Оно может отсутствовать при чтении кэша или если запрос не выполнялся. Используется окружение работающего прокси-сервиса, а не текущего терминала. Если `proxy` не задан, существующее окружение сохраняется; `"auto"` при запуске читает статические настройки HTTP/HTTPS Windows или macOS. На macOS унаследованный прокси отменяет это чтение. На macOS допустимый шаблон `*.<domain>` преобразуется в `.<domain>`: для `*.local` прямое соединение получают `foo.local` и само имя `local`, но не `xlocal`. Точные диапазоны `169.254/16`, `169.254.0.0/16` и `fe80::/10` пропускаются с диагностикой: link-local IP-адреса используют прокси. IP-адреса и `*` принимаются; прочие CIDR, glob-шаблоны и исключения простых имён отменяют обнаружение без изменения окружения. PAC/WPAD, настройки только SOCKS и изменения во время работы автоматически не учитываются. Успех через TUN сам по себе не подтверждает исправность пути HTTP-прокси. См. [команды и состояния на английском](/reference/configuration/server/#codex-quota-network-diagnostics).
 
 `dropCodexSafetyBuffering`: не меняет проверки безопасности провайдера или отказы. Native WebSocket `codex.response.metadata.headers` и `/responses/compact` не входят в область фильтра.
+
+### Forced Claude Code subagent model
+
+The Subagents page offers **Force all subagents onto one model**, off by default. Select an exposed roster-style id, such as `combo/tev-auto`, then enable the switch. The roster is offered first; unavailable saved roster entries cannot be force targets.
+
+`ocx agent subagents force combo/tev-auto` sets `claudeCode.subagentModelForce`; `ocx agent subagents force -` clears it. `ocx agent status` reports the setting. `GET /api/subagent-models` returns `force`, `forceAvailable`, and `forceStatus`; `PUT` accepts `{ "force": "combo/tev-auto" }` or `{ "force": null }` without changing the roster. Omitting `force` leaves it unchanged. Invalid or unexposed targets are rejected on write; stale targets are reported and skipped at launch.
+
+This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` only for an authoritative million-token window; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
+
+Claude Code **2.1.257 or newer** is required for FORCE. Plugin and built-in agents (including Explore/Plan) and per-call model arguments are overridden. Forks and subagent skills with `model: inherit` keep the main conversation model. The main loop and Haiku/small-fast sidecars are unaffected. Existing roster files remain available.
+
+The dashboard warns about old or unknown CLI versions, unavailable targets, and either variable already present in `settings.json` → `env` (which overrides launch env). Detection is read-only and server-local: it cannot inspect another launch shell, another machine, or project-local settings. An unknown result is not proof of force support.
+
+## Непрерывный учёт истории пулов
+
+Лимиты пула относятся к каноническому провайдеру маршрута, а не к отображаемой метке аккаунта.
+Для каждого настроенного сейчас провайдера `P` его солёный псевдоним пула `h(pool, P)` автоматически
+связывается с `P` при чтении балансов. Это касается и сохранённой истории с точно таким же псевдонимом.
+Независимые лимиты провайдеров не требуют ручного назначения собственных псевдонимов или вычислений с солью.
+
+Другие исторические метки, включая метки с порядковым номером аккаунта, автоматически не связываются.
+Для истории с подтверждённым владельцем верхнеуровневый `spendPoolAliases` в `config.json` задаёт связь
+точного псевдонима пула (32 строчных шестнадцатеричных символа из журнала этой установки) с точным ID
+проверенного и настроенного сейчас провайдера, без пробелов по краям.
+Текущие имена и порядок аккаунтов не доказывают владельца истории. Храните журнал и соль в секрете.
+
+Автоматические и явные связи применяются только при чтении: исходные балансы не перемещаются,
+идентификационные связи в журнал не записываются. Удаление явной связи снова делает историю неопознанной,
+если её псевдоним не принадлежит самому настроенному сейчас провайдеру. Каждый исходный баланс
+учитывается один раз в связанной группе; неопознанный положительный баланс консервативно добавляется
+один раз к каждому возможному пулу. Псевдоним самого настроенного провайдера нельзя назначить другому
+провайдеру. Проверка повторяется при добавлении провайдеров и не создаёт соль.
+Некорректное соответствие сохраняет лимиты и блокирует допуск к пулу.
+
+Неактивная неопознанная история истекает только когда её последняя активность строго старше
+`spend.retentionDays`. Нехватка места не сокращает этот срок для положительных балансов.
+Активные резервирования и seed сохраняются даже при нулевой оценке; уменьшение баланса требует
+сначала записать удаление в журнал. При применимом лимите первая отправка для каждой цели/ключа
+требует обычного резервирования. Повторы используют те же области. `L` — общий лимит физических отправок
+одного запроса, фиксируемый при запуске запроса. Обычно он равен 4; существующий профиль запроса OAuth
+допускает до 18. Все физические отправки делят этот конечный лимит.
+
+Режим применения ограничений, действующие токенные лимиты корня, идентичности и пула, а также `L`
+фиксируются при запуске запроса. Изменение конфигурации применяется только к запросам, начатым после него.
+Уже выполняющийся запрос сохраняет исходную политику для всех повторов и продолжений: включение или
+снижение лимита не ужесточает её, а повышение или удаление не ослабляет. Запрос, начатый в режиме
+наблюдения, остаётся в этом режиме до завершения.
+Окончательный расчёт ждёт отчётов; удаление ID отправки не удаляет баланс. Без применимого лимита
+сохраняется режим наблюдения, включая пропуск записей при заполненной ёмкости отслеживания.
+
+Для Claude CLI, CodeBuddy и Qoder один вызов CLI считается одной отправкой и требует обычного резерва до запуска.
+Внутренние повторы и инструментальные ходы CLI отдельно не расходуют общий лимит отправок запроса, но стоимость учитывается по фактически сообщённому использованию, включая превышение первоначальной оценки.
+
+### Откат к 2.80.0: контракт C
+
+Новые записи используют обычный формат v1 и псевдонимы `pool`. Неизменённая 2.80.0 читает их,
+уплотняет журнал и применяет срок хранения по своим правилам отдельных меток. Сохраните текущие
+журнал и соль. После отката не гарантируется каноническая агрегация или тот же остаток лимита,
+который 2.80.0 вычислила бы для того же трафика без обновления. При повторном обновлении автоматические
+связи настроенных сейчас провайдеров и явные соответствия применяются к сохранившимся исходным балансам. Барьер запуска и команда сверки не требуются.
+История неопубликованных экспериментальных сборок с `pool-current` / `poolContinuity` исключена
+из контракта C. Исходные балансы сохраняются как неопознанная история до обычного истечения срока;
+немедленного преобразования или удаления нет.
+
+Полная, но некорректная запись (включая последний `null`) блокирует запросы с лимитом.
+Уплотнение продолжает сохранять корректные балансы; отказ живого процесса сохраняется до перезапуска
+с чистым журналом. Оборванная последняя строка JSON обрабатывается по прежним правилам восстановления.
+Подробности и коды ошибок: [английский оригинал](/reference/configuration/server/#historical-pool-continuity).

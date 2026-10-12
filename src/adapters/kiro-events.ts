@@ -1,10 +1,12 @@
 import type { OcxUsage } from "../types";
+import { debugProviderDiagnostic } from "../lib/debug";
 import { kiroTruncationReason } from "./kiro-truncation";
 
 export type ParsedKiroEvent =
   | { type: "content"; data?: string; modelId?: string }
   | { type: "reasoning"; data?: string; signature?: string; redactedContent?: string }
   | { type: "context_usage"; contextUsagePercentage: number }
+  | { type: "metering"; unit: string; usage: number; unitPlural?: string }
   | { type: "tool"; name?: string; toolUseId?: string; input?: string; stop?: boolean }
   | { type: "truncation"; data: string }
   | { type: "metadata"; usage?: OcxUsage; contextUsagePercentage?: number; stopReason?: string }
@@ -17,10 +19,12 @@ const KNOWN_EVENT_TYPES = new Set([
   "reasoningContentEvent",
   "toolUseEvent",
   "messageMetadataEvent",
+  "initial-response",
   "metadataEvent",
   // Authoritative context pressure. Every capture (kiro-cli 2.14.1 and 2.16.0) put the percentage
   // HERE and left `metadataEvent` carrying only `stopReason`; metadataEvent's own
   // contextUsagePercentage stays supported as a fallback rather than being dropped.
+  "meteringEvent",
   "contextUsageEvent",
   "invalidStateEvent",
   "error",
@@ -111,7 +115,11 @@ function parseTokenUsage(eventType: string, value: unknown): OcxUsage | undefine
 /** Decode a known Kiro event using its Smithy `:event-type` header. */
 export function parseKiroEvent(eventType: string, payload: Uint8Array): ParsedKiroEvent | null {
   // Unknown event types are intentionally ignored without parsing or logging their payload.
-  if (!KNOWN_EVENT_TYPES.has(eventType)) return null;
+  if (!KNOWN_EVENT_TYPES.has(eventType)) {
+    // The Smithy header is upstream-controlled too; a raw value can contain private data.
+    debugProviderDiagnostic("kiro", "unknown_event", { eventTypeLength: eventType.length });
+    return null;
+  }
   const parsed = parseObject(eventType, payload);
   // A metadataEvent's `stopReason` is Kiro's own terminal verdict and must reach the parser
   // intact. The generic truncation sniffer matches substrings ("max_tokens", "length",
@@ -174,7 +182,25 @@ export function parseKiroEvent(eventType: string, payload: Uint8Array): ParsedKi
           ? { stop: optionalBoolean(eventType, parsed, "stop") }
           : {}),
       };
+    case "meteringEvent": {
+      const unit = optionalString(eventType, parsed, "unit");
+      if (unit === undefined) {
+        return malformed(eventType, "unit must be a string");
+      }
+      const unitPlural = optionalString(eventType, parsed, "unitPlural");
+      const rawUsage = parsed.usage !== undefined ? parsed.usage : parsed.amount;
+      if (typeof rawUsage !== "number" || !Number.isFinite(rawUsage) || rawUsage < 0) {
+        return malformed(eventType, "usage must be a finite non-negative number");
+      }
+      return {
+        type: "metering",
+        unit,
+        usage: rawUsage,
+        ...(unitPlural !== undefined ? { unitPlural } : {}),
+      };
+    }
     case "messageMetadataEvent":
+    case "initial-response":
       return {
         type: "message_metadata",
         conversationId:

@@ -1,6 +1,6 @@
 /**
- * CLI head: version/help early exits, `ocx ready` pre-parse, and the bounded
- * Codex-shim auto-restore preflight, in that order (Phase 1 of the CLI
+ * CLI head: version/help early exits, ready/resolve pre-parse, lifecycle version
+ * notice, then bounded Codex-shim auto-restore preflight (Phase 1 of the CLI
  * deepening — moved out of src/cli/index.ts).
  *
  * `parseCliHead` is pure (no I/O, no process access) so the ordering and the
@@ -8,18 +8,30 @@
  * the exit paths and the shim preflight, then returns the dispatchable head
  * for the command switch in src/cli/index.ts.
  */
-import { hasHelpFlag, printSubcommandUsage, printUsage, printVersion } from "./help";
+import { printFullUsage, printSubcommandUsage, printUsage, printVersion } from "./help";
 import { parseReadyArgs, type ReadyArgs } from "./ready";
+import { parseResolveArgs, type ResolveArgs } from "./resolve";
+import { parseStopApproval } from "./stop-approval";
 import { maybeAutoRestoreCodexShim } from "./codex-shim-autorestore";
+import { findCommand } from "./registry";
+import { printUnknownCommand } from "./help-recovery";
+import { noteCredentialArgv, redactSecretArgs } from "./secret-args";
+import { maybeNoticeVersionSkew } from "./version-skew-notice";
 
 export interface CliHead {
-  kind: "version" | "help" | "ready" | "command";
+  kind: "version" | "help" | "ready" | "resolve" | "command";
   command: string | undefined;
   args: string[];
   /** For kind "help": the subcommand whose usage should print, if any. */
   helpTarget?: string;
+  /** Explicit multi-token help topic; never passed to command execution. */
+  helpPath?: string[];
+  /** Complete static reference requested from root help. */
+  helpAll?: boolean;
   /** Present only for `ready`; undefined when the ready args failed to parse. */
   readyArgs?: ReadyArgs;
+  /** Present only for `resolve`; undefined when the resolve args failed to parse. */
+  resolveArgs?: ResolveArgs;
 }
 
 export function parseCliHead(argv: string[]): CliHead {
@@ -28,18 +40,25 @@ export function parseCliHead(argv: string[]): CliHead {
   if (command === "--version" || command === "-v" || command === "version") {
     return { kind: "version", command, args };
   }
-  if (command === undefined || command === "help" || command === "--help" || command === "-h") {
-    // `ocx help <sub>` carries the subcommand; bare/flag help prints the full usage.
+  const boundary = argv.indexOf("--");
+  const prefix = boundary < 0 ? argv : argv.slice(0, boundary);
+  const rootHelp = command === undefined || command === "help" || command === "--help" || command === "-h";
+  const commandHelp = prefix[1] === "help";
+  if (rootHelp || commandHelp || prefix.slice(1).some(value => value === "--help" || value === "-h")) {
+    const topic = rootHelp ? prefix.slice(1)
+      : commandHelp ? [command!, ...prefix.slice(2)] : prefix;
+    // Options and their operands are not part of a help topic. Keep argv intact.
+    const option = topic.findIndex((value, index) => value.startsWith("-")
+      && (index > 0 || (rootHelp && ["--all", "--help", "-h"].includes(value))));
+    const path = option < 0 ? topic : topic.slice(0, option);
     return {
       kind: "help",
       command,
       args,
-      ...(command === "help" && args[1] ? { helpTarget: args[1] } : {}),
+      ...(path.length ? { helpTarget: path[0] } : {}),
+      ...(path.length > 1 ? { helpPath: path } : {}),
+      ...(rootHelp && path.length === 0 && prefix.includes("--all") ? { helpAll: true } : {}),
     };
-  }
-  if (command !== "help" && hasHelpFlag(args.slice(1))) {
-    // `ocx <cmd> --help|-h|help` prints that command's usage, not the full list.
-    return { kind: "help", command, args, helpTarget: command };
   }
   // P1: pre-parse `ocx ready` and reject invalid arguments with exit 64 BEFORE
   // maybeAutoRestoreCodexShim (or any discovery/probe/filesystem-capable global
@@ -51,17 +70,34 @@ export function parseCliHead(argv: string[]): CliHead {
     if (!parsed.ok) return { kind: "ready", command, args, readyArgs: undefined };
     return { kind: "ready", command, args, readyArgs: parsed.args };
   }
+  // Same ordering contract as `ready`: `ocx resolve` rejects any argument with exit
+  // 64 BEFORE maybeAutoRestoreCodexShim (or any other preflight with side effects) runs.
+  if (command === "resolve") {
+    const parsed = parseResolveArgs(args.slice(1));
+    if (!parsed.ok) return { kind: "resolve", command, args, resolveArgs: undefined };
+    return { kind: "resolve", command, args, resolveArgs: parsed.args };
+  }
   return { kind: "command", command, args };
 }
 
+export function uninstallArgsError(command: string | undefined, args: string[]): string | undefined {
+  if ((command !== "uninstall" && command !== "remove") || args.length <= 1) return undefined;
+  return `ocx ${command} does not accept arguments (got: ${redactSecretArgs(args.slice(1)).join(" ")}). No changes were made. See: ocx help ${command}`;
+}
+
 export async function runCli(argv: string[]): Promise<CliHead> {
+  noteCredentialArgv(argv);
   const head = parseCliHead(argv);
   switch (head.kind) {
     case "version":
       printVersion();
       process.exit(0);
     case "help": {
-      if (head.helpTarget) printSubcommandUsage(head.helpTarget);
+      if (head.helpAll) printFullUsage();
+      else if (head.helpTarget) printSubcommandUsage(head.helpTarget, head.helpPath, {
+        fallbackToParent: head.command !== "help" && head.command !== "--help"
+          && head.command !== "-h" && head.args[1] !== "help",
+      });
       else printUsage();
       process.exit(0);
     }
@@ -79,7 +115,34 @@ export async function runCli(argv: string[]): Promise<CliHead> {
       maybeAutoRestoreCodexShim(head.command, head.args);
       return head;
     }
+    case "resolve": {
+      // Fail-closed impossible-state guard, mirroring ready: the pre-parse above already
+      // rejected invalid arguments before any preflight, so a missing resolveArgs means
+      // dispatch diverged. Refuse with code 64 and perform NO I/O.
+      if (!head.resolveArgs) {
+        console.error("Usage: ocx resolve [--json]");
+        console.error("  --json prints one JSON document: the config home, the effective port,");
+        console.error("  and the identity-checked liveness verdict.");
+        process.exit(64);
+      }
+      maybeAutoRestoreCodexShim(head.command, head.args);
+      return head;
+    }
     case "command":
+      if (head.command !== "internal" && !findCommand(head.command ?? "")) {
+        printUnknownCommand(head.command);
+        process.exit(1);
+      }
+      if (head.command === "stop" && !parseStopApproval(head.args.slice(1)).ok) {
+        console.error("Usage: ocx stop [--json [--expect-pid <pid> --expect-port <port> --expect-hostname <host> --expect-config-home <home> --expect-cli-version <version> --expect-compatibility-token <hex>]]");
+        process.exit(64);
+      }
+      const uninstallError = uninstallArgsError(head.command, head.args);
+      if (uninstallError) {
+        console.error(uninstallError);
+        process.exit(2);
+      }
+      await maybeNoticeVersionSkew(head.command, head.args);
       maybeAutoRestoreCodexShim(head.command, head.args);
       return head;
   }

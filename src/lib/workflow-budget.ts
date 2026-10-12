@@ -22,7 +22,9 @@
 import {
   sharedSpendLedger,
   spendCeilingsConfigured,
+  type SpendAdmissionPolicy,
   type SpendReservationLedger,
+  type SpendReservationProof,
   type SpendScope,
   type SpendUsage,
 } from "./spend-reservation-ledger";
@@ -42,6 +44,8 @@ export interface WorkflowSpendDenialDetail {
   readonly limit: number;
   /** Tokens the refused reservation would have taken the scope to, where that is known. */
   readonly projected?: number;
+  /** A pool ceiling also includes unknown-owner history conservatively charged to every pool. */
+  readonly includesUnboundPoolHistory?: boolean;
 }
 
 /** Operator-facing name for each scope. What an operator calls it, not what the type calls it. */
@@ -196,7 +200,8 @@ export type WorkflowDenial =
   /** This send id was already reserved once; a repeat buys no second dispatch. */
   | "workflow-send-replayed"
   /** The reservation could not be made durable, and a configured ceiling requires it. */
-  | "workflow-spend-undurable";
+  | "workflow-spend-undurable"
+  | "workflow-pool-history-unresolved";
 
 /**
  * The sentence an operator reads, plus the machine-readable name of the ceiling that fired.
@@ -205,8 +210,8 @@ export type WorkflowDenial =
  * accurate for exactly one of them. Worse, the wire cannot carry the distinction on its own:
  * `classifyError` rewrites every 429 to `rate_limit_error` / `rate_limit_exceeded`, so the body
  * of a refusal this proxy made is shaped exactly like a provider rate limit. Each sentence
- * therefore says which ceiling fired AND that no provider was contacted, because that is the
- * first thing an operator needs and the only place left to put it.
+ * therefore names which ceiling fired; send refusals describe the dispatch that was stopped
+ * without making claims about earlier attempts in the same request.
  */
 export function workflowDenialSummary(
   reason: WorkflowDenial,
@@ -246,7 +251,10 @@ export function workflowDenialSummary(
             + (spend.projected !== undefined
               ? " (this send would have taken it to " + formatTokenCount(spend.projected) + ")"
               : "")
-            + ", so no provider was contacted. Spend is durable, so it does not roll forward"
+            + (spend.includesUnboundPoolHistory
+              ? ". The total includes unassigned historical provider-pool balances, conservatively counted against every provider pool until verified mappings assign them; this can overrestrict otherwise unused pools"
+              : "")
+            + ", so this send was refused before contacting a provider. Spend is durable, so it does not roll forward"
             + " with the send window: raise or remove spend." + spend.scope
             + ".maxTokens in config.json to grant more."
           : "This proxy refused the request locally: the task reached a configured token"
@@ -265,6 +273,8 @@ export function workflowDenialSummary(
         message: "This proxy refused the request locally: this send was already reserved once, and"
           + " a repeat buys no second dispatch.",
       };
+    case "workflow-pool-history-unresolved":
+      return { code: "workflow_pool_history_unresolved", message: "Historical provider-pool spend needs verified alias mappings before dispatch. No provider was contacted." };
     case "workflow-spend-undurable":
       return {
         code: "workflow_spend_undurable",
@@ -297,6 +307,8 @@ export interface WorkflowBudgetEvent {
   readonly spendScope?: SpendScope;
   /** That scope's ceiling, so the event is readable without the config open beside it. */
   readonly spendLimit?: number;
+  /** The pool ceiling conservatively included unidentified historical pool balances. */
+  readonly spendIncludesUnboundPoolHistory?: boolean;
   /** Windowed sends at the moment of the event. */
   readonly sends: number;
   /** Windowed distinct children at the moment of the event. */
@@ -355,6 +367,7 @@ export function recordWorkflowRefusalEvent(
     rootId,
     reason,
     ...(spend ? { spendScope: spend.scope, spendLimit: spend.limit } : {}),
+    ...(spend?.includesUnboundPoolHistory ? { spendIncludesUnboundPoolHistory: true } : {}),
     sends: state ? windowedSends(state, now) : 0,
     children: state ? windowedChildren(state, now) : 0,
   });
@@ -385,6 +398,8 @@ export type WorkflowDecision =
       spendLimit?: number;
       /** Tokens the refused reservation would have taken the scope to, where known. */
       spendProjected?: number;
+      /** A pool ceiling includes unbound historical balances for every candidate pool. */
+      spendIncludesUnboundPoolHistory?: boolean;
     };
 
 /**
@@ -517,6 +532,7 @@ export function admitWorkflowTurn(
           spendScope: denial.scope,
           spendLimit: denial.limit,
           ...(denial.projected !== undefined ? { spendProjected: denial.projected } : {}),
+          ...(denial.includesUnboundPoolHistory ? { spendIncludesUnboundPoolHistory: true } : {}),
         }
         : {}),
     };
@@ -582,6 +598,7 @@ export function admitWorkflowTurn(
       // an operator reading a 429 needs to know which of the three happened.
       const reason: WorkflowDenial = denial.reason === "duplicate-send-id"
         ? "workflow-send-replayed"
+        : denial.reason === "pool-history-unresolved" ? "workflow-pool-history-unresolved"
         : denial.reason === "reserve-not-durable" || denial.reason === "journal-corrupt"
           ? "workflow-spend-undurable"
           : denial.reason === "tracking-capacity-exhausted"
@@ -590,7 +607,12 @@ export function admitWorkflowTurn(
       return refuse(
         reason,
         denial.reason === "spend-limit-exceeded"
-          ? { scope: denial.scope, limit: denial.limit, projected: denial.projected }
+          ? {
+            scope: denial.scope,
+            limit: denial.limit,
+            projected: denial.projected,
+            ...(denial.includesUnboundPoolHistory ? { includesUnboundPoolHistory: true } : {}),
+          }
           : undefined,
       );
     }
@@ -711,14 +733,16 @@ export function workflowSendCeilingReached(
 function spentRootCeiling(
   rootId: string,
   ledger: SpendReservationLedger,
+  excludingSendId?: string,
+  admissionPolicy?: SpendAdmissionPolicy,
 ): WorkflowSpendDenialDetail | undefined {
-  const limit = ledger.policy.root.maxTokens;
+  const limit = (admissionPolicy ?? ledger.policy).root.maxTokens;
   if (limit === undefined) return undefined;
-  return ledger.exhausted("root", rootId) ? { scope: "root", limit } : undefined;
+  return ledger.exhausted("root", rootId, excludingSendId, admissionPolicy) ? { scope: "root", limit } : undefined;
 }
 
 /**
- * The token ceiling a root has already spent, or undefined when it has room or has none.
+ * A root or routed pool ceiling already spent, or undefined when neither is exhausted.
  *
  * The count-side twin of {@link workflowSendCeilingReached}, and the responses path calls both
  * at the same seam for the same reason: a refusal decided before dispatch can be reported as
@@ -731,10 +755,28 @@ function spentRootCeiling(
 export function workflowSpendCeilingReached(
   rootId: string | undefined,
   spendLedger?: SpendReservationLedger,
+  poolId?: string,
+  reservation?: SpendReservationProof,
+  admissionPolicy?: SpendAdmissionPolicy,
 ): WorkflowSpendDenialDetail | undefined {
-  if (!rootId) return undefined;
-  const ledger = spendLedger ?? (spendCeilingsConfigured() ? sharedSpendLedger() : undefined);
-  return ledger ? spentRootCeiling(rootId, ledger) : undefined;
+  if (!rootId && !poolId) return undefined;
+  // An explicit empty snapshot belongs to an observe-only request, even if current config
+  // enables a ceiling. Conversely, old enforced requests still read totals after disable.
+  if (admissionPolicy && admissionPolicy.root.maxTokens === undefined && admissionPolicy.pool.maxTokens === undefined) return undefined;
+  const ledger = spendLedger ?? (admissionPolicy || spendCeilingsConfigured() ? sharedSpendLedger() : undefined);
+  if (!ledger) return undefined;
+  // This reads the current alias partition; it never publishes continuity metadata.
+  const excludingSendId = reservation?.ledger === ledger ? reservation.sendId : undefined;
+  const root = rootId ? spentRootCeiling(rootId, ledger, excludingSendId, admissionPolicy) : undefined;
+  if (root) return root;
+  const limit = (admissionPolicy ?? ledger.policy).pool.maxTokens;
+  return poolId && limit !== undefined && ledger.exhausted("pool", poolId, excludingSendId, admissionPolicy)
+    ? {
+      scope: "pool",
+      limit,
+      ...(ledger.hasUnboundPositivePoolHistory() ? { includesUnboundPoolHistory: true } : {}),
+    }
+    : undefined;
 }
 
 export interface WorkflowBudgetSnapshot {

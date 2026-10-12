@@ -8,7 +8,9 @@ import { clearCodexUpstreamHealth } from "../../src/codex/routing";
 import { clearUpstreamHostHealth } from "../../src/codex/upstream-host-health";
 import { handleResponsesCompact } from "../../src/server/responses";
 import type { OcxConfig } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { configureSharedSpendLedger, sharedSpendLedger, spendPolicyFromConfig } from "../../src/lib/spend-reservation-ledger";
 
 const originalFetch = globalThis.fetch;
 
@@ -44,7 +46,7 @@ describe("compact handoff route admission namespacing", () => {
     } as OcxConfig;
   }
 
-  function withPoolEnv<T>(run: (config: OcxConfig) => Promise<T>): Promise<T> {
+  async function withPoolEnv<T>(run: (config: OcxConfig) => Promise<T>): Promise<T> {
     const testDir = mkdtempSync(join(tmpdir(), "ocx-compact-handoff-admission-"));
     const previousOpencodexHome = process.env.OPENCODEX_HOME;
     const previousCodexHome = process.env.CODEX_HOME;
@@ -60,7 +62,13 @@ describe("compact handoff route admission namespacing", () => {
       chatgptAccountId: "pool_acc",
     });
     updateAccountQuota("pool-a", 10);
-    return run(poolConfig()).finally(() => {
+    // Taken after this helper installs its home so direct compact dispatch owns that journal.
+    const releaseSpendHome = acquireOwnedSpendHome();
+    try {
+      return await run(poolConfig());
+    } finally {
+      // Released before this helper restores and removes its home so no live database is unlinked.
+      releaseSpendHome();
       globalThis.fetch = originalFetch;
       clearCodexUpstreamHealth();
       clearUpstreamHostHealth();
@@ -70,7 +78,7 @@ describe("compact handoff route admission namespacing", () => {
       else process.env.OPENCODEX_HOME = previousOpencodexHome;
       if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = previousCodexHome;
-    });
+    }
   }
 
   function compactionRequest(
@@ -97,6 +105,34 @@ describe("compact handoff route admission namespacing", () => {
       parallel_tool_calls: true,
     };
   }
+
+  for (const historicalPool of ["retired-display-label", "openai"]) test(`native compact explains spend refusal with history from ${historicalPool}`, async () => {
+    await withPoolEnv(async config => {
+      configureSharedSpendLedger(spendPolicyFromConfig({ pool: { maxTokens: 100 } }, undefined, ["openai"]));
+      const ledger = sharedSpendLedger();
+      expect(ledger.reserve({ sendId: "historical", scopes: { poolId: historicalPool },
+        inputTokens: 90, outputCeilingTokens: 0 }).reserved).toBe(true);
+      ledger.markDispatched("historical");
+      ledger.settle("historical", { inputTokens: 90, outputTokens: 0 });
+      let calls = 0;
+      globalThis.fetch = (async () => { calls++; throw new Error("compact must refuse before wire"); }) as typeof fetch;
+      const response = await handleResponsesCompact(compactionRequest(compactionBody("gpt-5.6-sol"), {}),
+        config, { model: "", provider: "", spendInputEstimateTokens: 20 });
+      expect(response.status).toBe(429);
+      const body = await response.text();
+      if (historicalPool === "retired-display-label") {
+        expect(response.headers.get("x-opencodex-local-refusal")).toBe("workflow_spend_exhausted");
+        expect(body).toContain("unassigned historical provider-pool balances");
+      } else {
+        expect(response.headers.get("x-opencodex-local-refusal")).toBeNull();
+        expect(body).toContain("request_send_budget_exhausted");
+        expect(body).not.toContain("unassigned historical provider-pool balances");
+      }
+      expect(body).not.toContain("retired-display-label");
+      expect(calls).toBe(0);
+      expect(ledger.snapshot("pool", "openai")?.settled).toBe(90);
+    });
+  });
 
   test("a remembered route is claimed only by the principal that stored it", async () => {
     await withPoolEnv(async config => {
@@ -155,8 +191,12 @@ describe("compact handoff route admission namespacing", () => {
 
       // The owner stores the deepseek route under (its principal, this lane).
       const stored = await compact("deepseek/deepseek-v4-flash", owner);
-      expect(stored.status).toBe(200);
-      expect(calls).toEqual([{ model: "deepseek-v4-flash", nativeCompact: false }]);
+      try {
+        expect(stored.status).toBe(200);
+        expect(calls).toEqual([{ model: "deepseek-v4-flash", nativeCompact: false }]);
+      } finally {
+        await stored.body?.cancel();
+      }
 
       // A different admitted principal re-sending the same lane header must not
       // claim it: every attempt stays on the requested model's native compact.
@@ -171,16 +211,24 @@ describe("compact handoff route admission namespacing", () => {
       ] as const) {
         calls.length = 0;
         const res = await compact("openai-apikey/gpt-5.6-sol", intruder);
-        expect(res.status).toBe(502);
-        expect(calls.length).toBeGreaterThan(0);
-        expect(calls.every(call => call.model === "gpt-5.6-sol" && call.nativeCompact)).toBe(true);
+        try {
+          expect(res.status).toBe(502);
+          expect(calls.length).toBeGreaterThan(0);
+          expect(calls.every(call => call.model === "gpt-5.6-sol" && call.nativeCompact)).toBe(true);
+        } finally {
+          await res.body?.cancel();
+        }
       }
 
       // The owner's own quota-blocked retry still finds the route and hands off.
       calls.length = 0;
       const handoff = await compact("openai-apikey/gpt-5.6-sol", owner);
-      expect(handoff.status).toBe(200);
-      expect(calls.at(-1)).toEqual({ model: "deepseek-v4-flash", nativeCompact: false });
+      try {
+        expect(handoff.status).toBe(200);
+        expect(calls.at(-1)).toEqual({ model: "deepseek-v4-flash", nativeCompact: false });
+      } finally {
+        await handoff.body?.cancel();
+      }
     });
     // Five request sequences ride the transient-502 retry ladder; the default
     // 5s budget is not enough on a contended host.

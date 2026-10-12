@@ -1,5 +1,14 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import {
+  LOCAL_ASIDE_SYNC_CAPABILITY_HEADER,
+  LOCAL_ASIDE_SYNC_EXPECTED_PID_HEADER,
+  LOCAL_ASIDE_SYNC_EXPIRES_AT_HEADER,
+  LOCAL_ASIDE_SYNC_NONCE_HEADER,
+  LOCAL_ASIDE_SYNC_PATH,
+  parseExpectedLocalAsideSyncPid,
+  verifyLocalAsideSyncCapability,
+} from "../lib/local-aside-sync-contract";
+import {
   chmodSync,
   closeSync,
   fsyncSync,
@@ -12,7 +21,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import { adminApiTokenFilePath } from "../lib/admin-secrets";
+import { adminApiTokenFilePath, opencodeCatalogToken } from "../lib/admin-secrets";
 import {
   LOCAL_MANAGEMENT_CAPABILITY_HEADER,
   LOCAL_MANAGEMENT_CAPABILITY_EXPIRES_AT_HEADER,
@@ -62,6 +71,8 @@ import {
   type GuiSessionRecord,
   type GuiSessionRequestContext,
 } from "./gui-session";
+import { hasLocalDesktopSnapshotCapability } from "./local-desktop-snapshot-auth";
+import { hasLocalAccountSwitchCapability } from "./local-account-switch-auth";
 export type { GuiSessionBootstrap, GuiSessionRequestContext } from "./gui-session";
 
 const LOCAL_READ_REPLAY_LIMIT = 256;
@@ -70,6 +81,8 @@ const admittedLocalReadRequests = new WeakSet<Request>();
 const LOCAL_PROVIDER_RELOAD_REPLAY_LIMIT = 256;
 const consumedLocalProviderReloadCapabilities = new Map<string, number>();
 const admittedLocalProviderReloadRequests = new WeakSet<Request>();
+const consumedLocalAsideSyncCapabilities = new Map<string, number>();
+const admittedLocalAsideSyncRequests = new WeakSet<Request>();
 const GUI_PAIR_REPLAY_LIMIT = 256;
 const consumedGuiPairCapabilities = new Map<string, number>();
 const admittedGuiPairRequests = new WeakSet<Request>();
@@ -249,27 +262,56 @@ export function issueGuiSession(
   return issueGuiSessionFromState(req, config, state, context);
 }
 
+/** Returns the recorded issuance for the session that authorized this request. */
+export function managementSessionIssuance(
+  req: Request,
+  state: ManagementAuthState,
+): import("./gui-session").GuiSessionIssuance | null {
+  if (!state.available) return null;
+  const credential = requestManagementCredential(req);
+  if (!credential || equalSecret(credential, state.token)) return null;
+  return state.sessions.get(credential)?.issuance ?? null;
+}
+
 export interface ManagementSessionControl {
   revokeCurrent(req: Request): boolean;
   /** Revalidate a long-lived request against current authority, without cached admission or renewal. */
   isCurrent(req: Request, config: OcxConfig): boolean;
+  /** Prove that the current browser session came from the operator-mediated pairing flow. */
+  isPaired(req: Request, config: OcxConfig): boolean;
+  /** Revalidate independent session authority before disclosing stored data keys. */
+  canRevealDataKeys?(req: Request, config: OcxConfig): boolean;
 }
 
 export function createManagementSessionControl(state: ManagementAuthState): ManagementSessionControl {
+  function currentSession(req: Request, config: OcxConfig): GuiSessionRecord | null {
+    if (!state.available) return null;
+    const adminToken = state.token;
+    const credential = requestManagementCredential(req);
+    if (!credential || equalSecret(credential, adminToken)) return null;
+    const session = state.sessions.get(credential);
+    if (!session) return null;
+    // Reuse the full origin/expiry/CSRF predicate against the current record, but
+    // isolate its sliding-expiry mutation: authority checks are not browser activity.
+    return authorizeGuiSessionRequest(req, config, {
+      sessions: new Map([[credential, { ...session }]]),
+      pairingGrants: state.pairingGrants,
+    }).ok ? session : null;
+  }
   return {
     isCurrent(req: Request, config: OcxConfig): boolean {
       if (!state.available) return false;
       const credential = requestManagementCredential(req);
       if (!credential) return false;
       if (equalSecret(credential, state.token)) return true;
-      const session = state.sessions.get(credential);
-      if (!session) return false;
-      // Reuse the full origin/expiry/CSRF predicate against the current record, but
-      // isolate its sliding-expiry mutation: SSE heartbeats are not browser activity.
-      return authorizeGuiSessionRequest(req, config, {
-        sessions: new Map([[credential, { ...session }]]),
-        pairingGrants: state.pairingGrants,
-      }).ok;
+      return currentSession(req, config) !== null;
+    },
+    isPaired(req: Request, config: OcxConfig): boolean {
+      return currentSession(req, config)?.issuance === "pairing";
+    },
+    canRevealDataKeys(req: Request, config: OcxConfig): boolean {
+      const issuance = currentSession(req, config)?.issuance;
+      return issuance === "pairing" || issuance === "tailscale-identity";
     },
     revokeCurrent(req: Request): boolean {
       if (!state.available) return false;
@@ -292,15 +334,19 @@ export function createManagementSessionControl(state: ManagementAuthState): Mana
  * per-session CSRF token match. Consent-bearing routes must key off this value
  * rather than off request headers, which the token holder can forge freely.
  * The capability principals are process-scoped HMACs bound to the current process
- * PID and listening port. Local reads are accepted only for two exact GET paths;
- * restart and provider reload remain separate wire contracts for their exact POSTs.
+ * PID and listening port. Local reads are accepted only for allowlisted GET paths;
+ * snapshot, restart and provider reload use separate contracts for their exact POSTs.
  */
 export type ManagementPrincipal =
   | "admin-token"
+  | "opencode-catalog-token"
   | "gui-session"
   | "gui-pair-capability"
   | "local-read-capability"
+  | "local-desktop-snapshot-capability"
+  | "local-account-switch-capability"
   | "local-provider-reload-capability"
+  | "local-aside-sync-capability"
   | "system-restart-capability";
 
 export interface LocalManagementAuthContext {
@@ -350,8 +396,6 @@ function hasLocalReadCapability(
   } catch {
     return false;
   }
-  // Do not let a future query-bearing variant silently inherit this narrow grant.
-  if (url.search !== "") return false;
   const expectedPid = parseExpectedLocalManagementPid(
     req.headers.get(LOCAL_MANAGEMENT_EXPECTED_PID_HEADER),
   );
@@ -366,7 +410,9 @@ function hasLocalReadCapability(
     local.attestationSecret,
     req.headers.get(LOCAL_MANAGEMENT_NONCE_HEADER),
     req.method,
-    url.pathname,
+    // The query is signed into the capability, so a grant for one range cannot be replayed
+    // against another — the grant stays exactly as narrow as the request it was minted for.
+    url.pathname + url.search,
     local.pid,
     local.port,
     expiresAt,
@@ -431,6 +477,25 @@ function hasLocalProviderReloadCapability(
   return true;
 }
 
+function hasLocalAsideSyncCapability(req: Request, local: LocalManagementAuthContext | undefined): boolean {
+  if (admittedLocalAsideSyncRequests.has(req)) return true;
+  if (!local || req.method !== "POST") return false;
+  let url: URL;
+  try { url = new URL(req.url); } catch { return false; }
+  if (url.pathname !== LOCAL_ASIDE_SYNC_PATH || url.search !== "") return false;
+  if (parseExpectedLocalAsideSyncPid(req.headers.get(LOCAL_ASIDE_SYNC_EXPECTED_PID_HEADER)) !== local.pid) return false;
+  const expiresAt = Number(req.headers.get(LOCAL_ASIDE_SYNC_EXPIRES_AT_HEADER));
+  if (!Number.isSafeInteger(expiresAt)) return false;
+  const capability = req.headers.get(LOCAL_ASIDE_SYNC_CAPABILITY_HEADER);
+  const now = Date.now();
+  if (!verifyLocalAsideSyncCapability(local.attestationSecret, req.headers.get(LOCAL_ASIDE_SYNC_NONCE_HEADER), req.method, url.pathname, local.pid, local.port, expiresAt, capability, now)) return false;
+  for (const [used, until] of consumedLocalAsideSyncCapabilities) if (until <= now) consumedLocalAsideSyncCapabilities.delete(used);
+  if (!capability || consumedLocalAsideSyncCapabilities.has(capability) || consumedLocalAsideSyncCapabilities.size >= 256) return false;
+  consumedLocalAsideSyncCapabilities.set(capability, expiresAt);
+  admittedLocalAsideSyncRequests.add(req);
+  return true;
+}
+
 function hasGuiPairCapability(
   req: Request,
   local: LocalManagementAuthContext | undefined,
@@ -484,6 +549,16 @@ function requestManagementCredential(req: Request): string | null {
     || null;
 }
 
+function isOpencodeCatalogRequest(req: Request): boolean {
+  if (req.method !== "GET") return false;
+  try {
+    const url = new URL(req.url);
+    return url.pathname === "/api/models" && url.search === "";
+  } catch {
+    return false;
+  }
+}
+
 function resolveManagementAdmission(
   req: Request,
   state: ManagementAuthState,
@@ -494,12 +569,18 @@ function resolveManagementAdmission(
   if (cached) return cached;
   let principal: ManagementPrincipal | null = null;
   if (hasSystemRestartCapability(req, local)) principal = "system-restart-capability";
+  else if (hasLocalAsideSyncCapability(req, local)) principal = "local-aside-sync-capability";
   else if (hasLocalProviderReloadCapability(req, local)) principal = "local-provider-reload-capability";
+  else if (hasLocalDesktopSnapshotCapability(req, local)) principal = "local-desktop-snapshot-capability";
+  else if (hasLocalAccountSwitchCapability(req, local)) principal = "local-account-switch-capability";
   else if (hasLocalReadCapability(req, local)) principal = "local-read-capability";
   else if (hasGuiPairCapability(req, local)) principal = "gui-pair-capability";
   else if (state.available) {
     const actual = requestManagementCredential(req);
     if (actual && equalSecret(actual, state.token)) principal = "admin-token";
+    else if (actual && isOpencodeCatalogRequest(req) && equalSecret(actual, opencodeCatalogToken(state.token))) {
+      principal = "opencode-catalog-token";
+    }
     else if (config && authorizeGuiSessionRequest(req, config, state).ok) principal = "gui-session";
   }
   if (principal) admittedManagementRequests.set(req, principal);

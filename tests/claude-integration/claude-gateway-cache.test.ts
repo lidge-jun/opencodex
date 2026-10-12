@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { claudeConfigDir, refreshGatewayModelCacheFromProxy, writeGatewayModelCache } from "../../src/claude/gateway-cache";
+import { claudeConfigDir, fetchGatewayModels, refreshGatewayModelCacheFromProxy, writeGatewayModelCache } from "../../src/claude/gateway-cache";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const dirs: string[] = [];
@@ -49,9 +49,10 @@ describe("Claude Code gateway-model cache pre-write (devlog 260712 030)", () => 
       process.env.CLAUDE_CONFIG_DIR = "/tmp/custom-claude";
       expect(claudeConfigDir()).toBe("/tmp/custom-claude");
       delete process.env.CLAUDE_CONFIG_DIR;
-      // Platform-correct separator (Windows CI joins with backslash).
-      const { homedir } = require("node:os") as typeof import("node:os");
-      expect(claudeConfigDir()).toBe(join(homedir(), ".claude"));
+      // The current platform home variable, which the preload points at the sandbox; Bun's
+      // os.homedir() would still name the real home (#6775). join() keeps the separator right.
+      const home = process.platform === "win32" ? process.env.USERPROFILE : process.env.HOME;
+      expect(claudeConfigDir()).toBe(join(home!, ".claude"));
     } finally {
       if (prev === undefined) delete process.env.CLAUDE_CONFIG_DIR;
       else process.env.CLAUDE_CONFIG_DIR = prev;
@@ -194,4 +195,60 @@ describe("Claude Code gateway-model cache pre-write (devlog 260712 030)", () => 
       globalThis.fetch = originalFetch;
     }
   });
+});
+
+describe("gateway-model cache carries the picker description", () => {
+  test("writer keeps description so the picker stops reading \"From gateway\"", () => {
+    const dir = tempDir();
+    const path = writeGatewayModelCache("http://127.0.0.1:10100", [
+      { id: "claude-ocx-xai--grok-4.7", display_name: "grok-4.7 (xai)", description: "Routed by OpenCodex to xai/grok-4.7" },
+      { id: "claude-ocx-native--gpt-5.5", display_name: "gpt-5.5 (native)" },
+    ], dir);
+    expect(JSON.parse(readFileSync(path!, "utf8")).models).toEqual([
+      { id: "claude-ocx-xai--grok-4.7", display_name: "grok-4.7 (xai)", description: "Routed by OpenCodex to xai/grok-4.7" },
+      { id: "claude-ocx-native--gpt-5.5", display_name: "gpt-5.5 (native)" },
+    ]);
+  });
+
+  test("proxy refresh copies description from /v1/models and ignores non-strings", async () => {
+    const dir = tempDir();
+    const fetchImpl = (async () => new Response(JSON.stringify({ data: [
+      { id: "claude-ocx-xai--grok-4.7", display_name: "grok-4.7 (xai)", description: "Routed by OpenCodex to xai/grok-4.7" },
+      { id: "claude-ocx-p--odd", display_name: "odd (p)", description: 42 },
+    ] }), { headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
+    const path = await refreshGatewayModelCacheFromProxy(10100, { timeoutMs: 1000, configDir: dir, env: {}, fetchImpl });
+    expect(JSON.parse(readFileSync(path!, "utf8")).models).toEqual([
+      { id: "claude-ocx-xai--grok-4.7", display_name: "grok-4.7 (xai)", description: "Routed by OpenCodex to xai/grok-4.7" },
+      { id: "claude-ocx-p--odd", display_name: "odd (p)" },
+    ]);
+  });
+});
+
+
+test("fresh discovery remains usable when cache cannot be written", async () => {
+  const dir = tempDir();
+  const blocked = join(dir, "file"); writeFileSync(blocked, "not a directory");
+  let requests = 0;
+  const snapshot = await fetchGatewayModels({ baseUrl: "https://hub.example.test", admissionToken: "fixture-client" }, {
+    configDir: blocked,
+    fetchImpl: async (_url, init) => {
+      requests++;
+      expect(new Headers(init?.headers).get("x-opencodex-api-key")).toBe("fixture-client");
+      expect(new Headers(init?.headers).has("authorization")).toBe(false);
+      return Response.json({ data: [{ id: "ocx-claude-mock--model" }] });
+    },
+  });
+  expect(snapshot?.models).toEqual([{ id: "ocx-claude-mock--model" }]);
+  expect(writeGatewayModelCache(snapshot!.baseUrl, snapshot!.models, blocked)).toBeNull();
+  expect(requests).toBe(1);
+});
+
+test("failed or malformed discovery supplies no exposure and never reads stale cache", async () => {
+  const dir = tempDir();
+  writeGatewayModelCache("https://hub.example.test", [{ id: "ocx-claude-mock--stale" }], dir);
+  for (const result of [Response.json({}, { status: 401 }), Response.json({ data: "bad" }), new Response("{")]) {
+    expect(await fetchGatewayModels({ baseUrl: "https://hub.example.test", admissionToken: "fixture-client" }, {
+      configDir: dir, fetchImpl: async () => result,
+    })).toBeNull();
+  }
 });

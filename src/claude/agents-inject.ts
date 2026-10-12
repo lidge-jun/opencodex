@@ -15,14 +15,14 @@ import { lstatSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileS
 import { join } from "node:path";
 import type { OcxConfig } from "../types";
 import { renameAtomicFile } from "../lib/windows-atomic-replace";
-import { claudeCodeAlias, claudeCodeNativeAlias } from "./alias";
-import { AUTO_CONTEXT_OFF, shouldMarkOneMillion, stripOneMillionMarker, withOneMillionMarker } from "./context-windows";
+import { assertNotRealClaudeConfigUnderTest } from "../lib/test-home-guard";
+import { accountsAt200k, entryParts, SAFE_AGENT_MODEL_ID, withSubagentContextMarker } from "./subagent-model";
+import { stripOneMillionMarker } from "./context-windows";
 import { claudeConfigDir } from "./gateway-cache";
-import { DEFAULT_SUBAGENT_MODELS, hasOwnProvider } from "../config";
+import { DEFAULT_SUBAGENT_MODELS } from "../config";
 import { effectiveBlockedSkillNames, resolveInboundModel } from "./inbound";
 import { AnthropicRequestError } from "./inbound-records";
-import { knownModelIdsForProvider } from "../router";
-import { decodeRoutedModelIdOrThrow } from "../providers/slug-codec";
+import { siblingOfLivePort } from "../codex/sibling-start";
 
 export interface ClaudeAgentDef {
   file: string;
@@ -36,6 +36,7 @@ export interface ClaudeAgentDef {
 const OWNED_PREFIX = "ocx-";
 /** Ownership proof (audit 071 #2): a file without this marker is NEVER touched. */
 const GENERATED_MARKER = "generated-by: opencodex";
+
 
 function sanitizeName(value: string): string {
   const cleaned = value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
@@ -55,43 +56,6 @@ function pickerDefaultModel(configDir: string): string | null {
   } catch {
     return null;
   }
-}
-
-/** Roster entry -> alias + display parts. Entries are bare native slugs or "provider/id".
- * Codex-facing encoded ids (`provider/vendor-model`) decode to the native slash id first
- * so the alias joins the raw-native context-window map (context-windows.ts). */
-
-/**
- * Generated subagent defs cannot rely on the parent's auto-context compaction
- * pairing, so their [1m] marker follows the AUTHORITATIVE window only: mark when
- * the effective window (exact selector, then the canonical [1m] form, then bare)
- * is genuinely >= 1M; strip an inherited unsafe marker back to the bare selector;
- * with no window information, keep the selector as it was. Genuine routed [1m]
- * ids are preserved through the canonical-exact lookup. (#854)
- */
-function withSubagentContextMarker(selector: string, windows: Record<string, number>): string {
-  const bare = stripOneMillionMarker(selector);
-  const wasMarked = selector !== bare;
-  const canonicalExact = wasMarked ? `${bare}[1m]` : selector;
-  const authoritativeWindow = windows[selector] ?? windows[canonicalExact] ?? windows[bare];
-  if (typeof authoritativeWindow === "number" && authoritativeWindow > 0) {
-    return shouldMarkOneMillion(authoritativeWindow, AUTO_CONTEXT_OFF)
-      ? (withOneMillionMarker(selector, windows) ?? selector)
-      : bare;
-  }
-  return wasMarked ? selector : bare;
-}
-function entryParts(entry: string, config: OcxConfig): { alias: string; id: string; provider: string } {
-  const slash = entry.indexOf("/");
-  if (slash > 0) {
-    const provider = entry.slice(0, slash);
-    const prov = hasOwnProvider(config.providers, provider) ? config.providers[provider] : undefined;
-    const id = prov
-      ? decodeRoutedModelIdOrThrow(entry.slice(slash + 1), knownModelIdsForProvider(provider, prov, config))
-      : entry.slice(slash + 1);
-    return { alias: claudeCodeAlias(provider, id), id, provider };
-  }
-  return { alias: claudeCodeNativeAlias(entry), id: entry, provider: "native" };
 }
 
 export function buildClaudeAgentDefs(
@@ -134,7 +98,7 @@ export function buildClaudeAgentDefs(
     // Generated defs mark [1m] on the authoritative window only — never the
     // main-session auto-context predicate (a 372K route marked [1m] would be
     // accounted at 1M with no compaction safety net in the subagent).
-    const model = withSubagentContextMarker(alias, windows);
+    const model = withSubagentContextMarker(alias, windows, accountsAt200k(config));
     const bare = alias.toLowerCase();
     if (coveredModels.has(bare)) return;
     coveredModels.add(bare);
@@ -156,7 +120,7 @@ export function buildClaudeAgentDefs(
   const roster = rosterOverride
     ?? (config.subagentModels === undefined ? DEFAULT_SUBAGENT_MODELS : config.subagentModels);
   for (const entry of roster.slice(0, 5)) {
-    if (typeof entry !== "string" || entry.trim() === "") continue;
+    if (typeof entry !== "string" || !SAFE_AGENT_MODEL_ID.test(entry.trim())) continue;
     const { alias, id, provider } = entryParts(entry.trim(), config);
     push(sanitizeName(id), alias, `Delegate work to ${id} (${provider}) via opencodex routing. General-purpose worker/explorer on that model. ${NO_MODEL_ARG}`);
   }
@@ -167,7 +131,7 @@ export function buildClaudeAgentDefs(
   // the next launch sync — documented limit. No resolvable default -> no self def.
   const selfModel = pickerDefaultModel(configDir) ?? (config.claudeCode?.model?.trim() || null);
   if (selfModel) {
-    const marked = withSubagentContextMarker(selfModel, windows);
+    const marked = withSubagentContextMarker(selfModel, windows, accountsAt200k(config));
     defs.push({
       file: `${OWNED_PREFIX}self.md`,
       name: `${OWNED_PREFIX}self`,
@@ -240,6 +204,16 @@ function isOwnedFile(path: string): boolean {
  * atomic (tmp + rename). Best-effort — returns null on any failure.
  */
 export function syncClaudeAgentDefs(defs: readonly ClaudeAgentDef[], configDir = claudeConfigDir()): string[] | null {
+  // Outside the best-effort catch: under an armed test process a write or prune of the
+  // real Claude agents directory must throw, never degrade to "returned null" (#6775).
+  // Every path written is judged by where it resolves, including a pre-placed link named like
+  // a definition or its temporary file.
+  const agentsDir = join(configDir, "agents");
+  assertNotRealClaudeConfigUnderTest(
+    configDir,
+    agentsDir,
+    ...defs.flatMap(def => [join(agentsDir, def.file), `${join(agentsDir, def.file)}.tmp-${process.pid}`]),
+  );
   try {
     const dir = join(configDir, "agents");
     if (defs.length === 0) {
@@ -284,6 +258,9 @@ export function injectClaudeAgentDefs(
   /** Hub-sourced roster on a connected client; see `buildClaudeAgentDefs`. */
   rosterOverride?: readonly string[],
 ): string[] | null {
+  // `~/.claude/agents` is shared with the live proxy a sibling instance runs beside, which owns
+  // both its roster and its pruning (`src/codex/sibling-start.ts`).
+  if (siblingOfLivePort() !== null) return null;
   if (config.claudeCode?.enabled === false || config.claudeCode?.injectAgents === false) {
     // Disabled: prune verified-owned files so stale definitions stop loading
     // in future sessions (audit 071 #3). The roster override is irrelevant here by

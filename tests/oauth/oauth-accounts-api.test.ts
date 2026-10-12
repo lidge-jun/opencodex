@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { managementFetch as fetch } from "../helpers/management-auth";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
@@ -12,6 +12,7 @@ import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/iso
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { withStubbedProviderFetch } from "../helpers/catalog-provider-fetch";
 import { getAccountSet } from "../../src/oauth/store";
+import { getValidAccessSnapshotForAccount } from "../../src/oauth";
 import { ACCOUNT_IMPORT_DEADLINE_MS, ACCOUNT_IMPORT_MAX_BYTES, ACCOUNT_IMPORT_MAX_REQUEST_BYTES } from "../../src/oauth/account-import/types";
 import { handleOauthAccountRoutes } from "../../src/server/management/oauth-account-routes";
 import { createManagementSessionControl, requireManagementAuth, type ManagementAuthState } from "../../src/server/management-auth";
@@ -68,11 +69,34 @@ function writeAccounts(): void {
     anthropic: {
       activeAccountId: "aaaa1111",
       accounts: [
-        { id: "aaaa1111", credential: { access: "t1", refresh: "r1", expires: 9999999999999, email: "first@example.com", accountId: "acct-1" } },
-        { id: "bbbb2222", credential: { access: "t2", refresh: "r2", expires: 9999999999999, email: "second@example.com", accountId: "acct-2" } },
+        { id: "aaaa1111", credential: { access: "t1", refresh: "r1", expires: 9999999999999, email: "first@example.com", accountId: "acct-1", source: "oauth" } },
+        { id: "bbbb2222", credential: { access: "t2", refresh: "r2", expires: 9999999999999, email: "second@example.com", accountId: "acct-2", source: "oauth" } },
       ],
     },
   }), { mode: 0o600 });
+}
+
+function enableGoogleAntigravityAccounts(configureProvider = true): void {
+  const config = baseConfig();
+  if (configureProvider) {
+    config.providers["google-antigravity"] = {
+      adapter: "openai-chat",
+      baseUrl: "https://cloudcode-pa.googleapis.com",
+      authMode: "oauth",
+    } as OcxConfig["providers"][string];
+  }
+  saveConfig(config);
+
+  const authPath = join(testDir, "auth.json");
+  const auth = JSON.parse(readFileSync(authPath, "utf8")) as Record<string, unknown>;
+  auth["google-antigravity"] = {
+    activeAccountId: "ga111111",
+    accounts: [
+      { id: "ga111111", credential: { access: "antigravity-1", refresh: "refresh-1", expires: 9999999999999, email: "first@example.test", accountId: "ga-account-1", projectId: "project-1" } },
+      { id: "ga222222", credential: { access: "antigravity-2", refresh: "refresh-2", expires: 9999999999999, email: "second@example.test", accountId: "ga-account-2", projectId: "project-2" } },
+    ],
+  };
+  writeFileSync(authPath, JSON.stringify(auth), { mode: 0o600 });
 }
 
 beforeEach(() => {
@@ -412,6 +436,133 @@ describe("multiauth accounts API", () => {
         body: JSON.stringify({ provider: "not-a-provider", accountId: "x" }),
       });
       expect(badProvider.status).toBe(400);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("generic OAuth pause persists, moves active selection when possible, and permits pausing every account", async () => {
+    enableGoogleAntigravityAccounts();
+    const server = startServer(0);
+    try {
+      const pause = await fetch(new URL("/api/oauth/accounts/pause", server.url), {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "google-antigravity", accountId: "ga111111", paused: true }),
+      });
+      expect(pause.status).toBe(200);
+      expect(await pause.json()).toMatchObject({ ok: true, paused: true, activeAccountId: "ga222222" });
+      expect(getAccountSet("google-antigravity")?.accounts.find(account => account.id === "ga111111")?.paused).toBe(true);
+
+      const listed = await fetch(new URL("/api/oauth/accounts?provider=google-antigravity", server.url));
+      const rows = await listed.json() as { accounts: Array<{ id: string; paused?: boolean }> };
+      expect(rows.accounts.find(account => account.id === "ga111111")?.paused).toBe(true);
+      expect(rows.accounts.find(account => account.id === "ga222222")?.paused).toBe(false);
+
+      const selectingPaused = await fetch(new URL("/api/oauth/accounts/active", server.url), {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "google-antigravity", accountId: "ga111111" }),
+      });
+      expect(selectingPaused.status).toBe(409);
+
+      const pauseLast = await fetch(new URL("/api/oauth/accounts/pause", server.url), {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "google-antigravity", accountId: "ga222222", paused: true }),
+      });
+      expect(pauseLast.status).toBe(200);
+      expect(getAccountSet("google-antigravity")?.activeAccountId).toBe("ga222222");
+      expect(getAccountSet("google-antigravity")?.accounts.find(account => account.id === "ga222222")?.paused).toBe(true);
+      await expect(getValidAccessSnapshotForAccount("google-antigravity", "ga222222")).rejects.toThrow();
+
+      const resume = await fetch(new URL("/api/oauth/accounts/pause", server.url), {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "google-antigravity", accountId: "ga111111", paused: false }),
+      });
+      expect(resume.status).toBe(200);
+      expect(getAccountSet("google-antigravity")?.accounts.find(account => account.id === "ga111111")?.paused).toBeUndefined();
+
+      const resumeLast = await fetch(new URL("/api/oauth/accounts/pause", server.url), {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "google-antigravity", accountId: "ga222222", paused: false }),
+      });
+      expect(resumeLast.status).toBe(200);
+      expect(getAccountSet("google-antigravity")?.accounts.find(account => account.id === "ga222222")?.paused).toBeUndefined();
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("built-in generic OAuth pause works when the provider config row is absent", async () => {
+    enableGoogleAntigravityAccounts(false);
+    const server = startServer(0);
+    try {
+      const listed = await fetch(new URL("/api/oauth/accounts?provider=google-antigravity", server.url));
+      expect(listed.status).toBe(200);
+      const rows = await listed.json() as { accounts: Array<{ id: string; paused?: boolean }> };
+      expect(rows.accounts.find(account => account.id === "ga111111")?.paused).toBe(false);
+
+      const paused = await fetch(new URL("/api/oauth/accounts/pause", server.url), {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "google-antigravity", accountId: "ga111111", paused: true }),
+      });
+      expect(paused.status).toBe(200);
+      expect(await paused.json()).toMatchObject({ ok: true, paused: true });
+      expect(getAccountSet("google-antigravity")?.accounts.find(account => account.id === "ga111111")?.paused).toBe(true);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("Anthropic pause validates input, persists resume and never alters credentials", async () => {
+    const before = getAccountSet("anthropic")!;
+    const server = startServer(0);
+    const pause = (accountId: string, paused: unknown) => fetch(new URL("/api/oauth/accounts/pause", server.url), {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider: "anthropic", accountId, paused }),
+    });
+    try {
+      expect((await pause("aaaa1111", "true")).status).toBe(400);
+      expect((await pause("missing", true)).status).toBe(404);
+      expect(getAccountSet("anthropic")).toEqual(before);
+      expect((await pause("aaaa1111", true)).status).toBe(200);
+      expect((await pause("bbbb2222", true)).status).toBe(200);
+      const disk = JSON.parse(readFileSync(join(testDir, "auth.json"), "utf8"));
+      expect(disk.anthropic.accounts.every((row: { paused: boolean }) => row.paused)).toBe(true);
+      const resumed = await pause("aaaa1111", false);
+      expect(await resumed.json()).toMatchObject({ paused: false, activeAccountId: "aaaa1111", activeAccountChanged: true });
+      const after = getAccountSet("anthropic")!;
+      expect(after.accounts.map(row => row.credential)).toEqual(before.accounts.map(row => row.credential));
+      expect(after.accounts.find(row => row.id === "aaaa1111")?.paused).toBeUndefined();
+      const serialized = await fetch(new URL("/api/oauth/accounts?provider=anthropic", server.url)).then(response => response.text());
+      expect(serialized).not.toContain('"access"');
+      expect(serialized).not.toContain('"refresh"');
+    } finally { await server.stop(true); }
+  });
+
+  test("pause API supports Anthropic but rejects a generic OAuth account behind an API-key route", async () => {
+    enableGoogleAntigravityAccounts();
+    const keyRouteConfig = baseConfig();
+    keyRouteConfig.providers["google-antigravity"] = {
+      adapter: "openai-chat", baseUrl: "https://cloudcode-pa.googleapis.com", authMode: "key",
+    } as OcxConfig["providers"][string];
+    saveConfig(keyRouteConfig);
+    const server = startServer(0);
+    try {
+      const anthropicPause = await fetch(new URL("/api/oauth/accounts/pause", server.url), {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "anthropic", accountId: "aaaa1111", paused: true }),
+      });
+      expect(anthropicPause.status).toBe(200);
+      expect(await anthropicPause.json()).toMatchObject({ paused: true, activeAccountId: "bbbb2222" });
+      const listed = await fetch(new URL("/api/oauth/accounts?provider=anthropic", server.url));
+      const rows = await listed.json() as { accounts: Array<{ id: string; paused: boolean }> };
+      expect(rows.accounts.find(row => row.id === "aaaa1111")?.paused).toBe(true);
+      expect(rows.accounts.find(row => row.id === "bbbb2222")?.paused).toBe(false);
+
+      const keyRoutePause = await fetch(new URL("/api/oauth/accounts/pause", server.url), {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "google-antigravity", accountId: "ga111111", paused: true }),
+      });
+      expect(keyRoutePause.status).toBe(400);
+      expect(getAccountSet("google-antigravity")?.accounts.find(account => account.id === "ga111111")?.paused).toBeUndefined();
     } finally {
       await server.stop(true);
     }

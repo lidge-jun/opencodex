@@ -28,6 +28,24 @@ describe("anthropicMessagesUrl", () => {
 });
 
 describe("anthropic stream hardening", () => {
+  test("malformed escaped tool names degrade to an empty name", async () => {
+    const response = new Response([
+      "event: content_block_start\n",
+      'data: {"type":"content_block_start","content_block":{"type":"tool_use","id":"toolu_bad_name","name":{"bad":1}}}\n\n',
+      "event: content_block_stop\n",
+      'data: {"type":"content_block_stop"}\n\n',
+      "event: message_stop\n",
+      'data: {"type":"message_stop"}\n\n',
+    ].join(""));
+    const escapedProvider = { ...provider, escapeBuiltinToolNames: true };
+    const events = await collect(createAnthropicAdapter(escapedProvider).parseStream(response));
+    expect(events.find(e => e.type === "tool_call_start")).toMatchObject({
+      type: "tool_call_start",
+      name: "",
+    });
+    expect(events.at(-1)?.type).toBe("done");
+  });
+
   test("EOF after content without message_stop fails closed", async () => {
     const response = new Response([
       "event: content_block_start\n",
@@ -102,6 +120,19 @@ describe("anthropic stream hardening", () => {
 });
 
 describe("anthropic non-stream tool_use input", () => {
+  test("malformed escaped tool names degrade to an empty name", async () => {
+    const adapter = createAnthropicAdapter({ ...provider, escapeBuiltinToolNames: true });
+    const events = await adapter.parseResponse!(new Response(JSON.stringify({
+      content: [{ type: "tool_use", id: "toolu_bad_name", name: { bad: 1 }, input: {} }],
+      stop_reason: "tool_use",
+    })));
+    expect(events.find(e => e.type === "tool_call_start")).toMatchObject({
+      type: "tool_call_start",
+      name: "",
+    });
+    expect(events.at(-1)?.type).toBe("done");
+  });
+
   test("parses string tool_use.input", async () => {
     const adapter = createAnthropicAdapter(provider);
     const events = await adapter.parseResponse!(new Response(JSON.stringify({

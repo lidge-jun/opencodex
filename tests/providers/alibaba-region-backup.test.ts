@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { existsSync, linkSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -23,6 +23,7 @@ test("creates a snapshot, then never replaces it", () => {
     writeFileSync(configPath, '{"before":true}', "utf8");
     expect(backupConfigBeforeAlibabaRegionMigration(configPath)).toBe("created");
     expect(readFileSync(backupPath, "utf8")).toBe('{"before":true}');
+    if (process.platform !== "win32") expect(statSync(backupPath).mode & 0o777).toBe(0o600);
     expect(backupConfigBeforeAlibabaRegionMigration(configPath)).toBe("reused");
     expect(readFileSync(backupPath, "utf8")).toBe('{"before":true}');
   } finally { removeTreeWithRetry(dir); }
@@ -53,6 +54,7 @@ test("a short copy is never published", () => {
       exists: existsSync,
       read: path => readFileSync(path),
       copy: (_source, destination) => { writeFileSync(destination, '{"bef', "utf8"); },
+      harden: () => {},
       publishNoReplace: linkSync,
       remove: path => rmSync(path, { force: true }),
     })).toThrow(AlibabaBackupIntegrityError);
@@ -70,10 +72,30 @@ test("a failed copy leaves no snapshot and no temp file", () => {
       exists: existsSync,
       read: path => readFileSync(path),
       copy: () => { throw new Error("disk full"); },
+      harden: () => {},
       publishNoReplace: linkSync,
       remove: path => { removed.push(path); rmSync(path, { force: true }); },
     })).toThrow("disk full");
     expect(existsSync(`${configPath}.pre-alibaba-region-v1.bak`)).toBe(false);
     expect(removed).toHaveLength(1);
+  } finally { removeTreeWithRetry(dir); }
+});
+
+test("a failed harden never publishes the secret-bearing snapshot", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ocx-bak-"));
+  const configPath = join(dir, "config.json");
+  const backupPath = `${configPath}.pre-alibaba-region-v1.bak`;
+  try {
+    writeFileSync(configPath, '{"before":true}', "utf8");
+    expect(() => backupConfigBeforeAlibabaRegionMigration(configPath, {
+      exists: existsSync,
+      read: path => readFileSync(path),
+      copy: (source, destination) => writeFileSync(destination, readFileSync(source)),
+      harden: () => { throw new Error("ACL hardening failed"); },
+      publishNoReplace: linkSync,
+      remove: path => rmSync(path, { force: true }),
+    })).toThrow("ACL hardening failed");
+    expect(existsSync(backupPath)).toBe(false);
+    expect(existsSync(`${backupPath}.${process.pid}.tmp`)).toBe(false);
   } finally { removeTreeWithRetry(dir); }
 });

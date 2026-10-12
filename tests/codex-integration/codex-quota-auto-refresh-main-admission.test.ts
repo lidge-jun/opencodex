@@ -138,12 +138,13 @@ afterEach(async () => {
 });
 
 describe("quota auto-refresh native-main admission", () => {
-  test("stale metadata prepares an expired main token before WHAM and activation", async () => {
+  test.each([false, true])("expired main token is prepared before activation (missing deadline: %s)", async missingDeadline => {
     const cfg = config();
     writeMain(bearer(true));
     const cached = getAccountQuota(MAIN);
     if (!cached) throw new Error("Expected cached main quota");
     cached.updatedAt = now - 300_000;
+    if (missingDeadline) delete cached.shortResetAt;
     const fresh = bearer();
     const calls = installFetch(async (url, init) => {
       if (url === tokenUrl) {
@@ -157,7 +158,7 @@ describe("quota auto-refresh native-main admission", () => {
       return completedResponse();
     });
     await runCodexQuotaAutoRefresh(cfg, now, { persistCompleted: recordMarkers });
-    expect(calls).toEqual([tokenUrl, whamUrl, responsesUrl]);
+    expect(calls).toEqual(missingDeadline ? [tokenUrl, whamUrl, responsesUrl] : [tokenUrl, responsesUrl]);
     expect(isAccountNeedsReauth(MAIN)).toBe(false);
     expect(cfg.codexQuotaAutoRefresh?.[MAIN]?.lastFiveHourResetAt).toBe(RESET_MILLISECONDS);
     expect(getNativeMainProfileRequestCount()).toBe(0);
@@ -244,7 +245,8 @@ describe("quota auto-refresh native-main admission", () => {
     const calls = installFetch(async () => completedResponse());
     try {
       await runCodexQuotaAutoRefresh(cfg, now, { persistCompleted: recordMarkers });
-      expect(getMainAccountHardLockStatus(cfg)).toEqual({ enabled: true, state: "blocked" });
+      expect(getMainAccountHardLockStatus(cfg)).toEqual({ enabled: true, state: "blocked",
+        thresholds: { short: 90, long: 98 }, window: "short" });
       expect(token).not.toHaveBeenCalled();
       expect(calls).toEqual([]);
       expect(cfg.codexQuotaAutoRefresh?.[MAIN]).toEqual({ fiveHour: true, weekly: true });

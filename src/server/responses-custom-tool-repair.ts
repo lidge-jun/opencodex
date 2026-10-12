@@ -1,6 +1,7 @@
 import type { TranslatorBudget } from "../lib/translator-budget";
 import { mayBecomePatchEnvelope, normalizeApplyPatchDelimiters } from "../responses/apply-patch-envelope";
 import { compileCodeModeHelperInput, resolveCodeModeHelperName } from "../responses/code-mode-helper-compat";
+import { mayBecomeCodeModeShellInput } from "../responses/code-mode-shell-input";
 import { progressiveFreeformInput } from "../responses/progressive-freeform-input";
 import { declaresCodeModeExec } from "../types/tools";
 import {
@@ -12,6 +13,7 @@ import {
 } from "../responses/custom-tool-compat";
 import {
   replaceSseDataPayload,
+  splitSseBlock,
   sseDataPayload,
   type SseBlockRewrite,
 } from "./sse-payload-rewrite";
@@ -21,8 +23,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 function replaceSseEventName(block: string, type: string): string {
-  const newline = block.includes("\r\n") ? "\r\n" : "\n";
-  const lines = block.split(/\r?\n/);
+  const { newline, lines } = splitSseBlock(block);
   let replaced = false;
   const next = lines.map(line => {
     if (!replaced && line.startsWith("event:")) {
@@ -320,6 +321,7 @@ export function createRoutedCustomToolRestoreBlockRewrite(
         && itemName?.name === "exec";
       const mayNormalize = ownsFreeformGrammar && itemName?.name === "apply_patch";
       if ((mayCompile || mayNormalize) && mayBecomePatchEnvelope(fullInput)) return [];
+      if (mayCompile && mayBecomeCodeModeShellInput(open.argumentsText, fullInput)) return [];
       if (!fullInput.startsWith(open.emittedInput) || fullInput.length === open.emittedInput.length) return [];
       const inputDelta = fullInput.slice(open.emittedInput.length);
       open.emittedInput = fullInput;

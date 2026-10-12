@@ -7,11 +7,13 @@ function deps(overrides: {
   current?: string;
   installer?: "npm" | "bun" | "source";
   cache?: VersionCache | null;
+  now?: number;
 }): UpdateBadgeDeps {
   return {
     currentVersion: () => overrides.current ?? "2.7.43",
     detectInstall: () => (overrides.installer ?? "npm") as ReturnType<UpdateBadgeDeps["detectInstall"]>,
     readCache: () => overrides.cache ?? null,
+    ...(overrides.now === undefined ? {} : { now: () => overrides.now! }),
   };
 }
 
@@ -61,6 +63,25 @@ describe("readUpdateBadge", () => {
     // refresh hook at all — this test pins that shape.
     const keys = Object.keys(deps({}));
     expect(keys).toEqual(["currentVersion", "detectInstall", "readCache"]);
+  });
+
+
+  test("cache remains known just before 40 hours and becomes unknown at 40 hours", () => {
+    const now = Date.parse("2026-09-24T00:00:00Z");
+    const recent = { ...cache("2.7.44"), last_checked_at: new Date(now - 40 * 60 * 60 * 1000 + 60_000).toISOString() };
+    expect(readUpdateBadge(deps({ now, cache: recent })).unknown).toBe(false);
+    const stale = { ...recent, last_checked_at: new Date(now - 40 * 60 * 60 * 1000).toISOString() };
+    const badge = readUpdateBadge(deps({ now, cache: stale }));
+    expect(badge.unknown).toBe(true);
+    expect(badge.latestVersion).toBeNull();
+    expect(badge.updateAvailable).toBe(false);
+  });
+
+  test("invalid and future cache timestamps are unknown", () => {
+    const now = Date.parse("2026-09-24T00:00:00Z");
+    for (const last_checked_at of ["invalid", new Date(now + 1).toISOString()]) {
+      expect(readUpdateBadge(deps({ now, cache: { ...cache("2.7.44"), last_checked_at } })).unknown).toBe(true);
+    }
   });
 
   test("preview versions resolve on the preview channel", () => {

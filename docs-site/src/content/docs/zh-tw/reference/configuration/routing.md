@@ -31,7 +31,7 @@ opencodex 依此順序解析請求的模型：
 
 ### 封鎖模型重新導向
 
-`blockedModelRedirects` 是選用的頂層 `Record<string, string>`，用於精確替換已解析的模型 id，預設不設定。它在上述解析順序後執行：符合時會保留已選取的供應商與帳號路由，僅替換上游模型 id，並記錄路由原因 `blocked-model-redirect`。省略此鍵時，路由維持不變。
+`blockedModelRedirects` 是預設未設定的可選完全比對替換表。裸模型鍵在供應商、帳戶及別名解析後生效。目標未明確指定另一個已設定供應商時，即使值包含 `/`，也只替換一次上游模型 ID，並保留已選供應商和帳戶。只有明確指定另一個已設定供應商的目標才會跨供應商重新路由；此時 `<來源供應商>/<解析後模型>` 鍵優先於裸鍵。鏈式重新導向最多五跳並偵測循環。固定帳戶選擇器不能跨供應商。目標使用自己的憑證和配額，路由原因記為 `blocked-model-redirect`。
 
 ```json
 {
@@ -54,7 +54,7 @@ Codex Auth 頁面將此 picker 行為作為選擇加入功能暴露。停用它�
 | Key | 型別 | 預設值 | 意義 |
 | --- | --- | --- | --- |
 | `targets` | `{ provider: string; model: string; weight?: number }[]` | 必填 | 有序的具體路由。`weight` 為 1–10000，預設 `1`。 |
-| `strategy?` | `"failover" \| "round-robin" \| "random" \| "least-used" \| "reset-window"` | `"failover"` | 選擇策略。目標順序為 `failover` 優先序；`weight` 塑造 `round-robin` 與 `random` 抽選；`least-used` 依循已記錄的成功次數；`reset-window` 依循最早的配額重設。 |
+| `strategy?` | `"failover" \| "round-robin" \| "random" \| "least-used" \| "reset-window" \| "jev"` | `"failover"` | 選擇策略。目標順序為 `failover` 優先序；`weight` 塑造 `round-robin` 與 `random` 抽選；`least-used` 依循已記錄的成功次數；`reset-window` 依循最早的配額重設；`jev` 對第一個符合條件的目標與 effort 執行一次有界決策，之後使用一般的順序 fallback。 |
 | `stickyLimit?` | `number` | `1` | 在一個 round-robin 批次中保留的成功請求數。範圍 1–100。 |
 | `defaultEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| null` | 未設定 | 當 combo 設定非 null 預設值且目標支援清單已知且非空時，`defaultEffort` 會補入省略的 `reasoning.effort`。目標支援設定值時保留該值，否則選擇不高於設定值的最高支援層級；若沒有更低層級，則使用最低支援層級。未知或空清單不會注入預設值。 |
 | `reasoningEffortMode?` | `"strict" \| "adaptive"` | `"strict"` | `"strict"` 對所有已知目標層級清單取交集，包括空清單；`"adaptive"` 排除空清單。未知清單在兩種模式下都不限制目錄交集。傳送時，明確空清單在兩種模式下都會移除 effort/thinking 控制；未知清單只在 adaptive 移除。`reasoning.summary` 保持不變。已知非空目標的 effort 解析、目標選擇及順序不變。 |

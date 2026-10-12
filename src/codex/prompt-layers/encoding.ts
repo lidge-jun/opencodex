@@ -78,3 +78,93 @@ export function decodeBasicString(literal: string): string | null {
   }
   return out;
 }
+
+/** Decode externally authored TOML basic strings on the read-only fallback path. */
+export function decodeTomlBasicString(literal: string): string | null {
+  if (literal.length < 2 || !literal.startsWith('"') || !literal.endsWith('"')) return null;
+  const inner = literal.slice(1, -1);
+  let out = "";
+  for (let i = 0; i < inner.length; i += 1) {
+    const ch = inner[i]!;
+    if (ch !== "\\") {
+      const code = inner.codePointAt(i)!;
+      if (ch === '"' || (code < 0x20 && code !== 0x09) || code === 0x7f
+        || (code >= 0xd800 && code <= 0xdfff)) return null;
+      out += String.fromCodePoint(code);
+      if (code > 0xffff) i += 1;
+      continue;
+    }
+    const escape = inner[++i];
+    switch (escape) {
+      case "b": out += "\b"; break;
+      case "t": out += "\t"; break;
+      case "n": out += "\n"; break;
+      case "f": out += "\f"; break;
+      case "r": out += "\r"; break;
+      case '"': out += '"'; break;
+      case "\\": out += "\\"; break;
+      case "u":
+      case "U": {
+        const digits = escape === "u" ? 4 : 8;
+        const hex = inner.slice(i + 1, i + 1 + digits);
+        if (hex.length !== digits || !/^[0-9a-fA-F]+$/.test(hex)) return null;
+        const code = Number.parseInt(hex, 16);
+        if (code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)) return null;
+        out += String.fromCodePoint(code);
+        i += digits;
+        break;
+      }
+      default: return null;
+    }
+  }
+  return out;
+}
+
+/** Shared scalar assignment matching; quoted and escaped keys retain their spelling. */
+export function matchKeyHead(line: string, key: string): { prefix: string; rest: string } | null {
+  const m = /^\s*("(?:[^"\\]|\\.)*"|'[^']*'|[A-Za-z0-9_-]+)\s*=\s*/.exec(line);
+  if (!m) return null;
+  const token = m[1]!;
+  const decoded = token.startsWith('"') ? decodeTomlBasicString(token)
+    : token.startsWith("'") ? token.slice(1, -1) : token;
+  return decoded === key ? { prefix: m[0], rest: line.slice(m[0].length) } : null;
+}
+
+/**
+ * For each line, whether it begins outside every string and composite span, or
+ * `null` when a span never closes and the scope of later lines is unknown.
+ *
+ * Line matchers for assignments and table headers must only look at lines that
+ * start at top level: `"model_instructions_file" = "x"` written inside a
+ * `"""…"""` value or a multi-line array is prose, not syntax. Readers and
+ * editors share this so a write and the snapshot read back agree.
+ */
+export function lexicalLineStarts(lines: readonly string[]): boolean[] | null {
+  const starts: boolean[] = [];
+  let open: string | null = null;
+  let depth = 0;
+  for (const line of lines) {
+    starts.push(open === null && depth === 0);
+    for (let i = 0; i < line.length; i += 1) {
+      const char = line[i]!;
+      if (open !== null) {
+        if (char === "\\" && (open === '"' || open === '"""')) { i += 1; continue; }
+        if (char !== open[0]) continue;
+        if (open.length === 1) { open = null; continue; }
+        let run = 0;
+        while (line[i + run] === char) run += 1;
+        // Up to two quotes may sit inside the value just before the closing three.
+        if (run >= 3) open = null;
+        i += run - 1;
+      } else if (char === "#") break;
+      else if (char === '"' || char === "'") {
+        open = line.startsWith(char.repeat(3), i) ? char.repeat(3) : char;
+        i += open.length - 1;
+      } else if (char === "[" || char === "{") depth += 1;
+      else if (char === "]" || char === "}") { depth -= 1; if (depth < 0) return null; }
+    }
+    // Single-line strings cannot cross a newline.
+    if (open !== null && open.length === 1) return null;
+  }
+  return open === null && depth === 0 ? starts : null;
+}

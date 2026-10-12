@@ -12,6 +12,7 @@ import {
   type WorkspaceItem,
   type WorkspaceProvider,
 } from "../../provider-workspace/catalog";
+import { isSubscriptionCliProvider } from "../../provider-workspace/subscription-cli";
 import { isLocalProvider } from "../../provider-workspace/kind";
 import { formatProviderDisplayName, providerIconPaint, providerIconSrc } from "../../provider-icons";
 
@@ -26,6 +27,8 @@ export function statusLabel(p: WorkspaceProvider, t: TFn): string {
 }
 
 export function authModeLabel(item: WorkspaceItem, t: TFn): string {
+  // Configured with authMode "key" (the registry's authKind), but no key is ever used.
+  if (isSubscriptionCliProvider(item)) return t("modal.badge.subscriptionCli");
   switch (item.authMode) {
     case "oauth": return t("modal.badge.oauth");
     case "forward": return t("pws.auth.chatgptPassthrough");

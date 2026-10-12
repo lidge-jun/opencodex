@@ -1,12 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import {
   CURSOR_CAPABILITIES,
+  cursorLiveRosterScope,
   cursorUmbrellaRows,
   parseCursorVariantId,
   recordLiveCursorClaudeModels,
   resetLiveCursorClaudeWireIdentitiesForTests,
   resolveCursorSelection,
 } from "../../../src/adapters/cursor/catalog";
+import { clearModelCache } from "../../../src/codex/model-cache";
 import {
   cursorEffortSuffix,
   cursorModelHasEffortTiers,
@@ -182,6 +184,22 @@ describe("cursor umbrella catalog (devlog 260828_cursor_umbrella_catalog)", () =
       expect(resolved.wireId).toBe("claude-opus-5-thinking-high");
     });
 
+    test("claude-opus-5-5 routes flat effort-suffixed wire ids without a thinking infix (#5722)", () => {
+      expect(resolveCursorSelection("claude-opus-5-5", "medium").wireId).toBe("claude-opus-5-5-medium");
+      expect(resolveCursorSelection("claude-opus-5-5", "high").wireId).toBe("claude-opus-5-5-high");
+      expect(resolveCursorSelection("claude-opus-5-5", "medium", undefined, { fast: true }).wireId).toBe("claude-opus-5-5-medium-fast");
+    });
+
+    test("claude-sonnet-5-5 is seeded with flat effort ids like Opus 5.5 until the live roster lists it", () => {
+      expect(resolveCursorSelection("claude-sonnet-5-5", "medium").wireId).toBe("claude-sonnet-5-5-medium");
+      expect(resolveCursorSelection("claude-sonnet-5-5", "max").wireId).toBe("claude-sonnet-5-5-max");
+    });
+
+    test("Haiku 5.5 uses flat regular effort ids with no thinking or fast variant", () => {
+      expect(resolveCursorSelection("claude-haiku-5-5", "medium").wireId).toBe("claude-haiku-5-5-medium");
+      expect(resolveCursorSelection("claude-haiku-5-5", "max").wireId).toBe("claude-haiku-5-5-max");
+    });
+
     test("bare-thinking families ignore effort", () => {
       expect(resolveCursorSelection("claude-4-sonnet", "max").wireId).toBe("claude-4-sonnet-thinking");
     });
@@ -209,6 +227,30 @@ describe("cursor umbrella catalog (devlog 260828_cursor_umbrella_catalog)", () =
       } finally {
         resetLiveCursorClaudeWireIdentitiesForTests();
       }
+    });
+
+    test("live roster spellings stay isolated by provider credential scope and clear with its cache", () => {
+      const trusted = cursorLiveRosterScope("https://trusted.cursor.test", "trusted-token");
+      const untrusted = cursorLiveRosterScope("https://other.cursor.test", "other-token");
+      recordLiveCursorClaudeModels(
+        ["claude-4.6-opus-high-thinking"],
+        { provider: "cursor-trusted", key: trusted },
+      );
+      recordLiveCursorClaudeModels(
+        ["claude-opus-4-6-thinking-high"],
+        { provider: "cursor-other", key: untrusted },
+      );
+
+      expect(resolveCursorSelection("claude-4.6-opus", "high", undefined, { liveRosterScope: trusted }).wireId)
+        .toBe("claude-4.6-opus-high-thinking");
+      expect(resolveCursorSelection("claude-4.6-opus", "high", undefined, { liveRosterScope: untrusted }).wireId)
+        .toBe("claude-opus-4-6-thinking-high");
+
+      clearModelCache("cursor-other");
+      expect(resolveCursorSelection("claude-4.6-opus", "high", undefined, { liveRosterScope: untrusted }).wireId)
+        .toBe("claude-4.6-opus-high-thinking");
+      expect(resolveCursorSelection("claude-4.6-opus", "high", undefined, { liveRosterScope: trusted }).wireId)
+        .toBe("claude-4.6-opus-high-thinking");
     });
 
     test("ultra arms maxMode only on evidence-gated bases", () => {

@@ -5,7 +5,8 @@
  * Usage:
  *   bun scripts/release.ts <version> [--tag latest|preview] [--publish]
  *   bun scripts/release.ts --bump patch|minor|major [--tag latest|preview] [--publish]
- *       Preflight (clean tree + dependency audit + typecheck + tests + privacy scan) → bump package.json → commit → push →
+ *       Preflight (clean tree + dependency audit + typecheck + tests + privacy scan) → bump package.json and the
+ *       desktop version sources (scripts/release-version-sources.ts) → commit → push →
  *       wait for Cross-platform CI → dispatch the Release workflow → watch it.
  *       The version bump commit/push is real; the Release workflow publish step is dry-run by default.
  *       Pass --publish to publish.
@@ -26,6 +27,8 @@
  * behaves exactly as before.
  */
 import { commandInvocation } from "../src/lib/win-exec";
+import { VERSION_SOURCE_PATHS } from "./release-version-sources";
+import { getTestRunnerBun } from "./lib/test-runner-bun";
 import {
   compareVersions as compareReleaseVersions,
   nextPreviewRelease,
@@ -559,6 +562,7 @@ await runLoud(["bun", "run", "audit:high"]);
 console.log("→ typecheck");
 await runLoud(["bun", "x", "tsc", "--noEmit"]);
 console.log("→ test suite");
+const testRunner = getTestRunnerBun();
 // Match CI's isolation policy instead of inventing a second one. `ci.yml` runs
 // the storage-policy and api-usage harnesses in DEDICATED jobs and excludes them
 // from the general shards (`scripts/ci/run-bun-test-batches.sh`
@@ -571,10 +575,8 @@ console.log("→ test suite");
 // was green: the worst kind of gate, one that blocks a good release and teaches
 // you to distrust it. Same files and same coverage as before (915), now in the
 // same groups CI uses.
-// Every command here stays a `bun` invocation. The release-helper suite shims
-// exactly `bun`, `gh`, `git` and `npm` onto a scratch PATH to record calls
-// without executing them; a `bash` step would miss that shim, escape into the
-// real suite, and fail the helper tests with exit 127.
+// Test commands use the pinned runner; audit, typecheck and privacy keep the runtime.
+// The release-helper fixture mocks runner resolution to keep test calls on its shim.
 const ISOLATED_TEST_FILES = [
   "./tests/storage/api-storage-policy-already-running.test.ts",
   "./tests/storage/api-storage-policy-mutation-busy.test.ts",
@@ -585,18 +587,18 @@ const ISOLATED_TEST_FILES = [
   "./tests/server/api-usage.test.ts",
 ];
 await runLoud([
-  "bun", "test", "--isolate", "tests",
+  testRunner, "test", "--isolate", "tests",
   "--path-ignore-patterns=**/api-storage-policy*.test.ts",
   "--path-ignore-patterns=**/api-storage.test.ts",
   "--path-ignore-patterns=**/api-usage.test.ts",
 ]);
 for (const isolated of ISOLATED_TEST_FILES) {
-  await runLoud(["bun", "test", "--isolate", isolated]);
+  await runLoud([testRunner, "test", "--isolate", isolated]);
 }
 console.log("→ privacy scan");
 await runLoud(["bun", "run", "privacy:scan"]);
 
-// 2. Bump package.json only; the workflow creates the version tag after npm publish.
+// 2. Bump every version source; the workflow creates the version tag after npm publish.
 //
 // A dry run bumps and pushes exactly like a real one, because the point of the dry run is to
 // exercise the workflow against the REAL release commit. That makes the second invocation
@@ -611,13 +613,21 @@ if (currentVersion === version) {
   console.log(`→ bump package.json → ${version}`);
   await runLoud(["npm", "version", version, "--no-git-tag-version"]);
 }
+// The desktop app takes its version from tauri.conf.json and Cargo.toml/Cargo.lock, not from
+// package.json, and release.yml refuses to build when they disagree with the requested version.
+// Moving package.json alone would ship an app that reports the previous version under an updater
+// manifest naming this one. The sync is idempotent, so the --publish re-run is a no-op. It runs as
+// a `bun` subprocess like every other step here, which is what keeps it inside the helper
+// suite's PATH shim instead of rewriting the checkout the suite runs in.
+console.log(`→ sync desktop version sources → ${version}`);
+await runLoud(["bun", "scripts/release-version-sources.ts", "sync", version]);
 
 // 3. Commit + push the version bump — only if it is not already committed and pushed. On the
 // --publish re-run of a dry run there is nothing to commit, and `git commit` with an empty
 // index fails, which would strand the release just as surely as the bump did.
-const pendingBump = (await capture(["git", "status", "--porcelain", "package.json"])).trim() !== "";
+const pendingBump = (await capture(["git", "status", "--porcelain", "--", ...VERSION_SOURCE_PATHS])).trim() !== "";
 if (pendingBump) {
-  await runLoud(["git", "add", "package.json"]);
+  await runLoud(["git", "add", "--", ...VERSION_SOURCE_PATHS]);
   await runLoud(["git", "commit", "-m", `release: v${version}`]);
 }
 const releaseSha = await capture(["git", "rev-parse", "HEAD"]);

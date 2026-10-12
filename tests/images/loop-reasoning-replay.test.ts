@@ -18,6 +18,11 @@ import { createTestTranslatorBudget } from "../helpers/translator-budget";
 const REASONING = "I need to inspect files before answering.";
 
 const PREV_HOME = process.env.OPENCODEX_HOME;
+// `mock.restore()` does not undo `mock.module`: Bun keeps both overrides below for every
+// file that runs after this one in the same process. Keep the real modules to put back,
+// and restore only the ones captured: a setup that failed partway must not install an empty module.
+let realProgressStream: Record<string, unknown> | undefined;
+let realFulfill: Record<string, unknown> | undefined;
 let runWithImageBridgeProduction: typeof import("../../src/images/loop")["runWithImageBridge"];
 let fulfillResult: import("../../src/images/types").ImageCallResult = {
   ok: true, model: "grok-imagine-image-quality", prompt: "a cat",
@@ -27,6 +32,8 @@ let fulfillResult: import("../../src/images/types").ImageCallResult = {
 beforeAll(async () => {
   process.env.OPENCODEX_HOME = join(tmpdir(), "ocx-test-" + randomUUID());
   mock.restore();
+  realProgressStream = { ...(await import("../../src/web-search/progress-stream")) };
+  realFulfill = { ...(await import("../../src/images/fulfill")) };
   mock.module("../../src/web-search/progress-stream", () => ({
     parseStreamWithProgress: async function* (_resp: Response, parse: (r: Response) => AsyncGenerator<AdapterEvent>, _opts: unknown) {
       for await (const e of parse(_resp)) yield e;
@@ -44,6 +51,8 @@ afterAll(() => {
   if (PREV_HOME === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = PREV_HOME;
   mock.restore();
+  if (realProgressStream) { const real = realProgressStream; mock.module("../../src/web-search/progress-stream", () => real); }
+  if (realFulfill) { const real = realFulfill; mock.module("../../src/images/fulfill", () => real); }
 });
 
 let streamQueue: AdapterEvent[][] = [];

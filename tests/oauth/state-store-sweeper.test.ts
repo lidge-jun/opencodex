@@ -133,6 +133,9 @@ describe("state-store sweeper", () => {
       "provider-request-pacing",
       "combo-target-cooldowns",
       "anthropic-routing-health",
+      "anthropic-family-quota",
+      "anthropic-rate-pauses",
+      "anthropic-cooldown-generations",
       "xai-refresh-verdicts",
       // #3019: the WHAM 401 recovery budget. Registered here deliberately — the inventory
       // is hand-maintained so a new store cannot be added without someone deciding it has

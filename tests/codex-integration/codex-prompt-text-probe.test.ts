@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   extractSectionsForTests,
+  mapSectionsToLayersForTests,
   probePromptText,
   promptTextProbeSpawnAttemptsForTests,
   resetPromptTextProbeForTests,
@@ -183,6 +184,23 @@ describe("section extraction", () => {
     expect(sections.get("apps_instructions")).toBe("line one\nline two");
   });
 
+  test("context-dependent collaboration text maps to its prompt layer", () => {
+    const rendered = extractSectionsForTests(
+      message("<collaboration_mode>Pair-programming instructions.</collaboration_mode>"),
+    );
+    expect(mapSectionsToLayersForTests(rendered).collaboration).toEqual({
+      text: "Pair-programming instructions.",
+      reason: "ok",
+      bytes: 30,
+    });
+
+    expect(mapSectionsToLayersForTests(new Map()).collaboration).toEqual({
+      text: null,
+      reason: "not-rendered",
+      bytes: 0,
+    });
+  });
+
   test("AGENTS.md is bounded by its own INSTRUCTIONS wrapper", () => {
     // Capturing to end-of-message swept up whatever untagged prose followed. The
     // body is delimited, so the delimiter is the boundary.
@@ -208,6 +226,38 @@ describe("section extraction", () => {
     const sections = extractSectionsForTests(raw);
     expect(sections.has("div")).toBe(false);
     expect(sections.get("__agents_md")).toContain("<div>");
+  });
+
+  test("the no-directory AGENTS.md header is still extracted", () => {
+    // Upstream emits `# AGENTS.md instructions` with no `for <dir>` when the
+    // working set carries no path (core/src/context.rs). The `for` suffix is
+    // optional in the pattern for exactly this shape.
+    const raw = message("# AGENTS.md instructions\n\n<INSTRUCTIONS>\nAnswer tersely.\n</INSTRUCTIONS>");
+    expect(extractSectionsForTests(raw).get("__agents_md")).toBe("Answer tersely.");
+  });
+
+  test("the multi-environment form keeps its labels inside the capture", () => {
+    // The newer render labels each project's block `for \`<env>\` with root
+    // <cwd>` INSIDE the <INSTRUCTIONS> wrapper rather than in the header. Those
+    // labels are what the model sees, so the body keeps them.
+    const body = "for `prod` with root /srv/a\n\nRules for prod.\n\nfor `dev` with root /srv/b\n\nRules for dev.";
+    const raw = message(`# AGENTS.md instructions\n\n<INSTRUCTIONS>\n${body}\n</INSTRUCTIONS>`);
+    expect(extractSectionsForTests(raw).get("__agents_md")).toBe(body);
+  });
+
+  test("an unrecognized AGENTS.md header maps to unmapped, not not-rendered", () => {
+    // A header that renders without its INSTRUCTIONS wrapper — a future
+    // upstream shape — must not be reported as "sent nothing": the text exists,
+    // it just cannot be shown. `unmapped` is the honest bucket for that.
+    const raw = message("# AGENTS.md instructions for /x\n\nThe whole file inline, no wrapper.");
+    const sections = extractSectionsForTests(raw);
+    expect(sections.has("__agents_md")).toBe(false);
+    expect(sections.has("__agents_md_unmatched")).toBe(true);
+    expect(mapSectionsToLayersForTests(sections)["agents-md"]).toEqual({
+      text: null,
+      reason: "unmapped",
+      bytes: 0,
+    });
   });
 });
 
@@ -610,6 +660,38 @@ describe("prompt probe process lifecycle", () => {
     });
     expect((await probePromptText(2_000)).ok).toBe(true);
     expect(promptTextProbeSpawnAttemptsForTests()).toBe(1);
+  });
+});
+
+describe("unmapped layers", () => {
+  test("a layer with no confirmed tag reports unmapped, not the base prompt's not-exposed", async () => {
+    // UNMAPPED_LAYER_IDS used to reuse "not-exposed", which is the base prompt's
+    // contract: the GUI renders a base-prompt-specific explanation for it. A
+    // layer the extractor simply has no verified tag for is a smaller claim.
+    const home = promptHome({
+      "config.toml": "model = \"gpt-test\"\n",
+      "opencodex-catalog.json": catalogJson([{ slug: "gpt-test", base_instructions: "Base prompt body." }]),
+    });
+    const previousHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = home;
+    setPromptTextProbeCommandForTests({
+      binary: process.execPath,
+      args: ["-e", `process.stdout.write(${JSON.stringify(VALID_PROBE_OUTPUT)})`],
+    });
+    try {
+      const result = await probePromptText(2_000);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.layers["personality"]).toMatchObject({ text: null, reason: "unmapped", bytes: 0 });
+        expect(result.layers["tools"]).toMatchObject({ text: null, reason: "unmapped", bytes: 0 });
+        // The base prompt keeps its own contract: readable text stays "ok" and an
+        // unexpanded template stays "not-exposed" - never "unmapped".
+        expect(result.layers["base-instructions"]).toMatchObject({ text: "Base prompt body.", reason: "ok" });
+      }
+    } finally {
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+    }
   });
 });
 

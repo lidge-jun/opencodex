@@ -200,6 +200,12 @@ export function resolveProductionBehaviorValues(
         : reasoningEfforts.length > 0 || Boolean(registryEntry?.reasoningEfforts),
     ),
     "reasoning.efforts": behaviorRow("provider_config", reasoningEfforts),
+    // Whether the configured ladder above is what the WIRE uses, or only what the catalog
+    // advertises. An adapter shipping its own per-model table (command-code) otherwise wins for
+    // models it knows, and it also repairs a refused rung by replaying without the effort. Two
+    // routes that disagree about this send different bytes and recover differently, so they are
+    // not the same compatibility subject and must not share evidence.
+    "reasoning.effortsAuthoritative": behaviorRow("provider_config", effective.modelReasoningEffortsAuthoritative === true),
     "reasoning.defaultEffort": behaviorRow("provider_config", defaultReasoningEffort),
     "reasoning.effortMap": behaviorRow("provider_config", reasoningEffortMap),
     "reasoning.wireFormat": behaviorRow("provider_config", effective.reasoningWireFormat ?? null),
@@ -209,6 +215,9 @@ export function resolveProductionBehaviorValues(
     }),
     "reasoning.replayMode": behaviorRow("provider_config", {
       preserveResponses: effective.preserveResponsesReasoningContent === true,
+      // Dropping replayed reasoning items changes the continuation body, so two routes that
+      // disagree about it are not the same compatibility subject and must not share evidence.
+      dropResponses: effective.dropResponsesReasoningItems === true,
       preserveContent: includesModel(effective.preserveReasoningContentModels, modelId),
       placeholder: includesModel(effective.requiresReasoningPlaceholderModels, modelId),
     }),

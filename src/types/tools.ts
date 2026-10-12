@@ -3,6 +3,12 @@ export interface OcxTool {
   description: string;
   parameters: Record<string, unknown>;
   strict?: boolean;
+  /**
+   * Anthropic `tools[*].allowed_callers`: which callers may invoke this tool. Carried rather
+   * than diagnosed, because rebuilding the declaration without it hands the model a tool the
+   * caller had restricted and returns a normal response (#5210).
+   */
+  allowedCallers?: string[];
   /** MCP namespace (e.g. "mcp__context7") for tools flattened out of a Responses "namespace" tool. */
   namespace?: string;
   /** Freeform/custom tool (e.g. apply_patch): the model's call must be relayed as a custom_tool_call. */
@@ -32,6 +38,19 @@ export function namespacedToolName(namespace: string | undefined, name: string):
 }
 
 /**
+ * Whether a declaration actually narrows who may call the tool.
+ *
+ * `["direct"]` is the state every unrestricted tool is already in, so treating it as a
+ * restriction would refuse ordinary traffic. Mirrors the `caller_mode` predicate in
+ * src/claude/compatibility.ts, which draws the same line.
+ */
+export function toolRestrictsCallers(tool: Pick<OcxTool, "allowedCallers">): boolean {
+  const callers = tool.allowedCallers;
+  if (callers === undefined) return false;
+  return !(callers.length === 1 && callers[0] === "direct");
+}
+
+/**
  * Dotted alias of a namespaced tool's wire name. Some routed providers (observed: muse-spark
  * via opencode-go) echo a namespaced tool call as "<namespace>.<name>" instead of the flattened
  * "<namespace>__<name>" form. It names the same tool identity+�u���T never a new grant"��y��y� so the
@@ -48,9 +67,12 @@ export function dottedToolName(namespace: string | undefined, name: string): str
  * Codex's code-mode shell tool is declared as `exec` (a freeform custom tool whose own
  * description mentions the nested `await tools.exec_command(...)` helper). Some routed providers
  * echo that helper name as the tool-call name, emitting `exec_command`, `write_stdin`,
- * `apply_patch`, or `view_image` instead of the declared `exec`. Accept these nested helper names
- * only when the request catalog actually declares `exec` and does not itself declare the emitted
- * name (an MCP server may legitimately advertise one under its own namespace).
+ * `apply_patch`, `view_image`, or one of the goal helpers (`create_goal`, `get_goal`,
+ * `update_goal`, #5495) instead of the declared `exec`. Accept these nested helper names only
+ * when the request catalog actually declares `exec` and does not itself declare the emitted name
+ * (an MCP server may legitimately advertise one under its own namespace). The helper list itself
+ * is closed; the one other admission through `exec` is a direct `mcp__<server>__<tool>` call,
+ * which `isCodeModeMcpDirectName` recognizes.
  */
 const LEGACY_SHELL_BRIDGE_TOOL_NAMES = ["exec_command", "shell_command"] as const;
 const CODE_MODE_HELPER_TOOL_NAMES = [
@@ -58,6 +80,9 @@ const CODE_MODE_HELPER_TOOL_NAMES = [
   "write_stdin",
   "apply_patch",
   "view_image",
+  "create_goal",
+  "get_goal",
+  "update_goal",
 ] as const;
 
 /**
@@ -82,11 +107,28 @@ export const CODE_MODE_HELPER_WIRE_NAMES: ReadonlySet<string> = new Set<string>(
 );
 
 /**
+ * A flattened MCP wire name (`mcp__<server>__<tool>`) emitted as a direct tool call.
+ *
+ * Codex code mode reaches the host's nested tools through `tools.<name>(...)` inside `exec`,
+ * so none of them are declared; routed models (observed: Kimi K3, GLM 5.3) occasionally skip the
+ * wrapper and call the flattened name directly. Under a code-mode catalog the call is compiled
+ * into the equivalent `tools.<name>(...)` exec body instead of failing closed — capability-
+ * equivalent, since the model could have written that JavaScript itself. Server and tool must
+ * both be non-empty so a bare `mcp__` prefix never qualifies.
+ */
+export function isCodeModeMcpDirectName(name: string): boolean {
+  if (!name.startsWith("mcp__")) return false;
+  const rest = name.slice("mcp__".length);
+  const separator = rest.indexOf("__");
+  return separator > 0 && separator + "__".length < rest.length;
+}
+
+/**
  * Spellings that may never be MANUFACTURED as a bare alias for a namespaced tool.
  *
  * A bare alias is an ordinary compatibility affordance -- providers echo a namespaced tool
  * without its prefix, and restoring the identity needs the bare spelling registered. For these
- * six it is also an authorization decision, because a declared-name set is what
+ * names it is also an authorization decision, because a declared-name set is what
  * `normalizeDeclaredToolName` and `declaresCodeModeExec` read: bare `exec` turns nested-helper
  * normalization on for a catalog that never declared the shell, bare `exec_command` or
  * `shell_command` turns it off for one that did, and the rest are accepted as declared calls the
@@ -110,19 +152,27 @@ export const NAMESPACED_BARE_ALIAS_EXCLUDED_NAMES: ReadonlySet<string> = new Set
  *
  * Rewrites invented `default.<name>` prefixes back to a declared bare tool when that bare tool
  * is declared and neither `default.<name>` nor `default__<name>` was explicitly declared (#4176).
- * Also normalizes legacy helper names (`exec_command`, `shell_command`, `apply_patch`, `view_image`) to
- * `exec` when code-mode `exec` is declared in the request catalog.
+ * The same wrapper may surround an already-flattened namespace identity; accept that exact
+ * declared suffix without treating its child name as a bare declaration.
+ * Also normalizes nested helper names (`exec_command`, `shell_command`, `write_stdin`,
+ * `apply_patch`, `view_image`, `create_goal`, `get_goal`, `update_goal`) and direct
+ * `mcp__<server>__<tool>` calls to `exec` when code-mode `exec` is declared in the
+ * request catalog. MCP recovery additionally requires explicit custom-tool provenance;
+ * a structured function named `exec` is not a JavaScript executor.
  *
  * @param name - The tool name emitted on the wire by the provider.
  * @param declared - All wire tool names declared in the request catalog, including aliases.
  * @param declaredBare - Explicitly declared bare tool names without namespace provenance.
  *                       When omitted, falls back to `declared`.
+ * @param declaredCustom - Custom wire identities from the caller's catalog, never bare aliases
+ *                         manufactured from foreign namespaces.
  * @returns The normalized tool name to expose downstream.
  */
 export function normalizeDeclaredToolName(
   name: string,
   declared: ReadonlySet<string> | undefined,
   declaredBare?: ReadonlySet<string>,
+  declaredCustom?: ReadonlySet<string>,
 ): string {
   if (!declared) return name;
   if (declared.has(name)) return name;
@@ -132,18 +182,25 @@ export function normalizeDeclaredToolName(
     const bareDeclared = declaredBare ?? declared;
     if (
       bare.length > 0
-      && bareDeclared.has(bare)
+      && (
+        bareDeclared.has(bare)
+        // Muse can wrap the complete `namespace__tool` identity in `default.`. Requiring the
+        // exact flattened identity to be declared preserves the #4176 provenance boundary:
+        // `default.tool` still cannot borrow a namespaced tool's manufactured bare alias.
+        || (bare.includes("__") && declared.has(bare))
+      )
       && !declared.has("default." + bare)
       && !declared.has("default__" + bare)
     ) {
       candidate = bare;
     } else if (
       // Code mode never declares bare helper names; a provider that invents `default.`
-      // for one still means the nested helper. Strip the prefix so the helper list
-      // below can rewrite it to `exec` (#4412).
+      // for one still means the nested helper. The same wrapper can surround a direct MCP
+      // name, but only a custom exec declaration authorizes that recovery.
       bare.length > 0
       && declared.has(CODE_MODE_EXEC_TOOL_NAME)
-      && (CODE_MODE_HELPER_TOOL_NAMES as readonly string[]).includes(bare)
+      && ((CODE_MODE_HELPER_TOOL_NAMES as readonly string[]).includes(bare)
+        || (declaredCustom?.has(CODE_MODE_EXEC_TOOL_NAME) && isCodeModeMcpDirectName(bare)))
       && !declared.has("default." + bare)
       && !declared.has("default__" + bare)
     ) {
@@ -159,7 +216,13 @@ export function normalizeDeclaredToolName(
   if ((LEGACY_SHELL_BRIDGE_TOOL_NAMES as readonly string[]).some(legacy => declared.has(legacy))) {
     return candidate;
   }
-  return (CODE_MODE_HELPER_TOOL_NAMES as readonly string[]).includes(candidate)
+  if ((CODE_MODE_HELPER_TOOL_NAMES as readonly string[]).includes(candidate)) {
+    return CODE_MODE_EXEC_TOOL_NAME;
+  }
+  // A direct `mcp__<server>__<tool>` call names a nested host tool the code-mode catalog
+  // never declares; `compileCodeModeHelperInput` turns it into the `tools.<name>(...)`
+  // exec body the model could have written itself.
+  return declaredCustom?.has(CODE_MODE_EXEC_TOOL_NAME) && isCodeModeMcpDirectName(candidate)
     ? CODE_MODE_EXEC_TOOL_NAME
     : candidate;
 }
@@ -334,6 +397,13 @@ export type OcxToolChoice =
 
 export function isAllowedToolChoice(value: OcxToolChoice | undefined): value is { allowedTools: string[]; mode: "auto" | "required" } {
   return typeof value === "object" && value !== null && "allowedTools" in value;
+}
+
+export function requiresToolCall(choice: OcxToolChoice | undefined): boolean {
+  return choice === "required"
+    || (typeof choice === "object" && choice !== null && (
+      "name" in choice || ("mode" in choice && choice.mode === "required")
+    ));
 }
 
 /** Compile the request's tool-choice policy into a reusable advertisement/restoration predicate. */

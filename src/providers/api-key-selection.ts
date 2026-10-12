@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mutatePersistedConfig } from "../config";
 import { publishAccountSelection } from "../lib/account-selection-events";
+import { clearModelCache } from "../codex/model-cache";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import type { ProviderApiKeySelection } from "../types/provider";
 import { routedProviderConfig } from "../router";
@@ -100,6 +101,9 @@ export function commitProviderApiKeySelection<T>(
   if (outcome.status === "unavailable") return { status: "unavailable" };
   const committed = outcome.value;
   if (committed.status !== "unavailable") config.providers[name] = structuredClone(committed.provider);
-  if (committed.status === "committed" && committed.notify) publishAccountSelection(name, "api-key");
+  if (committed.status === "committed" && committed.notify) {
+    clearModelCache(name);
+    publishAccountSelection(name, "api-key");
+  }
   return committed;
 }

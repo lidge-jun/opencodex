@@ -2,7 +2,8 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { closeSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { ConfigMutationLockError, deleteConfigTopLevelKey, getConfigPath, initializePersistedConfigIfMissing, loadConfig, observeInitialConfigState, readConfigGeneration, saveConfig, withConfigMutationLockSync } from "../../src/config";
+import { armClaudeCodeBaseline, ConfigMutationLockError, deleteConfigTopLevelKey, getConfigPath, initializePersistedConfigIfMissing, loadConfig, observeInitialConfigState, readConfigGeneration, saveConfig, saveConfigPreservingClaudeCode, withConfigMutationLockSync } from "../../src/config";
+import { setCodexAccountAutoSwitchThresholdOverride } from "../../src/codex/account-auto-switch";
 import { InitialConfigPublicationError, publishInitialConfigNoReplace } from "../../src/config/initialize";
 import { nextAtomicTempSequence } from "../../src/config/atomic-write";
 import { CodexCredentialRefreshLockTimeoutError, getCodexAccountCredential, saveCodexAccountCredential } from "../../src/codex/account-store";
@@ -203,6 +204,43 @@ test("initial creation keeps candidate values and existing bytes; the explicit s
   saveConfig(config(21003));
   expect(loadConfig().port).toBe(21003);
   expect(initTemps()).toEqual([]);
+});
+
+test.each([0, 60])("initial publication consumes a deleted %i account override before a later disk recreation", (threshold) => {
+  const candidate = { ...config(), codexAccountAutoSwitchThresholds: { work: threshold, side: 70 } };
+  setCodexAccountAutoSwitchThresholdOverride(candidate, "work", null);
+  expect(initializePersistedConfigIfMissing(candidate)).toBe("created");
+  expect(loadConfig().codexAccountAutoSwitchThresholds).toEqual({ side: 70 });
+  armClaudeCodeBaseline(candidate);
+
+  const newer = JSON.parse(readFileSync(getConfigPath(), "utf8"));
+  newer.codexAccountAutoSwitchThresholds = { work: 80, side: 70, added: 90 };
+  writeFileSync(getConfigPath(), JSON.stringify(newer));
+  candidate.port = 21001;
+  saveConfigPreservingClaudeCode(candidate);
+
+  expect(candidate.codexAccountAutoSwitchThresholds).toEqual({ work: 80, side: 70, added: 90 });
+  expect(loadConfig().codexAccountAutoSwitchThresholds).toEqual({ work: 80, side: 70, added: 90 });
+  expect(loadConfig().port).toBe(21001);
+});
+
+test("failed initial publication retains child deletion intent for the next guarded save", () => {
+  const candidate = { ...config(), codexAccountAutoSwitchThresholds: { work: 60, side: 70 } };
+  armClaudeCodeBaseline(candidate);
+  setCodexAccountAutoSwitchThresholdOverride(candidate, "work", null);
+  expect(() => initializePersistedConfigIfMissing(candidate, {
+    link() { throw new Error("publication refused"); },
+  })).toThrow();
+  expect(existsSync(getConfigPath())).toBe(false);
+
+  writeFileSync(getConfigPath(), JSON.stringify({
+    ...config(),
+    codexAccountAutoSwitchThresholds: { work: 80, side: 70, added: 90 },
+  }));
+  saveConfigPreservingClaudeCode(candidate);
+
+  expect(candidate.codexAccountAutoSwitchThresholds).toEqual({ side: 70, added: 90 });
+  expect(loadConfig().codexAccountAutoSwitchThresholds).toEqual({ side: 70, added: 90 });
 });
 
 test.each(["", "not-json\n", '{"port":"broken"}', '\uFEFF{ "port":21002, "providers":{}, "defaultProvider":"openai", "unknown":42 }\n'])(
@@ -440,6 +478,54 @@ test("management API maps config mutation lock contention to retryable 503", asy
     writeFileSync(releasePath, "release");
     // The readiness-failure path already killed the child; expecting exit 0 here
     // would mask that primary error with a bare 143.
+    if (!childKilled) {
+      expect(await waitForOwnedChild(child)).toBe(0);
+    }
+  }
+});
+
+test("own-state writers honor the shared mutation lock (grok coupon ledger)", async () => {
+  saveConfig(config());
+  const readyPath = join(testRoot, "own-state-holder-ready");
+  const releasePath = join(testRoot, "own-state-holder-release");
+  const configModuleUrl = pathToFileURL(repoPath("src/config.ts")).href;
+  const childSource = `
+    import { existsSync, writeFileSync } from "node:fs";
+    import { withConfigMutationLockSync } from ${JSON.stringify(configModuleUrl)};
+    withConfigMutationLockSync(() => {
+      writeFileSync(${JSON.stringify(readyPath)}, "ready");
+      while (!existsSync(${JSON.stringify(releasePath)})) Bun.sleepSync(10);
+    });
+  `;
+  const child = Bun.spawn([process.execPath, "-e", childSource], {
+    cwd: repoRoot(),
+    env: { ...process.env, OPENCODEX_HOME: testRoot },
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  let childKilled = false;
+  try {
+    try {
+      await waitForOwnedChildReady(child, readyPath);
+    } catch (error) {
+      childKilled = true;
+      child.kill();
+      await child.exited;
+      const stderr = await new Response(child.stderr).text().catch(() => "");
+      throw new Error(`${(error as Error).message}\nchild stderr: ${stderr}`);
+    }
+    const { openGrokResetCouponOperation } = await import("../../src/grok/reset-coupon-ledger");
+    const journalPath = join(testRoot, "grok-reset-coupon-ledger.json");
+    expect(() => openGrokResetCouponOperation(
+      { accountId: "acct-1", operationId: crypto.randomUUID() },
+      Date.now(),
+      journalPath,
+    )).toThrow(ConfigMutationLockError);
+    expect(existsSync(journalPath)).toBe(false);
+  } finally {
+    writeFileSync(releasePath, "release");
     if (!childKilled) {
       expect(await waitForOwnedChild(child)).toBe(0);
     }

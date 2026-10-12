@@ -45,3 +45,29 @@ export function parseStrictSemver(value: unknown, maxLength = 128): StrictSemver
     prerelease: Object.freeze(prereleaseParts.map(part => /^\d+$/.test(part) ? BigInt(part) : part)),
   });
 }
+
+/**
+ * SemVer precedence: -1 when left is older, 1 when newer, 0 when equal.
+ *
+ * Build metadata is ignored per the spec; callers that need to distinguish
+ * `2.43.0+a` from `2.43.0+b` compare the raw strings separately. Shared by
+ * every version comparison so two diagnostics can never disagree about which
+ * install is older.
+ */
+export function compareStrictSemver(left: StrictSemver, right: StrictSemver): number {
+  for (let i = 0; i < left.core.length; i++) {
+    if (left.core[i]! !== right.core[i]!) return left.core[i]! > right.core[i]! ? 1 : -1;
+  }
+  if (left.prerelease.length === 0) return right.prerelease.length === 0 ? 0 : 1;
+  if (right.prerelease.length === 0) return -1;
+  for (let i = 0; i < Math.max(left.prerelease.length, right.prerelease.length); i++) {
+    const a = left.prerelease[i];
+    const b = right.prerelease[i];
+    if (a === b) continue;
+    if (a === undefined) return -1;
+    if (b === undefined) return 1;
+    if (typeof a !== typeof b) return typeof a === "bigint" ? -1 : 1;
+    return a > b ? 1 : -1;
+  }
+  return 0;
+}

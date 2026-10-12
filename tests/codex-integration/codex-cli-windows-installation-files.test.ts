@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   inspectWindowsInstallationFiles,
+  ntCreateFileRefusal,
   setWindowsInstallationFilesOpenedForTests,
 } from "../../src/codex/windows-installation-files";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -18,6 +19,14 @@ afterEach(() => {
 });
 
 describe("explicit Windows installation file snapshot", () => {
+  test("only missing-object NTSTATUS values permit another candidate", () => {
+    expect(ntCreateFileRefusal(0xc0000034 | 0)).toBe("not-found");
+    expect(ntCreateFileRefusal(0xc000003a | 0)).toBe("not-found");
+    for (const status of [0xc0000022, 0xc0000043, 0xc000050b]) {
+      expect(ntCreateFileRefusal(status | 0)).toBe("open-refused");
+    }
+  });
+
   test.each([
     "relative\\package.json", "C:package.json", "\\\\host\\share\\package.json",
     "\\\\?\\C:\\package.json", "C:\\test\\..\\package.json", "C:\\test\\.\\package.json",
@@ -38,6 +47,17 @@ describe("explicit Windows installation file snapshot", () => {
       { path: "C:\\node.exe", maxBytes: 256 * 1024 * 1024, hashOnly: true },
       { path: "C:\\other.exe", maxBytes: 256 * 1024 * 1024, hashOnly: true },
     ])).toEqual({ kind: "refused", reason: "invalid-request" });
+  });
+
+  nativeTest("reports absent leaf and ancestor as not-found", async () => {
+    mkdirSync(join(fixture, "present"));
+    for (const path of [
+      join(fixture, "present", "missing.cmd"),
+      join(fixture, "missing", "launcher.cmd"),
+    ]) {
+      expect(await inspectWindowsInstallationFiles([{ path, maxBytes: 0, metadataOnly: true }]))
+        .toEqual({ kind: "refused", reason: "not-found" });
+    }
   });
 
   nativeTest("reads real nested files under held ancestors and releases every handle", async () => {
@@ -126,5 +146,40 @@ describe("explicit Windows installation file snapshot", () => {
     expect(result.files[0]!.bytes).toHaveLength(0);
     expect(result.files[0]!.identity.size).toBe(3 * 1024 * 1024);
     expect(result.files[0]!.digest).toBe(expected.digest("hex"));
+  });
+
+  nativeTest("metadataOnly observes an oversized file's identity without reading or hashing", async () => {
+    const path = join(fixture, "oversized.fixture");
+    writeFileSync(path, Buffer.alloc(2048, 0x6f));
+    const result = await inspectWindowsInstallationFiles([{ path, maxBytes: 0, metadataOnly: true }]);
+    expect(result.kind).toBe("observed");
+    if (result.kind !== "observed") return;
+    const file = result.files[0]!;
+    expect(file.path).toBe(path);
+    expect(file.identity.size).toBe(2048);
+    expect(file.identity.fileId).toMatch(/^[a-f0-9]{32}$/);
+    expect(file.bytes).toHaveLength(0);
+    expect(file.digest).toBe("");
+  });
+
+  nativeTest("prefixOnly returns a bounded prefix of an oversized file without a digest", async () => {
+    const path = join(fixture, "wrapper.cmd");
+    const prefix = Buffer.from("@echo off\r\nrem marker\r\n");
+    const tail = Buffer.alloc(4096, 0x20);
+    writeFileSync(path, Buffer.concat([prefix, tail]));
+    const result = await inspectWindowsInstallationFiles([{ path, maxBytes: prefix.length, prefixOnly: true }]);
+    expect(result.kind).toBe("observed");
+    if (result.kind !== "observed") return;
+    const file = result.files[0]!;
+    expect(Buffer.from(file.bytes)).toEqual(prefix);
+    expect(file.identity.size).toBe(prefix.length + tail.length);
+    expect(file.digest).toBe("");
+    const small = join(fixture, "small.cmd");
+    writeFileSync(small, prefix);
+    const full = await inspectWindowsInstallationFiles([{ path: small, maxBytes: 1024, prefixOnly: true }]);
+    expect(full.kind).toBe("observed");
+    if (full.kind !== "observed") return;
+    expect(Buffer.from(full.files[0]!.bytes)).toEqual(prefix);
+    expect(full.files[0]!.digest).toBe(createHash("sha256").update(prefix).digest("hex"));
   });
 });

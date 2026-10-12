@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { loadKeyringBinding } from "../src/lib/keyring-native";
 
 export interface KeyringSmokeEntry {
   setSecret(secret: Uint8Array, signal?: AbortSignal): Promise<void>;
@@ -15,8 +16,8 @@ export interface KeyringSmokeOptions {
 }
 
 async function createOsEntry(service: string, account: string): Promise<KeyringSmokeEntry> {
-  const { AsyncEntry } = await import("@napi-rs/keyring");
-  return new AsyncEntry(service, account);
+  const { AsyncEntry } = loadKeyringBinding();
+  return new AsyncEntry(service, account) as unknown as KeyringSmokeEntry;
 }
 
 export async function runKeyringSmoke({

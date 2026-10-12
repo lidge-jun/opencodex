@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import type { OcxProviderConfig } from "../types";
 import {
   assessUrlDestination,
@@ -7,12 +8,13 @@ import {
   resolvePublicAddresses,
 } from "./destination-policy";
 import { pinnedHttpGet, pinnedHttpPost } from "./pinned-http";
-import { configuredOutboundFetch, effectiveProxyFor, noProxyMatches, normalizeProxyHostname, outboundProxyConfigured } from "./proxy-env";
+import { configuredOutboundFetch, effectiveProxyFor, noProxyMatches, normalizeProxyHostname, schemeMatchedProxyFor } from "./proxy-env";
+import { InvalidProviderEgressError, resolveProviderEgress } from "./provider-egress";
 import { publicProviderBaseUrl } from "./provider-url";
 
 type ProviderGetInit = Omit<RequestInit, "body" | "method" | "redirect">;
 type ProviderPostInit = ProviderGetInit & { body: string };
-type ProviderOutboundConfig = Pick<OcxProviderConfig, "baseUrl" | "allowPrivateNetwork"> & {
+type ProviderOutboundConfig = Pick<OcxProviderConfig, "baseUrl" | "allowPrivateNetwork" | "proxy" | "noProxy"> & {
   fetch?: typeof globalThis.fetch;
 };
 export interface ProviderOutboundDependencies {
@@ -27,10 +29,83 @@ export interface ProviderOutboundDependencies {
    * that forgets the seam fails closed, never open.
    */
   isCanonicalUrl?: (name: string, url: string) => boolean;
+  /** Recheck caller-owned credential authority after DNS and immediately before transport. */
+  beforeSend?: () => boolean;
+  /**
+   * Caller opt-in for a cleartext `http:` POST to a self-hosted service. Honoured only when the
+   * URL host is exactly `localhost` or an address literal in the narrow local allowlist
+   * (`localCleartextAddressAllowed`) AND the provider row itself sets `allowPrivateNetwork: true`
+   * (a registry default does not count). Every resolved answer must stay inside the same
+   * allowlist, and a proxied route is refused, so the cleartext body never leaves the host or
+   * LAN. Every other destination keeps the HTTPS-only POST gate. Defaults to refusing.
+   */
+  allowLocalCleartextPost?: boolean;
+}
+
+function ipv4Octets(address: string): number[] | null {
+  return isIP(address) === 4 ? address.split(".").map(Number) : null;
+}
+
+function ipv6Hextets(address: string): number[] | null {
+  if (isIP(address) !== 6 || address.includes("%")) return null;
+  let text = address.toLowerCase();
+  const lastColon = text.lastIndexOf(":");
+  const embedded = ipv4Octets(text.slice(lastColon + 1));
+  if (text.slice(lastColon + 1).includes(".")) {
+    if (!embedded) return null;
+    const [a, b, c, d] = embedded as [number, number, number, number];
+    text = `${text.slice(0, lastColon + 1)}${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+  }
+  const [head = "", tail] = text.split("::");
+  const headParts = head ? head.split(":") : [];
+  const tailParts = tail ? tail.split(":") : [];
+  const fill = tail === undefined ? 0 : 8 - headParts.length - tailParts.length;
+  const parts = [...headParts, ...Array<string>(Math.max(0, fill)).fill("0"), ...tailParts];
+  return parts.length === 8 ? parts.map(part => Number.parseInt(part, 16)) : null;
+}
+
+/**
+ * The only addresses a cleartext provider POST may reach: IPv4 loopback 127/8, IPv4-mapped
+ * loopback ::ffff:127.0.0.0/104, ::1, RFC 1918 (10/8, 172.16/12, 192.168/16), and IPv6 ULA
+ * fc00::/7. Deliberately narrower than the private-network classification: CGNAT 100.64/10,
+ * NAT64 64:ff9b:1::/48, benchmark, documentation, multicast/broadcast, link-local, metadata and
+ * unspecified addresses never qualify.
+ */
+export function localCleartextAddressAllowed(address: string): boolean {
+  const v4 = ipv4Octets(address);
+  if (v4) {
+    const [a, b] = v4 as [number, number];
+    return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+  }
+  const v6 = ipv6Hextets(address);
+  if (!v6) return false;
+  if (v6.slice(0, 7).every(part => part === 0) && v6[7] === 1) return true;
+  if (v6.slice(0, 5).every(part => part === 0) && v6[5] === 0xffff && (v6[6]! >> 8) === 127) return true;
+  return (v6[0]! & 0xfe00) === 0xfc00;
+}
+
+function unbracketedHostname(url: URL): string {
+  const host = url.hostname;
+  return host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
+}
+
+function localCleartextPostAllowed(
+  provider: ProviderOutboundConfig,
+  url: URL,
+  dependencies: ProviderOutboundDependencies,
+): boolean {
+  if (dependencies.allowLocalCleartextPost !== true || url.protocol !== "http:") return false;
+  if (provider.allowPrivateNetwork !== true) return false;
+  const host = unbracketedHostname(url);
+  return host === "localhost" || localCleartextAddressAllowed(host);
 }
 
 export class ProviderOutboundPolicyError extends Error {
   override readonly name = "ProviderOutboundPolicyError";
+}
+
+export class ProviderOutboundSendCancelledError extends Error {
+  override readonly name = "ProviderOutboundSendCancelledError";
 }
 
 function pickPinnedAddress(addresses: Array<{ address: string; family: number }>): { address: string; family: number } {
@@ -104,19 +179,88 @@ export async function providerRedirectError(response: Response, requestUrl: stri
   return `provider returned ${response.status} redirect to ${target}; configure the final provider URL directly`;
 }
 
+/**
+ * Default client identity for proxy-originated provider outbound requests.
+ *
+ * Every request through the provider outbound wrapper — connection tests, model
+ * discovery, quota probes — is initiated by the proxy itself, so there is no
+ * client request to inherit a User-Agent from, and the pinned Node-style
+ * transport sends none. WAF/CDN front ends commonly answer UA-less requests
+ * with a 403 that surfaced as "provider added but no models" (#5104). A caller
+ * that materializes its own User-Agent — registry static headers, provider
+ * `headers`, or a vendor-specific client fingerprint — keeps that value and is
+ * never given a second User-Agent; this only fills the name nobody claimed.
+ * The value is what survives, not its spelling: both the pinned transport and
+ * the SOCKS transport rebuild the set through `new Headers()`, which lowercases
+ * every name before it reaches the wire. Inference traffic never uses this
+ * wrapper, so the client-fingerprint rationale of #1751 is unaffected.
+ */
+const PROVIDER_OUTBOUND_DEFAULT_USER_AGENT = "opencodex";
+
+function hasUserAgentHeader(headers: HeadersInit | null | undefined): boolean {
+  if (!headers) return false;
+  if (headers instanceof Headers) return headers.has("user-agent");
+  if (Array.isArray(headers)) return headers.some(([name]) => name.toLowerCase() === "user-agent");
+  return Object.keys(headers).some(name => name.toLowerCase() === "user-agent");
+}
+
+function withDefaultOutboundUserAgent(
+  init: ProviderGetInit | ProviderPostInit,
+): ProviderGetInit | ProviderPostInit {
+  const headers = init.headers;
+  if (hasUserAgentHeader(headers)) return init;
+  if (headers instanceof Headers) {
+    const merged = new Headers(headers);
+    merged.set("User-Agent", PROVIDER_OUTBOUND_DEFAULT_USER_AGENT);
+    return { ...init, headers: merged };
+  }
+  if (Array.isArray(headers)) {
+    return { ...init, headers: [...headers, ["User-Agent", PROVIDER_OUTBOUND_DEFAULT_USER_AGENT]] };
+  }
+  return { ...init, headers: { ...(headers ?? {}), "User-Agent": PROVIDER_OUTBOUND_DEFAULT_USER_AGENT } };
+}
+
 async function providerOutboundRequest(
   name: string,
   provider: ProviderOutboundConfig,
   url: string,
   method: "GET" | "POST",
-  init: ProviderGetInit | ProviderPostInit,
+  rawInit: ProviderGetInit | ProviderPostInit,
   dependencies: ProviderOutboundDependencies = {},
 ): Promise<Response> {
+  // See PROVIDER_OUTBOUND_DEFAULT_USER_AGENT: this wrapper only carries proxy-originated
+  // diagnostic traffic, so it identifies itself unless the caller already did.
+  const init = withDefaultOutboundUserAgent(rawInit);
+  const assertSendAllowed = () => {
+    if (dependencies.beforeSend?.() === false) throw new ProviderOutboundSendCancelledError("provider credential changed before send");
+  };
   const postUrl = method === "POST" ? new URL(url) : undefined;
-  if (postUrl?.protocol !== undefined && postUrl.protocol !== "https:") {
+  if (postUrl?.protocol !== undefined && postUrl.protocol !== "https:"
+    && !localCleartextPostAllowed(provider, postUrl, dependencies)) {
     throw new ProviderOutboundPolicyError("provider POST URL must use HTTPS");
   }
-  if (provider.fetch) {
+  // Only reachable after the narrow opt-in above admitted it.
+  const localCleartextPost = postUrl?.protocol === "http:";
+  // A provider entry keeps unknown configuration keys, so `fetch` can arrive as a value the
+  // operator wrote into the file rather than an executor a caller attached. Calling that would
+  // throw inside discovery and fail the provider for a reason nothing in its configuration
+  // explains; the built-in transport is what a configured value means.
+  if (typeof provider.fetch === "function") {
+    // An executor resolves names itself, so a cleartext POST through one must name an address.
+    if (localCleartextPost && !isIP(unbracketedHostname(postUrl!))) {
+      throw new ProviderOutboundPolicyError("a cleartext provider POST through a caller-supplied executor must use an address literal");
+    }
+    // A caller-owned executor decides its own transport, so a provider egress route cannot be
+    // applied to it. Refusing is the only honest answer: running the executor anyway would send
+    // the request by whatever route that executor picked while the configuration says otherwise.
+    if (resolveProviderEgress({ providerName: name, provider, url }).kind !== "inherit") {
+      throw new InvalidProviderEgressError(
+        "proxy",
+        "a caller-supplied fetch executor owns its own routing, so this route cannot be applied",
+        `providers.${name}.proxy cannot be applied to a caller-supplied fetch executor; `
+        + "remove the provider egress override or the custom executor",
+      );
+    }
     // A caller-owned executor cannot be peer-pinned here. This branch keeps literal/config
     // checks and redirect blocking, but does not provide the resolved-address guarantees of
     // the built-in transport. Main-request migration must define that executor contract first.
@@ -135,16 +279,50 @@ async function providerOutboundRequest(
       });
       if (destinationError) throw new ProviderOutboundPolicyError(destinationError);
     }
+    assertSendAllowed();
     return provider.fetch(url, { ...init, method, redirect: "manual" });
   }
   const parsed = postUrl ?? new URL(url);
-  const proxyConfigured = outboundProxyConfigured();
-  // Snapshot the scheme-matched proxy once, before the DNS await, so admission and transport
-  // below reason about the same value. `null` here means "no proxy fetch would actually use",
-  // even if some other proxy variable is set.
-  const effectiveProxy = effectiveProxyFor(parsed);
+  // The provider's own route, decided against this request URL. `inherit` leaves every value
+  // below exactly as the global decision computed it.
+  const egress = resolveProviderEgress({ providerName: name, provider, url: parsed });
+  const providerProxy = egress.kind === "proxy" ? egress.proxyUrl : null;
+  // Snapshot the proxy fetch would actually use once, before the DNS await, so admission
+  // and transport below reason about the same value. `null` here means "no proxy fetch
+  // would actually use", even if some other proxy variable is set.
+  const globalProxy = effectiveProxyFor(parsed);
+  // The request leaves the DNS-pinned transport only when a proxy will actually carry it:
+  // a proxy variable fetch would use for this URL that NO_PROXY does not exempt.
+  // A scheme-mismatched or unusable variable, a NO_PROXY match, or an ALL_PROXY
+  // this target's scheme cannot use must not downgrade pinning or admit
+  // proxy-only DNS answers.
+  //
+  // A provider route replaces that decision outright rather than combining with it. An
+  // explicit provider proxy applies even where global NO_PROXY exempts the host, because the
+  // operator named this proxy for this provider; `providers.<name>.noProxy` is the exemption
+  // that belongs to that choice, and `resolveProviderEgress` has already applied it. A
+  // provider pinned to `direct` keeps the DNS-pinned transport, which reaches the peer
+  // through no proxy at all — the one route on this path that needs nothing from Bun.
+  const proxyApplies = egress.kind === "inherit"
+    ? globalProxy !== null && !noProxyMatches(parsed)
+    : providerProxy !== null;
+  // A cleartext body must go straight to the local peer: a proxy (global or provider route, and
+  // the DNS-failure proxy degradation below, which needs one) would carry it off-host unencrypted.
+  if (localCleartextPost && proxyApplies) {
+    throw new ProviderOutboundPolicyError(
+      `a cleartext provider POST cannot use an outbound proxy; add ${normalizeProxyHostname(parsed.hostname)} to NO_PROXY`,
+    );
+  }
   const isCanonicalUrl = dependencies.isCanonicalUrl ?? (() => false);
-  const allowMihomoIpv6FakeIp = (effectiveProxy !== null && !noProxyMatches(parsed))
+  // The IPv6 fake-IP gate keeps its stricter documented condition — a
+  // scheme-matched variable or a SOCKS5 ALL_PROXY, never a non-SOCKS
+  // ALL_PROXY — even when proxyApplies admits one for the transport
+  // decision, because admission binds the fetch to this value explicitly.
+  // An explicit provider proxy is exactly such a binding: the fetch below is pinned to it.
+  const bindingProxy = egress.kind === "inherit"
+    ? schemeMatchedProxyFor(parsed)
+    : providerProxy;
+  const allowMihomoIpv6FakeIp = (bindingProxy !== null && (providerProxy !== null || !noProxyMatches(parsed)))
     || transparentFakeIpException(url, parsed, isCanonicalUrl, name);
   const resolveAddresses = dependencies.resolveAddresses ?? resolvePublicAddresses;
   const pinnedGet = dependencies.pinnedGet ?? pinnedHttpGet;
@@ -168,7 +346,7 @@ async function providerOutboundRequest(
       // proof is on the final request URL — not the provider name — because an
       // OAuth/forward name matches any baseUrl by design while the bearer is
       // pinned to the registry destination independently.
-      allowBenchmarkAddresses: (proxyConfigured && !noProxyMatches(parsed))
+      allowBenchmarkAddresses: proxyApplies
         || transparentFakeIpException(url, parsed, isCanonicalUrl, name),
       // Mihomo IPv6 fake-IP (fdfe:dcba:9876::/48) answers are admitted either when bound
       // to a scheme-matched proxy (#3462) or under the TUN transparency exception for a
@@ -181,25 +359,38 @@ async function providerOutboundRequest(
     if (!dnsResolutionFailed) {
       throw new ProviderOutboundPolicyError(error instanceof Error ? error.message : "provider destination was blocked");
     }
-    if (!proxyConfigured) throw error;
+    if (!proxyApplies) throw error;
     warnProxyBoundaryOnce();
     warnProxyDnsDegradationOnce();
-    return configuredOutboundFetch(url, { ...init, method, redirect: "manual" });
+    // An explicit provider proxy stays pinned through the degradation too; re-inferring the
+    // route from the environment here would quietly move the request to a different exit.
+    assertSendAllowed();
+    return configuredOutboundFetch(url, {
+      ...init, method, redirect: "manual",
+      ...(providerProxy ? { proxy: providerProxy } : {}),
+    });
   }
   // A canonical TUN exception with no scheme-matched proxy must retain the
   // validated address, even when an unrelated HTTP_PROXY/ALL_PROXY is present.
-  if (proxyConfigured && !resolved.privateNetwork && (effectiveProxy !== null || !allowMihomoIpv6FakeIp)) {
+  if (proxyApplies && !resolved.privateNetwork) {
     warnProxyBoundaryOnce();
     // When the Mihomo exception could have admitted an answer, pin the transport to the
     // proxy the admission assumed instead of letting fetch re-infer it from the environment.
-    const proxy = (allowMihomoIpv6FakeIp && effectiveProxy) ? effectiveProxy : undefined;
+    // An explicit provider proxy is always pinned, for the same reason and unconditionally:
+    // the operator named the exit for this provider, so the environment must not re-decide it.
+    const proxy = providerProxy ?? ((allowMihomoIpv6FakeIp && bindingProxy) ? bindingProxy : undefined);
+    assertSendAllowed();
     return configuredOutboundFetch(url, { ...init, method, redirect: "manual", ...(proxy ? { proxy } : {}) });
   }
-  if (proxyConfigured && resolved.privateNetwork && !noProxyMatches(parsed)) {
+  if (proxyApplies && resolved.privateNetwork) {
     const hostname = normalizeProxyHostname(parsed.hostname);
     throw new Error(
       `provider URL resolves to a private-network destination; add ${hostname} to NO_PROXY before using allowPrivateNetwork with an outbound proxy`,
     );
+  }
+  if (localCleartextPost
+    && !resolved.addresses.every(answer => localCleartextAddressAllowed(answer.address))) {
+    throw new ProviderOutboundPolicyError("a cleartext provider POST resolved outside the local address allowlist");
   }
   const requestOptions = {
     headers: init.headers,
@@ -207,6 +398,7 @@ async function providerOutboundRequest(
     context: "provider response",
   };
   const pinned = pickPinnedAddress(resolved.addresses);
+  assertSendAllowed();
   if (method === "POST") {
     return pinnedPost(url, pinned, (init as ProviderPostInit).body, init.signal ?? undefined, requestOptions);
   }

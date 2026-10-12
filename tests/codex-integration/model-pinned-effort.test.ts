@@ -12,6 +12,7 @@ import { parseRequest } from "../../src/responses/parser";
 import { routeModel } from "../../src/router";
 import { createTestTranslatorBudget, withTestTranslatorBudget } from "../helpers/translator-budget";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../../src/types";
 
@@ -265,11 +266,14 @@ describe("operator pins on the actual request wire", () => {
   let failFirst: boolean;
   let failureStatus: number;
   let onFirstSend: (() => void) | undefined;
+  let releaseSpendHome: (() => void) | undefined;
 
   beforeEach(() => {
     savedHome = process.env.OPENCODEX_HOME;
     home = mkdtempSync(join(tmpdir(), "ocx-pin-wire-"));
     process.env.OPENCODEX_HOME = home;
+    // Take the writer lease after this block installs its home so direct handler dispatch can open the spend journal.
+    releaseSpendHome = acquireOwnedSpendHome();
     codexHome = installIsolatedCodexHome("ocx-pin-wire-codex-");
     captured = [];
     failFirst = false;
@@ -309,6 +313,9 @@ describe("operator pins on the actual request wire", () => {
   });
 
   afterEach(() => {
+    // Release before restoring or removing the home to prevent Windows removal failures and POSIX unlinked databases.
+    releaseSpendHome?.();
+    releaseSpendHome = undefined;
     globalThis.fetch = originalFetch;
     if (savedHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = savedHome;

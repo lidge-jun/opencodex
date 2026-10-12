@@ -3,7 +3,7 @@ import { isLocalAttestationSecret } from "./local-management-attestation";
 
 export const GUI_PAIR_METHOD = "POST";
 export const GUI_PAIR_PATH = "/api/gui/pairing-grants";
-export const GUI_PAIR_CAPABILITY_VERSION = "v1";
+export const GUI_PAIR_CAPABILITY_VERSION = "v2";
 export const GUI_PAIR_EXPECTED_PID_HEADER = "x-opencodex-gui-pair-expected-pid";
 export const GUI_PAIR_NONCE_HEADER = "x-opencodex-gui-pair-nonce";
 export const GUI_PAIR_EXPIRES_AT_HEADER = "x-opencodex-gui-pair-expires-at";
@@ -63,6 +63,23 @@ export function canonicalHttpOrigin(value: unknown): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Standalone pairing is only for this process's configured literal loopback origin.
+ * No CORS entry, public hub URL, wildcard bind, alias or client role can widen it.
+ * The CLI separately checks the attested runtime's actual port before requesting a grant.
+ */
+export function standaloneGuiPairingOrigin(config: {
+  runtimeRole?: string;
+  hostname?: string;
+  port: number;
+}): string | null {
+  if ((config.runtimeRole ?? "standalone") !== "standalone") return null;
+  const hostname = config.hostname ?? "127.0.0.1";
+  if (hostname !== "127.0.0.1" && hostname !== "::1") return null;
+  if (!Number.isInteger(config.port) || config.port < 1 || config.port > 65535) return null;
+  return new URL(`http://${hostname === "::1" ? "[::1]" : hostname}:${config.port}`).origin;
 }
 
 function capabilityPayload(

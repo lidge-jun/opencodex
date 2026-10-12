@@ -30,6 +30,7 @@ import {
   createSseTerminalOutputBoundary,
   doneFrame,
   failedTailFrame,
+  refusalFailedTailFrame,
   upstreamErrorTailFrame,
 } from "./relay";
 import {
@@ -87,6 +88,8 @@ export type EagerRelayOptions = {
   upstreamError?: string;
   /** Optional client-facing hint policy; inspection retains original frames. */
   terminalBoundary?: CodexSafetyBufferingFilterOptions;
+  /** Mask the selected outbound credential in synthetic failures. */
+  maskCredential?: (text: string) => string;
   /** Injectable clock for tests. */
   now?: () => number;
 };
@@ -122,7 +125,24 @@ export function relaySseEagerBounded(
     ?? (hooks.rewritePayload ? payloadRewriteAsBlockRewrite(hooks.rewritePayload) : undefined);
   const encodeFailedTail = (error: unknown): Uint8Array | null => {
     try {
-      return failedTailFrame(terminalEncoder, error);
+      return failedTailFrame(terminalEncoder, error, opts?.maskCredential);
+    } catch {
+      return null;
+    }
+  };
+  /**
+   * Same tail, except that a refusal the boundary already captured outranks the
+   * read failure that followed it — the upstream ended the turn before the
+   * socket did (#5176).
+   */
+  const encodeTerminalTail = (error: unknown): Uint8Array | null => {
+    const refusalCode = terminalBoundary.upstreamRefusalCode();
+    const refusalMessage = terminalBoundary.upstreamError();
+    if (refusalCode === undefined || refusalMessage === undefined) {
+      return encodeFailedTail(error);
+    }
+    try {
+      return refusalFailedTailFrame(terminalEncoder, refusalMessage, refusalCode, opts?.maskCredential);
     } catch {
       return null;
     }
@@ -313,7 +333,14 @@ export function relaySseEagerBounded(
             const upstreamError = terminalBoundary.upstreamError() ?? opts?.upstreamError;
             const upstreamErrorFrame = upstreamError === undefined
               ? adapterEofFrame
-              : upstreamErrorTailFrame(terminalEncoder, upstreamError);
+              : upstreamErrorTailFrame(
+                terminalEncoder,
+                upstreamError,
+                terminalBoundary.upstreamRefusalCode(),
+                opts?.maskCredential,
+                terminalBoundary.upstreamErrorType(),
+                terminalBoundary.upstreamErrorCode(),
+              );
             queuedBytes += upstreamErrorFrame.byteLength + terminalSentinel.byteLength;
             try {
               controllerRef?.enqueue(upstreamErrorFrame);
@@ -439,7 +466,7 @@ export function relaySseEagerBounded(
         // getters, toString) that re-entrantly cancel the client or abort the
         // upstream. Build the tail FIRST, then re-check eligibility before
         // committing to the synthetic terminal (adversarial review blocker).
-        const tail = encodeFailedTail(err);
+        const tail = encodeTerminalTail(err);
         if (tail && canDeliver()) {
           // Inspection and client framing have separate bounded parsers. If
           // inspection resynchronized after an oversized frame and observed a
@@ -453,6 +480,8 @@ export function relaySseEagerBounded(
         }
       }
     } finally {
+      upstream.signal.removeEventListener("abort", wakeUp);
+      upstream.signal.removeEventListener("abort", wakeParkedRead);
       // Release any retained rewrite-buffer bytes on every teardown path
       // (error, cancel, upstream abort) — consumption/EOF release alone
       // leaves them charged.

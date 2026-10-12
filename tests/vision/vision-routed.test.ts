@@ -37,8 +37,8 @@ beforeEach(() => {
   resetVisionDescriptionCache();
 });
 
-afterEach(() => {
-  upstream?.stop(true);
+afterEach(async () => {
+  await upstream?.stop(true);
   upstream = null;
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
@@ -87,7 +87,7 @@ describe("describeImageRouted unit", () => {
       const userParts = messages[1].content as Array<{ type: string }>;
       expect(userParts.some(part => part.type === "image_url")).toBe(true);
     } finally {
-      server.stop(true);
+      await server.stop(true);
     }
   });
 
@@ -211,7 +211,7 @@ describe("describeImageRouted unit", () => {
       );
       expect(bad.error).toContain("unsupported image type");
     } finally {
-      server.stop(true);
+      await server.stop(true);
     }
   });
 });
@@ -291,7 +291,7 @@ describe("chat-surface recursion fence (full path)", () => {
       // upstream count increment, no recursion either way).
       expect(forwarded.length).toBe(2);
     } finally {
-      server.stop(true);
+      await server.stop(true);
     }
   });
 
@@ -374,7 +374,7 @@ describe("chat-surface recursion fence (full path)", () => {
       expect(mainBodies[0]).toContain(CAPTION.slice(0, 20));
       expect(mainBodies[0]).not.toContain("aGVsbG8taW1hZ2UtYnl0ZXM=");
     } finally {
-      server.stop(true);
+      await server.stop(true);
     }
   });
 });

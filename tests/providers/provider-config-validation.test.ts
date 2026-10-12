@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { providerConfigSchema } from "../../src/config/schema/leaf-validators";
 import {
   apiKeyTransportConfigError,
   booleanRecordConfigError,
@@ -10,6 +11,7 @@ import {
   positiveIntegerRecordConfigError,
   providerBaseUrlConfigError,
   providerHeadersConfigError,
+  projectContextConfigError,
   reasoningSummaryDeliveryRecordConfigError,
   upstreamHttpVersionConfigError,
 } from "../../src/config/provider-validation";
@@ -36,6 +38,16 @@ describe("provider config validation leaf", () => {
     expect(apiKeyTransportConfigError({ adapter: "openai-chat", authMode: "key", apiKeyTransport: "bearer" })).toContain("anthropic adapter");
     expect(apiKeyTransportConfigError({ adapter: "anthropic", authMode: "oauth", apiKeyTransport: "bearer" })).toContain("API-key authentication");
     expect(apiKeyTransportConfigError({ adapter: "anthropic", authMode: "key", apiKeyTransport: "invalid" as "bearer" })).toContain("x-api-key");
+  });
+
+  test("accepts projectContext only on the native Command Code adapter", () => {
+    const base = { adapter: "command-code", baseUrl: "https://api.commandcode.ai" };
+    expect(providerConfigSchema.safeParse({ ...base, projectContext: "on" }).success).toBe(true);
+    expect(providerConfigSchema.safeParse({ ...base, projectContext: "off" }).success).toBe(true);
+    expect(providerConfigSchema.safeParse({ ...base, projectContext: "invalid" }).success).toBe(false);
+    expect(providerConfigSchema.safeParse({ ...base, adapter: "openai-chat", projectContext: "on" }).success).toBe(false);
+    expect(projectContextConfigError({ adapter: "command-code", projectContext: "on" })).toBeNull();
+    expect(projectContextConfigError({ adapter: "openai-chat", projectContext: "on" })).toContain("only by");
   });
 
   test("shares the upstream HTTP-version enum across write and load boundaries", () => {

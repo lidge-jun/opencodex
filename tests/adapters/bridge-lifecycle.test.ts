@@ -122,12 +122,9 @@ describe("bridge stream lifecycle (RC1 / RC2)", () => {
     try {
       await Promise.race([
         completed,
-        // Measured: the stall closes the stream in ~1160ms. The gap between this
-        // guard and the test's own timeout is the budget a loaded CI runner can
-        // spend on drifted heartbeat ticks — 2500ms inside a 3000ms budget left
-        // 500ms, and a slow runner spent it. The stream is proven to close well
-        // inside 1500ms, so the guard sits at the point where something is
-        // genuinely wrong, and the test timeout gives the drift room.
+        // This bounds a stuck reader, not upstream latency. CI scales the
+        // watchdog for runner contention; the outer timeout below always leaves
+        // two more seconds for cancellation and assertion reporting.
         new Promise<never>((_, reject) => setTimeout(() => reject(new Error("stall stream did not close")), watchdogMs(4_000))),
       ]);
     } finally {
@@ -140,7 +137,8 @@ describe("bridge stream lifecycle (RC1 / RC2)", () => {
     expect(names).toContain("response.incomplete");
     expect(names).not.toContain("response.completed");
     expect(cancelled).toBe(true);
-  }, 6_000);
+  // The test ceiling must leave cleanup time after the CI-scaled inner watchdog.
+  }, watchdogMs(4_000) + 2_000);
 
   test("terminal callback reports completed for a normal done event", async () => {
     const terminals: string[] = [];

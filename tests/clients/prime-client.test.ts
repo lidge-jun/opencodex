@@ -40,7 +40,7 @@ describe("Prime Agent client config", () => {
   test("shares Pi's model contract without opting Prime into session headers", () => {
     const prime = buildClientConfig("prime", context()) as PiGeneratedConfig;
     const pi = buildClientConfig("pi", context()) as PiGeneratedConfig;
-    expect(pi.providers[OPENCODE_PROVIDER_ID]!.compat).toEqual({ sendSessionAffinityHeaders: true });
+    expect(pi.providers[OPENCODE_PROVIDER_ID]!.compat).toEqual({ sendSessionAffinityHeaders: true, supportsDeveloperRole: false });
     delete pi.providers[OPENCODE_PROVIDER_ID]!.compat;
     expect(prime).toEqual(pi);
     expect(buildClientContribution("prime", context()).fragments[0]!.value)

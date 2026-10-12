@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   detectGrokCliToken,
+  hasClaudeCredentialContinuity,
   parseClaudeOauthPayload,
   readClaudeCredentialsFile,
   shouldAdoptGrokGeneration,
@@ -132,5 +133,26 @@ describe("shouldAdoptGrokGeneration with NaN/unknown expiries", () => {
   test("adopts a newer valid disk credential", () => {
     const disk = { ...stored, expires: Date.now() + 7200_000 };
     expect(shouldAdoptGrokGeneration(stored, disk, Date.now(), 60_000)).toBe(true);
+  });
+});
+
+describe("Claude credential continuity", () => {
+  const stored = { access: "synthetic-access", refresh: "synthetic-refresh", expires: 1 };
+  test("accepts a shared access or refresh token", () => {
+    expect(hasClaudeCredentialContinuity(stored, { ...stored, refresh: "synthetic-new-refresh" })).toBe(true);
+    expect(hasClaudeCredentialContinuity(stored, { ...stored, access: "synthetic-new-access" })).toBe(true);
+  });
+  test("rejects a completely replaced pair even when metadata agrees", () => {
+    const metadata = { accountId: "synthetic-account", email: "synthetic@example.test" };
+    expect(hasClaudeCredentialContinuity({ ...stored, ...metadata }, {
+      access: "synthetic-other-access", refresh: "synthetic-other-refresh", expires: 2, ...metadata,
+    })).toBe(false);
+  });
+  test("empty or whitespace-only values do not prove continuity", () => {
+    for (const token of ["", " ", "\t"]) {
+      expect(hasClaudeCredentialContinuity({ access: token, refresh: token, expires: 1 }, {
+        access: token, refresh: token, expires: 2,
+      })).toBe(false);
+    }
   });
 });

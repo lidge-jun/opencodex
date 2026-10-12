@@ -18,6 +18,9 @@ export function parseDataUrl(url: string): { mediaType: string; base64: string }
  */
 export function contentPartsToText(content: string | OcxContentPart[]): string {
   if (typeof content === "string") return content;
-  const text = content.map(p => p.type === "text" ? p.text : p.type === "image" ? "[image]" : "[video]").join("");
+  // A document carries its own marker, so this wire states the attachment instead of
+  // mislabelling it as a video.
+  const text = content.map(p =>
+    p.type === "text" || p.type === "document" ? p.text : p.type === "image" ? "[image]" : "[video]").join("");
   return text || "[image]";
 }

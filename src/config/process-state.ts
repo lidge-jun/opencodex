@@ -9,6 +9,7 @@ import {
 } from "../lib/windows-elevation";
 import { atomicWriteFile } from "./atomic-write";
 import { getConfigDir, hardenConfigDir } from "./paths";
+import { registerOwnHome, unregisterOwnerRegistryHome } from "./owner-registry";
 
 export function getPidPath(): string {
   return join(getConfigDir(), "ocx.pid");
@@ -36,6 +37,12 @@ export type RuntimePortState = {
   hostname?: string;
   /** Per-process proof key; protected by the config directory and never served. */
   attestationSecret?: string;
+  /**
+   * The live proxy's port when this runtime is a sibling instance started beside it
+   * (`src/codex/sibling-start.ts`). `ocx stop` reads it to leave shared client routing alone.
+   * Absent for every other runtime, so those records keep their bytes.
+   */
+  siblingOfPort?: number;
 };
 
 function isValidRuntimePortState(value: unknown): value is RuntimePortState {
@@ -43,18 +50,25 @@ function isValidRuntimePortState(value: unknown): value is RuntimePortState {
   const state = value as Record<string, unknown>;
   const hostnameOk = state.hostname === undefined || typeof state.hostname === "string";
   const attestationOk = state.attestationSecret === undefined || isLocalAttestationSecret(state.attestationSecret);
+  const siblingOk = state.siblingOfPort === undefined
+    || (Number.isInteger(state.siblingOfPort) && Number(state.siblingOfPort) > 0 && Number(state.siblingOfPort) <= 65535);
   return Number.isSafeInteger(state.pid)
     && Number(state.pid) > 0
     && Number.isInteger(state.port)
     && Number(state.port) > 0
     && Number(state.port) <= 65535
     && hostnameOk
-    && attestationOk;
+    && attestationOk
+    && siblingOk;
 }
 
 export function writeRuntimePort(state: RuntimePortState): void {
   ensureProcessStateDir();
   atomicWriteFile(getRuntimePortPath(), JSON.stringify(state, null, 2) + "\n");
+  // The record proves this home's owner only to a reader that knows where it lives.
+  // One pointer in the shared registry makes the record findable from every home;
+  // it is best-effort because ownership never depends on the registry write landing.
+  registerOwnHome();
 }
 
 export function parsePidFile(raw: string): number | null {
@@ -91,6 +105,9 @@ export function removePid(expectedPid?: number): void {
 export function removeRuntimePort(expectedPid?: number): void {
   if (expectedPid !== undefined && readRuntimePort(expectedPid) === null) return;
   try { unlinkSync(getRuntimePortPath()); } catch { /* ignore */ }
+  // The record is gone, so the registry pointer names a dead home. Retire it
+  // beside the record or stale pointers accumulate toward the reader's cap.
+  unregisterOwnerRegistryHome(getConfigDir());
 }
 
 /**
@@ -127,7 +144,7 @@ export function isOcxCommandLine(commandLine: string): boolean {
     || normalized.includes("src/cli/index.ts")
     || normalized.includes("@bitkyc08/opencodex")
     || /@bitkyc08\/\.opencodex-/.test(normalized)
-    || /(?:^|[\s/"'])(?:ocx|opencodex)(?:\.cmd)?(?:$|[\s"'])/.test(normalized);
+    || /(?:^|[\s/"'])(?:ocx|opencodex)(?:\.cmd|\.exe)?(?:$|[\s"'])/.test(normalized);
 }
 
 export function isOcxStartCommandLine(commandLine: string): boolean {
@@ -284,7 +301,7 @@ export function setProcessCommandLinePlatformForTests(next: NodeJS.Platform | nu
   processCommandLinePlatformForTests = next;
 }
 
-function readProcessCommandLine(pid: number): string | undefined {
+export function readProcessCommandLine(pid: number): string | undefined {
   if (!Number.isSafeInteger(pid) || pid <= 0) return undefined;
   const platform = processCommandLinePlatformForTests ?? process.platform;
   try {
@@ -311,14 +328,23 @@ function readProcessCommandLine(pid: number): string | undefined {
       } catch {
         /* WMIC missing or failed — fall through */
       }
-      const output = processCommandLineExec(resolveTrustedWindowsPowerShellExe(), [
-        "-NoProfile",
-        "-NoLogo",
-        "-NonInteractive",
-        "-Command",
-        `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}").CommandLine`,
-      ], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 3000, windowsHide: true });
-      return output.trim() || undefined;
+      // One bounded retry: a transient CIM timeout answers "unreadable" for an
+      // unchanged process and turns a guarded stop into a false approval-changed.
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          const output = processCommandLineExec(resolveTrustedWindowsPowerShellExe(), [
+            "-NoProfile",
+            "-NoLogo",
+            "-NonInteractive",
+            "-Command",
+            `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}").CommandLine`,
+          ], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 3000, windowsHide: true });
+          return output.trim() || undefined;
+        } catch {
+          /* timed out or CIM unavailable — try once more, then unreadable */
+        }
+      }
+      return undefined;
     }
     for (const ps of ["/bin/ps", "/usr/bin/ps"]) {
       try {

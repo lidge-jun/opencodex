@@ -61,6 +61,9 @@ export function buildTools(tools: unknown[] | undefined): OcxTool[] | undefined 
       parameters: normalizeParameters(t.parameters),
     };
     if (t.strict !== undefined) tool.strict = t.strict as boolean;
+    if (Array.isArray(t.allowed_callers)) {
+      tool.allowedCallers = (t.allowed_callers as unknown[]).filter((c): c is string => typeof c === "string");
+    }
     if (namespace) tool.namespace = namespace;
     out.push(tool);
   };

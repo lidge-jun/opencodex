@@ -1,4 +1,5 @@
 import type { OcxContentPart, OcxTextContent } from "../types";
+import { inlineDocumentFromDataUrl } from "./inline-document";
 
 export function isObj(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -8,7 +9,7 @@ type InputBlock =
   | { type: "input_text"; text: string }
   | { type: "text"; text: string }
   | { type: "input_image"; image_url?: string; file_id?: string; detail?: string }
-  | { type: "input_video"; video_url?: string }
+  | { type: "input_video"; video_url?: string; processing?: string }
   // codex-rs protocol/src/models.rs sends audio as input_audio with an audio_url.
   | { type: "input_audio"; audio_url?: string; format?: string }
   | { type: "input_file"; file_id?: string; filename?: string; file_data?: string };
@@ -61,7 +62,8 @@ export function inputContentParts(blocks: unknown): string | OcxContentPart[] {
       // the request never carried, which is worse than dropping malformed input.
     } else if (block.type === "input_video") {
       const videoUrl = nonEmptyString(block.video_url);
-      if (videoUrl) parts.push({ type: "video", videoUrl });
+      const processing = nonEmptyString((block as { processing?: string }).processing);
+      if (videoUrl) parts.push({ type: "video", videoUrl, ...(processing ? { processing } : {}) });
     } else if (block.type === "input_audio") {
       // Upstream Codex sends input_audio with an audio_url (codex-rs
       // protocol/src/models.rs). The IR has no audio carrier and no adapter consumes
@@ -90,8 +92,13 @@ export function inputContentParts(blocks: unknown): string | OcxContentPart[] {
       if (fileId) {
         parts.push({ type: "text", text: `[file: ${fileId}]` });
       } else if (fileData) {
-        // Inline file_data is often large base64. Preserve only its presence and name, never bytes.
-        parts.push({ type: "text", text: filename ? `[file: ${filename}]` : "[file: inline data]" });
+        // Inline bytes used to be reduced to a name here, which meant no adapter could forward
+        // the attachment even to a target that has a representation for it, and a title-only
+        // forward came back as a confident answer about a document the model never saw (#5212).
+        // The marker survives on the part for every wire that still cannot carry one. Bytes with
+        // no declared media type are not decodable into a document and keep the marker they had.
+        const document = inlineDocumentFromDataUrl(fileData, filename);
+        parts.push(document ?? { type: "text", text: filename ? `[file: ${filename}]` : "[file: inline data]" });
       }
       // A bare filename is not a file resource in the Responses schema, so omit it rather than
       // fabricating a "[file: ...]" marker for an attachment that was never sent.

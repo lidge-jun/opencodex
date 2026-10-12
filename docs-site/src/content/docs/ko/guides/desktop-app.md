@@ -1,0 +1,157 @@
+---
+title: 데스크톱 앱
+description: macOS, Windows, Linux에서 OpenCodex 데스크톱 앱을 설치하고 사용합니다.
+---
+
+OpenCodex 데스크톱 앱은 네이티브 트레이와 웹 대시보드를 함께 제공합니다. 번들 CLI가 기존 로컬 프록시를 찾으며, 프록시가 없다는 사실이 확인된 경우에만 앱이 번들 런타임을 시작합니다.
+
+대시보드는 확인된 로컬 프록시 엔드포인트에서 제공됩니다. 기본 포트는 `10100`입니다. 데스크톱 앱은 해당 대시보드와 번들 런타임을 감싸는 로컬 셸입니다.
+
+## 설치
+
+### macOS
+
+[최신 릴리스](https://github.com/lidge-jun/opencodex/releases)에서 `OpenCodex-<version>-macos.dmg`를 다운로드하세요. DMG를 열고 `OpenCodex.app`을 Applications로 드래그합니다. macOS 13 이상이 필요합니다.
+
+릴리스 버전의 `OpenCodex.app`은 Developer ID로 서명되고 Apple 공증을 받으므로, 첫 실행 시에는 대개 다운로드한 앱에 대한 일반 확인만 요청합니다. macOS가 계속 차단하면 **System Settings → Privacy & Security → Open Anyway**를 선택하세요.
+
+### Windows
+
+`OpenCodex-<version>-windows-x64.msi`를 다운로드해 설치 프로그램을 실행하세요. 설치 프로그램은 아직 코드 서명이 없어 Windows SmartScreen이 경고할 수 있습니다. 릴리스 페이지에서 다운로드한 파일인지 확인한 뒤 **More info → Run anyway**를 선택하세요.
+
+### Linux
+
+릴리스 페이지에서 `OpenCodex-<version>-linux-x86_64.AppImage` 또는 `OpenCodex-<version>-linux-amd64.deb`를 다운로드하세요.
+
+AppImage를 사용하는 경우:
+
+```bash
+chmod +x OpenCodex-<version>-linux-x86_64.AppImage
+./OpenCodex-<version>-linux-x86_64.AppImage
+```
+
+Debian 기반 배포판의 경우:
+
+```bash
+sudo apt install ./OpenCodex-<version>-linux-amd64.deb
+```
+
+트레이 아이콘을 사용하려면 AppIndicator를 지원하는 데스크톱 환경이 필요합니다.
+
+## 첫 실행
+
+앱은 번들 CLI에 `ocx resolve --json` 실행을 요청합니다. 이미 실행 중인 로컬 프록시에 연결할 수 있으면 그 프록시를 사용합니다. CLI가 프록시의 부재를 확인한 경우에만 번들 런타임을 시작하고, 결과가 불확실하면 시작 실패로 표시합니다. 그 뒤 확인된 loopback 엔드포인트의 대시보드를 앱 webview에서 엽니다. 로그인 시 트레이에 숨겨진 채로 시작한 경우에는 가벼운 시작 화면을 유지하고, 트레이에서 처음 열거나 앱을 다시 실행할 때 대시보드를 불러옵니다.
+
+트레이의 **Open dashboard** 또는 **Open in browser**를 사용하면 내장 대시보드와 일반 브라우저를 오갈 수 있습니다. 트레이에서는 업데이트도 확인할 수 있습니다.
+
+macOS에서는 대시보드를 닫아도 앱이 메뉴 막대에서 계속 실행됩니다. Dock 또는 Finder에서 OpenCodex를 다시 열면 프록시를 재시작하지 않고 대시보드가 다시 표시됩니다.
+
+## 데스크톱 앱과 ocx CLI 함께 사용하기
+
+안정된 위치의 macOS 앱, Windows 설치본, 설치된 Linux deb에서는 Desktop이 시작할 때
+새 터미널이 번들 `ocx`를 사용하도록 자동 설정합니다. 대시보드 사이드바의 데스크톱
+업데이트 옆 **터미널 명령**, 또는 트레이 메뉴의 **Terminal command…**에서 끄기,
+복구, 제거를 선택하세요. **Use Desktop's ocx command in new terminals**을 끄면 관리
+설정을 제거합니다. **Remove terminal command**도 꺼 둔 선택을 저장하며, 재시작 후에도
+자동으로 다시 설치하지 않습니다. AppImage와 개발 실행에서는 터미널 명령을 설정하지 않습니다.
+
+macOS와 Linux에서는 `~/.opencodex-desktop/bin`의 shim, 공유 `path.sh` 도우미,
+zsh·bash·fish 시작 파일의 관리 블록을 사용합니다. 소유권과 복구 정보는
+`~/.opencodex-desktop/cli.json`에 저장합니다. 이 기록만 삭제해도 명령이나 셸 블록은
+제거되지 않습니다. Linux deb의 `/usr/bin/ocx`는 그대로 유지됩니다. Windows에서는
+설치 디렉터리를 사용자 `Path` 앞에 추가하고 나머지 항목을 보존합니다. Windows 시스템
+`Path`의 다른 명령이 먼저 선택될 수 있으며, Desktop은 이를 부분 적용으로 표시하고
+시스템 `Path`는 변경하지 않습니다.
+
+설정을 켜거나 복구한 뒤에는 새 터미널을 여세요. macOS/Linux에서는 `type -a ocx`,
+Windows에서는 `Get-Command ocx -All`과 `where.exe ocx`로 확인하세요. 이미 열린 셸,
+별칭, 절대 경로 명령, 이후 PATH 변경은 다른 실행 파일을 선택할 수 있습니다.
+Desktop을 종료해도 설정은 유지됩니다. 번들이 사라지면 POSIX shim은 다른 `ocx`를
+조용히 선택하지 않고 복구 또는 제거 안내와 함께 실패합니다.
+
+POSIX에서는 launch proof 생성 도구가 있으면 셸에서 export한 Anthropic 설정을
+보존합니다. proof를 생성할 수 없거나 Windows에서 직접 실행하면 신뢰되지 않은
+Anthropic 환경 설정을 제거하는 기존 번들 CLI 동작을 유지합니다.
+
+macOS와 Linux에서 데스크톱 앱이 번들 프록시를 실행하는 것으로 확인되면,
+`ocx status`에 `Runtime supervisor: OpenCodex Desktop`이 표시됩니다.
+기록된 소유권이 없어도 이 관계를 확인할 수 있습니다. 백그라운드 서비스를
+설치하는 대신 OpenCodex 메뉴에서 **Start at Login**을 켜세요. 앱의 로그인
+등록이 확인되어야 재시작 후 보호가 적용됩니다. 등록을 확인할 수 없으면
+status에 표시되는 데스크톱 안내를 따르세요. 실행 관계 확인은 소유권을 생성하지 않습니다.
+이때 시작 안전 페이지의 데스크톱 앱 행에는 **실행 중 · 로그인 시 시작 미확인**이 표시됩니다.
+메뉴의 체크 표시는 로그인 항목 파일이 있다는 것만 나타냅니다. 이미 체크되어 있다면
+macOS의 시스템 설정 → 일반 → 로그인 항목 및 확장 프로그램에서 OpenCodex가 로그인 시
+열리도록 허용되어 있는지 확인하세요. 앱이 프록시를 실행하는 동안 시작 안전 페이지는
+백그라운드 서비스와 런처 shim 설치를 막아 둡니다. 이를 대신 쓰려면 OpenCodex를 종료하고
+터미널에서 `ocx service install` 또는 `ocx codex-shim install`을 실행하세요.
+
+번들 CLI 경로는 macOS에서 `/Applications/OpenCodex.app/Contents/MacOS/ocx`,
+Linux deb 패키지에서 `/usr/bin/ocx`입니다. 해당 실행 파일에 `status`를 붙여
+앱의 프록시 상태를 확인할 수 있습니다. Windows에서는 supervision 감지를 지원하지 않습니다.
+
+CLI가 Desktop의 프록시 감독을 감지하면 `ocx service install`, `repair`, `start`,
+`restart`는 서비스를 변경하기 전에 중단됩니다. 기록된 소유권이나 확인된 로그인
+등록이 없어도 적용됩니다. CLI로 시작 관리를 옮기려면 OpenCodex를 종료한 뒤
+`ocx service install`을 실행하세요. 중복 `ocx start`는 Desktop 감독자를 표시합니다.
+
+앱 번들은 트레이의 **Check for Updates…**로 업데이트하세요. Desktop이 프록시를
+감독하는 동안 `ocx update`는 별도로 설치한 npm/Bun 패키지도 교체하지 않습니다.
+해당 설치를 업데이트하려면 OpenCodex를 먼저 종료하세요. 수락된 `ocx restart`는
+Desktop이 교체 프록시를 시작한다고 알리고 정상 작동 확인을 기다립니다. 더 최신인
+PATH CLI도 `ocx restart`로 앱의 프록시를 자기 설치의 런타임으로 교체할 수 없습니다.
+
+터미널의 `ocx stop`은 프록시를 중지하지만 Desktop이 짧은 대기 후 다시 시작할 수
+있습니다. 계속 중지하려면 트레이의 **Stop proxy** 또는 **Quit**을 사용하세요.
+일반 stop은 이 안내를 stderr에 표시하고, `ocx stop --json`은 감독 검사와 안내를 생략합니다.
+
+이 가드는 현재 CLI와 런타임이 제공하는 조기 경고입니다. 이전 버전에는 없을 수 있으며
+Windows에서는 감독 검사를 지원하지 않습니다. 검사 중 Desktop을 발견했지만 확인을
+완료하지 못한 경우에도 작업을 차단합니다. 한 번 차단되면 이후의 불확실한 검사로는
+해제되지 않으며, Desktop 감독이 없다는 사실이 확인되어야 합니다. 앞서 Desktop을
+발견하지 않았다면 불확실하거나 지원되지 않는 검사는 기존 명령 동작을 유지합니다.
+기록된 소유권에 따른 기존 거부 검사는 별도로 적용됩니다.
+
+## 트레이에서 사용량 보기
+
+macOS와 Windows에서는 트레이 아이콘을 클릭하면 작은 사용량 창이 열립니다. 트레이의 **Show usage**로도 열 수 있으며, 트레이 클릭 이벤트를 전달하지 않는 Linux 데스크톱에서도 사용할 수 있습니다. Linux에서는 트레이 아이콘이 표시되지 않는 환경을 포함해 시작할 때 대시보드가 열립니다.
+
+사용량 창에는 오늘 및 30일 합계, 설정한 사용량 차트, 간결한 모델 목록, 프로바이더·계정 한도가 표시됩니다. 할당량 막대 옆에는 초기화까지 남은 시간이 나오며, 정확한 시각은 마우스를 올려 확인할 수 있습니다. 기존 **Menu bar & widget** 설정으로 표시할 섹션과 차트를 제어합니다. 숨긴 프로바이더는 제목, 합계, 할당량, 차트에서 제외됩니다. 차트에는 현재 시간 구간의 활동도 포함됩니다. 일부 차트 데이터를 신뢰할 수 있게 귀속할 수 없으면 부분 데이터 표시가 나타납니다. 측정값이 없는 경우를 사용량 0으로 표시하지 않습니다. Windows와 Linux에서는 계정 목록이 길 때 사용량 창을 스크롤하면 끝에 있는 Refresh와 Dashboard를 볼 수 있습니다.
+
+macOS에서 이 창은 네이티브 SwiftUI 컨트롤과 스크롤 가능한 AppKit 패널을 사용합니다. macOS 26 이상에서는 Apple Liquid Glass를, 이전 버전에서는 네이티브 팝오버 재질을 사용합니다. 계정 목록을 스크롤해도 헤더와 Refresh, Dashboard 버튼은 계속 보입니다. **View → Show Usage** (Command-Shift-U)로도 열 수 있습니다. Escape를 누르거나 패널 밖을 클릭하면 닫힙니다.
+
+트레이 메뉴에는 오늘의 요청 수와 토큰 수가 표시되고, 설정하면 추정 비용도 나옵니다. 위젯과 동일한 로컬 날짜 기준 사용량을 사용합니다. **Refresh now**를 선택하면 즉시 갱신하며, 앱도 60초마다 갱신합니다. 표시 설정은 대시보드의 **Menu bar & widget** 섹션에서 관리합니다. **Today**를 끄면 요약이 숨겨지고 **Cost**를 끄면 요약에서 비용이 빠집니다.
+
+사용할 수 없거나 명시적으로 측정하지 않은 사용량은 측정값 0이 아닌 `—`로 표시됩니다. 아이콘만 표시하도록 선택하면 이전 숫자가 지워집니다. 축약 표기에서는 정수 자릿수를 유지하므로 토큰 천만 개는 `1M`이 아니라 `10M`입니다.
+
+## 업데이트
+
+트레이 메뉴에서 **Check for Updates…**를 선택하면 즉시 확인합니다. 릴리스 빌드는 시작 후와 이후 6시간마다 자동으로도 확인합니다.
+
+Tauri 업데이터가 새 앱 버전을 찾으면 macOS 메뉴 막대 아이콘이나 트레이 호스트가 있는 Windows/Linux 트레이 아이콘에 파란 점이 표시됩니다. 내장 대시보드에도 같은 데스크톱 업데이트 신호가 나타납니다. 같은 프록시에 연결된 일반 브라우저에는 프록시 패키지의 업데이트 상태가 표시됩니다. 셸의 보고가 약 3분 동안 끊기면 다시 연결될 때까지 내장 배지가 unknown으로 바뀝니다. 점은 업데이트 가능 여부만 알려 주며 설치에는 명시적인 동작이 필요합니다.
+
+데스크톱 앱에서는 대시보드의 업데이트 버튼으로 앱 업데이트 페이지를 엽니다. 여기서 다시 확인하고, 대기 중인 서명된 업데이트를 설치하거나 대시보드로 돌아갈 수 있습니다. 같은 설치 동작은 트레이 메뉴에서도 사용할 수 있습니다. 설치에 실패해도 업데이트가 재시도할 수 있는 상태로 남습니다. 트레이 아이콘이 없는 Linux 데스크톱에서도 이 페이지를 사용할 수 있습니다. 일반 브라우저 대시보드는 해당 프록시의 패키지 설치를 관리합니다.
+
+업데이트는 설치 전에 프로젝트의 서명된 업데이터 공개 키로 검증됩니다. macOS의 앱 내 업데이트는 `OpenCodex-<version>-macos.app.tar.gz`를 다운로드하며, DMG는 최초 설치용입니다. 업데이터 키 시크릿이 설정된 경우에만 릴리스 매니페스트를 만들고, 이때는 네 플랫폼 모두 서명되어야 합니다.
+
+## 위젯
+
+macOS 앱에는 OpenCodex WidgetKit 확장이 포함됩니다. 위젯 설정과 로컬 스냅샷에 관한 자세한 내용은 [macOS 메뉴 막대 앱 가이드](/ko/guides/macos-menu-bar/)를 참고하세요.
+
+## 제거
+
+지원되는 Desktop 설치본을 제거하기 전에 대시보드나 트레이의 **Terminal command**를
+열어 **Remove terminal command**를 선택하세요. Desktop은 변경되지 않은 자신의 관리
+설정만 제거합니다. 사용자가 수정한 블록이나 파일은 보존하고 알려 주므로, 앱을 삭제하기
+전에 해당 문제를 처리하세요. 앱만 직접 제거하면 셸 파일이나 사용자 `Path` 정리가
+보장되지 않습니다.
+
+macOS에서는 Applications의 `OpenCodex.app`을 휴지통으로 옮깁니다. Windows에서는 **Installed apps**에서 OpenCodex를 제거합니다. Debian 기반 Linux에서는 다음 명령을 실행합니다.
+
+```bash
+sudo apt remove opencodex
+```
+
+AppImage는 다운로드한 파일을 삭제하면 됩니다.
+
+저장된 메뉴 막대 설정을 읽을 수 없다면 파일을 보존하기 위해 일부 항목만 수정하는 작업을 거부합니다. 다시 편집하려면 파일을 복원하거나 컴패니언 설정을 명시적으로 초기화하세요.

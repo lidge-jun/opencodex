@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import * as storeModule from "../../../src/oauth/store";
 
-let accountSets: Record<string, { accounts: Array<{ id: string; needsReauth?: boolean }>; activeAccountId?: string }> = {};
+let accountSets: Record<string, { accounts: Array<{ id: string; needsReauth?: boolean; paused?: boolean }>; activeAccountId?: string }> = {};
 mock.module("../../../src/oauth/store", () => ({
   ...storeModule,
   getAccountSet: (provider: string) => accountSets[provider] ?? null,
@@ -131,6 +131,8 @@ describe("planWebSearch xai arm (L7)", () => {
   test("findXaiSidecarProvider: disabled/key-auth/reauth all fail", () => {
     accountSets = { xai: { accounts: [{ id: "a1", needsReauth: true }], activeAccountId: "a1" } };
     expect(findXaiSidecarProvider(config())).toBeUndefined();
+    accountSets = { xai: { accounts: [{ id: "a1", paused: true }], activeAccountId: "a1" } };
+    expect(findXaiSidecarProvider(config())).toBeUndefined();
     accountSets = { xai: { accounts: [{ id: "a1" }], activeAccountId: "a1" } };
     expect(findXaiSidecarProvider(config({ providers: { routed, xai: { ...xaiProvider, disabled: true } } }))).toBeUndefined();
     expect(findXaiSidecarProvider(config({ providers: { routed, xai: { ...xaiProvider, authMode: "key", apiKey: "k" } } }))).toBeUndefined();
@@ -153,6 +155,34 @@ describe("credential pinning + loop fail-closed (review blockers)", () => {
       expect(captured.length).toBeGreaterThanOrEqual(1);
       for (const url of captured) expect(new URL(url).origin).toBe("https://api.x.ai");
       expect(out.error).toContain("401");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  test("non-OK response bodies are byte-bounded and canceled upstream", async () => {
+    let producedBytes = 0;
+    let canceled = false;
+    const chunk = new Uint8Array(1024).fill(0x61);
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(new ReadableStream({
+      pull(controller) {
+        producedBytes += chunk.byteLength;
+        controller.enqueue(chunk);
+      },
+      cancel() {
+        canceled = true;
+      },
+    }), { status: 500 })) as typeof fetch;
+    try {
+      const { runXaiWebSearch } = await import("../../../src/web-search/xai-executor");
+      const out = await runXaiWebSearch("q", "xai", xaiProvider, { model: "grok-4.6", reasoning: "low", timeoutMs: 5000, describeImages: false });
+
+      expect(out.error).toContain("response body exceeded byte bound");
+      // The stream implementation may prefetch a small number of chunks, but it must
+      // stop near the cap rather than consume an arbitrarily large upstream body.
+      expect(producedBytes).toBeLessThanOrEqual(MAX_SIDECAR_RESPONSE_BYTES + (4 * chunk.byteLength));
+      expect(canceled).toBe(true);
     } finally {
       globalThis.fetch = realFetch;
     }

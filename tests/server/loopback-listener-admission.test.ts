@@ -72,10 +72,11 @@ describe("loopback listener policy view", () => {
     expect(messagesStart).toBeGreaterThan(countTokensStart);
     expect(chatStart).toBeGreaterThan(messagesStart);
     expect(source.slice(countTokensStart, messagesStart)).toContain(
-      "await handleClaudeCountTokens(req, config, policy)",
+      // First-party bindings ride on the same call: only the intercept ingress sets the flag.
+      'await handleClaudeCountTokens(req, config, policy, { claudeIntercept: ingress === "claude-intercept" })',
     );
     expect(source.slice(messagesStart, chatStart)).toContain(
-      "await handleClaudeMessages(req, config, logCtx, { requestId, start, turnAdmissionLease, admission }, policy)",
+      'await handleClaudeMessages(sessionReq, config, logCtx, { requestId, start, turnAdmissionLease, admission }, policy, { claudeIntercept: ingress === "claude-intercept" })',
     );
     for (const branch of [
       source.slice(countTokensStart, messagesStart),
@@ -134,7 +135,8 @@ describe("local client inference wires on the loopback listener (#4236)", () => 
     const nextRoute = source.indexOf("url.pathname === \"/v1/live\"", chatStart);
     expect(chatStart).toBeGreaterThan(-1);
     const branch = source.slice(chatStart, nextRoute);
-    expect(branch).toContain("handleChatCompletions(req, config, logCtx");
+    // The handler receives the caller-session-promoted request (#6520); CORS still uses req.
+    expect(branch).toContain("handleChatCompletions(sessionReq, config, logCtx");
     expect(branch).toContain("req,\n          policy,\n        )");
     expect(branch).not.toContain("req,\n          config,\n        )");
   });

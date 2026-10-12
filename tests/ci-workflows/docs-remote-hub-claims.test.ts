@@ -123,6 +123,35 @@ describe("the one-port hub recipe", () => {
     }
   });
 
+  test("both locales warn that the companion requires a dedicated host", async () => {
+    const warnings = [
+      ["en", GUIDE, "every process and OS user", "shared or multi-tenant host", "dedicated single-tenant host", "Do not enable"],
+      ["ko", KO_GUIDE, "모든 프로세스와 OS 사용자", "공유 또는 다중 테넌트 호스트에서는 활성화하지 마세요", "전용 단일 테넌트 호스트", "활성화하지 마세요"],
+    ] as const;
+    for (const [locale, file, localAccess, sharedHost, dedicated, doNotEnable] of warnings) {
+      const source = await Bun.file(file).text();
+      expect(source, locale).toContain(localAccess);
+      expect(source, locale).toContain(sharedHost);
+      expect(source, locale).toContain(dedicated);
+      expect(source, locale).toContain(doNotEnable);
+      // The warning must render inside the danger box, not flow past as ordinary prose.
+      const opened = source.indexOf(":::danger");
+      expect(opened, locale).toBeGreaterThan(-1);
+      const closing = /\r?\n:::\r?\n/.exec(source.slice(opened));
+      expect(closing, locale).not.toBeNull();
+      const callout = source.slice(opened, opened + (closing?.index ?? 0));
+      expect(callout, locale).toContain(dedicated);
+      expect(callout, locale).toContain(sharedHost);
+      expect(callout, locale).not.toMatch(/`unauthenticatedLoopbackListener` (?:command|명령)/);
+      // The same unauthenticated surface is offered again by the ported form; the warning
+      // must reach that command too, or a reader following only that section misses it.
+      const ported = source.indexOf('"port":10104');
+      expect(ported, locale).toBeGreaterThan(-1);
+      const after = source.slice(ported, ported + 600);
+      expect(after, locale).toMatch(/unauthenticated|인증/);
+    }
+  });
+
   test("no locale tells the operator to export a data-plane token by hand", async () => {
     for (const [locale, file] of LOCALES) {
       const source = await Bun.file(file).text();

@@ -3,10 +3,30 @@
  *
  * `GET /healthz` answers "is the process alive and serving HTTP?" the instant the
  * listener binds. Readiness is stricter: the proxy is "ready" only after the
- * post-startup Codex catalog/config sync (`syncModelsToCodex`) has settled with
- * `ok=true` and no catalog-sync warning. Until then the process is live (Codex can
- * open a socket) but not ready (a request would race the sync or hit a stale
- * catalog), so clients should back off.
+ * post-startup Codex catalog/config sync (`syncModelsToCodex`) has SETTLED and
+ * reported `ok=true`. Until it settles the process is live (Codex can open a
+ * socket) but not ready — a request would race the sync — so clients back off.
+ *
+ * What readiness is NOT (#5181): it is not a verdict on the local Codex client's
+ * artifacts. A nonempty `warning` used to be terminal here, which made a
+ * degradation of files written into the local Codex home permanently un-ready a
+ * proxy that was serving every other provider correctly. In a single-replica
+ * Kubernetes deployment that removed the only Service endpoint.
+ *
+ * `ok` and `warning` are separate fields in the sync result because they answer
+ * separate questions, and the gate must not conflate them. `ok` is the sync's own
+ * verdict on whether the essential work — config injection, and the write
+ * admission that precedes it — succeeded. `warning` names a degradation the sync
+ * itself decided to continue past: no catalog source so Codex keeps its native
+ * catalog, combos omitted from the catalog, a conversation-history relabel left
+ * to Codex's own writer, or a caught catalog-refresh exception after which
+ * injection still runs and still reports its own `ok`. None of those stops this
+ * process from accepting HTTP or routing to a provider, so none of them may close
+ * the gate.
+ *
+ * That boundary is not new, only extended: the Claude Code roster reconciliation
+ * in `src/cli/claude-agent-startup-sync.ts` already delays the ready transition
+ * without being allowed to fail it, on the same reasoning.
  *
  * Design contract (per P1 review):
  *  - NO module-global mutable state. Each `startServer` invocation gets its own
@@ -65,8 +85,11 @@ export interface SyncOutcomeLike {
 
 /**
  * Drive the gate from the post-startup sync. Awaits `syncFn`; the gate goes to
- * `ready` ONLY on `ok=true` with no nonempty warning. A throw, `null`, `ok=false`,
- * or a nonempty warning transitions to `failed`. Used directly by `handleStart`
+ * `ready` on `ok=true`. A throw, `null`, or `ok !== true` transitions to
+ * `failed`; a nonempty `warning` does not, because the sync that produced it
+ * still reported the essential work done (see the file header, #5181). A throw
+ * and `null` stay terminal because neither is a classified outcome: the startup
+ * path did not reach a verdict, so the gate cannot claim one. Used by `handleStart`
  * so the startup transition is unit-testable without spawning the proxy. Returns
  * the raw sync outcome so a caller that also needs the #1046 write flags (did the
  * sync actually write the catalog/cache?) can keep them without a second call.
@@ -87,10 +110,6 @@ export async function runStartupReadinessSync(
     return null;
   }
   if (result.ok !== true) {
-    gate.markFailed();
-    return result;
-  }
-  if (result.warning !== undefined && result.warning !== "") {
     gate.markFailed();
     return result;
   }

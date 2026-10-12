@@ -1,0 +1,8 @@
+.kiro-device-dialog { max-width: var(--prose-measure); width: 100%; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); color: var(--text); padding: var(--space-6); }
+.kiro-device-dialog::backdrop { background: var(--glass-rail); }
+.kiro-login-choices { display: grid; gap: var(--space-2); margin-block: var(--space-4); }
+.kiro-login-choices .btn { justify-content: flex-start; min-height: var(--control-touch); }
+.kiro-device-code { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); margin-block: var(--space-4); }
+.kiro-device-code-value { font-family: var(--font-code); font-size: var(--text-title); font-weight: var(--weight-semibold); letter-spacing: var(--tracking-wide); }
+.kiro-device-destination { overflow-wrap: anywhere; user-select: all; }
+.kiro-device-actions { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-4); }

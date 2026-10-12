@@ -21,11 +21,13 @@ import {
   writePid,
   writeRuntimePort,
 } from "../../src/config/process-state";
+import { markSiblingStart, resetSiblingStartForTests, siblingRuntimeField } from "../../src/codex/sibling-start";
 import { setTrustedWindowsSystemDirectoryResolverForTests } from "../../src/lib/windows-elevation";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
 
 let testDir = "";
+const previousHome = process.env.OPENCODEX_HOME;
 
 beforeEach(() => {
   testDir = mkdtempSync(join(tmpdir(), "ocx-process-state-"));
@@ -38,7 +40,8 @@ afterEach(() => {
   setProcessCommandLinePlatformForTests(null);
   setTrustedWindowsSystemDirectoryResolverForTests(null);
   setOcxStartProcessCacheForTests([]);
-  delete process.env.OPENCODEX_HOME;
+  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = previousHome;
   if (testDir && existsSync(testDir)) removeTreeWithRetry(testDir);
   testDir = "";
 });
@@ -94,6 +97,45 @@ describe("proxy process-state ownership", () => {
     expect(isOcxCommandLine("bun run src/cli.ts start")).toBe(true);
     expect(isOcxStartCommandLine("bun run src/cli.ts stop")).toBe(false);
     expect(isOcxStartCommandLine("opencodex update --tag latest")).toBe(false);
+  });
+
+  test("recognizes the Windows standalone executable, whatever its case or path shape", () => {
+    // scripts/build-standalone.ts and desktop/scripts/prepare-sidecar.ts both emit ocx.exe
+    // on Windows targets, and the bundled sidecar is copied as ocx-<triple>.exe. A quoted
+    // install path with spaces is the realistic WMIC/PowerShell command line for it.
+    expect(isOcxCommandLine('"C:/Program Files/OpenCodex/bin/ocx.exe" start --port 10100')).toBe(true);
+    expect(isOcxCommandLine('"C:\\Program Files\\OpenCodex\\bin\\OCX.EXE" start')).toBe(true);
+    expect(isOcxCommandLine("C:/tools/ocx.exe stop")).toBe(true);
+    expect(isOcxCommandLine("ocx.exe")).toBe(true);
+    expect(isOcxCommandLine("opencodex.exe status")).toBe(true);
+    expect(isOcxStartCommandLine('"C:/Program Files/OpenCodex/bin/ocx.exe" start')).toBe(true);
+    // Lookalikes stay foreign: the token boundary around the executable name is the whole
+    // defence, and widening it for .exe must not widen it for neighbours.
+    expect(isOcxCommandLine("not-ocx.exe start")).toBe(false);
+    expect(isOcxCommandLine("myocx.exe")).toBe(false);
+    expect(isOcxCommandLine("ocx.exes start")).toBe(false);
+  });
+
+  test("a transient Windows command-line probe failure is retried once", () => {
+    const trustedSystem32 = join(testDir, "trusted", "System32");
+    const trustedWmic = join(trustedSystem32, "wbem", "WMIC.exe");
+    const trustedPowerShell = join(trustedSystem32, "WindowsPowerShell", "v1.0", "powershell.exe");
+    const calls: string[] = [];
+    mkdirSync(dirname(trustedPowerShell), { recursive: true });
+    writeFileSync(trustedPowerShell, "", { mode: 0o755 });
+    setProcessCommandLinePlatformForTests("win32");
+    setTrustedWindowsSystemDirectoryResolverForTests(() => trustedSystem32);
+    // WMIC absent, the first CIM read times out, the retry answers — an unchanged
+    // process must not read as foreign because one probe flaked.
+    setProcessCommandLineExecForTests(executable => {
+      calls.push(executable);
+      if (executable === trustedPowerShell && calls.filter(entry => entry === trustedPowerShell).length === 2) {
+        return "C:\\tools\\ocx.exe start\n";
+      }
+      throw new Error("probe unavailable");
+    });
+    expect(isLikelyOcxProcess(4242)).toBe(true);
+    expect(calls).toEqual([trustedWmic, trustedPowerShell, trustedPowerShell]);
   });
 
   test("the ownership probe distinguishes a real owner from a reused PID", () => {
@@ -242,5 +284,27 @@ describe("proxy process-state ownership", () => {
       "utf-8",
     );
     expect(readRuntimePort()).toBeNull();
+  });
+
+  test("a sibling record carries the live owner's port; every other record keeps its bytes", () => {
+    // Absent means "not a sibling", and the writer must not add the key: a non-sibling record is
+    // byte-identical to the one written before the field existed.
+    writeRuntimePort({ pid: 1234, port: 58195, hostname: "127.0.0.1", ...siblingRuntimeField() });
+    expect(readFileSync(getRuntimePortPath(), "utf-8"))
+      .toBe(`${JSON.stringify({ pid: 1234, port: 58195, hostname: "127.0.0.1" }, null, 2)}\n`);
+    expect(readRuntimePort()?.siblingOfPort).toBeUndefined();
+
+    markSiblingStart(10100);
+    try {
+      writeRuntimePort({ pid: 1234, port: 10199, hostname: "127.0.0.1", ...siblingRuntimeField() });
+    } finally {
+      resetSiblingStartForTests();
+    }
+    expect(readRuntimePort()).toEqual({ pid: 1234, port: 10199, hostname: "127.0.0.1", siblingOfPort: 10100 });
+
+    for (const siblingOfPort of [0, 70000, 1.5, "10100", null]) {
+      writeFileSync(getRuntimePortPath(), JSON.stringify({ pid: 1234, port: 10199, siblingOfPort }), "utf-8");
+      expect(readRuntimePort()).toBeNull();
+    }
   });
 });

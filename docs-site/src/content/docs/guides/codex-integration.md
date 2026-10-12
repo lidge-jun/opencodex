@@ -7,13 +7,19 @@ opencodex makes Codex route through the proxy by editing two things Codex reads:
 (`$CODEX_HOME/config.toml`, default `~/.codex/config.toml`) and its model catalog. Every edit is
 idempotent and reversible.
 
-The **Integrations** overview has a Codex switch for this native integration. Its switch shows
-the desired state from OpenCodex's configuration, while the badge reports whether Codex is
+The **Connect** overview has a Codex switch for this native integration. Its switch shows
+the latest saved desired state from OpenCodex's configuration, including immediately after a toggle, while the badge reports whether Codex is
 currently observed using the proxy; during cleanup those can briefly differ while the badge
 continues to report the observed state. Disabling names the effective Codex config
 file, removes OpenCodex's generated routing artifacts, and leaves the proxy running for other
 clients. Re-enabling rebuilds the catalog from the models available at that time, so it does not
 restore the Codex files byte for byte.
+
+For bare native Codex models and OpenCodex-generated account-selector rows, the catalog carries
+authenticated access program metadata. Bare models use the main Codex account; account-qualified
+models use their selected account. Refreshing the integration updates these rows when upstream
+changes the account's access programs.
+OpenCodex carries the logged-in main account's live model availability prompt onto bare native model rows.
 
 The proxy exposes one bare `openai` Codex-login route with Pool(default) and Direct account modes,
 plus `openai-apikey/<model>` for the configured API key. Pool includes main plus added accounts;
@@ -29,15 +35,25 @@ caller credential as the Pool selection. An exact account binding remains bound 
 
 ## Config injection
 
+`ocx sync` removes reasoning efforts unsupported by the selected Codex runtime from the catalog.
+It reports a clamp when its runtime identity, removed efforts or affected models change; unchanged
+syncs preserve the diagnostic timestamp and do not repeat that notice. This compatibility
+projection does not require running `ocx doctor`. If a clamp clears and later returns, it is reported again.
+
+OpenCodex serializes its Codex configuration writes. On Windows, a file temporarily held open
+by another process gets a short, bounded retry. If access stays busy, retry the operation shortly;
+OpenCodex preserves the existing lock evidence and does not use that access failure to take over
+another writer's lock.
+
 `ocx init`, `ocx start`, and `ocx sync` call the injector. On the default loopback bind, it keeps
 Codex's built-in `openai` provider id and points that provider at opencodex:
 
 ```toml
 # root keys, before the first table
 model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
-# Auto-injected by opencodex
+# Auto-injected by opencodex (undo: ocx restore)
 openai_base_url = "http://127.0.0.1:10100/v1"
-# Auto-injected by opencodex
+# Auto-injected by opencodex (undo: ocx restore)
 experimental_realtime_ws_base_url = "http://127.0.0.1:10100/v1"
 
 # only when fastMode is set; unset adds no [features] table
@@ -51,7 +67,11 @@ WebSocket at `api.openai.com` directly unless `experimental_realtime_ws_base_url
 Pool mode the call is created under the account opencodex selects, so a direct join under the app's
 own login fails with `realtime websocket handshake failed` (404). The injected key sends the join
 back through opencodex (`GET /v1/live/{callId}`), where the Pool reuses the account it bound to that
-session/thread pair (a process-local binding). In Direct mode both legs already use the caller's
+session/thread pair (a process-local binding). A call the client created itself is the exception:
+when ChatGPT voice hands a call to a Codex thread, or Codex Desktop creates the call on its own,
+the call belongs to your ChatGPT login and only its sideband join reaches opencodex, so opencodex
+forwards that join with the caller's own ChatGPT credential rather than a Pool account. In Direct
+mode both legs already use the caller's
 current bearer, so the key only keeps the join on the proxy path. It is written only on the loopback
 `openai_base_url` form, is removed together with it, and a user-owned
 `experimental_realtime_ws_base_url` is never overwritten.
@@ -98,6 +118,13 @@ is a `POST` to the canonical Responses URL or a configured WebSocket route, and 
 falls back to it when the request cannot be prepared, the `response.create` frame exceeds its size
 limit, or the proxy route cannot carry the socket.
 
+To keep the built-in ChatGPT provider on HTTP/SSE, set `providers.openai.upstreamWebsocket`
+to `false` in `~/.opencodex/config.json` and restart the proxy. Merge this field into the
+existing `openai` provider; preserve its account mode and other settings. Omit the field
+to restore the default upstream WebSocket selection. This setting does not change the
+client-facing `websockets` switch or the ChatGPT account used for the request. Native
+mid-turn steering and injection need upstream WebSocket and are unavailable while it is off.
+
 Local provider pacing can also hold a request before it is dispatched at all. So a slow first
 output has several possible contributors, and upstream queueing is only one of them. `ocx doctor`
 classifies configuration and measures none of these: compare actual transport, pacing, network,
@@ -118,6 +145,14 @@ built-in `openai` row, so its absence tells you nothing about where any other pr
 echo `default`, so request logs show the response tier as an observation with confirmation
 `assumed`. For latency-sensitive work, compare observed first-output times across the providers you
 actually use rather than assuming any particular channel is faster.
+
+For a gateway forwarding to a backend with the same metadata limitation, explicitly declare
+[`responseTierAuthoritative: false`](/reference/configuration/providers/#response-service-tier-authority)
+on that provider. The request still sends priority and records the raw echo, while actual Fast
+scheduling remains unconfirmed. Undeclared gateways and the official API keep their existing
+response-based interpretation. Updating OpenCodex alone does not add this declaration to existing
+gateway entries: without it, an eligible priority request followed by a `default` echo still records
+`response-declined`.
 
 The proxy listens on port `10100` by default and serves `POST /v1/responses`,
 `POST /v1/responses/compact`, `POST /v1/images/generations`, `POST /v1/images/edits`,
@@ -204,6 +239,29 @@ caller, including one that posts them directly, and a model turn records no hist
 opencodex decides this by reading Codex own config itself, so the switch does not depend on the
 injected URL or on anything a client sends, and turning it off takes effect without a restart.
 
+### Hosted image results in Codex App
+
+When a routed Responses provider returns a completed hosted `image_generation_call`
+with base64 image data, opencodex saves the validated image under its local
+`artifacts/` directory and delivers a final assistant image message to a locally
+connected Codex client. The image stays outside the collapsible progress section.
+This applies to streaming and non-streaming Responses, without another generation
+request or a change to the selected provider.
+
+When a client replays these generated image messages as assistant history, opencodex
+replaces its generated local image links with opaque artifact references before
+forwarding that history. This protects the display paths without changing the image
+message already shown in the app. It does not redact unrelated user-supplied paths.
+
+This display compatibility requires loopback admission and a recognized Codex client.
+Remote and generic API clients retain the provider's hosted response format.
+Partial previews and URL-only results are not rendered by this compatibility layer.
+Artifacts use the existing retention limit, so save images you want to keep before
+older files are pruned. An invalid image or a failed local write produces a visible
+failure message instead of a broken image link. Display batches reject duplicate image
+identities, oversized routing metadata, and output that exceeds the display byte limit;
+these failures return HTTP 502 before streaming or a failed terminal event after it starts.
+
 ### Built-in image generation (`image_gen`)
 
 Codex's built-in `image_gen` tool does not go through `/v1/responses` — the codex-rs extension
@@ -215,8 +273,10 @@ This is separate from the [Image Bridge](/guides/image-bridge/), which only acti
 **Responses** turn lists the hosted `image_generation` tool while a non-OpenAI model is selected.
 Standalone `/images/generations` calls never enter that bridge.
 
-- **One mode-aware forward candidate:** Pool selects an eligible main/added account; Direct uses the
-  caller OAuth bearer. The configured mode applies consistently to the image request.
+- **One mode-aware forward candidate:** Pool selects an eligible main/added account and uses its
+  stored ChatGPT credential even when the client authenticates to opencodex with a proxy admission
+  bearer. Direct uses the caller's ChatGPT OAuth bearer and cannot forward a proxy admission token.
+  The configured mode applies consistently to the image request.
 - **OpenAI API-key provider:** it is used only when no forward candidate owns an authentication
   failure. A broken/expired Pool credential is never hidden behind separately billed API usage.
 - **Explicit custom provider:** set `images.provider` to the id of a custom API-key
@@ -299,7 +359,7 @@ model_provider = "opencodex"
 model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
 
 # appended at the end of the file
-# Auto-injected by opencodex
+# Auto-injected by opencodex (undo: ocx restore)
 [model_providers.opencodex]
 name = "OpenCodex Proxy"
 base_url = "http://your-host:10100/v1"
@@ -333,10 +393,15 @@ $CODEX_HOME/opencodex-catalog.json
 $CODEX_HOME/models_cache.json
 ```
 
-On WSL, if `CODEX_HOME` is unset and the Linux `~/.codex/config.toml` is absent, opencodex also
+On WSL, if `CODEX_HOME` is unset and the Linux `~/.codex` directory is absent or holds no Codex state
+(`config.toml`, `auth.json`, `sessions`, `history.jsonl`), opencodex also
 checks for a single Windows Codex Desktop home at `/mnt/c/Users/*/.codex/config.toml`. When exactly
 one candidate exists, it uses that directory so WSL app-server mode and Windows Codex Desktop share
-the same config and auth files. Set `CODEX_HOME` explicitly to override this detection.
+the same config and auth files. Set `CODEX_HOME` explicitly to override this detection. When Windows Codex Desktop runs its app-server inside WSL, it ships the Linux Codex binary under that home as `bin/wsl/<hash>/codex`; opencodex finds it there when the service PATH has no `codex`, after any explicitly configured runtime and PATH.
+
+If the Codex home exists but Codex has not written `config.toml` yet (for example a fresh Desktop install
+that was never signed in to OpenAI), opencodex creates an empty `config.toml` there and continues. If
+the home directory itself does not exist, start Codex once so it creates it, or set `CODEX_HOME`.
 
 Codex can keep SQLite-backed thread state in a separate directory. OpenCodex history operations use
 the same precedence as Codex: root `sqlite_home` in `config.toml`, then `CODEX_SQLITE_HOME`, then the
@@ -459,6 +524,55 @@ two forms cannot use the root key and are unchanged.
 While the mode is active, the realtime voice sideband override
 (`experimental_realtime_ws_base_url`) is not injected — the dedicated provider-table form cannot
 carry it — so Codex Desktop voice uses its native endpoint rather than the proxy.
+
+### Emergency compaction model (opt-in)
+
+When OpenCodeX translates remote compaction for providers such as Google, it replaces images
+from earlier turns with short reopening notes if a later explicit final answer exists. Existing
+analysis and file references stay in the summary input; images after the last final answer stay
+available for unresolved work. Commentary-only and unphased histories are preserved. This affects
+only the compaction request, not stored attachments or ordinary model requests. It reduces repeated
+vision input but does not guarantee that a long text history fits the provider's context limit.
+
+`compactionRecovery` leaves the initial compaction on the conversation's selected route. It
+permits one emergency attempt only after a supported, pre-output compaction failure. It is
+separate from `compactionRouting`, which chooses another model before compaction starts, and
+from `codexClientCompaction`, which changes Codex's provider form.
+
+```json
+{
+  "compactionRecovery": {
+    "enabled": true,
+    "model": "provider/emergency-model",
+    "allowDevinInvalidArgument": false
+  }
+}
+```
+
+Use an independently configured, authorized model with enough context for the failed input.
+Enabling recovery permits that model's provider to receive the compaction history and charge
+for the extra attempt when recovery runs; ordinary successful compactions incur no extra call.
+The option is off when absent or disabled. The existing authenticated management API accepts
+this block through `PUT /api/settings`; send `compactionRecovery: null` to remove it. A direct
+file edit should follow the normal stopped-proxy configuration workflow. This setting does not
+change sign-in, the conversation's ordinary model, Codex's provider ID, or the desktop composer.
+
+Recovery does not replay after cancellation, semantic output, tool side effects, an exhausted
+send budget, or an authentication, admission or policy refusal. Generic `400` errors do not
+enable fallback. Devin answers an oversized history with an opaque pre-output
+`invalid_argument`; when the request's estimated size is at or near the model's input window,
+the adapter reports it as `context_length_exceeded` instead, so Codex compacts on an ordinary
+turn and a failed compaction qualifies as a context overflow without any Devin-specific option.
+The estimate uses tool descriptions after Cognition sanitization and truncation, matching the
+request sent upstream. A smaller request that gets the same code stays a plain `400`. The
+separately opted-in `allowDevinInvalidArgument` case covers only those remaining `invalid_argument` failures, and
+only on an identified compaction request. The emergency attempt shares the original request's
+send budget and never starts a second recovery attempt.
+
+Native encrypted compaction is outside this recovery path: its original error is retained.
+There is no automatic local truncation mode. A response being accepted is not proof that a
+long conversation retained its goals; verify the next turn on the original model before
+treating an emergency summary as a recovered task.
 
 ### Authless Codex Desktop (opt-in)
 
@@ -586,6 +700,33 @@ Codex. Native custom calls and converted function calls use the same completion 
 patch previews are held while their executable form is unresolved. JavaScript that merely
 contains patch text and unrelated native custom payloads stay unchanged.
 
+A routed model can also mistakenly send a shell-argument object such as
+`{"cmd":"git status --short"}` to code-mode `exec`. For a verified code-mode catalog,
+opencodex converts an unambiguous shell object into `tools.exec_command(...)` JavaScript
+and forwards its output through `text(...)`. Shell options are preserved, and Codex still
+executes and authorizes the command. Valid JavaScript fallback fields, ambiguous objects,
+and unrelated tool namespaces are not converted. This compatibility repair does not bypass
+provider rate limits or change the configured retry policy.
+
+The same repair covers the goal helpers. A routed model that calls `create_goal`, `get_goal`, or
+`update_goal` (or a `default.`-prefixed spelling of one) as a tool while the catalog declares only
+code-mode `exec` has the call converted into the matching `tools.<helper>(...)` call inside
+`exec`. A catalog that genuinely declares the bare goal tool keeps it, and a catalog that declares
+neither the tool nor `exec` still rejects the call as undeclared.
+
+On routed conversions with a verified freeform code-mode `exec` catalog, structured calls
+sent directly to
+`mcp__<server>__<tool>` (including a provider-added `default.` prefix) are also
+wrapped as nested host-tool calls. This avoids a retry
+caused solely by a model omitting the `exec` wrapper. Explicitly declared MCP tools
+keep their normal behavior; an ordinary JSON function named `exec` does not enable
+this repair. Unknown tools still fail at the host. Tool-call records printed as
+ordinary answer text are not executed by this compatibility rule.
+
+For routed Responses turns, an explicit tool-enforcement policy also rejects client tool calls if
+the request's declared-tool catalog is unavailable. An empty declared catalog rejects every client
+tool call; Chat and Anthropic clients retain their own tool-validation responsibility.
+
 Routed code-mode turns are also told the host's rules for the nested helpers before the first
 call: `tools.apply_patch` takes one string that opens and closes with the bare patch marker lines,
 the isolate has no `import`, and long-running commands are polled through `write_stdin`. When a
@@ -605,6 +746,19 @@ mode unchanged.
 
 After `ocx sync` changes this metadata, restart Codex App and open a fresh task. Existing app-server
 processes and tasks may retain the catalog and tool plan they loaded at startup.
+
+### Inline visualizations with routed models
+
+The Codex App's Visualize plugin asks the model to reply with a reference wrapped in private-use
+characters (U+E200 … U+E201). Some providers remove those characters before the model sees them —
+every Claude route we checked does — so the model used to answer with a bare
+`visualize{"path":…}` line that Codex App printed as text.
+
+opencodex rewrites those references into the directive the app itself renders,
+`::codex-inline-vis{path="/absolute/path/chart.html"}`, in the conversation text sent to routed
+models. Any model can read and repeat that form, so the visualization renders inline. Native OpenAI
+passthrough requests are forwarded unchanged. Replies that were already saved in the bare
+`visualize{…}` form stay as they are; ask for the visualization again in a new reply.
 
 ### Custom model display names
 
@@ -668,6 +822,20 @@ Codex history metadata restoration. Tools that manage a custom provider often ta
 provider id; replacing the active id can make those intact sessions disappear from Codex's history
 view. The same protection applies to an external provider selected by a legacy root profile.
 
+While an external provider owns `config.toml`, the settings report that
+`GET /api/settings` and `ocx system settings --json` return a description of the Desktop authless and
+client-compaction switches — and the Codex sign-in requirement — as controlled by that
+provider instead of showing the effective state OpenCodex would produce. Flipping either
+switch still stores the preference, but `config.toml` is not rewritten; the stored value
+takes effect if you switch Codex back to a provider OpenCodex manages and rerun `ocx start`.
+
+If `config.toml` exists but cannot be read (permissions, or a delete racing the read), the same
+report withholds the effective values and the sign-in answer as undetermined instead of showing
+the state OpenCodex would compute locally. The apply record keeps that explanation — including on
+a save whose injection gate is already closed by a disabled integration or a stopped proxy — and
+marks it retryable, so a later `ocx system settings --json` read reports the settled answer once
+the file is readable again. With Codex integration disabled, `ocx sync` is catalog-only and cannot apply it.
+
 Keep one tool as the owner of Codex provider configuration. To use OpenCodex behind an existing
 provider manager, point that provider at `http://127.0.0.1:10100/v1` with Responses passthrough
 (`wire_api = "responses"` in Codex TOML), not Chat Completions translation. When proxy API auth is
@@ -719,6 +887,22 @@ Check the failure boundary before changing provider settings:
 See [The parser and bridge](/reference/architecture/#the-parser) for the explicit wire mapping.
 There is no provider-level setting that can add a missing `tool_search` declaration; ordinary
 code-mode discovery remains a separate path.
+
+### Cache-read diagnostics
+
+Set `OPENCODEX_CACHE_DEBUG=1` before starting the proxy to write one diagnostic record per
+finalized request to `<config-dir>/cache-debug.jsonl`. The switch is off by default; set it to `0`
+or remove it to disable capture. The file is owner-only (`0600`) in the hardened config directory
+and rolls after 200 lines, retaining the newest 100.
+
+Each JSONL record contains the protocol, routed provider/model, cache-counter presence and
+provenance, process-local equality tags for the account, prompt-cache key, and allowlisted session
+headers, plus ordered fingerprints for instructions, tools, and message/input blocks. Prefix
+sections retain at most 128 tags and identify only the first divergent section/index. The
+diagnostic never stores prompt or message text, tool names, raw headers, raw cache/session/account
+identifiers, or a durable tag derived from them. Its random HMAC key is created at process start,
+separate from other debug keys, and is never persisted; tags therefore compare values only within
+one proxy process.
 
 ### Catalog troubleshooting
 
@@ -775,7 +959,43 @@ ocx service install    # persistent: auto-starts on login and respawns on crash
 `ocx status` shows whether the proxy is running and prints the same restart hint when
 it is not; `ocx doctor` reports restart safety (service/shim coverage).
 
+### Codex autostart shim
+
+Run `ocx codex-shim install` to install the optional launcher wrapper. It runs
+`ocx ensure` before ordinary Codex launches and then forwards the original arguments
+and exit status. The command also works with the standalone `ocx` shipped in desktop
+packages: both the installation probe and the installed wrapper use that executable,
+without requiring a separate Bun installation or a source checkout.
+
+On macOS and Linux, activate the private wrapper in your current shell after other PATH setup.
+With the default OpenCodex home, run:
+
+```sh
+. "$HOME/.opencodex/codex-shell-env.sh"
+```
+
+With a custom `OPENCODEX_HOME`, use the quoted path printed by `ocx codex-shim install`.
+Add that source line after other PATH setup in your shell startup file to activate future shells.
+OpenCodex does not edit that file or change the parent shell. Legacy in-place Unix shims are not
+auto-migrated; run `ocx codex-shim install` explicitly to migrate them.
+
+Use `ocx codex-shim status` to inspect it. On macOS and Linux, `ocx codex-shim uninstall`
+removes the private overlay files and leaves native Codex intact. Windows keeps in-place
+script wrappers; uninstall restores the saved launcher. See the
+[CLI lifecycle reference](/reference/cli/lifecycle/#ocx-codex-shim-installstatusuninstallremove).
+
 ## Routed models during Codex reserve mode
+
+Codex Pool can optionally protect stored pool accounts at a selected 5-hour or weekly usage
+threshold. The Desktop/main account keeps its separate 98% hard lock.
+Set `codexPool.lowQuotaProtection` in configuration to pause accounts, record a log-and-API
+alert, or both; see [routing configuration](/reference/configuration/routing/#codex-pool-low-quota-protection).
+A pause takes effect for the next selection immediately, while saving it to disk is deferred.
+Pool quota responses can authorize a pause only with valid usage and a captured credential
+that is still current. A response without that proof may refresh displayed usage without pausing an account.
+Check this server’s authenticated `GET /api/codex-auth/low-quota-events` history for `logged`
+alerts or save failures. Manual resume remains in force for the current quota episode. The
+default alert reaches only the log and API; it does not produce a desktop or OS notification.
 
 When the ChatGPT 5-hour quota is exhausted, Codex may offer a reserve fallback model
 (`gpt-reserve` / Luna Reserve). While that state is active, the Codex model picker can make
@@ -833,7 +1053,22 @@ If the new OAuth credential's authenticated usage lookup confirms an exhausted 5
 
 `ocx account refresh openai` and `ocx account list openai --quota --refresh` only read usage. Model validation spends quota and requires a human dashboard session: open `ocx gui` and click **Refresh quotas** after recovery. For a headless host, access its dashboard from your browser; an admin token alone does not authorize validation. Validation can complete while an account is paused without resuming or selecting it. Model authorization failures remain visible until successful validation or reauthentication clears them.
 
+In **Codex Set → Multi-auth**, enable the **Codex credits** switch in the **Codex Auth** header to display each main and pool account’s latest observed credits directly below Week. It is off by default and persists as `showCodexCredits`. The balance is a locale-formatted number, with Unlimited or an overage warning when reported; the bar indicates availability, not a percentage, because no total credit limit is supplied. Hiding credits changes display only, and a new login waits for its own observation.
+
+When an account reaches 100% on a usage window and still holds credits, upstream keeps serving it and draws the balance. OpenCodex does not let that happen by default: an account at 100% is switched out while its weekly or monthly window (only monthly on 30-day plans) or its 5-hour window is full, and used again once that window resets. The order of the other accounts does not change, and when no other account is available, selection finds none rather than spending credits. A request for the main account is refused like a hard-lock refusal until the reset. A full 5-hour window without a reset time holds an account only while that reading is fresh. Allowing the main account does not lift its hard lock (on by default at 98%), which still stops it first; turn the lock off if the main account should spend credits (a lock at 100% still stops it at 100%). To let accounts keep working from their credits, turn on **Use credits** next to the **Codex credits** switch in the Codex Auth header. The switch allows every account. To choose accounts one by one, open an account card's **⋯** menu and use **Use credits after limit** there; the header switch shows a middle position when only some accounts are on. An account allowed to spend carries a **Uses credits** badge on its card. New accounts start off. The choice is stored in `creditCodexAccountIds` and never redeems reset credits; the **Codex credits** display switch only shows balances and never changes routing.
+
+For an opted-in, unpaused main account with a full usage window, the background recovery cycle renews spendable credit observations from three minutes of age, even while the dashboard is closed. It prepares a valid token before the authenticated usage lookup so the balance can be observed again before its five-minute freshness limit. Missing, zero, restricted or retracted credits keep the account eligible for recovery lookups under the existing retry backoff. Requests remain refused until a fresh positive balance or unlimited credits are observed; `has_credits` alone or approximate message counts do not prove a spendable balance. With consent on, this credit-evidence refusal's `Retry-After` is at most five minutes, or a sooner included-quota reset; without consent it still follows the included-quota reset. A failed or incomplete lookup does not refresh old balance evidence. The separate main-account hard lock, needs-reauth quarantine and upstream retry delays still apply. This metadata lookup does not send a model validation request or set or clear the account's needs-reauth state.
+
 Background revalidation is separate and off by default. It requires Token Guardian, the `openai` provider's `proactive` refresh policy, and `tokenGuardian.codexWarmupEnabled`. It skips accounts awaiting deferred registration validation.
+
+### After a ChatGPT plan upgrade
+
+Refresh the main account's quota in Codex Auth after changing your ChatGPT plan. When the
+authenticated usage response confirms a long window has replaced the five-hour window,
+opencodex removes the old five-hour reading from both request admission and account selection.
+An allowed response with primary and secondary windows can omit the optional tertiary window.
+This recovery uses your included plan allowance and does not require enabling **Use credits**.
+Partial or invalid usage data retains the previous block until recovery is confirmed.
 
 ### Cancelling main-account device reauthentication
 
@@ -844,6 +1079,32 @@ When cancelling main-account device reauthentication, a temporary DELETE or netw
 When an account leaves pool selection, the reason travels with the decision instead of being recomputed for display, so a surface can never report an account healthy while routing is dropping it. `GET /api/codex-auth/accounts` carries `reauthReason` next to `needsReauth` on each account: `missing_credential` for a credential that was never stored, `refresh_failed` for a credential refresh that keeps failing, and `quota_unauthorized` when the usage lookup itself was rejected.
 
 A main-account refresh that does not complete still answers `503` with `Retry-After`, because a retry may still succeed. The message now adds that a failure which persists means the main account needs reauthentication, rather than only asking for another attempt.
+
+### Optional idle-window steering
+
+`codexPool.startIdleWindows` is an optional boolean and defaults to `false`. When enabled, a new
+unbound real request may be placed on an eligible account whose observed short quota window is at
+0% with evidence that its five-hour clock has not started. This check runs after conversation and family affinity, so an existing
+binding remains authoritative; an explicit account pin or manual account preference also wins.
+Independent model quota scopes are skipped, and the shared active cursor is unchanged. After the
+idle-window choice, normal strategy selection resumes for other conversations.
+
+The observation must be no older than five minutes, and the short window must explicitly be
+18,000 seconds. Its reset must be observed within 60 seconds of `observation + 5h` (rather than an already ticking or elapsed reset). A synchronous,
+process-local reservation prevents duplicate selections for the same account and window. The
+reservation deadline is at least 5h plus one minute after selection; a fresh observation is
+required after that deadline before the same account can be steered again. Reservations are cleared when the proxy
+process restarts and are never persisted to disk.
+
+Enable it in your existing configuration:
+
+```json
+{
+  "codexPool": { "startIdleWindows": true }
+}
+```
+
+If no account meets the criteria, ordinary routing applies. This feature only steers an actual incoming request. It creates no synthetic request and no timer.
 
 ### Keeping a downgraded account out of rotation
 
@@ -868,7 +1129,7 @@ ocx restore    # restore without stopping  (alias: ocx eject)
 ocx restore back # point plain Codex at the running proxy again
 ```
 
-When opencodex runs as a managed [background service](/reference/cli/#ocx-service), it sets
+When opencodex runs as a managed [background service](/reference/cli/lifecycle/#background-service), it sets
 `OCX_SERVICE=1` so a service-driven restart does **not** thrash the Codex config — only an explicit
 `ocx stop` / `ocx service stop` restores native Codex.
 
@@ -903,14 +1164,36 @@ When an affected history store supports paginated records, a provider transition
 
 When returning to the root-override form, OpenCodex retains an existing `[model_providers.opencodex]` definition before committing the configuration, even if history preflight currently passes. This keeps older `opencodex` conversations resolvable if Codex migrates history after that commit or while the background worker starts. New conversations still use the selected root provider; explicit restore keeps its separate removal guards.
 
-`ocx restore` and Codex config removal still refuse on `history_paginated_requires_native_writer`. Stripping the `[model_providers.opencodex]` definition while thread rows still reference it would make those conversations unresolvable, and the restore path has no way to keep a compatibility provider table. A home that is already paginated cannot currently be uninstalled through the product; that is known open work rather than intended behaviour.
+`ocx restore`, `ocx stop` and `ocx uninstall` no longer refuse on `history_paginated_requires_native_writer`. They take every OpenCodex root routing key out and keep the `[model_providers.opencodex]` definition on disk, so conversations whose rows still name that provider keep resolving while plain `codex` stops pointing at the proxy. The result is reported as a partial restore that names the retained lines, and `ocx restore --remove-codex-provider-table` removes them too, after which those conversations stop opening.
+
+Enabling the integration in its provider-table form on a home whose `openai`-tagged conversations Codex has already paginated used to be refused outright with `history_paginated_openai_requires_native_writer`: nothing was written and the integration stayed disabled. OpenCodex now completes that transition by keeping the managed root `openai_base_url` override beside the `[model_providers.opencodex]` table. Codex merges the override onto its built-in `openai` provider, so those conversations keep reaching the proxy without being relabeled and no rollout byte or thread row is touched. Only a routing form that requires the `x-opencodex-api-key` admission header still refuses, because Codex's built-in provider cannot carry that header; its message names the two settings that resolve it — route Codex through the loopback listener so the override can be retained, or set `syncResumeHistory` to `false` to accept that those conversations resume against Codex's own OpenAI endpoint.
+
+### Remote thread-list provider filters
+
+Provider-table routing changes the default provider id for new conversations to `opencodex` while
+history that cannot safely be relabeled may remain tagged `openai`. Some native app-server/mobile
+versions treat an omitted `thread/list.modelProviders` filter as the current default provider only,
+so those existing conversations can disappear from that remote list even though their database row
+and rollout are intact. A compatible list client can send `modelProviders: []` to request all
+providers. OpenCodex cannot rewrite that RPC because the remote client talks directly to Codex's
+native app-server rather than the inference proxy.
+
+`ocx sync` and `ocx start` include the warning when they apply a provider-table route. If a
+user-owned root URL sends the command down the no-routing branch, the CLI omits the warning. In
+client-compaction mode, the CLI can retain that URL, apply the `opencodex` provider table, and
+include the warning. The dashboard shows a separate preference hint when either setting is enabled.
+It appears once if both settings are enabled, regardless of the root URL. The hint reports enabled
+preferences; it does not mean Authless Desktop is effective on the current route. Authless Desktop
+applies only to effective loopback authless routing and is ignored for remote-client routing or
+listeners that require an admission header. The warning is not a migration: OpenCodex does not edit
+provider tags merely to influence a client-side list filter. Verify the conversation in native Codex
+and the app-server/client version; do not rewrite paginated history to make a remote list include it.
 
 Do not rewrite an active paginated rollout or thread row to migrate those conversations yourself. Close the affected conversation before any recovery, and report the exact error and versions without uploading private history. A backup or a successful script alone does not prove the conversation is visible again. Check the restored conversation in Codex after reopening.
 
 ## Experimental native mid-turn steering
 
-For a compatible model on the canonical ChatGPT forward route or an explicitly configured
-[OpenAI API WebSocket route](#steering-continuation-settings-and-public-api), and a client
+For a compatible model on the canonical ChatGPT forward route, and a client
 that sends `response.steer`, enable both options in `~/.opencodex/config.json` and restart
 OpenCodex before starting a fresh turn:
 
@@ -935,7 +1218,7 @@ Do not rerun tools or resend accepted steering text. Model, account, tool declar
 may change in an explicit saved-result continuation as described below. Other changes
 require an explicitly stopped or finished turn and normal new dispatch. Multiple independent conversations use independent connections.
 
-HTTP fallback, noncanonical gateways, translated models, sidecars, Combo attempts and plaintext V2
+HTTP fallback, noncanonical gateways, public API-key routes, translated models, sidecars, Combo attempts and plaintext V2
 restoration do not support this option. It does not add steering capability to a model or
 a client that lacks it. Unsupported routes return a protocol error rather than silently
 ignoring input. Disconnected or timed-out delivery may be unknown: never automatically
@@ -965,6 +1248,16 @@ waits, so the per-stage deadlines above compose to a worst case on the order of 
 During that time the turn holds one physical socket and one pinned credential that cannot rotate,
 because the channel deliberately never re-enters account selection. Treat an enabled steering
 connection as a long-lived session resource rather than an ordinary bounded request.
+
+Steering frames also share the proxy's configured body and memory limits. A control frame above
+[`maxInboundBodyBytes`](/reference/inbound-body-admission/) is refused before
+it is parsed on an established control connection (an initial frame is still parsed before
+its type-based limit applies), and the reconstructed body sent upstream is refused when it exceeds
+[`maxUpstreamBodyBytes`](/reference/configuration/providers/). Each
+connection's replay journal is capped at 32 MiB and counted as pinned state against
+[`appOwnedMemoryBudgetMb`](/reference/configuration/server/); admitting a
+journal demotes evictable caches first rather than failing, and the aggregate across live journals
+is capped at 128 MiB regardless of the configured budget.
 
 A timeout means **delivery is unknown**, not that the server rejected the input.
 Do not resend an accepted instruction or rerun a tool automatically. Inspect the
@@ -1046,6 +1339,11 @@ A missing acknowledgement or a disconnect means delivery can be **unknown**. Do
 not automatically resend a result, restart a tool or change accounts to retry it.
 The pending queue is limited to 32 frames and 8 MiB, with 1,024 advertised function
 calls, a 32 MiB replay journal and at most 128 responses per owned connection.
+Injection journals share the pinned memory budget and 128 MiB aggregate ceiling
+with steering journals; see [steering memory limits](#steering-confirmation-deadlines-and-retained-context).
+The configured upstream body limit is checked before a result enters the queue,
+even while another result awaits acknowledgement. An `outbound_body_too_large`
+refusal leaves the connection usable for a corrected result without rerunning its tool.
 Each sent injection has a 90-second acknowledgement deadline that unrelated output
 cannot extend; a saved-result wait is limited to 30 minutes. Existing frame limits
 and stall timeouts still apply.
@@ -1094,12 +1392,11 @@ can follow a completed multi-agent turn as a new explicit request using ordinary
 routing. Client support and backend entitlement still require live verification.
 
 
-## Steering continuation settings and public API
+## Steering continuation settings
 
 An explicit saved-result `response.create` may override `reasoning` (effort and
 summary), `text` (verbosity and supported structured-output format), and
-`stream_options`. On an explicitly configured public API route it may also
-change `max_output_tokens`. Subscription routes refuse that token-limit override
+`stream_options`. Subscription routes refuse a `max_output_tokens` override
 instead of silently ignoring it. Normal provider pins, subagent caps, effort
 mapping and summary/verbosity capability exclusions still apply.
 
@@ -1111,14 +1408,11 @@ corrected request can be submitted without rerunning its tool. The server still
 decides which settings the chosen model accepts. Changes to model, account,
 provider, tools, instructions or service tier require a separate ordinary turn.
 
-For public API steering, configure an `openai-responses` provider with exactly
-`https://api.openai.com/v1`, its API key and `upstreamWebsocket: true`, then use its
-normal prefixed model selector with `websockets: true` and
-`codexNativeSteering: true`. This does not buy API credit or redirect a ChatGPT
-subscription to separately billed usage. A supporting single-agent model/execution
-mode is still required. Conversation-bound responses and API automatic compaction
-are not steerable; their ordinary responses are preserved and a steering attempt
-receives an explanatory error. The multi-agent injection path stays separate.
+Native steering is restricted to the canonical ChatGPT subscription route. Public
+API-key and gateway routes are not steerable; their ordinary responses are preserved
+and a steering attempt receives an explanatory error. This prevents successor
+generations on a retained socket from bypassing normal per-request admission. The
+separately gated public API multi-agent injection path remains available.
 
 ### Executable direct-versus-proxy wire probe
 
@@ -1165,3 +1459,14 @@ The process exits 0 only if all four live scenarios pass, 1 otherwise, and 2 for
 invalid arguments or missing credentials. This is a **wire diagnostic**, not an
 end-to-end Codex App/CLI interface test, live certification or instruction to enable
 the experimental feature for production work.
+
+## Streaming line endings
+
+The shared SSE decoder accepts LF, CRLF and standalone CR line endings, even when a delimiter spans network chunks. This allows compatible providers to stream events without requiring LF-only framing.
+
+
+### Account-qualified requests and credits
+
+Choosing an account-qualified model does not enable credit spending. Stored accounts obey **Use credits after limit** during authentication, when credentials are prepared, and before Responses HTTP or WebSocket dispatch after pacing or retry waits. A held request reports the credit policy, not an authentication failure; wait for the reset, choose another account, or explicitly enable that account’s credit spending.
+
+Stored-account vision and web-search helpers also recheck this policy before sending, including retries. If consent changes or a limit is reached after helper selection, the helper reports the policy refusal without sending that attempt. The standalone search relay returns a reset-bound 429. Caller-owned Direct credentials retain their existing behavior.

@@ -3,10 +3,50 @@ import {
   getStarStatus,
   invalidateStarStatusCache,
   probeStarState,
+  resolveTrustedGhExecutable,
   starRepository,
   STAR_REPO,
   type StarDeps,
 } from "../../src/github/star-state";
+
+describe("trusted gh resolution", () => {
+  test("does not search a caller-controlled POSIX PATH", () => {
+    const visited: string[] = [];
+    const resolved = resolveTrustedGhExecutable("linux", { PATH: "/workspace/untrusted:/tmp/bin" }, candidate => {
+      visited.push(candidate);
+      return candidate === "/usr/bin/gh";
+    });
+
+    expect(resolved).toBe("/usr/bin/gh");
+    expect(visited).not.toContain("/workspace/untrusted/gh");
+    expect(visited).not.toContain("/tmp/bin/gh");
+  });
+
+  test("ignores canonical-shaped hostile Windows environment roots", () => {
+    const visited: string[] = [];
+    const resolved = resolveTrustedGhExecutable("win32", {
+      PATH: "D:\\workspace\\bin",
+      ProgramFiles: "D:\\Program Files",
+      ProgramW6432: "D:\\Program Files",
+      "ProgramFiles(x86)": "D:\\Program Files (x86)",
+      USERPROFILE: "D:\\Users\\operator",
+      LOCALAPPDATA: "D:\\Users\\operator\\AppData\\Local",
+    }, candidate => {
+      visited.push(candidate);
+      return candidate.startsWith("D:\\");
+    });
+
+    expect(resolved).toBeNull();
+    expect(visited).toEqual([
+      "C:\\Program Files\\GitHub CLI\\gh.exe",
+      "C:\\Program Files (x86)\\GitHub CLI\\gh.exe",
+    ]);
+
+    expect(resolveTrustedGhExecutable("win32", {}, candidate =>
+      candidate === "C:\\Program Files (x86)\\GitHub CLI\\gh.exe",
+    )).toBe("C:\\Program Files (x86)\\GitHub CLI\\gh.exe");
+  });
+});
 
 type GhCall = { args: string[]; timeoutMs: number };
 

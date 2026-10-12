@@ -5,11 +5,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useT } from "../i18n/shared";
 import { IconAlert } from "../icons";
-import {
-  oauthTosRisk,
-  oauthTosRiskBodyKey,
-  oauthTosRiskTitleKey,
-} from "../oauth-tos-risk";
+import { oauthTosCopyKeys, oauthTosRisk } from "../oauth-tos-risk";
 
 export default function OAuthTosWarningModal({
   providerId,
@@ -25,6 +21,7 @@ export default function OAuthTosWarningModal({
   const t = useT();
   const titleId = useId();
   const bodyId = useId();
+  const conditionsId = useId();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const submittedRef = useRef(false);
   const [acknowledged, setAcknowledged] = useState(false);
@@ -46,13 +43,7 @@ export default function OAuthTosWarningModal({
   // Unmarked provider: render nothing (callers must gate with oauthTosRisk).
   if (!level) return null;
 
-  const normalizedProviderId = providerId.trim().toLowerCase();
-  const bodyKey = normalizedProviderId === "anthropic"
-    ? "oauthTos.anthropicBody"
-    : oauthTosRiskBodyKey(level);
-  const showApiKeySaferPath =
-    normalizedProviderId === "anthropic"
-    || normalizedProviderId === "google-antigravity";
+  const copy = oauthTosCopyKeys(providerId, level);
 
   const handleContinue = () => {
     if (!acknowledged || submittedRef.current) return;
@@ -65,7 +56,7 @@ export default function OAuthTosWarningModal({
     <dialog
       ref={dialogRef}
       aria-labelledby={titleId}
-       aria-describedby={bodyId}
+      aria-describedby={copy.conditions ? `${bodyId} ${conditionsId}` : bodyId}
       className="modal-overlay"
       onCancel={handleCancel}
     >
@@ -75,7 +66,7 @@ export default function OAuthTosWarningModal({
         onClick={e => e.stopPropagation()}
         style={{ maxWidth: 460 }}
       >
-        <h3 id={titleId}>{t(oauthTosRiskTitleKey(level), { provider: providerLabel })}</h3>
+        <h3 id={titleId}>{t(copy.title, { provider: providerLabel })}</h3>
         <div
           id={bodyId}
           className="notice-warn"
@@ -83,12 +74,17 @@ export default function OAuthTosWarningModal({
         >
           <IconAlert width={16} height={16} style={{ flexShrink: 0, marginTop: 2 }} aria-hidden="true" />
           <p className="modal-desc" style={{ margin: 0 }}>
-            {t(bodyKey, { provider: providerLabel })}
+            {t(copy.body, { provider: providerLabel })}
           </p>
         </div>
-        {showApiKeySaferPath && (
+        {copy.conditions && (
+          <p id={conditionsId} className="modal-desc" style={{ marginTop: 12 }}>
+            {t(copy.conditions)}
+          </p>
+        )}
+        {copy.saferPath && (
           <p className="muted text-label" style={{ marginTop: 12 }}>
-            {t("oauthTos.saferPath")}
+            {t(copy.saferPath)}
           </p>
         )}
         <label className="oauth-tos-ack" style={{ display: "flex", gap: 8, alignItems: "flex-start", marginTop: 14 }}>
@@ -99,7 +95,7 @@ export default function OAuthTosWarningModal({
             style={{ marginTop: 3 }}
             aria-required="true"
           />
-          <span className="text-label">{t("oauthTos.acknowledge")}</span>
+          <span className="text-label">{t(copy.acknowledge)}</span>
         </label>
         <div className="modal-actions">
           <button type="button" className="btn btn-ghost" onClick={onCancel}>
@@ -111,7 +107,7 @@ export default function OAuthTosWarningModal({
             disabled={!acknowledged || submitted}
             onClick={handleContinue}
           >
-            {t("oauthTos.continue")}
+            {t(copy.continue)}
           </button>
         </div>
       </div>

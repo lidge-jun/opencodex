@@ -19,7 +19,7 @@ bearer。這些路徑不會彼此 fallback。shipped v1 設定會遷移到 marke
 ```toml
 # 根級鍵，必須位於第一個 table 之前
 model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
-# Auto-injected by opencodex
+# Auto-injected by opencodex (undo: ocx restore)
 openai_base_url = "http://127.0.0.1:10100/v1"
 
 # 僅在設定 fastMode 時寫入；未設定時不新增 [features] table
@@ -107,7 +107,7 @@ model_provider = "opencodex"
 model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
 
 # 追加到檔案末尾
-# Auto-injected by opencodex
+# Auto-injected by opencodex (undo: ocx restore)
 [model_providers.opencodex]
 name = "OpenCodex Proxy"
 base_url = "http://your-host:10100/v1"
@@ -139,7 +139,7 @@ $CODEX_HOME/opencodex-catalog.json
 $CODEX_HOME/models_cache.json
 ```
 
-在 WSL 中，如果未設定 `CODEX_HOME`，且 Linux 的 `~/.codex/config.toml` 不存在，opencodex 也會檢查
+在 WSL 中，如果未設定 `CODEX_HOME`，且 Linux 的 `~/.codex` 目錄不存在或不含任何 Codex 狀態（`config.toml`, `auth.json`, `sessions`, `history.jsonl`），opencodex 也會檢查
 `/mnt/c/Users/*/.codex/config.toml` 下是否只有一個 Windows Codex Desktop home。候選項恰好只有一個時，
 會使用該目錄，讓 WSL app-server mode 與 Windows Codex Desktop 共用相同的 config 與 auth 檔案。
 若要覆蓋此偵測，請明確設定 `CODEX_HOME`。
@@ -315,7 +315,7 @@ ocx service install    # 常駐：登入時自動啟動，崩潰後自動重新�
 ## Subagent 選擇器
 
 目錄同步會讓選定的 sub-agent 模型可供 Codex 使用；picker 排序請參見
-[Codex App 模型選擇器](/zh-tw/guides/codex-app-models/#subagent-selection)，v1/base/v2 委派與 fallback
+[Codex App 模型選擇器](/zh-tw/guides/codex-app-models/#子代理選擇)，v1/base/v2 委派與 fallback
 行為則參見 [Sub-agent Surface](/zh-tw/guides/sub-agent-surface/)。
 
 ## Codex 帳號預熱
@@ -325,6 +325,8 @@ ocx service install    # 常駐：登入時自動啟動，崩潰後自動重新�
 若新 OAuth 憑證的已驗證用量查詢確認5小時、每週或每月額度耗盡，則不呼叫模型而直接儲存帳號，顯示**等待驗證**。重新啟動或更新權杖也不會使其可用。額度恢復後重新整理額度：只有完整的最新用量顯示有餘額，才會傳送小型驗證請求；請求完成後帳號才可用於路由。查詢或驗證失敗將保留等待狀態。一般狀態輪詢不會傳送該請求。首次註冊時用量未知仍需一般預熱驗證。
 
 `ocx account refresh openai` 和 `ocx account list openai --quota --refresh` 僅查詢用量。模型驗證會消耗配額，因此需要使用者的儀表板工作階段：配額恢復後，開啟 `ocx gui` 並點選 **Refresh quotas**。無介面主機也需要透過瀏覽器存取其儀表板；僅憑管理員權杖無法授權驗證。暫停的帳號可以完成驗證，但不會因此恢復或被選取。模型授權錯誤會持續顯示，直到驗證或重新登入成功。
+
+在 **Codex Set → Multi-auth** 中，開啟 **Codex Auth** 標題列中的 **Codex 額度** 開關，即可在 Week 下方顯示主帳號和各池帳號最近查詢到的點數。預設關閉，並儲存為 `showCodexCredits`。餘額按地區格式顯示；上游回報時會顯示無限額或超額使用上限警告。由於沒有點數總上限，長條表示可用狀態而非百分比。此開關僅控制顯示，新登入需等待其自身的查詢結果。
 
 背景重新驗證是獨立功能，預設關閉。它需要 Token Guardian、`openai` 的 `proactive` 更新政策及 `tokenGuardian.codexWarmupEnabled`，並略過等待註冊驗證的帳號。
 
@@ -357,13 +359,13 @@ ocx restore    # 不停止 proxy，只恢復原生設定（alias: ocx eject）
 ocx restore back # 讓普通 Codex 再次指向仍在執行的 proxy
 ```
 
-當 opencodex 作為受管的 [背景服務](/zh-tw/reference/cli/#ocx-service) 執行時，會設定 `OCX_SERVICE=1`，
+當 opencodex 作為受管的 [背景服務](/zh-tw/reference/cli/lifecycle/#ocx-service-installrepairrestartstartstopstatusuninstallremove) 執行時，會設定 `OCX_SERVICE=1`，
 因此 service 驅動的 restart **不會**反覆改寫 Codex 設定；只有明確執行 `ocx stop` 或
 `ocx service stop` 才會恢復原生 Codex。
 
 ## 分頁歷史記錄安全拒絕
 
-如果受影響的歷史儲存區支援分頁，提供者切換可能傳回 `history_paginated_requires_native_writer`。此原因不再拒絕寫入 Codex 設定、參考設定檔與模型目錄。`ocx sync` 與 `ocx start` 仍會寫入這些檔案並設定 `model_catalog_json`，因此 Codex 模型選擇器會繼續顯示所有經 OpenCodex 路由的模型。只有這一條原因會讓對話歷史的重新標記停手，因為分頁歷史序號由 Codex 自己的寫入器分配，重試也不會改變。無法讀取的狀態資料庫、身分已變的歷史檔案、未能執行的預檢等其他歷史預檢原因仍會拒絕整個切換並回復，因為那些情況以後可能成功。在此狀態下，OpenCodex 不會修改分頁歷史檔案或執行緒列。既有對話保留已標記的提供者，不會被遷移；新對話仍正常經代理路由。重新標記停手時，家目錄裡既有的 `[model_providers.opencodex]` 表會保留而不是撤下，即便是 root-override（loopback）形式也一樣，這樣列上標記為 `opencodex` 的對話仍能對應到還存在的提供者 id。可遷移儲存區中的 legacy 記錄也適用。CLI 會印出 `Codex resume history: left to Codex's native writer (history_paginated_requires_native_writer)`。`ocx restore` 與移除 Codex 設定仍會因 `history_paginated_requires_native_writer` 被拒絕。執行緒列仍在參照時撤掉 `[model_providers.opencodex]` 定義會使這些對話無法解析，而復原路徑沒有辦法留下相容提供者表。已經分頁的家目錄目前無法透過產品解除安裝；這是已知的未完成工作，而非預期行為。
+如果受影響的歷史儲存區支援分頁，提供者切換可能傳回 `history_paginated_requires_native_writer`。此原因不再拒絕寫入 Codex 設定、參考設定檔與模型目錄。`ocx sync` 與 `ocx start` 仍會寫入這些檔案並設定 `model_catalog_json`，因此 Codex 模型選擇器會繼續顯示所有經 OpenCodex 路由的模型。只有這一條原因會讓對話歷史的重新標記停手，因為分頁歷史序號由 Codex 自己的寫入器分配，重試也不會改變。無法讀取的狀態資料庫、身分已變的歷史檔案、未能執行的預檢等其他歷史預檢原因仍會拒絕整個切換並回復，因為那些情況以後可能成功。在此狀態下，OpenCodex 不會修改分頁歷史檔案或執行緒列。既有對話保留已標記的提供者，不會被遷移；新對話仍正常經代理路由。重新標記停手時，家目錄裡既有的 `[model_providers.opencodex]` 表會保留而不是撤下，即便是 root-override（loopback）形式也一樣，這樣列上標記為 `opencodex` 的對話仍能對應到還存在的提供者 id。可遷移儲存區中的 legacy 記錄也適用。CLI 會印出 `Codex resume history: left to Codex's native writer (history_paginated_requires_native_writer)`。`ocx restore`、`ocx stop` 與 `ocx uninstall` 不再因 `history_paginated_requires_native_writer` 被拒絕。它們會移除 OpenCodex 寫入的所有根路由鍵，並把 `[model_providers.opencodex]` 定義留在磁碟上，因此列上仍指向該提供者的對話依舊可以解析，而純 `codex` 不再指向代理。結果會回報為部分復原並列出保留的列；`ocx restore --remove-codex-provider-table` 會連這些列一併刪除，之後那些對話將無法開啟。另外，在 Codex 已把 `openai` 標記對話遷移為分頁歷史的家目錄上啟用提供者表形式的整合，過去會以 `history_paginated_openai_requires_native_writer` 整體拒絕：什麼都不寫，整合維持關閉。現在 OpenCodex 會保留受管的根 `openai_base_url` 覆寫，與 `[model_providers.opencodex]` 表並存，藉此完成這次切換。Codex 會把該覆寫合併到內建 `openai` 提供者上，所以那些對話無需重新標記即可繼續抵達代理，歷史檔案與執行緒列都不會被更動。只有需要 `x-opencodex-api-key` 准入標頭的路由形式仍會拒絕，因為 Codex 內建提供者無法攜帶該標頭；此時訊息會點名兩個可行設定——讓 Codex 走回送監聽器以便保留該覆寫，或把 `syncResumeHistory` 設為 `false`，接受那些對話轉向 Codex 自己的 OpenAI 端點。
 
 返回根 URL 覆寫模式時，即使歷史預檢通過，OpenCodex 也會在提交設定前保留既有的 `[model_providers.opencodex]` 定義。如此一來，即使 Codex 在提交後或背景歷史工作啟動時遷移歷史格式，舊的 `opencodex` 對話仍能找到其提供者。新對話繼續使用所選的根提供者；明確要求的還原仍執行原有的獨立刪除檢查。
 

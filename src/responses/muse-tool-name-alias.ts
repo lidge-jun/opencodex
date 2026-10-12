@@ -8,6 +8,25 @@ const MUSE_SAFE_NAME = /^[a-zA-Z0-9_-]+$/;
 
 export type MuseToolNameAliases = ReadonlyMap<string, string>;
 
+/**
+ * Final wire name for an identity before the Muse length rewrite.
+ *
+ * The alias map is request-local and already narrowed by `tool_choice`. Returning undefined for
+ * a contradictory map keeps downstream identity checks fail-closed instead of choosing one alias.
+ */
+export function museWireNameForOriginal(
+  originalName: string,
+  aliases: MuseToolNameAliases,
+): string | undefined {
+  let wireName: string | undefined;
+  for (const [candidate, original] of aliases) {
+    if (original !== originalName) continue;
+    if (wireName !== undefined && wireName !== candidate) return undefined;
+    wireName = candidate;
+  }
+  return wireName ?? originalName;
+}
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }

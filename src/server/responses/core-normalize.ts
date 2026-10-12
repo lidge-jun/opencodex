@@ -12,13 +12,15 @@ import { subagentFallbackNeedsModelEntitlements } from "../../codex/subagent-mod
 import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/main-account";
 import type { RequestLogContext } from "../request-log";
 import type { HandleResponsesOptions } from "./core-options";
-import { prepareEffortNormalization } from "../effort-policy";
-import { providerModelResponsesUpstreamStreaming } from "../../providers/registry";
+import { prepareEffortNormalization, stripEmptyLadderEffort, supportedLadderFor } from "../effort-policy";
 import { resolveOpenCodeGoTransport } from "../../providers/opencode-go-transport";
 import { getOrAllocateRequestSessionLane } from "../request-log-conversation";
 import { shouldPreparePlaintextV2AgentMessages } from "../../responses/plaintext-v2-agent-messages";
+import { hasValidatedActiveReasoningEffort } from "../../responses/parser";
+import { responseTierAuthorityForProvider } from "../../providers/openai-tiers-destination";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { applyOpenAiVirtualModel } from "../../providers/openai-virtual-models";
+import { renameRoutedIdentityInContext } from "../../adapters/identity";
 import {
   fastPolicyForModel,
   serviceTierSupportFromPolicy,
@@ -36,6 +38,27 @@ import { isInjectionDebugEnabled } from "../../lib/debug-settings";
 import { injectionDebugLog } from "../../lib/injection-debug-log";
 import { recordAttemptRequestedEffort } from "../request-log";
 import type { ResolvedFastPolicy } from "../../providers/fastwire";
+import { applyDroidResponsesReasoningDefault } from "../droid-reasoning-default";
+import { applyXaiOauthFastModel, xaiOauthFastModelForDecision } from "../../providers/xai-fast-model";
+
+/** Preview the billed xAI lane without mutating request state or resolving credentials. */
+export function previewXaiOauthWireModel(
+  parsed: { options: Pick<OcxParsedRequest["options"], "serviceTier"> },
+  route: RouteResult,
+  config: OcxConfig,
+  inboundWire: InboundWire,
+): string {
+  if (route.providerName !== "xai" || route.provider.authMode !== "oauth") return route.modelId;
+  const provider = resolveWireProtocolOverride(
+    route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy,
+  );
+  const policy = fastPolicyForModel(
+    provider, route.modelId, route.providerName, inboundWire, config.providers[route.providerName],
+  );
+  return xaiOauthFastModelForDecision(
+    { ...route, provider }, decideTier(policy, config.fastMode, parsed.options.serviceTier),
+  ) ?? route.modelId;
+}
 
 export const MAX_FAST_WIRE_CAPABILITY_WARNINGS = 256;
 
@@ -80,6 +103,7 @@ export function canPassThroughEncryptedV2AgentTask(
     route.modelId,
     provider,
     inboundWire,
+    route.staticPolicy,
   ).adapter === "openai-responses";
 }
 
@@ -117,15 +141,23 @@ export async function applyFinalRouteRequestNormalization(args: {
   inboundWire: InboundWire;
   inboundTransport?: "websocket";
   claudeGoAffinity?: HandleResponsesOptions["claudeGoAffinity"];
+  droidDefaultEffort?: HandleResponsesOptions["droidDefaultEffort"];
 }): Promise<void> {
   const { parsed, route, config, req, logCtx, inboundWire, inboundTransport } = args;
   const effortSelector = prepareEffortNormalization(parsed, route);
+  if (applyDroidResponsesReasoningDefault(
+    parsed._rawBody,
+    args.droidDefaultEffort,
+    { provider: route.provider, modelId: route.modelId },
+  )) parsed.options.reasoning = args.droidDefaultEffort;
 
   // Only Anthropic message routes retain the Codex-facing selector. Other providers must keep
   // their existing response.model contract even when their public and wire model ids differ.
   const responseModelId = parsed.modelId;
   const preserveAnthropicResponseModel = route.providerName === "anthropic"
     || route.provider.adapter === "anthropic";
+  const finalSelectedModelId = route.modelId;
+  const virtualModel = applyOpenAiVirtualModel(parsed, route, logCtx, inboundWire);
 
   // Apply the routed model id upstream: routing may strip a "<provider>/" namespace.
   if (route.modelId !== parsed.modelId) {
@@ -134,13 +166,15 @@ export async function applyFinalRouteRequestNormalization(args: {
     }
     parsed.modelId = route.modelId;
   }
+  // #5221: the parser named the identity sentence from the CLIENT selector, because routing had
+  // not run when it read the body, and only the adapters that build their own system text rename
+  // it afterwards. Settle it on the id this request really sends, here where that id is final —
+  // every dispatch path (passthrough, runTurn, adapter request build) reads the context after
+  // this, and a combo child runs this for its own target.
+  parsed.context = renameRoutedIdentityInContext(parsed.context, route.modelId);
   // Transport-neutral reliability policy (#875): applies to any Responses
   // upstream whose final adapter is openai-responses, not only WS turns.
-  const responsesUpstreamStreaming = providerModelResponsesUpstreamStreaming(
-    route.providerName,
-    route.provider,
-    route.modelId,
-  );
+  const responsesUpstreamStreaming = route.staticPolicy.model.responsesUpstreamStreaming;
 
   // Preserve the routed destination for Go recognition, then settle the wire before
   // deriving protocol-scoped affinity. Recognition must not inspect the flipped adapter.
@@ -150,6 +184,7 @@ export async function applyFinalRouteRequestNormalization(args: {
     route.modelId,
     routedProvider,
     inboundWire,
+    route.staticPolicy,
   );
   route.provider = resolveOpenCodeGoTransport(wireProvider,
     args.claudeGoAffinity ? args.claudeGoAffinity.sessionLane : getOrAllocateRequestSessionLane(req),
@@ -165,13 +200,20 @@ export async function applyFinalRouteRequestNormalization(args: {
   if (inboundWire === "responses" && parsed._rawBody) {
     const summary = (parsed._rawBody as { reasoning?: { summary?: unknown } }).reasoning?.summary;
     parsed.options.hideThinkingSummary = summary === "none"
-      || (!summary && route.provider.showThinkingSummary !== true);
+      || (!summary && !hasValidatedActiveReasoningEffort(parsed.options)
+        && route.provider.showThinkingSummary !== true);
   }
+  // Provider policy, recomputed per final route like the summary default above so a fallback
+  // cannot inherit the previous target's choice. Raw content-channel reasoning is suppressed;
+  // provider-authored summaries stay on the summary channel and remain visible.
+  parsed.options.hideRawReasoning = route.provider.hideRawReasoning === true;
   if (preserveAnthropicResponseModel) parsed._responseModelId = responseModelId;
-  logCtx.model = route.modelId;
+  logCtx.model = virtualModel?.selectedModelId ?? route.modelId;
   logCtx.provider = route.providerName;
+  logCtx.spendPoolId = route.providerName;
   logCtx.providerAdapter = route.provider.adapter;
   logCtx.routeDecision = route.routeDecision;
+  logCtx.policyEligibility = route.policyEligibility;
   if (route.routeReason === "model-alias" || route.modelId !== responseModelId && responseModelId.includes("/")) logCtx.requestedAlias = responseModelId;
 
   if (responsesUpstreamStreaming === false && route.provider.adapter === "openai-responses") {
@@ -194,13 +236,10 @@ export async function applyFinalRouteRequestNormalization(args: {
     (parsed._rawBody as Record<string, unknown>).store = false;
   }
 
-  // Final selected model before virtual wire-model rewriting (Pro aliases).
-  const finalSelectedModelId = route.modelId;
-
-  // Virtual model rewriting: Pro aliases → base model + reasoning.mode="pro".
-  applyOpenAiVirtualModel(parsed, route, logCtx);
   if (parsed._responseModelId !== undefined && parsed._responseModelId !== parsed.modelId) {
     logCtx.resolvedModel = route.modelId;
+    logCtx.wireModel = route.modelId;
+    logCtx.responseModelEcho = parsed._responseModelId;
     logCtx.preserveResolvedModelFromRoute = true;
   }
 
@@ -215,14 +254,12 @@ export async function applyFinalRouteRequestNormalization(args: {
   );
   const modelServiceTierSupport = serviceTierSupportFromPolicy(fastPolicy);
   const callerTier = parsed.options.serviceTier;
-  // The ChatGPT-internal Codex backend echoes `service_tier: "default"` even on turns it
-  // scheduled as priority, so its echo cannot confirm OR deny Fast. Believing it reported every
-  // Fast request as `response-declined` (#2558). The public API's echo stays authoritative.
+  // Capture destination evidence policy separately from the unchanged outbound Fast decision.
   parsed.options.tierObservation = tierObservationContext(
     fastPolicy,
     config.fastMode,
     callerTier,
-    isCanonicalOpenAiForwardProvider(route.provider) ? false : undefined,
+    responseTierAuthorityForProvider(route.provider),
   );
   parsed.options.tierDecision = decideTier(fastPolicy, config.fastMode, callerTier);
   parsed.options.serviceTier = tierValueAfterDecision(parsed.options.tierDecision, callerTier);
@@ -238,6 +275,8 @@ export async function applyFinalRouteRequestNormalization(args: {
     inboundWire,
     fastPolicy,
   );
+  // xAI OAuth Fast is a serving-lane switch: serialize the variant id, keep the logical id for policy.
+  applyXaiOauthFastModel(parsed, route, logCtx);
   if (modelServiceTierSupport === false) {
     logCtx.requestedServiceTier = undefined;
     logCtx.requestedSpeedLabel = undefined;
@@ -275,6 +314,22 @@ export async function applyFinalRouteRequestNormalization(args: {
   }
 
   {
+    // Last word on a memory turn's effort: the phase setting is more specific than a provider-wide
+    // pin, and Codex hard-codes the phase effort with no config key of its own.
+    const phase = parsed._memoryModelPhase;
+    if (phase) {
+      const { applyMemoryModelEffort } = await import("./memory-models");
+      const applied = applyMemoryModelEffort(parsed, config, phase);
+      if (applied) {
+        logCtx.requestedEffort = applied.from ? `${applied.from}->${applied.to}` : applied.to;
+        if (isInjectionDebugEnabled()) {
+          injectionDebugLog(`[opencodex] ${route.modelId}: memory ${phase} effort applied (${applied.from ?? "none"} -> ${applied.to})`);
+        }
+      }
+    }
+  }
+
+  {
     const { applyEffortCap, effortCapAppliesTo, supportedLadderFor } = await import("../effort-policy");
     const surface = collabSurface(parsed);
     if (effortCapAppliesTo(surface, req.headers, config, parsed._compactionRequest === true)) {
@@ -300,6 +355,18 @@ export async function applyFinalRouteRequestNormalization(args: {
       const raw = parsed._rawBody as { reasoning?: { effort?: string } } | undefined;
       if (raw?.reasoning && typeof raw.reasoning === "object") raw.reasoning.effort = clamped;
       logCtx.requestedEffort = `${logCtx.requestedEffort ?? "max"}->${clamped}`;
+    }
+  }
+  // Chat ingress cannot strip effort against a provisional policy pick. Apply the
+  // concrete target's restriction to BOTH adapter options and the raw wire copy;
+  // policy-fallback retains the original body before this attempt-local mutation.
+  if (inboundWire === "chat" && supportedLadderFor(route)?.length === 0) {
+    parsed.options.reasoning = undefined;
+    const raw = parsed._rawBody as { reasoning?: unknown } | undefined;
+    if (raw) {
+      const reasoning = stripEmptyLadderEffort(raw.reasoning, []);
+      if (reasoning === undefined) delete raw.reasoning;
+      else raw.reasoning = reasoning;
     }
   }
   recordAttemptRequestedEffort(logCtx);

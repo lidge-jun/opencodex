@@ -1,11 +1,20 @@
 import { existsSync, readFileSync } from "node:fs";
 import { configReasoningPinsConfigError } from "./provider-validation";
 import type { OcxConfig } from "../types";
-import { refreshUserCostOverlays, withPreservedDiskOnlyProviders } from "../usage/user-cost-overlays";
+import { withPreservedDiskOnlyProviders } from "../usage/user-cost-overlays";
+import { refreshConfigDerivedRegistries } from "./derived-registries";
 import { atomicWriteFile, isMissingPathError } from "./atomic-write";
 import { getConfigPath } from "./paths";
 import { configRebaseDeletionKeys, projectConfigRebaseProvenance } from "./rebase-provenance";
 import { clientConnectionSchema } from "./schema/leaf-validators";
+
+/** The requested bytes are current; callers must not roll back only live state. */
+export class ConfigWritePublishedError extends Error {
+  constructor(cause: unknown) {
+    super("Config was published, but post-publication bookkeeping failed", { cause });
+    this.name = "ConfigWritePublishedError";
+  }
+}
 
 /** The literal file, with no schema merge or default injection. */
 export function readRawConfigJson(): Record<string, unknown> | undefined {
@@ -80,13 +89,18 @@ export function persistConfigUnlocked(config: OcxConfig): boolean {
   // including byte-identical saves: a cooperating CLI process may have written
   // the same bytes (e.g. before a proxy notification), and Logs/Usage must
   // adopt the overlay without waiting for a changed save or restart.
-  if (unchanged) {
-    refreshUserCostOverlays(persisted);
-    return false;
+  let published = unchanged;
+  try {
+    if (!unchanged) {
+      atomicWriteFile(configPath, bytes, undefined, { afterRename: () => { published = true; } });
+      published = true;
+    }
+    // Publication, not successful cache refresh, is the rollback boundary. A
+    // byte-identical save already has the requested state on disk as well.
+    refreshConfigDerivedRegistries(persisted);
+    return !unchanged;
+  } catch (error) {
+    if (published) throw new ConfigWritePublishedError(error);
+    throw error;
   }
-  atomicWriteFile(configPath, bytes);
-  // For changed saves, refresh only AFTER the write succeeded so a failed
-  // write cannot leave estimates reflecting configuration never persisted.
-  refreshUserCostOverlays(persisted);
-  return true;
 }

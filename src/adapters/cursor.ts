@@ -3,8 +3,8 @@ import type { AdapterEvent, OcxProviderConfig } from "../types";
 import type { ProviderAdapter } from "./base";
 import { isTranslatorBudgetExceededError } from "../lib/translator-budget";
 import { cursorExecDeniedMessage, cursorRequestDeclaresFullAccess } from "./cursor/exec-policy";
-import { isCursorBenignCancelError, isCursorIncompleteToolCallMessage, isCursorInvalidArgumentError, isCursorOverflowRemintCandidate, isCursorRootEnvelopeError, safeCursorErrorMessage, type CursorSizeContext } from "./cursor/cursor-errors";
-import { cursorCheckpointModelAffinityId, inferCursorContextWindow, isCursorExternalWireModel } from "./cursor/discovery";
+import { classifyCursorError, isCursorBenignCancelError, isCursorIncompleteToolCallMessage, isCursorInvalidArgumentError, isCursorOverflowRemintCandidate, isCursorRootEnvelopeError, safeCursorErrorMessage, type CursorSizeContext } from "./cursor/cursor-errors";
+import { cursorCheckpointModelAffinityId, cursorNeedsExternalToolContinuation, inferCursorContextWindow, isCursorExternalWireModel } from "./cursor/discovery";
 import { createCursorKvStore, type CursorKvStore } from "./cursor/kv-store";
 import { mapCursorServerMessage } from "./cursor/message-mapper";
 import {
@@ -31,6 +31,7 @@ import { debugProviderDiagnostic } from "../lib/debug";
 import { isDebugEnabled } from "../lib/debug-settings";
 import { createAdapterTierMetadata } from "../providers/fastwire";
 import { estimateTokens } from "../lib/token-estimate";
+import { ToolEnvelopeEchoFilter } from "../lib/tool-envelope-echo-filter";
 import {
   clearCursorIncompleteToolRemint,
   cursorIncompleteToolRemintScopeKey,
@@ -41,6 +42,7 @@ import {
   recordCursorIncompleteToolRemint,
   recordCursorEnvelopeEchoRemint,
   recordCursorOverflowRemint,
+  rememberCursorConversationRewrite,
   rememberCursorThreadConversation,
   shouldSkipCursorOverflowRemint,
   shouldSurfaceCursorOverflowFirst,
@@ -48,6 +50,7 @@ import {
 import { runCursorTurnWithRetry } from "./cursor/transport-retry";
 import { cursorRequestHasShellAlias, cursorRequestUsesCodeMode } from "./cursor/tool-definitions";
 import {
+  CURSOR_OUTPUT_GUARD_MAX_HOLD_BYTES,
   CURSOR_ECHO_RETRY_CONTINUATION_TEXT,
   CURSOR_ROUTING_COMMENTARY_RETRY_TEXT,
   CursorEnvelopeEchoSniffer,
@@ -61,6 +64,9 @@ import {
   CursorTransportDisabledError,
   type CursorTransportFactory,
 } from "./cursor/transport";
+import { cursorLiveRosterScope } from "./cursor/catalog";
+import { cursorUsesPlainToolWording } from "./cursor/tool-wording";
+import { noteCursorPoolRateLimit, selectCursorPoolToken } from "../providers/cursor-pool";
 
 export const CURSOR_API_URL = "https://api2.cursor.sh";
 
@@ -167,15 +173,24 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
       // Captured after createCursorRequest so the catch block can apply the bare-RE
       // size prior (devlog 260) even though `request` is scoped inside the try.
       let requestSizeContext: CursorSizeContext | undefined;
+      let usingSharedPool = false;
+      let pooledToken: string | undefined;
+      let poolOwner = "";
+      let poolThread = "";
       try {
         const makeTransport = deps.createTransport ?? createLiveCursorTransport;
         const kv = deps.kv ?? createCursorKvStore({}, incoming.translatorBudget);
         const rekeyContextUsage = deps.rekeyContextUsage ?? rekeyCursorContextUsage;
-        // Pool ownership is a trusted parsed-route field. When older callers do not provide
-        // that scope, retain the credential-isolation fallback; the digest is never emitted.
+        // Namespace thread→conversation derivation by the authenticated Cursor credential so
+        // shared-proxy tenants with different Cursor accounts cannot collide on a parent thread id.
+        // Prefer an already-set auth scope (e.g. Codex pool account) when present.
+        // Opt-in pool selection uses that scope as the owner and does not replace it with the
+        // rotated account, so a pooled token cannot collapse two tenants onto one conversation.
+        let liveRosterScope: string | undefined;
         if (!_parsed._cursorIdentityScope) {
           try {
             const token = resolveCursorToken(provider, incoming.headers);
+            liveRosterScope = cursorLiveRosterScope(provider.baseUrl, token);
             _parsed._cursorIdentityScope = createHash("sha256")
               .update("ocx:cursor:acct:")
               .update(token)
@@ -184,13 +199,26 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
           } catch {
             // Missing credentials fail closed in the live transport path.
           }
+        } else {
+          try {
+            liveRosterScope = cursorLiveRosterScope(provider.baseUrl, resolveCursorToken(provider, incoming.headers));
+          } catch {
+            /* Missing credential is handled by the live transport path below. */
+          }
         }
-        const pooledToken = deps.selectPoolToken?.(_parsed._cursorIdentityScope ?? "", _parsed._clientThreadId ?? "");
+        usingSharedPool = provider.cursorAccountPool?.enabled === true && deps.selectPoolToken === undefined;
+        const poolTokenSelector = deps.selectPoolToken ?? (usingSharedPool ? selectCursorPoolToken : undefined);
+        poolOwner = _parsed._cursorIdentityScope ?? "";
+        poolThread = _parsed._clientThreadId ?? "";
+        pooledToken = poolTokenSelector?.(poolOwner, poolThread);
         const activeProvider = pooledToken ? { ...provider, apiKey: pooledToken } : provider;
+        // Roster evidence follows the credential that will actually be sent. The identity
+        // scope above stays on the pre-pool credential so conversation isolation is unchanged.
+        if (pooledToken) liveRosterScope = cursorLiveRosterScope(provider.baseUrl, pooledToken);
         const inheritedCheckpointRef = _parsed._providerContinuation?.cursor?.checkpointRef;
         const previousConversationId = _parsed._cursorConversationId;
         let request = {
-          ...createCursorRequest(_parsed),
+          ...createCursorRequest(_parsed, { liveRosterScope }),
           _cursorIdentityScope: _parsed._cursorIdentityScope?.trim() || "local",
         };
         requestSizeContext = cursorRequestSizeContext(request);
@@ -257,6 +285,7 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
             coveredMessageCount,
             prefixDigest: cursorCoveredPrefixDigest(_parsed, coveredMessageCount),
             systemDigest: cursorInstructionDigest(_parsed),
+            toolSuspended: toolSuspendedCommit,
           });
           if (!checkpointRef) return;
           if (previousRef && previousRef !== checkpointRef) invalidateCursorCheckpoint(previousRef);
@@ -266,7 +295,8 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
               ...(_parsed._providerContinuation?.cursor ?? {}),
               conversationId: activeRequest.conversationId,
               // A tool-suspended checkpoint is only usable by the immediate trailing-toolResult
-              // continuation; the request-builder guard keys on checkpointUsable=false for that.
+              // continuation; the request-builder guard keys on this checkpointUsable=false and
+              // the snapshot's persisted toolSuspended flag for that.
               checkpointUsable: !toolSuspendedCommit,
               checkpointRef,
             },
@@ -290,15 +320,22 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
           // Armed for ANY external turn whose replayed history contains a tool result — echo
           // priming was observed live on user-action rounds too (the envelope lives in the
           // flattened history regardless of which role ends the input).
-          const armEchoSniffer =
-            isCursorExternalWireModel(activeRequest.modelId)
-            && (_parsed.context.messages ?? []).some(message => message.role === "toolResult");
+          const replaysToolResult = (_parsed.context.messages ?? []).some(message => message.role === "toolResult");
+          const armEchoSniffer = isCursorExternalWireModel(activeRequest.modelId) && replaysToolResult;
           const echoSniffer = armEchoSniffer ? new CursorEnvelopeEchoSniffer() : undefined;
           // Mid-stream observer (devlog 260828 F1/F2): diagnostic-only; armed with the
           // prefix sniffer because both fire on flattened tool-result replay priming.
-          const midstreamObserver = armEchoSniffer ? new CursorMidstreamEchoObserver() : undefined;
+          // The composer-2.5 builds are native-wire but also replay the tool result as root text
+          // (cursorNeedsExternalToolContinuation), so the client-visible strip and the next-turn
+          // remint follow that predicate. The prefix retry above stays external-only: its
+          // corrective continuation text is encoded for external wire models alone.
+          const armMidstreamEcho = cursorNeedsExternalToolContinuation(activeRequest.modelId) && replaysToolResult;
+          const midstreamObserver = armMidstreamEcho ? new CursorMidstreamEchoObserver() : undefined;
+          const midstreamFilter = armMidstreamEcho ? new ToolEnvelopeEchoFilter() : undefined;
+          // Claude's factual redirects allow truthful routing prose; it is not a failure claim.
           const armRoutingCommentarySniffer =
             isCursorExternalWireModel(activeRequest.modelId)
+            && !cursorUsesPlainToolWording(activeRequest.modelId)
             && (
               cursorRequestUsesCodeMode(activeRequest.tools, activeRequest.toolChoice)
               || cursorRequestHasShellAlias(activeRequest.tools)
@@ -307,11 +344,16 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
             ? new CursorRoutingCommentarySniffer()
             : undefined;
           let guardHeld: AdapterEvent[] = [];
+          let guardHeldBytes = 0;
+          const guardEncoder = new TextEncoder();
           // Exactly-once observation: every client-bound text delta passes through here
           // exactly once — held deltas only on release, ordinary deltas at emit time.
           const emitTextObserved = (event: AdapterEvent): void => {
-            if (event.type === "text_delta") midstreamObserver?.feed(event.text);
-            emit(event);
+            if (event.type !== "text_delta") { emit(event); return; }
+            midstreamObserver?.feed(event.text);
+            const text = midstreamFilter?.feed(event.text) ?? event.text;
+            if (midstreamFilter?.matched) sawMidstreamEnvelopeEcho = true;
+            if (text) emit({ ...event, text });
           };
           const releaseGuardHeld = () => {
             for (const held of guardHeld) {
@@ -319,7 +361,49 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
               emitTextObserved(held);
             }
             guardHeld = [];
+            guardHeldBytes = 0;
           };
+          // A single frame can carry a multi-megabyte payload (the transport accepts up to the
+          // 16 MiB Cursor message bound), so the serialized size is projected — object overhead
+          // plus raw payload length — BEFORE any encoded copy exists. Escapes only inflate the
+          // exact figure, making the raw length a safe lower bound for the overflow decision.
+          const GUARD_EVENT_OVERHEAD_BYTES = 64;
+          const projectedGuardEventBytes = (event: AdapterEvent): number =>
+            GUARD_EVENT_OVERHEAD_BYTES
+            + (event.type === "text_delta"
+              ? Buffer.byteLength(event.text, "utf8")
+              : event.type === "thinking_delta"
+                ? Buffer.byteLength(event.thinking, "utf8")
+                : 0);
+          const holdGuardEvent = (event: AdapterEvent) => {
+            if (guardHeldBytes + projectedGuardEventBytes(event) > CURSOR_OUTPUT_GUARD_MAX_HOLD_BYTES) {
+              // Too large to retain even unescaped: settle the sniffers, release what was held,
+              // and pass this event through without ever encoding it.
+              echoSniffer?.finish();
+              routingCommentarySniffer?.finish();
+              releaseGuardHeld();
+              if (event.type !== "heartbeat") emittedOutput = true;
+              emitTextObserved(event);
+              return false;
+            }
+            guardHeld.push(event);
+            // Count the complete retained representation, including per-event overhead, so an
+            // upstream cannot evade the cap with empty or non-text reasoning frames.
+            guardHeldBytes += guardEncoder.encode(JSON.stringify(event)).byteLength;
+            if (guardHeldBytes <= CURSOR_OUTPUT_GUARD_MAX_HOLD_BYTES) return true;
+            echoSniffer?.finish();
+            routingCommentarySniffer?.finish();
+            releaseGuardHeld();
+            return false;
+          };
+          // Bound each feed before a sniffer copies or encodes it. Their normal 40 B / 512 B
+          // hold thresholds are checked after classification, so one large frame previously
+          // let a late match inspect an arbitrary tail. Only these leading UTF-16 prefixes
+          // now participate in corrective retry; later text remains ordinary output.
+          const ECHO_SNIFF_FEED_MAX_CHARS = 512;
+          const ROUTING_SNIFF_FEED_MAX_CHARS = 2048;
+          const boundedSniffText = (text: string, maxChars: number): string =>
+            text.length > maxChars ? text.slice(0, maxChars) : text;
           const guardsSettled = () =>
             (!echoSniffer || echoSniffer.settled)
             && (!routingCommentarySniffer || routingCommentarySniffer.settled);
@@ -360,27 +444,30 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
                 }
                 if (!guardsSettled()) {
                   if (event.type === "text_delta") {
-                    guardHeld.push(event);
+                    // Classify the delta before the aggregate-cap check: an oversized first
+                    // delta must still pass the armed sniffers (echo/hallucination detection is
+                    // prefix-based), so the cap cannot disarm them before they see the text.
                     if (echoSniffer && !echoSniffer.settled) {
-                      const decision = echoSniffer.feed(event.text);
+                      const decision = echoSniffer.feed(boundedSniffText(event.text, ECHO_SNIFF_FEED_MAX_CHARS));
                       if (decision.kind === "echo") {
                         guardHeld = [];
                         throw new CursorToolResultEchoError(decision.marker);
                       }
                     }
                     if (routingCommentarySniffer && !routingCommentarySniffer.settled) {
-                      const decision = routingCommentarySniffer.feed(event.text);
+                      const decision = routingCommentarySniffer.feed(boundedSniffText(event.text, ROUTING_SNIFF_FEED_MAX_CHARS));
                       if (decision.kind === "hallucination") {
                         guardHeld = [];
                         throw new CursorRoutingCommentaryError();
                       }
                     }
+                    if (!holdGuardEvent(event)) continue;
                     if (guardsSettled()) releaseGuardHeld();
                     continue;
                   } else if (event.type === "thinking_delta" || event.type === "heartbeat") {
                     // Reasoning before first text stays ordered; liveness still passes through.
                     if (event.type === "thinking_delta") {
-                      guardHeld.push(event);
+                      holdGuardEvent(event);
                       continue;
                     }
                   } else {
@@ -397,8 +484,13 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
                 }
                 if (event.type !== "heartbeat") emittedOutput = true;
                 if (event.type === "done") {
+                  const suffix = midstreamFilter?.finish();
+                  // A fenced marker released by hold overflow is unproven code: remint to be safe.
+                  if (midstreamFilter?.matched || midstreamFilter?.unverifiedMarker) sawMidstreamEnvelopeEcho = true;
+                  if (suffix) emit({ type: "text_delta", text: suffix });
+                  // The observer is diagnostic only: the fence-aware filter's verdict decides the
+                  // remint, so a quoted marker in a closed code block does not rotate the thread.
                   const midstreamFindings = midstreamObserver?.findings() ?? [];
-                  if (midstreamFindings.length > 0) sawMidstreamEnvelopeEcho = true;
                   for (const finding of midstreamFindings) {
                     debugProviderDiagnostic("cursor", "midstream-envelope-echo", {
                       wireModel: activeRequest.modelId,
@@ -442,7 +534,7 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
           lastTransport = undefined;
           _parsed._cursorConversationId = undefined;
           const next = {
-            ...createCursorRequest(_parsed, { forceFreshConversation: true }),
+            ...createCursorRequest(_parsed, { forceFreshConversation: true, liveRosterScope }),
             _cursorIdentityScope: _parsed._cursorIdentityScope?.trim() || "local",
           };
           rekeyContextUsage(failedConversationId, next.conversationId);
@@ -451,6 +543,9 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
           // the next turn does not recompute the stale deterministic thread hash. Isolated helper /
           // compaction turns must not park their throwaway id under the parent or Desktop owner.
           const threadOwner = cursorClientThreadOwner(_parsed);
+          if (_parsed._cursorIsolateConversation !== true) {
+            rememberCursorConversationRewrite(failedConversationId, next.conversationId, _parsed._cursorIdentityScope);
+          }
           if (threadOwner && _parsed._cursorIsolateConversation !== true) {
             rememberCursorThreadConversation(
               threadOwner,
@@ -573,11 +668,8 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
         } else if (!sawIncompleteToolCall && completedNormally && incompleteToolRemintScopeKey) {
           clearCursorIncompleteToolRemint(incompleteToolRemintScopeKey);
         }
-        // A mid-stream envelope echo has ALREADY reached the client — the prefix sniffer only
-        // watches the first bytes of a turn, and grok-4.6 writes a real sentence before pasting
-        // the envelope. It cannot be quarantined, so the recovery is the same as the
-        // incomplete-tool case: leave this turn alone and rotate the next turn's id, otherwise
-        // the stored echo is replayed and primes the model to echo again.
+        // Strip a split mid-stream marker before it reaches the client, then rotate the next
+        // conversation because the upstream checkpoint may still contain the echoed envelope.
         //
         // Its own budget, not the incomplete-tool one: echoing is cheap and repeatable while an
         // incomplete client-tool stream is rare and structural, so a shared counter would let a
@@ -589,6 +681,7 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
             ? cursorEnvelopeEchoRemintScopeKey(
                 cursorClientThreadOwner(_parsed),
                 _parsed._cursorIdentityScope,
+                request.conversationId,
               )
             : null;
         if (sawMidstreamEnvelopeEcho && !sawIncompleteToolCall && envelopeEchoRemintScopeKey) {
@@ -635,6 +728,16 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
           }
         }
       } catch (err) {
+        if (
+          usingSharedPool
+          && pooledToken
+          && classifyCursorError(
+            err instanceof Error ? err.message : typeof err === "string" ? err : "",
+            requestSizeContext,
+          ) === "Cursor rate limit exceeded"
+        ) {
+          noteCursorPoolRateLimit(poolOwner, poolThread);
+        }
         if (isCursorBenignCancelError(err)) return;
         const partialUsage = (err as { partialUsage?: import("../types").OcxUsage }).partialUsage;
         emit({

@@ -32,9 +32,10 @@ export function resolveServiceListenPort(override?: number): number {
   return 10100;
 }
 
-export function buildServiceShellCommand(bun: string, cli: string, port = resolveServiceListenPort()): string {
+export function buildServiceShellCommand(bun: string, cli: string | null, port = resolveServiceListenPort()): string {
   const tokenFile = serviceApiTokenFilePath();
-  return `if [ -f ${shellQuote(tokenFile)} ]; then OPENCODEX_API_AUTH_TOKEN="$(cat ${shellQuote(tokenFile)})"; export OPENCODEX_API_AUTH_TOKEN; fi; exec ${shellQuote(bun)} ${shellQuote(cli)} start --port ${port}`;
+  const args = cli ? `${shellQuote(cli)} start` : "start";
+  return `if [ -f ${shellQuote(tokenFile)} ]; then OPENCODEX_API_AUTH_TOKEN="$(cat ${shellQuote(tokenFile)})"; export OPENCODEX_API_AUTH_TOKEN; fi; exec ${shellQuote(bun)} ${args} --port ${port}`;
 }
 
 /**

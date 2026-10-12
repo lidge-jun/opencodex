@@ -13,6 +13,7 @@ import { repoPath } from "../helpers/repo-root";
 import * as encoding from "../../src/codex/prompt-layers/encoding";
 import * as revision from "../../src/codex/prompt-layers/revision";
 import * as tomlRead from "../../src/codex/prompt-layers/toml-read";
+import { OCX_SECTION_MARKER } from "../../src/codex/injected-marker";
 import {
   LAYER_INVENTORY,
   TOGGLE_IDS,
@@ -183,7 +184,8 @@ describe("revision", () => {
   });
 
   test("changes when only the marker is removed", () => {
-    const withMarker = '# Auto-injected by opencodex\ndeveloper_instructions = "x"\n';
+    // Prompt layers keep the bare marker; the routing hint (#5261) is a different scope.
+    const withMarker = `${OCX_SECTION_MARKER}\ndeveloper_instructions = "x"\n`;
     const without = 'developer_instructions = "x"\n';
     expect(computeRevision(withMarker, "{}")).not.toBe(computeRevision(without, "{}"));
   });

@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { compileCodeModeHelperInput, resolveCodeModeHelperName } from "../../src/responses/code-mode-helper-compat";
 import { restoreRoutedCustomCallsInJson } from "../../src/responses/custom-tool-compat";
+import { bridgeToResponsesSSE, buildResponseJSON } from "../../src/bridge";
+import type { AdapterEvent } from "../../src/types";
+import { dataPayload } from "../helpers/custom-tool-repair-fixtures";
 
 /**
  * Recognition and compilation must read ONE canonical body (#5046).
@@ -50,6 +53,39 @@ describe("code-mode apply_patch compiles the body recognition accepted", () => {
     expect(compileCodeModeHelperInput(JSON.stringify({ patch: PATCH }), "apply_patch")).toBe(EXPECTED);
     expect(compileCodeModeHelperInput(PATCH, "apply_patch")).toBe(EXPECTED);
     expect(compileAsBridge(JSON.stringify({ patch: PATCH }))).toBeUndefined();
+  });
+
+  test("a default.apply_patch alias keeps the native apply_patch vocabulary", () => {
+    for (const key of ["patch", "content"]) {
+      expect(compileCodeModeHelperInput(
+        JSON.stringify({ [key]: PATCH }),
+        "default.apply_patch",
+        "default.apply_patch",
+      )).toBe(EXPECTED);
+    }
+  });
+
+  test("default.apply_patch normalization and body repair agree in JSON and fragmented SSE", async () => {
+    for (const key of ["patch", "content"]) {
+      const body = JSON.stringify({ [key]: PATCH });
+      async function* events(): AsyncGenerator<AdapterEvent> {
+        yield { type: "tool_call_start", id: "call-patch", name: "default.apply_patch" };
+        for (const part of body) yield { type: "tool_call_delta", id: "call-patch", arguments: part };
+        yield { type: "tool_call_end", id: "call-patch" };
+        yield { type: "done" };
+      }
+      const options = { declaredToolNames: CODE_MODE };
+      const collected: AdapterEvent[] = [];
+      for await (const event of events()) collected.push(event);
+      const json = buildResponseJSON(collected, "fixture", { ...options, freeformToolNames: CODE_MODE });
+      expect(json.output).toMatchObject([{ type: "custom_tool_call", name: "exec", input: EXPECTED }]);
+      const stream = bridgeToResponsesSSE(events(), "fixture", undefined, CODE_MODE, undefined, undefined, 50_000, options);
+      const text = await new Response(stream).text();
+      const payloads = text.split(/\r?\n\r?\n/).filter(block => block.includes("data: {")).map(dataPayload);
+      expect(payloads.find(p => p.type === "response.custom_tool_call_input.done")?.input).toBe(EXPECTED);
+      const preview = payloads.filter(p => p.type === "response.custom_tool_call_input.delta").map(p => p.delta).join("");
+      expect(EXPECTED.startsWith(preview)).toBe(true);
+    }
   });
 
   test("a normal code-mode JavaScript body is left alone", () => {

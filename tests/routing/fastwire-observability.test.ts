@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import type { AdapterRequest } from "../../src/adapters/base";
 import { createOpenAIChatAdapter } from "../../src/adapters/openai-chat";
 import { createResponsesPassthroughAdapter } from "../../src/adapters/openai-responses";
@@ -26,6 +26,14 @@ import { estimateComboCost, serviceTierContextFromOutcome } from "../../src/usag
 import type { ExpectedPriceOverlay } from "../../src/usage/expected-prices";
 import { normalizeUsageEntryForTest } from "../../src/usage/log";
 import { createTestTranslatorBudget, withTestTranslatorBudget } from "../helpers/translator-budget";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+
+let releaseSpendHome: (() => void) | undefined;
+afterEach(() => {
+  // Release the lease before later teardown can replace the preload sandbox home.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
+});
 
 const SERVICE_WIRE = {
   kind: "service-tier" as const,
@@ -491,6 +499,8 @@ describe("FastWire logging and persistence", () => {
       }) as typeof fetch;
       const logCtx: RequestLogContext = { model: "", provider: "" };
       try {
+        // Direct dispatch needs the writer lease that prevents spend-ledger ownership failures.
+        releaseSpendHome = acquireOwnedSpendHome();
         const response = await handleResponses(
           new Request("http://localhost/v1/responses", {
             method: "POST",

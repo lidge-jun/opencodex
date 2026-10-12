@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement, type FC, type SVGProps } from "react";
 import * as icons from "../src/icons";
+import { NAV_GROUPS } from "../src/nav-groups";
 
 /**
  * The codex-set nav row wears the Codex mark.
@@ -12,30 +13,14 @@ import * as icons from "../src/icons";
  * IS the glyph, so it is supposed to fail when the glyph changes.
  *
  * It still does not pin the symbol NAME. A rename is not a regression; wearing a
- * key again is. The name is read from the row only to resolve the component, and
- * every assertion lands on rendered geometry.
+ * key again is. The row's Icon is read from the group table, and every assertion lands
+ * on rendered geometry.
  */
-function iconNameForNavRow(src: string, id: string): string {
-  // Comments naming the icon are prose, not evidence: icons.tsx carries a long
-  // block comment naming this mark, and App.tsx has comment prose inside <nav>.
-  const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-  const at = code.indexOf("const NAV: NavEntry[] = [");
-  expect(at, "NAV table not found in App.tsx").toBeGreaterThan(-1);
-  const nav = code.slice(at, code.indexOf("];", at));
-  const row = nav.match(new RegExp(`\\{[^{}]*id: "${id}"[^{}]*\\}`));
-  expect(row, `NAV has no ${id} row`).not.toBeNull();
-  const name = row![0].match(/Icon:\s*(\w+)/);
-  expect(name, `the ${id} row declares no Icon`).not.toBeNull();
-  return name![1]!;
-}
-
-test("the codex-set nav row renders the upstream Codex mark, under any symbol name", async () => {
-  const src = await Bun.file(new URL("../src/App.tsx", import.meta.url)).text();
-  const name = iconNameForNavRow(src, "codex-set");
-
-  const Icon = (icons as Record<string, FC<SVGProps<SVGSVGElement>> | undefined>)[name];
-  expect(Icon, `App.tsx points codex-set at ${name}, which icons.tsx does not export`)
-    .toBeTypeOf("function");
+test("the codex-set nav row renders the upstream Codex mark, under any symbol name", () => {
+  const row = NAV_GROUPS.find(group => group.id === "codex-set");
+  expect(row, "NAV_GROUPS has no codex-set row").toBeDefined();
+  const Icon = row!.Icon as FC<SVGProps<SVGSVGElement>>;
+  expect(Object.values(icons), "the codex-set row's Icon is not exported by icons.tsx").toContain(Icon);
 
   const svg = renderToStaticMarkup(createElement(Icon!));
   // Attribute order and source formatting are not the subject; the drawn path is.

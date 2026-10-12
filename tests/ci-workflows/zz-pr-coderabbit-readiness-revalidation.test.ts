@@ -31,7 +31,7 @@ const GATE_MARKER = "<!-- opencodex-pr-gate -->";
 const CHECKLIST_START = "<!-- pr-quality-readiness-checklist:start -->";
 const CHECKLIST_END = "<!-- pr-quality-readiness-checklist:end -->";
 const CHECKLIST_ITEMS = [
-  "All CI tests are green on my local testing.",
+  "Required local validation passed; commands, results, and any full-suite exception are documented.",
   "I pushed my PR to the latest dev commit.",
   "I resolved all correct Codex and CodeRabbit findings.",
   "My PR is ready for review.",
@@ -281,3 +281,14 @@ describe("workflow comment-spam hardening", () => {
     expect(docs).toContain("CodeRabbit status-comment edits do not trigger the PR gate");
   });
 });
+
+for (const draft of [false, true]) {
+  test(`invalid contributor PR gets scoped validation guidance (draft=${draft})`, async () => {
+    const result = await runEnforcePrTarget(await readGateScript(), {
+      pr: { base: { ref: "main" }, draft, body: "Incomplete description" },
+    });
+    const body = gateBodyFrom(result);
+    expect(body).toContain("required local validation has passed with commands, results, and any full-suite exception documented");
+    expect(body).not.toContain("local CI is green");
+  });
+}

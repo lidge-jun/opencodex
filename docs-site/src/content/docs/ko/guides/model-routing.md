@@ -82,6 +82,15 @@ fallback하지 않습니다.
   막지는 않습니다.
 - 프로바이더의 `selectedModels`가 비어 있지 않으면 카탈로그 허용 목록으로 동작합니다. 실시간 모델 탐색과
   직접 라우팅은 그대로 두고, 카탈로그와 `/v1/models`에 내보낼 모델만 줄입니다.
+- `modelDiscovery.newModelPolicy`가 `"off"`이면 첫 실시간 탐색 성공 시 기준을 만들고,
+  이후 추가된 모델을 `disabledModels`에 넣습니다. 이 정책은 `/v1/models`, 대시보드,
+  클라이언트 설정 내보내기, 서비스 시작을 포함한 Codex 카탈로그 동기화에서 새 모델을 공개하기
+  전에 적용됩니다. 수동으로 활성화한 모델은 이후 새로고침과 내보내기에서도 활성 상태를 유지합니다.
+  새 설치의 기본값은 `"off"`이며, 기존 설치는 직접 바꾸기 전까지 `"on"`을 유지합니다.
+  `ocx models new-policy off`로 전역 정책을 설정하고, `--provider <name>`으로 프로바이더별
+  정책을 지정합니다. `ocx models new-arrivals [--json]`으로 새 모델을 확인할 수 있습니다.
+  실패하거나 제한된 탐색은 기준을 바꾸지 않습니다. `selectedModels`가 비어 있지 않은
+  프로바이더는 이미 선택 목록을 사용하므로 이 정책으로 모델을 자동 비활성화하지 않습니다.
 - `provider.disabled: true`인 프로바이더는 카탈로그 탐색에서 제외됩니다. 명시적 `provider/model` 요청은
   실패하고, `defaultModel` / `models[]` 검사에서도 건너뜁니다.
 - `providerContextCaps`는 공급자별로 Codex에 표시할 컨텍스트 상한을 지정합니다.

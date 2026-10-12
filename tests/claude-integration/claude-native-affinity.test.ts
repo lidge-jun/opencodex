@@ -1,18 +1,24 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { MAIN_CODEX_ACCOUNT_ID } from "../../src/codex/main-account";
+import { clearMainAccountInfoCache } from "../../src/codex/auth-api";
 import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
 import { handleResponses } from "../../src/server/responses/core";
-import { handleResponsesWithPolicyFallback, rankPolicyFallbackCandidates } from "../../src/server/responses/policy-fallback";
+import { handleResponsesWithPolicyFallback } from "../../src/server/responses/policy-fallback";
 import { tryAdmitTurn } from "../../src/server/lifecycle";
 import { providerConfigSeed } from "../../src/providers/derive";
 import { getProviderRegistryEntry } from "../../src/providers/registry";
+import { closeRequestHistoryIndex } from "../../src/routing/history/indexer";
+import { historyIndexPath } from "../../src/routing/history/schema";
+import { clearHealthHistoryCacheForTests } from "../../src/routing/health";
 import type { OcxConfig } from "../../src/types";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 const originalFetch = globalThis.fetch;
 const metadata = "user_test_account__session_conversation-native";
@@ -23,6 +29,7 @@ let isolated: IsolatedCodexHome;
 let home: string;
 let previousHome: string | undefined;
 let token: string;
+let releaseSpendHome: (() => void) | undefined;
 
 beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME;
@@ -33,8 +40,16 @@ beforeEach(() => {
   writeFileSync(join(isolated.path, "auth.json"), JSON.stringify({ tokens: { access_token: token, account_id: "fixture-native-main" } }));
   clearComboSelectionState();
   clearComboTargetCooldowns();
+  // Dispatches without starting a server, so the spend-journal lease is taken here.
+  releaseSpendHome = acquireOwnedSpendHome();
 });
 afterEach(() => {
+  // Policy candidate health opens a separate SQLite index under this home.
+  closeRequestHistoryIndex();
+  clearHealthHistoryCacheForTests();
+  // Released before the directory is removed, so no live database sits inside it.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   globalThis.fetch = originalFetch;
   clearComboSelectionState();
   clearComboTargetCooldowns();
@@ -85,7 +100,7 @@ describe("Claude final canonical native affinity after a Go preliminary pick", (
           expect(response.status).toBe(200);
           const wire = seen.at(-1)!;
           expect(wire.url).toBe("https://chatgpt.com/backend-api/codex/responses");
-          expect(wire.headers.get("session_id")).toBe(explicit ? explicit === "session_id" ? "caller-conversation" : null : expectedSession);
+          expect(wire.headers.get("session_id")).toBe(explicit ? "caller-conversation" : expectedSession);
           if (explicit) expect(wire.headers.get(explicit)).toBe("caller-conversation");
           expect(wire.headers.has("x-opencode-session")).toBe(false);
           expect(wire.body.prompt_cache_key).toBe(key);
@@ -114,14 +129,12 @@ describe("Claude final canonical native affinity after a Go preliminary pick", (
   });
 
   test("native failure leaves policy-hop request headers free of synthesized identity", async () => {
+    clearHealthHistoryCacheForTests();
     const cfg = config();
-    const trace = { version: 1, decisionId: "native-hop", createdAt: Date.now(), requestedModel: "openai/gpt-5.6-luna",
-      routeKind: "policy", profile: { id: "native-hop", revision: "1" }, requirements: [],
-      candidates: [
-        { provider: "openai", model: "gpt-5.6-luna", eligible: true, exclusions: [], score: { total: 2 } },
-        { provider: "other", model: "m", eligible: true, exclusions: [], score: { total: 1 } },
-      ], selected: { candidateIndex: 0, provider: "openai", model: "gpt-5.6-luna", reason: "fixture" },
-    } as unknown as Parameters<typeof rankPolicyFallbackCandidates>[0];
+    // Both physical routes belong to the original evaluation; a diagnostic trace cannot add one.
+    cfg.routingProfiles = { "native-hop": { candidates: [
+      { provider: "openai", model: "gpt-5.6-luna" }, { provider: "other", model: "m" },
+    ] } };
     const requests: Request[] = [];
     const wires: Headers[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -131,20 +144,70 @@ describe("Claude final canonical native affinity after a Go preliminary pick", (
     }) as typeof fetch;
     const req = new Request("http://localhost/v1/responses", { method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${token}`, "chatgpt-account-id": "fixture-native-main" },
-      body: JSON.stringify({ model: "openai/gpt-5.6-luna", input: "ping", stream: false }) });
+      body: JSON.stringify({ model: "policy/native-hop", input: "ping", stream: false }) });
     const runCore: NonNullable<Parameters<typeof handleResponsesWithPolicyFallback>[4]>["runCore"] = async (request, current, log, options) => {
       requests.push(request);
-      const response = await handleResponses(request, current, log, options);
-      if (requests.length === 1) log.routeDecision = trace;
-      return response;
+      return handleResponses(request, current, log, options);
     };
     const response = await handleResponsesWithPolicyFallback(req, cfg, { model: "", provider: "" },
       { claudeNativeSessionId: expectedSession }, { runCore });
     await response.text();
+    expect(existsSync(historyIndexPath(home))).toBe(true);
     expect(response.status).toBe(200);
     expect(requests).toHaveLength(2);
     expect(wires[0]?.get("session_id")).toBe(expectedSession);
     expect(wires.at(-1)?.has("session_id")).toBe(false);
     expect(requests.every(request => !request.headers.has("session_id"))).toBe(true);
+  });
+});
+
+
+describe("native alias identity survives 401 auth replay", () => {
+  test.each([
+    { session_id: "", "session-id": "caller-conversation" },
+    { "session-id": "", "thread-id": "caller-conversation" },
+    { "session-id": "caller-conversation", "thread-id": "weaker-conversation" },
+  ])("keeps the same wire identity before and after stored-main refresh: %j", async identity => {
+    const cfg = config();
+    cfg.activeCodexAccountId = MAIN_CODEX_ACCOUNT_ID;
+    cfg.autoSwitchThreshold = 0;
+    cfg.codexAccounts = [];
+    cfg.providers.openai!.codexAccountMode = "pool";
+    clearMainAccountInfoCache();
+    writeFileSync(join(isolated.path, "auth.json"), JSON.stringify({ tokens: {
+      access_token: token, refresh_token: "fixture-refresh-grant", account_id: "fixture-native-main",
+    } }));
+    const refreshed = fakeChatGptJwt({ exp: Math.floor(Date.now() / 1000) + 172800, chatgpt_account_id: "fixture-native-main" });
+    const wires: Headers[] = [];
+    let refreshes = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if (url.hostname === "auth.openai.com") {
+        refreshes++;
+        return Response.json({ access_token: refreshed, refresh_token: "fixture-rotated-grant", expires_in: 3600 });
+      }
+      if (!url.pathname.endsWith("/responses")) return Response.json({ rate_limit: { primary_window: { used_percent: 10 } } });
+      wires.push(new Headers(init?.headers));
+      return wires.length === 1
+        ? Response.json({ error: { message: "expired bearer" } }, { status: 401 }) : completed();
+    }) as typeof fetch;
+    const req = new Request("http://localhost/v1/responses", { method: "POST",
+      headers: { "content-type": "application/json", originator: "example-agent", ...identity },
+      body: JSON.stringify({ model: "openai/gpt-5.6-luna", input: "ping", stream: false }),
+    });
+    const originalHeaders = [...req.headers];
+    const lease = tryAdmitTurn();
+    expect(lease).not.toBeNull();
+    try {
+      const response = await handleResponses(req, cfg, { model: "", provider: "" }, { turnAdmissionLease: lease! });
+      await response.text();
+      expect(response.status).toBe(200);
+      expect(refreshes).toBe(1);
+      expect(wires).toHaveLength(2);
+      expect(wires.map(headers => headers.get("session_id"))).toEqual(["caller-conversation", "caller-conversation"]);
+      expect(wires.map(headers => headers.get("originator"))).toEqual(["example-agent", "example-agent"]);
+      expect(wires.map(headers => headers.get("authorization"))).toEqual([`Bearer ${token}`, `Bearer ${refreshed}`]);
+      expect([...req.headers]).toEqual(originalHeaders);
+    } finally { lease?.release(); clearMainAccountInfoCache(); }
   });
 });

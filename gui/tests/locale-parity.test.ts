@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
+import { LOCALES } from "../src/i18n/shared";
 
-const LOCALES = ["en", "de", "fr", "ja", "ko", "ru", "tr", "zh", "zh-TW"] as const;
+const LOCALE_CODES = LOCALES.map(locale => locale.code);
 
 async function readDict(locale: string): Promise<Map<string, string>> {
   const src = await Bun.file(new URL(`../src/i18n/${locale}.ts`, import.meta.url)).text();
@@ -12,6 +13,16 @@ async function readDict(locale: string): Promise<Map<string, string>> {
     out.set(m[1]!, m[2]!);
   }
   return out;
+}
+
+/**
+ * A value with no letters once its placeholders are removed has nothing to translate: an em
+ * dash, a currency template, a bare glyph. Matching English there is evidence of nothing, so
+ * it is derived from the value instead of growing the allowlist by one entry every time the
+ * UI gains another symbol.
+ */
+function carriesTranslatableWords(value: string): boolean {
+  return /\p{L}/u.test(value.replace(/\{[a-zA-Z0-9_]+\}/g, " "));
 }
 
 // When the English locale grows, `scripts/sync-locale-keys.mjs` seeds the new key into every
@@ -30,6 +41,10 @@ async function readDict(locale: string): Promise<Map<string, string>> {
 // gap. Anything *not* on this list that ships an English-identical value is treated as a stale
 // placeholder and fails the build.
 const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
+  // The Codex sidebar row is the product name, kept in every locale like Claude.
+  "nav.codexSet",
+  // The primary Anthropic pool is labelled by the vendor name alone, kept in every locale.
+  "sidecar.poolA",
   // A bare em dash: the "no Reasoning control" marker is a symbol, not copy.
   "integrations.cursor.noControl",
   // API protocol/endpoint names
@@ -38,10 +53,17 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   "api.modelsEndpoint",
   "api.protocolChatCompletions",
   "api.protocolMessages",
+  // Short wire names on the Logs protocol path, and the IR acronym beside them.
+  "logs.protocol.wire.responses",
+  "logs.protocol.wire.chat",
+  "logs.protocol.wire.messages",
+  "logs.protocol.hop.ir",
   "api.protocolResponses",
   "api.responsesEndpoint",
   // Provider proper nouns (Taiwan keeps the English brand; "火山方舟" is Mainland usage)
   "provider.name.volcengine",
+  // JEV decision method named after the TypeSafe product.
+  "cws.jev.backend.typesafe",
   // A literal filename, not prose: AGENTS.md is the file Codex reads from the
   // working directory, and Taiwan renders it the same way every other locale does.
   "codexSet.layer.agents-md",
@@ -58,8 +80,8 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   "dash.backendOpenAI",
   // Claude app labels
   "claude.pageTitle",
-  "claude.tabCode",
-  "claude.tabDesktop",
+  // A literal Claude Desktop picker model id used as the input placeholder, not prose.
+  "claudeDesktop.firstParty.bindings.pickerPlaceholder",
   // Claude Desktop model-family labels (proper nouns)
   "claudeDesktop.effort.supported",
   "claudeDesktop.family.fable",
@@ -101,7 +123,9 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   "api.clientConfig.clientOpencode",
   // Cline CLI is a product name, not untranslated interface copy.
   "integrations.tab.cline",
+  "integrations.tab.droid",
   "api.clientConfig.clientCline",
+  "api.clientConfig.clientDroid",
   "api.clientConfig.clientPi",
   "api.clientConfig.clientOmp",
   "api.clientConfig.clientHermes",
@@ -142,7 +166,14 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   "api.clientConfig.clientOmo",
   // Cline product name and CLI acronym are intentionally preserved.
   "integrations.tab.cline",
+  "integrations.tab.droid",
   "api.clientConfig.clientCline",
+  "integrations.tab.kilo",
+  "api.clientConfig.clientKilo",
+  "api.clientConfig.clientDroid",
+  // Command Code is a product name, identical in every locale.
+  "integrations.tab.commandcode",
+  "api.clientConfig.clientCommandCode",
   "integrations.codex.title",
   // Provider proper nouns kept in English
   "provider.name.commandCodeAuth",
@@ -181,6 +212,8 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   // untranslated `~$`); the templates are pure placeholders on purpose.
   "logs.cost.approximate",
   "logs.cost.lowerBound",
+  // A token count ("200k") reads the same in every locale; the 1M choice carries the translated "default".
+  "claude.contextAccounting200k",
 ]);
 
 test("zh-TW ships no untranslated English placeholders beyond the intentional allowlist", async () => {
@@ -192,6 +225,7 @@ test("zh-TW ships no untranslated English placeholders beyond the intentional al
     const enValue = en.get(key);
     if (enValue === undefined) continue; // key-set parity is the other test's job
     if (!value.trim()) continue; // blank-value is the other test's job
+    if (!carriesTranslatableWords(value)) continue; // a symbol is identical in every locale
     if (value === enValue && !ZH_TW_KEEP_ENGLISH.has(key)) {
       stale.push(key);
     }
@@ -209,7 +243,7 @@ test("zh-TW ships no untranslated English placeholders beyond the intentional al
 // complete parity guard, independent of the claude-desktop-locale file.
 test("every locale key set matches the English source", async () => {
   const en = [...(await readDict("en")).keys()].sort();
-  for (const locale of LOCALES.filter(l => l !== "en")) {
+  for (const locale of LOCALE_CODES.filter(l => l !== "en")) {
     const other = [...(await readDict(locale)).keys()].sort();
     expect(`${locale} key count: ${other.length}`).toBe(`${locale} key count: ${en.length}`);
     expect(other).toEqual(en);
@@ -240,7 +274,7 @@ const CURSOR_KEEP_ENGLISH_BY_LOCALE: Record<string, ReadonlySet<string>> = {
 
 test("every locale translates the Cursor tab beyond the brand labels", async () => {
   const en = await readDict("en");
-  for (const locale of LOCALES.filter(l => l !== "en")) {
+  for (const locale of LOCALE_CODES.filter(l => l !== "en")) {
     const dict = await readDict(locale);
     const stale: string[] = [];
     for (const [key, value] of dict) {
@@ -254,56 +288,66 @@ test("every locale translates the Cursor tab beyond the brand labels", async () 
   }
 });
 
-const DSH_VISIBLE_COPY: Record<(typeof LOCALES)[number], readonly [string, string, string]> = {
+const DSH_VISIBLE_COPY: Record<(typeof LOCALE_CODES)[number], readonly [string, string, string]> = {
   en: [
     "DeepSeek Harness (DSH)",
     "DSH",
-    "OpenCodex manages only llm-pi-ai.providers.opencodex in $DSH_HOME/settings.yaml. DSH hot reloads this provider; your default model and deepseek-official stay unchanged. Currently loopback-only; no real credential is written.",
+    "OpenCodex manages only the opencodex provider of the llm-pi-ai row in $DSH_HOME/profiles/desktop/cordis.patch.yml, the Desktop profile DSH 0.1.7+ reads ($DSH_HOME/settings.yaml until that profile exists). DSH hot reloads this provider; your default model and deepseek-official stay unchanged. Currently loopback-only; no real credential is written.",
   ],
   fr: [
     "DeepSeek Harness (DSH)",
     "DSH",
-    "OpenCodex gère uniquement llm-pi-ai.providers.opencodex dans $DSH_HOME/settings.yaml. DSH recharge ce fournisseur à chaud ; votre modèle par défaut et deepseek-official restent inchangés. Seule l’adresse de bouclage est actuellement prise en charge ; aucun identifiant réel n’est écrit.",
+    "OpenCodex gère uniquement le fournisseur opencodex de la ligne llm-pi-ai dans $DSH_HOME/profiles/desktop/cordis.patch.yml, le profil Desktop que lit DSH 0.1.7+ ($DSH_HOME/settings.yaml tant que ce profil n’existe pas). DSH recharge ce fournisseur à chaud ; votre modèle par défaut et deepseek-official restent inchangés. Seule l’adresse de bouclage est actuellement prise en charge ; aucun identifiant réel n’est écrit.",
   ],
   de: [
     "DeepSeek Harness (DSH)",
     "DSH",
-    "OpenCodex verwaltet nur llm-pi-ai.providers.opencodex in $DSH_HOME/settings.yaml. DSH lädt diesen Anbieter im laufenden Betrieb neu; Ihr Standardmodell und deepseek-official bleiben unverändert. Derzeit nur über Loopback; es werden keine echten Zugangsdaten geschrieben.",
+    "OpenCodex verwaltet nur den Anbieter opencodex in der llm-pi-ai-Zeile von $DSH_HOME/profiles/desktop/cordis.patch.yml, dem Desktop-Profil, das DSH ab 0.1.7 liest ($DSH_HOME/settings.yaml, solange dieses Profil fehlt). DSH lädt diesen Anbieter im laufenden Betrieb neu; Ihr Standardmodell und deepseek-official bleiben unverändert. Derzeit nur über Loopback; es werden keine echten Zugangsdaten geschrieben.",
   ],
   ja: [
     "DeepSeek Harness (DSH)",
     "DSH",
-    "OpenCodex が管理するのは $DSH_HOME/settings.yaml 内の llm-pi-ai.providers.opencodex だけです。DSH はこのプロバイダーをホットリロードし、既定のモデルと deepseek-official は変更しません。現在はループバック専用で、実際の認証情報は書き込みません。",
+    "OpenCodex が管理するのは $DSH_HOME/profiles/desktop/cordis.patch.yml（DSH 0.1.7 以降が読む Desktop プロファイル。存在しない間は $DSH_HOME/settings.yaml）の llm-pi-ai 行にある opencodex プロバイダーだけです。DSH はこのプロバイダーをホットリロードし、既定のモデルと deepseek-official は変更しません。現在はループバック専用で、実際の認証情報は書き込みません。",
   ],
   ko: [
     "DeepSeek Harness (DSH)",
     "DSH",
-    "OpenCodex는 $DSH_HOME/settings.yaml의 llm-pi-ai.providers.opencodex만 관리합니다. DSH는 이 provider를 hot reload하며 기본 model과 deepseek-official은 변경하지 않습니다. 현재 loopback 전용이며 실제 credential을 기록하지 않습니다.",
+    "OpenCodex는 $DSH_HOME/profiles/desktop/cordis.patch.yml(DSH 0.1.7+가 읽는 Desktop profile, 이 profile이 없으면 $DSH_HOME/settings.yaml)의 llm-pi-ai 행에 있는 opencodex provider만 관리합니다. DSH는 이 provider를 hot reload하며 기본 model과 deepseek-official은 변경하지 않습니다. 현재 loopback 전용이며 실제 credential을 기록하지 않습니다.",
   ],
   ru: [
     "DeepSeek Harness (DSH)",
     "DSH",
-    "OpenCodex управляет только llm-pi-ai.providers.opencodex в $DSH_HOME/settings.yaml. DSH применяет этот провайдер горячей перезагрузкой; модель по умолчанию и deepseek-official остаются без изменений. Сейчас поддерживается только loopback; реальные учётные данные не записываются.",
+    "OpenCodex управляет только провайдером opencodex в строке llm-pi-ai файла $DSH_HOME/profiles/desktop/cordis.patch.yml — профиля Desktop, который читает DSH 0.1.7+ ($DSH_HOME/settings.yaml, пока этого профиля нет). DSH применяет этот провайдер горячей перезагрузкой; модель по умолчанию и deepseek-official остаются без изменений. Сейчас поддерживается только loopback; реальные учётные данные не записываются.",
   ],
   tr: [
     "DeepSeek Harness (DSH)",
     "DSH",
-    "OpenCodex yalnızca $DSH_HOME/settings.yaml içindeki llm-pi-ai.providers.opencodex bölümünü yönetir. DSH bu sağlayıcıyı çalışırken yeniden yükler; varsayılan modeliniz ve deepseek-official değişmez. Şimdilik yalnızca geri döngü desteklenir; gerçek kimlik bilgisi yazılmaz.",
+    "OpenCodex yalnızca $DSH_HOME/profiles/desktop/cordis.patch.yml içindeki llm-pi-ai satırının opencodex sağlayıcısını yönetir; bu, DSH 0.1.7+ sürümünün okuduğu Desktop profilidir (profil yokken $DSH_HOME/settings.yaml). DSH bu sağlayıcıyı çalışırken yeniden yükler; varsayılan modeliniz ve deepseek-official değişmez. Şimdilik yalnızca geri döngü desteklenir; gerçek kimlik bilgisi yazılmaz.",
   ],
   zh: [
     "DeepSeek Harness (DSH)",
     "DSH",
-    "OpenCodex 只管理 $DSH_HOME/settings.yaml 中的 llm-pi-ai.providers.opencodex。DSH 会热重载该 provider；你的默认模型和 deepseek-official 保持不变。目前仅支持环回地址，且不会写入真实凭据。",
+    "OpenCodex 只管理 $DSH_HOME/profiles/desktop/cordis.patch.yml（DSH 0.1.7 起读取的 Desktop profile；该 profile 不存在时为 $DSH_HOME/settings.yaml）中 llm-pi-ai 这一行的 opencodex provider。DSH 会热重载该 provider；你的默认模型和 deepseek-official 保持不变。目前仅支持环回地址，且不会写入真实凭据。",
   ],
   "zh-TW": [
     "DeepSeek Harness (DSH)",
     "DSH",
-    "OpenCodex 只管理 $DSH_HOME/settings.yaml 中的 llm-pi-ai.providers.opencodex。DSH 會熱重載該 provider；你的預設模型與 deepseek-official 維持不變。目前僅支援 loopback，且不會寫入真實憑證。",
+    "OpenCodex 只管理 $DSH_HOME/profiles/desktop/cordis.patch.yml（DSH 0.1.7 起讀取的 Desktop profile；該 profile 不存在時為 $DSH_HOME/settings.yaml）中 llm-pi-ai 這一列的 opencodex provider。DSH 會熱重載該 provider；你的預設模型與 deepseek-official 維持不變。目前僅支援 loopback，且不會寫入真實憑證。",
+  ],
+  vi: [
+    "DeepSeek Harness (DSH)",
+    "DSH",
+    "OpenCodex chỉ quản lý provider opencodex trong dòng llm-pi-ai của $DSH_HOME/profiles/desktop/cordis.patch.yml, profile Desktop mà DSH 0.1.7+ đọc ($DSH_HOME/settings.yaml khi profile đó chưa tồn tại). DSH sẽ hot reload provider này; model mặc định của bạn và deepseek-official không thay đổi. Hiện chỉ hỗ trợ loopback; không ghi credential thật nào.",
+  ],
+  pt: [
+    "DeepSeek Harness (DSH)",
+    "DSH",
+    "O OpenCodex gerencia apenas o provedor opencodex da linha llm-pi-ai em $DSH_HOME/profiles/desktop/cordis.patch.yml, o perfil Desktop que o DSH 0.1.7+ lê ($DSH_HOME/settings.yaml enquanto esse perfil não existir). O DSH recarrega esse provedor a quente; seu modelo padrão e o deepseek-official permanecem inalterados. Atualmente somente loopback; nenhuma credencial real é gravada.",
   ],
 };
 
 test("every locale carries the exact DSH label and ownership semantics", async () => {
-  for (const locale of LOCALES) {
+  for (const locale of LOCALE_CODES) {
     const dict = await readDict(locale);
     const expected = DSH_VISIBLE_COPY[locale];
     expect(dict.get("api.clientConfig.clientDsh")).toBe(expected[0]);
@@ -326,7 +370,7 @@ test("every locale carries the exact DSH label and ownership semantics", async (
  * are the part that must survive translation unchanged.
  */
 test("every locale keeps the three facts Aside's ownership sentence carries", async () => {
-  for (const locale of LOCALES) {
+  for (const locale of LOCALE_CODES) {
     const dict = await readDict(locale);
     expect(dict.get("api.clientConfig.clientAside"), locale).toBe("Aside");
     expect(dict.get("integrations.tab.aside"), locale).toBe("Aside");

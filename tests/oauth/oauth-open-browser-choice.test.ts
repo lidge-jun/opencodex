@@ -49,7 +49,7 @@ async function startLogin(
   const openUrlMod = await import("../../src/lib/open-url");
   const opened: string[] = [];
   const startSpy = spyOn(oauth, "startLoginFlow").mockResolvedValue({ url: "https://accounts.x.ai/oauth/authorize?code_challenge=x" });
-  const openSpy = spyOn(openUrlMod, "openUrl").mockImplementation((url: string) => { opened.push(url); });
+  const openSpy = spyOn(openUrlMod, "openUrl").mockImplementation(async (url: string) => { opened.push(url); return { status: "started" as const }; });
   try {
     const req = new Request("http://127.0.0.1/api/oauth/login", {
       method: "POST",

@@ -3,6 +3,8 @@ import type { TFn } from "../i18n/shared";
 import { readJsonIfOk } from "../fetch-json";
 import { openBrowserRequestField } from "../oauth-open-browser-pref";
 import { afterOAuthCancellation, cancelOAuthLogin } from "../oauth-cancellation-barrier";
+import { parseBrowserLaunch, type BrowserLaunch } from "../oauth-browser-launch";
+import { loginPollAttempts } from "../oauth-login-budget";
 import type { OAuthAccount, OAuthStatus } from "./providers-shared";
 import { oauthLabel } from "./providers-shared";
 
@@ -33,7 +35,7 @@ export function useProvidersOAuth({
   setAccountSets: React.Dispatch<React.SetStateAction<Record<string, AccountSet>>>;
   setBusy: React.Dispatch<React.SetStateAction<string | null>>;
   setStatus: React.Dispatch<React.SetStateAction<string>>;
-  setLoginInfo: React.Dispatch<React.SetStateAction<{ provider: string; url?: string; instructions?: string; deviceCode?: string } | null>>;
+  setLoginInfo: React.Dispatch<React.SetStateAction<{ provider: string; url?: string; instructions?: string; deviceCode?: string; browserLaunch?: BrowserLaunch } | null>>;
   setOauthStatus: React.Dispatch<React.SetStateAction<Record<string, OAuthStatus>>>;
   notify: (msg: string, ok: boolean) => void;
   fetchConfig: () => Promise<void>;
@@ -56,6 +58,32 @@ export function useProvidersOAuth({
 
   const cancelServerLogin = useCallback((provider: string) =>
     cancelOAuthLogin(apiBase, provider), [apiBase]);
+
+  const reloadAccountsAfterLogin = useCallback(async (provider: string) => {
+    const knownProviders = Object.keys(accountSets);
+    const knownSet = new Set(knownProviders);
+    await fetchAccountSets(knownSet.has(provider) ? knownProviders : [...knownProviders, provider]);
+  }, [accountSets, fetchAccountSets]);
+
+  const refreshDerivedAfterLogin = useCallback(() => {
+    void fetchConfig();
+    void fetchProviderQuotas(true);
+    bumpModelsRefresh();
+  }, [fetchConfig, fetchProviderQuotas, bumpModelsRefresh]);
+
+  const onNativeLoginSettled = useCallback(async (provider: string, outcome: "added" | "ended" | "failed") => {
+    if (!aliveRef.current) return;
+    if (outcome === "added") onLoginSettled?.(provider);
+    try { await reloadAccountsAfterLogin(provider); } catch {
+      // A failed roster read must not hide a confirmed device outcome. The
+      // account loader owns its own error state; derived reads can still heal it.
+    }
+    if (!aliveRef.current) return;
+    if (outcome === "added") notify(t("prov.loginOk", { provider: oauthLabel(provider), cmd: "ocx sync" }), true);
+    else if (outcome === "ended") notify(t("kiroLogin.ended"), false);
+    else notify(t("prov.loginError", { provider: oauthLabel(provider), error: t("kiroLogin.failed") }), false);
+    refreshDerivedAfterLogin();
+  }, [aliveRef, onLoginSettled, reloadAccountsAfterLogin, notify, t, refreshDerivedAfterLogin]);
 
   useEffect(() => {
     const cancelActiveLogins = (clearUi: boolean) => {
@@ -119,14 +147,18 @@ export function useProvidersOAuth({
         notify(data.error || t("prov.loginFailStart", { provider: oauthLabel(provider) }), false);
         return;
       }
-      const data = await res.json() as { url?: string; instructions?: string; deviceCode?: string };
+      const data = await res.json() as { url?: string; instructions?: string; deviceCode?: string; browserLaunch?: unknown };
       if (!aliveRef.current || oauthLoginGenerationRef.current!.get(provider) !== generation) return;
+      const browserLaunch = parseBrowserLaunch(data.browserLaunch);
       if (data.url || data.instructions || data.deviceCode) {
-        setLoginInfo({ provider, url: data.url, instructions: data.instructions, deviceCode: data.deviceCode });
+        setLoginInfo({ provider, url: data.url, instructions: data.instructions, deviceCode: data.deviceCode, browserLaunch });
       }
       const baselineCount = accountSets[provider]?.accounts.length ?? 0;
       let finished = false;
-      for (let i = 0; i < 150 && aliveRef.current && oauthLoginGenerationRef.current!.get(provider) === generation; i++) {
+      // A device code can arrive with the POST or with a later status hint; either one stretches
+      // the budget to the grant's lifetime (see oauth-login-budget.ts).
+      let deviceFlow = Boolean(data.deviceCode);
+      for (let i = 0; i < loginPollAttempts(deviceFlow, 2000, 150) && aliveRef.current && oauthLoginGenerationRef.current!.get(provider) === generation; i++) {
         await new Promise(r => setTimeout(r, 2000));
         if (oauthLoginGenerationRef.current!.get(provider) !== generation || !aliveRef.current) return;
         const sRes = await fetch(`${apiBase}/api/oauth/status?provider=${provider}`).catch(() => null);
@@ -183,9 +215,7 @@ export function useProvidersOAuth({
           }
           setLoginInfo(null);
           onLoginSettled?.(provider);
-          const knownProviders = Object.keys(accountSets);
-          const knownSet = new Set(knownProviders);
-          await fetchAccountSets(knownSet.has(provider) ? knownProviders : [...knownProviders, provider]);
+          await reloadAccountsAfterLogin(provider);
           if (!aliveRef.current || oauthLoginGenerationRef.current!.get(provider) !== generation) return;
           const sameIdentityAdd = addAccount && !reauthTargetId && statusCount <= baselineCount;
           if (sameIdentityAdd) {
@@ -193,11 +223,16 @@ export function useProvidersOAuth({
           } else {
             notify(t("prov.loginOk", { provider: oauthLabel(provider), cmd: "ocx sync" }), true);
           }
-          void fetchConfig();
-          void fetchProviderQuotas(true);
-          bumpModelsRefresh();
+          refreshDerivedAfterLogin();
           finished = true;
           break;
+        }
+        // A later provider step replaces the initial POST hint (including an
+        // absent device code); generation checks above keep old polls out.
+        // The launch outcome belongs to the POST, so a status hint keeps it.
+        if (s.hint) {
+          if (s.hint.deviceCode) deviceFlow = true;
+          setLoginInfo({ provider, url: s.hint.url, instructions: s.hint.instructions, deviceCode: s.hint.deviceCode, browserLaunch });
         }
       }
       if (!finished && oauthLoginGenerationRef.current!.get(provider) === generation && aliveRef.current) {
@@ -244,5 +279,5 @@ export function useProvidersOAuth({
     }
   };
 
-  return { cancelLoginOAuth, loginOAuth, logoutOAuth };
+  return { cancelLoginOAuth, loginOAuth, logoutOAuth, onNativeLoginSettled };
 }

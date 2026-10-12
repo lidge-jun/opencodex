@@ -9,12 +9,18 @@
  * reaches a message or a status object.
  */
 import { describe, expect, test } from "bun:test";
+import { createResponsesPassthroughAdapter as createResponsesPassthroughAdapterProduction } from "../../src/adapters/openai-responses";
 import { OAUTH_PROVIDERS } from "../../src/oauth";
 import { loginMetaMuse, refreshMetaMuseToken } from "../../src/oauth/meta-muse";
+import { providerConfigSeed } from "../../src/providers/derive";
 import { getProviderRegistryEntry } from "../../src/providers/registry";
 import { supportsPerAccountQuota } from "../../src/providers/quota";
 import { routeModel } from "../../src/router";
-import type { OcxConfig } from "../../src/types";
+import type { OcxConfig, OcxProviderConfig } from "../../src/types";
+import { withTestTranslatorBudget } from "../helpers/translator-budget";
+
+const createResponsesPassthroughAdapter = (...args: Parameters<typeof createResponsesPassthroughAdapterProduction>) =>
+  withTestTranslatorBudget(createResponsesPassthroughAdapterProduction(...args));
 
 const MODELS = ["muse-spark-1.3", "muse-spark-1.3-contributor"] as const;
 
@@ -54,13 +60,28 @@ describe("meta-muse registry entry", () => {
     expect(entry().oauthId).toBe("meta-muse");
   });
 
-  test("reuses the ladder, window, modalities and identity wire map from the key provider", () => {
+  test("adds max to the Muse credential ladder while reusing the model metadata", () => {
     for (const id of MODELS) {
-      expect(entry().modelReasoningEfforts?.[id]).toEqual(["minimal", "low", "medium", "high", "xhigh"]);
+      expect(entry().modelReasoningEfforts?.[id]).toEqual(["minimal", "low", "medium", "high", "xhigh", "max"]);
       expect(entry().modelReasoningEffortMap?.[id]?.minimal).toBe("minimal");
+      expect(entry().modelReasoningEffortMap?.[id]?.max).toBe("max");
       expect(entry().modelContextWindows?.[id]).toBe(1_048_576);
       expect(entry().modelInputModalities?.[id]).toEqual(["text", "image"]);
     }
+  });
+
+  test("max reaches the Responses wire unchanged", () => {
+    const provider = { ...providerConfigSeed(entry()), apiKey: "meta-test-key" } as OcxProviderConfig;
+    const request = createResponsesPassthroughAdapter(provider).buildRequest({
+      modelId: "muse-spark-1.3-contributor",
+      context: { messages: [] },
+      stream: false,
+      options: { reasoning: "max" },
+      _rawBody: { model: "muse-spark-1.3-contributor", input: "ping", reasoning: { effort: "max" } },
+    }, { headers: new Headers({ "user-agent": "grok-build/test" }) });
+    const body = JSON.parse(request.body) as { reasoning?: { effort?: string } };
+    expect(body.reasoning?.effort).toBe("max");
+    expect(new Headers(request.headers).get("user-agent")).toBe("muse-build/1.3.0 (opencodex compatibility)");
   });
 
   test("keeps live discovery off — the real roster carries image and voice models", () => {

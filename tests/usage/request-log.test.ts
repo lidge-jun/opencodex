@@ -7,6 +7,7 @@ import {
   responseWithDeferredRequestLog,
   requestLogErrorCode,
   requestLogSpeedLabel,
+  queryRequestLogs,
   type RequestLogEntry,
 } from "../../src/server";
 import {
@@ -41,23 +42,12 @@ import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { log } from "../helpers/request-log-entry";
 import { decodeRequestLogCursor, selectRequestLogPoll } from "../../src/server/request-log-cursor";
 
 async function* replayAdapterEvents(events: AdapterEvent[]): AsyncGenerator<AdapterEvent> {
   for (const event of events) yield event;
-}
-
-function log(overrides: Partial<RequestLogEntry>): RequestLogEntry {
-  return {
-    requestId: "ocx-test",
-    timestamp: 1,
-    model: "gpt-test",
-    provider: "openai",
-    status: 200,
-    durationMs: 10,
-    usageStatus: "unreported",
-    ...overrides,
-  };
 }
 
 describe("request log metadata", () => {
@@ -240,6 +230,9 @@ describe("request log metadata", () => {
       },
     } as OcxConfig;
 
+    // This row calls the handler directly, so it takes the spend-journal writer lease that
+    // startServer would have taken. Released in the finally, before the fetch stub is restored.
+    const releaseSpendHome = acquireOwnedSpendHome();
     try {
       const response = await handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST",
@@ -256,7 +249,11 @@ describe("request log metadata", () => {
         adapter: "openai-responses",
         sendCount: 1,
       })]);
+      // Read before the lease is released: the row asserts on metadata only, so without this it
+      // finishes with the turn's body still attached and the lease dropped underneath it.
+      await response.text();
     } finally {
+      releaseSpendHome();
       globalThis.fetch = originalFetch;
     }
   });
@@ -543,53 +540,6 @@ describe("request log metadata", () => {
     }
   });
 
-  test("records ordered attempts with sealed identity, fresh estimates, and deduplicated recoveries", () => {
-    const a = beginRequestAttempt(1, "provisional-a", "model-a", "openai-chat");
-    noteAttemptSend(a, 100);
-    noteAttemptSend(a, 120, "transient-5xx");
-    noteAttemptSend(a, 120, "transient-5xx");
-    sealRequestAttemptIdentity(a, "chatgpt-pabcdef", "openai-responses", "pabcdef");
-    finishRequestAttempt(a, 503, 12);
-
-    const b = beginRequestAttempt(2, "prov-b", "model-b", "openai-chat");
-    noteAttemptSend(b, undefined);
-    finishRequestAttempt(b, 200, 8, {
-      inputTokens: 10,
-      outputTokens: 2,
-      cachedInputTokens: 4,
-      cacheReadInputTokens: 4,
-    });
-
-    expect(a).toMatchObject({
-      ordinal: 1,
-      provider: "chatgpt-pabcdef",
-      accountLogLabel: "pabcdef",
-      adapter: "openai-responses",
-      status: 503,
-      sendCount: 3,
-      inputTokenEstimate: 120,
-      recoveryKinds: ["transient-5xx"],
-      usageStatus: "estimated",
-      usage: { inputTokens: 120, outputTokens: 0, estimated: true },
-      totalTokens: 120,
-      errorCode: "server_is_overloaded",
-    });
-    expect(b).toMatchObject({ status: 200, sendCount: 1, usageStatus: "reported", totalTokens: 12 });
-
-    expect(aggregateAttemptUsage([a, b])).toEqual({
-      status: "estimated",
-      totalTokens: 132,
-      usage: {
-        inputTokens: 130,
-        outputTokens: 2,
-        totalTokens: 132,
-        cachedInputTokens: 4,
-        cacheReadInputTokens: 4,
-        estimated: true,
-      },
-    });
-  });
-
   test("folds partial and unsupported attempt measurement honestly", () => {
     const reported = finishRequestAttempt(
       beginRequestAttempt(1, "a", "m1", "openai-chat"),
@@ -834,6 +784,10 @@ describe("request log metadata", () => {
       "Provider error 401: this model requires a subscription, upgrade for access",
     )).toBe("invalid_api_key");
     expect(requestLogErrorCode(429)).toBe("rate_limit_exceeded");
+    expect(requestLogErrorCode(
+      429,
+      "The upstream exchange did not complete reliably. The request may already have been processed; automatic replay was stopped.",
+    )).toBe("upstream_reset_replay_refused");
     expect(requestLogErrorCode(499)).toBe("client_closed_request");
     expect(requestLogErrorCode(502, "client closed request during web-search")).toBe("client_closed_request");
     expect(requestLogErrorCode(400, "blocked", "cyber_policy")).toBe("cyber_policy");
@@ -983,6 +937,42 @@ describe("request log metadata", () => {
   test("limit returns newest rows when buffer exceeds limit", () => {
     const logs = Array.from({ length: 10 }, (_, i) => log({ requestId: `r${i}`, provider: "openai", status: 200 }));
     expect(filterRequestLogs(logs, new URLSearchParams("limit=3")).map(entry => entry.requestId)).toEqual(["r7", "r8", "r9"]);
+  });
+
+  test("queryRequestLogs returns both total count and paginated logs in a single pass", () => {
+    const logs = [
+      log({ requestId: "r0", provider: "openai", model: "gpt-4", status: 200, accountLogLabel: "acc-1" }),
+      log({ requestId: "r1", provider: "openai", model: "gpt-4", status: 500, accountLogLabel: "acc-1" }),
+      log({ requestId: "r2", provider: "xai", model: "grok-1", status: 200, accountLogLabel: "acc-2" }),
+      log({ requestId: "r3", provider: "openai", model: "gpt-4", status: 200, accountLogLabel: "acc-1" }),
+      log({ requestId: "r4", provider: "openai", model: "gpt-4", status: 204, accountLogLabel: "acc-1" }),
+      log({ requestId: "r5", provider: "openai", model: "gpt-4", status: 200, accountLogLabel: "acc-1" }),
+    ];
+
+    // Filter by provider, status 2xx, with limit and offset
+    const query = new URLSearchParams("provider=openai&status=2xx&limit=2&offset=1");
+    const result = queryRequestLogs(logs, query);
+
+    // Matches r0 (200), r3 (200), r4 (204), r5 (200) -> total = 4
+    // Paginating from end: length = 4, offset = 1 -> end = 3, capped = 2 -> begin = 1 -> slice(1, 3) -> [r3, r4]
+    expect(result.total).toBe(4);
+    expect(result.logs.map(e => e.requestId)).toEqual(["r3", "r4"]);
+
+    // Tail with limit and offset
+    const tailQuery = new URLSearchParams("provider=openai&status=2xx&tail=3&limit=2");
+    const tailResult = queryRequestLogs(logs, tailQuery);
+    // Matches 4 items, tail=3 takes last 3: [r3, r4, r5] -> total = 3
+    // limit=2 from end takes last 2: [r4, r5]
+    expect(tailResult.total).toBe(3);
+    expect(tailResult.logs.map(e => e.requestId)).toEqual(["r4", "r5"]);
+
+    // Fast path: no filter
+    const noFilter = queryRequestLogs(logs, new URLSearchParams());
+    expect(noFilter.total).toBe(6);
+    expect(noFilter.logs.length).toBe(6);
+
+    // Empty array
+    expect(queryRequestLogs([], new URLSearchParams("provider=openai"))).toEqual({ total: 0, logs: [] });
   });
 
   test("deferred JSON logging preserves response service tier before final log", async () => {

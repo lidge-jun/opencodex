@@ -2,6 +2,7 @@ import { readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { expandUserPath } from "../config";
 import { defaultCodexHome } from "./home";
+import { codexHomeIsAbsent } from "./codex-home-owner";
 
 function resolveCodexHome(): string {
   const raw = process.env.CODEX_HOME?.trim();
@@ -11,6 +12,7 @@ function resolveCodexHome(): string {
     try {
       stat = statSync(path);
     } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT" && codexHomeIsAbsent(path)) return path;
       const message = err instanceof Error ? err.message : String(err);
       throw new Error(`CODEX_HOME points to ${raw}, but that path could not be read: ${message}`);
     }

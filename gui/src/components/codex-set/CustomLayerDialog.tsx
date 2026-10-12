@@ -68,6 +68,7 @@ export default function CustomLayerDialog({
    * mid-edit, which is the whole point of moving between them.
    */
   const draftsRef = useRef(new Map<string, { title: string; body: string }>());
+  const [parkedDirty, setParkedDirty] = useState(false);
   const editingId = layer?.id ?? null;
   const lastIdRef = useRef(editingId);
 
@@ -93,7 +94,15 @@ export default function CustomLayerDialog({
     setTitle(parked?.title ?? layer?.title ?? "");
     setBody(parked?.body ?? layer?.body ?? "");
   }, [editingId, layer]);
-  const [confirmingDiscard, setConfirmingDiscard] = useState(false);
+
+  useEffect(() => {
+    setParkedDirty([...draftsRef.current].some(([id, draft]) => {
+      if (id === editingId) return false;
+      const saved = others.find(candidate => candidate.id === id);
+      return saved === undefined || draft.title !== saved.title || draft.body !== saved.body;
+    }));
+  }, [editingId, others]);
+  const [discardAction, setDiscardAction] = useState<{ kind: "close" } | { kind: "save"; targetId: string | null } | null>(null);
   const titleId = "codex-set-custom-dialog";
 
   // Compare against what the editor OPENED with, seed included. Comparing against
@@ -102,6 +111,8 @@ export default function CustomLayerDialog({
   const initialTitle = layer?.title ?? seed?.title ?? "";
   const initialBody = layer?.body ?? seed?.body ?? "";
   const dirty = title !== initialTitle || body !== initialBody;
+  // A parked draft is still live user work. Exclude the displayed layer because
+  // its inputs supersede the older parked copy when someone navigates back.
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -114,9 +125,9 @@ export default function CustomLayerDialog({
   }, []);
 
   const requestClose = useCallback(() => {
-    if (dirty) { setConfirmingDiscard(true); return; }
+    if (dirty || parkedDirty) { setDiscardAction({ kind: "close" }); return; }
     onClose();
-  }, [dirty, onClose]);
+  }, [dirty, parkedDirty, onClose]);
 
   const handleCancel = useCallback((event: React.SyntheticEvent) => {
     event.preventDefault();
@@ -129,6 +140,17 @@ export default function CustomLayerDialog({
   const normalizationApplied = normalized !== body;
   const findings = useMemo(() => lintPromptLayer(normalized), [normalized]);
   const bodyBytes = utf8Length(normalized);
+  // Declared after the memo: a closure that hands `normalized` to onSave must not
+  // precede it, or the compiler cannot keep the lint memoization.
+  const saveCurrent = (targetId: string | null) => {
+    if (busy || problem !== null || targetId !== editingId) return;
+    onSave({ ...draft, body: normalized });
+  };
+  const requestSave = () => {
+    if (busy || problem !== null) return;
+    if (parkedDirty) { setDiscardAction({ kind: "save", targetId: editingId }); return; }
+    saveCurrent(editingId);
+  };
 
   const problemMessage = !problem ? null
     : problem.kind === "title-empty" ? t("codexSet.custom.titleRequired")
@@ -153,7 +175,7 @@ export default function CustomLayerDialog({
                 type="button"
                 className="btn btn-ghost btn-sm"
                 aria-label={t("codexSet.custom.prevLayer")}
-                disabled={navigation.position <= 1 || busy}
+                disabled={navigation.position <= 1 || busy || discardAction !== null}
                 onClick={navigation.onPrev}
               >
                 &larr;
@@ -165,7 +187,7 @@ export default function CustomLayerDialog({
                 type="button"
                 className="btn btn-ghost btn-sm"
                 aria-label={t("codexSet.custom.nextLayer")}
-                disabled={navigation.position >= navigation.total || busy}
+                disabled={navigation.position >= navigation.total || busy || discardAction !== null}
                 onClick={navigation.onNext}
               >
                 &rarr;
@@ -215,7 +237,7 @@ export default function CustomLayerDialog({
           </ul>
         )}
 
-        {confirmingDiscard ? (
+        {discardAction ? (
           // The prompt text IS the accessible name. role="alertdialog" without one
           // announces an unnamed dialog, so a screen-reader user is asked to confirm
           // something the announcement never states.
@@ -224,12 +246,19 @@ export default function CustomLayerDialog({
             role="alertdialog"
             aria-labelledby={titleId + "-discard"}
           >
-            <span id={titleId + "-discard"} className="muted small">{t("codexSet.custom.discardPrompt")}</span>
-            <button type="button" className="btn btn-sm" onClick={() => setConfirmingDiscard(false)}>
+            <span id={titleId + "-discard"} className="muted small">
+              {t(discardAction.kind === "save" ? "codexSet.custom.discardOthersAndSave" : "codexSet.custom.discardPrompt")}
+            </span>
+            <button type="button" className="btn btn-sm" onClick={() => setDiscardAction(null)}>
               {t("codexSet.custom.keepEditing")}
             </button>
-            <button type="button" className="btn btn-danger btn-sm" onClick={onClose}>
-              {t("common.discard")}
+            <button
+              type="button"
+              className="btn btn-danger btn-sm"
+              disabled={discardAction.kind === "save" && (problem !== null || busy || discardAction.targetId !== editingId)}
+              onClick={() => discardAction.kind === "save" ? saveCurrent(discardAction.targetId) : onClose()}
+            >
+              {t(discardAction.kind === "save" ? "common.save" : "common.discard")}
             </button>
           </div>
         ) : (
@@ -238,7 +267,7 @@ export default function CustomLayerDialog({
               type="button"
               className="btn btn-primary btn-sm"
               disabled={problem !== null || busy}
-              onClick={() => onSave({ ...draft, body: normalized })}
+              onClick={requestSave}
             >
               {t("common.save")}
             </button>

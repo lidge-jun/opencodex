@@ -1,8 +1,10 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import {
   comboStreamPayloadCommitsOutput,
+  deferProtocolSafeResetRecovery,
   preflightComboStreamResponse,
 } from "../../src/server/responses/combo-stream-preflight";
+import { stageCommitment, type RequestFailureStage } from "../../src/lib/request-failure-model";
 import type { RequestLogContext } from "../../src/server/request-log";
 import { MAX_CLIENT_SSE_FRAME_BYTES } from "../../src/server/sse-frame-buffer";
 
@@ -538,7 +540,7 @@ describe("combo stream preflight", () => {
     expect(source.cancelSpy()!.mock.calls).toHaveLength(0);
   });
 
-  test("replayReadErrors accepts a reconstructed prefix and the same reader.read error", async () => {
+  test("replayReadErrors returns a reconstructed prefix, the same read error, and the observed stage", async () => {
     const readError = new Error("preflight-read-reset");
     const source = prefixThenReadError(createdPrefix, readError);
     const result = await preflightComboStreamResponse(
@@ -547,7 +549,14 @@ describe("combo stream preflight", () => {
       undefined,
       { replayReadErrors: true },
     );
-    expect(result.kind).toBe("accepted");
+    expect(result.kind).toBe("read-error");
+    if (result.kind === "read-error") {
+      expect(result.error).toBe(readError);
+      // response.created and nothing else: the failure model puts that in the prelude, and a
+      // prelude is a stage at which the caller has observed nothing.
+      expect(result.stage).toBe("protocol-prelude");
+      expect(stageCommitment(result.stage)).toBe("nothing-observed");
+    }
     expect(source.cancelSpy()).toBeDefined();
     expect(source.cancelSpy()!.mock.calls).toHaveLength(0);
     const reader = result.response.body!.getReader();
@@ -557,6 +566,90 @@ describe("combo stream preflight", () => {
     await expect(reader.read()).rejects.toBe(readError);
     expect(source.cancelSpy()).toBeDefined();
     expect(source.cancelSpy()!.mock.calls).toHaveLength(0);
+  });
+
+  test("a read error before any event is headers-only, and a committed stream never reports one", async () => {
+    const readError = new Error("preflight-read-reset");
+    const bare = await preflightComboStreamResponse(
+      prefixThenReadError(new TextEncoder().encode(""), readError).response,
+      { model: "m1", provider: "a" },
+      undefined,
+      { replayReadErrors: true },
+    );
+    expect(bare.kind).toBe("read-error");
+    if (bare.kind === "read-error") {
+      expect(bare.stage).toBe("headers-only");
+      expect(stageCommitment(bare.stage)).toBe("nothing-observed");
+    }
+
+    // Once output commits the preflight stops buffering and hands the body back, so the read
+    // error that follows happens on the caller's side of the boundary and no stage is ever
+    // reported. That is the stronger statement: a committed stream does not reach the resend
+    // gate at all, rather than reaching it and being refused there.
+    const outputPrefix = new TextEncoder().encode(`data: ${JSON.stringify({
+      type: "response.output_text.delta", delta: "hi",
+    })}\n\n`);
+    const committed = await preflightComboStreamResponse(
+      prefixThenReadError(outputPrefix, readError).response,
+      { model: "m1", provider: "a" },
+      undefined,
+      { replayReadErrors: true },
+    );
+    expect(committed.kind).toBe("accepted");
+    // The prefix is still relayed and the error still reaches whoever reads it.
+    const reader = committed.response.body!.getReader();
+    expect((await reader.read()).value).toEqual(outputPrefix);
+    await expect(reader.read()).rejects.toBe(readError);
+  });
+
+  /**
+   * The boundary that decides resend permission, asserted where it is actually enforced.
+   *
+   * The stage a read error is reported at is only half the guarantee. What matters is that a
+   * stream which committed output never gets a replacement offered at all, and the seam that
+   * decides it is the deferred wrapper, not the preflight. The commitment is read from
+   * `stageCommitment` rather than compared against a written-out stage name, so a stage added
+   * to the model later cannot pass this by being unlisted.
+   */
+  test("a replacement is offered only for a stage the caller observed nothing at", async () => {
+    const readError = new Error("preflight-read-reset");
+    const logCtx: RequestLogContext = { model: "m1", provider: "a" };
+    const seen: RequestFailureStage[] = [];
+    const recover = async (_error: unknown, stage: RequestFailureStage): Promise<Response | null> => {
+      seen.push(stage);
+      return null;
+    };
+
+    const prelude = deferProtocolSafeResetRecovery(
+      prefixThenReadError(createdPrefix, readError).response, logCtx, recover);
+    const preludeReader = prelude.body!.getReader();
+    expect((await preludeReader.read()).value).toEqual(createdPrefix);
+    await expect(preludeReader.read()).rejects.toBe(readError);
+    expect(seen).toHaveLength(1);
+    expect(stageCommitment(seen[0]!)).toBe("nothing-observed");
+
+    seen.length = 0;
+    const outputPrefix = new TextEncoder().encode(`data: ${JSON.stringify({
+      type: "response.output_text.delta", delta: "hi",
+    })}\n\n`);
+    const committed = deferProtocolSafeResetRecovery(
+      prefixThenReadError(outputPrefix, readError).response, logCtx, recover);
+    const committedReader = committed.body!.getReader();
+    expect((await committedReader.read()).value).toEqual(outputPrefix);
+    await expect(committedReader.read()).rejects.toBe(readError);
+    // Never consulted. A turn whose output the caller already saw cannot be replaced, and it
+    // does not get as far as asking.
+    expect(seen).toEqual([]);
+  });
+
+  test("a response.created carrying output is not a prelude", () => {
+    expect(comboStreamPayloadCommitsOutput({
+      type: "response.created", response: { id: "r1", output: [] },
+    })).toBe(false);
+    expect(comboStreamPayloadCommitsOutput({
+      type: "response.created",
+      response: { id: "r1", output: [{ type: "message", role: "assistant" }] },
+    })).toBe(true);
   });
 
 });

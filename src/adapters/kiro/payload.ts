@@ -23,9 +23,8 @@ import {
 import { EMPTY_EXEC_OUTPUT_MESSAGE, annotateCodeModeHostFailure, normalizeEmptyExecToolResultText } from "../exec-tool-result-normalize";
 import { identifyRoutedModel } from "../identity";
 import {
-  countKiroUninlinableImages,
   extractKiroImages,
-  kiroUninlinableImageMarker,
+  kiroImageOmissionMarker,
   type KiroImage,
 } from "../kiro-images";
 import { convertKiroToolContext } from "../kiro-tools";
@@ -105,6 +104,7 @@ export function kiroCompletionTool(): Record<string, unknown> {
   };
 }
 
+/** Build the Kiro wire request, retaining markers for images that cannot be inlined. */
 export function buildKiroPayload(
   parsed: OcxParsedRequest,
   profileArn: string | undefined,
@@ -245,9 +245,9 @@ export function buildKiroPayload(
     if (msg.role === "user" || msg.role === "developer") {
       const content = (msg as { content: string | OcxContentPart[] }).content;
       const images = extractKiroImages(content);
-      // Kiro inlines base64 bytes only. A remote reference used to vanish with neither
-      // bytes nor a trace; attach a bounded, URL-free marker so the loss is visible.
-      const marker = kiroUninlinableImageMarker(countKiroUninlinableImages(content));
+      // Kiro inlines base64 bytes only. Neither remote references nor malformed
+      // inline data URLs can be forwarded; leave a bounded, URL-free marker.
+      const marker = kiroImageOmissionMarker(content);
       const text = userContentText(content);
       pushUser(marker ? (text ? text + "\n" + marker : marker) : text, images);
     } else if (msg.role === "assistant") {
@@ -295,14 +295,14 @@ export function buildKiroPayload(
       const annotatedExecText = normalizedExecText === undefined && codeModeExecName !== undefined
         ? annotateCodeModeHostFailure(text, execOptions)
         : undefined;
-      const uninlinableMarker = kiroUninlinableImageMarker(countKiroUninlinableImages(tr.content));
+      const omittedImageMarker = kiroImageOmissionMarker(tr.content);
       // Appended to the SELECTED result text, not to `text`: when an exec normalization
       // fires, resultText below takes normalizedExecText/annotatedExecText instead, and
       // a marker attached to `text` would be dropped — reinstating the silent loss this
       // exists to remove.
       const chosenText = normalizedExecText ?? annotatedExecText ?? (text.trim() ? text : KIRO_EMPTY_TOOL_RESULT_MESSAGE);
-      const resultText = uninlinableMarker
-        ? (chosenText ? chosenText + "\n" + uninlinableMarker : uninlinableMarker)
+      const resultText = omittedImageMarker
+        ? (chosenText ? chosenText + "\n" + omittedImageMarker : omittedImageMarker)
         : chosenText;
       const images = extractKiroImages(tr.content);
       const toolUseId = normalizeToolId(tr.toolCallId);
@@ -315,8 +315,8 @@ export function buildKiroPayload(
         ? (annotatedExecText ?? text) : undefined;
       // The grouping path rebuilds a collapsed turn's content from these texts, so the
       // marker has to ride along here too or an adjacent-result turn loses it.
-      const rawGroupText = uninlinableMarker
-        ? (rawGroupBase ? rawGroupBase + "\n" + uninlinableMarker : uninlinableMarker)
+      const rawGroupText = omittedImageMarker
+        ? (rawGroupBase ? rawGroupBase + "\n" + omittedImageMarker : omittedImageMarker)
         : rawGroupBase;
       const last = turns.at(-1);
       if (

@@ -5,7 +5,7 @@ This file applies to `docs-site/` and inherits the repository-wide rules in `/AG
 ## Source-of-truth rules
 
 - `docs-site/` is the public user-documentation source.
-- Document current shipped or intentionally pending behavior. Do not copy claims from historical `docs/` or `devlog/` material without verifying them against current code and configuration.
+- Document current shipped or intentionally pending behavior. Do not copy claims from `devlog/` notes or older revisions in git history without verifying them against current code and configuration.
 - English documentation is the canonical source. Translated content must not contradict it.
 - Keep commands, paths, configuration keys, defaults, branch names, and URLs synchronized with the repository.
 - Do not edit generated build output.

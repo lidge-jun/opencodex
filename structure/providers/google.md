@@ -47,6 +47,21 @@ mismatched, and standalone results become marked text instead of unpaired functi
 Representable data-URL images remain sibling `inline_data` parts in either case.
 
 > Decision record: [ADR-0058](../decisions/ADR-0058-google-tool-result-adjacency-repair.md)
+
+## Google opening functionCall repair
+
+A `functionCall` turn may not open `contents`: the upstream requires a call turn to follow a
+user or function-response turn and rejects an opening call turn with
+"function call turn comes immediately after a user turn or after a function response turn"
+(HTTP 400). Client-side context compaction can truncate a long history so it opens on an
+assistant tool call. `messagesToGeminiFormat` prepends a user `"(continue)"` nudge when the
+first compiled turn is `model` carrying a `functionCall` — the same repair Kiro applies to
+assistant-head turns in `src/adapters/kiro/payload.ts`. A model head carrying only text is left
+alone: no upstream rule against it is demonstrated, so repairing it would inject a turn into
+valid requests.
+
+> Decision record: [ADR-5008](../decisions/ADR-5008-google-opening-functioncall-repair.md)
+
 ## Structured output on generateContent
 
 A caller's Responses `text.format` reaches the Gemini wire as
@@ -72,6 +87,52 @@ a claim about what the upstream can do); an image-capable model, whose `response
 configuration contradicts JSON-constrained text; and a `json_schema` format carrying
 no schema, which would otherwise downgrade to bare JSON mode. An image-capable model
 with no structured-output request keeps its existing `responseModalities` behavior.
+
+## Google tool-schema loss reporting
+
+`src/adapters/google-tool-schema.ts` compiles tool declarations against an explicit `ai-studio`,
+`vertex`, or `cloud-code-assist` endpoint profile. All three profiles currently use the same
+conservative documented subset. Compilation returns the compatible parameters plus a versioned
+loss report with exactly six fields: `version`, `endpointClass`, `lossy`, `truncated`,
+`uncertainComparisons`, and `categories`. Category values and the content-free uncertainty count
+saturate at 255; saturation beyond either cap sets `truncated`. Bounded structural comparisons that
+exhaust their 24-level or 1,024-node allowance increment `uncertainComparisons` rather than
+`lossy` or a proven-loss category. The report never retains tool or property names, paths, descriptions,
+schema or enum values, references, hashes, request ids, project ids, or account ids.
+Every sanitizer branch that widens or drops an accepted-value constraint has a closed category,
+including type unions and unsupported types, conditional and tuple constraints, reference-overlay
+replacement, and root object coercion. Lossless normalization does not set `lossy`: accepted type
+case folding, duplicate enum/required removal, nullable-union collapse, and string-const conversion
+preserve the accepted value set; an array left without `items` is emitted with `items: { type: "string" }`
+because Gemini rejects an array declaration without an item type; that narrows an unconstrained item
+rather than widening a constraint, so it does not set `lossy` either. The synthesized item is itself
+part of the emitted tree and charges the 1,024-node allowance, so an array the budget can no longer
+complete is omitted — along with any parent that lost its own `items` to the same rule — and records
+`node-budget-widened` instead of emitting a declaration Gemini would reject. Annotation-only fields such as title, default, examples, comments,
+deprecated, read-only/write-only, external documentation and examples are omitted without loss.
+Local-reference siblings use 2020-12-style conjunctive semantics for loss accounting, while the
+wire transform retains its implemented overlay-wins merge; enum reports compare that intersection
+with the post-filter set actually emitted.
+
+This layer observes loss and does not reject it. The emitted request body remains the same as
+before reporting. The existing limits remain 24 schema levels, 16 local-reference dereferences,
+and 1,024 visited nodes; reporting stops with those limits and does not inspect omitted content.
+`src/adapters/google-wire-compiler.ts` aggregates reports across declarations, and
+`src/adapters/google.ts` emits a `google-tool-schema-loss` provider diagnostic only when provider
+debug is enabled. `generationConfig.responseMimeType` and `generationConfig.responseJsonSchema`
+are output-schema fields and never enter tool-schema sanitation or loss accounting.
+
+`googleToolSchemaPolicy` is provider-scoped. Omission and `compatible` retain the report-only body
+and existing repair replay. `reject-lossy` refuses an initially lossy or comparison-indeterminate
+compilation before `buildRequest` returns, so no physical send exists. Vertex and Cloud Code Assist carry the same
+resolved policy into their 400 compatibility repair: indexed repair reports one opened declaration,
+unindexed repair reports every declaration it would open, and strict policy returns the original
+400 without a changed repair send. The `google-tool-schema-repair` diagnostic inherits the complete
+bounded report shape — version, endpoint class, `lossy`, `uncertainComparisons`, truncation flag,
+and saturating fixed category counts — and adds only the `repair` phase, the declaration count, and whether the changed
+send was allowed.
+AI Studio direct mode continues to disable 400 repair entirely. Output schemas remain outside both
+initial and repair policy.
 
 ## Google wire-shape projection
 
@@ -109,3 +170,29 @@ per-turn ordinal lists; the serialized ceiling, held at half `MAX_DEBUG_LINE_BYT
 turn detail from the tail until the summary fits. Without the second, a worst case inside the
 first serializes past the debug buffer's per-line cap, and the buffer truncates at a byte
 boundary: the consumer gets unparseable JSON whose retained prefix still reads `truncated: false`.
+
+## Video part boundary and agentic media processing
+
+The inbound contract is the OpenAI-compatible content part
+`{ type: "video_url", video_url: { url, processing? } }`, normalized by both the Chat and
+Responses ingress into an internal `{ type: "video", videoUrl, processing? }` part. `processing`
+is caller-supplied and optional; nothing infers it.
+
+The outbound contract is a GenerateContent `contents[].parts[]` entry. `media_processing` is a
+**Part** field, not a request field and not the Interactions API's `processing`, so it is emitted
+beside `inline_data` and beside `file_data` alike — attaching it to only the fetched-URI branch
+would silently drop the mode for `data:` URLs, which is the shape the first revision of #3271 had.
+`geminiMediaProcessing` upper-cases the caller's value and returns `undefined` when absent, so a
+request that did not ask for a mode gains no field.
+
+`geminiFetchableVideoUri` is the trust boundary: it decides which URLs opencodex will ask Gemini
+to **fetch on its own behalf**. It parses the URL and requires HTTPS, then admits exactly two
+families — the YouTube watch hosts (`youtube.com`, `www.`/`m.`/`music.` variants, `youtu.be`, and
+the `-nocookie` forms) and `generativelanguage.googleapis.com` with a path matching
+`/files/<id>`. Matching is on the parsed host and pathname, never a substring of the URL, so a
+look-alike host cannot become a `file_data` reference. Everything else keeps the
+`[video: <url>]` text marker: without a media type there is nothing correct to send, and a
+fetchable reference the proxy cannot vouch for is the SSRF-shaped half of this feature.
+
+`file_data` carries `file_uri` only. An earlier revision guessed a `mime_type` for it; the Files
+API already knows the type of what it stores, and a wrong guess is worse than no guess.

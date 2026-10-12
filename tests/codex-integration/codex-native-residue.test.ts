@@ -999,3 +999,51 @@ test("a missing coordinator with only the generated profile refuses initializati
     message: "A missing coordinator row cannot be initialized while native Codex routing residue exists.",
   });
 });
+
+// Performance regression scenarios: small native history remains clean; routed
+// metadata remains residue; malformed history stays indeterminate; the existing
+// per-file limit stays intact; many individually valid files cannot cause an
+// unbounded aggregate scan. The original code fails the last scenario.
+test("history inspection refuses aggregate rollout work above 64 MiB", () => {
+  createHistoryDatabase("openai");
+  const event = JSON.stringify({ type: "event_msg", payload: { message: "x".repeat(1000) } }) + "\n";
+  const body = event.repeat(Math.ceil(34 * 1024 * 1024 / event.length));
+  writeFileSync(pathInCodexHome("rollout.jsonl"), sessionMeta("thread-1", "openai") + "\n" + body);
+  const second = pathInCodexHome("rollout-2.jsonl");
+  writeFileSync(second, sessionMeta("thread-2", "openai") + "\n" + body);
+  const db = new Database(pathInCodexHome("state_5.sqlite"));
+  db.query("INSERT INTO threads VALUES (?, ?, 'openai', 'cli', 'native history', 1)").run("thread-2", second);
+  db.close();
+  const result = classifyNativeRoutedResidue();
+  expect(result.kind).toBe("indeterminate");
+  if (result.kind !== "indeterminate") throw new Error("aggregate work must not be classified as clean");
+  expect(result.surface).toBe("history");
+  expect(result.reason).toContain("aggregate inspection limit");
+  // Classification is read-only: neither file nor the native provider is changed.
+  expect(lstatSync(second).size).toBe(Buffer.byteLength(sessionMeta("thread-2", "openai") + "\n" + body));
+  const verify = new Database(pathInCodexHome("state_5.sqlite"), { readonly: true });
+  expect(verify.query("SELECT count(*) AS n FROM threads WHERE model_provider = 'openai'").get()).toEqual({ n: 2 });
+  verify.close();
+});
+
+test("rollout budget resets for each classification", () => {
+  createHistoryDatabase("openai");
+  const line = JSON.stringify({ type: "event_msg", payload: { message: "x".repeat(1000) } }) + "\n";
+  writeFileSync(pathInCodexHome("rollout.jsonl"), sessionMeta("thread-1", "openai") + "\n" + line.repeat(Math.ceil(34 * 1024 * 1024 / line.length)));
+  expect(classifyNativeRoutedResidue()).toEqual({ kind: "clean" });
+  expect(classifyNativeRoutedResidue()).toEqual({ kind: "clean" });
+});
+
+test("history and backup rollout scans share the aggregate budget", () => {
+  createHistoryDatabase("openai");
+  const line = JSON.stringify({ type: "event_msg", payload: { message: "x".repeat(1000) } }) + "\n";
+  writeFileSync(pathInCodexHome("rollout.jsonl"), sessionMeta("thread-1", "openai") + "\n" + line.repeat(Math.ceil(34 * 1024 * 1024 / line.length)));
+  writeFileSync(historyBackupPath(), JSON.stringify(validHistoryBackupFixture(
+    canonicalPathInCodexHome("state_5.sqlite"), canonicalPathInCodexHome("rollout.jsonl"),
+  )));
+  const result = classifyNativeRoutedResidue();
+  expect(result.kind).toBe("indeterminate");
+  if (result.kind !== "indeterminate") throw new Error("aggregate work must fail closed");
+  expect(result.surface).toBe("history-backup");
+  expect(result.reason).toContain("aggregate inspection limit");
+});

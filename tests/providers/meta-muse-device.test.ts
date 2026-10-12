@@ -27,6 +27,7 @@ const KEY = `LLM|${"1".repeat(16)}|${"c".repeat(27)}`;
 const ACCOUNT_TOKEN = "meta-account-" + "z".repeat(48);
 /** If this string ever reaches an error message, a response body leaked into one. */
 const BODY_CANARY = "canary-body-must-never-appear-in-an-error";
+const OVERSIZED_JSON = JSON.stringify({ value: "x".repeat(65_536) });
 
 interface Reply { status?: number; body?: unknown; text?: string; headers?: Record<string, string> }
 interface Scenario {
@@ -132,6 +133,13 @@ describe("muse device authorization", () => {
     expect(error.message).toContain("500");
     expect(error.message).not.toContain(BODY_CANARY);
   });
+
+  test("rejects an oversized streamed authorization response", async () => {
+    const h = harness({ auth: { text: OVERSIZED_JSON } });
+    const error = await caught(() => requestMuseDeviceAuthorization(h.deps));
+    expect(error.kind).toBe("device-authorization");
+    expect(error.message).toContain("65536-byte limit");
+  });
 });
 
 describe("muse device poll", () => {
@@ -217,6 +225,17 @@ describe("muse device poll", () => {
     expect(error.kind).toBe("device-token");
   });
 
+  test("rejects an oversized token response instead of polling again", async () => {
+    const h = harness({ tokens: [{ text: OVERSIZED_JSON }] });
+    const auth = await requestMuseDeviceAuthorization(h.deps);
+    const error = await caught(() => pollMuseDeviceToken(auth, h.deps));
+    expect(error.kind).toBe("device-token");
+    // A 200 without access_token also ends as device-token, so kind alone cannot tell
+    // the limit fired; the message names the bound.
+    expect(error.message).toContain("65536-byte limit");
+    expect(h.calls.token).toBe(1);
+  });
+
   // W4 and W3 together: the last seconds of a grant must still be polled, and a token
   // the server issued in that window must not be thrown away by a local clock.
   test("polls once more inside the final seconds and accepts a late token", async () => {
@@ -254,6 +273,23 @@ describe("muse device poll", () => {
 });
 
 describe("muse key mint", () => {
+  test("cancels a rate-limited mint body without reading or reflecting it", async () => {
+    let cancelled = false;
+    let reads = 0;
+    const fetchImpl = (async () => new Response(new ReadableStream({
+      pull(controller) { reads++; controller.enqueue(new TextEncoder().encode(BODY_CANARY)); },
+      cancel() { cancelled = true; },
+    }, { highWaterMark: 0 }), { status: 429, headers: { "retry-after": "30" } })) as typeof fetch;
+    const error = await caught(() => mintMuseApiKey(ACCOUNT_TOKEN, {}, { fetchImpl }));
+    expect(error.kind).toBe("mint-rate-limited");
+    expect(error.status).toBe(429);
+    expect(error.retryAfterMs).toBe(30_000);
+    expect(error.message).toContain("30s");
+    expect(error.message).not.toContain(BODY_CANARY);
+    expect(reads).toBe(0);
+    expect(cancelled).toBe(true);
+  });
+
   test("asks Meta to onboard during a login and sends the account bearer", async () => {
     const h = harness();
     await mintMuseApiKey(ACCOUNT_TOKEN, { onboard: true }, h.deps);
@@ -282,6 +318,18 @@ describe("muse key mint", () => {
     expect(error.kind).toBe("mint-http");
     expect(error.message).toContain("502");
     expect(error.message).not.toContain(BODY_CANARY);
+  });
+
+  test("rejects an oversized declared mint response before consuming it", async () => {
+    let cancelled = false;
+    const fetchImpl = (async () => new Response(new ReadableStream({
+      pull() {},
+      cancel() { cancelled = true; },
+    }), { headers: { "content-length": "65537" } })) as typeof fetch;
+    const error = await caught(() => mintMuseApiKey(ACCOUNT_TOKEN, {}, { fetchImpl }));
+    expect(error.kind).toBe("mint-invalid");
+    expect(error.message).toContain("65536-byte limit");
+    expect(cancelled).toBeTrue();
   });
 
   test("lowercases the email and keeps the usage object", async () => {

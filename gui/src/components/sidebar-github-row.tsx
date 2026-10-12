@@ -1,5 +1,5 @@
 /**
- * Sidebar footer row: the GitHub link plus two circular satellite buttons.
+ * Sidebar footer row: the GitHub link plus circular satellite buttons.
  *
  * Star: reflects the real state from `gh` rather than always inviting a click.
  * Already starred renders a filled, non-interactive marker; an unauthenticated
@@ -10,13 +10,14 @@
  * Update: always present, so "am I current?" is answerable at any time. It reads the
  * cached badge endpoint (no npm spawn per poll) purely to decide emphasis — an
  * available update renders the accent state plus a dot, otherwise it is a plain orb.
- * Either way a click runs a fresh check and opens the dashboard update dialog, which
- * already owns the install/cancel decision.
+ * Either way a click opens the desktop update page in the app shell, or runs a fresh
+ * package check in a browser dashboard where the existing dialog owns installation.
  */
 import { useState } from "react";
 import { useKeyedClientResource } from "../client-resource";
-import { IconDownload, IconGithub, IconStar } from "../icons";
+import { IconDownload, IconGithub, IconStar, IconTerminal } from "../icons";
 import { useT } from "../i18n/shared";
+import { isDesktopShell, updateBadgeUrl } from "../lib/desktop-shell";
 
 type StarState = "starred" | "not-starred" | "unauthenticated";
 
@@ -28,6 +29,7 @@ interface StarStatus {
 interface UpdateBadge {
   updateAvailable?: boolean;
   latestVersion?: string | null;
+  installer?: "bun" | "mise" | "npm" | "pnpm" | "source" | "desktop";
   /** True when no cached registry answer exists, so "no update" is unproven. */
   unknown?: boolean;
 }
@@ -45,10 +47,13 @@ async function readJson<T>(url: string, signal: AbortSignal): Promise<T | null> 
 export function SidebarGithubRow({
   apiBase,
   onOpenUpdate,
+  onOpenTerminalCommand,
 }: {
   apiBase: string;
-  /** Navigates to the dashboard maintenance surface where the update dialog lives. */
+  /** Opens desktop updates in the app shell, or the package update surface in a browser. */
   onOpenUpdate: () => void;
+  /** Opens the local terminal-command settings in the desktop app shell. */
+  onOpenTerminalCommand: () => void;
 }) {
   const t = useT();
   const [starring, setStarring] = useState(false);
@@ -66,11 +71,12 @@ export function SidebarGithubRow({
     (signal) => readJson<StarStatus>(`${apiBase}/api/github/star`, signal),
     { pollMs: STAR_POLL_MS },
   );
+  const badgeUrl = updateBadgeUrl(apiBase);
   const badgePoll = useKeyedClientResource(
-    `sidebar-update-badge:${apiBase}`,
-    [apiBase],
-    (signal) => readJson<UpdateBadge>(`${apiBase}/api/update/badge`, signal),
-    { pollMs: BADGE_POLL_MS },
+    "sidebar-update-badge:" + badgeUrl,
+    [badgeUrl],
+    (signal) => readJson<UpdateBadge>(badgeUrl, signal),
+    { pollMs: isDesktopShell() ? 60_000 : BADGE_POLL_MS },
   );
 
   const polledState = starPoll.data?.state ?? null;
@@ -125,7 +131,7 @@ export function SidebarGithubRow({
   // action, so the button never reads as "update available" when nothing is waiting.
   const updateLabel = updateAvailable && latestVersion
     ? t("sidebar.updateAvailable", { version: latestVersion })
-    : t("sidebar.checkUpdate");
+    : isDesktopShell() ? t("sidebar.desktopUpdate") : t("sidebar.checkUpdate");
 
   return (
     <div className="sidebar-github-row">
@@ -154,6 +160,17 @@ export function SidebarGithubRow({
           <IconDownload aria-hidden="true" />
           {updateAvailable && <span className="sidebar-orb-dot" aria-hidden="true" />}
         </button>
+        {isDesktopShell() && (
+          <button
+            type="button"
+            className="sidebar-orb"
+            onClick={onOpenTerminalCommand}
+            aria-label={t("sidebar.terminalCommand")}
+            title={t("sidebar.terminalCommand")}
+          >
+            <IconTerminal aria-hidden="true" />
+          </button>
+        )}
       </div>
     </div>
   );

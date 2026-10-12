@@ -16,6 +16,8 @@ such request runs at a time, including when multiple listeners share a process. 
 reserve the full allowance; neither a small Content-Length nor compression bypasses admission.
 The reservation remains until the response stream ends, fails, or finishes cancellation, rather
 than ending as soon as the request JSON has been parsed.
+A client disconnect releases the reservation after producer cancellation settles; limits above
+256 MiB admit one covered request at a time regardless of `appOwnedMemoryBudgetMb`.
 
 The covered POST endpoints are `/v1/responses`, `/v1/responses/compact`,
 `/v1/chat/completions`, `/v1/messages`, `/v1/messages/count_tokens`,
@@ -36,8 +38,8 @@ receive an Anthropic-shaped error with type `overloaded_error`; OpenAI-compatibl
 backoff. Increasing the body limit further does not resolve a busy allowance.
 
 A body larger than its per-request limit still follows the existing HTTP **413** handling.
-A declared oversize keeps that path instead of becoming a busy refusal. A disconnect retains the
-existing cancellation behavior. Authentication and origin checks run before this concurrency gate.
+A declared oversize keeps that path instead of becoming a busy refusal.
+Authentication and origin checks run before this concurrency gate.
 
 ## What the budget measures
 

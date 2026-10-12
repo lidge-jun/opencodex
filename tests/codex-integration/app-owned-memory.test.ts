@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import {
+  admitAppOwnedPinnedBytes,
   appOwnedBytesSnapshot,
   APP_OWNED_WORST_CASE_PINNED_BYTES,
   configureAppOwnedMemoryBudget,
@@ -15,6 +16,7 @@ import { MAX_STORED_RESPONSE_BYTES } from "../../src/responses/state";
 import { IMAGE_NORMALIZE_CACHE_MAX_BYTES } from "../../src/adapters/anthropic-image-normalize";
 import { VISION_DESCRIPTION_CACHE_MAX_BYTES } from "../../src/vision";
 import { ANTIGRAVITY_REPLAY_MAX_TOTAL_BYTES } from "../../src/adapters/google-antigravity-replay";
+import { MAX_NATIVE_CONTROL_REPLAY_TOTAL_BYTES } from "../../src/server/responses/native-steering-replay";
 import {
   clearRequestLogsForTests,
   evictOldestRequestLogForBudget,
@@ -85,7 +87,8 @@ describe("app-owned retained memory", () => {
       + MAX_STORED_RESPONSE_BYTES
       + IMAGE_NORMALIZE_CACHE_MAX_BYTES
       + VISION_DESCRIPTION_CACHE_MAX_BYTES
-      + ANTIGRAVITY_REPLAY_MAX_TOTAL_BYTES;
+      + ANTIGRAVITY_REPLAY_MAX_TOTAL_BYTES
+      + MAX_NATIVE_CONTROL_REPLAY_TOTAL_BYTES;
     expect(boundedStoreBytes).toBeLessThan(APP_OWNED_WORST_CASE_PINNED_BYTES);
   });
 
@@ -348,6 +351,61 @@ describe("app-owned retained memory", () => {
     const snapshot = enforceAppOwnedMemoryBudget();
     expect(snapshot.retainedBytes).toBe(0);
     expect(snapshot.enforcement.bytesReleased).toBe(18);
+  });
+
+  test("pinned admission demotes reclaimable owners instead of refusing", () => {
+    const order: string[] = [];
+    registerRows("logs", "logs", [{ bytes: 4, at: 1 }], order);
+    configureAppOwnedMemoryBudget(6);
+
+    expect(admitAppOwnedPinnedBytes(4)).toBe(true);
+    expect(order).toEqual(["logs"]);
+    expect(appOwnedBytesSnapshot().retainedBytes).toBe(0);
+  });
+
+  test("pinned admission refuses only when the projected total still exceeds budget", () => {
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    const order: string[] = [];
+    registerRows("pinned", "blobs", [{ bytes: 6, at: 1, pinned: true }], order);
+    configureAppOwnedMemoryBudget(4);
+
+    expect(admitAppOwnedPinnedBytes(2)).toBe(false);
+    expect(order).toEqual([]);
+    expect(appOwnedBytesSnapshot().retainedBytes).toBe(6);
+    warning.mockRestore();
+  });
+
+  test("pinned admission inside an enforcing callback never evicts and answers honestly", () => {
+    const order: string[] = [];
+    let nested = -1;
+    registerRows("only", "logs", [{ bytes: 4, at: 1 }], order);
+    let probeBytes = 8;
+    registerRetainedStore({
+      id: "probe",
+      category: "caches",
+      snapshot: () => ({
+        count: probeBytes > 0 ? 1 : 0,
+        bytes: probeBytes,
+        evictableBytes: probeBytes,
+        pinnedBytes: 0,
+        oldestAt: probeBytes > 0 ? 0 : null,
+      }),
+      evictOldest: () => {
+        nested = admitAppOwnedPinnedBytes(1) ? 1 : 0;
+        order.push("probe");
+        const released = probeBytes;
+        probeBytes = 0;
+        return released;
+      },
+    });
+    configureAppOwnedMemoryBudget(4);
+
+    const snapshot = enforceAppOwnedMemoryBudget();
+
+    // The reentrant call skipped the eviction loop and measured the real retained total.
+    expect(nested).toBe(0);
+    expect(order).toEqual(["only", "probe"]);
+    expect(snapshot.retainedBytes).toBe(0);
   });
 
   test("translator and serialized-tail observations never invoke budget eviction", () => {

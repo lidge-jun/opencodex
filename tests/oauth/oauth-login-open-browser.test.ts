@@ -25,15 +25,21 @@ function baseConfig(): OcxConfig {
   return { port: 0, hostname: "127.0.0.1", defaultProvider: "kimi", providers: {} } as OcxConfig;
 }
 
-async function startLogin(flow: { url: string; instructions?: string; deviceCode?: string }): Promise<{
+async function startLogin(
+  flow: { url: string; instructions?: string; deviceCode?: string },
+  launch: "started" | "failed" = "started",
+): Promise<{
   opened: string[];
-  body: { url?: string; deviceCode?: string; instructions?: string };
+  body: { url?: string; deviceCode?: string; instructions?: string; browserLaunch?: string };
 }> {
   const oauth = await import("../../src/oauth");
   const openUrlMod = await import("../../src/lib/open-url");
   const opened: string[] = [];
   const startSpy = spyOn(oauth, "startLoginFlow").mockResolvedValue(flow);
-  const openSpy = spyOn(openUrlMod, "openUrl").mockImplementation((url: string) => { opened.push(url); });
+  const openSpy = spyOn(openUrlMod, "openUrl").mockImplementation(async (url: string) => {
+    opened.push(url);
+    return launch === "started" ? { status: "started" as const } : { status: "failed" as const, reason: "spawn-error" as const };
+  });
   try {
     const req = loginRequest("kimi");
     const response = await handleOauthAccountRoutes({
@@ -44,7 +50,7 @@ async function startLogin(flow: { url: string; instructions?: string; deviceCode
       convergeCodexCatalog: async () => ({ status: "failed", reason: "disk" }),
       syncClaudeAgentDefsBestEffort: async () => {},
     });
-    return { opened, body: await response!.json() as { url?: string; deviceCode?: string; instructions?: string } };
+    return { opened, body: await response!.json() as { url?: string; deviceCode?: string; instructions?: string; browserLaunch?: string } };
   } finally {
     startSpy.mockRestore();
     openSpy.mockRestore();
@@ -64,6 +70,7 @@ describe("POST /api/oauth/login browser opening", () => {
     // The user keeps every way to finish the login by hand.
     expect(body.url).toBe("https://auth.kimi.com/device?user_code=WDJB-MJHT");
     expect(body.deviceCode).toBe("WDJB-MJHT");
+    expect(body.browserLaunch).toBe("skipped");
   });
 
   test("a browser redirect flow is still opened, exactly as before", async () => {
@@ -71,5 +78,15 @@ describe("POST /api/oauth/login browser opening", () => {
 
     expect(opened).toEqual(["https://accounts.example.test/authorize?code=1"]);
     expect(body.deviceCode).toBeUndefined();
+    expect(body.browserLaunch).toBe("started");
+  });
+
+  test("a launcher that could not open anything is reported, and the login continues", async () => {
+    const { opened, body } = await startLogin({ url: "https://accounts.example.test/authorize?code=2" }, "failed");
+
+    expect(opened).toEqual(["https://accounts.example.test/authorize?code=2"]);
+    // The login is not failed for it: the URL is still returned for the dashboard to offer.
+    expect(body.url).toBe("https://accounts.example.test/authorize?code=2");
+    expect(body.browserLaunch).toBe("failed");
   });
 });

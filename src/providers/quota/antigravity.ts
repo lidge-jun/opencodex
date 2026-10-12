@@ -253,16 +253,21 @@ function antigravityUnavailableFailure(
 }
 
 export async function probeAntigravityUsageQuota(accessToken: string, projectId: string): Promise<AntigravityQuotaProbeResult> {
-  const fetchQuota = (url: string) => providerOutboundPost("google-antigravity", { baseUrl: ANTIGRAVITY_ACCOUNT_QUOTA_BASE }, url, {
+  const fetchQuota = (url: string, userAgent = antigravityUserAgent()) => providerOutboundPost("google-antigravity", { baseUrl: ANTIGRAVITY_ACCOUNT_QUOTA_BASE }, url, {
     headers: {
       Accept: "application/json", "Content-Type": "application/json",
-      "User-Agent": antigravityUserAgent(), Authorization: `Bearer ${accessToken}`,
+      "User-Agent": userAgent, Authorization: `Bearer ${accessToken}`,
     },
     body: JSON.stringify({ project: projectId }), signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   }, antigravityOutboundDependencies);
   let summaryFailure: QuotaFailureCode | undefined;
   try {
-    const response = await fetchQuota(ANTIGRAVITY_QUOTA_SUMMARY_URL);
+    let response = await fetchQuota(ANTIGRAVITY_QUOTA_SUMMARY_URL);
+    if (response.status === 403) {
+      // Some valid accounts reject the IDE fingerprint only for quota accounting.
+      try { await response.body?.cancel(); } catch { /* Best-effort release before retry. */ }
+      response = await fetchQuota(ANTIGRAVITY_QUOTA_SUMMARY_URL, "antigravity/1.0");
+    }
     if (await providerRedirectError(response, ANTIGRAVITY_QUOTA_SUMMARY_URL)) return unavailableAntigravityQuota("redirect_blocked");
     if (response.status === 401 || response.status === 403) return unavailableAntigravityQuota("access_denied");
     if (response.ok) {

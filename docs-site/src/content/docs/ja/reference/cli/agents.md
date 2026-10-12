@@ -13,7 +13,16 @@ description: マルチエージェント、コンボ、可観測性、アクセ�
 
 ```bash
 ocx agent subagents set ark/model-a,openai/gpt-5.5
+ocx agent sidecar web --enabled off
 ```
+
+`--enabled off` はダッシュボードの **オフ (Off)** 行と同じスイッチです。OpenCodex はサイドカーを
+実行しなくなり、Codex 統合は `~/.codex/config.toml` に
+`web_search = "disabled"` を書き込むため、MCP 検索サーバーだけを検索経路にできます。
+`--enabled on` はその行を再び削除します。保存でスイッチが実際に切り替わったとき、コマンドは
+Codex 側の書き込み（`--json` では `codexWebSearch`、それ以外では末尾の
+`Codex config:` 行）を報告し、書き込みできなかった場合は `ocx sync` を案内します。
+このフラグは `vision` でも機能します。
 
 ### `ocx v2 <status|on|off|mode <v1|default|v2>|threads <n>>`
 
@@ -88,11 +97,15 @@ ocx debug usage logs [-f|--follow]
 
 ### `ocx access <key|endpoints|models|test> ...`
 
-OpenCodex アドミッション API キーを管理し、外部エンドポイントとモデルを検査します。 `ocx api-key <list|create|remove> ...` は `ocx access key` の別名です。
+OpenCodex へのアクセス用 API キーの一覧、外部エンドポイント、モデルを確認します。`ocx api-key` は `ocx access key` コマンド群の別名です。
+
+キーの作成とローテーションの開始では、通常のテキスト出力でも JSON 出力でも、一度だけ表示される平文の認証情報が返されます。エージェントはこれらの手順を実行せず、エージェントセッション外で人が直接操作するターミナルに委ねてください。キーそのものをチャットで求めず、設定と接続の確認結果、および秘密情報ではないキー ID とローテーション ID だけを受け取ってください。
 
 ```bash
-ocx access key create deployment
+ocx access key list --json
 ```
+
+新しいキーの設定と接続の確認は、古いキーの失効承認ではありません。ローテーションの確定や古いキーの削除には、そのキーを失効させるための明示的な承認が別途必要です。承認された操作の後は一覧を再確認してください。API の直接呼び出しでこの手順を回避しないでください。
 
 ## クライアントの統合
 
@@ -127,7 +140,7 @@ Grok Build モデル フェンスを管理および適用します。
 
 ## クライアント設定のエクスポート
 
-### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside|raycast|omo>`
+### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside|raycast|omo|cline|kilo|commandcode|droid>`
 
 実行中のプロキシに接続するクライアント設定を出力します。このコマンドは、ベース URL、モデル一覧、およびクライアントに応じた認証情報参照または `opencodex-loopback` プレースホルダーを含む `opencodex` プロバイダーブロックを、選択したクライアントのネイティブ形式でシリアル化します。
 
@@ -135,7 +148,7 @@ Grok Build モデル フェンスを管理および適用します。
 
 |旗 |アクション |
 | --- | --- |
-| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae\|dsh\|mcode\|zcode\|prime\|aside\|raycast\|omo>` |必須。クライアントの設定形式を選択します。 |
+| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae\|dsh\|mcode\|zcode\|prime\|aside\|raycast\|omo\|cline\|kilo\|commandcode\|droid>` |必須。クライアントの設定形式を選択します。 |
 | `--json` |構成 JSON のみを標準出力に出力するため、リダイレクトはバイト正確な出力をキャプチャします。 `--out` 書き込みメモを含むすべての診断は stderr に送られます。 |
 | `--out <path>` |設定を `<path>` に書き込みます。既存のファイルの置き換えを拒否します。 |
 | `--force` | `--out` が既存のファイルを置き換えることを許可します。 |
@@ -160,11 +173,16 @@ ocx export --client opencode --out ~/opencodex-opencode.json
 | `gajae` | `~/.gjc/agent/models.yml` | `gajae-models.yaml` | 秘密ではないループバック用プレースホルダー |
 | `dsh` | `$DSH_HOME/settings.yaml`（既定 `~/.dsh/settings.yaml`） | `settings.yaml` | なし — 秘密ではないループバック bearer プレースホルダー |
 | `mcode` | `~/.minimax/config.yaml` (`MINIMAX_DATA_DIR`、次に旧 `MAVIS_DATA_DIR` が設定時に優先。相対値は拒否されます) | `mcode-config.yaml` | なし — loopback placeholder |
-| `zcode` | `~/.zcode/v2/config.json` (`ZCODE_DATA_DIR` が設定時に優先。相対値は拒否されます) | `config.json` | なし — loopback placeholder |
+| `zcode` | `~/.zcode/v2/config.json` (既定ホームの `setting.json` にある `dataBaseDir` がルートを移動。`ZCODE_DATA_DIR` が設定時に優先。相対値は拒否されます) | `config.json` | なし — loopback placeholder |
 | `prime` | `~/.prime/agent/models.json` (`PRIME_AGENT_CODING_AGENT_DIR` が設定時に優先。相対値は拒否されます) | `prime-models.json` | なし — loopback placeholder |
 | `aside` | `~/.aside/u/<account>/models.json`。Aside 自身の `accounts.json` が現在のアカウントとして指す account を使います。マニフェストが読めない場合は、既定のアカウントに落とさず拒否します | `aside-models.json` | なし — loopback placeholder |
 | `raycast` | `~/.config/raycast/ai/providers.yaml` (macOS と Windows で同じ。Raycast は `XDG_CONFIG_HOME` を尊重しません) | `raycast-providers.yaml` | なし — loopback のみ。`api_keys` エントリは書き込まれません |
 | `omo` | `~/.omo/agent/models.json` (`OMO_CODING_AGENT_DIR`、次に `SENPI_CODING_AGENT_DIR`、次に `PI_CODING_AGENT_DIR` の順で設定時に優先。相対値は拒否されます) | `omo-models.json` | なし — loopback placeholder |
+| `kilo` | `~/.config/kilo` 配下で最初に存在する `kilo.jsonc`、`kilo.json`、`opencode.jsonc`、`opencode.json`、`config.json`（`XDG_CONFIG_HOME` が設定されていればその配下）。候補がなければ `kilo.jsonc` | `kilo.jsonc` | `OPENCODEX_KILO_API_KEY` |
+| `commandcode` | `~/.commandcode/providers.json` (Windows の既定ホームを使用する場合: `HOME ?? USERPROFILE` が空文字列や空白のみではなく Windows の絶対パスの場合に限り使用し、それ以外は `homedir()`。別途指定されたホームは保持。その配下の `.commandcode\providers.json`) | `providers.json` | ループバックのみ・`apiKey: false`・環境変数不要 |
+| `droid` | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` on Windows) | `factory-settings.json` | ループバックのみ・環境変数不要 |
+
+上記のパスは既定値です。既定のホームにある `~/.zcode/v2/setting.json` に絶対パスの `dataBaseDir` を指定すると、保存先は `<dataBaseDir>/.zcode/v2/provider_config.json` に移ります。`ZCODE_DATA_DIR` は `.zcode` ルートそのものを指定して設定値より優先され、`ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` はプロバイダーファイルのパスで優先されます。不正な設定、読み取れない設定、相対パスでは新しい適用と更新を拒否します。既存の所有権と復元記録は保持されます。[パスと復元規則の原文](https://opencodex.me/guides/integrations/#zcode-314-and-later)を参照してください。
 
 Raycast のエクスポートは、`providers` シーケンスに `id: opencodex` 要素を 1 つだけ持つ独立した `providers.yaml` 文書です。内容は `name: OpenCodex`、プロキシの `/v1` ベース URL、および `abilities` 付きのルーティング済み全モデルです (`tools` と `system_message` は常にサポート、`vision` はカタログの入力モダリティから、`reasoning_effort` はモデルに effort ラダーがある場合、`temperature` は推論モデルではオフ)。Custom Providers は Raycast Pro の機能で、Raycast はこのファイルを監視しているため、保存した変更は再起動なしで反映されます。形式は [manual.raycast.com/ai/custom-providers](https://manual.raycast.com/ai/custom-providers) に記載されています。`api_keys` エントリは書き込まれないため、このエクスポートは loopback 専用で、loopback 以外のバインドは拒否されます。
 
@@ -174,7 +192,7 @@ opencode は `{env:OPENCODEX_OPENCODE_API_KEY}` を補間します。opencodex �
 `ocx export` は実際のクライアント設定を書き込むことはありません。宛先は手動でマージできるように出力されます。`--out` は、`--force` なしで既存のファイルを上書きすることを拒否します。これは、設定を置き換えると、その中にすでに含まれている他のプロバイダー、エージェント、および MCP エントリが破壊されるためです。
 :::
 
-キーはシリアル化されません。生成される設定には、文書化された環境参照か、秘密ではないループバック用プレースホルダーのいずれかが入ります。ループバック プロキシ (`127.0.0.1`、デフォルト) にはアドミッション キーはまったく必要ありません。クライアントの設定形式が対応しており、プロキシがループバック以外のアドレスにバインドする場合にのみ、参照される環境変数を設定してください。アドミッション キーの発行方法は [Remote access](/reference/configuration/#remote-access) を参照してください。上流プロバイダー自体のキーは別の設定です。[Providers](/guides/providers/) を参照してください。
+キーはシリアル化されません。生成される設定には、文書化された環境参照か、秘密ではないループバック用プレースホルダーのいずれかが入ります。ループバックアドレス (`127.0.0.1`) だけでは、キー不要とは判断できません。対象の認証ポリシーとエンドポイントを確認してください。選択したキーを使うモデル・音声 CLI はループバックでも明示的なキー入力が必要です。クライアントの設定形式が対応しており、プロキシがループバック以外のアドレスにバインドする場合にのみ、参照される環境変数を設定してください。アドミッション キーの発行方法は [Remote access](/ja/reference/configuration/server/#リモートアクセス) を参照してください。上流プロバイダー自体のキーは別の設定です。[Providers](/guides/providers/) を参照してください。
 
 生成される gjc 連携は秘密ではないループバック用の値を使うため、環境変数は不要です。ループバック専用で、リモート接続の認証情報は設定しません。
 
@@ -215,6 +233,20 @@ ocx system codex-cli-update attest --candidate <absolute-path> --npm-prefix <abs
 
 識別値やダイジェストは観測時点のファイルを表し、持続的な更新許可ではありません。選択されたランタイム、過去のインストーラー、実効 npm 設定、ツールの真正性は証明しません。指定した Node も観測するだけで、ランチャーが選ぶ Node だとは証明しません。対象の実行、レジストリ要求、インストール、設定の書き込み、プロセス制御は行いません。既存の Windows `check` は引き続き候補・設定のファイルシステム I/O を行いません。
 
-### `ocx config <show|get|set|unset|validate|export|import> ...`
+### `ocx config [show|get|set|unset|validate|export|import] ...`
+
+`ocx config [show] [--json] [--source]` は、プロキシを起動せずにローカル設定を表示します。`show` を省略しても、どちらかのフラグ、または両方を任意の順序で指定できます。`--source` は診断のソース、エラー、警告を含め、表示時のみ使用できます。`--json` は明示的な操作の前にも指定でき、実行する操作を変更しません。`--json` または `--source` の重複と不明な引数は拒否されます。
 
 検証された OpenCodex 設定を検査し、安全に変更します。 `show` および `get` はシークレットをマスクします。インポートは書き込む前に検証され、`--yes` が必要です。
+
+### Forced Claude Code subagent model
+
+The Subagents page offers **Force all subagents onto one model**, off by default. Select an exposed roster-style id, such as `combo/tev-auto`, then enable the switch. The roster is offered first; unavailable saved roster entries cannot be force targets.
+
+`ocx agent subagents force combo/tev-auto` sets `claudeCode.subagentModelForce`; `ocx agent subagents force -` clears it. `ocx agent status` reports the setting. `GET /api/subagent-models` returns `force`, `forceAvailable`, and `forceStatus`; `PUT` accepts `{ "force": "combo/tev-auto" }` or `{ "force": null }` without changing the roster. Omitting `force` leaves it unchanged. Invalid or unexposed targets are rejected on write; stale targets are reported and skipped at launch.
+
+This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` only for an authoritative million-token window; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
+
+Claude Code **2.1.257 or newer** is required for FORCE. Plugin and built-in agents (including Explore/Plan) and per-call model arguments are overridden. Forks and subagent skills with `model: inherit` keep the main conversation model. The main loop and Haiku/small-fast sidecars are unaffected. Existing roster files remain available.
+
+The dashboard warns about old or unknown CLI versions, unavailable targets, and either variable already present in `settings.json` → `env` (which overrides launch env). Detection is read-only and server-local: it cannot inspect another launch shell, another machine, or project-local settings. An unknown result is not proof of force support.

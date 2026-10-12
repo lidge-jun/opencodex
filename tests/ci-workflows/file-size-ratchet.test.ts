@@ -181,7 +181,7 @@ describe("file-size ratchet: scan filter", () => {
 
     // Prefix and exact exclusions. gui/dist without a trailing slash is listed
     // in the contract alongside gui/dist/ children.
-    expect(isScannedPath("devlog/_plan/260914_godfile_round2/010.md")).toBe(false);
+    expect(isScannedPath("devlog/_fin/260914_godfile_round2/010.md")).toBe(false);
     expect(isScannedPath("assets/banner.png")).toBe(false);
     expect(isScannedPath("docs-site/public/favicon.png")).toBe(false);
     expect(isScannedPath("docs-site/src/assets/og.png")).toBe(false);
@@ -237,7 +237,7 @@ describe("file-size ratchet: exemption classification", () => {
     // contradictory reasons and reviewable under neither.
     expect(new Set(all).size).toBe(all.length);
     expect([...all].sort()).toEqual([...EXEMPT_PATHS]);
-    expect(EXEMPT_PATHS.length).toBe(13);
+    expect(EXEMPT_PATHS).toContain("gui/src/i18n/pt.ts");
 
     // Every exemption names a file that is actually here. A stale entry exempts nothing and
     // hides the fact that the policy no longer describes this tree.

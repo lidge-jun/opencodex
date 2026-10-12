@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   createRequestExecutionBudget,
   deriveRequestExecutionBudget,
+  reportDispatchSends,
   type RequestExecutionBudget,
   type RequestExecutionBudgetPolicy,
   type RequestSendObserver,
@@ -91,7 +92,7 @@ describe("transient send accounting stays request-scoped", () => {
       return new Response("ok");
     }, {
       attempts: 1,
-      onSendsConsumed: (count) => { budget.used += count; },
+      onSendsConsumed: (count) => { reportDispatchSends(budget, count, reserved.permit); },
     });
 
     expect(response.status).toBe(200);
@@ -100,6 +101,23 @@ describe("transient send accounting stays request-scoped", () => {
     expect(observer.charges).toBe(1);
     expect(reserved.permit.use()).toBe(true);
     expect(reserved.permit.use()).toBe(false);
+  });
+
+  test("a reset helper can report its exact receipt before the single-use dispatch thunk", async () => {
+    const budget = createRequestExecutionBudget(THREE_SEND_POLICY);
+    const earlier = budget.reserveDispatch({ sendClass: "initial", targetKey: "same", countedExternally: true });
+    const later = budget.reserveDispatch({ sendClass: "initial", targetKey: "same", countedExternally: true });
+    if (!earlier.allowed || !later.allowed) throw new Error("synthetic reservation refused");
+    let physicalSends = 0;
+    await fetchWithResetRetry(async () => {
+      expect(later.permit.use()).toBe(true);
+      physicalSends += 1;
+      return new Response("ok");
+    }, { attempts: 1, onSendsConsumed: count => reportDispatchSends(budget, count, later.permit) });
+    later.permit.release();
+    earlier.permit.release();
+    expect(budget.used).toBe(physicalSends);
+    expect(physicalSends).toBe(1);
   });
 
   test("the transient wrapper reports a rejected physical send exactly once", async () => {

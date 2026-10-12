@@ -26,11 +26,15 @@ durumunu yazar ve ikinci bir canlı örneği başlatmayı reddeder. Tercih edile
 doluysa `start`, portu tutan süreci sorgular ve her iki durumda da durur: orada bir
 opencodex yanıt veriyorsa başlatmayı reddeder, aksi halde portu tutan sürecin
 tanımlanamadığını bildirir. İlk proxy'yi çalışır durumda bırakıp Codex'i ikinciye
-yönlendireceği için dinleyiciyi kendiliğinden başka bir porta taşımaz. `--port` ile
-farklı bir port belirtin veya işletim sisteminden bir port istemek için yapılandırmada
-`port: 0` ayarlayın. Başlangıçta her sağlayıcının modellerini Codex'in kataloğuna
+yönlendireceği için dinleyiciyi kendiliğinden başka bir porta taşımaz. Aynı
+`OPENCODEX_HOME` kullanılırken farklı bir `--port` açıkça verilse de başlangıç reddedilir;
+yalnızca gözlem ve sınır uygulama kiplerinin ikisi de aynı harcama günlüğüne yazar. Bağımsız
+bir kardeş örnek için ayrı bir `OPENCODEX_HOME` kullanın. `port: 0` yalnızca port seçimini
+işletim sistemine bırakır, durumu ayırmaz. Başlangıçta her sağlayıcının modellerini Codex'in kataloğuna
 senkronize eder. Kapatıldığında — yönetilen bir servis olarak başlatılmadığı sürece
-(`OCX_SERVICE=1`) — yerel Codex'i geri yükler.
+(`OCX_SERVICE=1`) — yerel Codex'i geri yükler. Çalışan bir proxy'nin yanında başlatılan kardeş örnek,
+`ocx stop` ya da bir sinyalle durdurulduğunda da dahil ikisini de yapmaz: yalnızca kendi portundaki
+doğrudan istekleri karşılar ve Codex, Grok ile Claude zaten çalışmakta olan proxy'yi göstermeye devam eder.
 
 `--socks5` (varsayılan `127.0.0.1:10808`) SOCKS5 URL'sini `config.proxy` içine kaydeder ve giden
 HTTP(S) isteklerini gerçek bir SOCKS5 tünelinden yönlendirir. `--socks5-off` yalnızca kaydedilmiş
@@ -185,6 +189,12 @@ gelecekteki sürümler alanlar ekleyebilir, ancak mevcut alanlar kararlı
 kalmalıdır. API anahtarlarını, OAuth belirteçlerini, yetkilendirme başlıklarını,
 istek içeriğini, e-postaları ve hesap kimliklerini kasıtlı olarak hariç tutar.
 
+Canlı okuma, süre sınırı olan servis probunun tamamlanmasını bekler: tanılama
+önbelleği boşsa veya süresi dolmuşsa macOS/Linux'ta en fazla 6,5 saniye,
+Windows'ta en fazla 16,5 saniye. Önbellekten yapılan okumalar hızla sonuç döndürür.
+Zaman aşımında yine yerel tanılamalara dönülür; yalnızca `/healthz` sağlıklı diye
+yeniden başlatma korumasının etkin olduğu doğrulanamaz.
+
 ### `ocx health [--json]`
 
 Canlı proxy'yi kimlik kontrolünden geçirin. İnsan çıktısı PID/port bildirir;
@@ -302,6 +312,27 @@ sağlık denetimi yanıtlarını geciktirebilir ve işlem çalışırken bile si
 Güncellemeden sonra kayıtlı bu önceliği değiştirmek ve servisi yeniden başlatmak için `ocx service repair` komutunu çalıştırın.
 UAC onayı gerekebilir. Zaten normal veya yüksek öncelik ayarlanmışsa yalnızca öncelik nedeniyle yeniden kayıt yapılmaz.
 
+Linux'ta systemd birimi, kurulum sırasında `PATH` üzerinde bulunan ilk normal, çalıştırılabilir `ocx`
+dosyasını çağırır; kurulu paket ağacındaki Bun ve CLI yollarını değil. **mise** ve **asdf** gibi sürüm
+yöneticileri sürümlü bir dizine kurar ve yükseltmede eskisini siler; kararlı shim'leri birimin
+çözümlenmeye devam etmesini sağlar. `ocx` başlatıcısı olmayan kaynak checkout'ları doğrudan Bun + CLI
+biçimini korur. Bun başlamadan önce seçilen güvenilir bir `OPENCODEX_BUN_PATH` shim üzerinden korunur;
+paket içindeki paketlenmiş Bun yolları yükseltmelerden sonra yeniden keşfedilir.
+
+macOS'ta launchd bunun yerine kurulum veya repair sırasında seçilen paket içi Bun ve CLI yollarını
+kullanır. Bu, değiştirilebilir bir PATH shim'inin sonraki bir yeniden başlatmada servis API token'ını
+ve yapılandırılmış proxy ortamını almasını engeller. Sürüm yöneticili bir kurulumu yükselttikten sonra,
+servisi yeniden başlatmadan önce bu yolları tazelemek için `ocx service repair` komutunu çalıştırın.
+
+Bu değişiklikten önce kurulan tanımlar hâlâ eski sürümlü yolları taşır ve kendilerini taşıyamaz —
+eski yürütülebilir dosya silindiğinde, onu düzeltecek hiçbir opencodex kodu çalışmaz. Yükseltmeden
+sonra bir kez `ocx service repair` çalıştırın. Bundan sonra Linux servis başlatmaları başlatıcıyı
+izler; macOS repair'i yeni paket yollarını launchd tanımına yazar. Zaten çalışan bir proxy harici
+yükseltmeyle değiştirilmez: kurulu CLI çalışan proxy'den daha yeni ise, yeni derlemenin hizmet vermesi
+için `ocx service restart` çalıştırın. macOS'ta bu durumda `repair` yeterli değildir: tanım değişmedi
+ve hiçbir şeyi değiştirmeyen bir repair hiçbir şeyi yeniden yüklemez. Bunun yerine proxy daha yeni ise,
+[`ocx status`](#ocx-status---json) altında açıklandığı gibi CLI kurulumunu ve `PATH`'i kontrol edin.
+
 | Alt komut | Eylem |
 | --- | --- |
 | none | Servis yoksa kurup başlatın; varsa mevcut servise `repair` uygulayın. Sağlıklı bir Windows Task Scheduler tanımı yeniden kullanılır; eski bir tanım yeniden kaydedilebilir ve yükseltme gerektirebilir. |
@@ -405,11 +436,19 @@ ve Codex yönlendirmesini yerinde bırakır. Mevcut veya çakışan zamanlayıc�
 kayıtları güvenli olmayan en iyi çaba geri alması olarak silinmek yerine kapalı
 olarak başarısız olmaya devam eder.
 
+Başlatma sırasında `another process owns the runtime mutation lease` bildirilirse ya da `ocx service status` `Runtime mutation lease busy` gösterirse, proxy çalışmıyor olsa bile bu kiralama başlatmayı veya hizmet değişikliklerini engelliyordur. Mesaj; kilit yolunu, kayıtlı PID'yi, bu PID'nin şu anda canlı olup olmadığını, alınabildiyse yürütülebilir dosyanın adını ve kiralamanın yaşını içerir. Sürecin kimliği doğrulanmaz: PID yeniden kullanılmış olabilir, bu yüzden canlılık durumu ve yürütülebilir dosya adı o PID'yi şu anda kullanan süreci tanımlar. İşlemin bitmesini bekleyip yeniden deneyin; yalnızca bu PID'ye dayanarak kilidi silmeyin ya da bir süreci durdurmayın. Kiralamanın yaşı 30 saniyeyi aştığında ve kayıtlı PID artık canlı olmadığında, sonraki bir değişiklik girişimi eskimiş kiralamayı geri alabilir; `ocx service status` yalnızca onu inceler.
+
 ### `ocx codex-shim <install|status|uninstall|remove>`
 
-PATH üzerindeki betik tabanlı bir `codex` başlatıcısını hafif bir otomatik
-başlatma betiği ile sarın. Tam yürütülebilir çağrıları bozmaktan kaçınmak için
-gerçek `codex.exe` hedefleri dokunulmadan bırakılır.
+macOS ve Linux'ta `ocx codex-shim install`, çözümlenen OpenCodex dizininde özel `<OPENCODEX_HOME>/bin/codex` sarmalayıcısını ve kabuğa yüklenecek `<OPENCODEX_HOME>/codex-shell-env.sh` dosyasını oluşturur. Yerel başlatıcı brew, npm veya fnm'nin kurduğu yerde kalır; paket yöneticisi güncellemeleri ve önceki sürüme dönüşler yeniden sarmalama gerektirmez. Windows'ta betik başlatıcıları mevcut konumlarında sarılmaya devam eder, gerçek `codex.exe` değiştirilmez. Yalnızca `codex.exe` varsa `ocx service install` kullanın.
+
+brew/fnm PATH ayarlarından sonra kurulumun yazdırdığı etkinleştirme komutunu çalıştırın. Varsayılan dizinde:
+
+```sh
+. "$HOME/.opencodex/codex-shell-env.sh"
+```
+
+Özel bir dizin için yazdırılan tırnaklı yolu kullanın. Dosyayı tekrar yüklemek özel bin tekrarlarını kaldırıp dizini PATH'in başına koyar. Gelecekteki kabuklar için bu satırı başlangıç dosyasındaki PATH ayarlarından sonra kendiniz ekleyin; OpenCodex kabuk başlangıç dosyalarını düzenlemez. Kurulum üst kabuğun PATH'ini değiştiremez. Sarmalayıcı çalıştırılabiliyorsa geçerli kabukta henüz etkin olmasa da kurulum başarılıdır; reddedilen kurulum veya çalışmayan sarmalayıcı hata verir. `ocx status`, `ocx codex-shim status`, `ocx doctor` ve `ocx connect`, PATH sarmalayıcıyı seçmiyorsa **not active** durumunu ve etkinleştirme komutunu gösterir. connect uyarıları çıkış kodunu değiştirmez. Takma adlar, işlevler, masaüstü ve servis başlatmaları ayrıca ayarlanmalıdır.
 
 Bir kurulum veya onarım uygulanmadan önce OpenCodex servis başlangıcı atlanırken
 kaydedilen başlatıcıyı `--version` ile çalıştırır. Başlatıcı `codex`'i tekrar
@@ -419,13 +458,12 @@ temizlenemediğinde değişikliği reddeder ve geri alır. Bu nedenle `codex-shi
 install` koşulsuz değildir. Reddedilirse PATH girdisinin somut bir yürütülebilir
 dosya veya başlatıcı olması için Codex'i yeniden yükleyin ve yeniden deneyin;
 dinamik bir komut yöneticisi başlatıcısı bu denetimleri karşılayamadığında bunun
-yerine `ocx service install` kullanın. Yükseltmeler sırasında geçerli doğrulama
-korumasından yoksun kurulu bir Unix dolgusu yeniden oluşturulur ve araştırılır.
-Kaydedilen başlatıcısı güvenli değilse OpenCodex güvensiz sarmalayıcıyı kurulu
-bırakmak yerine eski dolguyu kaldırır ve orijinal başlatıcıyı geri yükler.
+yerine `ocx service install` kullanın.
+
+Eski, yerinde kurulu Unix shim yalnızca açıkça çalıştırılan `ocx codex-shim install` ile taşınır. Kaydedilen yerel başlatıcı, mevcut daha yeni başlatıcının üzerine yazılmadan geri yüklenir; ardından özel sarmalayıcı kurulur. Geri yüklemeden sonra özel kurulum başarısız olsa da yerel başlatıcı geri yüklenmiş kalır ve işlem yeniden denenebilir. Kayıtlı başlatıcı yoksa veya çalışmıyorsa paket yöneticisiyle onarın; OpenCodex başka bir kurulumu tahmin etmez ve yöneticinin yolunu yeniden sarmalamaz.
 
 Yalnızca başlatıcı kurulumu Codex isteklerinin OpenCodex kullanacağını
-kanıtlamaz. Sağlıklı bir kurulumdan sonra komut geçerli Codex yönlendirmesini
+kanıtlamaz. Çalıştırılabilir bir sarmalayıcı kurulduktan sonra komut geçerli Codex yönlendirmesini
 kontrol eder ve yönlendirme harici, kullanıcıya ait veya doğrulanamaz olduğunda
 yeşil bir sonuç yerine bir uyarı bildirir. Ayrıca giden proxy değişkenleri
 yalnızca geçerli süreçte mevcutken `config.proxy` ayarlanmadığında veya
@@ -434,27 +472,22 @@ ortamı devralmayabilir. Bu denetimler salt okunurdur ve asla proxy değerlerini
 yazdırmaz; otomatik başlatmaya güvenmeden önce bildirilen devri çözün ve `ocx
 doctor` çalıştırın.
 
-Tamamlanan harici bir Codex güncellemesi kurulu bir dolgunun üzerine yazarsa
-sonraki sıradan `ocx` komutu kararlı yeni başlatıcıyı yedekler ve dağıtımdan
-önce dolguyu geri yükler. Sıfır etkili `ocx system codex-cli-update check` denetim
-komutu ile ayrılmış `ocx system codex-cli-update` ad alanındaki hatalı çağrılar bu onarımı asla yapmaz. Hala değişmekte olan bir başlatıcı dokunulmadan
-bırakılır ve daha sonra yeniden denenir. Onarım arızaları talep edilen komutu
-başarısız kılmadan uyarır; manuel geri dönüş: `ocx codex-shim install`. Süreç
-düzeyinde bir vazgeçme için `codexShimAutoRestore`'u `false` olarak ayarlayın
-veya `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0` ayarlayın.
+Unix'te otomatik onarım yalnızca özel sarmalayıcıyı yeniler; paket yöneticisinin başlatıcılarını yeniden yazmaz veya eski yerinde shim'i taşımaz. Windows'ta tamamlanan harici güncelleme shim'i değiştirirse sonraki sıradan `ocx` komutu kararlı yeni başlatıcıyı yedekleyip shim'i geri yükler. Değişmekte olan başlatıcıya dokunulmaz ve daha sonra yeniden denenir. `ocx status`, `ocx doctor`, `ocx codex-shim status`, `ocx system codex-cli-update check` ve ayrılmış ad alanındaki hatalı çağrılar bu onarımı yapmaz. Onarım hataları istenen komutun çıkış kodunu değiştirmeden uyarı verir. Elle onarım: `ocx codex-shim install`. Devre dışı bırakmak için `codexShimAutoRestore` değerini `false` yapın veya süreç için `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0` ayarlayın.
 
 | Alt komut | Eylem |
 | --- | --- |
 | `install` | Dolguyu kurun (veya eskiyse onarın). |
-| `uninstall` | Dolguyu kaldırın ve orijinal Codex ikili dosyasını geri yükleyin. |
+| `uninstall` | Unix özel dosyalarını kaldırır, yerel Codex kalır; Windows’ta özgün başlatıcıyı geri yükler. |
 | `remove` | `uninstall`'ın takma adıdır. |
-| `status` | Dolgu durumunu bildirin (kurulu, eski veya eksik). |
+| `status` | shim durumunu ve özel sarmalayıcının PATH üzerinde etkin olup olmadığını bildirir. |
 
 ```bash
 ocx codex-shim install
 ocx codex-shim status
 ocx codex-shim uninstall
 ```
+
+Unix'te kaldırdıktan sonra başlangıç dosyasındaki yükleme satırını silin ve kabuğu yeniden başlatın veya özel bin girdisini PATH'ten çıkarın. Yalnızca sahip olunan sarmalayıcı, kabuk ortam dosyası ve durum kaldırılır; paket yöneticisinin başlatıcısına dokunulmaz. Eski yerinde Unix shim kayıtlı geri yükleme bilgileriyle kaldırılır.
 
 :::tip[Servis mi Dolgu mu?]
 Her zaman açık bir arka plan proxy'si için `ocx service` kullanın (önerilir).
@@ -468,6 +501,9 @@ Windows durum tepsisi simgesini kurun ve kontrol edin. Windows oturum açılış
 başlar ve tek tıklamayla proxy kontrolleri sağlar. `start` ve `stop` yalnızca
 simgeyi kontrol eder; proxy'yi kontrol etmek için menüsünü kullanın.
 `--no-start`, `install` için geçerlidir ve tepsiyi hemen başlatmadan kurar.
+Kullanımdan kaldırıldı: OpenCodex masaüstü uygulaması Windows, macOS ve Linux'ta tepsi sağlar;
+`ocx tray`, masaüstü uygulaması olmayan kurulumlar için kullanılmaya devam eder.
+Yeni bir paket sürümü bilindiğinde tepsi, çevrimiçi, uyarı veya çevrimdışı simgesine mavi bir nokta ekler ve **Update available** gösterir. Yerel önbellekteki rozeti yaklaşık dakikada bir denetler; eski veya kullanılamayan sonuçlar noktayı kaldırır. Menü öğesi panoyu açar ve paket güncellemesini oradan başlatabilirsiniz. Otomatik yükleme yapmaz.
 
 ## Kontrol Paneli
 
@@ -481,6 +517,10 @@ adresindeki [web kontrol panelini](/tr/guides/web-dashboard/) açın; hub'da yö
 `ocx update`, Codex CLI'yi değil OpenCodex'in kendisini günceller. Yapılandırılmış Codex CLI adayının provenance bilgisini sınırlı ve salt okunur biçimde denetlemek için [sistem denetim komutları](/tr/reference/cli/agents/) arasındaki `ocx system codex-cli-update check` komutunu kullanın. Komut package registry'ye istek göndermez ve güncelleme kurmaz.
 
 ### `ocx update [--tag latest|preview]`
+
+OpenCodex mise üzerinden kurulduğunda bu komut proxy'yi durdurmadan veya paket dosyalarını değiştirmeden önce başarısız olur ve doğrulanmış yerel mise diğer adını kullanarak `mise upgrade <tool>` komutunu gösterir. Güncelleme denetimi kullanılabilir kalır ve kurulumun harici olarak yönetildiğini bildirir. Okunamayan veya tutarsız mise sahiplik meta verileri de araç adını tahmin etmeden değişikliği reddeder; `--tag preview` mise içinde yapılandırılmış seçimi değiştirmez.
+
+Linux'ta kayıtlı başlatıcısı mise paket başlatıcısı (mise shim'i değil, `<tool>/latest/node_modules/.bin/ocx`) olan bir arka plan hizmeti `mise upgrade` işlemini kendiliğinden izler: yeni sürüm oturduktan yaklaşık on saniye sonra etkin istekleri boşaltır ve yeni sürümle yeniden başlar; mise daha sonra çalıştığı sürümü temizlerse de aynı şekilde toparlanır. macOS'ta, mise shim'i üzerinden kurulan bir hizmette ve ön plandaki bir proxy'de yükseltmeden sonra kendiniz yeniden başlatın (macOS'ta önce `ocx service repair`).
 
 opencodex'i npm'den kendi kendine güncelleyin. Kararlı kurulumlar `@latest`
 kullanır; önizleme kurulumları `--tag latest|preview` iletmediğiniz sürece
@@ -507,4 +547,4 @@ bunları npm'de yayınladığında kullanılabilir hale gelir.
 
 ## Remote Hub istemci yaşam döngüsü
 
-`ocx connect <url> --pairing-code-stdin`, `ocx connect status`, `ocx sync` ve `ocx connect rotate --pairing-code-stdin` kullanın. `ocx disconnect` yerel durumu çevrimdışı geri yükler ancak hub anahtarını iptal etmez. Bağlıyken `ocx connect revoke --admin-token-stdin` kayıtlı `apiKeyId` değerini iptal eder; bağlantıdan sonra hub üzerindeki **Integrations → API Keys** kullanılmalıdır. Sırlar yalnızca stdin üzerinden geçer, argv'ye yazılmaz.
+`ocx connect <url> --pairing-code-stdin`, `ocx connect status`, `ocx sync` ve `ocx connect rotate --pairing-code-stdin` kullanın. `ocx disconnect` yerel durumu çevrimdışı geri yükler ancak hub anahtarını iptal etmez. Bağlıyken `ocx connect revoke --admin-token-stdin` kayıtlı `apiKeyId` değerini iptal eder; bağlantıdan sonra hub üzerindeki **Bağlantı → API Anahtarları** kullanılmalıdır. Sırlar yalnızca stdin üzerinden geçer, argv'ye yazılmaz.

@@ -4,12 +4,23 @@ import type { OcxConfig } from "../../src/types";
 import { createWebsocketHandler } from "../../src/server/index/websocket-handler";
 import type { ServeOptionsContext } from "../../src/server/index/serve-options";
 import { NativeSteeringChannel, MAX_NATIVE_STEERS, validateSteeringFrame } from "../../src/server/responses/native-steering";
-import { NativeSteeringReplay, MAX_NATIVE_STEERING_REPLAY_BYTES } from "../../src/server/responses/native-steering-replay";
+import { NativeSteeringReplay, MAX_NATIVE_STEERING_REPLAY_BYTES, nativeControlReplayRetainedStoreSnapshot, setNativeControlReplayTotalCapForTests } from "../../src/server/responses/native-steering-replay";
+import { NativeInjectionReplay } from "../../src/server/responses/native-injection-replay";
 import { type WsData } from "../../src/server/ws-bridge";
 import { getRequestLogEntries, clearRequestLogsForTests } from "../../src/server/request-log";
 import { runOptionalShutdownHooks } from "../../src/lib/optional-shutdown-hooks";
 import { MAX_ACTIVE_TURNS, tryAdmitTurn } from "../../src/server/lifecycle";
 import { configSchema } from "../../src/config/schema/config-schema";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { appOwnedBytesSnapshot, configureAppOwnedMemoryBudget, registerRetainedStore, resetAppOwnedMemoryForTests } from "../../src/lib/app-owned-memory";
+
+// The websocket handler dispatches through the real request path, so it reaches the shared spend
+// journal and needs the writer lease startServer would have taken. Without it the turn is refused
+// and the symptom is this file's own waitFor timing out, which names nothing.
+let releaseSpendHome: (() => void) | undefined;
+// Every synthetic client this file opens, so teardown can close them before the lease is given
+// back rather than leaving a handler mid-turn against a journal nobody owns.
+const clients: Array<ServerWebSocket<WsData>> = [];
 
 type Frame = Record<string, any>;
 const realSocket = globalThis.WebSocket;
@@ -48,12 +59,14 @@ const waitFor = async (condition: () => boolean) => {
   throw new Error("fixture condition timed out");
 };
 function downstream(fields: Frame = {}, settings = config(), credential = "test") {
+  releaseSpendHome ??= acquireOwnedSpendHome();
   const handler = createWebsocketHandler({ config: settings, deps: {} } as ServeOptionsContext);
   const sent: Frame[] = [];
   const ws = { readyState: 1, data: { headers: new Headers({ authorization: `Bearer ${credential}`, "thread-id": `fixture-${credential}`, session_id: `fixture-${credential}` }) } as WsData,
     send: (text: string) => { sent.push(JSON.parse(text)); return 1; }, close() { handler.close(ws); },
   } as unknown as ServerWebSocket<WsData>;
   const send = (frame: Frame) => handler.message(ws, JSON.stringify(frame));
+  clients.push(ws);
   send({ type: "response.create", model: "gpt-5.5", input: "initial", ...fields });
   return { ws, sent, send, handler };
 }
@@ -78,13 +91,40 @@ beforeEach(() => {
   globalThis.fetch = (async () => { fallbackCalls++; throw new Error("unexpected network/fallback in native steering fixture"); }) as typeof fetch;
   clearRequestLogsForTests();
 });
-afterEach(() => {
-  for (const socket of Socket.all) socket.close();
-  Socket.all = [];
-  runOptionalShutdownHooks();
-  globalThis.WebSocket = realSocket;
-  globalThis.fetch = realFetch;
-  for (const key of proxyKeys) { delete process.env[key]; if (savedProxy[key] !== undefined) process.env[key] = savedProxy[key]; }
+afterEach(async () => {
+  // handler.close only STARTS the pump cancellation. Waiting for the socket to drop its stream
+  // cancel and its native control is what proves the turn finished accounting; releasing the
+  // lease before that leaves a reader settling against a journal nobody owns.
+  //
+  // The rest runs even when that wait gives up, and the failure still propagates. A wait that
+  // expired is NOT evidence the turn settled: it means this fixture could not prove it, and the
+  // case should say so while still handing back the lease and the globals it replaced.
+  let failure: unknown;
+  const note = (error: unknown): void => { failure ??= error; };
+  try {
+    // Every client gets its close and its wait even after an earlier one gave up. Stopping at
+    // the first failure left the rest open for the next case to inherit.
+    for (const client of clients.splice(0)) {
+      // Separate guards: close() runs the production handler, so a throw there would otherwise
+      // skip this client's completion wait as well as its own failure.
+      try { client.close(); } catch (error) { note(error); }
+      try {
+        await waitFor(() => client.data.cancel === undefined && client.data.nativeControl === undefined);
+      } catch (error) { note(error); }
+    }
+    for (const socket of Socket.all) {
+      try { socket.close(); } catch (error) { note(error); }
+    }
+    Socket.all = [];
+    try { runOptionalShutdownHooks(); } catch (error) { note(error); }
+    // The release itself can throw, and it used to take the global restore down with it.
+    try { releaseSpendHome?.(); } catch (error) { note(error); } finally { releaseSpendHome = undefined; }
+  } finally {
+    globalThis.WebSocket = realSocket;
+    globalThis.fetch = realFetch;
+    for (const key of proxyKeys) { delete process.env[key]; if (savedProxy[key] !== undefined) process.env[key] = savedProxy[key]; }
+  }
+  if (failure !== undefined) throw failure;
 });
 
 test("configuration is explicit opt-in and malformed values fail closed", () => {
@@ -245,6 +285,124 @@ test("replay budget refuses overflow instead of silently losing context", () => 
   expect(() => new NativeSteeringReplay("x".repeat(MAX_NATIVE_STEERING_REPLAY_BYTES), () => {})).toThrow("budget");
 });
 
+test("native controls obey configured inbound and reconstructed outbound body limits", () => {
+  const settings = config();
+  settings.maxInboundBodyBytes = 1024 * 1024;
+  const handler = createWebsocketHandler({ config: settings, deps: {} } as ServeOptionsContext);
+  const sent: Frame[] = [];
+  const ws = { readyState: 1, data: { nativeControl: {} }, send: (text: string) => sent.push(JSON.parse(text)) } as unknown as ServerWebSocket<WsData>;
+  handler.message(ws, JSON.stringify({ type: "response.steer", previous_response_id: "r", input: "x".repeat(1024 * 1024) }));
+  expect(sent.at(-1)?.error.code).toBe("inbound_body_too_large");
+
+  const channel = new NativeSteeringChannel({}, 300_000, 256);
+  expect(() => channel.assertOutboundFrame(JSON.stringify({ type: "response.create", input: "x".repeat(1024) })))
+    .toThrow("configured upstream body limit");
+});
+
+test("replay journals share the application-owned memory budget", () => {
+  resetAppOwnedMemoryForTests();
+  registerRetainedStore({
+    id: "native_control_replay",
+    category: "continuation",
+    snapshot: nativeControlReplayRetainedStoreSnapshot,
+    evictOldest: () => 0,
+  });
+  let first: NativeSteeringReplay | undefined;
+  try {
+    first = new NativeSteeringReplay("x".repeat(200), () => {});
+    configureAppOwnedMemoryBudget(appOwnedBytesSnapshot().retainedBytes);
+    expect(() => new NativeSteeringReplay("y".repeat(200), () => {})).toThrow("application-owned memory budget");
+  } finally {
+    first?.dispose();
+    resetAppOwnedMemoryForTests();
+  }
+});
+
+test("injection journals share the same pinned control replay accounting", () => {
+  resetAppOwnedMemoryForTests();
+  registerRetainedStore({
+    id: "native_control_replay",
+    category: "continuation",
+    snapshot: nativeControlReplayRetainedStoreSnapshot,
+    evictOldest: () => 0,
+  });
+  let steering: NativeSteeringReplay | undefined;
+  let injection: NativeInjectionReplay | undefined;
+  try {
+    steering = new NativeSteeringReplay("x".repeat(200), () => {});
+    injection = new NativeInjectionReplay("y".repeat(200), () => {});
+    const shared = nativeControlReplayRetainedStoreSnapshot();
+    expect(shared.count).toBe(2);
+    expect(shared.bytes).toBe(steering.retainedBytes + injection.retainedBytes);
+    expect(shared.pinnedBytes).toBe(shared.bytes);
+    injection.dispose();
+    expect(nativeControlReplayRetainedStoreSnapshot().bytes).toBe(steering.retainedBytes);
+    steering.dispose();
+    steering = undefined;
+    configureAppOwnedMemoryBudget(1);
+    expect(() => new NativeInjectionReplay("z".repeat(200), () => {})).toThrow("application-owned memory budget");
+  } finally {
+    steering?.dispose();
+    injection?.dispose();
+    resetAppOwnedMemoryForTests();
+  }
+});
+
+test("reclaimable app-owned stores demote to admit a steering journal", () => {
+  resetAppOwnedMemoryForTests();
+  registerRetainedStore({
+    id: "native_control_replay",
+    category: "continuation",
+    snapshot: nativeControlReplayRetainedStoreSnapshot,
+    evictOldest: () => 0,
+  });
+  const cacheRows = [{ bytes: 300, at: 1 }];
+  registerRetainedStore({
+    id: "cache",
+    category: "caches",
+    snapshot: () => ({
+      count: cacheRows.length,
+      bytes: cacheRows.reduce((sum, row) => sum + row.bytes, 0),
+      evictableBytes: cacheRows.reduce((sum, row) => sum + row.bytes, 0),
+      pinnedBytes: 0,
+      oldestAt: cacheRows[0]?.at ?? null,
+    }),
+    evictOldest: () => cacheRows.splice(0, 1)[0]?.bytes ?? 0,
+  });
+  let replay: NativeSteeringReplay | undefined;
+  try {
+    configureAppOwnedMemoryBudget(400);
+    replay = new NativeSteeringReplay("x".repeat(200), () => {});
+    expect(cacheRows).toEqual([]);
+    expect(nativeControlReplayRetainedStoreSnapshot().bytes).toBeGreaterThan(0);
+  } finally {
+    replay?.dispose();
+    resetAppOwnedMemoryForTests();
+  }
+});
+
+test("a raised memory budget still caps the aggregate pinned steering journals", () => {
+  resetAppOwnedMemoryForTests();
+  registerRetainedStore({
+    id: "native_control_replay",
+    category: "continuation",
+    snapshot: nativeControlReplayRetainedStoreSnapshot,
+    evictOldest: () => 0,
+  });
+  configureAppOwnedMemoryBudget(4096 * 1024 * 1024);
+  const replays: NativeSteeringReplay[] = [];
+  try {
+    replays.push(new NativeSteeringReplay("x".repeat(200), () => {}));
+    setNativeControlReplayTotalCapForTests(replays[0]!.retainedBytes * 2 + 1);
+    replays.push(new NativeSteeringReplay("y".repeat(200), () => {}));
+    expect(() => new NativeSteeringReplay("z".repeat(200), () => {})).toThrow("pinned journal ceiling");
+  } finally {
+    for (const replay of replays) replay.dispose();
+    setNativeControlReplayTotalCapForTests(null);
+    resetAppOwnedMemoryForTests();
+  }
+});
+
 test("HTTP upgrade fallback keeps ordinary streaming and rejects steering explicitly", async () => {
   globalThis.WebSocket = class { constructor() { throw new Error("fixture unavailable upgrade"); } } as unknown as typeof WebSocket;
   let finish!: () => void;
@@ -380,6 +538,34 @@ test("early continuation validates advertised call and approval identities and r
   expect(() => channel.continue(continuation)).toThrow("already sent");
   expect(sent).toHaveLength(2);
   detach();
+});
+
+test("an oversized paced continuation rolls back instead of failing the stream", async () => {
+  const settings = config();
+  settings.maxUpstreamBodyBytes = 4096;
+  const client = downstream({}, settings);
+  await waitFor(() => client.sent.some(frame => frame.type === "response.created"));
+  const { ws, send, sent } = client;
+  const socket = Socket.all.at(-1)!;
+  const id = socket.root;
+  send({ type: "response.steer", previous_response_id: id, input: "accepted constraint" });
+  accept(socket, id);
+  complete(socket, id, { output: [{ type: "function_call", call_id: "c", name: "lookup", arguments: "{}" }] });
+  // The paced path defers dispatch to a microtask; the reconstructed frame must be
+  // validated before that wait so the refusal reaches the channel's synchronous
+  // rollback and a corrected continuation can still use this channel.
+  send({ type: "response.create", previous_response_id: id, model: "gpt-5.5", input: [{ type: "function_call_output", call_id: "c", output: "x".repeat(8192) }] });
+  expect(sent.at(-1)?.error.code).toBe("outbound_body_too_large");
+  expect(socket.frames).toHaveLength(2);
+  expect(socket.readyState).toBe(1);
+  expect(ws.data.nativeControl).toBeDefined();
+  send({ type: "response.create", previous_response_id: id, model: "gpt-5.5", input: [{ type: "function_call_output", call_id: "c", output: "saved" }] });
+  await waitFor(() => socket.frames.length === 3);
+  expect(socket.frames[2].input).toEqual([{ type: "function_call_output", call_id: "c", output: "saved" }]);
+  socket.emit({ type: "response.created", response: { id: "retry-successor", previous_response_id: id } });
+  complete(socket, "retry-successor");
+  await waitFor(() => !ws.data.nativeControl);
+  expect(fallbackCalls).toBe(0);
 });
 
 

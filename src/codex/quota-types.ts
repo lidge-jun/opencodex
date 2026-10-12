@@ -1,5 +1,8 @@
 /** Quota wire/storage shapes. This leaf must not import credential or config owners. */
-export const MAIN_ACCOUNT_HARD_LOCK_PERCENT = 99;
+/** Long-window default; explicit main-account hard-lock thresholds may override it. */
+export const MAIN_ACCOUNT_HARD_LOCK_PERCENT = 98;
+export const MAIN_ACCOUNT_HARD_LOCK_SHORT_PERCENT = 90;
+export const MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT = 80;
 
 /**
  * How recently a 100% burst reading must have been observed to exclude an account when it
@@ -18,6 +21,32 @@ export const TERMINAL_SHORT_WINDOW_FRESHNESS_MS = 5 * 60_000;
  * question and cannot import the routing or disk-cache owners to do it.
  */
 export const CODEX_EXHAUSTED_USAGE_PERCENT = 100;
+
+/** Credits have a separate clock: ordinary usage headers do not re-observe the balance. */
+export const CODEX_CREDITS_FRESHNESS_MS = 5 * 60_000;
+
+export interface CodexSpendableCredits {
+  hasCredits?: boolean;
+  unlimited?: boolean;
+  balance?: number;
+  overageLimitReached?: boolean;
+  /** Credit spending control, never the included-plan rate_limit.allowed verdict. */
+  allowed?: boolean;
+  observedAt: number;
+}
+
+export function hasSpendableCodexCredits(
+  quota: Pick<StoredAccountQuota, "credits"> | null,
+  now = Date.now(),
+): boolean {
+  const credits = quota?.credits;
+  if (!credits || !Number.isFinite(credits.observedAt)) return false;
+  const age = now - credits.observedAt;
+  if (age < 0 || age > CODEX_CREDITS_FRESHNESS_MS
+    || credits.allowed === false || credits.overageLimitReached === true || credits.hasCredits === false) return false;
+  return credits.unlimited === true || (credits.hasCredits === true
+    && typeof credits.balance === "number" && Number.isFinite(credits.balance) && credits.balance > 0);
+}
 
 /**
  * Above this a value is already milliseconds; at or below it, it is Unix seconds.
@@ -77,6 +106,8 @@ export type StoredAccountQuota = {
   shortWindowSeconds?: number;
   customWindows?: Array<{ label: string; percent: number; resetAt?: number }>;
   resetCredits?: number;
+  /** Spendable usage credits; resetCredits are separate, manually redeemed reset tickets. */
+  credits?: CodexSpendableCredits | null;
   /** Monthly usage came from an explicitly monthly PRIMARY, not supplementary tertiary, window. */
   monthlyIsPrimaryWindow?: boolean;
   updatedAt: number;
@@ -111,6 +142,14 @@ export type WhamUsageResponse = {
     secondary_window?: WhamUsageWindow | null;
     tertiary_window?: WhamUsageWindow | null;
   };
+  credits?: {
+    has_credits?: unknown;
+    unlimited?: unknown;
+    balance?: unknown;
+    overage_limit_reached?: unknown;
+  } | null;
+  /** Absent/null imposes no veto; present raw controls require an object with reached:false. */
+  spend_control?: unknown;
   rate_limit_reset_credits?: { available_count: number } | null;
   additional_rate_limits?: WhamAdditionalRateLimit[] | null;
 };

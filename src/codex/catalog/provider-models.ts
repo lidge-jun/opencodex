@@ -1,3 +1,7 @@
+import { fetchCopilotAutoModels, copilotPickerModels, copilotRequiresAuto } from "../../providers/github-copilot-auto";
+import { resolveGithubCopilotTransport } from "../../providers/github-copilot-transport";
+import { resolveCopilotApiBaseUrl } from "../../oauth/github-copilot";
+import { isAnthropicOAuthInstance } from "../../providers/anthropic-instance";
 import { effectiveProviderAlias, effectiveProviderAliasDecision } from "../../providers/default-aliases";
 import { initialModelSelectionPending } from "../../providers/initial-model-selection";
 import { execFileSync } from "node:child_process";
@@ -6,11 +10,14 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from 
 import { delimiter, dirname, join, resolve } from "node:path";
 import { atomicWriteFile, expandUserPath, getConfigDir, websocketsEnabled } from "../../config";
 import { resolveProviderApiKey } from "../../providers/key-store";
+import { captureOAuthAccountSelection, credentialGeneration, getAccountCredentialWithStatus, getAccountSet } from "../../oauth/store";
+import { readKiroAccountModels, kiroObservedContextWindow } from "../../providers/kiro-model-catalog";
 import { CODEX_CONFIG_PATH, CODEX_MODELS_CACHE_PATH, DEFAULT_CATALOG_PATH, readRootTomlString, resolveCodexConfigPath } from "../paths";
 import {
   clearModelCache,
   clearProviderDiscoveryStatus,
   captureModelCacheGeneration,
+  observeModelCacheRevision,
   DEFAULT_MODEL_CACHE_TTL_MS,
   getFreshCached,
   getStaleCached,
@@ -25,17 +32,19 @@ import {
 } from "../model-cache";
 import {
   buildModelsRequest,
-  getValidAccessTokenSnapshot,
+  getModelsOAuthAccessSnapshot,
   observeActiveOAuthAccessToken,
   resolveModelsAuthToken,
   type OAuthActiveTokenObservation,
 } from "../../oauth";
+import { mayResolveModelsOAuth } from "../../oauth/model-discovery-auth";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 import { modelInList } from "../../types";
 import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
 import { isModelVisionSidecarConsumer } from "../../vision/eligibility";
 import { getModelMetadata, getModelMetadataCaseInsensitive, listModelMetadata, resolveMetadataProvider, type ModelMetadata } from "../../generated/model-metadata";
 import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
+import { isAzureModelMetadataDestination, refreshAzureModelMetadata } from "../../providers/azure-model-metadata";
 import {
   captureFastPolicyAuthority,
   fastPolicyForModel,
@@ -51,10 +60,15 @@ import { routedSlug, slugEquals, slugEquivalenceKey, slugsEquivalent } from "../
 import { CODEX_GPT5_IDENTITY_LINE } from "../../adapters/identity";
 import { filterCursorConfiguredModelsByLiveDiscovery } from "../../adapters/cursor/discovery";
 import { fetchCursorUsableModels } from "../../adapters/cursor/live-models";
-import { recordLiveCursorClaudeModels, recordLiveCursorMaxModeModels } from "../../adapters/cursor/catalog";
+import { cursorLiveRosterScope, recordLiveCursorClaudeModels, recordLiveCursorMaxModeModels } from "../../adapters/cursor/catalog";
 import { fetchQoderModels } from "../../adapters/qoder/live-models";
 import { resolveQoderProfile } from "../../adapters/qoder/profiles";
+import { CODEBUDDY_PROFILES, type CodeBuddyProfile } from "../../adapters/codebuddy/profiles";
+import { fetchCodeBuddyModels } from "../../adapters/codebuddy/live-models";
+import { resolveProfileByBaseUrl } from "../../adapters/coding-agent/profile";
 import { fetchDevinUsableModels } from "../../adapters/devin/live-models";
+import { resolveDevinApiBaseUrl } from "../../oauth/devin/api-base";
+import { resolveZedModels } from "../../providers/zed";
 import { isCanonicalOpenAiForwardProvider, OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import {
   COMBO_NAMESPACE,
@@ -67,6 +81,7 @@ import {
 import type { NormalizedComboConfig } from "../../combos/types";
 import {
   ProviderOutboundPolicyError,
+  ProviderOutboundSendCancelledError,
   providerOutboundGet,
   providerOutboundPost,
   providerRedirectError,
@@ -103,11 +118,24 @@ import type {
 import type { CapturedProviderGather, CatalogGatherProviderAuthOutcome, CatalogGatherProviderModelOutcome, ModelsAuthResolution, ModelsAuthResolver } from "./gather-capture";
 import { QUIET_AUTHORITATIVE_CATALOG_PROVIDERS, applyConfigHintsToCachedModels, applyProviderConfigHints, boundedOwnedBy, catalogHintsFromModelsApiItem, catalogHintsFromProviderConfig } from "./model-hints";
 import { mergeConfiguredModelsIntoLiveCatalog, shouldExposeProviderModel, warnDroppedConfiguredIdsOnce } from "./model-visibility";
-import { captureProviderGather, materializeCapturedHeaders } from "./gather-capture";
+import { captureModelsRequest, captureProviderGather, materializeCapturedHeaders } from "./gather-capture";
 
+
+/** Observed Kiro ids advertised in the public catalog: plain ids that need no router decoding. */
+const KIRO_PUBLISHABLE_MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+/** Upper bound on observed Kiro ids added to the catalog across the whole roster. */
+const KIRO_OBSERVED_CATALOG_MAX = 64;
 export interface ProviderModelsResult {
   readonly models: CatalogModel[];
   readonly outcome: CatalogGatherProviderModelOutcome;
+  /**
+   * The provider's cache content revision as it stood when these rows were chosen.
+   *
+   * Sampled here rather than by the caller because only this point is synchronous with the
+   * choice. A caller reading it after its own await can observe a revision another flight
+   * published in between, and would then record these rows under that flight's identity.
+   */
+  readonly contentRevision: string;
 }
 export const refreshingModelsAuthResolver: ModelsAuthResolver = { kind: "refreshing" };
 
@@ -123,34 +151,47 @@ export function observedModelsAuthResolver(
         return { apiKey: resolveProviderApiKey(provider.apiKey), observed: true };
       }
 
-      const observation = observeActiveOAuthAccessToken(name, authStoreBuffer);
+      const observation: OAuthActiveTokenObservation = mayResolveModelsOAuth(name, provider)
+        ? observeActiveOAuthAccessToken(name, authStoreBuffer) : { kind: "missing" };
       outcomes.push({ provider: name, state: observation.kind });
       if (observation.kind !== "available") return { apiKey: undefined, observed: true };
       return {
         apiKey: observation.snapshot.accessToken,
         observed: true,
+        oauthAccountId: observation.snapshot.accountId,
+        oauthGeneration: observation.snapshot.generation,
+        ...(observation.snapshot.providerUserId ? { oauthProviderUserId: observation.snapshot.providerUserId } : {}),
         ...(observation.snapshot.apiBaseUrl ? { oauthApiBaseUrl: observation.snapshot.apiBaseUrl } : {}),
         ...(observation.snapshot.projectId ? { oauthProjectId: observation.snapshot.projectId } : {}),
       };
     },
   };
 }
+/** Project captured discovery through config hints and retention; Auto-only Copilot exposes only Auto. */
 export async function fetchProviderModelsWithAuth(
   captured: CapturedProviderGather,
   ttlMs: number,
   contextCap: number | undefined,
   resolveAuth: ModelsAuthResolver,
 ): Promise<ProviderModelsResult> {
-  const { name, provider: prov, discovery, request, metadataModelIdCaseFold } = captured;
+  const { name, provider: prov, discovery, metadataModelIdCaseFold, metadataConfigDir } = captured;
+  const azureMetadata = isAzureModelMetadataDestination(prov.baseUrl);
   const observed = (
     models: CatalogModel[],
     state: CatalogGatherProviderModelOutcome["state"],
-  ): ProviderModelsResult => ({ models, outcome: { provider: name, state } });
+  ): ProviderModelsResult => ({
+    models,
+    outcome: { provider: name, state },
+    contentRevision: observeModelCacheRevision(name),
+  });
   // Capture before any credential refresh or outbound await. OAuth account changes clear this
   // generation, so a request started with the former account cannot later publish its result.
   const cacheGeneration = captureModelCacheGeneration(name);
   const isCurrentCacheGeneration = () => isModelCacheGenerationCurrent(name, cacheGeneration);
+  const anthropicSelection = isAnthropicOAuthInstance(name) && prov.authMode === "oauth" && mayResolveModelsOAuth(name, prov)
+    ? captureOAuthAccountSelection(name) : null;
   if (prov.authMode === "forward") return observed([], "authoritative"); // ChatGPT backend has no /models
+  if (azureMetadata) await refreshAzureModelMetadata(prov.baseUrl, metadataConfigDir);
   const seedVertexDefault = prov.adapter === "google"
     && prov.googleMode === "vertex"
     && (prov.models?.length ?? 0) === 0
@@ -169,7 +210,7 @@ export async function fetchProviderModelsWithAuth(
   const configured: CatalogModel[] = configuredIds.map(id => ({
     id,
     provider: name,
-    ...catalogHintsFromProviderConfig(name, prov, id, contextCap, metadataModelIdCaseFold, captured.effectiveAlias),
+    ...catalogHintsFromProviderConfig(name, prov, id, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir),
   }));
   const withConfiguredRetention = (
     models: CatalogModel[],
@@ -185,6 +226,7 @@ export async function fetchProviderModelsWithAuth(
       seedVertexDefault,
       retainComboTargets: options?.retainComboTargets,
       metadataModelIdCaseFold,
+      metadataConfigDir,
     });
     if (
       options?.warnDrops === true
@@ -200,20 +242,81 @@ export async function fetchProviderModelsWithAuth(
   // discovery failure left by an older live configuration even when the account is logged out.
   if (prov.liveModels === false) {
     clearProviderDiscoveryStatus(name);
+    if (name === "kiro") {
+      const ids = [...configuredIds];
+      // Observed ids are advertised only when they round-trip through catalog encoding (no "/"
+      // or other separators the router would have to decode), and the roster adds at most
+      // KIRO_OBSERVED_CATALOG_MAX of them. Every observed id still informs routing preference.
+      let observedAdded = 0;
+      for (const account of getAccountSet("kiro")?.accounts ?? []) {
+        if (account.needsReauth === true || account.paused === true) continue;
+        for (const row of readKiroAccountModels(account) ?? []) {
+          if (observedAdded >= KIRO_OBSERVED_CATALOG_MAX) break;
+          if (!KIRO_PUBLISHABLE_MODEL_ID.test(row.modelId) || ids.includes(row.modelId)) continue;
+          ids.push(row.modelId);
+          observedAdded += 1;
+        }
+      }
+      return observed(ids.map(id => {
+        const hints = catalogHintsFromProviderConfig(name, prov, id, contextCap,
+          metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir);
+        const observedWindow = kiroObservedContextWindow(id);
+        return { id, provider: name, ...hints,
+          ...(observedWindow !== undefined
+            ? { contextWindow: applyProviderContextCap(observedWindow, contextCap) } : {}) };
+      }), "authoritative");
+    }
     return observed(configured, "authoritative");
   }
-  const auth: ModelsAuthResolution = captured.observedAuth ?? (resolveAuth.kind === "refreshing"
-    ? prov.authMode === "oauth" && effectiveGoogleMode(name, prov) === "cloud-code-assist"
-      ? await getValidAccessTokenSnapshot(name)
+  const auth: ModelsAuthResolution = prov.authMode === "oauth" && !mayResolveModelsOAuth(name, prov)
+    ? { apiKey: undefined, observed: resolveAuth.kind === "observed" }
+    : captured.observedAuth ?? (resolveAuth.kind === "refreshing"
+    ? prov.authMode === "oauth"
+      ? await getModelsOAuthAccessSnapshot(name, prov)
         .then(snapshot => ({
           apiKey: snapshot.accessToken,
           observed: false,
+          oauthAccountId: snapshot.accountId,
+          oauthGeneration: snapshot.generation,
+          ...(snapshot.providerUserId ? { oauthProviderUserId: snapshot.providerUserId } : {}),
+          ...(snapshot.apiBaseUrl ? { oauthApiBaseUrl: snapshot.apiBaseUrl } : {}),
           ...(snapshot.projectId ? { oauthProjectId: snapshot.projectId } : {}),
         }))
         .catch(() => ({ apiKey: undefined, observed: false }))
       : { apiKey: await resolveModelsAuthToken(name, prov), observed: false }
     : resolveAuth.resolve(name, prov));
   const apiKey = auth.apiKey;
+  if (name === "github-copilot" && apiKey) {
+    const transport = resolveGithubCopilotTransport({ ...prov, apiKey }, prov.authMode === "oauth"
+      ? resolveCopilotApiBaseUrl(auth.oauthApiBaseUrl) : undefined);
+    try {
+      const models = await fetchCopilotAutoModels(transport, AbortSignal.timeout(8_000), undefined, ttlMs);
+      const picker = copilotPickerModels(prov, models).map(/** Apply configured hints to the permission-filtered account catalog without changing upstream metadata. */
+        model => applyProviderConfigHints(name, prov, {
+        id: model.id, provider: name,
+        ...catalogHintsFromModelsApiItem(name, model as ProviderModelsApiItem),
+      }, contextCap, metadataModelIdCaseFold, captured.effectiveAlias));
+      if (!isCurrentCacheGeneration()) return observed(configured, "degraded");
+      markProviderDiscoveryOk(name, picker.length);
+      // Retain callable manual/combo selectors, but do not advertise named selection
+      // for an Auto-only account even when its saved configuration still contains it.
+      return observed(copilotRequiresAuto(prov, models)
+        ? picker : withConfiguredRetention(picker, { warnDrops: true }), "authoritative");
+    } catch {
+      if (isCurrentCacheGeneration()) markProviderDiscoveryFailed(name, { reason: "provider" });
+      return observed(configured, "degraded");
+    }
+  }
+  const maySendAnthropicDiscovery = () => {
+    if (!isAnthropicOAuthInstance(name) || prov.authMode !== "oauth") return true;
+    if (!mayResolveModelsOAuth(name, prov)) return false;
+    const selected = captureOAuthAccountSelection(name);
+    const row = auth.oauthAccountId ? getAccountCredentialWithStatus(name, auth.oauthAccountId) : null;
+    return !!anthropicSelection && !!selected && !!row && !row.paused && !row.needsReauth
+      && selected.accountId === anthropicSelection.accountId && selected.revision === anthropicSelection.revision
+      && row.credential.expires > Date.now() && auth.oauthAccountId === selected.accountId
+      && credentialGeneration(row.credential) === auth.oauthGeneration && row.credential.access === apiKey;
+  };
   // A configured default is a real callable selector and must remain discoverable when a
   // compatible provider's live /models request fails (issue #308). Static providers already seed
   // their default selector above when no explicit model list exists.
@@ -222,7 +325,7 @@ export async function fetchProviderModelsWithAuth(
     : [{
       id: prov.defaultModel,
       provider: name,
-      ...catalogHintsFromProviderConfig(name, prov, prov.defaultModel, contextCap, metadataModelIdCaseFold, captured.effectiveAlias),
+      ...catalogHintsFromProviderConfig(name, prov, prov.defaultModel, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir),
     }];
   const vertexDefaultSeed = seedVertexDefault ? configured[0] : undefined;
   const withVertexDefaultSeed = (models: CatalogModel[]): CatalogModel[] => (
@@ -230,6 +333,110 @@ export async function fetchProviderModelsWithAuth(
       ? [...models, vertexDefaultSeed]
       : models
   );
+  if (prov.adapter === "codebuddy") {
+    if (!apiKey) return observed(configured, "degraded");
+    const resolvedProfile = resolveProfileByBaseUrl(CODEBUDDY_PROFILES, prov.baseUrl);
+    if (!resolvedProfile) return observed(configured, "degraded");
+    const profile = resolvedProfile as CodeBuddyProfile;
+    // Cache reads/writes are provider/key-fingerprint-scoped: an irreversible fingerprint of
+    // the configured key means a key switch never reuses the roster cached for the previous
+    // key. The roster comes from the product configuration endpoint authenticated with that
+    // same key, so the fingerprint scope and the roster's authority are the same identity: the
+    // roster is the key's own account answer, never the CLI login's.
+    const authorityIdentity = createHash("sha256").update(apiKey).digest("hex");
+    const fresh = getFreshCached(name, ttlMs, Date.now(), authorityIdentity);
+    if (fresh) {
+      return observed(withConfiguredRetention(
+        applyConfigHintsToCachedModels(name, prov, fresh, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir),
+      ), "authoritative");
+    }
+    const scopedStale = getStaleCached(name, authorityIdentity);
+    if (isModelsFetchCoolingDown(name, undefined, undefined, authorityIdentity) && scopedStale) {
+      return observed(withConfiguredRetention(
+        applyConfigHintsToCachedModels(name, prov, scopedStale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir),
+      ), "degraded");
+    }
+    const live = await fetchCodeBuddyModels(profile, apiKey);
+    if (live.ok) {
+      const discovered = live.models.map(id => ({
+        id,
+        provider: name,
+        ...catalogHintsFromProviderConfig(name, prov, id, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir),
+      }));
+      const forCache = withConfiguredRetention(discovered, { retainComboTargets: false });
+      if (!setCached(name, forCache, Date.now(), cacheGeneration, authorityIdentity)) {
+        return observed(withConfiguredRetention(configured), "degraded");
+      }
+      markProviderDiscoveryOk(name, live.models.length);
+      return observed(withConfiguredRetention(forCache, { warnDrops: true }), "authoritative");
+    }
+    if (isCurrentCacheGeneration()) {
+      markModelsFetchFailure(name, undefined, authorityIdentity);
+      markProviderDiscoveryFailed(name, { reason: "provider" });
+      console.warn(`[opencodex] CodeBuddy model discovery failed [${live.error}]${live.status === undefined ? "" : ` status=${live.status}`}; using stale/static catalog degradation.`);
+    }
+    const stale = getStaleCached(name, authorityIdentity);
+    return observed(withConfiguredRetention(
+      stale ? applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir) : configured,
+    ), "degraded");
+  }
+  if (name === "zed" && prov.adapter === "zed") {
+    if (!apiKey || !auth.oauthAccountId || !auth.oauthProviderUserId) return observed(configured, "degraded");
+    // Zed's roster and short-lived inference token are both account-scoped. Keep the
+    // catalog cache bound to the same pair so a multi-account switch cannot reuse a stale
+    // roster even when the provider destination is unchanged.
+    const authorityIdentity = createHash("sha256")
+      .update(JSON.stringify([auth.oauthAccountId, apiKey])).digest("hex");
+    const cached = getFreshCached(name, ttlMs, Date.now(), authorityIdentity);
+    if (cached) {
+      return observed(
+        withConfiguredRetention(applyConfigHintsToCachedModels(name, prov, cached, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir)),
+        "authoritative",
+      );
+    }
+    const stale = getStaleCached(name, authorityIdentity);
+    if (isModelsFetchCoolingDown(name, undefined, undefined, authorityIdentity) && stale) {
+      return observed(
+        withConfiguredRetention(applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir)),
+        "degraded",
+      );
+    }
+    const zedFetch = (prov as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch;
+    try {
+      const live = await resolveZedModels(
+        // Zed signs with its own user id; the slot id only keys the catalog cache above.
+        { userId: auth.oauthProviderUserId, accessToken: apiKey },
+        { signal: AbortSignal.timeout(8_000), ...(zedFetch ? { fetchFn: zedFetch } : {}) },
+      );
+      const discovered = live.models.map(model => {
+        const reasoningEfforts = sanitizeCodexReasoningEfforts(model.supportedEffortLevels);
+        return {
+          id: model.id,
+          provider: name,
+          ...(model.contextLength ? { contextWindow: model.contextLength } : {}),
+          ...(model.maxOutputTokens ? { maxOutputTokens: model.maxOutputTokens } : {}),
+          ...(model.supportsImages ? { inputModalities: ["text", "image"] } : {}),
+          ...(reasoningEfforts?.length ? { reasoningEfforts } : {}),
+          ...catalogHintsFromProviderConfig(name, prov, model.id, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir),
+        } as CatalogModel;
+      });
+      const forCache = withConfiguredRetention(discovered, { retainComboTargets: false });
+      if (!setCached(name, forCache, Date.now(), cacheGeneration, authorityIdentity)) {
+        return observed(withConfiguredRetention(configured), "degraded");
+      }
+      markProviderDiscoveryOk(name, live.models.length);
+      return observed(withConfiguredRetention(forCache, { warnDrops: true }), "authoritative");
+    } catch {
+      if (isCurrentCacheGeneration()) {
+        markModelsFetchFailure(name, undefined, authorityIdentity);
+        markProviderDiscoveryFailed(name, { reason: "provider" });
+      }
+      return observed(
+        withConfiguredRetention(stale ? applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir) : configured),
+        "degraded",
+      );
+    }
+  }
   if (prov.adapter === "qoder") {
     if (!apiKey) return observed(configured, "degraded");
     const profile = resolveQoderProfile(prov.baseUrl);
@@ -241,13 +448,13 @@ export async function fetchProviderModelsWithAuth(
     const fresh = getFreshCached(name, ttlMs, Date.now(), authorityIdentity);
     if (fresh) {
       return observed(withConfiguredRetention(
-        applyConfigHintsToCachedModels(name, prov, fresh, contextCap, metadataModelIdCaseFold, captured.effectiveAlias),
+        applyConfigHintsToCachedModels(name, prov, fresh, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir),
       ), "authoritative");
     }
     const scopedStale = getStaleCached(name, authorityIdentity);
     if (isModelsFetchCoolingDown(name) && scopedStale) {
       return observed(withConfiguredRetention(
-        applyConfigHintsToCachedModels(name, prov, scopedStale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias),
+        applyConfigHintsToCachedModels(name, prov, scopedStale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir),
       ), "degraded");
     }
     const live = await fetchQoderModels(profile, apiKey);
@@ -255,7 +462,7 @@ export async function fetchProviderModelsWithAuth(
       const discovered = live.models.map(id => ({
         id,
         provider: name,
-        ...catalogHintsFromProviderConfig(name, prov, id, contextCap, metadataModelIdCaseFold, captured.effectiveAlias),
+        ...catalogHintsFromProviderConfig(name, prov, id, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir),
       }));
       const forCache = withConfiguredRetention(discovered, { retainComboTargets: false });
       if (!setCached(name, forCache, Date.now(), cacheGeneration, authorityIdentity)) {
@@ -271,28 +478,40 @@ export async function fetchProviderModelsWithAuth(
     }
     const stale = getStaleCached(name, authorityIdentity);
     return observed(withConfiguredRetention(
-      stale ? applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias) : configured,
+      stale ? applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir) : configured,
     ), "degraded");
   }
   if (prov.adapter === "devin") {
     if (!apiKey) return observed(configured, "degraded");
-    const cachedDevin = getFreshCached(name, ttlMs);
+    // Both the credential and its validated tenant destination own this roster.
+    // The registered Devin route ignores a saved baseUrl override; discovery must
+    // use that same fixed destination when the stored tenant URL is invalid.
+    const configuredBase = name === "devin" ? getProviderRegistryEntry(name)?.baseUrl ?? prov.baseUrl : prov.baseUrl;
+    const destination = resolveDevinApiBaseUrl(auth.oauthApiBaseUrl ?? configuredBase);
+    const authorityIdentity = createHash("sha256")
+      .update(JSON.stringify([apiKey, destination])).digest("hex");
+    const cachedDevin = getFreshCached(name, ttlMs, Date.now(), authorityIdentity);
     if (cachedDevin) {
       return observed(
-        withConfiguredRetention(applyConfigHintsToCachedModels(name, prov, cachedDevin)),
+        withConfiguredRetention(applyConfigHintsToCachedModels(name, prov, cachedDevin, undefined, undefined, undefined, metadataConfigDir)),
         "authoritative",
       );
     }
-    if (isModelsFetchCoolingDown(name)) {
-      const cooling = getStaleCached(name);
+    if (isModelsFetchCoolingDown(name, undefined, undefined, authorityIdentity)) {
+      const cooling = getStaleCached(name, authorityIdentity);
       return observed(
         withConfiguredRetention(
-          cooling ? applyConfigHintsToCachedModels(name, prov, cooling) : configured,
+          cooling ? applyConfigHintsToCachedModels(name, prov, cooling, undefined, undefined, undefined, metadataConfigDir) : configured,
         ),
         "degraded",
       );
     }
-    const liveResult = await fetchDevinUsableModels({ apiKey, baseUrl: prov.baseUrl });
+    // The OAuth snapshot owns both values: never combine one account's durable
+    // key with the registry's default host or another account's tenant host.
+    const liveResult = await fetchDevinUsableModels({
+      apiKey,
+      baseUrl: destination,
+    });
     if (liveResult.ok) {
       // Live catalog is the source of truth — use the discovered base models
       // directly, not a filtered subset of the static seed.
@@ -316,29 +535,31 @@ export async function fetchProviderModelsWithAuth(
           // away, and every client that keys an effort control off this field —
           // the Pi-shaped exports — renders no control at all.
           ...(liveResult.efforts[id]?.length ? { reasoningEfforts: liveResult.efforts[id] } : {}),
+          // The family's effective enabled default, matching an unset effort at request time.
+          ...(liveResult.defaultEfforts[id] ? { defaultReasoningEffort: liveResult.defaultEfforts[id] } : {}),
           // The account catalog's per-base supportsImages vote collapses to one
           // modalities value. It spreads before the hints so exact
           // modelCapabilities declarations, the legacy modelInputModalities
           // record and the vision-sidecar rewrite keep winning — the live
           // value survives only when none of them applies.
           ...(liveResult.inputModalities[id]?.length ? { inputModalities: liveResult.inputModalities[id] } : {}),
-          ...catalogHintsFromProviderConfig(name, prov, id, contextCap, metadataModelIdCaseFold, captured.effectiveAlias),
+          ...catalogHintsFromProviderConfig(name, prov, id, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir),
         } as CatalogModel;
       });
       const forCache = withConfiguredRetention(result, { retainComboTargets: false });
-      if (!setCached(name, forCache, Date.now(), cacheGeneration)) {
+      if (!setCached(name, forCache, Date.now(), cacheGeneration, authorityIdentity)) {
         return observed(withConfiguredRetention(configured), "degraded");
       }
       markProviderDiscoveryOk(name, liveResult.models.length);
       return observed(withConfiguredRetention(forCache), "authoritative");
     }
     if (isCurrentCacheGeneration()) {
-      markModelsFetchFailure(name);
+      markModelsFetchFailure(name, undefined, authorityIdentity);
       markProviderDiscoveryFailed(name, { reason: liveResult.error === "auth" ? "provider" : "invalid_response" });
     }
-    const stale = getStaleCached(name);
+    const stale = getStaleCached(name, authorityIdentity);
     return observed(
-      withConfiguredRetention(stale ? applyConfigHintsToCachedModels(name, prov, stale) : configured),
+      withConfiguredRetention(stale ? applyConfigHintsToCachedModels(name, prov, stale, undefined, undefined, undefined, metadataConfigDir) : configured),
       "degraded",
     );
   }
@@ -348,18 +569,22 @@ export async function fetchProviderModelsWithAuth(
     // variants this PLAN can use. Keep the base-model UX (the request builder appends the effort
     // suffix) but filter the static seed to the bases the account actually has — so models not on the
     // plan (e.g. claude-fable-5) drop out instead of failing ERROR_BAD_MODEL_NAME. Fall back to the seed.
-    const cachedCursor = getFreshCached(name, ttlMs);
+    // The roster is entitlement-specific, so the cache entry is bound to an irreversible
+    // credential fingerprint: a credential switch must not observe the previous account's
+    // plan roster, its stale fallback, or its failure cooldown suppression.
+    const authorityIdentity = createHash("sha256").update(apiKey).digest("hex");
+    const cachedCursor = getFreshCached(name, ttlMs, Date.now(), authorityIdentity);
     if (cachedCursor) {
       return observed(
-        withConfiguredRetention(applyConfigHintsToCachedModels(name, prov, cachedCursor, undefined, metadataModelIdCaseFold, captured.effectiveAlias)),
+        withConfiguredRetention(applyConfigHintsToCachedModels(name, prov, cachedCursor, undefined, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir)),
         "authoritative",
       );
     }
-    if (isModelsFetchCoolingDown(name)) {
-      const cooling = getStaleCached(name);
+    if (isModelsFetchCoolingDown(name, undefined, undefined, authorityIdentity)) {
+      const cooling = getStaleCached(name, authorityIdentity);
       return observed(
         withConfiguredRetention(
-          cooling ? applyConfigHintsToCachedModels(name, prov, cooling, undefined, metadataModelIdCaseFold, captured.effectiveAlias) : configured,
+          cooling ? applyConfigHintsToCachedModels(name, prov, cooling, undefined, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir) : configured,
         ),
         "degraded",
       );
@@ -372,35 +597,40 @@ export async function fetchProviderModelsWithAuth(
       ...(cursorFetch ? { fetch: cursorFetch } : {}),
     });
     if (liveResult.ok) {
-      const available = filterCursorConfiguredModelsByLiveDiscovery(configured, liveResult.models);
+      const available = filterCursorConfiguredModelsByLiveDiscovery(
+        configured,
+        liveResult.models,
+        liveResult.maxModeModels ?? [],
+      );
       const result = available.length > 0 ? available : configured;
       // Cache the discovery-filtered roster without combo retention so a later
       // gather can re-apply the current capture's retain set on read.
       const forCache = withConfiguredRetention(result, { retainComboTargets: false });
-      if (!setCached(name, forCache, Date.now(), cacheGeneration)) {
+      if (!setCached(name, forCache, Date.now(), cacheGeneration, authorityIdentity)) {
         return observed(withConfiguredRetention(configured), "degraded");
       }
       // Publish roster-derived state only for a discovery the cache accepted: a stale
       // in-flight capture (generation revoked by a credential/config change) must not
       // overwrite the spelling or Max-Mode evidence of the newer one.
-      recordLiveCursorClaudeModels(liveResult.models);
+      const liveRosterScope = { provider: name, key: cursorLiveRosterScope(prov.baseUrl, apiKey) };
+      recordLiveCursorClaudeModels(liveResult.models, liveRosterScope);
       // Live Max-Mode evidence feeds the umbrella resolver's ultra gate
       // (devlog 260828_cursor_umbrella_catalog; union with static evidence).
-      recordLiveCursorMaxModeModels(liveResult.maxModeModels ?? []);
+      recordLiveCursorMaxModeModels(liveResult.maxModeModels ?? [], liveRosterScope);
       markProviderDiscoveryOk(name, liveResult.models.length);
       return observed(withConfiguredRetention(forCache, { warnDrops: true }), "authoritative");
     }
     if (isCurrentCacheGeneration()) {
-      markModelsFetchFailure(name);
+      markModelsFetchFailure(name, undefined, authorityIdentity);
       markProviderDiscoveryFailed(name, { reason: "provider" });
       console.warn(
         `[opencodex] Cursor model discovery for "${name}" failed [${liveResult.error}]${liveResult.detail ? `: ${liveResult.detail}` : ""}; using stale/static catalog degradation.`,
       );
     }
-    const staleCursor = getStaleCached(name);
+    const staleCursor = getStaleCached(name, authorityIdentity);
     return observed(
       withConfiguredRetention(
-        staleCursor ? applyConfigHintsToCachedModels(name, prov, staleCursor, undefined, metadataModelIdCaseFold, captured.effectiveAlias) : configured,
+        staleCursor ? applyConfigHintsToCachedModels(name, prov, staleCursor, undefined, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir) : configured,
       ),
       "degraded",
     );
@@ -418,7 +648,7 @@ export async function fetchProviderModelsWithAuth(
   if (fresh) {
     return observed(
       withConfiguredRetention(
-        withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, fresh, contextCap, metadataModelIdCaseFold, captured.effectiveAlias)),
+        withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, fresh, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir)),
       ),
       "authoritative",
     ); // dedups Codex's frequent /v1/models polling within the TTL
@@ -430,12 +660,17 @@ export async function fetchProviderModelsWithAuth(
     return observed(
       withConfiguredRetention(
         stale
-          ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias))
+          ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir))
           : failedDiscoveryConfigured,
       ),
       "degraded",
     );
   }
+  // The captured request predates any refresh, so a refreshing gather rebuilds it
+  // from the auth it resolved: the token and its origin, together.
+  const request = resolveAuth.kind === "refreshing" && name !== "anthropic2"
+    ? captureModelsRequest(name, prov, auth.oauthApiBaseUrl)
+    : captured.request;
   const url = request.url;
   let headers = materializeCapturedHeaders(request, apiKey);
   // One Ollama authority contract: for canonical ollama-cloud/ollama-native rows, discovery
@@ -453,7 +688,7 @@ export async function fetchProviderModelsWithAuth(
   const failedDiscoveryFallback = (
     failure: ProviderModelDiscoveryFailure,
   ): { models: CatalogModel[]; fallback: "stale" | "configured"; shouldLog: boolean } => {
-    if (!isCurrentCacheGeneration()) {
+    if (!isCurrentCacheGeneration() || !maySendAnthropicDiscovery()) {
       return {
         models: withConfiguredRetention(failedDiscoveryConfigured),
         fallback: "configured",
@@ -470,7 +705,7 @@ export async function fetchProviderModelsWithAuth(
     return {
       models: withConfiguredRetention(
         stale
-          ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias))
+          ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir))
           : failedDiscoveryConfigured,
       ),
       fallback: stale ? "stale" : "configured",
@@ -485,7 +720,8 @@ export async function fetchProviderModelsWithAuth(
     // proof is on the URL — not the provider name — because an OAuth/forward
     // name matches any baseUrl by design. Retargeted or renamed custom rows
     // fetch a different URL and keep the rejection.
-    const outboundDependencies = { isCanonicalUrl: isRegistryModelDiscoveryUrl };
+    if (!maySendAnthropicDiscovery()) return observed(withConfiguredRetention(failedDiscoveryConfigured), "degraded");
+    const outboundDependencies = { isCanonicalUrl: isRegistryModelDiscoveryUrl, beforeSend: maySendAnthropicDiscovery };
     const res = request.method === "POST"
       ? await providerOutboundPost(name, prov, url, {
         headers,
@@ -547,25 +783,35 @@ export async function fetchProviderModelsWithAuth(
       return observed(models, "degraded");
     }
     if (antigravity) {
-      const live = antigravity.map(model => applyProviderConfigHints(name, prov, {
+      const upstream: CatalogModel[] = antigravity.map(model => ({
         id: model.id,
         provider: name,
-        // CCA only exposes a numeric thinking budget. Until the adapter owns an exact Codex
-        // effort-to-wire mapping for a newly discovered model, do not advertise a false ladder.
-        reasoningEfforts: [],
+        // Only an exact discovered wire map proves a new model's selectable effort ladder.
+        reasoningEfforts: Object.keys(model.effortWireModelIds ?? {}),
+        ...(model.effortWireModelIds ? {
+          antigravityEffortWireModelIds: model.effortWireModelIds,
+          suppressSyntheticMax: true,
+          defaultReasoningEffort: model.effortWireModelIds.medium ? "medium" : "high",
+        } : {}),
         ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
         ...(model.inputModalities ? { inputModalities: model.inputModalities } : {}),
-      }, contextCap, metadataModelIdCaseFold, captured.effectiveAlias));
-      const forCache = withConfiguredRetention(live, { retainComboTargets: false });
-      if (!setCached(name, forCache, Date.now(), cacheGeneration)) {
+      }));
+      const live = applyConfigHintsToCachedModels(name, prov, upstream, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir);
+      const forCache = azureMetadata ? upstream : withConfiguredRetention(live, { retainComboTargets: false });
+      if (!isCurrentCacheGeneration()) {
         return observed(withConfiguredRetention(configured), "degraded");
       }
+      // Save exact family routes before publishing synthetic IDs. These synchronous writes
+      // cannot interleave with a credential-generation change; failure keeps the prior cache.
       registerAntigravityDiscoveredWireModels(prov.baseUrl, antigravity, {
         provider: name,
         cacheGeneration,
       });
+      if (!setCached(name, forCache, Date.now(), cacheGeneration)) {
+        return observed(withConfiguredRetention(configured), "degraded");
+      }
       markProviderDiscoveryOk(name, live.length);
-      return observed(withConfiguredRetention(forCache, { warnDrops: true }), "authoritative");
+      return observed(withConfiguredRetention(azureMetadata ? live : forCache, { warnDrops: true }), "authoritative");
     }
     const googleAiStudio = effectiveGoogleMode(name, prov) === "ai-studio"
       ? extractGoogleAiStudioModelItems(bounded.value, discovery.maxModels)
@@ -604,7 +850,7 @@ export async function fetchProviderModelsWithAuth(
         provider: prov,
       }).catch(() => undefined)
       : undefined;
-    const live = items.map(m => {
+    const upstream: CatalogModel[] = items.map(m => {
       const ownedBy = boundedOwnedBy(m.owned_by);
       // Precedence: the authoritative /v1/models row wins; /api/show fills only metadata the
       // models-API row does not carry. applyProviderConfigHints then applies explicit
@@ -620,22 +866,25 @@ export async function fetchProviderModelsWithAuth(
           ? { inputModalities: ["text", "image"] as string[] }
           : {}),
       };
-      return applyProviderConfigHints(name, prov, {
+      return {
         id: m.id,
         provider: name,
         ...(ownedBy ? { owned_by: ownedBy } : {}),
         ...discoveredHints,
-      }, contextCap, metadataModelIdCaseFold, captured.effectiveAlias);
+      };
     })
       .filter(m => shouldExposeProviderModel(name, m.id));
+    const live = applyConfigHintsToCachedModels(name, prov, upstream, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir);
     // Capture the count BEFORE the alias/configured augmentation below pushes extra rows into
     // `live`; otherwise configured entries would be reported as discovered ones.
     const liveModelCount = live.length;
     // Dated-release aliases + configured retention (compat allow-list, combo targets,
     // Vertex default). Cache without combo retention so a later gather re-applies the
     // current capture's retain set on read (warm-cache OCX-111 / #1308).
-    const forCache = withConfiguredRetention(live, { retainComboTargets: false });
-    const returned = withConfiguredRetention(forCache, { warnDrops: true });
+    // Azure hints depend on the admitted config root. Keep only upstream evidence in the
+    // shared TTL/stale cache; every read reapplies metadata and retention for its own root.
+    const forCache = azureMetadata ? upstream : withConfiguredRetention(live, { retainComboTargets: false });
+    const returned = withConfiguredRetention(azureMetadata ? live : forCache, { warnDrops: true });
     const droppedConfiguredIds = configured
       .map(model => model.id)
       .filter(id => !returned.some(model => model.id === id));
@@ -644,12 +893,15 @@ export async function fetchProviderModelsWithAuth(
         `[opencodex] Provider model discovery for "${name}" returned an authoritative empty catalog; ${droppedConfiguredIds.length > 0 ? `dropping configured model ids: ${droppedConfiguredIds.join(", ")}` : "no models will be exposed"}.`,
       );
     }
-    if (!setCached(name, forCache, Date.now(), cacheGeneration)) {
+    if (!maySendAnthropicDiscovery() || !setCached(name, forCache, Date.now(), cacheGeneration)) {
       return observed(withConfiguredRetention(configured), "degraded");
     }
     markProviderDiscoveryOk(name, liveModelCount);
     return observed(returned, "authoritative");
   } catch (error) {
+    if (error instanceof ProviderOutboundSendCancelledError) {
+      return observed(withConfiguredRetention(failedDiscoveryConfigured), "degraded");
+    }
     if (error instanceof ProviderOutboundPolicyError) {
       const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "blocked" });
       if (shouldLog) {

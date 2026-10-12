@@ -199,10 +199,15 @@ describe("GET /api/system/memory", () => {
 	        spillLastWriteFailureOrigin: string | null;
 	        spillAclRetryReturnedTimeouts: number;
 	        spillAclTimeoutMemoRefusals: number;
+	        spillCapacityRefusals: number; spillHeadroomEvictions: number;
 	        spillLastWriteFailureAt: number | null;
 	        spillLastWriteSuccessAt: number | null;
 	        replayScopeMismatchDrops: number;
 	      };
+      responseSpill: {
+        scanned: number; truncated: boolean; files: number; bytes: number;
+        ownedFiles: number; ownedBytes: number; orphanFiles: number; orphanBytes: number;
+      };
 	      appOwnedBytes: ReturnType<typeof appOwnedBytesSnapshot>;
 	      inspectionCounters: {
 	        frameBufferHighWaterBytes: number; completedItemsMaxCount: number; frameCapOverflows: number;
@@ -224,8 +229,12 @@ describe("GET /api/system/memory", () => {
     // responseState is a scalar-only continuation-store attribution block: numbers plus fixed
     // enum/null fields (no paths, messages, tokens, or account identifiers).
     // The exact count is pinned on purpose: a new field must be reviewed for privacy safety
-    // before it reaches this surface. 20 after #3522 added failure origins and counters.
-    expect(Object.keys(body.responseState)).toHaveLength(20);
+    // before it reaches this surface. 20 after #3522 added failure origins and counters; 22 after
+    // #6747 added the disk-cap refusal and admission-eviction counts (cumulative integers only).
+    expect(Object.keys(body.responseState)).toHaveLength(22);
+    for (const field of ["spillCapacityRefusals", "spillHeadroomEvictions"] as const) {
+      expect(Number.isSafeInteger(body.responseState[field]) && body.responseState[field] >= 0).toBe(true);
+    }
     const {
       spillWriteStatus,
       spillLastWriteFailureCode,
@@ -247,6 +256,15 @@ describe("GET /api/system/memory", () => {
     expect(spillLastWriteFailureAt === null || Number.isFinite(spillLastWriteFailureAt)).toBe(true);
     expect(spillLastWriteSuccessAt === null || Number.isFinite(spillLastWriteSuccessAt)).toBe(true);
     expect(body.responseState.count).toBeGreaterThanOrEqual(0);
+    // responseSpill is the dry-run spill-directory report: scalar-only counts and a
+    // truncation flag — no paths, filenames, or response ids.
+    expect(Object.keys(body.responseSpill).sort()).toEqual([
+      "bytes", "files", "orphanBytes", "orphanFiles", "ownedBytes", "ownedFiles", "scanned", "truncated",
+    ]);
+    expect(typeof body.responseSpill.truncated).toBe("boolean");
+    const { truncated: _truncated, ...numericSpill } = body.responseSpill;
+    expect(Object.values(numericSpill)
+      .every(value => typeof value === "number" && Number.isFinite(value))).toBe(true);
     expect(body.appOwnedBytes).toEqual({
       budgetBytes: expect.any(Number),
       retainedBytes: expect.any(Number),
@@ -300,36 +318,31 @@ describe("GET /api/system/memory", () => {
       return await res!.json() as { bunRuntimeSource?: unknown; bunRevision?: unknown };
     };
     try {
-      for (const source of ["override", "bundled", "process"]) {
-        process.env.OCX_BUN_RUNTIME_SOURCE = source;
-        // Source alone is not enough: the marker must name THIS executable.
-        expect((await read()).bunRuntimeSource).toBeUndefined();
-        process.env.OCX_BUN_RUNTIME_PATH = process.execPath;
-        expect((await read()).bunRuntimeSource).toBe(source);
-        delete process.env.OCX_BUN_RUNTIME_PATH;
-      }
-      // A mismatched recorded path describes another binary — stay absent.
-      process.env.OCX_BUN_RUNTIME_SOURCE = "override";
-      process.env.OCX_BUN_RUNTIME_PATH = "/usr/local/bin/definitely-not-this-bun";
-      expect((await read()).bunRuntimeSource).toBeUndefined();
-      delete process.env.OCX_BUN_RUNTIME_PATH;
-      delete process.env.OCX_BUN_RUNTIME_SOURCE;
-      // An unset or unrecognized marker must leave the field absent rather than
-      // shipping a value doctor would then have to distrust.
-      const unset = await read();
-      expect(unset.bunRuntimeSource).toBeUndefined();
-      expect(typeof unset.bunRevision).toBe("string");
+      // The env-marker matrix itself — every allowlisted source, the pair contract,
+      // a mismatched recorded path, and absent or unrecognized markers — is exercised
+      // directly against the serialization target in
+      // tests/ci-workflows/bun-runtime.test.ts ("reportedBunRuntimeSource (#848
+      // launch-time provenance)"), with assertions identical to the ones this test
+      // used to route through eight full memory snapshots (~600 ms each on the
+      // shared CI runners, over this test's own deadline twice in unrelated PRs).
+      // What only this test can still prove is the wiring: the route answers THIS
+      // field from THAT function. One read per wire shape is the whole cost of that.
+      process.env.OCX_BUN_RUNTIME_SOURCE = "bundled";
+      process.env.OCX_BUN_RUNTIME_PATH = process.execPath;
+      const reported = await read();
+      expect(reported.bunRuntimeSource).toBe("bundled");
+      expect(typeof reported.bunRevision).toBe("string");
 
-      process.env.OCX_BUN_RUNTIME_SOURCE = "system";
+      // Without the marker pair the field is absent, never a guessed value.
+      delete process.env.OCX_BUN_RUNTIME_SOURCE;
+      delete process.env.OCX_BUN_RUNTIME_PATH;
       expect((await read()).bunRuntimeSource).toBeUndefined();
     } finally {
       if (inherited === undefined) delete process.env.OCX_BUN_RUNTIME_SOURCE;
       else process.env.OCX_BUN_RUNTIME_SOURCE = inherited;
       delete process.env.OCX_BUN_RUNTIME_PATH;
     }
-    // The route costs ~600 ms per read on the shared CI runners, and this test makes
-    // eight of them — marginally over bun's 5 s default on a loaded box.
-  }, 20_000);
+  });
 
   test("GET system memory includes privacy-safe appOwnedBytes scalars", async () => {
     registerDefaultAppOwnedMemoryStores();
@@ -339,7 +352,7 @@ describe("GET /api/system/memory", () => {
     };
     expect(Object.keys(body.appOwnedBytes.stores).sort()).toEqual([
       "antigravity_replay", "claude_debug", "crash_ring", "cursor_blobs", "image_normalize",
-      "injection_debug", "model_cache", "provider_debug", "request_log", "responses_continuation",
+      "injection_debug", "model_cache", "native_control_replay", "provider_debug", "request_log", "responses_continuation",
       "usage_snapshot", "usage_summary", "vision_descriptions",
     ]);
     expect(Object.values(body.appOwnedBytes.stores).flatMap(snapshot => Object.values(snapshot))

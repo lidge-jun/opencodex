@@ -350,6 +350,45 @@ export function deleteAccountHealth(accountId: string): void {
   upstreamHealth.delete(accountId);
 }
 
+export function carriesQuotaRefusal(health: CodexUpstreamHealth | undefined): boolean {
+  return health?.lastFailureStatus === 429 || health?.lastFailureStatus === 402;
+}
+
+/**
+ * Has this account refused a request on quota without serving one since?
+ *
+ * Thread affinity is a prompt-cache optimization and every rule around it is a preference:
+ * `autoSwitchThreshold` is a hint that an account is getting busy, and `pool.cacheAffinity`
+ * deliberately raises that bar further. A refusal is not a preference, and once the account has
+ * told THIS thread it cannot serve, the binding has nothing left to optimize.
+ *
+ * The distinction matters because the cooldown a 429 writes is deliberately short. A reset
+ * announcement is advisory — plan quota routinely frees up before the advertised instant — so
+ * {@link CODEX_MAX_RESET_DERIVED_COOLDOWN_MS} caps it at 15 minutes. The five-hour window that
+ * announcement describes is not capped, so an account whose burst window is spent looks
+ * selectable again long before it is. For an unbound request that is correct: going back to find
+ * out is how the pool learns the window moved. For a BOUND thread it is a loop with no exit —
+ * the cooldown lapses, the account still scores lowest on the only window this proxy has a
+ * reading for (its weekly bar, untouched by a burst limit), the thread rebinds, and earns the
+ * identical 429. Cleared affinity does not help: the next request re-derives the same choice.
+ * From the Codex side that reads exactly as reported — a new session rotates normally while an
+ * existing one is locked to an exhausted account until the proxy is restarted, because a restart
+ * is the only thing that drops the binding and the stale health together.
+ *
+ * `lastFailureStatus` is the right evidence because of when it ends: {@link preservedCooldownFields}
+ * strips it from every recovery write, so it survives exactly until the account actually serves a
+ * request again. Nothing here blocks that — selection is untouched, so unbound traffic still probes
+ * the account and the first success releases every thread this refused.
+ *
+ * Scope follows where the refusal was recorded. An account-wide throttle lands in
+ * `upstreamHealth` and releases every lane; a reset-derived refusal lands against one native
+ * quota group, so a spent Spark window still cannot displace the same thread's Terra binding.
+ */
+export function hasUnrecoveredCodexQuotaRefusal(accountId: string, quotaScope?: CodexQuotaScope): boolean {
+  if (carriesQuotaRefusal(getAccountHealth(accountId))) return true;
+  return quotaScope !== undefined && carriesQuotaRefusal(scopedHealthFor(accountId, quotaScope));
+}
+
 export function listScopedHealthEntries(accountId: string): Array<[CodexQuotaScope, CodexUpstreamHealth]> {
   return [...(quotaScopedHealth.get(accountId) ?? [])];
 }

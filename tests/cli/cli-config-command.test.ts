@@ -31,14 +31,21 @@ function freshConfig() {
         adapter: "openai-responses",
         baseUrl: "https://chatgpt.com/backend-api/codex",
         authMode: "forward",
+        proxy: "http://route_user:route_password@egress.test:3128",
       },
       blsc: {
         adapter: "openai-chat",
         baseUrl: "https://llmapi.blsc.cn",
+        proxy: "direct",
         modelCosts: {
           "deepseek-v4-flash": { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 },
           "sk-abcdef1234567890": { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0 },
         },
+      },
+      nocreds: {
+        adapter: "openai-chat",
+        baseUrl: "https://nocreds.example",
+        proxy: "http://127.0.0.1:7890",
       },
     },
     defaultProvider: "openai",
@@ -48,6 +55,67 @@ function freshConfig() {
 }
 
 describe("ocx config display redaction", () => {
+  test.each([
+    "providers.openai.proxy ",
+    "providers.openai.proxy.",
+    "providers..openai. proxy .",
+  ])("normalized proxy path %s keeps get and set output masked", (path) => {
+    const dir = freshConfig();
+    try {
+      const get = runCli(["config", "get", path, "--json"], { OPENCODEX_HOME: dir });
+      expect(get.status).toBe(0);
+      expect(JSON.parse(get.stdout)).toBe("http://egress.test:3128/");
+      expect(get.stdout + get.stderr).not.toContain("route_user");
+      expect(get.stdout + get.stderr).not.toContain("route_password");
+
+      const set = runCli([
+        "config", "set", path,
+        "http://next_user:next_password@egress.test:8080", "--json",
+      ], { OPENCODEX_HOME: dir });
+      expect(set.status).toBe(0);
+      expect(JSON.parse(set.stdout).value).toBe("http://egress.test:8080/");
+      expect(set.stdout + set.stderr).not.toContain("next_user");
+      expect(set.stdout + set.stderr).not.toContain("next_password");
+    } finally {
+      removeTreeWithRetry(dir);
+    }
+  });
+
+  test("provider proxy credentials stay masked in show, get, and set output", () => {
+    const dir = freshConfig();
+    const secret = "route_password";
+    try {
+      const show = runCli(["config", "show", "--json"], { OPENCODEX_HOME: dir });
+      expect(show.status).toBe(0);
+      expect(show.stdout).not.toContain(secret);
+      const shown = JSON.parse(show.stdout).providers;
+      // Credentialed URL: userinfo stripped, host/port kept for diagnostics.
+      expect(shown.openai.proxy).toBe("http://egress.test:3128/");
+      expect(show.stdout).not.toContain("route_user");
+      // "direct" and credential-less URLs carry no secret and stay readable.
+      expect(shown.blsc.proxy).toBe("direct");
+      expect(shown.nocreds.proxy).toBe("http://127.0.0.1:7890");
+
+      const get = runCli(["config", "get", "providers.openai.proxy"], { OPENCODEX_HOME: dir });
+      expect(get.status).toBe(0);
+      expect(get.stdout.trim()).toBe("http://egress.test:3128/");
+
+      const getDirect = runCli(["config", "get", "providers.blsc.proxy"], { OPENCODEX_HOME: dir });
+      expect(getDirect.status).toBe(0);
+      expect(getDirect.stdout.trim()).toBe("direct");
+
+      const set = runCli([
+        "config", "set", "providers.openai.proxy",
+        "http://next_user:next_password@egress.test:8080", "--json",
+      ], { OPENCODEX_HOME: dir });
+      expect(set.status).toBe(0);
+      expect(set.stdout).not.toContain("next_password");
+      expect(JSON.parse(set.stdout).value).toBe("http://egress.test:8080/");
+    } finally {
+      removeTreeWithRetry(dir);
+    }
+  });
+
   test("config show --json never prints secret-shaped modelCosts keys", () => {
     const dir = freshConfig();
     try {
@@ -77,4 +145,32 @@ describe("ocx config display redaction", () => {
       removeTreeWithRetry(dir);
     }
   });
+});
+
+
+test.each([false, true])("raw config export to stdout JSON=%s remains the config document", json => {
+  const dir = freshConfig();
+  try {
+    const result = runCli(["config", "export", "-", ...(json ? ["--json"] : [])], { OPENCODEX_HOME: dir });
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    const config = JSON.parse(result.stdout);
+    expect(config.providers.openai.proxy).toBe("http://route_user:route_password@egress.test:3128");
+    expect(config.ok).toBeUndefined();
+  } finally { removeTreeWithRetry(dir); }
+});
+
+
+test("config validate stdin exits 1 with a single JSON failure payload", () => {
+  const dir = freshConfig();
+  try {
+    const result = spawnSync(process.execPath, [cliPath, "config", "validate", "-", "--json"], {
+      cwd: repoRoot,
+      env: { ...process.env, OPENCODEX_HOME: dir, CODEX_HOME: isolatedCodexHome },
+      encoding: "utf8", input: '{"port":"invalid"}', timeout: SPAWN_BUDGET_MS - 5_000,
+    });
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
+    expect(result.stderr).toBe("");
+  } finally { removeTreeWithRetry(dir); }
 });

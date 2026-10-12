@@ -28,7 +28,7 @@ listesine eklenmez. Satır, gerçek bir katalog satırının sahip olduğu alan
 şekliyle eşleştirilir, bu da hatalı biçimlendirilmiş girdileri filtreler —
 önbellek kullanıcıya ait bir dosya olduğundan kimliğin bir yukarı akış
 yanıtından geldiğini kanıtlamaz. Bkz. [Tam Codex hesap
-seçicileri](/tr/reference/configuration/routing/#exact-codex-account-selectors).
+seçicileri](/tr/reference/configuration/routing/#tam-codex-hesap-seçicileri).
 
 `gpt-daybreak-blue-latest`, hesap nitelikli satırlar için bu yalnızca gözlem
 kuralını takip eder ve yalın yerel izin listesine eklenmez. Ayrı, açık bir
@@ -115,7 +115,7 @@ yönlendirir. Ayrıca uyumluluk takma adları mevcutken devre dışı bırakılm
 yerel satırları etkili katalogdan çıkarır, böylece Desktop `visibility`'yi yok
 sayarak onları yeniden canlandıramaz. Komut, devre dışı bırakma anahtarı
 anlambilimi ve güvenlik kısıtlamaları için [Codex Desktop yerel izin listesi
-uyumluluğu](/tr/guides/combos/#codex-desktop-native-allowlist-compatibility)
+uyumluluğu](/tr/guides/combos/#codex-desktop-yerel-izin-listesi-uyumluluğu)
 bölümüne bakın.
 
 ## Entegrasyon yolu
@@ -157,8 +157,8 @@ meta verileri sağladığı GPT-5.6 için kullanılır.
 | Codex girişi (açık Daybreak iletme satırı) | Yalnızca tam `customModels` satırı kurallı `openai` sağlayıcısında yapılandırıldığında `openai/gpt-daybreak-blue-latest`. Daybreak hat kimliğini korur ve sabitlenmiş Sol yetenek anlık görüntüsünü kullanır (922.000 bağlam; 829.800 otomatik sıkıştırma). |
 | OpenAI (API anahtarı) | Tam olarak on ad alanlı satır: `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna, üç `*-pro` sanal kimliği ve iki Daybreak takma adı (onunun tümü için 922.000 bağlam; 922.000 maksimum girdi) |
 | OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` (922.000) |
-| Cursor | Statik geri dönüş `cursor/gpt-5.6-sol`, `cursor/gpt-5.6-terra` ve `cursor/gpt-5.6-luna` (1.000.000) artı `cursor/grok-4.5` ve `cursor/grok-4.5-fast` (500.000) içerir; canlı hesap keşfi hangilerinin görünür kalacağına karar verir. |
-| xAI | Canlı keşif yetkilidir. Geri dönüş kataloğu `xai/grok-4.6` içerir ve varsayılan olarak `xai/grok-4.5`'tir; her ikisinin de 500.000 tokenlik pencereleri vardır. Grok 4.6, `low` / `medium` / `high` / `xhigh` (yukarı akış varsayılanı: `high`) sunarken, Grok 4.5 `high` ile durur. |
+| Cursor | Statik geri dönüş `cursor/gpt-5.6-sol`, `cursor/gpt-5.6-terra` ve `cursor/gpt-5.6-luna` (1.000.000) ile Grok 4.5, 4.6 ve 4.7 için normal/Fast satırları (500.000) içerir; 4.6 ve 4.7 ayrıca `xhigh` sunar. Canlı hesap keşfi hangi satırların görünür kalacağını belirler. |
+| xAI | Canlı keşif yetkilidir. Geri dönüş kataloğu `xai/grok-4.6` ve `xai/grok-4.7` içerir; varsayılan model `xai/grok-4.5` olarak kalır. Üçünün de bağlam penceresi 500.000 tokendir. Grok 4.6 ve 4.7 `low` / `medium` / `high` / `xhigh` (yukarı akış varsayılanı: `high`) sunarken, Grok 4.5 `high` ile durur. |
 
 Sabitlenmiş GPT-5.6 girdileri tam yukarı akış merdivenini korur. Sol ve Terra
 `low`'dan `ultra`'ya kadar sunar; Luna `max` ile durur. Sol varsayılan olarak

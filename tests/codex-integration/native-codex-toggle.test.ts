@@ -11,20 +11,22 @@
  * so a process that dies between the two leaves a decision the next start can
  * act on — rather than artifacts the next start silently undoes.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { handleManagementAPI } from "../../src/server/management-api";
 import type { ManagementApiDeps } from "../../src/server/management/context";
 import type { OcxConfig } from "../../src/types";
+import * as serviceManagerProbe from "../../src/service-manager-probe";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 let fixtureRoot = "";
 let codexHome = "";
 let previousOpencodexHome: string | undefined;
 let previousCodexHome: string | undefined;
+let restoreServiceManagerProbe = () => {};
 const cleanup: string[] = [];
 
 function baseConfig(): OcxConfig {
@@ -73,6 +75,11 @@ function persistedCodexIntent(): unknown {
 }
 
 beforeEach(() => {
+  // The route fixture owns no service, and HOME cannot redirect launchctl/systemctl.
+  // Without this the host's own opencodex registration decides the case.
+  const probe = spyOn(serviceManagerProbe, "inspectServiceManagerInstallation")
+    .mockReturnValue({ kind: "absent" });
+  restoreServiceManagerProbe = () => probe.mockRestore();
   previousOpencodexHome = process.env.OPENCODEX_HOME;
   previousCodexHome = process.env.CODEX_HOME;
   // Native realpath resolves macOS /var aliases and expands Windows RUNNER~1
@@ -93,6 +100,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  restoreServiceManagerProbe();
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousOpencodexHome;
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
@@ -142,6 +150,69 @@ describe("request validation", () => {
 });
 
 describe("turning Codex off", () => {
+  test("the status read reflects the persisted switch after a toggle with a stale server config", async () => {
+    const serverConfig = baseConfig();
+    const disabled = await put(serverConfig, { enabled: false });
+    expect(disabled.body).toMatchObject({ state: "absent", desiredEnabled: false });
+    expect(persistedCodexIntent()).toBe(false);
+
+    const response = await dispatch(serverConfig, "/api/native-integrations");
+    const body = await response!.json() as { clients: { clientId: string; state: string; desiredEnabled: boolean }[] };
+    expect(body.clients.find(client => client.clientId === "codex")).toMatchObject({
+      state: "absent",
+      desiredEnabled: false,
+    });
+  });
+
+  test("the status read follows an off-then-on round trip against the same stale server config", async () => {
+    const serverConfig = baseConfig();
+    await put(serverConfig, { enabled: false });
+    await put(serverConfig, { enabled: true });
+    expect(persistedCodexIntent()).not.toBe(false);
+
+    const response = await dispatch(serverConfig, "/api/native-integrations");
+    const body = await response!.json() as { clients: { clientId: string; state: string; desiredEnabled: boolean }[] };
+    expect(body.clients.find(client => client.clientId === "codex")).toMatchObject({
+      state: "current",
+      desiredEnabled: true,
+    });
+  });
+
+  test("a failed native restore stays unsafe on the next status read", async () => {
+    // A directory where Codex's config file belongs makes the native restore fail.
+    mkdirSync(join(codexHome, "config.toml"));
+    const serverConfig = baseConfig();
+    const disabled = await put(serverConfig, { enabled: false });
+    expect(disabled.body).toMatchObject({ state: "unsafe", reason: "restore_incomplete", desiredEnabled: false });
+
+    const response = await dispatch(serverConfig, "/api/native-integrations");
+    const body = await response!.json() as { clients: { clientId: string; state: string; desiredEnabled: boolean }[] };
+    expect(body.clients.find(client => client.clientId === "codex")).toMatchObject({
+      state: "unsafe",
+      desiredEnabled: false,
+    });
+  });
+
+  test("an enable that did not apply stays absent on the next status read", async () => {
+    // A hub does not rewrite its own Codex config, so the enable is saved but skipped.
+    writeFileSync(join(fixtureRoot, "config.json"), JSON.stringify({ ...baseConfig(), runtimeRole: "hub" }, null, 2));
+    const serverConfig = { ...baseConfig(), runtimeRole: "hub" } as OcxConfig;
+    const enabled = await put(serverConfig, { enabled: true });
+    expect(enabled.body).toMatchObject({ state: "absent", desiredEnabled: true, reason: "apply_incomplete" });
+
+    const response = await dispatch(serverConfig, "/api/native-integrations");
+    const body = await response!.json() as { clients: { clientId: string; state: string; desiredEnabled: boolean }[] };
+    expect(body.clients.find(client => client.clientId === "codex")).toMatchObject({ state: "absent", desiredEnabled: true });
+  });
+
+  test("without a config file the status read keeps the request's in-memory intent", async () => {
+    rmSync(join(fixtureRoot, "config.json"));
+    const serverConfig = { ...baseConfig(), clientIntegrations: { codex: false } } as OcxConfig;
+    const response = await dispatch(serverConfig, "/api/native-integrations");
+    const body = await response!.json() as { clients: { clientId: string; desiredEnabled: boolean }[] };
+    expect(body.clients.find(client => client.clientId === "codex")?.desiredEnabled).toBe(false);
+  });
+
   test("persists the decision so it survives the next start", async () => {
     const result = await put(baseConfig(), { enabled: false });
     expect(result.status).toBe(200);
@@ -189,6 +260,12 @@ describe("turning Codex off", () => {
 });
 
 describe("turning Codex back on", () => {
+  test("enable inspects the fixture's service-manager evidence", async () => {
+    expect(serviceManagerProbe.inspectServiceManagerInstallation).not.toHaveBeenCalled();
+    await put(baseConfig(), { enabled: true });
+    expect(serviceManagerProbe.inspectServiceManagerInstallation).toHaveBeenCalled();
+  });
+
   test("removes the key rather than storing true", async () => {
     await put(baseConfig(), { enabled: false });
     expect(persistedCodexIntent()).toBe(false);

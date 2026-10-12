@@ -47,8 +47,9 @@ full owner inventory for the Responses surface.
 `server/index/serve-options.ts` owns the HTTP boundary and delegates the Responses data plane to
 the `server/responses.ts` facade and its `server/responses/*.ts` modules:
 
-1. `server/index/serve-options.ts` applies CORS and API authentication, rejects new work while draining, and
-   records request lifecycle metadata. It serves `GET /v1/models`, `POST /v1/responses`,
+1. `server/index/serve-options.ts` applies CORS and API authentication, rejects new work while draining
+   with HTTP 503, JSON `error.code: "server_restarting"`, and `Retry-After: 5`, and
+   records request lifecycle metadata. Drain responses use the receiving listener's CORS policy. It serves `GET /v1/models`, `POST /v1/responses`,
    `POST /v1/responses/compact`, `POST /v1/images/generations` / `POST /v1/images/edits`
    (relayed to an OpenAI-family upstream by `server/images.ts` for codex's built-in `image_gen`
    tool), `POST /v1/live` / `POST /v1/realtime/calls` (ChatGPT / Codex App voice and OpenAI
@@ -70,6 +71,12 @@ the `server/responses.ts` facade and its `server/responses/*.ts` modules:
    supports only the standard HTTP path; adapters that implement `runTurn`, such as Cursor, bypass it.
 7. `bridge/sse.ts` / `bridge/response-json.ts` produces Responses SSE or JSON. `server/request-log.ts` and `usage/` collect terminal
    status, latency, provider/model labels, and best-effort token usage without changing the response.
+
+The pre-dispatch input estimate follows what the routed adapter actually sends. For `openai-chat`
+models outside `preserveReasoningContentModels`, the adapter drops replayed assistant thinking, so
+the estimate excludes it too; history that never reaches the provider therefore cannot cause a local
+context-limit refusal. Models that preserve reasoning, and other adapters,
+send that thinking and still count it.
 
 ## The parser
 
@@ -109,7 +116,8 @@ understands:
 The bridge also runs a **heartbeat keep-alive** (RC3): during upstream silence, it emits an SSE
 comment line (`: opencodex heartbeat`) every 2 seconds to re-arm Codex's idle timer. Comment lines
 are discarded by every eventsource parser without producing an event, so strict Responses decoders
-never see an unknown variant. The default **stall deadline** is 300 seconds (`stallTimeoutSec`);
+never see an unknown variant. The default **stall deadline** is 300 seconds for a public upstream
+and disabled for a local one (`stallTimeoutSec`; `0` disables it everywhere);
 reaching it aborts the upstream and emits `response.incomplete` with reason
 `upstream_stall_timeout`, preventing a hung connection from blocking Codex indefinitely.
 
@@ -233,7 +241,8 @@ keepalives do not reset the adapter-event stall watchdog. The default stall
 timeout stays 300 seconds; encrypted compaction content is preserved unchanged.
 
 Native compact response buffering also enforces a body-byte inactivity deadline
-using `stallTimeoutSec` (300 seconds by default). Nonempty chunks reset that
+using `stallTimeoutSec` (300 seconds for a public upstream, disabled for a local one,
+and disabled everywhere when set to `0`). Nonempty chunks reset that
 deadline; a stalled body returns HTTP 504, client cancellation retains HTTP 499,
 and cleanup does not wait for a stuck upstream cancellation promise. The 32 MiB
 response ceiling and the original body bytes are preserved.

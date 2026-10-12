@@ -1,18 +1,25 @@
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { configReasoningPinsConfigError } from "./provider-validation";
 import { adoptCustomModelCatalogMigration, projectCustomModelCatalogMigration } from "../codex/custom-model-catalog-migration";
-import { refreshPreservedProviderOwner, refreshUserCostOverlays } from "../usage/user-cost-overlays";
+import { refreshPreservedProviderOwner } from "../usage/user-cost-overlays";
+import { refreshConfigDerivedRegistries } from "./derived-registries";
 import {
+  applyConfigObjectChildDeletions,
+  clearPendingConfigObjectChildDeletions,
+  prepareConfigObjectChildDeletionRebase,
   clearPendingConfigTopLevelDeletions,
+  clearConfigTopLevelDeletionIntent,
   configHasRebaseProvenance,
   configRebaseDeletionKeys,
   CONFIG_REBASE_PROVENANCE_KEY,
   projectConfigRebaseProvenance,
 } from "./rebase-provenance";
 import { withConfigMutationLockSync, bumpGenerationForCooperatingConfigWrite } from "./mutation-lock";
-import { persistConfigUnlocked, readRawConfigJson } from "./persist-unlocked";
+import { ConfigWritePublishedError, persistConfigUnlocked, readRawConfigJson } from "./persist-unlocked";
 import { configDiagnosticsFromRaw, readConfigDiagnostics } from "./diagnostics";
 import { normalizePersistedClaudeCode } from "./load-degrade";
+import { reconcileApiKeys } from "./api-key-reconcile";
+import { captureLiveTopologyBaseline, LIVE_TOPOLOGY_KEYS, projectLiveTopology } from "./live-topology";
 
 // ---------------------------------------------------------------------------
 // Hand-edit protection for the `claudeCode` subtree (devlog 260726_claude_auth_auto/040 H1).
@@ -37,6 +44,40 @@ const claudeCodeBaseline = new WeakMap<OcxConfig, unknown>();
  * reconciliation paths below.
  */
 const liveConfigBaseline = new WeakMap<OcxConfig, OcxConfig>();
+
+/** Adopt a committed manual selection without advancing unrelated live merge baselines. */
+export function adoptPersistedCodexAccountSelection(
+  config: OcxConfig,
+  persisted: Pick<OcxConfig, "activeCodexAccountId" | "activeCodexAccountPinned">,
+): void {
+  const keys = ["activeCodexAccountId", "activeCodexAccountPinned"] as const;
+  const baseline = liveConfigBaseline.get(config);
+  for (const key of keys) {
+    config[key] = persisted[key];
+    // Retain known absent keys: a later disk-only selection is a new edit, not stale intent.
+    if (baseline) baseline[key] = persisted[key];
+  }
+  clearConfigTopLevelDeletionIntent(config, keys);
+  if (baseline) clearConfigTopLevelDeletionIntent(baseline, keys);
+}
+
+/**
+ * Adopt a committed discovery decision and its merge baseline as one synchronous step.
+ * Visibility writers assign and save synchronously; any future writer yielding between
+ * those steps must preserve pending edits through a three-way merge here.
+ */
+export function adoptPersistedModelDiscovery(
+  config: OcxConfig,
+  persisted: Pick<OcxConfig, "modelDiscovery" | "disabledModels">,
+): void {
+  config.modelDiscovery = structuredClone(persisted.modelDiscovery);
+  config.disabledModels = structuredClone(persisted.disabledModels);
+  const baseline = liveConfigBaseline.get(config);
+  if (baseline) {
+    baseline.modelDiscovery = structuredClone(persisted.modelDiscovery);
+    baseline.disabledModels = structuredClone(persisted.disabledModels);
+  }
+}
 /**
  * The live config retains the address of the socket Bun actually opened, while
  * this map retains the operator's desired address for the next process start.
@@ -48,6 +89,16 @@ type PersistedServerBinding = Pick<OcxConfig, "port" | "hostname">;
 const persistedLiveServerBinding = new WeakMap<OcxConfig, PersistedServerBinding>();
 
 /**
+ * Config instances nobody holds long-term — the catalog auto-refresh tick's
+ * per-tick `loadConfig()` snapshot. A detached snapshot cannot express a
+ * deliberate deletion and owns no live listener socket, so the live policy's
+ * `hostname`/`port` and disk-only-key skips would only discard concurrent hand
+ * edits wholesale. Keyed on the instance so the mode cannot leak into the
+ * long-lived server config.
+ */
+const detachedConfigSnapshots = new WeakSet<OcxConfig>();
+
+/**
  * Arm the baseline for a long-lived config. MANDATORY at `startServer`, not lazy on
  * first save — arming lazily would lose exactly the hand edit made before that first
  * save, which is the case the guard exists for.
@@ -55,6 +106,18 @@ const persistedLiveServerBinding = new WeakMap<OcxConfig, PersistedServerBinding
 export function armClaudeCodeBaseline(config: OcxConfig): void {
   liveConfigBaseline.set(config, structuredClone(config));
   claudeCodeBaseline.set(config, structuredClone(config.claudeCode));
+  captureLiveTopologyBaseline(config);
+}
+
+/**
+ * Arm a freshly loaded config instance no long-lived server owns. The save path
+ * then reconciles every field — the listener binding and keys that exist only
+ * on disk included — against this arming baseline, so a concurrent hand edit is
+ * adopted rather than overwritten by the snapshot's stale values.
+ */
+export function armDetachedConfigBaseline(config: OcxConfig): void {
+  armClaudeCodeBaseline(config);
+  detachedConfigSnapshots.add(config);
 }
 
 /**
@@ -78,6 +141,42 @@ export function adoptPersistedProviderIntoLiveConfig(
 /** Test seam only: is this instance armed? */
 export function claudeCodeBaselineArmed(config: OcxConfig): boolean {
   return claudeCodeBaseline.has(config);
+}
+
+/**
+ * Adopt a field-scoped Claude Code write into a long-lived config snapshot.
+ *
+ * Scoped writers commit against the current file rather than serializing the
+ * whole snapshot. Mirror that committed subtree and rebase the hand-edit guard
+ * together so a later unrelated save does not mistake the scoped write for an
+ * outstanding in-memory mutation.
+ *
+ * The live subtree may already hold pending mutations a concurrent request
+ * assigned but has not saved yet — the Claude settings PUT yields between
+ * assigning `config.claudeCode` and saving. Adopt through the same three-way
+ * reconcile guarded saves use, so pending live leaves survive, disjoint
+ * committed changes merge in, and only the baseline moves wholesale to the
+ * committed subtree.
+ */
+export function adoptPersistedClaudeCode(
+  config: OcxConfig,
+  persistedClaudeCode: OcxConfig["claudeCode"],
+): void {
+  const storedBaseline: ConfigMergeValue = claudeCodeBaseline.has(config)
+    ? claudeCodeBaseline.get(config)
+    : MISSING_CONFIG_VALUE;
+  const merged = reconcileConfigValue(
+    storedBaseline === undefined ? MISSING_CONFIG_VALUE : storedBaseline,
+    config.claudeCode === undefined ? MISSING_CONFIG_VALUE : config.claudeCode,
+    persistedClaudeCode === undefined ? MISSING_CONFIG_VALUE : persistedClaudeCode,
+  );
+  if (merged === MISSING_CONFIG_VALUE) delete config.claudeCode;
+  else config.claudeCode = merged as OcxConfig["claudeCode"];
+  const baseline = liveConfigBaseline.get(config);
+  if (baseline) baseline.claudeCode = structuredClone(persistedClaudeCode);
+  if (claudeCodeBaseline.has(config)) {
+    claudeCodeBaseline.set(config, structuredClone(persistedClaudeCode));
+  }
 }
 
 /**
@@ -123,6 +222,42 @@ type IndexedCustomModels = {
   order: string[];
   byId: Map<string, Record<string, unknown>>;
 };
+
+function indexDisabledModels(value: ConfigMergeValue): { order: string[]; members: Set<string> } | null {
+  if (value === MISSING_CONFIG_VALUE) return { order: [], members: new Set() };
+  if (!Array.isArray(value)) return null;
+  const members = new Set<string>();
+  for (const item of value) {
+    if (typeof item !== "string" || members.has(item)) return null;
+    members.add(item);
+  }
+  return { order: value as string[], members };
+}
+
+/**
+ * Merge disabled-model lists by membership instead of treating the array as one
+ * opaque leaf: a slug either side deleted stays deleted (deletion wins over the
+ * other side's unchanged retention) while slugs added on either side are kept.
+ * Discovery only appends, so live additions are its arrivals; a hand edit that
+ * hid or un-hid a model mid-refresh survives the discovery save.
+ */
+function reconcileDisabledModels(
+  baseline: ConfigMergeValue,
+  live: ConfigMergeValue,
+  persisted: ConfigMergeValue,
+): ConfigMergeValue | null {
+  const baselineSet = indexDisabledModels(baseline);
+  const liveSet = indexDisabledModels(live);
+  const persistedSet = indexDisabledModels(persisted);
+  if (!baselineSet || !liveSet || !persistedSet) return null;
+  const order = [...liveSet.order, ...persistedSet.order.filter(id => !liveSet.members.has(id))];
+  const merged: string[] = [];
+  for (const id of order) {
+    if (baselineSet.members.has(id) && (!liveSet.members.has(id) || !persistedSet.members.has(id))) continue;
+    merged.push(id);
+  }
+  return merged;
+}
 
 function indexCustomModels(value: ConfigMergeValue): IndexedCustomModels | null {
   if (!Array.isArray(value)) return null;
@@ -189,10 +324,18 @@ function reconcileConfigRecord(
         && baselineValue !== MISSING_CONFIG_VALUE
         && persistedValue === MISSING_CONFIG_VALUE
       ? MISSING_CONFIG_VALUE
-      : key === "customModels"
+      : key === "apiKeys"
+        ? reconcileApiKeys(baselineValue === MISSING_CONFIG_VALUE ? undefined : baselineValue,
+            liveValue === MISSING_CONFIG_VALUE ? undefined : liveValue,
+            persistedValue === MISSING_CONFIG_VALUE ? undefined : persistedValue, reconcileConfigRecord)
+          ?? reconcileConfigValue(baselineValue, liveValue, persistedValue)
+        : key === "customModels"
         ? reconcileCustomModels(baselineValue, liveValue, persistedValue)
           ?? reconcileConfigValue(baselineValue, liveValue, persistedValue)
-        : reconcileConfigValue(baselineValue, liveValue, persistedValue, key === "providers");
+        : key === "disabledModels"
+          ? reconcileDisabledModels(baselineValue, liveValue, persistedValue)
+            ?? reconcileConfigValue(baselineValue, liveValue, persistedValue)
+          : reconcileConfigValue(baselineValue, liveValue, persistedValue, key === "providers");
     if (merged === MISSING_CONFIG_VALUE) delete live[key];
     else live[key] = merged;
   }
@@ -261,12 +404,14 @@ export function reconcileLiveConfigFromDisk(config: OcxConfig, persistedBaseline
     ...(persisted.hostname !== undefined ? { hostname: persisted.hostname } : {}),
   });
 
+  const childDeletions = prepareConfigObjectChildDeletionRebase(config);
   reconcileConfigRecord(
     config as unknown as Record<string, unknown>,
     persistedBaseline as unknown as Record<string, unknown>,
     persisted as unknown as Record<string, unknown>,
-    new Set(["hostname", "port", ...(claudeGuardArmed ? ["claudeCode"] : [])]),
+    new Set([...LIVE_TOPOLOGY_KEYS, ...(claudeGuardArmed ? ["claudeCode"] : [])]),
   );
+  applyConfigObjectChildDeletions(config, childDeletions);
 
   if (claudeGuardArmed && !pendingLiveClaudeMutation) {
     if (persisted.claudeCode === undefined) delete config.claudeCode;
@@ -276,7 +421,7 @@ export function reconcileLiveConfigFromDisk(config: OcxConfig, persistedBaseline
   // The reconciliation may have adopted a providers.<name>.modelCosts edit made
   // by a cooperating process while the OAuth login was pending; keep the overlay
   // registry (and the usage-cache overlay version) in sync with the live config.
-  refreshUserCostOverlays(config);
+  refreshConfigDerivedRegistries(config);
 }
 
 /**
@@ -302,7 +447,11 @@ function readPersistedServerBinding(
 }
 
 /**
- * The save entry point for every writer holding a LIVE server config.
+ * The save entry point for every writer holding a LIVE server config, and for a
+ * detached snapshot armed through {@link armDetachedConfigBaseline}. The live
+ * policy keeps `hostname`/`port` and disk-only keys out of the merge; a detached
+ * snapshot has neither hazard, so it rebases every field against its arming
+ * baseline instead.
  *
  * Conflict policy, chosen deliberately:
  * - disk changed, we did not → their hand edit wins;
@@ -312,43 +461,62 @@ function readPersistedServerBinding(
  *   live state edited that same row;
  * - file missing/unreadable → save what we have, no throw.
  *
- * Custom-model rows are merged by their stable `id`, preserving independent
- * edits and deletions across stale whole-config saves.
+ * Custom-model rows are merged by their stable `id`, and `disabledModels` by
+ * member, preserving independent edits and deletions across stale whole-config
+ * saves.
  */
 export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
   const pinError = configReasoningPinsConfigError(config);
   if (pinError) throw new Error(pinError);
-  withConfigMutationLockSync(() => {
+  let published = false;
+  const persist = (candidate: OcxConfig): void => {
+    const changed = persistConfigUnlocked(candidate);
+    published = true;
+    if (changed) bumpGenerationForCooperatingConfigWrite();
+  };
+  const save = () => withConfigMutationLockSync(() => {
+    const childDeletions = prepareConfigObjectChildDeletionRebase(config);
     const bindingBaseline = persistedLiveServerBinding.get(config);
     // One authoritative pre-write read feeds both the live-config reconciliation and
     // custom-model deletion migration. A second read could observe different bytes.
     const onDisk = readRawConfigJson();
     const baseline = liveConfigBaseline.get(config);
+    let diskDeletedKeys = new Set<string>();
+    let persistedSnapshot: OcxConfig | undefined;
     if (baseline && onDisk !== undefined) {
       const persistedDiagnostics = configDiagnosticsFromRaw(JSON.stringify(onDisk));
       if (persistedDiagnostics.source === "file") {
-        const deletedKeys = configRebaseDeletionKeys(config);
-        const provenanceExists = configHasRebaseProvenance(config);
-        // Only keys this live config is actually known to have diverged on may be
-        // rebased. The baseline is captured once when the server arms it, so any key
-        // that appeared on disk afterwards — through saveConfig(), a hand edit, or
-        // another process — is absent from the baseline as well as from the live
-        // config. Reconciling those keys reads "live never changed this" and adopts
-        // the disk value, which resurrects a field the live writer had deliberately
-        // deleted (#1462 regression: PUT /api/grok/selection with an empty list).
-        // Restrict the merge to keys the baseline knew about, plus keys the live
-        // config still carries; a key that exists only on disk is left to the
-        // ordinary whole-config write below.
-        const rebaseableKeys = new Set([
-          ...Object.keys(baseline as unknown as Record<string, unknown>),
-          ...Object.keys(config as unknown as Record<string, unknown>),
-          ...(provenanceExists
-            ? Object.keys(persistedDiagnostics.config as unknown as Record<string, unknown>)
-            : []),
-        ]);
-        const skipped = new Set(["hostname", "port", "claudeCode", CONFIG_REBASE_PROVENANCE_KEY]);
-        for (const key of Object.keys(persistedDiagnostics.config as unknown as Record<string, unknown>)) {
-          if (!rebaseableKeys.has(key)) skipped.add(key);
+        persistedSnapshot = persistedDiagnostics.config;
+        // Capture authoritative disk deletions before reconciliation can restore a key.
+        // Live instances retain actual socket identity; detached discovery snapshots
+        // own no socket and also merge listener fields and disk-only sections.
+        const detached = detachedConfigSnapshots.has(config);
+        diskDeletedKeys = configRebaseDeletionKeys(persistedDiagnostics.config);
+        // Preserve explicit pending live edits; stale retention is not an edit.
+        if (!detached) for (const key of diskDeletedKeys) {
+          if (!LIVE_TOPOLOGY_KEYS.has(key) && !deepEqual(
+            ownConfigValue(config as unknown as Record<string, unknown>, key),
+            ownConfigValue(baseline as unknown as Record<string, unknown>, key))) diskDeletedKeys.delete(key);
+        }
+        const deletedKeys = new Set([...diskDeletedKeys, ...configRebaseDeletionKeys(config)]);
+        const skipped = detached
+          ? new Set(["claudeCode"])
+          : new Set([...LIVE_TOPOLOGY_KEYS, "claudeCode", CONFIG_REBASE_PROVENANCE_KEY]);
+        if (!detached) {
+          const provenanceExists = configHasRebaseProvenance(config) || configHasRebaseProvenance(persistedDiagnostics.config);
+          // Without provenance, disk-only keys remain subject to the legacy whole-
+          // config write: adopting them could resurrect a deliberate live deletion
+          // absent from its baseline (#1462). Provenance makes that intent explicit.
+          const rebaseableKeys = new Set([
+            ...Object.keys(baseline as unknown as Record<string, unknown>),
+            ...Object.keys(config as unknown as Record<string, unknown>),
+            ...(provenanceExists
+              ? Object.keys(persistedDiagnostics.config as unknown as Record<string, unknown>)
+              : []),
+          ]);
+          for (const key of Object.keys(persistedDiagnostics.config as unknown as Record<string, unknown>)) {
+            if (!rebaseableKeys.has(key)) skipped.add(key);
+          }
         }
         reconcileConfigRecord(
           config as unknown as Record<string, unknown>,
@@ -356,9 +524,13 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
           persistedDiagnostics.config as unknown as Record<string, unknown>,
           skipped,
         );
-        for (const key of deletedKeys) delete (config as unknown as Record<string, unknown>)[key];
+        for (const key of deletedKeys) {
+          if (!detached && LIVE_TOPOLOGY_KEYS.has(key)) continue;
+          delete (config as unknown as Record<string, unknown>)[key];
+        }
       }
     }
+    applyConfigObjectChildDeletions(config, childDeletions);
     if (claudeCodeBaseline.has(config)) {
       if (onDisk !== undefined) {
         const baseline = claudeCodeBaseline.get(config);
@@ -370,26 +542,35 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
         }
       }
     }
-    const provenanceProjection = projectConfigRebaseProvenance(config);
+    const desired = persistedSnapshot && !detachedConfigSnapshots.has(config)
+      ? projectLiveTopology(config, persistedSnapshot, reconcileConfigRecord) : config;
+    const durableProjection = { ...desired, configRebaseProvenance: projectConfigRebaseProvenance(config).configRebaseProvenance };
+    for (const key of diskDeletedKeys) {
+      delete (durableProjection as unknown as Record<string, unknown>)[key];
+    }
+    if (diskDeletedKeys.size) durableProjection.configRebaseProvenance = { version: 1,
+      deletedTopLevelKeys: [...new Set([...configRebaseDeletionKeys(durableProjection), ...diskDeletedKeys])].sort() };
+    const provenanceProjection = projectConfigRebaseProvenance(durableProjection);
     const projectedConfig = projectCustomModelCatalogMigration(
       onDisk,
-      config,
+      durableProjection,
     );
     if (provenanceProjection.configRebaseProvenance === undefined) delete projectedConfig.configRebaseProvenance;
     else projectedConfig.configRebaseProvenance = provenanceProjection.configRebaseProvenance;
-    const persistedBinding = bindingBaseline && onDisk
-      ? readPersistedServerBinding(onDisk, bindingBaseline)
+    const persistedBinding = (bindingBaseline || diskDeletedKeys.has("hostname")) && onDisk
+      ? readPersistedServerBinding(onDisk, bindingBaseline ?? { port: config.port, hostname: config.hostname })
       : bindingBaseline;
     if (persistedBinding) {
       const persistedConfig: OcxConfig = { ...projectedConfig, port: persistedBinding.port };
       if (persistedBinding.hostname === undefined) delete persistedConfig.hostname;
       else persistedConfig.hostname = persistedBinding.hostname;
-      if (persistConfigUnlocked(persistedConfig)) bumpGenerationForCooperatingConfigWrite();
+      persist(persistedConfig);
       persistedLiveServerBinding.set(config, persistedBinding);
     } else {
-      if (persistConfigUnlocked(projectedConfig)) bumpGenerationForCooperatingConfigWrite();
+      persist(projectedConfig);
     }
     adoptCustomModelCatalogMigration(config, projectedConfig);
+    captureLiveTopologyBaseline(config);
     if (claudeCodeBaseline.has(config)) {
       claudeCodeBaseline.set(config, structuredClone(config.claudeCode));
     }
@@ -398,6 +579,17 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
       else config.configRebaseProvenance = structuredClone(projectedConfig.configRebaseProvenance);
       liveConfigBaseline.set(config, structuredClone(projectedConfig));
     }
+    clearPendingConfigObjectChildDeletions(config);
     clearPendingConfigTopLevelDeletions(config);
   });
+  try {
+    save();
+  } catch (error) {
+    // Generation/baseline updates and the lock's COMMIT run after publication.
+    // They may fail, but the file replacement cannot be undone by a live rollback.
+    if (published && !(error instanceof ConfigWritePublishedError)) {
+      throw new ConfigWritePublishedError(error);
+    }
+    throw error;
+  }
 }

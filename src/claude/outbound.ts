@@ -20,7 +20,7 @@ import {
   type TranslatorBudget,
 } from "../lib/translator-budget";
 import { sseFieldOffset, sseFieldValue } from "../lib/sse-decoder";
-import { decodeReasoningEnvelope, encodeReasoningEnvelope } from "../responses/reasoning-envelope";
+import { decodeReasoningEnvelope, encodeReasoningEnvelope, OCX_REASONING_PREFIX } from "../responses/reasoning-envelope";
 
 type Rec = Record<string, unknown>;
 
@@ -33,7 +33,7 @@ function reasoningIdentityDigest(value: string): string {
 }
 
 /** Fixed-size identity that preserves protocol boundaries without retaining upstream strings. */
-function boundedReasoningIdentity(value: unknown): string {
+export function boundedReasoningIdentity(value: unknown): string {
   if (typeof value === "number") {
     if (Number.isSafeInteger(value) && value >= 0) return `n${value}`;
     if (Number.isFinite(value)) return `d${value}`;
@@ -70,8 +70,67 @@ export function anthropicErrorType(status: number): string {
   }
 }
 
+/**
+ * Claude Code compacts reactively only when an oversized-prompt refusal is worded the way the
+ * Anthropic API words it: it looks for `prompt is too long` (or `input is too long for requested
+ * model`) in the message and reads `prompt is too long: <actual> tokens > <limit> maximum` for the
+ * gap (2.1.288 binary). Routed providers word the same refusal differently, so a
+ * context_length_exceeded envelope is rewritten into that form. Counts are carried over only when
+ * the upstream states both of them; otherwise the original text is prefixed and no number is
+ * guessed. Without this the client ends the turn on a fatal error instead of compacting
+ * (devlog/_plan/261009_claude_1m_default/010).
+ */
+const CLAUDE_PROMPT_TOO_LONG_RE = /prompt is too long|input is too long for requested model/i;
+const STATED_CONTEXT_COUNTS_RE = /maximum context length is (\d+) tokens[\s\S]*?(?:resulted in|you requested) (\d+) tokens/i;
+
+export function claudePromptTooLongMessage(message: string): string {
+  if (CLAUDE_PROMPT_TOO_LONG_RE.test(message)) return message;
+  const counts = STATED_CONTEXT_COUNTS_RE.exec(message);
+  if (counts) return `prompt is too long: ${counts[2]} tokens > ${counts[1]} maximum`;
+  return `prompt is too long: ${message}`;
+}
+
+/** Provider wordings of an oversized-input refusal, for lanes that relay a provider's own error text. */
+const CONTEXT_OVERFLOW_TEXT_RE = /prompt is too long|input is too long|context window|context length|maximum context|too many tokens|model token limit/i;
+
+export function isContextOverflowText(message: string): boolean {
+  return CONTEXT_OVERFLOW_TEXT_RE.test(message);
+}
+
+/**
+ * SSE payload rewrite for the native Messages lane: an `error` event that refuses an oversized
+ * input gets the Anthropic wording; every other payload passes through byte-identical. The type
+ * gate keeps a rate limit that happens to mention the context window untouched.
+ */
+export function claudeOverflowSsePayload(payload: string): string {
+  if (!payload.includes("\"error\"")) return payload;
+  let parsed: unknown;
+  try { parsed = JSON.parse(payload); } catch { return payload; }
+  if (!isRec(parsed) || parsed.type !== "error" || !isRec(parsed.error)) return payload;
+  const error = parsed.error;
+  const message = typeof error.message === "string" ? error.message : "";
+  const sized = error.type === "invalid_request_error" || error.type === "request_too_large";
+  if (!sized || isThroughputLimitText(message)) return payload;
+  if (!(error.code === "context_length_exceeded" || isContextOverflowText(message))) return payload;
+  const next = claudePromptTooLongMessage(message);
+  return next === message ? payload : JSON.stringify({ ...parsed, error: { ...error, message: next } });
+}
+
+/**
+ * A throughput limit that the shared classifier files under context_length_exceeded (its "too many
+ * tokens" match also catches "too many tokens per minute"). Worded as an overflow it would make
+ * Claude Code compact a conversation that only needs to wait, so it keeps its own text.
+ */
+const THROUGHPUT_LIMIT_TEXT_RE = /\bper (?:second|minute|hour|day)\b|\brate limit|\bquota\b|\btpm\b/i;
+
+export function isThroughputLimitText(message: string): boolean {
+  return THROUGHPUT_LIMIT_TEXT_RE.test(message);
+}
+
 export function anthropicErrorBody(status: number, message: string, type?: string, code?: string): Rec {
-  return { type: "error", error: { type: type ?? anthropicErrorType(status), message, ...(code ? { code } : {}) } };
+  const overflow = code === "context_length_exceeded" && !isThroughputLimitText(message);
+  const text = overflow ? claudePromptTooLongMessage(message) : message;
+  return { type: "error", error: { type: type ?? anthropicErrorType(status), message: text, ...(code ? { code } : {}) } };
 }
 
 export function anthropicErrorResponse(status: number, message: string, type?: string, code?: string): Response {
@@ -104,7 +163,7 @@ export function anthropicUsage(usage: unknown, webSearchRequests = 0): Rec {
   };
 }
 
-function sseFrame(name: string, data: Rec): string {
+export function sseFrame(name: string, data: Rec): string {
   return `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
@@ -161,7 +220,7 @@ export function sanitizeWebSearchInput(input: unknown): Rec {
  * input (query/queries) and the web_search_tool_result content (hits, or the error
  * object when the search failed). Shared by the SSE and JSON translation paths.
  */
-function webSearchPairFromItem(item: Rec): { id: string; input: Rec; resultContent: unknown; completed: boolean } {
+export function webSearchPairFromItem(item: Rec): { id: string; input: Rec; resultContent: unknown; completed: boolean } {
   const action = isRec(item.action) ? item.action : {};
   const queries = Array.isArray(action.queries)
     ? action.queries.filter((q): q is string => typeof q === "string" && q.length > 0)
@@ -205,7 +264,7 @@ function webSearchPairFromItem(item: Rec): { id: string; input: Rec; resultConte
  * is not a claim about upstream's tokenizer, and it is not final — `message_delta` carries the
  * authoritative count for every reader that waits for it, exactly as before.
  */
-function messageSnapshot(model: string, confirmedUsage?: Rec, inputTokenFloor?: number): Rec {
+export function messageSnapshot(model: string, confirmedUsage?: Rec, inputTokenFloor?: number): Rec {
   const usage = confirmedUsage
     ?? (typeof inputTokenFloor === "number" && Number.isFinite(inputTokenFloor) && inputTokenFloor > 0
       ? { input_tokens: Math.trunc(inputTokenFloor), output_tokens: 0 }
@@ -220,6 +279,44 @@ function messageSnapshot(model: string, confirmedUsage?: Rec, inputTokenFloor?: 
     stop_sequence: null,
     usage,
   };
+}
+
+/**
+ * A Responses incomplete reason as the Anthropic client sees it: an output cap and a content
+ * filter are real stop reasons; every other reason is a retryable overload so Claude Code backs
+ * off instead of accepting a truncated turn.
+ */
+export function anthropicIncompleteOutcome(
+  reason: unknown,
+  message: unknown,
+): { stopReason: "max_tokens" | "refusal" } | { failMessage: string } {
+  if (reason === "max_output_tokens") return { stopReason: "max_tokens" };
+  if (reason === "content_filter") return { stopReason: "refusal" };
+  return {
+    failMessage: typeof message === "string" && message.trim()
+      ? message
+      : `upstream response was incomplete${typeof reason === "string" ? ` (${reason})` : ""}`,
+  };
+}
+
+/**
+ * The HTTP status a Responses `response.failed` error object maps to on the Anthropic wire.
+ * Internal failure envelopes carry the classified {type, code, message} but no numeric status,
+ * so it is derived with the same mapping /api/logs uses; a classified 429/401/400 then reaches
+ * Claude Code as its real Anthropic error type instead of a retryable overload.
+ */
+export function anthropicFailedStatus(error: Rec, message: string): number {
+  const code = typeof error.code === "string" ? error.code : undefined;
+  if (code === "context_length_exceeded") return 400;
+  return code === "translation_buffer_limit"
+    ? 413
+    : typeof error.status === "number"
+      ? error.status
+      : httpStatusFromTerminalError({
+        type: typeof error.type === "string" ? error.type : undefined,
+        code: typeof error.code === "string" ? error.code : null,
+        message,
+      });
 }
 
 interface OpenBlock {
@@ -242,6 +339,13 @@ interface OpenBlock {
   thinkingBuf?: string;
   thinkingBufBytes?: number;
   reasoningSig?: string;
+  /** The provider's own encrypted reasoning for this item; signed into the block on close. */
+  reasoningNative?: { enc: string; id?: string };
+}
+
+/** A provider-minted (not ocxr1) `encrypted_content`, or `""`. */
+function nativeEncryptedReasoning(encrypted: string): string {
+  return encrypted.length > 0 && !encrypted.startsWith(OCX_REASONING_PREFIX) ? encrypted : "";
 }
 
 /** Streaming: Responses SSE bytes -> Anthropic Messages SSE bytes. */
@@ -256,6 +360,7 @@ export function responsesSseToAnthropicSse(
      * upstream sent no confirmed usage before the first frame. See `messageSnapshot` (#4857).
      */
     inputTokenFloor?: number;
+    nativeReasoningTagFor?: (blob: string) => string | undefined;
   },
 ): ReadableStream<Uint8Array> {
   const translatorBudget = opts.translatorBudget;
@@ -344,6 +449,13 @@ export function responsesSseToAnthropicSse(
           open.webSearchArgsEmitted = true;
         }
         if (open.kind === "thinking") {
+          const native = open.reasoningNative;
+          const tag = native && opts.nativeReasoningTagFor?.(native.enc);
+          if (!open.thinkingBuf && !open.reasoningSig && !tag) {
+            releaseThinkingBuffer(open);
+            open = null;
+            return;
+          }
           // Delay the index and all thinking frames until closure so a matching
           // done envelope can put its redacted blocks first. The existing buffer
           // remains charged through signature emission, including queued frames.
@@ -358,7 +470,10 @@ export function responsesSseToAnthropicSse(
               delta: { type: "thinking_delta", thinking: open.thinkingBuf },
             });
           }
-          const signature = open.reasoningSig ?? encodeReasoningEnvelope({ txt: open.thinkingBuf ?? "" }, translatorBudget);
+          const signature = open.reasoningSig ?? encodeReasoningEnvelope({
+            txt: open.thinkingBuf ?? "",
+            ...(tag ? { nat: { ...native, model, tag } } : {}),
+          }, translatorBudget);
           emit("content_block_delta", {
             type: "content_block_delta", index: open.index,
             delta: { type: "signature_delta", signature },
@@ -646,11 +761,15 @@ export function responsesSseToAnthropicSse(
                 emit("content_block_start", { type: "content_block_start", index: idx, content_block: { type: "redacted_thinking", data } });
                 emit("content_block_stop", { type: "content_block_stop", index: idx });
               }
-              if (env?.sig && open?.kind !== "thinking") {
+              // A provider's own blob is the only copy of its reasoning the client can hold, so
+              // it gets a thinking block even when no summary text arrived.
+              const native = nativeEncryptedReasoning(encrypted);
+              if ((env?.sig || native) && open?.kind !== "thinking") {
                 ensureBlock("thinking");
               }
               if (open?.kind === "thinking") {
                 if (env?.sig) open.reasoningSig = env.sig;
+                if (native) open.reasoningNative = typeof item.id === "string" && item.id.length > 0 ? { enc: native, id: item.id } : { enc: native };
                 closeOpenBlock();
               }
             }
@@ -668,16 +787,9 @@ export function responsesSseToAnthropicSse(
           case "response.incomplete": {
             const response = isRec(data.response) ? data.response : {};
             const details = isRec(response.incomplete_details) ? response.incomplete_details : {};
-            if (details.reason === "max_output_tokens") {
-              finish("max_tokens", response.usage);
-            } else if (details.reason === "content_filter") {
-              finish("refusal", response.usage);
-            } else {
-              const message = typeof details.message === "string" && details.message.trim()
-                ? details.message
-                : `upstream response was incomplete${typeof details.reason === "string" ? ` (${details.reason})` : ""}`;
-              fail(529, message, true);
-            }
+            const outcome = anthropicIncompleteOutcome(details.reason, details.message);
+            if ("stopReason" in outcome) finish(outcome.stopReason, response.usage);
+            else fail(529, outcome.failMessage, true);
             break;
           }
           case "response.failed": {
@@ -688,19 +800,7 @@ export function responsesSseToAnthropicSse(
             if (code === "translation_buffer_limit") {
               throw new TranslatorBudgetExceededError("live_transient", TRANSLATOR_MAX_TURN_BYTES);
             }
-            const status = code === "translation_buffer_limit"
-              ? 413
-              : typeof error.status === "number"
-                ? error.status
-                // Internal response.failed envelopes carry the classified {type, code, message}
-                // but no numeric status. Derive it with the same mapping /api/logs uses so a
-                // classified 429/401/400 reaches Claude Code as its real Anthropic error type
-                // instead of being masked as retryable overload.
-                : httpStatusFromTerminalError({
-                  type: typeof error.type === "string" ? error.type : undefined,
-                  code: typeof error.code === "string" ? error.code : null,
-                  message,
-                });
+            const status = anthropicFailedStatus(error, message);
             // Unclassified status-absent response.failed (relaySseWithFailedTail synthetic
             // tail) still lands on a transient 5xx here — the mid-stream reset shape maps to
             // overloaded_error by design.
@@ -708,6 +808,7 @@ export function responsesSseToAnthropicSse(
               status,
               message,
               true,
+              code === "context_length_exceeded" ? code : undefined,
             );
             break;
           }
@@ -861,7 +962,7 @@ export function responsesSseToAnthropicSse(
 }
 
 /** Non-streaming: /v1/responses JSON -> Anthropic message JSON. */
-export function responsesJsonToAnthropicMessage(json: unknown, model: string, translatorBudget?: TranslatorBudget): Rec {
+export function responsesJsonToAnthropicMessage(json: unknown, model: string, translatorBudget?: TranslatorBudget, nativeReasoningTagFor?: (blob: string) => string | undefined): Rec {
   const body = isRec(json) ? json : {};
   const output = Array.isArray(body.output) ? body.output : [];
   const content: Rec[] = [];
@@ -897,10 +998,14 @@ export function responsesJsonToAnthropicMessage(json: unknown, model: string, tr
         // Legacy combined envelopes place redacted blocks before the signed block,
         // matching the Anthropic adapter. New bridge output uses separate items.
         for (const data of env?.red ?? []) content.push({ type: "redacted_thinking", data });
-        // env.txt may be locally hidden text. Do not expose it here or manufacture
-        // a new signed continuity carrier; hidden-summary replay remains limited.
-        if (parts.length > 0 || env?.sig) {
-          content.push({ type: "thinking", thinking: parts.join("\n\n"), signature: env?.sig ?? encodeReasoningEnvelope({ txt: parts.join("\n\n") }, translatorBudget) });
+        // env.txt may be locally hidden text. Do not expose it here. A provider's own blob is
+        // carried in the envelope so the next request can hand it back (see inbound.ts).
+        const native = nativeEncryptedReasoning(encrypted);
+        const tag = native && nativeReasoningTagFor?.(native);
+        if (parts.length > 0 || env?.sig || tag) {
+          const text = parts.join("\n\n");
+          const nat = tag ? { enc: native, model, tag, ...(typeof raw.id === "string" && raw.id.length > 0 ? { id: raw.id } : {}) } : undefined;
+          content.push({ type: "thinking", thinking: text, signature: env?.sig ?? encodeReasoningEnvelope({ txt: text, ...(nat ? { nat } : {}) }, translatorBudget) });
         }
         break;
       }

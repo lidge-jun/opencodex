@@ -33,8 +33,6 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { repoPath } from "../helpers/repo-root";
 
-const CLASSIFIER_REL = "scripts/ci/bun-crash-signatures.sh";
-const SOURCE_LINE = `source ${CLASSIFIER_REL}`;
 
 /** Every signature that means "the interpreter died", not "a test failed". */
 const CRASH_SIGNATURES = [
@@ -50,25 +48,15 @@ function read(...segments: string[]): string {
 }
 
 /** The literal text of one `run:` block, located by a line only that block contains. */
-function runBlockContaining(workflow: string, anchor: string): string {
-  const index = workflow.indexOf(anchor);
-  expect(`anchor present: ${anchor}`).toBe(`anchor present: ${anchor}`);
-  expect(index).toBeGreaterThan(-1);
-  const start = workflow.lastIndexOf("run: |", index);
-  expect(start).toBeGreaterThan(-1);
-  const end = workflow.indexOf("\n      - name:", index);
-  return workflow.slice(start, end === -1 ? undefined : end);
-}
-
 describe("the Bun crash classifier is shared", () => {
   const classifier = read("scripts", "ci", "bun-crash-signatures.sh");
   const batchScript = read("scripts", "ci", "run-bun-test-batches.sh");
   const workflow = read(".github", "workflows", "ci.yml");
 
-  const lanes = {
-    "macos-shard": runBlockContaining(workflow, "run_macos_suite tests"),
-    "macos-control": runBlockContaining(workflow, "bun test --isolate --timeout 60000 tests 2>&1"),
-  };
+  const jobs = (Bun.YAML.parse(workflow) as { jobs: Record<string, { steps: Array<{ run?: string }> }> }).jobs;
+  const lanes = Object.fromEntries(["test", "platform-macos", "macos-control", "platform-windows"].map(name => [
+    name, jobs[name]!.steps.map(step => step.run ?? "").filter(run => run.includes("scripts/ci/run-bun-test-batches.sh")).join("\n"),
+  ]));
 
   test("the signatures exist in the classifier", () => {
     for (const signature of CRASH_SIGNATURES) {
@@ -91,13 +79,11 @@ describe("the Bun crash classifier is shared", () => {
 
   test("every direct lane and the shared batch runner use the classifier", () => {
     for (const [name, text] of Object.entries(lanes)) {
-      expect(`${name}:sources:${text.includes(SOURCE_LINE)}`).toBe(`${name}:sources:true`);
-      expect(`${name}:calls:${text.includes("is_bun_runtime_crash \"$suite_status\" \"$suite_log\"")}`)
-        .toBe(`${name}:calls:true`);
+      expect(`${name}:delegates:${text.includes("scripts/ci/run-bun-test-batches.sh")}`).toBe(`${name}:delegates:true`);
     }
     expect(batchScript).toContain("bun-crash-signatures.sh");
     expect(batchScript).toContain('is_bun_runtime_crash "$status" "$log_file"');
-    expect(workflow.match(/run: bash scripts\/ci\/run-bun-test-batches\.sh/g)).toHaveLength(2);
+    expect(workflow.match(/run: bash scripts\/ci\/run-bun-test-batches\.sh/g)).toHaveLength(4);
   });
 
   test("the thread-numbered panic form is the anchor nowhere", () => {

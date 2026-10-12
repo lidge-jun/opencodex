@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 import {
   buildClaudeEnv as buildClaudeEnvWithIo,
   buildNativeClaudeEnv,
@@ -8,13 +9,15 @@ import {
   ensureProxyForClaude,
   fetchClaudeCodeState,
   isProxyOnlyModelId,
+  readConnectedClaudeContextWindows,
   nativeModelOverride,
   readPickerDefaultModel,
   rootSkipPermissionsNotice,
   shouldAllowRootSkipPermissions,
 } from "../../src/cli/claude";
+import { buildClaudeContextWindows } from "../../src/claude/context-windows";
 import { commandInvocation } from "../../src/lib/win-exec";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LivenessIo, LiveProxy } from "../../src/server/proxy-liveness";
@@ -72,6 +75,62 @@ describe("ocx claude proxy liveness", () => {
 });
 
 describe("ocx claude native fallback", () => {
+  test("owned applied and stale proxy settings bypass the intercept", () => {
+    const owned = { HTTPS_PROXY: "http://opencodex:t@127.0.0.1:10200", NODE_EXTRA_CA_CERTS: "/tmp/owned-ca.pem" };
+    for (const kind of ["applied", "stale"] as const) {
+      const env = buildNativeClaudeEnv(cfg(), { HTTPS_PROXY: owned.HTTPS_PROXY,
+        NODE_EXTRA_CA_CERTS: owned.NODE_EXTRA_CA_CERTS }, { ownedInterceptSettings: { kind, env: owned } });
+      expect(env.NO_PROXY).toBe("*");
+      expect(env.no_proxy).toBe("*");
+      expect(env.HTTPS_PROXY).toBeUndefined();
+      expect(env.NODE_EXTRA_CA_CERTS).toBeUndefined();
+      const foreignCa = buildNativeClaudeEnv(cfg(), { HTTPS_PROXY: owned.HTTPS_PROXY,
+        NODE_EXTRA_CA_CERTS: "/tmp/foreign-ca.pem" }, { ownedInterceptSettings: { kind, env: owned } });
+      expect(foreignCa.NODE_EXTRA_CA_CERTS).toBe("/tmp/foreign-ca.pem");
+    }
+    const noInheritedProxy = buildNativeClaudeEnv(cfg(), { ALL_PROXY: "http://corp:3128" },
+      { ownedInterceptSettings: { kind: "applied", env: owned } });
+    expect(noInheritedProxy).toMatchObject({ NO_PROXY: "*", no_proxy: "*", ALL_PROXY: "http://corp:3128" });
+  });
+
+  test("foreign inherited proxy preserves env and warns exactly once", () => {
+    const owned = { HTTPS_PROXY: "http://opencodex:t@127.0.0.1:10200", NODE_EXTRA_CA_CERTS: "/tmp/owned-ca.pem" };
+    for (const name of ["HTTPS_PROXY", "https_proxy"] as const) {
+      const warnings: string[] = [];
+      const base = { [name]: "http://corp:3128", NO_PROXY: "localhost",
+        NODE_EXTRA_CA_CERTS: owned.NODE_EXTRA_CA_CERTS };
+      const env = buildNativeClaudeEnv(cfg(), base, { ownedInterceptSettings: { kind: "applied", env: owned },
+        warn: line => warnings.push(line) });
+      expect(env[name]).toBe("http://corp:3128");
+      expect(env.NO_PROXY).toBe("localhost");
+      expect(env.no_proxy).toBeUndefined();
+      expect(env.NODE_EXTRA_CA_CERTS).toBe(owned.NODE_EXTRA_CA_CERTS);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("Turn Desktop/CLI first-party off");
+    }
+  });
+
+  test("absent, foreign, unreadable and CA-only stale settings leave inherited proxies alone", () => {
+    const states = [{ kind: "absent" }, { kind: "foreign", env: { HTTPS_PROXY: "http://corp:3128" } },
+      { kind: "unreadable", path: "/settings.json" },
+      { kind: "stale", env: { NODE_EXTRA_CA_CERTS: "/tmp/owned-ca.pem" } }] as const;
+    for (const state of states) {
+      const warnings: string[] = [];
+      const env = buildNativeClaudeEnv(cfg(), { ALL_PROXY: "http://corp:3128",
+        NODE_EXTRA_CA_CERTS: "/tmp/owned-ca.pem" },
+        { ownedInterceptSettings: state, warn: line => warnings.push(line) });
+      expect(env.ALL_PROXY).toBe("http://corp:3128");
+      expect(env.NODE_EXTRA_CA_CERTS).toBe("/tmp/owned-ca.pem");
+      expect(env.NO_PROXY).toBeUndefined();
+      expect(env.no_proxy).toBeUndefined();
+      expect(warnings).toEqual([]);
+    }
+    const noSettings = buildNativeClaudeEnv(cfg(), { HTTPS_PROXY: "http://corp:3128",
+      NODE_EXTRA_CA_CERTS: "/tmp/corp-ca.pem" });
+    expect(noSettings.HTTPS_PROXY).toBe("http://corp:3128");
+    expect(noSettings.NODE_EXTRA_CA_CERTS).toBe("/tmp/corp-ca.pem");
+    expect(noSettings.NO_PROXY).toBeUndefined();
+  });
   test("routes unless configured or live Claude routing is explicitly disabled", () => {
     expect(claudeLaunchPlan(true, true)).toEqual({ kind: "routed" });
     expect(claudeLaunchPlan(true, undefined)).toEqual({ kind: "routed" });
@@ -126,23 +185,44 @@ describe("ocx claude native fallback", () => {
     expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBeUndefined();
   });
 
-  test("preserves an unrelated loopback gateway and its user credential", () => {
+  test("drops the picker label opencodex paired with a stripped alias slot, never a user label (#6926)", () => {
+    const env = buildNativeClaudeEnv(cfg(), {
+      ANTHROPIC_DEFAULT_OPUS_MODEL: "ocx-claude-native--gpt-6.1-sol",
+      ANTHROPIC_DEFAULT_OPUS_MODEL_NAME: "gpt-6.1-sol (native)",
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: "ocx-claude-native--gpt-6-luna",
+      ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME: "My helper",
+      ANTHROPIC_DEFAULT_SONNET_MODEL: "claude-sonnet-5-5",
+      ANTHROPIC_DEFAULT_SONNET_MODEL_NAME: "Sonnet (mine)",
+    }, { preBunAnthropicSlots: [] });
+    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBeUndefined();
+    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL_NAME).toBeUndefined();
+    expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBeUndefined();
+    expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME).toBe("My helper");
+    expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("claude-sonnet-5-5");
+    expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL_NAME).toBe("Sonnet (mine)");
+  });
+
+  test("preserves an unrelated gateway, its user credential, and its host-managed guard", () => {
     for (const baseUrl of ["http://localhost:8080", "http://127.0.0.1:10100"]) {
       const env = buildNativeClaudeEnv(cfg({ port: 10100 }), {
         ANTHROPIC_BASE_URL: baseUrl,
         ANTHROPIC_API_KEY: "sk-ant-user-key",
+        CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1",
       }, {
         preBunAnthropicSlots: ["ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY"],
       });
 
       expect(env.ANTHROPIC_BASE_URL).toBe(baseUrl);
       expect(env.ANTHROPIC_API_KEY).toBe("sk-ant-user-key");
+      expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe("1");
     }
   });
 
   test("keeps unrelated slash model ids and recognizes configured provider routes", () => {
     expect(isProxyOnlyModelId("mock/model", ["mock"])).toBe(true);
     expect(isProxyOnlyModelId("claude-ocx2-abcd")).toBe(true);
+    expect(isProxyOnlyModelId("ocx-claude-mock--model")).toBe(true);
+    expect(isProxyOnlyModelId("ocx-claude2-openrouter--a~sb[1m]")).toBe(true);
     expect(isProxyOnlyModelId("arn:aws:bedrock:region:acct:inference-profile/us.anthropic.model", ["mock"])).toBe(false);
     expect(isProxyOnlyModelId("claude-opus-5")).toBe(false);
   });
@@ -153,6 +233,31 @@ describe("ocx claude native fallback", () => {
     expect(nativeModelOverride("claude-ocx2-abcd", "mock/model", [], ["mock"]).flag).toBeUndefined();
     expect(nativeModelOverride("claude-ocx2-abcd", "opus", ["--model", "sonnet"], ["mock"]))
       .toEqual({});
+  });
+
+  test("a connected client's window map keeps legacy claude-ocx selectors next to the current ones", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-claude-connected-catalog-"));
+    try {
+      const path = join(dir, "catalog.json");
+      writeFileSync(path, JSON.stringify({ models: [
+        { slug: "cursor/gpt-5.6-luna", context_window: 1_000_000 },
+        { slug: "gpt-5.6-sol", context_window: 272_000 },
+      ] }));
+      const windows = readConnectedClaudeContextWindows(path);
+      expect(windows["ocx-claude-cursor--gpt-5.6-luna"]).toBe(1_000_000);
+      expect(windows["claude-ocx-cursor--gpt-5.6-luna"]).toBe(1_000_000);
+      expect(windows["ocx-claude-native--gpt-5.6-sol"]).toBe(272_000);
+      expect(windows["claude-ocx-native--gpt-5.6-sol"]).toBe(272_000);
+    } finally {
+      removeTreeWithRetry(dir);
+    }
+  });
+
+  test("a saved current ocx-claude selector also falls back to the configured native model", () => {
+    expect(nativeModelOverride("ocx-claude-mock--model", "opus", [], ["mock"]))
+      .toMatchObject({ flag: ["--model", "opus"] });
+    expect(nativeModelOverride("ocx-claude2-openrouter--a~sb", "opus", [], ["mock"]))
+      .toMatchObject({ flag: ["--model", "opus"] });
   });
 
   test("preserves the root opt-in on native fallback", () => {
@@ -182,7 +287,7 @@ describe("ocx claude native fallback", () => {
       expect(warnings).toHaveLength(1);
     } finally {
       console.warn = realWarn;
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 });
@@ -270,13 +375,45 @@ describe("ocx claude env assembly", () => {
     // OAuth — the launcher must leave it unset on an open loopback proxy.
     expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
     expect(env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY).toBe("1");
-    expect(env.ANTHROPIC_MODEL).toBe("claude-ocx-gemini--gemini-3-pro");
+    // A legacy configured slot leaves in the current spelling (same route, real window).
+    expect(env.ANTHROPIC_MODEL).toBe("ocx-claude-gemini--gemini-3-pro");
     expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("gemini/gemini-3-flash");
     expect(env.ANTHROPIC_SMALL_FAST_MODEL).toBe("gemini/gemini-3-flash");
     // Never both token vars (Claude Code auth-conflict warning, 003 E1).
     expect(env.ANTHROPIC_API_KEY).toBeUndefined();
     // Do NOT set _CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL — it disables gateway model discovery.
     expect(env._CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL).toBeUndefined();
+  });
+
+  test("an exported tier model wins over the native [1m] default (#5755)", () => {
+    const env = buildClaudeEnv(cfg(), 10100, { ANTHROPIC_DEFAULT_SONNET_MODEL: "claude-sonnet-5" }, buildClaudeContextWindows([], [], undefined, {}), AUTH_PRESENT);
+    expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("claude-sonnet-5");
+    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("claude-opus-5-5[1m]");
+    // Claude Code names its own first-party ids; only an alias slot gets a label.
+    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL_NAME).toBeUndefined();
+    expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL_NAME).toBeUndefined();
+  });
+
+  test("an alias tier slot this launch writes carries its /model label (#6926)", () => {
+    const config = cfg({ claudeCode: { tierModels: { opus: "ocx-claude-native--gpt-6.1-sol", haiku: "claude-ocx-cursor--gpt-5.6-luna" } } });
+    const env = buildClaudeEnv(config, 10100, {}, {}, AUTH_PRESENT);
+    // The alias stays the submitted id; only the label is added.
+    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("ocx-claude-native--gpt-6.1-sol");
+    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL_NAME).toBe("gpt-6.1-sol (native)");
+    expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("ocx-claude-cursor--gpt-5.6-luna");
+    expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME).toBe("gpt-5.6-luna (cursor)");
+    // ANTHROPIC_SMALL_FAST_MODEL has no label variable in Claude Code.
+    expect(env.ANTHROPIC_SMALL_FAST_MODEL_NAME).toBeUndefined();
+
+    // A slot the user exported is theirs: no label is paired with a value opencodex did not write.
+    const userSlot = buildClaudeEnv(config, 10100, { ANTHROPIC_DEFAULT_OPUS_MODEL: "ocx-claude-cursor--other" }, {}, AUTH_PRESENT);
+    expect(userSlot.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("ocx-claude-cursor--other");
+    expect(userSlot.ANTHROPIC_DEFAULT_OPUS_MODEL_NAME).toBeUndefined();
+
+    // A label the user exported wins over the generated one.
+    const userLabel = buildClaudeEnv(config, 10100, { ANTHROPIC_DEFAULT_OPUS_MODEL_NAME: "Sol" }, {}, AUTH_PRESENT);
+    expect(userLabel.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("ocx-claude-native--gpt-6.1-sol");
+    expect(userLabel.ANTHROPIC_DEFAULT_OPUS_MODEL_NAME).toBe("Sol");
   });
 
   test("configured API key becomes the auth token (admission required)", () => {
@@ -361,16 +498,16 @@ describe("ocx claude env assembly", () => {
     expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe("829800");
   });
 
-  test("opt-in levers: alwaysEnableEffort=1, maxContextTokens injects the official pair", () => {
+  test("opt-in levers: maxContextTokens sets the window without disabling compact", () => {
     const env = buildClaudeEnv(cfg({
       claudeCode: { alwaysEnableEffort: true, maxContextTokens: 1_000_000 },
     }), 10100, {});
     expect(env.CLAUDE_CODE_ALWAYS_ENABLE_EFFORT).toBe("1");
     expect(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe("1000000");
-    // MAX_CONTEXT_TOKENS alone is ignored for recognized claude-shaped ids; the
-    // official pair requires DISABLE_COMPACT (exact name, no CLAUDE_CODE_ prefix).
-    expect(env.DISABLE_COMPACT).toBe("1");
-    // Legacy override wins rule-1 inside the CLI -> auto-context stays inert.
+    // Current ocx-claude ids do not start with claude-, so Claude Code honors
+    // the window without DISABLE_COMPACT. Do not inject it.
+    expect(env.DISABLE_COMPACT).toBeUndefined();
+    // maxContextTokens still disables the auto-compact window env.
     expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBeUndefined();
   });
 
@@ -385,6 +522,15 @@ describe("ocx claude env assembly", () => {
     expect(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe("500000");
     expect(env.DISABLE_COMPACT).toBe("0");
     expect(env.CLAUDE_CODE_ALWAYS_ENABLE_EFFORT).toBe("0");
+  });
+
+  test("maxContextTokens outside the compact window range never produces a compact lever", () => {
+    for (const value of [50_000, 2_000_000]) {
+      const env = buildClaudeEnv(cfg({ claudeCode: { maxContextTokens: value } }), 10100, {});
+      expect(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe(String(value));
+      expect(env.DISABLE_COMPACT).toBeUndefined();
+      expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBeUndefined();
+    }
   });
 
   test("invalid maxContextTokens values inject nothing", () => {

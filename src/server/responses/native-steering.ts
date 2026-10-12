@@ -3,6 +3,7 @@ import type { NativeSteeringReplayObserver } from "./native-steering-replay";
 import { createHash } from "node:crypto";
 import { CODEX_WS_ID_MAX_BYTES, CodexWsCorrelation } from "./codex-ws-correlation";
 import { codexWsCreateFrameExceedsLimit } from "./codex-ws-wire";
+import { checkOutboundBodySize } from "./outbound-body-guard";
 
 export const MAX_NATIVE_STEERS = 32;
 export const MAX_NATIVE_STEERING_RESPONSES = 128;
@@ -123,13 +124,20 @@ export class NativeSteeringChannel {
   private advertisedBytes = 0;
 
   /** Pin the initial lane and setting digests without opening a transport. */
-  constructor(initial: Frame, private readonly idleMs = 300_000) {
+  constructor(initial: Frame, private readonly idleMs = 300_000, private readonly maxUpstreamBodyBytes?: number) {
     if (record(initial.multi_agent) && initial.multi_agent.enabled === true) {
       throw new NativeSteeringError("native_control_mode_mismatch", "Multi-agent responses cannot use the single-agent steering channel.");
     }
     this.lane = initial.stream_id;
     for (const [key, value] of Object.entries(initial)) {
       if (!["type", "input", "previous_response_id", "stream", "stream_id"].includes(key)) this.settings.set(key, fingerprint(value));
+    }
+  }
+
+  /** Refuse the exact rebuilt control body before it reaches the retained socket. */
+  assertOutboundFrame(text: string): void {
+    if (!checkOutboundBodySize(text, this.maxUpstreamBodyBytes).admitted) {
+      throw new NativeSteeringError("outbound_body_too_large", "Native steering frame exceeds the configured upstream body limit.");
     }
   }
   /** Report whether native dispatch ever bound a physical connection to this owner. */

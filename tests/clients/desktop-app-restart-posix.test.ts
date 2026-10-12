@@ -1,8 +1,9 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { restartCodexDesktopApp, type DesktopAppRestartIo } from "../../src/codex/desktop-app-restart";
+import { setDarwinKillForTests } from "../../src/codex/desktop-app/darwin";
 import { isUnderRoot } from "../../src/codex/desktop-app/types";
 import {
   acquireDesktopRestartLock,
@@ -51,6 +52,15 @@ function isolatedLock(): { lockPath: string } {
 function psRows(rows: Array<[number, number, string]>): string {
   return rows.map(([pid, ppid, exe]) => `${pid} ${ppid} ${WHEN}   ${process.getuid?.() ?? 0} ${exe}`).join("\n");
 }
+
+/**
+ * Every signal the darwin adapter sends. The adapter signals through `process.kill`, which the
+ * exec seam cannot intercept, so without this recorder the synthetic pids below (15901 …) were
+ * signalled for real on whatever machine ran the suite.
+ */
+const kills: Array<[number, string]> = [];
+beforeEach(() => { setDarwinKillForTests((pid, signal) => { kills.push([pid, signal]); }); });
+afterEach(() => { setDarwinKillForTests(null); });
 
 function darwinIo(options: {
   calls: Call[];
@@ -276,6 +286,26 @@ describe.skipIf(process.platform === "win32")("a stop is only ever claimed when 
     expect(result.surviving).toEqual([15901]);
     expect(result.reason).toBe("targets_survived");
     expect(calls.some(call => call.file === "/usr/bin/open")).toBe(false);
+  });
+});
+
+describe.skipIf(process.platform === "win32")("darwin signals stay inside the suite", () => {
+  test("a forced stop signals the recorder, never a real pid", () => {
+    kills.length = 0;
+    restartCodexDesktopApp({
+      platform: "darwin",
+      lock: isolatedLock(),
+      ancestryPids: () => [99_999],
+      isAlive: () => true,
+      sleep: () => {},
+      now: (() => { let t = 0; return () => (t += 500); })(),
+      execFile: (file) => {
+        if (file === "/bin/ps") return psRows([[15901, 1, SHELL]]);
+        if (file === "/usr/libexec/PlistBuddy") return "com.openai.codex";
+        return "";
+      },
+    });
+    expect(kills.some(([pid]) => pid === 15901)).toBe(true);
   });
 });
 

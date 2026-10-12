@@ -13,6 +13,17 @@ import {
   recoverySse,
   routedConfig,
 } from "../helpers/agent-task-recovery";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+
+// Direct handler dispatch never takes the writer lease that startServer would take, so it is refused.
+let releaseSpendHome: (() => void) | undefined;
+beforeEach(() => {
+  releaseSpendHome = acquireOwnedSpendHome();
+});
+afterEach(() => {
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
+});
 
 describe("agent task recovery fallback routing", () => {
   beforeEach(() => {

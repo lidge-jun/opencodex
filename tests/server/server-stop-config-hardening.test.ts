@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { flushConfigDirHardening, flushConfigDirHardeningForTests, hardenConfigDir } from "../../src/config/paths";
 import * as windowsAcl from "../../src/lib/windows-secret-acl";
+import * as windowsPrincipal from "../../src/lib/windows-user-principal";
 import * as nativeStartup from "../../src/codex/native-profile-startup";
 import { startServer } from "../../src/server";
 import type { OcxConfig } from "../../src/types";
@@ -93,6 +94,68 @@ test("server.stop(true) waits for the config-dir ACL flight the startup loadConf
   }
 });
 
+test("server.stop(true) waits for a timed-out ACL child to exit before home removal", async () => {
+  const server = startServer(0);
+  await flushConfigDirHardening(testDir);
+  windowsAcl.resetHardenedStateForTests();
+  windowsAcl.setPlatformForTests("win32");
+  windowsPrincipal.setAsyncWindowsPrincipalRunnerForTests(async () => ({
+    success: true, exitCode: 0, timedOut: false, stdout: "S-1-5-21-1-2-3-1001\nTEST\\user\n",
+  }));
+  let now = 0;
+  windowsAcl.setNowForTests(() => now);
+  let fireBelt = () => { throw new Error("ACL deadline was not armed"); };
+  windowsAcl.setAsyncIcaclsBeltSchedulerForTests(callback => {
+    fireBelt = callback;
+    return () => {};
+  });
+  let started!: () => void;
+  const childStarted = new Promise<void>(resolve => { started = resolve; });
+  let release!: () => void;
+  const childExited = new Promise<void>(resolve => { release = resolve; });
+  windowsAcl.setAsyncIcaclsRunnerForTests(async args => {
+    if (args[0] === testDir) { started(); await childExited; }
+    return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+  });
+  try {
+    hardenConfigDir();
+    await childStarted;
+    now = 60_001;
+    fireBelt();
+    await flushConfigDirHardening(testDir);
+    expect(windowsAcl.windowsSecretAclReapPendingAtOrBelow(testDir)).toBe(true);
+
+    let stopped = false;
+    const stopping = server.stop(true).then(() => { stopped = true; });
+    const port = server.port;
+    let refused = false;
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      refused = await fetch(`http://127.0.0.1:${port}/healthz`).then(() => false, () => true);
+      if (refused) break;
+      await Bun.sleep(5);
+    }
+    expect(refused).toBe(true);
+    await Bun.sleep(5);
+    expect(stopped).toBe(false);
+
+    release();
+    await stopping;
+    expect(windowsAcl.windowsSecretAclReapPendingAtOrBelow(testDir)).toBe(false);
+    removeTreeWithRetry(testDir);
+  } finally {
+    release();
+    await server.stop(true).catch(() => undefined);
+    await windowsAcl.flushWindowsSecretAclReapsBeforeRemoval(testDir);
+    windowsAcl.setAsyncIcaclsRunnerForTests(null);
+    windowsAcl.setAsyncIcaclsBeltSchedulerForTests(null);
+    windowsAcl.setNowForTests(null);
+    windowsAcl.setPlatformForTests(null);
+    windowsPrincipal.setAsyncWindowsPrincipalRunnerForTests(null);
+    windowsPrincipal.resetWindowsPrincipalForTests();
+    windowsAcl.resetHardenedStateForTests();
+  }
+});
+
 test("server.stop(true) resolves promptly when no flight is in progress", async () => {
   const server = startServer(0);
   const t0 = Date.now();
@@ -114,8 +177,12 @@ test("a rejected native-lifecycle release still drains the ACL flight before sto
     throw new Error("native release exploded");
   });
   let server: ReturnType<typeof startServer> | null = null;
+  // Kept separate and never nulled: the body nulls `server` to show stop() has settled, but
+  // the real native-lifecycle release still has to run against the object startServer returned.
+  let startedServer: ReturnType<typeof startServer> | null = null;
   try {
     server = startServer(0);
+    startedServer = server;
     let settled: "pending" | "rejected" | "resolved" = "pending";
     let rejection: unknown;
     const stopping = server.stop(true).then(() => { settled = "resolved"; }, (error: unknown) => { settled = "rejected"; rejection = error; });
@@ -136,6 +203,11 @@ test("a rejected native-lifecycle release still drains the ACL flight before sto
     releaseSpy.mockRestore();
     aclSpy.mockRestore();
     if (server) await server.stop(true).catch(() => undefined);
+    if (startedServer) await nativeStartup.releaseNativeMainStartupLifecycle(startedServer);
+    // The spoofed win32 platform makes startServer take a process-wide ownership block, and the
+    // throwing spy meant it was never dropped: this case must not leave that gate blocked for
+    // every later test file sharing the process.
+    expect(nativeStartup.isNativeMainTrafficBlocked()).toBe(false);
   }
 });
 

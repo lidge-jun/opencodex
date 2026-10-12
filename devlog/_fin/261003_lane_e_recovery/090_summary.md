@@ -1,0 +1,9 @@
+# Lane E local recovery result
+
+Both complete issue patches were preserved and carried from their recorded source commits. Follow-up repairs preserve explicit launch selectors across later configuration changes, validate connected targets against fresh gateway exposure, and retain native Claude credential routing through reversible aliases. Remote Link production behavior is preserved, with regression coverage requiring fresh fingerprint confirmation after rescan. Contract-check failures in the carried layout/capability entries and force component were corrected; nine copied-English force catalogs were translated.
+
+Local verification: routing/native 174 passing tests; launch/client/endpoint 136; isolated GUI 99 before the final force loading refinement; focused force GUI 3 after refinement; layout/capability/skill contracts 53. The final locale and screenshot evidence is retained in ignored task scratch and reported in the chat handoff. Structure, file-size, generated capability surface, i18n lint and privacy checks passed. Earlier failing evidence is retained with its repair, not treated as an environmental exemption.
+
+The inherited independent code reviewer found no demonstrated correctness issue in the reviewed repair. Browser QA drives production page components and stylesheet with fixture data, covering force enable/change/clear/failure rollback and Remote Link discovery/retry/manual alias/fingerprint invalidation/keyboard behavior. It does not prove live Claude subprocess acceptance, live SSH, native Windows behavior or the complete dashboard shell.
+
+This lane is local-only. Integration, broad typechecks, GUI/docs builds and final cross-platform CI remain coordinator-owned. The unit remains in _plan until that integration outcome is recorded. Deferred policy issues and product holds remain outside this work.

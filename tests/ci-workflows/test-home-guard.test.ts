@@ -10,7 +10,7 @@
  * Incident: devlog/_fin/260730_codex_rs_upstream_v2_live_handoff/070.
  */
 import { describe, expect, spyOn, test } from "bun:test";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -332,6 +332,83 @@ const canSymlink = (() => {
 
     expect(probe.stdout).toContain("REFUSED");
     expect(probe.stdout).not.toContain("WRITE_ALLOWED");
+  });
+
+  test("armed catalog, cache, journal and config writes and K permits reject the protected Codex home (#6529)", async () => {
+    const probeId = beginProbe("02b-codex-home-files");
+    const { realHome, codexHome } = sentinelHome();
+    // CODEX_HOME is deliberately left at the protected home: a teardown that deletes CODEX_HOME sends
+    // every Codex writer to os.homedir()/.codex, which is how test runs rewrote a live catalog.
+    const probe = await runProbe(probeId, `
+      import { join } from "node:path";
+      import { atomicWriteFile } from "${REPO_ROOT_URL}src/config/atomic-write";
+      import { withCatalogWriteSerialization } from "${REPO_ROOT_URL}src/codex/catalog-write-serialization";
+      const home = ${JSON.stringify(codexHome)};
+      const results = [];
+      for (const name of ["opencodex-catalog.json", "models_cache.json", "opencodex-journal.json", "config.toml"]) {
+        try { atomicWriteFile(join(home, name), "{}"); results.push(name + ":WRITTEN"); }
+        catch (err) { results.push(name + (String(err).includes("refusing to write the real Codex home") ? ":REFUSED" : ":OTHER")); }
+      }
+      let ran = false;
+      try { withCatalogWriteSerialization(home, () => { ran = true; }, { intent: "refresh", writer: "probe" }); results.push("K:GRANTED"); }
+      catch (err) { results.push(String(err).includes("refusing to write the real Codex home") ? "K:REFUSED" : "K:OTHER"); }
+      results.push(ran ? "callback:RAN" : "callback:SKIPPED");
+      console.log(JSON.stringify(results));
+    `, { OCX_TEST_HOME_GUARD: "1", OCX_REAL_HOME: realHome, CODEX_HOME: codexHome });
+
+    expect(JSON.parse(probe.stdout.trim().split("\n").at(-1) ?? "[]")).toEqual([
+      "opencodex-catalog.json:REFUSED",
+      "models_cache.json:REFUSED",
+      "opencodex-journal.json:REFUSED",
+      "config.toml:REFUSED",
+      "K:REFUSED",
+      "callback:SKIPPED",
+    ]);
+    for (const name of ["opencodex-catalog.json", "models_cache.json", "opencodex-journal.json", "config.toml"]) {
+      expect(() => readFileSync(join(codexHome, name))).toThrow();
+    }
+  });
+
+  test("armed writes reached through the unset-CODEX_HOME fallback reject the protected Codex home (#6529)", async () => {
+    const probeId = beginProbe("02c-codex-home-fallback");
+    const { realHome, codexHome } = sentinelHome();
+    // A Codex home in use (Codex writes sessions/), so the default-home lookup settles on it.
+    mkdirSync(join(codexHome, "sessions"), { recursive: true });
+    // The incident path: CODEX_HOME absent, so every writer resolves os.homedir()/.codex.
+    const probe = await runProbe(probeId, `
+      import { join } from "node:path";
+      import { realpathSync } from "node:fs";
+      import { getCodexHome } from "${REPO_ROOT_URL}src/codex/paths";
+      import { atomicWriteFile } from "${REPO_ROOT_URL}src/config/atomic-write";
+      import { withCatalogWriteSerialization } from "${REPO_ROOT_URL}src/codex/catalog-write-serialization";
+      const home = getCodexHome();
+      const results = [home === realpathSync(${JSON.stringify(codexHome)}) ? "home:SENTINEL" : "home:OTHER"];
+      for (const name of ["opencodex-catalog.json", "models_cache.json", "opencodex-journal.json", "config.toml"]) {
+        try { atomicWriteFile(join(home, name), "{}"); results.push(name + ":WRITTEN"); }
+        catch (err) { results.push(name + (String(err).includes("refusing to write the real Codex home") ? ":REFUSED" : ":OTHER")); }
+      }
+      try { withCatalogWriteSerialization(home, () => null, { intent: "refresh", writer: "probe" }); results.push("K:GRANTED"); }
+      catch (err) { results.push(String(err).includes("refusing to write the real Codex home") ? "K:REFUSED" : "K:OTHER"); }
+      console.log(JSON.stringify(results));
+    `, {
+      OCX_TEST_HOME_GUARD: "1",
+      OCX_REAL_HOME: realHome,
+      HOME: realHome,
+      USERPROFILE: realHome,
+      CODEX_HOME: undefined,
+    });
+
+    expect(JSON.parse(probe.stdout.trim().split("\n").at(-1) ?? "[]")).toEqual([
+      "home:SENTINEL",
+      "opencodex-catalog.json:REFUSED",
+      "models_cache.json:REFUSED",
+      "opencodex-journal.json:REFUSED",
+      "config.toml:REFUSED",
+      "K:REFUSED",
+    ]);
+    for (const name of ["opencodex-catalog.json", "models_cache.json", "opencodex-journal.json", "config.toml"]) {
+      expect(() => readFileSync(join(codexHome, name))).toThrow();
+    }
   });
 
   test.skipIf(!canSymlink)("armed + a symlink escaping a temp home into the protected home: refused", async () => {
@@ -690,6 +767,64 @@ const canSymlink = (() => {
     `, { OCX_REAL_HOME: realHome, OCX_TEST_HOME_GUARD: "1" });
 
     expect(JSON.parse(probe.stdout.trim())).toEqual({ alias: true, plain: true });
+  });
+
+  test.skipIf(!canSymlink)("content of a checkout inside the Codex home may be removed; the checkout and its neighbours may not", async () => {
+    // A Codex-app worktree is a checkout under ~/.codex/worktrees/. The sentinel's .codex points
+    // at this checkout's parent, which puts the running checkout inside the protected tree the
+    // same way. Only repository content is lifted; a link inside the checkout that resolves out
+    // of it is still judged by its canonical form.
+    const probeId = beginProbe("14-checkout-content");
+    const realHome = mkdtempSync(join(tmpdir(), "ocx-sentinel-home-"));
+    const codexLink = join(realHome, ".codex");
+    symlinkSync(dirname(REPO_ROOT), codexLink);
+    mkdirSync(join(realHome, ".opencodex"), { recursive: true });
+    try {
+      const probe = await runProbe(probeId, `
+        import { mkdirSync, symlinkSync, unlinkSync } from "node:fs";
+        import { dirname, join } from "node:path";
+        import { protectedRemovalReason } from "${REPO_ROOT_URL}src/lib/test-home-guard";
+        const root = ${JSON.stringify(REPO_ROOT)};
+        const linkDir = join(root, ".tmp");
+        mkdirSync(linkDir, { recursive: true });
+        const link = join(linkDir, "guard-link-" + process.pid);
+        symlinkSync(dirname(root), link);
+        try {
+          console.log(JSON.stringify({
+            fixture: protectedRemovalReason(join(root, "tests", ".tmp-guard-fixture")) === null,
+            checkout: protectedRemovalReason(root) !== null,
+            parent: protectedRemovalReason(dirname(root)) !== null,
+            sibling: protectedRemovalReason(join(dirname(root), "another-worktree")) !== null,
+            link: protectedRemovalReason(link) !== null,
+          }));
+        } finally {
+          unlinkSync(link);
+        }
+      `, { OCX_REAL_HOME: realHome, OCX_TEST_HOME_GUARD: "1" });
+
+      expect(JSON.parse(probe.stdout.trim())).toEqual({
+        fixture: true, checkout: true, parent: true, sibling: true, link: true,
+      });
+    } finally {
+      unlinkSync(codexLink);
+    }
+  });
+
+  test("a checkout that contains a protected tree gains no exemption", async () => {
+    // The lift requires the checkout to sit INSIDE the tree. A checkout at the home directory, or
+    // the virtual root a compiled build reports, contains ~/.codex instead and must stay guarded.
+    const probeId = beginProbe("15-checkout-contains-tree");
+    const probe = await runProbe(probeId, `
+      import { join } from "node:path";
+      import { protectedRemovalReason } from "${REPO_ROOT_URL}src/lib/test-home-guard";
+      const root = ${JSON.stringify(REPO_ROOT)};
+      console.log(JSON.stringify({
+        codex: protectedRemovalReason(join(root, ".codex", "sessions")) !== null,
+        opencodex: protectedRemovalReason(join(root, ".opencodex", "config.json")) !== null,
+      }));
+    `, { OCX_REAL_HOME: REPO_ROOT, OCX_TEST_HOME_GUARD: "1" });
+
+    expect(JSON.parse(probe.stdout.trim())).toEqual({ codex: true, opencodex: true });
   });
 
   test("removeTreeWithRetry refuses a protected tree before it calls through", () => {

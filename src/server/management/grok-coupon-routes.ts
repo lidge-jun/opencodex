@@ -11,6 +11,7 @@
 
 import { jsonResponse } from "../auth-cors";
 import type { ManagementContext } from "./context";
+import { ConfigMutationLockError } from "../../config/mutation-lock";
 import { isCodexResetCreditOperationId } from "../../codex/reset-credit-recovery";
 import { getValidAccessSnapshotForAccount } from "../../oauth";
 import { listAccounts, captureOAuthAccountSelection } from "../../oauth/store";
@@ -20,8 +21,14 @@ import {
   type GrokResetCoupon,
 } from "../../grok/reset-coupons";
 import {
+  getGrokResetCouponOperationAccountId,
+  isTerminalGrokCouponReplay,
+  markGrokResetCouponAttempt,
   openGrokResetCouponOperation,
   recordGrokResetCouponSettlement,
+  readGrokResetCouponTerminalReplay,
+  refuseGrokResetCouponBeforeOpen,
+  settleGrokResetCouponPreflightRefusal,
   type GrokResetCouponOperationRecord,
 } from "../../grok/reset-coupon-ledger";
 
@@ -40,6 +47,11 @@ export interface GrokConsumeCouponRequestBody {
   tokenId?: string;
   operationId?: string;
 }
+
+// A recent attempt can still be in flight. Older attempts may be inspected,
+// but a remaining token is not proof that the original request cannot land.
+const GROK_COUPON_ATTEMPT_STALE_MS = 90_000;
+const grokCouponInFlightAttempts = new Set<string>();
 
 function resolveTargetAccountId(requestedAccountId?: string): string {
   if (requestedAccountId && requestedAccountId.trim() !== "") {
@@ -139,51 +151,187 @@ export async function handleGrokCouponRoutes(ctx: ManagementContext): Promise<Re
       );
     }
 
+    /**
+     * Once a caller supplies an operationId, that id may already name an operation that
+     * another request is spending. A refusal from this request must not read as
+     * definitive then, or the caller drops its hold and mints a replacement.
+     */
+    const uncertain = (id: string): Response => jsonResponse({ operationId: id, error: {
+      code: "attempt_in_progress",
+      message: "This request did not attempt a redemption, but another request may hold this operation; retry the same operationId to read its durable state",
+    } }, 409, req, config);
+    /** Refuse before open: definitive only when the supplied id is durably reserved as failed. */
+    const preOpenRefusal = (definitive: Response, code: string, knownAccountId?: string): Response => {
+      if (operationId === undefined) return definitive;
+      if (knownAccountId === undefined) return uncertain(operationId);
+      try {
+        const result = refuseGrokResetCouponBeforeOpen({
+          operationId, accountId: knownAccountId, code,
+          tokenId: typeof requestedTokenId === "string" ? requestedTokenId : undefined,
+        });
+        if (result.kind === "recorded") return definitive;
+        if (result.kind === "replay") return jsonResponse({
+          code: result.code, replayed: true, tokenId: result.tokenId, settledAt: result.settledAt,
+        }, 200, req, config);
+        if (result.kind === "identity-mismatch") return jsonResponse({ error: {
+          code: "operation_id_owned_by_another_account",
+          message: "Operation ID was previously registered with a different account or token",
+        } }, 409, req, config);
+        return uncertain(operationId);
+      } catch {
+        return uncertain(operationId);
+      }
+    };
+
+    if (requestedTokenId !== undefined && (typeof requestedTokenId !== "string" || requestedTokenId.trim() === "")) {
+      return preOpenRefusal(jsonResponse({ error: { code: "invalid_token_id", message: "tokenId must be a non-empty string" } }, 400, req, config), "invalid_token_id");
+    }
+
+    let recordedAccountId: string | undefined;
+    if (rawAccountId === undefined && operationId !== undefined) {
+      try { recordedAccountId = getGrokResetCouponOperationAccountId(operationId); }
+      catch {
+        return uncertain(operationId);
+      }
+    }
     let accountId: string;
     try {
-      accountId = resolveTargetAccountId(rawAccountId);
+      accountId = resolveTargetAccountId(rawAccountId ?? recordedAccountId);
     } catch (err) {
-      return jsonResponse(
+      return preOpenRefusal(jsonResponse(
         { error: { code: "no_account", message: err instanceof Error ? err.message : String(err) } },
         400,
         req,
         config,
-      );
+      ), "no_account");
     }
 
     let tokenSnapshot;
     try {
       tokenSnapshot = await getValidAccessSnapshotForAccount("xai", accountId, { requireUsableAccount: true });
     } catch (err) {
-      return jsonResponse(
+      return preOpenRefusal(jsonResponse(
         { error: { code: "auth_failed", message: "Failed to resolve valid xAI credentials for account" } },
         401,
         req,
         config,
-      );
+      ), "auth_failed", accountId);
     }
 
     // Journaling and Idempotency settlement check
     const effectiveOpId = operationId ?? crypto.randomUUID();
-    const opRecord = openGrokResetCouponOperation({
-      accountId,
-      tokenId: requestedTokenId,
-      operationId: effectiveOpId,
-    });
+    if (grokCouponInFlightAttempts.has(effectiveOpId)) return jsonResponse({ operationId: effectiveOpId, error: {
+      code: "attempt_in_progress", message: "This operation still has an active request; retry later",
+    } }, 409, req, config);
+    let opRecord: GrokResetCouponOperationRecord;
+    try {
+      opRecord = openGrokResetCouponOperation({ accountId, tokenId: requestedTokenId, operationId: effectiveOpId });
+    } catch {
+      // A failed open cannot prove that no earlier request already opened this id.
+      return jsonResponse({ operationId: effectiveOpId, error: {
+        code: "ledger_unavailable",
+        message: "Coupon ledger could not be read or locked; this request did not attempt a redemption. Retry the same operationId",
+      } }, 503, req, config);
+    }
+
+    let resolvedTokenId = requestedTokenId ?? opRecord.tokenId;
+    let resolvedTokenValidityEnd: number | undefined;
 
     if (opRecord.kind === "replay") {
-      return jsonResponse(
-        {
-          code: opRecord.code,
-          replayed: true,
-          tokenId: opRecord.tokenId,
-          settledAt: opRecord.settledAt,
-        },
-        200,
-        req,
-        config,
-      );
+      if (opRecord.code !== undefined) {
+        // Replay only a definitive outcome; a recorded code that means "unconfirmed"
+        // must keep the caller on this operation.
+        if (!isTerminalGrokCouponReplay(opRecord, accountId, requestedTokenId)) {
+          return jsonResponse({ operationId: effectiveOpId, error: {
+            code: "attempt_unresolved",
+            message: "This operation's recorded outcome is unconfirmed; preserve this operationId and do not create a replacement attempt",
+          } }, 409, req, config);
+        }
+        return jsonResponse(
+          {
+            code: opRecord.code,
+            replayed: true,
+            tokenId: opRecord.tokenId,
+            settledAt: opRecord.settledAt,
+          },
+          200,
+          req,
+          config,
+        );
+      }
+      if (opRecord.tokenId === undefined) {
+        // Legacy opens may already have dispatched without recording a token.
+        return jsonResponse({ operationId: effectiveOpId, error: {
+          code: "attempt_unresolved", message: "The prior operation has no recorded token; preserve this operationId and do not create a replacement attempt",
+        } }, 409, req, config);
+      }
+      // "attempted" with no recorded outcome: the spend call fired (or the
+      // process died right after the mark) but nothing was settled. Never
+      // replay this as a success — reconcile against upstream instead. A
+      // Remaining-token availability cannot identify the original request's
+      // outcome, and a listed token cannot rule out delayed completion.
+      if (requestedTokenId !== undefined && requestedTokenId !== opRecord.tokenId) {
+        // The retry names a different coupon than the one marked: spending
+        // either of them would surprise the caller — refuse and let them
+        // retry with the recorded token and preserve the operationId.
+        return jsonResponse(
+          {
+            operationId: effectiveOpId,
+            error: {
+              code: "operation_token_mismatch",
+              message: "Operation was attempted with a different coupon; preserve the operationId and retry with the recorded tokenId",
+            },
+          },
+          409,
+          req,
+          config,
+        );
+      }
+      if (
+        opRecord.attemptedAt === undefined ||
+        Date.now() - opRecord.attemptedAt < GROK_COUPON_ATTEMPT_STALE_MS
+      ) {
+        // A fresh attempt may still be in flight in the original request —
+        // no additional upstream inspection is needed until that window ends.
+        // Older attempts are inspected without another redemption.
+        return jsonResponse(
+          { operationId: effectiveOpId,
+            error: {
+              code: "attempt_in_progress",
+              message: "A redemption attempt for this operation is recent and may still be running; retry later",
+            },
+          },
+          409,
+          req,
+          config,
+        );
+      }
+      let remainingTokens: GrokResetCoupon[];
+      try {
+        const remaining = await getGrokRemainingResets({ accessToken: tokenSnapshot.accessToken });
+        remainingTokens = remaining.tokens;
+      } catch (err) {
+        return jsonResponse(
+          { operationId: effectiveOpId, error: { code: "attempt_reconcile_failed", message: err instanceof Error ? err.message : String(err) } },
+          502,
+          req,
+          config,
+        );
+      }
+      // Availability cannot identify which request consumed a coupon. Even a
+      // missing, still-valid token does not confirm this operation succeeded.
+      const listed = remainingTokens.some((t) => t.tokenId === opRecord.tokenId);
+      return jsonResponse({ operationId: effectiveOpId, error: {
+        code: "attempt_unresolved",
+        message: listed
+          ? "The prior redemption may still complete; its listed coupon will not be redeemed again"
+          : "The coupon is no longer listed, but this operation's outcome is unconfirmed; no redemption will be repeated",
+      } }, 409, req, config);
     }
+
+    if (opRecord.kind === "token-mismatch") return jsonResponse({ operationId: effectiveOpId, error: {
+      code: "operation_token_mismatch", message: "Operation ID was previously registered with a different coupon",
+    } }, 409, req, config);
 
     if (opRecord.kind === "identity-mismatch") {
       return jsonResponse(
@@ -200,11 +348,14 @@ export async function handleGrokCouponRoutes(ctx: ManagementContext): Promise<Re
     }
 
     if (opRecord.kind !== "execute") {
+      // A capacity refusal cannot reserve the id, so an earlier same-id request still in
+      // credential resolution may open it once records expire: keep the caller on the id.
       return jsonResponse(
         {
+          ...(operationId !== undefined ? { operationId: effectiveOpId } : {}),
           error: {
             code: opRecord.kind,
-            message: "Coupon ledger capacity or unavailable failure",
+            message: "Coupon ledger is at capacity; this request did not attempt a redemption. Retry the same operationId later",
           },
         },
         503,
@@ -213,25 +364,40 @@ export async function handleGrokCouponRoutes(ctx: ManagementContext): Promise<Re
       );
     }
 
-    let resolvedTokenId = requestedTokenId;
-    if (!resolvedTokenId) {
+    const settlePreflightRefusal = (code: string, tokenId?: string): Response | null => {
+      try {
+        const result = settleGrokResetCouponPreflightRefusal({
+          operationId: effectiveOpId, accountId, tokenId, code,
+          status: "failed", expectedStatus: "open",
+        });
+        if (result.kind === "recorded") return null;
+        if (result.kind === "replay") return jsonResponse({
+          code: result.code, replayed: true, tokenId: result.tokenId, settledAt: result.settledAt,
+        }, 200, req, config);
+        return jsonResponse({ operationId: effectiveOpId, error: {
+          code: "operation_state_changed",
+          message: "Another request changed this operation during inspection; retry the same operationId to read its durable state",
+        } }, 409, req, config);
+      } catch {
+        // The refusal could not be recorded, so the operation may still be claimed elsewhere.
+        return uncertain(effectiveOpId);
+      }
+    };
+
+    {
+      // Always consult the upstream list: it resolves the token when the
+      // caller omits one, and — for an explicit tokenId — proves the coupon
+      // still exists. Captured validity remains journal metadata, never proof
+      // that this operation succeeded during a later reconciliation.
+      let tokens: GrokResetCoupon[];
       try {
         const remaining = await getGrokRemainingResets({ accessToken: tokenSnapshot.accessToken });
-        if (!remaining.tokens || remaining.tokens.length === 0) {
-          recordGrokResetCouponSettlement({
-            operationId: effectiveOpId,
-            code: "no_coupons_available",
-            status: "failed",
-          });
-          return jsonResponse(
-            { error: { code: "no_coupons_available", message: "No reset coupons available to redeem" } },
-            400,
-            req,
-            config,
-          );
-        }
-        resolvedTokenId = remaining.tokens[0].tokenId;
+        tokens = remaining.tokens ?? [];
       } catch (err) {
+        // Close the still-open operation before reporting a definitive failure: once it is
+        // recorded as failed it can never be claimed, so the caller may safely start over.
+        const changed = settlePreflightRefusal("fetch_resets_failed", resolvedTokenId);
+        if (changed) return changed;
         return jsonResponse(
           { error: { code: "fetch_resets_failed", message: err instanceof Error ? err.message : String(err) } },
           502,
@@ -239,20 +405,140 @@ export async function handleGrokCouponRoutes(ctx: ManagementContext): Promise<Re
           config,
         );
       }
+      if (!resolvedTokenId) {
+        if (tokens.length === 0) {
+          const changed = settlePreflightRefusal("no_coupons_available");
+          if (changed) return changed;
+          return jsonResponse(
+            { error: { code: "no_coupons_available", message: "No reset coupons available to redeem" } },
+            400,
+            req,
+            config,
+          );
+        }
+        resolvedTokenId = tokens[0].tokenId;
+      }
+      const match = tokens.find((t) => t.tokenId === resolvedTokenId);
+      if (!match) {
+        // The requested coupon is already consumed or expired upstream —
+        // redeeming it would only surface an upstream error.
+        const changed = settlePreflightRefusal("coupon_unavailable", resolvedTokenId);
+        if (changed) return changed;
+        return jsonResponse(
+          {
+            error: {
+              code: "coupon_unavailable",
+              message: "The requested reset coupon is no longer available upstream",
+            },
+          },
+          409,
+          req,
+          config,
+        );
+      }
+      const parsedEnd = Date.parse(match.validityEnd);
+      if (!Number.isNaN(parsedEnd)) resolvedTokenValidityEnd = parsedEnd;
     }
 
-    try {
-      const redeemResult = await redeemGrokResetCoupon({
-        accessToken: tokenSnapshot.accessToken,
-        tokenId: resolvedTokenId,
-      });
+    if (resolvedTokenId === undefined) {
+      // Unreachable: every path above either resolves a token or returns.
+      const changed = settlePreflightRefusal("token_unresolved");
+      if (changed) return changed;
+      return jsonResponse(
+        { error: { code: "token_unresolved", message: "No reset coupon token could be resolved" } },
+        500,
+        req,
+        config,
+      );
+    }
 
-      recordGrokResetCouponSettlement({
-        operationId: effectiveOpId,
-        tokenId: resolvedTokenId,
-        code: "redeemed",
-        status: "success",
-      });
+    if (grokCouponInFlightAttempts.has(effectiveOpId)) {
+      // The original request holding this operation is still running in this
+      // process — its upstream spend has not concluded, so nothing may spend
+      // on this operationId again regardless of how stale the mark looks.
+      return jsonResponse(
+        {
+          operationId: effectiveOpId,
+          error: {
+            code: "attempt_in_progress",
+            message: "A redemption attempt for this operation is still running; retry later",
+          },
+        },
+        409,
+        req,
+        config,
+      );
+    }
+
+    grokCouponInFlightAttempts.add(effectiveOpId);
+    try {
+      // Record the attempt BEFORE the spend call: a crash between redemption
+      // and settlement must still leave the operation non-open so a retry can
+      // never execute it again. The atomic claim admits exactly one contender;
+      // a failed mark write aborts here while nothing has been spent.
+      try {
+        const claimed = markGrokResetCouponAttempt(effectiveOpId, resolvedTokenId, undefined, undefined, resolvedTokenValidityEnd);
+        if (!claimed) {
+          // A concurrent request may already have reached a definitive outcome;
+          // replay it rather than holding the caller on a finished operation.
+          // A failed read proves nothing about the winner, so it stays uncertain:
+          // reporting a definitive error here would let the caller open a
+          // replacement operation while this one may already have spent.
+          let winner: ReturnType<typeof readGrokResetCouponTerminalReplay> = null;
+          try { winner = readGrokResetCouponTerminalReplay(effectiveOpId, accountId, resolvedTokenId); } catch { winner = null; }
+          if (winner) return jsonResponse({
+            code: winner.code, replayed: true, tokenId: winner.tokenId, settledAt: winner.settledAt,
+          }, 200, req, config);
+          return uncertain(effectiveOpId);
+        }
+      } catch {
+        // The claim write failed or was contended: this request dispatched nothing, but a
+        // concurrent holder of this operation may be spending, so keep the caller on it.
+        return uncertain(effectiveOpId);
+      }
+
+      try {
+        await redeemGrokResetCoupon({
+          accessToken: tokenSnapshot.accessToken,
+          tokenId: resolvedTokenId,
+        });
+      } catch (err) {
+        // A transport error cannot prove that the irreversible request failed.
+        // Keep "attempted" so a later retry can inspect without dispatching again.
+        return jsonResponse(
+          { operationId: effectiveOpId, accountId, tokenId: resolvedTokenId, error: {
+            code: "attempt_unresolved",
+            message: "Redemption delivery is unconfirmed; reuse this operationId to inspect its state and do not create a replacement attempt",
+          } },
+          502,
+          req,
+          config,
+        );
+      }
+
+      // A confirmed redemption remains successful even when settlement fails.
+      // The existing claim protects retries if settlement does not land.
+      let settlementRecorded = false;
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        try {
+          settlementRecorded = recordGrokResetCouponSettlement({
+            operationId: effectiveOpId,
+            accountId,
+            tokenId: resolvedTokenId,
+            code: "redeemed",
+            status: "success",
+            expectedStatus: "attempted",
+          });
+          break;
+        } catch (error) {
+          // Retry only transient acquisition contention, never an unsafe or
+          // unreadable ledger, a changed claim, or the upstream redemption.
+          const cause = error instanceof ConfigMutationLockError ? error.cause : undefined;
+          if (!cause || typeof cause !== "object" || !("code" in cause)
+            || cause.code !== "SQLITE_BUSY" || attempt === 4) break;
+          await Bun.sleep(20);
+        }
+      }
 
       return jsonResponse(
         {
@@ -262,24 +548,14 @@ export async function handleGrokCouponRoutes(ctx: ManagementContext): Promise<Re
           tokenId: resolvedTokenId,
           accountId,
           operationId: effectiveOpId,
+          settlementRecorded,
         },
         200,
         req,
         config,
       );
-    } catch (err) {
-      recordGrokResetCouponSettlement({
-        operationId: effectiveOpId,
-        tokenId: resolvedTokenId,
-        code: "redeem_failed",
-        status: "failed",
-      });
-      return jsonResponse(
-        { error: { code: "redeem_failed", message: err instanceof Error ? err.message : String(err) } },
-        502,
-        req,
-        config,
-      );
+    } finally {
+      grokCouponInFlightAttempts.delete(effectiveOpId);
     }
   }
 

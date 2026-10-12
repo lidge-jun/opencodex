@@ -20,9 +20,10 @@ import { homedir } from "node:os";
 import { join, resolve, win32 } from "node:path";
 import { expandUserPath, getConfigDir, loadConfig } from "../config";
 import { recordOwnedConfigPath } from "./config-ownership";
-import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV, durableBunRuntime } from "./bun-runtime";
+import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV, durableBunRuntime, type DurableBunRuntime } from "./bun-runtime";
 import type { BunRuntimeSource } from "./bun-runtime";
 import { serviceApiTokenFilePath } from "./service-secrets";
+import { filterTransientServicePath } from "./transient-service-path";
 
 export const WINSW_VERSION = "2.12.0";
 export const WINSW_URL = `https://github.com/winsw/winsw/releases/download/v${WINSW_VERSION}/WinSW.NET461.exe`;
@@ -72,7 +73,7 @@ export interface WinswEntry {
   bun: string;
   /** Provenance of `bun`, resolved together with it so the two can never disagree. */
   bunRuntimeSource: BunRuntimeSource;
-  cli: string;
+  cli: string | null;
 }
 
 /**
@@ -103,10 +104,11 @@ export function buildWinswXml(entry: WinswEntry, env: NodeJS.ProcessEnv = proces
   const aclTimeout = env.OPENCODEX_ACL_TIMEOUT_MS?.trim();
   const envLines = [
     `  <env name="OCX_SERVICE" value="1"/>`,
+    `  <env name="OCX_SERVICE_MANAGED" value="1"/>`,
     `  <env name="${BUN_RUNTIME_SOURCE_ENV}" value="${xmlEscape(entry.bunRuntimeSource)}"/>`,
     `  <env name="${BUN_RUNTIME_PATH_ENV}" value="${xmlEscape(entry.bun)}"/>`,
     `  <env name="OCX_API_TOKEN_FILE" value="${xmlEscape(serviceApiTokenFilePath())}"/>`,
-    `  <env name="PATH" value="${xmlEscape(env.PATH ?? "")}"/>`,
+    `  <env name="PATH" value="${xmlEscape(filterTransientServicePath(env.PATH ?? "", ";", "win32"))}"/>`,
     env.CODEX_HOME?.trim() ? `  <env name="CODEX_HOME" value="${xmlEscape(currentCodexHomeAbsolute())}"/>` : null,
     env.CODEX_SQLITE_HOME?.trim() ? `  <env name="CODEX_SQLITE_HOME" value="${xmlEscape(windowsServicePathAbsolute(env.CODEX_SQLITE_HOME.trim()))}"/>` : null,
     `  <env name="OPENCODEX_HOME" value="${xmlEscape(getConfigDir())}"/>`,
@@ -118,7 +120,7 @@ export function buildWinswXml(entry: WinswEntry, env: NodeJS.ProcessEnv = proces
   <name>OpenCodex Proxy (native)</name>
   <description>OpenCodex proxy running as a native Windows service (windowless, starts at boot).</description>
   <executable>${xmlEscape(entry.bun)}</executable>
-  <arguments>${xmlEscape(`"${entry.cli}" start --port ${safeListenPort}`)}</arguments>
+  <arguments>${xmlEscape(`${entry.cli ? `"${entry.cli}" ` : ""}start --port ${safeListenPort}`)}</arguments>
 ${envLines.join("\n")}
   <logpath>${xmlEscape(winswLogDir())}</logpath>
   <log mode="roll-by-size">
@@ -177,8 +179,16 @@ export async function ensureWinswBinary(fetchImpl: typeof fetch = fetch): Promis
   return exe;
 }
 
+/** SCM round-trips are sub-second on a healthy system; a wedged service controller must not block a guarded stop forever — a killed command still classifies fail-closed. */
+const SERVICE_COMMAND_TIMEOUT_MS = 15_000;
+/** `stopwait` outlasts the SCM `<stoptimeout>` (20s in the generated service definition) plus overhead; still bounded so a wedged SCM cannot hang the CLI. */
+const SERVICE_STOPWAIT_TIMEOUT_MS = 40_000;
+
 function runWinsw(args: string[]): string {
-  return execFileSync(winswExePath(), args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true }).trim();
+  const timeoutMs = args[0] === "stopwait" ? SERVICE_STOPWAIT_TIMEOUT_MS : SERVICE_COMMAND_TIMEOUT_MS;
+  return execFileSync(winswExePath(), args, {
+    encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true, timeout: timeoutMs,
+  }).trim();
 }
 
 /** `install /p` prompts for the service-account password on the console — stdin must be inherited. */
@@ -189,13 +199,14 @@ function runWinswInteractive(args: string[]): void {
         + "Run `ocx service install --native` from an elevated Command Prompt or PowerShell window, not a hidden or piped session.",
     );
   }
+  // Unbounded by design: the service-account password prompt waits on the user.
   execFileSync(winswExePath(), args, { stdio: "inherit" });
 }
 
 function scQc(): string {
   const sc = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "sc.exe");
   return execFileSync(existsSync(sc) ? sc : "sc.exe", ["qc", WINSW_SERVICE_ID], {
-    encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true,
+    encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true, timeout: SERVICE_COMMAND_TIMEOUT_MS,
   });
 }
 
@@ -267,7 +278,7 @@ function scExePath(): string {
 
 function queryScmForService(): string {
   return execFileSync(scExePath(), ["query", WINSW_SERVICE_ID], {
-    encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true,
+    encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true, timeout: SERVICE_COMMAND_TIMEOUT_MS,
   });
 }
 
@@ -368,9 +379,9 @@ export function uninstallWinswService(): void {
       }
       if (probe === true) {
         try {
-          execFileSync(scExePath(), ["stop", WINSW_SERVICE_ID], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+          execFileSync(scExePath(), ["stop", WINSW_SERVICE_ID], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true, timeout: SERVICE_COMMAND_TIMEOUT_MS });
         } catch { /* not running */ }
-        execFileSync(scExePath(), ["delete", WINSW_SERVICE_ID], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+        execFileSync(scExePath(), ["delete", WINSW_SERVICE_ID], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true, timeout: SERVICE_COMMAND_TIMEOUT_MS });
       }
     }
     return;
@@ -397,7 +408,6 @@ export function winswStatusSummary(): string {
 }
 
 /** Default entry mirrors the Task Scheduler baking: durable Bun + cli.ts. */
-export function defaultWinswEntry(cliDir: string): WinswEntry {
-  const runtime = durableBunRuntime();
+export function defaultWinswEntry(cliDir: string, runtime: DurableBunRuntime = durableBunRuntime()): WinswEntry {
   return { bun: runtime.path, bunRuntimeSource: runtime.source, cli: join(cliDir, "cli", "index.ts") };
 }

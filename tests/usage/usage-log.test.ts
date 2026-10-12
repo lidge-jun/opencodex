@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   appendUsageEntry,
   currentUsageLogRevision,
+  encodePersistedRequestedModel,
   normalizeUsageEntryForTest,
   normalizeClaudeCompatibilityUsageLog,
   normalizePersistedUsageRow,
@@ -148,6 +149,47 @@ describe("usage log", () => {
     });
 
     expect(normalized.attempts).toEqual([]);
+  });
+
+  test("bounds requested model selectors before appending usage rows", () => {
+    const requestedModel = `policy/${"x".repeat(1024 * 1024)}`;
+    appendUsageEntry({
+      requestId: "ocx-bounded-selector",
+      timestamp: 1,
+      provider: "unknown",
+      model: "unknown",
+      requestedModel,
+      status: 404,
+      durationMs: 1,
+      usageStatus: "unreported",
+    });
+
+    const raw = readFileSync(usageLogPath(), "utf8");
+    const persisted = JSON.parse(raw) as PersistedUsageEntry;
+    expect(persisted.requestedModel).toBe(encodePersistedRequestedModel(requestedModel));
+    expect(persisted.requestedModel!.length).toBeLessThanOrEqual(130);
+    expect(raw.length).toBeLessThan(1024);
+  });
+
+  test("keeps over-long selectors that share the bounded prefix distinguishable", () => {
+    // Selectors are not length-bound at admission, so two valid selectors can
+    // agree past the persistence bound; they must not collapse into one identity.
+    const sharedPrefix = `provider/${"m".repeat(200)}`;
+    const selectorA = `${sharedPrefix}-alpha`;
+    const selectorB = `${sharedPrefix}-omega`;
+    expect(selectorA.slice(0, 130)).toBe(selectorB.slice(0, 130));
+
+    const encodedA = encodePersistedRequestedModel(selectorA);
+    const encodedB = encodePersistedRequestedModel(selectorB);
+    expect(encodedA).not.toBe(encodedB);
+    expect(encodedA.length).toBeLessThanOrEqual(130);
+    expect(encodedB.length).toBeLessThanOrEqual(130);
+
+    // Short selectors persist verbatim, and re-normalizing a persisted row is a
+    // no-op — normalizeUsageEntry also runs on every read.
+    const short = "provider/model";
+    expect(encodePersistedRequestedModel(short)).toBe(short);
+    expect(encodePersistedRequestedModel(encodedA)).toBe(encodedA);
   });
 
   test("preserves only valid non-PII Codex account log labels", () => {

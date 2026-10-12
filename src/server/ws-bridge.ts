@@ -8,6 +8,7 @@ import type { ResponsesTerminalStatus } from "../bridge";
 import type { DataPlaneAdmission } from "./auth-cors";
 import type { AdmissionLease, AdmissionReservation } from "../lib/admission";
 import { BoundedSseFrameBuffer } from "./sse-frame-buffer";
+import { sseDataPayload as parseSseBlock } from "./sse-payload-rewrite";
 import { safeResponseHeaders } from "./safe-response-headers";
 import type { AudioSocketTarget } from "./audio-dictation";
 
@@ -183,17 +184,6 @@ export function buildWsErrorFrame(
   };
 }
 
-function parseSseBlock(block: string): string | null {
-  const data: string[] = [];
-  for (const line of block.split(/\r?\n/)) {
-    if (line.startsWith("data:")) {
-      const value = line.slice(5);
-      data.push(value.startsWith(" ") ? value.slice(1) : value);
-    }
-  }
-  return data.length > 0 ? data.join("\n") : null;
-}
-
 function payloadType(payload: string): string | null {
   try {
     const json = JSON.parse(payload) as { type?: unknown };
@@ -226,6 +216,22 @@ function protocolError(message: string): Record<string, unknown> {
 
 function sendProtocolError(ws: ServerWebSocket<WsData>, status: number, message: string): void {
   sendJsonFrame(ws, buildWsErrorFrame(status, protocolError(message)));
+}
+
+/**
+ * Report an upstream-pump failure to the client. Errors that carry a structured
+ * code (for example the undeclared-tool guard's undeclared_tool_call) keep it so
+ * clients see the same rejection identity as the SSE path; everything else stays
+ * a generic protocol error.
+ */
+function sendUpstreamError(ws: ServerWebSocket<WsData>, status: number, err: unknown): void {
+  const code = err != null && typeof (err as { code?: unknown }).code === "string"
+    ? (err as { code: string }).code
+    : undefined;
+  const message = err instanceof Error ? err.message : String(err);
+  sendJsonFrame(ws, buildWsErrorFrame(status, code
+    ? { type: "upstream_error", code, message }
+    : protocolError(message)));
 }
 
 export async function pumpResponsesSseToWebSocket(
@@ -319,7 +325,7 @@ export async function pumpResponsesSseToWebSocket(
       && !(err instanceof WsSendDroppedError)) {
       reportTerminal("incomplete");
       try {
-        sendProtocolError(ws, 502, err instanceof Error ? err.message : String(err));
+        sendUpstreamError(ws, 502, err);
       } catch (sendErr) {
         // If delivery is already dropped, there is no useful error frame left
         // to send. Swallow only that expected transport signal; other failures

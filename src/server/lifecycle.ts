@@ -8,7 +8,7 @@ import {
 } from "../storage/policy-job";
 import { abortRestoreTrashJobAsync } from "../storage/restore-job";
 import { stopStorageCleanupScheduler } from "../storage/policy-scheduler";
-import { runOptionalShutdownHooks } from "../lib/optional-shutdown-hooks";
+import { runDrainStartHooks, runOptionalShutdownHooks } from "../lib/optional-shutdown-hooks";
 import { stopStateStoreSweeper } from "../lib/state-store-sweeper";
 import {
   cancelQueuedStorageWorkerSpawns,
@@ -35,6 +35,8 @@ export const MAX_ACTIVE_SESSION_LANES = 64;
 export const SESSION_LANE_ID_BYTES = 32;
 const turnGate = createAdmissionGate("active_turns", MAX_ACTIVE_TURNS);
 export interface ActiveTurnLease extends AdmissionLease {
+  attach(lease: AdmissionLease): void;
+  bindAbortSignal(signal: AbortSignal): () => void;
   bindAbortController(ac: AbortController): void;
   beginCodexAccountSelection(): CodexAccountSelectionAdmission;
   isTransferred(): boolean;
@@ -168,7 +170,7 @@ export function resetLifecycleDrainStateForTests(): void {
   serverStartupReleaseFlights = new WeakMap<ReturnType<typeof Bun.serve>, Promise<void>>();
   releaseServerStartupLifecycleImpl = releaseNativeMainStartupLifecycle;
 }
-export function tryAdmitTurn(sessionLaneId?: string): ActiveTurnLease | null {
+export function tryAdmitTurn(sessionLaneId?: string, clientSignal?: AbortSignal): ActiveTurnLease | null {
   if (isDraining()) return null;
   const opaqueSessionLaneId = sessionLaneId
     ? createHash("sha256").update(sessionLaneId).digest("hex").slice(0, SESSION_LANE_ID_BYTES)
@@ -190,26 +192,51 @@ export function tryAdmitTurn(sessionLaneId?: string): ActiveTurnLease | null {
     }
   }
   const controllers = new Set<AbortController>();
+  const attachedLeases = new Set<AdmissionLease>();
+  const abortListeners = new Map<AbortSignal, () => void>();
+  let cancellationReason: unknown;
   let active = true;
   let transferred = false;
   let nativeMainClaimed = false;
   const lease: ActiveTurnLease = {
+    attach(attachedLease) {
+      if (!active) attachedLease.release();
+      else attachedLeases.add(attachedLease);
+    },
+    bindAbortSignal(signal) {
+      if (!active || abortListeners.has(signal)) return () => {};
+      const onAbort = () => {
+        cancellationReason = signal.reason;
+        const boundControllers = [...controllers];
+        lease.release();
+        for (const controller of boundControllers) controller.abort(cancellationReason);
+      };
+      abortListeners.set(signal, onAbort);
+      signal.addEventListener("abort", onAbort, { once: true });
+      if (signal.aborted) onAbort();
+      return () => {
+        if (abortListeners.get(signal) !== onAbort) return;
+        signal.removeEventListener("abort", onAbort);
+        abortListeners.delete(signal);
+      };
+    },
     bindAbortController(ac) {
       knownTurnControllers.add(ac);
       if (!active) {
-        ac.abort(new Error("turn already settled"));
+        ac.abort(cancellationReason ?? new Error("turn already settled"));
         return;
       }
       transferred = true;
       controllers.add(ac);
       activeTurns.set(ac, lease);
+      lease.bindAbortSignal(ac.signal);
     },
     beginCodexAccountSelection() {
       const mainProfileDraining = nativeMainDrainOwners.size > 0;
-      let selectionActive = !mainProfileDraining;
+      let selectionActive = active && !mainProfileDraining;
       let released = false;
       if (selectionActive) nativeMainSelections += 1;
-      return {
+      const selection: CodexAccountSelectionAdmission = {
         mainProfileDraining,
         claimMainProfile() {
           if (released || mainProfileDraining || !active) return false;
@@ -222,22 +249,29 @@ export function tryAdmitTurn(sessionLaneId?: string): ActiveTurnLease | null {
         release() {
           if (released) return;
           released = true;
+          attachedLeases.delete(selection);
           if (selectionActive) {
             selectionActive = false;
             nativeMainSelections = Math.max(0, nativeMainSelections - 1);
           }
         },
       };
+      lease.attach(selection);
+      return selection;
     },
     isTransferred() { return transferred; },
     release() {
       if (!active) return;
       active = false;
       admittedTurns.delete(lease);
+      for (const [signal, listener] of abortListeners) signal.removeEventListener("abort", listener);
+      abortListeners.clear();
       for (const controller of controllers) {
         if (activeTurns.get(controller) === lease) activeTurns.delete(controller);
       }
       controllers.clear();
+      for (const attachedLease of attachedLeases) attachedLease.release();
+      attachedLeases.clear();
       nativeMainTurns.delete(lease);
       if (opaqueSessionLaneId) {
         const currentRefCount = activeSessionLaneRefCounts.get(opaqueSessionLaneId);
@@ -250,6 +284,7 @@ export function tryAdmitTurn(sessionLaneId?: string): ActiveTurnLease | null {
     },
   };
   admittedTurns.add(lease);
+  if (clientSignal) lease.bindAbortSignal(clientSignal);
   return lease;
 }
 export function codexAccountSelectionForTurn(
@@ -357,12 +392,12 @@ export function getServerListenPort(): number | undefined {
  *   caller sees the same result before a replacement binds the port. Swallowing it would let
  *   `drainAndShutdown` report success while a socket is still held.
  *
- * `always` runs after the listeners regardless of their outcome, and its own failure joins the
- * reported set rather than replacing it.
+ * `always` runs after the listeners regardless of their outcome and receives whether every
+ * listener stop succeeded. Its own failure joins the reported set rather than replacing it.
  */
 export async function runListenerShutdown(
   steps: Array<() => Promise<void>>,
-  always: () => Promise<void>,
+  always: (listenersStopped: boolean) => Promise<void>,
 ): Promise<void> {
   const failures: unknown[] = [];
   // Close admission and start connection-owner cleanup before waiting for any drain.
@@ -372,7 +407,7 @@ export async function runListenerShutdown(
     if (result.status === "rejected") failures.push(result.reason);
   }
   try {
-    await always();
+    await always(failures.length === 0);
   } catch (error) {
     failures.push(error);
   }
@@ -464,6 +499,7 @@ export async function drainAndShutdown(
   // ordinary in-flight turns. A stuck scoped owner must not pin shutdown forever.
   const deadline = Date.now() + Math.max(0, timeoutMs);
   beginShutdownDrain();
+  runDrainStartHooks();
   const temporaryDrainsSettled = await waitForTemporaryDrainsUntil(deadline);
   if (!temporaryDrainsSettled) {
     console.warn("Temporary drain lease did not settle before the shutdown deadline; forcing shutdown");
@@ -471,7 +507,7 @@ export async function drainAndShutdown(
   beginBackgroundShellShutdown();
   try {
     while (admittedTurns.size > 0 && Date.now() < deadline) {
-      await Bun.sleep(100);
+      await Bun.sleep(Math.min(100, Math.max(0, deadline - Date.now())));
     }
     if (admittedTurns.size > 0) {
       console.warn(`⚠️  Aborting ${admittedTurns.size} in-flight turn(s) after ${timeoutMs}ms deadline`);

@@ -38,6 +38,7 @@ describe("global fast switch lists -fast identities outside Codex", () => {
   test("a thinking-default base lists its thinking-fast id, a regular-default base its fast id", () => {
     expect(cursorFastIdFor("claude-opus-5")).toBe("claude-opus-5-thinking-fast");
     expect(cursorFastIdFor("grok-4.6")).toBe("grok-4.6-fast");
+    expect(cursorFastIdFor("grok-4.7")).toBe("grok-4.7-fast");
   });
 
   test("a base with no fast variant yields no fast id at all", () => {
@@ -48,20 +49,22 @@ describe("global fast switch lists -fast identities outside Codex", () => {
 
   test("Claude Code discovery lists the umbrella id with the switch off", () => {
     expect(listIds([cursorModel("claude-opus-5")], false))
-      .toContain("claude-ocx-cursor--claude-opus-5");
+      .toContain("ocx-claude-cursor--claude-opus-5");
     expect(listIds([cursorModel("claude-opus-5")], undefined))
-      .toContain("claude-ocx-cursor--claude-opus-5");
+      .toContain("ocx-claude-cursor--claude-opus-5");
   });
 
   test("Claude Code discovery lists the fast identity with the switch on", () => {
     expect(listIds([cursorModel("claude-opus-5")], true))
-      .toContain("claude-ocx-cursor--claude-opus-5-thinking-fast");
+      .toContain("ocx-claude-cursor--claude-opus-5-thinking-fast");
     expect(listIds([cursorModel("grok-4.6", 500_000)], true))
-      .toContain("claude-ocx-cursor--grok-4.6-fast");
+      .toContain("ocx-claude-cursor--grok-4.6-fast");
+    expect(listIds([cursorModel("grok-4.7", 500_000)], true))
+      .toContain("ocx-claude-cursor--grok-4.7-fast");
   });
 
   test("the switch leaves a base without a fast variant alone", () => {
-    expect(listIds([cursorModel("kimi-k3")], true)).toContain("claude-ocx-cursor--kimi-k3");
+    expect(listIds([cursorModel("kimi-k3")], true)).toContain("ocx-claude-cursor--kimi-k3");
   });
 
   test("Desktop 3P hashed aliases are untouched by the switch", () => {
@@ -79,6 +82,7 @@ describe("global fast switch lists -fast identities outside Codex", () => {
 
     expect(decide("claude-opus-5", true)).toEqual({ kind: "set", value: "fast" });
     expect(decide("grok-4.6", true)).toEqual({ kind: "set", value: "fast" });
+    expect(decide("grok-4.7", true)).toEqual({ kind: "set", value: "fast" });
     expect(decide("kimi-k3", true)).toEqual({ kind: "drop" });
     // And the switch off must not promote.
     expect(decide("claude-opus-5", false)).toEqual({ kind: "drop" });

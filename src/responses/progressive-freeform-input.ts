@@ -1,36 +1,5 @@
-import { freeformFallbackKeys, unwrapFreeformToolInput } from "./apply-patch-envelope";
-
-const JSON_WHITESPACE = new Set([" ", "\t", "\n", "\r"]);
-
-type WrapperOpening =
-  | { state: "none" }
-  | { state: "prefix" }
-  | { state: "open"; valueStart: number };
-
-/**
- * Where the string value of `{"<key>":"` begins, tolerating the insignificant whitespace
- * `JSON.parse` accepts.
- *
- * The earlier form of this compared the buffer against the compact literal `{"key":"`, so a
- * wrapper written with spaces or newlines matched no prefix at all, streamed as raw JSON
- * deltas and then completed as the unwrapped body. That is the same delta/completion
- * disagreement #5047 closed for compact wrappers, reached through a different spelling:
- * `unwrapFreeformToolInput` reads the completed text with `JSON.parse`, which does not care
- * how the object is laid out, so neither can the streaming side.
- */
-function wrapperOpening(args: string, key: string): WrapperOpening {
-  let index = 0;
-  for (const token of ["{", `"${key}"`, ":", '"']) {
-    while (index < args.length && JSON_WHITESPACE.has(args[index]!)) index++;
-    if (index >= args.length) return { state: "prefix" };
-    for (const expected of token) {
-      if (index >= args.length) return { state: "prefix" };
-      if (args[index] !== expected) return { state: "none" };
-      index++;
-    }
-  }
-  return { state: "open", valueStart: index };
-}
+import { freeformFallbackKeys } from "./apply-patch-envelope";
+import { JSON_ESCAPES, scanFreeformWrapper } from "./freeform-wrapper-scan";
 
 /**
  * Whether a body could still grow into one complete outer Markdown fence.
@@ -48,11 +17,6 @@ function mayBecomeFencedBody(text: string, toolName: string): boolean {
   return head.startsWith("```") || "```".startsWith(head);
 }
 
-/** The two-character escapes JSON defines, and nothing else. */
-const JSON_ESCAPES = new Map<string, string>([
-  ['"', '"'], ["\\", "\\"], ["/", "/"],
-  ["b", "\b"], ["f", "\f"], ["n", "\n"], ["r", "\r"], ["t", "\t"],
-]);
 const LOW_SURROGATE_ESCAPE = /^\\u[dD][c-fC-F][0-9a-fA-F]{2}$/;
 
 /**
@@ -128,31 +92,33 @@ function decodeJsonStringPrefix(body: string): string | null {
  * damage is what is available without giving up progressive streaming, and the args are
  * unusable in that case whichever representation wins.
  *
- * A fallback key is not. It only unwraps when it is the SINGLE string field, and a second
- * key can still arrive — so a value emitted early would have to be taken back. That is the
- * rewind this holds instead: stream nothing until the object closes, then publish the one
- * repaired body. The routed passthrough in `responses-custom-tool-repair.ts` already holds
- * any object prefix for the same reason (#5047).
+ * A fallback key decides only at the object's close. It unwraps as the SINGLE string field,
+ * and a second key can still arrive while the object is open — so a value emitted early would
+ * have to be taken back. The scan therefore keeps a member table and consults it at the
+ * close, publishing the wrapped value (or the raw text) without ever reparsing the buffer.
+ * The routed passthrough in `responses-custom-tool-repair.ts` already holds any object prefix
+ * for the same reason (#5047).
+ *
+ * An object that has not reached a canonical key YET is in exactly that position, and used to
+ * be treated as raw because it did not match the literal `{"input":"`. It holds now: `input`
+ * can still arrive after other properties, or wearing an escaped spelling, and completion would
+ * then unwrap a body whose wrapper syntax had already been published as deltas (#5151). The
+ * cost of holding is preview on an object body that turns out not to be a wrapper; the cost of
+ * not holding was publishing bytes the completed item removes.
  */
 export function progressiveFreeformInput(args: string, toolName: string): string | null {
-  const openings = ["input", ...freeformFallbackKeys(toolName)]
-    .map(key => ({ key, opening: wrapperOpening(args, key) }));
-  const canonical = openings[0]!.opening;
-  if (canonical.state === "open") {
-    const decoded = decodeJsonStringPrefix(args.slice(canonical.valueStart));
+  const scan = scanFreeformWrapper(args, freeformFallbackKeys(toolName));
+  if (scan.kind === "input") {
+    const decoded = decodeJsonStringPrefix(args.slice(scan.valueStart));
     if (decoded === null) return null;
     return mayBecomeFencedBody(decoded, toolName) ? null : decoded;
   }
-  if (openings.some(entry => entry.opening.state === "open")) {
-    // Committed to a fallback wrapper. Undecidable until the object is complete.
-    try {
-      JSON.parse(args);
-    } catch {
-      return null;
-    }
-    return unwrapFreeformToolInput(args, toolName);
-  }
-  // Still an ambiguous prefix of some wrapper: which wrapper, if any, is not known yet.
-  if (openings.some(entry => entry.opening.state === "prefix")) return null;
-  return mayBecomeFencedBody(args, toolName) ? null : args;
+  if (scan.kind === "raw") return mayBecomeFencedBody(args, toolName) ? null : args;
+
+  // Undecided: an incomplete object, or a close whose tail is clamped out of view. Both stay
+  // held — the first is provably incomplete, and re-walking a budget-exhausted buffer on every
+  // delta is work for a preview that arrives in the same instant as the authoritative
+  // completion behind it. A closed object the scan could see whole never reaches here: its
+  // member table already resolved it to `input` or `raw`.
+  return null;
 }

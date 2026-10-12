@@ -10,6 +10,8 @@
 /* LoginHint — the composed login-in-progress surface (device code + URL +
    provider prose + paste fallback), shared by the same three surfaces. */
 .login-hint { display: flex; flex-direction: column; gap: 8px; }
+/* The hint's own gap spaces it; `.notice-warn`'s standalone bottom margin would double it. */
+.login-hint-launch-failed { margin-bottom: 0; }
 .login-hint-device { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
 .login-hint-device-code { font-size: 20px; font-weight: 800; letter-spacing: .14em; color: var(--text); user-select: all; }
 .login-hint-paste { display: flex; flex-direction: column; gap: 6px; }

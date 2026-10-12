@@ -1,9 +1,12 @@
-import { existsSync, unlinkSync } from "node:fs";
+import { existsSync, lstatSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { restoreNativeCodexAsync } from "../codex/inject";
 import { describeRetainedCodexProviderTable } from "../codex/inject/restore";
 import { stripGrokConfig } from "../grok/inject";
-import { serviceApiTokenFilePath } from "../lib/service-secrets";
+import { withConfigMutationLockSync } from "../config/mutation-lock";
+import { withClientLifecycleSync, type ClientLifecycleLockDeps } from "../client/lifecycle-lock";
+import { pendingClientConnectMayOwnToken, readClientConnectionState } from "../client/state";
+import { readServiceApiTokenState, serviceApiTokenFilePath } from "../lib/service-secrets";
 import { statusWinswRaw, type WinswStatus } from "../lib/winsw";
 import { withWindowsServiceMutationLock } from "../lib/windows-service-mutation-lock";
 import { maybeShowStarPrompt } from "../cli/star-prompt";
@@ -13,13 +16,19 @@ import { resolveServiceListenPort, reportServiceServing } from "./health";
 import { platformOps, proxyStillLiveAfterStop, stopTrackedProxyForServiceCommand, installServiceSafely, installFreshWindowsSchedulerSafely, removeServiceInstallState, isServiceInstalled } from "./orchestration";
 import { repairService } from "./repair";
 import type { ServiceRepairVerb } from "./repair";
-import { TASK, plistPath, readServiceBackend } from "./state";
+import { TASK, plistPath, readServiceBackend, releaseServiceOwner, resolveServiceOwnership, serviceStatePaths } from "./state";
+import { ownershipMutationLeaseStatusLine } from "./ownership-mutation-lease.mjs";
+import { foreignServiceOwnerRefusal, unknownServiceOwnerRefusal } from "./repair";
 import type { ServiceBackend } from "./state";
 import { unitPath } from "./systemd";
 import { inspectWindowsSchedulerServiceStatus, schtasksErrorDetail, probeWindowsSchedulerTask } from "./windows-scheduler";
 import type { WindowsSchedulerTaskProbe } from "./windows-scheduler";
 import { win32 } from "node:path";
 import { serviceDiagnosticsSummary } from "./diagnostics";
+import { runServiceClaim } from "./claim";
+import { createSupervisionLatch, desktopServiceCommandRefusal } from "./desktop-command-guard";
+import { linuxServiceBootHint } from "./linux-linger";
+import { diagnoseDesktopStartup, desktopLoginStatusSummary } from "./desktop-startup";
 
 /**
  * `restart` is NO LONGER folded into `repair`.
@@ -180,9 +189,44 @@ export function parseServiceArgs(args: string[]): ParsedServiceArgs {
   return { sub: normalizeServiceSubcommand(sub), backend, invalid };
 }
 
+/** Remove the service credential only when no client connection can own it. */
+export function removeServiceTokenAfterUninstall(
+  lockDeps: ClientLifecycleLockDeps = {},
+): "removed" | "absent" | "retained" | "unverified" {
+  try {
+    return withClientLifecycleSync(() => withConfigMutationLockSync(() => {
+      const path = serviceApiTokenFilePath();
+      try { lstatSync(path); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return "absent";
+        throw error;
+      }
+      if (readClientConnectionState().kind !== "disconnected") return "retained";
+      const token = readServiceApiTokenState();
+      if (token.kind !== "present") return token.kind === "absent" ? "absent" : "unverified";
+      if (pendingClientConnectMayOwnToken(token.fingerprint)) return "retained";
+      unlinkSync(path);
+      return "removed";
+    }), lockDeps);
+  } catch {
+    // Lock, state-read and unlink failures all leave cleanup unverified, not successful.
+    return "unverified";
+  }
+}
+
+/** Execute a service verb while preserving client-owned credentials during uninstall. */
 export async function serviceCommand(...args: (string | undefined)[]): Promise<void> {
   const filteredArgs = args.filter((a): a is string => Boolean(a));
+  const supervisionLatch = createSupervisionLatch();
   const execute = async (): Promise<void> => {
+    // `claim` is not an install verb: it is deliberately outside planServiceCommand (whose
+    // backend/installation checks do not apply to an ownership write) and outside
+    // assertServiceEnvironmentMatchesInstall — a takeover is not an install.
+    if (filteredArgs[0] === "claim") {
+      const code = await runServiceClaim(filteredArgs.slice(1));
+      if (code !== 0) process.exitCode = code;
+      return;
+    }
     // Planning reads manager state. Repeat it only after the writer lock is held, otherwise a
     // bare command can choose install from a snapshot another service command already changed.
     const plan = planServiceCommand(filteredArgs);
@@ -191,6 +235,12 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
       process.exit(1);
     }
     const { parsed, command } = plan;
+    const refusal = desktopServiceCommandRefusal(command, undefined, supervisionLatch);
+    if (refusal) {
+      console.error(refusal);
+      process.exitCode = 1;
+      return;
+    }
   if (command === "repair" || command === "restart") {
     const verb: ServiceRepairVerb = command === "restart" ? "restart" : "repair";
     assertServiceEnvironmentMatchesInstall();
@@ -209,7 +259,7 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
     // existing registration had been restarted, not repaired (#4914).
     let repairError: unknown;
     try {
-      await repairService({ verb });
+      await repairService({ verb, supervisionLatch });
     } catch (error) {
       repairError = error;
       process.exitCode = 1;
@@ -233,6 +283,15 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
     case "install":
       assertServiceEnvironmentMatchesInstall();
       assertServiceAuthEnvironment();
+      // The install may advance provenance, but it may take back only the owner it observed
+      // before touching the registration. A desktop successor that claims ownership while
+      // the install is running must survive the late release below.
+      const ownershipBeforeInstall = resolveServiceOwnership();
+      if (ownershipBeforeInstall.kind === "unknown") {
+        console.error(`❌ ${unknownServiceOwnerRefusal(ownershipBeforeInstall.reason, "install")}`);
+        process.exitCode = 1;
+        break;
+      }
       // A manually started proxy can still own the configured port while the service
       // registration is absent or unloaded. Stop both the registered manager and any
       // tracked standalone listener before loading the freshly written service assets.
@@ -246,38 +305,74 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
             throw new Error(`Task Scheduler state could not be verified before install: ${scheduler.detail}`);
           }
           if (scheduler.status === "absent") {
-            await installFreshWindowsSchedulerSafely();
+            await installFreshWindowsSchedulerSafely({ supervisionLatch });
           } else {
-            await installServiceSafely(backend, ops.install);
+            await installServiceSafely(backend, ops.install, { supervisionLatch });
           }
         } else {
-          await installServiceSafely(backend, ops.install);
+          await installServiceSafely(backend, ops.install, { supervisionLatch });
         }
       } catch (error) {
         console.error(`❌ Service install cleanup failed: ${error instanceof Error ? error.message : String(error)}`);
         process.exitCode = 1;
         break;
       }
+      // ONLY now. `install` is the verb that takes the runtime back, and it does so after the
+      // registration exists — releasing first meant a cancelled UAC prompt, a failed
+      // registration or an aborted cleanup left the retained npm registration looking
+      // CLI-owned, so the next incidental repair would reactivate it.
+      //
+      // `repair` and `restart` refuse under a foreign owner precisely because they run
+      // incidentally — from a tray helper, from `ocx update`, from a doctor suggestion — and
+      // undoing a takeover the user consented to must be something the user asked for.
+      {
+        const released = releaseServiceOwner(ownershipBeforeInstall, { allowRevisionAdvance: true });
+        if (released) {
+          console.log(
+            `ℹ️  The desktop app owned the background runtime (install ${released.installId}, `
+            + `consent generation ${released.consentGeneration}); this install took it back.`,
+          );
+        }
+      }
       // The wrapper was written moments ago in this process, so the configured port
       // and the baked one cannot have diverged yet — unlike `start`, which reads the
       // installed artifact instead.
       await reportServiceServing("installed", { port: resolveServiceListenPort() });
-      if (process.platform === "linux") console.log("   For auto-start on boot: loginctl enable-linger $USER");
+      if (process.platform === "linux") console.log(linuxServiceBootHint());
       // Service users never reach the `ocx start` prompt: the proxy they run is the
       // supervised child, which always carries OCX_SERVICE=1. This command, though, is
       // hand-typed in a real terminal, so it is the one interactive moment they get.
       // Same one-time marker and same guards (TTY, gh auth, agent deferral) apply.
       await maybeShowStarPrompt();
       break;
-    case "start":
+    case "start": {
       // The installed launcher preserves the recorded CODEX_SQLITE_HOME: a
       // changed sqlite_home/CODEX_SQLITE_HOME/CODEX_HOME would start the service
       // on the recorded database while this shell resolves another, splitting
       // native Codex history between databases. Same guard `stop` already runs.
       assertServiceEnvironmentMatchesInstall();
+      // `start` activates the npm registration, so it refuses on the same terms repair does.
+      // The Windows tray starts the service automatically, which would otherwise put a second
+      // proxy beside the one the desktop app is running without anyone asking for it.
+      // `stop` and `uninstall` are deliberately NOT gated: they deactivate.
+      //
+      // Reported rather than thrown: the tray drives this through `runTrayProxyStart`, which
+      // does not catch, and a refusal is a decision rather than a crash.
+      const ownership = resolveServiceOwnership();
+      const refusal = ownership.kind === "unknown"
+        ? unknownServiceOwnerRefusal(ownership.reason, "start")
+        : ownership.kind === "owned" && ownership.ownership.owner !== "cli"
+          ? foreignServiceOwnerRefusal(ownership.ownership, "start")
+          : null;
+      if (refusal) {
+        console.error(`❌ ${refusal}`);
+        process.exitCode = 1;
+        break;
+      }
       ops.start();
       await reportServiceServing("started");
       break;
+    }
     case "stop": {
       assertServiceEnvironmentMatchesInstall();
       // Only stop what is actually installed. The unguarded call ran a real `launchctl unload`
@@ -335,7 +430,13 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
         // subsumes the not-installed case and adds the serving / stale-plist split.
         console.log(await serviceStatusReport());
       }
+      // A busy lease is why a supervised start can keep failing while the line above only
+      // says "not running"; report its recorded PID with unverified identity and lease age here.
+      const lease = ownershipMutationLeaseStatusLine(serviceStatePaths());
+      if (lease) console.log(lease);
       console.log(`Diagnostics: ${serviceDiagnosticsSummary()}`);
+      const desktop = diagnoseDesktopStartup();
+      if (desktop) console.log(desktopLoginStatusSummary(desktop));
       break;
     }
     case "uninstall":
@@ -369,11 +470,13 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
         }
       }
       removeServiceInstallState();
-      try { if (existsSync(serviceApiTokenFilePath())) unlinkSync(serviceApiTokenFilePath()); } catch { /* best-effort */ }
+      const tokenCleanup = removeServiceTokenAfterUninstall();
+      if (tokenCleanup === "retained") console.warn("⚠️  Service token kept because client state may own it.");
+      else if (tokenCleanup === "unverified") console.warn("⚠️  Service token cleanup could not be verified; inspect client state before deleting it.");
       console.log("✅ service uninstalled.");
       break;
     default:
-      console.error("Usage: ocx service [install|repair|restart|start|stop|status|uninstall|remove] [--native|--scheduler]");
+      console.error("Usage: ocx service [install|repair|restart|start|stop|status|uninstall|remove|claim] [--native|--scheduler]");
       console.error("       With no subcommand, installs when absent or repairs/restarts an existing service.");
       console.error("       repair: refresh the installed backend, reloading it only when the definition changed; stale Windows tasks may request admin approval.");
       console.error("       restart: the same refresh, but always restarts the service — on macOS a healthy job is kickstarted in place.");
@@ -383,6 +486,14 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
   };
 
   const preliminary = parseServiceArgs(filteredArgs);
+  if (preliminary.invalid.length === 0) {
+    const refusal = desktopServiceCommandRefusal(preliminary.sub, undefined, supervisionLatch);
+    if (refusal) {
+      console.error(refusal);
+      process.exitCode = 1;
+      return;
+    }
+  }
   const windowsMutation = process.platform === "win32"
     && preliminary.invalid.length === 0
     && preliminary.sub !== "status";

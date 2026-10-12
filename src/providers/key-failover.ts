@@ -8,11 +8,12 @@
  *
  * Modelled after src/codex/routing.ts cooldown logic but scoped to plain API-key pools.
  */
-import { commitProviderApiKeySelection } from "./api-key-selection";
+import { commitProviderApiKeySelection, providerApiKeySelectionIsCurrent } from "./api-key-selection";
 import type { ProviderApiKeySelection } from "../types/provider";
 import { routedProviderConfig } from "../router";
 import { getProviderRegistryEntry } from "./registry";
-import type { OcxConfig, OcxProviderConfig, RateLimitRetryPolicy, TransientRetryPolicy } from "../types";
+import { isCanonicalCommandCodeBaseUrl, normalizedBaseUrl } from "./quota/vendor-probes-key";
+import type { OcxConfig, OcxProviderConfig, RateLimitRetryPolicy, ResetReplayPolicy, TransientRetryPolicy } from "../types";
 import { OPENCODE_GO_SESSION_HEADER } from "./opencode-go-transport";
 import { resolveProviderTransport, type OcxProviderTransport } from "./xai-transport";
 import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
@@ -29,6 +30,16 @@ interface KeyCooldown {
 
 const DEFAULT_COOLDOWN_MS = 60_000;
 const MAX_COOLDOWN_MS = 10 * 60_000; // cap at 10 min for api-key rotation
+/**
+ * Anthropic credit-balance refusal (#6958). An empty prepaid balance is account state, not a
+ * rate signal: it clears only when someone buys credits or auto-reload fires, so the
+ * ten-minute credential cap would hand a dead key back to rotation six times an hour. One hour
+ * keeps it out of replacement and proactive selection while a funded sibling exists, and still
+ * notices a top-up without a restart. When every key is held, requests keep using the active
+ * key and return Anthropic's original refusal. The hold is in memory; dashboard key management
+ * clears it.
+ */
+export const ANTHROPIC_BILLING_COOLDOWN_MS = 60 * 60_000;
 
 /**
  * Cap for a cooldown the upstream itself dated, as opposed to one we inferred.
@@ -297,7 +308,7 @@ const OPENCODE_GO_RATE_LIMIT_RETRY = {
 } as const satisfies Required<RateLimitRetryPolicy>;
 
 /** True when the provider row points at the OpenCode Go destination. */
-function isOpenCodeGoDestination(
+export function isOpenCodeGoDestination(
   provider: Partial<Pick<OcxProviderConfig, "baseUrl" | "authMode">>,
 ): boolean {
   const raw = typeof provider.baseUrl === "string" ? provider.baseUrl : "";
@@ -305,11 +316,15 @@ function isOpenCodeGoDestination(
   // Endpoint identity, not adapter identity: the runtime adapter is already overridden
   // per model by the time the recovery loop runs (muse-spark rides `openai-responses`
   // while the preset declares `openai-chat`), so an adapter-strict lookup misses it.
-  const endpoint = raw.trim().replace(/\/+$/, "");
+  // Canonicalize with the shared quota-probe normalizer so host case and explicit
+  // default ports compare equal; userinfo, query, and fragment never match
+  // (follow-up to the review on #5067).
+  const endpoint = normalizedBaseUrl(raw.trim());
+  if (!endpoint) return false;
   const entry = getProviderRegistryEntry("opencode-go");
   if (!entry) return false;
   const candidates = [entry.baseUrl, ...(entry.destinationAliases ?? []).map(alias => alias.baseUrl)];
-  return candidates.some(url => url.trim().replace(/\/+$/, "") === endpoint);
+  return candidates.some(url => normalizedBaseUrl(url.trim()) === endpoint);
 }
 
 /**
@@ -320,6 +335,16 @@ const DEFAULT_TRANSIENT_RETRY = {
   enabled: true,
   attempts: 3,
 } as const satisfies Required<TransientRetryPolicy>;
+
+/**
+ * Default used when a provider opts in with a bare `retryOnReset: {}`: one replacement for
+ * the whole logical request. `replacements` counts duplicate inferences the operator accepts,
+ * not retries and not sends.
+ */
+const DEFAULT_RESET_REPLAY = {
+  enabled: true,
+  replacements: 1,
+} as const satisfies Required<ResetReplayPolicy>;
 
 /** Map<`${providerName}\0${keyId}`, KeyCooldown> */
 const keyCooldowns = new Map<string, KeyCooldown>();
@@ -551,7 +576,8 @@ export function selectProactiveApiKeyTransport(
  * `enabled: false` to opt out). When the knob is absent, the OpenCode Go destination
  * (subscription traffic such as Muse Spark) falls back to a patient same-key policy so a
  * burst 429 waits and replays instead of surfacing to the client and aborting a long
- * session; every other provider without the knob keeps today's fail-fast behavior.
+ * session; key-auth Command Code at its canonical endpoints gets the same fallback (#5180), and
+ * every other provider without the knob keeps today's fail-fast behavior.
  * OAuth/forward/local credentials are never replayed on the same token. The returned
  * policy is fully defaulted so callers never re-check fields.
  */
@@ -575,10 +601,17 @@ export function rateLimitRetryPolicyFor(
       respectRetryAfter: policy.respectRetryAfter ?? DEFAULT_RATE_LIMIT_RETRY.respectRetryAfter,
     };
   }
-  // No explicit knob: patient fallback for the OpenCode Go destination only.
+  // No explicit knob: patient fallback for OpenCode Go and canonical Command Code only.
   if (provider.authMode !== undefined && provider.authMode !== "key") return null;
-  if (!isOpenCodeGoDestination(provider)) return null;
-  return { ...OPENCODE_GO_RATE_LIMIT_RETRY };
+  if (isOpenCodeGoDestination(provider)) return { ...OPENCODE_GO_RATE_LIMIT_RETRY };
+  // Command Code's Provider API rate-limits long muse-spark turns the same way (#5180): a single
+  // key cannot fail over, and the Codex client does not retry a 429, so the turn aborts. The key
+  // endpoint gets the same patient same-key policy. A row repointed at a custom relay is not the
+  // canonical endpoint and keeps fail-fast unless it sets `retryOn429`.
+  if (typeof provider.baseUrl === "string" && isCanonicalCommandCodeBaseUrl(provider.baseUrl.trim())) {
+    return { ...OPENCODE_GO_RATE_LIMIT_RETRY };
+  }
+  return null;
 }
 
 /**
@@ -608,6 +641,26 @@ export function transientRetryPolicyFor(
   return {
     enabled: policy.enabled ?? DEFAULT_TRANSIENT_RETRY.enabled,
     attempts: policy.attempts ?? DEFAULT_TRANSIENT_RETRY.attempts,
+  };
+}
+
+/**
+ * Normalize a provider's `retryOnReset` policy, or return null when it is absent or explicitly
+ * disabled.
+ *
+ * No auth-mode gate: the canonical ChatGPT backend is `forward` auth and is the send this
+ * policy exists for. Whether a given REQUEST may be replaced is a per-body decision made in
+ * src/server/responses/reset-replay.ts, and how many replacements the request gets is the
+ * shared allowance on its execution budget. This function only reads the operator's intent.
+ */
+export function resetReplayPolicyFor(
+  provider: Pick<OcxProviderConfig, "retryOnReset">,
+): Required<ResetReplayPolicy> | null {
+  const policy = provider.retryOnReset;
+  if (!policy || policy.enabled === false) return null;
+  return {
+    enabled: policy.enabled ?? DEFAULT_RESET_REPLAY.enabled,
+    replacements: policy.replacements ?? DEFAULT_RESET_REPLAY.replacements,
   };
 }
 
@@ -645,12 +698,13 @@ export function rateLimitRetryDelayMs(
 function rotateKeyAfterFailure(
   config: OcxConfig,
   providerName: string,
-  failureStatus: 401 | 429,
+  failureStatus: 401 | 429 | "billing",
   retryAfterHeader: string | null | undefined,
   now = Date.now(),
   attemptedKey?: string,
   attemptedSelection?: ProviderApiKeySelection,
   quotaResetAt?: number,
+  acceptsFreshProvider?: (provider: OcxProviderConfig) => boolean,
 ): OcxProviderConfig | null {
   const provider = config.providers[providerName];
   if (!provider) return null;
@@ -661,6 +715,11 @@ function rotateKeyAfterFailure(
     | { failedId?: string; candidateId?: string }
     | { exhaustedCount: number; failedId?: string };
   const outcome = commitProviderApiKeySelection<Rotation | null>(config, providerName, freshProvider => {
+    // Run on every persisted transaction attempt, including a freshness rebase.
+    if (acceptsFreshProvider) {
+      try { if (!acceptsFreshProvider(freshProvider)) return { changed: false, value: null }; }
+      catch { return { changed: false, value: null }; }
+    }
     const pool = freshProvider.apiKeyPool;
     if (!pool || pool.length < 2) return { changed: false, value: null };
 
@@ -698,6 +757,8 @@ function rotateKeyAfterFailure(
   }, attemptedSelection);
   if (outcome.status === "unavailable") return null;
   if (outcome.status === "superseded") {
+    // Billing authority is bound to the sent selection; a newer manual choice grants no replay.
+    if (acceptsFreshProvider) return null;
     // A newer manual selection (including A→B→A) owns subsequent dispatch. Reusing the
     // same failed key here would loop forever; preserve its original failure instead.
     return outcome.provider.apiKey !== failedKey ? structuredClone(outcome.provider) : null;
@@ -707,7 +768,9 @@ function rotateKeyAfterFailure(
     // A 401 is a verdict about the credential itself, not a timing signal: the key is rejected
     // until an operator replaces it, and upstreams send no Retry-After for it. Hold it for the
     // full cap instead of the 429 default so a dead key is not re-tried once a minute.
-    const cooldownMs = failureStatus === 401
+    const cooldownMs = failureStatus === "billing"
+      ? ANTHROPIC_BILLING_COOLDOWN_MS
+      : failureStatus === 401
       ? MAX_COOLDOWN_MS
       // A reset instant the upstream dated outranks both the header and the
       // default: it is the only one of the three that knows when the quota
@@ -719,7 +782,7 @@ function rotateKeyAfterFailure(
     sweepExpiredOnWrite(now);
   }
   if ("exhaustedCount" in outcome.value) {
-    console.warn(`[key-failover] ${providerName}: all ${outcome.value.exhaustedCount} keys in cooldown after ${failureStatus}; returning the upstream status to the client`);
+    console.warn(`[key-failover] ${providerName}: all ${outcome.value.exhaustedCount} keys in cooldown after ${failureLabel(failureStatus)}; returning the upstream status to the client`);
     return null;
   }
 
@@ -728,10 +791,14 @@ function rotateKeyAfterFailure(
   if (outcome.value.candidateId) {
     console.warn(
       // Log ids only — labels are user-supplied free text and could carry secret material.
-      `[key-failover] ${providerName}: ${failureStatus} on key ${outcome.value.failedId ?? "?"}; rotating to key ${outcome.value.candidateId}`,
+      `[key-failover] ${providerName}: ${failureLabel(failureStatus)} on key ${outcome.value.failedId ?? "?"}; rotating to key ${outcome.value.candidateId}`,
     );
   }
   return structuredClone(committed);
+}
+
+function failureLabel(failureStatus: 401 | 429 | "billing"): string {
+  return failureStatus === "billing" ? "credit-balance refusal" : String(failureStatus);
 }
 
 export function rotateKeyOn429(
@@ -820,6 +887,29 @@ export function rotateProviderTransportOn401(
     options.attemptedSelection ?? routedProvider._apiKeyAttempt);
   if (!rotated) return null;
   return applyRotatedTransport(providerName, routedProvider, rotated, options.promptCacheKey);
+}
+
+/** Exact Anthropic billing refusal: cool the key for ANTHROPIC_BILLING_COOLDOWN_MS. */
+export function rotateProviderTransportOnAnthropicBilling(
+  config: OcxConfig,
+  providerName: string,
+  routedProvider: OcxProviderTransport,
+  options: Omit<RotateProviderTransportOptions, "retryAfter"> = {},
+): OcxProviderTransport | null {
+  if (routedProvider.adapter !== "anthropic"
+    || (routedProvider.authMode !== undefined && routedProvider.authMode !== "key")
+    || !hasKeyPoolFailover(routedProvider)) return null;
+  const headerShape = (provider: OcxProviderConfig) => JSON.stringify(Object.entries(provider.headers ?? {}).sort(([a], [b]) => a.localeCompare(b)));
+  const sentHeaders = headerShape(routedProvider);
+  const acceptsFreshProvider = (fresh: OcxProviderConfig): boolean => fresh.adapter === routedProvider.adapter
+    && (fresh.authMode === undefined || fresh.authMode === "key") && hasKeyPoolFailover(fresh)
+    && (fresh.apiKeyTransport ?? "x-api-key") === (routedProvider.apiKeyTransport ?? "x-api-key")
+    && headerShape(fresh) === sentHeaders
+    && providerApiKeySelectionIsCurrent({ ...config, providers: { ...config.providers, [providerName]: fresh } },
+      providerName, routedProvider);
+  const rotated = rotateKeyAfterFailure(config, providerName, "billing", null, options.now,
+    options.attemptedKey, options.attemptedSelection ?? routedProvider._apiKeyAttempt, undefined, acceptsFreshProvider);
+  return rotated ? applyRotatedTransport(providerName, routedProvider, rotated, options.promptCacheKey) : null;
 }
 
 function applyRotatedTransport(

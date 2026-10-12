@@ -1,0 +1,167 @@
+import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { repoPath } from "../helpers/repo-root";
+
+/**
+ * The two CLI surfaces the shell drives, read against the CLI that defines them.
+ *
+ * D5 and D4: the shell stops resolving the home, the port and liveness itself, and stops performing
+ * the teardown itself. `src/cli/resolve.ts` and `src/cli/stop-report.ts` own those answers; the Rust
+ * side is a reader. Both halves are asserted here together so a schema, a status value or an
+ * outcome name cannot change on one side and be discovered on a user's machine.
+ *
+ * The rule that matters most is the one a reader can get wrong quietly: liveness has three answers,
+ * and only a proven absence authorises starting a runtime. Everything that can go wrong on the
+ * shell side has to fold into the third one, because the reading that must never happen is "the
+ * resolve failed, so nobody must be listening".
+ */
+const SHELL = "desktop/src-tauri/src";
+const RESOLVE_RS = repoPath(`${SHELL}/resolve.rs`);
+const STOP_RS = repoPath(`${SHELL}/runtime_stop.rs`);
+const STARTUP = repoPath(`${SHELL}/startup.rs`);
+const RESOLVE_TS = repoPath("src/cli/resolve.ts");
+const STOP_TS = repoPath("src/cli/stop-report.ts");
+
+function code(path: string): string {
+  return readFileSync(path, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+}
+
+describe("desktop CLI contracts", () => {
+  const resolveRs = code(RESOLVE_RS);
+  const stopRs = code(STOP_RS);
+  const resolveTs = code(RESOLVE_TS);
+  const stopTs = code(STOP_TS);
+
+  test("both sides name the same wire versions", () => {
+    expect(resolveTs).toContain('RESOLVE_SCHEMA = "ocx-resolve/1"');
+    expect(resolveRs).toContain('pub const SCHEMA: &str = "ocx-resolve/1"');
+    expect(stopTs).toContain('STOP_SUMMARY_SCHEMA = "ocx-stop/1"');
+    expect(stopRs).toContain('pub const SCHEMA: &str = "ocx-stop/1"');
+    // A document announcing anything else is not understood rather than half-read.
+    expect(resolveRs).toContain("resolved.schema != SCHEMA");
+    expect(stopRs).toContain("summary.schema != SCHEMA");
+  });
+
+  test("liveness keeps its three answers, and only one of them authorises a start", () => {
+    // Two reach the wire; the third exits 1 before the document is built.
+    expect(resolveTs).toContain('status: "live" | "absent-proven"');
+    expect(resolveRs).toContain('#[serde(rename_all = "kebab-case")]');
+    expect(resolveRs).toContain("    Live,");
+    expect(resolveRs).toContain("    AbsentProven,");
+    const rule = resolveRs.slice(resolveRs.indexOf("pub fn may_start("));
+    const body = rule.slice(0, rule.indexOf("\n}"));
+    expect(body).toContain("Some(Status::AbsentProven)");
+    expect(body).not.toContain("Status::Live");
+  });
+
+  test("a live listener this app cannot manage is neither attached to nor started beside", () => {
+    // Core's liveness predicate accepts a connected client's listener on purpose, so
+    // duplicate-start avoidance can see it; the shell discriminates on the role rather than
+    // narrow that predicate.
+    expect(resolveTs).toContain("role?: string");
+    const verdict = resolveRs.slice(resolveRs.indexOf("pub fn live_verdict("));
+    const body = verdict.slice(0, verdict.indexOf("\n}"));
+    expect(body).toContain('role.as_deref() == Some("client")');
+    expect(body).toContain("LiveVerdict::Unusable");
+    // An address this shell cannot reach on loopback is unusable, whatever the role.
+    const loopback = body.indexOf("loopback_reachable(resolved.liveness.hostname.as_deref())");
+    expect(loopback).toBeGreaterThan(-1);
+    expect(body.indexOf("return LiveVerdict::Client;")).toBeGreaterThan(loopback);
+    const startup = code(STARTUP);
+    const unusable = startup.indexOf("resolve::LiveVerdict::Unusable(reason) =>");
+    const spawn = startup.indexOf("spawn_runtime(app, endpoint, &watch)");
+    expect(unusable).toBeGreaterThan(-1);
+    expect(startup.slice(unusable, spawn)).toContain("return;");
+  });
+
+  test("the version skew rides the resolve document and gates a downgrade takeover", () => {
+    // The CLI computes the comparison once (it already owns version-skew semantics for
+    // `ocx status` and doctor); the shell consumes the relation rather than reparsing
+    // versions, and a newer runtime must never be offered a takeover that downgrades it.
+    expect(resolveTs).toContain("versionSkew: computeVersionSkew(cliVersion, live.version)");
+    expect(resolveRs).toContain("pub version_skew: Option<VersionSkew>");
+    const startup = code(STARTUP);
+    const newer = startup.indexOf("VersionRelation::ProxyNewer");
+    expect(newer).toBeGreaterThan(-1);
+    expect(startup.slice(newer)).toContain("AttachPlan::Guest(");
+  });
+
+  test("a Child's client runtime is attached to without a takeover prompt, never started beside", () => {
+    // Refusing it failed every recovery on a Child whose runtime restarted outside the app.
+    const startup = code(STARTUP);
+    const client = startup.indexOf("resolve::LiveVerdict::Client =>");
+    const unusable = startup.indexOf("resolve::LiveVerdict::Unusable(reason) =>");
+    expect(client).toBeGreaterThan(-1);
+    const arm = startup.slice(client, unusable);
+    expect(arm).toContain("attach_as_guest(");
+    expect(arm).toContain("return;");
+    expect(arm).not.toContain("attach_plan(");
+    expect(arm).not.toContain("await_consent");
+  });
+
+  test("everything that can go wrong on this side folds into unknown", () => {
+    const reader = resolveRs.slice(resolveRs.indexOf("pub fn read("), resolveRs.indexOf("pub async fn run("));
+    // A non-zero exit is the CLI's own refusal, including the exit 1 it uses for unknown liveness.
+    expect(reader).toContain("if exit_code != Some(0) {");
+    expect(reader).toContain("Resolution::Unknown");
+    const runner = resolveRs.slice(resolveRs.indexOf("pub async fn run("));
+    const body = runner.slice(0, runner.indexOf("\n}"));
+    // A missing binary, a failed spawn and a deadline all answer the same way.
+    expect(body.match(/Resolution::Unknown/g) || []).toHaveLength(3);
+    expect(body).toContain("timeout_at(deadline, command.output())");
+  });
+
+  test("the startup sequence refuses to start on anything but a proven absence", () => {
+    const startup = code(STARTUP);
+    // Anchor on the name, not the full signature: a parameter added to the sequence is not a
+    // change to the order this case is about, and `indexOf` returning -1 silently slices the
+    // last character instead of failing, so every index below reads -1 and the case passes
+    // vacuously. That is exactly what it did when `run` gained its start instant.
+    const at = startup.indexOf("async fn run(app: &AppHandle");
+    expect(at).toBeGreaterThan(-1);
+    const run = startup.slice(at);
+    const unknown = run.indexOf("let Some(answer) = resolution.resolved() else {");
+    const attach = run.indexOf("match resolve::live_verdict(&resolution) {");
+    // A takeover proves its own absence by stopping what was there, so it skips this guard.
+    const guard = run.indexOf("if !took_over && !resolve::may_start(&resolution) {");
+    const spawn = run.indexOf("spawn_runtime(app, endpoint, &watch)");
+    expect(unknown).toBeGreaterThan(-1);
+    expect(attach).toBeGreaterThan(unknown);
+    expect(guard).toBeGreaterThan(attach);
+    expect(spawn).toBeGreaterThan(guard);
+    // The unresolved branch fails the state; it does not fall through to a start.
+    expect(run.slice(unknown, attach)).toContain("Phase::Resolving,");
+    expect(run.slice(unknown, attach)).toContain("return;");
+  });
+
+  test("a stop is a success only when the CLI said so twice", () => {
+    // The process status and the document have to agree, and the document has to say the runtime
+    // is down: taking the summary's word for its own exit status is taking a claim as its own
+    // evidence.
+    expect(stopTs).toContain("ok: signals.exitCode === 0");
+    expect(stopTs).toContain("runtimeDown: record.proxy ===");
+    const reader = stopRs.slice(stopRs.indexOf("pub fn read("), stopRs.indexOf("pub async fn run("));
+    expect(reader).toContain("if exit_code != Some(0)");
+    expect(reader).toContain("|| !summary.ok");
+    expect(reader).toContain("|| summary.exit_code != 0");
+    expect(reader).toContain("|| !summary.runtime_down");
+    // And the document has to agree with itself rather than be trusted to.
+    expect(reader).toContain("|| !agrees");
+    expect(reader).toContain("(Outcome::Stopped, Proxy::Stopped)");
+    expect(reader).toContain("(Outcome::NotRunning, Proxy::NotRunning)");
+    expect(reader).toContain("StopResult::Failed");
+    const stopped = reader.indexOf("StopResult::Stopped(Box::new(summary))");
+    expect(stopped).toBeGreaterThan(reader.indexOf("if exit_code != Some(0)"));
+  });
+
+  test("the outcomes the shell can be handed are the outcomes the CLI can emit", () => {
+    expect(stopTs).toContain(
+      'outcome: "stopped" | "not-running" | "history-incomplete" | "history-deferred" | "failed" | "approval-changed" | "manager-still-active"',
+    );
+    // The shell does not re-derive the outcome; it carries the CLI's own words into its diagnostic.
+    expect(stopRs).toContain("summary.outcome");
+    expect(stopRs).toContain("summary.exit_code");
+    expect(stopRs).toContain("summary.message");
+    expect(stopRs).not.toContain('== "stopped"');
+  });
+});

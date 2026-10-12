@@ -1,0 +1,98 @@
+---
+title: 远程链接
+description: 通过 SSH 将 OpenCodex 主机与子机连接起来。
+---
+
+机器链接通过 SSH 连接 OpenCodex **主机（Home）** 与 **子机（Child）**。主机通过 SSH 隧道为子机提供服务，两台电脑各自继续在 `10100` 端口运行本地 OpenCodex 服务。控制台会通过 SSH 传递子机专用的链接密钥，因此不需要手动输入令牌。
+
+## 要求
+
+- 主机可以使用 OpenSSH 密钥登录子机。
+- 对于由子机发起的链接，子机必须能使用 OpenSSH 密钥登录主机（不支持密码登录）。
+- 子机已安装 OpenCodex 2.66.0 或更高版本（由子机发起的链接还要求主机也满足）。
+- 两台电脑运行 macOS 或 Linux。
+- 从主机添加子机的控制台需在主机上打开，或使用已配对的 Hub 会话。将当前电脑转换为子机需要操作员配对的控制台会话；无凭据签发的本地会话不能提交这项路由更改。
+
+密码 SSH 和 Windows 不在当前流程中。链接可以从任意一侧发起：按下文从主机发起，或按“将这台电脑连接为子机”一节从子机发起。
+
+## 从 `#remote` 添加子机
+
+1. 打开控制台的 `#remote`，开启 Remote Link。
+2. 选择 **Home**，然后点击 **Continue**。SSH 主机列表会打开。
+3. 从 SSH 候选主机中选择主机，或输入 SSH 配置别名。
+4. 运行连接测试，并将显示的主机指纹与目标电脑的指纹进行比较。比较指纹可以在 SSH 信任主机前发现错误的电脑或已更换的主机密钥。
+5. 确认指纹，然后连接子机。
+
+控制台不会要求输入令牌。它会先探测主机，只有明确确认指纹后才能应用链接。
+
+添加子机窗口会说明子机通过 SSH 使用此主机的提供商，并列出上述前提条件。别名来自运行 OpenCodex 的主机上的 `~/.ssh/config`，不一定是显示浏览器的电脑。如果发现成功但没有主机，请添加如下 `Host` 条目后重新扫描。也可以手动输入已有别名；选择或输入别名后即可启用连接测试。窗口还提供本指南的链接。
+
+```sshconfig
+Host devbox
+  HostName devbox.example.com
+  User you
+  IdentityFile ~/.ssh/id_ed25519
+```
+
+如果发现失败，窗口会显示加载失败、可用的请求原因和重试按钮，而不是声称列表为空。连接测试失败的具体原因和清理后的 SSH 提示只在活动窗口中显示，不会在背后重复显示。检查原因，必要时使用下方 SSH 诊断方法，然后重试。重新扫描会保留输入的别名，但连接前必须重新检查指纹。
+
+## 将这台电脑连接为子机
+
+在要使用主机提供商的电脑上：
+
+1. 在控制台中打开 `#remote` 并开启 Remote Link。
+2. 选择 **Child**。SSH 主机列表会打开。
+3. 选择主机的 SSH 主机，运行连接测试，然后比较并确认其主机指纹。
+4. 阅读提示后选择 **Connect as Child**。
+
+连接会重启这台电脑上的 OpenCodex。已在运行的 Codex 请求会先完成，重启期间新的请求可能在最多一分钟内失败。随后控制台会自动重新加载并显示子机链接。Codex 继续使用这台电脑上的 `http://127.0.0.1:<port>/v1`，无需设置令牌或环境变量：本地 OpenCodex 会把每个请求转发给主机，由主机用它自己的提供商和账户提供服务。
+
+如果 **Child** 提示先配对这台电脑，请在这台电脑上打开配置的 HTTP 回环 IP 地址控制台，例如 `http://127.0.0.1:<configured-port>`。只有在缺少配对且控制台与 API 使用同一个回环源时，才会显示本地配对表单。复制表单中的 `ocx gui pair --origin "http://127.0.0.1:<configured-port>"` 命令，在这台电脑的终端中运行，再将一次性代码粘贴到表单中。必须使用表单显示的确切源；提供商 API 密钥或管理员令牌不是配对代码。缺少配对与配置端口不匹配是不同的原因。
+
+选择 **Child** 角色还要求 OpenCodex 以独立运行模式在其配置的端口上运行，因为子机会在正好这个端口上重启。如果控制台提示 OpenCodex 未在其配置的端口上运行，请先在该端口上重启它。
+
+## 链接状态
+
+- **Connected** 表示 SSH 隧道已就绪，子机可以使用主机链接。
+- **Reconnecting** 表示正在重试隧道。重试期间请求可能暂时返回带有 `Retry-After` 的 `503`。在从自己的仪表板连接的 Child 上，请求会先最多等待 15 秒让隧道恢复。
+- **Failed** 表示链接需要处理。请检查 SSH 身份验证、已确认的主机密钥、转发或超时原因。建立 SSH 隧道的一方会在睡眠、故障或重启后自动重试（Home 添加的 Child 由 Home 重试，从自己的仪表板连接的 Child 由 Child 重试）：超时或转发错误后大约每分钟一次，身份验证错误后每五分钟一次。主机密钥变更时不会重试。要立即重连，请在 Home 的仪表板中选择 **Retry**，或在 Home 上运行 `ocx link reconnect --link-id <id>`。这只会重启该链接的隧道，不会重启 OpenCodex。
+
+链接失败时不会静默切换到本地提供商。
+
+## 移除子机
+
+选择子机的 **Disconnect** 并确认别名。主机会停止隧道、吊销该子机的链接密钥并删除保存的链接记录。
+
+如果主机无法连接子机来运行断开命令，请选择 **Remove here only**。这会只删除本机的隧道、密钥和记录。然后登录子机并运行：
+
+```bash
+ocx disconnect
+```
+
+要断开由子机发起的链接，请在子机上运行 `ocx disconnect`。该命令会断开客户端隧道，并通过 SSH 在 Home 上撤销链接。如果 Home 撤销失败，命令会输出：`Home revoke failed; run ocx link revoke --link-id <linkId> on the home.`
+
+## 安全
+
+子机会通过链接使用主机电脑上的提供商和提供商凭据。主机会为每台子机创建单独的链接密钥；移除链接会吊销该密钥。确认前比较主机指纹，避免误接受错误电脑或已更换的主机密钥。由 Tailscale 身份签发的控制台会话不能管理机器链接。 在子机上，密钥只保留在 OpenCodex 内部：Codex 或 Claude Code 在子机上发送的凭据不会转发给主机，子机上任何能访问 `127.0.0.1:<port>` 的程序都可以无密钥使用主机，这与独立安装给予本地程序的信任相同。来自其他网站的网页会被拒绝。
+
+## CLI 参考
+
+```text
+ocx link probe <alias> [--json]
+ocx link add <alias> [--expect-fingerprint SHA256:…] [--json]
+ocx link port [--json]
+ocx link issue --alias <alias> --tunnel-port <port> [--json]
+ocx link status [--json]
+ocx link revoke --link-id <id> [--json]
+ocx link reconnect --link-id <id> [--json]
+```
+
+非交互式终端（非 TTY）必须提供 `--expect-fingerprint`。交互式终端中可省略该参数，但必须明确确认所提供的指纹。
+
+## 相关指南
+
+- [Remote Hub 部署](/zh-cn/guides/remote-hub/)
+- [远程工作区](/zh-cn/guides/remote-workspace/)
+
+
+`ocx link probe <alias> --json` · `ocx link add <alias> --expect-fingerprint SHA256:… --json` — [CLI, restart, relay verification and recovery](/guides/remote-link/#add-a-child-from-the-terminal).

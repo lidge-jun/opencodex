@@ -41,6 +41,8 @@ export interface CursorRunRequest {
    */
   echoRetryContinuationText?: string;
   conversationId: string;
+  /** Prompt fallback for Responses structured output; Cursor has no native schema field. */
+  textFormat?: OcxRequestOptions["textFormat"];
   system: string[];
   messages: CursorRequestMessage[];
   rawMessages?: readonly OcxMessage[];

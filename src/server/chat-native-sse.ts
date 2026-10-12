@@ -129,6 +129,11 @@ interface NativeChatSseOptions {
   translatorBudget: TranslatorBudget;
   signal: AbortSignal;
   stallTimeoutSec?: number;
+  /**
+   * The upstream is local infrastructure (loopback / private / `.local` / `.lan`); an unset
+   * `stallTimeoutSec` then resolves to disabled so a slow local model is not cut mid-turn.
+   */
+  localUpstream?: boolean;
   onFirstOutput?: () => void;
   onUsage: (usage: OcxUsage) => void;
   onTerminal?: (status: number, message?: string) => void;
@@ -157,7 +162,12 @@ export function nativeChatSse(
   let settled = false;
   let cancelled = false;
   let cancelledBySignal = false;
-  const stallMs = resolveStallTimeoutSec(options.stallTimeoutSec) * 1_000;
+  const stallSec = resolveStallTimeoutSec(options.stallTimeoutSec, { localUpstream: options.localUpstream });
+  // 0 is an explicit disabled budget (local upstream, or the operator's stallTimeoutSec: 0). Map
+  // it to an Infinity deadline so every `now >= pullDeadline` / `remaining <= 0` check stays
+  // false and the read race is skipped, instead of arming an immediate kill on the first pull.
+  const stallEnabled = stallSec > 0;
+  const stallMs = stallEnabled ? stallSec * 1_000 : Number.POSITIVE_INFINITY;
   // Count only active upstream consumption; downstream backpressure must not
   // consume the provider's inactivity allowance. Comments and empty deltas do.
   let remainingStallMs = stallMs;
@@ -332,17 +342,19 @@ export function nativeChatSse(
           let timeout: ReturnType<typeof setTimeout> | undefined;
           let read: Awaited<ReturnType<typeof reader.read>>;
           try {
-            read = await Promise.race([
-              reader.read(),
-              new Promise<never>((_, reject) => {
-                const check = () => {
-                  const remaining = pullDeadline - performance.now();
-                  if (remaining <= 0) reject(stalled);
-                  else timeout = setTimeout(check, Math.min(remaining, 2_147_483_647));
-                };
-                check();
-              }),
-            ]);
+            read = stallEnabled
+              ? await Promise.race([
+                  reader.read(),
+                  new Promise<never>((_, reject) => {
+                    const check = () => {
+                      const remaining = pullDeadline - performance.now();
+                      if (remaining <= 0) reject(stalled);
+                      else timeout = setTimeout(check, Math.min(remaining, 2_147_483_647));
+                    };
+                    check();
+                  }),
+                ])
+              : await reader.read();
           } finally {
             if (timeout !== undefined) clearTimeout(timeout);
           }

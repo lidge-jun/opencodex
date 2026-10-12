@@ -133,7 +133,7 @@ lines.push("");
 lines.push("// Cross-provider model-level price fallback (260720 WP5): a model follows its");
 lines.push("// official vendor price regardless of the serving provider. Exact modelId match in");
 lines.push("// priority-ordered vendor bundles; first nonzero cost wins.");
-lines.push("const COST_VENDOR_PRIORITY = " + JSON.stringify(COST_VENDOR_BUNDLES) + ";");
+lines.push("export const COST_VENDOR_PRIORITY = " + JSON.stringify(COST_VENDOR_BUNDLES) + ";");
 lines.push("export function findVendorCostByModelId(modelId: string): { provider: string; cost: { input: number; output: number; cacheRead: number; cacheWrite: number } } | undefined {");
 lines.push("  for (const provider of COST_VENDOR_PRIORITY) {");
 lines.push("    const row = DATA[provider]?.find(r => r[0] === modelId);");

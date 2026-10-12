@@ -6,6 +6,7 @@ const DIRECT_LOCAL_HTTP_TIMEOUT_MS = 10_000;
 type DirectLocalHttpIo = {
   timeoutMs?: number;
   connect?: (hostname: string, port: number) => Socket;
+  scheduleDeadline?: (onTimeout: () => void, timeoutMs: number) => () => void;
 };
 
 function abortReason(signal: AbortSignal): Error {
@@ -270,18 +271,22 @@ export async function directLocalHttpFetch(
   return await new Promise<Response>((resolve, reject) => {
     let socket: Socket | undefined;
     let settled = false;
+    let closed = false;
+    let completed = false;
+    let outcomeError: Error | undefined;
+    let cancelDeadline: (() => void) | undefined;
     let receivedBytes = 0;
     let responseBytes = Buffer.allocUnsafe(4 * 1024);
     let framing: ResponseFraming = { kind: "head", searchFrom: 0 };
-    const cleanup = () => {
+    const disableSocketTimeout = () => { socket?.setTimeout(0); };
+    const settleAfterClose = (deadlineError?: Error) => {
+      if (!settled || (!closed && !deadlineError) || completed) return;
+      completed = true;
+      // Framing may finish before close, so the caller's deadline owns teardown too.
       signal?.removeEventListener("abort", onAbort);
-      socket?.setTimeout(0);
-    };
-    const finish = (error?: Error) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      try { socket?.destroy(); } catch { /* ignore */ }
+      cancelDeadline?.();
+      cancelDeadline = undefined;
+      const error = outcomeError ?? deadlineError;
       if (error) {
         reject(error);
         return;
@@ -292,9 +297,28 @@ export async function directLocalHttpFetch(
         reject(parseError instanceof Error ? parseError : new Error(String(parseError)));
       }
     };
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      outcomeError = error;
+      disableSocketTimeout();
+      try { socket?.destroy(); } catch (destroyError) {
+        settleAfterClose(error ?? (destroyError instanceof Error ? destroyError : new Error(String(destroyError))));
+        return;
+      }
+      settleAfterClose();
+    };
     const onAbort = () => {
       const error = signal ? abortReason(signal) : new Error("direct local HTTP request aborted");
+      if (settled) outcomeError ??= error;
+      else finish(error);
+      if (error.name === "TimeoutError") settleAfterClose(error);
+    };
+    const onDeadline = () => {
+      const error = new Error("direct local HTTP request timed out");
+      error.name = "TimeoutError";
       finish(error);
+      settleAfterClose(error);
     };
 
     socket = (io.connect ?? ((host, selectedPort) => net.createConnection({
@@ -302,17 +326,9 @@ export async function directLocalHttpFetch(
       port: selectedPort,
       autoSelectFamily: true,
     })))(hostname, port);
-    socket.setTimeout(timeoutMs, () => {
-      const error = new Error("direct local HTTP request timed out");
-      error.name = "TimeoutError";
-      finish(error);
-    });
-    signal?.addEventListener("abort", onAbort, { once: true });
-    if (signal?.aborted) {
-      onAbort();
-      return;
-    }
+    socket.setTimeout(timeoutMs, onDeadline);
     socket.on("connect", () => {
+      if (settled) return;
       try { socket?.write(requestBytes); } catch (error) {
         finish(error instanceof Error ? error : new Error(String(error)));
       }
@@ -342,6 +358,16 @@ export async function directLocalHttpFetch(
     });
     socket.once("end", () => finish());
     socket.once("error", error => finish(error));
-    socket.once("close", () => finish());
+    socket.once("close", () => {
+      closed = true;
+      finish();
+      settleAfterClose();
+    });
+    cancelDeadline = (io.scheduleDeadline ?? ((callback, delayMs) => {
+      const timer = setTimeout(callback, delayMs);
+      return () => clearTimeout(timer);
+    }))(onDeadline, timeoutMs);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) onAbort();
   });
 }

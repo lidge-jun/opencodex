@@ -1,6 +1,6 @@
 import type { OcxConfig } from "../../types";
 import { effectiveProviderAlias } from "../../providers/default-aliases";
-import { identifyRoutedModel } from "../../adapters/identity";
+import { neutralizeIdentity } from "../../adapters/identity";
 import { COMBO_NAMESPACE } from "../../combos";
 import {
   CODEX_CUSTOM_MODEL_CATALOG_KIND,
@@ -144,14 +144,18 @@ export function deriveEntry(
         delete e.context_window;
         delete e.max_context_window;
         delete e.auto_compact_token_limit;
+        // Nor its comp_hash (#5796): template selection is not evidence of history
+        // compatibility. Normalization represents the unknown value as null, avoiding
+        // both rebuild-dependent hashes and a synthetic native/routed mismatch.
+        delete e.comp_hash;
       }
-      // Native id for identity text + metadata lookups — the slug may be an encoded
-      // alias (`provider/vendor-model`); the model object carries the native id.
-      const modelName = model?.id ?? slug.slice(slug.indexOf("/") + 1);
       if (typeof e.base_instructions === "string") {
         // Proxy-neutral: keep the GPT-5/OpenAI disclaimer but never advertise the opencodex proxy
         // (leaking that into base_instructions is a non-first-party signature → ToS risk).
-        e.base_instructions = identifyRoutedModel(e.base_instructions, modelName);
+        // Model-neutral on disk (#5217): Codex stores this block as the session's instructions and
+        // replays it verbatim into a sub-agent spawned on a DIFFERENT model, so a baked-in model id
+        // follows the worker and misnames it. The destination id is written at request time instead.
+        e.base_instructions = neutralizeIdentity(e.base_instructions);
       }
       applyReasoningLevels(
         e,
@@ -190,6 +194,7 @@ export function deriveEntry(
     return ensureStrictCatalogFields(normalizeServiceTiers(e), {
       preserveExactInputModalities: preserveExact,
       isRouted,
+      preserveNativeAccessPrograms: codexForwardNativeCapabilityAlias !== null,
     });
   }
   // Fallback when no template is available (best-effort; strict parser may need more).

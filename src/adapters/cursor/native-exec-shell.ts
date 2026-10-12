@@ -1,5 +1,6 @@
-import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { resolve } from "node:path";
+import { foregroundShellUnavailableMessage, runForegroundShell, type CursorForegroundShellOwner } from "./native-foreground-shell";
 import { create } from "@bufbuild/protobuf";
 import {
   BackgroundShellSpawnErrorSchema,
@@ -123,39 +124,11 @@ export function rejectShellExecForPolicy(execMsg: ExecServerMessage, hint?: stri
   return execBytes(execMsg, "shellResult", rejectedShellResult(args.command, resolve(args.workingDirectory || process.cwd()), Date.now(), hint));
 }
 
-export function shellExec(execMsg: ExecServerMessage): Uint8Array {
-  if (execMsg.message.case !== "shellArgs") throw new Error("invalid shell exec");
-  const args = execMsg.message.value;
-  const cwd = resolve(args.workingDirectory || process.cwd());
-  const started = Date.now();
-  const result = spawnSync(args.command, { cwd, shell: true, encoding: "utf8", timeout: args.hardTimeout || 120_000 });
-  const elapsed = Date.now() - started;
-  const stdout = String(result.stdout ?? "");
-  const stderr = String(result.stderr ?? "");
-  const code = typeof result.status === "number" ? result.status : 1;
-  if (code === 0) {
-    return execBytes(execMsg, "shellResult", create(ShellResultSchema, {
-      result: {
-        case: "success",
-        value: create(ShellSuccessSchema, { command: args.command, workingDirectory: cwd, exitCode: code, signal: "", stdout, stderr, executionTime: elapsed }),
-      },
-    }));
-  }
-  return execBytes(execMsg, "shellResult", create(ShellResultSchema, {
-    result: {
-      case: "failure",
-      value: create(ShellFailureSchema, {
-        command: args.command,
-        workingDirectory: cwd,
-        exitCode: code,
-        signal: String(result.signal ?? ""),
-        stdout,
-        stderr,
-        executionTime: elapsed,
-        aborted: !!result.error,
-      }),
-    },
-  }));
+export function shellExec(execMsg: ExecServerMessage, redirectHint?: string): Uint8Array {
+  // Synchronous shellArgs needs the same admission fence as shellStreamArgs;
+  // changing wire shape must not bypass the missing descendant owner.
+  // Without a catalog hint, keep the default bridge redirect (#604) after the reason.
+  return rejectShellExecForPolicy(execMsg, foregroundShellUnavailableMessage(redirectHint ?? nativeShellDisabledMessage()));
 }
 
 export function rejectShellStreamExecForPolicy(execMsg: ExecServerMessage, hint?: string): Uint8Array[] {
@@ -178,7 +151,12 @@ export function rejectShellStreamExecForPolicy(execMsg: ExecServerMessage, hint?
   ];
 }
 
-export async function shellStreamExec(execMsg: ExecServerMessage): Promise<Uint8Array[]> {
+export async function shellStreamExec(
+  execMsg: ExecServerMessage,
+  owner?: CursorForegroundShellOwner,
+  signal?: AbortSignal,
+  redirectHint?: string,
+): Promise<Uint8Array[]> {
   if (execMsg.message.case !== "shellStreamArgs") throw new Error("invalid shell stream exec");
   const args = execMsg.message.value;
   const cwd = resolve(args.workingDirectory || process.cwd());
@@ -188,36 +166,13 @@ export async function shellStreamExec(execMsg: ExecServerMessage): Promise<Uint8
       event: { case: "start", value: create(ShellStreamStartSchema, { sandboxPolicy: args.requestedSandboxPolicy }) },
     })),
   ];
-  const result = await new Promise<{ stdout: string; stderr: string; code: number; aborted: boolean }>(resolvePromise => {
-    const child = spawn(args.command, { cwd, shell: true });
-    let stdout = "";
-    let stderr = "";
-    let aborted = false;
-    const timeout = setTimeout(() => {
-      aborted = true;
-      child.kill();
-    }, args.hardTimeout || 120_000);
-    child.stdout.on("data", chunk => {
-      stdout += String(chunk);
-    });
-    child.stderr.on("data", chunk => {
-      stderr += String(chunk);
-    });
-    child.on("close", code => {
-      clearTimeout(timeout);
-      resolvePromise({ stdout, stderr, code: code ?? 1, aborted });
-    });
-    child.on("error", err => {
-      clearTimeout(timeout);
-      resolvePromise({ stdout, stderr: stderr + errorText(err), code: 1, aborted });
-    });
-  });
-  if (result.stdout) {
+  const result = await runForegroundShell(args.command, cwd, args.hardTimeout ?? 120_000, owner, signal, redirectHint ?? nativeShellDisabledMessage());
+  if (result.stdout && !result.aborted) {
     replies.push(execBytes(execMsg, "shellStream", create(ShellStreamSchema, {
       event: { case: "stdout", value: create(ShellStreamStdoutSchema, { data: result.stdout }) },
     })));
   }
-  if (result.stderr) {
+  if (result.stderr && !result.aborted) {
     replies.push(execBytes(execMsg, "shellStream", create(ShellStreamSchema, {
       event: { case: "stderr", value: create(ShellStreamStderrSchema, { data: result.stderr }) },
     })));
@@ -237,7 +192,7 @@ export async function shellStreamExec(execMsg: ExecServerMessage): Promise<Uint8
             command: args.command,
             workingDirectory: cwd,
             exitCode: result.code,
-            signal: "",
+            signal: result.signal,
             stdout: result.stdout,
             stderr: result.stderr,
             executionTime: Date.now() - started,
@@ -251,7 +206,7 @@ export async function shellStreamExec(execMsg: ExecServerMessage): Promise<Uint8
             command: args.command,
             workingDirectory: cwd,
             exitCode: result.code,
-            signal: "",
+            signal: result.signal,
             stdout: result.stdout,
             stderr: result.stderr,
             executionTime: Date.now() - started,

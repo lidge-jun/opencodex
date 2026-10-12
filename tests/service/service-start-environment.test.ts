@@ -28,7 +28,12 @@ test("service start refuses a changed install environment before it starts the l
 
   const body = source.slice(source.indexOf("export async function serviceCommand"));
   expect(body).toContain('case "start":');
-  const startCase = body.slice(body.indexOf('case "start":'));
-  expect(startCase).toMatch(/assertServiceEnvironmentMatchesInstall\(\);\s*ops\.start\(\);/);
+  const startCase = body.slice(body.indexOf('case "start":'), body.indexOf('case "stop"'));
+  const guardAt = startCase.indexOf("assertServiceEnvironmentMatchesInstall();");
+  const launchAt = startCase.indexOf("ops.start();");
+  expect(guardAt).toBeGreaterThan(-1);
+  expect(launchAt).toBeGreaterThan(guardAt);
+  // The runtime-ownership refusal now sits between them. It can only PREVENT the start, so
+  // the invariant is unchanged: nothing reaches the service manager before the guard has run.
+  expect(startCase.slice(guardAt, launchAt)).not.toContain("ops.");
 });
-

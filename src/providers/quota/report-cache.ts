@@ -8,7 +8,7 @@ import { apiKeyPoolEntryId } from "../api-keys";
 import { getProviderRegistryEntry, providerCodexAccountMode } from "../registry";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../openai-tiers";
 import { CODEX_CAPACITY_MAX_QUOTA_AGE_MS, type CodexCapacityAggregation, type CodexCapacityQuota } from "../codex-capacity";
-import { clearCachedProviderQuotas, providerQuotaRoutingBinding, type ProviderQuotaRoutingEvidence } from "../quota-routing-cache";
+import { clearCachedProviderQuotas, providerQuotaRoutingBinding, replaceCachedProviderQuotas, type ProviderQuotaRoutingEvidence } from "../quota-routing-cache";
 import { clearProviderApiKeyQuotaCache } from "../quota-key-accounts";
 import { QUOTA_JSON_READ_FAILURE, readQuotaJson } from "../quota-wire";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
@@ -99,6 +99,29 @@ export function clearProviderQuotaCache(): void {
   clearCachedProviderQuotas();
   clearProviderApiKeyQuotaCache();
   invalidationEpoch += 1;
+}
+
+const providerReportEpochs = new Map<string, number>();
+
+export function captureProviderReportEpochs(): ReadonlyMap<string, number> {
+  return new Map(providerReportEpochs);
+}
+
+export function providerReportEpochChanged(captured: ReadonlyMap<string, number>, provider: string): boolean {
+  return (providerReportEpochs.get(provider) ?? 0) !== (captured.get(provider) ?? 0);
+}
+
+/**
+ * Provider-scoped invalidation: drop one provider's report and routing row. The global epoch
+ * is untouched, so another provider's cached row and in-flight commit authority survive; an
+ * aggregate already in flight drops only this provider's row when it publishes.
+ */
+export function clearProviderQuotaCacheFor(provider: string): void {
+  providerReportEpochs.set(provider, (providerReportEpochs.get(provider) ?? 0) + 1);
+  if (!cache) return;
+  const reports = cache.response.reports.filter(report => report.provider !== provider);
+  cache = { ...cache, response: { ...cache.response, reports } };
+  replaceCachedProviderQuotas(reports, routingEvidence);
 }
 
 function cacheKey(config: OcxConfig): string {

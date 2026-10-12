@@ -72,6 +72,11 @@ export function formatOAuthHealthForStatus(
       parts.push(CODEX_HEALTH_MANAGEMENT_API_UNAVAILABLE_NOTE);
       break;
   }
+  const policy = report.mainAccountHardLock;
+  if (policy) {
+    const warning = policy.externalUsage ? "; possible usage outside opencodex — the lock may not prevent exhaustion" : "";
+    parts.push(`Codex main-account protection: ${policy.state} (5h ≥ ${policy.thresholds.short}%, weekly/monthly ≥ ${policy.thresholds.long}%)${warning}`);
+  }
   const oauthBlock = formatEntryBlock(report.entries);
   if (oauthBlock) parts.push(oauthBlock);
   return parts.join("\n");

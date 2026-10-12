@@ -11,7 +11,7 @@ import { CODEX_CONFIG_PATH } from "../paths";
 export type CodexRoutingKind =
   "native" | "opencodex-local" | "custom-local" | "custom-remote" | "unknown";
 
-type RoutingEndpointKind = "local" | "remote" | "unknown";
+export type RoutingEndpointKind = "local" | "remote" | "unknown";
 
 function ipv4Octets(hostname: string): number[] | null {
   const dotted = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(hostname);
@@ -26,7 +26,8 @@ function ipv4Octets(hostname: string): number[] | null {
   return [high >>> 8, high & 0xff, low >>> 8, low & 0xff];
 }
 
-function classifyRoutingEndpoint(value: string): RoutingEndpointKind {
+/** The one loopback rule for routing URLs; the drift detector (`routing-drift.ts`) shares it. */
+export function classifyRoutingEndpoint(value: string): RoutingEndpointKind {
   try {
     const url = new URL(value);
     if (url.protocol !== "http:" && url.protocol !== "https:") return "unknown";

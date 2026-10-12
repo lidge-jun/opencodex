@@ -3,11 +3,15 @@ import {
   normalizeApplyPatchDelimiters,
   unwrapFreeformToolInput,
 } from "./apply-patch-envelope";
-import { declaresCodeModeExec } from "../types/tools";
+import { declaresCodeModeExec, isCodeModeMcpDirectName } from "../types/tools";
+import { parseCodeModeShellInput } from "./code-mode-shell-input";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
+
+/** A nested host tool reachable as `tools.<name>` when the flattened name is one identifier. */
+const CODE_MODE_IDENTIFIER_NAME = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
 /**
  * Convert a nested Code Mode helper call into unified-exec JavaScript.
@@ -31,6 +35,10 @@ export function compileCodeModeHelperInput(
   const helperName = toolName.startsWith("default.")
     ? toolName.slice("default.".length)
     : toolName;
+  if (helperName === "exec_command" && wireToolName === "exec") {
+    const args = parseCodeModeShellInput(argumentsText);
+    if (args) return `const result = await tools.exec_command(${JSON.stringify(args)});\ntext(result);`;
+  }
   if (helperName === "apply_patch") {
     // `resolveCodeModeHelperName` decides this IS an apply-patch call by reading
     // `unwrapFreeformToolInput(argumentsText, wireToolName)`, which strips an outer Markdown
@@ -43,8 +51,12 @@ export function compileCodeModeHelperInput(
     // is an apply_patch wrapper and is not an `exec` fallback field, and the recognizer already
     // declines it under `exec`; reading it here would compile a body that recognition rejected,
     // which is exactly the drift a second, looser unwrap introduces.
+    const bodyToolName = wireToolName ?? helperName;
+    const normalizedBodyToolName = bodyToolName.startsWith("default.")
+      ? bodyToolName.slice("default.".length)
+      : bodyToolName;
     const patch = normalizeApplyPatchDelimiters(
-      unwrapFreeformToolInput(argumentsText, wireToolName ?? helperName),
+      unwrapFreeformToolInput(argumentsText, normalizedBodyToolName),
     );
     return `const result = await tools.apply_patch(${JSON.stringify(patch)});\ntext(result);`;
   }
@@ -83,6 +95,19 @@ export function compileCodeModeHelperInput(
     }
     return `const result = await tools.view_image(${JSON.stringify(viewArgs)});\nif (result && result.image_url) { image(result.image_url); } else { text(result); }`;
   }
+  if (helperName === "create_goal" || helperName === "get_goal" || helperName === "update_goal") {
+    return `const result = await tools.${helperName}(${JSON.stringify(args)});\ntext(result);`;
+  }
+  if (isCodeModeMcpDirectName(helperName)) {
+    // Direct `mcp__<server>__<tool>` call under a code-mode catalog: the emitted name IS the
+    // nested host tool's name, so compile to the same `tools.<name>(args)` the model could
+    // have written. Dot access when the name is a clean identifier (the common case); bracket
+    // access otherwise, so a hyphenated server name still addresses the same tool.
+    const target = CODE_MODE_IDENTIFIER_NAME.test(helperName)
+      ? `tools.${helperName}`
+      : `tools[${JSON.stringify(helperName)}]`;
+    return `const result = await ${target}(${JSON.stringify(args)});\ntext(result);`;
+  }
   return `const result = await tools.exec_command(${JSON.stringify(args)});\ntext(result);`;
 }
 
@@ -96,8 +121,8 @@ export function compileCodeModeHelperInput(
  * wrong.
  *
  * This adds that second case: the name is already `exec` so nothing was rewritten, but
- * the body is a complete patch envelope and therefore cannot be the JavaScript that
- * `exec` runs. Same inference the name-based path makes, drawn from the payload.
+ * the body is a complete patch envelope or an unambiguous structured shell call.
+ * Same inference the name-based path makes, drawn from the payload.
  *
  * Returns undefined for everything else, including JavaScript that merely mentions a
  * patch envelope — that body is a real program and is forwarded byte-identical.
@@ -116,5 +141,6 @@ export function resolveCodeModeHelperName(
   // `tools.apply_patch(...)` JavaScript would be the mis-route this repair exists to avoid.
   if (!declaresCodeModeExec(declaredNames)) return undefined;
   if (typeof argumentsText !== "string" || argumentsText === "") return undefined;
-  return isCompletePatchEnvelope(unwrapFreeformToolInput(argumentsText, "exec")) ? "apply_patch" : undefined;
+  if (isCompletePatchEnvelope(unwrapFreeformToolInput(argumentsText, "exec"))) return "apply_patch";
+  return parseCodeModeShellInput(argumentsText) ? "exec_command" : undefined;
 }

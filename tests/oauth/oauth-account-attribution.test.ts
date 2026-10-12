@@ -14,6 +14,7 @@ import { summarizeUsage } from "../../src/usage/summary";
 import type { RequestLogContext } from "../../src/server/request-log";
 import { handleResponses } from "../../src/server/responses";
 import type { OcxConfig } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 /**
@@ -66,9 +67,13 @@ async function withHome<T>(run: (home: string) => Promise<T>): Promise<T> {
   const prevCodex = process.env.CODEX_HOME;
   process.env.OPENCODEX_HOME = home;
   process.env.CODEX_HOME = home;
+  // Take the writer lease after this helper installs its home so direct handler dispatch can open the spend journal.
+  const releaseSpendHome = acquireOwnedSpendHome();
   try {
     return await run(home);
   } finally {
+    // Release before restoring or removing the home to prevent Windows removal failures and POSIX unlinked databases.
+    releaseSpendHome();
     globalThis.fetch = originalFetch;
     removeTreeWithRetry(home);
     if (prevOpencodex === undefined) delete process.env.OPENCODEX_HOME;
@@ -258,7 +263,7 @@ describe("Responses per-account attribution for non-Codex OAuth", () => {
     });
   });
 
-  test.each([[1, 1], [5, 4]])("native Responses with %i accounts stays within %i sends on repeated 429", async (accounts, expectedSends) => {
+  test.each([[1, 1], [5, 5]])("native Responses with %i accounts visits each once on repeated 429 (%i sends)", async (accounts, expectedSends) => {
     await withHome(async () => {
       clearGenericFailoverHealth();
       for (let index = 0; index < accounts; index++) {

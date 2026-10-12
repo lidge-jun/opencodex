@@ -1,7 +1,7 @@
 import { chmodSync, linkSync, mkdirSync, mkdtempSync, realpathSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
-import { resolveCodexRuntime } from "../codex/runtime";
+import { resolveCodexRuntimeAsync } from "../codex/runtime";
 import { remoteWorkspaceThreadStartParams } from "./workspace-coordinator";
 import { startRemoteWorkspaceToolBridge } from "./workspace-tool-bridge";
 import { truncateRemoteWorkspaceUtf8 } from "./workspace-utf8";
@@ -299,7 +299,8 @@ export class CodexRemoteWorkspaceRuntimeFactory implements RemoteWorkspaceRuntim
     if (this.options.command && this.options.command.length > 0) {
       return { available: true, version: this.options.version ?? "test" };
     }
-    const resolved = resolveCodexRuntime();
+    // Async probes: a Hub availability check must not freeze every other proxy request.
+    const resolved = await resolveCodexRuntimeAsync();
     const compatibility = codexRemotePermissionProfileCompatibility();
     if (!compatibility.compatible) return { available: false, reason: compatibility.reason };
     return resolved.runtime.version
@@ -310,7 +311,7 @@ export class CodexRemoteWorkspaceRuntimeFactory implements RemoteWorkspaceRuntim
   async start(options: Parameters<RemoteWorkspaceRuntimeFactory["start"]>[0]): Promise<RemoteWorkspaceRuntimeHandle> {
     const command = this.options.command
       ? [...this.options.command]
-      : [resolveCodexRuntime().runtime.command];
+      : [(await resolveCodexRuntimeAsync()).runtime.command];
     if (command.length < 1) throw new Error("Codex CLI is unavailable on this Hub");
     const executablePath = isAbsolute(command[0]!) ? command[0]! : findExecutableOnPath(command[0]!);
     if (!executablePath) throw new Error("Codex CLI executable could not be resolved on this Hub");

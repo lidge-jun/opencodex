@@ -22,8 +22,10 @@ const EXPECTED_ADAPTER_NAMES = {
   "azure-openai": "azure-openai",
   cursor: "cursor",
   devin: "devin",
+  zed: "zed",
   "mimo-free": "mimo-free",
   qoder: "qoder",
+  "claude-cli": "claude-cli",
 } as const;
 
 function provider(adapter: string): OcxProviderConfig {

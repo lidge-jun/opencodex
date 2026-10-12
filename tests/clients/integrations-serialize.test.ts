@@ -117,6 +117,11 @@ describe("renderToml", () => {
     expect(renderToml({ k: ["a", 1, true] })).toContain('k = ["a", 1, true]');
   });
 
+  test("refuses integers outside JavaScript's safe range", () => {
+    expect(() => renderToml({ k: [Number.MAX_SAFE_INTEGER + 1] }))
+      .toThrow(/outside JavaScript's safe range/);
+  });
+
   test("still refuses what TOML cannot express inline", () => {
     // TOML has no null; that is a real limit of the format, not of our renderer.
     expect(() => renderToml({ k: null })).toThrow(/TOML cannot represent/);

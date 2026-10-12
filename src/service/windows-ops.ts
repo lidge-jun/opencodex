@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import { win32 } from "node:path";
 import { winswXmlPath } from "../lib/winsw";
 import { hardenSecretPath } from "../lib/windows-secret-acl";
+import { durableBunRuntime, type DurableBunRuntime } from "../lib/bun-runtime";
+import { assertSelectedRuntimeWritable, type RuntimePreflightDeps } from "../lib/bun-runtime-preflight";
 import { parseBakedListenPort } from "./health";
 import { windowsServiceScriptPath } from "./state";
 import { execFileSync } from "node:child_process";
@@ -12,13 +14,13 @@ import { dirname, join } from "node:path";
 import { getConfigDir } from "../config";
 import { OCX_ELEVATED_STAGING_UNREADABLE, runWindowsElevatedScheduledTaskRegistration, WindowsSchtasksError, type StagedWindowsTaskXml } from "../lib/windows-elevation";
 import { defaultWinswEntry, installWinswService, statusWinswRaw, uninstallWinswService, WINSW_SERVICE_ID, type WinswStatus } from "../lib/winsw";
-import { forgetEphemeralSecretDir, forgetEphemeralSecretPath, hardenSecretDir } from "../lib/windows-secret-acl";
+import { forgetEphemeralSecretDir, forgetEphemeralSecretPath, hardenElevatedStageDir, hardenElevatedStagePath, hardenSecretDir } from "../lib/windows-secret-acl";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { killWindowsSchedulerWrappers } from "../lib/windows-service-wrappers";
 import { isTestHomeGuardArmed } from "../lib/test-home-guard";
 import { writeServiceApiTokenFile } from "./guards";
 import type { ServiceStopOutcome } from "./orchestration";
-import { TASK, windowsLauncherVbsPath, windowsTaskXmlPath, serviceStatePath, writeServiceInstallState, serviceSourceDir } from "./state";
+import { TASK, windowsLauncherVbsPath, windowsTaskXmlPath, serviceStatePath, writeServiceInstallState, serviceSourceDir, cliEntry } from "./state";
 import { decodeSchtasksOutput, querySchtasks, schtasks, type WindowsSchedulerTaskProbe, schtasksErrorDetail, probeWindowsSchedulerTask, rollbackWindowsSchedulerTaskOwnedByAttempt } from "./windows-scheduler";
 import { buildWindowsServiceScript, buildWindowsSchtasksCreateArgs, buildWindowsSchtasksCreateArgsForXml, buildWindowsLauncherVbs, resolvedWindowsTaskSid, buildWindowsTaskXmlDocument, windowsTaskRegistrationOwnedByAttempt, windowsTaskRegistrationHealthy } from "./windows-taskxml";
 
@@ -108,11 +110,11 @@ function writeServiceAssetWithRetry(path: string, content: string, encoding: "ut
  * Rewrite on-disk scheduler assets (script/VBS/XML) without itself registering the task.
  * Fresh install creates it afterwards; repair does so only when the live definition is stale.
  */
-export function writeWindowsSchedulerAssets(): void {
+export function writeWindowsSchedulerAssets(runtime: DurableBunRuntime = durableBunRuntime()): void {
   if (!existsSync(getConfigDir())) mkdirSync(getConfigDir(), { recursive: true });
   writeServiceApiTokenFile();
   const script = windowsServiceScriptPath();
-  writeServiceAssetWithRetry(script, buildWindowsServiceScript(), "utf8");
+  writeServiceAssetWithRetry(script, buildWindowsServiceScript(cliEntry(runtime)), "utf8");
   // UTF-16LE + BOM: a BOM-less UTF-8 VBS mis-decodes non-ASCII (e.g. Korean) profile
   // paths on some WSH/codepage combinations — same contract as the task XML below.
   writeServiceAssetWithRetry(windowsLauncherVbsPath(), `\uFEFF${buildWindowsLauncherVbs(script)}`, "utf16le");
@@ -192,19 +194,24 @@ export interface ElevatedSchedulerStagingDeps {
  * alone:
  *
  * - **Access.** The directory is created fresh by `mkdtemp`, then ACL-hardened before
- *   anything is written into it, so another local account cannot read or replace the
- *   payload while the UAC prompt is open. Hardening the directory first is what makes
- *   the file private from the moment it exists.
+ *   anything is written into it, so no non-administrator account can read or replace
+ *   the payload while the UAC prompt is open. Administrators get read — never write —
+ *   because an over-the-shoulder UAC prompt answered with a different administrator's
+ *   credentials runs the elevated process as that admin (#4779); tamper-evidence does
+ *   not depend on the DACL, it comes from the pinned handles and the digest below.
+ *   Hardening the directory first is what makes the file private from the moment it
+ *   exists.
  * - **No reparse point.** Each artifact is inspected with `lstat` and rejected unless it
  *   is what it claims to be. `wx` already refuses to create over an existing name, which
  *   is the atomic step here — there is no replace path to race, because every path is
  *   inside a directory that did not exist a moment ago. The explicit check is what keeps
  *   that guarantee from depending on a reading of `O_EXCL` semantics.
- * - **Tamper evidence.** The digest is taken over the exact bytes written, and the
- *   elevated script recomputes it over the bytes it reads. An ACL cannot cover this:
- *   a process running as the same user has the same SID and can rewrite the file, so
- *   the digest is the only thing that makes such a swap fail closed rather than
- *   silently register a different task definition.
+ * - **Pinned namespace and content.** Before UAC, the launcher opens every ancestor and
+ *   payload without following reparse points. Ancestor handles share read/write but
+ *   deny delete, so the namespace cannot be redirected while sibling payloads can
+ *   still be written; payload handles deny write/delete outright. Those handles stay
+ *   open until elevation exits. The digest then verifies the exact,
+ *   length-bounded bytes read by the elevated process.
  *
  * Payloads are UTF-16LE with no BOM, and the elevated process decodes them straight into
  * `Register-ScheduledTask`. What is hashed is therefore exactly what is registered, with
@@ -217,11 +224,11 @@ export function stageElevatedSchedulerRegistration(
 ): StagedElevatedSchedulerRegistration {
   const createStageDir = deps.createStageDir
     ?? (() => mkdtempSync(join(tmpdir(), WINDOWS_SCHEDULER_STAGE_PREFIX)));
-  const hardenDir = deps.hardenDir ?? ((path: string) => { hardenSecretDir(path, { required: true }); });
+  const hardenDir = deps.hardenDir ?? ((path: string) => { hardenElevatedStageDir(path, { required: true }); });
   const writePayload = deps.writePayload ?? ((path: string, bytes: Buffer) => {
     writeFileSync(path, bytes, { flag: "wx", mode: 0o600 });
   });
-  const hardenPath = deps.hardenPath ?? ((path: string) => { hardenSecretPath(path, { required: true }); });
+  const hardenPath = deps.hardenPath ?? ((path: string) => { hardenElevatedStagePath(path, { required: true }); });
   const inspect = deps.inspect ?? ((path: string) => lstatSync(path));
   const removeStageDir = deps.removeStageDir ?? ((path: string) => { rmdirSync(path); });
 
@@ -266,7 +273,7 @@ export function stageElevatedSchedulerRegistration(
         throw new Error(`Refusing to stage an elevated Task Scheduler payload through a redirected path: ${path}`);
       }
       hardenPath(path);
-      return { path, sha256: createHash("sha256").update(bytes).digest("hex") };
+      return { path, byteLength: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
     };
     return {
       xml: stage("register.xml", xml),
@@ -293,10 +300,9 @@ export function stageElevatedSchedulerRegistration(
  *
  * The elevated process runs hidden, so nothing it writes survives; only the exit code
  * crosses back. That makes an unexplained code the whole user-facing error, which is
- * exactly what made the ENAMETOOLONG in #4692 expensive to diagnose. Staging introduces
- * one new failure of its own — the payload is readable only by the account that created
- * it, so an elevation answered with a different administrator's credentials cannot open
- * it — and that one gets named along with its remedy rather than surfacing as a number.
+ * exactly what made the ENAMETOOLONG in #4692 expensive to diagnose. Staging has one
+ * failure of its own — the elevated process cannot open the payload — and that one
+ * gets named along with its remedy rather than surfacing as a number.
  */
 export function describeElevatedRegistrationFailure(
   failureLabel: string,
@@ -305,10 +311,10 @@ export function describeElevatedRegistrationFailure(
 ): string {
   if (exitCode === OCX_ELEVATED_STAGING_UNREADABLE) {
     return `${failureLabel}: the elevated process could not read the staged task definition in `
-      + `${stageDir}. That directory is readable only by the account that staged it, so this `
-      + "happens when the UAC prompt was answered with a different administrator account. "
-      + "Approve the prompt as the signed-in user, or run the command again from a session "
-      + "already elevated as that user.";
+      + `${stageDir}. That directory grants read access to the staging account and to `
+      + "administrators, so the hardening did not take effect there or the file was "
+      + "replaced. Retry the command; if it keeps failing, run it again from a session "
+      + "already elevated as an administrator.";
   }
   return `${failureLabel} with exit code ${exitCode}.`;
 }
@@ -593,16 +599,40 @@ export function removeNativeWindowsServiceForScheduler(
   }
 }
 
-export function installWindows(): void {
-  recordWindowsSchedulerOwnership();
-  removeNativeWindowsServiceForScheduler();
+/** External Windows effects shared by the gated entrypoints and admitted commit paths. */
+export interface WindowsServiceInstallDeps extends RuntimePreflightDeps {
+  recordSchedulerOwnership?: () => boolean;
+  removeNativeService?: () => void;
+  stopScheduler?: () => void;
+  writeSchedulerAssets?: (runtime: DurableBunRuntime) => void;
+  schedulerCommand?: typeof schtasks;
+  writeState?: (backend: "scheduler" | "native", runtime: DurableBunRuntime) => void;
+  assertNativeAccount?: () => void;
+  prepareNativeConfig?: () => void;
+  uninstallScheduler?: () => void;
+  installNativeService?: typeof installWinswService;
+}
+
+export function installWindows(selected?: DurableBunRuntime, deps: WindowsServiceInstallDeps = {}): void {
+  const runtime = Object.freeze({ ...(selected ?? (deps.selectRuntime ?? durableBunRuntime)()) });
+  const configDir = (deps.configDir ?? getConfigDir)();
+  (deps.assertRuntimeWritable ?? assertSelectedRuntimeWritable)(runtime, configDir, { platform: deps.platform, rootWasAbsent: !existsSync(configDir) });
+  commitWindowsInstall(runtime, deps);
+}
+
+/** Internal commit boundary: the caller has admitted this frozen runtime before cleanup. */
+export function commitWindowsInstall(runtime: DurableBunRuntime, deps: WindowsServiceInstallDeps = {}): void {
+  (deps.recordSchedulerOwnership ?? recordWindowsSchedulerOwnership)();
+  (deps.removeNativeService ?? removeNativeWindowsServiceForScheduler)();
   // End a running task BEFORE rewriting the assets it is executing — cmd.exe reading the
   // script mid-rewrite runs a torn batch file, and its open handle can fail the write.
-  try { stopWindows(); } catch { /* not running */ }
-  writeWindowsSchedulerAssets();
-  schtasks(buildWindowsSchtasksCreateArgs(windowsServiceScriptPath()));
-  schtasks(["/run", "/tn", TASK]);
-  writeServiceInstallState("scheduler");
+  try { (deps.stopScheduler ?? stopWindows)(); } catch { /* not running */ }
+  (deps.writeSchedulerAssets ?? writeWindowsSchedulerAssets)(runtime);
+  const command = deps.schedulerCommand ?? schtasks;
+  command(buildWindowsSchtasksCreateArgs(windowsServiceScriptPath()));
+  command(["/run", "/tn", TASK]);
+  if (deps.writeState) deps.writeState("scheduler", runtime);
+  else writeServiceInstallState("scheduler", undefined, {}, runtime);
 }
 
 /**
@@ -744,26 +774,38 @@ function readWindowsPrincipalSource(): string | null {
   }
 }
 
-export async function installWindowsNative(): Promise<void> {
-  assertWindowsNativeServiceAccountSupported();
-  recordOwnedConfigPath(getConfigDir(), serviceStatePath());
-  if (!existsSync(getConfigDir())) mkdirSync(getConfigDir(), { recursive: true });
-  writeServiceApiTokenFile();
+export async function installWindowsNative(selected?: DurableBunRuntime, deps: WindowsServiceInstallDeps = {}): Promise<void> {
+  const runtime = Object.freeze({ ...(selected ?? (deps.selectRuntime ?? durableBunRuntime)()) });
+  const configDir = (deps.configDir ?? getConfigDir)();
+  (deps.assertRuntimeWritable ?? assertSelectedRuntimeWritable)(runtime, configDir, { platform: deps.platform, rootWasAbsent: !existsSync(configDir) });
+  await commitWindowsNativeInstall(runtime, deps);
+}
+
+/** Internal commit boundary; direct native installs go through the public admission gate. */
+export async function commitWindowsNativeInstall(runtime: DurableBunRuntime, deps: WindowsServiceInstallDeps = {}): Promise<void> {
+  (deps.assertNativeAccount ?? assertWindowsNativeServiceAccountSupported)();
+  if (deps.prepareNativeConfig) deps.prepareNativeConfig();
+  else {
+    recordOwnedConfigPath(getConfigDir(), serviceStatePath());
+    if (!existsSync(getConfigDir())) mkdirSync(getConfigDir(), { recursive: true });
+    writeServiceApiTokenFile();
+  }
+  const command = deps.schedulerCommand ?? schtasks;
   let hadScheduler = false;
   try {
-    hadScheduler = schtasks(["/query", "/tn", TASK]).includes(TASK);
+    hadScheduler = command(["/query", "/tn", TASK]).includes(TASK);
   } catch { /* task absent */ }
   if (hadScheduler) {
     console.log("🔁 Removing the Task Scheduler backend before installing the native (WinSW) service...");
-    try { stopWindows(); } catch { /* not running */ }
+    try { (deps.stopScheduler ?? stopWindows)(); } catch { /* not running */ }
     try {
-      uninstallWindows();
+      (deps.uninstallScheduler ?? uninstallWindows)();
     } catch (err) {
       throw new Error(`Cannot remove the Task Scheduler backend before switching to native: ${err instanceof Error ? err.message : String(err)}`);
     }
     // Verify removal — schtasks /delete can silently fail if UAC or policy blocks it.
     try {
-      if (schtasks(["/query", "/tn", TASK]).includes(TASK)) {
+      if (command(["/query", "/tn", TASK]).includes(TASK)) {
         throw new Error("Task Scheduler backend still present after removal — aborting switch.");
       }
     } catch (e) {
@@ -772,12 +814,13 @@ export async function installWindowsNative(): Promise<void> {
     }
   }
   try {
-    await installWinswService(defaultWinswEntry(serviceSourceDir));
+    await (deps.installNativeService ?? installWinswService)(defaultWinswEntry(serviceSourceDir, runtime));
   } catch (err) {
     if (hadScheduler) console.error("⚠️  Native install failed AFTER removing the Task Scheduler backend — no service is installed now. Run `ocx service install` to restore the scheduler backend, or retry `--native`.");
     throw err;
   }
-  writeServiceInstallState("native");
+  if (deps.writeState) deps.writeState("native", runtime);
+  else writeServiceInstallState("native", undefined, {}, runtime);
 }
 
 export function startWindows(): void { schtasks(["/run", "/tn", TASK]); }

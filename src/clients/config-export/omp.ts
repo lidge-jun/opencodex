@@ -67,7 +67,7 @@ export function buildOmpClientConfig(ctx: ExportContext): OmpGeneratedConfig {
     const context = authoritativeContextWindow(model.contextWindow);
     if (context !== undefined) {
       entry.contextWindow = context;
-      entry.maxTokens = outputBudgetFor(context);
+      entry.maxTokens = outputBudgetFor(context, model);
     }
     const efforts = ompEfforts(model);
     if (efforts.length > 0) {

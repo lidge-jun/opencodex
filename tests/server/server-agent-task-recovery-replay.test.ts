@@ -1,4 +1,4 @@
-import { afterEach, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { createKiroAdapter } from "../../src/adapters/kiro";
 import { ADAPTER_REGISTRY } from "../../src/adapters/registry";
 import { parseRequest } from "../../src/responses/parser";
@@ -6,8 +6,19 @@ import { bindTurnTerminationScope, rememberDeliveredFinalAnswer } from "../../sr
 import { conversationIdFromResponsesRequest } from "../../src/server/request-log-conversation";
 import type { OcxParsedRequest } from "../../src/types";
 import { recoverEncryptedAgentTask, resetAgentTaskRecoveryState, restoreCachedEncryptedAgentTasks } from "../../src/server/responses/agent-task-recovery";
-import { codexHeaders, encryptedInput, fakeChatGptJwt, FERNET_TASK, SECOND_FERNET_TASK, originalFetch, recoverySse, routedConfig } from "../helpers/agent-task-recovery";
+import { codexHeaders, encryptedInput, fakeChatGptJwt, FINAL_ANSWER_ENVELOPE, FERNET_TASK, SECOND_FERNET_TASK, originalFetch, recoverySse, routedConfig } from "../helpers/agent-task-recovery";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 afterEach(() => { globalThis.fetch = originalFetch; resetAgentTaskRecoveryState(); });
+
+// Direct handler dispatch never takes the writer lease that startServer would take, so it is refused.
+let releaseSpendHome: (() => void) | undefined;
+beforeEach(() => {
+  releaseSpendHome = acquireOwnedSpendHome();
+});
+afterEach(() => {
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
+});
 
 test("replay reuses admitted recovery after a tool result without another network call", async () => {
   let calls = 0;
@@ -262,6 +273,37 @@ test("MESSAGE cache remains isolated by message type, account, parent and sender
   const unknown = JSON.parse(JSON.stringify(encryptedMessage()).replace("Message Type: MESSAGE", "Message Type: UNKNOWN"));
   expect(await recoverEncryptedAgentTask(req, unknown, {}, config)).toBe(false);
   expect(calls).toBe(1);
+});
+
+test("FINAL_ANSWER cache stays isolated by structured recipient when the envelope names no task", async () => {
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls++;
+    return new Response(recoverySse(calls === 1 ? "Worker assignment." : "Other worker assignment."));
+  }) as typeof fetch;
+  const config = routedConfig({ enabled: true });
+  const req = new Request("http://localhost/v1/responses", { headers: codexHeaders() });
+  const scope = { parentThreadId: "parent" };
+  // Same ciphertext, sender, credentials, and Task-name-less header for both; only the
+  // structured recipient differs, so the header alone cannot separate these envelopes.
+  const finalAnswer = (recipient: string): unknown[] => [{
+    type: "agent_message",
+    author: "/root",
+    recipient,
+    content: [
+      { type: "input_text", text: FINAL_ANSWER_ENVELOPE },
+      { type: "encrypted_content", encrypted_content: FERNET_TASK },
+    ],
+  }];
+  expect(await recoverEncryptedAgentTask(req, finalAnswer("/root/worker"), {}, config, scope)).toBe(true);
+  expect(calls).toBe(1);
+  const other = finalAnswer("/root/other-worker");
+  expect(restoreCachedEncryptedAgentTasks(req, other, config, scope)).toBe(0);
+  expect(JSON.stringify(other)).toContain(FERNET_TASK);
+  expect(JSON.stringify(other)).not.toContain("Worker assignment.");
+  expect(await recoverEncryptedAgentTask(req, other, {}, config, scope)).toBe(true);
+  expect(calls).toBe(2);
+  expect(JSON.stringify(other)).toContain("Other worker assignment.");
 });
 
 

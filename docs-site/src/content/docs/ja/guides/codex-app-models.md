@@ -56,8 +56,8 @@ visibility = "list"
 | Codex ログイン (account-qualified 行が有効で、有効な selector あり) | 有効な selector とサポート対象 native model の各組み合わせに `<selector>/<native-openai-model>` 行を表示します。各行は対応付けられたアカウントだけを使用し、bare native 行はピッカーで非表示になります。Native metadata と context window は保持されます。 |
 | OpenAI (API キー) |正確に 8 つの名前空間行: `gpt-5.5`、`gpt-5.6`、Sol/Terra/Luna、および 3 つの `*-pro` 仮想 ID (コンテキスト 922,000、8 つすべての最大入力 922,000) |
 |オープンルーター | `openrouter/openai/gpt-5.6-sol`、`openrouter/openai/gpt-5.6-terra`、`openrouter/openai/gpt-5.6-luna` (922,000) |
-| Cursor | 静的フォールバックには `cursor/gpt-5.6-sol`、`cursor/gpt-5.6-terra`、`cursor/gpt-5.6-luna` (1,000,000) と、Grok 4.5 / 4.6 の通常・Fast 行 (500,000) が含まれます。4.6 は `xhigh` も公開し、ライブアカウントの検出によって表示される行が決まります。 |
-|かおるライブディスカバリーには信頼性があります。フォールバック カタログのデフォルトは、500,000 トークン ウィンドウと `low` / `medium` / `high` 推論制御を備えた `xai/grok-4.5` です。 |
+| Cursor | 静的フォールバックには `cursor/gpt-5.6-sol`、`cursor/gpt-5.6-terra`、`cursor/gpt-5.6-luna` (1,000,000) と、Grok 4.5 / 4.6 / 4.7 の通常・Fast 行 (500,000) が含まれます。4.6 と 4.7 は `xhigh` も公開し、ライブアカウントの検出によって表示される行が決まります。 |
+| xAI | xAI のライブ検出が優先されます。フォールバックには `xai/grok-4.6` と `xai/grok-4.7` が含まれ、デフォルトは `xai/grok-4.5` です。3 モデルともコンテキストは 500,000 トークンです。Grok 4.6 と 4.7 は `low` / `medium` / `high` / `xhigh`（上流のデフォルトは `high`）を提供し、Grok 4.5 は `high` までです。 |
 
 固定された GPT-5.6 エントリは、正確な上流ラダーを保存します。 Sol と Terra は `low` から `ultra` を公開します。ルナは`max`で止まります。 Sol のデフォルトは `low`、Terra と Luna のデフォルトは `medium` です。 `ultra` は、最大限の推論とプロアクティブな委任を目的としたクライアント向けの選択肢であり、`max` としてバックエンドに到達します。ピッカーのエントリは、カタログの準備ができていることを意味するだけです。接続されたアカウントまたは API キーには、そのモデルを使用する資格がまだある必要があります。
 

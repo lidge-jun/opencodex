@@ -1,8 +1,22 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { cancelBodyOnAbort } from "../../src/lib/abort";
 import { handleLive, readBodyCapped } from "../../src/server/live";
 import { handleResponses } from "../../src/server/responses";
 import type { OcxConfig } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+
+// Captured once so a test that never finishes (Bun's per-test timeout) cannot leave the stubbed
+// fetch installed for every later file in the same process.
+const REAL_FETCH = globalThis.fetch;
+
+let releaseSpendHome: (() => void) | undefined;
+afterEach(() => {
+  // Release the lease before later teardown can replace the preload sandbox home.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
+  // Bun runs afterEach even when a test times out, so this is the restore that survives a hang.
+  globalThis.fetch = REAL_FETCH;
+});
 
 function bodyWithCancelSpy(): { body: ReadableStream<Uint8Array>; cancelled: () => boolean } {
   let cancelled = false;
@@ -71,8 +85,14 @@ describe("readBodyCapped settles the stream when a read throws", () => {
     const requestAbort = new AbortController();
     const events: string[] = [];
     let rejectRead!: (reason: unknown) => void;
+    let readReached = false;
     let markReadStarted!: () => void;
-    const readStarted = new Promise<void>(resolve => { markReadStarted = resolve; });
+    const readStarted = new Promise<void>(resolve => {
+      markReadStarted = () => {
+        readReached = true;
+        resolve();
+      };
+    });
 
     const reader = {
       read(): Promise<ReadableStreamReadResult<Uint8Array>> {
@@ -131,7 +151,23 @@ describe("readBodyCapped settles the stream when a read throws", () => {
         body: "offer",
         signal: requestAbort.signal,
       }), config, { model: "", provider: "" });
-      await readStarted;
+      // Race the start signal against the handler settling: a handler that returns an error
+      // response without ever fetching would otherwise hang here until the harness kills the test.
+      await Promise.race([
+        readStarted,
+        pending.then(
+          async settled => {
+            if (readReached) return;
+            throw new Error(
+              `handleLive settled before reaching fetch: status ${settled.status} ${(await settled.text()).slice(0, 300)}`,
+            );
+          },
+          (reason: unknown) => {
+            if (readReached) return;
+            throw new Error(`handleLive settled before reaching fetch: ${reason instanceof Error ? reason.message : String(reason)}`);
+          },
+        ),
+      ]);
       requestAbort.abort(new DOMException("client closed request", "AbortError"));
 
       expect((await pending).status).toBe(499);
@@ -197,6 +233,8 @@ describe("readBodyCapped settles the stream when a read throws", () => {
     } as OcxConfig;
 
     try {
+      // Direct dispatch needs the writer lease that prevents spend-ledger ownership failures.
+      releaseSpendHome = acquireOwnedSpendHome();
       const response = await handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -258,6 +296,7 @@ describe("readBodyCapped settles the stream when a read throws", () => {
     } as OcxConfig;
 
     try {
+      releaseSpendHome = acquireOwnedSpendHome();
       const response = await handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },

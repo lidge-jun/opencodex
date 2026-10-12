@@ -109,6 +109,20 @@ describe("Grok inject model catalog", () => {
     expect(sol?.contextWindow).toBe(500_000);
     expect(sol?.reasoningEfforts).toEqual(nativeReasoningEfforts(NATIVE_SOL));
   });
+
+  test("forwards Meta Muse max into the Grok picker", () => {
+    const routed: CatalogModel = {
+      provider: "meta-muse",
+      id: "muse-spark-1.3-contributor",
+      contextWindow: 1_048_576,
+      reasoningEfforts: ["minimal", "low", "medium", "high", "xhigh", "max"],
+    };
+    const block = buildGrokManagedBlock(10100, buildGrokInjectModels(baseConfig(), [routed]));
+    const table = tableByModelId(parseModels(block), "meta-muse/muse-spark-1.3-contributor");
+    expect(table.reasoning_efforts?.map(row => row.value)).toEqual([
+      "minimal", "low", "medium", "high", "xhigh", "max",
+    ]);
+  });
 });
 
 describe("Grok managed-block thinking-intensity injection", () => {

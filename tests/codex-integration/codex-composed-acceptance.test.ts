@@ -551,11 +551,24 @@ describe("WP13 composed toggle acceptance", () => {
         expect(result.exitCode).toBe(0);
         expect(manifest(fx.codex)).toEqual(before);
       }
-      for (const argv of [["sync"], ["sync-cache"]]) {
-        const result = await fx.runCli(argv);
-        expect(result.exitCode).toBe(0);
-        expect(manifestWithoutCatalogArtifacts(manifest(fx.codex))).toEqual(manifestWithoutCatalogArtifacts(before));
-      }
+      const synced = await fx.runCli(["sync"]);
+      expect(synced.exitCode).toBe(0);
+      expect(manifestWithoutCatalogArtifacts(manifest(fx.codex))).toEqual(manifestWithoutCatalogArtifacts(before));
+      const unchangedCache = await fx.runCli(["sync-cache", "--json"]);
+      expect(unchangedCache.exitCode).toBe(0);
+      // An OFF sync may or may not leave a catalog behind; either way the explicit cache
+      // refresh is a benign skip, never a failure, and the envelope names which one.
+      const hasCatalog = existsSync(join(fx.codex, "opencodex-catalog.json"));
+      expect(JSON.parse(unchangedCache.stdout)).toMatchObject({
+        ok: true, wrote: false, skipped: true, skippedReason: hasCatalog ? "unchanged" : "no_catalog", desiredDisabled: true,
+      });
+      const unchangedHuman = await fx.runCli(["sync-cache"]);
+      expect(unchangedHuman.exitCode).toBe(0);
+      expect(unchangedHuman.stdout).toContain(hasCatalog
+        ? "Codex model cache is already current; nothing to sync."
+        : "No Codex catalog to derive a cache from; nothing to sync.");
+      expect(unchangedHuman.stdout).not.toContain("Codex integration is OFF");
+      expect(manifestWithoutCatalogArtifacts(manifest(fx.codex))).toEqual(manifestWithoutCatalogArtifacts(before));
       const sync = await fx.request(server.runtime, "/api/sync", { method: "POST" });
       expect(sync.status).toBe(200);
       expect(sync.body).toMatchObject({ status: "skipped", skippedReason: "desired_disabled", ok: true });

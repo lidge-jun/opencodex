@@ -107,7 +107,7 @@ describe("vision-sidecar catalog modalities", () => {
     expect(applyProviderConfigHints("mimo", canonical, {
       id: "mimo-v2.5",
       provider: "mimo",
-    }).inputModalities).toBeUndefined();
+    }).inputModalities).toEqual(["text", "image"]); // native, from the registry's modelInputModalities
 
     const customDestination: OcxProviderConfig = {
       adapter: "openai-chat",

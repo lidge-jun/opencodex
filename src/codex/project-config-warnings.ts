@@ -1,13 +1,51 @@
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  existsSync,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readSync,
+  realpathSync,
+} from "node:fs";
 import path, { dirname, join, resolve } from "node:path";
 import { expandUserPath } from "../config";
 import { defaultCodexHome } from "./home";
+import { readBoundedCodexConfig } from "./inject/bounded-config-reader";
 import { readRootTomlString } from "./paths";
 import { truncateRetainedUtf8 } from "../lib/admission";
 
 const OCX_SECTION_MARKER = "# Auto-injected by opencodex";
 const DIAGNOSTICS_CACHE_TTL_MS = 30_000;
 const MAX_DIAGNOSTIC_VALUE_BYTES = 8 * 1024;
+const MAX_PROJECT_CONFIG_BYTES = 1024 * 1024;
+
+export function readBoundedProjectConfig(filePath: string): string | null {
+  let fd: number | undefined;
+  try {
+    // A candidate can become a FIFO after discovery; opening must not wait for a writer.
+    fd = openSync(filePath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.size > MAX_PROJECT_CONFIG_BYTES) return null;
+
+    const buffer = Buffer.allocUnsafe(stat.size + 1);
+    let bytesRead = 0;
+    while (bytesRead < buffer.length) {
+      const count = readSync(fd, buffer, bytesRead, buffer.length - bytesRead, null);
+      if (count === 0) break;
+      bytesRead += count;
+    }
+    // Reject a file that changed while it was read, including a same-size rewrite.
+    const after = fstatSync(fd);
+    if (bytesRead !== stat.size || after.size !== stat.size
+      || after.mtimeMs !== stat.mtimeMs || after.ctimeMs !== stat.ctimeMs) return null;
+    return buffer.toString("utf-8", 0, bytesRead);
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
 
 function resolveCodexConfigPath(): string {
   const raw = process.env.CODEX_HOME?.trim();
@@ -15,7 +53,8 @@ function resolveCodexConfigPath(): string {
   return join(home, "config.toml");
 }
 
-export type ProjectCodexConfigIssueCode = "model_providers_table" | "profile_selector" | "model_provider_root";
+export type ProjectCodexConfigIssueCode = "model_providers_table" | "profile_selector" | "model_provider_root"
+  | "global_config_unreadable";
 
 export interface ProjectCodexConfigWarning {
   path: string;
@@ -227,17 +266,18 @@ export function resolveEffectiveProjectModelProvider(content: string): Effective
 /** True when global Codex config routes through the opencodex proxy. */
 export function isGlobalOpencodexRoutingActive(
   codexConfigPath: string = resolveCodexConfigPath(),
-  content?: string,
+  content?: string | null,
 ): boolean {
   let text = content;
   if (text === undefined) {
-    if (!existsSync(codexConfigPath)) return false;
     try {
-      text = readFileSync(codexConfigPath, "utf-8");
+      text = readBoundedCodexConfig(codexConfigPath) ?? undefined;
     } catch {
       return false;
     }
+    if (text === undefined) return false;
   }
+  if (text === null) return false;
   if (hasInjectedOpenaiBaseUrl(text)) return true;
   if (readRootTomlString(text, "model_provider") === "opencodex") return true;
   return false;
@@ -341,6 +381,8 @@ export function discoverProjectCodexConfigPaths(options: {
   cwd?: string;
   codexConfigPath?: string;
   maxWalkParents?: number;
+  /** Explicit null keeps an absent/unreadable observation; undefined permits a fresh read. */
+  globalContent?: string | null;
 } = {}): string[] {
   const found = new Set<string>();
   const codexConfigPath = options.codexConfigPath ?? resolveCodexConfigPath();
@@ -359,6 +401,12 @@ export function discoverProjectCodexConfigPaths(options: {
   const globalConfigIdentity = normalizeExistingPath(codexConfigPath);
   const addIfExists = (projectRoot: string) => {
     const candidate = join(resolve(projectRoot), ".codex", "config.toml");
+    try {
+      const stat = lstatSync(candidate);
+      if (!stat.isFile() || stat.size > MAX_PROJECT_CONFIG_BYTES) return;
+    } catch {
+      return;
+    }
     const candidateIdentity = normalizeExistingPath(candidate);
     if (candidateIdentity && candidateIdentity !== globalConfigIdentity) found.add(candidate);
   };
@@ -372,15 +420,16 @@ export function discoverProjectCodexConfigPaths(options: {
     cwd = parent;
   }
 
-  if (existsSync(codexConfigPath)) {
-    try {
-      const global = readFileSync(codexConfigPath, "utf-8");
+  try {
+    const global = options.globalContent === undefined
+      ? readBoundedCodexConfig(codexConfigPath) : options.globalContent;
+    if (global !== null) {
       for (const projectPath of parseTrustedProjectPathsFromCodexConfig(global)) {
         addIfExists(projectPath);
       }
-    } catch {
-      /* ignore unreadable global config */
     }
+  } catch {
+    /* ignore unreadable global config */
   }
 
   return [...found];
@@ -393,16 +442,34 @@ export function collectProjectCodexConfigWarnings(options: {
 } = {}): ProjectCodexConfigWarning[] {
   const codexConfigPath = options.codexConfigPath ?? resolveCodexConfigPath();
   const requireRouting = options.requireOpencodexRouting ?? true;
-  if (requireRouting && !isGlobalOpencodexRoutingActive(codexConfigPath)) return [];
+
+  // The routing question has three answers: active, inactive, and unreadable. An oversized
+  // or swapped-underneath global config must not silently collapse to "inactive" — that
+  // would erase both project-bypass coverage and trusted-path discovery without a trace.
+  let globalContent: string | null = null;
+  let globalUnreadable = false;
+  try {
+    globalContent = readBoundedCodexConfig(codexConfigPath);
+  } catch {
+    globalUnreadable = true;
+  }
+  if (requireRouting && !globalUnreadable
+    && !isGlobalOpencodexRoutingActive(codexConfigPath, globalContent)) {
+    return [];
+  }
 
   const warnings: ProjectCodexConfigWarning[] = [];
-  for (const path of discoverProjectCodexConfigPaths({ cwd: options.cwd, codexConfigPath })) {
-    try {
-      const content = readFileSync(path, "utf-8");
-      warnings.push(...analyzeProjectCodexConfig(content, path));
-    } catch {
-      /* skip unreadable project config */
-    }
+  if (globalUnreadable) {
+    warnings.push({
+      path: codexConfigPath,
+      code: "global_config_unreadable",
+      detail: "unreadable",
+      message: "The global Codex config could not be read within the 1 MiB bound — whether it routes through OpenCodex, and which projects it declares trusted, is undetermined.",
+    });
+  }
+  for (const path of discoverProjectCodexConfigPaths({ cwd: options.cwd, codexConfigPath, globalContent })) {
+    const content = readBoundedProjectConfig(path);
+    if (content !== null) warnings.push(...analyzeProjectCodexConfig(content, path));
   }
   return warnings;
 }
@@ -440,6 +507,8 @@ export function summarizeProjectCodexIssue(warning: ProjectCodexConfigWarning): 
       return warning.profileName ? `profile="${warning.profileName}"` : `model_provider="${warning.detail}"`;
     case "model_provider_root":
       return `model_provider="${warning.detail}"`;
+    case "global_config_unreadable":
+      return "config.toml unreadable or oversized";
   }
 }
 
@@ -461,6 +530,8 @@ export interface ProjectCodexConfigWarningGroup {
   path: string;
   issues: string[];
   bypass: string;
+  /** True when the group is the global-config-unreadable caveat, not a project bypass. */
+  globalUnreadable?: boolean;
 }
 
 export function groupProjectCodexConfigWarningsByPath(
@@ -472,22 +543,34 @@ export function groupProjectCodexConfigWarningsByPath(
     list.push(warning);
     grouped.set(warning.path, list);
   }
-  return [...grouped.entries()].map(([path, pathWarnings]) => ({
-    path,
-    issues: pathWarnings.map(summarizeProjectCodexIssue),
-    bypass: explainProjectConfigBypass(pathWarnings),
-  }));
+  return [...grouped.entries()].map(([path, pathWarnings]) => {
+    const globalUnreadable = pathWarnings.every(warning => warning.code === "global_config_unreadable");
+    return {
+      path,
+      issues: pathWarnings.map(summarizeProjectCodexIssue),
+      bypass: globalUnreadable ? pathWarnings[0]!.message : explainProjectConfigBypass(pathWarnings),
+      ...(globalUnreadable ? { globalUnreadable } : {}),
+    };
+  });
 }
 
 export function formatProjectCodexConfigWarningsForDoctor(warnings: ProjectCodexConfigWarning[]): string[] {
   const grouped = groupProjectCodexConfigWarningsByPath(warnings);
   if (grouped.length === 0) return [];
   const lines: string[] = [];
-  for (const { path, issues, bypass } of grouped) {
+  let hasBypassEntries = false;
+  for (const { path, issues, bypass, globalUnreadable } of grouped) {
     lines.push(`  --     ${relPath(path)} — ${issues.join(", ")}`);
     lines.push(`         ${bypass}`);
+    if (globalUnreadable) {
+      lines.push("       fix: keep the global config.toml a readable regular file within the 1 MiB bound");
+    } else {
+      hasBypassEntries = true;
+    }
   }
-  lines.push("       fix: remove those entries so OpenCodex proxy routing applies in this project");
+  if (hasBypassEntries) {
+    lines.push("       fix: remove those entries so OpenCodex proxy routing applies in this project");
+  }
   return lines;
 }
 
@@ -495,11 +578,19 @@ export function formatProjectCodexConfigWarningsForConsole(warnings: ProjectCode
   const grouped = groupProjectCodexConfigWarningsByPath(warnings);
   if (grouped.length === 0) return [];
   const lines = ["⚠️  Project Codex config bypasses OpenCodex:"];
-  for (const { path, issues, bypass } of grouped) {
+  let hasBypassEntries = false;
+  for (const { path, issues, bypass, globalUnreadable } of grouped) {
     lines.push(`    ${relPath(path)} — ${issues.join(", ")}`);
     lines.push(`    ${bypass}`);
+    if (globalUnreadable) {
+      lines.push("    fix: keep the global config.toml a readable regular file within the 1 MiB bound");
+    } else {
+      hasBypassEntries = true;
+    }
   }
-  lines.push("    fix: remove those entries so OpenCodex proxy routing applies in this project");
+  if (hasBypassEntries) {
+    lines.push("    fix: remove those entries so OpenCodex proxy routing applies in this project");
+  }
   return lines;
 }
 

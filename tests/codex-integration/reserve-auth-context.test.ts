@@ -25,6 +25,7 @@ import type { DataPlaneAdmission } from "../../src/server/auth-cors";
 import type { WhamUsageResponse } from "../../src/codex/quota-types";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 const MAIN = mainAccount.MAIN_CODEX_ACCOUNT_ID;
 const accountId = "reserve-workspace-fixture";
@@ -88,6 +89,8 @@ function prohibitPhysicalReads(): void {
   spyOn(mainAccount, "getValidMainAccountToken").mockImplementation(fail);
 }
 
+let releaseSpendHome: (() => void) | undefined;
+
 beforeEach(() => {
   oldHome = process.env.OPENCODEX_HOME;
   oldCodexHome = process.env.CODEX_HOME;
@@ -133,9 +136,16 @@ beforeEach(() => {
     }
     throw new Error("unexpected outbound fixture destination");
   }, { preconnect() {} }));
+  // Dispatches without starting a server, so it takes the spend-journal lease itself. Taken
+  // last because the lease binds the home in effect at the moment it is taken.
+  releaseSpendHome = acquireOwnedSpendHome();
 });
 
 afterEach(async () => {
+  // Released before this case's home is removed: an open lease inside a directory being
+  // deleted fails the removal on Windows and leaves an unlinked live database on POSIX.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   mock.restore();
   clearAccountQuota(); // Cancels this fixture's pending persistence timer before deleting its home.
   clearMainAccountInfoCache();

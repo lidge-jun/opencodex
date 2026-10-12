@@ -1,4 +1,4 @@
-import { modelCapabilitiesConfigError } from "../config/provider-validation";
+import { contextTierRecordConfigError, modelCapabilitiesConfigError } from "../config/provider-validation";
 import {
   CliUsageError,
   csv,
@@ -12,7 +12,10 @@ import {
   takeOption,
   type RuntimeApiDeps,
 } from "./runtime-api";
+import { takeProviderEditSettings } from "./provider-settings";
+import { printProviderReceipt, runProviderAction } from "./provider-result";
 import { providerQuotaLine } from "./account-extended";
+import { pinSponsorRows } from "../providers/sponsor-order";
 import type { ProviderQuotaReportDto } from "./account-api";
 
 interface ProviderQuotasDto {
@@ -41,8 +44,8 @@ const USAGE = `Usage:
       [--api-key-transport <x-api-key|bearer|->]
       [--headers <json>] [--enabled <on|off>] [--live-models <on|off>]
       [--retain-models <id,id|->] [--model <id> --text-only]
-      [--xai-chat <on|off>]
-      [--allow-private-network <on|off>] [--json]
+      [--xai-chat <on|off>] [--upstream-http-version <http1.1|->] [--fast <on|off>] [--context-window <tokens|->]
+      [--allow-private-network <on|off>] [--model-context-tier <model=default|long_context>] [--json]
   ocx provider test <name> [--json]
   ocx provider quota [--refresh] [--json]
   ocx provider resets [--limit <n>] [--json]
@@ -55,12 +58,12 @@ function cleared(value: string | undefined): string | undefined {
   return value === "-" ? "" : value;
 }
 
-async function edit(argv: string[], deps: RuntimeApiDeps): Promise<void> {
+async function edit(argv: string[], deps: RuntimeApiDeps): Promise<number> {
   const args = [...argv];
   const name = args.shift()?.trim();
   if (!name) throw new CliUsageError("provider name is required", USAGE);
   const wantsJson = takeFlag(args, "--json");
-  const patch: Record<string, unknown> = {};
+  const patch: Record<string, unknown> = takeProviderEditSettings(args);
   const adapter = takeOption(args, "--adapter");
   const baseUrl = takeOption(args, "--base-url");
   const defaultModel = cleared(takeOption(args, "--default-model"));
@@ -73,6 +76,12 @@ async function edit(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const liveModels = takeBooleanOption(args, "--live-models");
   const allowPrivateNetwork = takeBooleanOption(args, "--allow-private-network");
   const xaiChat = takeBooleanOption(args, "--xai-chat");
+  const contextTierValues: string[] = [];
+  for (;;) {
+    const value = takeOption(args, "--model-context-tier");
+    if (value === undefined) break;
+    contextTierValues.push(value);
+  }
   const textOnly = takeFlag(args, "--text-only");
   const capabilityModel = takeOption(args, "--model");
   rejectArgs(args, USAGE);
@@ -82,6 +91,21 @@ async function edit(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     const error = modelCapabilitiesConfigError(declaration);
     if (error) throw new CliUsageError(error, USAGE);
     patch.modelCapabilities = declaration;
+  }
+  if (contextTierValues.length) {
+    if (name !== "github-copilot") throw new CliUsageError("--model-context-tier is valid only for provider github-copilot", USAGE);
+    const tiers: Record<string, "default" | "long_context"> = Object.create(null);
+    for (const value of contextTierValues) {
+      const separator = value.indexOf("=");
+      const model = value.slice(0, separator);
+      const tier = value.slice(separator + 1);
+      if (separator < 1 || (tier !== "default" && tier !== "long_context"))
+        throw new CliUsageError("--model-context-tier must use model=default or model=long_context", USAGE);
+      tiers[model] = tier;
+    }
+    const error = contextTierRecordConfigError(tiers);
+    if (error) throw new CliUsageError(error, USAGE);
+    patch.modelContextTiers = tiers;
   }
   if (xaiChat !== undefined) {
     if (name !== "xai") throw new CliUsageError("--xai-chat is valid only for provider xai", USAGE);
@@ -117,13 +141,13 @@ async function edit(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   if (allowPrivateNetwork !== undefined) patch.allowPrivateNetwork = allowPrivateNetwork;
   if (Object.keys(patch).length === 0) throw new CliUsageError("at least one edit option is required", USAGE);
   const result = await runtimeRequest(`/api/providers?name=${encodeURIComponent(name)}`, {
-    method: "PATCH",
+    method: "PATCH", redirect: "error",
     body: JSON.stringify(patch),
   }, deps);
-  printData(result, wantsJson, [`Updated provider ${name}.`]);
+  return printProviderReceipt(result, wantsJson, "Provider edit");
 }
 
-async function testProvider(argv: string[], deps: RuntimeApiDeps): Promise<void> {
+async function testProvider(argv: string[], deps: RuntimeApiDeps): Promise<number> {
   const args = [...argv];
   const name = args.shift()?.trim();
   const wantsJson = takeFlag(args, "--json");
@@ -137,7 +161,7 @@ async function testProvider(argv: string[], deps: RuntimeApiDeps): Promise<void>
       `${name}: not applicable`,
       "Static catalog; no live model-discovery endpoint to test.",
     ]);
-    return;
+    return 0;
   }
   const ok = result.ok === true;
   printData(result, wantsJson, [
@@ -145,7 +169,7 @@ async function testProvider(argv: string[], deps: RuntimeApiDeps): Promise<void>
     String(result.message ?? result.error ?? "No detail"),
     `Latency: ${String(result.latencyMs ?? "?")} ms`,
   ]);
-  if (!ok) process.exitCode = 1;
+  return ok ? 0 : 1;
 }
 
 async function quota(argv: string[], deps: RuntimeApiDeps): Promise<void> {
@@ -212,7 +236,15 @@ async function presets(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   rejectArgs(args, USAGE);
   const result = await runtimeRequest<{ providers?: unknown[] } | unknown[]>("/api/provider-presets", {}, deps);
   const rows = Array.isArray(result) ? result : result.providers ?? [];
-  printData(result, wantsJson, rows.map(row => {
+  const pinned = pinSponsorRows(
+    rows,
+    row => {
+      const tier = (row as Record<string, unknown>)?.sponsor;
+      return tier === "main" || tier === "standard" ? tier : undefined;
+    },
+    row => String((row as Record<string, unknown>)?.label ?? (row as Record<string, unknown>)?.id ?? ""),
+  );
+  printData(result, wantsJson, pinned.map(row => {
     const record = row as Record<string, unknown>;
     const sponsor = record.sponsor ? `  (sponsor: ${String(record.sponsor)})` : "";
     return `${String(record.id ?? record.name ?? "?")}  ${String(record.label ?? record.adapter ?? "")}${sponsor}`.trimEnd();
@@ -280,9 +312,8 @@ async function keychain(argv: string[], deps: RuntimeApiDeps): Promise<void> {
 }
 
 export async function handleProviderRuntimeCommand(sub: string, argv: string[], deps: RuntimeApiDeps = {}): Promise<number | null> {
-  const handlers: Record<string, (args: string[], deps: RuntimeApiDeps) => Promise<void>> = {
-    edit,
-    update: edit,
+  if (sub === "edit" || sub === "update") return runProviderAction(() => edit(argv, deps));
+  const handlers: Record<string, (args: string[], deps: RuntimeApiDeps) => Promise<number | void>> = {
     test: testProvider,
     quota,
     resets,
@@ -293,7 +324,9 @@ export async function handleProviderRuntimeCommand(sub: string, argv: string[], 
   };
   const handler = handlers[sub];
   if (!handler) return null;
-  return runCliAction(() => handler(argv, deps));
+  let outcome: number | void = 0;
+  const exit = await runCliAction(async () => { outcome = await handler(argv, deps); });
+  return exit || outcome || 0;
 }
 
 export const PROVIDER_RUNTIME_USAGE = USAGE;

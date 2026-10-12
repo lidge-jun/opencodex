@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { writeVersionCache } from "../../src/update/notify";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { handleManagementAPI } from "../../src/server/management-api";
+import { withManagementCors } from "../../src/server/auth-cors";
 import { invalidateStarStatusCache, setStarDepsForTests, type StarDeps } from "../../src/github/star-state";
 import type { OcxConfig } from "../../src/types";
 
@@ -30,6 +36,29 @@ async function call(
   if (!res) return { status: 404, body: null, raw: "", routed: false };
   const raw = await res.text();
   return { status: res.status, body: raw ? JSON.parse(raw) : null, raw, routed: true };
+}
+
+const DESKTOP_A = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+const DESKTOP_B = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+const DESKTOP_ORIGIN_TEST = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+const desktopPayload = (sessionId = DESKTOP_A) => ({
+  sessionId, currentVersion: "2.61.0", latestVersion: "2.62.0",
+  available: true, checkedAtMs: Date.now(), phase: "available",
+});
+
+async function desktopPost(body: string | Uint8Array, principal?: "admin-token" | "gui-session",
+  contentType = "application/json", origin?: string, routeConfig = config, applyCors = false) {
+  const url = new URL("http://127.0.0.1:10100/api/update/desktop-snapshot");
+  const req = new Request(url, {
+    method: "POST",
+    headers: { host: "127.0.0.1:10100", "content-type": contentType, ...(origin === undefined ? {} : { origin }) },
+    body,
+  });
+  const routed = await handleManagementAPI(req, url, routeConfig, {}, principal);
+  const response = routed && applyCors ? withManagementCors(routed, req, routeConfig) : routed;
+  expect(response).not.toBeNull();
+  return { status: response!.status, body: await response!.json() as Record<string, unknown>,
+    allowOrigin: response!.headers.get("access-control-allow-origin") };
 }
 
 async function withStarDeps<T>(deps: StarDeps, run: () => Promise<T>): Promise<T> {
@@ -97,6 +126,24 @@ const NO_AGENT_ENV = {
 // headroom against an external binary's worst case.
 
 describe("GET /api/update/badge", () => {
+  test("repeated reads do not advance the package cache timestamp", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-badge-route-"));
+    const previous = process.env.OPENCODEX_HOME;
+    try {
+      process.env.OPENCODEX_HOME = dir;
+      writeVersionCache({ latest_version: "2.7.44", last_checked_at: "2026-09-24T00:00:00.000Z", tag: "latest" });
+      const before = readFileSync(join(dir, "version.json"), "utf8");
+      expect((await call("GET", "/api/update/badge")).status).toBe(200);
+      expect((await call("GET", "/api/update/badge")).status).toBe(200);
+      expect(readFileSync(join(dir, "version.json"), "utf8")).toBe(before);
+    } finally {
+      if (previous === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previous;
+      removeTreeWithRetry(dir);
+    }
+  });
+
+
   test("is routed and returns the badge shape", async () => {
     const { status, body } = await call("GET", "/api/update/badge");
     expect(status).toBe(200);
@@ -112,6 +159,56 @@ describe("GET /api/update/badge", () => {
     expect(raw).not.toContain("npm");
     expect(raw).not.toContain("/Users/");
     expect(raw).not.toContain("node_modules");
+  });
+});
+
+describe("desktop snapshot route", () => {
+  test("rejects dashboard and allowed cross-origin publishers without storing their snapshots", async () => {
+    const body = JSON.stringify(desktopPayload(DESKTOP_ORIGIN_TEST));
+    const routeConfig = { ...config, corsAllowOrigins: ["https://operator.example"] };
+    for (const origin of ["http://127.0.0.1:10100", "https://operator.example", ""]) {
+      const refused = await desktopPost(body, "admin-token", "application/json", origin, routeConfig);
+      expect(refused.status).toBe(403);
+      expect(refused.body).toEqual({ error: "desktop snapshot does not accept browser-origin requests" });
+      const unread = await call("GET", "/api/update/badge?surface=desktop&session=" + DESKTOP_ORIGIN_TEST);
+      expect(unread.body).toMatchObject({ unknown: true, updateAvailable: false });
+    }
+    const accepted = await desktopPost(body, "admin-token", "application/json", undefined, routeConfig);
+    expect(accepted.status).toBe(200);
+    expect(accepted.body).toEqual({ ok: true });
+    const stored = await call("GET", "/api/update/badge?surface=desktop&session=" + DESKTOP_ORIGIN_TEST);
+    expect(stored.body).toMatchObject({ unknown: false, updateAvailable: true });
+  });
+
+  test("requires the raw admin-token principal, not a GUI session or missing principal", async () => {
+    const body = JSON.stringify(desktopPayload());
+    expect((await desktopPost(body)).status).toBe(403);
+    expect((await desktopPost(body, "gui-session")).status).toBe(403);
+    expect((await desktopPost(body, "admin-token")).status).toBe(200);
+  });
+
+  test("rejects extra fields, malformed JSON and over-1KiB streams without echoing input", async () => {
+    expect((await desktopPost(JSON.stringify({ ...desktopPayload(), token: "sentinel" }), "admin-token")).status).toBe(400);
+    expect((await desktopPost("{", "admin-token")).status).toBe(400);
+    expect((await desktopPost("", "admin-token")).status).toBe(400);
+    expect((await desktopPost(new Uint8Array([0xff]), "admin-token")).status).toBe(400);
+    expect((await desktopPost(JSON.stringify(desktopPayload()), "admin-token", "text/plain")).status).toBe(400);
+    const oversized = await desktopPost("x".repeat(1025), "admin-token");
+    expect(oversized.status).toBe(413);
+    expect(JSON.stringify(oversized.body)).not.toContain("x".repeat(32));
+  });
+
+  test("desktop GET isolates sessions and never reads the package badge for an absent session", async () => {
+    expect((await desktopPost(JSON.stringify(desktopPayload()), "admin-token")).status).toBe(200);
+    const seen = await call("GET", "/api/update/badge?surface=desktop&session=" + DESKTOP_A);
+    expect(seen.body).toMatchObject({ installer: "desktop", updateAvailable: true, unknown: false });
+    expect(seen.raw).not.toContain(DESKTOP_A);
+    const other = await call("GET", "/api/update/badge?surface=desktop&session=" + DESKTOP_B);
+    expect(other.body).toMatchObject({ installer: "desktop", updateAvailable: false, unknown: true });
+    const missing = await call("GET", "/api/update/badge?surface=desktop");
+    expect(missing.body).toMatchObject({ installer: "desktop", unknown: true });
+    expect((await call("GET", "/api/update/badge")).body).not.toMatchObject({ installer: "desktop" });
+    expect((await call("GET", "/api/update/badge?surface=typo")).status).toBe(400);
   });
 });
 

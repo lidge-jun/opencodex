@@ -8,8 +8,35 @@ const DEVICE_ID = "11111111-1111-4111-8111-111111111111";
 const ROOT_ID = "22222222-2222-4222-8222-222222222222";
 const SESSION_ID = "33333333-3333-4333-8333-333333333333";
 
-test("#remote resolves to the Remote Workspace page", () => {
+test("#remote resolves to the Remote Link page", () => {
   expect(readPageFromHash("#remote")).toBe("remote");
+  expect(readPageFromHash("#remote-workspace")).toBe("remote-workspace");
+});
+
+test("Remote Workspace route gates unavailable deep links and mounts when available", async () => {
+  const [{ RemoteWorkspaceRoute }, { act }, { createRoot }, { LanguageProvider }] = await Promise.all([
+    import("../src/App"), import("react"), import("react-dom/client"), import("../src/i18n/provider"),
+  ]);
+  const host = win.document.createElement("div") as unknown as HTMLElement;
+  win.document.body.appendChild(host as never);
+  let navigated = false;
+  Object.defineProperty(globalThis, "fetch", { configurable: true, value: async () => jsonResponse({ available: false, devices: [], runtimes: {}, sessions: [] }) });
+  await act(async () => {
+    root = createRoot(host);
+    root.render(<LanguageProvider><RemoteWorkspaceRoute available={false} apiBase="" hubOrigin="https://hub.example.test" onOpenRemoteLink={() => { navigated = true; }} /></LanguageProvider>);
+  });
+  expect(host.textContent).toContain("Remote Workspace is unavailable");
+  expect(host.querySelector("button.link-btn")?.textContent).toBe("Remote Link");
+  expect(host.querySelector(".remote-workspace-page")).toBeNull();
+  await act(async () => { (host.querySelector("button.link-btn") as HTMLButtonElement).click(); });
+  expect(navigated).toBe(true);
+  Object.defineProperty(globalThis, "fetch", { configurable: true, value: async () => jsonResponse({ available: true, devices: [], runtimes: {}, sessions: [] }) });
+  await act(async () => {
+    root?.render(<LanguageProvider><RemoteWorkspaceRoute available apiBase="" hubOrigin="https://hub.example.test" onOpenRemoteLink={() => { navigated = true; }} /></LanguageProvider>);
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  expect(host.querySelector(".remote-workspace-page")).not.toBeNull();
 });
 
 test("pairing commands use native POSIX and PowerShell syntax", () => {

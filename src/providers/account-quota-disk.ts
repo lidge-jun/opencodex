@@ -14,6 +14,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { atomicWriteFile, getConfigDir } from "../config";
 import type { ProviderQuota } from "./quota-types";
+import type { KiroPersistedQuota, KiroPersistedVerdict } from "./kiro-account-state-disk";
+import { ACCOUNT_QUOTA_TTL_MS } from "./quota-wire";
 
 const FILENAME = "provider-account-quota-cache.json";
 
@@ -31,7 +33,8 @@ const PERSIST_DEBOUNCE_MS = 250;
 type DiskFile = {
   version: 1;
   /** provider\u0000accountId -> quota, the same key the in-memory cache uses. */
-  rows: Record<string, ProviderQuota>;
+  rows: Record<string, ProviderQuota | KiroPersistedQuota>;
+  kiroVerdicts?: Record<string, KiroPersistedVerdict>;
 };
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
@@ -45,8 +48,12 @@ export function readPersistedAccountQuotas(now = Date.now()): Map<string, Provid
     const parsed = JSON.parse(readFileSync(path, "utf8")) as DiskFile;
     if (!parsed || parsed.version !== 1 || !parsed.rows || typeof parsed.rows !== "object") return rows;
     for (const [key, quota] of Object.entries(parsed.rows)) {
-      if (!quota || typeof quota !== "object" || typeof quota.updatedAt !== "number") continue;
+      if (!quota || typeof quota !== "object" || typeof quota.updatedAt !== "number"
+        || !Number.isFinite(quota.updatedAt)) continue;
       if (now - quota.updatedAt > DISK_MAX_AGE_MS) continue;
+      if (key.startsWith("kiro\0") && (quota.updatedAt > now
+        || typeof (quota as KiroPersistedQuota).identity !== "string"
+        || !/^[a-f0-9]{64}$/.test((quota as KiroPersistedQuota).identity))) continue;
       rows.set(key, quota);
     }
   } catch {
@@ -55,15 +62,46 @@ export function readPersistedAccountQuotas(now = Date.now()): Map<string, Provid
   return rows;
 }
 
+export function readPersistedKiroVerdicts(now = Date.now()): Map<string, KiroPersistedVerdict> {
+  const result = new Map<string, KiroPersistedVerdict>();
+  try {
+    const file: unknown = JSON.parse(readFileSync(join(getConfigDir(), FILENAME), "utf8"));
+    if (!file || typeof file !== "object" || Array.isArray(file)) return result;
+    const parsed = file as Partial<DiskFile>;
+    if (parsed.version !== 1 || !parsed.kiroVerdicts || typeof parsed.kiroVerdicts !== "object"
+      || Array.isArray(parsed.kiroVerdicts)) return result;
+    for (const [key, value] of Object.entries(parsed.kiroVerdicts)) {
+      if (!key.startsWith("kiro\0") || !value || typeof value !== "object") continue;
+      const row = value as Partial<KiroPersistedVerdict>;
+      if (typeof row.exhausted !== "boolean" || typeof row.identity !== "string"
+        || !/^[a-f0-9]{64}$/.test(row.identity) || typeof row.observedAt !== "number"
+        || !Number.isFinite(row.observedAt) || row.observedAt > now
+        || now - row.observedAt >= ACCOUNT_QUOTA_TTL_MS
+        || (row.resetAt !== undefined && (typeof row.resetAt !== "number"
+          || !Number.isFinite(row.resetAt) || row.resetAt <= now
+          || !Number.isFinite(new Date(row.resetAt).getTime())))) continue;
+      result.set(key, row as KiroPersistedVerdict);
+    }
+  } catch { /* Missing or malformed evidence is unknown. */ }
+  return result;
+}
+
 /** Write the snapshot, debounced. Best-effort: a failed write is not an error. */
-export function schedulePersistAccountQuotas(rows: () => Iterable<[string, ProviderQuota]>): void {
+export function schedulePersistAccountQuotas(
+  rows: () => Iterable<[string, ProviderQuota | KiroPersistedQuota]>,
+  verdicts: () => Iterable<[string, KiroPersistedVerdict]> = () => [],
+): void {
   if (persistTimer) clearTimeout(persistTimer);
   persistTimer = setTimeout(() => {
     persistTimer = null;
     try {
       const out: Record<string, ProviderQuota> = {};
       for (const [key, quota] of rows()) out[key] = quota;
-      const body: DiskFile = { version: 1, rows: out };
+      const kiroVerdicts: Record<string, KiroPersistedVerdict> = {};
+      for (const [key, verdict] of verdicts()) {
+        if (key.startsWith("kiro\0") && /^[a-f0-9]{64}$/.test(verdict.identity)) kiroVerdicts[key] = verdict;
+      }
+      const body: DiskFile = { version: 1, rows: out, kiroVerdicts };
       atomicWriteFile(join(getConfigDir(), FILENAME), `${JSON.stringify(body)}\n`);
     } catch {
       // Best-effort persistence only.

@@ -14,7 +14,7 @@ exécute des fonctionnalités d'assistance autour des demandes du fournisseur.
 | `hostname?` | `string` | `"127.0.0.1"` | Adresse de liaison. Les liaisons hors bouclage nécessitent `OPENCODEX_API_AUTH_TOKEN`. |
 | `proxy?` | `string` | — | URL du proxy HTTP(S) ou SOCKS5 sortant (`socks5://host:port`) ou `${ENV_VAR}`. Les URL HTTP s’appliquent à `HTTP_PROXY` / `HTTPS_PROXY` si elles sont vides. Les URL SOCKS5 utilisent le tunnel SOCKS5 intégré et sont aussi exposées via `ALL_PROXY` (`ocx start --socks5`); `HTTP(S)_PROXY` héritées sont effacées dans ce processus. Le bouclage reste dans `NO_PROXY`. |
 | `emptyCompletionRetry?` | `boolean` | `false` | Active une nouvelle tentative Responses identique lorsqu’une réponse ne contient ni texte ni appel d’outil. Cette tentative peut être facturée. `OCX_EMPTY_COMPLETION_RETRY=0` la désactive sans modifier la configuration ; les combinaisons et les tours de compactage routés restent exclus. |
-| `stallTimeoutSec?` | `number` | `300` | Secondes sans progression utile en amont, pour Responses et le Chat natif. Minimum : 1. |
+| `stallTimeoutSec?` | `number` | `300` (public) / désactivé (local) | Secondes sans progression utile en amont (Responses et Chat natif) avant la coupure du flux. Sans réglage, un amont **local** (loopback, privé ou nom `.local`/`.lan`) est désactivé par défaut et un amont public vaut 300 s ; une valeur positive s'applique aux deux (minimum 1 s) ; `0` désactive partout le watchdog de silence. Pour Responses qui replie le SSE canonique ChatGPT en JSON non-streaming, un plafond total indépendant de 15 minutes subsiste même lorsque ce watchdog est désactivé. Les lectures de corps en attente de `/v1/responses/compact` partagent ce budget mais valent 300 s par défaut même pour un amont local ; une valeur explicite, y compris `0`, prime. |
 | `connectTimeoutMs?` | `number` | `200000` | Délai maximal par tentative pour DNS/TCP/TLS et les en-têtes finaux ; il prend fin avant la génération du corps. |
 | `shutdownTimeoutMs?` | `number` | `5000` | Délai de vidange gracieux avant l’annulation des tours actifs. |
 | `websockets?` | `boolean` | `false` | Annonce et autorise la route WebSocket Responses destinée aux clients. La valeur false maintient les clients sur HTTP/SSE ; elle ne désactive pas une optimisation WebSocket canonique admissible vers ChatGPT en amont. |
@@ -22,10 +22,12 @@ exécute des fonctionnalités d'assistance autour des demandes du fournisseur.
 | `apiKeys?` | `OcxApiKey[]` | `[]` | Identifiants `ocx_…` générés pour l'admission au plan de données sur les liaisons hors bouclage. Ils n'autorisent pas les API de gestion ; l'accès à la gestion utilise l'identifiant distinct décrit dans la [référence de l'API de gestion](/fr/reference/management-api/). Gérés depuis le tableau de bord. |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | désactivé | Politique facultative de nettoyage des sessions archivées. Elle n'est jamais activée implicitement. |
 | `appOwnedMemoryBudgetMb?` | `number` | `256` | Plafond en Mio pour les journaux, caches, objets binaires et charges utiles de continuation évincables qui appartiennent à l'application. Plage : 64–4096 ; il ne s'agit pas d'un plafond RSS. |
+| `metricsExport.enabled?` | `boolean` | `false` | Active les métriques de requêtes agrégées, locales au processus, sur `GET /api/metrics` authentifié. Redémarrage requis ; lorsque désactivé, le chemin renvoie 404 et aucune activité d'export n'est démarrée. |
+| `serviceHealthRecovery.enabled?` | `boolean` | `false` | Récupération optionnelle du service en arrière-plan : un petit processus sentinelle interroge `/healthz` et, lorsque le proxy reste vivant mais ne répond plus pendant environ une minute de sondes consécutives, le termine pour que le gestionnaire de service (Planificateur de tâches, launchd, systemd, WinSW) le redémarre. Seul le processus enfant du service géré en lance une ; les requêtes détenues par le processus bloqué ne sont pas rejouées. Au plus trois récupérations par heure. Redémarrage requis. |
 | `codexAutoStart?` | `boolean` | `true` | Autorise le lanceur intermédiaire Codex à exécuter `ocx ensure` avant de démarrer Codex. Avec la valeur false, cette vérification ne fait rien. |
 | `codexShimAutoRestore?` | `boolean` | `true` | Restaure le lanceur intermédiaire installé après son remplacement par une mise à jour externe de Codex terminée. Désactivation par variable d'environnement : `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`. |
 | `syncResumeHistory?` | `boolean` | `true` | Compatibilité historique Codex App réversible. Les métadonnées originales sont sauvegardées et restaurées par `ocx stop` / `ocx restore`. |
-| `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; sourceModels?: string[] }` | désactivé | Redirigez les appels Codex helper/shadow reconnus vers un modèle choisi tout en conservant l'effort de raisonnement configuré pour la requête. Le préfixe source par défaut est `gpt-5.6-luna` ; les clients plus anciens via 0.144.x utilisaient `gpt-5.4-mini`, que `sourceModels` peut restaurer. |
+| `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; sourceModels?: string[] }` | désactivé | Redirigez les appels Codex helper/shadow reconnus vers un modèle choisi tout en conservant l'effort de raisonnement configuré pour la requête. Le préfixe source par défaut est `gpt-6-luna`, `gpt-5.6-luna` ; les clients plus anciens via 0.144.x utilisaient `gpt-5.4-mini`, que `sourceModels` peut restaurer. |
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | activé lorsqu'il est utilisable | Options du service auxiliaire de recherche Web. |
 | `visionSidecar?` | `OcxVisionSidecarConfig` | activé lorsqu'il est utilisable | Options du service auxiliaire de description d'images. |
 | `images?` | `OcxImagesConfig` | sélection automatique OpenAI | Options de relais d'images autonomes pour Codex `image_gen`. |
@@ -183,19 +185,29 @@ l'abonnement avec un avertissement lorsque la détection n'est pas concluante. V
 Codex utilise de petits modèles auxiliaires pour des tâches telles que les titres et les messages de commit. Activez
 `shadowCallIntercept` pour rediriger les préfixes de modèle source reconnus vers un autre modèle configuré. Le
 modèle de remplacement conserve l'effort de raisonnement configuré pour la requête. Définissez `sourceModels` uniquement lorsqu'un client utilise d'autres identifiants de modèles auxiliaires.
-L'interception dépend du modèle : toute requête dont l'identifiant de modèle nu correspond à `sourceModels`
-peut être redirigée, y compris une requête normale portant `request_kind: "turn"`.
-`x-codex-turn-metadata` n'exempte pas une requête correspondante.
+Un identifiant de modèle nu correspondant à `sourceModels` peut être intercepté, mais un tour utilisateur
+conserve son modèle si `x-codex-turn-metadata` contient à la fois `request_kind: "turn"` et `thread_source: "user"`.
+Les enfants identifiés par l'en-tête de connexion `x-openai-subagent: collab_spawn` (requête HTTP ou ouverture WebSocket) ou par les métadonnées
+`subagent_kind: "thread_spawn"` conservent aussi leur modèle. Sur WebSocket, seules les métadonnées de chaque
+trame dans `client_metadata["x-codex-turn-metadata"]` décident, jamais les métadonnées de tour de la connexion initiale.
+Des métadonnées absentes ou mal formées conservent le comportement d'interception existant. Les auxiliaires
+peuvent porter `request_kind: "turn"` ; ce champ seul ne les exempte pas. Ces règles couvrent les modèles et les combos.
 
 ```json
 {
   "shadowCallIntercept": {
     "enabled": true,
     "model": "gpt-5.5",
-    "sourceModels": ["gpt-5.6-luna"]
+    "sourceModels": ["gpt-6-luna", "gpt-5.6-luna"]
   }
 }
 ```
+
+### Quand la cible est indisponible
+
+Le remplacement est la seule destination choisie par l'opérateur : une cible qui ne se résout plus fait échouer l'appel auxiliaire au lieu de l'envoyer ailleurs. Lorsque le fournisseur de la cible est désactivé ou supprimé, ou que son combo n'existe plus, une requête interceptée renvoie `409` avec le code d'erreur `intercept_target_unavailable` avant tout envoi en amont. Le journal des requêtes enregistre le même code. La requête n'est pas transmise au modèle auxiliaire natif et ne se replie pas sur le fournisseur par défaut, car l'un comme l'autre changerait la destination, les identifiants et le coût sans votre choix. Une cible combo ou profil de routage continue de basculer entre ses propres membres. Une cible qualifiée comme `provider/model` dont le segment fournisseur ne désigne rien de configuré est traitée de la même façon, et l'API des réglages refuse de l'enregistrer. Un identifiant de modèle nu résolu via le fournisseur par défaut reste valide.
+
+Désactiver (`PATCH /api/providers?name=<provider>` avec `disabled: true`) ou supprimer un fournisseur vers lequel la cible se résout réussit toujours ; la réponse ajoute `dependentShadowIntercept: { model, enabled }` et le tableau de bord affiche un avertissement. Réactiver le fournisseur, ou choisir une autre cible, rétablit l'interception.
 
 ## Services auxiliaires
 
@@ -214,7 +226,7 @@ l'API Images d'OpenAI et la forme de réponse attendue par Codex.
 
 | Champ | Type | Par défaut | Signification |
 | --- | --- | --- | --- |
-| `enabled?` | `boolean` | activé lorsqu'il est utilisable | Interrupteur principal. |
+| `enabled?` | `boolean` | activé lorsqu'il est utilisable | Interrupteur principal. Avec `false`, OpenCodex cesse d'intercepter `web_search` et l'intégration Codex écrit `web_search = "disabled"` dans `~/.codex/config.toml`. |
 | `backend?` | `"openai" \| "anthropic" \| "xai" \| "gemini" \| "exa"` | `openai` | Une valeur explicite est prioritaire ; l'absence de valeur sélectionne toujours `openai`. `anthropic` et `xai` ne s'exécutent que s'ils sont configurés explicitement ; `gemini` et `exa` restent réservés jusqu'à la livraison de leur executor. |
 | `model?` | `string` | dépendant du backend | `gpt-5.6-luna` pour OpenAI, `claude-sonnet-5` pour Anthropic ou `grok-4.6` pour xAI. L'héritage explicite `gpt-5.4-mini` migre au démarrage. |
 | `exaApiKey?` | `string` | aucun | Clé opérateur pour le backend `exa`. Écriture seule : les lectures de gestion ne renvoient jamais la valeur stockée. |
@@ -265,4 +277,48 @@ compte et la charge de travail prévus.
 
 ## Diagnostic réseau des quotas Codex
 
-Le champ `quotaRefresh` de la ligne du compte Codex principal décrit la récupération du quota, pas le quota restant ni les droits d’accès au modèle. Il peut être absent lorsque les données sont en cache ou qu’aucune récupération n’a eu lieu. La requête utilise l’environnement du service proxy en cours d’exécution, pas celui du terminal interactif. Sans `proxy`, l’environnement existant est conservé ; `"auto"` lit uniquement le proxy statique Windows au démarrage. PAC/WPAD, les paramètres SOCKS seuls et les changements à chaud ne sont pas pris en compte automatiquement. Un succès avec TUN ne valide pas à lui seul le chemin du proxy HTTP. Consultez [les commandes et les états en anglais](/reference/configuration/server/#codex-quota-network-diagnostics).
+Le champ `quotaRefresh` de la ligne du compte Codex principal décrit la récupération du quota, pas le quota restant ni les droits d’accès au modèle. Il peut être absent lorsque les données sont en cache ou qu’aucune récupération n’a eu lieu. La requête utilise l’environnement du service proxy en cours d’exécution, pas celui du terminal interactif. Sans `proxy`, l’environnement existant est conservé ; `"auto"` lit les paramètres HTTP/HTTPS statiques de Windows ou macOS au démarrage. Sur macOS, un proxy hérité empêche cette lecture. Sur macOS, un motif valide `*.<domain>` devient `.<domain>` : `foo.local` contourne le proxy pour `*.local`, `xlocal` non, et le nom racine `local` le contourne aussi. Les plages exactes `169.254/16`, `169.254.0.0/16` et `fe80::/10` sont ignorées avec un diagnostic : les adresses IP link-local passent par le proxy. Les autres plages CIDR, motifs glob et exceptions de noms simples refusent la découverte sans modifier l’environnement. Les adresses IP et `*` restent acceptés. PAC/WPAD, les paramètres SOCKS seuls et les changements à chaud ne sont pas pris en compte automatiquement. Un succès avec TUN ne valide pas à lui seul le chemin du proxy HTTP. Consultez [les commandes et les états en anglais](/reference/configuration/server/#codex-quota-network-diagnostics).
+
+### Forced Claude Code subagent model
+
+The Subagents page offers **Force all subagents onto one model**, off by default. Select an exposed roster-style id, such as `combo/tev-auto`, then enable the switch. The roster is offered first; unavailable saved roster entries cannot be force targets.
+
+`ocx agent subagents force combo/tev-auto` sets `claudeCode.subagentModelForce`; `ocx agent subagents force -` clears it. `ocx agent status` reports the setting. `GET /api/subagent-models` returns `force`, `forceAvailable`, and `forceStatus`; `PUT` accepts `{ "force": "combo/tev-auto" }` or `{ "force": null }` without changing the roster. Omitting `force` leaves it unchanged. Invalid or unexposed targets are rejected on write; stale targets are reported and skipped at launch.
+
+This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` only for an authoritative million-token window; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
+
+Claude Code **2.1.257 or newer** is required for FORCE. Plugin and built-in agents (including Explore/Plan) and per-call model arguments are overridden. Forks and subagent skills with `model: inherit` keep the main conversation model. The main loop and Haiku/small-fast sidecars are unaffected. Existing roster files remain available.
+
+The dashboard warns about old or unknown CLI versions, unavailable targets, and either variable already present in `settings.json` → `env` (which overrides launch env). Detection is read-only and server-local: it cannot inspect another launch shell, another machine, or project-local settings. An unknown result is not proof of force support.
+
+## Continuité de l’historique des pools
+
+Le plafond d’un pool s’applique au fournisseur canonique choisi par le routage, indépendamment du libellé de compte dans les journaux. Pour chaque fournisseur `P` actuellement configuré, OpenCodex associe automatiquement `h(pool, P)`, son alias de pool salé propre à cette installation, à `P` lors de la lecture des soldes. Cela inclut les soldes historiques conservés sous ce même alias. Les plafonds indépendants ne nécessitent ni association manuelle du fournisseur à lui-même ni calcul avec le sel.
+
+Les autres libellés historiques, y compris ceux contenant un numéro de compte, restent sans propriétaire confirmé. Chaque solde d’origine est compté une seule fois dans son groupe associé ; tout solde positif encore non associé est ajouté, par prudence, une fois à chaque pool candidat. Les montants réglés, réservés et non résolus comptent tous. Un historique inconnu peut donc limiter un pool inutilisé. Les noms actuels et l’ordre des comptes ne prouvent pas à quel fournisseur cet historique appartient. Les plafonds de racine et d’identité restent indépendants.
+
+Pour un historique dont vous avez vérifié le propriétaire, ajoutez une entrée dans `spendPoolAliases`, au premier niveau de `config.json`, en dehors de `spend`. La clé est l’alias salé exact du pool dans le journal de cette installation, composé de 32 caractères hexadécimaux minuscules ; la valeur est l’ID exact d’un fournisseur vérifié et actuellement configuré, sans espaces au début ni à la fin. Gardez le journal, le sel et les éléments justificatifs privés. L’alias propre d’un fournisseur configuré ne peut pas être attribué à un autre fournisseur. La validation est répétée lorsque les fournisseurs changent et lit le sel existant sans en créer.
+
+Les associations automatiques et explicites s’appliquent uniquement à la lecture : elles ne déplacent pas les soldes et n’inscrivent aucun lien d’identité dans le journal. Supprimer une association explicite rend l’historique inconnu, sauf si son alias est celui d’un fournisseur actuellement configuré. Une association invalide est rejetée à l’écriture ; une modification manuelle invalide conserve les plafonds mais bloque l’admission du pool.
+
+Un historique inconnu et inactif expire seulement quand sa dernière activité est strictement antérieure à la limite de `spend.retentionDays`. Un manque de capacité ne raccourcit pas ce délai pour un solde positif. Les réservations actives et leurs cibles restent protégées, même à zéro jeton. La suppression doit être enregistrée durablement avant de réduire le total utilisé pour l’admission.
+
+### Réservations et limite d’envoi
+
+Lorsqu’un plafond de racine, d’identité ou de pool s’applique, le premier envoi pour chaque cible ou clé nécessite une réservation dans la capacité normale de suivi. Sans réservation, aucun envoi n’atteint le fournisseur. Les nouvelles tentatives stables réutilisent les mêmes périmètres ; une autre cible ou clé nécessite une nouvelle réservation. `L` est la limite des envois physiques pour l’ensemble de la requête, figée au démarrage de la requête : quatre par défaut, ou jusqu’à dix-huit avec le profil de requête OAuth existant.
+
+L’activation des limites, les plafonds de jetons applicables à la racine, à l’identité et au pool, ainsi que `L`, sont déterminés au démarrage de chaque requête. Les changements de configuration s’appliquent uniquement aux requêtes démarrées après le changement. Une requête déjà en cours garde sa politique initiale pour toutes les nouvelles tentatives et continuations : activer ou abaisser un plafond ne la restreint pas davantage ; le relever ou le supprimer ne l’assouplit pas. Une requête commencée en observation seule reste dans ce mode jusqu’à sa fin.
+
+Le règlement final attend les rapports des envois démarrés. Un ID d’envoi n’est oublié qu’après enregistrement durable de sa comptabilité ; son solde demeure. La limite borne les envois, pas la facture : toute utilisation réelle supérieure à l’estimation reste comptabilisée. Sans plafond applicable, le comportement reste en observation seule, y compris l’omission des écritures lorsque la capacité de suivi est pleine. Aucun point de contrôle d’identité n’est ajouté.
+
+Claude CLI, CodeBuddy et Qoder comptent chaque invocation CLI comme un envoi et exigent une réservation normale avant le lancement. Les nouvelles tentatives et les tours d’outils internes au CLI ne consomment pas séparément la limite d’envois de la requête. Leur coût est réglé selon l’utilisation réelle rapportée, y compris la part dépassant l’estimation initiale.
+
+### Retour à 2.80.0 : contrat C
+
+Les nouveaux enregistrements utilisent le format v1 ordinaire et le domaine d’alias `pool`. La version 2.80.0 non modifiée les lit, compacte le journal et applique la rétention selon ses propres règles par libellé. Conservez le journal actuel et son sel : restaurer une ancienne copie perd les dépenses enregistrées depuis. Aucun correctif rétroporté, blocage du lanceur ou commande de rapprochement n’est nécessaire.
+
+Le retour à 2.80.0 ne garantit ni l’agrégation canonique ni le même solde disponible que si un trafic identique avait toujours été traité par 2.80.0. Lors d’une nouvelle mise à niveau, les associations automatiques des fournisseurs configurés et les correspondances explicites actuelles s’appliquent aux soldes d’origine encore conservés. Aucun nouveau point de contrôle ne dépend de métadonnées de liaison d’identité à préserver par l’ancien lecteur.
+
+Les journaux de versions expérimentales non publiées contenant `pool-current` ou `poolContinuity` sont exclus du contrat C, même après compactage. Leurs soldes d’origine restent un historique inconnu jusqu’à l’expiration normale, sans conversion ni suppression immédiate.
+
+Un enregistrement complet mais invalide, y compris un `null` final, bloque l’admission sous plafond. Le compactage peut conserver les données valides dans un point de contrôle propre, mais le refus reste actif jusqu’au redémarrage avec ce journal propre. Une dernière ligne JSON incomplète suit les règles de récupération existantes. Voir les limites et codes d’erreur dans la [référence anglaise](/reference/configuration/server/#historical-pool-continuity).

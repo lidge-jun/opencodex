@@ -35,7 +35,7 @@ opencodex 按以下顺序解析请求的模型：
 
 ### 被阻止模型重定向
 
-`blockedModelRedirects` 是可选的顶层 `Record<string, string>`，用于精确替换已解析的模型 ID，默认未设置。它在上述解析顺序之后运行：匹配后会保留已选定的提供方和账户路由，仅替换上游模型 ID，并记录路由原因 `blocked-model-redirect`。省略该键则路由保持不变。
+`blockedModelRedirects` 是默认未设置的可选精确匹配替换表。裸模型键在提供商、账户和别名解析后生效。目标未明确指定另一个已配置提供商时，即使值包含 `/`，也只替换一次上游模型 ID，并保留已选提供商和账户。只有明确指定另一个已配置提供商的目标才会跨提供商重路由；此时 `<源提供商>/<解析后模型>` 键优先于裸键。链式重定向最多五跳并检测循环。固定账户选择器不能跨提供商。目标使用自己的凭据和配额，路由原因记为 `blocked-model-redirect`。
 
 ```json
 {
@@ -71,7 +71,7 @@ Codex Auth 页面将此 picker 行为作为选择加入项。关闭它会隐藏�
 | 键 | 类型 | 默认值 | 含义 |
 | --- | --- | --- | --- |
 | `targets` | `{ provider: string; model: string; weight?: number }[]` | required | 有序的具体路由。`weight` 范围为 1–10000，默认值为 `1`。 |
-| `strategy?` | `"failover" \| "round-robin" \| "random" \| "least-used" \| "reset-window"` | `"failover"` | 选择策略。目标顺序表示 `failover` 优先级；`weight` 决定 `round-robin` 和 `random` 的抽取权重；`least-used` 根据记录的成功次数选择；`reset-window` 跟随最近的额度重置。 |
+| `strategy?` | `"failover" \| "round-robin" \| "random" \| "least-used" \| "reset-window" \| "jev"` | `"failover"` | 选择策略。目标顺序表示 `failover` 优先级；`weight` 决定 `round-robin` 和 `random` 的抽取权重；`least-used` 根据记录的成功次数选择；`reset-window` 跟随最近的额度重置；`jev` 对首个符合条件的目标和 effort 进行一次有界决策，随后使用普通的顺序 fallback。 |
 | `stickyLimit?` | `number` | `1` | 在单个轮询批次中保留的成功请求数。范围 1–100。 |
 | `defaultEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| null` | unset | 当 combo 配置了非 null 默认值且目标支持列表已知且非空时，`defaultEffort` 会填充省略的 `reasoning.effort`。目标支持配置值时保留该值，否则选择不高于配置值的最高支持档位；若不存在更低档位，则使用最低支持档位。未知或空列表不会注入默认值。 |
 | `reasoningEffortMode?` | `"strict" \| "adaptive"` | `"strict"` | `"strict"` 对所有已知目标档位列表取交集，包括空列表；`"adaptive"` 排除空列表。未知列表在两种模式下都不限制目录交集。发送时，显式空列表在两种模式下都会移除 effort/thinking 控制；未知列表仅在 adaptive 下移除。`reasoning.summary` 保持不变。已知非空目标的 effort 解析、目标选择和顺序不变。 |

@@ -85,13 +85,18 @@ import {
   resolveLiveSidebandUpgrade,
 } from "../live";
 import type { ServeOptionsContext } from "./serve-options";
+import type { RequestMetricsRecorder } from "../request-metrics";
+import { resolveInboundBodyLimitBytes } from "../request-decompress";
 
 /**
  * The WebSocket half of the Bun.serve options, split out of serve-options.ts to keep that file
  * under the 2,000-line ratchet threshold. The body is the original handler verbatim; it reads the
  * same startServer context the HTTP half does, so it takes the same context object.
  */
-export function createWebsocketHandler(ctx: ServeOptionsContext) {
+export function createWebsocketHandler(
+  ctx: ServeOptionsContext,
+  requestMetricsRecorder?: RequestMetricsRecorder,
+) {
   const { config, deps } = ctx;
   return {
       maxPayloadLength: MAX_WS_FRAME_BYTES,
@@ -186,11 +191,30 @@ export function createWebsocketHandler(ctx: ServeOptionsContext) {
           ws.close(1009, "message too large");
           return;
         }
+        // An established control connection only ever carries control frames, so the
+        // inbound body limit applies to raw bytes before the parse materializes them.
+        if (ws.data.nativeControl && rawBytes > resolveInboundBodyLimitBytes(config.maxInboundBodyBytes)) {
+          sendJsonFrame(ws, buildWsErrorFrame(413, {
+            type: "invalid_request_error",
+            code: "inbound_body_too_large",
+            message: "Native response control frame exceeds the configured inbound body limit.",
+          }));
+          return;
+        }
         let frame: Record<string, unknown>;
         try {
           frame = JSON.parse(typeof raw === "string" ? raw : raw.toString()) as Record<string, unknown>;
         } catch {
           return; // text-only contract; ignore unparseable frames
+        }
+        if ((frame.type === "response.inject" || frame.type === "response.steer")
+          && rawBytes > resolveInboundBodyLimitBytes(config.maxInboundBodyBytes)) {
+          sendJsonFrame(ws, buildWsErrorFrame(413, {
+            type: "invalid_request_error",
+            code: "inbound_body_too_large",
+            message: "Native response control frame exceeds the configured inbound body limit.",
+          }));
+          return;
         }
         if (frame.type === "response.inject" || frame.type === "response.steer" || (frame.type === "response.create" && ws.data.nativeControl)) {
           try {
@@ -223,8 +247,8 @@ export function createWebsocketHandler(ctx: ServeOptionsContext) {
           const idleMs = typeof config.stallTimeoutSec === "number" && Number.isFinite(config.stallTimeoutSec)
             ? Math.max(1, config.stallTimeoutSec) * 1000 : 300_000;
           const mode = nativeResponseControlMode(frame, config);
-          nativeControl = mode === "injection" ? new NativeInjectionChannel(frame, idleMs)
-            : mode === "steering" ? new NativeSteeringChannel(frame, idleMs) : undefined;
+          nativeControl = mode === "injection" ? new NativeInjectionChannel(frame, idleMs, config.maxUpstreamBodyBytes)
+            : mode === "steering" ? new NativeSteeringChannel(frame, idleMs, config.maxUpstreamBodyBytes) : undefined;
         } catch {
           sendJsonFrame(ws, buildWsErrorFrame(400, { type: "invalid_request_error", message: "Invalid native steering request settings" }));
           return;
@@ -283,6 +307,7 @@ export function createWebsocketHandler(ctx: ServeOptionsContext) {
           const logCtx: RequestLogContext = {
             model: "unknown",
             provider: "unknown",
+            ...(requestMetricsRecorder ? { requestMetricsRecorder } : {}),
             ...(wsAdmission ? admissionFields(wsAdmission) : {}),
             inboundProtocol: "responses",
           };

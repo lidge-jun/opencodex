@@ -36,6 +36,8 @@ describe("cursor umbrella picker rows (devlog 260828_cursor_umbrella_catalog)", 
     expect(ids).not.toContain("claude-opus-5-fast");
     expect(ids).not.toContain("grok-4.5-fast");
     expect(ids).not.toContain("grok-4.6-fast");
+    expect(ids).not.toContain("grok-4.7-fast");
+    expect(ids.filter(id => id === "grok-4.7")).toHaveLength(1);
     expect(ids).not.toContain("claude-fable-5.1");
     expect(ids).not.toContain("claude-5.1-fable");
     expect(ids.filter(id => id === "claude-fable-5-1")).toHaveLength(1);
@@ -109,6 +111,12 @@ describe("cursor umbrella picker rows (devlog 260828_cursor_umbrella_catalog)", 
         { id: "effort", value: "high" },
         { id: "fast", value: "true" },
       ]);
+    });
+
+    test("grok-4.7 fast alias resolves to an effort-suffixed flat wire id", () => {
+      const request = createCursorRequest(parsedFor("cursor/grok-4.7-fast", "xhigh"));
+      expect(request.modelId).toBe("grok-4.7-xhigh-fast");
+      expect(request.requestedModelParameters).toBeUndefined();
     });
 
     test("kimi-k3-1m alias still arms Max Mode", () => {

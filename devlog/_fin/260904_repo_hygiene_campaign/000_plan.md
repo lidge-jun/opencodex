@@ -17,15 +17,17 @@ every contributor whose work is carried.
 
 ## Classification of local branches
 
-Every branch was scored on four independent axes rather than by name:
+Every branch was scored on four independent axes rather than by name. Axis 3 is
+shown in its corrected form; the campaign itself ran it without `--no-renames`
+(see the 2026-09-21 correction in 010_method.md):
 
 1. `git merge-base --is-ancestor <br> origin/dev` — plain ancestry.
 2. `git cherry origin/dev <br>` — patch-equivalence, which catches rebases.
 3. Content landing — the files the branch touches
-   (`git diff --name-only origin/dev...<br>`) are compared two-dot against
-   `origin/dev` restricted to exactly those paths. Zero remaining difference
-   means the branch's content is already on `dev` even though a squash merge
-   destroyed its commit identity.
+   (`git diff --no-renames --name-only origin/dev...<br>`) are compared two-dot
+   against `origin/dev` restricted to exactly those paths. Zero remaining
+   difference means the branch's content is already on `dev` even though a
+   squash merge destroyed its commit identity.
 4. Exact reference matching against live GitHub state: open-PR head refs,
    worktree-backing refs, and the PR number a scratch branch was cut for.
 

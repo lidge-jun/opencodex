@@ -1,0 +1,98 @@
+---
+title: Liaison distante
+description: Connecter un ordinateur OpenCodex Home à un ordinateur Child avec SSH.
+---
+
+Une liaison entre machines connecte un ordinateur OpenCodex **Home** à un ordinateur **Child** avec SSH. Home sert le trafic de Child par le tunnel SSH, et les deux ordinateurs gardent leur service OpenCodex local sur le port `10100`. Le tableau de bord transmet la clé de liaison propre à Child par SSH, sans vous demander de saisir un jeton.
+
+## Conditions requises
+
+- Home peut se connecter à Child avec une clé OpenSSH.
+- Pour une liaison initiée par Child, Child peut se connecter à Home avec une clé OpenSSH (la connexion par mot de passe n’est pas prise en charge).
+- OpenCodex 2.66.0 ou ultérieur est installé sur Child (et sur Home pour une liaison initiée par Child).
+- Les deux ordinateurs utilisent macOS ou Linux.
+- Le tableau de bord qui ajoute un Child depuis Home est ouvert sur Home ou via une session Hub appairée. Transformer l’ordinateur actuel en Child exige une session de tableau de bord appairée par l’opérateur ; une session locale sans identifiant ne peut pas valider ce changement de routage.
+
+SSH par mot de passe et Windows restent hors du flux actuel. Une liaison peut être lancée des deux côtés : depuis Home, comme décrit ci-dessous, ou depuis Child, comme décrit dans la section « Connecter cet ordinateur comme Child ».
+
+## Ajouter un Child depuis `#remote`
+
+1. Ouvrez le tableau de bord sur `#remote` et activez Remote Link.
+2. Choisissez **Home**, puis **Continue**. La liste des hôtes SSH s’ouvre.
+3. Choisissez un hôte parmi les candidats SSH, ou saisissez un alias de configuration SSH.
+4. Lancez le test de connexion et comparez l’empreinte proposée avec celle de l’ordinateur visé. Cette comparaison aide à détecter un mauvais hôte ou une clé d’hôte modifiée avant que SSH ne lui fasse confiance.
+5. Confirmez l’empreinte, puis connectez Child.
+
+Le tableau de bord ne demande pas de saisir un jeton. Il sonde d’abord l’hôte et ne peut appliquer la liaison qu’après votre confirmation explicite de l’empreinte.
+
+La fenêtre d’ajout Child rappelle que Child utilise les fournisseurs de ce Home via SSH et affiche les prérequis ci-dessus. Les alias viennent de `~/.ssh/config` sur le Home exécutant OpenCodex, pas forcément de l’ordinateur du navigateur. Si la recherche réussit sans hôte, ajoutez une entrée `Host` comme ci-dessous puis relancez la recherche. La saisie manuelle d’un alias existant reste possible ; sélectionner ou saisir un alias active le test de connexion. La fenêtre propose un lien vers ce guide.
+
+```sshconfig
+Host devbox
+  HostName devbox.example.com
+  User you
+  IdentityFile ~/.ssh/id_ed25519
+```
+
+Si la recherche échoue, la fenêtre affiche l’échec du chargement, la raison disponible et une action pour réessayer, sans annoncer une liste vide. Un échec du test conserve sa raison et l’indication SSH nettoyée dans la fenêtre active, sans doublon derrière elle. Consultez la raison et le diagnostic SSH ci-dessous, puis réessayez. Une nouvelle recherche conserve l’alias saisi mais exige une nouvelle vérification de l’empreinte avant connexion.
+
+## Connecter cet ordinateur comme Child
+
+Sur l’ordinateur qui doit utiliser les fournisseurs de Home :
+
+1. Ouvrez le tableau de bord sur `#remote` et activez Remote Link.
+2. Choisissez **Child**. La liste des hôtes SSH s’ouvre.
+3. Choisissez l’hôte SSH de Home, lancez le test de connexion, puis comparez et confirmez son empreinte d’hôte.
+4. Lisez l’avertissement et choisissez **Connect as Child**.
+
+La connexion redémarre OpenCodex sur cet ordinateur. Les tours Codex déjà en cours se terminent d’abord, et les nouvelles requêtes peuvent échouer pendant une minute au plus pendant le redémarrage. Le tableau de bord se recharge ensuite de lui-même et affiche la liaison Child. Codex continue d’utiliser `http://127.0.0.1:<port>/v1` sur cet ordinateur, sans jeton ni variable d’environnement à définir : l’OpenCodex local relaie chaque requête vers Home, qui y répond avec ses propres fournisseurs et comptes.
+
+Si **Child** demande de jumeler d’abord cet ordinateur, ouvrez son tableau de bord HTTP à l’adresse IP de bouclage configurée, par exemple `http://127.0.0.1:<configured-port>`. Le formulaire de jumelage local apparaît uniquement lorsque le jumelage manque et que le tableau de bord et l’API utilisent la même origine de bouclage. Copiez la commande `ocx gui pair --origin "http://127.0.0.1:<configured-port>"` du formulaire, exécutez-la dans un terminal sur cet ordinateur, puis collez le code à usage unique dans le formulaire. Utilisez exactement l’origine affichée ; une clé API de fournisseur ou un jeton d’administration n’est pas un code de jumelage. L’absence de jumelage et un port différent du port configuré sont deux causes distinctes.
+
+Le rôle **Child** exige également qu’OpenCodex fonctionne en mode autonome sur son port configuré, car Child redémarre exactement sur ce port. Si le tableau de bord indique qu’OpenCodex ne tourne pas sur son port configuré, redémarrez-le d’abord sur ce port.
+
+## État de la liaison
+
+- **Connected** signifie que le tunnel SSH est prêt et que Child peut utiliser la liaison Home.
+- **Reconnecting** signifie que le tunnel est réessayé. Les requêtes peuvent temporairement renvoyer `503` avec `Retry-After`. Sur un Child connecté depuis son propre tableau de bord, une requête attend d’abord jusqu’à 15 secondes le retour du tunnel.
+- **Failed** signifie que la liaison nécessite une intervention. Vérifiez l’authentification SSH, la clé d’hôte confirmée, la redirection ou le délai indiqué. Le côté qui ouvre le tunnel SSH réessaie de lui-même après une mise en veille, une panne ou un redémarrage (Home pour un Child qu’il a ajouté, le Child pour une liaison qu’il a rejointe depuis son propre tableau de bord) : environ une fois par minute après un délai dépassé ou une erreur de redirection, et toutes les cinq minutes après une erreur d’authentification. Une clé d’hôte modifiée n’est jamais réessayée. Pour réessayer tout de suite, choisissez **Retry** dans le tableau de bord du Home ou exécutez `ocx link reconnect --link-id <id>` sur le Home. Le tunnel de cette liaison redémarre sans redémarrer OpenCodex.
+
+Une liaison en échec ne bascule pas silencieusement vers un fournisseur local.
+
+## Supprimer un Child
+
+Sélectionnez **Disconnect** pour Child et confirmez son alias. Home arrête le tunnel, révoque la clé de liaison de Child et supprime l’enregistrement enregistré.
+
+Si Home ne peut pas joindre Child pour exécuter la déconnexion, choisissez **Remove here only**. Cela supprime le tunnel, la clé et l’enregistrement locaux. Connectez-vous ensuite à Child et exécutez :
+
+```bash
+ocx disconnect
+```
+
+Pour déconnecter une liaison initiée par Child, exécutez `ocx disconnect` sur Child. La commande déconnecte le tunnel client et révoque la liaison sur Home via SSH. Si cette révocation échoue, elle affiche : `Home revoke failed; run ocx link revoke --link-id <linkId> on the home.`
+
+## Sécurité
+
+Child utilise les fournisseurs et les identifiants de fournisseur de l’ordinateur Home via la liaison. Home crée une clé distincte pour chaque Child ; la suppression de la liaison révoque cette clé. Comparez l’empreinte de l’hôte avant de confirmer afin de ne pas accepter par erreur une mauvaise machine ou une clé modifiée. Les sessions du tableau de bord émises depuis une identité Tailscale ne peuvent pas gérer les liaisons. Sur Child, la clé reste dans OpenCodex : les identifiants que Codex ou Claude Code envoient sur Child ne sont pas transmis à Home, et tout programme de Child qui atteint `127.0.0.1:<port>` utilise Home sans clé, avec la même confiance locale qu’une installation autonome. Les pages web d’autres sites sont refusées.
+
+## Référence CLI
+
+```text
+ocx link probe <alias> [--json]
+ocx link add <alias> [--expect-fingerprint SHA256:…] [--json]
+ocx link port [--json]
+ocx link issue --alias <alias> --tunnel-port <port> [--json]
+ocx link status [--json]
+ocx link revoke --link-id <id> [--json]
+ocx link reconnect --link-id <id> [--json]
+```
+
+Sans terminal interactif (TTY), `--expect-fingerprint` est obligatoire. Dans un terminal interactif, vous pouvez l’omettre si vous confirmez explicitement l’empreinte proposée.
+
+## Guides associés
+
+- [Déploiement Remote Hub](/fr/guides/remote-hub/)
+- [Remote Workspace](/fr/guides/remote-workspace/)
+
+
+`ocx link probe <alias> --json` · `ocx link add <alias> --expect-fingerprint SHA256:… --json` — [CLI, restart, relay verification and recovery](/guides/remote-link/#add-a-child-from-the-terminal).

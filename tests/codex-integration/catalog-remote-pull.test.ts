@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeAll, describe, expect, mock, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Database } from "bun:sqlite";
 
 import {
@@ -13,7 +14,11 @@ import {
 } from "../../src/codex/catalog/remote";
 import { resolveCodexCatalogSerializationDatabasePath, resolveEffectiveUserIdentity } from "../../src/codex/user-identity";
 import { withCatalogWriteSerialization } from "../../src/codex/catalog-write-serialization";
+import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmModuleGraph } from "../helpers/cold-spawn-warmup";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+
+/** Every K acquisition states its intent (#6529); these tests exercise the lock, not the intent. */
+const TEST_CATALOG_WRITE = { intent: "refresh", writer: "test" } as const;
 
 const homes: string[] = [];
 afterEach(() => { while (homes.length) removeTreeWithRetry(homes.pop()!); });
@@ -48,7 +53,24 @@ async function withProxyEnv(env: Record<string, string>, action: () => Promise<v
   }
 }
 
+// Absolute filesystem path, not a file:// href: the warm-up's import scan keeps specifiers
+// that are absolute paths, and the spawned --eval children resolve either form identically.
+const remoteModule = fileURLToPath(new URL("../../src/codex/catalog/remote.ts", import.meta.url));
+
+// The module graph this file's real-Bun transport children load.
+const REMOTE_TRANSPORT_EVAL_SCRIPT = `
+  const { fetchRemoteCatalog } = await import(${JSON.stringify(remoteModule)});
+`;
+
 describe("remote catalog acquisition", () => {
+  // The --eval children load the catalog-remote graph in a fresh Bun process bounded by a
+  // 10s kill deadline; the cold module load can exceed it on a loaded Windows runner (run
+  // 37735238354, windows 3/9). Pay it once in setup, into the same transpiler cache the
+  // children inherit via BUN_RUNTIME_TRANSPILER_CACHE_PATH below.
+  beforeAll(async () => {
+    await warmModuleGraph({ graph: "catalog-remote-pull/transport-eval", source: REMOTE_TRANSPORT_EVAL_SCRIPT });
+  }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
+
   test("accepts HTTPS and loopback HTTP but rejects credentials and insecure remote HTTP", () => {
     expect(validateRemoteCatalogUrl("https://hub.example.com/v1/catalog").href).toBe("https://hub.example.com/v1/catalog");
     expect(validateRemoteCatalogUrl("http://127.0.0.1:10100/v1/catalog").protocol).toBe("http:");
@@ -164,7 +186,7 @@ describe("remote catalog acquisition", () => {
       // Inherit process-launch necessities and test provenance only, never host credentials.
       const env: Record<string, string> = {};
       for (const key of ["PATH", "Path", "SystemRoot", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP",
-        "OCX_TEST_HOME_GUARD", "OCX_TEST_RUN_ID"]) {
+        "OCX_TEST_HOME_GUARD", "OCX_TEST_RUN_ID", "BUN_RUNTIME_TRANSPILER_CACHE_PATH"]) {
         const value = process.env[key];
         if (value !== undefined) env[key] = value;
       }
@@ -176,7 +198,7 @@ describe("remote catalog acquisition", () => {
       writeFileSync(join(env.OPENCODEX_HOME, ".env"), "no_proxy=*\n");
       env.HTTP_PROXY = `http://127.0.0.1:${proxy.port}`;
       env.NO_PROXY = bypass;
-      const source = new URL("../../src/codex/catalog/remote.ts", import.meta.url).href;
+      const source = remoteModule;
       const script = `
         const { fetchRemoteCatalog } = await import(${JSON.stringify(source)});
         try {
@@ -302,6 +324,32 @@ describe("remote catalog validation", () => {
 });
 
 describe("remote catalog coordinated installation", () => {
+  for (const ownership of ["foreign", "unknown"] as const) {
+    test(`an identical remote pull still refuses ${ownership} ownership`, async () => {
+      const codexHome = home();
+      const opencodexHome = home();
+      const foreignHome = home();
+      const previous = process.env.OPENCODEX_HOME;
+      process.env.OPENCODEX_HOME = opencodexHome;
+      try {
+        const first = await pullRemoteCatalog("https://hub.example/v1/catalog", {
+          codexHome, fetchImpl: async () => response(catalog),
+        });
+        writeFileSync(join(codexHome, "opencodex-journal.json"), ownership === "unknown"
+          ? "invalid evidence" : JSON.stringify({ version: 1, originalConfig: "", originalProfile: null,
+            pid: 1, timestamp: "2026-10-04T00:00:00Z", opencodexHome: foreignHome }));
+        const cachePath = join(codexHome, "models_cache.json");
+        const before = [readFileSync(first.catalogPath), readFileSync(cachePath)];
+        await expect(pullRemoteCatalog("https://hub.example/v1/catalog", {
+          codexHome, fetchImpl: async () => response(catalog),
+        })).rejects.toMatchObject({ code: ownership === "foreign" ? "foreign_owner" : "owner_unknown" });
+        expect([readFileSync(first.catalogPath), readFileSync(cachePath)]).toEqual(before);
+      } finally {
+        if (previous === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previous;
+      }
+    });
+  }
+
   test("updates catalog and cache under the shared writer even when desired integration is disabled", async () => {
     const codexHome = home();
     const opencodexHome = home();
@@ -335,7 +383,7 @@ describe("remote catalog coordinated installation", () => {
   test("lock contention is typed and preserves last-known-good files", async () => {
     const codexHome = home();
     // Materialize K, then hold BEGIN IMMEDIATE from a separate connection while pull attempts it.
-    expect(withCatalogWriteSerialization(codexHome, () => null).kind).toBe("completed");
+    expect(withCatalogWriteSerialization(codexHome, () => null, TEST_CATALOG_WRITE).kind).toBe("completed");
     const lockPath = resolveCodexCatalogSerializationDatabasePath(resolveEffectiveUserIdentity(), codexHome);
     const holder = new Database(lockPath);
     holder.exec("PRAGMA busy_timeout=0; BEGIN IMMEDIATE");
@@ -348,6 +396,24 @@ describe("remote catalog coordinated installation", () => {
     } finally {
       holder.exec("ROLLBACK"); holder.close();
     }
+  });
+
+  test("a changed catalog with unchanged derived cache is a successful pull", async () => {
+    const codexHome = home();
+    const first = await pullRemoteCatalog("https://hub.example/v1/catalog", {
+      codexHome, fetchImpl: async () => response(catalog),
+    });
+    const cachePath = join(codexHome, "models_cache.json");
+    const cacheBefore = readFileSync(cachePath);
+    const mtimeBefore = statSync(cachePath).mtimeMs;
+    const next = { ...catalog, source_revision: "second" };
+    const second = await pullRemoteCatalog("https://hub.example/v1/catalog", {
+      codexHome, fetchImpl: async () => response(next),
+    });
+    expect(second).toMatchObject({ status: "updated", catalogWritten: true, cacheSynced: false });
+    expect(JSON.parse(readFileSync(first.catalogPath, "utf8"))).toEqual(next);
+    expect(readFileSync(cachePath)).toEqual(cacheBefore);
+    expect(statSync(cachePath).mtimeMs).toBe(mtimeBefore);
   });
 
   test("fetch and validation failures preserve last-known-good files", async () => {

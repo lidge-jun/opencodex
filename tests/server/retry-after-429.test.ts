@@ -101,6 +101,14 @@ describe("resolveClientRetryAfter (#507)", () => {
     })).toBe("35");
   });
 
+  test("keeps a generated approximate Cognition delay in client cooldown metadata", () => {
+    expect(resolveClientRetryAfter({
+      status: 429,
+      message: "Cognition chat failed (resource_exhausted); retry after ~180s",
+      includeDefault: false,
+    })).toBe("180");
+  });
+
   test("reads a stated reset in minutes and hours, not just seconds", () => {
     expect(resolveClientRetryAfter({
       status: 429,

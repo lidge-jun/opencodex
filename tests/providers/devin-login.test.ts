@@ -259,14 +259,14 @@ describe("devin tenant selection is provider-scoped", () => {
     // tenant host sitting on "devin-cli"; otherwise the key is sent to the US
     // default and Cognition answers permission_denied.
     await seedSlot("devin-cli", EU_HOST);
-    expect(resolveDevinApiServer(undefined, "devin")).toBe(EU_HOST);
+    expect(resolveDevinApiServer(undefined, "devin", KEY)).toBe(EU_HOST);
   });
 
   test("the signed-in alias tenant wins over a configured baseUrl", async () => {
     // RegisterUser recorded the tenant on the credential. A leftover US
     // baseUrl on the rewritten config row must not override that account.
     await seedSlot("devin-cli", EU_HOST);
-    expect(resolveDevinApiServer(US_HOST, "devin")).toBe(EU_HOST);
+    expect(resolveDevinApiServer(US_HOST, "devin", KEY)).toBe(EU_HOST);
   });
 
   test("the literal slot wins when both alias ids hold a tenant", async () => {
@@ -275,8 +275,8 @@ describe("devin tenant selection is provider-scoped", () => {
     // to the other account's host.
     await seedSlot("devin", EU_HOST);
     await seedSlot("devin-cli", FEDSTART_HOST);
-    expect(resolveDevinApiServer(undefined, "devin")).toBe(EU_HOST);
-    expect(resolveDevinApiServer(undefined, "devin-cli")).toBe(FEDSTART_HOST);
+    expect(resolveDevinApiServer(undefined, "devin", KEY)).toBe(EU_HOST);
+    expect(resolveDevinApiServer(undefined, "devin-cli", KEY)).toBe(FEDSTART_HOST);
   });
 
   test("a credential that exists but has no usable tenant does not borrow the alias tenant", async () => {
@@ -287,8 +287,8 @@ describe("devin tenant selection is provider-scoped", () => {
     // account's FedStart tenant.
     await seedSlot("devin", "https://api.githubcopilot.com");
     await seedSlot("devin-cli", FEDSTART_HOST);
-    expect(resolveDevinApiServer(undefined, "devin")).toBe(US_HOST);
-    expect(resolveDevinApiServer(EU_HOST, "devin")).toBe(EU_HOST);
+    expect(resolveDevinApiServer(undefined, "devin", KEY)).toBe(US_HOST);
+    expect(resolveDevinApiServer(EU_HOST, "devin", KEY)).toBe(EU_HOST);
   });
 
   test("an alias slot with a non-Devin apiBaseUrl is not trusted", async () => {
@@ -296,9 +296,69 @@ describe("devin tenant selection is provider-scoped", () => {
     // the host that survives persist and still fails validateDevinApiBaseUrl.
     // Without that check on the alias candidate, the merge window would send
     // a Devin key to GitHub.
+    // The request key must match the seeded credential, or the lookup stops
+    // before the host reaches the validator and this case proves nothing.
     await seedSlot("devin-cli", "https://api.githubcopilot.com");
-    expect(resolveDevinApiServer(EU_HOST, "devin")).toBe(EU_HOST);
+    expect(resolveDevinApiServer(EU_HOST, "devin", KEY)).toBe(EU_HOST);
+    expect(resolveDevinApiServer(undefined, "devin", KEY)).toBe(US_HOST);
+  });
+
+  test("a literal tenant is not lent to a key that credential does not own", async () => {
+    // A provider-configured key or a forwarded bearer is resolved outside the
+    // credential store. Taking the active slot's host for it would send that
+    // key to another account's EU tenant.
+    const STAGING_HOST = "https://server-staging.codeium.com";
+    await seedSlot("devin", EU_HOST);
+    expect(resolveDevinApiServer(STAGING_HOST, "devin", "configured-provider-key")).toBe(STAGING_HOST);
+    expect(resolveDevinApiServer(undefined, "devin", "configured-provider-key")).toBe(US_HOST);
+    expect(resolveDevinApiServer(undefined, "devin", KEY)).toBe(EU_HOST);
+  });
+
+  test("an alias credential that owns the key is used when the literal slot owns another", async () => {
+    // Both slots are occupied because the rekey refused an occupied
+    // destination. Ownership, not slot order, decides which tenant the
+    // transmitted key belongs to.
+    const ALIAS_KEY = "devin-session-token$alias-account.payload.sig";
+    await seedSlot("devin", EU_HOST);
+    await saveCredential("devin-cli", {
+      access: ALIAS_KEY, refresh: ALIAS_KEY, expires: Number.MAX_SAFE_INTEGER,
+      source: "local-cli", apiBaseUrl: FEDSTART_HOST,
+    });
+    expect(resolveDevinApiServer(undefined, "devin", ALIAS_KEY)).toBe(FEDSTART_HOST);
+    expect(resolveDevinApiServer(undefined, "devin", KEY)).toBe(EU_HOST);
+  });
+
+  test("a key neither occupied slot owns gets neither stored tenant", async () => {
+    const STAGING_HOST = "https://server-staging.codeium.com";
+    await seedSlot("devin", EU_HOST);
+    await seedSlot("devin-cli", FEDSTART_HOST);
+    expect(resolveDevinApiServer(STAGING_HOST, "devin", "unowned-key")).toBe(STAGING_HOST);
+    expect(resolveDevinApiServer(STAGING_HOST, "devin-cli", "unowned-key")).toBe(STAGING_HOST);
+  });
+
+  test("without a transmitted key no stored tenant is trusted", async () => {
+    await seedSlot("devin", EU_HOST);
+    await seedSlot("devin-cli", FEDSTART_HOST);
     expect(resolveDevinApiServer(undefined, "devin")).toBe(US_HOST);
+    expect(resolveDevinApiServer(undefined, "devin", "")).toBe(US_HOST);
+    expect(resolveDevinApiServer("https://server-staging.codeium.com", "devin")).toBe("https://server-staging.codeium.com");
+  });
+
+  test("a non-active account's key keeps that account's own tenant", async () => {
+    // Several Devin accounts can share one provider id and the request path can
+    // admit any of them, so the owner is found by key, not by active selection.
+    const EU_KEY = "devin-session-token$eu-account.payload.sig";
+    const FEDSTART_KEY = "devin-session-token$fedstart-account.payload.sig";
+    await saveCredential("devin", {
+      access: EU_KEY, refresh: EU_KEY, expires: Number.MAX_SAFE_INTEGER,
+      source: "oauth", accountId: "eu-account", apiBaseUrl: EU_HOST,
+    });
+    await saveCredential("devin", {
+      access: FEDSTART_KEY, refresh: FEDSTART_KEY, expires: Number.MAX_SAFE_INTEGER,
+      source: "oauth", accountId: "fedstart-account", apiBaseUrl: FEDSTART_HOST,
+    });
+    expect(resolveDevinApiServer(undefined, "devin", EU_KEY)).toBe(EU_HOST);
+    expect(resolveDevinApiServer(undefined, "devin", FEDSTART_KEY)).toBe(FEDSTART_HOST);
   });
 });
 

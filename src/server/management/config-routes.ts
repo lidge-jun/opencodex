@@ -1,11 +1,22 @@
+import { MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT } from "../../codex/quota-types";
+import { resolveMainAccountHardLockThresholds } from "../../codex/main-account-hard-lock";
+import { getMainAccountExternalUsageWarning } from "../../codex/main-account-external-usage";
+import { getObservedMainQuotaIdentityKey } from "../../codex/main-account-cache";
+import { compactionRoutingSchema, memoryModelsSchema } from "../../config/schema/leaf-validators";
+import { compactionRecoverySchema } from "../../config/schema/compaction-recovery";
+import { anthropicSidecarPatchError } from "../../config/schema/anthropic-account-pool";
+import { isAnthropicInstanceId } from "../../providers/anthropic-instance-id";
+import { captureConfigTopLevelRollback } from "../../config/rebase-provenance";
 import type { IntegrationClientId } from "../../integrations/registry";
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { readFileSync } from "node:fs";
 import type { CatalogModel } from "../../codex/catalog";
 import { catalogModelSlug, invalidateCodexModelsCache, nativeContextLimits, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
 import {
-  applyCodexDesktopSwitches,
+  applyCodexConfigInjection,
   describeCodexDesktopSwitches,
+  observedCodexDesktopSwitchApply,
   type CodexDesktopSwitchApply,
 } from "../../codex/desktop-switches";
 import {
@@ -20,6 +31,7 @@ import {
   providerHeadersConfigError,
   saveConfigPreservingClaudeCode,
 } from "../../config";
+import { captureDesktopAppliedMarker, commitDesktopAppliedMarker } from "../../claude/desktop-applied-marker";
 import {
   clearLoginState,
   getLoginStatus,
@@ -56,12 +68,16 @@ import {
   codexQuotaAutoRefreshStatus,
   runCodexQuotaAutoRefresh,
 } from "../../codex/quota-auto-refresh";
-import { getMainAccountHardLockStatus } from "../../codex/main-account-hard-lock";
+import {
+  getMainAccountHardLockStatus,
+  isMainAccountHardLockEnabled,
+} from "../../codex/main-account-hard-lock";
 import {
   codexAccountPickerEnabled,
   initializeDefaultCodexAccountNamespaces,
 } from "../../codex/account-namespaces";
 import { catalogRefreshIsPending } from "../../codex/catalog-refresh-status";
+import { siblingOfLivePort } from "../../codex/sibling-start";
 import { DEFAULT_PROVIDER_CONTEXT_CAP, globalContextCapValue, providerContextCap, providerContextCaps, setAllProviderContextCaps, setGlobalContextCapValue, setProviderContextCap } from "../../providers/context-cap";
 import { resolveCodexHomeDir } from "../../codex/home";
 import { readUsageEntries } from "../../usage/log";
@@ -72,7 +88,6 @@ import { getProviderRegistryEntry } from "../../providers/registry";
 import { VISION_REASONING_EFFORTS, isVisionReasoningEffort } from "../../reasoning-effort";
 import { normalizeVisionReasoningForModel } from "../../vision/reasoning";
 import {
-  findAnthropicVisionProvider,
   isValidVisionTimeoutMs,
   MAX_VISION_TIMEOUT_MS,
   MIN_VISION_TIMEOUT_MS,
@@ -92,6 +107,7 @@ import {
   webSearchModelIsRejected,
   webSearchModelOptionsFrom,
   webSearchModelRejection,
+  sidecarAnthropicPoolOptions, sidecarOptionsAuth, sidecarSettingsAfterPatch,
 } from "./web-search-sidecar-options";
 import { validateXaiSearchOptions } from "../../web-search/xai-executor";
 import { getDebugLogEntries } from "../../lib/debug-log-buffer";
@@ -112,10 +128,10 @@ import type { PersistedUsageAttempt } from "../../usage/log";
 import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "../auth-cors";
 import { withProviderCatalogCapabilityDTO } from "./provider-capability-config";
 import { applySystemEnvToggle } from "../system-env";
-import { getCachedStartupHealth, invalidateStartupHealthCache } from "../startup-health-cache";
+import { getCachedStartupHealth, getStartupHealthSnapshot, invalidateStartupHealthCache } from "../startup-health-cache";
 import { runWindowsTrayAction } from "../windows-tray-control";
 import { runStartupInstallAction, type StartupInstallAction } from "../startup-action-control";
-import { displayCodexRuntimePath, effortClampAppliesToRuntime, liveRemovedEfforts, loadLastEffortClamp, resolveCodexRuntime } from "../../codex/runtime";
+import { displayCodexRuntimePath, effortClampAppliesToRuntime, getCodexRuntimeSnapshot, liveRemovedEfforts, loadLastEffortClamp } from "../../codex/runtime";
 
 import { isPlainRecord, parseDebugLogQuery, tokPerSecondResult, unavailableCostReason, costResult, requestLogDto, stripRegistryOnlyStaticHeaders, fetchAllModels } from "./shared";
 import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, CostResult, MetricSource } from "./shared";
@@ -137,7 +153,9 @@ async function sidecarVisionResponseSettings(config: OcxConfig): Promise<{
   const vs = config.visionSidecar ?? {};
   // Match the runtime's one selected Anthropic executor for both backend fallback
   // and catalog reachability; resolving it once prevents the two projections drifting.
-  const anthropicSidecar = findAnthropicVisionProvider(config);
+  const auth = sidecarOptionsAuth(config, vs.anthropicInstance);
+  const anthropicSidecar = auth.isAnthropicAuth && auth.anthropicProviderName && auth.anthropicProvider
+    ? { providerName: auth.anthropicProviderName, provider: auth.anthropicProvider, config } : undefined;
   // The routed backend reports its own namespaced model verbatim: it is the
   // dispatched value, and collapsing it through the legacy resolver would
   // display a describer the runtime is not using (roadmap 190).
@@ -165,6 +183,17 @@ interface ClientIntegrationSyncOutcome {
   readonly profileId?: number;
 }
 
+/** Only the Desktop write's own applied markers may change during a background projection. */
+function clientProjectionConfig(config: OcxConfig): OcxConfig {
+  const snapshot = structuredClone(config);
+  const profile = snapshot.claudeCode?.desktopProfile;
+  if (profile) {
+    delete profile.appliedFingerprint;
+    delete profile.appliedAt;
+  }
+  return snapshot;
+}
+
 /**
  * Re-inject native clients that are switched ON and every file integration whose
  * OpenCodex ownership record is the operator's durable opt-in.
@@ -188,15 +217,41 @@ export async function syncEnabledClientIntegrations(
   config: OcxConfig,
   deps: Pick<ManagementContext["deps"],
     "fetchAllModels" | "refreshOwnedCatalogIntegrations" | "writeDesktop3pConfig"> = {},
+  options: { unattended?: { isCurrent: () => boolean } } = {},
 ): Promise<ClientIntegrationSyncOutcome[]> {
-  if (port === undefined) return [];
-  const { claudeDesktopIntegrationEnabled, grokIntegrationEnabled } = await import("../../codex/desired-state");
+  // A sibling instance passes its OWN port here; the Grok fence and the Desktop gateway profile
+  // stay on the live owner's (`src/codex/sibling-start.ts`).
+  if (port === undefined || siblingOfLivePort() !== null) return [];
+  const projectionConfig = options.unattended ? clientProjectionConfig(config) : undefined;
+  const { claudeDesktopIntegrationEnabled, grokIntegrationEnabled, localClientSyncAllowed } = await import("../../codex/desired-state");
   const out: ClientIntegrationSyncOutcome[] = [];
+  const unattended = options.unattended;
+  const admit = () => {
+    if (!unattended!.isCurrent()) return false;
+    const fresh = loadConfig();
+    return localClientSyncAllowed(fresh) && isDeepStrictEqual(clientProjectionConfig(fresh), projectionConfig);
+  };
+  const stale = () => unattended !== undefined && !admit();
+  if (stale()) return out;
+  const grok = unattended ? await import("../../grok/inject") : undefined;
 
-  if (grokIntegrationEnabled(config)) {
+  if (grokIntegrationEnabled(config) && (!grok || grok.grokManagedBlockPresent())) {
     try {
       const { syncGrokConfig } = await import("../../grok/sync");
-      const r = await syncGrokConfig(port, config, config.hostname ? { hostname: config.hostname } : {});
+      if (stale()) return out;
+      const grokDeps = grok ? {
+        fetchAllModels: deps.fetchAllModels ?? (await import("../management-api")).fetchAllModels,
+        injectGrokConfig: ((...args: Parameters<typeof grok.injectGrokConfig>) =>
+          admit() && grokIntegrationEnabled(loadConfig()) && grok.grokManagedBlockPresent()
+            ? grok.injectGrokConfig(...args)
+            : { ok: true, changed: false, message: "Grok refresh skipped" }),
+      } : undefined;
+      const r = unattended
+        ? await syncGrokConfig(port, config, {
+          ...config.hostname ? { hostname: config.hostname } : {},
+          refreshOnly: { admit },
+        }, grokDeps)
+        : await syncGrokConfig(port, config, config.hostname ? { hostname: config.hostname } : {}, grokDeps);
       out.push(r.ok
         ? { client: "grok", ok: true, changed: r.changed === true }
         : { client: "grok", ok: false, reason: r.message });
@@ -205,36 +260,65 @@ export async function syncEnabledClientIntegrations(
     }
   }
 
-  if (claudeDesktopIntegrationEnabled(config)) {
+  if (stale()) return out;
+  const { observeClaudeDesktopMode, resolveClaudeDesktopMode } = await import("../../claude/desktop-first-party");
+  // A first-party Desktop must never get a gateway profile written and selected by a sync.
+  if (claudeDesktopIntegrationEnabled(config) && resolveClaudeDesktopMode(config, observeClaudeDesktopMode(config)) !== "first-party"
+    && (!unattended || !!config.claudeCode?.desktopProfile?.appliedFingerprint)) {
     try {
       const { writeDesktop3pConfig } = await import("../../claude/desktop-3p");
       const { desktopVisibleNativeSlugs, filterCatalogVisibleModels } = await import("../../codex/catalog");
       const { fetchAllModels } = await import("../management-api");
       const models = await (deps.fetchAllModels ?? fetchAllModels)(config);
-      // Discovery admits a concurrent OFF or settings edit. Re-read outside C:
-      // the writer facade owns L and its final desired-state check under L→C.
-      const latest = loadConfig();
-      if (claudeDesktopIntegrationEnabled(latest)) {
-        const routed = filterCatalogVisibleModels(models, latest)
-          .map(model => ({ provider: model.provider, id: model.id, contextWindow: model.contextWindow }));
-        const r = (deps.writeDesktop3pConfig ?? writeDesktop3pConfig)(
-          port,
-          [...desktopVisibleNativeSlugs(latest)],
-          routed,
-          latest.apiKeys?.[0]?.key,
-          "static",
-          latest.claudeCode?.desktopProfile,
-          nativeContextLimits(latest),
-        );
-        out.push(r.written
-          ? { client: "claude-desktop", ok: true, changed: true }
-          : { client: "claude-desktop", ok: false, reason: r.reason ?? "Claude Desktop write failed" });
-      }
+      // Serialized with Desktop mode transitions (picker lock): a first-party switch cannot interleave.
+      const { runPickerTransition } = await import("./claude-desktop-picker-routes");
+      await runPickerTransition(config, async () => {
+        // Discovery admits a concurrent OFF or settings edit. Re-read outside C:
+        // the writer facade owns L and its final desired-state check under L→C.
+        const latest = loadConfig();
+        // Discovery awaited: the mode may have changed meanwhile. Re-resolve on the fresh read,
+        // immediately before the writer, so a first-party switch during fetchAllModels still wins.
+        if (stale()) return;
+        if (claudeDesktopIntegrationEnabled(latest) && resolveClaudeDesktopMode(latest, observeClaudeDesktopMode(latest)) !== "first-party"
+          && (!unattended || !!latest.claudeCode?.desktopProfile?.appliedFingerprint)) {
+          const routed = filterCatalogVisibleModels(models, latest)
+            .map(model => ({ provider: model.provider, id: model.id, contextWindow: model.contextWindow }));
+          const writtenProfile = latest.claudeCode?.desktopProfile;
+          const markerBaseline = captureDesktopAppliedMarker(writtenProfile);
+          // Keep the attended writer's argument count unchanged, including its lock test seam.
+          const writeArgs: Parameters<typeof writeDesktop3pConfig> = [
+            port,
+            [...desktopVisibleNativeSlugs(latest)],
+            routed,
+            latest.apiKeys?.[0]?.key,
+            "static",
+            writtenProfile,
+            nativeContextLimits(latest),
+          ];
+          if (unattended) {
+            writeArgs[7] = undefined;
+            writeArgs[8] = { appliedFingerprint: writtenProfile!.appliedFingerprint!, admit };
+          }
+          const r = (deps.writeDesktop3pConfig ?? writeDesktop3pConfig)(...writeArgs);
+          if (unattended && r.reason === "desktop_refresh_only_skipped") return;
+          if (!r.written || !r.fingerprint) {
+            out.push({ client: "claude-desktop", ok: false, reason: r.reason ?? "Claude Desktop write failed" });
+          } else {
+            const marked = commitDesktopAppliedMarker(markerBaseline, r.fingerprint);
+            out.push(marked.status === "unavailable"
+              ? { client: "claude-desktop", ok: false, reason: "Claude Desktop applied marker was not saved (" + marked.reason + ")" }
+              : marked.value === false
+              ? { client: "claude-desktop", ok: false, reason: "Claude Desktop desired profile changed during sync; applied marker skipped" }
+              : { client: "claude-desktop", ok: true, changed: true });
+          }
+        }
+      });
     } catch (error) {
       out.push({ client: "claude-desktop", ok: false, reason: error instanceof Error ? error.message : String(error) });
     }
   }
 
+  if (stale()) return out;
   const { refreshOwnedCatalogIntegrations } = await import("../../integrations/catalog-refresh");
   const refreshOwned = deps.refreshOwnedCatalogIntegrations ?? refreshOwnedCatalogIntegrations;
   out.push(...await refreshOwned({
@@ -244,7 +328,10 @@ export async function syncEnabledClientIntegrations(
     },
     config,
     port,
-  }, ["mcode", "pi", "aside", "raycast", "omo", "cline"]));
+  }, unattended
+    ? ["mcode", "pi", "aside", "raycast", "omo", "commandcode", "droid", "opencode", "kilo"]
+    : ["mcode", "pi", "aside", "raycast", "omo", "cline", "commandcode", "droid", "opencode", "kilo"],
+  ...unattended ? [{ refreshOnly: true, admit }] as const : []));
 
   return out;
 }
@@ -258,6 +345,8 @@ function publicVisionSidecarSettings(
     enabled: vs.enabled !== false,
     model: vision.model,
     backend: vs.backend,
+    ...(vs.anthropicInstance ? { anthropicInstance: vs.anthropicInstance } : {}),
+    anthropicPool: sidecarAnthropicPoolOptions(config, { ...vs, backend: vs.backend ?? (vision.models.find(row => row.value === vision.model)?.backend) }),
     reasoning: vision.reasoning,
     maxDescriptionsPerTurn: resolveMaxDescriptionsPerTurn(vs.maxDescriptionsPerTurn),
     timeoutMs: resolveVisionTimeoutMs(vs.timeoutMs),
@@ -267,6 +356,10 @@ function publicVisionSidecarSettings(
 export async function handleConfigRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
   const readStartupHealth = deps.getCachedStartupHealth ?? getCachedStartupHealth;
+  // Settings only seed the dashboard chip; /api/startup-health owns the bounded fresh read.
+  // Waiting on the Windows service-manager probe here held settings reads and saves open
+  // for up to 15s, including the admin-token check. An injected reader stays authoritative.
+  const readStartupHealthSnapshot = deps.getCachedStartupHealth ?? getStartupHealthSnapshot;
   if (url.pathname === "/api/config" && req.method === "GET") {
     return jsonResponse(withProviderCatalogCapabilityDTO(safeConfigDTO(config), config));
   }
@@ -276,10 +369,12 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
   }
 
   if (url.pathname === "/api/settings" && req.method === "GET") {
-    let resolved: ReturnType<typeof resolveCodexRuntime>;
+    let resolved: ReturnType<typeof getCodexRuntimeSnapshot>;
     try {
-      // Full alternative discovery (memoized) so newerAvailable warnings work.
-      resolved = resolveCodexRuntime();
+      // Full alternative discovery so newerAvailable warnings work, served stale-while-
+      // revalidate: the sync resolver ran `codex --version` per candidate on this request and
+      // froze the whole proxy for ~0.6s every memo expiry while the dashboard polled here.
+      resolved = getCodexRuntimeSnapshot();
     } catch {
       resolved = {
         runtime: { command: "codex", version: null, source: "fallback" },
@@ -328,21 +423,23 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       ultraFastTier: config.ultraFastTier === true,
       // Absent means on by default: the GUI renders a switch enabled unless explicit false.
       fastRows: config.fastRows !== false,
-      codexMainAccountHardLock: config.codexMainAccountHardLock === true,
-      mainAccountHardLock: getMainAccountHardLockStatus(config),
+      codexMainAccountHardLock: isMainAccountHardLockEnabled(config),
+      mainAccountHardLock: { ...getMainAccountHardLockStatus(config),
+        externalUsage: getMainAccountExternalUsageWarning(getObservedMainQuotaIdentityKey()) },
       // Absent means the historical auto-open, so the GUI can render the toggle
       // without having to know that `undefined` and `true` mean the same thing.
       oauthOpenBrowser: config.oauthOpenBrowser !== false,
+      showCodexCredits: config.showCodexCredits === true,
       // Absent means off (today's Design B injection), so the GUI/CLI render a plain switch.
       codexDesktopAuthless: config.codexDesktopAuthless === true,
       // Absent keeps Design B remote compaction; true selects the dedicated provider identity.
       codexClientCompaction: config.codexClientCompaction === true,
-      codexDesktopSwitches: describeCodexDesktopSwitches(config, {
-        applied: false,
-        reason: "not_requested",
-        retryable: false,
-      }),
-      startupHealth: await readStartupHealth(config),
+      codexDesktopSwitches: describeCodexDesktopSwitches(config, await observedCodexDesktopSwitchApply()),
+      compactionRouting: config.compactionRouting ?? null,
+      compactionRecovery: config.compactionRecovery ?? null,
+      // Absent means both phases keep their existing routes; the GUI renders that as "Off".
+      memoryModels: config.memoryModels ?? null,
+      startupHealth: await readStartupHealthSnapshot(config),
       codexRuntime: {
         path: displayCodexRuntimePath(resolved.runtime.command),
         version: resolved.runtime.version,
@@ -428,11 +525,16 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       codexAccountPickerEnabled?: unknown;
       codexQuotaAutoRefresh?: unknown;
       oauthOpenBrowser?: unknown;
+      showCodexCredits?: unknown;
       ultraFastTier?: unknown;
       fastRows?: unknown;
       codexMainAccountHardLock?: unknown;
+      codexMainAccountHardLockThresholds?: unknown;
       codexDesktopAuthless?: unknown;
       codexClientCompaction?: unknown;
+      compactionRouting?: unknown;
+      compactionRecovery?: unknown;
+      memoryModels?: unknown;
     };
     if (body.codexAutoStart === undefined
       && body.streamMode === undefined
@@ -440,15 +542,23 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       && body.codexAccountPickerEnabled === undefined
       && body.codexQuotaAutoRefresh === undefined
       && body.oauthOpenBrowser === undefined
+      && body.showCodexCredits === undefined
       && body.ultraFastTier === undefined
       && body.fastRows === undefined
       && body.codexMainAccountHardLock === undefined
+      && body.codexMainAccountHardLockThresholds === undefined
       && body.codexDesktopAuthless === undefined
-      && body.codexClientCompaction === undefined) {
-      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, codexQuotaAutoRefresh, oauthOpenBrowser, ultraFastTier, fastRows, codexMainAccountHardLock, codexDesktopAuthless, or codexClientCompaction" }, 400);
+      && body.codexClientCompaction === undefined
+      && body.compactionRouting === undefined
+      && body.compactionRecovery === undefined
+      && body.memoryModels === undefined) {
+      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, codexQuotaAutoRefresh, oauthOpenBrowser, showCodexCredits, ultraFastTier, fastRows, codexMainAccountHardLock, codexMainAccountHardLockThresholds, codexDesktopAuthless, codexClientCompaction, compactionRouting, compactionRecovery, or memoryModels" }, 400);
     }
     if (body.codexAutoStart !== undefined && typeof body.codexAutoStart !== "boolean") {
       return jsonResponse({ error: "codexAutoStart boolean is required" }, 400);
+    }
+    if (body.showCodexCredits !== undefined && typeof body.showCodexCredits !== "boolean") {
+      return jsonResponse({ error: "showCodexCredits boolean is required" }, 400);
     }
     if (body.oauthOpenBrowser !== undefined && typeof body.oauthOpenBrowser !== "boolean") {
       return jsonResponse({ error: "oauthOpenBrowser boolean is required" }, 400);
@@ -469,11 +579,43 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     if (body.codexMainAccountHardLock !== undefined && typeof body.codexMainAccountHardLock !== "boolean") {
       return jsonResponse({ error: "codexMainAccountHardLock boolean is required" }, 400);
     }
+    let hardLockThresholds: OcxConfig["codexMainAccountHardLockThresholds"];
+    if (body.codexMainAccountHardLockThresholds !== undefined) {
+      const value = body.codexMainAccountHardLockThresholds;
+      if (!value || typeof value !== "object" || Array.isArray(value)
+        || Object.keys(value).length === 0
+        || Object.keys(value).some(key => key !== "short" && key !== "long")
+        || Object.values(value).some(percent => typeof percent !== "number" || !Number.isInteger(percent)
+          || percent < MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT || percent > 100)) {
+        return jsonResponse({ error: "codexMainAccountHardLockThresholds requires integer short/long percentages from 80 to 100" }, 400);
+      }
+      // A partial body updates one window and keeps the other stored value.
+      hardLockThresholds = { ...config.codexMainAccountHardLockThresholds,
+        ...(value as NonNullable<OcxConfig["codexMainAccountHardLockThresholds"]>) };
+      const defaults = resolveMainAccountHardLockThresholds(undefined);
+      if ((hardLockThresholds.short ?? defaults.short) > (hardLockThresholds.long ?? defaults.long)) {
+        return jsonResponse({ error: "codexMainAccountHardLockThresholds short must not exceed long" }, 400);
+      }
+    }
     if (body.codexDesktopAuthless !== undefined && typeof body.codexDesktopAuthless !== "boolean") {
       return jsonResponse({ error: "codexDesktopAuthless boolean is required" }, 400);
     }
     if (body.codexClientCompaction !== undefined && typeof body.codexClientCompaction !== "boolean") {
       return jsonResponse({ error: "codexClientCompaction boolean is required" }, 400);
+    }
+    const compactionRouting = body.compactionRouting == null
+      ? body.compactionRouting
+      : compactionRoutingSchema.safeParse(body.compactionRouting);
+    const compactionRecovery = body.compactionRecovery == null ? body.compactionRecovery : compactionRecoverySchema.safeParse(body.compactionRecovery);
+    if (compactionRecovery != null && !compactionRecovery.success) return jsonResponse({ error: "compactionRecovery requires enabled, a model, and optional boolean allowDevinInvalidArgument" }, 400);
+    if (compactionRouting != null && !compactionRouting.success) {
+      return jsonResponse({ error: "compactionRouting requires a model, an optional valid reasoningEffort, and optional non-repeating triggers drawn from \"manual\" and \"auto\"" }, 400);
+    }
+    const memoryModels = body.memoryModels == null
+      ? body.memoryModels
+      : memoryModelsSchema.safeParse(body.memoryModels);
+    if (memoryModels != null && !memoryModels.success) {
+      return jsonResponse({ error: "memoryModels requires a nonblank model and an optional declared reasoningEffort per configured phase, and no other fields" }, 400);
     }
     let quotaAutoRefreshChange: { id: string; window: "fiveHour" | "weekly"; enabled: boolean } | undefined;
     if (body.codexQuotaAutoRefresh !== undefined) {
@@ -504,6 +646,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     )) {
       return jsonResponse({ error: `appOwnedMemoryBudgetMb must be an integer from ${MIN_APP_OWNED_MEMORY_BUDGET_MB} to ${MAX_APP_OWNED_MEMORY_BUDGET_MB}` }, 400);
     }
+    const restoreCompactionRouting = captureConfigTopLevelRollback(config, ["compactionRouting", "compactionRecovery", "memoryModels"]);
     const previousSettings = {
       codexAutoStart: config.codexAutoStart,
       hasCodexAutoStart: Object.hasOwn(config, "codexAutoStart"),
@@ -519,10 +662,14 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       hasCodexQuotaAutoRefresh: Object.hasOwn(config, "codexQuotaAutoRefresh"),
       oauthOpenBrowser: config.oauthOpenBrowser,
       hasOauthOpenBrowser: Object.hasOwn(config, "oauthOpenBrowser"),
+      showCodexCredits: config.showCodexCredits,
+      hasShowCodexCredits: Object.hasOwn(config, "showCodexCredits"),
       ultraFastTier: config.ultraFastTier,
       hasUltraFastTier: Object.hasOwn(config, "ultraFastTier"),
       fastRows: config.fastRows,
       hasFastRows: Object.hasOwn(config, "fastRows"),
+      codexMainAccountHardLockThresholds: config.codexMainAccountHardLockThresholds,
+      hasCodexMainAccountHardLockThresholds: Object.hasOwn(config, "codexMainAccountHardLockThresholds"),
       codexMainAccountHardLock: config.codexMainAccountHardLock,
       hasCodexMainAccountHardLock: Object.hasOwn(config, "codexMainAccountHardLock"),
       codexDesktopAuthless: config.codexDesktopAuthless,
@@ -555,6 +702,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       } else if (body.codexAccountPickerEnabled === false) {
         config.codexAccountPickerEnabled = false;
       }
+      if (typeof body.showCodexCredits === "boolean") config.showCodexCredits = body.showCodexCredits;
       if (typeof body.oauthOpenBrowser === "boolean") {
         config.oauthOpenBrowser = body.oauthOpenBrowser;
       }
@@ -564,12 +712,22 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       else if (body.ultraFastTier === false) deleteConfigTopLevelKey(config, "ultraFastTier");
       if (body.fastRows === false) config.fastRows = false;
       else if (body.fastRows === true) deleteConfigTopLevelKey(config, "fastRows");
-      if (body.codexMainAccountHardLock === true) config.codexMainAccountHardLock = true;
-      else if (body.codexMainAccountHardLock === false) deleteConfigTopLevelKey(config, "codexMainAccountHardLock");
+      // Inverted from the pair above because the default is on (#5694): off is the persisted
+      // decision, so it writes `false`, while on deletes the key and returns to the default.
+      if (hardLockThresholds !== undefined) config.codexMainAccountHardLockThresholds = { ...hardLockThresholds };
+      if (body.codexMainAccountHardLock === false) config.codexMainAccountHardLock = false;
+      else if (body.codexMainAccountHardLock === true) deleteConfigTopLevelKey(config, "codexMainAccountHardLock");
       if (body.codexDesktopAuthless === true) config.codexDesktopAuthless = true;
       else if (body.codexDesktopAuthless === false) deleteConfigTopLevelKey(config, "codexDesktopAuthless");
       if (body.codexClientCompaction === true) config.codexClientCompaction = true;
       else if (body.codexClientCompaction === false) deleteConfigTopLevelKey(config, "codexClientCompaction");
+      if (compactionRouting === null) deleteConfigTopLevelKey(config, "compactionRouting");
+      else if (compactionRouting?.success) config.compactionRouting = compactionRouting.data;
+      if (compactionRecovery === null) deleteConfigTopLevelKey(config, "compactionRecovery");
+      else if (compactionRecovery?.success) config.compactionRecovery = compactionRecovery.data;
+      // Null clears both phases; the GUI sends that when neither row names a model.
+      if (memoryModels === null) deleteConfigTopLevelKey(config, "memoryModels");
+      else if (memoryModels?.success) config.memoryModels = memoryModels.data;
       if (quotaAutoRefreshChange) {
         const { id, window, enabled } = quotaAutoRefreshChange;
         const setting = { ...(config.codexQuotaAutoRefresh?.[id] ?? {}) };
@@ -600,6 +758,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       if (previousSettings.hasCodexQuotaAutoRefresh) {
         config.codexQuotaAutoRefresh = previousSettings.codexQuotaAutoRefresh;
       } else deleteConfigTopLevelKey(config, "codexQuotaAutoRefresh");
+      if (previousSettings.hasShowCodexCredits) config.showCodexCredits = previousSettings.showCodexCredits;
+      else deleteConfigTopLevelKey(config, "showCodexCredits");
       if (previousSettings.hasOauthOpenBrowser) {
         config.oauthOpenBrowser = previousSettings.oauthOpenBrowser;
       } else deleteConfigTopLevelKey(config, "oauthOpenBrowser");
@@ -609,6 +769,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       if (previousSettings.hasFastRows) {
         config.fastRows = previousSettings.fastRows;
       } else deleteConfigTopLevelKey(config, "fastRows");
+      if (previousSettings.hasCodexMainAccountHardLockThresholds) {
+        config.codexMainAccountHardLockThresholds = previousSettings.codexMainAccountHardLockThresholds;
+      } else deleteConfigTopLevelKey(config, "codexMainAccountHardLockThresholds");
       if (previousSettings.hasCodexMainAccountHardLock) {
         config.codexMainAccountHardLock = previousSettings.codexMainAccountHardLock;
       } else deleteConfigTopLevelKey(config, "codexMainAccountHardLock");
@@ -618,6 +781,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       if (previousSettings.hasCodexClientCompaction) {
         config.codexClientCompaction = previousSettings.codexClientCompaction;
       } else deleteConfigTopLevelKey(config, "codexClientCompaction");
+      restoreCompactionRouting();
       throw error;
     }
     if (typeof body.appOwnedMemoryBudgetMb === "number") {
@@ -648,8 +812,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     // because coordinated Codex writes acquire the Codex write lock N before the config mutation
     // lock C — awaiting N while still holding C would invert that order.
     const desktopSwitchApply: CodexDesktopSwitchApply = desktopSwitchesChanged
-      ? await applyCodexDesktopSwitches(config)
-      : { applied: false, reason: "not_requested", retryable: false };
+      ? await applyCodexConfigInjection(config)
+      : await observedCodexDesktopSwitchApply();
     const codexDesktopSwitches = describeCodexDesktopSwitches(config, desktopSwitchApply);
     const catalogRefreshPending = catalogRefresh
       ? catalogRefreshIsPending(catalogRefresh)
@@ -664,14 +828,21 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       codexAccountPickerEnabled: pickerIsEnabled,
       codexQuotaAutoRefresh: quotaAutoRefreshSettings(config),
       oauthOpenBrowser: config.oauthOpenBrowser !== false,
+      showCodexCredits: config.showCodexCredits === true,
       catalogRefreshPending,
       fastRows: config.fastRows !== false,
       codexDesktopAuthless: authlessIsEnabled,
       codexClientCompaction: clientCompactionIsEnabled,
       codexDesktopSwitches,
-      codexMainAccountHardLock: config.codexMainAccountHardLock === true,
-      mainAccountHardLock: getMainAccountHardLockStatus(config),
-      startupHealth: await readStartupHealth(config),
+      compactionRouting: config.compactionRouting ?? null,
+      compactionRecovery: config.compactionRecovery ?? null,
+      // The panel re-reads its own save response, so a missing block would render both
+      // phases as "Off" while the server kept them.
+      memoryModels: config.memoryModels ?? null,
+      codexMainAccountHardLock: isMainAccountHardLockEnabled(config),
+      mainAccountHardLock: { ...getMainAccountHardLockStatus(config),
+        externalUsage: getMainAccountExternalUsageWarning(getObservedMainQuotaIdentityKey()) },
+      startupHealth: await readStartupHealthSnapshot(config),
     });
   }
 
@@ -709,16 +880,17 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
   }
 
   if (url.pathname === "/api/update/check" && req.method === "GET") {
-    const { checkForUpdate, normalizeUpdateChannel } = await import("../../update/job");
+    const { normalizeUpdateChannel } = await import("../../update/job");
+    const { packageRefresh } = await import("../../update/refresh-scheduler");
     const rawTag = url.searchParams.get("tag");
     if (rawTag && rawTag !== "latest" && rawTag !== "preview") {
       return jsonResponse({ error: "tag must be latest or preview" }, 400);
     }
-    return jsonResponse(checkForUpdate(normalizeUpdateChannel(rawTag)));
+    return jsonResponse(await (deps.checkPackageUpdate ?? packageRefresh.check)(normalizeUpdateChannel(rawTag)));
   }
 
   if (url.pathname === "/api/update/run" && req.method === "POST") {
-    const { normalizeUpdateChannel, startUpdateJob, UpdateJobError } = await import("../../update/job");
+    const { normalizeUpdateChannel, startUpdateJob, UpdateJobError, spawnGuiUpdateWorker } = await import("../../update/job");
     let body: { tag?: unknown; restart?: unknown };
     try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     if (body.tag !== undefined && body.tag !== "latest" && body.tag !== "preview") {
@@ -728,7 +900,21 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       return jsonResponse({ error: "restart boolean is required" }, 400);
     }
     try {
-      return jsonResponse({ ok: true, job: startUpdateJob(normalizeUpdateChannel(body.tag as string | undefined), body.restart !== false) });
+      const channel = normalizeUpdateChannel(body.tag as string | undefined);
+      const { packageRefresh } = await import("../../update/refresh-scheduler");
+      const checked = await (deps.checkPackageUpdate ?? packageRefresh.check)(channel);
+      // Resolve the systemd-scope launcher before spawning: the first request
+      // would otherwise run up to four sequential five-second probes inside
+      // spawnSync on the shared event loop.
+      const { resolveSystemdRunAsync } = await import("../../update/worker-launch");
+      const systemdRun = process.platform === "linux" && process.env.INVOCATION_ID
+        ? await resolveSystemdRunAsync()
+        : undefined;
+      return jsonResponse({ ok: true, job: startUpdateJob(channel, body.restart !== false, {
+        checkForUpdateFn: () => checked,
+        spawnWorkerFn: (jobId, runChannel, runRestart) =>
+          spawnGuiUpdateWorker(jobId, runChannel, runRestart, { resolveSystemdRun: () => systemdRun }),
+      }) });
     } catch (err) {
       if (err instanceof UpdateJobError) {
         return jsonResponse({ error: err.message, code: err.code }, err.status);
@@ -753,6 +939,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
         enabled: ws.enabled !== false,
         model: ws.model ?? "gpt-5.6-luna",
         backend: ws.backend,
+        ...(ws.anthropicInstance ? { anthropicInstance: ws.anthropicInstance } : {}),
+        anthropicPool: sidecarAnthropicPoolOptions(config, ws),
         streamRoutedModelOutput: ws.streamRoutedModelOutput === true,
         ...(ws.xSearch ? { xSearch: ws.xSearch } : {}),
       },
@@ -773,10 +961,11 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     if (raw.webSearch !== undefined && !isPlainRecord(raw.webSearch)) return jsonResponse({ error: "webSearch must be an object" }, 400);
     if (raw.vision !== undefined && !isPlainRecord(raw.vision)) return jsonResponse({ error: "vision must be an object" }, 400);
     const body = raw as {
-      webSearch?: { model?: unknown; backend?: unknown; reasoning?: unknown; streamRoutedModelOutput?: unknown; exaApiKey?: unknown; xSearch?: unknown };
+      webSearch?: { enabled?: unknown; model?: unknown; backend?: unknown; anthropicInstance?: unknown; reasoning?: unknown; streamRoutedModelOutput?: unknown; exaApiKey?: unknown; xSearch?: unknown };
       vision?: {
         model?: unknown;
         backend?: unknown;
+        anthropicInstance?: unknown;
         reasoning?: unknown;
         maxDescriptionsPerTurn?: unknown;
         enabled?: unknown;
@@ -784,6 +973,11 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       };
     };
     const WEB_SEARCH_BACKENDS_UNION = ["openai", "anthropic", "xai", "gemini", "exa"] as const;
+    const instanceError = anthropicSidecarPatchError(config, {
+      ...(body.webSearch ? { webSearchSidecar: body.webSearch } : {}),
+      ...(body.vision ? { visionSidecar: body.vision } : {}),
+    });
+    if (instanceError) return jsonResponse({ error: instanceError }, 400);
     if (body.webSearch && body.webSearch.backend !== undefined && body.webSearch.backend !== null
       && !WEB_SEARCH_BACKENDS_UNION.includes(body.webSearch.backend as never)) {
       return jsonResponse({ error: "webSearch.backend must be openai, anthropic, xai, gemini, exa, or null" }, 400);
@@ -794,6 +988,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     if (body.webSearch && body.webSearch.streamRoutedModelOutput !== undefined
       && typeof body.webSearch.streamRoutedModelOutput !== "boolean") {
       return jsonResponse({ error: "webSearch.streamRoutedModelOutput must be a boolean" }, 400);
+    }
+    if (body.webSearch && body.webSearch.enabled !== undefined && typeof body.webSearch.enabled !== "boolean") {
+      return jsonResponse({ error: "webSearch.enabled must be a boolean" }, 400);
     }
     if (body.vision && body.vision.backend !== undefined
       && body.vision.backend !== null && body.vision.backend !== "openai" && body.vision.backend !== "anthropic"
@@ -824,7 +1021,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     // rejection body, so a 400 cannot cost two provider fetches.
     if (body.vision && typeof body.vision.model === "string" && body.vision.model !== "") {
       const requested = body.vision.model;
-      const candidates = await visionCandidateRows(config);
+      const candidates = await visionCandidateRows({ ...config, visionSidecar: sidecarSettingsAfterPatch(config.visionSidecar, body.vision) });
       const hint = body.vision.backend === "anthropic" || body.vision.backend === "openai"
         || body.vision.backend === "routed"
         ? body.vision.backend
@@ -858,8 +1055,11 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
         : normalizeVisionReasoningForModel(model, sourceReasoning);
     }
 
+    // Read BEFORE the mutation below: the Codex-side key follows the switch, and a flip is the
+    // only case that owes a config.toml rewrite.
+    const webSearchEnabledBefore = config.webSearchSidecar?.enabled !== false;
     if (body.webSearch) {
-      const pairTouched = body.webSearch.model !== undefined || body.webSearch.backend !== undefined;
+      const pairTouched = body.webSearch.model !== undefined || body.webSearch.backend !== undefined || body.webSearch.anthropicInstance !== undefined;
       // Validate against the backend the caller SUBMITTED, across the whole
       // union — not just openai/anthropic (#2457). The union check above has
       // already refused unknown literals, so a surviving string is a member;
@@ -878,12 +1078,14 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
         ? body.webSearch.model || undefined
         : config.webSearchSidecar?.model;
       if (pairTouched && effectiveModel) {
-        const candidates = await webSearchCandidateRows(config);
+        const candidates = await webSearchCandidateRows({ ...config, webSearchSidecar: sidecarSettingsAfterPatch(config.webSearchSidecar, body.webSearch) });
         if (webSearchModelIsRejected(effectiveBackend, effectiveModel, candidates)) {
           return jsonResponse(webSearchModelRejection("webSearch.model", effectiveBackend, effectiveModel, candidates), 400);
         }
       }
       const webSearchCandidate = { ...config.webSearchSidecar };
+      if (body.webSearch.anthropicInstance === null) delete webSearchCandidate.anthropicInstance;
+      else if (isAnthropicInstanceId(body.webSearch.anthropicInstance)) webSearchCandidate.anthropicInstance = body.webSearch.anthropicInstance;
       if (typeof body.webSearch.model === "string") {
         if (body.webSearch.model === "") delete webSearchCandidate.model;
         else webSearchCandidate.model = body.webSearch.model;
@@ -953,10 +1155,18 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
         if (body.webSearch.streamRoutedModelOutput) webSearchCandidate.streamRoutedModelOutput = true;
         else delete webSearchCandidate.streamRoutedModelOutput;
       }
+      if (typeof body.webSearch.enabled === "boolean") {
+        // `true` is the default — drop the key so a disable/re-enable cycle does not rewrite the
+        // file, exactly like the Vision master switch.
+        if (body.webSearch.enabled) delete webSearchCandidate.enabled;
+        else webSearchCandidate.enabled = false;
+      }
       config.webSearchSidecar = webSearchCandidate;
     }
     if (body.vision) {
       config.visionSidecar = { ...config.visionSidecar };
+      if (body.vision.anthropicInstance === null) delete config.visionSidecar.anthropicInstance;
+      else if (isAnthropicInstanceId(body.vision.anthropicInstance)) config.visionSidecar.anthropicInstance = body.vision.anthropicInstance;
       if (typeof body.vision.model === "string") {
         if (body.vision.model === "") delete config.visionSidecar.model;
         else config.visionSidecar.model = body.vision.model;
@@ -983,6 +1193,16 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       }
     }
     saveConfigPreservingClaudeCode(config);
+    // The sidecar's own switch is only half of what "off" means: Codex keeps declaring its native
+    // hosted `web_search` tool until its own mode says otherwise, and the tool a client advertises
+    // is the one the model reaches for — which is why an MCP search server needs the client-side
+    // key off too. The injection owns that root key, and a write that cannot happen is reported
+    // (the Desktop switches' contract) instead of being stored as if it had.
+    const webSearchEnabledChanged = typeof body.webSearch?.enabled === "boolean"
+      && webSearchEnabledBefore !== (config.webSearchSidecar?.enabled !== false);
+    const codexWebSearch: CodexDesktopSwitchApply = webSearchEnabledChanged
+      ? await applyCodexConfigInjection(config)
+      : { applied: false, reason: "not_requested", retryable: false };
     const ws = config.webSearchSidecar ?? {};
     const vision = await sidecarVisionResponseSettings(config);
     const savedWebSearchCandidates = await webSearchCandidateRows(config);
@@ -992,9 +1212,12 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
         enabled: ws.enabled !== false,
         model: ws.model ?? "gpt-5.6-luna",
         backend: ws.backend,
+        ...(ws.anthropicInstance ? { anthropicInstance: ws.anthropicInstance } : {}),
+        anthropicPool: sidecarAnthropicPoolOptions(config, ws),
         streamRoutedModelOutput: ws.streamRoutedModelOutput === true,
         ...(ws.xSearch ? { xSearch: ws.xSearch } : {}),
       },
+      codexWebSearch,
       vision: publicVisionSidecarSettings(config, vision),
       visionModels: vision.models,
       // Echoed for the same reason GET always carries it: the dashboard rebuilds

@@ -1,0 +1,411 @@
+import { randomBytes } from "node:crypto";
+import { hostname } from "node:os";
+import { isPortAvailable } from "../server/ports";
+import { scanListenPidsForAddress, type ListenPidScan } from "../server/port-reclaim";
+import { isLinkPort, JOIN_TUNNEL_PORT_MAX, JOIN_TUNNEL_PORT_MIN } from "../link/ports";
+import { buildExecArgv, REMOTE_COMMAND_NOT_FOUND, remoteOcxArgv } from "../link/ssh-argv";
+import { sshFailureHint, sshRunnerErrorHint, type SshRunner, type SshRunResult } from "../link/ssh-runner";
+import { connectClient, type ClientConnectDeps } from "./connect";
+import {
+  clearClientLinkState,
+  clientLinkStatePath,
+  readClientLinkState,
+  writeClientLinkState,
+  type ClientLinkState,
+} from "./link-state";
+import { isLinkConnection, readClientConnectionState, type ClientConnectionState } from "./state";
+import {
+  spawnClientLinkTunnel,
+  type ClientLinkTunnelDeps,
+  type ClientLinkTunnelHandle,
+} from "./link-tunnel";
+import type { OcxConnectedClientId } from "../types";
+
+const JOIN_TUNNEL_READY_TIMEOUT_MS = 15_000;
+const JOIN_TUNNEL_POLL_MS = 100;
+const JOIN_TUNNEL_SPAWN_GRACE_MS = 100;
+const JOIN_REVOKE_TIMEOUT_MS = 30_000;
+const JOIN_CONFIRM_TTL_MS = 5 * 60_000;
+const JOIN_PORT_ATTEMPTS = 32;
+const LINK_ID = /^lnk_[0-9a-f]{16}$/;
+const API_KEY_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$/;
+const DATA_KEY = /^ocx_data_[0-9a-f]{40}$/;
+const VALID_ALIAS = /^[A-Za-z0-9_][A-Za-z0-9._@%+:\[\]-]{0,252}$/;
+
+export interface JoinConfirmedHost {
+  alias: string;
+  fingerprint: string;
+  probedAt: number;
+}
+
+export type JoinFailureCode =
+  | "host_not_confirmed"
+  | "host_confirmation_expired"
+  | "join_port_failed"
+  | "join_issue_failed"
+  | "remote_ocx_missing"
+  | "join_tunnel_failed"
+  | "admission_failed"
+  | "join_connect_failed"
+  | "join_rollback_failed"
+  | "join_restart_failed";
+
+export class ClientLinkJoinError extends Error {
+  /** `hint` is a bounded line from ssh stderr or the ssh runner's own failure, for the dashboard; it is not part of the message. */
+  constructor(readonly code: JoinFailureCode, readonly linkId?: string, readonly hint?: string) {
+    super(linkId ? `${code}: ${linkId}` : code);
+    this.name = "ClientLinkJoinError";
+  }
+}
+
+interface IssuedLink {
+  linkId: string;
+  apiKeyId: string;
+  key: string;
+  listenerPort: number;
+}
+
+export interface ClientLinkJoinDeps {
+  runner: SshRunner;
+  knownHostsFile: string;
+  confirmedHost?: JoinConfirmedHost;
+  configDir?: string;
+  choosePort?: () => Promise<number>;
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+  hostname?: () => string;
+  randomBytes?: (size: number) => Uint8Array;
+  fetchImpl?: typeof fetch;
+  /**
+   * LISTEN-owner probe for the tunnel port; defaults to the netstat/lsof/ss scan.
+   * Receives the loopback address the tunnel binds so listeners on unrelated
+   * addresses do not confuse the readiness check.
+   */
+  scanListenPids?: (port: number, address?: string) => ListenPidScan;
+  spawnTunnel?: (spec: {
+    linkId: string;
+    alias: string;
+    tunnelPort: number;
+    peerListenerPort: number;
+  }, deps?: ClientLinkTunnelDeps) => ClientLinkTunnelHandle;
+  writeState?: (state: ClientLinkState) => void;
+  clearState?: (linkId: string) => void;
+  readSidecar?: () => ClientLinkState | null;
+  readConnectionState?: () => ClientConnectionState;
+  connect?: typeof connectClient;
+  connectDeps?: ClientConnectDeps;
+  selectedClients?: OcxConnectedClientId[];
+  /** Hands the standalone process to the client runtime once the join has committed. */
+  scheduleRestart: () => void;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function validPort(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 65535;
+}
+
+function parseIssuedLink(stdout: string): IssuedLink | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout.trim());
+  } catch {
+    return null;
+  }
+  if (!isRecord(parsed) || Object.keys(parsed).length !== 4
+    || typeof parsed.linkId !== "string" || !LINK_ID.test(parsed.linkId)
+    || typeof parsed.apiKeyId !== "string" || !API_KEY_ID.test(parsed.apiKeyId)
+    || typeof parsed.key !== "string" || !DATA_KEY.test(parsed.key)
+    || !validPort(parsed.listenerPort)) {
+    return null;
+  }
+  return {
+    linkId: parsed.linkId,
+    apiKeyId: parsed.apiKeyId,
+    key: parsed.key,
+    listenerPort: parsed.listenerPort,
+  };
+}
+
+/**
+ * A free loopback port in the join range (`JOIN_TUNNEL_PORT_MIN`-`JOIN_TUNNEL_PORT_MAX`), tried at
+ * random so a fixed-port service on this computer is not hit every time.
+ */
+export async function chooseJoinTunnelPort(deps: {
+  isAvailable?: (port: number) => Promise<boolean>;
+  random?: () => number;
+} = {}): Promise<number> {
+  const isAvailable = deps.isAvailable ?? (port => isPortAvailable(port, "127.0.0.1"));
+  const random = deps.random ?? Math.random;
+  const span = JOIN_TUNNEL_PORT_MAX - JOIN_TUNNEL_PORT_MIN + 1;
+  for (let attempt = 0; attempt < JOIN_PORT_ATTEMPTS; attempt += 1) {
+    const port = JOIN_TUNNEL_PORT_MIN + Math.min(span - 1, Math.floor(random() * span));
+    if (await isAvailable(port)) return port;
+  }
+  throw new Error("no free port in the join tunnel range");
+}
+
+function localAlias(deps: ClientLinkJoinDeps): string {
+  const raw = (deps.hostname ?? hostname)().trim();
+  const normalized = raw.replace(/[^A-Za-z0-9_\.\-]/g, "-").replace(/^-+/, "").slice(0, 253);
+  if (VALID_ALIAS.test(normalized)) return normalized;
+  const bytes = (deps.randomBytes ?? randomBytes)(4);
+  return `client-${Buffer.from(bytes).toString("hex")}`;
+}
+
+function defaultWriteState(configDir: string | undefined, state: ClientLinkState): void {
+  writeClientLinkState(state, clientLinkStatePath(configDir));
+}
+
+function defaultClearState(configDir: string | undefined, linkId: string): void {
+  clearClientLinkState(linkId, clientLinkStatePath(configDir));
+}
+
+async function stopTunnel(tunnel: ClientLinkTunnelHandle | null): Promise<void> {
+  if (!tunnel) return;
+  try {
+    await tunnel.stop();
+  } catch (error) {
+    void error;
+  }
+}
+
+async function revokeIssuedLink(deps: ClientLinkJoinDeps, linkId: string, alias = deps.confirmedHost?.alias ?? ""): Promise<boolean> {
+  try {
+    const result = await deps.runner.run(
+      buildExecArgv({
+        alias,
+        argv: remoteOcxArgv(["link", "revoke", "--link-id", linkId]),
+        knownHostsFile: deps.knownHostsFile,
+      }),
+      { timeoutMs: JOIN_REVOKE_TIMEOUT_MS },
+    );
+    return result.code === 0;
+  } catch (error) {
+    void error;
+    return false;
+  }
+}
+
+async function rollback(
+  deps: ClientLinkJoinDeps,
+  linkId: string,
+  tunnel: ClientLinkTunnelHandle | null,
+): Promise<void> {
+  await stopTunnel(tunnel);
+  if (!await revokeIssuedLink(deps, linkId)) throw new ClientLinkJoinError("join_rollback_failed", linkId);
+  try {
+    (deps.clearState ?? (id => defaultClearState(deps.configDir, id)))(linkId);
+  } catch (error) {
+    void error;
+  }
+}
+
+async function compensateStaleSidecar(deps: ClientLinkJoinDeps): Promise<void> {
+  let sidecar: ClientLinkState | null;
+  try {
+    sidecar = (deps.readSidecar ?? (() => readClientLinkState(clientLinkStatePath(deps.configDir))))();
+  } catch {
+    // A corrupt sidecar is overwritten by the next successful join.
+    return;
+  }
+  if (!sidecar) return;
+  let connection: ClientConnectionState;
+  try {
+    connection = (deps.readConnectionState ?? readClientConnectionState)();
+  } catch {
+    connection = { kind: "invalid", reason: "client connection state could not be read" };
+  }
+  if (connection.kind === "connected" && isLinkConnection(connection.value)
+    && connection.value.link?.linkId === sidecar.linkId) return;
+  if (!await revokeIssuedLink(deps, sidecar.linkId, sidecar.alias)) {
+    throw new ClientLinkJoinError("join_rollback_failed", sidecar.linkId);
+  }
+  try {
+    (deps.clearState ?? (linkId => defaultClearState(deps.configDir, linkId)))(sidecar.linkId);
+  } catch {
+    throw new ClientLinkJoinError("join_rollback_failed", sidecar.linkId);
+  }
+}
+
+/** Wait for the live tunnel's authenticated readiness, retaining the deadline after failed ownership rechecks. */
+async function waitForReady(
+  deps: ClientLinkJoinDeps,
+  tunnel: ClientLinkTunnelHandle,
+  port: number,
+  key: string,
+): Promise<void> {
+  const fetchImpl = deps.fetchImpl ?? fetch;
+  const now = deps.now ?? Date.now;
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
+  const deadline = now() + JOIN_TUNNEL_READY_TIMEOUT_MS;
+  const tunnelExited = tunnel.exited.then(() => { throw new ClientLinkJoinError("join_tunnel_failed"); });
+  await Promise.race([
+    tunnelExited,
+    new Promise<void>(resolve => setTimeout(resolve, JOIN_TUNNEL_SPAWN_GRACE_MS)),
+  ]);
+  const listenPids = deps.scanListenPids ?? scanListenPidsForAddress;
+  // The tunnel binds 127.0.0.1; a listener on a different loopback or interface address
+  // never receives our requests, so ownership is only judged among sockets that serve it.
+  const tunnelAddress = "127.0.0.1";
+  for (;;) {
+    try {
+      // A squatter answering the 401 challenge would otherwise collect the issued key:
+      // the only listener allowed a keyed request is the ssh process we spawned — it owns
+      // the port only after a successful bind, and ExitOnForwardFailure makes it exit when
+      // it cannot take the port. An unverifiable scan stays "not ready", never a pass.
+      const ownership = listenPids(port, tunnelAddress);
+      if (ownership.ok && ownership.pids.length === 1 && ownership.pids[0] === tunnel.pid) {
+        // Never follow redirects: a port occupant must not reroute the challenge, and a
+        // redirected keyed request would carry the issued key to an unrelated listener.
+        const probe = await Promise.race([
+          tunnelExited,
+          fetchImpl(`http://127.0.0.1:${port}/readyz`, { redirect: "manual" }),
+        ]);
+        if (probe.status === 401) {
+          // Ownership can flip between the probe and the keyed request (a squatter
+          // takes the port after the tunnel dies). Re-scan in the same iteration and
+          // skip only the keyed request on failure, not the deadline check and sleep.
+          const recheck = listenPids(port, tunnelAddress);
+          if (recheck.ok && recheck.pids.length === 1 && recheck.pids[0] === tunnel.pid) {
+            const response = await Promise.race([
+              tunnelExited,
+              fetchImpl(`http://127.0.0.1:${port}/readyz`, {
+                headers: { "x-opencodex-api-key": key },
+                redirect: "manual",
+              }),
+            ]);
+            if (response.status === 200) return;
+            if (response.status === 401) throw new ClientLinkJoinError("admission_failed");
+          }
+        }
+      }
+    } catch (error) {
+      if (error instanceof ClientLinkJoinError) throw error;
+    }
+    const remaining = deadline - now();
+    if (remaining <= 0) throw new ClientLinkJoinError("join_tunnel_failed");
+    await Promise.race([tunnelExited, sleep(Math.min(JOIN_TUNNEL_POLL_MS, remaining))]);
+  }
+}
+
+function requireConfirmedHost(deps: ClientLinkJoinDeps, alias: string): JoinConfirmedHost {
+  const confirmed = deps.confirmedHost;
+  if (!confirmed || confirmed.alias !== alias) throw new ClientLinkJoinError("host_not_confirmed");
+  if ((deps.now ?? Date.now)() - confirmed.probedAt > JOIN_CONFIRM_TTL_MS) {
+    throw new ClientLinkJoinError("host_confirmation_expired");
+  }
+  return confirmed;
+}
+
+/** Issue and enroll a confirmed Home link, compensating failures before committing the connection. */
+export async function joinHome(deps: ClientLinkJoinDeps, input: { alias: string }): Promise<{ linkId: string; apiKeyId: string }> {
+  const confirmed = requireConfirmedHost(deps, input.alias);
+  await compensateStaleSidecar(deps);
+  let tunnelPort: number;
+  try {
+    tunnelPort = await (deps.choosePort ?? (() => chooseJoinTunnelPort()))();
+    if (!isLinkPort(tunnelPort)) throw new Error("invalid link port");
+  } catch (error) {
+    void error;
+    throw new ClientLinkJoinError("join_port_failed");
+  }
+
+  const thisAlias = localAlias(deps);
+  let result: SshRunResult;
+  try {
+    result = await deps.runner.run(
+      buildExecArgv({
+        alias: input.alias,
+        argv: remoteOcxArgv(["link", "issue", "--alias", thisAlias, "--tunnel-port", String(tunnelPort), "--json"]),
+        knownHostsFile: deps.knownHostsFile,
+      }),
+      { timeoutMs: JOIN_REVOKE_TIMEOUT_MS },
+    );
+  } catch (error) {
+    throw new ClientLinkJoinError("join_issue_failed", undefined, sshRunnerErrorHint(error));
+  }
+  // Hints come from stderr only: a successful issue prints the new data key on stdout.
+  if (result.code === REMOTE_COMMAND_NOT_FOUND) throw new ClientLinkJoinError("remote_ocx_missing", undefined, sshFailureHint(result.stderr));
+  const parsed = result.code === 0 ? parseIssuedLink(result.stdout) : null;
+  if (!parsed) throw new ClientLinkJoinError("join_issue_failed", undefined, result.code === 0 ? undefined : sshFailureHint(result.stderr));
+  const issued: IssuedLink = parsed;
+
+  let tunnel: ClientLinkTunnelHandle | null = null;
+  try {
+    const state: ClientLinkState = {
+      linkId: issued.linkId,
+      alias: input.alias,
+      hubHostKeyFingerprint: confirmed.fingerprint,
+      peerListenerPort: issued.listenerPort,
+      tunnelPort,
+    };
+    (deps.writeState ?? (value => defaultWriteState(deps.configDir, value)))(state);
+    tunnel = (deps.spawnTunnel ?? spawnClientLinkTunnel)({
+      linkId: issued.linkId,
+      alias: input.alias,
+      tunnelPort,
+      peerListenerPort: issued.listenerPort,
+    }, {
+      runner: deps.runner,
+      configDir: deps.configDir,
+      knownHostsFile: deps.knownHostsFile,
+    });
+    await waitForReady(deps, tunnel, tunnelPort, issued.key);
+  } catch (error) {
+    const code = error instanceof ClientLinkJoinError ? error.code : "join_tunnel_failed";
+    await rollback(deps, issued.linkId, tunnel);
+    throw new ClientLinkJoinError(code);
+  }
+
+  const enrollmentAbort = new AbortController();
+  let enrollmentFinished = false;
+  try {
+    if (!tunnel) throw new ClientLinkJoinError("join_tunnel_failed");
+    const connect = deps.connect ?? connectClient;
+    // A tunnel exit cancels work; it is NOT a competing terminal result. The connect
+    // transaction alone decides commit versus rollback, so an exit queued immediately
+    // after commit cannot revoke a key that a connected client has already retained.
+    void tunnel.exited.then(() => {
+      if (!enrollmentFinished) enrollmentAbort.abort(new ClientLinkJoinError("join_tunnel_failed"));
+    });
+    const signal = deps.connectDeps?.signal
+      ? AbortSignal.any([enrollmentAbort.signal, deps.connectDeps.signal]) : enrollmentAbort.signal;
+    // Observe a tunnel that exited after readiness before starting any enrollment write.
+    await Promise.resolve();
+    signal.throwIfAborted();
+    await connect({
+      serverUrl: `http://127.0.0.1:${tunnelPort}`,
+      managementUrl: `http://127.0.0.1:${tunnelPort}`,
+      credential: { kind: "link", apiKeyId: issued.apiKeyId, key: issued.key },
+      transport: "link",
+      link: { tunnelPort, linkId: issued.linkId },
+      selectedClients: deps.selectedClients ?? ["codex", "claude"],
+      managementTransport: "direct",
+    }, {
+      fetchImpl: deps.fetchImpl,
+      ...deps.connectDeps,
+      signal,
+    });
+  } catch (error) {
+    // connectClient has drained its local rollback before rejecting. Only then can
+    // the tunnel and the remote key be compensated without racing a late writer.
+    const tunnelAborted = enrollmentAbort.signal.aborted;
+    enrollmentFinished = true;
+    await rollback(deps, issued.linkId, tunnel);
+    throw new ClientLinkJoinError(tunnelAborted ? "join_tunnel_failed"
+      : error instanceof ClientLinkJoinError ? error.code : "join_connect_failed");
+  } finally {
+    enrollmentFinished = true;
+  }
+
+  await stopTunnel(tunnel);
+  try {
+    deps.scheduleRestart();
+  } catch {
+    throw new ClientLinkJoinError("join_restart_failed", issued.linkId);
+  }
+  return { linkId: issued.linkId, apiKeyId: issued.apiKeyId };
+}

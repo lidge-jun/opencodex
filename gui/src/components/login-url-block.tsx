@@ -1,15 +1,28 @@
 import { IconExternal, IconLink } from "../icons";
 import { useT } from "../i18n/shared";
 import { useCopyFeedback } from "./use-copy-feedback";
+import type { BrowserLaunch } from "../oauth-browser-launch";
+
+/** Whether a login URL is something a browser can be asked to open. */
+function isOpenableUrl(url: string): boolean {
+  try {
+    const protocol = new URL(url).protocol;
+    return protocol === "https:" || protocol === "http:";
+  } catch {
+    return false;
+  }
+}
 
 /**
- * Recovery affordance for an OAuth waiting state: the proxy already tried to
- * open the browser server-side, so this block only matters once that failed.
- * It exposes the authorization URL as selectable text, copies it, and offers a
- * manual open — the single owner for all three login surfaces (workspace panel,
- * add-provider modal, Codex account modal).
+ * The authorization URL of a login in progress: selectable text, a copy button,
+ * and a manual open — the single owner for every login surface (workspace panel,
+ * add-provider modal, Codex account modal, native main-account reauth).
+ *
+ * `openLabel` exists because "Didn't open?" is only true when something tried to
+ * open a browser. A device grant and a login whose operator declined the
+ * automatic launch never did, so for them the link is simply the way in.
  */
-export function LoginUrlBlock({ url }: { url: string }) {
+export function LoginUrlBlock({ url, openLabel }: { url: string; openLabel?: string }) {
   const t = useT();
   const { outcomeFor, copy } = useCopyFeedback<string>();
 
@@ -26,14 +39,7 @@ export function LoginUrlBlock({ url }: { url: string }) {
   // inherently trustworthy: only offer navigation for schemes a browser can
   // safely open. Unsafe or malformed values stay visible and copyable but are
   // never rendered as a clickable link.
-  const canOpen = (() => {
-    try {
-      const protocol = new URL(url).protocol;
-      return protocol === "https:" || protocol === "http:";
-    } catch {
-      return false;
-    }
-  })();
+  const canOpen = isOpenableUrl(url);
 
   return (
     <div className="login-url-block">
@@ -45,7 +51,7 @@ export function LoginUrlBlock({ url }: { url: string }) {
         </button>
         {canOpen && (
           <a href={url} target="_blank" rel="noreferrer" className="login-url-block-open">
-            <IconExternal style={{ width: 13, height: 13 }} aria-hidden="true" /> {t("prov.didntOpen")}
+            <IconExternal style={{ width: 13, height: 13 }} aria-hidden="true" /> {openLabel ?? t("prov.didntOpen")}
           </a>
         )}
       </div>
@@ -58,6 +64,13 @@ export type LoginHintData = {
   url?: string;
   deviceCode?: string;
   instructions?: string;
+  /**
+   * What the proxy reported about opening the browser itself. Absent from older
+   * servers and from surfaces with no server launch; only `"failed"` changes
+   * what is shown, because `"started"` proves a launcher ran, not that a page
+   * rendered.
+   */
+  browserLaunch?: BrowserLaunch;
 };
 
 export type LoginHintPaste = {
@@ -86,7 +99,8 @@ export type LoginHintPaste = {
  *
  * Order is deliberate: the device code first because it is the short thing a
  * human has to type, then the URL, then any provider prose, then the paste
- * fallback for when the browser cannot reach the loopback callback.
+ * fallback for when the browser cannot reach the loopback callback. Device
+ * grants poll for approval instead: their human code is not a callback code.
  */
 export function LoginHint({ hint, paste }: { hint: LoginHintData; paste?: LoginHintPaste }) {
   const t = useT();
@@ -104,22 +118,46 @@ export function LoginHint({ hint, paste }: { hint: LoginHintData; paste?: LoginH
     : deviceOutcome === "unavailable"
       ? t("prov.linkCopyUnavailable")
       : t("prov.copyCode");
+  // Nothing tried to open a browser for a device grant or a declined launch, so
+  // the link is labelled as the way in rather than as a recovery.
+  const openLabel = deviceCode || hint.browserLaunch === "skipped" ? t("prov.openSignInPage") : undefined;
+  // Copy the code and open the page in one click, the way device logins usually
+  // go: the user lands on a page asking for a code that is already on their
+  // clipboard. The copy is started before the open so it still runs inside the
+  // click's user activation; the code stays on screen either way. Inside the
+  // desktop app the new window is handed to the default browser by the shell.
+  const copyAndOpen = deviceCode && isOpenableUrl(url)
+    ? () => {
+      deviceCopy.copy(deviceCode, deviceCode);
+      window.open(url, "_blank", "noopener,noreferrer");
+    }
+    : null;
 
   return (
     <div className="login-hint">
+      {hint.browserLaunch === "failed" && url && (
+        <div className="notice-warn login-hint-launch-failed" role="status">
+          {t("prov.browserLaunchFailed")}
+        </div>
+      )}
       {deviceCode && (
         <div className="login-hint-device pwi-device-code-wrap">
           <span className="text-label">{t("prov.deviceCode")}</span>
           <code className="login-hint-device-code pwi-device-code">{deviceCode}</code>
-          <button type="button" className="btn btn-primary btn-sm"
+          <button type="button" className={copyAndOpen ? "btn btn-ghost btn-sm" : "btn btn-primary btn-sm"}
             onClick={() => deviceCopy.copy(deviceCode, deviceCode)}>
             <span aria-live="polite">{deviceCopyLabel}</span>
           </button>
+          {copyAndOpen && (
+            <button type="button" className="btn btn-primary btn-sm login-hint-copy-open" onClick={copyAndOpen}>
+              {t("prov.copyCodeAndOpen")}
+            </button>
+          )}
         </div>
       )}
-      <LoginUrlBlock url={url} />
+      <LoginUrlBlock url={url} openLabel={openLabel} />
       {hint.instructions && <div className="muted text-label">{hint.instructions}</div>}
-      {paste && (
+      {paste && !deviceCode && (
         <div className="login-hint-paste">
           <div className="muted text-label">{t("prov.pasteRedirectHint")}</div>
           <div className="login-hint-paste-row">

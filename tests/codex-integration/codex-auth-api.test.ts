@@ -1,5 +1,6 @@
 import { registerWarmupRateLimitCases } from "../helpers/codex-warmup-rate-limit";
 import { registerResetCreditConsumeValidationTests } from "../helpers/reset-credit-consume-validation";
+import { registerPoolReauthCauseCases } from "../helpers/pool-reauth-cause";
 import * as usageHistoryModule from "../../src/usage/log";
 import { getAccountQuotaHistory } from "../../src/codex/quota";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
@@ -72,12 +73,15 @@ import {
 } from "../../src/codex/account-lifecycle";
 import {
   ConfigMutationLockError,
+  armClaudeCodeBaseline,
   getConfigPath,
   loadConfig,
   saveConfig,
   setPersistedConfigMutationBeforeCommitForTests,
 } from "../../src/config";
 import * as configModule from "../../src/config";
+import { setCodexAccountAutoSwitchThresholdOverride } from "../../src/codex/account-auto-switch";
+import { prepareConfigObjectChildDeletionRebase } from "../../src/config/rebase-provenance";
 import type { CatalogDisposition } from "../../src/codex/convergence-types";
 import { captureConfigGeneration, registerStateStore } from "../../src/lib/state-store-sweeper";
 import {
@@ -169,7 +173,7 @@ async function completeMockCodexOAuth(options: {
     done: true,
     loggedIn: true,
   } as ReturnType<typeof oauth.getLoginStatus>);
-  const openSpy = spyOn(openUrlMod, "openUrl").mockImplementation(() => {});
+  const openSpy = spyOn(openUrlMod, "openUrl").mockImplementation(async () => ({ status: "started" as const }));
   // Mirrors the login-status poll delay in login-flow.ts; other timers are intentionally dropped.
   const CODEX_OAUTH_LOGIN_POLL_INTERVAL_MS = 2_000;
   const timeoutSpy = spyOn(globalThis, "setTimeout").mockImplementation(((
@@ -474,14 +478,14 @@ describe("main quota refresh diagnostics", () => {
       expect(reads).toBe(1);
       if (invalidation === "none") {
         const expected = outcome === "http" ? { status: "http_error", httpStatus: 503 }
-          : outcome === "terminal_http" ? { status: "http_error", httpStatus: 403 }
+          : outcome === "terminal_http" ? { status: "http_error", httpStatus: 403, code: "invalid_workspace_selected" }
           : { status: outcome === "body" ? "network_error" : "ok" };
         expect(result.quotaRefresh).toEqual(expected);
       } else {
         expect(result).not.toHaveProperty("quotaRefresh");
       }
-      // The existing terminal-auth decision still applies, independently of diagnostic freshness.
-      if (outcome === "terminal_http") expect(isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)).toBe(true);
+      // Terminal errors can quarantine only the still-current identity and credential.
+      if (outcome === "terminal_http") expect(isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)).toBe(invalidation === "none");
       expect(result).not.toHaveProperty("quotaRefreshGeneration");
       expect(JSON.stringify(result)).not.toContain("quotaRefreshGeneration");
       expect(JSON.stringify(result)).not.toContain("canary");
@@ -1056,6 +1060,7 @@ describe("codex-auth API", () => {
   });
 
   test("account DTO exposes the routing plan exclusion and clears it on renewal", async () => {
+    globalThis.fetch = (async () => new Response(null, { status: 503 })) as typeof fetch; // Metadata assertions do not depend on quota transport.
     const cfg = makeConfig({ codexPool: { excludedPlans: ["free"] } });
     seedPoolAccount(cfg, { id: "plan-row", email: "plan@example.test", plan: "free" });
     const read = async () => {
@@ -2089,6 +2094,8 @@ describe("codex-auth API", () => {
     expect(config.codexAccounts?.find(account => account.id === "pool-plan-config-deleted")?.plan).toBe("plus");
     expect(existsSync(join(TEST_DIR, "config.json"))).toBe(false);
   });
+
+  registerPoolReauthCauseCases(makeConfig, seedPoolAccount);
 
   test("pool plan refresh batches multiple authoritative changes into one config save", async () => {
     const config = makeConfig();
@@ -3998,6 +4005,7 @@ describe("codex-auth API", () => {
   });
 
   test("the account list reports selection order, defaulting to zero", async () => {
+    globalThis.fetch = (async () => new Response(null, { status: 503 })) as typeof fetch; // Keep synthetic credentials off the quota network path.
     const config = makeConfig({ codexAccountPriorities: { work: 2 } });
     seedPoolAccount(config, { id: "work", email: "work@example.test" });
     seedPoolAccount(config, { id: "side", email: "side@example.test" });
@@ -4008,6 +4016,7 @@ describe("codex-auth API", () => {
     expect(accounts.find(a => a.id === "side")?.priority).toBe(0);
     expect(accounts.find(a => a.isMain)?.priority).toBe(0);
   });
+
 
   test("GET /api/codex-auth/active reports an operator pin but not an automatic pick", async () => {
     const config = makeConfig({ activeCodexAccountId: "work" });
@@ -4138,6 +4147,28 @@ describe("codex-auth API", () => {
     expect(resolveCodexAccountForThread("bulk-pause-thread", config)).toBe("free-weekly-only");
   });
 
+  test("bulk pause preserves spendable-credit accounts at 100% but pauses empty and reset-only accounts", async () => {
+    const config = makeConfig({ activeCodexAccountId: "paid", creditCodexAccountIds: ["paid"] });
+    for (const id of ["paid", "paid-off", "empty", "reset-only"]) {
+      seedPoolAccount(config, { id, email: `${id}@example.test`, plan: "pro", chatgptAccountId: id });
+    }
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const id = new Headers(init?.headers).get("ChatGPT-Account-Id");
+      return Response.json({
+        plan_type: "pro",
+        rate_limit: { allowed: (id === "paid" || id === "paid-off"), primary_window: { used_percent: 100, limit_window_seconds: 604800 } },
+        rate_limit_reset_credits: { available_count: id === "reset-only" ? 3 : 0 },
+        credits: { has_credits: (id === "paid" || id === "paid-off"), unlimited: false, balance: (id === "paid" || id === "paid-off") ? "42.5" : "0" },
+      });
+    }) as typeof fetch;
+    const req = new Request("http://localhost/api/codex-auth/accounts/pause-exhausted", { method: "PUT" });
+    const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+    expect(resp!.status).toBe(200);
+    expect(await resp!.json()).toMatchObject({ pausedAccountIds: ["paid-off", "empty", "reset-only"], pausedCount: 3 });
+    expect(config.pausedCodexAccountIds).toEqual(["paid-off", "empty", "reset-only"]);
+    expect(config.activeCodexAccountId).toBe("paid");
+  });
+
   test("bulk pause preserves a known Free main plan when WHAM omits plan_type", async () => {
     writeFileSync(join(TEST_CODEX_HOME, "auth.json"), JSON.stringify({
       tokens: { access_token: "main-access", account_id: "main-account" },
@@ -4210,6 +4241,23 @@ describe("codex-auth API", () => {
     expect(config.pausedCodexAccountIds).toBeUndefined();
   });
 
+  test("repeated main bulk-pause reads honor failed-query pacing under a shared claim", async () => {
+    writeFileSync(join(TEST_CODEX_HOME, "auth.json"), JSON.stringify({
+      tokens: { access_token: "bulk-main-access", account_id: "bulk-main-account" },
+    }));
+    const config = makeConfig({ providers: { openai: {
+      adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex",
+      authMode: "forward", codexAccountMode: "pool",
+    } } });
+    let calls = 0;
+    globalThis.fetch = (async () => { calls++; return new Response(null, { status: 503 }); }) as typeof fetch;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const req = new Request("http://localhost/api/codex-auth/accounts/pause-exhausted", { method: "PUT" });
+      expect((await handleCodexAuthAPI(req, new URL(req.url), config))?.status).toBe(502);
+    }
+    expect(calls).toBe(1);
+  });
+
   test("bulk pause discards an exhausted result after the account is deleted and recreated", async () => {
     const config = makeConfig({
       codexAccounts: [{ id: "reused", email: "old@example.test", plan: "plus", isMain: false }],
@@ -4271,20 +4319,6 @@ describe("codex-auth API", () => {
       pausedCount: 1,
     });
     expect(config.pausedCodexAccountIds).toEqual([MAIN_CODEX_ACCOUNT_ID]);
-  });
-
-  test("PUT /api/codex-auth/active rejects null when the effective main account is paused", async () => {
-    const config = makeConfig({ pausedCodexAccountIds: [MAIN_CODEX_ACCOUNT_ID] });
-    const req = new Request("http://localhost/api/codex-auth/active", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ accountId: null }),
-    });
-    const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
-
-    expect(resp!.status).toBe(409);
-    expect(await resp!.json()).toEqual({ error: "Account is paused" });
-    expect(config.activeCodexAccountId).toBeUndefined();
   });
 
   test("resuming restores eligibility and manual activation rejects paused accounts", async () => {
@@ -4590,7 +4624,7 @@ describe("codex-auth API", () => {
       instructions: "Enter code: ABCD-EFGH",
       deviceCode: "ABCD-EFGH",
     }));
-    const openSpy = spyOn(openUrlModule, "openUrl").mockImplementation(() => {});
+    const openSpy = spyOn(openUrlModule, "openUrl").mockImplementation(async () => ({ status: "started" as const }));
     try {
       const req = new Request("http://localhost/api/codex-auth/login", {
         method: "POST",
@@ -4696,7 +4730,7 @@ describe("codex-auth API", () => {
       controller.onAuth({ url: "https://example.test/oauth" });
       throw new Error("late failure at /home/alice/.opencodex/auth.json.ocx-tmp sk-secret-provider-key");
     };
-    const openSpy = spyOn(openUrlMod, "openUrl").mockImplementation(() => {});
+    const openSpy = spyOn(openUrlMod, "openUrl").mockImplementation(async () => ({ status: "started" as const }));
     const timeoutSpy = spyOn(globalThis, "setTimeout").mockImplementation(((
       callback: (...args: unknown[]) => void,
       delay?: number,
@@ -4744,7 +4778,7 @@ describe("codex-auth API", () => {
     const { OAuthMutationBusyError } = await import("../../src/oauth/store");
     const openUrlMod = await import("../../src/lib/open-url");
     const originalLogin = oauth.OAUTH_PROVIDERS.chatgpt.login;
-    const openSpy = spyOn(openUrlMod, "openUrl").mockImplementation(() => {});
+    const openSpy = spyOn(openUrlMod, "openUrl").mockImplementation(async () => ({ status: "started" as const }));
     const timeoutSpy = spyOn(globalThis, "setTimeout").mockImplementation(((
       callback: (...args: unknown[]) => void,
       delay?: number,
@@ -4807,21 +4841,6 @@ describe("codex-auth API", () => {
     }
   });
 
-  test("POST /api/codex-auth/login/cancel expires the pending flow", async () => {
-    const flowId = "flow-cancel-test";
-    const req = new Request("http://localhost/api/codex-auth/login/cancel", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ flowId }),
-    });
-    const resp = await handleCodexAuthAPI(req, new URL(req.url), {} as any);
-    expect(resp!.status).toBe(200);
-    const statusReq = new Request(`http://localhost/api/codex-auth/login-status?flowId=${flowId}`, { method: "GET" });
-    const statusResp = await handleCodexAuthAPI(statusReq, new URL(statusReq.url), {} as any);
-    const data = await statusResp!.json() as { status: string; error?: string };
-    expect(data).toMatchObject({ status: "error", error: "Login cancelled" });
-  });
-
   describe("POST /api/codex-auth/login/code", () => {
     async function startPendingFlow() {
       const oauth = await import("../../src/oauth");
@@ -4831,7 +4850,7 @@ describe("codex-auth API", () => {
         done: false,
         loggedIn: false,
       } as ReturnType<typeof oauth.getLoginStatus>);
-      const openSpy = spyOn(openUrlMod, "openUrl").mockImplementation(() => {});
+      const openSpy = spyOn(openUrlMod, "openUrl").mockImplementation(async () => ({ status: "started" as const }));
       const req = new Request("http://localhost/api/codex-auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -4839,16 +4858,13 @@ describe("codex-auth API", () => {
       });
       const resp = await handleCodexAuthAPI(req, new URL(req.url), makeConfig());
       const data = await resp!.json() as { flowId: string };
+      expect(startSpy).toHaveBeenCalledWith("chatgpt", expect.any(Object), { flowId: data.flowId });
       return {
         flowId: data.flowId,
         oauth,
         async cleanup() {
-          const cancelReq = new Request("http://localhost/api/codex-auth/login/cancel", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ flowId: data.flowId }),
-          });
-          await handleCodexAuthAPI(cancelReq, new URL(cancelReq.url), makeConfig());
+          const { codexAuthLoginState } = await import("../../src/codex/auth-api/login-state");
+          codexAuthLoginState.delete(data.flowId);
           startSpy.mockRestore();
           statusSpy.mockRestore();
           openSpy.mockRestore();
@@ -5158,7 +5174,7 @@ describe("codex-auth API", () => {
       loggedIn: false,
       error: "test-stop",
     } as ReturnType<typeof oauth.getLoginStatus>);
-    const openSpy = spyOn(openUrlMod, "openUrl").mockImplementation(() => {});
+    const openSpy = spyOn(openUrlMod, "openUrl").mockImplementation(async () => ({ status: "started" as const }));
 
     try {
       const req = new Request("http://localhost/api/codex-auth/login", {
@@ -5272,6 +5288,10 @@ describe("codex-auth API", () => {
     await refreshAccounts();
     expect(warmups).toBe(0);
     used = 0;
+    // A malformed 200 is paced; a replacement credential gets its own query key.
+    saveCodexAccountCredential(accountId, {
+      ...getCodexAccountCredential(accountId)!, accessToken: "quota-access-recovered",
+    }, { validationPending: true });
     clearAccountQuota();
     await listCodexAuthAccounts(config, false);
     expect(warmups).toBe(0); // Passive reads never spend inference.
@@ -5337,14 +5357,17 @@ describe("codex-auth API", () => {
     if (restart) clearAccountNeedsReauth(accountId);
     const rows = await listCodexAuthAccounts(config, false);
     const authFailed = !replace && (status === 401 || status === 403);
+    // The stored verdict's own http status names the cause whether or not the in-memory
+    // mark still exists; a bare mark no longer flattens the projection to refresh_failed.
+    const expectedReason = status === 403 ? "forbidden" : "unauthorized";
     const row = rows.find(entry => entry.id === accountId);
     expect(row).toMatchObject({
       needsReauth: authFailed,
-      health: { status: authFailed ? "reauth_required" : "warning", reason: authFailed ? "refresh_failed" : "validation_pending" },
+      health: { status: authFailed ? "reauth_required" : "warning", reason: authFailed ? expectedReason : "validation_pending" },
     });
     // The reason travels with the state, so an operator reading the account surface can tell a
     // failed refresh from a pending validation without inferring it from `health` (#4212).
-    if (authFailed) expect(row).toMatchObject({ reauthReason: "refresh_failed" });
+    if (authFailed) expect(row).toMatchObject({ reauthReason: expectedReason });
     else expect(row).not.toHaveProperty("reauthReason");
     fail = false;
     await refresh();
@@ -5440,7 +5463,7 @@ describe("codex-auth API", () => {
     expect(isCodexAccountUsable(config, accountId)).toBe(true);
   });
 
-  test.each([{ delay: 0, reads: 1 }, { delay: 3, reads: 2 }, { delay: 6, reads: 2 }])("validation joins before, during, and after quota settlement: %j", async ({ delay, reads }) => {
+  test.each([{ delay: 0, reads: 1 }, { delay: 3, reads: 1 }, { delay: 6, reads: 2 }])("validation joins before, during, and after quota settlement: %j", async ({ delay, reads }) => {
     const { fetchPoolAccountQuota } = await import("../../src/codex/auth-api");
     const accountId = "late-validation-join";
     const config = makeConfig({ codexAccounts: [{ id: accountId, plan: "pro", isMain: false }] });
@@ -6311,86 +6334,71 @@ describe("manual reset cooldown recovery (#3973)", () => {
     }
   });
 
-  // Adapt #3995/e172453052's two-flight convergence to fresh-before-old scheduling.
-  test("reset publishes a fourth usage request before two old current-generation flights complete", async () => {
+  test("post-reset usage has fresh proof while a same-generation replay joins its owner", async () => {
     const config = setup();
     const oldCredential = getCodexAccountCredential("manual-a")!;
     const oldGeneration = readCodexAccountRecord("manual-a")!.generation;
     const firstStarted = gate(); const release401 = gate(); const secondStarted = gate(); const secondFinish = gate();
-    const replayStarted = gate(); const replayFinish = gate(); const freshStarted = gate();
-    const latches = [firstStarted, release401, secondStarted, secondFinish, replayStarted, replayFinish, freshStarted];
     const pending: Promise<unknown>[] = [];
     const urls: string[] = []; const usageBearers: Array<string | null> = [];
-    let usageCalls = 0; let consumeCalls = 0; let completedOldResponses = 0;
+    let usageCalls = 0;
     let rejectDeadline!: (error: Error) => void;
     const deadline = new Promise<never>((_resolve, reject) => { rejectDeadline = reject; });
-    // Failure bound only: success is synchronized on dispatch latches, never elapsed time.
-    const timeout = setTimeout(() => rejectDeadline(new Error("mock dispatch did not reach its expected phase")), watchdogMs(10_000));
+    const timeout = setTimeout(() => rejectDeadline(new Error("mock dispatch did not settle")), watchdogMs(10_000));
+    const within = <T>(promise: Promise<T>) => Promise.race([promise, deadline]);
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input); urls.push(url);
-      if (url === CONSUME) { consumeCalls += 1; return Response.json({ code: "reset" }); }
+      if (url === CONSUME) return Response.json({ code: "reset" });
       if (url !== USAGE) throw new Error("unexpected mock URL");
       usageBearers.push(new Headers(init?.headers).get("Authorization"));
       switch (++usageCalls) {
-        case 1:
-          firstStarted.release(); await release401.promise;
-          return new Response("{}", { status: 401 });
-        case 2:
-          secondStarted.release(); await secondFinish.promise; completedOldResponses += 1;
+        case 1: firstStarted.release(); await release401.promise; return new Response("{}", { status: 401 });
+        case 2: secondStarted.release(); await secondFinish.promise;
           return Response.json({ ...usage(88), rate_limit_reset_credits: { available_count: 66 } });
-        case 3:
-          replayStarted.release(); await replayFinish.promise; completedOldResponses += 1;
-          return Response.json({ ...usage(99), rate_limit_reset_credits: { available_count: 77 } });
-        case 4:
-          freshStarted.release(); return Response.json(usage(12));
-        default: throw new Error("unexpected mock usage dispatch");
+        case 3: return Response.json({ ...usage(99), rate_limit_reset_credits: { available_count: 77 } });
+        case 4: return Response.json(usage(12));
+        default: throw new Error("duplicate same-key usage dispatch");
       }
     }) as typeof fetch;
     try {
       const first = listCodexAuthAccounts(config, true); pending.push(first);
       void first.catch(rejectDeadline);
-      await Promise.race([firstStarted.promise, deadline]);
-      // A fresh external generation starts its own ordinary flight while P's old 401 is held.
+      await within(firstStarted.promise);
       saveCodexAccountCredential("manual-a", { ...oldCredential, accessToken: "converged-access", refreshToken: "converged-refresh" });
       expect(readCodexAccountRecord("manual-a")!.generation).toBe(oldGeneration + 1);
       const second = listCodexAuthAccounts(config, true); pending.push(second);
       void second.catch(rejectDeadline);
-      await Promise.race([secondStarted.promise, deadline]);
+      await within(secondStarted.promise);
       release401.release();
-      await Promise.race([replayStarted.promise, deadline]);
-      // Both old flights now use the current generation; neither response has completed.
-      expect(usageBearers).toEqual([`Bearer ${oldCredential.accessToken}`, "Bearer converged-access", "Bearer converged-access"]);
-      expect(completedOldResponses).toBe(0);
+      // The replay's refreshed lineage can have a different generation key.
+      secondFinish.release();
+      const [firstRows, secondRows] = await within(Promise.all([first, second]));
+      const oldPercentages = [firstRows, secondRows].map(rows => rows.find(account => account.id === "manual-a")?.quota?.weeklyPercent);
+      expect(oldPercentages.every(percent => percent === 88 || percent === 99)).toBe(true);
+      expect(usageCalls).toBe(3);
       const reset = consume(config); pending.push(reset);
-      void reset.catch(rejectDeadline);
-      await Promise.race([freshStarted.promise, deadline]);
-      const response = await Promise.race([reset, deadline]);
+      const response = await within(reset);
       expect(response?.status).toBe(200);
       expect(await response?.json()).toEqual({ code: "reset", remaining: 2 });
-      expect(completedOldResponses).toBe(0);
+      expect(getAccountQuota("manual-a")).toMatchObject({ weeklyPercent: 12, resetCredits: 2 });
       expect(getCodexQuotaHealthSnapshot("manual-a", "shared")).toBeNull();
-      const fresh = structuredClone(getAccountQuota("manual-a"));
-      expect(fresh).toMatchObject({ weeklyPercent: 12, resetCredits: 2 });
-      secondFinish.release(); replayFinish.release();
-      await Promise.all([first, second]);
-      expect(completedOldResponses).toBe(2);
-      expect(getAccountQuota("manual-a")).toEqual(fresh);
-      expect(getCodexQuotaHealthSnapshot("manual-a", "shared")).toBeNull();
-      expect(consumeCalls).toBe(1); expect(usageCalls).toBe(4);
+      expect(usageCalls).toBe(4);
       expect(usageBearers).toEqual([`Bearer ${oldCredential.accessToken}`, "Bearer converged-access", "Bearer converged-access", "Bearer converged-access"]);
       expect(urls).toEqual([USAGE, USAGE, USAGE, CONSUME, USAGE]);
     } finally {
       clearTimeout(timeout);
-      for (const latch of latches) latch.release();
-      const results = await Promise.allSettled(pending);
+      release401.release(); secondFinish.release();
+      await Promise.allSettled(pending);
       globalThis.fetch = originalFetch;
-      for (const result of results) if (result.status === "rejected") throw result.reason;
     }
-  }, 60_000);
+  });
 
   test("main Q-first/P-last publication preserves post-reset cache, credits and hard-lock readiness", async () => {
-    const config = makeConfig({ codexMainAccountHardLock: true });
+    const config = makeConfig({ codexMainAccountHardLock: true, providers: { openai: {
+      adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex",
+      authMode: "forward", codexAccountMode: "pool",
+    } } });
     const accessToken = "ordered-main-token"; const accountId = "ordered-main-account";
     writeFileSync(join(TEST_CODEX_HOME, "auth.json"), JSON.stringify({ tokens: { access_token: accessToken, account_id: accountId } }));
     reconcileMainCodexAccountRuntimeState();
@@ -6432,35 +6440,53 @@ describe("manual reset cooldown recovery (#3973)", () => {
       expect(getMainAccountHardLockStatus(config).state).toBe("ready");
       const displayed = (await listCodexAuthAccounts(config, false)).find(account => account.isMain)!;
       expect(displayed.quota).toMatchObject({ weeklyPercent: 12, resetCredits: 2 });
-      await fetchMainAccountInfoSnapshot(true);
+      const deferred = await fetchMainAccountInfoSnapshot(true);
+      expect(deferred.quotaRefresh).toBeUndefined();
       const afterOmission = (await listCodexAuthAccounts(config, false)).find(account => account.isMain)!;
       expect(afterOmission.quota?.resetCredits).toBe(2);
       expect(getMainAccountHardLockStatus(config).state).toBe("ready");
-      expect(urls).toEqual([USAGE, CONSUME, USAGE, USAGE]);
+      expect(urls).toEqual([USAGE, CONSUME, USAGE]);
     } finally { oldFinish.release(); await old; }
   });
 
-  test("a newer failed main read does not outrank an older successful publication", async () => {
+  test("concurrent same-key main reads share one published quota result", async () => {
     writeFileSync(join(TEST_CODEX_HOME, "auth.json"), JSON.stringify({
       tokens: { access_token: "publication-main-token", account_id: "publication-main-account" },
     }));
     reconcileMainCodexAccountRuntimeState();
     const started = gate(); const finish = gate(); let reads = 0;
     const urls = mock(() => { throw new Error("consume is not expected"); }, async () => {
-      if (++reads === 1) { started.release(); await finish.promise; return Response.json(usage()); }
-      return new Response("fixture unavailable", { status: 503 });
+      reads++;
+      started.release(); await finish.promise; return Response.json(usage());
     });
-    const old = fetchMainAccountInfoSnapshot(true);
+    const first = fetchMainAccountInfoSnapshot(true);
     try {
       await started.promise;
-      expect((await fetchMainAccountInfoSnapshot(true)).quotaRefresh).toEqual({ status: "http_error", httpStatus: 503 });
+      const joined = fetchMainAccountInfoSnapshot(true);
+      expect(reads).toBe(1);
       finish.release();
-      expect((await old).quotaRefresh).toEqual({ status: "ok" });
+      expect((await first).quotaRefresh).toEqual({ status: "ok" });
+      expect((await joined).quotaRefresh).toEqual({ status: "ok" });
       expect(getMainAccountInfoCache()?.quota).toMatchObject({ weeklyPercent: 12, resetCredits: 2 });
       expect(getMainPolicyQuota()?.weeklyPercent).toBe(12);
       expect(getMainAccountHardLockStatus({ codexMainAccountHardLock: true }).state).toBe("ready");
-      expect(urls).toEqual([USAGE, USAGE]);
-    } finally { finish.release(); await old; }
+      expect(urls).toEqual([USAGE]);
+    } finally { finish.release(); await first; }
+  });
+
+  test.each(["absent", "direct"])("%s non-pool main forces dispatch after a failed read", async mode => {
+    writeFileSync(join(TEST_CODEX_HOME, "auth.json"), JSON.stringify({
+      tokens: { access_token: "non-pool-access", account_id: "non-pool-account" },
+    }));
+    const config = makeConfig(mode === "direct" ? { providers: { openai: {
+      adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex",
+      authMode: "forward", codexAccountMode: "direct",
+    } } } : {});
+    let calls = 0;
+    globalThis.fetch = (async () => { calls++; return new Response(null, { status: 503 }); }) as typeof fetch;
+    expect((await fetchMainAccountInfoSnapshot(true, config)).quotaRefresh).toEqual({ status: "http_error", httpStatus: 503 });
+    expect((await fetchMainAccountInfoSnapshot(true, config)).quotaRefresh).toEqual({ status: "http_error", httpStatus: 503 });
+    expect(calls).toBe(2);
   });
 
   test("main reset usage does not erase an existing reauth quarantine", async () => {

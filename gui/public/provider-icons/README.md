@@ -14,6 +14,9 @@ Export-client marks (used by the API tab's connect rows, not the provider list):
 
 - `cline-color.svg` — reuses the existing provider mark already tracked in this directory
   for Cline CLI; no new image was imported for the file integration.
+- `commandcode-color.svg` — reuses the Command Code provider mark already tracked in this
+  directory (the ⌘ mark in brand purple `#8C4EDD`, added in `b143984642`) for the Command
+  Code client integration; no new image was imported.
 
 - `pi.svg` — fetched 2026-08-02 from `https://pi.dev/favicon.svg`, the Pi
   project's own favicon, unmodified. Pi is `earendil-works/pi`
@@ -380,3 +383,22 @@ committing it.
   `b60df52303ba7170772b256c20c04940`), gradient id and all. The contributor works
   at Crusoe and confirms this is the company mark. Painted as an image: the
   gradient is the brand, so it must never be masked.
+
+- `factory-droid.svg` — Factory Docs favicon, fetched 2026-09-28 from `https://docs.factory.ai/favicon.svg`; unmodified first-party asset for Factory Droid.
+
+## TokenLab (2026-09-29)
+
+- `tokenlab.svg` — TokenLab's "Specimen Split" symbol, `logos/tokenlab-symbol.svg` from the
+  sponsor asset pack TokenLab supplied for its Standard sponsorship (`SPONSORS.md`), committed
+  byte for byte (416 bytes, MD5 `fcb8c1325a34ed52b1dc89eabf08a0e6`), `<title>`/`<desc>` included
+  since they do not affect rendering. `viewBox="0 0 48 48"`, one `#151714` ink, so it is
+  **masked** like `packycode.svg`: as an image it vanishes on the dark tile. The pack's reverse
+  symbol (`#F5F5F1`) is the same geometry and is not needed once the mark follows the theme.
+
+## OpenGateway (2026-10-02)
+
+- `opengateway.svg` — OpenGateway's header logo, `https://opengateway.ai/logo.svg` (the asset the
+  site's own header renders), committed byte for byte (860 bytes, MD5 `b510e841406d8bcb24fb4ad584f128fd`). `viewBox="0 0 1140 650"`
+  (1.75:1, inside the 2.5 lockup limit), pure geometry (`rect`/`path`), drawn in `currentColor`, so it
+  is **masked**: as an image `currentColor` resolves to black and vanishes on the dark tile. The site
+  favicon `https://opengateway.ai/icon.svg` was rejected: its "OG" is a `<text>` glyph.

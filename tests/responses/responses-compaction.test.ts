@@ -13,12 +13,47 @@ import {
   encodeCompactionSummary,
   extractCompactUserMessages,
 } from "../../src/responses/compaction";
-import type { AdapterEvent } from "../../src/types";
+import type { AdapterEvent, OcxMessage } from "../../src/types";
+import { COMPACTION_IMAGE_NOTE, omitEarlierCompactionImages } from "../../src/responses/compaction-images";
 import { withTestTranslatorBudget } from "../helpers/translator-budget";
 import { bufferCompactResponse, COMPACT_RESPONSE_MAX_BYTES } from "../../src/server/responses/compact";
 
 const createResponsesPassthroughAdapter = (...args: Parameters<typeof createResponsesPassthroughAdapterProduction>) =>
   withTestTranslatorBudget(createResponsesPassthroughAdapterProduction(...args));
+
+describe("translated compaction historical images", () => {
+  const image = { type: "image" as const, imageUrl: `data:image/png;base64,${"A".repeat(32_000)}`, detail: "high" };
+  test("omits only earlier image parts while preserving source text, tool identity and original input", () => {
+    const messages: OcxMessage[] = [
+      { role: "user", content: [{ type: "text", text: "Source: /fixtures/chart.png" }, image], timestamp: 1 },
+      { role: "toolResult", toolCallId: "call-1", toolName: "view_image", toolNamespace: "functions", isError: false,
+        content: [image, { type: "text", text: "Observed chart: total 42; unresolved legend." }], timestamp: 2 },
+      { role: "assistant", phase: "final_answer", content: [{ type: "text", text: "The chart total is 42." }], timestamp: 3 },
+      { role: "user", content: [image, { type: "text", text: "Now inspect this new image." }], timestamp: 4 },
+    ];
+    const before = structuredClone(messages);
+    const output = omitEarlierCompactionImages(messages);
+    expect(messages).toEqual(before);
+    expect(output[0]).toEqual({ ...messages[0], content: [
+      { type: "text", text: "Source: /fixtures/chart.png" }, { type: "text", text: COMPACTION_IMAGE_NOTE },
+    ] });
+    expect(output[1]).toEqual({ ...messages[1], content: [
+      { type: "text", text: COMPACTION_IMAGE_NOTE }, { type: "text", text: "Observed chart: total 42; unresolved legend." },
+    ] });
+    expect(output[2]).toBe(messages[2]);
+    expect(output[3]).toBe(messages[3]);
+    expect(JSON.stringify(output).length).toBeLessThan(JSON.stringify(messages).length / 2);
+    expect(JSON.stringify(output).split(image.imageUrl).length - 1).toBe(1);
+  });
+
+  test.each([undefined, "commentary", "final_answer"] as const)("no eligible final text keeps images (phase=%s)", phase => {
+    const messages: OcxMessage[] = [
+      { role: "user", content: [image], timestamp: 1 },
+      { role: "assistant", ...(phase ? { phase } : {}), content: [{ type: "text", text: phase === "final_answer" ? "  " : "I will inspect it." }], timestamp: 2 },
+    ];
+    expect(omitEarlierCompactionImages(messages)).toEqual(messages);
+  });
+});
 
 // These non-concurrent tests scope Bun's fake timers like responses/ws-upstream.test.ts.
 // The real bounded-body reader and idleDeadline run; upstream pull acknowledgements
@@ -79,6 +114,19 @@ describe("native compact response body deadline", () => {
       expect(source.cancellationReasons).toHaveLength(1);
       expect(source.cancellationReasons[0]).toBeInstanceOf(DOMException);
       expect((source.cancellationReasons[0] as DOMException).name).toBe("TimeoutError");
+      expect(source.body.locked).toBe(false);
+    } finally { source.close(); await pending; }
+  }));
+
+  test("local upstream silence retains the default deadline", () => withCompactBodyClock(async () => {
+    const source = compactBodySource();
+    const pending = bufferCompactResponse(new Response(source.body), new AbortController().signal, undefined, true);
+    try {
+      await source.waitingForRead();
+      jest.advanceTimersByTime(300_000);
+      const response = await pending;
+      expect(response.status).toBe(504);
+      expect(source.cancellationReasons).toHaveLength(1);
       expect(source.body.locked).toBe(false);
     } finally { source.close(); await pending; }
   }));

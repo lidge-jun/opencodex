@@ -21,10 +21,16 @@ on:
     # because this workflow is `pull_request` (not `pull_request_target`),
     # declares `contents: read`, and reads no secrets.
     #
-    # `push:` stays pinned to the integration lines: it gates the release path,
-    # and this trigger already covers review.
+    # `push:` stays pinned to the release lines: it gates publication, and
+    # review is covered by the pull_request trigger above. dev is dropped:
+    # its integration evidence comes from the pull_request run into dev, and
+    # workflow_dispatch covers anything a maintainer wants proven by hand.
+    # main and preview MUST stay: release.yml requires a successful
+    # push-event Cross-platform CI run for the exact release SHA and states
+    # that a pull-request run does not qualify, so removing either branch
+    # breaks publication.
   push:
-    branches: [main, preview, dev]
+    branches: [main, preview]
     paths:
       - "Dockerfile"
       - "compose.yaml"
@@ -34,26 +40,43 @@ on:
       - "bin/**"
       - "tests/**"
       - "scripts/**"
+      - "app/**"
+      - "desktop/**"
       - "gui/**"
       - "assets/**"
+      - ".github/scripts/**"
+      - ".github/workflows/**"
       - ".gitattributes"
       - ".npmignore"
       - "package.json"
       - "bun.lock"
       - "tsconfig.json"
       - "README.md"
+      - "readme/**"
+      - "skills/**"
+      - ".github/ISSUE_TEMPLATE/**"
       - "LICENSE"
-      - ".github/workflows/ci.yml"
-      - ".github/workflows/release.yml"
-      - ".github/workflows/enforce-pr-target.yml"
-      - ".github/workflows/stale-needs-info.yml"
   workflow_dispatch:
     inputs:
       lane:
-        description: "all (default) or macos-control"
+        description: "all (default), release-gates, or macos-control"
         type: choice
         default: all
-        options: [all, macos-control]
+        options: [all, release-gates, macos-control]
+  # Nightly safety net. The Windows shards run on a pull request only when the
+  # changes job judges it Windows-sensitive, so anything that slips past that
+  # filter must still be caught within a day: a scheduled run requests the full
+  # lane=all matrix (nine Windows shards and the macOS control included).
+  #
+  # GitHub runs schedules from the DEFAULT branch, which is main, so this
+  # trigger activates only once this file reaches main by promotion, and the
+  # workflow definition is main's. Every test checkout reads
+  # needs.changes.outputs.checkout_ref, which the changes job resolves to ONE
+  # dev commit on a schedule, so the run tests dev and every job tests the same
+  # SHA. Its check runs attach to main's head commit; release.yml accepts only a
+  # push-event run, so a scheduled run can never qualify a release.
+  schedule:
+    - cron: "17 18 * * *"
 
 permissions:
   contents: read
@@ -79,8 +102,12 @@ concurrency:
   # `github.run_id` is unique per run, so each dispatch is a group of one: it
   # cancels nothing and nothing cancels it, including a second dispatch of the
   # same ref.
-  group: cross-platform-ci-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
-  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+  #
+  # A scheduled run is keyed the same way. Keyed on the ref it would share
+  # refs/heads/main with a promotion push and, with cancel-in-progress, cancel
+  # the very run release.yml waits for.
+  group: cross-platform-ci-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.event_name == 'schedule' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' && github.event_name != 'schedule' }}
 
 jobs:
   # Which Windows runner this run is allowed to use.
@@ -107,8 +134,10 @@ jobs:
   # honest pull requests on GitHub-hosted runners and lets trusted branch runs
   # avoid the hosted-Windows Bun crashes. It is not the security boundary.
   #
-  # `push` on dev/main/preview requires the push permission, and
+  # `push` on main/preview requires the push permission, and
   # `workflow_dispatch` requires write access, so both carry a trusted author.
+  # A schedule runs main's workflow against a dev commit that already merged
+  # through review, the same trust as a push.
   # A trusted author is not audited code: merging a contributor PR into `dev`
   # fires `push`, and its dependencies and postinstall hooks then run here.
   select-windows-runner:
@@ -132,7 +161,7 @@ jobs:
           set -euo pipefail
           trusted=no
           case "$EVENT_NAME" in
-            push|workflow_dispatch) trusted=yes ;;
+            push|workflow_dispatch|schedule) trusted=yes ;;
           esac
 
           # Repository variable OCX_SELF_HOSTED_WINDOWS is an OPERATIONAL switch,
@@ -173,10 +202,32 @@ jobs:
       # step. A missing or malformed filter output must fail this job instead
       # of silently making every expensive job skip.
       ci: ${{ steps.scope.outputs.ci }}
-      gui: ${{ steps.filter.outputs.gui }}
-      packaging: ${{ steps.filter.outputs.packaging }}
-      docs: ${{ steps.filter.outputs.docs }}
-      structure: ${{ steps.filter.outputs.structure }}
+      desktop: ${{ steps.scope.outputs.desktop }}
+      native: ${{ steps.matrices.outputs.native }}
+      # Matrix include lists for keyring-smoke and npm-global-smoke, built and
+      # shape-checked by the same validation step as `native`.
+      keyring_matrix: ${{ steps.matrices.outputs.keyring_matrix }}
+      npm_global_matrix: ${{ steps.matrices.outputs.npm_global_matrix }}
+      # A scheduled run starts from main, so its path filter diffs main and would
+      # scope jobs by the wrong commit. The nightly safety net selects every scope
+      # instead, here and in the validation steps below, so it is the full matrix.
+      gui: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.gui }}
+      packaging: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.packaging }}
+      docs: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.docs }}
+      structure: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.structure }}
+      # Narrow scopes for two paths the ci filter leaves out on purpose. Both are re-emitted by the
+      # validation step below, so a malformed filter output fails this job instead of silently
+      # skipping the check it selects.
+      setup_action: ${{ steps.narrow.outputs.setup_action }}
+      remote_helper: ${{ steps.narrow.outputs.remote_helper }}
+      # Whether this pull request needs the nine Windows shards: the windows path
+      # filter below OR an added src/tests line naming a Windows marker. Computed
+      # by scripts/ci/windows-sensitive-diff.sh, which validates its input and
+      # treats the diff as data.
+      windows: ${{ steps.windows.outputs.windows }}
+      # The commit every test job checks out. Empty (the event's own commit)
+      # except on a schedule, where it is the one dev SHA resolved below.
+      checkout_ref: ${{ steps.nightly.outputs.checkout_ref }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -185,6 +236,9 @@ jobs:
           # between jobs, so leaving a usable token in .git/config is avoidable
           # residue. Matches the convention already used by the other workflows.
           persist-credentials: false
+          # The pull request merge commit plus its first parent, the base tip,
+          # so the Windows marker scan can diff exactly this pull request.
+          fetch-depth: 2
 
       - name: Detect changed areas
         id: filter
@@ -213,21 +267,63 @@ jobs:
               - 'bin/**'
               - 'tests/**'
               - 'scripts/**'
+              - 'app/**'
+              - 'desktop/**'
               - 'gui/**'
               - 'assets/**'
+              - '.github/scripts/**'
+              - '.github/workflows/**'
               - '.gitattributes'
               - '.npmignore'
               - 'package.json'
               - 'bun.lock'
               - 'tsconfig.json'
               - 'README.md'
+              - 'readme/**'
+              - 'skills/**'
+              - '.github/ISSUE_TEMPLATE/**'
               - 'LICENSE'
+            # Native-gated surface: platform-macos, widget and desktop-shell
+            # only run when the code they build or bundle could have changed.
+            # The listed src/ entries are what the bundled sidecar executes,
+            # package.json and bun.lock change what ships inside the bundle,
+            # and `.github/workflows/ci.yml` verifies this filter itself, the
+            # way docs and structure above do.
+            native:
+              - 'app/**'
+              - 'desktop/**'
+              - 'src/service/**'
+              - 'src/cli/index.ts'
+              - 'src/lib/bun-runtime.ts'
+              - 'src/lib/standalone.ts'
+              - 'src/lib/keyring-native.ts'
+              - 'scripts/build-standalone.ts'
+              - 'scripts/standalone-keyring.ts'
+              - 'package.json'
+              - 'bun.lock'
               - '.github/workflows/ci.yml'
-              - '.github/workflows/release.yml'
-              - '.github/workflows/enforce-pr-target.yml'
-              - '.github/workflows/stale-needs-info.yml'
             gui:
               - 'gui/**'
+            # Building both Linux package formats and booting their real payloads takes
+            # about 15 minutes, far more than the Rust-only desktop-shell check. On a
+            # pull request it runs only for inputs that change how the package is
+            # assembled or launched: the shell itself, the standalone sidecar build
+            # and its runtime locator, the native keyring staging, and the dependency
+            # set. Ordinary src/** and gui/** changes no longer select it on a pull
+            # request; they are still covered on every promotion push to main and
+            # preview and by workflow_dispatch, which always request this job.
+            # The workflow names itself so edits to this lane cannot skip their own E2E.
+            desktop:
+              - 'desktop/**'
+              - 'src/lib/standalone.ts'
+              - 'src/lib/keyring-native.ts'
+              - 'src/lib/bun-runtime.ts'
+              - 'scripts/build-standalone.ts'
+              - 'scripts/standalone-keyring.ts'
+              - 'scripts/standalone-targets.ts'
+              - 'package.json'
+              - 'bun.lock'
+              - '.github/workflows/ci.yml'
             # The docs site is built by nothing else on a pull request. `ci` above
             # deliberately omits `docs-site/**` -- a prose edit has no business
             # starting the cross-platform suite -- and `deploy-docs.yml` triggers
@@ -266,6 +362,45 @@ jobs:
             structure:
               - 'structure/**'
               - '.github/workflows/ci.yml'
+            # The composite action every Bun job runs. `ci` omits .github/actions/** for the same
+            # reason it omits docs-site/** and structure/**: a change that touches only the action
+            # would otherwise start the full matrix. Without this filter it started nothing, and the
+            # aggregate reported success over skips. The job it feeds runs the action on the three
+            # runner families and checks what it installed. Pull-request scope, like docs and
+            # structure; ci.yml is listed so an edit here verifies itself.
+            setup_action:
+              - '.github/actions/**'
+              - '.github/workflows/ci.yml'
+            # The Rust remote-workspace helper. Nothing else in CI builds it, and its sandbox is
+            # real only on macOS and Windows, so its job lints and tests the crate on all three.
+            remote_helper:
+              - 'native/remote-workspace-helper/**'
+            # Paths whose change selects the nine Windows suite shards on a pull
+            # request. These carry the Windows service, update, shim, intercept,
+            # ACL and process code, and the harness every Windows shard runs.
+            # scripts/ci/windows-sensitive-diff.sh adds the content markers.
+            windows:
+              - 'src/lib/windows-*'
+              - 'src/lib/*acl*'
+              - 'src/service/**'
+              - 'src/update/**'
+              - 'src/claude/intercept/**'
+              - 'src/codex/shim*'
+              - 'src/codex/app-server-processes.ts'
+              - 'src/codex/desktop-app/**'
+              - 'src/config/process-state.ts'
+              - 'src/cli/update-restart*'
+              - 'src/server/local-management-read-client.ts'
+              - 'src/server/startup-health-cache.ts'
+              - 'src/tray/**'
+              - 'scripts/test.ts'
+              - 'scripts/test-*.ts'
+              - 'scripts/ci/**'
+              - 'tests/preload.ts'
+              - 'tests/helpers/**'
+              - '.github/workflows/ci.yml'
+              - 'package.json'
+              - 'bun.lock'
             # Everything that ends up inside `npm pack`, or that decides what
             # does. `src/**` belongs here because package.json ships `src` and
             # bin/ocx.mjs executes it: without that entry an ordinary source PR
@@ -291,7 +426,8 @@ jobs:
         id: scope
         shell: bash
         env:
-          CI_SCOPE: ${{ steps.filter.outputs.ci }}
+          CI_SCOPE: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.ci }}
+          DESKTOP_SCOPE: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.desktop }}
         run: |
           set -euo pipefail
           case "$CI_SCOPE" in
@@ -303,12 +439,127 @@ jobs:
               exit 1
               ;;
           esac
+          case "$DESKTOP_SCOPE" in
+            true|false)
+              printf 'desktop=%s\n' "$DESKTOP_SCOPE" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              printf '::error::changes.outputs.desktop was %q, expected true or false\n' "$DESKTOP_SCOPE"
+              exit 1
+              ;;
+          esac
 
+      - name: Assert the native and matrix outputs are usable
+        id: matrices
+        shell: bash
+        env:
+          NATIVE_SELECTED: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.native }}
+        run: |
+          set -euo pipefail
+          case "$NATIVE_SELECTED" in
+            true|false)
+              printf 'native=%s\n' "$NATIVE_SELECTED" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              printf '::error::changes.outputs.native was %q, expected true or false\n' "$NATIVE_SELECTED"
+              exit 1
+              ;;
+          esac
+
+          # Two unconditional legs plus the macos leg that rides the native
+          # selection. These strings are what the keyring-smoke and
+          # npm-global-smoke matrices consume through fromJSON.
+          if [ "$NATIVE_SELECTED" = "true" ]; then
+            keyring_matrix='[{"name":"ubuntu","runner":"ubuntu-latest"},{"name":"windows","runner":"windows-latest"},{"name":"macos","runner":"macos-latest"}]'
+            npm_global_matrix='[{"os":"ubuntu-latest"},{"os":"windows-latest"},{"os":"macos-latest"}]'
+          else
+            keyring_matrix='[{"name":"ubuntu","runner":"ubuntu-latest"},{"name":"windows","runner":"windows-latest"}]'
+            npm_global_matrix='[{"os":"ubuntu-latest"},{"os":"windows-latest"}]'
+          fi
+
+          # GitHub turns an empty matrix include list into a job with no legs
+          # that still reports success, so the emitted value itself is
+          # validated: it must parse as a JSON array carrying at least the two
+          # unconditional legs. A malformed or empty matrix fails this job
+          # instead of passing over nothing.
+          assert_matrix() {
+            local label="$1" json="$2" jq_filter="$3"
+            if ! printf '%s' "$json" | jq -e "$jq_filter" >/dev/null; then
+              printf '::error::%s matrix output was %q\n' "$label" "$json"
+              exit 1
+            fi
+          }
+          assert_matrix keyring "$keyring_matrix" \
+            'type == "array" and length >= 2 and any(.[]; .name == "ubuntu") and any(.[]; .name == "windows")'
+          assert_matrix npm-global "$npm_global_matrix" \
+            'type == "array" and length >= 2 and any(.[]; .os == "ubuntu-latest") and any(.[]; .os == "windows-latest")'
+
+          printf 'keyring_matrix=%s\n' "$keyring_matrix" >> "$GITHUB_OUTPUT"
+          printf 'npm_global_matrix=%s\n' "$npm_global_matrix" >> "$GITHUB_OUTPUT"
+
+      - name: Assert the narrow scope outputs are usable
+        id: narrow
+        shell: bash
+        env:
+          SETUP_ACTION: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.setup_action }}
+          REMOTE_HELPER: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.remote_helper }}
+        run: |
+          set -euo pipefail
+          for pair in "setup_action=$SETUP_ACTION" "remote_helper=$REMOTE_HELPER"; do
+            case "${pair#*=}" in
+              true|false)
+                printf '%s\n' "$pair" >> "$GITHUB_OUTPUT"
+                ;;
+              *)
+                printf '::error::changes.outputs.%s was %q, expected true or false\n' "${pair%%=*}" "${pair#*=}"
+                exit 1
+                ;;
+            esac
+          done
+
+      - name: Decide whether the Windows shards run
+        id: windows
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PATH_SELECTED: ${{ steps.filter.outputs.windows }}
+        run: bash scripts/ci/windows-sensitive-diff.sh
+
+      # A scheduled run starts from main's head. Resolve dev ONCE so the nine
+      # Windows shards, the macOS control and every other job test one commit,
+      # however long the queue between them. contents: read already covers it.
+      - name: Resolve the commit a scheduled run tests
+        id: nightly
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" != "schedule" ]; then
+            echo 'checkout_ref=' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/dev" --jq .sha)"
+          if ! printf '%s' "$sha" | grep -Eqx '[0-9a-f]{40}'; then
+            printf '::error::could not resolve dev to a commit SHA\n'
+            exit 1
+          fi
+          printf 'checkout_ref=%s\n' "$sha" >> "$GITHUB_OUTPUT"
+          printf 'Scheduled run: workflow from %s, testing dev at %s\n' "$GITHUB_SHA" "$sha" >> "$GITHUB_STEP_SUMMARY"
+          printf 'scheduled run tests dev at %s (workflow %s)\n' "$sha" "$GITHUB_SHA"
+
+  # Bun roles (#6713): runtime 1.4.2 fixes #6684's Windows Bun.fetch streaming;
+  # test-runner 1.4.0 avoids 1.4.2's multi-file --isolate preload segfault (#4821
+  # reverted #4064; run 37631558263: Linux 1/4, macOS 2/2, Windows 9/9).
+  # Rejoin after the upstream runner crash is fixed and a green lane=all dispatch
+  # proves the unified version, then delete testRunnerBun and the action's role input.
   # The suite, split by file across four Linux runners.
   #
-  # `scripts/ci/run-bun-test-batches.sh` mirrors Bun's sorted round-robin shard
-  # assignment, then runs each shard in small batches so every batch gets a fresh
-  # Bun process. The helper prints the exact files before each batch and retries
+  # `scripts/ci/run-bun-test-batches.sh` assigns files to shards by the per-file
+  # durations recorded in `scripts/ci/test-durations.tsv` (sorted round-robin when
+  # nothing is recorded), then runs each shard in small batches so every batch gets
+  # a fresh Bun process. The helper prints the exact files before each batch and retries
   # nothing: a test failure, a process timeout and a Bun runtime crash each fail
   # the shard where they happen. A timeout or a crash is additionally swept one
   # file per process, after the shard has already failed, to attribute it.
@@ -342,6 +593,7 @@ jobs:
           # between jobs, so leaving a usable token in .git/config is avoidable
           # residue. Matches the convention already used by the other workflows.
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
           # tests/ci-workflows/release-version-line.test.ts compares package.json against the
           # newest release tag. actions/checkout fetches no tags by default, so
           # without this the check reads an empty tag set and passes on anything -
@@ -356,6 +608,8 @@ jobs:
 
       - name: Setup project Bun
         uses: ./.github/actions/setup-project-bun
+        with:
+          role: test-runner # See the Bun roles contract above test.
 
       # The GUI install is NOT optional here, however unrelated it looks to a
       # test shard. Several files under tests/ import JSX-bearing modules from
@@ -398,9 +652,12 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
 
       - name: Setup project Bun
         uses: ./.github/actions/setup-project-bun
+        with:
+          role: test-runner # See the Bun roles contract above test.
 
       - name: Install dependencies
         run: |
@@ -437,9 +694,12 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
 
       - name: Setup project Bun
         uses: ./.github/actions/setup-project-bun
+        with:
+          role: test-runner # See the Bun roles contract above test.
 
       - name: Install dependencies
         run: |
@@ -472,9 +732,12 @@ jobs:
           # between jobs, so leaving a usable token in .git/config is avoidable
           # residue. Matches the convention already used by the other workflows.
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
 
       - name: Setup project Bun
         uses: ./.github/actions/setup-project-bun
+        with:
+          role: test-runner # See the Bun roles contract above test.
 
       - name: Install dependencies
         run: |
@@ -534,20 +797,30 @@ jobs:
         run: bun run src/cli/index.ts help
 
   platform-macos:
-    name: macos ${{ matrix.shard }}/2
+    name: macos ${{ matrix.shard }}/3
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'
+    # Native-gated: these legs only run when the changes job's `native` filter
+    # says the macOS suite's inputs could have changed, so an ordinary source
+    # pull request stops paying for three macOS runners.
+    if: github.event_name != 'pull_request' || (needs.changes.outputs.ci == 'true' && needs.changes.outputs.native == 'true')
     runs-on: macos-latest
-    # Two shards. Unsharded, this job was the critical path on every green dev
+    # Three shards. Unsharded, this job was the critical path on every green dev
     # push (mean 14.9 min against a 4.7 min Linux maximum; devlog
-    # 260905_test_modularization_and_windows/003). Two halves finish in ~7.7 and
-    # cost 0.6 extra macOS minutes of setup per run. The whole-pool control that
-    # the single job used to provide lives in macos-control below, on dispatch.
+    # 260905_test_modularization_and_windows/003), so it was split in two. The
+    # suite then outgrew two halves: across seventeen dev dispatches from
+    # 2026-10-04 to 10-12 the slower half's test step went from 867s to 1155s,
+    # and run 38214884055 cancelled macos 2/2 at this cap with 68 files left
+    # while every test it had run was passing (#6978). Replaying the duration
+    # assignment against those runs' measured per-file times puts the slowest of
+    # three shards at 635-796s of tests, about 14 minutes with setup. The cap
+    # stays 20: the suite needs another shard, not a longer wait, and a wedged
+    # shard (#4956) is still cut off as early as before. The full-membership
+    # control runs the same bounded batches without sharding on explicit dispatch.
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3]
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -556,6 +829,7 @@ jobs:
           # between jobs, so leaving a usable token in .git/config is avoidable
           # residue. Matches the convention already used by the other workflows.
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
           # tests/ci-workflows/release-version-line.test.ts compares package.json against the
           # newest release tag. actions/checkout fetches no tags by default, so
           # without this the check reads an empty tag set and passes on anything -
@@ -570,6 +844,8 @@ jobs:
 
       - name: Setup project Bun
         uses: ./.github/actions/setup-project-bun
+        with:
+          role: test-runner # See the Bun roles contract above test.
 
       - name: Install dependencies
         run: |
@@ -583,101 +859,21 @@ jobs:
           cd gui
           bun run build
 
-      # No attempt is ever repeated here. A Bun panic is the interpreter dying mid-suite,
-      # which is process death a user would have seen; a second execution that happens not
-      # to die does not un-kill the first, and a leg that reports green on it is reporting
-      # something that did not happen. This leg retried a crash exactly once until
-      # 2026-09-17, the Linux batch runner swept crashed batches into green, and the result
-      # was that Bun 1.4.2's preload segfault stayed invisible on every lane except Windows.
-      #
-      # `is_bun_runtime_crash` from scripts/ci/bun-crash-signatures.sh survives, and this leg,
-      # the Windows leg, the macOS control and the Linux batch runner all still source that one
-      # definition. Its job is now diagnosis only: it decides which failure message is printed,
-      # never whether the leg fails.
-      - name: Test
-        env:
-          MACOS_TEST_SHARD: ${{ matrix.shard }}
+      - name: Setup bounded batch utilities
         run: |
-          # GitHub Actions starts bash `run:` blocks with `-e`. Disable
-          # errexit so a Bun crash reaches PIPESTATUS and the classifier below,
-          # instead of aborting the step before either can be read.
-          set +e
-          set -uo pipefail
-          # One shared classifier for every lane; see scripts/ci/bun-crash-signatures.sh.
-          source scripts/ci/bun-crash-signatures.sh
+          brew list coreutils >/dev/null 2>&1 || brew install coreutils
+          echo "$(brew --prefix coreutils)/libexec/gnubin" >> "$GITHUB_PATH"
 
-          run_macos_suite() {
-            local suite_log suite_status
-            suite_log="$(mktemp -t ocx-macos-suite.XXXXXX)" || return $?
-            # The per-test ceiling applies to every invocation, including each isolated
-            # serial file. One attempt, whatever the outcome.
-            bun test --isolate --timeout 60000 "$@" 2>&1 | tee "$suite_log"
-            suite_status="${PIPESTATUS[0]}"
-            if [ "$suite_status" -eq 0 ]; then
-              rm -f "$suite_log"
-              return 0
-            fi
-            if is_bun_runtime_crash "$suite_status" "$suite_log"; then
-              echo "::error::Bun runtime crash in the macOS suite (exit ${suite_status}); a crash is process death, not a test result, and it fails this leg on the first occurrence."
-            else
-              echo "::error::macOS suite failed (exit ${suite_status})."
-            fi
-            rm -f "$suite_log"
-            return "$suite_status"
-          }
-
-          case "$MACOS_TEST_SHARD" in
-            1|2) ;;
-            *) echo "::error::Invalid macOS test shard"; exit 64 ;;
-          esac
-          serial_manifest="$(bun -e 'import { SERIAL_FULL_SUITE_FILES } from "./scripts/test.ts"; console.log(SERIAL_FULL_SUITE_FILES.join("\n"));')"
-          manifest_status=$?
-          if [ "$manifest_status" -ne 0 ]; then
-            exit "$manifest_status"
-          fi
-          serial_files=()
-          ignore_args=()
-          serial_count=0
-          while IFS= read -r file; do
-            if [[ ! "$file" =~ ^[[:alnum:]_./-]+$ || "$file" == /* || "/$file/" == *"/../"* || "/$file/" == *"/./"* ]]; then
-              echo "::error::Invalid serial test path"
-              exit 1
-            fi
-            for ((index=0; index<serial_count; index++)); do
-              if [ "${serial_files[$index]}" = "$file" ]; then
-                echo "::error::Duplicate serial test path"
-                exit 1
-              fi
-            done
-            # The established basename glob must exclude exactly the owned file.
-            # Refuse missing files or collisions instead of silently losing tests.
-            base="${file##*/}"
-            matches="$(find tests -type f -name "$base")" || exit $?
-            if [ "$matches" != "tests/$file" ]; then
-              echo "::error::Missing or ambiguous serial test path: $file"
-              exit 1
-            fi
-            serial_files[$serial_count]="$file"
-            ignore_args+=("--path-ignore-patterns" "**/$base")
-            serial_count=$((serial_count + 1))
-          done <<< "$serial_manifest"
-          if [ "$serial_count" -eq 0 ]; then
-            echo "::error::Empty serial test manifest"
-            exit 1
-          fi
-
-          run_macos_suite tests "--shard=$MACOS_TEST_SHARD/2" "${ignore_args[@]}"
-          suite_status=$?
-          if [ "$suite_status" -ne 0 ]; then exit "$suite_status"; fi
-          for ((index=0; index<serial_count; index++)); do
-            if [ "$((index % 2 + 1))" -ne "$MACOS_TEST_SHARD" ]; then continue; fi
-            file="${serial_files[$index]}"
-            echo "::group::macOS isolated $file"
-            run_macos_suite --parallel=1 "./tests/$file"
-            suite_status=$?
-            echo "::endgroup::"
-            if [ "$suite_status" -ne 0 ]; then exit "$suite_status"; fi
-          done
+      - name: Test in fresh-process batches
+        env:
+          TEST_SHARD: ${{ matrix.shard }}/3
+          BUN_TEST_FILE_SCOPE: all
+          BUN_TEST_BATCH_SIZE: '12'
+          BUN_TEST_PARALLEL: '1'
+          BUN_TEST_BATCH_TIMEOUT_SECONDS: '300'
+          OCX_TEST_NO_QUEUE: '1'
+          OCX_TEST_FULL_SUITE: '1'
+        run: bash scripts/ci/run-bun-test-batches.sh "$TEST_SHARD"
 
       - name: CLI help smoke
         run: bun run src/cli/index.ts help
@@ -685,25 +881,16 @@ jobs:
   macos-control:
     name: macos control
     needs: changes
-    if: github.event_name == 'workflow_dispatch'
+    # Diagnostic-only lanes stay off the ordinary release gates: list every lane
+    # that should run this job, so a new lane defaults to skipping the diagnostic.
+    # The nightly schedule is the full lane=all matrix, so it runs this job too.
+    if: >-
+      github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all' || github.event.inputs.lane == 'macos-control')
     runs-on: macos-latest
-    # The unsharded control for the sharded Linux lane: the only place the whole
-    # suite runs in one pool, so it is the place that catches what sharding
-    # hides. The flakes it keeps surfacing are timing, not logic, and the fix
-    # is the tests, not a fourth lane.
-    #
-    # Sized to measured work, not to a guess. At 30 this lane never once finished:
-    # every run was cancelled slightly past halfway and the cancellations were read
-    # as runner capacity for months (#4905). An authorized one-off measurement let it
-    # complete for the first time and it took 50m39s wall, Bun reporting 3034.18s over
-    # 26526 tests in 1343 files. 75 leaves roughly 24 minutes of headroom on that
-    # number, which is the growth room the suite needs without letting a genuine hang
-    # sit for an hour before anyone sees it.
-    #
-    # This bound is not a fix for anything the run reports. That first complete run
-    # surfaced four tests that exceed their own timeouts under shared-process pressure,
-    # tracked separately in #4997; raising this budget is what made them observable and
-    # must not be mistaken for resolving them.
+    # Unsharded full-membership control, one worker in sequential fresh batches.
+    # Long-lived Bun isolate pools repeatedly wedged while synchronously reaping
+    # child processes. Batching bounds that lifetime without retrying failures or
+    # excluding tests. This no longer claims one whole-suite process as evidence.
     timeout-minutes: 75
     steps:
       - name: Checkout
@@ -713,6 +900,7 @@ jobs:
           # between jobs, so leaving a usable token in .git/config is avoidable
           # residue. Matches the convention already used by the other workflows.
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
           # tests/ci-workflows/release-version-line.test.ts compares package.json against the
           # newest release tag. actions/checkout fetches no tags by default, so
           # without this the check reads an empty tag set and passes on anything -
@@ -727,6 +915,8 @@ jobs:
 
       - name: Setup project Bun
         uses: ./.github/actions/setup-project-bun
+        with:
+          role: test-runner # See the Bun roles contract above test.
 
       - name: Install dependencies
         run: |
@@ -740,42 +930,28 @@ jobs:
           cd gui
           bun run build
 
-      # This is the lane that exists to see what sharding hides, so it is the last place a
-      # repeated attempt belongs. One execution, whatever the outcome; the shared classifier
-      # decides which message is printed, never whether the leg fails.
-      - name: Test
+      - name: Setup bounded batch utilities
         run: |
-          # GitHub Actions starts bash `run:` blocks with `-e`. Disable
-          # errexit so a Bun crash reaches PIPESTATUS and the classifier below,
-          # instead of aborting the step before either can be read.
-          set +e
-          set -uo pipefail
-          # One shared classifier for every lane; see scripts/ci/bun-crash-signatures.sh.
-          source scripts/ci/bun-crash-signatures.sh
-          suite_log="$(mktemp -t ocx-macos-suite.XXXXXX)"
-          # --timeout: Bun's default 5s per-test ceiling is the recurring flake
-          # class on this loaded shared runner (real retry windows + server
-          # round-trips exceed 5s under contention; a 10s-floor in-test
-          # watchdog fired at 10.16s there). 60s keeps hangs bounded (the 30m
-          # job timeout is the outer backstop) while removing the timing
-          # flakes — assertions are untouched. Pairs with the 30s CI floor in
-          # tests/helpers/ci-watchdog.ts.
-          bun test --isolate --timeout 60000 tests 2>&1 | tee "$suite_log"
-          suite_status="${PIPESTATUS[0]}"
-          if [ "$suite_status" -eq 0 ]; then
-            exit 0
-          fi
-          if is_bun_runtime_crash "$suite_status" "$suite_log"; then
-            echo "::error::Bun runtime crash in the macOS control suite (exit ${suite_status}); a crash is process death, not a test result, and it fails this leg on the first occurrence."
-          else
-            echo "::error::macOS control suite failed (exit ${suite_status})."
-          fi
-          exit "$suite_status"
+          brew list coreutils >/dev/null 2>&1 || brew install coreutils
+          echo "$(brew --prefix coreutils)/libexec/gnubin" >> "$GITHUB_PATH"
+
+      - name: Test in unsharded fresh-process batches
+        env:
+          TEST_SHARD: 1/1
+          BUN_TEST_FILE_SCOPE: all
+          BUN_TEST_BATCH_SIZE: '12'
+          BUN_TEST_PARALLEL: '1'
+          BUN_TEST_BATCH_TIMEOUT_SECONDS: '300'
+          OCX_TEST_NO_QUEUE: '1'
+          OCX_TEST_FULL_SUITE: '1'
+        run: bash scripts/ci/run-bun-test-batches.sh "$TEST_SHARD"
 
       - name: CLI help smoke
         run: bun run src/cli/index.ts help
 
-  # Windows runs only when a maintainer asks for it by hand.
+  # Windows runs on a Windows-sensitive pull request, on the nightly schedule,
+  # and on a lane=all (or default) dispatch. It is never part of the push run
+  # release.yml gates on.
   #
   # It left the PR lane first (16m23s against a 6-minute Linux critical path;
   # the ceiling was raised twice rather than the gap closed — #711 vs #653,
@@ -791,11 +967,18 @@ jobs:
   # release.yml gates on a successful push-event run of this workflow, which
   # now means Linux + macOS + the gates; Windows re-enters the gate when the
   # tracked failures are fixed, not before.
+  #
+  # Dispatch-only proved too late. #6639, #6556, #6605 and #6606 each landed with
+  # green pull-request CI while breaking Windows, and the breakage surfaced days
+  # later on a manual dispatch. So a pull request whose changes job reports
+  # windows=true (a Windows path, or an added src/tests line naming a Windows
+  # marker; see scripts/ci/windows-sensitive-diff.sh) now runs the nine shards,
+  # and the daily schedule catches whatever that filter misses.
   platform-windows:
     name: windows ${{ matrix.shard }}/9
-    needs: select-windows-runner
+    needs: [changes, select-windows-runner]
     if: >-
-      github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all')
+      github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all') || github.event_name == 'pull_request' && needs.changes.outputs.windows == 'true'
     runs-on: ${{ fromJSON(needs.select-windows-runner.outputs.runner) }}
     # Sharded like the Linux legs. The single-leg run reached 30 minutes on a
     # green suite and was killed in cleanup; four shards put each leg inside the
@@ -868,6 +1051,7 @@ jobs:
           # between jobs, so leaving a usable token in .git/config is avoidable
           # residue. Matches the convention already used by the other workflows.
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
           # Same reason as the Linux shards and the macOS control: this leg runs the
           # whole suite, and tests/ci-workflows/release-version-line.test.ts reads release tags.
           # Without tags the check sees an empty set and cannot fail.
@@ -875,6 +1059,8 @@ jobs:
 
       - name: Setup project Bun
         uses: ./.github/actions/setup-project-bun
+        with:
+          role: test-runner # See the Bun roles contract above test.
 
       - name: Install dependencies
         run: |
@@ -936,18 +1122,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: ubuntu
-            runner: ubuntu-latest
-          - name: windows
-            runner: windows-latest
-          - name: macos
-            runner: macos-latest
+        # The leg list arrives as JSON from the changes job: ubuntu and
+        # windows always run, macos only when the native selection is true.
+        # Entries keep the {name, runner} shape this job reads, and the
+        # changes job validates the list because an empty include matrix
+        # reports success over zero legs.
+        include: ${{ fromJSON(needs.changes.outputs.keyring_matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
 
       - name: Setup project Bun
         uses: ./.github/actions/setup-project-bun
@@ -1001,6 +1187,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
 
       - name: Setup project Bun
         uses: ./.github/actions/setup-project-bun
@@ -1030,6 +1217,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
 
       - name: Setup project Bun
         uses: ./.github/actions/setup-project-bun
@@ -1066,6 +1254,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
 
       - name: Setup project Bun
         uses: ./.github/actions/setup-project-bun
@@ -1075,6 +1264,127 @@ jobs:
 
       - name: Structure doc-map, ownership, and invariant bindings
         run: bun run structure:check
+
+  # The composite Bun setup, run on each runner family it serves, when a change touches only the
+  # action (see the setup_action filter). Each role proves its resolved and installed
+  # version matches package.json; nothing else runs, so this never grows into a suite.
+  setup-action:
+    name: setup action ${{ matrix.os }}
+    needs: changes
+    if: needs.changes.outputs.setup_action == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
+
+      - name: Setup project Bun
+        id: bun
+        uses: ./.github/actions/setup-project-bun
+
+      - name: Require the runtime package.json declares
+        shell: bash
+        env:
+          RESOLVED: ${{ steps.bun.outputs.version }}
+        run: |
+          set -euo pipefail
+          declared="$(node -p "require('./package.json').dependencies.bun")"
+          installed="$(bun --version)"
+          echo "declared=$declared resolved=$RESOLVED installed=$installed"
+          if [ "$RESOLVED" != "$declared" ] || [ "$installed" != "$declared" ]; then
+            echo "::error::setup-project-bun resolved '$RESOLVED' and installed '$installed', but package.json declares '$declared'"
+            exit 1
+          fi
+
+      - name: Setup project Bun test runner
+        id: bun-test-runner
+        uses: ./.github/actions/setup-project-bun
+        with:
+          role: test-runner
+
+      - name: Require the test runner package.json declares
+        shell: bash
+        env:
+          RESOLVED: ${{ steps.bun-test-runner.outputs.version }}
+        run: |
+          set -euo pipefail
+          declared="$(node -p "require('./package.json').testRunnerBun")"
+          installed="$(bun --version)"
+          echo "declared=$declared resolved=$RESOLVED installed=$installed"
+          if [ "$RESOLVED" != "$declared" ] || [ "$installed" != "$declared" ]; then
+            echo "::error::setup-project-bun resolved '$RESOLVED' and installed '$installed', but package.json testRunnerBun declares '$declared'"
+            exit 1
+          fi
+
+  # The Rust remote-workspace helper, when a change touches it (see the remote_helper filter).
+  # Formatting once, then clippy and the crate's tests on each platform: the sandbox and the live
+  # confinement tests compile only on macOS and Windows, and Linux covers the protocol and stub.
+  remote-helper:
+    name: remote helper ${{ matrix.os }}
+    needs: changes
+    if: needs.changes.outputs.remote_helper == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Check Rust formatting
+        if: runner.os == 'Linux'
+        run: cargo fmt --manifest-path native/remote-workspace-helper/Cargo.toml --check
+
+      - name: Run Rust clippy
+        run: cargo clippy --locked --manifest-path native/remote-workspace-helper/Cargo.toml --all-targets -- -D warnings
+
+      - name: Run Rust tests
+        run: cargo test --locked --manifest-path native/remote-workspace-helper/Cargo.toml
+
+  # `gates` already runs `privacy:scan` on every event it runs for, so this job
+  # covers exactly the pull requests `gates` skips -- its condition is the
+  # complement of `gates`' own, with no path list: every pull request runs the
+  # scan once, in one job or the other. A push or dispatch always runs `gates`.
+  # The aggregate below derives the same expectation from `scoped`.
+  privacy-gate:
+    name: privacy gate
+    needs: changes
+    if: github.event_name == 'pull_request' && needs.changes.outputs.ci != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
+
+      - name: Setup project Bun
+        uses: ./.github/actions/setup-project-bun
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Privacy scan
+        run: bun run privacy:scan
 
   npm-global-smoke:
     name: npm-global ${{ matrix.os }}
@@ -1095,7 +1405,12 @@ jobs:
         # `npm install -g`, which writes into the machine's global prefix and
         # would leave an `ocx` on a maintainer's personal PATH. It is an
         # short job on Linux and macOS, so there is nothing to win by moving it.
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        #
+        # The leg list arrives as JSON from the changes job: ubuntu-latest and
+        # windows-latest always run, macos-latest only when the native
+        # selection is true. The changes job validates the list because an
+        # empty include matrix reports success over zero legs.
+        include: ${{ fromJSON(needs.changes.outputs.npm_global_matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -1104,6 +1419,7 @@ jobs:
           # between jobs, so leaving a usable token in .git/config is avoidable
           # residue. Matches the convention already used by the other workflows.
           persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
 
       # Deliberately NO setup-bun: prove `npm install -g` works without a
       # separately-installed Bun. The launcher uses the bundled `bun` dependency.
@@ -1147,6 +1463,210 @@ jobs:
   # `if: always()` is load-bearing. Without it, a failed or skipped dependency
   # skips this job too — and GitHub reports a skipped job as success, so the gate
   # would go green precisely when something went wrong.
+  widget:
+    name: macos widget + bundle
+    needs: [changes, gates]
+    # Native-gated like platform-macos: the widget extension and app bundle
+    # are rebuilt only when native-capable paths changed.
+    if: github.event_name != 'pull_request' || (needs.changes.outputs.ci == 'true' && needs.changes.outputs.native == 'true')
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
+
+      - name: Setup project Bun
+        uses: ./.github/actions/setup-project-bun
+
+      - name: Install dependencies
+        run: |
+          bun install --frozen-lockfile
+          cd desktop
+          bun install --frozen-lockfile
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: stable
+
+      - name: Test MenuBarCore
+        run: |
+          bun run test:macos
+          swift run --package-path app NativeTrayTests
+
+      - name: Build dashboard
+        run: bun run build:gui
+
+      - name: Prepare desktop sidecar
+        run: bun desktop/scripts/prepare-sidecar.ts
+
+      - name: Build WidgetKit appex
+        run: bash desktop/scripts/build-widget.sh
+
+      - name: Build unsigned desktop app
+        working-directory: desktop
+        # `createUpdaterArtifacts` is on and the updater public key is committed, so a plain
+        # `tauri build` stops with "A public key has been found, but no private key" unless
+        # TAURI_SIGNING_PRIVATE_KEY is set. This job proves the appex and the app bundle build
+        # and that the widget is embedded; it does not ship an update, and a verification
+        # build has no business holding the release key. Updater artifacts are therefore off
+        # here and the signing path stays in release.yml, which already reads the secret and
+        # refuses to publish a manifest when it is absent.
+        run: bunx tauri build --ci --bundles app --config '{"bundle":{"createUpdaterArtifacts":false,"macOS":{"signingIdentity":"-"}}}'
+
+      - name: Verify WidgetKit appex and desktop app
+        run: |
+          app=desktop/src-tauri/target/release/bundle/macos/OpenCodex.app
+          # Tauri renames the main binary only when `mainBinaryName` is set, and this config
+          # does not set it, so the bundled executable keeps the Cargo bin name rather than
+          # the product name. Read the name the bundle itself declares instead of restating
+          # it here, so this check follows the config instead of drifting from it.
+          executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")"
+          test -n "$executable"
+          test -x "$app/Contents/MacOS/$executable"
+          test -x "$app/Contents/PlugIns/OpenCodexWidget.appex/Contents/MacOS/OpenCodexWidget"
+          test -x "$app/Contents/MacOS/ocx"
+          # Verify actual entitlements and execute the signed Bun sidecar as well as the seal.
+          bash desktop/scripts/verify-macos-runtime.sh "$app"
+          codesign -dv "$app/Contents/PlugIns/OpenCodexWidget.appex"
+          # The widget is only offered in the gallery when its bundle is actually linked in, and
+          # nothing else here would notice its absence: the appex builds, signs and registers
+          # exactly the same way with the WidgetBundle dropped by the linker.
+          nm -a "$app/Contents/PlugIns/OpenCodexWidget.appex/Contents/MacOS/OpenCodexWidget" \
+            | grep -q "OpenCodexWidget0abC6BundleV" \
+            || { echo "::error::the widget bundle is not linked into the extension"; exit 1; }
+
+  desktop-shell:
+    name: desktop shell
+    needs: [changes, gates]
+    # Native shell changes run the Rust checks; package-affecting changes also run the real Linux
+    # bundle acceptance. The aggregate gate below mirrors this union exactly.
+    if: github.event_name != 'pull_request' || (needs.changes.outputs.ci == 'true' && (needs.changes.outputs.native == 'true' || needs.changes.outputs.desktop == 'true'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
+
+      - name: Install Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf dbus-x11 xvfb xauth wmctrl xdotool openbox
+
+      - name: Setup Bun for packaged E2E
+        if: needs.changes.outputs.desktop == 'true'
+        uses: ./.github/actions/setup-project-bun
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Prepare desktop check resources
+        run: |
+          set -euo pipefail
+          triple="$(rustc -vV | sed -n 's/^host: //p')"
+          mkdir -p desktop/src-tauri/binaries desktop/src-tauri/resources/gui/dist desktop/src-tauri/resources/keyring
+          : > "desktop/src-tauri/binaries/ocx-${triple}"
+          chmod +x "desktop/src-tauri/binaries/ocx-${triple}"
+          : > desktop/src-tauri/resources/gui/dist/.keep
+          : > desktop/src-tauri/resources/keyring/.keep
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path desktop/src-tauri/Cargo.toml --check
+
+      - name: Run Rust clippy
+        run: cargo clippy --manifest-path desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: Run Rust tests
+        run: cargo test --manifest-path desktop/src-tauri/Cargo.toml
+
+      - name: Install packaged E2E dependencies
+        if: needs.changes.outputs.desktop == 'true'
+        run: |
+          bun install --frozen-lockfile
+          cd desktop
+          bun install --frozen-lockfile
+
+      - name: Build dashboard and bundled sidecar
+        if: needs.changes.outputs.desktop == 'true'
+        run: |
+          bun run build:gui
+          bun desktop/scripts/prepare-sidecar.ts --target x86_64-unknown-linux-gnu
+
+      # Build separately. One format failing must not delete or hide the other
+      # format's evidence, and neither verification artifact needs an updater key.
+      - name: Preserve the compiled Linux sidecar
+        if: needs.changes.outputs.desktop == 'true'
+        run: chmod +x desktop/scripts/appimage-patchelf.py
+
+      - name: Build Linux AppImage
+        if: needs.changes.outputs.desktop == 'true'
+        working-directory: desktop
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/opencodex-appimage-target
+          PATCHELF: ${{ github.workspace }}/desktop/scripts/appimage-patchelf.py
+        run: bunx tauri build --ci --bundles appimage --config '{"bundle":{"createUpdaterArtifacts":false}}'
+
+      - name: Build Linux deb
+        if: needs.changes.outputs.desktop == 'true'
+        working-directory: desktop
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/opencodex-deb-target
+        run: bunx tauri build --ci --bundles deb --config '{"bundle":{"createUpdaterArtifacts":false}}'
+
+      - name: Stage isolated Linux bundles
+        if: needs.changes.outputs.desktop == 'true'
+        env:
+          APPIMAGE_BUNDLE: ${{ runner.temp }}/opencodex-appimage-target/release/bundle/appimage
+          DEB_BUNDLE: ${{ runner.temp }}/opencodex-deb-target/release/bundle/deb
+          BUNDLE_ROOT: ${{ runner.temp }}/opencodex-linux-bundles
+        run: |
+          set -euo pipefail
+          mkdir -p "$BUNDLE_ROOT/appimage" "$BUNDLE_ROOT/deb"
+          cp -a "$APPIMAGE_BUNDLE/." "$BUNDLE_ROOT/appimage/"
+          cp -a "$DEB_BUNDLE/." "$BUNDLE_ROOT/deb/"
+          chmod -R a-w "$BUNDLE_ROOT"
+
+      - name: Verify packaged Linux sidecar keyring
+        if: needs.changes.outputs.desktop == 'true'
+        env:
+          BUNDLE_ROOT: ${{ runner.temp }}/opencodex-linux-bundles
+        run: bash desktop/scripts/verify-linux-sidecar.sh "$BUNDLE_ROOT/appimage"
+
+      - name: Run Linux packaged-shell E2E
+        if: needs.changes.outputs.desktop == 'true'
+        env:
+          REPORT_PATH: ${{ runner.temp }}/opencodex-linux-e2e/report.json
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$REPORT_PATH")"
+          dbus-run-session -- xvfb-run -a -s '-screen 0 1440x900x24' bash -lc '
+            openbox >"$RUNNER_TEMP/opencodex-openbox.log" 2>&1 &
+            wm_pid=$!
+            trap '\''kill "$wm_pid" 2>/dev/null || true'\'' EXIT
+            bun desktop/scripts/linux-packaged-e2e.ts \
+              --bundle-root "$RUNNER_TEMP/opencodex-linux-bundles" \
+              --report "$REPORT_PATH" \
+              --version "$(jq -r .version package.json)"
+          '
+
+      - name: Upload Linux packaged-shell E2E report
+        if: always() && needs.changes.outputs.desktop == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linux-packaged-shell-e2e
+          path: ${{ runner.temp }}/opencodex-linux-e2e/report.json
+          if-no-files-found: warn
+          retention-days: 7
+
   ci:
     name: ci
     if: always()
@@ -1154,7 +1674,7 @@ jobs:
     # direct dependencies only, so a failing `select-windows-runner` would
     # otherwise reach this gate as nothing at all while its dependents report
     # `skipped`, which is the shape the step below is written to catch.
-    needs: [changes, select-windows-runner, test, storage-policy, api-usage, gates, platform-macos, macos-control, platform-windows, keyring-smoke, docker-smoke, docs-site-build, structure-gate, npm-global-smoke]
+    needs: [changes, select-windows-runner, test, storage-policy, api-usage, gates, platform-macos, macos-control, platform-windows, keyring-smoke, docker-smoke, docs-site-build, structure-gate, privacy-gate, npm-global-smoke, widget, desktop-shell, setup-action, remote-helper]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -1173,6 +1693,11 @@ jobs:
           CHANGES_PACKAGING: ${{ needs.changes.outputs.packaging }}
           CHANGES_DOCS: ${{ needs.changes.outputs.docs }}
           CHANGES_STRUCTURE: ${{ needs.changes.outputs.structure }}
+          CHANGES_SETUP_ACTION: ${{ needs.changes.outputs.setup_action }}
+          CHANGES_REMOTE_HELPER: ${{ needs.changes.outputs.remote_helper }}
+          CHANGES_NATIVE: ${{ needs.changes.outputs.native }}
+          CHANGES_DESKTOP: ${{ needs.changes.outputs.desktop }}
+          CHANGES_WINDOWS: ${{ needs.changes.outputs.windows }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -1193,6 +1718,19 @@ jobs:
           if [ "$EVENT_NAME" = "pull_request" ] && [ "$CHANGES_CI" != "true" ]; then
             scoped=not-requested
           fi
+          # platform-macos and widget carry the ordinary scope gate AND the native path filter.
+          # desktop-shell accepts that native set plus the package-E2E set.
+          # This mirrors that expression exactly; where it disagrees with the
+          # jobs' own `if:`, the gate fails by name instead of demanding
+          # success from a job that was deliberately left unselected.
+          native=not-requested
+          if [ "$EVENT_NAME" != "pull_request" ] || { [ "$CHANGES_CI" = "true" ] && [ "$CHANGES_NATIVE" = "true" ]; }; then
+            native=requested
+          fi
+          desktop_shell=not-requested
+          if [ "$EVENT_NAME" != "pull_request" ] || { [ "$CHANGES_CI" = "true" ] && { [ "$CHANGES_NATIVE" = "true" ] || [ "$CHANGES_DESKTOP" = "true" ]; }; }; then
+            desktop_shell=requested
+          fi
           packaging=not-requested
           if [ "$CHANGES_PACKAGING" = "true" ]; then
             packaging=requested
@@ -1205,14 +1743,42 @@ jobs:
           if [ "$CHANGES_STRUCTURE" = "true" ]; then
             structure=requested
           fi
+          setup_action=not-requested
+          if [ "$CHANGES_SETUP_ACTION" = "true" ]; then
+            setup_action=requested
+          fi
+          remote_helper=not-requested
+          if [ "$CHANGES_REMOTE_HELPER" = "true" ]; then
+            remote_helper=requested
+          fi
+          # privacy-gate runs exactly where `gates` (scoped) does not, on every
+          # pull request the ci filter declines. Deriving it from `scoped` keeps
+          # the two scans complementary here as they are in the jobs' own
+          # conditions.
+          privacy=not-requested
+          if [ "$scoped" = not-requested ]; then
+            privacy=requested
+          fi
           dispatch=not-requested
           windows=not-requested
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+          if [ "$EVENT_NAME" = "schedule" ]; then
+            # The nightly safety net is the full lane=all matrix.
             dispatch=requested
-            # `lane=macos-control` is the one dispatch that deliberately omits Windows.
+            windows=requested
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            # Mirror the diagnostic job allowlist; release-gates requests neither suite.
+            if [ -z "$LANE" ] || [ "$LANE" = "all" ] || [ "$LANE" = "macos-control" ]; then
+              dispatch=requested
+            fi
+            # Only the default/all lane requests the nine Windows suite shards.
             if [ -z "$LANE" ] || [ "$LANE" = "all" ]; then
               windows=requested
             fi
+          elif [ "$EVENT_NAME" = "pull_request" ] && [ "${CHANGES_WINDOWS:-}" = "true" ]; then
+            # A Windows-sensitive pull request (path filter or added-line marker) runs the
+            # nine shards and requires them, exactly as dispatch and the schedule do. A
+            # shard that only fails on a pull request is a regression in that pull request.
+            windows=requested
           fi
 
           # One line per job, mirroring that job's own `if:`. Adding a job to this workflow
@@ -1220,16 +1786,25 @@ jobs:
           GATED_JOBS="changes select-windows-runner test storage-policy api-usage gates"
           GATED_JOBS="$GATED_JOBS platform-macos keyring-smoke docker-smoke npm-global-smoke"
           GATED_JOBS="$GATED_JOBS macos-control platform-windows docs-site-build"
-          GATED_JOBS="$GATED_JOBS structure-gate"
+          GATED_JOBS="$GATED_JOBS structure-gate widget"
+          GATED_JOBS="$GATED_JOBS desktop-shell"
+          GATED_JOBS="$GATED_JOBS setup-action remote-helper"
+          GATED_JOBS="$GATED_JOBS privacy-gate"
 
           expected_for() {
             case "$1" in
               changes|select-windows-runner) echo requested ;;
-              test|storage-policy|api-usage|gates|platform-macos|keyring-smoke|docker-smoke)
+              test|storage-policy|api-usage|gates|keyring-smoke|docker-smoke)
                 echo "$scoped" ;;
+              platform-macos|widget)
+                echo "$native" ;;
+              desktop-shell) echo "$desktop_shell" ;;
               npm-global-smoke) echo "$packaging" ;;
               docs-site-build) echo "$docs" ;;
               structure-gate) echo "$structure" ;;
+              setup-action) echo "$setup_action" ;;
+              remote-helper) echo "$remote_helper" ;;
+              privacy-gate) echo "$privacy" ;;
               macos-control) echo "$dispatch" ;;
               platform-windows) echo "$windows" ;;
               *) echo undeclared ;;

@@ -31,7 +31,7 @@ opencodex は、要求されたモデルを次の順序で解決します。
 
 ### ブロック対象モデルのリダイレクト
 
-`blockedModelRedirects` は、完全一致する解決済みモデル ID の置換を指定する任意のトップレベル `Record<string, string>` で、デフォルトでは未設定です。上記の解決順序の後に適用されます。一致した場合、すでに選択されたプロバイダーとアカウントのルートは維持され、上流モデル ID のみが置き換えられ、ルート理由として `blocked-model-redirect` が記録されます。このキーを省略すると、ルーティングは変更されません。
+`blockedModelRedirects` は省略可能な完全一致の置換表で、既定では未設定です。ベアモデルのキーはプロバイダー、アカウント、エイリアスの解決後に適用されます。別の設定済みプロバイダーを明示しないターゲットは、`/` を含む値でも選択済みのプロバイダーとアカウントでモデル ID を一度だけ置換します。別の設定済みプロバイダーを明示するターゲットのみ再ルーティングされ、この場合は `<元プロバイダー>/<解決済みモデル>` キーがベアキーより優先されます。連鎖は最大 5 ホップで循環を検出します。固定アカウントのセレクターから別プロバイダーへの移動は拒否されます。宛先は自身の認証情報とクォータを使い、理由は `blocked-model-redirect` になります。
 
 ```json
 {
@@ -67,7 +67,7 @@ picker catalog の convergence だけが保留中で routing change は失われ
 |キー |タイプ |デフォルト |意味 |
 | --- | --- | --- | --- |
 | `targets` | `{ provider: string; model: string; weight?: number }[]` |必須 |具体的なルートを指示しました。 `weight` は 1 ～ 10000 で、デフォルトは `1` です。 |
-| `strategy?` | `"failover" \| "round-robin" \| "random" \| "least-used" \| "reset-window"` | `"failover"` |選択戦略。ターゲットの順序は `failover` の優先順位となり、`weight` は `round-robin` と `random` の抽選に影響し、`least-used` は記録された成功数に従い、`reset-window` は最も早いクォータリセットに従います。 |
+| `strategy?` | `"failover" \| "round-robin" \| "random" \| "least-used" \| "reset-window" \| "jev"` | `"failover"` |選択戦略。ターゲットの順序は `failover` の優先順位となり、`weight` は `round-robin` と `random` の抽選に影響し、`least-used` は記録された成功数に従い、`reset-window` は最も早いクォータリセットに従います。`jev` は最初の適格なターゲットと effort を 1 回の制限付き決定で選び、その後は通常の順序付きフォールバックを使用します。 |
 | `stickyLimit?` | `number` | `1` |成功したリクエストは 1 つのラウンドロビン バッチに保持されます。範囲は 1 ～ 100。 |
 | `defaultEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| null` |設定を解除する | `defaultEffort` は、コンボの既定値が null でなく、対象の対応リストが既知で空でない場合に、省略された `reasoning.effort` を補います。設定値に対応していればその値を使い、そうでなければ設定値以下で最も高い段階を選びます。それもなければ最も低い対応段階を使います。不明または空のリストでは既定値を省略します。 |
 | `reasoningEffortMode?` | `"strict" \| "adaptive"` | `"strict"` | `"strict"` は空リストを含む既知の対応リストの共通部分を公開し、`"adaptive"` は空リストを除外します。不明なリストは両モードで共通部分を制限しません。送信時、明示的な空リストは両モードで effort/thinking 制御を削除し、不明なリストでは adaptive のみ削除します。`reasoning.summary` は保持されます。既知の空でない対象の effort 解決と対象の選択・順序は変わりません。 |

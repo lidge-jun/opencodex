@@ -12,15 +12,19 @@ import {
   takeOption,
   type RuntimeApiDeps,
 } from "./runtime-api";
+import { clientIntegrationPath, validateAsideProfile } from "./integration-input";
+import { asideProfileRecoveryLines } from "./aside-profile-recovery";
+import type { IntegrationClientId } from "../integrations/registry";
 
 const CLAUDE_USAGE = `Usage:
   ocx claude config [status] [--json]
   ocx claude config set [--enabled <on|off>] [--auth-mode <auto|proxy|subscription>]
       [--system-env <on|off>] [--fast-mode <on|off>] [--auto-context <on|off>]
-      [--compact-window <tokens|default>] [--inject-agents <on|off>]
+      [--compact-window <tokens|default>] [--context-accounting <1m|200k>] [--inject-agents <on|off>]
       [--small-fast-model <id|->] [--model-map <from=to,from=to|->]
       [--blocked-skills <name,name|->] [--web-model <id|->] [--web-backend <openai|anthropic|xai|gemini|exa|->]
-      [--vision-model <id|->] [--vision-backend <openai|anthropic|->] [--json]`;
+      [--vision-model <id|->] [--vision-backend <openai|anthropic|->] [--json]
+  ocx claude config set --first-party <on|off> [--json]`;
 
 const GROK_USAGE = `Usage:
   ocx grok [status] [--json]
@@ -33,21 +37,13 @@ const CLIENT_USAGE = `Usage:
   ocx integration client <enable|disable> --client <id> [--profile <id>] [--overwrite-conflict] [--json]
   ocx integration client history [--client <id>] [--profile <id>] [--json]
   ocx integration client restore --op <opId> [--client aside --profile <id>] [--confirm-drift] [--json]
+  ocx integration client preview --client <id> --operation <apply|overwrite|disable> [--profile <id>] [--json]
+  ocx integration client restore --op <opId> --preview [--client aside --profile <id>] [--confirm-drift] [--json]
+  ocx integration client history remove --op <opId> --yes [--client aside] [--profile <id>] [--json]
+  ocx integration client sync --client aside [--json]
+  enable/disable/restore accept --plan-fingerprint <token>; bound Aside operations require one profile.
+  Droid enable/preview accept repeatable --reasoning-default <model=effort> or --clear-reasoning-defaults.
   --profile selects one Aside account-backed profile; omitted Aside toggles affect all profiles.`;
-
-function validateAsideProfile(profile: string | undefined, client: string | undefined): void {
-  if (profile === undefined) return;
-  if (client !== "aside") throw new CliUsageError("--profile requires --client aside", CLIENT_USAGE);
-  if (!/^(0|[1-9][0-9]*)$/.test(profile) || !Number.isSafeInteger(Number(profile))) {
-    throw new CliUsageError("--profile must be a nonnegative integer account ID", CLIENT_USAGE);
-  }
-
-}
-
-function clientIntegrationPath(client: string, profile?: string): string {
-  const base = `/api/client-integrations/${encodeURIComponent(client)}`;
-  return client === "aside" ? `${base}/profiles${profile === undefined ? "" : `/${encodeURIComponent(profile)}`}` : base;
-}
 
 function parseMap(raw: string): Record<string, string> {
   if (raw === "-") return {};
@@ -74,11 +70,13 @@ export async function handleClaudeConfigCommand(argv: string[], deps: RuntimeApi
     if (action !== "set") throw new CliUsageError(`unknown Claude config command ${action}`, CLAUDE_USAGE);
     const body: Record<string, unknown> = {};
     const enabled = takeBooleanOption(args, "--enabled");
+    const firstParty = takeBooleanOption(args, "--first-party");
     const authMode = takeOption(args, "--auth-mode");
     const systemEnv = takeBooleanOption(args, "--system-env");
     const fastMode = takeBooleanOption(args, "--fast-mode");
     const autoContext = takeBooleanOption(args, "--auto-context");
     const compact = takeOption(args, "--compact-window");
+    const accounting = takeOption(args, "--context-accounting");
     const injectAgents = takeBooleanOption(args, "--inject-agents");
     const smallFastModel = takeOption(args, "--small-fast-model");
     const modelMap = takeOption(args, "--model-map");
@@ -101,6 +99,11 @@ export async function handleClaudeConfigCommand(argv: string[], deps: RuntimeApi
         body.autoCompactWindow = value;
       }
     }
+    if (accounting !== undefined) {
+      const value = accounting.toLowerCase();
+      if (value !== "1m" && value !== "200k") throw new CliUsageError("--context-accounting must be 1m or 200k", CLAUDE_USAGE);
+      body.contextAccounting = value;
+    }
     if (injectAgents !== undefined) body.injectAgents = injectAgents;
     if (smallFastModel !== undefined) body.smallFastModel = smallFastModel === "-" ? "" : smallFastModel;
     if (modelMap !== undefined) body.modelMap = parseMap(modelMap);
@@ -116,9 +119,22 @@ export async function handleClaudeConfigCommand(argv: string[], deps: RuntimeApi
     const vision = sidecar(visionModel, visionBackend);
     if (web) body.webSearchSidecar = web;
     if (vision) body.visionSidecar = vision;
+    if (firstParty !== undefined) {
+      if (Object.keys(body).length > 0) {
+        throw new CliUsageError("--first-party must be set on its own (it writes Claude Code's settings file immediately)", CLAUDE_USAGE);
+      }
+      body.cliFirstParty = firstParty;
+    }
     if (Object.keys(body).length === 0) throw new CliUsageError("at least one Claude setting is required", CLAUDE_USAGE);
     const result = await runtimeRequest("/api/claude-code", { method: "PUT", body: JSON.stringify(body) }, deps);
-    printData(result, wantsJson, ["Claude Code settings updated."]);
+    const warnings = (result as { warnings?: unknown }).warnings;
+    const retained = Array.isArray(warnings) && warnings.includes("shared_proxy_retained");
+    printData(result, wantsJson, [
+      "Claude Code settings updated.",
+      // The route kept the shared proxy env because Claude Desktop may still rely on it. Say so,
+      // or an operator who turned first-party off believes the local interception is gone.
+      ...(retained ? ["Warning: Claude Desktop still uses the shared proxy settings. Run `ocx claude desktop apply --gateway` to release them."] : []),
+    ]);
   });
 }
 
@@ -185,7 +201,10 @@ function raycastBlock(result: unknown): RaycastStatusBlock | null {
  */
 function singleClientStatusLines(result: unknown): string[] {
   const raycast = raycastBlock(result);
-  if (!raycast) return summaryLines(result);
+  if (!raycast) {
+    const aside = (result as { clientId?: unknown } | null)?.clientId === "aside";
+    return [...summaryLines(result), ...(aside ? asideProfileRecoveryLines([result]) : [])];
+  }
   const rest = Object.fromEntries(Object.entries(result as Record<string, unknown>).filter(([key]) => key !== "raycast"));
   const lines = [...summaryLines(rest), `plan: ${raycast.plan}`];
   if (!raycast.aiDirPresent) {
@@ -207,7 +226,24 @@ function singleClientStatusLines(result: unknown): string[] {
 export async function handleClientIntegrationCommand(
   argv: string[],
   deps: RuntimeApiDeps = {},
+  expectedClientId?: IntegrationClientId,
 ): Promise<number> {
+  if (expectedClientId !== undefined && argv.some(arg => ["--client", "--profile"].some(flag => arg === flag || arg.startsWith(`${flag}=`)))) {
+    return runCliAction(async () => { throw new CliUsageError("client-specific restore does not accept --client or --profile", CLIENT_USAGE); });
+  }
+  if ((argv[0] === "history" || argv[0] === "journal") && argv[1] === "remove") {
+    const { handleIntegrationJournalRemove } = await import("./integration-journal");
+    return handleIntegrationJournalRemove(argv.slice(2), deps);
+  }
+  if (argv[0] === "sync") {
+    const { handleIntegrationAsideSync } = await import("./integration-aside-sync");
+    return handleIntegrationAsideSync(argv.slice(1), deps);
+  }
+  if (argv[0] === "preview" || argv.some(arg => ["--preview", "--plan-fingerprint", "--reasoning-default", "--clear-reasoning-defaults"]
+    .some(flag => arg === flag || arg.startsWith(`${flag}=`)))) {
+    const { handleIntegrationPreviewCommand } = await import("./integration-preview");
+    return handleIntegrationPreviewCommand(argv, deps, expectedClientId);
+  }
   return runCliAction(async () => {
     const args = [...argv];
     const action = (args.shift() ?? "status").toLowerCase();
@@ -216,7 +252,7 @@ export async function handleClientIntegrationCommand(
 
     if (action === "status" || action === "show" || action === "list") {
       const client = takeOption(args, "--client");
-      validateAsideProfile(profile, client);
+      validateAsideProfile(profile, client, CLIENT_USAGE);
       rejectArgs(args, CLIENT_USAGE);
       const path = client
         ? clientIntegrationPath(client, profile)
@@ -226,17 +262,26 @@ export async function handleClientIntegrationCommand(
       const profiles = (result as { profiles?: Array<Record<string, unknown>> }).profiles;
       printData(result, wantsJson, profiles
         ? profiles.length > 0
-          ? profiles.map(row => `${String(row.profileId)}  ${String(row.name ?? "Aside")}: ${row.enabled ? "on" : "off"} (${String(row.state)})${row.current ? " [current]" : ""}`)
+          ? [
+            ...profiles.map(row => `${String(row.profileId)}  ${String(row.name ?? "Aside")}: ${row.enabled ? "on" : "off"} (${String(row.state)})${row.current ? " [current]" : ""}`),
+            ...asideProfileRecoveryLines(profiles),
+          ]
           : [String((result as { error?: string }).error ?? "No Aside profiles found.")]
         : rows
-        ? rows.map(row => `${String(row.clientId)}: ${String(row.state)}${row.installed ? "" : " (not installed)"}`)
+        /*
+         * `supersededBy` is named here and not only in the single-client view
+         * because this list is where a user looks to see that everything is
+         * connected, and "current" alone is exactly the reassurance that hid a
+         * client reading a file opencodex does not write.
+         */
+        ? rows.map(row => `${String(row.clientId)}: ${String(row.state)}${row.installed ? "" : " (not installed)"}${row.supersededBy ? " (client reads another file)" : ""}`)
         : singleClientStatusLines(result));
       return;
     }
 
     if (action === "history" || action === "journal") {
       const client = takeOption(args, "--client");
-      validateAsideProfile(profile, client);
+      validateAsideProfile(profile, client, CLIENT_USAGE);
       rejectArgs(args, CLIENT_USAGE);
       const path = client === "aside" ? `${clientIntegrationPath(client, profile)}/journal`
         : `/api/client-integrations/journal${client ? `?client=${encodeURIComponent(client)}` : ""}`;
@@ -258,13 +303,16 @@ export async function handleClientIntegrationCommand(
       const opId = takeOption(args, "--op") ?? takeOption(args, "--op-id");
       const confirmDrift = takeFlag(args, "--confirm-drift");
       const client = takeOption(args, "--client");
-      validateAsideProfile(profile, client);
+      validateAsideProfile(profile, client, CLIENT_USAGE);
       if (client !== undefined && profile === undefined) throw new CliUsageError("restore --client requires --profile", CLIENT_USAGE);
       rejectArgs(args, CLIENT_USAGE);
       if (!opId) throw new CliUsageError("--op <opId> is required", CLIENT_USAGE);
-      const result = await runtimeRequest(profile === undefined ? "/api/client-integrations/restore" : `${clientIntegrationPath("aside", profile)}/restore`, {
+      const restorePath = expectedClientId !== undefined ? `${clientIntegrationPath(expectedClientId)}/restore`
+        : profile === undefined ? "/api/client-integrations/restore" : `${clientIntegrationPath("aside", profile)}/restore`;
+      const result = await runtimeRequest(restorePath, {
         method: "POST",
-        body: JSON.stringify({ opId, confirmDrift }),
+        ...(expectedClientId === undefined ? {} : { redirect: "error" as const }),
+        body: JSON.stringify({ opId, confirmDrift, ...(expectedClientId === undefined ? {} : { expectedClientId }) }),
       }, deps);
       printData(result, wantsJson, [String((result as Record<string, unknown>).message ?? "Restored.")]);
       return;
@@ -274,7 +322,7 @@ export async function handleClientIntegrationCommand(
       throw new CliUsageError(`unknown client integration command ${action}`, CLIENT_USAGE);
     }
     const client = takeOption(args, "--client");
-    validateAsideProfile(profile, client);
+    validateAsideProfile(profile, client, CLIENT_USAGE);
     /*
      * The conflict escape hatch, spelled the way `restore --confirm-drift` is: the
      * refusal is the default and the waiver has to be typed.
@@ -344,6 +392,40 @@ export async function handleZcodeCommand(argv: string[], deps: RuntimeApiDeps = 
   const code = await handleClientIntegrationCommand(forwarded, deps);
   if (code === 0 && (action === "enable" || action === "disable")) {
     console.error("Restart ZCode to pick up the provider change.");
+  }
+  return code;
+}
+
+export async function handleClaudeInterceptCommand(argv: string[], deps: RuntimeApiDeps = {}): Promise<number> {
+  return runCliAction(async () => {
+    const args = [...argv];
+    const action = args.shift();
+    const wantsJson = takeFlag(args, "--json");
+    const usage = "Usage: ocx claude intercept start [--json]";
+    rejectArgs(args, usage);
+    if (action !== "start") throw new CliUsageError("Expected start", usage);
+    const result = await runtimeRequest("/api/claude-intercept/start", { method: "POST" }, deps);
+    printData(result, wantsJson, summaryLines(result));
+  });
+}
+
+const COMMANDCODE_USAGE = "Usage: ocx commandcode [status|show|list|enable|disable|history|journal|restore] [--json]";
+
+export async function handleCommandcodeCommand(argv: string[], deps: RuntimeApiDeps = {}): Promise<number> {
+  const args = [...argv];
+  const verbIndex = args.findIndex(arg => !arg.startsWith("-"));
+  const action = (verbIndex === -1 ? "status" : args[verbIndex]).toLowerCase();
+  const known = ["status", "show", "list", "enable", "disable", "history", "journal", "restore"];
+  if (!known.includes(action)) {
+    console.error(`unknown commandcode command ${action}`);
+    console.error(COMMANDCODE_USAGE);
+    return 2;
+  }
+  const rest = verbIndex === -1 ? args : [...args.slice(0, verbIndex), ...args.slice(verbIndex + 1)];
+  const forwarded = action === "restore" ? [action, ...rest] : [action, ...rest, "--client", "commandcode"];
+  const code = await handleClientIntegrationCommand(forwarded, deps, action === "restore" ? "commandcode" : undefined);
+  if (code === 0 && (action === "enable" || action === "disable")) {
+    console.error("Command Code reads providers on startup.");
   }
   return code;
 }

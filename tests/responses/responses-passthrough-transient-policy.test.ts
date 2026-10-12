@@ -37,20 +37,31 @@ describe("the Responses passthrough lane reads the provider transient policy", (
       "const transientSendPolicy = () => transientRetryPolicyFor(route.provider);\n"
       + "const transientSendAttempts = (): number => transientSendCapFor(\n"
       + "  transientSendPolicy()?.attempts,\n"
-      + "  sendBudgetState.sendsUsed,\n"
+      + "  sendBudgetState.targetSendsUsed,\n"
       + ");",
     ));
   });
 
   test("every transient-retry send takes its attempts from that resolver", () => {
-    const sites = occurrences(packed, "fetchWithTransientRetry(");
+    // Every helper this lane sends through, not just the one it started with. The post-header
+    // replacement reaches upstream exactly like the legs above it and has to draw on the same
+    // resolver; counting only `fetchWithTransientRetry` would let a second send helper be added
+    // on the constant while this file still reported balance.
+    const sites = occurrences(packed, "fetchWithTransientRetry(")
+      + occurrences(packed, "refetchAfterProtocolSafeReset(");
     // The lane's initial send plus its recovery legs. A site that stops being counted here is a
     // site that stopped being governed by the policy.
     expect(sites).toBeGreaterThanOrEqual(4);
 
     const budgeted = occurrences(packed, "attempts:remainingTransientSendBudget(transientSendAttempts())");
     const allowanceBacked = occurrences(packed, "attempts:allowance.attempts");
-    expect(budgeted + allowanceBacked).toBe(sites);
+    const prepaidInitial = occurrences(packed, "attempts:sendBudgetState.initialSendAllowance(transientSendAttempts())");
+    expect(prepaidInitial).toBe(1);
+    // Combo-owned, non-enforced sends settle at physical dispatch; every other send keeps the
+    // shared reporter, so exactly one of the two accounts for any given send.
+    expect(packed).toContain("onPhysicalDispatch:receiptMode?sendBudgetState.noteInitialDispatch:undefined");
+    expect(packed).toContain("...(receiptMode?{}:{onSendsConsumed:transientSendReporter()})");
+    expect(budgeted + allowanceBacked + prepaidInitial).toBe(sites);
 
     // The rebuild leg spends a recovery allowance rather than the base budget directly, so its
     // cap has to come from the same resolver one level up.
@@ -175,3 +186,8 @@ describe("a configured ladder is bounded by the request budget", () => {
     expect(budget.reserveSpent).toBe(false);
   });
 });
+
+// The OpenCode Go replaySafe exception is gone for good: the behavioral contract is pinned
+// by an execution test in responses-send-budget-counts.test.ts ("an OpenCode Go destination
+// refuses an ambiguous pre-answer reset instead of replaying"), which fails if any name for
+// the option ever returns.

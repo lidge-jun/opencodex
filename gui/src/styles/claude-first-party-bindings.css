@@ -1,0 +1,19 @@
+/* ── First-party "Code tab model bindings" card ── */
+.claude-bindings {
+  margin: 0 0 14px; padding: 10px 14px 12px;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface);
+}
+.claude-bindings-title { margin: 0 0 4px; font-size: 13px; font-weight: 600; }
+.claude-bindings-hint { margin: 0 0 10px; font-size: 12px; color: var(--muted); line-height: 1.45; text-wrap: pretty; }
+.claude-bindings-empty { margin: 0 0 10px; font-size: 12px; color: var(--muted); }
+.claude-bindings-list { margin: 0 0 10px; padding: 0; list-style: none; display: grid; gap: 6px; }
+.claude-bindings-row { display: flex; align-items: center; gap: 8px; }
+.claude-bindings-id {
+  flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 12px; color: var(--fg);
+}
+.claude-bindings-arrow { flex: none; color: var(--muted); }
+.claude-bindings-select { flex: 1 1 220px; min-width: 0; font-size: 12.5px; }
+.claude-bindings-remove { flex: none; padding: 4px; }
+.claude-bindings-add { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.claude-bindings-input { flex: 1 1 200px; min-width: 140px; font-size: 12.5px; }

@@ -1,5 +1,6 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import * as directHttp from "../../src/server/direct-local-http";
+import { opencodeCatalogToken } from "../../src/lib/admin-secrets";
 import * as childProcess from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -130,7 +131,7 @@ describe("ocx opencode provider block", () => {
   test("native slugs pick up authoritative context windows from the resolver", () => {
     const block = buildOpencodeProviderBlock(10100, ["gpt-5.6-luna", "unknown-native"], [], slug =>
       slug === "gpt-5.6-luna" ? 1_000_000 : undefined);
-    expect(block.models["gpt-5.6-luna"]?.limit).toEqual({ context: 1_000_000, output: SCHEMA_REQUIRED_OUTPUT_BUDGET });
+    expect(block.models["gpt-5.6-luna"]?.limit).toEqual({ context: 1_000_000, output: 128_000 });
     expect(block.models["unknown-native"]?.limit).toBeUndefined();
   });
 
@@ -263,7 +264,7 @@ describe("ocx opencode proxy model catalog", () => {
       port: 10123, hostname: "127.0.0.1", pid: null, source: "config",
     });
     const fetcher = spyOn(directHttp, "directLocalHttpFetch").mockImplementation(async (input, init) => {
-      expect(new Headers(init?.headers).get("x-opencodex-api-key")).toBe("fixture-admin-token");
+      expect(new Headers(init?.headers).get("x-opencodex-api-key")).toBe(opencodeCatalogToken("fixture-admin-token"));
       expect(String(input)).toBe("http://127.0.0.1:10123/api/models");
       expect(JSON.parse(readFileSync(configPath, "utf8")).providers.pending.initialModelSelection.status).toBe("pending");
       writeFileSync(configPath, JSON.stringify(ready));
@@ -416,10 +417,11 @@ describe("ocx opencode proxy model catalog", () => {
       { id: "high", settings: { reasoningEffort: "high" } },
       { id: "max", settings: { reasoningEffort: "max" } },
     ]);
-    expect(blocks.v2.models["opencode-go/plain"]!.variants).toBeUndefined();
-    // The legacy block never carries variants, and both generations describe the same models:
-    // that is what makes opencode's merge produce one entry per model.
-    expect(blocks.v1.models["opencode-go/glm-5.3"]).not.toHaveProperty("variants");
+    expect(blocks.v2.models["opencode-go/plain"]!.variants).toEqual([]);
+    // Legacy options maps and native settings arrays describe the same models and choices.
+    expect(blocks.v1.models["opencode-go/glm-5.3"]!.variants).toEqual({
+      low: { reasoningEffort: "low" }, high: { reasoningEffort: "high" }, max: { reasoningEffort: "max" },
+    });
     expect(Object.keys(blocks.v2.models)).toEqual(Object.keys(blocks.v1.models));
     expect(Object.keys(blocks.v1.models)).not.toContain("opencode-go/hidden");
   });
@@ -429,16 +431,16 @@ describe("ocx opencode proxy model catalog", () => {
     // image input for these rows and opencode gates attachments client-side, so dropping the
     // field here leaves the image blocked before any request reaches the proxy (#4286).
     const rows = [
-      { namespaced: "gpt-5.6-luna", native: true, provider: "openai", id: "gpt-5.6-luna", inputModalities: ["text", "image"] },
+      { namespaced: "gpt-5.6-luna", native: true, provider: "openai", id: "gpt-5.6-luna", inputModalities: ["text", "image"], supportsTools: true },
       { namespaced: "opencode-go/glm-5.3", provider: "opencode-go", id: "glm-5.3", inputModalities: ["text", "image"] },
-      { namespaced: "opencode-go/text-only", provider: "opencode-go", id: "text-only", inputModalities: ["text"] },
+      { namespaced: "opencode-go/text-only", provider: "opencode-go", id: "text-only", inputModalities: ["text"], supportsTools: false },
       { namespaced: "opencode-go/undeclared", provider: "opencode-go", id: "undeclared" },
       { namespaced: "opencode-go/hidden", provider: "opencode-go", id: "hidden", disabled: true, inputModalities: ["text", "image"] },
     ];
     const catalog = opencodeCatalogFromProxyRows(rows, cfg());
     const blocks = buildOpencodeProviderBlocksFromCatalog(10100, catalog, undefined, cfg());
 
-    for (const block of [blocks.v1, blocks.v2]) {
+    for (const block of [blocks.v1]) {
       expect(block.models["gpt-5.6-luna"]).toMatchObject({
         attachment: true, modalities: { input: ["text", "image"], output: ["text"] },
       });
@@ -454,6 +456,9 @@ describe("ocx opencode proxy model catalog", () => {
       expect(block.models["opencode-go/undeclared"]).not.toHaveProperty("modalities");
       expect(Object.keys(block.models)).not.toContain("opencode-go/hidden");
     }
+    expect(blocks.v2.models["gpt-5.6-luna"]!.capabilities).toMatchObject({ input: ["text", "image"], output: ["text"] });
+    expect(blocks.v2.models["opencode-go/text-only"]!.capabilities).toMatchObject({ input: ["text"], output: ["text"] });
+    expect(blocks.v2.models["opencode-go/undeclared"]!.capabilities).toBeUndefined();
   });
 
   test("the launcher's V1 and V2 blocks share one connection", () => {

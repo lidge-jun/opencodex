@@ -7,7 +7,7 @@ import { replaceActiveCodexCatalog } from "../internal/catalog-writer";
 import { resetCodexAppServerCatalogStateCache } from "../app-server-processes";
 import { getCodexHome } from "../paths";
 import { readCodexCatalogPathForHome } from "./parsing";
-import { invalidateCodexModelsCacheWithPermit } from "./sync";
+import { invalidateCodexModelsCacheWithPermitOutcome } from "./sync";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_MODELS = 2_000;
@@ -17,7 +17,7 @@ const ALLOWED_MODALITIES = new Set(["text", "image", "audio"]);
 export type RemoteCatalogFailureCode =
   | "url_invalid" | "insecure_http_refused" | "credential_invalid" | "request_failed"
   | "redirect_refused" | "http_error" | "body_too_large" | "body_invalid"
-  | "catalog_invalid" | "write_failed" | "lock_busy" | "lock_database" | "unsafe_path";
+  | "catalog_invalid" | "write_failed" | "lock_busy" | "lock_database" | "unsafe_path" | "foreign_owner" | "owner_unknown";
 
 export class RemoteCatalogError extends Error {
   constructor(readonly code: RemoteCatalogFailureCode, message: string, readonly status?: number) {
@@ -202,7 +202,10 @@ export async function fetchRemoteCatalog(
 
 function mapSerializationFailure<T>(outcome: CatalogSerializationOutcome<T>): never {
   if (outcome.kind === "completed") throw new RemoteCatalogError("write_failed", "Remote catalog installation failed");
-  const code = outcome.reason === "busy" ? "lock_busy" : outcome.reason === "database" ? "lock_database" : "unsafe_path";
+  const code = outcome.reason === "busy" ? "lock_busy"
+    : outcome.reason === "database" ? "lock_database"
+      : outcome.reason === "foreign-owner" ? "foreign_owner"
+        : outcome.reason === "owner-unknown" ? "owner_unknown" : "unsafe_path";
   throw new RemoteCatalogError(code, `Remote catalog installation unavailable (${outcome.reason})`);
 }
 
@@ -235,23 +238,18 @@ export async function pullRemoteCatalog(input: string, options: PullRemoteCatalo
   const fetched = await fetchRemoteCatalog(input, options);
   const codexHome = options.codexHome ?? getCodexHome();
   const catalogPath = readCodexCatalogPathForHome(codexHome);
-  const current = existsSync(catalogPath) ? readFileSync(catalogPath) : null;
-  const candidate = Buffer.from(fetched.content, "utf8");
-  if (current?.equals(candidate)) {
-    return { status: "unchanged", catalogWritten: false, cacheSynced: false, codexHome, catalogPath, modelCount: fetched.document.models.length };
-  }
   const outcome = withCatalogWriteSerialization(codexHome, permit => {
     // Re-check under K: another writer may have installed these bytes while the request was in flight.
     const lockedCurrent = existsSync(catalogPath) ? readFileSync(catalogPath) : null;
-    if (lockedCurrent?.equals(candidate)) return { catalogWritten: false, cacheSynced: false };
-    replaceActiveCodexCatalog(permit, codexHome, { path: catalogPath, content: fetched.content });
-    const cacheSynced = invalidateCodexModelsCacheWithPermit(permit, codexHome, { allowWhenDesiredDisabled: true });
-    if (!cacheSynced) {
-      restorePreviousCatalog(permit, codexHome, catalogPath, lockedCurrent);
+    const catalog = replaceActiveCodexCatalog(permit, codexHome, { path: catalogPath, content: fetched.content });
+    if (catalog.kind === "refused") throw new RemoteCatalogError("write_failed", "Remote catalog publication refused");
+    const cache = invalidateCodexModelsCacheWithPermitOutcome(permit, codexHome, { allowWhenDesiredDisabled: true });
+    if (cache !== "written" && cache !== "unchanged") {
+      if (catalog.kind === "written") restorePreviousCatalog(permit, codexHome, catalogPath, lockedCurrent);
       throw new RemoteCatalogError("write_failed", "Remote catalog cache synchronization failed");
     }
-    return { catalogWritten: true, cacheSynced: true };
-  });
+    return { catalogWritten: catalog.kind === "written", cacheSynced: cache === "written" };
+  }, { intent: "pull", writer: "catalog-pull" });
   if (outcome.kind !== "completed") return mapSerializationFailure(outcome);
   return {
     status: outcome.value.catalogWritten ? "updated" : "unchanged",

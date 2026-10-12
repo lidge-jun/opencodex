@@ -61,17 +61,36 @@ describe("Responses bridge reasoning and usage parity", () => {
     expect(firstOutputs).toBe(1);
   });
 
-  test("first-output callback ignores tool-only streams", async () => {
+  test("first-output callback observes tool-only streams once", async () => {
     let firstOutputs = 0;
     await collectSse(bridgeToResponsesSSE(replay([
       { type: "tool_call_start", id: "call_1", name: "read_file" },
+      { type: "tool_call_delta", arguments: "" },
       { type: "tool_call_delta", arguments: "{}" },
+      { type: "tool_call_delta", arguments: " " },
       { type: "tool_call_end", id: "call_1" },
       { type: "done" },
     ]), "routed/model", undefined, undefined, undefined, undefined, undefined, {
       onFirstOutput: () => { firstOutputs += 1; },
     }));
-    expect(firstOutputs).toBe(0);
+    expect(firstOutputs).toBe(1);
+  });
+
+  test("first-output callback observes custom tool input but not empty tool scaffolding", async () => {
+    for (const input of ["", "synthetic input"]) {
+      let firstOutputs = 0;
+      const frames = await collectSse(bridgeToResponsesSSE(replay([
+        { type: "tool_call_start", id: "custom_1", name: "probe_tool" },
+        { type: "tool_call_delta", arguments: input },
+        { type: "tool_call_end", id: "custom_1" },
+        { type: "done" },
+      ]), "routed/model", undefined, new Set(["probe_tool"]), undefined, undefined, undefined, {
+        onFirstOutput: () => { firstOutputs += 1; },
+      }));
+      expect(firstOutputs).toBe(input.length ? 1 : 0);
+      expect(frames.some(frame => frame.event === "response.completed")).toBe(true);
+      if (input) expect(frames.some(frame => frame.event === "response.custom_tool_call_input.delta")).toBe(true);
+    }
   });
 
   test("first-output callback still fires for hidden reasoning", async () => {
@@ -673,6 +692,36 @@ describe("Responses bridge reasoning and usage parity", () => {
     // Freeform calls must NOT emit function_call_arguments events.
     expect(frames.some(f => f.event === "response.function_call_arguments.delta")).toBe(false);
     expect(frames.some(f => f.event === "response.function_call_arguments.done")).toBe(false);
+  });
+
+  test("holds function-call argument fragments that can never parse, failing the item clean", async () => {
+    const frames = await collectSse(bridgeToResponsesSSE(replay([
+      { type: "tool_call_start", id: "call_6c903fcfec9947a8b7aff270", name: "js" },
+      // A coding-agent stream that already lost its leading `{"` (observed 260921):
+      // the fragments can never assemble into parseable JSON.
+      { type: "tool_call_delta", arguments: 'code":"let log = [];"' },
+      { type: "tool_call_delta", arguments: ',"timeout_ms":90000}' },
+      { type: "tool_call_end" },
+      { type: "done" },
+    ]), "codebuddy-cn/hy4-preview-f"));
+
+    expect(frames.some(f => f.event === "response.function_call_arguments.delta")).toBe(false);
+    const failed = frames.find(f => f.event === "response.failed")?.data.response as Record<string, unknown>;
+    const failure = failed?.error as Record<string, unknown> | undefined;
+    expect(String(failure?.message)).toContain("malformed tool call arguments");
+  });
+
+  test("still streams healthy function-call argument deltas unchanged", async () => {
+    const frames = await collectSse(bridgeToResponsesSSE(replay([
+      { type: "tool_call_start", id: "call_ok", name: "js" },
+      { type: "tool_call_delta", arguments: '{"code":"' },
+      { type: "tool_call_delta", arguments: 'let x = 1"}' },
+      { type: "tool_call_end" },
+      { type: "done" },
+    ]), "codebuddy-cn/hy4-preview-f"));
+
+    const deltas = frames.filter(f => f.event === "response.function_call_arguments.delta").map(f => f.data.delta);
+    expect(deltas.join("")).toBe('{"code":"let x = 1"}');
   });
 
   test("repairs a complete decorated top-level apply_patch payload", () => {
@@ -1786,8 +1835,10 @@ describe("fallback freeform wrappers stream one stable representation (#5047)", 
     expect(inputView(await streamExec([wrapper])))
       .toEqual({ concatenated: wrapper, done: wrapper, itemInput: wrapper });
 
-    // A non-string value is not a wrapper either, and it never matched `{"code":"`, so it was
-    // never held: this pins that ordinary bodies keep streaming immediately.
+    // A non-string value is not a wrapper either. Since #5151 an object-shaped body is held
+    // until it parses, because a canonical `input` can still arrive after any property, so
+    // what this pins is the bytes rather than when they leave: the object reaches the client
+    // byte-exact and unrepaired. Bodies that are not objects still stream as they arrive.
     const numeric = JSON.stringify({ code: 1 });
     expect(inputView(await streamExec([numeric])))
       .toEqual({ concatenated: numeric, done: numeric, itemInput: numeric });

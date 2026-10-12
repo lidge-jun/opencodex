@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useKeyedClientResource } from "../../client-resource";
 import { createBoundedFetch } from "../../bounded-fetch";
-import { readUsageMetadata, usageSummary30dResourceKey, type UsageReadMetadata } from "../../usage-summary-resource";
+import { readUsageMetadata, readUsageResponseJson, usageSummary30dResourceKey, type UsageReadMetadata } from "../../usage-summary-resource";
 import { UsageIncompleteNotice } from "../usage-incomplete-notice";
 import { useT } from "../../i18n/shared";
 import { IconFilter, IconSearch, IconBoxes, IconGlobe, IconLock, IconKey, IconTrash } from "../../icons";
@@ -120,10 +120,12 @@ export default function ProviderWorkspaceShell({
   /**
    * Called when a FORCED quota read settles, with whether it succeeded.
    *
-   * The shell owns the only `/api/provider-quotas` read, so it owns the only truthful
-   * completion signal. An operator-facing refresh button that resolved on its own would
-   * report success before the response landed — `fetchProviderQuotas(true)` is a
-   * synchronous state bump, not a request.
+   * The shell owns the only `/api/provider-quotas` read in this workspace, forced
+   * `?refresh=1` included — the header QuotaSummaryBar keeps a separate passive 60s read
+   * that never forces one — so the shell owns the only truthful completion signal for a
+   * forced refresh. An operator-facing refresh button that resolved on its own would report
+   * success before the response landed: `fetchProviderQuotas(true)` is a synchronous state
+   * bump, not a request.
    */
   onQuotaRefreshSettled?: (ok: boolean, epoch: number) => void;
   /** True when the bump came from a mutation that needs the server to bypass its TTL. */
@@ -176,7 +178,10 @@ export default function ProviderWorkspaceShell({
   useEffect(() => { modelsSettled.current = onModelsSettled; }, [onModelsSettled]);
   const filterWrapRef = useRef<HTMLDivElement>(null);
   // Shared usage-summary key: all four subscribers raise the deadline together (30d usage is ~5s cold).
-  const usageResource = useKeyedClientResource(usageSummary30dResourceKey(apiBase), [apiBase], async (signal) => { const res = await fetch(apiBase + "/api/usage?range=30d", { signal }); if (!res.ok) throw new Error(String(res.status)); return await res.json(); }, { deadlineMs: 60_000 });
+  const usageResource = useKeyedClientResource(usageSummary30dResourceKey(apiBase), [apiBase], async (signal) => {
+    const res = await fetch(apiBase + "/api/usage?range=30d", { signal });
+    return await readUsageResponseJson(res);
+  }, { deadlineMs: 60_000 });
 
   const sections = useMemo(() => {
     const base = buildProviderWorkspace(hideRedundantChatGptForwardProviders(providers));

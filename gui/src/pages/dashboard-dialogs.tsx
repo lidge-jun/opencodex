@@ -72,7 +72,9 @@ export function DashboardDialogs(d: Dash) {
                   {updateCheck.updateAvailable ? t("dash.updateAvailable") : t("dash.updateCurrent")}
                 </span>
               </div>
-              <div className="muted update-command">{t("dash.updateCommand")} <code className="chip">{updateCheck.command}</code></div>
+              {updateCheck.command && (
+                <div className="muted update-command">{t("dash.updateCommand")} <code className="chip">{updateCheck.command}</code></div>
+              )}
               {updateCheck.reason === "source_checkout" && (
                 <div className="notice-warn" role="status"><IconAlert /> {t("dash.updateSource")}</div>
               )}

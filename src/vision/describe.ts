@@ -8,6 +8,7 @@ import { applyUpstreamRecoveryInit, fetchWithResetRetry } from "../lib/upstream-
 import { parseSidecarSSE } from "../web-search/parse";
 import type { SidecarOutcomeRecorder } from "../web-search/executor";
 import { NATIVE_RESERVE_MODEL } from "../codex/catalog/native-models";
+import { openAiSidecarCreditRefusal } from "../providers/openai-sidecar-credit";
 
 export interface VisionSettings {
   model: string;
@@ -60,6 +61,7 @@ export async function describeImage(
   settings: VisionSettings,
   abortSignal?: AbortSignal,
   recordOutcome?: SidecarOutcomeRecorder,
+  beforeDispatch?: () => void,
 ): Promise<DescribeOutcome> {
   if (settings.reserveCompatibility && settings.model === NATIVE_RESERVE_MODEL) {
     return { text: "", error: "Luna Reserve compatibility is only available as a conversation model, not a vision helper. Choose another vision helper model." };
@@ -98,16 +100,19 @@ export async function describeImage(
     const res = await fetchWithResetRetry(
       // The replay needs `keepalive: false` to abandon the half-closed pooled socket; Bun has
       // ignored a bare `Connection: close` (oven-sh/bun#20492).
-      recovery => fetch(`${forwardProvider.baseUrl}/responses`, applyUpstreamRecoveryInit({
-        method: "POST",
-        headers,
-        body: JSON.stringify(body),
-        signal: linkedSignal.signal,
-        // Credential-bearing: do not follow a cross-origin 3xx. Bun strips `Authorization`
-        // across origins but forwards nonstandard headers such as `chatgpt-account-id`,
-        // `session_id`, and `x-codex-turn-metadata` to the redirect target.
-        redirect: "manual",
-      }, recovery)),
+      recovery => {
+        beforeDispatch?.();
+        return fetch(`${forwardProvider.baseUrl}/responses`, applyUpstreamRecoveryInit({
+          method: "POST",
+          headers,
+          body: JSON.stringify(body),
+          signal: linkedSignal.signal,
+          // Credential-bearing: do not follow a cross-origin 3xx. Bun strips `Authorization`
+          // across origins but forwards nonstandard headers such as `chatgpt-account-id`,
+          // `session_id`, and `x-codex-turn-metadata` to the redirect target.
+          redirect: "manual",
+        }, recovery));
+      },
       { replaySafe: true, abortSignal: linkedSignal.signal, label: "vision-sidecar" },
     );
     const detachBodyGuard = cancelBodyOnAbort(res.body, linkedSignal.signal);
@@ -129,6 +134,8 @@ export async function describeImage(
       detachBodyGuard();
     }
   } catch (e) {
+    const policyRefusal = openAiSidecarCreditRefusal(e);
+    if (policyRefusal) return { text: "", error: policyRefusal.message };
     const kind = e instanceof Error && e.name === "TimeoutError" ? "timeout" : "connect_error";
     const callerAborted = abortSignal?.aborted === true
       && linkedSignal.signal.aborted

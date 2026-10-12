@@ -19,8 +19,19 @@ import {
   routedConfig,
   ROUTING_ENVELOPE,
 } from "../helpers/agent-task-recovery";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 const realDateNow = Date.now;
+
+// Direct handler dispatch never takes the writer lease that startServer would take, so it is refused.
+let releaseSpendHome: (() => void) | undefined;
+beforeEach(() => {
+  releaseSpendHome = acquireOwnedSpendHome();
+});
+afterEach(() => {
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
+});
 
 describe("agent task recovery security", () => {
   beforeEach(() => resetAgentTaskRecoveryState());

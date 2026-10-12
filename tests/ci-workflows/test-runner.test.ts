@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -18,6 +19,7 @@ import {
   changedSelectionFailure,
   captureTestOutput,
   createIsolatedTestEnvironment,
+  LIVE_INSTALL_CREDENTIAL_ENV,
   ensureGuiDependencies,
   inspectChangedRun,
   resolveBunTestArgs,
@@ -327,6 +329,23 @@ describe("test runner isolation", () => {
     expect(existsSync(isolated.root)).toBe(false);
   });
 
+  test("drops the developer's live install credentials and keeps the rest of the environment", () => {
+    const isolated = createIsolatedTestEnvironment({
+      PATH: "/test/bin",
+      FIXTURE: "unchanged",
+      OPENCODEX_API_AUTH_TOKEN: "live-data-token",
+      OPENCODEX_ADMIN_AUTH_TOKEN: "live-admin-token",
+      OCX_API_TOKEN_FILE: "/real/home/.opencodex/service-api-token",
+    });
+    try {
+      for (const name of LIVE_INSTALL_CREDENTIAL_ENV) expect(name in isolated.env).toBe(false);
+      expect(isolated.env.FIXTURE).toBe("unchanged");
+      expect(isolated.env.PATH).toBe("/test/bin");
+    } finally {
+      isolated.cleanup();
+    }
+  });
+
   test.if(process.platform === "win32")("gives the Windows sandbox a real profile shape", () => {
     const isolated = createIsolatedTestEnvironment({ PATH: "C:\\test\\bin" });
     try {
@@ -367,6 +386,154 @@ describe("test runner isolation", () => {
       }
     },
   );
+});
+
+describe("test runner transpiler cache isolation", () => {
+  test("places the default executable cache inside its owned sandbox", () => {
+    const isolated = createIsolatedTestEnvironment({});
+    try {
+      const cache = isolated.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH!;
+      expect(cache).toBe(join(isolated.root, "bun-transpiler-cache"));
+      const entry = lstatSync(cache);
+      expect(entry.isDirectory()).toBe(true);
+      expect(entry.isSymbolicLink()).toBe(false);
+      if (process.platform !== "win32") {
+        expect(entry.uid).toBe(process.geteuid!());
+        expect(entry.mode & 0o777).toBe(0o700);
+        expect(lstatSync(isolated.root).mode & 0o777).toBe(0o700);
+      }
+    } finally { isolated.cleanup(); }
+    expect(existsSync(isolated.root)).toBe(false);
+  });
+
+  test("independent sandboxes neither reuse nor remove another default cache", () => {
+    const first = createIsolatedTestEnvironment({});
+    const second = createIsolatedTestEnvironment({});
+    try {
+      const firstCache = first.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH!;
+      const secondCache = second.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH!;
+      expect(firstCache).not.toBe(secondCache);
+      writeFileSync(join(firstCache, "fixture"), "first");
+      writeFileSync(join(secondCache, "fixture"), "second");
+      first.cleanup();
+      expect(existsSync(firstCache)).toBe(false);
+      expect(readFileSync(join(secondCache, "fixture"), "utf8")).toBe("second");
+    } finally { first.cleanup(); second.cleanup(); }
+  });
+
+  test("nested home isolation inherits the parent's cache and leaves its lifetime to the owner", () => {
+    const parent = createIsolatedTestEnvironment({});
+    const child = createIsolatedTestEnvironment(parent.env);
+    try {
+      const cache = parent.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH!;
+      expect(child.root).not.toBe(parent.root);
+      expect(child.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH).toBe(cache);
+      writeFileSync(join(cache, "fixture"), "parent-owned");
+      child.cleanup();
+      expect(readFileSync(join(cache, "fixture"), "utf8")).toBe("parent-owned");
+    } finally { child.cleanup(); parent.cleanup(); }
+  });
+
+  test("keeps an explicit cache path without creating or reclaiming it", () => {
+    const fixture = mkdtempSync(join(tmpdir(), "ocx-cache-override-"));
+    const override = join(fixture, "operator-selected");
+    const isolated = createIsolatedTestEnvironment({ BUN_RUNTIME_TRANSPILER_CACHE_PATH: override });
+    try {
+      expect(isolated.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH).toBe(override);
+      expect(existsSync(override)).toBe(false);
+      expect(existsSync(join(isolated.root, "bun-transpiler-cache"))).toBe(false);
+      mkdirSync(override);
+      writeFileSync(join(override, "fixture"), "operator-owned");
+      isolated.cleanup();
+      expect(readFileSync(join(override, "fixture"), "utf8")).toBe("operator-owned");
+    } finally { isolated.cleanup(); removeTreeWithRetry(fixture); }
+  });
+
+  test.each(["", "0"])("preserves cache-disable value %j without allocating a default cache", value => {
+    const isolated = createIsolatedTestEnvironment({ BUN_RUNTIME_TRANSPILER_CACHE_PATH: value });
+    try {
+      expect(isolated.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH).toBe(value);
+      expect(existsSync(join(isolated.root, "bun-transpiler-cache"))).toBe(false);
+    } finally { isolated.cleanup(); }
+  });
+
+  test.each(["directory", "symlink"])("does not adopt or alter a pre-existing shared cache %s", kind => {
+    const fixture = mkdtempSync(join(tmpdir(), "ocx-cache-legacy-"));
+    const legacy = join(fixture, "ocx-test-bun-transpiler-cache");
+    const target = join(fixture, "foreign-cache");
+    mkdirSync(target);
+    writeFileSync(join(target, "fixture"), "leave-unchanged");
+    if (kind === "symlink") symlinkSync(target, legacy, process.platform === "win32" ? "junction" : "dir");
+    else { mkdirSync(legacy); writeFileSync(join(legacy, "fixture"), "leave-unchanged"); }
+    const before = lstatSync(legacy);
+    const oldEnv = { TMPDIR: process.env.TMPDIR, TMP: process.env.TMP, TEMP: process.env.TEMP };
+    let isolated: ReturnType<typeof createIsolatedTestEnvironment> | undefined;
+    try {
+      process.env.TMPDIR = fixture; process.env.TMP = fixture; process.env.TEMP = fixture;
+      isolated = createIsolatedTestEnvironment({});
+      expect(dirname(isolated.root)).toBe(fixture);
+      expect(isolated.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH).toBe(join(isolated.root, "bun-transpiler-cache"));
+      isolated.cleanup();
+      expect(readFileSync(join(legacy, "fixture"), "utf8")).toBe("leave-unchanged");
+      expect(lstatSync(legacy).ino).toBe(before.ino);
+      expect(lstatSync(legacy).mode).toBe(before.mode);
+      expect(lstatSync(legacy).isSymbolicLink()).toBe(kind === "symlink");
+    } finally {
+      isolated?.cleanup();
+      for (const [name, value] of Object.entries(oldEnv)) {
+        if (value === undefined) delete process.env[name]; else process.env[name] = value;
+      }
+      removeTreeWithRetry(fixture);
+    }
+  });
+
+  test("Bun children with different homes reuse only the selected private cache", () => {
+    const isolated = createIsolatedTestEnvironment({ ...process.env, BUN_RUNTIME_TRANSPILER_CACHE_PATH: undefined });
+    try {
+      const cache = isolated.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH!;
+      const source = join(isolated.root, "cacheable-fixture.ts");
+      // Above the pinned Bun runtime's cache threshold; no production code or credential is loaded.
+      writeFileSync(source, `const value: string = ${JSON.stringify("x".repeat(70_000))}; console.log(value.length);`);
+      // A hit only reads; a miss for the identical input must add or rewrite an entry. Seal the
+      // first home's entries at a sentinel mtime, then the second home proves reuse by adding
+      // nothing, rewriting nothing, and leaving no cache anywhere else in the sandbox.
+      const sealedAt = new Date("2001-01-01T00:00:00Z");
+      const sandboxPiles = () => readdirSync(isolated.root, { recursive: true })
+        .map(String)
+        .filter(entry => entry.endsWith(".pile"))
+        .sort();
+      let sealed: string[] | undefined;
+      for (const name of ["first-home", "second-home"]) {
+        const home = join(isolated.root, name);
+        mkdirSync(home);
+        const child = Bun.spawnSync([process.execPath, source], {
+          cwd: isolated.root,
+          env: { ...isolated.env, HOME: home, USERPROFILE: home },
+          stdout: "pipe", stderr: "pipe", timeout: SPAWN_BUDGET_MS,
+        });
+        expect(child.exitCode, new TextDecoder().decode(child.stderr)).toBe(0);
+        expect(new TextDecoder().decode(child.stdout).trim()).toBe("70000");
+        expect(readdirSync(home)).toEqual([]);
+        const piles = sandboxPiles();
+        if (sealed === undefined) {
+          expect(piles.length).toBeGreaterThan(0);
+          for (const entry of piles) {
+            const file = join(isolated.root, entry);
+            expect(pathIsContainedBy(cache, file, process.platform === "win32" ? "win32" : "posix"))
+              .toBe(true);
+            utimesSync(file, sealedAt, sealedAt);
+          }
+          sealed = piles;
+        } else {
+          expect(piles).toEqual(sealed);
+          for (const entry of sealed) {
+            expect(statSync(join(isolated.root, entry)).mtimeMs).toBe(sealedAt.getTime());
+          }
+        }
+      }
+      expect(dirname(cache)).toBe(isolated.root);
+    } finally { isolated.cleanup(); }
+  }, { timeout: SPAWN_BUDGET_MS * 3 });
 });
 
 describe("Windows test TEMP recovery", () => {
@@ -544,6 +711,25 @@ describe("bun test argv", () => {
     }
     expect(plan.find(lane => lane.label === "release-helper.test.ts")?.timeoutMs).toBe(5 * 60 * 1000);
     expect(plan.find(lane => lane.label === "codex-shim.test.ts")?.timeoutMs).toBe(3 * 60 * 1000);
+  });
+
+  test("a control budget is bounded and changes only the main lane", () => {
+    const baseline = resolveBunTestPlan([], undefined, {});
+    expect(baseline[0]!.timeoutMs).toBe(900_000);
+    const control = resolveBunTestPlan([], undefined, { OCX_TEST_MAIN_TIMEOUT_MS: "3600000" });
+    expect(control[0]!.timeoutMs).toBe(3_600_000);
+    expect(control.slice(1)).toEqual(baseline.slice(1));
+    for (const value of ["", "-1", "59999", "3600001", "Infinity", "1e6", "900000.5"]) {
+      expect(() => resolveBunTestPlan([], undefined, { OCX_TEST_MAIN_TIMEOUT_MS: value })).toThrow("OCX_TEST_MAIN_TIMEOUT_MS");
+    }
+  });
+
+  test("server admission fixtures finish in a dedicated process", () => {
+    const plan = resolveBunTestPlan([]);
+    expect(plan[0]?.args).toContain("**/active-registry-admission.test.ts");
+    expect(plan.find(lane => lane.label === "active-registry-admission.test.ts")?.args).toEqual([
+      "--isolate", "--parallel=1", "./tests/codex-integration/active-registry-admission.test.ts",
+    ]);
   });
 
   test("serial lanes override caller parallelism without changing the main lane", () => {

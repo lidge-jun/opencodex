@@ -19,6 +19,13 @@ test("Dashboard sub-hashes are registered routes, not invalid suffixes", () => {
   }
 });
 
+test("Usage companion deep link stays on its own view", () => {
+  expect(readPageFromHash("usage/companion")).toBe("usage");
+  expect(hashBelongsToPage("usage/companion", "usage")).toBe(true);
+  expect(resolveAppHashChange("usage/companion")).toEqual({ page: "usage", replaceTo: null });
+  expect(resolveAppHashChange("usage/unknown").replaceTo).toBe("usage");
+});
+
 test("bare #dashboard stays the Overview route", () => {
   expect(readPageFromHash("dashboard")).toBe("dashboard");
   expect(hashBelongsToPage("dashboard", "dashboard")).toBe(true);
@@ -42,12 +49,13 @@ test("registering Dashboard tabs does not disturb the Logs or Providers contract
   expect(hashBelongsToPage("logs/debug", "dashboard")).toBe(false);
 });
 
-test("Codex Set sits directly after Dashboard in the sidebar", async () => {
+test("Connect sits directly after Dashboard, then Codex", async () => {
   const app = await Bun.file(new URL("../src/App.tsx", import.meta.url)).text();
-  const nav = app.slice(app.indexOf("const NAV"), app.indexOf("];", app.indexOf("const NAV")));
-  const order = [...nav.matchAll(/id: "([a-z-]+)"/g)].map((m) => m[1]);
+  const { NAV_GROUPS } = await import("../src/nav-groups");
+  const order = NAV_GROUPS.map((group) => group.id);
   expect(order[0]).toBe("dashboard");
-  expect(order[1]).toBe("codex-set");
+  expect(order[1]).toBe("connect");
+  expect(order[2]).toBe("codex-set");
   // Order only — no divider markup was introduced (Q3).
   expect(app).not.toContain("nav-divider");
 });

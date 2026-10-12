@@ -13,6 +13,10 @@ const roots: string[] = [];
 const SOURCE = "opencodex_reserve_source";
 const MARKER = "opencodex_reserve_metadata_source";
 const SELECTOR = "personal/gpt-reserve";
+// Each sync spawns a fresh Bun child that loads the catalog module graph; a cold Windows runner
+// has taken 33s for one (dev CI 36706278700). Budget each test by its sync count.
+const CHILD_TIMEOUT_MS = 60_000;
+const budget = (syncs: number) => syncs * CHILD_TIMEOUT_MS + 10_000;
 
 interface Sandbox {
   root: string;
@@ -39,8 +43,12 @@ function reserveRow(qualified: boolean, efforts = ["high", "xhigh"]): RawEntry {
   const pin = JSON.parse(readFileSync(repoPath("src/codex/data/upstream-models.json"), "utf8")) as RawCatalog;
   const luna = pin.models?.find(row => row.slug === "gpt-5.6-luna");
   if (!luna) throw new Error("Fixture requires the checked-in Luna source");
+  // Upstream rows no longer carry top-level base_instructions (openai/codex #43604); a genuine
+  // roster row does, so the fixture restores it from the template the pin still ships.
+  const template = (luna.model_messages as { instructions_template?: string } | undefined)?.instructions_template;
   return {
     ...structuredClone(luna),
+    base_instructions: typeof luna.base_instructions === "string" ? luna.base_instructions : template,
     slug: qualified ? SELECTOR : "gpt-reserve",
     display_name: qualified ? "personal / Genuine Reserve" : "Genuine Reserve",
     supported_in_api: qualified,
@@ -125,11 +133,28 @@ function sync(sandbox: Sandbox): RawCatalog {
     const config = loadConfig();
     for (const provider of Object.values(config.providers)) provider.fetch = globalThis.fetch;
     const result = await refreshCodexModelCatalog(config, undefined, { allowWhenDesiredDisabled: true });
-    if (!result.catalogExists || !result.cacheSynced) throw new Error(JSON.stringify(result));
+    if (!result.catalogExists) throw new Error(JSON.stringify(result));
+    if (result.refreshOutcome !== "committed") throw new Error(JSON.stringify(result));
+    // cacheSynced reports whether bytes were written, so a byte-identical no-op is a
+    // legitimate false and so is a broad failure. Neither can be the oracle on its own.
+    // Require the commit verdict, then read the cache back and prove it carries this
+    // catalog rather than trusting the write flag. Matching serialized slugs in order
+    // keeps the check independent of the cache document shape: it proves the same rows
+    // lead the file, not that a particular envelope was used.
+    const cacheRaw = readFileSync(${JSON.stringify(sandbox.cachePath)}, "utf8");
+    const active = JSON.parse(readFileSync(${JSON.stringify(sandbox.catalogPath)}, "utf8"));
+    const slugs = (active.models ?? []).map(row => row.slug).filter(Boolean);
+    if (slugs.length === 0) throw new Error("active catalog has no rows: " + JSON.stringify(result));
+    let cursor = -1;
+    for (const slug of slugs) {
+      const at = cacheRaw.indexOf(JSON.stringify(slug), cursor + 1);
+      if (at < 0) throw new Error("models cache is missing " + slug + ": " + JSON.stringify(result));
+      cursor = at;
+    }
     console.log("RESERVE_CATALOG_LIFECYCLE_OK");
   `;
   const child = spawnSync(process.execPath, withOwnedServiceHomePreload(["--eval", script], sandbox.preloadPath), {
-    cwd: repoRoot(), env: sandbox.env, encoding: "utf8", timeout: 30_000,
+    cwd: repoRoot(), env: sandbox.env, encoding: "utf8", timeout: CHILD_TIMEOUT_MS,
   });
   expect({ status: child.status, error: child.error?.message, stderr: child.stderr }).toMatchObject({ status: 0, error: undefined });
   expect(child.stdout).toContain("RESERVE_CATALOG_LIFECYCLE_OK");
@@ -162,7 +187,7 @@ describe("Reserve actual catalog finalization lifecycle", () => {
     expect(first.models?.some(row => row.slug === "external/model")).toBe(true);
     const second = sync(sandbox);
     expect(selected(second)).toEqual(selected(first));
-  }, 70_000);
+  }, budget(2));
 
   test("genuine bare active on-disk metadata wins over a bundled-only build base", () => {
     const sandbox = makeSandbox([nativeRow(), reserveRow(false, ["medium"])]);
@@ -170,7 +195,7 @@ describe("Reserve actual catalog finalization lifecycle", () => {
     expect(selected(result)).toMatchObject({ multi_agent_version: "disabled", [MARKER]: "gpt-reserve", comp_hash: "genuine-reserve-comp-hash" });
     expect(retained(result)).toMatchObject({ slug: "gpt-reserve", multi_agent_version: "disabled" });
     expect(retained(result)[MARKER]).toBeUndefined();
-  }, 40_000);
+  }, budget(1));
 
   test("historical cached A cannot replace fresh active B on the following sync", () => {
     const cachedA = {
@@ -207,7 +232,7 @@ describe("Reserve actual catalog finalization lifecycle", () => {
     expect(retained(second)).toEqual(retained(first));
     expect(selected(second)).toEqual(selected(first));
     expect(second.models?.some(row => row.slug === "external/model")).toBe(true);
-  }, 70_000);
+  }, budget(2));
 
   test("qualified-only source survives omission, cache invalidation and effort recovery without Luna fallback", () => {
     const sandbox = makeSandbox([nativeRow(), reserveRow(true)]);
@@ -245,7 +270,7 @@ describe("Reserve actual catalog finalization lifecycle", () => {
     const refreshed = sync(sandbox);
     expect(selected(refreshed)).toMatchObject({ display_name: "personal / Fresh source", default_reasoning_level: "low" });
     expect(retained(refreshed).supported_reasoning_levels).toEqual([{ effort: "low", description: "Genuine low" }]);
-  }, 170_000);
+  }, budget(5));
 
   test("a retained adaptation is rejected rather than promoted to genuine source", () => {
     const adapted = { ...reserveRow(false, ["medium"]), [MARKER]: "gpt-5.6-luna" };
@@ -253,5 +278,5 @@ describe("Reserve actual catalog finalization lifecycle", () => {
     const result = sync(sandbox);
     expect(selected(result)).toMatchObject({ multi_agent_version: "v1", [MARKER]: "gpt-5.6-luna" });
     expect(result[SOURCE]).toBeUndefined();
-  }, 40_000);
+  }, budget(1));
 });

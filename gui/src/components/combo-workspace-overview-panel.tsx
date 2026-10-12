@@ -1,7 +1,8 @@
 import type { ComboItem, ProviderQuotaStates } from "../combo-workspace-data";
-import { buildComboAttention, groupCombos } from "../combo-workspace-data";
+import { buildComboAttention, groupCombos, jevDecisionSummary } from "../combo-workspace-data";
 import { IconAlert, IconChevron, IconPlus } from "../icons";
 import { useT, type TFn } from "../i18n/shared";
+import type { ProviderOption } from "./combo-workspace-types";
 
 function attentionCopy(
   reason: "empty-targets" | "few-targets" | "catalog-omitted" | "all-targets-exhausted",
@@ -18,6 +19,7 @@ export function OverviewPanel({
   cataloguedComboIds,
   providerMap,
   providerQuotaStates,
+  providers,
   onSelect,
   onAdd,
 }: {
@@ -25,6 +27,8 @@ export function OverviewPanel({
   cataloguedComboIds?: ReadonlySet<string>;
   providerMap: Readonly<Record<string, { disabled?: boolean }>>;
   providerQuotaStates: ProviderQuotaStates;
+  /** Configured providers; resolves a JEV combo's decision service to its endpoint. */
+  providers: readonly ProviderOption[];
   onSelect: (id: string) => void;
   onAdd: () => void;
 }) {
@@ -34,6 +38,10 @@ export function OverviewPanel({
     cataloguedComboIds,
     providers: providerMap,
     providerQuotaStates,
+  });
+  const jevCombos = combos.flatMap((item) => {
+    const decision = jevDecisionSummary(item, providers);
+    return decision ? [{ item, decision }] : [];
   });
 
   return (
@@ -56,6 +64,37 @@ export function OverviewPanel({
         <h3 className="pwi-section-title">{t("cws.howTitle")}</h3>
         <p className="muted" style={{ margin: 0 }}>{t("cws.howBody")}</p>
       </section>
+
+      {jevCombos.length > 0 && (
+        <section className="pwi-section" aria-label={t("cws.jev.decisionServicesTitle")}>
+          <h3 className="pwi-section-title">{t("cws.jev.decisionServicesTitle")}</h3>
+          <div className="cwi-attention-list">
+            {jevCombos.map(({ item, decision }) => (
+              <button
+                key={item.id}
+                type="button"
+                className="cwi-attention-row"
+                style={{ flexWrap: "wrap" }}
+                data-decision-provider={decision.model ? undefined : decision.provider ?? "jev"}
+                data-decision-model={decision.model ?? undefined}
+                onClick={() => onSelect(item.id)}
+              >
+                <code className="chip">{item.model}</code>
+                {decision.model
+                  ? <span>{t("cws.jev.method.model")}: <code>{decision.model}</code></span>
+                  : <span>{decision.provider ?? t("cws.jev.decisionServiceDefault")}</span>}
+                {decision.baseUrl && <code className="muted" style={{ overflowWrap: "anywhere" }}>{decision.baseUrl}</code>}
+                <span className="muted">
+                  {decision.timeoutMs === null
+                    ? t("cws.jev.decisionTimeoutDefaultShort")
+                    : t("cws.jev.decisionTimeoutShort", { ms: decision.timeoutMs })}
+                </span>
+                <IconChevron width={14} height={14} style={{ marginLeft: "auto" }} aria-hidden="true" />
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
 
       {attention.length > 0 && (
         <section className="pwi-section" aria-label={t("cws.attentionTitle")}>

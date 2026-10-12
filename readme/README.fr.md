@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="../assets/banner.png" alt="opencodex — proxy universel de fournisseurs pour Codex, Claude Code, Claude Desktop et Grok Build" width="100%">
+</p>
+
 <h3 align="center">make codex open!</h3>
 <p align="center"><b>Proxy universel de fournisseurs pour OpenAI Codex, Claude Code, Claude Desktop &amp; Grok Build</b><br>
 Deux commandes suffisent pour que chacun d'eux exécute le LLM de votre choix.</p>
@@ -13,6 +17,13 @@ Deux commandes suffisent pour que chacun d'eux exécute le LLM de votre choix.</
 npm install -g @bitkyc08/opencodex
 ocx start
 ```
+
+<p align="center">
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/macOS-.dmg-24292f?logo=apple&logoColor=white" alt="Télécharger pour macOS (.dmg)"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Windows-.msi-24292f?logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0id2hpdGUiPjxwYXRoIGQ9Ik0zIDNoOC41djguNUgzem05LjUgMEgyMXY4LjVoLTguNXpNMyAxMi41aDguNVYyMUgzem05LjUgMEgyMVYyMWgtOC41eiIvPjwvc3ZnPg==" alt="Télécharger pour Windows (.msi)"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Linux-.AppImage-24292f?logo=linux&logoColor=white" alt="Télécharger pour Linux (.AppImage)"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Linux-.deb-24292f?logo=debian&logoColor=white" alt="Télécharger pour Linux (.deb)"></a>
+</p>
 
 <table>
 <tr>
@@ -79,7 +90,7 @@ tandis que les fils existants restent associés au compte qui les a démarrés.
 
 ## Démarrage rapide
 
-### Installation personnelle
+### Installation personnelle (CLI)
 
 ```bash
 npm install -g @bitkyc08/opencodex   # Node 18+ ; le runtime Bun est inclus automatiquement
@@ -92,7 +103,37 @@ Ouvrez **http://localhost:10100** et configurez tout dans le tableau de bord web
 fournisseurs (plus de 40 intégrés, ou n'importe quel point de terminaison compatible OpenAI),
 choisissez les modèles, gérez les comptes. `ocx gui`
 rouvre le tableau de bord à tout moment.
-Il peut également gérer un **groupe de comptes ChatGPT** pour l'authentification Codex. Ajoutez plusieurs
+
+<details>
+<summary><b>Application de bureau (bêta)</b></summary>
+
+L'application de bureau reprend le même proxy et le même tableau de bord dans une fenêtre native, avec une icône dans la barre d'état et le binaire `ocx` inclus.
+Elle se rattache à un proxy déjà en cours d'exécution ou démarre celui qui est fourni, et le tableau de bord reste
+sur le port du proxy (**http://localhost:10100** sauf si vous en avez configuré un autre). Choisissez le fichier
+correspondant à votre plateforme sur la page de la [dernière version publiée](https://github.com/lidge-jun/opencodex/releases/latest) :
+
+| Plateforme | Fichier | Remarques |
+|---|---|---|
+| macOS 13+ (Apple Silicon et Intel) | `OpenCodex-<version>-macos.dmg` | Compilation universelle, signée avec un identifiant Developer ID et notariée |
+| Windows (x64) | `OpenCodex-<version>-windows-x64.msi` | Pas encore signée numériquement : SmartScreen demande une confirmation, choisissez **Informations complémentaires → Exécuter quand même** |
+| Linux (x86_64) | `OpenCodex-<version>-linux-x86_64.AppImage` ou `-linux-amd64.deb` | La barre d'état nécessite un environnement de bureau compatible AppIndicator |
+
+Chaque fichier est accompagné d'un `.sha256` sur la page de la version. Sous macOS 14+, l'application embarque
+également une extension WidgetKit qui affiche l'état du proxy, l'utilisation du jour et les quotas des
+fournisseurs ; le modèle de données des instantanés qu'elle affiche se trouve dans [`app/`](../app)
+(`MenuBarCore`). Pour compiler l'application vous-même, exécutez
+`bun install && bun run build:gui` à la racine du dépôt, puis, dans `desktop/`,
+`bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local` sous macOS,
+ou `bun install && bun run prepare-sidecar && bun run build:local` sous Windows et Linux (l'étape du widget
+exige macOS). Le [guide de l'application de bureau](https://opencodex.me/fr/guides/desktop-app/) et le
+[guide de l'application macOS dans la barre des menus](https://opencodex.me/fr/guides/macos-menu-bar/) détaillent le premier lancement, et
+[`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed) répertorie tout ce qui est écrit sur le disque.
+
+</details>
+
+### Groupe de comptes ChatGPT
+
+opencodex peut également gérer un **groupe de comptes ChatGPT** pour l'authentification Codex. Ajoutez plusieurs
 comptes ChatGPT / Codex et actualisez leurs quotas 5 h / hebdomadaires / 30 j dans le tableau de bord.
 Avec le routage par quota, les nouvelles sessions peuvent utiliser le compte opérationnel le moins sollicité ;
 les modes round-robin et fill-first appliquent leurs propres politiques. Les fils Codex existants restent
@@ -119,6 +160,10 @@ Voir [SPONSORS.md](../SPONSORS.md).
 <tr>
 <td width="180"><a href="https://www.packyapi.com/register?aff=k5KT"><img src="../assets/sponsors/packycode.png" alt="PackyCode" width="150"></a></td>
 <td>Merci à <a href="https://www.packyapi.com/register?aff=k5KT">PackyCode</a> pour son soutien à ce projet ! PackyCode est un fournisseur de relais API stable et performant, qui propose des services de relais pour Claude Code, Codex, Gemini et d'autres. Grâce au basculement automatique, au routage intelligent et à une concurrence illimitée, il fait de l'IA un véritable outil de productivité. <a href="https://www.packyapi.com/register?aff=k5KT">Inscrivez-vous via ce lien</a> et commencez ! Choisissez <code>PackyCode</code> dans le sélecteur Add provider ou exécutez <code>ocx provider add packycode</code>.<br><sub>PackyCode 是一家稳定、高效的 API 中转服务商，提供 Claude Code、Codex、Gemini 等多种中转服务。具备自动故障转移、智能路由和无限并发等多种功能，让 AI 编程成为真正的生产力工具。<a href="https://www.packyapi.com/register?aff=k5KT">点此链接注册</a>，立即开始使用！</sub></td>
+</tr>
+<tr>
+<td width="180"><a href="https://tokenlab.sh/r/OPENCODEX"><picture><source media="(prefers-color-scheme: dark)" srcset="../assets/sponsors/tokenlab-dark.png"><img src="../assets/sponsors/tokenlab-light.png" alt="TokenLab" width="150"></picture></a></td>
+<td>Merci à <a href="https://tokenlab.sh/r/OPENCODEX">TokenLab</a> pour son soutien à ce projet ! TokenLab donne aux agents de code une seule clé API pour les principaux modèles, avec les formats OpenAI Responses et Chat Completions, Anthropic Messages et l'API native de Gemini, streaming et appel d'outils compris. Il fournit aussi un serveur MCP et des Skills pour agents afin de faciliter l'intégration. Choisissez votre mode de livraison et payez à l'usage. Choisissez <code>TokenLab</code> dans le sélecteur Add provider ou exécutez <code>ocx provider add tokenlab</code>.<br><sub>TokenLab 为编程智能体提供统一的多模型 API，一枚 API Key 即可接入主流模型，支持 OpenAI Responses、Chat Completions、Anthropic Messages 和 Gemini 原生 API 格式，以及流式输出和工具调用。同时提供 MCP 服务器和 Agent Skills，方便接入现有工作流；交付模式可选，按量付费。</sub></td>
 </tr>
 </tbody>
 </table>
@@ -184,8 +229,9 @@ des fournisseurs, les contrôles d'acceptation authentifiés, la gestion distant
 
 ```bash
 curl -fsSL https://bun.sh/install | bash
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex && ~/.bun/bin/bun install
+~/.bun/bin/bun run build:gui
 ~/.bun/bin/bun run src/cli/index.ts start
 ```
 
@@ -193,8 +239,9 @@ cd opencodex && ~/.bun/bin/bun install
 
 ```powershell
 irm bun.sh/install.ps1 | iex
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex; bun install
+bun run build:gui
 bun run src/cli/index.ts start
 ```
 
@@ -227,13 +274,13 @@ s'il est inaccessible). `ocx status` / `ocx doctor` / `ocx health` indiquent l'�
 
 ## Plateformes prises en charge
 
-| Système d'exploitation | État | Gestionnaire de services |
-|---|---|---|
-| macOS (arm64 / x64) | Entièrement pris en charge | launchd |
-| Linux (x64 / arm64) | Entièrement pris en charge | systemd (unité utilisateur) |
-| Windows (x64) | Entièrement pris en charge | Planificateur de tâches (masqué) / service natif en option (`--native`, WinSW) |
+| Système d'exploitation | État | Gestionnaire de services | Application de bureau (bêta) |
+|---|---|---|---|
+| macOS (arm64 / x64) | Entièrement pris en charge | launchd | `.dmg` universel |
+| Linux (x64 / arm64) | Entièrement pris en charge | systemd (unité utilisateur) | x86_64 `.AppImage` / `.deb` |
+| Windows (x64) | Entièrement pris en charge | Planificateur de tâches (masqué) / service natif en option (`--native`, WinSW) | x64 `.msi` |
 
-Nécessite [Node](https://nodejs.org) 18+. L'environnement d'exécution Bun est inclus lors de `npm install` — aucune installation
+L'installation de la CLI nécessite [Node](https://nodejs.org) 18+ ; l'application de bureau n'a besoin ni de Node ni de Bun. L'environnement d'exécution Bun est inclus lors de `npm install` — aucune installation
 séparée de Bun n'est nécessaire, ni WSL sous Windows. Si npm a bloqué les scripts d'installation de l'environnement inclus,
 consultez la [documentation d'installation](https://opencodex.me/fr/getting-started/installation/).
 
@@ -270,14 +317,15 @@ consultez la [documentation d'installation](https://opencodex.me/fr/getting-star
 <details>
 <summary>Détails de la gestion de la mémoire</summary>
 
-OpenCodex suit 36 catégories d'état conservé par le processus. Chacune possède une limite documentée :
+OpenCodex suit l'état conservé par le processus dans les catégories ci-dessous. Chacune possède une limite documentée :
 
-- **12 stockages conservés** (journal des requêtes, tampons circulaires de débogage, cache d'images, cache de
+- **14 stockages conservés** (journal des requêtes, tampons circulaires de débogage, cache d'images, cache de
   modèles, descriptions visuelles, blobs de curseurs, continuation des réponses, etc.) sont comptabilisés en octets et
-  évincés selon le budget mémoire géré par l'application (256 Mio par défaut).
+  évincés selon le budget mémoire géré par l'application (256 Mio par défaut), sauf le stockage de
+  rejeu des contrôles natifs, épinglé et jamais évincé.
 - **4 tampons observés** (accumulateurs de traduction, segments finaux d'images/OAuth/Grok) sont
   surveillés pour détecter la pression des octets en cours de traitement, sans éviction.
-- **24 enregistrements de stockages d'état** gèrent les balayages d'expiration (intervalle de 60 s) et la
+- **31 enregistrements de stockages d'état** gèrent les balayages d'expiration (intervalle de 60 s) et la
   réconciliation des générations de configuration afin de supprimer les clés obsolètes des fournisseurs et des comptes.
 - **Les mémos de chemins et d'empreintes** (métadonnées de l'espace de travail, identités renforcées, sels
   d'installation, capacités indiquées par le mode) utilisent des limites LRU selon l'ordre d'insertion (8 à 128 entrées).
@@ -307,12 +355,31 @@ correspondance selon le motif du nom du modèle. Les identifiants de modèles du
 sont présentés avec leurs barres obliques internes remplacées par `-` ; la forme brute comportant toutes
 les barres obliques continue également de fonctionner. Détails : [documentation sur le routage des modèles](https://opencodex.me/fr/guides/model-routing/).
 
+### Routage JEV Auto (optionnel)
+
+TypeSafe JEV peut choisir le premier modèle et l'effort de raisonnement d'un Combo activé explicitement,
+sans rien changer au sélecteur de modèles ni aux routes directes. Ajoutez l'identifiant avec
+`ocx login jev`, depuis **Providers → TypeSafe JEV → Add API key**, ou via `TYPESAFE_API_KEY`/`JEV_API_KEY`.
+Ouvrez ensuite **Models → Combos → Create JEV Auto**, choisissez les modèles cibles autorisés et cochez
+les efforts exacts que JEV peut sélectionner pour chaque cible. Sans réglage d'effort, une cible autorise
+tous les efforts que le modèle annonce actuellement.
+
+JEV n'est consulté que pour `jev-auto`, et une seule fois par appel logique au modèle. Un identifiant
+manquant, une erreur réseau ou une décision invalide retombent sur la première cible éligible ;
+l'annulation par l'appelant annule toujours la requête. Les tests automatisés utilisent un point de
+terminaison TypeSafe simulé et ne valident pas un compte JEV réel.
+
+Un Combo JEV peut aussi interroger un modèle de décision auto-hébergé, comme `tev1` d'Ollama, sans
+clé : ajoutez un fournisseur `jev-decision` dont la `baseUrl` est le point de terminaison complet
+`/v1/systemone`, puis indiquez-le dans le `decisionProvider` du Combo. Les identifiants TypeSafe n'y
+sont jamais envoyés. Détails : [modèle de décision auto-hébergé](https://opencodex.me/fr/guides/combos/).
+
 ## Fournisseurs et adaptateurs
 
 <!-- sponsors:main-first-mention -->
 OpenAI (connexion ChatGPT ou clé API), Anthropic, Google Gemini, xAI, Kimi, Azure OpenAI, Ollama
 (local + Cloud), Cursor (expérimental) et tous les points de terminaison compatibles OpenAI — ainsi que DeepSeek,
-Groq, OpenRouter, Together, Fireworks, Cerebras, Mistral, Hugging Face, NVIDIA NIM, MiniMax,
+Groq, OpenRouter, OpenGateway, Together, Fireworks, Cerebras, Mistral, Hugging Face, NVIDIA NIM, MiniMax,
 Qwen Cloud, Qoder Global et CN (PAT officiel + CLI), SiliconFlow, et d'autres. Liste complète : `ocx init` ou la
 [documentation des fournisseurs](https://opencodex.me/fr/guides/providers/).
 
@@ -398,9 +465,9 @@ le trier, et aucun délai de première réponse n'est promis.
 
 ## Développement
 
-Le développement depuis les sources nécessite la CLI `bun` dans votre `PATH`. Elle est distincte de
-l'environnement d'exécution Bun inclus dans le paquet npm publié, lequel est uniquement utilisé par les
-commandes `ocx` installées.
+Le développement depuis les sources nécessite la CLI `bun` dans votre `PATH`. Le paquet npm publié inclut
+son propre environnement d'exécution Bun pour les commandes `ocx` installées ; les scripts du paquet peuvent
+également résoudre Bun via cette dépendance incluse.
 
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git

@@ -20,6 +20,7 @@ import {
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { getConfigDir } from "../config";
+import { loadKeyringBinding } from "../lib/keyring-native";
 import { extractAccountId } from "../oauth/chatgpt";
 import { getCodexHome, readRootTomlString } from "./paths";
 import {
@@ -120,7 +121,7 @@ export class OsNativeProfileKeyProvider implements NativeProfileKeyProvider {
 
   private async entry(homeId: string): Promise<NativeKeyringEntry> {
     try {
-      const { AsyncEntry } = await import("@napi-rs/keyring");
+      const { AsyncEntry } = loadKeyringBinding();
       return new AsyncEntry(KEYRING_SERVICE, homeId) as unknown as NativeKeyringEntry;
     } catch {
       throw new NativeProfileError(

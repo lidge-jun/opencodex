@@ -3,12 +3,15 @@ import { Window } from "happy-dom";
 import {
   configureApiTargets,
   installApiAuthFetch,
+  fetchApiSessionValidation,
+  installApiSessionFromHtml,
+  logoutApiSession,
   resetApiAuthFetchForTests,
   setRebootstrapTimeoutForTests,
   setResolutionWatchdogForTests,
   SESSION_UNAVAILABLE_EVENT,
 } from "../src/api";
-import { targetsFromMachineStatus, type MachineStatusV1 } from "../src/api-targets";
+import { standaloneApiTargets, targetsFromMachineStatus, type MachineStatusV1 } from "../src/api-targets";
 
 const globals = ["document", "window", "navigator", "sessionStorage", "fetch"] as const;
 let previousGlobals: Record<(typeof globals)[number], unknown>;
@@ -338,6 +341,8 @@ test("a signal-dropping hung bootstrap is bounded by the whole-resolution watchd
   setResolutionWatchdogForTests(300);
   let bootstrapCalls = 0;
   let bootstrapZombie = true;
+  let unavailableEvents = 0;
+  window.addEventListener(SESSION_UNAVAILABLE_EVENT, () => { unavailableEvents++; });
   const mockFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (pathnameOf(input) === "/opencodex-session") {
       bootstrapCalls += 1;
@@ -355,11 +360,13 @@ test("a signal-dropping hung bootstrap is bounded by the whole-resolution watchd
   expect(first.status).toBe(401);
   expect(bootstrapCalls).toBe(1);
   expect(promptCalls).toBe(0);
+  expect(unavailableEvents).toBe(1);
 
   bootstrapZombie = false;
   const second = await fetch("/api/config");
   expect(second.status).toBe(200);
   expect(bootstrapCalls).toBe(2);
+  expect(unavailableEvents).toBe(1);
 });
 test("the watchdog never bounds the prompt: slow user input stacks no dialogs and waves join", async () => {
   // Non-loopback shape: the bootstrap definitively refuses (401 -> unavailable), so
@@ -401,4 +408,61 @@ test("the watchdog never bounds the prompt: slow user input stacks no dialogs an
   expect(resA.status).toBe(200);
   expect(resB.status).toBe(200);
   expect(promptCalls).toBe(1);
+});
+
+const watchdogCases = (["headers", "body"] as const).flatMap(stage =>
+  (["malformed", "valid"] as const).flatMap(html =>
+    (["current", "new-login", "logout", "target", "caller-abort"] as const).map(action => [stage, html, action] as const)));
+
+test.each(watchdogCases)("watchdog guards late %s with %s HTML after %s", async (stage, htmlKind, action) => {
+  setRebootstrapTimeoutForTests(1000); // Only the whole-resolution watchdog expires.
+  setResolutionWatchdogForTests(20);
+  let unavailableEvents = 0;
+  let release!: () => void;
+  let markPending!: () => void;
+  const pending = new Promise<void>(resolve => { markPending = resolve; });
+  window.addEventListener(SESSION_UNAVAILABLE_EVENT, () => { unavailableEvents++; });
+  const mockFetch = (async (input, init) => {
+    if (pathnameOf(input) === "/opencodex-session") {
+      const html = htmlKind === "valid" ? sessionDocumentHtml("ocx_session_late", "late-csrf", "http://localhost") : "<html></html>";
+      const response = new Response(html);
+      if (stage === "headers") return new Promise<Response>(resolve => {
+        release = () => resolve(response);
+        markPending();
+      });
+      response.text = () => new Promise<string>(resolve => {
+        release = () => resolve(html);
+        markPending();
+      });
+      return response;
+    }
+    if (pathnameOf(input) === "/api/observe") {
+      const headers = new Headers(init?.headers);
+      return Response.json({ replacement: headers.get("x-opencodex-api-key") === "ocx_session_replacement"
+        && headers.get("x-opencodex-csrf-token") === "replacement-csrf" && headers.get("x-opencodex-gui-origin") === "http://localhost",
+        missing: !headers.has("x-opencodex-api-key") && !headers.has("x-opencodex-csrf-token") && !headers.has("x-opencodex-gui-origin") });
+    }
+    return new Response(null, { status: 401 });
+  }) as typeof fetch;
+  await installMockAuthFetch(mockFetch);
+  const controller = new AbortController();
+  const request = fetch("/api/config", { signal: controller.signal });
+  await pending;
+  if (action === "new-login") installApiSessionFromHtml("shared", sessionDocumentHtml("ocx_session_replacement", "replacement-csrf", "http://localhost"));
+  if (action === "logout") expect(await logoutApiSession("shared")).toBe(false);
+  if (action === "target") {
+    configureApiTargets(standaloneApiTargets("https://other.example.test"));
+    configureApiTargets(standaloneApiTargets(""));
+    installApiSessionFromHtml("shared", sessionDocumentHtml("ocx_session_replacement", "replacement-csrf", "http://localhost"));
+  }
+  if (action === "caller-abort") controller.abort();
+  expect((await request).status).toBe(401);
+  if (action === "caller-abort") await new Promise(resolve => setTimeout(resolve, 30));
+  expect(unavailableEvents).toBe(action === "current" ? 1 : 0);
+  release();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const observed = await (await fetchApiSessionValidation("shared", "/api/observe", { method: "POST" })).json();
+  expect(observed[action === "new-login" || action === "target" ? "replacement" : "missing"]).toBe(true);
+  expect(unavailableEvents).toBe(action === "current" ? 1 : 0);
+  expect(promptCalls).toBe(0);
 });

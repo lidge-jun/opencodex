@@ -1,0 +1,277 @@
+name: desktop installed-artifact gate
+
+# D9 part two: install the real artifact on a machine per platform, launch it against a
+# staged npm runtime, and exercise the ownership contract — takeover, the gestures that
+# must leave the runtime alive, tray Quit draining an in-flight request, and on Linux
+# both update paths (R3). Runs only on maintainer-registered self-hosted GUI machines;
+# publication wiring into release.yml is a separate change.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version whose desktop artifacts the gate installs
+        required: true
+        type: string
+      from-version:
+        description: Older release used for the staged npm runtime and the Linux update phases
+        required: true
+        type: string
+      # Hook inputs are FILE NAMES, never command text. The runner's operator installs
+      # audited executables in a hooks directory (vars.OPENCODEX_GATE_HOOKS_DIR) and a
+      # dispatch picks among them by name; the gate executes the file directly, so this
+      # workflow can never become an arbitrary-shell surface on a persistent runner.
+      consent-hook:
+        description: Name of the runner hook that answers the takeover consent prompt
+        required: false
+        type: string
+      tray-click-hook:
+        description: Name of the runner hook that left-clicks the tray icon
+        required: false
+        type: string
+      tray-quit-hook:
+        description: Name of the runner hook that opens the tray menu and chooses Quit
+        required: false
+        type: string
+      tray-check-hook:
+        description: Name of the runner hook that chooses Check for Updates in the tray
+        required: false
+        type: string
+      tray-install-hook:
+        description: Name of the runner hook that chooses Install update in the tray
+        required: false
+        type: string
+      elevate-accept-hook:
+        description: Name of the runner hook that answers the deb update's elevation prompt (drives the accept path)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-installed-gate-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  macos:
+    runs-on: [self-hosted, opencodex-gate-macos]
+    timeout-minutes: 60
+    # Required-review environment: no run reaches the GUI runner without a maintainer
+    # approval, and the checkout below pins the driver to the protected dev branch, so a
+    # dispatched ref cannot smuggle modified gate code onto the machine.
+    environment: opencodex-desktop-gate
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: dev
+          persist-credentials: false
+
+      - name: Setup project Bun
+        uses: ./.github/actions/setup-project-bun
+
+      - name: Download the release artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          GATE_ARTIFACTS: ${{ runner.temp }}/gate-artifacts
+        run: |
+          mkdir -p "$GATE_ARTIFACTS"
+          gh release download "v${RELEASE_VERSION}" \
+            --pattern "OpenCodex-${RELEASE_VERSION}-macos.dmg" \
+            --dir "$GATE_ARTIFACTS" \
+            --clobber
+
+      - name: Run the installed-artifact gate
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          FROM_VERSION: ${{ inputs.from-version }}
+          CONSENT_HOOK: ${{ inputs.consent-hook }}
+          TRAY_CLICK_HOOK: ${{ inputs.tray-click-hook }}
+          TRAY_QUIT_HOOK: ${{ inputs.tray-quit-hook }}
+          GATE_HOOKS_DIR: ${{ vars.OPENCODEX_GATE_HOOKS_DIR }}
+          GATE_ARTIFACTS: ${{ runner.temp }}/gate-artifacts
+          GATE_WORK: ${{ runner.temp }}/installed-gate
+          GATE_REPORT: ${{ runner.temp }}/installed-gate-report.json
+        run: |
+          set -euo pipefail
+          args=(
+            --platform macos --format dmg
+            --artifact "$GATE_ARTIFACTS/OpenCodex-${RELEASE_VERSION}-macos.dmg"
+            --work-dir "$GATE_WORK"
+            --to-version "$RELEASE_VERSION"
+            --from-version "$FROM_VERSION"
+            --report "$GATE_REPORT"
+          )
+          if [ -n "$GATE_HOOKS_DIR" ]; then args+=(--hooks-dir "$GATE_HOOKS_DIR"); fi
+          for pair in "consent-hook:CONSENT_HOOK" "tray-click-hook:TRAY_CLICK_HOOK" "tray-quit-hook:TRAY_QUIT_HOOK"; do
+            name="${pair%%:*}"; env_name="${pair##*:}"
+            value="${!env_name}"
+            if [ -n "$value" ]; then args+=("--${name}" "$value"); fi
+          done
+          bun desktop/scripts/installed-gate.ts "${args[@]}"
+
+      - name: Upload the gate report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: installed-gate-report-macos
+          path: ${{ runner.temp }}/installed-gate-report.json
+          if-no-files-found: error
+
+  windows:
+    runs-on: [self-hosted, opencodex-gate-windows]
+    timeout-minutes: 60
+    environment: opencodex-desktop-gate
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: dev
+          persist-credentials: false
+
+      - name: Setup project Bun
+        uses: ./.github/actions/setup-project-bun
+
+      - name: Download the release artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          GATE_ARTIFACTS: ${{ runner.temp }}/gate-artifacts
+        run: |
+          mkdir -p "$GATE_ARTIFACTS"
+          gh release download "v${RELEASE_VERSION}" \
+            --pattern "OpenCodex-${RELEASE_VERSION}-windows-x64.msi" \
+            --dir "$GATE_ARTIFACTS" \
+            --clobber
+
+      - name: Run the installed-artifact gate
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          FROM_VERSION: ${{ inputs.from-version }}
+          CONSENT_HOOK: ${{ inputs.consent-hook }}
+          TRAY_CLICK_HOOK: ${{ inputs.tray-click-hook }}
+          TRAY_QUIT_HOOK: ${{ inputs.tray-quit-hook }}
+          GATE_HOOKS_DIR: ${{ vars.OPENCODEX_GATE_HOOKS_DIR }}
+          GATE_ARTIFACTS: ${{ runner.temp }}/gate-artifacts
+          GATE_WORK: ${{ runner.temp }}/installed-gate
+          GATE_REPORT: ${{ runner.temp }}/installed-gate-report.json
+        run: |
+          set -euo pipefail
+          args=(
+            --platform windows --format msi
+            --artifact "$GATE_ARTIFACTS/OpenCodex-${RELEASE_VERSION}-windows-x64.msi"
+            --work-dir "$GATE_WORK"
+            --to-version "$RELEASE_VERSION"
+            --from-version "$FROM_VERSION"
+            --report "$GATE_REPORT"
+          )
+          if [ -n "$GATE_HOOKS_DIR" ]; then args+=(--hooks-dir "$GATE_HOOKS_DIR"); fi
+          for pair in "consent-hook:CONSENT_HOOK" "tray-click-hook:TRAY_CLICK_HOOK" "tray-quit-hook:TRAY_QUIT_HOOK"; do
+            name="${pair%%:*}"; env_name="${pair##*:}"
+            value="${!env_name}"
+            if [ -n "$value" ]; then args+=("--${name}" "$value"); fi
+          done
+          bun desktop/scripts/installed-gate.ts "${args[@]}"
+
+      - name: Upload the gate report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: installed-gate-report-windows
+          path: ${{ runner.temp }}/installed-gate-report.json
+          if-no-files-found: error
+
+  linux:
+    runs-on: [self-hosted, opencodex-gate-linux]
+    timeout-minutes: 60
+    environment: opencodex-desktop-gate
+    strategy:
+      fail-fast: false
+      matrix:
+        format: [deb, appimage]
+        include:
+          - format: deb
+            suffix: linux-amd64.deb
+          - format: appimage
+            suffix: linux-x86_64.AppImage
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: dev
+          persist-credentials: false
+
+      - name: Setup project Bun
+        uses: ./.github/actions/setup-project-bun
+
+      - name: Download the release artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          FROM_VERSION: ${{ inputs.from-version }}
+          ARTIFACT_SUFFIX: ${{ matrix.suffix }}
+          GATE_ARTIFACTS: ${{ runner.temp }}/gate-artifacts
+        run: |
+          mkdir -p "$GATE_ARTIFACTS"
+          gh release download "v${RELEASE_VERSION}" \
+            --pattern "OpenCodex-${RELEASE_VERSION}-${ARTIFACT_SUFFIX}" \
+            --dir "$GATE_ARTIFACTS" \
+            --clobber
+          gh release download "v${FROM_VERSION}" \
+            --pattern "OpenCodex-${FROM_VERSION}-${ARTIFACT_SUFFIX}" \
+            --dir "$GATE_ARTIFACTS" \
+            --clobber
+
+      - name: Run the installed-artifact gate
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          FROM_VERSION: ${{ inputs.from-version }}
+          GATE_FORMAT: ${{ matrix.format }}
+          ARTIFACT_SUFFIX: ${{ matrix.suffix }}
+          CONSENT_HOOK: ${{ inputs.consent-hook }}
+          TRAY_CLICK_HOOK: ${{ inputs.tray-click-hook }}
+          TRAY_QUIT_HOOK: ${{ inputs.tray-quit-hook }}
+          TRAY_CHECK_HOOK: ${{ inputs.tray-check-hook }}
+          TRAY_INSTALL_HOOK: ${{ inputs.tray-install-hook }}
+          ELEVATE_ACCEPT_HOOK: ${{ inputs.elevate-accept-hook }}
+          GATE_HOOKS_DIR: ${{ vars.OPENCODEX_GATE_HOOKS_DIR }}
+          GATE_ARTIFACTS: ${{ runner.temp }}/gate-artifacts
+          GATE_WORK: ${{ runner.temp }}/installed-gate
+          GATE_REPORT: ${{ runner.temp }}/installed-gate-report.json
+        run: |
+          set -euo pipefail
+          args=(
+            --platform linux --format "$GATE_FORMAT"
+            --artifact "$GATE_ARTIFACTS/OpenCodex-${RELEASE_VERSION}-${ARTIFACT_SUFFIX}"
+            --older-artifact "$GATE_ARTIFACTS/OpenCodex-${FROM_VERSION}-${ARTIFACT_SUFFIX}"
+            --work-dir "$GATE_WORK"
+            --to-version "$RELEASE_VERSION"
+            --from-version "$FROM_VERSION"
+            --report "$GATE_REPORT"
+          )
+          if [ -n "$GATE_HOOKS_DIR" ]; then args+=(--hooks-dir "$GATE_HOOKS_DIR"); fi
+          for pair in "consent-hook:CONSENT_HOOK" "tray-click-hook:TRAY_CLICK_HOOK" "tray-quit-hook:TRAY_QUIT_HOOK" "tray-check-hook:TRAY_CHECK_HOOK" "tray-install-hook:TRAY_INSTALL_HOOK" "elevate-accept-hook:ELEVATE_ACCEPT_HOOK"; do
+            name="${pair%%:*}"; env_name="${pair##*:}"
+            value="${!env_name}"
+            if [ -n "$value" ]; then args+=("--${name}" "$value"); fi
+          done
+          bun desktop/scripts/installed-gate.ts "${args[@]}"
+
+      - name: Upload the gate report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: installed-gate-report-linux-${{ matrix.format }}
+          path: ${{ runner.temp }}/installed-gate-report.json
+          if-no-files-found: error

@@ -1,0 +1,53 @@
+name: Codex queue helpers
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/codex-queue.*'
+      - 'docs-site/astro.config.mjs'
+      - 'docs-site/src/content/docs/guides/composer-usage-gate-fallback.md'
+      - '.github/workflows/codex-queue-helpers.yml'
+  push:
+    branches: [dev, main, preview]
+    paths:
+      - 'scripts/codex-queue.*'
+      - 'docs-site/astro.config.mjs'
+      - 'docs-site/src/content/docs/guides/composer-usage-gate-fallback.md'
+      - '.github/workflows/codex-queue-helpers.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codex-queue-helpers-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  offline-helpers:
+    name: queue helpers (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            shells: bash
+          - os: macos-latest
+            shells: /bin/bash
+          - os: windows-latest
+            shells: powershell.exe,pwsh.exe
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+      # Hosted runners supply Node 20+; no dependencies, secrets, real Codex,
+      # accounts, services, downloads or model requests are used by this harness.
+      - name: Offline native wrapper regressions
+        shell: bash
+        env:
+          CODEX_QUEUE_TEST_SHELLS: ${{ matrix.shells }}
+        run: |
+          node --version
+          node --test scripts/codex-queue.test.mjs

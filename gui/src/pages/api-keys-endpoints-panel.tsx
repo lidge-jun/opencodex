@@ -6,8 +6,9 @@
  * different one that happened to share a file.
  */
 import { useI18n, type TKey } from "../i18n/shared";
-import type { ApiAuthDisposition, ApiAuthMatrixRow, ApiEndpointInfo } from "./api-keys-utils";
+import type { ApiAuthDisposition, ApiAuthMatrixRow, ApiEndpointInfo, ApiSurfacesInfo } from "./api-keys-utils";
 import { EndpointUrl } from "./api-keys-copy";
+import { ApiSurfaceCards } from "./api-surface-cards";
 
 /** The server ships the rules; the GUI only names them. */
 function dispositionLabel(value: ApiAuthDisposition, t: (key: TKey) => string): string {
@@ -20,12 +21,23 @@ export function ApiKeysEndpointsPanel({
   endpoints,
   claudeCodeEnabled,
   authMatrix,
+  surfaces,
+  apiBase,
+  onSurfacesChanged,
 }: {
   endpoints: ApiEndpointInfo;
   claudeCodeEnabled: boolean;
   authMatrix: ApiAuthMatrixRow[];
+  /** Absent from a server that predates API surface settings; the flat list is kept then. */
+  surfaces?: ApiSurfacesInfo;
+  /** Management origin the Messages toggle writes to (this machine or the shared hub). */
+  apiBase?: string;
+  onSurfacesChanged?: () => void;
 }) {
   const { t } = useI18n();
+  const cards = surfaces && apiBase !== undefined && onSurfacesChanged
+    ? { surfaces, apiBase, onChanged: onSurfacesChanged }
+    : null;
   return (
     <div className="panel api-panel">
       <h3 className="panel-title">{t("api.endpointsTitle")}</h3>
@@ -34,25 +46,30 @@ export function ApiKeysEndpointsPanel({
           <span className="muted small">{t("api.baseUrl")}</span>
           <EndpointUrl url={endpoints.baseUrl} />
         </div>
-        <div>
-          <span className="muted small">{t("api.responsesEndpoint")}</span>
-          <EndpointUrl url={endpoints.responses} />
-        </div>
-        <div>
-          <span className="muted small">{t("api.chatCompletionsEndpoint")}</span>
-          <EndpointUrl url={endpoints.chatCompletions} />
-        </div>
-        {claudeCodeEnabled && (
-          <div>
-            <span className="muted small">{t("api.messagesEndpoint")}</span>
-            <EndpointUrl url={endpoints.messages} />
-          </div>
+        {cards ? null : (
+          <>
+            <div>
+              <span className="muted small">{t("api.responsesEndpoint")}</span>
+              <EndpointUrl url={endpoints.responses} />
+            </div>
+            <div>
+              <span className="muted small">{t("api.chatCompletionsEndpoint")}</span>
+              <EndpointUrl url={endpoints.chatCompletions} />
+            </div>
+            {claudeCodeEnabled && (
+              <div>
+                <span className="muted small">{t("api.messagesEndpoint")}</span>
+                <EndpointUrl url={endpoints.messages} />
+              </div>
+            )}
+          </>
         )}
         <div>
           <span className="muted small">{t("api.modelsEndpoint")}</span>
           <EndpointUrl url={endpoints.models} />
         </div>
       </div>
+      {cards ? <ApiSurfaceCards endpoints={endpoints} {...cards} /> : null}
       <p className="muted small">{t("api.endpointNote")}</p>
       {/* Not a disclosure. This is the one thing a user needs before their first
           request succeeds, and the prose it replaces was wrong about Chat

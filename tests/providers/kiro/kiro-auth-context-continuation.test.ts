@@ -15,6 +15,7 @@ import { clearGenericFailoverHealth } from "../../../src/oauth/generic-account-f
 import { getAccountSet, saveCredential, setActiveAccount } from "../../../src/oauth/store";
 import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
+import { acquireOwnedSpendHome } from "../../helpers/owned-spend-home";
 
 const previousHome = process.env.OPENCODEX_HOME;
 let testHome = "";
@@ -84,15 +85,24 @@ beforeAll(async () => {
   ({ handleResponses } = await import("../../../src/server/responses"));
 });
 
+let releaseSpendHome: (() => void) | undefined;
+
 beforeEach(() => {
   testHome = mkdtempSync(join(tmpdir(), "ocx-kiro-continuation-auth-"));
   process.env.OPENCODEX_HOME = testHome;
   kiroBuilds = [];
   clearAnthropicAccountPoolState();
   clearGenericFailoverHealth();
+  // Dispatches without starting a server, so it takes the spend-journal lease itself. Taken
+  // last because the lease binds the home in effect at the moment it is taken.
+  releaseSpendHome = acquireOwnedSpendHome();
 });
 
 afterEach(() => {
+  // Released before this case's home is removed: an open lease inside a directory being
+  // deleted fails the removal on Windows and leaves an unlinked live database on POSIX.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   clearAnthropicAccountPoolState();
   clearGenericFailoverHealth();
   removeTreeWithRetry(testHome);
@@ -104,7 +114,11 @@ afterAll(() => {
   mock.restore();
 });
 
-test("Kiro continuation 429 keeps the rotated bearer and routing metadata together", async () => {
+test.each([
+  [429, { error: { message: "rate limited" } }],
+  [400, { reason: "MONTHLY_REQUEST_COUNT" }],
+  [403, { reason: "TEMPORARILY_SUSPENDED" }],
+] as const)("Kiro continuation %i keeps the rotated bearer and routing metadata together", async (refusalStatus, refusalBody) => {
   const profiles = [
     "arn:aws:codewhisperer:us-east-1:123456789012:profile/account-a",
     "arn:aws:codewhisperer:eu-west-1:123456789012:profile/account-b",
@@ -144,10 +158,8 @@ test("Kiro continuation 429 keeps the rotated bearer and routing metadata togeth
   globalThis.fetch = (async () => {
     const phase = phases.shift();
     if (phase === "rate-limit") {
-      return Response.json(
-        { error: { message: "rate limited" } },
-        { status: 429, headers: { "retry-after": "30" } },
-      );
+      return Response.json(refusalBody, { status: refusalStatus,
+        ...(refusalStatus === 429 ? { headers: { "retry-after": "30" } } : {}) });
     }
     if (!phase) throw new Error("unexpected extra request");
     return new Response("", { status: 200, headers: { "x-test-phase": phase } });

@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/banner.png" alt="opencodex — universal provider proxy for Codex, Claude Code, Claude Desktop and Grok Build" width="100%">
+</p>
+
 <h3 align="center">make codex open!</h3>
 <p align="center"><b>Universal provider proxy for OpenAI Codex, Claude Code, Claude Desktop &amp; Grok Build</b><br>
 Two commands, and every one of them runs any LLM you point it at.</p>
@@ -13,6 +17,13 @@ Two commands, and every one of them runs any LLM you point it at.</p>
 npm install -g @bitkyc08/opencodex
 ocx start
 ```
+
+<p align="center">
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/macOS-.dmg-24292f?logo=apple&logoColor=white" alt="Download for macOS (.dmg)"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Windows-.msi-24292f?logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0id2hpdGUiPjxwYXRoIGQ9Ik0zIDNoOC41djguNUgzem05LjUgMEgyMXY4LjVoLTguNXpNMyAxMi41aDguNVYyMUgzem05LjUgMEgyMVYyMWgtOC41eiIvPjwvc3ZnPg==" alt="Download for Windows (.msi)"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Linux-.AppImage-24292f?logo=linux&logoColor=white" alt="Download for Linux (.AppImage)"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Linux-.deb-24292f?logo=debian&logoColor=white" alt="Download for Linux (.deb)"></a>
+</p>
 
 <table>
 <tr>
@@ -78,7 +89,7 @@ account while existing threads stay pinned to the account that started them.
 
 ## Quick start
 
-### Personal install
+### Personal install (CLI)
 
 ```bash
 npm install -g @bitkyc08/opencodex   # Node 18+; the Bun runtime is bundled automatically
@@ -90,7 +101,36 @@ Use `ocx service` to run it in the background.
 Open **http://localhost:10100** and configure everything in the web dashboard — add providers
 (40+ built-ins, or any OpenAI-compatible endpoint), pick models, manage accounts. `ocx gui`
 re-opens the dashboard at any time.
-It can also manage a **ChatGPT account pool** for Codex auth. Add multiple ChatGPT / Codex accounts,
+
+<details>
+<summary><b>Desktop app (beta)</b></summary>
+
+The desktop app is the same proxy and dashboard in a native window, with a tray and bundled `ocx`.
+It attaches to a proxy that is already running, or starts its bundled one, and the dashboard stays
+on the proxy port (**http://localhost:10100** unless you configured another). Pick the file for your
+platform from the [latest release](https://github.com/lidge-jun/opencodex/releases/latest):
+
+| Platform | File | Notes |
+|---|---|---|
+| macOS 13+ (Apple Silicon and Intel) | `OpenCodex-<version>-macos.dmg` | Universal build, signed with a Developer ID and notarized |
+| Windows (x64) | `OpenCodex-<version>-windows-x64.msi` | Not code-signed yet: SmartScreen asks once, choose **More info → Run anyway** |
+| Linux (x86_64) | `OpenCodex-<version>-linux-x86_64.AppImage` or `-linux-amd64.deb` | The tray needs an AppIndicator-capable desktop |
+
+Every file has a `.sha256` next to it on the release page. On macOS 14+ the app also ships a
+WidgetKit extension that shows proxy status, today's usage and provider quotas; the snapshot model
+it renders lives in [`app/`](./app) (`MenuBarCore`). To build the app yourself, run
+`bun install && bun run build:gui` at the repository root, then in `desktop/` run
+`bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local` on macOS,
+or `bun install && bun run prepare-sidecar && bun run build:local` on Windows and Linux (the widget
+step needs macOS). The [Desktop App guide](https://opencodex.me/guides/desktop-app/) and the
+[macOS Menu Bar App guide](https://opencodex.me/guides/macos-menu-bar/) cover first launch, and
+[`AGENTS_INSTALL.md`](./AGENTS_INSTALL.md#where-things-are-installed) lists everything written to disk.
+
+</details>
+
+### ChatGPT account pool
+
+opencodex can also manage a **ChatGPT account pool** for Codex auth. Add multiple ChatGPT / Codex accounts,
 refresh their 5h / weekly / 30d quota in the dashboard. Under quota routing, new sessions can use
 the lowest-usage healthy account; round-robin and fill-first use their own policies. Existing Codex
 threads normally retain affinity to the account that started them, so long SSH, tmux, or
@@ -116,6 +156,10 @@ See [SPONSORS.md](./SPONSORS.md).
 <tr>
 <td width="180"><a href="https://www.packyapi.com/register?aff=k5KT"><img src="assets/sponsors/packycode.png" alt="PackyCode" width="150"></a></td>
 <td>Thanks to <a href="https://www.packyapi.com/register?aff=k5KT">PackyCode</a> for sponsoring this project! PackyCode is a stable, high-performance API relay provider, offering relay services for Claude Code, Codex, Gemini, and more. With automatic failover, smart routing, and unlimited concurrency, it turns AI into a real productivity tool. <a href="https://www.packyapi.com/register?aff=k5KT">Register via this link</a> and get started! Pick <code>PackyCode</code> in the Add provider picker or run <code>ocx provider add packycode</code>.<br><sub>PackyCode 是一家稳定、高效的 API 中转服务商，提供 Claude Code、Codex、Gemini 等多种中转服务。具备自动故障转移、智能路由和无限并发等多种功能，让 AI 编程成为真正的生产力工具。<a href="https://www.packyapi.com/register?aff=k5KT">点此链接注册</a>，立即开始使用！</sub></td>
+</tr>
+<tr>
+<td width="180"><a href="https://tokenlab.sh/r/OPENCODEX"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/sponsors/tokenlab-dark.png"><img src="assets/sponsors/tokenlab-light.png" alt="TokenLab" width="150"></picture></a></td>
+<td>Thanks to <a href="https://tokenlab.sh/r/OPENCODEX">TokenLab</a> for sponsoring this project! TokenLab gives coding agents one API key for leading models, supporting OpenAI Responses and Chat Completions, Anthropic Messages, and Gemini's native API formats, with streaming and tool calling. It also provides an MCP server and agent Skills for easy integration. Choose your delivery mode and pay as you go. Pick <code>TokenLab</code> in the Add provider picker or run <code>ocx provider add tokenlab</code>.<br><sub>TokenLab 为编程智能体提供统一的多模型 API，一枚 API Key 即可接入主流模型，支持 OpenAI Responses、Chat Completions、Anthropic Messages 和 Gemini 原生 API 格式，以及流式输出和工具调用。同时提供 MCP 服务器和 Agent Skills，方便接入现有工作流；交付模式可选，按量付费。</sub></td>
 </tr>
 </tbody>
 </table>
@@ -180,8 +224,9 @@ setup, authenticated acceptance checks, remote management, and rollback.
 
 ```bash
 curl -fsSL https://bun.sh/install | bash
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex && ~/.bun/bin/bun install
+~/.bun/bin/bun run build:gui
 ~/.bun/bin/bun run src/cli/index.ts start
 ```
 
@@ -189,8 +234,9 @@ cd opencodex && ~/.bun/bin/bun install
 
 ```powershell
 irm bun.sh/install.ps1 | iex
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex; bun install
+bun run build:gui
 bun run src/cli/index.ts start
 ```
 
@@ -222,13 +268,13 @@ when it is unreachable). `ocx status` / `ocx doctor` / `ocx health` report the r
 
 ## Supported platforms
 
-| OS | Status | Service manager |
-|---|---|---|
-| macOS (arm64 / x64) | Fully supported | launchd |
-| Linux (x64 / arm64) | Fully supported | systemd (user unit) |
-| Windows (x64) | Fully supported | Task Scheduler (hidden) / opt-in native service (`--native`, WinSW) |
+| OS | Status | Service manager | Desktop app (beta) |
+|---|---|---|---|
+| macOS (arm64 / x64) | Fully supported | launchd | Universal `.dmg` |
+| Linux (x64 / arm64) | Fully supported | systemd (user unit) | x86_64 `.AppImage` / `.deb` |
+| Windows (x64) | Fully supported | Task Scheduler (hidden) / opt-in native service (`--native`, WinSW) | x64 `.msi` |
 
-Requires [Node](https://nodejs.org) 18+. The Bun runtime is bundled on `npm install` — no separate
+The CLI install requires [Node](https://nodejs.org) 18+; the desktop app needs neither Node nor Bun. The Bun runtime is bundled on `npm install` — no separate
 Bun install needed, no WSL needed on Windows. If npm blocked the bundled runtime's install scripts,
 see the [installation docs](https://opencodex.me/getting-started/installation/).
 
@@ -266,14 +312,15 @@ see the [installation docs](https://opencodex.me/getting-started/installation/).
 <details>
 <summary>Memory ownership details</summary>
 
-OpenCodex tracks 36 categories of process-retained state. Each has a documented bound:
+OpenCodex tracks process-retained state in the categories below. Each has a documented bound:
 
-- **12 retained stores** (request log, debug rings, image cache, model cache, vision
+- **14 retained stores** (request log, debug rings, image cache, model cache, vision
   descriptions, cursor blobs, responses continuation, etc.) are byte-accounted and
-  evicted by the app-owned memory budget (default 256 MiB).
+  evicted by the app-owned memory budget (default 256 MiB), except the native control replay
+  store, which is pinned and never evicted.
 - **4 observed buffers** (translator accumulators, image/OAuth/Grok tails) are
   monitored for in-flight byte pressure without eviction.
-- **24 state-store registrations** handle expiry sweeps (60 s interval) and
+- **31 state-store registrations** handle expiry sweeps (60 s interval) and
   config-generation reconciliation so stale provider/account keys are removed.
 - **Path and fingerprint memos** (workspace metadata, hardened identities, installation
   salts, mode-hint capabilities) use insertion-order LRU caps (8–128 entries).
@@ -302,12 +349,31 @@ Omit the `provider/` prefix to use the default provider or auto-match by model n
 Provider model ids containing `/` are exposed with inner slashes aliased to `-`; the raw
 full-slash form keeps working too. Details: [model routing docs](https://opencodex.me/guides/model-routing/).
 
+### JEV Auto routing (optional)
+
+TypeSafe JEV can choose the first model and reasoning effort for an opt-in Combo while the normal
+model picker and every direct route stay unchanged. Add the credential with `ocx login jev`, from
+**Providers → TypeSafe JEV → Add API key**, or through `TYPESAFE_API_KEY`/`JEV_API_KEY`. Then open
+**Models → Combos → Create JEV Auto**, choose the allowed target models, and check the exact efforts
+JEV may select for each target. Leaving a target's effort setting untouched allows all efforts that
+model currently advertises.
+
+JEV is consulted only for `jev-auto` and only once per logical model call. Missing credentials,
+network failures, or invalid decisions fail open to the first currently eligible target; caller
+cancellation still cancels the request. Automated tests use a mocked TypeSafe endpoint and do not
+validate a live JEV account.
+
+A JEV Combo can instead ask a self-hosted decision model, such as Ollama's keyless `tev1`: add a
+`jev-decision` provider whose `baseUrl` is the full `/v1/systemone` endpoint and set the Combo's
+`decisionProvider` to it. TypeSafe credentials are never sent there. Details:
+[System One-compatible server](https://opencodex.me/guides/combos/#system-one-compatible-server).
+
 ## Providers & adapters
 
 <!-- sponsors:main-first-mention -->
 OpenAI (ChatGPT login or API key), Anthropic, Google Gemini, xAI, Kimi, Azure OpenAI, Ollama
 (local + Cloud), Cursor (experimental), and every OpenAI-compatible endpoint — plus DeepSeek,
-Groq, OpenRouter, Together, Fireworks, Cerebras, Mistral, Hugging Face, NVIDIA NIM, MiniMax,
+Groq, OpenRouter, OpenGateway, Together, Fireworks, Cerebras, Mistral, Hugging Face, NVIDIA NIM, MiniMax,
 Qwen Cloud, Qoder Global and CN (official PAT + CLI), SiliconFlow, and more. Full list: `ocx init` or the
 [provider docs](https://opencodex.me/guides/providers/).
 
@@ -392,8 +458,8 @@ Acknowledging a report is not the same as triaging it, and no first-response tar
 
 ## Development
 
-Source development requires the `bun` CLI on your `PATH`. This is separate from the published npm
-package's bundled Bun runtime, which is used only by installed `ocx` commands.
+Source development requires the `bun` CLI on your `PATH`. The published npm package bundles its own
+Bun runtime for installed `ocx` commands; package scripts may also resolve Bun through that bundled dependency.
 
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git

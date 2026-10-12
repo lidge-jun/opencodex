@@ -1,4 +1,4 @@
-import { getPoolSettings, putPoolSettings, putCodexPoolStrategy } from "../src/pool-settings";
+import { getPoolSettings, putPoolSettings, putCodexPoolStrategy, poolSettingsRequestBody } from "../src/pool-settings";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
@@ -140,6 +140,53 @@ describe("account pool strategy helpers", () => {
     expect(normalizeAccountPoolStrategy("reset-first")).toBe("reset-first");
     expect(normalizeAccountPoolStrategy("weighted")).toBe(DEFAULT_ACCOUNT_POOL_STRATEGY);
     expect(normalizeAccountPoolStrategy(undefined)).toBe("quota");
+  });
+
+  test("native Messages preference defaults on for Anthropic and preserves a false 204 write", async () => {
+    const read = await getPoolSettings("", "anthropic", async () => Response.json({ kind: "anthropic" }));
+    expect(read?.nativeMessages).toBe(true);
+    let request: Record<string, unknown> | undefined;
+    const written = await putPoolSettings("", "anthropic", { nativeMessages: false }, async (_url, init) => {
+      request = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(null, { status: 204 });
+    });
+    expect(request).toEqual({ provider: "anthropic", nativeMessages: false });
+    expect(written?.nativeMessages).toBe(false);
+    const codex = poolSettingsRequestBody("openai", { nativeMessages: false });
+    expect(codex).toEqual({ provider: "openai" });
+  });
+
+  test("native preference uses provider scope before kind, then present server field before submitted fallback", async () => {
+    for (const provider of ["openai", "anthropic-apikey", "custom"]) {
+      const read = await getPoolSettings("", provider, async () => Response.json({ kind: "anthropic", nativeMessages: true }));
+      expect(read?.nativeMessages).toBeNull();
+      const saved = await putPoolSettings("", provider, { nativeMessages: true }, async () => new Response(null, { status: 204 }));
+      expect(saved?.nativeMessages).toBeNull();
+      expect(poolSettingsRequestBody(provider, { nativeMessages: true })).toEqual({ provider });
+    }
+    for (const value of [false, null, "true", 1, {}, []]) {
+      const saved = await putPoolSettings("", "anthropic", { nativeMessages: true }, async () => Response.json({ nativeMessages: value }));
+      expect(saved?.nativeMessages).toBe(false);
+      const read = await getPoolSettings("", "anthropic", async () => Response.json({ nativeMessages: value }));
+      expect(read?.nativeMessages).toBe(false);
+    }
+    expect((await putPoolSettings("", "anthropic", { nativeMessages: false }, async () => Response.json({ nativeMessages: true })))?.nativeMessages).toBe(true);
+    expect((await putPoolSettings("", "anthropic", { nativeMessages: false }, async () => Response.json({})))?.nativeMessages).toBe(false);
+    expect((await getPoolSettings("", "anthropic", async () => Response.json({ kind: "generic" })))?.nativeMessages).toBe(true);
+  });
+
+  test("confirmed writes carry only the recognized bookkeeping warning", async () => {
+    const saved = await putPoolSettings("", "anthropic", { nativeMessages: false }, async () => Response.json({ nativeMessages: false, warning: "config_bookkeeping_failed" }));
+    expect(saved?.nativeMessages).toBe(false);
+    expect(saved?.warning).toBe("config_bookkeeping_failed");
+    expect((await putPoolSettings("", "anthropic", {}, async () => Response.json({ warning: "untrusted server text" })))?.warning).toBeUndefined();
+  });
+
+  test("unknown save state is distinguished from ordinary failure only for the Anthropic 409 code", async () => {
+    await expect(putPoolSettings("", "anthropic", { nativeMessages: false }, async () => Response.json({ code: "config_save_state_unknown" }, { status: 409 }))).rejects.toMatchObject({ code: "config_save_state_unknown" });
+    for (const [provider, status, code] of [["openai", 409, "config_save_state_unknown"], ["anthropic", 500, "config_save_state_unknown"], ["anthropic", 409, "different_error"]] as const) {
+      expect(await putPoolSettings("", provider, {}, async () => Response.json({ code }, { status }))).toBeNull();
+    }
   });
 
   test("normalizes sticky limits to 1–100 integers", () => {

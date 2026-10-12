@@ -5,6 +5,7 @@ import { getProviderRegistryEntry } from "../../src/providers/registry";
 import { routedProviderConfig } from "../../src/router";
 import { handleResponses } from "../../src/server/responses/core";
 import type { OcxConfig, OcxMessage, OcxParsedRequest, OcxProviderConfig } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 const ANNOTATION =
   "[ocx] empty tool output: the tool ran but produced no stdout or return value; do not treat this as success, failure, or user-provided input.";
@@ -148,7 +149,13 @@ describe("openai-chat empty tool output annotation", () => {
 
 describe("openai-responses empty tool output annotation", () => {
   const originalFetch = globalThis.fetch;
-  afterEach(() => { globalThis.fetch = originalFetch; });
+  let releaseSpendHome: (() => void) | undefined;
+  afterEach(() => {
+    // Release first so a failed dispatch cannot leak writer ownership into the next case.
+    releaseSpendHome?.();
+    releaseSpendHome = undefined;
+    globalThis.fetch = originalFetch;
+  });
 
   async function drive(config: OcxConfig, input: unknown[]): Promise<{ body: Record<string, unknown> }> {
     const requests: Array<{ body: Record<string, unknown> }> = [];
@@ -156,7 +163,9 @@ describe("openai-responses empty tool output annotation", () => {
       requests.push({ body: JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown> });
       return Response.json({ id: "resp_test", object: "response", status: "completed", output: [] });
     }) as typeof fetch;
-    await handleResponses(
+    // Direct dispatch needs the writer lease to prevent spend-ledger ownership failures.
+    releaseSpendHome = acquireOwnedSpendHome();
+    const turn = await handleResponses(
       new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -165,6 +174,9 @@ describe("openai-responses empty tool output annotation", () => {
       config,
       { model: "", provider: "" },
     );
+    // The turn's body is a live stream. Releasing it here means no reader is still attached
+    // when the lease is dropped, which is what turns a finished case into a pending one.
+    await turn.body?.cancel();
     return requests[0] ?? { body: {} };
   }
 

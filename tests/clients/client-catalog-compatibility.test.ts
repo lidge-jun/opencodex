@@ -67,6 +67,19 @@ describe("#4207 catalog effort compatibility", () => {
     });
   });
 
+  test("parser sentinels are accepted even when absent from observed native ladders", () => {
+    // Native bundled rows do not advertise these values, but the Codex catalog parser accepts
+    // both. The observed rows therefore cannot be treated as an exhaustive parser enum.
+    const observedNativeLadder = new Set(["low", "medium", "high", "xhigh"]);
+    const models = JSON.parse(catalogBody(["none", "minimal"], "provider/model", "minimal")).models;
+
+    expect(catalogEffortCompatibility(models, observedNativeLadder)).toEqual({
+      compatible: true,
+      unsupportedEfforts: [],
+      affectedModels: [],
+    });
+  });
+
   test("an unobservable runtime ladder is not evidence of incompatibility", () => {
     const models = JSON.parse(catalogBody(["low", "max"])).models;
     expect(catalogEffortCompatibility(models, null).compatible).toBe(true);

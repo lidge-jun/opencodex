@@ -212,11 +212,15 @@ describe("Cursor native exec sandbox policy", () => {
     }), { unsafeAllowNativeLocalExec }))[0]);
     expect(stringify(allowedRead)).toContain(content);
 
-    const allowedShell = decode((await handleCursorNativeExec(execMessage({
+    const unavailableShell = decode((await handleCursorNativeExec(execMessage({
       case: "shellArgs",
       value: create(ShellArgsSchema, { command: "printf SHELL_ALLOWED", workingDirectory: dir, hardTimeout: 2000 }),
     }), { unsafeAllowNativeLocalExec }))[0]);
-    expect(stringify(allowedShell)).toContain("SHELL_ALLOWED");
+    expect(unavailableShell.message.case).toBe("shellResult");
+    if (unavailableShell.message.case !== "shellResult" || unavailableShell.message.value.result.case !== "failure") throw new Error("expected foreground denial");
+    expect(unavailableShell.message.value.result.value.stdout).toBe("");
+    expect(unavailableShell.message.value.result.value.aborted).toBe(true);
+    expect(unavailableShell.message.value.result.value.stderr).toContain("kernel-backed descendant ownership");
 
     let fetchCalled = false;
     const allowedFetch = decode((await handleCursorNativeExec(execMessage({
@@ -274,7 +278,7 @@ describe("Cursor native exec sandbox policy", () => {
     }
   });
 
-  test("explicit nativeLocalExec on remains the only mode that authorizes native shell, read, and fetch", async () => {
+  test("explicit nativeLocalExec on authorizes read and fetch but not unowned foreground shells", async () => {
     const declared = await capturedFullAccessDeclaration({
       model: "cursor/auto",
       input: [
@@ -447,9 +451,70 @@ describe("Cursor native exec catalog-aware redirect hint", () => {
     ["an empty catalog", []],
     ["a bare exec_command bridge", [{ name: "exec_command" }]],
     ["a bare shell_command bridge next to client tools", [{ name: "task" }, { name: "shell_command" }]],
-    ["unified exec next to client tools", [{ name: "task" }, { name: "exec", freeform: true }]],
+    ["a non-freeform unified exec next to client tools", [{ name: "task" }, { name: "exec" }]],
+    ["freeform exec beside a bare shell bridge (flat catalog)", [{ name: "exec", freeform: true }, { name: "shell_command" }]],
   ])("keeps the default bridge wording for %s", (_name, tools) => {
     expect(cursorNativeExecRedirectHint(tools)).toBeUndefined();
+  });
+
+  test("code mode redirects inside the freeform exec and never recommends a missing top-level shell bridge", () => {
+    const hint = cursorNativeExecRedirectHint([{ name: "exec", freeform: true }]) ?? "";
+    expect(hint).toContain("`exec`");
+    expect(hint).toContain("await tools.exec_command(");
+    expect(hint).toContain("text(");
+    expect(hint).toContain("Do NOT narrate");
+    // The buggy default recommended the flat bridge by its harness display name; code mode has neither.
+    expect(hint).not.toContain("mcp_opencodex-responses_");
+    // The bare bridge names may only appear in the "do not call at the top level" clause.
+    expect(hint).toContain("do not call `shell_command` or `exec_command` at the top level");
+    // "No bare shell bridge" must not read as forbidding separately listed namespaced tools.
+    expect(hint).toContain("remains callable at the top level as usual");
+    for (const pattern of SILENT_REDIRECT_FORBIDDEN) expect(hint).not.toMatch(pattern);
+  });
+
+  test("code-mode denial frames across fs, shell, and fetch carry the exec redirect and execute nothing", async () => {
+    const hint = cursorNativeExecRedirectHint([{ name: "exec", freeform: true }]);
+    expect(hint).toBeDefined();
+    const dir = mkdtempSync(join(tmpdir(), "ocx-cursor-code-mode-hint-"));
+    const existing = join(dir, "grounding.txt");
+    const content = "CODE-MODE-HINT-01 must not leak";
+    writeFileSync(existing, content);
+    const newPath = join(dir, "must-not-exist.txt");
+    let fetchCalled = false;
+    const deps = {
+      unsafeAllowNativeLocalExec: false,
+      nativeExecRedirectHint: hint,
+      fetch: async () => {
+        fetchCalled = true;
+        return new Response("SHOULD_NOT_FETCH");
+      },
+    };
+    const frames = [
+      execMessage({ case: "readArgs", value: create(ReadArgsSchema, { path: existing }) }),
+      execMessage({ case: "lsArgs", value: create(LsArgsSchema, { path: dir }) }),
+      execMessage({ case: "grepArgs", value: create(GrepArgsSchema, { pattern: "CODE-MODE", path: dir }) }),
+      execMessage({ case: "writeArgs", value: create(WriteArgsSchema, { path: newPath, fileText: "SHOULD_NOT_WRITE" }) }),
+      execMessage({ case: "deleteArgs", value: create(DeleteArgsSchema, { path: existing }) }),
+      execMessage({ case: "shellArgs", value: create(ShellArgsSchema, { command: "printf RAN_%s MARKER", workingDirectory: dir, hardTimeout: 2000 }) }),
+      execMessage({ case: "shellStreamArgs", value: create(ShellArgsSchema, { command: "printf RAN_%s MARKER", workingDirectory: dir }) }),
+      execMessage({ case: "backgroundShellSpawnArgs", value: create(BackgroundShellSpawnArgsSchema, { command: "printf RAN_%s MARKER", workingDirectory: dir }) }),
+      execMessage({ case: "writeShellStdinArgs", value: create(WriteShellStdinArgsSchema, { shellId: 999, chars: "SHOULD_NOT_WRITE" }) }),
+      execMessage({ case: "fetchArgs", value: create(FetchArgsSchema, { url: "https://metadata.invalid/latest" }) }),
+    ];
+    for (const frame of frames) {
+      const text = stringifyReplies(await handleCursorNativeExec(frame, deps));
+      expect(text).toContain("await tools.exec_command(");
+      expect(text).toContain("Do NOT narrate");
+      expect(text).not.toContain("mcp_opencodex-responses_");
+      expect(text).not.toContain(content);
+      // Denied shell frames echo the command text; only an executed command could produce the joined marker.
+      expect(text).not.toContain("RAN_MARKER");
+      expect(text).not.toContain("SHOULD_NOT_WRITE");
+      expect(text).not.toContain("SHOULD_NOT_FETCH");
+    }
+    expect(fetchCalled).toBe(false);
+    expect(existsSync(existing)).toBe(true);
+    expect(existsSync(newPath)).toBe(false);
   });
 
   test("lists namespaced tools by wire name and caps a long catalog", () => {

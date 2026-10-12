@@ -1,12 +1,14 @@
 import { normalizeRoutedAgentMessages } from "../routed-agent-messages";
+import { nameRoutedIdentity, repairIdentityInResponsesBody, stripRoutedIdentity } from "../identity";
 import { stripBracketedModelSuffix } from "../openai-chat";
 import { normalizeOpenCodeGoAdditionalTools } from "../opencode-go-additional-tools";
 import { isXaiResponsesDestination } from "../../providers/xai-transport";
+import { applyGithubCopilotContextTier } from "../../providers/github-copilot-context";
 import { Buffer } from "node:buffer";
 import type { IncomingMeta, ProviderAdapter } from "../base";
 import { namespacedToolName, type AdapterEvent, type OcxParsedRequest, type OcxProviderConfig, type OcxUsage, type TierDecision } from "../../types";
 import { applyCodexRoutingHint, CODEX_RESPONSES_LITE_HEADER, CODEX_ROUTING_HINT_HEADER } from "../../codex/forward-transport-headers";
-import { COMPACT_PROMPT, compactionItemToText, decodeCompactionSummary, isCompactionItemType } from "../../responses/compaction";
+import { COMPACT_PROMPT, compactionItemToText, decodeCompactionSummary, isCompactionItemType, transferCompactionCiphertextLease } from "../../responses/compaction";
 import { decodeServerSentEvents } from "../../lib/sse-decoder";
 import {
   CODEX_FORWARD_BASE_URL,
@@ -15,7 +17,7 @@ import {
   isOpenAiOperatedResponsesDestination,
 } from "../../providers/openai-tiers";
 import type { TranslatorBudget } from "../../lib/translator-budget";
-import { rewriteRoutedCustomToolsForUpstream } from "../../responses/custom-tool-compat";
+import { rewriteRoutedCustomToolsForUpstream, validateFinalCustomToolCompatibility } from "../../responses/custom-tool-compat";
 import { rewriteRoutedToolSearchForUpstream } from "../../responses/tool-search-compat";
 import { rewriteRoutedNamespaceToolsForUpstream } from "../../responses/namespace-tool-compat";
 import { repairLegacyDottedToolCallNames } from "../../responses/legacy-dotted-tool-name-repair";
@@ -31,9 +33,11 @@ import {
 } from "../xai-tool-schema";
 import {
   createAdapterTierMetadata,
+  emittedFastWire,
 } from "../../providers/fastwire";
-import { mapRoutedResponsesReasoningEffort, normalizeConfiguredReasoningSummaryDelivery, sanitizeReasoningInputContent, stripDisabledReasoningSummaries, stripDisabledVerbosity, stripUnsupportedReasoningSummaryDelivery } from "./reasoning";
-import { scrubOcxCompactionItems, stripCanonicalOnlyToolFields, stripCanonicalOnlyTopLevelFields, stripInternalChatMessageMetadataPassthrough, stripInvalidItemIds, stripItemIdsWhenUnstored } from "./request-strips";
+import { dropResponsesReasoningInputItems, mapRoutedResponsesReasoningEffort, normalizeConfiguredReasoningSummaryDelivery, sanitizeReasoningInputContent, stripDisabledReasoningSummaries, stripDisabledVerbosity, stripNoneReasoningSummary, stripUnsupportedReasoningSummaryDelivery } from "./reasoning";
+import { scrubOcxCompactionItems, stripCanonicalOnlyToolFields, stripCanonicalOnlyTopLevelFields, stripInternalChatMessageMetadataPassthrough, stripInvalidItemIds, stripItemIdsWhenUnstored, stripRejectedSamplingParams } from "./request-strips";
+import { notePlaintextReasoningDropped } from "./plaintext-reasoning-notice";
 import { stripCanonicalForwardPromptCacheOptions, stripDeprecatedPromptCacheRetention } from "./prompt-cache";
 import { isPlainObject } from "./internal";
 import { normalizeToolSchemas, promoteClientLoadedTools, stripUnsupportedHostedTools } from "./tool-schema";
@@ -42,6 +46,11 @@ import { bridgeSearchReplayScope } from "../../responses/bridge-search-replay-ca
 import { applyTierDecisionToResponsesBody, normalizeCanonicalForwardContinuationEnvelope, normalizeCanonicalForwardPromptEnvelope, stripCanonicalForwardSamplingParams, stripPreviousResponseId, stripStatefulResponsesParams, stripUnsupportedForwardParams } from "./canonical-forward";
 import { normalizeImageGenClientTools, preferConfiguredHostedTools } from "./image-gen";
 import { stripMuseSparkUnsupportedWebSearchFields, stripOpenAiOnlyWebSearchFields } from "./web-search";
+import { observeOutbound } from "../../usage/cache-diagnostic";
+import { normalizeForwardedClientHeaderName } from "../../lib/provider-client-headers";
+import { normalizeMuseToolChoice } from "./muse-tool-choice";
+import { renderCompactionSearchHistoryItems } from "./compaction-search-history";
+import { stripKimiEmptyAssistantMessages } from "./empty-assistant";
 
 /**
  * Identifies DeepSeek's strict Responses replay contract: tool-bearing continuations need
@@ -89,6 +98,22 @@ function applyCallerUserAgentFallback(
   if (userAgent) headers["User-Agent"] = userAgent;
 }
 
+/** Copy only explicitly opted-in caller metadata; provider-owned headers remain authoritative. */
+function applyConfiguredClientHeaderForwarding(
+  headers: Record<string, string>,
+  incoming: IncomingMeta,
+  provider: OcxProviderConfig,
+): void {
+  if (!Array.isArray(provider.forwardClientHeaders)) return;
+  for (const rawName of provider.forwardClientHeaders.slice(0, 64)) {
+    const name = normalizeForwardedClientHeaderName(rawName);
+    if (name === null) continue;
+    if (Object.keys(headers).some(existing => existing.toLowerCase() === name)) continue;
+    const value = incoming.headers.get(name);
+    if (value) headers[name] = value;
+  }
+}
+
 /** Replace every `input_image` part under a routed-compaction body with a short marker. */
 function stripInputImagesDeep(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stripInputImagesDeep);
@@ -111,17 +136,21 @@ function stripInputImagesDeep(value: unknown): unknown {
  * be applied here. Images go too: a summary needs no pixels, and a text-only
  * gateway would reject them.
  */
-function buildRoutedCompactionBody(body: unknown): unknown {
+function buildRoutedCompactionBody(body: unknown, responsesLite: boolean): unknown {
   if (!isPlainObject(body)) return body;
   // `text` goes with the tool fields: the summary must be prose, not schema-constrained JSON.
   const { tools: _tools, tool_choice: _toolChoice, parallel_tool_calls: _parallel, text: _text, ...rest } = body;
   const input = Array.isArray(body.input) ? body.input : [];
-  const kept = input.filter(item => !isPlainObject(item)
+  // Bridge restoration has already recovered any available real call/result pairs. Remaining
+  // hosted cells require tools, so they become bounded assistant reference notes.
+  const kept = renderCompactionSearchHistoryItems(input.filter(item => !isPlainObject(item)
     // `additional_tools` is how Codex Desktop's responses-lite shape carries tools;
     // leaving it in would break the no-tools invariant even with `tools` removed.
-    || (item.type !== "compaction_trigger" && item.type !== "additional_tools"));
+    || (item.type !== "compaction_trigger" && item.type !== "additional_tools")));
   return {
     ...rest,
+    // Lite validates this flag even when the summarizer has no callable tools.
+    ...(responsesLite ? { parallel_tool_calls: false } : {}),
     input: [
       ...(stripInputImagesDeep(kept) as unknown[]),
       { type: "message", role: "user", content: [{ type: "input_text", text: COMPACT_PROMPT }] },
@@ -247,8 +276,9 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         if (provider.headers) Object.assign(headers, provider.headers);
       }
       // Some Responses-compatible gateways select their Codex compatibility path from the real
-      // client fingerprint. This is a single non-credential fallback, not broader caller-header
-      // forwarding. Static provider headers remain authoritative in either auth mode.
+      // client fingerprint. Additional caller metadata is opt-in; static provider headers remain
+      // authoritative in either auth mode.
+      applyConfiguredClientHeaderForwarding(headers, incoming, provider);
       applyCallerUserAgentFallback(headers, incoming);
 
       const forward = provider.authMode === "forward";
@@ -267,6 +297,17 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       if (!forward) outBody = normalizeRoutedAgentMessages(outBody, {
         allowStringContent: isXaiResponsesDestination(provider),
       });
+      // #5217: a sub-agent inherits the parent session's instruction block, so the identity
+      // sentence this proxy generated for the PARENT's model rides along to a worker running a
+      // different one. On a routed destination it is renamed to that destination — including the
+      // model-neutral catalog sentence, which this adapter never names itself; on a native/forward
+      // destination our sentence is dropped, because Codex's own identity wording (sent in the
+      // client's model_switch block) is the correct one there. Text the proxy did not generate —
+      // user turns, tool output, fenced code, provider-native blocks — is untouched.
+      outBody = repairIdentityInResponsesBody(
+        outBody,
+        forward ? stripRoutedIdentity : (text: string) => nameRoutedIdentity(text, parsed.modelId),
+      );
       outBody = mapRoutedResponsesReasoningEffort(outBody, provider, parsed.modelId);
       // stripPreviousResponseId() intentionally returns its input on a no-op. Detach before the
       // tier write so a force-fast/default decision can never mutate parsed._rawBody.
@@ -294,15 +335,28 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       }
       const synthesizeMissingCallOutputs = !forward && (stateless || pairedToolResults);
       if (forward || stateless || pairedToolResults) {
-        outBody = repairOrphanedInputItems(outBody, unexpandedMiss, synthesizeMissingCallOutputs);
+        // A stateful destination can resolve an output-only delta against the call stored behind
+        // an unexpanded previous_response_id. All other shapes have no hidden call to preserve.
+        const repairOrphanOutputs = forward || stateless || !unexpandedMiss;
+        outBody = repairOrphanedInputItems(
+          outBody,
+          unexpandedMiss,
+          synthesizeMissingCallOutputs,
+          repairOrphanOutputs,
+        );
+      }
+      if (provider.dropResponsesReasoningItems === true) {
+        outBody = dropResponsesReasoningInputItems(outBody);
       }
       if (adjacentToolResults) {
         outBody = normalizeResponsesToolResultAdjacency(outBody);
       }
       if (forward) {
-        outBody = stripUnsupportedForwardParams(outBody);
-        // Only the canonical ChatGPT backend rejects the retired field; a self-hosted or
-        // third-party forward gateway may still accept it, so this must not be widened.
+        // `metadata` is stripped on every forward route for compatibility with the canonical backend.
+        // `max_output_tokens` is stripped only when this provider is the canonical backend.
+        outBody = stripUnsupportedForwardParams(outBody, isCanonicalOpenAiForwardProvider(provider));
+        // Only the canonical ChatGPT backend rejects the canonical-only fields below; a self-hosted
+        // or third-party forward gateway may accept them, so this guard must not be widened.
         if (isCanonicalOpenAiForwardProvider(provider)) {
           outBody = stripCanonicalForwardSamplingParams(outBody);
           outBody = stripDeprecatedPromptCacheRetention(outBody, parsed.modelId);
@@ -311,6 +365,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
           outBody = normalizeCanonicalForwardContinuationEnvelope(outBody);
         }
       } else {
+        outBody = stripRejectedSamplingParams(outBody, provider, parsed.modelId);
         outBody = preferConfiguredHostedTools(
           outBody,
           provider,
@@ -323,13 +378,14 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         outBody = repairOversizedReplayCallIds(outBody);
       }
       outBody = stripUnsupportedReasoningSummaryDelivery(outBody, parsed.modelId);
+      outBody = stripNoneReasoningSummary(outBody);
       // #4587: on a bridged provider, hand the destination back the search call and result the
       // proxy executed on its behalf, in place of the hosted cell the caller replays. Scoped to
-      // this destination and recorded by the bridge itself, so a provider without the opt-in
-      // computes no identity and keeps the body reference it already had. This runs before the
-      // query backfill below because a restored cell is no longer a web_search_call to repair.
+      // its exact conversation and serving identity and recorded by the bridge itself, so a
+      // provider without the opt-in computes no identity and keeps the body reference it already
+      // had. This runs before query backfill because a restored cell is no longer one to repair.
       if (provider.webSearchBridge?.enabled === true) {
-        outBody = restoreBridgedWebSearchCalls(outBody, bridgeSearchReplayScope(provider.baseUrl));
+        outBody = restoreBridgedWebSearchCalls(outBody, bridgeSearchReplayScope(parsed._reasoningReplayScope));
       }
       // Repair stored history from before the bridge emitted both keys, in either
       // direction: a conversation that already recorded a web_search_call replays it
@@ -343,7 +399,9 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       // OpenAI model inheriting history a routed provider had damaged.
       outBody = repairLegacyDottedToolCallNames(outBody);
       if (!isCanonicalOpenAiForwardProvider(provider)) {
-        outBody = stripInternalChatMessageMetadataPassthrough(outBody);
+        if (provider.preserveResponsesMessageMetadata !== true) {
+          outBody = stripInternalChatMessageMetadataPassthrough(outBody);
+        }
         // The same class of private field, one level up, but keyed on the DESTINATION rather than
         // on the canonical surface alone. `src/server/responses/compact.ts` spreads the caller's
         // raw body into the native `/responses/compact` request without passing through this
@@ -384,8 +442,9 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         outBody = rewritten.body;
         convertedRoutedNamespaceToolAliases = rewritten.aliases;
         // Preserve xAI's cached-only fail-closed semantics and image-search mapping before the
-        // generic capability fallback removes the private OpenAI fields.
-        outBody = normalizeXaiResponsesWebSearch(outBody, provider);
+        // generic capability fallback removes the private OpenAI fields. Grok relayed through
+        // OpenCode Go speaks the same dialect, which the final model id and URL identify.
+        outBody = normalizeXaiResponsesWebSearch(outBody, provider, { modelId: parsed.modelId, responseUrl: url });
         outBody = injectXaiResponsesXSearch(outBody, provider, parsed._replayPrefixLen);
         // xAI and explicitly classified compatible gateways reject these OpenAI web_search
         // extensions. Keep them for OpenAI API-key traffic and unclassified gateways.
@@ -404,19 +463,22 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         // Last, so promoted namespace children are also cleared of Codex-private fields.
         outBody = stripCanonicalOnlyToolFields(outBody, provider.supportsOpenAiWebSearchToolFields === false);
       }
-      if (!forward) outBody = normalizeOpenCodeGoAdditionalTools(outBody, url);
+      if (!forward) {
+        outBody = normalizeOpenCodeGoAdditionalTools(outBody, url, parsed._replayPrefixLen);
+      }
       // Same predicate as the routedCompaction gate in handleResponses(): an authMode check would
       // let a noncanonical custom forward provider skip this rewrite while the server still routes
       // it as a summarizer turn (#422). The compaction body build removes the tool surface and must
       // therefore be the last routed transform that may depend on those declarations. Structural
       // sanitizers below can still run after it.
       outBody = normalizeResponsesCodeMode(outBody, parsed, provider);
-      if (parsed._compactionRequest === true && !isCanonicalOpenAiForwardProvider(provider)) {
-        outBody = buildRoutedCompactionBody(outBody);
+      if (parsed._compactionRequest === true && (!isCanonicalOpenAiForwardProvider(provider) || parsed._portableCompaction === true)) {
+        outBody = buildRoutedCompactionBody(outBody, new Headers(headers).get(CODEX_RESPONSES_LITE_HEADER) === "true");
       }
       // Run after routed compaction so nested input_image parts are replaced before a malformed
       // tool output is flattened to text and can no longer be inspected structurally.
       outBody = repairUnidentifiedToolOutputItems(outBody);
+      outBody = stripKimiEmptyAssistantMessages(outBody, url);
       if (parsed._plaintextV2AgentMessages === true && isCanonicalOpenAiForwardProvider(provider)) {
         const prepared = preparePlaintextV2AgentMessages(outBody);
         outBody = prepared.body;
@@ -439,16 +501,22 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
                   outBody,
                   destinationDecodesNativeCompactionBlob(provider),
                   threadServingIdentityChanged,
+                  parsed._compactionRequest !== true,
                 ),
                 {
                   preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true,
                   dropNullContentChannel: !isOpenAiOperatedResponsesDestination(provider),
                   stripEncryptedContent: threadServingIdentityChanged || requiresPlaintextReasoningReplay(provider),
+                  dropForeignItemId: parsed._dropForeignReasoningItemIds === true,
+                  requirePlaintextReasoning: requiresPlaintextReasoningReplay(provider),
+                  onPlaintextReasoningBlanked: () => notePlaintextReasoningDropped(provider),
                 },
               ),
               provider,
             ),
           ),
+          isXaiResponsesDestination(provider),
+          provider.preserveResponsesInputItemIds === true,
         ),
         isXaiSchemaTarget(provider),
       );
@@ -462,7 +530,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         parsed.modelId,
       );
       // Normalize the wire model before deriving model-dependent transport metadata.
-      const finalBody =
+      let finalBody =
         provider.modelSuffixBracketStrip
           && unnormalizedBody !== null
           && typeof unnormalizedBody === "object"
@@ -470,6 +538,20 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
           && typeof (unnormalizedBody as { model?: unknown }).model === "string"
           ? { ...(unnormalizedBody as Record<string, unknown>), model: stripBracketedModelSuffix((unnormalizedBody as { model: string }).model) }
           : unnormalizedBody;
+      if (isMetaAiResponsesDestination(url)) {
+        const originalChoice = isPlainObject(parsed._rawBody) ? parsed._rawBody.tool_choice : undefined;
+        finalBody = normalizeMuseToolChoice(finalBody, originalChoice);
+      }
+      // The canonical ChatGPT Codex endpoint is SSE-only even though the public Responses surface
+      // permits an omitted/false `stream`. Keep the client's delivery preference on `parsed.stream`
+      // and coerce only this final upstream copy; passthrough delivery folds the terminal stream
+      // back into JSON for that client. `store` is intentionally untouched here because explicit
+      // caller storage semantics are independent of the transport required by the destination.
+      if (isCanonicalOpenAiForwardProvider(provider)
+        && isPlainObject(finalBody)
+        && finalBody.stream !== true) {
+        finalBody = { ...finalBody, stream: true };
+      }
       if (isCanonicalOpenAiForwardProvider(provider)) {
         const routingHeaders = new Headers(headers);
         applyCodexRoutingHint(routingHeaders, finalBody);
@@ -481,14 +563,10 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         const hint = routingHeaders.get(CODEX_ROUTING_HINT_HEADER);
         if (hint !== null) headers[CODEX_ROUTING_HINT_HEADER] = hint;
       }
-      const actualServiceTier = isPlainObject(finalBody) && typeof finalBody.service_tier === "string"
-        ? finalBody.service_tier
-        : null;
       const tierLog = createAdapterTierMetadata(
         parsed.options?.tierObservation,
         parsed.options?.tierDecision,
-        actualServiceTier === null ? null : "service-tier",
-        actualServiceTier,
+        ...emittedFastWire(parsed, finalBody),
       );
       // The Responses adapter is passthrough: it forwards `parsed._rawBody` rather than
       // rebuilding the body from `parsed.modelId`, and the router writes the routed id into
@@ -496,7 +574,11 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       // here, on the serialized body, not on the parsed selector. One place covers both the
       // HTTP and the WebSocket outbound, because the WS path transports this same request
       // instead of rebuilding it.
-      const body = JSON.stringify(finalBody);
+      observeOutbound(parsed._rawBody, finalBody, headers);
+      if (!isCanonicalOpenAiForwardProvider(provider)) {
+        validateFinalCustomToolCompatibility(finalBody, provider.supportsResponsesCustomTools);
+      }
+      const body = JSON.stringify(applyGithubCopilotContextTier(finalBody, provider, parsed.modelId, incoming.providerName));
       const releaseBodyObservation = translatorBudget.observeExternallyCapped(
         "passthrough_serialization",
         Buffer.byteLength(body, "utf8"),
@@ -539,112 +621,121 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       let compactionEncryptedContent: string | undefined;
       let compactionEncryptedContentBytes = 0;
       let completedSeen = false;
-      for await (const event of decodeServerSentEvents(response.body, { translatorBudget: budget })) {
-        let payload: unknown;
-        try { payload = JSON.parse(event.data); } catch { continue; }
-        if (!isPlainObject(payload)) continue;
-        switch (payload.type) {
-          case "response.output_text.delta":
-            if (typeof payload.delta === "string") {
-              const next = deltas + payload.delta;
-              const nextBytes = appendedUtf8Bytes(deltasBytes, deltasLastCodeUnit, payload.delta);
-              const reservation = budget.reserveTransient(nextBytes, { kind: "retained_collectors" });
-              deltas = next;
-              reservation.commitRetained();
-              budget.releaseRetained(deltasBytes, { kind: "retained_collectors" });
-              deltasBytes = nextBytes;
-              if (payload.delta.length > 0) deltasLastCodeUnit = payload.delta.charCodeAt(payload.delta.length - 1);
-            }
-            break;
-          case "response.output_text.done":
-            if (typeof payload.text === "string") {
-              const next = doneText + payload.text;
-              const nextBytes = appendedUtf8Bytes(doneTextBytes, doneTextLastCodeUnit, payload.text);
-              const reservation = budget.reserveTransient(nextBytes, { kind: "retained_collectors" });
-              doneText = next;
-              reservation.commitRetained();
-              budget.releaseRetained(doneTextBytes, { kind: "retained_collectors" });
-              doneTextBytes = nextBytes;
-              if (payload.text.length > 0) doneTextLastCodeUnit = payload.text.charCodeAt(payload.text.length - 1);
-            }
-            break;
-          case "response.failed":
-          case "error":
-            yield { type: "error", message: responsesErrorMessage(payload.response ?? payload) };
-            return;
-          case "response.incomplete":
-            yield { type: "incomplete", reason: responsesErrorMessage(payload.response ?? payload) };
-            return;
-          case "response.completed":
-            {
-              completedSeen = true;
-              const responsePayload = isPlainObject(payload.response) ? payload.response : undefined;
-              const output = Array.isArray(responsePayload?.output) ? responsePayload.output : [];
-              const compaction = output.find(item => isPlainObject(item) && item.type === "compaction");
-              if (isPlainObject(compaction) && typeof compaction.encrypted_content === "string") {
-                const nextEncryptedContent = compaction.encrypted_content;
-                const nextEncryptedContentBytes = Buffer.byteLength(nextEncryptedContent, "utf8");
-                const reservation = budget.reserveTransient(nextEncryptedContentBytes, { kind: "retained_collectors" });
-                compactionEncryptedContent = nextEncryptedContent;
+      let ciphertextTransferred = false;
+      try {
+        for await (const event of decodeServerSentEvents(response.body, { translatorBudget: budget })) {
+          let payload: unknown;
+          try { payload = JSON.parse(event.data); } catch { continue; }
+          if (!isPlainObject(payload)) continue;
+          switch (payload.type) {
+            case "response.output_text.delta":
+              if (typeof payload.delta === "string") {
+                const next = deltas + payload.delta;
+                const nextBytes = appendedUtf8Bytes(deltasBytes, deltasLastCodeUnit, payload.delta);
+                const reservation = budget.reserveTransient(nextBytes, { kind: "retained_collectors" });
+                deltas = next;
                 reservation.commitRetained();
-                budget.releaseRetained(compactionEncryptedContentBytes, { kind: "retained_collectors" });
-                compactionEncryptedContentBytes = nextEncryptedContentBytes;
+                budget.releaseRetained(deltasBytes, { kind: "retained_collectors" });
+                deltasBytes = nextBytes;
+                if (payload.delta.length > 0) deltasLastCodeUnit = payload.delta.charCodeAt(payload.delta.length - 1);
               }
-              const next = responsesPayloadText(payload.response);
-              const nextBytes = Buffer.byteLength(next, "utf8");
-              const reservation = budget.reserveTransient(nextBytes, { kind: "retained_collectors" });
-              snapshot = next;
-              reservation.commitRetained();
-              budget.releaseRetained(snapshotBytes, { kind: "retained_collectors" });
-              snapshotBytes = nextBytes;
-            }
-            {
-              const nextUsage = usageFromResponsesPayload(payload.response);
-              // The attached raw usage object can be event-sized (unknown keys carry arbitrary
-              // values); it stays reachable until the terminal yields, so charge it like the
-              // adjacent retained collectors or it would defeat the per-request memory cap.
-              const nextRawBytes = nextUsage?.rawUsage === undefined ? 0
-                : Buffer.byteLength(JSON.stringify(nextUsage.rawUsage), "utf8");
-              if (nextRawBytes > 0) {
-                const reservation = budget.reserveTransient(nextRawBytes, { kind: "retained_collectors" });
-                usage = nextUsage;
+              break;
+            case "response.output_text.done":
+              if (typeof payload.text === "string") {
+                const next = doneText + payload.text;
+                const nextBytes = appendedUtf8Bytes(doneTextBytes, doneTextLastCodeUnit, payload.text);
+                const reservation = budget.reserveTransient(nextBytes, { kind: "retained_collectors" });
+                doneText = next;
                 reservation.commitRetained();
-              } else {
-                usage = nextUsage;
+                budget.releaseRetained(doneTextBytes, { kind: "retained_collectors" });
+                doneTextBytes = nextBytes;
+                if (payload.text.length > 0) doneTextLastCodeUnit = payload.text.charCodeAt(payload.text.length - 1);
               }
-              if (usageRawBytes > 0) {
-                budget.releaseRetained(usageRawBytes, { kind: "retained_collectors" });
+              break;
+            case "response.failed":
+            case "error":
+              yield { type: "error", message: responsesErrorMessage(payload.response ?? payload) };
+              return;
+            case "response.incomplete":
+              yield { type: "incomplete", reason: responsesErrorMessage(payload.response ?? payload) };
+              return;
+            case "response.completed":
+              {
+                completedSeen = true;
+                const responsePayload = isPlainObject(payload.response) ? payload.response : undefined;
+                const output = Array.isArray(responsePayload?.output) ? responsePayload.output : [];
+                const compaction = output.find(item => isPlainObject(item) && item.type === "compaction");
+                if (isPlainObject(compaction) && typeof compaction.encrypted_content === "string") {
+                  const nextEncryptedContent = compaction.encrypted_content;
+                  const nextEncryptedContentBytes = Buffer.byteLength(nextEncryptedContent, "utf8");
+                  const reservation = budget.reserveTransient(nextEncryptedContentBytes, { kind: "retained_collectors" });
+                  compactionEncryptedContent = nextEncryptedContent;
+                  reservation.commitRetained();
+                  budget.releaseRetained(compactionEncryptedContentBytes, { kind: "retained_collectors" });
+                  compactionEncryptedContentBytes = nextEncryptedContentBytes;
+                }
+                const next = responsesPayloadText(payload.response);
+                const nextBytes = Buffer.byteLength(next, "utf8");
+                const reservation = budget.reserveTransient(nextBytes, { kind: "retained_collectors" });
+                snapshot = next;
+                reservation.commitRetained();
+                budget.releaseRetained(snapshotBytes, { kind: "retained_collectors" });
+                snapshotBytes = nextBytes;
               }
-              usageRawBytes = nextRawBytes;
-            }
-            break;
+              {
+                const nextUsage = usageFromResponsesPayload(payload.response);
+                // The attached raw usage object can be event-sized (unknown keys carry arbitrary
+                // values); it stays reachable until the terminal yields, so charge it like the
+                // adjacent retained collectors or it would defeat the per-request memory cap.
+                const nextRawBytes = nextUsage?.rawUsage === undefined ? 0
+                  : Buffer.byteLength(JSON.stringify(nextUsage.rawUsage), "utf8");
+                if (nextRawBytes > 0) {
+                  const reservation = budget.reserveTransient(nextRawBytes, { kind: "retained_collectors" });
+                  usage = nextUsage;
+                  reservation.commitRetained();
+                } else {
+                  usage = nextUsage;
+                }
+                if (usageRawBytes > 0) {
+                  budget.releaseRetained(usageRawBytes, { kind: "retained_collectors" });
+                }
+                usageRawBytes = nextRawBytes;
+              }
+              break;
+          }
+          // Buffered text is still upstream progress, but gateway keepalives are not.
+          // Yield after accounting, directly to the consumer: no progress queue or content leak.
+          if (
+            !completedSeen
+            && (payload.type === "response.output_text.delta"
+              || payload.type === "response.reasoning_summary_text.delta"
+              || payload.type === "response.reasoning_text.delta")
+            && typeof payload.delta === "string"
+            && payload.delta.length > 0
+          ) {
+            yield { type: "heartbeat" };
+          }
         }
-        // Buffered text is still upstream progress, but gateway keepalives are not.
-        // Yield after accounting, directly to the consumer: no progress queue or content leak.
-        if (
-          !completedSeen
-          && (payload.type === "response.output_text.delta"
-            || payload.type === "response.reasoning_summary_text.delta"
-            || payload.type === "response.reasoning_text.delta")
-          && typeof payload.delta === "string"
-          && payload.delta.length > 0
-        ) {
-          yield { type: "heartbeat" };
-        }
+        // Gateways differ in which of these they emit; prefer the authoritative
+        // completed snapshot so text is never double-counted.
+        const text = snapshot || doneText || deltas;
+        if (text) yield { type: "text_delta", text };
+        const done: AdapterEvent = {
+          type: "done",
+          ...(usage ? { usage } : {}),
+          ...(compactionEncryptedContent ? { compactionEncryptedContent } : {}),
+        };
+        // Exact event ownership survives buffered collection without charging a second copy.
+        transferCompactionCiphertextLease(done, budget, compactionEncryptedContentBytes);
+        ciphertextTransferred = true;
+        yield done;
+      } finally {
+        budget.releaseRetained(
+          deltasBytes + doneTextBytes + snapshotBytes + usageRawBytes
+            + (ciphertextTransferred ? 0 : compactionEncryptedContentBytes),
+          { kind: "retained_collectors" },
+        );
       }
-      // Gateways differ in which of these they emit; prefer the authoritative
-      // completed snapshot so text is never double-counted.
-      const text = snapshot || doneText || deltas;
-      if (text) yield { type: "text_delta", text };
-      budget.releaseRetained(
-        deltasBytes + doneTextBytes + snapshotBytes + usageRawBytes,
-        { kind: "retained_collectors" },
-      );
-      yield {
-        type: "done",
-        ...(usage ? { usage } : {}),
-        ...(compactionEncryptedContent ? { compactionEncryptedContent } : {}),
-      };
     },
 
     async parseResponse(response: Response, budget: TranslatorBudget): Promise<AdapterEvent[]> {

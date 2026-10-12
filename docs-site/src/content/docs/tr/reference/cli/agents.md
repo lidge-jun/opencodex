@@ -18,7 +18,16 @@ yüzeyleri](/tr/guides/sub-agent-surface/) sayfasına bakın.
 
 ```bash
 ocx agent subagents set ark/model-a,openai/gpt-5.5
+ocx agent sidecar web --enabled off
 ```
+
+`--enabled off`, kontrol panelindeki **Kapalı (Off)** satırıyla aynı anahtardır: OpenCodex
+sidecar'ı çalıştırmayı bırakır ve Codex entegrasyonu `~/.codex/config.toml` dosyasına
+`web_search = "disabled"` yazar; tek arama yolu olarak bir MCP arama sunucusunun kullanılmasını bu
+sağlar. `--enabled on` bu satırı yeniden kaldırır. Kaydetme anahtarı gerçekten değiştirdiğinde
+komut tetiklediği Codex tarafı yazmayı bildirir (`--json` içinde `codexWebSearch`, aksi
+halde son satırda `Codex config:`) ve yazma yapılamadığında `ocx sync` adresini gösterir.
+Bayrak `vision` için de çalışır.
 
 ### `ocx v2 <status|on|off|mode <v1|default|v2>|threads <n>|mode-hint <text|--clear>>`
 
@@ -135,13 +144,15 @@ varsayılan olarak `OCX_DEBUG=1`'den gelir (eski `OCX_DEBUG_FRAMES=1` de
 
 ### `ocx access <key|endpoints|models|test> ...`
 
-OpenCodex kabul API anahtarlarını yönetin ve harici uç noktaları ile modelleri
-inceleyin. `ocx api-key <list|create|remove> ...`, `ocx access key`'in bir takma
-adıdır.
+OpenCodex erişim API anahtarlarının listesini, harici uç noktaları ve modelleri inceleyin. `ocx api-key`, `ocx access key` komut ailesinin takma adıdır.
+
+Anahtar oluşturma ve anahtar yenilemeyi başlatma işlemleri, hem metin hem de JSON çıktısında yalnızca bir kez gösterilen açık metin kimlik bilgisi döndürür. Ajanlar bu adımları, ajan oturumu dışında bir insanın doğrudan kullandığı terminale bırakmalıdır. Anahtarın kendisini sohbette istemeyin; yalnızca yapılandırmanın ve bağlantı testinin tamamlandığına dair onayı ve gizli olmayan anahtar ile yenileme kimliklerini alın.
 
 ```bash
-ocx access key create deployment
+ocx access key list --json
 ```
+
+Yeni anahtarın yapılandırılıp doğrulanması, eski anahtarı iptal etme izni değildir. Yenilemeyi kesinleştirmek veya eski anahtarı silmek için o anahtarın iptaline yönelik ayrıca açık izin gerekir. İzin verilen işlemden sonra listeyi yeniden kontrol edin. Doğrudan API çağrılarıyla bu süreci aşmaya çalışmayın.
 
 ## İstemci entegrasyonları
 
@@ -193,7 +204,7 @@ Grok Build model çitini yönetin ve uygulayın.
 
 ## İstemci yapılandırma dışa aktarma
 
-### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside|raycast|omo>`
+### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside|raycast|omo|cline|kilo|commandcode|droid>`
 
 Çalışan proxy'ye bağlı bir istemci yapılandırmasını yazdırın. Komut, `opencodex`
 sağlayıcı bloğunu — temel URL, model listesi ve istemcinin kimlik bilgisi
@@ -205,7 +216,7 @@ yalnızca Codex'in şu anda görebildiği modelleri yayınlar.
 
 | Bayrak | Eylem |
 | --- | --- |
-| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae\|dsh\|mcode\|zcode\|prime\|aside\|raycast\|omo>` | Gerekli. İstemci yapılandırma lehçesini seçer. |
+| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae\|dsh\|mcode\|zcode\|prime\|aside\|raycast\|omo\|cline\|kilo\|commandcode\|droid>` | Gerekli. İstemci yapılandırma lehçesini seçer. |
 | `--json` | Betikler için stdout üzerinde oluşturulan belgeyi JSON olarak yazdırın. Bu, seçilen istemcinin yerel formatı YAML, TOML veya JSON5 olsa bile JSON'dur. |
 | `--out <path>` | İstemcinin yerel yapılandırma formatını `<path>` konumuna yazın. Mevcut bir dosyanın üzerine yazmayı reddeder. |
 | `--force` | `--out`'un mevcut bir dosyanın üzerine yazmasına izin verin. |
@@ -238,6 +249,11 @@ için kendi varsayılanlarını uygular) gelir.
 | `aside` | Aside'ın kendi `accounts.json` dosyasının güncel olarak gösterdiği hesap için `~/.aside/u/<account>/models.json`; okunamayan bir manifest, gelişigüzel bir hesaba düşmek yerine reddedilir | `aside-models.json` | yok — geri döngü yer tutucusu |
 | `raycast` | `~/.config/raycast/ai/providers.yaml`, macOS ve Windows'ta aynı (Raycast `XDG_CONFIG_HOME` değerini dikkate almaz) | `raycast-providers.yaml` | yok — yalnızca geri döngü, `api_keys` girdisi yazılmaz |
 | `omo` | `~/.omo/agent/models.json` (ayarlandığında sırasıyla `OMO_CODING_AGENT_DIR`, `SENPI_CODING_AGENT_DIR`, `PI_CODING_AGENT_DIR` öncelikli; göreli değer reddedilir) | `omo-models.json` | yok — geri döngü yer tutucusu |
+| `kilo` | `~/.config/kilo` altında ilk bulunan `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json` veya `config.json` (`XDG_CONFIG_HOME` bu dizini taşır); hiçbiri yoksa `kilo.jsonc` kullanılır | `kilo.jsonc` | `OPENCODEX_KILO_API_KEY` |
+| `commandcode` | `~/.commandcode/providers.json` (Windows’ta varsayılan ana dizin kullanılırken: `HOME ?? USERPROFILE` değerini yalnızca boş veya sırf boşluklardan oluşmayan mutlak bir Windows yoluysa kullanır, aksi halde `homedir()` kullanılır; ayrıca verilen ana dizin korunur; sonuna `.commandcode\providers.json` eklenir) | `providers.json` | yalnızca geri döngü; `apiKey: false`; ortam değişkeni gerekmez |
+| `droid` | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` on Windows) | `factory-settings.json` | yalnızca loopback; ortam değişkeni gerekmez |
+
+Bu yollar varsayılandır. Varsayılan ev dizininde kalan `~/.zcode/v2/setting.json` içindeki mutlak `dataBaseDir`, depoyu `<dataBaseDir>/.zcode/v2/provider_config.json` konumuna taşır. `ZCODE_DATA_DIR` doğrudan `.zcode` kökünü belirtir ve ayardan önceliklidir; `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` sağlayıcı dosyası için önceliklidir. Okunamayan, bozuk veya göreli ayarlar yeni uygulamaları ve yenilemeleri engeller. Mevcut sahiplik ve geri alma kayıtları korunur. [İngilizce yol ve geri alma kurallarına](https://opencodex.me/guides/integrations/#zcode-314-and-later) bakın.
 
 Raycast dışa aktarımı, `providers` dizisinde tek bir `id: opencodex` öğesi içeren bağımsız
 bir `providers.yaml` belgesidir: `name: OpenCodex`, proxy'nin `/v1` temel URL'si ve
@@ -267,11 +283,10 @@ diğer sağlayıcıları, ajanları ve MCP girdilerini yok eder.
 :::
 
 Hiçbir anahtar asla serileştirilmez. Yapılandırmalar belgelenmiş bir ortam
-referansı veya gizli olmayan bir geri döngü yer tutucusu taşır. Bir geri döngü
-proxy'si (`127.0.0.1`, varsayılan) hiçbir kabul anahtarı gerektirmez. Referans
+referansı veya gizli olmayan bir geri döngü yer tutucusu taşır. Geri döngü adresi (`127.0.0.1`) tek başına anahtarsız erişimi kanıtlamaz; hedefin politikasını ve uç noktasını kontrol edin. Seçili anahtarla model/ses CLI komutları geri döngüde de açık anahtar girişi gerektirir. Referans
 verilen bir değişkeni yalnızca istemci şeması desteklediğinde ve proxy geri
 döngünün ötesine bağlandığında ayarlayın; kabul anahtarlarının nasıl verildiğini
-görmek için [Uzaktan erişim](/tr/reference/configuration/#remote-access)
+görmek için [Uzaktan erişim](/tr/reference/configuration/server/#uzaktan-erişim)
 bölümüne bakın. Yukarı akış sağlayıcılarının kendi anahtarları tamamen ayrı bir
 şeydir ve [Sağlayıcılar](/tr/guides/providers/) bölümüne göre yapılandırılır.
 Oluşturulan gjc entegrasyonu gizli olmayan bir loopback yer tutucusu kullanır; ortam değişkeni gerekmez. Yalnızca loopback desteklenir, uzak erişim kimlik bilgileri yapılandırılmaz.
@@ -319,8 +334,22 @@ Sınırlı okuma boyunca yerel tanıtıcılar üst dizinleri ve dosyaları açı
 
 Kimlik veya özet yalnızca gözlem anındaki dosyaları tanımlar; kalıcı güncelleme izni değildir. Seçilen çalışma zamanını, geçmiş yükleyiciyi, etkin npm yapılandırmasını veya araçların gerçekliğini kanıtlamaz. Verilen Node yalnızca gözlemlenir; başlatıcının onu seçeceği kanıtlanmaz. Hiçbir hedef çalıştırılmaz; kayıt deposu isteği, kurulum, yapılandırma yazımı veya süreç denetimi yapılmaz. Mevcut Windows `check`, aday veya yapılandırma dosya sistemi G/Ç işlemlerini hâlâ yapmaz.
 
-### `ocx config <show|get|set|unset|validate|export|import> ...`
+### `ocx config [show|get|set|unset|validate|export|import] ...`
+
+`ocx config [show] [--json] [--source]`, çalışan bir proxy olmadan yerel yapılandırmayı gösterir. `show` atlandığında bayraklardan biri veya ikisi herhangi bir sırayla kullanılabilir. `--source`, tanılama kaynağını, hataları ve uyarıları içerir ve yalnızca görüntüleme için kabul edilir. `--json`, açıkça belirtilen bir eylemden önce gelebilir; çalıştırılan eylemi değiştirmez. Yinelenen `--json` veya `--source` bayrakları ve bilinmeyen bağımsız değişkenler reddedilir.
 
 Doğrulanmış OpenCodex yapılandırmasını inceleyin ve güvenle değiştirin. `show`
 ve `get` sırları maskeler. İçe aktarma yazmadan önce doğrular ve `--yes`
 gerektirir.
+
+### Forced Claude Code subagent model
+
+The Subagents page offers **Force all subagents onto one model**, off by default. Select an exposed roster-style id, such as `combo/tev-auto`, then enable the switch. The roster is offered first; unavailable saved roster entries cannot be force targets.
+
+`ocx agent subagents force combo/tev-auto` sets `claudeCode.subagentModelForce`; `ocx agent subagents force -` clears it. `ocx agent status` reports the setting. `GET /api/subagent-models` returns `force`, `forceAvailable`, and `forceStatus`; `PUT` accepts `{ "force": "combo/tev-auto" }` or `{ "force": null }` without changing the roster. Omitting `force` leaves it unchanged. Invalid or unexposed targets are rejected on write; stale targets are reported and skipped at launch.
+
+This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` only for an authoritative million-token window; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
+
+Claude Code **2.1.257 or newer** is required for FORCE. Plugin and built-in agents (including Explore/Plan) and per-call model arguments are overridden. Forks and subagent skills with `model: inherit` keep the main conversation model. The main loop and Haiku/small-fast sidecars are unaffected. Existing roster files remain available.
+
+The dashboard warns about old or unknown CLI versions, unavailable targets, and either variable already present in `settings.json` → `env` (which overrides launch env). Detection is read-only and server-local: it cannot inspect another launch shell, another machine, or project-local settings. An unknown result is not proof of force support.

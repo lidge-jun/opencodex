@@ -1,10 +1,10 @@
 ---
 title: Intégrations
-description: Connectez opencodex à OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast et omo depuis le tableau de bord — un commutateur par client, avec une sauvegarde avant chaque écriture.
+description: Connectez opencodex à OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline CLI, Kilo, Command Code et Factory Droid depuis le tableau de bord — un commutateur par client, avec une sauvegarde avant chaque écriture.
 ---
 
-L'onglet **Intégrations** écrit le bloc fournisseur d'opencodex dans le fichier de configuration du client,
-puis peut le retirer. Quinze clients fonctionnent ainsi, chacun avec son propre commutateur :
+L'onglet **Connexion** écrit le bloc fournisseur d'opencodex dans le fichier de configuration du client,
+puis peut le retirer. Dix-huit clients fonctionnent ainsi, chacun avec son propre commutateur :
 
 | Client | Fichier de configuration | Format | Prise d'effet de la modification | Identifiant |
 |---|---|---|---|---|
@@ -15,21 +15,21 @@ puis peut le retirer. Quinze clients fonctionnent ainsi, chacun avec son propre 
 | OpenClaw | `~/.openclaw/openclaw.json` | JSON5 | immédiatement, sur une passerelle en cours d'exécution | `OPENCODEX_OPENCLAW_API_KEY` |
 | Kimi Code | `~/.kimi-code/config.toml` | TOML | au redémarrage ou avec `/reload` | valeur fictive de bouclage |
 | gjc | `~/.gjc/agent/models.yml` | YAML | dans les nouvelles sessions ou à l'ouverture de `/model` |non-secret loopback placeholder |
-| DeepSeek Harness (DSH) | `$DSH_HOME/settings.yaml` (`~/.dsh/settings.yaml` par défaut) | YAML | rechargement à chaud | jeton porteur fictif et non secret pour le bouclage |
+| DeepSeek Harness (DSH) | `$DSH_HOME/profiles/desktop/cordis.patch.yml` (`~/.dsh/profiles/desktop/cordis.patch.yml` par défaut) ; `$DSH_HOME/settings.yaml` tant que DSH Desktop n’a pas créé ce profil | YAML | rechargement à chaud | jeton porteur fictif et non secret pour le bouclage |
 | MiniMax Code | `~/.minimax/config.yaml` | YAML | dans les nouvelles sessions ou après l’ouverture du sélecteur de modèles | valeur fictive de bouclage |
 | Prime Agent | `~/.prime/agent/models.json` | JSON | dans les nouvelles sessions | valeur fictive de bouclage |
-| ZCode | `~/.zcode/v2/config.json` | JSON | au redémarrage | valeur fictive de bouclage |
+| ZCode | `~/.zcode/v2/provider_config.json` (schemaVersion 1) ; repli historique : `~/.zcode/v2/config.json` | JSON | au redémarrage | valeur fictive de bouclage |
 | Aside | `~/.aside/u/<account>/models.json` | JSON | après avoir quitté complètement puis rouvert Aside | valeur fictive de bouclage |
 | Raycast | `~/.config/raycast/ai/providers.yaml` | YAML | immédiatement à l'enregistrement — Raycast surveille le fichier | aucun — bouclage uniquement |
 | omo | `~/.omo/agent/models.json` | JSON | nouvelles sessions | espace réservé de bouclage |
 | Cline CLI | `~/.cline/data/settings/providers.json` + `models.json` | JSON | après arrêt et redémarrage | bouclage uniquement |
+| Kilo | premier fichier existant parmi `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json` ou `config.json` sous `~/.config/kilo` (`XDG_CONFIG_HOME` déplace ce répertoire ; `kilo.jsonc` est créé si aucun n'existe) | JSONC | nouvelles sessions | `OPENCODEX_KILO_API_KEY` |
+| Command Code | `~/.commandcode/providers.json` (sous Windows avec le répertoire personnel par défaut : utiliser `HOME ?? USERPROFILE` uniquement si la valeur n’est ni vide ni composée uniquement d’espaces et désigne un chemin absolu Windows, sinon `homedir()` ; un répertoire personnel fourni séparément est conservé ; ajouter `.commandcode\providers.json`) | JSON | au prochain lancement de Command Code | aucun — boucle locale sans clé (`apiKey: false`) |
+| Factory Droid | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` sous Windows) | JSON | dès la détection du fichier | boucle locale sans clé |
 
-La prise en charge gérée de DSH exige au minimum **DSH 0.1.0-rc.6**. OpenCodex ne possède que le fragment
-`llm-pi-ai.providers.opencodex` : **Appliquer** et **Actualiser** remplacent ce fragment, **Désactiver** ne
-supprime que ce fragment, et **Restaurer** rétablit un instantané enregistré. DSH recharge à chaud les
-modifications de fournisseurs. Ces opérations ne changent ni le modèle par défaut de l'utilisateur ni le
-fournisseur natif `deepseek-official`. L'intégration DSH gérée est actuellement limitée au bouclage et
-n'écrit jamais de véritable identifiant.
+Les modèles GJC dotés d'une échelle d'effort de raisonnement prise en charge exportent `reasoning: true`, `thinking.levels` et `compat.supportsReasoningEffort`, afin que GJC propose le choix de l'effort. Les modèles Codex natifs reçoivent leur échelle standard même si le catalogue l'omet. Ces champs sont absents sans échelle connue ; `none` n'envoie pas d'effort et `ultra` devient `max` sur le réseau. Actualisez l'intégration pour mettre à jour ces options.
+
+La prise en charge gérée de DSH exige au minimum **DSH 0.1.0-rc.6**. Avec **DSH 0.1.7 et versions ultérieures**, DSH lit les routes dans le patch du profil Desktop, `$DSH_HOME/profiles/desktop/cordis.patch.yml`, qu’il recharge à chaud. Lorsque le profil Desktop et son patch existent, OpenCodex y écrit uniquement `[id=llm-pi-ai].config.providers.opencodex`. Si `$DSH_HOME/profiles/desktop/package.json` existe mais que `cordis.patch.yml` manque, Appliquer refuse : créez `cordis.patch.yml` contenant `[]` (le patch vide que DSH écrit pour un nouveau profil), puis activez à nouveau l’intégration. En l’absence du profil Desktop, il utilise uniquement `llm-pi-ai.providers.opencodex` dans `$DSH_HOME/settings.yaml` comme solution de repli. **Appliquer** et **Actualiser** remplacent ce fragment, **Désactiver** ne supprime que ce fragment, et **Restaurer** rétablit un instantané enregistré. Ces opérations ne changent ni le modèle par défaut de l’utilisateur ni le fournisseur natif `deepseek-official`. L’intégration DSH gérée est actuellement limitée au bouclage et n’écrit jamais de véritable identifiant.
 
 MiniMax Code recherche d’abord `MINIMAX_DATA_DIR`, puis `MAVIS_DATA_DIR`, avant de se rabattre sur
 `~/.minimax`. Son bloc géré ne possède que `custom_provider.opencodex`. Il ne modifie ni `defaultModel`, ni
@@ -41,7 +41,7 @@ qui appartient à la session MCode, est préservé.
 
 Raycast a deux prérequis. Les fournisseurs personnalisés (Custom Providers) sont une fonctionnalité
 **Raycast Pro** : avec un forfait gratuit, le fichier est tout de même écrit, mais
-`ocx integration client status --client raycast` et la page Intégrations signalent un avertissement,
+`ocx integration client status --client raycast` et la page **Connexion** signalent un avertissement,
 car Raycast ne le lira pas. Et Raycast ne crée son dossier `ai` que lorsque vous ouvrez une fois
 Raycast → Settings → AI → **Reveal Providers Config** ; opencodex utilise ce dossier comme signal
 d'installation et indique que le client n'est pas installé tant qu'il n'existe pas. Raycast lit
@@ -134,13 +134,31 @@ Kimi Code, gjc, MiniMax Code et Raycast — documents YAML, JSON5 et TOML rééc
 d'opencodex ont été modifiées, le commutateur se verrouille et la désactivation est refusée plutôt que de
 deviner quelles modifications vous appartiennent.
 
+Exception pour Hermes : l'ajout de `session_affinity_header: session-id` seul dans un bloc déjà géré peut être adopté via **Apply** ; toute autre modification d'un champ géré reste un conflit. Jusqu'à cette application, l'actualisation automatique de la liste des modèles est également suspendue. Le réglage concerne tous les modèles du provider et nécessite une version de Hermes qui le prend en charge ; il ne garantit aucun taux de succès du cache. Voir le [guide de mise à niveau en anglais](/guides/integrations/#hermes-session-affinity).
+
+## Prévisualiser et confirmer les modifications
+
+Appliquer, Remplacer, Désactiver et Restaurer commencent désormais par un aperçu. La boîte de dialogue
+indique exactement quels réglages gérés vont changer, avec les chemins concernés dans les limites prévues
+et la nature de chaque modification : ajout, mise à jour ou suppression. Examinez ce plan avant de confirmer.
+
+Lorsqu’un plan n’indique aucune modification, cela signifie que le document client géré est déjà dans l’état
+demandé. Pour un profil Aside sélectionné, la confirmation peut tout de même enregistrer sa préférence de
+synchronisation, même si le document géré ne change pas.
+
+Si le fichier change après votre examen, l'écriture est refusée car le plan est devenu obsolète. La boîte de
+dialogue remplace l'ancien plan par le nouveau et vous demande de confirmer à nouveau ; elle ne relance jamais
+l'écriture automatiquement. Si l'aperçu est temporairement indisponible, rechargez normalement la page et
+recommencez l'action.
+
+Aside utilise le même flux d'aperçu et de confirmation pour un seul profil sélectionné à la fois. **Synchroniser
+tous les profils** reste une action groupée distincte et n'est pas liée à un aperçu combiné unique.
+
 ## À quoi s'attendre, en toute transparence
 
 **Le formatage n'est généralement pas préservé.** L'application analyse une configuration avant de la
 réécrire ; JSON, JSON5 et TOML peuvent donc être reformatés, et les commentaires JSON5 ou TOML sont perdus.
-OMP et DSH font exception : leurs outils d'écriture YAML ne modifient que `providers.opencodex` et
-`llm-pi-ai.providers.opencodex`, respectivement, tout en préservant octet par octet les commentaires et le
-formatage des fournisseurs sans rapport. Si la plage source exacte ne peut pas être identifiée de manière
+OMP et DSH font exception : leurs outils d’écriture YAML ne modifient que le fragment géré. Pour OMP, il s’agit de `providers.opencodex` ; pour DSH, de `[id=llm-pi-ai].config.providers.opencodex` dans le patch Desktop, ou de `llm-pi-ai.providers.opencodex` dans `settings.yaml` uniquement si le profil Desktop est absent. Ils préservent octet par octet les commentaires et le formatage des fournisseurs sans rapport. Si la plage source exacte ne peut pas être identifiée de manière
 sûre, l'opération est refusée. Pour les autres clients, utilisez **Restaurer** lorsque vous avez besoin des
 octets précédents du fichier : l'instantané en est une copie exacte.
 
@@ -174,7 +192,10 @@ une configuration cliente.
 
 **Pour `ocx opencode`, le bloc fournisseur du lanceur l'emporte.** Le lanceur injecte
 `provider.opencodex` par `OPENCODE_CONFIG_CONTENT`, qui est prioritaire sur la même entrée enregistrée sur
-le disque ; le reste de votre configuration opencode continue de s'appliquer normalement. Le commutateur
+le disque ; le reste de votre configuration opencode continue de s'appliquer normalement. Ces blocs sont
+construits à partir des mêmes métadonnées canoniques effectives que les exports : capacités, choix de
+raisonnement et limites connues sont repris tels quels, la limite de sortie recourant au besoin au
+repli de 32000 exigé par le schéma, borné au contexte. Le commutateur
 décrit ici est celui qui compte lorsque vous lancez directement `opencode`.
 
 ## Depuis le terminal
@@ -207,10 +228,12 @@ ocx mcode
 ```
 
 Une fois l’intégration connectée, `ocx sync` et `POST /api/sync` actualisent les catalogues MCode,
-Pi, Aside, Raycast et omo gérés. Le démarrage du proxy actualise aussi le catalogue Raycast géré.
-Les changements de visibilité, de fournisseur ou de préréglage actualisent Pi, Aside, Raycast et omo.
-Les blocs absents, modifiés par un tiers, non sûrs ou supprimés manuellement restent intacts ;
-réactivez explicitement l’intégration lorsque vous souhaitez la reconnecter.
+Pi, Aside, Raycast, omo, OpenCode et Kilo gérés. Le démarrage du proxy actualise aussi le
+catalogue Raycast géré. Les changements de visibilité, de fournisseur ou de préréglage actualisent
+Pi, Aside, Raycast, omo, OpenCode et Kilo. Les blocs absents, modifiés par un tiers, non sûrs ou
+supprimés manuellement restent intacts ; réactivez explicitement l’intégration lorsque vous
+souhaitez la reconnecter. Démarrez une nouvelle session Pi, OpenCode ou Kilo pour charger le
+fichier actualisé.
 
 Le CLI distinct de la plateforme MiniMax (`mmx`) n’est pas une intégration à commutateur de fichier. Ses
 commandes textuelles utilisent le point de terminaison compatible avec Anthropic de MiniMax ; OpenCodex
@@ -236,6 +259,38 @@ Les détails des clients ont été vérifiés par rapport au format de configura
 consultez les notes de recherche dans
 `devlog/_fin/260802_client_toggle_api/002_client_toggle_matrix.md` pour savoir ce qui a été contrôlé et quand.
 
+## ZCode 3.14 et versions ultérieures
+
+Ces chemins sont les valeurs par défaut. Un `dataBaseDir` absolu dans `~/.zcode/v2/setting.json`, toujours dans le dossier personnel par défaut, déplace le stockage vers `<dataBaseDir>/.zcode/v2/provider_config.json`. `ZCODE_DATA_DIR` désigne directement la racine `.zcode` et prime sur ce réglage ; `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` prime pour le fichier des fournisseurs. Un réglage illisible, mal formé ou relatif bloque les nouvelles applications et actualisations. Les droits de propriété et les données de restauration existants sont conservés. Voir les [règles de chemin et de restauration en anglais](https://opencodex.me/guides/integrations/#zcode-314-and-later).
+
+ZCode 3.14 a déplacé ses fournisseurs personnalisés vers `~/.zcode/v2/provider_config.json` et ne
+lit plus `~/.zcode/v2/config.json` qu'au travers d'un import unique, exécuté seulement quand le
+nouveau fichier est absent. ZCode crée ce nouveau fichier au premier lancement : sur toute
+installation déjà démarrée une fois, l'import a donc déjà eu lieu et une écriture dans
+`config.json` n'atteint plus rien.
+
+opencodex écrit désormais `provider_config.json` directement quand il le peut. Activer
+l'intégration ajoute la règle de fournisseur `opencodex` dans ce fichier, une actualisation du
+catalogue la met à jour, et la désactivation retire exactement ce qu'opencodex y a mis. Toutes les
+autres règles du fichier restent intactes, y compris celle qu'un autre fournisseur conserve pour un
+identifiant de modèle qui figure aussi chez nous. Une règle portant l'identifiant `opencodex`
+qu'opencodex n'a pas écrite est un conflit et non quelque chose à reprendre : réglez-la dans ZCode,
+ou utilisez l'écrasement explicite.
+
+Deux situations refusent encore au lieu d'écrire. Un bloc écrit par opencodex avant le déplacement
+du stockage maintient l'intégration sur `config.json` : désactivez-la d'abord à cet endroit, puis
+réactivez-la pour écrire le nouveau stockage. Et un `provider_config.json` dont le
+`schemaVersion` n'est pas un de ceux qu'opencodex a observés est signalé plutôt que fusionné :
+ce fichier contient tous les fournisseurs de ZCode, et y affirmer une forme échangerait une
+absence d'effet silencieuse contre une perte silencieuse. L'état nomme le fichier que ZCode lit dès
+que l'intégration ne l'écrit pas.
+
+Dans ce second cas, ajoutez le fournisseur dans les réglages de ZCode : URL de base
+`http://127.0.0.1:10100/v1` (ajustez le port à votre écoute), une clé non vide quelconque, et les
+identifiants de modèle donnés par `ocx export --client zcode`. Supprimer
+`provider_config.json` pour relancer l'import de ZCode n'est pas pris en charge : cela détruit
+tous les fournisseurs que ZCode y conserve.
+
 ## Cline CLI
 
 Cline CLI utilise providers.json et models.json. Quittez Cline avant toute modification ou synchronisation, puis redémarrez-le. Annuler restaure les deux originaux. Le fournisseur par défaut reste inchangé. Cette intégration ne migre pas le stockage des anciennes extensions VS Code.
@@ -247,3 +302,29 @@ ocx integration client restore --op <operation-id>
 ```
 
 [CLI / rollback / CLINE_PROVIDER_SETTINGS_PATH](/guides/integrations/#cline-cli).
+
+## Effort de raisonnement des rôles omo (Codex / LazyCodex)
+
+Lorsque LazyCodex est détecté, la section **omo (Codex / LazyCodex)** de l’onglet omo permet de choisir le modèle et l’effort de raisonnement de chaque rôle de `$CODEX_HOME/agents/*.toml`, puis de cliquer sur **Enregistrer**. Une ligne dont le rôle n’a pas de modèle fixé peut enregistrer un effort seul ; le rôle continue alors d’hériter de son modèle. opencodex ne modifie que les clés racine `model` et `model_reasoning_effort` du fichier du rôle et insère les valeurs manquantes près du début du fichier ; les instructions du rôle, les autres commentaires et les autres clés restent inchangés. Un enregistrement qui ne change que le modèle n’envoie pas `effort` et conserve les deux valeurs d’effort. Choisir un niveau insère ou remplace `model_reasoning_effort` dans le fichier du rôle et l’écrit aussi dans `[codex].agents.<role>.reasoning` de `~/.omo/omo.jsonc` lorsque LazyCodex prend en charge ce niveau (`ultra` reste uniquement dans le fichier du rôle et un ancien `reasoning` est supprimé). En ligne de commande, `ocx agent roles set <role> <model> --effort <level>` fait la même chose.
+
+Chaque ligne propose **Hériter de l’effort**, y compris pour les rôles dont l’effort est déjà fixé. Remplacer un effort fixé par cette option puis enregistrer envoie `"effort": null` : la ligne racine `model_reasoning_effort` du fichier du rôle et son commentaire de fin de ligne sont supprimés, ainsi que `[codex].agents.<role>.reasoning` dans omo.jsonc. Le modèle reste fixé. Codex détermine ensuite l’effort comme pour tout rôle sans valeur propre (une valeur explicite au lancement, la valeur par défaut de `[agents]` ou la session parente), et non à partir d’une valeur par défaut fixe du modèle. Seule une valeur existante, sous forme de chaîne sur une seule ligne, peut être supprimée ; une valeur multiligne ou qui n’est pas une chaîne est refusée avec 409 `unsupported_model_value`, sans modifier aucun des deux fichiers.
+
+Sur `PUT /api/codex-agent-roles/{role}`, omettre `model` laisse tels quels le modèle fixé dans le fichier du rôle et le `model` de omo.jsonc : un rôle sans modèle fixé continue d’hériter de son modèle pendant que son effort change ou est effacé. Le tableau de bord envoie cette requête limitée à l’effort pour une telle ligne, et, lorsqu’un niveau pris en charge par LazyCodex est enregistré, un rôle sans entrée dans omo.jsonc en reçoit une qui contient seulement `reasoning`. Un `model` à `null` est refusé avec 400 `invalid_model`, car un enregistrement ne supprime jamais un modèle fixé, et une requête sans `model` ni `effort` est refusée avec 400 `empty_update` avant toute lecture du fichier du rôle ou de omo.jsonc. `ocx agent roles set` exige toujours un modèle.
+
+Si `~/.omo/omo.jsonc` n’existe pas, il n’est pas créé. S’il contient des commentaires, il reste intact, car l’enregistrement les supprimerait ; définissez alors la valeur à la main. Un miroir ignoré n’annule pas l’enregistrement du fichier du rôle. Si le fichier du rôle est enregistré mais que l’écriture de omo.jsonc échoue, le bouton de la ligne devient **Réessayer omo.jsonc** et renvoie le même choix d’effort, y compris un effacement par **Hériter de l’effort** (`null`). Tant que ce nouvel essai n’a pas réussi, un clic ultérieur sur **Enregistrer** ou sur **Appliquer** dans **Attribution auto**, sans modification de l’effort de ce rôle, renvoie aussi ce choix en attente ; un effort choisi explicitement le remplace.
+
+**Attribution auto** propose un effort pour chaque rôle évalué dont le modèle choisi possède une liste d’efforts non vide, et **Appliquer**, **Tout appliquer** ou `ocx agent roles suggest --apply` insère ou remplace sa valeur `model_reasoning_effort`. L’effort est placé sur les niveaux propres au modèle choisi : le plus bas, celui par défaut, celui juste au-dessus du niveau par défaut, ou le plus haut. Une liste vide ne donne aucune proposition d’effort (`proposedEffort: null`) ; **Appliquer** omet alors `effort` et laisse tel quel l’effort déjà fixé. Une proposition `null` n’efface jamais un effort fixé.
+
+## Kilo
+
+Kilo n’écrit que `provider.opencodex` dans le premier fichier global existant sous `~/.config/kilo` (`XDG_CONFIG_HOME` déplace ce répertoire ; `kilo.jsonc` est créé si aucun candidat n’existe). Si un autre fichier candidat définit aussi `provider.opencodex`, l’état signale un conflit et Appliquer refuse. Les autres clés restent inchangées. Les choix de raisonnement par modèle sont écrits sous forme de carte de variantes dans le bloc fournisseur, à partir des mêmes métadonnées canoniques effectives que l’export OpenCode. `ocx sync` et `POST /api/sync` actualisent un bloc Kilo possédé par OpenCodex ; démarrez une nouvelle session Kilo pour charger le fichier actualisé. Appliquer réécrit tout le fichier ; commentaires et virgules finales ne sont pas conservés. Sélectionnez `opencodex/<modèle>` dans Kilo.
+
+Désactiver peut retirer le bloc appartenant à OpenCodex du fichier enregistré même si un autre candidat est en conflit ou ne peut pas être analysé ; cet autre fichier reste intact.
+
+```bash
+ocx integration client enable --client kilo
+```
+
+## Factory Droid
+
+Factory Droid utilise `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` sous Windows). Activez explicitement l’intégration avec `ocx integration client enable --client droid`, puis choisissez un modèle personnalisé dans `/model`. Les entrées gérées n’utilisent pas de clé et fonctionnent uniquement en boucle locale. La désactivation supprime ces entrées ; l’annulation restaure les octets sauvegardés. Si l’ancien `config.json` contient des entrées OpenCodex ou si `settings.local.json` remplace `customModels`, résolvez ce conflit avant l’activation. Consultez la [documentation Factory BYOK](https://docs.factory.ai/model-independence/byok).

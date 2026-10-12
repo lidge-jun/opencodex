@@ -1,4 +1,4 @@
-import { describe, expect, test, beforeEach, afterEach } from "bun:test";
+import { describe, expect, test, beforeEach, afterEach, spyOn } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -22,6 +22,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
  */
 
 let TEST_DIR = "";
+const previousHome = process.env.OPENCODEX_HOME;
 
 const ICACLS_OK = { success: true, exitCode: 0, timedOut: false, stdout: "" };
 
@@ -39,13 +40,15 @@ describe("codex refresh-failure classification", () => {
     await flushConfigDirHardeningForTests();
     setIcaclsRunnerForTests(null);
     setAsyncIcaclsRunnerForTests(null);
-    delete process.env.OPENCODEX_HOME;
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome;
     if (TEST_DIR) removeTreeWithRetry(TEST_DIR);
     TEST_DIR = "";
   });
 
   /** Drive one forced refresh against a stubbed token endpoint and return the thrown reason. */
-  async function classify(accountId: string, respond: () => Response): Promise<string> {
+  async function classify(accountId: string, respond: () => Response,
+    metadata?: { status: number; code: string | undefined }): Promise<string> {
     const { forceRefreshCodexPoolToken, readCodexAccountRecord, saveCodexAccountCredential, TokenRefreshError } =
       await import("../../src/codex/account-store");
     saveCodexAccountCredential(accountId, {
@@ -65,6 +68,7 @@ describe("codex refresh-failure classification", () => {
       throw new Error("expected a TokenRefreshError");
     } catch (error) {
       expect(error).toBeInstanceOf(TokenRefreshError);
+      if (metadata) expect(error).toMatchObject(metadata);
       return (error as InstanceType<typeof TokenRefreshError>).reason;
     } finally {
       globalThis.fetch = originalFetch;
@@ -149,4 +153,47 @@ describe("codex refresh-failure classification", () => {
     const reason = await classify("unparseable", () => new Response("<html>502 revoked</html>", { status: 502 }));
     expect(reason).toBe("unknown");
   });
+
+  test.each([429, 500, 503])("HTTP %s cannot retire a grant from terminal code or prose", async status => {
+    for (const [label, body] of [
+      ["code", { error: "invalid_grant" }],
+      ["prose", { error_description: "refresh token was revoked and expired" }],
+    ] as const) {
+      expect(await classify(`availability-${status}-${label}`, () => Response.json(body, { status }))).toBe("unknown");
+    }
+  });
+
+  test.each(["token_invalidated", "refresh_token_reused"])("exact %s retires a pool grant", async code => {
+    expect(await classify(code, () => Response.json({ error: { code } }, { status: 400 }))).toBe("revoked");
+  });
+
+  test.each([123, {}, [], null])("malformed error_description %j stays transient", async error_description => {
+    expect(await classify(`malformed-${JSON.stringify(error_description)}`, () => Response.json({ error_description }, { status: 400 }))).toBe("unknown");
+  });
+
+  test("pool refresh logs only status and recognized codes, never provider text", async () => {
+    const lines: string[] = [];
+    const warn = spyOn(console, "warn").mockImplementation((...args) => { lines.push(args.join(" ")); });
+    try {
+      await classify("diagnostic-known", () => Response.json({ error: "invalid_grant", error_description: "private-body-marker" }, { status: 400 }));
+      await classify("diagnostic-unknown", () => Response.json({ error: "private-code-marker", error_description: "private-body-marker" }, { status: 400 }));
+      expect(lines).toContain("[codex] pool refresh: reauth status=400 code=invalid_grant");
+      expect(lines).toContain("[codex] pool refresh: transient status=400 code=none");
+      expect(lines.join("\n")).not.toContain("private-body-marker");
+      expect(lines.join("\n")).not.toContain("private-code-marker");
+      expect(lines.join("\n")).not.toContain("grant-diagnostic");
+    } finally { warn.mockRestore(); }
+  });
+
+
+  test.each([
+    { status: 400, bodyCode: "invalid_grant", code: "invalid_grant", reason: "revoked" },
+    { status: 503, bodyCode: "server_error", code: "server_error", reason: "unknown" },
+    { status: 400, bodyCode: "private-code-marker", code: undefined, reason: "unknown" },
+  ])("pool refresh errors preserve safe structured metadata: %j", async ({ status, bodyCode, code, reason }) => {
+    expect(await classify(`metadata-${status}-${bodyCode}`,
+      () => Response.json({ error: bodyCode, error_description: "private-description-marker" }, { status }),
+      { status, code })).toBe(reason);
+  });
+
 });

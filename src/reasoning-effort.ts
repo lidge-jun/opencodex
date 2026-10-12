@@ -12,6 +12,14 @@ export const CODEX_REASONING_LEVELS: { effort: string; description: string }[] =
   { effort: "ultra", description: "Maximum reasoning with automatic task delegation" },
 ];
 
+/**
+ * One canonical rung. Catalog writers that hold a partially populated ladder derive their
+ * element type from this instead of restating `{ effort?: string }`: those restatements
+ * silently excluded `description`, so pushing a canonical rung into them is a type error
+ * that only surfaced once an unrelated import cycle through this module was broken.
+ */
+export type CodexReasoningLevel = (typeof CODEX_REASONING_LEVELS)[number];
+
 const CODEX_REASONING_ORDER = CODEX_REASONING_LEVELS.map(l => l.effort);
 const CODEX_REASONING_SET = new Set(CODEX_REASONING_ORDER);
 
@@ -160,11 +168,12 @@ export function configuredReasoningEfforts(provider: OcxProviderConfig, modelId:
   }
   // models.dev publishes the per-model ladder that routed providers never expose on /models.
   // (OpenCode Zen Go answers ids only). Only consulted when nothing was configured for this
-  // model, so every hand-written contract stays authoritative. The snapshot refreshes itself in
-  // the background; no snapshot means the previous behaviour.
-  // The refresh is asked for only once a snapshot has already answered, which means it only ever
-  // refreshes a STALE snapshot. Review asked for the opposite — refresh when the snapshot is
-  // missing or corrupt, since that is the case this lookup cannot serve. That is declined here:
+  // model, so every hand-written contract stays authoritative. Catalog sync bootstraps the
+  // snapshot with a bounded wait; an existing stale snapshot refreshes in the background.
+  // The refresh helper refuses to fetch a missing snapshot, so it only ever refreshes a STALE
+  // snapshot, including when a classified model supplied the fallback ladder. Review asked for
+  // the opposite — refresh when the snapshot is missing or corrupt, since that is the case this
+  // lookup cannot serve. That is declined here:
   // a missing snapshot is the default state of every fresh install and every test process, so
   // requesting the fetch here puts a models.dev request on the request path of the first routed
   // turn to a gated destination. Refreshing a snapshot that does not exist is catalog-sync work,

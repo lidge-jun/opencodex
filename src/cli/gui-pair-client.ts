@@ -1,5 +1,6 @@
 import { readRuntimePort, type RuntimePortState } from "../config/process-state";
 import { timingSafeEqual } from "node:crypto";
+import { createGuiPairIntent, GUI_PAIR_INTENT_HEADER, type GuiPairIntent } from "../lib/gui-pair-intent";
 import {
   LOCAL_ATTESTATION_CHALLENGE_HEADER,
   LOCAL_ATTESTATION_PROOF_HEADER,
@@ -30,7 +31,7 @@ import {
 
 export type GuiPairRequestResult =
   | { kind: "created"; grant: string; browserOrigin: string; serverOrigin: string; expiresAt: number }
-  | { kind: "unavailable"; reason: "unattested-target" | "runtime-mismatch" | "attestation" | "capability" | "transport" | "rejected" };
+  | { kind: "unavailable"; reason: "unattested-target" | "runtime-mismatch" | "attestation" | "capability" | "transport" | "rejected" | "local-intent" };
 
 export interface GuiPairClientDeps {
   fetchImpl?: typeof fetch;
@@ -38,6 +39,9 @@ export interface GuiPairClientDeps {
   createChallenge?: () => string;
   now?: () => number;
   timeoutMs?: number;
+  /** Hub invitation policy is unchanged; standalone commands require local write intent. */
+  requireLocalIntent?: boolean;
+  createIntent?: typeof createGuiPairIntent;
 }
 
 const GUI_PAIR_REQUEST_TIMEOUT_MS = 10_000;
@@ -136,9 +140,12 @@ export async function requestBoundGuiPairingGrant(
     expiresAt,
   );
   if (!capability) return { kind: "unavailable", reason: "capability" };
-  let response: Response;
+  let intent: GuiPairIntent | undefined;
   try {
-    response = await fetchImpl(`${baseUrl}${GUI_PAIR_PATH}`, {
+    if (deps.requireLocalIntent !== false) intent = (deps.createIntent ?? createGuiPairIntent)(capability);
+  } catch { return { kind: "unavailable", reason: "local-intent" }; }
+  try {
+    const response = await fetchImpl(`${baseUrl}${GUI_PAIR_PATH}`, {
       method: GUI_PAIR_METHOD,
       headers: {
         "Content-Length": "0",
@@ -147,13 +154,14 @@ export async function requestBoundGuiPairingGrant(
         [GUI_PAIR_EXPIRES_AT_HEADER]: String(expiresAt),
         [GUI_PAIR_BROWSER_ORIGIN_HEADER]: browserOrigin,
         [GUI_PAIR_CAPABILITY_HEADER]: capability,
+        ...(intent ? { [GUI_PAIR_INTENT_HEADER]: intent.proof } : {}),
       },
       signal: AbortSignal.timeout(timeoutMs),
     });
+    if (!response.ok) return { kind: "unavailable", reason: "rejected" };
+    const result = parseCreatedResult(await response.json().catch(() => null), browserOrigin);
+    return result ?? { kind: "unavailable", reason: "rejected" };
   } catch {
     return { kind: "unavailable", reason: "transport" };
-  }
-  if (!response.ok) return { kind: "unavailable", reason: "rejected" };
-  const result = parseCreatedResult(await response.json().catch(() => null), browserOrigin);
-  return result ?? { kind: "unavailable", reason: "rejected" };
+  } finally { intent?.dispose(); }
 }

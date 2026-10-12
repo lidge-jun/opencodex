@@ -273,7 +273,7 @@ test("the native-main drain sentinel covers the flagships without widening to gp
     const draining = { nativeMainSelectionOnly: true } as const;
     const noPoolCandidate = () => undefined;
 
-    for (const slug of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra", "gpt-daybreak-blue-latest"]) {
+    for (const slug of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-daybreak-blue-latest", "gpt-6-astra-minor"]) {
       expect(NATIVE_MAIN_DRAIN_SENTINEL_MODELS.has(slug)).toBe(true);
       expect(isSubagentModelUnavailable(slug, config, null, now, draining, noPoolCandidate))
         .toBe(false);
@@ -797,6 +797,20 @@ test("the native-main drain sentinel covers the flagships without widening to gp
     clearAccountQuota("pool-a");
     setAccountQuotaFromParsed("pool-a", { shortPercent: 100, shortResetAt: now - 60_000 });
     expect(isNativeModelQuotaExhausted("gpt-5.6-sol", config, "pool-a", now)).toBe(false);
+  });
+
+  test("native subagent quota checks use the resolved account threshold override", () => {
+    resetSubagentModelFallbackStateForTests();
+    updateAccountQuota("pool-a", 60);
+    const config = cfg({
+      autoSwitchThreshold: 95,
+      codexAccountAutoSwitchThresholds: { "pool-a": 50 },
+    });
+
+    expect(isNativeModelQuotaExhausted("gpt-5.6-sol", config, "pool-a")).toBe(true);
+
+    config.codexAccountAutoSwitchThresholds = { "pool-a": 0 };
+    expect(isNativeModelQuotaExhausted("gpt-5.6-sol", config, "pool-a")).toBe(false);
   });
 
   test("openai-direct/gpt-5.5 is accepted as encrypted-task fallback when canonical", () => {

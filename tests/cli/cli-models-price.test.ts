@@ -45,17 +45,40 @@ describe("models manual price commands", () => {
     });
     expect(result.code).toBe(0);
     expect(result.calls).toEqual([{ path: "/api/providers/custom-price/model-costs", method: "GET", body: undefined }]);
-    expect(JSON.parse(result.stdout)).toEqual({ provider: "custom-price", modelId: "org/model--fast", cost: COST });
+    expect(JSON.parse(result.stdout)).toEqual({ provider: "custom-price", modelId: "org/model--fast", cost: COST, effectiveCost: COST });
   });
 
   test("missing own keys read as automatic, including prototype-shaped selectors", async () => {
     for (const modelId of ["missing", "__proto__", "constructor", "toString"]) {
       const result = await invoke("price", [`custom-price/${modelId}`, "--json"], { provider: "custom-price", modelCosts: {} });
       expect(result.code).toBe(0);
-      expect(JSON.parse(result.stdout)).toEqual({ provider: "custom-price", modelId, cost: null });
+      expect(JSON.parse(result.stdout)).toEqual({ provider: "custom-price", modelId, cost: null, effectiveCost: null });
     }
     const automatic = await invoke("price", ["custom-price/missing"], { provider: "custom-price", modelCosts: {} });
     expect(automatic.stdout).toContain("automatic pricing");
+  });
+
+  test("automatic pricing exposes known vendor rates without creating an override", async () => {
+    const result = await invoke("price", ["custom-price/claude-sonnet-4-6", "--json"], {
+      provider: "custom-price", modelCosts: {},
+    });
+    expect(result.code).toBe(0);
+    const row = JSON.parse(result.stdout);
+    expect(row.cost).toBeNull();
+    expect(row.effectiveCost).toEqual({ input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 });
+    expect(result.calls).toHaveLength(1);
+  });
+
+  test("explicit zero prices override known automatic rates", async () => {
+    const zero = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+    const result = await invoke("price", ["custom-price/claude-sonnet-4-6", "--json"], {
+      provider: "custom-price", modelCosts: { "claude-sonnet-4-6": zero },
+    });
+    expect(JSON.parse(result.stdout)).toMatchObject({ cost: zero, effectiveCost: zero });
+    const automatic = await invoke("price", ["custom-price/claude-sonnet-4-6"], {
+      provider: "custom-price", modelCosts: {},
+    });
+    expect(automatic.stdout).toContain("USD per 1M tokens (automatic estimate)");
   });
 
   test("set-price sends four numeric rates with omitted cache rates defaulted to zero", async () => {

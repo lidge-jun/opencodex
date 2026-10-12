@@ -1,5 +1,5 @@
-import type { OcxClaudeCodeConfig } from "../types";
-import { isAnthropicOutputSchema } from "../adapters/anthropic-output-schema";
+import type { OcxConfig, OcxClaudeCodeConfig } from "../types";
+import { isAnthropicOutputSchema, satisfiesOpenAiStrictSchema } from "../adapters/anthropic-output-schema";
 import { resolveAlias } from "./alias";
 import { stripOneMillionMarker } from "./context-windows";
 import { isUnresolvedDesktop3pAlias, resolveDesktop3pAlias } from "./desktop-3p";
@@ -96,7 +96,13 @@ export function effortFromOutputConfig(outputConfig: unknown): string | undefine
   return typeof effort === "string" && OUTPUT_CONFIG_EFFORTS.has(effort) ? effort : undefined;
 }
 
-export function formatFromOutputConfig(outputConfig: unknown): Rec | undefined {
+function isFineTunedOpenAiTarget(model: string | undefined): boolean {
+  if (!model) return false;
+  const separator = model.lastIndexOf("/");
+  return model.slice(separator + 1).startsWith("ft:");
+}
+
+export function formatFromOutputConfig(outputConfig: unknown, resolvedModel?: string): Rec | undefined {
   if (!isRec(outputConfig) || !isRec(outputConfig.format)) return undefined;
   const format = outputConfig.format;
   if (
@@ -104,7 +110,21 @@ export function formatFromOutputConfig(outputConfig: unknown): Rec | undefined {
     || !isRec(format.schema)
     || !isAnthropicOutputSchema(format.schema)
   ) return undefined;
-  return { type: "json_schema", name: "response", schema: format.schema };
+  // `strict` is stated rather than left to the destination's default. A schema with an optional
+  // property is legal to Anthropic and a hard 400 under OpenAI strict mode ("'required' ... an
+  // array including every key in properties"), which takes down every structured-output turn on
+  // a route whose canonical target is unavailable. Satisfying strict by adding the missing keys
+  // to `required` would change the caller's contract, so the optionality is preserved and the
+  // strict claim is dropped instead.
+  return {
+    type: "json_schema",
+    name: "response",
+    schema: format.schema,
+    // Strict Structured Outputs also needs an object at the root; a root anyOf/oneOf is refused.
+    strict: format.schema.type === "object"
+      && !Object.hasOwn(format.schema, "anyOf") && !Object.hasOwn(format.schema, "oneOf")
+      && satisfiesOpenAiStrictSchema(format.schema, isFineTunedOpenAiTarget(resolvedModel)),
+  };
 }
 
 /**
@@ -133,7 +153,14 @@ export function extractOcxRouteDirective(body: unknown): string | null {
   const text = systemText(body);
   if (!text) return null;
   const match = OCX_ROUTE_RE.exec(text);
-  return match ? match[1]! : null;
+  if (!match) return null;
+  // Explicit gateway selection belongs to this invocation, not the mutable saved
+  // force setting. Bare Claude ids still need the legacy frontmatter fallback.
+  if (isRec(body) && typeof body.model === "string") {
+    const selector = stripOneMillionMarker(body.model);
+    if (resolveAlias(selector) || resolveDesktop3pAlias(selector)) return body.model;
+  }
+  return match[1]!;
 }
 
 /**

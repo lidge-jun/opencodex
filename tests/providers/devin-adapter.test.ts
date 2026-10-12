@@ -3,10 +3,10 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDevinAdapter, mapDevinToolCallStartForTests, mapOcxMessagesToDevin, mapOcxToolsToDevin, resolveWireModelUidForTests } from "../../src/adapters/devin";
-import { sanitizeToolDescriptionForCognitionForTests } from "../../src/adapters/devin/cloud-direct/chat";
+import { buildGetChatMessageRequestForTests, sanitizeTextForCognitionForTests, sanitizeToolDescriptionForCognitionForTests } from "../../src/adapters/devin/cloud-direct/chat";
 import { DEVIN_MODEL_CONTEXT_WINDOWS, DEVIN_STATIC_MODELS, collapseDevinModelUid } from "../../src/adapters/devin/live-models";
 import { parseCatalogBuffer } from "../../src/adapters/devin/cloud-direct/catalog";
-import { encodeMessage, encodeString, encodeVarintField } from "../../src/adapters/devin/cloud-direct/wire";
+import { encodeMessage, encodeString, encodeVarintField, iterFields } from "../../src/adapters/devin/cloud-direct/wire";
 import { DEPRECATED_OAUTH_PROVIDER_ALIASES, OAUTH_PROVIDERS, resolveRefreshPolicy } from "../../src/oauth";
 import { DEVIN_DEFAULT_API_SERVER } from "../../src/oauth/devin";
 import { saveCredential } from "../../src/oauth/store";
@@ -304,6 +304,81 @@ describe("devin adapter", () => {
     expect(sanitizeToolDescriptionForCognitionForTests(nearMiss)).toBe(nearMiss);
   });
 
+  test("rewrites the Codex escalation phrase on instruction surfaces and preserves data", () => {
+    // This trigger lives in Codex's <permissions instructions> boilerplate,
+    // which Codex sends as system prompt — not in a tool description. The
+    // clause was isolated live: the full sentence is refused while every
+    // sub-phrase passes, so the rewrite edits the verb phrase only.
+    const trigger = "asking the user if they want to allow the action in `justification` parameter";
+    const rewritten = sanitizeTextForCognitionForTests(
+      `Include a short question ${trigger}. e.g. "Do you want to run it?"`,
+    );
+    expect(rewritten).toContain("asking the user whether to allow the action in the `justification` parameter");
+    expect(rewritten).not.toContain("if they want to allow the action");
+    // Flexible whitespace/case, same as the other Codex entries.
+    expect(sanitizeTextForCognitionForTests(trigger.toUpperCase()))
+      .toContain("whether to allow the action");
+    expect(sanitizeTextForCognitionForTests(trigger.replaceAll(" ", "\n  "))).toBe(
+      "asking the user whether to allow the action in the `justification` parameter",
+    );
+
+    // The phrase is rewritten on instruction surfaces — #2 (system prompt)
+    // and tool descriptions — but data fields must stay byte-exact: a user
+    // message, replayed thinking, or tool-call arguments quoting the phrase
+    // are literal content (patches, exact needles) where a rewrite would
+    // silently change what the model did. If the cloud still refuses such a
+    // request, the caller sees the upstream permission_denied.
+    const sys = `<permissions instructions>\n- Include a short question ${trigger}. e.g. "Do it?"\n</permissions>`;
+    const req = buildGetChatMessageRequestForTests({
+      apiKey: "k",
+      modelUid: "swe-2",
+      cascadeId: "c",
+      sessionId: "s",
+      requestId: 1n,
+      triggerId: "t",
+      messages: [
+        { role: "system", content: sys },
+        { role: "user", content: `here is a quote: ${trigger}` },
+        {
+          role: "assistant",
+          content: "ok",
+          thinking: `the prompt says: ${trigger}`,
+          tool_calls: [{ id: "c1", name: "apply_patch", arguments: `{"patch":"${trigger}"}` }],
+        },
+        { role: "tool", tool_call_id: "c1", content: `file bytes: ${trigger}` },
+        { role: "user", content: "hello" },
+      ],
+      tools: [{ name: "codex_escalation", description: trigger, parameters: { type: "object" } }],
+    });
+    // Decode #2 independently: a rewritten tool description cannot mask an
+    // unsanitized system prompt in a whole-buffer substring assertion.
+    const systemField = [...iterFields(req)].find((field) => field.num === 2);
+    expect(systemField?.value).toEqual(Buffer.from(
+      `<permissions instructions>\n- Include a short question asking the user whether to allow the action in the \`justification\` parameter. e.g. "Do it?"\n</permissions>`,
+    ));
+    // ...but data fields preserve the literal bytes (user text, thinking,
+    // tool-call arguments all still carry the verbatim trigger).
+    expect(req.includes(Buffer.from(`here is a quote: ${trigger}`, "utf8"))).toBe(true);
+    expect(req.includes(Buffer.from(`the prompt says: ${trigger}`, "utf8"))).toBe(true);
+    expect(req.includes(Buffer.from(`{"patch":"${trigger}"}`, "utf8"))).toBe(true);
+    expect(req.includes(Buffer.from(`file bytes: ${trigger}`, "utf8"))).toBe(true);
+
+    // A request where the ONLY trigger carrier is a tool description must
+    // come out clean — pins encodeToolDef specifically.
+    const toolOnly = buildGetChatMessageRequestForTests({
+      apiKey: "k",
+      modelUid: "swe-2",
+      cascadeId: "c",
+      sessionId: "s",
+      requestId: 1n,
+      triggerId: "t",
+      messages: [{ role: "user", content: "hi" }],
+      tools: [{ name: "codex_escalation", description: trigger, parameters: { type: "object" } }],
+    });
+    expect(toolOnly.includes(Buffer.from(trigger, "utf8"))).toBe(false);
+    expect(toolOnly.includes(Buffer.from("whether to allow the action", "utf8"))).toBe(true);
+  });
+
   test("the catalog parser reads the per-account context window", () => {
     // ClientModelConfig #18 is the max input tokens, and it is the only
     // first-party context-window figure Cognition exposes: the Devin CLI and
@@ -368,6 +443,8 @@ describe("devin adapter", () => {
     // a Claude row five times too small, a Grok row about half its real size,
     // and a GPT row rounded up past what the service accepts.
     expect(DEVIN_MODEL_CONTEXT_WINDOWS["claude-sonnet-5"]).toBe(1_000_000);
+    expect(DEVIN_MODEL_CONTEXT_WINDOWS["claude-sonnet-5-5"]).toBe(1_000_000);
+    expect(DEVIN_MODEL_CONTEXT_WINDOWS["claude-haiku-5-5"]).toBe(1_000_000);
     expect(DEVIN_MODEL_CONTEXT_WINDOWS["grok-4-5"]).toBe(500_000);
     expect(DEVIN_MODEL_CONTEXT_WINDOWS["gpt-5-6-sol"]).toBe(1_000_000);
     expect(DEVIN_MODEL_CONTEXT_WINDOWS["swe-2"]).toBe(262_000);
@@ -379,12 +456,14 @@ describe("devin adapter", () => {
 });
 
 describe("SWE-2 wire effort selection", () => {
+  // Every case here passes a null catalog: this is the degraded path. With a
+  // catalog, family metadata decides (devin-family-resolution.test.ts).
   // Cognition spells SWE-2 effort as the model id, so an explicit effort has to
   // beat a suffix the picker already chose. Before this, swe-2-high asked for at
   // medium stayed high and the caller was silently ignored.
   test.each(["medium", "high", "max"])("an explicit %s effort overrides every SWE-2 variant", async (effort) => {
     for (const model of ["swe-2", "swe-2-medium", "swe-2-high", "swe-2-max", "swe-2.high"]) {
-      expect(await resolveWireModelUidForTests(model, "unused", "unused", effort)).toBe(`swe-2-${effort}`);
+      expect(await resolveWireModelUidForTests(model, "unused", "unused", effort, null)).toBe(`swe-2-${effort}`);
     }
   });
 
@@ -392,23 +471,23 @@ describe("SWE-2 wire effort selection", () => {
     ["none", "medium"], ["off", "medium"], ["minimal", "medium"],
     ["low", "medium"], ["xhigh", "max"], ["ultra", "max"],
   ])("maps %s to the supported SWE-2 %s lane", async (effort, expected) => {
-    expect(await resolveWireModelUidForTests("swe-2-high", "unused", "unused", effort)).toBe(`swe-2-${expected}`);
+    expect(await resolveWireModelUidForTests("swe-2-high", "unused", "unused", effort, null)).toBe(`swe-2-${expected}`);
   });
 
   // Case is normalised, which the source contribution did not do: a caller that
   // sends HIGH means the same lane as high.
   test("effort matching is case-insensitive", async () => {
-    expect(await resolveWireModelUidForTests("swe-2-medium", "unused", "unused", "HIGH")).toBe("swe-2-high");
+    expect(await resolveWireModelUidForTests("swe-2-medium", "unused", "unused", "HIGH", null)).toBe("swe-2-high");
   });
 
   test("omitted or unknown effort preserves an explicit variant", async () => {
-    expect(await resolveWireModelUidForTests("swe-2-high", "unused", "unused")).toBe("swe-2-high");
-    expect(await resolveWireModelUidForTests("swe-2-max", "unused", "unused", "future-effort")).toBe("swe-2-max");
+    expect(await resolveWireModelUidForTests("swe-2-high", "unused", "unused", undefined, null)).toBe("swe-2-high");
+    expect(await resolveWireModelUidForTests("swe-2-max", "unused", "unused", "future-effort", null)).toBe("swe-2-max");
   });
 
-  test("other model families keep their existing suffix precedence", async () => {
+  test("without a catalog, other model families keep their suffix precedence", async () => {
     for (const model of ["claude-opus-5-medium", "gpt-5-6-sol-high", "swe-1-7-high", "swe-20-high"]) {
-      expect(await resolveWireModelUidForTests(model, "unused", "unused", "max")).toBe(model);
+      expect(await resolveWireModelUidForTests(model, "unused", "unused", "max", null)).toBe(model);
     }
   });
 });
@@ -419,24 +498,24 @@ describe("effort suffix detection and caller effort values are different sets", 
   // the exact shape Cognition answers with an opaque permission_denied.
   test("a UID carrying the priority tier is recognised as already suffixed", async () => {
     for (const uid of ["gpt-5-6-sol-priority", "gpt-5-6-sol-medium-priority"]) {
-      expect(await resolveWireModelUidForTests(uid, "unused", "unused", "high")).toBe(uid);
+      expect(await resolveWireModelUidForTests(uid, "unused", "unused", "high", null)).toBe(uid);
     }
   });
 
   test("detection handles a compound suffix, which a last-token test could not", async () => {
-    expect(await resolveWireModelUidForTests("gpt-5-6-sol-medium-priority", "unused", "unused")).toBe(
+    expect(await resolveWireModelUidForTests("gpt-5-6-sol-medium-priority", "unused", "unused", undefined, null)).toBe(
       "gpt-5-6-sol-medium-priority",
     );
   });
 
   test("a bare model still receives the caller effort", async () => {
-    expect(await resolveWireModelUidForTests("gpt-5-6-sol", "unused", "unused", "high")).toBe("gpt-5-6-sol-high");
+    expect(await resolveWireModelUidForTests("gpt-5-6-sol", "unused", "unused", "high", null)).toBe("gpt-5-6-sol-high");
   });
 
   // `priority` is a service tier, not something a caller asks for as effort.
   // Sharing one set between detection and caller validity would admit it.
   test("priority is not accepted as a caller reasoning effort", async () => {
-    expect(await resolveWireModelUidForTests("gpt-5-6-sol", "unused", "unused", "priority")).toBe(
+    expect(await resolveWireModelUidForTests("gpt-5-6-sol", "unused", "unused", "priority", null)).toBe(
       "gpt-5-6-sol-medium",
     );
   });
@@ -444,7 +523,7 @@ describe("effort suffix detection and caller effort values are different sets", 
   // These never appear as a trailing token, so they are meaningless to detection,
   // but a caller can still name them and they must survive.
   test.each(["max-1m", "none-1m", "1m", "fast"])("the compound caller value %p is preserved", async (effort) => {
-    expect(await resolveWireModelUidForTests("gpt-5-6-sol", "unused", "unused", effort)).toBe(
+    expect(await resolveWireModelUidForTests("gpt-5-6-sol", "unused", "unused", effort, null)).toBe(
       `gpt-5-6-sol-${effort}`,
     );
   });
@@ -452,7 +531,7 @@ describe("effort suffix detection and caller effort values are different sets", 
   test("a model name is never mistaken for a suffix", async () => {
     // Greedy collapse must not eat part of a real model name.
     for (const uid of ["claude-opus-5", "swe-1-7", "glm-5-3"]) {
-      expect(await resolveWireModelUidForTests(uid, "unused", "unused", "high")).toBe(`${uid}-high`);
+      expect(await resolveWireModelUidForTests(uid, "unused", "unused", "high", null)).toBe(`${uid}-high`);
     }
   });
 });
@@ -500,10 +579,10 @@ describe("devin adapter api-server host resolution (#4503)", () => {
 
   // Drive one real runTurn. The stubbed 500 ends the turn in an upstream error
   // only after every outbound URL has been recorded.
-  async function runOneTurn(apiKey: string): Promise<AdapterEvent[]> {
+  async function runOneTurn(apiKey: string, providerId = "devin"): Promise<AdapterEvent[]> {
     const adapter = createDevinAdapter(
       { adapter: "devin", baseUrl: CONFIGURED_BASE_URL, apiKey },
-      { providerId: "devin" },
+      { providerId },
     );
     const parsed: OcxParsedRequest = {
       modelId: "swe-2-high",
@@ -534,7 +613,7 @@ describe("devin adapter api-server host resolution (#4503)", () => {
       apiBaseUrl: EU_TENANT_HOST,
     });
 
-    const events = await runOneTurn("ocx-test-alias-slot-key");
+    const events = await runOneTurn("devin-cli-session");
 
     expectDispatchedTo(EU_TENANT_HOST);
     expect(seenUrls.some((url) => url.startsWith(DEVIN_DEFAULT_API_SERVER))).toBe(false);
@@ -542,6 +621,21 @@ describe("devin adapter api-server host resolution (#4503)", () => {
     // The turn reached the transport and failed there on the stubbed 500 —
     // proof the recorded URLs came from a real dispatch, not an early return.
     expect(events.some((event) => event.type === "error")).toBe(true);
+  });
+
+  test("an independently configured key does not borrow an alias credential's tenant host", async () => {
+    await saveCredential("devin", {
+      access: "different-account-session",
+      refresh: "different-account-session",
+      expires: Number.MAX_SAFE_INTEGER,
+      source: "local-cli",
+      apiBaseUrl: EU_TENANT_HOST,
+    });
+
+    await runOneTurn("configured-provider-key", "devin-cli");
+
+    expectDispatchedTo(CONFIGURED_BASE_URL);
+    expect(seenUrls.some((url) => url.startsWith(EU_TENANT_HOST))).toBe(false);
   });
 
   test("a usable literal devin slot still wins over the aliased devin-cli slot", async () => {
@@ -560,9 +654,24 @@ describe("devin adapter api-server host resolution (#4503)", () => {
       apiBaseUrl: EU_TENANT_HOST,
     });
 
-    await runOneTurn("ocx-test-literal-slot-key");
+    await runOneTurn("devin-session");
 
     expectDispatchedTo(FEDSTART_TENANT_HOST);
+  });
+
+  test("a configured key does not borrow the literal devin slot's tenant host", async () => {
+    await saveCredential("devin", {
+      access: "devin-session",
+      refresh: "devin-session",
+      expires: Number.MAX_SAFE_INTEGER,
+      source: "oauth",
+      apiBaseUrl: FEDSTART_TENANT_HOST,
+    });
+
+    await runOneTurn("configured-provider-key");
+
+    expectDispatchedTo(CONFIGURED_BASE_URL);
+    expect(seenUrls.some((url) => url.startsWith(FEDSTART_TENANT_HOST))).toBe(false);
   });
 
   test("with neither credential slot populated the configured baseUrl still applies", async () => {

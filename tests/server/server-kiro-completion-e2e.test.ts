@@ -7,6 +7,7 @@ import { saveConfig } from "../../src/config";
 import { encodeMessage } from "../../src/lib/eventstream-decoder";
 import { startServer } from "../../src/server";
 import { clearRequestLogsForTests, getRequestLogEntries } from "../../src/server/request-log";
+import { readUsageEntries, resetUsageReadCacheForTests } from "../../src/usage/log";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -130,10 +131,10 @@ function anthropicEvents(sse: string): Array<{ name: string; data: Record<string
 }
 
 describe("Kiro completion through public server endpoints", () => {
-  test("/v1/responses keeps progress nonterminal and lets only the bounded fallback complete", async () => {
+  test("/v1/responses releases only the final answer after bounded validation", async () => {
     const upstream = scriptedKiroUpstream([
-      [textFrame("Checking the workspace.")],
-      completionFrames("The workspace is ready."),
+      [textFrame("Checking the workspace."), eventFrame("meteringEvent", { unit: "credit", usage: 0.04582331509121062 })],
+      [...completionFrames("The workspace is ready."), eventFrame("meteringEvent", { unit: "credit", amount: 0.01 })],
     ]);
     saveConfig(kiroConfig(upstream.server.url.toString()));
     const proxy = startServer(0);
@@ -154,15 +155,21 @@ describe("Kiro completion through public server endpoints", () => {
       const events = responseEvents(wire);
       const text = events.filter(event => event.name === "response.output_text.delta");
       expect(text.map(event => [event.data.delta, event.data.phase])).toEqual([
-        ["Checking the workspace.", undefined],
         ["The workspace is ready.", undefined],
       ]);
       const completed = events.filter(event => event.name === "response.completed");
       expect(completed).toHaveLength(1);
       expect(events.at(-1)?.name).toBe("response.completed");
       const messages = completed[0].data.response.output.filter((item: { type: string }) => item.type === "message");
-      expect(messages.map((item: { phase?: string }) => item.phase)).toEqual(["commentary", "final_answer"]);
+      expect(messages.map((item: { phase?: string }) => item.phase)).toEqual(["final_answer"]);
       expect(wire).not.toContain(KIRO_COMPLETION_TOOL_NAME);
+
+      const expectedCredits = 0.04582331509121062 + 0.01;
+      const log = getRequestLogEntries().find(entry => entry.provider === "kiro-test");
+      expect(log?.usage).toMatchObject({ providerCredits: expectedCredits, estimated: true });
+      resetUsageReadCacheForTests();
+      const persisted = readUsageEntries().find(entry => entry.requestId === log?.requestId);
+      expect(persisted?.usage).toMatchObject({ providerCredits: expectedCredits, estimated: true });
 
       expect(upstream.requests).toHaveLength(2);
       expect(kiroToolNames(upstream.requests[0])).toEqual(["bash", KIRO_COMPLETION_TOOL_NAME]);
@@ -204,7 +211,7 @@ describe("Kiro completion through public server endpoints", () => {
       const deltas = events
         .filter(event => event.name === "content_block_delta" && event.data.delta?.type === "text_delta")
         .map(event => event.data.delta.text);
-      expect(deltas).toEqual(["I am checking the Claude task.", "The Claude task is complete."]);
+      expect(deltas).toEqual(["The Claude task is complete."]);
       expect(events.filter(event => event.name === "message_delta")).toHaveLength(1);
       expect(events.find(event => event.name === "message_delta")?.data.delta.stop_reason).toBe("end_turn");
       expect(events.at(-1)?.name).toBe("message_stop");

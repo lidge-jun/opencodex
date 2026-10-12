@@ -1,4 +1,6 @@
 import { effectiveProviderAlias, effectiveProviderAliasDecision } from "../../providers/default-aliases";
+import { antigravityFamilyDisabled, collapseAntigravityPublicModels, projectAntigravitySelectedModels } from "../../providers/antigravity-effort-families";
+import { XAI_OAUTH_FAST_VARIANT_IDS } from "../../providers/xai-fast-model";
 import { initialModelSelectionPending } from "../../providers/initial-model-selection";
 import { execFileSync } from "node:child_process";
 import { createHash, createHmac, randomBytes } from "node:crypto";
@@ -191,6 +193,9 @@ export function shouldExposeProviderModel(providerName: string, modelId: string)
   // xAI /models advertises both the dated deployment and this floating alias.
   // Keep only grok-4.20-multi-agent-0309; the alias is the same server-side id.
   if (providerName === "xai" && modelId === "grok-4.20-multi-agent-beta-latest") return false;
+  // grok-4.7-build-fast is grok-4.7 on a faster serving lane; it is reached through grok-4.7's Fast
+  // selection on OAuth (xai-fast-model.ts), so the lane id is not published as a second model.
+  if (providerName === "xai" && XAI_OAUTH_FAST_VARIANT_IDS.has(modelId)) return false;
   return true;
 }
 
@@ -225,6 +230,7 @@ export function mergeConfiguredModelsIntoLiveCatalog(opts: {
   seedVertexDefault?: boolean;
   retainComboTargets?: boolean;
   metadataModelIdCaseFold?: boolean;
+  metadataConfigDir?: string;
 }): { models: CatalogModel[]; droppedConfiguredIds: string[] } {
   const {
     name,
@@ -235,6 +241,7 @@ export function mergeConfiguredModelsIntoLiveCatalog(opts: {
     seedVertexDefault,
     retainComboTargets = true,
     metadataModelIdCaseFold,
+    metadataConfigDir,
   } = opts;
   const out = [...opts.models];
   const present = new Set(out.map(model => model.id));
@@ -243,7 +250,7 @@ export function mergeConfiguredModelsIntoLiveCatalog(opts: {
     if (present.has(candidate.id)) continue;
     const dated = out.find(live => isDatedVariantId(live.id, candidate.id));
     if (dated) {
-      out.push(applyProviderConfigHints(name, prov, { ...dated, id: candidate.id }, contextCap, metadataModelIdCaseFold));
+      out.push(applyProviderConfigHints(name, prov, { ...dated, id: candidate.id }, contextCap, metadataModelIdCaseFold, undefined, metadataConfigDir));
       present.add(candidate.id);
       continue;
     }
@@ -263,7 +270,7 @@ export function mergeConfiguredModelsIntoLiveCatalog(opts: {
 
 export function filterCatalogVisibleModels(
   models: CatalogModel[],
-  config: Pick<OcxConfig, "disabledModels" | "providers">,
+  config: Pick<OcxConfig, "disabledModels" | "providers" | "modelDiscovery">,
 ): CatalogModel[] {
   const disabled = new Set(config.disabledModels ?? []);
   const allowByProvider = new Map<string, Set<string>>();
@@ -285,12 +292,14 @@ export function filterCatalogVisibleModels(
     // Two catalog stages with different equivalence relations is the exact bug class
     // this change exists to remove.
     if (Array.isArray(sel) && sel.length > 0) {
-      allowByProvider.set(name, new Set(sel.map(model => slugEquivalenceKey(routedSlug(name, model)))));
+      allowByProvider.set(name, new Set(projectAntigravitySelectedModels(name, sel, models)
+        .map(model => slugEquivalenceKey(routedSlug(name, model)))));
     }
   }
-  return models.filter(m => {
+  return collapseAntigravityPublicModels(models).filter(m => {
     if (initialModelSelectionPending(config.providers[m.provider])) return false;
     if (config.providers[m.provider]?.disabled === true) return false;
+    if (antigravityFamilyDisabled(config, m, models)) return false;
     const nativeAlias = m.provider === COMBO_NAMESPACE && m.nativeAlias === true;
     // disabledModels may be stored raw (canonical) or encoded (legacy UI writes).
     for (const stored of disabled) {

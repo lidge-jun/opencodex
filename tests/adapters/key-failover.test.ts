@@ -36,6 +36,7 @@ import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../../src/t
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 let home: string;
+const previousHome = process.env.OPENCODEX_HOME;
 
 function makeConfig(provider: Partial<OcxProviderConfig>): OcxConfig {
   const config = {
@@ -68,7 +69,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  delete process.env.OPENCODEX_HOME;
+  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = previousHome;
   removeTreeWithRetry(home);
   clearKeyCooldowns();
 });

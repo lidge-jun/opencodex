@@ -8,6 +8,7 @@ This file applies to `gui/` and inherits the repository-wide rules in `/AGENTS.m
 - `gui/dist/` is generated packaged output. Do not edit it by hand.
 - Use the existing component, state, routing, styling, and data-access patterns before introducing a new abstraction.
 - Keep dashboard behavior aligned with the management API and provider configuration model.
+- `gui/design-system/` is the token and component contract for `src/styles.css` and `src/ui.tsx`; read it before adding a visual value or a shared component, and update it in the same change when a token moves.
 
 ## Text and i18n
 

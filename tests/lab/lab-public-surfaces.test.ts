@@ -21,10 +21,12 @@ import { ManagementRequest } from "../helpers/management-auth";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const HOMES: string[] = [];
+const previousHome = process.env.OPENCODEX_HOME;
 
 afterEach(() => {
+  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = previousHome;
   for (const home of HOMES.splice(0)) removeTreeWithRetry(home);
-  delete process.env.OPENCODEX_HOME;
 });
 
 function tempHome(): string {

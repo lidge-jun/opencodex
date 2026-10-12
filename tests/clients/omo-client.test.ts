@@ -43,14 +43,15 @@ describe("omo client config", () => {
    * Prime and Aside reuse Pi's builder with the session-affinity flag left at
    * its default, because nobody has verified that their engines read it. omo's
    * engine WAS verified: senpi's compiled validator accepts `compat` with
-   * `sendSessionAffinityHeaders`, so omo opts in and the generated provider is
+   * `sendSessionAffinityHeaders`, and senpi documents `supportsDeveloperRole`
+   * in the same block (#5664), so omo opts in and the generated provider is
    * byte-identical to Pi's.
    */
   test("is Pi's document including the session-affinity opt-in", () => {
     const omo = buildClientConfig("omo", context()) as PiGeneratedConfig;
     const pi = buildClientConfig("pi", context()) as PiGeneratedConfig;
     expect(omo).toEqual(pi);
-    expect(omo.providers[OPENCODE_PROVIDER_ID]!.compat).toEqual({ sendSessionAffinityHeaders: true });
+    expect(omo.providers[OPENCODE_PROVIDER_ID]!.compat).toEqual({ sendSessionAffinityHeaders: true, supportsDeveloperRole: false });
   });
 
   /**

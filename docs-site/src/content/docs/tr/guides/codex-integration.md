@@ -25,7 +25,7 @@ ve bu sağlayıcıyı opencodex'e yönlendirir:
 ```toml
 # kök anahtarlar, ilk tablodan önce
 model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
-# Auto-injected by opencodex
+# Auto-injected by opencodex (undo: ocx restore)
 openai_base_url = "http://127.0.0.1:10100/v1"
 
 # yalnızca fastMode ayarlandığında; ayarlanmadığında [features] tablosu eklenmez
@@ -134,7 +134,7 @@ model_provider = "opencodex"
 model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
 
 # dosyanın sonuna eklenir
-# Auto-injected by opencodex
+# Auto-injected by opencodex (undo: ocx restore)
 [model_providers.opencodex]
 name = "OpenCodex Proxy"
 base_url = "http://your-host:10100/v1"
@@ -170,8 +170,8 @@ $CODEX_HOME/opencodex-catalog.json
 $CODEX_HOME/models_cache.json
 ```
 
-WSL üzerinde, `CODEX_HOME` ayarlanmamışsa ve Linux `~/.codex/config.toml` mevcut
-değilse, opencodex `/mnt/c/Users/*/.codex/config.toml` konumunda tek bir Windows
+WSL üzerinde, `CODEX_HOME` ayarlanmamışsa ve Linux `~/.codex` dizini mevcut
+değilse ya da hiçbir Codex durumu (`config.toml`, `auth.json`, `sessions`, `history.jsonl`) içermiyorsa, opencodex `/mnt/c/Users/*/.codex/config.toml` konumunda tek bir Windows
 Codex Desktop evini de kontrol eder. Tam olarak bir aday mevcut olduğunda bu
 dizini kullanır, böylece WSL app-server modu ve Windows Codex Desktop aynı
 yapılandırma ve kimlik doğrulama dosyalarını paylaşır. Bu algılamayı geçersiz
@@ -420,7 +420,7 @@ yeniden başlatma ipucunu yazdırır; `ocx doctor` yeniden başlatma güvenliği
 
 Katalog senkronizasyonu seçilen alt ajan modellerini Codex için kullanılabilir
 hale getirir; seçici sıralaması için [Codex App model
-seçicisi](/tr/guides/codex-app-models/#subagent-selection) ve v1/base/v2
+seçicisi](/tr/guides/codex-app-models/#alt-ajan-seçimi) ve v1/base/v2
 delegasyonu ve geri dönüş davranışı için [Alt Ajan
 Arayüzü](/tr/guides/sub-agent-surface/) sayfasına bakın.
 
@@ -431,6 +431,8 @@ Hesap ekleme veya yeniden kimlik doğrulama, normalde kaydetmeden önce `respons
 Yeni OAuth belirteciyle yapılan kota sorgusu 5 saatlik, haftalık veya aylık kotanın tükendiğini doğrularsa hesap model çağrısı olmadan kaydedilir ve **Doğrulama bekleniyor** gösterilir. Yeniden başlatma veya belirteç yenileme yönlendirmeyi açmaz. Kota geri geldiğinde kotaları yenileyin: kullanılabilir kapasite gösteren eksiksiz güncel veri küçük bir doğrulama isteğine izin verir. Yalnızca tamamlanan yanıt hesabı etkinleştirir. Hatalarda kısıtlama korunur. Pasif sorgulama bu isteği göndermez. İlk kayıtta bilinmeyen kota normal doğrulamayı gerektirir.
 
 `ocx account refresh openai` ve `ocx account list openai --quota --refresh` yalnızca kullanımı okur. Model doğrulaması kota tüketir ve insanın pano oturumunu gerektirir: kota yenilendikten sonra `ocx gui` açıp **Refresh quotas** düğmesine tıklayın. Grafik arayüzü olmayan bir sunucunun panosuna da tarayıcınızdan erişin; yalnızca yönetici belirteci doğrulama yetkisi vermez. Duraklatılmış hesap doğrulanabilir, ancak devam ettirilmez veya seçilmez. Model yetkilendirme hataları başarılı doğrulama veya yeniden girişe kadar görünür kalır.
+
+**Codex Set → Multi-auth** bölümünde **Codex Auth** başlığındaki **Codex kredileri** anahtarını açarak ana hesap ve havuz hesaplarının son gözlenen kredilerini Week satırının hemen altında görebilirsiniz. Varsayılan olarak kapalıdır ve `showCodexCredits` olarak kaydedilir. Bakiye yerel sayı biçiminde gösterilir; bildirildiğinde sınırsız kullanım veya aşım sınırı uyarısı görünür. Toplam kredi sınırı verilmediği için çubuk yüzdeyi değil kullanılabilirliği gösterir. Anahtar yalnızca görünümü değiştirir; yeni giriş kendi gözlemini bekler.
 
 Arka plan doğrulaması ayrı ve varsayılan olarak kapalıdır. Token Guardian, `openai` için `proactive` yenileme ilkesi ve `tokenGuardian.codexWarmupEnabled` gerektirir; kayıt doğrulaması bekleyen hesapları atlar.
 
@@ -463,14 +465,14 @@ ocx restore    # durdurmadan geri yükleyin  (takma ad: ocx eject)
 ocx restore back # düz Codex'i çalışan proxy'ye yeniden yönlendirin
 ```
 
-opencodex yönetilen bir [arka plan servisi](/tr/reference/cli/#ocx-service)
+opencodex yönetilen bir [arka plan servisi](/tr/reference/cli/lifecycle/#ocx-service-installrepairrestartstartstopstatusuninstallremove)
 olarak çalıştığında `OCX_SERVICE=1` ayarlar, böylece servis odaklı bir yeniden
 başlatma Codex yapılandırmasını **bozmaz** — yalnızca açık bir `ocx stop` / `ocx
 service stop` yerel Codex'i geri yükler.
 
 ## Sayfalanmış geçmiş için güvenlik reddi
 
-Etkilenen geçmiş deposu sayfalamayı destekliyorsa sağlayıcı değişimi `history_paginated_requires_native_writer` döndürebilir; legacy satırlar da buna dahildir. Bu neden artık Codex yapılandırmasını, başvuru profilini veya model kataloğunu reddetmez. `ocx sync` ve `ocx start` bu dosyaları yazmaya ve `model_catalog_json` yolunu ayarlamaya devam eder; böylece Codex model seçicisi OpenCodex üzerinden yönlendirilen her modeli göstermeyi sürdürür. Konuşma geçmişinin yeniden etiketlenmesini durduran yalnızca bu nedendir, çünkü sayfalanmış geçmiş sıra numaralarını Codex’in kendi yerel yazıcısı atar ve yeniden denemek bunu değiştirmez. Okunamayan bir durum veritabanı, kimliği değişmiş bir geçmiş veya çalıştırılamayan bir ön kontrol gibi diğer geçmiş ön kontrol nedenleri, daha sonra başarılı olabilecekleri için hâlâ tüm değişimi reddeder ve geri alır. Bu durumda OpenCodex sayfalanmış geçmiş dosyalarını veya iş parçacığı satırlarını değiştirmez. Mevcut konuşmalar zaten etiketlendikleri sağlayıcıda kalır ve taşınmaz; yeni konuşmalar proxy üzerinden normal şekilde yönlendirilir. Yeniden etiketleme durduğunda, ev dizininde zaten bulunan bir `[model_providers.opencodex]` tablosu kaldırılmaz, kök-override (loopback) biçimde bile tutulur; böylece satırları `opencodex` olarak etiketlenmiş konuşmalar hâlâ var olan bir sağlayıcı kimliğini korur. CLI şunu yazdırır: `Codex resume history: left to Codex's native writer (history_paginated_requires_native_writer)`. `ocx restore` ve Codex yapılandırmasının kaldırılması `history_paginated_requires_native_writer` nedeniyle hâlâ reddedilir. İş parçacığı satırları hâlâ ona başvuruyken `[model_providers.opencodex]` tanımını kaldırmak o konuşmaları çözülemez yapar ve geri yükleme yolu uyumluluk sağlayıcı tablosunu tutamaz. Zaten sayfalanmış bir ev dizini şu anda ürün üzerinden kaldırılamaz; bu amaçlanan davranış değil, bilinen açık iştir.
+Etkilenen geçmiş deposu sayfalamayı destekliyorsa sağlayıcı değişimi `history_paginated_requires_native_writer` döndürebilir; legacy satırlar da buna dahildir. Bu neden artık Codex yapılandırmasını, başvuru profilini veya model kataloğunu reddetmez. `ocx sync` ve `ocx start` bu dosyaları yazmaya ve `model_catalog_json` yolunu ayarlamaya devam eder; böylece Codex model seçicisi OpenCodex üzerinden yönlendirilen her modeli göstermeyi sürdürür. Konuşma geçmişinin yeniden etiketlenmesini durduran yalnızca bu nedendir, çünkü sayfalanmış geçmiş sıra numaralarını Codex’in kendi yerel yazıcısı atar ve yeniden denemek bunu değiştirmez. Okunamayan bir durum veritabanı, kimliği değişmiş bir geçmiş veya çalıştırılamayan bir ön kontrol gibi diğer geçmiş ön kontrol nedenleri, daha sonra başarılı olabilecekleri için hâlâ tüm değişimi reddeder ve geri alır. Bu durumda OpenCodex sayfalanmış geçmiş dosyalarını veya iş parçacığı satırlarını değiştirmez. Mevcut konuşmalar zaten etiketlendikleri sağlayıcıda kalır ve taşınmaz; yeni konuşmalar proxy üzerinden normal şekilde yönlendirilir. Yeniden etiketleme durduğunda, ev dizininde zaten bulunan bir `[model_providers.opencodex]` tablosu kaldırılmaz, kök-override (loopback) biçimde bile tutulur; böylece satırları `opencodex` olarak etiketlenmiş konuşmalar hâlâ var olan bir sağlayıcı kimliğini korur. CLI şunu yazdırır: `Codex resume history: left to Codex's native writer (history_paginated_requires_native_writer)`. `ocx restore`, `ocx stop` ve `ocx uninstall` artık `history_paginated_requires_native_writer` nedeniyle reddetmez. OpenCodex'in yazdığı tüm kök yönlendirme anahtarlarını kaldırır ve `[model_providers.opencodex]` tanımını diskte bırakır; böylece satırları hâlâ o sağlayıcıyı adlandıran konuşmalar çözülmeye devam ederken düz `codex` proxy'yi göstermeyi bırakır. Sonuç, bırakılan satırları adlandıran kısmi bir geri yükleme olarak raporlanır; `ocx restore --remove-codex-provider-table` onları da kaldırır ve ardından o konuşmalar açılmaz. Ayrıca, `openai` etiketli konuşmaları Codex'in zaten sayfaladığı bir ev dizininde entegrasyonu sağlayıcı tablosu biçiminde açmak eskiden `history_paginated_openai_requires_native_writer` ile tümüyle reddediliyordu: hiçbir şey yazılmıyor ve entegrasyon devre dışı kalıyordu. OpenCodex bu geçişi artık yönetilen kök `openai_base_url` geçersiz kılmasını `[model_providers.opencodex]` tablosunun yanında tutarak tamamlar. Codex bu geçersiz kılmayı yerleşik `openai` sağlayıcısıyla birleştirdiği için o konuşmalar yeniden etiketlenmeden proxy'ye ulaşmayı sürdürür ve hiçbir geçmiş baytı veya iş parçacığı satırı değişmez. Yalnızca `x-opencodex-api-key` kabul başlığını gerektiren yönlendirme biçimi hâlâ reddeder, çünkü Codex'in yerleşik sağlayıcısı bu başlığı taşıyamaz; mesajı bunu çözen iki ayarı adlandırır: geçersiz kılmanın korunabilmesi için Codex'i loopback dinleyicisi üzerinden yönlendirin ya da `syncResumeHistory` değerini `false` yaparak o konuşmaların Codex'in kendi OpenAI uç noktasına gitmesini kabul edin.
 
 Kök URL geçersiz kılma biçimine dönülürken OpenCodex, geçmiş ön kontrolü başarılı olsa bile yapılandırmayı kaydetmeden önce mevcut `[model_providers.opencodex]` tanımını korur. Böylece Codex, kayıttan sonra veya arka plan geçmiş işlemi başlarken geçmiş biçimini değiştirirse eski `opencodex` konuşmaları sağlayıcılarını bulmaya devam eder. Yeni konuşmalar seçili kök sağlayıcıyı kullanır; açıkça istenen geri yükleme, mevcut ayrı kaldırma kontrollerini korur.
 

@@ -116,6 +116,22 @@ describe("buildApiAccessEndpoints", () => {
     expect(buildApiAccessEndpoints({ claudeCode: { enabled: false } }).claudeCodeEnabled).toBe(false);
   });
 
+  test("reports every API surface with the source that decided it", () => {
+    expect(buildApiAccessEndpoints({}).surfaces).toEqual({
+      responses: { enabled: true, source: "fixed" },
+      chat: { enabled: true, source: "fixed" },
+      messages: { enabled: true, source: "claude-code-legacy" },
+    });
+    // An explicit surface value wins over the Claude integration, and the back-compat flag
+    // follows the resolved surface so an older dashboard shows the endpoint that is served.
+    const open = buildApiAccessEndpoints({ apiSurfaces: { messages: { enabled: true } }, claudeCode: { enabled: false } });
+    expect(open.surfaces.messages).toEqual({ enabled: true, source: "api-surfaces" });
+    expect(open.claudeCodeEnabled).toBe(true);
+    const invalid = buildApiAccessEndpoints({ apiSurfaces: { messages: { enabled: "yes" } } } as never);
+    expect(invalid.surfaces.messages).toEqual({ enabled: false, source: "invalid" });
+    expect(invalid.claudeCodeEnabled).toBe(false);
+  });
+
   test("audio metadata derives TLS and IPv6 URLs without claiming connectivity", () => {
     const result = buildApiAccessEndpoints({ hostname: "::", port: 10100 }, { requestOrigin: "https://[2001:db8::1]:8443" });
     expect(result.audio).toEqual({

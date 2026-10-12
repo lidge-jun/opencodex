@@ -58,10 +58,13 @@ async function rowInset(): Promise<number> {
   return cardRow;
 }
 
-test("the warning box is inset by the same amount as the card's padded rows", async () => {
+test("the conditions notice is inset by the same amount as the card's padded rows", async () => {
   const css = withoutComments(await Bun.file(cssUrl).text());
   const notice = ruleBody(css, ".anthropic-pool-card__notice");
   expect(horizontal(notice, "margin")).toBe(await rowInset());
+  // Helper text, not a tinted alert box: no border or background of its own.
+  expect(notice).not.toContain("border");
+  expect(notice).not.toContain("background");
 });
 
 test("the threshold field is inset by the same amount as the card's padded rows", async () => {

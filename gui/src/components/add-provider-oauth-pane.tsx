@@ -1,6 +1,7 @@
 import { IconLock } from "../icons";
 import { useT } from "../i18n/shared";
 import { LoginHint } from "./login-url-block";
+import type { BrowserLaunch } from "../oauth-browser-launch";
 import { OpenBrowserPrefToggle } from "./open-browser-pref-toggle";
 import type { CatalogPreset } from "./provider-catalog/provider-presets";
 
@@ -13,6 +14,7 @@ export function AddProviderOAuthPane({
   oauthUrl,
   oauthDeviceCode,
   oauthInstructions,
+  oauthBrowserLaunch,
   manualCode,
   manualCodeBusy,
   manualCodeMsg,
@@ -32,6 +34,7 @@ export function AddProviderOAuthPane({
   oauthUrl: string;
   oauthDeviceCode?: string;
   oauthInstructions?: string;
+  oauthBrowserLaunch?: BrowserLaunch;
   manualCode: string;
   manualCodeBusy: boolean;
   manualCodeMsg: string;
@@ -68,7 +71,7 @@ export function AddProviderOAuthPane({
       )}
       {oauthBusy && (
         <LoginHint
-          hint={{ url: oauthUrl, deviceCode: oauthDeviceCode, instructions: oauthInstructions }}
+          hint={{ url: oauthUrl, deviceCode: oauthDeviceCode, instructions: oauthInstructions, browserLaunch: oauthBrowserLaunch }}
           paste={{
             value: manualCode,
             busy: manualCodeBusy,

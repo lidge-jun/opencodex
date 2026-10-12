@@ -12,6 +12,7 @@ on:
       - ".github/scripts/pr-quality-messages.cjs"
       - ".github/scripts/pr-quality-messages.test.cjs"
       - ".github/scripts/pr-quality-state.cjs"
+      - ".github/scripts/pr-readiness-reattest.cjs"
       - ".github/scripts/pr-quality-state.test.cjs"
       - ".github/scripts/pr-labeler.cjs"
       - ".github/scripts/pr-labeler.test.cjs"
@@ -35,6 +36,8 @@ on:
       - ".github/workflows/issue-quality-tests.yml"
       - ".github/workflows/pr-hygiene.yml"
   push:
+    # Release lines only; review is covered by the pull_request trigger above.
+    branches: [main, preview]
     paths:
       - ".github/ISSUE_TEMPLATE/**"
       - ".github/scripts/issue-quality.cjs"
@@ -45,6 +48,7 @@ on:
       - ".github/scripts/pr-quality-messages.cjs"
       - ".github/scripts/pr-quality-messages.test.cjs"
       - ".github/scripts/pr-quality-state.cjs"
+      - ".github/scripts/pr-readiness-reattest.cjs"
       - ".github/scripts/pr-quality-state.test.cjs"
       - ".github/scripts/pr-labeler.cjs"
       - ".github/scripts/pr-labeler.test.cjs"

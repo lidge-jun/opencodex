@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { claimOwnedServiceHome } from "../helpers/owned-service-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
+import { OCX_ROUTING_MARKER_LINE } from "../../src/codex/injected-marker";
 
 /**
  * Regression: `ocx start` + Ctrl-C must NOT orphan the Bun proxy.
@@ -107,6 +108,11 @@ describe.skipIf(!runnable)("ocx launcher graceful shutdown", () => {
         // no-ops when no config.toml exists) — this lets us prove the config is RESTORED.
         const codexConfig = join(home, "config.toml");
         writeFileSync(codexConfig, 'model = "gpt-5.1"\n');
+        // Pin the configured port to this test's own port. `ocx start` probes the CONFIGURED
+        // port for a live owner even with no state files, and a fresh home defaults to 10100.
+        // On a developer machine running ocx there, the child found that proxy, took the sibling
+        // path and by design never injected Codex config, so this test could not pass locally.
+        writeFileSync(join(home, "config.json"), JSON.stringify({ port }));
 
         // stdout/stderr are CAPTURED, not discarded.
         //
@@ -125,6 +131,10 @@ describe.skipIf(!runnable)("ocx launcher graceful shutdown", () => {
             USERPROFILE: identity.userProfile,
             OPENCODEX_HOME: home,
             CODEX_HOME: home,
+            // Inherited real state must not make the child a sibling of the host's proxy either
+            // (same pinning as tests/cli/sibling-home-client-sync.test.ts).
+            GROK_HOME: join(home, "grok"),
+            OCX_OWNER_REGISTRY_DIR: join(identity.homeDir, ".opencodex", "ocx-homes"),
             ...identity.serviceManagerEnv,
           },
         });
@@ -141,18 +151,24 @@ describe.skipIf(!runnable)("ocx launcher graceful shutdown", () => {
         child.stderr?.on("data", chunk => { output += String(chunk); });
 
         // 1. Proxy comes up + injected the Codex config (Design B root override on loopback).
-        const up = await waitUntil(() => healthy(port), STARTUP_BUDGET_MS);
+        // The health listener may answer before the launcher completes injection.
+        let healthSeen = false;
+        const up = await waitUntil(async () => {
+          if (!(await healthy(port))) return false;
+          healthSeen = true;
+          return readFileSync(codexConfig, "utf8").includes(OCX_ROUTING_MARKER_LINE);
+        }, STARTUP_BUDGET_MS);
         if (!up) {
           // Name what actually went wrong instead of asserting a bare boolean.
           const died = exited ? ` The launcher EXITED (code ${exitCode}, signal ${exitSignal}).` : " The launcher was still running.";
           throw new Error(
-            `The proxy never answered /healthz on port ${port} within ${STARTUP_BUDGET_MS}ms.${died}`
+            `The proxy ${healthSeen ? "answered /healthz but did not inject Codex config" : "never answered /healthz"} on port ${port} within ${STARTUP_BUDGET_MS}ms.${died}`
             + ` Launcher output:\n${output.trim() || "(none)"}`,
           );
         }
         expect(existsSync(join(home, "ocx.pid"))).toBe(true);
         const injected = readFileSync(codexConfig, "utf8");
-        expect(injected).toContain("# Auto-injected by opencodex");
+        expect(injected).toContain(OCX_ROUTING_MARKER_LINE);
         expect(injected).toContain(`openai_base_url = "http://127.0.0.1:${port}/v1"`);
         expect(injected).not.toContain("model_providers.opencodex");
 
