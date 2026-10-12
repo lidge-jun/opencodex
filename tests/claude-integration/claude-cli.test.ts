@@ -225,6 +225,9 @@ describe("ocx claude native fallback", () => {
     expect(isProxyOnlyModelId("ocx-claude2-openrouter--a~sb[1m]")).toBe(true);
     expect(isProxyOnlyModelId("arn:aws:bedrock:region:acct:inference-profile/us.anthropic.model", ["mock"])).toBe(false);
     expect(isProxyOnlyModelId("claude-opus-5")).toBe(false);
+    expect(isProxyOnlyModelId("claude-fable-5-p000[1m]")).toBe(true);
+    expect(isProxyOnlyModelId("claude-opus-4-8-p000")).toBe(true);
+    expect(isProxyOnlyModelId("claude-fable-5")).toBe(false);
   });
 
   test("overrides a persisted proxy model only with a configured native model", () => {

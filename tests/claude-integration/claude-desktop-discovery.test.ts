@@ -177,7 +177,7 @@ describe("Desktop snapshot through authenticated model discovery", () => {
   test("snapshot installs Desktop-safe aliases, legacy decoders, and ordinary discovery shapes", async () => {
     launch();
     const legacyAlias = "claude-opus-4-8-20260304";
-    const wireAlias = "claude-opus-4-8-p01q";
+    const wireAlias = "claude-fable-5-p01q";
     const snapshot = await request("?ids=desktop&format=desktop-config");
     expect(snapshot.status).toBe(200);
     expect(snapshot.headers.get("cache-control")).toBe("no-store");
@@ -186,6 +186,7 @@ describe("Desktop snapshot through authenticated model discovery", () => {
     expect(body.models.find(model => model.name === wireAlias)?.anthropicFamilyTier).toBe("fable");
     expect(resolveDesktop3pAlias(wireAlias)).toBe("test/model-155");
     expect(resolveDesktop3pAlias(legacyAlias)).toBe("test/model-155");
+    expect(resolveDesktop3pAlias("claude-opus-4-8-p01q")).toBe("test/model-155");
     const anthropic = await request("?flavor=anthropic&ids=desktop");
     expect(anthropic.status).toBe(200);
     const anthropicBody = await anthropic.json() as { data: Array<{ id: string }>; version?: number };

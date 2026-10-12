@@ -225,6 +225,16 @@ whole app to OpenCodex as its inference gateway. Chat runs locally through OpenC
 claude.ai-only features are unavailable. The legacy `--static` / `--hybrid` /
 `--discovery-only` flags also select gateway.
 
+Gateway profiles use distinct model aliases with a `claude-fable-5-` prefix so
+Claude Desktop 2.31226 can offer its effort control without treating every routed
+model as the same active model. These aliases do not change the upstream model or
+your displayed labels and family defaults. Previous aliases remain decodable for
+existing sessions. Reapply the gateway profile and fully quit/reopen Desktop to
+load the new list. The static picker uses Desktop's fallback effort menu; it does
+not advertise an authoritative per-provider ladder, and the selected provider's
+normal effort normalization still applies. This remains a client-version-specific
+compatibility mechanism.
+
 ### First-party (opt-in)
 
 :::caution[Account risk]

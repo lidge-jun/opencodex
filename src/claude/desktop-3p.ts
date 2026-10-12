@@ -20,6 +20,7 @@ import {
   reconcileDesktopProfile,
   renderDesktopProfile,
   validDateAlias,
+  legacyDesktopProfileWireAlias,
   type DesktopProfileModel,
 } from "./desktop-profile";
 import { nativeOpenAiContextWindow, type NativeContextLimitsInput } from "../codex/catalog";
@@ -223,7 +224,7 @@ function collectDesktop3pModels(
         ...(model.supports1m ? { supports1m: true, prefer1m: true } : {}),
       });
     }
-    // Hash aliases from both pre-profile generations are compatibility-only and can
+    // Previous profile IDs and both hash generations are compatibility-only and can
     // collide. Bind them in stable route order so changing a family default or
     // rendered ordering can never silently rebind an old Desktop id.
     for (const model of [...rendered].sort((a, b) => a.route.localeCompare(b.route))) {
@@ -231,7 +232,8 @@ function collectDesktop3pModels(
       const providerEnd = model.route.indexOf("/");
       const provider = model.route.slice(0, providerEnd);
       const id = model.route.slice(providerEnd + 1);
-      for (const legacy of [desktop3pAlias(provider, id), legacyDesktop3pAlias(provider, id)]) {
+      const storedAlias = reconciled.assignments[model.route]!.alias;
+      for (const legacy of [legacyDesktopProfileWireAlias(storedAlias), desktop3pAlias(provider, id), legacyDesktop3pAlias(provider, id)]) {
         if (realAnthropicIds.has(legacy)) {
           console.warn(`[opencodex] Claude Desktop legacy alias ${legacy} for ${model.route} conflicts with a real Anthropic model; ignoring the alias`);
           continue;
@@ -369,7 +371,7 @@ export function isUnresolvedDesktop3pAlias(id: string): boolean {
   if (isKnownDesktop3pModelId(base)) return false;
   return validDateAlias(base)
     || /^claude-opus-4-(?:8-)?[a-z][a-z0-9]{2}$/.test(base)
-    || /^claude-opus-4-8-p[0-9a-z]{3}$/.test(base);
+    || /^claude-(?:opus-4-8|fable-5)-p[0-9a-z]{3}$/.test(base);
 }
 
 /** Alias selected by the installed profile registry, falling back to the legacy hash shape. */

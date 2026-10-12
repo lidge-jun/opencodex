@@ -386,16 +386,22 @@ occupied" once a catalog exceeded 365 routes, because stale assignments are reta
 the set only grows. 2026 is still allocated first, so existing assignments keep their slots, and
 2027-2035 are reached only after it fills. Years before 2026 stay rejected: dated ids such as
 `claude-opus-4-8-20250201` are real Anthropic snapshot ids and the inbound decoder relies on that
-distinction. At render time each stored slot becomes a unique `p`-prefixed four-character wire
-code, disjoint from the historical three-character hash namespace. Claude Desktop strips terminal
+distinction. At render time each stored slot becomes a unique `claude-fable-5-pXXX` wire
+id, disjoint from the historical three-character hash namespace. Desktop 2.31226 recognizes
+the fable prefix in its effort fallback, whereas a suffixed Opus id misses its canonical table
+(#7006). This is client compatibility, not authoritative per-provider effort metadata.
+Claude Desktop strips terminal
 dates when comparing active-session model identity, so writing
 the persisted date slots directly would collapse every managed route to `claude-opus-4-8` and
-suppress `set_model` between them (#3782). The registry accepts both forms during migration. If an
+suppress `set_model` between them (#3782). The registry accepts dates and previous
+`claude-opus-4-8-pXXX` wire IDs during migration. If an
 active real Anthropic id claims a persisted date slot, reconciliation reallocates the non-Anthropic
 route before rendering. If any synthetic or compatibility alias matches an active real Anthropic id,
 the conflicting routed row or compatibility binding is omitted with a warning, and the real
 Anthropic identity remains unclaimed; a profile alias can never overwrite native routing.
 `src/claude/desktop-profile.ts` owns the slot range and wire conversion.
+The native Claude CLI launcher in `src/cli/claude.ts` classifies both profile wire
+namespaces as proxy-only, so it clears these IDs before launching outside the proxy.
 
 Persisted date-shaped Desktop IDs can overlap genuine native model IDs. When available discovery and
 mapping evidence cannot resolve one, Messages and count-tokens return HTTP 503 with the fixed

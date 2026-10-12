@@ -140,7 +140,7 @@ describe("Claude Desktop profile", () => {
     const full = reconcileDesktopProfile(emptyDesktopProfile(), encoded);
     const rendered = renderDesktopProfile(full, encoded);
     expect(new Set(rendered.map(model => model.name)).size).toBe(TOTAL_ALIAS_SLOTS);
-    expect(rendered.every(model => /^claude-opus-4-8-p[0-9a-z]{3}$/.test(model.name))).toBe(true);
+    expect(rendered.every(model => /^claude-fable-5-p[0-9a-z]{3}$/.test(model.name))).toBe(true);
     const snapshot = structuredClone(full);
     expect(Object.keys(full.assignments)).toHaveLength(TOTAL_ALIAS_SLOTS);
     expect(() => reconcileDesktopProfile(full, [...encoded, { route: "test/overflow", label: "Overflow" }])).toThrow("encoded date slots");
