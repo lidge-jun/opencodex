@@ -33,7 +33,6 @@ const DECLARATION_LEAD = "exec tool declaration:";
 
 const TOOL_HEADING = /^### `([A-Za-z_$][\w$]*)`(?: \(`([^`]+)`\))?$/;
 const DECLARATION_FENCE = "```ts";
-const DECLARATION_CLOSE = "```";
 // CommonMark fences: up to three spaces of indentation, three or more backticks or tildes. A fence
 // closes only on the same character, at least as long, with nothing but whitespace after it.
 const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})(.*)$/;
@@ -64,16 +63,29 @@ function isCodeModeExec(tool: OcxTool): boolean {
 /** A nested tool rendered as a heading plus its own declaration; `raw` is the pre-normalization name. */
 interface RenderedTool { name: string; raw: string }
 
+/** The declaration fence codex-rs opens: three backticks and "ts". */
+const DECLARATION_FENCE_SHAPE: Fence = { char: "`", length: 3 };
+
+/** A complete declaration as render_code_mode_sample emits it, single- or multi-line. */
+function isCompleteDeclaration(body: readonly string[], name: string): boolean {
+  if (body.length === 0 || !body[0]!.startsWith("declare const tools: { " + name + "(")) return false;
+  const text = body.join("\n");
+  return /\): Promise<[\s\S]*>; \};$/.test(text);
+}
+
 /**
- * Nested tools whose top-level heading is followed by the declaration codex-rs renders for the same
- * name. A section ends at its declaration, not at the next heading: tool descriptions (V1 spawn's
- * own guidance, a configured usage hint) carry their own Markdown headings. Lines inside a quoted
- * fence are content and can neither open a section nor declare a tool.
+ * Nested tools whose top-level heading is followed by the complete declaration codex-rs renders for
+ * the same name. A section ends at its own declaration, not at the next heading, because tool and
+ * namespace descriptions (V1 spawn's guidance, a configured usage hint) carry their own Markdown,
+ * including example headings and example declarations. Pending headings form a stack: a
+ * declaration is owned by the innermost pending heading with its name, which is removed together
+ * with anything opened after it; a declaration nobody owns is an example and leaves the stack
+ * alone. Lines inside a quoted fence can neither open a section nor declare a tool.
  */
 function renderedNestedTools(description: string): RenderedTool[] {
   const lines = description.split("\n");
   const rendered: RenderedTool[] = [];
-  let pending: RenderedTool[] = [];
+  const pending: RenderedTool[] = [];
   let fence: Fence | undefined;
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i]!;
@@ -87,14 +99,18 @@ function renderedNestedTools(description: string): RenderedTool[] {
       continue;
     }
     if (line === DECLARATION_LEAD && lines[i + 1] === DECLARATION_FENCE) {
-      const declared = lines[i + 2] ?? "";
       let close = i + 2;
-      while (close < lines.length && lines[close] !== DECLARATION_CLOSE) close += 1;
-      // The innermost pending heading with this name owns the declaration; prose headings that
-      // merely look like tool headings are dropped with the rest of the pending list.
-      const owner = pending.findLast(tool => declared.startsWith("declare const tools: { " + tool.name + "("));
-      if (owner && close < lines.length) rendered.push(owner);
-      pending = [];
+      while (close < lines.length && !closesFence(lines[close]!, DECLARATION_FENCE_SHAPE)) close += 1;
+      if (close >= lines.length) return rendered; // unterminated: nothing after it is structure
+      const body = lines.slice(i + 2, close);
+      let owner = -1;
+      for (let k = pending.length - 1; k >= 0; k -= 1) {
+        if (isCompleteDeclaration(body, pending[k]!.name)) { owner = k; break; }
+      }
+      if (owner >= 0) {
+        rendered.push(pending[owner]!);
+        pending.length = owner;
+      }
       i = close;
       continue;
     }

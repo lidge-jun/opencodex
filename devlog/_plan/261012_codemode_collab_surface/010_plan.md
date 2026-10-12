@@ -57,7 +57,10 @@ comment already states; this change does not make it.
      belongs to the innermost pending heading whose name it declares, and ends that section. Section
      boundaries therefore come from complete declarations, so prose headings in a tool description
      (the V1 spawn guidance's four `### When to delegate…` lines, a configured usage hint's `## Usage`)
-     neither cut a genuine section nor claim its declaration. Identity is classified from the raw
+     neither cut a genuine section nor claim its declaration. Pending headings form a stack: a
+     complete declaration (`…): Promise<…>; };`) is owned by the innermost pending heading with its
+     name, which is removed with anything opened after it; an unowned example declaration leaves the
+     stack alone, and the declaration fence closes by the same CommonMark rule as any other fence. Identity is classified from the raw
      name, because normalization can map a foreign `multi-agent-v1` namespace onto `multi_agent_v1`.
    - Classification: V1 evidence requires `multi_agent_v1__spawn_agent`. Any other
      collaboration-shaped nested name (bare `spawn_agent`, `<ns>__spawn_agent` outside
@@ -118,3 +121,8 @@ AGENTS.md resource exception, recorded in the PR). No live service is touched.
   onto an existing line); boolean fence tracking (now CommonMark-shaped); namespace-heading
   boundaries cut usage-hint headings (now declaration-bounded); raw heading names were discarded
   (now classify identity). Each parser guard has a test that fails when the guard is removed.
+- Code review round 2 (GPT-6.1-Sol high) FAIL: an unowned example declaration cleared every
+  pending heading (now a stack; only the owner and later entries are removed); declaration close used
+  an exact three-backtick match (now the shared fence rule); a truncated first line counted as a
+  declaration (now the complete rendered form). Each fix has a regression that fails on the prior
+  commit.

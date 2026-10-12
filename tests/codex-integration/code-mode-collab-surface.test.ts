@@ -44,6 +44,11 @@ function nested(flatName: string, description = "Tool guidance."): string {
   ].join("\n");
 }
 
+/** A complete single-line declaration block, as a description might quote one. */
+function exampleDeclaration(name: string, close = FENCE): string {
+  return ["exec tool declaration:", FENCE + "ts", "declare const tools: { " + name + "(args: {}): Promise<unknown>; };", close].join("\n");
+}
+
 /** V1 spawn_agent's real description carries its own non-tool ### headings. */
 const SPAWN_DESCRIPTION = [
   "Spawn a sub-agent for a well-scoped task.",
@@ -147,6 +152,18 @@ describe("code mode that renders the V1 tools (#6844)", () => {
     const described = [SPAWN_DESCRIPTION, "### " + TICK + "worker" + TICK, "A role you can request."].join("\n");
     expect(surfaceOf(codeModeTools(execDescription(nested("multi_agent_v1__spawn_agent", described))))).toBe("v1");
   });
+
+  test("an example declaration inside the spawn description leaves the spawn section open", () => {
+    const bare = [SPAWN_DESCRIPTION, exampleDeclaration("worker")].join("\n");
+    expect(surfaceOf(codeModeTools(execDescription(nested("multi_agent_v1__spawn_agent", bare))))).toBe("v1");
+    const headed = [SPAWN_DESCRIPTION, "### " + TICK + "worker" + TICK, exampleDeclaration("worker")].join("\n");
+    expect(surfaceOf(codeModeTools(execDescription(nested("multi_agent_v1__spawn_agent", headed))))).toBe("v1");
+  });
+
+  test("an example declaration closed by a longer fence does not hide the V1 listing", () => {
+    const namespace = "## docs\n" + exampleDeclaration("lookup", FENCE + TICK);
+    expect(surfaceOf(codeModeTools(execDescription(namespace, nested("multi_agent_v1__spawn_agent"))))).toBe("v1");
+  });
 });
 
 describe("code mode without V1 evidence stays null", () => {
@@ -163,6 +180,17 @@ describe("code mode without V1 evidence stays null", () => {
   test("a heading without its own declaration is prose", () => {
     const prose = "### " + TICK + "multi_agent_v1__spawn_agent" + TICK + "\nMentioned in a guide.";
     expect(surfaceOf(codeModeTools(execDescription(prose, ...HELPER_SECTIONS)))).toBeNull();
+  });
+
+  test("a truncated declaration snippet is not a rendered tool", () => {
+    const snippet = [
+      "### " + TICK + "multi_agent_v1__spawn_agent" + TICK,
+      "exec tool declaration:",
+      FENCE + "ts",
+      "declare const tools: { multi_agent_v1__spawn_agent(",
+      FENCE,
+    ].join("\n");
+    expect(surfaceOf(codeModeTools(execDescription(nested("docs__lookup", snippet))))).toBeNull();
   });
 
   test.each([["four backticks", "````"], ["tildes", "~~~"]])("a complete V1 section quoted in a %s fence", (_label, fence) => {
@@ -212,6 +240,16 @@ describe("contradictory signals stay null", () => {
   test("V1 spawn beside another spawn_agent", () => {
     expect(surfaceOf(codeModeTools(execDescription(...V1_SECTIONS, nested("collaboration__spawn_agent"))))).toBeNull();
     expect(surfaceOf(codeModeTools(execDescription(...V1_SECTIONS, nested("server__spawn_agent"))))).toBeNull();
+  });
+
+  test("an example inside a V2 companion's description does not hide the contradiction", () => {
+    const example = ["Send a message.", "### " + TICK + "worker" + TICK, exampleDeclaration("worker")].join("\n");
+    expect(surfaceOf(codeModeTools(execDescription(...V1_SECTIONS, nested("collaboration__send_message", example))))).toBeNull();
+  });
+
+  test("an example closed with trailing whitespace does not swallow the next section", () => {
+    const namespace = "## collaboration\n" + exampleDeclaration("lookup", FENCE + " ");
+    expect(surfaceOf(codeModeTools(execDescription(...V1_SECTIONS, namespace, nested("collaboration__send_message"))))).toBeNull();
   });
 
   test("a direct flat spawn_agent beside the rendered V1 listing", () => {
