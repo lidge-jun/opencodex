@@ -365,6 +365,36 @@ than nudged.
   recorded in [`CREDITS.md`](./CREDITS.md); `missing_coauthor_credit` in
   `.github/scripts/pr-carry-attribution.cjs` is why the list should not grow.
 
+## Push early to protect work
+
+Local-only work is at risk: a reboot can clear temporary worktrees, and hosts or
+disks can fail. A local commit is not a remote backup. Keep safe, publishable
+work on an authorized remote branch at every sensible checkpoint:
+
+- Commit and push at the end of each logical step, before a long test run,
+  handoff, idle period or announced maintenance, and at least hourly during
+  active work. Verify the remote branch points to the intended commit.
+- Use a separate `wip/<agent>/<topic>` branch with no open PR for unfinished
+  work. The current workflows restrict push-triggered jobs to `dev`, `main`
+  and/or `preview`; ordinary `wip/**` branch pushes do not match those filters.
+  Check the branch's workflows and the destination's settings before assuming
+  a push is CI-free. An open PR can trigger checks on every head update.
+- Open the contributor PR in draft only after the implementation and required
+  local validation are review-ready, then complete the existing automated
+  review/readiness process. On an open-PR head, push reviewed, validated rounds
+  rather than interim checkpoints. Keep further WIP on a separate branch until
+  it is ready; this does not waive required checks or review fixes.
+- Checkpoint worktree branches too. `/tmp` and cache worktrees are not durable;
+  neither uncommitted files nor commits on an unpushed branch are protected by
+  another worktree's push.
+- Review the exact staged diff before committing. Never commit secrets,
+  credentials, tokens, raw capture logs, local session state or embargoed
+  security notes, even to a WIP or private branch. This does not authorize
+  publishing private/local-only work; arrange an approved durable private copy
+  instead. Preserve the security scratch and publication boundaries above.
+- After the work merges and its commits are retained remotely, remove only
+  the task's temporary WIP branches; do not delete other contributors' work.
+
 ## Branch policy
 
 - `dev` — the single integration branch and the target for every pull request.
