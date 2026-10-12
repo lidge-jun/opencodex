@@ -348,6 +348,44 @@ test("file identities that differ only beyond 2^53 still count as a replacement"
   } finally { lstat.mockRestore(); opening.mockRestore(); fstat.mockRestore(); }
 });
 
+for (const fault of ["zero inode", "changed status time"] as const) {
+  test(`unverified metadata identity (${fault}) fails before credential access`, () => {
+    const dir = root();
+    const fake = memoryPickerCaStore();
+    ensurePickerCa(dir, { persistent: true, rotation: "startup", store: fake.store });
+    const path = join(filesystem.realpathSync(dir), "claude-picker", "authority.json");
+    const original = readFileSync(path, "utf8");
+    const { lstatSync, fstatSync, openSync } = filesystem;
+    let authorityFd = -1;
+    const lstat = spyOn(filesystem, "lstatSync").mockImplementation(((target: filesystem.PathLike, options?: object) => {
+      const stat = lstatSync(target, options as never);
+      return target === path && fault === "zero inode" ? Object.create(stat, { ino: { value: 0n } }) : stat;
+    }) as typeof lstatSync);
+    const opening = spyOn(filesystem, "openSync").mockImplementation((target, flags, mode) => {
+      const fd = openSync(target, flags, mode);
+      if (target === path) authorityFd = fd;
+      return fd;
+    });
+    const fstat = spyOn(filesystem, "fstatSync").mockImplementation(((fd: number, options?: object) => {
+      const stat = fstatSync(fd, options as never);
+      if (fd !== authorityFd) return stat;
+      const identity = fstatSync(fd, { bigint: true });
+      return fault === "zero inode" ? Object.create(stat, { ino: { value: 0n } })
+        : Object.create(stat, { ctimeNs: { value: identity.ctimeNs + 1n } });
+    }) as typeof fstatSync);
+    let storeCalls = 0;
+    try {
+      expect(() => ensurePickerCa(dir, { persistent: true, rotation: "startup", store: (service, account) => {
+        storeCalls++;
+        return fake.store(service, account);
+      } })).toThrow("picker_ca_metadata_unsafe");
+      expect(storeCalls).toBe(0);
+      expect(fake.writes).toBe(1);
+      expect(readFileSync(path, "utf8")).toBe(original);
+    } finally { lstat.mockRestore(); opening.mockRestore(); fstat.mockRestore(); }
+  });
+}
+
 test("unsafe picker directory or lock cannot reach the credential store", () => {
   for (const pathKind of ["directory", "lock"] as const) {
     const dir = root();
