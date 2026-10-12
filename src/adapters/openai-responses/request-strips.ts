@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { COMPACT_PROMPT, appendCheckpointContinuationNote, compactionItemToText, decodeCompactionSummary, isCompactionItemType } from "../../responses/compaction";
+import { CHECKPOINT_END_MARKER, COMPACT_PROMPT, appendCheckpointContinuationNote, compactionItemToText, decodeCompactionSummary, isCompactionItemType } from "../../responses/compaction";
 import { debugProviderDiagnostic } from "../../lib/debug";
 import { modelInList } from "../../types";
 import { isPlainObject } from "./internal";
@@ -266,7 +266,15 @@ export function scrubOcxCompactionItems(
 
   let changed = false;
   let decodedCheckpoint = false;
-  const input = body.input.map(item => {
+  // Only the most recent decoded checkpoint is the current state; earlier ones are superseded.
+  let lastDecoded = -1;
+  if (addContinuationNote) {
+    body.input.forEach((item, index) => {
+      if (isPlainObject(item) && isCompactionItemType(item.type) && typeof item.encrypted_content === "string"
+        && decodeCompactionSummary(item.encrypted_content) !== null) lastDecoded = index;
+    });
+  }
+  const input = body.input.map((item, index) => {
     if (!isPlainObject(item) || !isCompactionItemType(item.type)) return item;
     const encrypted = typeof item.encrypted_content === "string" ? item.encrypted_content : undefined;
     if (encrypted === undefined) return item;
@@ -280,7 +288,7 @@ export function scrubOcxCompactionItems(
     return {
       type: "message",
       role: "user",
-      content: [{ type: "input_text", text: compactionItemToText(encrypted) }],
+      content: [{ type: "input_text", text: compactionItemToText(encrypted) + (index === lastDecoded ? CHECKPOINT_END_MARKER : "") }],
     };
   });
 

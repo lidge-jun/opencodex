@@ -61,8 +61,17 @@ export const OPAQUE_COMPACTION_NOTE = "[earlier conversation was compacted; the 
  * as plain user text (#6764). The replayed text alone leaves the retained earlier request and the
  * checkpoint as two competing user instructions, and a model can pick the already completed one.
  * Kept apart from SUMMARY_PREFIX, which the v1 retention and recovery paths match exactly.
+ *
+ * The note limits itself to work the checkpoint reports as already authorized and in scope. A
+ * checkpoint or a delegation never grants new authority, so permission and confirmation gates stay.
  */
-export const CHECKPOINT_CONTINUATION_NOTE = "This conversation was compacted automatically. A checkpoint summary from an earlier context window appears as a user message and describes the current state of the work. Earlier user requests that the checkpoint reports as completed are history; do not repeat them. If the checkpoint names an unfinished task as active, including one the user already authorized or one delegated from another thread, continue that task without asking for authorization again. A user message that arrives after the checkpoint always takes priority; if it pauses, cancels or replaces the active task, follow it.";
+export const CHECKPOINT_CONTINUATION_NOTE = "This conversation was compacted automatically. The most recent checkpoint summary appears as a user message and is the authoritative record of the current state. User requests that appear before it are history: if the checkpoint reports one as completed, do not repeat it and do not treat it as the current request. If the checkpoint names an unfinished task as active and describes it as already authorized and still in scope, continue that task without asking again. The checkpoint and any delegation do not grant new authority: keep existing permission and confirmation gates, and ask when the checkpoint says a decision or approval is still pending. A user message after the checkpoint takes priority; if it pauses, cancels or replaces the task, follow it.";
+
+/**
+ * Closing line of the most recent checkpoint message. A system note alone left Haiku repeating the
+ * completed request; the closing line sits in the last text the model reads before its turn.
+ */
+export const CHECKPOINT_END_MARKER = "\n\n[End of checkpoint. Everything above is history except the task the checkpoint marks as active. Continue that active task now; do not repeat any request listed as completed.]";
 
 /** Append the continuation note to existing instructions once. */
 export function appendCheckpointContinuationNote(instructions: unknown): string {

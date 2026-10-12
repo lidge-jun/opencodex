@@ -347,7 +347,7 @@ also degrades to the same opaque note the bridged parser uses, because forwardin
 turn and the item outlives the failure in the client transcript, repeating on every later turn
 including the compaction turn the proxy itself drives. With `store: false`, request sanitization
 strips ids from every input item, including compact-wire items, matching codex-rs
-(`core/src/client.rs:918-925`). Compact-wire items remain exempt from response-side field backfill.
+(`core/src/client.rs:918-925`). Compact-wire items remain exempt from response-side field backfill. A decoded `ocx1:` checkpoint is plain user text next to retained earlier requests that it may report as completed, so a request carrying one also gets the `CHECKPOINT_CONTINUATION_NOTE` (`src/responses/compaction.ts`) in `systemPrompt` on translated routes (`parser.ts`) or `instructions` on passthrough (`scrubOcxCompactionItems`), and `CHECKPOINT_END_MARKER` on the most recent decoded checkpoint only (#6764). A compaction request, an opaque native blob, a bare `context_compaction` marker and a request without a checkpoint get neither. `SUMMARY_PREFIX` is unchanged and still starts the checkpoint text exactly, because the v1 retention and recovery paths match it. The note limits continuation to work the checkpoint reports as already authorized and in scope: a checkpoint or delegation grants no new authority, permission and confirmation gates stay, and a later user message that pauses, cancels or replaces the task wins. Tests pin the wording and the wire construction, not model behavior.
 
 For replayed `encrypted_content` slots whose minting provenance is unavailable after a restart or
 full-history resend, the plaintext-compatibility boundary requires canonical key-independent Fernet

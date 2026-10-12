@@ -7,7 +7,7 @@ import { parseRequest } from "../../src/responses/parser";
 import {
   COMPACT_PROMPT,
   OPAQUE_COMPACTION_NOTE,
-  SUMMARY_PREFIX,
+  SUMMARY_PREFIX, CHECKPOINT_END_MARKER,
   buildCompactV1Output,
   decodeCompactionSummary,
   encodeCompactionSummary,
@@ -305,7 +305,7 @@ describe("parser compaction handling", () => {
     expect(parsed.context.messages).toHaveLength(2);
     const first = parsed.context.messages[0];
     expect(first.role).toBe("user");
-    expect(first.content).toBe(`${SUMMARY_PREFIX}\n\ndid X, next Y`);
+    expect(first.content).toBe(`${SUMMARY_PREFIX}\n\ndid X, next Y${CHECKPOINT_END_MARKER}`);
   });
 
   test("real encrypted compaction item degrades to the opaque note", () => {

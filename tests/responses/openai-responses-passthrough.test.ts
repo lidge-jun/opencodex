@@ -17,7 +17,7 @@ import { handleResponses, sanitizeEncryptedContentInPlace } from "../../src/serv
 import {
   encodeCompactionSummary,
   OPAQUE_COMPACTION_NOTE,
-  SUMMARY_PREFIX,
+  SUMMARY_PREFIX, CHECKPOINT_END_MARKER,
 } from "../../src/responses/compaction";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import type { AdapterEvent, OcxConfig } from "../../src/types";
@@ -4558,7 +4558,7 @@ describe("replayed compaction blobs", () => {
         expect(forwardedInput(target, [item], threadServingIdentityChanged)[0]).toEqual({
           type: "message",
           role: "user",
-          content: [{ type: "input_text", text: `${SUMMARY_PREFIX}\n\nprior work` }],
+          content: [{ type: "input_text", text: `${SUMMARY_PREFIX}\n\nprior work${CHECKPOINT_END_MARKER}` }],
         });
       }
     }
