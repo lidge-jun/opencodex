@@ -215,7 +215,7 @@ describe("Desktop snapshot through authenticated model discovery", () => {
       for (const effort of ["low", "medium", "high", "xhigh", "max"]) {
         const response = await fetch(`http://127.0.0.1:${server!.port}/v1/messages`, {
           method: "POST", headers: { "content-type": "application/json", "x-opencodex-api-key": key },
-          body: JSON.stringify({ model: `${selector}[1m]`, max_tokens: 32, stream: false,
+          body: JSON.stringify({ model: selector, max_tokens: 32, stream: false,
             thinking: { type: "adaptive" }, output_config: { effort },
             messages: [{ role: "user", content: "fixture request" }] }),
         });

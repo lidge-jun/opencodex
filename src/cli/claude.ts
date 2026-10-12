@@ -33,6 +33,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { aliasForNative, aliasForRoute, legacyAliasForNative, legacyAliasForRoute } from "../claude/alias";
 import { desktop3pAlias, isRealDesktop3pModelId, resolveDesktop3pAlias } from "../claude/desktop-3p";
+import { desktopProfileWireAlias, legacyDesktopProfileWireAlias } from "../claude/desktop-profile";
 import { inspectDesktopFirstParty } from "../claude/desktop-first-party";
 import { isClaudeInterceptProxyUrl, type ClaudeInterceptSettingsState } from "../claude/intercept/settings";
 import { withoutSiblingMarker } from "../codex/sibling-start";
@@ -621,11 +622,28 @@ const MODEL_ENV_SLOT_NAMES = [
 const DESKTOP_3P_ALIAS = /^claude-(?:opus-4(?:-8)?-[a-z][0-9a-z]{2}|(?:opus-4-8|fable-5)-p[0-9a-z]{3})(?:--fast)?$/;
 
 function nativeClaudeModelIds(config: OcxConfig): string[] {
-  const routes = Object.keys(config.claudeCode?.desktopProfile?.assignments ?? {});
+  const assignments = config.claudeCode?.desktopProfile?.assignments ?? {};
+  const routes = Object.keys(assignments);
+  const realProfileIds = new Set(routes.filter(route => route.startsWith("anthropic/claude-"))
+    .map(route => route.slice("anthropic/".length)));
+  // A native CLI starts without the server registry. Persisted profile bindings still
+  // identify proxy selectors, even when an old provider declaration has the same spelling.
+  const proxyProfileIds = new Set(routes.filter(route => !route.startsWith("anthropic/claude-"))
+    .flatMap(route => {
+      const alias = assignments[route]!.alias;
+      const slash = route.indexOf("/");
+      return [alias, desktopProfileWireAlias(alias), legacyDesktopProfileWireAlias(alias),
+        desktop3pAlias(route.slice(0, slash), route.slice(slash + 1))];
+    }));
   return [...new Set([
-    ...routes.filter(route => route.startsWith("anthropic/claude-")).map(route => route.slice("anthropic/".length)),
-    ...[...(config.providers.anthropic?.models ?? []), ...(config.providers.anthropic?.selectedModels ?? [])]
-      .filter(id => id.startsWith("claude-")),
+    ...realProfileIds,
+    ...[...(config.providers.anthropic?.models ?? []), ...(config.providers.anthropic?.selectedModels ?? []),
+      ...(config.providers.anthropic?.retainModels ?? [])]
+      .filter(id => {
+        const base = id.endsWith("--fast") ? id.slice(0, -"--fast".length) : id;
+        return id.startsWith("claude-") && (realProfileIds.has(id)
+          || (!proxyProfileIds.has(id) && !proxyProfileIds.has(base)));
+      }),
   ])];
 }
 

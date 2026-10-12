@@ -276,6 +276,13 @@ describe("ocx claude native fallback", () => {
         configured.providers.anthropic!.selectedModels = [`${id}--fast`];
         expect(buildNativeClaudeEnv(configured, { ANTHROPIC_MODEL: `${id}--fast` }).ANTHROPIC_MODEL)
           .toBe(`${id}--fast`);
+        configured.providers.anthropic!.selectedModels = undefined;
+        configured.providers.anthropic!.retainModels = [`${id}--fast`];
+        expect(buildNativeClaudeEnv(configured, { ANTHROPIC_MODEL: `${id}--fast[1m]` }).ANTHROPIC_MODEL)
+          .toBe(`${id}--fast[1m]`);
+        const retainedOnly = cfg({ providers: { anthropic: { adapter: "anthropic", retainModels: [id] } } });
+        expect(buildNativeClaudeEnv(retainedOnly, { ANTHROPIC_MODEL: `${id}[1m]` }).ANTHROPIC_MODEL)
+          .toBe(`${id}[1m]`);
         expect(nativeModelOverride(id, "opus", [], ["anthropic"], [id])).toEqual({});
         // The same spelling without genuine-model evidence is still proxy-only.
         expect(isProxyOnlyModelId(id)).toBe(true);
@@ -295,6 +302,26 @@ describe("ocx claude native fallback", () => {
       expect(isProxyOnlyModelId(`${id}--fast[1m]`, [], [`${id}--fast`])).toBe(true);
       expect(nativeModelOverride(id, "opus", [], [], [id])).toMatchObject({ flag: ["--model", "opus"] });
     } finally { buildDesktop3pRegistry([], []); }
+  });
+
+  test("cold native launch sheds profile bindings despite stale Anthropic catalog seeds", () => {
+    buildDesktop3pRegistry([], []);
+    const configured = cfg({
+      providers: { anthropic: { adapter: "anthropic", retainModels: ["claude-fable-5-p000--fast"],
+        models: ["claude-fable-5-p000"], selectedModels: ["claude-opus-4-8-p000"] } },
+      claudeCode: { desktopProfile: { version: 1,
+        assignments: { "mock/model": { family: "opus", alias: "claude-opus-4-8-20260101" } },
+        defaults: { opus: "mock/model", fable: null, sonnet: null, haiku: null },
+      } },
+    });
+    const env = buildNativeClaudeEnv(configured, {
+      ANTHROPIC_MODEL: "claude-fable-5-p000",
+      ANTHROPIC_DEFAULT_FABLE_MODEL: "claude-fable-5-p000--fast[1m]",
+      ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-opus-4-8-p000",
+    });
+    expect(env.ANTHROPIC_MODEL).toBeUndefined();
+    expect(env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBeUndefined();
+    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBeUndefined();
   });
 
   test("a connected client's window map keeps legacy claude-ocx selectors next to the current ones", () => {
