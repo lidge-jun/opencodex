@@ -59,7 +59,12 @@ stop; a drain that began during startup prevents the spawn (`didRunDrainStartHoo
 - Windows opens a kernel32 handle on the parent at startup through `bun:ffi`
   (`src/service/health-sentinel-windows.ts`), accepts it only if that process was created before the
   sentinel, and terminates through it. The open handle keeps the id from being reused. libuv's
-  kill-on-close Job is not relied on: libuv ignores a failed Job assignment.
+  kill-on-close Job is not relied on: libuv ignores a failed Job assignment. Caveat: the handle is
+  opened after the spawn, and the creation times compared are wall-clock times. If, in that
+  short window at sentinel startup, the proxy exits, its id is reissued, and the clock is set back
+  far enough that the new process appears to be older than the sentinel, the handle binds to that
+  process and a later recovery would terminate it. A handle created by the proxy and inherited by
+  the sentinel would close this gap; Bun's spawn does not offer one today.
 - POSIX checks the live `process.ppid` immediately before SIGKILL. SIGTERM cannot run on a stuck
   loop and is a clean exit to systemd. This binding is probabilistic: if the sentinel is descheduled
   between that check and `kill` while the parent exits, is reaped, and a new process receives the
