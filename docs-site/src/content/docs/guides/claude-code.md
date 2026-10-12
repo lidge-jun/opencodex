@@ -339,6 +339,8 @@ applies to it as well. Desktop and CLI catalog rewrites share bounded row and me
 if adding routed models would exceed a limit, OpenCodex returns the original Anthropic catalog
 unchanged rather than publishing a partial list.
 
+Uploads waiting for an upstream reply are stopped after 60 seconds in total or 15 seconds without upload progress. Upstream backpressure does not count as idleness. Completing the body or receiving the first upstream reply removes these limits, so long responses and SSE streams can continue.
+
 ### Use opencodex models from the Desktop Code tab (first-party bindings)
 
 In first-party mode the Code tab's model picker belongs to claude.ai: its rows (Opus 5.5,

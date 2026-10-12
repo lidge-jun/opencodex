@@ -34,6 +34,12 @@ export interface PickerListenerOptions {
   maxEncodedBytes?: number;
   /** Test seam: concurrent upstream requests; production uses PICKER_MAX_ACTIVE_UPSTREAMS. */
   maxActiveUpstreams?: number;
+  /** Test seam: absolute deadline until upload completion or the first upstream reply. */
+  uploadDeadlineMs?: number;
+  /** Test seam: maximum time without upload progress before an upstream reply. */
+  uploadIdleTimeoutMs?: number;
+  /** Test seam: observe or hold the upstream writable before piping input. */
+  onUpstreamRequest?: (request: ReturnType<typeof httpsRequest>) => void;
   /**
    * Test seam: arms the drop of a connection whose backend ended, after PICKER_ABANDONED_INPUT_LINGER_MS;
    * returns a cancel function. Production uses a timer.
@@ -56,6 +62,9 @@ export const PICKER_MAX_ACTIVE_UPSTREAMS = 256;
 export const PICKER_MAX_CONCURRENT_STREAMS = 100;
 /** A connection that has not sent a complete ClientHello by then is dropped. */
 const CLIENT_HELLO_TIMEOUT_MS = 10_000;
+const PICKER_UPLOAD_DEADLINE_MS = 60_000;
+const PICKER_UPLOAD_IDLE_TIMEOUT_MS = 15_000;
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 /**
  * Once the backend has ended a connection and its reply has been flushed, input the client still
  * sends is discarded for at most this long before the connection is dropped. A cooperative client
@@ -163,6 +172,13 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
   const upstream = options.upstream ?? { host: "claude.ai", port: 443, servername: "claude.ai" };
   const cap = options.maxEncodedBytes ?? BOOTSTRAP_MAX_ENCODED_BYTES;
   const maxActiveUpstreams = options.maxActiveUpstreams ?? PICKER_MAX_ACTIVE_UPSTREAMS;
+  const uploadDeadlineMs = options.uploadDeadlineMs ?? PICKER_UPLOAD_DEADLINE_MS;
+  const uploadIdleTimeoutMs = options.uploadIdleTimeoutMs ?? PICKER_UPLOAD_IDLE_TIMEOUT_MS;
+  for (const [name, value] of [["uploadDeadlineMs", uploadDeadlineMs], ["uploadIdleTimeoutMs", uploadIdleTimeoutMs]] as const) {
+    if (!Number.isFinite(value) || value <= 0 || value > MAX_TIMER_DELAY_MS) {
+      throw new RangeError(`${name} must be a positive finite timer duration`);
+    }
+  }
   const scheduleAbandonedInputDrop = options.scheduleAbandonedInputDrop ?? ((drop: () => void, ms: number) => {
     const timer = setTimeout(drop, ms);
     return () => clearTimeout(timer);
@@ -271,6 +287,7 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
     if (bootstrap) headers.push("Accept-Encoding", narrowBootstrapAcceptEncoding());
     let upReq: ReturnType<typeof httpsRequest>;
     let upstreamResponded = false;
+    let stopUploadClock = () => {};
     try {
       // The HTTP/1.1 client validates the method, path and header values synchronously.
       upReq = httpsRequest({
@@ -279,6 +296,7 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
         method, path: req.url, headers, maxHeaderSize: PICKER_MAX_HEADER_BYTES,
         }, upRes => {
         upstreamResponded = true;
+        stopUploadClock();
         const status = upRes.statusCode ?? 502;
         const originalHeaders = filteredHeaders(upRes.rawHeaders);
         const sendHead = (raw: string[]) => {
@@ -358,9 +376,32 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
     if (h2) (req as Http2ServerRequest).stream.once("close", onClientClose);
     if (uploading) {
       let uploadFinished = false;
+      let deadlineTimer: NodeJS.Timeout | undefined;
+      let idleTimer: NodeJS.Timeout | undefined;
+      const onUploadIdle = () => {
+        idleTimer = undefined;
+        // Pipe backpressure pauses data events without making the client idle.
+        // The absolute clock still bounds an upload whose upstream never drains.
+        if (upReq.writableNeedDrain) { onUploadProgress(); return; }
+        expireUpload();
+      };
+      const onUploadProgress = () => {
+        if (uploadFinished || upstreamResponded) return;
+        if (idleTimer) clearTimeout(idleTimer);
+        idleTimer = setTimeout(onUploadIdle, uploadIdleTimeoutMs);
+        idleTimer.unref?.();
+      };
+      stopUploadClock = () => {
+        if (deadlineTimer) clearTimeout(deadlineTimer);
+        if (idleTimer) clearTimeout(idleTimer);
+        deadlineTimer = undefined;
+        idleTimer = undefined;
+        req.off("data", onUploadProgress);
+      };
       const finishUpload = () => {
         if (uploadFinished) return;
         uploadFinished = true;
+        stopUploadClock();
         req.off("end", finishUpload);
         req.off("close", finishUpload);
         upReq.off("close", onUpstreamClose);
@@ -378,17 +419,28 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
           upReq.destroy();
         }
       };
+      const expireUpload = () => {
+        if (uploadFinished || upstreamResponded) return;
+        clientGone = true;
+        stopUnfinishedUpload();
+        release();
+      };
       const onResponseFinish = () => stopUnfinishedUpload(true);
       const onUpstreamClose = () => {
         if (!upstreamResponded && !res.writableEnded) stopUnfinishedUpload();
       };
       req.once("end", finishUpload);
       req.once("close", finishUpload);
+      req.on("data", onUploadProgress);
       upReq.once("close", onUpstreamClose);
       responseWritable.once("finish", onResponseFinish);
       res.once("close", stopUnfinishedUpload);
       if (h2) (req as Http2ServerRequest).stream.once("close", finishUpload);
+      deadlineTimer = setTimeout(expireUpload, uploadDeadlineMs);
+      deadlineTimer.unref?.();
+      onUploadProgress();
     }
+    options.onUpstreamRequest?.(upReq);
     req.pipe(upReq);
   };
   server.on("request", relay);

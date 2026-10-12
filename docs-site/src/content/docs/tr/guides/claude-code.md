@@ -219,6 +219,8 @@ seçildikten sonra Claude Desktop'ı tamamen kapatıp yeniden açın.
 Picker modu first-party'nin parçasıdır; bu nedenle [first-party hesap riski](#first-party-isteğe-bağlı)
 aynı şekilde geçerlidir.
 
+Üst sunucudan yanıt bekleyen yüklemeler toplam 60 saniye sonra veya 15 saniye boyunca ilerleme olmadığında durdurulur. Üst sunucunun geri basıncı hareketsizlik sayılmaz. Gövde gönderimi tamamlandığında veya ilk üst sunucu yanıtı alındığında bu sınırlar kaldırılır; uzun yanıtlar ve SSE akışları devam edebilir.
+
 ## Claude Desktop profili
 
 Bu profil yalnızca ağ geçidi modunda Desktop'a yazılır.

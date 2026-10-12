@@ -231,8 +231,13 @@ After a complete response, HTTP/2 closes only that stream with `RST_STREAM NO_ER
 HTTP/1.1 refusals, generated 502s and early replies advertise `Connection: close` only while input is unfinished; after the writable finishes,
 the listener unpipes the upstream upload, reads and discards remaining input, and ends the socket
 gracefully so queued response bytes flush. Errors and premature downstream closes still destroy
-the request. The request-side drain adds no upload deadline or byte cap and does not wait for request-body
-completion before ending the response side. Bun 1.4.3's HTTP server ends a `Connection: close`
+the request. The request-side drain adds no byte cap and does not wait for request-body
+completion before ending the response side. Accepted uploads awaiting an upstream reply have a
+60-second absolute and 15-second idle-progress deadline. Expiry closes that input and upstream
+work and releases its aggregate slot; upstream backpressure suspends only the idle clock.
+Body completion or the first upstream reply removes both clocks, so they cannot truncate a slow
+early response or SSE stream. The existing reply cleanup and TCP linger policy take over after
+an upstream reply. Bun 1.4.3's HTTP server ends a `Connection: close`
 response with `socket.destroySoon()` before the listener's own finish handler runs, which reset
 the splice before the reply reached the client; every HTTP/1.1 reply that closes unfinished input
 (refusal, generated 502, early upstream reply) therefore replaces that socket's `destroySoon` with

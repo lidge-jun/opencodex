@@ -200,6 +200,8 @@ quittez complètement puis rouvrez Claude Desktop.
 Le mode picker fait partie de first-party : le [risque pour le compte du mode first-party](#first-party-sur-demande)
 s'applique donc aussi à ce mode.
 
+Un envoi en attente de la réponse du serveur amont est arrêté après 60 secondes au total ou 15 secondes sans progression. La contre-pression du serveur amont ne compte pas comme une période d’inactivité. Les limites sont supprimées une fois le corps envoyé ou dès la première réponse amont, afin que les réponses longues et les flux SSE puissent continuer.
+
 ### Utiliser les modèles opencodex depuis l'onglet Code de Desktop (associations first-party)
 
 En mode first-party, le sélecteur de modèles de l'onglet Code appartient à claude.ai : ses lignes

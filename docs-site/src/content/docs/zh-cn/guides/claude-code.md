@@ -160,6 +160,8 @@ Picker 模式开启期间，Claude Desktop 通过 OpenCodex 访问网络。如�
 
 Picker 模式属于第一方模式，因此[第一方账户风险](#第一方主动选择)同样适用。
 
+等待上游响应的上传会在总计60秒后，或连续15秒没有上传进展时停止。上游背压不视为空闲。请求正文发送完成或收到首个上游响应后，这些限制会解除，因此长响应和SSE流可以继续。
+
 ## 连接远程 hub 的 Claude Desktop
 
 已连接的机器运行 `ocx claude desktop apply` 或 `ocx claude desktop` 时，会读取 hub 的
