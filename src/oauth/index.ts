@@ -5,6 +5,7 @@ import { getDefaultConfig, initializePersistedConfigIfMissing, loadConfig, mutat
 import { resolveProviderApiKey } from "../providers/key-store";
 import { projectEmail } from "../lib/privacy";
 import { KiroTokenRefreshError, environmentKiroRoutingMetadata, loginKiro, refreshKiroToken, settleKiroLoginTransaction } from "./kiro";
+import { KiroUserIdentityUnavailableError, kiroReauthIdentityMatches } from "./kiro-account-identity";
 import {
   OAuthMutationBusyError,
   OAuthRefreshIntentIOError,
@@ -492,6 +493,9 @@ export function publicOAuthAuthenticationErrorMessage(error: unknown): string {
     || error instanceof AnthropicInstanceCollisionError
     || error instanceof AnthropicCrossInstanceDuplicateError
     || error instanceof AnthropicLocalCliImportError
+    // Fixed, account-free text: a Kiro login that could not name its user left the existing
+    // organization account in place, and the user must confirm the signed-in CLI user (#6641).
+    || error instanceof KiroUserIdentityUnavailableError
   ) return error.message;
   return "OAuth authentication failed. Check the OpenCodex account status and retry.";
 }
@@ -1619,11 +1623,15 @@ export async function runLogin(
       if (!existing.accountId && !existing.email) {
         throw new OAuthReauthIdentityUnverifiedError();
       }
-      const identityMatches = existing.accountId && cred.accountId
-        ? existing.accountId === cred.accountId
-        : existing.email && cred.email
-          ? existing.email.toLowerCase() === cred.email.toLowerCase()
-          : false;
+      // A Kiro organization profile ARN is shared by its users, so it alone is not the account.
+      const identityMatches = provider === "kiro"
+        ? kiroReauthIdentityMatches(existing, cred, getAccountSet("kiro")?.accounts
+          .filter(account => account.id !== opts.reauthAccountId).map(account => account.credential))
+        : existing.accountId && cred.accountId
+          ? existing.accountId === cred.accountId
+          : existing.email && cred.email
+            ? existing.email.toLowerCase() === cred.email.toLowerCase()
+            : false;
       if (!identityMatches) {
         throw new OAuthReauthIdentityMismatchError();
       }
