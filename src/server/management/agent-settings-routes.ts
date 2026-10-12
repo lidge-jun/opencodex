@@ -1,6 +1,7 @@
 import { ensureManagementClaudeIntercept, interceptStartRefusal, interceptStatus } from "./claude-intercept-routes";
 import { persistCommittedDesktopGateway } from "../../claude/desktop-gateway-state";
 import { captureDesktopAppliedMarker, commitDesktopAppliedMarker } from "../../claude/desktop-applied-marker";
+import { isPassiveRead } from "../../lib/passive-read";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname } from "node:path";
@@ -228,6 +229,32 @@ async function injectionModelOptions(config: OcxConfig, models: readonly Catalog
       stored === m.namespaced || slugEquals(stored, m.provider, m.model)
     )));
   return [...nativeModels, ...routedModels];
+}
+
+/**
+ * The GET /api/injection-model body. `routed` is the discovered routed catalog, or `null` in a
+ * passive read (a Remote Link Child's, #6959). That body lists the native
+ * options and the current pick, which is all a read-only Child shows.
+ */
+export async function injectionModelView(config: OcxConfig, routed: readonly CatalogModel[] | null) {
+  const { CODEX_REASONING_LEVELS } = await import("../../reasoning-effort");
+  const available = await injectionModelOptions(config, routed ?? []);
+  const picked = config.injectionModel;
+  if (routed === null && picked && !available.some(option => option.namespaced === picked)) {
+    const slash = picked.indexOf("/");
+    available.push(slash > 0
+      ? { provider: picked.slice(0, slash), model: picked.slice(slash + 1), namespaced: picked }
+      : { provider: "openai", model: picked, namespaced: picked });
+  }
+  return {
+    multiAgentGuidanceEnabled: multiAgentGuidanceEnabled(config),
+    syncCodexSubagentDefaults: subagentDefaultSyncEffective(config),
+    model: config.injectionModel ?? null,
+    effort: config.injectionEffort ?? null,
+    prompt: config.injectionPrompt ?? null,
+    efforts: CODEX_REASONING_LEVELS.map(l => l.effort),
+    available,
+  };
 }
 
 export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise<Response | null> {
@@ -620,16 +647,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
   // effort the prompt tells the agent to pass to spawn_agent. GET returns the current
   // picks + available models/efforts; PUT sets or clears them.
   if (url.pathname === "/api/injection-model" && req.method === "GET") {
-    const { CODEX_REASONING_LEVELS } = await import("../../reasoning-effort");
-    return jsonResponse({
-      multiAgentGuidanceEnabled: multiAgentGuidanceEnabled(config),
-      syncCodexSubagentDefaults: subagentDefaultSyncEffective(config),
-      model: config.injectionModel ?? null,
-      effort: config.injectionEffort ?? null,
-      prompt: config.injectionPrompt ?? null,
-      efforts: CODEX_REASONING_LEVELS.map(l => l.effort),
-      available: await injectionModelOptions(config, await fetchAllModels(config)),
-    });
+    return jsonResponse(await injectionModelView(config, isPassiveRead() ? null : await fetchAllModels(config)));
   }
   // Read-only: sizes the described delegated work and proposes a model and effort from the
   // same options GET offers. The page applies an accepted proposal through the PUT below.

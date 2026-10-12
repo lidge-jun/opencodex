@@ -121,6 +121,18 @@ function macLoginRegistration(deps: DesktopStartupDeps) {
 
 type DesktopLoginFacts = Pick<DesktopStartupDiagnostic, "loginEnabled" | "loginRegistration">;
 
+/**
+ * Start at Login credit for one Desktop app copy. The tray's Start at Login item ports this
+ * judgment (desktop/src-tauri/src/login_registration.rs); both run the cases in
+ * tests/fixtures/desktop-login-registration-cases.json. Throws when evidence is unreadable.
+ */
+export function macLoginFactsFor(app: string, deps: DesktopStartupDeps): DesktopLoginFacts {
+  const login = macLoginRegistration(deps);
+  return login !== null && login.app === app
+    ? { loginEnabled: login.loginEnabled, ...(login.loginRegistration ? { loginRegistration: login.loginRegistration } : {}) }
+    : { loginEnabled: false };
+}
+
 function diagnoseSupervisedStartup(deps: DesktopStartupDeps, ownerRevision: number, loginFor: (app: string) => DesktopLoginFacts): DesktopStartupDiagnostic | undefined {
   const evidence = inspectDesktopSupervision(deps);
   if (evidence.kind !== "desktop") return undefined;
@@ -144,12 +156,7 @@ export function diagnoseMacDesktopStartup(deps: DesktopStartupDeps = {}): Deskto
   if ((deps.platform ?? process.platform) !== "darwin") return undefined;
   const ownership = deps.ownership ?? resolveServiceOwnership;
   const owner = ownership();
-  if (owner.kind === "none") return diagnoseSupervisedStartup(deps, owner.revision, app => {
-    const login = macLoginRegistration(deps);
-    return login !== null && login.app === app
-      ? { loginEnabled: login.loginEnabled, ...(login.loginRegistration ? { loginRegistration: login.loginRegistration } : {}) }
-      : { loginEnabled: false };
-  });
+  if (owner.kind === "none") return diagnoseSupervisedStartup(deps, owner.revision, app => macLoginFactsFor(app, deps));
   if (owner.kind !== "owned" || owner.ownership.owner !== "desktop") return undefined;
   const facts: Omit<DesktopStartupDiagnostic, "viable"> = { owned: true, loginEnabled: false, running: false };
   const execute = deps.run ?? run;

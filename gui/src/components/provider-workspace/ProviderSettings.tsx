@@ -18,6 +18,8 @@ import { useT } from "../../i18n/shared";
 import { IconLock } from "../../icons";
 import { isCatalogProviderId } from "../../provider-icons";
 import { openAiAccountProviderState } from "../../provider-payload";
+import { canConfigureResponsesReasoningReplay } from "../../responses-reasoning-replay";
+import { ResponsesReasoningReplayControl } from "../responses-reasoning-replay-control";
 import { providerSupportsLiveModelDiscovery } from "../../provider-workspace/catalog";
 import type { CatalogPreset } from "../provider-catalog/provider-presets";
 import { authModeLabel } from "./ProviderRail";
@@ -84,6 +86,7 @@ export default function ProviderSettings({
   const [apiKeyTransport, setApiKeyTransport] = useState(item.apiKeyTransport ?? "x-api-key");
   const [note, setNote] = useState(item.note ?? "");
   const [allowPrivateNetwork, setAllowPrivateNetwork] = useState(item.allowPrivateNetwork ?? false);
+  const [preserveReasoningReplay, setPreserveReasoningReplay] = useState(item.preserveResponsesReasoningContent === true);
   const [liveModels, setLiveModels] = useState(savedLiveModels);
   const [cursorHttpVersion, setCursorHttpVersion] = useState<CursorHttpVersion>(savedCursorHttpVersion);
   const [saving, setSaving] = useState(false);
@@ -114,6 +117,7 @@ export default function ProviderSettings({
     setApiKeyTransport(item.apiKeyTransport ?? "x-api-key");
     setNote(item.note ?? "");
     setAllowPrivateNetwork(item.allowPrivateNetwork ?? false);
+    setPreserveReasoningReplay(item.preserveResponsesReasoningContent === true);
     setLiveModels(savedLiveModels);
     setCursorHttpVersion(savedCursorHttpVersion);
     setPacingEnabled(item.requestPacing?.enabled === true);
@@ -124,7 +128,7 @@ export default function ProviderSettings({
     setMsg(null);
     setModeMsg(null);
     queueMicrotask(() => setEndpointChoice(matchChoiceId(baseUrlChoices, item.baseUrl)));
-  }, [item.adapter, item.baseUrl, item.defaultModel, item.authMode, item.apiKeyTransport, item.keyOptional, item.note, item.allowPrivateNetwork, savedLiveModels, savedCursorHttpVersion, item.requestPacing, baseUrlChoices]);
+  }, [item.adapter, item.baseUrl, item.defaultModel, item.authMode, item.apiKeyTransport, item.keyOptional, item.note, item.allowPrivateNetwork, item.preserveResponsesReasoningContent, savedLiveModels, savedCursorHttpVersion, item.requestPacing, baseUrlChoices]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   // Account mode syncs on its own: a mode PATCH refresh must not reset an in-progress
@@ -194,7 +198,10 @@ export default function ProviderSettings({
     ...(Object.keys(pacingModels).length > 0 ? { models: pacingModels } : {}),
   }), [pacingConcurrency, pacingDelay, pacingEnabled, pacingModels, pacingRpm]);
 
-  const dirty = adapter.trim() !== item.adapter
+  const supportsReasoningReplay = !isCatalogProviderId(item.name)
+    && canConfigureResponsesReasoningReplay({ adapter, baseUrl, authMode });
+  const reasoningReplayDirty = supportsReasoningReplay && preserveReasoningReplay !== (item.preserveResponsesReasoningContent === true);
+  const dirty = reasoningReplayDirty || adapter.trim() !== item.adapter
     || baseUrl.trim() !== item.baseUrl
     || defaultModel.trim() !== (item.defaultModel ?? "")
     || authMode !== String(item.authMode ?? (item.keyOptional ? "local" : "key"))
@@ -262,6 +269,7 @@ export default function ProviderSettings({
         // Keep omitted legacy values omitted unless the user actually changes this toggle.
         // Otherwise an unrelated settings save manufactures `liveModels: true` provenance.
         if (liveModelDiscoverySupported && liveModels !== (item.liveModels !== false)) patch.liveModels = liveModels;
+        if (reasoningReplayDirty) patch.preserveResponsesReasoningContent = preserveReasoningReplay;
         if (adapter.trim() === "cursor" && cursorHttpVersion !== savedCursorHttpVersion) {
           patch.upstreamHttpVersion = cursorHttpVersion === "http1.1" ? "http1.1" : null;
         }
@@ -328,6 +336,7 @@ export default function ProviderSettings({
     setDefaultModel(item.defaultModel ?? ""); setAuthMode(initialAuth);
     setApiKeyTransport(item.apiKeyTransport ?? "x-api-key");
     setNote(item.note ?? ""); setAllowPrivateNetwork(item.allowPrivateNetwork ?? false); setLiveModels(savedLiveModels);
+    setPreserveReasoningReplay(item.preserveResponsesReasoningContent === true);
     setCursorHttpVersion(savedCursorHttpVersion); setMsg(null);
     setPacingEnabled(item.requestPacing?.enabled === true); setPacingRpm(numberDraft(item.requestPacing?.requestsPerMinute));
     setPacingDelay(numberDraft(item.requestPacing?.minIntervalMs));
@@ -502,6 +511,7 @@ export default function ProviderSettings({
         <input type="checkbox" checked={allowPrivateNetwork} onChange={e => setAllowPrivateNetwork(e.target.checked)} />
         <span className="pwi-settings-label">{t("pws.allowPrivateNetwork")}</span>
       </label>
+      {supportsReasoningReplay && <ResponsesReasoningReplayControl checked={preserveReasoningReplay} onChange={setPreserveReasoningReplay} />}
       <label className="pwi-settings-field" style={{ flexDirection: "row", alignItems: "flex-start", gap: 8 }}>
         <input
           type="checkbox"

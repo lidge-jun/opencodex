@@ -16,6 +16,7 @@ import {
 } from "./provider-validation";
 import { UPSTREAM_HOST_CIRCUIT_MAX_THRESHOLD } from "../codex/upstream-host-health";
 import { hardenSecretPath } from "../lib/windows-secret-acl";
+import { isPassiveRead } from "../lib/passive-read";
 import { redactSecretString } from "../lib/redact";
 import { isValidProviderName } from "./provider-name";
 import { MODEL_ALIAS_PATTERN } from "../providers/default-aliases";
@@ -49,7 +50,7 @@ import {
 import { hasWarnedInheritedFastWireConflict, markWarnedInheritedFastWireConflict } from "./warn-memo";
 
 export function hardenExistingSecret(path: string): void {
-  if (existsSync(path)) {
+  if (existsSync(path) && !isPassiveRead()) {
     try { chmodSync(path, 0o600); } catch { /* best-effort */ }
     if (process.platform === "win32") {
       hardenSecretPath(path, { required: false });

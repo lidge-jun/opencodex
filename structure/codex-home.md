@@ -323,6 +323,10 @@ config parent. Both leases release on refusal or completion.
 PID/token file and bakery ticket. A contender still choosing makes peers refuse, and a
 later contender sees an earlier published ticket. Dead reservations are removed by their
 unique filename; stale observation cannot rename a live successor's reusable lock path.
+A peer's cleanup removes the empty claims directory, so a claims directory that vanishes between a
+contender's `mkdir` and its read is contention (`locked`), never an unsafe namespace or a crash.
+That single read is both the ownership/type check and the parent witness, so a replacement that
+appears after a missing read is never trusted.
 Lock and claim records include host evidence and optional process-start evidence. Takeover requires a
 matching local host and two dead-PID observations; a reused PID with a different known start identity
 remains busy. Unknown start identity disables only that comparison: live or unknown PID liveness

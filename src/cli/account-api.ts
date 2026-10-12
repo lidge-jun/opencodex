@@ -137,6 +137,7 @@ export async function apiJson(
   body?: unknown,
   options: { signal?: AbortSignal; redirect?: RequestRedirect } = {},
 ): Promise<ApiResult> {
+  if (baseUrl === LINK_HOME_BASE) return linkHomeApiJson(deps, method, path);
   const fetchImpl = deps.fetchImpl ?? fetch;
   try {
     const res = await fetchImpl(`${baseUrl}${path}`, {
@@ -163,7 +164,71 @@ export async function resolveBaseUrl(deps: AccountDeps): Promise<string | null> 
   if (deps.baseUrl) return deps.baseUrl;
   const live = await findLiveProxy();
   if (!live) return null;
+  if (live.role === "client") {
+    const { readLinkChildContext } = await import("./link-child");
+    if (readLinkChildContext()) return LINK_HOME_BASE;
+  }
   return `http://${probeHostname(live.hostname)}:${live.port}`;
+}
+
+/**
+ * Remote Link Child (#6957): account reads come from the Home over the link, and every account
+ * change is refused with the Child refusal. The marker is never a URL and never reaches fetch.
+ */
+export const LINK_HOME_BASE = "ocx-link-home:";
+
+async function linkHomeApiJson(deps: AccountDeps, method: string, path: string): Promise<ApiResult> {
+  const { readLinkChildContext, linkChildReadable, linkChildRefusal, readLinkHomeJson } = await import("./link-child");
+  const link = readLinkChildContext();
+  if (!link) return { status: 503, json: { error: "The Remote Link connection changed while the command ran; retry." } };
+  const pathname = new URL(path, "http://cli.invalid").pathname;
+  if (!linkChildReadable(method, path)) {
+    return { status: 403, json: { error: linkChildRefusal(link, `${method} ${pathname}`) } };
+  }
+  try {
+    const { status, body } = await readLinkHomeJson(link, path, deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {});
+    return { status, json: (body && typeof body === "object" ? body : { error: String(body ?? "") }) as Record<string, unknown> };
+  } catch (error) {
+    return { status: 503, json: { error: error instanceof Error ? error.message : String(error) } };
+  }
+}
+
+/**
+ * The config account commands classify providers against. On a Remote Link Child the local
+ * providers are inactive, so the Home's `/api/providers` projection (presence flags only) takes
+ * their place. Anywhere else the local config is returned. When the Home cannot be read the
+ * result is an error: classifying against the inactive local providers would answer for the
+ * wrong machine.
+ */
+export async function accountClassificationConfig(
+  deps: AccountDeps,
+  local: OcxConfig,
+): Promise<{ config: OcxConfig } | { error: string }> {
+  if (deps.baseUrl) return { config: local };
+  const { readLinkChildContext, readLinkHomeJson } = await import("./link-child");
+  const link = readLinkChildContext();
+  if (!link) return { config: local };
+  const unavailable = (detail: string) => ({ error: `Could not read the provider list from ${link.homePhrase} over Remote Link (${link.linkId}): ${detail}.` });
+  try {
+    const { status, body } = await readLinkHomeJson(link, "/api/providers", deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {});
+    if (status !== 200) {
+      // Keep the Home's own sentence (for example the upgrade instruction an older Home yields).
+      const message = body && typeof body === "object" && typeof (body as { error?: unknown }).error === "string"
+        ? (body as { error: string }).error : null;
+      return unavailable(message ?? `the Home answered HTTP ${status}`);
+    }
+    if (!Array.isArray(body)) return unavailable("the Home returned an unreadable provider list");
+    const providers: Record<string, unknown> = {};
+    for (const row of body) {
+      if (!row || typeof row !== "object" || typeof (row as { name?: unknown }).name !== "string") continue;
+      const { name, hasApiKey, ...rest } = row as Record<string, unknown> & { name: string };
+      // A placeholder marks presence for classification; no credential value crosses the link.
+      providers[name] = { ...rest, ...(hasApiKey === true ? { apiKey: "home-credential" } : {}) };
+    }
+    return { config: { ...local, providers: providers as OcxConfig["providers"] } };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 export function proxyUnreachable(transportError?: string): number {

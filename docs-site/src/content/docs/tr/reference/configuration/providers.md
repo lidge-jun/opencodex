@@ -282,6 +282,10 @@ Yalnızca ortak 5 saatlik veya haftalık kotanın reddini doğrulayan 429 hesab�
 boyut sınırlıdır. Token yenileme hataları mevcut yeniden kimlik doğrulama kurallarını korur. Doğrulanmış abonelik veya hesap ödeme 403 hatası çıktı başlamadan hesap değiştirebilir ve `Retry-After` veya varsayılan on dakika soğuma uygular. Genel izin reddi hesap değiştirmez. Uygun tüm hesaplar soğuyorsa istemciler bir
 kimlik doğrulama hatası değil, bilindiğinde `Retry-After` ile 429 alır.
 
+İsteğin kullanabileceği her hesap tükenmiş kotada tutuluyorsa (ortak 5 saatlik veya haftalık pencere ya da istenen model ailesinin haftalık penceresi), bu 429 hız sınırı değil kullanım sınırıdır: Responses gövdesi `error.type` ve `error.code` olarak `usage_limit_reached` taşır ve tutulan her hesabın upstream sıfırlama zamanı biliniyorsa `resets_at` (en erken sıfırlamanın epoch saniyesi) ekler. Codex "exceeded retry limit" olana kadar yeniden denemek yerine durur ve ne zaman tekrar deneneceğini gösterir. Son hesabın tükenmiş kota reddi, yedek kalmadığında aynı yanıtı alır. Tutulan hesaplardan biri yalnızca geçici olarak hız sınırına takılmışsa, bir model ailesini yeniden doğruluyorsa veya yetki nedeniyle reddedilmişse yanıt yeniden denenebilir `rate_limit_exceeded` olarak kalır. Combo hedefleri, combo'nun sonraki hedefe geçebilmesi için hız sınırı biçimini korur. Yerel `/v1/messages` Anthropic'in `rate_limit_error` türünü korur; mesajı kullanım sınırını belirtir.
+
+Taze bir kullanım okuması (dashboard Sağlayıcılar sayfası veya `ocx account list anthropic --quota --refresh`) reddedilen her pencerenin %100'ün altında olduğunu gösterdiğinde kota soğuması, `Retry-After`'dan da pencere sıfırlamasından da gelse erken kalkar. Plan yükseltmesi veya erken yeniden açılan bir pencere buna örnektir. Retten önce başlayan bir okuma onu asla kaldırmaz; yetki 403 soğumaları sürelerini bekler.
+
 :::caution[Deneysel]
 Anthropic hesap politikası riskini anlamadığınız sürece bunu devre dışı bırakın.
 Emin olmadığınızda manuel `ocx account use anthropic <id>` geçişini tercih edin.

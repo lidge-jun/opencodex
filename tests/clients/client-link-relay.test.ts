@@ -445,7 +445,8 @@ describe("client link HTTP relay", () => {
       contentLength: String(body.length), transferEncoding: null, body,
     });
     expect((await fetch(new URL("/v1/unknown", machine.url))).status).toBe(404);
-    expect((await fetch(new URL("/api/machine/hub-relay/api/config", machine.url))).status).toBe(404);
+    // #6957: the management relay exists on a link Child, but only for a Child dashboard session.
+    expect((await fetch(new URL("/api/machine/hub-relay/api/config", machine.url))).status).toBe(401);
 
     // A chunked upload (a streamed body with no Content-Length) passes through as on a standalone.
     const encoder = new TextEncoder();

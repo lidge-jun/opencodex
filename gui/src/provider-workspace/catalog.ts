@@ -51,6 +51,7 @@ export interface WorkspaceProvider {
   disabled?: boolean;
   note?: string;
   allowPrivateNetwork?: boolean;
+  preserveResponsesReasoningContent?: boolean;
   requestPacing?: {
     enabled?: boolean;
     requestsPerMinute?: number;

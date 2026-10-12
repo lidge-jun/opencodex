@@ -485,7 +485,7 @@ export async function fetchHubUsage(
   serverUrl: string,
   admissionToken: string,
   query: URLSearchParams,
-  options: { timeoutMs?: number; fetchImpl?: typeof fetch } = {},
+  options: { timeoutMs?: number; fetchImpl?: typeof fetch; peer?: "hub" | "Home" } = {},
 ): Promise<HubUsageReport> {
   const origin = normalizeHubOrigin(serverUrl);
   if (!isHubTransportPermitted(origin)) {
@@ -498,9 +498,12 @@ export async function fetchHubUsage(
   }, options.timeoutMs);
   if (!response.ok) {
     try { await response.body?.cancel(); } catch { /* best effort */ }
-    const message = response.status === 404 ? "Hub does not support client usage; upgrade the hub"
-      : response.status === 401 || response.status === 403 ? "Hub rejected this client's usage credential"
-      : `Hub usage request failed (${response.status})`;
+    // A Remote Link Child reads the same route from its Home (#6957).
+    const peer = options.peer ?? "hub";
+    const Peer = peer === "Home" ? "Home" : "Hub";
+    const message = response.status === 404 ? `${Peer} does not support client usage; upgrade the ${peer}`
+      : response.status === 401 || response.status === 403 ? `${Peer} rejected this ${peer === "Home" ? "Child's link key" : "client's usage credential"}`
+      : `${Peer} usage request failed (${response.status})`;
     throw new HubClientError(`hub_usage_http_${response.status}`, message, response.status);
   }
   if (!jsonCompatibleContentType(response)) {

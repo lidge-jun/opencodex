@@ -69,6 +69,11 @@ export interface LinkRelayDeps {
   /** The longest a request waits for a reconnecting tunnel, from its first wait. */
   holdMs?: number;
   now?: () => number;
+  /**
+   * The route table this relay enforces. Defaults to the data-plane table; only the Child's
+   * authenticated management relay passes the read-only management table (#6957).
+   */
+  routeAllowed?: (url: URL, req: Request) => boolean;
 }
 
 export const LINK_RELAY_RETRY_AFTER_SECONDS = 1;
@@ -305,7 +310,7 @@ export async function relayLinkDataRequest(
   deps: LinkRelayDeps = {},
 ): Promise<Response> {
   const url = new URL(req.url);
-  if (!linkRouteAllowed(url, req)) return jsonError(404, "not_found");
+  if (!(deps.routeAllowed ?? linkRouteAllowed)(url, req)) return jsonError(404, "not_found");
   let destination: string;
   try { destination = linkRelayDestination(url, target); } catch { return jsonError(404, "not_found"); }
   const validation = validateHubRelayRequestHeaders(linkFramingHeaders(req.headers));

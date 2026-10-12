@@ -11,6 +11,7 @@ export interface ProvidersConfig {
     liveModels?: boolean;
     upstreamHttpVersion?: "auto" | "http1.1" | "h1" | "http2" | "h2";
     reasoningWireFormat?: "gateway-object";
+    preserveResponsesReasoningContent?: boolean;
     authMode?: string;
     keyOptional?: boolean;
     disabled?: boolean;

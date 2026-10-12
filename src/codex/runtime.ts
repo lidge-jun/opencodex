@@ -8,6 +8,7 @@ import { resolveCodexHomeDir } from "./home";
 import { decodeOverlayState } from "./shim-state-file";
 import { redactSecretString, redactUserPath } from "../lib/redact";
 import { SUBPROCESS_KILL_GRACE_MS, waitForSubprocessExit } from "../lib/bounded-subprocess";
+import { isPassiveRead } from "../lib/passive-read";
 
 export type CodexRuntimeSource =
   | "environment"
@@ -984,7 +985,8 @@ export function getCodexRuntimeSnapshot(): ResolveCodexRuntimeResult {
   const cacheKey = resolveCacheKey({});
   const memo = resolveCache?.key === cacheKey ? resolveCache : null;
   if (memo && Date.now() - memo.at < RESOLVE_CACHE_MS) return cloneAndDeepFreeze(memo.value);
-  resolveCodexRuntimeAsync().catch(() => { /* the next read retries */ });
+  // A passive read (a Remote Link Child's, #6959) starts no version probes on this machine.
+  if (!isPassiveRead()) resolveCodexRuntimeAsync().catch(() => { /* the next read retries */ });
   if (memo) return cloneAndDeepFreeze(memo.value);
   return resolveCodexRuntime({ discoverAlternatives: false, probeVersion: false });
 }

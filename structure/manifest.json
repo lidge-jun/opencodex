@@ -561,6 +561,18 @@
       ]
     },
     {
+      "path": "desktop-start-at-login.md",
+      "tier": 6,
+      "title": "Desktop Start at Login",
+      "scope": "macOS tray Start at Login judgment shared with Startup safety, its parity fixture, click rules, and the guarded launch-origin migration.",
+      "documents": [
+        "desktop/src-tauri/src/first_run.rs",
+        "desktop/src-tauri/src/login_registration.rs",
+        "desktop/src-tauri/src/tray_login.rs",
+        "src/service/desktop-startup.ts"
+      ]
+    },
+    {
       "path": "ops/service-and-sidecars.md",
       "tier": 6,
       "title": "Background Service And Sidecars",

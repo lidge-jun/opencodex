@@ -959,6 +959,16 @@ ocx service install    # persistent: auto-starts on login and respawns on crash
 `ocx status` shows whether the proxy is running and prints the same restart hint when
 it is not; `ocx doctor` reports restart safety (service/shim coverage).
 
+### Upstream overload before any output
+
+When the ChatGPT backend declines a pooled native Codex turn with `server_is_overloaded` or
+another server error before it has produced any output, opencodex retries the same account
+with a short, capped backoff and then moves the turn to one other eligible Pool account.
+A pinned account (an account-qualified model) is retried but never moved. Once any output
+has reached Codex the turn is never sent again. If every attempt is declined, Codex receives
+the same error it would have received without the retries. Native compact requests move to
+another Pool account on a server error in the same way.
+
 ### Codex autostart shim
 
 Run `ocx codex-shim install` to install the optional launcher wrapper. It runs

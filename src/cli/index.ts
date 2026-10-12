@@ -1803,7 +1803,9 @@ async function handleStatus() {
   if (status.json.hub) {
     for (const line of hubStatusLines(status.json.hub)) console.log(`   ${line}`);
   }
-  console.log(`   ${status.json.connection.transport === "link" ? "Remote Link Home" : "Remote hub"}: ${status.json.connection.state}${status.json.connection.serverUrl ? ` (${status.json.connection.serverUrl})` : ""}`);
+  console.log(status.json.remoteHub.link
+    ? `   Remote Link Home: ${status.json.connection.state} (${status.json.remoteHub.link.homePhrase}, ${status.json.remoteHub.link.linkId})`
+    : `   ${status.json.connection.transport === "link" ? "Remote Link Home" : "Remote hub"}: ${status.json.connection.state}${status.json.connection.serverUrl ? ` (${status.json.connection.serverUrl})` : ""}`);
   if (status.json.connection.state === "invalid" || status.json.connection.state === "mismatched") {
     console.log(`   ⚠️  ${status.json.connection.reason}`);
   }

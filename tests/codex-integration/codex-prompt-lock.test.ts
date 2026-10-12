@@ -111,6 +111,41 @@ describe("staleness", () => {
 });
 
 describe("interleavings", () => {
+  // A peer's cleanup rmdirs the empty claims directory; it can vanish between our mkdir and our
+  // reads of it. That is contention: the contender must report "locked", not crash or call it unsafe.
+  for (const read of [1, 2] as const) {
+    test(`a claims directory removed by a peer before read ${read} reports contention`, () => {
+      const path = lockPath(), claims = path + ".claims";
+      let reads = 0;
+      const deps: LockDeps = { ...alive, lstat: target => {
+        if (target === claims && ++reads === read) rmSync(claims, { recursive: true, force: true });
+        return ownerDefaults.lstat(target);
+      } };
+      expect(tryAcquire(path, deps)).toEqual({ ok: false, error: "locked" });
+      expect(existsSync(path)).toBe(false);
+      expect(tryAcquire(path, alive).ok).toBe(true);
+    });
+  }
+  // The read that sees the directory is also the one judged: a foreign replacement that appears
+  // after a read found it missing is never trusted as the claims namespace or run in.
+  test.skipIf(process.platform === "win32")("a foreign directory replacing a removed claims directory is never trusted", () => {
+    const path = lockPath(), claims = path + ".claims", fs = require("node:fs") as typeof import("node:fs");
+    let reads = 0;
+    const deps: LockDeps = { ...alive, lstat: target => {
+      if (target !== claims) return ownerDefaults.lstat(target);
+      reads += 1;
+      // First read: a peer has just removed the directory. Later reads: a foreign one replaced it.
+      if (reads === 1) rmSync(claims, { recursive: true, force: true });
+      else if (!existsSync(claims)) fs.mkdirSync(claims);
+      const stat = ownerDefaults.lstat(target);
+      Object.defineProperty(stat, "uid", { value: BigInt((process.getuid?.() ?? 0) + 1) });
+      return stat;
+    } };
+    expect(tryAcquire(path, deps)).toEqual({ ok: false, error: "locked" });
+    expect(existsSync(path)).toBe(false);
+    expect(readdirSync(join(path, ".."))).not.toContain("opencodex-prompt.lock");
+  });
+
   test("real concurrent contenders admit at most one live owner and leave retries usable", async () => {
     const path = lockPath(), go = path + ".go", stop = path + ".stop";
     writeFileSync(path, JSON.stringify({ ...ownEvidence(ownerDefaults), token: "old", pid: 999999999, acquiredAt: 0 }));

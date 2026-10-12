@@ -2,7 +2,7 @@ import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { redactSecretString } from "../../lib/redact";
 import { isCyberPolicyMessage, isCyberPolicyCode } from "../../lib/errors";
 import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
-import { formatErrorResponse } from "../../bridge";
+import { formatErrorResponse, formatUsageLimitReachedResponse } from "../../bridge";
 import {
   UnsupportedContentEncodingError,
   DecompressedBodyTooLargeError,
@@ -130,6 +130,34 @@ export function comboUnavailable(comboId: string, now = Date.now()): Response {
  */
 export function clientCancelledResponse(): Response {
   return formatErrorResponse(499, "client_cancelled", "Client cancelled request");
+}
+
+/**
+ * The Responses answer to a local Anthropic pool refusal (`AnthropicAccountCooldownError`).
+ *
+ * When every held account is out on spent quota the refusal is a usage limit (#6991), which the
+ * Codex client stops on and renders with its reset time; anything else stays the retryable
+ * `rate_limit_error` it always was. A combo child keeps the retryable form and wording: the combo
+ * hops on any 429 and rebuilds the body anyway, and `isAnthropicPoolLocalRefusal` in
+ * `core-combo.ts` deliberately cools the target for the short local fallback, which a usage-limit
+ * code or usage-limit prose would stretch to the ten-minute exhaustion fallback in
+ * `combos/failover.ts`.
+ */
+export function anthropicPoolCooldownResponse(
+  refusal: {
+    message: string;
+    retryableMessage: string;
+    retryAfterSeconds: number | null;
+    usageLimit: { readonly resetsAt: number | null } | null;
+  },
+  options: { comboAttempt?: boolean; logCtx?: { errorCode?: string } } = {},
+): Response {
+  if (refusal.usageLimit !== null && !options.comboAttempt) {
+    if (options.logCtx) options.logCtx.errorCode = "usage_limit_reached";
+    return formatUsageLimitReachedResponse(refusal.message, refusal.usageLimit.resetsAt, refusal.retryAfterSeconds);
+  }
+  return formatErrorResponse(429, "rate_limit_error", refusal.retryableMessage,
+    refusal.retryAfterSeconds === null ? undefined : { retryAfter: String(refusal.retryAfterSeconds) });
 }
 
 

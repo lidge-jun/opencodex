@@ -104,9 +104,14 @@ Turn on **Start at Login** in the OpenCodex menu instead of installing a backgro
 service. Startup safety credits the app only when its login registration is verified;
 if it cannot be verified, follow the Desktop guidance in status.
 The Startup page then labels the Desktop row **Running · Start at Login not verified**.
-The menu checkbox only shows that the login item file exists. If it is already checked,
-make sure macOS allows OpenCodex to open at login under System Settings → General →
-Login Items & Extensions. While the app runs the proxy, the Startup page keeps the
+On macOS the menu's **Start at Login** item is checked only when Startup safety would
+verify the same registration. Otherwise the item is unchecked and its label says why:
+**disabled by macOS** opens System Settings → General → Login Items & Extensions, where
+you allow OpenCodex to open at login; **another OpenCodex copy** means the login item
+belongs to a different copy of the app, so turn it off from that copy; **registered app
+is missing** means the login item names an app that no longer exists, so delete
+`~/Library/LaunchAgents/OpenCodex.plist` and turn the item on again; **status unknown**
+means the registration could not be read. While the app runs the proxy, the Startup page keeps the
 background service and launcher shim installers disabled; to use them instead, quit
 OpenCodex and run `ocx service install` or `ocx codex-shim install` in a terminal.
 

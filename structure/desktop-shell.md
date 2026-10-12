@@ -408,6 +408,9 @@ plugin's registration name and Task Manager explicit-enable semantics. A Windows
 launch-origin migration marker revisits older registrations once, only when already
 enabled; entries disabled in the tray or Task Manager stay disabled.
 
+The macOS tray item and the macOS side of this migration judge the login item the way Startup
+safety does; see [Desktop Start at Login](desktop-start-at-login.md).
+
 The WidgetKit extension in `app/` needs three things that Xcode's app-extension target
 would supply on its own, and SwiftPM has no such target: `@main` on
 `OpenCodexWidgetBundle`, the `-e _NSExtensionMain` linker entry, and

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, jest, test } from "bun:test";
 import type { ProviderAdapter } from "../../src/adapters/base";
 import { createAdapterPhysicalSend } from "../../src/adapters/physical-send";
 import { sleepWithAbort } from "../../src/lib/upstream-retry";
@@ -13,8 +13,14 @@ import type { OcxProviderConfig } from "../../src/types";
 import { runWithWebSearch, type WebSearchLoopDeps } from "../../src/web-search/loop";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
 
+// Every deadline, pacing interval and backoff here runs on Bun's fake clock, which also drives
+// Date.now() and performance.now(). Virtual time moves only in settle(), one millisecond per step
+// after the pending work has drained, so a loaded runner that stalls the event loop cannot spend
+// a header budget and each case can assert the exact virtual time its contract implies (#6988).
 const HEADER_MS = 60;
 const QUEUE_MS = 180;
+// Far below every margin the cases distinguish (40ms of rotation budget, a 60ms header budget).
+const DRAIN_SLACK_MS = 20;
 const NAME = "search-pacing-test";
 const MODEL = "model";
 const provider: OcxProviderConfig = {
@@ -22,7 +28,47 @@ const provider: OcxProviderConfig = {
   requestPacing: { enabled: true, maxConcurrentRequests: 1 },
 };
 
-afterEach(() => resetProviderRequestPacingForTest());
+// Each case's turn signal is aborted in cleanup, and streams a case opened are torn down, so a case that
+// fails mid-flight cannot leave a queued send, a pending deadline or an open stream running into the next
+// file in the same Bun process. Real timers come back even if that teardown throws.
+let turn = new AbortController();
+let teardown: Array<() => unknown> = [];
+beforeEach(() => {
+  turn = new AbortController();
+  teardown = [];
+  jest.useFakeTimers();
+});
+afterEach(async () => {
+  try {
+    turn.abort(new DOMException("test finished", "AbortError"));
+    for (const step of teardown.splice(0)) await step();
+    await drain();
+    resetProviderRequestPacingForTest();
+  } finally {
+    jest.clearAllTimers();
+    jest.useRealTimers();
+  }
+});
+
+/** Let promise chains and stream reads finish without moving the virtual clock. */
+async function drain(turns = 8) {
+  for (let turn = 0; turn < turns; turn++) await new Promise<void>(resolve => setImmediate(resolve));
+}
+
+/** Advance virtual time until `pending` settles; return its value and the virtual ms it took. */
+async function settle<T>(pending: Promise<T>, limitMs = 10_000): Promise<{ value: T; atMs: number }> {
+  const start = performance.now();
+  let done = false;
+  const observed = pending.finally(() => { done = true; });
+  observed.catch(() => {});
+  await drain();
+  while (!done) {
+    if (performance.now() - start >= limitMs) throw new Error(`still pending after ${limitMs} virtual ms`);
+    jest.advanceTimersByTime(1);
+    await drain();
+  }
+  return { value: await observed, atMs: performance.now() - start };
+}
 
 function adapter(adapterSend = false): ProviderAdapter {
   return {
@@ -57,32 +103,42 @@ function run(executor: ProviderFetch, overrides: Partial<WebSearchLoopDeps> = {}
     forwardProvider: { adapter: "openai-responses", baseUrl: "https://chatgpt.test/v1", authMode: "forward" },
     hostedTool: { type: "web_search" }, selectedForwardHeaders: new Headers(),
     settings: { model: "search", reasoning: "low", timeoutMs: 1000 }, maxSearches: 1,
-    connectTimeoutMs: HEADER_MS,
+    connectTimeoutMs: HEADER_MS, abortSignal: turn.signal,
     ...overrides,
   });
 }
 
-async function expectSuccess(pending: Promise<Response>) {
-  const response = await pending;
+/** Resolves to the virtual ms at which the final headers arrived. */
+async function expectSuccess(pending: Promise<Response>): Promise<number> {
+  const { value: response, atMs } = await settle(pending);
   expect(response.status).toBe(200);
-  const body = await response.text();
+  const { value: body } = await settle(response.text());
   expect(body).toContain("response.completed");
   expect(body).not.toContain("response.failed");
+  return atMs;
 }
 
-async function expectTimeout(pending: Promise<Response>, timeoutMs = HEADER_MS) {
-  const response = await pending;
+/** Resolves to the virtual ms at which the 504 was returned. */
+async function expectTimeout(pending: Promise<Response>, timeoutMs = HEADER_MS): Promise<number> {
+  const { value: response, atMs } = await settle(pending);
   expect(response.status).toBe(504);
   expect(await response.json()).toEqual({ error: {
     message: `Provider response-header timeout after ${timeoutMs}ms during web-search`,
     type: "upstream_error", code: null,
   } });
+  return atMs;
+}
+
+/** A deadline or slot fires at `expectedMs`; observation may trail it by bounded slack while continuations drain. */
+function expectAt(atMs: number, expectedMs: number) {
+  expect(atMs).toBeGreaterThanOrEqual(expectedMs);
+  expect(atMs).toBeLessThan(expectedMs + DRAIN_SLACK_MS);
 }
 
 async function waitUntilQueued(configured = provider) {
   for (let i = 0; i < 1000; i++) {
     if (providerRequestPacingStatus(NAME, configured).queued > 0) return;
-    await Bun.sleep(1);
+    await drain(1);
   }
   throw new Error("send never entered pacing queue");
 }
@@ -93,13 +149,10 @@ describe("web-search pacing and response-header deadline", () => {
       const held = await waitForProviderRequestSlot(NAME, provider, MODEL);
       let sends = 0;
       const executor = fetcher(async () => { sends++; return new Response("ok"); });
-      const pending = run(executor, { adapter: adapter(adapterSend) });
-      const release = setTimeout(() => held.release(), QUEUE_MS);
-      try {
-        await expectSuccess(pending);
-        expect(sends).toBe(1);
-        expect(providerRequestPacingStatus(NAME, provider)).toMatchObject({ queued: 0, inFlight: 0 });
-      } finally { clearTimeout(release); held.release(); }
+      setTimeout(() => held.release(), QUEUE_MS);
+      expectAt(await expectSuccess(run(executor, { adapter: adapter(adapterSend) })), QUEUE_MS);
+      expect(sends).toBe(1);
+      expect(providerRequestPacingStatus(NAME, provider)).toMatchObject({ queued: 0, inFlight: 0 });
     });
 
     test(`${adapterSend ? "adapter fetchResponse" : "ordinary fetch"} still times out genuine header stalls and releases its lease`, async () => {
@@ -107,7 +160,7 @@ describe("web-search pacing and response-header deadline", () => {
         await sleepWithAbort(10_000, init?.signal ?? undefined);
         return new Response("unreachable");
       });
-      await expectTimeout(run(executor, { adapter: adapter(adapterSend) }));
+      expectAt(await expectTimeout(run(executor, { adapter: adapter(adapterSend) })), HEADER_MS);
       expect(providerRequestPacingStatus(NAME, provider)).toMatchObject({ queued: 0, inFlight: 0 });
     });
   }
@@ -120,7 +173,7 @@ describe("web-search pacing and response-header deadline", () => {
     const pending = run(executor, { abortSignal: caller.signal });
     await waitUntilQueued();
     caller.abort(new DOMException("client left", "AbortError"));
-    const response = await pending;
+    const { value: response } = await settle(pending);
     expect(response.status).toBe(499);
     expect(sends).toBe(0);
     expect(providerRequestPacingStatus(NAME, provider)).toMatchObject({ queued: 0, inFlight: 1 });
@@ -132,8 +185,8 @@ describe("web-search pacing and response-header deadline", () => {
 
   for (const recovery of ["same-target", "rotation", "reset"] as const) {
     test(`${recovery} replay excludes its own pacing wait`, async () => {
-      const configured = { ...provider, requestPacing: { ...provider.requestPacing,
-        minIntervalMs: recovery === "reset" ? QUEUE_MS * 5 : QUEUE_MS } };
+      const intervalMs = recovery === "reset" ? QUEUE_MS * 5 : QUEUE_MS;
+      const configured = { ...provider, requestPacing: { ...provider.requestPacing, minIntervalMs: intervalMs } };
       let sends = 0;
       const executor = fetcher(async () => {
         if (++sends === 1) {
@@ -142,14 +195,15 @@ describe("web-search pacing and response-header deadline", () => {
         }
         return new Response("ok");
       }, configured);
-      await expectSuccess(run(executor, {
-        // Reset recovery retains its existing 120-180ms backoff inside the budget.
+      // The replay waits out the whole pacing interval, several header budgets long, and still succeeds the
+      // moment its slot opens. Reset recovery retains its existing 120-180ms backoff inside the budget.
+      expectAt(await expectSuccess(run(executor, {
         connectTimeoutMs: recovery === "reset" ? HEADER_MS * 5 : HEADER_MS,
         ...(recovery === "same-target" ? { retryOn429Policy: {
           enabled: true, attempts: 1, intervalMs: 1, maxIntervalMs: 1, respectRetryAfter: false,
         } } : {}),
         ...(recovery === "rotation" ? { on429: () => ({ adapter: adapter(true), recoveryKind: "key-429" }) } : {}),
-      }));
+      })), intervalMs);
       expect(sends).toBe(2);
       expect(providerRequestPacingStatus(NAME, configured)).toMatchObject({ queued: 0, inFlight: 0 });
     });
@@ -159,10 +213,8 @@ describe("web-search pacing and response-header deadline", () => {
     const held = await waitForProviderRequestSlot(NAME, provider, MODEL);
     const direct = adapter();
     direct.fetchResponse = (request, ctx) => ctx!.executor!(request.url, { signal: ctx?.abortSignal });
-    const pending = run(fetcher(async () => new Response("ok")), { adapter: direct });
-    const release = setTimeout(() => held.release(), QUEUE_MS);
-    try { await expectSuccess(pending); }
-    finally { clearTimeout(release); held.release(); }
+    setTimeout(() => held.release(), QUEUE_MS);
+    expectAt(await expectSuccess(run(fetcher(async () => new Response("ok")), { adapter: direct })), QUEUE_MS);
     expect(providerRequestPacingStatus(NAME, provider)).toMatchObject({ queued: 0, inFlight: 0 });
   });
 
@@ -180,7 +232,7 @@ describe("web-search pacing and response-header deadline", () => {
       await first.body?.cancel();
       return send({ url: request.url, recovery: "rate-limit-429", dispatch });
     };
-    await expectSuccess(run(executor, { adapter: retrying }));
+    expectAt(await expectSuccess(run(executor, { adapter: retrying })), QUEUE_MS);
     expect(sends).toBe(2);
     expect(providerRequestPacingStatus(NAME, configured)).toMatchObject({ queued: 0, inFlight: 0 });
   });
@@ -188,12 +240,16 @@ describe("web-search pacing and response-header deadline", () => {
   test("final headers keep the pacing lease until the streamed body finishes", async () => {
     let bodyController!: ReadableStreamDefaultController<Uint8Array>;
     const upstream = new ReadableStream<Uint8Array>({ start(controller) { bodyController = controller; } });
-    const response = await run(fetcher(async () => new Response(upstream)));
+    const { value: response } = await settle(run(fetcher(async () => new Response(upstream))));
+    teardown.push(
+      () => response.body?.cancel().catch(() => {}),
+      () => { try { bodyController.error(new Error("test finished")); } catch { /* already closed */ } },
+    );
     expect(response.status).toBe(200);
     expect(providerRequestPacingStatus(NAME, provider).inFlight).toBe(1);
     bodyController.enqueue(new TextEncoder().encode("ok"));
     bodyController.close();
-    expect(await response.text()).toContain("response.completed");
+    expect((await settle(response.text())).value).toContain("response.completed");
     expect(providerRequestPacingStatus(NAME, provider).inFlight).toBe(0);
   });
 
@@ -206,9 +262,12 @@ describe("web-search pacing and response-header deadline", () => {
       await sleepWithAbort(70, init?.signal ?? undefined);
       return ++sends === 1 ? new Response("limited", { status: 429 }) : new Response("ok");
     }, configured);
-    await expectTimeout(run(executor, { connectTimeoutMs: 110,
+    // The first send spends 70 of 110ms; the pacing wait until 180ms is excluded; the rotated send gets only
+    // the remaining 40ms. A renewed budget would let it answer at 250ms, and a counted pacing wait would
+    // expire at 110ms before it started.
+    expectAt(await expectTimeout(run(executor, { connectTimeoutMs: 110,
       on429: () => ({ adapter: adapter(), recoveryKind: "key-429" }),
-    }), 110);
+    }), 110), QUEUE_MS + 40);
     expect(sends).toBe(1);
     expect(started).toBe(2);
     expect(providerRequestPacingStatus(NAME, configured)).toMatchObject({ queued: 0, inFlight: 0 });

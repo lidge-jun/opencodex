@@ -1,0 +1,1136 @@
+{
+  "//": "Shared by desktop/src-tauri/src/login_registration.rs and tests/service/service-desktop-login-registration.test.ts (#6972). Each case is one macOS Start at Login registration; expect.loginEnabled is what Startup safety reports for this app, expect.tray is what the tray shows. Only tray \"on\" is checked, and it must coincide with loginEnabled. Placeholders: {APP} this copy, {OTHER_APP} another existing copy, {MISSING_APP} a copy that does not exist, {PLIST} ~/Library/LaunchAgents/OpenCodex.plist, {OTHER_PLIST} another existing plist, {UID} 501. plist null means the LaunchAgent file is absent; disabled null means print-disabled fails; loaded is launchctl print: stdout, or an exit status with stderr (and optional signal), or a failure such as a timeout.",
+  "cases": [
+    {
+      "name": "loaded from this copy and this plist",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 1\n\tpath = {PLIST}\n\tstate = running\n\tprogram = {APP}\n}"
+      },
+      "expect": {
+        "tray": "on",
+        "loginEnabled": true,
+        "loginRegistration": "loaded"
+      }
+    },
+    {
+      "name": "valid registration not loaded yet",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "status": 113,
+        "stderr": "Could not find service \"OpenCodex\" in domain for user gui: {UID}"
+      },
+      "expect": {
+        "tray": "on",
+        "loginEnabled": true,
+        "loginRegistration": "registered-not-loaded"
+      }
+    },
+    {
+      "name": "valid registration not loaded yet, Bad request form",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "status": 113,
+        "stderr": "Bad request.\nCould not find service \"OpenCodex\" in domain for user gui: {UID}\n"
+      },
+      "expect": {
+        "tray": "on",
+        "loginEnabled": true,
+        "loginRegistration": "registered-not-loaded"
+      }
+    },
+    {
+      "name": "no override for OpenCodex",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 1\n\tpath = {PLIST}\n\tstate = running\n\tprogram = {APP}\n}"
+      },
+      "expect": {
+        "tray": "on",
+        "loginEnabled": true,
+        "loginRegistration": "loaded"
+      }
+    },
+    {
+      "name": "empty override list",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 1\n\tpath = {PLIST}\n\tstate = running\n\tprogram = {APP}\n}"
+      },
+      "expect": {
+        "tray": "on",
+        "loginEnabled": true,
+        "loginRegistration": "loaded"
+      }
+    },
+    {
+      "name": "override false",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"OpenCodex\" => false\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 1\n\tpath = {PLIST}\n\tstate = running\n\tprogram = {APP}\n}"
+      },
+      "expect": {
+        "tray": "on",
+        "loginEnabled": true,
+        "loginRegistration": "loaded"
+      }
+    },
+    {
+      "name": "single-line override list",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = { \"OpenCodex\" => enabled }",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 1\n\tpath = {PLIST}\n\tstate = running\n\tprogram = {APP}\n}"
+      },
+      "expect": {
+        "tray": "on",
+        "loginEnabled": true,
+        "loginRegistration": "loaded"
+      }
+    },
+    {
+      "name": "override followed by a comma",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = { \"OpenCodex\" => enabled, \"x\" => disabled }",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 1\n\tpath = {PLIST}\n\tstate = running\n\tprogram = {APP}\n}"
+      },
+      "expect": {
+        "tray": "on",
+        "loginEnabled": true,
+        "loginRegistration": "loaded"
+      }
+    },
+    {
+      "name": "override with CRLF line ending",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\r\n\t\"OpenCodex\" => enabled\r\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 1\n\tpath = {PLIST}\n\tstate = running\n\tprogram = {APP}\n}"
+      },
+      "expect": {
+        "tray": "on",
+        "loginEnabled": true,
+        "loginRegistration": "loaded"
+      }
+    },
+    {
+      "name": "override with trailing spaces before newline",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"OpenCodex\"   =>   enabled   \n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 1\n\tpath = {PLIST}\n\tstate = running\n\tprogram = {APP}\n}"
+      },
+      "expect": {
+        "tray": "on",
+        "loginEnabled": true,
+        "loginRegistration": "loaded"
+      }
+    },
+    {
+      "name": "plist absent",
+      "plist": null,
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 1\n\tpath = {PLIST}\n\tstate = running\n\tprogram = {APP}\n}"
+      },
+      "expect": {
+        "tray": "off",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "plist absent while launchd keeps a disabled override",
+      "plist": null,
+      "disabled": "disabled services = {\n\t\"OpenCodex\" => disabled\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 1\n\tpath = {PLIST}\n\tstate = running\n\tprogram = {APP}\n}"
+      },
+      "expect": {
+        "tray": "off",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "launchd disables this copy",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"OpenCodex\" => disabled\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 1\n\tpath = {PLIST}\n\tstate = running\n\tprogram = {APP}\n}"
+      },
+      "expect": {
+        "tray": "disabled-by-system",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "launchd disables this copy with true",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"OpenCodex\" => true\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 1\n\tpath = {PLIST}\n\tstate = running\n\tprogram = {APP}\n}"
+      },
+      "expect": {
+        "tray": "disabled-by-system",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "plist Disabled true without override",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ],
+        "Disabled": true
+      },
+      "disabled": "disabled services = {\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 1\n\tpath = {PLIST}\n\tstate = running\n\tprogram = {APP}\n}"
+      },
+      "expect": {
+        "tray": "unknown",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "plist Disabled false without override",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ],
+        "Disabled": false
+      },
+      "disabled": "disabled services = {\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 1\n\tpath = {PLIST}\n\tstate = running\n\tprogram = {APP}\n}"
+      },
+      "expect": {
+        "tray": "on",
+        "loginEnabled": true,
+        "loginRegistration": "loaded"
+      }
+    },
+    {
+      "name": "plist Disabled true with enabled override",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ],
+        "Disabled": true
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 1\n\tpath = {PLIST}\n\tstate = running\n\tprogram = {APP}\n}"
+      },
+      "expect": {
+        "tray": "on",
+        "loginEnabled": true,
+        "loginRegistration": "loaded"
+      }
+    },
+    {
+      "name": "plist Disabled is not a boolean",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ],
+        "Disabled": "yes"
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 1\n\tpath = {PLIST}\n\tstate = running\n\tprogram = {APP}\n}"
+      },
+      "expect": {
+        "tray": "unknown",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "Program equal to the registered app",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ],
+        "Program": "{APP}"
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 1\n\tpath = {PLIST}\n\tstate = running\n\tprogram = {APP}\n}"
+      },
+      "expect": {
+        "tray": "on",
+        "loginEnabled": true,
+        "loginRegistration": "loaded"
+      }
+    },
+    {
+      "name": "Program differs from the registered app",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ],
+        "Program": "{OTHER_APP}"
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 1\n\tpath = {PLIST}\n\tstate = running\n\tprogram = {APP}\n}"
+      },
+      "expect": {
+        "tray": "unknown",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "another existing copy is registered",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{OTHER_APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 1\n\tpath = {PLIST}\n\tstate = running\n\tprogram = {APP}\n}"
+      },
+      "expect": {
+        "tray": "other-copy",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "another copy is registered and launchd disables it",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{OTHER_APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"OpenCodex\" => disabled\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 1\n\tpath = {PLIST}\n\tstate = running\n\tprogram = {APP}\n}"
+      },
+      "expect": {
+        "tray": "other-copy",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "loaded job runs another copy",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tpath = {PLIST}\n\tprogram = {OTHER_APP}\n}"
+      },
+      "expect": {
+        "tray": "other-copy",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "loaded job runs a copy that no longer exists",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tpath = {PLIST}\n\tprogram = {MISSING_APP}\n}"
+      },
+      "expect": {
+        "tray": "other-copy",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "loaded job came from another plist",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tpath = {OTHER_PLIST}\n\tprogram = {APP}\n}"
+      },
+      "expect": {
+        "tray": "unknown",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "loaded job without a program line",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tpath = {PLIST}\n}"
+      },
+      "expect": {
+        "tray": "unknown",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "loaded job without a path line",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tprogram = {APP}\n}"
+      },
+      "expect": {
+        "tray": "unknown",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "registered app no longer exists",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{MISSING_APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 1\n\tpath = {PLIST}\n\tstate = running\n\tprogram = {APP}\n}"
+      },
+      "expect": {
+        "tray": "missing-copy",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "this copy has no bundled ocx",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 1\n\tpath = {PLIST}\n\tstate = running\n\tprogram = {APP}\n}"
+      },
+      "proxy": false,
+      "expect": {
+        "tray": "unknown",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "plist cannot be converted",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 1\n\tpath = {PLIST}\n\tstate = running\n\tprogram = {APP}\n}"
+      },
+      "plutilFails": true,
+      "expect": {
+        "tray": "unknown",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "registration lacks --autostart",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 1\n\tpath = {PLIST}\n\tstate = running\n\tprogram = {APP}\n}"
+      },
+      "expect": {
+        "tray": "unknown",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "registration carries an extra argument",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart",
+          "--x"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 1\n\tpath = {PLIST}\n\tstate = running\n\tprogram = {APP}\n}"
+      },
+      "expect": {
+        "tray": "unknown",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "registration label is not OpenCodex",
+      "plist": {
+        "Label": "com.example.OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 1\n\tpath = {PLIST}\n\tstate = running\n\tprogram = {APP}\n}"
+      },
+      "expect": {
+        "tray": "unknown",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "RunAtLoad is not true",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": false,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 1\n\tpath = {PLIST}\n\tstate = running\n\tprogram = {APP}\n}"
+      },
+      "expect": {
+        "tray": "unknown",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "registered program is not the desktop binary",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "/usr/bin/true",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 1\n\tpath = {PLIST}\n\tstate = running\n\tprogram = {APP}\n}"
+      },
+      "expect": {
+        "tray": "unknown",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "print-disabled fails",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": null,
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 1\n\tpath = {PLIST}\n\tstate = running\n\tprogram = {APP}\n}"
+      },
+      "expect": {
+        "tray": "unknown",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "print-disabled output is malformed",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "\"OpenCodex\" => enabled",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 1\n\tpath = {PLIST}\n\tstate = running\n\tprogram = {APP}\n}"
+      },
+      "expect": {
+        "tray": "unknown",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "print-disabled envelope is not closed",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"OpenCodex\" => enabled\n",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 1\n\tpath = {PLIST}\n\tstate = running\n\tprogram = {APP}\n}"
+      },
+      "expect": {
+        "tray": "unknown",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "OpenCodex mentioned twice",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"OpenCodex\" => enabled\n\t\"OpenCodex\" => disabled\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 1\n\tpath = {PLIST}\n\tstate = running\n\tprogram = {APP}\n}"
+      },
+      "expect": {
+        "tray": "unknown",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "override value has a suffix",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"OpenCodex\" => enabledx\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 1\n\tpath = {PLIST}\n\tstate = running\n\tprogram = {APP}\n}"
+      },
+      "expect": {
+        "tray": "unknown",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "override value is unrecognized",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"OpenCodex\" => maybe\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 1\n\tpath = {PLIST}\n\tstate = running\n\tprogram = {APP}\n}"
+      },
+      "expect": {
+        "tray": "unknown",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "override value followed by text on the same line",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"OpenCodex\" => enabled later\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 1\n\tpath = {PLIST}\n\tstate = running\n\tprogram = {APP}\n}"
+      },
+      "expect": {
+        "tray": "unknown",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "launchctl print fails for another reason",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "status": 5,
+        "stderr": "Operation not permitted"
+      },
+      "expect": {
+        "tray": "unknown",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "launchctl print times out",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "failure": "timeout"
+      },
+      "expect": {
+        "tray": "unknown",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "service-not-found result killed by a signal",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "status": 113,
+        "stderr": "Could not find service \"OpenCodex\" in domain for user gui: {UID}",
+        "signal": "SIGKILL"
+      },
+      "expect": {
+        "tray": "unknown",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "exit 113 with different stderr",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "status": 113,
+        "stderr": "Could not find service \"OpenCodex\" in domain for user gui: 502"
+      },
+      "expect": {
+        "tray": "unknown",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "exit 113 with extra stderr",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "status": 113,
+        "stderr": "Could not find service \"OpenCodex\" in domain for user gui: {UID}\nextra"
+      },
+      "expect": {
+        "tray": "unknown",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "override changes during the not-loaded re-read",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "status": 113,
+        "stderr": "Could not find service \"OpenCodex\" in domain for user gui: {UID}"
+      },
+      "disabledAfterFirstRead": "disabled services = {\n\t\"OpenCodex\" => disabled\n}",
+      "expect": {
+        "tray": "unknown",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "override text changes during the not-loaded re-read",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "status": 113,
+        "stderr": "Could not find service \"OpenCodex\" in domain for user gui: {UID}"
+      },
+      "disabledAfterFirstRead": "disabled services = {\n\t\"OpenCodex\" => enabled\n\t\"com.apple.new\" => disabled\n}",
+      "expect": {
+        "tray": "unknown",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "plist is rewritten while it is read",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 1\n\tpath = {PLIST}\n\tstate = running\n\tprogram = {APP}\n}"
+      },
+      "touchPlistOnRead": true,
+      "expect": {
+        "tray": "unknown",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "plist is a symlink and the job was loaded through it",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 1\n\tpath = {PLIST}\n\tstate = running\n\tprogram = {APP}\n}"
+      },
+      "plistLink": true,
+      "expect": {
+        "tray": "on",
+        "loginEnabled": true,
+        "loginRegistration": "loaded"
+      }
+    },
+    {
+      "name": "plist is a symlink and not loaded yet",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "status": 113,
+        "stderr": "Could not find service \"OpenCodex\" in domain for user gui: {UID}"
+      },
+      "plistLink": true,
+      "expect": {
+        "tray": "on",
+        "loginEnabled": true,
+        "loginRegistration": "registered-not-loaded"
+      }
+    },
+    {
+      "name": "launchctl print lines end in CR",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\r\tpath = {PLIST}\r\tprogram = {APP}\r}"
+      },
+      "expect": {
+        "tray": "on",
+        "loginEnabled": true,
+        "loginRegistration": "loaded"
+      }
+    },
+    {
+      "name": "launchctl print lines end in U+2028",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = { \tpath = {PLIST} \tprogram = {APP} }"
+      },
+      "expect": {
+        "tray": "on",
+        "loginEnabled": true,
+        "loginRegistration": "loaded"
+      }
+    },
+    {
+      "name": "launchctl print lines end in U+2029",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = { \tpath = {PLIST} \tprogram = {APP} }"
+      },
+      "expect": {
+        "tray": "on",
+        "loginEnabled": true,
+        "loginRegistration": "loaded"
+      }
+    },
+    {
+      "name": "loaded program value stops at U+2028",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tpath = {PLIST}\n\tprogram = {APP} tail\n}"
+      },
+      "expect": {
+        "tray": "on",
+        "loginEnabled": true,
+        "loginRegistration": "loaded"
+      }
+    },
+    {
+      "name": "loaded program value starts after a line terminator",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tpath = {PLIST}\n\tprogram =  {APP}\n}"
+      },
+      "expect": {
+        "tray": "unknown",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "loaded path value stops at CR",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tpath = {PLIST}\rtail\n\tprogram = {APP}\n}"
+      },
+      "expect": {
+        "tray": "on",
+        "loginEnabled": true,
+        "loginRegistration": "loaded"
+      }
+    }
+  ]
+}

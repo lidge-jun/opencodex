@@ -68,3 +68,22 @@ export function formatErrorResponse(
   if (refusal) retainReplayRefusal(response);
   return response;
 }
+
+/**
+ * A spent usage window, in the shape the Codex client treats as final (#6991): HTTP 429 with
+ * `error.type: "usage_limit_reached"` and, when the reset is known, `resets_at` in epoch
+ * seconds. Codex stops (and shows the reset time when present) instead of backing off through its
+ * retry budget, which is what it does with `rate_limit_exceeded`. No `plan_type` is sent: Codex
+ * would read it as a ChatGPT plan and print that plan's upgrade advice. `formatErrorResponse`
+ * cannot build this, because every 429 it classifies becomes `rate_limit_exceeded` and its
+ * payload has no `resets_at`.
+ */
+export function formatUsageLimitReachedResponse(message: string, resetsAtMs: number | null, retryAfterSeconds: number | null): Response {
+  const error = {
+    message, type: "usage_limit_reached", code: "usage_limit_reached",
+    ...(resetsAtMs !== null ? { resets_at: Math.ceil(resetsAtMs / 1000) } : {}),
+  };
+  const headers = new Headers({ "Content-Type": "application/json" });
+  if (retryAfterSeconds !== null) headers.set("Retry-After", String(retryAfterSeconds));
+  return new Response(JSON.stringify({ error }), { status: 429, headers });
+}

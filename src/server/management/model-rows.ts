@@ -11,6 +11,7 @@
 import type { CatalogModel } from "../../codex/catalog";
 import { antigravityFamilyDisabled } from "../../providers/antigravity-effort-families";
 import { observeModelCacheRevision } from "../../codex/model-cache";
+import { isPassiveRead } from "../../lib/passive-read";
 import {
   captureExportConfigAdmission,
   detachedConfigSnapshot,
@@ -306,8 +307,9 @@ export async function listManagementModelRows(
    * that brings its own roster still sees exactly what a writer would, and the two cannot
    * disagree about the roster for any reason except the roster itself.
    */
+  // A passive read (#6959) also skips the entitlement refresh, which reaches the Codex accounts.
   const models = options.models === undefined
-    ? (await Promise.all([
+    ? isPassiveRead() ? [] : (await Promise.all([
       fetchAllModels(config, options.providerContentRevisions, projection => { config = projection; }),
       ensureCodexEntitlementFreshness(config, {
         waitMs: options.entitlementWaitMs ?? 3_000,

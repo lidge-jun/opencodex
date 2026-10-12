@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { flushWindowsSecretAclReapsBeforeRemoval, hardenSecretDirAsync, windowsSecretAclApplies } from "../lib/windows-secret-acl";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
+import { isPassiveRead } from "../lib/passive-read";
 
 /**
  * Expand a leading `~` in user-supplied paths without interpreting shell
@@ -29,6 +30,8 @@ export function getConfigPath(): string {
 }
 
 export function hardenConfigDir(): void {
+  // A passive read (a Remote Link Child's, #6959) repairs nothing on this machine.
+  if (isPassiveRead()) return;
   const dir = getConfigDir();
   // The guard runs before any mutation: refusing after chmod/ACL would already
   // have changed the protected directory used by the test-home boundary.

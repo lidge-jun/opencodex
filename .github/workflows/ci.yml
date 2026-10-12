@@ -550,8 +550,9 @@ jobs:
           printf 'scheduled run tests dev at %s (workflow %s)\n' "$sha" "$GITHUB_SHA"
 
   # Bun roles (#6713): runtime 1.4.2 fixes #6684's Windows Bun.fetch streaming;
-  # test-runner 1.4.0 avoids 1.4.2's multi-file --isolate preload segfault (#4821
-  # reverted #4064; run 37631558263: Linux 1/4, macOS 2/2, Windows 9/9).
+  # the test runner skipped 1.4.2's multi-file --isolate preload segfault (#4821
+  # reverted #4064; run 37631558263: Linux 1/4, macOS 2/2, Windows 9/9) and runs
+  # 1.4.3, whose oven-sh/bun#44581 stops Bun.spawnSync losing a child's exit (#4956).
   # Rejoin after the upstream runner crash is fixed and a green lane=all dispatch
   # proves the unified version, then delete testRunnerBun and the action's role input.
   # The suite, split by file across four Linux runners.

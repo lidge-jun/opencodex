@@ -24,7 +24,7 @@ import {
   sealRequestAttemptIdentity,
   recordAttemptCredentialSource,
 } from "../request-log";
-import { clientCancelledResponse, readDisplaySafeErrorText, normalizeUpstreamErrorText } from "./core-errors";
+import { anthropicPoolCooldownResponse, clientCancelledResponse, readDisplaySafeErrorText, normalizeUpstreamErrorText } from "./core-errors";
 import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
 import { redactSecretString } from "../../lib/redact";
 import { rewriteUpstreamPolicyRefusal } from "./policy-refusal";
@@ -556,8 +556,7 @@ export async function prepareAdapterExchange(
       return formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(refusal));
     }
     if (refusal instanceof AnthropicAccountCooldownError) {
-      return formatErrorResponse(429, "rate_limit_error", refusal.message,
-        refusal.retryAfterSeconds === null ? undefined : { retryAfter: String(refusal.retryAfterSeconds) });
+      return anthropicPoolCooldownResponse(refusal, { comboAttempt: options.comboAttempt, logCtx });
     }
     // A budget refusal is a decision this process made, not an upstream fault. Reporting it as
     // 502 does more than mislabel it: the Codex client retries 5xx and does not retry a 429, so
@@ -835,8 +834,7 @@ export async function prepareAdapterExchange(
           return { failed: formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(refusal)) };
         }
         if (refusal instanceof AnthropicAccountCooldownError) {
-          return { failed: formatErrorResponse(429, "rate_limit_error", refusal.message,
-            refusal.retryAfterSeconds === null ? undefined : { retryAfter: String(refusal.retryAfterSeconds) }) };
+          return { failed: anthropicPoolCooldownResponse(refusal, { comboAttempt: options.comboAttempt, logCtx }) };
         }
         // Same rule on the recovery leg: the ladder refused to send again, so the answer names
         // this proxy rather than the provider it never reached.
@@ -1805,6 +1803,14 @@ export async function prepareAdapterExchange(
           requestState.subagentFallbackAccountId,
         );
       }
+      // The last pool account just refused on spent quota and recovery found no replacement:
+      // answer the usage limit now (#6991), so Codex stops instead of retrying into the local
+      // refusal that every later attempt meets until the first window reopens.
+      const poolUsageLimit = upstreamResponse.status === 429 && anthropicInstance && route.provider.authMode === "oauth"
+        ? anthropicRoutingFor(anthropicInstance).anthropicPoolUsageLimitAfterRefusal(Date.now(), transportState.anthropicRouteDecision, route.modelId)
+        : null;
+      // Combo children returned above; the flag is passed anyway so this site states the same rule.
+      if (poolUsageLimit) return anthropicPoolCooldownResponse(poolUsageLimit, { comboAttempt: options.comboAttempt, logCtx });
       // Upstreams occasionally echo request details in error bodies — scrub token-shaped
       // material before it reaches the client-facing error surface.
       const upstreamRetryAfter = upstreamResponse.headers.get("retry-after");
