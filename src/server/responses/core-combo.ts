@@ -1,3 +1,5 @@
+import { effectiveAzureOutputBudget } from "../../adapters/azure";
+import { resolveWireProtocolOverride } from "../adapter-resolve";
 import type { CodexAccountModelRefusal } from "../../combos/failover";
 import {
   isCodexReasoningEffort,
@@ -718,6 +720,15 @@ export async function executeComboResponses(
     const targetRoute = routeConcreteModel(config, `${pick.target.provider}/${pick.target.model}`);
     // The inherited spend tracker observes this parent log, before the child has its own label.
     logCtx.spendPoolId = targetRoute.providerName;
+    // Combo prepays before its child normalizes the route; the parent tracker must
+    // already see this target's effective cap rather than a previous target's cap.
+    const spendProvider = resolveWireProtocolOverride(targetRoute.providerName, targetRoute.modelId,
+      targetRoute.provider, options.inboundWire ?? "responses", targetRoute.staticPolicy);
+    const outputBudget = effectiveAzureOutputBudget(spendProvider,
+      isPlainObject(body) ? body.max_output_tokens : undefined);
+    if (typeof outputBudget === "number" && outputBudget > 0) {
+      logCtx.spendOutputCeilingTokens = Math.trunc(outputBudget);
+    }
     // Derive the target's allowance before booking its initial send; the booking occupies it.
     const targetSendBudget = comboSendScope
       ? comboTargetSendBudget(comboSendScope, combo.targets.length - 1 - comboTargetsDispatched)

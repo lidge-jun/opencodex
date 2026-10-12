@@ -678,6 +678,17 @@ export const configSchema = z.object({
         message: reasoningSummaryDeliveryError,
       });
     }
+    const minMaxOutputError = positiveIntegerConfigError(
+      (provider as { minMaxOutputTokens?: unknown }).minMaxOutputTokens,
+      "minMaxOutputTokens",
+    );
+    if (minMaxOutputError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "minMaxOutputTokens"],
+        message: minMaxOutputError,
+      });
+    }
     const defaultMaxOutputError = positiveIntegerConfigError(
       (provider as { defaultMaxOutputTokens?: unknown }).defaultMaxOutputTokens,
       "defaultMaxOutputTokens",

@@ -1,6 +1,16 @@
 import type { IncomingMeta, ProviderAdapter } from "./base";
 import type { OcxParsedRequest, OcxProviderConfig } from "../types";
 import { createResponsesPassthroughAdapter } from "./openai-responses";
+import { isPlainObject } from "./openai-responses/internal";
+
+/** Shared by wire construction and pre-dispatch spend admission. */
+export function effectiveAzureOutputBudget(provider: OcxProviderConfig, budget: unknown): unknown {
+  const floor = provider.minMaxOutputTokens;
+  return (provider.adapter === "azure" || provider.adapter === "azure-openai")
+    && typeof floor === "number" && Number.isInteger(floor) && floor > 0
+    && typeof budget === "number" && Number.isInteger(budget) && budget > 0 && budget < floor
+    ? floor : budget;
+}
 
 export function createAzureAdapter(provider: OcxProviderConfig): ProviderAdapter & { passthrough: true } {
   const inner = createResponsesPassthroughAdapter({
@@ -20,7 +30,15 @@ export function createAzureAdapter(provider: OcxProviderConfig): ProviderAdapter
         throw new Error("azure-openai requires a non-empty apiKey");
       }
 
-      const request = await inner.buildRequest(parsed, incoming);
+      // An operator may opt into a floor for deployments that reject tiny validation
+      // budgets. Copy only the envelope; keep caller-owned input and normal serialization.
+      const raw = parsed._rawBody;
+      const budget = isPlainObject(raw) ? raw.max_output_tokens : undefined;
+      const effectiveBudget = effectiveAzureOutputBudget(provider, budget);
+      const effective = effectiveBudget !== budget && isPlainObject(raw)
+        ? { ...parsed, _rawBody: { ...raw, max_output_tokens: effectiveBudget } }
+        : parsed;
+      const request = await inner.buildRequest(effective, incoming);
       const unresolvedPlaceholder = request.url.match(/\{[^}]*\}/)?.[0] ?? request.url.match(/[{}]/)?.[0];
       if (unresolvedPlaceholder) {
         throw new Error(`azure-openai baseUrl contains unresolved ${unresolvedPlaceholder} — set your real resource URL`);

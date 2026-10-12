@@ -1,3 +1,4 @@
+import { effectiveAzureOutputBudget } from "../../adapters/azure";
 import { sanitizeLogMetadataString } from "../../lib/redact";
 import type { RouteResult } from "../../router";
 import type { InboundWire } from "../../providers/registry";
@@ -211,6 +212,16 @@ export async function applyFinalRouteRequestNormalization(args: {
   logCtx.model = virtualModel?.selectedModelId ?? route.modelId;
   logCtx.provider = route.providerName;
   logCtx.spendPoolId = route.providerName;
+  // Admission precedes adapter serialization. Reserve the same explicit output cap
+  // the final destination will send, and recompute from the caller on every fallback.
+  const rawBudget = parsed._rawBody && typeof parsed._rawBody === "object"
+    ? (parsed._rawBody as { max_output_tokens?: unknown }).max_output_tokens : undefined;
+  const outputBudget = effectiveAzureOutputBudget(route.provider,
+    route.provider.adapter === "azure" || route.provider.adapter === "azure-openai"
+      ? rawBudget : parsed.options.maxOutputTokens);
+  if (typeof outputBudget === "number" && outputBudget > 0) {
+    logCtx.spendOutputCeilingTokens = Math.trunc(outputBudget);
+  }
   logCtx.providerAdapter = route.provider.adapter;
   logCtx.routeDecision = route.routeDecision;
   logCtx.policyEligibility = route.policyEligibility;
