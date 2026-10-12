@@ -106,7 +106,7 @@ export async function handleCodexAgentRoleRoutes(ctx: ManagementContext): Promis
   let effort: string | null | undefined;
   let toml: { status: "written" | "unchanged" };
   try {
-    model = body.model === undefined ? undefined : roles.validateAgentRoleModel(body.model);
+    model = body?.model === undefined ? undefined : roles.validateAgentRoleModel(body.model);
     effort = body?.effort === undefined ? undefined : body.effort === null ? null : roles.validateAgentRoleEffort(body.effort);
     toml = roles.writeCodexAgentRoleModel(role, model, codexHome, effort);
   } catch (error) {
