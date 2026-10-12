@@ -719,8 +719,9 @@ a level sets it, and `null` removes the role file's `model_reasoning_effort` lin
 comment, and the omo.jsonc `reasoning`. A Save that changes only the model leaves both effort values as they were.
 Omitting `model` leaves the role file's `model` pin and the omo.jsonc `model` exactly as they were,
 so a role without a pin keeps inheriting its model while its effort changes or clears; the dashboard
-sends this effort-only request for such a row, and an omo.jsonc role without an entry gets one holding
-only `reasoning`. A `null` model is refused with 400 `invalid_model`, because a save never removes a model
+sends this effort-only request for such a row. When omo.jsonc can be written, a role without an entry there
+gets one holding only `reasoning` if the saved effort is one LazyCodex supports (`none` is written as
+`off`); for such a role, clearing the effort or saving `ultra` adds no entry. A `null` model is refused with 400 `invalid_model`, because a save never removes a model
 pin, and a request with neither `model` nor `effort` is refused with 400 `empty_update` before the role file or omo.jsonc is
 read. `ocx agent roles set` always takes a model.
 Only an existing one-line string value can be removed; a multiline or non-string value is refused
