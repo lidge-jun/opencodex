@@ -58,7 +58,7 @@ comment already states; this change does not make it.
      boundaries therefore come from complete declarations, so prose headings in a tool description
      (the V1 spawn guidance's four `### When to delegate…` lines, a configured usage hint's `## Usage`)
      neither cut a genuine section nor claim its declaration. Pending headings form a stack: a
-     complete declaration (`…): Promise<…>; };`) is owned by the innermost pending heading with its
+     complete declaration (named typed parameter, non-empty `Promise<…>` return) is owned by the outermost pending heading with its
      name, which is removed with anything opened after it; an unowned example declaration leaves the
      stack alone, and the declaration fence closes by the same CommonMark rule as any other fence. Identity is classified from the raw
      name, because normalization can map a foreign `multi-agent-v1` namespace onto `multi_agent_v1`.
@@ -126,3 +126,8 @@ AGENTS.md resource exception, recorded in the PR). No live service is touched.
   an exact three-backtick match (now the shared fence rule); a truncated first line counted as a
   declaration (now the complete rendered form). Each fix has a regression that fails on the prior
   commit.
+- Code review round 3 (GPT-6.1-Sol high) FAIL: raw-name suffixes were trusted without checking that
+  they normalize to the heading, and the innermost same-name heading owned a declaration (now the
+  outermost, and a suffix must differ from the heading and normalize to it); `(...)` and empty
+  `Promise<>` declarations were accepted (now a named typed parameter and a non-empty return are
+  required). Each fix has a regression that fails without it.

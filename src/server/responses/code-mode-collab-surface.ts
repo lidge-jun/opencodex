@@ -68,9 +68,29 @@ const DECLARATION_FENCE_SHAPE: Fence = { char: "`", length: 3 };
 
 /** A complete declaration as render_code_mode_sample emits it, single- or multi-line. */
 function isCompleteDeclaration(body: readonly string[], name: string): boolean {
-  if (body.length === 0 || !body[0]!.startsWith("declare const tools: { " + name + "(")) return false;
   const text = body.join("\n");
-  return /\): Promise<[\s\S]*>; \};$/.test(text);
+  const prefix = "declare const tools: { " + name + "(";
+  if (!text.startsWith(prefix)) return false;
+  // A named, typed parameter (`args` for functions, `input` for freeform) and a non-empty return type.
+  return /^(?:args|input): \S[\s\S]*\): Promise<[^>\s][\s\S]*>; \};$/.test(text.slice(prefix.length));
+}
+
+/** codex-rs normalize_code_mode_identifier: invalid identifier characters become `_`. */
+function normalizeCodeModeIdentifier(raw: string): string {
+  let identifier = "";
+  for (const [index, ch] of [...raw].entries()) {
+    const valid = index === 0 ? /[A-Za-z_$]/.test(ch) : /[A-Za-z0-9_$]/.test(ch);
+    identifier += valid ? ch : "_";
+  }
+  return identifier === "" ? "_" : identifier;
+}
+
+/** A heading as render_tool_heading emits it: a raw suffix only when normalization changed the name. */
+function renderedHeading(match: RegExpExecArray): RenderedTool | undefined {
+  const name = match[1]!;
+  const raw = match[2];
+  if (raw === undefined) return { name, raw: name };
+  return raw !== name && normalizeCodeModeIdentifier(raw) === name ? { name, raw } : undefined;
 }
 
 /**
@@ -78,7 +98,7 @@ function isCompleteDeclaration(body: readonly string[], name: string): boolean {
  * the same name. A section ends at its own declaration, not at the next heading, because tool and
  * namespace descriptions (V1 spawn's guidance, a configured usage hint) carry their own Markdown,
  * including example headings and example declarations. Pending headings form a stack: a
- * declaration is owned by the innermost pending heading with its name, which is removed together
+ * declaration is owned by the outermost pending heading with its name, which is removed together
  * with anything opened after it; a declaration nobody owns is an example and leaves the stack
  * alone. Lines inside a quoted fence can neither open a section nor declare a tool.
  */
@@ -93,9 +113,10 @@ function renderedNestedTools(description: string): RenderedTool[] {
       if (closesFence(line, fence)) fence = undefined;
       continue;
     }
-    const heading = TOOL_HEADING.exec(line);
-    if (heading) {
-      pending.push({ name: heading[1]!, raw: heading[2] ?? heading[1]! });
+    const match = TOOL_HEADING.exec(line);
+    if (match) {
+      const heading = renderedHeading(match);
+      if (heading) pending.push(heading);
       continue;
     }
     if (line === DECLARATION_LEAD && lines[i + 1] === DECLARATION_FENCE) {
@@ -103,10 +124,9 @@ function renderedNestedTools(description: string): RenderedTool[] {
       while (close < lines.length && !closesFence(lines[close]!, DECLARATION_FENCE_SHAPE)) close += 1;
       if (close >= lines.length) return rendered; // unterminated: nothing after it is structure
       const body = lines.slice(i + 2, close);
-      let owner = -1;
-      for (let k = pending.length - 1; k >= 0; k -= 1) {
-        if (isCompleteDeclaration(body, pending[k]!.name)) { owner = k; break; }
-      }
+      // The outermost pending heading with the declared name owns it, so a same-name heading quoted
+      // inside the tool's own description cannot take over the genuine section.
+      const owner = pending.findIndex(tool => isCompleteDeclaration(body, tool.name));
       if (owner >= 0) {
         rendered.push(pending[owner]!);
         pending.length = owner;
