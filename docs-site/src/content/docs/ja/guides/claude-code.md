@@ -264,7 +264,7 @@ Claude Code 2.1.129 以降は `GET /v1/models?limit=1000` でゲートウェイ�
 | 画面 | 形式 | 例 |
 | --- | --- | --- |
 | Claude Code CLI | `ocx-claude-<provider>--<model>` (plain) または `ocx-claude2-…` (escaped) | `ocx-claude-native--gpt-5.6-sol` |
-| Claude Desktop 3P | `claude-opus-4-8-p<code>` (3 桁の base36 プロファイルスロット) | `claude-opus-4-8-p01q` |
+| Claude Desktop 3P | `claude-fable-5-p<code>` (3 桁の base36 プロファイルスロット) | `claude-fable-5-p01q` |
 
 プロキシはリクエストごとに系列を選びます。`?ids=cli` または `?ids=desktop` が優先し、指定しないと
 `claude-code/*` user-agent には読みやすい CLI 形式を、他のクライアントには Desktop コードを

@@ -280,7 +280,7 @@ Claude Code 2.1.129+ обнаруживает модели шлюза через
 | Интерфейс | Формат | Пример |
 | --- | --- | --- |
 | Claude Code CLI | `ocx-claude-<provider>--<model>` (plain) или `ocx-claude2-…` (escaped) | `ocx-claude-native--gpt-5.6-sol` |
-| Claude Desktop 3P | `claude-opus-4-8-p<code>` (3-символьный слот профиля base36) | `claude-opus-4-8-p01q` |
+| Claude Desktop 3P | `claude-fable-5-p<code>` (3-символьный слот профиля base36) | `claude-fable-5-p01q` |
 
 Прокси выбирает семейство для каждого запроса: приоритет у `?ids=cli` или `?ids=desktop`; иначе
 user-agent `claude-code/*` получает читаемую CLI-форму, а остальные клиенты — Desktop-код. Оба

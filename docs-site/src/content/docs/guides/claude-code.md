@@ -467,8 +467,9 @@ Support/Claude/configLibrary` on macOS, `%APPDATA%\Claude\configLibrary` on Wind
 `CLAUDE_USER_DATA_DIR` for an alternate Desktop user-data root. The legacy `Claude-3p` directory is
 not read or deleted automatically.
 
-Non-Anthropic routes receive stable aliases such as `claude-opus-4-8-p01q`, with a `p`-prefixed
-four-character code. OpenCodex keeps a separate synthetic date slot internally so existing profile
+Non-Anthropic routes receive stable aliases such as `claude-fable-5-p01q`, with a `p`-prefixed
+four-character code. Previous `claude-opus-4-8-p...` profile IDs remain decode-only compatibility
+IDs; new profiles use the Fable form. OpenCodex keeps a separate synthetic date slot internally so existing profile
 assignments stay stable, but it does not expose that date as the Desktop model id: current Desktop
 builds strip terminal dates when comparing active-session models, which can suppress model changes.
 Real Anthropic Claude routes keep
@@ -595,7 +596,7 @@ for every Claude Code CLI row (`Routed by OpenCodex to <provider>/<model>`; nati
 | Surface | Format | Example |
 | --- | --- | --- |
 | Claude Code CLI | `ocx-claude-<provider>--<model>` (plain) or `ocx-claude2-…` (escaped) | `ocx-claude-native--gpt-5.6-sol` |
-| Claude Desktop 3P | `claude-opus-4-8-p<code>` (3-char base36 profile slot) | `claude-opus-4-8-p01q` |
+| Claude Desktop 3P | `claude-fable-5-p<code>` (3-char base36 profile slot) | `claude-fable-5-p01q` |
 
 The proxy picks the family per request: `?ids=cli` or `?ids=desktop` wins; otherwise the
 `claude-code/*` user-agent gets the readable CLI form and other clients get the Desktop code.

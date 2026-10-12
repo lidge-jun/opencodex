@@ -268,7 +268,7 @@ değerini ayarlayın. Eski `Claude-3p` dizini otomatik olarak okunmaz veya
 silinmez.
 
 Anthropic harici rotalar, `p` önekli dört karakterli bir kod kullanan
-`claude-opus-4-8-p01q` gibi kararlı takma adlar alır. OpenCodex profil atamalarını
+`claude-fable-5-p01q` gibi kararlı takma adlar alır. OpenCodex profil atamalarını
 kararlı tutmak için dahili olarak sentetik tarih yuvaları saklar; ancak güncel
 Desktop sürümleri etkin oturum modellerini karşılaştırırken sondaki tarihleri
 kaldırdığı ve model değişimini engelleyebildiği için bu tarihi Desktop model kimliği olarak yayımlamaz. Mevcut
@@ -438,7 +438,7 @@ satırı için bir tane gönderir (`Routed by OpenCodex to <provider>/<model>`; 
 | Yüzey | Format | Örnek |
 | --- | --- | --- |
 | Claude Code CLI | `ocx-claude-<provider>--<model>` (düz) veya `ocx-claude2-…` (kaçışlı) | `ocx-claude-openai--gpt-5.6-sol` |
-| Claude Desktop 3P | `claude-opus-4-8-p<code>` (3 karakterli base36 profil yuvası) | `claude-opus-4-8-p01q` |
+| Claude Desktop 3P | `claude-fable-5-p<code>` (3 karakterli base36 profil yuvası) | `claude-fable-5-p01q` |
 
 Proxy, istek başına aileyi seçer: `?ids=cli` veya `?ids=desktop` kazanır; aksi
 takdirde `claude-code/*` kullanıcı aracısı okunabilir CLI biçimini alır ve diğer

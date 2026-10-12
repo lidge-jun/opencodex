@@ -228,6 +228,19 @@ describe("ocx claude native fallback", () => {
     expect(isProxyOnlyModelId("claude-fable-5-p000[1m]")).toBe(true);
     expect(isProxyOnlyModelId("claude-opus-4-8-p000")).toBe(true);
     expect(isProxyOnlyModelId("claude-fable-5")).toBe(false);
+    for (const alias of ["claude-fable-5-p000", "claude-opus-4-8-p000", "claude-opus-4-8-abc"]) {
+      expect(isProxyOnlyModelId(`${alias}--fast`)).toBe(true);
+      expect(isProxyOnlyModelId(`${alias}--fast[1m]`)).toBe(true);
+      expect(nativeModelOverride(`${alias}--fast[1m]`, "opus", []))
+        .toMatchObject({ flag: ["--model", "opus"] });
+      const env = buildNativeClaudeEnv(cfg(), {
+        ANTHROPIC_MODEL: `${alias}--fast`,
+        ANTHROPIC_DEFAULT_FABLE_MODEL: `${alias}--fast[1m]`,
+      });
+      expect(env.ANTHROPIC_MODEL).toBeUndefined();
+      expect(env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBeUndefined();
+    }
+    expect(isProxyOnlyModelId("claude-fable-5--fast")).toBe(false);
   });
 
   test("overrides a persisted proxy model only with a configured native model", () => {

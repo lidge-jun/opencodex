@@ -618,7 +618,7 @@ const MODEL_ENV_SLOT_NAMES = [
   "ANTHROPIC_SMALL_FAST_MODEL",
 ] as const;
 
-const DESKTOP_3P_ALIAS = /^claude-(?:opus-4(?:-8)?-[a-z][0-9a-z]{2}|(?:opus-4-8|fable-5)-p[0-9a-z]{3})$/;
+const DESKTOP_3P_ALIAS = /^claude-(?:opus-4(?:-8)?-[a-z][0-9a-z]{2}|(?:opus-4-8|fable-5)-p[0-9a-z]{3})(?:--fast)?$/;
 
 export function isProxyOnlyModelId(value: string, providerNames: readonly string[] = []): boolean {
   const id = value.trim().replace(/\[1m\]$/, "");

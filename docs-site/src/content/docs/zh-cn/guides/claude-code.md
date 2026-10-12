@@ -254,7 +254,7 @@ Claude Code 2.1.278 接受包含 `claude` 或 `anthropic` 的 ID。以 `claude-`
 | 界面 | 格式 | 示例 |
 | --- | --- | --- |
 | Claude Code CLI | `ocx-claude-<provider>--<model>`（plain）或 `ocx-claude2-…`（escaped） | `ocx-claude-native--gpt-5.6-sol` |
-| Claude Desktop 3P | `claude-opus-4-8-p<code>`（3 字符 base36 配置槽） | `claude-opus-4-8-p01q` |
+| Claude Desktop 3P | `claude-fable-5-p<code>`（3 字符 base36 配置槽） | `claude-fable-5-p01q` |
 
 代理会按请求选择别名族：`?ids=cli` 或 `?ids=desktop` 优先；否则，`claude-code/*`
 user-agent 会获得易读的 CLI 形式，其他客户端会获得 Desktop 代码形式。两种别名族都会永久
