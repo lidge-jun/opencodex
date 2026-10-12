@@ -50,13 +50,15 @@ comment already states; this change does not make it.
      `declaresCodeModeExec()` holds, whose description starts with the codex-rs template line
      `Run JavaScript code to orchestrate/compose tool calls`. Anything else (structured or namespaced
      `exec`, flat-bridge shape, overridden template) contributes nothing.
-   - Section parser: scan lines, tracking CommonMark code fences; a nested section starts only at a
-     top-level (outside any fence) tool heading of the exact rendered form (a backticked identifier,
-     optionally followed by the backticked raw name) and ends at the next tool heading or namespace
-     heading line. Prose headings inside a tool description (the real V1 spawn description has four
-     `### When to delegate…`-style lines) do not end a section. It counts as nested tool G only when the section's final fence is the
-     `exec tool declaration:` ts block whose first line is `declare const tools: { G(`. Prose,
-     examples inside fences, and headings without their own declaration are ignored.
+   - Section parser: scan lines, tracking CommonMark code fences (backticks or tildes, opening
+     length, at most three spaces of indentation; only the same character, at least as long, closes).
+     A top-level tool heading of the exact rendered form (a backticked identifier, optionally followed
+     by the backticked raw name) becomes pending; the next top-level `exec tool declaration:` ts fence
+     belongs to the innermost pending heading whose name it declares, and ends that section. Section
+     boundaries therefore come from complete declarations, so prose headings in a tool description
+     (the V1 spawn guidance's four `### When to delegate…` lines, a configured usage hint's `## Usage`)
+     neither cut a genuine section nor claim its declaration. Identity is classified from the raw
+     name, because normalization can map a foreign `multi-agent-v1` namespace onto `multi_agent_v1`.
    - Classification: V1 evidence requires `multi_agent_v1__spawn_agent`. Any other
      collaboration-shaped nested name (bare `spawn_agent`, `<ns>__spawn_agent` outside
      `multi_agent_v1`, any V2 companion name in any namespace) beside it makes the listing
@@ -107,3 +109,12 @@ Locales do not discuss detection, so they are not contradicted.
 `bun run structure:check`; `bun run privacy:scan`; full `bun run test` before review readiness (or the
 AGENTS.md resource exception, recorded in the PR). No live service is touched.
 
+## Review record
+
+- Plan audit (GPT-6.1-Sol high): round 1 FAIL, five findings folded (deferred V1, envelope strictness,
+  unprefixed MCP lookalikes, V2 policy scope, test registration); round 2 NEAR-PASS, four
+  non-blocking findings folded.
+- Code review round 1 (GPT-6.1-Sol high) FAIL: layout.json reached the 2000-line ratchet (entry moved
+  onto an existing line); boolean fence tracking (now CommonMark-shaped); namespace-heading
+  boundaries cut usage-hint headings (now declaration-bounded); raw heading names were discarded
+  (now classify identity). Each parser guard has a test that fails when the guard is removed.

@@ -136,6 +136,17 @@ describe("code mode that renders the V1 tools (#6844)", () => {
     const example = [SPAWN_DESCRIPTION, FENCE + "md", "### " + TICK + "worker" + TICK, "Report back.", FENCE].join("\n");
     expect(surfaceOf(codeModeTools(execDescription(nested("multi_agent_v1__spawn_agent", example))))).toBe("v1");
   });
+
+  test("a configured usage hint with its own headings stays inside the spawn section", () => {
+    // codex-rs copies multi_agent_v2.usage_hint_text into the V1 spawn description verbatim.
+    const hinted = [SPAWN_DESCRIPTION, "## Usage", "Spawn reviewers in parallel.", "## multi_agent_v1"].join("\n");
+    expect(surfaceOf(codeModeTools(execDescription(...HELPER_SECTIONS, nested("multi_agent_v1__spawn_agent", hinted))))).toBe("v1");
+  });
+
+  test("an unfenced tool-shaped heading inside the spawn description does not take its declaration", () => {
+    const described = [SPAWN_DESCRIPTION, "### " + TICK + "worker" + TICK, "A role you can request."].join("\n");
+    expect(surfaceOf(codeModeTools(execDescription(nested("multi_agent_v1__spawn_agent", described))))).toBe("v1");
+  });
 });
 
 describe("code mode without V1 evidence stays null", () => {
@@ -154,9 +165,21 @@ describe("code mode without V1 evidence stays null", () => {
     expect(surfaceOf(codeModeTools(execDescription(prose, ...HELPER_SECTIONS)))).toBeNull();
   });
 
-  test("a complete V1 section quoted inside another tool's fenced example", () => {
-    const quoted = nested("docs__lookup", ["Example:", FENCE + "md", nested("multi_agent_v1__spawn_agent"), FENCE].join("\n"));
+  test.each([["four backticks", "````"], ["tildes", "~~~"]])("a complete V1 section quoted in a %s fence", (_label, fence) => {
+    // The lone three-backtick line is content: only the same character, at least as long, closes.
+    const quoted = nested("docs__lookup", ["Example:", fence + "md", FENCE, nested("multi_agent_v1__spawn_agent"), fence].join("\n"));
     expect(surfaceOf(codeModeTools(execDescription(quoted)))).toBeNull();
+  });
+
+  test("a raw name from a foreign namespace that normalizes onto the V1 identifier", () => {
+    // codex-rs normalizes multi-agent-v1__spawn_agent to multi_agent_v1__spawn_agent and keeps the raw
+    // name in the heading suffix; the raw name decides the identity.
+    const lookalike = nested("multi_agent_v1__spawn_agent").replace(
+      "### " + TICK + "multi_agent_v1__spawn_agent" + TICK,
+      "### " + TICK + "multi_agent_v1__spawn_agent" + TICK + " (" + TICK + "multi-agent-v1__spawn_agent" + TICK + ")",
+    );
+    expect(surfaceOf(codeModeTools(execDescription(lookalike)))).toBeNull();
+    expect(surfaceOf(codeModeTools(execDescription(...V1_SECTIONS, lookalike)))).toBeNull();
   });
 
   test("an unprefixed MCP server imitating the V1 tool names", () => {

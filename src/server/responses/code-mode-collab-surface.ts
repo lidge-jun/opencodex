@@ -31,13 +31,29 @@ const SPAWN = "spawn_agent";
 const V2_COMPANIONS = ["send_message", "followup_task", "interrupt_agent", "list_agents"] as const;
 const DECLARATION_LEAD = "exec tool declaration:";
 
-const TOOL_HEADING = /^### `([A-Za-z_$][\w$]*)`(?: \(`[^`]+`\))?$/;
-// CommonMark: any backtick run opens a fence; only a bare run closes it, so "```ts" inside a fence
-// is content rather than a close.
-/** codex-rs "## <namespace>" line preceding a namespace's tools; prose "## Usage" also matches and fails closed. */
-const NAMESPACE_HEADING = /^## [A-Za-z_$][\w$.-]*$/;
-const FENCE_OPEN = /^```/;
-const FENCE_CLOSE = /^```\s*$/;
+const TOOL_HEADING = /^### `([A-Za-z_$][\w$]*)`(?: \(`([^`]+)`\))?$/;
+const DECLARATION_FENCE = "```ts";
+const DECLARATION_CLOSE = "```";
+// CommonMark fences: up to three spaces of indentation, three or more backticks or tildes. A fence
+// closes only on the same character, at least as long, with nothing but whitespace after it.
+const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+const FENCE_CLOSE = /^ {0,3}(`{3,}|~{3,})[ \t]*$/;
+
+interface Fence { char: string; length: number }
+
+function openedFence(line: string): Fence | undefined {
+  const match = FENCE_OPEN.exec(line);
+  if (!match) return undefined;
+  const run = match[1]!;
+  // A backtick fence's info string may not contain a backtick (that line is inline code).
+  if (run[0] === "`" && match[2]!.includes("`")) return undefined;
+  return { char: run[0]!, length: run.length };
+}
+
+function closesFence(line: string, fence: Fence): boolean {
+  const match = FENCE_CLOSE.exec(line);
+  return match !== null && match[1]![0] === fence.char && match[1]!.length >= fence.length;
+}
 
 function isCodeModeExec(tool: OcxTool): boolean {
   return tool.name === CODE_MODE_EXEC_TOOL_NAME && !tool.namespace && tool.freeform === true
@@ -45,48 +61,46 @@ function isCodeModeExec(tool: OcxTool): boolean {
     && tool.description.startsWith(CODE_MODE_EXEC_TEMPLATE_HEADER);
 }
 
-/** True when a section ends with the declaration fence codex-rs renders for `name`. */
-function endsWithOwnDeclaration(section: readonly string[], name: string): boolean {
-  let end = section.length - 1;
-  while (end >= 0 && section[end]!.trim() === "") end -= 1;
-  if (end < 3 || section[end] !== "```") return false;
-  // exec tool declaration: / ```ts / declare const tools: { name(args: ... (one or more lines) / ```
-  let open = end - 1;
-  while (open >= 0 && !section[open]!.startsWith("```")) open -= 1;
-  return open >= 1 && open + 1 < end
-    && section[open] === "```ts"
-    && section[open - 1] === DECLARATION_LEAD
-    && section[open + 1]!.startsWith("declare const tools: { " + name + "(");
-}
+/** A nested tool rendered as a heading plus its own declaration; `raw` is the pre-normalization name. */
+interface RenderedTool { name: string; raw: string }
 
-/** Names of nested tools rendered as complete top-level sections, outside any quoted fence. */
-function renderedNestedToolNames(description: string): string[] {
+/**
+ * Nested tools whose top-level heading is followed by the declaration codex-rs renders for the same
+ * name. A section ends at its declaration, not at the next heading: tool descriptions (V1 spawn's
+ * own guidance, a configured usage hint) carry their own Markdown headings. Lines inside a quoted
+ * fence are content and can neither open a section nor declare a tool.
+ */
+function renderedNestedTools(description: string): RenderedTool[] {
   const lines = description.split("\n");
-  const names: string[] = [];
-  let inFence = false;
-  let current: { name: string; lines: string[] } | undefined;
-  const close = () => {
-    if (current && endsWithOwnDeclaration(current.lines, current.name)) names.push(current.name);
-    current = undefined;
-  };
-  for (const line of lines) {
-    if (!inFence) {
-      const heading = TOOL_HEADING.exec(line);
-      if (heading) {
-        close();
-        current = { name: heading[1]!, lines: [] };
-        continue;
-      }
-      if (NAMESPACE_HEADING.test(line)) {
-        close();
-        continue;
-      }
+  const rendered: RenderedTool[] = [];
+  let pending: RenderedTool[] = [];
+  let fence: Fence | undefined;
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i]!;
+    if (fence) {
+      if (closesFence(line, fence)) fence = undefined;
+      continue;
     }
-    if (inFence ? FENCE_CLOSE.test(line) : FENCE_OPEN.test(line)) inFence = !inFence;
-    current?.lines.push(line);
+    const heading = TOOL_HEADING.exec(line);
+    if (heading) {
+      pending.push({ name: heading[1]!, raw: heading[2] ?? heading[1]! });
+      continue;
+    }
+    if (line === DECLARATION_LEAD && lines[i + 1] === DECLARATION_FENCE) {
+      const declared = lines[i + 2] ?? "";
+      let close = i + 2;
+      while (close < lines.length && lines[close] !== DECLARATION_CLOSE) close += 1;
+      // The innermost pending heading with this name owns the declaration; prose headings that
+      // merely look like tool headings are dropped with the rest of the pending list.
+      const owner = pending.findLast(tool => declared.startsWith("declare const tools: { " + tool.name + "("));
+      if (owner && close < lines.length) rendered.push(owner);
+      pending = [];
+      i = close;
+      continue;
+    }
+    fence = openedFence(line);
   }
-  if (!inFence) close();
-  return names;
+  return rendered;
 }
 
 /** A nested name that claims a collaboration surface other than V1's. */
@@ -108,9 +122,11 @@ export function codeModeV1Evidence(tools: readonly OcxTool[] | undefined): CodeM
   let foreign = false;
   for (const tool of tools) {
     if (!isCodeModeExec(tool)) continue;
-    for (const name of renderedNestedToolNames(tool.description)) {
-      if (name === MULTI_AGENT_V1_SPAWN) v1Spawn = true;
-      else if (isForeignCollabName(name)) foreign = true;
+    for (const { raw } of renderedNestedTools(tool.description)) {
+      // Classify by the name the host registered; the normalized identifier can collapse a foreign
+      // namespace such as multi-agent-v1 onto multi_agent_v1.
+      if (raw === MULTI_AGENT_V1_SPAWN) v1Spawn = true;
+      else if (isForeignCollabName(raw)) foreign = true;
     }
   }
   if (!v1Spawn) return null;
