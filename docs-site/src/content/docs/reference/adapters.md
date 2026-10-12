@@ -56,7 +56,8 @@ transport; it does not infer subscription attribution from the inbound protocol.
 - **Rewrites Codex's GPT-5 identity prompt** to a model-agnostic intro so routed models don't claim to
   be OpenAI.
 - For translated `Qwen3.8-27B` requests (including gateway-namespaced ids such as
-  `openai/Qwen3.8-27B`) and `OrcaSAQ-2-Cyber-27B` GGUF requests, a text-only developer reminder
+  `openai/Qwen3.8-27B`), Flash-Next requests (`flash-next` or `Qwen3.8-Flash-Next`, also with
+  gateway namespaces), and `OrcaSAQ-2-Cyber-27B` GGUF requests, a text-only developer reminder
   after the leading system message stays in its conversation slot but is sent as `user`.
   The Orca exception requires `GGUF` in the final model segment before any optional colon
   quant tag; non-GGUF Orca variants keep their configured developer-role behavior.
