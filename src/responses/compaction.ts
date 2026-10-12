@@ -57,6 +57,21 @@ export const SUMMARY_PREFIX = "Another language model started to solve this prob
 export const OPAQUE_COMPACTION_NOTE = "[earlier conversation was compacted; the summary is stored in a format this model cannot read]";
 
 /**
+ * System-level continuation framing for a routed model that receives a decoded `ocx1` checkpoint
+ * as plain user text (#6764). The replayed text alone leaves the retained earlier request and the
+ * checkpoint as two competing user instructions, and a model can pick the already completed one.
+ * Kept apart from SUMMARY_PREFIX, which the v1 retention and recovery paths match exactly.
+ */
+export const CHECKPOINT_CONTINUATION_NOTE = "This conversation was compacted automatically. A checkpoint summary from an earlier context window appears as a user message and describes the current state of the work. Earlier user requests that the checkpoint reports as completed are history; do not repeat them. If the checkpoint names an unfinished task as active, including one the user already authorized or one delegated from another thread, continue that task without asking for authorization again. A user message that arrives after the checkpoint always takes priority; if it pauses, cancels or replaces the active task, follow it.";
+
+/** Append the continuation note to existing instructions once. */
+export function appendCheckpointContinuationNote(instructions: unknown): string {
+  const existing = typeof instructions === "string" ? instructions : "";
+  if (existing.includes(CHECKPOINT_CONTINUATION_NOTE)) return existing;
+  return existing.trim().length > 0 ? `${existing}\n\n${CHECKPOINT_CONTINUATION_NOTE}` : CHECKPOINT_CONTINUATION_NOTE;
+}
+
+/**
  * Item types in the compact wire family. Each carries an `encrypted_content` blob the client
  * replays verbatim on every later turn, and the minting backend verifies it is unmodified.
  *

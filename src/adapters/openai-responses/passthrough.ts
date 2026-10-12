@@ -501,6 +501,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
                   outBody,
                   destinationDecodesNativeCompactionBlob(provider),
                   threadServingIdentityChanged,
+                  parsed._compactionRequest !== true,
                 ),
                 {
                   preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true,
