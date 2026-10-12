@@ -200,6 +200,17 @@ export async function runHealthSentinel(deps: HealthSentinelDeps): Promise<Healt
         return standDown(attempt.reason);
       } else {
         const { entry } = attempt;
+        // The lease, history and log work above takes time. Re-check that the evidence is still
+        // fresh right before the irreversible step: a proxy that recovered meanwhile must not be
+        // killed on old observations. A clock that ran backwards makes the evidence stale too.
+        const evidenceAge = deps.now() - outcome.endedAt;
+        if (evidenceAge < 0 || evidenceAge > timing.maxEvidenceAgeMs || deps.isTargetGone()) {
+          settle({ ...entry, state: "skipped" });
+          if (deps.isTargetGone()) return { outcome: "target_exited" };
+          deps.log(`discarding stale evidence (${Math.round(evidenceAge / 1000)}s old) for pid ${deps.targetPid}; observing again`);
+          if (await raceGone(deps.sleep(policy.nextDelayMs()), exitSignal) === GONE) return { outcome: "target_exited" };
+          continue;
+        }
         const result = deps.terminateTarget();
         if (result === "not_target") {
           settle({ ...entry, state: "skipped" });

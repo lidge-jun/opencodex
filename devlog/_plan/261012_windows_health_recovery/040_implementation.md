@@ -35,3 +35,12 @@ Round-1 major confirmed resolved (reviewer instrumentation: 50,000 healthy probe
 subscription, no listeners left). The remaining minor — the fixture could start hanging before the
 sentinel had armed — is folded: the sentinel logs `watching pid <pid> on port <port>` once when it
 arms, and the fixture keeps answering until that line appears.
+
+## Merge sign-off conditions (GPT-6.1-Sol high, SIGN-OFF-WITH-CONDITIONS on abd179ba5e)
+
+| # | Condition | Change |
+|---|---|---|
+| A | Lease/history/log work between the last failing probe and `terminateTarget` had no freshness check (reproduced: a ten-minute injected history delay still killed) | `maxEvidenceAgeMs` (5 s). Right before the kill the runner re-checks the wall-clock age of the last failing observation; stale or future-dated evidence settles the `intent` entry as `skipped` and requires a fresh failing streak. Regression: injected +10 min delay and −2 h clock step both lead to a discard and a kill only after three new timeouts |
+| B | Future-dated history entries were dropped, so a two-hour clock rollback lifted the hourly cap (reproduced) | `recentRecoveryCount` counts future entries as recent until the clock passes them by a full window. Regression: rollback with three entries stands down, also for a restarted sentinel; one future entry doubles the required span |
+
+Accepted by the merge thread: POSIX PID-reuse residual for this default-off feature; Linux `pidfd_open` + `pidfd_send_signal` is a follow-up issue.

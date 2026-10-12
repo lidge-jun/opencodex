@@ -41,7 +41,9 @@ stop; a drain that began during startup prevents the spawn (`didRunDrainStartHoo
 - after a timeout, probe back to back (1 s), so a streak is one continuous unresponsive stretch and
   recurring shorter stalls aligned with the 30 s cadence cannot add up;
 - recover at 3 timeouts and 60 s of span (about 62 s of continuous silence with a 20 s deadline);
-  the span doubles per recovery in the last hour, and 3 recoveries per hour stand the sentinel down;
+  the span doubles per recovery in the last hour, and 3 recoveries per hour stand the sentinel down.
+  A recovery dated after the current time (the clock was set back) counts as recent until the
+  clock passes it by a full window, so a rollback or a restart after one cannot lift the cap;
 - a probe that started late or outlived its deadline by more than 5 s, a clock that ran
   backwards, or a probe during which the sentinel's own event loop ran more than 2 s late
   (wall-clock lag monitor, so sleep counts) voids the streak.
@@ -63,7 +65,9 @@ stop; a drain that began during startup prevents the spawn (`didRunDrainStartHoo
 
 The final runtime-record re-read and the durable `intent` write run under the service ownership
 mutation lease (`src/service/ownership-mutation-lease.mjs`, 500 ms wait, no subprocess); a busy lease
-defers. The lease is released before the kill, because on Windows the sentinel may end with the
+defers. Right before the kill the runner re-checks that the last failing observation is at most
+5 s old on the wall clock (and not in the future); older evidence is discarded, the `intent` entry is
+settled as `skipped`, and a fresh failing streak is required. The lease is released before the kill, because on Windows the sentinel may end with the
 proxy and a held lease would delay the replacement's startup. Every history write takes the lease.
 `service-health-recovery.json` is written through an fsynced temp file, rename and (POSIX) directory
 fsync where storage errors fail the write, fails closed when unreadable or unwritable, and settles each entry as `terminated`,

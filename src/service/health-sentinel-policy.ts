@@ -66,6 +66,11 @@ export type HealthSentinelTiming = {
   maxRecoveriesPerWindow: number;
   /** Ceiling on the backoff multiplier. */
   maxBackoffMultiplier: number;
+  /**
+   * Oldest the final failing observation may be when the kill is issued. Lease, history and log
+   * work runs between the decision and the kill; evidence older than this is discarded.
+   */
+  maxEvidenceAgeMs: number;
 };
 
 export const DEFAULT_HEALTH_SENTINEL_TIMING: Readonly<HealthSentinelTiming> = Object.freeze({
@@ -80,6 +85,7 @@ export const DEFAULT_HEALTH_SENTINEL_TIMING: Readonly<HealthSentinelTiming> = Ob
   recoveryWindowMs: 60 * 60_000,
   maxRecoveriesPerWindow: 3,
   maxBackoffMultiplier: 8,
+  maxEvidenceAgeMs: 5_000,
 });
 
 export type HealthSentinelDecision =
@@ -105,9 +111,14 @@ export type HealthSentinelPolicy = {
   nextDelayMs(): number;
 };
 
-/** Recoveries recorded inside the window ending at `now`. */
+/**
+ * Recoveries recorded inside the window ending at `now`. An entry dated after `now` counts as
+ * recent: it means the wall clock was set back after it was written, and dropping it would let a
+ * clock rollback (or a restart after one) lift the hourly cap. It keeps counting until the clock
+ * passes it by a full window, which errs toward not killing.
+ */
 export function recentRecoveryCount(history: readonly number[], now: number, windowMs: number): number {
-  return history.filter(at => Number.isFinite(at) && at <= now && now - at < windowMs).length;
+  return history.filter(at => Number.isFinite(at) && now - at < windowMs).length;
 }
 
 /** The unhealthy span required after `recent` recoveries: doubled per recovery, capped. */

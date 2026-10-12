@@ -63,7 +63,7 @@ function world(script: Array<"answer" | "timeout" | "refused">, overrides: Parti
     timing: FAST,
     ...overrides,
   };
-  return { deps, events, history, runtime, exitTarget };
+  return { deps, events, history, runtime, exitTarget, advance: (ms: number) => { clock += ms; } };
 }
 
 const terminated = (events: string[]) => events.some(event => event.startsWith("terminate:"));
@@ -84,6 +84,31 @@ describe("health sentinel runner (#6671)", () => {
     // Arming is announced once, before the first counted timeout.
     expect(events.filter(event => event === `log:watching pid ${TARGET} on port 4100`)).toHaveLength(1);
     expect(events.indexOf(`log:watching pid ${TARGET} on port 4100`)).toBeLessThan(events.indexOf("probe:timeout"));
+  });
+
+  test("evidence that went stale during lease and history work is discarded and observed again", async () => {
+    // Merge sign-off condition A: a slow history write (or a clock set back) between the last
+    // failing probe and the kill must not kill a proxy on old observations.
+    for (const shift of [10 * 60_000, -2 * 60 * 60_000]) {
+      const { deps, events, history, advance } = world(["answer", "timeout"]);
+      let delayed = false;
+      const write = deps.writeHistory;
+      deps.writeHistory = entry => {
+        if (entry.state === "intent" && !delayed) {
+          delayed = true;
+          advance(shift);
+        }
+        return write(entry);
+      };
+      expect(await runHealthSentinel(deps)).toEqual({ outcome: "recovered", state: "terminated" });
+      expect(history.map(entry => entry.state)).toEqual(["intent", "skipped", "intent", "terminated"]);
+      const discarded = events.findIndex(event => event.includes("discarding stale evidence"));
+      const kill = events.findIndex(event => event.startsWith("terminate:"));
+      expect(discarded).toBeGreaterThan(-1);
+      expect(kill).toBeGreaterThan(discarded);
+      // The kill came only after a fresh run of failing probes, not from the stale one.
+      expect(events.slice(discarded, kill).filter(event => event === "probe:timeout").length).toBeGreaterThanOrEqual(3);
+    }
   });
 
   test("a healthy or refusing target is never terminated", async () => {

@@ -182,6 +182,25 @@ describe("service health sentinel policy (#6671)", () => {
     expect(last).toBe("recover");
   });
 
+  test("recoveries dated in the future still count after a clock rollback and across a restart", () => {
+    // Merge sign-off condition B: three attempts, then the wall clock is set back two hours. Their
+    // entries now lie in the future and must not lift the hourly cap.
+    const from = START + T.startupGraceMs;
+    const rolledBack = [from + 2 * 3_600_000 - 120_000, from + 2 * 3_600_000 - 60_000, from + 2 * 3_600_000];
+    expect(recentRecoveryCount(rolledBack, from, T.recoveryWindowMs)).toBe(3);
+    expect(feedTimeouts(armedPolicy(rolledBack), from, 60).decision?.action).toBe("stand_down");
+    // A restarted sentinel reads the same history and reaches the same answer.
+    const restarted = createHealthSentinelPolicy({ targetPid: TARGET, startedAt: START + 1, recoveryHistory: rolledBack });
+    restarted.observe(answered(START + 1));
+    expect(feedTimeouts(restarted, from, 60).decision?.action).toBe("stand_down");
+    // One future entry still doubles the required span.
+    const one = armedPolicy([from + 3_600_000]);
+    feedTimeouts(one, from, 1);
+    expect(one.requiredUnhealthyMs()).toBe(2 * T.minUnhealthyMs);
+    // Once the clock passes an entry by a full window, it stops counting.
+    expect(recentRecoveryCount([from], from + T.recoveryWindowMs, T.recoveryWindowMs)).toBe(0);
+  });
+
   test("earlier recoveries double the required unhealthy span and the hourly cap stands down", () => {
     expect(requiredUnhealthySpan(T, 0)).toBe(T.minUnhealthyMs);
     expect(requiredUnhealthySpan(T, 1)).toBe(2 * T.minUnhealthyMs);
