@@ -684,7 +684,8 @@ Codex plugin is enabled in `$CODEX_HOME/config.toml` and an installed copy under
 `$CODEX_HOME/plugins/cache/sisyphuslabs/omo/` carries its `lazycodex-install.json`. A `~/.omo`
 folder on its own does not count, because Pi-based omo creates it too. Without LazyCodex the
 section is hidden and the command line reports it as not installed. Pick a model and a reasoning
-effort on a row and press Save:
+effort on a row and press Save. A row whose role has no model pin can save an effort on its own;
+the role keeps inheriting its model:
 
 - opencodex updates only the root `model = "..."` and `model_reasoning_effort = "..."` keys of that role's file.
   Missing pins are inserted near the top. Choosing **Inherit effort**, available on every row,
@@ -711,6 +712,12 @@ in omo.jsonc when LazyCodex has that level (`ultra` stays in the role file only,
 `reasoning` is removed). On `PUT /api/codex-agent-roles/{role}`, omitting `effort` keeps the pin,
 a level sets it, and `null` removes the role file's `model_reasoning_effort` line, its trailing
 comment, and the omo.jsonc `reasoning`. A Save that changes only the model leaves both effort values as they were.
+Omitting `model` leaves the role file's `model` pin and the omo.jsonc `model` exactly as they were,
+so a role without a pin keeps inheriting its model while its effort changes or clears; the dashboard
+sends this effort-only request for such a row, and an omo.jsonc role without an entry gets one holding
+only `reasoning`. A `null` model is refused with 400 `invalid_model`, because a save never removes a model
+pin, and a request with neither `model` nor `effort` is refused with 400 `empty_update` before the role file or omo.jsonc is
+read. `ocx agent roles set` always takes a model.
 Only an existing one-line string value can be removed; a multiline or non-string value is refused
 with 409 `unsupported_model_value`, leaving both files unchanged. Clearing removes only the
 role's own override: Codex then resolves the effort as it does for any role without one (an explicit

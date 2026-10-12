@@ -1820,7 +1820,7 @@ export const ko: Record<TKey, string> = {
   "integrations.lazycodexRoles.saveFailed": "{role}의 모델을 저장하지 못했습니다.",
   "integrations.lazycodexRoles.saved": "이제 {role}은(는) {model}로 실행됩니다.",
   "integrations.lazycodexRoles.omoAbsent": "이제 {role}은(는) {model}로 실행됩니다. omo.jsonc가 없어서 역할 파일만 바꿨습니다.",
-  "integrations.lazycodexRoles.omoComments": "역할 파일에서 {role}은(는) 이제 {model}로 실행됩니다. 저장하면 주석이 사라지므로 omo.jsonc는 바꾸지 않았습니다. 그곳의 [codex].agents.{role}.model은 직접 설정하세요.",
+  "integrations.lazycodexRoles.omoComments": "역할 파일에서 {role}은(는) 이제 {model}로 실행됩니다. 저장하면 주석이 사라지므로 omo.jsonc는 바꾸지 않았습니다. 그곳의 [codex].agents.{role}은 직접 설정하세요.",
   "integrations.lazycodexRoles.omoInvalid": "역할 파일에서 {role}은(는) 이제 {model}로 실행됩니다. omo.jsonc가 [codex].agents 객체를 가진 JSON 객체가 아니어서 바꾸지 않았습니다.",
   "integrations.lazycodexRoles.omoFailed": "역할 파일에서 {role}은(는) 이제 {model}로 실행되지만, omo.jsonc에는 쓰지 못했습니다.",
   "integrations.lazycodexRoles.retryMirror": "omo.jsonc 다시 시도",

@@ -1776,7 +1776,7 @@ export const de: Record<TKey, string> = {
   "integrations.lazycodexRoles.saveFailed": "Das Modell für {role} konnte nicht gespeichert werden.",
   "integrations.lazycodexRoles.saved": "{role} läuft jetzt mit {model}.",
   "integrations.lazycodexRoles.omoAbsent": "{role} läuft jetzt mit {model}. omo.jsonc wurde nicht gefunden, daher wurde nur die Rollendatei geändert.",
-  "integrations.lazycodexRoles.omoComments": "{role} läuft laut Rollendatei jetzt mit {model}. omo.jsonc blieb unverändert, weil das Speichern seine Kommentare entfernen würde; setzen Sie [codex].agents.{role}.model dort von Hand.",
+  "integrations.lazycodexRoles.omoComments": "{role} läuft laut Rollendatei jetzt mit {model}. omo.jsonc blieb unverändert, weil das Speichern seine Kommentare entfernen würde; setzen Sie [codex].agents.{role} dort von Hand.",
   "integrations.lazycodexRoles.omoInvalid": "{role} läuft laut Rollendatei jetzt mit {model}. omo.jsonc blieb unverändert, weil es kein JSON-Objekt mit einem [codex].agents-Objekt ist.",
   "integrations.lazycodexRoles.omoFailed": "{role} läuft laut Rollendatei jetzt mit {model}, aber omo.jsonc konnte nicht geschrieben werden.",
   "integrations.lazycodexRoles.retryMirror": "omo.jsonc erneut versuchen",

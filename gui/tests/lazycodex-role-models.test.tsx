@@ -61,6 +61,7 @@ beforeEach(() => {
       const body = JSON.parse(String(init.body));
       puts.push({ url, body });
       if (putFailure) return json(putFailure.body, putFailure.status);
+      if (body.model === undefined && body.effort === undefined) return json({ error: "empty", code: "empty_update" }, 400);
       if (body.effort !== undefined && body.effort !== null) {
         try {
           validateAgentRoleEffort(body.effort);
@@ -69,10 +70,17 @@ beforeEach(() => {
         }
       }
       const role = decodeURIComponent(url.slice(url.lastIndexOf("/") + 1));
-      const current = rolesBody as { roles: Array<{ role: string; model: string | null; effort?: string | null }> };
+      const current = rolesBody as { roles: Array<{ role: string; model: string | null; effort?: string | null; omoJsoncModel?: string | null }> };
+      // Like the server, an omitted model leaves both the role pin and the omo.jsonc model alone.
+      const model = body.model === undefined ? undefined : body.model as string;
       rolesBody = {
         ...current,
-        roles: current.roles.map(row => row.role === role ? { ...row, model: body.model, effort: body.effort === undefined ? row.effort ?? null : body.effort, omoJsoncModel: omoWriteStatus === "written" ? body.model : (row as { omoJsoncModel?: string | null }).omoJsoncModel } : row),
+        roles: current.roles.map(row => row.role === role ? {
+          ...row,
+          model: model ?? row.model,
+          effort: body.effort === undefined ? row.effort ?? null : body.effort,
+          omoJsoncModel: omoWriteStatus === "written" && model !== undefined ? model : row.omoJsoncModel ?? null,
+        } : row),
       };
       return json({ ok: true, toml: { status: "written" }, omoJsonc: { status: omoWriteStatus } });
     }
@@ -420,4 +428,110 @@ test("a pre-save GET resolving late cannot overwrite a confirmed save", async ()
   expect(current("explorer")).toBe("gpt-5.5 · high");
   expect(await effortOptions("explorer")).toEqual(["Inherit effort", "high", "low", "medium"]);
   expect(saveButton("explorer").disabled).toBe(true);
+});
+
+function inheritLibrarian(effort: string | null): void {
+  rolesBody = {
+    ...(rolesBody as object),
+    roles: [
+      { role: "explorer", model: "gpt-5.5", effort: null, omoJsoncModel: null },
+      { role: "librarian", model: null, effort, omoJsoncModel: "omo/pick" },
+    ],
+  };
+}
+
+function librarianRow(): { model: string | null; effort: string | null; omoJsoncModel: string | null } {
+  const { model, effort, omoJsoncModel } = (rolesBody as { roles: Array<{ role: string; model: string | null; effort: string | null; omoJsoncModel: string | null }> })
+    .roles.find(row => row.role === "librarian")!;
+  return { model, effort, omoJsoncModel };
+}
+
+for (const reloadFails of [false, true]) {
+  test(`a role that inherits its model saves a new effort without a model (reload fails: ${reloadFails})`, async () => {
+    inheritLibrarian("high");
+    await mount();
+    expect(current("librarian")).toBe("No model pin · high");
+    expect(saveButton("librarian").disabled).toBe(true);
+    await pick("librarian", "low", "Reasoning effort (librarian)");
+    expect(saveButton("librarian").disabled).toBe(false);
+    if (reloadFails) rolesFailure = { status: 503, body: { error: "unavailable" } };
+    await act(async () => { saveButton("librarian").click(); });
+    await settle();
+    expect(puts).toEqual([{ url: `${apiBase}/api/codex-agent-roles/librarian`, body: { effort: "low" } }]);
+    expect(librarianRow()).toEqual({ model: null, effort: "low", omoJsoncModel: "omo/pick" });
+    expect(container.textContent).toContain("librarian now runs on No model pin · low.");
+    expect(current("librarian")).toBe("No model pin · low");
+    expect(saveButton("librarian").disabled).toBe(true);
+    expect(saveButton("librarian").textContent).toBe("Save");
+  });
+}
+
+test("Inherit effort clears a model-inheriting role's effort without a model", async () => {
+  inheritLibrarian("high");
+  await mount();
+  await pick("librarian", "Inherit effort", "Reasoning effort (librarian)");
+  expect(saveButton("librarian").disabled).toBe(false);
+  await act(async () => { saveButton("librarian").click(); });
+  await settle();
+  expect(puts.map(entry => entry.body)).toEqual([{ effort: null }]);
+  expect(current("librarian")).toBe("No model pin");
+  expect(container.textContent).toContain("librarian now runs on No model pin.");
+  expect(saveButton("librarian").disabled).toBe(true);
+});
+
+test("a role with neither a model nor an effort pin saves once an effort is picked", async () => {
+  await mount();
+  expect(current("librarian")).toBe("No model pin");
+  expect(saveButton("librarian").disabled).toBe(true);
+  expect(saveButton("librarian").textContent).toBe("Save");
+  await pick("librarian", "high", "Reasoning effort (librarian)");
+  await act(async () => { saveButton("librarian").click(); });
+  await settle();
+  expect(puts.map(entry => entry.body)).toEqual([{ effort: "high" }]);
+  expect(current("librarian")).toBe("No model pin · high");
+  expect(saveButton("librarian").disabled).toBe(true);
+});
+
+for (const [choice, sent] of [["low", "low"], ["Inherit effort", null]] as const) {
+  for (const reload of ["pending", "failed"] as const) {
+    test(`an effort-only mirror retry resends ${String(sent)} without a model after a ${reload} reload`, async () => {
+      inheritLibrarian("high");
+      await mount();
+      omoWriteStatus = "write_failed";
+      let release = () => {};
+      if (reload === "pending") rolesHold = new Promise<void>(resolve => { release = resolve; });
+      else rolesFailure = { status: 503, body: { error: "unavailable" } };
+      await pick("librarian", choice, "Reasoning effort (librarian)");
+      await act(async () => { saveButton("librarian").click(); });
+      await settle();
+      expect(container.textContent).toContain("omo.jsonc could not be written");
+      expect(current("librarian")).toBe(sent ? `No model pin · ${sent}` : "No model pin");
+      expect(saveButton("librarian").disabled).toBe(false);
+      expect(saveButton("librarian").textContent).toBe("Retry omo.jsonc");
+      omoWriteStatus = "written";
+      await act(async () => { saveButton("librarian").click(); });
+      await settle();
+      expect(puts.map(entry => entry.body)).toEqual([{ effort: sent }, { effort: sent }]);
+      expect(saveButton("librarian").disabled).toBe(true);
+      expect(saveButton("librarian").textContent).toBe("Save");
+      await act(async () => { release(); });
+      await settle();
+    });
+  }
+}
+
+test("picking a model after a failed effort-only mirror sends both, and only then pins a model", async () => {
+  inheritLibrarian("high");
+  await mount();
+  omoWriteStatus = "write_failed";
+  await pick("librarian", "low", "Reasoning effort (librarian)");
+  await act(async () => { saveButton("librarian").click(); });
+  await settle();
+  await pick("librarian", "xai/grok-4.5");
+  expect(saveButton("librarian").textContent).toBe("Save");
+  omoWriteStatus = "written";
+  await act(async () => { saveButton("librarian").click(); });
+  await settle();
+  expect(puts.map(entry => entry.body)).toEqual([{ effort: "low" }, { model: "xai/grok-4.5", effort: "low" }]);
+  expect(current("librarian")).toBe("xai/grok-4.5 · low");
 });

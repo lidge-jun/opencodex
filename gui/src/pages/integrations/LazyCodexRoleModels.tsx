@@ -72,18 +72,21 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
   const latestData = useRef(data);
   useLayoutEffect(() => { latestData.current = data; }, [data]);
 
-  const save = async (role: string, model: string, effort: string | null | undefined = undefined, displayedEffort?: string): Promise<boolean> => {
+  // An undefined model saves the effort alone and leaves the role's model pin, or its inheritance,
+  // as it is. Auto-assign and model picks always pass a model.
+  const save = async (role: string, model: string | undefined, effort: string | null | undefined = undefined, displayedEffort?: string): Promise<boolean> => {
     if (pending !== null) return false;
-    setPending(role);
-    setResult(null);
     // An omitted effort still carries a pending omo.jsonc retry's effort, so a later save from any
     // path (the row or auto-assign) cannot drop it. An explicit effort replaces the retry.
     const sent = effort === undefined ? mirrorRetries[role]?.sent : effort;
+    if (model === undefined && sent === undefined) return false;
+    setPending(role);
+    setResult(null);
     try {
       const response = await fetch(`${apiBase}/api/codex-agent-roles/${encodeURIComponent(role)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(sent === undefined ? { model } : { model, effort: sent }),
+        body: JSON.stringify({ ...(model !== undefined ? { model } : {}), ...(sent !== undefined ? { effort: sent } : {}) }),
       });
       const payload = await readJsonOrThrow<{ omoJsonc?: { status?: OmoWriteStatus } }>(
         response,
@@ -96,21 +99,23 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
         ? confirmedRow ? confirmedRow.effort ?? null : displayedEffort || null
         : sent;
       const shownEffort = confirmedEffort ?? "";
+      const confirmedModel = model ?? confirmedRow?.model ?? null;
       if (confirmed) {
         const next = {
           ...confirmed,
           roles: confirmed.roles.map(row => row.role === role ? {
             ...row,
-            model,
+            model: model ?? row.model,
             effort: confirmedEffort,
-            omoJsoncModel: omoStatus === "written" || omoStatus === "unchanged" ? model : row.omoJsoncModel,
+            omoJsoncModel: model !== undefined && (omoStatus === "written" || omoStatus === "unchanged") ? model : row.omoJsoncModel,
           } : row),
         };
         latestData.current = next;
         setClientResourceData(resourceKey, next);
       }
       const notice = omoStatus ? OMO_WRITE_NOTICE[omoStatus] : undefined;
-      const picked = shownEffort ? `${model} · ${shownEffort}` : model;
+      const shownModel = confirmedModel ?? t("integrations.lazycodexRoles.none");
+      const picked = shownEffort ? `${shownModel} · ${shownEffort}` : shownModel;
       setResult(notice
         ? { tone: "warn", text: t(notice, { role, model: picked }) }
         : { tone: "ok", text: t("integrations.lazycodexRoles.saved", { role, model: picked }) });
@@ -119,7 +124,7 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
         const { [role]: _previous, ...rest } = current;
         return mirrorFailed ? { ...rest, [role]: value } : rest;
       };
-      setDrafts(current => keepOnFailure(current, model));
+      setDrafts(current => keepOnFailure(current, model ?? ""));
       setEffortDrafts(current => keepOnFailure(current, shownEffort));
       setMirrorRetries(current => keepOnFailure(current, { sent }));
       await resource.refresh();
@@ -176,17 +181,22 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
               {data.roles.map(row => {
                 const draft = drafts[row.role] ?? row.model ?? "";
                 const effortDraft = effortDrafts[row.role] ?? row.effort ?? "";
-                const changed = draft !== "" && (draft !== row.model || effortDraft !== (row.effort ?? ""));
-                const pendingMirror = mirrorRetries[row.role];
-                const retryMirror = pendingMirror !== undefined && draft !== "";
                 const effortChanged = effortDraft !== (row.effort ?? "");
+                // A role that inherits its model has an empty model draft; its effort still saves alone.
+                const changed = (draft !== "" && draft !== row.model) || effortChanged;
+                const pendingMirror = mirrorRetries[row.role];
+                // Without a model draft, a retry needs the effort it resends, including a null clear.
+                const retryMirror = pendingMirror !== undefined && (draft !== "" || pendingMirror.sent !== undefined);
                 return (
                   <tr key={row.role}>
                     <td><code>{row.role}</code></td>
                     <td>
                       {row.model
                         ? <code>{row.effort ? `${row.model} · ${row.effort}` : row.model}</code>
-                        : <span className="integration-meta">{t("integrations.lazycodexRoles.none")}</span>}
+                        : <>
+                          <span className="integration-meta">{t("integrations.lazycodexRoles.none")}</span>
+                          {row.effort && <> · <code>{row.effort}</code></>}
+                        </>}
                     </td>
                     <td>
                       <div className="lazycodex-role-models-edit">
@@ -211,7 +221,7 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
                           type="button"
                           className="btn btn-primary btn-sm"
                           disabled={!(changed || retryMirror) || pending !== null}
-                          onClick={() => void save(row.role, draft, effortChanged ? effortDraft || null : undefined, row.effort ?? "")}
+                          onClick={() => void save(row.role, draft || undefined, effortChanged ? effortDraft || null : undefined, row.effort ?? "")}
                         >
                           {pending === row.role
                             ? t("common.saving")

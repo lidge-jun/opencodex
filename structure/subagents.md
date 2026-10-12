@@ -321,7 +321,7 @@ the requested model id only; effort remains owned by the caps described under
 Codex overrides a child's spawn-time model with the root `model` key of
 `$CODEX_HOME/agents/<role>.toml`, so that pin decides which model a role runs on.
 `src/codex/agent-role-models.ts` is opencodex's only writer into those files, and it writes only
-the root `model` and optional `model_reasoning_effort` keys, only when a user saves a role in the dashboard's omo (Codex / LazyCodex)
+the root `model` and `model_reasoning_effort` keys, each only when the request carries it, only when a user saves a role in the dashboard's omo (Codex / LazyCodex)
 section on the omo tab (`PUT /api/codex-agent-roles/{role}`) or with `ocx agent roles set`,
 and only while LazyCodex is detected. No sync, startup, or
 catalog path calls it, and opencodex never creates, repairs, or removes a role file.
@@ -348,6 +348,10 @@ catalog path calls it, and opencodex never creates, repairs, or removes a role f
   Removal preserves the BOM, line endings, and all other bytes; an absent key is a no-op.
   Clearing the role-level override lets Codex resolve effort normally (spawn value, `[agents]`
   default, parent). The dashboard offers **Inherit effort** on every row and sends `null` to clear.
+- `model` is optional too: omitted leaves the root pin, or its absence, untouched, so a role that
+  inherits its model can set or clear its effort alone; the dashboard sends `{ "effort": ... }` for a
+  row without a pin. A `null` model is refused with 400 `invalid_model` (a save never removes a pin),
+  and a body with neither key is refused with 400 `empty_update` before any role file is read.
 - The same pick is mirrored into LazyCodex's `[codex].agents.<role>` as `model` and, for an effort LazyCodex can express, `reasoning`; that half belongs to
   [client integrations](clients/integrations.md#omo-codex-lazycodex-role-models). The role file is written first
   and stands even when the mirror is skipped.

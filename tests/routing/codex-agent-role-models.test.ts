@@ -222,4 +222,52 @@ describe("writeCodexAgentRoleModel", () => {
     expect((caught as AgentRoleModelError).code).toBe("unsupported_model_value");
     expect(readFileSync(path)).toEqual(before);
   });
+
+  // A role without a root model pin inherits its model. An omitted model must leave it inheriting.
+  const INHERITING_ROLE = IMPORTED_ROLE.replace('model = "gpt-5.5" # pinned\n', "").replace('model_reasoning_effort = "high"\n', "");
+
+  function inheritingHome(): { dir: string; path: string } {
+    const dir = codexHome();
+    const path = join(dir, "agents", "explorer.toml");
+    writeFileSync(path, INHERITING_ROLE);
+    return { dir, path };
+  }
+
+  test("an effort without a model sets the effort and adds no model pin", () => {
+    const { dir, path } = inheritingHome();
+    expect(writeCodexAgentRoleModel("explorer", undefined, dir, "medium")).toEqual({ status: "written" });
+    expect(readFileSync(path, "utf8")).toBe(INHERITING_ROLE.replace("# imported by Codex\n", '# imported by Codex\nmodel_reasoning_effort = "medium"\n'));
+    expect(listCodexAgentRoleModels(dir)).toEqual([{ role: "explorer", model: null }]);
+    expect(readCodexAgentRoleEffort("explorer", dir)).toBe("medium");
+    expect(writeCodexAgentRoleModel("explorer", undefined, dir, "medium")).toEqual({ status: "unchanged" });
+    expect(writeCodexAgentRoleModel("explorer", undefined, dir, "high")).toEqual({ status: "written" });
+    expect(readCodexAgentRoleEffort("explorer", dir)).toBe("high");
+  });
+
+  test("a null effort without a model clears the effort and restores the original bytes", () => {
+    const { dir, path } = inheritingHome();
+    writeCodexAgentRoleModel("explorer", undefined, dir, "high");
+    expect(writeCodexAgentRoleModel("explorer", undefined, dir, null)).toEqual({ status: "written" });
+    expect(readFileSync(path, "utf8")).toBe(INHERITING_ROLE);
+    expect(listCodexAgentRoleModels(dir)).toEqual([{ role: "explorer", model: null }]);
+    expect(writeCodexAgentRoleModel("explorer", undefined, dir, null)).toEqual({ status: "unchanged" });
+  });
+
+  test("neither a model nor an effort leaves the file byte for byte", () => {
+    const dir = codexHome();
+    expect(writeCodexAgentRoleModel("explorer", undefined, dir)).toEqual({ status: "unchanged" });
+    expect(readFileSync(join(dir, "agents", "explorer.toml"), "utf8")).toBe(IMPORTED_ROLE);
+    expect(() => writeCodexAgentRoleModel("missing", undefined, dir, "high")).toThrow(AgentRoleModelError);
+  });
+
+  test("an effort-only write keeps the existing pin and the TOML and effort guards", () => {
+    const dir = codexHome();
+    expect(writeCodexAgentRoleModel("explorer", undefined, dir, "low")).toEqual({ status: "written" });
+    expect(readFileSync(join(dir, "agents", "explorer.toml"), "utf8")).toBe(IMPORTED_ROLE.replace('model_reasoning_effort = "high"', 'model_reasoning_effort = "low"'));
+    expect(() => writeCodexAgentRoleModel("explorer", undefined, dir, "turbo")).toThrow(AgentRoleModelError);
+    const broken = 'name = "explorer"\nmodel_reasoning_effort = "old\\q"\n';
+    writeFileSync(join(dir, "agents", "explorer.toml"), broken);
+    expect(() => writeCodexAgentRoleModel("explorer", undefined, dir, "high")).toThrow(AgentRoleModelError);
+    expect(readFileSync(join(dir, "agents", "explorer.toml"), "utf8")).toBe(broken);
+  });
 });

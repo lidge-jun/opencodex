@@ -96,11 +96,17 @@ export async function handleCodexAgentRoleRoutes(ctx: ManagementContext): Promis
     return jsonResponse({ error: "invalid JSON body" }, 400, req, config);
   }
 
-  let model: string;
+  // An omitted model leaves the role's model pin (or its inheritance) alone, an omitted effort
+  // keeps the effort, and an effort of null clears it. A body with neither changes nothing, which
+  // is a client mistake rather than a save, so it is refused before any role file is read.
+  if (body?.model === undefined && body?.effort === undefined) {
+    return jsonResponse({ error: "send a model, an effort, or both", code: "empty_update" }, 400, req, config);
+  }
+  let model: string | undefined;
   let effort: string | null | undefined;
   let toml: { status: "written" | "unchanged" };
   try {
-    model = roles.validateAgentRoleModel(body?.model);
+    model = body.model === undefined ? undefined : roles.validateAgentRoleModel(body.model);
     effort = body?.effort === undefined ? undefined : body.effort === null ? null : roles.validateAgentRoleEffort(body.effort);
     toml = roles.writeCodexAgentRoleModel(role, model, codexHome, effort);
   } catch (error) {
@@ -120,5 +126,12 @@ export async function handleCodexAgentRoleRoutes(ctx: ManagementContext): Promis
   } catch {
     omoStatus = "write_failed";
   }
-  return jsonResponse({ ok: true, role, model, ...(effort !== undefined ? { effort } : {}), toml, omoJsonc: { status: omoStatus } }, 200, req, config);
+  return jsonResponse({
+    ok: true,
+    role,
+    ...(model !== undefined ? { model } : {}),
+    ...(effort !== undefined ? { effort } : {}),
+    toml,
+    omoJsonc: { status: omoStatus },
+  }, 200, req, config);
 }

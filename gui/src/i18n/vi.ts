@@ -2335,7 +2335,7 @@ export const vi: Record<TKey, string> = {
   "integrations.lazycodexRoles.saveFailed": "Không lưu được mô hình cho {role}.",
   "integrations.lazycodexRoles.saved": "{role} giờ chạy trên {model}.",
   "integrations.lazycodexRoles.omoAbsent": "{role} giờ chạy trên {model}. Không tìm thấy omo.jsonc nên chỉ tệp vai trò được thay đổi.",
-  "integrations.lazycodexRoles.omoComments": "Trong tệp vai trò, {role} giờ chạy trên {model}. omo.jsonc được giữ nguyên vì lưu sẽ xóa các chú thích của nó; hãy tự đặt [codex].agents.{role}.model ở đó.",
+  "integrations.lazycodexRoles.omoComments": "Trong tệp vai trò, {role} giờ chạy trên {model}. omo.jsonc được giữ nguyên vì lưu sẽ xóa các chú thích của nó; hãy tự đặt [codex].agents.{role} ở đó.",
   "integrations.lazycodexRoles.omoInvalid": "Trong tệp vai trò, {role} giờ chạy trên {model}. omo.jsonc được giữ nguyên vì nó không phải đối tượng JSON có đối tượng [codex].agents.",
   "integrations.lazycodexRoles.omoFailed": "Trong tệp vai trò, {role} giờ chạy trên {model}, nhưng không ghi được omo.jsonc.",
   "integrations.lazycodexRoles.retryMirror": "Thử lại omo.jsonc",

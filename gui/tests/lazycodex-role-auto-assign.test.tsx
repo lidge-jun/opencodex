@@ -61,7 +61,7 @@ beforeEach(() => {
     if (method === "PUT") {
       const body = JSON.parse(String(init?.body));
       const role = url.slice(url.lastIndexOf("/") + 1);
-      roleRows = roleRows.map(row => row.role === role ? { ...row, model: body.model, effort: body.effort === undefined ? row.effort : body.effort } : row);
+      roleRows = roleRows.map(row => row.role === role ? { ...row, model: body.model ?? row.model, effort: body.effort === undefined ? row.effort : body.effort } : row);
       return json({ ok: true, toml: { status: "written" }, omoJsonc: { status: mirrorStatus } });
     }
     if (url.endsWith("/api/subagent-models")) return json({ available: ["gpt-5.5", "a/small", "a/mid"] });
@@ -234,4 +234,24 @@ test("applying a no-ladder proposal resends an effort whose omo.jsonc mirror is 
   ]);
   expect(roleRow("worker").querySelectorAll("td")[1]!.textContent).toBe("a/mid · low");
   expect((roleRow("worker").querySelector("button.btn-primary") as HTMLButtonElement).disabled).toBe(true);
+});
+
+test("Apply after a failed effort-only mirror on a model-inheriting role carries that effort", async () => {
+  mirrorStatus = "write_failed";
+  await mount();
+  expect(roleRow("worker").querySelectorAll("td")[1]!.textContent).toBe("No model pin · high");
+  const trigger = container.querySelector('[aria-label="Reasoning effort (worker)"]') as HTMLButtonElement;
+  await act(async () => { trigger.click(); });
+  const low = [...testWindow.document.querySelectorAll('[role="option"]')].find(node => node.textContent === "low") as unknown as HTMLElement;
+  await act(async () => { low.click(); });
+  await click(roleRow("worker").querySelector("button.btn-primary") as HTMLButtonElement);
+  expect(roleRow("worker").querySelectorAll("td")[1]!.textContent).toBe("No model pin · low");
+  mirrorStatus = "written";
+  await click(button("Auto-assign"));
+  await click(button("Apply", proposal("worker")));
+  expect(requests.filter(r => r.method === "PUT").map(r => r.body)).toEqual([
+    { effort: "low" },
+    { model: "a/mid", effort: "low" },
+  ]);
+  expect(roleRow("worker").querySelectorAll("td")[1]!.textContent).toBe("a/mid · low");
 });

@@ -1793,7 +1793,7 @@ export const zh: Record<TKey, string> = {
   "integrations.lazycodexRoles.saveFailed": "无法保存 {role} 的模型。",
   "integrations.lazycodexRoles.saved": "{role} 现在使用 {model}。",
   "integrations.lazycodexRoles.omoAbsent": "{role} 现在使用 {model}。未找到 omo.jsonc，因此只修改了角色文件。",
-  "integrations.lazycodexRoles.omoComments": "角色文件中 {role} 现在使用 {model}。保存会删除 omo.jsonc 的注释，因此未修改它；请手动设置其中的 [codex].agents.{role}.model。",
+  "integrations.lazycodexRoles.omoComments": "角色文件中 {role} 现在使用 {model}。保存会删除 omo.jsonc 的注释，因此未修改它；请手动设置其中的 [codex].agents.{role}。",
   "integrations.lazycodexRoles.omoInvalid": "角色文件中 {role} 现在使用 {model}。omo.jsonc 不是包含 [codex].agents 对象的 JSON 对象，因此未修改。",
   "integrations.lazycodexRoles.omoFailed": "角色文件中 {role} 现在使用 {model}，但无法写入 omo.jsonc。",
   "integrations.lazycodexRoles.retryMirror": "重试 omo.jsonc",

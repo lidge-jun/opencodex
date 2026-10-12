@@ -2387,7 +2387,7 @@ export const en = {
   "integrations.lazycodexRoles.saveFailed": "Could not save the model for {role}.",
   "integrations.lazycodexRoles.saved": "{role} now runs on {model}.",
   "integrations.lazycodexRoles.omoAbsent": "{role} now runs on {model}. omo.jsonc was not found, so only the role file changed.",
-  "integrations.lazycodexRoles.omoComments": "{role} now runs on {model} in its role file. omo.jsonc was left unchanged because saving would remove its comments; set [codex].agents.{role}.model there by hand.",
+  "integrations.lazycodexRoles.omoComments": "{role} now runs on {model} in its role file. omo.jsonc was left unchanged because saving would remove its comments; set [codex].agents.{role} there by hand.",
   "integrations.lazycodexRoles.omoInvalid": "{role} now runs on {model} in its role file. omo.jsonc was left unchanged because it is not a JSON object with a [codex].agents object.",
   "integrations.lazycodexRoles.omoFailed": "{role} now runs on {model} in its role file, but omo.jsonc could not be written.",
   "integrations.lazycodexRoles.retryMirror": "Retry omo.jsonc",

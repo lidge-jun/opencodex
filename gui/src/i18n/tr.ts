@@ -2326,7 +2326,7 @@ export const tr: Record<TKey, string> = {
   "integrations.lazycodexRoles.saveFailed": "{role} için model kaydedilemedi.",
   "integrations.lazycodexRoles.saved": "{role} artık {model} ile çalışıyor.",
   "integrations.lazycodexRoles.omoAbsent": "{role} artık {model} ile çalışıyor. omo.jsonc bulunamadığı için yalnızca rol dosyası değişti.",
-  "integrations.lazycodexRoles.omoComments": "{role} rol dosyasında artık {model} ile çalışıyor. Kaydetmek yorumlarını sileceği için omo.jsonc değiştirilmedi; [codex].agents.{role}.model değerini orada elle ayarlayın.",
+  "integrations.lazycodexRoles.omoComments": "{role} rol dosyasında artık {model} ile çalışıyor. Kaydetmek yorumlarını sileceği için omo.jsonc değiştirilmedi; [codex].agents.{role} değerini orada elle ayarlayın.",
   "integrations.lazycodexRoles.omoInvalid": "{role} rol dosyasında artık {model} ile çalışıyor. omo.jsonc, [codex].agents nesnesi içeren bir JSON nesnesi olmadığı için değiştirilmedi.",
   "integrations.lazycodexRoles.omoFailed": "{role} rol dosyasında artık {model} ile çalışıyor, ancak omo.jsonc yazılamadı.",
   "integrations.lazycodexRoles.retryMirror": "omo.jsonc'yi yeniden dene",

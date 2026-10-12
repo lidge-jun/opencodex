@@ -2300,7 +2300,7 @@ export const ru: Record<TKey, string> = {
   "integrations.lazycodexRoles.saveFailed": "Не удалось сохранить модель для {role}.",
   "integrations.lazycodexRoles.saved": "{role} теперь работает на {model}.",
   "integrations.lazycodexRoles.omoAbsent": "{role} теперь работает на {model}. Файл omo.jsonc не найден, поэтому изменён только файл роли.",
-  "integrations.lazycodexRoles.omoComments": "В файле роли {role} теперь работает на {model}. omo.jsonc не изменён, потому что сохранение удалило бы его комментарии; задайте [codex].agents.{role}.model вручную.",
+  "integrations.lazycodexRoles.omoComments": "В файле роли {role} теперь работает на {model}. omo.jsonc не изменён, потому что сохранение удалило бы его комментарии; задайте [codex].agents.{role} вручную.",
   "integrations.lazycodexRoles.omoInvalid": "В файле роли {role} теперь работает на {model}. omo.jsonc не изменён: это не JSON-объект с объектом [codex].agents.",
   "integrations.lazycodexRoles.omoFailed": "В файле роли {role} теперь работает на {model}, но записать omo.jsonc не удалось.",
   "integrations.lazycodexRoles.retryMirror": "Повторить запись omo.jsonc",
