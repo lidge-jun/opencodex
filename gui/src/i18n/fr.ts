@@ -277,7 +277,7 @@ export const fr: Record<TKey, string> = {
   "startup.disabled": "Désactivé",
   "startup.protection.desktop": "Application de bureau",
   "startup.desktopHint": "Démarre à la connexion et supervise son proxy intégré. La prise en charge et les processus actifs sont vérifiés.",
-  "startup.desktopRecovery": "OpenCodex gère ce proxy. Rouvrez l’application de bureau et vérifiez le démarrage à la connexion. Les modifications du service et du lanceur restent désactivées tant que l’application le gère.",
+  "startup.desktopRecovery": "OpenCodex gère ce proxy. Rouvrez l’application de bureau et vérifiez le démarrage à la connexion. S’il est déjà coché, vérifiez que le système autorise OpenCodex à s’ouvrir à la connexion (macOS : Réglages Système → Général → Ouverture et extensions). Les modifications du service et du lanceur restent désactivées tant que l’application le gère.",
   "startup.desktopSupervisedRecovery": "OpenCodex Desktop exécute ce proxy, mais son démarrage à la connexion n’a pas pu être vérifié. Activez le démarrage à la connexion dans le menu OpenCodex. S’il est déjà coché, vérifiez que le système autorise OpenCodex à s’ouvrir à la connexion (macOS : Réglages Système → Général → Ouverture et extensions). Le service d’arrière-plan et le lanceur restent désactivés ici tant que l’application exécute le proxy ; pour les utiliser à la place, quittez OpenCodex et lancez la commande dans un terminal.",
   "startup.desktopReopenRecovery": "Rouvrez OpenCodex et vérifiez le démarrage à la connexion.",
   "startup.protection.service": "Service en arrière-plan",

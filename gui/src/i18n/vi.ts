@@ -277,7 +277,7 @@ export const vi: Record<TKey, string> = {
   "startup.disabled": "Đã tắt",
   "startup.protection.desktop": "Ứng dụng máy tính",
   "startup.desktopHint": "Khởi chạy khi đăng nhập và giám sát proxy tích hợp. Xác minh quyền quản lý và các tiến trình đang chạy.",
-  "startup.desktopRecovery": "OpenCodex quản lý proxy này. Mở lại ứng dụng máy tính và kiểm tra khởi động khi đăng nhập. Không thể thay đổi dịch vụ hay trình khởi chạy khi ứng dụng đang quản lý proxy.",
+  "startup.desktopRecovery": "OpenCodex quản lý proxy này. Mở lại ứng dụng máy tính và kiểm tra khởi động khi đăng nhập. Nếu đã bật, hãy kiểm tra hệ thống có cho phép OpenCodex mở khi đăng nhập không (macOS: Cài đặt hệ thống → Cài đặt chung → Mục đăng nhập & Phần mở rộng). Không thể thay đổi dịch vụ hay trình khởi chạy khi ứng dụng đang quản lý proxy.",
   "startup.desktopSupervisedRecovery": "OpenCodex Desktop đang chạy proxy này, nhưng không xác minh được khởi động khi đăng nhập. Bật khởi động khi đăng nhập trong menu OpenCodex. Nếu đã bật, hãy kiểm tra hệ thống có cho phép OpenCodex mở khi đăng nhập không (macOS: Cài đặt hệ thống → Cài đặt chung → Mục đăng nhập & Phần mở rộng). Khi ứng dụng đang chạy proxy, dịch vụ nền và launcher shim bị tắt tại đây; để dùng chúng, hãy thoát OpenCodex rồi chạy lệnh trong terminal.",
   "startup.desktopReopenRecovery": "Mở lại OpenCodex và kiểm tra cài đặt khởi động khi đăng nhập.",
   "startup.protection.service": "Service nền",

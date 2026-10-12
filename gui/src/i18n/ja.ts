@@ -282,7 +282,7 @@ export const ja: Record<TKey, string> = {
   "startup.disabled": "無効",
   "startup.protection.desktop": "デスクトップアプリ",
   "startup.desktopHint": "ログイン時に起動し、内蔵プロキシを監視します。所有権の記録と実行中のプロセスを確認します。",
-  "startup.desktopRecovery": "OpenCodex がこのプロキシを管理しています。デスクトップアプリを開き直し、ログイン時の起動を確認してください。アプリが管理している間はサービスとランチャーを変更できません。",
+  "startup.desktopRecovery": "OpenCodex がこのプロキシを管理しています。デスクトップアプリを開き直し、ログイン時の起動を確認してください。すでに有効な場合は、ログイン時に OpenCodex を開くことがシステムで許可されているか確認してください（macOS: システム設定 → 一般 → ログイン項目と機能拡張）。アプリが管理している間はサービスとランチャーを変更できません。",
   "startup.desktopSupervisedRecovery": "OpenCodex Desktop がこのプロキシを実行していますが、「ログイン時に起動」を確認できませんでした。OpenCodex メニューで「ログイン時に起動」を有効にしてください。すでに有効な場合は、ログイン時に OpenCodex を開くことがシステムで許可されているか確認してください（macOS: システム設定 → 一般 → ログイン項目と機能拡張）。アプリがプロキシを実行している間、ここではバックグラウンドサービスとランチャー shim を変更できません。代わりに使う場合は OpenCodex を終了し、ターミナルでコマンドを実行してください。",
   "startup.desktopReopenRecovery": "OpenCodex を開き直し、「ログイン時に起動」の設定を確認してください。",
   "startup.protection.service": "バックグラウンドサービス",

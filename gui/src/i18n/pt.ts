@@ -302,7 +302,7 @@ export const pt: Record<TKey, string> = {
   "startup.disabled": "Desativada",
   "startup.protection.desktop": "App desktop",
   "startup.desktopHint": "Inicia no login; o app desktop supervisiona o proxy embutido. A propriedade e os processos ativos são verificados.",
-  "startup.desktopRecovery": "O OpenCodex é dono deste proxy. Reabra o app desktop e marque Iniciar no login. As alterações de serviço e de inicializador ficam desativadas enquanto o app desktop for o dono.",
+  "startup.desktopRecovery": "O OpenCodex é dono deste proxy. Reabra o app desktop e marque Iniciar no login. Se já estiver marcado, confirme que o sistema permite abrir o OpenCodex no login (macOS: Ajustes do Sistema → Geral → Itens de Início de Sessão e Extensões). As alterações de serviço e de inicializador ficam desativadas enquanto o app desktop for o dono.",
   "startup.desktopSupervisedRecovery": "O OpenCodex Desktop executa este proxy, mas não foi possível verificar o Iniciar no login. Ative Iniciar no login no menu do OpenCodex. Se já estiver marcado, confirme que o sistema permite abrir o OpenCodex no login (macOS: Ajustes do Sistema → Geral → Itens de Início de Sessão e Extensões). O serviço em segundo plano e o shim do inicializador ficam desativados aqui enquanto o app executa o proxy; para usá-los, saia do OpenCodex e execute o comando em um terminal.",
   "startup.desktopReopenRecovery": "Reabra o OpenCodex e verifique Iniciar no login.",
   "startup.protection.service": "Serviço em segundo plano",

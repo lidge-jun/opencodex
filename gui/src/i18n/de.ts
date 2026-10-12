@@ -275,7 +275,7 @@ export const de: Record<TKey, string> = {
   "startup.disabled": "Deaktiviert",
   "startup.protection.desktop": "Desktop-App",
   "startup.desktopHint": "Startet bei der Anmeldung und überwacht den integrierten Proxy. Zuständigkeit und laufende Prozesse werden geprüft.",
-  "startup.desktopRecovery": "OpenCodex verwaltet diesen Proxy. Öffne die Desktop-App erneut und prüfe „Beim Anmelden starten“. Dienst- und Launcher-Änderungen bleiben währenddessen gesperrt.",
+  "startup.desktopRecovery": "OpenCodex verwaltet diesen Proxy. Öffne die Desktop-App erneut und prüfe „Beim Anmelden starten“. Ist es bereits aktiviert, prüfe, ob das System OpenCodex beim Anmelden öffnen darf (macOS: Systemeinstellungen → Allgemein → Anmeldeobjekte & Erweiterungen). Dienst- und Launcher-Änderungen bleiben währenddessen gesperrt.",
   "startup.desktopSupervisedRecovery": "OpenCodex Desktop führt diesen Proxy aus, aber „Beim Anmelden starten“ konnte nicht bestätigt werden. Aktiviere „Beim Anmelden starten“ im OpenCodex-Menü. Ist es bereits aktiviert, prüfe, ob das System OpenCodex beim Anmelden öffnen darf (macOS: Systemeinstellungen → Allgemein → Anmeldeobjekte & Erweiterungen). Hintergrunddienst und Launcher-Shim bleiben hier gesperrt, solange die App den Proxy ausführt; um sie stattdessen zu nutzen, beende OpenCodex und führe den Befehl im Terminal aus.",
   "startup.desktopReopenRecovery": "Öffne OpenCodex erneut und prüfe „Beim Anmelden starten“.",
   "startup.protection.service": "Hintergrunddienst",

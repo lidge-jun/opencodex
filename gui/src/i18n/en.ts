@@ -284,7 +284,7 @@ export const en = {
   "startup.disabled": "Disabled",
   "startup.protection.desktop": "Desktop app",
   "startup.desktopHint": "Starts at login; the desktop app supervises its bundled proxy. Ownership and live processes are verified.",
-  "startup.desktopRecovery": "OpenCodex owns this proxy. Reopen the desktop app and check Start at Login. Service and launcher changes stay disabled while the desktop app owns it.",
+  "startup.desktopRecovery": "OpenCodex owns this proxy. Reopen the desktop app and check Start at Login. If it is already checked, make sure your system allows OpenCodex to open at login (macOS: System Settings → General → Login Items & Extensions). Service and launcher changes stay disabled while the desktop app owns it.",
   "startup.desktopSupervisedRecovery": "OpenCodex Desktop runs this proxy, but its Start at Login could not be verified. Turn on Start at Login in the OpenCodex menu. If it is already checked, make sure your system allows OpenCodex to open at login (macOS: System Settings → General → Login Items & Extensions). The background service and launcher shim stay disabled here while the app runs the proxy; to use them instead, quit OpenCodex and run the command in a terminal.",
   "startup.desktopReopenRecovery": "Reopen OpenCodex and check Start at Login.",
   "startup.protection.service": "Background service",

@@ -206,7 +206,10 @@ test("#6963: an owned Desktop running without Start at Login gets the same badge
   desktopFacts = { owned: true, loginEnabled: false, running: true, viable: false };
   await mount();
   expect(desktopBadge()).toBe("Running · Start at Login not verified");
-  expect(container.querySelector(".startup-details")!.textContent).toContain("OpenCodex owns this proxy");
+  const details = container.querySelector(".startup-details")!.textContent!;
+  expect(details).toContain("OpenCodex owns this proxy");
+  // The owned guidance names the macOS allowance too, matching the badge.
+  expect(details).toContain("Login Items & Extensions");
 });
 
 test("#6963: a stopped Desktop and a stale reading stay unhealthy; a verified Desktop is ready", async () => {

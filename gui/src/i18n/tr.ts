@@ -283,7 +283,7 @@ export const tr: Record<TKey, string> = {
   "startup.disabled": "Devre dışı",
   "startup.protection.desktop": "Masaüstü uygulaması",
   "startup.desktopHint": "Oturum açıldığında başlar ve yerleşik proxy’yi izler. Sahiplik ve çalışan işlemler doğrulanır.",
-  "startup.desktopRecovery": "Bu proxy OpenCodex tarafından yönetiliyor. Masaüstü uygulamasını yeniden açın ve oturum açılışında başlatma ayarını kontrol edin. Uygulama proxy’yi yönettiği sürece servis ve başlatıcı değişiklikleri devre dışıdır.",
+  "startup.desktopRecovery": "Bu proxy OpenCodex tarafından yönetiliyor. Masaüstü uygulamasını yeniden açın ve oturum açılışında başlatma ayarını kontrol edin. Zaten işaretliyse sistemin OpenCodex’in oturum açılışında açılmasına izin verdiğinden emin olun (macOS: Sistem Ayarları → Genel → Oturum Açma Öğeleri ve Genişletmeler). Uygulama proxy’yi yönettiği sürece servis ve başlatıcı değişiklikleri devre dışıdır.",
   "startup.desktopSupervisedRecovery": "Bu proxy’yi OpenCodex Desktop çalıştırıyor, ancak oturum açılışında başlatma doğrulanamadı. OpenCodex menüsünde oturum açılışında başlatmayı etkinleştirin. Zaten işaretliyse sistemin OpenCodex’in oturum açılışında açılmasına izin verdiğinden emin olun (macOS: Sistem Ayarları → Genel → Oturum Açma Öğeleri ve Genişletmeler). Uygulama proxy’yi çalıştırdığı sürece arka plan servisi ve başlatıcı shim burada devre dışı kalır; bunları kullanmak için OpenCodex’ten çıkıp komutu bir terminalde çalıştırın.",
   "startup.desktopReopenRecovery": "OpenCodex’i yeniden açın ve oturum açılışında başlatma ayarını kontrol edin.",
   "startup.protection.service": "Arka plan servisi",

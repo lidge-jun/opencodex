@@ -277,7 +277,7 @@ export const zh: Record<TKey, string> = {
   "startup.disabled": "已禁用",
   "startup.protection.desktop": "桌面应用",
   "startup.desktopHint": "登录时启动，由桌面应用守护内置代理；已核对接管记录和实际进程。",
-  "startup.desktopRecovery": "OpenCodex 桌面应用正在接管此代理。请重新打开应用并检查“登录时启动”。桌面应用仍持有接管记录时，服务和启动脚本的更改保持禁用。",
+  "startup.desktopRecovery": "OpenCodex 桌面应用正在接管此代理。请重新打开应用并检查“登录时启动”。如果已勾选，请确认系统允许 OpenCodex 在登录时打开（macOS：系统设置 → 通用 → 登录项与扩展）。桌面应用仍持有接管记录时，服务和启动脚本的更改保持禁用。",
   "startup.desktopSupervisedRecovery": "OpenCodex 桌面应用正在运行此代理，但无法确认其“登录时启动”。请在 OpenCodex 菜单中开启“登录时启动”。如果已勾选，请确认系统允许 OpenCodex 在登录时打开（macOS：系统设置 → 通用 → 登录项与扩展）。应用运行此代理期间，此处的后台服务和启动器 shim 保持禁用；如需改用它们，请退出 OpenCodex 并在终端中运行命令。",
   "startup.desktopReopenRecovery": "请重新打开 OpenCodex 并检查“登录时启动”设置。",
   "startup.protection.service": "后台服务",
