@@ -290,8 +290,8 @@ for (const lane of ["native", "translated"] as const) describe(`${lane} Anthropi
     expect(loadConfig().providers.anth!.apiKey).toBe("fixture-key-1");
     expect(loadConfig().providers.anth!.apiKeyTransport).toBe("bearer");
     const remaining = getKeyCooldownUntil("anth", "k0")! - Date.now();
-    expect(remaining).toBeGreaterThan(590_000);
-    expect(remaining).toBeLessThanOrEqual(600_000);
+    expect(remaining).toBeGreaterThan(3_590_000);
+    expect(remaining).toBeLessThanOrEqual(3_600_000);
     expect(getKeyCooldownUntil("anth", "k1")).toBeNull();
   });
 
@@ -322,8 +322,8 @@ for (const lane of ["native", "translated"] as const) describe(`${lane} Anthropi
     expect(seen[1]!.body).toEqual(seen[0]!.body);
     expect(loadConfig().providers.anth!.apiKey).toBe("fixture-key-1");
     const remaining = getKeyCooldownUntil("anth", "k0")! - Date.now();
-    expect(remaining).toBeGreaterThan(590_000);
-    expect(remaining).toBeLessThanOrEqual(600_000);
+    expect(remaining).toBeGreaterThan(3_590_000);
+    expect(remaining).toBeLessThanOrEqual(3_600_000);
   });
 
   test("configured headers overriding A with C do not cool A or commit B", async () => {

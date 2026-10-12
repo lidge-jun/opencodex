@@ -30,6 +30,14 @@ interface KeyCooldown {
 
 const DEFAULT_COOLDOWN_MS = 60_000;
 const MAX_COOLDOWN_MS = 10 * 60_000; // cap at 10 min for api-key rotation
+/**
+ * Anthropic credit-balance refusal (#6958). An empty prepaid balance is account state, not a
+ * rate signal: it clears only when someone buys credits or auto-reload fires, so the
+ * ten-minute credential cap would probe a dead key six times an hour. One hour bounds that
+ * to a single refused, zero-output request per key per hour, and still notices a top-up
+ * without a restart. Cooldowns are skip hints for rotation; a manual selection still wins.
+ */
+export const ANTHROPIC_BILLING_COOLDOWN_MS = 60 * 60_000;
 
 /**
  * Cap for a cooldown the upstream itself dated, as opposed to one we inferred.
@@ -688,7 +696,7 @@ export function rateLimitRetryDelayMs(
 function rotateKeyAfterFailure(
   config: OcxConfig,
   providerName: string,
-  failureStatus: 401 | 429,
+  failureStatus: 401 | 429 | "billing",
   retryAfterHeader: string | null | undefined,
   now = Date.now(),
   attemptedKey?: string,
@@ -758,7 +766,9 @@ function rotateKeyAfterFailure(
     // A 401 is a verdict about the credential itself, not a timing signal: the key is rejected
     // until an operator replaces it, and upstreams send no Retry-After for it. Hold it for the
     // full cap instead of the 429 default so a dead key is not re-tried once a minute.
-    const cooldownMs = failureStatus === 401
+    const cooldownMs = failureStatus === "billing"
+      ? ANTHROPIC_BILLING_COOLDOWN_MS
+      : failureStatus === 401
       ? MAX_COOLDOWN_MS
       // A reset instant the upstream dated outranks both the header and the
       // default: it is the only one of the three that knows when the quota
@@ -770,7 +780,7 @@ function rotateKeyAfterFailure(
     sweepExpiredOnWrite(now);
   }
   if ("exhaustedCount" in outcome.value) {
-    console.warn(`[key-failover] ${providerName}: all ${outcome.value.exhaustedCount} keys in cooldown after ${failureStatus}; returning the upstream status to the client`);
+    console.warn(`[key-failover] ${providerName}: all ${outcome.value.exhaustedCount} keys in cooldown after ${failureLabel(failureStatus)}; returning the upstream status to the client`);
     return null;
   }
 
@@ -779,10 +789,14 @@ function rotateKeyAfterFailure(
   if (outcome.value.candidateId) {
     console.warn(
       // Log ids only — labels are user-supplied free text and could carry secret material.
-      `[key-failover] ${providerName}: ${failureStatus} on key ${outcome.value.failedId ?? "?"}; rotating to key ${outcome.value.candidateId}`,
+      `[key-failover] ${providerName}: ${failureLabel(failureStatus)} on key ${outcome.value.failedId ?? "?"}; rotating to key ${outcome.value.candidateId}`,
     );
   }
   return structuredClone(committed);
+}
+
+function failureLabel(failureStatus: 401 | 429 | "billing"): string {
+  return failureStatus === "billing" ? "credit-balance refusal" : String(failureStatus);
 }
 
 export function rotateKeyOn429(
@@ -873,7 +887,7 @@ export function rotateProviderTransportOn401(
   return applyRotatedTransport(providerName, routedProvider, rotated, options.promptCacheKey);
 }
 
-/** Exact Anthropic billing refusal: reuse the bounded ten-minute credential cooldown. */
+/** Exact Anthropic billing refusal: cool the key for ANTHROPIC_BILLING_COOLDOWN_MS. */
 export function rotateProviderTransportOnAnthropicBilling(
   config: OcxConfig,
   providerName: string,
@@ -891,7 +905,7 @@ export function rotateProviderTransportOnAnthropicBilling(
     && headerShape(fresh) === sentHeaders
     && providerApiKeySelectionIsCurrent({ ...config, providers: { ...config.providers, [providerName]: fresh } },
       providerName, routedProvider);
-  const rotated = rotateKeyAfterFailure(config, providerName, 401, null, options.now,
+  const rotated = rotateKeyAfterFailure(config, providerName, "billing", null, options.now,
     options.attemptedKey, options.attemptedSelection ?? routedProvider._apiKeyAttempt, undefined, acceptsFreshProvider);
   return rotated ? applyRotatedTransport(providerName, routedProvider, rotated, options.promptCacheKey) : null;
 }

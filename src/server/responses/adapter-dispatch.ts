@@ -30,7 +30,7 @@ import { redactSecretString } from "../../lib/redact";
 import { rewriteUpstreamPolicyRefusal } from "./policy-refusal";
 import { withProviderRequestSlot } from "../../providers/request-pacing";
 import { providerFetch, fetchWithHeaderTimeout, safeHostLabel } from "./fetch-helpers";
-import { rotateAnthropicBillingKeyOnResponse } from "../../providers/anthropic-billing-recovery";
+import { isAnthropicBillingKeyPool, rotateAnthropicBillingKeyOnResponse } from "../../providers/anthropic-billing-recovery";
 import {
   transientRetryPolicyFor,
   resetReplayPolicyFor,
@@ -386,7 +386,7 @@ export async function prepareAdapterExchange(
     upstreamResponse = new Response(text, { status: original.status, statusText: original.statusText, headers });
     return upstreamResponse;
   };
-  const billingPoolRequest = route.provider.adapter === "anthropic" && hasKeyPoolFailover(route.provider);
+  const billingPoolRequest = isAnthropicBillingKeyPool(route.provider);
   let billingRecoveryActive = false;
   const genericRefetchCountsSends = () => sendBudgetState.adapterSendBudget?.spendEnforced === true
     || transientRetryPolicyFor(route.provider) !== null || resetReplayPolicyFor(route.provider) !== null
@@ -512,7 +512,7 @@ export async function prepareAdapterExchange(
           label: safeHostLabel(builtInitialRequest.url),
           claimAmbiguousResend: claimPreHeaderResend,
           ...(sendBudgetState.adapterSendBudget?.spendEnforced || options.comboDispatchPermit || transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt
-            || (route.provider.adapter === "anthropic" && hasKeyPoolFailover(route.provider))
+            || billingPoolRequest
             ? {
               // A pending compaction permit already booked this leg's first physical send.
               ...(transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt
@@ -644,7 +644,12 @@ export async function prepareAdapterExchange(
           recordAdapterReasoning(logCtx, retryRequest);
           recordAdapterTier(logCtx, retryRequest);
         } catch (err) {
-          if (preserveFailureResponse && !options.abortSignal?.aborted) return { failed: preserveFailureResponse };
+          // A rotated credential that cannot be shaped keeps the refusal it was meant to
+          // replace. The image-tier rebuild is different: the request itself failed to shape,
+          // and its established 413/400 build-error contract stays authoritative.
+          if (preserveFailureResponse && recovery !== "image-413" && !options.abortSignal?.aborted) {
+            return { failed: preserveFailureResponse };
+          }
           // A rotated/rebuilt adapter build failure is a request-shaping error, not an
           // upstream connect failure: tear the abort link down and map it as 400. A
           // translator-budget refusal keeps its established 413 here as well — adapters
@@ -1207,7 +1212,7 @@ export async function prepareAdapterExchange(
         // The refusal is a 429 too: without this the while condition is still true and the
         // next configured attempt replays it on the same target.
         if (isNonReplayableResponse(upstreamResponse)
-          || (route.provider.adapter === "anthropic" && hasKeyPoolFailover(route.provider)
+          || (isAnthropicBillingKeyPool(route.provider)
             && [400, 402].includes(upstreamResponse.status))) continue recovery;
      }
 
