@@ -119,6 +119,40 @@ describe("fnm Codex shim discovery", () => {
     expect(lastCodexDiscoveryError()).not.toContain(fallback);
   });
 
+  test.skipIf(process.platform === "win32")(
+    "Unix install reports the fnm refusal instead of a missing Codex (#6963)",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "ocx-shim-install-fnm-refused-"));
+      const home = join(root, "opencodex-home");
+      // A multishell directory that is a real directory, not a link to a durable installation.
+      const multishellBin = join(root, "fnm_multishells", "619109", "bin");
+      const oldPath = process.env.PATH;
+      const oldHome = process.env.OPENCODEX_HOME;
+      try {
+        mkdirSync(home, { recursive: true });
+        mkdirSync(multishellBin, { recursive: true });
+        writeFileSync(join(multishellBin, "codex"), "#!/bin/sh\nexit 0\n", "utf8");
+        chmodSync(join(multishellBin, "codex"), 0o755);
+        process.env.PATH = multishellBin;
+        process.env.OPENCODEX_HOME = home;
+
+        const installed = installCodexShim();
+
+        expect(installed.installed).toBe(false);
+        expect(installed.refused).toBe(true);
+        expect(installed.message).toContain("fnm's temporary multishell path");
+        expect(installed.message).not.toContain("Native Codex launcher not found");
+        expect(existsSync(join(home, "codex-shim.json"))).toBe(false);
+      } finally {
+        if (oldPath === undefined) delete process.env.PATH;
+        else process.env.PATH = oldPath;
+        if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
+        else process.env.OPENCODEX_HOME = oldHome;
+        removeTreeWithRetry(root);
+      }
+    },
+  );
+
   test("stable nvm installation paths are not treated as fnm temporary paths", () => {
     const nvmBin = "/home/u/.nvm/versions/node/v24.20.0/bin";
     const nvmCodex = `${nvmBin}/codex`;

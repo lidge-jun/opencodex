@@ -79,6 +79,12 @@ macOS와 Linux에서 데스크톱 앱이 번들 프록시를 실행하는 것으
 설치하는 대신 OpenCodex 메뉴에서 **Start at Login**을 켜세요. 앱의 로그인
 등록이 확인되어야 재시작 후 보호가 적용됩니다. 등록을 확인할 수 없으면
 status에 표시되는 데스크톱 안내를 따르세요. 실행 관계 확인은 소유권을 생성하지 않습니다.
+이때 시작 안전 페이지의 데스크톱 앱 행에는 **실행 중 · 로그인 시 시작 미확인**이 표시됩니다.
+메뉴의 체크 표시는 로그인 항목 파일이 있다는 것만 나타냅니다. 이미 체크되어 있다면
+macOS의 시스템 설정 → 일반 → 로그인 항목 및 확장 프로그램에서 OpenCodex가 로그인 시
+열리도록 허용되어 있는지 확인하세요. 앱이 프록시를 실행하는 동안 시작 안전 페이지는
+백그라운드 서비스와 런처 shim 설치를 막아 둡니다. 이를 대신 쓰려면 OpenCodex를 종료하고
+터미널에서 `ocx service install` 또는 `ocx codex-shim install`을 실행하세요.
 
 번들 CLI 경로는 macOS에서 `/Applications/OpenCodex.app/Contents/MacOS/ocx`,
 Linux deb 패키지에서 `/usr/bin/ocx`입니다. 해당 실행 파일에 `status`를 붙여

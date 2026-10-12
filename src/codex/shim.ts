@@ -1079,7 +1079,7 @@ function installCodexShimInternal(options: InstallCodexShimInternalOptions): { i
 }
 
 export function installCodexShim(deps: RuntimePreflightDeps = {}): { installed: boolean; message: string; refused?: boolean; runnable?: boolean } {
-  if (process.platform !== "win32") return installUnixOverlay(findCodexOnPath);
+  if (process.platform !== "win32") return installUnixOverlay(findCodexOnPath, lastCodexDiscoveryError);
   return installCodexShimInternal({ ...deps, allowFreshInstall: true });
 }
 

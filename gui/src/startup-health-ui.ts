@@ -12,6 +12,23 @@ export function desktopManagesStartup(health: Pick<StartupRiskDetail, "desktop">
   return health.desktop !== undefined && (health.desktop.owned || health.desktop.supervisor !== undefined);
 }
 
+/**
+ * Badge for the Desktop app row. A running app whose Start at Login could not be verified is not
+ * "installed but unhealthy": the proxy is fine and only restart protection is missing (#6963).
+ * `failed` already folds in a stale diagnostic, so old facts never earn the narrower label.
+ */
+export function desktopBadgeKey(
+  desktop: Pick<NonNullable<StartupHealthData["desktop"]>, "owned" | "supervisor" | "running" | "loginEnabled" | "viable">,
+  failed: boolean,
+): TKey {
+  if (failed) return "startup.unhealthy";
+  if (desktop.viable) return "startup.viable";
+  if (desktop.running && !desktop.loginEnabled && (desktop.owned || desktop.supervisor !== undefined)) {
+    return "startup.desktopLoginUnverified";
+  }
+  return "startup.unhealthy";
+}
+
 export function startupRiskDetailKey(health: StartupRiskDetail): TKey {
   if (health.routingKind === "custom-local") return "startup.riskDetailCustomLocal";
   if (health.routingKind === "opencodex-local") {

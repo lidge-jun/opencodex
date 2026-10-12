@@ -1,6 +1,6 @@
 import { useI18n, type TKey } from "../i18n/shared";
 import { confirmAction } from "../action-dialogs";
-import { desktopManagesStartup, startupRiskDetailKey } from "../startup-health-ui";
+import { desktopBadgeKey, desktopManagesStartup, startupRiskDetailKey } from "../startup-health-ui";
 import { IconAlert, IconCheck, IconPower, IconTerminal } from "../icons";
 import type {
   StartupHealthData,
@@ -100,7 +100,7 @@ export function StartupDetailsSection({
         <div className="startup-detail-row">
           <div><strong>{t("startup.protection.desktop")}</strong><span>{t(!failed && data.desktop.viable ? "startup.desktopHint" : startupRiskDetailKey(data))}</span></div>
           <div className="startup-detail-actions">
-            <StartupStateBadge ok={!failed && data.desktop.viable} yes={t("startup.viable")} no={t("startup.unhealthy")} />
+            <StartupStateBadge ok={!failed && data.desktop.viable} yes={t("startup.viable")} no={t(desktopBadgeKey(data.desktop, failed))} />
           </div>
         </div>
       )}
