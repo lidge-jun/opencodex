@@ -372,12 +372,14 @@ for (const lane of ["native", "translated"] as const) describe(`${lane} Anthropi
     expect(getKeyCooldownUntil("anth", "k1")).not.toBeNull();
   });
 
-  test("a single key does not rotate or cool on billing", async () => {
-    const config = fixture(() => refusal(), 1);
+  for (const keys of [0, 1]) test(`${keys === 0 ? "an empty pool" : "a single key"} does not rotate or cool on billing`, async () => {
+    const config = fixture(() => refusal(), keys);
     const response = await send(lane, config);
     expect(response.status).toBe(400);
-    await response.text();
+    expect(await response.text()).toContain(creditMessage);
     expect(seen).toHaveLength(1);
+    expect(seen[0]!.key).toBe("fixture-key-0");
+    expect(loadConfig().providers.anth!.apiKey).toBe("fixture-key-0");
     expect(getKeyCooldownUntil("anth", "k0")).toBeNull();
   });
 
