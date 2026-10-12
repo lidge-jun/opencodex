@@ -211,9 +211,11 @@ ocx integration client restore --op <operation-id>
 
 ## omo (Codex / LazyCodex) 角色推理強度
 
-偵測到 LazyCodex 後，可在 omo 分頁的 **omo (Codex / LazyCodex)** 區段為 `$CODEX_HOME/agents/*.toml` 中的每個角色選擇模型與推理強度，再按下 **儲存**。opencodex 只會更新該角色檔案根層級的 `model` 與 `model_reasoning_effort` 鍵，缺少的固定值會插入到檔案開頭附近；角色的指令、其他註解與其他鍵維持不變。只變更模型的儲存不會傳送 `effort`，兩個檔案中的推理強度都維持原樣。選擇某個等級會插入或取代角色檔案中的 `model_reasoning_effort`；若 LazyCodex 支援該等級，也會寫入 `~/.omo/omo.jsonc` 的 `[codex].agents.<role>.reasoning`（`ultra` 只保留在角色檔案中，並移除舊的 `reasoning`）。在命令列中可用 `ocx agent roles set <role> <model> --effort <level>` 完成相同操作。
+偵測到 LazyCodex 後，可在 omo 分頁的 **omo (Codex / LazyCodex)** 區段為 `$CODEX_HOME/agents/*.toml` 中的每個角色選擇模型與推理強度，再按下 **儲存**。沒有固定模型的角色所在列可以只儲存推理強度，該角色仍繼承其模型。opencodex 只會更新該角色檔案根層級的 `model` 與 `model_reasoning_effort` 鍵，缺少的固定值會插入到檔案開頭附近；角色的指令、其他註解與其他鍵維持不變。只變更模型的儲存不會傳送 `effort`，兩個檔案中的推理強度都維持原樣。選擇某個等級會插入或取代角色檔案中的 `model_reasoning_effort`；若 LazyCodex 支援該等級，也會寫入 `~/.omo/omo.jsonc` 的 `[codex].agents.<role>.reasoning`（`ultra` 只保留在角色檔案中，並移除舊的 `reasoning`）。在命令列中可用 `ocx agent roles set <role> <model> --effort <level>` 完成相同操作。
 
 每一列都提供 **繼承推理強度**，包括已固定推理強度的角色。將已固定的強度改為此選項並儲存時，會傳送 `"effort": null`：移除角色檔案根層級的 `model_reasoning_effort` 行及其行尾註解，以及 omo.jsonc 中的 `[codex].agents.<role>.reasoning`。模型固定維持不變。之後 Codex 會像對待任何沒有自身覆寫值的角色一樣決定推理強度（明確的啟動值、`[agents]` 預設值或父工作階段），而不是使用固定的模型預設值。只能移除既有的單行字串值；多行或非字串值會以 409 `unsupported_model_value` 被拒絕，兩個檔案都不會變更。
+
+在 `PUT /api/codex-agent-roles/{role}` 中省略 `model` 時，角色檔案中的 `model` 固定值與 omo.jsonc 中的 `model` 都維持原樣，因此沒有固定模型的角色會繼續繼承模型，只變更或清除推理強度。儀表板會為這樣的列傳送只包含推理強度的請求；若 omo.jsonc 中沒有該角色的項目，只有儲存 LazyCodex 支援的推理強度等級時，才會建立只包含 `reasoning` 的項目。儲存絕不會移除模型固定值，因此 `null` 模型會以 400 `invalid_model` 被拒絕；既沒有 `model` 也沒有 `effort` 的請求會在讀取角色檔案或 omo.jsonc 之前以 400 `empty_update` 被拒絕。`ocx agent roles set` 一律需要指定模型。
 
 若 `~/.omo/omo.jsonc` 不存在，不會建立它。若其中含有註解，儲存會刪除這些註解，因此不會變更該檔案，請手動設定該值。略過鏡像不會復原角色檔案的儲存。若角色檔案已儲存但 omo.jsonc 寫入失敗，該列的按鈕會變成 **重試 omo.jsonc**，重新傳送相同的推理強度選擇，包括透過 **繼承推理強度** 進行的清除（`null`）。在重試成功之前，該角色之後任何不變更推理強度的 **儲存** 或 **自動指派** 的 **套用**，都會一併傳送這個待處理的選擇；明確選擇的推理強度會取代它。
 

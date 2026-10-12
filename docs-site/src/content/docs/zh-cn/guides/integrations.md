@@ -221,9 +221,11 @@ Undo 会恢复**两个原始字节串**，包括原本不存在的文件。操�
 
 ## omo (Codex / LazyCodex) 角色推理强度
 
-检测到 LazyCodex 后，可以在 omo 标签页的 **omo (Codex / LazyCodex)** 部分为 `$CODEX_HOME/agents/*.toml` 中的每个角色选择模型和推理强度，然后点击 **保存**。opencodex 只更新该角色文件根级的 `model` 和 `model_reasoning_effort` 键，缺少的固定值会插入到文件开头附近；角色的指令、其他注释和其他键保持不变。只更改模型的保存不会发送 `effort`，两个文件中的推理强度都保持原样。选择某个级别会插入或替换角色文件中的 `model_reasoning_effort`；如果 LazyCodex 支持该级别，还会写入 `~/.omo/omo.jsonc` 的 `[codex].agents.<role>.reasoning`（`ultra` 只保留在角色文件中，并移除旧的 `reasoning`）。在命令行中可以用 `ocx agent roles set <role> <model> --effort <level>` 完成同样的操作。
+检测到 LazyCodex 后，可以在 omo 标签页的 **omo (Codex / LazyCodex)** 部分为 `$CODEX_HOME/agents/*.toml` 中的每个角色选择模型和推理强度，然后点击 **保存**。没有固定模型的角色所在行可以只保存推理强度，该角色仍继承其模型。opencodex 只更新该角色文件根级的 `model` 和 `model_reasoning_effort` 键，缺少的固定值会插入到文件开头附近；角色的指令、其他注释和其他键保持不变。只更改模型的保存不会发送 `effort`，两个文件中的推理强度都保持原样。选择某个级别会插入或替换角色文件中的 `model_reasoning_effort`；如果 LazyCodex 支持该级别，还会写入 `~/.omo/omo.jsonc` 的 `[codex].agents.<role>.reasoning`（`ultra` 只保留在角色文件中，并移除旧的 `reasoning`）。在命令行中可以用 `ocx agent roles set <role> <model> --effort <level>` 完成同样的操作。
 
 每一行都提供 **继承推理强度**，包括已固定推理强度的角色。把已固定的强度改为该选项并保存时，会发送 `"effort": null`：移除角色文件根级的 `model_reasoning_effort` 行及其行尾注释，以及 omo.jsonc 中的 `[codex].agents.<role>.reasoning`。模型固定保持不变。之后 Codex 会像对待任何没有自身覆盖值的角色一样确定推理强度（显式的启动值、`[agents]` 默认值或父会话），而不是使用固定的模型默认值。只能移除现有的单行字符串值；多行或非字符串值会以 409 `unsupported_model_value` 被拒绝，两个文件都不会改变。
+
+在 `PUT /api/codex-agent-roles/{role}` 中省略 `model` 时，角色文件中的 `model` 固定值和 omo.jsonc 中的 `model` 都保持原样，因此没有固定模型的角色会继续继承模型，只更改或清除推理强度。仪表盘会为这样的行发送只包含推理强度的请求；如果 omo.jsonc 中没有该角色的条目，只有保存 LazyCodex 支持的推理强度级别时，才会创建只包含 `reasoning` 的条目。保存永远不会移除模型固定值，因此 `null` 模型会以 400 `invalid_model` 被拒绝；既没有 `model` 也没有 `effort` 的请求会在读取角色文件或 omo.jsonc 之前以 400 `empty_update` 被拒绝。`ocx agent roles set` 始终需要指定模型。
 
 如果 `~/.omo/omo.jsonc` 不存在，不会创建它。如果其中包含注释，保存会删除这些注释，因此不会改动该文件，请手动设置该值。跳过镜像不会撤销角色文件的保存。如果角色文件已保存但 omo.jsonc 写入失败，该行的按钮会变为 **重试 omo.jsonc**，重新发送同一推理强度选择，包括通过 **继承推理强度** 进行的清除（`null`）。在重试成功之前，该角色之后任何不改动推理强度的 **保存** 或 **自动分配** 的 **应用** 都会一并发送这个待处理的选择；明确选择的推理强度会取代它。
 

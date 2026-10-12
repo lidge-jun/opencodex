@@ -227,9 +227,11 @@ Undo는 원래 없던 파일까지 포함해 **두 원본 바이트 문자열 �
 
 ## omo (Codex / LazyCodex) 역할별 추론 강도
 
-LazyCodex가 감지되면 omo 탭의 **omo (Codex / LazyCodex)** 섹션에서 `$CODEX_HOME/agents/*.toml`에 있는 역할마다 모델과 추론 강도를 고른 뒤 **저장**을 누를 수 있습니다. opencodex는 그 역할 파일의 루트 `model`과 `model_reasoning_effort` 키만 고치고, 없는 고정값은 파일 위쪽에 추가합니다. 역할의 지침, 다른 주석과 다른 키는 그대로 둡니다. 모델만 바꿔 저장하면 `effort`를 보내지 않으므로 두 파일의 추론 강도가 그대로 유지됩니다. 단계를 고르면 역할 파일의 `model_reasoning_effort`를 추가하거나 바꾸고, LazyCodex가 그 단계를 지원하면 `~/.omo/omo.jsonc`의 `[codex].agents.<role>.reasoning`에도 씁니다(`ultra`는 역할 파일에만 남고, 이전 `reasoning`은 제거합니다). 명령줄에서는 `ocx agent roles set <role> <model> --effort <level>`로 같은 작업을 합니다.
+LazyCodex가 감지되면 omo 탭의 **omo (Codex / LazyCodex)** 섹션에서 `$CODEX_HOME/agents/*.toml`에 있는 역할마다 모델과 추론 강도를 고른 뒤 **저장**을 누를 수 있습니다. 모델 고정이 없는 역할의 행은 강도만 저장할 수 있고, 그 역할은 계속 모델을 상속합니다. opencodex는 그 역할 파일의 루트 `model`과 `model_reasoning_effort` 키만 고치고, 없는 고정값은 파일 위쪽에 추가합니다. 역할의 지침, 다른 주석과 다른 키는 그대로 둡니다. 모델만 바꿔 저장하면 `effort`를 보내지 않으므로 두 파일의 추론 강도가 그대로 유지됩니다. 단계를 고르면 역할 파일의 `model_reasoning_effort`를 추가하거나 바꾸고, LazyCodex가 그 단계를 지원하면 `~/.omo/omo.jsonc`의 `[codex].agents.<role>.reasoning`에도 씁니다(`ultra`는 역할 파일에만 남고, 이전 `reasoning`은 제거합니다). 명령줄에서는 `ocx agent roles set <role> <model> --effort <level>`로 같은 작업을 합니다.
 
 이미 강도가 고정된 역할을 포함해 모든 행에 **추론 강도 상속** 항목이 있습니다. 고정된 강도를 이 항목으로 바꾸고 저장하면 `"effort": null`을 보내, 역할 파일의 루트 `model_reasoning_effort` 줄과 그 줄 끝의 주석, omo.jsonc의 `[codex].agents.<role>.reasoning`을 제거합니다. 모델 고정은 그대로 남습니다. 이후 Codex는 자체 값이 없는 다른 역할과 같은 방식으로 추론 강도를 정합니다(명시적인 spawn 값, `[agents]` 기본값 또는 상위 세션). 모델의 고정 기본값을 쓰는 것이 아닙니다. 제거할 수 있는 값은 기존의 한 줄짜리 문자열뿐이며, 여러 줄이거나 문자열이 아닌 값은 409 `unsupported_model_value`로 거부되고 두 파일 모두 바뀌지 않습니다.
+
+`PUT /api/codex-agent-roles/{role}`에서 `model`을 생략하면 역할 파일의 `model` 고정과 omo.jsonc의 `model`을 그대로 둡니다. 따라서 고정이 없는 역할은 모델을 계속 상속하면서 강도만 바뀌거나 지워집니다. 대시보드는 이런 행에 강도만 담은 요청을 보내며, omo.jsonc에 그 역할의 항목이 없으면 LazyCodex가 지원하는 강도를 저장할 때에 한해 `reasoning`만 담은 항목을 만듭니다. 저장은 모델 고정을 지우지 않으므로 `null` 모델은 400 `invalid_model`로 거부됩니다. `model`과 `effort`가 모두 없는 요청은 역할 파일이나 omo.jsonc를 읽기 전에 400 `empty_update`로 거부됩니다. `ocx agent roles set`은 항상 모델을 받습니다.
 
 `~/.omo/omo.jsonc`가 없으면 새로 만들지 않습니다. 주석이 있으면 저장할 때 주석이 사라지므로 파일을 건드리지 않습니다. 이때는 값을 직접 설정하세요. 미러를 건너뛰어도 역할 파일 저장은 취소되지 않습니다. 역할 파일은 저장됐지만 omo.jsonc 쓰기에 실패하면 그 행의 버튼이 **omo.jsonc 다시 시도**로 바뀌고, **추론 강도 상속**으로 해제한 경우(`null`)를 포함해 같은 강도 선택을 다시 보냅니다. 재시도가 성공하기 전까지는 그 역할에서 강도를 바꾸지 않는 다음 **저장**이나 **자동 배정**의 **적용**도 대기 중인 선택을 함께 보냅니다. 강도를 직접 고르면 그 값이 우선합니다.
 
