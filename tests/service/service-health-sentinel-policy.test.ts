@@ -201,6 +201,30 @@ describe("service health sentinel policy (#6671)", () => {
     expect(recentRecoveryCount([from], from + T.recoveryWindowMs, T.recoveryWindowMs)).toBe(0);
   });
 
+  test("startup grace is elapsed time: a clock set back neither reopens nor extends it", () => {
+    // After the grace: a two-hour rollback must not suspend counting for two hours.
+    const after = armedPolicy();
+    let at = START + T.startupGraceMs + 10_000;
+    expect(after.observe(answered(at)).action).toBe("continue");
+    at -= 2 * 3_600_000;
+    const decisions: string[] = [];
+    for (let i = 0; i < 6 && !decisions.includes("recover"); i += 1) {
+      decisions.push(after.observe(timeout(at)).action);
+      at += T.probeTimeoutMs + T.failureIntervalMs;
+    }
+    expect(decisions).toContain("recover");
+    // During the grace: time elapsed before the rollback still counts toward it.
+    const during = armedPolicy();
+    at = START + 100_000;
+    expect(during.observe(answered(at)).action).toBe("continue");
+    at -= 3_600_000;
+    expect(during.observe(timeout(at)).note).toBe("startup grace");
+    at += 25_000;
+    expect(during.observe(answered(at)).action).toBe("continue");
+    at += 1_000;
+    expect(during.observe(timeout(at)).note).not.toBe("startup grace");
+  });
+
   test("earlier recoveries double the required unhealthy span and the hourly cap stands down", () => {
     expect(requiredUnhealthySpan(T, 0)).toBe(T.minUnhealthyMs);
     expect(requiredUnhealthySpan(T, 1)).toBe(2 * T.minUnhealthyMs);

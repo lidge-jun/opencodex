@@ -10,6 +10,7 @@
  *
  * The guards, in the order they apply:
  * - nothing counts until the target has answered once as itself and the startup grace is over;
+ *   the grace is elapsed time, so setting the clock back neither restarts nor extends it;
  * - only a probe that got no complete answer by its deadline counts. Any answer proves the event
  *   loop ran, and a refused or failed connection means the listener is closing, not hung;
  * - an answer from another pid means the port is no longer the target's: stand down for good;
@@ -141,6 +142,15 @@ export function createHealthSentinelPolicy(input: {
   let lastObservedAt: number | null = null;
   let stoodDown: string | null = null;
   let required = timing.minUnhealthyMs;
+  // Startup grace is measured as elapsed time, accumulated from forward clock movement only, so a
+  // wall clock set back after (or during) the grace cannot reopen it and hold off recovery for as
+  // long as the clock was moved.
+  let graceElapsedMs = 0;
+  let graceClock = input.startedAt;
+  const noteGraceProgress = (at: number) => {
+    if (at > graceClock) graceElapsedMs += at - graceClock;
+    graceClock = at;
+  };
 
   const resetStreak = () => {
     streak = 0;
@@ -155,6 +165,7 @@ export function createHealthSentinelPolicy(input: {
 
   const observe = (outcome: HealthProbeOutcome): HealthSentinelDecision => {
     if (stoodDown !== null) return { action: "stand_down", reason: stoodDown };
+    noteGraceProgress(outcome.startedAt);
     const previous = lastObservedAt;
     lastObservedAt = outcome.endedAt;
     let note: string | undefined;
@@ -179,7 +190,7 @@ export function createHealthSentinelPolicy(input: {
         return { action: "continue", note };
       case "timeout": {
         if (!armed) return { action: "continue", note: note ?? "not armed: the target has not answered yet" };
-        if (outcome.startedAt - input.startedAt < timing.startupGraceMs) {
+        if (graceElapsedMs < timing.startupGraceMs) {
           return { action: "continue", note: note ?? "startup grace" };
         }
         if (

@@ -106,8 +106,12 @@ describe("health sentinel runner (#6671)", () => {
       const kill = events.findIndex(event => event.startsWith("terminate:"));
       expect(discarded).toBeGreaterThan(-1);
       expect(kill).toBeGreaterThan(discarded);
-      // The kill came only after a fresh run of failing probes, not from the stale one.
-      expect(events.slice(discarded, kill).filter(event => event === "probe:timeout").length).toBeGreaterThanOrEqual(3);
+      // The kill came only after a fresh run of failing probes, not from the stale one, and
+      // promptly: a clock set back must not hold recovery off for as long as it moved (the
+      // simulated clock would otherwise need ~240,000 probes to catch up two hours).
+      const fresh = events.slice(discarded, kill).filter(event => event === "probe:timeout").length;
+      expect(fresh).toBeGreaterThanOrEqual(3);
+      expect(fresh).toBeLessThanOrEqual(6);
     }
   });
 

@@ -35,13 +35,15 @@ stop; a drain that began during startup prevents the spawn (`didRunDrainStartHoo
 `src/service/health-sentinel-policy.ts` is the whole judgement, pure and clock-injected:
 
 - arm only after an answer naming the target pid (logged once as `watching pid … on port …`), and
-  after a 120 s grace;
+  after a 120 s grace, measured as elapsed time so a clock set back cannot reopen or extend it;
 - count only probe timeouts; any HTTP answer (including a package-tree fence 503), a refusal or an
   error resets the streak; an answer from another pid stands the sentinel down;
 - after a timeout, probe back to back (1 s), so a streak is one continuous unresponsive stretch and
   recurring shorter stalls aligned with the 30 s cadence cannot add up;
 - recover at 3 timeouts and 60 s of span (about 62 s of continuous silence with a 20 s deadline);
-  the span doubles per recovery in the last hour, and 3 recoveries per hour stand the sentinel down.
+  the span doubles per recovery in the last hour. The cap of 3 recoveries per hour is checked when
+  a later streak qualifies (threshold and span both met): instead of recovering, the sentinel then
+  stands down for the rest of the proxy's life. It does not stand down earlier, at startup.
   A recovery dated after the current time (the clock was set back) counts as recent until the
   clock passes it by a full window, so a rollback or a restart after one cannot lift the cap;
 - a probe that started late or outlived its deadline by more than 5 s, a clock that ran
