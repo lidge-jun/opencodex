@@ -33,6 +33,12 @@ export const REQUEST_PACING_CONCURRENCY_RETRY_AFTER_SECONDS = 5;
 let maxQueueDepth = REQUEST_PACING_MAX_QUEUE_DEPTH;
 let maxQueueAgeMs = REQUEST_PACING_MAX_QUEUE_AGE_MS;
 
+// Optional owners register internal response markers; only this owned body rewrap carries them.
+const responseProvenance = new Set<WeakMap<Response, unknown>>();
+export function registerProviderResponseProvenance(markers: WeakMap<Response, unknown>): void {
+  responseProvenance.add(markers);
+}
+
 export type RequestPacingQueueOverloadReason = "queue_full" | "queue_expired";
 
 export class RequestPacingQueueOverloadError extends Error {
@@ -588,6 +594,9 @@ export function trackProviderRequestSlotBody(
   // Retry helpers mark the response they return from, and recovery decisions key on these
   // identity markers; the rewrap must not make a non-replayable response look replayable.
   if (isNonReplayableResponse(response)) markResponseNonReplayable(wrapped);
+  for (const markers of responseProvenance) {
+    if (markers.has(response)) markers.set(wrapped, markers.get(response));
+  }
   return carryReplayRefusal(response, wrapped);
 }
 

@@ -93,6 +93,10 @@ credentials must never be replayed on the same token, and local runtimes have no
 preserve. It is opt-in: when the option is absent the feature is off; object presence enables
 it unless `enabled: false`.
 
+### Anthropic API-key credit exhaustion
+
+Anthropic API-key pools with at least two keys automatically try a sibling key when a complete HTTP `400` or `402` error states that the credit balance is too low to access the Anthropic API. This applies to `invalid_request_error`, `billing_error`, and `permission_error` before any text or tool output. Key rotation and pool strategies skip the failed key for one hour, because an empty balance only clears when credits are added; when every key is out of credit, requests still use the active key and return Anthropic's original error; choosing the key as active in the dashboard, or restarting the proxy, clears that hold after a top-up. Replacement sends share the request's send limit. Ordinary `400` errors stay terminal, and this does not enable same-key retries or change OAuth account routing. A header override that sends a different credential cannot cool or rotate the selected pool key.
+
 ### Which account a request spends
 
 The question people ask before connecting an account is whether opencodex will draw on the

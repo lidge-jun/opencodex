@@ -488,7 +488,7 @@ Renamed fixed-key providers receive [missing reasoning metadata](catalog.md#rena
 Translated audio/file admission follows the [final-adapter input contract](adapters/registry.md#untranslated-input-media); native raw passthrough remains separate.
 ## Request-local target compatibility
 
-Google's final adapter compiler may emit an opt-in, content-free [tool-schema loss diagnostic](providers/google.md#google-tool-schema-loss-reporting). It observes adapter-local narrowing only and changes neither provider routing nor the serialized request body.
+The exact Anthropic credit-balance refusal on HTTP 400/402 is a provider-state failure under the [Anthropic API-key billing contract](providers/anthropic-key-billing.md). `src/combos/failover.ts` recognizes complete bounded JSON or exact formatted prose with an accepted structured code before the generic invalid-request stop, granting a provider-scoped hop; malformed, truncated and unrelated 400s keep their existing decision. Google's final adapter compiler may emit an opt-in, content-free [tool-schema loss diagnostic](providers/google.md#google-tool-schema-loss-reporting). It observes adapter-local narrowing only and changes neither provider routing nor the serialized request body.
 
 `src/adapters/openai-responses.ts` omits only top-level `user` at the canonical ChatGPT Codex forward destination. Claude translation retains its original identity and prompt-cache key; public API and noncanonical gateways retain their `user` field. Input roles, tool-schema properties, safety identifiers and original replay bodies are not changed.
 

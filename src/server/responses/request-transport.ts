@@ -1,4 +1,5 @@
 import { SendBudgetExhaustedError } from "../../lib/upstream-retry";
+import { anthropicBillingPhysicalFetch } from "../../providers/anthropic-billing-ownership";
 import { rebindPhysicalSend } from "../../lib/request-execution-budget";
 import { anthropicModelQuotaFor } from "../../oauth/anthropic-model-quota";
 import { anthropicRatePolicyFor } from "../../oauth/anthropic-rate-limit-policy";
@@ -697,7 +698,7 @@ export async function prepareResponsesTransport(
             }
             commitKeyAttemptSend();
             response = await sendWithConnectionPolicy(
-              fetchImpl,
+              anthropicBillingPhysicalFetch(fetchImpl, route.providerName, route.provider),
               destination,
               { ...dispatchInit, redirect: "manual" },
               { providerName: route.providerName, provider: route.provider },

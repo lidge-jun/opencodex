@@ -13,6 +13,8 @@ import {
 import { handleResponses } from "../../src/server/responses/core";
 import type { RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
+import { saveConfig } from "../../src/config";
+import { clearKeyCooldowns } from "../../src/providers/key-failover";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 const originalFetch = globalThis.fetch;
@@ -81,6 +83,7 @@ function fakeUpstream(answer: (index: number) => Response): Send[] {
 
 beforeEach(() => {
   resetWorkflowBudgetsForTest();
+  clearKeyCooldowns();
   testDir = mkdtempSync(join(tmpdir(), "ocx-anthropic-fast-downgrade-"));
   process.env.OPENCODEX_HOME = testDir;
   releaseSpendHome = acquireOwnedSpendHome();
@@ -96,6 +99,7 @@ function cleanupTestState(): void {
     else process.env.OPENCODEX_HOME = originalHome;
     rmSync(testDir, { recursive: true, force: true });
     resetWorkflowBudgetsForTest();
+    clearKeyCooldowns();
   }
 }
 
@@ -226,4 +230,24 @@ describe("Anthropic fast refusal in Responses dispatch", () => {
     expect(await next.text()).toContain("the task reached its send ceiling");
     expect(sends).toHaveLength(2);
   });
+});
+
+for (const second of ["success", "rate", "billing"] as const) test(`key pool fast downgrade to ${second} counts each physical send once`, async () => {
+  const configured = config();
+  configured.providers["anthropic-apikey"]!.apiKeyPool = [{ id: "A", key: "test-token" }, { id: "B", key: "test-token-B" }];
+  saveConfig(configured);
+  const sends = fakeUpstream(index => index === 1 ? refusal(CREDITS)
+    : index === 2 && second === "rate" ? refusal(GENERIC)
+    : index === 2 && second === "billing" ? Response.json({ type: "error", error: { type: "invalid_request_error",
+      message: "Your credit balance is too low to access the Anthropic API." } }, { status: 400 }) : success());
+  const budget = createRequestExecutionBudget({ maxTotalModelSends: 3, baseSendAllowance: 3, finalRecoveryAllowance: 0,
+    maxAlternateTargetSends: 1, maxTargetTransitions: 2 });
+  const response = await handleResponses(request(), configured, { model: "", provider: "" }, { sendBudget: budget });
+  expect(response.status).toBe(200);
+  expect(await response.text()).toContain("ok");
+  expect(budget.used).toBe(sends.length);
+  expect(sends.map(send => send.headers.get("x-api-key"))).toEqual(second === "success"
+    ? ["test-token", "test-token"] : ["test-token", "test-token", "test-token-B"]);
+  expect(sends[0]!.body.speed).toBe("fast");
+  for (const send of sends.slice(1)) expect(send.body.speed).toBeUndefined();
 });

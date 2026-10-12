@@ -156,7 +156,7 @@ The shared Responses path follows the [bounded multipart recovery contract](../s
 
 ## Upstream key attempt accounting
 
-Key identity is sealed at the guarded physical dispatch after queued selections are rebuilt.
+Translated Anthropic billing recovery uses the [immutable physical-send ownership contract](../providers/anthropic-key-billing.md). Its initial send, credential hop and later mixed-class refusals share the request budget. A denied hop retains the upstream refusal, and a leased pacing body rewrap carries the existing marker rather than attributing the response to rebuilt headers. Key identity is sealed at the guarded physical dispatch after queued selections are rebuilt.
 Raw adapter terminal usage is recorded before continuation, search, or image loops merge it;
 repeated parsing of one physical response does not count it twice. Key changes preserve the
 previous attempt while retaining the active attempt object shared by streaming/combo callbacks.

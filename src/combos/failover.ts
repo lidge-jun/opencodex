@@ -1,6 +1,7 @@
 import { parseResetCooldownMs } from "../codex/routing";
 import { classifyError, isCyberPolicyCode } from "../lib/errors";
 import { isNonReplayableUpstreamCode } from "../lib/upstream-retry";
+import { isAnthropicBillingFailure } from "../providers/anthropic-billing-refusal";
 import type { OcxComboTarget } from "../types";
 import { targetKey } from "./types";
 import {
@@ -563,6 +564,7 @@ export function comboFailureCooldownScope(
   options?: { code?: string | null },
 ): ComboFailureCooldownScope {
   const code = normalizedFailureCode(options?.code);
+  if (isAnthropicBillingFailure(status, message, options?.code)) return "provider";
   // Request-shape refusals first: an oversized request must not cool a healthy target.
   // A native transport can surface a zero-output model overflow as a generic
   // upstream_server_error carrying precise context-window prose, so consult the bounded
@@ -847,6 +849,7 @@ export function comboFailureDecision(
   // reaches that list and returns terminal before anything can ask whether the next target
   // could have served the request (#4903).
   if (isResponseFormatCapabilityRefusal(status, message, options?.code)) return "hop";
+  if (isAnthropicBillingFailure(status, message, options?.code)) return "hop";
   if (["origin_rejected", "context_length_exceeded", "invalid_request_error"].includes(error.code ?? "")) {
     return "stop";
   }
