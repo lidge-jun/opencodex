@@ -9,11 +9,17 @@ if (process.env.OCX_BILLING_BUDGET_DRIVER === "1") {
       env: { ...process.env, OCX_BILLING_BUDGET_DRIVER: "1" },
       stdout: "pipe", stderr: "pipe",
     });
-    const [output, errors, exitCode] = await Promise.all([
-      new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
-    ]);
-    expect(exitCode, output + errors).toBe(0);
-    expect(errors).toContain("3 pass");
-    expect(errors).toContain("0 fail");
-  });
+    try {
+      const [output, errors, exitCode] = await Promise.all([
+        new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+      ]);
+      expect(exitCode, output + errors).toBe(0);
+      expect(errors).toContain("3 pass");
+      expect(errors).toContain("0 fail");
+    } finally {
+      // A parent timeout must not leave the child driver running into later tests.
+      if (child.exitCode === null) child.kill();
+    }
+    // Covers a second Bun process starting under a loaded runner, not just the three probes.
+  }, 30_000);
 }
