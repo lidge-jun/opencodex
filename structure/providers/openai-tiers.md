@@ -506,6 +506,12 @@ A manual activation pins its account and lowers the tier ceiling to that account
 is released by drain, exclusion, deletion, an explicit failover/promotion away, and any write to
 `codexAccountPriorities` — a pin and an order are both the operator naming an account to use, so the
 newer statement wins. Ordinary round-robin movement inside the capped tier does not release it.
+`PUT /api/codex-auth/active` with a null id is the explicit release, and a release is not a
+selection: it clears the pin and the stored active id, unwinds the steering a selection planted
+(one-shot manual preference, runtime cursor, and the rotation seeds on the shared and independent
+quota-scope rings), and leaves bound threads on their captured account and quota-avoidance health
+standing — nothing was named, so nothing new applies immediately, which is why the route reports
+`appliesImmediately: false` there. A release may include `expectedPinnedAccountId`: the lock-protected persisted mutation checks that exact pin again before publication, returning `account_pin_changed` if a newer pin replaced it. Callers that omit the precondition retain the explicit global release contract.
 Without that last rule a pin made before any order existed, which is just an ordinary account switch,
 would outrank every order set afterwards for as long as the account kept headroom.
 

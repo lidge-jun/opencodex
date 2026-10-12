@@ -116,6 +116,15 @@ test("an armed guard refuses every Claude writer that resolves into the real dir
   mkdirSync(linkedClaude, { recursive: true });
   writeFileSync(probe, "---\nname: \"ocx-guard-probe\"\nmodel: \"x\"\n---\n\n<!-- generated-by: opencodex -->\n");
   writeFileSync(catalog, "{}");
+  // #6936: an owned block without the loopback bypass plus a NO_PROXY receipt. Every receipt
+  // mutation must be refused here, including apply's, which comes before the settings write.
+  const seededClaude = join(realClaude, "seeded");
+  mkdirSync(seededClaude, { recursive: true });
+  const seededSettings = JSON.stringify({ env: {
+    HTTPS_PROXY: "http://opencodex:token@127.0.0.1:1", NODE_EXTRA_CA_CERTS: "/tmp/ca.pem", NO_PROXY: "10.0.0.5" } });
+  const seededReceipt = JSON.stringify({ version: 1, hadKey: true, previous: "10.0.0.5", written: "x" });
+  writeFileSync(join(seededClaude, "settings.json"), seededSettings);
+  writeFileSync(join(seededClaude, "opencodex-no-proxy.json"), seededReceipt);
   const linkType = process.platform === "win32" ? "junction" : "dir";
   symlinkSync(join(realClaude, "agents"), join(linkedClaude, "agents"), linkType);
   symlinkSync(join(realClaude, "cache"), join(linkedClaude, "cache"), linkType);
@@ -151,9 +160,11 @@ test("an armed guard refuses every Claude writer that resolves into the real dir
     const { syncClaudeAgentDefs } = await import(m.agents);
     const { writeGatewayModelCache } = await import(m.cache);
     const { invalidateClaudeCodeServedCatalog } = await import(m.catalog);
-    const { applyClaudeInterceptSettings, buildClaudeInterceptEnv } = await import(m.settings);
+    const { applyClaudeInterceptSettings, buildClaudeInterceptEnv, captureClaudeInterceptSettingsRollback,
+      removeClaudeInterceptSettings } = await import(m.settings);
     const { protectedRemovalReason } = await import(m.guard);
     const real = ${JSON.stringify(realClaude)}, linked = ${JSON.stringify(linkedClaude)};
+    const seeded = ${JSON.stringify(seededClaude)};
     const alias = ${JSON.stringify(caseAlias)}, fixture = ${JSON.stringify(fixtureClaude)};
     const absentAlias = ${JSON.stringify(absentAlias)};
     const fileLinked = ${JSON.stringify(fileLinkedClaude)};
@@ -171,18 +182,22 @@ test("an armed guard refuses every Claude writer that resolves into the real dir
       cacheUnderBackslashNamedChild: () => writeGatewayModelCache("http://127.0.0.1:1", [{ id: "claude-x" }], real + "/..\\\\fixture"),
       catalog: () => invalidateClaudeCodeServedCatalog(real),
       settings: () => applyClaudeInterceptSettings(env, real),
+      noProxyApply: () => applyClaudeInterceptSettings(env, seeded),
+      noProxyRemove: () => removeClaudeInterceptSettings("/tmp/ca.pem", seeded),
     };
     const refused = {};
     for (const [name, attempt] of Object.entries(attempts)) {
       try { attempt(); refused[name] = false; }
       catch (error) { refused[name] = /real Claude config directory/.test(String(error)); }
     }
+    // Rollback reports failure instead of throwing; the files below prove nothing was written.
+    const noProxyRollback = captureClaudeInterceptSettingsRollback(env, seeded)();
     const fixtureWrite = writeGatewayModelCache("http://127.0.0.1:1", [{ id: "claude-x" }], fixture) !== null;
     // Windows reads the backslash as a separator, so there the same spelling leaves the root.
     const backslashChildRefused = process.platform === "win32" || protectedRemovalReason(real + "/..\\\\fixture") !== null;
     const removalRefused = protectedRemovalReason(absentAlias) !== null && protectedRemovalReason(real) !== null
       && backslashChildRefused;
-    console.log(JSON.stringify({ refused, fixtureWrite, removalRefused }));
+    console.log(JSON.stringify({ refused, fixtureWrite, removalRefused, noProxyRollback }));
   `;
   try {
     const child = Bun.spawnSync([process.execPath, "-e", code], {
@@ -213,10 +228,15 @@ test("an armed guard refuses every Claude writer that resolves into the real dir
         cacheUnderBackslashNamedChild: process.platform !== "win32",
         catalog: true,
         settings: true,
+        noProxyApply: true,
+        noProxyRemove: true,
       },
       fixtureWrite: true,
       removalRefused: true,
+      noProxyRollback: false,
     });
+    expect(readFileSync(join(seededClaude, "settings.json"), "utf8")).toBe(seededSettings);
+    expect(readFileSync(join(seededClaude, "opencodex-no-proxy.json"), "utf8")).toBe(seededReceipt);
     expect(existsSync(probe)).toBe(true);
     expect(existsSync(catalog)).toBe(true);
     expect(readFileSync(realCacheFile, "utf8")).toBe("original");

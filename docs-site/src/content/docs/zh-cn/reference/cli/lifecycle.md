@@ -310,3 +310,5 @@ ocx update --tag preview
 ## Remote Hub 客户端生命周期
 
 使用 `ocx connect <url> --pairing-code-stdin`、`ocx connect status`、`ocx sync` 和 `ocx connect rotate --pairing-code-stdin`。`ocx disconnect` 可离线恢复本地状态，但不会吊销 hub 密钥。仍连接时，`ocx connect revoke --admin-token-stdin` 会吊销已保存的 `apiKeyId`；断开后请使用 hub 的 **连接 → API 密钥**。密钥只能通过 stdin 传递，不能放入 argv。
+
+Linux 的 `ocx service install` 检查 linger 是否已开启；关闭时才提示开启，无法诊断时明确说明不确定性。macOS 上有效且启用的 Desktop 登录注册，即使尚未在当前会话加载，也可用于下次登录的保护判定。`ocx service status` 和 `ocx status` 区分这些状态；错误 plist、禁用或不确定的检查仍不算保护证据。

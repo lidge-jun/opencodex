@@ -8,7 +8,7 @@ import {
 } from "../storage/policy-job";
 import { abortRestoreTrashJobAsync } from "../storage/restore-job";
 import { stopStorageCleanupScheduler } from "../storage/policy-scheduler";
-import { runOptionalShutdownHooks } from "../lib/optional-shutdown-hooks";
+import { runDrainStartHooks, runOptionalShutdownHooks } from "../lib/optional-shutdown-hooks";
 import { stopStateStoreSweeper } from "../lib/state-store-sweeper";
 import {
   cancelQueuedStorageWorkerSpawns,
@@ -499,6 +499,7 @@ export async function drainAndShutdown(
   // ordinary in-flight turns. A stuck scoped owner must not pin shutdown forever.
   const deadline = Date.now() + Math.max(0, timeoutMs);
   beginShutdownDrain();
+  runDrainStartHooks();
   const temporaryDrainsSettled = await waitForTemporaryDrainsUntil(deadline);
   if (!temporaryDrainsSettled) {
     console.warn("Temporary drain lease did not settle before the shutdown deadline; forcing shutdown");

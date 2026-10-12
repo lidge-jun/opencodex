@@ -2,6 +2,7 @@ import { saveConfigPreservingClaudeCode } from "../../config";
 import { clearCodexAccountPin, pinnedCodexAccountId } from "../account-priority";
 import {
   POOL_KEY_CODEX,
+  clearPoolRotationState,
   normalizeCodexAccountPoolStrategy,
   seedPoolRotationAccount,
 } from "../pool-rotation";
@@ -71,6 +72,26 @@ export function resetCodexRoutingForManualSelection(accountId: string): void {
     const retained = overrule(health);
     if (Object.keys(retained).length === 0) deleteScopedHealth(accountId, scope);
     else setScopedHealth(accountId, scope, { consecutiveFailures: 0, ...retained });
+  }
+}
+
+/**
+ * Operator released the selection instead of naming a new account: return routing to
+ * automatic without steering. A release names no replacement, so bound threads keep
+ * their captured account and quota-avoidance health stands — nothing new overrules it.
+ * What still has to go is the steering a selection planted: the one-shot manual
+ * preference (releasing account A must not keep blocking every other pick), the
+ * runtime cursor, and the rotation seeds on the shared ring and each independent
+ * quota-scope ring, which would otherwise force the next pick onto that same account.
+ */
+export function resetCodexRoutingForClearedSelection(): void {
+  runtimeActiveCodexAccountId = undefined;
+  manualPreference.delete(POOL_KEY_CODEX);
+  clearPoolRotationState(POOL_KEY_CODEX);
+  for (const scope of new Set(Object.values(NATIVE_MODEL_QUOTA_SCOPES))) {
+    if (isIndependentCodexQuotaScope(scope)) {
+      clearPoolRotationState(codexPoolKeyForScope(scope));
+    }
   }
 }
 

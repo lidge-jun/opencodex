@@ -227,6 +227,8 @@ propres valeurs par défaut à ces lignes.
 | `commandcode` | `~/.commandcode/providers.json` (sous Windows avec le répertoire personnel par défaut : utiliser `HOME ?? USERPROFILE` uniquement si la valeur n’est ni vide ni composée uniquement d’espaces et désigne un chemin absolu Windows, sinon `homedir()` ; un répertoire personnel fourni séparément est conservé ; ajouter `.commandcode\providers.json`) | `providers.json` | boucle locale uniquement ; `apiKey: false` ; aucune variable d’environnement |
 | `droid` | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` on Windows) | `factory-settings.json` | boucle locale uniquement ; aucune variable d’environnement |
 
+Ces chemins sont les valeurs par défaut. Un `dataBaseDir` absolu dans `~/.zcode/v2/setting.json`, toujours dans le dossier personnel par défaut, déplace le stockage vers `<dataBaseDir>/.zcode/v2/provider_config.json`. `ZCODE_DATA_DIR` désigne directement la racine `.zcode` et prime sur ce réglage ; `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` prime pour le fichier des fournisseurs. Un réglage illisible, mal formé ou relatif bloque les nouvelles applications et actualisations. Les droits de propriété et les données de restauration existants sont conservés. Voir les [règles de chemin et de restauration en anglais](https://opencodex.me/guides/integrations/#zcode-314-and-later).
+
 L'exportation Raycast est un document `providers.yaml` autonome contenant un seul élément `id: opencodex`
 dans la séquence `providers` : `name: OpenCodex`, l'URL de base `/v1` du proxy et chaque modèle routé avec
 ses `abilities` (`tools` et `system_message` toujours pris en charge, `vision` d'après les modalités d'entrée

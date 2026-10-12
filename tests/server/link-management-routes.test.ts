@@ -1,3 +1,4 @@
+import { remoteChildHttpArgv, REMOTE_CURL_PREFLIGHT } from "../../src/link/remote-probe";
 import { afterEach, describe, expect, test } from "bun:test";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
@@ -87,6 +88,18 @@ function harness() {
   return { deps, config: cfg, events, listener, callbacks, setListenerState: (state: typeof listenerState) => { listenerState = state; }, get store() { return current; } };
 }
 
+function childProbe(remote: string, h: ReturnType<typeof harness>): SshRunResult | null {
+  if (remote === remoteOcx(["config", "show", "--json"])) return { code: 0, stdout: '{"port":10100}', stderr: "" };
+  if (remote === quoteRemote(REMOTE_CURL_PREFLIGHT)) return { code: 0, stdout: "", stderr: "" };
+  if (remote === remoteOcx(["restart"])) { h.events.push("child-restart"); return { code: 0, stdout: "", stderr: "" }; }
+  if (remote === quoteRemote(remoteChildHttpArgv(10100, "healthz"))) return { code: 0, stdout: JSON.stringify({ service: "opencodex", pid: 123, port: 10100, ...(h.events.includes("child-restart") ? { role: "client" } : { restartCapability: "v1" }) }) + "\n200", stderr: "" };
+  if (remote === quoteRemote(remoteChildHttpArgv(10100, "v1/catalog"))) {
+    for (const callback of h.callbacks) callback(h.store.links.find(link => link.direction === "hub-initiated")!.apiKeyId);
+    return { code: 0, stdout: '{"models":[]}\n200', stderr: "" };
+  }
+  return null;
+}
+
 function applyRunner(h: ReturnType<typeof harness>, connectCode = 0): SshRunner {
   return {
     async run(argv, options) {
@@ -96,6 +109,7 @@ function applyRunner(h: ReturnType<typeof harness>, connectCode = 0): SshRunner 
       if (knownHostOption) writeFileSync(knownHostOption.slice("UserKnownHostsFile=".length), "client ssh-ed25519 AAAA\n");
       if (isBareOcx(argv)) return BARE_OCX;
       const remote = argv.at(-1) ?? "";
+      const child = childProbe(remote, h); if (child) return child;
       if (remote === remoteOcx(["--version"])) return { code: 0, stdout: "opencodex 2.66.0\n", stderr: "" };
       if (remote === remoteOcx(["link", "port"])) return { code: 0, stdout: JSON.stringify({ port: 2200 }), stderr: "" };
       if (remote.startsWith(`${remoteOcx(["connect", "--link", "--key-stdin", "--tunnel-port", "2200", "--link-id"])} `)) {
@@ -437,7 +451,7 @@ describe("link management routes", () => {
       sshRunner: {
         ...baseRunner,
         async run(argv: readonly string[], options?: { stdin?: string | Uint8Array }) {
-          if (argv.join(" ").includes("connect")) h.deps.writeLinkStore!({ ...h.store, links: [other, ...h.store.links] });
+          if ((argv.at(-1) ?? "").startsWith(`${remoteOcx(["connect", "--link"])} `)) h.deps.writeLinkStore!({ ...h.store, links: [other, ...h.store.links] });
           return baseRunner.run(argv, options);
         },
       },
@@ -766,7 +780,7 @@ describe("link management routes", () => {
     expect((await after!.json()).links).toEqual([]);
   });
 
-  test("returns compensation_failed and retains the record when duplicate revoke fails", async () => {
+  test("duplicate apply is refused before issuing a key, without touching the existing link", async () => {
     temp = mkdtempSync(join(tmpdir(), "ocx-link-duplicate-compensation-"));
     const h = harness();
     const existing = { id: "lnk_0123456789abcdef", alias: "duplicate", direction: "hub-initiated" as const, hostKeyFingerprint: "SHA256:abcdefghijklmnop", tunnelPort: 2200, apiKeyId: "existing-key", createdAt: "2026-09-25T00:00:00.000Z" };
@@ -789,14 +803,14 @@ describe("link management routes", () => {
     expect((await call("/api/link/probe", "POST", { alias: "duplicate" }, routed, "gui-session", true, "pairing", true, h.config))?.status).toBe(200);
     expect((await call("/api/link/confirm-host", "POST", { alias: "duplicate", fingerprint: "SHA256:abcdefghijklmnop" }, routed, "gui-session", true, "pairing", true, h.config))?.status).toBe(200);
     const response = await call("/api/link/apply", "POST", { alias: "duplicate" }, routed, "gui-session", true, "pairing", true, h.config);
-    expect(response?.status).toBe(500);
-    expect(await response!.json()).toMatchObject({ error: { code: "compensation_failed" } });
-    expect(h.store.links).toHaveLength(2);
-    const status = await call("/api/link/status", "GET", undefined, routed, "gui-session", true, "pairing", true, h.config);
-    expect((await status!.json()).links.at(-1)).toMatchObject({ state: "failed", reason: "compensation_failed" });
+    expect(response?.status).toBe(409);
+    expect(await response!.json()).toMatchObject({ error: { code: "link_exists" } });
+    expect(h.store.links).toEqual([existing]);
+    expect(h.events).not.toContain("issue");
+    expect(h.events).not.toContain("revoke");
   });
 
-  test("apply observes command exit and first authenticated catalog admission", async () => {
+  test("apply observes restart and a fresh Child relay catalog after enrollment", async () => {
     temp = mkdtempSync(join(tmpdir(), "ocx-link-apply-"));
     const h = harness();
     const runner: SshRunner = {
@@ -807,6 +821,7 @@ describe("link management routes", () => {
         if (knownHostOption) writeFileSync(knownHostOption.slice("UserKnownHostsFile=".length), "client ssh-ed25519 AAAA\n");
         if (isBareOcx(argv)) return BARE_OCX;
         const remote = argv.at(-1) ?? "";
+      const child = childProbe(remote, h); if (child) return child;
         if (remote === remoteOcx(["--version"])) return { code: 0, stdout: "opencodex 2.66.0\n", stderr: "" };
         if (remote.startsWith(`${remoteOcx(["connect", "--link", "--key-stdin", "--tunnel-port", "2200", "--link-id"])} `)) {
           h.events.push("connect");

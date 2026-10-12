@@ -78,6 +78,8 @@ Child 會透過連結使用 Home 電腦上的供應商與供應商憑證。Home 
 ## CLI 參考
 
 ```text
+ocx link probe <alias> [--json]
+ocx link add <alias> [--expect-fingerprint SHA256:…] [--json]
 ocx link port [--json]
 ocx link issue --alias <alias> --tunnel-port <port> [--json]
 ocx link status [--json]
@@ -85,7 +87,12 @@ ocx link revoke --link-id <id> [--json]
 ocx link reconnect --link-id <id> [--json]
 ```
 
+非互動式終端（非 TTY）必須提供 `--expect-fingerprint`。互動式終端中可省略此參數，但必須明確確認提供的指紋。
+
 ## 相關指南
 
 - [Remote Hub 部署](/zh-tw/guides/remote-hub/)
 - [遠端工作區](/zh-tw/guides/remote-workspace/)
+
+
+`ocx link probe <alias> --json` · `ocx link add <alias> --expect-fingerprint SHA256:… --json` — [CLI, restart, relay verification and recovery](/guides/remote-link/#add-a-child-from-the-terminal).

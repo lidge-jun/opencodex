@@ -7,15 +7,26 @@
  * cannot be retracted. So the request log also refuses any diagnostic that repeats a configured
  * value: every provider's apiKey and apiKeyPool keys (keychain and env references resolved), every
  * configured header value, every credential-named provider field, and every token in the OAuth
- * store. The set is rebuilt when config.json or auth.json changes on disk, a stored keychain secret
- * is replaced, or a referenced environment variable changes.
+ * store. The set is rebuilt when the bytes of config.json or auth.json change, a stored keychain
+ * secret is replaced in this process, or a referenced environment variable changes.
+ *
+ * Freshness is decided by content, never by file metadata. Every check reads both stores and
+ * compares a digest of the bytes it read; the rebuild parses those same bytes. An inode/size/mtime
+ * key missed a same-length rewrite inside one timestamp tick (coarse on Windows) and any writer that
+ * preserves or backdates mtime, and then kept serving the previous, complete-looking view (#6923).
+ * The cost is two small reads per check; checks run only for retained upstream diagnostics.
  *
  * Reads are observe-only: no hardening, backup, repair or warning. A file that exists but cannot be
  * read, parsed or recognized as the expected shape, or a keychain reference that cannot be resolved,
  * makes coverage incomplete and callers fail closed; an incomplete set is retried after a short delay
  * so a keychain that becomes available restores diagnostics. Values are held in memory only and
  * never serialized or exposed.
+ *
+ * Not covered: keychain secrets are cached per process (`readKeychain` in
+ * src/providers/api-key-resolve.ts), so a secret replaced by another process is seen only after
+ * this process re-resolves it.
  */
+import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "../config/paths";
@@ -44,19 +55,35 @@ interface Snapshot {
 
 let cached: Snapshot | undefined;
 
-function fileSignature(path: string): string {
-  try {
-    const stat = statSync(path);
-    return stat.isFile() ? `${stat.ino}:${stat.size}:${stat.mtimeMs}` : "not-a-file";
-  } catch (error) {
-    return (error as NodeJS.ErrnoException)?.code === "ENOENT" ? "absent" : "unreadable";
-  }
+/** One read of a store: its state for the signature and, for a readable file, the bytes read. */
+interface StoreRead {
+  /** "absent", "not-a-file", "unreadable", or "sha256:<hex>" of exactly the bytes in `text`. */
+  readonly state: string;
+  readonly text?: string;
 }
 
-function readJson(path: string, signature: string): { ok: boolean; value?: unknown } {
-  if (signature === "absent") return { ok: true };
+function readStore(path: string): StoreRead {
   try {
-    return { ok: true, value: JSON.parse(readFileSync(path, "utf8").replace(/^\uFEFF/, "")) };
+    if (!statSync(path).isFile()) return { state: "not-a-file" };
+  } catch (error) {
+    // Only a store that is not there at all counts as intentionally absent.
+    return { state: (error as NodeJS.ErrnoException)?.code === "ENOENT" ? "absent" : "unreadable" };
+  }
+  let bytes: Buffer;
+  try {
+    bytes = readFileSync(path);
+  } catch {
+    // Present a moment ago, gone or unreadable now (a replacement in progress): fail closed.
+    return { state: "unreadable" };
+  }
+  return { state: `sha256:${createHash("sha256").update(bytes).digest("hex")}`, text: bytes.toString("utf8") };
+}
+
+function parseStore(read: StoreRead): { ok: boolean; value?: unknown } {
+  if (read.state === "absent") return { ok: true };
+  if (read.text === undefined) return { ok: false };
+  try {
+    return { ok: true, value: JSON.parse(read.text.replace(/^\uFEFF/, "")) };
   } catch {
     return { ok: false };
   }
@@ -76,7 +103,7 @@ function envReference(raw: string): string | undefined {
   return /^\$\{(\w+)\}$/.exec(raw)?.[1] ?? raw.slice(1);
 }
 
-function build(configPath: string, authPath: string, signature: string, now: number): Snapshot {
+function build(configRead: StoreRead, authRead: StoreRead, signature: string, now: number): Snapshot {
   const values = new Set<string>();
   const envNames = new Set<string>();
   let complete = true;
@@ -126,10 +153,11 @@ function build(configPath: string, authPath: string, signature: string, now: num
     }
   };
 
-  const [configSig, authSig] = signature.split("|");
-  const config = readJson(configPath, configSig!);
-  const auth = readJson(authPath, authSig!);
-  if (!config.ok || !auth.ok || configSig === "unreadable" || authSig === "unreadable") complete = false;
+  const configSig = configRead.state;
+  const authSig = authRead.state;
+  const config = parseStore(configRead);
+  const auth = parseStore(authRead);
+  if (!config.ok || !auth.ok) complete = false;
   // An existing file must have the shape its loader expects; anything else hides credentials.
   if (configSig !== "absent" && config.ok && (!isRecord(config.value)
     || (config.value.providers !== undefined && !isRecord(config.value.providers)))) complete = false;
@@ -154,13 +182,13 @@ function build(configPath: string, authPath: string, signature: string, now: num
 /** The configured credential set for the active config home, rebuilt when any input changes. */
 export function configuredCredentials(now = Date.now()): ConfiguredCredentials {
   const dir = getConfigDir();
-  const configPath = join(dir, "config.json");
-  const authPath = join(dir, "auth.json");
-  const signature = `${fileSignature(configPath)}|${fileSignature(authPath)}|${providerKeyResolutionGeneration()}|${dir}`;
+  const configRead = readStore(join(dir, "config.json"));
+  const authRead = readStore(join(dir, "auth.json"));
+  const signature = `${configRead.state}|${authRead.state}|${providerKeyResolutionGeneration()}|${dir}`;
   const stale = !cached
     || cached.signature !== signature
     || cached.envFingerprint !== envFingerprint(cached.envNames)
     || (!cached.view.complete && now - cached.builtAt >= INCOMPLETE_RETRY_MS);
-  if (stale) cached = build(configPath, authPath, signature, now);
+  if (stale) cached = build(configRead, authRead, signature, now);
   return cached!.view;
 }

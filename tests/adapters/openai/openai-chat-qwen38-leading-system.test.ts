@@ -17,12 +17,12 @@ const provider: OcxProviderConfig = {
   apiKey: "test",
 };
 
-function serialize(modelId: string, target = provider): Array<{ role: string; content: string }> {
+function serialize(modelId: string, target = provider, messages?: OcxParsedRequest["context"]["messages"]): Array<{ role: string; content: string }> {
   const request = createOpenAIChatAdapter(target).buildRequest({
     modelId,
     context: {
       systemPrompt: ["Base instructions."],
-      messages: [
+      messages: messages ?? [
         { role: "user", content: "First turn.", timestamp: 0 },
         { role: "developer", content: "Answer in one sentence.", timestamp: 0 },
         { role: "user", content: "Second turn.", timestamp: 0 },
@@ -45,8 +45,12 @@ function assertTemplateAccepts(messages: Array<{ role: string }>): void {
   });
 }
 
-describe("leading-system chat templates (Qwen3.8-27B, OrcaSAQ-2-Cyber-27B)", () => {
+describe("leading-system chat templates (Qwen3.8-27B, Flash-Next, OrcaSAQ-2-Cyber-27B)", () => {
   test.each([
+    "flash-next",
+    "Qwen3.8-Flash-Next",
+    "oh-my-gpu/flash-next",
+    "hosted_vllm/Qwen/Qwen3.8-Flash-Next",
     "Qwen3.8-27B",
     "Qwen/Qwen3.8-27B",
     // Internal Eliza serves the same pinned template under dashed checkpoint ids.
@@ -71,7 +75,7 @@ describe("leading-system chat templates (Qwen3.8-27B, OrcaSAQ-2-Cyber-27B)", () 
     expect(() => assertTemplateAccepts(messages)).not.toThrow();
   });
 
-  test.each(["Qwen3.8-27B", "OrcaSAQ-2-Cyber-27B-Uncensored-GGUF:Q8_0"])(
+  test.each(["flash-next", "Qwen3.8-Flash-Next", "Qwen3.8-27B", "OrcaSAQ-2-Cyber-27B-Uncensored-GGUF:Q8_0"])(
     "does not send a developer role even if a gateway declaration says it accepts one: %s", modelId => {
       const messages = serialize(modelId, { ...provider, foldDeveloperRoleToSystem: false });
       expect(messages[2]).toEqual({ role: "user", content: "Answer in one sentence." });
@@ -90,7 +94,37 @@ describe("leading-system chat templates (Qwen3.8-27B, OrcaSAQ-2-Cyber-27B)", () 
       .toEqual({ role: "developer", content: "Answer in one sentence." });
   });
 
+  test.each([undefined, true, false])("accepts first-turn Flash-Next instructions with foldDeveloperRoleToSystem=%s", foldDeveloperRoleToSystem => {
+    const messages = serialize("flash-next", { ...provider, foldDeveloperRoleToSystem }, [
+      { role: "developer", content: [{ type: "text", text: "Permission instructions." }], timestamp: 0 },
+      { role: "user", content: "Hello.", timestamp: 0 },
+    ]);
+    expect(messages).toEqual([
+      { role: "system", content: "Base instructions." },
+      { role: "user", content: "Permission instructions." },
+      { role: "user", content: "Hello." },
+    ]);
+    expect(() => assertTemplateAccepts(messages)).not.toThrow();
+  });
+
+  test("Flash-Next releases a reminder after its pending tool result", () => {
+    const messages = serialize("flash-next", provider, [
+      { role: "user", content: "Inspect.", timestamp: 0 },
+      { role: "assistant", content: [{ type: "toolCall", id: "call_1", name: "read_file", arguments: {} }], model: "flash-next", timestamp: 0 },
+      { role: "developer", content: "Keep the policy.", timestamp: 0 },
+      { role: "toolResult", toolCallId: "call_1", toolName: "read_file", content: "Contents.", isError: false, timestamp: 0 },
+    ]);
+    expect(messages.map(message => message.role)).toEqual(["system", "user", "assistant", "tool", "user"]);
+    expect(messages[3]).toMatchObject({ role: "tool", tool_call_id: "call_1", content: "Contents." });
+    expect(messages[4]).toEqual({ role: "user", content: "Keep the policy." });
+    expect(() => assertTemplateAccepts(messages)).not.toThrow();
+  });
+
   test("other models keep their recorded role and chronological position", () => {
+    for (const modelId of ["flash-next-other", "Qwen3.8-Flash-Next-FP8", "deepseek-flash-next"]) {
+      expect(serialize(modelId)[2].role).toBe("system");
+    }
+    expect(serialize("flash-next", { ...provider, baseUrl: "https://api.openai.com/v1" })[2].role).toBe("system");
     expect(serialize("other-model")[2]).toEqual({ role: "system", content: "Answer in one sentence." });
     expect(serialize("other-model", { ...provider, foldDeveloperRoleToSystem: false })[2])
       .toEqual({ role: "developer", content: "Answer in one sentence." });

@@ -10,7 +10,7 @@
  * adapter-reported CatalogModel.contextWindow / the Anthropic registry for passthrough ids);
  * nothing is guessed.
  */
-import { aliasForNative, aliasForRoute, currentClaudeAliasSpelling, legacyAliasForNative, legacyAliasForRoute } from "./alias";
+import { aliasForNative, aliasForRoute, currentClaudeAliasSpelling, legacyAliasForNative, legacyAliasForRoute, resolveAlias } from "./alias";
 import { desktop3pAlias } from "./desktop-3p";
 import { nativeOpenAiContextWindow, type CatalogModel, type NativeContextLimitsInput } from "../codex/catalog";
 import { ANTHROPIC_MODEL_CONTEXT_WINDOWS } from "../providers/registry/model-seeds";
@@ -274,6 +274,59 @@ export function effectiveModelEnv(
   const effectiveHaiku = claudeCode?.tierModels?.haiku ?? claudeCode?.smallFastModel;
   set("ANTHROPIC_DEFAULT_HAIKU_MODEL", effectiveHaiku);
   set("ANTHROPIC_SMALL_FAST_MODEL", effectiveHaiku);
+  return out;
+}
+
+/**
+ * Tier slots Claude Code pairs with a `<slot>_NAME` label (#6926). Its /model tier row is
+ * `label: <slot>_NAME ?? <first-party display name> ?? <slot value>` (2.1.296), and an
+ * `ocx-claude-*` alias is not a first-party id, so without the label the row prints the alias.
+ * The alias itself stays the submitted id: saved selections and inbound resolution depend on it.
+ */
+export const CLAUDE_TIER_LABEL_SLOTS = [
+  "ANTHROPIC_DEFAULT_OPUS_MODEL",
+  "ANTHROPIC_DEFAULT_SONNET_MODEL",
+  "ANTHROPIC_DEFAULT_FABLE_MODEL",
+  "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+] as const;
+
+export type ClaudeTierLabelSlot = (typeof CLAUDE_TIER_LABEL_SLOTS)[number];
+
+export function isClaudeTierLabelSlot(name: string): name is ClaudeTierLabelSlot {
+  return (CLAUDE_TIER_LABEL_SLOTS as readonly string[]).includes(name);
+}
+
+/**
+ * The picker label for a tier slot holding an OpenCodex alias, spelled like the discovery
+ * row's `display_name` (model-info.ts): `<slug> (native)`, `<model> (<provider>)` and a
+ * ` · 1M` variant. The native-namespaced `claude-*` selector is the Anthropic Fable picker
+ * alias, which discovery labels `(anthropic)`. A trailing `--fast` stays in the model name:
+ * without the catalog this cannot tell a synthetic Fast sibling from a real model whose id ends
+ * in `--fast`, and naming the exact model beats a prettier label that could name the wrong one.
+ * Anything that is not an alias (a first-party id, `provider/model`, a bare slug) gets no
+ * label: Claude Code either names it itself or the id is already what the user typed.
+ */
+export function claudeTierDisplayName(selector: string): string | undefined {
+  const trimmed = selector.trim();
+  const oneMillion = hasOneMillionMarker(trimmed);
+  const route = resolveAlias(stripOneMillionMarker(trimmed));
+  if (route === null) return undefined;
+  const slash = route.indexOf("/");
+  let provider = slash > 0 ? route.slice(0, slash) : "native";
+  const model = slash > 0 ? route.slice(slash + 1) : route;
+  if (!model) return undefined;
+  if (provider === "native" && model.startsWith("claude-")) provider = "anthropic";
+  return `${model} (${provider})${oneMillion ? " · 1M" : ""}`;
+}
+
+/** `{ "<slot>_NAME": label }` for each tier slot in `env` that holds an OpenCodex alias. */
+export function claudeTierDisplayNameEnv(env: Readonly<Record<string, string | undefined>>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const slot of CLAUDE_TIER_LABEL_SLOTS) {
+    const value = env[slot];
+    const label = value ? claudeTierDisplayName(value) : undefined;
+    if (label !== undefined) out[`${slot}_NAME`] = label;
+  }
   return out;
 }
 

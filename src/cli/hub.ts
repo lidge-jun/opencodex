@@ -7,9 +7,10 @@ import {
   type GuiPairRequestResult,
 } from "./gui-pair-client";
 import type { RuntimeApiDeps } from "./runtime-api";
+import { HUB_DISABLE_USAGE, runHubDisable, type HubDisableDeps } from "./hub-disable";
 
 export const HUB_USAGE =
-  "ocx hub invite [--json] [--data-url <origin>] [--management-url <origin>] [--clients codex,claude]";
+  "ocx hub invite [--json] [--data-url <origin>] [--management-url <origin>] [--clients codex,claude]\n  " + HUB_DISABLE_USAGE;
 
 const PAIRING_WARNING = "Pairing codes are secret, single-use, and expire quickly. Do not save them.";
 
@@ -23,7 +24,7 @@ const PAIRING_WARNING = "Pairing codes are secret, single-use, and expire quickl
  */
 const DEFAULT_CLIENT_BROWSER_ORIGIN = "http://localhost:10100";
 
-export interface HubCommandDeps extends RuntimeApiDeps {
+export interface HubCommandDeps extends RuntimeApiDeps, HubDisableDeps {
   loadConfig: () => OcxConfig;
   findLiveProxy?: () => Promise<LiveProxy | null>;
   requestPairingGrant?: (
@@ -361,6 +362,7 @@ async function runInvite(args: string[], deps: HubCommandDeps): Promise<number> 
 }
 
 export async function runHubCommand(args: string[], deps: HubCommandDeps): Promise<number> {
+  if (args[0] === "disable") return runHubDisable(args.slice(1), deps);
   if (args[0] !== "invite") {
     console.error(`Usage: ${HUB_USAGE}`);
     return 1;

@@ -22,6 +22,7 @@ export function canonicalPickerConfigDir(configDir: string): string {
 /** Public records still cannot follow symlinks or accept oversized/malformed recovery data. */
 function readState(path: string, configId: string, initialization: boolean): Initialization | AuthorityMetadata | null {
   // BigInt stats: a Windows file ID exceeds 2^53, so Number ino loses low bits and two files can compare equal.
+  // Refuse zero identity or metadata changes between the path snapshot and opened descriptor.
   let expected: BigIntStats;
   try { expected = lstatSync(path, { bigint: true }); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw new Error("picker_ca_metadata_unsafe"); }
@@ -31,7 +32,8 @@ function readState(path: string, configId: string, initialization: boolean): Ini
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw new Error("picker_ca_metadata_unsafe"); }
   try {
     const stat = fstatSync(fd, { bigint: true });
-    if (stat.dev !== expected.dev || stat.ino !== expected.ino) throw new Error("picker_ca_metadata_unsafe");
+    if (stat.dev !== expected.dev || stat.ino !== expected.ino || stat.ino === 0n
+      || stat.ctimeNs !== expected.ctimeNs) throw new Error("picker_ca_metadata_unsafe");
     if (!stat.isFile() || stat.nlink !== 1n || stat.size > BigInt(MAX_PUBLIC_STATE_BYTES)
       || (process.platform !== "win32" && stat.uid !== BigInt(process.getuid!()))) throw new Error();
     const bytes = Buffer.alloc(MAX_PUBLIC_STATE_BYTES + 1);

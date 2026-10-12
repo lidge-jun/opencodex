@@ -103,6 +103,12 @@ it verifies that the desktop app runs its bundled proxy, even without recorded o
 Turn on **Start at Login** in the OpenCodex menu instead of installing a background
 service. Startup safety credits the app only when its login registration is verified;
 if it cannot be verified, follow the Desktop guidance in status.
+The Startup page then labels the Desktop row **Running · Start at Login not verified**.
+The menu checkbox only shows that the login item file exists. If it is already checked,
+make sure macOS allows OpenCodex to open at login under System Settings → General →
+Login Items & Extensions. While the app runs the proxy, the Startup page keeps the
+background service and launcher shim installers disabled; to use them instead, quit
+OpenCodex and run `ocx service install` or `ocx codex-shim install` in a terminal.
 
 The bundled CLI is `/Applications/OpenCodex.app/Contents/MacOS/ocx` on macOS and
 `/usr/bin/ocx` for the Linux deb package. Run that executable with `status` to check

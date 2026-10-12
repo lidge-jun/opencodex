@@ -39,6 +39,7 @@ import {
   assertDroidPathsUnambiguous,
   assertDroidRecordedSettingsUnambiguous,
   resolveIntegrationPaths,
+  type ResolvedIntegrationPaths,
   unresolvedPathHintFor,
   type IntegrationClientId,
 } from "./registry";
@@ -482,7 +483,7 @@ export interface IntegrationStateInput {
   store?: IntegrationStateStore;
   io?: IntegrationIO;
   /** Internal explicit profile target; never accepted as a caller-provided path. */
-  resolvedPaths?: { configPath: string; detectDir: string };
+  resolvedPaths?: ResolvedIntegrationPaths;
 }
 
 export function exportContextOf(input: {
@@ -592,11 +593,11 @@ export function readIntegrationState(input: IntegrationStateInput): IntegrationS
    */
   let installed: boolean;
   let effective: IntegrationTarget;
-  let record: OwnershipRecord | null;
+  let record: OwnershipRecord | null = null;
   try {
     // One resolution for both, so a client whose paths come from mutable state
     // cannot report one account's install beside another account's config path.
-    const paths = resolveStatePaths(input);
+    const paths = resolveStatePaths(input, io);
     installed = io.statKind(paths.detectDir) === "dir";
     if (input.clientId === "cline") io = createClineIO(io, paths.configPath, store);
     /*
@@ -611,7 +612,7 @@ export function readIntegrationState(input: IntegrationStateInput): IntegrationS
       statKind: io.statKind, env: input.env, home: input.home,
     });
     effective = resolveIntegrationTarget({
-      clientId: input.clientId, configPath: recordedPath, io, record, env: input.env, home: input.home,
+      clientId: input.clientId, configPath: recordedPath, io, record, env: input.env, home: input.home, resolvedPaths: paths,
     });
   } catch (error) {
     if (!(error instanceof ClientPathError)) throw error;
@@ -626,6 +627,10 @@ export function readIntegrationState(input: IntegrationStateInput): IntegrationS
      * yet. A client that can name where its config would go gets `installed:
      * false` and that location, which reads as "not installed" in the UI.
      */
+    if (input.clientId === "zcode" && record) return {
+      clientId: input.clientId, state: "unsafe", installed: false, configPath: record.configPath,
+      reason: "unresolvable-path", appliedAt: record.appliedAt, lastOpId: record.opId, ...retention,
+    };
     const hint = unresolvedPathHintFor(input.clientId, input.env, input.home);
     return {
       clientId: input.clientId,
@@ -638,6 +643,12 @@ export function readIntegrationState(input: IntegrationStateInput): IntegrationS
   }
 
   const configPath = effective.configPath;
+  if (effective.pathError) return {
+    clientId: input.clientId, state: "unsafe", installed, configPath,
+    reason: "unresolvable-path",
+    ...(record?.configPath === configPath ? { appliedAt: record.appliedAt, lastOpId: record.opId } : {}),
+    ...retention,
+  };
   if (input.clientId === "kilo") {
     const candidates = inspectKiloCandidates({ io, selectedPath: configPath, env: input.env, home: input.home });
     if (candidates.kind !== "ok") return {
@@ -715,9 +726,10 @@ export function readIntegrationState(input: IntegrationStateInput): IntegrationS
   };
 }
 
-function resolveStatePaths(input: IntegrationStateInput): { configPath: string; detectDir: string } {
+function resolveStatePaths(input: IntegrationStateInput, io: IntegrationIO): ResolvedIntegrationPaths {
   const context = exportContextOf(input);
-  const paths = input.resolvedPaths ?? resolveIntegrationPaths(input.clientId, input.env, input.home, context);
+  const paths = input.clientId === "zcode" || !input.resolvedPaths
+    ? resolveIntegrationPaths(input.clientId, input.env, input.home, context, io) : input.resolvedPaths;
   if (input.clientId === "droid" && input.resolvedPaths) assertDroidPathsUnambiguous(paths.detectDir, context);
   return paths;
 }
@@ -727,7 +739,7 @@ export function readOwnedDroidReasoningDefaults(input: IntegrationStateInput): R
   const store = input.store ?? createIntegrationStateStore();
   const io = input.io ?? store.io();
   try {
-    const paths = resolveStatePaths(input);
+    const paths = resolveStatePaths(input, io);
     const record = store.readRecords().droid;
     if (!record || record.clientId !== "droid" || record.configPath !== paths.configPath) return {};
     const effective = resolveIntegrationTarget({

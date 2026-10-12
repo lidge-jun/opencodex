@@ -124,6 +124,29 @@ describe("OAuth account-scoped reauth", () => {
     expect(getAccountSet("xai")?.accounts[0]?.loginId).not.toBe(loginId);
   });
 
+  test("runLogin reauth keeps an unobserved plan and clears it on an observed unknown", async () => {
+    await saveCredential("xai", {
+      access: "a1", refresh: "r1", expires: Date.now() + 60_000,
+      email: "slot-a@example.test", accountId: "acct-a", plan: "pro",
+    });
+    const slotId = getAccountSet("xai")!.activeAccountId;
+    const original = OAUTH_PROVIDERS.xai.login;
+    try {
+      OAUTH_PROVIDERS.xai.login = async () => ({
+        access: "a2", refresh: "r2", expires: Date.now() + 60_000, email: "slot-a@example.test", accountId: "acct-a",
+      });
+      await runLogin("xai", {} as OAuthController, { reauthAccountId: slotId });
+      expect(getAccountCredential("xai", slotId)?.plan).toBe("pro");
+      OAUTH_PROVIDERS.xai.login = async () => ({
+        access: "a3", refresh: "r3", expires: Date.now() + 60_000, email: "slot-a@example.test", accountId: "acct-a", plan: null,
+      });
+      await runLogin("xai", {} as OAuthController, { reauthAccountId: slotId });
+      expect(getAccountCredential("xai", slotId)?.plan).toBeNull();
+    } finally {
+      OAUTH_PROVIDERS.xai.login = original;
+    }
+  });
+
   test("kiro-cli reauth refuses a native-origin slot before any CLI work", async () => {
     const cred: OAuthCredentials = { access: "native-access", refresh: "native-refresh", expires: Date.now() + 60_000 };
     await appendKiroAccountFromDeviceLogin(cred);

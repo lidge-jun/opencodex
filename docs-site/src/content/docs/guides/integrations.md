@@ -547,10 +547,26 @@ available. Fully quit and reopen Aside to load changed model files.
 
 ## ZCode 3.14 and later
 
-ZCode 3.14 moved its custom providers to `~/.zcode/v2/provider_config.json` and left
+By default, ZCode 3.14 stores its custom providers in `~/.zcode/v2/provider_config.json` and left
 `~/.zcode/v2/config.json` reachable only through a one-shot import that runs when the new file is
 missing. ZCode creates the new file the first time it runs, so on any install that has ever been
 launched the import is already spent and a write to `config.json` reaches nothing.
+
+ZCode can relocate its data root with an absolute `dataBaseDir` in
+`~/.zcode/v2/setting.json`. This bootstrap file always stays under the default home;
+the provider store moves to `<dataBaseDir>/.zcode/v2/provider_config.json`.
+`ZCODE_DATA_DIR` takes precedence and names the `.zcode` root directly, while
+`ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` takes precedence for the provider file.
+`ZCODE_DATA_BASE_DIR` is a separate native selector and is not an alias for `ZCODE_DATA_DIR`.
+
+Unreadable, malformed or relative bootstrap settings leave the active root unknown.
+Apply, overwrite and refresh refuse with a repair message instead of claiming a successful
+legacy write. An existing explicit provider file can still establish the active store.
+Ownership recorded at the original default config or store keeps its path, fingerprints
+and undo history; disable removes that original block before a later enable can use the
+relocated store. An older undo also refuses while another path owns the integration.
+If an earlier explicit selector no longer identifies the owned file, restore that selector
+before disabling; opencodex retains the record and refuses to abandon the block.
 
 opencodex writes `provider_config.json` directly where it can. Enabling the integration adds the
 `opencodex` provider rule to that file, a catalog refresh updates it, and disabling removes exactly
@@ -667,17 +683,25 @@ role's model is actually decided. LazyCodex counts as installed when the `omo@si
 Codex plugin is enabled in `$CODEX_HOME/config.toml` and an installed copy under
 `$CODEX_HOME/plugins/cache/sisyphuslabs/omo/` carries its `lazycodex-install.json`. A `~/.omo`
 folder on its own does not count, because Pi-based omo creates it too. Without LazyCodex the
-section is hidden and the command line reports it as not installed. Pick a model on a row and
-press Save:
+section is hidden and the command line reports it as not installed. Pick a model and a reasoning
+effort on a row and press Save. A row whose role has no model pin can save an effort on its own;
+the role keeps inheriting its model:
 
-- opencodex rewrites only the root `model = "..."` line of that role's file. The role's
-  instructions, comments, and other keys are left exactly as they were. A role with no pin gets
-  one added near the top of the file.
-- The same value is written to `[codex].agents.<role>.model` in `~/.omo/omo.jsonc`, which
-  LazyCodex 5.1.1 and later reads. If that file does not exist it is not created. If it contains
+- opencodex updates only the root `model = "..."` and `model_reasoning_effort = "..."` keys of that role's file.
+  Missing pins are inserted near the top. Choosing **Inherit effort**, available on every row,
+  sends `"effort": null` to clear the effort pin, removing its line and trailing comment.
+  The role's instructions, other comments, and other keys are left exactly as they were.
+- The model is written to `[codex].agents.<role>.model` in `~/.omo/omo.jsonc`, which
+  LazyCodex 5.1.1 and later reads, and a changed effort LazyCodex supports goes to
+  `[codex].agents.<role>.reasoning` in the same entry. If that file does not exist it is not created. If it contains
   comments it is left untouched, because saving would remove them; the tab says so, and you can
   set the value there by hand. Symlinks and non-regular files are rejected; on macOS and Linux,
   a FIFO is rejected without waiting for a writer. A skipped mirror does not undo the role-file save.
+
+If the role-file save succeeds but the omo.jsonc write fails, the row's button becomes
+**Retry omo.jsonc**, which resends the same effort choice, including an **Inherit effort** clear
+(`null`). Until that retry succeeds, a later Save or Auto-assign Apply for the role that leaves the
+effort alone carries the pending choice with it; an explicitly picked effort takes its place.
 
 Nothing happens until you press Save; syncing or restarting opencodex never changes a role file.
 New Codex sessions pick up the change. The same controls exist on the command line:
@@ -688,9 +712,22 @@ ocx agent roles set explorer xai/grok-4.5
 ```
 
 `ocx agent roles set <role> <model> --effort <level>` also sets the role's reasoning effort: it
-rewrites the role file's `model_reasoning_effort` line and writes `[codex].agents.<role>.reasoning`
+inserts or replaces the role file's `model_reasoning_effort` value and writes `[codex].agents.<role>.reasoning`
 in omo.jsonc when LazyCodex has that level (`ultra` stays in the role file only, and an older
-`reasoning` is removed). A Save that changes only the model leaves both effort values as they were.
+`reasoning` is removed). On `PUT /api/codex-agent-roles/{role}`, omitting `effort` keeps the pin,
+a level sets it, and `null` removes the role file's `model_reasoning_effort` line, its trailing
+comment, and the omo.jsonc `reasoning`. A Save that changes only the model leaves both effort values as they were.
+Omitting `model` leaves the role file's `model` pin and the omo.jsonc `model` exactly as they were,
+so a role without a pin keeps inheriting its model while its effort changes or clears; the dashboard
+sends this effort-only request for such a row. When omo.jsonc can be written, a role without an entry there
+gets one holding only `reasoning` if the saved effort is one LazyCodex supports (`none` is written as
+`off`); for such a role, clearing the effort or saving `ultra` adds no entry. A `null` model is refused with 400 `invalid_model`, because a save never removes a model
+pin, and a request with neither `model` nor `effort` is refused with 400 `empty_update` before the role file or omo.jsonc is
+read. `ocx agent roles set` always takes a model.
+Only an existing one-line string value can be removed; a multiline or non-string value is refused
+with 409 `unsupported_model_value`, leaving both files unchanged. Clearing removes only the
+role's own override: Codex then resolves the effort as it does for any role without one (an explicit
+spawn value, the `[agents]` default, or the parent session), not a fixed model default.
 
 ### Auto-assign
 
@@ -713,9 +750,11 @@ picks a model. opencodex then picks the cheapest model from your picker list tha
 Each proposal shows the model, the tier, the reasoning effort, a one-line reason, and what would move
 it up or down. A role the model could not size clearly is shown as not sized, with the reason, and
 cannot be applied. Nothing is written until you press Apply on a row or Apply all. Applying uses the
-same save as picking by hand, and also rewrites the role's `model_reasoning_effort` when the file already has
-one. The effort is placed on the chosen model's own levels: its lowest, its default, one above the
-default, or its highest.
+same save as picking by hand. Every sized role whose chosen model has a non-empty effort ladder gets
+an effort proposal, and Apply or `--apply` inserts or replaces its `model_reasoning_effort` value.
+The effort is placed on the chosen model's own levels: its lowest, its default, one above the
+default, or its highest. An empty ladder gives no effort proposal (`proposedEffort: null`);
+Apply omits `effort` and leaves any existing effort pin as it was. A null proposal never clears a pin.
 
 ```bash
 ocx agent roles suggest

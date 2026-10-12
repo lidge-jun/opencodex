@@ -31,7 +31,7 @@ against `api.openai.com`, so every OpenAI-compatible gateway was assumed not to 
 role until proven otherwise, and the instruction silently lost `developer` precedence.
 
 The translated `Qwen3.8-27B` Chat route follows its [pinned template](https://huggingface.co/Qwen/Qwen3.8-27B/blob/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0/chat_template.jinja): a late `system` raises, `developer` is unsupported, and a late `user` renders in place; the `OrcaSAQ-2-Cyber-27B` GGUF family pins the same contract and takes the same mapping.
-Gateway-namespaced ids such as LiteLLM's `openai/Qwen3.8-27B` match too. The Orca exception requires `GGUF` in the final model segment before any optional colon quant tag; non-GGUF Orca variants keep their configured mapping. Text-only developer items therefore keep their content and slot but use the `user` wire role,
+Flash-Next uses the same mapping for the exact `flash-next` and `Qwen3.8-Flash-Next` ids (the failure is reported in [#6242](https://github.com/lidge-jun/opencodex/issues/6242)). Gateway-namespaced ids such as LiteLLM's `openai/Qwen3.8-27B` and `oh-my-gpu/flash-next` match too. The Orca exception requires `GGUF` in the final model segment before any optional colon quant tag; non-GGUF Orca variants keep their configured mapping. Text-only developer items therefore keep their content and slot but use the `user` wire role,
 losing developer precedence. Other models retain the mapping above; native Chat passthrough
 is unchanged. The rule is recorded in `tests/fixtures/qwen38-27b-chat-template-contract.json`
 and exercised by `tests/adapters/openai/openai-chat-qwen38-leading-system.test.ts`.
@@ -581,15 +581,12 @@ file part whose inline base64 bytes now have a lossless carrier; the native Chat
 unchanged. No audio transport and no automatic URL fetch is added, and no client filename,
 payload, URL or metadata is included in the new error messages.
 
-The shared coding-agent projection (CodeBuddy, Qoder) carries tool-result images as
-real image blocks rather than flattening them to the text `[image]`, and orders image
-blocks chronologically — history before current — so attachment order matches the
-prose the model reads beside them. Vendor tool execution stays disabled on both
+The shared coding-agent projection in `src/adapters/coding-agent/` (CodeBuddy, Qoder) carries supported tool-result image references as
+real image blocks. Current tool-result prose marks supported images as `[image attached below]` and unsupported references as `[image omitted: unsupported reference]`; historical tool-result prose retains `[image]` while supported references are also emitted as image blocks. In multi-turn projection, image blocks follow conversation order — history before current. Vendor tool execution stays disabled on both
 adapters. CodeBuddy refuses an unquoted, line-oriented full-width-bar DSML `calls`
 container followed by a named bare or namespaced invoke control line in either output channel; it
 preserves preceding answer text, never promotes vendor prose into execution authority,
-and leaves discussed or quoted literals and code examples untouched. Qoder's explicit
-refusal of original images is unchanged.
+and leaves discussed or quoted literals and code examples untouched. Qoder Global accepts image input through the Qoder CLI. OpenCodex forwards supported image inputs that reach the Global adapter in `src/adapters/qoder/` through the shared coding-agent projection without maintaining a per-model vision capability allowlist there. Image compatibility and any model-specific preprocessing or routing are handled by Qoder. OpenCodex does not use the static discovery fallback roster to classify per-model vision capability. Qoder CN keeps its sidecar classification and rejects residual raw-image requests that reach the adapter. OpenCodex serializes image blocks in conversation order, with history before the current turn. Because Qoder runs with `--no-session-persistence`, prior images are re-projected on later turns; in observed multi-turn image conversations, replayed images can become unreliably associated or effectively ordered relative to the historical text they originally accompanied, a known limitation of the current stateless Qoder projection path.
 
 Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.
 

@@ -78,6 +78,8 @@ Child はリンクを通じて Home コンピューターのプロバイダー�
 ## CLI リファレンス
 
 ```text
+ocx link probe <alias> [--json]
+ocx link add <alias> [--expect-fingerprint SHA256:…] [--json]
 ocx link port [--json]
 ocx link issue --alias <alias> --tunnel-port <port> [--json]
 ocx link status [--json]
@@ -85,7 +87,12 @@ ocx link revoke --link-id <id> [--json]
 ocx link reconnect --link-id <id> [--json]
 ```
 
+対話型端末（TTY）でない場合、`--expect-fingerprint` は必須です。対話型端末では省略できますが、提示されたフィンガープリントを明示的に承認する必要があります。
+
 ## 関連ガイド
 
 - [Remote Hub のデプロイ](/ja/guides/remote-hub/)
 - [リモートワークスペース](/ja/guides/remote-workspace/)
+
+
+端末では `ocx link probe <alias> --json` で指紋とバージョンを確認し、`ocx link add <alias> --expect-fingerprint SHA256:… --json` で接続できます。指紋を省略すると対話端末で明示的な確認が必要です。Home は Child の再起動サポートと curl を事前確認し、接続後に再起動と実際のリレーを検証します。Child 設定が残った場合は Child で `ocx disconnect` と `ocx restart` を実行してください。[詳細（英語）](/guides/remote-link/#add-a-child-from-the-terminal)。

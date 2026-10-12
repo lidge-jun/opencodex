@@ -32,6 +32,26 @@ Regression coverage: `tests/providers/provider-anthropic-instance.test.ts`,
 `tests/oauth/oauth-anthropic-instance-registration.test.ts`, and
 `tests/oauth/oauth-anthropic-instance-refresh.test.ts`.
 
+## Subscription labels
+
+`src/oauth/anthropic-identity.ts` reads organization tiers from the authenticated profile
+without changing bearer-bound UUID proof. Browser login, refresh, local import and proven
+CLI rotation persist a validated display-only `plan`; both Anthropic instances project it
+through `src/oauth/index.ts`. Rate-limit tiers strip `default_claude_`, with organization
+kinds stripping `claude_` as fallback. Unknown tiers remain null and never come from quota
+percentages. Same-account refreshes retain an unobserved plan; observed unknown tiers clear it.
+Refresh gives the profile read a 2-second deadline because a refresh can sit on a request path;
+a missed read leaves the stored label in place.
+An account replacement cannot inherit another account's label.
+
+`src/oauth/google-antigravity.ts` persists `loadCodeAssist`'s `paidTier.id`, falling back
+to `currentTier.id` (paid accounts report `free-tier` there), alongside the discovered project
+on login and refresh. An unanswered `loadCodeAssist` observes nothing and keeps the stored label;
+only a parsed body can clear it. `src/oauth/plan.ts` accepts only trimmed lowercase labels of at
+most 64 characters in `[a-z0-9_.-]`. `src/oauth/store.ts` preserves this allowlisted metadata and
+`src/oauth/index.ts` projects validated stored labels for every provider, with explicit null for
+an unknown subscription. Subscription labels never establish identity, entitlement or quota capacity.
+
 ## Discovery credential ownership
 
 `src/oauth/model-discovery-auth.ts` checks the configured Pool 2 row before a

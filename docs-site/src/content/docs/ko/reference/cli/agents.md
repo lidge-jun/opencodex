@@ -212,6 +212,8 @@ ocx export --client opencode --out ~/opencodex-opencode.json
 | `commandcode` | `~/.commandcode/providers.json` (Windows 기본 홈 사용 시: `HOME ?? USERPROFILE` 값이 비어 있거나 공백만으로 구성되지 않은 Windows 절대 경로일 때만 사용하고, 그 외에는 `homedir()` 사용. 별도로 전달된 홈은 유지. 해당 홈 아래의 `.commandcode\providers.json`) | `providers.json` | 루프백 전용; `apiKey: false`; 환경 변수 불필요 |
 | `droid` | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` on Windows) | `factory-settings.json` | 루프백 전용, 환경 변수 불필요 |
 
+위 경로는 기본값입니다. 기본 홈의 `~/.zcode/v2/setting.json`에 절대 경로 `dataBaseDir`를 지정하면 저장소는 `<dataBaseDir>/.zcode/v2/provider_config.json`으로 이동합니다. `ZCODE_DATA_DIR`는 `.zcode` 루트 자체를 지정하며 설정값보다 우선하고, `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`는 제공자 파일 경로에 우선합니다. 잘못되거나 읽을 수 없는 설정, 상대 경로는 새 적용과 갱신을 거부합니다. 기존 소유권과 복구 기록은 보존됩니다. [경로와 복구 규칙의 원문](https://opencodex.me/guides/integrations/#zcode-314-and-later)을 참고하세요.
+
 Raycast 내보내기는 `providers` 시퀀스에 `id: opencodex` 요소 하나만 담은 독립 `providers.yaml` 문서입니다. 내용은 `name: OpenCodex`, proxy의 `/v1` base URL, 그리고 `abilities`가 붙은 라우팅된 모든 모델입니다(`tools`와 `system_message`는 항상 지원, `vision`은 카탈로그의 입력 모달리티를 따름, `reasoning_effort`는 모델에 effort 사다리가 있을 때, `temperature`는 추론 모델에서 꺼짐). Custom Providers는 Raycast Pro 기능이며, Raycast가 이 파일을 감시하므로 저장한 변경은 재시작 없이 적용됩니다. 형식은 [manual.raycast.com/ai/custom-providers](https://manual.raycast.com/ai/custom-providers)에 문서화되어 있습니다. `api_keys` 항목은 쓰지 않으므로 이 내보내기는 loopback 전용이며, loopback이 아닌 bind는 거부됩니다.
 
 opencode는 `{env:OPENCODEX_OPENCODE_API_KEY}`를 보간합니다. opencodex가 생성한 Pi 블록에는 환경 변수가 필요 없으며, 리터럴 placeholder인 `opencodex-loopback`이 들어갑니다. 이 값은 필수입니다. Pi는 모델 목록을 만들 때 `apiKey`를 해석하고, 기존 config에 설정되지 않은 env 참조가 있으면 provider 전체를 숨기기 때문입니다. 루프백에서 proxy는 생성된 placeholder를 검사하지 않습니다.

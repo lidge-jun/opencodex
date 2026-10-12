@@ -1,6 +1,6 @@
 /** Anthropic OAuth flow (Claude Pro/Max). Ported from jawcode oauth/anthropic.ts. */
 import { OAuthCallbackFlow } from "./callback-server";
-import { bindAnthropicIdentity, resolveAnthropicAccountIdentity } from "./anthropic-identity";
+import { bindAnthropicIdentity, normalizeAnthropicIdentity, resolveAnthropicAccountIdentity } from "./anthropic-identity";
 import { generatePKCE } from "./pkce";
 import type { LocalTokenImportMode, OAuthController, OAuthCredentials } from "./types";
 import { outboundProxyConfigured, startupOutboundProxyConfigured } from "../lib/proxy-env";
@@ -12,6 +12,8 @@ const AUTHORIZE_URL = "https://claude.ai/oauth/authorize";
 const TOKEN_URL = "https://api.anthropic.com/v1/oauth/token";
 const CALLBACK_PORT = 54545;
 const CALLBACK_PATH = "/callback";
+/** Profile enrichment budget on token refresh; login paths keep the resolver's own deadline. */
+const REFRESH_PROFILE_TIMEOUT_MS = 2_000;
 const SCOPES = "org:create_api_key user:profile user:inference";
 
 // ── OAuth-request requirements applied by the anthropic adapter when authMode==="oauth" ──
@@ -130,6 +132,15 @@ function credsFrom(data: AnthropicTokenResponse, refreshFallback?: string): OAut
   };
 }
 
+async function withAccountProfile(credential: OAuthCredentials, signal?: AbortSignal): Promise<OAuthCredentials> {
+  const profile = await resolveAnthropicAccountIdentity(credential.access, signal);
+  if (!profile) return credential;
+  // Token-response identity remains authoritative here; enrichment changes display metadata only.
+  const identity = normalizeAnthropicIdentity(credential.anthropicIdentity, credential.access);
+  if (identity && identity.accountUuid !== profile.accountUuid) return credential;
+  return { ...credential, plan: profile.plan ?? null };
+}
+
 export class AnthropicOAuthFlow extends OAuthCallbackFlow {
   #verifier = "";
 
@@ -174,7 +185,7 @@ export class AnthropicOAuthFlow extends OAuthCallbackFlow {
       redirect_uri: redirectUri,
       code_verifier: this.#verifier,
     });
-    return credsFrom(parseTokenResponse(responseBody));
+    return withAccountProfile(credsFrom(parseTokenResponse(responseBody)), this.ctrl.signal);
   }
 }
 
@@ -192,7 +203,8 @@ export async function loginAnthropic(
       if (local.expires >= Date.now() + 60_000) {
         const identity = await resolveAnthropicAccountIdentity(local.access, ctrl.signal);
         ctrl.signal?.throwIfAborted();
-        return { ...local, ...(identity ? { accountId: identity.accountUuid, anthropicIdentity: identity } : {}) };
+        return { ...local, ...(identity ? { accountId: identity.accountUuid,
+          anthropicIdentity: normalizeAnthropicIdentity(identity, local.access), plan: identity.plan ?? null } : {}) };
       }
       try {
         return { ...(await refreshAnthropicToken(local.refresh)), source: "local-cli" };
@@ -218,5 +230,7 @@ export async function refreshAnthropicToken(refreshToken: string): Promise<OAuth
     client_id: CLIENT_ID,
     refresh_token: refreshToken,
   });
-  return credsFrom(parseTokenResponse(responseBody), refreshToken);
+  // Refresh can sit on a request path, so the profile enrichment gets a short deadline. A
+  // missed read leaves plan unobserved and the stored label survives through mergeOAuthPlan.
+  return withAccountProfile(credsFrom(parseTokenResponse(responseBody), refreshToken), AbortSignal.timeout(REFRESH_PROFILE_TIMEOUT_MS));
 }

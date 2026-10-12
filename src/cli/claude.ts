@@ -12,7 +12,7 @@ import { spawn } from "node:child_process";
 import { loadConfig } from "../config";
 import { injectClaudeAgentDefs } from "../claude/agents-inject";
 import { CLAUDE_ALIAS_PREFIX_CURRENT, CLAUDE_ALIAS_PREFIX_CURRENT_V2, CLAUDE_ALIAS_PREFIX_V1, CLAUDE_ALIAS_PREFIX_V2 } from "../claude/alias";
-import { claudeToolSearchEnv, effectiveModelEnv, resolveAutoContext } from "../claude/context-windows";
+import { claudeTierDisplayName, claudeToolSearchEnv, effectiveModelEnv, isClaudeTierLabelSlot, resolveAutoContext } from "../claude/context-windows";
 import { claudeConfigDir, fetchGatewayModels, writeGatewayModelCache } from "../claude/gateway-cache";
 import { commandInvocation } from "../lib/win-exec";
 import { isProxyAdmissionSecret } from "../server/auth-cors";
@@ -211,10 +211,12 @@ export function buildClaudeEnv(
   // real cost to a documented entry point, and the escape hatch is the launcher: run
   // through `ocx` (the published bin) and genuine shell exports are preserved by proof.
   deleteUntrustedAnthropicSlots(env, deps);
-  const setDefault = (name: string, value: string | undefined) => {
-    if (value === undefined || value.length === 0) return;
-    if (env[name] !== undefined && env[name] !== "") return; // user wins
+  /** Returns whether the value was written; a value the user already has wins. */
+  const setDefault = (name: string, value: string | undefined): boolean => {
+    if (value === undefined || value.length === 0) return false;
+    if (env[name] !== undefined && env[name] !== "") return false; // user wins
     env[name] = value;
+    return true;
   };
   if (config.claudeCode?.subagentModelForce !== undefined) {
     const forced = resolveSubagentForceModel(config, contextWindows, deps.forceAvailableSelectors !== undefined ? { selectors: deps.forceAvailableSelectors } : { entries: deps.forceAvailable ?? [] });
@@ -415,7 +417,9 @@ export function buildClaudeEnv(
   // with automatic [1m] context-variant marking when the slot's target model has an
   // authoritative >=1M window (Claude Code then accounts 1M, compaction preserved).
   for (const [name, value] of Object.entries(effectiveModelEnv(config.claudeCode, contextWindows, auto))) {
-    setDefault(name, value);
+    // A tier slot this launch wrote gets its picker label too (#6926). A slot the user exported
+    // stays unlabelled, and a `<slot>_NAME` the user exported wins.
+    if (setDefault(name, value) && isClaudeTierLabelSlot(name)) setDefault(`${name}_NAME`, claudeTierDisplayName(value));
   }
   return env;
 }
@@ -682,7 +686,12 @@ export function buildNativeClaudeEnv(
   const providerNames = Object.keys(config.providers);
   for (const name of MODEL_ENV_SLOT_NAMES) {
     const value = env[name];
-    if (value && isProxyOnlyModelId(value, providerNames)) delete env[name];
+    if (!value || !isProxyOnlyModelId(value, providerNames)) continue;
+    delete env[name];
+    // The label opencodex paired with this slot names a proxy route the native session cannot use.
+    const labelName = `${name}_NAME`;
+    const label = claudeTierDisplayName(value);
+    if (isClaudeTierLabelSlot(name) && label !== undefined && env[labelName] === label) delete env[labelName];
   }
   if (deps.allowRootSkipPermissions === true && !env.IS_SANDBOX) env.IS_SANDBOX = "1";
   return env;

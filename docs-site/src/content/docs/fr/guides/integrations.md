@@ -261,6 +261,8 @@ consultez les notes de recherche dans
 
 ## ZCode 3.14 et versions ultérieures
 
+Ces chemins sont les valeurs par défaut. Un `dataBaseDir` absolu dans `~/.zcode/v2/setting.json`, toujours dans le dossier personnel par défaut, déplace le stockage vers `<dataBaseDir>/.zcode/v2/provider_config.json`. `ZCODE_DATA_DIR` désigne directement la racine `.zcode` et prime sur ce réglage ; `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` prime pour le fichier des fournisseurs. Un réglage illisible, mal formé ou relatif bloque les nouvelles applications et actualisations. Les droits de propriété et les données de restauration existants sont conservés. Voir les [règles de chemin et de restauration en anglais](https://opencodex.me/guides/integrations/#zcode-314-and-later).
+
 ZCode 3.14 a déplacé ses fournisseurs personnalisés vers `~/.zcode/v2/provider_config.json` et ne
 lit plus `~/.zcode/v2/config.json` qu'au travers d'un import unique, exécuté seulement quand le
 nouveau fichier est absent. ZCode crée ce nouveau fichier au premier lancement : sur toute
@@ -300,6 +302,18 @@ ocx integration client restore --op <operation-id>
 ```
 
 [CLI / rollback / CLINE_PROVIDER_SETTINGS_PATH](/guides/integrations/#cline-cli).
+
+## Effort de raisonnement des rôles omo (Codex / LazyCodex)
+
+Lorsque LazyCodex est détecté, la section **omo (Codex / LazyCodex)** de l’onglet omo permet de choisir le modèle et l’effort de raisonnement de chaque rôle de `$CODEX_HOME/agents/*.toml`, puis de cliquer sur **Enregistrer**. Une ligne dont le rôle n’a pas de modèle fixé peut enregistrer un effort seul ; le rôle continue alors d’hériter de son modèle. opencodex ne modifie que les clés racine `model` et `model_reasoning_effort` du fichier du rôle et insère les valeurs manquantes près du début du fichier ; les instructions du rôle, les autres commentaires et les autres clés restent inchangés. Un enregistrement qui ne change que le modèle n’envoie pas `effort` et conserve les deux valeurs d’effort. Choisir un niveau insère ou remplace `model_reasoning_effort` dans le fichier du rôle et l’écrit aussi dans `[codex].agents.<role>.reasoning` de `~/.omo/omo.jsonc` lorsque LazyCodex prend en charge ce niveau (`ultra` reste uniquement dans le fichier du rôle et un ancien `reasoning` est supprimé). En ligne de commande, `ocx agent roles set <role> <model> --effort <level>` fait la même chose.
+
+Chaque ligne propose **Hériter de l’effort**, y compris pour les rôles dont l’effort est déjà fixé. Remplacer un effort fixé par cette option puis enregistrer envoie `"effort": null` : la ligne racine `model_reasoning_effort` du fichier du rôle et son commentaire de fin de ligne sont supprimés, ainsi que `[codex].agents.<role>.reasoning` dans omo.jsonc. Le modèle reste fixé. Codex détermine ensuite l’effort comme pour tout rôle sans valeur propre (une valeur explicite au lancement, la valeur par défaut de `[agents]` ou la session parente), et non à partir d’une valeur par défaut fixe du modèle. Seule une valeur existante, sous forme de chaîne sur une seule ligne, peut être supprimée ; une valeur multiligne ou qui n’est pas une chaîne est refusée avec 409 `unsupported_model_value`, sans modifier aucun des deux fichiers.
+
+Sur `PUT /api/codex-agent-roles/{role}`, omettre `model` laisse tels quels le modèle fixé dans le fichier du rôle et le `model` de omo.jsonc : un rôle sans modèle fixé continue d’hériter de son modèle pendant que son effort change ou est effacé. Le tableau de bord envoie cette requête limitée à l’effort pour une telle ligne, et, lorsqu’un niveau pris en charge par LazyCodex est enregistré, un rôle sans entrée dans omo.jsonc en reçoit une qui contient seulement `reasoning`. Un `model` à `null` est refusé avec 400 `invalid_model`, car un enregistrement ne supprime jamais un modèle fixé, et une requête sans `model` ni `effort` est refusée avec 400 `empty_update` avant toute lecture du fichier du rôle ou de omo.jsonc. `ocx agent roles set` exige toujours un modèle.
+
+Si `~/.omo/omo.jsonc` n’existe pas, il n’est pas créé. S’il contient des commentaires, il reste intact, car l’enregistrement les supprimerait ; définissez alors la valeur à la main. Un miroir ignoré n’annule pas l’enregistrement du fichier du rôle. Si le fichier du rôle est enregistré mais que l’écriture de omo.jsonc échoue, le bouton de la ligne devient **Réessayer omo.jsonc** et renvoie le même choix d’effort, y compris un effacement par **Hériter de l’effort** (`null`). Tant que ce nouvel essai n’a pas réussi, un clic ultérieur sur **Enregistrer** ou sur **Appliquer** dans **Attribution auto**, sans modification de l’effort de ce rôle, renvoie aussi ce choix en attente ; un effort choisi explicitement le remplace.
+
+**Attribution auto** propose un effort pour chaque rôle évalué dont le modèle choisi possède une liste d’efforts non vide, et **Appliquer**, **Tout appliquer** ou `ocx agent roles suggest --apply` insère ou remplace sa valeur `model_reasoning_effort`. L’effort est placé sur les niveaux propres au modèle choisi : le plus bas, celui par défaut, celui juste au-dessus du niveau par défaut, ou le plus haut. Une liste vide ne donne aucune proposition d’effort (`proposedEffort: null`) ; **Appliquer** omet alors `effort` et laisse tel quel l’effort déjà fixé. Une proposition `null` n’efface jamais un effort fixé.
 
 ## Kilo
 

@@ -144,6 +144,7 @@ test("first-party apply writes only the proxy env, creates the CA, and removes c
     FOO: "bar",
     HTTPS_PROXY: expectedProxyUrl(10200),
     NODE_EXTRA_CA_CERTS: applied.env.NODE_EXTRA_CA_CERTS,
+    NO_PROXY: "127.0.0.1,localhost,::1,0.0.0.0",
   });
   expect(inspectDesktopFirstParty(config()).applied).toBe(true);
   // Desktop's own library is untouched: first-party never installs a gateway profile.

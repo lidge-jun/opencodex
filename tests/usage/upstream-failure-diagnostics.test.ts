@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { afterEach, beforeEach, describe } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, statSync, utimesSync, writeFileSync, type Stats } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -144,6 +144,67 @@ test("final request rows expose original upstream error type, code, request id a
   expect(rows[0]!.upstreamErrorType).toBe("overloaded_error");
   expect(rows[0]!.upstreamErrorCode).toBe("overloaded_error");
   expect(rows[0]!.upstreamRequestId).toBe("req_diagnostic_fixture");
+});
+
+// #6740: the Codex WebSocket wraps a backend failure as {type:"error", status|status_code, error}.
+// The native client maps that status; the canonical log path used to drop it and write 502.
+const wrappedError = (fields: Record<string, unknown>, error: Record<string, unknown> = {
+  type: "server_error", code: "server_error", message: "An error occurred while processing your request.",
+}) => JSON.stringify({ type: "error", ...fields, error });
+
+test.each([
+  [{ status: 503 }, 503],
+  [{ status_code: 503 }, 503],
+  [{ status: 500 }, 500],
+  [{ status_code: 504 }, 504],
+])("a bare error keeps the server status its WebSocket wrapper states (%o)", (fields, status) => {
+  const log = context();
+  inspectResponseLogJson(log, wrappedError(fields));
+  expect(log.terminalHttpStatus).toBe(status);
+  // Provisional, like every bare-error status: a genuine terminal still replaces it.
+  inspectResponseLogJson(log, JSON.stringify({ type: "response.failed",
+    response: { error: { type: "upstream_error", code: "upstream_server_error", message: "later terminal" } } }));
+  expect(log.terminalHttpStatus).toBe(502);
+});
+
+test.each([
+  ["a client status", { status: 429 }],
+  ["a not-found status", { status_code: 404 }],
+  ["a numeric string", { status: "503" }],
+  ["a fractional number", { status: 503.5 }],
+  ["both aliases", { status: 503, status_code: 503 }],
+  ["an alias outside the wrapper contract", { http_status: 503 }],
+  ["no wrapper status", {}],
+] as const)("a bare error with %s records no wrapper status", (_label, fields) => {
+  const log = context();
+  inspectResponseLogJson(log, wrappedError(fields));
+  expect(log.terminalHttpStatus).toBeUndefined();
+});
+
+test("a nested error status is not the wrapper status", () => {
+  const log = context();
+  inspectResponseLogJson(log, wrappedError({}, { type: "server_error", code: "server_error", status: 503, message: "nested" }));
+  expect(log.terminalHttpStatus).toBeUndefined();
+});
+
+test("a recognized class outranks the wrapper status", () => {
+  const log = context();
+  inspectResponseLogJson(log, wrappedError({ status: 500 }, { type: "server_error", code: "server_is_overloaded", message: "busy" }));
+  expect(log.terminalHttpStatus).toBe(503);
+});
+
+test("a wrapped 503 reaches the final row as an upstream overload instead of a generic 502", () => {
+  const log = context();
+  inspectResponseLogJson(log, wrappedError({ status: 503 }));
+  const rows: RequestLogEntry[] = [];
+  addFinalRequestLog("wrapped-fixture", Date.now(), log, httpStatusForRequestLogTerminal("failed", log),
+    { terminalStatus: "failed", closeReason: "terminal" }, entry => rows.push(entry));
+  expect(rows[0]!.status).toBe(503);
+  expect(rows[0]!.errorCode).toBe("server_is_overloaded");
+  expect(rows[0]!.failureCause).toBe("upstream-declined");
+  expect(rows[0]!.upstreamErrorCode).toBe("server_error");
+  // Same transient class as the 502 it replaces: account health and rotation do not move.
+  expect(classifyCodexUpstreamOutcome(503)).toBe(classifyCodexUpstreamOutcome(502));
 });
 
 test("an explicit unknown code outranks a recognized class in a lower-priority envelope", () => {
@@ -734,14 +795,62 @@ describe("configured credential source", () => {
     expect(configuredCredentials().complete).toBe(true);
     writeConfig("null");
     expect(configuredCredentials().complete).toBe(false);
-    // A different byte length from the next write: the cache signature is ino:size:mtimeMs, and
-    // two same-size in-place rewrites can share one mtime tick on Windows.
     writeConfig({ providers: [null] });
     expect(configuredCredentials().complete).toBe(false);
     writeConfig({ providers: {} });
     expect(configuredCredentials().complete).toBe(true);
     writeFileSync(join(home, "auth.json"), "[]");
     expect(configuredCredentials().complete).toBe(false);
+  });
+
+  // #6923: freshness must come from content. Each rewrite below keeps the byte length and has its
+  // mtime pinned back to the same whole second, so inode, size and mtime are all unchanged: what a
+  // same-tick rewrite on Windows, or a writer that preserves timestamps, leaves behind.
+  describe("same-length rewrites with an unchanged mtime", () => {
+    const pinned = new Date(Math.floor(Date.now() / 1000) * 1000 - 60_000);
+    const rewrite = (file: string, text: string): Stats => {
+      const path = join(home, file);
+      writeFileSync(path, text);
+      utimesSync(path, pinned, pinned);
+      return statSync(path);
+    };
+    const sameMetadata = (before: Stats, after: Stats) => {
+      expect(after.size).toBe(before.size);
+      expect(after.mtimeMs).toBe(before.mtimeMs);
+    };
+
+    test("a config credential swap is seen and the replaced key is no longer matched", () => {
+      const keyA = "cfg-a-" + randomBytes(12).toString("hex");
+      const keyB = "cfg-b-" + randomBytes(12).toString("hex");
+      const before = rewrite("config.json", JSON.stringify({ providers: { p: { apiKey: keyA } } }));
+      expect(configuredCredentials().matches(keyA)).toBe(true);
+      sameMetadata(before, rewrite("config.json", JSON.stringify({ providers: { p: { apiKey: keyB } } })));
+      const swapped = configuredCredentials();
+      expect(swapped.complete).toBe(true);
+      expect(swapped.matches(keyB)).toBe(true);
+      expect(swapped.matches(keyA)).toBe(false);
+    });
+
+    test("a malformed config of the same length fails closed instead of keeping the complete view", () => {
+      const valid = JSON.stringify({ providers: { p: { apiKey: "cfg-" + randomBytes(12).toString("hex") } } });
+      const malformed = `{"providers":["${"x".repeat(valid.length - 18)}"]}`;
+      expect(malformed.length).toBe(valid.length);
+      const before = rewrite("config.json", valid);
+      expect(configuredCredentials().complete).toBe(true);
+      sameMetadata(before, rewrite("config.json", malformed));
+      expect(configuredCredentials().complete).toBe(false);
+    });
+
+    test("an OAuth store token swap is seen and the replaced token is no longer matched", () => {
+      const tokenA = "tok-a-" + randomBytes(12).toString("hex");
+      const tokenB = "tok-b-" + randomBytes(12).toString("hex");
+      const before = rewrite("auth.json", JSON.stringify({ p: { type: "oauth", access: tokenA } }));
+      expect(configuredCredentials().matches(tokenA)).toBe(true);
+      sameMetadata(before, rewrite("auth.json", JSON.stringify({ p: { type: "oauth", access: tokenB } })));
+      const swapped = configuredCredentials();
+      expect(swapped.matches(tokenB)).toBe(true);
+      expect(swapped.matches(tokenA)).toBe(false);
+    });
   });
 
   test("only credential fields are collected, not labels such as authMode", () => {

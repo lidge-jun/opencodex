@@ -373,14 +373,16 @@ location: it carries the text format of that file, the contribution shape its re
 and the predicate that decides whether a document on disk is a version whose shape has been
 observed. Naming the store without the last three would be naming a file we cannot write.
 
-`src/integrations/target.ts` turns that declaration into the one answer every surface uses: which
-file this operation reads, writes, journals and records, and whether a write there reaches the
-client. It decides from three facts, in order:
+`src/integrations/target.ts` turns that declaration into the one answer every surface uses: which file this operation reads, writes, journals and records, and whether a write there reaches the client. It decides from three facts, in order:
 
 1. No declared store, or no store on disk — the config file, unchanged, unless the declaration's `missingStore` says the client still reads the absent store; that is an ineffective write carrying its remedy; status rows and refused previews also publish `supersededReason` and the store's `missingStoreDocument`, so the dashboard names what to create in its own language. A client that has never run still imports what we write there, which is why the rule keys on the store's presence rather than on a client version.
-2. This project's own block already in one of the two files — that file. Disable removes what we
-   wrote from where we wrote it, and no apply leaves a block in one file while writing another.
+2. This project's own block already in one of the two files — that file. Disable removes what we wrote from where we wrote it, and no apply leaves a block in one file while writing another.
 3. Otherwise the store, and only when its schema establishes.
+
+ZCode resolves absolute `dataBaseDir` from the default-home `~/.zcode/v2/setting.json` through the caller's `IntegrationIO`, moving data to `<base>/.zcode/v2`. `ZCODE_DATA_DIR` overrides the `.zcode` root directly; `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` overrides the store. Native `ZCODE_DATA_BASE_DIR` is not an alias.
+The registry resolves config, detection and store from one bootstrap read. Synchronous observations re-read after coordinator awaits; store-lock and restore probes share the injected IO. Malformed, unreadable or relative settings refuse apply/overwrite/refresh as an unknown active root. Only a present explicit provider file can establish the store independently.
+
+Owned legacy config and default-root store paths retain their fingerprints and recovery evidence after relocation: refresh refuses, disable and undo use the original file, and an older undo refuses while a different path owns the record. Unknown settings retain recognized historical recovery targets; an unrecognized prior selector must be restored before mutation. Contract: `tests/clients/integrations-current-store.test.ts`.
 
 Four properties are load-bearing:
 
@@ -408,8 +410,7 @@ the shared formatter. A segment beginning with that reserved marker but failing 
 grammar is unreadable rather than a plain key or a v1 selector, so malformed persisted bytes cannot
 silently select a different element.
 
-A store whose schema cannot be established is reported, never merged into. That file holds the
-user's other providers and the client rewrites it on its own, so asserting a nesting we have not
+A store whose schema cannot be established is reported, never merged into. That file holds the user's other providers and the client rewrites it on its own, so asserting a nesting we have not
 observed would trade a silent no-op for a silent loss. Status reports the store beside the file
 state rather than folding it into the state: `current` remains the truth about the file, and the
 notice appears only when the client reads some other file than the one the state is about.
@@ -500,7 +501,7 @@ reports LazyCodex installed, `src/clients/omo-role-models.ts`
 mirrors a dashboard or `ocx agent roles set` pick into `[codex].agents.<role>.model` of
 `~/.omo/omo.jsonc`, which LazyCodex 5.1.1 and later reads. The home is resolved the way omo
 resolves it: `HOME`, then `USERPROFILE`, then the OS home. This write has no ownership record,
-snapshot, or journal. It changes the role's `model` and, when the request carries an effort, its `reasoning` (Codex `none` becomes `off`; a level LazyCodex lacks, such as `ultra`, removes a stale `reasoning`; a model-only save keeps it), and leaves every other key as it
+snapshot, or journal. It changes the role's `model` when the request carries one (an effort-only save keeps it, and creates an absent entry only to hold `reasoning`) and, when the request carries an effort, its `reasoning` (Codex `none` becomes `off`; a level LazyCodex lacks, such as `ultra`, removes a stale `reasoning`; an effort of JSON `null` removes `reasoning` along with the role file's `model_reasoning_effort`; a model-only save keeps it), and leaves every other key as it
 was, re-serialized with the file's indentation, line endings, and BOM.
 
 It never creates the file and never writes one it would damage: a missing file reports

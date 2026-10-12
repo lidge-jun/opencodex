@@ -39,11 +39,20 @@ let status: "protected" | "at-risk" = "protected";
 let desktop = false;
 let desktopViable = true;
 let brokenStarters = false;
+/** Replaces the default owned Desktop facts; null keeps the owned fixture above. */
+let desktopFacts: Record<string, unknown> | null = null;
+let staleReading = false;
+let healthFails = false;
+let releaseInstall: (() => void) | null = null;
 
 beforeEach(() => {
   desktop = false;
   desktopViable = true;
   brokenStarters = false;
+  desktopFacts = null;
+  staleReading = false;
+  healthFails = false;
+  releaseInstall = null;
   clearClientResourceStoresForTests();
   previousGlobals = Object.fromEntries(globals.map(k => [k, Reflect.get(globalThis, k)])) as typeof previousGlobals;
   testWindow = new Window({ url: "http://localhost/#startup" });
@@ -60,10 +69,18 @@ beforeEach(() => {
     configurable: true,
     value: async (url: string) => {
       const path = new URL(String(url), "http://localhost/").pathname;
+      if (path === "/api/startup-health" && healthFails) {
+        return { ok: false, status: 500, text: async () => "{}", json: async () => ({ error: "probe failed" }) } as unknown as Response;
+      }
+      if (path === "/api/startup-action") {
+        await new Promise<void>(resolve => { releaseInstall = resolve; });
+        return response({ ok: true });
+      }
       if (path === "/api/startup-health") return response(desktop ? {
         ...health(desktopViable ? "protected" : "at-risk"), protection: desktopViable ? "desktop" : "none", serviceInstalled: false, serviceViable: false,
         shimInstalled: brokenStarters, shimHealthy: false, serviceInstalled: brokenStarters, serviceStale: brokenStarters,
-        desktop: { owned: true, loginEnabled: desktopViable, running: desktopViable, viable: desktopViable },
+        diagnosticStale: staleReading,
+        desktop: desktopFacts ?? { owned: true, loginEnabled: desktopViable, running: desktopViable, viable: desktopViable },
       } : health(status));
       if (path === "/api/settings") return response({ codexAutoStart: true, codexRuntime: { version: "x" } });
       return response({});
@@ -158,4 +175,90 @@ test("a CLI-owned unprotected install still offers service and shim actions", as
     expect(button).not.toBeNull();
     expect(button!.disabled).toBe(false);
   }
+});
+
+const SUPERVISOR = { supervisorPid: 123, runtimePid: 456, app: "/Applications/OpenCodex.app/Contents/MacOS/opencodex-desktop" };
+
+function desktopBadge(): string {
+  const row = [...container.querySelectorAll(".startup-details .startup-detail-row")]
+    .find(item => item.textContent?.includes("Desktop app"));
+  return row?.querySelector(".badge")?.textContent ?? "";
+}
+
+test("#6963: a supervised Desktop running without verified Start at Login names the missing login item", async () => {
+  desktop = true;
+  desktopViable = false;
+  desktopFacts = { owned: false, supervisor: SUPERVISOR, loginEnabled: false, running: true, viable: false };
+  await mount();
+  expect(desktopBadge()).toBe("Running · Start at Login not verified");
+  const details = container.querySelector(".startup-details")!.textContent!;
+  expect(details).toContain("Login Items & Extensions");
+  expect(details).not.toContain("Installed but unhealthy");
+  // Startup management stays with the app: neither starter can be installed here.
+  for (const label of ["Background service - Install", "Codex launcher shim - Install"]) {
+    expect(container.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!.disabled).toBe(true);
+  }
+});
+
+test("#6963: an owned Desktop running without Start at Login gets the same badge and keeps owned guidance", async () => {
+  desktop = true;
+  desktopViable = false;
+  desktopFacts = { owned: true, loginEnabled: false, running: true, viable: false };
+  await mount();
+  expect(desktopBadge()).toBe("Running · Start at Login not verified");
+  const details = container.querySelector(".startup-details")!.textContent!;
+  expect(details).toContain("OpenCodex owns this proxy");
+  // The owned guidance names the macOS allowance too, matching the badge.
+  expect(details).toContain("Login Items & Extensions");
+});
+
+test("#6963: a stopped Desktop and a stale reading stay unhealthy; a verified Desktop is ready", async () => {
+  desktop = true;
+  desktopViable = false;
+  await mount();
+  expect(desktopBadge()).toBe("Installed but unhealthy");
+  await act(async () => { root!.unmount(); });
+  root = null;
+  clearClientResourceStoresForTests();
+
+  desktopFacts = { owned: false, supervisor: SUPERVISOR, loginEnabled: false, running: true, viable: false };
+  staleReading = true;
+  await mount();
+  expect(desktopBadge()).toBe("Installed but unhealthy");
+  await act(async () => { root!.unmount(); });
+  root = null;
+  clearClientResourceStoresForTests();
+
+  desktopViable = true;
+  staleReading = false;
+  desktopFacts = { owned: false, supervisor: SUPERVISOR, loginEnabled: true, running: true, viable: true };
+  await mount();
+  expect(desktopBadge()).toBe("Ready");
+});
+
+test("#6963: a failed refresh that keeps the last Desktop reading does not claim it is running", async () => {
+  desktop = true;
+  desktopViable = false;
+  desktopFacts = { owned: false, supervisor: SUPERVISOR, loginEnabled: false, running: true, viable: false };
+  await mount();
+  expect(desktopBadge()).toBe("Running · Start at Login not verified");
+  healthFails = true;
+  const refresh = [...container.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent?.includes("Refresh"))!;
+  await act(async () => { refresh.click(); });
+  await act(async () => { await new Promise<void>(r => testWindow.setTimeout(r, 30)); });
+  expect(container.querySelector(".startup-details")).not.toBeNull();
+  expect(desktopBadge()).toBe("Installed but unhealthy");
+});
+
+test("an in-flight install disables every starter action until it settles", async () => {
+  status = "at-risk";
+  await mount();
+  const shim = container.querySelector<HTMLButtonElement>('button[aria-label="Codex launcher shim - Install"]')!;
+  expect(shim.disabled).toBe(false);
+  await act(async () => { shim.click(); });
+  for (const label of ["Background service - Install", "Codex launcher shim - Install"]) {
+    expect(container.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!.disabled).toBe(true);
+  }
+  await act(async () => { releaseInstall?.(); await new Promise<void>(r => testWindow.setTimeout(r, 30)); });
+  expect(container.querySelector<HTMLButtonElement>('button[aria-label="Background service - Install"]')!.disabled).toBe(false);
 });

@@ -140,6 +140,7 @@ async function mount(strict = false, showCard = false) {
       onPriorityChange: () => {},
       priorityUpdatingId: null,
       switchingId: null,
+      onUnpin: () => {},
       onOpenReset: () => {},
       mainReauth: {
         ...value,

@@ -186,6 +186,8 @@ ocx integration client restore --client aside --profile 1 --op <opId>
 
 ## ZCode 3.14 以降
 
+上記のパスは既定値です。既定のホームにある `~/.zcode/v2/setting.json` に絶対パスの `dataBaseDir` を指定すると、保存先は `<dataBaseDir>/.zcode/v2/provider_config.json` に移ります。`ZCODE_DATA_DIR` は `.zcode` ルートそのものを指定して設定値より優先され、`ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` はプロバイダーファイルのパスで優先されます。不正な設定、読み取れない設定、相対パスでは新しい適用と更新を拒否します。既存の所有権と復元記録は保持されます。[パスと復元規則の原文](https://opencodex.me/guides/integrations/#zcode-314-and-later)を参照してください。
+
 ZCode 3.14 はカスタムプロバイダーの保存先を `~/.zcode/v2/provider_config.json` に移しました。`~/.zcode/v2/config.json` からは、新しいファイルがない場合に一度だけ行われるインポートでしか参照されません。ZCode は初回起動時に新しいファイルを作るため、一度でも起動した環境ではインポートは済んでおり、`config.json` に書いても反映されません。
 
 opencodex は可能な場合、`provider_config.json` に直接書き込みます。統合を有効にすると `opencodex` プロバイダーの規則が追加され、カタログ更新でその内容が更新され、無効化では opencodex が書いた内容だけを削除します。ファイル内のその他の規則は維持されます。他のプロバイダーが opencodex と同じモデル ID に対して保持する規則も対象です。opencodex が書いていない `opencodex` ID の規則は、引き継ぐ対象ではなく競合です。ZCode 内で解決するか、明示的な上書きを使ってください。
@@ -218,6 +220,18 @@ ocx integration client restore --op <operation-id>
 Undo は、もともと存在しなかったファイルも含め、**元の両方のバイト列**を復元します。操作後の編集には、既存の明示的な `--confirm-drift` が必要で、編集済みのペアも先にバックアップされます。すでに使われている OpenCodex 項目には、既存の `--overwrite-conflict` による同意が必要です。Disable は 2 つの管理対象項目を削除しますが、以前の他者の項目は復元しません。その場合は Undo を使ってください。スナップショットの保持件数と期限は他の統合と同じ規則です。
 
 ダウンロードされる `cline-config-bundle.json` には、`providers.json` 用の `settings` と `models.json` 用の `catalog` という 2 つのネイティブ文書要素が含まれます。それ自体は Cline の設定ファイルではありません。ジャーナル付きのマージとロールバックには統合コマンドを使ってください。生成された統合はリモートの受け入れ認証に対応せず、認証不要のループバックアクセスが必要です。
+
+## omo (Codex / LazyCodex) のロール別推論負荷
+
+LazyCodex が検出されると、omo タブの **omo (Codex / LazyCodex)** セクションで、`$CODEX_HOME/agents/*.toml` にある各ロールのモデルと推論負荷を選んで **保存** できます。モデルが固定されていないロールの行では推論負荷だけを保存でき、そのロールは引き続きモデルを継承します。opencodex はそのロールファイルのルートにある `model` と `model_reasoning_effort` のキーだけを更新し、存在しない固定値はファイルの先頭付近に追加します。ロールの指示、ほかのコメントやキーはそのまま残ります。モデルだけを変えて保存すると `effort` を送らないため、両方のファイルの推論負荷は変わりません。段階を選ぶとロールファイルの `model_reasoning_effort` を追加または置き換え、LazyCodex がその段階に対応していれば `~/.omo/omo.jsonc` の `[codex].agents.<role>.reasoning` にも書き込みます（`ultra` はロールファイルにだけ残り、以前の `reasoning` は削除されます）。コマンドラインでは `ocx agent roles set <role> <model> --effort <level>` で同じ操作ができます。
+
+推論負荷が固定されたロールも含め、すべての行に **推論エフォートを継承** があります。固定済みの推論負荷をこれに変えて保存すると `"effort": null` を送り、ロールファイルのルートの `model_reasoning_effort` 行とその行末コメント、omo.jsonc の `[codex].agents.<role>.reasoning` を削除します。モデルの固定は残ります。以後 Codex は、独自の値を持たないほかのロールと同じ方法で推論負荷を決めます（明示的な spawn 値、`[agents]` の既定値、または親セッション）。モデル固有の既定値に固定されるわけではありません。削除できるのは既存の 1 行の文字列値だけで、複数行または文字列以外の値は 409 `unsupported_model_value` で拒否され、両方のファイルは変更されません。
+
+`PUT /api/codex-agent-roles/{role}` で `model` を省略すると、ロールファイルの `model` の固定と omo.jsonc の `model` はそのまま残ります。そのため、固定のないロールはモデルを継承したまま、推論負荷だけが変わるか解除されます。ダッシュボードはそのような行に推論負荷だけのリクエストを送り、omo.jsonc にそのロールの項目がなければ、LazyCodex が対応する推論負荷の段階を保存する場合に限り、`reasoning` だけを持つ項目を作ります。保存でモデルの固定が消えることはないため、`null` のモデルは 400 `invalid_model` で拒否されます。`model` も `effort` もないリクエストは、ロールファイルや omo.jsonc を読む前に 400 `empty_update` で拒否されます。`ocx agent roles set` は常にモデルを受け取ります。
+
+`~/.omo/omo.jsonc` が存在しない場合は作成しません。コメントを含む場合は、保存するとコメントが消えるためファイルに触れません。その場合は値を手動で設定してください。ミラーをスキップしても、ロールファイルの保存は取り消されません。ロールファイルの保存に成功して omo.jsonc の書き込みに失敗した場合、その行のボタンが **omo.jsonc を再試行** に変わり、**推論エフォートを継承** による解除（`null`）を含めて同じ推論負荷の選択を再送します。再試行が成功するまでは、そのロールで推論負荷を変えずに行う次の **保存** や **自動割り当て** の **適用** も、保留中の選択を一緒に送ります。推論負荷を明示的に選ぶと、その値が優先されます。
+
+**自動割り当て** は、必要な能力と推論負荷を評価したロールのうち、選んだモデルの推論負荷の段階リストが空でないすべてのロールに推論負荷を提案します。**適用**、**すべて適用**、または `ocx agent roles suggest --apply` は、そのロールの `model_reasoning_effort` を追加または置き換えます。推論負荷は選んだモデル自身の段階から、最も低い段階、既定の段階、既定より 1 つ上の段階、最も高い段階のいずれかになります。段階リストが空なら推論負荷を提案せず（`proposedEffort: null`）、適用時は `effort` を送らないため既存の固定値はそのまま残ります。`null` の提案が固定値を消すことはありません。
 
 ## Kilo
 

@@ -404,7 +404,9 @@ function failure(error: unknown): InstallResult {
   const message = error instanceof Error ? error.message : "Codex overlay operation failed";
   return { installed: false, refused: true, message: truncateRetainedUtf8(message.replace(/[\r\n]/g, " "), MAX_DIAGNOSTIC_VALUE_BYTES) };
 }
-function installLocked(discover: () => string | null, automatic: boolean, check: () => void): InstallResult {
+function installLocked(
+  discover: () => string | null, automatic: boolean, check: () => void, describeMiss?: () => string | null,
+): InstallResult {
   recoverJournal(check);
   const pinnedState = snapshot(statePath());
   const result = readStateResult();
@@ -428,18 +430,20 @@ function installLocked(discover: () => string | null, automatic: boolean, check:
     const discovered = automatic ? null : discover();
     launcher = discovered ? resolve(discovered) : null;
   }
-  if (!launcher) throw new Error("Native Codex launcher not found; install or repair Codex with its package manager");
+  // A discovery that refused a candidate (fnm's temporary multishell path) says why; reporting it
+  // as plain absence sent users to reinstall a Codex that was already there (#6963).
+  if (!launcher) throw new Error(describeMiss?.() || "Native Codex launcher not found; install or repair Codex with its package manager");
   check();
   return publishOverlay(launcher, overlay, check, pinnedState);
 }
-export function installUnixOverlay(discover: () => string | null): InstallResult {
+export function installUnixOverlay(discover: () => string | null, describeMiss?: () => string | null): InstallResult {
   let lock: ReturnType<typeof tryAcquireShimRestoreLock> = null;
   try {
     const check = namespace(true);
     lock = tryAcquireShimRestoreLock();
     if (!lock) throw new Error("Codex shim operation is already in progress; retry later");
     check();
-    return installLocked(discover, false, check);
+    return installLocked(discover, false, check, describeMiss);
   } catch (error) { return failure(error); }
   finally { lock?.release(); }
 }

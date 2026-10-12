@@ -527,16 +527,20 @@ export async function fetchHubUsage(
  */
 export async function fetchHubState(
   serverUrl: string,
-  admissionToken: string,
+  admissionToken: string | null,
   options: { timeoutMs?: number; fetchImpl?: typeof fetch } = {},
 ): Promise<HubStateDTO> {
   const origin = normalizeHubOrigin(serverUrl);
   const response = await fetchBounded(options.fetchImpl ?? fetch, `${origin}/v1/hub-state`, {
     method: "GET",
-    headers: new Headers({ Accept: "application/json", "x-opencodex-api-key": admissionToken }),
+    headers: new Headers({ Accept: "application/json", ...(admissionToken === null ? {} : { "x-opencodex-api-key": admissionToken }) }),
   }, options.timeoutMs, "headers");
   if (response.status === 404) {
-    try { await response.body?.cancel(); } catch { /* best effort */ }
+    let body: unknown = null;
+    try { body = JSON.parse(await boundedText(response, 4096, { inactivityTimeoutMs: safeTimeout(options.timeoutMs) })); } catch { /* legacy/non-JSON 404 stays unsupported */ }
+    if (body && typeof body === "object" && !Array.isArray(body) && (body as { error?: { code?: unknown } }).error?.code === "hub_state_not_a_hub") {
+      throw new HubClientError("hub_state_not_a_hub", "the remote host does not publish hub state", 404);
+    }
     throw new HubClientError("hub_state_unsupported", "Hub does not serve /v1/hub-state; upgrade the hub", 404);
   }
   if (!response.ok) {

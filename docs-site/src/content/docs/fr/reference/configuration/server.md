@@ -23,6 +23,7 @@ exécute des fonctionnalités d'assistance autour des demandes du fournisseur.
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | désactivé | Politique facultative de nettoyage des sessions archivées. Elle n'est jamais activée implicitement. |
 | `appOwnedMemoryBudgetMb?` | `number` | `256` | Plafond en Mio pour les journaux, caches, objets binaires et charges utiles de continuation évincables qui appartiennent à l'application. Plage : 64–4096 ; il ne s'agit pas d'un plafond RSS. |
 | `metricsExport.enabled?` | `boolean` | `false` | Active les métriques de requêtes agrégées, locales au processus, sur `GET /api/metrics` authentifié. Redémarrage requis ; lorsque désactivé, le chemin renvoie 404 et aucune activité d'export n'est démarrée. |
+| `serviceHealthRecovery.enabled?` | `boolean` | `false` | Récupération optionnelle du service en arrière-plan : un petit processus sentinelle interroge `/healthz` et, lorsque le proxy reste vivant mais ne répond plus pendant environ une minute de sondes consécutives, le termine pour que le gestionnaire de service (Planificateur de tâches, launchd, systemd, WinSW) le redémarre. Seul le processus enfant du service géré en lance une ; les requêtes détenues par le processus bloqué ne sont pas rejouées. Au plus trois récupérations par heure. Redémarrage requis. |
 | `codexAutoStart?` | `boolean` | `true` | Autorise le lanceur intermédiaire Codex à exécuter `ocx ensure` avant de démarrer Codex. Avec la valeur false, cette vérification ne fait rien. |
 | `codexShimAutoRestore?` | `boolean` | `true` | Restaure le lanceur intermédiaire installé après son remplacement par une mise à jour externe de Codex terminée. Désactivation par variable d'environnement : `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`. |
 | `syncResumeHistory?` | `boolean` | `true` | Compatibilité historique Codex App réversible. Les métadonnées originales sont sauvegardées et restaurées par `ocx stop` / `ocx restore`. |
@@ -184,10 +185,13 @@ l'abonnement avec un avertissement lorsque la détection n'est pas concluante. V
 Codex utilise de petits modèles auxiliaires pour des tâches telles que les titres et les messages de commit. Activez
 `shadowCallIntercept` pour rediriger les préfixes de modèle source reconnus vers un autre modèle configuré. Le
 modèle de remplacement conserve l'effort de raisonnement configuré pour la requête. Définissez `sourceModels` uniquement lorsqu'un client utilise d'autres identifiants de modèles auxiliaires.
-L'interception dépend du modèle : toute requête dont l'identifiant de modèle nu correspond à `sourceModels`
-peut être redirigée, y compris une requête normale portant `request_kind: "turn"`. Les requêtes marquées
-comme enfants générés par `x-openai-subagent: collab_spawn` ou par `subagent_kind: "thread_spawn"` dans
-l'en-tête JSON `x-codex-turn-metadata` sont exemptées, afin qu'un sous-agent explicitement généré conserve son modèle.
+Un identifiant de modèle nu correspondant à `sourceModels` peut être intercepté, mais un tour utilisateur
+conserve son modèle si `x-codex-turn-metadata` contient à la fois `request_kind: "turn"` et `thread_source: "user"`.
+Les enfants identifiés par l'en-tête de connexion `x-openai-subagent: collab_spawn` (requête HTTP ou ouverture WebSocket) ou par les métadonnées
+`subagent_kind: "thread_spawn"` conservent aussi leur modèle. Sur WebSocket, seules les métadonnées de chaque
+trame dans `client_metadata["x-codex-turn-metadata"]` décident, jamais les métadonnées de tour de la connexion initiale.
+Des métadonnées absentes ou mal formées conservent le comportement d'interception existant. Les auxiliaires
+peuvent porter `request_kind: "turn"` ; ce champ seul ne les exempte pas. Ces règles couvrent les modèles et les combos.
 
 ```json
 {

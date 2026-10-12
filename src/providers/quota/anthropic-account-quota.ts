@@ -20,6 +20,8 @@ import {
  */
 export async function fetchAnthropicAccountQuota(
   instance: AnthropicInstanceId, accountId: string, force: boolean, config: OcxConfig = loadConfig(),
+  /** Never join an older account or vendor flight; a reset reread needs post-grant evidence. */
+  freshDispatch = false,
 ): Promise<AccountQuotaCacheEntry> {
   const unavailable = (): AccountQuotaCacheEntry => ({ ts: Date.now(), quota: null, unavailable: true });
   const target = config.providers[instance];
@@ -52,7 +54,7 @@ export async function fetchAnthropicAccountQuota(
   const flightKey = recovery.anthropicCredentialQuotaFlightKey(key, accountId);
   const flightCurrent = () => ownerCurrent()
     && recovery.anthropicCredentialQuotaFlightKey(key, accountId) === flightKey;
-  const joinable = accountQuotaInflight.get(flightKey);
+  const joinable = freshDispatch ? undefined : accountQuotaInflight.get(flightKey);
   if (joinable) {
     const joined = await joinable;
     return ownerCurrent() && (joined.isCurrent?.() ?? flightCurrent()) ? joined : unavailable();
@@ -78,7 +80,7 @@ export async function fetchAnthropicAccountQuota(
       const result = await recovery.probeAnthropicQuotaWithRecovery(accountId, token, fresh => {
         if (!flightCurrent()) throw new AnthropicQuotaProbeOwnershipError("quota flight changed");
         recovery.assertAnthropicQuotaSendAllowed(accountId, token);
-        return fetchAnthropicUsageQuotaForInstance(instance, token, fresh);
+        return fetchAnthropicUsageQuotaForInstance(instance, token, fresh || freshDispatch);
       }, () => ownerCurrent() && mayCommitAccountQuotaKey(key, writerGeneration));
       if (result && !result.isCurrent()) return unavailable();
       if (!result && !flightCurrent()) return unavailable();

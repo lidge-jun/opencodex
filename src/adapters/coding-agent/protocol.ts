@@ -154,17 +154,18 @@ function asString(value: unknown): string | undefined {
 
 /** Extract OpenCodex usage from the Anthropic-shaped usage record shared by frames and deltas. */
 function usageFromAnthropicShape(usage: Record<string, unknown>): OcxUsage | undefined {
-  const inputTokens = typeof usage.input_tokens === "number" ? usage.input_tokens : 0;
-  const outputTokens = typeof usage.output_tokens === "number" ? usage.output_tokens : 0;
-  const cachedInputTokens = typeof usage.cache_read_input_tokens === "number" ? usage.cache_read_input_tokens : undefined;
-  const cacheCreationInputTokens =
-    typeof usage.cache_creation_input_tokens === "number" ? usage.cache_creation_input_tokens : undefined;
+  const count = (value: unknown): number => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
+  // Anthropic input_tokens excludes cache reads/writes; the OpenCodex contract includes them
+  // (normalizeCostTokens drops a turn whose cache counters exceed its input).
+  const freshInputTokens = count(usage.input_tokens);
+  const outputTokens = count(usage.output_tokens);
   // A snapshot is zero-only when every counter is absent or zero. Testing only the cache-read
   // field dropped a cache-creation-only snapshot (input/output 0 with, say, 200 cache-creation
   // tokens), and a capture-only tool leg terminated at message_stop never sees a result frame
   // that could carry those tokens instead, so the turn under-reported usage and cost.
-  const cacheReadTotal = cachedInputTokens ?? 0;
-  const cacheCreationTotal = cacheCreationInputTokens ?? 0;
+  const cacheReadTotal = count(usage.cache_read_input_tokens);
+  const cacheCreationTotal = count(usage.cache_creation_input_tokens);
+  const inputTokens = freshInputTokens + cacheReadTotal + cacheCreationTotal;
   if (inputTokens === 0 && outputTokens === 0 && cacheReadTotal === 0 && cacheCreationTotal === 0) {
     return undefined;
   }
@@ -191,16 +192,22 @@ export function usageFromResult(message: StreamMessage): OcxUsage | undefined {
  * authoritative for a text-only turn; partial state exists so a capture-only tool-bridge turn —
  * which is terminated at `message_stop` before any result frame can arrive — still reports real
  * token usage instead of zero.
+ * This is a cumulative single-message leg: capture-only MCP never answers, and the runner stops
+ * at that assistant's message_stop. A completed CLI result is authoritative for an entire turn.
+ * This maximum fold is not an accounting interface for a future persistent multi-iteration SDK.
  */
 function mergePartialUsage(previous: OcxUsage | undefined, next: OcxUsage): OcxUsage {
   if (!previous) return next;
-  const inputTokens = Math.max(previous.inputTokens, next.inputTokens);
   const outputTokens = Math.max(previous.outputTokens, next.outputTokens);
   const cacheRead = Math.max(
     previous.cacheReadInputTokens ?? previous.cachedInputTokens ?? 0,
     next.cacheReadInputTokens ?? next.cachedInputTokens ?? 0,
   );
   const cacheCreation = Math.max(previous.cacheCreationInputTokens ?? 0, next.cacheCreationInputTokens ?? 0);
+  // Inclusive inputs: fold each snapshot's fresh part, then add the folded cache counters once.
+  const freshInput = (usage: OcxUsage) => Math.max(0, usage.inputTokens
+    - (usage.cacheReadInputTokens ?? usage.cachedInputTokens ?? 0) - (usage.cacheCreationInputTokens ?? 0));
+  const inputTokens = Math.max(freshInput(previous), freshInput(next)) + cacheRead + cacheCreation;
   return {
     inputTokens,
     outputTokens,

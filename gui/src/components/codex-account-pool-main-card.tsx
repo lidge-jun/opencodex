@@ -6,7 +6,7 @@ import { AccountCreditsToggle, CreditsOnBadge } from "./CodexCreditSpend";
 import QuotaBars from "./QuotaBars";
 import CodexCreditsRow from "./CodexCreditsRow";
 import { useI18n } from "../i18n/shared";
-import { CodexPauseToggleLabel, CodexTicketBadge } from "./codex-account-pool-helpers";
+import { CodexPauseToggleLabel, CodexPinnedBadge, CodexTicketBadge } from "./codex-account-pool-helpers";
 import type { CodexAccountEntry, CodexAccountLoadState } from "./codex-account-pool-types";
 import type { CodexAccountModeState } from "../codex-multi-state";
 import type { TFn } from "../i18n/shared";
@@ -42,6 +42,7 @@ export function CodexAccountPoolMainCard({
   autoSwitchDisabled,
   switchingId,
   pinnedId = null,
+  onUnpin,
   onOpenReset,
   onCopyDoctor,
   doctorCopyOutcomeFor,
@@ -76,6 +77,8 @@ export function CodexAccountPoolMainCard({
    * within that tier. Badge the account the operator chose, not wherever routing landed.
    */
   pinnedId?: string | null;
+  /** Opens the release confirm when the pinned badge is selected again. */
+  onUnpin: (account: CodexAccountEntry) => void;
   onOpenReset: (account: CodexAccountEntry) => void;
   /** Writes the main login's "use credits after limit" switch, shown in its "more" disclosure. */
   onToggleCreditsAfterLimit?: (entry: CodexAccountEntry, enabled: boolean) => void;
@@ -134,7 +137,7 @@ export function CodexAccountPoolMainCard({
           )}
           <AccountPriorityBadge value={mainSwitchEntry.priority} />
           <CreditsOnBadge enabled={main?.creditsAfterLimit} />
-          {pinnedId === "__main__" && !main?.paused && <span className="badge badge-muted">{t("codexAuth.pinned")}</span>}
+          {pinnedId === "__main__" && !main?.paused && <CodexPinnedBadge t={t} onUnpin={() => onUnpin(mainSwitchEntry)} />}
           {main && <CodexTicketBadge t={t} account={{ ...main, id: "__main__" } as CodexAccountEntry} onClick={() => onOpenReset({ ...main, id: "__main__" } as CodexAccountEntry)} />}
           {healthLabel && (
             <span className={oauthHealthBadgeClass(main?.health?.status)}>{healthLabel}</span>

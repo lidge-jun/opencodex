@@ -32,7 +32,7 @@ const cardProps = {
   activeId: null, accountModeState: null, threshold: 80, switchActionLabel: "switch", onSwitch: () => {},
   onTogglePause: () => {}, pauseUpdatingId: null, pauseBusy: false, onPriorityChange: () => {},
   priorityUpdatingId: null, onAutoSwitchThresholdChange: async () => true, autoSwitchDisabled: false,
-  switchingId: null, onOpenReset: () => {}, onReauth: () => {}, onEditAlias: () => {}, onRemove: () => {},
+  switchingId: null, onUnpin: () => {}, onOpenReset: () => {}, onReauth: () => {}, onEditAlias: () => {}, onRemove: () => {},
 };
 
 const ON_BADGE = `>${en["codexAuth.creditsOn"]}</span>`;

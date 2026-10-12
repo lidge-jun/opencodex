@@ -23,6 +23,7 @@ description: 리스너, 원격 접근, admission 키, 타임아웃, 저장소, �
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | disabled | 선택적으로 활성화하는 보관 세션 정리 정책입니다. 절대 암묵적으로 활성화되지 않습니다. |
 | `appOwnedMemoryBudgetMb?` | `number` | `256` | 제거 가능한 앱 소유 로그, 캐시, blob, continuation payload에 대한 MiB 단위 상한입니다. 범위는 64–4096이며 RSS 상한은 아닙니다. |
 | `metricsExport.enabled?` | `boolean` | `false` | 인증된 `GET /api/metrics`에서 프로세스 로컬 집계 요청 메트릭을 활성화합니다. 재시작이 필요하며, 비활성화 상태에서는 404를 반환하고 exporter 동작을 시작하지 않습니다. |
+| `serviceHealthRecovery.enabled?` | `boolean` | `false` | 백그라운드 서비스용 선택적 복구입니다. 작은 감시 프로세스가 `/healthz`를 확인하고, 프록시가 살아 있지만 연속 프로브에 약 1분 동안 전혀 응답하지 않으면 종료해 서비스 관리자(작업 스케줄러, launchd, systemd, WinSW)가 다시 시작하게 합니다. 관리되는 서비스 자식 프로세스에서만 시작되며, 멈춘 프로세스가 처리 중이던 요청은 재전송하지 않습니다. 시간당 최대 3회. 재시작이 필요합니다. |
 | `codexAutoStart?` | `boolean` | `true` | Codex shim이 Codex를 실행하기 전에 `ocx ensure`를 돌리도록 허용합니다. `false`이면 ensure는 아무 작업도 하지 않습니다. |
 | `codexShimAutoRestore?` | `boolean` | `true` | 완료된 외부 Codex 업데이트가 설치된 shim을 교체한 뒤 복원합니다. 환경 변수로 끌 수 있습니다: `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`. |
 | `syncResumeHistory?` | `boolean` | `true` | 되돌릴 수 있는 Codex App history 호환성입니다. 원래 메타데이터는 `ocx stop` / `ocx restore`가 백업하고 복원합니다. |
@@ -162,7 +163,7 @@ ssh -L 20100:localhost:10100 -L 1455:localhost:1455 you@remote
 
 Codex는 제목과 커밋 메시지 같은 작업에 작은 보조 모델을 사용합니다. 인식된 source-model prefix를 다른 구성된 모델로 돌리려면 `shadowCallIntercept`를 활성화합니다. 대체 호출은 요청에 설정된 reasoning effort를 유지합니다. 클라이언트가 다른 helper id를 사용할 때만 `sourceModels`를 설정합니다.
 
-가로채기는 모델을 기준으로 합니다. 모델 ID가 `sourceModels`와 일치하는 모든 요청은 일반 `request_kind: "turn"` 요청을 포함해 다시 보낼 수 있습니다. `x-openai-subagent: collab_spawn` 또는 `x-codex-turn-metadata` JSON 헤더의 `subagent_kind: "thread_spawn"`로 생성된 자식으로 표시된 요청은 예외이므로, 명시적으로 생성된 서브에이전트는 모델을 유지합니다.
+한정되지 않은 모델 ID가 `sourceModels`와 일치하면 가로채기 대상이지만, `x-codex-turn-metadata`에 `request_kind: "turn"`과 `thread_source: "user"`가 함께 명시된 사용자 턴은 선택한 모델을 유지합니다. 연결 헤더 `x-openai-subagent: collab_spawn`(HTTP 요청 또는 WebSocket 핸드셰이크) 또는 메타데이터의 `subagent_kind: "thread_spawn"`으로 표시된 자식도 모델을 유지합니다. WebSocket에서 턴 메타데이터는 각 프레임의 `client_metadata["x-codex-turn-metadata"]`만 사용하며 핸드셰이크의 턴 메타데이터는 이후 프레임을 분류하지 않습니다. 메타데이터가 없거나 잘못된 형식이면 기존 가로채기 동작을 유지합니다. 헬퍼도 `request_kind: "turn"`을 사용할 수 있으므로 이 필드만으로는 예외가 되지 않습니다. 이 규칙은 구체적 모델 대상과 콤보 대상에 모두 적용됩니다.
 
 ```json
 {

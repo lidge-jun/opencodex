@@ -3,6 +3,7 @@ import { projectModelRenames } from "./model-rename-migration";
 import { projectStaleContextWindows } from "./stale-context-window-migration";
 import { projectStaleModelRosters } from "./stale-model-roster-migration";
 import { projectStaleVisionClassifications } from "./stale-vision-classification-migration";
+import { projectStaleNoVisionSeeds } from "./stale-no-vision-seed-migration";
 import { projectDevinCliAuthMode } from "./devin-cli-authmode-migration";
 import type { OcxConfig } from "../types";
 
@@ -17,12 +18,13 @@ export function projectStartupConfigRepairs(config: OcxConfig): ReturnType<typeo
   const renames = projectModelRenames(config);
   const windows = projectStaleContextWindows(renames.config);
   const vision = projectStaleVisionClassifications(windows.config);
-  const rosters = projectStaleModelRosters(vision.config);
+  const noVision = projectStaleNoVisionSeeds(vision.config);
+  const rosters = projectStaleModelRosters(noVision.config);
   const devinCli = projectDevinCliAuthMode(rosters.config);
   return {
     config: devinCli.config,
-    changed: renames.changed || windows.changed || vision.changed || rosters.changed || devinCli.changed,
-    warnings: [...renames.warnings, ...windows.warnings, ...vision.warnings, ...rosters.warnings, ...devinCli.warnings],
+    changed: renames.changed || windows.changed || vision.changed || noVision.changed || rosters.changed || devinCli.changed,
+    warnings: [...renames.warnings, ...windows.warnings, ...vision.warnings, ...noVision.warnings, ...rosters.warnings, ...devinCli.warnings],
   };
 }
 

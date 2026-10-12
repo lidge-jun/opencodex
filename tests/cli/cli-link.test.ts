@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { runLinkCommand, type LinkStatusPayload } from "../../src/cli/link";
 import type { LinkStore } from "../../src/link/store";
+import { projectLinkStatus } from "../../src/link/status-projection";
 import { CAPABILITIES } from "../../src/cli/capabilities";
 import { DISPATCH_COMMANDS } from "../../src/cli/dispatch";
 import { findCommand } from "../../src/cli/registry";
@@ -57,6 +58,24 @@ const statusResponse: LinkStatusPayload = {
 };
 
 describe("ocx link", () => {
+  test("status accepts the existing K16 shape for an empty-store Home-initiated Child", async () => {
+    const dto = projectLinkStatus({ version: 1, listenerPort: null, links: [] }, [], { state: "off", port: null }, {
+      runtimeRole: "client", client: { transport: "link", serverUrl: "http://127.0.0.1:19200",
+        connectedAt: "2026-09-25T00:00:00.000Z", link: { linkId: issueResponse.linkId, tunnelPort: 19200 } },
+    }, { version: 1, entries: {} }, {
+      alias: "Home", state: "reconnecting", since: "2026-09-25T00:01:00.000Z", reason: null,
+    });
+    const output = captureOutput();
+    try {
+      const code = await runLinkCommand(["status", "--json"], {
+        baseUrl: "http://127.0.0.1:19101", fetchImpl: fakeFetch(dto, []), readAdminToken: () => "ocx_admin_test-token",
+      });
+      expect(code).toBe(0);
+      expect(JSON.parse(output.stdout[0]!)).toEqual(dto);
+      expect(output.stderr).toEqual([]);
+    } finally { output.restore(); }
+  });
+
   test("port prints one JSON document and no diagnostics", async () => {
     const output = captureOutput();
     try {
@@ -254,10 +273,12 @@ describe("ocx link", () => {
     }
   });
 
-  test("registers the canonical command and all five capability leaves", () => {
+  test("registers the canonical command and all seven capability leaves", () => {
     expect(findCommand("link")?.name).toBe("link");
     expect(DISPATCH_COMMANDS).toContain("link");
     expect(CAPABILITIES.filter(cap => cap.command[0] === "link").map(cap => cap.command.join(" "))).toEqual([
+      "link probe",
+      "link add",
       "link port",
       "link issue",
       "link status",

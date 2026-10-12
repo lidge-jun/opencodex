@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync, unlinkSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "../config";
-import { claudeToolSearchEnv, resolveAutoContext, type AutoContextMode } from "../claude/context-windows";
+import { CLAUDE_TIER_LABEL_SLOTS, claudeTierDisplayName, claudeToolSearchEnv, resolveAutoContext, type AutoContextMode } from "../claude/context-windows";
 import { PROXY_MARKER } from "../claude/auth-detect";
 import { isProxyAdmissionSecret } from "./auth-cors";
 import type { OcxConfig } from "../types";
@@ -30,6 +30,8 @@ const MANAGED_SYSTEM_ENV_NAMES = new Set<string>([
   "ANTHROPIC_DEFAULT_FABLE_MODEL",
   "ANTHROPIC_DEFAULT_HAIKU_MODEL",
   "ANTHROPIC_SMALL_FAST_MODEL",
+  // Picker labels paired with an alias tier slot this instance injected (#6926).
+  ...CLAUDE_TIER_LABEL_SLOTS.map(slot => `${slot}_NAME`),
   "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
   "DISABLE_COMPACT",
   "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
@@ -314,6 +316,14 @@ export async function injectSystemEnv(
     for (const [name, value] of Object.entries(modelEnv)) {
       if (name === "ANTHROPIC_MODEL") continue; // legacy slot handled by shell file only (back-compat)
       injectLever(name, value);
+    }
+    // Picker labels (#6926) only for alias tier slots this instance owns after the loop above: a
+    // launchd slot the user set keeps whatever label it has, and a label nothing produces any
+    // more is unset by the produced-key sweep below like any other tracked lever.
+    for (const slot of CLAUDE_TIER_LABEL_SLOTS) {
+      const value = modelEnv[slot];
+      const label = value === undefined ? undefined : claudeTierDisplayName(value);
+      if (label !== undefined && injectedKeys.includes(slot)) injectLever(`${slot}_NAME`, label);
     }
     const maxCtx = config.claudeCode?.maxContextTokens;
     if (typeof maxCtx === "number" && Number.isFinite(maxCtx) && maxCtx > 0) {

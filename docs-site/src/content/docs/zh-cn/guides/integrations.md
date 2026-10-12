@@ -184,6 +184,8 @@ ocx integration client restore --client aside --profile 1 --op <opId>
 
 ## ZCode 3.14 及更新版本
 
+以上路径为默认值。在默认主目录的 `~/.zcode/v2/setting.json` 中设置绝对路径 `dataBaseDir` 后，存储路径变为 `<dataBaseDir>/.zcode/v2/provider_config.json`。`ZCODE_DATA_DIR` 直接指定 `.zcode` 根目录并优先于设置；`ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` 优先指定提供商文件。设置格式错误、不可读或使用相对路径时，新应用和刷新会被拒绝。已有所有权和恢复记录保留。参见[路径与恢复规则的英文原文](https://opencodex.me/guides/integrations/#zcode-314-and-later)。
+
 ZCode 3.14 将自定义提供商移至 `~/.zcode/v2/provider_config.json`，而 `~/.zcode/v2/config.json` 只能通过新文件缺失时运行的一次性导入影响它。ZCode 首次运行就会创建新文件，因此任何已启动过的安装都已经用完导入机会；写入 `config.json` 不会生效。
 
 可以时，opencodex 会直接写入 `provider_config.json`。启用集成会向该文件添加 `opencodex` 提供商规则，目录刷新会更新它，禁用时则准确移除 opencodex 写入的内容。文件中的其他规则保持不变，包括其他提供商针对也出现在我们目录中的模型 id 所保留的规则。如果某条规则带有 `opencodex` id 却并非由 opencodex 写入，它会被视为冲突，而不会被直接接管；请在 ZCode 中解决，或明确选择覆盖。
@@ -216,6 +218,18 @@ ocx integration client restore --op <operation-id>
 Undo 会恢复**两个原始字节串**，包括原本不存在的文件。操作后的编辑需要现有的明确 `--confirm-drift`；编辑后的文件对会先备份。被其他内容占用的 OpenCodex 条目需要现有的 `--overwrite-conflict` 选择。Disable 只移除两个托管条目，不会恢复先前的外来条目；如需恢复，请使用 Undo。快照保留和过期规则与其他集成相同。
 
 下载文件 `cline-config-bundle.json` 包含两个原生文档成员：对应 `providers.json` 的 `settings`，以及对应 `models.json` 的 `catalog`。它本身不是 Cline 设置文件。建议使用集成命令，以获得带日志的合并和回滚。此生成集成不支持远程准入接线，需要免认证的回环访问。
+
+## omo (Codex / LazyCodex) 角色推理强度
+
+检测到 LazyCodex 后，可以在 omo 标签页的 **omo (Codex / LazyCodex)** 部分为 `$CODEX_HOME/agents/*.toml` 中的每个角色选择模型和推理强度，然后点击 **保存**。没有固定模型的角色所在行可以只保存推理强度，该角色仍继承其模型。opencodex 只更新该角色文件根级的 `model` 和 `model_reasoning_effort` 键，缺少的固定值会插入到文件开头附近；角色的指令、其他注释和其他键保持不变。只更改模型的保存不会发送 `effort`，两个文件中的推理强度都保持原样。选择某个级别会插入或替换角色文件中的 `model_reasoning_effort`；如果 LazyCodex 支持该级别，还会写入 `~/.omo/omo.jsonc` 的 `[codex].agents.<role>.reasoning`（`ultra` 只保留在角色文件中，并移除旧的 `reasoning`）。在命令行中可以用 `ocx agent roles set <role> <model> --effort <level>` 完成同样的操作。
+
+每一行都提供 **继承推理强度**，包括已固定推理强度的角色。把已固定的强度改为该选项并保存时，会发送 `"effort": null`：移除角色文件根级的 `model_reasoning_effort` 行及其行尾注释，以及 omo.jsonc 中的 `[codex].agents.<role>.reasoning`。模型固定保持不变。之后 Codex 会像对待任何没有自身覆盖值的角色一样确定推理强度（显式的启动值、`[agents]` 默认值或父会话），而不是使用固定的模型默认值。只能移除现有的单行字符串值；多行或非字符串值会以 409 `unsupported_model_value` 被拒绝，两个文件都不会改变。
+
+在 `PUT /api/codex-agent-roles/{role}` 中省略 `model` 时，角色文件中的 `model` 固定值和 omo.jsonc 中的 `model` 都保持原样，因此没有固定模型的角色会继续继承模型，只更改或清除推理强度。仪表盘会为这样的行发送只包含推理强度的请求；如果 omo.jsonc 中没有该角色的条目，只有保存 LazyCodex 支持的推理强度级别时，才会创建只包含 `reasoning` 的条目。保存永远不会移除模型固定值，因此 `null` 模型会以 400 `invalid_model` 被拒绝；既没有 `model` 也没有 `effort` 的请求会在读取角色文件或 omo.jsonc 之前以 400 `empty_update` 被拒绝。`ocx agent roles set` 始终需要指定模型。
+
+如果 `~/.omo/omo.jsonc` 不存在，不会创建它。如果其中包含注释，保存会删除这些注释，因此不会改动该文件，请手动设置该值。跳过镜像不会撤销角色文件的保存。如果角色文件已保存但 omo.jsonc 写入失败，该行的按钮会变为 **重试 omo.jsonc**，重新发送同一推理强度选择，包括通过 **继承推理强度** 进行的清除（`null`）。在重试成功之前，该角色之后任何不改动推理强度的 **保存** 或 **自动分配** 的 **应用** 都会一并发送这个待处理的选择；明确选择的推理强度会取代它。
+
+**自动分配** 会为每个已评估、且所选模型的推理强度级别列表不为空的角色提出推理强度；**应用**、**全部应用** 或 `ocx agent roles suggest --apply` 会插入或替换该角色的 `model_reasoning_effort`。推理强度取自所选模型自身的级别：最低级别、默认级别、比默认高一级，或最高级别。级别列表为空时不提出推理强度（`proposedEffort: null`）；此时 **应用** 会省略 `effort`，保留已有的固定强度。`null` 提案永远不会清除固定的推理强度。
 
 ## Kilo
 

@@ -1,6 +1,7 @@
 import { detectClaudeCodeToken, hasClaudeCredentialContinuity } from "./local-token-detect";
 import { normalizeAnthropicIdentity, resolveAnthropicAccountIdentity, type AnthropicIdentityResolver } from "./anthropic-identity";
 import { credentialGeneration, type AuthStore } from "./store";
+import { mergeOAuthPlan } from "./plan";
 import { REFRESH_SKEW_MS } from "./refresh-policy";
 import type { OAuthCredentials, ProviderAccountSet } from "./types";
 import type { AnthropicInstanceId } from "../providers/anthropic-instance-id";
@@ -30,7 +31,7 @@ export async function newerClaudeCredentialForInstance(
   const before = normalizeAnthropicIdentity(stored.anthropicIdentity, stored.access);
   if (hasClaudeCredentialContinuity(stored, disk)) {
     return { kind: "adopt", diskGeneration: credentialGeneration(disk), credential: {
-      ...stored, ...disk, anthropicIdentity: disk.access === stored.access ? before : undefined,
+      ...stored, ...disk, plan: mergeOAuthPlan(disk, stored), anthropicIdentity: disk.access === stored.access ? before : undefined,
     } };
   }
   // Independent observations share a deadline through the caller signal; neither extends the other.
@@ -42,7 +43,7 @@ export async function newerClaudeCredentialForInstance(
   if (!oldIdentity || !newIdentity) return { kind: "unresolved", diskGeneration };
   if (oldIdentity.accountUuid !== newIdentity.accountUuid) return { kind: "different", diskGeneration };
   return { kind: "adopt", diskGeneration: credentialGeneration(disk), credential: {
-    ...stored, ...disk, accountId: newIdentity.accountUuid, anthropicIdentity: newIdentity,
+    ...stored, ...disk, accountId: newIdentity.accountUuid, anthropicIdentity: newIdentity, plan: newProof?.plan ?? null,
   } };
 }
 
@@ -75,5 +76,5 @@ export function captureAnthropicCredentialOwnerForInstance(instance: AnthropicIn
 }
 
 function identityMetadata(credential: OAuthCredentials): string {
-  return JSON.stringify([credential.source, credential.accountId, credential.email, credential.anthropicIdentity]);
+  return JSON.stringify([credential.source, credential.accountId, credential.email, credential.anthropicIdentity, credential.plan]);
 }

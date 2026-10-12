@@ -23,6 +23,7 @@ description: リスナー、リモート アクセス、アドミッション �
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` |無効 |アーカイブされたセッションのクリーンアップ ポリシーをオプトインします。暗黙的に有効になることはありません。 |
 | `appOwnedMemoryBudgetMb?` | `number` | `256` |排除可能なアプリ所有のログ、キャッシュ、BLOB、および継続ペイロードの MiB の上限。範囲は 64 ～ 4096。 RSSキャップではありません。 |
 | `metricsExport.enabled?` | `boolean` | `false` | 認証済み `GET /api/metrics` でプロセスローカルの集約リクエストメトリクスを有効にします。再起動が必要です。無効時は 404 となり、エクスポーター処理は開始されません。 |
+| `serviceHealthRecovery.enabled?` | `boolean` | `false` | バックグラウンドサービス向けのオプトイン復旧。小さな監視プロセスが `/healthz` を確認し、プロキシが生きたまま連続プローブに約 1 分間まったく応答しない場合に終了させ、サービスマネージャー（タスク スケジューラ、launchd、systemd、WinSW）に再起動させます。管理対象サービスの子プロセスでのみ起動し、停止したプロセスが保持していたリクエストは再送しません。1 時間あたり最大 3 回。再起動が必要です。 |
 | `codexAutoStart?` | `boolean` | `true` | Codex を起動する前に、Codex シムで `ocx ensure` を実行させます。 False を指定すると、操作が行われないことが保証されます。 |
 | `codexShimAutoRestore?` | `boolean` | `true` |完了した外部 Codex アップデートによってインストールされたシムが置き換えられた後、インストールされているシムを復元します。環境オプトアウト: `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`。 |
 | `syncResumeHistory?` | `boolean` | `true` | Codex App 履歴の互換性を元に戻すことができます。元のメタデータは `ocx stop` / `ocx restore` によってバックアップおよび復元されます。 |
@@ -114,7 +115,7 @@ ssh -L 20100:localhost:10100 -L 1455:localhost:1455 you@remote
 
 Codex は、タイトルやコミット メッセージなどのタスクに小さなヘルパー モデルを使用します。 `shadowCallIntercept` を有効にして、認識されたソース モデル プレフィックスを別の構成済みモデルにリダイレクトします。置換後も、リクエストに設定された推論エフォートは維持されます。クライアントが異なるヘルパー ID を使用する場合にのみ、`sourceModels` を設定します。
 
-モデルによるインターセプトです。裸のモデル ID が `sourceModels` に一致するリクエストは、通常の `request_kind: "turn"` も含めてリダイレクトできます。`x-openai-subagent: collab_spawn` または `x-codex-turn-metadata` の JSON ヘッダー内の `subagent_kind: "thread_spawn"` で生成された子としてマークされたリクエストは対象外となり、明示的に生成されたサブエージェントはモデルを維持します。
+裸のモデル ID が `sourceModels` に一致するとインターセプト対象になりますが、`x-codex-turn-metadata` に `request_kind: "turn"` と `thread_source: "user"` の両方があるユーザーターンは選択したモデルを維持します。接続ヘッダー `x-openai-subagent: collab_spawn`（HTTP リクエストまたは WebSocket ハンドシェイク） またはメタデータの `subagent_kind: "thread_spawn"` で識別された子もモデルを維持します。WebSocket ではターンメタデータを各フレームの `client_metadata["x-codex-turn-metadata"]` のみで判定し、ハンドシェイクのターンメタデータは後続フレームに使いません。メタデータがない場合や不正な場合は従来のインターセプト動作を維持します。ヘルパーも `request_kind: "turn"` を使うため、このフィールドだけでは除外されません。これらの規則は具体的なモデルとコンボの両方に適用されます。
 
 ```json
 {

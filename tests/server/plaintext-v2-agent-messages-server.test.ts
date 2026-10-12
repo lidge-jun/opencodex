@@ -307,24 +307,44 @@ describe("plaintext v2 agent messages at the Responses server boundary", () => {
 
   test("bounds the headerless prefix probe when the upstream body produces no chunk", async () => {
     takeInheritedSpendHome();
+    jest.useFakeTimers();
+    const firstRead = Promise.withResolvers<void>();
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
     let cancels = 0;
-    globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
-      pull: () => new Promise<void>(() => {}),
+    const body = new ReadableStream<Uint8Array>({
+      start(value) { controller = value; },
+      pull() { firstRead.resolve(); },
       cancel: () => { cancels += 1; },
-    }), { status: 200 })) as typeof fetch;
-
-    const started = performance.now();
-    const response = await handleResponses(
+    }, { highWaterMark: 0 });
+    globalThis.fetch = (async () => new Response(body, { status: 200 })) as typeof fetch;
+    let settled = false;
+    const pending = handleResponses(
       collaborationRequest(),
       config(true, false, undefined, 1),
       { model: "", provider: "" },
-    );
-    const clientBody = await response.text();
-
-    expect(response.status).toBe(502);
-    expect(clientBody).toContain("unsupported content type");
-    expect(cancels).toBeGreaterThan(0);
-    expect(performance.now() - started).toBeLessThan(3_000);
+    ).then(response => { settled = true; return response; });
+    try {
+      // Anchor to the probe's read, not dispatch latency under a busy CI runner.
+      // Checking both sides of the deadline also rejects premature cancellation.
+      await firstRead.promise;
+      jest.advanceTimersByTime(999);
+      for (let turn = 0; turn < 50; turn++) await Promise.resolve();
+      expect(settled).toBe(false);
+      expect(cancels).toBe(0);
+      jest.advanceTimersByTime(1);
+      const response = await pending;
+      expect(response.status).toBe(502);
+      expect(await response.text()).toContain("unsupported content type");
+      expect(cancels).toBe(1);
+    } finally {
+      try {
+        if (cancels === 0) controller.close();
+        await pending;
+      } finally {
+        jest.clearAllTimers();
+        jest.useRealTimers();
+      }
+    }
   });
 
   test("fails closed when the headerless prefix probe reads a failed body", async () => {

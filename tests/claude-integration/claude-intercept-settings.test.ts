@@ -15,9 +15,16 @@ import { configSchema } from "../../src/config/schema/config-schema";
 
 const CA = "/home/u/.opencodex/claude-intercept/ca.pem";
 const env = buildClaudeInterceptEnv(8846, CA, "test-token");
+const LOOPBACK = "127.0.0.1,localhost,::1,0.0.0.0";
+/** What apply writes into a block that had no NO_PROXY of its own. */
+const written = { ...env, NO_PROXY: LOOPBACK };
 
 function dir(): string {
   return mkdtempSync(join(tmpdir(), "ocx-intercept-settings-"));
+}
+
+function seed(configDir: string, doc: unknown): void {
+  writeFileSync(join(configDir, "settings.json"), JSON.stringify(doc));
 }
 
 function readSettings(configDir: string): Record<string, unknown> {
@@ -32,8 +39,9 @@ test("apply creates settings.json when absent and is idempotent", () => {
   const configDir = dir();
   expect(inspectClaudeInterceptSettings(env, configDir)).toEqual({ kind: "absent" });
   expect(applyClaudeInterceptSettings(env, configDir)).toMatchObject({ ok: true, changed: true });
-  expect(readSettings(configDir)).toEqual({ env });
+  expect(readSettings(configDir)).toEqual({ env: written });
   expect(applyClaudeInterceptSettings(env, configDir)).toMatchObject({ ok: true, changed: false });
+  expect(readSettings(configDir)).toEqual({ env: written });
   expect(inspectClaudeInterceptSettings(env, configDir)).toEqual({ kind: "applied", env });
 });
 
@@ -43,7 +51,7 @@ test("apply preserves unrelated settings and env keys", () => {
   applyClaudeInterceptSettings(env, configDir);
   expect(readSettings(configDir)).toEqual({
     model: "opus",
-    env: { ANTHROPIC_MODEL: "gpt-x", FOO: "1", ...env },
+    env: { ANTHROPIC_MODEL: "gpt-x", FOO: "1", ...written },
     permissions: { allow: [] },
   });
 });
@@ -53,7 +61,7 @@ test("a previous port is stale and gets rewritten; a foreign proxy is left alone
   writeFileSync(join(configDir, "settings.json"), JSON.stringify({ env: { HTTPS_PROXY: "http://127.0.0.1:9000", NODE_EXTRA_CA_CERTS: CA } }));
   expect(inspectClaudeInterceptSettings(env, configDir)).toEqual({ kind: "stale", env: { HTTPS_PROXY: "http://127.0.0.1:9000", NODE_EXTRA_CA_CERTS: CA } });
   expect(applyClaudeInterceptSettings(env, configDir)).toMatchObject({ ok: true, changed: true });
-  expect(readSettings(configDir)).toEqual({ env });
+  expect(readSettings(configDir)).toEqual({ env: written });
 
   const foreign = dir();
   writeFileSync(join(foreign, "settings.json"), JSON.stringify({ env: { HTTPS_PROXY: "http://corp-proxy:3128" } }));
@@ -72,7 +80,7 @@ test("migrate rewrites an owned legacy env but never creates or touches foreign 
   const configDir = dir();
   writeFileSync(join(configDir, "settings.json"), JSON.stringify({ theme: "dark", env: { HTTPS_PROXY: "http://127.0.0.1:8846", NODE_EXTRA_CA_CERTS: CA } }));
   expect(migrateClaudeInterceptSettings(env, configDir)).toMatchObject({ ok: true, changed: true });
-  expect(readSettings(configDir)).toEqual({ theme: "dark", env });
+  expect(readSettings(configDir)).toEqual({ theme: "dark", env: written });
   expect(migrateClaudeInterceptSettings(env, configDir)).toMatchObject({ ok: true, changed: false });
 
   // Absent env stays absent — migration must not enable the integration by itself.
@@ -89,7 +97,9 @@ test("migrate rewrites an owned legacy env but never creates or touches foreign 
 
 test("remove deletes only owned values and drops an emptied env block", () => {
   const configDir = dir();
-  writeFileSync(join(configDir, "settings.json"), JSON.stringify({ model: "opus", env: { ...env } }));
+  writeFileSync(join(configDir, "settings.json"), JSON.stringify({ model: "opus" }));
+  applyClaudeInterceptSettings(env, configDir);
+  expect(readSettings(configDir)).toEqual({ model: "opus", env: written });
   expect(removeClaudeInterceptSettings(CA, configDir)).toMatchObject({ ok: true, changed: true });
   expect(readSettings(configDir)).toEqual({ model: "opus" });
   expect(removeClaudeInterceptSettings(CA, configDir)).toMatchObject({ ok: true, changed: false });
@@ -148,7 +158,7 @@ test("settings rollback refuses a newer managed proxy choice", () => {
   const configDir = dir();
   const rollback = captureClaudeInterceptSettingsRollback(env, configDir);
   applyClaudeInterceptSettings(env, configDir);
-  const newer = { ...env, HTTPS_PROXY: "http://127.0.0.1:12000" };
+  const newer = { ...written, HTTPS_PROXY: "http://127.0.0.1:12000" };
   writeFileSync(join(configDir, "settings.json"), JSON.stringify({ env: newer }));
   expect(rollback()).toBe(false);
   expect(readSettings(configDir)).toEqual({ env: newer });

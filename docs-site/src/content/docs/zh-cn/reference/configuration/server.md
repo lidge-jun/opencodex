@@ -24,6 +24,7 @@ description: 监听、远程访问、准入密钥、超时、存储、侧车、�
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | disabled | 可选启用的归档会话清理策略。不会被隐式启用。 |
 | `appOwnedMemoryBudgetMb?` | `number` | `256` | 可逐出应用自有日志、缓存、blob 和续传载荷的内存上限，单位 MiB。范围 64–4096；不是 RSS 上限。 |
 | `metricsExport.enabled?` | `boolean` | `false` | 在经过认证的 `GET /api/metrics` 上启用进程本地的请求聚合指标。需要重启；禁用时该路径返回 404，且不会启动任何导出活动。 |
+| `serviceHealthRecovery.enabled?` | `boolean` | `false` | 后台服务的可选恢复：一个小型守护进程探测 `/healthz`，当代理进程仍存活但在连续探测中约一分钟毫无响应时将其终止，由服务管理器（任务计划程序、launchd、systemd、WinSW）重新启动。仅受管服务子进程会启动它；卡住进程持有的请求不会重放。每小时最多 3 次。需要重启。 |
 | `codexAutoStart?` | `boolean` | `true` | 允许 Codex shim 在启动 Codex 之前运行 `ocx ensure`。设为 false 会让 ensure 变成无操作。 |
 | `codexShimAutoRestore?` | `boolean` | `true` | 在完成外部 Codex 更新并覆盖安装的 shim 之后恢复该 shim。环境退出开关：`OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`。 |
 | `syncResumeHistory?` | `boolean` | `true` | 可逆的 Codex App 历史兼容性。原始元数据会被备份，并由 `ocx stop` / `ocx restore` 恢复。 |
@@ -126,7 +127,7 @@ ssh -L 20100:localhost:10100 -L 1455:localhost:1455 you@remote
 Codex 会为标题、提交信息等任务使用较小的辅助模型。启用
 `shadowCallIntercept` 后，可将识别出的源模型前缀重定向到另一个已配置模型。替换后仍会保留为请求配置的推理强度。只有当客户端使用不同的辅助 ID 时，才设置 `sourceModels`。
 
-拦截依据模型进行：裸模型 ID 与 `sourceModels` 匹配的请求（包括普通的 `request_kind: "turn"` 请求）都可以被重定向。通过 `x-openai-subagent: collab_spawn` 或 `x-codex-turn-metadata` JSON 标头中的 `subagent_kind: "thread_spawn"` 标记为已生成子代理的请求不受拦截，因此显式生成的子代理会保留其模型。
+裸模型 ID 与 `sourceModels` 匹配的请求可以被拦截，但 `x-codex-turn-metadata` 同时包含 `request_kind: "turn"` 和 `thread_source: "user"` 的用户轮次保留所选模型。连接标头 `x-openai-subagent: collab_spawn`（HTTP 请求或 WebSocket 握手） 或元数据中的 `subagent_kind: "thread_spawn"` 标记的子代理也保留模型。WebSocket 的轮次元数据仅依据每帧的 `client_metadata["x-codex-turn-metadata"]`，不使用握手中的轮次元数据来分类后续帧。元数据缺失或格式错误时保留原有拦截行为。辅助调用也可能带有 `request_kind: "turn"`，因此仅凭该字段不能豁免。这些规则适用于具体模型和 combo 目标。
 
 ```json
 {

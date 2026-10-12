@@ -24,6 +24,7 @@ yardımcı özellikleri nasıl çalıştıracağını kontrol eder.
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | devre dışı | İsteğe bağlı arşivlenmiş oturum temizleme politikası. Asla örtük olarak etkinleştirilmez. |
 | `appOwnedMemoryBudgetMb?` | `number` | `256` | Çıkarılabilir uygulamaya ait günlükler, önbellekler, bloblar ve devam yükleri için MiB cinsinden sınır. Aralık 64–4096; bir RSS sınırı değildir. |
 | `metricsExport.enabled?` | `boolean` | `false` | Kimliği doğrulanmış `GET /api/metrics` üzerinde süreç yerel toplu istek metriklerini etkinleştirir. Yeniden başlatma gerekir; devre dışıyken yol 404 döndürür ve dışa aktarıcı etkinliği başlamaz. |
+| `serviceHealthRecovery.enabled?` | `boolean` | `false` | Arka plan hizmeti için isteğe bağlı kurtarma: küçük bir gözcü süreç `/healthz` adresini yoklar ve proxy canlı kalıp art arda yoklamalara yaklaşık bir dakika hiç yanıt vermezse onu sonlandırır; hizmet yöneticisi (Görev Zamanlayıcı, launchd, systemd, WinSW) yeniden başlatır. Yalnızca yönetilen hizmet alt süreci başlatır; takılan sürecin tuttuğu istekler yeniden oynatılmaz. Saatte en fazla üç kurtarma. Yeniden başlatma gerekir. |
 | `codexAutoStart?` | `boolean` | `true` | Codex dolgusunun Codex'i başlatmadan önce `ocx ensure` çalıştırmasına izin verin. False, ensure'ı bir işlem yapmayan (no-op) hale getirir. |
 | `codexShimAutoRestore?` | `boolean` | `true` | Tamamlanan harici bir Codex güncellemesi değiştirdikten sonra kurulu bir dolguyu geri yükleyin. Ortam vazgeçmesi: `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`. |
 | `syncResumeHistory?` | `boolean` | `true` | Tersine çevrilebilir Codex App geçmişi uyumluluğu. Orijinal meta veriler yedeklenir ve `ocx stop` / `ocx restore` tarafından geri yüklenir. |
@@ -206,11 +207,14 @@ kullanır. Tanınan kaynak model öneklerini yapılandırılmış başka bir mod
 yönlendirmek için `shadowCallIntercept`'i etkinleştirin. Değiştirilen istek, yapılandırılmış
 akıl yürütme çabasını korur.
 `sourceModels`'ı yalnızca bir istemci farklı yardımcı kimlikleri kullandığında
-ayarlayın. Yakalama model tabanlıdır: çıplak model kimliği `sourceModels` ile
-eşleşen her istek, normal `request_kind: "turn"` istekleri dahil, yeniden
-yönlendirilebilir. `x-openai-subagent: collab_spawn` veya `x-codex-turn-metadata` JSON üst bilgisindeki
-`subagent_kind: "thread_spawn"` ile oluşturulmuş çocuk olarak işaretlenen istekler muaftır; açıkça oluşturulan
-bir alt aracının modeli korunur.
+ayarlayın. Çıplak model kimliği `sourceModels` ile eşleşen istekler yakalanabilir; ancak
+`x-codex-turn-metadata` içinde hem `request_kind: "turn"` hem de `thread_source: "user"` varsa
+kullanıcı turu seçtiği modeli korur. bağlantı üst bilgisi `x-openai-subagent: collab_spawn` (HTTP isteği veya WebSocket el sıkışması) veya meta verideki
+`subagent_kind: "thread_spawn"` ile işaretlenen çocuklar da modeli korur. WebSocket'te yalnızca her
+çerçevenin `client_metadata["x-codex-turn-metadata"]` değeri kullanılır; el sıkışmadaki tur meta verisi sonraki
+çerçeveleri sınıflandırmaz. Eksik veya bozuk meta veri mevcut yakalama davranışını korur. Yardımcı
+çağrılar da `request_kind: "turn"` taşıyabilir; bu alan tek başına muafiyet sağlamaz. Kurallar hem
+somut model hedeflerine hem de combo hedeflerine uygulanır.
 
 ```json
 {

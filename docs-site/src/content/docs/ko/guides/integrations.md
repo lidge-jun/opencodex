@@ -190,6 +190,8 @@ ocx integration client restore --client aside --profile 1 --op <opId>
 
 ## ZCode 3.14 이상
 
+위 경로는 기본값입니다. 기본 홈의 `~/.zcode/v2/setting.json`에 절대 경로 `dataBaseDir`를 지정하면 저장소는 `<dataBaseDir>/.zcode/v2/provider_config.json`으로 이동합니다. `ZCODE_DATA_DIR`는 `.zcode` 루트 자체를 지정하며 설정값보다 우선하고, `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`는 제공자 파일 경로에 우선합니다. 잘못되거나 읽을 수 없는 설정, 상대 경로는 새 적용과 갱신을 거부합니다. 기존 소유권과 복구 기록은 보존됩니다. [경로와 복구 규칙의 원문](https://opencodex.me/guides/integrations/#zcode-314-and-later)을 참고하세요.
+
 ZCode 3.14는 사용자 정의 프로바이더를 `~/.zcode/v2/provider_config.json`으로 옮겼습니다. `~/.zcode/v2/config.json`은 새 파일이 없을 때 한 번 실행되는 가져오기 경로로만 남았습니다. ZCode를 처음 실행하면 새 파일을 만들므로 한 번이라도 실행한 설치에서는 가져오기 기회가 이미 지나갔고 `config.json`에 써도 반영되지 않습니다.
 
 opencodex는 가능할 때 `provider_config.json`에 직접 기록합니다. 연동을 활성화하면 그 파일에 `opencodex` 프로바이더 규칙을 추가하고, 카탈로그 갱신 시 이를 갱신하며, 비활성화하면 opencodex가 넣은 내용만 제거합니다. opencodex 아래에도 있는 모델 ID를 다른 프로바이더가 규칙으로 사용하더라도 파일의 다른 모든 규칙은 유지됩니다. opencodex가 기록하지 않은 `opencodex` ID 규칙은 가져오지 않고 충돌로 처리합니다. ZCode에서 해결하거나 명시적 덮어쓰기를 사용하세요.
@@ -222,6 +224,18 @@ ocx integration client restore --op <operation-id>
 Undo는 원래 없던 파일까지 포함해 **두 원본 바이트 문자열 모두** 복원합니다. 작업 후 편집된 내용이 있으면 기존의 명시적 `--confirm-drift`가 필요하며 편집된 파일 쌍도 먼저 백업합니다. 이미 차지된 OpenCodex 항목에는 기존 `--overwrite-conflict` 동의가 필요합니다. Disable은 관리형 항목 두 개를 제거하며 이전 외부 항목을 복원하지는 않습니다. 그럴 때는 Undo를 사용하세요. 스냅샷 보관과 만료에는 다른 연동과 같은 규칙이 적용됩니다.
 
 다운로드되는 `cline-config-bundle.json`에는 두 네이티브 문서 구성 요소가 있습니다. `providers.json`용 `settings`와 `models.json`용 `catalog`입니다. 번들 자체가 Cline 설정 파일은 아닙니다. 저널을 남기는 병합과 롤백에는 연동 명령을 권장합니다. 생성된 연동은 원격 수용 연결을 지원하지 않으며 인증이 없는 루프백 접근이 필요합니다.
+
+## omo (Codex / LazyCodex) 역할별 추론 강도
+
+LazyCodex가 감지되면 omo 탭의 **omo (Codex / LazyCodex)** 섹션에서 `$CODEX_HOME/agents/*.toml`에 있는 역할마다 모델과 추론 강도를 고른 뒤 **저장**을 누를 수 있습니다. 모델 고정이 없는 역할의 행은 강도만 저장할 수 있고, 그 역할은 계속 모델을 상속합니다. opencodex는 그 역할 파일의 루트 `model`과 `model_reasoning_effort` 키만 고치고, 없는 고정값은 파일 위쪽에 추가합니다. 역할의 지침, 다른 주석과 다른 키는 그대로 둡니다. 모델만 바꿔 저장하면 `effort`를 보내지 않으므로 두 파일의 추론 강도가 그대로 유지됩니다. 단계를 고르면 역할 파일의 `model_reasoning_effort`를 추가하거나 바꾸고, LazyCodex가 그 단계를 지원하면 `~/.omo/omo.jsonc`의 `[codex].agents.<role>.reasoning`에도 씁니다(`ultra`는 역할 파일에만 남고, 이전 `reasoning`은 제거합니다). 명령줄에서는 `ocx agent roles set <role> <model> --effort <level>`로 같은 작업을 합니다.
+
+이미 강도가 고정된 역할을 포함해 모든 행에 **추론 강도 상속** 항목이 있습니다. 고정된 강도를 이 항목으로 바꾸고 저장하면 `"effort": null`을 보내, 역할 파일의 루트 `model_reasoning_effort` 줄과 그 줄 끝의 주석, omo.jsonc의 `[codex].agents.<role>.reasoning`을 제거합니다. 모델 고정은 그대로 남습니다. 이후 Codex는 자체 값이 없는 다른 역할과 같은 방식으로 추론 강도를 정합니다(명시적인 spawn 값, `[agents]` 기본값 또는 상위 세션). 모델의 고정 기본값을 쓰는 것이 아닙니다. 제거할 수 있는 값은 기존의 한 줄짜리 문자열뿐이며, 여러 줄이거나 문자열이 아닌 값은 409 `unsupported_model_value`로 거부되고 두 파일 모두 바뀌지 않습니다.
+
+`PUT /api/codex-agent-roles/{role}`에서 `model`을 생략하면 역할 파일의 `model` 고정과 omo.jsonc의 `model`을 그대로 둡니다. 따라서 고정이 없는 역할은 모델을 계속 상속하면서 강도만 바뀌거나 지워집니다. 대시보드는 이런 행에 강도만 담은 요청을 보내며, omo.jsonc에 그 역할의 항목이 없으면 LazyCodex가 지원하는 강도를 저장할 때에 한해 `reasoning`만 담은 항목을 만듭니다. 저장은 모델 고정을 지우지 않으므로 `null` 모델은 400 `invalid_model`로 거부됩니다. `model`과 `effort`가 모두 없는 요청은 역할 파일이나 omo.jsonc를 읽기 전에 400 `empty_update`로 거부됩니다. `ocx agent roles set`은 항상 모델을 받습니다.
+
+`~/.omo/omo.jsonc`가 없으면 새로 만들지 않습니다. 주석이 있으면 저장할 때 주석이 사라지므로 파일을 건드리지 않습니다. 이때는 값을 직접 설정하세요. 미러를 건너뛰어도 역할 파일 저장은 취소되지 않습니다. 역할 파일은 저장됐지만 omo.jsonc 쓰기에 실패하면 그 행의 버튼이 **omo.jsonc 다시 시도**로 바뀌고, **추론 강도 상속**으로 해제한 경우(`null`)를 포함해 같은 강도 선택을 다시 보냅니다. 재시도가 성공하기 전까지는 그 역할에서 강도를 바꾸지 않는 다음 **저장**이나 **자동 배정**의 **적용**도 대기 중인 선택을 함께 보냅니다. 강도를 직접 고르면 그 값이 우선합니다.
+
+**자동 배정**은 필요한 능력과 추론 강도를 판정한 역할 가운데 선택된 모델의 강도 단계 목록이 비어 있지 않은 모든 역할에 추론 강도를 제안하며, **적용**, **모두 적용** 또는 `ocx agent roles suggest --apply`는 그 역할의 `model_reasoning_effort` 값을 추가하거나 바꿉니다. 강도는 선택된 모델 자체의 단계에서 정하며, 가장 낮은 단계, 기본 단계, 기본보다 한 단계 높은 단계, 가장 높은 단계 중 하나입니다. 단계 목록이 비어 있으면 강도를 제안하지 않고(`proposedEffort: null`), 적용할 때 `effort`를 보내지 않아 기존 강도 고정을 그대로 둡니다. `null` 제안은 고정값을 지우지 않습니다.
 
 ## Kilo
 

@@ -19,7 +19,9 @@
  *   distinct one. Kimi extracts JWT `user_id`/`sub` as accountId; Cursor extracts JWT `sub` —
  *   both append distinct identified accounts under multiauth.
  */
+import { normalizeOAuthPlan, mergeOAuthPlan } from "./plan";
 import { normalizeAnthropicIdentity, matchesAnthropicImport, mergeAnthropicIdentity } from "./anthropic-identity";
+import { findKiroAccountForLogin, withRetainedKiroUser } from "./kiro-account-identity";
 import { isAnthropicInstanceId, type AnthropicInstanceId } from "../providers/anthropic-instance-id";
 import { assertNoCrossAnthropicRegistration, assertAnthropicCredentialSource, assertAnthropicInstanceLoginConfig } from "./store-anthropic-instance";
 import { createHash, randomUUID } from "node:crypto";
@@ -537,6 +539,7 @@ function normalizeCredential(cred: unknown): OAuthCredentials | null {
   if (typeof candidate.accountId === "string" && candidate.accountId.length > 0) normalized.accountId = candidate.accountId;
   const identity = normalizeAnthropicIdentity(candidate.anthropicIdentity, candidate.access);
   if (identity) normalized.anthropicIdentity = identity;
+  if (candidate.plan !== undefined) normalized.plan = normalizeOAuthPlan(candidate.plan) ?? null;
   if (isCredentialSource(candidate.source)) normalized.source = candidate.source;
   if (typeof candidate.projectId === "string" && candidate.projectId.length > 0) normalized.projectId = candidate.projectId;
   if (typeof candidate.apiBaseUrl === "string" && candidate.apiBaseUrl.length > 0) {
@@ -905,6 +908,7 @@ export async function saveCredentialWithReceipt(
       const existing = set.accounts.find(a => matchesAnthropicImport(a.credential, safe));
       if (existing) {
         existing.credential = { ...safe, ...mergeAnthropicIdentity(safe, existing.credential),
+          plan: mergeOAuthPlan(safe, existing.credential),
           accountId: safe.accountId ?? existing.credential.accountId, email: safe.email ?? existing.credential.email };
         set.selectionRevision = previousSelectionRevision;
         delete existing.needsReauth;
@@ -918,9 +922,17 @@ export async function saveCredentialWithReceipt(
         accountId = id;
       }
     } else if (identity) {
-      const existing = set.accounts.find(a => (a.credential.accountId ?? a.credential.email) === identity);
+      // Kiro: a shared organization profile ARN is not a user, so its identity also carries the
+      // same-session whoami email (#6641); the helper never guesses between identified users.
+      const existing = provider === "kiro"
+        ? findKiroAccountForLogin(set.accounts, safe)
+        : set.accounts.find(a => (a.credential.accountId ?? a.credential.email) === identity);
       if (existing) {
-        existing.credential = safe;
+        const incoming = provider === "kiro" ? withRetainedKiroUser(safe, existing.credential) : safe;
+        // Same identity: a login whose tier read failed keeps the stored label (plan absent),
+        // while an observed unknown (plan null) still clears it.
+        const plan = mergeOAuthPlan(incoming, existing.credential);
+        existing.credential = plan === undefined ? incoming : { ...incoming, plan };
         delete existing.needsReauth;
         delete existing.needsReauthReason;
         delete existing.refreshAttentionGeneration;
@@ -932,7 +944,13 @@ export async function saveCredentialWithReceipt(
         // active identity-less row in place prevents a stale duplicate that stays selectable
         // and would re-refresh into a second row with the same identity.
         const active = set.accounts.find(a => a.id === set.activeAccountId);
-        if (!opts.preserveIdentityless && active && active.credential.accountId === undefined && active.credential.email === undefined) {
+        // Kiro rows of one organization differ only by user: while another row shares the profile,
+        // an unmatched Kiro login claims an identity-less slot only as the same CLI session (#6641).
+        const legacyUpgrade = active !== undefined && active.credential.accountId === undefined
+          && active.credential.email === undefined
+          && (provider !== "kiro" || (Boolean(safe.refresh) && active.credential.refresh === safe.refresh)
+            || !set.accounts.some(a => safe.accountId !== undefined && a.credential.accountId === safe.accountId));
+        if (!opts.preserveIdentityless && active && legacyUpgrade) {
           active.credential = safe;
           delete active.needsReauth;
           delete active.needsReauthReason;
@@ -1012,6 +1030,25 @@ export async function saveCredential(
   opts: { preserveIdentityless?: boolean; assertBeforePersist?: () => void } = {},
 ): Promise<void> {
   await saveCredentialWithReceipt(provider, cred, opts);
+}
+
+/**
+ * Record the same-session whoami user on a Kiro row saved before whoami named it (#6641).
+ * Applies only while the row still holds the proven session's refresh token and profile ARN
+ * and has no user yet; tokens, routing, plan and health are left exactly as stored.
+ */
+export async function bindKiroAccountUserEmail(
+  accountId: string,
+  proof: { profileArn: string; refresh: string; email: string },
+): Promise<boolean> {
+  return await mutateStore(store => {
+    const account = store.kiro?.accounts.find(candidate => candidate.id === accountId);
+    const credential = account?.credential;
+    if (!credential || credential.email !== undefined) return false;
+    if (credential.accountId !== proof.profileArn || credential.refresh !== proof.refresh) return false;
+    credential.email = proof.email;
+    return true;
+  }, [accountId, proof]);
 }
 
 /** Native device approval always gets a new slot; no unverified identity can replace one. */
