@@ -35,7 +35,7 @@ const MAX_COOLDOWN_MS = 10 * 60_000; // cap at 10 min for api-key rotation
  * rate signal: it clears only when someone buys credits or auto-reload fires, so the
  * ten-minute credential cap would probe a dead key six times an hour. One hour bounds that
  * to a single refused, zero-output request per key per hour, and still notices a top-up
- * without a restart. Cooldowns are skip hints for rotation; a manual selection still wins.
+ * without a restart. The hold is in memory; key management through the dashboard clears it.
  */
 export const ANTHROPIC_BILLING_COOLDOWN_MS = 60 * 60_000;
 
