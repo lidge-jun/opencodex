@@ -9,8 +9,9 @@ import { shouldInjectApiAuthHeader } from "../../codex/inject";
 
 
 /**
- * Authoritative context window, or undefined. Never guesses: a missing, non-finite, or
- * non-positive value means the serializer omits every context-derived field.
+ * Validate the supplied catalog window (which may be a labelled vendor estimate).
+ * A missing, non-finite, or non-positive value omits every context-derived field;
+ * this serializer does not independently infer a window.
  */
 export function authoritativeContextWindow(contextWindow: number | undefined): number | undefined {
   if (typeof contextWindow === "number" && Number.isFinite(contextWindow) && contextWindow > 0) {

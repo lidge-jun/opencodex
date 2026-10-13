@@ -239,7 +239,7 @@ apply、轮换/恢复或直接 disconnect 均可处理，无需新参数或事�
 UI。真实 Anthropic 模型保留其原始 id。合成的 2026 日期是内部槽位，不是发布日期。旧版哈希
 别名和 `claude-ocx-<provider>--<model>` 别名仍可解析，转义的 `claude-ocx2-<provider>--<model>` 也同样可解析。
 已保存的旧 id 仍会路由，但 Claude Code 对它仍按 200k 计算。把已保存的 `claude-ocx-` 重新选一次对应的
-`ocx-claude-`，转义的 `claude-ocx2-` 重新选一次 `ocx-claude2-`，即可同时用上真实上下文窗口和 compact。
+`ocx-claude-`，转义的 `claude-ocx2-` 重新选一次 `ocx-claude2-`，即可同时用上目录中的有效上下文窗口和 compact。
 上下文为 1M 或不低于默认压缩阈值（829,800）的模型会多出一行 `…[1m]`：
 选中后 Claude Code 会按 1M 计算该模型的上下文（自动压缩保留，代理在路由前去掉该标记）。
 选中后会保存到 Claude Code 的 `settings.json` `model` 字段；入站请求会将别名解析回路由
@@ -294,7 +294,9 @@ v1 别名按字面解码（历史上 model ID 中包含的两字符序列 `~s` /
 
 ### 上下文变体 `[1m]` 标记
 
-权威上下文窗口为 1M 或不低于默认压缩阈值（829,800）的模型会多出一个带 `…[1m]` 的选择器条目。
+这些判断使用目录中的有效窗口，其中可能包含[自定义渠道的推断值](/zh-cn/reference/configuration/providers/#自定义渠道的上下文窗口)。推断值并不证明中转的实际容量。
+
+目录中的有效上下文窗口为 1M 或不低于默认压缩阈值（829,800）的模型会多出一个带 `…[1m]` 的选择器条目。
 该下限是固定的，修改压缩值不会降低它；Anthropic 路由上的 Claude 模型必须真正达到 1M；关闭自动上下文后只对 1M 模型生效。
 超出真实窗口时会返回 `prompt is too long` 错误，Claude Code 会自动压缩。选择它后，Claude Code 会按完整的 1M 上下文计算。
 代理会在进行别名解析和路由之前移除不区分大小写的 `[1m]` 后缀。
@@ -304,7 +306,7 @@ v1 别名按字面解码（历史上 model ID 中包含的两字符序列 `~s` /
 对于任何无法识别的模型，Claude Code 都会按 200k token 计算。默认开启的**自动上下文**可解决
 这一问题：
 
-1. 启动环境槽位会在实际窗口大于 200k **且**至少达到所配置的自动压缩阈值时带上
+1. 启动环境槽位会在目录中的有效窗口大于 200k **且**至少达到所配置的自动压缩阈值时带上
    `[1m]` 标记。发现列表和 Desktop 选择器条目不跟随该阈值：它们使用固定的 829,800 token 下限（Anthropic 路由上的 Claude 模型必须真正达到 1M）。
 2. 系统会注入 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`（默认 `829800`，范围 `100000`–`1000000`），
    使对话在该位置自动进行摘要。
@@ -330,7 +332,7 @@ v1 别名按字面解码（历史上 model ID 中包含的两字符序列 `~s` /
 `claudeCode.contextAccounting` 决定 opencodex 默认选用的值。未设置（`1m`，默认）时，长上下文模型在启动环境槽位、
 Desktop 选择器、Desktop 3P（`prefer1m`）和生成的子代理中按 1M 提供。设为 `200k` 即可退出：不再自动添加 `[1m]` 标记，
 不注入 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`，Desktop 3P 保留 `supports1m` 但去掉 `prefer1m`。你自己标记 `[1m]` 的选择仍可使用
-（生成的子代理和强制子代理仍会去掉模型窗口无法承载的标记），发现列表中真正 1M 模型的 `· 1M` 条目也仍然存在。`200k` 优先于
+（生成的子代理和强制子代理仍会去掉模型窗口无法承载的标记），发现列表中目录窗口至少为 1M 的模型的 `· 1M` 条目也仍然存在。`200k` 优先于
 自动上下文：你自行导出的压缩值不会重新启用自动标记，但 opencodex 不会改动你导出的值。
 
 ```bash
@@ -584,7 +586,7 @@ OAuth 活动账户未标记 `needsReauth`。显式选择 Anthropic 却没有可�
 `ANTHROPIC_BASE_URL` 可能已经过时。请打开一个新终端，或重新运行 `ocx claude`。
 
 **大模型仍受 200k 上下文上限限制**——在选择器中选择 `[1m]` 变体，或启用自动上下文
-（默认开启）。如果选择器中没有 `[1m]` 条目，该模型的权威上下文窗口可能低于固定的 829,800 token 下限。
+（默认开启）。如果选择器中没有 `[1m]` 条目，该模型在目录中的有效上下文窗口可能低于固定的 829,800 token 下限。
 
 **技能加载导致 token 数量过高**——内置的 `claude-api` 技能（约 136k token）会在提及
 Claude 模型时自动加载。对于原生透传，这是正常现象；对于已路由模型，opencodex 默认会将其
@@ -599,7 +601,7 @@ Claude 模型时自动加载。对于原生透传，这是正常现象；对于�
 
 ### 第一方模型选择器的上下文标记
 
-对于权威上下文窗口至少为一百万 token，或不低于默认压缩阈值 829,800（例如选择了 872k 窗口的原生 GPT-6 模型）的路由模型，Desktop Code 标签页的模型选择器会添加 `[1m]`，使 Claude 按 1M 窗口计量，而不是使用自定义模型较小的默认窗口。Anthropic 路由上的 Claude 模型仍必须真正达到 1M。标签、配置中的顺序和提供方路由保持不变。窗口未知或更短的模型不添加标记。选择器无法保证 Desktop 或远程运行器收到配套的压缩环境设置，因此超出真实窗口的长窗口模型会收到 `prompt is too long` 错误，Claude Code 会据此压缩。Desktop 3P 的 `supports1m`/`prefer1m` 和生成的子代理遵循同一规则。`ocx claude` 的自动上下文与压缩配套设置保持不变。现有对话会保留已保存的选择器，直到你在刷新后的模型选择器中重新选择该模型。
+对于目录中的有效上下文窗口至少为一百万 token，或不低于默认压缩阈值 829,800（例如选择了 872k 窗口的原生 GPT-6 模型）的路由模型，Desktop Code 标签页的模型选择器会添加 `[1m]`，使 Claude 按 1M 窗口计量，而不是使用自定义模型较小的默认窗口。Anthropic 路由上的 Claude 模型仍必须真正达到 1M。标签、配置中的顺序和提供方路由保持不变。窗口未知或更短的模型不添加标记。选择器无法保证 Desktop 或远程运行器收到配套的压缩环境设置，因此超出真实窗口的长窗口模型会收到 `prompt is too long` 错误，Claude Code 会据此压缩。Desktop 3P 的 `supports1m`/`prefer1m` 和生成的子代理遵循同一规则。`ocx claude` 的自动上下文与压缩配套设置保持不变。现有对话会保留已保存的选择器，直到你在刷新后的模型选择器中重新选择该模型。
 
 ### Forced Claude Code subagent model
 
@@ -607,7 +609,7 @@ The Subagents page offers **Force all subagents onto one model**, off by default
 
 `ocx agent subagents force combo/tev-auto` sets `claudeCode.subagentModelForce`; `ocx agent subagents force -` clears it. `ocx agent status` reports the setting. `GET /api/subagent-models` returns `force`, `forceAvailable`, and `forceStatus`; `PUT` accepts `{ "force": "combo/tev-auto" }` or `{ "force": null }` without changing the roster. Omitting `force` leaves it unchanged. Invalid or unexposed targets are rejected on write; stale targets are reported and skipped at launch.
 
-This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` when the authoritative window reaches the fixed 829,800-token floor, and only for a genuine 1M window on Anthropic Claude models and bare `claude-*` selectors; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
+This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` when the effective catalog window reaches the fixed 829,800-token floor, and only for a genuine 1M window on Anthropic Claude models and bare `claude-*` selectors; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
 
 Claude Code **2.1.257 or newer** is required for FORCE. Plugin and built-in agents (including Explore/Plan) and per-call model arguments are overridden. Forks and subagent skills with `model: inherit` keep the main conversation model. The main loop and Haiku/small-fast sidecars are unaffected. Existing roster files remain available.
 

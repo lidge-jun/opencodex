@@ -1,3 +1,4 @@
+import type { VendorContextInference } from "./vendor-context";
 import { isCodexControlPlaneModel } from "../control-plane-models";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -120,6 +121,8 @@ export interface CatalogModel {
   suppressSyntheticMax?: boolean;
   defaultReasoningEffort?: string;
   contextWindow?: number;
+  /** Bundled fallback only; never a serving-provider capability assertion. */
+  contextWindowInference?: VendorContextInference;
   maxInputTokens?: number;
   /** Model-scoped output-token ceiling; omitted when no authoritative value is known. */
   maxOutputTokens?: number;

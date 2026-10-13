@@ -775,6 +775,11 @@ Add a display name from the CLI (the proxy syncs the catalog right away when liv
 ocx models add deepseek deepseek-v4 --display-name "DeepSeek V4" --context-window 128000
 ```
 
+For custom providers, omitting an explicit context window lets the catalog use the
+[context-window fallback rules](/reference/configuration/providers/#context-windows-on-custom-providers).
+Model-ID estimates apply only when the provider sets `inferContextWindow: true`; set an explicit
+window or Context cap when the relay supports less than the model's vendor window.
+
 Remote Codex clients can fetch the same generated catalog with an ordinary **data-plane** key
 — the same credential they already use for `/v1/responses`, not an admin token:
 

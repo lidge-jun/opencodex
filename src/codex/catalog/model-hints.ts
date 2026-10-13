@@ -1,3 +1,4 @@
+import { canInferVendorContext, vendorContextInference } from "./vendor-context";
 import { effectiveProviderAlias, effectiveProviderAliasDecision } from "../../providers/default-aliases";
 import { initialModelSelectionPending } from "../../providers/initial-model-selection";
 import { supportsConfiguredUltraFast } from "./configured-tiers";
@@ -311,6 +312,10 @@ export function applyProviderConfigHints(
   // owns catalog publication, including an explicit provider-level false.
   const supportsServiceTier = serviceTierSupportFromPolicy(fastPolicy);
   const {
+    contextWindowInference: _staleContextInference,
+    contextWindow: _previousContextWindow,
+    contextCap: previousContextCap,
+    contextCapped: previousContextCapped,
     supportsServiceTier: _staleServiceTier,
     supportsUltraFastTier: _staleUltraFastTier,
     fastTierDescription: _staleFastTierDescription,
@@ -320,16 +325,23 @@ export function applyProviderConfigHints(
   } = model;
   // 已发现窗口只允许被配置值压低；缺窗口时，已开的 Context cap 就是实际窗口。
   const discoveredWindow = githubCopilotCatalogContextWindow(name, prov, model.id,
-    typeof model.contextWindow === "number" && model.contextWindow > 0 ? model.contextWindow : undefined);
+    !model.contextWindowInference && typeof model.contextWindow === "number" && model.contextWindow > 0 ? model.contextWindow : undefined);
   const projectedLimits = clampObservedModelLimits(staticPolicy.model, {
     ...(discoveredWindow !== undefined ? { contextWindow: discoveredWindow } : {}),
     ...(typeof model.maxInputTokens === "number" && model.maxInputTokens > 0 ? { maxInputTokens: model.maxInputTokens } : {}),
   });
+  const azureWindow = positiveSafeInteger(azureMetadata?.contextWindow);
+  const inferredWindow = projectedLimits.contextWindow === undefined && azureWindow === undefined && canInferVendorContext(name, prov)
+    ? vendorContextInference(model.id) : undefined;
   const hintedWindow = projectedLimits.contextWindow
-    ?? positiveSafeInteger(azureMetadata?.contextWindow)
+    ?? azureWindow
+    ?? inferredWindow?.contextWindow
     ?? (providerCap !== undefined ? resolveUnknownRoutedContextWindow(providerCap) : undefined);
   const hinted = {
     ...modelWithoutServiceTier,
+    ...(!model.contextWindowInference && previousContextCap !== undefined
+      ? { contextCap: previousContextCap, contextCapped: previousContextCapped } : {}),
+    ...(inferredWindow ? { contextWindowInference: inferredWindow } : {}),
     ...(displayName !== undefined ? { displayName } : {}),
     ...(providerAlias !== undefined ? { providerAlias } : {}),
     ...(hintedWindow !== undefined ? { contextWindow: hintedWindow } : {}),

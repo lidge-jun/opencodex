@@ -263,6 +263,8 @@ Ajoutez un nom d'affichage depuis la CLI ; si le proxy est actif, il synchronise
 ocx models add deepseek deepseek-v4 --display-name "DeepSeek V4" --context-window 128000
 ```
 
+Pour un fournisseur personnalisé, l’absence de fenêtre explicite laisse le catalogue appliquer les [règles de repli du contexte](/fr/reference/configuration/providers/#contexte-des-fournisseurs-personnalisés), y compris les estimations par ID de modèle. Définissez une fenêtre ou un Context cap explicite si le relais accepte moins que la fenêtre du fabricant.
+
 Les clients Codex distants peuvent récupérer le même catalogue généré avec une clé ordinaire du plan de données — le même identifiant que celui utilisé pour `/v1/responses`, et non un jeton de gestion ou d'administration :
 
 ```bash

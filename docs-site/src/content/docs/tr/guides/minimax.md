@@ -41,9 +41,9 @@ custom_provider:
           context: 1000000
 ```
 
-Gerçek oluşturulan model listesi ile bilinen bağlam pencereleri ve akıl yürütme çabası
-basamakları çalışan OpenCodex kataloğundan gelir. Yetkili bağlam penceresi veya çaba
-basamağı olmayan model için tahmini bir değer yazılmaz; ilgili alan atlanır. MCode,
+Oluşturulan model listesi, bağlam pencereleri ve akıl yürütme çabası basamakları çalışan
+OpenCodex kataloğundan gelir. Pencereler [özel sağlayıcı tahminlerini](/tr/reference/configuration/providers/#özel-sağlayıcılarda-bağlam-penceresi) içerebilir;
+katalogda pencere veya çaba basamağı yoksa ilgili alan atlanır. MCode,
 oturumda o anda seçili çabayı korur; bu nedenle OpenCodex, seçimi değiştirmeden
 `effortOptions` değerini dışa aktarır. Blok gerçek bir anahtar yazmaz, `defaultModel`
 değerini değiştirmez ve MiniMax girişinizi etkilemez. MCode içinde
