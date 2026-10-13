@@ -172,7 +172,6 @@ export function resetLifecycleDrainStateForTests(): void {
 }
 export function tryAdmitTurn(sessionLaneId?: string, clientSignal?: AbortSignal): ActiveTurnLease | null {
   if (isDraining()) return null;
-  if (clientSignal?.aborted) return null;
   const opaqueSessionLaneId = sessionLaneId
     ? createHash("sha256").update(sessionLaneId).digest("hex").slice(0, SESSION_LANE_ID_BYTES)
     : undefined;
@@ -196,7 +195,6 @@ export function tryAdmitTurn(sessionLaneId?: string, clientSignal?: AbortSignal)
   const attachedLeases = new Set<AdmissionLease>();
   const abortListeners = new Map<AbortSignal, () => void>();
   let cancellationReason: unknown;
-  let cancelled = false;
   let active = true;
   let transferred = false;
   let nativeMainClaimed = false;
@@ -208,12 +206,10 @@ export function tryAdmitTurn(sessionLaneId?: string, clientSignal?: AbortSignal)
     bindAbortSignal(signal) {
       if (!active || abortListeners.has(signal)) return () => {};
       const onAbort = () => {
-        if (cancelled) return;
-        cancelled = true;
         cancellationReason = signal.reason;
-        for (const controller of [...controllers]) {
-          if (!controller.signal.aborted) controller.abort(cancellationReason);
-        }
+        const boundControllers = [...controllers];
+        lease.release();
+        for (const controller of boundControllers) controller.abort(cancellationReason);
       };
       abortListeners.set(signal, onAbort);
       signal.addEventListener("abort", onAbort, { once: true });
@@ -230,10 +226,6 @@ export function tryAdmitTurn(sessionLaneId?: string, clientSignal?: AbortSignal)
         ac.abort(cancellationReason ?? new Error("turn already settled"));
         return;
       }
-      if (cancelled) {
-        ac.abort(cancellationReason ?? new Error("turn cancelled"));
-        return;
-      }
       transferred = true;
       controllers.add(ac);
       activeTurns.set(ac, lease);
@@ -241,13 +233,13 @@ export function tryAdmitTurn(sessionLaneId?: string, clientSignal?: AbortSignal)
     },
     beginCodexAccountSelection() {
       const mainProfileDraining = nativeMainDrainOwners.size > 0;
-      let selectionActive = active && !cancelled && !mainProfileDraining;
+      let selectionActive = active && !mainProfileDraining;
       let released = false;
       if (selectionActive) nativeMainSelections += 1;
       const selection: CodexAccountSelectionAdmission = {
         mainProfileDraining,
         claimMainProfile() {
-          if (released || mainProfileDraining || !active || cancelled) return false;
+          if (released || mainProfileDraining || !active) return false;
           if (!nativeMainClaimed) {
             nativeMainClaimed = true;
             nativeMainTurns.add(lease);
