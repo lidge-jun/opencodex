@@ -166,15 +166,21 @@ function canonicalFileIdentity(canonical: string): string | null {
 /** Capture before the first write; nested native children share the same recovery scope. */
 export function withConfigWriteRecovery<T>(
   configPath: string, held: LockHandle, run: () => T,
-  options: { refreshBeforeSpawn?: boolean; preimage?: Buffer } = {},
+  options: { refreshBeforeSpawn?: boolean; preimage?: Buffer; requireMatchingPreimage?: boolean } = {},
 ): T {
-  if (recoveries.has(held)) return run();
+  const nested = recoveries.get(held);
+  if (nested && !options.requireMatchingPreimage) return run();
   let canonical: string;
   try { canonical = assertConfigWriteDestination(configPath, held); }
   catch { throw new ConfigWriteDestinationChanged(); }
   const identity = canonicalFileIdentity(canonical);
   const preimage = identity === null ? null : readFileSync(canonical);
   if (canonicalFileIdentity(canonical) !== identity) throw new ConfigWriteDestinationChanged();
+  if (options.requireMatchingPreimage && (!options.preimage || !preimage?.equals(options.preimage))) {
+    throw new ConfigWriteDestinationChanged();
+  }
+  if (nested && (nested.canonical !== canonical || nested.identity !== identity)) throw new ConfigWriteDestinationChanged();
+  if (nested) return run();
   const recovery: ConfigWriteRecovery = {
     canonical, identity, preimage: options.preimage ?? preimage,
     refreshBeforeSpawn: options.refreshBeforeSpawn === true && options.preimage === undefined,

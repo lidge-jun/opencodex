@@ -204,7 +204,7 @@ export function removeCodexConfig(
   if (historyError && !(historyDisposition !== "refuse-on-any" && historyError === HISTORY_RELABEL_STANDS_DOWN)) {
     return { success: false, message: `Codex configuration preserved: ${historyError}. Native writer coordination is required.` };
   }
-  const locked = withConfigWriteLockHeld(CODEX_CONFIG_PATH, options.heldConfigWriteLock, held => withConfigWriteRecovery(CODEX_CONFIG_PATH, held, () => {
+  const locked = withConfigWriteLockHeld(CODEX_CONFIG_PATH, options.heldConfigWriteLock, held => {
   beginCodexWriteSection(held);
   if (!options.preserveProfile) {
     try {
@@ -223,7 +223,9 @@ export function removeCodexConfig(
       message: `Codex config not found; no native restore was needed${options.preserveProfile ? "." : ", and the opencodex profile was removed if present."}`,
     };
   }
-  const rawContent = readFileSync(CODEX_CONFIG_PATH, "utf-8");
+  const preimage = readFileSync(CODEX_CONFIG_PATH);
+  return withConfigWriteRecovery(CODEX_CONFIG_PATH, held, () => {
+  const rawContent = preimage.toString("utf-8");
   // Same EOL boundary as inject: strip in LF space, write back in the file's own ending.
   // The unchanged fast path compares in LF space so an untouched file is never rewritten.
   const eol = dominantEol(rawContent);
@@ -281,7 +283,8 @@ export function removeCodexConfig(
     message: removedMessage,
     ...(retainedBlock === null ? {} : { retainedProviderTable: retainedBlock.replace(/\n+$/, "").split("\n") }),
   };
-  }));
+  }, { preimage, requireMatchingPreimage: true });
+  });
   if (!locked.ok) return { success: false, retryable: locked.error === "locked", message: configWriteLockFailureMessage(locked) };
   return locked.value;
 }
