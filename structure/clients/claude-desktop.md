@@ -92,17 +92,7 @@ traffic through a local interception proxy, which Anthropic may treat as a terms
 owned settings are still observed; otherwise the field is `null`.
 `/api/sync` and roster-update auto-apply never write a gateway profile while the resolved mode is
 first-party; both re-resolve after model discovery before writing.
-Background refresh preserves the selected owned gateway profile's mode, refuses symlinked library, metadata, profile or backup paths and non-regular profiles, and rechecks admission, the selected owned metadata entry and its applied fingerprint in the no-follow writer's pre-rename hook; it leaves metadata and backup bytes unchanged.
-
-Every read of Desktop library configuration — selected-profile inspection, `_meta.json` parsing, foreign-key preservation during writes, refresh mode re-resolution, the refresh
-fingerprint hash, the picker profile's inspection and apply snapshots, and the connection-owned store's metadata and profile reads — goes through the shared verified regular-file reader in `src/claude/desktop-3p-library.ts`
-(`readDesktopLibraryBytes`/`readDesktopLibraryText`). The path `lstat` must already name a regular file; on POSIX the open is nonblocking and no-follow, so a path swapped to a FIFO
-cannot turn an observation into a blocking read and a swapped symlink is not followed; the opened descriptor must still be a regular file whose bigint device, inode and change
-time match the path observation before its bytes are read, and it is always closed. Windows keeps the same path-and-descriptor identity check without the POSIX-only open flags.
-A non-regular or swapped path throws `desktop_config_not_regular`, including a swap that surfaces only at open (a symlink's `ELOOP`, a socket's `ENXIO`, a deletion's `ENOENT`):
-the failed open re-observes the path and reports the documented refusal whenever it no longer names the expected file, while a same-path failure keeps its own errno. Inspection
-reports the refusal through its existing `metadata_unreadable`/`broken` outcomes and the writer through its existing refusals; `StoreIO.read` in `src/claude/desktop-remote-store-io.ts`
-layers its size cap, private-file mode and post-read identity contract on top of the same read and reports it as `unsafe`.
+Background refresh preserves the selected owned gateway profile's mode, refuses symlinked library, metadata, profile or backup paths and non-regular profiles, and rechecks admission, the selected owned metadata entry and its applied fingerprint in the no-follow writer's pre-rename hook; it leaves metadata and backup bytes unchanged. Desktop library configuration reads follow [`clients/claude-desktop-config-reads.md`](claude-desktop-config-reads.md).
 
 Mode switches establish the replacement before removing the previous connection. A failed
 first-party apply (disabled intercept, CA failure, unreadable settings or foreign env) preserves
