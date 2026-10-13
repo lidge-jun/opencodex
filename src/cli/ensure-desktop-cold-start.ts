@@ -127,24 +127,36 @@ export interface DesktopProcessOptions {
   linuxExecutables?: (uid: number) => string[] | "unverified";
 }
 
+/** Linux truncates comm to 15 bytes. */
+const LINUX_DESKTOP_COMM = "opencodex-desktop".slice(0, 15);
+
 /**
  * Linux: executables of this user's processes. A process that exited mid-scan or belongs to someone
- * else is skipped; one of this user's processes whose executable cannot be read makes the answer
- * unverifiable, because it could be the Desktop app.
+ * else is skipped. A non-dumpable process (ssh-agent, gpg-agent) hides its executable but not its
+ * comm, so it is ruled out by name; one whose comm could be Desktop makes the answer unverifiable.
+ * The scan must also see this process, or procfs is filtered and absence proves nothing.
  */
-function linuxExecutables(uid: number): string[] | "unverified" {
+export function scanLinuxExecutables(uid: number, selfPid: number = process.pid, proc = "/proc"): string[] | "unverified" {
   const paths: string[] = [];
-  for (const entry of readdirSync("/proc")) {
+  let sawSelf = false;
+  const code = (error: unknown) => (error as { code?: unknown } | null)?.code;
+  for (const entry of readdirSync(proc)) {
     if (!/^\d+$/.test(entry)) continue;
+    if (Number(entry) === selfPid) sawSelf = true;
     try {
-      if (statSync(`/proc/${entry}`).uid !== uid) continue;
-      paths.push(readlinkSync(`/proc/${entry}/exe`).replace(/ \(deleted\)$/, ""));
+      if (statSync(`${proc}/${entry}`).uid !== uid) continue;
+      paths.push(readlinkSync(`${proc}/${entry}/exe`).replace(/ \(deleted\)$/, ""));
     } catch (error) {
-      if ((error as { code?: unknown })?.code === "ENOENT" || (error as { code?: unknown })?.code === "ESRCH") continue;
+      if (code(error) === "ENOENT" || code(error) === "ESRCH") continue;
+      try {
+        if (readFileSync(`${proc}/${entry}/comm`, "utf8").trim() !== LINUX_DESKTOP_COMM) continue;
+      } catch (commError) {
+        if (code(commError) === "ENOENT" || code(commError) === "ESRCH") continue;
+      }
       return "unverified";
     }
   }
-  return paths;
+  return sawSelf ? paths : "unverified";
 }
 
 /** Whether this user runs an OpenCodex Desktop app, judged by executable identity, never arguments. */
@@ -155,7 +167,7 @@ export function inspectDesktopProcess(options: DesktopProcessOptions = {}): Desk
     const uid = options.uid ?? process.getuid?.();
     if (platform === "linux") {
       if (uid === undefined) return "unknown";
-      const executables = (options.linuxExecutables ?? linuxExecutables)(uid);
+      const executables = (options.linuxExecutables ?? scanLinuxExecutables)(uid);
       if (executables === "unverified") return "unknown";
       return executables.some(path => isDesktopExecutable(path, platform)) ? "running" : "absent";
     }

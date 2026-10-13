@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -9,6 +9,7 @@ import {
   launchDesktopApp,
   planEnsureColdStart,
   runDesktopColdStart,
+  scanLinuxExecutables,
   type DesktopColdStartDeps,
   type DesktopOwnershipState,
   type DesktopProcessState,
@@ -218,4 +219,50 @@ describe("Desktop launch lease", () => {
     expect(release).not.toBeNull();
     release!();
   });
+});
+
+describe.skipIf(process.platform === "win32")("Linux procfs scan", () => {
+  const uid = process.getuid?.() ?? 0;
+  function fakeProc(entries: Record<string, { exe?: string; unreadableExe?: boolean; comm?: string }>, body: (proc: string) => void) {
+    const proc = mkdtempSync(join(tmpdir(), "ocx-fake-proc-"));
+    try {
+      for (const [pid, entry] of Object.entries(entries)) {
+        mkdirSync(join(proc, pid));
+        // A regular file where the link should be makes readlink fail, as a non-dumpable process does.
+        if (entry.unreadableExe) writeFileSync(join(proc, pid, "exe"), "");
+        else if (entry.exe) symlinkSync(entry.exe, join(proc, pid, "exe"));
+        if (entry.comm !== undefined) writeFileSync(join(proc, pid, "comm"), `${entry.comm}\n`);
+      }
+      writeFileSync(join(proc, "uptime"), "1 1\n");
+      body(proc);
+    } finally { removeTreeWithRetry(proc); }
+  }
+
+  test("a non-dumpable unrelated process is ruled out by its comm, so plain cold starts keep working", () => fakeProc({
+    "10": { exe: "/usr/bin/bash" },
+    "20": { unreadableExe: true, comm: "ssh-agent" },
+  }, proc => {
+    expect(scanLinuxExecutables(uid, 10, proc)).toEqual(["/usr/bin/bash"]);
+  }));
+
+  test("an unreadable process named like Desktop makes the answer unverifiable", () => fakeProc({
+    "10": { exe: "/usr/bin/bash" },
+    "30": { unreadableExe: true, comm: "opencodex-deskt" },
+  }, proc => {
+    expect(scanLinuxExecutables(uid, 10, proc)).toBe("unverified");
+  }));
+
+  test("a scan that cannot see this process is filtered and proves no absence", () => fakeProc({
+    "10": { exe: "/usr/bin/bash" },
+  }, proc => {
+    expect(scanLinuxExecutables(uid, 99, proc)).toBe("unverified");
+  }));
+
+  test("other users' processes are skipped and Desktop is found by its executable", () => fakeProc({
+    "10": { exe: "/usr/bin/bash" },
+    "40": { exe: "/opt/OpenCodex/opencodex-desktop" },
+  }, proc => {
+    expect(scanLinuxExecutables(uid, 10, proc)).toEqual(["/usr/bin/bash", "/opt/OpenCodex/opencodex-desktop"]);
+    expect(scanLinuxExecutables(uid + 1, 10, proc)).toEqual([]);
+  }));
 });
