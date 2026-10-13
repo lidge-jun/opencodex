@@ -2,7 +2,7 @@ import { describe, it, expect, afterAll, afterEach } from "bun:test";
 import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV, isRealBunBinary, bundledBunPath, durableBunPath, durableBunRuntime, reportedBunRuntimeSource, withProcessRuntimeProvenance } from "../../src/lib/bun-runtime";
 import { findPathBun } from "../../src/lib/bun-path-runtime.mjs";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -25,7 +25,25 @@ afterEach(() => {
 });
 afterAll(() => {
   removeTreeWithRetry(tmp);
+  for (const root of trustedPathRoots) removeTreeWithRetry(root);
 });
+
+// findPathBun rejects a PATH candidate beneath any group/other-writable ancestor,
+// which includes the shared temp root on POSIX ("/tmp" is 1777). A fixture that is
+// supposed to exercise a *trusted* PATH dir therefore cannot live under tmpdir().
+const trustedPathRoots: string[] = [];
+function trustedPathRoot(prefix: string): string {
+  if (process.platform === "win32") {
+    const root = mkdtempSync(join(tmpdir(), prefix));
+    trustedPathRoots.push(root);
+    return root;
+  }
+  const base = join(dirname(repoPath()), ".tmp", "path-bun-fixtures");
+  mkdirSync(base, { recursive: true, mode: 0o700 });
+  const root = mkdtempSync(join(base, prefix));
+  trustedPathRoots.push(root);
+  return root;
+}
 
 describe("isRealBunBinary (size gate vs placeholder stub)", () => {
   it("rejects the ~450-byte ASCII placeholder stub", () => {
@@ -55,7 +73,10 @@ describe("isRealBunBinary (size gate vs placeholder stub)", () => {
 describe("bundledBunPath / durableBunPath", () => {
   it("PATH-selected process provenance survives durable selection and project dotenv", () => {
     const root = join(tmp, "path-dotenv");
-    const pathDir = join(root, "path");
+    mkdirSync(root, { recursive: true });
+    // The PATH fixture needs trusted ancestors (see trustedPathRoot); everything
+    // else in this case (HOME, dotenv, consumer script) stays under tmp.
+    const pathDir = join(trustedPathRoot("path-dotenv-"), "path");
     mkdirSync(pathDir, { recursive: true });
     const bun = join(pathDir, process.platform === "win32" ? "bun.exe" : "bun");
     copyFileSync(process.execPath, bun);
