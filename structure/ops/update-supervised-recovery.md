@@ -49,6 +49,9 @@ restart skips the direct start. An unsettled restart starts no competing proxy a
 Otherwise the pinned direct start runs as before, and when that proxy comes up healthy the job
 still ends `failed` with `restarted: false`, an error naming UNSUPERVISED, and the warning in its
 log. Installs without a service are unchanged: the direct start is their normal recovery.
+Every exit after a failed manager attempt carries that outcome, including a live holder the worker
+refused to replace and a listener already serving the target version, because neither proves the
+manager owns the proxy.
 The job store withholds multi-line text, so the worker joins the shared warnings into one line.
 
 An armed test process (`OCX_TEST_HOME_GUARD=1`) never reaches the live manager: the default runner

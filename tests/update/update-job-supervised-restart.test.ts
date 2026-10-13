@@ -141,6 +141,20 @@ describe("dashboard restart after a failed service refresh", () => {
     expect(spawned.count).toBe(1);
   });
 
+  test("a listener left in place after a failed manager restart is still unproven ownership", async () => {
+    const job = freshJob("svc-managed-holder");
+    const spawned = { count: 0 };
+    const result = await restartAfterUpdateForTests(job, { port: 19106, hostname: "127.0.0.1" }, {
+      ...managedIo("failed", spawned),
+      waitForPort: async () => false,
+      listListenPidsFn: () => [4242],
+      isAliveFn: () => true,
+      verifyOcxFn: () => null,
+    });
+    expect(result).toBe("unsupervised");
+    expect(spawned.count).toBe(0);
+  });
+
   test("an install without a service starts directly and asks no manager", async () => {
     const job = freshJob("no-service-direct");
     let managerCalls = 0;

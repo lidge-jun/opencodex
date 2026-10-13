@@ -996,8 +996,7 @@ export interface RestartIo {
   releaseForServiceManagerFn?: () => void;
   /** Re-acquire the lease for the direct-start fallthrough, then re-run the veto; a notice stops the restart. */
   reacquireForDirectStartFn?: () => { readonly notice: string; readonly failed: boolean } | null;
-  /** launchd/systemd restart tried before a managed install's direct fallback (#7043). */
-  restartServiceManagerFn?: ManagerRestartFn;
+  restartServiceManagerFn?: ManagerRestartFn; // launchd/systemd restart before a managed direct fallback (#7043)
   probeProxy?: (port: number, hostname?: string) => Promise<boolean>;
   /** Richer /healthz read for update-correlated restart evidence (pid + version). */
   probeProxyIdentity?: (port: number, hostname?: string) => Promise<RestartProxyIdentity | null>;
@@ -1248,6 +1247,7 @@ async function restartAfterUpdate(
   const managed = serviceInstalled ? await restartManager({ port, hostname }, line => updateJob(job, {}, line)) : "failed";
   if (managed === "supervised") return;
   if (managed === "unsettled") { updateJob(job, ...unsettledManagerRestartFailure(port)); return false; }
+  const fallback = serviceInstalled ? "unsupervised" as const : undefined; // every exit below is unproven ownership
   // The service refresh ran outside the lease; take it back so the veto and the kills/start below stay serialized.
   const restartVeto = io.reacquireForDirectStartFn?.();
   if (restartVeto) {
@@ -1280,7 +1280,7 @@ async function restartAfterUpdate(
     );
     if (liveHolders.length > 0) {
       updateJob(job, {}, `Live holder(s) remain on port ${port}; not starting on another port. Retry 'ocx start --port ${port}'.`);
-      return;
+      return fallback;
     }
     // Dead PIDs can still own LISTEN rows. SetTcpEntry needs elevation (rc 317 on a
     // normal update worker), so poll until netstat is empty and the start runtime can bind.
@@ -1304,7 +1304,7 @@ async function restartAfterUpdate(
             + `${formatPortHolders(port, listPids, verifyOcx, directAllow)} `
             + `Retry 'ocx start --port ${port}'.`,
         );
-        return;
+        return fallback;
       }
     }
   }
@@ -1312,7 +1312,7 @@ async function restartAfterUpdate(
   // retries on missing /healthz after prepare + ghost-LISTEN clear.
   if (io.spawnStart) {
     io.spawnStart(job, job.installer, port, launcher);
-    return serviceInstalled ? "unsupervised" : undefined;
+    return fallback;
   }
   const sleep = io.sleepMs ?? ((ms: number) => new Promise<void>(r => setTimeout(r, ms)));
   const probe = io.probeProxy ?? (async (p: number, host?: string) => (
@@ -1332,7 +1332,7 @@ async function restartAfterUpdate(
         {},
         `Proxy already healthy on ${hostname}:${port} at ${expectedVersion}; skipping pinned start.`,
       );
-      return;
+      return fallback;
     }
   }
   const attempts = 3;
@@ -1391,12 +1391,13 @@ async function restartAfterUpdate(
     child.once("close", retireChild);
     const healthDeadline = now() + perAttemptHealthMs;
     while (now() < healthDeadline) {
-      if (await probe(port, hostname)) return serviceInstalled ? "unsupervised" : undefined;
+      if (await probe(port, hostname)) return fallback;
       await sleep(500);
     }
   }
   // Exhausted retries: do not leave a hung pinned-start child owning the port.
   killSpawnAttempt(lastChild);
+  return fallback;
 }
 
 /** Compact listen-holder summary for update-job logs when reclaim fails. */
@@ -1732,8 +1733,7 @@ export async function finishGuiUpdateRestart(
   // Bun/source: health alone remains enough unless a richer identity probe is supplied.
   const confirm = !usesNodeLauncher(installer) && !io.probeProxyIdentity ? confirmRestartedProxy : confirmPackageManagerExplicitRestart;
   const confirmed = await confirm(job, captured, io);
-  // A healthy proxy the manager does not own is not a full recovery (#7043): fail the job with the warning.
-  if (confirmed && restarted === "unsupervised") updateJob(job, ...unsupervisedRestartFailure(captured.port));
+  if (confirmed && restarted === "unsupervised") updateJob(job, ...unsupervisedRestartFailure(captured.port)); // #7043
   return confirmed && restarted !== "unsupervised";
 }
 
