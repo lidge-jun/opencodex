@@ -25,7 +25,9 @@ import type { OcxConfig } from "../../src/types";
 const ULTRAFAST = { id: "ultrafast", name: "Ultrafast", description: "Lower latency, increased usage; requires an eligible plan" };
 const fastTier = (description: string) => ({ id: "priority", name: "Fast", description });
 const nativeRow = (slug: string, extra: Partial<RawEntry> = {}): RawEntry => ({
-  slug, display_name: slug.toUpperCase(), visibility: "list", base_instructions: "You are Codex.",
+  // A display name equal to the slug marks a fallback row the merge replaces with the pinned
+  // upstream entry, so fixtures carry a real one to exercise preserved operator rows.
+  slug, display_name: `Test ${slug}`, visibility: "list", base_instructions: "You are Codex.",
   context_window: 272_000, supported_reasoning_levels: [{ effort: "high", description: "High" }],
   service_tiers: [fastTier("2x speed, increased usage")], additional_speed_tiers: ["fast"], ...extra,
 });
@@ -58,7 +60,8 @@ describe("native Ultrafast catalog projection", () => {
     for (const slug of ["gpt-6-astra", "gpt-6.1-sol"]) {
       expect(row(on, slug).service_tiers).toEqual([fastTier("2x speed, increased usage"), ULTRAFAST]);
       expect(row(on, slug).additional_speed_tiers).toEqual(["fast", "ultrafast"]);
-      const { service_tiers: _a, additional_speed_tiers: _b, ...restOn } = row(on, slug);
+      expect(row(on, slug).opencodex_generated_service_tiers).toEqual(["additional_speed_tiers", "service_tiers"]);
+      const { service_tiers: _a, additional_speed_tiers: _b, opencodex_generated_service_tiers: _m, ...restOn } = row(on, slug);
       const { service_tiers: _c, additional_speed_tiers: _d, ...restOff } = row(off, slug);
       expect(restOn).toEqual(restOff);
       expect(row(on, slug).default_service_tier ?? null).toBeNull();
@@ -99,9 +102,34 @@ describe("native Ultrafast catalog projection", () => {
   test("a row missing the tier arrays still gets a well-formed declaration", () => {
     const entry: RawEntry = { slug: "gpt-6-astra" };
     applyNativeUltraFastTier(entry, true);
-    expect(entry).toEqual({ slug: "gpt-6-astra", service_tiers: [ULTRAFAST], additional_speed_tiers: ["ultrafast"] });
+    expect(entry).toEqual({
+      slug: "gpt-6-astra", service_tiers: [ULTRAFAST], additional_speed_tiers: ["ultrafast"],
+      opencodex_generated_service_tiers: ["additional_speed_tiers", "service_tiers"],
+    });
     applyNativeUltraFastTier(entry, false);
     expect(entry).toEqual({ slug: "gpt-6-astra" });
+  });
+
+  test("ownership comes from the provenance marker, never from matching text", () => {
+    // An operator may have written the generated descriptor verbatim before this switch existed.
+    const handWritten = nativeRow("gpt-6.1-sol", {
+      service_tiers: [fastTier("2x speed, increased usage"), { ...ULTRAFAST }], additional_speed_tiers: ["fast", "ultrafast"],
+    });
+    const off = row(merge([handWritten], false), "gpt-6.1-sol");
+    expect(off.service_tiers).toEqual([fastTier("2x speed, increased usage"), ULTRAFAST]);
+    expect(off.additional_speed_tiers).toEqual(["fast", "ultrafast"]);
+    // Enabling over it claims nothing, so a later disable still leaves it alone.
+    const on = row(merge([handWritten], true), "gpt-6.1-sol");
+    expect(on.opencodex_generated_service_tiers).toBeUndefined();
+    expect(row(merge([on], false), "gpt-6.1-sol").service_tiers).toEqual(off.service_tiers);
+    // Only the field the switch filled is withdrawn when the operator supplied the other.
+    const speedsOnly = nativeRow("gpt-6.1-sol", { additional_speed_tiers: ["fast", "ultrafast"] });
+    const claimed = row(merge([speedsOnly], true), "gpt-6.1-sol");
+    expect(claimed.opencodex_generated_service_tiers).toEqual(["service_tiers"]);
+    const released = row(merge([claimed], false), "gpt-6.1-sol");
+    expect(released.service_tiers).toEqual([fastTier("2x speed, increased usage")]);
+    expect(released.additional_speed_tiers).toEqual(["fast", "ultrafast"]);
+    expect(released.opencodex_generated_service_tiers).toBeUndefined();
   });
 });
 
