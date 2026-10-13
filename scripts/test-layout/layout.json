@@ -1172,7 +1172,7 @@
     "loopback-listener-admission.test.ts": "server",
     "loopback-listener-integration.test.ts": "server",
     "macos-serial-lanes.test.ts": "ci-workflows",
-    "main-account-hard-lock-auth.test.ts": "codex-integration",
+    "main-account-hard-lock-auth.test.ts": "codex-integration", "main-account-hard-lock-usage-limit.test.ts": "codex-integration",
     "main-account-hard-lock-default.test.ts": "codex-integration",
     "main-account-hard-lock-policy.test.ts": "codex-integration",
     "main-account-hard-lock-recovery.test.ts": "codex-integration", "main-account-credit-renewal.test.ts": "codex-integration",

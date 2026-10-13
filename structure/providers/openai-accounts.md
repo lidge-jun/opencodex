@@ -541,6 +541,20 @@ Policy evidence retention uses the minimum configurable 80%, so a partial update
 cannot erase a reading that may block under an allowed configuration. Fresh lower usage and
 validated window-absence evidence still own recovery.
 
+A hard-lock refusal reaches every Responses client as HTTP 429 with `error.type`/`error.code`
+`usage_limit_reached` (#7046), on HTTP through `cooldownErrorResponse` and on the WebSocket
+error frame, so Codex ends the turn and marks a Goal usage-limited instead of sleeping through a
+transient retry. `Retry-After` and `resets_at` (epoch seconds) name the same instant, and both
+are omitted when nothing is known. When unpinned Pool selection reached main, `resolveCodexAuthContext`
+annotates the refusal with `nextCodexPoolRecoveryAt` (`src/codex/routing/pool-recovery.ts`): the
+earliest time a stored Pool account's every known hold ends (quota cooldown, quota avoidance,
+credits-off usage-limit reset), skipping paused, plan-excluded, quarantined, unusable or
+model-denied accounts, accounts with an unknown hold end, and accounts with no recorded hold. That
+instant replaces main's reset when it comes first, and is held to at least 60 s. It is only a retry
+hint: selection is re-run from fresh state on the retry, and neither the guard, its thresholds nor
+account eligibility change. Pins, Reserve and dispatch-time refusals keep main's reset.
+Covered by `tests/codex-integration/main-account-hard-lock-usage-limit.test.ts`.
+
 The outside-usage detector keeps a separate process-local baseline keyed by observed main identity.
 Only validated fresh percentages with a known normalized reset from the current observation enter it;
 carried policy windows, credits-only updates, writer-free observations and retired writers cannot
