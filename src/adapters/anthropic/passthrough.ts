@@ -68,9 +68,9 @@ export interface AnthropicMessagesPassthroughRequest {
   wireBody: Record<string, unknown>;
   /** Caller `anthropic-beta` values were left out. The trace never records which ones. */
   droppedBetas: boolean;
-  /** Log-safe names of the dropped values (published beta shape only); see beta-allowlist.ts. */
+  /** Log-safe names of the dropped values (known beta names only); see beta-allowlist.ts. */
   droppedBetaNames: string[];
-  /** Dropped values without a beta shape, counted only. */
+  /** Dropped values that are not known beta names, counted only. */
   droppedUnrecognizedBetas: number;
   /** Thinking signatures or `redacted_thinking` blocks were removed for this destination. */
   strippedOpaqueState: boolean;
@@ -246,6 +246,23 @@ export function anthropicOAuthWireBody(body: Rec, clientIdentity?: AnthropicClie
 }
 
 /**
+ * `context_management` for the wire. Under OAuth, declared client tools travel with the OAuth
+ * prefix, so an edit's `exclude_tools` must name the same wire spelling or the tools it means to
+ * protect stop matching and their context can be cleared. Copy-on-write; anything else is opaque.
+ */
+export function contextManagementForWire(value: unknown, oauthToolNames?: ReadonlyMap<string, string>): unknown {
+  if (!oauthToolNames || oauthToolNames.size === 0 || !isRec(value) || !Array.isArray(value.edits)) return value;
+  const callerToWire = new Map([...oauthToolNames].map(([wire, caller]) => [caller, wire]));
+  const edits = mapPreservingIdentity(value.edits as unknown[], edit => {
+    if (!isRec(edit) || !Array.isArray(edit.exclude_tools)) return edit;
+    const excludeTools = mapPreservingIdentity(edit.exclude_tools as unknown[],
+      name => typeof name === "string" ? callerToWire.get(name) ?? name : name);
+    return excludeTools === edit.exclude_tools ? edit : { ...edit, exclude_tools: excludeTools };
+  });
+  return edits === value.edits ? value : { ...value, edits };
+}
+
+/**
  * What the native lane sends for this provider, without a credential: the allowlisted body,
  * opaque state kept only for first-party Anthropic, and the OAuth request shape for an OAuth
  * provider. `count_tokens` counts this; the builder below sends it.
@@ -314,7 +331,7 @@ export function buildAnthropicMessagesPassthroughRequest(
   mergeAnthropicBetaHeader(headers, betas.betas);
   // Header and body travel as a pair: the field goes out only when its beta does.
   const sentBody = betas.betas.includes(CONTEXT_MANAGEMENT_BETA) && body.context_management !== undefined
-    ? { ...wireBody, context_management: body.context_management }
+    ? { ...wireBody, context_management: contextManagementForWire(body.context_management, oauthToolNames) }
     : wireBody;
   return {
     url,

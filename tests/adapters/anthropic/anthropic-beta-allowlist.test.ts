@@ -151,6 +151,28 @@ describe("context management (#7042)", () => {
       clientIdentity: observed,
     });
     expect(withoutBeta.wireBody).not.toHaveProperty("context_management");
+  });
+
+  test("OAuth rewrites exclude_tools to the prefixed wire names of declared client tools", () => {
+    const managed = {
+      ...BODY,
+      tools: [{ name: "lookup", input_schema: { type: "object" } }, { type: "web_search_20250305", name: "web_search" }],
+      context_management: { edits: [{ type: "clear_tool_uses_20250919", exclude_tools: ["lookup", "web_search", "undeclared"] }] },
+    };
+    const oauth = buildAnthropicMessagesPassthroughRequest(
+      provider({ authMode: "oauth", apiKey: "fixture-oauth-access" }), "claude-wire", managed, undefined,
+      { callerAnthropicBeta: CONTEXT_MANAGEMENT_BETA, clientIdentity: observed },
+    );
+    const wireTool = (oauth.wireBody.tools as Array<{ name: string }>)[0]!.name;
+    expect(wireTool).not.toBe("lookup");
+    expect(oauth.wireBody.context_management).toEqual({
+      edits: [{ type: "clear_tool_uses_20250919", exclude_tools: [wireTool, "web_search", "undeclared"] }],
+    });
+    // The caller's body is never mutated.
+    expect(managed.context_management.edits[0]!.exclude_tools).toEqual(["lookup", "web_search", "undeclared"]);
+    const key = buildAnthropicMessagesPassthroughRequest(provider(), "claude-wire", managed, undefined,
+      { callerAnthropicBeta: CONTEXT_MANAGEMENT_BETA, clientIdentity: observed });
+    expect(key.wireBody.context_management).toBe(managed.context_management);
     const generic = buildAnthropicMessagesPassthroughRequest(provider(), "claude-wire", source, undefined, {
       callerAnthropicBeta: CONTEXT_MANAGEMENT_BETA,
     });
@@ -165,14 +187,15 @@ describe("context management (#7042)", () => {
 });
 
 describe("dropped beta names (#7042)", () => {
-  test("only published beta shapes are named; everything else is counted", () => {
+  test("only known beta names are named; a caller-chosen dated value is counted, never echoed", () => {
     const result = allowlistAnthropicBetas(
-      `${UNKNOWN},effort-2025-11-24,EFFORT-2025-11-24,sk-ant-fixture-secret,${ALLOWED}`, "first-party",
+      `${UNKNOWN},effort-2025-11-24,EFFORT-2025-11-24,customer-acme-2026-10-13,sk-ant-fixture-secret,${ALLOWED}`, "first-party",
     );
     expect(result).toEqual({
       betas: [ALLOWED], dropped: true,
-      droppedNames: [UNKNOWN, "effort-2025-11-24"], droppedUnrecognized: 1,
+      droppedNames: ["effort-2025-11-24"], droppedUnrecognized: 3,
     });
+    expect(allowlistAnthropicBetas(CONTEXT_MANAGEMENT_BETA, "first-party").droppedNames).toEqual([CONTEXT_MANAGEMENT_BETA]);
   });
 
   test("the log line names each distinct set once and never echoes unshaped values", () => {
