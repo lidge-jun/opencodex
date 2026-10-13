@@ -1,3 +1,4 @@
+import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 // English — source of truth. Its keys define the TKey type; de/fr/ko/zh/zh-TW/ru/ja/tr must match (compile-checked).
 // Strings with {cmd} render a <code> chip via <Trans>; {var} are plain interpolations.
 /**
@@ -6,6 +7,7 @@
  * `{var}` are plain interpolations.
  */
 export const en = {
+  ...desktopCompatibilityCopy("en"),
   "sidecar.pool": "Pool",
   "sidecar.poolCurrent": "Current request's pool",
   "sidecar.poolA": "Anthropic",

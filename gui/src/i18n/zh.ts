@@ -1,9 +1,11 @@
+import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import type { TKey } from "./en";
 
 /**
  * Chinese i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const zh: Record<TKey, string> = {
+  ...desktopCompatibilityCopy("zh"),
   "sidecar.pool": "账户池",
   "sidecar.poolCurrent": "使用当前请求的账户池",
   "sidecar.poolA": "Anthropic",

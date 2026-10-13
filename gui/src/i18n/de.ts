@@ -1,3 +1,4 @@
+import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 // German — generated from en.ts. Must match TKey set (compile-checked).
 import type { TKey } from "./en";
 
@@ -5,6 +6,7 @@ import type { TKey } from "./en";
  * German i18n catalog, generated from en.ts. Must match the `TKey` set (compile-checked).
  */
 export const de: Record<TKey, string> = {
+  ...desktopCompatibilityCopy("de"),
   "sidecar.pool": "Kontopool",
   "sidecar.poolCurrent": "Pool der aktuellen Anfrage",
   "sidecar.poolA": "Anthropic",

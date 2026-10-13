@@ -1,9 +1,11 @@
+import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import type { TKey } from "./en";
 
 /**
  * Japanese i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const ja: Record<TKey, string> = {
+  ...desktopCompatibilityCopy("ja"),
   "sidecar.pool": "アカウントプール",
   "sidecar.poolCurrent": "現在のリクエストのプール",
   "sidecar.poolA": "Anthropic",

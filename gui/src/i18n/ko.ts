@@ -1,9 +1,11 @@
+import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import type { TKey } from "./en";
 
 /**
  * Korean i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const ko: Record<TKey, string> = {
+  ...desktopCompatibilityCopy("ko"),
   "sidecar.pool": "계정 풀",
   "sidecar.poolCurrent": "현재 요청의 풀 사용",
   "sidecar.poolA": "Anthropic",

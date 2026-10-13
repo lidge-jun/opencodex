@@ -1,9 +1,11 @@
+import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import type { TKey } from "./en";
 
 /**
  * Russian i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const ru: Record<TKey, string> = {
+  ...desktopCompatibilityCopy("ru"),
   "sidecar.pool": "Пул аккаунтов",
   "sidecar.poolCurrent": "Пул текущего запроса",
   "sidecar.poolA": "Anthropic",

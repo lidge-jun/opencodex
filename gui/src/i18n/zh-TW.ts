@@ -1,7 +1,9 @@
+import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import type { TKey } from "./en";
 
 /** Traditional Chinese (Taiwan) UI strings — keys must match `en.ts` 1:1. */
 export const zhTW: Record<TKey, string> = {
+  ...desktopCompatibilityCopy("zh-TW"),
   "sidecar.pool": "帳戶池",
   "sidecar.poolCurrent": "使用目前請求的帳戶池",
   "sidecar.poolA": "Anthropic",
