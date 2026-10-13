@@ -48,13 +48,11 @@ type MainAuthJsonCredential = {
   path: string;
   rawSha256: string;
   /**
-   * Filesystem identity of the file the hash was taken from (#2999).
-   *
-   * A content hash cannot tell "unchanged" from "replaced with a file that happens to
-   * hash the same", and more importantly it is read at a different instant than the
-   * rename. Carrying dev+ino lets the pre-rename guard ask the sharper question: is this
-   * still the same file, not merely one with the same bytes. `null` when the target could
-   * not be stat'ed, which is treated as "cannot prove identity" rather than "matches".
+   * Filesystem identity of the file the hash was taken from. It catches a writer that
+   * replaces auth.json by rename with identical bytes. It does not see Codex's own writes:
+   * Codex rewrites auth.json in place (truncate + write), which keeps dev and ino, so only
+   * the content hash notices those, and only once the new bytes are visible (#2999).
+   * `null` when the target could not be stat'ed, which fails closed.
    */
   identity: { dev: number; ino: number } | null;
   root: Record<string, unknown>;
@@ -264,10 +262,9 @@ function assertMainAuthJsonSnapshotUnchanged(expected: MainAuthJsonCredential): 
   if (!current || current.path !== expected.path || current.rawSha256 !== expected.rawSha256) {
     throw new MainAuthJsonChangedDuringRefreshError();
   }
-  // Identity, not just content (#2999). A writer can land between this check and the
-  // rename, and rename(2) replaces unconditionally - so the narrower the question asked
-  // here, the smaller the window where a Codex login gets silently overwritten. An
-  // unreadable identity on either side fails closed: unprovable is not the same as equal.
+  // Also refuse a rename-based replacement with identical bytes. An unreadable identity on
+  // either side fails closed. This narrows the window; rename(2) still replaces
+  // unconditionally after this check returns.
   assertMainAuthJsonIdentityUnchanged(expected);
 }
 
@@ -288,9 +285,7 @@ function persistRefreshedMainAuthJson(
   assertNotRealCodexHomeUnderTest(resolveCodexHomeDir());
   const accessToken = refreshed.access;
   const refreshToken = refreshed.refresh || expected.refreshToken!;
-  const chatgptAccountId = refreshed.accountId
-    ?? extractAccountId(undefined, accessToken)
-    ?? expected.chatgptAccountId;
+  const { chatgptAccountId } = inFlightMainAccountToken(expected, refreshed);
   const tokens = {
     ...expected.tokens,
     access_token: accessToken,
@@ -539,7 +534,19 @@ async function resolveMainAccountToken(
         // Once the exchange starts, only its own timeout may abort it: a successful
         // rotating grant retires the old refresh token. Save the only live grant before
         // honoring caller cancellation, while retaining the external-writer guards.
-        const result = persistRefreshedMainAuthJson(locked, refreshed);
+        let result: { accessToken: string; chatgptAccountId: string };
+        try {
+          result = persistRefreshedMainAuthJson(locked, refreshed);
+        } catch (cause) {
+          if (!(cause instanceof MainAuthJsonChangedDuringRefreshError)) throw cause;
+          // Another writer owns auth.json now (#2999). The exchange already succeeded, so
+          // failing the request would waste it. Serve the new access token to this request
+          // only: leave the file as the other writer left it, keep nothing as the main
+          // credential, and do not retire the grant.
+          noteNativeMainRefresh("publish-refused-served-in-flight");
+          if (dependencies.signal?.aborted) throw dependencies.signal.reason;
+          return inFlightMainAccountToken(locked, refreshed);
+        }
         // A permitted in-flight success speaks only for its own profile and grant.
         clearMainRefreshGrantRejection(mainRefreshGrantKey(locked)!);
         if (dependencies.preserveReauth !== true) clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
@@ -554,6 +561,19 @@ async function resolveMainAccountToken(
     }
     throw cause;
   }
+}
+
+/** The refreshed bearer for one request whose save was refused; never stored anywhere. */
+function inFlightMainAccountToken(
+  expected: MainAuthJsonCredential,
+  refreshed: OAuthCredentials,
+): { accessToken: string; chatgptAccountId: string } {
+  return {
+    accessToken: refreshed.access,
+    chatgptAccountId: refreshed.accountId
+      ?? extractAccountId(undefined, refreshed.access)
+      ?? expected.chatgptAccountId,
+  };
 }
 
 /** Refresh the CLI-owned native credential before upstream I/O and publish it atomically. */
