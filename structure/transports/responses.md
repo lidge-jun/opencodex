@@ -71,7 +71,7 @@ silence. It cannot observe the client's workspace or prove whether a successful 
 repository state. Consequently, the active-turn and session-lane gates are concurrency admission
 limits, the translator budget follows [live retained-byte ownership](byte-accounting.md#stream-buffer-accounting), the response-state caps are cache
 retention limits, and the stall watchdog is a silence limit. None is a cumulative continuation or
-semantic no-progress budget. The turn lease in `src/server/lifecycle.ts` subscribes to HTTP ingress cancellation, internal decision cancellation and every registered controller. Cancellation releases turn admission, session lanes, attached workflow leases and pending native-main selection ownership without waiting for upstream work. Live/Realtime acquisition binds ingress cancellation until WebSocket upgrade transfers ownership. Normal completion detaches the listeners; late finalizers remain idempotent.
+semantic no-progress budget. The turn lease in `src/server/lifecycle.ts` subscribes to HTTP ingress cancellation, internal decision cancellation and every registered controller. Cancellation aborts every bound controller but retains turn admission, session lanes and attached ownership until the corresponding owner finalizes; pending native-main selection cannot claim an account after cancellation. Live/Realtime acquisition binds ingress cancellation until WebSocket upgrade transfers ownership. Normal completion detaches the listeners; late finalizers remain idempotent.
 
 > Decision record: [ADR-0031](../decisions/ADR-0031-responses-http-sse.md)
 > Decision record: [ADR-0032](../decisions/ADR-0032-responses-http-sse.md)
@@ -590,8 +590,8 @@ keeps only allowlisted transport verdict codes and the explicit local `spend_led
 deserialize them as required fields.
 
 
-Active-turn admission owns workflow admission, so both remain held until a streaming body finishes or
-is cancelled.
+Active-turn admission owns workflow admission, so both remain held until their owner finalizes.
+Cancellation signals upstream work immediately; signalling alone does not release admission.
 
 The shared endpoint path also preserves the cyber-policy stop when a malformed UTF-8 5xx body is
 replacement-decoded; other malformed-body usage, quota, reset evidence and classification retain the

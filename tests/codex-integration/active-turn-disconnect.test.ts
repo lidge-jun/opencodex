@@ -114,23 +114,43 @@ async function disconnectedTurn(protocol: Protocol, phase: Phase) {
       await until(() => getActiveTurnCount() === before.turns + 1, "HTTP admitted");
       client.destroy();
     }
-    await until(() => getActiveTurnCount() === before.turns && sessionLaneMetrics().active === before.lanes, `${protocol}/${phase} released`);
+    if (phase === "selection") {
+      await until(() => capturedSignal?.aborted === true, `${protocol}/${phase} cancelled`);
+      expect(getActiveTurnCount()).toBe(before.turns + 1);
+      expect(sessionLaneMetrics().active).toBe(before.lanes + 1);
+      if (protocol === "responses-http") expect(workflowBudgetSnapshot(root)?.active ?? 0).toBeGreaterThan(0);
+      expect(upstreamRequests).toBe(0);
+    } else {
+      await until(() => getActiveTurnCount() === before.turns && sessionLaneMetrics().active === before.lanes, `${protocol}/${phase} released`);
+    }
     console.log(JSON.stringify({ protocol, phase, before, after: { turns: getActiveTurnCount(), lanes: sessionLaneMetrics().active }, upstreamRequests, clientSignalAborted: capturedSignal?.aborted }));
-    expect(getActiveTurnCount()).toBe(before.turns);
-    expect(sessionLaneMetrics().active).toBe(before.lanes);
-    if (protocol !== "responses-ws") expect(workflowBudgetSnapshot(root)?.active ?? 0).toBe(0);
+    if (phase === "selection") {
+      expect(getActiveTurnCount()).toBe(before.turns + 1);
+      expect(sessionLaneMetrics().active).toBe(before.lanes + 1);
+      if (protocol === "responses-http") expect(workflowBudgetSnapshot(root)?.active ?? 0).toBeGreaterThan(0);
+    } else {
+      expect(getActiveTurnCount()).toBe(before.turns);
+      expect(sessionLaneMetrics().active).toBe(before.lanes);
+      if (protocol !== "responses-ws") expect(workflowBudgetSnapshot(root)?.active ?? 0).toBe(0);
+    }
   } catch (error) {
     console.log(JSON.stringify({ protocol, phase, before, after: { turns: getActiveTurnCount(), lanes: sessionLaneMetrics().active }, upstreamRequests, clientSignalAborted: capturedSignal?.aborted }));
     throw error;
   } finally {
     closeClient?.();
     unblock.resolve();
-    prepare.mockRestore();
-    abortAndReleaseAllTurns(new Error("fixture teardown"));
-    await server.stop(true);
-    await upstream.stop(true);
-    if (previousHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previousHome;
-    removeTreeWithRetry(home);
+    try {
+      if (phase === "selection") {
+        await until(() => getActiveTurnCount() === before.turns && sessionLaneMetrics().active === before.lanes, `${protocol}/${phase} finalized`);
+      }
+    } finally {
+      prepare.mockRestore();
+      abortAndReleaseAllTurns(new Error("fixture teardown"));
+      await server.stop(true);
+      await upstream.stop(true);
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previousHome;
+      removeTreeWithRetry(home);
+    }
   }
 }
 
@@ -140,11 +160,11 @@ for (const protocol of ["responses-http", "responses-ws", "messages"] as const) 
   }
 }
 for (const protocol of ["responses-http", "responses-ws"] as const) {
-  test(`${protocol} releases while account selection stays pending`, () => disconnectedTurn(protocol, "selection"), 15_000);
+  test(`${protocol} retains admission while account selection stays pending`, () => disconnectedTurn(protocol, "selection"), 15_000);
 }
 test("compact releases its lane after disconnect before upstream headers", () => disconnectedTurn("compact", "silent"), 15_000);
 
-test("an aborted registered controller releases once while its work stays pending", () => {
+test("an aborted registered controller retains ownership while its work stays pending", () => {
   const before = activeRegistryMetrics().activeTurns;
   const laneBefore = sessionLaneMetrics().active;
   const lease = tryAdmitTurn("fixture-controller")!;
@@ -154,23 +174,26 @@ test("an aborted registered controller releases once while its work stays pendin
   lease.bindAbortController(ac);
   try {
     ac.abort(new Error("fixture client closed"));
-    expect(getActiveTurnCount()).toBe(before.active);
-    expect(sessionLaneMetrics().active).toBe(laneBefore);
-    expect(released).toBe(1);
+    expect(getActiveTurnCount()).toBe(before.active + 1);
+    expect(sessionLaneMetrics().active).toBe(laneBefore + 1);
+    expect(released).toBe(0);
     unregisterTurn(ac);
     lease.release();
+    expect(getActiveTurnCount()).toBe(before.active);
+    expect(sessionLaneMetrics().active).toBe(laneBefore);
     expect(released).toBe(1);
     expect(activeRegistryMetrics().activeTurns.releaseMisses).toBe(before.releaseMisses);
   } finally { lease.release(); }
 });
 
 
-test("ingress cancellation releases pending selection and all bound controllers", () => {
+test("ingress cancellation retains admission until pending selection unwinds", () => {
   const before = getActiveTurnCount();
   const nativeBefore = getNativeMainProfileRequestCount();
   const client = new AbortController();
   const lease = tryAdmitTurn("fixture-selection", client.signal)!;
   const selection = lease.beginCodexAccountSelection();
+  const duringSelection = getNativeMainProfileRequestCount();
   const first = new AbortController();
   const second = new AbortController();
   lease.bindAbortController(first);
@@ -178,8 +201,8 @@ test("ingress cancellation releases pending selection and all bound controllers"
   lease.bindAbortController(first);
   const reason = new Error("fixture ingress closed");
   client.abort(reason);
-  expect(getActiveTurnCount()).toBe(before);
-  expect(getNativeMainProfileRequestCount()).toBe(nativeBefore);
+  expect(getActiveTurnCount()).toBe(before + 1);
+  expect(getNativeMainProfileRequestCount()).toBe(duringSelection);
   expect(first.signal.reason).toBe(reason);
   expect(second.signal.reason).toBe(reason);
   expect(selection.claimMainProfile()).toBe(false);
@@ -194,18 +217,15 @@ test("ingress cancellation releases pending selection and all bound controllers"
   expect(released).toBe(1);
 });
 
-test("already aborted ingress cannot retain admission or selection", () => {
+test("already aborted ingress cannot acquire admission or selection", () => {
   const before = getActiveTurnCount();
   const nativeBefore = getNativeMainProfileRequestCount();
   const client = new AbortController();
   client.abort(new Error("fixture already closed"));
-  const lease = tryAdmitTurn("fixture-pre-aborted", client.signal)!;
+  const lease = tryAdmitTurn("fixture-pre-aborted", client.signal);
   expect(getActiveTurnCount()).toBe(before);
-  const selection = lease.beginCodexAccountSelection();
-  expect(selection.claimMainProfile()).toBe(false);
+  expect(lease).toBeNull();
   expect(getNativeMainProfileRequestCount()).toBe(nativeBefore);
-  selection.release();
-  lease.release();
 });
 
 test("normal completion detaches cancellation listeners", () => {
@@ -222,7 +242,7 @@ test("normal completion detaches cancellation listeners", () => {
 });
 
 
-test("internal decision cancellation releases admission while dispatch remains pending", async () => {
+test("internal decision cancellation retains admission while dispatch remains pending", async () => {
   const before = getActiveTurnCount();
   const entered = deferred<void>();
   const unblock = deferred<Response>();
@@ -239,7 +259,7 @@ test("internal decision cancellation releases admission while dispatch remains p
   expect(getActiveTurnCount()).toBe(before + 1);
   try {
     client.abort(new Error("fixture decision closed"));
-    expect(getActiveTurnCount()).toBe(before);
+    expect(getActiveTurnCount()).toBe(before + 1);
   } finally {
     unblock.resolve(new Response(null, { status: 499 }));
     await settled;
@@ -247,7 +267,7 @@ test("internal decision cancellation releases admission while dispatch remains p
 });
 
 
-test("Live upgrade disconnect releases admission while resolution remains pending", async () => {
+test("Live upgrade disconnect retains admission while resolution remains pending", async () => {
   const previousHome = process.env.OPENCODEX_HOME;
   const home = mkdtempSync(join(tmpdir(), "ocx-upgrade-disconnect-"));
   process.env.OPENCODEX_HOME = home;
@@ -269,7 +289,9 @@ test("Live upgrade disconnect releases admission while resolution remains pendin
     await entered.promise;
     expect(getActiveTurnCount()).toBe(before + 1);
     socket.close();
-    await until(() => getActiveTurnCount() === before, "Live upgrade admission released");
+    expect(getActiveTurnCount()).toBe(before + 1);
+    unblock.resolve(new Response(null, { status: 499 }));
+    await until(() => getActiveTurnCount() === before, "Live upgrade admission finalized");
   } finally {
     unblock.resolve(new Response(null, { status: 499 }));
     resolve.mockRestore();
@@ -295,5 +317,96 @@ test("upgrade transfer detaches ingress cancellation and keeps connection owners
   expect(getActiveTurnCount()).toBe(before + 1);
   expect(connection.signal.aborted).toBe(false);
   connection.abort(new Error("fixture socket closed"));
+  expect(getActiveTurnCount()).toBe(before + 1);
+  lease.release();
   expect(getActiveTurnCount()).toBe(before);
+});
+
+test("retains saturated admission until stalled work settles without aborting sibling work", () => {
+  const leases = [];
+  try {
+    for (let index = 0; index < 512; index += 1) {
+      const lease = tryAdmitTurn();
+      if (!lease) break;
+      leases.push(lease);
+    }
+    expect(leases.length).toBeGreaterThan(1);
+    const cancelled = leases[0]!;
+    const sibling = leases[1]!;
+    const cancellation = new AbortController();
+    const work = new AbortController();
+    const siblingWork = new AbortController();
+    cancelled.bindAbortSignal(cancellation.signal);
+    cancelled.bindAbortController(work);
+    sibling.bindAbortController(siblingWork);
+
+    cancellation.abort(new Error("client disconnected"));
+
+    expect(work.signal.aborted).toBe(true);
+    expect(siblingWork.signal.aborted).toBe(false);
+    expect(getActiveTurnCount()).toBe(leases.length);
+    expect(tryAdmitTurn()).toBeNull();
+
+    const lateWork = new AbortController();
+    cancelled.bindAbortController(lateWork);
+    expect(lateWork.signal.aborted).toBe(true);
+    const selection = cancelled.beginCodexAccountSelection();
+    expect(selection.claimMainProfile()).toBe(false);
+    selection.release();
+  } finally {
+    for (const lease of leases) lease.release();
+  }
+});
+
+test("cancellation aborts all controllers when an abort listener releases the lease", () => {
+  const before = getActiveTurnCount();
+  const cancellation = new AbortController();
+  const lease = tryAdmitTurn("fixture-reentrant-release", cancellation.signal)!;
+  const first = new AbortController();
+  const second = new AbortController();
+  const reason = new Error("fixture reentrant cancellation");
+  lease.bindAbortController(first);
+  lease.bindAbortController(second);
+  first.signal.addEventListener("abort", () => lease.release(), { once: true });
+  try {
+    cancellation.abort(reason);
+    expect(first.signal.reason).toBe(reason);
+    expect(second.signal.reason).toBe(reason);
+    expect(getActiveTurnCount()).toBe(before);
+  } finally { lease.release(); }
+});
+
+test.each([false, true])("late cancelled controller unregister preserves its owner's admission (transferred=%s)", transferred => {
+  const before = activeRegistryMetrics().activeTurns;
+  const lanes = sessionLaneMetrics().active;
+  const nativeBefore = getNativeMainProfileRequestCount();
+  const ingress = new AbortController();
+  const lease = tryAdmitTurn(`fixture-late-controller-${transferred}`, ingress.signal)!;
+  const selection = lease.beginCodexAccountSelection();
+  const duringSelection = getNativeMainProfileRequestCount();
+  let released = 0;
+  lease.attach({ release() { released += 1; } });
+  if (transferred) lease.bindAbortController(new AbortController());
+  const reason = new Error("fixture cancelled before late binding");
+  ingress.abort(reason);
+  const late = new AbortController();
+  late.signal.addEventListener("abort", () => unregisterTurn(late), { once: true });
+  try {
+    lease.bindAbortController(late);
+    expect(late.signal.reason).toBe(reason);
+    expect(getActiveTurnCount()).toBe(before.active + 1);
+    expect(sessionLaneMetrics().active).toBe(lanes + 1);
+    expect(getNativeMainProfileRequestCount()).toBe(duringSelection);
+    expect(selection.claimMainProfile()).toBe(false);
+    expect(released).toBe(0);
+    expect(lease.isTransferred()).toBe(transferred);
+    unregisterTurn(late);
+    expect(getActiveTurnCount()).toBe(before.active + 1);
+    expect(activeRegistryMetrics().activeTurns.releaseMisses).toBe(before.releaseMisses);
+    lease.release();
+    expect(getActiveTurnCount()).toBe(before.active);
+    expect(sessionLaneMetrics().active).toBe(lanes);
+    expect(getNativeMainProfileRequestCount()).toBe(nativeBefore);
+    expect(released).toBe(1);
+  } finally { lease.release(); }
 });
