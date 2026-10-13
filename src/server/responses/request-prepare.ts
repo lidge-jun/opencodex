@@ -136,6 +136,13 @@ import {
   routeAllowedByScope,
 } from "../admission-model-scope";
 import { nativeContextLimits } from "../../codex/catalog";
+import type { ClientToolCatalogRestriction } from "../../lib/empty-tool-catalog";
+import {
+  currentTurnWireToolCatalogBody,
+  hasExplicitEmptyToolCatalog,
+  collectDeclaredWireToolNames,
+  collectDeclaredBareCustomWireToolNames,
+} from "../responses-undeclared-tool-guard";
 import { streamingContextOverflowResponse } from "./context-overflow";
 import {
   preAuthUpstreamHostCircuitKey,
@@ -381,8 +388,17 @@ export async function prepareResponsesRequest(
 
   let parsed: OcxParsedRequest;
   let toolBridgeMaps: ReturnType<typeof buildToolBridgeMaps>;
+  let clientToolCatalogRestriction: ClientToolCatalogRestriction | undefined;
   try {
     parsed = parseRequest(body);
+    // Capture before route rewrites or hosted sidecars can add tools; replayed catalogs are history.
+    const currentCatalog = currentTurnWireToolCatalogBody(parsed._rawBody, parsed._replayPrefixLen);
+    if (options.clientDeclaredEmptyToolCatalog === true || hasExplicitEmptyToolCatalog(currentCatalog)) {
+      clientToolCatalogRestriction = {
+        declaredToolNames: collectDeclaredWireToolNames(currentCatalog),
+        bareCustomToolNames: collectDeclaredBareCustomWireToolNames(currentCatalog),
+      };
+    }
     if (options.inboundWire === "anthropic") {
       parsed._nativeReasoningReplay = options.nativeReasoningReplay;
       parsed._nativeReasoningMint = options.nativeReasoningMint;
@@ -1453,6 +1469,7 @@ export async function prepareResponsesRequest(
   return {
     inboundWire,
     clientDeclaredEmptyToolCatalog: options.clientDeclaredEmptyToolCatalog === true,
+    clientToolCatalogRestriction,
     // Admission facts later route rewrites must not re-derive: the selector the caller sent and
     // the key scope as it stood when this request was admitted.
     inboundSelector,

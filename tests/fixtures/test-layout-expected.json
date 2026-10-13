@@ -1,4 +1,6 @@
 {
+  "explicit-empty-tool-catalog.test.ts": "responses",
+  "explicit-empty-tool-catalog-history.test.ts": "responses",
   "service-health-sentinel-policy.test.ts": "service",
   "service-health-sentinel-runner.test.ts": "service",
   "service-health-sentinel-launch.test.ts": "service",
