@@ -1,4 +1,5 @@
 {
+  "codex-history-pending-wal.test.ts": "codex-integration",
   "service-log.test.ts": "service",
   "service-health-sentinel-policy.test.ts": "service",
   "service-health-sentinel-runner.test.ts": "service",
@@ -1121,7 +1122,7 @@
   "umans-provider.test.ts": "providers", "uninstall.test.ts": "cli",
   "update-async-routes.test.ts": "server", "update-badge.test.ts": "update",
   "update-bun-ownership-lease.test.ts": "update", "update-desktop-badge.test.ts": "update",
-  "update-desktop-owner.test.ts": "update", "update-job.test.ts": "update",
+  "update-desktop-owner.test.ts": "update", "update-job.test.ts": "update", "update-standalone.test.ts": "update",
   "update-worker-launch.test.ts": "update", "update-notify.test.ts": "update",
   "update-npm-cache-preflight.test.ts": "update", "update-npm-invocation.test.ts": "update",
   "update-mise-launcher-target.test.ts": "update", "update-mise.test.ts": "update",
