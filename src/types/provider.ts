@@ -639,6 +639,8 @@ export interface OcxProviderConfig {
    * Responses `max_output_tokens`. Adapters still let an explicit request win.
    */
   defaultMaxOutputTokens?: number;
+  /** Opt-in Azure Responses floor for explicit positive output budgets; may raise the caller cap. */
+  minMaxOutputTokens?: number;
   /** Model-specific fallback output token budgets. Exact/model-pattern entries beat the provider default. */
   modelMaxOutputTokens?: Record<string, number>;
   /**

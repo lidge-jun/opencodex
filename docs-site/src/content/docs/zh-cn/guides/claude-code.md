@@ -254,7 +254,7 @@ Claude Code 2.1.278 接受包含 `claude` 或 `anthropic` 的 ID。以 `claude-`
 | 界面 | 格式 | 示例 |
 | --- | --- | --- |
 | Claude Code CLI | `ocx-claude-<provider>--<model>`（plain）或 `ocx-claude2-…`（escaped） | `ocx-claude-native--gpt-5.6-sol` |
-| Claude Desktop 3P | `claude-opus-4-8-p<code>`（3 字符 base36 配置槽） | `claude-opus-4-8-p01q` |
+| Claude Desktop 3P | `claude-fable-5-p<code>`（3 字符 base36 配置槽） | `claude-fable-5-p01q` |
 
 代理会按请求选择别名族：`?ids=cli` 或 `?ids=desktop` 优先；否则，`claude-code/*`
 user-agent 会获得易读的 CLI 形式，其他客户端会获得 Desktop 代码形式。两种别名族都会永久
@@ -317,6 +317,10 @@ v1 别名按字面解码（历史上 model ID 中包含的两字符序列 `~s` /
 
 可以在 Claude 页面调整压缩值。**警告：**如果将其提高到超过模型的实际窗口，该模型将无法正常
 工作——聊天会在触发摘要之前报错。
+
+规范化上下文超限错误时，只使用提供方错误消息的前 65,536 个 UTF-16 代码单元。
+后面的诊断信息或 token 数可能被丢弃，且不会添加截断标记。
+详细限制和 token 数处理条件见[英文指南](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling)。
 
 低于 1M 的原生 Anthropic 模型绝不会被自动标记。你自行导出的压缩值在启动槽位标记上始终优先（代理会使用**你的**
 值来判断哪些模型可以安全标记）。发现列表忽略该导出值并保持固定下限。手动编辑配置时填入的无效值会回退到 829,800。

@@ -382,3 +382,10 @@ Dashboard Fast-row persistence and client refresh follow the [Fast selector rows
 The [compaction routing override](responses-failover.md#compaction-routing-overrides) selects a target before the existing native compact or routed Responses transport is resolved.
 
 First-party managed native Messages retain the [serving UUID and observed CLI identity contract](../data-planes/protocol-paths.md#managed-native-messages). Identity headers do not authorize credentials or extend their destination scope.
+
+Qoder `runTurn` requests use the existing API-key pool only for pre-output failures explicitly
+permitted by Qoder's private classifier and safe to replay. CodeBuddy does not gain this recovery;
+self-authenticated Claude CLI does not authorize API-key recovery through `runTurn` either.
+Sharing the runner, parser or token injection is not recovery permission. Eligibility, attempt
+binding, streaming bounds and safe replay follow
+[runTurn API-key recovery](responses-failover.md#runturn-api-key-recovery).

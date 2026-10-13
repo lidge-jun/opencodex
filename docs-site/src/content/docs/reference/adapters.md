@@ -77,6 +77,11 @@ transport; it does not infer subscription attribution from the inbound protocol.
   collects `usage`. Providers listed in `reasoningDetailsModels` (MiniMax M-series) instead read
   structured `delta.reasoning_details` segments, whose `text` arrives as cumulative snapshots and
   is prefix-diffed, and replay preserved reasoning as a `reasoning_details` array.
+- For `api.mistral.ai`, both response paths also accept typed `text` and `thinking`
+  arrays. Text keeps its bytes and order; thinking stays separate from the answer.
+  Adjacent text blocks share inline-tag parsing; typed thinking resets it.
+  Unsupported or malformed array blocks return an upstream error. Other hosts
+  keep their existing behavior. This does not add Mistral signature replay.
 - Suppresses bare `<tool_call>` text when it duplicates a structured call, and collapses two
   immediately adjacent identical blocks when exactly one structured call agrees with their function
   and input. A doubled `input` is reduced to one copy, joined either directly or by one newline,

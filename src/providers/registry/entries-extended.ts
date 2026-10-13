@@ -1248,6 +1248,25 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     note: "OpenAI-compatible API gateway. Create a workspace API key at tokenlab.sh. Live discovery lists tool-capable chat models available to your key and delivery policy.",
   },
   {
+    // Modelflare: OpenAI-compatible relay at https://modelflare.dev/v1 (an Anthropic Messages
+    // surface also answers at https://modelflare.dev/v1/messages). Live-checked 2026-10-13 through
+    // the proxy: chat, streaming and tool calls succeed on Chat for all four seeded models, and a
+    // real `codex exec` turn completed on glm-5.3-flash. GET /v1/models lists ~77 rows mixing chat,
+    // image and video models, and includes deepseek-v4.1-flash, which answers 503 on every call,
+    // so the preset seeds the verified chat models statically instead of trusting live discovery.
+    // The conventional env reference derived from the id is ${MODELFLARE_API_KEY}.
+    id: "modelflare",
+    label: "Modelflare",
+    adapter: "openai-chat",
+    baseUrl: "https://modelflare.dev/v1",
+    authKind: "key",
+    dashboardUrl: "https://modelflare.dev",
+    preserveCustomDestination: true,
+    defaultModel: "glm-5.3-flash",
+    models: ["glm-5.3-flash", "claude-sonnet-5-5", "gpt-6.1-sol", "deepseek-v4-flash"],
+    note: "OpenAI-compatible relay for Claude, GPT, GLM and DeepSeek chat models. The seeded models were verified with chat, streaming and tool calls; deepseek-v4.1-flash is listed upstream but currently answers 503 and is left out. An ordinary key only reaches its own routing group's models; a Smart key reaches all seeded models. Image and video models are not served through this Chat preset. Upstream latency varies widely (a few seconds to about 30 s) with occasional transient 503s.",
+  },
+  {
     id: "opencode-free",
     label: "OpenCode Free",
     adapter: "openai-chat",

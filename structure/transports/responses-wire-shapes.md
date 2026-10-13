@@ -293,34 +293,34 @@ There is no rule that strips whatever precedes the first dot: a legitimate tool 
 one in another provider's vocabulary, and a replayed item names a call that already happened, which
 is the worst place to guess.
 
-Membership enforcement is that flag, `enforceDeclaredToolNames`, and only the `responses` inbound
-wire enforces. Explicit enforcement with no declared catalog also refuses client tool calls rather
-than treating the missing set as permission. A routed provider that names a tool the request never declared ends the turn there:
+Membership enforcement refuses a routed provider that names a tool the request never declared:
 `src/bridge/sse.ts` emits `response.failed` and `src/bridge/response-json.ts` returns a failed
 response, both carrying `undeclared client tool`. That is the #1700 contract and it stands. Codex
 executes a top-level tool call, so a hallucinated `apply_patch` — which under code mode exists only
 as a nested `tools.apply_patch(...)` helper inside `exec` — is refused before it reaches the
 runtime, where it previously surfaced as a bare `aborted` with the file untouched.
 
-The `chat` and `anthropic` inbound wires relay the call instead. This is a deliberate reversal of
-#1700's scope for those two wires, not an oversight. Both vendor specs make the client's own runner
-responsible for validating a tool call and then executing or denying it, and harnesses on those
-endpoints defer part of their catalog to conserve prompt tokens and discover the rest at runtime.
-Enforcing membership against a partial catalog killed those streams mid-turn with a 502 and cost the
-caller the whole turn. This proxy executes no tool call on any wire, so scoping enforcement off
-these two moves the decision to the party that already makes it rather than removing it.
+Translated lanes (`src/server/responses/run-turn-execution.ts`, `adapter-delivery.ts`) derive
+enforcement from `inboundWire`: only `responses` refuses an undeclared client-executed call. The
+native lane computes `undeclaredToolGuardActive` once in `passthrough-dispatch.ts`: `responses`
+refuses against any readable catalog; `chat` and `anthropic` refuse only under an explicit empty
+catalog (below). `passthrough-delivery.ts` reads that flag for SSE and buffered JSON alike, before
+continuation state is stored. Otherwise `chat` and `anthropic` replies relay the call: those
+harnesses may defer part of their catalog to conserve prompt tokens and discover the rest at
+runtime, and both vendor specs leave the client's own runner responsible for validating it —
+membership enforcement against a partial catalog would kill those streams mid-turn.
 
-An explicitly empty catalog still authorizes nothing on the wire that enforces. A request declaring
-an empty tool list is making a statement rather than omitting one, which is how the passthrough
-guard reads it through `clientExplicitWireToolCatalog` in
-`src/server/responses/passthrough-dispatch.ts`.
+An explicitly empty catalog authorizes nothing wherever enforcement runs — deferred wires
+included: `tools: []` is a statement, not an omission, and no deferred registry exists under
+it. The ingresses carry the fact as `clientDeclaredEmptyToolCatalog`
+(`src/server/chat-completions.ts`, `src/server/claude-messages.ts`) since translation drops an
+empty catalog with the rest; `hasExplicitEmptyToolCatalog` reads a verbatim `tools: []` or
+`additional_tools: []` too. Refusals keep `undeclared_tool_call` across the buffered envelope
+and endpoint projections, so Messages sees a deterministic `api_error`, never `overloaded_error`.
 
-The passthrough SSE/JSON refusal is wire-scoped too: only `responses` rejects undeclared calls.
-`undeclaredToolGuardActive` still gates namespace normalization and continuation suppression on every wire,
-standing down only for `authMode: "forward"` and requests with no catalog; relayed undeclared calls are not remembered.
-
-`src/server/responses/run-turn-execution.ts`, `src/server/responses/adapter-delivery.ts`, and
-`src/server/responses/passthrough-delivery.ts` scope membership refusal from `inboundWire` for SSE and JSON alike.
+`undeclaredToolGuardActive` gates refusal and continuation suppression, standing down only for
+`authMode: "forward"`, deferred catalogs, and absent ones; a refused turn never enters
+continuation state. `default.` normalization is scoped separately.
 
 ## Selection outlives the declaration check
 

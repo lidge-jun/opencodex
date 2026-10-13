@@ -441,6 +441,8 @@ export type AdapterEvent =
       /** Responses error type and code when the adapter has a structured provider failure. */
       errorType?: string;
       code?: string;
+      /** Proxy-internal permission to consider API-key recovery; never serialized. */
+      apiKeyRecovery?: true;
       retryable?: boolean;
       /**
        * Proxy-internal, never serialized: the upstream failed the turn before producing text or a

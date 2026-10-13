@@ -1131,6 +1131,160 @@
         "loginEnabled": true,
         "loginRegistration": "loaded"
       }
+    },
+    {
+      "name": "loaded job resubmitted through smd by Background Task Management (#7019)",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 0\n\tpath = (submitted by smd.104)\n\ttype = Submitted\n\tmanaged_by = com.apple.xpc.ServiceManagement\n\tstate = not running\n\n\tprogram = {APP}\n\tBTM uuid = 00000000-0000-0000-0000-000000000000\n\targuments = {\n\t\t{APP}\n\t\t--autostart\n\t}\n}"
+      },
+      "expect": {
+        "tray": "on",
+        "loginEnabled": true,
+        "loginRegistration": "loaded"
+      }
+    },
+    {
+      "name": "smd-submitted job without managed_by",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 0\n\tpath = (submitted by smd.104)\n\ttype = Submitted\n\tstate = not running\n\n\tprogram = {APP}\n\tBTM uuid = 00000000-0000-0000-0000-000000000000\n\targuments = {\n\t\t{APP}\n\t\t--autostart\n\t}\n}"
+      },
+      "expect": {
+        "tray": "unknown",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "smd-submitted job managed by something else",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 0\n\tpath = (submitted by smd.104)\n\ttype = Submitted\n\tmanaged_by = com.apple.runningboard\n\tstate = not running\n\n\tprogram = {APP}\n\tBTM uuid = 00000000-0000-0000-0000-000000000000\n\targuments = {\n\t\t{APP}\n\t\t--autostart\n\t}\n}"
+      },
+      "expect": {
+        "tray": "unknown",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "job submitted by another daemon",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 0\n\tpath = (submitted by runningboardd.179)\n\ttype = Submitted\n\tmanaged_by = com.apple.xpc.ServiceManagement\n\tstate = not running\n\n\tprogram = {APP}\n\tBTM uuid = 00000000-0000-0000-0000-000000000000\n\targuments = {\n\t\t{APP}\n\t\t--autostart\n\t}\n}"
+      },
+      "expect": {
+        "tray": "unknown",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "smd submitter without a pid",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 0\n\tpath = (submitted by smd.)\n\ttype = Submitted\n\tmanaged_by = com.apple.xpc.ServiceManagement\n\tstate = not running\n\n\tprogram = {APP}\n\tBTM uuid = 00000000-0000-0000-0000-000000000000\n\targuments = {\n\t\t{APP}\n\t\t--autostart\n\t}\n}"
+      },
+      "expect": {
+        "tray": "unknown",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "smd submitter pid is not numeric",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 0\n\tpath = (submitted by smd.x1)\n\ttype = Submitted\n\tmanaged_by = com.apple.xpc.ServiceManagement\n\tstate = not running\n\n\tprogram = {APP}\n\tBTM uuid = 00000000-0000-0000-0000-000000000000\n\targuments = {\n\t\t{APP}\n\t\t--autostart\n\t}\n}"
+      },
+      "expect": {
+        "tray": "unknown",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "smd-submitted job runs another copy",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 0\n\tpath = (submitted by smd.104)\n\ttype = Submitted\n\tmanaged_by = com.apple.xpc.ServiceManagement\n\tstate = not running\n\n\tprogram = {OTHER_APP}\n\tBTM uuid = 00000000-0000-0000-0000-000000000000\n\targuments = {\n\t\t{OTHER_APP}\n\t\t--autostart\n\t}\n}"
+      },
+      "expect": {
+        "tray": "other-copy",
+        "loginEnabled": false
+      }
+    },
+    {
+      "name": "smd-submitted job whose override changes during the re-read",
+      "plist": {
+        "Label": "OpenCodex",
+        "RunAtLoad": true,
+        "ProgramArguments": [
+          "{APP}",
+          "--autostart"
+        ]
+      },
+      "disabled": "disabled services = {\n\t\"com.apple.example\" => disabled\n\t\"OpenCodex\" => enabled\n}",
+      "loaded": {
+        "stdout": "gui/{UID}/OpenCodex = {\n\tactive count = 0\n\tpath = (submitted by smd.104)\n\ttype = Submitted\n\tmanaged_by = com.apple.xpc.ServiceManagement\n\tstate = not running\n\n\tprogram = {APP}\n\tBTM uuid = 00000000-0000-0000-0000-000000000000\n\targuments = {\n\t\t{APP}\n\t\t--autostart\n\t}\n}"
+      },
+      "disabledAfterFirstRead": "disabled services = {\n\t\"OpenCodex\" => enabled\n}",
+      "expect": {
+        "tray": "unknown",
+        "loginEnabled": false
+      }
     }
   ]
 }

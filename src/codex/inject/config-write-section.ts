@@ -1,7 +1,7 @@
 import type { AtomicWriteHooks } from "../../config/atomic-write";
 import { existsSync, readFileSync } from "node:fs";
 import { withConfigMutationLockSync } from "../../config";
-import { ConfigWriteLockRefusal, assertConfigWriteDestination, publishConfigWriteTarget, watchConfigWriteTargets, withConfigWriteLockHeld, type LockHandle } from "../config-write-lock";
+import { ConfigWriteLockRefusal, assertConfigWriteDestination, publishConfigWriteTarget, removeConfigWriteEntry, watchConfigWriteTargets, withConfigWriteLockHeld, type LockHandle } from "../config-write-lock";
 import { CODEX_CONFIG_PATH, CODEX_PROFILE_PATH } from "../paths";
 import { getCodexHome } from "../paths";
 import { codexHomeIsAbsent } from "../codex-home-owner";
@@ -15,6 +15,9 @@ export function beginCodexWriteSection(held: LockHandle): void {
 export function publishCodexArtifact<T>(path: string, held: LockHandle | undefined, run: (destination: string, hooks: AtomicWriteHooks) => T): T {
   if (!held) throw new Error("Codex artifact publication requires a held configuration lock");
   return publishConfigWriteTarget(CODEX_CONFIG_PATH, held, path, run);
+}
+export function removeCodexProfileEntry(held: LockHandle): void {
+  removeConfigWriteEntry(CODEX_CONFIG_PATH, held, CODEX_PROFILE_PATH);
 }
 /** Courtesy cleanup re-reads provider ownership inside the same config section. */
 export function cleanExternalProviderJournal(beforeClientWrite?: () => void): void {

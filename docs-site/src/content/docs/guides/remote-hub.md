@@ -37,6 +37,11 @@ listener, not the management port. Local clients use the configured loopback com
   Advisor model used by managed native Anthropic Messages. Bare model IDs and the hub's configured
   `provider/model` names are accepted. A disallowed or unnamed Advisor destination returns HTTP 403
   before provider dispatch; provider-only and unrestricted keys retain their existing scope.
+- GitHub Copilot Auto rechecks the concrete model selected during negotiation and
+  renewal. A model outside the client's allowed scope ends the request with
+  `model_not_allowed_for_key` (HTTP 403 before streaming, or a terminal error in
+  an already-started stream). Credential rotation or a fallback target cannot
+  override that refusal.
 - A raw management admin token can perform ordinary administration, but it cannot mint a browser
   session or authorize consent-bearing actions such as starring the repository. Those actions
   require a server-issued `gui-session`, matching browser origin, and CSRF token.

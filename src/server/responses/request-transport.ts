@@ -56,6 +56,11 @@ import { stampOAuthAccountLabel, usesApiKeyAccount } from "../../providers/label
 import { resolveProviderTransport } from "../../providers/xai-transport";
 import { captureRouteStaticPolicy } from "../../router";
 import { CopilotAutoHttpError, resolveCopilotAuto } from "../../providers/github-copilot-auto";
+import {
+  AdmissionModelDeniedError,
+  admissionModelDeniedResponse,
+  assertRouteAllowedByScope,
+} from "../admission-model-scope";
 import { renameRoutedIdentityInContext } from "../../adapters/identity";
 import { resolveCopilotApiBaseUrl } from "../../oauth/github-copilot";
 import {
@@ -109,6 +114,8 @@ export async function prepareResponsesTransport(
     | "inboundWire"
     | "selectedForwardHeaders"
     | "translatorBudget"
+    | "inboundSelector"
+    | "admissionScope"
   >,
 ) {
   const { config, logCtx, options, req } = requestContext;
@@ -297,6 +304,7 @@ export async function prepareResponsesTransport(
   const copilotRequestedModel = route.modelId;
   /** Project only bounded Copilot refusal metadata; upstream bodies and session tokens never reach the client. */
   const copilotRefusalResponse = (error: unknown): Response | undefined => {
+    if (error instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(error);
     if (!(error instanceof CopilotAutoHttpError) || ![401, 403, 429].includes(error.status)) return;
     const response = formatErrorResponse(error.status, error.status === 429 ? "rate_limit_error" : "authentication_error",
       error.message);
@@ -357,6 +365,13 @@ export async function prepareResponsesTransport(
       replayOAuthCredentialSnapshot = { accountId: refreshed.accountId, generation: refreshed.generation };
       selected = await negotiate();
     }
+    assertRouteAllowedByScope(
+      // The scope captured at admission: a key edited or removed while negotiation was in
+      // flight must not widen this request. The refusal names the caller's own selector.
+      requestState.admissionScope,
+      requestState.inboundSelector,
+      { providerName: route.providerName, modelId: selected.modelId },
+    );
     copilotSessionExpiresAt = selected.expiresAt ?? Infinity;
     route.provider = selected.provider;
     route.modelId = selected.modelId;
@@ -725,6 +740,7 @@ export async function prepareResponsesTransport(
         let nextAdapter: ProviderAdapter;
         try { nextAdapter = await refreshDispatchAdapter(requestParsed); }
         catch (error) {
+          if (error instanceof AdmissionModelDeniedError) throw error;
           const refusal = copilotRefusalResponse(error);
           if (refusal) return refusal;
           throw error;

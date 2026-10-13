@@ -5,7 +5,6 @@ import { applyExplicitChatReasoningWirePolicy } from "./openai-chat/reasoning-wi
 import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "./base";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig, OcxUsage } from "../types";
 import { modelInList } from "../types";
-import { createInlineThinkContentSplitter, splitInlineThinkContent } from "./inline-think-tags";
 import { mapReasoningEffort } from "../reasoning-effort";
 import { debugProviderDiagnostic } from "../lib/debug";
 import { sseFieldValue } from "../lib/sse-decoder";
@@ -28,6 +27,7 @@ import {
   type InvalidToolCallDiagnostic,
 } from "./openai-chat/tool-call-validation";
 import {
+  chatContentEvents, createChatContentSplitter, splitChatContentEvents,
   createReasoningDetailSnapshotTracker,
   invalidChoicesEvent,
   invalidToolCallsEvent,
@@ -368,7 +368,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       const reasoningDetailsOptIn = modelInList(provider.reasoningDetailsModels, lastRequestedModelId ?? "");
       // A gateway with no server-side reasoning parser leaves thinking inline in `content` as
       // <think> blocks, which would otherwise render as the answer. Passthrough unless opted in.
-      const inlineThink = createInlineThinkContentSplitter(provider.inlineThinkTagModels, lastRequestedModelId, budget);
+      const inlineThink = createChatContentSplitter(provider, lastRequestedModelId, budget);
       const emitContent = function* (events: AdapterEvent[]): Generator<AdapterEvent> {
         for (const event of events) {
           // Any other event keeps its place behind held text instead of overtaking it.
@@ -444,8 +444,9 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
             const reasoningText = reasoningTextFrom(delta);
             if (reasoningText !== undefined) yield* toolCallContent.hold({ type: "reasoning_raw_delta", text: reasoningText });
           }
-          if (typeof delta.content === "string" && delta.content.length > 0) {
-            yield* emitContent(inlineThink.feed(delta.content));
+          for (const event of chatContentEvents(delta.content, provider.baseUrl, pendingUsage)) {
+            if (event.type === "error") return yield* terminateWithError(event);
+            yield* emitContent(inlineThink.feed(event));
           }
 
           const rawToolCalls = delta.tool_calls;
@@ -767,7 +768,9 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         }
         if (reasoningText !== undefined) events.push({ type: "reasoning_raw_delta", text: reasoningText });
         const contentStart = events.length;
-        if (typeof msg.content === "string") events.push(...splitInlineThinkContent(provider.inlineThinkTagModels, lastRequestedModelId, budget, msg.content));
+        const contentEvents = splitChatContentEvents(msg.content, provider, lastRequestedModelId, budget, usage);
+        if (contentEvents.some(event => event.type === "error")) return contentEvents;
+        events.push(...contentEvents);
         const contentEnd = events.length;
         const answerText = events.slice(contentStart).map(event => (event.type === "text_delta" ? event.text : "")).join("");
         // Each call holds the delta event it emitted, so the batch repair sets its arguments later.

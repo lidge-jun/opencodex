@@ -125,11 +125,13 @@ export function bindRouteReasoningReplayScope(args: {
   if (owner) parsed._nativeReasoningBoundOwner = owner;
   else delete parsed._nativeReasoningBoundOwner;
   if (parsed._nativeReasoningReplay?.size) {
+    const rejected = new Set<string>();
     for (const [blob, tag] of parsed._nativeReasoningReplay) {
       if (!nativeReasoningTagMatches(nativeReasoningTag(owner, blob), tag)) {
-        stripNativeReasoningBlob(parsed, blob);
+        rejected.add(blob);
       }
     }
+    if (rejected.size) stripNativeReasoningBlobs(parsed, rejected);
   }
   const continuationDestinationIdentity = providerContinuationDestinationIdentity(parsed, provider);
   const continuationOwner = providerContinuationOwnerFromReplayIdentity(
@@ -169,11 +171,11 @@ export function bindRouteReasoningReplayScope(args: {
   bindProviderContinuationForRoute(parsed, continuationOwner);
 }
 
-function stripNativeReasoningBlob(parsed: OcxParsedRequest, blob: string): void {
+function stripNativeReasoningBlobs(parsed: OcxParsedRequest, rejected: ReadonlySet<string>): void {
   const input = (parsed._rawBody as { input?: unknown } | undefined)?.input;
   if (Array.isArray(input)) {
     for (const item of input) {
-      if (item && typeof item === "object" && item.type === "reasoning" && item.encrypted_content === blob) {
+      if (item && typeof item === "object" && item.type === "reasoning" && rejected.has(item.encrypted_content)) {
         delete item.encrypted_content;
         delete item.id;
       }
@@ -187,7 +189,8 @@ function stripNativeReasoningBlob(parsed: OcxParsedRequest, blob: string): void 
         const item: unknown = JSON.parse(part.signature);
         if (!item || typeof item !== "object" || Array.isArray(item)) continue;
         const reasoning = item as Record<string, unknown>;
-        if (reasoning.type !== "reasoning" || reasoning.encrypted_content !== blob) continue;
+        if (reasoning.type !== "reasoning" || typeof reasoning.encrypted_content !== "string"
+          || !rejected.has(reasoning.encrypted_content)) continue;
         delete reasoning.encrypted_content;
         delete reasoning.id;
         part.signature = JSON.stringify(reasoning);

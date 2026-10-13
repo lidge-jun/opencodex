@@ -153,3 +153,103 @@ describe("Responses passthrough deferred tool delivery by inbound wire", () => {
     }
   }
 });
+
+// An explicit empty catalog is still a caller declaration — deny-all — even on wires whose
+// absent or partial catalogs may be completed later by the client's own tool registry.
+// The refusal must stay a deterministic catalog violation, never a retryable overload.
+describe("explicit empty tool catalog is deny-all on deferred wires", () => {
+  for (const wire of ["chat", "anthropic"] as const) {
+    for (const stream of [true, false]) {
+      test(`${wire} ${stream ? "stream" : "buffered"}: tools:[] refuses an upstream Write`, async () => {
+        const upstream = mockResponsesUpstream("Write", stream);
+        saveConfig({
+          port: 0, defaultProvider: "mock",
+          providers: { mock: {
+            adapter: "openai-responses", apiKey: "mock-key", authMode: "key",
+            baseUrl: `${upstream.server.url.toString().replace(/\/$/, "")}/v1`, allowPrivateNetwork: true,
+          } },
+        } as OcxConfig);
+        const server = startServer(0);
+        try {
+          const body = wire === "anthropic"
+            ? { model: "mock/test-model", stream, max_tokens: 128,
+                messages: [{ role: "user", content: "write to todo" }], tools: [] }
+            : { model: "mock/test-model", stream,
+                messages: [{ role: "user", content: "write to todo" }], tools: [] };
+          const result = await fetch(new URL(endpoints[wire], server.url), {
+            method: "POST", headers: { "content-type": "application/json", "anthropic-version": "2023-06-01" },
+            body: JSON.stringify(body),
+          });
+          const text = await result.text();
+          expect(upstream.seen).toHaveLength(1);
+          expect(text).toContain("undeclared client tool");
+          expect(text).toContain("Write");
+          if (wire === "anthropic") {
+            // Deterministic refusal: api_error identity, never a retryable overload.
+            expect(text).not.toContain("overloaded_error");
+            expect(text).toContain("undeclared_tool_call");
+            if (stream) {
+              expect(result.status).toBe(200);
+              expect(text).toContain("api_error");
+            } else {
+              expect(result.status).toBe(502);
+              expect(JSON.parse(text).error.type).toBe("api_error");
+            }
+          } else {
+            expect(text).toContain("undeclared_tool_call");
+            if (stream) expect(result.status).toBe(200);
+            else expect(result.status).toBe(502);
+          }
+        } finally {
+          await server.stop(true);
+          upstream.server.stop(true);
+        }
+      });
+    }
+  }
+});
+
+// Tool-search style discovery lands the provider's expanded catalog back in the request as
+// `additional_tools`/`tool_search_output` input items. Those are THIS turn's declarations, so
+// a call they name is registered, not invented — the refusal is only for a catalog that never
+// authorized the name.
+describe("registered deferred catalog input items authorize calls", () => {
+  for (const itemType of ["additional_tools", "tool_search_output"] as const) {
+    for (const stream of [true, false]) {
+      test(`responses ${stream ? "stream" : "buffered"}: Write declared via ${itemType}`, async () => {
+        const upstream = mockResponsesUpstream("Write", stream);
+        saveConfig({
+          port: 0, defaultProvider: "mock",
+          providers: { mock: {
+            adapter: "openai-responses", apiKey: "mock-key", authMode: "key",
+            baseUrl: `${upstream.server.url.toString().replace(/\/$/, "")}/v1`, allowPrivateNetwork: true,
+          } },
+        } as OcxConfig);
+        const server = startServer(0);
+        try {
+          const result = await fetch(new URL(endpoints.responses, server.url), {
+            method: "POST", headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              model: "mock/test-model", stream,
+              input: [
+                { type: "message", role: "user", content: [{ type: "input_text", text: "write to todo" }] },
+                { type: itemType, tools: [{ type: "function", name: "Write", description: "Write a file", parameters: { type: "object", properties: { path: { type: "string" } } } }] },
+              ],
+              tools: [{ type: "function", name: "Read", description: "Read a file", parameters: { type: "object", properties: { path: { type: "string" } } } }],
+            }),
+          });
+          const text = await result.text();
+          expect(upstream.seen).toHaveLength(1);
+          expect(result.status).toBe(200);
+          expect(text).not.toContain("undeclared client tool");
+          expect(text).not.toContain('"error"');
+          if (stream) expect(text).toContain("response.completed");
+          else expect(JSON.parse(text).output[0].name).toBe("Write");
+        } finally {
+          await server.stop(true);
+          upstream.server.stop(true);
+        }
+      });
+    }
+  }
+});

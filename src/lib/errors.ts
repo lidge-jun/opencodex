@@ -18,6 +18,13 @@ export const ENCRYPTED_FUNCTION_OUTPUT_REJECTION =
  */
 export const SEND_BUDGET_EXHAUSTED_CODE = "request_send_budget_exhausted";
 export const SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE = "spend_ledger_storage_unavailable";
+/**
+ * Wire code for the undeclared-tool guard's deterministic refusal. Endpoint translators
+ * read it to keep the refusal non-retryable instead of folding it into the transient
+ * upstream-error class. Declared here rather than in the guard module because the shared
+ * envelope formatter decides whether the identity survives serialization.
+ */
+export const UNDECLARED_TOOL_CALL_ERROR_CODE = "undeclared_tool_call";
 
 /** First nonblank string across the canonical upstream error paths, in priority order. */
 export function upstreamErrorMessageFromPayload(payload: unknown): string | undefined {

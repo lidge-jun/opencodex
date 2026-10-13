@@ -299,7 +299,7 @@ Claude Code 2.1.129 이상은 `GET /v1/models?limit=1000`에서 게이트웨이 
 | 화면 | 형식 | 예시 |
 | --- | --- | --- |
 | Claude Code CLI | `ocx-claude-<provider>--<model>` (plain) 또는 `ocx-claude2-…` (escaped) | `ocx-claude-native--gpt-5.6-sol` |
-| Claude Desktop 3P | `claude-opus-4-8-p<code>` (3자리 base36 프로필 슬롯) | `claude-opus-4-8-p01q` |
+| Claude Desktop 3P | `claude-fable-5-p<code>` (3자리 base36 프로필 슬롯) | `claude-fable-5-p01q` |
 
 프록시는 요청마다 계열을 골라요. `?ids=cli` 또는 `?ids=desktop`이 우선하고, 지정하지 않으면
 `claude-code/*` user-agent에는 읽기 쉬운 CLI 형식을, 다른 클라이언트에는 Desktop 코드를
@@ -369,6 +369,10 @@ Claude Code는 알 수 없는 모델의 컨텍스트를 200k 토큰으로 계산
 
 **연결 → Claude**에서 압축 값을 조절할 수 있어요. **경고:** 모델의 실제 컨텍스트 창보다 크게 올리면
 요약을 시작하기 전에 채팅 오류가 발생해요.
+
+컨텍스트 초과 오류를 정규화할 때는 제공자 오류 메시지의 첫 65,536 UTF-16 코드 단위만 사용해요.
+뒤쪽 진단 내용이나 토큰 수는 별도 잘림 표시 없이 빠질 수 있어요.
+자세한 제한과 토큰 수 처리 조건은 [영문 가이드](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling)를 참고하세요.
 
 1M 미만인 네이티브 Anthropic 모델에는 자동으로 표식을 붙이지 않아요. 직접 내보낸 압축 값은 실행 슬롯 표식에서 항상
 우선하며, 프록시는 **사용자가 지정한** 값을 기준으로 어떤 모델에 안전하게 표식을 붙일지 결정해요.

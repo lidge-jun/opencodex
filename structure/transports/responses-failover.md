@@ -198,16 +198,7 @@ relay identity markers are restored on the wrapped response so Windows/Bun strea
 logging retain their existing owners. A failed child keeps its physical attempt receipt and usage,
 while the successful child remains the logical request result.
 
-A `runTurn` adapter has the equivalent boundary in `preflightAdapterEvents`
-(`src/adapters/run-turn-queue.ts`), streaming and non-streaming alike: when its first meaningful
-event is a tool call the current request did not declare, and no earlier replay-unsafe heartbeat
-recorded a side effect, `src/server/responses/run-turn-execution.ts` projects the fail-closed
-undeclared-tool refusal as a pre-commit 502 so the combo can hop with the unchanged catalog. After
-any output or a replay-unsafe heartbeat the refusal stays with that child. Chat Completions and
-Anthropic Messages inbound requests do not use this classification.
-The same heartbeat also decides an ordinary pre-output adapter error or an empty end: after a
-replay-unsafe heartbeat the child's 502 is marked non-replayable, so the combo stops on it instead
-of sending the turn to the next target.
+A `runTurn` adapter has the equivalent boundary in `preflightAdapterEvents` (`src/adapters/run-turn-queue.ts`), streaming and non-streaming alike: when its first meaningful event is a tool call the current request did not declare, and no earlier replay-unsafe heartbeat recorded a side effect, `src/server/responses/run-turn-execution.ts` projects the fail-closed undeclared-tool refusal as a pre-commit 502 so the combo can hop with the unchanged catalog. After any output or a replay-unsafe heartbeat the refusal stays with that child. Chat Completions and Anthropic Messages inbound requests do not use this classification. The same heartbeat also decides an ordinary pre-output adapter error or an empty end: after a replay-unsafe heartbeat the child's 502 is marked non-replayable, so the combo stops on it instead of sending the turn to the next target.
 
 HTTP 410 remains terminal by default. It advances and cools only the exact combo target when the
 structured code or message explicitly identifies a model lifecycle event (end-of-life, retired,
@@ -598,3 +589,12 @@ provider cannot establish the original serving identity and remains portable.
 
 The `anthropic` OAuth and `anthropic-apikey` registry entries use native `anthropic-speed` FastWire only for `claude-opus-5-5`, `claude-opus-5` and `claude-opus-4-8`; there is no provider-wide Fast fallback. In the main adapter dispatch loop, a fast refusal naming fast mode or the `speed` parameter (400 or 429), or a 429 with a fast-pool remaining header of zero, may use one shared-budget repair permit for a standard-speed resend.
 The resend charges the root workflow send counter once without a second request-budget charge. The request retains the drop decision through later rebuilds and records `anthropic-fast-downgrade`, cause `parameter-rejected`, and a `downgraded` / `response-declined` tier outcome. A spent budget leaves the original refusal intact; generic 429 and 529 responses keep their ordinary handling. This repair precedes same-target 429 waiting and credential rotation. Continuation and sidecar owners do not use this repair. Coverage: `tests/routing/fastwire-policy.test.ts` and `tests/responses/responses-anthropic-fast-downgrade.test.ts`.
+
+## runTurn API-key recovery
+
+- **Eligibility:** `src/server/responses/run-turn-execution.ts` arms API-key-pool preflight only for the Qoder adapter with a multi-key pool. A pre-output 401/429 is eligible only with internal `apiKeyRecovery: true` from the [Qoder failure classifier](../providers-and-adapters.md); status or quota text alone grants no permission. CodeBuddy and self-authenticated Claude CLI do not authorize API-key recovery through `runTurn`.
+- **Replay boundary:** Recovery reuses the preflight output/replay-unsafe boundary and credential-hop/physical-send budgets. Local refusals, cancellation, prior output, replay-unsafe heartbeats, missing permission and single-key configurations do not authorize key rotation or key cooldowns through this path.
+- **Streaming bound:** Qoder key-pool preflight waits at most the resolved stall timeout, using the default finite bound when the watchdog is disabled. Reaching this bound returns the SSE Response rather than blocking it indefinitely; it does not by itself make replay unsafe. Recovery remains possible in-stream until content or a replay-unsafe event arrives. Existing OAuth preflight behavior is unchanged.
+- **Attempt ownership:** Each attempt captures its adapter binding at the physical-send observation. Recovery passes that binding's key and `_apiKeyAttempt` to the existing API-key 401/429 helpers, so a late failure cannot cool or overwrite a newer manual selection. A replacement rebuilds the adapter and replay scope before dispatch. Failed credentials are not resent in the request; the initial pool size and shared budget bound attempts.
+- **Cooldown:** Only an eligible 429 API-key recovery enters this cooldown path. When no reset time is known, the failed key receives the existing default cooldown. Nonrecoverable quota classifications do not create a key cooldown through this path; no daily reset is inferred.
+- **Regression coverage:** `tests/providers/qoder-adapter.test.ts` covers classification; `tests/server/server-key-failover-e2e.test.ts` covers mocked/local key recovery and replay boundaries; `tests/oauth/generic-oauth-failover.test.ts` guards recovery-site accounting.

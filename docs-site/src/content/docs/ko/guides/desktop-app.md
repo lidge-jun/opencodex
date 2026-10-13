@@ -89,8 +89,12 @@ macOS에서 메뉴의 **Start at Login** 항목은 시작 안전 페이지도 �
 뜻이니 그 사본에서 끄세요. **registered app is missing**은 로그인 항목이 더 이상 없는 앱을
 가리킨다는 뜻이니 `~/Library/LaunchAgents/OpenCodex.plist`를 지우고 항목을 다시 켜세요.
 **status unknown**은 등록을 읽지 못했다는 뜻입니다. 앱이 프록시를 실행하는 동안 시작 안전 페이지는
-백그라운드 서비스와 런처 shim 설치를 막아 둡니다. 이를 대신 쓰려면 OpenCodex를 종료하고
-터미널에서 `ocx service install` 또는 `ocx codex-shim install`을 실행하세요.
+백그라운드 서비스 설치를 막아 둡니다. 서비스를 대신 쓰려면 OpenCodex를 종료하고
+터미널에서 `ocx service install`을 실행하세요. Codex 런처 shim은 이 페이지에서 설치할 수 있습니다.
+Codex를 실행할 때 프록시가 없으면 shim은 OpenCodex가 프록시를 다시 띄우기를 기다리고, macOS에서
+앱이 종료돼 있으면 앱을 열며, 그 밖의 경우에는 두 번째 프록시를 띄우지 않고 오류를 알립니다.
+shim이 "활성화 미확인"으로 보이면 셸 시작 파일의 다른 PATH 설정 뒤에
+`. ~/.opencodex/codex-shell-env.sh`를 추가하세요.
 
 번들 CLI 경로는 macOS에서 `/Applications/OpenCodex.app/Contents/MacOS/ocx`,
 Linux deb 패키지에서 `/usr/bin/ocx`입니다. 해당 실행 파일에 `status`를 붙여
