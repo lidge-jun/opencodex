@@ -140,7 +140,7 @@ are tried before the failure reaches `src/oauth/index.ts`. `src/oauth/store.ts` 
 and operator pause. Once that generation's access token expires, account summaries project `needsReauth: true` and the active login projects `loggedIn: false`. `src/oauth/health.ts` uses
 the same generation/expiry predicate with its supplied observation time, so account-list health and CLI diagnostics project `reauth_required` with `refresh_failed`; `ocx doctor` warns with a
 login action. The internal terminal flag stays clear so a later refresh remains eligible; successful refresh or credential replacement
-clears the evidence. Desktop input errors, network failures, and 5xx responses create no evidence. No upstream description or credential metadata enters the status response.
+clears the evidence. Desktop input errors, network failures, and 5xx responses create no evidence. No upstream description or credential metadata enters the status response. The desktop refresh endpoint answers a dead refresh token with HTTP 401 and a bare `{"message":"Bad credentials"}` body; only that exact pair on the desktop endpoint is a terminal grant refusal, surfaced as the fixed `bad_credentials` code and quarantined like an allowlisted OAuth error.
 
 Kiro's account quota cache persists quota and an optional exhaustion verdict under one opaque account key and a non-secret login identity. Hydration admits only matching live
 accounts and bounds quota and verdict independently by reset and ten-minute TTL; a failed probe keeps the same-login last-good display bar. The protected OAuth store rotates

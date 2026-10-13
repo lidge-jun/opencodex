@@ -473,6 +473,10 @@ a later successful automatic refresh also clears the attention state. This statu
 classify the refresh grant as revoked or disable future refresh attempts. Network and server
 errors do not trigger this status.
 
+For desktop-auth accounts, an HTTP 401 with exactly `Bad credentials` requires a new login
+and immediately marks the rejected credential generation as needing re-authentication.
+Other messages, statuses, and AWS SSO responses do not trigger this desktop-specific rule.
+
 ### Kiro credential import
 
 The dashboard offers native Builder ID, Google, and GitHub device login without Kiro CLI.
