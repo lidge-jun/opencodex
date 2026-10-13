@@ -6,14 +6,15 @@ import { canonicalDirectory } from "./desktop-remote-store-io";
 import {
   resolveDesktop3pConfigLibraryPath, parseMetadata, SAFE_DESKTOP_PROFILE_ID, isRecord,
   isOwnedDesktopEntry, isOwnedDesktopGatewayEntry, profilePath, readDesktopProfileForeignKeys, readDesktopLibraryText, readDesktopLibraryBytes,
+  readOptionalDesktopLibraryBytes,
   type Desktop3pConfigLibraryOptions, type Desktop3pMetadata, type Desktop3pMetadataEntry,
 } from "./desktop-3p-library";
 export { resolveDesktop3pConfigLibraryPath, type Desktop3pConfigLibraryOptions } from "./desktop-3p-library";
 import { createHash, randomUUID } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, lstatSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, lstatSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { atomicWriteFile, readConfigDiagnostics, withConfigMutationLockSync } from "../config";
-import { atomicWriteFileNoFollow } from "../config/atomic-write";
+import { atomicWriteFileNoFollow, atomicWriteFileStreamed } from "../config/atomic-write";
 import { claudeDesktopIntegrationEnabled } from "../codex/desired-state";
 import type { OcxClaudeDesktopProfile } from "../types";
 import {
@@ -852,7 +853,7 @@ function writeDesktop3pConfigWithGenerator(
       atomicWriteFile(metadataPath, JSON.stringify({ ...metadata, appliedId: id, entries }, null, 2) + "\n");
     } catch (metaError) {
       // Rollback: restore the backed-up config if metadata write fails.
-      if (backupPath && existsSync(backupPath)) copyFileSync(backupPath, configPath);
+      if (backupPath) writeDesktopConfigBytes(configPath, readDesktopLibraryBytes(backupPath));
       throw metaError;
     }
     return { written: true, path: configPath, fingerprint };
@@ -869,7 +870,13 @@ export function atomicReplaceDesktopConfig(
   writer: (path: string, content: string) => void = atomicWriteFile,
 ): { backupPath?: string } {
   const backupPath = `${path}.bak`;
-  if (existsSync(path)) copyFileSync(path, backupPath);
+  const previous = readOptionalDesktopLibraryBytes(path);
+  if (previous !== undefined) writeDesktopConfigBytes(backupPath, previous);
   writer(path, content);
-  return existsSync(backupPath) ? { backupPath } : {};
+  return previous === undefined ? {} : { backupPath };
+}
+
+/** Publish the verified bytes without reopening the source or decoding its backup contents. */
+function writeDesktopConfigBytes(path: string, bytes: Buffer): void {
+  atomicWriteFileStreamed(path, descriptor => { writeFileSync(descriptor, bytes); });
 }

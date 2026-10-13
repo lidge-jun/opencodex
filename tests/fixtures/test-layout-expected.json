@@ -579,6 +579,7 @@
   "deepseek-inbound-wire.test.ts": "providers", "deepseek-reasoning-replay-gaps.test.ts": "providers",
   "deepseek-reasoning-replay.test.ts": "providers", "deepseek-responses-item-id-repair.test.ts": "providers",
   "desktop-3p-guard.test.ts": "clients", "desktop-3p-removal.test.ts": "clients",
+  "desktop-3p-write-files.test.ts": "clients",
   "desktop-3p.test.ts": "clients", "desktop-app-restart.test.ts": "clients",
   "desktop-cli-contracts.test.ts": "clients", "desktop-exit-ownership.test.ts": "clients",
   "desktop-cli-command-surface.test.ts": "clients",
