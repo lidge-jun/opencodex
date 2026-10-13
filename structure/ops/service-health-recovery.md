@@ -51,6 +51,7 @@ stop; a drain that began during startup prevents the spawn (`didRunDrainStartHoo
   (wall-clock lag monitor, so sleep counts) voids the streak.
 
 `src/service/health-sentinel-probe.ts` asks `/healthz` through `directLocalHttpFetch`.
+Probes accept only numeric IPv4/IPv6 destinations. Default and localhost binds use numeric loopback, as do wildcard binds; the wildcard test is the server's `isWildcardHostname` (`src/codex/loopback-target.ts`), so `*`, `0` and every all-zero spelling count. Other DNS bind names make the sentinel stand down without probing; the proxy remains available. The first normalized address and port remain pinned for the run, and runtime-record changes stand down both before probing and before termination.
 
 ## Binding the kill to the proxy
 
@@ -70,9 +71,9 @@ stop; a drain that began during startup prevents the spawn (`didRunDrainStartHoo
   between that check and `kill` while the parent exits, is reaped, and a new process receives the
   same id, the signal reaches that process. Bun exposes no pidfd or process handle on POSIX.
 
-The final runtime-record re-read and the durable `intent` write run under the service ownership
+The lease-held runtime-record re-read and the durable `intent` write run under the service ownership
 mutation lease (`src/service/ownership-mutation-lease.mjs`, 500 ms wait, no subprocess); a busy lease
-defers. Right before the kill the runner re-checks that the last failing observation is at most
+defers. After releasing the lease, the final runtime-record read precedes the evidence-age and target-exit checks, so time spent on that read cannot authorize termination on stale observations. Right before the kill the runner re-checks that the last failing observation is at most
 5 s old on the wall clock (and not in the future); older evidence is discarded, the `intent` entry is
 settled as `skipped`, and a fresh failing streak is required. The lease is released before the kill, because on Windows the sentinel may end with the
 proxy and a held lease would delay the replacement's startup. Every history write takes the lease.

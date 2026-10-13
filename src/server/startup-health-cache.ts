@@ -117,6 +117,7 @@ function conservativeFallback(config: Pick<OcxConfig, "codexAutoStart">): Startu
     serviceSupported: process.platform === "win32" || process.platform === "darwin" || process.platform === "linux",
     shimInstalled: shim.installed,
     shimHealthy: shim.healthy,
+    ...(shim.activationPending ? { shimActivationPending: true } : {}),
     platform: process.platform,
     diagnosticStale: true,
   });

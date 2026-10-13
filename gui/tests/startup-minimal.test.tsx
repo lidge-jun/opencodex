@@ -43,6 +43,7 @@ let brokenStarters = false;
 let desktopFacts: Record<string, unknown> | null = null;
 let staleReading = false;
 let healthFails = false;
+let activationPending = false;
 let releaseInstall: (() => void) | null = null;
 
 beforeEach(() => {
@@ -52,6 +53,7 @@ beforeEach(() => {
   desktopFacts = null;
   staleReading = false;
   healthFails = false;
+  activationPending = false;
   releaseInstall = null;
   clearClientResourceStoresForTests();
   previousGlobals = Object.fromEntries(globals.map(k => [k, Reflect.get(globalThis, k)])) as typeof previousGlobals;
@@ -79,6 +81,7 @@ beforeEach(() => {
       if (path === "/api/startup-health") return response(desktop ? {
         ...health(desktopViable ? "protected" : "at-risk"), protection: desktopViable ? "desktop" : "none", serviceInstalled: false, serviceViable: false,
         shimInstalled: brokenStarters, shimHealthy: false, serviceInstalled: brokenStarters, serviceStale: brokenStarters,
+        ...(activationPending ? { shimActivationPending: true } : {}),
         diagnosticStale: staleReading,
         desktop: desktopFacts ?? { owned: true, loginEnabled: desktopViable, running: desktopViable, viable: desktopViable },
       } : health(status));
@@ -137,34 +140,48 @@ test("desktop protection is named separately and cannot install a competing serv
   expect(install!.disabled).toBe(true);
 });
 
-test("non-viable desktop ownership blocks competing starters and gives desktop recovery", async () => {
+test("non-viable desktop ownership blocks a competing service, keeps the shim, and gives desktop recovery", async () => {
   desktop = true;
   desktopViable = false;
   await mount();
   const install = container.querySelector<HTMLButtonElement>('button[aria-label="Background service - Install"]');
   expect(install).not.toBeNull();
   expect(install!.disabled).toBe(true);
+  // #6971: the shim's ensure waits for or starts Desktop, so it no longer competes with it.
   const shim = container.querySelector<HTMLButtonElement>('button[aria-label="Codex launcher shim - Install"]');
-  expect(shim!.disabled).toBe(true);
+  expect(shim!.disabled).toBe(false);
   const recovery = container.querySelector(".startup-recovery-details")!;
   expect(recovery.textContent).toContain("Start at Login");
   expect(recovery.textContent).not.toContain("ocx service install");
-  expect(recovery.textContent).not.toContain("ocx shim install");
+  expect(recovery.textContent).toContain("ocx shim install");
   expect(recovery.textContent).not.toContain("background service is recommended");
   expect(recovery.textContent).toContain("ocx restore");
   expect(container.querySelector(".startup-hero")!.textContent).toContain("Start at Login");
 });
 
-test("desktop ownership also blocks repair of stale service and shim assets", async () => {
+test("desktop ownership blocks service repair but allows shim repair", async () => {
   desktop = true;
   desktopViable = false;
   brokenStarters = true;
   await mount();
-  for (const label of ["Background service - Repair", "Codex launcher shim - Repair"]) {
-    const button = container.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
-    expect(button).not.toBeNull();
-    expect(button!.disabled).toBe(true);
-  }
+  const service = container.querySelector<HTMLButtonElement>('button[aria-label="Background service - Repair"]');
+  expect(service!.disabled).toBe(true);
+  const shim = container.querySelector<HTMLButtonElement>('button[aria-label="Codex launcher shim - Repair"]');
+  expect(shim!.disabled).toBe(false);
+});
+
+test("#6971: an intact shim the dashboard cannot see on PATH asks for activation, not repair", async () => {
+  desktop = true;
+  desktopViable = false;
+  brokenStarters = true;
+  activationPending = true;
+  await mount();
+  expect(container.querySelector('button[aria-label="Codex launcher shim - Repair"]')).toBeNull();
+  const row = [...container.querySelectorAll(".startup-details .startup-detail-row")]
+    .find(item => item.textContent?.includes("Codex launcher shim"))!;
+  expect(row.textContent).toContain("Installed · activation not confirmed");
+  expect(row.textContent).toContain("codex-shell-env.sh");
+  expect(row.textContent).not.toContain("Stale");
 });
 
 test("a CLI-owned unprotected install still offers service and shim actions", async () => {
@@ -194,10 +211,9 @@ test("#6963: a supervised Desktop running without verified Start at Login names 
   const details = container.querySelector(".startup-details")!.textContent!;
   expect(details).toContain("Login Items & Extensions");
   expect(details).not.toContain("Installed but unhealthy");
-  // Startup management stays with the app: neither starter can be installed here.
-  for (const label of ["Background service - Install", "Codex launcher shim - Install"]) {
-    expect(container.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!.disabled).toBe(true);
-  }
+  // Startup management stays with the app; the shim only waits for or starts it (#6971).
+  expect(container.querySelector<HTMLButtonElement>('button[aria-label="Background service - Install"]')!.disabled).toBe(true);
+  expect(container.querySelector<HTMLButtonElement>('button[aria-label="Codex launcher shim - Install"]')!.disabled).toBe(false);
 });
 
 test("#6963: an owned Desktop running without Start at Login gets the same badge and keeps owned guidance", async () => {

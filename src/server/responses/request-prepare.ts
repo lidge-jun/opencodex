@@ -1453,6 +1453,10 @@ export async function prepareResponsesRequest(
   return {
     inboundWire,
     clientDeclaredEmptyToolCatalog: options.clientDeclaredEmptyToolCatalog === true,
+    // Admission facts later route rewrites must not re-derive: the selector the caller sent and
+    // the key scope as it stood when this request was admitted.
+    inboundSelector,
+    admissionScope,
     translatorBudget,
     parsed,
     toolBridgeMaps,

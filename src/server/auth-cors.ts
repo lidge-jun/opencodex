@@ -925,6 +925,8 @@ export function providerManagementConfigError(
   if (raw.xaiResponsesXSearch !== undefined && typeof raw.xaiResponsesXSearch !== "boolean") {
     return `provider ${name} xaiResponsesXSearch must be a boolean`;
   }
+  const minMaxOutputError = positiveIntegerConfigError(raw.minMaxOutputTokens, "minMaxOutputTokens");
+  if (minMaxOutputError) return `provider ${name} ${minMaxOutputError}`;
   const defaultMaxOutputError = positiveIntegerConfigError(raw.defaultMaxOutputTokens, "defaultMaxOutputTokens");
   if (defaultMaxOutputError) return `provider ${name} ${defaultMaxOutputError}`;
   const maxOutputError = positiveIntegerRecordConfigError(raw.modelMaxOutputTokens, "modelMaxOutputTokens");
@@ -1092,6 +1094,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   modelMaxInputTokens: "runtime",
   modelAutoCompactTokenLimits: "editor",
   defaultMaxOutputTokens: "editor",
+  minMaxOutputTokens: "editor",
   modelMaxOutputTokens: "editor",
   modelCosts: "editor",
   headers: "redacted",
