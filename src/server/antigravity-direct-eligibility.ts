@@ -100,7 +100,7 @@ export interface AntigravityDirectRuntime {
  * The first rule that keeps a Chat request off the Antigravity direct lane, or `undefined` when
  * the route is eligible.
  *
- * - the `protocols.rollout.antigravityDirect` switch is off;
+ * - the `protocols.rollout.antigravityDirect` switch is explicitly off (it defaults on);
  * - the final adapter is not Google in Cloud Code Assist mode;
  * - a combo or policy route owns multi-candidate execution in the Responses pipeline;
  * - a hosted web-search tool would engage the sidecar, which reads the Responses body;

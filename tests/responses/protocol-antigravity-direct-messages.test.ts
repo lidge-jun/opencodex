@@ -2,7 +2,7 @@
  * Antigravity direct lane, end to end through the Messages ingress against a fake Cloud Code
  * Assist upstream.
  *
- * With `protocols.rollout.antigravityDirect` on, the same Messages request (system prompt, tool
+ * With `protocols.rollout.antigravityDirect` on (the default), the same Messages request (system prompt, tool
  * catalog, signed thinking, a tool call and its result in history) must reach Antigravity as the
  * same wire body it gets on the bridge, reach the client as the same answer, and be traced as
  * `messages -> ir -> other` both ways. The core receives only the request settings: the
@@ -104,7 +104,8 @@ function antigravityConfig(direct: boolean, extra: Partial<OcxConfig> = {}): Ocx
         models: ["gemini-3.8-flash"],
       },
     },
-    ...(direct ? { protocols: { rollout: { antigravityDirect: true } } } : {}),
+    // Explicit both ways: the switch is on by default, so the bridge side has to turn it off.
+    protocols: { rollout: { antigravityDirect: direct } },
     ...extra,
   } as OcxConfig;
 }

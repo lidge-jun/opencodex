@@ -330,7 +330,7 @@ State-changing: yes.
 |---|---|---|
 | `--messages` | string | Open or close the Messages API: on or off. Off also turns the Claude integration off. |
 | `--unrepresentable` | string | legacy keeps today's behavior; reject refuses a request its path cannot carry. |
-| `--rollout` | string | One switch as name=on or name=off; repeatable. Every switch defaults off. |
+| `--rollout` | string | One switch as name=on or name=off; repeatable. Every switch defaults off except antigravityDirect. |
 | `--json` | boolean | Emit the resulting GET /api/protocols body. |
 
 JSON mode: `payload`.

@@ -102,7 +102,12 @@ export function resolveProtocolSettings(config: ProtocolConfig, providerName?: s
       // OAuth extension is meaningless without the key-auth path it extends.
       managedMessagesNativeOAuth: managedMessagesNative && nativeOn("managedMessagesNativeOAuth"),
       directEncoders: on("directEncoders"),
-      antigravityDirect: on("antigravityDirect"),
+      // Default on: an absent switch takes the Antigravity direct lane, which falls back to the
+      // bridge per request whenever its eligibility rule declines. Only an explicit `false` turns
+      // it off; a non-boolean value or a malformed container fails closed like every other switch.
+      antigravityDirect: validContainers && (Object.hasOwn(rollout, "antigravityDirect")
+        ? rollout.antigravityDirect === true
+        : true),
       shadowPlan: on("shadowPlan"),
     }),
   });

@@ -2,7 +2,7 @@
  * Antigravity direct lane, end to end through the Chat ingress against a fake Cloud Code Assist
  * upstream.
  *
- * With `protocols.rollout.antigravityDirect` on, the same Chat request must reach Antigravity as
+ * With `protocols.rollout.antigravityDirect` on (the default), the same Chat request must reach Antigravity as
  * the same wire body it gets on the bridge, reach the client as the same answer, and be traced as
  * `chat -> ir -> other` both ways. The core receives only the request settings: the conversation is
  * decoded straight from the Chat body.
@@ -94,7 +94,8 @@ function antigravityConfig(direct: boolean): OcxConfig {
         models: ["gemini-3.8-flash"],
       },
     },
-    ...(direct ? { protocols: { rollout: { antigravityDirect: true } } } : {}),
+    // Explicit both ways: the switch is on by default, so the bridge side has to turn it off.
+    protocols: { rollout: { antigravityDirect: direct } },
   } as OcxConfig;
 }
 

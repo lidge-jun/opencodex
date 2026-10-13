@@ -16,7 +16,7 @@ function config(extra: Partial<OcxConfig> = {}, rollout = true): OcxConfig {
   return {
     port: 0,
     providers: {},
-    ...(rollout ? { protocols: { rollout: { antigravityDirect: true } } } : {}),
+    protocols: { rollout: { antigravityDirect: rollout } },
     ...extra,
   } as OcxConfig;
 }
@@ -41,9 +41,11 @@ describe("antigravityDirectDeclineReason", () => {
     expect(antigravityDirectDeclineReason(route(), chat(), config())).toBeUndefined();
   });
 
-  test("the switch is off by default", () => {
+  test("the switch is on by default and an explicit false turns it off", () => {
+    expect(antigravityDirectDeclineReason(route(), chat(), { port: 0, providers: {} } as OcxConfig)).toBeUndefined();
+    expect(antigravityMessagesDeclineReason(route(), { messages: [] }, MODEL, { port: 0, providers: {} } as OcxConfig)).toBeUndefined();
     expect(antigravityDirectDeclineReason(route(), chat(), config({}, false))).toBe("rollout-disabled");
-    expect(antigravityDirectDeclineReason(route(), chat(), config({ protocols: { rollout: { antigravityDirect: "true" } } } as never, false)))
+    expect(antigravityDirectDeclineReason(route(), chat(), config({ protocols: { rollout: { antigravityDirect: "true" } } } as never)))
       .toBe("rollout-disabled");
   });
 
