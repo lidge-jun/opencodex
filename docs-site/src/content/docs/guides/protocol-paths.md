@@ -149,6 +149,8 @@ These paths still use the internal Responses bridge or are not covered:
   Credential placement remains proxy-owned and beta allowlisting still applies. Missing or invalid
   identity uses the existing compatibility headers; compatible hosts and generated Responses retain
   their current behavior. Headers alone do not authorize requests or establish official support.
+  The TypeScript Agent SDK's `sdk-ts` user-agent entrypoint is recognized with the same required
+  identity headers, preserving its allowlisted native feature betas on first-party Anthropic requests.
 - Native Chat over OAuth is not planned. Native Messages over Anthropic OAuth covers only an
   unpooled account; a pooled account set stays on the bridge.
 - The managed native Messages path forwards a caller's `anthropic-beta` values only from a short

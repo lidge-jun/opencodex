@@ -35,7 +35,7 @@ import { isServiceInstalled, isServiceViable, readServiceBackend, stopWindows } 
 import { runUpdateRestartWithOwnershipLease, type ServiceOwnershipResolution } from "./restart-ownership";
 import {
   type Channel, type Installer,
-  PKG,
+  PKG, STANDALONE_UPDATE_HINT,
   checkUpdatePackageIntegrity,
   currentVersion,
   defaultUpdateTag,
@@ -492,17 +492,17 @@ export function checkForUpdate(
   const ownership = deps.detectInstallOwnership?.();
   const installer = ownership?.installer ?? deps.detectInstall();
   const channel = requestedChannel ?? normalizeUpdateChannel(null, current);
-  const latest = installer === "source" ? null : deps.latestVersion(channel);
+  const latest = installer === "source" || installer === "standalone" ? null : deps.latestVersion(channel);
   const updateAvailable = !!latest && isNewer(latest, current, channel);
   let reason: string | undefined;
-  let command = installer === "source"
+  let command = installer === "standalone" ? STANDALONE_UPDATE_HINT : installer === "source"
     ? manualSourceCommand()
     : installer === "mise"
       ? (ownership && deps.miseUpdateCommand?.(ownership)) ?? ""
       : updateExecutionCommand(installer, channel).display;
 
-  if (installer === "source") {
-    reason = "source_checkout";
+  if (installer === "source" || installer === "standalone") {
+    reason = installer === "source" ? "source_checkout" : "standalone_install";
   } else if (installer === "mise") {
     reason = command ? "externally_managed" : "external_ownership_invalid";
   } else if (!latest) {
@@ -517,7 +517,7 @@ export function checkForUpdate(
     channel,
     installer,
     updateAvailable,
-    canUpdate: installer !== "source" && installer !== "mise" && updateAvailable,
+    canUpdate: installer !== "source" && installer !== "standalone" && installer !== "mise" && updateAvailable,
     command,
     releaseNotesUrl: RELEASE_NOTES_URL,
     ...(reason ? { reason } : {}),

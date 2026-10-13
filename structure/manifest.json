@@ -595,6 +595,13 @@
       ]
     },
     {
+      "path": "ops/service-logging.md",
+      "tier": 6,
+      "title": "Managed Service Logging",
+      "scope": "Service-only console timestamps and bounded copy-truncate log retention.",
+      "documents": ["src/service/logging.ts"]
+    },
+    {
       "path": "ops/service-health-recovery.md",
       "tier": 6,
       "title": "Service Health Recovery",

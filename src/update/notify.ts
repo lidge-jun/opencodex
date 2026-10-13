@@ -152,7 +152,7 @@ export function interactiveGuardOk(): boolean {
  */
 export function shouldConsider(): { channel: Channel; current: string } | null {
   const installer = detectInstall();
-  if (installer === "source" || installer === "mise") return null;
+  if (installer === "source" || installer === "standalone" || installer === "mise") return null;
   const current = currentVersion();
   if (current === "?" || isSourceBuildVersion(current)) return null;
   if (!interactiveGuardOk()) return null;
