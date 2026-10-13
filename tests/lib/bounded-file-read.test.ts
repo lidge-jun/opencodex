@@ -30,6 +30,22 @@ function afterOpenedStat(mutate: () => void, read: () => Buffer): Buffer {
   finally { stat.mockRestore(); expect(changed).toBe(true); }
 }
 
+function canCreateFileSymlink(): boolean {
+  if (process.platform !== "win32") return true;
+  const directory = mkdtempSync(join(tmpdir(), "ocx-bounded-symlink-probe-"));
+  try {
+    const target = join(directory, "target.json");
+    writeFileSync(target, "fixture");
+    try { symlinkSync(target, join(directory, "link.json"), "file"); }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EPERM" || code === "EACCES") return false;
+      throw error;
+    }
+    return true;
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+}
+
 describe("readBoundedRegularFileSync", () => {
   test("reads a bounded regular file", () => {
     const path = join(root, "config.json");
@@ -87,11 +103,15 @@ describe("readBoundedRegularFileSync", () => {
     expect(readBoundedRegularFileSync(path, content.length).equals(content)).toBe(true);
   });
 
-  test("rejects oversized files and final symlinks", () => {
+  test("rejects oversized files", () => {
     const path = join(root, "large.json");
     writeFileSync(path, "x".repeat(33));
     expect(() => readBoundedRegularFileSync(path, 32)).toThrow();
+  });
 
+  test.skipIf(!canCreateFileSymlink())("rejects final symlinks", () => {
+    const path = join(root, "target.json");
+    writeFileSync(path, "fixture");
     const link = join(root, "linked.json");
     symlinkSync(path, link, "file");
     expect(() => readBoundedRegularFileSync(link, 64)).toThrow();
