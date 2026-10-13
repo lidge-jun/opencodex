@@ -1144,6 +1144,7 @@ async function handleClaudeMessagesWithBudget(
   };
   /** Leave the direct plan: the core gets the full bridge translation, as without the switch. */
   const leaveDirectPlan = (): unknown => {
+    directPlan?.releaseDecodeCharges();
     directPlan = undefined;
     try {
       const translation = messagesToResponsesTranslation(anthropicBody, cc, translatorBudget);

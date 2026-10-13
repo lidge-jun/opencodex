@@ -21,7 +21,8 @@ import { requestPathForLane } from "../../src/protocols/path";
 import { parseRequest } from "../../src/responses/parser";
 import { encodeReasoningEnvelope } from "../../src/responses/reasoning-envelope";
 import { evidenceFromBody } from "../../src/routing/request-evidence";
-import type { OcxClaudeCodeConfig, OcxParsedRequest } from "../../src/types";
+import { planMessagesAntigravityDirect } from "../../src/server/messages-antigravity-direct";
+import type { OcxClaudeCodeConfig, OcxConfig, OcxParsedRequest } from "../../src/types";
 
 const MODEL = "google-antigravity/gemini-3.8-flash";
 const IDENTITY = "You are a coding agent powered by the gpt-6. If asked which model you are, identify as gpt-6. "
@@ -374,3 +375,48 @@ describe("feature effects on the Messages direct path", () => {
   });
 });
 
+
+describe("an abandoned direct plan hands its translator budget back", () => {
+  const config = {
+    port: 0,
+    defaultProvider: "google-antigravity",
+    providers: {
+      "google-antigravity": {
+        adapter: "google",
+        baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+        authMode: "oauth",
+        googleMode: "cloud-code-assist",
+        project: "fixture-project",
+        models: ["gemini-3.8-flash"],
+      },
+    },
+  } as OcxConfig;
+  const charged = (signature: string): Body => ({
+    model: MODEL,
+    messages: [
+      { role: "user", content: "q" },
+      { role: "assistant", content: [
+        { type: "thinking", thinking: "t", signature: "plain-signature-".repeat(64) },
+        { type: "thinking", thinking: "t", signature },
+      ] },
+      { role: "user", content: "x" },
+    ],
+  });
+
+  test("a malformed envelope the bridge retries leaves the budget as it found it", () => {
+    const budget = createTranslatorBudget();
+    const before = budget.snapshot().currentBytes;
+    expect(planMessagesAntigravityDirect(clone(charged("ocxr1:not-base64-json")), undefined, config, budget)).toBeUndefined();
+    expect(budget.snapshot().currentBytes).toBe(before);
+  });
+
+  test("a plan the ingress leaves releases what its decode retained", () => {
+    const budget = createTranslatorBudget();
+    const before = budget.snapshot().currentBytes;
+    const plan = planMessagesAntigravityDirect(clone(charged("second-signature")), undefined, config, budget);
+    expect(plan).toBeDefined();
+    expect(budget.snapshot().currentBytes).toBeGreaterThan(before);
+    plan!.releaseDecodeCharges();
+    expect(budget.snapshot().currentBytes).toBe(before);
+  });
+});

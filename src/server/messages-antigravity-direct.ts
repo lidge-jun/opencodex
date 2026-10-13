@@ -25,7 +25,7 @@ import {
   type MessagesIrConversation,
 } from "../protocols/codecs/messages-ir";
 import { resolveProtocolSettings } from "../protocols/settings";
-import type { TranslatorBudget } from "../lib/translator-budget";
+import type { TranslatorBudget, TranslatorBufferKind } from "../lib/translator-budget";
 import type { PolicyRequestEvidence } from "../routing/evaluator";
 import { previewRouteModel, type RouteResult } from "../router";
 import type { OcxClaudeCodeConfig, OcxConfig } from "../types";
@@ -45,6 +45,44 @@ export interface MessagesDirectPlan {
   conversation: MessagesIrConversation;
   /** What the core would have read from the bridge body for policy routing. */
   evidence: PolicyRequestEvidence;
+  /**
+   * Release the retained charges the plan's decode made. The ingress calls it when it abandons
+   * the plan for the full translation, which charges the same reasoning copies again.
+   */
+  releaseDecodeCharges(): void;
+}
+
+/**
+ * The request budget, with the retained charges made through it recorded so a decode the ingress
+ * abandons can hand them back. Without that, the bridge translation that follows would be held to
+ * a budget already spent on a copy nobody keeps, and could answer 413 where the bridge alone fits.
+ */
+function recordingBudget(budget: TranslatorBudget): { budget: TranslatorBudget; release(): void } {
+  const charged = new Map<TranslatorBufferKind, number>();
+  const recording: TranslatorBudget = {
+    openCall: id => budget.openCall(id),
+    closeCall: id => budget.closeCall(id),
+    reserveTransient: (bytes, scope) => budget.reserveTransient(bytes, scope),
+    chargeRetained: (delta, scope) => {
+      budget.chargeRetained(delta, scope);
+      charged.set(scope.kind, (charged.get(scope.kind) ?? 0) + delta);
+    },
+    releaseRetained: (bytes, scope) => {
+      budget.releaseRetained(bytes, scope);
+      charged.set(scope.kind, (charged.get(scope.kind) ?? 0) - bytes);
+    },
+    observeAcceptedRequestCopy: bytes => budget.observeAcceptedRequestCopy(bytes),
+    observeExternallyCapped: (kind, bytes) => budget.observeExternallyCapped(kind, bytes),
+    snapshot: () => budget.snapshot(),
+    dispose: () => budget.dispose(),
+  };
+  return {
+    budget: recording,
+    release: () => {
+      for (const [kind, bytes] of charged) if (bytes > 0) budget.releaseRetained(bytes, { kind });
+      charged.clear();
+    },
+  };
 }
 
 /**
@@ -69,11 +107,16 @@ export function planMessagesAntigravityDirect(
   }
   const model = settings.body.model as string;
   if (!messagesDirectRouteHolds(route, body as Rec, model, config)) return undefined;
+  const recorded = recordingBudget(budget);
   let conversation: MessagesIrConversation;
   try {
-    conversation = messagesConversationToIr(body, cc, budget, model);
+    conversation = messagesConversationToIr(body, cc, recorded.budget, model);
   } catch (err) {
-    if (err instanceof AnthropicRequestError && err.message === MALFORMED_REASONING_SIGNATURE) return undefined;
+    if (err instanceof AnthropicRequestError && err.message === MALFORMED_REASONING_SIGNATURE) {
+      // The bridge retries this body through the native projection; give it the whole budget.
+      recorded.release();
+      return undefined;
+    }
     throw err;
   }
   return {
@@ -83,6 +126,7 @@ export function planMessagesAntigravityDirect(
     cacheKeySource: settings.cacheKeySource,
     conversation,
     evidence: messagesRouteEvidence(body),
+    releaseDecodeCharges: recorded.release,
   };
 }
 
