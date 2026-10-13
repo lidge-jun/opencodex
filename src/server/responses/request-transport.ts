@@ -60,7 +60,6 @@ import {
   AdmissionModelDeniedError,
   admissionModelDeniedResponse,
   assertRouteAllowedByScope,
-  resolveAdmissionModelScope,
 } from "../admission-model-scope";
 import { renameRoutedIdentityInContext } from "../../adapters/identity";
 import { resolveCopilotApiBaseUrl } from "../../oauth/github-copilot";
@@ -115,6 +114,8 @@ export async function prepareResponsesTransport(
     | "inboundWire"
     | "selectedForwardHeaders"
     | "translatorBudget"
+    | "inboundSelector"
+    | "admissionScope"
   >,
 ) {
   const { config, logCtx, options, req } = requestContext;
@@ -365,8 +366,10 @@ export async function prepareResponsesTransport(
       selected = await negotiate();
     }
     assertRouteAllowedByScope(
-      resolveAdmissionModelScope(config, options.admission),
-      copilotRequestedModel,
+      // The scope captured at admission: a key edited or removed while negotiation was in
+      // flight must not widen this request. The refusal names the caller's own selector.
+      requestState.admissionScope,
+      requestState.inboundSelector,
       { providerName: route.providerName, modelId: selected.modelId },
     );
     copilotSessionExpiresAt = selected.expiresAt ?? Infinity;

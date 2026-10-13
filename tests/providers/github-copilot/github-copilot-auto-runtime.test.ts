@@ -452,6 +452,28 @@ describe("Copilot Auto through the Responses pipeline", () => {
     expect(body).not.toContain("gpt-4o");
     expect(sent.filter(call => ["/chat/completions", "/responses"].includes(call.path))).toHaveLength(0);
   });
+  test("a negotiated denial names the caller's selector, not the resolved Auto model id", async () => {
+    await accounts();
+    const { config } = fixture();
+    const admission = scopedAdmission(config, ["github-copilot/auto"]);
+    const response = await handleResponses(request("hello", false), config, { model: "", provider: "" }, { admission });
+    expect(response.status).toBe(403);
+    const { error } = await response.json() as { error: { type: string; model: string; message: string } };
+    expect(error.type).toBe("model_not_allowed_for_key");
+    expect(error.model).toBe("github-copilot/auto");
+    expect(error.message).toContain("github-copilot/auto");
+  });
+  test("a key scope removed while negotiation is in flight does not widen the request", async () => {
+    await accounts();
+    let config!: OcxConfig;
+    const f = fixture({ onSession: () => { config.apiKeys = []; } });
+    config = f.config;
+    const admission = scopedAdmission(config, ["github-copilot/auto"]);
+    const response = await handleResponses(request("hello", false), config, { model: "", provider: "" }, { admission });
+    expect(response.status).toBe(403);
+    expect(await response.text()).toContain("model_not_allowed_for_key");
+    expect(f.sent.filter(call => ["/chat/completions", "/responses"].includes(call.path))).toHaveLength(0);
+  });
   test("Auto negotiation dispatches a model admitted by scope", async () => {
     await accounts();
     const { config, sent } = fixture();
@@ -540,6 +562,23 @@ describe("Copilot Auto through the Responses pipeline", () => {
     expect(await response.text()).toContain("limited");
     expect(sent.filter(call => ["/chat/completions", "/responses"].includes(call.path))).toHaveLength(1);
     expect(sent.filter(call => call.path === "/models/session")).toHaveLength(2);
+  });
+  test("web-search key rotation into a model outside the key scope ends with the scope refusal", async () => {
+    const { config, sent } = fixture({ key: true, rotate: true });
+    config.webSearchSidecar = { backend: "exa", exaApiKey: "synthetic-search-key" };
+    saveConfig(config);
+    const admission = scopedAdmission(config, ["github-copilot/auto", "gpt-4o"]);
+    const req = new Request("http://localhost/v1/responses", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "github-copilot/auto", input: "hello", stream: false, tools: [{ type: "web_search" }] }) });
+    const response = await handleResponses(req, config, { model: "", provider: "" }, { admission });
+    expect(response.status).toBe(403);
+    expect(isNonReplayableResponse(response)).toBe(true);
+    const text = await response.text();
+    expect(JSON.parse(text).error.type).toBe("model_not_allowed_for_key");
+    expect(text).not.toContain("gpt-5.4");
+    // Account A's gpt-4o was sent once and refused; B's gpt-5.4 was negotiated but never sent.
+    expect(sent.filter(call => ["/chat/completions", "/responses"].includes(call.path)).map(call => call.body.model))
+      .toEqual(["gpt-4o"]);
   });
 
   test("Auto-only catalog retains manual preferences and requires explicit picker selection", async () => {
@@ -682,7 +721,9 @@ describe("Copilot Auto through the Responses pipeline", () => {
     const response = await handleResponses(req, config, { model: "", provider: "" }, { admission });
     expect(response.status).toBe(403);
     expect(isNonReplayableResponse(response)).toBe(true);
-    expect(await response.text()).toContain("model_not_allowed_for_key");
+    // The combo boundary keeps the stable scope envelope instead of rewrapping it as upstream_error.
+    const { error } = await response.json() as { error: { type: string; model: string } };
+    expect(error.type).toBe("model_not_allowed_for_key");
     expect(fallbackSends).toBe(0);
   });
   test("terminal continuation emits the scope refusal without a replacement inference", async () => {
