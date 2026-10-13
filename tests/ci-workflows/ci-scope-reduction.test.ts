@@ -300,13 +300,12 @@ function runGate(inputs: GateInputs, results: Record<string, string>): { gatedJo
 }
 
 describe("the push trigger", () => {
-  test("carries dev, main and preview", () => {
+  test("carries main and preview, and never dev", () => {
     // main and preview must stay: release.yml requires a successful push-event
     // run for the exact release SHA and states that a pull_request run does not
-    // qualify, so removing either breaks publication. dev is required because
-    // pull requests run only the fast Ubuntu subset: the macOS and Windows legs
-    // run after merge, on the push into dev.
-    expect([...(workflow.on?.push?.branches ?? [])].sort()).toEqual(["dev", "main", "preview"]);
+    // qualify, so removing either breaks publication. dev is deliberately absent
+    // (CI policy): cross-platform legs run on dev only by manual dispatch.
+    expect([...(workflow.on?.push?.branches ?? [])].sort()).toEqual(["main", "preview"]);
   });
 });
 

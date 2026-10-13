@@ -8,12 +8,14 @@ on:
       - 'docs-site/src/content/docs/guides/composer-usage-gate-fallback.md'
       - '.github/workflows/codex-queue-helpers.yml'
   push:
-    branches: [dev, main, preview]
+    branches: [main, preview]
     paths:
       - 'scripts/codex-queue.*'
       - 'docs-site/astro.config.mjs'
       - 'docs-site/src/content/docs/guides/composer-usage-gate-fallback.md'
       - '.github/workflows/codex-queue-helpers.yml'
+
+  workflow_dispatch:
 
 permissions:
   contents: read

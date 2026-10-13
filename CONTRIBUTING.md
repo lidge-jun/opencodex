@@ -36,6 +36,14 @@ Source development requires the `bun` CLI on your `PATH`. The published npm pack
 Bun runtime for end users. Package scripts such as `bun run test` and `bun run prepush` may resolve
 Bun through that bundled dependency.
 
+## CI policy (maintainer decision — do not change)
+
+- Pull requests run **only the fast Ubuntu subset**.
+- Full cross-platform (macOS/Windows) CI runs **only** via manual
+  `workflow_dispatch` and on push to `main`/`preview` (release lines).
+- **Never** add a `dev` push trigger, or `pull_request` runs for macOS/Windows
+  jobs, to any workflow. PRs that change this policy will be closed.
+
 ## Pull request contract
 
 A ready-for-review PR is the author's claim that the change is complete, understood, tested, and suitable for merging. Opening a PR does not transfer responsibility for the branch to maintainers.

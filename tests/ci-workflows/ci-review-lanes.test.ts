@@ -61,11 +61,11 @@ describe("CI review lanes", () => {
       }
     }
 
-    // The push trigger covers dev and the release lines. main and preview MUST
+    // The push trigger is pinned to the release lines. main and preview MUST
     // stay because release.yml requires a successful push-event run for the
     // exact release SHA and states that a pull-request run does not qualify.
-    // dev is required because pull requests run only the fast Ubuntu subset:
-    // the macOS and Windows legs run after merge, on the push into dev.
+    // dev is deliberately absent (CI policy): cross-platform legs run on dev
+    // only by manual workflow_dispatch.
     const ci = Bun.YAML.parse(await readText(".github/workflows/ci.yml")) as {
       on?: {
         push?: { branches?: string[]; paths?: string[] };
@@ -74,7 +74,7 @@ describe("CI review lanes", () => {
       jobs?: Record<string, Record<string, unknown> | undefined>;
     };
     expect([...(ci.on?.push?.branches ?? [])].sort())
-      .toEqual(["dev", "main", "preview"]);
+      .toEqual(["main", "preview"]);
 
     // The PR trigger must carry NO base-branch filter, and the two triggers
     // differ on purpose. GitHub matches `branches:` against the BASE ref, so

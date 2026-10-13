@@ -1,3 +1,11 @@
+# ============================================================================
+# CI POLICY (maintainer decision — do not change in a contributor PR)
+#  * Pull requests run ONLY the fast Ubuntu subset.
+#  * Full cross-platform (macOS/Windows) CI runs ONLY via manual
+#    workflow_dispatch and on push to main/preview (release lines).
+#  * NEVER add a dev push trigger or pull_request runs for macOS/Windows jobs.
+#  PRs that change this policy will be closed. See AGENTS.md "CI policy".
+# ============================================================================
 name: Cross-platform CI
 
 on:
@@ -25,17 +33,17 @@ on:
     # Pull requests run only the fast Ubuntu subset. Every macOS and Windows
     # job (and the macOS/Windows legs of the keyring, npm-global, setup-action
     # and remote-helper matrices) is skipped on `pull_request` and runs after
-    # merge instead, on the `push:` below, plus workflow_dispatch and the
-    # nightly schedule.
+    # merge instead, via workflow_dispatch, the main/preview `push:` below and
+    # the nightly schedule.
     #
-    # `push:` covers dev so every merge into the integration branch gets the
-    # cross-platform evidence that pull requests no longer carry. main and
-    # preview MUST stay: release.yml requires a successful push-event
+    # `push:` is pinned to the release lines. dev is deliberately absent:
+    # cross-platform evidence for dev is run by hand via workflow_dispatch.
+    # main and preview MUST stay: release.yml requires a successful push-event
     # Cross-platform CI run for the exact release SHA and states that a
     # pull-request run does not qualify, so removing either branch breaks
     # publication.
   push:
-    branches: [dev, main, preview]
+    branches: [main, preview]
     paths:
       - "Dockerfile"
       - "compose.yaml"
@@ -822,7 +830,7 @@ jobs:
     name: macos ${{ matrix.shard }}/3
     needs: changes
     # Never on pull requests: macOS legs run after merge, on push to
-    # dev/main/preview, and on dispatch and the schedule.
+    # main/preview, and on dispatch and the schedule.
     if: github.event_name != 'pull_request'
     runs-on: macos-latest
     # Three shards. Unsharded, this job was the critical path on every green dev
