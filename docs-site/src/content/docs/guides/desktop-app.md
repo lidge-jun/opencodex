@@ -113,8 +113,12 @@ belongs to a different copy of the app, so turn it off from that copy; **registe
 is missing** means the login item names an app that no longer exists, so delete
 `~/Library/LaunchAgents/OpenCodex.plist` and turn the item on again; **status unknown**
 means the registration could not be read. While the app runs the proxy, the Startup page keeps the
-background service and launcher shim installers disabled; to use them instead, quit
-OpenCodex and run `ocx service install` or `ocx codex-shim install` in a terminal.
+background service installer disabled; to use it instead, quit OpenCodex and run
+`ocx service install` in a terminal. The Codex launcher shim can still be installed there.
+When a Codex launch finds no proxy, the shim waits for OpenCodex to restart it, opens
+OpenCodex on macOS if it quit, and otherwise reports an error instead of starting a second
+proxy. If the shim reads "activation not confirmed", add
+`. ~/.opencodex/codex-shell-env.sh` to your shell startup file after other PATH setup.
 
 The bundled CLI is `/Applications/OpenCodex.app/Contents/MacOS/ocx` on macOS and
 `/usr/bin/ocx` for the Linux deb package. Run that executable with `status` to check
@@ -126,7 +130,7 @@ While the CLI detects Desktop supervising the proxy, `ocx service install`, `rep
 or verified login registration. Quit OpenCodex, then run `ocx service install` to move
 startup management to the CLI. A duplicate `ocx start` names the Desktop supervisor.
 
-Use **Check for Updates…** in the tray to update the app's bundle. `ocx update` refuses
+Use **Check for Updates…** in the tray to update the app's bundle. The bundled compiled CLI reports `installer: "standalone"` and `reason: "standalone_install"` from `ocx system update check`, with `canUpdate: false` and guidance to use Desktop updates. `ocx update` refuses
 package replacement while Desktop supervises the proxy, even for a separate npm/Bun install;
 quit OpenCodex first to update that install. An accepted `ocx restart` reports that Desktop
 starts the replacement and waits for it to become healthy. A newer PATH CLI cannot use

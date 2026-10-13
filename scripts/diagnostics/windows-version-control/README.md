@@ -31,6 +31,12 @@ The fixture root must not already exist. Bun must support `--no-env-file`,
 `--no-orphans`, and CPU profiling. A startup/profile flag failure is not evidence
 of the catalog stall. This control has only been executed on Windows.
 
+The controller captures the original home before replacing the child
+environment and arms the test-home guard (`OCX_TEST_HOME_GUARD`,
+`OCX_REAL_HOME`) with that protected identity. Rewriting fixture `HOME` and
+`USERPROFILE` does not redefine the protected OpenCodex and Codex homes.
+The module contracts exercise the same setup with a synthetic original home.
+
 The fake Codex executables initially return their version and bundled catalog
 immediately. After a successful model-list warmup and a 16-second memo-expiry
 wait, the controller arms the chosen mode and sends one model-list request:

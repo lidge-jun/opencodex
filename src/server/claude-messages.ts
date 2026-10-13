@@ -40,6 +40,7 @@ import {
   REPLAY_REFUSED_STATUS,
   UPSTREAM_RESET_REPLAY_REFUSED_CODE,
 } from "../lib/upstream-retry";
+import { UNDECLARED_TOOL_CALL_ERROR_CODE } from "../lib/errors";
 import { resolveClientRetryAfter } from "../lib/retry-after";
 import { anthropicRateLimitHeaders } from "./anthropic-rate-limit-headers";
 import { upstreamMessagesRequestIdHeaders } from "./messages-response-headers";
@@ -1348,6 +1349,12 @@ async function handleClaudeMessagesWithBudget(
     // Without this the replay would look native and a Responses-scoped wire default
     // would fire, disagreeing with the pre-flight decision above.
     inboundWire: "anthropic",
+    // An explicit empty `tools` array is a deny-all declaration the translation drops with
+    // the rest of the catalog; carried separately so the undeclared-tool guard can still
+    // enforce it while partial and absent catalogs stay deferred.
+    clientDeclaredEmptyToolCatalog: isRec(anthropicBody)
+      && Array.isArray(anthropicBody.tools)
+      && anthropicBody.tools.length === 0,
     nativeReasoningReplay,
     nativeReasoningMint,
     claudeGoAffinity: { sessionLane: claudeGoSessionLane },
@@ -1374,11 +1381,13 @@ async function handleClaudeMessagesWithBudget(
     // Re-shape the OpenAI-style error envelope into the Anthropic one, preserving status.
     let message = `upstream error (${response.status})`;
     let contextError = false;
+    let catalogRefusal = false;
     try {
       const text = await response.text();
       try {
         const parsed = JSON.parse(text) as { error?: { message?: string; type?: string; code?: unknown } | string; message?: string };
         contextError = typeof parsed?.error === "object" && parsed.error?.code === "context_length_exceeded";
+        catalogRefusal = typeof parsed?.error === "object" && parsed.error?.code === UNDECLARED_TOOL_CALL_ERROR_CODE;
         const nested = typeof parsed?.error === "object" && parsed.error ? parsed.error.message : undefined;
         const flat = typeof parsed?.error === "string" ? parsed.error : parsed?.message;
         message = nested || flat || (text ? `upstream error (${response.status}): ${text.slice(0, 400)}` : message);
@@ -1407,7 +1416,10 @@ async function handleClaudeMessagesWithBudget(
     const nativeMainFence = response.status === 503
       && upstreamRetryAfter?.trim() === "1"
       && message === CODEX_MAIN_PROFILE_MAINTENANCE_MESSAGE;
-    const transient = !replayRefusal && !nativeMainFence && !contextError && isTransientUpstreamStatus(response.status);
+    // The undeclared-tool guard's refusal is deterministic: the same request produces the
+    // same verdict, so it must not arrive as a retryable overload like a transient 5xx.
+    const transient = !replayRefusal && !nativeMainFence && !contextError && !catalogRefusal
+      && isTransientUpstreamStatus(response.status);
     const outStatus = replayRefusal
       ? REPLAY_REFUSED_STATUS
       : nativeMainFence ? 503 : contextError ? 400 : transient ? 529 : response.status;
@@ -1419,7 +1431,11 @@ async function handleClaudeMessagesWithBudget(
       outStatus,
       message,
       undefined,
-      replayRefusal ? UPSTREAM_RESET_REPLAY_REFUSED_CODE : contextError ? "context_length_exceeded" : undefined,
+      replayRefusal
+        ? UPSTREAM_RESET_REPLAY_REFUSED_CODE
+        : contextError
+          ? "context_length_exceeded"
+          : catalogRefusal ? UNDECLARED_TOOL_CALL_ERROR_CODE : undefined,
     )), {
       status: outStatus,
       headers: outHeaders,

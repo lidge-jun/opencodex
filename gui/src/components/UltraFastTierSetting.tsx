@@ -8,13 +8,10 @@ type Feedback = { tone: "ok" | "err"; message: string } | null;
 /**
  * Opt-in Ultra Fast service tier.
  *
- * The description deliberately says what this does NOT do. PR #2994 added an `ultrafast`
- * row to the shipped catalog and was closed because the picker gained a choice the wire
- * could not honor — upstream advertises only `priority`. This switch does not bring that
- * row back. It keeps a tier the operator configured themselves from being stripped on
- * regeneration, and it is why the request logs name the tier instead of recording that no
- * fast tier was asked for. A toggle that implied a speed it cannot deliver would be the
- * same defect in a new place.
+ * The switch adds the documented Ultrafast choice to native GPT-6 Astra and GPT-6.1 Sol in
+ * the Codex picker and keeps an operator-configured `ultrafast` tier on routed rows. The
+ * description names the plan requirement because the generated catalog replaces ChatGPT's
+ * plan-aware model list: the switch is the operator's statement that their plan is eligible.
  */
 export default function UltraFastTierSetting({ apiBase }: { apiBase: string }) {
   const t = useT();

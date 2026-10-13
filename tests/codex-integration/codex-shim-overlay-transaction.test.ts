@@ -42,6 +42,26 @@ function privateDebris(home: string): string[] {
 }
 
 describe.skipIf(process.platform === "win32")("Codex overlay publication transactions", () => {
+  test("device drift within one inspection is refused even when inode and content match", () => fixture(f => {
+    expect(installCodexShim().installed).toBe(true);
+    const original = saved(f.wrapper);
+    const lstat = fs.lstatSync;
+    let reads = 0;
+    spyOn(fs, "lstatSync").mockImplementation((...args) => {
+      const stat = lstat(...args);
+      if (String(args[0]) === f.wrapper && ++reads > 1) {
+        stat.dev += typeof stat.dev === "bigint" ? 1n : 1;
+      }
+      return stat;
+    });
+    const result = diagnoseCodexShim();
+    mock.restore();
+    expect(reads).toBeGreaterThan(1);
+    expect(result).toMatchObject({ healthy: false, runnable: false, active: null });
+    expect(result.summary).toMatch(/Private Codex artifact.*changed/);
+    expect(saved(f.wrapper)).toEqual(original);
+  }));
+
   for (const installedBefore of [false, true]) {
     test.each(["stage", "probe", "publish", "env-write", "env-publish", "state-commit"])(`${installedBefore ? "refresh" : "fresh install"} rolls back on %s failure`, phase => fixture(f => {
       if (installedBefore) {

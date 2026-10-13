@@ -1,3 +1,11 @@
+# ============================================================================
+# CI POLICY (maintainer decision — do not change in a contributor PR)
+#  * Pull requests run ONLY the fast Ubuntu subset.
+#  * Full cross-platform (macOS/Windows) CI runs ONLY via manual
+#    workflow_dispatch and on push to main/preview (release lines).
+#  * NEVER add a dev push trigger or pull_request runs for macOS/Windows jobs.
+#  PRs that change this policy will be closed. See AGENTS.md "CI policy".
+# ============================================================================
 name: Cross-platform CI
 
 on:
@@ -21,14 +29,19 @@ on:
     # because this workflow is `pull_request` (not `pull_request_target`),
     # declares `contents: read`, and reads no secrets.
     #
-    # `push:` stays pinned to the release lines: it gates publication, and
-    # review is covered by the pull_request trigger above. dev is dropped:
-    # its integration evidence comes from the pull_request run into dev, and
-    # workflow_dispatch covers anything a maintainer wants proven by hand.
-    # main and preview MUST stay: release.yml requires a successful
-    # push-event Cross-platform CI run for the exact release SHA and states
-    # that a pull-request run does not qualify, so removing either branch
-    # breaks publication.
+    #
+    # Pull requests run only the fast Ubuntu subset. Every macOS and Windows
+    # job (and the macOS/Windows legs of the keyring, npm-global, setup-action
+    # and remote-helper matrices) is skipped on `pull_request` and runs after
+    # merge instead, via workflow_dispatch, the main/preview `push:` below and
+    # the nightly schedule.
+    #
+    # `push:` is pinned to the release lines. dev is deliberately absent:
+    # cross-platform evidence for dev is run by hand via workflow_dispatch.
+    # main and preview MUST stay: release.yml requires a successful push-event
+    # Cross-platform CI run for the exact release SHA and states that a
+    # pull-request run does not qualify, so removing either branch breaks
+    # publication.
   push:
     branches: [main, preview]
     paths:
@@ -454,6 +467,7 @@ jobs:
         shell: bash
         env:
           NATIVE_SELECTED: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.native }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
           case "$NATIVE_SELECTED" in
@@ -466,22 +480,30 @@ jobs:
               ;;
           esac
 
-          # Two unconditional legs plus the macos leg that rides the native
-          # selection. These strings are what the keyring-smoke and
-          # npm-global-smoke matrices consume through fromJSON.
-          if [ "$NATIVE_SELECTED" = "true" ]; then
+          # These strings are what the keyring-smoke and npm-global-smoke
+          # matrices consume through fromJSON. A pull request runs only the
+          # ubuntu leg; the windows and macos legs run after merge on push
+          # (and on dispatch and the schedule). Outside pull requests, ubuntu
+          # and windows always run and macos rides the native selection.
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            keyring_matrix='[{"name":"ubuntu","runner":"ubuntu-latest"}]'
+            npm_global_matrix='[{"os":"ubuntu-latest"}]'
+            min_legs_filter='length >= 1'
+          elif [ "$NATIVE_SELECTED" = "true" ]; then
             keyring_matrix='[{"name":"ubuntu","runner":"ubuntu-latest"},{"name":"windows","runner":"windows-latest"},{"name":"macos","runner":"macos-latest"}]'
             npm_global_matrix='[{"os":"ubuntu-latest"},{"os":"windows-latest"},{"os":"macos-latest"}]'
+            min_legs_filter='length >= 2'
           else
             keyring_matrix='[{"name":"ubuntu","runner":"ubuntu-latest"},{"name":"windows","runner":"windows-latest"}]'
             npm_global_matrix='[{"os":"ubuntu-latest"},{"os":"windows-latest"}]'
+            min_legs_filter='length >= 2'
           fi
 
           # GitHub turns an empty matrix include list into a job with no legs
           # that still reports success, so the emitted value itself is
-          # validated: it must parse as a JSON array carrying at least the two
-          # unconditional legs. A malformed or empty matrix fails this job
-          # instead of passing over nothing.
+          # validated: it must parse as a JSON array carrying the ubuntu leg,
+          # and outside pull requests the windows leg too. A malformed or
+          # empty matrix fails this job instead of passing over nothing.
           assert_matrix() {
             local label="$1" json="$2" jq_filter="$3"
             if ! printf '%s' "$json" | jq -e "$jq_filter" >/dev/null; then
@@ -489,10 +511,17 @@ jobs:
               exit 1
             fi
           }
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            keyring_windows='true'
+            npm_global_windows='true'
+          else
+            keyring_windows='any(.[]; .name == "windows")'
+            npm_global_windows='any(.[]; .os == "windows-latest")'
+          fi
           assert_matrix keyring "$keyring_matrix" \
-            'type == "array" and length >= 2 and any(.[]; .name == "ubuntu") and any(.[]; .name == "windows")'
+            "type == \"array\" and $min_legs_filter and any(.[]; .name == \"ubuntu\") and $keyring_windows"
           assert_matrix npm-global "$npm_global_matrix" \
-            'type == "array" and length >= 2 and any(.[]; .os == "ubuntu-latest") and any(.[]; .os == "windows-latest")'
+            "type == \"array\" and $min_legs_filter and any(.[]; .os == \"ubuntu-latest\") and $npm_global_windows"
 
           printf 'keyring_matrix=%s\n' "$keyring_matrix" >> "$GITHUB_OUTPUT"
           printf 'npm_global_matrix=%s\n' "$npm_global_matrix" >> "$GITHUB_OUTPUT"
@@ -800,10 +829,9 @@ jobs:
   platform-macos:
     name: macos ${{ matrix.shard }}/3
     needs: changes
-    # Native-gated: these legs only run when the changes job's `native` filter
-    # says the macOS suite's inputs could have changed, so an ordinary source
-    # pull request stops paying for three macOS runners.
-    if: github.event_name != 'pull_request' || (needs.changes.outputs.ci == 'true' && needs.changes.outputs.native == 'true')
+    # Never on pull requests: macOS legs run after merge, on push to
+    # main/preview, and on dispatch and the schedule.
+    if: github.event_name != 'pull_request'
     runs-on: macos-latest
     # Three shards. Unsharded, this job was the critical path on every green dev
     # push (mean 14.9 min against a 4.7 min Linux maximum; devlog
@@ -979,7 +1007,7 @@ jobs:
     name: windows ${{ matrix.shard }}/9
     needs: [changes, select-windows-runner]
     if: >-
-      github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all') || github.event_name == 'pull_request' && needs.changes.outputs.windows == 'true'
+      github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all')
     runs-on: ${{ fromJSON(needs.select-windows-runner.outputs.runner) }}
     # Sharded like the Linux legs. The single-leg run reached 30 minutes on a
     # green suite and was killed in cleanup; four shards put each leg inside the
@@ -1278,7 +1306,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        # Pull requests run the ubuntu leg only; windows and macos run after merge.
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["ubuntu-latest","windows-latest","macos-latest"]') }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -1336,7 +1365,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # Pull requests run the ubuntu leg only; macos and windows run after merge.
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["ubuntu-latest","macos-latest","windows-latest"]') }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -1467,9 +1497,9 @@ jobs:
   widget:
     name: macos widget + bundle
     needs: [changes, gates]
-    # Native-gated like platform-macos: the widget extension and app bundle
-    # are rebuilt only when native-capable paths changed.
-    if: github.event_name != 'pull_request' || (needs.changes.outputs.ci == 'true' && needs.changes.outputs.native == 'true')
+    # Never on pull requests, like platform-macos: the widget extension and
+    # app bundle are rebuilt after merge, on push, dispatch and the schedule.
+    if: github.event_name != 'pull_request'
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
@@ -1719,13 +1749,13 @@ jobs:
           if [ "$EVENT_NAME" = "pull_request" ] && [ "$CHANGES_CI" != "true" ]; then
             scoped=not-requested
           fi
-          # platform-macos and widget carry the ordinary scope gate AND the native path filter.
-          # desktop-shell accepts that native set plus the package-E2E set.
-          # This mirrors that expression exactly; where it disagrees with the
-          # jobs' own `if:`, the gate fails by name instead of demanding
+          # platform-macos and widget never run on a pull request (macOS runs after merge).
+          # desktop-shell (ubuntu) carries the ordinary scope gate AND the native or
+          # package-E2E path filters. This mirrors those expressions exactly; where it
+          # disagrees with the jobs' own `if:`, the gate fails by name instead of demanding
           # success from a job that was deliberately left unselected.
           native=not-requested
-          if [ "$EVENT_NAME" != "pull_request" ] || { [ "$CHANGES_CI" = "true" ] && [ "$CHANGES_NATIVE" = "true" ]; }; then
+          if [ "$EVENT_NAME" != "pull_request" ]; then
             native=requested
           fi
           desktop_shell=not-requested
@@ -1775,11 +1805,6 @@ jobs:
             if [ -z "$LANE" ] || [ "$LANE" = "all" ]; then
               windows=requested
             fi
-          elif [ "$EVENT_NAME" = "pull_request" ] && [ "${CHANGES_WINDOWS:-}" = "true" ]; then
-            # A Windows-sensitive pull request (path filter or added-line marker) runs the
-            # nine shards and requires them, exactly as dispatch and the schedule do. A
-            # shard that only fails on a pull request is a regression in that pull request.
-            windows=requested
           fi
 
           # One line per job, mirroring that job's own `if:`. Adding a job to this workflow

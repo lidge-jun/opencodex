@@ -24,6 +24,17 @@ provider events → internal adapter events → client dialect
 
 コンボではない Responses リクエストでは、OpenCodex はその allowlist 対象の 403 を HTTP 200 の Responses、`status: "incomplete"`、`incomplete_details.reason: "content_filter"` に書き換えます。openai-chat アダプタ経路と openai-responses パススルー（grok-4.6 / grok-4.5 OAuth）の両方です。ストリーミングも同じ incomplete 境界です。空本文の 403 はエラーのままです。サブスクリプション、クレジット、権限、`not allowed to use this model` の 403 はエラーのままです。コンボのフェイルオーバーは元の HTTP 403 を見ます。
 
+## 宣言されていないツール呼び出し
+
+Responses エンドポイントでは、リクエストがツールカタログを宣言している場合、ネイティブのパススルー応答がそのカタログにないクライアント実行ツールを呼び出すと、その呼び出しを中継せずにターンを失敗させます: エラーコード `undeclared_tool_call` を含む `response.failed` イベントに続き `data: [DONE]` を送り、バッファリングされた JSON は同じコードで HTTP 502 を返します。この拒否は応答が継続状態に入る前に実行され、`authMode: "forward"` のプロバイダーまたは宣言済みカタログのないリクエストに限り無効になります。
+
+Chat Completions と Messages の各エンドポイントは遅延ツールカタログを尊重します: これらのクライアントはカタログの一部だけを宣言し、残りを実行時に自身のツールレジストリを通じて発見できます。完全な宣言境界を所有するのは翻訳されたカタログのスナップショットではなくそのレジストリです。宣言リスト外の呼び出しはクライアントが検証するために中継され、明示的に空の `tools: []` に対する呼び出しは依然として拒否されます — 空の宣言の下には遅延レジストリが存在しないためです。これらの拒否もすべてのワイヤで `undeclared_tool_call` コードを保持します:
+
+- **Chat Completions:** そのコードを含む OpenAI 形式の `error` オブジェクトを含む `data:` フレームを送り、成功完了や `[DONE]` を送らずにストリームを閉じます。バッファリングされた JSON はコード付きの HTTP 502 を返します。
+- **Messages:** 本文が `{ "type": "error", "error": { "type": "api_error", "code": "undeclared_tool_call", ... } }` の Anthropic `event: error` フレームを送り、成功した `message_stop` や `[DONE]` は送りません。バッファリングされた JSON はコード付きの HTTP 502 `api_error` を返します。確定的なカタログ違反は再試行可能な `overloaded_error`（HTTP 529）として報告されません。
+
+これとは別に、すべての受信ワイヤで、プロバイダーの `default.` 名前空間の呼び出しはリクエストが宣言した素のツール名に正規化されます（`default.Read` → `Read`）。
+
 ## エンドポイントの概要
 
 |クライアントサーフェス |エンドポイント |非ストリームの結果が成功 |成功したストリームまたはソケットの結果 |

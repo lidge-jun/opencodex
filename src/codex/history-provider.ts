@@ -1831,7 +1831,7 @@ export function countPendingOpencodexHistory(
       : { pendingRows: 0, backupEntries };
   }
   try {
-    const db = new Database(stateDbPath, { readonly: true });
+    const db = openCodexStateForPreflight(stateDbPath);
     try {
       db.exec("PRAGMA busy_timeout = 100");
       // Prove the expected history schema is readable without counting unowned routed rows.

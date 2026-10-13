@@ -217,6 +217,8 @@ export const configSchema = z.object({
     short: z.number().int().min(MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT).max(100).optional().catch(undefined),
     long: z.number().int().min(MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT).max(100).optional().catch(undefined),
   }).optional().catch(undefined),
+  // #2999: a malformed hand edit falls back to auto detection rather than rejecting the config.
+  nativeMainRefresh: z.enum(["codex", "opencodex"]).optional().catch(undefined),
   // Future versions remain opaque through passthrough-compatible whole-config saves.
   // Only version 1 grants deletion authority in the rebase path.
   configRebaseProvenance: z.unknown().optional(),
@@ -676,6 +678,17 @@ export const configSchema = z.object({
         code: "custom",
         path: ["providers", redactSecretString(name), "modelReasoningSummaryDelivery"],
         message: reasoningSummaryDeliveryError,
+      });
+    }
+    const minMaxOutputError = positiveIntegerConfigError(
+      (provider as { minMaxOutputTokens?: unknown }).minMaxOutputTokens,
+      "minMaxOutputTokens",
+    );
+    if (minMaxOutputError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "minMaxOutputTokens"],
+        message: minMaxOutputError,
       });
     }
     const defaultMaxOutputError = positiveIntegerConfigError(

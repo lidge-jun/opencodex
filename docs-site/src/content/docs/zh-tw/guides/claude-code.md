@@ -199,7 +199,7 @@ ocx claude desktop import <path> [--apply]
 檔案，因此無效檔案不會改動目前設定檔。加上 `--apply` 可在匯入有效設定檔後立即寫入 Desktop。
 `none` 僅適用於空系列；每個非空系列都必須保留一個預設。
 
-非 Anthropic 路由會得到穩定別名，例如 `claude-opus-4-8-p01q`，其後綴是以 `p` 開頭的四字元代碼。OpenCodex 仍會在內部保留合成日期槽位，
+非 Anthropic 路由會得到穩定別名，例如 `claude-fable-5-p01q`，其後綴是以 `p` 開頭的四字元代碼。OpenCodex 仍會在內部保留合成日期槽位，
 以維持既有設定檔配置的穩定性，但不會把日期當成 Desktop 模型 ID；目前的 Desktop 版本在比較作用中工作階段的模型時會移除尾端日期，
 因而可能抑制模型切換。
 真正的 Anthropic Claude 路由保留真實 id。新路由預設落在 Opus
@@ -328,7 +328,7 @@ Claude Code 2.1.278 接受包含 `claude` 或 `anthropic` 的 ID。以 `claude-`
 | 介面 | 格式 | 示例 |
 | --- | --- | --- |
 | Claude Code CLI | `ocx-claude-<provider>--<model>`（plain）或 `ocx-claude2-…`（escaped） | `ocx-claude-native--gpt-5.6-sol` |
-| Claude Desktop 3P | `claude-opus-4-8-p<code>`（3 字元 base36 設定檔槽位） | `claude-opus-4-8-p01q` |
+| Claude Desktop 3P | `claude-fable-5-p<code>`（3 字元 base36 設定檔槽位） | `claude-fable-5-p01q` |
 
 代理會按請求選擇別名族：`?ids=cli` 或 `?ids=desktop` 優先；否則，`claude-code/*`
 user-agent 會獲得易讀的 CLI 形式，其他用戶端會獲得 Desktop 代碼形式。兩種別名族都會永久
@@ -393,6 +393,10 @@ v1 別名按字面解碼（歷史上 model ID 中包含的兩字元序列 `~s` /
 
 可以在 Claude 頁面調整壓縮值。**警告：**如果將其提高到超過模型的實際視窗，該模型將無法正常
 工作——聊天會在觸發摘要之前報錯。
+
+正規化上下文超限錯誤時，只使用提供方錯誤訊息的前 65,536 個 UTF-16 程式碼單元。
+後面的診斷資訊或 token 數可能被捨棄，且不會新增截斷標記。
+詳細限制和 token 數處理條件請參閱[英文指南](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling)。
 
 低於 1M 的原生 Anthropic 模型絕不會被自動標記。你自行匯出的壓縮值在啟動槽位標記上始終優先（代理會使用**你的**
 值來判斷哪些模型可以安全標記）。探索列表忽略該匯出值並保持固定下限。手動編輯設定時填入的無效值會回退到 829,800。

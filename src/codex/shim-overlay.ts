@@ -44,6 +44,10 @@ export function overlayActivationHint(configDir = getConfigDir()): string {
 function sameId(left: OverlayIdentity | null | undefined, right: OverlayIdentity | null | undefined): boolean {
   return !!left && !!right && left.dev === right.dev && left.ino === right.ino;
 }
+/** APFS device numbers can change after reboot; persisted ownership still requires the same inode. */
+function samePersistedInode(current: OverlayIdentity, recorded: OverlayIdentity | undefined): boolean {
+  return !!recorded && current.ino === recorded.ino;
+}
 function lexical(path: string): Stats | null {
   try { return lstatSync(path); }
   catch (error) { if (fileErrorCode(error) === "ENOENT") return null; throw error; }
@@ -128,7 +132,7 @@ function shellEnvironment(): string {
     'unset ocx_shim_dir ocx_shim_rest ocx_shim_path ocx_shim_more ocx_shim_part', ""].join("\n");
 }
 function ownedWrapper(value: Snapshot, state: OverlayState): boolean {
-  return sameId(value.identity, state.wrapperIdentity)
+  return samePersistedInode(value.identity, state.wrapperIdentity)
     && value.content.includes(SHIM_MARKER) && value.content.includes(`exec ${shQuote(state.launcherPath)} "$@"`);
 }
 function requireOverlayIdentities(state: OverlayState): void {
@@ -137,7 +141,7 @@ function requireOverlayIdentities(state: OverlayState): void {
   }
 }
 function ownedEnvironment(value: Snapshot, state: OverlayState): boolean {
-  return sameId(value.identity, state.envIdentity) && value.content === shellEnvironment();
+  return samePersistedInode(value.identity, state.envIdentity) && value.content === shellEnvironment();
 }
 function revalidateOverlay(state: OverlayState, saved: Snapshot | null, wrapper: Snapshot | null, env: Snapshot | null): void {
   if (!unchanged(statePath(), saved) || !unchanged(state.wrapperPath, wrapper) || !unchanged(overlayPaths().env, env)) {
@@ -201,6 +205,7 @@ export function overlayDiagnostic(state: ShimState): CodexShimDiagnostic {
     inspection?.revalidate();
   } catch (error) { active = null; runnable = false; integrityMessage = failure(error).message; }
   return { installed: true, healthy: complete && runnable && active === true, runnable, active,
+    activationPending: complete && runnable && active !== true,
     summary: `Codex PATH shim: ${complete && runnable ? "ready" : "unhealthy"} at ${state.wrapperPath}; launcher ${state.launcherPath}; PATH ${active === null ? "unverified" : active ? "active" : "inactive"}. ${complete && runnable ? overlayActivationHint() : integrityMessage || "Run ocx codex-shim install to repair the shim."}` };
 }
 

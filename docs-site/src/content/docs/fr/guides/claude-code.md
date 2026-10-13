@@ -275,7 +275,7 @@ Support/Claude/configLibrary` sur macOS, `%APPDATA%\Claude\configLibrary` sur Wi
 `CLAUDE_USER_DATA_DIR` pour utiliser une autre racine de données Claude Desktop. L'ancien répertoire `Claude-3p` n'est
 ni lu ni supprimé automatiquement.
 
-Les routes non Anthropic reçoivent des alias stables comme `claude-opus-4-8-p01q`, avec un code de quatre caractères préfixé par `p`. OpenCodex conserve
+Les routes non Anthropic reçoivent des alias stables comme `claude-fable-5-p01q`, avec un code de quatre caractères préfixé par `p`. OpenCodex conserve
 un emplacement synthétique daté en interne pour stabiliser les affectations du profil, mais n'expose pas cette date comme identifiant Desktop : les versions
 actuelles de Desktop retirent les dates finales lors de la comparaison des modèles d'une session active, ce qui peut empêcher un changement. Les véritables routes Anthropic Claude conservent
 leur identité. Les nouvelles routes appartiennent par défaut à la famille Opus, mais déplacer une route ne change ni le
@@ -397,7 +397,7 @@ chaque ligne du CLI Claude Code (`Routed by OpenCodex to <provider>/<model>` ; l
 | Surface | Format | Exemple |
 | --- | --- | --- |
 | Claude Code CLI | `ocx-claude-<provider>--<model>` (simple) ou `ocx-claude2-…` (échappé) | `ocx-claude-native--gpt-5.6-sol` |
-| Claude Desktop 3P | `claude-opus-4-8-p<code>` (emplacement base36 de 3 caractères) | `claude-opus-4-8-p01q` |
+| Claude Desktop 3P | `claude-fable-5-p<code>` (emplacement base36 de 3 caractères) | `claude-fable-5-p01q` |
 
 Le proxy choisit la famille pour chaque requête : `?ids=cli` ou `?ids=desktop` est prioritaire ; à défaut, l'agent utilisateur
 `claude-code/*` reçoit la forme lisible de la CLI et les autres clients reçoivent le code Claude Desktop.
@@ -485,6 +485,10 @@ Trois états de configuration :
 
 La valeur de compactage est réglable dans **Connexion → Claude**. **Avertissement :** une valeur supérieure à la fenêtre réelle d'un modèle
 rend ce modèle inutilisable : les tours échouent avant que le résumé puisse se déclencher.
+
+La normalisation des erreurs de dépassement de contexte utilise uniquement les 65 536 premières unités de code UTF-16 du message du fournisseur.
+Les diagnostics ou nombres de jetons situés après cette limite peuvent disparaître sans marqueur de troncature.
+Consultez le [guide anglais](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling) pour les limites exactes et les conditions de reprise des nombres de jetons.
 
 Les modèles Anthropic natifs dont le contexte est inférieur à 1M ne sont jamais marqués automatiquement. Une fenêtre de compactage que vous exportez vous-même
 reste prioritaire pour le marquage des variables de lancement ; le proxy s'appuie sur votre valeur pour déterminer les modèles qui peuvent recevoir le marqueur sans risque.

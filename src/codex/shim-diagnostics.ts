@@ -29,6 +29,12 @@ export interface CodexShimDiagnostic {
   summary: string;
   runnable?: boolean;
   active?: boolean | null;
+  /**
+   * PATH overlay only: the wrapper and its private state are intact and runnable, but this process
+   * could not see it first on PATH. Reinstalling cannot change that; the shell must source the
+   * environment file. The dashboard's PATH can also differ from the user's shell (#6971).
+   */
+  activationPending?: boolean;
 }
 
 /** Structured, secret-free shim state for CLI/GUI lifecycle diagnostics. */

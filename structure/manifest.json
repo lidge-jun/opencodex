@@ -537,6 +537,15 @@
       ]
     },
     {
+      "path": "clients/claude-desktop-config-reads.md",
+      "tier": 5,
+      "title": "Claude Desktop Configuration Reads",
+      "scope": "Verified regular-file reads of Claude Desktop config-library metadata, profiles and snapshots.",
+      "documents": [
+        "src/claude/"
+      ]
+    },
+    {
       "path": "desktop-shell.md",
       "tier": 6,
       "title": "Desktop shell",
@@ -584,6 +593,13 @@
         "src/sidecar/",
         "src/update/"
       ]
+    },
+    {
+      "path": "ops/service-logging.md",
+      "tier": 6,
+      "title": "Managed Service Logging",
+      "scope": "Service-only console timestamps and bounded copy-truncate log retention.",
+      "documents": ["src/service/logging.ts"]
     },
     {
       "path": "ops/service-health-recovery.md",

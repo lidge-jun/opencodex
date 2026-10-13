@@ -365,6 +365,14 @@ than nudged.
   recorded in [`CREDITS.md`](./CREDITS.md); `missing_coauthor_credit` in
   `.github/scripts/pr-carry-attribution.cjs` is why the list should not grow.
 
+## CI policy (maintainer decision — do not change)
+
+- Pull requests run **only the fast Ubuntu subset**.
+- Full cross-platform (macOS/Windows) CI runs **only** via manual
+  `workflow_dispatch` and on push to `main`/`preview` (release lines).
+- **Never** add a `dev` push trigger, or `pull_request` runs for macOS/Windows
+  jobs, to any workflow. PRs that change this policy will be closed.
+
 ## Branch policy
 
 - `dev` — the single integration branch and the target for every pull request.

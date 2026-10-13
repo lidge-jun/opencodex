@@ -581,12 +581,13 @@ export interface OcxConfig {
   /**
    * Opt-in Ultra Fast service tier, default off.
    *
-   * This does NOT synthesize an `ultrafast` row: `src/codex/data/upstream-models.json`
-   * advertises only `priority`, and PR #2994 was closed precisely because a catalog row
-   * the wire cannot honor is a picker entry that lies. What the flag turns on is honesty
-   * about a tier the operator supplies themselves — the catalog stops stripping an
-   * `ultrafast` the user configured, and the request path names it instead of recording
-   * "no fast tier was requested".
+   * On native GPT-6 Astra and GPT-6.1 Sol rows (bare and account-bound), the flag adds the
+   * Ultrafast speed choice OpenAI documents for those two models, so the Codex picker offers
+   * it even though `model_catalog_json` replaces ChatGPT's live, plan-aware model list
+   * (`src/codex/catalog/native-ultrafast.ts`). On routed rows it still never invents a tier:
+   * it keeps an `ultrafast` the operator configured from being stripped on regeneration
+   * (PR #2994 was closed for adding one the wire could not honor). Turning it off withdraws
+   * the generated native tier on the next catalog write.
    */
   ultraFastTier?: boolean;
   /**
@@ -599,6 +600,13 @@ export interface OcxConfig {
   codexMainAccountHardLock?: boolean;
   /** Per-window percentages: short defaults to 90, long to 98; integers 80..100, short <= long. */
   codexMainAccountHardLockThresholds?: { short?: number; long?: number };
+  /**
+   * Who refreshes the native main ChatGPT login in CODEX_HOME (#2999). "codex" asks the Codex
+   * binary through app-server `getAuthStatus` and never writes auth.json; "opencodex" keeps the
+   * guarded writer. Absent means "codex" when a Codex binary at or above the supported version
+   * is found, otherwise "opencodex". "codex" also falls back when no such binary exists.
+   */
+  nativeMainRefresh?: "codex" | "opencodex";
   /** Explicit top-level deletion intent used by stale whole-config rebases. */
   configRebaseProvenance?: OcxConfigRebaseProvenance | Record<string, unknown>;
   /** OpenAI provider-contract migration marker (v2 = single `openai` provider with account mode). */

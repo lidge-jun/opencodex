@@ -17,13 +17,10 @@ import { unprivilegedOwnershipMutationEnvironment } from "../service/ownership-m
 import { withUpdateOwnershipLease, readUpdateRuntimeTarget } from "./ownership-transaction";
 import { npmInvocation } from "./npm-invocation.mjs";
 import { pnpmInvocation, pnpmInvocationForPath, resolvePnpmCommands } from "./pnpm-invocation.mjs";
-import {
-  detectInstallFromPath,
-  detectInstallOwnershipFromPath,
-} from "./install-detection.mjs";
+import { detectInstallOwnershipFromPath } from "./install-detection.mjs";
 import type {
   DetectedInstall,
-  InstallOwnership,
+  InstallOwnership as PackageInstallOwnership,
   MiseInstallOwner,
 } from "./install-detection.d.mts";
 import {
@@ -42,6 +39,7 @@ import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from "./tray-updat
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
 import { withoutSiblingMarker } from "../codex/sibling-start";
 import { packageVersion } from "../lib/package-version";
+import { isStandaloneModuleUrl } from "../lib/standalone";
 import { selfLaunchArgv } from "../lib/self-launch-argv";
 import { PNPM_READ_CWD, withPnpmCommandCwd, pnpmReadEnvironment } from "./pnpm-read-policy.mjs";
 
@@ -62,18 +60,21 @@ export function historyRestoreIncomplete(configDir = getConfigDir()): boolean {
 export const PKG = "@bitkyc08/opencodex";
 const HERE = dirname(fileURLToPath(import.meta.url)); // .../opencodex/src/update
 
-export type Installer = DetectedInstall;
+export type Installer = DetectedInstall | "standalone";
+export const STANDALONE_UPDATE_HINT = "Update via OpenCodex Desktop (Check for Updates…) or reinstall the standalone binary from GitHub Releases.";
 export type Channel = "latest" | "preview";
-export type { InstallOwnership, MiseInstallOwner };
+export type InstallOwnership = PackageInstallOwnership | { installer: "standalone" };
+export type { MiseInstallOwner };
 
 /** Infer how opencodex is installed from the running module's path. */
-export function detectInstall(): Installer {
-  return detectInstallFromPath(HERE, { exists: existsSync });
+export function detectInstall(moduleUrl = import.meta.url): Installer {
+  return detectInstallOwnership(moduleUrl).installer;
 }
 
 /** Resolve installer ownership and verified mise update guidance for this package. */
-export function detectInstallOwnership(): InstallOwnership {
-  return detectInstallOwnershipFromPath(HERE, { exists: existsSync });
+export function detectInstallOwnership(moduleUrl = import.meta.url): InstallOwnership {
+  if (isStandaloneModuleUrl(moduleUrl)) return { installer: "standalone" };
+  return detectInstallOwnershipFromPath(dirname(fileURLToPath(moduleUrl)), { exists: existsSync });
 }
 
 export function miseUpdateCommand(
@@ -234,6 +235,7 @@ export function registrySpawnTarget(
   args: readonly string[],
   owner?: PnpmGlobalOwner,
 ): SpawnTarget | null {
+  if (installer === "standalone") return null;
   // A pnpm command without an owner would silently fall back to the first PATH
   // candidate. That is unsafe when multiple PNPM_HOME installations expose the
   // same version, so registry queries use the same hard binding as mutation.
@@ -310,6 +312,7 @@ export function latestVersion(
 
 /** The global-install command opencodex would run to update on this channel. */
 export function updateCommand(installer: Installer, tag: Channel, resolvedVersion?: string | null): { bin: string; args: string[] } {
+  if (installer === "standalone") throw new Error(STANDALONE_UPDATE_HINT);
   if (installer === "mise") {
     throw new Error("mise-owned installations must be upgraded through mise");
   }
@@ -423,6 +426,12 @@ export async function runUpdate(): Promise<void> {
         "OpenCodex appears to be managed by mise, but its ownership metadata is unreadable or inconsistent. Repair the mise installation metadata before updating.",
       );
     }
+    process.exitCode = 1;
+    return;
+  }
+
+  if (installer === "standalone") {
+    console.error(STANDALONE_UPDATE_HINT);
     process.exitCode = 1;
     return;
   }

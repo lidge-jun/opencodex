@@ -307,6 +307,12 @@ admission or account-snapshot pairing. The forwarding contract is covered in
 
 ## SOCKS5 dispatch boundary
 
+HTTPS tunnels in `src/lib/socks5-fetch.ts` give the TLS handshake its own absolute
+30-second deadline after SOCKS CONNECT. Successful TLS clears that deadline before
+the response timer takes over; timeout, caller cancellation, error and premature
+close release the owned socket and listeners. Certificate verification stays enabled.
+`tests/lib/socks5-tls-lifecycle.test.ts` exercises stalled and interrupted handshakes.
+
 `src/config/proxy-env.ts` activates configured SOCKS5 through `src/lib/proxy-env.ts`;
 the compatibility config facade does not own a second activation path.
 The library captures `startupOutboundProxyConfigured` at module evaluation, before config
@@ -382,3 +388,10 @@ Dashboard Fast-row persistence and client refresh follow the [Fast selector rows
 The [compaction routing override](responses-failover.md#compaction-routing-overrides) selects a target before the existing native compact or routed Responses transport is resolved.
 
 First-party managed native Messages retain the [serving UUID and observed CLI identity contract](../data-planes/protocol-paths.md#managed-native-messages). Identity headers do not authorize credentials or extend their destination scope.
+
+Qoder `runTurn` requests use the existing API-key pool only for pre-output failures explicitly
+permitted by Qoder's private classifier and safe to replay. CodeBuddy does not gain this recovery;
+self-authenticated Claude CLI does not authorize API-key recovery through `runTurn` either.
+Sharing the runner, parser or token injection is not recovery permission. Eligibility, attempt
+binding, streaming bounds and safe replay follow
+[runTurn API-key recovery](responses-failover.md#runturn-api-key-recovery).

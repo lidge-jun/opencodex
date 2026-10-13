@@ -280,13 +280,10 @@ describe("GitHub Actions hardening", () => {
     expect(macosTestStep?.run).not.toContain("for attempt in");
     expect(macosTestStep?.run).not.toContain("while true");
     expect((ci.jobs?.["platform-macos"] as { needs?: string; if?: string })?.needs).toBe("changes");
-    // Native-gated together with widget and desktop-shell: on a pull request the
-    // job additionally requires the native path filter, so a src-only PR stops
-    // paying for a macOS shard. ci-scope-reduction.test.ts evaluates this
-    // condition against the events that select the job.
-    expect((ci.jobs?.["platform-macos"] as { if?: string })?.if).toBe(
-      "github.event_name != 'pull_request' || (needs.changes.outputs.ci == 'true' && needs.changes.outputs.native == 'true')",
-    );
+    // Pull requests never run macOS shards; they run after merge, on push to
+    // dev/main/preview. ci-scope-reduction.test.ts evaluates this condition
+    // against the events that select the job.
+    expect((ci.jobs?.["platform-macos"] as { if?: string })?.if).toBe("github.event_name != 'pull_request'");
 
     // Whole-pool control lives on dispatch so every push does not pay the
     // unsharded macOS critical path. Keep the unsharded full-membership control and the
@@ -316,11 +313,12 @@ describe("GitHub Actions hardening", () => {
     expect(macosControlSteps.some(step => step.run?.includes("--shard"))).toBe(false);
     expect(macosControlSteps.some(step => step.run?.includes("coreutils") && step.run.includes("GITHUB_PATH"))).toBe(true);
 
-    // Windows-sensitive PRs and the daily schedule request Windows; release
-    // pushes still do not. Keep branch-ref shortcuts off this condition.
+    // Dispatch and the daily schedule request Windows; pull requests (which run
+    // only the fast Ubuntu subset) and pushes do not. Keep branch-ref shortcuts
+    // off this condition.
     const windowsIf = String((ci.jobs?.["platform-windows"] as { if?: string })?.if ?? "");
     expect(windowsIf).toBe(
-      "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all') || github.event_name == 'pull_request' && needs.changes.outputs.windows == 'true'",
+      "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all')",
     );
     expect(windowsIf).not.toContain("refs/heads/main");
     expect(windowsIf).not.toContain("refs/heads/preview");

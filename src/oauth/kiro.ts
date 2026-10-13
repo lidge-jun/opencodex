@@ -45,6 +45,10 @@ const KIRO_TERMINAL_REFRESH_ERRORS = new Set([
   "access_denied",
   "expired_token",
 ]);
+// The desktop refresh endpoint rejects a dead refresh token with HTTP 401 and a bare
+// `{"message":"Bad credentials"}` body, without an OAuth `error` code. Only that exact
+// pair is a terminal verdict; it is surfaced under this fixed code, never the raw text.
+const KIRO_DESKTOP_BAD_CREDENTIALS = "bad_credentials";
 
 interface ImportedKiroToken {
   access: string;
@@ -545,12 +549,14 @@ async function kiroTokenRefreshError(response: Response, awsSsoRefresh = false):
   let oauthError: string | undefined;
   let refreshAttention = false;
   try {
-    const payload = await response.json() as { error?: unknown };
+    const payload = await response.json() as { error?: unknown; message?: unknown };
     // This input-error code is attention evidence only for our AWS SSO refresh request,
     // never a terminal grant verdict. Do not surface arbitrary upstream descriptions.
     refreshAttention = awsSsoRefresh && response.status === 400 && payload.error === "invalid_request";
     if (typeof payload.error === "string" && KIRO_TERMINAL_REFRESH_ERRORS.has(payload.error)) {
       oauthError = payload.error;
+    } else if (!awsSsoRefresh && response.status === 401 && payload.message === "Bad credentials") {
+      oauthError = KIRO_DESKTOP_BAD_CREDENTIALS;
     }
   } catch {
     // Error bodies are untrusted and intentionally excluded from the surfaced message.

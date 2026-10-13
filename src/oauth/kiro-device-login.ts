@@ -250,9 +250,10 @@ async function poll(flow: Flow, principal: KiroDevicePrincipal): Promise<KiroDev
       if (data.status === "authorization_pending") return publicView(flow);
       if (data.status === "expired_token" || data.status === "expired") return terminal(flow, "expired");
     }
+    // The social poll reports a completed grant as status "authorized"; "approved" is kept as an alias.
     if (result.status !== 200 || Object.hasOwn(data, "error") || error || (builder && (data.status !== undefined || !positive(data.expiresIn) || !isStorableKiroClientPart(flow.clientId)
       || !isStorableKiroClientPart(flow.clientSecret)))
-      || (!builder && (data.status !== undefined && data.status !== "approved"))) return terminal(flow, "failed");
+      || (!builder && (data.status !== undefined && data.status !== "authorized" && data.status !== "approved"))) return terminal(flow, "failed");
     if (!code(data.accessToken) || !code(data.refreshToken)
       || (!builder && (typeof data.profileArn !== "string" || !PROFILE_ARN.test(data.profileArn)))) return terminal(flow, "failed");
     const credential: OAuthCredentials = {

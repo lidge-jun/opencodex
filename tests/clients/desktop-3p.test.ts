@@ -422,13 +422,13 @@ describe("Claude Desktop 3P models", () => {
       defaults: { opus: "other/current", fable: null, sonnet: null, haiku: null },
     };
     const rendered = generateDesktop3pModels([], [staleRoute, { provider: "other", id: "current" }], profile);
-    expect(rendered.find(model => model.labelOverride.includes("Current"))?.name).toBe("claude-opus-4-8-p000");
+    expect(rendered.find(model => model.labelOverride.includes("Current"))?.name).toBe("claude-fable-5-p000");
     expect(resolveDesktop3pAlias(staleAlias)).toBe("test/model-14753");
   });
 
   test("fails closed when a managed wire id matches a real Anthropic id", () => {
     const warning = spyOn(console, "warn").mockImplementation(() => {});
-    const collision = "claude-opus-4-8-p000";
+    const collision = "claude-fable-5-p000";
     const profile = {
       version: 1 as const,
       assignments: {
@@ -466,8 +466,8 @@ describe("Claude Desktop 3P models", () => {
     const luna = rendered.find(model => model.labelOverride.includes("Luna"));
     expect(luna).toMatchObject({ anthropicFamilyTier: "haiku", isFamilyDefault: true, supports1m: true });
     expect(rendered.map(model => model.name)).toEqual([
-      expect.stringMatching(/^claude-opus-4-8-p[0-9a-z]{3}$/),
-      expect.stringMatching(/^claude-opus-4-8-p[0-9a-z]{3}$/),
+      expect.stringMatching(/^claude-fable-5-p[0-9a-z]{3}$/),
+      expect.stringMatching(/^claude-fable-5-p[0-9a-z]{3}$/),
     ]);
     const desktopIdentity = (id: string) => id.replace(/-(\d{8})$/, "");
     expect(new Set(rendered.map(model => desktopIdentity(model.name))).size).toBe(2);
@@ -476,6 +476,40 @@ describe("Claude Desktop 3P models", () => {
     const legacyDate = profile.assignments["cursor/gpt-5.6-luna"]!.alias;
     expect(resolveDesktop3pAlias(legacyDate)).toBe("cursor/gpt-5.6-luna");
     expect(resolveInboundModel(legacyDate)).toBe("cursor/gpt-5.6-luna");
+    const previousWireId = luna!.name.replace("claude-fable-5-", "claude-opus-4-8-");
+    expect(resolveInboundModel(previousWireId)).toBe("cursor/gpt-5.6-luna");
+    expect(resolveInboundModel(`${previousWireId}[1m]`)).toBe("cursor/gpt-5.6-luna");
+    expect(resolveInboundModel(`${luna!.name}[1m]`)).toBe("cursor/gpt-5.6-luna");
+    // Desktop 2.31226 normalizes terminal dates, then uses a prefix fallback
+    // for fable/mythos. These wire IDs retain identity and reach that fallback.
+    expect(rendered.every(model => /^(?:claude-)?(?:fable|mythos)(?:-|$)/.test(desktopIdentity(model.name)))).toBe(true);
+    expect(isUnresolvedDesktop3pAlias("claude-fable-5-pzzz")).toBe(true);
+    expect(() => resolveInboundModel("claude-fable-5-pzzz")).toThrow("Unknown Claude Desktop alias");
+    buildDesktop3pRegistry([], []);
+  });
+
+  test("old profile IDs never capture a genuine Anthropic model during migration", () => {
+    const collision = "claude-opus-4-8-p000";
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    const profile = {
+      version: 1 as const,
+      assignments: {
+        "test/routed": { family: "opus" as const, alias: "claude-opus-4-8-20260101" },
+        [`anthropic/${collision}`]: { family: "opus" as const, alias: collision },
+      },
+      defaults: { opus: "test/routed", fable: null, sonnet: null, haiku: null },
+    };
+    try {
+      const rendered = generateDesktop3pModels([], [{ provider: "test", id: "routed" }, { provider: "anthropic", id: collision }], profile);
+      expect(rendered.map(model => model.name)).toEqual(["claude-fable-5-p000", collision]);
+      expect(resolveInboundModel("claude-fable-5-p000")).toBe("test/routed");
+      expect(resolveInboundModel(collision)).toBe(collision);
+      expect(resolveDesktop3pAlias(collision)).toBeNull();
+      expect(warning.mock.calls.flat().join(" ")).toContain("conflicts with a real Anthropic model");
+    } finally {
+      warning.mockRestore();
+      buildDesktop3pRegistry([], []);
+    }
   });
 
   test("backs up owned config and preserves old bytes when atomic replacement fails", () => {

@@ -103,19 +103,19 @@ function modelInfo(id: string, displayName: string, ladder: readonly string[], i
 
 /**
  * Which id family the discovery list carries (devlog 050): Claude Code (CLI)
- * gets readable `claude-ocx-*` ids; Claude Desktop keeps the hashed
- * `claude-opus-4-8-<code>` family its 3P config was written with. Both families
+ * gets readable `ocx-claude-*` ids; Claude Desktop keeps its profile's
+ * `claude-fable-5-p<code>` ids (legacy no-profile callers use hash aliases). Both families
  * decode in resolveInboundModel regardless of the style served here.
  */
 export type AnthropicIdStyle = "desktop3p" | "readable";
 
-/** Build the full anthropic-flavor discovery list (ids are Desktop 3P aliases). */
+/** Build discovery rows; a Desktop resolver can return undefined to withhold an unbound ID. */
 export function buildAnthropicModelInfos(
   nativeSlugs: readonly string[],
   routedModels: readonly CatalogModel[],
   auto: AutoContextMode = AUTO_CONTEXT_OFF,
   idStyle: AnthropicIdStyle = "desktop3p",
-  aliasForRoute: (provider: string, modelId: string) => string = desktop3pAlias,
+  aliasForRoute: (provider: string, modelId: string) => string | undefined = desktop3pAlias,
   nativeContextCap?: NativeContextLimitsInput,
   fastMode?: boolean,
   // Presence is the feature gate: the caller passes undefined when `fastRows` is off, so a
@@ -144,7 +144,7 @@ export function buildAnthropicModelInfos(
         ? claudeCodeAlias(m.provider, listed)
         : aliasForRoute(m.provider, m.id);
     }),
-  ]);
+  ].filter((id): id is string => typeof id === "string" && id.length > 0));
   // [1m] picker variant (devlog 260712 B1; widened in devlog/_plan/261009_claude_1m_default/020):
   // Claude Code accounts exactly 1M for ids carrying the marker (2.1.207 binary: /\[1m\]/i -> 1e6,
   // compaction preserved). A discovery client may lack CLAUDE_CODE_AUTO_COMPACT_WINDOW, so the
@@ -201,7 +201,7 @@ export function buildAnthropicModelInfos(
   };
   for (const slug of nativeSlugs) {
     const id = idStyle === "readable" ? claudeCodeNativeAlias(slug) : aliasForRoute("native", slug);
-    if (seen.has(id)) continue;
+    if (!id || seen.has(id)) continue;
     seen.add(id);
     const nativeWindow = nativeOpenAiContextWindow(slug, nativeContextCap);
     const nativeMaxInput = nativeOpenAiMaxInputTokens(slug, nativeContextCap);
@@ -228,7 +228,7 @@ export function buildAnthropicModelInfos(
     const id = idStyle === "readable"
       ? claudeCodeAlias(m.provider, listedModelId)
       : aliasForRoute(m.provider, m.id);
-    if (seen.has(id)) continue;
+    if (!id || seen.has(id)) continue;
     seen.add(id);
     const groupStart = out.length;
     const ladder = Array.isArray(m.reasoningEfforts) ? m.reasoningEfforts : [];

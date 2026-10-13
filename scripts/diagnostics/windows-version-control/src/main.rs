@@ -2,6 +2,8 @@
 
 #[cfg(windows)]
 mod control;
+#[cfg(windows)]
+mod fixture_env;
 
 fn main() {
     #[cfg(windows)]

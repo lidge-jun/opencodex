@@ -61,11 +61,11 @@ describe("CI review lanes", () => {
       }
     }
 
-    // The push trigger stays pinned to the release-relevant lines: main and
-    // preview MUST stay because release.yml requires a successful push-event
-    // run for the exact release SHA and states that a pull-request run does
-    // not qualify. dev is deliberately absent: its integration evidence is
-    // the pull_request run, with workflow_dispatch for anything else.
+    // The push trigger is pinned to the release lines. main and preview MUST
+    // stay because release.yml requires a successful push-event run for the
+    // exact release SHA and states that a pull-request run does not qualify.
+    // dev is deliberately absent (CI policy): cross-platform legs run on dev
+    // only by manual workflow_dispatch.
     const ci = Bun.YAML.parse(await readText(".github/workflows/ci.yml")) as {
       on?: {
         push?: { branches?: string[]; paths?: string[] };
@@ -208,7 +208,16 @@ describe("CI review lanes", () => {
         expect(enabled(job, event, lane)).toBe(true);
         expect(enabled(job, event, lane, "false")).toBe(event !== "pull_request");
       }
-      for (const job of ["platform-macos", "widget", "desktop-shell"]) {
+      // macOS jobs never run on a pull request; they run after merge, on push.
+      for (const job of ["platform-macos", "widget"]) {
+        for (const scope of ["true", "false"]) {
+          for (const native of ["true", "false"]) {
+            expect(enabled(job, event, lane, scope, "true", native)).toBe(event !== "pull_request");
+          }
+        }
+      }
+      // desktop-shell runs on ubuntu, so a native pull request still selects it.
+      for (const job of ["desktop-shell"]) {
         for (const scope of ["true", "false"]) {
           for (const native of ["true", "false"]) {
             expect(enabled(job, event, lane, scope, "true", native))
@@ -220,7 +229,8 @@ describe("CI review lanes", () => {
       expect(enabled("npm-global-smoke", event, lane, "true", "false")).toBe(false);
     }
     for (const windows of ["true", "false", ""]) {
-      expect(enabled("platform-windows", "pull_request", "", "true", "true", "true", windows)).toBe(windows === "true");
+      // Even a Windows-sensitive pull request runs only the fast Ubuntu subset.
+      expect(enabled("platform-windows", "pull_request", "", "true", "true", "true", windows)).toBe(false);
     }
     expect(enabled("platform-windows", "schedule", "", "false", "false", "false")).toBe(true);
     expect(enabled("macos-control", "schedule", "", "false", "false", "false")).toBe(true);
@@ -344,7 +354,7 @@ describe("Windows and nightly CI contracts", () => {
     expect(checkouts).toBe(17);
   });
 
-  test.skipIf(process.platform === "win32" || !Bun.which("jq"))("aggregate requests Windows only for selected PRs and requests both diagnostic jobs nightly", async () => {
+  test.skipIf(process.platform === "win32" || !Bun.which("jq"))("aggregate never requests Windows on a pull request and requests both diagnostic jobs nightly", async () => {
     const ci = Bun.YAML.parse(await readText(".github/workflows/ci.yml")) as {
       jobs: Record<string, { needs?: string[]; steps?: Array<{ name?: string; shell?: string; env?: Record<string, string>; run?: string }> }>;
     };
@@ -363,7 +373,8 @@ describe("Windows and nightly CI contracts", () => {
     const slice = script.slice(start, last + "RESULTS_EOF".length);
     for (const [event, lane, windows, expectWindows, expectControl] of [
       ["schedule", "", undefined, "requested", "requested"],
-      ["pull_request", "", "true", "requested", "not-requested"],
+      // Pull requests run only the fast Ubuntu subset, even when the change is Windows-sensitive.
+      ["pull_request", "", "true", "not-requested", "not-requested"],
       ["pull_request", "", "false", "not-requested", "not-requested"],
       ["pull_request", "", undefined, "not-requested", "not-requested"],
       ["push", "", "true", "not-requested", "not-requested"],

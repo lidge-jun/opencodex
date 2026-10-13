@@ -53,7 +53,7 @@ export function createRefreshScheduler(deps: RefreshDeps = defaults) {
     const version = deps.current();
     const installer = deps.install();
     return !deps.disabled() && version !== "?" && !isSourceBuildVersion(version)
-      && installer !== "source" && installer !== "mise";
+      && installer !== "source" && installer !== "standalone" && installer !== "mise";
   };
   const channel = () => defaultUpdateTag(deps.current());
   const stale = (tag: Channel) => {
@@ -123,7 +123,7 @@ export function createRefreshScheduler(deps: RefreshDeps = defaults) {
     },
     async check(tag: Channel): Promise<UpdateCheckResult> {
       const installer = deps.install();
-      const latest = installer === "source" || installer === "mise" ? null : await lookup(tag, false);
+      const latest = installer === "source" || installer === "standalone" || installer === "mise" ? null : await lookup(tag, false);
       return checkForUpdate(tag, {
         currentVersion: deps.current,
         detectInstall: deps.install,

@@ -49,6 +49,7 @@ import { isReserveCatalogProjection, type ReserveCatalogProjection } from "./res
 import { deriveEntry, finishUpstreamNativeEntry, isExactComboCatalogEntry } from "./derive-entry";
 import { PICKER_ORDER_PRIORITY_BASE, SPAWN_PRIORITY_FIELD } from "./subagent-roster";
 import { applyConfiguredUltraFast } from "./configured-tiers";
+import { applyNativeUltraFastTier } from "./native-ultrafast";
 
 export interface ObservedCatalogEntryBuildInput {
   readonly template: RawEntry | null;
@@ -934,6 +935,11 @@ export function mergeCatalogEntriesFromObservedState({
           levels.flatMap(level => typeof level.effort === "string" ? [level.effort] : []),
         );
       }
+    }
+    // Native Astra/Sol rows (bare and account-bound) gain or lose the documented Ultrafast
+    // choice with the switch; aliases, combos and reserve projections keep their own tiers.
+    if (!reserveProjection && !exactCombo && m.owned_by !== COMBO_NAMESPACE && !isNativeAliasCatalogEntry(e)) {
+      applyNativeUltraFastTier(e, ultraFastTier);
     }
     if (wsEnabled) e.supports_websockets = true;
     else {
