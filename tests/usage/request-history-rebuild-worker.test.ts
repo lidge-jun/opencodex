@@ -26,6 +26,7 @@ import {
   RequestHistoryIndexClosedError,
   REQUEST_HISTORY_MAX_RECORD_BYTES,
   setRequestHistoryAsyncRefreshBuildsForTests,
+  setRequestHistoryRebuildJobFactoryForTests,
   setRequestHistoryWorkerRebuildMinBytesForTests,
 } from "../../src/routing/history/indexer";
 import { buildFilePath, buildIndexFile } from "../../src/routing/history/build-file";
@@ -111,6 +112,7 @@ afterEach(async () => {
   closeRequestHistoryIndex();
   setRequestHistoryWorkerRebuildMinBytesForTests(undefined);
   setRequestHistoryAsyncRefreshBuildsForTests(undefined);
+  setRequestHistoryRebuildJobFactoryForTests(undefined);
   // A disposed worker's build files go only after its thread exits.
   await waitFor(() => buildFilesLeft().length === 0);
   await flushConfigDirHardeningForTests();
@@ -187,6 +189,38 @@ describe("request-history worker rebuild (#6990)", () => {
     writeLedger(ledgerLines(200));
     const meta = await openRequestHistoryIndex();
     expect(meta.indexedRows).toBe(200);
+  });
+
+  test("after a worker fails, async readers rebuild inline and routing stays busy", async () => {
+    // A worker that spawns and then fails (a module that will not load, say).
+    let builds = 0;
+    setRequestHistoryRebuildJobFactoryForTests(() => ({
+      build: async () => { builds += 1; throw new Error("worker module failed to load"); },
+      dispose: async () => {},
+      afterExit: async (cleanup: () => void) => { cleanup(); },
+    }));
+    writeLedger(ledgerLines(250));
+    expect(() => openRequestHistoryIndexSync()).toThrow(RequestHistoryIndexBusyError);
+    await Bun.sleep(10);
+    // During the cooldown routing neither respawns the worker nor rebuilds inline.
+    expect(() => openRequestHistoryIndexSync()).toThrow(/rebuild failed recently/);
+    expect(builds).toBe(1);
+    const meta = await openRequestHistoryIndex();
+    expect(meta.indexedRows).toBe(250);
+    expect(builds).toBe(1);
+    expect(openRequestHistoryIndexSync().indexedRows).toBe(250);
+  });
+
+  test("a manual rebuild falls back inline when its worker fails", async () => {
+    setRequestHistoryRebuildJobFactoryForTests(() => ({
+      build: async () => { throw new Error("worker exited"); },
+      dispose: async () => {},
+      afterExit: async (cleanup: () => void) => { cleanup(); },
+    }));
+    writeLedger(ledgerLines(180));
+    const meta = await rebuildRequestHistoryIndex();
+    expect(meta.indexedRows).toBe(180);
+    expect(meta.lastError).toBe("manual rebuild requested");
   });
 
   test("rows appended during the build arrive as a tail after the swap", async () => {

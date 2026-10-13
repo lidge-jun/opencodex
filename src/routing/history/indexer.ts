@@ -120,8 +120,17 @@ export class RequestHistoryIndexClosedError extends Error {
 }
 
 interface WorkerRebuild {
-  readonly job: RebuildWorkerJob;
+  readonly job: RebuildJob;
   readonly promise: Promise<void>;
+}
+
+/** The part of a rebuild worker job the indexer drives; tests substitute a failing one. */
+type RebuildJob = Pick<RebuildWorkerJob, "build" | "dispose" | "afterExit">;
+let createRebuildJob: () => RebuildJob = () => new RebuildWorkerJob();
+
+/** Test seam: replace the worker job factory; `undefined` restores the real worker. */
+export function setRequestHistoryRebuildJobFactoryForTests(factory: (() => RebuildJob) | undefined): void {
+  createRebuildJob = factory ?? (() => new RebuildWorkerJob());
 }
 
 /** Internal signal: the refresh needs a rebuild that is running (or now started) on the worker. */
@@ -322,21 +331,21 @@ function fullRebuild(dbHandle: Database, reason: string): void {
  * Start a worker rebuild of `revision`, or return null when no worker can be
  * spawned (the caller then rebuilds inline, as before #6990).
  */
+function workerCoolingDown(): boolean {
+  return workerFailure !== null && Date.now() - workerFailure.at < WORKER_FAILURE_COOLDOWN_MS;
+}
+
 function startWorkerRebuild(reason: string, revision: UsageLogRevision): WorkerRebuild | null {
-  if (workerFailure && Date.now() - workerFailure.at < WORKER_FAILURE_COOLDOWN_MS) {
-    const cause = workerFailure.error instanceof Error ? workerFailure.error.message : String(workerFailure.error);
-    throw new RequestHistoryIndexBusyError(`request-history index rebuild failed recently: ${cause}`);
-  }
-  let job: RebuildWorkerJob;
+  let job: RebuildJob;
   try {
-    job = new RebuildWorkerJob();
+    job = createRebuildJob();
   } catch {
     return null;
   }
   const lifetime = indexLifetime;
   const indexPath = dbPath || indexDbPath();
   const buildPath = buildFilePath(indexPath, process.pid, ++buildSequence);
-  const rebuild: { job: RebuildWorkerJob; promise: Promise<void> } = { job, promise: Promise.resolve() };
+  const rebuild: { job: RebuildJob; promise: Promise<void> } = { job, promise: Promise.resolve() };
   rebuild.promise = job.build(indexPath, buildPath, reason, revision)
     .then(() => {
       if (lifetime !== indexLifetime) throw new RequestHistoryIndexClosedError();
@@ -370,24 +379,39 @@ function installBuild(buildPath: string, indexPath: string): void {
   renameSync(buildPath, indexPath);
 }
 
+/**
+ * Who is refreshing. Routing-time reads never rebuild a large ledger inline;
+ * async readers do once the worker has just failed, which is the pre-#6990
+ * behaviour and better than leaving history unavailable.
+ */
+type RefreshCaller = "routing" | "reader";
+
 /** Full rebuild, on the worker when the ledger is large enough to stall the event loop. */
-function rebuildFromLedger(handle: Database, reason: string): void {
+function rebuildFromLedger(handle: Database, reason: string, caller: RefreshCaller): void {
   const revision = sourceIdentity();
   if (revision !== null && Number(revision.size) >= workerRebuildMinBytes) {
-    const rebuild = startWorkerRebuild(reason, revision);
-    if (rebuild) throw new RebuildHandedOff(rebuild);
+    if (workerCoolingDown()) {
+      if (caller === "routing") {
+        const error = workerFailure!.error;
+        const cause = error instanceof Error ? error.message : String(error);
+        throw new RequestHistoryIndexBusyError(`request-history index rebuild failed recently: ${cause}`);
+      }
+    } else {
+      const rebuild = startWorkerRebuild(reason, revision);
+      if (rebuild) throw new RebuildHandedOff(rebuild);
+    }
   }
   fullRebuild(handle, reason);
 }
 
-function refreshLockedSync(): RequestHistoryIndexMeta {
+function refreshLockedSync(caller: RefreshCaller): RequestHistoryIndexMeta {
   if (workerRebuild) throw new RebuildHandedOff(workerRebuild);
   openIndexDb();
   const state = ensureSchemaAndIdentity(db!);
   const handle = db!;
   const revision = sourceIdentity();
   if (state === "rebuilt") {
-    rebuildFromLedger(handle, "rebuilt after identity/schema mismatch");
+    rebuildFromLedger(handle, "rebuilt after identity/schema mismatch", caller);
     return metaFor(handle);
   }
   const current = readIndexedMeta(handle);
@@ -399,7 +423,7 @@ function refreshLockedSync(): RequestHistoryIndexMeta {
   const tailNextOffset = current.indexedOffset;
   if (Number(revision.size) < tailNextOffset) {
     // Truncated source: offsets no longer make sense.
-    rebuildFromLedger(handle, "source truncated; index rebuilt");
+    rebuildFromLedger(handle, "source truncated; index rebuilt", caller);
     return metaFor(handle);
   }
   if (tailNextOffset < Number(revision.size)) {
@@ -418,7 +442,7 @@ function refreshLockedSync(): RequestHistoryIndexMeta {
  */
 export function openRequestHistoryIndexSync(): RequestHistoryIndexMeta {
   try {
-    return refreshLockedSync();
+    return refreshLockedSync("routing");
   } catch (error) {
     if (error instanceof RebuildHandedOff) throw new RequestHistoryIndexBusyError();
     throw error;
@@ -430,7 +454,7 @@ async function refreshWaitingForWorker(): Promise<RequestHistoryIndexMeta> {
   for (let builds = 0; ; ) {
     let handedOff: RebuildHandedOff;
     try {
-      return refreshLockedSync();
+      return refreshLockedSync("reader");
     } catch (error) {
       if (!(error instanceof RebuildHandedOff)) throw error;
       handedOff = error;
@@ -485,8 +509,16 @@ export async function rebuildRequestHistoryIndex(): Promise<RequestHistoryIndexM
     workerFailure = null;
     const rebuild = startWorkerRebuild("manual rebuild requested", revision);
     if (rebuild) {
-      await rebuild.promise;
-      return openRequestHistoryIndex();
+      const lifetime = indexLifetime;
+      try {
+        await rebuild.promise;
+        return openRequestHistoryIndex();
+      } catch (error) {
+        // A close is final; any other worker failure falls back to the inline rebuild below.
+        if (lifetime !== indexLifetime || error instanceof RequestHistoryIndexClosedError) throw error;
+      }
+      fullRebuild(openIndexDb(), "manual rebuild requested");
+      return metaFor(db!);
     }
   }
   fullRebuild(handle, "manual rebuild requested");
