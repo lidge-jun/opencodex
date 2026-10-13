@@ -675,6 +675,24 @@ mod tests {
     use super::*;
     use record::tests::{bundle, Temp};
     #[cfg(target_os = "macos")]
+    fn stable_bundle_fixture() -> Temp {
+        // Stable bundles cannot live under the OS temp directory. Keep the fixture
+        // in this checkout, with the production raw/canonical checks still enabled.
+        let base = fs::canonicalize(env!("CARGO_MANIFEST_DIR"))
+            .unwrap()
+            .join(".tmp");
+        assert!(
+            !is_temporary_bundle_path(&base, &std::env::temp_dir())
+                && !has_app_translocation_marker(&base),
+            "stable bundle tests require a checkout outside temporary/translocated locations"
+        );
+        fs::create_dir_all(&base).unwrap();
+        record::check(&base, true).unwrap();
+        let root = base.join(format!("ocx-stable-bundle-{}", uuid::Uuid::new_v4()));
+        record::private_dir(&root).unwrap();
+        Temp(root)
+    }
+    #[cfg(target_os = "macos")]
     fn rc_acl(path: &Path, add: bool) {
         let mut command = std::process::Command::new("/bin/chmod");
         if add {
@@ -1033,7 +1051,7 @@ mod tests {
     #[test]
     fn stable_macos_bundle_requires_an_executable_sibling_and_checks_canonical_location() {
         use std::os::unix::fs::{symlink, PermissionsExt};
-        let t = Temp::new();
+        let t = stable_bundle_fixture();
         let app = t.0.join("App.app/Contents/MacOS");
         fs::create_dir_all(&app).unwrap();
         let exe = app.join("app");
@@ -1106,11 +1124,12 @@ mod tests {
         let npm = t.0.join("npm-bin");
         record::private_dir(&npm).unwrap();
         record::atomic(&npm.join("ocx"), None, b"#!/bin/sh\necho npm-ocx\n", 0o700).unwrap();
-        let app = if cfg!(target_os = "macos") {
-            t.0.join("Applications/OpenCodex.app/Contents/MacOS")
-        } else {
-            t.0.join("usr/bin")
-        };
+        #[cfg(target_os = "macos")]
+        let stable = stable_bundle_fixture();
+        #[cfg(target_os = "macos")]
+        let app = stable.0.join("Applications/OpenCodex.app/Contents/MacOS");
+        #[cfg(not(target_os = "macos"))]
+        let app = t.0.join("usr/bin");
         fs::create_dir_all(&app).unwrap();
         let exe = app.join("OpenCodex");
         let cli = app.join("ocx");
