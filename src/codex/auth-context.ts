@@ -1085,7 +1085,7 @@ export async function resolveCodexAuthContext(
   mode: CodexAccountMode,
   options: ResolveCodexAuthContextOptions = {},
 ): Promise<CodexAuthContext> {
-  // Filled by the inner resolver once it knows the gated-model roster, so the hint obeys it.
+  // Filled by the inner resolver with the request's own fenced model evidence, so the hint obeys it.
   const eligibility: RecoveryHintEligibility = {};
   try {
     return await resolveCodexAuthContextUnannotated(headers, config, mode, options, eligibility);
@@ -1099,7 +1099,7 @@ export async function resolveCodexAuthContext(
       try {
         const now = Date.now();
         error.poolRecoveryAt = nextCodexPoolRecoveryAt(config, now, codexQuotaScopeForModel(options.modelId), {
-          deniedAccountIds: cachedDeniedCodexAccountIdsForModel(options.modelId, now),
+          deniedAccountIds: eligibility.deniedModelAccountIds,
           eligibleAccountIds: eligibility.modelEligibleAccountIds,
         });
       } catch { /* the hint is optional; the refusal stands without it */ }
@@ -1108,7 +1108,10 @@ export async function resolveCodexAuthContext(
   }
 }
 
-interface RecoveryHintEligibility { modelEligibleAccountIds?: ReadonlySet<string> }
+interface RecoveryHintEligibility {
+  modelEligibleAccountIds?: ReadonlySet<string>;
+  deniedModelAccountIds?: ReadonlySet<string>;
+}
 
 async function resolveCodexAuthContextUnannotated(
   headers: Headers,
@@ -1341,6 +1344,7 @@ async function resolveCodexAuthContextUnannotated(
       undefined,
       { excludeAccountIds },
     );
+    eligibility.deniedModelAccountIds = deniedModelAccountIds;
     const selectionOptions = {
       // Temporary switch drain keeps the candidate until the atomic claim rejects
       // it. Retained recovery makes main wholly ineligible so pool routing continues.
