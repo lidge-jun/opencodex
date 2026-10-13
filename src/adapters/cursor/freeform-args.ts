@@ -17,7 +17,16 @@ export type CursorFreeformArgs =
   | { ok: true; args: string }
   | { ok: false; reason: string };
 
-const SAFE_KEY = /^[A-Za-z0-9_.-]{1,40}$/;
+/**
+ * The only key names a diagnostic may print. They are constants written here, so the error can
+ * never carry request-derived text: a model can put body text or an identifier in key position,
+ * and the message is persisted to request logs. Every other key is counted, not named.
+ */
+const NAMEABLE_KEYS: ReadonlySet<string> = new Set([
+  "input",
+  "code", "script", "js", "javascript", "command", "cmd", "content", "patch",
+  "source", "program", "body", "text", "args", "arguments",
+]);
 const MAX_LISTED_KEYS = 8;
 
 function valueKind(value: unknown): string {
@@ -27,17 +36,18 @@ function valueKind(value: unknown): string {
 }
 
 /**
- * Shape-only description of a rejected wrapper. Lists key names (never values) so the next
- * report can say what the model actually sent; keys that do not look like identifiers are
- * counted instead of echoed, since a malformed object can carry body text in key position.
+ * Shape-only description of a rejected wrapper: allowlisted key names with their value kinds,
+ * then a count of every other key. Never values, never an unlisted key name.
  */
 function describeKeys(record: Record<string, unknown>): string {
   const keys = Object.keys(record);
   if (keys.length === 0) return "received an empty object";
-  const safe = keys.filter(key => SAFE_KEY.test(key));
-  const listed = safe.slice(0, MAX_LISTED_KEYS).map(key => `${key}:${valueKind(record[key])}`);
+  const listed = keys.filter(key => NAMEABLE_KEYS.has(key))
+    .slice(0, MAX_LISTED_KEYS)
+    .map(key => `${key}:${valueKind(record[key])}`);
   const hidden = keys.length - listed.length;
-  return `received keys [${listed.join(", ")}${hidden > 0 ? `${listed.length > 0 ? ", " : ""}+${hidden} more` : ""}]`;
+  if (hidden > 0) listed.push(`+${hidden} other`);
+  return `received keys [${listed.join(", ")}]`;
 }
 
 export function canonicalCursorFreeformArgs(args: string, toolName: string): CursorFreeformArgs {

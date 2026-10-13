@@ -85,10 +85,16 @@ describe("Cursor freeform argument gate (#7049)", () => {
     expect(canonicalCursorFreeformArgs("", "exec")).toEqual({ ok: false, reason: "received no arguments" });
   });
 
-  test("diagnostics name key shapes without echoing values or body-like keys", () => {
-    const result = canonicalCursorFreeformArgs(JSON.stringify({ "text(secret body)": 1, source: "x" }), "exec");
-    expect(result).toEqual({ ok: false, reason: "received keys [source:string, +1 more]" });
+  test("diagnostics name only allowlisted keys and count the rest", () => {
+    // Identifier-shaped keys can still be request content (an account id, a token), and the
+    // error is persisted to request logs, so nothing outside the fixed allowlist is printed.
+    const result = canonicalCursorFreeformArgs(
+      JSON.stringify({ "text(secret body)": 1, acct_123456: "x", source: "y" }),
+      "exec",
+    );
+    expect(result).toEqual({ ok: false, reason: "received keys [source:string, +2 other]" });
     expect(JSON.stringify(result)).not.toContain("secret");
+    expect(JSON.stringify(result)).not.toContain("acct_123456");
   });
 
   test("commits a completed Opus exec call that names its body `code`", () => {
@@ -145,11 +151,11 @@ describe("Cursor freeform argument gate (#7049)", () => {
   test("still rejects an unrecognized wrapper with its shape in the error", () => {
     const state = codeModeState();
     expect(mapSyntheticMcpExecToToolEvents(
-      execArgs("call_bad", { program: stringValueBytes("text(1)") }),
+      execArgs("call_bad", { program: stringValueBytes("text(1)"), acct_9: stringValueBytes("x") }),
       "fallback",
       { state },
     )).toEqual([
-      { type: "error", message: "exec call had invalid freeform arguments; expected {input:string} (received keys [program:string])" },
+      { type: "error", message: "exec call had invalid freeform arguments; expected {input:string} (received keys [program:string, +1 other])" },
     ]);
     expect(state.completedToolCalls.has("call_bad")).toBe(true);
   });

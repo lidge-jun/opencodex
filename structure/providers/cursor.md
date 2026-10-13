@@ -256,8 +256,9 @@ On the way back, `src/adapters/cursor/freeform-args.ts` gates every completed fr
 call before emission. It accepts a string `input` byte-identical, and otherwise applies
 the shared Responses unwrap rule — no `input` key and exactly one string-valued fallback
 field from `freeformFallbackKeys` (for example `code` on bare `exec`) — re-emitting
-`{input}`. Every other shape fails closed with an error that names key shapes, never
-values. Freeform string args decode without JSON re-parsing, so a body that is itself
+`{input}`. Every other shape fails closed with an error that names only allowlisted key
+names with their value kinds and counts every other key; values and request-derived key
+names never reach the persisted log. Freeform string args decode without JSON re-parsing, so a body that is itself
 valid JSON stays a string (#7049). Coverage lives in
 `tests/providers/cursor/cursor-freeform-args.test.ts`.
 Namespaced tools do not acquire bare-shell behavior. Regression coverage lives in
