@@ -1,7 +1,7 @@
 # Claude Desktop Configuration Reads
 
 Every read of Desktop library configuration — selected-profile inspection, `_meta.json` parsing,
-foreign-key preservation during writes, refresh mode re-resolution, the refresh fingerprint hash,
+foreign-key preservation during writes, backup creation and rollback, refresh mode re-resolution, the refresh fingerprint hash,
 the picker profile's inspection and apply snapshots, and the connection-owned store's metadata and
 profile reads — goes through the shared verified regular-file reader in
 `src/claude/desktop-3p-library.ts` (`readDesktopLibraryBytes`/`readDesktopLibraryText`). The path
@@ -18,5 +18,11 @@ failure keeps its own errno. Inspection reports the refusal through its existing
 in `src/claude/desktop-remote-store-io.ts` layers its size cap, private-file mode and post-read
 identity contract on top of the same read and reports it as `unsafe`.
 
-Tests: `tests/clients/desktop-3p-removal.test.ts`, `tests/clients/desktop-remote-store.test.ts`, and
+Optional metadata and profile reads treat only a missing directory entry as absent. Dangling links
+and other read failures refuse before profile publication. Backups preserve verified bytes through
+the atomic writer; rollback verifies the backup again before publishing it. An unsafe backup
+refuses rollback and reports the existing writer failure result rather than claiming restoration.
+An absent profile does not adopt a leftover backup from an earlier operation.
+
+Tests: `tests/clients/desktop-3p-write-files.test.ts`, `tests/clients/desktop-3p-removal.test.ts`, `tests/clients/desktop-remote-store.test.ts`, and
 `tests/claude-integration/claude-desktop-picker-profile.test.ts`.

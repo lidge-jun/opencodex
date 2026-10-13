@@ -271,6 +271,10 @@ not advertise an authoritative per-provider ladder, and the selected provider's
 normal effort normalization still applies. This remains a client-version-specific
 compatibility mechanism.
 
+Gateway apply refuses unreadable or non-regular configuration files, including dangling metadata
+links, before creating a new profile. Backups and rollback also require regular source files; a
+failed rollback is reported as a failed apply and does not claim that the previous profile was restored.
+
 ### First-party (opt-in)
 
 :::caution[Account risk]
