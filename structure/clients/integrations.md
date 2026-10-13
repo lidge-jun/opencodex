@@ -381,6 +381,7 @@ observed. Naming the store without the last three would be naming a file we cann
 
 ZCode resolves absolute `dataBaseDir` from the default-home `~/.zcode/v2/setting.json` through the caller's `IntegrationIO`, moving data to `<base>/.zcode/v2`. `ZCODE_DATA_DIR` overrides the `.zcode` root directly; `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` overrides the store. Native `ZCODE_DATA_BASE_DIR` is not an alias.
 The registry resolves config, detection and store from one bootstrap read. Synchronous observations re-read after coordinator awaits; store-lock and restore probes share the injected IO. Malformed, unreadable or relative settings refuse apply/overwrite/refresh as an unknown active root. Only a present explicit provider file can establish the store independently.
+Default ZCode bootstrap path resolution uses the same bounded regular-file reader as integration operations. A final symlink, FIFO or file above 4 MiB leaves the active root unknown. A missing bootstrap file or valid settings without `dataBaseDir` uses the default root; failed reads never fall back. An explicit `ZCODE_DATA_DIR` still bypasses bootstrap discovery.
 
 Owned legacy config and default-root store paths retain their fingerprints and recovery evidence after relocation: refresh refuses, disable and undo use the original file, and an older undo refuses while a different path owns the record. Unknown settings retain recognized historical recovery targets; an unrecognized prior selector must be restored before mutation. Contract: `tests/clients/integrations-current-store.test.ts`.
 
