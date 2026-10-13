@@ -911,6 +911,8 @@ async function handleClaudeMessagesWithBudget(
   // Antigravity direct lane (off by default): planned before translation, kept only if routing
   // settles on the route the plan was made for.
   let directPlan: MessagesDirectPlan | undefined;
+  /** The retained charge for the settings-only body, handed back if the plan is left. */
+  let directSettingsBodyBytes = 0;
   // Built only under the reject policy; the legacy default leaves this request untouched.
   let envelope: ProtocolEnvelope | undefined;
   let messagesFeatures: () => Iterable<ProtocolFeature> = () => [];
@@ -1085,7 +1087,9 @@ async function handleClaudeMessagesWithBudget(
     // fields only, so the caller intent is applied to the TRANSLATED body rather than the
     // inbound one.
     if (fastRow) internalBody.service_tier = "priority";
-    translatorBudget.chargeRetained(jsonUtf8Bytes(internalBody), { kind: "request_copies" });
+    const internalBodyBytes = jsonUtf8Bytes(internalBody);
+    translatorBudget.chargeRetained(internalBodyBytes, { kind: "request_copies" });
+    if (directPlan) directSettingsBodyBytes = internalBodyBytes;
     cacheKeySource = translation.cacheKeySource;
     nativeReasoningReplay = translation.nativeReasoningReplay;
   } catch (err) {
@@ -1144,8 +1148,12 @@ async function handleClaudeMessagesWithBudget(
   };
   /** Leave the direct plan: the core gets the full bridge translation, as without the switch. */
   const leaveDirectPlan = (): unknown => {
+    // Hand back everything the plan retained: its decode and the settings-only body it replaces.
     directPlan?.releaseDecodeCharges();
     directPlan = undefined;
+    nativeReasoningReplay = undefined;
+    translatorBudget.releaseRetained(directSettingsBodyBytes, { kind: "request_copies" });
+    directSettingsBodyBytes = 0;
     try {
       const translation = messagesToResponsesTranslation(anthropicBody, cc, translatorBudget);
       internalBody = translation.body;
