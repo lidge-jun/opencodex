@@ -17,7 +17,6 @@ const ORCAROUTER: SponsorBrand = {
 const SPONSOR_BRANDS: Readonly<Record<string, SponsorBrand>> = {
   orcarouter: ORCAROUTER,
   "orcarouter-oauth": ORCAROUTER,
-  packycode: { name: "PackyCode", title: "pws.sponsor.packyTitle", description: "pws.sponsor.packyDescription" },
   tokenlab: { name: "TokenLab", title: "pws.sponsor.tokenlabTitle", description: "pws.sponsor.tokenlabDescription" },
 };
 

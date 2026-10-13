@@ -1140,10 +1140,8 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // https://cf.api.fan/v1 — GET /v1/models answers 401 without a key, so the host is live and
     // discovery narrows to what the key's token group allows. Model ids are bare OpenAI-style
     // ids (the Codex token group lists gpt-5.5 / gpt-5.1-codex).
-    // Standard sponsor under SPONSORS.md; the dashboardUrl carries their affiliate code.
     id: "packycode", label: "PackyCode", adapter: "openai-chat", baseUrl: "https://cf.api.fan/v1",
-    authKind: "key", dashboardUrl: "https://www.packyapi.com/register?aff=k5KT",
-    sponsor: { tier: "standard", url: "https://www.packyapi.com/register?aff=k5KT" },
+    authKind: "key", dashboardUrl: "https://www.packyapi.com",
     defaultModel: "gpt-5.5",
     models: ["gpt-5.5", "gpt-5.1-codex"],
     liveModels: true,

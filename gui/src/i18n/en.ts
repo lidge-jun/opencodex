@@ -1564,8 +1564,6 @@ export const en = {
   "modal.badge.subscriptionCli": "Subscription CLI",
   "pws.sponsor.orcaTitle": "A model for every prompt",
   "pws.sponsor.orcaDescription": "An OpenAI-compatible gateway with adaptive routing and automatic failover.",
-  "pws.sponsor.packyTitle": "Claude Code, Codex and Gemini in one place",
-  "pws.sponsor.packyDescription": "An API relay for your AI coding tools. Start with a Codex-group token.",
   "pws.sponsor.tokenlabTitle": "One API key for leading models",
   "pws.sponsor.tokenlabDescription": "Responses, Chat Completions, streaming and tool calling for coding agents, with your choice of delivery mode and pay-as-you-go billing.",
   "pws.sponsor.visit": "Explore {provider}",

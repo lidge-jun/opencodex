@@ -2669,8 +2669,6 @@ export const de: Record<TKey, string> = {
   "modal.badge.subscriptionCli": "Abo-CLI",
   "pws.sponsor.orcaTitle": "Das passende Modell für jede Anfrage",
   "pws.sponsor.orcaDescription": "Ein OpenAI-kompatibles Gateway mit adaptivem Routing und automatischem Failover.",
-  "pws.sponsor.packyTitle": "Claude Code, Codex und Gemini an einem Ort",
-  "pws.sponsor.packyDescription": "Ein API-Relay für Ihre KI-Programmierwerkzeuge. Starten Sie mit einem Token der Codex-Gruppe.",
   "pws.sponsor.tokenlabTitle": "Ein API-Schlüssel für führende Modelle",
   "pws.sponsor.tokenlabDescription": "Responses, Chat Completions, Streaming und Tool-Aufrufe für Coding-Agenten, mit wählbarem Bereitstellungsmodus und nutzungsbasierter Abrechnung.",
   "pws.sponsor.visit": "{provider} entdecken",
