@@ -628,6 +628,15 @@
       ]
     },
     {
+      "path": "ops/update-supervised-recovery.md",
+      "tier": 6,
+      "title": "Update Supervised Recovery",
+      "scope": "Manager-first recovery after a failed post-update service refresh, and the non-zero unsupervised fallback.",
+      "documents": [
+        "src/update/supervised-recovery.mjs"
+      ]
+    },
+    {
       "path": "ops/plugins.md",
       "tier": 6,
       "title": "Local Plugins",

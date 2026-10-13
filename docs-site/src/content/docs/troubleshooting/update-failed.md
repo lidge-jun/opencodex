@@ -72,6 +72,16 @@ ownership marker. Delete a leftover only after confirming that no OpenCodex proc
 If a folder will not delete, a process is still running from it. Signing out or restarting Windows
 releases the lock.
 
+## If the update reports an UNSUPERVISED proxy
+
+When the background service cannot be refreshed after an update, the updater first asks launchd
+(macOS) or the systemd user manager (Linux) to restart the service it already has. If that does not
+bring back a proxy owned by the service, the updater starts the proxy directly so you are not left
+without one, prints a warning that the proxy is running UNSUPERVISED, and exits with a non-zero
+status. That proxy works, but nothing restarts it after a crash, and a later service start can
+compete with it for the port. Run `ocx service repair` to hand it back to the background service,
+then check `ocx status`.
+
 ## If the proxy answers 503 after a manual install
 
 Installing over a running proxy makes it answer `503` with `package_tree_changed` until it

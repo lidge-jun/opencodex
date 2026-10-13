@@ -61,6 +61,10 @@ import {
   CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS,
   isCodexCliUpdateInspectionArgv,
 } from "../src/update/codex-cli-update-launch-policy.mjs";
+import {
+  hasRestartableServiceManager, readParentPid, readServiceManagerPid, restartServiceManagerJob,
+  supervisionVerdict, unsupervisedRuntimeWarning,
+} from "../src/update/supervised-recovery.mjs";
 
 const PKG = "@bitkyc08/opencodex";
 const UPDATE_RECOVERY_READY_MS = 30_000;
@@ -510,6 +514,38 @@ function runPackageManagerSelfUpdate(manager) {
     return false;
   }
 
+  // #7043: before any detached start, ask launchd/systemd to restart the job it already holds,
+  // and count it only when the serving proxy is that job (or its launcher's child).
+  function restartThroughServiceManager() {
+    if (!hasRestartableServiceManager()) return false;
+    console.log("opencodex: asking the service manager to restart the background service.");
+    const restarted = restartServiceManagerJob();
+    let verdict;
+    if (!restarted.ok) {
+      verdict = { kind: "failed", reason: restarted.reason };
+    } else {
+      let servingPid = null;
+      const deadline = Date.now() + UPDATE_RECOVERY_READY_MS;
+      while (servingPid === null && Date.now() < deadline) {
+        const current = readCurrentRuntimeTarget();
+        if (current.kind === "target" && current.target.port === bakePort
+          && probeProxyLiveness(current.target.port, current.target.hostname ?? bakeHostname) === "live") {
+          servingPid = current.target.pid;
+        } else {
+          Atomics.wait(UPDATE_RECOVERY_SLEEP, 0, 0, UPDATE_RECOVERY_POLL_MS);
+        }
+      }
+      verdict = supervisionVerdict({ servingPid, managerPid: readServiceManagerPid(), parentPid: pid => readParentPid(pid) });
+    }
+    if (verdict.kind === "supervised") {
+      console.log(`opencodex: the proxy is healthy on port ${bakePort} under the service manager (pid ${verdict.managerPid}).`);
+      return true;
+    }
+    console.warn(`opencodex: the service manager did not recover a supervised proxy: ${verdict.reason}.`);
+    return false;
+  }
+
+  /** Returns "unsupervised" when only a detached fallback was attempted; callers exit non-zero. */
   function refreshBackgroundServiceOrStartDirect() {
     const mayRefresh = () => {
       const supervision = observeSupervision();
@@ -576,6 +612,8 @@ function runPackageManagerSelfUpdate(manager) {
             : nowOwned.notice ?? "opencodex: the background runtime is owned elsewhere; not starting a second proxy.");
           return;
         }
+        // #7043: the manager first. Only a proxy it owns counts as recovered.
+        if (restartThroughServiceManager()) return;
         // Repair normally avoids elevation for a healthy registration, but a stale Windows
         // scheduler definition can require it. It can also fail — or exit 0 while leaving
         // a non-viable manager. Fall back to a direct detached proxy start so the
@@ -586,7 +624,8 @@ function runPackageManagerSelfUpdate(manager) {
             : "opencodex: service refresh failed — starting the proxy directly instead.",
         );
         console.warn("  Run 'ocx service repair' to see why the background service could not restart.");
-        startProxyDirectly();
+        if (startProxyDirectly()) console.warn(unsupervisedRuntimeWarning(bakePort));
+        return "unsupervised";
       }
     } finally {
       if (prevBake === undefined) delete process.env.OCX_BAKE_PORT;
@@ -895,7 +934,7 @@ function runPackageManagerSelfUpdate(manager) {
     // launcher so the new files write the baked paths and the service restarts.
     if (postInstallPlan.mayRestoreService) {
       console.log("Refreshing the background service with the updated files...");
-      refreshBackgroundServiceOrStartDirect();
+      if (refreshBackgroundServiceOrStartDirect() === "unsupervised") process.exit(1);
     } else if (postInstallPlan.mayStopRuntime) {
       console.log(`Restart the proxy:  ${launcherStartHint(postUpdateLauncher, bakePort)}`);
     }
