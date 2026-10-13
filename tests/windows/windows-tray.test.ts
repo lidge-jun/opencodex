@@ -519,6 +519,8 @@ describe("Windows tray packaging and command safety", () => {
       // with spaces or `&` even when quoted.
       const hangChild = join(directory, "hangchild.ps1");
       writeFileSync(hangChild, [
+        // Prove readiness is observed, not guessed from a fixed 500ms sleep.
+        ...(scenario === "Online" ? ["Start-Sleep -Milliseconds 1500"] : []),
         "$pidFile = $env:OCX_PROBE_TEST_PID_FILE",
         "if ($pidFile) { Add-Content -LiteralPath $pidFile -Value $PID }",
         ...(scenario === "BadgeOverflowStdout" ? ["[Console]::Out.Write('x' * 32768)"] : []),
