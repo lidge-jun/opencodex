@@ -653,7 +653,8 @@
       "title": "Update Supervised Recovery",
       "scope": "Manager-first recovery after a failed post-update service refresh, and the non-zero unsupervised fallback.",
       "documents": [
-        "src/update/supervised-recovery.mjs"
+        "src/update/supervised-recovery.mjs",
+        "src/update/job-supervised-restart.ts"
       ]
     },
     {

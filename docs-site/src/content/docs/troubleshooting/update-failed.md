@@ -82,6 +82,10 @@ status. That proxy works, but nothing restarts it after a crash, and a later ser
 compete with it for the port. Run `ocx service repair` to hand it back to the background service,
 then check `ocx status`.
 
+Updates started from the dashboard follow the same order. If only the direct start brings the proxy
+back, the dashboard reports the update as failed with the same UNSUPERVISED message even though the
+new version is installed and answering; run the same repair to clear it.
+
 ## If the proxy answers 503 after a manual install
 
 Installing over a running proxy makes it answer `503` with `package_tree_changed` until it
