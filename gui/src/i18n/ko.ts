@@ -1,9 +1,18 @@
+import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import type { TKey } from "./en";
 
 /**
  * Korean i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const ko: Record<TKey, string> = {
+  ...desktopCompatibilityCopy("ko"),
+  "claude.tierDefaults.unset": "미지정 (기존 Claude 설정 유지)",
+  "claude.tierDefaults.recovery": "적용이 중단되었고 자동 복원에 실패했어요. 다시 시도하기 전에 아래 백업을 확인하세요.",
+  "claude.tierDefaults.title": "CLI 티어 기본 모델",
+  "claude.tierDefaults.preview": "Claude 설정 미리보기",
+  "claude.tierDefaults.apply": "Claude 설정에 적용",
+  "claude.tierDefaults.applied": "Claude 설정이 저장된 기본값과 일치합니다.",
+  "claude.tierDefaults.failed": "기본값을 적용하지 못했습니다. 다시 미리 보고 Claude 설정을 확인하세요.",
   "sidecar.pool": "계정 풀",
   "sidecar.poolCurrent": "현재 요청의 풀 사용",
   "sidecar.poolA": "Anthropic",
@@ -1602,6 +1611,9 @@ export const ko: Record<TKey, string> = {
   "integrations.tab.aside": "Aside",
   "integrations.tab.raycast": "Raycast",
   "integrations.tab.omo": "omo",
+  "integrations.tab.qoder": "Qoder",
+  "api.clientConfig.clientQoder": "Qoder",
+  "integrations.semantics.qoder": "~/.qoder/settings.json의 OpenCodex 공급자와 사용자 지정 모델을 관리합니다. 루프백 접근이 필요합니다. 다른 설정은 유지되며 실행 취소 시 스냅샷을 복원합니다.",
   "integrations.tab.cline": "Cline CLI",
   "integrations.tab.kilo": "Kilo",
   "integrations.tab.droid": "Factory Droid",

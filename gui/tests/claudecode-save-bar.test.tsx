@@ -16,6 +16,76 @@ import { readSessionListCacheEntry } from "../src/session-list-cache";
 const originalFetch = globalThis.fetch;
 let restoreGlobals: (() => void) | undefined;
 
+test("user-settings defaults are previewed then explicitly applied with a fingerprint", async () => {
+  const fingerprint = "a".repeat(64);
+  let writes = 0;
+  globalThis.fetch = (async (input, init) => {
+    if (String(input).endsWith("/api/claude-code/model-defaults")) {
+      if (init?.method === "POST") {
+        expect(JSON.parse(String(init.body))).toEqual({ fingerprint });
+        writes++;
+        return Response.json({ changed: true });
+      }
+      return Response.json({ fingerprint, changes: [{ key: "ANTHROPIC_DEFAULT_OPUS_MODEL", before: "old/model", after: "combo/opus" }] });
+    }
+    return Response.json({ ...SERVER, tierModels: { opus: "combo/opus" }, modelMap: {} });
+  }) as typeof fetch;
+  const page = await mount();
+  try {
+    expect(writes).toBe(0);
+    await page.click(page.button("Preview Claude settings"));
+    expect(page.container.textContent).toContain("old/model -> combo/opus");
+    expect(writes).toBe(0);
+    await page.click(page.button("Apply to Claude settings"));
+    expect(writes).toBe(1);
+    expect(page.container.textContent).toContain("Claude settings match the saved defaults.");
+  } finally {
+    await act(async () => page.root.unmount());
+    page.testWindow.close();
+  }
+});
+
+test("a failed automatic settings restore surfaces its private recovery path", async () => {
+  globalThis.fetch = (async (input, init) => {
+    if (String(input).endsWith("/api/claude-code/model-defaults")) {
+      if (init?.method === "POST") return Response.json({ code: "settings_recovery_required", backupPath: "mock/model-default-backups/apply-example/settings.json" }, { status: 500 });
+      return Response.json({ fingerprint: "a".repeat(64), changes: [{ key: "ANTHROPIC_DEFAULT_OPUS_MODEL", before: null, after: "combo/opus" }] });
+    }
+    return Response.json({ ...SERVER, tierModels: { opus: "combo/opus" }, modelMap: {} });
+  }) as typeof fetch;
+  const page = await mount();
+  try {
+    await page.click(page.button("Preview Claude settings"));
+    await page.click(page.button("Apply to Claude settings"));
+    expect(page.container.querySelector('[role="alert"]')?.textContent).toContain("automatic restore failed");
+    expect(page.container.textContent).toContain("mock/model-default-backups/apply-example/settings.json");
+    expect(page.container.textContent).not.toContain("Claude settings match the saved defaults.");
+  } finally {
+    await act(async () => page.root.unmount());
+    page.testWindow.close();
+  }
+});
+
+test("a refused user-settings apply reports failure, not success", async () => {
+  globalThis.fetch = (async (input, init) => {
+    if (String(input).endsWith("/api/claude-code/model-defaults")) {
+      if (init?.method === "POST") return Response.json({ error: "settings_changed" }, { status: 409 });
+      return Response.json({ fingerprint: "a".repeat(64), changes: [{ key: "ANTHROPIC_DEFAULT_OPUS_MODEL", before: null, after: "combo/opus" }] });
+    }
+    return Response.json({ ...SERVER, tierModels: { opus: "combo/opus" }, modelMap: {} });
+  }) as typeof fetch;
+  const page = await mount();
+  try {
+    await page.click(page.button("Preview Claude settings"));
+    await page.click(page.button("Apply to Claude settings"));
+    expect(page.container.querySelector('[role="alert"]')?.textContent).toContain("Could not apply defaults");
+    expect(page.container.textContent).not.toContain("Claude settings match the saved defaults.");
+  } finally {
+    await act(async () => page.root.unmount());
+    page.testWindow.close();
+  }
+});
+
 beforeEach(() => {
   clearClientResourceStoresForTests();
   const language = Object.getOwnPropertyDescriptor(globalThis.navigator, "language");

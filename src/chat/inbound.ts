@@ -36,7 +36,7 @@ export function assertChatCompletionsRoutingBody(raw: unknown): asserts raw is C
 const OUTPUT_CONFIG_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
 const OUTPUT_CONFIG_SUMMARIES = new Set(["auto", "concise", "detailed", "none"]);
 
-function contentToText(content: unknown): string {
+export function contentToText(content: unknown): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
   const parts: string[] = [];
@@ -62,7 +62,7 @@ const imageUrlFromPart = chatImageUrlFromPart;
  * understanding is requested by (#3271). The object form is the only one that
  * can carry it — `video_url` as a bare string has nowhere to put it.
  */
-function videoFromPart(part: Rec): { url: string; processing?: string } | null {
+export function videoFromPart(part: Rec): { url: string; processing?: string } | null {
   if (part.type !== "video_url") return null;
   const videoUrl = part.video_url;
   if (typeof videoUrl === "string" && videoUrl.length > 0) return { url: videoUrl };
@@ -123,7 +123,7 @@ function userContentToBlocks(content: unknown): Rec[] {
  * was dropped in silence (#5212). A part with no inline bytes is still not translatable and is
  * left to the untranslated-media refusal, which runs before this loop.
  */
-function fileFromPart(part: Rec): Rec | null {
+export function fileFromPart(part: Rec): Rec | null {
   if (part.type !== "file" && part.type !== "input_file") return null;
   const file = isRec(part.file) ? part.file : part;
   const fileData = file.file_data;
@@ -143,7 +143,7 @@ function fileFromPart(part: Rec): Rec | null {
  * Only representable plaintext is read. No signature, encrypted payload or
  * provider-issued item id is reconstructed — see the reasoning item built below.
  */
-function assistantReasoningText(msg: Rec): string | undefined {
+export function assistantReasoningText(msg: Rec): string | undefined {
   if (typeof msg.reasoning_content === "string" && msg.reasoning_content.length > 0) {
     return msg.reasoning_content;
   }
@@ -601,6 +601,32 @@ export function chatCompletionsToResponsesBody(raw: unknown): Rec {
     ...(legacyFunctionsToResponses(raw.functions) ?? []),
   ];
   if (tools.length > 0) body.tools = tools;
+  applyChatSettings(raw, body);
+  return body;
+}
+
+/**
+ * The request settings of a Chat body as a Responses body with no conversation: `input` is
+ * empty and there are no `instructions` or `tools`. The Antigravity direct lane hands this to
+ * the Responses core so routing, effort policy, tier and logging keep reading the fields they
+ * read today, while the conversation is decoded straight into the IR
+ * (`src/protocols/codecs/chat-ir.ts`). Field order and validation are the bridge body's own:
+ * both are built by `applyChatSettings`.
+ */
+export function chatSettingsToResponsesBody(raw: unknown): Rec {
+  assertChatCompletionsRoutingBody(raw);
+  const body: Rec = {
+    model: raw.model,
+    input: [],
+    stream: raw.stream === true,
+    store: false,
+  };
+  applyChatSettings(raw, body);
+  return body;
+}
+
+/** Everything after the conversation and tool catalog: choice, limits, sampling, reasoning, format. */
+function applyChatSettings(raw: ChatCompletionsRoutingBody, body: Rec): void {
   if (raw.tool_choice !== undefined) toolChoiceToResponses(raw.tool_choice, body);
   else legacyFunctionChoiceToResponses(raw.function_call, body);
 
@@ -637,6 +663,4 @@ export function chatCompletionsToResponsesBody(raw: unknown): Rec {
 
   const text = responseFormatToText(raw.response_format);
   if (text) body.text = text;
-
-  return body;
 }

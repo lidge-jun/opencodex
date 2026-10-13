@@ -1,3 +1,4 @@
+import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 // German — generated from en.ts. Must match TKey set (compile-checked).
 import type { TKey } from "./en";
 
@@ -5,6 +6,14 @@ import type { TKey } from "./en";
  * German i18n catalog, generated from en.ts. Must match the `TKey` set (compile-checked).
  */
 export const de: Record<TKey, string> = {
+  ...desktopCompatibilityCopy("de"),
+  "claude.tierDefaults.unset": "Nicht festgelegt (Claude-Einstellung beibehalten)",
+  "claude.tierDefaults.recovery": "Anwendung gestoppt; automatische Wiederherstellung fehlgeschlagen. Prüfen Sie vor einem erneuten Versuch die Sicherung unten.",
+  "claude.tierDefaults.title": "CLI-Standardmodelle",
+  "claude.tierDefaults.preview": "Claude-Einstellungen ansehen",
+  "claude.tierDefaults.apply": "Auf Claude-Einstellungen anwenden",
+  "claude.tierDefaults.applied": "Claude-Einstellungen entsprechen den gespeicherten Standardwerten.",
+  "claude.tierDefaults.failed": "Standardwerte konnten nicht angewendet werden. Erneut Vorschau anzeigen und Claude-Einstellungen prüfen.",
   "sidecar.pool": "Kontopool",
   "sidecar.poolCurrent": "Pool der aktuellen Anfrage",
   "sidecar.poolA": "Anthropic",
@@ -1558,6 +1567,9 @@ export const de: Record<TKey, string> = {
   "integrations.tab.aside": "Aside",
   "integrations.tab.raycast": "Raycast",
   "integrations.tab.omo": "omo",
+  "integrations.tab.qoder": "Qoder",
+  "api.clientConfig.clientQoder": "Qoder",
+  "integrations.semantics.qoder": "Verwaltet OpenCodex-Anbieter und eigene Modelle in ~/.qoder/settings.json. Erfordert Loopback-Zugriff. Andere Einstellungen bleiben erhalten; Rückgängig stellt den Snapshot wieder her.",
   "integrations.tab.cline": "Cline CLI",
   "integrations.tab.kilo": "Kilo",
   "integrations.tab.droid": "Factory Droid",

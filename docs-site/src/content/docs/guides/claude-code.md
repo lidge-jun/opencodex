@@ -26,6 +26,42 @@ research-preview access. See
 [Anthropic Fast configuration](/reference/configuration/providers/#anthropic-fast-anthropic-speed)
 for the exact model and recovery scope.
 
+## Tier defaults for CLI and external launchers
+
+In the Claude Code tab, select an Opus, Sonnet, Haiku or Fable default and **Save**.
+These `claudeCode.tierModels` defaults are passed to new `ocx claude` launches. They do not
+change the currently selected main model, reasoning effort or Desktop family assignments.
+
+Applications that launch `claude` directly do not receive the `ocx` launcher's environment.
+After saving, choose **Preview Claude settings**, review the `ANTHROPIC_DEFAULT_*_MODEL`
+changes, then **Apply to Claude settings**. This changes the OpenCodex host's Claude user
+settings, not a remote browser's computer. Start a new Claude process to use the new values;
+the operation does not stop or restart existing sessions. It does not configure routing or
+authentication, so the direct caller must already be connected to OpenCodex.
+
+Selected routing aliases are paired with `ANTHROPIC_DEFAULT_*_MODEL_NAME` labels, using the
+same readable names as the model picker. Preview includes both IDs and label changes; the
+alias remains the submitted model ID. An existing label is managed only if it exactly matches
+the generated name for its current alias. Other labels, including empty values, are preserved.
+A manually entered label identical to that generated name is indistinguishable from a managed label.
+
+Only explicitly selected tier IDs are applied. An unset tier leaves its existing model ID
+and its display label untouched. Replacing an alias with a first-party
+ID or another non-alias also removes its matching generated label. Preview shows label removal
+as an empty replacement; custom labels and unrelated settings remain intact.
+Missing files are supported, but existing empty or corrupt files are
+refused. Changes since preview require a new preview. Apply briefly moves the current
+document into a private `model-default-backups/apply-*/settings.json` directory under the
+Claude config directory, validates the captured document, then publishes exclusively.
+It never replaces a concurrent writer's new file, including during rollback. Avoid editing
+or launching Claude while applying: another reader can see the brief missing-file interval.
+The filesystem must support same-volume moves and hard links; unsupported operations fail
+without an overwrite fallback. After an interrupted apply or a failed automatic restore,
+inspect this backup location and reconcile newer edits before restoring. Windows/Linux
+filesystem behavior must be verified separately; a local test is not cross-platform proof.
+Verify the resolved provider/model in request logs: selecting a tier is not proof of the
+actual model served. This is especially useful for external classifiers requesting Sonnet.
+
 ## Claude OAuth account pool (experimental)
 
 Native Anthropic subscription passthrough retains the upstream `anthropic-ratelimit-*`

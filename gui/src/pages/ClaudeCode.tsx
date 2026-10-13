@@ -18,6 +18,7 @@ import {
 } from "./claude-code-sections";
 import { AUTO_COMPACT_WINDOW_DEFAULT, formatCompactWindow, newClientId, normalizeContextAccounting, type ClaudeCodeState, type MapRow } from "./claude-code-types";
 import { SmallFastModelSetting } from "./claude-code-settings";
+import { ClaudeCodeTierDefaults } from "./claude-code-tier-defaults";
 import { interceptReasonKey, normalizeSharedProxy, selectFirstPartyNotice, type FirstPartyNotice } from "./claude-code-first-party";
 import {
   acknowledgeSave,
@@ -462,6 +463,11 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
           availableModels={state.available ?? []}
           onStateChange={setState}
         />
+      </CcwSection>
+
+      <CcwSection title={t("claude.tierDefaults.title")}>
+        <ClaudeCodeTierDefaults state={state} options={modelOptions} onChange={setState} apiBase={apiBase}
+          dirty={!!edit && isClaudeCodeDraftDirty(edit.draft, edit.baseline)} />
       </CcwSection>
 
       <CcwSection title={t("claude.smallFastModel")}>

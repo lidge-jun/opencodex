@@ -1,9 +1,18 @@
+import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import type { TKey } from "./en";
 
 /**
  * Japanese i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const ja: Record<TKey, string> = {
+  ...desktopCompatibilityCopy("ja"),
+  "claude.tierDefaults.unset": "未指定（既存のClaude設定を維持）",
+  "claude.tierDefaults.recovery": "適用が停止し、自動復元に失敗しました。再試行する前に以下のバックアップを確認してください。",
+  "claude.tierDefaults.title": "CLIのティア既定モデル",
+  "claude.tierDefaults.preview": "Claude設定をプレビュー",
+  "claude.tierDefaults.apply": "Claude設定に適用",
+  "claude.tierDefaults.applied": "Claude設定は保存済みの既定値と一致しています。",
+  "claude.tierDefaults.failed": "既定値を適用できませんでした。再度プレビューしてClaude設定を確認してください。",
   "sidecar.pool": "アカウントプール",
   "sidecar.poolCurrent": "現在のリクエストのプール",
   "sidecar.poolA": "Anthropic",
@@ -1993,6 +2002,9 @@ export const ja: Record<TKey, string> = {
   "integrations.tab.aside": "Aside",
   "integrations.tab.raycast": "Raycast",
   "integrations.tab.omo": "omo",
+  "integrations.tab.qoder": "Qoder",
+  "api.clientConfig.clientQoder": "Qoder",
+  "integrations.semantics.qoder": "~/.qoder/settings.json の OpenCodex プロバイダーとカスタムモデルを管理します。ループバック接続が必要です。他の設定は保持され、元に戻すとスナップショットが復元されます。",
   "integrations.tab.cline": "Cline CLI",
   "integrations.tab.kilo": "Kilo",
   "integrations.tab.droid": "Factory Droid",

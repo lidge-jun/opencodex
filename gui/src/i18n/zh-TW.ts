@@ -1,7 +1,16 @@
+import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import type { TKey } from "./en";
 
 /** Traditional Chinese (Taiwan) UI strings — keys must match `en.ts` 1:1. */
 export const zhTW: Record<TKey, string> = {
+  ...desktopCompatibilityCopy("zh-TW"),
+  "claude.tierDefaults.unset": "未設定（保留現有 Claude 設定）",
+  "claude.tierDefaults.recovery": "套用已停止，自動還原失敗。重試前請檢查下方備份。",
+  "claude.tierDefaults.title": "CLI 層級預設模型",
+  "claude.tierDefaults.preview": "預覽 Claude 設定",
+  "claude.tierDefaults.apply": "套用至 Claude 設定",
+  "claude.tierDefaults.applied": "Claude 設定與儲存的預設值一致。",
+  "claude.tierDefaults.failed": "無法套用預設值。請重新預覽並檢查 Claude 設定。",
   "sidecar.pool": "帳戶池",
   "sidecar.poolCurrent": "使用目前請求的帳戶池",
   "sidecar.poolA": "Anthropic",
@@ -3010,6 +3019,9 @@ export const zhTW: Record<TKey, string> = {
   "integrations.tab.aside": "Aside",
   "integrations.tab.raycast": "Raycast",
   "integrations.tab.omo": "omo",
+  "integrations.tab.qoder": "Qoder",
+  "api.clientConfig.clientQoder": "Qoder",
+  "integrations.semantics.qoder": "管理 ~/.qoder/settings.json 中的 OpenCodex 供應商和自訂模型。需要回環存取。保留其他設定；復原會還原快照。",
   "integrations.tab.cline": "Cline CLI",
   "integrations.tab.kilo": "Kilo",
   "integrations.tab.droid": "Factory Droid",

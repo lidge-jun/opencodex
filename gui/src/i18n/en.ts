@@ -1,3 +1,4 @@
+import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 // English — source of truth. Its keys define the TKey type; de/fr/ko/zh/zh-TW/ru/ja/tr must match (compile-checked).
 // Strings with {cmd} render a <code> chip via <Trans>; {var} are plain interpolations.
 /**
@@ -6,6 +7,14 @@
  * `{var}` are plain interpolations.
  */
 export const en = {
+  ...desktopCompatibilityCopy("en"),
+  "claude.tierDefaults.unset": "Unset (keep existing Claude setting)",
+  "claude.tierDefaults.recovery": "Apply stopped and automatic restore failed. Check the backup below before retrying.",
+  "claude.tierDefaults.title": "CLI tier defaults",
+  "claude.tierDefaults.preview": "Preview Claude settings",
+  "claude.tierDefaults.apply": "Apply to Claude settings",
+  "claude.tierDefaults.applied": "Claude settings match the saved defaults.",
+  "claude.tierDefaults.failed": "Could not apply defaults. Preview again and check Claude settings.",
   "sidecar.pool": "Pool",
   "sidecar.poolCurrent": "Current request's pool",
   "sidecar.poolA": "Anthropic",
@@ -2126,6 +2135,9 @@ export const en = {
   "integrations.tab.aside": "Aside",
   "integrations.tab.raycast": "Raycast",
   "integrations.tab.omo": "omo",
+  "integrations.tab.qoder": "Qoder",
+  "api.clientConfig.clientQoder": "Qoder",
+  "integrations.semantics.qoder": "Manages OpenCodex providers and custom models in ~/.qoder/settings.json. Requires loopback access. Other settings are preserved; Undo restores the snapshot.",
   "integrations.tab.cline": "Cline CLI",
   "integrations.tab.kilo": "Kilo",
   "integrations.tab.droid": "Factory Droid",

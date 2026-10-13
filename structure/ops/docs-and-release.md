@@ -422,9 +422,9 @@ The `package-standalone` job in `.github/workflows/release.yml` also builds Bun 
 `ocx` archives for Linux, macOS, and Windows, bundles `gui/dist`, smoke-tests `/healthz`, and
 publishes SHA-256 sidecars for the attach job. Each archive also carries the target-matching
 `@napi-rs/keyring` native addon under `keyring/`; the macOS release installs both optional Darwin
-packages so its separate arm64 and x64 builds cannot silently reuse the hosted runner's
-architecture. Desktop preparation copies those same pinned assets into Tauri resources. The loader
-and packaged-app proof are owned by the [desktop keyring contract](../desktop-shell.md#packaged-native-keyring-binding).
+packages so its separate arm64 and x64 builds cannot silently reuse the hosted runner's architecture. Desktop preparation
+copies those same pinned assets into Tauri resources. The loader and packaged-app proof are owned by the [desktop keyring contract](../desktop-shell.md#packaged-native-keyring-binding).
+`src/lib/standalone.ts` recognizes Bun's file-URL virtual roots after one URL decode, including Windows `%7EBUN`, and resolves runtime assets beside the real executable. Invalid/non-file URLs and double-encoded markers remain source paths; `tests/lib/standalone.test.ts` and `tests/service/standalone-service.test.ts` cover this distinction.
 
 Opening a release starts with the `dev` pre-move. Dispatch
 `.github/workflows/dev-version-bump.yml` with the intended version, merge the pull request it opens,

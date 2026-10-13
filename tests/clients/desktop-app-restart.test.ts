@@ -171,6 +171,28 @@ describe("the test-runner guard follows the test preload, not NODE_ENV", () => {
 });
 
 describe("Codex desktop app restart (#2292)", () => {
+  test("an unreadable Windows root command line refuses before stop and leaves the restart lock reusable", () => {
+    const calls: Call[] = [];
+    const io = scriptedIo({ discovery: DISCOVERY, processes: `1000 900 2026-01-01T00:00:00Z ${INSTALL}\\app\\ChatGPT.exe\t`, calls });
+    withTrustedExes(() => {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        expect(restartCodexDesktopApp(io)).toEqual({ attempted: false, stopped: [], surviving: [], relaunch: "skipped", reason: "relaunch_context_failed" });
+      }
+    });
+    expect(calls.some(call => call.file === TASKKILL || /CloseMainWindow|Start-Process|OpenCodexPackageActivation/.test(call.args.join(" ")))).toBe(false);
+  });
+
+  test("a relaunch-context failure refuses before any process is signalled and releases the lock", () => {
+    const calls: Call[] = [];
+    const io = scriptedIo({ discovery: DISCOVERY, processes: `1000 900 2026-01-01T00:00:00Z ${INSTALL}\\app\\ChatGPT.exe`, calls });
+    io.adapter = { ...windowsDesktopAppAdapter, captureRelaunchContext: () => { throw new Error("conflicting context"); } };
+    withTrustedExes(() => {
+      const first = restartCodexDesktopApp(io), second = restartCodexDesktopApp(io);
+      expect(first).toEqual({ attempted: false, stopped: [], surviving: [], relaunch: "skipped", reason: "relaunch_context_failed" });
+      expect(second.reason).toBe("relaunch_context_failed");
+    });
+    expect(calls.some(call => call.file === TASKKILL || call.args.join(" ").includes("CloseMainWindow") || call.args.join(" ").includes("Start-Process"))).toBe(false);
+  });
   // macOS and Linux are no longer no-ops: they have real adapters. What survives from the
   // original assertion is that a platform with NO adapter still refuses without execing
   // anything, which is the fail-closed property the old windows_only case was really
@@ -504,4 +526,3 @@ describe("#2557 a failed probe is not an absent app", () => {
     expect(script).not.toContain("SilentlyContinue' $root");
   });
 });
-

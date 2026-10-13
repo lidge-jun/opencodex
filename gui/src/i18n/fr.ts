@@ -1,9 +1,18 @@
+import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import type { TKey } from "./en";
 
 /**
  * French i18n catalog. Must match the `TKey` set.
  */
 export const fr: Record<TKey, string> = {
+  ...desktopCompatibilityCopy("fr"),
+  "claude.tierDefaults.unset": "Non défini (conserver le réglage Claude)",
+  "claude.tierDefaults.recovery": "Application arrêtée et restauration automatique échouée. Vérifiez la sauvegarde ci-dessous avant de réessayer.",
+  "claude.tierDefaults.title": "Modèles par défaut du CLI",
+  "claude.tierDefaults.preview": "Aperçu des paramètres Claude",
+  "claude.tierDefaults.apply": "Appliquer aux paramètres Claude",
+  "claude.tierDefaults.applied": "Les paramètres Claude correspondent aux valeurs enregistrées.",
+  "claude.tierDefaults.failed": "Impossible d'appliquer les valeurs. Relancez l'aperçu et vérifiez les paramètres Claude.",
   "sidecar.pool": "Pool de comptes",
   "sidecar.poolCurrent": "Pool de la requête actuelle",
   "sidecar.poolA": "Anthropic",
@@ -2098,6 +2107,9 @@ export const fr: Record<TKey, string> = {
   "integrations.tab.aside": "Aside",
   "integrations.tab.raycast": "Raycast",
   "integrations.tab.omo": "omo",
+  "integrations.tab.qoder": "Qoder",
+  "api.clientConfig.clientQoder": "Qoder",
+  "integrations.semantics.qoder": "Gère les fournisseurs OpenCodex et les modèles personnalisés dans ~/.qoder/settings.json. Nécessite qu’opencodex soit joignable sur une adresse de bouclage. Les autres paramètres sont conservés ; Annuler restaure la sauvegarde.",
   "integrations.tab.cline": "Cline CLI",
   "integrations.tab.kilo": "Kilo",
   "integrations.tab.droid": "Factory Droid",

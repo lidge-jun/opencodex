@@ -6,6 +6,7 @@ import { lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as z from "zod/v4";
 import { compactionRecoveryConfigError } from "./schema/compaction-recovery";
+import { desktopCompatibilityConfigError } from "./schema/desktop-compatibility";
 import { blockedModelRedirectsError } from "./schema/blocked-model-redirects";
 import type { OcxConfig } from "../types";
 import { anthropicAccountPoolConfigError, anthropicOAuthInstanceConfigError, anthropicSidecarConfigError } from "./schema/anthropic-account-pool";
@@ -694,7 +695,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
   const anthropicError = anthropicOAuthInstanceConfigError(value) ?? anthropicAccountPoolConfigError(value) ?? anthropicSidecarConfigError(value);
   if (anthropicError) return { ok: false, error: anthropicError };
   const boundaryError = blockedModelRedirectsError(value)
-    ?? compactionRecoveryConfigError(value) ?? configReasoningPinsConfigError(value)
+    ?? compactionRecoveryConfigError(value) ?? desktopCompatibilityConfigError(value) ?? configReasoningPinsConfigError(value)
     ?? blankHostnameError(value)
     ?? (rawSubagentModelForce(value) !== undefined && !isSubagentModelEntry(rawSubagentModelForce(value)) ? "schema_invalid: claudeCode.subagentModelForce: expected a safe roster-style model id" : null)
     ?? claudeSubagentEffortError(value)

@@ -1,9 +1,18 @@
+import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import type { TKey } from "./en";
 
 /**
  * Russian i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const ru: Record<TKey, string> = {
+  ...desktopCompatibilityCopy("ru"),
+  "claude.tierDefaults.unset": "Не задано (сохранить настройку Claude)",
+  "claude.tierDefaults.recovery": "Применение остановлено, автоматическое восстановление не удалось. Проверьте резервную копию ниже перед повтором.",
+  "claude.tierDefaults.title": "Модели CLI по умолчанию",
+  "claude.tierDefaults.preview": "Предпросмотр настроек Claude",
+  "claude.tierDefaults.apply": "Применить к настройкам Claude",
+  "claude.tierDefaults.applied": "Настройки Claude соответствуют сохранённым значениям.",
+  "claude.tierDefaults.failed": "Не удалось применить значения. Повторите предпросмотр и проверьте настройки Claude.",
   "sidecar.pool": "Пул аккаунтов",
   "sidecar.poolCurrent": "Пул текущего запроса",
   "sidecar.poolA": "Anthropic",
@@ -2084,6 +2093,9 @@ export const ru: Record<TKey, string> = {
   "integrations.tab.aside": "Aside",
   "integrations.tab.raycast": "Raycast",
   "integrations.tab.omo": "omo",
+  "integrations.tab.qoder": "Qoder",
+  "api.clientConfig.clientQoder": "Qoder",
+  "integrations.semantics.qoder": "Управляет провайдерами OpenCodex и пользовательскими моделями в ~/.qoder/settings.json. Требуется доступ через loopback. Остальные настройки сохраняются; отмена восстанавливает снимок.",
   "integrations.tab.cline": "Cline CLI",
   "integrations.tab.kilo": "Kilo",
   "integrations.tab.droid": "Factory Droid",

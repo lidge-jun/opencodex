@@ -540,6 +540,13 @@
       ]
     },
     {
+      "path": "clients/codex-desktop.md",
+      "tier": 5,
+      "title": "Codex Desktop Compatibility",
+      "scope": "Windows package activation, restart context, and protected compatibility authority persistence.",
+      "documents": ["src/codex/", "src/cli/"]
+    },
+    {
       "path": "clients/chatgpt-desktop.md",
       "tier": 5,
       "title": "ChatGPT Desktop",
@@ -569,6 +576,16 @@
       "scope": "Verified regular-file reads of Claude Desktop config-library metadata, profiles and snapshots.",
       "documents": [
         "src/claude/"
+      ]
+    },
+    {
+      "path": "clients/qoder.md",
+      "tier": 5,
+      "title": "Qoder Client Integration",
+      "scope": "Qoder settings.json provider and custom-model ownership, export and loopback placeholder rules.",
+      "documents": [
+        "src/clients/",
+        "src/integrations/"
       ]
     },
     {

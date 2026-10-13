@@ -1,3 +1,4 @@
+import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 // Turkish — generated from en.ts. Must match TKey set (compile-checked).
 import type { TKey } from "./en";
 
@@ -5,6 +6,14 @@ import type { TKey } from "./en";
  * Turkish i18n catalog. Must match the `TKey` set (compile-checked).
  */
 export const tr: Record<TKey, string> = {
+  ...desktopCompatibilityCopy("tr"),
+  "claude.tierDefaults.unset": "Belirtilmedi (mevcut Claude ayarını koru)",
+  "claude.tierDefaults.recovery": "Uygulama durdu ve otomatik geri yükleme başarısız oldu. Yeniden denemeden önce aşağıdaki yedeği kontrol edin.",
+  "claude.tierDefaults.title": "CLI varsayılan modelleri",
+  "claude.tierDefaults.preview": "Claude ayarlarını önizle",
+  "claude.tierDefaults.apply": "Claude ayarlarına uygula",
+  "claude.tierDefaults.applied": "Claude ayarları kaydedilen varsayılanlarla eşleşiyor.",
+  "claude.tierDefaults.failed": "Varsayılanlar uygulanamadı. Yeniden önizleyin ve Claude ayarlarını kontrol edin.",
   "sidecar.pool": "Hesap havuzu",
   "sidecar.poolCurrent": "Geçerli isteğin havuzu",
   "sidecar.poolA": "Anthropic",
@@ -2111,6 +2120,9 @@ export const tr: Record<TKey, string> = {
   "integrations.tab.aside": "Aside",
   "integrations.tab.raycast": "Raycast",
   "integrations.tab.omo": "omo",
+  "integrations.tab.qoder": "Qoder",
+  "api.clientConfig.clientQoder": "Qoder",
+  "integrations.semantics.qoder": "~/.qoder/settings.json içindeki OpenCodex sağlayıcılarını ve özel modelleri yönetir. Loopback erişimi gerektirir. Diğer ayarlar korunur; Geri al, anlık görüntüyü geri yükler.",
   "integrations.tab.cline": "Cline CLI",
   "integrations.tab.kilo": "Kilo",
   "integrations.tab.droid": "Factory Droid",

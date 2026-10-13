@@ -88,9 +88,11 @@ The dashboard, the management API, and third-party client config ownership.
 | [`gui-and-management-api.md`](gui-and-management-api.md) | Dashboard serving, authentication boundaries, /api/* ownership, and startup safety. |
 | [`dashboard-and-usage.md`](dashboard-and-usage.md) | Dashboard page contracts, usage accounting and request metrics, and per-surface management settings. |
 | [`clients/integrations.md`](clients/integrations.md) | Third-party client config ownership, snapshots, refresh, disable, and restore. |
+| [`clients/codex-desktop.md`](clients/codex-desktop.md) | Windows package activation, restart context, and protected compatibility authority persistence. |
 | [`clients/chatgpt-desktop.md`](clients/chatgpt-desktop.md) | Experimental macOS app-server stdout shim, opt-in launch, restore and failure boundaries. |
 | [`clients/claude-desktop.md`](clients/claude-desktop.md) | Claude Desktop profile ownership and config-library resolution. |
 | [`clients/claude-desktop-config-reads.md`](clients/claude-desktop-config-reads.md) | Verified regular-file reads of Claude Desktop config-library metadata, profiles and snapshots. |
+| [`clients/qoder.md`](clients/qoder.md) | Qoder settings.json provider and custom-model ownership, export and loopback placeholder rules. |
 | [`companion.md`](companion.md) | Shared timeline filtering, usage/quotas, native and web tray title, and WidgetKit display contracts. |
 | [`codex-account-controls.md`](codex-account-controls.md) | Account selection order, custom usage thresholds, and stable account-card editing. |
 
@@ -146,10 +148,10 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/chatgpt/` | [`clients/chatgpt-desktop.md`](clients/chatgpt-desktop.md) |
 | `src/claude/` | [`runtime.md`](runtime.md)<br>[`clients/claude-desktop.md`](clients/claude-desktop.md)<br>[`clients/claude-desktop-config-reads.md`](clients/claude-desktop-config-reads.md) |
 | `src/cli.ts` | [`runtime.md`](runtime.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
-| `src/cli/` | [`runtime.md`](runtime.md)<br>[`config.md`](config.md)<br>[`local-messaging.md`](local-messaging.md)<br>[`cli-management.md`](cli-management.md)<br>[`clients/integrations.md`](clients/integrations.md)<br>[`clients/chatgpt-desktop.md`](clients/chatgpt-desktop.md)<br>[`clients/claude-desktop.md`](clients/claude-desktop.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
+| `src/cli/` | [`runtime.md`](runtime.md)<br>[`config.md`](config.md)<br>[`local-messaging.md`](local-messaging.md)<br>[`cli-management.md`](cli-management.md)<br>[`clients/integrations.md`](clients/integrations.md)<br>[`clients/codex-desktop.md`](clients/codex-desktop.md)<br>[`clients/chatgpt-desktop.md`](clients/chatgpt-desktop.md)<br>[`clients/claude-desktop.md`](clients/claude-desktop.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `src/client/` | [`runtime.md`](runtime.md)<br>[`clients/claude-desktop.md`](clients/claude-desktop.md) |
-| `src/clients/` | [`clients/integrations.md`](clients/integrations.md) |
-| `src/codex/` | [`runtime.md`](runtime.md)<br>[`config.md`](config.md)<br>[`codex-home.md`](codex-home.md)<br>[`codex-prompts.md`](codex-prompts.md)<br>[`catalog.md`](catalog.md)<br>[`subagents.md`](subagents.md)<br>[`transports/responses-failover.md`](transports/responses-failover.md)<br>[`providers/openai-tiers.md`](providers/openai-tiers.md)<br>[`providers/openai-accounts.md`](providers/openai-accounts.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`dashboard-and-usage.md`](dashboard-and-usage.md)<br>[`clients/chatgpt-desktop.md`](clients/chatgpt-desktop.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
+| `src/clients/` | [`clients/integrations.md`](clients/integrations.md)<br>[`clients/qoder.md`](clients/qoder.md) |
+| `src/codex/` | [`runtime.md`](runtime.md)<br>[`config.md`](config.md)<br>[`codex-home.md`](codex-home.md)<br>[`codex-prompts.md`](codex-prompts.md)<br>[`catalog.md`](catalog.md)<br>[`subagents.md`](subagents.md)<br>[`transports/responses-failover.md`](transports/responses-failover.md)<br>[`providers/openai-tiers.md`](providers/openai-tiers.md)<br>[`providers/openai-accounts.md`](providers/openai-accounts.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`dashboard-and-usage.md`](dashboard-and-usage.md)<br>[`clients/codex-desktop.md`](clients/codex-desktop.md)<br>[`clients/chatgpt-desktop.md`](clients/chatgpt-desktop.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `src/codex/catalog/effort.ts` | [`catalog-vendor-context.md`](catalog-vendor-context.md)<br>[`catalog-effort-clamp.md`](catalog-effort-clamp.md) |
 | `src/codex/catalog/model-hints.ts` | [`catalog-vendor-context.md`](catalog-vendor-context.md) |
 | `src/codex/catalog/parsing.ts` | [`catalog-vendor-context.md`](catalog-vendor-context.md) |
@@ -167,7 +169,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/grok/` | [`runtime.md`](runtime.md) |
 | `src/images/` | [`runtime.md`](runtime.md)<br>[`transports/inventory.md`](transports/inventory.md) |
 | `src/index.ts` | [`runtime.md`](runtime.md) |
-| `src/integrations/` | [`clients/integrations.md`](clients/integrations.md) |
+| `src/integrations/` | [`clients/integrations.md`](clients/integrations.md)<br>[`clients/qoder.md`](clients/qoder.md) |
 | `src/lab/` | [`runtime.md`](runtime.md)<br>[`adapters/compatibility-lab.md`](adapters/compatibility-lab.md) |
 | `src/lib/` | [`overview.md`](overview.md)<br>[`runtime.md`](runtime.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`transports/responses-failover.md`](transports/responses-failover.md)<br>[`transports/responses-spend.md`](transports/responses-spend.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`dashboard-and-usage.md`](dashboard-and-usage.md)<br>[`clients/integrations.md`](clients/integrations.md)<br>[`ops/service-and-sidecars.md`](ops/service-and-sidecars.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `src/lib/advisor-activation.ts` | [`advisor.md`](advisor.md) |

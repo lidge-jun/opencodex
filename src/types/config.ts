@@ -30,6 +30,11 @@ export interface OcxProtocolsConfig {
     managedMessagesNativeOAuth?: boolean;
     /** Chat and Messages clients are encoded directly from adapter events. */
     directEncoders?: boolean;
+    /**
+     * Chat requests to a concrete Google Antigravity route decode straight into the IR and are
+     * answered through the direct encoders, with no internal Responses body in either direction.
+     */
+    antigravityDirect?: boolean;
     /** Compare the dispatch plan with the observed path; never sends a second request. */
     shadowPlan?: boolean;
   };
@@ -778,6 +783,8 @@ export interface OcxConfig {
   };
   /** Opt-in failure-only recovery; never replaces the initial compaction model. */
   compactionRecovery?: { enabled: boolean; model: string; allowDevinInvalidArgument?: boolean };
+  /** Explicit opt-in; resumes Observe only using an existing trusted certificate and endpoints. */
+  desktopCompatibility?: { startOnProxyStart: boolean };
   /**
    * Destination model for Codex's own memory pipeline, per phase
    * (src/server/responses/memory-models.ts).

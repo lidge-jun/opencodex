@@ -577,7 +577,7 @@ describe("export allowlist parity", () => {
 });
 
 describe("keyless exports use the live management admission policy", () => {
-  for (const client of ["raycast", "droid"] as const) for (const secondary of [false, true]) {
+  for (const client of ["raycast", "droid", "qoder"] as const) for (const secondary of [false, true]) {
     test(`${client} live wildcard bind with secondary=${secondary} wins over saved loopback config`, async () => {
       const oldHome = process.env.OPENCODEX_HOME;
       const oldCodexHome = process.env.CODEX_HOME;
@@ -604,8 +604,9 @@ describe("keyless exports use the live management admission policy", () => {
         });
         if (secondary) {
           expect(result.code).toBe(0);
-          const document = JSON.parse(result.stdout) as { providers?: Array<{ base_url: string }>; customModels?: Array<{ baseUrl: string }> };
-          expect(client === "raycast" ? document.providers?.[0]?.base_url : document.customModels?.[0]?.baseUrl)
+          const document = JSON.parse(result.stdout) as { providers?: Array<{ base_url: string }> & { opencodex?: { baseUrl: string } }; customModels?: Array<{ baseUrl: string }> };
+          expect(client === "raycast" ? document.providers?.[0]?.base_url
+            : client === "qoder" ? document.providers?.opencodex?.baseUrl : document.customModels?.[0]?.baseUrl)
             .toBe("http://127.0.0.1:10237/v1");
           expect(readFileSync(out, "utf8")).toContain("10237/v1");
           expect(readFileSync(out, "utf8")).not.toContain("10999");

@@ -28,6 +28,12 @@ export interface ProtocolPlanCandidateInput {
   adapter: string;
   /** True when the ingress would send its own wire to this candidate. */
   nativeEligible: boolean;
+  /**
+   * True when the ingress would decode its own wire straight into the IR for this candidate (the
+   * Antigravity direct lane). Only meaningful toward an `other` upstream; `path.ts` ignores it
+   * anywhere else.
+   */
+  directEligible?: boolean;
   /** Why the ingress declined its native lane, when it did. */
   declineReasons: readonly ProtocolReasonCode[];
 }
@@ -80,7 +86,9 @@ function planCandidate(
   const upstream = upstreamWireForAdapter(candidate.adapter);
   // A native lane only exists toward the ingress's own wire; an inconsistent snapshot must
   // not produce a path that claims the source body reached a different wire untouched.
-  const lane: ProtocolLane = candidate.nativeEligible && upstream === input.inbound ? "native" : "bridge";
+  const lane: ProtocolLane = candidate.nativeEligible && upstream === input.inbound
+    ? "native"
+    : candidate.directEligible === true ? "direct" : "bridge";
   const requestPath = requestPathForLane(input.inbound, lane, upstream);
   const responsePath = responsePathForLane(input.inbound, lane, upstream);
   const mode = deliveryModeForLane(input.inbound, lane, upstream);

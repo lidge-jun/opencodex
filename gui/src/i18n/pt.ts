@@ -1,3 +1,4 @@
+import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 // Brazilian Portuguese — generated from en.ts. Must match TKey set (compile-checked).
 import type { TKey } from "./en";
 
@@ -6,6 +7,14 @@ import type { TKey } from "./en";
  * Technical terms and model identifiers intentionally remain English.
  */
 export const pt: Record<TKey, string> = {
+  ...desktopCompatibilityCopy("pt"),
+  "claude.tierDefaults.unset": "Não definido (manter configuração Claude)",
+  "claude.tierDefaults.recovery": "Aplicação interrompida; restauração automática falhou. Verifique o backup abaixo antes de tentar novamente.",
+  "claude.tierDefaults.title": "Modelos padrão da CLI",
+  "claude.tierDefaults.preview": "Prévia das configurações Claude",
+  "claude.tierDefaults.apply": "Aplicar às configurações Claude",
+  "claude.tierDefaults.applied": "As configurações Claude correspondem aos padrões salvos.",
+  "claude.tierDefaults.failed": "Não foi possível aplicar os padrões. Veja a prévia novamente e confira as configurações Claude.",
   "sidecar.pool": "Pool de contas",
   "sidecar.poolCurrent": "Pool da solicitação atual",
   "sidecar.poolA": "Anthropic",
@@ -2112,6 +2121,7 @@ export const pt: Record<TKey, string> = {
   "integrations.tab.cline": "Cline CLI",
   "integrations.tab.commandcode": "Command Code",
   "integrations.tab.kilo": "Kilo",
+  "integrations.tab.qoder": "Qoder",
   "integrations.tab.droid": "Factory Droid",
   "integrations.aside.profilesTitle": "Perfis do Aside",
   "integrations.aside.profilesHint": "Escolha quais perfis recebem os modelos selecionados. O perfil ativo do Aside permanece inalterado.",
@@ -2416,6 +2426,7 @@ export const pt: Record<TKey, string> = {
   "integrations.lazycodexRoles.auto.moveUp": "Suba de nível se: {text}",
   "integrations.lazycodexRoles.auto.moveDown": "Desça de nível se: {text}",
   "integrations.semantics.cline": "Gerencia o OpenCodex no providers.json e no models.json do Cline CLI. Pare o Cline antes de alterar ou sincronizar esses arquivos e reinicie depois. Desfazer restaura os dois originais. Seu provedor padrão permanece inalterado; selecione o OpenCodex no Cline.",
+  "integrations.semantics.qoder": "Gerencia os provedores e modelos personalizados do OpenCodex em ~/.qoder/settings.json. Requer acesso por loopback. As demais configurações são preservadas; Desfazer restaura o snapshot.",
   "integrations.semantics.commandcode": "Gerencia apenas a entrada do provedor OpenCodex em ~/.commandcode/providers.json. Seus outros provedores e configurações permanecem inalterados.",
   "integrations.semantics.kilo": "Gerencia apenas provider.opencodex na configuração global do Kilo — o primeiro arquivo existente entre kilo.jsonc, kilo.json, opencode.jsonc, opencode.json ou config.json em ~/.config/kilo (XDG_CONFIG_HOME realoca esse diretório; kilo.jsonc é criado quando nenhum existe). As demais chaves permanecem inalteradas. Aplicar reescreve o arquivo inteiro, então comentários e vírgulas finais não são preservados. Selecione opencodex/<model> no Kilo.",
   "integrations.semantics.droid": "Adiciona modelos personalizados do OpenCodex ao settings.json do Factory Droid. Desativar remove apenas as linhas gerenciadas; desfazer restaura o arquivo salvo.",
@@ -2966,6 +2977,7 @@ export const pt: Record<TKey, string> = {
   "api.clientConfig.clientCline": "Cline CLI",
   "api.clientConfig.clientCommandCode": "Command Code",
   "api.clientConfig.clientKilo": "Kilo",
+  "api.clientConfig.clientQoder": "Qoder",
   "api.clientConfig.clientDroid": "Factory Droid",
   "api.clientConfig.clineBundle": "Este é um pacote de dois arquivos, não um arquivo de configurações do Cline. Mescle settings em providers.json e catalog no models.json vizinho. Use o interruptor de integração para uma gravação com backup.",
   "api.clientConfig.clineDownloaded": "{filename} baixado. Nada foi alterado ainda; settings e catalog pertencem a dois arquivos separados do Cline.",

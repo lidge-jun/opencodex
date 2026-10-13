@@ -484,7 +484,7 @@ const commandRunners: Record<string, CommandRunner> = {
             },
             config,
             port: live.port,
-          }, ["mcode", "pi", "raycast", "omo", "cline", "commandcode", "droid", "opencode", "kilo"]));
+          }, ["mcode", "pi", "raycast", "omo", "cline", "commandcode", "droid", "opencode", "kilo", "qoder"]));
         } catch (error) {
           console.warn(`Client integrations were not refreshed: ${error instanceof Error ? error.message : String(error)}`);
         }

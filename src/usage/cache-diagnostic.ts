@@ -294,11 +294,13 @@ export function appendFinalCacheDiagnostic(facts: CacheDiagnosticFinalFacts): vo
 
 const CACHE_DIAGNOSTIC_HOOK = Symbol.for("opencodex.cache-diagnostic.v1");
 interface CacheDiagnosticHooks {
+  enabled(): boolean;
   observeInbound(body: unknown, headers: Headers, source: PromptCacheKeySource): CacheDiagnosticDraft;
   rebind(body: unknown, draft: CacheDiagnosticDraft | undefined): void;
   finalize(facts: CacheDiagnosticFinalFacts): void;
 }
 (globalThis as Record<symbol, CacheDiagnosticHooks | undefined>)[CACHE_DIAGNOSTIC_HOOK] = {
+  enabled: isCacheDiagnosticEnabled,
   observeInbound,
   rebind: rebindCacheDiagnosticBodyAlias,
   finalize: appendFinalCacheDiagnostic,

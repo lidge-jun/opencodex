@@ -82,6 +82,8 @@ import {
 
 export type { CommandCodeGeneratedConfig, CommandCodeModelEntry, CommandCodeProviderBlock };
 export { buildCommandCodeClientConfig, summarizeCommandCode, buildCommandCodeContribution, commandCodeProviderRoot };
+import { buildQoderClientConfig, summarizeQoder, buildQoderContribution, qoderConfigPath } from "./config-export/qoder";
+export { buildQoderClientConfig, qoderConfigPath, qoderHomeDir, type QoderGeneratedConfig } from "./config-export/qoder";
 
 
 
@@ -1428,6 +1430,18 @@ export function clineSettingsDir(env: OpencodeLaunchEnv = process.env, home: str
 }
 
 export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
+  qoder: {
+    id: "qoder",
+    filename: "qoder-settings.json",
+    destination: env => qoderConfigPath(env),
+    apiKeyEnv: "",
+    exportHint: "Qoder reads a non-secret placeholder from settings.json; loopback needs no key.",
+    build: buildQoderClientConfig,
+    format: "json",
+    summarize: summarizeQoder,
+    buildContribution: buildQoderContribution,
+    loopbackOnly: true,
+  },
   opencode: {
     id: "opencode",
     filename: "opencode.json",

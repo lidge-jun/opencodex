@@ -38,6 +38,17 @@ const STATE = {
 const row = (from: string, to: string, id = `${from}->${to}`): MapRow => ({ id, from, to });
 const editable = (state: Partial<ClaudeCodeState> = {}, rows: MapRow[] = []): ClaudeCodeEditable => ({ state: { ...STATE, ...state }, rows });
 
+test("tier defaults participate in save, polling preservation and revert", () => {
+  const tiers = { opus: "combo/opus", sonnet: "combo/sonnet", haiku: "combo/haiku" };
+  const draft = editable({ tierModels: tiers });
+  const baseline = editable({ tierModels: {} });
+  expect(claudeCodeSaveBody(draft.state, []).tierModels).toEqual(tiers);
+  expect(isClaudeCodeDraftDirty(draft, baseline)).toBe(true);
+  expect(mergeServerRead(draft.state, baseline.state).tierModels).toEqual(tiers);
+  expect(revertEditable(draft.state, baseline.state).tierModels).toEqual({});
+  expect(claudeCodeSaveBody({ ...STATE, tierModels: {} }, []).tierModels).toEqual({});
+});
+
 test("the Save body never carries the immediate connection switch", () => {
   expect("enabled" in claudeCodeSaveBody(STATE, [])).toBe(false);
 });

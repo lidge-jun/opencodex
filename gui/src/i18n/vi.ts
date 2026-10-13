@@ -1,3 +1,4 @@
+import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 // Vietnamese — generated from en.ts. Must match TKey set (compile-checked).
 import type { TKey } from "./en";
 
@@ -6,6 +7,14 @@ import type { TKey } from "./en";
  * Technical terms and model identifiers intentionally remain English.
  */
 export const vi: Record<TKey, string> = {
+  ...desktopCompatibilityCopy("vi"),
+  "claude.tierDefaults.unset": "Chưa đặt (giữ cài đặt Claude hiện có)",
+  "claude.tierDefaults.recovery": "Đã dừng áp dụng và khôi phục tự động thất bại. Kiểm tra bản sao lưu bên dưới trước khi thử lại.",
+  "claude.tierDefaults.title": "Mô hình mặc định CLI",
+  "claude.tierDefaults.preview": "Xem trước cài đặt Claude",
+  "claude.tierDefaults.apply": "Áp dụng vào cài đặt Claude",
+  "claude.tierDefaults.applied": "Cài đặt Claude khớp với mặc định đã lưu.",
+  "claude.tierDefaults.failed": "Không thể áp dụng mặc định. Xem trước lại và kiểm tra cài đặt Claude.",
   "sidecar.pool": "Nhóm tài khoản",
   "sidecar.poolCurrent": "Nhóm của yêu cầu hiện tại",
   "sidecar.poolA": "Anthropic",
@@ -2074,6 +2083,9 @@ export const vi: Record<TKey, string> = {
   "integrations.tab.aside": "Aside",
   "integrations.tab.raycast": "Raycast",
   "integrations.tab.omo": "omo",
+  "integrations.tab.qoder": "Qoder",
+  "api.clientConfig.clientQoder": "Qoder",
+  "integrations.semantics.qoder": "Quản lý nhà cung cấp OpenCodex và mô hình tùy chỉnh trong ~/.qoder/settings.json. Yêu cầu truy cập loopback. Giữ nguyên các cài đặt khác; Hoàn tác khôi phục bản chụp.",
   "integrations.tab.cline": "Cline CLI",
   "integrations.tab.kilo": "Kilo",
   "integrations.tab.droid": "Factory Droid",
