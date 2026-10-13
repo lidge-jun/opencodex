@@ -186,6 +186,38 @@ describe("pool recovery estimate", () => {
     expect(nextCodexPoolRecoveryAt(cfg, now)).toBeUndefined();
   });
 
+  test("every routing hold with a known end extends recovery; a gated roster restricts candidates", () => {
+    const now = Date.now();
+    const cfg = config([POOL_A, POOL_B]);
+    // A transient soft avoid that outlives the quota cooldown still blocks selection until it ends.
+    setAccountHealth(POOL_A, { consecutiveFailures: 1, cooldownUntil: now + 3_600_000, softAvoidUntil: now + 4 * 3_600_000 });
+    setAccountHealth(POOL_B, { consecutiveFailures: 0, cooldownUntil: now + 5 * 3_600_000 });
+    expect(nextCodexPoolRecoveryAt(cfg, now)).toBe(now + 4 * 3_600_000);
+    expect(nextCodexPoolRecoveryAt(cfg, now, undefined, { eligibleAccountIds: new Set([POOL_B]) })).toBe(now + 5 * 3_600_000);
+    expect(nextCodexPoolRecoveryAt(cfg, now, undefined, { eligibleAccountIds: new Set() })).toBeUndefined();
+  });
+
+  test("an account-gated model only takes a hint from accounts its roster admits", async () => {
+    const cfg = config([POOL_A, POOL_B]);
+    lockMain();
+    const now = Date.now();
+    setAccountHealth(POOL_A, { consecutiveFailures: 0, cooldownUntil: now + 5 * 3_600_000 });
+    setAccountHealth(POOL_B, { consecutiveFailures: 0, cooldownUntil: now + 2 * 3_600_000 });
+    const model = "gpt-daybreak-blue-latest";
+    const error = await resolveCodexAuthContext(new Headers(), cfg, "pool", {
+      modelId: model,
+      primeCodexPoolQuotas: async () => {},
+      resolveCodexModelEntitlements: async () => ({
+        modelsByAccount: new Map([[MAIN, new Set([model])], [POOL_A, new Set([model])], [POOL_B, new Set<string>()]]),
+        confirmedAccountIds: new Set([MAIN, POOL_A, POOL_B]),
+        credentialIdentities: new Map(),
+      }),
+    }).catch(cause => cause);
+    expect(error).toBeInstanceOf(CodexMainAccountHardLockError);
+    // POOL_B recovers sooner but cannot serve the model.
+    expect((error as CodexMainAccountHardLockError).poolRecoveryAt).toBe(now + 5 * 3_600_000);
+  });
+
   test("an unpinned pool request that falls through to a locked main carries the sibling's recovery", async () => {
     const cfg = config([POOL_A]);
     lockMain();

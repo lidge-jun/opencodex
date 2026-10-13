@@ -1085,16 +1085,22 @@ export async function resolveCodexAuthContext(
   mode: CodexAccountMode,
   options: ResolveCodexAuthContextOptions = {},
 ): Promise<CodexAuthContext> {
+  // Filled by the inner resolver once it knows the gated-model roster, so the hint obeys it.
+  const eligibility: RecoveryHintEligibility = {};
   try {
-    return await resolveCodexAuthContextUnannotated(headers, config, mode, options);
+    return await resolveCodexAuthContextUnannotated(headers, config, mode, options, eligibility);
   } catch (error) {
     if (error instanceof CodexMainAccountHardLockError && mode === "pool" && options.accountId === undefined
       && options.excludeAccountId !== MAIN_CODEX_ACCOUNT_ID
-      && !requiresReserveAuthorization(options.codexAuthPolicy ?? config, options.modelId, options.admission)) {
+      && !requiresReserveAuthorization(options.codexAuthPolicy ?? config, options.modelId, options.admission)
+      // An account-gated model with no resolved roster has no known eligible sibling.
+      && (!options.modelId || !ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(options.modelId)
+        || eligibility.modelEligibleAccountIds !== undefined)) {
       try {
         const now = Date.now();
         error.poolRecoveryAt = nextCodexPoolRecoveryAt(config, now, codexQuotaScopeForModel(options.modelId), {
           deniedAccountIds: cachedDeniedCodexAccountIdsForModel(options.modelId, now),
+          eligibleAccountIds: eligibility.modelEligibleAccountIds,
         });
       } catch { /* the hint is optional; the refusal stands without it */ }
     }
@@ -1102,11 +1108,14 @@ export async function resolveCodexAuthContext(
   }
 }
 
+interface RecoveryHintEligibility { modelEligibleAccountIds?: ReadonlySet<string> }
+
 async function resolveCodexAuthContextUnannotated(
   headers: Headers,
   config: OcxConfig,
   mode: CodexAccountMode,
   options: ResolveCodexAuthContextOptions = {},
+  eligibility: RecoveryHintEligibility = {},
 ): Promise<CodexAuthContext> {
   const writerGeneration = captureConfigGeneration();
   const policy = options.codexAuthPolicy ?? config;
@@ -1314,6 +1323,7 @@ async function resolveCodexAuthContextUnannotated(
     const modelEligibleAccountIds = entitledAccountIds
       ? new Set([...entitledAccountIds].filter(candidate => !excludeAccountIds?.has(candidate)))
       : undefined;
+    eligibility.modelEligibleAccountIds = modelEligibleAccountIds;
     // #4768: the flagships stay visible and never fail closed, so this is evidence routing may
     // ORDER by, not evidence it may refuse on. Read synchronously from rosters discovery has
     // already gathered -- no upstream fetch joins the request path for the most commonly
