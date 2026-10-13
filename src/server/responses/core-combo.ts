@@ -714,6 +714,13 @@ export async function executeComboResponses(
         retryAfter: String(Math.max(1, Math.ceil(remainingQuotaCooldownMs / 1000))),
       }) : lastFailure;
   };
+  // The caller's output ceiling, captured once so a floor applied to one target never
+  // leaks into the next. An established parent estimate wins; otherwise (combo dispatch
+  // precedes request preparation) the caller's own positive cap is reserved.
+  const callerBudget = isPlainObject(body) ? body.max_output_tokens : undefined;
+  const callerOutputCeilingTokens = logCtx.spendOutputCeilingTokens
+    ?? (typeof callerBudget === "number" && Number.isFinite(callerBudget) && callerBudget > 0
+      ? Math.trunc(callerBudget) : undefined);
   while (pick) {
     if (options.abortSignal?.aborted) return clientCancelledResponse();
     const firstComboTarget = comboTargetsDispatched === 0;
@@ -724,10 +731,13 @@ export async function executeComboResponses(
     // already see this target's effective cap rather than a previous target's cap.
     const spendProvider = resolveWireProtocolOverride(targetRoute.providerName, targetRoute.modelId,
       targetRoute.provider, options.inboundWire ?? "responses", targetRoute.staticPolicy);
-    const outputBudget = effectiveAzureOutputBudget(spendProvider,
-      isPlainObject(body) ? body.max_output_tokens : undefined);
-    if (typeof outputBudget === "number" && outputBudget > 0) {
+    const outputBudget = effectiveAzureOutputBudget(spendProvider, callerBudget);
+    if (outputBudget !== callerBudget && typeof outputBudget === "number" && outputBudget > 0) {
       logCtx.spendOutputCeilingTokens = Math.trunc(outputBudget);
+    } else if (callerOutputCeilingTokens === undefined) {
+      delete logCtx.spendOutputCeilingTokens;
+    } else {
+      logCtx.spendOutputCeilingTokens = callerOutputCeilingTokens;
     }
     // Derive the target's allowance before booking its initial send; the booking occupies it.
     const targetSendBudget = comboSendScope
