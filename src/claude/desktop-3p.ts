@@ -5,12 +5,12 @@ import { applyRemoteDesktopStore, inspectRemoteDesktopCleanup, restoreRemoteDesk
 import { canonicalDirectory } from "./desktop-remote-store-io";
 import {
   resolveDesktop3pConfigLibraryPath, parseMetadata, SAFE_DESKTOP_PROFILE_ID, isRecord,
-  isOwnedDesktopEntry, isOwnedDesktopGatewayEntry, profilePath, readDesktopProfileForeignKeys,
+  isOwnedDesktopEntry, isOwnedDesktopGatewayEntry, profilePath, readDesktopProfileForeignKeys, readDesktopLibraryText, readDesktopLibraryBytes,
   type Desktop3pConfigLibraryOptions, type Desktop3pMetadata, type Desktop3pMetadataEntry,
 } from "./desktop-3p-library";
 export { resolveDesktop3pConfigLibraryPath, type Desktop3pConfigLibraryOptions } from "./desktop-3p-library";
 import { createHash, randomUUID } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, lstatSync, unlinkSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, lstatSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { atomicWriteFile, readConfigDiagnostics, withConfigMutationLockSync } from "../config";
 import { atomicWriteFileNoFollow } from "../config/atomic-write";
@@ -476,7 +476,7 @@ export function inspectDesktop3pConfigLibrary(
   let profile: Record<string, unknown>;
   let fingerprint: string;
   try {
-    const source = readFileSync(selectedProfilePath, "utf8");
+    const source = readDesktopLibraryText(selectedProfilePath);
     const parsed = JSON.parse(source) as unknown;
     if (!isRecord(parsed)) return { kind: "broken", libraryPath, selectedProfilePath, appliedId, residualPaths, ownedProfileActive };
     profile = parsed;
@@ -709,7 +709,7 @@ export function writeDesktop3pConfig(
         const metadata = parseMetadata(join(inspected.libraryPath, "_meta.json"));
         if (!isOwnedDesktopGatewayEntry(metadata.entries.find(entry => entry.id === inspected.appliedId))) return refused;
         try {
-          const selected = JSON.parse(readFileSync(inspected.selectedProfilePath, "utf8")) as Record<string, unknown>;
+          const selected = JSON.parse(readDesktopLibraryText(inspected.selectedProfilePath)) as Record<string, unknown>;
           mode = selected.modelDiscoveryEnabled !== true ? "static"
             : Array.isArray(selected.inferenceModels) ? "hybrid" : "discovery";
         } catch { return refused; }
@@ -825,7 +825,7 @@ function writeDesktop3pConfigWithGenerator(
             const freshMetadata = parseMetadata(metadataPath);
             if (freshMetadata.appliedId !== refreshOnly.requiredId
               || !isOwnedDesktopGatewayEntry(freshMetadata.entries.find(entry => entry.id === refreshOnly.requiredId))
-              || createHash("sha256").update(readFileSync(configPath)).digest("hex").slice(0, 16) !== refreshOnly.expectedFingerprint) {
+              || createHash("sha256").update(readDesktopLibraryBytes(configPath)).digest("hex").slice(0, 16) !== refreshOnly.expectedFingerprint) {
               throw new Error();
             }
           } catch { throw new Error("desktop_refresh_only_skipped"); }
