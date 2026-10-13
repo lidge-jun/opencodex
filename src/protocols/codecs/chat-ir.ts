@@ -144,8 +144,9 @@ function unsignedReasoningSignature(text: string): string {
  * The parser's parameter normalization. The bridge's schema parse hands the parser a shallow
  * copy of the caller's record, so this copies too: a sanitizer that edits the catalog in place
  * must not reach the caller's body, which the lane may still need to re-decode.
+ * Shared with the direct Messages decoder (`messages-ir.ts`), whose tools pass the same schema.
  */
-function normalizedParameters(raw: unknown): Record<string, unknown> {
+export function normalizedParameters(raw: unknown): Record<string, unknown> {
   // The bridge's `z.record` copies own keys except `__proto__`, which JSON.parse can create.
   const copy: Record<string, unknown> = {};
   if (isRec(raw)) {

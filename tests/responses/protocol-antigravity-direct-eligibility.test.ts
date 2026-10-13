@@ -3,7 +3,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { planProtocol, type ProtocolPlanInput } from "../../src/protocols/plan";
-import { antigravityDirectDeclineReason, isAntigravityRoute } from "../../src/server/antigravity-direct-eligibility";
+import { antigravityDirectDeclineReason, antigravityMessagesDeclineReason, isAntigravityRoute } from "../../src/server/antigravity-direct-eligibility";
 import { cacheDiagnosticsObserving } from "../../src/server/request-log";
 import "../../src/usage/cache-diagnostic";
 import type { RouteResult } from "../../src/router";
@@ -117,6 +117,72 @@ describe("antigravityDirectDeclineReason", () => {
       if (previous === undefined) delete process.env.OPENCODEX_CACHE_DEBUG;
       else process.env.OPENCODEX_CACHE_DEBUG = previous;
     }
+  });
+});
+
+const messages = (extra: Record<string, unknown> = {}) => ({
+  model: `google-antigravity/${MODEL}`,
+  messages: [{ role: "user", content: "hi" }],
+  ...extra,
+});
+const RESOLVED = `google-antigravity/${MODEL}`;
+
+describe("antigravityMessagesDeclineReason", () => {
+  test("an eligible concrete Antigravity route takes the lane; the route rules are the Chat ones", () => {
+    expect(antigravityMessagesDeclineReason(route(), messages(), RESOLVED, config())).toBeUndefined();
+    expect(antigravityMessagesDeclineReason(route(), messages(), RESOLVED, config({}, false))).toBe("rollout-disabled");
+    expect(antigravityMessagesDeclineReason(route({ googleMode: "vertex" }), messages(), RESOLVED, config())).toBe("not-migrated");
+    expect(antigravityMessagesDeclineReason(route({}, { routeKind: "policy" } as never), messages(), RESOLVED, config()))
+      .toBe("combo-or-policy-route");
+  });
+
+  test("a hosted web-search tool or a forced WebSearch choice keeps the bridge for the sidecar", () => {
+    expect(antigravityMessagesDeclineReason(route(), messages({ tools: [{ type: "web_search_20250305", name: "web_search" }] }), RESOLVED, config()))
+      .toBe("hosted-tool");
+    expect(antigravityMessagesDeclineReason(route(), messages({ tool_choice: { type: "tool", name: "WebSearch" } }), RESOLVED, config()))
+      .toBe("hosted-tool");
+    expect(antigravityMessagesDeclineReason(route(), messages({ tools: [{ name: "f", input_schema: { type: "object" } }] }), RESOLVED, config()))
+      .toBeUndefined();
+  });
+
+  test("an image for a text-only model keeps the bridge, in a user turn or a tool result", () => {
+    const textOnly = route({ modelCapabilities: { [MODEL]: { inputModalities: ["text"] } } } as never);
+    const image = { type: "image", source: { type: "base64", media_type: "image/png", data: "AA==" } };
+    expect(antigravityMessagesDeclineReason(textOnly, messages({ messages: [{ role: "user", content: [image] }] }), RESOLVED, config()))
+      .toBe("vision-preprocessing");
+    const inResult = messages({ messages: [{ role: "user", content: [{ type: "tool_result", tool_use_id: "t", content: [image] }] }] });
+    expect(antigravityMessagesDeclineReason(textOnly, inResult, RESOLVED, config())).toBe("vision-preprocessing");
+    expect(antigravityMessagesDeclineReason(textOnly, messages(), RESOLVED, config())).toBeUndefined();
+  });
+
+  test("the shadow-call intercept is matched on the resolved model", () => {
+    const intercept = { shadowCallIntercept: { enabled: true, model: "combo/helpers", sourceModels: ["gemini-"] } } as Partial<OcxConfig>;
+    expect(antigravityMessagesDeclineReason(route(), messages(), MODEL, config(intercept))).toBe("bridge-only-policy");
+    expect(antigravityMessagesDeclineReason(route(), messages(), RESOLVED, config(intercept))).toBeUndefined();
+  });
+
+  test("text the core rewrites on the bridge body, or an observing recorder, keeps the bridge", () => {
+    const catalog = "intro <skills_instructions>\n## Skills\n</skills_instructions>";
+    expect(antigravityMessagesDeclineReason(route(), messages({ system: [{ type: "text", text: catalog }] }), RESOLVED, config()))
+      .toBe("bridge-only-policy");
+    expect(antigravityMessagesDeclineReason(route(), messages({ messages: [{ role: "system", content: catalog }, { role: "user", content: "hi" }] }), RESOLVED, config()))
+      .toBe("bridge-only-policy");
+    const generatedImage = messages({ messages: [
+      { role: "user", content: "draw" },
+      { role: "assistant", content: [{ type: "text", text: "![Generated image](</tmp/artifacts/img.png>)" }] },
+      { role: "user", content: "again" },
+    ] });
+    expect(antigravityMessagesDeclineReason(route(), generatedImage, RESOLVED, config())).toBe("bridge-only-policy");
+    expect(antigravityMessagesDeclineReason(route(), messages(), RESOLVED, config(), { cacheDiagnostics: true })).toBe("bridge-only-policy");
+  });
+
+  test("the policies the decoder reproduces decline nothing", () => {
+    const cc = { claudeCode: { stabilizePromptCache: true } } as Partial<OcxConfig>;
+    const skill = messages({ messages: [
+      { role: "assistant", content: [{ type: "tool_use", id: "s", name: "Skill", input: { skill: "claude-api" } }] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "s", content: "Launching skill: claude-api" }] },
+    ] });
+    expect(antigravityMessagesDeclineReason(route(), skill, RESOLVED, config(cc))).toBeUndefined();
   });
 });
 

@@ -21,6 +21,13 @@ import { normalizeAnthropicImages } from "../adapters/anthropic-image-normalize"
 import { createToolCallIdAllocator } from "../adapters/tool-call-id";
 import { openAIChatSerializesThinking } from "../adapters/openai-chat/messages";
 import { messagesToResponsesTranslation } from "../protocols/codecs/messages";
+import {
+  messagesDirectPlanHolds,
+  messagesDirectRequestOption,
+  messagesDirectTraceDecline,
+  planMessagesAntigravityDirect,
+  type MessagesDirectPlan,
+} from "./messages-antigravity-direct";
 import { AnthropicRequestError, DesktopModelMappingUnavailableError, extractOcxEffortDirective, extractOcxRouteDirective, nativeAnthropicProjection, resolveInboundModel, type ClaudeCacheKeySource } from "../claude/inbound";
 import { nativeReasoningTag, type NativeReasoningOwner } from "../responses/reasoning-replay-cache";
 import { isKnownDesktop3pModelId, resolveDesktop3pAlias } from "../claude/desktop-3p";
@@ -851,6 +858,21 @@ export async function handleClaudeMessages(
   }
 }
 
+/** The client answer for a Messages body the translation (or the direct decode) refused. */
+function translationFailure(err: unknown, logCtx: RequestLogContext, logIds: { requestId: string; start: number } | undefined): Response {
+  const overflow = isTranslatorBudgetExceededError(err);
+  const unavailable = err instanceof DesktopModelMappingUnavailableError;
+  const status = overflow ? 413 : unavailable ? 503 : err instanceof AnthropicRequestError ? 400 : 500;
+  if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, status, { closeReason: "non_stream" });
+  if (unavailable) return desktopMappingUnavailableResponse(err);
+  return anthropicErrorResponse(
+    status,
+    overflow ? "request translation buffer exceeded the safe limit" : err instanceof Error ? err.message : String(err),
+    overflow ? "request_too_large" : undefined,
+    overflow ? "translation_buffer_limit" : undefined,
+  );
+}
+
 /**
  * Translate a Claude Messages request, route it through the Responses pipeline,
  * and translate the reply back. Runs under a translator budget owned by the
@@ -886,6 +908,9 @@ async function handleClaudeMessagesWithBudget(
   let effortRow: ParsedEffortRowId | null = null;
   let fastRow: ParsedFastRowId | null = null;
   let requestedModel = "";
+  // Antigravity direct lane (off by default): planned before translation, kept only if routing
+  // settles on the route the plan was made for.
+  let directPlan: MessagesDirectPlan | undefined;
   // Built only under the reject policy; the legacy default leaves this request untouched.
   let envelope: ProtocolEnvelope | undefined;
   let messagesFeatures: () => Iterable<ProtocolFeature> = () => [];
@@ -1035,9 +1060,16 @@ async function handleClaudeMessagesWithBudget(
       };
       delete anthropicBody.thinking;
     }
-    let translation;
+    // On the direct lane the core receives only the request settings; the conversation is
+    // already decoded into the IR. Without a plan the translation below runs as before.
+    directPlan = planMessagesAntigravityDirect(anthropicBody, cc, config, translatorBudget);
+    let translation = directPlan && {
+      body: directPlan.settingsBody,
+      cacheKeySource: directPlan.cacheKeySource,
+      nativeReasoningReplay: directPlan.conversation.nativeReasoningReplay,
+    };
     try {
-      translation = messagesToResponsesTranslation(anthropicBody, cc, translatorBudget);
+      translation ??= messagesToResponsesTranslation(anthropicBody, cc, translatorBudget);
     } catch (err) {
       // A native Messages route can discard an undecodable proxy envelope. Keep the
       // original error for any route that ultimately translates to Responses.
@@ -1057,17 +1089,7 @@ async function handleClaudeMessagesWithBudget(
     cacheKeySource = translation.cacheKeySource;
     nativeReasoningReplay = translation.nativeReasoningReplay;
   } catch (err) {
-    const overflow = isTranslatorBudgetExceededError(err);
-    const unavailable = err instanceof DesktopModelMappingUnavailableError;
-    const status = overflow ? 413 : unavailable ? 503 : err instanceof AnthropicRequestError ? 400 : 500;
-    if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, status, { closeReason: "non_stream" });
-    if (unavailable) return desktopMappingUnavailableResponse(err);
-    return anthropicErrorResponse(
-      status,
-      overflow ? "request translation buffer exceeded the safe limit" : err instanceof Error ? err.message : String(err),
-      overflow ? "request_too_large" : undefined,
-      overflow ? "translation_buffer_limit" : undefined,
-    );
+    return translationFailure(err, logCtx, logIds);
   }
 
   if (!requestedModel) requestedModel = (anthropicBody as Rec).model as string;
@@ -1120,8 +1142,25 @@ async function handleClaudeMessagesWithBudget(
     }
     return requestTokenFloor;
   };
+  /** Leave the direct plan: the core gets the full bridge translation, as without the switch. */
+  const leaveDirectPlan = (): unknown => {
+    directPlan = undefined;
+    try {
+      const translation = messagesToResponsesTranslation(anthropicBody, cc, translatorBudget);
+      internalBody = translation.body;
+      if (fastRow) internalBody.service_tier = "priority";
+      internalBody.stream = true;
+      translatorBudget.chargeRetained(jsonUtf8Bytes(internalBody), { kind: "request_copies" });
+      cacheKeySource = translation.cacheKeySource;
+      nativeReasoningReplay = translation.nativeReasoningReplay;
+      return undefined;
+    } catch (err) {
+      return err;
+    }
+  };
+  let directLeaveError: unknown;
   try {
-    const route = routeModel(config, internalBody.model as string, evidenceFromBody(internalBody));
+    const route = routeModel(config, internalBody.model as string, directPlan ? directPlan.evidence : evidenceFromBody(internalBody));
     // Settle the wire once so the sampling decision below reads the effective
     // adapter rather than the provider-wide default (#404).
     route.staticPolicy = captureRouteStaticPolicy(
@@ -1139,6 +1178,8 @@ async function handleClaudeMessagesWithBudget(
     route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, "anthropic", route.staticPolicy);
     logCtx.routeDecision = route.routeDecision;
     settledRoute = route;
+    // Before any route-specific shaping, so a request that leaves the lane is shaped as the bridge's.
+    if (directPlan && !messagesDirectPlanHolds(directPlan, route, anthropicBody as Rec, config)) directLeaveError = leaveDirectPlan();
     if (directEncodersApply(config, route)) {
       clientEncoder = { protocol: "messages", stream, model: requestedModel, inputTokenFloor: claudeRequestTokenFloor() };
     }
@@ -1184,6 +1225,14 @@ async function handleClaudeMessagesWithBudget(
     }
     /* unknown model: let handleResponses shape the 404 */
   }
+  if (directPlan && !settledRoute) directLeaveError ??= leaveDirectPlan();
+  if (directLeaveError !== undefined) return translationFailure(directLeaveError, logCtx, logIds);
+  const directRoute = directPlan && settledRoute ? settledRoute : undefined;
+  // The direct lane answers through the direct encoder whatever `directEncoders` says: neither
+  // direction passes through the internal Responses body.
+  if (directRoute) {
+    clientEncoder = { protocol: "messages", stream, model: requestedModel, inputTokenFloor: claudeRequestTokenFloor(), requestLane: "direct" };
+  }
 
   // PF-08: a managed-key Anthropic route sends its Messages body natively. The caller-forward
   // passthrough above was decided on the caller's own credential and never reaches this point.
@@ -1207,11 +1256,20 @@ async function handleClaudeMessagesWithBudget(
     return anthropicErrorResponse(400, nativeProjectionOnlyError.message, "invalid_request_error");
   }
   // With the switch on, a declined route says why on its bridge mark, as native Chat does.
-  if (nativeDecline && nativeDecline !== "rollout-disabled") {
+  const antigravityDecline = settledRoute && !nativeMessagesRoute && !directRoute
+    ? messagesDirectTraceDecline(settledRoute, anthropicBody, String(internalBody.model ?? ""), config)
+    : undefined;
+  if (directRoute) {
+    markProtocolEntry(logCtx, { inbound: "messages", lane: "direct", features: messagesFeatures });
+  } else if ((nativeDecline && nativeDecline !== "rollout-disabled") || antigravityDecline) {
     markProtocolEntry(logCtx, {
       inbound: "messages",
       lane: "bridge",
-      reasonCodes: [...(effortRow ? ["effort-row" as const] : fastRow ? ["fast-row" as const] : []), nativeDecline],
+      reasonCodes: [
+        ...(effortRow ? ["effort-row" as const] : fastRow ? ["fast-row" as const] : []),
+        ...(nativeDecline && nativeDecline !== "rollout-disabled" ? [nativeDecline] : []),
+        ...(antigravityDecline ? [antigravityDecline] : []),
+      ],
       features: messagesFeatures,
     });
   }
@@ -1219,7 +1277,11 @@ async function handleClaudeMessagesWithBudget(
   if (envelope && settledRoute && !settledRoute.combo && settledRoute.routeKind !== "policy") {
     const verdict = checkRepresentable({
       inbound: "messages",
-      requestPath: requestPathForLane("messages", nativeMessagesRoute ? "native" : "bridge", upstreamWireForAdapter(settledRoute.provider.adapter)),
+      requestPath: requestPathForLane(
+        "messages",
+        nativeMessagesRoute ? "native" : directRoute ? "direct" : "bridge",
+        upstreamWireForAdapter(settledRoute.provider.adapter),
+      ),
       features: envelope.features(),
       policy: "reject",
     });
@@ -1369,6 +1431,9 @@ async function handleClaudeMessagesWithBudget(
     onNativePassthroughTerminal: status => finalizeNativeLog(httpStatusForRequestLogTerminal(status, logCtx), { terminalStatus: status, closeReason: "terminal" }),
     onNativePassthroughCancel: () => finalizeNativeLog(499, { closeReason: "client_cancel" }),
     ...(clientEncoder ? { clientEncoder } : {}),
+    ...(directRoute && directPlan
+      ? { directRequest: messagesDirectRequestOption(directPlan, anthropicBody, cc, translatorBudget) }
+      : {}),
   });
   const response = logIds ? responseWithDeferredRequestLog(upstream, logIds.requestId, logIds.start, logCtx) : upstream;
   // Already in the Messages wire (direct encoder): no conversion.
