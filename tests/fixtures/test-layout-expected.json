@@ -10,6 +10,7 @@
   "router-anthropic-billing-failover.test.ts": "routing",
   "anthropic-billing-refusal.test.ts": "adapters/anthropic",
     "messages-request-id-headers.test.ts": "claude-integration",
+  "bounded-file-read.test.ts": "lib",
     "messages-request-id-endpoint.test.ts": "claude-integration",
   "anthropic-revoked-token.test.ts": "adapters/anthropic",
   "messages-revoked-token.test.ts": "claude-integration",

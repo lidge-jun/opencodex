@@ -287,6 +287,17 @@ profiles** remains a separate bulk action and is not bound to one combined previ
 
 ## What to expect, honestly
 
+**Managed configuration files are limited to 4 MiB (4,194,304 UTF-8 bytes).**
+The shared integration reader refuses larger files as unsafe to read, and the writer
+refuses a merged configuration that exceeds the same limit with `write_failed`, leaving
+the original configuration unchanged. Cline's recovery marker also has this limit;
+it includes both files' before-and-after contents plus metadata, so Cline can hit the
+limit even when each individual file is smaller than 4 MiB.
+
+Back up the client configuration yourself, then remove unneeded entries or reduce the
+exported model list before retrying. **Replace** does not bypass the limit. If the
+configuration must stay larger, manage it manually instead of using the Connect switch.
+
 **Formatting is generally not preserved.** Applying parses a config and writes it back
 out, so JSON, JSON5 and TOML may be reformatted and comments in JSON5 or TOML are lost.
 OMP, DSH and Hermes are the exceptions: OMP and Hermes patch only `providers.opencodex`.
