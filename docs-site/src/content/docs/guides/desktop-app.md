@@ -113,8 +113,12 @@ belongs to a different copy of the app, so turn it off from that copy; **registe
 is missing** means the login item names an app that no longer exists, so delete
 `~/Library/LaunchAgents/OpenCodex.plist` and turn the item on again; **status unknown**
 means the registration could not be read. While the app runs the proxy, the Startup page keeps the
-background service and launcher shim installers disabled; to use them instead, quit
-OpenCodex and run `ocx service install` or `ocx codex-shim install` in a terminal.
+background service installer disabled; to use it instead, quit OpenCodex and run
+`ocx service install` in a terminal. The Codex launcher shim can still be installed there.
+When a Codex launch finds no proxy, the shim waits for OpenCodex to restart it, opens
+OpenCodex on macOS if it quit, and otherwise reports an error instead of starting a second
+proxy. If the shim reads "activation not confirmed", add
+`. ~/.opencodex/codex-shell-env.sh` to your shell startup file after other PATH setup.
 
 The bundled CLI is `/Applications/OpenCodex.app/Contents/MacOS/ocx` on macOS and
 `/usr/bin/ocx` for the Linux deb package. Run that executable with `status` to check
