@@ -805,3 +805,20 @@ describe("the loopback-only set is one fact, read through one seam", () => {
     }
   });
 });
+
+describe("the managed file size bound", () => {
+  test("a config past the read bound classifies unsafe, never absent", () => {
+    mkdirSync(join(home, ".pi", "agent"), { recursive: true });
+    const path = join(home, ".pi", "agent", "models.json");
+    writeFileSync(path, `{"pad":"${"x".repeat(4 * 1024 * 1024)}"}\n`);
+    const status = readIntegrationState(input());
+    /*
+     * Too large to read is a read failure like any other: the file reports
+     * unsafe rather than absent, so nothing mistakes it for an empty target
+     * a write could replace.
+     */
+    expect(status.state).toBe("unsafe");
+    expect(status.reason).toBe("unparseable");
+    expect(loadTarget(fileIO(), path)).toEqual({ ok: false, why: "read-failed" });
+  });
+});

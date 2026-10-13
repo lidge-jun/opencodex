@@ -12,6 +12,7 @@ import {
 import type { NativeProfileKey, NativeProfileKeyProvider } from "../../src/codex/native-profile-types";
 import { drainAndShutdown } from "../../src/server";
 import { startServer } from "../../src/server";
+import { nativeOwnerRestartService } from "./native-owner-restart-service";
 
 const required = (name: string): string => {
   const value = process.env[name];
@@ -137,7 +138,9 @@ function start(home = codexHome): ReturnType<typeof startServer> {
           }
         : undefined,
     },
-    managementApi: { nativeProfileApi: { manager } },
+    // Synthetic homes do not isolate OS process-control APIs. Every server, including extra
+    // fixture instances, must inject the entire restart service rather than using live defaults.
+    managementApi: { nativeProfileApi: { manager }, codexRestartService: nativeOwnerRestartService },
   });
   servers.push(server);
   return server;
