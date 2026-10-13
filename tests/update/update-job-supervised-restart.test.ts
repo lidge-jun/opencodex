@@ -84,11 +84,14 @@ describe("restartServiceManagerAfterUpdate", () => {
   test("no manager, or a refused restart, fails without polling", async () => {
     let probes = 0;
     const probeServing = async () => { probes++; return true; };
+    const lines: string[] = [];
     expect(await restartServiceManagerAfterUpdate(target, () => {}, deps({ hasManager: () => false, probeServing }))).toBe("failed");
-    expect(await restartServiceManagerAfterUpdate(target, () => {}, deps({
-      restartJob: () => ({ ok: false, reason: "Could not find service" }), probeServing, readRecord: () => null,
+    expect(await restartServiceManagerAfterUpdate(target, line => lines.push(line), deps({
+      restartJob: () => ({ ok: false, reason: "token=abc123 Could not find service" }), probeServing, readRecord: () => null,
     }))).toBe("failed");
     expect(probes).toBe(0);
+    expect(lines.at(-1)).toContain("refused the restart");
+    expect(lines.join("\n")).not.toContain("abc123");
   });
 
   test("the update lease is released before the manager restart, and kept when there is no manager", async () => {

@@ -55,7 +55,8 @@ export async function restartServiceManagerAfterUpdate(
   const unsettled = !restarted.ok && restarted.unsettled === true;
   let verdict: ReturnType<typeof supervisionVerdict>;
   if (!restarted.ok && !unsettled) {
-    verdict = { kind: "failed", reason: restarted.reason };
+    // The refusal reason is the manager's stderr: external text, so it never reaches the persisted job.
+    verdict = { kind: "failed", reason: "the service manager refused the restart" };
   } else {
     let servingPid: number | null = null;
     const deadline = now() + (deps.deadlineMs ?? 30_000);
