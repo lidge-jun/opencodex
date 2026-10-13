@@ -27,17 +27,22 @@ export interface ManagerRestartDeps {
 }
 
 export type ManagerRestartFn = (
-  target: { port: number; hostname: string },
+  target: { port: number; hostname: string; release?: () => void },
   log: (line: string) => void,
 ) => Promise<ManagerRestartOutcome>;
 
-/** Ask the manager to restart its job and prove the serving proxy is that job. Never throws. */
+/**
+ * Ask the manager to restart its job and prove the serving proxy is that job. Never throws.
+ * `release` frees the update lease first: the manager's child cannot join it (#5760), and the
+ * worker reaches this point without a release when it skipped the service repair.
+ */
 export async function restartServiceManagerAfterUpdate(
-  target: { port: number; hostname: string },
+  target: { port: number; hostname: string; release?: () => void },
   log: (line: string) => void,
   deps: ManagerRestartDeps = {},
 ): Promise<ManagerRestartOutcome> {
   if (!(deps.hasManager ?? hasRestartableServiceManager)()) return "failed";
+  target.release?.();
   log("Asking the service manager to restart the background service...");
   const readRecord = deps.readRecord ?? (() => readRuntimePort());
   const probe = deps.probeServing ?? (async (port: number, hostname: string, pid: number, deadlineAt: number) => (

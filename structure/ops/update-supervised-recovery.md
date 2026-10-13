@@ -46,6 +46,8 @@ size cap. When a service-managed install's refresh fails, is not viable, or neve
 worker asks the manager to restart its job before it re-acquires the lease for a direct start,
 using the same helpers and the same manager-PID-against-serving-PID proof. A proven supervised
 restart skips the direct start. An unsettled restart starts no competing proxy and fails the job.
+The manager step releases the update lease itself once a manager is present, because the worker
+reaches it without a release when it skipped the repair after a port-reclaim timeout.
 Otherwise the pinned direct start runs as before, and when that proxy comes up healthy the job
 still ends `failed` with `restarted: false`, an error naming UNSUPERVISED, and the warning in its
 log. Installs without a service are unchanged: the direct start is their normal recovery.

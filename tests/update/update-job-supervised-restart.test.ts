@@ -31,7 +31,7 @@ function freshJob(id: string): UpdateJobState {
     currentVersion: "2.40.0", latestVersion: "2.40.1", channel: "latest", installer: "bun", restart: true,
     command: "bun add -g @bitkyc08/opencodex", releaseNotesUrl: "https://example.invalid", log: [],
   };
-  writeFileSync(updateJobPath(id), JSON.stringify(job));
+  writeFileSync(updateJobPath(), JSON.stringify(job));
   return job;
 }
 
@@ -89,6 +89,18 @@ describe("restartServiceManagerAfterUpdate", () => {
       restartJob: () => ({ ok: false, reason: "Could not find service" }), probeServing, readRecord: () => null,
     }))).toBe("failed");
     expect(probes).toBe(0);
+  });
+
+  test("the update lease is released before the manager restart, and kept when there is no manager", async () => {
+    const order: string[] = [];
+    const release = () => { order.push("release"); };
+    await restartServiceManagerAfterUpdate({ ...target, release }, () => {}, deps({
+      restartJob: () => { order.push("restart"); return { ok: false, reason: "refused" }; },
+    }));
+    expect(order).toEqual(["release", "restart"]);
+    order.length = 0;
+    await restartServiceManagerAfterUpdate({ ...target, release }, () => {}, deps({ hasManager: () => false }));
+    expect(order).toEqual([]);
   });
 
   test("a client timeout with no proven supervision is unsettled", async () => {

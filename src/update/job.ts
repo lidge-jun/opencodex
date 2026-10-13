@@ -1243,8 +1243,8 @@ async function restartAfterUpdate(
   }
 
   // #7043: a managed install asks launchd/systemd first; only the manager's own job counts as recovered.
-  const restartManager = io.restartServiceManagerFn ?? restartServiceManagerAfterUpdate;
-  const managed = serviceInstalled ? await restartManager({ port, hostname }, line => updateJob(job, {}, line)) : "failed";
+  const managed = !serviceInstalled ? "failed" : await (io.restartServiceManagerFn ?? restartServiceManagerAfterUpdate)(
+    { port, hostname, release: io.releaseForServiceManagerFn }, line => updateJob(job, {}, line));
   if (managed === "supervised") return;
   if (managed === "unsettled") { updateJob(job, ...unsettledManagerRestartFailure(port)); return false; }
   const fallback = serviceInstalled ? "unsupervised" as const : undefined; // every exit below is unproven ownership
