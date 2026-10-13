@@ -447,6 +447,7 @@ describe("codex-journal", () => {
       expect(result.status).toBe(0);
       const out = JSON.parse(result.stdout);
       if (symlinked) {
+        expect(out.success).toBe(false);
         expect(out.config.state).toBe("failed");
         expect(readFileSync(configPath, "utf8")).toBe(injectedConfig);
         expect(readFileSync(journalPath, "utf8")).toBe(journal);

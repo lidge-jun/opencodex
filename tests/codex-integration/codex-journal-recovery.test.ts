@@ -260,4 +260,96 @@ describe("codex-journal recovery diagnostics", () => {
       else expect(existsSync(join(testDir, "opencodex.config.toml"))).toBe(mode === "unlink-EPERM");
     });
   }
+
+  test("profile removal refusal rolls back published config", () => {
+    const journal = seed("process", injected, true);
+    const result = runScript(testDir, `
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const { spyOn } = require("bun:test");
+      const section = require("./src/codex/inject/config-write-section");
+      const { removeCodexConfig } = require("./src/codex/inject/remove");
+      let reached = false, publishedFirst = false, refused = false;
+      const hook = spyOn(section, "removeCodexProfileEntry").mockImplementation(() => {
+        reached = true;
+        publishedFirst = !fs.readFileSync(path.join(process.env.CODEX_HOME, "config.toml"), "utf8").includes('model_provider = "opencodex"');
+        throw new Error("fixture profile removal refused");
+      });
+      try { removeCodexConfig(); } catch { refused = true; }
+      finally { hook.mockRestore(); }
+      console.log(JSON.stringify({ reached, publishedFirst, refused }));
+    `);
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ reached: true, publishedFirst: true, refused: true });
+    expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(injected);
+    expect(readFileSync(join(testDir, "opencodex.config.toml"), "utf8")).toBe(profile);
+    expect(readFileSync(join(testDir, "opencodex-journal.json"), "utf8")).toBe(journal);
+  });
+  test("dangling generated-profile metadata refuses the complete pair", () => {
+    const journal = seed("process", injected, true);
+    const result = runScript(testDir, `
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const { spyOn } = require("bun:test");
+      const profilePath = path.join(process.env.CODEX_HOME, "opencodex.config.toml");
+      fs.unlinkSync(profilePath);
+      const lstat = fs.lstatSync;
+      const hook = spyOn(fs, "lstatSync").mockImplementation((target, ...args) =>
+        path.basename(String(target)) === "opencodex.config.toml"
+          ? { isSymbolicLink: () => true }
+          : lstat(target, ...args));
+      let out;
+      try { out = require("./src/codex/journal").restoreJournalState(); }
+      finally { hook.mockRestore(); }
+      console.log(JSON.stringify(out));
+    `);
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ complete: false, profileRestoreFailed: true, configRewritten: false, profileRewritten: false });
+    expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(injected);
+    expect(readFileSync(join(testDir, "opencodex-journal.json"), "utf8")).toBe(journal);
+  });
+  test("generated profile disappearance at type observation is treated as absence", () => {
+    seed("process", injected, true);
+    const result = runScript(testDir, `
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const { spyOn } = require("bun:test");
+      const profilePath = path.join(process.env.CODEX_HOME, "opencodex.config.toml");
+      const lstat = fs.lstatSync;
+      let vanished = false;
+      const hook = spyOn(fs, "lstatSync").mockImplementation((target, ...args) => {
+        if (!vanished && path.basename(String(target)) === "opencodex.config.toml") {
+          vanished = true;
+          fs.unlinkSync(profilePath);
+          throw Object.assign(new Error("fixture missing profile"), { code: "ENOENT" });
+        }
+        return lstat(target, ...args);
+      });
+      let out;
+      try { out = require("./src/codex/journal").restoreJournalState(); }
+      finally { hook.mockRestore(); }
+      console.log(JSON.stringify({ vanished, out }));
+    `);
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ vanished: true, out: { complete: true, profileRestored: true } });
+    expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(original);
+    expect(existsSync(join(testDir, "opencodex.config.toml"))).toBe(false);
+    expect(existsSync(join(testDir, "opencodex-journal.json"))).toBe(false);
+  });
+  test.skipIf(process.platform === "win32")("a real dangling generated-profile symlink preserves recovery evidence", () => {
+    const journal = seed("process", injected, true);
+    const result = runScript(testDir, `
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const profilePath = path.join(process.env.CODEX_HOME, "opencodex.config.toml");
+      fs.unlinkSync(profilePath);
+      fs.symlinkSync(path.join(process.env.CODEX_HOME, "missing-profile-target.toml"), profilePath);
+      const out = require("./src/codex/journal").restoreJournalState();
+      console.log(JSON.stringify({ out, link: fs.lstatSync(profilePath).isSymbolicLink() }));
+    `);
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ link: true, out: { complete: false, profileRestoreFailed: true } });
+    expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(injected);
+    expect(readFileSync(join(testDir, "opencodex-journal.json"), "utf8")).toBe(journal);
+  });
 });

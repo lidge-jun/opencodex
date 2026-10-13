@@ -2,7 +2,7 @@ import { beginCodexWriteSection, publishCodexArtifact, removeCodexProfileEntry }
 import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { normalizeStructuralWhitespace, rootAssignmentKey, rootSourceLines, sourceAssignment, sourceText } from "../toml-source-lines";
 import { atomicWriteFile } from "../../config";
-import { ConfigWriteLockRefusal, configWriteLockFailureMessage, withConfigWriteLockHeld } from "../config-write-lock";
+import { ConfigWriteLockRefusal, configWriteLockFailureMessage, withConfigWriteLockHeld, withConfigWriteRecovery } from "../config-write-lock";
 import type { LockHandle } from "../config-write-lock";
 import {
   REALTIME_WS_BASE_URL_KEY,
@@ -204,7 +204,7 @@ export function removeCodexConfig(
   if (historyError && !(historyDisposition !== "refuse-on-any" && historyError === HISTORY_RELABEL_STANDS_DOWN)) {
     return { success: false, message: `Codex configuration preserved: ${historyError}. Native writer coordination is required.` };
   }
-  const locked = withConfigWriteLockHeld(CODEX_CONFIG_PATH, options.heldConfigWriteLock, held => {
+  const locked = withConfigWriteLockHeld(CODEX_CONFIG_PATH, options.heldConfigWriteLock, held => withConfigWriteRecovery(CODEX_CONFIG_PATH, held, () => {
   beginCodexWriteSection(held);
   if (!options.preserveProfile) {
     try {
@@ -281,7 +281,7 @@ export function removeCodexConfig(
     message: removedMessage,
     ...(retainedBlock === null ? {} : { retainedProviderTable: retainedBlock.replace(/\n+$/, "").split("\n") }),
   };
-  });
+  }));
   if (!locked.ok) return { success: false, retryable: locked.error === "locked", message: configWriteLockFailureMessage(locked) };
   return locked.value;
 }

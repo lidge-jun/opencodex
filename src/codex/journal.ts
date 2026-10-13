@@ -349,7 +349,12 @@ export function restoreJournalState(
 
   // A matching byte hash does not authorize following a newly substituted profile link.
   // Refuse the complete pair before restoring config or deleting its recovery journal.
-  if (currentProfile !== null && profileUnchanged && !comparison.profileAlreadyOriginal && lstatSync(CODEX_PROFILE_PATH).isSymbolicLink()) {
+  let profileIsSymlink = false;
+  if (profileUnchanged && (!comparison.profileAlreadyOriginal || comparison.originalProfile === null)) {
+    try { profileIsSymlink = lstatSync(CODEX_PROFILE_PATH).isSymbolicLink(); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  }
+  if (profileIsSymlink) {
     return {
       configRestored: comparison.configAlreadyOriginal, profileRestored: false,
       configRewritten: false, profileRewritten: false,
