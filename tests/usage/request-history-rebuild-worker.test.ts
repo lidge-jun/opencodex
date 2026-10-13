@@ -25,6 +25,7 @@ import {
   RequestHistoryIndexBusyError,
   RequestHistoryIndexClosedError,
   REQUEST_HISTORY_MAX_RECORD_BYTES,
+  setRequestHistoryAsyncRefreshBuildsForTests,
   setRequestHistoryWorkerRebuildMinBytesForTests,
 } from "../../src/routing/history/indexer";
 import { buildFilePath, buildIndexFile } from "../../src/routing/history/build-file";
@@ -109,6 +110,7 @@ beforeEach(() => {
 afterEach(async () => {
   closeRequestHistoryIndex();
   setRequestHistoryWorkerRebuildMinBytesForTests(undefined);
+  setRequestHistoryAsyncRefreshBuildsForTests(undefined);
   // A disposed worker's build files go only after its thread exits.
   await waitFor(() => buildFilesLeft().length === 0);
   await flushConfigDirHardeningForTests();
@@ -176,6 +178,15 @@ describe("request-history worker rebuild (#6990)", () => {
     expect(meta.indexedRows).toBe(500);
     expect(openRequestHistoryIndexSync().indexedRows).toBe(500);
     expect(buildFilesLeft()).toEqual([]);
+  });
+
+  test("the build that reaches the wait limit still returns its index", async () => {
+    // With the limit at one build, the first build is also the last a reader
+    // waits for; its successful swap must be served, not reported busy.
+    setRequestHistoryAsyncRefreshBuildsForTests(1);
+    writeLedger(ledgerLines(200));
+    const meta = await openRequestHistoryIndex();
+    expect(meta.indexedRows).toBe(200);
   });
 
   test("rows appended during the build arrive as a tail after the swap", async () => {

@@ -97,9 +97,9 @@ export const REQUEST_HISTORY_WORKER_REBUILD_MIN_BYTES = 1024 * 1024;
 // retried by routing-time reads for this long, so a persistent failure (disk
 // full, unreadable ledger) cannot spawn a worker on every routing decision.
 const WORKER_FAILURE_COOLDOWN_MS = 30_000;
-// Async readers restart at most this many times after a worker rebuild before
-// reporting the index busy (a ledger replaced again during every build).
-const MAX_ASYNC_REFRESH_ATTEMPTS = 4;
+// Async readers wait for at most this many worker rebuilds before reporting the
+// index busy (a ledger replaced again during every build).
+const MAX_ASYNC_REFRESH_BUILDS = 4;
 
 /** The index is being rebuilt in the background; routing treats history as unknown meanwhile. */
 export class RequestHistoryIndexBusyError extends Error {
@@ -135,6 +135,7 @@ let openPromise: Promise<RequestHistoryIndexMeta> | null = null;
 let workerRebuild: WorkerRebuild | null = null;
 let workerFailure: { at: number; error: unknown } | null = null;
 let workerRebuildMinBytes = REQUEST_HISTORY_WORKER_REBUILD_MIN_BYTES;
+let maxAsyncRefreshBuilds = MAX_ASYNC_REFRESH_BUILDS;
 let buildSequence = 0;
 // Bumped by closeRequestHistoryIndex, so a rebuild finishing after a close is discarded.
 let indexLifetime = 0;
@@ -142,6 +143,11 @@ let indexLifetime = 0;
 /** Test seam: move the worker threshold; `undefined` restores the default. */
 export function setRequestHistoryWorkerRebuildMinBytesForTests(bytes: number | undefined): void {
   workerRebuildMinBytes = bytes ?? REQUEST_HISTORY_WORKER_REBUILD_MIN_BYTES;
+}
+
+/** Test seam: how many worker rebuilds one async refresh waits for; `undefined` restores the default. */
+export function setRequestHistoryAsyncRefreshBuildsForTests(builds: number | undefined): void {
+  maxAsyncRefreshBuilds = builds ?? MAX_ASYNC_REFRESH_BUILDS;
 }
 
 function indexDbPath(): string {
@@ -421,7 +427,7 @@ export function openRequestHistoryIndexSync(): RequestHistoryIndexMeta {
 
 async function refreshWaitingForWorker(): Promise<RequestHistoryIndexMeta> {
   const lifetime = indexLifetime;
-  for (let attempt = 1; ; attempt++) {
+  for (let builds = 0; ; ) {
     let handedOff: RebuildHandedOff;
     try {
       return refreshLockedSync();
@@ -429,10 +435,14 @@ async function refreshWaitingForWorker(): Promise<RequestHistoryIndexMeta> {
       if (!(error instanceof RebuildHandedOff)) throw error;
       handedOff = error;
     }
+    // Only a refresh that needs yet another build hits the limit; one that
+    // follows a successful build returns that index above.
+    if (builds >= maxAsyncRefreshBuilds) throw new RequestHistoryIndexBusyError();
     let failure: unknown = null;
     await handedOff.rebuild.promise.catch((error: unknown) => { failure = error ?? new Error("rebuild failed"); });
+    builds += 1;
     if (lifetime !== indexLifetime) throw new RequestHistoryIndexClosedError();
-    if (attempt >= MAX_ASYNC_REFRESH_ATTEMPTS) throw failure ?? new RequestHistoryIndexBusyError();
+    if (failure !== null && builds >= maxAsyncRefreshBuilds) throw failure;
   }
 }
 
