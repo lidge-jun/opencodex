@@ -15,7 +15,7 @@
  */
 import { spawn as nodeSpawn, type ChildProcess } from "node:child_process";
 import { userInfo } from "node:os";
-import { basename, delimiter, isAbsolute } from "node:path";
+import { basename, isAbsolute } from "node:path";
 
 const BEGIN = "__OCX_LOGIN_PATH_BEGIN__";
 const END = "__OCX_LOGIN_PATH_END__";
@@ -46,7 +46,8 @@ export function parseLoginShellPath(output: string): string | null {
 
 /** Ordered union: the shell's entries first, then any the process had that the shell did not. */
 export function mergePathLists(preferred: string, fallback: string | undefined): string {
-  return [...new Set([...preferred.split(delimiter), ...(fallback ?? "").split(delimiter)].filter(Boolean))].join(delimiter);
+  // POSIX only: the login shell runs on macOS and Linux, where PATH is colon-separated.
+  return [...new Set([...preferred.split(":"), ...(fallback ?? "").split(":")].filter(Boolean))].join(":");
 }
 
 export interface LoginShellPathDeps {

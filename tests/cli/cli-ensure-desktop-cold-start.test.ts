@@ -290,7 +290,8 @@ describe.skipIf(process.platform === "win32")("Linux procfs scan", () => {
     "10": { exe: "/usr/bin/bash" },
     "40": { exe: "/opt/OpenCodex/opencodex-desktop" },
   }, proc => {
-    expect(scanLinuxExecutables(uid, 10, proc)).toEqual(["/usr/bin/bash", "/opt/OpenCodex/opencodex-desktop"]);
+    // readdir order is filesystem-defined.
+    expect((scanLinuxExecutables(uid, 10, proc) as string[]).sort()).toEqual(["/opt/OpenCodex/opencodex-desktop", "/usr/bin/bash"]);
     expect(scanLinuxExecutables(uid + 1, 10, proc)).toEqual([]);
   }));
 });
