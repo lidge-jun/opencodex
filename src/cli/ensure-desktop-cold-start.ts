@@ -246,14 +246,22 @@ export function acquireDesktopLaunchLease(
     } finally {
       try { unlinkSync(staged); } catch { /* not created */ }
     }
-    // Older generations belong to dead holders: the newest was checked, and no one can publish
-    // above it without the same check.
+    const release = () => {
+      try { if (readHolder(leasePath(next)) === pid) unlinkSync(leasePath(next)); } catch { /* already gone */ }
+    };
+    // A contender with a stale directory read can publish a generation a winner already cleaned
+    // up. The highest generation is the one launcher; anyone below it stands down.
+    try {
+      if (readdirSync(configDir).some(name => Number(LEASE_FILE.exec(name)?.[1] ?? 0) > next)) {
+        release();
+        return null;
+      }
+    } catch { /* keep the lease: the directory was readable a moment ago */ }
+    // Older generations belong to dead holders: the newest was checked before publishing above it.
     for (const generation of generations) {
       try { unlinkSync(leasePath(generation)); } catch { /* already gone */ }
     }
-    return () => {
-      try { if (readHolder(leasePath(next)) === pid) unlinkSync(leasePath(next)); } catch { /* already gone */ }
-    };
+    return release;
   }
   return null;
 }

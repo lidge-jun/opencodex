@@ -202,6 +202,17 @@ describe("Desktop launch lease", () => {
     expect(leases(dir).filter(name => name.endsWith(".tmp"))).toEqual([]);
   }));
 
+  test("a stale contender that publishes below the winner stands down", () => withDir(dir => {
+    writeFileSync(join(dir, "desktop-launch.3.lease"), "100");
+    // While this caller checks generation 3, the winner publishes generation 5 and cleans up 3 and 4.
+    const alive = (pid: number) => {
+      if (pid === 100) { writeFileSync(join(dir, "desktop-launch.5.lease"), "999"); return false; }
+      return true;
+    };
+    expect(acquireDesktopLaunchLease(dir, { pid: 200, alive })).toBeNull();
+    expect(leases(dir)).toEqual(["desktop-launch.3.lease", "desktop-launch.5.lease"]);
+  }));
+
   test("an unreadable lease directory still allows the launch", () => {
     const release = acquireDesktopLaunchLease(join(tmpdir(), "ocx-desktop-lease-missing", "nested"));
     expect(release).not.toBeNull();
