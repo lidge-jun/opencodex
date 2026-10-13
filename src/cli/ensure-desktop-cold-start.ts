@@ -22,7 +22,8 @@
  */
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { linkSync, readdirSync, readFileSync, readlinkSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, readdirSync, readFileSync, readlinkSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { basename, dirname, join, win32 } from "node:path";
 import { getConfigDir } from "../config/paths";
 import { resolveServiceOwnership } from "../service/state";
@@ -125,6 +126,30 @@ export interface DesktopProcessOptions {
   run?: Execute;
   /** Linux: executable paths of this user's processes, or \`unverified\`. */
   linuxExecutables?: (uid: number) => string[] | "unverified";
+  /** Linux: whether procfs hides processes (hidepid=2/4). */
+  procfsHidesProcesses?: () => boolean;
+  /** Linux: whether this machine shows evidence of an OpenCodex Desktop install. */
+  desktopInstalled?: () => boolean;
+}
+
+/**
+ * Linux: hidepid=2 (invisible) or 4 (ptraceable) can hide a same-uid process whose credentials
+ * differ from the caller's (for example after newgrp), so an empty scan proves nothing there.
+ * An unreadable mount table is treated as filtering.
+ */
+export function procfsHidesProcesses(mountinfo = "/proc/self/mountinfo"): boolean {
+  let text: string;
+  try { text = readFileSync(mountinfo, "utf8"); } catch { return true; }
+  return text.split("\n").some(line => {
+    const [mount, fs] = line.split(" - ");
+    if (mount?.split(" ")[4] !== "/proc" || !fs) return false;
+    const [type, , options = ""] = fs.split(" ");
+    return type === "proc" && options.split(",").some(option => /^hidepid=(2|4|invisible|ptraceable)$/.test(option));
+  });
+}
+
+function linuxDesktopInstalled(): boolean {
+  return existsSync(join(homedir(), ".opencodex-desktop")) || existsSync("/usr/bin/opencodex-desktop");
 }
 
 /** Linux truncates comm to 15 bytes. */
@@ -169,7 +194,11 @@ export function inspectDesktopProcess(options: DesktopProcessOptions = {}): Desk
       if (uid === undefined) return "unknown";
       const executables = (options.linuxExecutables ?? scanLinuxExecutables)(uid);
       if (executables === "unverified") return "unknown";
-      return executables.some(path => isDesktopExecutable(path, platform)) ? "running" : "absent";
+      if (executables.some(path => isDesktopExecutable(path, platform))) return "running";
+      // A filtered procfs cannot prove absence where Desktop may be installed. Without an install
+      // there is nothing to hide, so hardened hosts keep the plain CLI cold start.
+      return (options.procfsHidesProcesses ?? procfsHidesProcesses)() && (options.desktopInstalled ?? linuxDesktopInstalled)()
+        ? "unknown" : "absent";
     }
     if (platform === "darwin") {
       if (uid === undefined) return "unknown";
@@ -258,14 +287,14 @@ export function acquireDesktopLaunchLease(
     } finally {
       try { unlinkSync(staged); } catch { /* not created */ }
     }
-    const release = () => {
+    const withdraw = () => {
       try { if (readHolder(leasePath(next)) === pid) unlinkSync(leasePath(next)); } catch { /* already gone */ }
     };
     // A contender with a stale directory read can publish a generation a winner already cleaned
     // up. The highest generation is the one launcher; anyone below it stands down.
     try {
       if (readdirSync(configDir).some(name => Number(LEASE_FILE.exec(name)?.[1] ?? 0) > next)) {
-        release();
+        withdraw();
         return null;
       }
     } catch { /* keep the lease: the directory was readable a moment ago */ }
@@ -273,7 +302,9 @@ export function acquireDesktopLaunchLease(
     for (const generation of generations) {
       try { unlinkSync(leasePath(generation)); } catch { /* already gone */ }
     }
-    return release;
+    // The newest generation is never deleted on release: removing it would let numbering restart
+    // below a stale contender. It stops counting once this process exits.
+    return () => {};
   }
   return null;
 }
