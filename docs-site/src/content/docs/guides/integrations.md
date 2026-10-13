@@ -571,6 +571,9 @@ the provider store moves to `<dataBaseDir>/.zcode/v2/provider_config.json`.
 `ZCODE_DATA_BASE_DIR` is a separate native selector and is not an alias for `ZCODE_DATA_DIR`.
 
 Unreadable, malformed or relative bootstrap settings leave the active root unknown.
+The bootstrap must be a regular file of at most 4 MiB; symbolic links and special files
+are refused during export and integration path discovery. Repair the bootstrap file or
+supply an explicit `ZCODE_DATA_DIR` to select the intended data root.
 Apply, overwrite and refresh refuse with a repair message instead of claiming a successful
 legacy write. An existing explicit provider file can still establish the active store.
 Ownership recorded at the original default config or store keeps its path, fingerprints
