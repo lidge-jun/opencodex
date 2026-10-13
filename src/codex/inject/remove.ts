@@ -1,5 +1,5 @@
-import { beginCodexWriteSection, publishCodexArtifact } from "./config-write-section";
-import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { beginCodexWriteSection, publishCodexArtifact, removeCodexProfileEntry } from "./config-write-section";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { normalizeStructuralWhitespace, rootAssignmentKey, rootSourceLines, sourceAssignment, sourceText } from "../toml-source-lines";
 import { atomicWriteFile } from "../../config";
 import { ConfigWriteLockRefusal, configWriteLockFailureMessage, withConfigWriteLockHeld } from "../config-write-lock";
@@ -206,9 +206,18 @@ export function removeCodexConfig(
   }
   const locked = withConfigWriteLockHeld(CODEX_CONFIG_PATH, options.heldConfigWriteLock, held => {
   beginCodexWriteSection(held);
+  if (!options.preserveProfile) {
+    try {
+      if (lstatSync(CODEX_PROFILE_PATH).isSymbolicLink()) {
+        return { success: false, message: "Codex profile is a symbolic link; configuration and recovery evidence were preserved." };
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
   if (!existsSync(CODEX_CONFIG_PATH)) {
     if (!options.preserveProfile && existsSync(CODEX_PROFILE_PATH))
-      publishCodexArtifact(CODEX_PROFILE_PATH, held, (path, hooks) => { hooks.validateBeforeRename?.(path); unlinkSync(path); hooks.afterRename?.(path); });
+      removeCodexProfileEntry(held);
     return {
       success: true,
       message: `Codex config not found; no native restore was needed${options.preserveProfile ? "." : ", and the opencodex profile was removed if present."}`,
@@ -248,7 +257,7 @@ export function removeCodexConfig(
     publishCodexArtifact(CODEX_CONFIG_PATH, held, (path, hooks) => atomicWriteFile(path, applyEol(finalContent, eol), undefined, hooks));
   }
   if (!options.preserveProfile && existsSync(CODEX_PROFILE_PATH))
-    publishCodexArtifact(CODEX_PROFILE_PATH, held, (path, hooks) => { hooks.validateBeforeRename?.(path); unlinkSync(path); hooks.afterRename?.(path); });
+    removeCodexProfileEntry(held);
   const retainedNote = retainedBlock === null
     ? ""
     : " Kept [model_providers.opencodex] so conversations already tagged opencodex still open;"

@@ -317,6 +317,38 @@ export function publishConfigWriteTarget<T>(
   });
 }
 
+export function removeConfigWriteEntry(configPath: string, held: LockHandle, path: string): void {
+  assertConfigWriteDestination(configPath, held);
+  watchConfigWriteTargets(held, [path]);
+  const watched = targets.get(held)!;
+  const expected = watched.get(path)!;
+  const current = destination(path);
+  if (expected.canonical !== current.canonical || expected.inode !== current.inode
+    || current.canonical !== join(realpathSync.native(dirname(resolve(path))), basename(resolve(path)))) {
+    throw new Error("Codex artifact destination changed; files and recovery evidence were preserved.");
+  }
+  if (expected.inode === null) return;
+
+  const entry = join(realpathSync.native(dirname(resolve(path))), basename(resolve(path)));
+  const identity = (file: { dev: bigint; ino: bigint }) => `${file.dev}:${file.ino}`;
+  const before = lstatSync(entry, { bigint: true });
+  if (before.isSymbolicLink() || !before.isFile() || identity(before) !== expected.inode) {
+    throw new Error("Codex artifact destination changed; files and recovery evidence were preserved.");
+  }
+  assertConfigWriteDestination(configPath, held);
+  const now = lstatSync(entry, { bigint: true });
+  if (now.isSymbolicLink() || !now.isFile() || identity(now) !== expected.inode) {
+    throw new Error("Codex artifact destination changed; files and recovery evidence were preserved.");
+  }
+  unlinkSync(entry);
+  assertConfigWriteDestination(configPath, held);
+  const after = destination(path);
+  if (after.inode !== null || after.canonical !== expected.canonical) {
+    throw new Error("Codex artifact destination changed; recovery evidence was preserved.");
+  }
+  watched.set(path, after);
+}
+
 export function configWriteLockFailureMessage(failure: Exclude<ConfigWriteAcquireResult, { ok: true }>): string {
   if (failure.error === "missing-parent") return `Codex configuration parent is missing or unresolved at ${failure.detail}; no files were changed.`;
   return failure.error === "unsafe"

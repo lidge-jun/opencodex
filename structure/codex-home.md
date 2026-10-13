@@ -79,7 +79,7 @@ and absence is distinct from an empty file. The injector checks a retained hashl
 the same `baselineContent` it snapshots, plus the current profile, before writing or assigning a new
 injected hash. Native content can establish a fresh snapshot; routed content cannot promote an
 unverified older original. Existing hash-backed edit preservation and external-provider opt-out
-remain separate paths.
+remain separate paths. Removal with `preserveProfile: false` refuses a final-component profile symlink before changing config or journal state; ordinary profile removal unlinks only the checked entry under its canonical parent, never the target of a resolved symlink. A matching journal refuses a symlinked profile that it would restore or remove before changing config, profile, or recovery evidence.
 
 `src/codex/journal.ts` distinguishes restored state from actual writes with `configRewritten`
 and `profileRewritten`; removing a generated profile counts as a write, while already-original
