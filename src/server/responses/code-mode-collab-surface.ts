@@ -77,13 +77,104 @@ interface RenderedTool { name: string; raw: string }
 /** The declaration fence codex-rs opens: three backticks and "ts". */
 const DECLARATION_FENCE_SHAPE: Fence = { char: "`", length: 3 };
 
-/** A complete declaration as render_code_mode_sample emits it, single- or multi-line. */
-function isCompleteDeclaration(body: readonly string[], name: string): boolean {
+const DECLARATION_PREFIX = "declare const tools: { ";
+const PROMISE_SEPARATOR = "): Promise<";
+const DECLARATION_SUFFIX = ">; };";
+// Bounds keep a caller-controlled description linear work: a rendered listing is a heading, a
+// description, and a small declaration per tool, so anything this large cannot be the codex-rs
+// shape this parser exists to recognize.
+const MAX_DESCRIPTION_LENGTH = 1 << 20;
+const MAX_DECLARATION_LENGTH = 64 * 1024;
+
+const isSpace = (ch: string | undefined): boolean => ch === undefined || /\s/.test(ch);
+
+/**
+ * The declared tool name when body is a complete declaration as render_code_mode_sample emits it,
+ * single- or multi-line, else undefined. Fixed boundaries plus one forward scan that balances the
+ * parameter list's brackets and the return type's generics: no backtracking, so a fence body full
+ * of candidate separators stays linear work.
+ */
+function completeDeclarationName(body: readonly string[]): string | undefined {
   const text = body.join("\n");
-  const prefix = "declare const tools: { " + name + "(";
-  if (!text.startsWith(prefix)) return false;
+  if (text.length > MAX_DECLARATION_LENGTH) return undefined;
+  if (!text.startsWith(DECLARATION_PREFIX) || !text.endsWith(DECLARATION_SUFFIX)) return undefined;
+  const signature = text.slice(DECLARATION_PREFIX.length, -DECLARATION_SUFFIX.length);
+  const openParen = signature.indexOf("(");
+  const name = openParen > 0 ? signature.slice(0, openParen) : "";
+  if (!/^[A-Za-z_$][\w$]*$/.test(name)) return undefined;
   // A named, typed parameter (`args` for functions, `input` for freeform) and a non-empty return type.
-  return /^(?:args|input): \S[\s\S]*\): Promise<[^>\s][\s\S]*>; \};$/.test(text.slice(prefix.length));
+  const rest = signature.slice(openParen + 1);
+  const typed = rest.startsWith("args: ") ? 6 : rest.startsWith("input: ") ? 7 : -1;
+  if (typed < 0 || isSpace(rest[typed])) return undefined;
+  // Quoted text and comments are opaque to delimiter matching. Each skip advances
+  // past its text once; an unterminated region cannot contain a closing declaration.
+  const isOpaqueTypeText = (at: number): boolean => {
+    const ch = rest[at];
+    return ch === '"' || ch === "'" || ch === "`"
+      || ch === "/" && (rest[at + 1] === "/" || rest[at + 1] === "*");
+  };
+  const skipTypeText = (at: number): number | undefined => {
+    const quote = rest[at]!;
+    if (quote === "/" && rest[at + 1] === "/") {
+      let i = at + 2;
+      while (i < rest.length && rest[i] !== "\n" && rest[i] !== "\r"
+        && rest[i] !== "\u2028" && rest[i] !== "\u2029") i += 1;
+      return i < rest.length ? i : undefined;
+    }
+    if (quote === "/" && rest[at + 1] === "*") {
+      const end = rest.indexOf("*/", at + 2);
+      return end < 0 ? undefined : end + 1;
+    }
+    let i = at + 1;
+    while (i < rest.length) {
+      const ch = rest[i]!;
+      if (ch === "\\") i += 2;
+      else if (ch === quote) return i;
+      else i += 1;
+    }
+    return undefined;
+  };
+  // The parameter list ends at the ')' that balances the opening '(': a ')' nested inside the
+  // parameter's own type (e.g. `args: (a: string) => Promise<void>`) cannot pose as the separator.
+  // The type must also say something before that ')': `args: )` or `args: /* note */)` names no type.
+  let depth = 1;
+  let close = -1;
+  let typeContent = false;
+  for (let at = typed; at < rest.length; at += 1) {
+    const ch = rest[at]!;
+    if (isOpaqueTypeText(at)) {
+      if (ch !== "/") typeContent = true; // a quoted literal is a type, a comment is not
+      const end = skipTypeText(at);
+      if (end === undefined) return undefined;
+      at = end;
+      continue;
+    }
+    if (ch === "(" || ch === "[" || ch === "{") depth += 1;
+    else if (ch === ")" || ch === "]" || ch === "}") depth -= 1;
+    if (depth === 0) { close = at; break; }
+    if (!isSpace(ch)) typeContent = true;
+  }
+  if (close < 0 || !typeContent || !rest.startsWith(PROMISE_SEPARATOR, close)) return undefined;
+  const head = rest[close + PROMISE_SEPARATOR.length];
+  if (head === ">" || isSpace(head)) return undefined;
+  // The return type runs to the stripped suffix, which already supplied exactly one '>' for the
+  // Promise's '<': generic depth must stay positive to the end and land at exactly 1 — a '>' that
+  // reaches zero ('Promise<unknown>; garbage') is surplus text, a depth left above 1
+  // ('Promise<Map<string, unknown') never closed its own generic, and a '=>' arrow never counts.
+  let generic = 1;
+  for (let at = close + PROMISE_SEPARATOR.length; at < rest.length; at += 1) {
+    const ch = rest[at]!;
+    if (isOpaqueTypeText(at)) {
+      const end = skipTypeText(at);
+      if (end === undefined) return undefined;
+      at = end;
+      continue;
+    }
+    if (ch === "<") generic += 1;
+    else if (ch === ">" && rest[at - 1] !== "=") generic -= 1;
+    if (generic === 0) return undefined;
+  }
+  return generic === 1 ? name : undefined;
 }
 
 /** codex-rs normalize_code_mode_identifier: invalid identifier characters become `_`. */
@@ -114,9 +205,21 @@ function renderedHeading(match: RegExpExecArray): RenderedTool | undefined {
  * alone. Lines inside a quoted fence can neither open a section nor declare a tool.
  */
 function renderedNestedTools(description: string): RenderedTool[] {
+  if (description.length > MAX_DESCRIPTION_LENGTH) return [];
   const lines = description.split("\n");
   const rendered: RenderedTool[] = [];
   const pending: RenderedTool[] = [];
+  // Ascending indexes into `pending` per name, so a declaration finds its owner in one lookup
+  // instead of rescanning every pending heading.
+  const pendingByName = new Map<string, number[]>();
+  const dropPendingTo = (length: number): void => {
+    while (pending.length > length) {
+      const removed = pending.pop()!;
+      const indexes = pendingByName.get(removed.name)!;
+      indexes.pop();
+      if (indexes.length === 0) pendingByName.delete(removed.name);
+    }
+  };
   let fence: Fence | undefined;
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i]!;
@@ -127,7 +230,11 @@ function renderedNestedTools(description: string): RenderedTool[] {
     const match = TOOL_HEADING.exec(line);
     if (match) {
       const heading = renderedHeading(match);
-      if (heading) pending.push(heading);
+      if (heading) {
+        const indexes = pendingByName.get(heading.name);
+        if (indexes) indexes.push(pending.length); else pendingByName.set(heading.name, [pending.length]);
+        pending.push(heading);
+      }
       continue;
     }
     if (line === DECLARATION_LEAD && lines[i + 1] === DECLARATION_FENCE) {
@@ -137,10 +244,11 @@ function renderedNestedTools(description: string): RenderedTool[] {
       const body = lines.slice(i + 2, close);
       // The outermost pending heading with the declared name owns it, so a same-name heading quoted
       // inside the tool's own description cannot take over the genuine section.
-      const owner = pending.findIndex(tool => isCompleteDeclaration(body, tool.name));
+      const declared = completeDeclarationName(body);
+      const owner = declared === undefined ? -1 : pendingByName.get(declared)?.[0] ?? -1;
       if (owner >= 0) {
         rendered.push(pending[owner]!);
-        pending.length = owner;
+        dropPendingTo(owner);
       }
       i = close;
       continue;

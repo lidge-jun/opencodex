@@ -28,6 +28,8 @@ export interface StartupHealthData {
   serviceSupported: boolean;
   shimInstalled: boolean;
   shimHealthy: boolean;
+  /** Intact PATH-overlay shim not seen active from the dashboard's PATH: show activation, not Repair. */
+  shimActivationPending?: boolean;
   shimCoverage: "full" | "cli-only" | "none";
   platform: string;
   recommendedCommand: string | null;

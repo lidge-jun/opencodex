@@ -225,6 +225,16 @@ whole app to OpenCodex as its inference gateway. Chat runs locally through OpenC
 claude.ai-only features are unavailable. The legacy `--static` / `--hybrid` /
 `--discovery-only` flags also select gateway.
 
+Gateway profiles use distinct model aliases with a `claude-fable-5-` prefix so
+Claude Desktop 2.31226 can offer its effort control without treating every routed
+model as the same active model. These aliases do not change the upstream model or
+your displayed labels and family defaults. Previous aliases remain decodable for
+existing sessions. Reapply the gateway profile and fully quit/reopen Desktop to
+load the new list. The static picker uses Desktop's fallback effort menu; it does
+not advertise an authoritative per-provider ladder, and the selected provider's
+normal effort normalization still applies. This remains a client-version-specific
+compatibility mechanism.
+
 ### First-party (opt-in)
 
 :::caution[Account risk]
@@ -457,8 +467,9 @@ Support/Claude/configLibrary` on macOS, `%APPDATA%\Claude\configLibrary` on Wind
 `CLAUDE_USER_DATA_DIR` for an alternate Desktop user-data root. The legacy `Claude-3p` directory is
 not read or deleted automatically.
 
-Non-Anthropic routes receive stable aliases such as `claude-opus-4-8-p01q`, with a `p`-prefixed
-four-character code. OpenCodex keeps a separate synthetic date slot internally so existing profile
+Non-Anthropic routes receive stable aliases such as `claude-fable-5-p01q`, with a `p`-prefixed
+four-character code. Previous `claude-opus-4-8-p...` profile IDs remain decode-only compatibility
+IDs; new profiles use the Fable form. OpenCodex keeps a separate synthetic date slot internally so existing profile
 assignments stay stable, but it does not expose that date as the Desktop model id: current Desktop
 builds strip terminal dates when comparing active-session models, which can suppress model changes.
 Real Anthropic Claude routes keep
@@ -585,7 +596,7 @@ for every Claude Code CLI row (`Routed by OpenCodex to <provider>/<model>`; nati
 | Surface | Format | Example |
 | --- | --- | --- |
 | Claude Code CLI | `ocx-claude-<provider>--<model>` (plain) or `ocx-claude2-…` (escaped) | `ocx-claude-native--gpt-5.6-sol` |
-| Claude Desktop 3P | `claude-opus-4-8-p<code>` (3-char base36 profile slot) | `claude-opus-4-8-p01q` |
+| Claude Desktop 3P | `claude-fable-5-p<code>` (3-char base36 profile slot) | `claude-fable-5-p01q` |
 
 The proxy picks the family per request: `?ids=cli` or `?ids=desktop` wins; otherwise the
 `claude-code/*` user-agent gets the readable CLI form and other clients get the Desktop code.
@@ -675,11 +686,26 @@ window breaks that model — the chat errors out before the summary can fire.
 A model's advertised context window does not guarantee that a tool-heavy request fits the
 upstream input limit. A classified input-limit rejection reaches Claude Code as
 `invalid_request_error` with `context_length_exceeded`, worded the way Anthropic words it
-(`prompt is too long: …`, with token counts when the provider states them), so Claude Code
+(`prompt is too long: …`), so Claude Code
 compacts the conversation and retries on its own; a non-streaming response uses HTTP 400 instead
-of a retryable 502. Providers on the native Messages lane get the same wording. A throughput
-limit that only mentions tokens (for example "too many tokens per minute") keeps its text and is
-not treated as an overflow. If compaction itself still exceeds the limit, preserve the original
+of a retryable 502. Providers on the native Messages lane get the same wording.
+
+Overflow normalization uses only the first **65,536 UTF-16 code units** of the provider's error
+message, including messages that already use Anthropic's wording. This is a string-length limit,
+not a byte or token limit. Text beyond it is discarded without an ellipsis or truncation marker,
+so diagnostic details and token counts near the end may be absent from the error Claude Code
+receives. The added `prompt is too long:` prefix, followed by a space, can make the final message
+longer than this retained portion.
+
+Within that portion, recognized Anthropic wording is kept; otherwise OpenCodex emits
+`prompt is too long: <requested> tokens > <limit> maximum` only when it finds
+`maximum context length is <limit> tokens` followed by `resulted in <requested> tokens` or
+`you requested <requested> tokens`. It uses the first stated limit and the first matching request
+count after it. If that pair is missing, reversed, or cut off, it prefixes the retained text with
+`prompt is too long:` followed by a space, without inventing counts. A throughput limit that only mentions tokens
+(for example "too many tokens per minute") keeps its text and is not treated as an overflow.
+
+If compaction itself still exceeds the limit, preserve the original
 history and try compacting a fork with fewer enabled tool or MCP schemas, if your client supports
 that workflow. A `[1m]` marker or larger client accounting setting does not raise the upstream
 limit, and OpenCodex does not silently remove history or tools to make it fit.

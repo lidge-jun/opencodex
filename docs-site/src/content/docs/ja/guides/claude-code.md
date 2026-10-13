@@ -264,7 +264,7 @@ Claude Code 2.1.129 以降は `GET /v1/models?limit=1000` でゲートウェイ�
 | 画面 | 形式 | 例 |
 | --- | --- | --- |
 | Claude Code CLI | `ocx-claude-<provider>--<model>` (plain) または `ocx-claude2-…` (escaped) | `ocx-claude-native--gpt-5.6-sol` |
-| Claude Desktop 3P | `claude-opus-4-8-p<code>` (3 桁の base36 プロファイルスロット) | `claude-opus-4-8-p01q` |
+| Claude Desktop 3P | `claude-fable-5-p<code>` (3 桁の base36 プロファイルスロット) | `claude-fable-5-p01q` |
 
 プロキシはリクエストごとに系列を選びます。`?ids=cli` または `?ids=desktop` が優先し、指定しないと
 `claude-code/*` user-agent には読みやすい CLI 形式を、他のクライアントには Desktop コードを
@@ -337,6 +337,10 @@ Claude Code は未知モデルのコンテキストを 200k トークンとし�
 
 **接続 → Claude** で圧縮値を調整できます。**警告:** モデルの実際のコンテキストウィンドウより大きく上げると
 要約を開始する前にチャットエラーが発生します。
+
+コンテキスト超過エラーの正規化では、プロバイダーのエラーメッセージの先頭 65,536 UTF-16 コード単位だけを使います。
+末尾の診断情報やトークン数は、省略を示す印なしで失われることがあります。
+詳しい制限とトークン数の扱いは[英語ガイド](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling)を参照してください。
 
 1M 未満のネイティブ Anthropic モデルには自動で標識を付けません。自分で export した圧縮値は起動スロットの標識に優先し、プロキシは**ユーザーが指定した**値を基準にどのモデルに安全に標識を付けるか決定します。ディスカバリー行はその export を無視し、固定の下限を保ちます。
 直接編集した設定値が不正な場合は 829,800 に戻ります。

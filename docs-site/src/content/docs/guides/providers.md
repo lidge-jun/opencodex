@@ -517,7 +517,7 @@ The account list marks Kiro accounts excluded from automatic selection with a re
 
 ## 3. API-key catalog
 
-opencodex ships 103 built-in presets: 84 key-based, 15 OAuth, three local, and one default
+opencodex ships 104 built-in presets: 85 key-based, 15 OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it; validation is provider-specific. Notable entries:
 
@@ -610,6 +610,7 @@ region-pinned EU routes, is at [opper.ai/models](https://opper.ai/models). Opper
 | Kilo | `https://api.kilo.ai/api/gateway` |
 | Opper | `https://api.opper.ai/v3/compat` |
 | TokenLab | `https://api.tokenlab.sh/v1` |
+| Modelflare | `https://modelflare.dev/v1` |
 | OpenGateway | `https://apis.opengateway.ai/v1` |
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
@@ -659,6 +660,19 @@ prefixes remain separate: `tokenlab/gpt-5.6-terra` sends `gpt-5.6-terra` upstrea
 TokenLab's [terms](https://tokenlab.sh/tos) and [privacy policy](https://tokenlab.sh/privacy-policy)
 apply to requests sent to this service. The preset pins the row near the top of the Add provider
 picker and marks it as a sponsor, and nothing else about routing or defaults changes.
+
+**Modelflare** is an OpenAI-compatible relay at `https://modelflare.dev/v1`. Select **Modelflare**
+in `ocx init` or the dashboard's **Add provider** picker, or run `ocx provider add modelflare`, and
+give it your key directly or as the reference `${MODELFLARE_API_KEY}` so the key stays in your
+environment. The preset uses Chat Completions and seeds four models that
+were verified with chat, streaming and tool calls: `glm-5.3-flash` (the default),
+`claude-sonnet-5-5`, `gpt-6.1-sol` and `deepseek-v4-flash`. You can add other Chat-compatible
+Modelflare models as custom models. Image and video models use separate Modelflare endpoints and
+do not work through this Chat preset. An ordinary Modelflare key is bound to one routing group and
+can call only that group's models, so use a Smart key for the full seeded set, or pass
+`--default-model` with a model your key's group serves.
+`deepseek-v4.1-flash` is listed upstream but currently answers 503, so the preset leaves it out.
+Upstream latency varies from a few seconds to about 30 seconds, with occasional transient 503s.
 
 The MiniMax and MiniMax (CN) provider cards can also show Coding Plan quota when the configured
 key has an active plan. The dashboard reads the plan's 5-hour window and, when present, weekly

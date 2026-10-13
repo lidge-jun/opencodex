@@ -115,6 +115,42 @@ describe("health sentinel runner (#6671)", () => {
     }
   });
 
+  test.each([10 * 60_000, -2 * 60 * 60_000])("final runtime re-read invalidates stale evidence after clock shift %s", async shift => {
+    const { deps, events, history, advance } = world(["answer", "timeout"]);
+    const read = deps.readRuntime;
+    let shifted = false;
+    deps.readRuntime = () => {
+      const record = read();
+      if (!shifted && history.some(entry => entry.state === "intent")) {
+        shifted = true;
+        advance(shift);
+      }
+      return record;
+    };
+    expect(await runHealthSentinel(deps)).toEqual({ outcome: "recovered", state: "terminated" });
+    expect(history.map(entry => entry.state)).toEqual(["intent", "skipped", "intent", "terminated"]);
+    const discarded = events.findIndex(event => event.includes("discarding stale evidence"));
+    const kill = events.findIndex(event => event.startsWith("terminate:"));
+    expect(discarded).toBeGreaterThan(-1);
+    expect(kill).toBeGreaterThan(discarded);
+    const fresh = events.slice(discarded, kill).filter(event => event === "probe:timeout").length;
+    expect(fresh).toBeGreaterThanOrEqual(3);
+    expect(fresh).toBeLessThanOrEqual(6);
+  });
+
+  test("target exit during final runtime re-read prevents termination", async () => {
+    const { deps, events, history, exitTarget } = world(["answer", "timeout"]);
+    const read = deps.readRuntime;
+    deps.readRuntime = () => {
+      const record = read();
+      if (history.some(entry => entry.state === "intent")) exitTarget();
+      return record;
+    };
+    expect(await runHealthSentinel(deps)).toEqual({ outcome: "target_exited" });
+    expect(terminated(events)).toBe(false);
+    expect(history.map(entry => entry.state)).toEqual(["intent", "skipped"]);
+  });
+
   test("a healthy or refusing target is never terminated", async () => {
     for (const kind of ["answer", "refused"] as const) {
       const { deps, events, exitTarget } = world(["answer", kind]);
@@ -206,6 +242,54 @@ describe("health sentinel runner (#6671)", () => {
     expect(await runHealthSentinel(deps)).toEqual({ outcome: "target_exited" });
     expect(terminated(events)).toBe(false);
   });
+
+  test("DNS bind names never arm recovery or reach a probe", async () => {
+    const w = world(["answer", "timeout"]);
+    w.runtime.hostname = "health.attacker.invalid";
+    expect((await runHealthSentinel(w.deps)).outcome).toBe("stood_down");
+    expect(w.events.filter(event => event.startsWith("probe:"))).toHaveLength(0);
+    expect(terminated(w.events)).toBe(false);
+    expect(w.history).toHaveLength(0);
+  });
+
+  test.each(["127.0.0.2", "health.attacker.invalid"])("address change to %s after arming stands down", async hostname => {
+    const w = world(["answer", "timeout"]);
+    const probe = w.deps.probe;
+    w.deps.probe = async (target, timeout) => {
+      const outcome = await probe(target, timeout);
+      w.runtime.hostname = hostname;
+      return outcome;
+    };
+    expect((await runHealthSentinel(w.deps)).outcome).toBe("stood_down");
+    expect(w.events.filter(event => event.startsWith("probe:"))).toHaveLength(1);
+    expect(terminated(w.events)).toBe(false);
+    expect(w.history).toHaveLength(0);
+  });
+
+  test.each(["address", "port"])("%s change during lease admission preserves the process", async changed => {
+    const w = world(["answer", "timeout"]);
+    const lease = w.deps.withOwnershipLease;
+    w.deps.withOwnershipLease = run => {
+      if (changed === "address") w.runtime.hostname = "127.0.0.2";
+      else w.runtime.port++;
+      return lease(run);
+    };
+    expect((await runHealthSentinel(w.deps)).outcome).toBe("stood_down");
+    expect(terminated(w.events)).toBe(false);
+    expect(w.history).toHaveLength(0);
+  });
+
+  test("endpoint change while writing intent is rechecked before termination", async () => {
+    const w = world(["answer", "timeout"]);
+    const write = w.deps.writeHistory;
+    w.deps.writeHistory = entry => {
+      if (entry.state === "intent") w.runtime.hostname = "127.0.0.2";
+      return write(entry);
+    };
+    expect((await runHealthSentinel(w.deps)).outcome).toBe("stood_down");
+    expect(terminated(w.events)).toBe(false);
+    expect(w.history.map(entry => entry.state)).toEqual(["intent", "skipped"]);
+  });
 });
 
 describe("health sentinel state files", () => {
@@ -264,6 +348,8 @@ describe("health sentinel state files", () => {
     expect(readSentinelRuntime(path)?.sibling).toBe(true);
     writeFileSync(path, JSON.stringify({ pid: -1, port: 4100 }));
     expect(readSentinelRuntime(path)).toBeNull();
+    writeFileSync(path, JSON.stringify({ pid: 12, port: 4100, hostname: 4100 }));
+    expect(readSentinelRuntime(path)).toBeNull();
   });
 
   test("timing override keeps only finite non-negative known fields", () => {
@@ -306,5 +392,25 @@ describe("health sentinel probe", () => {
     expect(probeUrlHost("::")).toBe("[::1]");
     expect(probeUrlHost("fd00::1")).toBe("[fd00::1]");
     expect(probeUrlHost(undefined)).toBe("127.0.0.1");
+  });
+
+  test.each(["health.attacker.invalid", "127.1", "2130706433", "[::1", "::1]", "fe80::1%en0"])("refuses unpinned destination %s before transport", async hostname => {
+    let calls = 0;
+    const outcome = await probeHealth({ hostname, port: 4100 }, 100, {
+      fetch: async () => { calls++; throw Object.assign(new Error("redirected timeout"), { name: "TimeoutError" }); },
+    });
+    expect(outcome.kind).toBe("error");
+    expect(calls).toBe(0);
+  });
+
+  test.each([
+    [undefined, "127.0.0.1"], ["localhost.", "127.0.0.1"], ["LOCALHOST", "127.0.0.1"],
+    ["0.0.0.0", "127.0.0.1"], ["127.0.0.2", "127.0.0.2"], ["::", "[::1]"],
+    ["[::1]", "[::1]"], ["0:0:0:0:0:0:0:0", "[::1]"], ["fd00::1", "[fd00::1]"],
+    // Every wildcard spelling the server accepts (isWildcardHostname) maps to loopback.
+    ["*", "127.0.0.1"], ["0", "127.0.0.1"], ["00.0.0.000", "127.0.0.1"], ["0.0.0.0.", "127.0.0.1"],
+    ["[::]", "[::1]"], ["::0", "[::1]"],
+  ])("normalizes stable bind %s to %s", (hostname, expected) => {
+    expect(probeUrlHost(hostname)).toBe(expected);
   });
 });

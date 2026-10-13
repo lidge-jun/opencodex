@@ -448,6 +448,7 @@ neither prove nor contradict a native surface.
 The two checks are asymmetric on purpose: evidence needs a rendered section, while the
 contradiction check reads every heading and declaration line, quoted or not, so text copied into
 the listing can push a turn toward `null` but cannot hide another surface.
+The parse uses bounded linear scans: descriptions over `1 << 20` string code units carry no nested evidence, declarations over `64 * 1024` code units are not recognized, and quoted text and comments are skipped while matching delimiters; return generics must close fully.
 Nested evidence never produces `v2`. When the model supports tool search (every OpenCodex catalog
 row), codex-rs defers the V1 tools and leaves them out of the description. Its own
 `<multi_agent_mode>` item exists only on V2 and it pins the version per session, so neither the saved

@@ -599,3 +599,85 @@ test("server stop waits for a native Messages transport reporter after listener 
     lifecycle.release();
   }
 }));
+
+
+for (const adapter of ["azure", "azure-openai"] as const) {
+  for (const combo of [false, true]) {
+    for (const ceiling of [8, 32]) {
+      test(`Azure floor participates in spend admission (${adapter}, combo=${combo}, ceiling=${ceiling})`, async () => {
+        await withExecutorHome(async ledger => {
+          ledger.reconfigure({ ...DEFAULT_SPEND_RESERVATION_POLICY, pool: { maxTokens: ceiling } });
+          const sentCaps: number[] = [];
+          const reservedAtWire: number[] = [];
+          const wire = (async (_url: unknown, init?: RequestInit) => {
+            sentCaps.push(JSON.parse(String(init?.body)).max_output_tokens);
+            reservedAtWire.push(ledger.snapshot("pool", "P")?.reserved ?? 0);
+            return executorSuccess("passthrough");
+          }) as typeof fetch;
+          const config = executorConfig("passthrough", wire);
+          config.providers.P!.adapter = adapter;
+          config.providers.P!.minMaxOutputTokens = 16;
+          if (combo) config.combos = { auto: { strategy: "failover", targets: [{ provider: "P", model: "model" }] } };
+          const ctx: RequestLogContext = { model: "", provider: "", spendInputEstimateTokens: 0 };
+          const tracker = createRequestSpendTracker(ctx, undefined, ledger);
+          const budget = createRequestExecutionBudget(undefined, undefined, tracker);
+          const translatorBudget = createTranslatorBudget();
+          try {
+            const req = new Request("http://localhost/v1/responses", {
+              method: "POST", headers: { "content-type": "application/json" },
+              body: JSON.stringify({ model: combo ? "combo/auto" : "P/model", input: [], max_output_tokens: 1, stream: false }),
+            });
+            const response = await handleResponses(req, config, ctx, { sendBudget: budget, translatorBudget });
+            await response.text();
+            expect(response.status).toBe(ceiling < 16 ? 429 : 200);
+            expect(sentCaps).toEqual(ceiling < 16 ? [] : [16]);
+            expect(reservedAtWire).toEqual(ceiling < 16 ? [] : [16]);
+            expect(budget.physicalStarted).toBe(ceiling < 16 ? 0 : 1);
+            tracker.settle(undefined);
+            await ledger.waitForReporterDrain();
+          } finally { translatorBudget.dispose(); }
+        });
+      }, 10_000);
+    }
+  }
+}
+
+
+test("Combo fallback recomputes spend from the next target's original cap", async () => withExecutorHome(async ledger => {
+  ledger.reconfigure({ ...DEFAULT_SPEND_RESERVATION_POLICY, pool: { maxTokens: 128 } });
+  const observations: Array<{ pool: string; cap: number }> = [];
+  const bookings = spyOn(ledger, "reserveSeed");
+  const wireFor = (pool: string, fail: boolean) => (async (_url: unknown, init?: RequestInit) => {
+    observations.push({ pool, cap: JSON.parse(String(init?.body)).max_output_tokens });
+    return fail ? Response.json({ error: { message: "fixture overload" } }, { status: 503 }) : executorSuccess("passthrough");
+  }) as typeof fetch;
+  const config = executorConfig("passthrough", wireFor("P", true));
+  config.providers.P!.adapter = "azure-openai";
+  config.providers.P!.minMaxOutputTokens = 16;
+  // Same field on a different adapter must not inflate its wire or reservation.
+  config.providers.Q = { ...config.providers.P!, adapter: "openai-responses", fetch: wireFor("Q", false) };
+  config.combos = { auto: { strategy: "failover", targets: [{ provider: "P", model: "model" }, { provider: "Q", model: "model" }] } };
+  const ctx: RequestLogContext = { model: "", provider: "", spendInputEstimateTokens: 0 };
+  const tracker = createRequestSpendTracker(ctx, undefined, ledger);
+  const budget = createRequestExecutionBudget(undefined, undefined, tracker);
+  const translatorBudget = createTranslatorBudget();
+  try {
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "combo/auto", input: [], max_output_tokens: 1, stream: false }),
+    }), config, ctx, { sendBudget: budget, translatorBudget });
+    await response.text();
+    expect(response.status).toBe(200);
+    expect(observations).toEqual([
+      { pool: "P", cap: 16 },
+      { pool: "P", cap: 16 },
+      { pool: "P", cap: 16 },
+      { pool: "Q", cap: 1 },
+    ]);
+    expect(bookings.mock.calls.filter(([request]) => request.scopes.poolId === "Q")
+      .map(([request]) => request.outputCeilingTokens)).toEqual([1]);
+    expect(budget.physicalStarted).toBe(4);
+    tracker.settle(undefined);
+    await ledger.waitForReporterDrain();
+  } finally { bookings.mockRestore(); translatorBudget.dispose(); }
+}), 10_000);
