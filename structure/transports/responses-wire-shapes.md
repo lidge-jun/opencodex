@@ -300,12 +300,14 @@ executes a top-level tool call, so a hallucinated `apply_patch` — which under 
 as a nested `tools.apply_patch(...)` helper inside `exec` — is refused before it reaches the
 runtime, where it previously surfaced as a bare `aborted` with the file untouched.
 
-On the native passthrough lane the refusal matches the translated delivery scope:
-`src/server/responses/run-turn-execution.ts`, `src/server/responses/adapter-delivery.ts` and
-the native guard in `src/server/responses/passthrough-dispatch.ts` all derive enforcement from
-`inboundWire`, so only `responses` refuses an undeclared client-executed call — in SSE and
-buffered JSON alike, before continuation state is stored. `chat` and `anthropic` inbound
-replies relay the call instead: those harnesses may defer part of their catalog to conserve
+The translated lanes, `src/server/responses/run-turn-execution.ts` and
+`src/server/responses/adapter-delivery.ts`, derive enforcement from `inboundWire`: only
+`responses` refuses an undeclared client-executed call. The native passthrough lane computes
+`undeclaredToolGuardActive` once in `src/server/responses/passthrough-dispatch.ts`: a
+`responses` inbound refuses against any readable catalog, while `chat` and `anthropic` refuse
+only under an explicit empty catalog (below). `src/server/responses/passthrough-delivery.ts`
+reads that flag for SSE and buffered JSON alike, before continuation state is stored. Otherwise
+`chat` and `anthropic` inbound replies relay the call: those harnesses may defer part of their catalog to conserve
 prompt tokens and discover the rest at runtime, and both vendor specs leave the client's own
 runner responsible for validating it — membership enforcement against a partial catalog would
 kill those streams mid-turn for a call the client could execute.
