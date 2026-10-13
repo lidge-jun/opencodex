@@ -16,6 +16,7 @@ import {
   captureSnapshot,
   clearPruneFailure,
   countSnapshots,
+  discardUncommittedSnapshot,
   findOperation,
   findCommittedOperation,
   listOperations,
@@ -53,6 +54,7 @@ export interface IntegrationStateStore {
   findOperation(opId: string): JournalEntry | null;
   findCommittedOperation(opId: string): JournalEntry | null;
   captureSnapshot(clientId: IntegrationClientId, opId: string, text: string | null): SnapshotRef;
+  discardUncommittedSnapshot(clientId: IntegrationClientId, opId: string): void;
   readSnapshot(entry: JournalEntry):
     | { kind: "none" }
     | { kind: "stored"; text: string; path: string }
@@ -92,6 +94,7 @@ export function createIntegrationStateStore(root: string = integrationsDir()): I
     findOperation: opId => findOperation(opId, dir),
     findCommittedOperation: opId => findCommittedOperation(opId, dir),
     captureSnapshot: (clientId, opId, text) => captureSnapshot(clientId, opId, text, dir),
+    discardUncommittedSnapshot: (clientId, opId) => discardUncommittedSnapshot(clientId, opId, dir),
     readSnapshot: entry => readSnapshot(entry, dir),
     countSnapshots: clientId => countSnapshots(clientId, dir),
     pruneSnapshots: clientId => pruneSnapshots(clientId, dir),

@@ -40,7 +40,7 @@
         "^context-history\\.test\\.ts$",
         "^aside-profiles-routes",
         "^update-async-routes\\.test\\.ts$",
-        "^(?:account|alias|bounded|cancel|config\\.test\\.ts|consume|data|debug|error|errors|fetch|health|input|loopback|management|memory|outbound|owned|passive|port|ports\\.test\\.ts|proxy|relay|response|retry|server|session|sidebar|stream|v2)-",
+        "^(?!bounded-file-read\\.test\\.ts$)(?:account|alias|bounded|cancel|config\\.test\\.ts|consume|data|debug|error|errors|fetch|health|input|loopback|management|memory|outbound|owned|passive|port|ports\\.test\\.ts|proxy|relay|response|retry|server|session|sidebar|stream|v2)-",
         "^subagent-model-force-api\\.test\\.ts$"
       ]
     },
@@ -106,7 +106,7 @@
     },
     "lib": {
       "match": [
-        "^(?:acl|clearable|credential|debug\\.test\\.ts|optional|redact\\.test\\.ts|remove|self|stall|strict|transient)-"
+        "^(?:acl|bounded|clearable|credential|debug\\.test\\.ts|optional|redact\\.test\\.ts|remove|self|stall|strict|transient)-"
       ]
     },
     "clients": {

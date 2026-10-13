@@ -73,6 +73,42 @@ describe("append and read back", () => {
 });
 
 describe("snapshots", () => {
+  test("unused snapshot cleanup is bound to one store and client", () => {
+    const other = createIntegrationStateStore(join(root, "other"));
+    store.captureSnapshot("pi", "unused", "pi bytes");
+    store.captureSnapshot("kimi", "unused", "kimi bytes");
+    other.captureSnapshot("pi", "unused", "other bytes");
+    store.discardUncommittedSnapshot("pi", "unused");
+    expect(store.countSnapshots("pi")).toBe(0);
+    expect(readFileSync(join(root, "snapshots", "kimi", "unused"), "utf8")).toBe("kimi bytes");
+    expect(readFileSync(join(other.root, "snapshots", "pi", "unused"), "utf8")).toBe("other bytes");
+    expect(() => store.discardUncommittedSnapshot("pi", "../../escaped")).toThrow(/unsafe opId/);
+  });
+
+  test.each([false, true])("unused cleanup preserves committed evidence, including retired rows (retired=%s)", retired => {
+    const snapshot = store.captureSnapshot("pi", "committed", "recovery bytes");
+    store.appendJournal(entry({ opId: "committed", snapshot, resultFingerprint: "a".repeat(16) }));
+    if (retired) store.retireOperation({ tombstone: "committed", at: new Date().toISOString(), by: "test" });
+    expect(() => store.discardUncommittedSnapshot("pi", "committed")).toThrow(/recorded operation/);
+    expect(readFileSync(join(root, "snapshots", "pi", "committed"), "utf8")).toBe("recovery bytes");
+  });
+
+  test.each(["records.json", "journal.jsonl"])("unused cleanup retains evidence when %s cannot establish non-commit", filename => {
+    store.captureSnapshot("pi", "uncertain", "recovery bytes");
+    writeFileSync(join(root, filename), "{broken");
+    expect(() => store.discardUncommittedSnapshot("pi", "uncertain")).toThrow();
+    expect(readFileSync(join(root, "snapshots", "pi", "uncertain"), "utf8")).toBe("recovery bytes");
+  });
+
+  test("unused cleanup preserves an owned snapshot even before its journal append", () => {
+    store.captureSnapshot("pi", "owned", "recovery bytes");
+    store.putRecord({ clientId: "pi", configPath: join(root, "client.json"),
+      fileFingerprint: "f".repeat(16), blockFingerprint: "b".repeat(16),
+      fragmentPaths: [["providers", "opencodex"]], appliedAt: new Date().toISOString(), opId: "owned" });
+    expect(() => store.discardUncommittedSnapshot("pi", "owned")).toThrow(/recorded operation/);
+    expect(readFileSync(join(root, "snapshots", "pi", "owned"), "utf8")).toBe("recovery bytes");
+  });
+
   test("a missing file records `none`, which is not a failure", () => {
     const ref = store.captureSnapshot("pi", "op-1", null);
     expect(ref).toEqual({ kind: "none" });
