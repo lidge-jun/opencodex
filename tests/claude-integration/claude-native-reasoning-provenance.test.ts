@@ -137,6 +137,60 @@ describe("Claude native reasoning provenance", () => {
     expect(nativeReasoningOwnerForRoute({ provider: oauth, oauthCredentialSnapshot: { accountId: "slot" } })).toBeUndefined();
   });
 
+  test("rejects many distinct blobs in one history pass and preserves valid replay until a route switch", () => {
+    const selected = provider();
+    const owner = nativeReasoningOwnerForRoute({ provider: selected });
+    const payload = turn();
+    for (let i = 0; i < 128; i++) {
+      const blob = `ciphertext-${i}`;
+      payload.messages.push({ role: "assistant", content: [
+        { type: "thinking", thinking: "Visible plan.", signature: encodeReasoningEnvelope({ nat: {
+          enc: blob, model: MODEL, id: `rs_${i}`, tag: i === 0 ? nativeReasoningTag(owner, blob)! : "invalid",
+        } }) },
+        { type: "text", text: "Done." },
+      ] } as typeof payload.messages[number]);
+    }
+    const translated = anthropicToResponsesTranslation(payload);
+    const parsed = parseRequest(translated.body);
+    parsed._nativeReasoningReplay = translated.nativeReasoningReplay;
+    expect(parsed._nativeReasoningReplay?.size).toBe(128);
+    let signatureReads = 0;
+    let carriers = 0;
+    for (const message of parsed.context.messages) {
+      if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
+      for (const part of message.content) {
+        if (part.type !== "thinking" || typeof part.signature !== "string") continue;
+        carriers++;
+        let value = part.signature;
+        Object.defineProperty(part, "signature", {
+          enumerable: true, configurable: true,
+          get() { signatureReads++; return value; },
+          set(next: string) { value = next; },
+        });
+      }
+    }
+    expect(carriers).toBe(128);
+    const bind = (target: OcxProviderConfig) => {
+      signatureReads = 0;
+      bindRouteReasoningReplayScope({ parsed, providerName: "a", provider: target, adapterName: "openai-responses" });
+      expect(signatureReads).toBeLessThanOrEqual(2 * carriers);
+    };
+    bind(selected);
+    for (const history of [parsed._rawBody, parsed.context]) {
+      const encoded = JSON.stringify(history);
+      expect(encoded).toContain("ciphertext-0");
+      expect(encoded).not.toContain("ciphertext-1");
+    }
+    bind(provider(undefined, "key-b"));
+    bind(selected);
+    for (const history of [parsed._rawBody, parsed.context]) {
+      const encoded = JSON.stringify(history);
+      expect(encoded).not.toContain("ciphertext-");
+      expect(encoded).not.toContain("rs_127");
+      expect(encoded).toContain("Visible plan.");
+    }
+  });
+
   test("OAuth generation changes strip both replay carriers while the same generation keeps them", () => {
     const oauth = { ...provider(), authMode: "oauth" } as OcxProviderConfig;
     const minted = nativeReasoningOwnerForRoute({ provider: oauth, oauthCredentialSnapshot: { accountId: "slot", generation: 1 } })!;

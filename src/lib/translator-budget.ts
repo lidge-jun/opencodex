@@ -1,3 +1,5 @@
+import { isNonReplayableResponse, markResponseNonReplayable } from "./upstream-retry";
+
 export const TRANSLATOR_MAX_CALL_ARGUMENT_BYTES = 2 * 1024 * 1024;
 export const TRANSLATOR_MAX_TURN_BYTES = 32 * 1024 * 1024;
 export const TRANSLATOR_MAX_SSE_EVENT_BYTES = 32 * 1024 * 1024;
@@ -410,5 +412,9 @@ export function finalizeTranslatorBudgetResponse(response: Response, budget: Tra
   });
   if (signal?.aborted) finalize();
   else signal?.addEventListener("abort", finalize, { once: true });
-  return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+  const finalizedResponse = new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+  // The rebuild above drops identity markers. A refusal that must not be replayed
+  // stays non-replayable through accounting finalization.
+  if (isNonReplayableResponse(response)) markResponseNonReplayable(finalizedResponse);
+  return finalizedResponse;
 }

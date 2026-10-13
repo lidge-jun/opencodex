@@ -48,7 +48,7 @@ describe.skipIf(process.platform === "win32")("Unix overlay PATH activation", ()
     expect(result.message).toContain("codex-shell-env.sh");
     expect(result.message).toContain("after other PATH setup");
     expect(process.env.PATH).toBe(path);
-    expect(diagnoseCodexShim()).toMatchObject({ installed: true, runnable: true, active: false, healthy: false });
+    expect(diagnoseCodexShim()).toMatchObject({ installed: true, runnable: true, active: false, healthy: false, activationPending: true });
     expect(findFirstCodexOnPath()).toEqual({ path: f.native, isShim: false });
     expect(shellCommand().stdout.trim()).toBe(f.native);
     const readiness = inspectCodexShimForConnect();
@@ -68,7 +68,7 @@ describe.skipIf(process.platform === "win32")("Unix overlay PATH activation", ()
     expect(path!.split(":").filter(item => item === dirname(f.wrapper))).toHaveLength(1);
     process.env.PATH = path;
     expect(findFirstCodexOnPath()).toEqual({ path: f.wrapper, isShim: true });
-    expect(diagnoseCodexShim()).toMatchObject({ runnable: true, active: true, healthy: true });
+    expect(diagnoseCodexShim()).toMatchObject({ runnable: true, active: true, healthy: true, activationPending: false });
     expect(inspectCodexShimForConnect().status).toBe("ready");
   }));
 
@@ -123,7 +123,7 @@ describe.skipIf(process.platform === "win32")("Unix overlay PATH activation", ()
     process.env.PATH = f.earlier;
     expect(findFirstCodexOnPath()).toBeNull();
     expect(shellCommand().status).not.toBe(0);
-    expect(diagnoseCodexShim()).toMatchObject({ runnable: true, active: false, healthy: false });
+    expect(diagnoseCodexShim()).toMatchObject({ runnable: true, active: false, healthy: false, activationPending: true });
     expect(inspectCodexShimForConnect().status).toBe("missing");
   }));
 

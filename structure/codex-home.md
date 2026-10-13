@@ -79,7 +79,13 @@ and absence is distinct from an empty file. The injector checks a retained hashl
 the same `baselineContent` it snapshots, plus the current profile, before writing or assigning a new
 injected hash. Native content can establish a fresh snapshot; routed content cannot promote an
 unverified older original. Existing hash-backed edit preservation and external-provider opt-out
-remain separate paths.
+remain separate paths. Removal with `preserveProfile: false` refuses a final-component profile symlink before changing config or journal state. Profile cleanup uses the held configuration lock, canonical parent and identity rechecks; its pathname unlink is not atomic against non-cooperating writers. A matching journal refuses profiles eligible for restoration or removal when they are symlinks, including dangling generated links, before changing either artifact or recovery evidence. Config publication is covered by `withConfigWriteRecovery` if later profile removal throws.
+
+Standalone removal derives its transform and rollback preimage from the same raw bytes.
+Removal refuses before publication if the recovery capture no longer matches its input bytes.
+Nested removal also requires the outer scope's last observed file identity to remain current;
+its transaction preimage is retained. Advisory locking does not serialize non-cooperating edits
+after these checks.
 
 `src/codex/journal.ts` distinguishes restored state from actual writes with `configRewritten`
 and `profileRewritten`; removing a generated profile counts as a write, while already-original

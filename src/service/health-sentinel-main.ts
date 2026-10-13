@@ -38,7 +38,7 @@ import {
   type HealthProbeOutcome,
   type HealthSentinelTiming,
 } from "./health-sentinel-policy";
-import { probeHealth, type HealthProbeTarget } from "./health-sentinel-probe";
+import { probeHealth, probeUrlHost, type HealthProbeTarget } from "./health-sentinel-probe";
 
 export const HEALTH_SENTINEL_ENV = {
   targetPid: "OCX_HEALTH_SENTINEL_TARGET_PID",
@@ -143,6 +143,11 @@ type Attempt =
   | { kind: "gone" }
   | { kind: "intent"; entry: RecoveryEntry };
 
+function matchesProbeTarget(runtime: SentinelRuntimeRecord | null, pid: number, target: HealthProbeTarget): boolean {
+  return runtime !== null && runtime.pid === pid && !runtime.sibling
+    && runtime.port === target.port && probeUrlHost(runtime.hostname) === target.hostname;
+}
+
 export async function runHealthSentinel(deps: HealthSentinelDeps): Promise<HealthSentinelResult> {
   const timing: HealthSentinelTiming = { ...DEFAULT_HEALTH_SENTINEL_TIMING, ...deps.timing };
   const standDown = (reason: string): HealthSentinelResult => {
@@ -162,12 +167,18 @@ export async function runHealthSentinel(deps: HealthSentinelDeps): Promise<Healt
     recoveryHistory: history,
     timing,
   });
+  let pinnedTarget: HealthProbeTarget | null = null;
   for (;;) {
     if (deps.isTargetGone()) return { outcome: "target_exited" };
     const runtime = deps.readRuntime();
     if (!runtime || runtime.pid !== deps.targetPid) return standDown("the runtime record no longer names the watched process");
     if (runtime.sibling) return standDown("the watched process is a sibling proxy");
-    const outcome = await raceGone(deps.probe({ hostname: runtime.hostname ?? "", port: runtime.port }, timing.probeTimeoutMs), exitSignal);
+    const hostname = probeUrlHost(runtime.hostname);
+    if (hostname === null) return standDown("the recorded bind address is not numeric; DNS names cannot authorize recovery");
+    const target: HealthProbeTarget = pinnedTarget ?? { hostname, port: runtime.port };
+    if (!matchesProbeTarget(runtime, deps.targetPid, target)) return standDown("the recorded probe endpoint changed");
+    pinnedTarget = target;
+    const outcome = await raceGone(deps.probe(target, timing.probeTimeoutMs), exitSignal);
     if (outcome === GONE) return { outcome: "target_exited" };
     const wasArmed = policy.state().armed;
     const decision = policy.observe(outcome);
@@ -178,7 +189,7 @@ export async function runHealthSentinel(deps: HealthSentinelDeps): Promise<Healt
         // Everything that could have changed during the probe is re-read under the lease.
         if (deps.isTargetGone()) return { kind: "gone" };
         const current = deps.readRuntime();
-        if (!current || current.pid !== deps.targetPid || current.port !== runtime.port || current.sibling) {
+        if (!matchesProbeTarget(current, deps.targetPid, target)) {
           return { kind: "stand_down", reason: "the runtime record changed while the target was unresponsive" };
         }
         // Persist first: an attempted recovery must count toward the cap, and on Windows this
@@ -202,7 +213,10 @@ export async function runHealthSentinel(deps: HealthSentinelDeps): Promise<Healt
         const { entry } = attempt;
         // The lease, history and log work above takes time. Re-check that the evidence is still
         // fresh right before the irreversible step: a proxy that recovered meanwhile must not be
-        // killed on old observations. A clock that ran backwards makes the evidence stale too.
+        // killed on old observations. A clock that ran backwards makes the evidence stale too. The
+        // final runtime-record read is included before the freshness check so time spent on it
+        // cannot authorize termination on stale observations.
+        const finalRuntime = deps.readRuntime();
         const evidenceAge = deps.now() - outcome.endedAt;
         if (evidenceAge < 0 || evidenceAge > timing.maxEvidenceAgeMs || deps.isTargetGone()) {
           settle({ ...entry, state: "skipped" });
@@ -210,6 +224,10 @@ export async function runHealthSentinel(deps: HealthSentinelDeps): Promise<Healt
           deps.log(`discarding stale evidence (${Math.round(evidenceAge / 1000)}s old) for pid ${deps.targetPid}; observing again`);
           if (await raceGone(deps.sleep(policy.nextDelayMs()), exitSignal) === GONE) return { outcome: "target_exited" };
           continue;
+        }
+        if (!matchesProbeTarget(finalRuntime, deps.targetPid, target)) {
+          settle({ ...entry, state: "skipped" });
+          return standDown("the recorded probe endpoint changed before termination");
         }
         const result = deps.terminateTarget();
         if (result === "not_target") {
@@ -329,6 +347,7 @@ export function readSentinelRuntime(path: string): SentinelRuntimeRecord | null 
   try {
     const parsed = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
     const { pid, port, hostname } = parsed;
+    if (hostname !== undefined && typeof hostname !== "string") return null;
     if (typeof pid !== "number" || !Number.isSafeInteger(pid) || pid <= 0) return null;
     if (typeof port !== "number" || !Number.isSafeInteger(port) || port <= 0 || port > 65_535) return null;
     return { pid, port, ...(typeof hostname === "string" ? { hostname } : {}), sibling: parsed.siblingOfPort !== undefined };

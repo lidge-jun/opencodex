@@ -1055,7 +1055,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           );
           const { buildAnthropicModelInfos } = await import("../../claude/model-info");
           const { resolveAutoContext } = await import("../../claude/context-windows");
-          const { activeDesktop3pAlias } = await import("../../claude/desktop-3p");
+          const { resolvableDesktop3pAlias } = await import("../../claude/desktop-3p");
           // Per-surface id family (devlog 050): explicit ?ids= wins; otherwise the
           // Claude Code CLI discovery UA (`claude-code/<version>`, binary n_()) gets
           // readable claude-ocx ids and every other client (Desktop 3P) keeps the
@@ -1071,7 +1071,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             goOrdered,
             resolveAutoContext(config.claudeCode),
             idStyle,
-            activeDesktop3pAlias,
+            resolvableDesktop3pAlias,
             desktopInputs.nativeContextCap,
             config.fastMode,
             // Explicit opt-out omits the Fast predicate.

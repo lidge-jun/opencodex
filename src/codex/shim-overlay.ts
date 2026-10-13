@@ -201,6 +201,7 @@ export function overlayDiagnostic(state: ShimState): CodexShimDiagnostic {
     inspection?.revalidate();
   } catch (error) { active = null; runnable = false; integrityMessage = failure(error).message; }
   return { installed: true, healthy: complete && runnable && active === true, runnable, active,
+    activationPending: complete && runnable && active !== true,
     summary: `Codex PATH shim: ${complete && runnable ? "ready" : "unhealthy"} at ${state.wrapperPath}; launcher ${state.launcherPath}; PATH ${active === null ? "unverified" : active ? "active" : "inactive"}. ${complete && runnable ? overlayActivationHint() : integrityMessage || "Run ocx codex-shim install to repair the shim."}` };
 }
 

@@ -1428,6 +1428,15 @@ export async function runDoctor(args: string[] = []): Promise<void> {
     }
   }
 
+  // #2999: which process refreshes the native main login in CODEX_HOME.
+  console.log("\nNative main refresh");
+  {
+    const { loadConfig } = await import("../config");
+    const { formatNativeMainRefreshDoctorLines, resolveNativeMainRefreshMode } = await import("../codex/native-main-refresh-mode");
+    const resolution = await resolveNativeMainRefreshMode(loadConfig());
+    for (const line of formatNativeMainRefreshDoctorLines(resolution)) console.log(line);
+  }
+
   // Mirrors `ocx status` through the same comparison rather than a second implementation:
   // two diagnostics disagreeing about whether an install is stale is worse than one (#2701).
   // No extra probe -- findLiveProxy already carried the version back.

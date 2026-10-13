@@ -58,6 +58,15 @@ describe("claudePromptTooLongMessage", () => {
     expect(CLAUDE_CODE_GAP_RE.test(message)).toBe(false);
   });
 
+  test("bounds repeated context prefixes and scans a request count only after the first limit", () => {
+    const repeated = "maximum context length is 1 tokens; ".repeat(4_000);
+    expect(claudePromptTooLongMessage(repeated)).toBe(`prompt is too long: ${repeated.slice(0, 64 * 1024)}`);
+    expect(claudePromptTooLongMessage("you requested 99 tokens; maximum context length is 10 tokens"))
+      .not.toContain("99 tokens > 10 maximum");
+    expect(claudePromptTooLongMessage("maximum context length is 10 tokens; maximum context length is 20 tokens; you requested 30 tokens"))
+      .toBe("prompt is too long: 30 tokens > 10 maximum");
+  });
+
   test("leaves Anthropic wording unchanged", () => {
     for (const text of ["prompt is too long: 1000 tokens > 900 maximum", "Input is too long for requested model."]) {
       expect(claudePromptTooLongMessage(text)).toBe(text);
@@ -221,6 +230,19 @@ describe("native Messages lane", () => {
     expect(response.status).toBe(200);
     const data = JSON.parse(text.split("\n").find(line => line.startsWith("data:"))!.slice(5));
     expect(data.error.message).toBe("prompt is too long: Your request exceeded model token limit: 262144");
+  });
+
+  test("bounds oversized overflow messages on the managed native SSE route", async () => {
+    const message = "maximum context length is 1 tokens; ".repeat(4_000);
+    const frame = `event: error\ndata: ${JSON.stringify({ type: "error", error: {
+      type: "invalid_request_error", message,
+    } })}\n\n`;
+    const { response, text } = await send(nativeConfig(() => new Response(frame, {
+      headers: { "content-type": "text/event-stream" },
+    })), true);
+    expect(response.status).toBe(200);
+    const data = JSON.parse(text.split("\n").find(line => line.startsWith("data:"))!.slice(5));
+    expect(data.error.message).toBe(`prompt is too long: ${message.slice(0, 64 * 1024)}`);
   });
 
   test("stall detection still times raw upstream bytes, not whole rewritten frames", async () => {

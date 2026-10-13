@@ -156,6 +156,7 @@ import {
   reconcileEnsureDesiredIntegrations,
 } from "./ensure-desired-integrations";
 import { ENSURE_READY_TIMEOUT_MS, ensureKeepWaiting, waitForLiveProxy } from "./ensure-readiness";
+import { productionDesktopColdStartDeps, runDesktopColdStart } from "./ensure-desktop-cold-start";
 import { refreshOwnedCatalogIntegrations } from "../integrations/catalog-refresh";
 import { loadExportModels } from "../server/management/model-rows";
 
@@ -816,9 +817,16 @@ async function handleEnsure(options: { existingIsSuccess?: boolean; forceStart?:
     console.log("Codex autostart is disabled.");
     return false;
   }
-  const live = owner.live;
+  let live = owner.live;
+  if (!live) {
+    // OpenCodex Desktop owns or runs this proxy: wait for it or start it, never a competing CLI proxy (#6971).
+    const desktopStart = await runDesktopColdStart(productionDesktopColdStartDeps(timeoutMs => waitForProxy(timeoutMs)));
+    if (desktopStart.kind === "failed") { console.error(`❌ ${desktopStart.message}`); process.exitCode = 1; return false; }
+    // Also for restart: the proxy was absent and Desktop started it, so the live tail below applies.
+    if (desktopStart.kind === "live") live = desktopStart.live;
+  }
   if (live) {
-    if (options.existingIsSuccess === false) {
+    if (options.existingIsSuccess === false && live === owner.live) {
       console.error("Proxy appeared while restart was confirming absence; no start was attempted.");
       return false;
     }

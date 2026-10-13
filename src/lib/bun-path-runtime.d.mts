@@ -5,7 +5,16 @@ export interface DesktopCliIo {
 export interface PathBunIo extends DesktopCliIo {
   now?: () => number;
   realpath?: (path: string) => string;
-  stat?: (path: string) => { isFile(): boolean; mode: number };
+  stat?: (path: string) => { isFile(): boolean; mode: number; uid?: number };
+  lstat?: (path: string) => {
+    isFile(): boolean;
+    isDirectory(): boolean;
+    isSymbolicLink(): boolean;
+    mode: number;
+    uid?: number;
+  };
+  readlink?: (path: string) => string;
+  geteuid?: () => number | undefined;
   isRealBunBinary?: (path: string) => boolean;
   spawnSync?: (path: string, args: string[], options: {
     env: NodeJS.ProcessEnv;
