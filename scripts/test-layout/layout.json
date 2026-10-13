@@ -958,6 +958,7 @@
     "gcp-adc.test.ts": "adapters/google",
     "gemini-37-flash-migration.test.ts": "adapters/google",
     "gemini-4-argon-antigravity.test.ts": "adapters/google",
+    "antigravity-account-roster.test.ts": "adapters/google",
     "gemini-inline.test.ts": "images",
     "gemini-web-search.test.ts": "adapters/google",
     "generic-oauth-failover.test.ts": "oauth",

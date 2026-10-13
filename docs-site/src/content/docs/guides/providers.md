@@ -156,9 +156,14 @@ OpenCodex sends Argon requests and model discovery with the CLI User-Agent
 
 The built-in `google-antigravity` model list is Gemini 3.8 Flash (`gemini-3.8-flash`), Gemini 4 Argon
 (`gemini-4-argon`), Claude Opus 5.5 (`claude-opus-5-5`), and Claude Sonnet 5.5
-(`claude-sonnet-5-5`), each with low, medium, and high efforts. Other models appear only when live
-model discovery returns them for your account. Saved selections of models that left the list keep
-routing as before.
+(`claude-sonnet-5-5`), each with low, medium, and high efforts. What you actually see is your
+account's own model discovery, because Google enables models per account: some accounts list
+Claude Sonnet 4.6 and Claude Opus 4.6 (Thinking), others only Claude Opus and Sonnet 5.5 (directly
+billed, non-trial Pro or Ultra plans), and Gemini 4 Argon only on Ultra and Enterprise. Both Claude
+generations map: 4.6 takes its effort as a thinking level, 5.5 as its `-low`, `-medium`, or
+`-high` model. With several Antigravity accounts and `oauthAccountFailover.enabled`, a request
+prefers an account whose discovery lists the requested model. Saved selections of models that left
+the list keep routing as before.
 
 To check which mode a provider is actually using, open it on the Providers page: the **Connection**
 block's **Authentication** row reads `OAuth`, `API key`, `ChatGPT passthrough`, `Local`, or
