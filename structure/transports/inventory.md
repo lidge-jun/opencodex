@@ -307,6 +307,12 @@ admission or account-snapshot pairing. The forwarding contract is covered in
 
 ## SOCKS5 dispatch boundary
 
+HTTPS tunnels in `src/lib/socks5-fetch.ts` give the TLS handshake its own absolute
+30-second deadline after SOCKS CONNECT. Successful TLS clears that deadline before
+the response timer takes over; timeout, caller cancellation, error and premature
+close release the owned socket and listeners. Certificate verification stays enabled.
+`tests/lib/socks5-tls-lifecycle.test.ts` exercises stalled and interrupted handshakes.
+
 `src/config/proxy-env.ts` activates configured SOCKS5 through `src/lib/proxy-env.ts`;
 the compatibility config facade does not own a second activation path.
 The library captures `startupOutboundProxyConfigured` at module evaluation, before config

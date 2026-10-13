@@ -1728,7 +1728,7 @@
     "sidecar-tracker.test.ts": "vision",
     "skill-ocx.test.ts": "ci-workflows",
     "slug-codec.test.ts": "codex-integration",
-    "socks5-fetch.test.ts": "lib",
+    "socks5-fetch.test.ts": "lib", "socks5-tls-lifecycle.test.ts": "lib",
     "socks5-upload-lifecycle.test.ts": "lib",
     "spend-ceiling-enforcement.test.ts": "lib",
     "spend-instrumentation-log.test.ts": "server",
