@@ -38,11 +38,11 @@ unchanged.
 
 ## Route map (eligible concrete Antigravity route)
 
-| Inbound | Before | After (`antigravityDirect` on) |
+| Inbound | Before | After (`antigravityDirect`, on by default) |
 |---|---|---|
 | Responses | `responses -> ir -> other`, answer `other -> ir -> responses` | unchanged; already direct (`parseRequest`, `bridgeToResponsesSSE`) |
 | Chat | `chat -> responses-internal -> ir -> other`; answer `other -> ir -> responses-internal -> chat` (`other -> ir -> chat` only with `directEncoders`) | `chat -> ir -> other`; answer `other -> ir -> chat` |
-| Messages | `messages -> responses-internal -> ir -> other` | unchanged in this unit (follow-up below) |
+| Messages | `messages -> responses-internal -> ir -> other`; answer `other -> ir -> responses-internal -> messages` (`other -> ir -> messages` only with `directEncoders`) | `messages -> ir -> other`; answer `other -> ir -> messages` |
 
 ## Design
 
@@ -61,10 +61,12 @@ and the end-to-end test requires the same Antigravity wire body on both lanes.
 
 ## Follow-ups
 
-- Messages -> Antigravity direct decode. The Messages ingress applies more bridge-body policy
-  (model resolution, prompt-cache key, blocked-skill elision, cache stabilization, `ocxr1`
-  reasoning envelopes and the native reasoning replay map), so it needs its own parity corpus and
-  decline rules; stack it on this branch.
+- Messages -> Antigravity direct decode: done in the follow-up PR (`messages-ir.ts`,
+  `src/server/messages-antigravity-direct.ts`). The lane is planned before translation on the
+  settings-only body (resolved model, prompt-cache key) against a route preview, reproduces
+  blocked-skill elision, cache stabilization, envelopes and the native replay map, and declines
+  hosted web search, vision preprocessing, the shadow intercept and core-rewritten text. The same
+  PR turns `antigravityDirect` on by default for both lanes; an explicit `false` turns it off.
 - Claude-on-Antigravity thinking continuity: the Google adapter sends assistant thinking parts
   nowhere today; only call-bound `thoughtSignature`s survive. Carrying Claude thinking blocks as
   `thought: true` parts (as CLIProxyAPI does) is an adapter change for both lanes, not part of
