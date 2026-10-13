@@ -1,5 +1,6 @@
 {
-  "gcp-credential-boundary.test.ts": "adapters/google", "gcp-sa-marker.test.ts": "adapters/google", "gcp-sa-adapter.test.ts": "adapters/google", "management-gcp-credential-input.test.ts": "server",
+  "responses-call-id-linkage.test.ts": "responses",
+"gcp-credential-boundary.test.ts": "adapters/google", "gcp-sa-marker.test.ts": "adapters/google", "gcp-sa-adapter.test.ts": "adapters/google", "management-gcp-credential-input.test.ts": "server",
   "codex-preserve-signed-in.test.ts": "codex-integration", "cli-account-preservation.test.ts": "cli",
   "catalog-native-max-context.test.ts": "codex-integration",
   "protocol-argon-thought-boundary.test.ts": "responses",
