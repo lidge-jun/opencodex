@@ -621,7 +621,7 @@ const MODEL_ENV_SLOT_NAMES = [
 
 const DESKTOP_3P_ALIAS = /^claude-(?:opus-4(?:-8)?-[a-z][0-9a-z]{2}|(?:opus-4-8|fable-5)-p[0-9a-z]{3})(?:--fast)?$/;
 
-function nativeClaudeModelIds(config: OcxConfig): string[] {
+export function nativeClaudeModelIds(config: OcxConfig): string[] {
   const assignments = config.claudeCode?.desktopProfile?.assignments ?? {};
   const routes = Object.keys(assignments);
   const realProfileIds = new Set(routes.filter(route => route.startsWith("anthropic/claude-"))
@@ -635,10 +635,16 @@ function nativeClaudeModelIds(config: OcxConfig): string[] {
       return [alias, desktopProfileWireAlias(alias), legacyDesktopProfileWireAlias(alias),
         desktop3pAlias(route.slice(0, slash), route.slice(slash + 1))];
     }));
+  // The configured default is a genuine declaration too: the catalog seeds it for static
+  // providers, so it must be recognized here even without a server registry.
+  const anthropic = config.providers.anthropic;
+  const declaredIds = [
+    ...(anthropic?.defaultModel ? [anthropic.defaultModel] : []),
+    ...(anthropic?.models ?? []), ...(anthropic?.selectedModels ?? []), ...(anthropic?.retainModels ?? []),
+  ];
   return [...new Set([
     ...realProfileIds,
-    ...[...(config.providers.anthropic?.models ?? []), ...(config.providers.anthropic?.selectedModels ?? []),
-      ...(config.providers.anthropic?.retainModels ?? [])]
+    ...declaredIds
       .filter(id => {
         const base = id.endsWith("--fast") ? id.slice(0, -"--fast".length) : id;
         return id.startsWith("claude-") && (realProfileIds.has(id)

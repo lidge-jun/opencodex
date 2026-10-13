@@ -10,6 +10,7 @@ import {
   fetchClaudeCodeState,
   isProxyOnlyModelId,
   readConnectedClaudeContextWindows,
+  nativeClaudeModelIds,
   nativeModelOverride,
   readPickerDefaultModel,
   rootSkipPermissionsNotice,
@@ -322,6 +323,31 @@ describe("ocx claude native fallback", () => {
     expect(env.ANTHROPIC_MODEL).toBeUndefined();
     expect(env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBeUndefined();
     expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBeUndefined();
+  });
+
+  test("cold native launch keeps a genuine alias-shaped Anthropic defaultModel", () => {
+    buildDesktop3pRegistry([], []);
+    const id = "claude-fable-5-p000";
+    const configured = cfg({
+      providers: { anthropic: { adapter: "anthropic", liveModels: false, defaultModel: id } },
+    });
+    const env = buildNativeClaudeEnv(configured, {
+      ANTHROPIC_MODEL: id, ANTHROPIC_DEFAULT_FABLE_MODEL: `${id}[1m]`,
+    });
+    expect(env.ANTHROPIC_MODEL).toBe(id);
+    expect(env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe(`${id}[1m]`);
+    expect(nativeModelOverride(id, "opus", [], Object.keys(configured.providers), nativeClaudeModelIds(configured)))
+      .toEqual({});
+
+    // An active synthetic binding still outranks the stale default declaration.
+    configured.claudeCode = { desktopProfile: { version: 1,
+      assignments: { "mock/model": { family: "opus", alias: "claude-opus-4-8-20260101" } },
+      defaults: { opus: "mock/model", fable: null, sonnet: null, haiku: null },
+    } };
+    const bound = buildNativeClaudeEnv(configured, { ANTHROPIC_MODEL: id });
+    expect(bound.ANTHROPIC_MODEL).toBeUndefined();
+    expect(nativeModelOverride(id, "opus", [], Object.keys(configured.providers), nativeClaudeModelIds(configured)))
+      .toMatchObject({ flag: ["--model", "opus"] });
   });
 
   test("a connected client's window map keeps legacy claude-ocx selectors next to the current ones", () => {
