@@ -19,6 +19,7 @@ for (let parent = dirname(root); ; parent = dirname(parent)) {
 }
 const calls: Array<{ command: string; args: string[]; override?: string }> = [];
 let running = scenario.running === true;
+let pgrepCalls = 0;
 const uid = typeof process.getuid === "function" ? process.getuid() : -1;
 
 mock.module("node:fs", () => ({ ...fs, lstatSync(path: string, ...args: unknown[]) {
@@ -48,8 +49,15 @@ mock.module("node:child_process", () => ({ ...childProcess, spawnSync(command: s
     status: scenario.trust === "unsigned" ? 1 : 0,
     stdout: args[0] === "--verify" ? "" : `TeamIdentifier=${scenario.trust === "foreign-team" ? "OTHERTEAM" : "2DC432GLL2"}\n`, stderr: "",
   };
-  if (command === "pgrep") return { status: running ? 0 : 1, stdout: running ? "123" : "", stderr: "" };
-  if (command === "ps") return { status: 0, stdout: shell, stderr: "" };
+  if (command === "pgrep") {
+    pgrepCalls++;
+    if (scenario.pgrepFails || (scenario.probeFailsAfterQuit && pgrepCalls > 2)) return {
+      status: scenario.pgrepTimeout ? null : 2, stdout: "", stderr: "private fixture diagnostic",
+    };
+    if (scenario.invalidPgrep) return { status: 0, stdout: "not-a-pid", stderr: "" };
+    return { status: running ? 0 : 1, stdout: running ? "123" : "", stderr: "" };
+  }
+  if (command === "ps") return { status: scenario.psFails ? 1 : 0, stdout: scenario.psFails ? "" : shell, stderr: "" };
   if (command === "/usr/bin/osascript") running = false;
   if (command === "/usr/bin/open" && scenario.openFails) return { status: 1, stdout: "", stderr: "fixture open failed" };
   return { status: 0, stdout: "", stderr: "" };
@@ -60,7 +68,10 @@ mock.module("../../src/config", () => ({ loadConfig: () => ({ chatgptDesktop: { 
 mock.module("../../src/config/diagnostics", () => ({ readConfigFileSnapshot: () => ({ raw: scenario.configRaw }) }));
 mock.module("../../src/codex/desktop-app/darwin", () => ({
   darwinDefaultExec: () => "",
-  darwinDesktopAppAdapter: { discover: () => scenario.noInstall ? null : { id: "com.openai.codex", root, relaunch: "com.openai.codex" } },
+  darwinDesktopAppAdapter: { discover: () => {
+    if (scenario.discoveryFails) throw new Error("private discovery diagnostic");
+    return scenario.noInstall ? null : { id: "com.openai.codex", root, relaunch: "com.openai.codex" };
+  } },
 }));
 mock.module("../../src/chatgpt/app-server-shim/launcher", () => ({
   chatgptShimLauncherPath: () => launcher,
@@ -69,4 +80,4 @@ mock.module("../../src/chatgpt/app-server-shim/launcher", () => ({
 }));
 const { handleChatgptCommand } = await import("../../src/cli/chatgpt-command");
 const code = await handleChatgptCommand([scenario.sub ?? "restore"], "darwin");
-console.log(JSON.stringify({ code, calls, launcherExists: fs.existsSync(launcher), root, shell, binary }));
+console.log(JSON.stringify({ code, calls, launcherExists: fs.existsSync(launcher), launcherContent: fs.existsSync(launcher) ? fs.readFileSync(launcher, "utf8") : null, root, shell, binary }));

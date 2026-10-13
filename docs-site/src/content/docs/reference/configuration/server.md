@@ -126,6 +126,10 @@ SOCKS5 (Clash mixed-port listeners included) belongs on `ALL_PROXY`, not `HTTP_P
 
 `ocx start --socks5` writes that value; `ocx start --socks5-off` clears it.
 
+HTTPS requests through SOCKS5 have a separate 30-second TLS handshake deadline.
+A stalled handshake fails without disabling certificate verification; caller
+cancellation can stop it sooner.
+
 If an older development build changed resume-history metadata before backup support existed, run
 `ocx recover-history --legacy-openai --yes` to force native-provider recovery.
 It force-relabels every user-message `opencodex` row, including legitimate dedicated-provider

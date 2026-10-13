@@ -68,7 +68,7 @@ export interface PackageTreeIntegrityOptions {
 }
 
 export type ObservePackageTree = () => PackageTreeObservation | null;
-export type PackageTreeRuntimeInstall = "bun" | "mise" | "npm" | "pnpm" | "source";
+export type PackageTreeRuntimeInstall = "bun" | "mise" | "npm" | "pnpm" | "source" | "standalone";
 
 const packageManifestUrl = new URL("../../package.json", import.meta.url);
 
@@ -323,7 +323,7 @@ export function createRuntimePackageTreeIntegrityGuard(
   now: () => number = Date.now,
   options: PackageTreeIntegrityOptions = {},
   ): PackageTreeIntegrityGuard {
-    if (installer === "source" || isStandaloneBinary()) {
+    if (installer === "source" || installer === "standalone" || isStandaloneBinary()) {
       return { status: () => ({ ok: true }), dispose: () => {} };
     }
     // The restart replacement spawns process.execPath, the bundled Bun in an npm install. Read it

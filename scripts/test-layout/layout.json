@@ -1,8 +1,8 @@
 {
   "version": 1,
   "root": "tests",
-  "explicit": {
-    "responses-anthropic-billing-send-budget.test.ts": "responses", "anthropic-billing-ownership.test.ts": "adapters/anthropic", "server-anthropic-billing.test.ts": "server", "server-anthropic-billing-boundaries.test.ts": "server", "router-anthropic-billing-failover.test.ts": "routing", "anthropic-billing-refusal.test.ts": "adapters/anthropic", "messages-request-id-headers.test.ts": "claude-integration", "bounded-file-read.test.ts": "lib", "responses-undeclared-tool-guard-inbound.test.ts": "responses", "explicit-empty-tool-catalog.test.ts": "responses", "explicit-empty-tool-catalog-history.test.ts": "responses",
+  "explicit": { "service-log.test.ts": "service",
+    "codex-history-pending-wal.test.ts": "codex-integration", "responses-anthropic-billing-send-budget.test.ts": "responses", "anthropic-billing-ownership.test.ts": "adapters/anthropic", "server-anthropic-billing.test.ts": "server", "server-anthropic-billing-boundaries.test.ts": "server", "router-anthropic-billing-failover.test.ts": "routing", "anthropic-billing-refusal.test.ts": "adapters/anthropic", "messages-request-id-headers.test.ts": "claude-integration", "bounded-file-read.test.ts": "lib", "responses-undeclared-tool-guard-inbound.test.ts": "responses", "explicit-empty-tool-catalog.test.ts": "responses", "explicit-empty-tool-catalog-history.test.ts": "responses",
     "messages-request-id-endpoint.test.ts": "claude-integration",
     "anthropic-revoked-token.test.ts": "adapters/anthropic",
     "messages-revoked-token.test.ts": "claude-integration",
@@ -1728,7 +1728,7 @@
     "sidecar-tracker.test.ts": "vision",
     "skill-ocx.test.ts": "ci-workflows",
     "slug-codec.test.ts": "codex-integration",
-    "socks5-fetch.test.ts": "lib",
+    "socks5-fetch.test.ts": "lib", "socks5-tls-lifecycle.test.ts": "lib",
     "socks5-upload-lifecycle.test.ts": "lib",
     "spend-ceiling-enforcement.test.ts": "lib",
     "spend-instrumentation-log.test.ts": "server",
@@ -1836,7 +1836,7 @@
     "update-async-routes.test.ts": "server",
     "update-badge.test.ts": "update", "update-bun-ownership-lease.test.ts": "update",
     "update-desktop-badge.test.ts": "update", "update-desktop-owner.test.ts": "update",
-    "update-job.test.ts": "update", "update-worker-launch.test.ts": "update",
+    "update-job.test.ts": "update", "update-standalone.test.ts": "update", "update-worker-launch.test.ts": "update",
     "update-notify.test.ts": "update", "update-npm-cache-preflight.test.ts": "update",
     "update-npm-invocation.test.ts": "update", "update-mise-launcher-target.test.ts": "update",
     "update-mise.test.ts": "update", "update-mise-node-runtime.test.ts": "update",

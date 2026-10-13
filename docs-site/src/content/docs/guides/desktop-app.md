@@ -130,7 +130,7 @@ While the CLI detects Desktop supervising the proxy, `ocx service install`, `rep
 or verified login registration. Quit OpenCodex, then run `ocx service install` to move
 startup management to the CLI. A duplicate `ocx start` names the Desktop supervisor.
 
-Use **Check for Updates…** in the tray to update the app's bundle. `ocx update` refuses
+Use **Check for Updates…** in the tray to update the app's bundle. The bundled compiled CLI reports `installer: "standalone"` and `reason: "standalone_install"` from `ocx system update check`, with `canUpdate: false` and guidance to use Desktop updates. `ocx update` refuses
 package replacement while Desktop supervises the proxy, even for a separate npm/Bun install;
 quit OpenCodex first to update that install. An accepted `ocx restart` reports that Desktop
 starts the replacement and waits for it to become healthy. A newer PATH CLI cannot use

@@ -186,7 +186,7 @@ describe("restore validates the discovered app before any quit or open", () => {
       expect(result.status).toBe(0);
       return { ...JSON.parse(result.stdout.trim().split("\n").at(-1)!), stdout: result.stdout, stderr: result.stderr } as {
         code: number; calls: Array<{ command: string; args: string[]; override?: string }>;
-        launcherExists: boolean; root: string; shell: string; binary: string; stdout: string; stderr: string;
+        launcherExists: boolean; launcherContent: string | null; root: string; shell: string; binary: string; stdout: string; stderr: string;
       };
     } finally { removeTreeWithRetry(dir); }
   };
@@ -197,6 +197,37 @@ describe("restore validates the discovered app before any quit or open", () => {
       expect(result.launcherExists).toBe(true);
       expect(result.stderr).toContain("Refusing to restore");
       expect(result.calls.filter(call => ["pgrep", "ps", "/usr/bin/osascript", "/usr/bin/open"].includes(call.command))).toEqual([]);
+    });
+  }
+  for (const sub of ["launch", "restore"]) {
+    for (const scenario of [
+      { pgrepFails: true }, { pgrepFails: true, pgrepTimeout: true },
+      { psFails: true, running: true }, { invalidPgrep: true }, { discoveryFails: true },
+    ]) {
+      test(`${sub} preserves the launcher and refuses unknown app state ${JSON.stringify(scenario)}`, () => {
+        const result = run({ sub, flag: true, ...scenario });
+        expect(result.code).toBe(1);
+        expect(result.launcherContent).toBe("preserve until restore succeeds");
+        expect(result.calls.some(call => ["/usr/bin/osascript", "/usr/bin/open"].includes(call.command))).toBe(false);
+        expect(result.stderr).not.toContain("private");
+      });
+    }
+  }
+  test("an inspection failure after quit does not authorize open or launcher removal", () => {
+    const result = run({ running: true, probeFailsAfterQuit: true });
+    expect(result.code).toBe(1);
+    expect(result.launcherContent).toBe("preserve until restore succeeds");
+    expect(result.calls.some(call => call.command === "/usr/bin/osascript")).toBe(true);
+    expect(result.calls.some(call => call.command === "/usr/bin/open")).toBe(false);
+  });
+  for (const scenario of [{ pgrepFails: true }, { discoveryFails: true }, { psFails: true, running: true }]) {
+    test(`status reports unknown without mutation ${JSON.stringify(scenario)}`, () => {
+      const result = run({ sub: "status", ...scenario });
+      expect(result.code).toBe(0);
+      expect(result.stdout).toContain("app: unknown");
+      expect(result.stdout).toContain("CODEX_CLI_PATH launcher: unknown");
+      expect(result.launcherContent).toBe("preserve until restore succeeds");
+      expect(result.stdout).not.toContain("private");
     });
   }
   test("valid restore works with the flag off and no bundled app-server", () => {
