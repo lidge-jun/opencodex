@@ -146,6 +146,11 @@ login-only too: `ocx login google-antigravity` signs in with your Google account
 Assist wire, and the `google` preset beside it is the AI Studio Gemini API — a different product
 reached with its own key, not a key mode for the same login.
 
+Gemini 4 Argon (`gemini-4-argon`) is listed on the `google` preset with low, medium (the
+default), and high thinking levels. Google offers it on the paid Gemini API tier only, not the free
+tier. On `google-antigravity`, Google currently limits Argon to AI Ultra and eligible Enterprise
+accounts, so OpenCodex shows it there only when live model discovery returns it for your account.
+
 To check which mode a provider is actually using, open it on the Providers page: the **Connection**
 block's **Authentication** row reads `OAuth`, `API key`, `ChatGPT passthrough`, `Local`, or
 `No key needed`. It is a provider-level setting, so the account rows below it do not repeat it.
