@@ -437,6 +437,10 @@ read-only SQLite inspection. Zero-byte, empty-unversioned, and rowless states ar
 from catalog/app-server health, so a successful catalog refresh is not mistaken for successful
 Codex config injection.
 
+The pending-history check reads a checkpointed WAL-mode `state_5.sqlite` even when Codex is
+closed and its `-wal`/`-shm` files are absent. Missing sidecars alone do not indicate a history
+integrity failure. Backup manifests and restore targets still undergo integrity validation.
+
 After stopping the OpenCodex proxy/service, explicitly preserve and move a proven non-authoritative
 coordinator, then retry sync:
 
