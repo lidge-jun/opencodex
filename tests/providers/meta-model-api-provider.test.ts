@@ -70,7 +70,7 @@ describe("Meta Model API provider (meta-model)", () => {
     // and voice families on this same base URL, so discovery would publish rows this
     // Responses-agent provider cannot drive.
     expect(entry().liveModels).toBeFalsy();
-    expect(entry().models).toEqual([...META_MODELS]);
+    expect(entry().models).toEqual([...META_MODELS, "muse-wonder-1.0"]);
   });
 
   test("the seed survives derive() intact", () => {

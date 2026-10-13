@@ -21,7 +21,7 @@ import {
   registryModelIdKeys,
 } from "../../src/providers/registry/model-ids";
 import type { ProviderRegistryEntry } from "../../src/providers/registry/types";
-import { META_MUSE_MODELS } from "../../src/providers/registry/model-seeds";
+import { META_MODEL_API_MODELS } from "../../src/providers/registry/model-seeds";
 import { FREE_PROVIDER_DIRECTORY } from "../../src/providers/free-directory";
 import { applyProviderConfigHints } from "../../src/codex/catalog";
 import { routeModel } from "../../src/router";
@@ -175,7 +175,7 @@ describe("provider registry parity", () => {
     // effort maps. The helper never reads models, so recovering them here is evidence the maps
     // were read. Compared against the seed the entry is built from rather than a copied literal,
     // so adding a Muse model does not fail this case for the wrong reason.
-    expect(registryModelIdKeys(metaMuse)).toEqual([...META_MUSE_MODELS]);
+    expect(registryModelIdKeys(metaMuse)).toEqual([...META_MODEL_API_MODELS]);
   });
 
   test("key-login export is derived from the registry", () => {

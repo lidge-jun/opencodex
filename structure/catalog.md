@@ -320,6 +320,7 @@ preserving custom descriptions and other stored row fields.
 
 GPT-6 Sol and Luna (2026-09-22) and GPT-6.1 Sol (2026-09-29, `low` default effort) are self-described the same way, from their roster-pinned
 rows: labels `GPT-6-Sol` / `GPT-6-Luna`, 272,000 default context and 872,000 opt-in ceiling,
+except GPT-6.1 Sol's default context, raised to 500,000 by `NATIVE_GPT61_SOL_CONTEXT` (OpenAI, 2026-10-11; ceiling kept at 872,000),
 `medium` default. Sol ships low-through-ultra; Luna stops at `max`, and no path may add `ultra` to
 it: `nativeLadderIncludesUltra` answers from the self-described row (or an alias's source row), so
 `ensureGpt56ReasoningLevels` restores `max` everywhere but adds `ultra` only where the pinned row

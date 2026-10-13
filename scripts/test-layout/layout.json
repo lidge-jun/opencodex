@@ -1215,7 +1215,7 @@
     "management-workflow-budget-routes.test.ts": "server",
     "managing-cli.test.ts": "service",
     "memory-watchdog.test.ts": "server",
-    "meta-model-api-provider.test.ts": "providers",
+    "meta-model-api-provider.test.ts": "providers", "meta-muse-wonder.test.ts": "providers",
     "meta-muse-oauth.test.ts": "providers",
     "mimo-effort.test.ts": "providers",
     "mimo-free-provider.test.ts": "providers",

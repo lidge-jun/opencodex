@@ -770,7 +770,7 @@
   "management-route-registry.test.ts": "server", "protocol-routes.test.ts": "server",
   "protocol-settings-route.test.ts": "server", "protocol-provider-summary.test.ts": "server",
   "management-workflow-budget-routes.test.ts": "server", "managing-cli.test.ts": "service",
-  "memory-watchdog.test.ts": "server", "meta-model-api-provider.test.ts": "providers",
+  "memory-watchdog.test.ts": "server", "meta-model-api-provider.test.ts": "providers", "meta-muse-wonder.test.ts": "providers",
   "meta-muse-oauth.test.ts": "providers", "mimo-effort.test.ts": "providers",
   "mimo-free-provider.test.ts": "providers", "mimo-token-plan-provider.test.ts": "providers",
   "mimo-v26-catalog.test.ts": "providers", "minimax-clients.test.ts": "providers",

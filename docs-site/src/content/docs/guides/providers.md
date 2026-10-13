@@ -898,9 +898,13 @@ served over `/v1/responses`. Create a key in
 [the Meta developer console](https://dev.meta.ai/docs/authentication) — Meta calls this
 variable `MODEL_API_KEY`, but opencodex derives the env var from the provider id, so
 export it as **`META_MODEL_API_KEY`** (or paste it during `ocx init`). The account needs a
-payment method before it will serve requests, and every call is metered per token. Two
-models are seeded — `meta-model/muse-spark-1.3` and `meta-model/muse-spark-1.3-contributor`
-— with the vendor's `minimal`/`low`/`medium`/`high`/`xhigh` ladder and a 1M context window.
+payment method before it will serve requests, and every call is metered per token. Three
+models are seeded, each with a 1M context window: `meta-model/muse-spark-1.3` and
+`meta-model/muse-spark-1.3-contributor` with the vendor's `minimal`/`low`/`medium`/`high`/`xhigh`
+ladder, and `meta-model/muse-wonder-1.0` (Muse Wonder, preview) with `minimal` through `max`.
+Muse Wonder is Standard mode only on the Model API: it has no Contributor tier and costs
+$4 per 1M input and $20 per 1M output tokens. Muse Wonder Full is available only inside Muse
+Code subscriptions, so it is not seeded.
 Discovery stays off until an authenticated roster is verified, because Meta serves image and
 voice models on the same host.
 
@@ -929,11 +933,14 @@ The management OAuth provider list therefore omits Meta Muse for raw-admin-token
 open a session-authenticated dashboard to use that login flow. This changes discovery only,
 not the admission checks on login start or manual continuation.
 
-Both seeded `meta-muse` models expose `minimal`/`low`/`medium`/`high`/`xhigh`/`max` to
+All three seeded `meta-muse` models (Muse Spark 1.3, its Contributor tier and Muse Wonder)
+expose `minimal`/`low`/`medium`/`high`/`xhigh`/`max` to
 routed clients, including Grok's effort picker. Requests use
 `User-Agent: muse-build/1.3.0 (opencodex compatibility)` so Meta accepts the Muse Code
 effort contract. An explicit provider User-Agent overrides this default and may cause
-`max` to be rejected. The `meta-model` and OpenCode Go effort ladders remain unchanged.
+`max` to be rejected. On `meta-model` only Muse Wonder accepts `max`; its Spark rows and
+OpenCode Go keep the `xhigh` ceiling. Advertising `max` is the model's contract and does not
+prove your Muse Code plan covers Muse Wonder.
 
 **Read this before enabling it.** Meta scopes that credential to the Muse Code CLI, so
 using it here is an *unsupported* path. Meta does not authorize subscription coverage

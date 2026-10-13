@@ -146,7 +146,14 @@ it needs `client_version` **0.153.0 or later** and is the Codex default. GPT-6 S
 
 | Model | Default context | Opt-in ceiling | Default effort | Reasoning ladder |
 | --- | ---: | ---: | --- | --- |
-| `gpt-6.1-sol` | 272,000 | 872,000 | `low` | `low` through `ultra` |
+| `gpt-6.1-sol` | 500,000 | 872,000 | `low` | `low` through `ultra` |
+
+OpenAI raised GPT-6.1 Sol's default context in Codex and Work from 272,000 to 500,000 tokens on
+October 11, 2026, so the native row now defaults to 500,000 and compacts at 450,000. The bundled
+Codex catalog still reads 272,000, so opencodex sets the new default itself. A configured window or
+provider cap still lowers it, and the long-window opt-in still stops at 872,000: OpenAI describes
+the model maximum as 1M without saying how that maps onto Codex's window and input limits, so
+opencodex does not advertise more than the ceiling it can verify.
 
 The same `providerContextCaps.openai`, `modelContextWindows` and `modelAutoCompactTokenLimits`
 levers apply as for Astra. On the OpenAI API (`openai-apikey`), `gpt-6.1-sol` has 1,050,000
