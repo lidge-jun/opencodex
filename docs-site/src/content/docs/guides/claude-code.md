@@ -683,15 +683,15 @@ Overflow normalization uses only the first **65,536 UTF-16 code units** of the p
 message, including messages that already use Anthropic's wording. This is a string-length limit,
 not a byte or token limit. Text beyond it is discarded without an ellipsis or truncation marker,
 so diagnostic details and token counts near the end may be absent from the error Claude Code
-receives. The added `prompt is too long: ` prefix can make the final message longer than this
-retained portion.
+receives. The added `prompt is too long:` prefix, followed by a space, can make the final message
+longer than this retained portion.
 
 Within that portion, recognized Anthropic wording is kept; otherwise OpenCodex emits
 `prompt is too long: <requested> tokens > <limit> maximum` only when it finds
 `maximum context length is <limit> tokens` followed by `resulted in <requested> tokens` or
 `you requested <requested> tokens`. It uses the first stated limit and the first matching request
 count after it. If that pair is missing, reversed, or cut off, it prefixes the retained text with
-`prompt is too long: ` without inventing counts. A throughput limit that only mentions tokens
+`prompt is too long:` followed by a space, without inventing counts. A throughput limit that only mentions tokens
 (for example "too many tokens per minute") keeps its text and is not treated as an overflow.
 
 If compaction itself still exceeds the limit, preserve the original
