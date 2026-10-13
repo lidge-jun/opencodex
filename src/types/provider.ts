@@ -622,6 +622,11 @@ export interface OcxProviderConfig {
   contextWindow?: number;
   /** Per-model fallback when context metadata is absent; otherwise caps the reported window. */
   modelContextWindows?: Record<string, number>;
+  /**
+   * Custom providers only, default off: fill a missing context window from bundled model-ID
+   * metadata before the Context cap / 128k fallback. An estimate, not verified relay capacity.
+   */
+  inferContextWindow?: boolean;
   /** Per-model Copilot upstream tier; only the github-copilot route sends it. */
   modelContextTiers?: Record<string, "default" | "long_context">;
   /** Model-specific Codex catalog input modalities, e.g. ["text"] or ["text", "image"]. */

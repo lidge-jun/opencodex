@@ -160,6 +160,19 @@
       ]
     },
     {
+      "path": "catalog-vendor-context.md",
+      "tier": 2,
+      "title": "Custom-provider context estimates",
+      "scope": "Bundled model-ID window fallback, ambiguity handling, and inferred-capacity provenance.",
+      "documents": [
+        "src/codex/catalog/vendor-context.ts",
+        "src/codex/catalog/model-hints.ts",
+        "src/codex/catalog/parsing.ts",
+        "src/codex/catalog/routed-gather.ts",
+        "src/codex/catalog/effort.ts"
+      ]
+    },
+    {
       "path": "catalog-effort-clamp.md",
       "tier": 2,
       "title": "Effort-clamp observations",
@@ -175,6 +188,18 @@
         "src/codex/",
         "src/providers/",
         "src/server/"
+      ]
+    },
+    {
+      "path": "advisor.md",
+      "tier": 2,
+      "title": "Advisor Sidecar",
+      "scope": "The OpenCodex-owned expert consultation sidecar: synthetic advisor tool, preflight policy, loopback consultation through the routing authority, and the optional-subsystem seam.",
+      "documents": [
+        "src/advisor/",
+        "src/server/responses/advisor-slot.ts",
+        "src/server/responses/advisor-plan-slot.ts",
+        "src/lib/advisor-activation.ts"
       ]
     },
     {
@@ -497,6 +522,7 @@
         "src/codex/",
         "src/lib/",
         "src/quota/",
+        "src/routing/history/",
         "src/server/",
         "src/usage/"
       ]
@@ -612,6 +638,15 @@
         "src/service/health-sentinel-policy.ts",
         "src/service/health-sentinel-probe.ts",
         "src/service/health-sentinel-windows.ts"
+      ]
+    },
+    {
+      "path": "ops/update-supervised-recovery.md",
+      "tier": 6,
+      "title": "Update Supervised Recovery",
+      "scope": "Manager-first recovery after a failed post-update service refresh, and the non-zero unsupervised fallback.",
+      "documents": [
+        "src/update/supervised-recovery.mjs"
       ]
     },
     {

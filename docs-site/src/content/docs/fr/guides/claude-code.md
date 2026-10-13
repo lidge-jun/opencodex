@@ -424,7 +424,7 @@ d'OpenCodex, de réappliquer ce profil et de démarrer une nouvelle conversation
 dépannage, sans garantie de résolution. OpenCodex ne peut pas observer l'état du sélecteur ; il achemine
 l'identifiant du modèle porté par chaque requête. Vérifiez ce que le client envoie sous **Logs → requestedModel**.
 
-Les modèles dont la fenêtre de contexte de référence atteint 1M ou au moins le seuil de compactage par défaut (829 800) obtiennent une ligne supplémentaire `…[1m]` dans le sélecteur.
+Les modèles dont la fenêtre de contexte effective du catalogue atteint 1M ou au moins le seuil de compactage par défaut (829 800) obtiennent une ligne supplémentaire `…[1m]` dans le sélecteur.
 Sa sélection indique à Claude Code la fenêtre complète de 1M pour ce modèle, tout en maintenant le compactage automatique ; le proxy retire
 le marqueur avant le routage.
 La sélection est conservée dans le champ `model` de `settings.json` ; pour les requêtes entrantes, l'alias est de nouveau
@@ -459,7 +459,9 @@ conservent leurs identifiants canoniques sur les deux interfaces.
 
 ### Marqueur `[1m]` de variante contextuelle
 
-Les modèles dont la fenêtre de contexte de référence atteint 1M ou au moins le seuil de compactage par défaut (829 800)
+Ces vérifications utilisent la fenêtre effective du catalogue, qui peut inclure une [estimation pour un fournisseur personnalisé](/fr/reference/configuration/providers/#contexte-des-fournisseurs-personnalisés). Une estimation ne garantit pas la capacité réelle du relais.
+
+Les modèles dont la fenêtre de contexte effective du catalogue atteint 1M ou au moins le seuil de compactage par défaut (829 800)
 obtiennent une ligne supplémentaire `…[1m]` dans le sélecteur. Ce plancher est fixe : modifier la valeur de compactage ne l'abaisse pas,
 et un modèle Claude sur une route Anthropic doit réellement atteindre 1M. Sans contexte automatique, seule une fenêtre de 1M compte.
 Au-delà de la fenêtre réelle, l'erreur `prompt is too long` déclenche le compactage automatique de Claude Code. En la sélectionnant, Claude Code
@@ -471,7 +473,7 @@ résolution de l'alias et le routage.
 Claude Code attribue une limite de 200k jetons à tout modèle qu'il ne reconnaît pas. Le **contexte automatique**, activé
 par défaut, corrige ce comportement :
 
-1. Les variables d'environnement de lancement reçoivent le marqueur `[1m]` lorsque la fenêtre réelle dépasse 200k **et**
+1. Les variables d'environnement de lancement reçoivent le marqueur `[1m]` lorsque la fenêtre effective du catalogue dépasse 200k **et**
    atteint au moins le seuil de compactage automatique configuré. Les lignes de découverte et du sélecteur Desktop ne suivent pas
    ce seuil : elles utilisent le plancher fixe de 829 800 jetons (1M réel pour un modèle Claude sur une route Anthropic).
 2. `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (`829800` par défaut, plage `100000`–`1000000`) est injecté afin
@@ -502,7 +504,7 @@ longue fenêtre sont proposés à 1M dans les emplacements d'environnement du la
 (`prefer1m`) et les sous-agents générés. Avec `200k`, rien n'est marqué `[1m]` automatiquement, `CLAUDE_CODE_AUTO_COMPACT_WINDOW`
 n'est pas injecté et Desktop 3P retire `prefer1m` tout en gardant `supports1m`. Un sélecteur que vous marquez vous-même `[1m]`
 reste disponible (les sous-agents générés ou forcés retirent toujours un marqueur que la fenêtre du modèle ne peut pas porter), et
-la découverte liste toujours les lignes `· 1M` des modèles réellement à 1M. `200k` l'emporte sur le contexte automatique : une valeur
+la découverte liste toujours les lignes `· 1M` des modèles dont la fenêtre du catalogue atteint au moins 1M. `200k` l'emporte sur le contexte automatique : une valeur
 de compactage que vous exportez ne réactive pas le marquage automatique, mais opencodex laisse votre export en place.
 
 ```bash
@@ -766,7 +768,7 @@ défini (automatique avec `ocx claude`). Exécutez `ocx claude` pour actualiser 
 une valeur `ANTHROPIC_BASE_URL` obsolète. Ouvrez un nouveau terminal ou réexécutez `ocx claude`.
 
 **Plafond de contexte 200k malgré un grand modèle** — Sélectionnez la variante `[1m]` dans le sélecteur ou activez
-le contexte automatique, activé par défaut. Si le sélecteur n'affiche aucune ligne `[1m]`, la fenêtre de contexte de référence du modèle
+le contexte automatique, activé par défaut. Si le sélecteur n'affiche aucune ligne `[1m]`, la fenêtre de contexte effective du modèle dans le catalogue
 peut être inférieure au plancher fixe de 829 800 jetons.
 
 **Nombre élevé de jetons provenant du chargement des compétences** — La compétence `claude-api` fournie (~136k jetons) se charge automatiquement
@@ -791,7 +793,7 @@ The Subagents page offers **Force all subagents onto one model**, off by default
 
 `ocx agent subagents force combo/tev-auto` sets `claudeCode.subagentModelForce`; `ocx agent subagents force -` clears it. `ocx agent status` reports the setting. `GET /api/subagent-models` returns `force`, `forceAvailable`, and `forceStatus`; `PUT` accepts `{ "force": "combo/tev-auto" }` or `{ "force": null }` without changing the roster. Omitting `force` leaves it unchanged. Invalid or unexposed targets are rejected on write; stale targets are reported and skipped at launch.
 
-This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` when the authoritative window reaches the fixed 829,800-token floor, and only for a genuine 1M window on Anthropic Claude models and bare `claude-*` selectors; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
+This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` when the effective catalog window reaches the fixed 829,800-token floor, and only for a genuine 1M window on Anthropic Claude models and bare `claude-*` selectors; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
 
 Claude Code **2.1.257 or newer** is required for FORCE. Plugin and built-in agents (including Explore/Plan) and per-call model arguments are overridden. Forks and subagent skills with `model: inherit` keep the main conversation model. The main loop and Haiku/small-fast sidecars are unaffected. Existing roster files remain available.
 

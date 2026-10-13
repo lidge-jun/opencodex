@@ -1,4 +1,5 @@
 import { projectAntigravitySelectedModels } from "../../providers/antigravity-effort-families";
+import { configuredUltraFastSlugs } from "./configured-tiers";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { initializeConfigOwnership } from "../../lib/config-ownership";
@@ -509,6 +510,7 @@ function writeRetainedCatalogSync({
     : [];
   catalog.models = mergeCatalogEntriesFromObservedState({
     ultraFastTier: ultraFastTierEnabled(config),
+    configuredUltraFastSlugs: configuredUltraFastSlugs(orderedGoModels),
     modelPickerOrder,
     accountSelectors,
     catalogModels: catalogModelsForMerge,

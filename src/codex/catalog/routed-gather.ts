@@ -1,5 +1,7 @@
+import { canInferVendorContext } from "./vendor-context";
 import { effectiveProviderAlias, effectiveProviderAliasDecision } from "../../providers/default-aliases";
 import { initialModelSelectionPending } from "../../providers/initial-model-selection";
+import { supportsConfiguredUltraFast } from "./configured-tiers";
 import { execFileSync } from "node:child_process";
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
@@ -318,6 +320,7 @@ function boundCustomNativeReasoning(
   return bounded;
 }
 
+/** Gather discovered and custom rows under one captured provider policy, including speed capabilities. */
 async function gatherRoutedModelsUncached(
   config: OcxConfig,
   capture: GatherFlightCapture,
@@ -358,6 +361,7 @@ async function gatherRoutedModelsUncached(
       const policy = fastPolicyForModel(apiProvider.provider, model.id, apiProvider.name);
       const supported = serviceTierSupportFromPolicy(policy);
       if (supported !== undefined) model.supportsServiceTier = supported;
+      model.supportsUltraFastTier = supportsConfiguredUltraFast(policy);
       if (supported === true && policy.fastTierDescription !== undefined) model.fastTierDescription = policy.fastTierDescription;
     }
   }
@@ -467,7 +471,7 @@ async function gatherRoutedModelsUncached(
       ...inherited,
       catalogKind: CODEX_CUSTOM_MODEL_CATALOG_KIND,
       ...(typeof custom.contextWindow === "number" && custom.contextWindow > 0
-        ? { contextWindow: custom.contextWindow }
+        ? { contextWindow: custom.contextWindow, contextWindowInference: undefined }
         : {}),
       ...(Array.isArray(custom.inputModalities)
         ? { inputModalities: [...custom.inputModalities] }
@@ -654,6 +658,7 @@ async function gatherRoutedModelsUncached(
       ...(Array.isArray(cm.reasoningEfforts) ? { reasoningEfforts: [...cm.reasoningEfforts] } : {}),
       ...(cm.defaultReasoningEffort ? { defaultReasoningEffort: cm.defaultReasoningEffort } : {}),
       ...(typeof supportsServiceTier === "boolean" ? { supportsServiceTier } : {}),
+      supportsUltraFastTier: supportsConfiguredUltraFast(fastPolicy),
       ...(supportsServiceTier === true && fastPolicy?.fastTierDescription !== undefined
         ? { fastTierDescription: fastPolicy.fastTierDescription }
         : {}),
@@ -686,7 +691,8 @@ async function gatherRoutedModelsUncached(
       : undefined;
     const merged: CatalogModel = replaced ? {
       ...base,
-      ...(base.contextWindow === undefined && replaced.contextWindow !== undefined ? { contextWindow: replaced.contextWindow } : {}),
+      ...(base.contextWindow === undefined && replaced.contextWindow !== undefined
+        ? { contextWindow: replaced.contextWindow, ...(replaced.contextWindowInference ? { contextWindowInference: replaced.contextWindowInference, contextCap: replaced.contextCap, contextCapped: replaced.contextCapped } : {}) } : {}),
       ...(mergedMaxInput !== undefined ? { maxInputTokens: mergedMaxInput } : {}),
       ...(mergedMaxOutput !== undefined ? { maxOutputTokens: mergedMaxOutput } : {}),
       ...(base.autoCompactTokenLimit === undefined && replaced.autoCompactTokenLimit !== undefined
@@ -703,17 +709,29 @@ async function gatherRoutedModelsUncached(
       ...(base.codexToolMode === undefined && replaced.codexToolMode !== undefined ? { codexToolMode: replaced.codexToolMode } : {}),
       ...(base.capabilities === undefined && replaced.capabilities !== undefined ? { capabilities: replaced.capabilities } : {}),
     } : base;
+    // A custom-only model may never appear in /models or the provider's configured roster.
+    // Fill only its absent context; a full hint overlay would overwrite custom capabilities.
+    const customContextHints = merged.contextWindow === undefined && effectiveProvider && canInferVendorContext(cm.provider, effectiveProvider)
+      ? applyProviderConfigHints(cm.provider, effectiveProvider, { provider: cm.provider, id: cm.modelId },
+        providerContextCap(config, cm.provider), metadataModelIdCaseFoldByProvider.get(cm.provider),
+        undefined, metadataConfigDirByProvider.get(cm.provider))
+      : undefined;
+    const contextResolved: CatalogModel = customContextHints?.contextWindow !== undefined
+      ? { ...merged, contextWindow: customContextHints.contextWindow,
+        ...(customContextHints.contextWindowInference ? { contextWindowInference: customContextHints.contextWindowInference } : {}),
+        ...(customContextHints.contextCap !== undefined ? { contextCap: customContextHints.contextCap, contextCapped: customContextHints.contextCapped } : {}) }
+      : merged;
     // Catalog-advertised efforts are bounded whenever the model id is a pinned native
     // slug. Desktop validates that id, so a gateway such as YYLJ/gpt-6-astra still cannot
     // advertise none/minimal. Full native identity stays behind the alias predicate.
     const nativeEffortSource = hasNativeOpenAiCapabilityMetadata(cm.modelId);
     const reasoningBounded = nativeEffortSource
       ? boundCustomNativeReasoning(
-        merged,
+        contextResolved,
         nativeReasoningEfforts(cm.modelId),
         nativeAliasDefaultEffort ?? nativeDefaultReasoningEffort(cm.modelId),
       )
-      : merged;
+      : contextResolved;
     // Vision-sidecar coverage only: when the enriched provider's shared predicate matches
     // noVisionModels or text-without-image modelInputModalities, advertise image input so the
     // Codex app lets images reach the sidecar (#349/#344). Deliberately NOT the full

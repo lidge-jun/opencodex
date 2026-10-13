@@ -473,6 +473,10 @@ a later successful automatic refresh also clears the attention state. This statu
 classify the refresh grant as revoked or disable future refresh attempts. Network and server
 errors do not trigger this status.
 
+For desktop-auth accounts, an HTTP 401 with exactly `Bad credentials` requires a new login
+and immediately marks the rejected credential generation as needing re-authentication.
+Other messages, statuses, and AWS SSO responses do not trigger this desktop-specific rule.
+
 ### Kiro credential import
 
 The dashboard offers native Builder ID, Google, and GitHub device login without Kiro CLI.
@@ -512,7 +516,7 @@ an ambiguous token selection), when `KIROCLI_DB_PATH` / `KIRO_CLI_DB_FILE` redir
 from the live CLI store, or when an existing primary CLI database has no recognized token row.
 Repair or remove the unreadable database under the normal `kiro-cli` data path, unset those import
 selectors, then retry. Signing in from a machine with no existing `kiro-cli` session is unaffected.
-The native dashboard choices are add-only and do not sign out `kiro-cli`. A device dialog shows the code and verification destination. Only recognized Kiro or Builder ID hosts are opened as links; an unexpected destination is shown as copyable text for review. Closing the dialog sends cancellation and leaves a bounded background status check to reconcile a commit already in progress. A stalled status response is retried; exhausting the flow deadline produces the neutral ended outcome rather than claiming success.
+The native dashboard choices are add-only and do not sign out `kiro-cli`. A device dialog shows the code and verification destination. Only recognized Kiro or Builder ID hosts are opened as links; an unexpected destination is shown as copyable text for review. Closing the dialog sends cancellation and leaves a bounded background status check to reconcile a commit already in progress. A stalled status response is retried; exhausting the flow deadline produces the neutral ended outcome rather than claiming success. Google and GitHub approval completes when Kiro reports `authorized` (or the legacy `approved` status) with valid tokens and a profile ARN.
 The account list marks Kiro accounts excluded from automatic selection with a reason, when available.
 
 ## 3. API-key catalog

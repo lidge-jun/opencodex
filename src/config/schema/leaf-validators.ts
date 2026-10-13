@@ -331,6 +331,7 @@ export const providerConfigSchema = z.object({
   responseTierAuthoritative: z.boolean().optional(),
   fastEnabled: z.boolean().optional(),
   supportsServiceTier: z.boolean().optional(),
+  inferContextWindow: z.boolean().optional(),
   modelSupportsServiceTier: z.record(z.string().min(1), z.boolean()).optional(),
   modelSuppressSyntheticMax: z.record(z.string().min(1), z.boolean()).optional(),
   preserveResponsesReasoningContent: z.boolean().optional(),

@@ -2,6 +2,7 @@ import type { OcxUsage } from "../../types";
 import type { AgentServerMessage, McpArgs, ToolCall } from "./gen/agent_pb";
 import { decodeCursorArgsMap } from "./arg-codec";
 import { normalizeArgKeys } from "./arg-normalize";
+import { canonicalCursorFreeformArgs } from "./freeform-args";
 import {
   CODEX_APPLY_PATCH_TOOL,
   CURSOR_MULTI_EDIT_TOOL,
@@ -334,9 +335,20 @@ function toolSchemaForWireName(state: CursorProtobufEventState, toolName: string
   return resolveShellBridgeAliasKey(toolName, alias => state.toolSchemas!.get(alias));
 }
 
-function decodeMcpArgsNormalized(args: McpArgs | undefined, state: CursorProtobufEventState): string {
-  const decoded = decodeCursorArgsMap(args?.args);
+function isFreeformCall(state: CursorProtobufEventState, responsesName: string | undefined): boolean {
+  return responsesName !== undefined && state.freeformToolNames?.has(responsesName) === true;
+}
+
+function decodeMcpArgsNormalized(
+  args: McpArgs | undefined,
+  state: CursorProtobufEventState,
+  openResponsesName?: string,
+): string {
   const toolName = mcpWireNameFromArgs(args);
+  const responsesName = toolName
+    ? responsesToolNameFromCursorWire(toolName, state.cursorToolNameMap)
+    : openResponsesName;
+  const decoded = decodeCursorArgsMap(args?.args, { preserveStrings: isFreeformCall(state, responsesName) });
   const schema = toolSchemaForWireName(state, toolName);
   if (schema) return JSON.stringify(normalizeArgKeys(decoded, schema));
   return JSON.stringify(decoded);
@@ -381,8 +393,13 @@ function normalizeJsonText(text: string, toolName: string | undefined, state: Cu
  * preserved verbatim so the bridge can reject malformed or truncated JSON instead of silently
  * converting it to `{}`. A genuinely empty buffer remains the no-argument case.
  */
-function resolveCompletedArgs(buffered: string, args: McpArgs | undefined, state: CursorProtobufEventState): string {
-  if (hasMcpArgBytes(args)) return decodeMcpArgsNormalized(args, state);
+function resolveCompletedArgs(
+  buffered: string,
+  args: McpArgs | undefined,
+  state: CursorProtobufEventState,
+  openResponsesName?: string,
+): string {
+  if (hasMcpArgBytes(args)) return decodeMcpArgsNormalized(args, state, openResponsesName);
   const name = mcpWireNameFromArgs(args);
   if (isCompleteJson(buffered)) return normalizeJsonText(buffered, name, state);
   return buffered;
@@ -1092,7 +1109,7 @@ export function mapSyntheticMcpExecToToolEvents(
     const out: CursorServerMessage[] = [...recordToolCall(options.state, callId, cursorWireName)];
     if (out.some(event => event.type === "error")) return out;
     const open = options.state.openToolCalls.get(callId);
-    const finalArgs = resolveCompletedArgs(open?.args ?? "", args, options.state);
+    const finalArgs = resolveCompletedArgs(open?.args ?? "", args, options.state, open?.name);
     out.push(...commitToolCall(options.state, callId, finalArgs));
     return out;
   }
@@ -1167,23 +1184,16 @@ function discardBufferedTextToolCalls(state: CursorProtobufEventState): void {
  * recorded in `openToolCalls`. Because each completion emits a whole non-interleaved unit, the bridge
  * (which tracks a single current tool call) serializes parallel Cursor calls correctly.
  */
-function cursorFreeformWrapperValid(args: string): boolean {
-  try {
-    const parsed = JSON.parse(args) as unknown;
-    return !!parsed
-      && typeof parsed === "object"
-      && !Array.isArray(parsed)
-      && typeof (parsed as Record<string, unknown>).input === "string";
-  } catch {
-    return false;
-  }
+/** True when the args already carry a body this call can commit, canonical or repairable (#7049). */
+function cursorFreeformArgsCommittable(args: string, toolName: string): boolean {
+  return canonicalCursorFreeformArgs(args, toolName).ok;
 }
 
-function dropInvalidFreeformCall(state: CursorProtobufEventState, callId: string, toolName: string): CursorServerMessage[] {
+function dropInvalidFreeformCall(state: CursorProtobufEventState, callId: string, toolName: string, reason: string): CursorServerMessage[] {
   state.openToolCalls.delete(callId);
   state.translatorBudget?.closeCall(callId);
   state.completedToolCalls.add(callId);
-  return [{ type: "error", message: `${toolName} call had invalid freeform arguments; expected {input:string}` }];
+  return [{ type: "error", message: `${toolName} call had invalid freeform arguments; expected {input:string} (${reason})` }];
 }
 
 function dropShellBridgeCall(state: CursorProtobufEventState, callId: string, toolName: string): CursorServerMessage[] {
@@ -1202,11 +1212,14 @@ function dropStructuredEditCall(state: CursorProtobufEventState, callId: string,
   return [{ type: "text", text: `\n${toolName} call was not converted to apply_patch: ${reason}` }];
 }
 
-function commitToolCall(state: CursorProtobufEventState, callId: string, finalArgs: string): CursorServerMessage[] {
+function commitToolCall(state: CursorProtobufEventState, callId: string, committedArgs: string): CursorServerMessage[] {
   const open = state.openToolCalls.get(callId);
   if (!open) return [];
-  if (state.freeformToolNames?.has(open.name) && !cursorFreeformWrapperValid(finalArgs)) {
-    return dropInvalidFreeformCall(state, callId, open.name);
+  let finalArgs = committedArgs;
+  if (isFreeformCall(state, open.name)) {
+    const freeform = canonicalCursorFreeformArgs(finalArgs, open.name);
+    if (!freeform.ok) return dropInvalidFreeformCall(state, callId, open.name, freeform.reason);
+    finalArgs = freeform.args;
   }
   const schema = toolSchemaForWireName(state, open.name);
   if (!cursorShellBridgeArgsValid(finalArgs, open.name, schema)) {
@@ -1386,7 +1399,7 @@ export function mapCursorProtobufServerMessage(
         && (
           (name !== undefined && openBeforeStart.args.length === 0)
           || (state.freeformToolNames?.has(openBeforeStart.name) === true
-            && !cursorFreeformWrapperValid(openBeforeStart.args)
+            && !cursorFreeformArgsCommittable(openBeforeStart.args, openBeforeStart.name)
           )
         )
       ) {
@@ -1410,13 +1423,13 @@ export function mapCursorProtobufServerMessage(
       if (
         !openBeforeStart && open && !hasMcpArgBytes(args)
         && state.freeformToolNames?.has(open.name) === true
-        && !cursorFreeformWrapperValid(open.args)
+        && !cursorFreeformArgsCommittable(open.args, open.name)
       ) {
         open.awaitingNativeArgs = true;
         return [];
       }
       if (open) {
-        const finalArgs = resolveCompletedArgs(open.args, args, state);
+        const finalArgs = resolveCompletedArgs(open.args, args, state, open.name);
         out.push(...commitToolCall(state, update.value.callId, finalArgs));
       }
       return out;

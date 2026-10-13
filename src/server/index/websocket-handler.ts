@@ -30,7 +30,9 @@ import {
 } from "../ws-bridge";
 import {
   CodexAccountCooldownError,
+  CodexMainAccountHardLockError,
   cooldownErrorMessage,
+  cooldownErrorResponse,
 } from "../../codex/auth-context";
 import { codexAccountNamespaceForModel } from "../../codex/account-namespace-match";
 import {
@@ -368,6 +370,13 @@ export function createWebsocketHandler(
                 const accountSelector = typeof payload.model === "string"
                   ? codexAccountNamespaceForModel(config.codexAccountNamespaces, payload.model)
                   : undefined;
+                if (err instanceof CodexMainAccountHardLockError) {
+                  // Same terminal usage-limit body and Retry-After as HTTP (#7046).
+                  const refusal = cooldownErrorResponse(err, Date.now(), accountSelector);
+                  const body = await refusal.json() as { error: Record<string, unknown> };
+                  sendJsonFrame(ws, buildWsErrorFrame(429, body.error, refusal.headers));
+                  return;
+                }
                 sendJsonFrame(ws, buildWsErrorFrame(429, {
                   type: "rate_limit_error",
                   message: cooldownErrorMessage(err, accountSelector),

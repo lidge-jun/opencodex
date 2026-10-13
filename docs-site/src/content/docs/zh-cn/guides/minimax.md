@@ -43,7 +43,7 @@ custom_provider:
           context: 1000000
 ```
 
-实际生成的模型列表，以及已知的上下文窗口和推理强度级别，来自运行中的 OpenCodex 目录。没有可靠上下文窗口或强度级别的模型会省略相应字段，而不会采用猜测值。MCode 在会话中保留当前选定的强度，因此 OpenCodex 导出 `effortOptions` 时不会覆盖该选择。配置块不会写入真实密钥，不会替换 `defaultModel`，也不会修改 MiniMax 登录。在 MCode 中，请从 `custom_provider:opencodex/...` 下选择模型。
+生成的模型列表、上下文窗口和推理强度级别来自运行中的 OpenCodex 目录。窗口可能包含[自定义渠道的推断值](/zh-cn/reference/configuration/providers/#自定义渠道的上下文窗口)；如果目录中没有窗口或强度级别，则省略相应字段。MCode 在会话中保留当前选定的强度，因此 OpenCodex 导出 `effortOptions` 时不会覆盖该选择。配置块不会写入真实密钥，不会替换 `defaultModel`，也不会修改 MiniMax 登录。在 MCode 中，请从 `custom_provider:opencodex/...` 下选择模型。
 
 `ocx mcode` 会在启动客户端前确认该提供商指向当前运行的代理。首次启用后，端口或目录能力变化时，`ocx sync` 会刷新由 OpenCodex 管理的配置块。自动同步不会创建不归其管理的配置块、重建你已删除的配置块，也不会覆盖 OpenCodex 写入后又被修改的文件；若确实要重新连接，请使用启用命令。可以通过同一经过审计的集成系统禁用或恢复：
 

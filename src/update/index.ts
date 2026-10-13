@@ -42,6 +42,10 @@ import { packageVersion } from "../lib/package-version";
 import { isStandaloneModuleUrl } from "../lib/standalone";
 import { selfLaunchArgv } from "../lib/self-launch-argv";
 import { PNPM_READ_CWD, withPnpmCommandCwd, pnpmReadEnvironment } from "./pnpm-read-policy.mjs";
+import {
+  freshServingPid, hasRestartableServiceManager, readParentPid, readServiceManagerPid, restartServiceManagerJob,
+  supervisionVerdict, unsettledManagerWarning, unsupervisedRuntimeWarning,
+} from "./supervised-recovery.mjs";
 
 /**
  * A `codex-history-backup-*.json` surviving a stop means the native-history restore was
@@ -560,7 +564,8 @@ export async function runUpdate(): Promise<void> {
     return before?.owner === after?.owner && before?.installId === after?.installId
       && before?.consentGeneration === after?.consentGeneration;
   };
-  const startProxyDirectly = async (): Promise<boolean> => {
+  /** `"vetoed"`: another owner holds the runtime, so not starting is the correct outcome. */
+  const startProxyDirectly = async (): Promise<boolean | "vetoed"> => {
     const ownership = await resolvedRuntimeOwnership();
     const supervision = observeSupervision();
     const plan = planUpdateRuntimeHandling({ ...ownership, serviceInstalled: false, supervision });
@@ -568,7 +573,7 @@ export async function runUpdate(): Promise<void> {
       console.warn(supervision
         ? "OpenCodex Desktop supervises the proxy; no CLI runtime was restored."
         : plan.notice);
-      return false;
+      return "vetoed";
     }
     if (!postUpdateLauncherUsable || !existsSync(postUpdateLauncher)) return false;
     // An ordinary owner: a stray sibling marker would otherwise mark it before any probe.
@@ -590,6 +595,51 @@ export async function runUpdate(): Promise<void> {
     }
     console.warn("⚠️  Recovery did not report a healthy proxy before its deadline; run 'ocx service repair' or 'ocx start'.");
     return false;
+  };
+  // #7043: before any detached start, ask launchd/systemd to restart the job it already holds,
+  // and count it only when the serving proxy is that job. Runs unleased: the manager's child
+  // cannot join this lease (#5760). `"unsettled"` means the manager may still finish the restart,
+  // so no competing proxy may be started.
+  const restartThroughServiceManager = async (): Promise<"supervised" | "failed" | "unsettled"> => {
+    if (!hasRestartableServiceManager()) return "failed";
+    console.log("🔁 Asking the service manager to restart the background service...");
+    const before = readUpdateRuntimeTarget(getRuntimePortPath(), capturedListen.hostname);
+    const staleRecordPid = before.kind === "target" ? before.target.pid : null;
+    const restarted = restartServiceManagerJob();
+    const unsettled = !restarted.ok && restarted.unsettled === true;
+    let verdict: ReturnType<typeof supervisionVerdict> | { kind: "failed"; reason: string };
+    if (!restarted.ok && !unsettled) {
+      verdict = { kind: "failed", reason: restarted.reason };
+    } else {
+      let servingPid: number | null = null;
+      const deadline = Date.now() + 30_000;
+      while (servingPid === null && Date.now() < deadline) {
+        const current = readUpdateRuntimeTarget(getRuntimePortPath(), capturedListen.hostname);
+        if (current.kind === "target" && current.target.port === capturedListen.port
+          && freshServingPid(current.target.pid, staleRecordPid) !== null
+          && await proxyIdentityAt(current.target.port, { hostname: current.target.hostname, expectedPid: current.target.pid },
+            { timeoutMs: 1500, deadlineAt: deadline, attempts: 1 })) servingPid = current.target.pid;
+        else await Bun.sleep(Math.min(100, Math.max(0, deadline - Date.now())));
+      }
+      verdict = supervisionVerdict({ servingPid, managerPid: readServiceManagerPid(), parentPid: pid => readParentPid(pid) });
+    }
+    if (verdict.kind === "supervised") {
+      console.log(`✅ Proxy is healthy on port ${capturedListen.port} under the service manager (pid ${verdict.managerPid}).`);
+      return "supervised";
+    }
+    if (unsettled) {
+      console.warn(unsettledManagerWarning(capturedListen.port));
+      return "unsettled";
+    }
+    console.warn(`⚠️  The service manager did not recover a supervised proxy: ${verdict.reason}.`);
+    return "failed";
+  };
+  /** Direct start as the last resort for a managed install: never reported as full recovery. */
+  const startUnsupervisedFallback = async (): Promise<"vetoed" | "started" | "failed"> => {
+    const started = await startProxyDirectly();
+    if (started === "vetoed") return "vetoed";
+    if (started) console.warn(unsupervisedRuntimeWarning(capturedListen.port));
+    return started ? "started" : "failed";
   };
   const recoverStoppedRuntime = async (reason: string): Promise<void> => {
     try {
@@ -626,6 +676,12 @@ export async function runUpdate(): Promise<void> {
           env: mutation.controlEnvironment({ ...process.env, OCX_BAKE_PORT: String(capturedListen.port) }),
         });
         if (service.status !== 0 || !isServiceViable()) {
+          // Ownership may have moved while the refresh ran unleased; only a recovery plan that
+          // still names the service may restart the manager's job.
+          if ((await planRecovery()).action === "service") {
+            const managed = await restartThroughServiceManager();
+            if (managed !== "failed") return;
+          }
           // The refresh ran unleased; a claim could have landed meanwhile, so take
           // the lease back before re-reading ownership and authorizing a direct start.
           mutation.reacquire();
@@ -635,7 +691,7 @@ export async function runUpdate(): Promise<void> {
             liveness: currentPackageRuntimeLiveness(), serviceInstalled: false,
             launcherUsable: postUpdateLauncherUsable && existsSync(postUpdateLauncher), hadRuntimeState,
           });
-          if (fallback.action === "direct") await startProxyDirectly();
+          if (fallback.action === "direct") await startUnsupervisedFallback();
           else console.warn("⚠️  Service recovery was not confirmed; no second proxy was started.");
         }
       } else if (recovery.action === "direct") {
@@ -911,6 +967,12 @@ export async function runUpdate(): Promise<void> {
           }
         }
         if (!serviceRefreshed || !serviceViable) {
+          // #7043: the manager first. Only a proxy it owns counts as recovered; everything
+          // below this line leaves an unsupervised runtime and exits non-zero.
+          if (!await mayRefresh()) return;
+          const managed = await restartThroughServiceManager();
+          if (managed === "supervised") return;
+          if (managed === "unsettled") return 1;
           // Repair normally avoids elevation for a healthy scheduler task, but a stale
           // definition may require guarded create/elevation. It can also fail — or exit 0
           // while leaving stale/missing assets that never start
@@ -965,7 +1027,9 @@ export async function runUpdate(): Promise<void> {
             console.warn(process.platform === "win32"
               ? "   Run 'ocx service repair' to refresh the background service."
               : "   Run 'ocx service repair' to refresh the background service and see why it failed.");
-            if (await startProxyDirectly()) console.log(`✅ Proxy is healthy on port ${capturedListen.port}.`);
+            // An ownership veto is the correct outcome, not a degraded one.
+            if (await startUnsupervisedFallback() === "vetoed") return;
+            return 1;
           }
         }
       } finally {

@@ -59,6 +59,7 @@ export const PROVIDER_MODEL_RENAME_ROLES = {
   newModelPolicy: "none",
   modelPreset: "none",
   contextWindow: "none",
+  inferContextWindow: "none",
   modelContextWindows: "record",
   modelContextTiers: "record",
   modelInputModalities: "record",

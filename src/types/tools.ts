@@ -25,6 +25,8 @@ export interface OcxTool {
   imageGeneration?: boolean;
   /** Synthetic video_gen tool: executed by the xAI video bridge sidecar. */
   videoGeneration?: boolean;
+  /** Synthetic advisor tool: the model's call is intercepted by the advisor sidecar (see src/advisor), never relayed to the client. */
+  advisor?: boolean;
 }
 
 /**

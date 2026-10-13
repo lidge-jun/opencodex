@@ -312,7 +312,7 @@ Messages, translated adapter and run-turn delivery, direct client encoders, and 
 image or video output. Calls outside current-turn declarations become `undeclared_tool_call` before client
 delivery or continuation state, with no successful terminal after refusal. With no declarations,
 every client tool call is refused; other declarations in the same turn remain usable. Internal
-hosted-search, vision, and image operations retain their existing execution behavior.
+hosted-search, vision, image and advisor operations retain their existing execution behavior.
 
 The ingresses carry the declaration as `clientDeclaredEmptyToolCatalog`
 (`src/server/chat-completions.ts`, `src/server/claude-messages.ts`) because translation can omit

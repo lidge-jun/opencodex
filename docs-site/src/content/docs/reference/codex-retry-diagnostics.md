@@ -41,6 +41,13 @@ account's remaining quota, and a predicted reset never releases the block on
 its own. The thresholds (by default `short` 90, `long` 98) are visible in the
 status payload and configurable through `codexMainAccountHardLockThresholds`.
 
+A hard-lock refusal is reported as `usage_limit_reached`, so Codex ends the turn
+and marks an active Goal as usage-limited instead of waiting for days in a
+retry. The suggested retry time is the main account's reset or, for a request
+that the account pool routed to the main account, the earliest known time another
+pool account recovers, whichever comes first (never sooner than one minute).
+Resume the Goal after that time; routing then picks an account from fresh state.
+
 ## Why the first reconnect row can be absent
 
 The public Codex `rust-v0.158.0-alpha.2.1` source gates the ordinary stream-retry

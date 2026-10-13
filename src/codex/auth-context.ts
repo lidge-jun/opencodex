@@ -66,7 +66,8 @@ import {
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS, NATIVE_RESERVE_MODEL } from "./catalog/native-models";
 import type { CodexCooldownSource, CodexQuotaScope } from "./routing";
 import { maskAccountId } from "../lib/privacy";
-import { formatErrorResponse } from "../bridge";
+import { formatErrorResponse, formatUsageLimitReachedResponse } from "../bridge";
+import { nextCodexPoolRecoveryAt } from "./routing/pool-recovery";
 import { CODEX_UNKNOWN_USAGE_SCORE, getAccountQuota, getMainPolicyQuota, parseUsageQuota, parseMainPolicyUsageQuota, setAccountQuotaFromParsed } from "./quota";
 import { codexAccountUsesCreditsAfterLimit, codexUsageLimitResetAt } from "./account-credit-use";
 import type { CodexAccountMode, OcxConfig, OcxProviderConfig } from "../types";
@@ -523,6 +524,11 @@ export class CodexAccountCooldownError extends Error {
 
 export class CodexMainAccountHardLockError extends CodexAccountCooldownError {
   readonly resetAt?: number;
+  /**
+   * Earliest known recovery of another stored pool account, set only when an unpinned pool
+   * selection reached main (#7046). A hint for the client's retry time; never routing input.
+   */
+  poolRecoveryAt?: number;
 
   constructor(resetAt?: number, thresholds = resolveMainAccountHardLockThresholds(undefined)) {
     super(MAIN_CODEX_ACCOUNT_ID, resetAt ?? 0);
@@ -935,16 +941,40 @@ export function cooldownErrorMessage(err: CodexAccountCooldownError, accountSele
     + ` (source: ${err.cooldownSource ?? "default"}).${recovery}`;
 }
 
+/**
+ * The soonest a main hard-lock refusal is worth retrying: a sibling pool account's known
+ * recovery when it comes first, otherwise main's own reset (#7046). A pool hint is held to at
+ * least {@link MAIN_HARD_LOCK_MIN_POOL_RETRY_MS} so a hold about to lapse cannot turn the refusal
+ * into a tight retry loop. Null when neither time is known and still in the future.
+ */
+export const MAIN_HARD_LOCK_MIN_POOL_RETRY_MS = 60_000;
+export function mainHardLockRetryAt(err: CodexMainAccountHardLockError, now: number): number | null {
+  const future = (value: number | undefined): number | null =>
+    typeof value === "number" && Number.isFinite(value) && value > now ? value : null;
+  const main = future(err.resetAt);
+  const pool = future(err.poolRecoveryAt);
+  const poolRetryAt = pool === null ? null : Math.max(pool, now + MAIN_HARD_LOCK_MIN_POOL_RETRY_MS);
+  if (poolRetryAt !== null && (main === null || poolRetryAt < main)) return poolRetryAt;
+  return main;
+}
+
 /** HTTP form of {@link cooldownErrorMessage}, carrying Retry-After for well-behaved clients. */
 export function cooldownErrorResponse(
   err: CodexAccountCooldownError,
   now = Date.now(),
   accountSelector?: string,
 ): Response {
+  if (err instanceof CodexMainAccountHardLockError) {
+    // A local policy refusal with a known horizon, not a transient throttle (#7046): Codex keeps
+    // a Goal active and sleeps through `rate_limit_exceeded` for the whole Retry-After, but
+    // stops on `usage_limit_reached` and shows the reset. The guard itself is unchanged.
+    const retryAt = mainHardLockRetryAt(err, now);
+    return formatUsageLimitReachedResponse(cooldownErrorMessage(err, accountSelector), retryAt,
+      retryAt === null ? null : Math.max(1, Math.ceil((retryAt - now) / 1000)));
+  }
   const res = formatErrorResponse(429, "rate_limit_error", cooldownErrorMessage(err, accountSelector));
   const headers = new Headers(res.headers);
-  if (!(err instanceof CodexReserveUnavailableError)
-    && (!(err instanceof CodexMainAccountHardLockError) || err.resetAt !== undefined)) {
+  if (!(err instanceof CodexReserveUnavailableError)) {
     headers.set("Retry-After", String(Math.max(1, Math.ceil((err.cooldownUntil - now) / 1000))));
   }
   return new Response(res.body, { status: res.status, headers });
@@ -1044,11 +1074,51 @@ async function awaitMainAccountPolicyBindingSettled(
   if (!settled) throw new CodexMainProfileDrainingError();
 }
 
+/**
+ * Resolve the credential for one Codex turn. A main hard-lock reached through unpinned pool
+ * selection is annotated with the earliest known pool recovery, so the refusal can name a retry
+ * time that a sibling account may meet (#7046).
+ */
 export async function resolveCodexAuthContext(
   headers: Headers,
   config: OcxConfig,
   mode: CodexAccountMode,
   options: ResolveCodexAuthContextOptions = {},
+): Promise<CodexAuthContext> {
+  // Filled by the inner resolver with the request's own fenced model evidence, so the hint obeys it.
+  const eligibility: RecoveryHintEligibility = {};
+  try {
+    return await resolveCodexAuthContextUnannotated(headers, config, mode, options, eligibility);
+  } catch (error) {
+    if (error instanceof CodexMainAccountHardLockError && mode === "pool" && options.accountId === undefined
+      && options.excludeAccountId !== MAIN_CODEX_ACCOUNT_ID
+      && !requiresReserveAuthorization(options.codexAuthPolicy ?? config, options.modelId, options.admission)
+      // An account-gated model with no resolved roster has no known eligible sibling.
+      && (!options.modelId || !ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(options.modelId)
+        || eligibility.modelEligibleAccountIds !== undefined)) {
+      try {
+        const now = Date.now();
+        error.poolRecoveryAt = nextCodexPoolRecoveryAt(config, now, codexQuotaScopeForModel(options.modelId), {
+          deniedAccountIds: eligibility.deniedModelAccountIds,
+          eligibleAccountIds: eligibility.modelEligibleAccountIds,
+        });
+      } catch { /* the hint is optional; the refusal stands without it */ }
+    }
+    throw error;
+  }
+}
+
+interface RecoveryHintEligibility {
+  modelEligibleAccountIds?: ReadonlySet<string>;
+  deniedModelAccountIds?: ReadonlySet<string>;
+}
+
+async function resolveCodexAuthContextUnannotated(
+  headers: Headers,
+  config: OcxConfig,
+  mode: CodexAccountMode,
+  options: ResolveCodexAuthContextOptions = {},
+  eligibility: RecoveryHintEligibility = {},
 ): Promise<CodexAuthContext> {
   const writerGeneration = captureConfigGeneration();
   const policy = options.codexAuthPolicy ?? config;
@@ -1256,6 +1326,7 @@ export async function resolveCodexAuthContext(
     const modelEligibleAccountIds = entitledAccountIds
       ? new Set([...entitledAccountIds].filter(candidate => !excludeAccountIds?.has(candidate)))
       : undefined;
+    eligibility.modelEligibleAccountIds = modelEligibleAccountIds;
     // #4768: the flagships stay visible and never fail closed, so this is evidence routing may
     // ORDER by, not evidence it may refuse on. Read synchronously from rosters discovery has
     // already gathered -- no upstream fetch joins the request path for the most commonly
@@ -1273,6 +1344,7 @@ export async function resolveCodexAuthContext(
       undefined,
       { excludeAccountIds },
     );
+    eligibility.deniedModelAccountIds = deniedModelAccountIds;
     const selectionOptions = {
       // Temporary switch drain keeps the candidate until the atomic claim rejects
       // it. Retained recovery makes main wholly ineligible so pool routing continues.
