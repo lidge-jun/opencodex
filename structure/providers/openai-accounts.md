@@ -292,8 +292,11 @@ wait signal does not release an acquired lock while the exchange runs.
 Successful refresh publishes access and refresh tokens and advances the
 credential mutation epoch before clearing grant rejection and applicable
 reauth quarantine, then throws the caller's abort reason if cancelled.
-Snapshot and identity checks still refuse an external auth writer, including
-when the caller also cancelled. Same-identity device reauth obtains a new login
+Snapshot and identity checks still refuse to overwrite an external auth writer,
+including when the caller also cancelled. A save refused after a successful
+exchange serves the new access token to that request only: auth.json stays as
+the other writer left it, the rotated grant is kept nowhere, and the old grant
+is not marked rejected (#2999). Same-identity device reauth obtains a new login
 grant rather than rotating the existing grant and keeps its pre-publication fence.
 
 ## Manual account pause and resume
