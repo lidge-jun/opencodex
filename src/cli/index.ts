@@ -807,31 +807,6 @@ function detachedStartEnvironment(): NodeJS.ProcessEnv {
   return withProcessRuntimeProvenance(env);
 }
 
-/** Shared tail for a proxy that answers: align Codex, the shell env and integrations with it. */
-async function finishEnsureOnLiveProxy(live: LiveProxy, config: ReturnType<typeof loadConfig>): Promise<boolean> {
-  const synced = await syncModelsToCodex(live.port).catch(e => {
-    console.error(`⚠️  Model sync skipped: ${e instanceof Error ? e.message : String(e)}`);
-    return null;
-  });
-  if (synced?.status === "skipped") {
-    console.log(startupLeftCodexNativeLine(synced.skippedReason ?? "desired_disabled"));
-  }
-  // Do not refresh Raycast from saved config here: live bind/admission and
-  // secondary-listener settings may differ. Explicit sync or server startup
-  // owns catalog refresh; ensure must not overwrite a working destination.
-  // Ensure env file exists for already-running proxy (may have been deleted or pre-dates this feature).
-  const systemEnv = await injectSystemEnv(live.port, config).catch(() => ({ injected: false }));
-  if (siblingOfLivePort() === null) reportShellHookFailure(reconcileShellHook(systemEnv.injected));
-  if (!systemEnv.injected) await syncClaudeAgentDefsAtProxyStartup(config, live.port);
-  // Refresh the Grok Build fence too (same contract as start). live.hostname is the
-  // hostname the running proxy actually bound — config.hostname may have drifted.
-  // The reconciler re-reads immediately before each client-file mutation; only
-  // the live proxy's observed bind host is safe to carry across this boundary.
-  if (siblingOfLivePort() === null) await reconcileEnsureDesiredIntegrations(live.port, { kind: "live", hostname: live.hostname });
-  console.log(`✅ Proxy running on port ${live.port}`);
-  return true;
-}
-
 async function handleEnsure(options: { existingIsSuccess?: boolean; forceStart?: boolean; onSpawn?: (child: ReturnType<typeof spawn>) => void } = {}): Promise<boolean> {
   const owner = await findProxyOwnerBeforeJournalRecovery({ probeConfiguredPort: true });
   if (!owner.live && !(await markCrossHomeSibling())) reconcileStartupJournal();
@@ -842,17 +817,44 @@ async function handleEnsure(options: { existingIsSuccess?: boolean; forceStart?:
     console.log("Codex autostart is disabled.");
     return false;
   }
-  const live = owner.live;
-  if (live && options.existingIsSuccess === false) {
-    console.error("Proxy appeared while restart was confirming absence; no start was attempted.");
-    return false;
+  let live = owner.live;
+  if (!live) {
+    // OpenCodex Desktop owns or runs this proxy: wait for it or start it, never a competing CLI proxy (#6971).
+    const desktopStart = await runDesktopColdStart(productionDesktopColdStartDeps(timeoutMs => waitForProxy(timeoutMs)));
+    if (desktopStart.kind === "failed") { console.error(`❌ ${desktopStart.message}`); process.exitCode = 1; return false; }
+    // Also for restart: the proxy was absent and Desktop started it, so the live tail below applies.
+    if (desktopStart.kind === "live") live = desktopStart.live;
   }
-  if (live) return finishEnsureOnLiveProxy(live, config);
-  // OpenCodex Desktop owns or runs this proxy: wait for it or start it, never a competing CLI proxy (#6971).
-  const desktopStart = await runDesktopColdStart(productionDesktopColdStartDeps(timeoutMs => waitForProxy(timeoutMs)));
-  if (desktopStart.kind === "failed") { console.error(`❌ ${desktopStart.message}`); process.exitCode = 1; return false; }
-  // Also for restart (existingIsSuccess=false): the proxy was absent and Desktop started it on request.
-  if (desktopStart.kind === "live") return finishEnsureOnLiveProxy(desktopStart.live, config);
+  if (live) {
+    if (options.existingIsSuccess === false && live === owner.live) {
+      console.error("Proxy appeared while restart was confirming absence; no start was attempted.");
+      return false;
+    }
+      const synced = await syncModelsToCodex(live.port).catch(e => {
+        console.error(`⚠️  Model sync skipped: ${e instanceof Error ? e.message : String(e)}`);
+        return null;
+      });
+      if (synced?.status === "skipped") {
+        console.log(startupLeftCodexNativeLine(synced.skippedReason ?? "desired_disabled"));
+      }
+      // Do not refresh Raycast from saved config here: live bind/admission and
+      // secondary-listener settings may differ. Explicit sync or server startup
+      // owns catalog refresh; ensure must not overwrite a working destination.
+      // Ensure env file exists for already-running proxy (may have been deleted or pre-dates this feature).
+      const systemEnv = await injectSystemEnv(live.port, config).catch(() => ({ injected: false }));
+      if (siblingOfLivePort() === null) reportShellHookFailure(reconcileShellHook(systemEnv.injected));
+      if (!systemEnv.injected) await syncClaudeAgentDefsAtProxyStartup(config, live.port);
+      // Refresh the Grok Build fence too (same contract as start). live.hostname is the
+      // hostname the running proxy actually bound — config.hostname may have drifted.
+      // The reconciler re-reads immediately before each client-file mutation; only
+      // the live proxy's observed bind host is safe to carry across this boundary.
+      if (siblingOfLivePort() === null) await reconcileEnsureDesiredIntegrations(
+        live.port,
+        { kind: "live", hostname: live.hostname },
+      );
+      console.log(`✅ Proxy running on port ${live.port}`);
+      return true;
+    }
 
   const pinPort = config.port ?? 10100;
   const child = spawn(process.execPath, startArgv(pinPort > 0 ? pinPort : undefined), {
