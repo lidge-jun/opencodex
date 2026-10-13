@@ -2452,7 +2452,7 @@ export const pt: Record<TKey, string> = {
   "codexAuth.mainHardLockMonitoring": "Proteção ativa · monitorando",
   "codexAuth.mainExternalUsageWarning": "Possível uso fora do opencodex. O bloqueio pode não impedir o esgotamento.",
   "codexAuth.mainHardLockManage": "Ver configuração de proteção",
-  "codexAuth.ultraFastDesc": "Impede que um nível de serviço ultrarrápido configurado por você seja removido quando o catálogo é regenerado e o nomeia nos logs de requisição. Não adiciona o Ultra Fast ao seletor de modelos: o upstream anuncia apenas o Fast, então uma linha no seletor ofereceria uma velocidade que a conexão não consegue entregar.",
+  "codexAuth.ultraFastDesc": "Adiciona a opção de velocidade Ultrafast ao GPT-6 Astra e ao GPT-6.1 Sol no seletor de modelos do Codex e impede que um nível de serviço ultrafast configurado por você em modelos roteados seja removido quando o catálogo é regenerado. O Ultrafast exige um plano do ChatGPT elegível; ative apenas se o seu plano o incluir.",
   "codexAuth.ultraFastLoadFailed": "Não foi possível ler a configuração do Ultra Fast.",
   "codexAuth.ultraFastEnabled": "Nível Ultra Fast ativado",
   "codexAuth.ultraFastDisabled": "Nível Ultra Fast desativado",

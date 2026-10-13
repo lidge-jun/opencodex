@@ -2405,7 +2405,7 @@ export const fr: Record<TKey, string> = {
   "codexAuth.mainHardLockMonitoring": "Protection active · surveillance",
   "codexAuth.mainExternalUsageWarning": "Utilisation possible hors opencodex. Le blocage peut ne pas empêcher l’épuisement du quota.",
   "codexAuth.mainHardLockManage": "Voir le réglage de protection",
-  "codexAuth.ultraFastDesc": "Empêche la suppression d’un niveau de service ultrafast que vous avez configuré vous-même lors de la régénération du catalogue, et le nomme dans les journaux de requêtes. Ultra Fast n’est pas ajouté au sélecteur de modèles : l’amont n’annonce que Fast, une entrée proposerait donc une vitesse que le transport ne peut pas fournir.",
+  "codexAuth.ultraFastDesc": "Ajoute l’option de vitesse Ultrafast à GPT-6 Astra et GPT-6.1 Sol dans le sélecteur de modèles de Codex, et empêche la suppression d’un niveau de service ultrafast que vous avez configuré vous-même sur des modèles routés lors de la régénération du catalogue. Ultrafast nécessite un forfait ChatGPT éligible ; activez-le uniquement si votre forfait l’inclut.",
   "codexAuth.ultraFastLoadFailed": "Impossible de lire le réglage Ultra Fast.",
   "codexAuth.ultraFastEnabled": "Niveau Ultra Fast activé",
   "codexAuth.ultraFastDisabled": "Niveau Ultra Fast désactivé",

@@ -2478,7 +2478,7 @@ export const en = {
   "codexAuth.mainHardLockMonitoring": "Protection on · monitoring",
   "codexAuth.mainExternalUsageWarning": "Possible usage outside opencodex. The lock may not prevent exhaustion.",
   "codexAuth.mainHardLockManage": "View protection setting",
-  "codexAuth.ultraFastDesc": "Keeps an ultrafast service tier you configured yourself from being stripped when the catalog is regenerated, and names it in the request logs. It does not add Ultra Fast to the model picker: upstream advertises only Fast, so a picker row would offer a speed the wire cannot deliver.",
+  "codexAuth.ultraFastDesc": "Adds the Ultrafast speed choice to GPT-6 Astra and GPT-6.1 Sol in the Codex model picker, and keeps an ultrafast tier you configured yourself on routed models when the catalog is regenerated. Ultrafast requires an eligible ChatGPT plan; turn this on only if your plan includes it.",
   "codexAuth.ultraFastLoadFailed": "Could not read the Ultra Fast setting.",
   "codexAuth.ultraFastEnabled": "Ultra Fast tier enabled",
   "codexAuth.ultraFastDisabled": "Ultra Fast tier disabled",

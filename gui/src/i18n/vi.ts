@@ -2426,7 +2426,7 @@ export const vi: Record<TKey, string> = {
   "codexAuth.mainHardLockMonitoring": "Bảo vệ đang bật · đang theo dõi",
   "codexAuth.mainExternalUsageWarning": "Có thể có sử dụng ngoài opencodex. Việc chặn có thể không ngăn hết hạn mức.",
   "codexAuth.mainHardLockManage": "Xem thiết lập bảo vệ",
-  "codexAuth.ultraFastDesc": "Ngăn không cho dịch vụ cấp độ Ultra Fast mà bạn đã thiết lập bị loại bỏ khi catalog được tạo lại, và đưa tên nó vào các request log. Nó không thêm Ultra Fast vào bộ chọn model: upstream chỉ quảng cáo Fast, do đó mục chọn sẽ đưa ra tốc độ mà đường truyền không thể đáp ứng.",
+  "codexAuth.ultraFastDesc": "Thêm lựa chọn tốc độ Ultrafast cho GPT-6 Astra và GPT-6.1 Sol trong bộ chọn model của Codex, đồng thời ngăn dịch vụ cấp độ ultrafast mà bạn tự thiết lập trên các model định tuyến bị loại bỏ khi catalog được tạo lại. Ultrafast yêu cầu gói ChatGPT đủ điều kiện; chỉ bật khi gói của bạn bao gồm nó.",
   "codexAuth.ultraFastLoadFailed": "Không thể đọc thiết lập Ultra Fast.",
   "codexAuth.ultraFastEnabled": "Cấp độ Ultra Fast đã bật",
   "codexAuth.ultraFastDisabled": "Cấp độ Ultra Fast đã tắt",

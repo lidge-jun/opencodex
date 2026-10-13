@@ -1783,7 +1783,7 @@ export const zhTW: Record<TKey, string> = {
   "codexAuth.mainHardLockMonitoring": "保護已開啟 · 監測中",
   "codexAuth.mainExternalUsageWarning": "可能存在 opencodex 以外的使用。封鎖可能無法避免額度耗盡。",
   "codexAuth.mainHardLockManage": "查看保護設定",
-  "codexAuth.ultraFastDesc": "讓你自行設定的 ultrafast 服務層級在重新產生目錄時不被移除，並在請求記錄中寫下該層級名稱。它不會把 Ultra Fast 加入模型選擇器：上游只公布 Fast，選擇器出現該項等於讓使用者挑一個實際無法提供的速度。",
+  "codexAuth.ultraFastDesc": "在 Codex 模型選擇器中為 GPT-6 Astra 與 GPT-6.1 Sol 加入 Ultrafast 速度選項，並讓你在路由模型上自行設定的 ultrafast 服務層級在重新產生目錄時不被移除。Ultrafast 需要符合資格的 ChatGPT 方案，僅在你的方案包含它時開啟。",
   "codexAuth.ultraFastLoadFailed": "無法讀取 Ultra Fast 設定。",
   "codexAuth.ultraFastEnabled": "已啟用 Ultra Fast 層級",
   "codexAuth.ultraFastDisabled": "已停用 Ultra Fast 層級",

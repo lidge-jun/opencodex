@@ -2429,7 +2429,7 @@ export const tr: Record<TKey, string> = {
   "codexAuth.mainHardLockMonitoring": "Koruma açık · izleniyor",
   "codexAuth.mainExternalUsageWarning": "opencodex dışında kullanım olabilir. Engel, kotanın tükenmesini önlemeyebilir.",
   "codexAuth.mainHardLockManage": "Koruma ayarını göster",
-  "codexAuth.ultraFastDesc": "Kendi yapılandırdığınız ultrafast hizmet katmanının katalog yeniden oluşturulurken silinmesini önler ve istek günlüklerinde bu katmanın adını yazar. Ultra Fast’i model seçicisine eklemez: üst kaynak yalnızca Fast duyurur, bu yüzden bir satır eklemek hattın veremeyeceği bir hızı seçtirmek olurdu.",
+  "codexAuth.ultraFastDesc": "Codex model seçicisinde GPT-6 Astra ve GPT-6.1 Sol için Ultrafast hız seçeneğini ekler ve yönlendirilen modellerde kendi yapılandırdığınız ultrafast hizmet katmanının katalog yeniden oluşturulurken silinmesini önler. Ultrafast uygun bir ChatGPT planı gerektirir; yalnızca planınız içeriyorsa açın.",
   "codexAuth.ultraFastLoadFailed": "Ultra Fast ayarı okunamadı.",
   "codexAuth.ultraFastEnabled": "Ultra Fast katmanı etkinleştirildi",
   "codexAuth.ultraFastDisabled": "Ultra Fast katmanı devre dışı bırakıldı",
