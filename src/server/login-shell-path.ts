@@ -22,6 +22,8 @@ const END = "__OCX_LOGIN_PATH_END__";
 export const LOGIN_SHELL_PATH_TIMEOUT_MS = 5_000;
 export const LOGIN_SHELL_PATH_CACHE_MS = 5 * 60_000;
 const MAX_OUTPUT_BYTES = 64 * 1024;
+/** After the shell exits, how long its stdout may stay open before a background job is assumed to hold it. */
+const STDOUT_DRAIN_MS = 500;
 
 export function loginShellPathArgs(shell: string): string[] {
   const print = basename(shell) === "fish"
@@ -106,22 +108,32 @@ function probe(shell: string, env: NodeJS.ProcessEnv, deps: LoginShellPathDeps):
     } catch { resolve(null); return; }
     let output = "";
     let settled = false;
-    const finish = (value: string | null) => {
+    let exitCode: number | null = null;
+    let drain: ReturnType<typeof setTimeout> | undefined;
+    const finish = (value: string | null, killGroupMembers: boolean) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      // Startup files can leave background jobs in the group; none of them belong to OpenCodex.
-      if (child.pid) killGroup(child.pid);
+      clearTimeout(drain);
+      // A hung startup file, or a background job still holding the pipe, is killed with its group.
+      // A shell that exited and closed its output is left alone: its group id may already be free.
+      if (killGroupMembers && child.pid) killGroup(child.pid);
       resolve(value);
     };
-    const timer = setTimeout(() => finish(null), deps.timeoutMs ?? LOGIN_SHELL_PATH_TIMEOUT_MS);
+    const timer = setTimeout(() => finish(null, true), deps.timeoutMs ?? LOGIN_SHELL_PATH_TIMEOUT_MS);
     child.stdout?.setEncoding("utf8");
     child.stdout?.on("data", (chunk: string) => {
       output += chunk;
-      if (output.length > MAX_OUTPUT_BYTES) finish(null);
+      if (output.length > MAX_OUTPUT_BYTES) finish(null, true);
     });
-    child.once("error", () => finish(null));
-    child.once("exit", code => finish(code === 0 ? parseLoginShellPath(output) : null));
+    const parsed = () => exitCode === 0 ? parseLoginShellPath(output) : null;
+    child.once("error", () => finish(null, true));
+    // Parse only after stdout closes: `exit` can arrive before the last chunk.
+    child.once("close", code => { exitCode ??= code; finish(parsed(), false); });
+    child.once("exit", code => {
+      exitCode = code;
+      drain = setTimeout(() => finish(parsed(), true), STDOUT_DRAIN_MS);
+    });
   });
 }
 

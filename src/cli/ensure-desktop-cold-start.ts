@@ -14,41 +14,41 @@
  *   where that is possible, then wait. Elsewhere, fail with guidance. A missing Desktop process
  *   never authorizes a CLI proxy by itself; handing ownership to the CLI stays an explicit
  *   `ocx service install` consent step.
+ * - Ownership or the process list that cannot be read is not evidence of absence: refuse.
  * - No claim and no running app: the ordinary CLI cold start.
  *
- * Concurrent shim launches share one Desktop launch through a short-lived lease file; every
- * caller then waits on the same readiness probe.
+ * Concurrent shim launches share one Desktop launch through a lease file held by a live process;
+ * every caller then waits on the same readiness probe.
  */
 import { execFileSync } from "node:child_process";
-import { closeSync, openSync, statSync, unlinkSync, writeSync } from "node:fs";
-import { join, win32 } from "node:path";
+import { randomUUID } from "node:crypto";
+import { closeSync, linkSync, openSync, readdirSync, readFileSync, readlinkSync, renameSync, unlinkSync, writeSync } from "node:fs";
+import { basename, dirname, join, win32 } from "node:path";
 import { getConfigDir } from "../config/paths";
 import { resolveServiceOwnership } from "../service/state";
 
 export type DesktopProcessState = "running" | "absent" | "unknown";
+export type DesktopOwnershipState = "desktop" | "other" | "unknown";
 
 export type EnsureColdStartPlan =
   | { kind: "spawn-cli" }
   | { kind: "wait-desktop" }
   | { kind: "launch-desktop" }
-  | { kind: "refuse" };
+  | { kind: "refuse"; reason: "desktop-unlaunchable" | "unverified" };
 
 export function planEnsureColdStart(facts: {
-  desktopOwned: boolean;
+  ownership: DesktopOwnershipState;
   desktopProcess: DesktopProcessState;
   platform: NodeJS.Platform;
 }): EnsureColdStartPlan {
   if (facts.desktopProcess === "running") return { kind: "wait-desktop" };
-  if (!facts.desktopOwned) return { kind: "spawn-cli" };
-  // An unverifiable process list is treated as absence for the claimed owner: relaunching through
-  // LaunchServices is idempotent, and nothing here can fall back to a CLI proxy.
-  return facts.platform === "darwin" ? { kind: "launch-desktop" } : { kind: "refuse" };
+  if (facts.ownership === "unknown" || facts.desktopProcess === "unknown") return { kind: "refuse", reason: "unverified" };
+  if (facts.ownership === "other") return { kind: "spawn-cli" };
+  return facts.platform === "darwin" ? { kind: "launch-desktop" } : { kind: "refuse", reason: "desktop-unlaunchable" };
 }
 
 /** Desktop restart backoff tops out at 30 s; the budget covers it plus a cold sidecar start. */
 export const DESKTOP_COLD_START_TIMEOUT_MS = 40_000;
-/** A launch lease older than this belongs to an ensure that is no longer waiting. */
-export const DESKTOP_LAUNCH_LEASE_MS = DESKTOP_COLD_START_TIMEOUT_MS + 5_000;
 
 export type DesktopColdStartResult<T> =
   | { kind: "cli" }
@@ -57,7 +57,7 @@ export type DesktopColdStartResult<T> =
 
 export interface DesktopColdStartDeps<T> {
   platform: NodeJS.Platform;
-  desktopOwned: () => boolean;
+  ownership: () => DesktopOwnershipState;
   desktopProcess: () => DesktopProcessState;
   /** Start the Desktop app hidden. Returns false when the request could not be made. */
   launchDesktop: () => boolean;
@@ -71,13 +71,15 @@ const QUIT_HINT = "To run the proxy from this CLI instead, quit OpenCodex and ru
 
 export async function runDesktopColdStart<T>(deps: DesktopColdStartDeps<T>): Promise<DesktopColdStartResult<T>> {
   const plan = planEnsureColdStart({
-    desktopOwned: deps.desktopOwned(),
+    ownership: deps.ownership(),
     desktopProcess: deps.desktopProcess(),
     platform: deps.platform,
   });
   if (plan.kind === "spawn-cli") return { kind: "cli" };
   if (plan.kind === "refuse") {
-    return { kind: "failed", message: `OpenCodex Desktop manages this proxy but is not running. Open OpenCodex to start it. ${QUIT_HINT}` };
+    return { kind: "failed", message: plan.reason === "unverified"
+      ? "Could not verify whether OpenCodex Desktop manages this proxy, so no CLI proxy was started. Run `ocx doctor`, or start the proxy explicitly with `ocx start`."
+      : `OpenCodex Desktop manages this proxy but is not running. Open OpenCodex to start it. ${QUIT_HINT}` };
   }
   if (plan.kind === "launch-desktop") {
     const release = deps.acquireLaunchLease();
@@ -106,36 +108,61 @@ type Execute = (command: string, args: string[], timeoutMs: number) => string;
 
 function execute(command: string, args: string[], timeoutMs: number): string {
   return execFileSync(command, args, {
-    encoding: "utf8", timeout: timeoutMs, maxBuffer: 256 * 1024, stdio: ["ignore", "pipe", "ignore"], windowsHide: true,
+    encoding: "utf8", timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"], windowsHide: true,
   });
 }
 
-/** Whether this user has an OpenCodex Desktop app process, by image name. */
-export function inspectDesktopProcess(options: {
+/** A Desktop app executable: `opencodex-desktop`, inside an app bundle's Contents/MacOS on macOS. */
+export function isDesktopExecutable(path: string, platform: NodeJS.Platform): boolean {
+  if (basename(path) !== "opencodex-desktop") return false;
+  return platform !== "darwin" || (basename(dirname(path)) === "MacOS" && basename(dirname(dirname(path))) === "Contents");
+}
+
+export interface DesktopProcessOptions {
   platform?: NodeJS.Platform;
   uid?: number;
   env?: NodeJS.ProcessEnv;
   run?: Execute;
-} = {}): DesktopProcessState {
+  /** Linux: executable paths of this user's readable processes. */
+  linuxExecutables?: () => string[];
+}
+
+function linuxExecutables(): string[] {
+  const paths: string[] = [];
+  for (const entry of readdirSync("/proc")) {
+    if (!/^\d+$/.test(entry)) continue;
+    // Another user's process, or one that exited mid-scan, is simply not ours.
+    try { paths.push(readlinkSync(`/proc/${entry}/exe`).replace(/ \(deleted\)$/, "")); } catch { /* skip */ }
+  }
+  return paths;
+}
+
+/** Whether this user runs an OpenCodex Desktop app, judged by executable identity, never arguments. */
+export function inspectDesktopProcess(options: DesktopProcessOptions = {}): DesktopProcessState {
   const platform = options.platform ?? process.platform;
   const run = options.run ?? execute;
   try {
+    if (platform === "linux") {
+      return (options.linuxExecutables ?? linuxExecutables)().some(path => isDesktopExecutable(path, platform)) ? "running" : "absent";
+    }
+    if (platform === "darwin") {
+      const uid = options.uid ?? process.getuid?.();
+      if (uid === undefined) return "unknown";
+      // macOS reports the full executable path as comm.
+      const output = run("/bin/ps", ["-U", String(uid), "-o", "comm="], 3_000);
+      return output.split("\n").some(line => isDesktopExecutable(line.trim(), platform)) ? "running" : "absent";
+    }
     if (platform === "win32") {
       const env = options.env ?? process.env;
       const root = env.SystemRoot ?? env.windir ?? "C:\\Windows";
-      const output = run(win32.join(root, "System32", "tasklist.exe"),
-        ["/FI", "IMAGENAME eq opencodex-desktop.exe", "/FO", "CSV", "/NH"], 3_000);
+      const user = env.USERNAME?.trim();
+      const args = ["/FI", "IMAGENAME eq opencodex-desktop.exe", ...(user ? ["/FI", `USERNAME eq ${user}`] : []), "/FO", "CSV", "/NH"];
+      const output = run(win32.join(root, "System32", "tasklist.exe"), args, 3_000);
       return /^"opencodex-desktop\.exe",/im.test(output) ? "running" : "absent";
     }
-    if (platform !== "darwin" && platform !== "linux") return "absent";
-    const uid = options.uid ?? process.getuid?.();
-    if (uid === undefined) return "unknown";
-    // Linux truncates comm to 15 characters, so match the executable path in the command line.
-    run("pgrep", ["-U", String(uid), "-f", "(^|/)opencodex-desktop( |$)"], 1_500);
-    return "running";
-  } catch (error) {
-    // pgrep exits 1 when nothing matched; anything else is an unanswered question.
-    return (error as { status?: unknown })?.status === 1 && platform !== "win32" ? "absent" : "unknown";
+    return "absent";
+  } catch {
+    return "unknown";
   }
 }
 
@@ -148,27 +175,55 @@ export function launchDesktopApp(options: { platform?: NodeJS.Platform; run?: Ex
   } catch { return false; }
 }
 
-/** One Desktop launch per cold start; a stale lease from a dead caller is replaced once. */
-export function acquireDesktopLaunchLease(configDir: string, now: () => number = Date.now): (() => void) | null {
+function processAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return (error as NodeJS.ErrnoException | null)?.code === "EPERM"; }
+}
+
+function readHolder(path: string): number | null {
+  const pid = Number(readFileSync(path, "utf8").trim());
+  return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+}
+
+/**
+ * One Desktop launch per cold start. The lease names its holder's pid and stays valid while that
+ * process lives, so a slow launch never expires under its owner. A dead holder's lease is reclaimed
+ * by renaming it away, which only one contender can do; a contender that turns out to have moved a
+ * live peer's lease puts it back and waits instead of launching.
+ */
+export function acquireDesktopLaunchLease(
+  configDir: string,
+  io: { pid?: number; alive?: (pid: number) => boolean } = {},
+): (() => void) | null {
   const path = join(configDir, "desktop-launch.lease");
-  for (let attempt = 0; attempt < 2; attempt++) {
+  const pid = io.pid ?? process.pid;
+  const alive = io.alive ?? processAlive;
+  for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const fd = openSync(path, "wx", 0o600);
-      try { writeSync(fd, String(process.pid)); } finally { closeSync(fd); }
-      const created = statSync(path);
+      try { writeSync(fd, String(pid)); } finally { closeSync(fd); }
       return () => {
-        try {
-          const current = statSync(path);
-          if (current.ino === created.ino && current.dev === created.dev) unlinkSync(path);
-        } catch { /* already gone */ }
+        try { if (readHolder(path) === pid) unlinkSync(path); } catch { /* already gone */ }
       };
     } catch (error) {
       // An unwritable lease must not suppress the launch; it only loses deduplication.
       if ((error as { code?: unknown })?.code !== "EEXIST") return () => {};
-      try {
-        if (now() - statSync(path).mtimeMs < DESKTOP_LAUNCH_LEASE_MS) return null;
-        unlinkSync(path);
-      } catch { return null; }
+    }
+    try {
+      const holder = readHolder(path);
+      if (holder !== null && alive(holder)) return null;
+      const moved = `${path}.${randomUUID()}`;
+      renameSync(path, moved);
+      const movedHolder = readHolder(moved);
+      if (movedHolder !== null && alive(movedHolder)) {
+        try { linkSync(moved, path); } catch { /* a third caller holds it now */ }
+        unlinkSync(moved);
+        return null;
+      }
+      unlinkSync(moved);
+    } catch (error) {
+      // Lost the reclaim race to another contender: try to create again.
+      if ((error as { code?: unknown })?.code !== "ENOENT") return null;
     }
   }
   return null;
@@ -178,11 +233,12 @@ export function acquireDesktopLaunchLease(configDir: string, now: () => number =
 export function productionDesktopColdStartDeps<T>(waitForProxy: (timeoutMs: number) => Promise<T | null>): DesktopColdStartDeps<T> {
   return {
     platform: process.platform,
-    desktopOwned: () => {
+    ownership: () => {
       try {
         const owner = resolveServiceOwnership();
-        return owner.kind === "owned" && owner.ownership.owner === "desktop";
-      } catch { return false; }
+        if (owner.kind === "unknown") return "unknown";
+        return owner.kind === "owned" && owner.ownership.owner === "desktop" ? "desktop" : "other";
+      } catch { return "unknown"; }
     },
     desktopProcess: () => inspectDesktopProcess(),
     launchDesktop: () => launchDesktopApp(),
@@ -191,4 +247,3 @@ export function productionDesktopColdStartDeps<T>(waitForProxy: (timeoutMs: numb
     info: line => console.log(line),
   };
 }
-

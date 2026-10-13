@@ -851,6 +851,7 @@ async function handleEnsure(options: { existingIsSuccess?: boolean; forceStart?:
   // OpenCodex Desktop owns or runs this proxy: wait for it or start it, never a competing CLI proxy (#6971).
   const desktopStart = await runDesktopColdStart(productionDesktopColdStartDeps(timeoutMs => waitForProxy(timeoutMs)));
   if (desktopStart.kind === "failed") { console.error(`❌ ${desktopStart.message}`); process.exitCode = 1; return false; }
+  // Also for restart (existingIsSuccess=false): the proxy was absent and Desktop started it on request.
   if (desktopStart.kind === "live") return finishEnsureOnLiveProxy(desktopStart.live, config);
 
   const pinPort = config.port ?? 10100;

@@ -14,8 +14,11 @@ import {
 
 afterEach(() => resetLoginShellPathCacheForTests());
 
-/** A fake shell: prints `stdout`, then exits with `code` unless it hangs. */
-function fakeShell(stdout: string, options: { code?: number; hang?: boolean } = {}) {
+/**
+ * A fake shell: prints `stdout`, then exits with `code` and closes its output, unless it hangs.
+ * `exitFirst` emits exit before the output arrives; `holdOpen` exits but never closes stdout.
+ */
+function fakeShell(stdout: string, options: { code?: number; hang?: boolean; exitFirst?: boolean; holdOpen?: boolean } = {}) {
   const calls: { command: string; args: string[]; env: NodeJS.ProcessEnv; detached: unknown }[] = [];
   const spawn = ((command: string, args: string[], spawnOptions: { env: NodeJS.ProcessEnv; detached: unknown }) => {
     calls.push({ command, args, env: spawnOptions.env, detached: spawnOptions.detached });
@@ -23,8 +26,14 @@ function fakeShell(stdout: string, options: { code?: number; hang?: boolean } = 
     const out = new PassThrough();
     Object.assign(child, { stdout: out, pid: 4242 });
     queueMicrotask(() => {
+      const code = options.code ?? 0;
+      if (options.hang) { out.write(stdout); return; }
+      if (options.exitFirst) child.emit("exit", code);
       out.write(stdout);
-      if (!options.hang) setTimeout(() => child.emit("exit", options.code ?? 0), 0);
+      setTimeout(() => {
+        if (!options.exitFirst) child.emit("exit", code);
+        if (!options.holdOpen) child.emit("close", code);
+      }, 5);
     });
     return child;
   }) as never;
@@ -35,7 +44,7 @@ const framed = (path: string) => `motd noise\n__OCX_LOGIN_PATH_BEGIN__${path}__O
 
 describe("login-shell PATH for the dashboard shim installer (#6971)", () => {
   test("only the framed PATH is trusted, and every entry must be absolute", () => {
-    expect(parseLoginShellPath(framed("/opt/homebrew/bin:/Users/me/.bun/bin:/usr/bin"))).toBe("/opt/homebrew/bin:/Users/me/.bun/bin:/usr/bin");
+    expect(parseLoginShellPath(framed("/opt/homebrew/bin:/opt/bun/bin:/usr/bin"))).toBe("/opt/homebrew/bin:/opt/bun/bin:/usr/bin");
     expect(parseLoginShellPath("no markers /opt/homebrew/bin")).toBeNull();
     expect(parseLoginShellPath(framed("relative/bin:/usr/bin"))).toBeNull();
     expect(parseLoginShellPath(framed(""))).toBeNull();
@@ -54,16 +63,29 @@ describe("login-shell PATH for the dashboard shim installer (#6971)", () => {
   test("a successful read runs a detached login shell with a minimal env and is cached", async () => {
     const shell = fakeShell(framed("/opt/homebrew/bin:/usr/bin"));
     const killed: number[] = [];
-    const env = { HOME: "/Users/me", PATH: "/usr/bin:/bin", OPENAI_API_KEY: "secret" };
+    const env = { HOME: "/var/empty/tester", PATH: "/usr/bin:/bin", OPENAI_API_KEY: "secret" };
     const merged = await withLoginShellPath(env, { platform: "darwin", shell: "/bin/zsh", spawn: shell.spawn, killGroup: pid => killed.push(pid) });
     expect(merged.PATH).toBe("/opt/homebrew/bin:/usr/bin:/bin");
     expect(merged.OPENAI_API_KEY).toBe("secret");
     expect(shell.calls).toHaveLength(1);
     expect(shell.calls[0]!.detached).toBe(true);
     expect(shell.calls[0]!.env.OPENAI_API_KEY).toBeUndefined();
-    expect(killed).toEqual([4242]);
+    // A shell that exited and closed its output is not signalled: its group id may be free.
+    expect(killed).toEqual([]);
     await readLoginShellPath({ platform: "darwin", shell: "/bin/zsh", spawn: shell.spawn, killGroup: () => {} });
     expect(shell.calls).toHaveLength(1);
+  });
+
+  test("output that arrives after exit is still read before parsing", async () => {
+    const shell = fakeShell(framed("/opt/homebrew/bin"), { exitFirst: true });
+    expect(await readLoginShellPath({ platform: "darwin", shell: "/bin/zsh", spawn: shell.spawn, killGroup: () => {} })).toBe("/opt/homebrew/bin");
+  });
+
+  test("a background job holding the pipe after exit is killed with the group, keeping the PATH read", async () => {
+    const shell = fakeShell(framed("/opt/homebrew/bin"), { holdOpen: true });
+    const killed: number[] = [];
+    expect(await readLoginShellPath({ platform: "darwin", shell: "/bin/zsh", spawn: shell.spawn, killGroup: pid => killed.push(pid) })).toBe("/opt/homebrew/bin");
+    expect(killed).toEqual([4242]);
   });
 
   test("a hung startup file is killed at the deadline and the failure is cached", async () => {
