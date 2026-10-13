@@ -4,6 +4,8 @@
 import { describe, expect, test } from "bun:test";
 import { planProtocol, type ProtocolPlanInput } from "../../src/protocols/plan";
 import { antigravityDirectDeclineReason, isAntigravityRoute } from "../../src/server/antigravity-direct-eligibility";
+import { cacheDiagnosticsObserving } from "../../src/server/request-log";
+import "../../src/usage/cache-diagnostic";
 import type { RouteResult } from "../../src/router";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 
@@ -102,6 +104,19 @@ describe("antigravityDirectDeclineReason", () => {
   test("an observing cache diagnostic recorder keeps the bridge", () => {
     expect(antigravityDirectDeclineReason(route(), chat(), config(), { cacheDiagnostics: true })).toBe("bridge-only-policy");
     expect(antigravityDirectDeclineReason(route(), chat(), config(), { cacheDiagnostics: false })).toBeUndefined();
+  });
+
+  test("the recorder observes only when cache debugging is on, not merely because it is loaded", () => {
+    const previous = process.env.OPENCODEX_CACHE_DEBUG;
+    try {
+      delete process.env.OPENCODEX_CACHE_DEBUG;
+      expect(cacheDiagnosticsObserving()).toBe(false);
+      process.env.OPENCODEX_CACHE_DEBUG = "1";
+      expect(cacheDiagnosticsObserving()).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env.OPENCODEX_CACHE_DEBUG;
+      else process.env.OPENCODEX_CACHE_DEBUG = previous;
+    }
   });
 });
 
