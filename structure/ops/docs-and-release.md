@@ -236,9 +236,9 @@ CI setup uses the [Bun runtime and test-runner pins](../runtime.md#bun-runtime-a
 `scripts/test.ts` owns `SERIAL_FULL_SUITE_FILES`, the shared process-isolation roster. Local
 full-suite runs, both macOS paths, and `scripts/ci/run-bun-test-batches.sh` execute those files
 alone with fresh process homes, including launchd repair and standalone home/lease cases. Hosted batches assign shard membership by the per-file durations
-in `scripts/ci/test-durations.tsv` (sorted round-robin when nothing is recorded), run each shard's
+in `scripts/ci/test-durations.tsv` (Windows: `scripts/ci/test-durations.windows.tsv`; sorted round-robin when nothing is recorded), run each shard's
 files in sorted order and split only process boundaries; every selected file still runs once.
-Ordinary macOS shards select 1/2 and 2/2 from the full file list; macOS control selects 1/1. Both
+Ordinary macOS shards select 1/3, 2/3 and 3/3 from the full file list; macOS control selects 1/1. Both
 execute sequential batches of at most 12 files with one worker.
 Storage-policy and API-usage families run as singletons, as do manifest-declared files.
 This preserves full test membership but does not claim cross-batch shared-process coverage.

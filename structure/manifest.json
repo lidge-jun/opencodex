@@ -160,6 +160,13 @@
       ]
     },
     {
+      "path": "catalog-effort-clamp.md",
+      "tier": 2,
+      "title": "Effort-clamp observations",
+      "scope": "Persisted effort-clamp observation identity and idempotent sync notices.",
+      "documents": ["src/codex/runtime.ts", "src/codex/catalog/effort.ts"]
+    },
+    {
       "path": "subagents.md",
       "tier": 2,
       "title": "Subagents And Multi-Agent Surface",
@@ -330,6 +337,18 @@
         "src/combos/",
         "src/server/",
         "src/usage/"
+      ]
+    },
+    {
+      "path": "providers/anthropic-key-billing.md",
+      "tier": 4,
+      "title": "Anthropic API-key Billing Recovery",
+      "scope": "Exact billing refusal evidence, immutable physical credential ownership, pacing provenance and bounded pre-output key recovery.",
+      "documents": [
+        "src/providers/anthropic-billing-refusal.ts",
+        "src/providers/anthropic-billing-ownership.ts",
+        "src/providers/anthropic-billing-recovery.ts",
+        "src/providers/request-pacing.ts"
       ]
     },
     {
@@ -542,6 +561,18 @@
       ]
     },
     {
+      "path": "desktop-start-at-login.md",
+      "tier": 6,
+      "title": "Desktop Start at Login",
+      "scope": "macOS tray Start at Login judgment shared with Startup safety, its parity fixture, click rules, and the guarded launch-origin migration.",
+      "documents": [
+        "desktop/src-tauri/src/first_run.rs",
+        "desktop/src-tauri/src/login_registration.rs",
+        "desktop/src-tauri/src/tray_login.rs",
+        "src/service/desktop-startup.ts"
+      ]
+    },
+    {
       "path": "ops/service-and-sidecars.md",
       "tier": 6,
       "title": "Background Service And Sidecars",
@@ -552,6 +583,19 @@
         "src/service-manager-probe.ts",
         "src/sidecar/",
         "src/update/"
+      ]
+    },
+    {
+      "path": "ops/service-health-recovery.md",
+      "tier": 6,
+      "title": "Service Health Recovery",
+      "scope": "Opt-in sentinel that turns a hung but listening managed service proxy into an exit its manager restarts.",
+      "documents": [
+        "src/service/health-sentinel-launch.ts",
+        "src/service/health-sentinel-main.ts",
+        "src/service/health-sentinel-policy.ts",
+        "src/service/health-sentinel-probe.ts",
+        "src/service/health-sentinel-windows.ts"
       ]
     },
     {

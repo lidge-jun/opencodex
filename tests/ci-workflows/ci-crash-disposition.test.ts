@@ -212,6 +212,11 @@ function runBatches(
     for (const file of FIXTURE_FILES) writeFileSync(join(directory, "tests", file), "");
     writeFileSync(join(directory, "tests", DEDICATED_FILE), "");
     for (const file of options.additionalFiles ?? []) writeFileSync(join(directory, "tests", file), "");
+    // Pin the weights the runner shards and batches by. Without this every fixture file weighs the
+    // median of the committed scripts/ci/test-durations.tsv, and the 1-second cases' 500 ms batch
+    // budget would move with each refresh of that table (#6982).
+    const durations = join(directory, "durations.tsv");
+    writeFileSync(durations, FIXTURE_FILES.map(file => `100\ttests/${file}\n`).join(""));
     writeFileSync(
       join(binDirectory, "timeout"),
       options.timeoutTool === "non-gnu" ? FAKE_NON_GNU_TIMEOUT : FAKE_TIMEOUT,
@@ -233,6 +238,7 @@ function runBatches(
         ...(options.batchTimeoutSeconds === undefined ? {} : { BUN_TEST_BATCH_TIMEOUT_SECONDS: options.batchTimeoutSeconds }),
         ...(options.killGraceSeconds === undefined ? {} : { BUN_TEST_BATCH_KILL_GRACE_SECONDS: options.killGraceSeconds }),
         BUN_TEST_FILE_SCOPE: fileScope,
+        BUN_TEST_DURATIONS_FILE: durations,
         ...(options.parallel === undefined ? {} : { BUN_TEST_PARALLEL: options.parallel }),
         OCX_TEST_NO_QUEUE: "1",
         OPENCODEX_BUN_PATH: join(binDirectory, "bun"),

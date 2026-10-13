@@ -569,6 +569,14 @@ export default function App() {
               onFocusOrphaned={focusAfterSwitcher}
             />
           )}
+          {/* Outside the page boundary: a page that fails to render must not hide whose state this is. */}
+          {targetsSettled && targets.link && (
+            <Notice tone="warn">
+              {targets.link.home
+                ? t("connection.linkManaged", { home: targets.link.home, linkId: targets.link.linkId })
+                : t("connection.linkManagedUnnamed", { linkId: targets.link.linkId })}
+            </Notice>
+          )}
           <ErrorBoundary
             key={shellPage}
             pageName={t(PAGE_TKEY[shellPage])}

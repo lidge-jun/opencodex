@@ -85,7 +85,7 @@ route-specific results rather than repeating this table.
 | `GET /api/grok/reset-coupons?accountId=...` | Read remaining Grok billing reset tokens and validity windows for the active or specified xAI account | 400 missing account; 401 unauthenticated; 502 upstream gRPC-Web error |
 | `POST /api/grok/reset-coupons/consume` | Redeem an eligible reset coupon. Body `{ accountId?, tokenId?, operationId? }`. Optional `operationId` (UUIDv4) makes redemption idempotent: repeating the same ID replays the durable result without double-redemption. | 400 invalid JSON/UUID; 401 unauthenticated; 409 `operation_id_owned_by_another_account` / `coupon_unavailable` / `operation_token_mismatch` / `operation_state_changed` / `attempt_in_progress` / `attempt_unresolved`; 502 upstream error; 503 ledger capacity / `ledger_unavailable`; 500 `attempt_mark_failed` |
 | `GET /api/anthropic/reset-grants?accountId=...` | Read the Claude usage-limit reset grants of one Anthropic OAuth account: eligibility, each grant's resets left, validity window, and the windows it clears, plus any unconfirmed attempt still retryable | 400 no matching account; 401 re-authentication needed; 502 upstream unavailable |
-| `POST /api/anthropic/reset-grants/consume` | Spend one reset grant. Body `{ accountId, grantId, operationId }`; `operationId` is a UUIDv4 sent upstream as the request ID, so repeating it retries the same claim. Requires a dashboard session. | 400 invalid body; 401 re-authentication needed; 403 `session_required`; 409 `grant_not_usable`, `in_flight`, `unresolved_prior_operation`, `unknown_outcome_expired`, `operation_identity_mismatch`; 500 `journal_write_failed`; 502 `unknown_outcome`; 503 journal busy, unavailable, or full |
+| `POST /api/anthropic/reset-grants/consume` | Spend one reset grant. Body `{ accountId, grantId, operationId }`; `operationId` is a UUIDv4 sent upstream as the request ID, so repeating it retries the same claim. Requires a dashboard session. A settled `reset` lifts the account's local cooldown only when it is a quota refusal recorded before the claim was first journaled and the windows the grant reported cleared cover every window that refusal named (both windows when it named none). A refusal recorded while the claim was in flight, an entitlement refusal, or an uncovered window stays, including on a same-id replay. The cached quota is dropped and usage is reread with a fresh request, so the pool can select the account before the old deadline. Model-family exclusions stay until that reread proves a family is no longer rejected. | 400 invalid body; 401 re-authentication needed; 403 `session_required`; 409 `grant_not_usable`, `in_flight`, `unresolved_prior_operation`, `unknown_outcome_expired`, `operation_identity_mismatch`; 500 `journal_write_failed`; 502 `unknown_outcome`; 503 journal busy, unavailable, or full |
 | `GET, PUT /api/claude-desktop` | Read or persist the Claude Desktop routed/native profile | 400 invalid or unavailable assignment |
 | `POST /api/claude-desktop/apply` | Write the saved profile to Claude Desktop's managed config | 400/500 write failure |
 | `GET /api/claude-desktop/status` | Inspect saved-versus-applied profile and Desktop health | 400 status read failure |
@@ -290,7 +290,10 @@ Failed request rows can include bounded `upstreamErrorType`, `upstreamErrorCode`
 EOF retains recognized rate-limit or overload codes in the synthesized failed terminal.
 Request logs record these as 429 for `rate_limit_exceeded` / `rate_limit_error`, or 503 for
 `server_is_overloaded` / `overloaded_error`. A recognized type without a code uses the same
-status; explicit unknown codes remain generic 502 failures. Bare-error status is provisional:
+status. On the streaming path, an explicit unknown code records the 5xx status the Codex
+WebSocket wrapper states as a top-level integer `status` or `status_code` (one of the two, not
+both); otherwise, and for buffered JSON callers, it remains a generic 502 failure. The client
+terminal keeps `upstream_server_error` for unknown codes either way. Bare-error status is provisional:
 a genuine completed, failed, or incomplete terminal replaces it before account-health recording.
 Refusal precedence is unchanged.
 This diagnostic mapping adds no automatic replay or retry.
@@ -572,6 +575,11 @@ Inspect Integrations and resolve the reported issue before retrying `ocx sync`. 
 outcome fields from an older server do not establish successful recovery.
 
 ### OAuth accounts, provider keys, and data-plane keys
+
+OAuth account rows always include `plan`: a validated upstream subscription label or `null`
+when unknown. Anthropic profile tiers report labels such as `max_20x`, `max_5x`, or `pro`;
+Antigravity prefers the paid tier (for example `g1-pro-tier`) over the current tier.
+Labels are read on login/import or refresh, never inferred from quota percentages.
 
 | Method and path | Purpose | Notable errors |
 | --- | --- | --- |

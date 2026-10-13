@@ -105,10 +105,22 @@ function createAnthropicModelQuota(instance: AnthropicInstanceId) {
     if (!entry || !anthropicFamilyRejected(id, model, now)) return undefined;
     return entry.busy ? now + 1000 : Math.min(entry.resetAt ?? Infinity, entry.seenAt + ANTHROPIC_PASSIVE_FAMILY_MAX_AGE_MS);
   }
+  /**
+   * The requested family's exclusion as a usage-limit fact: whether a revalidation send is in flight
+   * (its answer may reopen the family within the second) and the upstream window reset, when known.
+   * The admission deadline `anthropicFamilyRetryAt` is not that reset: passive evidence also expires
+   * after thirty minutes.
+   */
+  function anthropicFamilyHoldState(id: string, model?: string): { revalidating: boolean; resetAt?: number } | undefined {
+    const family = anthropicModelFamily(model);
+    const entry = family && ownedObservation(id, family);
+    return entry ? { revalidating: entry.busy, ...(entry.resetAt !== undefined ? { resetAt: entry.resetAt } : {}) } : undefined;
+  }
   return Object.freeze({ instance, anthropicModelExhausted, anthropicFamilyQuotaGeneration,
     captureAnthropicFamilyQuotaGeneration,
     observeAnthropicFamilyQuota, anthropicFamilyRejected, claimAnthropicFamilyRevalidation,
-    clearAnthropicRequestedFamilyQuota, clearAnthropicFamilyQuota, anthropicFamilyRetryAt, reconcileAnthropicFamilyQuota });
+    clearAnthropicRequestedFamilyQuota, clearAnthropicFamilyQuota, anthropicFamilyRetryAt, anthropicFamilyHoldState,
+    reconcileAnthropicFamilyQuota });
 }
 
 export type AnthropicModelQuota = ReturnType<typeof createAnthropicModelQuota>;

@@ -327,9 +327,9 @@ async function readAnthropicUsageQuota(accessToken: string): Promise<ProviderQuo
  * This endpoint reports quota only. Its body carries `five_hour`, `seven_day`, the
  * model-scoped weekly buckets (`seven_day_fable`/`_opus`/`_sonnet`) and a `limits` array,
  * and **no subscription or tier field** — nor does the OAuth token response, which yields only
- * `account.uuid` and `account.email_address` (`src/oauth/anthropic.ts`). That is why
- * `OAuthAccountSummary.plan` is `null` for Anthropic rather than populated here (#3777); it is
- * a missing upstream field, not an unfinished mapping.
+ * `account.uuid` and `account.email_address` (`src/oauth/anthropic.ts`). Subscription labels
+ * instead come from the authenticated profile in `src/oauth/anthropic-identity.ts`, never
+ * from this quota response.
  *
  * A tier must not be inferred from what is here. Percentages are normalized per account, so a
  * Max x5 seat at 50% is byte-identical to a Max x20 seat at 50%, and the presence of a

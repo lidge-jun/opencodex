@@ -408,6 +408,7 @@ export async function deliverPassthroughResponse(
     | "noteInspectedPayload"
     | "normalizeFunctionCompletionJson"
     | "localUpstream"
+    | "terminalOutcomeRecorded"
   >,
 ): Promise<Response> {
   const { route } = requestState;
@@ -486,7 +487,9 @@ export async function deliverPassthroughResponse(
       ? (status: ResponsesTerminalStatus, httpStatusOverride?: number): void => {
         if (terminalOutcomeRecorded) return;
         terminalOutcomeRecorded = true;
-        recordTerminalOutcome(status, httpStatusOverride);
+        // A restored pre-output refusal whose account outcome dispatch already wrote (#6969) keeps
+        // every other terminal callback but must not write the same refusal a second time.
+        if (!nativeExchange.terminalOutcomeRecorded) recordTerminalOutcome(status, httpStatusOverride);
       }
       : undefined;
     const terminalBodyWillRecord = !!terminalRecorder && upstreamResponse.ok && isEventStream;

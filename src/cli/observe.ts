@@ -113,8 +113,12 @@ async function logs(argv: string[], deps: ObserveStreamDeps): Promise<number> {
     return followLogs({ query: new URLSearchParams(query(params)), limit, jsonl: wantsJsonl, events: wantsEvents, formatRow: formatLog }, deps);
   }
   const data = await runtimeRequest(`/api/logs${query(params)}`, {}, deps);
+  const rows = logRows(data);
+  if (!wantsJson && !wantsJsonl && rows.length === 0 && [provider, model, status, conversationId, account].some(Boolean)) {
+    console.log("No log entry matched the filters.");
+  }
   if (wantsJson) printData(data, true);
-  else for (const row of logRows(data)) {
+  else for (const row of rows) {
     if (wantsJsonl) console.log(JSON.stringify(row));
     else console.log(formatLog(row));
   }
@@ -206,8 +210,12 @@ async function usage(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     if (token.kind !== "present" || token.fingerprint !== connection.value.tokenFingerprint) {
       throw new Error("Client usage unavailable: the enrolled data key is missing or changed; repair the client connection");
     }
+    // A Remote Link Child sends this read through the connection-bound link relay (#6957).
+    const link = connection.value.transport === "link" && connection.value.link;
+    const peerFetch = deps.fetchImpl
+      ?? (link ? (await import("../client/link-home")).linkBoundFetch(connection.value, token.token) : undefined);
     result = await fetchHubUsage(connection.value.serverUrl, token.token, new URLSearchParams(suffix), {
-      fetchImpl: deps.fetchImpl, timeoutMs: 60_000,
+      fetchImpl: peerFetch, timeoutMs: 60_000, ...(link ? { peer: "Home" as const } : {}),
     });
     const current = readClientConnectionState();
     const currentToken = readServiceApiTokenState();

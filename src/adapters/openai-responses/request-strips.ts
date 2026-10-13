@@ -1,6 +1,6 @@
 import { expandRetainedCompactionInput } from "../../responses/retained-compaction";
 import { createHash } from "node:crypto";
-import { COMPACT_PROMPT, compactionItemToText, decodeCompactionSummary, isCompactionItemType } from "../../responses/compaction";
+import { COMPACT_PROMPT, appendCheckpointContinuationNote, compactionItemToText, decodeCompactionSummary, isCompactionItemType } from "../../responses/compaction";
 import { debugProviderDiagnostic } from "../../lib/debug";
 import { modelInList } from "../../types";
 import { isPlainObject } from "./internal";
@@ -261,11 +261,13 @@ export function scrubOcxCompactionItems(
   body: unknown,
   destinationDecodesNativeBlob: boolean,
   threadServingIdentityChanged: boolean,
+  addContinuationNote = false,
 ): unknown {
   if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
 
   const expanded = expandRetainedCompactionInput(body.input) as unknown[];
   let changed = expanded !== body.input;
+  let decodedCheckpoint = false;
   const input = expanded.map(item => {
     if (!isPlainObject(item) || !isCompactionItemType(item.type)) return item;
     const encrypted = typeof item.encrypted_content === "string" ? item.encrypted_content : undefined;
@@ -276,6 +278,7 @@ export function scrubOcxCompactionItems(
       && !threadServingIdentityChanged
     ) return item;
     changed = true;
+    if (decodeCompactionSummary(encrypted) !== null) decodedCheckpoint = true;
     return {
       type: "message",
       role: "user",
@@ -283,5 +286,10 @@ export function scrubOcxCompactionItems(
     };
   });
 
-  return changed ? { ...body, input } : body;
+  if (!changed) return body;
+  // #6764: a decoded checkpoint is plain user text from here on, so name its role in the
+  // instructions. Compaction requests skip this; the summarizer must not be told to continue.
+  return addContinuationNote && decodedCheckpoint
+    ? { ...body, input, instructions: appendCheckpointContinuationNote(body.instructions) }
+    : { ...body, input };
 }

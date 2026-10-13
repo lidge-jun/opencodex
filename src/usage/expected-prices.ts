@@ -211,6 +211,8 @@ const META_MODEL_PRICING = "https://dev.meta.ai/docs/pricing-rate-limits";
  */
 const META_MUSE_SPARK_13: Cost4 = { input: 1.25, output: 4.25, cacheRead: 0.15, cacheWrite: 0 };
 const META_MUSE_SPARK_13_CONTRIBUTOR: Cost4 = { input: 0.1, output: 0.2, cacheRead: 0.002, cacheWrite: 0 };
+// Muse Wonder (muse-wonder-1.0): Standard mode only, no long-context premium (verified 2026-10-13).
+const META_MUSE_WONDER_10: Cost4 = { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 0 };
 const META_SPARK_SOURCE = `Meta Model API published price ${META_MODEL_PRICING}`;
 const META_SPARK_CONTRIBUTOR_SOURCE = `Meta Model API published Contributor-tier price ${META_MODEL_PRICING}; data-sharing discount tier`;
 const DEEPSEEK_PRICING = "https://api-docs.deepseek.com/quick_start/pricing-details-usd; V4 Flash alias transition scheduled 2026-07-24 — re-verify after";
@@ -369,11 +371,13 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   // cacheWrite=0: Meta publishes a cached-input price but no cache-write charge.
   { provider: "meta-model", modelId: "muse-spark-1.3", cost4: META_MUSE_SPARK_13, source: META_SPARK_SOURCE, verifiedAt: "2026-09-03", status: "verified" },
   { provider: "meta-model", modelId: "muse-spark-1.3-contributor", cost4: META_MUSE_SPARK_13_CONTRIBUTOR, source: META_SPARK_CONTRIBUTOR_SOURCE, verifiedAt: "2026-09-03", status: "verified" },
+  { provider: "meta-model", modelId: "muse-wonder-1.0", cost4: META_MUSE_WONDER_10, source: META_SPARK_SOURCE, verifiedAt: "2026-10-13", status: "verified" },
   // Same endpoint, same list price, different credential. Meta does not authorize this
   // reuse and settlement is not observable, so these are the public Model API rates as a
   // conservative estimate — not evidence of how the call is actually billed.
   { provider: "meta-muse", modelId: "muse-spark-1.3", cost4: META_MUSE_SPARK_13, source: META_SPARK_SOURCE, verifiedAt: "2026-09-03", status: "verified-derived" },
   { provider: "meta-muse", modelId: "muse-spark-1.3-contributor", cost4: META_MUSE_SPARK_13_CONTRIBUTOR, source: META_SPARK_CONTRIBUTOR_SOURCE, verifiedAt: "2026-09-03", status: "verified-derived" },
+  { provider: "meta-muse", modelId: "muse-wonder-1.0", cost4: META_MUSE_WONDER_10, source: META_SPARK_SOURCE, verifiedAt: "2026-10-13", status: "verified-derived" },
   // Daybreak aliases: priced as their current snapshots (red -> gpt-5.6-cyber,
   // blue -> gpt-5.6-sol). The alias ids carry no rows of their own upstream, hence
   // verified-derived. Blue deliberately reuses GPT56_SOL rather than duplicating the tuple.

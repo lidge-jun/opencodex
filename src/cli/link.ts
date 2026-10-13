@@ -1,3 +1,8 @@
+import { clientLinkStatusIdentity } from "../client/link-status";
+import { clientLinkTunnelStatus } from "../client/link-tunnel";
+import { loadConfig } from "../config";
+import { projectLinkStatus, type ClientLinkIdentity, type LinkStatusConfig, type LinkStatusDto } from "../link/status-projection";
+import { runLinkEnrollment } from "./link-enrollment";
 import { assertSshAlias } from "../link/ssh-argv";
 import { linkStorePath } from "../link/paths";
 import { isLinkPort } from "../link/ports";
@@ -19,6 +24,8 @@ import {
 } from "./runtime-api";
 
 export const LINK_USAGE = `Usage:
+  ocx link probe <alias> [--json]
+  ocx link add <alias> [--expect-fingerprint SHA256:…] [--json]
   ocx link port [--json]
   ocx link issue --alias <alias> --tunnel-port <port> [--json]
   ocx link status [--json]
@@ -58,7 +65,13 @@ export interface LinkIssuePayload {
 }
 
 export interface LinkCliDeps extends RuntimeApiDeps {
+  /** Test seam can shorten, never extend, the whole enrollment deadline. */
+  enrollmentTimeoutMs?: number;
   choosePort?: () => Promise<number>;
+  readConfig?: () => LinkStatusConfig;
+  readClientLinkIdentity?: (linkId: string) => ClientLinkIdentity | null;
+  readChildStatus?: () => LinkStatusDto["child"];
+  confirmFingerprint?: (host: { alias: string; fingerprint: string; keyType: string }) => Promise<boolean>;
   readStore?: () => LinkStore;
   readAdminToken?: () => string | null;
 }
@@ -173,25 +186,12 @@ function validateRevoke(value: unknown, expectedLinkId: string): void {
   if (value.linkId !== expectedLinkId) throw new Error("invalid link API response: revoke link id");
 }
 
-function localStatus(store: LinkStore): LinkStatusPayload {
-  const hasLinks = store.links.length > 0;
-  return {
-    role: hasLinks ? "home" : "standalone",
-    listener: {
-      state: hasLinks && store.listenerPort !== null ? "listening" : "off",
-      port: hasLinks ? store.listenerPort : null,
-    },
-    links: store.links.map(link => ({
-      id: link.id,
-      alias: link.alias,
-      direction: link.direction,
-      state: "idle",
-      since: link.createdAt,
-      reason: null,
-      tunnelPort: link.tunnelPort,
-    })),
-    child: null,
-  };
+function localStatus(store: LinkStore, deps: LinkCliDeps): LinkStatusPayload {
+  const config = (deps.readConfig ?? loadConfig)();
+  const identity = config.client?.transport === "link" && config.client.link
+    ? (deps.readClientLinkIdentity ?? clientLinkStatusIdentity)(config.client.link.linkId) : null;
+  return projectLinkStatus(store, [], { state: store.links.length > 0 && store.listenerPort !== null ? "listening" : "off", port: store.links.length > 0 ? store.listenerPort : null },
+    config, { version: 1, entries: {} }, (deps.readChildStatus ?? clientLinkTunnelStatus)(), identity);
 }
 
 async function linkRequest<T>(path: string, init: RequestInit, deps: LinkCliDeps): Promise<T> {
@@ -212,10 +212,10 @@ async function linkRequest<T>(path: string, init: RequestInit, deps: LinkCliDeps
   }
 }
 
-function errorCodeBody(body: unknown): { error: { code: string } } | null {
+function errorCodeBody(body: unknown): { error: { code: string }; residual?: true } | null {
   if (!isRecord(body) || !isRecord(body.error)) return null;
   const code = body.error.code;
-  return typeof code === "string" && /^[a-z_]{1,64}$/.test(code) ? { error: { code } } : null;
+  return typeof code === "string" && /^[a-z_]{1,64}$/.test(code) ? { error: { code }, ...(body.residual === true ? { residual: true as const } : {}) } : null;
 }
 
 async function runPort(args: string[], deps: LinkCliDeps): Promise<void> {
@@ -253,7 +253,7 @@ async function runStatus(args: string[], deps: LinkCliDeps): Promise<void> {
   } catch (error) {
     if (!deps.baseUrl && error instanceof RuntimeApiError && error.status === 503) {
       const store = (deps.readStore ?? (() => readLinkStore(linkStorePath())))();
-      console.log(JSON.stringify(localStatus(store)));
+      console.log(JSON.stringify(localStatus(store, deps)));
       return;
     }
     throw error;
@@ -320,11 +320,12 @@ export async function runLinkCommand(rawArgs: string[], deps: LinkCliDeps = {}):
   return runCliAction(async () => {
     const args = [...rawArgs];
     const command = args.shift();
-    if (command === "port") await runPort(args, deps);
+    if (command === "probe" || command === "add") await runLinkEnrollment(command, args, deps, linkRequest, LINK_USAGE);
+    else if (command === "port") await runPort(args, deps);
     else if (command === "issue") await runIssue(args, deps);
     else if (command === "status") await runStatus(args, deps);
     else if (command === "revoke") await runRevoke(args, deps);
     else if (command === "reconnect") await runReconnect(args, deps);
-    else throw new CliUsageError("link requires one of: port, issue, status, revoke, reconnect", LINK_USAGE);
+    else throw new CliUsageError("link requires one of: probe, add, port, issue, status, revoke, reconnect", LINK_USAGE);
   });
 }

@@ -14,6 +14,7 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Manager, Wry,
 };
+#[cfg(not(target_os = "macos"))]
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_opener::OpenerExt;
 
@@ -28,6 +29,8 @@ pub struct TrayMenu {
     check_updates: MenuItem<Wry>,
     install_update: MenuItem<Wry>,
     stop: MenuItem<Wry>,
+    #[cfg(target_os = "macos")]
+    pub(crate) login: CheckMenuItem<Wry>,
 }
 
 impl Default for TrayState {
@@ -79,6 +82,10 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
         true,
         None::<&str>,
     )?;
+    // macOS shows only what Startup safety would verify, and probes it off the main thread.
+    #[cfg(target_os = "macos")]
+    let login = crate::tray_login::item(app)?;
+    #[cfg(not(target_os = "macos"))]
     let login = CheckMenuItem::with_id(
         app,
         "start-at-login",
@@ -133,8 +140,12 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
             check_updates: check_updates.clone(),
             install_update: install_update.clone(),
             stop: stop.clone(),
+            #[cfg(target_os = "macos")]
+            login: login.clone(),
         });
     }
+    #[cfg(target_os = "macos")]
+    crate::tray_login::refresh(app);
 
     let builder = TrayIconBuilder::with_id("main")
         .icon(icon())
@@ -151,6 +162,11 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
     let builder = builder.show_menu_on_left_click(false);
     let tray = builder
         .on_tray_icon_event(|tray, event| {
+            #[cfg(target_os = "macos")]
+            if let TrayIconEvent::Enter { .. } = event {
+                crate::tray_login::hover(tray.app_handle());
+                return;
+            }
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
                 button_state: MouseButtonState::Up,
@@ -213,11 +229,16 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
                     .open_url(format!("{}#/usage", endpoint.url("/")), None::<String>);
             }
             "start-at-login" => {
-                let enabled = app.autolaunch().is_enabled().unwrap_or(false);
-                if enabled {
-                    let _ = app.autolaunch().disable();
-                } else {
-                    let _ = crate::login_autostart::enable(app);
+                #[cfg(target_os = "macos")]
+                crate::tray_login::click(app);
+                #[cfg(not(target_os = "macos"))]
+                {
+                    let enabled = app.autolaunch().is_enabled().unwrap_or(false);
+                    if enabled {
+                        let _ = app.autolaunch().disable();
+                    } else {
+                        let _ = crate::login_autostart::enable(app);
+                    }
                 }
             }
             "stop-proxy" => {
@@ -254,6 +275,8 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
         let mut tick = 0;
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            #[cfg(target_os = "macos")]
+            crate::tray_login::refresh(&app);
             let Some(proxy) = app
                 .try_state::<crate::AppState>()
                 .and_then(|state| state.proxy())
@@ -287,7 +310,7 @@ fn refresh(app: &AppHandle, tray: &tauri::tray::TrayIcon<Wry>) {
 /// the main thread and takes this same mutex while doing so, so calling a setter with the lock held
 /// is a cycle: a background update owns the mutex and waits for the main thread, and the main
 /// thread waits for the mutex. The app would stop answering Quit.
-fn menu_handles(app: &AppHandle) -> Option<TrayMenu> {
+pub(crate) fn menu_handles(app: &AppHandle) -> Option<TrayMenu> {
     let state = app.try_state::<TrayState>()?;
     let handles = state.menu.lock().ok()?;
     handles.as_ref().cloned()

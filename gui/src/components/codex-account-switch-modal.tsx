@@ -16,6 +16,7 @@ export function CodexAccountSwitchModal({
   switchingId,
   orderBusy = false,
   threshold,
+  unpin = false,
   onCancel,
   onConfirm,
 }: {
@@ -30,6 +31,13 @@ export function CodexAccountSwitchModal({
    */
   orderBusy?: boolean;
   threshold?: number;
+  /**
+   * Release variant: `confirm` is the account carrying the pin, and confirming sends the
+   * null selection that clears it — the server resolves that as automatic selection. The
+   * threshold warning is skipped (no account is being newly loaded); the thread-affinity
+   * note still applies; no replacement account is loaded and no cache-reset warning is needed.
+   */
+  unpin?: boolean;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
@@ -59,11 +67,15 @@ export function CodexAccountSwitchModal({
     >
       <button type="button" className="modal-backdrop-dismiss" aria-label={t("common.close")} tabIndex={-1} onClick={onCancel} />
       <div className="modal-card" onClick={e => e.stopPropagation()} role="document">
-        <h3 id="codex-switch-title">{accountModeState === "direct"
+        <h3 id="codex-switch-title">{unpin
+          ? t("codexAuth.unpinTitle")
+          : accountModeState === "direct"
           ? t("codexAuth.preparePoolTitle")
           : confirm.id === "__main__" ? t("codexAuth.switchBack") : t("codexAuth.switchTitle")}</h3>
         <p className="modal-desc">
-          {accountModeState === "direct"
+          {unpin
+            ? t("codexAuth.unpinDesc")
+            : accountModeState === "direct"
             ? t("codexAuth.preparePoolDesc")
             : confirm.id === "__main__" ? t("codexAuth.switchBackDesc") : t("codexAuth.switchDesc")}
         </p>
@@ -71,10 +83,10 @@ export function CodexAccountSwitchModal({
           <strong>{confirm.id === "__main__" ? (mainEmail || t("codexAuth.codexApp")) : confirm.email}</strong>
           {confirm.plan && <span className="badge badge-green" style={{ marginLeft: 8 }}>{confirm.plan}</span>}
         </div>
-        {confirm.id !== "__main__" && (
+        {!unpin && confirm.id !== "__main__" && (
           <div className="notice-warn"><IconAlert width={14} /> {t("codexAuth.cacheWarning")}</div>
         )}
-        {exceedsThreshold && (
+        {!unpin && exceedsThreshold && (
           <div className="notice-warn" data-testid="codex-switch-threshold-warning">
             <IconAlert width={14} /> {t("codexAuth.switchExceedsThresholdWarning", { threshold })}
           </div>
@@ -82,7 +94,7 @@ export function CodexAccountSwitchModal({
         <div className="modal-actions">
           <button type="button" className="btn btn-ghost" onClick={onCancel}>{t("codexAuth.cancel")}</button>
           <button type="button" className="btn btn-primary" disabled={Boolean(switchingId) || orderBusy} onClick={onConfirm}>
-            {switchingId ? t("pws.accountSwitching") : t(accountModeState === "direct" ? "codexAuth.prepareForPool" : "codexAuth.setAsNext")}
+            {switchingId ? t("pws.accountSwitching") : unpin ? t("codexAuth.unpinAction") : t(accountModeState === "direct" ? "codexAuth.prepareForPool" : "codexAuth.setAsNext")}
           </button>
         </div>
       </div>

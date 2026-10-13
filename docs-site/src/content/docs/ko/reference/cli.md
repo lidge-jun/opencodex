@@ -56,3 +56,5 @@ Windows x64 설치 관측은 [`attest` 명령](/ko/reference/cli/agents/)을 참
 ## Default alias listing
 
 `ocx alias --json`은 `ocx alias list --json`과 같습니다. `--json`은 명시한 alias 작업의 앞이나 뒤에 둘 수 있습니다.
+
+`ocx logs --model`은 표시된 `provider/model`과 기본 모델 ID를 모두 지원합니다. 필터는 행 제한 전에 적용하며 `--follow`에도 동일합니다. 빈 필터 결과는 사람이 읽는 출력에서 안내하고 JSON/JSONL은 그대로 유지합니다. `ocx hub disable`은 [Remote Hub](/guides/remote-hub/#return-a-hub-to-standalone)를 참조하세요.

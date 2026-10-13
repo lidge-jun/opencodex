@@ -11,6 +11,7 @@ import { packageVersion } from "../lib/package-version";
 import { codexHomeIsAbsent } from "../codex/codex-home-owner";
 import { getCodexHome } from "../codex/paths";
 import { admitUpdateRestartChild } from "./update-restart-child";
+import { HEALTH_SENTINEL_STANDALONE_ARG, startServiceHealthSentinel } from "../service/health-sentinel-launch";
 import { UpdateRestartRequired } from "./update-restart-candidate";
 import { describeUpdateRestartFailure, restartFromCurrentInstallation } from "./update-restart";
 import { findGuiDist } from "../server/gui-static";
@@ -212,6 +213,7 @@ initializeNodeLauncherContext();
 // The compiled executable is also the capture-only MCP server's launcher.
 // Handle this private entrypoint before CLI preflight or command dispatch.
 if (process.argv[2] === "__keyring-load-check") { console.log(JSON.stringify((await import("../lib/keyring-native")).inspectKeyringBinding())); process.exit(0); }
+if (process.argv[2] === HEALTH_SENTINEL_STANDALONE_ARG) process.exit(await (await import("../service/health-sentinel-main")).runHealthSentinelProcess());
 
 // The compiled executable also launches the isolated MCP servers.
 // Handle these private entrypoints before CLI preflight or command dispatch.
@@ -623,6 +625,7 @@ async function handleStart(options: { block?: boolean } = {}) {
   // Records are visible now; background work may observe this runtime without a gap.
   scheduleCatalogPrewarm();
   installCrashGuards();
+  let healthSentinel: ReturnType<typeof startServiceHealthSentinel> = null; // opt-in #6671, started once ready
   // No pre-emptive snapshot here. `injectCodexConfig` journals the exact bytes it
   // is about to transform; snapshotting earlier only captured a baseline that could
   // already be stale by the time injection ran (#477).
@@ -646,6 +649,7 @@ async function handleStart(options: { block?: boolean } = {}) {
     try { routingHealer?.stop(); } catch { /* best-effort */ }
     try { guardian.stop(); } catch { /* best-effort */ }
     try { historyGuardian?.stop(); } catch { /* best-effort */ }
+    try { healthSentinel?.stop(); } catch { /* best-effort */ }
     // Dashboard drain-and-restart (#563) must not tear down injection: the replacement
     // process expects Codex/Grok/env fences to still be in place. A sibling owns none of them.
     const teardown = decideStartExitTeardown({ sibling: siblingStart, recycling: isRecyclingForExit(), ocxService: process.env.OCX_SERVICE });
@@ -746,6 +750,7 @@ async function handleStart(options: { block?: boolean } = {}) {
   );
   if (!startupSync.ran) console.log(startupLeftCodexNativeLine(localClientSkipReason(config), server.port ?? port));
   await refreshOwnedRaycastCatalog(config, port);
+  if (!cleaned && !shuttingDown) healthSentinel = startServiceHealthSentinel(config); // after startup reconciliation; never mid-boot or mid-drain
   // #1046: one warning per startup, after BOTH writes. The server's cache
   // invalidation happens first and the catalog sync second, so the mtime is only
   // final here — and neither write site warns on its own, or a boot that hits
@@ -1717,7 +1722,7 @@ async function handleStatus() {
   // are tagged `(local)`. A reader who sees neither draws the wrong conclusion from a correct
   // report — an agent read `xai ✗ not logged in` off a client and decided the hub could not
   // serve grok.
-  const remoteHubBanner = remoteHubBannerLine(status.json.remoteHub);
+  const remoteHubBanner = remoteHubBannerLine(status.json.remoteHub, status.json.connection.transport);
   if (remoteHubBanner) console.log(remoteHubBanner);
   // `(local)` only while connected: on a standalone install every line is local, and tagging
   // them all would be noise that trains the reader to skip the tag.
@@ -1798,7 +1803,9 @@ async function handleStatus() {
   if (status.json.hub) {
     for (const line of hubStatusLines(status.json.hub)) console.log(`   ${line}`);
   }
-  console.log(`   Remote hub: ${status.json.connection.state}${status.json.connection.serverUrl ? ` (${status.json.connection.serverUrl})` : ""}`);
+  console.log(status.json.remoteHub.link
+    ? `   Remote Link Home: ${status.json.connection.state} (${status.json.remoteHub.link.homePhrase}, ${status.json.remoteHub.link.linkId})`
+    : `   ${status.json.connection.transport === "link" ? "Remote Link Home" : "Remote hub"}: ${status.json.connection.state}${status.json.connection.serverUrl ? ` (${status.json.connection.serverUrl})` : ""}`);
   if (status.json.connection.state === "invalid" || status.json.connection.state === "mismatched") {
     console.log(`   ⚠️  ${status.json.connection.reason}`);
   }
@@ -1854,10 +1861,12 @@ async function handleStatus() {
   // that decide what a request can route to. The local block still prints — an operator debugging
   // a half-migrated machine needs to see it — but under a heading that says it is not in use, and
   // below the hub's, so the hub's is what a reader (or an agent) encounters first (#4236).
-  for (const line of remoteHubStatusLines(status.json.remoteHub)) console.log(`   ${line}`);
+  for (const line of remoteHubStatusLines(status.json.remoteHub, status.json.connection.transport)) console.log(`   ${line}`);
   if (status.json.remoteHub.connected) {
     console.log(status.json.remoteHub.stateSource === "unavailable"
-      ? "   Local-only credential state (this is NOT the hub's; the hub's state could not be read):"
+      ? status.json.connection.transport === "link"
+        ? "   Local-only credential state (Home state is unavailable over Remote Link):"
+        : "   Local-only credential state (this is NOT the hub's; the hub's state could not be read):"
       : "   Local-only (not used for routing while connected):");
   }
   console.log(`   OAuth logins${local}:`);

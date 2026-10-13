@@ -917,6 +917,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       // Presence only (#959 review): header names and values never leave the process.
       hasHeaders: !!p.headers && Object.keys(p.headers).length > 0,
       allowPrivateNetwork: p.allowPrivateNetwork === true,
+      preserveResponsesReasoningContent: p.preserveResponsesReasoningContent,
       liveModels: p.liveModels !== false,
       requestPacing: p.requestPacing,
       models: p.models ?? [],

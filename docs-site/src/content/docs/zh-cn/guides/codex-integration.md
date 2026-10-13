@@ -142,6 +142,8 @@ $CODEX_HOME/opencodex-catalog.json
 $CODEX_HOME/models_cache.json
 ```
 
+在 macOS 上，opencodex 在显式选择、shim、PATH、既有安装路径和可运行的裸 `codex` 后备命令之后，依次检查 `/Applications/ChatGPT.app` 和 `~/Applications/ChatGPT.app` 中的 Codex 应用内置 CLI，要求其 XML `Info.plist` 标识为 `com.openai.codex`，且不会用应用候选项自动替换仍可运行的已保存选择。
+
 在 WSL 中，如果未设置 `CODEX_HOME`，且 Linux 侧的 `~/.codex` 目录不存在或不含任何 Codex 状态（`config.toml`, `auth.json`, `sessions`, `history.jsonl`），opencodex 还会检查
 `/mnt/c/Users/*/.codex/config.toml` 下是否存在单一的 Windows Codex Desktop home。只要候选项恰好只有一个，
 它就会使用那个目录，让 WSL app-server mode 和 Windows Codex Desktop 共享同一份 config 与 auth 文件。

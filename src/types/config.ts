@@ -519,6 +519,11 @@ export interface OcxConfig {
   skills?: OcxSkillsConfig;
   /** Opt-in process-local aggregate request metrics on the authenticated management plane. */
   metricsExport?: { enabled?: boolean };
+  /**
+   * Opt-in recovery of a managed service proxy that stays alive but stops answering /healthz:
+   * a separate sentinel process terminates it so its supervisor restarts it (#6671).
+   */
+  serviceHealthRecovery?: { enabled?: boolean };
   /** Opt in to one identical-turn retry when a Responses completion has no text or tool call. */
   emptyCompletionRetry?: boolean;
   /** Suppress allowlisted client-facing Codex transport hints; provider enforcement is unchanged. */

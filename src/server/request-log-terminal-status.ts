@@ -9,6 +9,7 @@ import {
 import { redactSecretString } from "../lib/redact";
 import { outboundCredentials, type OutboundCredentialRegistry } from "../lib/outbound-credential-registry";
 import { configuredCredentials, type ConfiguredCredentials } from "./configured-credentials";
+import { codexWsWrapperStatus } from "./responses/codex-ws-wire";
 
 /** First bounded upstream diagnostics shared by request contexts and final rows. */
 export interface UpstreamErrorDiagnostics {
@@ -26,6 +27,9 @@ export interface UpstreamErrorPayload {
   type?: unknown;
   code?: unknown;
   message?: unknown;
+  /** Codex WebSocket wrapper status (`status_code` is its alias); read only on bare `error` events. */
+  status?: unknown;
+  status_code?: unknown;
   error?: { type?: unknown; code?: unknown; message?: unknown };
   last_error?: { type?: unknown; code?: unknown; message?: unknown };
   response?: {
@@ -136,6 +140,17 @@ export function upstreamDiagnosticLogFields(logCtx: UpstreamErrorDiagnostics): U
   };
 }
 
+/**
+ * The server status a Codex WebSocket `error` frame states on its wrapper ({@link codexWsWrapperStatus}),
+ * or undefined. Only 5xx is returned. Every 5xx is the same transient class for account health, so
+ * this changes what a row says, not where the next turn goes; a wrapper 4xx would move quota and
+ * credential routing and is left to its own review (#6740).
+ */
+export function wrappedServerErrorStatus(json: UpstreamErrorPayload): number | undefined {
+  const status = codexWsWrapperStatus(json as Record<string, unknown>);
+  return status !== undefined && status >= 500 ? status : undefined;
+}
+
 function captureTerminalHttpStatus(
   logCtx: TerminalStatusContext,
   json: UpstreamErrorPayload,
@@ -205,8 +220,15 @@ function captureTerminalHttpStatus(
       code: candidates.find(candidate => typeof candidate?.code === "string")?.code,
       type: candidates.slice(0, -1).find(candidate => typeof candidate?.type === "string")?.type,
     });
-    // Unrecognized bare errors leave the status to explicit event fields (combo preflight).
-    if (structured) noteStatus(structured.httpStatus);
+    if (structured) {
+      noteStatus(structured.httpStatus);
+      return;
+    }
+    // An unrecognized class keeps only the status the upstream itself stated on the WebSocket
+    // wrapper. Nothing is invented here: with no wrapper status the row stays the synthetic 502, and
+    // combo preflight still reads its wider set of explicit event fields after this one.
+    const wrapped = wrappedServerErrorStatus(json);
+    if (wrapped !== undefined) noteStatus(wrapped);
     return;
   }
   if (type !== "response.failed" || !responseError || typeof responseError !== "object") return;

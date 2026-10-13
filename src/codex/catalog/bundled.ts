@@ -28,6 +28,7 @@ import {
 import type { NormalizedComboConfig } from "../../combos/types";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { redactSecretString } from "../../lib/redact";
+import { isPassiveRead } from "../../lib/passive-read";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
 import { decodeOverlayState } from "../shim-state-file";
 
@@ -313,7 +314,8 @@ function* bundledCatalogSteps(
       const output = yield command;
       if (!current()) return null;
       const catalog = output === null ? null : parseCatalogJson(output);
-      if (catalog && findNativeTemplate(catalog)) {
+      if (catalog && catalog.models?.every(row => row !== null && typeof row === "object" && !Array.isArray(row))
+        && findNativeTemplate(catalog)) {
         if (cacheKey) {
           publishBundledCatalogCache(
             cacheKey,
@@ -377,6 +379,8 @@ export function loadBundledCodexCatalogAsync(
   if (useCache && bundledCatalogFlight?.inputs === inputs && bundledCatalogFlight.epoch === epoch) {
     return view(bundledCatalogFlight.promise);
   }
+  // A passive read (a Remote Link Child's, #6959) runs no Codex binary and persists no runtime.
+  if (isPassiveRead()) return Promise.resolve(null);
   const controller = new AbortController();
   const flight = { inputs, epoch, controller, promise: Promise.resolve<ReadonlyRawCatalog | null>(null) };
   if (useCache && !signal && isCurrent === catalogAlwaysCurrent) {

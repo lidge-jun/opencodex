@@ -173,3 +173,7 @@ services:
 - `/readyz` 返回 `200` 而 `/v1/catalog` 返回 `403 origin_rejected`：说明数据监听器绑在回环地址上却位于 TLS 前端之后，参见上文“为数据监听器提供 TLS”。
 - 浏览器 logout/expiry 只影响会话，不会吊销数据密钥。
 - `tailscale serve reset` 会删除节点上的所有映射，请先查看 `tailscale serve status`。
+
+## 关闭 Hub
+
+`ocx hub disable [--json]` 在一次经过验证的写入中移除 Hub 专用设置。现有密钥没有可信的客户端来源标记；先用 `ocx access key list --json` 查看 ID，再运行 `ocx hub disable --revoke-clients --client-key <id> [--json]`，可重复 `--client-key`。密钥名称不用于判断来源，未知 ID 或未选择 ID 的撤销请求会在修改前被拒绝。未选中的密钥保留。命令不会重启代理或修改外部发布配置；请按输出的提示重启，并检查 `tailscale serve status`。参见[英文详情](/guides/remote-hub/#return-a-hub-to-standalone)。

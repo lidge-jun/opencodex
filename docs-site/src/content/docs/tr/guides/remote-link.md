@@ -78,6 +78,8 @@ Child, bağlantı üzerinden Home bilgisayarının sağlayıcılarını ve sağl
 ## CLI başvurusu
 
 ```text
+ocx link probe <alias> [--json]
+ocx link add <alias> [--expect-fingerprint SHA256:…] [--json]
 ocx link port [--json]
 ocx link issue --alias <alias> --tunnel-port <port> [--json]
 ocx link status [--json]
@@ -85,7 +87,12 @@ ocx link revoke --link-id <id> [--json]
 ocx link reconnect --link-id <id> [--json]
 ```
 
+TTY olmayan kullanımda `--expect-fingerprint` zorunludur. Etkileşimli bir terminalde sunulan parmak izini açıkça onaylayarak bu seçeneği atlayabilirsiniz.
+
 ## İlgili kılavuzlar
 
 - [Remote Hub Dağıtımı](/tr/guides/remote-hub/)
 - [Uzak Çalışma Alanı](/tr/guides/remote-workspace/)
+
+
+`ocx link probe <alias> --json` · `ocx link add <alias> --expect-fingerprint SHA256:… --json` — [CLI, restart, relay verification and recovery](/guides/remote-link/#add-a-child-from-the-terminal).

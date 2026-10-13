@@ -473,6 +473,17 @@ export function clearAccountQuotaCache(provider?: string): void {
   persistAccountQuotaCache();
 }
 
+/** Drop one account's cached bars and any joined probe so a reset is not ranked from the old window. */
+export function forgetCachedProviderAccountQuota(provider: string, accountId: string): void {
+  hydrateAccountQuotaCache();
+  const key = accountCacheKey(provider, accountId);
+  accountQuotaCache.delete(key);
+  for (const flight of [...accountQuotaInflight.keys()]) {
+    if (flight === key || flight.startsWith(key + "\u0000")) accountQuotaInflight.delete(flight);
+  }
+  persistAccountQuotaCache();
+}
+
 /**
  * Resolve a bearer for quota probing without silently adopting a newer global
  * Claude CLI credential into a background multiauth slot.

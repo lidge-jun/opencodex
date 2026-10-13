@@ -15,7 +15,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -308,6 +308,60 @@ describe("ocx status end to end on a connected client", () => {
     return { stdout, stderr, exitCode };
   }
 
+  test.each(["present", "missing", "unsafe", "mismatched"])("Remote Link reads through local Child with %s CLI token and sends no key", async tokenState => {
+    writeConnectedHome(testHome, "http://127.0.0.1:19200");
+    const snapshot = { ...connectionSnapshot(), serverUrl: "http://127.0.0.1:19200", transport: "link" as const };
+    if (tokenState === "missing") rmSync(join(testHome, "service-api-token"));
+    if (tokenState === "unsafe") chmodSync(join(testHome, "service-api-token"), 0o644);
+    if (tokenState === "mismatched") writeFileSync(join(testHome, "service-api-token"), "unowned-status-token", { mode: 0o600 });
+    const seen: Array<{ url: string; headers: Headers }> = [];
+    const remote = await collectRemoteHubStatus(snapshot, {
+      findChild: async () => ({ pid: 123, port: 10100, source: "runtime", role: "client", hostname: "127.0.0.1" }),
+      fetchImpl: (async (url, init) => { seen.push({ url: String(url), headers: new Headers(init?.headers) }); return Response.json(hubState()); }) as typeof fetch,
+    });
+    expect(remote.stateSource).toBe("hub"); expect(remote.providers.length).toBeGreaterThan(0);
+    expect(seen).toHaveLength(1); expect(seen[0]!.url).toBe("http://127.0.0.1:10100/v1/hub-state");
+    expect([...seen[0]!.headers.keys()]).toEqual(["accept"]);
+    expect(remoteHubBannerLine(remote, "link")).toContain("State from Remote Link Home");
+    expect(remoteHubStatusLines(remote, "link").length).toBeGreaterThan(0);
+  });
+
+  test("Remote Link changed ownership during Child discovery suppresses the live read", async () => {
+    const origin = "http://127.0.0.1:19200"; writeConnectedHome(testHome, origin);
+    const snapshot = { ...connectionSnapshot(), serverUrl: origin, transport: "link" as const };
+    let fetched = false;
+    const remote = await collectRemoteHubStatus(snapshot, {
+      findChild: async () => {
+        writeConnectedHome(testHome, "http://127.0.0.1:19201");
+        return { pid: 123, port: 10100, source: "runtime", role: "client" };
+      },
+      fetchImpl: (async () => { fetched = true; return Response.json(hubState()); }) as typeof fetch,
+    });
+    expect(fetched).toBe(false); expect(remote.stateSource).toBe("unavailable");
+  });
+
+  test("standalone Home role-based 404 suppresses obsolete cache and upgrade warning", async () => {
+    const origin = "http://127.0.0.1:19200"; writeConnectedHome(testHome, origin);
+    expect(writeCachedHubState(connectedConfig(origin).client, hubState(), "2026-09-06T00:00:00.000Z")).toBe(true);
+    const remote = await collectRemoteHubStatus({ ...connectionSnapshot(), serverUrl: origin, transport: "link" }, {
+      findChild: async () => ({ pid: 123, port: 10100, source: "runtime", role: "client" }),
+      fetchImpl: (async () => Response.json({ error: { type: "invalid_request_error", code: "hub_state_not_a_hub", message: "role required" } }, { status: 404 })) as typeof fetch,
+    });
+    expect(remote.stateSource).toBe("unavailable"); expect(remote.reason).toBe("the remote host does not publish hub state");
+    expect(remoteHubBannerLine(remote, "link")).toContain("Remote Link Home");
+    expect(remoteHubBannerLine(remote, "link")).not.toContain("upgrade");
+  });
+
+  test("no local Child means no raw tunnel URL request; owner-bound cache remains usable", async () => {
+    const origin = "http://127.0.0.1:19200"; writeConnectedHome(testHome, origin);
+    expect(writeCachedHubState(connectedConfig(origin).client, hubState(), "2026-09-06T00:00:00.000Z")).toBe(true);
+    let fetched = false;
+    const remote = await collectRemoteHubStatus({ ...connectionSnapshot(), serverUrl: origin, transport: "link" }, {
+      findChild: async () => null, fetchImpl: (async () => { fetched = true; return Response.json(hubState()); }) as typeof fetch,
+    });
+    expect(fetched).toBe(false); expect(remote.stateSource).toBe("cache");
+  });
+
   test("a live hub drives the banner, the hub block and the (local) tags", async () => {
     const home = mkdtempSync(join(tmpdir(), "ocx-status-hub-live-"));
     const codexHome = join(home, "codex");
@@ -350,6 +404,8 @@ describe("ocx status end to end on a connected client", () => {
       expect(human.exitCode).toBe(0);
       const lines = human.stdout.split("\n");
       expect(lines[0]).toContain("State from hub");
+      expect(human.stdout).toContain(`   Remote hub: connected (${origin})`);
+      expect(human.stdout).not.toContain("Remote Link Home:");
       // The hub's logins print ABOVE the local block, which is labelled as unused.
       const hubHeading = lines.findIndex(line => line.includes("OAuth logins (hub"));
       const localHeading = lines.findIndex(line => line.includes("Local-only (not used for routing while connected)"));

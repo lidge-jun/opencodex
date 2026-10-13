@@ -44,7 +44,8 @@ export const NATIVE_GPT6_LUNA_MODEL = "gpt-6-luna";
  * SELF-DESCRIBED: its row is pinned verbatim in `src/codex/data/roster-pinned-models.json` from
  * openai/codex `codex-rs/models-manager/models.json` after #49318, which also made it the Codex
  * catalog default (priority 1). Ladder low..ultra with default effort low, and the GPT-6
- * 272,000 / 872,000 context pair. Ungated for the same owner decision as Sol and Luna.
+ * 272,000 / 872,000 context pair in that pinned row; the effective native default is now 500,000
+ * (NATIVE_GPT61_SOL_CONTEXT). Ungated for the same owner decision as Sol and Luna.
  */
 export const NATIVE_GPT61_SOL_MODEL = "gpt-6.1-sol";
 
@@ -62,10 +63,23 @@ export const NATIVE_GPT6_ASTRA_MINOR_MODEL = "gpt-6-astra-minor";
 /**
  * Context pair every GPT-6 native ships in its upstream row: a 272,000-token default window
  * against an 872,000-token ceiling (and input limit) reached only through the long-window opt-in.
- * The built-in GPT-6 rows and every configured native (below) inherit this one value.
+ * The built-in GPT-6 rows and every configured native (below) inherit this one value, except
+ * GPT-6.1 Sol, whose default window is NATIVE_GPT61_SOL_CONTEXT.
  */
 export const NATIVE_GPT6_CONTEXT: Readonly<{ contextWindow: number; maxContextWindow: number; maxInputTokens: number }> =
   Object.freeze({ contextWindow: 272_000, maxContextWindow: 872_000, maxInputTokens: 872_000 });
+
+/**
+ * GPT-6.1 Sol through Codex & Work: OpenAI raised the default context from 272k to 500k
+ * (Tibo Sottiaux, 2026-10-11, https://x.com/thsottiaux/status/2109430343346581527), while
+ * overrides stay allowed and the model maximum is described as 1M. The bundled codex-rs row
+ * still reads 272,000 / 872,000, and built-in natives never take roster values, so the default
+ * lives here. The 872,000 ceiling (and input limit) is kept on purpose: the announcement does
+ * not say how "1M" maps onto the native window and input fields, and raising maxInputTokens
+ * would assert an input allowance nobody has measured. Overrides therefore clamp to 872,000.
+ */
+export const NATIVE_GPT61_SOL_CONTEXT: Readonly<{ contextWindow: number; maxContextWindow: number; maxInputTokens: number }> =
+  Object.freeze({ ...NATIVE_GPT6_CONTEXT, contextWindow: 500_000 });
 
 /** Pinned row a configured native borrows its capability metadata from: the current Sol. */
 export const CONFIGURED_NATIVE_OPENAI_TEMPLATE_MODEL = NATIVE_GPT61_SOL_MODEL;

@@ -131,15 +131,36 @@ export function buildExecArgv(options: ExecArgvOptions): string[] {
   ];
 }
 
+/** The POSIX shell's exit status for a command it could not find. */
+export const REMOTE_COMMAND_NOT_FOUND = 127;
+/** Reserved prelude status: the remote OS cannot run the POSIX Remote Link workflow. */
+export const REMOTE_PLATFORM_UNSUPPORTED = 125;
+
 /**
  * The remote sh script for every ocx call. `quoteRemote` single-quotes it, so the login shell
  * passes it through untouched and `$HOME`/`$PATH` expand in the remote `sh`; the arguments reach
- * ocx as `"$@"` without another round of parsing. The fallback directories are appended, so an
- * ocx the remote PATH already resolves keeps winning. A missing ocx exits 127.
+ * ocx as `"$@"` without another round of parsing. Desktop binaries precede PATH candidates;
+ * each candidate must run --version successfully. A missing runnable ocx exits 127.
  */
-export const REMOTE_OCX_SCRIPT = 'PATH="$PATH:$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"; exec ocx "$@"';
-/** The POSIX shell's exit status for a command it could not find. */
-export const REMOTE_COMMAND_NOT_FOUND = 127;
+export const REMOTE_OCX_SCRIPT = `export PATH="$PATH:$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"
+case "$(uname -s 2>/dev/null)" in Windows*|MSYS*|MINGW*|CYGWIN*) exit ${REMOTE_PLATFORM_UNSUPPORTED};; esac
+try_ocx() {
+  if [ -x "$1" ] && "$1" --version >/dev/null 2>&1; then
+    executable=$1
+    shift
+    exec "$executable" "$@"
+  fi
+}
+for candidate in "$HOME/.opencodex-desktop/bin/ocx" "/Applications/OpenCodex.app/Contents/MacOS/ocx" "/usr/bin/ocx"; do
+  try_ocx "$candidate" "$@"
+done
+remaining=$PATH
+while :; do
+  directory=\${remaining%%:*}
+  try_ocx "\${directory:-.}/ocx" "$@"
+  case "$remaining" in *:*) remaining=\${remaining#*:};; *) break;; esac
+done
+exit ${REMOTE_COMMAND_NOT_FOUND}`;
 
 export function remoteOcxArgv(args: readonly string[]): string[] {
   return ["sh", "-c", REMOTE_OCX_SCRIPT, "ocx", ...args];

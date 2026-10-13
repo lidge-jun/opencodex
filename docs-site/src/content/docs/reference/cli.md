@@ -324,3 +324,9 @@ When saved config is invalid or unreadable, `ocx config`, `ocx config show`, and
 Local `ocx provider add` validates the full candidate config before saving. A validation failure leaves the saved file unchanged. Intentionally local providers require `--allow-private-network` unless their registry entry already permits private destinations. The flag does not permit blocked metadata endpoints.
 
 `ocx health` accepts only one optional `--json` flag. Unknown arguments or repeated flags return exit 2 before probing. Alias usage errors also return exit 2 with a readable error; unknown actions name `ocx help alias`.
+
+### Log model selectors
+
+`ocx logs --model` accepts either a bare model ID or the full `provider/model` label printed in human rows, including models whose bare IDs contain slashes. Failover attempts are matched as complete destinations. Filtering occurs before `--limit`, and `--follow` uses the same server filter. An empty filtered human result says no log entry matched; `--json` and `--jsonl` keep their machine-readable output.
+
+`ocx hub disable [--revoke-clients --client-key <id> ...] [--json]` returns a hub to standalone in one validated config write. Client key revocation requires explicit IDs because key names do not prove origin. See [Return a hub to standalone](/guides/remote-hub/#return-a-hub-to-standalone).

@@ -501,7 +501,7 @@ reports LazyCodex installed, `src/clients/omo-role-models.ts`
 mirrors a dashboard or `ocx agent roles set` pick into `[codex].agents.<role>.model` of
 `~/.omo/omo.jsonc`, which LazyCodex 5.1.1 and later reads. The home is resolved the way omo
 resolves it: `HOME`, then `USERPROFILE`, then the OS home. This write has no ownership record,
-snapshot, or journal. It changes the role's `model` and, when the request carries an effort, its `reasoning` (Codex `none` becomes `off`; a level LazyCodex lacks, such as `ultra`, removes a stale `reasoning`; a model-only save keeps it), and leaves every other key as it
+snapshot, or journal. It changes the role's `model` when the request carries one (an effort-only save keeps it, and creates an absent entry only to hold `reasoning`) and, when the request carries an effort, its `reasoning` (Codex `none` becomes `off`; a level LazyCodex lacks, such as `ultra`, removes a stale `reasoning`; an effort of JSON `null` removes `reasoning` along with the role file's `model_reasoning_effort`; a model-only save keeps it), and leaves every other key as it
 was, re-serialized with the file's indentation, line endings, and BOM.
 
 It never creates the file and never writes one it would damage: a missing file reports

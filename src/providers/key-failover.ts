@@ -8,7 +8,7 @@
  *
  * Modelled after src/codex/routing.ts cooldown logic but scoped to plain API-key pools.
  */
-import { commitProviderApiKeySelection } from "./api-key-selection";
+import { commitProviderApiKeySelection, providerApiKeySelectionIsCurrent } from "./api-key-selection";
 import type { ProviderApiKeySelection } from "../types/provider";
 import { routedProviderConfig } from "../router";
 import { getProviderRegistryEntry } from "./registry";
@@ -30,6 +30,16 @@ interface KeyCooldown {
 
 const DEFAULT_COOLDOWN_MS = 60_000;
 const MAX_COOLDOWN_MS = 10 * 60_000; // cap at 10 min for api-key rotation
+/**
+ * Anthropic credit-balance refusal (#6958). An empty prepaid balance is account state, not a
+ * rate signal: it clears only when someone buys credits or auto-reload fires, so the
+ * ten-minute credential cap would hand a dead key back to rotation six times an hour. One hour
+ * keeps it out of replacement and proactive selection while a funded sibling exists, and still
+ * notices a top-up without a restart. When every key is held, requests keep using the active
+ * key and return Anthropic's original refusal. The hold is in memory; dashboard key management
+ * clears it.
+ */
+export const ANTHROPIC_BILLING_COOLDOWN_MS = 60 * 60_000;
 
 /**
  * Cap for a cooldown the upstream itself dated, as opposed to one we inferred.
@@ -688,12 +698,13 @@ export function rateLimitRetryDelayMs(
 function rotateKeyAfterFailure(
   config: OcxConfig,
   providerName: string,
-  failureStatus: 401 | 429,
+  failureStatus: 401 | 429 | "billing",
   retryAfterHeader: string | null | undefined,
   now = Date.now(),
   attemptedKey?: string,
   attemptedSelection?: ProviderApiKeySelection,
   quotaResetAt?: number,
+  acceptsFreshProvider?: (provider: OcxProviderConfig) => boolean,
 ): OcxProviderConfig | null {
   const provider = config.providers[providerName];
   if (!provider) return null;
@@ -704,6 +715,11 @@ function rotateKeyAfterFailure(
     | { failedId?: string; candidateId?: string }
     | { exhaustedCount: number; failedId?: string };
   const outcome = commitProviderApiKeySelection<Rotation | null>(config, providerName, freshProvider => {
+    // Run on every persisted transaction attempt, including a freshness rebase.
+    if (acceptsFreshProvider) {
+      try { if (!acceptsFreshProvider(freshProvider)) return { changed: false, value: null }; }
+      catch { return { changed: false, value: null }; }
+    }
     const pool = freshProvider.apiKeyPool;
     if (!pool || pool.length < 2) return { changed: false, value: null };
 
@@ -741,6 +757,8 @@ function rotateKeyAfterFailure(
   }, attemptedSelection);
   if (outcome.status === "unavailable") return null;
   if (outcome.status === "superseded") {
+    // Billing authority is bound to the sent selection; a newer manual choice grants no replay.
+    if (acceptsFreshProvider) return null;
     // A newer manual selection (including A→B→A) owns subsequent dispatch. Reusing the
     // same failed key here would loop forever; preserve its original failure instead.
     return outcome.provider.apiKey !== failedKey ? structuredClone(outcome.provider) : null;
@@ -750,7 +768,9 @@ function rotateKeyAfterFailure(
     // A 401 is a verdict about the credential itself, not a timing signal: the key is rejected
     // until an operator replaces it, and upstreams send no Retry-After for it. Hold it for the
     // full cap instead of the 429 default so a dead key is not re-tried once a minute.
-    const cooldownMs = failureStatus === 401
+    const cooldownMs = failureStatus === "billing"
+      ? ANTHROPIC_BILLING_COOLDOWN_MS
+      : failureStatus === 401
       ? MAX_COOLDOWN_MS
       // A reset instant the upstream dated outranks both the header and the
       // default: it is the only one of the three that knows when the quota
@@ -762,7 +782,7 @@ function rotateKeyAfterFailure(
     sweepExpiredOnWrite(now);
   }
   if ("exhaustedCount" in outcome.value) {
-    console.warn(`[key-failover] ${providerName}: all ${outcome.value.exhaustedCount} keys in cooldown after ${failureStatus}; returning the upstream status to the client`);
+    console.warn(`[key-failover] ${providerName}: all ${outcome.value.exhaustedCount} keys in cooldown after ${failureLabel(failureStatus)}; returning the upstream status to the client`);
     return null;
   }
 
@@ -771,10 +791,14 @@ function rotateKeyAfterFailure(
   if (outcome.value.candidateId) {
     console.warn(
       // Log ids only — labels are user-supplied free text and could carry secret material.
-      `[key-failover] ${providerName}: ${failureStatus} on key ${outcome.value.failedId ?? "?"}; rotating to key ${outcome.value.candidateId}`,
+      `[key-failover] ${providerName}: ${failureLabel(failureStatus)} on key ${outcome.value.failedId ?? "?"}; rotating to key ${outcome.value.candidateId}`,
     );
   }
   return structuredClone(committed);
+}
+
+function failureLabel(failureStatus: 401 | 429 | "billing"): string {
+  return failureStatus === "billing" ? "credit-balance refusal" : String(failureStatus);
 }
 
 export function rotateKeyOn429(
@@ -863,6 +887,29 @@ export function rotateProviderTransportOn401(
     options.attemptedSelection ?? routedProvider._apiKeyAttempt);
   if (!rotated) return null;
   return applyRotatedTransport(providerName, routedProvider, rotated, options.promptCacheKey);
+}
+
+/** Exact Anthropic billing refusal: cool the key for ANTHROPIC_BILLING_COOLDOWN_MS. */
+export function rotateProviderTransportOnAnthropicBilling(
+  config: OcxConfig,
+  providerName: string,
+  routedProvider: OcxProviderTransport,
+  options: Omit<RotateProviderTransportOptions, "retryAfter"> = {},
+): OcxProviderTransport | null {
+  if (routedProvider.adapter !== "anthropic"
+    || (routedProvider.authMode !== undefined && routedProvider.authMode !== "key")
+    || !hasKeyPoolFailover(routedProvider)) return null;
+  const headerShape = (provider: OcxProviderConfig) => JSON.stringify(Object.entries(provider.headers ?? {}).sort(([a], [b]) => a.localeCompare(b)));
+  const sentHeaders = headerShape(routedProvider);
+  const acceptsFreshProvider = (fresh: OcxProviderConfig): boolean => fresh.adapter === routedProvider.adapter
+    && (fresh.authMode === undefined || fresh.authMode === "key") && hasKeyPoolFailover(fresh)
+    && (fresh.apiKeyTransport ?? "x-api-key") === (routedProvider.apiKeyTransport ?? "x-api-key")
+    && headerShape(fresh) === sentHeaders
+    && providerApiKeySelectionIsCurrent({ ...config, providers: { ...config.providers, [providerName]: fresh } },
+      providerName, routedProvider);
+  const rotated = rotateKeyAfterFailure(config, providerName, "billing", null, options.now,
+    options.attemptedKey, options.attemptedSelection ?? routedProvider._apiKeyAttempt, undefined, acceptsFreshProvider);
+  return rotated ? applyRotatedTransport(providerName, routedProvider, rotated, options.promptCacheKey) : null;
 }
 
 function applyRotatedTransport(

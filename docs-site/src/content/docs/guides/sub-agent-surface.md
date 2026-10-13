@@ -128,6 +128,11 @@ On v1, opencodex injects the same proactive delegation guidance as the v2 recomm
 at `max` or `ultra` effort. Only the delegation trigger changes: no separate delegation request is
 needed; user instructions, authority, task scope, and collaboration-tool rules still apply.
 It does not add a preferred model, roster, fallback list, or custom prompt on v1.
+In Codex code mode, opencodex sees the v1 tools when the `exec` tool description lists them. When
+Codex defers them for tool search, which it does for every opencodex catalog model, opencodex
+relies on the deferred-tool list Codex Desktop sends with the conversation; if that list names
+`multi_agent_v1`, the proactive guidance is added. A Codex client that does not send the list gives
+opencodex no sign that v1 is available, so the guidance is not added there.
 
 The default-off `syncCodexSubagentDefaults` option is separate from guidance. When opencodex owns
 active Codex routing, sync or restart can write the selected values as marker-owned

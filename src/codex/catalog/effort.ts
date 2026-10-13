@@ -620,8 +620,8 @@ export function clampCatalogModelsToCodexSupport(models: RawEntry[], deps: Bundl
       removedEfforts: [...clamp.removedEfforts],
       affectedModels: [...clamp.affectedModels],
     };
-    for (const line of formatClampLogLines(diagnostic)) console.warn(line);
-    if (!deps.commandCandidates) persistEffortClamp(diagnostic, { configDir: deps.configDir });
+    const changed = deps.commandCandidates ? true : persistEffortClamp(diagnostic, { configDir: deps.configDir });
+    if (changed) for (const line of formatClampLogLines(diagnostic)) console.warn(line);
     deps.onEffortClamp?.(diagnostic);
   } else if (!deps.commandCandidates) {
     persistEffortClamp(null, { configDir: deps.configDir });

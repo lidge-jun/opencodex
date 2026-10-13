@@ -31,7 +31,7 @@ import { restoreNativeCodexAsync, type CodexNativeRestoreResult } from "../codex
 import { stripGrokConfig } from "../grok/inject";
 import { handleRestartScopeAfterWrite, readRestartScope, type RestartScope } from "./restart-scope";
 import { normalizeUpdateChannel, runGuiUpdateWorker } from "../update/job";
-import { isJsonOption, takeFlag, terminalSafeError } from "./runtime-api";
+import { isJsonOption, takeFlag, terminalSafeError, terminalSafeText } from "./runtime-api";
 import { printStopSummary, type StopOutcome } from "./stop-report";
 import { parseStopApproval, type StopApproval } from "./stop-approval";
 import type { ResolveArgs } from "./resolve";
@@ -407,9 +407,22 @@ const commandRunners: Record<string, CommandRunner> = {
       try {
         const { syncConnectedClient } = await import("../client/connect");
         const result = await syncConnectedClient({ restartCodex });
+        const link = clientState.value.transport === "link";
         console.log(result.stale
-          ? "Hub unavailable; retained and applied the last-known-good remote catalog (stale)."
-          : "Remote hub catalog synchronized.");
+          ? `${link ? "Home" : "Hub"} unavailable; retained and applied the last-known-good remote catalog (stale).`
+          : link ? "Remote Link Home catalog synchronized." : "Remote hub catalog synchronized.");
+        if (result.homeSettings) {
+          const { describeHomeCodexSettings } = await import("../link/codex-settings");
+          const settings = result.homeSettings;
+          if (settings.source === "local") {
+            console.log(`Codex settings: kept this machine's local values (${terminalSafeText(settings.reason)}).`);
+          } else {
+            console.log(settings.source === "home"
+              ? `Codex settings applied from Home ${terminalSafeText(settings.document.home.name)}:`
+              : `Codex settings applied from the last recorded Home read (${terminalSafeText(settings.reason)}):`);
+            for (const line of describeHomeCodexSettings(settings.document.settings)) console.log(`  ${terminalSafeText(line)}`);
+          }
+        }
         await handleConnectedSyncCatalogWrite(result, restartScope);
         // `process.exitCode` rather than a literal 0, for the same reason every other
         // runner does it (tests/cli/cli-transport-honesty.test.ts): the catalog-write helper

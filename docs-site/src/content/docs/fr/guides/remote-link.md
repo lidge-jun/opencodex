@@ -78,6 +78,8 @@ Child utilise les fournisseurs et les identifiants de fournisseur de l’ordinat
 ## Référence CLI
 
 ```text
+ocx link probe <alias> [--json]
+ocx link add <alias> [--expect-fingerprint SHA256:…] [--json]
 ocx link port [--json]
 ocx link issue --alias <alias> --tunnel-port <port> [--json]
 ocx link status [--json]
@@ -85,7 +87,12 @@ ocx link revoke --link-id <id> [--json]
 ocx link reconnect --link-id <id> [--json]
 ```
 
+Sans terminal interactif (TTY), `--expect-fingerprint` est obligatoire. Dans un terminal interactif, vous pouvez l’omettre si vous confirmez explicitement l’empreinte proposée.
+
 ## Guides associés
 
 - [Déploiement Remote Hub](/fr/guides/remote-hub/)
 - [Remote Workspace](/fr/guides/remote-workspace/)
+
+
+`ocx link probe <alias> --json` · `ocx link add <alias> --expect-fingerprint SHA256:… --json` — [CLI, restart, relay verification and recovery](/guides/remote-link/#add-a-child-from-the-terminal).

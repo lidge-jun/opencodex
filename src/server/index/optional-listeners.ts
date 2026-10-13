@@ -14,6 +14,7 @@ import {
   type LinkListenerStatus,
 } from "./link-listener";
 import { createLinkSupervisor, type LinkSupervisor } from "../../link/supervisor";
+import { linkManagementRouteAllowed } from "../../link/management-routes";
 import { saveConfigPreservingClaudeCode } from "../../config/live-reconcile";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
 export { LINK_INGRESS_HOSTNAME } from "./link-listener";
@@ -77,7 +78,10 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): O
       if (claudeIntercept.ownsListener(server)) return "claude-intercept";
       return undefined;
     },
-    linkRouteAllowed,
+    // The Home's link listener admits the data plane plus the read-only management relay
+    // (#6957). The Child's own ingress keeps the data-only table, so a local caller on the Child
+    // cannot reach the Home's management reads without the Child's dashboard session.
+    linkRouteAllowed: (url, req) => linkRouteAllowed(url, req) || linkManagementRouteAllowed(url, req),
     linkAdmissionKeyIds: () => linkListener.linkAdmissionKeyIds(),
     onAuthenticatedCatalog: listener => linkListener.onAuthenticatedCatalog(listener),
     notifyAuthenticatedCatalog: apiKeyId => linkListener.notifyAuthenticatedCatalog(apiKeyId),

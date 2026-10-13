@@ -1,9 +1,11 @@
 import { MAX_CLIENT_SSE_FRAME_BYTES } from "../sse-frame-buffer";
 import {
+  isTransientUpstreamStatus,
   markResponseNonReplayable,
   UPSTREAM_CLOSED_BEFORE_RESPONSE_CODE,
   UPSTREAM_NO_RESPONSE_CODE,
 } from "../../lib/upstream-retry";
+import { isRateLimitOrQuotaFailureMessage, recognizedUpstreamError } from "../../lib/errors";
 import type { RequestFailureCause, RequestFailureStage } from "../../lib/request-failure-model";
 import { packageVersion } from "../../lib/package-version";
 // If the 101 never arrives (network black hole), give SSE a chance well before
@@ -107,7 +109,208 @@ export type CodexWsStageRecord = Omit<CodexWsFailureStage, "requestBytes"> & {
   ocxVersion: string;
   /** Bun runtime version the exchange gated on. */
   bunVersion: string;
+  /**
+   * Normalized type of the Responses terminal frame that ended a plain exchange, as the upstream
+   * sent it and before any tail this proxy synthesizes (#6740). It is what separates an upstream
+   * `error` frame from a genuine `response.failed` when both reach a row as the same synthetic 502.
+   * Null when no terminal frame arrived, and on native-control exchanges, which can end on an
+   * acknowledgement instead. Records written before it existed read as null.
+   */
+  terminalEvent: CodexWsTerminalEvent | null;
+  /** Wrapper status of a terminal `error` frame ({@link codexWsWrapperStatus}); null otherwise. */
+  terminalErrorStatus: number | null;
 };
+
+/** The frames a plain exchange ends on, closed so a stage record can never carry free text. */
+export const CODEX_WS_TERMINAL_EVENTS = [
+  "response.completed",
+  "response.failed",
+  "response.incomplete",
+  "error",
+] as const;
+export type CodexWsTerminalEvent = typeof CODEX_WS_TERMINAL_EVENTS[number];
+
+export function isCodexWsTerminalEvent(value: unknown): value is CodexWsTerminalEvent {
+  return typeof value === "string" && (CODEX_WS_TERMINAL_EVENTS as readonly string[]).includes(value);
+}
+
+/**
+ * The HTTP status a Codex WebSocket `error` frame states on its wrapper, or undefined.
+ *
+ * The backend wraps a failure as `{type:"error", status|status_code, error}` and the native client
+ * turns that status into an HTTP error of the same status
+ * (codex-rs/codex-api/src/endpoint/responses_websocket.rs map_wrapped_websocket_error_event). Only
+ * that contract is read: a top-level integer in 100..599 under exactly one of the two aliases, the
+ * same rule the pre-commit rejection projection applies.
+ */
+export function codexWsWrapperStatus(payload: Record<string, unknown>): number | undefined {
+  if (payload.type !== "error") return undefined;
+  const hasStatus = Object.hasOwn(payload, "status");
+  if (hasStatus === Object.hasOwn(payload, "status_code")) return undefined;
+  const status = hasStatus ? payload.status : payload.status_code;
+  return typeof status === "number" && Number.isInteger(status) && status >= 100 && status <= 599
+    ? status
+    : undefined;
+}
+
+function plainRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** An absent or empty `output` array; anything else may already be visible to the client. */
+function emptyOutput(response: Record<string, unknown>): boolean {
+  const output = response.output;
+  return output === undefined || (Array.isArray(output) && output.length === 0);
+}
+
+/**
+ * Upper bound on how long an exchange may hold empty lifecycle frames while it waits to see
+ * whether the upstream refuses the turn before any output (#6969).
+ *
+ * Field rows put 97.5% of authoritative refusals within 5 s of the first Responses event and
+ * 98.2% within 10 s, with nothing gained after that.
+ */
+export const CODEX_WS_PRE_OUTPUT_REFUSAL_HOLD_MAX_MS = 10_000;
+
+/**
+ * The hold one send may use: at most `maxMs` from the first empty lifecycle frame, and never past
+ * `until`, an absolute time.
+ */
+export interface CodexWsPreOutputRefusalHold {
+  maxMs: number;
+  until: number;
+}
+
+/**
+ * The hold for a send starting now. The caller's header deadline (`connectTimeoutMs`) starts no
+ * earlier than this, so ending every hold by half of it means a held turn always commits well before
+ * that deadline could abort it, however late the first lifecycle frame arrives.
+ */
+export function codexWsPreOutputRefusalHold(connectMs: number, now = Date.now()): CodexWsPreOutputRefusalHold {
+  const half = Math.max(0, Math.floor(connectMs / 2));
+  return { maxMs: Math.min(CODEX_WS_PRE_OUTPUT_REFUSAL_HOLD_MAX_MS, half), until: now + half };
+}
+
+/**
+ * A lifecycle frame that commits nothing the client could see or act on (#6969): created,
+ * in-progress or queued, carrying a response object whose output is absent or empty. A snapshot
+ * with any output item, an unknown event, or a frame addressed to another stream is not one.
+ */
+export function isEmptyCodexWsLifecycleEvent(payload: Record<string, unknown>): boolean {
+  if (payload.type !== "response.created" && payload.type !== "response.in_progress"
+    && payload.type !== "response.queued") return false;
+  if (payload.stream_id !== undefined) return false;
+  return plainRecord(payload.response) && emptyOutput(payload.response);
+}
+
+const QUOTA_REFUSAL_IDENTITIES: ReadonlySet<string> = new Set(["usage_limit_reached", "usage_not_included"]);
+
+/** Quota and rate-limit identities keep their own routing: every `rate_limit*` and `*quota*` name. */
+function quotaRefusalIdentity(value: string): boolean {
+  const name = value.toLowerCase();
+  return QUOTA_REFUSAL_IDENTITIES.has(name) || name.startsWith("rate_limit") || name.includes("quota");
+}
+
+/**
+ * The status of an authoritative upstream refusal that ended a turn before any output (#6969),
+ * or undefined.
+ *
+ * Only structured evidence counts: a bare `error` frame's single wrapper status (the alias the
+ * native client turns into an HTTP error of that status, see {@link codexWsWrapperStatus}), or,
+ * with no wrapper alias at all, the recognized overload class; and a `response.failed` with an
+ * empty output whose error is the recognized overload class. The status must be a transient
+ * gateway status. Message wording never authorizes anything here; it can only veto, so a 5xx whose
+ * error names quota or a rate limit keeps the routing it has today.
+ */
+export function codexWsPreOutputRefusalStatus(payload: Record<string, unknown>): number | undefined {
+  if (payload.stream_id !== undefined) return undefined;
+  let error: unknown;
+  let status: number | undefined;
+  if (payload.type === "error") {
+    error = payload.error;
+    if (error !== undefined && !plainRecord(error)) return undefined;
+    const statedAlias = Object.hasOwn(payload, "status") || Object.hasOwn(payload, "status_code");
+    status = codexWsWrapperStatus(payload);
+    // A malformed or doubled alias is not evidence of anything.
+    if (statedAlias && status === undefined) return undefined;
+    if (status === undefined && plainRecord(error)) status = recognizedUpstreamError(error)?.httpStatus;
+  } else if (payload.type === "response.failed") {
+    const response = payload.response;
+    if (!plainRecord(response) || !emptyOutput(response)) return undefined;
+    error = response.error;
+    if (!plainRecord(error)) return undefined;
+    status = recognizedUpstreamError(error)?.httpStatus;
+  } else {
+    return undefined;
+  }
+  if (status === undefined || !isTransientUpstreamStatus(status)) return undefined;
+  if (plainRecord(error)) {
+    const { code, type, message } = error;
+    if ([code, type, message].some(value => value != null && typeof value !== "string")) return undefined;
+    if (typeof code === "string" && quotaRefusalIdentity(code)) return undefined;
+    if (typeof type === "string" && quotaRefusalIdentity(type)) return undefined;
+    if (typeof message === "string" && isRateLimitOrQuotaFailureMessage(message)) return undefined;
+  }
+  return status;
+}
+
+/**
+ * The response ids a frame names, for the exchange's replay-eligibility latch (#6969): the nested
+ * `response.id` and the top-level `response_id`. Null when a present id is not a string, which the
+ * latch treats as a conflict.
+ */
+export function codexWsFrameResponseIds(payload: Record<string, unknown>): string[] | null {
+  const ids: string[] = [];
+  const nested = plainRecord(payload.response) ? payload.response.id : undefined;
+  for (const value of [nested, payload.response_id]) {
+    if (value === undefined) continue;
+    if (typeof value !== "string") return null;
+    if (!ids.includes(value)) ids.push(value);
+  }
+  return ids;
+}
+
+interface PreOutputRefusalRecord {
+  restore: (() => Response) | null;
+  outcomeRecorded: boolean;
+}
+
+const preOutputRefusals = new WeakMap<Response, PreOutputRefusalRecord>();
+
+/**
+ * Register a pre-output refusal projection (#6969): a replayable gateway status standing in for a
+ * WebSocket exchange whose upstream refused the turn before any output. `restore` rebuilds the
+ * 200 event stream the client would have received without the projection.
+ */
+export function markCodexWsPreOutputRefusal(projection: Response, restore: () => Response): void {
+  preOutputRefusals.set(projection, { restore, outcomeRecorded: false });
+}
+
+export function isCodexWsPreOutputRefusal(response: Response): boolean {
+  return preOutputRefusals.has(response);
+}
+
+/** Record that this projection's account outcome was written, so no later owner writes it again. */
+export function noteCodexWsPreOutputRefusalOutcome(response: Response): void {
+  const record = preOutputRefusals.get(response);
+  if (record) record.outcomeRecorded = true;
+}
+
+export function codexWsPreOutputRefusalOutcomeRecorded(response: Response): boolean {
+  return preOutputRefusals.get(response)?.outcomeRecorded === true;
+}
+
+/**
+ * The response the client should receive in place of a projection no recovery replaced: the
+ * original event stream, byte for byte. Single use; any other response is returned unchanged.
+ */
+export function restoreCodexWsPreOutputRefusal(response: Response): Response {
+  const record = preOutputRefusals.get(response);
+  const restore = record?.restore;
+  if (!record || !restore) return response;
+  record.restore = null;
+  return restore();
+}
 
 const codexWsStageByResponse = new WeakMap<Response, CodexWsStageRecord>();
 

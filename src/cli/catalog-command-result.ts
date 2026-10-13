@@ -23,7 +23,8 @@ export async function runCatalogAction(
     if (error instanceof RuntimeApiError) {
       if (error.code) {
         console.error(`Error: ${error.code === "proxy_not_running" ? PROXY_NOT_RUNNING_MESSAGE
-          : "This listener has no management API. Run management commands on the connected Hub. No request was sent."}`);
+          : error.code === "link_child_management_unavailable" ? terminalSafeText(error.message)
+            : "This listener has no management API. Run management commands on the connected Hub. No request was sent."}`);
         return 1;
       }
       const code = own(error.body, "code") ?? own(own(error.body, "error"), "code");

@@ -255,6 +255,23 @@ export const META_MUSE_CODE_REASONING_EFFORT_MAP: Record<string, string> = Objec
 /** Both Muse Spark 1.3 tiers publish a 1,048,576-token window (dev.meta.ai/docs/models). */
 export const META_MUSE_CONTEXT_WINDOW = 1_048_576;
 export const META_MUSE_MODELS = ["muse-spark-1.3", "muse-spark-1.3-contributor"];
+/*
+ * Muse Wonder (preview), announced 2026-10-12 (research.meta.ai/blog/muse-wonder). Per
+ * dev.meta.ai/docs/models and dev.meta.ai/docs/pricing-rate-limits, verified 2026-10-13:
+ * id muse-wonder-1.0, a 1,048,576-token window, reasoning effort "minimal" through "max",
+ * and Standard mode only on the Model API (no Contributor variant). Muse Wonder Full is
+ * reachable only inside Muse Code subscriptions and has no Model API id, so it is absent.
+ */
+export const META_MUSE_WONDER_MODEL = "muse-wonder-1.0";
+/** Roster both direct Meta providers serve: the Spark 1.3 tiers plus Muse Wonder. */
+export const META_MODEL_API_MODELS = [...META_MUSE_MODELS, META_MUSE_WONDER_MODEL];
+/** Model API ladders: Spark stops at xhigh; Wonder documents minimal..max. */
+export const META_MODEL_API_REASONING_EFFORTS: Record<string, string[]> = Object.fromEntries(
+  META_MODEL_API_MODELS.map(id => [id, id === META_MUSE_WONDER_MODEL ? META_MUSE_CODE_REASONING_EFFORTS : META_MUSE_REASONING_EFFORTS]),
+);
+export const META_MODEL_API_REASONING_EFFORT_MAPS: Record<string, Record<string, string>> = Object.fromEntries(
+  META_MODEL_API_MODELS.map(id => [id, id === META_MUSE_WONDER_MODEL ? META_MUSE_CODE_REASONING_EFFORT_MAP : META_MUSE_REASONING_EFFORT_MAP]),
+);
 /**
  * Daybreak program aliases. These `-latest` ids are the stable contract: OpenAI repoints
  * them at newer snapshots over time (red -> gpt-5.6-cyber, blue -> gpt-5.6-sol as of

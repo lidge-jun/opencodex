@@ -85,6 +85,9 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
     || mainReauth.state.phase === "pending"
     || mainReauth.state.phase === "committing";
   const [confirm, setConfirm] = useState<CodexAccountEntry | null>(null);
+  // The pinned card whose badge was selected again: the release goes through the same
+  // /active write as a switch, just with a null id, which the server reads as unpin.
+  const [unpinFor, setUnpinFor] = useState<CodexAccountEntry | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [modelsNotice, setModelsNotice] = useState<{ catalogRefreshPending: boolean } | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -250,6 +253,21 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
     showActionFeedback(accountModeState === "direct"
       ? t("codexAuth.poolPreparedToast", { email: label })
       : t("codexAuth.switched", { email: label }));
+  };
+
+  const unpinAccount = async () => {
+    if (!unpinFor) return;
+    const result = await controller.switchAccount(null, { expectedPinnedAccountId: unpinFor.id });
+    if (!result.ok) {
+      if (result.reason === "busy") return;
+      // The confirmation described an old pin, or the saved result is uncertain.
+      // A fresh attempt must start from the refreshed card and a new confirmation.
+      setUnpinFor(null);
+      showActionFeedback(t(result.reason === "pin_changed" ? "codexAuth.unpinChanged" : "codexAuth.unpinFailed"), "err");
+      return;
+    }
+    setUnpinFor(null);
+    showActionFeedback(t("codexAuth.unpinned"), "ok");
   };
 
   const editAlias = async (account: CodexAccountEntry) => {
@@ -543,6 +561,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
             threshold={autoSwitchThreshold}
             switchActionLabel={switchActionLabel}
             onSwitch={setConfirm}
+            onUnpin={setUnpinFor}
             onTogglePause={togglePaused}
             pauseUpdatingId={pauseUpdatingId}
             pauseBusy={pauseBusy}
@@ -591,6 +610,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
             threshold={autoSwitchThreshold}
             onOpenReset={openResetPopup}
             onSwitch={setConfirm}
+            onUnpin={setUnpinFor}
             onTogglePause={togglePaused}
             pauseUpdatingId={pauseUpdatingId}
             pauseBusy={pauseBusy}
@@ -673,6 +693,19 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
           threshold={poolStrategy && poolStrategy !== "round-robin" ? autoSwitchThreshold : undefined}
           onCancel={() => setConfirm(null)}
           onConfirm={() => { void setActive(confirm.id === "__main__" ? "__main__" : confirm.id); }}
+        />
+      )}
+
+      {unpinFor && (
+        <CodexAccountSwitchModal
+          unpin
+          confirm={unpinFor}
+          mainEmail={main?.email}
+          accountModeState={accountModeState}
+          switchingId={switchingId}
+          orderBusy={priorityUpdatingId !== null}
+          onCancel={() => setUnpinFor(null)}
+          onConfirm={() => { void unpinAccount(); }}
         />
       )}
 

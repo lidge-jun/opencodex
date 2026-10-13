@@ -1,3 +1,4 @@
+import { deferPhysicalSendReporter } from "./deferred-send-reporter";
 import { spendLedgerStorageErrorResponse } from "./spend-storage-error";
 import { classifyAnthropic429 } from "../../oauth/anthropic-rate-limit-policy";
 import { rotateAnthropicAccountOnResponseForInstance } from "../../oauth/anthropic-account-refusal";
@@ -23,12 +24,13 @@ import {
   sealRequestAttemptIdentity,
   recordAttemptCredentialSource,
 } from "../request-log";
-import { clientCancelledResponse, readDisplaySafeErrorText, normalizeUpstreamErrorText } from "./core-errors";
+import { anthropicPoolCooldownResponse, clientCancelledResponse, readDisplaySafeErrorText, normalizeUpstreamErrorText } from "./core-errors";
 import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
 import { redactSecretString } from "../../lib/redact";
 import { rewriteUpstreamPolicyRefusal } from "./policy-refusal";
 import { withProviderRequestSlot } from "../../providers/request-pacing";
 import { providerFetch, fetchWithHeaderTimeout, safeHostLabel } from "./fetch-helpers";
+import { isAnthropicBillingKeyPool, rotateAnthropicBillingKeyOnResponse } from "../../providers/anthropic-billing-recovery";
 import {
   transientRetryPolicyFor,
   resetReplayPolicyFor,
@@ -372,6 +374,23 @@ export async function prepareAdapterExchange(
       : transportState.oauth401ReplayAttempted ? "oauth-401" : undefined
     : undefined;
   let upstreamResponse: Response;
+  // Preserve bounded terminal bytes without retaining the refused send's pacing lease.
+  // Reading the owned body to EOF (or cancelling on its bound) frees capacity BEFORE
+  // replacement admission; keeping that live body would wait on its own concurrency slot.
+  const retainFailureResponse = async (): Promise<Response> => {
+    const original = upstreamResponse;
+    const text = await readDisplaySafeErrorText(original, upstream.signal, "");
+    const headers = new Headers(original.headers);
+    headers.delete("content-length");
+    headers.delete("content-encoding");
+    upstreamResponse = new Response(text, { status: original.status, statusText: original.statusText, headers });
+    return upstreamResponse;
+  };
+  const billingPoolRequest = isAnthropicBillingKeyPool(route.provider);
+  let billingRecoveryActive = false;
+  const genericRefetchCountsSends = () => sendBudgetState.adapterSendBudget?.spendEnforced === true
+    || transientRetryPolicyFor(route.provider) !== null || resetReplayPolicyFor(route.provider) !== null
+    || billingPoolRequest || billingRecoveryActive;
   let handoffPermit: ResponsesSendBudget["pendingHopPermit"];
   try {
     if (transportState.activeAdapter.fetchResponse) {
@@ -444,6 +463,8 @@ export async function prepareAdapterExchange(
       const fetchWithRetryPolicy = (route.provider.adapter === "google" || transientPolicy)
         ? fetchWithTransientRetry
         : fetchWithResetRetry;
+      const initialReporter = transientSendReporter(compactPrepaid ?? options.comboDispatchPermit);
+      const deferredInitial = billingPoolRequest && !receiptMode ? deferPhysicalSendReporter(initialReporter) : undefined;
       try { upstreamResponse = await fetchWithRetryPolicy(
         recovery => {
           // Unconfigured generic sends may omit the counting reporter. Capture policy
@@ -452,10 +473,11 @@ export async function prepareAdapterExchange(
             poolId: logCtx.spendPoolId ?? route.providerName, identityId: logCtx.accountLogLabel,
           });
           // Receipt mode books the physical send at executor admission instead of here.
-          if (!receiptMode && compactPrepaid && !compactPrepaidUsed) {
+          if (!deferredInitial && !receiptMode && compactPrepaid && !compactPrepaidUsed) {
             if (!compactPrepaid.use()) throw new SendBudgetExhaustedError(safeHostLabel(builtInitialRequest.url));
             compactPrepaidUsed = true;
           }
+          // Key transport keeps this metadata pending until it binds the actual selection.
           transportState.noteRoutedAttemptSend(inputTokenEstimate, recovery ?? initialRecovery);
           return fetchWithHeaderTimeout(builtInitialRequest.url, applyUpstreamRecoveryInit({
             method: builtInitialRequest.method,
@@ -467,6 +489,13 @@ export async function prepareAdapterExchange(
               providerName: route.providerName,
               modelId: route.modelId,
               onPhysicalDispatch: () => {
+                if (deferredInitial) {
+                  if (!deferredInitial.beforeDispatch()) throw new SendBudgetExhaustedError(safeHostLabel(builtInitialRequest.url));
+                  if (compactPrepaid && !compactPrepaidUsed) {
+                    if (!compactPrepaid.use()) throw new SendBudgetExhaustedError(safeHostLabel(builtInitialRequest.url));
+                    compactPrepaidUsed = true;
+                  }
+                }
                 // Preserve the unconfigured direct-adapter accounting contract; Combo admission
                 // and explicit retry/compaction budgets require a receipt for their booked send.
                 if (receiptMode) {
@@ -483,6 +512,7 @@ export async function prepareAdapterExchange(
           label: safeHostLabel(builtInitialRequest.url),
           claimAmbiguousResend: claimPreHeaderResend,
           ...(sendBudgetState.adapterSendBudget?.spendEnforced || options.comboDispatchPermit || transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt
+            || billingPoolRequest
             ? {
               // A pending compaction permit already booked this leg's first physical send.
               ...(transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt
@@ -495,7 +525,7 @@ export async function prepareAdapterExchange(
               // settled by `onPhysicalDispatch`, so a reporter here would count them twice.
               ...(receiptMode
                 ? {}
-                : { onSendsConsumed: transientSendReporter(compactPrepaid ?? options.comboDispatchPermit) }),
+                : { onSendsConsumed: deferredInitial?.report ?? initialReporter }),
             }
             : {}),
         },
@@ -526,8 +556,7 @@ export async function prepareAdapterExchange(
       return formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(refusal));
     }
     if (refusal instanceof AnthropicAccountCooldownError) {
-      return formatErrorResponse(429, "rate_limit_error", refusal.message,
-        refusal.retryAfterSeconds === null ? undefined : { retryAfter: String(refusal.retryAfterSeconds) });
+      return anthropicPoolCooldownResponse(refusal, { comboAttempt: options.comboAttempt, logCtx });
     }
     // A budget refusal is a decision this process made, not an upstream fault. Reporting it as
     // 502 does more than mislabel it: the Codex client retries 5xx and does not retry a 429, so
@@ -614,7 +643,12 @@ export async function prepareAdapterExchange(
           recordAdapterReasoning(logCtx, retryRequest);
           recordAdapterTier(logCtx, retryRequest);
         } catch (err) {
-          if (preserveFailureResponse && !options.abortSignal?.aborted) return { failed: preserveFailureResponse };
+          // A rotated credential that cannot be shaped keeps the refusal it was meant to
+          // replace. The image-tier rebuild is different: the request itself failed to shape,
+          // and its established 413/400 build-error contract stays authoritative.
+          if (preserveFailureResponse && recovery !== "image-413" && !options.abortSignal?.aborted) {
+            return { failed: preserveFailureResponse };
+          }
           // A rotated/rebuilt adapter build failure is a request-shaping error, not an
           // upstream connect failure: tear the abort link down and map it as 400. A
           // translator-budget refusal keeps its established 413 here as well — adapters
@@ -691,7 +725,7 @@ export async function prepareAdapterExchange(
           const refetchWithPolicy = (route.provider.adapter === "google" || refetchTransientPolicy)
             ? fetchWithTransientRetry
             : fetchWithResetRetry;
-          const helperCountsSends = sendBudgetState.adapterSendBudget?.spendEnforced === true || refetchTransientPolicy !== null || resetReplayPolicyFor(route.provider) !== null;
+          const helperCountsSends = genericRefetchCountsSends();
           const prepaid = sendBudgetState.pendingHopPermit;
           const configuredTotal = refetchTransientPolicy?.attempts;
           const refetchCap = transientSendCapFor(configuredTotal, sendBudgetState.targetSendsUsed);
@@ -707,27 +741,41 @@ export async function prepareAdapterExchange(
               { allowFinalRecoveryReserve: configuredTotal === undefined },
             )
             : undefined;
+          let refetchPermitUsed = false;
+          const refetchReporter = refetchAllowance ? transientSendReporter(refetchAllowance.permit) : undefined;
+          const deferredRefetch = billingPoolRequest && refetchReporter ? deferPhysicalSendReporter(refetchReporter) : undefined;
           try {
             return await refetchWithPolicy(
               recoveryKind => {
                 sendBudgetState.adapterSendBudget?.startRequest?.({
                   poolId: logCtx.spendPoolId ?? route.providerName, identityId: logCtx.accountLogLabel,
                 });
-                if (refetchAllowance?.permit && !refetchAllowance.permit.use()) {
-                  throw new SendBudgetExhaustedError(safeHostLabel(retryRequest.url));
-                }
-                transportState.noteRoutedAttemptSend(retryEstimate, recoveryKind ?? recovery);
-                // Same boundary on the helper path: the thunk is what reaches the wire, and it
-                // can be refused above before it does. use() past the first attempt is a no-op.
-                onDispatch?.();
-                if (preserveFailureResponse) replacementAdmitted = true;
-                if (!refetchAllowance) chargeFastDowngradeWorkflowSend();
+                // Prepare key metadata before the guarded transport commits its attempt;
+                // counters and permits still wait for the physical executor after pacing.
+                if (deferredRefetch) transportState.noteRoutedAttemptSend(retryEstimate, recoveryKind ?? recovery);
+                const confirmDispatch = () => {
+                  if (refetchAllowance?.permit && !refetchPermitUsed) {
+                    if (!refetchAllowance.permit.use()) throw new SendBudgetExhaustedError(safeHostLabel(retryRequest.url));
+                    refetchPermitUsed = true;
+                  }
+                  if (!deferredRefetch) transportState.noteRoutedAttemptSend(retryEstimate, recoveryKind ?? recovery);
+                  // Eligible pools confirm after pacing at the physical executor; legacy
+                  // helper paths retain their existing thunk admission boundary.
+                  onDispatch?.();
+                  if (preserveFailureResponse) replacementAdmitted = true;
+                  if (!refetchAllowance) chargeFastDowngradeWorkflowSend();
+                };
+                if (!deferredRefetch) confirmDispatch();
                 return fetchWithHeaderTimeout(retryRequest.url,
                   applyUpstreamRecoveryInit({
                     method: retryRequest.method, headers: retryRequest.headers, body: retryRequest.body,
                   }, recoveryKind), upstream.signal, connectMs, parsed.stream,
                   providerFetch(route.provider, options.codexWsRuntimeIdentity, {
                     dispatchOverride: oauthDispatch(retryRequest),
+                    onPhysicalDispatch: deferredRefetch ? () => {
+                      if (!deferredRefetch.beforeDispatch()) throw new SendBudgetExhaustedError(safeHostLabel(retryRequest.url));
+                      confirmDispatch();
+                    } : undefined,
                     providerName: route.providerName,
                     modelId: route.modelId,
                     beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
@@ -741,14 +789,14 @@ export async function prepareAdapterExchange(
                 ...(refetchAllowance
                   ? {
                     attempts: refetchAllowance.attempts,
-                    onSendsConsumed: transientSendReporter(refetchAllowance.permit),
+                    onSendsConsumed: deferredRefetch?.report ?? refetchReporter,
                   }
                   : {}),
               },
             );
           } finally {
-            // Refunds only a reservation whose send never happened -- an abort settled before
-            // the thunk ran. A used or externally settled permit ignores this.
+            // Refund only a reservation whose send never reached its admission boundary.
+            // A used or externally settled permit ignores this.
             refetchAllowance?.permit?.release();
           }
         } finally {
@@ -786,8 +834,7 @@ export async function prepareAdapterExchange(
           return { failed: formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(refusal)) };
         }
         if (refusal instanceof AnthropicAccountCooldownError) {
-          return { failed: formatErrorResponse(429, "rate_limit_error", refusal.message,
-            refusal.retryAfterSeconds === null ? undefined : { retryAfter: String(refusal.retryAfterSeconds) }) };
+          return { failed: anthropicPoolCooldownResponse(refusal, { comboAttempt: options.comboAttempt, logCtx }) };
         }
         // Same rule on the recovery leg: the ladder refused to send again, so the answer names
         // this proxy rather than the provider it never reached.
@@ -998,32 +1045,83 @@ export async function prepareAdapterExchange(
           promptCacheKey: parsed.options.promptCacheKey,
         });
         if (!rotated) break;
-        // Release the failed response's socket before retrying; unread bodies otherwise linger
-        // until runtime cleanup (one per rotated key).
-        try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
-        route.provider = rotated;
-        const selectionFailure = await resolveRotatedCopilotSelection();
-        if (selectionFailure) return selectionFailure;
-        invalidateSameTargetRequest();
-        transportState.activeAdapter = resolveSelectionAdapter(
-          resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
-          config.cacheRetention,
-        );
-        bindRouteReasoningReplayScope({
-          parsed,
-          providerName: route.providerName,
-          provider: route.provider,
-          adapterName: transportState.activeAdapter.name,
-        });
-       const result = await rebuildAndRefetch("key-401");
-       if ("failed" in result) return result.failed;
-       upstreamResponse = result;
-        // A recovery refetch can itself die on an ambiguous pre-header reset, and the refusal
-        // that answers it is a 429. Every arm below keys on 429, so letting it fall through
-        // hands the marked refusal to the next waiting arm and replays the send it exists to
-        // stop. Re-enter the loop guard instead, which returns it unchanged.
-        if (isNonReplayableResponse(upstreamResponse)) continue recovery;
-     }
+        if (billingRecoveryActive && (options.abortSignal?.aborted || upstream.signal.aborted)) {
+          cleanupUpstreamAbort(); upstream.abort(); return clientCancelledResponse();
+        }
+        const billingHop = (billingPoolRequest || billingRecoveryActive)
+          ? reserveCredentialHop("auth-recovery", `${route.providerName}|${route.modelId}|key-401`,
+            transportState.activeAdapter.fetchResponse === undefined)
+          : undefined;
+        if (billingHop && !billingHop.allowed) break;
+        const failedResponse = billingPoolRequest || billingRecoveryActive ? await retainFailureResponse() : undefined;
+        try {
+          // Release the failed response's socket before retrying; unread bodies otherwise linger
+          // until runtime cleanup (one per rotated key).
+          if (!failedResponse) try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+          route.provider = rotated;
+          const selectionFailure = await resolveRotatedCopilotSelection();
+          if (selectionFailure) return selectionFailure;
+          invalidateSameTargetRequest();
+          transportState.activeAdapter = resolveSelectionAdapter(
+            resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
+            config.cacheRetention,
+          );
+          bindRouteReasoningReplayScope({
+            parsed,
+            providerName: route.providerName,
+            provider: route.provider,
+            adapterName: transportState.activeAdapter.name,
+          });
+          if (billingHop) sendBudgetState.pendingHopPermit = billingHop.permit;
+          const result = await rebuildAndRefetch("key-401",
+            billingHop ? () => { billingHop.permit?.use(); } : undefined, failedResponse);
+          if ("failed" in result) {
+            if (result.failed !== failedResponse) return result.failed;
+            break;
+          }
+          if (failedResponse) {
+            try { void failedResponse.body?.cancel().catch(() => {}); } catch { /* closed */ }
+          }
+          upstreamResponse = result;
+          // A recovery refetch can itself die on an ambiguous pre-header reset, and the refusal
+          // that answers it is a 429. Every arm below keys on 429, so letting it fall through
+          // hands the marked refusal to the next waiting arm and replays the send it exists to
+          // stop. Re-enter the loop guard instead, which returns it unchanged.
+          if (isNonReplayableResponse(upstreamResponse)) continue recovery;
+        } finally {
+          if (billingHop) { sendBudgetState.pendingHopPermit = undefined; billingHop.permit?.release(); }
+        }
+      }
+
+      while ((upstreamResponse.status === 400 || upstreamResponse.status === 402) && hasKeyPoolFailover(route.provider)) {
+        const rotated = await rotateAnthropicBillingKeyOnResponse(upstreamResponse, config, route.providerName, route.provider,
+          { signal: upstream.signal, promptCacheKey: parsed.options.promptCacheKey });
+        if (upstream.signal.aborted || options.abortSignal?.aborted) {
+          cleanupUpstreamAbort(); upstream.abort(); return clientCancelledResponse();
+        }
+        if (!rotated) break;
+        billingRecoveryActive = true;
+        const hop = reserveCredentialHop("auth-recovery", `${route.providerName}|${route.modelId}|key-401`,
+          transportState.activeAdapter.fetchResponse === undefined);
+        if (!hop.allowed) break;
+        const failedResponse = await retainFailureResponse();
+        try {
+          route.provider = rotated;
+          invalidateSameTargetRequest();
+          transportState.activeAdapter = resolveSelectionAdapter(
+            resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy), config.cacheRetention);
+          bindRouteReasoningReplayScope({ parsed, providerName: route.providerName, provider: route.provider, adapterName: transportState.activeAdapter.name });
+          sendBudgetState.pendingHopPermit = hop.permit;
+          const result = await rebuildAndRefetch("key-401", () => { hop.permit?.use(); }, failedResponse);
+          if ("failed" in result) {
+            if (result.failed !== failedResponse) return result.failed;
+            break;
+          }
+          try { void failedResponse.body?.cancel().catch(() => {}); } catch { /* closed */ }
+          upstreamResponse = result;
+          continue recovery;
+        } finally { sendBudgetState.pendingHopPermit = undefined; hop.permit?.release(); }
+      }
 
       // Anthropic fast mode refused (no usage credits, organization not enabled, model outside
       // the lane, fast pool empty): resend once at standard speed, as Claude Code does. This
@@ -1042,7 +1140,7 @@ export async function prepareAdapterExchange(
         const hop = reserveCredentialHop(
           "repair",
           `${route.providerName}|${route.modelId}|anthropic-fast-downgrade`,
-          !adapterOwnsDispatch && (transientRetryPolicyFor(route.provider) !== null || resetReplayPolicyFor(route.provider) !== null),
+          !adapterOwnsDispatch && genericRefetchCountsSends(),
         );
         if (hop.allowed) {
           anthropicFastDowngradeGuard.attempted = true;
@@ -1111,7 +1209,9 @@ export async function prepareAdapterExchange(
        upstreamResponse = result;
         // The refusal is a 429 too: without this the while condition is still true and the
         // next configured attempt replays it on the same target.
-        if (isNonReplayableResponse(upstreamResponse)) continue recovery;
+        if (isNonReplayableResponse(upstreamResponse)
+          || (isAnthropicBillingKeyPool(route.provider)
+            && [400, 402].includes(upstreamResponse.status))) continue recovery;
      }
 
       // Multi-key 429 failover: rotate to the next pool key (cooldown-aware) and retry the
@@ -1146,30 +1246,53 @@ export async function prepareAdapterExchange(
           quotaResetAt,
         });
         if (!rotated) break;
-        // Release the failed response's socket before retrying; unread bodies otherwise linger
-        // until runtime cleanup (one per rotated key under a rate-limit storm).
-        try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
-        route.provider = rotated;
-        const selectionFailure = await resolveRotatedCopilotSelection();
-        if (selectionFailure) return selectionFailure;
-        invalidateSameTargetRequest();
-        transportState.activeAdapter = resolveSelectionAdapter(
-          resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
-          config.cacheRetention,
-        );
-        bindRouteReasoningReplayScope({
-          parsed,
-          providerName: route.providerName,
-          provider: route.provider,
-          adapterName: transportState.activeAdapter.name,
-        });
-       const result = await rebuildAndRefetch("key-429");
-       if ("failed" in result) return result.failed;
-       upstreamResponse = result;
-        // Rotating on the refusal would also write a cooldown against a key that rate-limited
-        // nothing, which outlives the request.
-        if (isNonReplayableResponse(upstreamResponse)) continue recovery;
-     }
+        if (billingRecoveryActive && (options.abortSignal?.aborted || upstream.signal.aborted)) {
+          cleanupUpstreamAbort(); upstream.abort(); return clientCancelledResponse();
+        }
+        const billingHop = (billingPoolRequest || billingRecoveryActive)
+          ? reserveCredentialHop("auth-recovery", `${route.providerName}|${route.modelId}|key-429`,
+            transportState.activeAdapter.fetchResponse === undefined)
+          : undefined;
+        if (billingHop && !billingHop.allowed) break;
+        const failedResponse = billingPoolRequest || billingRecoveryActive ? await retainFailureResponse() : undefined;
+        try {
+          // Release the failed response's socket before retrying; unread bodies otherwise linger
+          // until runtime cleanup (one per rotated key under a rate-limit storm).
+          if (!failedResponse) try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+          route.provider = rotated;
+          const selectionFailure = await resolveRotatedCopilotSelection();
+          if (selectionFailure) return selectionFailure;
+          invalidateSameTargetRequest();
+          transportState.activeAdapter = resolveSelectionAdapter(
+            resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
+            config.cacheRetention,
+          );
+          bindRouteReasoningReplayScope({
+            parsed,
+            providerName: route.providerName,
+            provider: route.provider,
+            adapterName: transportState.activeAdapter.name,
+          });
+          if (billingHop) sendBudgetState.pendingHopPermit = billingHop.permit;
+          const result = await rebuildAndRefetch("key-429",
+            billingHop ? () => { billingHop.permit?.use(); } : undefined, failedResponse);
+          if ("failed" in result) {
+            if (result.failed !== failedResponse) return result.failed;
+            break;
+          }
+          if (failedResponse) {
+            try { void failedResponse.body?.cancel().catch(() => {}); } catch { /* closed */ }
+          }
+          upstreamResponse = result;
+          // Rotating on the refusal would also write a cooldown against a key that rate-limited
+          // nothing, which outlives the request.
+          if (isNonReplayableResponse(upstreamResponse)
+            || (billingRecoveryActive && upstreamResponse.status === 401)
+            || (route.provider.adapter === "anthropic" && [400, 402].includes(upstreamResponse.status))) continue recovery;
+        } finally {
+          if (billingHop) { sendBudgetState.pendingHopPermit = undefined; billingHop.permit?.release(); }
+        }
+      }
 
       // Anthropic OAuth: recover a rate limit or proven account entitlement refusal
       // before output, within the shared request and account rotation limits.
@@ -1557,9 +1680,13 @@ export async function prepareAdapterExchange(
         imageRetryAttempted = true;
         transportState.imageTierBias = 1;
         invalidateSameTargetRequest();
-        try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
-        const result = await rebuildAndRefetch("image-413");
-        if ("failed" in result) return result.failed;
+        const failedResponse = await retainFailureResponse();
+        const result = await rebuildAndRefetch("image-413", undefined, failedResponse);
+        if ("failed" in result) {
+          if (result.failed !== failedResponse) return result.failed;
+          break recovery;
+        }
+        try { void failedResponse.body?.cancel().catch(() => {}); } catch { /* closed */ }
         upstreamResponse = result;
         continue recovery;
       }
@@ -1676,6 +1803,14 @@ export async function prepareAdapterExchange(
           requestState.subagentFallbackAccountId,
         );
       }
+      // The last pool account just refused on spent quota and recovery found no replacement:
+      // answer the usage limit now (#6991), so Codex stops instead of retrying into the local
+      // refusal that every later attempt meets until the first window reopens.
+      const poolUsageLimit = upstreamResponse.status === 429 && anthropicInstance && route.provider.authMode === "oauth"
+        ? anthropicRoutingFor(anthropicInstance).anthropicPoolUsageLimitAfterRefusal(Date.now(), transportState.anthropicRouteDecision, route.modelId)
+        : null;
+      // Combo children returned above; the flag is passed anyway so this site states the same rule.
+      if (poolUsageLimit) return anthropicPoolCooldownResponse(poolUsageLimit, { comboAttempt: options.comboAttempt, logCtx });
       // Upstreams occasionally echo request details in error bodies — scrub token-shaped
       // material before it reaches the client-facing error surface.
       const upstreamRetryAfter = upstreamResponse.headers.get("retry-after");

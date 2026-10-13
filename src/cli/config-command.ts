@@ -60,11 +60,14 @@ export function remoteHubConfigNote(
   // alone describes a machine that cannot read its hub, and `ocx status` is still the command
   // that has the facts — so the note points there in every case, connected or not.
   const connected = connection.state === "connected" && connection.token === "owned";
+  const link = config.client.transport === "link";
   const note = connection.state !== "connected"
     ? `this machine is configured as a client but its connection is ${connection.state}${connection.reason ? ` (${connection.reason})` : ""}; run ocx connect status`
     : connection.token !== "owned"
-      ? `this machine is configured as a client but its hub data-plane token is ${connection.token}; run ocx connect status`
-      : "provider credentials and model availability live on the hub; run ocx status";
+      ? `this machine is configured as a client but its ${link ? "Remote Link key" : "hub data-plane token"} is ${connection.token}; run ocx connect status`
+      : link
+        ? "this machine is a Remote Link Child: provider credentials, model availability and the Codex settings OpenCodex writes come from its Home; the settings in this file are local and inactive while linked; run ocx status"
+        : "provider credentials and model availability live on the hub; run ocx status";
   return { connected, origin: config.client.serverUrl, note };
 }
 
@@ -235,6 +238,7 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
       const path = args.shift();
       if (!path) throw new CliUsageError("config path is required", USAGE);
       rejectArgs(args, USAGE);
+      await (await import("./link-child")).printLinkChildLocalNotice("The values");
       const diagnostics = readConfigDiagnostics();
       if (diagnostics.source === "fallback" || diagnostics.error) {
         console.error(`Warning: Config at ${getConfigPath()} is invalid or unreadable; defaults are being shown for invalid settings. Run: ocx config validate. Inspect: ocx config show --source.`);
@@ -246,6 +250,7 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
       return;
     }
     if (action === "set" || action === "unset") {
+      await (await import("./link-child")).printLinkChildLocalWriteNotice();
       const path = args.shift();
       const raw = action === "set" ? args.shift() : undefined;
       if (!path || (action === "set" && raw === undefined)) throw new CliUsageError(action === "unset" ? "config path is required" : "config path and value are required", USAGE);
@@ -316,6 +321,7 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
       return;
     }
     if (action === "import") {
+      await (await import("./link-child")).printLinkChildLocalWriteNotice();
       const path = args.shift();
       const yes = takeFlag(args, "--yes");
       if (!path) throw new CliUsageError("import path is required", USAGE);

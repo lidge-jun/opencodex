@@ -44,6 +44,8 @@ interface OperationRecord {
   status: "open" | "settled";
   code?: string;
   resetsLeft?: number | null;
+  /** Windows the settled claim reported cleared; absent on records written before this field. */
+  cleared?: string[];
   attempts: number;
   leaseUntil: number;
   createdAt: number;
@@ -64,7 +66,7 @@ export interface AnthropicResetOperationIdentity {
 
 export type AnthropicResetBegin =
   | { kind: "execute"; attempt: number }
-  | { kind: "replay"; code: string; resetsLeft: number | null; settledAt: number }
+  | { kind: "replay"; code: string; resetsLeft: number | null; settledAt: number; claimedAt: number; cleared: string[] }
   | { kind: "identity-mismatch" }
   | { kind: "in-flight" }
   | { kind: "expired" }
@@ -102,7 +104,9 @@ function isRecordShape(value: unknown): value is OperationRecord {
   return typeof record.accountId === "string" && typeof record.grantId === "string"
     && typeof record.orgDigest === "string" && (record.status === "open" || record.status === "settled")
     && typeof record.attempts === "number" && typeof record.leaseUntil === "number"
-    && typeof record.createdAt === "number" && typeof record.updatedAt === "number";
+    && typeof record.createdAt === "number" && typeof record.updatedAt === "number"
+    && (record.cleared === undefined
+      || Array.isArray(record.cleared) && record.cleared.every(window => typeof window === "string"));
 }
 
 /** Missing file → empty journal. Present but unreadable → throws; never an empty fallback. */
@@ -197,7 +201,10 @@ export function beginAnthropicResetOperation(
         return { kind: "identity-mismatch" };
       }
       if (existing.status === "settled") {
-        return { kind: "replay", code: existing.code ?? "unavailable", resetsLeft: existing.resetsLeft ?? null, settledAt: existing.updatedAt };
+        return {
+          kind: "replay", code: existing.code ?? "unavailable", resetsLeft: existing.resetsLeft ?? null,
+          settledAt: existing.updatedAt, claimedAt: existing.createdAt, cleared: existing.cleared ?? [],
+        };
       }
       if (existing.leaseUntil > now) return { kind: "in-flight" };
       if (now - existing.createdAt >= ANTHROPIC_RESET_RETRY_WINDOW_MS) return { kind: "expired" };
@@ -232,6 +239,12 @@ export function beginAnthropicResetOperation(
 export interface AnthropicResetSettlement {
   code: string;
   resetsLeft: number | null;
+  /** When the canonical (first) settlement was journaled, not when this caller arrived. */
+  settledAt: number;
+  /** When the operation was first journaled, before its first claim was sent. */
+  claimedAt: number;
+  /** Windows the canonical settlement reported cleared. */
+  cleared: string[];
 }
 
 /**
@@ -241,7 +254,7 @@ export interface AnthropicResetSettlement {
  * throws, because an answer with no journal entry cannot be reported as durable.
  */
 export function settleAnthropicResetOperation(
-  settlement: { operationId: string; code: string; resetsLeft: number | null },
+  settlement: { operationId: string; code: string; resetsLeft: number | null; cleared?: readonly string[] },
   options: AnthropicResetLedgerOptions = {},
 ): AnthropicResetSettlement {
   const now = options.now ?? Date.now();
@@ -250,14 +263,23 @@ export function settleAnthropicResetOperation(
     const journal = readJournal(filePath);
     const existing = journal.operations[settlement.operationId];
     if (!existing) throw new AnthropicResetLedgerError("unavailable");
-    if (existing.status === "settled") return { code: existing.code ?? "unavailable", resetsLeft: existing.resetsLeft ?? null };
+    if (existing.status === "settled") {
+      return {
+        code: existing.code ?? "unavailable", resetsLeft: existing.resetsLeft ?? null,
+        settledAt: existing.updatedAt, claimedAt: existing.createdAt, cleared: existing.cleared ?? [],
+      };
+    }
     existing.status = "settled";
     existing.code = settlement.code;
     existing.resetsLeft = settlement.resetsLeft;
+    existing.cleared = [...(settlement.cleared ?? [])];
     existing.leaseUntil = 0;
     existing.updatedAt = now;
     writeJournal(filePath, journal, now);
-    return { code: settlement.code, resetsLeft: settlement.resetsLeft };
+    return {
+      code: settlement.code, resetsLeft: settlement.resetsLeft, settledAt: now,
+      claimedAt: existing.createdAt, cleared: [...existing.cleared],
+    };
   });
 }
 

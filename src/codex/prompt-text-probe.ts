@@ -776,9 +776,14 @@ function extractSections(raw: string): Map<string, string> {
   }
   if (!Array.isArray(parsed)) return sections;
   for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
     const content = (item as { content?: unknown }).content;
     if (!Array.isArray(content)) continue;
-    const text = content.map(part => String((part as { text?: unknown }).text ?? "")).join("");
+    const text = content.map(part => {
+      if (!part || typeof part !== "object" || Array.isArray(part)) return "";
+      const value = (part as { text?: unknown }).text;
+      return typeof value === "string" ? value : "";
+    }).join("");
     // Tag names are NOT all snake_case: Codex renders `<permissions instructions>`
     // with a space. A `[a-z_]+` pattern silently skipped it, and the layer was
     // reported as "sent nothing" while its text sat right there.

@@ -3,6 +3,7 @@ import { join } from "node:path";
 import * as z from "zod/v4";
 import { CODEX_ACCOUNT_NAMESPACE_COMBO_ALIAS_COLLISION_ERROR } from "../codex/account-namespace-match";
 import { redactSecretString } from "../lib/redact";
+import { isPassiveRead } from "../lib/passive-read";
 import { hasWarnedConfigFallback, markWarnedConfigFallback } from "./warn-memo";
 import { configSchema } from "./schema/config-schema";
 import type { OcxConfig } from "../types";
@@ -232,7 +233,8 @@ export function warnAndBackupInvalidConfig(configPath: string, error: unknown): 
 }
 
 export function backupInvalidConfig(configPath: string): string | null {
-  if (!existsSync(configPath)) return null;
+  // A passive read leaves a malformed file for the Home's own load to back up (#6959).
+  if (!existsSync(configPath) || isPassiveRead()) return null;
   const backupPath = `${configPath}.invalid-${new Date().toISOString().replace(/[:.]/g, "-")}`;
   try {
     copyFileSync(configPath, backupPath);

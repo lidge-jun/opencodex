@@ -275,7 +275,7 @@ function MainCard({ state, warned = false }: { state: MainAccountHardLockStatus[
     accountModeState="pool" threshold={80} switchActionLabel="Use main" onSwitch={() => {}}
     onTogglePause={() => {}} pauseUpdatingId={null} pauseBusy={false} onPriorityChange={() => {}}
     priorityUpdatingId={null} onAutoSwitchThresholdChange={async () => true}
-    autoSwitchDisabled={false} switchingId={null} onOpenReset={() => {}} />;
+    autoSwitchDisabled={false} switchingId={null} onUnpin={() => {}} onOpenReset={() => {}} />;
 }
 test.each([
   ["blocked", "Blocked by main-account protection (5h 90%, long 98%)", false],

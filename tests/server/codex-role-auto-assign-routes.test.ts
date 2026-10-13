@@ -97,7 +97,7 @@ describe("POST /api/codex-agent-roles/auto-assign", () => {
     expect(result.body.sizingModel).toBe("stub/sizer");
     const byRole = Object.fromEntries((result.body.proposals as any[]).map(p => [p.role, p]));
     expect(byRole.explorer).toMatchObject({ status: "proposed", model: "stub/big", effort: "high", proposedModel: "stub/small", proposedEffort: "low", tier: "fast" });
-    expect(byRole.worker).toMatchObject({ status: "proposed", proposedModel: "stub/big", proposedEffort: null, tier: "frontier" });
+    expect(byRole.worker).toMatchObject({ status: "proposed", proposedModel: "stub/big", proposedEffort: "xhigh", tier: "frontier" });
     expect(byRole.bare.status).toBe("unsized");
   });
 

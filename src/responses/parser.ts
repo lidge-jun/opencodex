@@ -16,7 +16,7 @@ import { responsesRequestSchema } from "./schema";
 import { providerMetadataFromResponsesFunctionCall } from "./provider-opaque-metadata";
 import { lookupReplayThoughtSignature } from "./thought-signature-replay";
 import { decodeRetainedCompaction, RETAINED_COMPACTION_PREFIX } from "./retained-compaction";
-import { compactionItemToText, isCompactionItemType, SUMMARY_PREFIX } from "./compaction";
+import { CHECKPOINT_CONTINUATION_NOTE, compactionItemToText, decodeCompactionSummary, isCompactionItemType, SUMMARY_PREFIX } from "./compaction";
 import { previousResponseReplayPrefixLength } from "./state";
 import { decodeReasoningEnvelope } from "./reasoning-envelope";
 import { hasRoutedIdentity, nameRoutedIdentity } from "../adapters/identity";
@@ -194,6 +194,7 @@ export function parseRequest(
   // Remote compaction v2: the input tail carries `{type:"compaction_trigger"}` and Codex expects a
   // synthetic `{type:"compaction"}` output item (src/responses/compaction.ts). Flagged for the server.
   let compactionRequest = false;
+  let decodedCheckpoint = false;
   let contextCompactionBoundary = false;
   let continuationConversationMessageIndex: number | undefined;
 
@@ -252,7 +253,7 @@ export function parseRequest(
       }
 
       if (isCompactionItemType(effectiveType)) {
-        // A stored summary from a previous compaction. Decode our ocx1 envelope into plain text so
+        // A stored summary from a previous compaction. Decode our ocx1/ocx2 envelopes into plain text so
         // the routed model keeps the compacted context; real OpenAI-encrypted blobs degrade to a note.
         // `context_compaction` (encrypted_content optional) is codex-rs's local-compaction marker;
         // with no payload it is a pure marker (the summary follows as its own user message), so it
@@ -262,6 +263,7 @@ export function parseRequest(
         if (inputIndex >= replayedInputPrefixLength) contextCompactionBoundary = true;
         const encrypted = (item as { encrypted_content?: unknown }).encrypted_content;
         if (effectiveType === "context_compaction" && typeof encrypted !== "string") continue;
+        if (typeof encrypted === "string" && decodeCompactionSummary(encrypted) !== null) decodedCheckpoint = true;
         pendingReasoning.length = 0;
         if (typeof encrypted === "string" && encrypted.startsWith(RETAINED_COMPACTION_PREFIX)) {
           const retained = decodeRetainedCompaction(encrypted);
@@ -594,6 +596,10 @@ export function parseRequest(
     .map(t => loadedToolNames.has(namespacedToolName(t.namespace, t.name))
       ? { ...t, loadedFromToolSearch: true }
       : t);
+  // #6764: the decoded checkpoint is ordinary user text on this route. Say in the system prompt
+  // what it is, so a retained earlier request that it reports as completed is not repeated.
+  // A compaction request is a summarizer turn and must not be told to continue.
+  if (decodedCheckpoint && !compactionRequest) systemPrompt.push(CHECKPOINT_CONTINUATION_NOTE);
   const context: OcxContext = {
     ...(systemPrompt.length > 0 ? { systemPrompt } : {}),
     messages,

@@ -62,7 +62,7 @@ describe("an edit to the setup action alone", () => {
   });
 });
 
-// #6713: user runtimes and compiled artifacts need 1.4.2; isolate runners need 1.4.0.
+// #6713: user runtimes and compiled artifacts need 1.4.2; isolate runners need the testRunnerBun pin (1.4.3, #4956).
 // Check the active setup at each test command, so a later role switch cannot evade the guard.
 const runsBunTests = (step: Step): boolean =>
   /\bbun\s+test\b|\bbun\s+run\s+test(?::changed)?(?:\s|$)|\bbun\s+(?:run\s+)?scripts\/test\.ts\b|scripts\/ci\/run-bun-test-batches\.sh/.test(

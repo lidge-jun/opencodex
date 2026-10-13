@@ -4,12 +4,13 @@ import { createHash } from "node:crypto";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { CLAUDE_CLI_USER_AGENT } from "../providers/claude-cli-identity";
 import type { OAuthCredentials } from "./types";
+import { normalizeOAuthPlan } from "./plan";
 
 const PROFILE_URL = "https://api.anthropic.com/api/oauth/profile";
 const PROFILE_TIMEOUT_MS = 10_000;
 const PROFILE_MAX_BYTES = 65_536;
 export type AnthropicIdentity = NonNullable<OAuthCredentials["anthropicIdentity"]>;
-export type AnthropicIdentityResolver = (access: string, signal?: AbortSignal) => Promise<AnthropicIdentity | undefined>;
+export type AnthropicIdentityResolver = (access: string, signal?: AbortSignal) => Promise<(AnthropicIdentity & { plan?: string }) | undefined>;
 
 export function bindAnthropicIdentity(access: string, accountUuid: unknown): AnthropicIdentity | undefined {
   if (!access || typeof accountUuid !== "string" || !accountUuid.length || accountUuid.length > 128
@@ -48,8 +49,18 @@ export const resolveAnthropicAccountIdentity: AnthropicIdentityResolver = async 
     const data: unknown = JSON.parse(body.text);
     if (!data || typeof data !== "object" || !("account" in data)) return undefined;
     const account = data.account;
-    return account && typeof account === "object" && "uuid" in account
+    const identity = account && typeof account === "object" && "uuid" in account
       ? bindAnthropicIdentity(access, account.uuid) : undefined;
+    if (!identity) return undefined;
+    const organization = "organization" in data ? data.organization : undefined;
+    const org = organization && typeof organization === "object"
+      ? organization as Record<string, unknown> : undefined;
+    const strip = (value: unknown, prefix: string) => {
+      const label = normalizeOAuthPlan(value);
+      return label ? normalizeOAuthPlan(label.startsWith(prefix) ? label.slice(prefix.length) : label) : undefined;
+    };
+    const plan = strip(org?.rate_limit_tier, "default_claude_") ?? strip(org?.organization_type, "claude_");
+    return { ...identity, ...(plan ? { plan } : {}) };
   } catch {
     // Unavailable identity is an explicit unresolved result, never an ownership guess.
     return undefined;

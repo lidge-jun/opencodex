@@ -24,7 +24,10 @@ import {
   NATIVE_MAIN_DRAIN_SENTINEL_MODELS,
   SELF_DESCRIBED_NATIVE_OPENAI_MODELS,
 } from "../../src/codex/catalog/native-models";
-import { DOCUMENTED_NATIVE_OPENAI_ADDITIONS } from "../../src/codex/catalog/metadata";
+import { DOCUMENTED_NATIVE_OPENAI_ADDITIONS, type NativeContextLimitsInput } from "../../src/codex/catalog/metadata";
+import { buildCatalogEntriesFromObservedState, mergeCatalogEntriesFromObservedState } from "../../src/codex/catalog/build-entries";
+import { CODEX_ACCOUNT_BOUND_CATALOG_KIND } from "../../src/codex/catalog/account-models";
+import type { RawEntry } from "../../src/codex/catalog/parsing";
 import { resetCodexModelEntitlementCacheForTests } from "../../src/codex/model-entitlements";
 import { DEFAULT_SUBAGENT_MODELS } from "../../src/config/subagent-models";
 import { getProviderRegistryEntry, PROVIDER_REGISTRY } from "../../src/providers/registry";
@@ -34,6 +37,30 @@ afterEach(() => resetCodexModelEntitlementCacheForTests());
 
 const SOL_LADDER = ["low", "medium", "high", "xhigh", "max", "ultra"];
 const API_LADDER = ["low", "medium", "high", "xhigh", "max"];
+
+function builtSol(limits?: NativeContextLimitsInput): RawEntry | undefined {
+  return buildCatalogEntriesFromObservedState({
+    template: null, gptSlugs: [NATIVE_GPT61_SOL_MODEL], goModels: [], wsEnabled: false,
+    multiAgentMode: "default", multiAgentV2Enabled: false, exactComboSlugs: new Set(),
+    accountSelectors: [], suppressedBareNativeSlugs: new Set(), disabledNativeAccountSlugs: new Set(),
+    openaiContextCap: limits,
+  }).find(entry => entry.slug === NATIVE_GPT61_SOL_MODEL);
+}
+
+function mergeRetainedSol(retained: RawEntry, limits?: NativeContextLimitsInput): RawEntry | undefined {
+  const accountBound = retained.opencodex_catalog_kind === CODEX_ACCOUNT_BOUND_CATALOG_KIND;
+  return mergeCatalogEntriesFromObservedState({
+    catalogModels: accountBound ? [] : [retained], baselineCatalogModels: [], routedEntries: [],
+    baseline: new Map(), featured: [], wsEnabled: false, template: null,
+    disabledModels: new Set(), selectedModelsByProvider: new Map(), gatheredProviderNames: new Set(),
+    degradedProviderNames: new Set(), legacyCustomModelSlugs: new Set(), multiAgentMode: "default",
+    multiAgentV2Enabled: false, exactComboSlugs: new Set(), hasPhysicalComboProvider: false,
+    includeNativeOpenAi: true, accountBoundEntries: accountBound ? [retained] : [],
+    // No backfill: the test must repair the retained row rather than replace it with a fresh one.
+    policy: { nativeBackfillSlugs: [], unsupportedNativeEntries: "drop", warningPolicy: "suppress" },
+    openaiContextCap: limits,
+  }).find(entry => entry.slug === retained.slug);
+}
 
 function efforts(entry: { supported_reasoning_levels?: unknown } | null | undefined): string[] {
   const levels = Array.isArray(entry?.supported_reasoning_levels)
@@ -57,7 +84,7 @@ describe("GPT-6.1 Sol native Codex row", () => {
       context_window: 272_000,
       max_context_window: 872_000,
     });
-    expect(nativeOpenAiContextTier(NATIVE_GPT61_SOL_MODEL)).toEqual({ defaultWindow: 272_000, longWindow: 872_000 });
+    expect(nativeOpenAiContextTier(NATIVE_GPT61_SOL_MODEL)).toEqual({ defaultWindow: 500_000, longWindow: 872_000 });
     expect(nativeReasoningEfforts(NATIVE_GPT61_SOL_MODEL)).toEqual(SOL_LADDER);
     // Upstream ships low as the default effort for 6.1 Sol (GPT-6 Sol ships medium).
     expect(nativeDefaultReasoningEffort(NATIVE_GPT61_SOL_MODEL)).toBe("low");
@@ -67,10 +94,71 @@ describe("GPT-6.1 Sol native Codex row", () => {
   test("the built catalog lists it with ultra and keeps GPT-6 Sol beside it", () => {
     const entries = buildCatalogEntries(null, [NATIVE_GPT61_SOL_MODEL, NATIVE_GPT6_SOL_MODEL], []);
     const next = entries.find(entry => entry.slug === NATIVE_GPT61_SOL_MODEL);
+    expect(next).toMatchObject({
+      context_window: 500_000, max_context_window: 500_000, auto_compact_token_limit: 450_000,
+    });
     expect(next?.visibility).toBe("list");
     expect(efforts(next)).toEqual(SOL_LADDER);
     expect(entries.some(entry => entry.slug === NATIVE_GPT6_SOL_MODEL)).toBe(true);
   });
+
+  test("per-model context override wins over the provider window override", () => {
+    expect(builtSol({ providerWindow: 300_000, modelWindows: { [NATIVE_GPT61_SOL_MODEL]: 400_000 } }))
+      .toMatchObject({ context_window: 400_000, max_context_window: 400_000, auto_compact_token_limit: 360_000 });
+    expect(builtSol({ providerWindow: 300_000 }))
+      .toMatchObject({ context_window: 300_000, max_context_window: 300_000, auto_compact_token_limit: 270_000 });
+  });
+
+  test("the provider context cap narrows the default and a per-model opt-in", () => {
+    for (const modelWindows of [undefined, { [NATIVE_GPT61_SOL_MODEL]: 872_000 }]) {
+      expect(builtSol({ cap: 350_000, modelWindows }))
+        .toMatchObject({ context_window: 350_000, max_context_window: 350_000, auto_compact_token_limit: 315_000 });
+    }
+  });
+
+  test("a 1M context override clamps to the unchanged 872k ceiling", () => {
+    expect(builtSol({ modelWindows: { [NATIVE_GPT61_SOL_MODEL]: 1_000_000 } }))
+      .toMatchObject({ context_window: 872_000, max_context_window: 872_000, auto_compact_token_limit: 784_800 });
+  });
+
+  test("a configured compaction limit lowers the 500k row's soft budget", () => {
+    expect(builtSol({ modelAutoCompactTokenLimits: { [NATIVE_GPT61_SOL_MODEL]: 320_000 } }))
+      .toMatchObject({ context_window: 500_000, max_context_window: 500_000, auto_compact_token_limit: 320_000 });
+  });
+
+  test("long-window opt-in reaches 872k without changing the default tier", () => {
+    const limits = { modelWindows: { [NATIVE_GPT61_SOL_MODEL]: 872_000 } };
+    expect(builtSol(limits))
+      .toMatchObject({ context_window: 872_000, max_context_window: 872_000, auto_compact_token_limit: 784_800 });
+    expect(nativeOpenAiContextTier(NATIVE_GPT61_SOL_MODEL, limits))
+      .toEqual({ defaultWindow: 500_000, longWindow: 872_000 });
+  });
+
+  test.each([NATIVE_GPT61_SOL_MODEL, `personal/${NATIVE_GPT61_SOL_MODEL}`])(
+    "retained %s repairs the old 272k window and 244800 compaction limit", slug => {
+      const retained = {
+        ...upstreamNativeEntry(NATIVE_GPT61_SOL_MODEL)!, slug,
+        context_window: 272_000, auto_compact_token_limit: 244_800,
+        ...(slug.includes("/") ? { opencodex_catalog_kind: CODEX_ACCOUNT_BOUND_CATALOG_KIND } : {}),
+      };
+      expect(mergeRetainedSol(retained))
+        .toMatchObject({ slug, context_window: 500_000, max_context_window: 500_000, auto_compact_token_limit: 450_000 });
+      // The observed merge detaches its input; persistence evidence remains unchanged.
+      expect(retained).toMatchObject({ context_window: 272_000, auto_compact_token_limit: 244_800 });
+    },
+  );
+
+  test.each([NATIVE_GPT61_SOL_MODEL, `personal/${NATIVE_GPT61_SOL_MODEL}`])(
+    "retained %s keeps 244800 compaction under an explicit 272k override", slug => {
+      const retained = {
+        ...upstreamNativeEntry(NATIVE_GPT61_SOL_MODEL)!, slug,
+        context_window: 272_000, auto_compact_token_limit: 244_800,
+        ...(slug.includes("/") ? { opencodex_catalog_kind: CODEX_ACCOUNT_BOUND_CATALOG_KIND } : {}),
+      };
+      expect(mergeRetainedSol(retained, { modelWindows: { [NATIVE_GPT61_SOL_MODEL]: 272_000 } }))
+        .toMatchObject({ slug, context_window: 272_000, max_context_window: 272_000, auto_compact_token_limit: 244_800 });
+    },
+  );
 });
 
 describe("GPT-6.1 Sol on API and gateway providers", () => {
@@ -82,6 +170,28 @@ describe("GPT-6.1 Sol on API and gateway providers", () => {
     expect(entry.modelMaxOutputTokens?.["gpt-6.1-sol"]).toBe(128_000);
     expect(entry.modelReasoningEfforts?.["gpt-6.1-sol"]).toEqual(API_LADDER);
     expect(entry.modelInputModalities?.["gpt-6.1-sol"]).toEqual(["text", "image"]);
+  });
+
+  test("native defaults leave OpenAI API, Kiro and CodeBuddy context windows unchanged", () => {
+    const cases = [
+      { provider: "openai-apikey", contextWindow: 1_050_000 },
+      { provider: "kiro", contextWindow: 272_000 },
+      { provider: "codebuddy", contextWindow: 1_000_000 },
+    ];
+    const routed = cases.map(({ provider, contextWindow }) => {
+      const registry = getProviderRegistryEntry(provider)!;
+      expect(registry.models).toContain(NATIVE_GPT61_SOL_MODEL);
+      expect(registry.modelContextWindows?.[NATIVE_GPT61_SOL_MODEL]).toBe(contextWindow);
+      return { provider, id: NATIVE_GPT61_SOL_MODEL,
+        contextWindow: registry.modelContextWindows![NATIVE_GPT61_SOL_MODEL],
+        maxInputTokens: registry.modelMaxInputTokens?.[NATIVE_GPT61_SOL_MODEL] };
+    });
+    const entries = buildCatalogEntries(null, [NATIVE_GPT61_SOL_MODEL], routed);
+    expect(entries.find(entry => entry.slug === NATIVE_GPT61_SOL_MODEL)?.context_window).toBe(500_000);
+    for (const { provider, contextWindow } of cases) {
+      expect(entries.find(entry => entry.slug === `${provider}/${NATIVE_GPT61_SOL_MODEL}`)?.context_window)
+        .toBe(contextWindow);
+    }
   });
 
   test("OpenRouter lists it as an OpenAI-backed route with the live window", () => {

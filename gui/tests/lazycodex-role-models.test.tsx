@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
+import { validateAgentRoleEffort } from "../../src/codex/agent-role-models";
 
 const globals = ["document", "window", "navigator", "localStorage", "sessionStorage", "fetch", "IS_REACT_ACT_ENVIRONMENT"] as const;
 
@@ -16,6 +17,8 @@ let omoWriteStatus = "written";
 let putFailure: { status: number; body: unknown } | null = null;
 let rolesFailure: { status: number; body: unknown } | null = null;
 let rolesBody: unknown;
+let effortsFailure = false;
+let rolesHold: Promise<void> | null = null;
 let fetched: string[] = [];
 
 function json(body: unknown, status = 200): Response {
@@ -41,6 +44,8 @@ beforeEach(() => {
   omoWriteStatus = "written";
   putFailure = null;
   rolesFailure = null;
+  effortsFailure = false;
+  rolesHold = null;
   rolesBody = {
     lazycodex: { detected: true, pluginEnabled: true, pluginInstalled: true },
     omoJsonc: { state: "present" },
@@ -56,14 +61,37 @@ beforeEach(() => {
       const body = JSON.parse(String(init.body));
       puts.push({ url, body });
       if (putFailure) return json(putFailure.body, putFailure.status);
+      if (body.model === undefined && body.effort === undefined) return json({ error: "empty", code: "empty_update" }, 400);
+      if (body.effort !== undefined && body.effort !== null) {
+        try {
+          validateAgentRoleEffort(body.effort);
+        } catch {
+          return json({ error: "invalid effort", code: "invalid_effort" }, 400);
+        }
+      }
       const role = decodeURIComponent(url.slice(url.lastIndexOf("/") + 1));
-      const current = rolesBody as { roles: Array<{ role: string; model: string | null }> };
-      rolesBody = { ...current, roles: current.roles.map(row => row.role === role ? { ...row, model: body.model } : row) };
+      const current = rolesBody as { roles: Array<{ role: string; model: string | null; effort?: string | null; omoJsoncModel?: string | null }> };
+      // Like the server, an omitted model leaves both the role pin and the omo.jsonc model alone.
+      const model = body.model === undefined ? undefined : body.model as string;
+      rolesBody = {
+        ...current,
+        roles: current.roles.map(row => row.role === role ? {
+          ...row,
+          model: model ?? row.model,
+          effort: body.effort === undefined ? row.effort ?? null : body.effort,
+          omoJsoncModel: omoWriteStatus === "written" && model !== undefined ? model : row.omoJsoncModel ?? null,
+        } : row),
+      };
       return json({ ok: true, toml: { status: "written" }, omoJsonc: { status: omoWriteStatus } });
     }
     if (url.endsWith("/api/subagent-models")) return json({ available: ["gpt-5.5", "xai/grok-4.5"] });
+    if (url.endsWith("/api/injection-model")) {
+      return effortsFailure ? json({ error: "unavailable" }, 503) : json({ efforts: ["low", "medium", "high"] });
+    }
     if (rolesFailure) return json(rolesFailure.body, rolesFailure.status);
-    return json(rolesBody);
+    const snapshot = rolesBody;
+    if (rolesHold) await rolesHold;
+    return json(snapshot);
   }) as typeof fetch;
   Object.defineProperty(globalThis, "fetch", { configurable: true, value: mockFetch });
   container = testWindow.document.createElement("div") as unknown as HTMLElement;
@@ -104,8 +132,8 @@ function saveButton(role: string): HTMLButtonElement {
   return row!.querySelector("button.btn-primary") as HTMLButtonElement;
 }
 
-async function pick(role: string, model: string): Promise<void> {
-  const trigger = testWindow.document.querySelector(`[aria-label="Model for ${role}"]`) as unknown as HTMLButtonElement;
+async function pick(role: string, model: string, label = `Model for ${role}`): Promise<void> {
+  const trigger = testWindow.document.querySelector(`[aria-label="${label}"]`) as unknown as HTMLButtonElement;
   await act(async () => { trigger.click(); });
   const option = [...testWindow.document.querySelectorAll('[role="option"]')].find(node => node.textContent === model) as unknown as HTMLElement;
   await act(async () => { option.click(); });
@@ -124,6 +152,34 @@ test("lists roles with their pins and saves a picked model for one row", async (
   await settle();
   expect(puts).toEqual([{ url: `${apiBase}/api/codex-agent-roles/explorer`, body: { model: "xai/grok-4.5" } }]);
   expect(container.textContent).toContain("explorer now runs on xai/grok-4.5.");
+});
+
+test("picking only a reasoning effort enables Save and sends the effort with the current model", async () => {
+  await mount();
+  expect(saveButton("explorer").disabled).toBe(true);
+  await pick("explorer", "high", "Reasoning effort (explorer)");
+  expect(saveButton("explorer").disabled).toBe(false);
+  await act(async () => { saveButton("explorer").click(); });
+  await settle();
+  expect(puts).toEqual([{ url: `${apiBase}/api/codex-agent-roles/explorer`, body: { model: "gpt-5.5", effort: "high" } }]);
+  expect(container.textContent).toContain("explorer now runs on gpt-5.5 · high.");
+  expect(container.textContent).toContain("gpt-5.5 · high");
+  expect(saveButton("explorer").disabled).toBe(true);
+});
+
+test("a failed effort list still loads the table and saves a model", async () => {
+  effortsFailure = true;
+  rolesBody = {
+    ...(rolesBody as object),
+    roles: [{ role: "explorer", model: "gpt-5.5", effort: "medium", omoJsoncModel: null }],
+  };
+  await mount();
+  expect(container.textContent).not.toContain("Could not load Codex agent roles.");
+  expect(container.textContent).toContain("gpt-5.5 · medium");
+  await pick("explorer", "xai/grok-4.5");
+  await act(async () => { saveButton("explorer").click(); });
+  await settle();
+  expect(puts).toEqual([{ url: `${apiBase}/api/codex-agent-roles/explorer`, body: { model: "xai/grok-4.5" } }]);
 });
 
 test("renders nothing and loads no model list when LazyCodex is not detected", async () => {
@@ -152,11 +208,11 @@ test("says when omo.jsonc was skipped because of its comments", async () => {
   rolesBody = { ...(rolesBody as object), omoJsonc: { state: "comments" } };
   omoWriteStatus = "skipped_comments";
   await mount();
-  expect(container.textContent).toContain("omo.jsonc contains comments");
+  expect(container.textContent).toContain("omo.jsonc has comments");
   await pick("librarian", "gpt-5.5");
   await act(async () => { saveButton("librarian").click(); });
   await settle();
-  expect(container.textContent).toContain("saving would remove its comments");
+  expect(container.textContent).toContain("comments a save would remove");
 });
 
 test("a failed omo.jsonc mirror can be retried with the same model", async () => {
@@ -178,6 +234,82 @@ test("a failed omo.jsonc mirror can be retried with the same model", async () =>
   expect(saveButton("explorer").textContent).toBe("Save");
 });
 
+function pinExplorerEffort(effort: string): void {
+  rolesBody = {
+    ...(rolesBody as object),
+    roles: [{ role: "explorer", model: "gpt-5.5", effort, omoJsoncModel: null }],
+  };
+}
+
+async function saveEffortWithFailedMirror(): Promise<void> {
+  omoWriteStatus = "write_failed";
+  await pick("explorer", "high", "Reasoning effort (explorer)");
+  await act(async () => { saveButton("explorer").click(); });
+  await settle();
+}
+
+test("retrying a failed mirror while the reload is still pending resends the saved effort", async () => {
+  pinExplorerEffort("low");
+  await mount();
+  let release = () => {};
+  rolesHold = new Promise<void>(resolve => { release = resolve; });
+  await saveEffortWithFailedMirror();
+  expect(saveButton("explorer").disabled).toBe(false);
+  await act(async () => { saveButton("explorer").click(); });
+  await settle();
+  expect(puts.map(entry => entry.body)).toEqual([{ model: "gpt-5.5", effort: "high" }, { model: "gpt-5.5", effort: "high" }]);
+  await act(async () => { release(); });
+  await settle();
+});
+
+test("retrying a failed mirror after a failed reload resends the saved effort", async () => {
+  pinExplorerEffort("low");
+  await mount();
+  rolesFailure = { status: 500, body: { error: "unavailable" } };
+  await saveEffortWithFailedMirror();
+  expect(current("explorer")).toBe("gpt-5.5 · high");
+  await act(async () => { saveButton("explorer").click(); });
+  await settle();
+  expect(puts.map(entry => entry.body)).toEqual([{ model: "gpt-5.5", effort: "high" }, { model: "gpt-5.5", effort: "high" }]);
+});
+
+test("a model-only save keeps an unchanged effort out of the PUT, even one the server would refuse", async () => {
+  pinExplorerEffort("future-provider-effort");
+  await mount();
+  expect(container.textContent).toContain("gpt-5.5 · future-provider-effort");
+  await pick("explorer", "xai/grok-4.5");
+  await act(async () => { saveButton("explorer").click(); });
+  await settle();
+  expect(puts.map(entry => entry.body)).toEqual([{ model: "xai/grok-4.5" }]);
+  expect(container.textContent).toContain("xai/grok-4.5 · future-provider-effort");
+  expect(container.textContent).not.toContain("Could not save");
+});
+
+test("none, minimal and ultra are efforts the role write accepts", () => {
+  for (const effort of ["none", "minimal", "ultra"]) expect(validateAgentRoleEffort(effort)).toBe(effort);
+  expect(() => validateAgentRoleEffort("future-provider-effort")).toThrow();
+});
+
+for (const reload of ["pending", "failed"] as const) {
+  test(`a model-only mirror retry still omits the effort after a ${reload} reload`, async () => {
+    pinExplorerEffort("future-provider-effort");
+    await mount();
+    omoWriteStatus = "write_failed";
+    let release = () => {};
+    if (reload === "pending") rolesHold = new Promise<void>(resolve => { release = resolve; });
+    else rolesFailure = { status: 500, body: { error: "unavailable" } };
+    await pick("explorer", "xai/grok-4.5");
+    await act(async () => { saveButton("explorer").click(); });
+    await settle();
+    expect(saveButton("explorer").textContent).toBe("Retry omo.jsonc");
+    await act(async () => { saveButton("explorer").click(); });
+    await settle();
+    expect(puts.map(entry => entry.body)).toEqual([{ model: "xai/grok-4.5" }, { model: "xai/grok-4.5" }]);
+    await act(async () => { release(); });
+    await settle();
+  });
+}
+
 test("a failed save shows the localized message rather than the server text", async () => {
   putFailure = { status: 500, body: { error: "EACCES: permission denied, open '/secret/path'", code: "write_failed" } };
   await mount();
@@ -186,4 +318,220 @@ test("a failed save shows the localized message rather than the server text", as
   await settle();
   expect(container.textContent).toContain("Could not save the model for explorer.");
   expect(container.textContent).not.toContain("EACCES");
+});
+
+function roleRow(role: string): HTMLElement {
+  return [...container.querySelectorAll("tbody tr")].find(tr => tr.querySelector("td")?.textContent === role) as HTMLElement;
+}
+
+function current(role: string): string | null {
+  return roleRow(role).querySelectorAll("td")[1]!.textContent;
+}
+
+async function effortOptions(role: string): Promise<Array<string | null>> {
+  const trigger = container.querySelector(`[aria-label="Reasoning effort (${role})"]`) as HTMLButtonElement;
+  await act(async () => { trigger.click(); });
+  const options = [...testWindow.document.querySelectorAll('[role="option"]')].map(node => node.textContent);
+  await act(async () => { trigger.click(); });
+  return options;
+}
+
+for (const reloadFails of [false, true]) {
+  test(`Inherit clears a pinned effort and preserves a null mirror retry (reload fails: ${reloadFails})`, async () => {
+    pinExplorerEffort("high");
+    await mount();
+    expect(await effortOptions("explorer")).toEqual(["Inherit effort", "high", "low", "medium"]);
+    expect(saveButton("explorer").disabled).toBe(true);
+    await pick("explorer", "Inherit effort", "Reasoning effort (explorer)");
+    expect(saveButton("explorer").disabled).toBe(false);
+    omoWriteStatus = "write_failed";
+    if (reloadFails) rolesFailure = { status: 503, body: { error: "unavailable" } };
+    await act(async () => { saveButton("explorer").click(); });
+    await settle();
+    expect(current("explorer")).toBe("gpt-5.5");
+    expect(await effortOptions("explorer")).toEqual(["Inherit effort", "low", "medium", "high"]);
+    expect(saveButton("explorer").disabled).toBe(false);
+    omoWriteStatus = "written";
+    await act(async () => { saveButton("explorer").click(); });
+    await settle();
+    expect(puts.map(entry => entry.body)).toEqual([{ model: "gpt-5.5", effort: null }, { model: "gpt-5.5", effort: null }]);
+    expect(current("explorer")).toBe("gpt-5.5");
+    expect(saveButton("explorer").disabled).toBe(true);
+  });
+}
+
+for (const reloadFails of [false, true]) {
+  test(`model changes retain an outstanding effort mirror write (reload fails: ${reloadFails})`, async () => {
+    pinExplorerEffort("low");
+    await mount();
+    if (reloadFails) rolesFailure = { status: 503, body: { error: "unavailable" } };
+    await saveEffortWithFailedMirror();
+    expect(current("explorer")).toBe("gpt-5.5 · high");
+    expect(await effortOptions("explorer")).toEqual(["Inherit effort", "high", "low", "medium"]);
+    expect(saveButton("explorer").disabled).toBe(false);
+    await pick("explorer", "xai/grok-4.5");
+    omoWriteStatus = "written";
+    await act(async () => { saveButton("explorer").click(); });
+    await settle();
+    expect(puts.map(entry => entry.body)).toEqual([{ model: "gpt-5.5", effort: "high" }, { model: "xai/grok-4.5", effort: "high" }]);
+    expect(current("explorer")).toBe("xai/grok-4.5 · high");
+    expect(saveButton("explorer").disabled).toBe(true);
+  });
+}
+
+test("a new effort choice outranks an outstanding mirror effort", async () => {
+  pinExplorerEffort("low");
+  await mount();
+  await saveEffortWithFailedMirror();
+  await pick("explorer", "xai/grok-4.5");
+  await pick("explorer", "Inherit effort", "Reasoning effort (explorer)");
+  expect(saveButton("explorer").disabled).toBe(false);
+  omoWriteStatus = "written";
+  await act(async () => { saveButton("explorer").click(); });
+  await settle();
+  expect(puts.map(entry => entry.body)).toEqual([{ model: "gpt-5.5", effort: "high" }, { model: "xai/grok-4.5", effort: null }]);
+  expect(current("explorer")).toBe("xai/grok-4.5");
+  expect(saveButton("explorer").disabled).toBe(true);
+});
+
+test("a successful mirror with a failed reload publishes its confirmed model and effort", async () => {
+  pinExplorerEffort("low");
+  await mount();
+  rolesFailure = { status: 503, body: { error: "unavailable" } };
+  await pick("explorer", "xai/grok-4.5");
+  await pick("explorer", "high", "Reasoning effort (explorer)");
+  await act(async () => { saveButton("explorer").click(); });
+  await settle();
+  expect(puts.map(entry => entry.body)).toEqual([{ model: "xai/grok-4.5", effort: "high" }]);
+  expect(current("explorer")).toBe("xai/grok-4.5 · high");
+  expect(await effortOptions("explorer")).toEqual(["Inherit effort", "high", "low", "medium"]);
+  expect(saveButton("explorer").disabled).toBe(true);
+  await pick("explorer", "Inherit effort", "Reasoning effort (explorer)");
+  expect(saveButton("explorer").disabled).toBe(false);
+});
+
+test("a pre-save GET resolving late cannot overwrite a confirmed save", async () => {
+  pinExplorerEffort("low");
+  await mount();
+  let release = () => {};
+  rolesHold = new Promise<void>(resolve => { release = resolve; });
+  const { invalidateClientResource } = await import("../src/client-resource");
+  await act(async () => { invalidateClientResource(`lazycodex-role-models:${apiBase}`); });
+  await settle();
+  rolesFailure = { status: 503, body: { error: "unavailable" } };
+  await pick("explorer", "high", "Reasoning effort (explorer)");
+  await act(async () => { saveButton("explorer").click(); });
+  await settle();
+  await act(async () => { release(); });
+  await settle();
+  expect(puts.map(entry => entry.body)).toEqual([{ model: "gpt-5.5", effort: "high" }]);
+  expect(current("explorer")).toBe("gpt-5.5 · high");
+  expect(await effortOptions("explorer")).toEqual(["Inherit effort", "high", "low", "medium"]);
+  expect(saveButton("explorer").disabled).toBe(true);
+});
+
+function inheritLibrarian(effort: string | null): void {
+  rolesBody = {
+    ...(rolesBody as object),
+    roles: [
+      { role: "explorer", model: "gpt-5.5", effort: null, omoJsoncModel: null },
+      { role: "librarian", model: null, effort, omoJsoncModel: "omo/pick" },
+    ],
+  };
+}
+
+function librarianRow(): { model: string | null; effort: string | null; omoJsoncModel: string | null } {
+  const { model, effort, omoJsoncModel } = (rolesBody as { roles: Array<{ role: string; model: string | null; effort: string | null; omoJsoncModel: string | null }> })
+    .roles.find(row => row.role === "librarian")!;
+  return { model, effort, omoJsoncModel };
+}
+
+for (const reloadFails of [false, true]) {
+  test(`a role that inherits its model saves a new effort without a model (reload fails: ${reloadFails})`, async () => {
+    inheritLibrarian("high");
+    await mount();
+    expect(current("librarian")).toBe("No model pin · high");
+    expect(saveButton("librarian").disabled).toBe(true);
+    await pick("librarian", "low", "Reasoning effort (librarian)");
+    expect(saveButton("librarian").disabled).toBe(false);
+    if (reloadFails) rolesFailure = { status: 503, body: { error: "unavailable" } };
+    await act(async () => { saveButton("librarian").click(); });
+    await settle();
+    expect(puts).toEqual([{ url: `${apiBase}/api/codex-agent-roles/librarian`, body: { effort: "low" } }]);
+    expect(librarianRow()).toEqual({ model: null, effort: "low", omoJsoncModel: "omo/pick" });
+    expect(container.textContent).toContain("librarian now runs on No model pin · low.");
+    expect(current("librarian")).toBe("No model pin · low");
+    expect(saveButton("librarian").disabled).toBe(true);
+    expect(saveButton("librarian").textContent).toBe("Save");
+  });
+}
+
+test("Inherit effort clears a model-inheriting role's effort without a model", async () => {
+  inheritLibrarian("high");
+  await mount();
+  await pick("librarian", "Inherit effort", "Reasoning effort (librarian)");
+  expect(saveButton("librarian").disabled).toBe(false);
+  await act(async () => { saveButton("librarian").click(); });
+  await settle();
+  expect(puts.map(entry => entry.body)).toEqual([{ effort: null }]);
+  expect(current("librarian")).toBe("No model pin");
+  expect(container.textContent).toContain("librarian now runs on No model pin.");
+  expect(saveButton("librarian").disabled).toBe(true);
+});
+
+test("a role with neither a model nor an effort pin saves once an effort is picked", async () => {
+  await mount();
+  expect(current("librarian")).toBe("No model pin");
+  expect(saveButton("librarian").disabled).toBe(true);
+  expect(saveButton("librarian").textContent).toBe("Save");
+  await pick("librarian", "high", "Reasoning effort (librarian)");
+  await act(async () => { saveButton("librarian").click(); });
+  await settle();
+  expect(puts.map(entry => entry.body)).toEqual([{ effort: "high" }]);
+  expect(current("librarian")).toBe("No model pin · high");
+  expect(saveButton("librarian").disabled).toBe(true);
+});
+
+for (const [choice, sent] of [["low", "low"], ["Inherit effort", null]] as const) {
+  for (const reload of ["pending", "failed"] as const) {
+    test(`an effort-only mirror retry resends ${String(sent)} without a model after a ${reload} reload`, async () => {
+      inheritLibrarian("high");
+      await mount();
+      omoWriteStatus = "write_failed";
+      let release = () => {};
+      if (reload === "pending") rolesHold = new Promise<void>(resolve => { release = resolve; });
+      else rolesFailure = { status: 503, body: { error: "unavailable" } };
+      await pick("librarian", choice, "Reasoning effort (librarian)");
+      await act(async () => { saveButton("librarian").click(); });
+      await settle();
+      expect(container.textContent).toContain("omo.jsonc could not be written");
+      expect(current("librarian")).toBe(sent ? `No model pin · ${sent}` : "No model pin");
+      expect(saveButton("librarian").disabled).toBe(false);
+      expect(saveButton("librarian").textContent).toBe("Retry omo.jsonc");
+      omoWriteStatus = "written";
+      await act(async () => { saveButton("librarian").click(); });
+      await settle();
+      expect(puts.map(entry => entry.body)).toEqual([{ effort: sent }, { effort: sent }]);
+      expect(saveButton("librarian").disabled).toBe(true);
+      expect(saveButton("librarian").textContent).toBe("Save");
+      await act(async () => { release(); });
+      await settle();
+    });
+  }
+}
+
+test("picking a model after a failed effort-only mirror sends both, and only then pins a model", async () => {
+  inheritLibrarian("high");
+  await mount();
+  omoWriteStatus = "write_failed";
+  await pick("librarian", "low", "Reasoning effort (librarian)");
+  await act(async () => { saveButton("librarian").click(); });
+  await settle();
+  await pick("librarian", "xai/grok-4.5");
+  expect(saveButton("librarian").textContent).toBe("Save");
+  omoWriteStatus = "written";
+  await act(async () => { saveButton("librarian").click(); });
+  await settle();
+  expect(puts.map(entry => entry.body)).toEqual([{ effort: "low" }, { model: "xai/grok-4.5", effort: "low" }]);
+  expect(current("librarian")).toBe("xai/grok-4.5 · low");
 });

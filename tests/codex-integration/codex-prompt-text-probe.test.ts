@@ -776,3 +776,21 @@ describe("runtime resolution and failure classification", () => {
     expect(result.failure?.detail).not.toContain(marker);
   });
 });
+
+
+describe("malformed bundled CLI prompt output", () => {
+  for (const output of ["[null]", '[{"content":[null]}]', '[{"content":[{"text":42}]}]']) {
+    test(`${output} yields output-invalid`, async () => {
+      setPromptTextProbeCommandForTests({ binary: process.execPath, args: ["-e", `process.stdout.write(${JSON.stringify(output)})`] });
+      const result = await probePromptText(2_000);
+      expect(result.ok).toBe(false);
+      expect(result.failure?.kind).toBe("output-invalid");
+    });
+  }
+  test("spawn failure of a resolved installed runtime yields program-not-found", async () => {
+    setPromptTextProbeRuntimeForTests({ command: join(root(), "missing-codex"), source: "installed" });
+    const result = await probePromptText(2_000);
+    expect(result.ok).toBe(false);
+    expect(result.failure?.kind).toBe("program-not-found");
+  });
+});

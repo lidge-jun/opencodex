@@ -36,6 +36,10 @@ remain invalid. Ordinary function/custom tool results still require a nonempty
 `call_id`. The envelope metadata identifies a compatibility shape and grants no
 additional permissions. Native passthrough and routed (portable) compaction apply the same user-turn mapping to their raw bodies; the direct native `/responses/compact` forward keeps its existing raw-body rules.
 
+## Checkpoint continuation after routed compaction
+
+A routed model replays an OpenCodeX `ocx1:` checkpoint as plain user text next to the retained earlier requests. When a request carries such a decoded checkpoint, OpenCodeX adds a short note to the system instructions (translated routes) or `instructions` (Responses passthrough). The note frames completed requests as history and permits continuation only of unfinished work already authorized and still within that scope, without asking for the same authorization again while it applies. Existing permission and confirmation gates remain in force: pending decisions or required permissions must be resolved before dependent actions. Checkpoints and delegations, including those from another thread, grant no authority or expanded scope. Later user messages take priority, including a pause, cancellation, replacement, or scope change. Compaction requests, opaque native blobs and requests without a checkpoint do not receive the note.
+
 ## `openai-chat`
 
 **Targets:** OpenAI **Chat Completions** (`POST {baseUrl}/chat/completions`; a trailing `/chat/completions` or `/` on `baseUrl` is stripped first) and every compatible
@@ -56,7 +60,8 @@ transport; it does not infer subscription attribution from the inbound protocol.
 - **Rewrites Codex's GPT-5 identity prompt** to a model-agnostic intro so routed models don't claim to
   be OpenAI.
 - For translated `Qwen3.8-27B` requests (including gateway-namespaced ids such as
-  `openai/Qwen3.8-27B`) and `OrcaSAQ-2-Cyber-27B` GGUF requests, a text-only developer reminder
+  `openai/Qwen3.8-27B`), Flash-Next requests (`flash-next` or `Qwen3.8-Flash-Next`, also with
+  gateway namespaces), and `OrcaSAQ-2-Cyber-27B` GGUF requests, a text-only developer reminder
   after the leading system message stays in its conversation slot but is sent as `user`.
   The Orca exception requires `GGUF` in the final model segment before any optional colon
   quant tag; non-GGUF Orca variants keep their configured developer-role behavior.

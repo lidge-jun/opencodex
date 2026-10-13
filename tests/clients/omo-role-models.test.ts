@@ -42,15 +42,41 @@ describe("omo role models", () => {
   });
 
   test("reasoning is set, kept, or removed with the model", () => {
-    const path = file('{ "[codex]": { "agents": { "plan": { "model": "a", "reasoning": "low" } } } }');
+    const path = file('{ "[codex]": { "agents": { "plan": { "model": "a", "reasoning": "low", "temperature": 0.2 } } } }');
     const entry = () => JSON.parse(readFileSync(path, "utf8"))["[codex]"].agents.plan;
     expect(writeOmoRoleModel("plan", "a", path, "low")).toBe("unchanged");
     expect(writeOmoRoleModel("plan", "b", path)).toBe("written");
-    expect(entry()).toEqual({ model: "b", reasoning: "low" });
+    expect(entry()).toEqual({ model: "b", reasoning: "low", temperature: 0.2 });
     expect(writeOmoRoleModel("plan", "b", path, "xhigh")).toBe("written");
-    expect(entry()).toEqual({ model: "b", reasoning: "xhigh" });
+    expect(entry()).toEqual({ model: "b", reasoning: "xhigh", temperature: 0.2 });
     expect(writeOmoRoleModel("plan", "b", path, null)).toBe("written");
-    expect(entry()).toEqual({ model: "b" });
+    expect(entry()).toEqual({ model: "b", temperature: 0.2 });
+  });
+
+  test("an omitted model changes only reasoning and never adds a model", () => {
+    const path = file('{ "[codex]": { "agents": { "plan": { "model": "a", "reasoning": "low", "temperature": 0.2 } } } }');
+    const agents = () => JSON.parse(readFileSync(path, "utf8"))["[codex]"].agents;
+    expect(writeOmoRoleModel("plan", undefined, path)).toBe("unchanged");
+    expect(writeOmoRoleModel("plan", undefined, path, "low")).toBe("unchanged");
+    expect(writeOmoRoleModel("plan", undefined, path, "high")).toBe("written");
+    expect(agents().plan).toEqual({ model: "a", reasoning: "high", temperature: 0.2 });
+    expect(writeOmoRoleModel("plan", undefined, path, null)).toBe("written");
+    expect(agents().plan).toEqual({ model: "a", temperature: 0.2 });
+
+    // A role without an entry gets a reasoning-only one, which LazyCodex accepts.
+    expect(writeOmoRoleModel("explorer", undefined, path, "off")).toBe("written");
+    expect(agents().explorer).toEqual({ reasoning: "off" });
+    expect(readOmoRoleModels(path)).toEqual({ state: "present", models: { plan: "a" } });
+    expect(writeOmoRoleModel("explorer", undefined, path, null)).toBe("written");
+    expect(agents().explorer).toEqual({});
+  });
+
+  test("an omitted model with nothing to set creates no entry and no [codex] block", () => {
+    const text = '{\n  "other": 1\n}\n';
+    const path = file(text);
+    expect(writeOmoRoleModel("explorer", undefined, path, null)).toBe("unchanged");
+    expect(writeOmoRoleModel("explorer", undefined, path)).toBe("unchanged");
+    expect(readFileSync(path, "utf8")).toBe(text);
   });
 
   test("Codex efforts map to the levels LazyCodex accepts", () => {

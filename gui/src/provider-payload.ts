@@ -1,3 +1,5 @@
+import { canConfigureResponsesReasoningReplay } from "./responses-reasoning-replay";
+
 export interface ProviderPayloadForm {
   name: string;
   adapter: string;
@@ -8,6 +10,7 @@ export interface ProviderPayloadForm {
   apiKeyTransport?: "x-api-key" | "bearer";
   defaultModel: string;
   allowPrivateNetwork?: boolean;
+  preserveResponsesReasoningContent?: boolean;
 }
 
 export interface ProviderPostPreset {
@@ -78,6 +81,7 @@ export interface ProviderPayload {
   authMode?: "key" | "forward" | "oauth";
   codexAccountMode?: "pool" | "direct";
   allowPrivateNetwork?: boolean;
+  preserveResponsesReasoningContent?: boolean;
 }
 
 export function buildProviderPayload(form: ProviderPayloadForm): ProviderPayload {
@@ -103,6 +107,9 @@ export function buildProviderPayload(form: ProviderPayloadForm): ProviderPayload
   }
   if (form.allowPrivateNetwork) {
     provider.allowPrivateNetwork = true;
+  }
+  if (canConfigureResponsesReasoningReplay(form) && form.preserveResponsesReasoningContent === true) {
+    provider.preserveResponsesReasoningContent = true;
   }
 
   return provider;

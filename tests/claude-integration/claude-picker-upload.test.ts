@@ -212,7 +212,10 @@ for (const protocol of ["h1", "h2"] as const) {
     } finally { await wait(f.close()); }
   });
 
-  bounded(`${protocol} upstream failure delivers 502 and releases an unfinished upload`, async wait => {
+  // "buffered" queues 4 MiB of an advertised 32 MiB body, so the generated 502 races input still in
+  // flight (Bun 1.4.3 reset that reply through the splice before the client could read it).
+  for (const input of protocol === "h1" ? ["small", "buffered"] as const : ["small"] as const)
+  bounded(`${protocol} upstream failure delivers 502 and releases ${input === "buffered" ? "a buffered" : "an"} unfinished upload`, async wait => {
     const f = await fixture((req, res) => {
       req.on("error", () => res.destroy()); req.resume();
       if (req.url === "/failed") req.socket.destroy(); else res.end("ordinary");
@@ -221,10 +224,10 @@ for (const protocol of ["h1", "h2"] as const) {
       const session = f.h2();
       const upload = protocol === "h2"
         ? session.request({ ":method": "POST", ":path": "/failed", ":authority": "claude.ai" })
-        : f.h1("/failed", "POST", { "Content-Length": "100" });
+        : f.h1("/failed", "POST", { "Content-Length": input === "buffered" ? String(32 * 1024 * 1024) : "100" });
       const closed = protocol === "h2" ? observeClose(upload) : observeSocketClose(upload as ClientRequest);
       const result = protocol === "h2" ? h2Result(upload as ClientHttp2Stream) : h1Result(upload as ClientRequest);
-      upload.write("x");
+      upload.write(input === "buffered" ? Buffer.alloc(4 * 1024 * 1024, 0x61) : "x");
       expect(await wait(result)).toEqual({ status: 502, text: "" }); await wait(closed);
       if (protocol === "h2") expect((upload as ClientHttp2Stream).rstCode).toBe(constants.NGHTTP2_NO_ERROR);
       const next = session.request({ ":method": "POST", ":path": "/next", ":authority": "claude.ai" });
@@ -347,9 +350,16 @@ bounded("h2 cancellation releases aggregate admission once without weakening the
 });
 
 for (const protocol of ["h1", "h2"] as const) {
-  bounded(`${protocol} early upstream response closes an unfinished upload without losing the reply`, async wait => {
+  // "buffered" answers early while 4 MiB of an advertised 32 MiB body is still queued.
+  for (const input of protocol === "h1" ? ["small", "buffered"] as const : ["small"] as const)
+  bounded(`${protocol} early upstream response closes ${input === "buffered" ? "a buffered" : "an"} unfinished upload without losing the reply`, async wait => {
     const f = await fixture((req, res) => {
-      req.on("error", () => res.destroy());
+      // Answer like a real origin that replies early: keep reading the body and close with a FIN.
+      // Bun's own server would close this unfinished request with destroySoon(), a reset that
+      // Windows delivers before the reply bytes, so the relay could never read what it should relay.
+      req.on("error", () => res.destroy()); req.resume();
+      const socket = req.socket;
+      socket.destroySoon = () => { socket.end(); return socket; };
       if (req.url === "/early") { res.writeHead(413, { "Content-Length": "5" }); res.end("early"); }
       else res.end("ordinary");
     });
@@ -357,9 +367,10 @@ for (const protocol of ["h1", "h2"] as const) {
       const session = f.h2();
       const upload = protocol === "h2"
         ? session.request({ ":method": "POST", ":path": "/early", ":authority": "claude.ai" })
-        : f.h1("/early", "POST", { "Content-Length": "100" });
+        : f.h1("/early", "POST", { "Content-Length": input === "buffered" ? String(32 * 1024 * 1024) : "100" });
       const result = protocol === "h2" ? h2Result(upload as ClientHttp2Stream) : h1Result(upload as ClientRequest);
-      const closed = protocol === "h2" ? observeClose(upload) : observeSocketClose(upload as ClientRequest); upload.write("x");
+      const closed = protocol === "h2" ? observeClose(upload) : observeSocketClose(upload as ClientRequest);
+      upload.write(input === "buffered" ? Buffer.alloc(4 * 1024 * 1024, 0x61) : "x");
       expect(await wait(result)).toEqual({ status: 413, text: "early" });
       await wait(closed);
       if (protocol === "h2") expect((upload as ClientHttp2Stream).rstCode).toBe(constants.NGHTTP2_NO_ERROR);

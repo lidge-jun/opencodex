@@ -5,6 +5,8 @@ import type { CatalogPreset } from "./provider-catalog/provider-presets";
 import type { ProviderPayloadForm } from "../provider-payload";
 import { AddProviderField } from "./add-provider-modal-field";
 import { baseUrlForChoice } from "../base-url-choice";
+import { canConfigureResponsesReasoningReplay } from "../responses-reasoning-replay";
+import { ResponsesReasoningReplayControl } from "./responses-reasoning-replay-control";
 import { isSubscriptionCliProvider, SUBSCRIPTION_CLI_API_KEY_ALTERNATIVE } from "../provider-workspace/subscription-cli";
 
 const FORM_ADAPTERS = ["openai-responses", "openai-chat", "anthropic", "google", "azure-openai", "cursor"];
@@ -131,6 +133,10 @@ export function AddProviderFormPane({
           <p className="muted text-hint">{t("modal.allowPrivateNetworkHint")}</p>
         )}
       </>}
+      {isCustom && canConfigureResponsesReasoningReplay(form) && (
+        <ResponsesReasoningReplayControl checked={form.preserveResponsesReasoningContent === true}
+          onChange={checked => onFormChange({ ...form, preserveResponsesReasoningContent: checked })} />
+      )}
       {form.authMode === "forward" ? (
         <div className="text-label" style={{ color: "var(--green)", background: "var(--green-soft)", border: "1px solid var(--green)", borderRadius: "var(--radius-sm)", padding: "8px 10px" }}>
           {presetDescription(preset)}

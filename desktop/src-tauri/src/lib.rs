@@ -15,6 +15,9 @@ mod formatting;
 mod identity;
 mod logging;
 mod login_autostart;
+// The judgment is portable so Linux CI runs its fixture parity tests; only macOS reads launchd.
+#[cfg(any(target_os = "macos", test))]
+mod login_registration;
 #[cfg(any(target_os = "windows", test))]
 mod windows_autostart_command;
 // macOS only: it exists to replace one item in a menu no other platform installs. Compiling it
@@ -35,6 +38,8 @@ mod popup;
 mod popup;
 #[cfg(target_os = "macos")]
 mod provider_icons;
+#[cfg(target_os = "macos")]
+mod tray_login;
 // The macOS build selects native_tray.rs as the popup module; compile the portable popup
 // module's tests on macOS too so its navigation rules run on the maintainers' platform.
 #[cfg(all(test, target_os = "macos"))]

@@ -146,7 +146,14 @@ it needs `client_version` **0.153.0 or later** and is the Codex default. GPT-6 S
 
 | Model | Default context | Opt-in ceiling | Default effort | Reasoning ladder |
 | --- | ---: | ---: | --- | --- |
-| `gpt-6.1-sol` | 272,000 | 872,000 | `low` | `low` through `ultra` |
+| `gpt-6.1-sol` | 500,000 | 872,000 | `low` | `low` through `ultra` |
+
+OpenAI raised GPT-6.1 Sol's default context in Codex and Work from 272,000 to 500,000 tokens on
+October 11, 2026, so the native row now defaults to 500,000 and compacts at 450,000. The bundled
+Codex catalog still reads 272,000, so opencodex sets the new default itself. A configured window or
+provider cap still lowers it, and the long-window opt-in still stops at 872,000: OpenAI describes
+the model maximum as 1M without saying how that maps onto Codex's window and input limits, so
+opencodex does not advertise more than the ceiling it can verify.
 
 The same `providerContextCaps.openai`, `modelContextWindows` and `modelAutoCompactTokenLimits`
 levers apply as for Astra. On the OpenAI API (`openai-apikey`), `gpt-6.1-sol` has 1,050,000
@@ -227,7 +234,7 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `modelSupportsServiceTier?` | `Record<string, boolean>` | Exact upstream model capability overrides. Exact `true` enables canonical Fast for that model; exact `false` narrows provider defaults. An explicit provider-level `supportsServiceTier: false` remains fail-closed and cannot be reopened. Exact `true` does not authorize foreign caller-tier forwarding on Chat. Undeclared models fall back to provider-wide behavior. Management `PATCH /api/providers` merges entries and accepts `null` to clear one. |
 | `chatServiceTier?` | `boolean` | Provider-wide Chat-wire opt-in for forwarding caller `service_tier` values. On a classified route it governs foreign values such as `flex`, not proxy-owned canonical Fast after capability validation; on an unclassified route it governs every caller value because no Fast capability has been validated. Exact model capability does not authorize foreign forwarding. Responses routes retain their capability-based caller forwarding behavior. |
 | `promptCacheKey?` | `boolean` | Provider-wide `openai-chat` opt-in for forwarding a `prompt_cache_key`. The adapter forwards the key it is given and never invents one, but the key is not always the caller's: Claude Messages translation derives one from `metadata.user_id`, or from a model/system/tools cohort when no metadata is sent. Default off. Enable only when the upstream documents support, because strict gateways may reject the unknown field with HTTP 400. |
-| `preserveResponsesReasoningContent?` | `boolean` | Keep plaintext reasoning content on replayed Responses reasoning items instead of blanking it (blanking is the ChatGPT backend's rule). Enable for upstreams whose contract accepts reasoning replay, such as DeepSeek or a self-hosted Kimi on vLLM. Proxy-minted `ocxr1` envelopes are always stripped. A hand-configured `openai-responses` provider without it logs one warning per host the first time plaintext reasoning is dropped. `preserveReasoningContentModels` does not affect this wire. |
+| `preserveResponsesReasoningContent?` | `boolean` | Default off for custom providers. In **Providers → Settings**, enable **Replay plaintext reasoning** for a custom Responses endpoint only if it accepts this history. This sends prior plaintext reasoning to that endpoint and may increase token use. Keep plaintext reasoning content on replayed Responses reasoning items instead of blanking it (blanking is the ChatGPT backend's rule). Enable for upstreams whose contract accepts reasoning replay, such as DeepSeek or a self-hosted Kimi on vLLM. Proxy-minted `ocxr1` envelopes are always stripped. A hand-configured `openai-responses` provider without it logs one warning per host the first time plaintext reasoning is dropped. `preserveReasoningContentModels` does not affect this wire. |
 | `preserveResponsesInputItemIds?` | `boolean` | Default off. Preserve valid `input[].id` when `store: false` for explicitly trusted launcher relays that require turn identity. Ordinary Responses providers keep stripping IDs; xAI custom-call ID repair remains active. |
 | `preserveResponsesMessageMetadata?` | `boolean` | Default off. Preserve private `internal_chat_message_metadata_passthrough` on input items for explicitly trusted launcher relays. This forwards private turn/session metadata to that destination; do not enable for ordinary gateways. |
 | `dropResponsesReasoningItems?` | `boolean` | Remove replayed Responses `reasoning` items from continuation input entirely, instead of forwarding them with blanked content. This is lossy: summaries, item ids, and `encrypted_content` go with them, so no reasoning item from the previous turn remains in the forwarded input. It does not remove `previous_response_id`, so an upstream holding its own turn state may still reach it. Enable only for an upstream that rejects reasoning replay outright — the built-in Volcengine Ark Coding Plan preset sets it because validated tool continuations answered `400 InvalidParameter` otherwise. Set it to `false` on that provider to forward reasoning items again. |
@@ -949,6 +956,23 @@ Active usage probes preserve absent family windows unless the response authorita
 Affinity is process-local
 and size-bounded. Token-refresh credential failures retain the existing reauthentication policy. Classified pre-output account-entitlement/billing 403s clear affinity and cool the account for `Retry-After`, or ten minutes by default, before trying an eligible replacement. Generic or request-level 403s remain terminal; see [Claude account recovery](/guides/claude-code/). If all eligible accounts are cooling, clients receive 429 with
 `Retry-After` when known, not an authentication error.
+
+When every account the request can use is held on spent quota (a shared 5-hour or weekly window,
+or the requested model family's weekly window), that 429 is a usage limit rather than a rate limit:
+the Responses body carries `error.type` and `error.code` `usage_limit_reached` and, when the
+upstream reset of every held account is known, `resets_at` (epoch seconds of the earliest reset).
+Codex stops on this answer and shows when to try again instead of retrying until
+"exceeded retry limit". The last account's own spent-quota refusal gets the same answer once no
+replacement is left. If any held account is only throttled, revalidating a model family, or
+refused for entitlement, the answer stays the retryable `rate_limit_exceeded`. Combo targets keep
+the rate-limit form so the combo can move to its next target. Native `/v1/messages` keeps
+Anthropic's `rate_limit_error` type; its message names the usage limit.
+
+A quota cooldown lifts early once a fresh usage reading (the dashboard Providers page, or
+`ocx account list anthropic --quota --refresh`) shows every window the refusal rejected below
+100%, whether the cooldown came from `Retry-After` or a window reset. This covers a plan upgrade
+or a window that reopened early. A reading taken before the refusal never lifts it, and
+entitlement 403 cooldowns wait for their deadline.
 
 Anthropic responses also report the serving account's 5-hour and weekly utilization, and whichever
 of those two a given response carries is recorded against that account — each window independently,

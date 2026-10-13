@@ -12,6 +12,7 @@
 import { findLiveProxy, probeHostname, type LivenessIo, type LiveProxy } from "../server/proxy-liveness";
 import { runningProxyUpdateHeaders } from "../oauth/login-cli";
 import { redactSecretArgs } from "./secret-args";
+import type { LinkHomeDeps } from "../client/link-home";
 export { redactSecretArgs };
 
 export type CliStdin = NodeJS.ReadableStream & { isTTY?: boolean; readableEnded?: boolean };
@@ -28,6 +29,8 @@ export interface RuntimeApiDeps {
   stdinSignal?: AbortSignal;
   /** Optional proxy liveness probe injection for commands that check or fall back around live runtime state. */
   findLiveProxy?: (io?: LivenessIo) => Promise<LiveProxy | null>;
+  /** Remote Link Child: how allowlisted reads reach the Home (#6957). */
+  linkHome?: LinkHomeDeps;
 }
 
 export class CliUsageError extends Error {
@@ -45,7 +48,7 @@ export class RuntimeApiError extends Error {
     readonly status: number,
     readonly body: unknown,
     /** Local discovery refusals occur before the management request is sent. */
-    readonly code?: "proxy_not_running" | "client_role_management_unavailable",
+    readonly code?: "proxy_not_running" | "client_role_management_unavailable" | "link_child_management_unavailable",
   ) {
     super(message);
     this.name = "RuntimeApiError";
@@ -83,6 +86,10 @@ export async function runtimeBaseUrl(deps: RuntimeApiDeps = {}): Promise<string>
   // this costs no extra request. Only the client role is refused: an absent role is a
   // standalone or hub proxy (or a legacy body that predates the field), and both serve /api/*.
   if (live.role === "client") {
+    // A Remote Link Child has no relay transport to point at; it names its Home instead (#6957).
+    const { readLinkChildContext, linkChildRefusal } = await import("./link-child");
+    const link = readLinkChildContext();
+    if (link) throw new RuntimeApiError(linkChildRefusal(link), 503, null, "link_child_management_unavailable");
     throw new RuntimeApiError(clientRoleManagementRefusal(live.port), 503, null, "client_role_management_unavailable");
   }
   return `http://${probeHostname(live.hostname)}:${live.port}`;
@@ -180,7 +187,25 @@ export async function runtimeRequest<T = unknown>(
   init: RequestInit = {},
   deps: RuntimeApiDeps = {},
 ): Promise<T> {
-  const baseUrl = await runtimeBaseUrl(deps);
+  let baseUrl: string;
+  try {
+    baseUrl = await runtimeBaseUrl(deps);
+  } catch (error) {
+    if (!(error instanceof RuntimeApiError) || error.code !== "link_child_management_unavailable") throw error;
+    // #6957: on a Remote Link Child an allowlisted read is answered by the Home over the link;
+    // every other request is refused with the operation named, before anything is sent.
+    const method = (init.method ?? "GET").toUpperCase();
+    const { readLinkChildContext, linkChildReadable, linkChildRefusal, readLinkHomeJson } = await import("./link-child");
+    const link = readLinkChildContext();
+    if (!link) throw error;
+    const pathname = new URL(path.startsWith("/") ? path : `/${path}`, "http://cli.invalid").pathname;
+    if (!linkChildReadable(method, path)) {
+      throw new RuntimeApiError(linkChildRefusal(link, `${method} ${pathname}`), 503, null, "link_child_management_unavailable");
+    }
+    const { status, body } = await readLinkHomeJson(link, path, deps.linkHome);
+    if (status < 200 || status >= 300) throw new RuntimeApiError(responseMessage(body, status), status, body);
+    return body as T;
+  }
   const headers = runningProxyUpdateHeaders();
   for (const [key, value] of new Headers(init.headers).entries()) headers.set(key, value);
   const fetchImpl = deps.fetchImpl ?? fetch;

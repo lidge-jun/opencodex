@@ -568,16 +568,21 @@ describe("sidecar on429 wiring", () => {
     //                wire/pool remain unchanged.
     //   anthropic = 3: the same, MINUS runTurn -- that path is Cursor-only (cursor.ts is the
     //                  sole adapter implementing runTurn), so Anthropic cannot reach it.
-    //   key       = 3: hasKeyPoolFailover guards the two 429 response loops plus the
+    //   key       = 4: hasKeyPoolFailover guards the two 429 response loops, the
     //                  pre-stream 401 recovery site (a rejected key rotates instead of
-    //                  failing the request); the sidecar reaches the key pool through
+    //                  failing the request), and the pre-output Anthropic credit-balance
+    //                  loop (#6958). The billing loop needs only the key rotator: an
+    //                  OAuth credit refusal already rotates through the Anthropic account
+    //                  arm, and generic OAuth has no credit-balance contract. Send-accounting
+    //                  eligibility goes through isAnthropicBillingKeyPool, which is not a
+    //                  recovery site. The sidecar reaches the key pool through
     //                  rotateProviderTransportOn429 instead.
     //
     // Adding a recovery site means deciding, deliberately, which rotators it needs and
     // updating the matching number. That decision is the thing this test exists to force.
     expect(counts.generic).toBe(5);
     expect(counts.anthropic).toBe(3);
-    expect(counts.key).toBe(3);
+    expect(counts.key).toBe(4);
   });
 
   test("the verify-account arm moves via auth-refusal rotation, never rate-limit", () => {

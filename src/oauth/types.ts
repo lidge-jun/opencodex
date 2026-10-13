@@ -62,6 +62,8 @@ export type OAuthCredentials = {
   email?: string;
   accountId?: string;
   source?: OAuthCredentialSource;
+  /** Validated upstream subscription label; null is an observed unknown, absent is not read. */
+  plan?: string | null;
   /** Private authenticated account proof; never projected into account summaries. */
   anthropicIdentity?: { v: 1; accountUuid: string; bearerSha256: string };
   /** Google Antigravity (Cloud Code Assist) discovered project id; injected into the CCA envelope. */

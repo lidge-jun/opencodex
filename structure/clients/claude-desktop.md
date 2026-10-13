@@ -231,8 +231,21 @@ After a complete response, HTTP/2 closes only that stream with `RST_STREAM NO_ER
 HTTP/1.1 refusals, generated 502s and early replies advertise `Connection: close` only while input is unfinished; after the writable finishes,
 the listener unpipes the upstream upload, reads and discards remaining input, and ends the socket
 gracefully so queued response bytes flush. Errors and premature downstream closes still destroy
-the request. Draining adds no upload deadline or byte cap and does not wait for request-body
-completion before ending the response side. Body completion removes the input-cleanup listeners,
+the request. The request-side drain adds no upload deadline or byte cap and does not wait for request-body
+completion before ending the response side. Bun 1.4.3's HTTP server ends a `Connection: close`
+response with `socket.destroySoon()` before the listener's own finish handler runs, which reset
+the splice before the reply reached the client; every HTTP/1.1 reply that closes unfinished input
+(refusal, generated 502, early upstream reply) therefore replaces that socket's `destroySoon` with
+the same resume-and-`end()`. The TCP front
+enables half-open reads once a ClientHello is recognized and, when the backend side ends, unpipes
+and keeps discarding client ciphertext, so a client still writing an abandoned upload reads the
+reply and FIN and can close (Bun 1.4.2 otherwise left it open). That front-side discard is bounded:
+once the reply has flushed to the client socket (`finish`), the connection is dropped after
+`PICKER_ABANDONED_INPUT_LINGER_MS` (30 s), so a peer that keeps trickling an abandoned upload cannot
+hold it until shutdown (#6984). The timer is armed only after the reply has left the process, so
+it cannot cut a reply that is still being written; `finish` is not peer receipt, though, and a client
+that also stops reading for the whole budget can still lose unread reply bytes when the drop fires.
+A connection that closes first cancels the timer. Body completion removes the input-cleanup listeners,
 leaving long-lived responses and SSE subscriptions independent of upload cleanup. Completed HTTP/1.1 uploads retain keep-alive on generated 502s and can reuse the same client socket.
 `tests/claude-integration/claude-picker-upload.test.ts` covers headers-only refusals on both
 protocols, byte-exact early replies under backpressure, completed uploads with SSE, cancellation,
@@ -253,7 +266,7 @@ application-access dialogs are controlled by macOS; restart or upgrade does not 
 bounded exact-shape payload, full constrained CA profile, validity and P-256 private-key match validation.
 `picker-ca-persistence.ts` validates public `authority.json` and `authority-init.json` records under
 the canonical CA lock, rejecting symlinks and mismatched pre-open/path and descriptor identities.
-Device and inode comparisons use bigint stats so distinct full-width file IDs cannot alias through numeric rounding. Initialization journals the config identity, new fingerprint and public
+Device and inode comparisons use bigint stats so distinct full-width file IDs cannot alias through numeric rounding. Zero inode identities and changed `ctimeNs` between the path snapshot and opened descriptor are rejected. Initialization journals the config identity, new fingerprint and public
 predecessor before writing the credential, verifies readback, then commits metadata and publication;
 it removes the journal last. Recovery requires matching journal/store identity; missing initialized
 credentials, unavailable storage or inconsistent metadata fail closed without publishing a replacement.

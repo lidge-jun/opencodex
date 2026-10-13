@@ -485,7 +485,7 @@ export async function fetchHubUsage(
   serverUrl: string,
   admissionToken: string,
   query: URLSearchParams,
-  options: { timeoutMs?: number; fetchImpl?: typeof fetch } = {},
+  options: { timeoutMs?: number; fetchImpl?: typeof fetch; peer?: "hub" | "Home" } = {},
 ): Promise<HubUsageReport> {
   const origin = normalizeHubOrigin(serverUrl);
   if (!isHubTransportPermitted(origin)) {
@@ -498,9 +498,12 @@ export async function fetchHubUsage(
   }, options.timeoutMs);
   if (!response.ok) {
     try { await response.body?.cancel(); } catch { /* best effort */ }
-    const message = response.status === 404 ? "Hub does not support client usage; upgrade the hub"
-      : response.status === 401 || response.status === 403 ? "Hub rejected this client's usage credential"
-      : `Hub usage request failed (${response.status})`;
+    // A Remote Link Child reads the same route from its Home (#6957).
+    const peer = options.peer ?? "hub";
+    const Peer = peer === "Home" ? "Home" : "Hub";
+    const message = response.status === 404 ? `${Peer} does not support client usage; upgrade the ${peer}`
+      : response.status === 401 || response.status === 403 ? `${Peer} rejected this ${peer === "Home" ? "Child's link key" : "client's usage credential"}`
+      : `${Peer} usage request failed (${response.status})`;
     throw new HubClientError(`hub_usage_http_${response.status}`, message, response.status);
   }
   if (!jsonCompatibleContentType(response)) {
@@ -527,16 +530,20 @@ export async function fetchHubUsage(
  */
 export async function fetchHubState(
   serverUrl: string,
-  admissionToken: string,
+  admissionToken: string | null,
   options: { timeoutMs?: number; fetchImpl?: typeof fetch } = {},
 ): Promise<HubStateDTO> {
   const origin = normalizeHubOrigin(serverUrl);
   const response = await fetchBounded(options.fetchImpl ?? fetch, `${origin}/v1/hub-state`, {
     method: "GET",
-    headers: new Headers({ Accept: "application/json", "x-opencodex-api-key": admissionToken }),
+    headers: new Headers({ Accept: "application/json", ...(admissionToken === null ? {} : { "x-opencodex-api-key": admissionToken }) }),
   }, options.timeoutMs, "headers");
   if (response.status === 404) {
-    try { await response.body?.cancel(); } catch { /* best effort */ }
+    let body: unknown = null;
+    try { body = JSON.parse(await boundedText(response, 4096, { inactivityTimeoutMs: safeTimeout(options.timeoutMs) })); } catch { /* legacy/non-JSON 404 stays unsupported */ }
+    if (body && typeof body === "object" && !Array.isArray(body) && (body as { error?: { code?: unknown } }).error?.code === "hub_state_not_a_hub") {
+      throw new HubClientError("hub_state_not_a_hub", "the remote host does not publish hub state", 404);
+    }
     throw new HubClientError("hub_state_unsupported", "Hub does not serve /v1/hub-state; upgrade the hub", 404);
   }
   if (!response.ok) {

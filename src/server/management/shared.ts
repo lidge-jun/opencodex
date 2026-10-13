@@ -3,6 +3,7 @@ import { captureInitialSelectionBaseline, finalizeInitialModelSelection } from "
 import { captureModelDiscoveryBaseline, finalizeModelDiscovery } from "../../providers/new-model-policy-runtime";
 import { CatalogGatherBusyError } from "../../codex/catalog/routed-gather";
 import { initialModelSelectionPending } from "../../providers/initial-model-selection";
+import { isPassiveRead } from "../../lib/passive-read";
 import { readFileSync } from "node:fs";
 import type { CatalogModel } from "../../codex/catalog";
 import { catalogModelSlug, invalidateCodexModelsCache, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
@@ -291,6 +292,8 @@ export async function fetchAllModels(
   /** Management renders disabled rows using this detached state after inventory drift. */
   publishProjection?: (projection: OcxConfig) => void,
 ): Promise<CatalogModel[]> {
+  // A Remote Link read: no upstream, no initial selection, no write (#6959).
+  if (isPassiveRead()) return [];
   const { gatherRoutedModels } = await import("../../codex/catalog");
   const baseline = captureInitialSelectionBaseline(config);
   const discoveryBaseline = captureModelDiscoveryBaseline(config);

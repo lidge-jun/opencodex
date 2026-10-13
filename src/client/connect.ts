@@ -74,6 +74,16 @@ import {
   assertNoClientDisconnectPending, assertClientConnectionUnchanged, sameClientConnectionOwner,
 } from "./state";
 import { assertClientCatalogCompatible, type CatalogCompatibilityDeps } from "./catalog-compatibility";
+import { overlayHomeCodexSettings } from "../link/codex-settings";
+import {
+  clearHomeCodexSettingsRecord,
+  fetchHomeCodexSettings,
+  resolveHomeCodexSettings,
+  recordHomeCodexSettings,
+  writeHomeCodexSettingsRecord,
+  type HomeCodexSettingsSource,
+  type LinkHomeDeps,
+} from "./link-home";
 import { hubStateCachePath } from "./hub-state";
 import { ClientLinkStateError, clearClientLinkState, readClientLinkState } from "./link-state";
 import { isLinkPort } from "../link/ports";
@@ -110,6 +120,8 @@ export interface ClientConnectDeps {
   now?: () => Date;
   lifecycleLockDeps?: ClientLifecycleLockDeps;
   catalogCompatibility?: CatalogCompatibilityDeps;
+  /** Link mode: how the Home's Codex settings are read (#6957). */
+  linkHome?: LinkHomeDeps;
 }
 
 export interface RotateClientOptions {
@@ -687,7 +699,16 @@ export async function connectClient(
 
     const config = earlyConfig ?? loadConfig();
     const target = routingTarget(serverUrl, linkMode ? config.port : undefined, config);
-    const injectConfig = { ...config, syncResumeHistory: false };
+    // A link Child writes the Home's OpenCodex-owned Codex settings, not its own (#6957). A read
+    // that fails here keeps the local values; the next `ocx sync` applies the Home's.
+    // Read only: the record is written after the connection commits, so a rollback leaves none.
+    const homeSettings = linkMode && linkMetadata && options.selectedClients.includes("codex")
+      ? await fetchHomeCodexSettings({ transport: "link", link: linkMetadata, apiKeyId }, admissionToken, deps.linkHome)
+      : undefined;
+    const injectConfig = {
+      ...(homeSettings?.kind === "fresh" ? overlayHomeCodexSettings(config, homeSettings.document.settings) : config),
+      syncResumeHistory: false,
+    };
     const preflight = await injectCodexConfig(config.port, injectConfig, {
       validateOnly: true,
       routingTarget: target,
@@ -734,6 +755,12 @@ export async function connectClient(
       commitClientConnection(connection);
       committed = true;
     }), deps.lifecycleLockDeps);
+    // Recorded only when the injection that applied it ran (not with --no-sync).
+    if (homeSettings?.kind === "fresh" && linkMetadata && injectionCommitted) {
+      try {
+        writeHomeCodexSettingsRecord({ linkId: linkMetadata.linkId, fetchedAt: now, document: homeSettings.document });
+      } catch { /* the next sync records it; the applied config is already committed */ }
+    }
     return connection;
   } catch (error) {
     const rollbackFailures: string[] = [];
@@ -780,7 +807,7 @@ export async function connectClient(
 export async function syncConnectedClient(
   _options: { restartCodex?: boolean } = {},
   deps: ClientConnectDeps = {},
-): Promise<{ catalogWritten: boolean; cacheSynced: boolean; injected: boolean; stale: boolean }> {
+): Promise<{ catalogWritten: boolean; cacheSynced: boolean; injected: boolean; stale: boolean; homeSettings?: HomeCodexSettingsSource }> {
   if (siblingOfLivePort() !== null) throw new Error(siblingSkipMessage());
   const initial = withClientLifecycleSync(() => withConfigMutationLockSync(() => {
     assertNoClientDisconnectPending();
@@ -825,21 +852,28 @@ export async function syncConnectedClient(
     if (next.pendingOperation || token.kind !== "present" || token.fingerprint !== next.tokenFingerprint) throw new Error("client_token_changed");
   };
   let injected = false;
+  let homeSettings: HomeCodexSettingsSource | undefined;
   if (next.selectedClients.includes("codex")) {
-    const config = loadConfig();
+    let config = loadConfig();
+    // #6957: a link Child applies the Home's OpenCodex-owned Codex settings with the catalog.
+    if (isLinkConnection(next)) {
+      homeSettings = await resolveHomeCodexSettings(next, initial.token.token, deps.linkHome);
+      if (homeSettings.source !== "local") config = overlayHomeCodexSettings(config, homeSettings.document.settings);
+    }
     const result = await injectCodexConfig(config.port, { ...config, syncResumeHistory: false }, {
       routingTarget: routingTarget(next.serverUrl, isLinkConnection(next) ? config.port : undefined, config), catalogPath: DEFAULT_CATALOG_PATH,
       journalOwner: { kind: "client", apiKeyId: next.apiKeyId }, beforeClientWrite,
     });
     if (!result.success || result.status === "skipped") throw new Error(result.message);
     injected = true;
+    if (homeSettings && next.link) recordHomeCodexSettings(next.link.linkId, homeSettings);
   }
   const cacheSynced = withClientLifecycleSync(() => {
     beforeClientWrite();
     // Cache invalidation acquires K itself (N -> K -> C); never call it while C is held.
     return invalidateCodexModelsCache({ allowWhenDesiredDisabled: true });
   }, deps.lifecycleLockDeps);
-  return { catalogWritten: downloaded !== undefined, cacheSynced, injected, stale };
+  return { catalogWritten: downloaded !== undefined, cacheSynced, injected, stale, ...(homeSettings ? { homeSettings } : {}) };
 }
 
 /**
@@ -1035,6 +1069,7 @@ export async function disconnectClient(
         if (!(error instanceof ClientLinkStateError)) throw error;
       }
       if (sidecarLinkId === connection.link.linkId) clearClientLinkState(connection.link.linkId);
+      try { clearHomeCodexSettingsRecord(); } catch { /* derived data; never fails a disconnect */ }
     }
     removeHubStateCache();
     requireDesktopResult(finishRemoteDesktopCleanup(held, receipt.owner));

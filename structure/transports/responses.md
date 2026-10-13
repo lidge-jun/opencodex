@@ -331,23 +331,13 @@ again held its entry for the life of the process.
 
 > Decision record: [ADR-0038](../decisions/ADR-0038-responses-http-sse.md)
 
-A replayed compaction item carries an `encrypted_content` blob only its minting backend can decode,
-and the client replays it on every later turn. The proxy's own `ocx1:`/`ocx2:` envelopes are transparent
-base64, so they always lower to plain user messages. A native blob is relayed only when there is no
-known serving-identity mismatch and the destination is known to decode native blobs — the canonical
-ChatGPT forward surface, the official OpenAI API, or a provider with the explicit
-`decodesNativeCompactionBlobs` capability. The destination gate alone is insufficient because more
-than one backend, including OpenAI and xAI, mints native blobs: a destination can decode its own blob
-without being able to decode the previous backend's. The same serving-identity mismatch signal
-therefore strips reasoning `encrypted_content` and degrades native compaction blobs through the
-existing opaque-note path. Claude-native reasoning adds a per-blob tag check at every route binding:
-only the matching durable endpoint and generation-bearing credential retain raw and parsed carriers. Without recorded thread identity, the destination gate remains. Noncanonical forward providers
-receive no caller credentials and may point at any backend. On any other routed destination the blob
-also degrades to the same opaque note the bridged parser uses, because forwarding it there fails the
-turn and the item outlives the failure in the client transcript, repeating on every later turn
-including the compaction turn the proxy itself drives. With `store: false`, request sanitization
-strips ids from every input item, including compact-wire items, matching codex-rs
-(`core/src/client.rs:918-925`). Compact-wire items remain exempt from response-side field backfill.
+A replayed compaction item carries an `encrypted_content` blob only its minting backend can decode, and the client replays it on every later turn. The proxy's own `ocx1:`/`ocx2:` envelopes are transparent base64, so they always lower to plain user messages. A
+native blob is relayed only when there is no known serving-identity mismatch and the destination is known to decode native blobs — the canonical ChatGPT forward surface, the official OpenAI API, or a provider with the explicit
+`decodesNativeCompactionBlobs` capability. The destination gate alone is insufficient because more than one backend, including OpenAI and xAI, mints native blobs: a destination can decode its own blob without being able to decode the previous backend's.
+The same serving-identity mismatch signal therefore strips reasoning `encrypted_content` and degrades native compaction blobs through the existing opaque-note path. Claude-native reasoning adds a per-blob tag check at every route binding: only the
+matching durable endpoint and generation-bearing credential retain raw and parsed carriers. Without recorded thread identity, the destination gate remains. Noncanonical forward providers receive no caller credentials and may point at any backend. On any
+other routed destination the blob also degrades to the same opaque note the bridged parser uses, because forwarding it there fails the turn and the item outlives the failure in the client transcript, repeating on every later turn including the compaction
+turn the proxy itself drives. With `store: false`, request sanitization strips ids from every input item, including compact-wire items, matching codex-rs (`core/src/client.rs:918-925`). Compact-wire items remain exempt from response-side field backfill.
 
 For replayed `encrypted_content` slots whose minting provenance is unavailable after a restart or
 full-history resend, the plaintext-compatibility boundary requires canonical key-independent Fernet
@@ -405,6 +395,16 @@ always become unable to serve.
 
 > Decision record: [ADR-0039](../decisions/ADR-0039-responses-http-sse.md)
 
+
+## Decoded checkpoint continuation
+
+`src/responses/parser.ts` adds `CHECKPOINT_CONTINUATION_NOTE` from `src/responses/compaction.ts` to the system prompt only when normal generation contains a decoded `ocx1:` or `ocx2:` checkpoint; `src/adapters/openai-responses/request-strips.ts` applies the same condition to passthrough `instructions` while lowering the checkpoint to a user message. Summarizer turns, opaque native blobs and requests without decoded checkpoints receive no note. `SUMMARY_PREFIX` and checkpoint text remain unchanged, and later user messages retain their order after the checkpoint.
+
+The note is a prompt contract and grants no authority. Completed requests remain history unless a later user message asks to repeat them. Unfinished work continues only under existing authorization and within its scope, without asking for that authorization again while it still applies. Permission and confirmation gates remain authoritative: a pending decision or required permission must resolve before the dependent action. Checkpoints and delegations, including those from another thread, neither grant authority nor expand scope. Later user messages take priority, including pause, cancellation, replacement and scope changes.
+
+The continuation-note and continuation-wire tests establish prompt-contract and wire-construction evidence, including preservation of existing instructions, checkpoint ordering, and separated `ocx2:` retained reasoning. They do not establish model behavior or whether a model actually resumes the correct task.
+
+> Decision record: [ADR-7003](../decisions/ADR-7003-decoded-checkpoint-continuation.md)
 
 ## Core module ownership
 

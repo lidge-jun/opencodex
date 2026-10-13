@@ -34,6 +34,11 @@ export interface PickerListenerOptions {
   maxEncodedBytes?: number;
   /** Test seam: concurrent upstream requests; production uses PICKER_MAX_ACTIVE_UPSTREAMS. */
   maxActiveUpstreams?: number;
+  /**
+   * Test seam: arms the drop of a connection whose backend ended, after PICKER_ABANDONED_INPUT_LINGER_MS;
+   * returns a cancel function. Production uses a timer.
+   */
+  scheduleAbandonedInputDrop?: (drop: () => void, ms: number) => () => void;
   log?: (line: string) => void;
 }
 export interface PickerListenerHandle { port: number; close(): Promise<void> }
@@ -51,6 +56,12 @@ export const PICKER_MAX_ACTIVE_UPSTREAMS = 256;
 export const PICKER_MAX_CONCURRENT_STREAMS = 100;
 /** A connection that has not sent a complete ClientHello by then is dropped. */
 const CLIENT_HELLO_TIMEOUT_MS = 10_000;
+/**
+ * Once the backend has ended a connection and its reply has been flushed, input the client still
+ * sends is discarded for at most this long before the connection is dropped. A cooperative client
+ * closes as soon as it reads a Connection: close reply; this only bounds one that keeps uploading.
+ */
+export const PICKER_ABANDONED_INPUT_LINGER_MS = 30_000;
 
 const HOP_HEADERS = new Set([
   "connection", "keep-alive", "proxy-connection", "proxy-authenticate", "proxy-authorization",
@@ -152,6 +163,10 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
   const upstream = options.upstream ?? { host: "claude.ai", port: 443, servername: "claude.ai" };
   const cap = options.maxEncodedBytes ?? BOOTSTRAP_MAX_ENCODED_BYTES;
   const maxActiveUpstreams = options.maxActiveUpstreams ?? PICKER_MAX_ACTIVE_UPSTREAMS;
+  const scheduleAbandonedInputDrop = options.scheduleAbandonedInputDrop ?? ((drop: () => void, ms: number) => {
+    const timer = setTimeout(drop, ms);
+    return () => clearTimeout(timer);
+  });
   let activeUpstreams = 0;
   const upgrades = new Set<Duplex>();
   const spliced = new Set<Socket>();
@@ -205,8 +220,18 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
         } else req.destroy();
       }
     };
+    // An HTTP/1.1 reply sent while the upload is unfinished advertises Connection: close. Bun 1.4.3
+    // ends such a response with socket.destroySoon() before our finish listeners run, which resets
+    // the splice before the reply reaches the client; keep it a graceful FIN that discards input.
+    // Only that closing socket is changed, and destroy() stays available for errors and shutdown.
+    const closesUnfinishedUpload = () => !h2 && uploading && !req.complete;
+    const keepClosingReplyIntact = () => {
+      const socket = req.socket;
+      socket.destroySoon = () => { req.resume(); socket.end(); return socket; };
+    };
     // Refusals answer with an empty response and a fixed log line that carries no request data.
     const refuse = (status: 400 | 503) => {
+      if (closesUnfinishedUpload()) keepClosingReplyIntact();
       // Do not leave a refused, still-uploading stream behind after delivering its empty reply.
       if (uploading && !req.complete) {
         req.once("error", () => res.destroy());
@@ -236,6 +261,7 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
       if (clientGone) return;
       if (res.headersSent) res.destroy();
       else {
+        if (closesUnfinishedUpload()) keepClosingReplyIntact();
         res.writeHead(502, { "Content-Length": "0", ...(!h2 && uploading && !req.complete ? { Connection: "close" } : {}) });
         res.end(); log(502);
       }
@@ -260,7 +286,10 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
           // HTTP/2 has no reason phrase; its compat writeHead takes the same flat raw header array.
           if (h2) (relayRes as Http2ServerResponse).writeHead(status, raw as unknown as Record<string, string>);
           else {
-            if (uploading && !req.complete) raw.push("Connection", "close");
+            if (uploading && !req.complete) {
+              keepClosingReplyIntact();
+              raw.push("Connection", "close");
+            }
             res.writeHead(status, upRes.statusMessage, raw);
           }
           log(status);
@@ -438,6 +467,8 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
       const offersH2 = clientHelloOffersH2(head);
       if (offersH2 === null) return;
       client.off("data", onData);
+      // Keep reading an aborted upload after the backend reply FIN.
+      client.allowHalfOpen = true;
       // Paused, a FIN or later bytes wait in the readable buffer and follow `head` once piped.
       client.pause();
       clearTimeout(deadline);
@@ -450,6 +481,23 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
       // its peer (reset, dial failure) tears the peer down instead of leaving it open.
       inner.once("close", () => { spliced.delete(inner); if (!client.writableEnded) client.destroy(); });
       client.once("close", () => { if (!inner.writableEnded) inner.destroy(); });
+      // The backend reply ended; discard ciphertext still coming from the aborted upload.
+      // Unpipe before resuming, so backpressure cannot hide the peer FIN. The discard is bounded
+      // from the moment the reply has been flushed to the socket (finish), never before, so the
+      // drop cannot cut a reply still being written; finish is not peer receipt, so a peer that
+      // also stops reading for the whole budget can lose unread bytes. A peer that keeps sending
+      // past the budget is dropped instead of holding the connection until shutdown (#6984).
+      inner.once("end", () => {
+        client.unpipe(inner);
+        client.resume();
+        const linger = () => {
+          if (client.destroyed) return;
+          const cancel = scheduleAbandonedInputDrop(() => client.destroy(), PICKER_ABANDONED_INPUT_LINGER_MS);
+          client.once("close", cancel);
+        };
+        if (client.writableFinished) linger();
+        else client.once("finish", linger);
+      });
       inner.once("connect", () => {
         inner.setNoDelay(true);
         client.setNoDelay(true);

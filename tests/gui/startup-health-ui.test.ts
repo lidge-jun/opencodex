@@ -7,6 +7,7 @@ import type { StartupHealthData } from "../../gui/src/pages/startup-shared";
 import {
   PROJECT_CONFIG_DIAGNOSTICS_POLL_MS,
   beginPollEpochs,
+  desktopBadgeKey,
   desktopManagesStartup,
   mapStartupHealthProbe,
   probeNeedsFastRetry,
@@ -47,6 +48,21 @@ describe("startup health UI decisions", () => {
       .toBe("startup.riskDetailWindowsShim");
     expect(startupRiskDetailKey({ ...base, routingKind: "custom-local", desktop: { owned: false, supervisor } }))
       .toBe("startup.riskDetailCustomLocal");
+  });
+
+  test("a running desktop app with unverified Start at Login is not labelled unhealthy (#6963)", () => {
+    const supervisor = { supervisorPid: 123, runtimePid: 456, app: "/Applications/OpenCodex.app" };
+    const loginOff = { running: true, loginEnabled: false, viable: false };
+    expect(desktopBadgeKey({ owned: false, supervisor, ...loginOff }, false)).toBe("startup.desktopLoginUnverified");
+    expect(desktopBadgeKey({ owned: true, ...loginOff }, false)).toBe("startup.desktopLoginUnverified");
+    // A failed or stale read never vouches for the running process it last saw.
+    expect(desktopBadgeKey({ owned: false, supervisor, ...loginOff }, true)).toBe("startup.unhealthy");
+    expect(desktopBadgeKey({ owned: true, running: true, loginEnabled: true, viable: true }, true)).toBe("startup.unhealthy");
+    // Stopped, or neither owned nor supervised, stays unhealthy.
+    expect(desktopBadgeKey({ owned: true, running: false, loginEnabled: false, viable: false }, false)).toBe("startup.unhealthy");
+    expect(desktopBadgeKey({ owned: true, running: false, loginEnabled: true, viable: false }, false)).toBe("startup.unhealthy");
+    expect(desktopBadgeKey({ owned: false, ...loginOff }, false)).toBe("startup.unhealthy");
+    expect(desktopBadgeKey({ owned: false, supervisor, running: true, loginEnabled: true, viable: true }, false)).toBe("startup.viable");
   });
 
   test("custom-local guidance takes precedence over stale owned or supervised desktop guidance", () => {

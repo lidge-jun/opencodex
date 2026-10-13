@@ -3,6 +3,14 @@ import type { Capability } from "./capability-types";
 /** Verified existing handlers only; local operations never claim management routes. */
 export const ACCESS_REMOTE_CAPABILITIES: readonly Capability[] = [
   {
+    command: ["hub", "disable"], summary: "Return a hub to standalone in one validated config write.",
+    usage: "ocx hub disable [--revoke-clients --client-key <id> ...] [--json]",
+    routes: [],
+    flags: [{ name: "--revoke-clients", value: "boolean", summary: "Revoke only explicitly selected saved client key IDs." }, { name: "--client-key", value: "string", summary: "Exact saved key ID to revoke; repeatable, requires --revoke-clients." }, { name: "--json", value: "boolean", summary: "Emit the result and restart guidance as JSON." }],
+    mutates: true, json: "envelope",
+    details: ["Removes hub, unauthenticatedLoopbackListener, runtimeRole and hostname atomically after validation; non-hub roles refuse without changes.", "Existing keys have no verified client origin. Names never select keys; --revoke-clients requires exact --client-key IDs when keys exist. Unselected keys remain.", "Prints only safe key metadata, never plaintext keys or pending rotations. Restart advice is informational; the running proxy and external publishing are unchanged."],
+  },
+  {
     command: ["access", "key"], summary: "Manage API access keys and inspect masked metadata.",
     usage: "ocx access key list [--json]",
     routes: [{"method": "GET", "path": "/api/keys"}, {"method": "POST", "path": "/api/keys"}, {"method": "PATCH", "path": "/api/keys"}, {"method": "DELETE", "path": "/api/keys"}, {"method": "POST", "path": "/api/keys/rotate"}, {"method": "POST", "path": "/api/keys/rotate/commit"}, {"method": "DELETE", "path": "/api/keys/rotate"}],

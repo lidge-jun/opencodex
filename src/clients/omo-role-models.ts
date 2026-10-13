@@ -120,10 +120,13 @@ function serialize(text: string, doc: JsonObject): string {
 /**
  * `reasoning` left undefined keeps the entry's level; null removes it, so a level LazyCodex cannot
  * express does not leave a stale one behind for its next install to apply.
+ * `model` left undefined keeps the entry's model, so an effort-only save of a role that inherits
+ * its model never adds a pin here. LazyCodex declares both keys optional, so an entry may carry
+ * `reasoning` alone; an absent entry is created only when there is a value to put in it.
  */
 export function writeOmoRoleModel(
   role: string,
-  model: string,
+  model: string | undefined,
   path: string = omoJsoncPath(),
   reasoning?: string | null,
 ): OmoRoleModelWriteStatus {
@@ -137,10 +140,10 @@ export function writeOmoRoleModel(
   if (!isObject(agents)) return "invalid";
   const entry = agents[role] === undefined ? {} : agents[role];
   if (!isObject(entry)) return "invalid";
-  const next: JsonObject = { ...entry, model };
+  const next: JsonObject = model === undefined ? { ...entry } : { ...entry, model };
   if (reasoning === null) delete next.reasoning;
   else if (reasoning !== undefined) next.reasoning = reasoning;
-  if (entry.model === model && entry.reasoning === next.reasoning) return "unchanged";
+  if (entry.model === next.model && entry.reasoning === next.reasoning) return "unchanged";
   agents[role] = next;
   codex.agents = agents;
   doc[CODEX_SECTION] = codex;

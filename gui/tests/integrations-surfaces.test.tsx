@@ -1811,7 +1811,7 @@ test("the LazyCodex role section sits on the omo tab and only when LazyCodex is 
   ]);
   // Every tab panel is mounted, and the section shows only on the active one. Seeding the role list's
   // store renders it in the first commit, so placement is checked without waiting on a request.
-  type Roles = { detected: boolean; roles: unknown[]; omoJsonc: unknown; available: string[] };
+  type Roles = { detected: boolean; roles: unknown[]; omoJsonc: unknown; available: string[]; efforts: string[] };
   const render = async (hash: string, roles: Roles) => {
     testWindow.location.hash = hash;
     mountCount += 1;
@@ -1833,14 +1833,15 @@ test("the LazyCodex role section sits on the omo tab and only when LazyCodex is 
     .map(element => element.closest("[id^='integrations-panel-']")?.id ?? "outside");
 
   // Pi-based omo alone: no tab shows anything of LazyCodex.
-  await render("#integrations/omo", { detected: false, roles: [], omoJsonc: null, available: [] });
+  await render("#integrations/omo", { detected: false, roles: [], omoJsonc: null, available: [], efforts: [] });
   expect(panelsWithSection()).toEqual([]);
 
   const detected: Roles = {
     detected: true,
-    roles: [{ role: "explorer", model: "gpt-5.6-sol", omoJsoncModel: null }],
+    roles: [{ role: "explorer", model: "gpt-5.6-sol", effort: null, omoJsoncModel: null }],
     omoJsonc: { state: "present" },
     available: ["gpt-5.6-sol"],
+    efforts: ["low", "medium", "high"],
   };
   await render("#integrations/omo", detected);
   expect(panelsWithSection()).toEqual(["integrations-panel-omo"]);

@@ -32,12 +32,12 @@ import {
   OPENAI_API_GPT56_MAX_INPUT_TOKENS,
   OPENAI_API_GPT56_VIRTUAL_MODELS,
   OPENAI_API_GPT56_REASONING_EFFORTS,
-  META_MUSE_REASONING_EFFORTS,
-  META_MUSE_REASONING_EFFORT_MAP,
+  META_MODEL_API_REASONING_EFFORTS,
+  META_MODEL_API_REASONING_EFFORT_MAPS,
   META_MUSE_CODE_REASONING_EFFORTS,
   META_MUSE_CODE_REASONING_EFFORT_MAP,
   META_MUSE_CONTEXT_WINDOW,
-  META_MUSE_MODELS,
+  META_MODEL_API_MODELS,
   OPENAI_DAYBREAK_MODELS,
   OPENAI_DAYBREAK_CONTEXT_WINDOWS,
   OPENAI_DAYBREAK_MAX_INPUT_TOKENS,
@@ -736,7 +736,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     authKind: "key",
     dashboardUrl: "https://dev.meta.ai/docs/authentication",
     defaultModel: "muse-spark-1.3",
-    models: META_MUSE_MODELS,
+    models: META_MODEL_API_MODELS,
     // Static roster: no authenticated /v1/models payload was ever observed (the only
     // contact was an unauthenticated GET returning 401 invalid_api_key), and Meta serves
     // non-agent families on this same base URL. Turning discovery on would publish an
@@ -746,20 +746,20 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // without this, registry transport canonicalization would retarget it and send their
     // saved key to Meta.
     preserveCustomDestination: true,
-    modelContextWindows: Object.fromEntries(META_MUSE_MODELS.map(id => [id, META_MUSE_CONTEXT_WINDOW])),
+    modelContextWindows: Object.fromEntries(META_MODEL_API_MODELS.map(id => [id, META_MUSE_CONTEXT_WINDOW])),
     // text+image only. Meta also documents video, audio (degraded on 1.3), and PDF, but
     // the catalog modality enum is text/image and over-advertising poisons the exported
     // client config (see tests/codex-integration/catalog-input-modality-enum.test.ts).
-    modelInputModalities: Object.fromEntries(META_MUSE_MODELS.map(id => [id, ["text", "image"] as ["text", "image"]])),
-    modelReasoningEfforts: Object.fromEntries(META_MUSE_MODELS.map(id => [id, META_MUSE_REASONING_EFFORTS])),
-    modelReasoningEffortMap: Object.fromEntries(META_MUSE_MODELS.map(id => [id, META_MUSE_REASONING_EFFORT_MAP])),
+    modelInputModalities: Object.fromEntries(META_MODEL_API_MODELS.map(id => [id, ["text", "image"] as ["text", "image"]])),
+    modelReasoningEfforts: META_MODEL_API_REASONING_EFFORTS,
+    modelReasoningEffortMap: META_MODEL_API_REASONING_EFFORT_MAPS,
     // No defaultMaxOutputTokens: Meta publishes none. The only number in its docs
     // (131072) appears inside a third-party config sample, and the protocol pages call
     // the real limit "model-dependent".
     // Meta names its variable MODEL_API_KEY, but the env var opencodex reads is derived
     // from the provider id (META_MODEL_API_KEY). Saying only Meta's name would send a
     // user to export a variable this proxy never reads.
-    note: "Pay-as-you-go Meta Model API. Get a key at https://dev.meta.ai (Meta calls it MODEL_API_KEY; export it here as META_MODEL_API_KEY) — a Meta developer account needs a payment method before it can serve requests, and every call is metered per token. A Muse Code subscription does NOT work here: Meta scopes that credential to the Muse Code CLI and bills any other key pay-as-you-go (dev.meta.ai/docs/muse-code/subscriptions). The Contributor tier (muse-spark-1.3-contributor) is cheap because Meta trains on your prompts — about 92% off input, 95% off output, 99% off cached input; do not send confidential material through it. Muse Spark is also reachable through resellers: command-code carries both tiers, opencode-go serves only muse-spark-1.3-contributor.",
+    note: "Pay-as-you-go Meta Model API. Get a key at https://dev.meta.ai (Meta calls it MODEL_API_KEY; export it here as META_MODEL_API_KEY) — a Meta developer account needs a payment method before it can serve requests, and every call is metered per token. A Muse Code subscription does NOT work here: Meta scopes that credential to the Muse Code CLI and bills any other key pay-as-you-go (dev.meta.ai/docs/muse-code/subscriptions). The Contributor tier (muse-spark-1.3-contributor) is cheap because Meta trains on your prompts — about 92% off input, 95% off output, 99% off cached input; do not send confidential material through it. Muse Wonder (muse-wonder-1.0, preview) is Standard mode only on this API ($4 input / $20 output per 1M tokens, no Contributor tier) and accepts reasoning effort up to max; the Spark rows stop at xhigh. Muse Spark is also reachable through resellers: command-code carries both tiers, opencode-go serves only muse-spark-1.3-contributor.",
   },
   /* [Decision Log]
   - 목적과 의도: Let an operator who already signed the Muse Code CLI in reach Muse Spark with that credential, instead of provisioning a second key.
@@ -787,14 +787,14 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     oauthId: "meta-muse",
     dashboardUrl: "https://dev.meta.ai",
     defaultModel: "muse-spark-1.3",
-    models: META_MUSE_MODELS,
+    models: META_MODEL_API_MODELS,
     // Same reason as meta-model: the authenticated roster carries muse-image-1.0 and
     // muse-voice-transcribe-1.0, which this Responses-agent provider cannot drive.
     liveModels: false,
-    modelContextWindows: Object.fromEntries(META_MUSE_MODELS.map(id => [id, META_MUSE_CONTEXT_WINDOW])),
-    modelInputModalities: Object.fromEntries(META_MUSE_MODELS.map(id => [id, ["text", "image"] as ["text", "image"]])),
-    modelReasoningEfforts: Object.fromEntries(META_MUSE_MODELS.map(id => [id, META_MUSE_CODE_REASONING_EFFORTS])),
-    modelReasoningEffortMap: Object.fromEntries(META_MUSE_MODELS.map(id => [id, META_MUSE_CODE_REASONING_EFFORT_MAP])),
+    modelContextWindows: Object.fromEntries(META_MODEL_API_MODELS.map(id => [id, META_MUSE_CONTEXT_WINDOW])),
+    modelInputModalities: Object.fromEntries(META_MODEL_API_MODELS.map(id => [id, ["text", "image"] as ["text", "image"]])),
+    modelReasoningEfforts: Object.fromEntries(META_MODEL_API_MODELS.map(id => [id, META_MUSE_CODE_REASONING_EFFORTS])),
+    modelReasoningEffortMap: Object.fromEntries(META_MODEL_API_MODELS.map(id => [id, META_MUSE_CODE_REASONING_EFFORT_MAP])),
     note: "Signs in to Meta with a browser device code on any platform, then mints the Muse Code subscription key. That grant is reimplemented from the one the Muse Code CLI performs and has NOT been exercised against Meta from OpenCodex, so treat the first login as unverified. If the Muse Code CLI is already signed in on macOS, the existing key is imported instead of starting a new grant. A pasted key from https://dev.meta.ai still works as a fallback when a device login cannot complete, and faces the same format check and live validation. A device login authenticates as Meta own Muse Code client, which is a stronger claim than reusing a key the CLI already minted. Meta scopes that credential to the Muse Code CLI, so this is an UNSUPPORTED use: Meta does not authorize subscription coverage outside its own CLI, how these calls settle is not observable from the API, and you should treat every call as billable against your account. The key, imported or pasted, is copied into OpenCodex's auth store. For an account signed in with the device login, OpenCodex refreshes Meta's subscription windows on demand from the same key endpoint the login uses, at most once every five minutes. For an imported or pasted key there is no endpoint to query them on demand, so OpenCodex reads them from streaming responses and shows the last observed value with its age; refreshing one then requires another streaming turn, and translated (non-passthrough) turns report none. Rate limits apply per team, not per key. For a supported path use the meta-model provider with your own key (export it as META_MODEL_API_KEY).",
   },
   {

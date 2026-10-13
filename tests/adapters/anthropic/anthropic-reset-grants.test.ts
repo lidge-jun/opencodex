@@ -232,11 +232,14 @@ describe("reset-grant journal", () => {
 
   test("the first settlement wins and a later settle gets the stored one back", () => {
     beginAnthropicResetOperation(id(OP), { journalPath, now: T0 });
-    expect(settleAnthropicResetOperation({ operationId: OP, code: "reset", resetsLeft: 0 }, { journalPath, now: T0 + 1 }))
-      .toEqual({ code: "reset", resetsLeft: 0 });
-    expect(settleAnthropicResetOperation({ operationId: OP, code: "unavailable", resetsLeft: null }, { journalPath, now: T0 + 2 }))
-      .toEqual({ code: "reset", resetsLeft: 0 });
-    expect(beginAnthropicResetOperation(id(OP), { journalPath, now: T0 + 3 })).toMatchObject({ kind: "replay", code: "reset" });
+    expect(settleAnthropicResetOperation({ operationId: OP, code: "reset", resetsLeft: 0, cleared: ["five_hour"] }, { journalPath, now: T0 + 1 }))
+      .toEqual({ code: "reset", resetsLeft: 0, settledAt: T0 + 1, claimedAt: T0, cleared: ["five_hour"] });
+    // A late answer gets the canonical settlement back, including when the claim was first
+    // journaled and which windows it cleared, so admission makes the same decision.
+    expect(settleAnthropicResetOperation({ operationId: OP, code: "unavailable", resetsLeft: null, cleared: ["five_hour", "seven_day"] }, { journalPath, now: T0 + 2 }))
+      .toEqual({ code: "reset", resetsLeft: 0, settledAt: T0 + 1, claimedAt: T0, cleared: ["five_hour"] });
+    expect(beginAnthropicResetOperation(id(OP), { journalPath, now: T0 + 3 }))
+      .toMatchObject({ kind: "replay", code: "reset", claimedAt: T0, cleared: ["five_hour"] });
   });
 
   test("settling an operation the journal does not hold fails instead of pretending to be durable", () => {
