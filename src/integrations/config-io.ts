@@ -7,8 +7,9 @@
  *
  * Design of record: devlog/_fin/260802_client_toggle_api/021 §5-6.
  */
-import { lstatSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { lstatSync, mkdirSync, rmSync, statSync } from "node:fs";
 import type { ConfigFormat } from "../clients/config-export";
+import { readBoundedRegularFileSync } from "../lib/bounded-file-read";
 import { canonicalizeJsonc } from "../lib/jsonc";
 import { MAX_JSON_NESTING } from "./serialize";
 import { atomicWriteFileNoFollow, isMissingPathError } from "../config/atomic-write";
@@ -24,6 +25,10 @@ import type { IntegrationClientId } from "./registry";
  * then overwritten.
  */
 export const PARSE_FAILED = Symbol("parse-failed");
+const MAX_INTEGRATION_CONFIG_FILE_BYTES = 4 * 1024 * 1024;
+
+/** Raised before any target mutation, including pending-marker creation. */
+export class IntegrationWriteSizeError extends Error {}
 
 /**
  * What `JSON.parse` has already discarded by the time we hold the parsed value,
@@ -285,7 +290,7 @@ export function fileIO(): Omit<IntegrationIO, "appendJournal" | "putRecord" | "d
     lstatKind,
     readText: path => {
       try {
-        return { kind: "text", text: readFileSync(path, "utf8") };
+        return { kind: "text", text: readBoundedRegularFileSync(path, MAX_INTEGRATION_CONFIG_FILE_BYTES).toString("utf8") };
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
         return code === "ENOENT" ? { kind: "missing" } : { kind: "failed", ...(code ? { code } : {}) };
@@ -300,6 +305,19 @@ export function fileIO(): Omit<IntegrationIO, "appendJournal" | "putRecord" | "d
       }
     },
     writeText: (path, text) => {
+      /*
+       * One bound on both halves of the seam: a file past this size is one
+       * readText refuses, so writing it would strand the integration against
+       * its own configuration — or, for Cline's pending marker, leave a
+       * transaction recovery could never read back.
+       */
+      const bytes = Buffer.byteLength(text, "utf8");
+      if (bytes > MAX_INTEGRATION_CONFIG_FILE_BYTES) {
+        throw new IntegrationWriteSizeError(
+          `refusing oversized integration write to ${path}: `
+          + `${bytes} bytes is past the ${MAX_INTEGRATION_CONFIG_FILE_BYTES}-byte read bound`,
+        );
+      }
       const kind = lstatKind(path);
       if (kind !== "file" && kind !== "missing") {
         throw new Error(`refusing unsafe integration write target: ${path}`);

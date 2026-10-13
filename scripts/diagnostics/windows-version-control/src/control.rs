@@ -312,6 +312,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     {
         return Err("all paths must be absolute".into());
     }
+    let original_home = env::var_os("OCX_REAL_HOME")
+        .or_else(|| env::var_os("USERPROFILE"))
+        .or_else(|| env::var_os("HOME"))
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .ok_or("missing absolute original home")?;
     fs::create_dir(&root)?;
     let home = root.join("opencodex");
     let codex = root.join("codex");
@@ -346,8 +352,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     let system = env::var_os("SystemRoot").ok_or("missing SystemRoot")?;
     let path = env::join_paths([bin.clone(), Path::new(&system).join("System32")])?;
-    let child = Command::new(&args[0])
-        .env_clear()
+    let mut command = Command::new(&args[0]);
+    command.env_clear();
+    crate::fixture_env::arm_test_home_guard(&mut command, &original_home)?;
+    let child = command
         .env("SystemRoot", &system)
         .env("WINDIR", &system)
         .env("PATH", path)
