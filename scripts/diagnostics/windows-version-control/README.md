@@ -1,7 +1,7 @@
 # Windows synchronous runtime-selection control
 
 This optional Rust control exercises `GET /v1/models` in a separate Bun process
-using the repository's unchanged `tests/helpers/native-main-owner-child.ts`.
+using the repository's `tests/helpers/native-main-owner-child.ts`.
 It does not connect to a running proxy, install accounts, or replay turns.
 It is a reproducer, not a runtime fix or proof of a historical production cause.
 
@@ -9,6 +9,14 @@ The child gets a cleared environment, synthetic homes, fixed fixture-only
 authentication values, and an ephemeral loopback listener. It is configured
 with no real credentials and one unavailable loopback provider. Other network
 egress is not blocked or audited.
+
+Every native-owner fixture server injects `nativeOwnerRestartService` from
+`tests/helpers/native-owner-restart-service.ts`. Codex desktop/app-server state
+queries return a synthetic unknown result and restart requests fail without
+catalog synchronization, host process enumeration or process signalling. This
+boundary applies even when a client presents the fixture authentication values;
+redirected homes and descendant Jobs alone are not process-control isolation.
+The diagnostic's model-list and native-profile operations are unchanged.
 
 ```powershell
 cargo test --locked --manifest-path scripts/diagnostics/windows-version-control/Cargo.toml --test async_contracts -- --test-threads=4
@@ -54,7 +62,7 @@ call chain. Keep profiles and fixture artifacts private; publish bounded scalar
 results and repository-relative function names instead.
 
 To compare installed source with the repository fixture, use a separately owned
-scratch mirror containing a byte-identical copy of the helper and package
+scratch mirror containing byte-identical copies of both helper files and package
 metadata, with `src` and `node_modules` links to the desired installation.
 The fixture must perform no writes to that installation. Links alone do not
 enforce read-only access. Verify the profile's source module paths and source
