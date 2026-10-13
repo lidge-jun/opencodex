@@ -31,6 +31,12 @@ import { advanceCodexCredentialMutationEpoch } from "./credential-mutation-epoch
 import { withNativeMainExclusiveClaim } from "./native-main-claim";
 import { resolveNativeProfileContext } from "./native-profile-store";
 import { isNativeMainTrafficBlocked } from "./native-profile-startup";
+import { loadConfig } from "../config";
+import {
+  requestCodexAuthStatus,
+  resolveNativeMainRefreshMode,
+  type CodexAuthStatus,
+} from "./native-main-refresh-mode";
 
 export { MAIN_CODEX_ACCOUNT_ID } from "./account-id";
 
@@ -64,6 +70,8 @@ type MainAuthJsonCredential = {
 
 export interface NativeMainRefreshDependencies {
   refreshToken?: (refreshToken: string, options: { signal: AbortSignal }) => Promise<OAuthCredentials>;
+  /** Codex-mode seam: one app-server `getAuthStatus` call. Used only when Codex owns the refresh. */
+  codexAuthStatus?: (options: { refresh: boolean; signal: AbortSignal }) => Promise<CodexAuthStatus>;
   signal?: AbortSignal;
   /** Metadata-only refresh must not retract a concurrent traffic reauth quarantine. */
   preserveReauth?: boolean;
@@ -470,6 +478,12 @@ async function resolveMainAccountToken(
   const signal = dependencies.signal
     ? AbortSignal.any([dependencies.signal, refreshTimeout])
     : refreshTimeout;
+  // An injected exchange is the guarded writer by definition. Otherwise Codex refreshes its own
+  // login whenever a supported binary exists, unless the operator chose "opencodex" (#2999).
+  const refreshMode = dependencies.refreshToken
+    ? null
+    : await resolveNativeMainRefreshMode(loadConfig());
+  if (signal.aborted) throw signal.reason;
   const lockKey = refreshGrantFingerprintForToken(initial.refreshToken);
   // Two locks, because they guard two different things that live in two different
   // homes. `withCodexRefreshFileLock` is keyed on the grant fingerprint and lives
@@ -502,6 +516,11 @@ async function resolveMainAccountToken(
         if (locked.accessToken !== rejectedAccessToken
           && mainAccessTokenFresh(locked.accessToken, Date.now(), MAIN_TOKEN_REFRESH_SKEW_MS)) {
           return { accessToken: locked.accessToken!, chatgptAccountId: locked.chatgptAccountId };
+        }
+        if (refreshMode?.mode === "codex") {
+          const command = refreshMode.command!;
+          return refreshThroughCodex(locked, rejectedAccessToken, dependencies, refreshTimeout,
+            dependencies.codexAuthStatus ?? (options => requestCodexAuthStatus(command, options)));
         }
         const refresh = dependencies.refreshToken ?? refreshNativeMainGrant;
         let refreshed: OAuthCredentials;
@@ -574,6 +593,51 @@ function inFlightMainAccountToken(
       ?? extractAccountId(undefined, refreshed.access)
       ?? expected.chatgptAccountId,
   };
+}
+
+/**
+ * Codex mode (#2999): Codex refreshes and stores its own login; OpenCodex only uses the bearer.
+ *
+ * auth.json is not read again after the call. In keyring mode Codex deletes the file once the
+ * keyring save succeeds, so the RPC answer is the only place the new token exists for us.
+ * The call runs on the refresh timeout alone: killing app-server mid-exchange could retire
+ * the grant before Codex saves its successor.
+ */
+async function refreshThroughCodex(
+  locked: MainAuthJsonCredential,
+  rejectedAccessToken: string | undefined,
+  dependencies: NativeMainRefreshDependencies,
+  refreshTimeout: AbortSignal,
+  authStatus: NonNullable<NativeMainRefreshDependencies["codexAuthStatus"]>,
+): Promise<{ accessToken: string; chatgptAccountId: string }> {
+  let status: CodexAuthStatus;
+  try {
+    status = await authStatus({ refresh: true, signal: refreshTimeout });
+  } catch (cause) {
+    noteNativeMainRefresh("codex-unavailable");
+    throw new MainAccountTokenRefreshError("transient", { cause });
+  }
+  if (status.authMethod === "chatgpt" && !status.authToken) {
+    // The only permanent-failure signal the response carries: Codex withholds the token once
+    // its refresh was refused for good. The specific OAuth code is not on the wire.
+    noteNativeMainRefresh("codex-reauth");
+    markMainRefreshGrantRejected(mainRefreshGrantKey(locked)!);
+    throw new MainAccountTokenRefreshError("reauth");
+  }
+  const token = status.authToken;
+  if (status.authMethod !== "chatgpt" || !token) {
+    noteNativeMainRefresh("codex-no-chatgpt-login");
+    throw new MainAccountTokenRefreshError("transient");
+  }
+  // A transient Codex refresh failure still answers with its cached bearer.
+  if (token === rejectedAccessToken || !mainAccessTokenFresh(token, Date.now(), 0)) {
+    noteNativeMainRefresh("codex-transient");
+    throw new MainAccountTokenRefreshError("transient");
+  }
+  noteNativeMainRefresh("codex-ok");
+  if (dependencies.preserveReauth !== true) clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+  if (dependencies.signal?.aborted) throw dependencies.signal.reason;
+  return { accessToken: token, chatgptAccountId: extractAccountId(undefined, token) ?? locked.chatgptAccountId };
 }
 
 /** Refresh the CLI-owned native credential before upstream I/O and publish it atomically. */

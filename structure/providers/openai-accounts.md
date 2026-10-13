@@ -299,6 +299,23 @@ the other writer left it, the rotated grant is kept nowhere, and the old grant
 is not marked rejected (#2999). Same-identity device reauth obtains a new login
 grant rather than rotating the existing grant and keeps its pre-publication fence.
 
+## Native-main refresh ownership
+
+`src/codex/native-main-refresh-mode.ts` decides who refreshes the native main
+login (#2999). `nativeMainRefresh: "codex"`, the default whenever the Codex
+runtime resolved by `src/codex/runtime.ts` is 0.130.0 or newer, starts a
+short-lived `codex -c model_provider="openai" app-server` under the same
+CODEX_HOME and calls `getAuthStatus` with `includeToken` and `refreshToken`.
+OpenCodex uses the returned `authToken` for the request and writes nothing; it
+does not read auth.json again afterwards, because Codex in keyring mode deletes
+the file. A `chatgpt` method with a null token is the only permanent-failure
+signal on the wire and marks the grant rejected (reauth). An unreachable binary,
+a non-ChatGPT method, or the same or an expired bearer is transient. The
+exchange runs on the refresh timeout alone, under the same claim and grant lock
+as the writer. `"opencodex"`, a missing binary, or an older binary keeps the
+guarded writer above. While the test home guard is armed, auto resolution
+never spawns Codex. `ocx doctor` prints the active mode and its reason.
+
 ## Manual account pause and resume
 
 Manual pause/resume in `src/codex/auth-api/account-pause-group.ts` resolves existing native-main
