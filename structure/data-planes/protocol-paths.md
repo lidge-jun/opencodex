@@ -264,9 +264,14 @@ Cloud Code Assist mode, judged with `effectiveGoogleMode` so a saved provider wi
 `googleMode` gets the registry's); `combo-or-policy-route`; `hosted-tool` (a `web_search` tool
 the sidecar reads from the parsed Responses body); `vision-preprocessing` (an image for a model
 `requiresVisionPreprocessing` declares unable to read it); `bridge-only-policy` (the shadow-call
-intercept could rewrite the model before parsing). The Chat ingress and the planner both ask it;
-the planner cannot see a hosted tool, which no Chat feature describes. A declined Antigravity route
-adds its reason to the bridge entry mark; `rollout-disabled` and `not-migrated` add nothing.
+intercept could rewrite the model before parsing; a `<skills_instructions>` block in a system or
+developer message, which the per-session skills snapshot rewrites on the bridge body; a generated
+image link in assistant history, whose hosted display path the bridge body redacts; or, as a
+runtime fact only the ingress supplies, an observing cache diagnostic recorder, which records the
+body the core receives). The Chat ingress and the planner both ask it; the planner judges a
+standalone route only and cannot see body content no Chat feature describes (a hosted tool, the
+rewritten text). A declined Antigravity route adds its reason to the bridge entry mark;
+`rollout-disabled` and `not-migrated` add nothing.
 
 On the lane the ingress validates the Chat body by decoding it, with
 `chatConversationToIr` (`src/protocols/codecs/chat-ir.ts`), and sends the core
@@ -285,12 +290,16 @@ usage and the request log. The conversation travels as `HandleResponsesOptions.d
 - `evidence` replaces `evidenceFromBody(parsed._rawBody)` for policy routing, with the values the
   bridge body would have given (a non-empty catalog; an image in a user message, not in a tool
   result, which that scan never read).
-- `bridgeConversation` builds the bridge's `input`, `instructions` and `tools`. If the final
-  route is not the Antigravity route the lane was decided for (checked once the route is final,
-  before account binding), or if the body reaches the combo dispatcher,
-  `restoreDirectRequestConversation` puts them back on the raw body, re-marks the entry as the
-  bridge with `not-migrated`, and drops the encoder's direct request lane. The decoded IR stays,
-  because it equals what the parser builds from the restored body.
+- `bridgeConversation` builds the bridge's `input`, `instructions` and `tools`. When a route
+  assignment (the initial resolution or a subagent fallback, checked by
+  `leaveDirectLaneIfRerouted` right after each, and once more before final-route normalization)
+  is not the Antigravity route the lane was decided for, or the body reaches the combo dispatcher,
+  `restoreDirectRequestConversation` puts them back on the raw body before canonical
+  sanitization, ciphertext stripping or injected guidance can read or write it, re-marks the entry
+  as the bridge with `not-migrated`, and drops the encoder's direct request lane. The decoded IR
+  stays, because it equals what the parser builds from the restored body.
+- Ambiguous-resend replay (`adapter-dispatch.ts`) judges self-containment on the settings body
+  merged with `bridgeConversation()`, built only if a reset asks, so its answer is the bridge's.
 
 The contract that makes this safe is parity. For every Chat body the bridge accepts, the lane's
 parsed request equals `parseRequest(chatCompletionsToResponsesBody(body))` apart from `_rawBody`
@@ -308,7 +317,7 @@ so the response half is `[other, ir, chat]` as well. Messages to Antigravity is 
 
 `tests/responses/protocol-chat-ir-parity.test.ts` holds the decoder to the bridge over a fixture
 corpus, refusals included, and pins routing evidence and feature effects;
-`tests/responses/antigravity-direct-eligibility.test.ts` pins the rule and the plan;
+`tests/responses/protocol-antigravity-direct-eligibility.test.ts` pins the rule and the plan;
 `tests/responses/protocol-antigravity-direct-chat.test.ts` sends the same Chat request on both
 lanes to a fake Cloud Code Assist upstream and requires the same wire body, the same answer and
 the `chat -> ir -> other` trace.

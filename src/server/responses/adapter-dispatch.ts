@@ -226,8 +226,13 @@ export async function prepareAdapterExchange(
 
 
   let selfContainedJudgment: boolean | undefined;
+  // On the Antigravity direct lane the raw body carries only settings; judge the body the bridge
+  // would have sent, built only if an ambiguous reset actually asks.
+  const directRequest = options.directRequest;
   const requestIsSelfContained = (): boolean =>
-    selfContainedJudgment ??= selfContainedResponsesBody(parsed._rawBody);
+    selfContainedJudgment ??= selfContainedResponsesBody(directRequest
+      ? { ...(parsed._rawBody as Record<string, unknown>), ...directRequest.bridgeConversation() }
+      : parsed._rawBody);
   const claimPreHeaderResend = (): boolean => authorizeResendForRecovery(
     "pre-header", "connection-reset",
     ambiguousResendAllowanceFor(route.provider, requestIsSelfContained, claimAmbiguousResend),

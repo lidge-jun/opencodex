@@ -37,13 +37,18 @@ function comparable(parsed: OcxParsedRequest): unknown {
 }
 
 function viaBridge(body: Body): OcxParsedRequest {
-  return parseRequest(chatCompletionsToResponsesBody(structuredClone(body)));
+  return parseRequest(chatCompletionsToResponsesBody(clone(body)));
 }
 
 function viaDirect(body: Body): OcxParsedRequest {
-  const source = structuredClone(body);
+  const source = clone(body);
   const decoded = chatConversationToIr(source, source.model as string);
   return withDirectChatConversation(parseRequest(chatSettingsToResponsesBody(source)), source, decoded);
+}
+
+/** A JSON round trip, as the ingress reads bodies: keeps an own `__proto__` key. */
+function clone(body: Body): Body {
+  return JSON.parse(JSON.stringify(body)) as Body;
 }
 
 const CORPUS: Record<string, Body> = {
@@ -186,6 +191,11 @@ const CORPUS: Record<string, Body> = {
     model: MODEL,
     messages: [{ role: "system", content: "just instructions" }],
   },
+  "tool parameters with an own __proto__ key": JSON.parse(
+    `{"model":"${MODEL}","messages":[{"role":"user","content":"x"}],`
+    + `"tools":[{"type":"function","function":{"name":"p","parameters":{"type":"object","__proto__":{"x":1},"properties":{}}}},`
+    + `{"type":"function","function":{"name":"q","parameters":{"__proto__":{"y":2}}}}]}`,
+  ) as Body,
 };
 
 describe("Chat -> IR direct decode parity with the Responses bridge", () => {
@@ -197,28 +207,28 @@ describe("Chat -> IR direct decode parity with the Responses bridge", () => {
 
   test("the settings-only body is the bridge body without its conversation", () => {
     for (const body of Object.values(CORPUS)) {
-      const { input: _input, instructions: _instructions, tools: _tools, ...settings } = chatCompletionsToResponsesBody(structuredClone(body));
-      expect(chatSettingsToResponsesBody(structuredClone(body))).toEqual({ ...settings, input: [] });
+      const { input: _input, instructions: _instructions, tools: _tools, ...settings } = chatCompletionsToResponsesBody(clone(body));
+      expect(chatSettingsToResponsesBody(clone(body))).toEqual({ ...settings, input: [] });
     }
   });
 
   test("routing evidence matches what the core reads from the bridge body", () => {
     for (const body of Object.values(CORPUS)) {
-      const decoded = chatConversationToIr(structuredClone(body), MODEL);
-      expect(chatIrRouteEvidence(decoded)).toEqual(evidenceFromBody(chatCompletionsToResponsesBody(structuredClone(body))));
+      const decoded = chatConversationToIr(clone(body), MODEL);
+      expect(chatIrRouteEvidence(decoded)).toEqual(evidenceFromBody(chatCompletionsToResponsesBody(clone(body))));
     }
   });
 
   test("a model the core settled differently is decoded again for that model", () => {
     const body = CORPUS["leading system and developer are hoisted and named for the destination"]!;
-    const decoded = chatConversationToIr(structuredClone(body), MODEL);
-    const renamed = { ...structuredClone(body), model: "google-antigravity/other-model" };
+    const decoded = chatConversationToIr(clone(body), MODEL);
+    const renamed = { ...clone(body), model: "google-antigravity/other-model" };
     const base = parseRequest(chatSettingsToResponsesBody(renamed));
     expect(comparable(withDirectChatConversation(base, renamed, decoded))).toEqual(comparable(viaBridge(renamed)));
   });
 
   test("the decoder does not hand the caller's tool parameters to the IR by reference", () => {
-    const body = structuredClone(CORPUS["tool calls, results with images, held mid-batch instruction and reasoning"]!);
+    const body = clone(CORPUS["tool calls, results with images, held mid-batch instruction and reasoning"]!);
     const decoded = chatConversationToIr(body, MODEL);
     const tool = decoded.context.tools!.find(entry => entry.name === "lookup")!;
     tool.parameters.mutated = true;
@@ -244,9 +254,9 @@ describe("Chat -> IR direct decode refuses what the bridge refuses", () => {
   for (const [name, body] of Object.entries(INVALID)) {
     test(name, () => {
       let bridgeMessage: string | undefined;
-      try { chatCompletionsToResponsesBody(structuredClone(body)); } catch (err) { bridgeMessage = (err as Error).message; }
+      try { chatCompletionsToResponsesBody(clone(body)); } catch (err) { bridgeMessage = (err as Error).message; }
       expect(bridgeMessage).toBeDefined();
-      expect(() => chatConversationToIr(structuredClone(body), MODEL)).toThrow(bridgeMessage!);
+      expect(() => chatConversationToIr(clone(body), MODEL)).toThrow(bridgeMessage!);
     });
   }
 });

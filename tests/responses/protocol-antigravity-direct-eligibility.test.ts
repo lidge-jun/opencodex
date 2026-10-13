@@ -82,6 +82,27 @@ describe("antigravityDirectDeclineReason", () => {
     expect(antigravityDirectDeclineReason(route(), chat({ model: MODEL }), config(intercept))).toBe("bridge-only-policy");
     expect(antigravityDirectDeclineReason(route(), chat(), config(intercept))).toBeUndefined();
   });
+
+  test("text the core rewrites on the bridge body keeps the bridge", () => {
+    const skills = chat({ messages: [
+      { role: "system", content: "intro <skills_instructions>\n## Skills\n</skills_instructions>" },
+      { role: "user", content: "hi" },
+    ] });
+    expect(antigravityDirectDeclineReason(route(), skills, config())).toBe("bridge-only-policy");
+    const generatedImage = chat({ messages: [
+      { role: "user", content: "draw" },
+      { role: "assistant", content: [{ type: "text", text: "![Generated image](</tmp/artifacts/img.png>)" }] },
+      { role: "user", content: "again" },
+    ] });
+    expect(antigravityDirectDeclineReason(route(), generatedImage, config())).toBe("bridge-only-policy");
+    const userMention = chat({ messages: [{ role: "user", content: "what is <skills_instructions>?" }] });
+    expect(antigravityDirectDeclineReason(route(), userMention, config())).toBeUndefined();
+  });
+
+  test("an observing cache diagnostic recorder keeps the bridge", () => {
+    expect(antigravityDirectDeclineReason(route(), chat(), config(), { cacheDiagnostics: true })).toBe("bridge-only-policy");
+    expect(antigravityDirectDeclineReason(route(), chat(), config(), { cacheDiagnostics: false })).toBeUndefined();
+  });
 });
 
 describe("planner", () => {

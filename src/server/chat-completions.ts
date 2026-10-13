@@ -47,6 +47,7 @@ import type { OcxConfig } from "../types";
 import { readJsonRequestBody, resolveInboundBodyLimitBytes } from "./request-decompress";
 import {
   addFinalRequestLog,
+  cacheDiagnosticsObserving,
   httpStatusForRequestLogTerminal,
   recordFirstOutput,
   type RequestLogContext,
@@ -278,7 +279,7 @@ async function handleChatCompletionsWithBudget(
   // Antigravity direct lane (off by default): the conversation is decoded straight into the IR
   // and the answer is encoded straight into Chat, with no internal Responses body either way.
   const antigravityDecline = settledRoute && !chatNativeRoute
-    ? antigravityDirectDeclineReason(settledRoute, chatBody, config)
+    ? antigravityDirectDeclineReason(settledRoute, chatBody, config, { cacheDiagnostics: cacheDiagnosticsObserving() })
     : undefined;
   const directRoute = settledRoute && !chatNativeRoute && antigravityDecline === undefined ? settledRoute : null;
   const envelope = protocolSettings.unrepresentable === "reject" || nativeChatCombos

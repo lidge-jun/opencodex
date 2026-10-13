@@ -146,8 +146,15 @@ function unsignedReasoningSignature(text: string): string {
  * must not reach the caller's body, which the lane may still need to re-decode.
  */
 function normalizedParameters(raw: unknown): Record<string, unknown> {
-  if (isRec(raw) && raw.type === "object") return { ...raw };
-  return { ...(isRec(raw) ? raw : {}), type: "object" };
+  // The bridge's `z.record` copies own keys except `__proto__`, which JSON.parse can create.
+  const copy: Record<string, unknown> = {};
+  if (isRec(raw)) {
+    for (const key of Object.keys(raw)) {
+      if (key !== "__proto__") copy[key] = raw[key];
+    }
+  }
+  if (isRec(raw) && raw.type === "object") return copy;
+  return { ...copy, type: "object" };
 }
 
 function functionTool(name: string, description: unknown, parameters: unknown, strict: unknown): OcxTool {

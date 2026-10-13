@@ -142,9 +142,11 @@ function candidateFor(
     const reason = rows.effortRow ? "effort-row" : nativeChatDeclineReason(settled, body, config);
     nativeEligible = reason === undefined;
     if (reason) declineReasons = [reason];
-    // The Antigravity direct lane, judged by the ingress's own rule. A hosted web-search tool
-    // is body content no Chat feature describes, so a preview cannot predict that decline.
-    directEligible = !nativeEligible
+    // The Antigravity direct lane, judged by the ingress's own rule, for a standalone route only:
+    // a combo child is dispatched from the full Responses body even when `nativeChatCombos`
+    // judges it as a concrete route above. A hosted web-search tool and the other body-content
+    // declines are not described by any Chat feature, so a preview cannot predict them.
+    directEligible = !nativeEligible && routeKind === "direct"
       && antigravityDirectDeclineReason(settled, { ...body, model: rows.routeSelector }, config) === undefined;
   } else if (inbound === "messages" && resolveProtocolSettings(config, settled.providerName).rollout.managedMessagesNative) {
     // The runtime rule itself. With the switch off nothing is judged, so the default preview

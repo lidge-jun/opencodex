@@ -184,6 +184,23 @@ function restoreDirectRequestConversation(options: HandleResponsesOptions, body:
   });
 }
 
+/**
+ * Leave the direct lane as soon as the route stops being the Antigravity route it was decided
+ * for. Called after every route assignment, so readers that run between a reroute and dispatch
+ * (canonical sanitization, ciphertext stripping, final normalization) see the bridge body.
+ */
+function leaveDirectLaneIfRerouted(
+  options: HandleResponsesOptions,
+  route: Pick<RouteResult, "providerName" | "modelId" | "provider">,
+  parsed: OcxParsedRequest,
+  logCtx: RequestLogContext,
+): void {
+  const direct = options.directRequest;
+  if (!direct) return;
+  if (route.providerName === direct.providerName && route.modelId === direct.modelId && isAntigravityRoute(route)) return;
+  restoreDirectRequestConversation(options, parsed._rawBody, logCtx);
+}
+
 /** Parses, selects, and admits one request without changing the dispatch policy. */
 export async function prepareResponsesRequest(
   requestContext: Pick<ResponsesRequestContext, "options" | "config" | "req" | "logCtx">,
@@ -690,6 +707,7 @@ export async function prepareResponsesRequest(
     if (parsed._compactionRequest === true || options.compactionRoutingOverride) parsed._cursorIsolateConversation = true;
     route = memoryRoute ?? shadowRoute ?? resolveRoute(options.policyFallbackCandidate
       ? `${options.policyFallbackCandidate.provider}/${options.policyFallbackCandidate.model}` : parsed.modelId);
+    leaveDirectLaneIfRerouted(options, route, parsed, logCtx);
     // Name the phase in the persisted route decision, so the request log says why this turn went to
     // the memory destination instead of leaving it looking like a plain user selection. Set here, on
     // the resolved route, so a combo child's own route carries it too.
@@ -931,6 +949,7 @@ export async function prepareResponsesRequest(
         route = captureInboundRoutePolicy(
           routeModel(config, fallback.to, routeEvidence(options, parsed)),
         );
+        leaveDirectLaneIfRerouted(options, route, parsed, logCtx);
         credentialDomainWasRewritten = true;
         logCtx.routeDecision = route.routeDecision;
         logCtx.policyEligibility = route.policyEligibility;
@@ -1147,6 +1166,7 @@ export async function prepareResponsesRequest(
               route = captureInboundRoutePolicy(
                 routeModel(config, fallback.to, routeEvidence(options, parsed)),
               );
+              leaveDirectLaneIfRerouted(options, route, parsed, logCtx);
               credentialDomainWasRewritten = true;
               logCtx.routeDecision = route.routeDecision;
               logCtx.policyEligibility = route.policyEligibility;
@@ -1293,6 +1313,8 @@ export async function prepareResponsesRequest(
   // for streaming clients.
   const clientRequestedStream = parsed.stream;
   const admittedPolicyRoute = { providerName: route.providerName, modelId: route.modelId };
+  // Final guard before normalization may inject guidance into the raw body.
+  leaveDirectLaneIfRerouted(options, route, parsed, logCtx);
   await applyFinalRouteRequestNormalization({
     parsed,
     route,
@@ -1428,16 +1450,6 @@ export async function prepareResponsesRequest(
     substituteMainCredential = finalAuth.substituteMainCredential;
   }
 
-  // The direct lane was decided for one concrete Antigravity route. A later rewrite (a subagent
-  // fallback, an operator redirect) may have moved the request; restore the bridge conversation
-  // before any other adapter or account binding reads the raw body.
-  if (options.directRequest && (
-    route.providerName !== options.directRequest.providerName
-    || route.modelId !== options.directRequest.modelId
-    || !isAntigravityRoute(route)
-  )) {
-    restoreDirectRequestConversation(options, parsed._rawBody, logCtx);
-  }
   try {
     route.provider = applyCodexAuthContextToProvider(route.provider, admissionState.authCtx, route.codexAccountMode);
   } catch (error) {

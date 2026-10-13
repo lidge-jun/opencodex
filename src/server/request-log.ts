@@ -104,6 +104,11 @@ function cacheDiagnosticHooks(): CacheDiagnosticHooks | undefined {
   return (globalThis as Record<symbol, CacheDiagnosticHooks | undefined>)[CACHE_DIAGNOSTIC_HOOK];
 }
 
+/** Whether the cache diagnostic recorder is registered and will observe inbound bodies. */
+export function cacheDiagnosticsObserving(): boolean {
+  return cacheDiagnosticHooks() !== undefined;
+}
+
 export interface RequestLogContext extends UpstreamErrorDiagnostics {
   model: string;
   provider: string;
