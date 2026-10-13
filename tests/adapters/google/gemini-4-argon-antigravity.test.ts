@@ -9,11 +9,13 @@ import {
 } from "../../../src/adapters/google-antigravity-wire";
 import { buildModelsRequest } from "../../../src/oauth";
 import {
+  ANTIGRAVITY_KNOWN_PICKER_MODELS,
   ANTIGRAVITY_MODELS,
   ANTIGRAVITY_MODEL_CONTEXT_WINDOWS,
   ANTIGRAVITY_MODEL_EFFORTS,
   ANTIGRAVITY_MODEL_INPUT_MODALITIES,
   canonicalAntigravityUsageModel,
+  isAntigravitySuffixModelId,
   parseAntigravityAvailableModels,
   resolveAntigravityEffortWireModel,
 } from "../../../src/providers/antigravity-models";
@@ -176,5 +178,44 @@ describe("Antigravity User-Agent selection", () => {
   test("the IDE UA override does not replace the CLI UA", () => {
     process.env.GOOGLE_ANTIGRAVITY_USER_AGENT = "custom-ua/1.2.3";
     expect(antigravityCliUserAgent()).toBe(CLI_UA);
+  });
+});
+
+describe("Antigravity static lineup (3.8 / 4 / 5.5 / 5.5)", () => {
+  test("is exactly the four confirmed base models", () => {
+    expect(ANTIGRAVITY_MODELS).toEqual(["gemini-3.8-flash", "gemini-4-argon", "claude-opus-5-5", "claude-sonnet-5-5"]);
+    const entry = PROVIDER_REGISTRY.find(candidate => candidate.id === "google-antigravity");
+    expect(entry?.models).toEqual(ANTIGRAVITY_MODELS);
+  });
+
+  test("Claude 5.5 efforts ride their suffix wire ids on the IDE UA", async () => {
+    for (const base of ["claude-opus-5-5", "claude-sonnet-5-5"]) {
+      expect(ANTIGRAVITY_MODEL_EFFORTS[base]).toEqual(["low", "medium", "high"]);
+      expect(ANTIGRAVITY_MODEL_CONTEXT_WINDOWS[base]).toBe(1_000_000);
+      expect(ANTIGRAVITY_MODEL_INPUT_MODALITIES[base]).toEqual(["text", "image"]);
+      for (const effort of ["low", "medium", "high"] as const) {
+        expect(resolveAntigravityEffortWireModel(base, effort)).toEqual({ wireModelId: `${base}-${effort}` });
+        expect(canonicalAntigravityUsageModel(`${base}-${effort}`)).toBe(base);
+      }
+      expect(resolveAntigravityEffortWireModel(base)).toEqual({ wireModelId: `${base}-medium` });
+      const { req, env } = await built(base, "high");
+      expect(env.model).toBe(`${base}-high`);
+      expect(req.headers["User-Agent"]).toBe(IDE_UA);
+    }
+  });
+
+  test("models dropped from the lineup still route exactly as before", () => {
+    for (const legacy of ["gemini-3.7-flash", "gemini-3.1-pro", "claude-sonnet-4-6", "claude-opus-4-6-thinking", "gpt-oss-120b-medium"]) {
+      expect(ANTIGRAVITY_MODELS).not.toContain(legacy);
+      expect(ANTIGRAVITY_KNOWN_PICKER_MODELS).toContain(legacy);
+      // A known base is not mistaken for a tier-encoding suffix id.
+      expect(isAntigravitySuffixModelId(legacy)).toBe(false);
+      expect(canonicalAntigravityUsageModel(legacy)).toBe(legacy);
+    }
+    expect(resolveAntigravityEffortWireModel("gemini-3.7-flash", "low"))
+      .toEqual({ wireModelId: "gemini-3.7-flash-tiered", thinkingLevel: "low" });
+    expect(resolveAntigravityEffortWireModel("gemini-3.1-pro", "high")).toEqual({ wireModelId: "gemini-pro-agent", thinkingLevel: "high" });
+    expect(resolveAntigravityEffortWireModel("claude-sonnet-4-6", "high"))
+      .toEqual({ wireModelId: "claude-sonnet-4-6", thinkingLevel: "high" });
   });
 });

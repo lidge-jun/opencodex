@@ -154,6 +154,12 @@ eligible Enterprise accounts. Cloud Code Assist serves Argon only to the Antigra
 OpenCodex sends Argon requests and model discovery with the CLI User-Agent
 (`antigravity/cli/1.3.4`) and keeps the IDE User-Agent for every other model.
 
+The built-in `google-antigravity` model list is Gemini 3.8 Flash (`gemini-3.8-flash`), Gemini 4 Argon
+(`gemini-4-argon`), Claude Opus 5.5 (`claude-opus-5-5`), and Claude Sonnet 5.5
+(`claude-sonnet-5-5`), each with low, medium, and high efforts. Other models appear only when live
+model discovery returns them for your account. Saved selections of models that left the list keep
+routing as before.
+
 To check which mode a provider is actually using, open it on the Providers page: the **Connection**
 block's **Authentication** row reads `OAuth`, `API key`, `ChatGPT passthrough`, `Local`, or
 `No key needed`. It is a provider-level setting, so the account rows below it do not repeat it.

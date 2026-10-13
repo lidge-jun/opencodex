@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  ANTIGRAVITY_KNOWN_PICKER_MODELS,
   ANTIGRAVITY_MODELS,
   ANTIGRAVITY_MODEL_CONTEXT_WINDOWS,
   ANTIGRAVITY_MODEL_EFFORTS,
@@ -36,7 +37,7 @@ const RETIRED_TIERS: Record<string, string> = {
 
 describe("Gemini 3.7 Flash replaces 3.6 on Antigravity", () => {
   test("no retired Flash id is picker-visible", () => {
-    expect(ANTIGRAVITY_MODELS).toContain("gemini-3.7-flash");
+    expect(ANTIGRAVITY_KNOWN_PICKER_MODELS).toContain("gemini-3.7-flash");
     for (const retired of Object.keys(RETIRED_TIERS)) {
       expect(ANTIGRAVITY_MODELS).not.toContain(retired);
     }
@@ -47,7 +48,10 @@ describe("Gemini 3.7 Flash replaces 3.6 on Antigravity", () => {
     // unlike the 3.6 generation it must NOT join the retired map when its successor ships.
     // A regression here would strand every saved 3.7 selection on a redirect it never needed.
     expect(RETIRED_TIERS).not.toHaveProperty("gemini-3.7-flash");
-    expect(ANTIGRAVITY_MODELS).toContain("gemini-3.7-flash");
+    // Off the static lineup since 2026-10-14, but still a known base, so saved selections route
+    // exactly as before.
+    expect(ANTIGRAVITY_MODELS).not.toContain("gemini-3.7-flash");
+    expect(ANTIGRAVITY_KNOWN_PICKER_MODELS).toContain("gemini-3.7-flash");
     expect(ANTIGRAVITY_MODEL_EFFORTS["gemini-3.7-flash"]).toEqual(["low", "medium", "high"]);
   });
 
@@ -55,7 +59,7 @@ describe("Gemini 3.7 Flash replaces 3.6 on Antigravity", () => {
     const entry = PROVIDER_REGISTRY.find(row => row.id === "google-antigravity");
     expect(entry?.defaultModel).toBe("gemini-3.8-flash");
     expect(entry?.models).toContain("gemini-3.8-flash");
-    expect(entry?.models).toContain("gemini-3.7-flash");
+    expect(entry?.models).not.toContain("gemini-3.7-flash");
   });
 
   test("capability maps describe 3.7 rather than inheriting a fallback", () => {
@@ -318,8 +322,8 @@ describe("the -tiered wire rename reaches the request path", () => {
   test("the rename is confined to the wire, leaving the user-facing id intact", () => {
     // The picker, the usage rows and the price overlays are all keyed on the base id.
     // If the rename leaked into them, saved selections and historical spend would move.
-    expect(ANTIGRAVITY_MODELS).toContain("gemini-3.7-flash");
-    expect(ANTIGRAVITY_MODELS).not.toContain("gemini-3.7-flash-tiered");
+    expect(ANTIGRAVITY_KNOWN_PICKER_MODELS).toContain("gemini-3.7-flash");
+    expect(ANTIGRAVITY_KNOWN_PICKER_MODELS).not.toContain("gemini-3.7-flash-tiered");
     expect(canonicalAntigravityUsageModel("gemini-3.7-flash")).toBe("gemini-3.7-flash");
     expect(resolveMatchedPrice("google-antigravity", "gemini-3.7-flash")?.cost4).toBeDefined();
   });
