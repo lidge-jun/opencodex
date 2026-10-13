@@ -157,3 +157,6 @@ These paths still use the internal Responses bridge or are not covered:
   allowlist and only to `api.anthropic.com`, drops
   top-level fields outside its allowlist without a feature effect, and does not apply
   `claudeCode.stabilizePromptCache`.
+  A recognized Claude Code client keeps `context-management-2025-06-27` together with its
+  `context_management` body field. Dropped beta names appear once in the proxy log as
+  `anthropic-beta-dropped=<names>`.

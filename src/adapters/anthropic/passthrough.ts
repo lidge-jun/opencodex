@@ -30,12 +30,14 @@ import {
 import { applyAnthropicClientIdentity, hasObservedAnthropicClientIdentity, type AnthropicClientIdentity } from "./client-identity";
 import { bindAnthropicAccountMetadata } from "./account-metadata";
 import { shouldPreserveNativeClientPreamble } from "./native-client-preamble";
-import { allowlistAnthropicBetas } from "./beta-allowlist";
+import { allowlistAnthropicBetas, CONTEXT_MANAGEMENT_BETA } from "./beta-allowlist";
 
 /**
  * Top-level Messages fields the native lane forwards. Everything else is dropped: an unknown or
  * beta-gated field would otherwise reach the provider unchecked. None of the dropped fields has
  * a name in the protocol feature vocabulary, so no feature effect is recorded for them.
+ * `context_management` is the one beta-gated field the builder adds back, and only together
+ * with its forwarded beta (see {@link CONTEXT_MANAGEMENT_BETA}).
  */
 export const ANTHROPIC_MESSAGES_PASSTHROUGH_FIELDS = [
   "model",
@@ -64,8 +66,12 @@ export interface AnthropicMessagesPassthroughRequest {
   body: string;
   /** The same body before serialization, for callers that count or inspect what is sent. */
   wireBody: Record<string, unknown>;
-  /** Caller `anthropic-beta` values were left out. Which ones is never recorded. */
+  /** Caller `anthropic-beta` values were left out. The trace never records which ones. */
   droppedBetas: boolean;
+  /** Log-safe names of the dropped values (published beta shape only); see beta-allowlist.ts. */
+  droppedBetaNames: string[];
+  /** Dropped values without a beta shape, counted only. */
+  droppedUnrecognizedBetas: number;
   /** Thinking signatures or `redacted_thinking` blocks were removed for this destination. */
   strippedOpaqueState: boolean;
   /**
@@ -306,12 +312,18 @@ export function buildAnthropicMessagesPassthroughRequest(
   const betas = allowlistAnthropicBetas(options.callerAnthropicBeta, domain?.firstPartyAnthropic ? "first-party" : "compatible",
     { inlineTools: hasInlineToolChanges(wireBody), observedNativeClient: hasObservedAnthropicClientIdentity(options.clientIdentity) });
   mergeAnthropicBetaHeader(headers, betas.betas);
+  // Header and body travel as a pair: the field goes out only when its beta does.
+  const sentBody = betas.betas.includes(CONTEXT_MANAGEMENT_BETA) && body.context_management !== undefined
+    ? { ...wireBody, context_management: body.context_management }
+    : wireBody;
   return {
     url,
     headers,
-    body: JSON.stringify(wireBody),
-    wireBody,
+    body: JSON.stringify(sentBody),
+    wireBody: sentBody,
     droppedBetas: betas.dropped,
+    droppedBetaNames: betas.droppedNames,
+    droppedUnrecognizedBetas: betas.droppedUnrecognized,
     strippedOpaqueState,
     ...(oauthToolNames ? { oauthToolNames } : {}),
   };

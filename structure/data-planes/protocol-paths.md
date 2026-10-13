@@ -324,7 +324,9 @@ content directly contains typed inline definitions or tool references in additio
 Arguments, schemas and nested/unknown containers do not activate that feature allowance; no beta
 is injected. Proxy-owned betas (the OAuth
 pair) are set by the builder, and an operator's configured beta is merged, not replaced. Any
-dropped value adds `anthropic-beta-dropped` to the trace; the value itself is never recorded.
+dropped value adds `anthropic-beta-dropped` to the trace; the trace never records the value. The
+proxy log names dropped values once per distinct set (`anthropic-beta-dropped=<names>`), and only
+values with the published `name-YYYY-MM-DD` shape are named; any other value is a count.
 
 Opaque state and credential domains. `src/protocols/opaque-state.ts` defines a credential domain
 as the provider's base host plus its credential class (`key`, `oauth`, ...); first-party means
@@ -400,8 +402,10 @@ Observed native CLI and Desktop Code compatibility bundles preserve an existing 
 and known identity preamble through `src/adapters/anthropic/native-client-preamble.ts`; the proxy
 does not generate or sign billing text. Counting uses the same observed bundle. The first-party
 native beta allowance retains the source-listed inline-tool, per-turn control, thinking display,
-advisor and scoped-cache schemas. Advisor may perform sub-inference already requested by the caller;
-no feature or beta-gated body is injected. Generic managed callers keep the narrower allowance,
+advisor, scoped-cache and context-management schemas. `context-management-2025-06-27` travels with
+the caller's top-level `context_management` field: the builder forwards that field only when the
+beta survives the allowlist, so header and body never disagree. Advisor may perform sub-inference
+already requested by the caller; no feature or beta-gated body is injected. Generic managed callers keep the narrower allowance,
 and compatible destinations receive no first-party allowance. These handles grant no credential authority.
 
 Managed native Messages record validated caller controls as `requestedEffort` on the final row
