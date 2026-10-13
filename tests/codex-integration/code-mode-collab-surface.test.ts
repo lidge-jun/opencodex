@@ -220,6 +220,8 @@ describe("code mode without V1 evidence stays null", () => {
   test.each([
     ["an abbreviated parameter list", "declare const tools: { multi_agent_v1__spawn_agent(...): Promise<unknown>; };"],
     ["an empty return type", "declare const tools: { multi_agent_v1__spawn_agent(args: {}): Promise<>; };"],
+    ["an empty parameter type", "declare const tools: { multi_agent_v1__spawn_agent(args: ): Promise<unknown>; };"],
+    ["a parameter type that is only a comment", "declare const tools: { multi_agent_v1__spawn_agent(args: /* none */): Promise<unknown>; };"],
     ["surplus text after the return type", "declare const tools: { multi_agent_v1__spawn_agent(args: {}): Promise<unknown>; garbage>; };"],
     ["an unbalanced parameter type", "declare const tools: { multi_agent_v1__spawn_agent(args: {: Promise<unknown>; };"],
     ["a return type missing its generic closer", "declare const tools: { multi_agent_v1__spawn_agent(args: {}): Promise<Map<string, unknown>; };"],

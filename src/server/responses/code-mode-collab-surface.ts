@@ -136,11 +136,14 @@ function completeDeclarationName(body: readonly string[]): string | undefined {
   };
   // The parameter list ends at the ')' that balances the opening '(': a ')' nested inside the
   // parameter's own type (e.g. `args: (a: string) => Promise<void>`) cannot pose as the separator.
+  // The type must also say something before that ')': `args: )` or `args: /* note */)` names no type.
   let depth = 1;
   let close = -1;
+  let typeContent = false;
   for (let at = typed; at < rest.length; at += 1) {
     const ch = rest[at]!;
     if (isOpaqueTypeText(at)) {
+      if (ch !== "/") typeContent = true; // a quoted literal is a type, a comment is not
       const end = skipTypeText(at);
       if (end === undefined) return undefined;
       at = end;
@@ -149,8 +152,9 @@ function completeDeclarationName(body: readonly string[]): string | undefined {
     if (ch === "(" || ch === "[" || ch === "{") depth += 1;
     else if (ch === ")" || ch === "]" || ch === "}") depth -= 1;
     if (depth === 0) { close = at; break; }
+    if (!isSpace(ch)) typeContent = true;
   }
-  if (close < 0 || !rest.startsWith(PROMISE_SEPARATOR, close)) return undefined;
+  if (close < 0 || !typeContent || !rest.startsWith(PROMISE_SEPARATOR, close)) return undefined;
   const head = rest[close + PROMISE_SEPARATOR.length];
   if (head === ">" || isSpace(head)) return undefined;
   // The return type runs to the stripped suffix, which already supplied exactly one '>' for the
