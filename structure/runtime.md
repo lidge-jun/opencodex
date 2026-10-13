@@ -539,7 +539,7 @@ Codex compaction uses a request-local model override for the configured triggers
 
 ## Background-service runtime ownership
 
-`src/service/state.ts` records who owns the running proxy in the shared service install
+`src/cli/index.ts` activates [service logging](ops/service-logging.md) only for `start` with `OCX_SERVICE` set, before preflight; foreground and other CLI output remain unchanged. `src/service/state.ts` records who owns the running proxy in the shared service install
 state, beside the install provenance. The claim carries an `owner` (`cli` or `desktop`), an
 opaque `installId` naming the owning installation rather than the user or the machine, and a
 `consentGeneration`. An absent claim means the CLI install that registered the service owns

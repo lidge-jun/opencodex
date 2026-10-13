@@ -1,7 +1,7 @@
 {
   "version": 1,
   "root": "tests",
-  "explicit": {
+  "explicit": { "service-log.test.ts": "service",
     "responses-anthropic-billing-send-budget.test.ts": "responses", "anthropic-billing-ownership.test.ts": "adapters/anthropic", "server-anthropic-billing.test.ts": "server", "server-anthropic-billing-boundaries.test.ts": "server", "router-anthropic-billing-failover.test.ts": "routing", "anthropic-billing-refusal.test.ts": "adapters/anthropic", "messages-request-id-headers.test.ts": "claude-integration", "bounded-file-read.test.ts": "lib", "responses-undeclared-tool-guard-inbound.test.ts": "responses",
     "messages-request-id-endpoint.test.ts": "claude-integration",
     "anthropic-revoked-token.test.ts": "adapters/anthropic",

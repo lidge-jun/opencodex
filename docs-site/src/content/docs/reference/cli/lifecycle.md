@@ -793,6 +793,23 @@ any stale-baked-path finding.
 On Windows the scheduler backend keeps its own richer status output, which already
 reported Task Scheduler registration separately from proxy reachability.
 
+### Service logs
+
+The managed proxy writes stdout and stderr to `~/.opencodex/service.log`
+(or `$OPENCODEX_HOME/service.log` with a custom home). When `OCX_SERVICE` is set,
+`ocx start` prefixes every console log line, including multiline diagnostics,
+with a UTC ISO-8601 timestamp such as `2026-10-14T03:04:05.678Z`.
+Foreground output and other CLI commands keep their existing format.
+
+The service checks the log size at startup and once per minute. Above 20 MiB it
+copies the newest 20 MiB into `service.log.1`, moves the previous archive to
+`service.log.2`, and truncates the active file in place so the service manager's
+open append handles remain usable. The active file can exceed the threshold
+between checks; each archive is limited to 20 MiB. Rotation failures do not stop
+the service. Copy-truncate can lose lines written during the copy, and an archive
+may begin partway through a line. Existing Windows wrapper messages keep their
+wrapper format.
+
 On macOS this also covers a subtler failure: `launchctl load` reports failure on
 stderr while exiting 0, so a load that did not take used to leave launchd running a
 **previous** version of the service definition while the command printed a checkmark.

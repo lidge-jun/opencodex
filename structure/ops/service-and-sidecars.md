@@ -17,7 +17,7 @@ Shared parsing and streaming follow the [request-copy](../transports/byte-accoun
 
 ## Background service command selection
 
-A bare `ocx service` is an idempotent install-or-repair command. Argument validation happens before
+A bare `ocx service` is an idempotent install-or-repair command. Managed runtime logging follows the [service log contract](service-logging.md). Argument validation happens before
 any platform status probe. macOS and Linux choose from the registration file's proven presence;
 Windows combines the Task Scheduler and WinSW probes into `installed`, `absent`, or `unknown`.
 Only proven absence enters registration. A query failure refuses the bare command with status
