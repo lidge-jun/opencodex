@@ -1264,7 +1264,7 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     preserveCustomDestination: true,
     defaultModel: "glm-5.3-flash",
     models: ["glm-5.3-flash", "claude-sonnet-5-5", "gpt-6.1-sol", "deepseek-v4-flash"],
-    note: "OpenAI-compatible relay: one key for Claude, GPT, GLM and DeepSeek models. The seeded models were verified with chat, streaming and tool calls; deepseek-v4.1-flash is listed upstream but currently answers 503 and is left out. Upstream latency varies widely (a few seconds to about 30 s) with occasional transient 503s.",
+    note: "OpenAI-compatible relay for Claude, GPT, GLM and DeepSeek chat models. The seeded models were verified with chat, streaming and tool calls; deepseek-v4.1-flash is listed upstream but currently answers 503 and is left out. An ordinary key only reaches its own routing group's models; a Smart key reaches all seeded models. Image and video models are not served through this Chat preset. Upstream latency varies widely (a few seconds to about 30 s) with occasional transient 503s.",
   },
   {
     id: "opencode-free",

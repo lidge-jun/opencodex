@@ -666,8 +666,11 @@ in `ocx init` or the dashboard's **Add provider** picker, or run `ocx provider a
 give it your key directly or as the reference `${MODELFLARE_API_KEY}` so the key stays in your
 environment. The preset uses Chat Completions and seeds four models that
 were verified with chat, streaming and tool calls: `glm-5.3-flash` (the default),
-`claude-sonnet-5-5`, `gpt-6.1-sol` and `deepseek-v4-flash`. Modelflare's model list also carries
-image, video and other chat models; add those as custom models if you need them.
+`claude-sonnet-5-5`, `gpt-6.1-sol` and `deepseek-v4-flash`. You can add other Chat-compatible
+Modelflare models as custom models. Image and video models use separate Modelflare endpoints and
+do not work through this Chat preset. An ordinary Modelflare key is bound to one routing group and
+can call only that group's models, so use a Smart key for the full seeded set, or pass
+`--default-model` with a model your key's group serves.
 `deepseek-v4.1-flash` is listed upstream but currently answers 503, so the preset leaves it out.
 Upstream latency varies from a few seconds to about 30 seconds, with occasional transient 503s.
 
