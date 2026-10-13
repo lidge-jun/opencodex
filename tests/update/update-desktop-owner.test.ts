@@ -396,10 +396,14 @@ describe("Node service refresh mutation boundaries", () => {
     ${source.slice(start, end)}
     return refreshBackgroundServiceOrStartDirect();
   }`);
-  function refresh(evidence: SupervisionEvidence[], prior?: SupervisionEvidence, managerRecovers = false): number[] {
-    return refreshWithResult(evidence, prior, managerRecovers).mutations;
+  type ManagerOutcome = "supervised" | "failed" | "unsettled";
+  function refresh(evidence: SupervisionEvidence[], prior?: SupervisionEvidence, manager: ManagerOutcome = "failed"): number[] {
+    return refreshWithResult(evidence, prior, manager).mutations;
   }
-  function refreshWithResult(evidence: SupervisionEvidence[], prior?: SupervisionEvidence, managerRecovers = false) {
+  function refreshWithResult(
+    evidence: SupervisionEvidence[], prior?: SupervisionEvidence, manager: ManagerOutcome = "failed",
+    direct: boolean | "vetoed" = true,
+  ) {
     const latch = createSupervisionLatch();
     if (prior) latch.observe(prior);
     const mutations = [0, 0, 0, 0]; // repair, absent-service install, direct fallback, manager restart
@@ -416,9 +420,9 @@ describe("Node service refresh mutation boundaries", () => {
         if (args[0] === "install") { mutations[1]++; return { status: 1 }; }
         throw new Error("unexpected spawn");
       },
-      restartThroughServiceManager: () => { mutations[3]++; return managerRecovers; },
+      restartThroughServiceManager: () => { mutations[3]++; return manager; },
       unsupervisedRuntimeWarning: (port: number) => `UNSUPERVISED ${port}`,
-      startProxyDirectly: () => { mutations[2]++; return true; },
+      startProxyDirectly: () => { mutations[2]++; return direct; },
     });
     return { mutations: mutations.slice(0, 3), managerRestarts: mutations[3], result, warnings };
   }
@@ -435,18 +439,29 @@ describe("Node service refresh mutation boundaries", () => {
     expect(refresh([{ kind: "none" }], desktopEvidence)).toEqual([1, 1, 1]);
   });
   test("#7043: a manager restart that proves supervision replaces the detached fallback", () => {
-    const outcome = refreshWithResult([{ kind: "none" }], undefined, true);
+    const outcome = refreshWithResult([{ kind: "none" }], undefined, "supervised");
     expect(outcome.mutations).toEqual([1, 1, 0]);
     expect(outcome.managerRestarts).toBe(1);
     expect(outcome.result).toBeUndefined();
   });
   test("#7043: the detached fallback warns UNSUPERVISED and reports it for a non-zero exit", () => {
-    const outcome = refreshWithResult([{ kind: "none" }], undefined, false);
+    const outcome = refreshWithResult([{ kind: "none" }], undefined, "failed");
     expect(outcome.mutations).toEqual([1, 1, 1]);
     expect(outcome.managerRestarts).toBe(1);
     expect(outcome.result).toBe("unsupervised");
     expect(outcome.warnings).toContain("UNSUPERVISED 12345");
-    expect(source).toContain('if (refreshBackgroundServiceOrStartDirect() === "unsupervised") process.exit(1);');
+    expect(source).toContain('if (refreshed === "unsupervised" || refreshed === "unsettled") process.exit(1);');
+  });
+  test("#7043: a restart the manager may still finish starts no competing proxy and is reported", () => {
+    const outcome = refreshWithResult([{ kind: "none" }], undefined, "unsettled");
+    expect(outcome.mutations).toEqual([1, 1, 0]);
+    expect(outcome.result).toBe("unsettled");
+  });
+  test("#7043: an ownership veto at the direct start is not reported as unsupervised", () => {
+    const outcome = refreshWithResult([{ kind: "none" }], undefined, "failed", "vetoed");
+    expect(outcome.mutations).toEqual([1, 1, 1]);
+    expect(outcome.result).toBeUndefined();
+    expect(outcome.warnings).not.toContain("UNSUPERVISED 12345");
   });
   test("#7043: Desktop appearing before the fallback skips the manager restart too", () => {
     const outcome = refreshWithResult([{ kind: "none" }, { kind: "none" }, desktopEvidence]);

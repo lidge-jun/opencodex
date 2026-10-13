@@ -7,6 +7,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import {
   LAUNCHD_SERVICE_LABEL,
+  freshServingPid,
+  unsettledManagerWarning,
   SYSTEMD_SERVICE_UNIT,
   parseLaunchdJobPid,
   parseSystemdMainPid,
@@ -67,6 +69,20 @@ describe("service manager commands", () => {
   });
 });
 
+describe("a restart the manager may still finish", () => {
+  test("a client timeout is unsettled, never a plain failure", () => {
+    const run = () => ({ ok: false, stdout: "", stderr: "spawnSync systemctl ETIMEDOUT", timedOut: true });
+    const result = restartServiceManagerJob({ platform: "linux", run });
+    expect(result).toMatchObject({ ok: false, unsettled: true });
+    expect(unsettledManagerWarning(10100)).toContain("no second proxy was started");
+  });
+  test("a runtime record still naming the pre-restart process is not the restarted proxy", () => {
+    expect(freshServingPid(40, 40)).toBeNull();
+    expect(freshServingPid(41, 40)).toBe(41);
+    expect(freshServingPid(41, null)).toBe(41);
+  });
+});
+
 describe("supervision verdict: manager PID against serving PID", () => {
   const noParent = () => null;
   test("the serving proxy is the manager's job or its launcher's direct child", () => {
@@ -114,19 +130,22 @@ describe("armed test processes never reach the live manager", () => {
 describe("the Bun updater tries the manager before any detached start", () => {
   const source = readFileSync(repoPath("src/update/index.ts"), "utf8");
   test("manager restart precedes the post-install direct fallback, which exits non-zero", () => {
-    const managerAt = source.indexOf("if (await restartThroughServiceManager()) return;");
+    const managerAt = source.indexOf("const managed = await restartThroughServiceManager();");
     const fallbackAt = source.indexOf("starting the proxy directly instead");
     expect(managerAt).toBeGreaterThan(-1);
     expect(fallbackAt).toBeGreaterThan(managerAt);
     const tail = source.slice(fallbackAt, source.indexOf("} finally {", fallbackAt));
-    expect(tail).toContain("await startUnsupervisedFallback();");
+    expect(tail).toContain('if (await startUnsupervisedFallback() === "vetoed") return;');
     expect(tail).toContain("return 1;");
     expect(tail).not.toContain("startProxyDirectly()");
   });
   test("failed-update recovery of a managed install also asks the manager first", () => {
     const start = source.indexOf("const recoverStoppedRuntime = async");
     const recovery = source.slice(start, source.indexOf("  try {\n  // Never replace package files", start));
+    const replanAt = recovery.indexOf('if ((await planRecovery()).action === "service") {');
     const managerAt = recovery.indexOf("await restartThroughServiceManager()");
+    expect(replanAt).toBeGreaterThan(-1);
+    expect(managerAt).toBeGreaterThan(replanAt);
     expect(managerAt).toBeGreaterThan(-1);
     expect(recovery.indexOf("await startUnsupervisedFallback()", managerAt)).toBeGreaterThan(managerAt);
   });

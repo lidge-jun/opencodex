@@ -38,7 +38,11 @@ function defaultRun(file, args) {
     ? { ...process.env, XDG_RUNTIME_DIR: `/run/user/${process.getuid()}` }
     : process.env;
   const result = spawnSync(file, args, { encoding: "utf8", timeout: 20_000, windowsHide: true, env });
-  if (result.error) return { ok: false, stdout: "", stderr: String(result.error.message ?? "") };
+  if (result.error) {
+    // A timeout kills only the waiting client; the manager's queued job keeps running.
+    const timedOut = result.error.code === "ETIMEDOUT";
+    return { ok: false, stdout: "", stderr: String(result.error.message ?? ""), ...(timedOut ? { timedOut } : {}) };
+  }
   return { ok: result.status === 0, stdout: String(result.stdout ?? ""), stderr: String(result.stderr ?? "").trim() };
 }
 
@@ -70,7 +74,11 @@ export function hasRestartableServiceManager(deps = {}) {
   return platform === "darwin" || platform === "linux";
 }
 
-/** Ask the manager to restart the job in place. Never throws. */
+/**
+ * Ask the manager to restart the job in place. Never throws. `unsettled` means the client gave up
+ * waiting while the manager may still complete the restart: callers must not start a competing
+ * proxy on that answer.
+ */
 export function restartServiceManagerJob(deps = {}) {
   const { platform, uid, run } = resolve(deps);
   const result = platform === "darwin"
@@ -79,6 +87,7 @@ export function restartServiceManagerJob(deps = {}) {
       ? run("systemctl", ["--user", "restart", SYSTEMD_SERVICE_UNIT])
       : null;
   if (result === null) return { ok: false, reason: "no launchd or systemd manager on this platform" };
+  if (result.timedOut) return { ok: false, unsettled: true, reason: "the service manager did not finish the restart in time" };
   if (!result.ok) return { ok: false, reason: result.stderr.split("\n")[0] || "the service manager refused the restart" };
   return { ok: true };
 }
@@ -122,11 +131,27 @@ export function supervisionVerdict({ servingPid, managerPid, parentPid }) {
   return { kind: "failed", reason: `the serving proxy (pid ${servingPid}) is not the manager's job (pid ${managerPid})` };
 }
 
+/**
+ * The serving PID to judge after a restart: a record still naming the pre-restart process is not
+ * evidence about the restarted one.
+ */
+export function freshServingPid(recordPid, staleRecordPid) {
+  return Number.isSafeInteger(recordPid) && recordPid > 0 && recordPid !== staleRecordPid ? recordPid : null;
+}
+
 /** The warning printed when an update had to leave a proxy the manager does not own. */
 export function unsupervisedRuntimeWarning(port) {
   return [
     `⚠️  The proxy on port ${port} is running UNSUPERVISED: the background service manager did not take it back after the update.`,
     "   A crash will not be restarted, and a later service start can race it for the port.",
     "   Run 'ocx service repair' to hand it back to the background service.",
+  ].join("\n");
+}
+
+/** The warning printed when the manager may still be restarting; no second proxy is started. */
+export function unsettledManagerWarning(port) {
+  return [
+    `⚠️  The service manager is still restarting the proxy on port ${port}; no second proxy was started.`,
+    "   Check it with 'ocx service status', and run 'ocx service repair' if it does not come back.",
   ].join("\n");
 }

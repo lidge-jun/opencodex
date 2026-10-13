@@ -19,6 +19,14 @@ A restart counts as recovery only when the serving runtime record answers on the
 its PID is the manager's main PID (`launchctl print` `pid =`, systemd `MainPID`) or that PID's
 direct child: the job execs the Node launcher, which runs the Bun proxy as its child. Anything else
 is a failure with a stated reason, never an exception.
+A record that still names the pre-restart process is ignored, so an old proxy answering during
+shutdown cannot pass as the restarted one.
+
+A restart whose client times out is `unsettled`: the manager's queued job can still complete, so
+the lanes keep polling until the recovery deadline and, if supervision is still unproven, start no
+competing proxy, print that the manager is still restarting, and exit non-zero. Failed-update
+recovery in `src/update/index.ts` re-plans ownership after the unleased refresh and restarts the
+manager's job only when that plan still names the service.
 
 ## The unsupervised fallback
 
@@ -27,6 +35,8 @@ start so the user is not left without a proxy. That outcome is never reported as
 the updater prints an UNSUPERVISED warning that names the port and `ocx service repair`, and the
 update exits non-zero. Failed-update recovery of a managed install in `src/update/index.ts` asks
 the manager the same way before its direct fallback; that path already exits non-zero.
+An ownership veto at the direct start (Desktop or another owner claimed the runtime meanwhile) is
+the correct outcome and is not reported as unsupervised.
 
 The dashboard restart worker in `src/update/job.ts` keeps its own fallthrough.
 
