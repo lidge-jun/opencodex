@@ -1,4 +1,8 @@
-import type { ResponsesRequestContext, ResponsesAdmissionState, ResponsesDispatchers } from "./core-options";
+import type { HandleResponsesOptions, ResponsesRequestContext, ResponsesAdmissionState, ResponsesDispatchers } from "./core-options";
+import type { PolicyRequestEvidence } from "../../routing/evaluator";
+import type { RequestLogContext } from "../request-log";
+import { markProtocolEntry, protocolMarkFeatures } from "../../protocols/trace";
+import { isAntigravityRoute } from "../antigravity-direct-eligibility";
 import { capturePolicyRequestRoute, assertPolicyNormalizedRoute, recordPolicyPreparedDestination, policyCandidateRefusalResponse } from "./policy-request-scope";
 import {
   agentTaskRecoveryConfig,
@@ -155,6 +159,31 @@ import {
 
 import { redactHostedImageDisplayPaths } from "../responses-hosted-image-display";
 
+/** Policy-routing evidence. The direct lane's settings-only body has no conversation to scan. */
+function routeEvidence(options: Pick<HandleResponsesOptions, "directRequest">, parsed: OcxParsedRequest): PolicyRequestEvidence {
+  return options.directRequest?.evidence ?? evidenceFromBody(parsed._rawBody);
+}
+
+/**
+ * Leave the Antigravity direct lane for this request: put the bridge conversation back on the
+ * Responses body so every `_rawBody` reader sees what the bridge would have sent, and trace the
+ * request as the bridge. The IR conversation already decoded stays: it equals what
+ * `parseRequest` builds from the restored body (`tests/protocols/chat-ir-parity.test.ts`).
+ */
+function restoreDirectRequestConversation(options: HandleResponsesOptions, body: unknown, logCtx: RequestLogContext): void {
+  const direct = options.directRequest;
+  if (!direct) return;
+  options.directRequest = undefined;
+  if (body && typeof body === "object" && !Array.isArray(body)) Object.assign(body, direct.bridgeConversation());
+  if (options.clientEncoder) options.clientEncoder = { ...options.clientEncoder, requestLane: "bridge" };
+  markProtocolEntry(logCtx, {
+    inbound: direct.protocol,
+    lane: "bridge",
+    reasonCodes: ["not-migrated"],
+    features: protocolMarkFeatures(logCtx) ?? [],
+  });
+}
+
 /** Parses, selects, and admits one request without changing the dispatch policy. */
 export async function prepareResponsesRequest(
   requestContext: Pick<ResponsesRequestContext, "options" | "config" | "req" | "logCtx">,
@@ -306,6 +335,9 @@ export async function prepareResponsesRequest(
   }
   if (comboId && Object.hasOwn(config.combos ?? {}, comboId)) {
     options.onRequestBodyRead?.();
+    // The Antigravity direct lane is decided for one concrete route; a body that reached a combo
+    // goes through the combo's own child loop with the full bridge conversation.
+    restoreDirectRequestConversation(options, body, logCtx);
     return requestDispatchers.handleComboResponses(req, body, comboId, config, logCtx, {
       ...options,
       // Concrete combo child selectors no longer match the shadow source model. Carry the
@@ -383,6 +415,10 @@ export async function prepareResponsesRequest(
   let toolBridgeMaps: ReturnType<typeof buildToolBridgeMaps>;
   try {
     parsed = parseRequest(body);
+    // Antigravity direct lane: the body carried only the request settings, so the parse above
+    // produced them with an empty conversation; the conversation itself comes straight from the
+    // client body. Inside this try so a decode error answers exactly like a parse error.
+    if (options.directRequest) parsed = options.directRequest.decode(parsed);
     if (options.inboundWire === "anthropic") {
       parsed._nativeReasoningReplay = options.nativeReasoningReplay;
       parsed._nativeReasoningMint = options.nativeReasoningMint;
@@ -582,8 +618,8 @@ export async function prepareResponsesRequest(
       const resolved = concreteSelection
         ? routeConcreteModel(config, modelId)
         : parsed._compactionRequest === true
-          ? routeCompactionModel(config, modelId, evidenceFromBody(parsed._rawBody))
-          : routeModel(config, modelId, evidenceFromBody(parsed._rawBody));
+          ? routeCompactionModel(config, modelId, routeEvidence(options, parsed))
+          : routeModel(config, modelId, routeEvidence(options, parsed));
       // A Pool 2 selector may leave Pool 2 only through an operator-configured cross-provider
       // blocked-model redirect, which the router marks as a credential-domain rewrite. Any other
       // destination means the selector fell through to default resolution, which stays refused.
@@ -893,7 +929,7 @@ export async function prepareResponsesRequest(
     if (fallback?.to && !slugsEquivalent(fallback.to, route.modelId)) {
       try {
         route = captureInboundRoutePolicy(
-          routeModel(config, fallback.to, evidenceFromBody(parsed._rawBody)),
+          routeModel(config, fallback.to, routeEvidence(options, parsed)),
         );
         credentialDomainWasRewritten = true;
         logCtx.routeDecision = route.routeDecision;
@@ -1109,7 +1145,7 @@ export async function prepareResponsesRequest(
           if (fallback?.to && !slugsEquivalent(fallback.to, route.modelId)) {
             try {
               route = captureInboundRoutePolicy(
-                routeModel(config, fallback.to, evidenceFromBody(parsed._rawBody)),
+                routeModel(config, fallback.to, routeEvidence(options, parsed)),
               );
               credentialDomainWasRewritten = true;
               logCtx.routeDecision = route.routeDecision;
@@ -1392,6 +1428,16 @@ export async function prepareResponsesRequest(
     substituteMainCredential = finalAuth.substituteMainCredential;
   }
 
+  // The direct lane was decided for one concrete Antigravity route. A later rewrite (a subagent
+  // fallback, an operator redirect) may have moved the request; restore the bridge conversation
+  // before any other adapter or account binding reads the raw body.
+  if (options.directRequest && (
+    route.providerName !== options.directRequest.providerName
+    || route.modelId !== options.directRequest.modelId
+    || !isAntigravityRoute(route)
+  )) {
+    restoreDirectRequestConversation(options, parsed._rawBody, logCtx);
+  }
   try {
     route.provider = applyCodexAuthContextToProvider(route.provider, admissionState.authCtx, route.codexAccountMode);
   } catch (error) {

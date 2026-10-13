@@ -30,6 +30,11 @@ export interface OcxProtocolsConfig {
     managedMessagesNativeOAuth?: boolean;
     /** Chat and Messages clients are encoded directly from adapter events. */
     directEncoders?: boolean;
+    /**
+     * Chat requests to a concrete Google Antigravity route decode straight into the IR and are
+     * answered through the direct encoders, with no internal Responses body in either direction.
+     */
+    antigravityDirect?: boolean;
     /** Compare the dispatch plan with the observed path; never sends a second request. */
     shadowPlan?: boolean;
   };

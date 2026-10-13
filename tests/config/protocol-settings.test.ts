@@ -58,6 +58,7 @@ describe("protocol settings resolution", () => {
         managedMessagesNative: false,
         managedMessagesNativeOAuth: false,
         directEncoders: false,
+        antigravityDirect: false,
         shadowPlan: false,
       },
     });

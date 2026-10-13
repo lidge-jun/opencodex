@@ -22,6 +22,8 @@ import type { RequestLogContext } from "../request-log";
 import type { UpstreamHostAdmissionLease } from "../../codex/upstream-host-health";
 import type { AccountLease } from "../../oauth/kiro-account-load";
 import type { PolicyRequestScope } from "./policy-request-scope";
+import type { OcxParsedRequest } from "../../types";
+import type { PolicyRequestEvidence } from "../../routing/evaluator";
 
 export interface ConsumedComboFailure {
   response: Response;
@@ -61,6 +63,32 @@ export interface ClientEncoderOption {
   stream: boolean;
   model: string;
   inputTokenFloor?: number;
+  /**
+   * `direct` when the request side also skipped the internal Responses body (the Antigravity
+   * direct lane), so the attempt's request path is traced as `[inbound, ir, upstream]`.
+   */
+  requestLane?: "bridge" | "direct";
+}
+
+/**
+ * The Antigravity direct lane (`protocols.rollout.antigravityDirect`). The ingress sends the core
+ * a Responses body that carries only the request settings; the conversation is decoded straight
+ * from the client body. Request preparation applies `decode` at the parse seam, reads routing
+ * evidence from `evidence`, and calls `restoreBridgeConversation` if the final route is not the
+ * one the lane was decided for, so every `_rawBody` reader of another adapter sees the full
+ * bridge body.
+ */
+export interface DirectRequestOption {
+  protocol: "chat";
+  /** The concrete route the ingress decided the lane for. */
+  providerName: string;
+  modelId: string;
+  /** Policy-routing evidence from the client body; the settings-only body has no `input`. */
+  evidence: PolicyRequestEvidence;
+  /** The settings-only parse with the directly decoded conversation in place of its empty one. */
+  decode(base: OcxParsedRequest): OcxParsedRequest;
+  /** The bridge projection's conversation fields (`input`, `instructions`, `tools`). */
+  bridgeConversation(): Record<string, unknown>;
 }
 
 export interface HandleResponsesOptions {
@@ -226,6 +254,8 @@ export interface HandleResponsesOptions {
    * returning a Responses body, which the ingress converts as before.
    */
   clientEncoder?: ClientEncoderOption;
+  /** Set only by the Chat ingress on an eligible Antigravity route; see {@link DirectRequestOption}. */
+  directRequest?: DirectRequestOption;
 }
 
 /** Values shared by the call, not a bag of mutable pipeline state. */

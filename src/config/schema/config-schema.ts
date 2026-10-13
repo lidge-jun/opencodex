@@ -84,6 +84,7 @@ export const protocolConfigSchema = z.object({
     managedMessagesNative: z.boolean().optional(),
     managedMessagesNativeOAuth: z.boolean().optional(),
     directEncoders: z.boolean().optional(),
+    antigravityDirect: z.boolean().optional(),
     shadowPlan: z.boolean().optional(),
   }).strict().optional(),
 }).strict();
@@ -125,6 +126,7 @@ export const configSchema = z.object({
         managedMessagesNative: false,
         managedMessagesNativeOAuth: false,
         directEncoders: fields.directEncoders === true,
+        antigravityDirect: fields.antigravityDirect === true,
         shadowPlan: fields.shadowPlan === true,
       },
     };

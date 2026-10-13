@@ -152,6 +152,12 @@ export function featureEffectsForPath(
   present: Iterable<ProtocolFeature>,
 ): PathFeatureEffects {
   const nodes = protocolNodes(path);
+  // A Chat or Messages body decoded straight into the IR (the direct lane, `[inbound, ir, other]`)
+  // keeps exactly what its Responses projection keeps: the direct codecs are held to
+  // `parseRequest(projection)` by parity tests. The decode hop therefore reads the
+  // `<inbound>>responses` row, and the hop from the IR into `other` stays unknown as before.
+  const directIrDecode = inbound !== "responses" && path.length === 3
+    && path[0] === inbound && path[1] === "ir" && path[2] === "other";
   const effects: FeatureEffect[] = [];
   const unknown: ProtocolFeature[] = [];
   const seen = new Set<ProtocolFeature>();
@@ -160,8 +166,10 @@ export function featureEffectsForPath(
     seen.add(feature);
     let worst: FeatureDisposition = "passthrough";
     let unknownHop = false;
-    for (let i = 1; i < nodes.length; i++) {
-      const hop = featureHopDisposition(feature, nodes[i - 1]!, nodes[i]!);
+    const hops = directIrDecode
+      ? [featureHopDisposition(feature, inbound, "responses"), undefined]
+      : nodes.slice(1).map((node, i) => featureHopDisposition(feature, nodes[i]!, node));
+    for (const hop of hops) {
       if (hop === undefined) unknownHop = true;
       else if (RANK[hop] > RANK[worst]) worst = hop;
     }

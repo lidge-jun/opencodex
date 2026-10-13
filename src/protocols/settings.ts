@@ -64,6 +64,7 @@ export interface ProtocolRolloutSettings {
   managedMessagesNative: boolean;
   managedMessagesNativeOAuth: boolean;
   directEncoders: boolean;
+  antigravityDirect: boolean;
   shadowPlan: boolean;
 }
 
@@ -101,6 +102,7 @@ export function resolveProtocolSettings(config: ProtocolConfig, providerName?: s
       // OAuth extension is meaningless without the key-auth path it extends.
       managedMessagesNativeOAuth: managedMessagesNative && nativeOn("managedMessagesNativeOAuth"),
       directEncoders: on("directEncoders"),
+      antigravityDirect: on("antigravityDirect"),
       shadowPlan: on("shadowPlan"),
     }),
   });
@@ -145,6 +147,7 @@ export function protocolPolicyRevision(config: ProtocolConfig & Pick<OcxConfig, 
       secondarySettings.rollout.managedMessagesNative,
       secondarySettings.rollout.managedMessagesNativeOAuth,
       settings.rollout.directEncoders,
+      settings.rollout.antigravityDirect,
       settings.rollout.shadowPlan,
     ],
   });

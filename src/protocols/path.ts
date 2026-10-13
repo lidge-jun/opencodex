@@ -10,14 +10,23 @@ import { deliveryModeForPath, type DeliveryMode, type Protocol, type ProtocolHop
 /**
  * `native`: the ingress sent its own wire to a same-wire upstream.
  * `bridge`: the ingress projected the request into the Responses pipeline.
+ * `direct`: the ingress decoded its own wire straight into the IR the final adapter compiles
+ * from, with no internal Responses body in between (the Antigravity direct lane). Only a Chat or
+ * Messages ingress toward a non-protocol (`other`) upstream takes it; anything else falls back
+ * to the bridge rule so an inconsistent mark cannot claim a path that does not exist.
  */
-export type ProtocolLane = "native" | "bridge";
+export type ProtocolLane = "native" | "bridge" | "direct";
+
+function directApplies(inbound: Protocol, lane: ProtocolLane, upstream: UpstreamWire): boolean {
+  return lane === "direct" && inbound !== "responses" && upstream === "other";
+}
 
 export function requestPathForLane(inbound: Protocol, lane: ProtocolLane, upstream: UpstreamWire): ProtocolHop[] {
   if (inbound === "responses") {
     return upstream === "responses" ? ["responses", "responses"] : ["responses", "ir", upstream];
   }
   if (lane === "native") return [inbound, inbound];
+  if (directApplies(inbound, lane, upstream)) return [inbound, "ir", upstream];
   if (upstream === "responses") return [inbound, "responses"];
   return [inbound, "responses-internal", "ir", upstream];
 }
@@ -26,6 +35,7 @@ export function requestPathForLane(inbound: Protocol, lane: ProtocolLane, upstre
 export function responsePathForLane(inbound: Protocol, lane: ProtocolLane, upstream: UpstreamWire): ProtocolHop[] {
   if (inbound === "responses") return upstream === "responses" ? ["responses", "responses"] : [upstream, "ir", "responses"];
   if (lane === "native") return [inbound, inbound];
+  if (directApplies(inbound, lane, upstream)) return [upstream, "ir", inbound];
   if (upstream === "responses") return ["responses", inbound];
   return [upstream, "ir", "responses-internal", inbound];
 }
