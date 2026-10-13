@@ -848,6 +848,11 @@ reports the failure reason. A runnable Unix wrapper counts as a successful insta
 activation in the current shell; an already-installed healthy shim also counts as success.
 For Windows installations that expose only `codex.exe`, use `ocx service install` for autostart.
 
+On macOS/APFS, a reboot can change filesystem device numbers. An unchanged private wrapper and
+shell environment remain owned after that change, so status, repair, and uninstall continue to
+work. OpenCodex still checks their recorded inodes, paths, owner, permissions, and content/launcher
+binding; replaced or unvalidated files are preserved.
+
 After brew/fnm and other PATH setup, run the activation command printed by install. With the default
 home, it is:
 
