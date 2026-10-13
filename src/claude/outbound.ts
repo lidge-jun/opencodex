@@ -11,7 +11,7 @@
  *  - errors: {type:"error", error:{type,message}}; may arrive mid-stream after HTTP 200.
  */
 import { createHash } from "node:crypto";
-import { httpStatusFromTerminalError } from "../lib/errors";
+import { httpStatusFromTerminalError, UNDECLARED_TOOL_CALL_ERROR_CODE } from "../lib/errors";
 import { isTransientUpstreamStatus } from "../lib/upstream-retry";
 import {
   isTranslatorBudgetExceededError,
@@ -804,11 +804,14 @@ export function responsesSseToAnthropicSse(
             // Unclassified status-absent response.failed (relaySseWithFailedTail synthetic
             // tail) still lands on a transient 5xx here — the mid-stream reset shape maps to
             // overloaded_error by design.
+            // The undeclared-tool refusal is deterministic and proxy-owned, not an upstream
+            // condition: keep its api_error type and code instead of a retryable overload.
+            const deterministic = code === UNDECLARED_TOOL_CALL_ERROR_CODE;
             fail(
               status,
               message,
-              true,
-              code === "context_length_exceeded" ? code : undefined,
+              !deterministic,
+              deterministic || code === "context_length_exceeded" ? code : undefined,
             );
             break;
           }

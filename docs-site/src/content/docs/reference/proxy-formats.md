@@ -71,6 +71,34 @@ returns 504, and client cancellation returns 499. Bun does not expose the exact 
 cannot currently be forwarded precisely. A successful connection preserves the initial session
 frames in order. This handshake policy is separate from the Responses WebSocket transport.
 
+## Undeclared tool calls
+
+On the Responses endpoint, when a request declares a tool catalog, a native passthrough reply
+that calls a client-executed tool outside that catalog fails the turn instead of relaying the
+call: a `response.failed` event with error code `undeclared_tool_call`, then `data: [DONE]`;
+buffered JSON returns HTTP 502 with the same code. The refusal runs before the response can
+enter continuation state, and it stands down only for `authMode: "forward"` providers or a
+request with no declared catalog.
+
+The Chat Completions and Messages endpoints honor deferred tool catalogs: those clients may
+declare a partial catalog and discover the rest at runtime through their own tool registry,
+which — not the translated catalog snapshot — owns the full declaration boundary. A call
+outside the declared list is relayed for the client to validate; a call invented against an
+explicitly empty `tools: []` is still refused, because no deferred registry exists under an
+empty declaration. Those refusals keep the `undeclared_tool_call` code on every wire:
+
+- **Chat Completions:** a `data:` frame containing an OpenAI-style `error` object carrying the
+  code, then the stream closes without a success completion or `[DONE]`; buffered JSON returns
+  HTTP 502 with the code.
+- **Messages:** an Anthropic `event: error` frame whose body is
+  `{ "type": "error", "error": { "type": "api_error", "code": "undeclared_tool_call", ... } }`,
+  without a successful `message_stop` or `[DONE]`; buffered JSON returns HTTP 502 `api_error`
+  with the code. A deterministic catalog violation is never reported as a retryable
+  `overloaded_error` (HTTP 529).
+
+Separately, on every inbound wire, a provider's `default.`-namespaced call is normalized back
+to the bare tool name the request declared (`default.Read` → `Read`).
+
 ## Endpoint overview
 
 | Client surface | Endpoint | Successful non-stream result | Successful stream or socket result |

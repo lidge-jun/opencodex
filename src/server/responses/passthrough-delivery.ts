@@ -108,6 +108,7 @@ import { createResponsesFunctionToolRepairBlockRewrite } from "../responses-func
 import {
   createUndeclaredToolCallGuardBlockRewrite,
   currentTurnWireToolCatalogBody,
+  UNDECLARED_TOOL_CALL_ERROR_CODE,
   undeclaredToolCallNameInResponse,
   undeclaredToolCallMessage,
   normalizeDefaultNamespaceInJson,
@@ -437,8 +438,7 @@ export async function deliverPassthroughResponse(
     normalizeFunctionCompletionJson,
   } = nativeExchange;
   const { commitReasoningReplayServingRoute, recordTerminalOutcomes } = responseEffects;
-  const { parsed, subagentQuotaFailureModel, clientRequestedStream, translatorBudget, inboundWire } = requestState;
-  const enforceDeclaredToolNames = inboundWire !== "chat" && inboundWire !== "anthropic";
+  const { parsed, subagentQuotaFailureModel, clientRequestedStream, translatorBudget } = requestState;
   const { openAiSidecar } = sidecarState;
   const { requestBindings } = transportState;
 
@@ -857,14 +857,17 @@ export async function deliverPassthroughResponse(
           : undefined,
         // Last: every rewrite above can still rename or reshape a call item, so the guard must
         // compare the names the client will actually receive against the declared catalog.
-        nativeExchange.undeclaredToolGuardActive
+        // Deferred-catalog wires keep the rewrite for its normalization half only: a provider's
+        // `default.X` call still collapses to the declared `X`, but an undeclared name is the
+        // client's own deferred registry's business, not this proxy's verdict.
+        nativeExchange.undeclaredToolGuardActive || declaredWireToolNames.size > 0
           ? createUndeclaredToolCallGuardBlockRewrite(
             declaredWireToolNames,
             declaredNamelessClientCallTypes,
             providerExecutedCallTypes,
             declaredBareWireToolNames,
             recoverableBareCustomWireToolNames,
-            enforceDeclaredToolNames,
+            { refuseUndeclared: nativeExchange.undeclaredToolGuardActive },
           )
           : undefined,
         grokUpstreamEchoEnabled
@@ -1322,10 +1325,7 @@ export async function deliverPassthroughResponse(
       if (grokUpstreamEchoEnabled) {
         clientJson = stripGrokUpstreamEnvelopeEchoFromResponsesJson(clientJson);
       }
-      // #1700: same inbound-wire refusal policy as the SSE relay above. Both the plain JSON answer and
-      // the reframed-SSE branch below are built from this body, so one check covers them. This
-      // runs BEFORE the continuation cache write below: a refused turn must not become state a
-      // later `previous_response_id` replay can expand from.
+      // Both response formats use this body, before a refused turn can enter continuation state.
       if (nativeExchange.undeclaredToolGuardActive) {
         const undeclared = (() => {
           try {
@@ -1341,9 +1341,15 @@ export async function deliverPassthroughResponse(
             return undefined;
           }
         })();
-        if (enforceDeclaredToolNames && undeclared !== undefined) {
-          return formatErrorResponse(502, "upstream_error", undeclaredToolCallMessage(undeclared));
+        if (undeclared !== undefined) {
+          return formatErrorResponse(502, "upstream_error", undeclaredToolCallMessage(undeclared), {
+            code: UNDECLARED_TOOL_CALL_ERROR_CODE,
+          });
         }
+      }
+      // Same split as the SSE rewrite: normalization applies whenever a declared name exists,
+      // even on wires whose deferred catalog stands the refusal down.
+      if (declaredWireToolNames.size > 0) {
         clientJson = normalizeDefaultNamespaceInJson(
           clientJson,
           declaredWireToolNames,

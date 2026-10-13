@@ -19,7 +19,7 @@ import {
   responsesJsonToChatCompletion,
   responsesSseToChatCompletionsSse,
 } from "../chat/outbound";
-import { classifyError, cyberPolicyErrorType, CYBER_POLICY_ERROR_CODE, isCyberPolicyCode } from "../lib/errors";
+import { classifyError, cyberPolicyErrorType, CYBER_POLICY_ERROR_CODE, isCyberPolicyCode, UNDECLARED_TOOL_CALL_ERROR_CODE } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
 import { resolveClientRetryAfter } from "../lib/retry-after";
 import {
@@ -455,6 +455,10 @@ async function handleChatCompletionsWithBudget(
     abortSignal: req.signal,
     // Body is Responses-shaped by now, but the client spoke Chat Completions.
     inboundWire: "chat",
+    // A Chat caller may send an explicit empty `tools` array — a deny-all declaration the
+    // translation drops along with the whole catalog. Carried separately so the
+    // undeclared-tool guard can still enforce it; absent/partial catalogs stay deferred.
+    clientDeclaredEmptyToolCatalog: Array.isArray(chatBody.tools) && chatBody.tools.length === 0,
     ...((settledRoute?.combo || settledRoute?.routeKind === "policy") && droidDefaultEffort
       ? { droidDefaultEffort }
       : {}),
@@ -543,6 +547,10 @@ async function handleChatCompletionsWithBudget(
       // Structured model_not_found must win over classifyError's generic remaps.
       classified.code = "model_not_found";
       classified.type = "invalid_request_error";
+    } else if (upstreamCode === UNDECLARED_TOOL_CALL_ERROR_CODE) {
+      // The guard's deterministic refusal keeps its wire identity — same code the
+      // streamed `response.failed` frame and the Anthropic surface carry.
+      classified.code = UNDECLARED_TOOL_CALL_ERROR_CODE;
     } else if (upstreamCode !== undefined && upstreamCode !== null && classified.code == null) {
       classified.code = upstreamCode;
     }

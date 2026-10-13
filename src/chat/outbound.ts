@@ -19,6 +19,7 @@ import {
   CYBER_POLICY_ERROR_CODE,
   isCyberPolicyCode,
   isCyberPolicyMessage,
+  UNDECLARED_TOOL_CALL_ERROR_CODE,
 } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
 import { createSseBlockBuffer, sseDataPayload } from "../server/sse-payload-rewrite";
@@ -196,6 +197,10 @@ export function chatCompletionsStreamErrorPayload(
   } else if (isCyberPolicyCode(details?.code) || classified.code === CYBER_POLICY_ERROR_CODE) {
     classified.code = CYBER_POLICY_ERROR_CODE;
     classified.type = cyberPolicyErrorType(details?.type);
+  } else if (details?.code === UNDECLARED_TOOL_CALL_ERROR_CODE) {
+    // The guard's deterministic refusal keeps its wire identity past classifyError's
+    // generic 5xx remap — same code the buffered Chat error and the SSE frame carry.
+    classified.code = UNDECLARED_TOOL_CALL_ERROR_CODE;
   } else if (details?.code !== undefined && details.code !== null && !classified.code) {
     classified.code = details.code;
   }

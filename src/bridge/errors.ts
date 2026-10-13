@@ -13,6 +13,7 @@ import {
   CYBER_POLICY_ERROR_CODE,
   isCyberPolicyCode,
   SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE,
+  UNDECLARED_TOOL_CALL_ERROR_CODE,
   type OcxErrorPayload,
 } from "../lib/errors";
 
@@ -31,6 +32,10 @@ export function formatErrorResponse(
     error.code = CYBER_POLICY_ERROR_CODE;
     error.type = cyberPolicyErrorType(type);
   }
+  // The undeclared-tool refusal is deterministic, not a transient upstream failure: its code
+  // survives so the Anthropic translator can classify it instead of folding it into a
+  // retryable overload (and so clients see the SSE path's rejection identity).
+  if (options?.code === UNDECLARED_TOOL_CALL_ERROR_CODE) error.code = options.code;
   // Only the allowlisted transport verdicts survive this formatter. Do not forward
   // arbitrary provider codes, and preserve the existing cyber-policy precedence.
   const replayBlocked = error.code !== CYBER_POLICY_ERROR_CODE

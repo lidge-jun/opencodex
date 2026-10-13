@@ -1452,6 +1452,7 @@ export async function prepareResponsesRequest(
   commitSkillsSnapshot?.();
   return {
     inboundWire,
+    clientDeclaredEmptyToolCatalog: options.clientDeclaredEmptyToolCatalog === true,
     translatorBudget,
     parsed,
     toolBridgeMaps,
