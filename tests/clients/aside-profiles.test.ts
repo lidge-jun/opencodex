@@ -64,6 +64,20 @@ describe("Aside profile desired state, ownership and history", () => {
   });
   afterEach(() => removeTreeWithRetry(root));
 
+  test("repeated oversized profile writes discard only their unused store snapshots", async () => {
+    const seed = `{"pad":"${"x".repeat(4 * 1024 * 1024 - 256)}"}\n`;
+    writeFileSync(path(0), seed);
+    config.asideProfileSync = { allProfiles: false, legacyProfileId: 0 };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = await mutateAsideProfiles(input(), { profileId: 0, enabled: true });
+      expect(result.ok).toBe(false);
+      expect(result.result).toMatchObject({ ok: false, reason: "write_failed" });
+      expect(readFileSync(path(0), "utf8")).toBe(seed);
+      expect(store.listOperations("aside")).toEqual([]);
+    }
+    expect(store.countSnapshots("aside")).toBe(0);
+  });
+
   test.each([false, true])("implicit sync stays quiet for unconfigured or disabled Aside (legacy=%s)", async legacy => {
     if (legacy) {
       seedLegacy();

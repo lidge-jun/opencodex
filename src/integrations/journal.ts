@@ -16,7 +16,7 @@ import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { atomicWriteFile } from "../config";
-import { ensureDir, fingerprint, integrationsDir, isOwnershipRecord, type OwnershipRecord } from "./ownership";
+import { ensureDir, fingerprint, integrationsDir, isOwnershipRecord, readRecordsStrict, type OwnershipRecord } from "./ownership";
 import { isIntegrationClientId, type IntegrationClientId } from "./registry";
 
 /**
@@ -169,6 +169,20 @@ export function captureSnapshot(
   ensureDir(target);
   atomicWriteFile(target, text);
   return { kind: "stored", relPath: join("snapshots", clientId, opId) };
+}
+
+/** Remove only an unused pre-write snapshot; uncertain or committed evidence survives. */
+export function discardUncommittedSnapshot(
+  clientId: IntegrationClientId,
+  opId: string,
+  dir: string = integrationsDir(),
+): void {
+  const target = containedPath(dir, "snapshots", assertSafeComponent(clientId, "clientId"), assertSafeComponent(opId, "opId"));
+  if (findCommittedOperation(opId, dir)
+    || Object.values(readRecordsStrict(dir)).some(record => record?.opId === opId)) {
+    throw new Error("integration snapshot still belongs to a recorded operation");
+  }
+  rmSync(target, { force: true });
 }
 
 /** Commit the row. Pruning is post-commit and can never fail the append. */
