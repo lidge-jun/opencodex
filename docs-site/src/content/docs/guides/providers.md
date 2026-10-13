@@ -148,8 +148,11 @@ reached with its own key, not a key mode for the same login.
 
 Gemini 4 Argon (`gemini-4-argon`) is listed on the `google` preset with low, medium (the
 default), and high thinking levels. Google offers it on the paid Gemini API tier only, not the free
-tier. On `google-antigravity`, Google currently limits Argon to AI Ultra and eligible Enterprise
-accounts, so OpenCodex shows it there only when live model discovery returns it for your account.
+tier. On `google-antigravity`, Argon is listed with the same three levels, which map to the
+`gemini-4-argon-low`, `-medium`, and `-high` wire models. Google limits it there to AI Ultra and
+eligible Enterprise accounts. Cloud Code Assist serves Argon only to the Antigravity CLI client, so
+OpenCodex sends Argon requests and model discovery with the CLI User-Agent
+(`antigravity/cli/1.3.4`) and keeps the IDE User-Agent for every other model.
 
 To check which mode a provider is actually using, open it on the Providers page: the **Connection**
 block's **Authentication** row reads `OAuth`, `API key`, `ChatGPT passthrough`, `Local`, or

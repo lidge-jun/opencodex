@@ -351,9 +351,8 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   // 3.7 Flash rides CCA, whose billing equivalence to the Developer API list price is
   // not published, so this is `verified-derived` rather than `verified`: the number is
   // proven, the claim that Antigravity charges it is inferred.
-  // Gemini 4 Argon on Antigravity (AI Ultra / Enterprise only). Google documents one id with
-  // low/medium/high thinking levels; the suffix rows cover a discovered -low/-medium/-high ladder,
-  // which discovery collapses onto the base id. Billing equivalence to the API price is inferred.
+  // Gemini 4 Argon on Antigravity (AI Ultra / Enterprise only): the picker id plus its three
+  // verified CCA wire ids. Billing equivalence to the API price is inferred.
   { provider: "google-antigravity", modelId: "gemini-4-argon", cost4: GEMINI_4_ARGON, source: `derived: Gemini 4 Argon introductory rate through 2026-11-30 ${GEMINI_4_ARGON_PRICING}`, verifiedAt: "2026-10-14", status: "verified-derived" },
   { provider: "google-antigravity", modelId: "gemini-4-argon-low", cost4: GEMINI_4_ARGON, source: `derived: gemini-4-argon ${GEMINI_4_ARGON_PRICING}`, verifiedAt: "2026-10-14", status: "verified-derived" },
   { provider: "google-antigravity", modelId: "gemini-4-argon-medium", cost4: GEMINI_4_ARGON, source: `derived: gemini-4-argon ${GEMINI_4_ARGON_PRICING}`, verifiedAt: "2026-10-14", status: "verified-derived" },

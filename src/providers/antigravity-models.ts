@@ -18,6 +18,13 @@ import { readAntigravityWireSnapshot, writeAntigravityWireSnapshot, type Antigra
 const GEMINI_FLASH_CURRENT = "gemini-3.8-flash";
 
 /**
+ * Gemini 4 Argon. Like 3.8 it publishes one wire id per tier (`-low/-medium/-high`) and no
+ * `-tiered` row, verified 2026-10-14 against live CCA. CCA serves these ids only to the CLI
+ * User-Agent (see antigravityUserAgentForWireModel), and only to AI Ultra / Enterprise accounts.
+ */
+const GEMINI_ARGON = "gemini-4-argon";
+
+/**
  * Previous Flash generation — still served, still picker-visible.
  *
  * 3.6 vanished from CCA the moment 3.7 shipped, which is why RETIRED_FLASH_TIERS exists. 3.8
@@ -75,6 +82,9 @@ const ANTIGRAVITY_WIRE_MODELS = [
 ];
 
 const ANTIGRAVITY_PICKER_MODEL_BY_WIRE_ID: Record<string, string> = {
+  "gemini-4-argon-low": GEMINI_ARGON,
+  "gemini-4-argon-medium": GEMINI_ARGON,
+  "gemini-4-argon-high": GEMINI_ARGON,
   "gemini-3.8-flash-low": "gemini-3.8-flash",
   "gemini-3.8-flash-medium": "gemini-3.8-flash",
   "gemini-3.8-flash-high": "gemini-3.8-flash",
@@ -164,7 +174,8 @@ function collapsesIntoKnownPickerModel(candidateId: string): boolean {
 // Claude Opus: effort → thinkingConfig.thinkingLevel (CLIProxyAPI proven pattern).
 export const ANTIGRAVITY_MODEL_EFFORTS: Record<string, string[]> = {
   // No `minimal`: Google documents it as an error for this generation, and CCA exposes only
-  // the three tiers.
+  // the three tiers. Argon documents the same ladder (`minimal` is an HTTP 400).
+  [GEMINI_ARGON]: ["low", "medium", "high"],
   "gemini-3.8-flash": ["low", "medium", "high"],
   "gemini-3.7-flash": ["low", "medium", "high"],
   "gemini-3.1-pro": ["low", "high"],
@@ -175,7 +186,12 @@ export const ANTIGRAVITY_MODEL_EFFORTS: Record<string, string[]> = {
 // ── Effort → wire model map for Gemini base models ──
 const ANTIGRAVITY_EFFORT_WIRE_MAP: Record<string, Record<string, string>> = {
   // 3.8 publishes one wire id per tier and no `-tiered` row, so its efforts ride the suffix.
-  // This is the 3.6 shape, not the 3.7 one.
+  // This is the 3.6 shape, not the 3.7 one. Argon has the same shape.
+  [GEMINI_ARGON]: {
+    low: "gemini-4-argon-low",
+    medium: "gemini-4-argon-medium",
+    high: "gemini-4-argon-high",
+  },
   "gemini-3.8-flash": {
     low: "gemini-3.8-flash-low",
     medium: "gemini-3.8-flash-medium",
@@ -198,7 +214,7 @@ const ANTIGRAVITY_EFFORT_WIRE_MAP: Record<string, Record<string, string>> = {
  * `gemini-3.1-pro` is deliberately absent: its `high` rung is `gemini-pro-agent`, which carries
  * no tier suffix, so there the level is the only thing naming the effort.
  */
-const ANTIGRAVITY_SUFFIX_TIER_MODELS = new Set(["gemini-3.8-flash"]);
+const ANTIGRAVITY_SUFFIX_TIER_MODELS = new Set([GEMINI_ARGON, "gemini-3.8-flash"]);
 
 function completeDiscoveredEffortWireModelIds(
   pickerId: string,
@@ -223,6 +239,7 @@ function completeDiscoveredEffortWireModelIds(
 // ── Default effort per Gemini base model ──
 const ANTIGRAVITY_DEFAULT_EFFORT: Record<string, string> = {
   // Google's documented thinking_level default, and the tier CCA marks `recommended`.
+  [GEMINI_ARGON]: "medium",
   "gemini-3.8-flash": "medium",
   "gemini-3.1-pro": "high",
 };
@@ -287,6 +304,7 @@ export const ANTIGRAVITY_MODEL_ALIASES: Record<string, string> = {
 
 // Picker-visible: collapsed base models only.
 export const ANTIGRAVITY_MODELS = [
+  GEMINI_ARGON,
   GEMINI_FLASH_CURRENT,
   GEMINI_FLASH_PREVIOUS,
   "gemini-3.1-pro",
@@ -302,6 +320,9 @@ function isKnownAntigravityPickerModelId(value: string): boolean {
 
 // Context windows from the upstream `:fetchAvailableModels` maxTokens per model.
 const ANTIGRAVITY_WIRE_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
+  "gemini-4-argon-low": 1_048_576,
+  "gemini-4-argon-medium": 1_048_576,
+  "gemini-4-argon-high": 1_048_576,
   "gemini-3.8-flash-low": 1_048_576,
   "gemini-3.8-flash-medium": 1_048_576,
   "gemini-3.8-flash-high": 1_048_576,
@@ -316,6 +337,7 @@ const ANTIGRAVITY_WIRE_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 
 export const ANTIGRAVITY_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   // Collapsed base IDs — explicit entries for the picker.
+  [GEMINI_ARGON]: 1_048_576,
   "gemini-3.8-flash": 1_048_576,
   "gemini-3.7-flash": 1_048_576,
   "gemini-3.1-pro": 1_048_576,
@@ -330,6 +352,7 @@ export const ANTIGRAVITY_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 };
 
 export const ANTIGRAVITY_MODEL_INPUT_MODALITIES: Record<string, string[]> = {
+  [GEMINI_ARGON]: ["text", "image"],
   // Google documents 3.7 Flash as also accepting video, audio and PDF, but this proxy
   // carries only text and image parts (`OcxImageContent`, src/types.ts) and the Codex
   // catalog normalizes `input_modalities` against a closed enum. Advertising a modality

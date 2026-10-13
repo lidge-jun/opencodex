@@ -78,8 +78,9 @@ describe("antigravity CCA envelope", () => {
 
   test("exposes Gemini 3.8 and 3.7 Flash while retired Flash ids resolve to 3.7", async () => {
     // Collapsed picker: base models only. 3.8 leads because CCA ranks it first in the
-    // Recommended sort; 3.7 stays because Google still serves it.
+    // Recommended sort; 3.7 stays because Google still serves it. Argon sits above both.
     expect(ANTIGRAVITY_MODELS).toEqual([
+      "gemini-4-argon",
       "gemini-3.8-flash",
       "gemini-3.7-flash",
       "gemini-3.1-pro",

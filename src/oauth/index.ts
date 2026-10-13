@@ -49,7 +49,7 @@ import { loginGithubCopilot, refreshGithubCopilotToken, validateCopilotApiBaseUr
 import { loginCommandCode, refreshCommandCodeToken } from "./command-code";
 import { loginMetaMuse, refreshMetaMuseToken } from "./meta-muse";
 import { loginOrcaRouter, orcaRouterInferenceBaseUrl, refreshOrcaRouterKey } from "./orcarouter";
-import { ANTIGRAVITY_REQUEST_UA } from "../adapters/google-antigravity-wire";
+import { ANTIGRAVITY_DISCOVERY_UA } from "../adapters/google-antigravity-wire";
 import { deriveOAuthDefaultModel, deriveOAuthProviderConfig } from "../providers/derive";
 import { apiKeyPoolEntryId, sanitizeApiKeyValue } from "../providers/api-keys";
 import { effectiveGoogleMode, getProviderRegistryEntry, mergeRegistryStaticHeaders, providerMatchesRegistryTransport } from "../providers/registry";
@@ -1161,7 +1161,9 @@ export function buildModelsRequest(
   if (effectiveGoogleMode(providerName, effectiveProvider) === "cloud-code-assist") {
     headers.Accept = "application/json";
     headers["Content-Type"] = "application/json";
-    headers["User-Agent"] = ANTIGRAVITY_REQUEST_UA;
+    // CLI UA: CCA lists Gemini 4 Argon's wire ids only to the CLI client family. Inference keeps
+    // choosing per wire model (antigravityUserAgentForWireModel).
+    headers["User-Agent"] = ANTIGRAVITY_DISCOVERY_UA;
     if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
     return guarded({
       method: "POST" as const,

@@ -21,7 +21,7 @@ import { getVertexAccessToken } from "../lib/gcp-adc";
 import { fetchAntigravityWithRetry, fetchVertexWithRetry } from "./google-http";
 import { safeAntigravityHttpErrorMessage, safeVertexHttpErrorMessage } from "./google-errors";
 import { isVertexTruncatedTurn, vertexTruncationErrorEvent } from "./google-truncation";
-import { ANTIGRAVITY_REQUEST_UA, antigravitySessionAnchor, antigravitySessionId, isLikelyRealThoughtSignature, sanitizeAntigravityClaudeSignatures } from "./google-antigravity-wire";
+import { antigravitySessionAnchor, antigravityUserAgentForWireModel, antigravitySessionId, isLikelyRealThoughtSignature, sanitizeAntigravityClaudeSignatures } from "./google-antigravity-wire";
 import { summarizeGoogleWireShape } from "./google-wire-shape";
 import { compileGoogleWireBody } from "./google-wire-compiler";
 import type { GoogleToolSchemaLossReport, GoogleToolSchemaProfile } from "./google-tool-schema";
@@ -1155,7 +1155,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           requestId: `agent-${crypto.randomUUID()}`,
           request,
         };
-        headers["User-Agent"] = ANTIGRAVITY_REQUEST_UA;
+        headers["User-Agent"] = antigravityUserAgentForWireModel(wireModelId);
         headers["Authorization"] = `Bearer ${token}`;
         return { url, method: "POST", headers, body: JSON.stringify(envelope) };
       }
