@@ -51,7 +51,7 @@ stop; a drain that began during startup prevents the spawn (`didRunDrainStartHoo
   (wall-clock lag monitor, so sleep counts) voids the streak.
 
 `src/service/health-sentinel-probe.ts` asks `/healthz` through `directLocalHttpFetch`.
-Probes accept only numeric IPv4/IPv6 destinations. Default and localhost binds use numeric loopback, as do wildcard binds. Other DNS bind names make the sentinel stand down without probing; the proxy remains available. The first normalized address and port remain pinned for the run, and runtime-record changes stand down both before probing and before termination.
+Probes accept only numeric IPv4/IPv6 destinations. Default and localhost binds use numeric loopback, as do wildcard binds; the wildcard test is the server's `isWildcardHostname` (`src/codex/loopback-target.ts`), so `*`, `0` and every all-zero spelling count. Other DNS bind names make the sentinel stand down without probing; the proxy remains available. The first normalized address and port remain pinned for the run, and runtime-record changes stand down both before probing and before termination.
 
 ## Binding the kill to the proxy
 

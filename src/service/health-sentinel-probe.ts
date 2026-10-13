@@ -9,6 +9,7 @@
  */
 import { isIP } from "node:net";
 
+import { isWildcardHostname } from "../codex/loopback-target";
 import { directLocalHttpFetch } from "../server/direct-local-http";
 import type { HealthProbeOutcome } from "./health-sentinel-policy";
 
@@ -19,9 +20,14 @@ export type HealthProbeIo = {
   fetch?: (url: string, timeoutMs: number) => Promise<Response>;
 };
 
-/** Numeric probe endpoint only; unknown DNS destinations cannot authorize recovery. */
+/**
+ * Numeric probe endpoint only; unknown DNS destinations cannot authorize recovery. Wildcard
+ * spellings use the server's own predicate (`*`, `0`, `00.0.0.000`, `::0`, ...), so every bind
+ * the server accepts as a wildcard is probed on loopback instead of standing the sentinel down.
+ */
 export function probeUrlHost(hostname: string | undefined): string | null {
   let value = (hostname ?? "").trim();
+  if (isWildcardHostname(value)) return value.includes(":") ? "[::1]" : "127.0.0.1";
   if (value.startsWith("[") || value.endsWith("]")) {
     if (!value.startsWith("[") || !value.endsWith("]")) return null;
     value = value.slice(1, -1);

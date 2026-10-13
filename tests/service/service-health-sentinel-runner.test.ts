@@ -407,6 +407,9 @@ describe("health sentinel probe", () => {
     [undefined, "127.0.0.1"], ["localhost.", "127.0.0.1"], ["LOCALHOST", "127.0.0.1"],
     ["0.0.0.0", "127.0.0.1"], ["127.0.0.2", "127.0.0.2"], ["::", "[::1]"],
     ["[::1]", "[::1]"], ["0:0:0:0:0:0:0:0", "[::1]"], ["fd00::1", "[fd00::1]"],
+    // Every wildcard spelling the server accepts (isWildcardHostname) maps to loopback.
+    ["*", "127.0.0.1"], ["0", "127.0.0.1"], ["00.0.0.000", "127.0.0.1"], ["0.0.0.0.", "127.0.0.1"],
+    ["[::]", "[::1]"], ["::0", "[::1]"],
   ])("normalizes stable bind %s to %s", (hostname, expected) => {
     expect(probeUrlHost(hostname)).toBe(expected);
   });
