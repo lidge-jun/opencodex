@@ -22,7 +22,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { closeSync, linkSync, openSync, readdirSync, readFileSync, readlinkSync, renameSync, unlinkSync, writeSync } from "node:fs";
+import { linkSync, readdirSync, readFileSync, readlinkSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, win32 } from "node:path";
 import { getConfigDir } from "../config/paths";
 import { resolveServiceOwnership } from "../service/state";
@@ -123,16 +123,26 @@ export interface DesktopProcessOptions {
   uid?: number;
   env?: NodeJS.ProcessEnv;
   run?: Execute;
-  /** Linux: executable paths of this user's readable processes. */
-  linuxExecutables?: () => string[];
+  /** Linux: executable paths of this user's processes, or \`unverified\`. */
+  linuxExecutables?: (uid: number) => string[] | "unverified";
 }
 
-function linuxExecutables(): string[] {
+/**
+ * Linux: executables of this user's processes. A process that exited mid-scan or belongs to someone
+ * else is skipped; one of this user's processes whose executable cannot be read makes the answer
+ * unverifiable, because it could be the Desktop app.
+ */
+function linuxExecutables(uid: number): string[] | "unverified" {
   const paths: string[] = [];
   for (const entry of readdirSync("/proc")) {
     if (!/^\d+$/.test(entry)) continue;
-    // Another user's process, or one that exited mid-scan, is simply not ours.
-    try { paths.push(readlinkSync(`/proc/${entry}/exe`).replace(/ \(deleted\)$/, "")); } catch { /* skip */ }
+    try {
+      if (statSync(`/proc/${entry}`).uid !== uid) continue;
+      paths.push(readlinkSync(`/proc/${entry}/exe`).replace(/ \(deleted\)$/, ""));
+    } catch (error) {
+      if ((error as { code?: unknown })?.code === "ENOENT" || (error as { code?: unknown })?.code === "ESRCH") continue;
+      return "unverified";
+    }
   }
   return paths;
 }
@@ -142,11 +152,14 @@ export function inspectDesktopProcess(options: DesktopProcessOptions = {}): Desk
   const platform = options.platform ?? process.platform;
   const run = options.run ?? execute;
   try {
+    const uid = options.uid ?? process.getuid?.();
     if (platform === "linux") {
-      return (options.linuxExecutables ?? linuxExecutables)().some(path => isDesktopExecutable(path, platform)) ? "running" : "absent";
+      if (uid === undefined) return "unknown";
+      const executables = (options.linuxExecutables ?? linuxExecutables)(uid);
+      if (executables === "unverified") return "unknown";
+      return executables.some(path => isDesktopExecutable(path, platform)) ? "running" : "absent";
     }
     if (platform === "darwin") {
-      const uid = options.uid ?? process.getuid?.();
       if (uid === undefined) return "unknown";
       // macOS reports the full executable path as comm.
       const output = run("/bin/ps", ["-U", String(uid), "-o", "comm="], 3_000);
@@ -185,46 +198,62 @@ function readHolder(path: string): number | null {
   return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
 }
 
+const LEASE_FILE = /^desktop-launch\.(\d+)\.lease$/;
+
 /**
- * One Desktop launch per cold start. The lease names its holder's pid and stays valid while that
- * process lives, so a slow launch never expires under its owner. A dead holder's lease is reclaimed
- * by renaming it away, which only one contender can do; a contender that turns out to have moved a
- * live peer's lease puts it back and waits instead of launching.
+ * One Desktop launch per cold start. Leases are numbered generations, each published whole with
+ * link(2), which fails if the name exists, so exactly one contender can create generation N+1. A
+ * caller launches only after creating the next generation while the newest one belongs to a dead
+ * process (or none exists). A lease stays valid while its holder lives, so a slow launch never
+ * expires under its owner. Nothing ever moves or overwrites another holder's lease.
  */
 export function acquireDesktopLaunchLease(
   configDir: string,
   io: { pid?: number; alive?: (pid: number) => boolean } = {},
 ): (() => void) | null {
-  const path = join(configDir, "desktop-launch.lease");
   const pid = io.pid ?? process.pid;
   const alive = io.alive ?? processAlive;
-  for (let attempt = 0; attempt < 3; attempt++) {
+  const leasePath = (generation: number) => join(configDir, `desktop-launch.${generation}.lease`);
+  for (let attempt = 0; attempt < 4; attempt++) {
+    let generations: number[];
     try {
-      const fd = openSync(path, "wx", 0o600);
-      try { writeSync(fd, String(pid)); } finally { closeSync(fd); }
-      return () => {
-        try { if (readHolder(path) === pid) unlinkSync(path); } catch { /* already gone */ }
-      };
-    } catch (error) {
-      // An unwritable lease must not suppress the launch; it only loses deduplication.
-      if ((error as { code?: unknown })?.code !== "EEXIST") return () => {};
+      generations = readdirSync(configDir).flatMap(name => {
+        const match = LEASE_FILE.exec(name);
+        return match ? [Number(match[1])] : [];
+      }).sort((a, b) => b - a);
+    } catch {
+      // An unreadable lease directory must not suppress the launch; it only loses deduplication.
+      return () => {};
     }
-    try {
-      const holder = readHolder(path);
-      if (holder !== null && alive(holder)) return null;
-      const moved = `${path}.${randomUUID()}`;
-      renameSync(path, moved);
-      const movedHolder = readHolder(moved);
-      if (movedHolder !== null && alive(movedHolder)) {
-        try { linkSync(moved, path); } catch { /* a third caller holds it now */ }
-        unlinkSync(moved);
+    const newest = generations[0];
+    if (newest !== undefined) {
+      try {
+        const holder = readHolder(leasePath(newest));
+        if (holder !== null && alive(holder)) return null;
+      } catch (error) {
+        if ((error as { code?: unknown })?.code === "ENOENT") continue;
         return null;
       }
-      unlinkSync(moved);
-    } catch (error) {
-      // Lost the reclaim race to another contender: try to create again.
-      if ((error as { code?: unknown })?.code !== "ENOENT") return null;
     }
+    const next = (newest ?? 0) + 1;
+    const staged = join(configDir, `desktop-launch.${randomUUID()}.tmp`);
+    try {
+      writeFileSync(staged, String(pid), { flag: "wx", mode: 0o600 });
+      linkSync(staged, leasePath(next));
+    } catch (error) {
+      if ((error as { code?: unknown })?.code === "EEXIST") continue;
+      return () => {};
+    } finally {
+      try { unlinkSync(staged); } catch { /* not created */ }
+    }
+    // Older generations belong to dead holders: the newest was checked, and no one can publish
+    // above it without the same check.
+    for (const generation of generations) {
+      try { unlinkSync(leasePath(generation)); } catch { /* already gone */ }
+    }
+    return () => {
+      try { if (readHolder(leasePath(next)) === pid) unlinkSync(leasePath(next)); } catch { /* already gone */ }
+    };
   }
   return null;
 }

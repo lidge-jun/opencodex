@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -118,10 +118,19 @@ describe("ocx ensure cold start under OpenCodex Desktop (#6971)", () => {
 });
 
 describe("Desktop process detection by executable identity", () => {
-  test("Linux reads process executables, so arguments naming Desktop do not count", () => {
-    expect(inspectDesktopProcess({ platform: "linux", linuxExecutables: () => ["/usr/bin/tail", "/usr/lib/opencodex-desktop/opencodex-desktop"] })).toBe("running");
-    expect(inspectDesktopProcess({ platform: "linux", linuxExecutables: () => ["/usr/bin/tail", "/usr/bin/bash"] })).toBe("absent");
-    expect(inspectDesktopProcess({ platform: "linux", linuxExecutables: () => { throw new Error("no /proc"); } })).toBe("unknown");
+  test("Linux reads this user's process executables, so arguments naming Desktop do not count", () => {
+    const seen: number[] = [];
+    const scan = (paths: string[] | "unverified") => (uid: number) => { seen.push(uid); return paths; };
+    expect(inspectDesktopProcess({ platform: "linux", uid: 1000, linuxExecutables: scan(["/usr/bin/tail", "/usr/lib/opencodex-desktop/opencodex-desktop"]) })).toBe("running");
+    expect(seen).toEqual([1000]);
+    expect(inspectDesktopProcess({ platform: "linux", uid: 1000, linuxExecutables: scan(["/usr/bin/tail", "/usr/bin/bash"]) })).toBe("absent");
+    expect(inspectDesktopProcess({ platform: "linux", uid: 1000, linuxExecutables: scan("unverified") })).toBe("unknown");
+    expect(inspectDesktopProcess({ platform: "linux", uid: 1000, linuxExecutables: () => { throw new Error("no /proc"); } })).toBe("unknown");
+  });
+
+  test.skipIf(process.platform !== "linux" && process.platform !== "darwin")("the real process scan answers on this host", () => {
+    // An unanswerable scan would refuse every plain CLI cold start, so it must not be the norm.
+    expect(["running", "absent"]).toContain(inspectDesktopProcess());
   });
 
   test("macOS lists this user's executables and requires an app bundle", () => {
@@ -157,39 +166,43 @@ describe("Desktop launch lease", () => {
     const dir = mkdtempSync(join(tmpdir(), "ocx-desktop-lease-"));
     try { body(dir); } finally { removeTreeWithRetry(dir); }
   };
-  const lease = (dir: string) => join(dir, "desktop-launch.lease");
+  const leases = (dir: string) => readdirSync(dir).sort();
 
   test("a live holder keeps the lease however long its launch takes; release removes only its own", () => withDir(dir => {
     const release = acquireDesktopLaunchLease(dir, { pid: 100, alive: () => true });
     expect(release).not.toBeNull();
+    expect(leases(dir)).toEqual(["desktop-launch.1.lease"]);
     expect(acquireDesktopLaunchLease(dir, { pid: 200, alive: () => true })).toBeNull();
-    writeFileSync(lease(dir), "300");
+    writeFileSync(join(dir, "desktop-launch.1.lease"), "300");
     release!();
-    expect(readFileSync(lease(dir), "utf8")).toBe("300");
+    expect(readFileSync(join(dir, "desktop-launch.1.lease"), "utf8")).toBe("300");
   }));
 
-  test("a dead holder's lease is reclaimed by exactly one contender", () => withDir(dir => {
-    writeFileSync(lease(dir), "100");
+  test("a dead holder is superseded by the next generation, which only one contender can create", () => withDir(dir => {
+    writeFileSync(join(dir, "desktop-launch.4.lease"), "100");
     const alive = (pid: number) => pid !== 100;
     const first = acquireDesktopLaunchLease(dir, { pid: 200, alive });
     expect(first).not.toBeNull();
-    expect(readFileSync(lease(dir), "utf8")).toBe("200");
+    expect(leases(dir)).toEqual(["desktop-launch.5.lease"]);
     expect(acquireDesktopLaunchLease(dir, { pid: 300, alive })).toBeNull();
     first!();
-    expect(existsSync(lease(dir))).toBe(false);
+    expect(leases(dir)).toEqual([]);
   }));
 
-  test("a contender that moved a live peer's lease puts it back and does not launch", () => withDir(dir => {
-    writeFileSync(lease(dir), "100");
-    // The first read sees a dead holder; by the time the lease is moved, a live peer owns it.
-    let reads = 0;
-    const alive = (pid: number) => pid === 100 ? reads++ > 0 : true;
+  test("a contender that loses the race for a generation joins the winner instead of launching", () => withDir(dir => {
+    writeFileSync(join(dir, "desktop-launch.1.lease"), "100");
+    // Between this caller's check of generation 1 and its publish, a peer published generation 2.
+    let checked = false;
+    const alive = (pid: number) => {
+      if (pid === 100 && !checked) { checked = true; writeFileSync(join(dir, "desktop-launch.2.lease"), "999"); return false; }
+      return pid !== 100;
+    };
     expect(acquireDesktopLaunchLease(dir, { pid: 200, alive })).toBeNull();
-    expect(readFileSync(lease(dir), "utf8")).toBe("100");
-    expect(readdirSync(dir)).toEqual(["desktop-launch.lease"]);
+    expect(readFileSync(join(dir, "desktop-launch.2.lease"), "utf8")).toBe("999");
+    expect(leases(dir).filter(name => name.endsWith(".tmp"))).toEqual([]);
   }));
 
-  test("an unwritable lease directory still allows the launch", () => {
+  test("an unreadable lease directory still allows the launch", () => {
     const release = acquireDesktopLaunchLease(join(tmpdir(), "ocx-desktop-lease-missing", "nested"));
     expect(release).not.toBeNull();
     release!();
