@@ -60,9 +60,15 @@ for (const kind of ["http", "https", "socks5", "http-all", "https-all"] as const
   const origin = await listenFixture(upstream), proxy = await forwardProxy(transport, origin.port, proxyLeaf);
   const root = mkdtempSync(join(tmpdir(), "ocx-desktop-fetch-")), certificate = join(root, "fixture-ca.pem");
   writeFileSync(certificate, ca.certPem);
+  // Windows environment names are case-insensitive: ALL_PROXY and all_proxy are ONE variable, so
+  // giving them different values left the winner to env-block ordering, and an unrelated new
+  // variable once flipped it and sent this child straight to the real chatgpt.com. Clear every
+  // spelling, then set only the routes this case means.
+  const env: Record<string, string | undefined> = Object.fromEntries(Object.entries(process.env)
+    .filter(([name]) => !/^(https?_proxy|all_proxy|no_proxy)$/i.test(name)));
+  Object.assign(env, { NODE_EXTRA_CA_CERTS: certificate }, kind.endsWith("-all") ? { ALL_PROXY: proxy.url } : { HTTPS_PROXY: proxy.url });
   const child = Bun.spawn([process.execPath, repoPath("tests/helpers/desktop-egress-worker.ts")], {
-    cwd: repoRoot(), stdout: "pipe", stderr: "pipe",
-    env: { ...process.env, NODE_EXTRA_CA_CERTS: certificate, HTTPS_PROXY: kind.endsWith("-all") ? "" : proxy.url, https_proxy: "", HTTP_PROXY: "", http_proxy: "", ALL_PROXY: kind.endsWith("-all") ? proxy.url : "", all_proxy: "", NO_PROXY: "", no_proxy: "" },
+    cwd: repoRoot(), stdout: "pipe", stderr: "pipe", env,
   });
   const timer = setTimeout(() => child.kill(), 10000);
   try {
