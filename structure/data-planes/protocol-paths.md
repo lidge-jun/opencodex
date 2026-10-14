@@ -170,7 +170,7 @@ provenance collapses onto four public sources in `protocolAdapterSource`: `hard-
 
 Model overrides are resolved for a Responses client. The candidates are the explicit
 `modelAdapters` keys, the registry's `modelWireDefaults` keys, the exact-id hard pins
-(`captureWireAdapterHardPins`), the default model and the listed models, at most 1024 of them; a
+(`captureWireAdapterHardPins`, scoped to the configured destination for Go Gemini), the default model and the listed models, at most 1024 of them; a
 model is listed when its source is not `provider-default` or its adapter differs from the
 provider's. The list is sorted, capped at `PROTOCOL_PROVIDER_OVERRIDE_LIMIT` (64) and marked
 `modelOverridesTruncated` past it. Prefix pins cannot be enumerated, so only a listed model they

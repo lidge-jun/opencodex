@@ -718,7 +718,14 @@ MiniMax model list is still the previous default receives it on the next start; 
 is left as it is; register the preview by hand with
 `ocx models add minimax MiniMax-M3.1-Flash-Preview --context-window 1000000`.
 
-**OpenCode Go** requires a stable session identifier for routing. OpenCodex sends
+**OpenCode Go** routes `gemini-4-argon-contributor` through its Gemini API, including
+streaming and tool-result continuations. This applies to the built-in Go endpoint and
+`https://opencode.ai/inference/go/v1` with key authentication. A custom destination
+saved under the same provider name retains its own URL and does not receive this pin.
+Other Go models keep their model-specific protocols.
+Gemini uses `low`, `medium` and `high` thinking levels; higher requested efforts clamp to `high`.
+
+OpenCode Go requires a stable session identifier for routing. OpenCodex sends
 `claude-haiku-5-5`, like the MiniMax models, over the Anthropic Messages wire, matching
 [OpenCode Go's endpoint table](https://opencode.ai/docs/go/#endpoints). OpenCodex derives
 its Go session header from Codex thread/session headers, or from a client's
