@@ -326,6 +326,18 @@ fallback_ms="$(
 )"
 readonly FALLBACK_MS="$fallback_ms"
 
+# One private Bun transpiler cache for every batch in this shard. Left unset, each batch's
+# preload creates an empty cache of its own, so the first child a batch spawns re-transpiles
+# its whole module graph from nothing (0.67s cold against 0.20s warm for the journal/CLI graph
+# on macOS). On Windows runners that cold load is what pushed first spawns to 15-40s and past
+# their deadlines. mktemp -d creates a fresh directory only this job can write, which is the
+# protected explicit cache createIsolatedTestEnvironment accepts; an operator's value is kept.
+if [[ -z "${BUN_RUNTIME_TRANSPILER_CACHE_PATH+x}" ]]; then
+  shard_transpiler_cache="$(mktemp -d -t ocx-bun-transpiler-cache.XXXXXX)"
+  trap 'rm -rf -- "$shard_transpiler_cache"' EXIT
+  export BUN_RUNTIME_TRANSPILER_CACHE_PATH="$shard_transpiler_cache"
+fi
+
 assignment_file="$(mktemp -t ocx-bun-test-shards.XXXXXX)"
 printf '%s\n' "${GENERAL_FILES[@]}" \
   | awk -F '\t' -v table="$durations_source" -v fallback="$FALLBACK_MS" '
