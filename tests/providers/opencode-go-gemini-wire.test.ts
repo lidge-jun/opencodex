@@ -17,6 +17,7 @@ const ENDPOINT = `https://opencode.ai/inference/go/v1/models/${MODEL}`;
 const BASES = ["https://opencode.ai/zen/go/v1", "https://opencode.ai/inference/go/v1"];
 const SIGNATURE = "synthetic-gemini-thought-signature-for-tool-continuation";
 
+/** Build a synthetic URL with embedded credentials to exercise the destination rejection. */
 function endpointWithUserInfo(): string {
   const url = new URL(BASES[0]!);
   url.username = "test";
@@ -24,6 +25,7 @@ function endpointWithUserInfo(): string {
   return url.href;
 }
 
+/** Seed the canonical Go fixture, with overrides for destination and authentication cases. */
 function go(overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig {
   return { ...providerConfigSeed(getProviderRegistryEntry("opencode-go")!), apiKey: "test-key", ...overrides };
 }

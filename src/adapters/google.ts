@@ -865,6 +865,7 @@ function invalidGoogleShapeEvent(
   };
 }
 
+/** Build Gemini transport and response parsing for AI Studio, Vertex, Cloud Code Assist or Go. */
 export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapter {
   const toolSchemaPolicy = provider.googleToolSchemaPolicy ?? "compatible";
   const toolSchemaProfile = {

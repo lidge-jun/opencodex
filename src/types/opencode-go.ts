@@ -22,6 +22,7 @@ export function isOpenCodeGoGeminiDestination(provider: OpenCodeGoDestination | 
   }
 }
 
+/** Return the fixed Gemini endpoint only for the exact model and an eligible Go destination. */
 export function openCodeGoGeminiEndpoint(provider: OpenCodeGoDestination, modelId: string): string | undefined {
   return modelId === OPENCODE_GO_GEMINI_MODEL && isOpenCodeGoGeminiDestination(provider)
     ? `https://opencode.ai/inference/go/v1/models/${OPENCODE_GO_GEMINI_MODEL}`
