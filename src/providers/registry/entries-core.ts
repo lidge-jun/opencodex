@@ -825,6 +825,8 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
   },
   {
     id: "opencode-go", label: "opencode go", adapter: "openai-chat", baseUrl: "https://opencode.ai/zen/go/v1",
+    // Preserve custom URLs before the endpoint-scoped Gemini pin is evaluated (#7097).
+    preserveCustomDestination: true,
     authKind: "key", featured: true, dashboardUrl: "https://opencode.ai/auth", defaultModel: "kimi-k2.7-code",
     jawcodeBundle: "opencode-go", note: "GLM, DeepSeek, Kimi, Qwen, MiMo…",
     // Zen Go can close a Chat stream after a fully assembled function call without sending
@@ -909,6 +911,9 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     },
     modelReasoningEfforts: {
       "gpt-5.6-luna": OPENAI_API_GPT56_REASONING_EFFORTS,
+      // Gemini's native thinkingLevel ladder; higher Codex efforts clamp to high.
+      // https://ai.google.dev/gemini-api/docs/models/gemini-4-argon
+      "gemini-4-argon-contributor": ["low", "medium", "high"],
       "grok-4.6": ["low", "medium", "high", "xhigh"],
       "grok-4.7": ["low", "medium", "high", "xhigh"],
       "glm-5.3": ZAI_GLM_53_REASONING_EFFORTS,

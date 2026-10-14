@@ -1,3 +1,5 @@
+import { isOpenCodeGoGeminiDestination, OPENCODE_GO_GEMINI_MODEL, type OpenCodeGoDestination } from "./opencode-go";
+
 /**
  * Accepted values for the per-provider upstream HTTP-version pin (#1668). Shared by the
  * zod load schema, the management write boundary (POST/PATCH), and the fetch runtime, so
@@ -65,10 +67,13 @@ function anthropicWireModelsForProvider(providerName: string): ReadonlySet<strin
 }
 
 /** Detached provider-local hard-pin table for pure wire-policy resolution. */
-export function captureWireAdapterHardPins(providerName: string): Readonly<Record<string, string>> {
+export function captureWireAdapterHardPins(providerName: string, provider?: WirePinProvider): Readonly<Record<string, string>> {
   const models = anthropicWireModelsForProvider(providerName);
-  if (!models) return Object.freeze({});
-  return Object.freeze(Object.fromEntries([...models].map(modelId => [modelId, "anthropic"])));
+  return Object.freeze({
+    ...Object.fromEntries([...(models ?? [])].map(modelId => [modelId, "anthropic"])),
+    ...(providerName === "opencode-go" && isOpenCodeGoGeminiDestination(provider)
+      ? { [OPENCODE_GO_GEMINI_MODEL]: "google" } : {}),
+  });
 }
 
 interface WirePinPrefixRule {
@@ -98,9 +103,7 @@ const WIRE_ADAPTER_PIN_PREFIXES: Readonly<Record<string, WirePinPrefixRule>> = O
 });
 
 /** Just enough of a provider config to tell whether it still points at the pinned endpoint. */
-export interface WirePinProvider {
-  readonly baseUrl?: unknown;
-}
+export interface WirePinProvider extends OpenCodeGoDestination {}
 
 function normalizedEndpoint(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
@@ -148,12 +151,12 @@ function prefixedWireAdapter(providerName: string, modelId: string, provider: Wi
  * adapter" would pass on the first pass and then let the override win on the second.
  */
 export function isWirePinnedModel(providerName: string, modelId: string, provider?: WirePinProvider): boolean {
-  return (anthropicWireModelsForProvider(providerName)?.has(modelId) ?? false)
-    || prefixedWireAdapter(providerName, modelId, provider) !== undefined;
+  return pinnedWireAdapter(providerName, modelId, provider) !== undefined;
 }
 
 /** The wire a pinned model must use, or undefined when the model is not pinned. */
 export function pinnedWireAdapter(providerName: string, modelId: string, provider?: WirePinProvider): string | undefined {
+  if (providerName === "opencode-go" && modelId === OPENCODE_GO_GEMINI_MODEL && isOpenCodeGoGeminiDestination(provider)) return "google";
   return anthropicWireModelsForProvider(providerName)?.has(modelId)
     ? "anthropic"
     : prefixedWireAdapter(providerName, modelId, provider);

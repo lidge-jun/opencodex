@@ -60,7 +60,7 @@ function candidateModelIds(name: string, provider: Readonly<OcxProviderConfig>):
   };
   for (const model of Object.keys(provider.modelAdapters ?? {})) add(model);
   for (const model of Object.keys(registry?.modelWireDefaults ?? {})) add(model);
-  for (const model of Object.keys(captureWireAdapterHardPins(name))) add(model);
+  for (const model of Object.keys(captureWireAdapterHardPins(name, provider))) add(model);
   add(provider.defaultModel);
   for (const model of provider.models ?? []) add(model);
   return [...ids].sort((left, right) => left.localeCompare(right));
