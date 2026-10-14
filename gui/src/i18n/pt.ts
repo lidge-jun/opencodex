@@ -512,7 +512,7 @@ export const pt: Record<TKey, string> = {
   "compactionRetained.scope": "Aplica-se apenas a resumos em texto simples escritos pelo opencodex ou pelo Codex. Contexto como AGENTS.md e o ambiente é mantido, e os turnos de compactação continuam recebendo o histórico completo.",
   "compactionRetained.enabled": "As requisições retidas agora são omitidas após a compactação.",
   "compactionRetained.disabled": "As requisições retidas voltam a ser enviadas após a compactação.",
-  "compactionRetained.saveFailed": "Não foi possível salvar. A configuração anterior continua ativa.",
+  "compactionRetained.saveFailed": "Não foi possível confirmar o salvamento. O botão agora mostra a configuração salva.",
   "compactionRetained.loadFailed": "Não foi possível carregar esta configuração.",
   "memoryModels.title": "Roteamento de memória",
   "memoryModels.description": "O Codex grava memórias após o término de uma sessão. Escolha um modelo para cada fase ou mantenha a rota existente.",

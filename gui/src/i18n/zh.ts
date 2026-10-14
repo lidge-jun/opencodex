@@ -494,7 +494,7 @@ export const zh: Record<TKey, string> = {
   "compactionRetained.scope": "仅适用于 opencodex 或 Codex 写入的纯文本摘要。AGENTS.md 和环境等上下文会保留，压缩轮次仍会收到完整历史。",
   "compactionRetained.enabled": "压缩后现在会省略保留的请求。",
   "compactionRetained.disabled": "压缩后会重新发送保留的请求。",
-  "compactionRetained.saveFailed": "保存失败。之前的设置仍然有效。",
+  "compactionRetained.saveFailed": "无法确认是否已保存。开关现在显示已存储的设置。",
   "compactionRetained.loadFailed": "无法加载此设置。",
   "memoryModels.title": "记忆路由",
   "memoryModels.description": "会话结束后，Codex 会在后台写入记忆。为每个阶段选择模型，或保留现有路由。",

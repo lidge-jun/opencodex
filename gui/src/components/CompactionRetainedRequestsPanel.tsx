@@ -57,6 +57,7 @@ export default function CompactionRetainedRequestsPanel({ apiBase }: { apiBase: 
     // Optimistic, then reconciled with what the server actually stored.
     setEnabled(requested);
     const bounded = createBoundedFetch(15_000);
+    let outcomeUnknown = false;
     try {
       const res = await fetch(`${apiBase}/api/settings`, {
         method: "PUT",
@@ -70,14 +71,17 @@ export default function CompactionRetainedRequestsPanel({ apiBase }: { apiBase: 
       setEnabled(confirmed);
       setFeedback({ tone: "ok", message: t(confirmed ? "compactionRetained.enabled" : "compactionRetained.disabled") });
     } catch {
-      setEnabled(!requested);
+      // A timeout or error response does not prove the server kept the old value, so the
+      // switch is reconciled with a fresh read below instead of being flipped back blindly.
+      outcomeUnknown = true;
       setFeedback({ tone: "err", message: t("compactionRetained.saveFailed") });
     } finally {
       bounded.clear();
       savingRef.current = false;
+      if (outcomeUnknown) await load();
       setSaving(false);
     }
-  }, [apiBase, enabled, hydrated, loadError, t]);
+  }, [apiBase, enabled, hydrated, load, loadError, t]);
 
   const controlsDisabled = saving || !hydrated || loadError;
 

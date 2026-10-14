@@ -18,6 +18,7 @@
  * - a compaction (summarizer) turn is never touched, because it must see the whole history.
  */
 import { SUMMARY_PREFIX } from "./compaction";
+import { previousResponseReplayPrefixLength, shrinkPreviousResponseReplayPrefix } from "./state";
 
 type InputRecord = Record<string, unknown>;
 
@@ -77,4 +78,19 @@ export function dropRequestsRetainedBeforeCheckpoint(input: unknown): RetainedRe
   if (removedIndices.length === 0) return null;
   const removed = new Set(removedIndices);
   return { input: input.filter((_, index) => !removed.has(index)), removedIndices };
+}
+
+/**
+ * Applies the drop to a raw request body in place. When the input starts with items replayed from
+ * previous_response_id state, the recorded replay prefix shrinks by the removals inside it, so the
+ * parser's prefix boundary still points at the first client-carried item. True when items were removed.
+ */
+export function dropRetainedRequestsInBody(body: unknown): boolean {
+  if (!isRecord(body)) return false;
+  const dropped = dropRequestsRetainedBeforeCheckpoint(body.input);
+  if (!dropped) return false;
+  const prefixLength = previousResponseReplayPrefixLength(body);
+  body.input = dropped.input;
+  shrinkPreviousResponseReplayPrefix(body, dropped.removedIndices.filter(index => index < prefixLength).length);
+  return true;
 }

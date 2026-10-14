@@ -4,12 +4,23 @@
  * those requests are removed from later turns on every route. Construction evidence only: these
  * cases pin what reaches the wire, not how a model behaves.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { SUMMARY_PREFIX, encodeCompactionSummary } from "../../src/responses/compaction";
-import { dropRequestsRetainedBeforeCheckpoint } from "../../src/responses/compaction-retained-requests";
+import { dropRequestsRetainedBeforeCheckpoint, dropRetainedRequestsInBody } from "../../src/responses/compaction-retained-requests";
+import {
+  clearResponseStateForTests,
+  expandPreviousResponseInput,
+  previousResponseReplayPrefixLength,
+  rememberResponseState,
+  shrinkPreviousResponseReplayPrefix,
+} from "../../src/responses/state";
 import { handleResponses } from "../../src/server/responses";
 import type { OcxConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const user = (text: string) => ({ type: "message", role: "user", content: [{ type: "input_text", text }] });
 const OLD_A = "Inspect example.txt and tell me whether it is readable.";
@@ -57,6 +68,56 @@ describe("dropRequestsRetainedBeforeCheckpoint", () => {
     expect(dropRequestsRetainedBeforeCheckpoint([user(ENV), user(CHECKPOINT), user(LATER)])).toBeNull();
     expect(dropRequestsRetainedBeforeCheckpoint([user(CHECKPOINT), user(LATER)])).toBeNull();
     expect(dropRequestsRetainedBeforeCheckpoint("plain string input")).toBeNull();
+  });
+});
+
+describe("dropRetainedRequestsInBody keeps the previous_response_id replay prefix aligned", () => {
+  let home: string;
+  let priorHome: string | undefined;
+  beforeEach(() => {
+    priorHome = process.env["OPENCODEX_HOME"];
+    home = mkdtempSync(join(tmpdir(), "ocx-retained-prefix-"));
+    process.env["OPENCODEX_HOME"] = home;
+    clearResponseStateForTests();
+  });
+  afterEach(() => {
+    clearResponseStateForTests();
+    removeTreeWithRetry(home);
+    if (priorHome === undefined) delete process.env["OPENCODEX_HOME"];
+    else process.env["OPENCODEX_HOME"] = priorHome;
+  });
+
+  test("shrinks the prefix by the removals inside it and ignores removals after it", () => {
+    const answer = { type: "message", id: "msg_resp_prefix", role: "assistant", content: "done" };
+    rememberResponseState({ model: "m", input: [user(OLD_A)], store: true }, { id: "resp_prefix", status: "completed", output: [answer] });
+    const body = expandPreviousResponseInput({
+      model: "m",
+      previous_response_id: "resp_prefix",
+      input: [user(OLD_B), user(CHECKPOINT), user(LATER)],
+    }) as { input: unknown[] };
+    // Replayed prefix: [OLD_A, answer]; client-carried: [OLD_B, CHECKPOINT, LATER].
+    expect(previousResponseReplayPrefixLength(body)).toBe(2);
+
+    expect(dropRetainedRequestsInBody(body)).toBe(true);
+    // OLD_A (index 0) sat inside the prefix, OLD_B (index 2) after it: the prefix loses one item.
+    expect(texts(body.input)).toEqual(["done", CHECKPOINT, LATER]);
+    expect(previousResponseReplayPrefixLength(body)).toBe(1);
+  });
+
+  test("leaves a body without a replay prefix at zero and clamps an over-large shrink at zero", () => {
+    const plain = { input: [user(OLD_A), user(CHECKPOINT), user(LATER)] };
+    expect(dropRetainedRequestsInBody(plain)).toBe(true);
+    expect(previousResponseReplayPrefixLength(plain)).toBe(0);
+
+    rememberResponseState({ model: "m", input: [user(OLD_A)], store: true }, {
+      id: "resp_clamp",
+      status: "completed",
+      output: [{ type: "message", id: "msg_resp_clamp", role: "assistant", content: "done" }],
+    });
+    const body = expandPreviousResponseInput({ model: "m", previous_response_id: "resp_clamp", input: [user(LATER)] });
+    expect(previousResponseReplayPrefixLength(body)).toBe(2);
+    shrinkPreviousResponseReplayPrefix(body, 5);
+    expect(previousResponseReplayPrefixLength(body)).toBe(0);
   });
 });
 

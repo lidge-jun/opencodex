@@ -498,7 +498,7 @@ export const fr: Record<TKey, string> = {
   "compactionRetained.scope": "S’applique uniquement aux résumés en texte brut écrits par opencodex ou Codex. Le contexte comme AGENTS.md et l’environnement est conservé, et les tours de compaction reçoivent toujours l’historique complet.",
   "compactionRetained.enabled": "Les requêtes conservées sont désormais omises après la compaction.",
   "compactionRetained.disabled": "Les requêtes conservées sont de nouveau envoyées après la compaction.",
-  "compactionRetained.saveFailed": "Échec de l’enregistrement. Le paramètre précédent reste actif.",
+  "compactionRetained.saveFailed": "Impossible de confirmer l’enregistrement. Le commutateur affiche maintenant le paramètre enregistré.",
   "compactionRetained.loadFailed": "Impossible de charger ce paramètre.",
   "memoryModels.title": "Routage de la mémoire",
   "memoryModels.description": "Codex écrit les mémoires en arrière-plan après la session. Choisissez un modèle pour chaque étape ou conservez son routage actuel.",

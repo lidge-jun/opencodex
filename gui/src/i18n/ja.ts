@@ -499,7 +499,7 @@ export const ja: Record<TKey, string> = {
   "compactionRetained.scope": "opencodex または Codex が書いたプレーンテキストの要約にのみ適用されます。AGENTS.md や環境などのコンテキストは保持され、圧縮ターンには引き続き完全な履歴が送られます。",
   "compactionRetained.enabled": "圧縮後、保持されたリクエストを除外するようになりました。",
   "compactionRetained.disabled": "圧縮後、保持されたリクエストを再び送信します。",
-  "compactionRetained.saveFailed": "保存できませんでした。以前の設定が有効なままです。",
+  "compactionRetained.saveFailed": "保存を確認できませんでした。スイッチには保存済みの設定が表示されています。",
   "compactionRetained.loadFailed": "この設定を読み込めませんでした。",
   "memoryModels.title": "メモリルーティング",
   "memoryModels.description": "Codex はセッション終了後にバックグラウンドでメモリを書き込みます。各段階のモデルを選ぶか、現在のルートを維持します。",

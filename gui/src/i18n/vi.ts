@@ -498,7 +498,7 @@ export const vi: Record<TKey, string> = {
   "compactionRetained.scope": "Chỉ áp dụng cho bản tóm tắt dạng văn bản thuần do opencodex hoặc Codex tạo. Ngữ cảnh như AGENTS.md và môi trường vẫn được giữ, và các lượt nén vẫn nhận toàn bộ lịch sử.",
   "compactionRetained.enabled": "Các yêu cầu được giữ lại giờ sẽ bị bỏ sau khi nén.",
   "compactionRetained.disabled": "Các yêu cầu được giữ lại sẽ được gửi lại sau khi nén.",
-  "compactionRetained.saveFailed": "Không thể lưu. Thiết lập trước đó vẫn đang áp dụng.",
+  "compactionRetained.saveFailed": "Không thể xác nhận việc lưu. Công tắc hiện hiển thị thiết lập đã lưu.",
   "compactionRetained.loadFailed": "Không thể tải cài đặt này.",
   "memoryModels.title": "Định tuyến bộ nhớ",
   "memoryModels.description": "Codex ghi bộ nhớ ở chế độ nền sau khi phiên kết thúc. Chọn mô hình cho từng giai đoạn hoặc giữ tuyến hiện tại.",

@@ -494,7 +494,7 @@ export const ko: Record<TKey, string> = {
   "compactionRetained.scope": "opencodex 또는 Codex가 작성한 일반 텍스트 요약에만 적용됩니다. AGENTS.md와 환경 같은 컨텍스트는 유지되고, 압축 턴에는 계속 전체 기록이 전달됩니다.",
   "compactionRetained.enabled": "이제 압축 후 보존된 요청을 제외합니다.",
   "compactionRetained.disabled": "압축 후 보존된 요청을 다시 보냅니다.",
-  "compactionRetained.saveFailed": "저장하지 못했습니다. 이전 설정이 계속 적용됩니다.",
+  "compactionRetained.saveFailed": "저장을 확인하지 못했습니다. 스위치에 현재 저장된 설정이 표시됩니다.",
   "compactionRetained.loadFailed": "이 설정을 불러올 수 없습니다.",
   "memoryModels.title": "메모리 라우팅",
   "memoryModels.description": "Codex는 세션이 끝난 뒤 백그라운드에서 메모리를 작성합니다. 각 단계의 모델을 고르거나 기존 경로를 유지하세요.",

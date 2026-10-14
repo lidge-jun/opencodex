@@ -14,6 +14,7 @@ let container: HTMLDivElement;
 let stored: boolean;
 let failLoad: boolean;
 let failSave: boolean;
+let storeBeforeFailing: boolean;
 let writes: unknown[];
 
 beforeEach(() => {
@@ -24,11 +25,12 @@ beforeEach(() => {
   }
   Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
   win.localStorage.setItem("ocx-lang", "en");
-  stored = false; failLoad = false; failSave = false; writes = [];
+  stored = false; failLoad = false; failSave = false; storeBeforeFailing = false; writes = [];
   Object.defineProperty(globalThis, "fetch", { configurable: true, writable: true, value: async (_input: unknown, init?: RequestInit) => {
     if (init?.method === "PUT") {
       const body = JSON.parse(String(init.body));
       writes.push(body);
+      if (failSave && storeBeforeFailing) stored = body.compactionDropRetainedRequests === true;
       if (failSave) return Response.json({ error: "fixture failure" }, { status: 500 });
       stored = body.compactionDropRetainedRequests === true;
     } else if (failLoad) return Response.json({ error: "unavailable" }, { status: 503 });
@@ -73,12 +75,23 @@ test("renders the stored state as an accessible switch and writes only its own f
   expect(toggle().getAttribute("aria-pressed")).toBe("false");
 });
 
-test("a failed save reverts the switch and reports the error", async () => {
+test("a failed save re-reads the stored value when the server kept the old one", async () => {
   failSave = true;
   await render();
   await click(toggle());
   expect(toggle().getAttribute("aria-pressed")).toBe("false");
-  expect(container.querySelector("[role=alert]")?.textContent).toBe("Could not save. The previous setting is still active.");
+  expect(toggle().disabled).toBe(false);
+  expect(container.querySelector("[role=alert]")?.textContent).toBe("Could not confirm the save. The switch now shows the stored setting.");
+});
+
+test("a failed save re-reads the stored value when the server applied it anyway", async () => {
+  failSave = true;
+  storeBeforeFailing = true;
+  await render();
+  await click(toggle());
+  expect(stored).toBe(true);
+  expect(toggle().getAttribute("aria-pressed")).toBe("true");
+  expect(container.querySelector("[role=alert]")?.textContent).toBe("Could not confirm the save. The switch now shows the stored setting.");
 });
 
 test("a failed load keeps the switch disabled and offers a retry", async () => {
