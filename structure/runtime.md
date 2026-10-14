@@ -208,7 +208,7 @@ is reported as such rather than called foreign, because an identity probe cannot
 foreign server from an unreachable one. An explicit `--port` still never hops — it waits for the
 pin through `src/server/port-reclaim.ts` — and a configured `port: 0` still means "ask the OS". A restart replacement that finds its own draining parent waits for it instead ([restart handoff](ops/service-and-sidecars.md#restart-handoff)). During drain, `src/server/index.ts` answers new data-plane work with HTTP 503 JSON `server_restarting`, `Retry-After: 5`, and receiving-listener CORS; the same handoff section owns that response contract.
 
-Every `startServer` invocation acquires the `src/lib/spend-ledger-owner.ts` SQLite writer lease
+CLI port selection in `src/cli/auxiliary-listener-preflight.ts` first probes explicitly ported auxiliary listeners on IPv4 loopback. A failed bind reports `AuxiliaryListenerBindError` before public-port reclaim, spend-owner acquisition, or management-token publication can run their Windows ACL subprocesses. The port-less companion has no independent probe, and hub management ingress is probed only in the hub role. This early rejection does not reserve a socket: `startServer` retains the actual bind and failed-start rollback for a port taken after preflight. Every `startServer` invocation acquires the `src/lib/spend-ledger-owner.ts` SQLite writer lease
 for its resolved OpenCodex state directory before loading configuration or binding a listener.
 References share one lease only inside one process and one directory; a different directory in
 that process is refused while the lease is held, because the shared ledger is process-wide. The
