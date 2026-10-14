@@ -28,9 +28,9 @@
  * Identity is the same rule enrichment uses, read from the same helper: the registry must still
  * own the row (`providerMatchesRegistryTransport`, the check `enrichProviderFromRegistry` makes
  * before it writes registry metadata) and the row must still be on the entry's adapter.
- * `opencode-go` is an existing key preset without `preserveCustomDestination`, so the id alone
- * claims a row — exactly as it does for enrichment — while an entry that opts into destination
- * preservation narrows this projection for free.
+ * `opencode-go` opts into `preserveCustomDestination`, so this projection only repairs rows
+ * still pointing at its registry destination. Same-named custom endpoints keep their saved
+ * capabilities, just as they do during enrichment.
  *
  * Nothing here writes `modelCapabilities`. That is the dedicated per-model axis, it outranks
  * every source this file touches, and it is where a deliberate text-only override belongs

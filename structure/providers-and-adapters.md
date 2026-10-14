@@ -397,10 +397,10 @@ stripped). The paired modality declaration is the guard in both cases, which is 
 without one is left alone — that row is either a half-finished repair or a deliberate operator
 entry, and the projection does not guess which. The row must also still be the registry's own:
 identity resolves through `providerMatchesRegistryTransport`, the rule `enrichProviderFromRegistry`
-applies before it writes registry metadata, plus the entry's adapter. `opencode-go` is a pinned
-key preset without `preserveCustomDestination`, so its id alone claims a row — exactly as it does
-for enrichment — and an entry that opts into destination preservation narrows the projection with
-it. `modelCapabilities` is never written: it is the
+applies before it writes registry metadata, plus the entry's adapter. `opencode-go` opts into
+`preserveCustomDestination`, so only rows still pointing at its registry destination are repaired;
+same-named custom endpoints keep their saved capabilities, just as they do during enrichment.
+`modelCapabilities` is never written: it is the
 axis that outranks every source here, so it is where a deliberate text-only override belongs
 (`ocx provider edit <provider> --model <id> --text-only` writes it) and the one declaration a
 restart cannot take back.
