@@ -81,7 +81,7 @@ test("a failed save re-reads the stored value when the server kept the old one",
   await click(toggle());
   expect(toggle().getAttribute("aria-pressed")).toBe("false");
   expect(toggle().disabled).toBe(false);
-  expect(container.querySelector("[role=alert]")?.textContent).toBe("Could not confirm the save. The switch now shows the stored setting.");
+  expect(container.querySelector("[role=alert]")?.textContent).toBe("Could not confirm whether the setting was saved.");
 });
 
 test("a failed save re-reads the stored value when the server applied it anyway", async () => {
@@ -91,7 +91,23 @@ test("a failed save re-reads the stored value when the server applied it anyway"
   await click(toggle());
   expect(stored).toBe(true);
   expect(toggle().getAttribute("aria-pressed")).toBe("true");
-  expect(container.querySelector("[role=alert]")?.textContent).toBe("Could not confirm the save. The switch now shows the stored setting.");
+  expect(container.querySelector("[role=alert]")?.textContent).toBe("Could not confirm whether the setting was saved.");
+});
+
+test("an unconfirmed save whose re-read also fails locks the switch and offers a retry", async () => {
+  await render();
+  failSave = true;
+  failLoad = true;
+  await click(toggle());
+  expect(toggle().disabled).toBe(true);
+  const alerts = [...container.querySelectorAll("[role=alert]")].map(node => node.textContent ?? "");
+  expect(alerts.some(text => text.includes("Could not load this setting."))).toBe(true);
+  expect(alerts).toContain("Could not confirm whether the setting was saved.");
+  failSave = false;
+  failLoad = false;
+  await click(container.querySelector("[role=alert] button") as HTMLButtonElement);
+  expect(toggle().disabled).toBe(false);
+  expect(toggle().getAttribute("aria-pressed")).toBe("false");
 });
 
 test("a failed load keeps the switch disabled and offers a retry", async () => {

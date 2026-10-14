@@ -500,7 +500,7 @@ export const tr: Record<TKey, string> = {
   "compactionRetained.scope": "Yalnızca opencodex veya Codex tarafından yazılan düz metin özetler için geçerlidir. AGENTS.md ve ortam gibi bağlam korunur, özetleme turları ise tam geçmişi almaya devam eder.",
   "compactionRetained.enabled": "Korunan istekler artık özetlemeden sonra çıkarılıyor.",
   "compactionRetained.disabled": "Korunan istekler özetlemeden sonra yeniden gönderiliyor.",
-  "compactionRetained.saveFailed": "Kayıt doğrulanamadı. Anahtar artık kayıtlı ayarı gösteriyor.",
+  "compactionRetained.saveFailed": "Ayarın kaydedilip kaydedilmediği doğrulanamadı.",
   "compactionRetained.loadFailed": "Bu ayar yüklenemedi.",
   "memoryModels.title": "Bellek yönlendirmesi",
   "memoryModels.description": "Codex, oturum bittikten sonra belleği arka planda yazar. Her aşama için model seçin veya mevcut yönlendirmeyi koruyun.",

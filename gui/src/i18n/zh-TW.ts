@@ -375,7 +375,7 @@ export const zhTW: Record<TKey, string> = {
   "compactionRetained.scope": "僅適用於 opencodex 或 Codex 寫入的純文字摘要。AGENTS.md 和環境等上下文會保留，壓縮輪次仍會收到完整歷史。",
   "compactionRetained.enabled": "壓縮後現在會省略保留的請求。",
   "compactionRetained.disabled": "壓縮後會重新傳送保留的請求。",
-  "compactionRetained.saveFailed": "無法確認是否已儲存。開關現在顯示已儲存的設定。",
+  "compactionRetained.saveFailed": "無法確認設定是否已儲存。",
   "compactionRetained.loadFailed": "無法載入此設定。",
   "memoryModels.title": "記憶路由",
   "memoryModels.description": "工作階段結束後，Codex 會在背景寫入記憶。為每個階段選擇模型，或保留現有路由。",

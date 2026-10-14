@@ -508,7 +508,7 @@ export const en = {
   "compactionRetained.scope": "Applies only to plain-text summaries written by opencodex or Codex. Context such as AGENTS.md and the environment stays, and compaction turns still receive the full history.",
   "compactionRetained.enabled": "Retained requests are now left out after compaction.",
   "compactionRetained.disabled": "Retained requests are sent again after compaction.",
-  "compactionRetained.saveFailed": "Could not confirm the save. The switch now shows the stored setting.",
+  "compactionRetained.saveFailed": "Could not confirm whether the setting was saved.",
   "compactionRetained.loadFailed": "Could not load this setting.",
   "memoryModels.title": "Memory routing",
   "memoryModels.description": "Codex writes memories after a session ends. Choose a model for either phase, or keep its existing route.",

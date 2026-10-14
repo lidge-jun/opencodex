@@ -499,7 +499,7 @@ export const ru: Record<TKey, string> = {
   "compactionRetained.scope": "Применяется только к текстовым сводкам, созданным opencodex или Codex. Контекст, например AGENTS.md и окружение, сохраняется, а ходы сжатия по-прежнему получают полную историю.",
   "compactionRetained.enabled": "Сохранённые запросы теперь исключаются после сжатия.",
   "compactionRetained.disabled": "Сохранённые запросы снова отправляются после сжатия.",
-  "compactionRetained.saveFailed": "Не удалось подтвердить сохранение. Переключатель теперь показывает сохранённую настройку.",
+  "compactionRetained.saveFailed": "Не удалось подтвердить, сохранена ли настройка.",
   "compactionRetained.loadFailed": "Не удалось загрузить эту настройку.",
   "memoryModels.title": "Маршрутизация памяти",
   "memoryModels.description": "Codex пишет память в фоне после завершения сессии. Выберите модель для каждого этапа или сохраните текущий маршрут.",

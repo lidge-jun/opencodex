@@ -490,7 +490,7 @@ export const de: Record<TKey, string> = {
   "compactionRetained.scope": "Gilt nur für Klartext-Zusammenfassungen von opencodex oder Codex. Kontext wie AGENTS.md und die Umgebung bleibt erhalten, und Komprimierungs-Turns erhalten weiterhin den vollständigen Verlauf.",
   "compactionRetained.enabled": "Beibehaltene Anfragen werden nach der Komprimierung jetzt ausgelassen.",
   "compactionRetained.disabled": "Beibehaltene Anfragen werden nach der Komprimierung wieder gesendet.",
-  "compactionRetained.saveFailed": "Speichern konnte nicht bestätigt werden. Der Schalter zeigt jetzt die gespeicherte Einstellung.",
+  "compactionRetained.saveFailed": "Ob die Einstellung gespeichert wurde, ließ sich nicht bestätigen.",
   "compactionRetained.loadFailed": "Diese Einstellung konnte nicht geladen werden.",
   "memoryModels.title": "Memory-Routing",
   "memoryModels.description": "Codex schreibt Memories nach einer Sitzung im Hintergrund. Wähle für jede Phase ein Modell oder behalte die bestehende Route bei.",
