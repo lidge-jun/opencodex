@@ -465,7 +465,7 @@ describe("native Codex pool compaction", () => {
         new Headers({ authorization: "Bearer main-token" }),
         config,
         "pool",
-        { modelId: "gpt-5.6-sol" },
+        { modelId: "gpt-5.6-sol", primeCodexPoolQuotas: async () => {} },
       );
       expect(nextProbe).toMatchObject({ probeQuotaScope: "shared" });
       releaseCodexAuthContextProbeLease(nextProbe);
@@ -535,7 +535,7 @@ describe("native Codex pool compaction", () => {
         new Headers({ authorization: "Bearer main-token" }),
         config,
         "pool",
-        { modelId: "gpt-5.6-sol" },
+        { modelId: "gpt-5.6-sol", primeCodexPoolQuotas: async () => {} },
       );
       expect(nextProbe).toMatchObject({ probeQuotaScope: "shared" });
       releaseCodexAuthContextProbeLease(nextProbe);
