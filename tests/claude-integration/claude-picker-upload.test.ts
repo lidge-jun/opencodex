@@ -378,3 +378,78 @@ for (const protocol of ["h1", "h2"] as const) {
     } finally { await wait(f.close()); }
   });
 }
+
+
+for (const protocol of ["h1", "h2"] as const) {
+  bounded(`${protocol} idle upload releases admission without any upstream timeout`, async wait => {
+    const entered = Promise.withResolvers<void>();
+    const upstreamClosed = Promise.withResolvers<void>();
+    const f = await fixture((req, res) => {
+      req.on("error", () => res.destroy()); req.resume();
+      if (req.url === "/idle") {
+        req.once("data", () => entered.resolve());
+        req.once("close", () => upstreamClosed.resolve());
+        // No upstream response, socket timeout, or forced close: only the relay can release it.
+      } else res.end("ordinary");
+    }, { uploadIdleMs: 120, maxActiveUpstreams: 1 });
+    try {
+      const session = f.h2();
+      const upload = protocol === "h2"
+        ? session.request({ ":method": "POST", ":path": "/idle", ":authority": "claude.ai" })
+        : f.h1("/idle", "POST", { "Content-Length": "1000" });
+      const closed = protocol === "h2" ? observeClose(upload) : observeSocketClose(upload as ClientRequest);
+      upload.write("x"); await wait(entered.promise);
+      expect((await wait(normalH2(session))).status).toBe(503);
+      await wait(closed); await wait(upstreamClosed.promise);
+      expect(await wait(normalH2(session))).toEqual({ status: 200, text: "ordinary" });
+      expect(f.logs.filter(line => line === "picker upload idle timeout")).toHaveLength(1);
+    } finally { await wait(f.close()); }
+  });
+
+  bounded(`${protocol} progressing upload outlives the idle interval and preserves every byte`, async wait => {
+    let received = "";
+    const entered = Promise.withResolvers<void>();
+    const f = await fixture((req, res) => {
+      req.on("error", () => res.destroy());
+      req.on("data", chunk => { received += chunk.toString(); entered.resolve(); });
+      req.once("end", () => res.end(received));
+    }, { uploadIdleMs: 160 });
+    try {
+      const upload = protocol === "h2"
+        ? f.h2().request({ ":method": "POST", ":path": "/progress", ":authority": "claude.ai" })
+        : f.h1("/progress", "POST", { "Content-Length": "13" });
+      const result = protocol === "h2" ? h2Result(upload as ClientHttp2Stream) : h1Result(upload as ClientRequest);
+      upload.write("x"); await wait(entered.promise);
+      for (let i = 0; i < 8; i++) { await wait(Bun.sleep(40)); upload.write("x"); }
+      upload.end("tail");
+      expect(await wait(result)).toEqual({ status: 200, text: "xxxxxxxxxtail" });
+      expect(f.logs).not.toContain("picker upload idle timeout");
+    } finally { await wait(f.close()); }
+  });
+
+  for (const completed of [true, false]) {
+    bounded(`${protocol} ${completed ? "completed upload" : "early response"} leaves long-lived responses outside the idle guard`, async wait => {
+      const answered = Promise.withResolvers<void>();
+      let response: ServerResponse | undefined;
+      const f = await fixture((req, res) => {
+        req.on("error", () => res.destroy()); req.resume();
+        const begin = () => {
+          response = res; res.writeHead(200, { "Content-Type": "text/event-stream" });
+          res.write("data: first\n\n"); answered.resolve();
+        };
+        if (completed) req.once("end", begin); else req.once("data", begin);
+      }, { uploadIdleMs: 80 });
+      try {
+        const upload = protocol === "h2"
+          ? f.h2().request({ ":method": "POST", ":path": "/events", ":authority": "claude.ai" })
+          : f.h1("/events", "POST", { "Content-Length": completed ? "1" : "1000" });
+        const result = protocol === "h2" ? h2Result(upload as ClientHttp2Stream) : h1Result(upload as ClientRequest);
+        if (completed) upload.end("x"); else upload.write("x");
+        await wait(answered.promise); await wait(Bun.sleep(240));
+        response!.end("data: last\n\n");
+        expect(await wait(result)).toEqual({ status: 200, text: "data: first\n\ndata: last\n\n" });
+        expect(f.logs).not.toContain("picker upload idle timeout");
+      } finally { await wait(f.close()); }
+    });
+  }
+}

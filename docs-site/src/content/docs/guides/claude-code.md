@@ -349,6 +349,8 @@ applies to it as well. Desktop and CLI catalog rewrites share bounded row and me
 if adding routed models would exceed a limit, OpenCodex returns the original Anthropic catalog
 unchanged rather than publishing a partial list.
 
+Before the first upstream response, a picker upload that makes no progress for 60 seconds is closed. This idle timer pauses when the upstream applies backpressure and is removed when the upload completes or the upstream first responds. There is no absolute upload-duration limit: progressing large attachments and long-lived response streams remain supported.
+
 ### Use opencodex models from the Desktop Code tab (first-party bindings)
 
 In first-party mode the Code tab's model picker belongs to claude.ai: its rows (Opus 5.5,
