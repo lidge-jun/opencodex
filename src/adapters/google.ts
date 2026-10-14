@@ -947,6 +947,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         }
       : {}),
 
+    /** Compile an admitted request into the selected Gemini endpoint, body and authentication. */
     async buildRequest(parsed: OcxParsedRequest) {
       // Structured-output admission runs FIRST, before messagesToGeminiFormat writes
       // lastInjectedCallIds/lastReasoningReplayScope: a refused request must not leave

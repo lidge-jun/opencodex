@@ -126,6 +126,7 @@ describe("OpenCode Go Gemini Responses dispatch", () => {
           : Response.json(body);
       }) as typeof fetch;
       const config = { providers: { "opencode-go": go({ baseUrl }) } } as OcxConfig;
+      /** Dispatch one turn and return the completed Responses object from JSON or SSE. */
       const send = async (input: unknown[]) => {
         const response = await handleResponses(new Request("http://localhost/v1/responses", {
           method: "POST", headers: { "content-type": "application/json", "thread-id": "gemini-fixture-thread" },
