@@ -38,7 +38,11 @@ export function hardenConfigDir(): void {
   // have changed the protected directory used by the test-home boundary.
   assertNotRealHomeUnderTest(dir);
   if (!existsSync(dir)) return;
-  try { chmodSync(dir, 0o700); } catch { /* best-effort */ }
+  // Windows privacy is enforced by NTFS ACLs. chmod only changes DOS attributes there;
+  // doing it before the ACL lookup can invalidate its ctime-based successful observation.
+  if (!windowsSecretAclApplies()) {
+    try { chmodSync(dir, 0o700); } catch { /* best-effort */ }
+  }
   if (windowsSecretAclApplies() && !configDirHardeningFlights.has(dir)) {
     // This is an optional read-path harden. Waiting synchronously here used to stop the Bun
     // event loop (including /healthz) for the full icacls timeout. Required mutation paths keep
