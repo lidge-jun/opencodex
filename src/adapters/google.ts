@@ -1210,7 +1210,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       const endpoint = goEndpoint ?? `${provider.baseUrl}/v1beta/models/${routedModelId}`;
       const url = `${endpoint}:${method}${streamParam}`;
       const apiKey = provider.apiKey?.trim();
-      if (!apiKey) throw new Error("google (AI Studio) requires a non-empty API key");
+      if (!apiKey) throw new Error(`${goEndpoint ? "OpenCode Go" : "google (AI Studio)"} requires a non-empty API key`);
       if (goEndpoint) {
         // Console inference documents Bearer auth. Send only the selected Go key.
         for (const name of Object.keys(headers)) {

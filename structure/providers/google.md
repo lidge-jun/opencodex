@@ -14,6 +14,7 @@ normalization so a same-named custom row cannot acquire this credential route.
 `https://opencode.ai/inference/go/v1/models/gemini-4-argon-contributor`, with
 `:generateContent` or `:streamGenerateContent?alt=sse`, using the selected key as Bearer
 authorization. The existing Go session helper adds affinity for the settled Google wire.
+An empty key fails locally with an OpenCode Go diagnostic; AI Studio keeps its own diagnostic.
 The preset declares Gemini's `low`/`medium`/`high` thinking-level ladder; higher requested
 Codex efforts clamp to `high` through the existing effort resolver.
 AI Studio, Vertex and Antigravity retain their own transport contracts. Mocked dispatch

@@ -85,6 +85,10 @@ describe("OpenCode Go Gemini wire (#7097)", () => {
     expect(request.url).toBe(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`);
     expect(new Headers(request.headers).get("x-goog-api-key")).toBe("studio-key");
     expect(new Headers(request.headers).has("authorization")).toBe(false);
+    await expect(withTestTranslatorBudget(createGoogleAdapter({
+      adapter: "google", baseUrl: "https://generativelanguage.googleapis.com", apiKey: " ",
+    })).buildRequest(parseRequest({ model: MODEL, input: "ping" })))
+      .rejects.toThrow("google (AI Studio) requires a non-empty API key");
   });
 
   test("Go normalizes endpoint spelling, owns its key header, and preserves an explicit session", async () => {
@@ -101,7 +105,7 @@ describe("OpenCode Go Gemini wire (#7097)", () => {
     expect(headers.has("x-goog-api-key")).toBe(false);
     expect(headers.get("x-opencode-session")).toBe("operator-session");
     await expect(withTestTranslatorBudget(createGoogleAdapter({ ...resolved, apiKey: " " }))
-      .buildRequest(parseRequest({ model: MODEL, input: "ping" }))).rejects.toThrow("non-empty API key");
+      .buildRequest(parseRequest({ model: MODEL, input: "ping" }))).rejects.toThrow("OpenCode Go requires a non-empty API key");
   });
 });
 
