@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { flushWindowsSecretAclReapsBeforeRemoval, hardenSecretDirAsync, windowsSecretAclApplies } from "../lib/windows-secret-acl";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import { isPassiveRead } from "../lib/passive-read";
+import { trackBackgroundWork } from "../lib/background-work";
 
 /**
  * Expand a leading `~` in user-supplied paths without interpreting shell
@@ -42,12 +43,14 @@ export function hardenConfigDir(): void {
     // This is an optional read-path harden. Waiting synchronously here used to stop the Bun
     // event loop (including /healthz) for the full icacls timeout. Required mutation paths keep
     // their own awaited/fail-closed hardening; ordinary config reads only start one soft flight.
-    const flight = hardenSecretDirAsync(dir, { required: false })
+    // Tracked: icacls holds the directory open, and a config write or removal that lands on
+    // it before the child exits fails with a sharing violation on Windows.
+    const flight = trackBackgroundWork("config-dir-acl-harden", hardenSecretDirAsync(dir, { required: false })
       .then(() => undefined)
       .catch(() => undefined)
       .finally(() => {
         if (configDirHardeningFlights.get(dir) === flight) configDirHardeningFlights.delete(dir);
-      });
+      }));
     configDirHardeningFlights.set(dir, flight);
   }
 }
