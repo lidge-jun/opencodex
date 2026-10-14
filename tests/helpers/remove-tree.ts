@@ -49,7 +49,12 @@ export function removeTreeWithRetry(
  */
 export async function removeTreeAfterBackgroundWork(path: string): Promise<void> {
   assertRemovalOutsideProtectedTrees(path);
-  await settleBackgroundWork({ timeoutMs: REMOVE_RETRY_BUDGET_MS });
+  const { settled, pending } = await settleBackgroundWork({ timeoutMs: REMOVE_RETRY_BUDGET_MS });
+  // Removing under a live writer either fails with a sharing violation or lets the writer
+  // recreate files after removal. Keep the tree and name the work instead.
+  if (!settled) {
+    throw new Error(`[test] not removing ${path}: in-process background work still running: ${pending.join(", ")}`);
+  }
   await flushWindowsSecretAclReapsBeforeRemoval(path);
   await removeTestTempTreeAsync(path);
 }

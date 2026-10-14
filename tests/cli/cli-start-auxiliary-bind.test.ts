@@ -72,11 +72,23 @@ test("auxiliary preflight leaves free sockets available for the actual bind", as
     unauthenticatedLoopbackListener: { enabled: true, port: loopbackPort },
     hub: { managementIngress: { enabled: true, port: managementPort } },
   });
-  const listeners = [loopbackPort, managementPort].map(port => Bun.serve({
-    hostname: "127.0.0.1", port, fetch: () => new Response("ok"),
-  }));
-  try { expect(listeners.map(server => server.port)).toEqual([loopbackPort, managementPort]); }
-  finally { await Promise.all(listeners.map(server => server.stop(true))); }
+  // Bind inside try: if another process takes the second port, the first server still stops.
+  const listeners: ReturnType<typeof Bun.serve>[] = [];
+  try {
+    for (const port of [loopbackPort, managementPort]) {
+      listeners.push(Bun.serve({ hostname: "127.0.0.1", port, fetch: () => new Response("ok") }));
+    }
+    expect(listeners.map(server => server.port)).toEqual([loopbackPort, managementPort]);
+  } finally { await Promise.all(listeners.map(server => server.stop(true))); }
+});
+
+test("auxiliary preflight rejects two listeners configured for one port", async () => {
+  const port = await findAvailablePort(0);
+  await expect(assertAuxiliaryListenerPortsAvailable({
+    port: 0, providers: {}, defaultProvider: "openai", runtimeRole: "hub",
+    unauthenticatedLoopbackListener: { enabled: true, port },
+    hub: { managementIngress: { enabled: true, port } },
+  })).rejects.toThrow(`hub.managementIngress at 127.0.0.1:${port}`);
 });
 
 test("auxiliary preflight ignores the companion, disabled listeners, and non-hub ingress", async () => {

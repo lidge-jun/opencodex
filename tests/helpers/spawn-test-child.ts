@@ -49,6 +49,7 @@ export function spawnTestChild(
     let pipesClosed = false;
     let exitCode: number | null = null;
     let signal: NodeJS.Signals | null = null;
+    let spawned = false;
     let deadline: ReturnType<typeof setTimeout> | undefined;
     let reap: ReturnType<typeof setTimeout> | undefined;
     const finish = () => {
@@ -91,8 +92,17 @@ export function spawnTestChild(
     child.stderr?.on("data", (chunk: Buffer) => capture(chunk, stderrChunks));
     child.stdout?.on("error", stop);
     child.stderr?.on("error", stop);
-    // The child was never started or died at launch; there is nothing to reap.
-    child.on("error", finish);
+    child.once("spawn", () => { spawned = true; });
+    // Before "spawn" the child never started (missing executable): report it as a failure
+    // rather than an empty result. After it, an error is a failed kill; the reap grace bounds that.
+    child.on("error", (error: Error) => {
+      if (settled) return;
+      if (spawned) { beginReapGrace(); return; }
+      settled = true;
+      clearTimeout(deadline);
+      clearTimeout(reap);
+      reject(new Error(`[test-child] the child could not be spawned: ${error.message}`, { cause: error }));
+    });
     child.once("exit", (code, exitSignal) => {
       reaped = true;
       exitCode = code;

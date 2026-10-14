@@ -234,7 +234,19 @@ function Stop-StartupHealthProbe([switch]$Shutdown) {
   if ($Shutdown) {
     # Shutdown alone may wait. Timeout ticks keep the child tracked until actual exit.
     try { [void]$script:startupProbeProcess.WaitForExit(500) } catch { $null = $_ }
-    Complete-StartupHealthProbe
+    $exited = $false
+    try { $exited = $script:startupProbeProcess.HasExited } catch { $null = $_ }
+    if ($exited) {
+      # Exit does not mean both pipe readers finished; give them the same bounded wait.
+      $readers = @($script:startupProbeOutputTask, $script:startupProbeErrorTask) | Where-Object { $null -ne $_ }
+      if ($readers.Count -gt 0) {
+        try { [void][System.Threading.Tasks.Task]::WaitAll([System.Threading.Tasks.Task[]]$readers, 500) } catch { $null = $_ }
+      }
+      Complete-StartupHealthProbe
+    } else {
+      # Releasing the only reference would orphan a live child; keep it tracked.
+      Write-ActionLog "startup-health probe still running at shutdown; leaving it tracked"
+    }
   }
 }
 

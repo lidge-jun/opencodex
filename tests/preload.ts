@@ -134,7 +134,10 @@ const { flushNativeMainStartupReleases } = await import("../src/codex/native-pro
 const { settleBackgroundWork } = await import("../src/lib/background-work");
 const cleanup = createTestSandboxCleanup({
   drainProducers: async () => {
-    await settleBackgroundWork();
+    // Bounded: a task that never settles must not hang the worker. Throwing skips removal,
+    // so the root stays for ownership-checked stale recovery and the labels are reported.
+    const { settled, pending } = await settleBackgroundWork({ timeoutMs: 15_000 });
+    if (!settled) throw new Error(`[test] background work never settled before final cleanup: ${pending.join(", ")}`);
     await flushNativeMainStartupReleases();
     await flushConfigDirHardeningForTests();
   },

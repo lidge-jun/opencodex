@@ -15,6 +15,14 @@ export async function assertAuxiliaryListenerPortsAvailable(config: OcxConfig): 
     { listener: "unauthenticatedLoopbackListener", port: loopback?.enabled ? loopback.port : undefined },
     { listener: "hub.managementIngress", port: management?.enabled ? management.port : undefined },
   ] as const;
+  // Each probe releases its socket, so two listeners configured for one port would both
+  // pass and startup would still fail on the second bind. Reject the collision directly.
+  if (targets[0].port !== undefined && targets[0].port === targets[1].port) {
+    throw new AuxiliaryListenerBindError(
+      "hub.managementIngress", targets[1].port, "127.0.0.1",
+      new Error("port is also configured for unauthenticatedLoopbackListener"),
+    );
+  }
   for (const { listener, port } of targets) {
     // The port-less companion shares the public bind; it has no independent target.
     if (port === undefined) continue;

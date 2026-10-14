@@ -298,6 +298,11 @@ describe("warm-up failure policy", () => {
     expect(result.exitCode).not.toBe(0);
   });
 
+  test("a child that never starts rejects instead of resolving an empty result", async () => {
+    await expect(spawnTestChild([join(repoRoot(), "no-such-ocx-test-binary")], { cwd: repoRoot(), deadlineMs: 5_000 }))
+      .rejects.toThrow("the child could not be spawned");
+  });
+
   test("a descendant holding the child's pipes does not turn exit into a wait for EOF", async () => {
     resetColdSpawnWarmupForTests();
     // `close` is what a clean exit earns. A grandchild that keeps the write end open must not
