@@ -261,6 +261,16 @@
         ]
       },
       {
+        "path": "transports/compaction-checkpoints.md",
+        "tier": 3,
+        "title": "Compaction Checkpoints On Later Turns",
+        "scope": "Replacement-history shape after compaction and the opt-in removal of requests retained before a plaintext checkpoint.",
+        "documents": [
+          "src/responses/",
+          "src/server/"
+        ]
+      },
+      {
         "path": "transports/responses-spend.md",
       "tier": 3,
       "title": "Responses Spend Reservations",

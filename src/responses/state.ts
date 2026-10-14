@@ -1169,6 +1169,14 @@ export function previousResponseReplayPrefixLength(body: unknown): number {
   return replayedInputPrefixLengths.get(body) ?? 0;
 }
 
+/** Keep replay provenance aligned after request-local removal of items inside the replayed prefix. */
+export function shrinkPreviousResponseReplayPrefix(body: unknown, removedWithinPrefix: number): void {
+  if (!body || typeof body !== "object" || Array.isArray(body) || removedWithinPrefix <= 0) return;
+  const prefixLength = replayedInputPrefixLengths.get(body);
+  if (!prefixLength) return;
+  replayedInputPrefixLengths.set(body, Math.max(0, prefixLength - removedWithinPrefix));
+}
+
 /** Copy proxy-private replay provenance to an internal clone with the same materialized input. */
 export function copyPreviousResponseReplayProvenance(source: unknown, target: unknown): void {
   if (!source || typeof source !== "object" || Array.isArray(source)) return;

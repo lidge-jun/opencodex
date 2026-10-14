@@ -60,9 +60,12 @@ import {
   copyPreviousResponseReplayProvenance,
   expandPreviousResponseInput,
   previousResponseReplayFailure,
+  previousResponseReplayPrefixLength,
+  shrinkPreviousResponseReplayPrefix,
   markBodyNonPersistable,
   previousResponseProviderState,
 } from "../../responses/state";
+import { dropRequestsRetainedBeforeCheckpoint } from "../../responses/compaction-retained-requests";
 import { formatErrorResponse } from "../../bridge";
 import { mapCodexAuthContextErrorToResponse } from "./codex-auth-error";
 import type { OcxParsedRequest } from "../../types";
@@ -417,6 +420,16 @@ export async function prepareResponsesRequest(
       console.warn(
         `[opencodex] rewrote ${rewritten} plaintext encrypted_content part(s) to input_text (spawn-message compatibility)`,
       );
+  }
+  // Opt-in compactionDropRetainedRequests: on the RAW body, before parsing, for the same reason as
+  // the rewrite above — translated adapters and the native passthrough must see one input.
+  if (config.compactionDropRetainedRequests === true && body && typeof body === "object" && !Array.isArray(body)) {
+    const dropped = dropRequestsRetainedBeforeCheckpoint((body as { input?: unknown }).input);
+    if (dropped) {
+      const prefixLength = previousResponseReplayPrefixLength(body);
+      (body as { input?: unknown }).input = dropped.input;
+      shrinkPreviousResponseReplayPrefix(body, dropped.removedIndices.filter(index => index < prefixLength).length);
+    }
   }
 
   const skillsSnapshotScopeKey = resolveSkillsSnapshotScopeKey({

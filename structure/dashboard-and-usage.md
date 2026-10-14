@@ -520,7 +520,7 @@ provides labeled model, trigger, source-scope and effort selectors and warns whi
 via `GET /api/combos`) receives the full conversation. The source-scope picker edits `sourceModels` as exact
 model or `provider/*` selectors, keeps saved selectors missing from the catalog visible, and refuses an empty
 selection because the schema would drop the override. The model checklist is searchable and renders at most 300 matches without dropping hidden selections. `GET /api/settings` returns the override or null;
-`PUT /api/settings` accepts a validated object or null to clear it; a failed save restores live settings and deletion provenance while the dashboard keeps the draft for retry.
+`PUT /api/settings` accepts a validated object or null to clear it; a failed save restores live settings and deletion provenance while the dashboard keeps the draft for retry. Below it, `gui/src/components/CompactionRetainedRequestsPanel.tsx` renders `compactionDropRetainedRequests` as one switch that writes only that field, adopts the stored value from the response and reverts on a failed save.
 
 `src/server/gui-static.ts` serves the dashboard from `gui/dist`, with `OPENCODEX_GUI_DIST` taking
 priority. A standalone binary resolves the copied directory beside `ocx`, then the desktop bundle's resource directory

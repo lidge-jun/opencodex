@@ -193,6 +193,8 @@ export const configSchema = z.object({
   modelPinnedEfforts: modelPinnedEffortsSchema.optional(),
   compactionRouting: compactionRoutingSchema.optional().catch(undefined),
   compactionRecovery: compactionRecoverySchema.optional().catch(undefined),
+  // Opt-in; a malformed hand edit turns it off instead of rejecting the config that carries it.
+  compactionDropRetainedRequests: z.boolean().optional().catch(undefined),
   desktopCompatibility: desktopCompatibilitySchema.optional().catch(undefined),
   // A hand-edited malformed phase disables only that phase instead of rejecting
   // providers/apiKeys, matching the load-time degradation notice; the management write

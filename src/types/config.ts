@@ -783,6 +783,11 @@ export interface OcxConfig {
   };
   /** Opt-in failure-only recovery; never replaces the initial compaction model. */
   compactionRecovery?: { enabled: boolean; model: string; allowDevinInvalidArgument?: boolean };
+  /**
+   * Opt-in: drop the user requests Codex retains in front of a plaintext compaction checkpoint
+   * from later turns (src/responses/compaction-retained-requests.ts). Absent means off.
+   */
+  compactionDropRetainedRequests?: boolean;
   /** Explicit opt-in; resumes Observe only using an existing trusted certificate and endpoints. */
   desktopCompatibility?: { startOnProxyStart: boolean };
   /**

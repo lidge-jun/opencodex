@@ -437,6 +437,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       codexDesktopSwitches: describeCodexDesktopSwitches(config, await observedCodexDesktopSwitchApply()),
       compactionRouting: config.compactionRouting ?? null,
       compactionRecovery: config.compactionRecovery ?? null,
+      // Absent means off, so the GUI renders a plain switch.
+      compactionDropRetainedRequests: config.compactionDropRetainedRequests === true,
       // Absent means both phases keep their existing routes; the GUI renders that as "Off".
       memoryModels: config.memoryModels ?? null,
       startupHealth: await readStartupHealthSnapshot(config),
@@ -534,6 +536,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       codexClientCompaction?: unknown;
       compactionRouting?: unknown;
       compactionRecovery?: unknown;
+      compactionDropRetainedRequests?: unknown;
       memoryModels?: unknown;
     };
     if (body.codexAutoStart === undefined
@@ -551,8 +554,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       && body.codexClientCompaction === undefined
       && body.compactionRouting === undefined
       && body.compactionRecovery === undefined
+      && body.compactionDropRetainedRequests === undefined
       && body.memoryModels === undefined) {
-      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, codexQuotaAutoRefresh, oauthOpenBrowser, showCodexCredits, ultraFastTier, fastRows, codexMainAccountHardLock, codexMainAccountHardLockThresholds, codexDesktopAuthless, codexClientCompaction, compactionRouting, compactionRecovery, or memoryModels" }, 400);
+      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, codexQuotaAutoRefresh, oauthOpenBrowser, showCodexCredits, ultraFastTier, fastRows, codexMainAccountHardLock, codexMainAccountHardLockThresholds, codexDesktopAuthless, codexClientCompaction, compactionRouting, compactionRecovery, compactionDropRetainedRequests, or memoryModels" }, 400);
     }
     if (body.codexAutoStart !== undefined && typeof body.codexAutoStart !== "boolean") {
       return jsonResponse({ error: "codexAutoStart boolean is required" }, 400);
@@ -603,6 +607,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     if (body.codexClientCompaction !== undefined && typeof body.codexClientCompaction !== "boolean") {
       return jsonResponse({ error: "codexClientCompaction boolean is required" }, 400);
     }
+    if (body.compactionDropRetainedRequests !== undefined && typeof body.compactionDropRetainedRequests !== "boolean") {
+      return jsonResponse({ error: "compactionDropRetainedRequests boolean is required" }, 400);
+    }
     const compactionRouting = body.compactionRouting == null
       ? body.compactionRouting
       : compactionRoutingSchema.safeParse(body.compactionRouting);
@@ -646,7 +653,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     )) {
       return jsonResponse({ error: `appOwnedMemoryBudgetMb must be an integer from ${MIN_APP_OWNED_MEMORY_BUDGET_MB} to ${MAX_APP_OWNED_MEMORY_BUDGET_MB}` }, 400);
     }
-    const restoreCompactionRouting = captureConfigTopLevelRollback(config, ["compactionRouting", "compactionRecovery", "memoryModels"]);
+    const restoreCompactionRouting = captureConfigTopLevelRollback(config, ["compactionRouting", "compactionRecovery", "compactionDropRetainedRequests", "memoryModels"]);
     const previousSettings = {
       codexAutoStart: config.codexAutoStart,
       hasCodexAutoStart: Object.hasOwn(config, "codexAutoStart"),
@@ -725,6 +732,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       else if (compactionRouting?.success) config.compactionRouting = compactionRouting.data;
       if (compactionRecovery === null) deleteConfigTopLevelKey(config, "compactionRecovery");
       else if (compactionRecovery?.success) config.compactionRecovery = compactionRecovery.data;
+      // Off deletes the key: absent is the documented default.
+      if (body.compactionDropRetainedRequests === true) config.compactionDropRetainedRequests = true;
+      else if (body.compactionDropRetainedRequests === false) deleteConfigTopLevelKey(config, "compactionDropRetainedRequests");
       // Null clears both phases; the GUI sends that when neither row names a model.
       if (memoryModels === null) deleteConfigTopLevelKey(config, "memoryModels");
       else if (memoryModels?.success) config.memoryModels = memoryModels.data;
@@ -836,6 +846,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       codexDesktopSwitches,
       compactionRouting: config.compactionRouting ?? null,
       compactionRecovery: config.compactionRecovery ?? null,
+      compactionDropRetainedRequests: config.compactionDropRetainedRequests === true,
       // The panel re-reads its own save response, so a missing block would render both
       // phases as "Off" while the server kept them.
       memoryModels: config.memoryModels ?? null,

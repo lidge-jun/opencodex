@@ -1,4 +1,5 @@
 import CompactionRoutingPanel from "../components/CompactionRoutingPanel";
+import CompactionRetainedRequestsPanel from "../components/CompactionRetainedRequestsPanel";
 import MemoryObservabilityCard from "../components/MemoryObservabilityCard";
 import MemoryModelsPanel from "../components/MemoryModelsPanel";
 import type { useDashboardData } from "./use-dashboard-data";
@@ -21,6 +22,7 @@ export function DashboardOverviewPanels(props: Dash) {
       </div>
       <DashboardSidecarPanels d={props} />
       <CompactionRoutingPanel apiBase={props.apiBase} models={props.models} providers={props.providers} />
+      <CompactionRetainedRequestsPanel apiBase={props.apiBase} />
       <MemoryModelsPanel apiBase={props.apiBase} models={props.models} />
       <MemoryObservabilityCard apiBase={props.apiBase} />
     </>
