@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawnTestChild, TEST_CHILD_REAP_RESERVE_MS, type TestChildResult } from "./spawn-test-child";
 import { readFileSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { repoRoot } from "./repo-root";
@@ -92,7 +92,7 @@ import { SPAWN_BUDGET_MS } from "./test-budget";
 const WARMUP_TEARDOWN_RESERVE_MS = 15_000;
 
 /** Reaping the warm-up child after its deadline. */
-const WARMUP_REAP_RESERVE_MS = 5_000;
+const WARMUP_REAP_RESERVE_MS = TEST_CHILD_REAP_RESERVE_MS;
 
 /**
  * Budget for the hook that performs a warm-up. This is `SPAWN_BUDGET_MS` because a warm-up IS a real
@@ -202,108 +202,17 @@ export async function warmModuleGraph(options: ColdSpawnWarmup): Promise<void> {
   return warmColdSpawn(options.graph, deadlineMs => runModuleGraphWarmup(options, deadlineMs));
 }
 
-export interface ModuleGraphWarmupResult {
-  stdout: string;
-  stderr: string;
-  exitCode: number | null;
-  signal: NodeJS.Signals | null;
-  timedOut: boolean;
-}
+export type ModuleGraphWarmupResult = TestChildResult;
 
-/**
- * Spawn the warm-up child asynchronously and bound it on a live event loop.
- *
- * A blocking `Bun.spawnSync` made its own `timeout` the only bound it could honour, and that
- * turned out to be no bound at all: while the synchronous wait runs, the event loop is dead, so
- * the calling hook's budget and the suite's per-test timeout freeze inside the same wait and
- * nothing can report anything. Run 35511743422's macos 2/2 leg held that shape for eighteen
- * silent minutes inside tests/clients/client-connect.test.ts before the job ceiling cut it and
- * reported `cancelled` — a result the `ci` gate reads as failure rather than evidence. Whether
- * the child or the spawn primitive wedged is not observable from the outside, so the bound here
- * does not depend on either: SIGKILL at the deadline, a short reap grace, and the call settles
- * with or without the child's exit or EOF. A child that outlives its kill — or a descendant
- * holding its pipes — cannot turn a warm-up into an unbounded wait.
- */
+/** Warm-up compatibility surface; bounded child ownership is shared with behavior tests. */
 export function spawnModuleGraphWarmupChild(
   script: string,
   cwd: string,
   env: Record<string, string | undefined> | undefined,
   deadlineMs: number,
 ): Promise<ModuleGraphWarmupResult> {
-  const maxCaptureBytes = 1024 * 1024;
-  return new Promise((resolve, reject) => {
-    let child: ReturnType<typeof spawn>;
-    try {
-      child = spawn(process.execPath, ["--eval", script], {
-        cwd,
-        env: { ...process.env, ...env },
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-    } catch {
-      reject(new Error("[cold-spawn-warmup] the warm-up child could not be spawned"));
-      return;
-    }
-    const stdoutChunks: Buffer[] = [];
-    const stderrChunks: Buffer[] = [];
-    let bytes = 0;
-    let settled = false;
-    let timedOut = false;
-    let exitCode: number | null = null;
-    let signal: NodeJS.Signals | null = null;
-    let deadline: ReturnType<typeof setTimeout> | undefined;
-    let reap: ReturnType<typeof setTimeout> | undefined;
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(deadline);
-      clearTimeout(reap);
-      child.stdout?.destroy();
-      child.stderr?.destroy();
-      child.unref();
-      resolve({
-        stdout: Buffer.concat(stdoutChunks).toString("utf8"),
-        stderr: Buffer.concat(stderrChunks).toString("utf8"),
-        exitCode,
-        signal,
-        timedOut,
-      });
-    };
-    const beginReapGrace = () => {
-      if (settled) return;
-      reap ??= setTimeout(finish, WARMUP_REAP_RESERVE_MS);
-    };
-    const stop = () => {
-      if (settled || timedOut) return;
-      timedOut = true;
-      clearTimeout(deadline);
-      beginReapGrace();
-      try { child.kill("SIGKILL"); } catch { /* The kill's own failure must not extend the wait. */ }
-    };
-    const capture = (chunk: Buffer, into: Buffer[]) => {
-      if (settled || timedOut) return;
-      bytes += chunk.length;
-      if (bytes > maxCaptureBytes) { stop(); return; }
-      into.push(chunk);
-    };
-    child.stdout?.on("data", (chunk: Buffer) => capture(chunk, stdoutChunks));
-    child.stderr?.on("data", (chunk: Buffer) => capture(chunk, stderrChunks));
-    child.stdout?.on("error", stop);
-    child.stderr?.on("error", stop);
-    // The child was never started or died at launch; there is nothing to reap.
-    child.on("error", finish);
-    child.once("exit", (code, exitSignal) => {
-      exitCode = code;
-      signal = exitSignal;
-      clearTimeout(deadline);
-      // A descendant retaining a pipe must not turn a clean exit into a wait for EOF.
-      beginReapGrace();
-    });
-    child.once("close", (code, exitSignal) => {
-      exitCode = code;
-      signal = exitSignal;
-      finish();
-    });
-    deadline = setTimeout(stop, deadlineMs);
+  return spawnTestChild([process.execPath, "--eval", script], {
+    cwd, env: { ...process.env, ...env }, deadlineMs,
   });
 }
 
