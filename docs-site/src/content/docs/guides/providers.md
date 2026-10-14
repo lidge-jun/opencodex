@@ -540,7 +540,7 @@ The account list marks Kiro accounts excluded from automatic selection with a re
 
 ## 3. API-key catalog
 
-opencodex ships 104 built-in presets: 85 key-based, 15 OAuth, three local, and one default
+opencodex ships 105 built-in presets: 86 key-based, 15 OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it; validation is provider-specific. Notable entries:
 
@@ -632,6 +632,7 @@ region-pinned EU routes, is at [opper.ai/models](https://opper.ai/models). Opper
 | Opper | `https://api.opper.ai/v3/compat` |
 | TokenLab | `https://api.tokenlab.sh/v1` |
 | Modelflare | `https://modelflare.dev/v1` |
+| Atlas Cloud | `https://api.atlascloud.ai/v1` |
 | OpenGateway | `https://apis.opengateway.ai/v1` |
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
@@ -694,6 +695,16 @@ can call only that group's models, so use a Smart key for the full seeded set, o
 `--default-model` with a model your key's group serves.
 `deepseek-v4.1-flash` is listed upstream but currently answers 503, so the preset leaves it out.
 Upstream latency varies from a few seconds to about 30 seconds, with occasional transient 503s.
+
+**Atlas Cloud** is an OpenAI-compatible gateway operated by ATLAS CLOUD AI INC. at
+`https://api.atlascloud.ai/v1`. Create a key in the [Atlas Cloud console](https://console.atlascloud.ai/api-keys),
+then run `ocx provider add atlascloud` or select **Atlas Cloud** in `ocx init` or the dashboard's
+**Add provider** picker. Give it your key directly or as the reference `${ATLASCLOUD_API_KEY}` so
+the key stays in your environment. The preset uses Chat Completions and discovers models live from
+`GET /v1/models`, which is public and cannot validate a key. `deepseek-ai/deepseek-v4-flash` is the
+seeded default. Model ids are vendor-prefixed, so `atlascloud/deepseek-ai/deepseek-v4-flash` sends
+`deepseek-ai/deepseek-v4-flash` upstream. The Atlas Cloud [privacy and terms](https://www.atlascloud.ai/privacy)
+apply to requests sent to this service.
 
 The MiniMax and MiniMax (CN) provider cards can also show Coding Plan quota when the configured
 key has an active plan. The dashboard reads the plan's 5-hour window and, when present, weekly

@@ -1267,6 +1267,35 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     note: "OpenAI-compatible relay for Claude, GPT, GLM and DeepSeek chat models. The seeded models were verified with chat, streaming and tool calls; deepseek-v4.1-flash is listed upstream but currently answers 503 and is left out. An ordinary key only reaches its own routing group's models; a Smart key reaches all seeded models. Image and video models are not served through this Chat preset. Upstream latency varies widely (a few seconds to about 30 s) with occasional transient 503s.",
   },
   {
+    // Public contract checked 2026-10-14: GET https://api.atlascloud.ai/v1/models answers without a
+    // key (119 text models, OpenAI-style `data[].id`), and chat completions answer on /v1 with a
+    // Bearer key. Model ids are vendor-prefixed (deepseek-ai/deepseek-v4-flash). The conventional
+    // env reference derived from the id is ${ATLASCLOUD_API_KEY}.
+    id: "atlascloud",
+    label: "Atlas Cloud",
+    adapter: "openai-chat",
+    baseUrl: "https://api.atlascloud.ai/v1",
+    authKind: "key",
+    dashboardUrl: "https://console.atlascloud.ai/api-keys",
+    liveModels: true,
+    preserveCustomDestination: true,
+    defaultModel: "deepseek-ai/deepseek-v4-flash",
+    models: ["deepseek-ai/deepseek-v4-flash", "deepseek-ai/deepseek-v4-pro", "zai-org/glm-5.3", "qwen/qwen3.5-397b-a17b"],
+    modelContextWindows: {
+      "deepseek-ai/deepseek-v4-flash": 1_048_576,
+      "deepseek-ai/deepseek-v4-pro": 1_048_576,
+      "zai-org/glm-5.3": 1_048_576,
+      "qwen/qwen3.5-397b-a17b": 262_144,
+    },
+    modelInputModalities: {
+      "deepseek-ai/deepseek-v4-flash": ["text"],
+      "deepseek-ai/deepseek-v4-pro": ["text"],
+      "zai-org/glm-5.3": ["text"],
+      "qwen/qwen3.5-397b-a17b": ["text", "image"],
+    },
+    note: "OpenAI-compatible gateway for DeepSeek, GLM, Qwen, Kimi and other chat models. Create a key at console.atlascloud.ai. The model catalogue is public and discovered live from /v1/models; the public list cannot validate keys. Model ids are vendor-prefixed (deepseek-ai/deepseek-v4-flash).",
+  },
+  {
     id: "opencode-free",
     label: "OpenCode Free",
     adapter: "openai-chat",

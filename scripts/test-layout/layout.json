@@ -1297,6 +1297,7 @@
     "openrouter-provider-routing.test.ts": "providers",
     "openrouter-quota-reset-cooldown-4024.test.ts": "providers",
     "opper-provider.test.ts": "providers", "modelflare-provider.test.ts": "providers",
+    "atlascloud-provider.test.ts": "providers",
     "tokenlab-protocols.test.ts": "providers",
     "tokenlab-provider.test.ts": "providers",
     "optional-shutdown-hooks.test.ts": "lib",
