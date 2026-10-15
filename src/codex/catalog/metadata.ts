@@ -276,6 +276,14 @@ function asLimits(input: NativeContextLimitsInput): NativeContextLimits {
   return typeof input === "number" ? { cap: input } : input;
 }
 
+/** Configured hard ceiling only; an advertised default window is not a user limit. */
+export function nativeOpenAiConfiguredContextLimit(slug: string, input?: NativeContextLimitsInput): number | undefined {
+  const limits = asLimits(input);
+  const overlay = positiveInt(limits.modelWindows?.[slug]) ?? positiveInt(limits.providerWindow);
+  const cap = positiveInt(limits.cap);
+  return overlay === undefined ? cap : cap === undefined ? overlay : Math.min(overlay, cap);
+}
+
 /** Read both levers out of a config once, for call sites that hold one. */
 export function nativeContextLimits(
   config: Pick<OcxConfig, "providers" | "providerContextCaps">,
@@ -326,18 +334,12 @@ function longWindowOptInCeiling(slug: string): number | undefined {
 
 function narrowToLimits(raw: number | undefined, slug: string, input: NativeContextLimitsInput): number | undefined {
   if (raw === undefined) return undefined;
-  const limits = asLimits(input);
-  const overlay = positiveInt(limits.modelWindows?.[slug]) ?? positiveInt(limits.providerWindow);
-  const cap = positiveInt(limits.cap);
+  const limit = nativeOpenAiConfiguredContextLimit(slug, input);
   const optInCeiling = longWindowOptInCeiling(slug);
   if (optInCeiling !== undefined) {
-    const ceiling = optInCeiling;
-    const chosen = overlay ?? cap ?? raw;
-    const window = Math.min(chosen, ceiling);
-    return overlay !== undefined && cap !== undefined ? Math.min(window, cap) : window;
+    return Math.min(limit ?? raw, optInCeiling);
   }
-  const narrowed = overlay === undefined ? raw : Math.min(raw, overlay);
-  return applyProviderContextCap(narrowed, cap) ?? narrowed;
+  return applyProviderContextCap(raw, limit);
 }
 
 export function nativeOpenAiContextWindow(slug: string, limits?: NativeContextLimitsInput): number | undefined {

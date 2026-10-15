@@ -14,6 +14,7 @@ import { readClientConnectionState } from "../client/state";
 import { findManagedRegion, resolveGrokHome } from "../grok/inject";
 import { providerTableString } from "../codex/injected-marker";
 import { isLocalAttestationSecret } from "../lib/local-management-attestation";
+import { isProtectedHomeUnderTest } from "../lib/test-home-guard";
 import { readOwnerRegistry } from "../config/owner-registry";
 import {
   classifyHealthz,
@@ -160,7 +161,7 @@ export async function findCrossHomeOwnerDetailed(options: { homeDir?: string; io
   };
 
   const defaultHome = join(options.homeDir ?? homedir(), ".opencodex");
-  recordHome(defaultHome);
+  if (options.homeDir !== undefined || !isProtectedHomeUnderTest(defaultHome)) recordHome(defaultHome);
   // The shared registry is what lets one custom home find another: every runtime
   // that published a runtime record registered its home beside the shared clients.
   const registry = readOwnerRegistry();
@@ -291,33 +292,35 @@ export async function findCrossHomeOwnerDetailed(options: { homeDir?: string; io
 }
 
 /** Mark this process before any shared-client write when another home owns the clients. */
-export async function markCrossHomeSibling(): Promise<boolean> {
-  const verdict = await findCrossHomeOwnerDetailed();
+export async function markCrossHomeSibling(
+  options: Parameters<typeof findCrossHomeOwnerDetailed>[0] = {},
+): Promise<boolean> {
+  const verdict = await findCrossHomeOwnerDetailed(options);
   if (verdict.kind === "none") return false;
-  if (verdict.port === null) throw new Error("Shared-client owner could not be located; refusing startup before any shared-client write.");
   if (verdict.kind === "indeterminate") {
-    // Fail closed: an owner the reader could not verify still owns the shared
-    // writes. Marking the best port hint keeps every sibling gate engaged even
-    // while the answer stays unproven (#6198).
-    console.warn(
-      "A shared-client owner could not be verified (" + verdict.reason + "); "
-      + "treating this instance as a sibling so Codex, Grok and Claude configs are left alone.",
+    // A missed probe is not proof of a sibling topology. Refuse before publication
+    // so the service can retry discovery without freezing uncertainty for its lifetime.
+    throw new Error(
+      `Shared-client owner could not be verified (${verdict.reason}); `
+      + "refusing startup before any shared-client write. Retry startup after discovery recovers.",
     );
   }
-  const port = verdict.port;
-  markSiblingStart(port);
+  markSiblingStart(verdict.port);
   return true;
 }
 
 /** A live proxy in this home can publish its sibling owner even while that owner is down. */
-export async function markLiveHomeSibling(live: { pid: number | null; port: number }): Promise<boolean> {
+export async function markLiveHomeSibling(
+  live: { pid: number | null; port: number },
+  options: Parameters<typeof findCrossHomeOwnerDetailed>[0] = {},
+): Promise<boolean> {
   const runtime = readRuntimePort();
   if (live.pid !== null && runtime?.pid === live.pid && runtime.port === live.port
     && runtime.siblingOfPort !== undefined && runtime.siblingOfPort !== live.port) {
     markSiblingStart(runtime.siblingOfPort);
     return true;
   }
-  const verdict = await findCrossHomeOwnerDetailed();
+  const verdict = await findCrossHomeOwnerDetailed(options);
   if (verdict.kind === "none" || verdict.port === live.port) return false;
   if (verdict.port === null) throw new Error("Shared-client owner could not be located; refusing startup before any shared-client write.");
   markSiblingStart(verdict.port);

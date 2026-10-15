@@ -148,3 +148,14 @@ ocx v2 mode v1
 
 La CLI ne demande pas de confirmation. C'est le même paramètre : choisissez-le
 en tenant compte de ce que décrit cette page.
+
+## Limite de sous-agents simultanés
+
+Dans **Models → Model settings**, le réglage de limite des sous-agents définit le nombre maximal
+de sous-agents simultanés, sans compter l'agent principal. Il reste disponible en v1, base et v2,
+y compris en mode hybride lorsque le drapeau v2 global est désactivé. Le choix du mode est
+indépendant de cette limite.
+
+Augmenter la limite autorise davantage de sous-agents, sans les créer automatiquement ni garantir
+une exécution plus rapide. Lancez une nouvelle session Codex après modification. Si un hôte App
+de longue durée utilise encore l'ancienne limite, redémarrez cet hôte.

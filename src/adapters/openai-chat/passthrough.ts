@@ -14,6 +14,8 @@ import { modelRecordValue } from "../../reasoning-effort";
 import { modelInList, type OcxProviderConfig } from "../../types";
 import { chatParallelToolCallsWireValue } from "./parallel-tool-calls";
 import { applyExplicitChatReasoningWirePolicy } from "./reasoning-wire";
+import { replayNativeChatReasoning } from "./reasoning-replay";
+import type { OcxReasoningReplayScopeRef } from "../../types";
 
 const CHAT_PASSTHROUGH_FIELDS = [
   "audio",
@@ -55,17 +57,19 @@ export function buildOpenAIChatPassthroughRequest(
   fastPolicy: ResolvedFastPolicy = fastPolicyForModel(provider, modelId, undefined, "chat"),
   fastMode?: boolean,
   providerName?: string,
+  replayScope?: OcxReasoningReplayScopeRef,
 ): AdapterRequest {
   const { url, headers, hasCredential } = openAIChatTransport(provider);
 
   const body: Record<string, unknown> = {
     model: provider.modelSuffixBracketStrip ? stripBracketedModelSuffix(modelId) : modelId,
-    // The caller's messages are forwarded as they arrived, with one exception: an operator who
+    // The caller's messages retain their wire shape. An operator who
     // recorded that this destination rejects the `developer` role gets that role converted in
     // place. Verbatim was not neutral there — it sent the role anyway and the turn failed
     // upstream with a 400 before the model saw it. An unrecorded destination is still verbatim,
     // and the conversion changes the role of those messages and nothing else, so the position
-    // of every message and every other field survive unchanged.
+    // of every message and every other field survive unchanged. Missing thinking history is
+    // repaired below using the same preserve policy as the translated Chat builder.
     messages: applyExplicitChatDeveloperRole(
       frameAgentRouterMessages(provider.baseUrl, rawBody.messages),
       provider,
@@ -75,6 +79,8 @@ export function buildOpenAIChatPassthroughRequest(
   for (const field of CHAT_PASSTHROUGH_FIELDS) {
     if (rawBody[field] !== undefined) body[field] = rawBody[field];
   }
+  body.messages = replayNativeChatReasoning(body.messages, provider, modelId, replayScope,
+    Array.isArray(rawBody.tools) && rawBody.tools.length > 0);
   if (protectGlmSummaryBudget(body, provider.baseUrl, body.reasoning_effort)) body.reasoning_effort = "low";
   const rawEfforts = modelRecordValue(provider.modelReasoningEfforts, modelId) ?? provider.reasoningEfforts;
   const reasoningDisabled = modelInList(provider.noReasoningModels, modelId) || rawEfforts?.length === 0;

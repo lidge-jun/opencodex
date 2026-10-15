@@ -146,6 +146,14 @@ ocx restore       # restore native Codex without stopping (alias: ocx eject)
 ocx restore back  # route Codex through the still-running proxy again
 ```
 
+## Startup ownership could not be verified
+
+If startup reports `Shared-client owner could not be verified` and `refusing startup`,
+OpenCodex could not safely decide whether another proxy owns the shared client settings.
+It stops before publishing a new runtime or changing those settings. Retry startup after
+local connectivity recovers; an installed background service retries through its service manager.
+A timeout does not permanently turn the new process into a secondary instance.
+
 ## Next
 
 - [How It Works](/getting-started/how-it-works/) — what happens to each request.

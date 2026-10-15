@@ -1,9 +1,11 @@
 import { MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT } from "../../codex/quota-types";
+import { validRemainingQuotaAccountIds } from "../../codex/account-use-remaining";
 import * as z from "zod/v4";
 import { anthropicAccountPoolSchema } from "./anthropic-account-pool";
 import { compactionRecoverySchema } from "./compaction-recovery";
 import { desktopCompatibilitySchema } from "./desktop-compatibility";
 import { blockedModelRedirectsSchema } from "./blocked-model-redirects";
+import { mainAccountHardLockFallbackSchema } from "./main-account-hard-lock-fallback";
 import {
   agentTaskRecoverySchema,
   catalogAutoRefreshSchema,
@@ -222,6 +224,9 @@ export const configSchema = z.object({
     short: z.number().int().min(MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT).max(100).optional().catch(undefined),
     long: z.number().int().min(MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT).max(100).optional().catch(undefined),
   }).optional().catch(undefined),
+  // A malformed fallback section disables only the reroute, never the lock's refusal
+  // behavior; the management write boundary still rejects the bad value.
+  codexMainAccountHardLockFallback: mainAccountHardLockFallbackSchema.optional().catch(undefined),
   // #2999: a malformed hand edit falls back to auto detection rather than rejecting the config.
   nativeMainRefresh: z.enum(["codex", "opencodex"]).optional().catch(undefined),
   // Future versions remain opaque through passthrough-compatible whole-config saves.
@@ -293,6 +298,7 @@ export const configSchema = z.object({
   // so a hand-edited typo cannot trip the backup-and-defaults repair path; the write path rejects
   // it (creditCodexAccountIdsError in diagnostics).
   creditCodexAccountIds: z.array(z.string().regex(/^[a-zA-Z0-9._-]{1,64}$/)).optional().catch(undefined),
+  codexUseRemainingQuotaAccountIds: z.custom<string[]>(validRemainingQuotaAccountIds).optional().catch(undefined),
   // A malformed policy degrades to "no policy" rather than failing the parse, so a hand-edited
   // typo cannot trip the backup-and-defaults repair path and wipe providers or pool accounts.
   // Silently ignoring it would be its own trap, so the write path rejects it and loadConfig warns.

@@ -30,3 +30,16 @@ not `context_window`, so routing requirements still see unknown capacity. Existi
 modality/tool evidence remains usable. Shared client catalogs, Claude context markers and exports
 consume the estimated window; operators must configure a lower window or Context cap when a relay
 serves less. Tests: `tests/codex-integration/vendor-context.test.ts`.
+
+## Native maximum windows
+
+`src/codex/catalog/parsing.ts` preserves native `max_context_window` independently of the
+default `context_window`. Only configured hard limits narrow that maximum: the exact model's
+window overrides the provider window, then the provider context cap bounds either. Both paths
+share validation and precedence through `nativeOpenAiConfiguredContextLimit` in
+`src/codex/catalog/metadata.ts`. Strict normalization preserves the maximum for trusted
+account-selector native rows too; ordinary routed rows remain bounded by their effective window.
+Compaction and max input still follow the effective default
+window, including retained lower soft budgets. Native capacity remains defined by the
+[native passthrough contract](catalog.md#native-passthrough). Covered by
+`tests/codex-integration/catalog-native-max-context.test.ts`.
