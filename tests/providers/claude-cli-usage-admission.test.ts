@@ -72,15 +72,24 @@ describe("Claude usage admission cache", () => {
   });
 
   test("the cache lives under OPENCODEX_HOME and stores no token", async () => {
-    const statePath = join(getConfigDir(), "claude-usage-admission.json");
-    rmSync(statePath, { force: true });
-    const status = await checkClaudeUsageAdmission("claude-sonnet-5-5", { identity, probe: async () => freshQuota });
-    expect(status.state).toBe("available");
-    expect(existsSync(statePath)).toBe(true);
-    const saved = readFileSync(statePath, "utf8");
-    expect(saved).toContain("test-identity");
-    expect(saved).not.toContain("test-access");
-    rmSync(statePath, { force: true });
+    // A home this case creates, so cleanup never removes a path inside a home it did not create.
+    const previousHome = process.env.OPENCODEX_HOME;
+    const home = mkdtempSync(join(tmpdir(), "ocx-claude-admission-home-"));
+    dirs.push(home);
+    process.env.OPENCODEX_HOME = home;
+    try {
+      const statePath = join(getConfigDir(), "claude-usage-admission.json");
+      expect(existsSync(statePath)).toBe(false);
+      const status = await checkClaudeUsageAdmission("claude-sonnet-5-5", { identity, probe: async () => freshQuota });
+      expect(status.state).toBe("available");
+      expect(existsSync(join(home, "claude-usage-admission.json"))).toBe(true);
+      const saved = readFileSync(statePath, "utf8");
+      expect(saved).toContain("test-identity");
+      expect(saved).not.toContain("test-access");
+    } finally {
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+    }
   });
 
   test("a throwing identity or probe fails open as unknown", async () => {
