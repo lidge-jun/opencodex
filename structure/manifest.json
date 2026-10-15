@@ -652,6 +652,7 @@
       "documents": [
         "src/service/health-sentinel-launch.ts",
         "src/service/health-sentinel-main.ts",
+        "src/service/health-sentinel-linux.ts",
         "src/service/health-sentinel-policy.ts",
         "src/service/health-sentinel-probe.ts",
         "src/service/health-sentinel-windows.ts"

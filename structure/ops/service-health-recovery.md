@@ -55,7 +55,7 @@ Probes accept only numeric IPv4/IPv6 destinations. Default and localhost binds u
 
 ## Binding the kill to the proxy
 
-`src/service/health-sentinel-main.ts` never kills a bare number:
+`src/service/health-sentinel-main.ts` selects the process binding before arming recovery:
 
 - Windows opens a kernel32 handle on the parent at startup through `bun:ffi`
   (`src/service/health-sentinel-windows.ts`), accepts it only if that process was created before the
@@ -66,10 +66,24 @@ Probes accept only numeric IPv4/IPv6 destinations. Default and localhost binds u
   far enough that the new process appears to be older than the sentinel, the handle binds to that
   process and a later recovery would terminate it. A handle created by the proxy and inherited by
   the sentinel would close this gap; Bun's spawn does not offer one today.
-- POSIX checks the live `process.ppid` immediately before SIGKILL. SIGTERM cannot run on a stuck
-  loop and is a clean exit to systemd. This binding is probabilistic: if the sentinel is descheduled
-  between that check and `kill` while the parent exits, is reaped, and a new process receives the
-  same id, the signal reaches that process. Bun exposes no pidfd or process handle on POSIX.
+- Linux opens a pidfd through libc `syscall` using `bun:ffi`
+  (`src/service/health-sentinel-linux.ts`) on x64 and arm64, then checks that the watched PID is
+  still its live parent while holding the descriptor. A signal-zero call verifies signal support
+  and permissions before arming; the parent relationship is checked again afterward. Recovery
+  uses `pidfd_send_signal(SIGKILL)` on that descriptor, so PID reuse cannot redirect it. An exited
+  target (`ESRCH`) is skipped. A bound signal failure never falls back to a numeric PID.
+  `ENOSYS` from either startup syscall, or an unsupported syscall architecture, selects the existing
+  live-parent fallback and logs the limitation. Permission/resource/identity errors and unavailable
+  libc bindings refuse recovery. Both glibc and musl libc bindings are supported without new deps.
+  The watching line ends with `(pidfd)` when the binding succeeds.
+- macOS, and Linux without pidfd support, check the live `process.ppid` immediately before
+  SIGKILL. This fallback is probabilistic: if the sentinel is descheduled between the check and
+  `kill` while the parent exits, is reaped, and its PID is reused, the signal can reach that process.
+  SIGTERM cannot run on a stuck loop and is a clean exit to systemd.
+
+The runner releases its process owner in `finally`, including binding refusal, EOF, failed
+recovery and unexpected exceptions. Pidfd close is idempotent and prevents further signals;
+Linux close is never retried because a reused descriptor could name an unrelated object.
 
 The lease-held runtime-record re-read and the durable `intent` write run under the service ownership
 mutation lease (`src/service/ownership-mutation-lease.mjs`, 500 ms wait, no subprocess); a busy lease
@@ -90,3 +104,6 @@ replayed: requests the hung process held are lost as in a crash.
 phase-aligned recurring stalls), `-runner` (ordering, fail-closed paths, lease), `-launch` (gate,
 environment, drain hook, config admission) and `-process` (the real launcher and sentinel against a
 fixture that stops answering, on every CI OS).
+`tests/service/service-health-sentinel-linux.test.ts` covers injected syscall errors, reparenting
+during acquisition, PID reuse, already-exited targets, repeated recovery, teardown and descriptor
+cleanup. Linux additionally exercises the real FFI syscalls against a disposable process.

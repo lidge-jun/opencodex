@@ -9,7 +9,7 @@ import { createTempHome, type TempHome } from "../helpers/temp-home";
  * The sentinel against real processes (#6671): a fixture proxy spawns it through the real
  * launcher with a stdin pipe, and the sentinel must terminate the fixture once it stops answering,
  * or leave on its own once the fixture exits. On Windows this drives the kernel32 handle path; on
- * POSIX the live-ppid path. Short timings come from the test-only override.
+ * Linux the pidfd path and macOS the live-ppid path. Short timings come from the test-only override.
  */
 // Generous per-probe deadline and lag tolerance: a slow Windows runner must not miss arming or
 // discard every timeout as sentinel lag.
@@ -91,7 +91,12 @@ describe("service health sentinel process (#6671)", () => {
     expect(entries![0]!.pid).toBe(proxy.pid);
     // Windows may end the sentinel together with the proxy before it settles the entry.
     expect(process.platform === "win32" ? ["intent", "terminated"] : ["terminated"]).toContain(entries![0]!.state);
-    expect(readFileSync(root.path("service-health-sentinel.log"), "utf8")).toContain(`recovering pid ${proxy.pid}`);
+    const log = readFileSync(root.path("service-health-sentinel.log"), "utf8");
+    expect(log).toContain(`recovering pid ${proxy.pid}`);
+    if (process.platform === "linux") {
+      if (log.includes("pidfd unavailable:")) expect(log).toMatch(/pidfd unavailable: (pidfd_(open|send_signal) is unsupported by this kernel|pidfd syscall ABI is unsupported on \w+); using live parent PID check/);
+      else expect(log).toMatch(/watching pid \d+ on port \d+ \(pidfd\)/);
+    }
   }, 75_000);
 
   test("leaves without acting when the proxy exits on its own", async () => {

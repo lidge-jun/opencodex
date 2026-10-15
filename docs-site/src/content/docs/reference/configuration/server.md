@@ -51,6 +51,12 @@ runs helper features around provider requests.
 | `visionSidecar?` | `OcxVisionSidecarConfig` | on when usable | Image-description sidecar options. |
 | `images?` | `OcxImagesConfig` | automatic OpenAI selection | Standalone Images relay options for Codex `image_gen`. |
 
+On Linux x64/arm64 with pidfd support, service health recovery binds termination to the proxy's
+kernel process identity, so PID reuse cannot redirect it. The sentinel's watching log ends in
+`(pidfd)`. Unsupported kernels or architectures retain the existing live-parent PID check and log
+that fallback; other binding failures disable recovery for that proxy. macOS retains the live-parent
+check, and Windows retains its process handle binding.
+
 While the canonical ChatGPT upstream WebSocket waits for the first Responses event after
 sending the create frame, it watches for liveness rather than a fixed deadline. When the socket
 supports protocol pings, the proxy pings it every 15 seconds. Any inbound frame — quota,
