@@ -575,6 +575,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       // runTurn adapters signal errors via {type:"error"} events, not HTTP status codes.
       const errorEvent = events.find(e => e.type === "error");
       if (errorEvent && errorEvent.type === "error") {
+        hiddenUsage = addUsage(hiddenUsage, errorEvent.usage);
         if (errorEvent.code === "translation_buffer_limit") {
           throw new TranslatorBudgetExceededError("retained_collectors", TRANSLATOR_MAX_TURN_BYTES);
         }
@@ -778,6 +779,8 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
           signal,
           inactivityTimeoutMs: stallTimeoutMs,
           translatorBudget,
+          // A pass that fails was still billed; the error terminal below reports it with the hidden passes.
+          onErrorUsage: usage => { hiddenUsage = addUsage(hiddenUsage, usage); },
         })) {
           if (event.type === "heartbeat") yield event;
           else {

@@ -1299,3 +1299,38 @@ describe.each(["runTurn", "parseStream"] as const)("image-loop provider identity
     expect(seen).toEqual(["github-copilot", "github-copilot"]);
   });
 });
+
+describe("image-loop adapter error usage", () => {
+  const imageCall = (usage: { inputTokens: number; outputTokens: number }): AdapterEvent[] => [
+    { type: "tool_call_start", id: "call_1", name: "image_gen" },
+    { type: "tool_call_delta", arguments: '{"prompt":"a cat"}' },
+    { type: "tool_call_end" },
+    { type: "done", usage },
+  ];
+  const errored: AdapterEvent = { type: "error", message: "provider blew up", usage: { inputTokens: 3, outputTokens: 2 } };
+
+  test("parseStream: an errored iteration's usage is added to the hidden iterations'", async () => {
+    useRealProgressStream = true;
+    streamQueue = [imageCall({ inputTokens: 10, outputTokens: 4 }), [{ type: "text_delta", text: "partial" }, errored]];
+    let seen: unknown = "unset";
+    const response = await runWithImageBridge({ parsed: makeParsed(), adapter: mockAdapter, plan, onUsage: usage => { seen = usage; } });
+    const sse = await response.text();
+    expect(sse).toContain("Provider stream error: provider blew up");
+    expect(seen).toEqual({ inputTokens: 13, outputTokens: 6 });
+  });
+
+  test("runTurn: an errored iteration's usage is reported", async () => {
+    const queue = [imageCall({ inputTokens: 10, outputTokens: 4 }), [errored]];
+    const adapter: ProviderAdapter = {
+      ...mockAdapter,
+      runTurn: async (_parsed: OcxParsedRequest, _incoming: IncomingMeta, emit: (e: AdapterEvent) => void) => {
+        for (const e of queue.shift() ?? []) emit(e);
+      },
+    };
+    let seen: unknown = "unset";
+    const response = await runWithImageBridge({ parsed: makeParsed(), adapter, plan, onUsage: usage => { seen = usage; } });
+    const sse = await response.text();
+    expect(sse).toContain("provider blew up");
+    expect(seen).toEqual({ inputTokens: 13, outputTokens: 6 });
+  });
+});
