@@ -59,9 +59,11 @@ async function isAccountRefusal(response: Response, signal?: AbortSignal): Promi
     // Whole-message patterns: request-policy/model/resource refusals and quoted diagnostics
     // must not acquire account authority merely by containing entitlement keywords.
     if ("code" in error && error.code != null
-      && (typeof error.code !== "string" || !["subscription_required", "insufficient_quota", "permission_denied"].includes(error.code))) return false;
+      && (typeof error.code !== "string" || !["subscription_required", "insufficient_quota", "permission_denied", "oauth_org_not_allowed"].includes(error.code))) return false;
+    // The organization disabled subscription access: an account-scoped verdict, cooled like its siblings.
+    if (error.type === "oauth_org_not_allowed" || ("code" in error && error.code === "oauth_org_not_allowed")) return true;
     const message = error.message.trim();
-    if (error.type === "permission_error" && /^(?:Your account does not have access to Claude Code|Your (?:Claude )?subscription (?:has expired|is (?:expired|inactive))|Your account does not have an active subscription)[.!]?$/i.test(message)) return true;
+    if (error.type === "permission_error" && /^(?:Your account does not have access to Claude Code|Your (?:Claude )?subscription (?:has expired|is (?:expired|inactive))|Your account does not have an active subscription|(?:Your|This) organization has disabled Claude subscription access for Claude Code(?:\. Use an Anthropic API key instead, or ask your admin to enable access)?)[.!]?$/i.test(message)) return true;
     return (error.type === "billing_error" || error.type === "permission_error")
       && /^Your credit balance is too low to access the Anthropic API\.(?: Please go to Plans & Billing to upgrade or purchase credits\.)?$/i.test(message);
   } catch {

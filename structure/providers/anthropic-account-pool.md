@@ -300,7 +300,9 @@ only canonical Fable, Opus, or Sonnet labels after removing terminal controls; u
 
 `src/oauth/anthropic-account-refusal.ts` accepts an HTTP 403 only when a complete bounded
 JSON `error` envelope has `permission_error` or `billing_error` and a whole-message
-account subscription/Claude Code entitlement or Anthropic credit-balance refusal.
+account subscription/Claude Code entitlement or Anthropic credit-balance refusal, or when
+the envelope carries the structured `oauth_org_not_allowed` type or code (organization disabled
+Claude subscription access; also matched by its whole message under `permission_error`).
 Generic permission, resource/model access, content policy, quoted diagnostics, conflicting
 error codes and incomplete/malformed bodies remain terminal. The shared physical dispatch
 in `src/server/responses/request-transport.ts` binds the refusal to the stored bearer it sent;

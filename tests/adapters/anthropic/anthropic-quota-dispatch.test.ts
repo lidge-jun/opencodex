@@ -406,7 +406,25 @@ test.each([
   expect(sent).toHaveLength(2);
 });
 
+const orgDisabled = "Your organization has disabled Claude subscription access for Claude Code. Use an Anthropic API key instead, or ask your admin to enable access.";
 test.each([
+  { type: "permission_error", message: orgDisabled },
+  { type: "oauth_org_not_allowed", message: orgDisabled },
+  { type: "permission_error", code: "oauth_org_not_allowed", message: "Access denied." },
+])("organization-disabled 403 rotates and cools the refused account (%#)", async error => {
+  const [a, b] = await seed();
+  const config = configFor(body => sent.length === 1
+    ? Response.json({ type: "error", error }, { status: 403 }) : answer(body.stream === true));
+  const response = await post(config);
+  expect(response.status).toBe(200);
+  expect(await response.text()).toContain("The answer is complete.");
+  expect(sent.map(row => row.authorization)).toEqual([`Bearer ${credential(0).access}`, `Bearer ${credential(1).access}`]);
+  expect(getEligibleAnthropicAccounts()).toEqual([b!]);
+  expect(getAnthropicAccountHealthSnapshot(a!)).not.toBeNull();
+});
+
+test.each([
+  [`Request denied: ${orgDisabled}`, "permission_error"],
   ["Request blocked by content policy", "permission_error"],
   ["You do not have permission to access this resource", "permission_error"],
   ["Your account does not have access to this model", "permission_error"],
