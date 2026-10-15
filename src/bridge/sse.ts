@@ -842,6 +842,7 @@ export function bridgeToResponsesSSE(
           // its compaction UI renders nothing mid-turn, so nothing is lost visually.
           if (options?.compaction) {
             if (event.type === "text_delta") {
+              if (event.anthropicThinkingSignature) continue;
               compaction = appendString(
                 compaction,
                 event.text,

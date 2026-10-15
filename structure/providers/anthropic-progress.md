@@ -18,6 +18,8 @@ exact replay, mixed block order, OAuth beta preservation and cancellation cleanu
 visible `phase: "commentary"` message for a documented Anthropic progress update. Its `ocxr1`
 envelope stores the exact signed text and signature plus `upd`, the following message's ID.
 `src/bridge/sse.ts` and `src/bridge/response-json.ts` preserve this pair even when summaries are hidden.
+Compaction ignores signed progress events: only ordinary summary text enters the checkpoint,
+and neither bridge emits the commentary pair during compaction.
 `src/responses/parser.ts` removes only the adjacent commentary copy with matching ID (or no ID),
 phase and exact text, leaving the original thinking block in source order. Edited copies remain.
 `src/claude/outbound.ts` restores the signed thinking block and consumes the presentation copy on

@@ -387,6 +387,7 @@ function buildResponseJSONWithBudget(
         flushToolCall();
         break;
       case "text_delta":
+        if (options?.compaction && e.anthropicThinkingSignature) break;
         if (e.anthropicThinkingSignature) {
           rawReasoningForNextToolCall = "";
           flushText("commentary");

@@ -3,6 +3,7 @@ import { createAnthropicAdapter } from "../../../src/adapters/anthropic";
 import { bridgeToResponsesSSE, buildResponseJSON } from "../../../src/bridge";
 import { parseRequest } from "../../../src/responses/parser";
 import { decodeReasoningEnvelope } from "../../../src/responses/reasoning-envelope";
+import { decodeCompactionSummary } from "../../../src/responses/compaction";
 import { createTestTranslatorBudget, withTestTranslatorBudget } from "../../helpers/translator-budget";
 import { collectAnthropicMessage, responsesJsonToAnthropicMessage, responsesSseToAnthropicSse } from "../../../src/claude/outbound";
 import { buildContinuationRequest } from "../../../src/server/responses/terminal-guard";
@@ -30,7 +31,8 @@ async function eventsFor(blocks: Record<string, unknown>[], streaming: boolean, 
       ...(block.type === "thinking" ? [
         frame("content_block_delta", { index, delta: { type: "thinking_delta", thinking: block.thinking } }),
         frame("content_block_delta", { index, delta: { type: "signature_delta", signature: block.signature } }),
-      ] : block.type === "tool_use" ? [frame("content_block_delta", { index, delta: { type: "input_json_delta", partial_json: JSON.stringify(block.input) } })] : []),
+      ] : block.type === "tool_use" ? [frame("content_block_delta", { index, delta: { type: "input_json_delta", partial_json: JSON.stringify(block.input) } })]
+        : block.type === "text" ? [frame("content_block_delta", { index, delta: { type: "text_delta", text: block.text } })] : []),
       frame("content_block_stop", { index }),
     ]);
     frames.push(frame("message_delta", { delta: { stop_reason: "tool_use" } }), frame("message_stop"));
@@ -112,6 +114,25 @@ test("edited commentary is retained and never mistaken for the original signed b
   const parsed = parseRequest({ model, input: edited });
   expect(parsed.context.messages.some(message => Array.isArray(message.content) && message.content.some(part => part.type === "text" && part.text === "edited"))).toBe(true);
 });
+
+for (const streaming of [false, true]) {
+  test(`${streaming ? "SSE" : "JSON"}: compaction excludes signed progress from output and checkpoint text`, async () => {
+    const { events } = await eventsFor([update, { type: "text", text: "Checkpoint summary." }], streaming);
+    let output: { type: string; encrypted_content: string }[];
+    if (streaming) {
+      async function* source() { yield* events; }
+      const sse = await new Response(bridgeToResponsesSSE(source(), model, undefined, undefined, undefined, undefined, 2000, { compaction: true })).text();
+      const frames = sse.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
+      expect(frames.some(f => f.type === "response.output_text.delta")).toBe(false);
+      output = frames.find(f => f.type === "response.completed").response.output;
+      expect(frames.filter(f => f.type === "response.output_item.done").map(f => f.item.type)).toEqual(["compaction"]);
+    } else {
+      output = buildResponseJSON(events, model, { compaction: true }).output as typeof output;
+    }
+    expect(output.map(item => item.type)).toEqual(["compaction"]);
+    expect(decodeCompactionSummary(output[0]!.encrypted_content)).toBe("Checkpoint summary.");
+  });
+}
 
 test("buffered progress releases its reservation when the consumer cancels", async () => {
   const budget = createTestTranslatorBudget();
