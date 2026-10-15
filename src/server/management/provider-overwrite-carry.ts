@@ -214,6 +214,13 @@ export function applyProviderCompatPatchFields(
     else return { error: "preserveResponsesReasoningContent must be a boolean" };
     touched = true;
   }
+  if (Object.hasOwn(rawBody, "inferContextWindow")) {
+    const value = rawBody.inferContextWindow;
+    if (value === null) delete next.inferContextWindow;
+    else if (typeof value === "boolean") next.inferContextWindow = value;
+    else return { error: "inferContextWindow must be a boolean or null" };
+    touched = true;
+  }
   if (Object.hasOwn(rawBody, "reasoningWireFormat")) {
     const value = rawBody.reasoningWireFormat;
     if (value === null) {

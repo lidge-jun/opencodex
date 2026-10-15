@@ -41,6 +41,8 @@ Les points de terminaison Chat Completions et Messages honorent les catalogues d
 
 Par ailleurs, sur chaque voie entrante, un appel dans l’espace de noms `default.` d’un fournisseur est normalisé vers le nom d’outil nu déclaré par la requête (`default.Read` → `Read`).
 
+Messages natif reconnaît aussi les définitions d’outils en ligne dans les messages système avec `tools: []`. Ces noms restent appelables jusqu’à leur retrait permanent, sans autoriser d’autres outils clients. Les appels MCP hébergés et les flux d’arguments des outils serveur conservent leur format natif.
+
 ## Présentation du point de terminaison
 
 | Espace client | Point de terminaison | Résultat non-stream réussi | Résultat de flux ou de socket réussi |
