@@ -18,6 +18,7 @@ import type { OcxConfig, OcxParsedRequest } from "../../../src/types";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
 
 const credential = JSON.stringify({ type: "authorized_user", client_id: "fixture-client", client_secret: "fixture-secret", refresh_token: "fixture-refresh" });
+const encodedCredential = credential.replace(/[A-Za-z_]/g, ch => `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`);
 const rejectedInputs = [
   `[${credential}]`,
   JSON.stringify(credential),
@@ -58,10 +59,12 @@ afterEach(() => {
 });
 
 test.each([resolveProviderApiKey, resolveProviderApiKeyQuietly])("keychain aliases refuse GCP payloads before wire-key resolution %#", resolve => {
-  secrets.set("vertex/fixture", credential);
-  expect(() => resolve("keychain:vertex/fixture")).toThrow(/gcp-sa reference/);
-  config.providers.vertex!.apiKey = "keychain:vertex/fixture";
-  expect(() => routedProviderConfig("vertex", config.providers.vertex!)).toThrow(/gcp-sa reference/);
+  for (const input of [credential, encodedCredential]) {
+    secrets.set("vertex/fixture", input);
+    expect(() => resolve("keychain:vertex/fixture")).toThrow(/gcp-sa reference/);
+    config.providers.vertex!.apiKey = "keychain:vertex/fixture";
+    expect(() => routedProviderConfig("vertex", config.providers.vertex!)).toThrow(/gcp-sa reference/);
+  }
 });
 
 test.each(["cli", "management"])("%s deletion includes a credential added immediately before save-lock acquisition", async surface => {
@@ -105,7 +108,7 @@ test.each(rejectedInputs)("wrapped/malformed credential paste is refused before 
   expect(secrets.size).toBe(0);
 });
 
-test.each(rejectedInputs)("keychain restore refuses credential-shaped payload %#", input => {
+test.each([...rejectedInputs, encodedCredential])("keychain restore refuses credential-shaped payload %#", input => {
   config.providers.vertex!.apiKey = "keychain:vertex";
   saveConfig(config);
   secrets.set("vertex", input);

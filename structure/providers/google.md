@@ -7,7 +7,7 @@ An empty or whitespace-only account is rejected before token resolution; it neve
 Marker payload readability is checked before returning a cached token; removing or locking the stored
 credential fails closed. Errors omit the marker account. Wrapped or malformed credential-shaped input
 is refused at ingestion and keychain restore, so it cannot become a literal config value.
-The leaf classifier in `src/lib/gcp-credential-input.ts` also rejects GCP payloads reached through
+The leaf classifier in `src/lib/gcp-credential-input.ts` decodes JSON escapes and rejects GCP payloads reached through
 `keychain:` aliases before normal or quiet API-key resolution can return wire-header material.
 Post-commit cleanup skips empty or whitespace-only GCP marker accounts in both persisted references and captured removal candidates, so one malformed marker cannot block valid-account retention or cleanup. Request-time marker validation remains strict.
 `src/providers/api-keys.ts` stores pasted credential JSON as markers, including multiple JSON objects
