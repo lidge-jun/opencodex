@@ -1,5 +1,6 @@
 {
   "codex-history-pending-wal.test.ts": "codex-integration",
+  "compaction-history-framing.test.ts": "responses",
   "service-log.test.ts": "service",
   "service-health-sentinel-policy.test.ts": "service",
   "service-health-sentinel-runner.test.ts": "service",

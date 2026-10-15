@@ -1,4 +1,5 @@
 import { normalizeRoutedAgentMessages } from "../routed-agent-messages";
+import { frameCompactionHistory } from "../../responses/compaction-history-framing";
 import { nameRoutedIdentity, repairIdentityInResponsesBody, stripRoutedIdentity } from "../identity";
 import { stripBracketedModelSuffix } from "../openai-chat";
 import { normalizeOpenCodeGoAdditionalTools } from "../opencode-go-additional-tools";
@@ -414,6 +415,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         // Placed before the routed compaction body is built and before serialization, so the HTTP,
         // routed-compaction and WebSocket outbounds are all covered by this one call.
         if (!isOpenAiOperatedResponsesDestination(provider)) {
+          if (parsed._compactionRequest !== true && isPlainObject(outBody)) outBody = frameCompactionHistory(outBody);
           outBody = stripCanonicalOnlyTopLevelFields(outBody);
         }
         outBody = promoteClientLoadedTools(outBody);

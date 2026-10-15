@@ -672,6 +672,20 @@ Auto auth selects subscription when stored Claude auth is found, proxy when none
 subscription with a warning when detection is inconclusive. See
 [Claude Code auth mode](/guides/claude-code/#auth-mode).
 
+## Retained requests after compaction
+
+For translated providers and routed Responses gateways, OpenCodex automatically frames
+plain-text user requests before the latest readable Codex checkpoint as historical context.
+Requests the checkpoint reports as completed should not be repeated; retained text remains
+available for unfinished work within its existing authorization. Later user input takes priority,
+including pauses, cancellations and changes of scope. A checkpoint grants no new permission.
+
+This is enabled by default and needs no setting. Original request text and canonical thread/replay
+history are preserved. Native OpenAI Responses passthrough, summarizer turns, context wrappers,
+images/files and assistant/tool items are unchanged. The framing applies to plaintext checkpoints
+beginning with Codex's summary prefix; decoded OpenCodex checkpoints retain their existing
+continuation guidance. Framing is a prompt instruction, so model behavior can vary.
+
 ## Compaction routing
 
 In **Dashboard → Overview → Compaction routing**, choose a model, which triggers it applies to,
