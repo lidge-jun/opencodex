@@ -318,27 +318,8 @@ never spawns Codex. `ocx doctor` prints the active mode and its reason.
 
 ## Preserve signed-in quota
 
-`codexPreserveSignedInAccount` defaults off. `src/codex/account-preservation.ts` gives native main
-and matching ordinary pool entries a lower effective priority band; stored per-ID priorities
-remain unchanged inside each band. Eligibility, model evidence, quota headroom, manual pin ceilings
-and every strategy still use the shared selection path. Unbound quota preemption compares these
-same effective priorities; healthy bindings remain unless existing priority-failback rules apply.
-Exact account routes bypass the preference. Fallback may spend reserved quota, never bypassing
-pause, reauth, model access, hard lock or paid-credit consent.
-
-`src/codex/signed-in-identity.ts` requires matching selected workspace and normalized member email.
-Its process-local observation is published by existing physical-login lifecycle reads and the
-owned linked-group read; request routing reads only memory, even during native profile drain.
-Unknown/conflicting evidence never links a new ordinary row; transient failures and conflicting claims retain the last verified observation. Startup seeds the observation; later
-owned observations follow login changes, and confirmed transitions clear stale observations.
-Pool replacements are matched from their current credentials. Existing lifecycle transitions
-purge main bindings. No credential or member identity is persisted by the policy.
-
-`src/codex/auth-api/account-preservation.ts` exposes GET/PUT policy status under native-main
-ownership and reports affected entry IDs and the actual unbound preview. A validated PUT saves
-before releasing runtime state. Explicit application releases affected affinity scopes and manual
-preference/pin only for subsequent requests; already-materialized requests retain their account.
-The CLI drives this API; linked pause remains the absolute exclusion alternative.
+The opt-in preference that spends other pool accounts before the signed-in identity is
+described in [`openai-signed-in-preservation.md`](openai-signed-in-preservation.md).
 
 ## Manual account pause and resume
 
@@ -558,6 +539,16 @@ false. Exact-account and Direct routes are unchanged.
 ## Main-account policy observations
 
 Opted-in main-account credit renewal follows the [spendable credit contract](openai-tiers.md#spendable-codex-credits). An unpaused, non-quarantined main identity with an exhausted included window keeps discovering credits even when its evidence is missing or unavailable; fresh positive evidence waits until three minutes of age for renewal. Admission remains blocked until fresh spendable evidence arrives, with the consented credit refusal's Retry-After bounded to five minutes. The existing background sweep prepares a token before WHAM, rechecks eligibility, and uses a passive probe that neither sets nor clears needs-reauth, including after identity retries. Other probes keep their existing auth behavior. A non-passive caller joining renewal applies terminal-auth quarantine, or clears it on a successful explicit refresh, only while its credential and configuration fences remain current; shared evidence does not inherit the owner's passive intent.
+
+`src/codex/account-use-remaining.ts` owns the persistent, default-off
+`codexUseRemainingQuotaAccountIds` opt-in. Effective auto-switch thresholds resolve to zero
+for listed accounts; main protection resolves to 100% in both governing windows.
+Underlying thresholds remain stored, and disabling restores their current values.
+Account deletion removes its opt-in. No cooldown, pause, eligibility or credit-spending
+permission is removed. Selected-main and caller-owned Direct materialization use the same policy.
+`src/codex/auth-api/use-remaining-route.ts` exposes authenticated GET/PUT and rolls back
+the live preference when persistence fails; GET never saves. Coverage is in
+`tests/codex-integration/codex-use-remaining-quota.test.ts` and the existing main-auth suite.
 
 The main-account admission policy defaults to 90% for short windows and 98% for long windows;
 `codexMainAccountHardLockThresholds` permits ordered integer thresholds from 80 through 100.

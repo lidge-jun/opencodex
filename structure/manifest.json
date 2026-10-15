@@ -416,6 +416,13 @@
       ]
     },
     {
+      "path": "providers/openai-signed-in-preservation.md",
+      "tier": 4,
+      "title": "Preserve Signed-In Codex Quota",
+      "scope": "Opt-in effective priority bands that spend other pool accounts before the signed-in identity, its identity observation and management API.",
+      "documents": ["src/codex/account-preservation.ts", "src/codex/signed-in-identity.ts", "src/codex/auth-api/account-preservation.ts", "src/cli/account-preservation.ts"]
+    },
+    {
       "path": "providers/cursor.md",
       "tier": 4,
       "title": "Cursor Provider",

@@ -91,7 +91,7 @@ object so the freshness the data write moved does not read as a replacement. A d
 A schema-invalid top-level JSON value is repairable only when it is a non-array object.
 `loadConfig` backs up arrays, primitives, and null before using defaults, so the repair merge cannot turn them into a valid config while discarding the original bytes.
 
-`src/config/schema/config-schema.ts` accepts the opt-in `codexAccountPriorityFailback` preference and degrades a malformed value in a loaded file to false without discarding providers, while a write candidate carrying a non-boolean value is rejected. A malformed entry in `codexAccountAutoSwitchThresholds` is dropped on load with a warning and the valid entries are kept, so an unrelated save cannot erase them. Its [routing contract](providers/openai-accounts.md#ongoing-priority-failback) requires quota strategy and a positive threshold.
+`src/config/schema/config-schema.ts` accepts the opt-in `codexAccountPriorityFailback` preference and degrades a malformed value in a loaded file to false without discarding providers, while a write candidate carrying a non-boolean value is rejected. A malformed entry in `codexAccountAutoSwitchThresholds` is dropped on load with a warning and the valid entries are kept, so an unrelated save cannot erase them. Its [routing contract](providers/openai-accounts.md#ongoing-priority-failback) requires quota strategy and a positive threshold. The default-off `codexUseRemainingQuotaAccountIds` list degrades to absent when malformed; write candidates reject invalid account ids. Its [included-quota policy](providers/openai-accounts.md#main-account-policy-observations) preserves thresholds and credit-spending permission.
 
 | Group | Keys | Resolution rule |
 | --- | --- | --- |
