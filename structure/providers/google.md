@@ -36,6 +36,13 @@ first-user-message derivation for clients that omit it; only the fixed hash is r
 Both streaming and non-streaming responses feed the store; request compilation happens before replay
 so matching uses the provider-visible tool name.
 
+`src/adapters/openai-responses/passthrough.ts` removes item-level `extra_content` through
+`stripProviderInputItemMetadata` in `src/adapters/openai-responses/request-strips.ts` only for
+OpenAI-operated Responses destinations (canonical ChatGPT Codex and the official OpenAI API).
+This outbound projection is shared by HTTP and WebSocket creates, including concrete combo/fallback
+children. It preserves caller-owned history for Google thought-signature replay and leaves arbitrary
+gateway extensions intact; it does not allowlist item fields or traverse tool arguments/results.
+
 > Decision record: [ADR-0057](../decisions/ADR-0057-google-tool-call-thought-signature-replay.md)
 
 ## Google tool-result adjacency repair
