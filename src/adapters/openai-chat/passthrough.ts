@@ -79,7 +79,8 @@ export function buildOpenAIChatPassthroughRequest(
   for (const field of CHAT_PASSTHROUGH_FIELDS) {
     if (rawBody[field] !== undefined) body[field] = rawBody[field];
   }
-  body.messages = replayNativeChatReasoning(body.messages, provider, modelId, replayScope);
+  body.messages = replayNativeChatReasoning(body.messages, provider, modelId, replayScope,
+    Array.isArray(rawBody.tools) && rawBody.tools.length > 0);
   if (protectGlmSummaryBudget(body, provider.baseUrl, body.reasoning_effort)) body.reasoning_effort = "low";
   const rawEfforts = modelRecordValue(provider.modelReasoningEfforts, modelId) ?? provider.reasoningEfforts;
   const reasoningDisabled = modelInList(provider.noReasoningModels, modelId) || rawEfforts?.length === 0;

@@ -487,7 +487,7 @@ display, not confidentiality ([Responses wire shapes](../transports/responses-wi
 
 For models requiring a reasoning placeholder, a preserved thinking-only assistant receives it even
 without tools, keeping strict DeepSeek continuations valid (#5421). Chat replay policy in
-`src/adapters/openai-chat/reasoning-replay.ts` honors explicit lists and otherwise recognizes DeepSeek Flash/Pro tokens across versions and gateways; [native continuation](../data-planes/inbound-compat.md#native-chat-thinking-continuation) shares this policy.
+`src/adapters/openai-chat/reasoning-replay.ts` honors explicit lists and otherwise recognizes DeepSeek Flash/Pro tokens across versions and gateways; [native continuation](../data-planes/inbound-compat.md#native-chat-thinking-continuation) shares this policy and fills configured placeholders on plain assistant history when DeepSeek tools require them.
 
 The process-local raw-reasoning fallback is fail-closed unless a request has an explicit client
 thread plus an exact provider destination, wire adapter, final model, and physical credential

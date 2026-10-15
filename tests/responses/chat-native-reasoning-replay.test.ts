@@ -13,6 +13,7 @@ type Rec = Record<string, any>;
 const REASONING = "Inspect the fixture before answering.";
 const USER = { role: "user", content: "Inspect the fixture." };
 const tool = (id: string) => ({ id, type: "function", function: { name: "inspect", arguments: "{}" } });
+const TOOLS = [{ type: "function", function: { name: "inspect", parameters: { type: "object", properties: {} } } }];
 const ASSISTANT = { role: "assistant", content: null, tool_calls: [tool("call_a"), tool("call_b")] };
 const HISTORY = [USER, ASSISTANT, { role: "tool", tool_call_id: "call_a", content: "a" },
   { role: "tool", tool_call_id: "call_b", content: "b" }];
@@ -53,6 +54,13 @@ function start(providerName: string, model: string, options: {
     expect(new URL(req.url).pathname).toBe("/v1/chat/completions");
     const body = await req.json() as Rec;
     captured.push(body);
+    // DeepSeek requires reasoning on every assistant turn when tools are supplied,
+    // including earlier turns that answered without invoking a tool.
+    if (body.tools?.length && body.messages.some((m: Rec) => m.role === "assistant"
+        && (typeof m.reasoning_content !== "string" || m.reasoning_content.length === 0))) {
+      return Response.json({ error: { type: "invalid_request_error",
+        message: "The `reasoning_content` in the thinking mode must be passed back to the API." } }, { status: 400 });
+    }
     const assistant = body.messages.find((m: Rec) => m.role === "assistant" && m.tool_calls?.length);
     if (assistant) {
       if (typeof assistant.reasoning_content !== "string" || assistant.reasoning_content.length === 0
@@ -84,7 +92,7 @@ function start(providerName: string, model: string, options: {
   return async (messages: Rec[], stream = false, thread: string | null = "fixture-thread", extra: Rec = {}) => {
     const response = await fetch(new URL("/v1/chat/completions", proxy!.url), {
       method: "POST", headers: { "content-type": "application/json", ...(thread ? { "thread-id": thread } : {}) },
-      body: JSON.stringify({ model: `${providerName}/${model}`, stream, messages, ...extra }),
+      body: JSON.stringify({ model: `${providerName}/${model}`, stream, messages, tools: TOOLS, ...extra }),
     });
     const text = await response.text();
     return { status: response.status, text };
@@ -137,6 +145,17 @@ describe("#7118 native Chat thinking continuation", () => {
     const assistant = { ...ASSISTANT, reasoning_content: "client-owned reasoning", name: "assistant-name" };
     expect((await send([USER, assistant, ...HISTORY.slice(2)])).status).toBe(200);
     expect(captured[1]!.messages[1]).toEqual(assistant);
+  });
+  test("tool-enabled DeepSeek history repairs earlier assistant turns without tool calls", async () => {
+    const send = start("custom", "deepseek-v4.1-flash");
+    const earlier = { role: "assistant", content: "Earlier answer" };
+    const messages = [USER, earlier, { role: "user", content: "Now inspect the fixture" }, ...HISTORY.slice(1)];
+    expect((await send(messages)).status).toBe(200);
+    expect(captured.at(-1)!.messages[1]).toEqual({ ...earlier, reasoning_content: " " });
+    expect(captured.at(-1)!.tools).toEqual(TOOLS);
+    expect((await send([USER, { ...earlier, reasoning_content: "original earlier reasoning" },
+      ...messages.slice(2)])).status).toBe(200);
+    expect(captured.at(-1)!.messages[1].reasoning_content).toBe("original earlier reasoning");
   });
   test("a JSON upstream reply also seeds replay for a streaming client", async () => {
     const send = start("go-fixture", "deepseek-v4.1-flash", { requireOriginal: true });

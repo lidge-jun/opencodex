@@ -80,6 +80,21 @@ describe("native Chat reasoning policy and physical replay ownership", () => {
     expect(reasoning(scope(), raw, "custom")).toBeUndefined();
     expect(reasoning(scope(), PROVIDER, "plain-model")).toBeUndefined();
   });
+  test("plain-answer placeholders require DeepSeek, tools and both policy opt-ins", () => {
+    const messages = [{ role: "assistant", content: "Earlier answer" }];
+    const tools = [{ type: "function", function: { name: "inspect", parameters: { type: "object", properties: {} } } }];
+    for (const [provider, model, requestedTools, expected] of [
+      [PROVIDER, MODEL, tools, " "],
+      [PROVIDER, MODEL, [], undefined],
+      [{ ...PROVIDER, preserveReasoningContentModels: [] }, MODEL, tools, undefined],
+      [{ ...PROVIDER, requiresReasoningPlaceholderModels: [] }, MODEL, tools, undefined],
+      [{ ...PROVIDER, preserveReasoningContentModels: ["custom"] }, "custom", tools, undefined],
+    ] as const) {
+      const request = buildOpenAIChatPassthroughRequest(provider, { messages, tools: requestedTools }, model, false);
+      expect(JSON.parse(request.body).messages[0].reasoning_content).toBe(expected);
+    }
+    expect(messages).toEqual([{ role: "assistant", content: "Earlier answer" }]);
+  });
 });
 
 describe("native SSE reasoning capture lifecycle", () => {

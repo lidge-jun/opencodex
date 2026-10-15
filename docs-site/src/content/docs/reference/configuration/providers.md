@@ -1747,3 +1747,6 @@ across versions, including `deepseek-v4.1-flash`, namespaced ids and gateway suf
 lists remain authoritative: `preserveReasoningContentModels: []` disables automatic repair,
 while `requiresReasoningPlaceholderModels: []` disables placeholders and still allows cached
 original reasoning. Other model families require the preserve declaration.
+Tool-enabled DeepSeek requests also require reasoning on earlier assistant answers without tool
+calls. The configured placeholder fills these omissions; no original reasoning can be recovered
+from the tool-call cache for those turns. Preserve their supplied reasoning for full fidelity.

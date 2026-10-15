@@ -531,6 +531,8 @@ lane honors the same preserve/placeholder policy as translated Chat; absent pres
 recognize DeepSeek Flash/Pro families across dotted versions, namespaces and gateway suffixes.
 Explicit preserve lists (including `[]`) remain authoritative, and an explicit placeholder list
 can disable fabricated placeholders while allowing original cached reasoning.
+For tool-enabled DeepSeek requests the configured placeholder also repairs earlier assistant
+answers without tool calls. Those turns have no call-id replay entry; supplied reasoning wins.
 
 `src/server/chat-native-reasoning.ts` records upstream JSON and fragmented SSE reasoning under
 all parallel call ids, separately for each choice. Replay requires a sanitized `thread-id`,
