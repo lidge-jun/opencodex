@@ -692,12 +692,13 @@ export function httpStatusFromTerminalError(error: {
   if (isCyberPolicyCode(error.code) || (error.message ? isCyberPolicyMessage(error.message) : false)) {
     return 400;
   }
-  // Client-closed messages often arrive as invalid_request_error after classifyError; check message
-  // before a recognized invalid_request_error is treated as HTTP 400.
   const message = error.message ?? "";
-  if (message && isClientClosedMessage(message)) return 499;
   const recognized = recognizedUpstreamError(error);
-  if (recognized) return recognized.httpStatus;
+  // Client-closed messages often arrive as invalid_request_error after classifyError, so a
+  // recognized 400 yields to the client-closed check below; every other class keeps its order.
+  if (recognized && !(recognized.httpStatus === 400 && message && isClientClosedMessage(message))) {
+    return recognized.httpStatus;
+  }
   if (error.type === "rate_limit_error" || error.code === "rate_limit_exceeded") return 429;
   if (error.type === "authentication_error" || error.code === "invalid_api_key") return 401;
   if (
@@ -707,6 +708,9 @@ export function httpStatusFromTerminalError(error: {
   ) return 403;
   if (error.type === "insufficient_quota" || error.code === "insufficient_quota") return 429;
   if (error.type === "server_error" && error.code === "server_is_overloaded") return 503;
+  // Client-closed messages often arrive as invalid_request_error after classifyError; check message
+  // before treating every invalid_request_error as HTTP 400.
+  if (message && isClientClosedMessage(message)) return 499;
   if (error.type === "invalid_request_error") return 400;
   if (error.type === "proxy_error") return 500;
   // A structured server class must not be downgraded to a CLIENT error by message wording.

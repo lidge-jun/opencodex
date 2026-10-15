@@ -100,4 +100,7 @@ test("server-class overload keeps the 502 it had", async () => {
 test("a codeless invalid_request_error worded as a client close stays 499", () => {
   expect(httpStatusFromTerminalError({ type: "invalid_request_error", message: "client closed request" })).toBe(499);
   expect(httpStatusFromTerminalError({ type: "invalid_request_error", message: "bad shape" })).toBe(400);
+  // Only the recognized 400 yields to client-closed wording; other classes keep their dev order.
+  expect(httpStatusFromTerminalError({ type: "permission_error", message: "client closed request" })).toBe(403);
+  expect(httpStatusFromTerminalError({ type: "rate_limit_error", message: "client closed request" })).toBe(429);
 });
