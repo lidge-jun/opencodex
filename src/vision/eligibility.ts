@@ -227,6 +227,19 @@ export function isVisionSidecarConsumer(config: VisionCapabilityConfig, provider
 }
 
 /**
+ * `isVisionSidecarConsumer` for many rows of one config. Rows of the same provider share one
+ * registry enrichment instead of rebuilding it per row, which matters for `/api/models`
+ * listings with thousands of rows. Bind it to a single config snapshot; it does not observe
+ * provider changes made after the first lookup.
+ */
+export function visionSidecarConsumerClassifier(
+  config: VisionCapabilityConfig,
+): (providerName: string, modelId: string) => boolean {
+  const cache: EnrichedProviderCache = new Map();
+  return (providerName, modelId) => isVisionSidecarConsumerWithCache(config, providerName, modelId, cache);
+}
+
+/**
  * Can this model accept an image on the wire? Sources are consulted in descending
  * trustworthiness; the first that speaks wins. `undefined` means nothing knows,
  * which callers treat as eligible.

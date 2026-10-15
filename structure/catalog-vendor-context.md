@@ -11,6 +11,9 @@ then Azure metadata, then this estimate, then an enabled context cap as the wind
 retain their existing policies; OpenAI API metadata used for a custom relay is not Codex subscription
 capacity. The lookup changes no configuration, credentials, pricing, or request model identity.
 
+Management reads, strict boolean/null PATCH updates, and same-name overwrite preservation of the
+optional flag follow the [provider API contract](gui-and-management-api.md#api-ownership).
+
 Original-vendor tables precede aggregator tables. Exact model spellings win within a tier;
 case-folding and dot-to-hyphen aliases are accepted only without conflicting windows. Aggregator
 rows may supply a bare last-segment alias; floating `~` rows are excluded. Conflicting keys do not
@@ -27,3 +30,16 @@ not `context_window`, so routing requirements still see unknown capacity. Existi
 modality/tool evidence remains usable. Shared client catalogs, Claude context markers and exports
 consume the estimated window; operators must configure a lower window or Context cap when a relay
 serves less. Tests: `tests/codex-integration/vendor-context.test.ts`.
+
+## Native maximum windows
+
+`src/codex/catalog/parsing.ts` preserves native `max_context_window` independently of the
+default `context_window`. Only configured hard limits narrow that maximum: the exact model's
+window overrides the provider window, then the provider context cap bounds either. Both paths
+share validation and precedence through `nativeOpenAiConfiguredContextLimit` in
+`src/codex/catalog/metadata.ts`. Strict normalization preserves the maximum for trusted
+account-selector native rows too; ordinary routed rows remain bounded by their effective window.
+Compaction and max input still follow the effective default
+window, including retained lower soft budgets. Native capacity remains defined by the
+[native passthrough contract](catalog.md#native-passthrough). Covered by
+`tests/codex-integration/catalog-native-max-context.test.ts`.

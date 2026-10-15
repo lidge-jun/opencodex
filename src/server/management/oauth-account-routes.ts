@@ -597,10 +597,15 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     // sticky limit is refused identically whichever pool is addressed.
     let strategy: string | undefined;
     if (fields.strategy !== undefined) {
-      const parsed = kind === "codex" ? parseCodexAccountPoolStrategy(fields.strategy) : parseGenericPoolStrategy(fields.strategy, provider);
-      if (parsed === null) return jsonResponse({ error: kind === "codex"
-        ? "strategy must be one of: quota, round-robin, fill-first, reset-first"
-        : `strategy must be one of: quota, round-robin, fill-first${provider === "kiro" ? ", least-loaded" : ""}` }, 400);
+      // reset-first is a Codex and generic strategy. The Anthropic runtime implements only
+      // quota, round-robin and fill-first, so that kind keeps refusing it rather than storing
+      // a strategy it would silently ignore.
+      const parsed = kind === "codex" ? parseCodexAccountPoolStrategy(fields.strategy)
+        : kind === "generic" ? parseGenericPoolStrategy(fields.strategy, provider)
+        : parseAccountPoolStrategy(fields.strategy);
+      if (parsed === null) return jsonResponse({ error: kind === "anthropic"
+        ? "strategy must be one of: quota, round-robin, fill-first"
+        : `strategy must be one of: quota, round-robin, fill-first, reset-first${kind === "generic" && provider === "kiro" ? ", least-loaded" : ""}` }, 400);
       strategy = parsed;
     }
     let stickyLimit: number | undefined;
@@ -754,7 +759,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
         if (body.strategy === null) delete next.strategy;
         else {
           const parsed = parseGenericPoolStrategy(body.strategy, provider);
-          if (parsed === null) return jsonResponse({ error: `strategy must be one of: quota, round-robin, fill-first${provider === "kiro" ? ", least-loaded" : ""}` }, 400);
+          if (parsed === null) return jsonResponse({ error: `strategy must be one of: quota, round-robin, fill-first, reset-first${provider === "kiro" ? ", least-loaded" : ""}` }, 400);
           next.strategy = parsed;
         }
       }

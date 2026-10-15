@@ -1,4 +1,5 @@
 import { normalizeRoutedAgentMessages } from "../routed-agent-messages";
+import { frameCompactionHistory } from "../../responses/compaction-history-framing";
 import { nameRoutedIdentity, repairIdentityInResponsesBody, stripRoutedIdentity } from "../identity";
 import { stripBracketedModelSuffix } from "../openai-chat";
 import { normalizeOpenCodeGoAdditionalTools } from "../opencode-go-additional-tools";
@@ -36,7 +37,7 @@ import {
   emittedFastWire,
 } from "../../providers/fastwire";
 import { dropResponsesReasoningInputItems, mapRoutedResponsesReasoningEffort, normalizeConfiguredReasoningSummaryDelivery, sanitizeReasoningInputContent, stripDisabledReasoningSummaries, stripDisabledVerbosity, stripNoneReasoningSummary, stripUnsupportedReasoningSummaryDelivery } from "./reasoning";
-import { scrubOcxCompactionItems, stripCanonicalOnlyToolFields, stripCanonicalOnlyTopLevelFields, stripInternalChatMessageMetadataPassthrough, stripInvalidItemIds, stripItemIdsWhenUnstored, stripRejectedSamplingParams } from "./request-strips";
+import { scrubOcxCompactionItems, stripCanonicalOnlyToolFields, stripCanonicalOnlyTopLevelFields, stripInternalChatMessageMetadataPassthrough, stripInvalidItemIds, stripItemIdsWhenUnstored, stripProviderInputItemMetadata, stripRejectedSamplingParams } from "./request-strips";
 import { notePlaintextReasoningDropped } from "./plaintext-reasoning-notice";
 import { stripCanonicalForwardPromptCacheOptions, stripDeprecatedPromptCacheRetention } from "./prompt-cache";
 import { isPlainObject } from "./internal";
@@ -398,6 +399,10 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       // canonical-destination split below, because the reported failure was a side chat on a plain
       // OpenAI model inheriting history a routed provider had damaged.
       outBody = repairLegacyDottedToolCallNames(outBody);
+      // Shared HTTP/WS outbound projection, including concrete combo/fallback destinations.
+      if (isOpenAiOperatedResponsesDestination(provider)) {
+        outBody = stripProviderInputItemMetadata(outBody);
+      }
       if (!isCanonicalOpenAiForwardProvider(provider)) {
         if (provider.preserveResponsesMessageMetadata !== true) {
           outBody = stripInternalChatMessageMetadataPassthrough(outBody);
@@ -414,6 +419,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         // Placed before the routed compaction body is built and before serialization, so the HTTP,
         // routed-compaction and WebSocket outbounds are all covered by this one call.
         if (!isOpenAiOperatedResponsesDestination(provider)) {
+          if (parsed._compactionRequest !== true && isPlainObject(outBody)) outBody = frameCompactionHistory(outBody);
           outBody = stripCanonicalOnlyTopLevelFields(outBody);
         }
         outBody = promoteClientLoadedTools(outBody);

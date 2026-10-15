@@ -97,6 +97,8 @@ Shared parsing and streaming follow the [request-copy](../transports/byte-accoun
 
 ## Chat Completions inbound native path
 
+Managed native Chat and translated Chat share the [explicit empty client-catalog boundary](../transports/responses-wire-shapes.md#declared-tool-membership-by-inbound-wire): a current-turn `tools: []` refuses client tool output with `undeclared_tool_call` in SSE and JSON. Omitted, partial, and hosted-only catalogs retain deferred delivery, and caller-forward routes retain their exemption.
+
 ### Droid request defaults
 
 `src/server/droid-reasoning-default.ts` reads the model-scoped
