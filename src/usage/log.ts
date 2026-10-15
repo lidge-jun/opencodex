@@ -1163,8 +1163,12 @@ export function appendUsageEntry(entry: PersistedUsageEntry): void {
 
 export type UsageLogRevision = {
   path: string;
-  dev: number;
-  ino: number;
+  /**
+   * Exact decimal device and file id. NTFS file ids carry a sequence number in their
+   * high bits and routinely exceed 2^53, so a Number would let two files compare equal.
+   */
+  dev: string;
+  ino: string;
   birthtimeMs: number;
   size: number;
   mtimeMs: number;
@@ -1367,12 +1371,17 @@ function readExactly(fd: number, length: number, position: number): Buffer | nul
   return output;
 }
 
-function usageLogRevision(path: string, stat: ReturnType<typeof fstatSync>): UsageLogRevision {
+/** Exact dev/ino of an open file, read through bigint stats so large ids keep every bit. */
+export function exactFileIdentity(fd: number): { dev: string; ino: string } {
+  const exact = fstatSync(fd, { bigint: true });
+  return { dev: exact.dev.toString(), ino: exact.ino.toString() };
+}
+
+function usageLogRevision(path: string, fd: number, stat: ReturnType<typeof fstatSync>): UsageLogRevision {
   if (!stat.isFile()) throw new Error("usage log is not a regular file");
   return {
     path,
-    dev: Number(stat.dev),
-    ino: Number(stat.ino),
+    ...exactFileIdentity(fd),
     birthtimeMs: Number(stat.birthtimeMs),
     size: Number(stat.size),
     mtimeMs: Number(stat.mtimeMs),
@@ -1405,7 +1414,7 @@ export function currentUsageLogRevision(): UsageLogRevision | null {
   let fd: number | undefined;
   try {
     fd = openSync(path, "r");
-    return usageLogRevision(path, fstatSync(fd));
+    return usageLogRevision(path, fd, fstatSync(fd));
   } finally {
     if (fd !== undefined) closeSync(fd);
   }
@@ -1530,7 +1539,7 @@ async function readUsageEntriesFullCooperatively(
     if (prefixDigest === null) throw new Error("usage log changed while it was being read");
     return {
       entries: parsed.entries,
-      revision: usageLogRevision(path, stat),
+      revision: usageLogRevision(path, fd, stat),
       truncatedPrefixBytes,
       entriesTruncated: parsed.entriesDropped > 0,
       entriesDropped: parsed.entriesDropped,
@@ -1562,7 +1571,7 @@ async function readUsageEntriesIncrementally(
   try {
     fd = openSync(path, "r");
     const stat = fstatSync(fd);
-    const revision = usageLogRevision(path, stat);
+    const revision = usageLogRevision(path, fd, stat);
     if (usageLogIdentityKey(revision) !== retained.identityKey) return null;
     const size = Number(stat.size);
     // A shrink means truncation or replacement-in-place; the retained rows may no
