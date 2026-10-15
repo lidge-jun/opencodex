@@ -50,6 +50,7 @@ export async function handleCodexAccountPreservation(req: Request, config: OcxCo
       pinnedAccountId: pinnedCodexAccountId(runtime) ?? null,
       bindings: update?.applyToBound ? "released-for-next-request" : "retained",
       releasedPin,
+      priorityFailbackEnabled: runtime.codexAccountPriorityFailback === true,
       fallbackConsumesSignedInQuota: true,
     });
   });

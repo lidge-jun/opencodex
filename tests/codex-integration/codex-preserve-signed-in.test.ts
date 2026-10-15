@@ -215,3 +215,11 @@ test("failed persistence keeps the previous policy, manual pin and live binding"
     expect(resolveCodexAccountForThread("save-failure", c)).toBe("copy");
   } finally { save.mockRestore(); }
 });
+
+test("conflicting token claims cannot retract an existing owned identity observation", () => {
+  const c = config();
+  const id_token = `h.${Buffer.from(JSON.stringify({ email: "member@example.test", chatgpt_account_id: "workspace-x" })).toString("base64url")}.s`;
+  writeFileSync(authPath, JSON.stringify({ tokens: { access_token: "synthetic", id_token, account_id: "workspace-a" } }));
+  reconcileMainCodexAccountRuntimeState();
+  expect([...signedInCodexAccountIds(c)]).toEqual(["__main__", "copy"]);
+});

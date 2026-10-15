@@ -31,6 +31,7 @@ export async function cmdPreserveSignedIn(args: string[], deps: AccountDeps): Pr
     console.log(`Affected pool entries: ${result.json.affectedAccountIds.join(", ")}`);
     console.log(`Next unbound choice: ${result.json.nextAccountId ?? "none"}`);
     console.log(`Bindings: ${result.json.bindings}; manual pin: ${result.json.pinnedAccountId ?? "none"}`);
+    if (result.json.priorityFailbackEnabled === true) console.log("Existing priority failback can move bound work when its quota and freshness conditions hold.");
     console.log("Fallback can consume signed-in quota. Exact-account models override this preference.");
     console.log("Use on --apply-to-bound to release affected bindings and pins for the next request.");
   }

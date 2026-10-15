@@ -29,7 +29,10 @@ export function codexTokenIdentity(tokens: CodexTokens): CodexLoginIdentity | un
 
 /** Publish only from an existing physical-login observation, never an incoming bearer. */
 export function observeSignedInCodexIdentity(tokens?: CodexTokens): void {
-  observed = tokens ? codexTokenIdentity(tokens) ?? undefined : undefined;
+  if (!tokens) { observed = undefined; return; }
+  const next = codexTokenIdentity(tokens);
+  // Conflicting claims can be a partial external write, never proof of a new login.
+  if (next !== null) observed = next;
 }
 
 /** Routing reads memory only, including while the native profile is fenced. */

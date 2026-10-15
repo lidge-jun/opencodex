@@ -329,7 +329,7 @@ pause, reauth, model access, hard lock or paid-credit consent.
 `src/codex/signed-in-identity.ts` requires matching selected workspace and normalized member email.
 Its process-local observation is published by existing physical-login lifecycle reads and the
 owned linked-group read; request routing reads only memory, even during native profile drain.
-Unknown/conflicting evidence never links an ordinary row. Startup seeds the observation; later
+Unknown/conflicting evidence never links a new ordinary row; transient failures and conflicting claims retain the last verified observation. Startup seeds the observation; later
 owned observations follow login changes, and confirmed transitions clear stale observations.
 Pool replacements are matched from their current credentials. Existing lifecycle transitions
 purge main bindings. No credential or member identity is persisted by the policy.
