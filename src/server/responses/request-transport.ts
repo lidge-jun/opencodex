@@ -31,6 +31,7 @@ import {
 } from "../../oauth/anthropic-routing";
 import {
   OAuthAccountPausedError,
+  OAuthTokenRefreshBusyError,
   getValidAccessSnapshotForAccount,
   forceRefreshOAuthAccessSnapshot,
   getValidAccessTokenSnapshot,
@@ -963,6 +964,10 @@ export async function prepareResponsesTransport(
           "invalid_request_error",
           `${redactSecretString(err.message)}. Remove or reconfigure provider '${safeProviderName}' in the OpenCodex configuration.`,
         );
+      }
+      if (err instanceof OAuthTokenRefreshBusyError) {
+        return (options.abortSignal ?? req.signal).aborted ? clientCancelledResponse()
+          : formatErrorResponse(503, "server_error", err.message, { retryAfter: "1" });
       }
       if (err instanceof OAuthAccountPausedError) {
         return formatErrorResponse(403, "permission_error", publicOAuthAuthenticationErrorMessage(err));
