@@ -64,13 +64,13 @@ they can be bypassed by skipping tests, and cannot certify external client rende
 ## Verification result
 
 The investigation's runtime outcome is NOOP: the tested marked thoughts stay out of ordinary
-answer fields. New coverage adds 63 cases. Deliberately changing the classifier to emit marked
-thoughts as text fails all 63; byte-for-byte restoration returns all 63 to green. No classifier
+answer fields. New coverage adds 75 cases. Deliberately changing the classifier to emit marked
+thoughts as text fails all 75; byte-for-byte restoration returns all 75 to green. No classifier
 mutation is part of the patch. The live observation's cause remains unresolved.
 
-Final focused validation on the repository-pinned Bun 1.4.3: 352 pass / 0 fail across the new
+Final focused validation on the repository-pinned Bun 1.4.3: 364 pass / 0 fail across the new
 matrix and eight adjacent Google/direct-protocol files; layout/tooling/size: 36 pass / 0 fail.
-`bun run test:changed` selects the new file only and passes all 63 cases. `bun run typecheck`,
+`bun run test:changed` selects the new file only and passes all 75 cases. `bun run typecheck`,
 `bun run structure:check`, and `bun run privacy:scan` pass. `cd docs-site && bun run build`
 builds 577 pages and checks 81,202 links. Raw logs stay in local `.tmp/argon-protocol/`.
 An initial layout run under the shell's Bun 1.4.0 failed the pinned-runner check; using the
@@ -89,3 +89,9 @@ Fresh independent final review: PASS, no actionable defects. The fresh reader id
 result as synthetic regression coverage, with the live symptom explicitly unverified. No prose
 change was requested. The investigation is closed with that limitation; PR integration is
 tracked by the coordinator. Runtime source is unchanged.
+
+Hosted review follow-up: restore all fixture globals in finally if spend-lease release throws;
+add independent client-only opt-outs with provider opt-in still true for all three protocols.
+A Chat opt-out mutation fails 18 cases; a Messages display-omitted mutation fails 6. All
+production files were restored byte-for-byte. These probes confirm the added cases detect
+the independent client preference, rather than passing only because the provider default is off.

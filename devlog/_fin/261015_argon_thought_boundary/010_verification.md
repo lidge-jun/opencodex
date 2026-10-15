@@ -10,7 +10,7 @@ Depends on current Google adapter and existing client handlers; no runtime desig
    Assert exact ordinary answer text in both deltas and accumulated final payloads,
    thought marker only in reasoning/thinking fields, no
    signature-only text, preserved tool name/args and call-bound signature where the client wire
-   exposes it, successful terminal. For Responses summary none,
+   exposes it, successful terminal. For independent client-only opt-outs (Responses/Chat summary none and Messages display omitted),
    force upstream thought parts anyway and require suppression while answer and tool survive.
    Inspect protocol trace so the direct/bridge cases prove the intended lane executed.
 2. MODIFY `scripts/test-layout/layout.json` and `tests/fixtures/test-layout-expected.json`:

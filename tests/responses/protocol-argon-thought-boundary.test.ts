@@ -78,13 +78,15 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
-  releaseSpend?.();
-  clearGenericFailoverHealth();
-  globalThis.fetch = originalFetch;
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
-  codexHome?.restore();
-  if (home) removeTreeWithRetry(home);
+  try { releaseSpend?.(); }
+  finally {
+    clearGenericFailoverHealth();
+    globalThis.fetch = originalFetch;
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome;
+    codexHome?.restore();
+    if (home) removeTreeWithRetry(home);
+  }
 });
 
 function frames(text: string): Rec[] {
@@ -92,7 +94,7 @@ function frames(text: string): Rec[] {
     .map(line => JSON.parse(line.slice(6)));
 }
 
-async function verify(protocol: Protocol, direct: boolean, mode: typeof modes[number], tool: boolean, shown: boolean, summaryNone = false) {
+async function verify(protocol: Protocol, direct: boolean, mode: typeof modes[number], tool: boolean, shown: boolean, clientOmit = false) {
   split = mode.split;
   parts = [
     { thought: true, text: "MARKER_T1" }, { thought: true, text: "MARKER_T2" },
@@ -116,15 +118,15 @@ async function verify(protocol: Protocol, direct: boolean, mode: typeof modes[nu
   const body = {
     model: MODEL, stream: mode.stream,
     ...(protocol === "responses" ? {
-      input: "Return the fixture.", reasoning: { effort: "medium", ...(!shown || summaryNone ? { summary: "none" } : {}) },
+      input: "Return the fixture.", reasoning: { effort: "medium", ...(!shown || clientOmit ? { summary: "none" } : {}) },
       tools: [{ type: "function", name: "lookup", parameters: schema }],
     } : {
       messages: [{ role: "user", content: "Return the fixture." }], max_tokens: 400,
       ...(protocol === "chat" ? {
-        reasoning_effort: "medium", reasoning: { summary: shown ? "auto" : "none" },
+        reasoning_effort: "medium", reasoning: { summary: shown && !clientOmit ? "auto" : "none" },
         tools: [{ type: "function", function: { name: "lookup", parameters: schema } }],
       } : {
-        thinking: shown ? { type: "enabled", budget_tokens: 2048 } : { type: "disabled" },
+        thinking: shown ? { type: "enabled", budget_tokens: 2048, ...(clientOmit ? { display: "omitted" } : {}) } : { type: "disabled" },
         tools: [{ name: "lookup", input_schema: schema }],
       }),
     }),
@@ -140,8 +142,8 @@ async function verify(protocol: Protocol, direct: boolean, mode: typeof modes[nu
   const text = await response.text();
   expect(wireBodies).toHaveLength(1);
   expect(wireBodies[0].model).toMatch(/^gemini-4-argon-(low|medium|high)$/);
-  expect(wireBodies[0].request.generationConfig?.thinkingConfig?.includeThoughts === true).toBe(shown && !summaryNone);
-  const visible = shown && !summaryNone;
+  expect(wireBodies[0].request.generationConfig?.thinkingConfig?.includeThoughts === true).toBe(shown && !clientOmit);
+  const visible = shown && !clientOmit;
   const events = mode.stream ? frames(text) : [];
   const budget = createTranslatorBudget();
   try {
@@ -204,5 +206,7 @@ describe("Argon thought markers stay out of ordinary client output", () => {
   for (const { protocol, direct } of routes) for (const mode of modes) for (const tool of [false, true]) for (const shown of [false, true]) {
     test(`${protocol} direct=${direct} ${mode.name} tool=${tool} summaries=${shown}`, () => verify(protocol, direct, mode, tool, shown));
   }
-  for (const mode of modes) test(`Responses explicit summary none wins over provider opt-in: ${mode.name}`, () => verify("responses", false, mode, true, true, true));
+  for (const { protocol, direct } of routes) for (const mode of modes) {
+    test(`${protocol} direct=${direct} client-only display opt-out: ${mode.name}`, () => verify(protocol, direct, mode, true, true, true));
+  }
 });
