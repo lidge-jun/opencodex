@@ -317,9 +317,10 @@ export async function executeComboResponses(
   options: HandleResponsesOptions & { translatorBudget: TranslatorBudget },
   requestDispatchers: ResponsesDispatchers,
 ): Promise<Response> {
-  const requestedModel = typeof (rawBody as { model?: unknown } | null)?.model === "string"
-    ? (rawBody as { model: string }).model
-    : `combo/${comboId}`;
+  const requestedModel = options.mainHardLockFallbackOverride?.sourceModel
+    ?? (typeof (rawBody as { model?: unknown } | null)?.model === "string"
+      ? (rawBody as { model: string }).model
+      : `combo/${comboId}`);
   Object.assign(logCtx, {
     requestedModel,
     model: requestedModel,
@@ -858,7 +859,8 @@ export async function executeComboResponses(
         // The live config can change while the child is streaming. Never retain credentials.
         const currentCombo = getCombo(config, comboId);
         const provider = config.providers[completedTarget.provider];
-        if (!options.compactionRoutingOverride && Object.hasOwn(config.providers, completedTarget.provider)
+        if (!options.compactionRoutingOverride && !options.mainHardLockFallbackOverride
+          && Object.hasOwn(config.providers, completedTarget.provider)
           && provider && provider.disabled !== true
           && currentCombo?.targets.some(target => targetKey(target) === targetKey(completedTarget))) {
           rememberComboForLane(sessionLaneIdFromRequest(req.headers), comboId, completedTarget, model, writerGeneration);

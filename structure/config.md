@@ -77,7 +77,7 @@ scrub-before-unlink failure path, and explicit residual-temp errors. A caller mu
 `src/config/persist-unlocked.ts` and `src/config/live-reconcile.ts` follow the [publication-aware rollback contract](gui-and-management-api.md#durable-provider-patch). `src/config/live-reconcile.ts` adopts committed model discovery and disabled selectors together with their scoped live merge baselines. A later manual enable therefore removes the automatic disable instead of having a stale three-way merge restore it. Unrelated live config baselines are not advanced by that adoption.
 
 Owner-registry publication first refuses a directory symlink, applies POSIX mode `0700`, and requires `hardenSecretDir` for the locator directory. On Windows the default secret-directory ACL grants the current owner full control before removing inherited and broad-user access, without elevated-stage reader grants. A hardening failure skips this best-effort publication before any pointer is written.
-
+Under the armed test-home guard, `src/config/owner-registry.ts` uses the selected config home when its test override is absent and rejects protected-home destinations before reads, publication or retirement; production keeps the shared default-home registry. See [test state isolation](ops/test-sandbox-cleanup.md).
 Windows hardening in the atomic writer is applied once per write, not once per harden call. Both calls stay
 `required: true` and still fail the write closed, but the pre-rename call resolves through the
 `src/lib/windows-secret-acl.ts` success memo: after the content write the writer re-asserts that the
@@ -91,7 +91,7 @@ object so the freshness the data write moved does not read as a replacement. A d
 A schema-invalid top-level JSON value is repairable only when it is a non-array object.
 `loadConfig` backs up arrays, primitives, and null before using defaults, so the repair merge cannot turn them into a valid config while discarding the original bytes.
 
-`src/config/schema/config-schema.ts` accepts the opt-in `codexAccountPriorityFailback` preference and degrades a malformed value in a loaded file to false without discarding providers, while a write candidate carrying a non-boolean value is rejected. A malformed entry in `codexAccountAutoSwitchThresholds` is dropped on load with a warning and the valid entries are kept, so an unrelated save cannot erase them. Its [routing contract](providers/openai-accounts.md#ongoing-priority-failback) requires quota strategy and a positive threshold.
+`src/config/schema/config-schema.ts` accepts the opt-in `codexAccountPriorityFailback` preference and degrades a malformed value in a loaded file to false without discarding providers, while a write candidate carrying a non-boolean value is rejected. A malformed entry in `codexAccountAutoSwitchThresholds` is dropped on load with a warning and the valid entries are kept, so an unrelated save cannot erase them. Its [routing contract](providers/openai-accounts.md#ongoing-priority-failback) requires quota strategy and a positive threshold. The default-off `codexUseRemainingQuotaAccountIds` list degrades to absent when malformed; write candidates reject invalid account ids. Its [included-quota policy](providers/openai-accounts.md#main-account-policy-observations) preserves thresholds and credit-spending permission.
 
 | Group | Keys | Resolution rule |
 | --- | --- | --- |
@@ -394,7 +394,7 @@ the provider default, then the adapter omits `max_tokens`.
 
 Both fields must stay positive finite integers at disk-config and management validation boundaries.
 Registry entries may seed them through `providerConfigSeed`, key-login derivation, OAuth reconcile,
-and `routeModel`, but user config overrides registry defaults per field/key.
+and `routeModel`, but user config overrides registry defaults per field/key. Startup and login follow the [OAuth reconciliation contract](providers/oauth-reconciliation.md).
 
 `src/providers/resolved-model-policy.ts` is the detached static-policy authority for this merge
 contract. It preserves each field's existing rule rather than assigning one global priority:

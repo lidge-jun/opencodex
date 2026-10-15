@@ -506,8 +506,7 @@ describe("OAuth provider reconciliation", () => {
     // The devin preset declares neither output field, so the delete branch was
     // the only branch either of them ever took: a hand-edited budget was gone
     // before the next startup finished, leaving the adapter's own fallback as
-    // the only reachable cap (#5190). Reconciliation still owns the input-side
-    // catalog, which is why modelContextWindows is asserted alongside.
+    // the only reachable cap (#5190). Input limits are operator-owned too (#7092).
     const preset = OAUTH_PROVIDERS.devin.providerConfig;
     expect(preset.defaultMaxOutputTokens).toBeUndefined();
     expect(preset.modelMaxOutputTokens).toBeUndefined();
@@ -529,10 +528,9 @@ describe("OAuth provider reconciliation", () => {
 
     expect(config.providers.devin.defaultMaxOutputTokens).toBe(64_000);
     expect(config.providers.devin.modelMaxOutputTokens).toEqual({ "swe-2": 32_000 });
-    expect(config.providers.devin.modelContextWindows).toEqual(preset.modelContextWindows!);
+    expect(config.providers.devin.modelContextWindows).toMatchObject({ "swe-2": 1 });
 
-    // A preset that does declare a budget still refreshes the saved row: this
-    // is a narrower delete branch, not an exemption from reconciliation.
+    // Later operator edits remain authoritative through another reconciliation.
     config.providers.devin.defaultMaxOutputTokens = 1;
     reconcileOAuthProviders(config, false);
     expect(config.providers.devin.defaultMaxOutputTokens).toBe(1);

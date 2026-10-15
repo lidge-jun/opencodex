@@ -330,8 +330,8 @@ describe("refresh transaction revalidation", () => {
   test("Desktop edit after inspection refuses before backup and replacement", () => {
     const applied = seed(); const edited = readFileSync(applied.path, "utf8") + " ";
     const meta = readFileSync(join(library, "_meta.json"), "utf8");
-    const realRead = desktopLibrary.readDesktopProfileForeignKeys;
-    const read = spyOn(desktopLibrary, "readDesktopProfileForeignKeys").mockImplementation(path => {
+    const realRead = desktopLibrary.readDesktopProfileSnapshot;
+    const read = spyOn(desktopLibrary, "readDesktopProfileSnapshot").mockImplementation(path => {
       const preserved = realRead(path); writeFileSync(path, edited); return preserved;
     });
     try {
@@ -358,8 +358,8 @@ describe("refresh transaction revalidation", () => {
     const backupPath = `${applied.path}.bak`;
     writeFileSync(backupPath, "original backup bytes");
     const backupBefore = readFileSync(backupPath, "utf8");
-    const realRead = desktopLibrary.readDesktopProfileForeignKeys;
-    const read = spyOn(desktopLibrary, "readDesktopProfileForeignKeys").mockImplementation(path => {
+    const realRead = desktopLibrary.readDesktopProfileSnapshot;
+    const read = spyOn(desktopLibrary, "readDesktopProfileSnapshot").mockImplementation(path => {
       const preserved = realRead(path); writeFileSync(metaPath, selectedElsewhere); return preserved;
     });
     try {

@@ -9,6 +9,8 @@ Bu, alt ajan yüzeyinden farklıdır (bkz. [Ajan yapılandırması](/tr/referenc
 
 ## Yapılandırma
 
+Kontrol panelindeki **Advisor** sayfasında katalogdan model seçin. Yerel, sağlayıcı, hesap, özel model ve combo tanımlayıcıları aynen kaydedilir. Devre dışı veya ilk seçimi bekleyen modeller yeni seçenek olarak sunulmaz. Listede bulunmayan kayıtlı tanımlayıcı, değiştirilene veya temizlenene kadar uyarıyla korunur. Yükleme hatası seçimi korur ve yeniden deneme sunar. Metin önerisi verebilen bir model seçin; katalog danışma uyumluluğunu garanti etmez. CLI ve API, yönlendiricinin desteklediği model dizelerini kabul etmeye devam eder.
+
 ```json
 {
   "advisor": {
