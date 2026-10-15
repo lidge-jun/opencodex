@@ -481,7 +481,7 @@ describe("gcp-adc marker source", () => {
       deletePassword: () => true,
     }));
     isolateHostAdc();
-    await expect(getVertexAccessToken({ markerAccount: "p/missing" })).rejects.toThrow(/gcp-sa:p\/missing/);
+    await expect(getVertexAccessToken({ markerAccount: "p/missing" })).rejects.toThrow(/credential could not be read/);
   });
 
   test("no marker account falls through to the normal source priority (isolated: fails with ADC guidance)", async () => {

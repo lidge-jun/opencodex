@@ -9,7 +9,7 @@
 import { createHash } from "node:crypto";
 import { saveConfigPreservingClaudeCode } from "../config";
 import type { OcxConfig, OcxProviderConfig } from "../types";
-import { GCP_CREDENTIAL_MARKER_PREFIX, gcpCredentialMarkerAccount, parseGcpCredentialJson } from "../lib/gcp-adc";
+import { GCP_CREDENTIAL_MARKER_PREFIX, isGcpCredentialMaterial, parseGcpCredentialJson } from "../lib/gcp-adc";
 import { invalidateResolvedProviderKeyCache, probeProviderKeychain, providerKeychainEntry } from "./api-key-resolve";
 import type { AccountQuotaFields } from "./quota-types";
 import { commitProviderApiKeySelection } from "./api-key-selection";
@@ -56,6 +56,9 @@ export function splitCredentialPaste(value: string): Array<string | { credential
   if (!trimmed.startsWith("{")) {
     if (/(?:^|[\s,])\{/.test(trimmed)) {
       throw new Error("Mixing credential JSON and literal API keys in one paste is not supported. Add them separately.");
+    }
+    if (isGcpCredentialMaterial(trimmed)) {
+      throw new Error("Invalid credential JSON: paste a GCP credential object without wrapping it in an array or string.");
     }
     if (/^(?:[A-Za-z]:[\\/]|[\\/]|~[\\/]|\.{1,2}[\\/])/.test(trimmed) || /^[^\s{}]+\.json$/i.test(trimmed)) {
       throw new Error("This looks like a file path. Paste the full JSON body of the credential, not a file path.");
@@ -104,7 +107,7 @@ export function splitCredentialPaste(value: string): Array<string | { credential
   const isRealJson = (() => {
     try { JSON.parse(objects[0]!); return true; } catch { return false; }
   })();
-  if (objects.length === 1 && singleLine && spans[0]!.end === trimmed.length - 1 && !parseGcpCredentialJson(objects[0]!) && !isRealJson) {
+  if (objects.length === 1 && singleLine && spans[0]!.end === trimmed.length - 1 && !parseGcpCredentialJson(objects[0]!) && !isRealJson && !isGcpCredentialMaterial(trimmed)) {
     return [trimmed];
   }
   // Non-separator content BETWEEN and AFTER objects is rejected, not silently discarded:

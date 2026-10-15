@@ -18,6 +18,7 @@
  */
 import { resolveEnvValue } from "../config/proxy-env";
 import { loadKeyringBinding } from "../lib/keyring-native";
+import { isGcpCredentialMaterial } from "../lib/gcp-credential-input";
 import type { OcxProviderConfig } from "../types";
 
 export const KEYCHAIN_REFERENCE_PREFIX = "keychain:";
@@ -89,14 +90,16 @@ export function providerKeychainEntry(account: string): ProviderKeychainEntry {
 function readKeychain(account: string, quiet = false): string | undefined {
   const cached = resolvedCache.get(account);
   if (cached !== undefined) return cached;
+  let value: string | null = null;
   try {
-    const value = providerKeychainEntry(account).getPassword();
-    if (typeof value === "string" && value.trim()) {
-      resolvedCache.set(account, value);
-      return value;
-    }
+    value = providerKeychainEntry(account).getPassword();
   } catch {
     // fall through to the single warning below
+  }
+  if (typeof value === "string" && value.trim()) {
+    if (isGcpCredentialMaterial(value)) throw new Error("GCP credential JSON cannot be used as a literal API key; select a gcp-sa reference");
+    resolvedCache.set(account, value);
+    return value;
   }
   if (!quiet && !warnedAccounts.has(account)) {
     warnedAccounts.add(account);

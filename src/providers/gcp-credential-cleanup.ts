@@ -1,6 +1,6 @@
-import { mutatePersistedConfig, readConfigAdmissionSnapshot } from "../config";
+import { mutatePersistedConfig, readConfigAdmissionSnapshot, withConfigMutationLockSync } from "../config";
 import { GCP_CREDENTIAL_MARKER_PREFIX, gcpCredentialMarkerAccount } from "../lib/gcp-adc";
-import type { OcxProviderConfig } from "../types";
+import type { OcxConfig, OcxProviderConfig } from "../types";
 import { isKeychainReference, keychainAccount, providerKeychainEntry } from "./api-key-resolve";
 
 /** Snapshot credential references before removing a key or provider. */
@@ -15,6 +15,17 @@ export function snapshotProviderGcpCredentialMarkers(name: string, provider: Ocx
   const durableProvider = durable.kind === "read" && durable.diagnostics.source === "file"
     && durable.diagnostics.error === null ? durable.diagnostics.config.providers[name] : undefined;
   return [provider, durableProvider].flatMap(row => row ? providerGcpCredentialMarkers(row) : []);
+}
+
+/** Capture deletion candidates and save under the same lock; cleanup follows a successful save. */
+export function commitProviderGcpCredentialRemoval<T>(config: OcxConfig, name: string, saveRemoval: () => T): T {
+  let markers: string[] = [];
+  const result = withConfigMutationLockSync(() => {
+    markers = snapshotProviderGcpCredentialMarkers(name, config.providers[name]);
+    return saveRemoval();
+  });
+  cleanupRemovedGcpCredentials(markers);
+  return result;
 }
 
 function cleanupGcpCredentialAccount(key: string | undefined): string | undefined {

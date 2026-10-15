@@ -1,7 +1,7 @@
 import { resolveEnvValue, saveConfigPreservingClaudeCode } from "../config";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import type { ProviderRegistryEntry } from "./registry";
-import { parseGcpCredentialJson } from "../lib/gcp-adc";
+import { isGcpCredentialMaterial } from "../lib/gcp-adc";
 import {
   KEYCHAIN_REFERENCE_PREFIX,
   GCP_CREDENTIAL_MARKER_PREFIX,
@@ -140,7 +140,7 @@ export function restoreProviderKeyFromKeychain(config: OcxConfig, name: string):
     let value: string | null = null;
     try { value = providerKeychainEntry(account).getPassword(); } catch { value = null; }
     if (!value) return { ok: false, error: `OS keychain has no readable secret for ${ref}; config left unchanged`, status: 503 };
-    if (parseGcpCredentialJson(value)) {
+    if (isGcpCredentialMaterial(value)) {
       return { ok: false, error: "GCP credentials must remain in the OS store; use a gcp-sa reference. Config left unchanged", status: 400 };
     }
     resolved.set(account, value);

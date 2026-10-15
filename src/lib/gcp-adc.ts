@@ -23,6 +23,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { readFileSync, existsSync, statSync } from "node:fs";
 import { GCP_CREDENTIAL_MARKER_PREFIX, providerKeychainEntry } from "../providers/api-key-resolve";
+export { isGcpCredentialMaterial } from "./gcp-credential-input";
 import {
   captureConfigGeneration,
   sweepExpiredOnWrite,
@@ -203,7 +204,7 @@ function readMarkerCredential(account: string): AdcFileCredentials | undefined {
 function loadAdcCredentials(markerAccount: string | undefined): { source: string; creds: AdcFileCredentials } | undefined {
   if (markerAccount) {
     const creds = readMarkerCredential(markerAccount);
-    if (!creds) throw new Error(`gcp-sa:${markerAccount} marker is set but its credential could not be read from the OS credential store`);
+    if (!creds) throw new Error("GCP credential marker is set but its credential could not be read from the OS credential store");
     return { source: `marker:${markerAccount}`, creds };
   }
   const gacPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
@@ -383,6 +384,12 @@ export async function getVertexAccessToken(options?: { signal?: AbortSignal; fet
   // Only serve a cached token that matches the source the next resolve would actually use; prune
   // expired or now-stale (different-source) entries so a credential-source change is honored.
   const expectedSource = currentAdcSourceKey(markerAccount);
+  // A cached bearer token is usable only while the explicitly selected store entry remains
+  // readable. Removal or a locked store must fail closed before the cache can return it.
+  if (markerAccount && !readMarkerCredential(markerAccount)) {
+    tokenCache.delete(expectedSource);
+    throw new Error("GCP credential marker is set but its credential could not be read from the OS credential store");
+  }
   const writerGeneration = captureConfigGeneration();
   for (const [source, cached] of tokenCache) {
     if (source === expectedSource && cached.expiresAtMs - skew > now) return cached.token;

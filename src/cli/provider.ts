@@ -15,7 +15,7 @@ import { getProviderRegistryEntry, PROVIDER_REGISTRY } from "../providers/regist
 import { providerConfigSeed } from "../providers/derive";
 import { assertAnthropicInstanceLoginConfig } from "../oauth/store-anthropic-instance";
 import { dropProviderCustomModels } from "../providers/provider-id-rewrite";
-import { cleanupRemovedGcpCredentials, providerGcpCredentialMarkers } from "../providers/gcp-credential-cleanup";
+import { cleanupRemovedGcpCredentials, commitProviderGcpCredentialRemoval, providerGcpCredentialMarkers } from "../providers/gcp-credential-cleanup";
 import { providerCredentialInputError } from "../providers/api-keys";
 import type { OcxProviderConfig } from "../types";
 import { findLiveProxy } from "../server/proxy-liveness";
@@ -460,11 +460,12 @@ function handleRemove(args: string[]): void {
     process.exit(1);
   }
 
-  const removedCredentials = providerGcpCredentialMarkers(config.providers[name]!);
-  delete config.providers[name];
-  const droppedCustomModels = dropProviderCustomModels(config, name);
-  validateAndSave(config);
-  cleanupRemovedGcpCredentials(removedCredentials);
+  const droppedCustomModels = commitProviderGcpCredentialRemoval(config, name, () => {
+    delete config.providers[name];
+    const dropped = dropProviderCustomModels(config, name);
+    validateAndSave(config);
+    return dropped;
+  });
 
   if (wantsJson) {
     console.log(JSON.stringify({

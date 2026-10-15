@@ -4,6 +4,11 @@
 
 `src/lib/gcp-adc.ts` resolves an explicit `gcp-sa:<account>` through the OS credential store.
 An empty or whitespace-only account is rejected before token resolution; it never selects host ADC.
+Marker payload readability is checked before returning a cached token; removing or locking the stored
+credential fails closed. Errors omit the marker account. Wrapped or malformed credential-shaped input
+is refused at ingestion and keychain restore, so it cannot become a literal config value.
+The leaf classifier in `src/lib/gcp-credential-input.ts` also rejects GCP payloads reached through
+`keychain:` aliases before normal or quiet API-key resolution can return wire-header material.
 Post-commit cleanup skips empty or whitespace-only GCP marker accounts in both persisted references and captured removal candidates, so one malformed marker cannot block valid-account retention or cleanup. Request-time marker validation remains strict.
 `src/providers/api-keys.ts` stores pasted credential JSON as markers, including multiple JSON objects
 in one atomic pool update. Verified OS writes and marker persistence share the cleanup mutation
@@ -15,7 +20,7 @@ bulk pastes are rejected before any store writes. OS-store failures return a fix
 credential material. `src/server/management/provider-routes.ts` and `src/cli/provider.ts` enforce
 this admission through `providerCredentialInputError` in `src/providers/api-keys.ts`; CLI registry input is checked before forward/OAuth branches can discard `--api-key`.
 `src/providers/gcp-credential-cleanup.ts` cleans removed markers after config persistence, including CLI `provider add --force` overwrites, under the
-  config mutation lock, retaining credentials still referenced by any persisted provider. CLI overwrite captures both live and latest durable rows under that lock. Management overwrite and deletion reuse `snapshotProviderGcpCredentialMarkers` to capture the caller's row and a valid durable row before mutation. Failed saves and refused CLI additions do not clean credentials.
+  config mutation lock, retaining credentials still referenced by any persisted provider. CLI overwrite captures both live and latest durable rows under that lock. Management overwrite reuses `snapshotProviderGcpCredentialMarkers`; CLI and management deletion use `commitProviderGcpCredentialRemoval` to capture live and valid durable markers and persist removal without releasing the lock. Failed saves and refused CLI additions do not clean credentials.
 Reference retention compares OS account identities across both `gcp-sa:` and `keychain:`
 spellings. `src/providers/key-store.ts` leaves GCP markers stored during ordinary keychain
 store/restore and refuses to restore GCP JSON through a keychain alias; the shared classification
