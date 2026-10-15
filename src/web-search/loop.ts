@@ -7,6 +7,7 @@ import type { AttemptRecoveryKind } from "../usage/log";
 import { isTruncatedStopReason } from "../responses/truncated-stop-reason";
 import { bridgeToResponsesSSE } from "../bridge";
 import { guardEmptyToolCatalogStream, type ClientToolCatalogRestriction } from "../lib/empty-tool-catalog";
+import { mergeUsage } from "../server/responses/empty-completion-guard";
 import { runWebSearch, type SidecarOutcome, type SidecarOutcomeRecorder, type SidecarSettings } from "./executor";
 import { runAnthropicWebSearch } from "./anthropic-executor";
 import { runXaiWebSearch, type XaiSearchOptions } from "./xai-executor";
@@ -142,6 +143,11 @@ export function hasVisibleAssistantText(events: AdapterEvent[]): boolean {
 
 async function* replay(events: AdapterEvent[]): AsyncGenerator<AdapterEvent> {
   for (const e of events) yield e;
+}
+
+function terminalUsage(events: AdapterEvent[]): OcxUsage | undefined {
+  for (const e of events) if (e.type === "done" || e.type === "incomplete") return e.usage;
+  return undefined;
 }
 
 /**
@@ -413,6 +419,12 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   // One iteration beyond the forced answer is reserved for its empty-answer recovery below.
   const HARD_CAP = maxSearches + 3;
   let emptyAnswerRetries = 0;
+  // Every iteration re-sends the full context, but only the last one's terminal reaches the bridge.
+  // Search-calling passes and the discarded empty forced answer are summed here and added to what
+  // onUsage reports, so the request log meters what was actually sent. The client-facing terminal
+  // keeps the last iteration's usage: Codex and Claude Code size the context window from it, and
+  // a sum would read as a context several times larger and trigger early auto-compaction.
+  let hiddenUsage: OcxUsage | undefined;
   let accountRefusalOutputStarted = false;
   const connectTimeoutMs = deps.connectTimeoutMs ?? 200_000;
   const routedModelStallTimeoutMs = deps.routedModelStallTimeoutMs ?? 200_000;
@@ -950,6 +962,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
                   stopReason: terminalEvent.stopReason,
                   eventTypes: [...new Set(split.passthrough.map(event => event.type))],
                 }));
+                hiddenUsage = mergeUsage(hiddenUsage, terminalEvent.usage);
                 if (!split.hasMalformedToolCall && !split.hasRealToolCall && emptyAnswerRetries === 0) {
                   emptyAnswerRetries++;
                   console.warn("[web-search-loop] empty forced answer — retrying once without tools");
@@ -972,6 +985,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
             yield* replay(split.passthrough.slice(split.streamedPassthroughCount));
             return;
           }
+          hiddenUsage = mergeUsage(hiddenUsage, terminalUsage(split.passthrough));
           // The thinking that led to the search belongs to the FIRST call's assistant replay turn.
           for (const event of split.passthrough.slice(split.streamedPassthroughCount)) {
             if (event.type === "text_delta" && event.anthropicThinkingSignature) yield event;
@@ -991,11 +1005,14 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
               message: "upstream translation buffer exceeded the safe limit",
             };
           } else {
+            // The bridge reports no usage for this error; the iterations already sent still count.
+            if (hiddenUsage) deps.onUsage?.(hiddenUsage);
             yield { type: "error", message: e instanceof LoopError ? e.message : (e instanceof Error ? e.message : String(e)) };
           }
           return;
         }
       }
+      if (hiddenUsage) deps.onUsage?.(hiddenUsage);
       yield { type: "error", message: "web-search loop exceeded its iteration cap" };
     } finally {
       if (abortSignal) abortSignal.removeEventListener("abort", linkAbort);
@@ -1019,7 +1036,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       hideRawReasoning: parsed.options.hideRawReasoning,
       ...(deps.stallTimeoutSec !== undefined ? { stallTimeoutSec: deps.stallTimeoutSec } : {}),
       ...(deps.onFirstOutput ? { onFirstOutput: deps.onFirstOutput } : {}),
-      ...(deps.onUsage ? { onUsage: deps.onUsage } : {}),
+      ...(deps.onUsage ? { onUsage: (usage: OcxUsage | undefined) => deps.onUsage?.(mergeUsage(hiddenUsage, usage)) } : {}),
       ...(deps.onCompletedResponse ? { onCompletedResponse: deps.onCompletedResponse } : {}),
     },
   );
