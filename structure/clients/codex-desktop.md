@@ -52,11 +52,16 @@ Failure before publication preserves the original removable identity; staging is
 An older authority without the server-only EKU reports `renewal-required`: serving and trust
 registration refuse it, while exact trust removal and deliberate renewal remain available.
 
-`src/codex/desktop-compatibility/windows-key-protection.ts` uses trusted PowerShell
-and bounded stdin/stdout, never command-line secrets or plaintext fallback. CurrentUser
-protects against other OS identities, not another process using the same credentials.
+`src/codex/desktop-compatibility/windows-key-protection.ts` calls CurrentUser
+`CryptProtectData`/`CryptUnprotectData` in-process on Windows x64, loading `crypt32.dll`
+from the `GetSystemDirectoryW` path and clearing unprotected output before `LocalFree`.
+Windows ARM64, where Bun FFI is unavailable, keeps the trusted PowerShell helper with
+bounded stdin/stdout. Both write the same blob format; neither puts secrets on a command
+line or falls back to plaintext. CurrentUser protects against other OS identities, not
+another process using the same credentials.
 `tests/clients/desktop-compatibility-authority.test.ts` covers persistence, refusal,
-and a real Windows DPAPI round trip with synthetic data.
+a real Windows DPAPI round trip with synthetic data, and a PowerShell-written key opening
+in-process.
 
 ## Certificate setup API
 
@@ -165,6 +170,18 @@ unchanged responses do not query Windows. Background refresh runs once a minute 
 every ten seconds during Apply, and stops probing after the safety deadline. Failed checks
 disarm Apply. Native update/routing failures are
 public diagnostic codes; originals continue to relay and no app/config repair is automatic.
+Each completed check also publishes a `buildAssessment` record on runtime status holding only
+`assessedVersion`, `observedVersion`, `verified` and `completedAt`. A status read never starts
+a probe, a runtime without a real probe omits the field, and an aborted or in-flight check never
+replaces the last completed assessment, including across stop/start probe replacement and early
+routing failures. A newly completed failed probe supersedes that prior observation; retained
+metadata is diagnostic only and never authorizes a new start or Apply. `observedVersion` is reported only when the discovered
+package matches the assessed family, App entry and canonical basename, so a foreign or unidentifiable
+install reports `null` rather than raw discovery data, an identified newer build reports its own
+version with `verified` false, and a failed or missing read is unverified rather
+than a stale success. The allowlist stays pinned to one exact package version because the
+correction contract is verified per build, which is why a newer installed client is reported
+unverified instead of treated as covered.
 
 `runtime-ownership.ts` serializes certificate mutations against active/starting runtimes.
 The existing sibling guard blocks all runtime mutations in sibling instances. Core shutdown

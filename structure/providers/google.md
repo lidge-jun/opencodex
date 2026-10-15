@@ -11,6 +11,14 @@ explicit wire summary none win. Eligible CCA Gemini requests use `includeThought
 when provider opt-in and per-request display both allow it. Thought signatures remain attached
 to their tool calls independently; they never become Anthropic thinking signatures.
 
+The visibility marker is the boolean `thought: true`, not the presence of a `thoughtSignature`
+or the wording of the text. An unmarked signed text part remains ordinary assistant output;
+a signature-only part produces no text. Responses keeps summaries in reasoning items, Chat in
+`reasoning_content`, and Messages in thinking blocks. The handler-level synthetic matrix in
+`tests/responses/protocol-argon-thought-boundary.test.ts` checks Argon across buffered/SSE
+clients, coalesced/split upstream frames, direct/bridge lanes, explicit display suppression and
+tool calls. It verifies protocol separation, not live model behavior or another client's UI.
+
 > Decision record: [ADR-0055](../decisions/ADR-0055-google-thought-text-visibility-boundary.md)
 
 ## Google response-part field boundary

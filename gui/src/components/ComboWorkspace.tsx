@@ -26,6 +26,7 @@ export default function ComboWorkspace({
   models,
   capabilityModels = models,
   cataloguedComboIds,
+  visionEnabled,
   loading,
   onRefresh,
   onSave,
@@ -226,6 +227,7 @@ export default function ComboWorkspace({
             providers={providers}
             models={models}
             capabilityModels={capabilityModels}
+            visionEnabled={visionEnabled}
             onBack={() => trySelect(null)}
             onSaved={(item) => {
               setDetailDirty(false);
@@ -256,6 +258,7 @@ export default function ComboWorkspace({
             providers={providers}
             models={models}
             capabilityModels={capabilityModels}
+            visionEnabled={visionEnabled}
             onSaved={(item) => {
               setDetailDirty(false);
               setSelectedId(item.id);

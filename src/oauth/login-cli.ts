@@ -15,6 +15,7 @@ import type { OcxConfig, OcxProviderConfig } from "../types";
 import { configuredAdminToken } from "../lib/admin-secrets";
 import { codexAccountNamespaceProviderCollisionError } from "../codex/account-namespace-match";
 import { assertAnthropicInstanceLoginConfig } from "./store-anthropic-instance";
+import { reportOAuthLoginError } from "./login-cli-errors";
 
 /**
  * Seams a test drives in place of a browser, a terminal and a real provider. Production passes
@@ -122,6 +123,12 @@ export function loginUsageMessage(): string {
 
 export async function handleLogin(provider?: string, deps: LoginCliDeps = {}): Promise<void> {
   const name = (provider ?? "").trim().toLowerCase();
+  try {
+    // Check raw ownership before tolerant loading can print diagnostics or fall back to defaults.
+    if (name === "anthropic2") assertAnthropicInstanceLoginConfig({ providers: {} }, name);
+  } catch (error) {
+    reportOAuthLoginError(error);
+  }
   // A removed provider id reached through its alias still logs in — the merged
   // successor owns the flow. Warn rather than silently reroute so scripts and
   // docs that still say `devin-cli` surface the rename to whoever runs them.
@@ -159,7 +166,7 @@ export async function handleOAuthLogin(name: string, deps: LoginCliDeps = {}): P
         return await ask("Paste redirect URL or code (or wait for browser): ");
       },
     });
-  });
+  }).catch(reportOAuthLoginError);
   // A device or polling provider never prompts, so nothing above waited on the launcher. It is
   // still owed an answer before this claims the login worked.
   await browser.settled();
