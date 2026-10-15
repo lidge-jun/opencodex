@@ -1,3 +1,4 @@
+import { OPENCODE_GO_RESPONSES_DEFAULTS } from "../../types/opencode-go";
 import { KIRO_MODELS, KIRO_MODEL_CONTEXT_WINDOWS, KIRO_MODEL_REASONING_EFFORTS } from "../kiro-models";
 import { DEVIN_MODEL_CONTEXT_WINDOWS, DEVIN_MODEL_EFFORTS, DEVIN_DEFAULT_EFFORTS } from "../../adapters/devin/live-models";
 import { ANTIGRAVITY_MODELS, ANTIGRAVITY_MODEL_CONTEXT_WINDOWS, ANTIGRAVITY_MODEL_EFFORTS, ANTIGRAVITY_MODEL_INPUT_MODALITIES } from "../antigravity-models";
@@ -825,6 +826,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
   },
   {
     id: "opencode-go", label: "opencode go", adapter: "openai-chat", baseUrl: "https://opencode.ai/zen/go/v1",
+    destinationAliases: [{ adapter: "openai-chat", baseUrl: "https://opencode.ai/inference/go/v1" }],
     // Preserve custom URLs before the endpoint-scoped Gemini pin is evaluated (#7097).
     preserveCustomDestination: true,
     authKind: "key", featured: true, dashboardUrl: "https://opencode.ai/auth", defaultModel: "kimi-k2.7-code",
@@ -848,13 +850,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     - 다른 대안 대신 이 방식을 선택한 이유: OpenCode Go documents sibling models on Chat or Anthropic endpoints, and an exact registry default preserves both those routes and explicit opt-out precedence.
     - 장점, 단점 및 영향: Each listed model reaches `/responses` from every inbound surface without changing siblings; a future upstream endpoint change requires an evidence-backed registry update.
     */
-    modelWireDefaults: {
-      "gpt-5.6-luna": "openai-responses",
-      "grok-4.6": "openai-responses",
-      "grok-4.7": "openai-responses",
-      "muse-spark-1.3-contributor": "openai-responses",
-      "muse-spark-1.2-contributor": "openai-responses",
-    },
+    modelWireDefaults: OPENCODE_GO_RESPONSES_DEFAULTS,
     modelContextWindows: {
       "kimi-k3": KIMI_K3_STANDARD_CONTEXT_WINDOW,
       // Zen Go discovers only the gateway id, so carry DeepSeek's official 1M V4.1

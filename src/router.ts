@@ -380,7 +380,7 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     throw new Error(`Invalid baseUrl for provider "${providerName}": expected a nonblank URL without unresolved placeholders`);
   }
   // Registry template URLs are presets; local/self-hosted entries opt in explicitly.
-  const baseUrl = (registryBaseUrlIsTemplate || registryEntry.allowBaseUrlOverride) && userBaseUrlIsResolved
+  const baseUrl = (registryBaseUrlIsTemplate || registryEntry.allowBaseUrlOverride || registryEntry.preserveCustomDestination) && userBaseUrlIsResolved
     ? userBaseUrl
     : registryEntry.baseUrl;
   if (userBaseUrlIsResolved) warnIfBaseUrlDiscarded(providerName, userBaseUrl, baseUrl);
