@@ -140,6 +140,13 @@ import {
   routeAllowedByScope,
 } from "../admission-model-scope";
 import { nativeContextLimits } from "../../codex/catalog";
+import type { ClientToolCatalogRestriction } from "../../lib/empty-tool-catalog";
+import {
+  currentTurnWireToolCatalogBody,
+  hasExplicitEmptyToolCatalog,
+  collectDeclaredWireToolNames,
+  collectDeclaredBareCustomWireToolNames,
+} from "../responses-undeclared-tool-guard";
 import { streamingContextOverflowResponse } from "./context-overflow";
 import {
   preAuthUpstreamHostCircuitKey,
@@ -430,12 +437,25 @@ export async function prepareResponsesRequest(
 
   let parsed: OcxParsedRequest;
   let toolBridgeMaps: ReturnType<typeof buildToolBridgeMaps>;
+  let clientToolCatalogRestriction: ClientToolCatalogRestriction | undefined;
   try {
     parsed = parseRequest(body);
     // Antigravity direct lane: the body carried only the request settings, so the parse above
     // produced them with an empty conversation; the conversation itself comes straight from the
     // client body. Inside this try so a decode error answers exactly like a parse error.
     if (options.directRequest) parsed = options.directRequest.decode(parsed);
+    // Capture before route rewrites or hosted sidecars can add tools; replayed catalogs are history.
+    // The direct settings body omits tools, including current legacy Chat functions. Recover
+    // their wire names only when this restriction needs a non-empty decoded catalog.
+    const catalogBody = options.directRequest && options.clientDeclaredEmptyToolCatalog === true && parsed.context.tools?.length
+      ? options.directRequest.bridgeConversation() : parsed._rawBody;
+    const currentCatalog = currentTurnWireToolCatalogBody(catalogBody, parsed._replayPrefixLen);
+    if (options.clientDeclaredEmptyToolCatalog === true || hasExplicitEmptyToolCatalog(currentCatalog)) {
+      clientToolCatalogRestriction = {
+        declaredToolNames: collectDeclaredWireToolNames(currentCatalog),
+        bareCustomToolNames: collectDeclaredBareCustomWireToolNames(currentCatalog),
+      };
+    }
     if (options.inboundWire === "anthropic") {
       parsed._nativeReasoningReplay = options.nativeReasoningReplay;
       parsed._nativeReasoningMint = options.nativeReasoningMint;
@@ -1511,6 +1531,7 @@ export async function prepareResponsesRequest(
   return {
     inboundWire,
     clientDeclaredEmptyToolCatalog: options.clientDeclaredEmptyToolCatalog === true,
+    clientToolCatalogRestriction,
     // Admission facts later route rewrites must not re-derive: the selector the caller sent and
     // the key scope as it stood when this request was admitted.
     inboundSelector,

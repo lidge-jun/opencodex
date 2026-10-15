@@ -11,6 +11,9 @@ then Azure metadata, then this estimate, then an enabled context cap as the wind
 retain their existing policies; OpenAI API metadata used for a custom relay is not Codex subscription
 capacity. The lookup changes no configuration, credentials, pricing, or request model identity.
 
+Management reads, strict boolean/null PATCH updates, and same-name overwrite preservation of the
+optional flag follow the [provider API contract](gui-and-management-api.md#api-ownership).
+
 Original-vendor tables precede aggregator tables. Exact model spellings win within a tier;
 case-folding and dot-to-hyphen aliases are accepted only without conflicting windows. Aggregator
 rows may supply a bare last-segment alias; floating `~` rows are excluded. Conflicting keys do not

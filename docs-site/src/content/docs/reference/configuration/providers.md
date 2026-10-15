@@ -15,6 +15,13 @@ compatibility fallback. With it, the order is: discovered/configured limits (the
 Azure metadata, model-ID metadata, enabled Context cap as the window, then 128k. An enabled
 Context cap still limits the result. Built-in providers keep their existing behavior and ignore the flag.
 
+`GET /api/providers` includes `inferContextWindow` only when configured, preserving both `true` and
+`false`. To change it, `PATCH /api/providers?name=<provider>` accepts `true`, `false`, or `null` to
+clear the setting and restore the default-off behavior; other types return `400`. Omitting it keeps
+the current setting. A same-name `POST /api/providers` also keeps an omitted setting, including
+`false` and any change committed while the save was validating. A submitted boolean wins, including
+`false`, even if the stored value is `true`.
+
 ```json
 { "providers": { "my-relay": { "adapter": "anthropic", "baseUrl": "https://relay.example/v1", "inferContextWindow": true } } }
 ```
@@ -421,6 +428,10 @@ and `modelContextWindows` for that exact id when needed. Unknown ids are not gue
 The destination is the adapter, the base URL (scheme and host compared without regard to case, trailing slashes ignored) and, when the request names one, the auth mode. Moving a provider to another destination drops the eight settings because they describe the previous upstream, and drops the key pool because its keys were issued for it. A save never merges the rest of the old row into the new one.
 
 `hideRawReasoning` is an operator display policy, so a save of the same provider name keeps its stored value whenever the request omits it, including after a destination move. A value sent in the request wins, including `false`.
+
+The optional `inferContextWindow` setting also survives same-name saves that omit it, including
+destination moves. Its read, update, and clear behavior is described under
+[Context windows on custom providers](#context-windows-on-custom-providers).
 
 `PATCH /api/providers?name=<provider>` changes only the fields it names and keeps every other stored field, whatever the destination. It accepts all eight settings; `null` clears one. It also accepts a boolean `hideRawReasoning` or `null` to clear it. For the two reasoning lists an empty array is stored as an explicit opt-out rather than removed.
 
