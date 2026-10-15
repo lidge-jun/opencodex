@@ -571,7 +571,7 @@ boundary. `src/types/tools.ts` owns tool-name identity: namespaced and dotted na
 normalization, and `tool_choice` alias resolution, so every adapter matches a declared tool the
 same way. `src/types/wire.ts` owns accepted wire enumerations such as the per-provider upstream HTTP-version pin, shared by
 config load, management writes and fetch, so no boundary accepts a value another rejects. It also hard-pins OpenCode Go's
-`claude-haiku-5-5`, `minimax-m2.5`, `minimax-m2.7`, `minimax-m3`, and `union-alpha` to Anthropic across direct and captured static policy resolution, even with Chat/Responses overrides.
+`claude-haiku-5-5`, `minimax-m2.5`, `minimax-m2.7`, `minimax-m3`, and `union-alpha` to Anthropic across direct and captured static policy resolution, even with Chat/Responses overrides. Every `dsh-account` model is pinned to the `dsh-account` adapter whatever `baseUrl` says, because that adapter is the [DSH account token's destination boundary](providers/dsh-account.md#destinations).
 
 `src/types/config.ts` declares the optional per-phase `memoryModels` setting;
 `src/types/request.ts` carries the selected phase through combo handoffs without changing the

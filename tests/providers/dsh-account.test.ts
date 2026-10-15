@@ -17,7 +17,11 @@ import { saveConfig } from "../../src/config";
 import { saveCredential, getAccountSet } from "../../src/oauth/store";
 import { startServer } from "../../src/server";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-import type { OcxConfig } from "../../src/types";
+import type { OcxConfig, OcxProviderConfig } from "../../src/types";
+import { resolveAdapter, resolveWireProtocolOverride } from "../../src/server/adapter-resolve";
+import { modelAdapterRecordConfigError } from "../../src/config/provider-validation";
+import { parseRequest } from "../../src/responses/parser";
+import { createTestTranslatorBudget } from "../helpers/translator-budget";
 
 describe("dsh-account provider registry entry", () => {
   const entry = getProviderRegistryEntry("dsh-account");
@@ -324,6 +328,114 @@ describe("dsh-account 401 server/router lifecycle", () => {
       const currentAccount = getAccountSet("dsh-account")?.accounts[0];
       expect(currentAccount?.needsReauth).toBe(true);
       expect(currentAccount?.credential.access).toBe("dsh_desktop_local_token_123");
+    } finally {
+      await server.stop(true);
+    }
+  });
+});
+
+describe("dsh-account wire pin keeps the account token on the DSH adapter", () => {
+  const originalFetch = globalThis.fetch;
+  const originalHome = process.env.OPENCODEX_HOME;
+  let tmpHome: string;
+
+  beforeEach(() => {
+    tmpHome = mkdtempSync(join(tmpdir(), "ocx-dsh-wire-pin-home-"));
+    process.env.OPENCODEX_HOME = tmpHome;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    if (originalHome !== undefined) process.env.OPENCODEX_HOME = originalHome;
+    else delete process.env.OPENCODEX_HOME;
+    removeTreeWithRetry(tmpHome);
+  });
+
+  test("config validation rejects a per-model wire override, even with a custom baseUrl", () => {
+    for (const baseUrl of ["https://api.deepseek.com/anthropic", "https://evil.example/v1"]) {
+      const error = modelAdapterRecordConfigError(
+        { "deepseek-flash": "openai-chat" }, "modelAdapters", "dsh-account",
+        { adapter: "dsh-account", authMode: "oauth", baseUrl },
+      );
+      expect(error).toContain("cannot be overridden");
+    }
+  });
+
+  test("wire resolution forces the DSH adapter over row and per-model overrides", async () => {
+    const hijacked = (baseUrl: string): OcxProviderConfig => ({
+      adapter: "openai-chat",
+      baseUrl,
+      authMode: "oauth",
+      apiKey: "dsh-pinned-token",
+      modelAdapters: { "deepseek-flash": "openai-responses" },
+    });
+    const build = (baseUrl: string) => resolveAdapter(
+      resolveWireProtocolOverride("dsh-account", "deepseek-flash", hijacked(baseUrl)), undefined, "dsh-account",
+    ).buildRequest(
+      parseRequest({ model: "deepseek-flash", input: [{ role: "user", content: "hi" }] }),
+      { headers: new Headers(), translatorBudget: createTestTranslatorBudget() },
+    );
+    for (const inbound of ["responses", "chat", "anthropic"] as const) {
+      expect(resolveWireProtocolOverride("dsh-account", "deepseek-flash", hijacked("https://evil.example/v1"), inbound).adapter)
+        .toBe("dsh-account");
+    }
+    const req = await build("https://api.deepseek.com");
+    expect(req.url).toBe("https://api.deepseek.com/anthropic/v1/messages");
+    expect(req.headers["x-dsh-auth-token"]).toBe("dsh-pinned-token");
+    expect(Object.keys(req.headers).some(key => key.toLowerCase() === "authorization")).toBe(false);
+    // Any other destination, including DeepSeek's own API-key path, fails closed before a request exists.
+    for (const baseUrl of ["https://api.deepseek.com/v1", "https://evil.example/v1"]) {
+      await expect(build(baseUrl)).rejects.toThrow("Untrusted dsh-account destination");
+    }
+  });
+
+  test.each([
+    "https://api.deepseek.com/v1",
+    "https://evil.example/v1",
+  ])("a hand-edited openai-chat row at %s sends only to the pinned DSH endpoint", async (rowBaseUrl) => {
+    saveConfig({
+      port: 0,
+      hostname: "127.0.0.1",
+      defaultProvider: "dsh-account",
+      providers: {
+        "dsh-account": { adapter: "openai-chat", baseUrl: rowBaseUrl, authMode: "oauth" },
+      },
+    } as OcxConfig);
+    await saveCredential("dsh-account", {
+      access: "dsh_pinned_wire_token",
+      refresh: "dsh_pinned_wire_token",
+      expires: Date.now() + 3_600_000,
+      accountId: "dsh-wire-pin-user",
+      source: "credential-file",
+    });
+    const sends: { url: string; headers: Headers }[] = [];
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (!url.startsWith("http://127.0.0.1") && !url.startsWith("http://localhost")) {
+        sends.push({ url, headers: new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)) });
+        return new Response(JSON.stringify({
+          id: "msg_pin", type: "message", role: "assistant", model: "deepseek-flash",
+          content: [{ type: "text", text: "pinned" }], stop_reason: "end_turn",
+          usage: { input_tokens: 1, output_tokens: 1 },
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+
+    const server = startServer(0);
+    try {
+      const resp = await fetch(new URL("/v1/messages", server.url), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "dsh-account/deepseek-flash", max_tokens: 10, messages: [{ role: "user", content: "hi" }] }),
+      });
+      await resp.text();
+      expect(sends.length).toBe(1);
+      for (const send of sends) {
+        expect(send.url).toBe("https://api.deepseek.com/anthropic/v1/messages");
+        expect(send.headers.get("x-dsh-auth-token")).toBe("dsh_pinned_wire_token");
+        expect(send.headers.get("authorization")).toBeNull();
+      }
     } finally {
       await server.stop(true);
     }
