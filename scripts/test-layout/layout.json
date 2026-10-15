@@ -685,6 +685,7 @@
     "codex-transition-state.test.ts": "codex-integration",
     "codex-user-identity.test.ts": "codex-integration",
     "codex-v2-gate.test.ts": "codex-integration",
+    "codex-agent-thread-limit.test.ts": "codex-integration",
     "codex-warmup.test.ts": "codex-integration",
     "codex-web-search-switch.test.ts": "codex-integration",
     "codex-websocket-registry.test.ts": "codex-integration",
