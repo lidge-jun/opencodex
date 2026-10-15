@@ -2109,6 +2109,8 @@ export const tr: Record<TKey, string> = {
   "integrations.tab.grok": "Grok Build",
   "integrations.tab.opencode": "OpenCode",
   "integrations.tab.pi": "Pi",
+  "integrations.tab.gentleShell": "Gentle Shell",
+  "integrations.semantics.gentleShell": "Kayıtlı ana dizindeki kataloğu yüklemek için Gentle Shell’i yeniden başlatın. Bağlı/ortak dizinler için Pi entegrasyonunu kullanın.",
   "integrations.tab.omp": "OMP",
   "integrations.tab.hermes": "Hermes",
   "integrations.tab.openclaw": "OpenClaw",

@@ -483,6 +483,27 @@ sibling policy. Profile journal views retain source-store provenance for older l
 
 The shared atomic replacement publisher also identifies explicit Remote Workspace file writes as `remote-workspace`; its isolated owner and support limits are documented in [Remote Workspace](../remote-workspace.md).
 
+## Gentle Shell home discovery
+
+The `gentle-shell` client reuses Pi's serializer/options but stamps its own ownership
+identity for `providers.opencodex`. The registry resolves config and detect paths from
+one bootstrap read per observation; export uses that same resolver. Owned-catalog
+refresh includes this client, while Pi's existing path and behavior remain unchanged.
+
+`src/clients/gentle-shell-path.ts` resolves the persistent launcher home from
+`GENTLE_SHELL_CONFIG` (default `~/.gentle-shell/config.json`) and its `home` selector.
+Saved custom paths win over `GENTLE_SHELL_HOME`; isolated/default selection uses that
+variable or `~/.gentle-shell/agent`. Malformed JSON follows the launcher's isolated
+fallback, but an unreadable, unsafe or oversized bootstrap refuses discovery.
+Relative paths (including literal `~`) refuse: a proxy cannot infer another process's
+working directory. One-off launcher flags are not observable by this integration.
+
+Link mode and destinations aliasing Pi's default, configured or preserved original
+home refuse with a Pi-integration remedy. Canonical existing ancestors and existing
+file identities catch directory aliases and hard-linked catalogs. The resolver never
+changes launcher preferences or client files. The existing writer retains responsibility
+for target validation, ownership, snapshots and atomic replacement.
+
 ## omo variants
 
 "omo" names three products, and each surface here serves exactly one of them:

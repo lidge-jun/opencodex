@@ -2124,6 +2124,8 @@ export const en = {
   "integrations.tab.cursor": "Cursor",
   "integrations.tab.opencode": "OpenCode",
   "integrations.tab.pi": "Pi",
+  "integrations.tab.gentleShell": "Gentle Shell",
+  "integrations.semantics.gentleShell": "Restart Gentle Shell to load the catalog in its saved home. Link/shared homes use the Pi integration.",
   "integrations.tab.omp": "OMP",
   "integrations.tab.hermes": "Hermes",
   "integrations.tab.openclaw": "OpenClaw",

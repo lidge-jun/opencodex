@@ -2082,6 +2082,8 @@ export const ru: Record<TKey, string> = {
   "integrations.tab.grok": "Grok Build",
   "integrations.tab.opencode": "OpenCode",
   "integrations.tab.pi": "Pi",
+  "integrations.tab.gentleShell": "Gentle Shell",
+  "integrations.semantics.gentleShell": "Перезапустите Gentle Shell для загрузки каталога из сохранённого каталога. Для связанных или общих каталогов используйте интеграцию Pi.",
   "integrations.tab.omp": "OMP",
   "integrations.tab.hermes": "Hermes",
   "integrations.tab.openclaw": "OpenClaw",

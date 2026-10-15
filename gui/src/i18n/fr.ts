@@ -2096,6 +2096,8 @@ export const fr: Record<TKey, string> = {
   "integrations.tab.grok": "Grok Build",
   "integrations.tab.opencode": "OpenCode",
   "integrations.tab.pi": "Pi",
+  "integrations.tab.gentleShell": "Gentle Shell",
+  "integrations.semantics.gentleShell": "Redémarrez Gentle Shell pour charger le catalogue du répertoire enregistré. Pour un répertoire lié ou partagé, utilisez l’intégration Pi.",
   "integrations.tab.omp": "OMP",
   "integrations.tab.hermes": "Hermes",
   "integrations.tab.openclaw": "OpenClaw",

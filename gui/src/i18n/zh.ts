@@ -1575,6 +1575,8 @@ export const zh: Record<TKey, string> = {
   "integrations.tab.grok": "Grok Build",
   "integrations.tab.opencode": "OpenCode",
   "integrations.tab.pi": "Pi",
+  "integrations.tab.gentleShell": "Gentle Shell",
+  "integrations.semantics.gentleShell": "重启 Gentle Shell 以加载已保存目录中的模型目录。链接或共享目录请使用 Pi 集成。",
   "integrations.tab.omp": "OMP",
   "integrations.tab.hermes": "Hermes",
   "integrations.tab.openclaw": "OpenClaw",

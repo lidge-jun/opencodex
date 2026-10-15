@@ -5,6 +5,8 @@
   "messages-native-empty-inline.test.ts": "claude-integration",
   "explicit-empty-tool-catalog.test.ts": "responses",
   "explicit-empty-tool-catalog-history.test.ts": "responses",
+  "gentle-shell-path.test.ts": "clients",
+  "gentle-shell-client.test.ts": "clients",
   "codex-history-pending-wal.test.ts": "codex-integration",
   "compaction-history-framing.test.ts": "responses",
   "service-log.test.ts": "service",

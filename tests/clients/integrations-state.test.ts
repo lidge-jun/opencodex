@@ -796,7 +796,7 @@ describe("installation detection is independent of config state", () => {
 describe("the loopback-only set is one fact, read through one seam", () => {
   test("identifies exactly the registered loopback-only clients", () => {
     const loopbackOnly = INTEGRATION_CLIENT_IDS.filter(id => isLoopbackOnly(id));
-    expect(loopbackOnly).toEqual(["qoder", "pi", "omp", "kimi", "gajae", "dsh", "mcode", "zcode", "commandcode", "prime", "aside", "raycast", "omo", "cline", "droid"]);
+    expect(loopbackOnly).toEqual(["qoder", "pi", "omp", "kimi", "gajae", "dsh", "mcode", "zcode", "commandcode", "prime", "aside", "raycast", "omo", "cline", "droid", "gentle-shell"]);
   });
 
   test("the registry restates nothing — it reads the export spec", () => {

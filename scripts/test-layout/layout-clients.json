@@ -1,4 +1,6 @@
 {
+  "gentle-shell-path.test.ts": "clients",
+  "gentle-shell-client.test.ts": "clients",
   "droid-managed-reasoning-defaults.test.ts": "clients",
   "droid-normalized-reasoning-defaults.test.ts": "clients",
   "desktop-app-server-shim.test.ts": "clients",

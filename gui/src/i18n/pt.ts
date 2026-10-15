@@ -2108,6 +2108,8 @@ export const pt: Record<TKey, string> = {
   "integrations.tab.cursor": "Cursor",
   "integrations.tab.opencode": "OpenCode",
   "integrations.tab.pi": "Pi",
+  "integrations.tab.gentleShell": "Gentle Shell",
+  "integrations.semantics.gentleShell": "Reinicie o Gentle Shell para carregar o catálogo no diretório salvo. Para diretórios vinculados ou compartilhados, use a integração Pi.",
   "integrations.tab.omp": "OMP",
   "integrations.tab.hermes": "Hermes",
   "integrations.tab.openclaw": "OpenClaw",

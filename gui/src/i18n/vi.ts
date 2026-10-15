@@ -2072,6 +2072,8 @@ export const vi: Record<TKey, string> = {
   "integrations.tab.cursor": "Cursor",
   "integrations.tab.opencode": "OpenCode",
   "integrations.tab.pi": "Pi",
+  "integrations.tab.gentleShell": "Gentle Shell",
+  "integrations.semantics.gentleShell": "Khởi động lại Gentle Shell để tải danh mục trong thư mục đã lưu. Với thư mục liên kết/dùng chung, hãy dùng tích hợp Pi.",
   "integrations.tab.omp": "OMP",
   "integrations.tab.hermes": "Hermes",
   "integrations.tab.openclaw": "OpenClaw",

@@ -1602,6 +1602,8 @@ export const ko: Record<TKey, string> = {
   "integrations.tab.grok": "Grok Build",
   "integrations.tab.opencode": "OpenCode",
   "integrations.tab.pi": "Pi",
+  "integrations.tab.gentleShell": "Gentle Shell",
+  "integrations.semantics.gentleShell": "저장된 홈의 카탈로그를 불러오려면 Gentle Shell을 재시작하세요. 연결/공유 홈은 Pi 연동을 사용하세요.",
   "integrations.tab.omp": "OMP",
   "integrations.tab.hermes": "Hermes",
   "integrations.tab.openclaw": "OpenClaw",

@@ -47,6 +47,8 @@ export const INTEGRATION_MARKS: Record<OverviewClientId, string | null> = {
   ...NATIVE_MARKS,
   opencode: CLIENT_MARKS.opencode ?? null,
   pi: CLIENT_MARKS.pi ?? null,
+  // No verified square Gentle Shell asset: use its own monogram, not Pi\'s mark.
+  "gentle-shell": null,
   omp: CLIENT_MARKS.omp ?? null,
   hermes: CLIENT_MARKS.hermes ?? null,
   openclaw: CLIENT_MARKS.openclaw ?? null,
