@@ -473,6 +473,7 @@ export async function prepareResponsesRequest(
     if (options.inboundWire === "anthropic") {
       parsed._nativeReasoningReplay = options.nativeReasoningReplay;
       parsed._nativeReasoningMint = options.nativeReasoningMint;
+      parsed._anthropicServerTools = options.anthropicServerTools;
     }
     parsed._promptCacheKeyIsSharedCohort = options.promptCacheKeyIsSharedCohort;
     // The body may have been rebuilt since the inbound observation (previous-response

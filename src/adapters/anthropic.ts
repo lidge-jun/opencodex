@@ -521,6 +521,16 @@ function streamedToolArgumentsParse(assembled: string): boolean {
   }
 }
 
+/** The query a server-side web_search streamed as its input; [] when it did not parse. */
+function webSearchQueries(json: string): string[] {
+  try {
+    const query = (JSON.parse(json) as { query?: unknown } | null)?.query;
+    return typeof query === "string" && query.length > 0 ? [query] : [];
+  } catch {
+    return [];
+  }
+}
+
 function anthropicKeyUsesBearer(provider: OcxProviderConfig): boolean {
   return provider.apiKeyTransport === "bearer";
 }
@@ -896,6 +906,18 @@ function toolsToAnthropicFormat(parsed: OcxParsedRequest, toolNames: { toWire: (
   return converted;
 }
 
+/**
+ * Appends the Claude client's typed web tools (`parsed._anthropicServerTools`) so Anthropic runs
+ * them server-side. A same-named function tool wins: the web-search sidecar's `web_search` keeps
+ * priority, and Anthropic rejects duplicate tool names.
+ */
+function withAnthropicServerTools(tools: unknown[] | undefined, parsed: OcxParsedRequest): unknown[] | undefined {
+  const serverTools = parsed._anthropicServerTools?.filter(t => !parsed.context.tools?.some(f => f.name === t.name));
+  if (!serverTools?.length) return tools;
+  // The caller's breakpoints are dropped on this lane; applyPromptCaching places its own.
+  return [...(tools ?? []), ...serverTools.map(t => ({ ...t, cache_control: undefined }))];
+}
+
 function normalizeAnthropicInputSchema(schema: unknown): Record<string, unknown> {
   const stripped = stripResponsesOnlyEncryptedMarker(schema);
   const obj = stripped && typeof stripped === "object" && !Array.isArray(stripped)
@@ -988,7 +1010,9 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       // Anthropic rejects many-image requests (>20 images) carrying any image over
       // 2000px per side; see anthropic-image-guard.ts for the full limit policy.
       enforceAnthropicImageLimits(messages);
-      const tools = toolsToAnthropicFormat(parsed, toolNames);
+      const converted = toolsToAnthropicFormat(parsed, toolNames);
+      // A third-party Anthropic-compatible endpoint may not implement Anthropic's server tools.
+      const tools = usesNativeAnthropicEndpoint(provider) ? withAnthropicServerTools(converted, parsed) : converted;
 
       // Codex never sends `max_output_tokens`, so the omitted-limit default decides how
       // long a Claude answer may run. Honor the provider's configured output budget
@@ -1220,6 +1244,8 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       let pendingStopReason: string | undefined;
       let emittedDone = false;
       let sawVisibleText = false;
+      /** The open server-side web_search call, until its web_search_tool_result block. */
+      let serverSearch: { id: string; json: string; streaming: boolean } | undefined;
 
       const emitDone = function* (): Generator<AdapterEvent> {
         if (emittedDone) return;
@@ -1288,7 +1314,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
                 break;
               }
               case "content_block_start": {
-                const block = data.content_block as { type: string; id?: string; name?: unknown; data?: string; thinking?: string } | undefined;
+                const block = data.content_block as { type: string; id?: string; name?: unknown; data?: string; thinking?: string; tool_use_id?: unknown; content?: unknown } | undefined;
                 if (!block) break;
                 currentBlockType = block.type;
                 if (block.type === "thinking") {
@@ -1302,6 +1328,25 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
                   currentToolCallJson = "";
                   budget.openCall(currentToolCallId);
                   yield { type: "tool_call_start", id: currentToolCallId, name: currentToolCallName };
+                }
+                if (block.type === "server_tool_use" && block.name === "web_search" && typeof block.id === "string") {
+                  // Anthropic ran the caller's typed web_search: surface it as the same search
+                  // cell the sidecar emits. The query arrives as input_json_delta below.
+                  serverSearch = { id: block.id, json: "", streaming: true };
+                  yield { type: "web_search_call_begin", id: block.id };
+                }
+                if (block.type === "web_search_tool_result" && serverSearch && block.tool_use_id === serverSearch.id) {
+                  const hits = Array.isArray(block.content) ? block.content as Array<{ url?: unknown; title?: unknown }> : undefined;
+                  yield {
+                    type: "web_search_call_end",
+                    id: serverSearch.id,
+                    queries: webSearchQueries(serverSearch.json),
+                    // A failed search carries one error object instead of the hit list.
+                    status: hits ? "completed" : "failed",
+                    sources: (hits ?? []).flatMap(h => typeof h.url === "string"
+                      ? [{ url: h.url, ...(typeof h.title === "string" ? { title: h.title } : {}) }] : []),
+                  };
+                  serverSearch = undefined;
                 }
                 if (block.type === "redacted_thinking" && typeof block.data === "string") {
                   // Opaque redacted block: replay verbatim later or tool-use turns 400.
@@ -1346,10 +1391,15 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
                     throw error;
                   }
                   yield { type: "tool_call_delta", arguments: delta.partial_json };
+                } else if (delta.type === "input_json_delta" && typeof delta.partial_json === "string" && serverSearch?.streaming
+                    && serverSearch.json.length < 4096) {
+                  // Capped: a query past 4 KiB loses its label (queries: []), never the search.
+                  serverSearch.json += delta.partial_json;
                 }
                 break;
               }
               case "content_block_stop": {
+                if (serverSearch) serverSearch.streaming = false;
                 if (currentBlockType === "tool_use") {
                   // The non-stream path repairs an unparseable payload in toolUseArguments(); the
                   // stream cannot, because the fragments are already downstream. Fail the turn

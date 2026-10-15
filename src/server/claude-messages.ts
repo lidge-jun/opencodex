@@ -35,6 +35,7 @@ import { resolveAlias, claudeCodeNativeAlias, legacyAliasForNative } from "../cl
 import { recordDesktopRequest } from "../claude/desktop-health";
 import { stripOneMillionMarker } from "../claude/context-windows";
 import { captureClaudeInbound } from "../claude/inbound-debug";
+import { declaredAnthropicServerTools } from "../claude/inbound-content-options";
 import { claudeCodeForIngress } from "../claude/intercept/model-bindings";
 import { classifyInterceptClient } from "../claude/intercept/client-class";
 import { analyzeClaudeCompatibility, isClaudeCompatibilityMode } from "../claude/compatibility";
@@ -1428,6 +1429,8 @@ async function handleClaudeMessagesWithBudget(
       && anthropicBody.tools.length === 0,
     nativeReasoningReplay,
     nativeReasoningMint,
+    // Out of body like the replay above: the core hands these to an Anthropic destination only.
+    anthropicServerTools: declaredAnthropicServerTools(anthropicBody),
     claudeGoAffinity: { sessionLane: claudeGoSessionLane },
     claudeNativeSessionId,
     stripClaudeMainAuthForNoncanonicalForward: true,
