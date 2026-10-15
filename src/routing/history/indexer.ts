@@ -195,17 +195,18 @@ function readStoredMetaField(dbHandle: Database, key: string): string {
   return metaValue(dbHandle, key) ?? "";
 }
 
-function sourceIdentityMatches(dbHandle: Database, revision: UsageLogRevision | null): boolean {
+export function sourceIdentityMatches(dbHandle: Database, revision: UsageLogRevision | null): boolean {
   const stored = readIndexedMeta(dbHandle);
   if (revision === null) return stored.sourceSize === 0;
   const storedPath = readStoredMetaField(dbHandle, HISTORY_META_KEYS.sourcePath);
   if (!storedPath) return false;
-  const storedDev = Number(readStoredMetaField(dbHandle, HISTORY_META_KEYS.sourceDev));
-  const storedIno = Number(readStoredMetaField(dbHandle, HISTORY_META_KEYS.sourceIno));
+  // Compared as exact decimal strings; see UsageLogRevision for why ids are not Numbers.
+  const storedDev = readStoredMetaField(dbHandle, HISTORY_META_KEYS.sourceDev);
+  const storedIno = readStoredMetaField(dbHandle, HISTORY_META_KEYS.sourceIno);
   const storedBirthtimeMs = Number(readStoredMetaField(dbHandle, HISTORY_META_KEYS.sourceBirthtimeMs));
   return storedPath === revision.path
-    && storedDev === Number(revision.dev)
-    && storedIno === Number(revision.ino)
+    && storedDev === revision.dev
+    && storedIno === revision.ino
     && storedBirthtimeMs === Number(revision.birthtimeMs);
 }
 
