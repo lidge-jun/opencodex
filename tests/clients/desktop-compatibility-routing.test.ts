@@ -72,6 +72,7 @@ test("model and fallback edits revoke routing until a new observation context is
     { providers: { external: { baseUrl: "https://changed.example.test/v1" } } },
     { combos: {} }, { routingProfiles: {} },
     { memoryModels: { extract: { model: "openai/gpt-6-luna" } } },
+    { codexMainAccountHardLockFallback: { model: "external/model" } },
   ];
   const root = mkdtempSync(join(tmpdir(), "ocx-desktop-route-change-")); roots.push(root);
   writeFileSync(join(root, "config.toml"), text);

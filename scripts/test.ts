@@ -104,6 +104,8 @@ export function createIsolatedTestEnvironment(
       HOME: root,
       USERPROFILE: root,
       OPENCODEX_HOME: opencodexHome,
+      // Pin per process for both the preload and children that inherit this environment.
+      OCX_OWNER_REGISTRY_DIR: join(opencodexHome, "ocx-homes"),
       CODEX_HOME: codexHome,
       // Client homes that otherwise default to os.homedir(). Bun keeps the home it read at
       // startup, so a preload that only rewrites HOME leaves these at the developer's real
