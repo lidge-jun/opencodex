@@ -16,6 +16,7 @@ import {
   type TranslatorBudget,
 } from "../../lib/translator-budget";
 import { isTransientUpstreamStatus } from "../../lib/upstream-retry";
+import { UNDECLARED_TOOL_CALL_ERROR_CODE } from "../../lib/errors";
 import { encodeReasoningEnvelope } from "../../responses/reasoning-envelope";
 import { responsesUsage, webSearchAction } from "../../bridge/internal";
 import {
@@ -386,8 +387,9 @@ function createAnthropicMessageWriter(
         return;
       }
       const message = typeof error.message === "string" ? error.message : "upstream request failed";
-      fail(anthropicFailedStatus(error, message), message, true,
-        error.code === "context_length_exceeded" ? error.code : undefined);
+      const deterministic = error.code === UNDECLARED_TOOL_CALL_ERROR_CODE;
+      fail(anthropicFailedStatus(error, message), message, !deterministic,
+        deterministic || error.code === "context_length_exceeded" ? error.code as string : undefined);
     },
     overflow() {
       fail(413, "upstream translation buffer exceeded the safe limit", false, "translation_buffer_limit");

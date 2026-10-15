@@ -39,6 +39,18 @@ test("only the deliberate apply action carries account-wide consent", async () =
   await runCompatibilityAction("", { target: "runtime", action: "apply" }, new AbortController().signal);
   expect(bodies).toEqual([{ action: "start", confirmed: true }, { action: "apply", confirmed: true, accountWideConsent: true }]);
 });
+test("build assessment projection is strict, optional and never marks another version verified", () => {
+  const base = { supported: true, phase: "off", running: false };
+  expect(parseCompatibilityRuntime(base).buildAssessment).toBeUndefined();
+  expect(parseCompatibilityRuntime({ ...base, buildAssessment: null }).buildAssessment).toBeNull();
+  const assessed = { assessedVersion: "26.924.2738.0", observedVersion: "26.1007.9446.0", verified: false, completedAt: 1770000000000 };
+  expect(parseCompatibilityRuntime({ ...base, buildAssessment: assessed }).buildAssessment).toEqual(assessed);
+  expect(parseCompatibilityRuntime({ ...base, buildAssessment: { ...assessed, observedVersion: "26.924.2738.0", verified: true } }).buildAssessment?.verified).toBe(true);
+  for (const invalid of [{ ...assessed, verified: true }, { ...assessed, assessedVersion: "26.924" }, { ...assessed, observedVersion: "C:\\path" },
+    { ...assessed, verified: "true" }, { ...assessed, completedAt: 1.5 }, { ...assessed, completedAt: Infinity },
+    { ...assessed, observedVersion: undefined }, "C:\\Program Files\\WindowsApps", 42])
+    expect(() => parseCompatibilityRuntime({ ...base, buildAssessment: invalid })).toThrow("invalid_runtime_status");
+});
 test("every supported locale contains the complete compatibility consent namespace", () => {
   const keys = Object.keys(DICTS.en).filter(key => key.startsWith("desktopCompat."));
   expect(keys.length).toBeGreaterThan(20);

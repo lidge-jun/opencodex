@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import {
   appendFileSync,
   existsSync,
@@ -15,6 +16,7 @@ import { handleManagementAPI } from "../../src/server/management-api";
 import { ManagementRequest } from "../helpers/management-auth";
 import {
   appendUsageEntry,
+  currentUsageLogRevision,
   normalizeUsageEntryForTest,
   resetUsageReadCacheForTests,
   usageLogPath,
@@ -25,11 +27,13 @@ import {
   queryRequestHistory,
   rebuildRequestHistoryIndex,
   requestHistoryRowById,
+  sourceIdentityMatches,
   REQUEST_HISTORY_MAX_RECORD_BYTES,
   REQUEST_HISTORY_MAX_PAGE_SIZE,
   REQUEST_HISTORY_READ_CHUNK_BYTES,
 } from "../../src/routing/history/indexer";
 import { InvalidCursorError } from "../../src/routing/history/cursor";
+import { metaValue, recordSourceMeta, resetAndCreateSchema, setMeta } from "../../src/routing/history/ingest";
 import { HISTORY_DB_FILENAME, HISTORY_SCHEMA_VERSION } from "../../src/routing/history/schema";
 import { getConfigDir } from "../../src/config";
 import { flushConfigDirHardeningForTests } from "../../src/config/paths";
@@ -103,6 +107,64 @@ async function apiGet(path: string): Promise<Response> {
 }
 
 describe("request-history index (RI-02)", () => {
+  test("SQLite source identities distinguish adjacent device and inode ids above 2^53", () => {
+    appendUsageEntry(entry("exact-id", 1234, "a", "m1"));
+    const revision = currentUsageLogRevision()!;
+    const low = "9007199254740992";
+    const high = "9007199254740993";
+    expect(Number(low)).toBe(Number(high));
+    const db = new Database(":memory:");
+    try {
+      resetAndCreateSchema(db);
+      for (const field of ["dev", "ino"] as const) {
+        const exact = { ...revision, [field]: high };
+        recordSourceMeta(db, exact);
+        expect(metaValue(db, `source_${field}`)).toBe(high);
+        expect(sourceIdentityMatches(db, exact)).toBe(true);
+        expect(sourceIdentityMatches(db, { ...exact, [field]: low })).toBe(false);
+        // The old Number-based writer rounded the high id to its neighbour.
+        setMeta(db, `source_${field}`, Number(high));
+        expect(sourceIdentityMatches(db, exact)).toBe(false);
+      }
+    } finally {
+      db.close();
+    }
+  });
+
+  test("legacy rounded source metadata rebuilds once and then reuses the corrected index", async () => {
+    appendUsageEntry(entry("legacy-id", 1234, "a", "m1"));
+    await queryRequestHistory({}, undefined, 10);
+    closeRequestHistoryIndex();
+    const dbFile = join(getConfigDir(), HISTORY_DB_FILENAME);
+    let db = new Database(dbFile);
+    try {
+      setMeta(db, "source_ino", Number("9007199254740993"));
+    } finally {
+      db.close();
+    }
+    const page = await queryRequestHistory({}, undefined, 10);
+    expect(page.rows.map(row => row.requestId)).toEqual(["legacy-id"]);
+    expect(page.meta.lastError).toBe("rebuilt after identity/schema mismatch");
+    closeRequestHistoryIndex();
+    db = new Database(dbFile);
+    try {
+      const revision = currentUsageLogRevision()!;
+      expect(metaValue(db, "source_dev")).toBe(revision.dev);
+      expect(metaValue(db, "source_ino")).toBe(revision.ino);
+      setMeta(db, "reuse_marker", "preserve");
+    } finally {
+      db.close();
+    }
+    expect((await queryRequestHistory({}, undefined, 10)).rows).toHaveLength(1);
+    closeRequestHistoryIndex();
+    db = new Database(dbFile);
+    try {
+      expect(metaValue(db, "reuse_marker")).toBe("preserve");
+    } finally {
+      db.close();
+    }
+  });
+
   test("missing database and empty history produce an empty page", async () => {
     const page = await queryRequestHistory({}, undefined, 10);
     expect(page.rows).toEqual([]);
