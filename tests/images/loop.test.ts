@@ -1334,3 +1334,38 @@ describe("image-loop adapter error usage", () => {
     expect(seen).toEqual({ inputTokens: 13, outputTokens: 6 });
   });
 });
+
+describe("image-loop rotated usage", () => {
+  // Hidden rounds before a 429 rotation were spent by the account the loop left. Once the caller
+  // bills them to that account's attempt, the final report must not bill them again; the client
+  // terminal still shows the whole turn.
+  test.each([true, false])("a rotation offers the hidden usage; accepted=%p", async accepted => {
+    streamQueue = [
+      [
+        { type: "tool_call_start", id: "call_1", name: "image_gen" },
+        { type: "tool_call_delta", arguments: '{"prompt":"a cat"}' },
+        { type: "tool_call_end" },
+        { type: "done", usage: { inputTokens: 10, outputTokens: 4 } },
+      ],
+      [{ type: "text_delta", text: "after rotate" }, { type: "done", usage: { inputTokens: 30, outputTokens: 3 } }],
+    ];
+    let sends = 0;
+    const adapter: ProviderAdapter = {
+      ...mockAdapter,
+      fetchResponse: async () => ++sends === 2 ? new Response("rate limited", { status: 429 }) : new Response("{}"),
+    };
+    const offered: unknown[] = [];
+    let reported: unknown;
+    const response = await runWithImageBridge({
+      parsed: makeParsed(), adapter, plan,
+      on429: async () => ({ adapter, recoveryKind: "oauth-account-429" }),
+      onRotatedUsage: usage => { offered.push(usage); return accepted; },
+      onUsage: usage => { reported = usage; },
+    });
+    const sse = await response.text();
+    expect(sends).toBe(3);
+    expect(offered).toEqual([{ inputTokens: 10, outputTokens: 4 }]);
+    expect(reported).toEqual(accepted ? { inputTokens: 30, outputTokens: 3 } : { inputTokens: 40, outputTokens: 7 });
+    expect(sse).toContain('"input_tokens":40');
+  });
+});

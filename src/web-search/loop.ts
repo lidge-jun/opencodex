@@ -339,6 +339,12 @@ export interface WebSearchLoopDeps {
   onFirstOutput?: () => void;
   /** Raw adapter usage at the terminal event, pre wire-normalization (see bridgeToResponsesSSE onUsage). */
   onUsage?: (usage: OcxUsage | undefined) => void;
+  /**
+   * After an `on429` rotation, offered the usage of the hidden iterations the left credential
+   * served. Returning true means it was billed to that credential's attempt, so `onUsage` will not
+   * report it again.
+   */
+  onRotatedUsage?: (usage: OcxUsage) => boolean;
   /** Observe the exact adapter request selected for each routed-model iteration. */
   onRequestBuilt?: (request: AdapterRequest) => void;
   /** Request-scoped executor retains the core's selection binding across loop retries. */
@@ -611,6 +617,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         const rotated = await deps.on429(prepared.response.headers.get("retry-after"), prepared.response.headers,
           iterParsed, prepared.response);
         if (!rotated) break;
+        if (hiddenUsage && deps.onRotatedUsage?.(hiddenUsage)) hiddenUsage = undefined;
         const retainRefusal = prepared.response.status === 403
           && deps.incomingMeta?.providerName === "google-antigravity" && rotated.recoveryKind === "oauth-account-403";
         // Keep the bounded refusal readable until the sibling actually returns headers.
