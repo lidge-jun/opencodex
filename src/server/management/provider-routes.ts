@@ -1,8 +1,8 @@
 import { contextTierRecordConfigError, modelCapabilitiesConfigError, mergeModelCapabilities } from "../../config/provider-validation";
 import { DECLARABLE_HOSTED_TOOL_TYPES } from "../../responses/hosted-tool-policy";
 import { randomUUID } from "node:crypto";
-import { cleanupRemovedGcpCredentials, commitProviderGcpCredentialRemoval, providerGcpCredentialMarkers, snapshotProviderGcpCredentialMarkers } from "../../providers/gcp-credential-cleanup";
-import { providerCredentialInputError } from "../../providers/api-keys";
+import { cleanupRemovedGcpCredentials, providerGcpCredentialMarkers, snapshotProviderGcpCredentialMarkers } from "../../providers/gcp-credential-cleanup";
+import { providerGcpCredentialInputResponse, removeProviderWithGcpCredentials } from "./provider-gcp-credential-routes";
 import { readFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import type { CatalogModel } from "../../codex/catalog";
@@ -1149,8 +1149,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     const name = typeof body.name === "string" ? body.name.trim() : "";
     if (!isPlainRecord(body.provider)) return jsonResponse({ error: "provider must be a plain object" }, 400);
-    const credentialError = providerCredentialInputError(body.provider);
-    if (credentialError) return jsonResponse({ error: credentialError }, 400);
+    const credentialResponse = providerGcpCredentialInputResponse(body.provider);
+    if (credentialResponse) return credentialResponse;
     // Reject canonical-row clears before normalization hides their ownership.
     if (name === "openai" && (Object.hasOwn(body.provider, "autoReviewModel") || Object.hasOwn(body.provider, "autoReviewModelOverrides"))) {
       return jsonResponse({ error: "provider openai must not include autoReviewModel or autoReviewModelOverrides" }, 400);
@@ -1861,14 +1861,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const { saveConfigPreservingClaudeCode: save } = await import("../../config");
     // Deleting still succeeds; the response names the shadow-call target left without a provider.
     const shadowDependency = shadowInterceptProviderDependency(config, name);
-    const droppedCustomModels = commitProviderGcpCredentialRemoval(config, name, () => {
-      if (fallbackDefault) config.defaultProvider = fallbackDefault;
-      delete config.providers[name];
-      const dropped = dropProviderCustomModels(config, name);
-      forgetProviderContextCap(config, name);
-      save(config);
-      return dropped;
-    });
+    const droppedCustomModels = removeProviderWithGcpCredentials(config, name, fallbackDefault, save);
     await replaceProviderAccountSet(name, null);
     reconcileLiveStateStores();
     const { clearModelCache: clearCache } = await import("../../codex/model-cache");

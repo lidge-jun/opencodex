@@ -1,5 +1,5 @@
 # GUI And Management API
-Provider PUT, POST and DELETE in `src/server/management/provider-routes.ts` run [GCP credential cleanup](providers/google.md#vertex-credential-markers) only after saving; deletion snapshots live and valid durable row markers under the same lock as persistence. Rejected mutations and failed saves preserve secrets and other persisted references retain them.
+Provider PUT, POST and DELETE in `src/server/management/provider-routes.ts` run [GCP credential cleanup](providers/google.md#vertex-credential-markers) only after saving. `src/server/management/provider-gcp-credential-routes.ts` owns credential-input rejection responses and the locked deletion callback, which snapshots live and valid durable markers under the persistence lock. Rejected mutations and failed saves preserve secrets; other persisted references retain them. Route response shapes remain unchanged.
 Anthropic OAuth account DTOs include `autoSwitchThresholdOverride` (integer or null),
 `autoSwitchThreshold` (pool default) and `effectiveAutoSwitchThreshold`. The dedicated
 `PUT /api/oauth/accounts/auto-switch` accepts `{ provider: "anthropic", accountId, threshold }`;
