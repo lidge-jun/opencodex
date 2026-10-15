@@ -193,7 +193,7 @@ test("internal terminal continuation replays signed progress instead of unsigned
 });
 
 
-test("hosted search retains signed commentary for the next model iteration", async () => {
+for (const streamRoutedModelOutput of [false, true]) test(`hosted search displays signed commentary once and retains replay (live=${streamRoutedModelOutput})`, async () => {
   const search = { ...tool, name: "web_search", input: { query: "docs" } };
   const { adapter, events } = await eventsFor([empty, redacted, update, search], true);
   let pass = 0;
@@ -222,9 +222,14 @@ test("hosted search retains signed commentary for the next model iteration", asy
       forwardProvider: { adapter: "openai-responses", baseUrl: "https://sidecar.invalid", authMode: "forward" },
       hostedTool: { type: "web_search" }, selectedForwardHeaders: new Headers({ authorization: "Bearer synthetic" }),
       settings: { model: "synthetic", reasoning: "low", timeoutMs: 1000 }, maxSearches: 1,
+      streamRoutedModelOutput,
     });
     const text = await response.text();
     expect(text).not.toContain("response.failed");
+    const frames = text.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
+    expect(frames.filter(f => f.type === "response.output_text.delta" && f.delta === update.thinking)).toHaveLength(1);
+    expect(frames.findIndex(f => f.type === "response.output_text.delta" && f.delta === update.thinking))
+      .toBeLessThan(frames.findIndex(f => f.type === "response.output_item.added" && f.item.type === "web_search_call"));
     expect((replay as { role: string; content: unknown }[]).find(m => m.role === "assistant")?.content).toEqual([
       empty, redacted, update, expect.objectContaining({ type: "tool_use", id: tool.id }),
     ]);

@@ -163,7 +163,9 @@ test("signed progress preceding image generation remains thinking on the interna
     { type: "tool_call_end" }, { type: "done" },
   ], [{ type: "text_delta", text: "ready" }, { type: "done" }]];
   const response = await runWithImageBridge({ parsed: makeParsed(), adapter, plan: imagePlan, maxRounds: 1 });
-  await response.text();
+  const sse = await response.text();
+  const frames = sse.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
+  expect(frames.filter(f => f.type === "response.output_text.delta" && f.delta === "Creating the requested image.")).toHaveLength(1);
   expect(replay).toEqual([
     { type: "thinking", thinking: "", signature: "ReasoningSignature123456==" },
     { type: "thinking", thinking: "Creating the requested image.", signature: "ProgressSignature123456==" },

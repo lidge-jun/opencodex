@@ -885,6 +885,10 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
           // Discarded iteration still contributed tokens — accumulate for the final onUsage.
           takeUsageFrom(split.passthrough);
 
+          for (const event of split.passthrough) {
+            if (event.type === "text_delta" && event.anthropicThinkingSignature) yield event;
+          }
+
           // Fulfill each image/video call, then inject ONE assistant turn (thinking once + all tool
           // calls) so Anthropic extended-thinking continuations stay valid across parallel calls.
           const iterationThinking = extractIterationThinking(split.passthrough);

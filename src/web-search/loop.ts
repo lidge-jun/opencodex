@@ -971,6 +971,9 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
             return;
           }
           // The thinking that led to the search belongs to the FIRST call's assistant replay turn.
+          for (const event of split.passthrough.slice(split.streamedPassthroughCount)) {
+            if (event.type === "text_delta" && event.anthropicThinkingSignature) yield event;
+          }
           const iterationThinking = extractIterationThinking(split.passthrough);
           for (const [callIndex, call] of split.calls.entries()) {
             accountRefusalOutputStarted = true;
