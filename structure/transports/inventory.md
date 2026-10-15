@@ -81,7 +81,9 @@ producer streams token-granular deltas ahead of its consumer. These bounds do
 not cap process RSS or the conversation messages accumulated across completed media iterations.
 `tests/images/loop.test.ts` covers early producer cancellation, byte boundaries, iteration reset,
 opaque metadata, normal tool passthrough, coalesced-tail accounting, and consumer cancellation on
-both execution paths.
+both execution paths. Final client tool output also follows the [explicit empty client-catalog
+boundary](responses-wire-shapes.md#declared-tool-membership-by-inbound-wire); internal media tool
+execution keeps its existing behavior.
 
 ## Bounded response ingestion and OrcaRouter login
 

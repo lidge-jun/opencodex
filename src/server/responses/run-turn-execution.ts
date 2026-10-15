@@ -49,6 +49,7 @@ import { rememberResponseState } from "../../responses/state";
 import { trackStreamLifetime } from "../lifecycle";
 import { awaitThoughtSignatureDurability } from "../../responses/thought-signature-replay";
 import { undeclaredToolCallMessage } from "../responses-undeclared-tool-guard";
+import { emptyToolCatalogRefusal, guardEmptyToolCatalogEvents, guardEmptyToolCatalogStream } from "../../lib/empty-tool-catalog";
 // LOCAL PATCH (runturn-websearch)
 import { planWebSearch } from "../../web-search";
 import { runTurnWebSearchInitialParsed, runTurnWebSearchLoop } from "../../web-search/run-turn-loop";
@@ -87,6 +88,7 @@ export async function executeResponsesRunTurn(
     | "translatorBudget"
     | "inboundWire"
     | "toolBridgeMaps"
+    | "clientToolCatalogRestriction"
     | "rememberKiroDeliveredFinalAnswer"
     | "responseStateOptions"
   >,
@@ -699,14 +701,19 @@ export async function executeResponsesRunTurn(
       return orderMessagesOutput(retryQueue.stream());
     };
 
-    const { toolNsMap, declaredToolNames, toolParameterSchemas, freeformToolNames, bareCustomToolNames, toolSearchToolNames } = toolBridgeMaps;
+    const clientToolCatalog = requestState.clientToolCatalogRestriction && route.provider.authMode !== "forward"
+      ? requestState.clientToolCatalogRestriction : undefined;
+    const { toolNsMap, declaredToolNames, toolParameterSchemas, freeformToolNames, bareCustomToolNames, toolSearchToolNames } = clientToolCatalog
+      ? { ...toolBridgeMaps, ...clientToolCatalog } : toolBridgeMaps;
     const enforceDeclaredToolNames = inboundWire !== "chat" && inboundWire !== "anthropic";
     const classifyUndeclaredFirstTool = (
       event: AdapterEvent,
     ): Extract<AdapterEvent, { type: "error" }> | undefined => {
-      if (!enforceDeclaredToolNames || event.type !== "tool_call_start") return undefined;
       // This tool is declared to the adapter by the private search loop.
-      if (wsPlan && event.name === WEB_SEARCH_TOOL_NAME) return undefined;
+      if (wsPlan && event.type === "tool_call_start" && event.name === WEB_SEARCH_TOOL_NAME) return undefined;
+      const emptyCatalogRefusal = emptyToolCatalogRefusal(event, clientToolCatalog);
+      if (emptyCatalogRefusal) return emptyCatalogRefusal;
+      if (!enforceDeclaredToolNames || event.type !== "tool_call_start") return undefined;
       const effectiveName = normalizeDeclaredToolName(event.name, declaredToolNames, undefined, bareCustomToolNames);
       if (declaredToolNames.has(effectiveName)) return undefined;
       return {
@@ -778,7 +785,7 @@ export async function executeResponsesRunTurn(
           queue.close();
           const message = preflight.error?.message ?? "Adapter ended before producing a response";
           const failure = formatErrorResponse(preflight.error?.code === SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE ? 503 : 502,
-            preflight.error?.code === SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE ? SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE : "upstream_error", redactSecretString(message));
+            preflight.error?.code === SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE ? SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE : "upstream_error", redactSecretString(message), { code: preflight.error?.code });
           // A replay-unsafe heartbeat means the adapter already ran a local side effect, so the
           // combo must not send this turn to another target: the failure stays with this child.
           if (preflight.replayUnsafe) markResponseNonReplayable(failure);
@@ -824,7 +831,7 @@ export async function executeResponsesRunTurn(
           console.warn(emptyCompletionNotice(route.providerName, route.modelId));
         });
       const sseStream = bridgeToResponsesSSE(
-        guardedSource, parsed._responseModelId ?? parsed.modelId, toolNsMap, freeformToolNames, toolSearchToolNames,
+        guardEmptyToolCatalogStream(guardedSource, clientToolCatalog, translatorBudget), parsed._responseModelId ?? parsed.modelId, toolNsMap, freeformToolNames, toolSearchToolNames,
         () => {
           cancelResponseCompletion();
           runTurnAbort.abort();
@@ -961,6 +968,7 @@ export async function executeResponsesRunTurn(
         }
         events = searched;
       }
+      events = guardEmptyToolCatalogEvents(events, clientToolCatalog, translatorBudget);
       if (options.comboAttempt) {
         const firstMeaningfulIndex = events.findIndex(event => event.type !== "heartbeat");
         const firstMeaningful = firstMeaningfulIndex === -1 ? undefined : events[firstMeaningfulIndex];
@@ -979,7 +987,8 @@ export async function executeResponsesRunTurn(
             : "Adapter ended before producing a response");
           const storageRefusal = firstMeaningful?.type === "error" && firstMeaningful.code === SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE;
           const failure = formatErrorResponse(storageRefusal ? 503 : 502,
-            storageRefusal ? SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE : "upstream_error", redactSecretString(message));
+            storageRefusal ? SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE : "upstream_error", redactSecretString(message),
+            { code: classifiedError?.code ?? (firstMeaningful?.type === "error" ? firstMeaningful.code : undefined) });
           if (replayUnsafe) markResponseNonReplayable(failure);
           return failure;
         }

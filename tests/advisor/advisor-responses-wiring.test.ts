@@ -130,7 +130,7 @@ function loopbackInterceptor(config: OcxConfig, recorder: { chatRequests: string
   }) as typeof fetch;
 }
 
-function workerRequest(input: unknown, threadId?: string, stream = true) {
+function workerRequest(input: unknown, threadId?: string, stream = true, tools?: unknown[]) {
   return new Request("http://localhost/v1/responses", {
     method: "POST",
     headers: {
@@ -140,11 +140,67 @@ function workerRequest(input: unknown, threadId?: string, stream = true) {
       // Codex sends `thread-id`; it is the ledger's conversation identity.
       ...(threadId ? { "thread-id": threadId } : {}),
     },
-    body: JSON.stringify({ model: "worker/deepseek-v4", input, stream }),
+    body: JSON.stringify({ model: "worker/deepseek-v4", input, stream, ...(tools ? { tools } : {}) }),
   });
 }
 
 describe("advisor responses wiring (end-to-end)", () => {
+  for (const delivery of ["buffered", "bridge", "direct"] as const) {
+    for (const retry of [false, true]) for (const catalog of ["empty", "omitted", "partial"] as const) {
+      for (const finalTool of [false, true]) {
+        test(`advisor with ${catalog} client catalog: ${delivery}, empty retry=${retry}, final tool=${finalTool}`, async () => {
+          releaseSpendHome = acquireOwnedSpendHome();
+          const workerBodies: string[] = [];
+          const chatRequests: string[] = [];
+          const workerFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+            const request = JSON.parse(String(init?.body)) as { stream?: boolean };
+            workerBodies.push(String(init?.body));
+            const first = workerBodies.length === 1;
+            const toolName = first ? "advisor" : finalTool ? "Write" : undefined;
+            const callId = first ? "call_adv_1" : "call_write";
+            if (request.stream) return sse(toolName ? [
+              { choices: [{ delta: { tool_calls: [{ index: 0, id: callId, type: "function",
+                function: { name: toolName, arguments: "{}" } }] }, finish_reason: null }] },
+              { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
+            ] : plainFrames("worker final answer"));
+            return Response.json({ id: "worker", object: "chat.completion", model: "deepseek-v4", choices: [{
+              index: 0, message: { role: "assistant", content: toolName ? null : "worker final answer",
+                ...(toolName ? { tool_calls: [{ id: callId, type: "function",
+                  function: { name: toolName, arguments: "{}" } }] } : {}) },
+              finish_reason: toolName ? "tool_calls" : "stop",
+            }], usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 } });
+          }) as typeof fetch;
+          const config = advisorConfig({ enabled: true, model: "expert/gpt-6-astra",
+            contextSharingConsent: "v1", policy: "manual" }, workerFetch);
+          config.emptyCompletionRetry = retry;
+          loopbackInterceptor(config, { chatRequests });
+          const stream = delivery !== "buffered";
+          const tools = catalog === "empty" ? [] : catalog === "partial"
+            ? [{ type: "function", name: "Read", parameters: { type: "object", properties: {} } }] : undefined;
+          // Exercise the translated Chat ingress contract, including direct client delivery.
+          const response = await handleResponses(workerRequest("fixture task", undefined, stream, tools),
+            config, { model: "", provider: "" }, { inboundWire: "chat",
+              ...(delivery === "direct" ? { clientEncoder: { protocol: "chat", stream,
+                model: "worker/deepseek-v4" } } : {}) });
+          const text = await response.text();
+          expect(response.status).toBe(200);
+          expect(chatRequests).toHaveLength(1);
+          expect(workerBodies).toHaveLength(2);
+          expect(workerBodies[0]).toContain('"advisor"');
+          expect(workerBodies[1]).toContain(ADVISOR_ADVICE);
+          expect(text).not.toContain("call_adv_1");
+          if (catalog === "empty" && finalTool) {
+            expect(text).toContain("undeclared_tool_call");
+            expect(text).not.toContain("call_write");
+            expect(text).not.toContain("response.completed");
+          } else {
+            expect(text).not.toContain("undeclared_tool_call");
+            expect(text).toContain(finalTool ? "call_write" : "worker final answer");
+          }
+        });
+      }
+    }
+  }
   test.each([true, false])("a real OpenAI Chat worker that always calls advisor stops after bounded redispatches (stream=%s)", async stream => {
     releaseSpendHome = acquireOwnedSpendHome();
     const workerBodies: string[] = [];
