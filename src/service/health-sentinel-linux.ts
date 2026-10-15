@@ -4,7 +4,8 @@ import type { TerminateResult } from "./health-sentinel-main";
 
 const ESRCH = 3;
 const ENOSYS = 38;
-// Linux's generic syscall table, shared by x86_64 and aarch64 only.
+// Syscalls from 424 onward share one number on every Linux architecture. Binding is limited to
+// x64/arm64 because the FFI signature below assumes their LP64 integer-register calling convention.
 const SYS_PIDFD_OPEN = 434;
 const SYS_PIDFD_SEND_SIGNAL = 424;
 
