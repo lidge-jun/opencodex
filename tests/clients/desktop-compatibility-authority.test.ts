@@ -5,7 +5,9 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ensureDesktopCompatibilityAuthority, inspectDesktopCompatibilityAuthority, loadDesktopCompatibilityAuthority, renewDesktopCompatibilityAuthority } from "../../src/codex/desktop-compatibility/certificate-store";
-import { windowsAuthorityKeyProtection, type AuthorityKeyProtection } from "../../src/codex/desktop-compatibility/windows-key-protection";
+import {
+  powerShellAuthorityKeyProtectionForTests, usesNativeDpapiForTests, windowsAuthorityKeyProtection, type AuthorityKeyProtection,
+} from "../../src/codex/desktop-compatibility/windows-key-protection";
 import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
 
 const roots: string[] = [];
@@ -164,11 +166,20 @@ describe("Codex Desktop compatibility authority lifecycle", () => {
   });
 
   test.skipIf(process.platform !== "win32")("real CurrentUser DPAPI survives separate helper invocations and rejects corruption", async () => {
+    // x64 protects in-process; spawning PowerShell per call is what exceeded its bound on CI.
+    expect(usesNativeDpapiForTests()).toBe(process.arch === "x64");
     const original = Buffer.from("synthetic authority secret; no real credentials");
     const encrypted = await windowsAuthorityKeyProtection.protect(original);
     expect(Buffer.from(encrypted).includes(original)).toBe(false);
     expect(Buffer.from(await windowsAuthorityKeyProtection.unprotect(encrypted))).toEqual(original);
     const corrupted = Uint8Array.from(encrypted); corrupted[corrupted.length - 1] ^= 1;
     await expect(windowsAuthorityKeyProtection.unprotect(corrupted)).rejects.toThrow("desktop_compatibility_key_protection_failed");
-  }, 65_000); // three PowerShell calls, each bounded at 20s, plus margin
+  }, 65_000); // ARM64 still takes the PowerShell path: three calls, each bounded at 20s
+
+  test.skipIf(process.platform !== "win32" || process.arch !== "x64")("a key protected by the PowerShell helper still opens in-process", async () => {
+    // Every key stored before the native path was written by ProtectedData through PowerShell.
+    const original = Buffer.from("synthetic legacy authority secret; no real credentials");
+    const legacy = await powerShellAuthorityKeyProtectionForTests(50_000).protect(original);
+    expect(Buffer.from(await windowsAuthorityKeyProtection.unprotect(legacy))).toEqual(original);
+  }, 60_000); // one cold PowerShell; the bound is the test's, not the production path's
 });

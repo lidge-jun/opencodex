@@ -61,6 +61,7 @@ stays unpinned. `tests/providers/alibaba-token-plan-wire-defaults.test.ts` cover
 replay flag.
 
 Trusted custom Responses relays may opt into `preserveResponsesInputItemIds` and `preserveResponsesMessageMetadata` for launcher replay (#6220). Ordinary destinations still strip IDs when `store: false` and private `internal_chat_message_metadata_passthrough`; xAI custom-call ID repair remains active.
+Google metadata follows the [destination-scoped replay projection](../providers/google.md#google-tool-call-thought-signature-replay).
 
 xAI keeps `openai-chat` provider-wide; Grok 4.5/4.6/4.7 subscription Responses default to native `openai-responses`, retaining namespace, hosted-search and reasoning-replay normalization. The reserved `xai` OAuth transport is name-pinned
 to the Grok CLI gateway even if its saved base URL differs; custom provider IDs do not inherit this
@@ -525,7 +526,6 @@ terminal tail, while an opted-in terminal repair keeps its unframed suffix taint
 request-log accounting without promoting a truncated repair candidate. Terminal repair reconciles one delayed LF after a consumed CR delimiter, preserving its byte without treating it as an unframed EOF suffix; additional suffix bytes remain subject to the same strict check.
 
 > Decision record: [ADR-0044](../decisions/ADR-0044-responses-http-sse.md)
-
 
 ## Inbound history and code-mode shell wire repairs
 
