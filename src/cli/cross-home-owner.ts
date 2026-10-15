@@ -14,6 +14,7 @@ import { readClientConnectionState } from "../client/state";
 import { findManagedRegion, resolveGrokHome } from "../grok/inject";
 import { providerTableString } from "../codex/injected-marker";
 import { isLocalAttestationSecret } from "../lib/local-management-attestation";
+import { isProtectedHomeUnderTest } from "../lib/test-home-guard";
 import { readOwnerRegistry } from "../config/owner-registry";
 import {
   classifyHealthz,
@@ -160,7 +161,7 @@ export async function findCrossHomeOwnerDetailed(options: { homeDir?: string; io
   };
 
   const defaultHome = join(options.homeDir ?? homedir(), ".opencodex");
-  recordHome(defaultHome);
+  if (options.homeDir !== undefined || !isProtectedHomeUnderTest(defaultHome)) recordHome(defaultHome);
   // The shared registry is what lets one custom home find another: every runtime
   // that published a runtime record registered its home beside the shared clients.
   const registry = readOwnerRegistry();
@@ -309,14 +310,17 @@ export async function markCrossHomeSibling(
 }
 
 /** A live proxy in this home can publish its sibling owner even while that owner is down. */
-export async function markLiveHomeSibling(live: { pid: number | null; port: number }): Promise<boolean> {
+export async function markLiveHomeSibling(
+  live: { pid: number | null; port: number },
+  options: Parameters<typeof findCrossHomeOwnerDetailed>[0] = {},
+): Promise<boolean> {
   const runtime = readRuntimePort();
   if (live.pid !== null && runtime?.pid === live.pid && runtime.port === live.port
     && runtime.siblingOfPort !== undefined && runtime.siblingOfPort !== live.port) {
     markSiblingStart(runtime.siblingOfPort);
     return true;
   }
-  const verdict = await findCrossHomeOwnerDetailed();
+  const verdict = await findCrossHomeOwnerDetailed(options);
   if (verdict.kind === "none" || verdict.port === live.port) return false;
   if (verdict.port === null) throw new Error("Shared-client owner could not be located; refusing startup before any shared-client write.");
   markSiblingStart(verdict.port);

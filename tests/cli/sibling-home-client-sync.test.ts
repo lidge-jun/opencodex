@@ -205,7 +205,7 @@ test("live local sibling record marks a fresh ensure decision during primary dow
     pid: process.pid + 1, port: secondaryPort, siblingOfPort: primaryPort,
   }));
   expect(await findCrossHomeOwner({ homeDir: fx.home })).toBeNull();
-  expect(await markLiveHomeSibling({ pid: process.pid + 1, port: secondaryPort })).toBe(true);
+  expect(await markLiveHomeSibling({ pid: process.pid + 1, port: secondaryPort }, { homeDir: fx.home })).toBe(true);
   expect(siblingOfLivePort()).toBe(primaryPort);
 });
 
@@ -641,7 +641,7 @@ test("an unlocated owner refuses start and ensure rather than claiming an unmark
   expect(await findCrossHomeOwnerDetailed({ homeDir: fx.home })).toMatchObject({ kind: "indeterminate", port: null });
   await expect(markCrossHomeSibling({ homeDir: fx.home })).rejects.toThrow("refusing startup");
   expect(siblingOfLivePort()).toBeNull();
-  await expect(markLiveHomeSibling({ pid: process.pid, port: 42101 })).rejects.toThrow("refusing startup");
+  await expect(markLiveHomeSibling({ pid: process.pid, port: 42101 }, { homeDir: fx.home })).rejects.toThrow("refusing startup");
   expect(siblingOfLivePort()).toBeNull();
 });
 
