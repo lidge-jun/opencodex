@@ -398,6 +398,9 @@ export type ClaudeCacheKeySource = "metadata" | "system" | null;
 export function callerCacheRetention(raw: unknown): "long" | undefined {
   if (!isRec(raw)) return undefined;
   const blocks: unknown[] = [
+    // Top-level automatic caching is a breakpoint too; omitting it would read a 1h prefix with a
+    // 5m automatic tail as all-1h.
+    raw,
     ...(Array.isArray(raw.system) ? raw.system : []),
     ...(Array.isArray(raw.tools) ? raw.tools : []),
     ...(Array.isArray(raw.messages)

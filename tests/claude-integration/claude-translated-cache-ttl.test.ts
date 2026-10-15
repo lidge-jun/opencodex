@@ -31,6 +31,7 @@ async function wireTtls(
   callerTtl: "1h" | undefined,
   cacheRetention?: "short" | "long",
   messageTtl: "1h" | "5m" | "unset" = callerTtl ?? "unset",
+  topLevelTtl?: "1h" | "5m" | "unset",
 ): Promise<unknown[]> {
   const wires: string[] = [];
   const fetch = (async (_input: unknown, init?: RequestInit) => {
@@ -63,6 +64,7 @@ async function wireTtls(
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       model: "combo/waterfall", max_tokens: 64,
+      ...(topLevelTtl ? { cache_control: { type: "ephemeral", ...(topLevelTtl === "unset" ? {} : { ttl: topLevelTtl }) } } : {}),
       system: [{ type: "text", text: "You are a careful assistant.", cache_control: cc }],
       tools: [{ name: "Read", description: "read", input_schema: { type: "object", properties: {} } }],
       messages: [
@@ -100,5 +102,9 @@ describe("translated Claude lane cache TTL", () => {
   test("a caller mixing a 1h prefix with a 5m tail is not upgraded to 1h everywhere", async () => {
     expect(new Set(await wireTtls("1h", undefined, "5m"))).toEqual(new Set([undefined]));
     expect(new Set(await wireTtls("1h", undefined, "unset"))).toEqual(new Set([undefined]));
+    // Top-level automatic caching counts as a caller breakpoint.
+    expect(new Set(await wireTtls("1h", undefined, "1h", "unset"))).toEqual(new Set([undefined]));
+    expect(new Set(await wireTtls("1h", undefined, "1h", "5m"))).toEqual(new Set([undefined]));
+    expect(new Set(await wireTtls("1h", undefined, "1h", "1h"))).toEqual(new Set(["1h"]));
   });
 });
