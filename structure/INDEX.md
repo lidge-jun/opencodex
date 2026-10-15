@@ -64,6 +64,7 @@ Per-vendor contracts and the adapter authority that constructs them.
 | --- | --- |
 | [`providers/generic-account-pool.md`](providers/generic-account-pool.md) | Opt-in conversation ownership, request-local selection receipts and bounded release for generic OAuth pools. |
 | [`providers/anthropic-account-thresholds.md`](providers/anthropic-account-thresholds.md) | Account-owned usage thresholds, inheritance, routing boundaries and durable policy changes. |
+| [`providers/oauth-reconciliation.md`](providers/oauth-reconciliation.md) | Operator limits and per-model declarations across startup reconciliation and OAuth upsert. |
 | [`providers-and-adapters.md`](providers-and-adapters.md) | Provider and adapter selection, the adapter inventory, live model discovery, and the hosted-search continuation bridge. |
 | [`providers/jev-decision.md`](providers/jev-decision.md) | JEV Combo decision methods (TypeSafe, self-hosted System One rows, opencodex models), the decision request path, dashboard surfaces, and the content-free statistics projection. |
 | [`providers/anthropic-key-billing.md`](providers/anthropic-key-billing.md) | Exact billing refusal evidence, immutable physical credential ownership, pacing provenance and bounded pre-output key recovery. |
@@ -178,7 +179,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/lib/windows-owner-acl.ts` | [`remote-link.md`](remote-link.md) |
 | `src/link/` | [`remote-link.md`](remote-link.md) |
 | `src/messaging/` | [`local-messaging.md`](local-messaging.md) |
-| `src/oauth/` | [`providers/generic-account-pool.md`](providers/generic-account-pool.md)<br>[`runtime.md`](runtime.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`providers/anthropic-account-thresholds.md`](providers/anthropic-account-thresholds.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/anthropic-account-pool.md`](providers/anthropic-account-pool.md)<br>[`providers/xai-grok.md`](providers/xai-grok.md) |
+| `src/oauth/` | [`providers/generic-account-pool.md`](providers/generic-account-pool.md)<br>[`runtime.md`](runtime.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`providers/anthropic-account-thresholds.md`](providers/anthropic-account-thresholds.md)<br>[`providers/oauth-reconciliation.md`](providers/oauth-reconciliation.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/anthropic-account-pool.md`](providers/anthropic-account-pool.md)<br>[`providers/xai-grok.md`](providers/xai-grok.md) |
 | `src/plugins/` | [`ops/plugins.md`](ops/plugins.md) |
 | `src/protocols/` | [`data-planes/protocol-paths.md`](data-planes/protocol-paths.md) |
 | `src/providers/` | [`runtime.md`](runtime.md)<br>[`subagents.md`](subagents.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/anthropic-account-pool.md`](providers/anthropic-account-pool.md)<br>[`providers/xai-grok.md`](providers/xai-grok.md) |

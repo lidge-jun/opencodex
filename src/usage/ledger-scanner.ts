@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { closeSync, fstatSync, openSync, readSync } from "node:fs";
 import {
   currentUsageLogRevision,
+  exactFileIdentity,
   normalizePersistedUsageRow,
   usageLogIdentityKey,
   usageLogPath,
@@ -63,13 +64,13 @@ export class UsageLedgerRebuildRequiredError extends Error {
 
 function revisionFromStat(
   path: string,
+  fd: number,
   stat: ReturnType<typeof fstatSync>,
 ): UsageLogRevision {
   if (!stat.isFile()) throw new Error("usage log is not a regular file");
   return {
     path,
-    dev: Number(stat.dev),
-    ino: Number(stat.ino),
+    ...exactFileIdentity(fd),
     birthtimeMs: Number(stat.birthtimeMs),
     size: Number(stat.size),
     mtimeMs: Number(stat.mtimeMs),
@@ -276,7 +277,7 @@ export async function scanUsageLedgerCooperatively(
   let pendingLineBytes = 0;
 
   try {
-    const openedRevision = revisionFromStat(path, fstatSync(fd));
+    const openedRevision = revisionFromStat(path, fd, fstatSync(fd));
     const scanEnd = openedRevision.size;
     const openedIdentityKey = usageLogIdentityKey(openedRevision);
     if (options.expectedIdentityKey && options.expectedIdentityKey !== openedIdentityKey) {
@@ -391,7 +392,7 @@ export async function scanUsageLedgerCooperatively(
     }
 
     throwIfAborted(options.signal);
-    const endingRevision = revisionFromStat(path, fstatSync(fd));
+    const endingRevision = revisionFromStat(path, fd, fstatSync(fd));
     if (usageLogIdentityKey(endingRevision) !== openedIdentityKey) {
       throw rebuildRequired("identity_mismatch");
     }
@@ -417,7 +418,7 @@ export async function scanUsageLedgerCooperatively(
         line,
         options.signal,
       );
-      const verifiedFdRevision = revisionFromStat(path, fstatSync(fd));
+      const verifiedFdRevision = revisionFromStat(path, fd, fstatSync(fd));
       const verifiedPathRevision = currentUsageLogRevision();
       if (capturedDigest !== verifiedDigest) throw rebuildRequired("content_changed");
       if (!verifiedPathRevision

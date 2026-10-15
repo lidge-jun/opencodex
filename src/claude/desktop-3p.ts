@@ -5,15 +5,16 @@ import { applyRemoteDesktopStore, inspectRemoteDesktopCleanup, restoreRemoteDesk
 import { canonicalDirectory } from "./desktop-remote-store-io";
 import {
   resolveDesktop3pConfigLibraryPath, parseMetadata, SAFE_DESKTOP_PROFILE_ID, isRecord,
-  isOwnedDesktopEntry, isOwnedDesktopGatewayEntry, profilePath, readDesktopProfileForeignKeys, readDesktopLibraryText, readDesktopLibraryBytes,
+  isOwnedDesktopEntry, isOwnedDesktopGatewayEntry, profilePath, readDesktopProfileSnapshot, readDesktopLibraryText, readDesktopLibraryBytes,
+  readOptionalDesktopLibraryBytes,
   type Desktop3pConfigLibraryOptions, type Desktop3pMetadata, type Desktop3pMetadataEntry,
 } from "./desktop-3p-library";
 export { resolveDesktop3pConfigLibraryPath, type Desktop3pConfigLibraryOptions } from "./desktop-3p-library";
 import { createHash, randomUUID } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, lstatSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, lstatSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { atomicWriteFile, readConfigDiagnostics, withConfigMutationLockSync } from "../config";
-import { atomicWriteFileNoFollow } from "../config/atomic-write";
+import { atomicWriteFileNoFollow, atomicWriteFileStreamed } from "../config/atomic-write";
 import { claudeDesktopIntegrationEnabled } from "../codex/desired-state";
 import type { OcxClaudeDesktopProfile } from "../types";
 import {
@@ -800,6 +801,7 @@ function desktopRefreshPathsSafe(libraryPath: string, configPath?: string): bool
   } catch { return false; }
 }
 
+/** Publish a gateway profile from a verified snapshot, rolling it back if metadata fails. */
 function writeDesktop3pConfigWithGenerator(
   generate: () => object,
   refreshOnly?: { requiredId: string; expectedFingerprint: string; admit: () => boolean },
@@ -828,8 +830,8 @@ function writeDesktop3pConfigWithGenerator(
       : [...metadata.entries, entry];
 
     const generated = generate();
-    const preserved = readDesktopProfileForeignKeys(configPath);
-    const configJson = JSON.stringify({ ...preserved, ...generated }, null, 2) + "\n";
+    const previous = readDesktopProfileSnapshot(configPath);
+    const configJson = JSON.stringify({ ...previous.foreign, ...generated }, null, 2) + "\n";
     const fingerprint = createHash("sha256").update(configJson).digest("hex").slice(0, 16);
     if (refreshOnly) {
       atomicWriteFileNoFollow(configPath, configJson, undefined, {
@@ -847,12 +849,31 @@ function writeDesktop3pConfigWithGenerator(
       });
       return { written: true, path: configPath, fingerprint };
     }
-    const { backupPath } = atomicReplaceDesktopConfig(configPath, configJson);
+    atomicReplaceDesktopConfig(configPath, configJson, previous.bytes);
     try {
       atomicWriteFile(metadataPath, JSON.stringify({ ...metadata, appliedId: id, entries }, null, 2) + "\n");
     } catch (metaError) {
-      // Rollback: restore the backed-up config if metadata write fails.
-      if (backupPath && existsSync(backupPath)) copyFileSync(backupPath, configPath);
+      // Roll back from the verified bytes in memory: reopening the backup could meet a swapped
+      // entry and leave the new profile beside the old metadata. A profile this call created is
+      // unreferenced once metadata failed, so remove it rather than orphan one per retry.
+      // Rollback is ownership-aware: it acts only while the live profile still holds the bytes
+      // this call published, checked by the same comparison that guarded publication.
+      const base = metaError instanceof Error ? metaError.message : String(metaError);
+      const published = Buffer.from(configJson);
+      let owned = false;
+      const stillOwned = () => { owned = false; assertDesktopProfileUnchanged(configPath, published); owned = true; };
+      try {
+        stillOwned();
+        if (previous.bytes !== undefined) writeDesktopConfigBytes(configPath, previous.bytes, stillOwned);
+        else unlinkSync(configPath);
+      } catch (rollbackError) {
+        if (!owned) {
+          // Another writer replaced the profile after publication; its bytes win over our rollback.
+          throw new Error(`${base} (profile rollback skipped: profile changed after publish)`, { cause: metaError });
+        }
+        const detail = rollbackError instanceof Error ? rollbackError.message : String(rollbackError);
+        throw new AggregateError([metaError, rollbackError], `${base} (profile rollback also failed: ${detail})`, { cause: metaError });
+      }
       throw metaError;
     }
     return { written: true, path: configPath, fingerprint };
@@ -862,14 +883,35 @@ function writeDesktop3pConfigWithGenerator(
   }
 }
 
-/** Backup an existing owned config then atomically replace it. Exported for failure-path tests. */
+/**
+ * Compare the live profile with the caller's verified bytes before backup and before replacement.
+ * Refuse drift without retrying; backup and rollback continue to use the original verified bytes.
+ * `previous` is undefined only for an absent profile, which leaves any older backup alone.
+ * Exported for failure-path tests.
+ */
 export function atomicReplaceDesktopConfig(
   path: string,
   content: string,
-  writer: (path: string, content: string) => void = atomicWriteFile,
+  previous: Buffer | undefined,
+  writer: typeof atomicWriteFileNoFollow = atomicWriteFileNoFollow,
 ): { backupPath?: string } {
+  const validateBeforeRename = () => assertDesktopProfileUnchanged(path, previous);
+  validateBeforeRename();
   const backupPath = `${path}.bak`;
-  if (existsSync(path)) copyFileSync(path, backupPath);
-  writer(path, content);
-  return existsSync(backupPath) ? { backupPath } : {};
+  if (previous !== undefined) writeDesktopConfigBytes(backupPath, previous);
+  writer(path, content, undefined, { validateBeforeRename });
+  return previous === undefined ? {} : { backupPath };
+}
+
+/** Single compare-and-swap check: the live profile must still hold `expected` (undefined = absent). */
+function assertDesktopProfileUnchanged(path: string, expected: Buffer | undefined): void {
+  const current = readOptionalDesktopLibraryBytes(path);
+  if (expected === undefined ? current !== undefined : current === undefined || !expected.equals(current)) {
+    throw new Error("desktop_profile_changed");
+  }
+}
+
+/** Publish the verified bytes without reopening the source or decoding its backup contents. */
+function writeDesktopConfigBytes(path: string, bytes: Buffer, validateBeforeRename?: () => void): void {
+  atomicWriteFileStreamed(path, descriptor => { writeFileSync(descriptor, bytes); }, validateBeforeRename ? { validateBeforeRename } : {});
 }

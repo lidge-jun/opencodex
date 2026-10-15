@@ -344,6 +344,13 @@
       "documents": ["src/oauth/"]
     },
     {
+      "path": "providers/oauth-reconciliation.md",
+      "tier": 4,
+      "title": "OAuth Preset Reconciliation",
+      "scope": "Operator limits and per-model declarations across startup reconciliation and OAuth upsert.",
+      "documents": ["src/oauth/"]
+    },
+    {
       "path": "providers-and-adapters.md",
       "tier": 4,
       "title": "Providers And Adapters",
