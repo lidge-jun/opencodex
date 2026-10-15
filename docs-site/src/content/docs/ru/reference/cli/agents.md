@@ -256,7 +256,7 @@ env-reference, либо несекретную loopback-заглушку. Адр
 
 Управляйте headless runtime-setting'ами, startup, sync, diagnostics и update.
 
-`ocx system codex-restart --yes` перезапускает Codex app-server'ы и полностью закрывает и заново запускает Desktop-приложение Codex тем же модулем, что и `ocx sync --restart-codex`. Если сам proxy запущен внутри приложения Codex, команда отказывается с actionable-сообщением вместо handoff, который она не может завершить.
+`ocx system codex-restart --yes` перезапускает Codex app-server'ы тем же модулем, что и `ocx sync --restart-codex`. Desktop-приложение Codex полностью закрывается и запускается заново, только если оно было запущено до записи текущего каталога моделей, потому что выбор модели строится при запуске. Иначе приложение остаётся открытым, само перезапускает свой app-server и сохраняет неотправленные черновики и ожидающие подтверждения. Если состояние приложения или каталога прочитать нельзя, выполняется полный перезапуск. Если сам proxy запущен внутри приложения Codex, перезапуск Desktop отказывается с actionable-сообщением вместо handoff, который он не может завершить.
 
 ```bash
 ocx system settings --stream-mode eager-relay

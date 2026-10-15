@@ -2,10 +2,19 @@
 
 ## Explicit restart
 
-`ocx system codex-restart` requests a full Codex app and app-server restart through
-the management endpoint. `src/cli/capabilities.ts` and `src/cli/system-command.ts`
-warn that unsaved drafts, picker selections and pending approvals may be lost.
+`ocx system codex-restart` requests a Codex app-server restart through the management
+endpoint. `src/codex/app-server-restart-service.ts` also quits and relaunches the desktop
+app only when `src/codex/desktop-app/picker-freshness.ts` reports that a root shell started
+at or before the current catalog mtime, because the picker is built at shell launch and an
+app-server restart cannot refresh it. A shell that started strictly later is left running
+(`desktopApp.reason: "picker_current"`), so its unsaved drafts, picker selections and
+pending approvals survive while it respawns its own app-server. An unreadable shell list,
+start time or catalog mtime falls back to the full restart.
+`src/cli/capabilities.ts` and `src/cli/system-command.ts` warn that unsaved client state
+may be lost and report which outcome happened.
 The unconfirmed path sends no restart request; JSON output preserves refused outcomes.
+`tests/codex-integration/codex-app-server-restart-service.test.ts` and
+`tests/clients/desktop-app-restart.test.ts` cover the decision.
 
 Under the test preload's `OCX_TEST_HOME_GUARD=1`,
 `src/codex/desktop-app-restart.ts` skips real restart without an injected executor.

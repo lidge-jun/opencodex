@@ -235,9 +235,12 @@ opencode는 `{env:OPENCODEX_OPENCODE_API_KEY}`를 보간합니다. opencodex가 
 헤드리스 런타임 설정, 시작, 동기화, 진단, 업데이트를 관리합니다.
 
 `ocx system codex-restart --yes`는 `ocx sync --restart-codex`와 같은 모듈로 Codex
-app-server를 재시작하고 데스크톱 앱도 완전히 종료한 뒤 다시 띄웁니다. 프록시 자체가
-Codex 앱 안에서 실행 중이면 넘길 수 없는 handoff를 약속하지 않고, 대신 실행 가능한
-안내와 함께 거절합니다.
+app-server를 재시작합니다. 모델 선택기는 앱 실행 시점에 만들어지므로, 데스크톱 앱은 현재
+모델 카탈로그가 기록되기 전에 실행된 경우에만 완전히 종료한 뒤 다시 띄웁니다. 그렇지 않으면
+앱은 열린 채로 자체 app-server를 다시 띄우고, 보내지 않은 초안과 대기 중인 승인을 유지합니다.
+앱이나 카탈로그 상태를 읽을 수 없으면 전체 재시작을 수행합니다. 프록시 자체가 Codex 앱 안에서
+실행 중이면 데스크톱 재시작은 넘길 수 없는 handoff를 약속하지 않고, 대신 실행 가능한 안내와
+함께 거절합니다.
 
 ```bash
 ocx system settings --stream-mode eager-relay

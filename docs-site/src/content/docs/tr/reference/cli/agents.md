@@ -302,10 +302,14 @@ Başsız çalışma zamanı ayarlarını, başlatmayı, senkronizasyonu, tanıla
 güncellemeleri yönetin.
 
 `ocx system codex-restart --yes`, `ocx sync --restart-codex` ile aynı modül
-üzerinden Codex app-server'larını yeniden başlatır ve Codex masaüstü
-uygulamasını tamamen kapatıp yeniden başlatır. Proxy'nin kendisi Codex
-uygulamasının içinde çalışıyorsa, tamamlayamayacağı bir devri vaat etmek
-yerine eyleme geçirilebilir bir iletiyle reddeder.
+üzerinden Codex app-server'larını yeniden başlatır. Model seçici uygulama
+açılırken oluşturulduğu için Codex masaüstü uygulamasını yalnızca güncel model
+kataloğu yazılmadan önce başlatılmışsa tamamen kapatıp yeniden başlatır. Aksi
+halde uygulama açık kalır, kendi app-server'ını yeniden başlatır ve
+gönderilmemiş taslakları ve bekleyen onayları korur. Uygulama veya katalog
+durumu okunamazsa tam yeniden başlatma yapılır. Proxy'nin kendisi Codex
+uygulamasının içinde çalışıyorsa masaüstü yeniden başlatması, tamamlayamayacağı
+bir devri vaat etmek yerine eyleme geçirilebilir bir iletiyle reddeder.
 
 ```bash
 ocx system settings --stream-mode eager-relay

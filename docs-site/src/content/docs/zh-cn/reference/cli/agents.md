@@ -208,7 +208,7 @@ opencode 会插值 `{env:OPENCODEX_OPENCODE_API_KEY}`。opencodex 生成的 Pi �
 
 管理无头运行时设置、启动、同步、诊断和更新。
 
-`ocx system codex-restart --yes` 通过与 `ocx sync --restart-codex` 相同的模块重启 Codex app-server，并完全退出再重新启动 Codex 桌面应用。若代理本身运行在 Codex 应用内部，该命令会给出可执行提示并拒绝，而不是承诺无法完成的移交。
+`ocx system codex-restart --yes` 通过与 `ocx sync --restart-codex` 相同的模块重启 Codex app-server。模型选择器在应用启动时构建，因此只有当桌面应用在当前模型目录写入之前启动时，才会完全退出再重新启动它。否则应用保持打开，自行重启其 app-server，并保留未发送的草稿和待处理的审批。若无法读取应用或目录状态，则执行完整重启。若代理本身运行在 Codex 应用内部，桌面重启会给出可执行提示并拒绝，而不是承诺无法完成的移交。
 
 ```bash
 ocx system settings --stream-mode eager-relay

@@ -204,7 +204,7 @@ opencode は `{env:OPENCODEX_OPENCODE_API_KEY}` を補間します。opencodex �
 
 ヘッドレス ランタイムの設定、起動、同期、診断、更新を管理します。
 
-`ocx system codex-restart --yes` は `ocx sync --restart-codex` と同じモジュールで Codex app-server を再起動し、デスクトップ アプリも完全に終了して再起動します。プロキシ自体が Codex アプリ内で動いている場合、完了できない引き渡しを約束せず、実行可能な案内とともに拒否します。
+`ocx system codex-restart --yes` は `ocx sync --restart-codex` と同じモジュールで Codex app-server を再起動します。モデル ピッカーは起動時に構築されるため、デスクトップ アプリを完全に終了して再起動するのは、現在のモデル カタログが書き込まれる前にアプリが起動していた場合だけです。それ以外の場合、アプリは開いたまま自身の app-server を再起動し、未送信の下書きや保留中の承認を保持します。アプリまたはカタログの状態を読み取れない場合は完全な再起動を行います。プロキシ自体が Codex アプリ内で動いている場合、デスクトップの再起動は完了できない引き渡しを約束せず、実行可能な案内とともに拒否します。
 
 ```bash
 ocx system settings --stream-mode eager-relay

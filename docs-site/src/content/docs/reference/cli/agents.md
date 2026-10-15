@@ -1020,10 +1020,13 @@ the CLI, the API, and the GUI use the same bytes.
 
 Manage headless runtime settings, startup, sync, diagnostics, and updates.
 
-`ocx system codex-restart --yes` restarts Codex app-servers and fully quits and relaunches the
-Codex desktop app, through the same module as `ocx sync --restart-codex`. When the proxy itself
-is running inside the Codex app, the command refuses with an actionable message instead of
-promising a handoff it cannot complete.
+`ocx system codex-restart --yes` restarts Codex app-servers through the same module as
+`ocx sync --restart-codex`. It quits and relaunches the Codex desktop app only when the app
+launched before the current model catalog was written, because the model picker is built at
+launch. Otherwise the app stays open, respawns its own app-server, and keeps unsaved drafts and
+pending approvals. If the app or catalog state cannot be read, it takes the full restart. When
+the proxy itself is running inside the Codex app, the desktop restart refuses with an actionable
+message instead of promising a handoff it cannot complete.
 
 ```bash
 ocx system settings --stream-mode eager-relay
