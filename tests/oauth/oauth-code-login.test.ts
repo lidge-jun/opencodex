@@ -332,6 +332,45 @@ describe("OAuth code-display login", () => {
     }
   });
 
+  test("concurrent logins of one account each answer with that account", async () => {
+    const originalFetch = globalThis.fetch;
+    let issued = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      // No profile enrichment over the network: it would reorder the two saves at random.
+      if (String(input).startsWith("https://api.anthropic.com/api/oauth/profile")) return new Response("{}", { status: 401 });
+      if (!String(input).startsWith(TOKEN_URL)) return originalFetch(input, init);
+      issued += 1;
+      // Same account, a fresh refresh token per exchange: the later write rotates the row's token.
+      return new Response(JSON.stringify({
+        access_token: `access-${issued}`, refresh_token: `refresh-${issued}`, expires_in: 3600,
+        account: { uuid: "account-1", email_address: "one@example.com" },
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as typeof fetch;
+    const server = startServer(0);
+    try {
+      // Flow A has saved but not yet settled when flow B saves: A's settle is held until B is done.
+      const startedA = await startLoginFlow("anthropic", { forceLogin: true, codeMode: true }, {
+        flowId: "flow-a",
+        onSettled: async () => { await waitForLoginSettled("anthropic", 5_000, "flow-b"); },
+      });
+      const stateA = new URL(startedA.url).searchParams.get("state")!;
+      const b = await startCodeFlow("flow-b");
+      const pendingA = postCode({ provider: "anthropic", flowId: "flow-a", input: `code-a#${stateA}` }, server);
+      while (!getAccountSet("anthropic")?.accounts.length) await Bun.sleep(5);
+      const answerB = await postCode({ provider: "anthropic", flowId: "flow-b", input: `code-b#${b.state}` }, server);
+      const answers = [await pendingA, answerB];
+      const set = getAccountSet("anthropic")!;
+      expect(set.accounts).toHaveLength(1);
+      for (const answer of answers) {
+        expect(answer.status).toBe(200);
+        expect(((await answer.json()) as { account?: { id: string } }).account?.id).toBe(set.accounts[0]!.id);
+      }
+    } finally {
+      await server.stop(true);
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("a flow cleared while its exchange runs answers no_pending_login, not success", async () => {
     let release!: () => void;
     const held = new Promise<void>(resolve => { release = resolve; });

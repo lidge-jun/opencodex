@@ -1028,8 +1028,8 @@ export async function saveCredential(
   provider: string,
   cred: OAuthCredentials,
   opts: { preserveIdentityless?: boolean; assertBeforePersist?: () => void } = {},
-): Promise<void> {
-  await saveCredentialWithReceipt(provider, cred, opts);
+): Promise<OAuthCredentialWriteReceipt | null> {
+  return await saveCredentialWithReceipt(provider, cred, opts);
 }
 
 /**

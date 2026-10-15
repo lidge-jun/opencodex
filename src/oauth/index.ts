@@ -1571,6 +1571,8 @@ interface RunLoginDeps {
   settleKiroLoginTransaction?: typeof settleKiroLoginTransaction;
   rollbackCredentialWrite?: typeof rollbackCredentialWriteIfMatch;
   assertCurrentOwner?: () => void;
+  /** Told which account row the credential write landed in (an id, never the credential). */
+  onAccountPersisted?: (accountId: string) => void;
 }
 
 /** Run the login flow, persist the credential + upsert the provider entry to disk, return cred. */
@@ -1654,6 +1656,7 @@ export async function runLogin(
         assertBeforePersist: deps.assertCurrentOwner,
         rotateLoginId: true,
       });
+      deps.onAccountPersisted?.(opts.reauthAccountId);
     } else {
       const saveOptions = {
         preserveIdentityless: opts?.forceLogin === true || (provider === "anthropic" && cred.source === "local-cli"),
@@ -1665,8 +1668,11 @@ export async function runLogin(
           cred,
           saveOptions,
         );
+        if (kiroCredentialWrite) deps.onAccountPersisted?.(kiroCredentialWrite.accountId);
       } else {
-        await (deps.saveCredential ?? saveCredential)(provider, cred, saveOptions);
+        // The receipt names the row written; a stubbed save may return none.
+        const receipt = await (deps.saveCredential ?? saveCredential)(provider, cred, saveOptions);
+        if (receipt) deps.onAccountPersisted?.(receipt.accountId);
       }
     }
     if (provider !== "chatgpt") {
@@ -1875,7 +1881,10 @@ export async function startLoginFlow(
       if (!urlResolved) reject(error ?? new Error("OAuth login was superseded"));
       return true;
     };
-    const settle = async (error?: unknown, cred?: OAuthCredentials): Promise<void> => {
+    // The row this flow's own credential write landed in, from the store's receipt. A token match
+    // after the fact would miss it once a concurrent login for the same account rotates the token.
+    let persistedAccountId: string | undefined;
+    const settle = async (error?: unknown): Promise<void> => {
       // Cancellation deletes this controller and records its own terminal result. A late provider
       // rejection (or an older flow settling after a replacement starts) must not overwrite that
       // state or delete the replacement flow's controller/manual-code slot.
@@ -1892,10 +1901,8 @@ export async function startLoginFlow(
       if (finalError === undefined) {
         loginAbort.delete(flowId);
         clearManualCodeSlot(flowId);
-        // Record which row this flow wrote, so its caller is answered with that account rather
-        // than with whichever account happens to be active when it looks.
-        const saved = cred?.refresh ? getAccountSet(provider)?.accounts.find(a => a.credential.refresh === cred.refresh) : undefined;
-        settleLoginFlow(flowId, saved ? { accountId: saved.id } : {});
+        // Answer this flow's caller with the account it wrote, not whichever one is active now.
+        settleLoginFlow(flowId, persistedAccountId ? { accountId: persistedAccountId } : {});
         // Local-token import (grok-cli / Claude Code keychain) completes WITHOUT firing onAuth —
         // resolve so the GUI call returns instead of hanging.
         if (!urlResolved) resolve({ url: "", instructions: "Logged in via an existing local CLI/keychain token — no browser needed." });
@@ -1914,8 +1921,9 @@ export async function startLoginFlow(
     const assertCurrentOwner = (): void => {
       if (loginAbort.get(flowId)?.controller !== abort) throw new OAuthLoginSupersededError();
     };
-    void runLogin(provider, ctrl, opts, { assertCurrentOwner }).then(
-      (cred) => settle(undefined, cred),
+    const onAccountPersisted = (accountId: string): void => { persistedAccountId = accountId; };
+    void runLogin(provider, ctrl, opts, { assertCurrentOwner, onAccountPersisted }).then(
+      () => settle(),
       (e: unknown) => settle(e),
     ).catch((e: unknown) => {
       // settle catches lifecycle failures, so this is only a defensive promise-boundary guard.
