@@ -1475,8 +1475,6 @@ export const ja: Record<TKey, string> = {
   "modal.badge.subscriptionCli": "サブスク CLI",
   "pws.sponsor.orcaTitle": "プロンプトに合うモデルを一か所で",
   "pws.sponsor.orcaDescription": "自動ルーティングとフェイルオーバーに対応したOpenAI互換ゲートウェイです。",
-  "pws.sponsor.packyTitle": "Claude Code、Codex、Geminiを一か所で",
-  "pws.sponsor.packyDescription": "AIコーディングツール向けAPIリレーです。Codexグループのトークンで始められます。",
   "pws.sponsor.tokenlabTitle": "主要モデルを1つのAPIキーで",
   "pws.sponsor.tokenlabDescription": "コーディングエージェント向けにResponses、Chat Completions、ストリーミング、ツール呼び出しに対応し、配信モードを選んで従量課金で使えます。",
   "pws.sponsor.visit": "{provider}を見る",

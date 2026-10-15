@@ -4,7 +4,7 @@ import { clearResponseStateForTests, flushResponseState } from "../../src/respon
 import { flushConfigDirHardeningForTests } from "../../src/config/paths";
 import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
 import { closeRequestHistoryIndex } from "../../src/routing/history/indexer";
-import { removeTreeWithRetry } from "./remove-tree";
+import { removeTreeAfterBackgroundWork } from "./remove-tree";
 
 /**
  * Config, request and upstream-response fixtures for the compaction-routing suite.
@@ -39,7 +39,9 @@ export async function drainCompactionResponseState(): Promise<void> {
 
 export async function removeCompactionFixture(path: string): Promise<void> {
   await drainCompactionResponseState();
-  removeTreeWithRetry(path);
+  // Routing through a pool account fires the pre-route quota prime without awaiting it, and
+  // that prime holds the native-main claim database under this tree until it settles.
+  await removeTreeAfterBackgroundWork(path);
 }
 
 export function keyProviderConfig(overrides: Partial<OcxProviderConfig> = {}): OcxConfig {

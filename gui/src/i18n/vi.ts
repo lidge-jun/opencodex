@@ -1564,8 +1564,6 @@ export const vi: Record<TKey, string> = {
   "modal.badge.subscriptionCli": "CLI gói đăng ký",
   "pws.sponsor.orcaTitle": "Một model cho mọi prompt",
   "pws.sponsor.orcaDescription": "Gateway tương thích OpenAI với tính năng định tuyến thích ứng và tự động chuyển đổi dự phòng.",
-  "pws.sponsor.packyTitle": "Claude Code, Codex và Gemini tại một nơi",
-  "pws.sponsor.packyDescription": "Relay API cho các công cụ AI lập trình của bạn. Bắt đầu với token nhóm Codex.",
   "pws.sponsor.tokenlabTitle": "Một API key cho các model hàng đầu",
   "pws.sponsor.tokenlabDescription": "Hỗ trợ Responses, Chat Completions, streaming và gọi công cụ cho coding agent, với chế độ phân phối tùy chọn và trả theo mức sử dụng.",
   "pws.sponsor.visit": "Khám phá {provider}",

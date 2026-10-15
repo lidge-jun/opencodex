@@ -79,7 +79,7 @@ export interface ClientEncoderOption {
  * bridge body.
  */
 export interface DirectRequestOption {
-  protocol: "chat";
+  protocol: "chat" | "messages";
   /** The concrete route the ingress decided the lane for. */
   providerName: string;
   modelId: string;
@@ -254,7 +254,7 @@ export interface HandleResponsesOptions {
    * returning a Responses body, which the ingress converts as before.
    */
   clientEncoder?: ClientEncoderOption;
-  /** Set only by the Chat ingress on an eligible Antigravity route; see {@link DirectRequestOption}. */
+  /** Set only by the Chat or Messages ingress on an eligible Antigravity route; see {@link DirectRequestOption}. */
   directRequest?: DirectRequestOption;
 }
 

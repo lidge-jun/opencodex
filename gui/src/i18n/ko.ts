@@ -2747,8 +2747,6 @@ export const ko: Record<TKey, string> = {
   "modal.badge.subscriptionCli": "구독 CLI",
   "pws.sponsor.orcaTitle": "요청에 맞는 모델을 한곳에서",
   "pws.sponsor.orcaDescription": "자동 라우팅과 대체 모델 연결을 지원하는 OpenAI 호환 게이트웨이입니다.",
-  "pws.sponsor.packyTitle": "Claude Code, Codex, Gemini를 한곳에서",
-  "pws.sponsor.packyDescription": "여러 AI 코딩 도구에 연결하는 API 릴레이입니다. Codex 그룹 토큰으로 시작하세요.",
   "pws.sponsor.tokenlabTitle": "주요 모델을 API 키 하나로",
   "pws.sponsor.tokenlabDescription": "코딩 에이전트를 위한 Responses, Chat Completions, 스트리밍, 도구 호출을 지원하며 전달 방식을 골라 쓴 만큼 결제합니다.",
   "pws.sponsor.visit": "{provider} 살펴보기",

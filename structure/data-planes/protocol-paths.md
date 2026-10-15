@@ -257,9 +257,12 @@ Antigravity direct lane) the request path is `[inbound, "ir", upstream]` and the
 
 ## Antigravity direct lane
 
-Behind `protocols.rollout.antigravityDirect` (default off). A Chat request whose settled route is
-one concrete Google provider in Cloud Code Assist mode (Antigravity) skips the internal Responses
-body in both directions. Antigravity's `google` adapter has the `other` wire, so neither native
+Behind `protocols.rollout.antigravityDirect`, the one rollout switch that defaults on: an absent value
+takes the lane, only an explicit `false` turns it off, and a non-boolean value or a malformed
+`protocols` container fails closed. Every request the eligibility rule declines falls back to the
+bridge. A Chat or Messages request whose settled route is one concrete Google provider in Cloud
+Code Assist mode (Antigravity) skips the internal Responses body in both directions.
+Antigravity's `google` adapter has the `other` wire, so neither native
 lane can take it, and on the bridge its Chat traffic was decoded twice (Chat body -> Responses
 items -> IR) and encoded twice unless `directEncoders` was on.
 
@@ -321,14 +324,31 @@ wire. `_rawBody` readers that matter only to other wires, Codex surfaces or the 
 lane declines see an empty conversation, which is why the lane is limited to this route.
 
 The ingress asks for the direct encoder (`requestLane: "direct"`) whatever `directEncoders` says,
-so the response half is `[other, ir, chat]` as well. Messages to Antigravity is not on this lane.
+so the response half is `[other, ir, chat]` as well.
+
+### Messages on the lane
+
+The Messages ingress routes after translating, so `planMessagesAntigravityDirect` (`src/server/messages-antigravity-direct.ts`)
+plans first on `anthropicSettingsTranslation`: the bridge body's settings with `input: []`, completed by the same
+`applyAnthropicSettings`, so the resolved model, prompt-cache key, tool choice and reasoning are the bridge's. It
+previews the route on that model, asks `antigravityMessagesDeclineReason` (the Chat rules, spelled for Messages:
+`web_search_*` tools or a forced WebSearch choice, images in user turns or tool results, the intercept on the
+resolved model, system and assistant text the core rewrites), then decodes with `messagesConversationToIr`
+(`src/protocols/codecs/messages-ir.ts`). Routing uses `messagesRouteEvidence`; a settled route that is not the
+planned eligible one gets the full translation from `leaveDirectPlan` before route shaping. A settings error or an
+undecodable ocxr1 envelope (retried by the bridge through `nativeAnthropicProjection`) yields no plan, so it
+refuses exactly as before. The decoder reproduces blocked-skill elision, the `stabilizePromptCache` relocation,
+tool-result errors, images, documents and `tool_reference` markers, and thinking envelopes (encoded and charged as
+the translator does, decoded as the parser does) plus the native replay map. The Google adapter still sends no
+thinking text on either lane, only call-bound `thoughtSignature`s.
 
 `tests/responses/protocol-chat-ir-parity.test.ts` holds the decoder to the bridge over a fixture
 corpus, refusals included, and pins routing evidence and feature effects;
 `tests/responses/protocol-antigravity-direct-eligibility.test.ts` pins the rule and the plan;
 `tests/responses/protocol-antigravity-direct-chat.test.ts` sends the same Chat request on both
 lanes to a fake Cloud Code Assist upstream and requires the same wire body, the same answer and
-the `chat -> ir -> other` trace.
+the `chat -> ir -> other` trace. `tests/responses/protocol-messages-ir-parity.test.ts` and
+`protocol-antigravity-direct-messages.test.ts` do the same for Messages.
 
 ## Native Chat candidates in combos
 
@@ -540,10 +560,11 @@ only readers of the `apiSurfaces` and `protocols` config keys. Responses and Cha
 always served. The Messages surface uses an explicit `apiSurfaces.messages.enabled` boolean when
 present, closes when that value is present but malformed, and otherwise inherits
 `claudeCode.enabled !== false`. The unrepresentable policy defaults to `legacy` and every
-`protocols.rollout` switch defaults off; the OAuth native-Messages switch is effective only with
+`protocols.rollout` switch defaults off except `antigravityDirect`; the OAuth native-Messages switch is effective only with
 the key-auth one. The Chat and Messages ingresses read the unrepresentable policy (above);
 `directEncodersApply` reads `directEncoders` on both; `antigravityDirectDeclineReason` reads
-`antigravityDirect` for the Chat ingress and the planner; the Chat ingress reads `nativeChatCombos`
+`antigravityDirect` for the Chat ingress and the planner, and `antigravityMessagesDeclineReason` for
+the Messages ingress and the planner; the Chat ingress reads `nativeChatCombos`
 for combo routes (above); `managedMessagesNative` and `managedMessagesNativeOAuth` are read
 through `nativeMessagesDeclineReason` by the Messages ingress, `count_tokens` and the planner
 (above); `shadowPlan` is read by `recordProtocolShadowPlan` ([Shadow plan](#shadow-plan)). Every

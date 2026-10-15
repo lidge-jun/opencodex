@@ -593,7 +593,7 @@ describe("registry-seeded metadata does not re-arm the rename (#5066)", () => {
     // the user is still owed.
     expect(Object.keys(afterFirstBoot.modelContextWindows ?? {})).toContain("gemini-3.6-flash");
     // What the migration did own stayed fixed.
-    expect(afterFirstBoot.selectedModels).toEqual(["gemini-3.7-flash"]);
+    expect(afterFirstBoot.selectedModels).toEqual(["gemini-3.8-flash"]);
 
     const second = renameLines(() => { runModelRenameStartupMigration(loadConfig()); });
     expect(second).toEqual([]);
@@ -611,7 +611,7 @@ describe("registry-seeded metadata does not re-arm the rename (#5066)", () => {
 
     expect(changed).toBe(true);
     expect(warnings).toHaveLength(1);
-    expect(prov.selectedModels).toEqual(["gemini-3.7-flash"]);
+    expect(prov.selectedModels).toEqual(["gemini-3.8-flash"]);
     // Left alone on purpose: a request that still names the retired id routes to 3.7 and needs
     // a window under the id it asked for, and reconciliation would rewrite this record anyway.
     expect(prov.modelContextWindows?.["gemini-3.6-flash"]).toBe(1_048_576);

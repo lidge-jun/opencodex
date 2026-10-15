@@ -12,12 +12,6 @@ const orca: CatalogPreset = {
   sponsorUrl: "https://www.orcarouter.ai/?utm_source=opencodex&utm_medium=readme",
   dashboardUrl: "https://www.orcarouter.ai/console",
 };
-const packy: CatalogPreset = {
-  id: "packycode", label: "PackyCode", adapter: "openai-chat", auth: "key",
-  baseUrl: "https://cf.api.fan/v1", sponsor: "standard",
-  sponsorUrl: "https://www.packyapi.com/register?aff=k5KT",
-  dashboardUrl: "https://www.packyapi.com/register?aff=k5KT",
-};
 const tokenlab: CatalogPreset = {
   id: "tokenlab", label: "TokenLab", adapter: "openai-chat", auth: "key",
   baseUrl: "https://api.tokenlab.sh/v1", sponsor: "standard",
@@ -60,9 +54,10 @@ test("key and OAuth sponsor presets render disclosed links, keeping affiliate pa
   }
 });
 
-test("Packy preserves its affiliate link and does not repeat an identical console link", () => {
-  const html = render(packy, configured(packy));
-  expect(html).toContain('href="https://www.packyapi.com/register?aff=k5KT"');
+test("a sponsor link identical to the console link is not repeated", () => {
+  const sameLink = { ...tokenlab, dashboardUrl: tokenlab.sponsorUrl };
+  const html = render(sameLink, configured(sameLink));
+  expect(html).toContain('href="https://tokenlab.sh/r/OPENCODEX"');
   expect(html.match(/<a /g)).toHaveLength(1);
 });
 

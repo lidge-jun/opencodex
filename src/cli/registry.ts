@@ -481,7 +481,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
       "protocols [--provider <name>]   Contract version, API surfaces, protocol settings and feature vocabulary.",
       "explain --model <id> --inbound <responses|chat|messages> [--feature <key>]...   Preview the request path; sends nothing upstream.",
       "policy                          Read the protocol policy; with --messages, --unrepresentable or --rollout <switch>=<on|off> it changes config.",
-      "Every rollout switch defaults off. `ocx api policy` writes only when a setting flag is given.",
+      "Every rollout switch defaults off except antigravityDirect. `ocx api policy` writes only when a setting flag is given.",
     ],
   },
   {

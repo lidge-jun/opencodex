@@ -1140,10 +1140,8 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // https://cf.api.fan/v1 — GET /v1/models answers 401 without a key, so the host is live and
     // discovery narrows to what the key's token group allows. Model ids are bare OpenAI-style
     // ids (the Codex token group lists gpt-5.5 / gpt-5.1-codex).
-    // Standard sponsor under SPONSORS.md; the dashboardUrl carries their affiliate code.
     id: "packycode", label: "PackyCode", adapter: "openai-chat", baseUrl: "https://cf.api.fan/v1",
-    authKind: "key", dashboardUrl: "https://www.packyapi.com/register?aff=k5KT",
-    sponsor: { tier: "standard", url: "https://www.packyapi.com/register?aff=k5KT" },
+    authKind: "key", dashboardUrl: "https://www.packyapi.com",
     defaultModel: "gpt-5.5",
     models: ["gpt-5.5", "gpt-5.1-codex"],
     liveModels: true,
@@ -1170,13 +1168,16 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
   // devlog/_plan/260710_provider_hardening/001_research_frontier.md.
   {
     id: "google", label: "Google Gemini", adapter: "google", baseUrl: "https://generativelanguage.googleapis.com", authKind: "key", featured: true,
-    dashboardUrl: "https://aistudio.google.com/apikey", defaultModel: "gemini-3.5-flash", models: ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-3.7-flash"],
-    modelContextWindows: { "gemini-3.8-flash": 1_048_576, "gemini-3.6-flash": 1_048_576, "gemini-3.5-flash": 1_000_000, "gemini-3.5-flash-lite": 1_048_576, "gemini-3.7-flash": 1_048_576 },
-    modelInputModalities: { "gemini-3.8-flash": ["text", "image"], "gemini-3.6-flash": ["text", "image"], "gemini-3.5-flash-lite": ["text", "image"], "gemini-3.7-flash": ["text", "image"] },
+    dashboardUrl: "https://aistudio.google.com/apikey", defaultModel: "gemini-3.5-flash", models: ["gemini-4-argon", "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-3.7-flash"],
+    modelContextWindows: { "gemini-4-argon": 1_048_576, "gemini-3.8-flash": 1_048_576, "gemini-3.6-flash": 1_048_576, "gemini-3.5-flash": 1_000_000, "gemini-3.5-flash-lite": 1_048_576, "gemini-3.7-flash": 1_048_576 },
+    modelInputModalities: { "gemini-4-argon": ["text", "image"], "gemini-3.8-flash": ["text", "image"], "gemini-3.6-flash": ["text", "image"], "gemini-3.5-flash-lite": ["text", "image"], "gemini-3.7-flash": ["text", "image"] },
     modelReasoningEfforts: {
       // 3.7 and 3.8 omit `minimal`: Google documents it as a validation error on both model
       // pages, so advertising it hands the user a rung the API rejects. 3.5/3.6 keep theirs —
       // their pages still list it, and this unit has no evidence to change them.
+      // Gemini 4 Argon (GA 2026-10-13): low/medium(default)/high; `minimal` and thinking_budget
+      // return HTTP 400 per ai.google.dev/gemini-api/docs/models/gemini-4-argon.
+      "gemini-4-argon": ["low", "medium", "high"],
       "gemini-3.8-flash": ["low", "medium", "high"],
       "gemini-3.7-flash": ["low", "medium", "high"],
       "gemini-3.6-flash": ["minimal", "low", "medium", "high"],

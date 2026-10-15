@@ -39,3 +39,14 @@ blocks every removal; a root-specific drain failure preserves that root while ot
 can be removed. Removal failures do not stop later roots. Environment restoration runs in finally,
 and the first failure is rethrown. Undrained roots remain for run-level sandbox cleanup.
 `tests/ci-workflows/fixture-teardown-helper.test.ts` verifies ordering and failure gating with injected owners.
+
+`tests/helpers/spawn-test-child.ts` owns behavior and warm-up children on the parent's live
+event loop. It captures output continuously, kills at the child deadline, and bounds exit/pipe
+observation with a separate five-second grace. Results distinguish deadline expiry, observed
+exit (`reaped`) and pipe closure; an unobserved exit does not prove fixture handles were released.
+The affected catalog/status/routing fixtures retain roots after timeout or unproven exit/EOF
+for sandbox recovery rather than deleting against uncertain child handles. Explicit environments
+are complete allowlists. Catalog tick children drain their config ACL
+flights/reaps before normal exit. Child work deadlines remain separate from outer test budgets,
+which reserve time for termination and teardown. The shared warm-up regressions exercise a live
+interval after work completes and a descendant retaining stdout after its parent exits.

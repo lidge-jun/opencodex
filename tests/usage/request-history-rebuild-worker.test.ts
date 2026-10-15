@@ -289,7 +289,9 @@ describe("request-history worker rebuild (#6990)", () => {
     writeLedger(ledgerLines(10));
     const revision = currentUsageLogRevision()!;
     const buildPath = buildFilePath(join(testDir, "unit.sqlite"), process.pid, 1);
-    expect(() => buildIndexFile(buildPath, "test", { ...revision, ino: revision.ino + 1 }))
+    // Change the volume, not the file id: an NTFS file id can exceed 2^53, where ino + 1 rounds
+    // back to the same number and the build sees the recorded file (windows CI, #7070).
+    expect(() => buildIndexFile(buildPath, "test", { ...revision, dev: revision.dev + 1 }))
       .toThrow(RequestHistoryIndexStaleError);
     expect(readdirSync(testDir).filter(name => name.startsWith("unit.sqlite"))).toEqual([]);
   });

@@ -53,6 +53,7 @@ import {
 import type { FastPolicyAuthority } from "../../providers/fastwire";
 import { effectiveGoogleMode, getProviderRegistryEntry, providerMatchesRegistryTransport, registryEntryForProviderDestination } from "../../providers/registry";
 import { parseAntigravityAvailableModels, registerAntigravityDiscoveredWireModels } from "../../providers/antigravity-models";
+import { recordAntigravityAccountRoster } from "../../providers/antigravity-account-roster";
 import { applyProviderContextCap, providerContextCap, resolveUnknownRoutedContextWindow } from "../../providers/context-cap";
 import { clampAutoCompactTokenLimit } from "../../providers/auto-compact-budget";
 import { effectiveModelAliases } from "../../providers/default-aliases";
@@ -807,6 +808,9 @@ export async function fetchProviderModelsWithAuth(
         provider: name,
         cacheGeneration,
       });
+      // Entitlement is per account (Claude 4.6 vs 5.5, Argon): remember what THIS account
+      // lists so account selection can prefer one that serves the requested model.
+      if (auth.oauthAccountId) recordAntigravityAccountRoster(name, auth.oauthAccountId, antigravity);
       if (!setCached(name, forCache, Date.now(), cacheGeneration)) {
         return observed(withConfiguredRetention(configured), "degraded");
       }

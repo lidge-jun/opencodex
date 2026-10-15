@@ -8,10 +8,13 @@ import type { RuntimeApiDeps } from "../../src/cli/runtime-api";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath, repoRoot } from "../helpers/repo-root";
+import { spawnTestChild } from "../helpers/spawn-test-child";
+import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 const sentinel = "synthetic-private-profile-value";
 const committed = { status: "committed", changed: true, degraded: false, notices: [] };
 let home: string, previousHome: string | undefined, codexHome: IsolatedCodexHome;
+let childCompleted = true;
 let stdout: string[], stderr: string[], calls: { url: string; init: RequestInit }[], probes: number;
 let response: unknown, status: number;
 let logSpy: ReturnType<typeof spyOn>, errorSpy: ReturnType<typeof spyOn>, networkSpy: ReturnType<typeof spyOn>;
@@ -38,6 +41,7 @@ function deps(extra: Partial<RuntimeApiDeps> = {}): RuntimeApiDeps {
 }
 function noEcho() { expect(stdout.join("\n") + stderr.join("\n")).not.toContain(sentinel); }
 beforeEach(() => {
+  childCompleted = true;
   previousHome = process.env.OPENCODEX_HOME;
   home = mkdtempSync(join(tmpdir(), "ocx-cli-policy-write-")); process.env.OPENCODEX_HOME = home;
   codexHome = installIsolatedCodexHome("ocx-cli-policy-write-codex-");
@@ -49,7 +53,9 @@ beforeEach(() => {
 afterEach(() => {
   logSpy.mockRestore(); errorSpy.mockRestore(); networkSpy.mockRestore(); codexHome.restore();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previousHome;
-  removeTreeWithRetry(home);
+  // A killed/unreaped child may still have descendants holding this root. Preserve it for
+  // run-level sandbox recovery instead of racing Windows removal against those handles.
+  if (childCompleted) removeTreeWithRetry(home);
 });
 
 describe("routing profile write input", () => {
@@ -252,12 +258,14 @@ test("actual routing editor preserves stale/create/update/alias/delete authority
     } finally { resetLabActivationForTests(); }
   `;
   const childHome = join(home, "real-handler");
-  const child = Bun.spawn([process.execPath, "--eval", script], { cwd: repoRoot(), stdout: "pipe", stderr: "pipe",
+  childCompleted = false;
+  const result = await spawnTestChild([process.execPath, "--eval", script], { cwd: repoRoot(), deadlineMs: 20_000,
     env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, NODE_ENV: "test", HOME: childHome,
       USERPROFILE: childHome, APPDATA: childHome, XDG_CONFIG_HOME: childHome, OPENCODEX_HOME: childHome,
       CODEX_HOME: join(childHome, "codex"), NO_COLOR: "1" },
   });
-  const [out, err, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-  expect({ exit, err }).toEqual({ exit: 0, err: "" });
-  expect(JSON.parse(out.trim())).toEqual({ scenarios: 9, saves: 3, refreshes: 3, requests: 9, automationEnabled: false });
-}, 20_000);
+  childCompleted = !result.timedOut && result.reaped && result.pipesClosed;
+  // Keep child diagnostics in the failure instead of leaving a live process after Bun times out.
+  expect(result).toMatchObject({ exitCode: 0, stderr: "", timedOut: false, reaped: true, pipesClosed: true });
+  expect(JSON.parse(result.stdout.trim())).toEqual({ scenarios: 9, saves: 3, refreshes: 3, requests: 9, automationEnabled: false });
+}, SPAWN_BUDGET_MS);

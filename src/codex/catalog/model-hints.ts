@@ -447,7 +447,9 @@ export function suppressedSyntheticMaxCatalogSlugs(
   }
   return slugs;
 }
-export const QUIET_AUTHORITATIVE_CATALOG_PROVIDERS = new Set(["kimi", "xai"]);
+// google-antigravity: the static lineup is an entitlement superset (Claude 5.5 and Gemini 4 Argon
+// are per-account), so a live roster that omits some of it is the expected case, not drift.
+export const QUIET_AUTHORITATIVE_CATALOG_PROVIDERS = new Set(["kimi", "xai", "google-antigravity"]);
 
 export const CALLABLE_CONFIGURED_COMPATIBILITY_MODELS: Readonly<Record<string, ReadonlySet<string>>> = {
   // CodeBuddy's vendor defaults are real callable selectors — both the bundled manifests

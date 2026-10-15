@@ -786,7 +786,7 @@ export const CAPABILITIES: readonly Capability[] = [
     command: ["api","policy"],
     summary: "Read the protocol policy, or change the Messages surface, unrepresentable policy and rollout switches.",
     routes: [{"method":"GET","path":"/api/protocols"},{"method":"PATCH","path":"/api/protocols/settings"}],
-    flags: [{"name":"--messages","value":"string","summary":"Open or close the Messages API: on or off. Off also turns the Claude integration off."},{"name":"--unrepresentable","value":"string","summary":"legacy keeps today's behavior; reject refuses a request its path cannot carry."},{"name":"--rollout","value":"string","summary":"One switch as name=on or name=off; repeatable. Every switch defaults off."},{"name":"--json","value":"boolean","summary":"Emit the resulting GET /api/protocols body."}],
+    flags: [{"name":"--messages","value":"string","summary":"Open or close the Messages API: on or off. Off also turns the Claude integration off."},{"name":"--unrepresentable","value":"string","summary":"legacy keeps today's behavior; reject refuses a request its path cannot carry."},{"name":"--rollout","value":"string","summary":"One switch as name=on or name=off; repeatable. Every switch defaults off except antigravityDirect."},{"name":"--json","value":"boolean","summary":"Emit the resulting GET /api/protocols body."}],
     mutates: true,
     json: "payload",
     details: ["A bare invocation reads and never writes.","A setting flag changes the operator's config; run it only when the operator asks for that change."],

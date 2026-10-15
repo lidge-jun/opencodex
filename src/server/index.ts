@@ -25,6 +25,7 @@ import {
   websocketsEnabled,
 } from "../config";
 import { flushConfigDirHardeningAndReaps } from "../config/paths";
+import { trackBackgroundWork } from "../lib/background-work";
 import { migrateStartupSubagentModels } from "./subagent-models-startup";
 import { migrateStartupXaiResponses } from "./xai-responses-startup";
 import { migrateStartupZaiResponses } from "./zai-responses-startup";
@@ -843,7 +844,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
     && isCanonicalOpenAiForwardProvider(openAiProvider)
     && providerCodexAccountMode("openai", openAiProvider) === "pool"
   ) {
-    import("../codex/plan-from-token")
+    void trackBackgroundWork("codex-pool-quota-prime-startup", import("../codex/plan-from-token")
       .then(({ reconcileCodexPlansFromTokens }) => {
         try {
           reconcileCodexPlansFromTokens(config);
@@ -853,7 +854,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
         return import("../codex/auth-api");
       })
       .then(({ primeCodexPoolQuotas }) => primeCodexPoolQuotas(config, "startup"))
-      .catch(() => {});
+      .catch(() => {}));
   }
 
   // Opt-in storage policy (default OFF). Never blocks listen; cancellable on shutdown.
