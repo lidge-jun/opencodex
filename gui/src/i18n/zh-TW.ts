@@ -137,6 +137,7 @@ export const zhTW: Record<TKey, string> = {
   "advisor.saved": "顧問設定已儲存。",
   "advisor.loadFailed": "無法載入顧問設定。代理是否在執行？",
   "advisor.warning.noModel": "已啟用但尚未設定專家模型 — 設定模型之前 Advisor 無法執行。",
+  "advisor.notices": "費用與資料共享說明",
   "advisor.costNote": "每次諮詢都是真實的額外模型呼叫，會以顧問模型（而非 Worker 模型）計入用量。",
   "advisor.privacyNote": "跨 provider 提示：諮詢會把任務對話與工具結果傳送給設定的顧問 provider，它可能與 Worker 的 provider 不同。任務內容不做憑證脫敏 —— 若你不信任設定的顧問 provider 對這些任務內容的處理方式，請勿啟用顧問。只開啟開關並不會記錄這項同意。",
   "advisor.disclosure": "一次諮詢可能傳送：最新的使用者任務、已解析的使用者／助理／開發者文字、工具呼叫及其參數、工具結果、Worker 的工具目錄、Worker 身分、所設定的顧問模型，以及手動呼叫時的選用焦點問題。OpenCodex 不會把 provider API key、Authorization 標頭、OAuth token、後端密鑰、行程環境或隱藏的思維鏈寫進該提示。任務內容本身不做通用脫敏：貼進任務的金鑰、檔案裡的秘密、工具印出的 token 都可能被傳送。顧問 provider 可能與 Worker 的 provider 不同。",

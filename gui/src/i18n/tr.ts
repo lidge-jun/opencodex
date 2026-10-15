@@ -145,6 +145,7 @@ export const tr: Record<TKey, string> = {
   "advisor.saved": "Danışman ayarları kaydedildi.",
   "advisor.loadFailed": "Danışman ayarları yüklenemedi. Proxy çalışıyor mu?",
   "advisor.warning.noModel": "Etkin ancak uzman model yapılandırılmamış — model yapılandırılana kadar Advisor çalışmaz.",
+  "advisor.notices": "Maliyet ve veri paylaşımı uyarıları",
   "advisor.costNote": "Danışmalar gerçek ek model çağrılarıdır; kullanım, worker modeli değil danışman modeli altında görünür.",
   "advisor.privacyNote": "Sağlayıcılar arası uyarı: Danışmalar, görev konuşmasını ve araç sonuçlarını yapılandırılmış danışman sağlayıcısına (worker'ın sağlayıcısından farklı olabilir) gönderir. Görev içeriği sırlardan arındırılmaz — içeriğini bu sağlayıcıyla paylaşmak istemediğiniz görevlerde danışmanı etkinleştirmeyin. Açmak tek başına bu onayı kaydetmez.",
   "advisor.disclosure": "Bir danışma; son kullanıcı isteğini, ayrıştırılmış kullanıcı/asistan/geliştirici metnini, araç çağrılarını ve argümanlarını, araç sonuçlarını, worker araç kataloğunu, worker kimliğini, yapılandırılmış danışman modelini ve isteğe bağlı bir odak sorusunu gönderebilir. OpenCodex; sağlayıcı API anahtarlarını, Authorization başlıklarını, OAuth belirteçlerini, arka uç sırlarını, süreç ortamını veya gizli düşünce zincirini isteme koymaz. Görev içeriği sırlardan arındırılmaz: yapıştırılan bir anahtar, dosyadaki bir sır veya aracın yazdırdığı bir belirteç gönderilebilir. Danışman sağlayıcısı worker sağlayıcısından farklı olabilir.",

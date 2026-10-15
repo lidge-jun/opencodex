@@ -145,6 +145,7 @@ export const zh: Record<TKey, string> = {
   "advisor.saved": "顾问设置已保存。",
   "advisor.loadFailed": "无法加载顾问设置。代理是否在运行？",
   "advisor.warning.noModel": "已启用但尚未配置专家模型 — 配置模型之前 Advisor 无法运行。",
+  "advisor.notices": "费用与数据共享说明",
   "advisor.costNote": "每次咨询都是真实的额外模型调用，会以顾问模型（而非 Worker 模型）计入用量。",
   "advisor.privacyNote": "跨 provider 提示：咨询会把任务对话与工具结果发送给配置的顾问 provider，它可能与 Worker 的 provider 不同。任务内容不做凭据脱敏 —— 若你不信任设定的顾问 provider 对这些任务内容的处理方式，请勿启用顾问。仅打开开关并不会记录这项同意。",
   "advisor.disclosure": "一次咨询可能发送：最新的用户任务、已解析的用户/助手/开发者文本、工具调用及其参数、工具结果、Worker 的工具目录、Worker 身份、所配置的顾问模型，以及手动调用时的可选焦点问题。OpenCodex 不会把 provider API key、Authorization 头、OAuth token、后端密钥、进程环境或隐藏的思维链写进该提示。任务内容本身不做通用脱敏：贴进任务的密钥、文件里的秘密、工具打印出的 token 都可能被发送。顾问 provider 可能与 Worker 的 provider 不同。",

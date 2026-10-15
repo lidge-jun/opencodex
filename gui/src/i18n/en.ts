@@ -146,6 +146,7 @@ export const en = {
   "advisor.saved": "Advisor settings saved.",
   "advisor.loadFailed": "Could not load advisor settings. Is the proxy running?",
   "advisor.warning.noModel": "Enabled but no expert model is configured yet — the Advisor cannot run until a model is configured.",
+  "advisor.notices": "Cost and data-sharing notices",
   "advisor.costNote": "Consultations are real extra model calls. Each one appears in usage under the advisor model, not the worker model.",
   "advisor.privacyNote": "Cross-provider notice: consultations send the task conversation and tool results to the configured advisor provider, which may differ from the worker's provider. Task content is not secret-redacted — do not enable the advisor on tasks whose content you would not share with that provider. Turning Advisor on does not itself record this consent.",
   "advisor.disclosure": "A consultation may send the latest user task, parsed user/assistant/developer text, tool calls and arguments, tool results, the worker tool catalog, worker identity, the configured Advisor model, and an optional focus question. OpenCodex does not insert provider API keys, authorization headers, OAuth tokens, backend secrets, process environment, or hidden chain-of-thought. Task content is not secret-redacted: a pasted key, a secret in a file, or a token printed by a tool can be sent. The Advisor provider may differ from the worker provider.",

@@ -144,6 +144,7 @@ export const vi: Record<TKey, string> = {
   "advisor.saved": "Đã lưu cài đặt cố vấn.",
   "advisor.loadFailed": "Không thể tải cài đặt cố vấn. Proxy có đang chạy không?",
   "advisor.warning.noModel": "Đã bật nhưng chưa cấu hình mô hình chuyên gia — Advisor không thể chạy cho đến khi có mô hình.",
+  "advisor.notices": "Lưu ý về chi phí và chia sẻ dữ liệu",
   "advisor.costNote": "Mỗi lần tư vấn là một lời gọi mô hình thực sự bổ sung, được tính vào mức sử dụng theo mô hình cố vấn, không phải mô hình worker.",
   "advisor.privacyNote": "Lưu ý liên provider: các lần tư vấn gửi hội thoại nhiệm vụ và kết quả công cụ đến provider cố vấn đã cấu hình, có thể khác với provider của worker. OpenCodex không loại bỏ bí mật khỏi nội dung nhiệm vụ — không bật cố vấn cho nhiệm vụ mà bạn không muốn chia sẻ nội dung với provider đó. Bật cố vấn không tự ghi nhận sự đồng ý này.",
   "advisor.disclosure": "Một lần tư vấn có thể gửi yêu cầu người dùng mới nhất, văn bản người dùng/trợ lý/nhà phát triển đã phân tích, lệnh gọi công cụ và đối số, kết quả công cụ, danh mục công cụ của worker, danh tính worker, model cố vấn đã cấu hình, và câu hỏi trọng tâm tùy chọn. OpenCodex không đưa khóa API của provider, header Authorization, token OAuth, bí mật backend, môi trường tiến trình, hoặc chuỗi suy nghĩ ẩn vào prompt. Nội dung nhiệm vụ không được loại bỏ bí mật: khóa dán vào, bí mật trong tệp, hoặc token do công cụ in ra đều có thể được gửi. Provider cố vấn có thể khác provider của worker.",
