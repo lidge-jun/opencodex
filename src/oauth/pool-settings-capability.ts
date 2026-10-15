@@ -22,7 +22,7 @@ import { readAnthropicModelRoutes } from "./anthropic-model-routes";
  */
 export type PoolSettingsKind = "codex" | "anthropic" | "generic";
 
-export const GENERIC_POOL_STRATEGIES = ["quota", "round-robin", "fill-first", "least-loaded"] as const;
+export const GENERIC_POOL_STRATEGIES = ["quota", "round-robin", "fill-first", "reset-first", "least-loaded"] as const;
 export type GenericPoolStrategy = typeof GENERIC_POOL_STRATEGIES[number];
 
 export function poolSettingsCapability(name: string, provider: OcxProviderConfig | undefined): PoolSettingsKind | null {
@@ -33,7 +33,9 @@ export function poolSettingsCapability(name: string, provider: OcxProviderConfig
 }
 
 export function parseGenericPoolStrategy(value: unknown, providerName?: string): GenericPoolStrategy | null {
-  // Keep the common three names in the shared parser; the fourth is Kiro-specific.
+  // reset-first is shared with the Codex pool, so it is named here rather than added to the
+  // three-name shared parser that the Anthropic kind also uses. least-loaded is Kiro-specific.
+  if (value === "reset-first") return value;
   if (value === "least-loaded") return providerName === "kiro" ? value : null;
   return parseAccountPoolStrategy(value);
 }

@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 40.
+Declared capabilities: 41.
 
 ### `ocx account login`
 
@@ -858,7 +858,7 @@ State-changing: yes.
 |---|---|---|
 | `--enabled` | string | Stored pool preference; unsupported for Codex. Not equivalent to threshold0. |
 | `--threshold` | number | Auto-switch threshold0–100. |
-| `--strategy` | string | Use a strategy supported by this provider kind; reset-first is Codex, least-loaded is Kiro. |
+| `--strategy` | string | Use a strategy supported by this provider kind; reset-first is Codex or generic OAuth, least-loaded is Kiro. |
 | `--sticky` | number | Sticky limit1–100. |
 | `--quota-window` | string | Anthropic only: five-hour, weekly or max-utilization. |
 | `--json` | boolean | Emit the validated task result as one JSON document. |
@@ -867,6 +867,29 @@ JSON mode: `envelope`.
 
 - Reads the target supported-field list before a narrow PUT. Null/unsupported, stored/effective and generic inert policy stay distinct; disabling does not promise that reactive429 rotation stops.
 - No local classification/defaults are round-tripped into the live target; supported-field reads are not CAS.
+
+### `ocx account use-remaining`
+
+Usage: `ocx account use-remaining openai <id|alias|main> <on|off|status> [--json]`
+
+Choose whether one Codex account keeps using its remaining included quota.
+
+State-changing: yes.
+
+| Method | Route |
+|---|---|
+| GET | `/api/codex-auth/accounts` |
+| GET | `/api/codex-auth/accounts/use-remaining` |
+| PUT | `/api/codex-auth/accounts/use-remaining` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the validated account policy. |
+
+JSON mode: `envelope`.
+
+- On disables proactive usage switching for the selected account and raises main-account protection to 100%. Off restores the configured thresholds.
+- This is a persistent preference, not account selection. Pause, reauthentication, cooldown, entitlement and paid-credit policy still apply.
 
 ### `ocx account credits`
 

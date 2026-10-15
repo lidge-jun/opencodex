@@ -8,6 +8,23 @@ that root. Its synchronous exit fallback leaves an undrained root for ownership-
 recovery instead of blocking child cleanup with removal retries.
 `tests/ci-workflows/test-sandbox-cleanup.test.ts` pins that ordering with a delayed reap.
 
+`scripts/test.ts` pins `OCX_OWNER_REGISTRY_DIR` beneath each sandbox's OpenCodex home,
+including the sandbox created by the preload. It never inherits a host registry override.
+Under the armed guard, `src/config/owner-registry.ts` also resolves an absent override
+under the selected `OPENCODEX_HOME`, rather than Bun's cached startup home. Its resolver
+rejects protected-home ancestors before reads, registration or retirement, including explicit
+overrides and symlink aliases. Production keeps the shared default-home registry.
+`tests/config/owner-registry-isolation.test.ts` verifies guarded child reads, writes,
+retirement and fixture switches against a foreign startup-home record, plus production behavior.
+
+Under the armed test-home guard, `src/service/state.ts` resolves service-state reads and
+writes only within the selected `OPENCODEX_HOME`, including captured-home lookups. Bun
+caches the startup home, so a legacy mirror resolved through `os.homedir()` would otherwise
+be shared by parallel workers and serial fixture homes. Production retains the legacy
+default-home mirror and migration lookup. `tests/service/service-state-isolation.test.ts`
+plants a foreign startup-home record and verifies isolated reads, writes and fixture switches,
+alongside the unchanged production mirror behavior.
+
 The sandbox also pins the client homes that otherwise default to `os.homedir()`:
 `CLAUDE_CONFIG_DIR` and `GROK_HOME` point inside its root and are never inherited, because
 Bun's `os.homedir()` keeps the home it read at startup and a preload that only rewrites HOME

@@ -5,14 +5,15 @@ import { resolveCodexAccountTargetFromRows } from "./account-target";
 import { runCatalogAction } from "./catalog-command-result";
 import { serializeManagementJson } from "./json-input";
 import { creditAllReceipt, creditReceipt, grantsSchema, parseDto, poolSchema, record,
-  rosterSchema, threshold, thresholdReceipt } from "./account-policy-dto";
+  rosterSchema, threshold, thresholdReceipt, remainingQuotaReceipt } from "./account-policy-dto";
 import { CliUsageError, RuntimeApiError, printData, runtimeBaseUrl, runtimeRequest, summaryLines,
   takeFlag, takeOptionWithSyntax, type RuntimeApiDeps } from "./runtime-api";
 
-type Subcommand = "pool" | "auto-switch" | "credits" | "quota-activation" | "anthropic-reset-grants";
+type Subcommand = "pool" | "auto-switch" | "credits" | "quota-activation" | "anthropic-reset-grants" | "use-remaining";
 const USAGE = "Usage: ocx account pool <provider> [--enabled on|off] [--threshold 0-100] [--strategy NAME] [--sticky 1-100] [--quota-window NAME] [--json]\n"
   + "       ocx account auto-switch openai <status|on|off|inherit|threshold N> --account ID [--json]\n"
   + "       ocx account credits openai <ID on|off|--all on|off> [--json]\n"
+  + "       ocx account use-remaining openai ID <on|off|status> [--json]\n"
   + "       ocx account quota-activation openai ID --window <fiveHour|weekly> <on|off> [--json]\n"
   + "       ocx account anthropic-reset-grants [ID] [--provider anthropic|anthropic2] [--json]";
 const READ_ERRORS = { no_account: "No matching Anthropic OAuth account.", auth_failed: "Sign in to this Anthropic account again.",
@@ -53,6 +54,32 @@ function output(data: Record<string, unknown>, json: boolean, note?: string): nu
 }
 function requireEqual(actual: unknown, expected: unknown): void { if (actual !== expected) throw new Error("Unverified account policy result"); }
 
+async function useRemaining(args: string[], json: boolean, deps: RuntimeApiDeps): Promise<number> {
+  if (args.shift() !== "openai") usage();
+  const requested = selector(args.shift()), action = args.shift();
+  if (!["on", "off", "status"].includes(action ?? "")) usage();
+  done(args);
+  const pinned = { ...deps, baseUrl: await runtimeBaseUrl(deps) };
+  const { id } = await target(pinned, requested);
+  const path = "/api/codex-auth/accounts/use-remaining";
+  const result = parseDto(remainingQuotaReceipt, await request(
+    action === "status" ? path + "?id=" + encodeURIComponent(id) : path,
+    pinned, action === "status" ? undefined : { id, useRemainingQuota: action === "on" },
+  ));
+  requireEqual(result.id, id);
+  if (action !== "status") requireEqual(result.useRemainingQuota, action === "on");
+  if (result.useRemainingQuota) {
+    requireEqual(result.autoSwitchThreshold, 0);
+    if (id === MAIN_CODEX_ACCOUNT_ID) {
+      requireEqual(result.mainAccountHardLock?.thresholds.short, 100);
+      requireEqual(result.mainAccountHardLock?.thresholds.long, 100);
+    }
+  }
+  return output(result, json, result.useRemainingQuota
+    ? "Use remaining included quota: on. Paid-credit permission is unchanged."
+    : "Use remaining included quota: off. Configured usage thresholds apply.");
+}
+
 async function pool(args: string[], json: boolean, deps: RuntimeApiDeps): Promise<number> {
   const provider = selector(args.shift()).toLowerCase();
   if (!isValidProviderName(provider)) usage();
@@ -63,7 +90,8 @@ async function pool(args: string[], json: boolean, deps: RuntimeApiDeps): Promis
   if (limit !== undefined) patch.autoSwitchThreshold = integer(limit, 0);
   if (sticky !== undefined) patch.stickyLimit = integer(sticky, 1);
   if (strategy !== undefined) {
-    if (!["quota", "round-robin", "fill-first", ...(provider === "openai" ? ["reset-first"] : []),
+    // reset-first is a Codex and generic-pool strategy; the Anthropic pool does not run it.
+    if (!["quota", "round-robin", "fill-first", ...(isAnthropicInstanceId(provider) ? [] : ["reset-first"]),
       ...(provider === "kiro" ? ["least-loaded"] : [])].includes(strategy)) usage();
     patch.strategy = strategy;
   }
@@ -122,12 +150,12 @@ async function codex(sub: "auto-switch" | "credits" | "quota-activation", args: 
       const override = selected?.autoSwitchThresholdOverride;
       if (override === undefined) throw new Error("Missing account threshold evidence");
       const active = record(await request("/api/codex-auth/active", pinned));
-      const effective = override ?? parseDto(threshold, active.autoSwitchThreshold);
+      const effective = selected?.useRemainingQuota ? 0 : override ?? parseDto(threshold, active.autoSwitchThreshold);
       return output({ ok: true, id, autoSwitchThresholdOverride: override, autoSwitchThreshold: effective }, json);
     }
     const result = parseDto(thresholdReceipt, await request("/api/codex-auth/auto-switch", pinned, { id, threshold: value }));
     requireEqual(result.id, id); requireEqual(result.autoSwitchThresholdOverride, value);
-    if (value !== null) requireEqual(result.autoSwitchThreshold, value);
+    if (value !== null && !rows.find(row => row.id === id)?.useRemainingQuota) requireEqual(result.autoSwitchThreshold, value);
     return output(result, json, "Account threshold saved.");
   }
   if (sub === "credits") {
@@ -157,6 +185,7 @@ export async function handleAccountPolicyCommand(sub: Subcommand, args: string[]
     const rest = [...args], json = takeFlag(rest, "--json");
     if (rest.includes("--json")) usage();
     if (sub === "pool") return pool(rest, json, deps);
+    if (sub === "use-remaining") return useRemaining(rest, json, deps);
     if (sub !== "anthropic-reset-grants") return codex(sub, rest, json, deps);
     const selectedProvider = option(rest, "--provider");
     const provider = selectedProvider ?? "anthropic";

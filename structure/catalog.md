@@ -313,7 +313,7 @@ it does not relabel HTTP model listings or virtual `*-pro` rows.
 
 Astra has its own pinned native row: 272,000 default context, 872,000 opt-in ceiling,
 low-through-ultra effort, low default, and native multi-agent effort `xhigh`. The native-alias
-fallback passes the same configured limits to context, max input and compaction. Unrelated routed
+fallback passes configured limits to context, max input and compaction; [maximum windows](catalog-vendor-context.md#native-maximum-windows) remain separate. Unrelated routed
 templates clear the native multi-agent effort; canonical Astra-forward custom rows retain it and
 the pinned Fast speed description. Sync repairs only the exact old built-in Astra Fast description,
 preserving custom descriptions and other stored row fields.
@@ -573,7 +573,7 @@ Live sideband admission and its bounded upstream handshake follow the [runtime c
 
 The [explicit model-capability contract](config.md#explicit-per-model-capability-declarations) preserves operator declarations through provider storage and catalog capture; it does not infer upstream capability or change this surface's routing behavior.
 
-Exact [model input declarations](config.md#explicit-per-model-capability-declarations) now feed text-only eligibility and catalog hints; existing image-description/omission handling consumes them before the main upstream send.
+Exact [model input declarations](config.md#explicit-per-model-capability-declarations) now feed text-only eligibility and catalog hints; existing image-description/omission handling consumes them before the main upstream send. Combo saves can create those declarations through the `PUT /api/combos` `visionSidecarTargets` request field, which commits the combo and its declarations in one transaction, skips members the sidecar already covers, and converges the catalog in the same save.
 
 ## Renamed destination reasoning metadata
 

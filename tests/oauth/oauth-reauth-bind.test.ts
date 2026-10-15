@@ -333,7 +333,7 @@ describe("OAuth account-scoped reauth", () => {
     OAUTH_PROVIDERS.kiro.login = async () => rawCredential;
     try {
       await runLogin("kiro", {} as OAuthController, undefined, {
-        saveCredential: async (_provider, credential) => { savedCredential = credential; },
+        saveCredential: async (_provider, credential) => { savedCredential = credential; return null; },
         settleKiroLoginTransaction: (credential, persisted) => {
           settledCredential = credential;
           settledPersisted = persisted;

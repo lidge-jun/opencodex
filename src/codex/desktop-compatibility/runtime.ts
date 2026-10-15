@@ -16,7 +16,7 @@ import { launchWindowsCodexCompatibility } from "./windows-package-launch";
 import { acquireDesktopCompatibilityRuntime, bindDesktopCompatibilityLaunch } from "./runtime-ownership";
 import { createDesktopConnectionStore, type DesktopConnectionStore } from "./connection-store";
 import { createNativeRoutingVerifier } from "./routing-preflight";
-import { createInstalledBuildProbe } from "./installed-build";
+import { createInstalledBuildProbe, type DesktopBuildAssessment } from "./installed-build";
 
 export { DESKTOP_COMPATIBILITY_ASSESSED_VERSION, isAssessedDesktopInstalled } from "./installed-build";
 export interface DesktopRuntimeIo {
@@ -25,6 +25,8 @@ export interface DesktopRuntimeIo {
   trust?: (authority: StoredDesktopAuthority) => Promise<"trusted" | "not-trusted" | "unknown">;
   identity?: ReturnType<typeof createNativeIdentityReader>;
   buildSupported?: () => boolean | Promise<boolean>;
+  /** Internal fixture probe factory; requires testOnly and all sandbox identity/CA seams. */
+  testOnlyBuildProbe?: () => ReturnType<typeof createInstalledBuildProbe>;
   upstreamFetch?: typeof fetch;
   connectionStore?: DesktopConnectionStore;
   routingSupported?: () => boolean;
@@ -36,6 +38,7 @@ export interface DesktopRuntimeIo {
 export function createDesktopCompatibilityRuntime(io: DesktopRuntimeIo = {}) {
   const platform = io.platform ?? process.platform;
   let buildProbe: ReturnType<typeof createInstalledBuildProbe> | undefined;
+  let previousBuildAssessment: DesktopBuildAssessment | null = null;
   const buildSupported = io.buildSupported ?? (() => buildProbe?.check() ?? Promise.resolve(false));
   let routingSupported = io.routingSupported ?? (() => false);
   let contextFailure: "build_unverified" | "native_routing_unverified" | null = null;
@@ -54,6 +57,7 @@ export function createDesktopCompatibilityRuntime(io: DesktopRuntimeIo = {}) {
   let pendingCleanup: (() => Promise<void>) | null = null;
   let releaseOwner: (() => void) | null = null;
   const status = () => ({ phase, supported: platform === "win32", running: owned !== null, contextFailure,
+    ...(buildProbe ? { buildAssessment: buildProbe.lastResult() ?? (previousBuildAssessment ? { ...previousBuildAssessment } : null) } : {}),
     ...(owned ? { fingerprint: owned.fingerprint, safetyDeadline: owned.deadline, usage: owned.controller.snapshot() } : {}) });
   async function stop(): Promise<ReturnType<typeof status>> {
     if (phase === "starting") throw new Error("desktop_compatibility_busy");
@@ -67,11 +71,11 @@ export function createDesktopCompatibilityRuntime(io: DesktopRuntimeIo = {}) {
   async function start() {
     if (phase !== "off") throw new Error("desktop_compatibility_busy");
     if (platform !== "win32") throw new Error("desktop_compatibility_unsupported");
-    if (isTestHomeGuardArmed() && !(io.testOnly && io.identity && io.loadAuthority && io.trust && io.buildSupported && io.connectionStore && io.routingSupported)) throw new Error("desktop_compatibility_test_environment");
+    if (io.testOnlyBuildProbe && (!io.testOnly || io.buildSupported)) throw new Error("desktop_compatibility_test_environment");
+    if ((isTestHomeGuardArmed() || io.testOnlyBuildProbe) && !(io.testOnly && io.identity && io.loadAuthority && io.trust && (io.buildSupported || io.testOnlyBuildProbe) && io.connectionStore && io.routingSupported)) throw new Error("desktop_compatibility_test_environment");
     if (didRunOptionalShutdownHooks()) throw new Error("desktop_compatibility_stopping");
     try { desktopProxyFor(new URL("https://chatgpt.com")); } catch { throw new Error("desktop_compatibility_egress_proxy_invalid"); }
     releaseOwner = acquireDesktopCompatibilityRuntime(); phase = "starting";
-    if (!io.buildSupported) buildProbe = createInstalledBuildProbe();
     let relay: Awaited<ReturnType<typeof startDesktopRelay>> | undefined, proxy: ConnectProxyHandle | undefined;
     let pac: ReturnType<typeof Bun.serve> | undefined, timer: ReturnType<typeof setInterval> | undefined;
     let detach: (() => void) | undefined, unbindLaunch: (() => void) | undefined, controller: UsageRelayController | undefined;
@@ -84,6 +88,11 @@ export function createDesktopCompatibilityRuntime(io: DesktopRuntimeIo = {}) {
     };
     pendingCleanup = cleanup;
     try {
+      if (!io.buildSupported) {
+        // A fresh probe owns this start; diagnostics retain the last completed observation.
+        previousBuildAssessment = buildProbe?.lastResult() ?? previousBuildAssessment;
+        buildProbe = io.testOnlyBuildProbe ? io.testOnlyBuildProbe() : createInstalledBuildProbe();
+      }
       if (!io.routingSupported) routingSupported = createNativeRoutingVerifier((await import("../paths")).getCodexHome());
       if (!await contextValid()) throw new Error(`desktop_compatibility_${contextFailure}`);
       const directory = join(getConfigDir(), "codex-desktop-compatibility");

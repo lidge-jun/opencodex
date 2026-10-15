@@ -109,6 +109,7 @@ import {
 import { removeCredential } from "../../oauth/store";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { redactSecretString } from "../../lib/redact";
+import { withModelCostRowReplacement } from "../../config/live-reconcile";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
 import { deriveProviderPresets } from "../../providers/derive";
 import { providerCodexAccountMode } from "../../providers/registry";
@@ -408,7 +409,7 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     const submitted = { [modelId]: body.cost };
     const validationError = body.cost === null ? null : providerModelCostsConfigError(submitted);
     if (validationError) return jsonResponse({ error: validationError }, 400, req, config);
-    // Copy only validated rate fields; never echo a secret-shaped model key that the
+    // Copy validated rates and policy; never echo a secret-shaped model key that the
     // shared display boundary suppresses. Model IDs remain exact, including slashes.
     const cost = body.cost === null ? null : sanitizeModelCostsForDisplay(submitted)?.[modelId];
     if (cost === undefined) return jsonResponse({ error: "modelId cannot be displayed safely" }, 400, req, config);
@@ -423,10 +424,10 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     const previousModelCosts = provider.modelCosts;
     const nextModelCosts = Object.assign(
       Object.create(null) as Record<string, ProviderCostOverlay>,
-      previousModelCosts ?? {},
+      structuredClone(previousModelCosts ?? {}),
     );
     if (cost === null) delete nextModelCosts[modelId];
-    else nextModelCosts[modelId] = cost;
+    else nextModelCosts[modelId] = structuredClone(cost);
     const mergedError = providerModelCostsConfigError(nextModelCosts);
     if (mergedError) return jsonResponse({ error: mergedError }, 400, req, config);
     // Keep even an empty map until persistence reconciles individual model keys.
@@ -435,10 +436,14 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     try {
       // The persistence owner refreshes usage overlays after its atomic write.
       // Price-only edits do not change routing or require catalog convergence.
-      persistConfig(config);
+      withModelCostRowReplacement(config, name, modelId, cost, () => persistConfig(config));
     } catch (error) {
-      if (hadModelCosts) provider.modelCosts = previousModelCosts;
-      else delete provider.modelCosts;
+      // A published write is durable even if bookkeeping failed: recovery GET
+      // must not serve old prices or let a later save undo the committed policy.
+      if (!(error instanceof ConfigWritePublishedError)) {
+        if (hadModelCosts) provider.modelCosts = previousModelCosts;
+        else delete provider.modelCosts;
+      }
       throw error;
     }
     return jsonResponse({ ok: true, provider: name, modelId, cost }, 200, req, config);
