@@ -25,6 +25,8 @@ describe("Issue #6469: Responses Request Parser & Serializer Offline Regression"
       const serialized = buildResponseJSON(events, "claude-3-7-sonnet");
       const output = serialized.output as Array<Record<string, unknown>>;
       expect(output[0].call_id).toBe(callId);
+      expect(output[0].type).toBe("function_call");
+      expect(output[0].name).toBe("fetch_record");
 
       // Inbound continuation with explicit input items
       const rawInbound = {
@@ -166,8 +168,9 @@ describe("Issue #6469: Responses Request Parser & Serializer Offline Regression"
       expect(multiTurnResult.toolName).toBe("tool_v2"); // Most recent assistant turn
     });
 
-    test("handles missing call_id in function_call and function_call_output", () => {
-      // 1. Loose fallback item when function_call lacks call_id
+    test("tolerates missing call_id in function_call and function_call_output with undefined id", () => {
+      // schema catch-all (z.object({ type: z.string() }).loose()) matches items with missing call_id,
+      // so parseRequest does NOT throw; call_id simply resolves to undefined on the parsed part.
       const missingCallIdItem = {
         model: "claude-3-7-sonnet",
         input: [
@@ -187,7 +190,7 @@ describe("Issue #6469: Responses Request Parser & Serializer Offline Regression"
       const toolCallPart = (assistantMsg?.content as Array<Record<string, unknown>>).find(p => p.type === "toolCall");
       expect(toolCallPart?.id).toBeUndefined();
 
-      // 2. Loose fallback item when function_call_output lacks call_id
+      // function_call_output without call_id likewise resolves to an undefined toolCallId.
       const missingCallIdOutput = {
         model: "claude-3-7-sonnet",
         input: [
