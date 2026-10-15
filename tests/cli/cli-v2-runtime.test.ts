@@ -167,6 +167,13 @@ describe("live V2 fixed management operations", () => {
 });
 
 describe("local V2 state and synchronization graph", () => {
+  test("status identifies the canonical agents key in a global-V2 conflict", async () => {
+    writeFileSync(path, "[features.multi_agent_v2]\nenabled = true\n\n[agents]\nmax_concurrent_threads_per_session = 16\n");
+    const local = localDeps();
+    expect(await cmdV2(["status"], local.deps)).toBe(0);
+    expect(out.join("\n")).toContain("WARNING: [agents] max_concurrent_threads_per_session / max_threads is set");
+    expect(local.actions).toEqual([]);
+  });
   test.each([["mode", "default"], ["keep-native-v1", "off"], ["on"]].map(args => [args] as const))(
     "required sync runs with undefined port for %j", async args => {
       const local = localDeps();

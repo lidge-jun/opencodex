@@ -73,3 +73,4 @@ limit resolves them. Unsupported or unsafe writes refuse before mutation. With t
 flag disabled, a limit edit updates the canonical child count and removes a stale feature-level
 v2 limit without enabling that flag. These rules establish configuration consistency; they do
 not attest the effective capacity of a running native or routed session.
+CLI and dashboard global-v2 conflict warnings name both supported agents keys.

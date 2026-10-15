@@ -196,6 +196,15 @@ test("full v2 presents children (stored total minus the root slot) and PUTs tota
   expect(lastPut()).toEqual({ maxConcurrentThreadsPerSession: 33 });
 });
 
+test("the V2 conflict warning identifies canonical agents limits as well as the legacy alias", async () => {
+  testWindow.localStorage.setItem("ocx.models.settingsOpen.v1", "1");
+  v2Body = { enabled: true, multiAgentMode: "v2", agentsMaxThreadsConflict: true, maxConcurrentThreadsPerSession: 17 };
+  await mount();
+
+  const warning = container.querySelector(".models-v2-detail-row");
+  expect(warning?.textContent).toContain("[agents] max_concurrent_threads_per_session / max_threads");
+});
+
 test("the folded settings summary names the returned child limit in any mode", async () => {
   // Panel stays folded (no settingsOpen key): the summary line must still carry the value.
   v2Body = { enabled: false, multiAgentMode: "v1", maxConcurrentThreadsPerSession: 16 };

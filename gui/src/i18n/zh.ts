@@ -785,7 +785,7 @@ export const zh: Record<TKey, string> = {
   "models.v2Help": "控制所有模型的多代理界面。\n\nv1: 经典单线程代理。所有模型使用 v1 协作界面。\nbase: 上游默认值 — sol/terra 使用 v2，luna 使用 v1，其余跟随 codex 功能标志。\nv2: 多线程代理（spawn_agent）。所有模型使用 v2 协作界面。\n\n在 v2 下，「ChatGPT 保持 v1」会让 Sol/Terra 留在 v1，以便继续派发 Grok 或 Claude。ChatGPT 会加密 v2 子任务，路由模型无法读取；路由父代理仍留在 v2。\n\n更改在新会话中生效。",
   "models.v2DocsLink": "v1 / v2 是什么？",
   "dash.multiAgent": "子代理",
-  "models.v2Conflict": "[agents] max_threads 仍存在 — codex 将拒绝启动，请从 config.toml 移除",
+  "models.v2Conflict": "[agents] max_concurrent_threads_per_session / max_threads 仍存在 — codex 将拒绝启动，请从 config.toml 移除",
   "models.v2Applied": "子代理模式已更新 — 新会话生效（重启 Codex 应用以刷新选择器）",
   "models.v2ThreadsLabel": "子代理上限",
   "models.v2ThreadsDefault": "默认",

@@ -792,7 +792,7 @@ export const fr: Record<TKey, string> = {
   "dash.codexClientCompaction": "Utiliser la compaction côté client",
   "dash.codexClientCompactionHint": "Désactivé par défaut, uniquement pour le routage loopback authentifié. Les compactages futurs stockent des résumés portables en texte clair tout en conservant le routage OpenCodeX/V2 ; le fournisseur configuré peut les traiter et consommer son quota. L'historique ocx1 existant doit toujours être restauré. Redémarrez Codex après modification.",
   "dash.codexRemoteHistoryHint": "Le routage par table de fournisseurs peut masquer les fils existants marqués openai dans certaines listes mobiles distantes. L’historique n’est pas supprimé. Le client distant doit lister tous les fournisseurs ; ce réglage ne corrige pas son filtre.",
-  "models.v2Conflict": "[agents] max_threads est défini — codex refusera de démarrer ; supprimez-le de config.toml",
+  "models.v2Conflict": "[agents] max_concurrent_threads_per_session / max_threads est défini — codex refusera de démarrer ; supprimez-le de config.toml",
   "models.v2Applied": "Mode sous-agent mis à jour — s’applique aux nouvelles sessions (redémarrez l’application Codex pour actualiser le sélecteur)",
   "models.v2ThreadsLabel": "Limite de sous-agents",
   "models.v2ThreadsDefault": "par défaut",

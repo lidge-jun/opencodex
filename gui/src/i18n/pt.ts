@@ -806,7 +806,7 @@ export const pt: Record<TKey, string> = {
   "dash.codexClientCompaction": "Usar compactação no cliente",
   "dash.codexClientCompactionHint": "Desativado por padrão; somente loopback autenticado. As próximas compactações armazenam resumos portáveis em texto simples enquanto o roteamento de provedores do OpenCodeX e da V2 permanece ativo; o provedor configurado pode processá-los e consumir cota. O histórico não é alterado, e as threads existentes continuam roteando pelo proxy por meio do override openai_base_url gerenciado pelo OpenCodeX; se você definir essa linha manualmente, ela é mantida, e essas threads seguem o seu destino. O histórico ocx1 existente continua recuperável; recupere uma thread separadamente apenas antes de reproduzi-la no Codex nativo. Reinicie o Codex após alterar esta configuração.",
   "dash.codexRemoteHistoryHint": "O roteamento por tabela de provedores pode ocultar threads existentes marcadas como openai em algumas listas remotas do celular. O histórico não é excluído. O cliente remoto precisa listar todos os provedores; esta opção não corrige o filtro desse cliente.",
-  "models.v2Conflict": "[agents] max_threads está definido — o codex se recusará a iniciar; remova-o do config.toml",
+  "models.v2Conflict": "[agents] max_concurrent_threads_per_session / max_threads está definido — o codex se recusará a iniciar; remova-o do config.toml",
   "models.v2Applied": "Modo de subagente atualizado — vale para novas sessões (reinicie o app do Codex para atualizar o seletor)",
   "models.v2ThreadsLabel": "Limite de subagentes",
   "models.v2ThreadsDefault": "padrão",
