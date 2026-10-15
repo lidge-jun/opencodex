@@ -110,6 +110,31 @@ describe("key attempt accounting", () => {
     expect(roundTrip.usage).toMatchObject({ inputTokens: 400, outputTokens: 60 });
     expect(JSON.stringify(roundTrip)).not.toContain("test-key-");
   });
+  test("a rotated non-combo request totals every physical attempt, not only the last", async () => {
+    const key = (reference: string) => ({ adapter: "openai-chat" as const, authMode: "key" as const,
+      baseUrl: "https://example.test/v1", _apiKeyAttempt: { reference } });
+    const active = beginRequestAttempt(1, "test-provider", "test-model", "openai-chat");
+    const ctx: RequestLogContext = { provider: "test-provider", model: "test-model",
+      activeAttempt: active, activeAttemptStartedAt: Date.now(), attempts: [active] };
+    noteProviderAttemptSend(ctx, "test-provider", key("test-key-a"), undefined);
+    await recordKeyAttemptFailure(ctx, Response.json({ usage: { prompt_tokens: 100, completion_tokens: 20 } }, { status: 429 }));
+    noteProviderAttemptSend(ctx, "test-provider", key("test-key-b"), undefined, "key-429");
+    recordKeyAttemptUsage(ctx, { inputTokens: 300, outputTokens: 40 });
+    const rows: RequestLogEntry[] = [];
+    addFinalRequestLog("non-combo-rotation", Date.now(), ctx, 200, undefined, row => rows.push(row));
+    expect(rows[0].attempts?.map(attempt => attempt.usage?.inputTokens)).toEqual([100, 300]);
+    expect(rows[0]).toMatchObject({ provider: "test-provider", usageStatus: "reported", totalTokens: 460,
+      usage: { inputTokens: 400, outputTokens: 60 } });
+  });
+  test("a locally answered non-combo request keeps its own usage", () => {
+    const local = beginRequestAttempt(1, "test-provider", "test-model", "openai-chat");
+    local.locallyAnswered = true;
+    const ctx: RequestLogContext = { provider: "test-provider", model: "test-model", activeAttempt: local,
+      attempts: [local], localTerminalReason: "synthetic", usage: { inputTokens: 7, outputTokens: 3 } };
+    const rows: RequestLogEntry[] = [];
+    addFinalRequestLog("local-answer", Date.now(), ctx, 200, undefined, row => rows.push(row));
+    expect(rows[0]).toMatchObject({ totalTokens: 10, usage: { inputTokens: 7, outputTokens: 3 } });
+  });
   test.each([
     ["generic OAuth", "o111111", "o222222"],
     ["Codex pool", "paaaaa1", "pbbbbb2"],

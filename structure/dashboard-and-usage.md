@@ -185,7 +185,7 @@ retains separate flat records when retries change keys, and isolates each record
 from parent combo totals and adapter-loop aggregation. Reported failure usage is retained;
 missing usage and historical identities remain unknown. Native wire snapshots replace only the
 current physical response contribution, preserving prior sends on the same key without counting
-repeated inspections twice. Consumers sum the flat attempts once and keep subscription quota
+repeated inspections twice. A row with two or more attempts, combo or not, takes its request total from those attempts, so a key or account rotation is not reported as its last record alone; a single-attempt or locally answered row keeps its request-level usage. Consumers sum the flat attempts once and keep subscription quota
 observations separate from token or API-equivalent cost totals.
 
 `src/server/hub-usage.ts` serves `GET /v1/usage` on hubs for an explicit configured data key. The authenticated key selects the aggregate; query parameters cannot select an API-key identity. Unscoped environment/admin credentials and loopback bypass are not admitted. The response projects only this client's numeric totals, provider/model/day rows and incomplete-history metadata through `src/remote/hub-usage.ts`; accounts, raw records and key IDs are omitted. Unknown fields are stripped at every object boundary and the serialized body is capped at 1 MiB.
