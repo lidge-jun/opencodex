@@ -377,6 +377,17 @@
       ]
     },
     {
+      "path": "providers/dsh-account.md",
+      "tier": 4,
+      "title": "DeepSeek Harness Account Provider",
+      "scope": "Explicit read-only DSH credential import, verified account identity, disabled refresh, pinned inference and probe destinations, and authoritative-empty quota.",
+      "documents": [
+        "src/oauth/dsh.ts",
+        "src/adapters/dsh-account.ts",
+        "src/providers/quota/dsh-account.ts"
+      ]
+    },
+    {
       "path": "providers/anthropic-account-pool.md",
       "tier": 4,
       "title": "Anthropic Account Pool",

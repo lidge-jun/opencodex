@@ -1,0 +1,23 @@
+# DeepSeek Harness Account Provider
+
+`dsh-account` reuses the DeepSeek account signed in to DeepSeek Harness (DSH) Desktop. It is an OAuth-kind provider with its own credential domain; it shares no key, route or fallback with the API-key `deepseek` provider.
+
+## Import
+
+`src/oauth/dsh.ts` reads `$DSH_HOME/.credentials.yaml` (default `~/.dsh/.credentials.yaml`) only inside `loginDshAccount`, which runs on `ocx login dsh-account` or the dashboard's add-account action. Nothing else reads the file, and nothing in opencodex writes, deletes or changes the permissions of it. The `deepseek-account-platform/default` grant record is validated against `https://platform.deepseek.com/auth-api/v0/users/current` with manual redirects before anything is stored.
+
+Only a successful business response with a nonempty authoritative account ID imports. A missing ID fails closed; email, phone and display name never supply a slot identity, so two DSH accounts sharing an email land in different slots and reauthentication uses the shared account-ID comparison in `src/oauth/index.ts`. Parser and transport failures surface fixed error codes instead of credential or profile fragments.
+
+The imported copy lives in the opencodex credential store. Removing the account deletes only that copy and never signs DSH Desktop out.
+
+## Refresh and 401
+
+DSH grants have no rotation endpoint. `defaultRefreshPolicy` is `disabled`, and `refreshDshAccountToken` never re-reads the DSH file: it throws a terminal "revoked" error. An upstream 401 on the replay path therefore marks the account `needsReauth`; the user re-imports explicitly.
+
+## Destinations
+
+`src/adapters/dsh-account.ts` sends inference only to `https://api.deepseek.com/anthropic/v1/messages`. A configured `baseUrl` on another scheme, host or path fails the request before any send. Configured headers cannot set `x-dsh-auth-token`, `anthropic-version`, `authorization`, `x-api-key` or `host`; the adapter strips API-key and Claude Code headers and sets the account token last. The shared executor's manual redirect policy keeps the token from following a redirect. `x-dsh-auth-token` is in the redaction key and header-label lists in `src/lib/redact.ts`.
+
+## Quota
+
+`src/providers/quota/dsh-account.ts` probes `https://platform.deepseek.com/api/v0/users/get_user_summary` with manual redirects. A 401 is a terminal quota failure. A successful business response with summary data returns authoritative empty quota: the platform reports wallet amounts with no capacity, so no percentage window is derived from them.
