@@ -183,6 +183,9 @@ function pidfdCount(): number {
 }
 
 test.if(process.platform === "linux")("native pidfd signals a disposable fixture and releases its descriptor", async () => {
+  // Bun may hold its own pidfd for a spawned child and release it on exit, so the leak check
+  // compares against the count taken before the fixture exists.
+  const baseline = pidfdCount();
   const child = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], { stdin: "ignore", stdout: "ignore", stderr: "pipe" });
   const before = pidfdCount();
   const opened = openParentPidfd(child.pid, () => true);
@@ -202,7 +205,7 @@ test.if(process.platform === "linux")("native pidfd signals a disposable fixture
     if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
     await child.exited;
   }
-  expect(pidfdCount()).toBe(before);
+  expect(pidfdCount()).toBe(baseline);
 }, 10_000);
 
 
