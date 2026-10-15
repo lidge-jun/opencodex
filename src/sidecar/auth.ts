@@ -134,6 +134,8 @@ function findAnthropicAuthProvider(
     // its token path and the token guardian refuse an unmarked row of that name, so offering such a
     // custom row here would advertise credentials no helper executor will spend.
     if (providerName === "anthropic2") continue;
+    // The DSH account token is pinned to its own adapter and DeepSeek host; no helper may spend it.
+    if (providerName === "dsh-account") continue;
     if (provider.disabled === true) continue;
     if (provider.adapter !== "anthropic" || provider.authMode !== "oauth") continue;
     const set = getAccountSet(providerName);

@@ -164,16 +164,25 @@ export interface ProviderWebSearchBridgeConfig {
   endpoint?: string;
 }
 
-/**
- * User-configured display price for one model (USD per 1M tokens).
- * Mirrors the `Cost4` shape used by the usage cost estimator; structurally
- * compatible so config rows can be lifted directly into price overlays.
- */
+/** Optional user-owned prompt-length policy; rates are USD per 1M tokens. */
+export type PromptLengthPricing =
+  | { mode: "automatic" }
+  | { mode: "flat" }
+  | {
+    mode: "custom";
+    thresholdTokens: number;
+    comparison: "gt" | "gte";
+    rates: { input: number; output: number; cacheRead: number; cacheWrite: number };
+  };
+
+/** Complete base rates for one model, with automatic pricing when policy is absent. */
 export interface ProviderCostOverlay {
   input: number;
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  /** Absent means automatic vendor prompt-length pricing. */
+  promptLengthPricing?: PromptLengthPricing;
 }
 
 export interface RequestPacingRule {
@@ -717,7 +726,7 @@ export interface OcxProviderConfig {
      * contract. Consumed by the selector only while `pool.kernel` is on; with the flag off
      * it is still merely persisted, so omitted and set behave the same.
      */
-    strategy?: "quota" | "round-robin" | "fill-first" | "least-loaded";
+    strategy?: "quota" | "round-robin" | "fill-first" | "reset-first" | "least-loaded";
     /**
      * 0-100 usage percent at which fill-first advances off the active account (#695).
      * Read only under `pool.kernel` with `strategy: "fill-first"`; 80 when unset, matching

@@ -5,6 +5,9 @@ import { resolveProviderTransport } from "../providers/xai-transport";
 
 /** Discovery owns its configured row (a frozen capture for catalog gathers), not live config. */
 export function mayResolveModelsOAuth(name: string, provider: OcxProviderConfig | undefined): boolean {
+  // The DSH account token is pinned to its own adapter and fixed DeepSeek hosts. Its catalog is
+  // static, so no discovery path may resolve it, whatever adapter or baseUrl the row was edited to.
+  if (name === "dsh-account") return false;
   return name !== "anthropic2" || (provider !== undefined && provider.disabled !== true
     && isBuiltinAnthropicInstanceRow(name, provider));
 }

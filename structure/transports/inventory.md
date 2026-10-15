@@ -307,6 +307,17 @@ the same routed model during account rotation, without bypassing their send-budg
 admission or account-snapshot pairing. The forwarding contract is covered in
 `tests/oauth/oauth-account-quota-rank.test.ts`; the core facade remains orchestration-only.
 
+Generic OAuth pools accept `reset-first` under `pool.kernel` (`activeGenericStrategy` in
+`src/oauth/generic-account-failover.ts`). `rankAccountsByResetFirst` orders non-exhausted
+accounts by the soonest future reset of the requested family's weekly window, falling back to
+the 5-hour window, then by headroom; exhausted accounts go last. A passive provider with
+evidence for only part of the ring keeps headroom order. The first-attempt pick uses the same
+eligible set as round-robin, including per-account model listings, and needs headroom evidence.
+Kiro passes account-bound quota evidence through both selection paths, preserving headroom
+ordering and explicit exhaustion when reset times are unknown. The Anthropic kind refuses
+the strategy. Coverage: `tests/oauth/oauth-account-quota-rank.test.ts`
+and `tests/server/account-pool-management-api.test.ts`.
+
 ## SOCKS5 dispatch boundary
 
 `src/lib/socks5-handshake.ts` shares RFC1928/RFC1929 framing between the fetch tunnel and
