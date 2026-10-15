@@ -517,12 +517,12 @@ describe("Claude Desktop 3P models", () => {
     const path = join(dir, "owned.json");
     try {
       writeFileSync(path, "old bytes\n");
-      const success = atomicReplaceDesktopConfig(path, "new bytes\n");
+      const success = atomicReplaceDesktopConfig(path, "new bytes\n", readFileSync(path));
       expect(readFileSync(path, "utf8")).toBe("new bytes\n");
       expect(readFileSync(success.backupPath!, "utf8")).toBe("old bytes\n");
 
       writeFileSync(path, "stable bytes\n");
-      expect(() => atomicReplaceDesktopConfig(path, "never written\n", () => { throw new Error("injected"); })).toThrow("injected");
+      expect(() => atomicReplaceDesktopConfig(path, "never written\n", readFileSync(path), () => { throw new Error("injected"); })).toThrow("injected");
       expect(readFileSync(path, "utf8")).toBe("stable bytes\n");
       expect(readFileSync(`${path}.bak`, "utf8")).toBe("stable bytes\n");
     } finally {

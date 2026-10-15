@@ -97,6 +97,8 @@ Shared parsing and streaming follow the [request-copy](../transports/byte-accoun
 
 ## Chat Completions inbound native path
 
+Managed native Chat and translated Chat share the [explicit empty client-catalog boundary](../transports/responses-wire-shapes.md#declared-tool-membership-by-inbound-wire): a current-turn `tools: []` refuses client tool output with `undeclared_tool_call` in SSE and JSON. Omitted, partial, and hosted-only catalogs retain deferred delivery, and caller-forward routes retain their exemption.
+
 ### Droid request defaults
 
 `src/server/droid-reasoning-default.ts` reads the model-scoped
@@ -522,3 +524,23 @@ Native Messages and translated Anthropic requests share [revoked-token recovery]
 Managed native Anthropic OAuth metadata follows [the native Messages binding contract](protocol-paths.md#managed-native-messages): the serving credential's provider UUID replaces only recognized account metadata, with each attempt rebuilt from the source.
 
 Managed native Messages retain a coherent observed CLI identity bundle only for first-party Anthropic; [native Messages](protocol-paths.md#managed-native-messages) owns its bounds and credential separation. Header identity never selects an account or authorizes a request.
+
+### Native Chat thinking continuation
+
+`src/adapters/openai-chat/reasoning-replay.ts` repairs assistant tool-call history missing
+`reasoning_content` before native serialization. Caller-supplied nonempty text wins. The native
+lane honors the same preserve/placeholder policy as translated Chat; absent preserve declarations
+recognize DeepSeek Flash/Pro families across dotted versions, namespaces and gateway suffixes.
+Explicit preserve lists (including `[]`) remain authoritative, and an explicit placeholder list
+can disable fabricated placeholders while allowing original cached reasoning.
+For tool-enabled DeepSeek requests the configured placeholder also repairs earlier assistant
+answers without tool calls. Those turns have no call-id replay entry; supplied reasoning wins.
+
+`src/server/chat-native-reasoning.ts` records upstream JSON and fragmented SSE reasoning under
+all parallel call ids, separately for each choice. Replay requires a sanitized `thread-id`,
+`session_id` or `session-id` and the existing exact provider/destination/adapter/model/credential
+scope. The native send rebinds that scope before every request build, including key rotation.
+Missing identity, a restarted/expired/evicted cache, and another route receive only the configured
+placeholder; they never recover another conversation's raw text. SSE capture retains at most
+256 KiB and 64 calls within the translator budget and releases on terminal/error/cancellation.
+Unfinished tool streams cannot seed replay. This leaves the native wire and response fields intact.

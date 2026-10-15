@@ -474,6 +474,11 @@
   font-size: 12px;
 }
 
+/* Requests still continue without the images, so this is a warning (amber), not a failure. */
+.cwi-capability-hint--warn {
+  color: var(--amber);
+}
+
 
 .cwi-target-list {
   display: flex;

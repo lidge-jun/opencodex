@@ -167,18 +167,6 @@ export async function startClaudeIntercept<T>(options: StartClaudeInterceptOptio
   const startProxy = options.startProxy ?? startConnectProxy;
   const authToken = ensureClaudeInterceptProxyToken(configDir);
   const leaf = issueLocalInterceptLeaf(ca, CLAUDE_INTERCEPT_HOSTS);
-  // Refresh an env we already own (e.g. a pre-auth proxy URL left by an upgrade) before the
-  // authenticated proxy takes over the port — a plain `ocx start` after an update would
-  // otherwise 407 every CONNECT until the next `ocx ensure` or apply. Only `stale` state is
-  // rewritten, so installs that never applied first-party are untouched.
-  try {
-    const proxyPort = claudeInterceptProxyPort(options.config, options.publicPort);
-    migrateClaudeInterceptSettings(buildClaudeInterceptEnv(proxyPort, claudeInterceptCaCertPath(configDir), authToken));
-  } catch (error) {
-    // A skipped rewrite degrades to the pre-migration behaviour and ensure/apply retries it,
-    // but silence here leaves upgraded clients hitting 407 with no recorded cause.
-    console.warn(`[claude-intercept] settings migration skipped: ${error instanceof Error ? error.message : String(error)}`);
-  }
   const listener = startClaudeInterceptListener<T>({
     leaf,
     dispatch: options.dispatch,
@@ -202,6 +190,15 @@ export async function startClaudeIntercept<T>(options: StartClaudeInterceptOptio
   } catch (error) {
     await listener.stop(true);
     throw new ClaudeInterceptProxyBindError(error, claudeInterceptProxyPort(options.config, options.publicPort));
+  }
+  // Publish only a successfully bound endpoint, using the handle's actual port. A failed
+  // fixed-port bind leaves settings untouched; an ephemeral test binder never publishes :0
+  // or a probed port another process can steal. Only stale, owned env blocks are rewritten.
+  try {
+    migrateClaudeInterceptSettings(buildClaudeInterceptEnv(proxy.port, claudeInterceptCaCertPath(configDir), authToken));
+  } catch (error) {
+    // Ensure/apply retries a skipped migration; upgraded clients otherwise keep hitting 407.
+    console.warn(`[claude-intercept] settings migration skipped: ${error instanceof Error ? error.message : String(error)}`);
   }
   // Widened on purpose: assignments happen in nested awaits the catch below must still see.
   let picker = null as PickerRuntime | null;

@@ -77,6 +77,10 @@ describe("MiniMax Coding Plan Combo image input", () => {
         expect(comboImagesSupported(
           [{ provider: region, model: M3 }, { provider: "other", model: "blind" }],
           [...rows, { provider: "other", id: "blind", inputModalities: ["text"] }],
+        )).toBe(true); // a text-only member is covered by the Vision Sidecar
+        expect(comboImagesSupported(
+          [{ provider: region, model: M3 }, { provider: "other", model: "listener" }],
+          [...rows, { provider: "other", id: "listener", inputModalities: ["audio"] }],
         )).toBe(false);
       }
     }
