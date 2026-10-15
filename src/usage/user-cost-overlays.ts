@@ -18,7 +18,7 @@
  *
  * Display-time estimation only — these rows never affect billing.
  */
-import type { OcxConfig, OcxProviderConfig, ProviderCostOverlay } from "../types";
+import type { OcxConfig, OcxProviderConfig, ProviderCostOverlay, PromptLengthPricing } from "../types";
 import { MAX_COST4_RATE, type ExpectedPriceOverlay } from "./expected-prices";
 import { redactSecretString } from "../lib/redact";
 import { isSelectableCodexPoolAccount, MAIN_CODEX_ACCOUNT_ID } from "../codex/account-id";
@@ -247,11 +247,37 @@ export function isValidCost4Rate(rate: unknown): rate is number {
     && rate <= MAX_COST4_RATE;
 }
 
-/** True when `value` is a complete cost entry: all four rates are non-negative finite numbers. */
-function validCost4(value: unknown): value is ProviderCostOverlay {
+/** Complete base rates with a valid optional policy; extra top-level fields are never copied. */
+export function validCost4(value: unknown): value is ProviderCostOverlay {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const entry = value as Record<string, unknown>;
-  return COST4_RATE_KEYS.every(key => isValidCost4Rate(entry[key]));
+  return COST4_RATE_KEYS.every(key => Object.hasOwn(entry, key) && isValidCost4Rate(entry[key]))
+    && (!Object.hasOwn(entry, "promptLengthPricing") || isValidPromptLengthPricing(entry.promptLengthPricing));
+}
+
+/** Strict nested policy boundary; diagnostics never echo untrusted policy fields. */
+export function isValidPromptLengthPricing(value: unknown): value is PromptLengthPricing {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const policy = value as Record<string, unknown>;
+  if (!Object.hasOwn(policy, "mode")) return false;
+  if (policy.mode === "automatic" || policy.mode === "flat") return Object.keys(policy).length === 1;
+  if (policy.mode !== "custom" || Object.keys(policy).length !== 4
+    || !["mode", "thresholdTokens", "comparison", "rates"].every(key => Object.hasOwn(policy, key))
+    || typeof policy.thresholdTokens !== "number" || !Number.isSafeInteger(policy.thresholdTokens)
+    || policy.thresholdTokens <= 0 || (policy.comparison !== "gt" && policy.comparison !== "gte")) return false;
+  const rates = policy.rates;
+  return !!rates && typeof rates === "object" && !Array.isArray(rates)
+    && Object.keys(rates).length === COST4_RATE_KEYS.length
+    && COST4_RATE_KEYS.every(key => Object.hasOwn(rates, key) && isValidCost4Rate((rates as Record<string, unknown>)[key]));
+}
+
+/** Copy a validated override; automatic is represented by absence. */
+export function copyPromptLengthPricing(policy: PromptLengthPricing): PromptLengthPricing | undefined {
+  if (policy.mode === "automatic") return undefined;
+  if (policy.mode !== "custom") return { mode: policy.mode };
+  const { input, output, cacheRead, cacheWrite } = policy.rates;
+  return { mode: "custom", thresholdTokens: policy.thresholdTokens, comparison: policy.comparison,
+    rates: { input, output, cacheRead, cacheWrite } };
 }
 
 /**
@@ -273,10 +299,11 @@ export function refreshUserCostOverlays(config: OcxConfig): void {
       if (!costs || typeof costs !== "object" || Array.isArray(costs)) continue;
       for (const [modelId, cost4] of Object.entries(costs)) {
         if (!modelId.trim() || !validCost4(cost4)) continue;
+        const policy = cost4.promptLengthPricing && copyPromptLengthPricing(cost4.promptLengthPricing);
         rows.push({
           provider: providerName,
           modelId,
-          // Copy ONLY the four validated rate fields: a hand-edited row may
+          // Copy only validated rates and policy: a hand-edited row may
           // carry extra properties (e.g. a misplaced apiKey) that must never
           // reach display estimates or /api/logs through the registry.
           cost4: {
@@ -285,6 +312,7 @@ export function refreshUserCostOverlays(config: OcxConfig): void {
             cacheRead: cost4.cacheRead,
             cacheWrite: cost4.cacheWrite,
           },
+          ...(policy ? { promptLengthPricing: policy } : {}),
           // Display provenance only: redact token-shaped provider/model ids so
           // the source string can never echo a pasted key. Matching still uses
           // the raw fields, and the change-detection signature below MUST keep
