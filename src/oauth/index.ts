@@ -5,7 +5,6 @@ import type { OcxConfig, OcxProviderConfig, RefreshPolicy } from "../types";
 import { getDefaultConfig, initializePersistedConfigIfMissing, loadConfig, mutatePersistedConfig, observeInitialConfigState, saveConfig } from "../config";
 import { resolveProviderApiKey } from "../providers/key-store";
 import { projectEmail } from "../lib/privacy";
-import { createAdmissionGate } from "../lib/admission";
 import { KiroTokenRefreshError, environmentKiroRoutingMetadata, loginKiro, refreshKiroToken, settleKiroLoginTransaction } from "./kiro";
 import { KiroUserIdentityUnavailableError, kiroReauthIdentityMatches } from "./kiro-account-identity";
 import {
@@ -60,6 +59,8 @@ import { providerModelsUrl, resolveProviderModelDiscoveryUrl } from "../provider
 import { resolveProviderTransport } from "../providers/xai-transport";
 import { detectGrokCliToken, hasComparableGrokIdentity, isSameGrokIdentity, shouldAdoptGrokGeneration } from "./local-token-detect";
 import { logOAuthEvent } from "./log";
+import { MAX_OAUTH_TOKEN_REFRESH_WAITERS, retireSettledOAuthRefreshFlight, tokenRefreshWaiters, type OAuthRefreshFlightEvidence } from "./refresh-flight-retirement";
+export { MAX_OAUTH_TOKEN_REFRESH_WAITERS };
 import { captureConfigGeneration, sweepExpiredOnWrite } from "../lib/state-store-sweeper";
 import { admitLoginFlow, classifyLoginCodeError, clearManualCodeSlot, CodeLoginUnsupportedError, ensureManualCodeSlot, kiroLoginSettling, latestLoginFlowKey, loginAbort, loginFlowProvider, loginState, recordStartedLoginFlow, settleLoginFlow, waitForManualLoginCode, type LoginCodeError, type OAuthLoginHint } from "./login-flow-state";
 export { cancelLoginFlow, clearLoginState, CodeLoginUnsupportedError, isCodeLoginFlow, loginFlowAccountId, reconcileOAuthFlowState, submitLoginCode, submitManualLoginCode, waitForLoginSettled } from "./login-flow-state";
@@ -135,11 +136,7 @@ export type OAuthActiveTokenObservation =
   | { readonly kind: "unsupported" };
 
 const MAX_OAUTH_TOKEN_REFRESH_FLIGHTS = 32;
-/** Independent of client lifetime; a cancelled caller can still be awaiting a shared refresh. */
-export const MAX_OAUTH_TOKEN_REFRESH_WAITERS = 256;
-const tokenRefreshWaiters = createAdmissionGate("oauth_token_refresh_waiters", MAX_OAUTH_TOKEN_REFRESH_WAITERS);
 const OAUTH_TOKEN_REFRESH_FLIGHT_STALE_MS = 120_000;
-interface OAuthRefreshFlightEvidence { flightId: string; dispatched: boolean }
 interface OAuthTokenRefreshFlight extends OAuthRefreshFlightEvidence { promise: Promise<OAuthAccessSnapshot>; startedAt: number; abort: AbortController; settled?: boolean; retirementDeferredLogged?: boolean }
 const tokenRefreshes = new Map<string, OAuthTokenRefreshFlight>();
 export class OAuthTokenRefreshBusyError extends Error {
@@ -614,35 +611,6 @@ export function observeActiveOAuthAccessToken(
   };
 }
 
-// Retire only after the old attempt has finished its definitive-result cleanup. A provider
-// may ignore abort; marking its intent sooner would poison a late, safely retryable rejection.
-// Failed durable retirement retains the same bounded registry slot for a later retry.
-function retireSettledOAuthRefreshFlight(key: string, flight: OAuthTokenRefreshFlight): boolean {
-  if (!flight.settled) return false;
-  const [provider, accountId] = key.split("\0");
-  const defer = (reason: "uncertain_intent" | "intent_changed" | "storage_failure"): false => {
-    if (!flight.retirementDeferredLogged) {
-      flight.retirementDeferredLogged = true;
-      logOAuthEvent("OAuth refresh flight retirement deferred", { provider: provider ?? "unknown", reason });
-    }
-    return false;
-  };
-  try {
-    if (provider && accountId && isAnthropicOAuthInstance(provider)) {
-      const intent = readOAuthRefreshIntent(provider, accountId);
-      if (intent?.uncertain) return defer("uncertain_intent");
-      if (intent?.flightId === flight.flightId && !intent.staleOwner && !intent.cleanupPending) {
-        const retired = flight.dispatched
-          ? markOAuthRefreshIntentStaleOwner(provider, accountId, intent.generation, flight.flightId)
-          : clearObservedAnthropicRefreshIntent(provider, accountId, intent);
-        if (!retired) return defer("intent_changed");
-      }
-    }
-  } catch { return defer("storage_failure"); }
-  if (tokenRefreshes.get(key) === flight) tokenRefreshes.delete(key);
-  return true;
-}
-
 async function resolveAccessSnapshotForAccount(
   provider: string,
   accountId: string,
@@ -684,7 +652,7 @@ async function resolveAccessSnapshotForAccount(
       // through definitive-result cleanup and durable retirement, even with spare capacity.
       // In particular, an ignored abort must not mark a late explicit rejection as uncertain.
       await existing.promise.catch(() => {});
-      if (tokenRefreshes.get(key) === existing && !retireSettledOAuthRefreshFlight(key, existing)) {
+      if (tokenRefreshes.get(key) === existing && !retireSettledOAuthRefreshFlight(tokenRefreshes, key, existing)) {
         throw new OAuthTokenRefreshStaleError();
       }
       // Other admitted replacements may have resumed first and installed the next flight.
@@ -696,7 +664,7 @@ async function resolveAccessSnapshotForAccount(
     }
     if (tokenRefreshes.size >= MAX_OAUTH_TOKEN_REFRESH_FLIGHTS) {
       for (const [staleKey, stale] of tokenRefreshes) {
-        if (stale.abort.signal.reason instanceof OAuthTokenRefreshStaleError) retireSettledOAuthRefreshFlight(staleKey, stale);
+        if (stale.abort.signal.reason instanceof OAuthTokenRefreshStaleError) retireSettledOAuthRefreshFlight(tokenRefreshes, staleKey, stale);
       }
       if (tokenRefreshes.size >= MAX_OAUTH_TOKEN_REFRESH_FLIGHTS) throw new OAuthTokenRefreshBusyError();
     }
@@ -726,7 +694,7 @@ async function resolveAccessSnapshotForAccount(
       flight.settled = true;
       if (tokenRefreshes.get(key) !== flight) return;
       if (abort.signal.reason instanceof OAuthTokenRefreshStaleError) {
-        retireSettledOAuthRefreshFlight(key, flight);
+        retireSettledOAuthRefreshFlight(tokenRefreshes, key, flight);
       } else tokenRefreshes.delete(key);
     });
     flight.promise = refresh;
