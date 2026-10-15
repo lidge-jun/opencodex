@@ -217,7 +217,7 @@ export interface ProviderRegistryEntry {
    * at one keeps receiving this row's metadata through `registryEntryForProviderDestination`.
    * Destination matching is by adapter plus normalized base URL, so moving a row's wire or
    * prefix would otherwise orphan every config a user wrote against the old address. Entries
-   * preserving custom destinations also recognize these aliases for registry transport ownership.
+   * preserving custom destinations also recognize same-adapter aliases for registry transport ownership.
    */
   destinationAliases?: readonly { readonly baseUrl: string; readonly adapter: string }[];
   /**

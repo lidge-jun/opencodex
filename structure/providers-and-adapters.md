@@ -571,7 +571,7 @@ boundary. `src/types/tools.ts` owns tool-name identity: namespaced and dotted na
 normalization, and `tool_choice` alias resolution, so every adapter matches a declared tool the
 same way. `src/types/wire.ts` owns accepted wire enumerations such as the per-provider upstream HTTP-version pin, shared by
 config load, management writes and fetch, so no boundary accepts a value another rejects. It also hard-pins OpenCode Go's
-Anthropic models across runtime and static policy resolution, even with Chat/Responses overrides. Fixed-key entries preserving custom destinations recognize declared destination aliases as registry-owned and retain the configured canonical URL. `src/types/opencode-go.ts` shares exact native pins (including Qwen3.7 Plus/3.8 Max/3.8 Flash) and overridable Responses defaults (including GPT 6 Luna); unknown models retain Chat. `tests/providers/opencode-go-model-protocols.test.ts` covers resolution and dispatch.
+Anthropic models across runtime and static policy resolution, even with Chat/Responses overrides. Fixed-key entries preserving custom destinations recognize same-adapter destination aliases as registry-owned and retain the configured canonical URL. `src/types/opencode-go.ts` shares exact native pins (including Qwen3.7 Plus/3.8 Max/3.8 Flash) and overridable Responses defaults (including GPT 6 Luna); unknown models retain Chat. `tests/providers/opencode-go-model-protocols.test.ts` covers resolution and dispatch.
 
 `src/types/config.ts` declares the optional per-phase `memoryModels` setting;
 `src/types/request.ts` carries the selected phase through combo handoffs without changing the

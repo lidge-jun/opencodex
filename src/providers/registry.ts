@@ -111,7 +111,7 @@ export function providerMatchesRegistryTransport(
   // The opt-in is intentionally limited to fixed key destinations. Fail closed if a future
   // registry edit combines it with an override/template despite the registry parity tests.
   if (entry.allowBaseUrlOverride || /\{[^}]*\}/.test(entry.baseUrl)) return false;
-  if (typeof provider.baseUrl !== "string") return false;
+  if (typeof provider.baseUrl !== "string" || provider.adapter !== entry.adapter) return false;
   if (provider.authMode !== undefined && provider.authMode !== "key") return false;
   return [entry, ...(entry.destinationAliases ?? [])].some(destination => destination.adapter === provider.adapter
     && normalizedProviderEndpoint(provider.baseUrl) === normalizedProviderEndpoint(destination.baseUrl));

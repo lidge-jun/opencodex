@@ -872,6 +872,7 @@
   "opencode-go-deepseek.test.ts": "providers", "opencode-go-grok46-responses.test.ts": "providers",
   "opencode-go-gemini-wire.test.ts": "providers",
   "opencode-go-model-protocols.test.ts": "providers",
+  "registry-transport-alias.test.ts": "providers",
   "opencode-go-luna-wire.test.ts": "providers", "opencode-go-muse-context.test.ts": "providers",
   "opencode-go-muse-vision.test.ts": "providers", "opencode-go-quota.test.ts": "providers",
   "opencode-go-session-header.test.ts": "providers", "opencode-management-transport.test.ts": "providers",
