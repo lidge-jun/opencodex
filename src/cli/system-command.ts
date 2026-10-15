@@ -295,6 +295,11 @@ export function codexRestartLines(result: unknown): string[] {
   const view = recordValue(result);
   const desktop = recordValue(view?.desktopApp);
   const reason = typeof desktop?.reason === "string" ? desktop.reason : undefined;
+  // Only a reported `stale` reading may claim the picker predated the catalog; an unreadable
+  // reading also takes the full restart, and an older proxy reports no reading at all.
+  const why = desktop?.pickerState === "stale"
+    ? "its model picker predated the current catalog"
+    : "its model picker could not be confirmed current";
   const stopped = Array.isArray(view?.stopped) ? view.stopped.length : 0;
   const appServers = view?.code === "stopped"
     ? `Stopped ${stopped} Codex app-server(s); their owners start replacements.`
@@ -308,7 +313,7 @@ export function codexRestartLines(result: unknown): string[] {
   }
   if (reason === "no_targets") return [appServers, "The Codex desktop app is not running."];
   if (desktop?.relaunch === "started") {
-    return [appServers, "The Codex desktop app was quit and relaunched because its model picker predated the current catalog. Unsaved composer drafts, model-picker selections, and pending approval prompts may have been lost."];
+    return [appServers, `The Codex desktop app was quit and relaunched because ${why}. Unsaved composer drafts, model-picker selections, and pending approval prompts may have been lost.`];
   }
   if (desktop?.attempted === true) {
     return [appServers, `The Codex desktop app restart did not complete (${reason ?? "no outcome reported"}). Unsaved composer drafts, model-picker selections, and pending approval prompts may have been lost.`];

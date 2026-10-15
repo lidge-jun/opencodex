@@ -619,6 +619,7 @@ describe("desktop picker freshness decides the desktop restart (#4761)", () => {
     listProcesses: () => [proc(100)],
     readStartMs: () => new Map([[100, 1]]),
     restart: () => ({ requested: [100], stopped: [100], surviving: [], failed: [] }),
+    catalogBinding: async () => "/codex/opencodex-catalog.json",
   };
   const relaunched = { attempted: true, stopped: [7], surviving: [], relaunch: "started" as const };
 
@@ -630,7 +631,9 @@ describe("desktop picker freshness decides the desktop restart (#4761)", () => {
       restartDesktopApp: async () => { desktopRestarts += 1; return relaunched; },
     }));
     expect(desktopRestarts).toBe(0);
-    expect(result.desktopApp).toEqual({ attempted: false, stopped: [], surviving: [], relaunch: "skipped", reason: "picker_current" });
+    expect(result.desktopApp).toEqual({
+      attempted: false, stopped: [], surviving: [], relaunch: "skipped", reason: "picker_current", pickerState: "current",
+    });
     expect(result.code).toBe("stopped");
     expect(result.stopped).toEqual([100]);
     expect(isCodexRestartResponse(result)).toBe(true);
@@ -639,17 +642,18 @@ describe("desktop picker freshness decides the desktop restart (#4761)", () => {
   test("a closed desktop app is reported as not running without a restart attempt", async () => {
     let desktopRestarts = 0;
     const result = await performCodexRestart(baseIo({
+      catalogBinding: staleServers.catalogBinding,
       desktopPickerState: async () => "not_running",
       restartDesktopApp: async () => { desktopRestarts += 1; return relaunched; },
     }));
     expect(desktopRestarts).toBe(0);
-    expect(result.desktopApp?.reason).toBe("no_targets");
+    expect(result.desktopApp).toMatchObject({ reason: "no_targets", pickerState: "not_running" });
   });
 
-  for (const [label, state] of [
-    ["a picker older than the catalog", async () => "stale" as const],
-    ["an unreadable picker state", async () => "unknown" as const],
-    ["a picker probe that throws", async (): Promise<"stale"> => { throw new Error("probe failed"); }],
+  for (const [label, state, reported] of [
+    ["a picker older than the catalog", async () => "stale" as const, "stale"],
+    ["an unreadable picker state", async () => "unknown" as const, "unknown"],
+    ["a picker probe that throws", async (): Promise<"stale"> => { throw new Error("probe failed"); }, "unknown"],
   ] as const) {
     test(`${label} falls back to the full desktop restart`, async () => {
       let desktopRestarts = 0;
@@ -659,17 +663,46 @@ describe("desktop picker freshness decides the desktop restart (#4761)", () => {
         restartDesktopApp: async () => { desktopRestarts += 1; return relaunched; },
       }));
       expect(desktopRestarts).toBe(1);
-      expect(result.desktopApp).toEqual(relaunched);
+      expect(result.desktopApp).toEqual({ ...relaunched, pickerState: reported });
       expect(result.stopped).toEqual([100]);
+      expect(isCodexRestartResponse(result)).toBe(true);
     });
   }
 
-  test("the picker is judged after the catalog sync, against the catalog it must show", async () => {
+  for (const [label, bindings] of [
+    ["a sync that installs the catalog binding", [null, "/codex/opencodex-catalog.json"]],
+    ["a sync that moves the catalog binding", ["/codex/old.json", "/codex/opencodex-catalog.json"]],
+    ["an unreadable binding", ["/codex/opencodex-catalog.json", new Error("unreadable")]],
+  ] as const) {
+    test(`${label} restarts the desktop without trusting the mtime probe`, async () => {
+      // The catalog bytes did not change, so its mtime still predates the shell; only the
+      // binding the shell loaded at launch did.
+      let probes = 0;
+      let reads = 0;
+      let desktopRestarts = 0;
+      const result = await performCodexRestart(baseIo({
+        ...staleServers,
+        catalogBinding: async () => {
+          const value = bindings[Math.min(reads++, 1)];
+          if (value instanceof Error) throw value;
+          return value;
+        },
+        desktopPickerState: async () => { probes += 1; return "current"; },
+        restartDesktopApp: async () => { desktopRestarts += 1; return relaunched; },
+      }));
+      expect(probes).toBe(0);
+      expect(desktopRestarts).toBe(1);
+      expect(result.desktopApp?.pickerState).toBe("stale");
+    });
+  }
+
+  test("the binding is read around the sync and the picker is judged after it", async () => {
     const order: string[] = [];
     await performCodexRestart(baseIo({
+      catalogBinding: async () => { order.push("binding"); return null; },
       syncCatalog: async () => { order.push("sync"); return true; },
       desktopPickerState: async () => { order.push("picker"); return "current"; },
     }));
-    expect(order).toEqual(["sync", "picker"]);
+    expect(order).toEqual(["binding", "sync", "binding", "picker"]);
   });
 });

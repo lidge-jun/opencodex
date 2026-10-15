@@ -47,7 +47,16 @@ export interface CodexDesktopRestartSummary {
   surviving: number[];
   relaunch: "started" | "skipped";
   reason?: string;
+  /**
+   * Why the desktop was or was not restarted: `stale` (the shell predates the bound
+   * catalog, or this request rebound it) and `unknown` (the evidence was unreadable) both
+   * take the full restart. Absent on a proxy older than #4761.
+   */
+  pickerState?: CodexDesktopPickerState;
 }
+
+export type CodexDesktopPickerState = "current" | "stale" | "unknown" | "not_running";
+const DESKTOP_PICKER_STATES: readonly string[] = ["current", "stale", "unknown", "not_running"];
 
 /** POST response. All four arrays are pid lists — never command lines. */
 export interface CodexRestartResponse {
@@ -134,6 +143,8 @@ export function isCodexRestartResponse(value: unknown): value is CodexRestartRes
     if (!isPidList(d.stopped) || !isPidList(d.surviving)) return false;
     if (d.relaunch !== "started" && d.relaunch !== "skipped") return false;
     if (d.reason !== undefined && typeof d.reason !== "string") return false;
+    if (d.pickerState !== undefined
+      && (typeof d.pickerState !== "string" || !DESKTOP_PICKER_STATES.includes(d.pickerState))) return false;
     // A started relaunch cannot have left anything behind: the ladder refuses to
     // relaunch beside a survivor precisely so a second shell never appears.
     if (d.relaunch === "started" && (d.surviving as number[]).length > 0) return false;

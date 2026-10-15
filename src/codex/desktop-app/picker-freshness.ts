@@ -13,17 +13,26 @@
  * written. The catalog writer skips byte-identical rewrites to keep this mtime honest
  * (`src/codex/catalog/retained-sync.ts`), which is what makes the comparison usable.
  *
+ * The mtime only means something for the catalog `config.toml` actually binds. With no
+ * `model_catalog_json` the shell shows Codex's own roster, which no local file dates, so
+ * an unbound config is `unknown`. `config.toml`'s own mtime is no substitute: injection
+ * rewrites it on every sync even when the bytes are identical. A binding changed by THIS
+ * request's sync is caught by the caller comparing it across the sync; one changed by an
+ * earlier sync over a byte-identical catalog file is not observable here.
+ *
  * Anything we cannot read answers `unknown`, and the caller falls back to the full
  * desktop restart: a stale picker the operator asked us to fix is the failure this
  * command exists to prevent, so missing evidence never skips it.
  */
-import { statSync } from "node:fs";
-import { readCodexCatalogPath } from "../catalog/parsing";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { activeCodexConfigPath, resolveActiveCodexConfigPath } from "../catalog/parsing";
+import { readRootTomlString } from "../paths";
 import { readProcessStartMsBatch } from "../app-server-processes";
 import { listCodexDesktopShellPids, type DesktopAppRestartIo } from "../desktop-app-restart";
 import { isTestHomeGuardArmed } from "../../lib/test-home-guard";
+import type { CodexDesktopPickerState } from "../../lib/codex-restart-contract";
 
-export type DesktopPickerState = "not_running" | "current" | "stale" | "unknown";
+export type DesktopPickerState = CodexDesktopPickerState;
 
 /**
  * Pure decision. `shellStartsMs === null` means the shells could not be listed; a null
@@ -45,12 +54,26 @@ export function classifyDesktopPicker(
 
 export interface DesktopPickerIo extends DesktopAppRestartIo {
   readStartMs?: (pids: readonly number[]) => Map<number, number | null>;
-  catalogMtimeMs?: () => number | null;
+  /** The catalog `config.toml` binds, or null when it binds none or cannot be read. */
+  catalogBinding?: () => string | null;
+  catalogMtimeMs?: (path: string) => number | null;
 }
 
-function defaultCatalogMtimeMs(): number | null {
+/** The resolved `model_catalog_json` path, or null when config.toml binds no catalog. */
+export function readCodexCatalogBinding(): string | null {
   try {
-    return statSync(readCodexCatalogPath()).mtimeMs;
+    const configPath = activeCodexConfigPath();
+    if (!existsSync(configPath)) return null;
+    const path = readRootTomlString(readFileSync(configPath, "utf-8"), "model_catalog_json");
+    return path ? resolveActiveCodexConfigPath(path) : null;
+  } catch {
+    return null;
+  }
+}
+
+function defaultCatalogMtimeMs(path: string): number | null {
+  try {
+    return statSync(path).mtimeMs;
   } catch {
     return null;
   }
@@ -65,8 +88,9 @@ export function readCodexDesktopPickerState(io: DesktopPickerIo = {}): DesktopPi
   const pids = listCodexDesktopShellPids(io);
   if (pids === null || pids.length === 0) return classifyDesktopPicker(pids, null);
   const starts = (io.readStartMs ?? (list => readProcessStartMsBatch(list, platform)))(pids);
+  const binding = (io.catalogBinding ?? readCodexCatalogBinding)();
   return classifyDesktopPicker(
     pids.map(pid => starts.get(pid) ?? null),
-    (io.catalogMtimeMs ?? defaultCatalogMtimeMs)(),
+    binding === null ? null : (io.catalogMtimeMs ?? defaultCatalogMtimeMs)(binding),
   );
 }

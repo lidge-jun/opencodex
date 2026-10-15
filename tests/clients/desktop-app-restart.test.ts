@@ -1,14 +1,15 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { listCodexDesktopShellPids, restartCodexDesktopApp, type DesktopAppRestartIo } from "../../src/codex/desktop-app-restart";
-import { classifyDesktopPicker, readCodexDesktopPickerState } from "../../src/codex/desktop-app/picker-freshness";
+import { classifyDesktopPicker, readCodexCatalogBinding, readCodexDesktopPickerState } from "../../src/codex/desktop-app/picker-freshness";
 import type { DesktopAppAdapter, DesktopProcess } from "../../src/codex/desktop-app/types";
 import { windowsDesktopAppAdapter } from "../../src/codex/desktop-app/windows";
 import { handleDesktopAppRestart } from "../../src/cli/restart-scope";
 import { setTrustedWindowsElevationExecutablesForTests } from "../../src/lib/windows-elevation";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 /**
  * #2292: the desktop restart is the one path in the CLI that terminates a user's
@@ -571,16 +572,38 @@ describe("desktop picker freshness inputs (#4761)", () => {
     expect(classifyDesktopPicker([2_000], null)).toBe("unknown");
   });
 
-  test("reads shell start times and the catalog mtime through its seams", () => {
-    const read = (catalogMtimeMs: number | null, starts: Map<number, number | null>) => readCodexDesktopPickerState({
+  test("reads shell start times and the bound catalog's mtime through its seams", () => {
+    const read = (binding: string | null, catalogMtimeMs: number | null, starts: Map<number, number | null>) => readCodexDesktopPickerState({
       adapter: fixtureAdapter(listed), execFile: exec,
       readStartMs: pids => { expect(pids).toEqual([10]); return starts; },
-      catalogMtimeMs: () => catalogMtimeMs,
+      catalogBinding: () => binding,
+      catalogMtimeMs: path => { expect(path).toBe("/codex/opencodex-catalog.json"); return catalogMtimeMs; },
     });
-    expect(read(1_000, new Map([[10, 5_000]]))).toBe("current");
-    expect(read(9_000, new Map([[10, 5_000]]))).toBe("stale");
-    expect(read(1_000, new Map([[10, null]]))).toBe("unknown");
-    expect(read(null, new Map([[10, 5_000]]))).toBe("unknown");
+    const bound = "/codex/opencodex-catalog.json";
+    expect(read(bound, 1_000, new Map([[10, 5_000]]))).toBe("current");
+    expect(read(bound, 9_000, new Map([[10, 5_000]]))).toBe("stale");
+    expect(read(bound, 1_000, new Map([[10, null]]))).toBe("unknown");
+    expect(read(bound, null, new Map([[10, 5_000]]))).toBe("unknown");
+    // No model_catalog_json: the shell shows Codex's own roster, which no local file dates.
+    expect(read(null, 1_000, new Map([[10, 5_000]]))).toBe("unknown");
+  });
+
+  test("the catalog binding is the configured model_catalog_json, never the default-path fallback", () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-picker-binding-"));
+    const previous = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = home;
+    try {
+      expect(readCodexCatalogBinding()).toBeNull();
+      writeFileSync(join(home, "config.toml"), 'model = "gpt-5.5"\n');
+      writeFileSync(join(home, "opencodex-catalog.json"), "{}\n");
+      expect(readCodexCatalogBinding()).toBeNull();
+      writeFileSync(join(home, "config.toml"), 'model_catalog_json = "opencodex-catalog.json"\n');
+      expect(readCodexCatalogBinding()).toBe(join(realpathSync.native(home), "opencodex-catalog.json"));
+    } finally {
+      if (previous === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previous;
+      removeTreeWithRetry(home);
+    }
   });
 
   test("an armed test process without an injected executor never probes the real app", () => {

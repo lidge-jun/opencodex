@@ -61,8 +61,12 @@ describe("ocx system codex-restart confirmation", () => {
   test.each([
     [{ code: "stopped", stopped: [1, 2], desktopApp: { attempted: false, relaunch: "skipped", reason: "picker_current" } },
       ["Stopped 2 Codex app-server(s)", "left running", "unsaved drafts and pending approvals were kept"], ["may have been lost"]],
+    [{ code: "stopped", stopped: [1], desktopApp: { attempted: true, relaunch: "started", stopped: [9], surviving: [], pickerState: "stale" } },
+      ["quit and relaunched", "predated the current catalog", "may have been lost"], ["left running", "could not be confirmed"]],
+    [{ code: "stopped", stopped: [1], desktopApp: { attempted: true, relaunch: "started", stopped: [9], surviving: [], pickerState: "unknown" } },
+      ["quit and relaunched", "could not be confirmed current", "may have been lost"], ["predated"]],
     [{ code: "stopped", stopped: [1], desktopApp: { attempted: true, relaunch: "started", stopped: [9], surviving: [] } },
-      ["quit and relaunched", "predated the current catalog", "may have been lost"], ["left running"]],
+      ["quit and relaunched", "could not be confirmed current"], ["predated"]],
     [{ code: "nothing_running", stopped: [], desktopApp: { attempted: true, relaunch: "skipped", reason: "relaunch_failed" } },
       ["restart did not complete (relaunch_failed)", "may have been lost"], ["left running"]],
     [{ code: "enumeration_unavailable", stopped: [], desktopApp: { attempted: false, relaunch: "skipped", reason: "no_targets" } },
