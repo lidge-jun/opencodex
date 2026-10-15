@@ -32,6 +32,17 @@ describe("OpenCode Go documented per-model protocols (2026-10-15)", () => {
     }
   });
 
+  for (const model of ["qwen3.7-plus", "qwen3.8-max", "qwen3.8-flash"]) {
+    test(`${model} does not pin custom destinations or non-key auth`, () => {
+      for (const overrides of [{ baseUrl: "https://custom.invalid/v1" }, { authMode: "oauth" }, { authMode: "forward" }] as const) {
+        const provider = { ...go(), ...overrides, modelAdapters: { [model]: "openai-responses" } };
+        expect(resolveWireProtocolOverride("opencode-go", model, provider).adapter).toBe("openai-responses");
+        expect(captureRouteStaticPolicy("opencode-go", model, provider).model.adapter).toBe("openai-responses");
+        expect(fastPolicyForModel(provider, model, "opencode-go").adapter).toBe("openai-responses");
+      }
+    });
+  }
+
   test("Luna retains an explicit Chat opt-out and unknown siblings remain Chat", () => {
     const provider = { ...go(), modelAdapters: { "gpt-6-luna": "openai-chat" } };
     expect(resolveWireProtocolOverride("opencode-go", "gpt-6-luna", provider).adapter).toBe("openai-chat");

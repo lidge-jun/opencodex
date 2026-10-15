@@ -21,6 +21,11 @@ export const OPENCODE_GO_MODEL_WIRES: Readonly<Record<string, "google" | "anthro
   "union-alpha": "anthropic",
 });
 
+/** Compatibility: these five pins predate destination scoping. New native pins require Go. */
+export const OPENCODE_GO_LEGACY_NAME_PINS: ReadonlySet<string> = new Set([
+  "claude-haiku-5-5", "minimax-m2.5", "minimax-m2.7", "minimax-m3", "union-alpha",
+]);
+
 export const OPENCODE_GO_RESPONSES_DEFAULTS = Object.freeze(Object.fromEntries(
   Object.entries(OPENCODE_GO_MODEL_WIRES).filter(([, wire]) => wire === "openai-responses"),
 ));

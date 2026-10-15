@@ -200,23 +200,20 @@ describe("Console destination and translated recovery controls", () => {
     globalThis.fetch = (async input => { outbound.push(String(input)); return refusal(); }) as typeof fetch;
     const response = await handleResponses(request(false, "opencode-go"), cfg, { model: "", provider: "" });
     expect(response.status).toBe(400);
-    // Canonical row names normalize their base URL. A configured send path survives
-    // that normalization and reaches the effective-destination recovery gate.
+    // The canonical Go destination retains its configured send path, which reaches
+    // the effective-destination recovery gate.
     expect(outbound).toEqual(["https://opencode.ai/zen/go/v1/unrelated"]);
     expect(await response.text()).toContain("Invalid upload request.");
   });
 
-  test("normalization to the canonical endpoint keeps its bounded recovery", async () => {
+  test("a same-named custom destination remains custom and does not authorize Go replay", async () => {
     const cfg = config();
     cfg.providers["opencode-go"] = { ...cfg.providers.go!, baseUrl: "https://other.example.test/v1" };
     const outbound: string[] = [];
     globalThis.fetch = (async input => { outbound.push(String(input)); return refusal(); }) as typeof fetch;
     const response = await handleResponses(request(false, "opencode-go"), cfg, { model: "", provider: "" });
     expect(response.status).toBe(400);
-    expect(outbound).toEqual([
-      "https://opencode.ai/zen/go/v1/responses",
-      "https://opencode.ai/zen/go/v1/responses",
-    ]);
+    expect(outbound).toEqual(["https://other.example.test/v1/responses"]);
     expect(await response.text()).toContain("Invalid upload request.");
   });
 

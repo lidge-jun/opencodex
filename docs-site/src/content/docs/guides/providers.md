@@ -724,7 +724,9 @@ streaming and tool-result continuations. This applies to the built-in Go endpoin
 saved under the same provider name retains its own URL and does not receive this pin.
 Go selects protocols by exact model ID: GPT 6 Luna, GPT 5.6 Luna, Grok 4.6/4.7 and
 Muse Spark Contributor use Responses; Claude Haiku 5.5, MiniMax M2.7/M3 and
-Qwen3.7 Plus/3.8 Max/3.8 Flash use Anthropic Messages. Other models retain Chat.
+Qwen3.7 Plus/3.8 Max/3.8 Flash use Anthropic Messages. Legacy MiniMax M2.5 and
+Union Alpha also retain Messages. Models without a listed wire retain Chat.
+New native pins apply only to canonical Go destinations with key authentication.
 Responses models still accept an explicit `modelAdapters` override.
 Gemini uses `low`, `medium` and `high` thinking levels; higher requested efforts clamp to `high`.
 
