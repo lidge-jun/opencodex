@@ -1652,11 +1652,12 @@ export async function runLogin(
       // Proven same account: a reauth whose tier read failed keeps the stored label.
       const reauthPlan = mergeOAuthPlan(cred, existing);
       const reauthCred = reauthPlan === undefined ? cred : { ...cred, plan: reauthPlan };
-      await (deps.saveAccountCredential ?? saveAccountCredential)(provider, opts.reauthAccountId, reauthCred, {
+      const written = await (deps.saveAccountCredential ?? saveAccountCredential)(provider, opts.reauthAccountId, reauthCred, {
         assertBeforePersist: deps.assertCurrentOwner,
         rotateLoginId: true,
       });
-      deps.onAccountPersisted?.(opts.reauthAccountId);
+      // A reauth whose account was deleted meanwhile wrote nothing and owns no row to report.
+      if (written) deps.onAccountPersisted?.(opts.reauthAccountId);
     } else {
       const saveOptions = {
         preserveIdentityless: opts?.forceLogin === true || (provider === "anthropic" && cred.source === "local-cli"),
