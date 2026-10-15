@@ -1,4 +1,5 @@
 import { MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT } from "../../codex/quota-types";
+import { validRemainingQuotaAccountIds } from "../../codex/account-use-remaining";
 import * as z from "zod/v4";
 import { anthropicAccountPoolSchema } from "./anthropic-account-pool";
 import { compactionRecoverySchema } from "./compaction-recovery";
@@ -50,6 +51,7 @@ import {
   providerHeadersConfigError,
   providerForwardClientHeadersConfigError,
   reasoningSummaryDeliveryRecordConfigError,
+  credentialPinnedProviderConfigError,
 } from "../provider-validation";
 import {
   CODEX_ACCOUNT_NAMESPACE_COMBO_ALIAS_COLLISION_ERROR,
@@ -296,6 +298,7 @@ export const configSchema = z.object({
   // so a hand-edited typo cannot trip the backup-and-defaults repair path; the write path rejects
   // it (creditCodexAccountIdsError in diagnostics).
   creditCodexAccountIds: z.array(z.string().regex(/^[a-zA-Z0-9._-]{1,64}$/)).optional().catch(undefined),
+  codexUseRemainingQuotaAccountIds: z.custom<string[]>(validRemainingQuotaAccountIds).optional().catch(undefined),
   // A malformed policy degrades to "no policy" rather than failing the parse, so a hand-edited
   // typo cannot trip the backup-and-defaults repair path and wipe providers or pool accounts.
   // Silently ignoring it would be its own trap, so the write path rejects it and loadConfig warns.
@@ -311,6 +314,7 @@ export const configSchema = z.object({
   codexAccountAutoSwitchThresholds: z.unknown().optional().transform(salvageCodexAccountAutoSwitchThresholds),
   // An invalid optional preference must not discard providers or credential rows.
   codexAccountPriorityFailback: z.boolean().optional().catch(false),
+  codexPreserveSignedInAccount: z.boolean().optional().catch(false),
   // Absent or invalid keeps the sliding window on. Explicit false restores consecutive-only steering.
   codexFailureWindow: z.boolean().optional().catch(undefined),
   codexPinnedTransientPolicy: z.enum(["hold", "detour-new-threads"]).optional().catch("hold"),
@@ -597,6 +601,10 @@ export const configSchema = z.object({
         path: ["providers", redactSecretString(name), "modelAdapters"],
         message: modelAdaptersError,
       });
+    }
+    const credentialPinError = credentialPinnedProviderConfigError(name, provider);
+    if (credentialPinError) {
+      ctx.addIssue({ code: "custom", path: ["providers", redactSecretString(name)], message: credentialPinError });
     }
     const preferHostedToolsError = modelPreferHostedToolsConfigError(
       (provider as { modelPreferHostedTools?: unknown }).modelPreferHostedTools,

@@ -302,6 +302,7 @@ explicit `lastResort: false`. `--image-input auto|disabled` and
 `--reasoning-effort-mode strict|adaptive` preserve omission, while explicit `auto`
 and `strict` override saved disabled/adaptive values. Reasoning-effort mode is
 separate from `--effort-mode fallback|force`, which governs the default effort.
+`--allow-metered-targets on|off` grants or clears operator consent for marked combo targets on a loopback-only proxy; public and linked callers still need configured-key consent.
 `--native-alias on|off` preserves explicit false; the legacy bare flag means true.
 Turning it off may require the intended alias clear, `--native-alias off --alias -`,
 to avoid retaining an incompatible native alias. Set/rename is an upsert without
@@ -415,7 +416,7 @@ Inspect proxy requests, usage, storage, memory, and debug data. The direct alias
 | Alias | Equivalent resource |
 | --- | --- |
 | `ocx logs [filters] [--follow] [--json|--jsonl|--events]` | `ocx observe logs` |
-| `ocx usage [--range <today|1d|7d|30d|all>] [--since <timestamp> --until <timestamp>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--api-key-id <id>] [--json]` | `ocx observe usage` |
+| `ocx usage [--range <today|1d|7d|30d|all>] [--since <timestamp> --until <timestamp>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--api-key-id <id>] [--search <text>] [--top <1-1000>] [--json]` | `ocx observe usage` |
 | `ocx storage [--json]` | `ocx observe storage` |
 | `ocx memory [--json]` | `ocx observe memory` |
 
@@ -489,7 +490,7 @@ ocx usage --range 7d --search 'model-a' --json
 
 `--search` matches a trimmed case-insensitive substring in model, provider or
 resolved model after reading the report. It sorts model rows by descending total
-tokens with stable ties and keeps up to 100. JSON adds
+tokens with stable ties and keeps up to 100 by default. JSON adds
 `modelView:{query,matchedModelCount,returnedModelCount,limit:100,truncated}`;
 human output labels the view and shows its selected model rows. Report totals,
 provider/day/account rows, exact filters and incomplete/window metadata remain
@@ -499,6 +500,8 @@ An explicit blank query (`--search=`) selects the top-100 view; omitting search
 preserves the existing output. Exact `--provider`/`--model` still scope the
 underlying report. Search does not broaden selected-key or connected-client
 self scope and is never sent as a new Hub API query parameter.
+
+`ocx usage --top 25` (also `ocx observe usage --top 25`) sets the human model table limit to an integer from 1 to 1000. The default is 10, or 100 with `--search`; the limit applies after search filtering. It changes local display only: report totals, provider/account rows and API parameters stay unchanged. With `--json`, a valid `--top` is ignored; JSON retains its existing full report or 100-row search view. Invalid limits return exit 2 before fetching.
 
 ### Saved companion usage totals
 

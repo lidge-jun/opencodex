@@ -182,7 +182,7 @@ describe("meta-muse credential import", () => {
     await expect(loginMetaMuse({}, deps({
       // Mimics the real reader's contract: it resolves null once its deadline fires.
       readKeychain: async () => null,
-    }))).rejects.toThrow(/within 5s/);
+    }))).rejects.toThrow(/Could not read/);
     expect(Date.now() - started).toBeLessThan(5_000);
   });
 

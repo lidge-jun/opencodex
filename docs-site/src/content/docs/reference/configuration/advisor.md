@@ -16,7 +16,7 @@ never sees — even a worker that never spawns anything can be advised.
 
 ## Configuration
 
-On the dashboard **Advisor** page, choose the expert model from the catalog selector. It saves the exact catalog identifier, including native, provider, account-qualified, custom and combo selectors. Disabled models and models awaiting initial selection are not offered as new choices. A saved identifier missing from the selectable catalog remains visible with a warning and is preserved until you choose another model or clear it. Catalog loading failures preserve the selection and provide Retry. Choose a model that can return text advice: the catalog does not guarantee consultation compatibility. The CLI and API continue to accept router-supported model strings.
+On the dashboard **Advisor** page (under the **Subagents** sidebar row), choose the expert model from the catalog selector. It saves the exact catalog identifier, including native, provider, account-qualified, custom and combo selectors. Disabled models and models awaiting initial selection are not offered as new choices. A saved identifier missing from the selectable catalog remains visible with a warning and is preserved until you choose another model or clear it. Catalog loading failures preserve the selection and provide Retry. Choose a model that can return text advice: the catalog does not guarantee consultation compatibility. The CLI and API continue to accept router-supported model strings.
 
 ```json
 {

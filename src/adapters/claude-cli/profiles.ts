@@ -3,7 +3,8 @@ import { clearCodingAgentBinaryCache, type CodingAgentProviderProfile } from "..
 /**
  * Profile for the official Claude Code CLI — Anthropic's own harness (§三十一).
  *
- * The CLI owns the account: OpenCodex stores no Claude token, reads none, and injects none, so a
+ * The CLI owns the account: OpenCodex stores no Claude token and injects none (the usage preflight in
+ * `./usage-admission.ts` only reads it in memory), so a
  * subscription turn is spent through the harness Anthropic ships instead of a replayed Claude Code
  * identity against the Messages API. There is exactly one destination, so the profile carries the
  * single-binary shape of the shared coding-agent seam and no `tokenEnv`.

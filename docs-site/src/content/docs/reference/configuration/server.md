@@ -52,6 +52,12 @@ runs helper features around provider requests.
 | `visionSidecar?` | `OcxVisionSidecarConfig` | on when usable | Image-description sidecar options. |
 | `images?` | `OcxImagesConfig` | automatic OpenAI selection | Standalone Images relay options for Codex `image_gen`. |
 
+On Linux x64/arm64 with pidfd support, service health recovery binds termination to the proxy's
+kernel process identity, so PID reuse cannot redirect it. The sentinel's watching log ends in
+`(pidfd)`. Unsupported kernels or architectures retain the existing live-parent PID check and log
+that fallback; other binding failures disable recovery for that proxy. macOS retains the live-parent
+check, and Windows retains its process handle binding.
+
 While the canonical ChatGPT upstream WebSocket waits for the first Responses event after
 sending the create frame, it watches for liveness rather than a fixed deadline. When the socket
 supports protocol pings, the proxy pings it every 15 seconds. Any inbound frame — quota,
@@ -672,6 +678,21 @@ Messages admission. This setting does not add a global authorization boundary.
 Auto auth selects subscription when stored Claude auth is found, proxy when none is found, and
 subscription with a warning when detection is inconclusive. See
 [Claude Code auth mode](/guides/claude-code/#auth-mode).
+
+## Retained requests after compaction
+
+For translated providers and routed Responses gateways, OpenCodex automatically frames
+plain-text user requests before the latest readable Codex checkpoint as historical context.
+Requests the checkpoint reports as completed should not be repeated; retained text remains
+available for unfinished work within its existing authorization. Later user input takes priority,
+including pauses, cancellations and changes of scope. A checkpoint grants no new permission.
+
+This is enabled by default and needs no setting. Original request text and canonical thread/replay
+history are preserved. Native OpenAI Responses passthrough, summarizer turns, context wrappers,
+images/files and assistant/tool items are unchanged. The framing applies to plaintext checkpoints
+beginning with Codex's summary prefix; decoded OpenCodex checkpoints retain their existing
+continuation guidance. Client-side summarizer turns using Codex's standard compaction prompt
+also bypass framing. Framing is a prompt instruction, so model behavior can vary.
 
 ## Compaction routing
 

@@ -55,6 +55,7 @@ function world(script: Array<"answer" | "timeout" | "refused">, overrides: Parti
     targetExited,
     isTargetGone: () => gone,
     bindTarget: () => ({ ok: true }),
+    closeTarget: () => { events.push("close"); },
     terminateTarget: () => { events.push(`terminate:${TARGET}:${leased ? "leased" : "unleased"}`); exitTarget(); return "terminated"; },
     withOwnershipLease: run => { leased = true; try { return run(); } finally { leased = false; } },
     readHistory: () => [],

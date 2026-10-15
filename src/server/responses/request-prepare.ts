@@ -17,7 +17,7 @@ import {
   unreadableEncryptedAgentTaskResponse,
 } from "./core-errors";
 import { parseSyntheticRowId } from "../fast-row";
-import { resolveComboId, comboIdFromRawBody, NoAvailableComboTargetsError } from "../../combos";
+import { resolveComboId, comboIdFromRawBody, NoAvailableComboTargetsError, pickComboTarget } from "../../combos";
 import { INTERCEPT_TARGET_UNAVAILABLE_CODE, interceptTargetUnavailableResponse, resolveChosenTarget, resolveShadowCallTarget } from "./shadow-target-availability";
 import {
   MEMORY_MODEL_TARGET_UNAVAILABLE_CODE,
@@ -133,6 +133,7 @@ import {
 } from "../../codex/loopback-target";
 import { checkComboTargetInputAdmission, checkInputAdmission } from "./input-admission";
 import {
+  admissionMayUseMeteredComboTargets,
   admissionModelDeniedResponse,
   AdmissionModelDeniedError,
   assertRouteAllowedByScope,
@@ -638,6 +639,16 @@ export async function prepareResponsesRequest(
   }
   const admissionScope = resolveAdmissionModelScope(config, options.admission);
   const captureInboundRoutePolicy = (candidate: RouteResult, captureRequestPolicy = true): RouteResult => {
+    // Router-collapsed aliases bypass the combo loop. Re-pick before capturing destination
+    // policy so random/RR cannot refuse while an unmetered target is still usable.
+    if (candidate.combo?.target.metered && !admissionMayUseMeteredComboTargets(
+      config, options.admission, config.combos?.[candidate.combo.comboId],
+    )) {
+      const pick = pickComboTarget(config, candidate.combo.comboId, { eligible: target => !target.metered });
+      if (!pick) throw new NoAvailableComboTargetsError(candidate.combo.comboId);
+      const routed = routeConcreteModel(config, `${pick.target.provider}/${pick.target.model}`);
+      candidate = { ...routed, combo: pick, routeKind: "combo", routeReason: routed.routeReason === "blocked-model-redirect" ? "blocked-model-redirect" : "combo-pick" };
+    }
     // Every route this request path produces passes through here: the direct
     // name, an alias, a policy or combo selection, a compaction override, a
     // shadow-intercept target and both subagent-fallback re-routes. Checking

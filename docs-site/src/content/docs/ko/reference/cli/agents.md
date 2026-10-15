@@ -88,6 +88,8 @@ ocx route combo set reliable --targets ark/model-a:2,openai/gpt-5.5
 
 ## 관측성과 디버그
 
+`ocx usage --top 25` (`ocx observe usage --top 25`도 동일)는 사람이 읽는 모델 표의 행 수를 1~1000 정수로 지정합니다. 기본값은 10이며 `--search` 사용 시 100입니다. 검색 필터링 후 로컬 표시에만 적용되며 합계, 제공자/계정 행, API 매개변수는 바뀌지 않습니다. `--json`은 유효한 `--top`을 무시하고 기존 전체 보고서 또는 100행 검색 뷰를 유지합니다. 잘못된 값은 요청 전에 종료 코드 2를 반환합니다.
+
 `ocx logs filter --json`은 최근 로그 한 구간을 읽고 조건에 맞는 행을 고릅니다. `--scan-limit`은 읽을 행 수, `--limit`은 출력할 행 수입니다. 결과가 비어 있어도 전체 기록에 일치 항목이 없다는 뜻은 아닙니다. `ocx usage --search <text>`는 모델 행만 검색하고 보고서의 총계와 조회 권한 범위는 유지합니다.
 
 `ocx companion usage --json`은 저장된 모델·공급자 표시 설정으로 오늘과 30일 사용량을 읽습니다. 한 구간이 실패하면 다른 구간은 남기고 `partial: true`와 종료 코드 1을 반환합니다. 설정 기본값을 사용했다면 `settingsFallback`, 손상된 설정의 기본값이라면 `settingsCorrupt`도 확인하세요. 자세한 옵션과 응답은 [영문 CLI 기준 문서](/reference/cli/agents/#filter-a-bounded-log-snapshot)를 참고하세요.
@@ -99,7 +101,7 @@ ocx route combo set reliable --targets ark/model-a:2,openai/gpt-5.5
 | 별칭 | 대응 리소스 |
 | --- | --- |
 | `ocx logs [filters] [--follow] [--json|--jsonl]` | `ocx observe logs` |
-| `ocx usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--json]` | `ocx observe usage` |
+| `ocx usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--search <text>] [--top <1-1000>] [--json]` | `ocx observe usage` |
 | `ocx storage [--json]` | `ocx observe storage` |
 | `ocx memory [--json]` | `ocx observe memory` |
 

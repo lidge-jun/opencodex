@@ -1,5 +1,6 @@
 import { readExistingSpendSalt, spendPoolAliasesError, validatePoolAliasOwners } from "../lib/spend-pool-alias-validation";
 import { isSubagentModelEntry, rawSubagentModelForce } from "./subagent-models";
+import { validRemainingQuotaAccountIds } from "../codex/account-use-remaining";
 import { protocolConfigSchema } from "./schema/config-schema";
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync } from "node:fs";
@@ -406,12 +407,15 @@ function codexAccountPrioritiesError(value: unknown): string | null {
   return null;
 }
 
-function codexAccountPriorityFailbackError(value: unknown): string | null {
+function codexAccountSelectionPreferencesError(value: unknown): string | null {
   const raw = rawConfigRecord(value);
-  if (!raw || !Object.hasOwn(raw, "codexAccountPriorityFailback")) return null;
-  const enabled = raw.codexAccountPriorityFailback;
-  if (enabled === undefined || typeof enabled === "boolean") return null;
-  return "schema_invalid: codexAccountPriorityFailback: must be a boolean or omitted";
+  if (!raw) return null;
+  for (const key of ["codexAccountPriorityFailback", "codexPreserveSignedInAccount"]) {
+    if (raw[key] !== undefined && typeof raw[key] !== "boolean") {
+      return `schema_invalid: ${key}: must be a boolean or omitted`;
+    }
+  }
+  return null;
 }
 
 /**
@@ -505,6 +509,12 @@ function creditCodexAccountIdsError(value: unknown): string | null {
   if (ids === undefined) return null;
   if (Array.isArray(ids) && ids.every(id => typeof id === "string" && /^[a-zA-Z0-9._-]{1,64}$/.test(id))) return null;
   return "schema_invalid: creditCodexAccountIds: must be an array of account ids or omitted";
+}
+
+function remainingQuotaAccountIdsError(value: unknown): string | null {
+  const ids = rawConfigRecord(value)?.codexUseRemainingQuotaAccountIds;
+  return ids === undefined || validRemainingQuotaAccountIds(ids) ? null
+    : "schema_invalid: codexUseRemainingQuotaAccountIds: must be an array of Codex account ids or omitted";
 }
 
 function oauthOpenBrowserError(value: unknown): string | null {
@@ -713,7 +723,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? codexPoolError(value)
     ?? googleAntigravityStaticCatalogVersionError(value)
     ?? codexAccountPrioritiesError(value)
-    ?? codexAccountPriorityFailbackError(value)
+    ?? codexAccountSelectionPreferencesError(value)
     ?? poolCredentialGroupsError(value)
     ?? codexQuotaAutoRefreshError(value)
     ?? codexAccountPickerEnabledError(value)
@@ -722,6 +732,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? oauthOpenBrowserError(value)
     ?? showCodexCreditsError(value)
     ?? creditCodexAccountIdsError(value)
+    ?? remainingQuotaAccountIdsError(value)
     ?? runtimeRoleError(value)
     ?? remoteGuiConfigError(value)
     ?? clientConnectionConfigError(value)

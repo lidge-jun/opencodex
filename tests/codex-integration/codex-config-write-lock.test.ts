@@ -527,7 +527,7 @@ test("a successful feature toggle that atomically replaces config advances the h
     require("node:fs").renameSync(replacement, config);
   }, { configPath: config });
   expect(result).toMatchObject({ ok: true, changed: true, threadLimit: 63 });
-  expect(readFileSync(config, "utf8")).toContain("max_threads = 63");
+  expect(Bun.TOML.parse(readFileSync(config, "utf8")).agents).toEqual({ max_concurrent_threads_per_session: 63 });
 });
 
 describe("SQLite order and retained recovery authority", () => {
