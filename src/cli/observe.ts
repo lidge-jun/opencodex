@@ -35,7 +35,7 @@ const USAGE = `Usage:
   ocx logs index-status
   ocx observe usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok>]
       [--since <epoch-ms|ISO-datetime>] [--until <epoch-ms|ISO-datetime>]
-      [--provider <name>] [--model <id>] [--api-key-id <id>] [--search <text>] [--json]
+      [--provider <name>] [--model <id>] [--api-key-id <id>] [--search <text>] [--top <1-1000>] [--json]
   ocx observe storage [codex-logs [status|protect|unprotect|repair|compact] [--mode <compat|quiet>]] [--json]
   ocx observe memory [--json]
   ocx observe debug [--json]
@@ -174,6 +174,7 @@ async function indexStatus(argv: string[], deps: RuntimeApiDeps): Promise<void> 
 async function usage(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const search = takeUsageSearchOption(args);
+  const top = takeIntegerOption(args, "--top", { min: 1, max: 1000 });
   const wantsJson = takeFlag(args, "--json");
   const range = takeOption(args, "--range") ?? "30d";
   const surface = takeOption(args, "--surface") ?? "all";
@@ -246,10 +247,10 @@ async function usage(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   // the call, so passing formatUsageReport(...) inline would run the human
   // renderer during --json and let its assumptions affect a path that is meant
   // to bypass it entirely.
-  const view = search === undefined ? undefined : selectUsageModelView(result, search);
+  const view = search === undefined ? undefined : selectUsageModelView(result, search, wantsJson ? undefined : top);
   const displayed = view ?? result;
   if (wantsJson) printData(displayed, true);
-  else printData(displayed, false, formatUsageReport(displayed as Parameters<typeof formatUsageReport>[0], view ? { modelView: view.modelView } : undefined));
+  else printData(displayed, false, formatUsageReport(displayed as Parameters<typeof formatUsageReport>[0], { modelView: view?.modelView, modelRowLimit: top }));
 }
 
 async function simple(path: string, argv: string[], deps: RuntimeApiDeps): Promise<void> {

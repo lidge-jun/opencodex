@@ -32,6 +32,13 @@ export class AnthropicInstanceCollisionError extends Error {
   }
 }
 
+export class AnthropicInstanceConfigReadError extends Error {
+  constructor() {
+    super("Cannot verify Anthropic Pool 2 ownership in the existing config file.");
+    this.name = "AnthropicInstanceConfigReadError";
+  }
+}
+
 export function assertAnthropicInstanceLoginConfig(config: Pick<OcxConfig, "providers">, provider: string, credentialWritten = false): void {
   if (provider !== "anthropic2") return;
   const row = config.providers.anthropic2;
@@ -44,11 +51,11 @@ export function assertAnthropicInstanceLoginConfig(config: Pick<OcxConfig, "prov
   try { raw = readFileSync(getConfigPath(), "utf8"); }
   catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return;
-    throw new Error("Cannot verify Anthropic Pool 2 ownership in the existing config file.");
+    throw new AnthropicInstanceConfigReadError();
   }
   let parsed: unknown;
   try { parsed = JSON.parse(raw.replace(/^\uFEFF/, "")); }
-  catch { throw new Error("Cannot verify Anthropic Pool 2 ownership in the existing config file."); }
+  catch { throw new AnthropicInstanceConfigReadError(); }
   const providers = parsed && typeof parsed === "object" && "providers" in parsed ? parsed.providers : undefined;
   if (providers && typeof providers === "object" && Object.hasOwn(providers, provider)) {
     const persisted = (providers as Record<string, unknown>)[provider];
