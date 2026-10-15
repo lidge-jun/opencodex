@@ -17,30 +17,39 @@ export type RemoteControlRunner = (argv: readonly string[], budget: MessageBudge
 
 /** Forget only the revoked transaction, while the state mutation lock is still owned. */
 function forgetPendingTransaction(store: RemoteMessageStore, transaction: string, removeJournal = unlinkSync): void {
-  const path = join(store.directory, "enrollment.json"), text = readRemoteFile(path);
+  const path = join(store.directory, "enrollment.json");
+  const text = readRemoteFile(path);
   if (text === null) return;
   let pendingTransaction: unknown;
   try {
     const saved = exactRecord(JSON.parse(text), ["alias", "ssh", "fingerprint", "generation", "request"]);
     const request = exactRecord(saved.request, ["protocol", "action", "params"]);
     pendingTransaction = exactRecord(request.params, ["machine", "transaction", "returnCapability", "port"]).transaction;
-  } catch { return; } // Uninterpretable text cannot match a valid in-flight saved journal.
+  } catch {
+    // Uninterpretable text cannot match a valid in-flight saved journal.
+    return;
+  }
   if (pendingTransaction === transaction) removeRemoteFile(path, removeJournal);
 }
 /** Offer one host fingerprint without enrollment or persistent state; clean only this probe's scratch directory. */
 export async function probeRemoteHost(ssh: string, budget: MessageBudget, capacity: RemoteCapacity,
   runner: RemoteControlRunner = runRemoteHelper) {
   if (!isSshAlias(ssh)) throw remoteError("invalid_ssh_alias", "Choose a valid SSH destination.");
-  const root = mkdtempSync(join(tmpdir(), "ocx-message-probe-")), path = join(root, "known_hosts");
+  const root = mkdtempSync(join(tmpdir(), "ocx-message-probe-"));
+  const path = join(root, "known_hosts");
   try {
     writeRemoteFile(path, "");
     await runner(buildProbeArgv({ alias: ssh, tempKnownHostsFile: path }), budget, capacity);
     const fingerprint = parseFingerprintLine((await runner(buildFingerprintArgv(path), budget, capacity)).trim()).fingerprint;
     const hostKey = readRemoteFile(path);
     if (!hostKey || hostKey.length > 8192 || hostKey.trim().split("\n").length !== 1
-      || !hostKey.startsWith(`${ssh} `)) throw remoteError("invalid_host_key", "SSH probe did not return one bounded alias-bound host key.");
+      || !hostKey.startsWith(`${ssh} `)) {
+      throw remoteError("invalid_host_key", "SSH probe did not return one bounded alias-bound host key.");
+    }
     return { fingerprint, hostKey };
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 }
 /** Versioned private stdio control: invoked over confirmed SSH, never the network messaging gateway. */
 export function handleEnrollmentControl(store: RemoteMessageStore, input: unknown, removeJournal = unlinkSync): unknown {
@@ -50,17 +59,25 @@ export function handleEnrollmentControl(store: RemoteMessageStore, input: unknow
   if (raw.action === "enroll") {
     const params = exactRecord(raw.params, ["machine", "transaction", "returnCapability", "port"]);
     if (!validMachine(params.machine) || params.machine.id === state.machine.id || !isThreadId(params.transaction)
-      || !validCapability(params.returnCapability) || !validPort(params.port)) throw remoteError("invalid_enrollment", "Invalid messaging enrollment contract.");
+      || !validCapability(params.returnCapability) || !validPort(params.port)) {
+      throw remoteError("invalid_enrollment", "Invalid messaging enrollment contract.");
+    }
     const machine = params.machine, transaction = params.transaction, returnCapability = params.returnCapability, port = params.port;
     let incoming = "", full = false;
     const committed = store.mutate(current => {
       const existing = current.peers.find(peer => peer.machine.id === machine.id || peer.transaction === transaction);
       if (existing) {
         if (existing.transaction !== transaction || existing.machine.id !== machine.id || existing.outgoing !== returnCapability
-          || existing.port !== port) throw remoteError("enrollment_conflict", "An existing enrollment cannot be silently replaced.");
-        incoming = existing.incoming; return;
+          || existing.port !== port) {
+          throw remoteError("enrollment_conflict", "An existing enrollment cannot be silently replaced.");
+        }
+        incoming = existing.incoming;
+        return;
       }
-      if (current.peers.length >= REMOTE_LIMITS.peers) { full = true; return; }
+      if (current.peers.length >= REMOTE_LIMITS.peers) {
+        full = true;
+        return;
+      }
       incoming = capability();
       current.peers.push({ alias: `peer-${machine.id}`, machine, transaction, incoming, outgoing: returnCapability,
         port, ssh: null, hostKey: null, fingerprint: null, allowInbound: true });
@@ -70,7 +87,9 @@ export function handleEnrollmentControl(store: RemoteMessageStore, input: unknow
   }
   if (raw.action === "remove") {
     const params = exactRecord(raw.params, ["machineId", "transaction"]);
-    if (!isThreadId(params.machineId) || !isThreadId(params.transaction)) throw new Error();
+    if (!isThreadId(params.machineId) || !isThreadId(params.transaction)) {
+      throw new Error();
+    }
     store.mutate(current => {
       // Invalidate recovery before publishing absence, including an enrollment not yet locally published.
       forgetPendingTransaction(store, params.transaction as string, removeJournal);
@@ -84,7 +103,9 @@ export function handleEnrollmentControl(store: RemoteMessageStore, input: unknow
 export async function enrollRemoteHost(store: RemoteMessageStore, alias: string, ssh: string, fingerprint: string,
   budget: MessageBudget, capacity: RemoteCapacity, runner: RemoteControlRunner = runRemoteHelper) {
   const state = store.requireEnabled();
-  if (!validAlias(alias) || !isSshAlias(ssh) || !/^SHA256:[A-Za-z0-9+/=]{1,64}$/.test(fingerprint)) throw remoteError("invalid_enrollment", "Alias, SSH destination and confirmed fingerprint are required.");
+  if (!validAlias(alias) || !isSshAlias(ssh) || !/^SHA256:[A-Za-z0-9+/=]{1,64}$/.test(fingerprint)) {
+    throw remoteError("invalid_enrollment", "Alias, SSH destination and confirmed fingerprint are required.");
+  }
   const offered = await probeRemoteHost(ssh, budget, capacity, runner);
   if (offered.fingerprint !== fingerprint) throw remoteError("host_key_changed", "The offered SSH key differs from the explicitly confirmed fingerprint.");
   const pendingPath = join(store.directory, "enrollment.json");
@@ -92,7 +113,9 @@ export async function enrollRemoteHost(store: RemoteMessageStore, alias: string,
     const existing = readRemoteFile(pendingPath);
     if (existing !== null) {
       const saved = parseEnrollmentJournal(existing);
-      if (saved.alias !== alias || saved.ssh !== ssh || saved.fingerprint !== fingerprint) throw remoteError("enrollment_pending", "Reconcile the existing messaging enrollment before starting another.");
+      if (saved.alias !== alias || saved.ssh !== ssh || saved.fingerprint !== fingerprint) {
+        throw remoteError("enrollment_pending", "Reconcile the existing messaging enrollment before starting another.");
+      }
       return saved;
     }
     const current = store.requireEnabled();
@@ -101,12 +124,16 @@ export async function enrollRemoteHost(store: RemoteMessageStore, alias: string,
     if (current.peers.length >= REMOTE_LIMITS.peers) throw remoteError("peer_capacity", "Remove an enrolled peer before adding another.");
     const saved = { alias, ssh, fingerprint, generation: current.generation, request: { protocol: REMOTE_PROTOCOL, action: "enroll",
       params: { machine: state.machine, transaction: crypto.randomUUID(), returnCapability: capability(), port: state.port } } };
-    budget.throwIfEnded(); writeRemoteFile(pendingPath, JSON.stringify(saved)); return saved;
+    budget.throwIfEnded();
+    writeRemoteFile(pendingPath, JSON.stringify(saved));
+    return saved;
   });
   const request = pending.request, params = request.params;
   if (pending.generation !== state.generation || request.protocol !== REMOTE_PROTOCOL || request.action !== "enroll" || !validMachine(params.machine)
     || params.machine.id !== state.machine.id || !isThreadId(params.transaction) || !validCapability(params.returnCapability)
-    || params.port !== state.port) throw remoteError("enrollment_pending", "Pending enrollment no longer matches this node; reconcile it explicitly.");
+    || params.port !== state.port) {
+    throw remoteError("enrollment_pending", "Pending enrollment no longer matches this node; reconcile it explicitly.");
+  }
   const hostsPath = join(store.directory, `enrollment_known_hosts-${params.transaction}-${crypto.randomUUID()}`);
   try {
     withRemoteLock(store.directory, () => {
@@ -161,7 +188,9 @@ export async function enrollRemoteHost(store: RemoteMessageStore, alias: string,
         if (!ownsJournal) throw remoteError("enrollment_unknown", "This enrollment no longer owns the saved transaction.");
         current.peers.push({ alias, machine, transaction: params.transaction as string, incoming: params.returnCapability as string,
           outgoing: reply.capability as string, port: reply.port as number, ssh, hostKey: offered.hostKey, fingerprint, allowInbound: false });
-      }, () => { if (ownsJournal) forgetPendingTransaction(store, params.transaction as string); });
+      }, () => {
+        if (ownsJournal) forgetPendingTransaction(store, params.transaction as string);
+      });
     } catch {
       throw remoteError("enrollment_unknown", "Remote enrollment committed, but local completion is uncertain. Inspect current enrollment and any retained transaction before an explicit retry.");
     }
@@ -169,8 +198,9 @@ export async function enrollRemoteHost(store: RemoteMessageStore, alias: string,
       inboundOptInCommand: `ocx message hosts allow-inbound ${machine.id} --json` };
   } finally {
     // The unique attempt owns this path, not the shared journal; a busy mutation must not prevent cleanup.
-    try { if (readRemoteFile(hostsPath) !== null) removeRemoteFile(hostsPath); }
-    catch {
+    try {
+      if (readRemoteFile(hostsPath) !== null) removeRemoteFile(hostsPath);
+    } catch {
       throw remoteError("remote_storage_unknown", "Enrollment scratch cleanup could not be confirmed. Inspect local state before recovery; the remote enrollment may have committed.");
     }
   }
@@ -199,8 +229,15 @@ export async function removeRemoteHost(store: RemoteMessageStore, selector: stri
         argv: remoteOcxArgv(["message", "_control"]) }), budget, capacity, JSON.stringify({ protocol: REMOTE_PROTOCOL,
         action: "remove", params: { machineId: state.machine.id, transaction: peer.transaction } }))), ["protocol", "removed"]);
       if (reply.protocol === REMOTE_PROTOCOL && reply.removed === true) remote = "removed";
-    } catch { /* Receipt explicitly preserves unconfirmed remote cleanup. */ }
-    finally { try { removeRemoteFile(path); } catch { /* Scratch cleanup is best-effort and cannot undo local revocation. */ } }
+    } catch {
+      // Receipt explicitly preserves unconfirmed remote cleanup.
+    } finally {
+      try {
+        removeRemoteFile(path);
+      } catch {
+        // Scratch cleanup is best-effort and cannot undo local revocation.
+      }
+    }
   }
   return { protocol: REMOTE_PROTOCOL, machine: peer.machine, locallyRemoved: true, remote,
     ...(remote === "unconfirmed" ? { remoteCleanupCommand: `ocx message hosts remove ${state.machine.id} --transaction ${peer.transaction} --json` } : {}) };
