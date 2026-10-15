@@ -87,6 +87,39 @@ export function declaredAnthropicServerTools(raw: unknown): Rec[] | undefined {
   return tools.length > 0 ? tools : undefined;
 }
 
+/**
+ * Completed Anthropic server-tool exchanges (`server_tool_use` + `web_search_tool_result` /
+ * `web_fetch_tool_result`) in the caller's assistant history. The Responses body drops them, so
+ * an Anthropic destination re-inserts them out of body, keyed by the block that follows each run
+ * in its message: `call:<tool_use id>` or `text:<text>`, both of which survive translation. A run
+ * with neither, an unpaired call, a non-Anthropic id, or a search hit without `encrypted_content`
+ * is not replayable and stays dropped.
+ */
+export function replayedAnthropicServerBlocks(raw: unknown): Map<string, Rec[]> | undefined {
+  if (!isRec(raw) || !Array.isArray(raw.messages)) return undefined;
+  const out = new Map<string, Rec[]>();
+  for (const message of raw.messages) {
+    if (!isRec(message) || message.role !== "assistant" || !Array.isArray(message.content)) continue;
+    let run: Rec[] = [];
+    for (const block of message.content.filter(isRec)) {
+      if (block.type === "server_tool_use" || block.type === "web_search_tool_result" || block.type === "web_fetch_tool_result") {
+        // The caller's breakpoints are dropped on this lane, as for the declared tools above.
+        run.push({ ...block, cache_control: undefined });
+        continue;
+      }
+      const key = block.type === "tool_use" ? `call:${String(block.id)}` : block.type === "text" ? `text:${String(block.text)}` : undefined;
+      const uses = run.filter(b => b.type === "server_tool_use");
+      const results = run.filter(b => b.type !== "server_tool_use");
+      const replayable = uses.length > 0 && uses.length === results.length
+        && uses.every(u => typeof u.id === "string" && u.id.startsWith("srvtoolu_") && results.some(r => r.tool_use_id === u.id))
+        && results.every(r => !Array.isArray(r.content) || r.content.every(h => isRec(h) && typeof h.encrypted_content === "string"));
+      if (key && replayable && !out.has(key)) out.set(key, run);
+      run = [];
+    }
+  }
+  return out.size > 0 ? out : undefined;
+}
+
 export function toolChoiceToResponses(choice: unknown, body: Rec): void {
   if (!isRec(choice)) return;
   if (choice.disable_parallel_tool_use === true) body.parallel_tool_calls = false;

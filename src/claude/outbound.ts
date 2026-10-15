@@ -223,20 +223,21 @@ export function sanitizeWebSearchInput(input: unknown): Rec {
 /**
  * Map a Responses `web_search_call` item to its Anthropic pair: the server_tool_use
  * input (query/queries) and the web_search_tool_result content (hits, or the error
- * object when the search failed). An item carrying `fetch_result` is Anthropic's
- * server-side web_fetch and maps to web_fetch + its web_fetch_tool_result, verbatim.
- * Shared by the SSE and JSON translation paths.
+ * object when the search failed). An item carrying `anthropic_blocks` came from Anthropic's
+ * own server-side call and maps back to those blocks verbatim (`srvtoolu_` id,
+ * `encrypted_content`, web_fetch), so the client can replay them on its next turn.
+ * Shared by the SSE, JSON and direct translation paths.
  */
 export function webSearchPairFromItem(item: Rec): {
-  id: string; name: "web_search" | "web_fetch"; resultType: string; input: Rec; resultContent: unknown; completed: boolean;
+  id: string; name: string; resultType: string; input: Rec; resultContent: unknown; completed: boolean;
 } {
   const action = isRec(item.action) ? item.action : {};
-  const id = typeof item.id === "string" && item.id.length > 0 ? item.id : `srvtoolu_${uuid()}`;
   const completed = item.status !== "failed";
-  if (item.fetch_result !== undefined) {
-    const input = { url: typeof action.url === "string" ? action.url : "" };
-    return { id, name: "web_fetch", resultType: "web_fetch_tool_result", input, resultContent: item.fetch_result, completed };
+  if (isRec(item.anthropic_blocks)) {
+    const { use, result } = item.anthropic_blocks as { use: Rec; result: Rec };
+    return { id: String(use.id), name: String(use.name), resultType: String(result.type), input: use.input as Rec, resultContent: result.content, completed };
   }
+  const id = typeof item.id === "string" && item.id.length > 0 ? item.id : `srvtoolu_${uuid()}`;
   const queries = Array.isArray(action.queries)
     ? action.queries.filter((q): q is string => typeof q === "string" && q.length > 0)
     : [];

@@ -69,6 +69,11 @@ export interface OcxParsedRequest {
    */
   _anthropicServerTools?: readonly Record<string, unknown>[];
   /**
+   * Completed server-tool exchanges from the Claude client's history, keyed by the block that
+   * followed them (`call:<tool_use id>` / `text:<text>`). Same audience as `_anthropicServerTools`.
+   */
+  _anthropicServerReplay?: ReadonlyMap<string, readonly Record<string, unknown>[]>;
+  /**
    * Boundary between replayed history and this turn's newly appended input. Usually the
    * items the proxy restored from local previous_response_id state; also set when the
    * CLIENT already carried that history verbatim and the proxy skipped the prepend.
@@ -414,6 +419,9 @@ export interface OcxProviderContinuationState {
   [provider: string]: Record<string, unknown> | undefined;
 }
 
+/** One Anthropic server-side call as the API returned it: `server_tool_use` + its `*_tool_result`. */
+export interface AnthropicServerBlocks { use: Record<string, unknown>; result: Record<string, unknown> }
+
 export type AdapterEvent =
   | { type: "heartbeat"; replayUnsafe?: true; preflightReady?: true }
   | { type: "text_delta"; text: string; phase?: OcxMessagePhase;
@@ -443,8 +451,8 @@ export type AdapterEvent =
   | { type: "web_search_call_begin"; id: string }
   | {
       type: "web_search_call_end"; id: string; queries: string[]; status?: "completed" | "failed"; sources?: OcxUrlCitation[];
-      /** Anthropic's server-side web_fetch (adapters/anthropic.ts): the opened page and its `web_fetch_tool_result` content, verbatim. */
-      fetch?: { url: string; result: unknown };
+      /** Anthropic's server-side call (adapters/anthropic.ts): its `server_tool_use` and result block, verbatim. */
+      anthropic?: AnthropicServerBlocks;
     }
   | {
       type: "done";
