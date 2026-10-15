@@ -404,7 +404,10 @@ export function callerCacheRetention(raw: unknown): "long" | undefined {
     ...(Array.isArray(raw.system) ? raw.system : []),
     ...(Array.isArray(raw.tools) ? raw.tools : []),
     ...(Array.isArray(raw.messages)
-      ? raw.messages.flatMap(m => isRec(m) && Array.isArray(m.content) ? m.content : [])
+      ? raw.messages.flatMap(m => isRec(m) && Array.isArray(m.content)
+        // A tool_result's own content blocks can carry breakpoints as well.
+        ? m.content.flatMap(b => isRec(b) && Array.isArray(b.content) ? [b, ...b.content] : [b])
+        : [])
       : []),
   ];
   const ttls = blocks.flatMap(b => isRec(b) && isRec(b.cache_control) ? [b.cache_control.ttl] : []);

@@ -32,6 +32,7 @@ async function wireTtls(
   cacheRetention?: "short" | "long",
   messageTtl: "1h" | "5m" | "unset" = callerTtl ?? "unset",
   topLevelTtl?: "1h" | "5m" | "unset",
+  nestedToolResultTtl?: "1h" | "5m",
 ): Promise<unknown[]> {
   const wires: string[] = [];
   const fetch = (async (_input: unknown, init?: RequestInit) => {
@@ -69,8 +70,20 @@ async function wireTtls(
       tools: [{ name: "Read", description: "read", input_schema: { type: "object", properties: {} } }],
       messages: [
         { role: "user", content: "First." },
-        { role: "assistant", content: "Done." },
-        { role: "user", content: [{ type: "text", text: "Continue.", cache_control: messageCc }] },
+        ...(nestedToolResultTtl
+          ? [
+            { role: "assistant", content: [{ type: "tool_use", id: "toolu_1", name: "Read", input: {} }] },
+            { role: "user", content: [
+              { type: "tool_result", tool_use_id: "toolu_1", content: [
+                { type: "text", text: "file body", cache_control: { type: "ephemeral", ttl: nestedToolResultTtl } },
+              ] },
+              { type: "text", text: "Continue.", cache_control: messageCc },
+            ] },
+          ]
+          : [
+            { role: "assistant", content: "Done." },
+            { role: "user", content: [{ type: "text", text: "Continue.", cache_control: messageCc }] },
+          ]),
       ],
     }),
   }), config, { model: "", provider: "" });
@@ -106,5 +119,8 @@ describe("translated Claude lane cache TTL", () => {
     expect(new Set(await wireTtls("1h", undefined, "1h", "unset"))).toEqual(new Set([undefined]));
     expect(new Set(await wireTtls("1h", undefined, "1h", "5m"))).toEqual(new Set([undefined]));
     expect(new Set(await wireTtls("1h", undefined, "1h", "1h"))).toEqual(new Set(["1h"]));
+    // Breakpoints nested in a tool_result's content count too.
+    expect(new Set(await wireTtls("1h", undefined, "1h", undefined, "5m"))).toEqual(new Set([undefined]));
+    expect(new Set(await wireTtls("1h", undefined, "1h", undefined, "1h"))).toEqual(new Set(["1h"]));
   });
 });
