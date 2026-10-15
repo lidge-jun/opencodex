@@ -53,6 +53,7 @@ import {
   type DebugFlag,
 } from "../../lib/debug-settings";
 import { mergeModelCapabilities, modelCapabilitiesConfigError } from "../../config/provider-validation";
+import { modelRecordValue } from "../../reasoning-effort";
 import { commitProviderPatch } from "./provider-patch-transaction";
 import { ConfigWritePublishedError } from "../../config/persist-unlocked";
 import {
@@ -344,17 +345,22 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
         if (modelAcceptsImageInput(config, { provider, id: model }) === true) {
           return jsonResponse({ error: `visionSidecarTargets entry "${provider}/${model}" already accepts image input` }, 400);
         }
-        // Read the declaration the way the runtime does: exact capability axis, then the
-        // operator's custom row. A row without text (audio-only) cannot be widened by the sidecar.
-        const declared = providerRow.modelCapabilities?.[model]?.inputModalities
-          ?? customRowInputModalities(config, provider, model);
-        if (declared !== undefined && !declared.includes("text")) {
-          return jsonResponse({ error: `visionSidecarTargets entry "${provider}/${model}" is declared without text input; the Vision Sidecar cannot cover it` }, 400);
-        }
         // Already a consumer through any runtime source (exact declaration, custom row,
         // noVisionModels, legacy record, registry enrichment): the catalog already
         // advertises image for it. Writing the declaration again would be a no-op write.
         if (isVisionSidecarConsumer(config, provider, model)) continue;
+        // Read the declaration the way the runtime does: exact capability axis, then the
+        // operator's custom row, then the provider's per-model modality hint. A row without
+        // text (audio-only) cannot be widened by the sidecar, and writing ["text"] on the
+        // capability axis would silently override that declaration.
+        const capabilityRow = Object.hasOwn(providerRow.modelCapabilities ?? {}, model)
+          ? providerRow.modelCapabilities?.[model] : undefined;
+        const declared = capabilityRow?.inputModalities
+          ?? customRowInputModalities(config, provider, model)
+          ?? modelRecordValue(providerRow.modelInputModalities, model);
+        if (declared !== undefined && !declared.includes("text")) {
+          return jsonResponse({ error: `visionSidecarTargets entry "${provider}/${model}" is declared without text input; the Vision Sidecar cannot cover it` }, 400);
+        }
         const patch = sidecarPatches.get(provider) ?? {};
         patch[model] = { inputModalities: ["text"] };
         sidecarPatches.set(provider, patch);

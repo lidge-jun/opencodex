@@ -921,12 +921,19 @@ describe("comboVisionSidecarTargets", () => {
         { provider: "a", model: "m1" },
         { provider: "b", model: "m2" },
         { provider: "b", model: "m2" },
-        { provider: "c", model: "m3" },
       ],
       models,
     )).toEqual([
       { provider: "b", model: "m2" },
     ]);
+    // A blocked member forces the image switch off, so nothing may be enrolled on save.
+    expect(comboVisionSidecarTargets(
+      [
+        { provider: "b", model: "m2" },
+        { provider: "c", model: "m3" },
+      ],
+      models,
+    )).toEqual([]);
   });
 
   test("ignores incomplete or catalog-absent targets", () => {

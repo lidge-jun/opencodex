@@ -136,7 +136,7 @@ export function ComboCapabilities({
             {imageHint}
           </p>
           {sidecarTargets.length > 0 && effectiveOn && visionEnabled === false ? (
-            <p className="muted cwi-capability-hint" style={{ color: "var(--danger, #b42318)" }}>
+            <p className="cwi-capability-hint cwi-capability-hint--warn">
               {t("cws.capability.imageInputSidecarDisabled", {
                 models: sidecarTargets.map(({ provider, model }) => `${provider}/${model}`).join(", "),
               })}{" "}

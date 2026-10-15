@@ -3234,7 +3234,7 @@ export const vi: Record<TKey, string> = {
   "cws.field.defaultEffort": "Suy luận (reasoning) mặc định",
   "cws.field.defaultEffortNone": "Không (mặc định của mục tiêu)",
   "cws.field.defaultEffortHint": "Chỉ sử dụng khi client không chỉ định mức độ suy luận (reasoning effort). Các tùy chọn là giao điểm của các mức độ được công bố từ các mục tiêu đã chọn; những mục tiêu không có metadata về mức độ suy luận trong danh mục sẽ không cung cấp tùy chọn này.",
-  "cws.capability.imageInputUnavailable": "Không khả dụng cho đến khi mọi mục tiêu được chọn đều hỗ trợ đầu vào hình ảnh (image input).",
+  "cws.capability.imageInputUnavailable": "Hãy chọn tất cả mục tiêu từ danh mục trước — Vision Sidecar không thể hỗ trợ các mô hình không xác định.",
   "cws.capability.imageInputHint": "Được bật theo mặc định khi mọi mục tiêu đều hỗ trợ hình ảnh. Tắt để chỉ chấp nhận văn bản.",
   "cws.capability.imageInputSidecarHint": "Bật theo mặc định. {models} sẽ được khai báo chỉ-text khi lưu và dùng Vision Sidecar cho hình ảnh.",
   "cws.capability.imageInputSidecarDisabled": "Vision Sidecar đang tắt — hình ảnh gửi tới {models} sẽ được thay bằng ghi chú bỏ qua và yêu cầu vẫn tiếp tục. Bật nó trong cài đặt bảng điều khiển để khôi phục mô tả hình ảnh.",

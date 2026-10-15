@@ -3266,7 +3266,7 @@ export const pt: Record<TKey, string> = {
   "cws.field.defaultEffort": "Raciocínio padrão",
   "cws.field.defaultEffortNone": "Nenhum (padrão do destino)",
   "cws.field.defaultEffortHint": "Usado somente quando o cliente omite o esforço de raciocínio. As opções são a interseção dos esforços informados pelos destinos selecionados; destinos sem metadados de esforço no catálogo não oferecem nenhuma.",
-  "cws.capability.imageInputUnavailable": "Indisponível até que todos os destinos selecionados aceitem entrada de imagem.",
+  "cws.capability.imageInputUnavailable": "Escolha primeiro todos os destinos no catálogo — modelos desconhecidos não podem ser cobertos pelo Vision Sidecar.",
   "cws.capability.imageInputHint": "Ativado por padrão quando todos os destinos aceitam imagens. Desative para aceitar somente texto.",
   "cws.capability.imageInputSidecarHint": "Ativado por padrão. Ao salvar, {models} serão declarados como somente texto e usarão o Vision Sidecar para imagens.",
   "cws.capability.imageInputSidecarDisabled": "O Vision Sidecar está desativado — as imagens enviadas a {models} são substituídas por uma nota de omissão e a requisição continua sem elas. Ative-o nas configurações do painel para restaurar as descrições.",

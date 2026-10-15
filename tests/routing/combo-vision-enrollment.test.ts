@@ -179,6 +179,16 @@ describe("combo Vision Sidecar enrollment", () => {
             combos: undefined,
           }),
         },
+        {
+          name: "provider modality hint declares audio only",
+          config: baseConfig({
+            providers: {
+              ...baseConfig().providers,
+              b: { ...baseConfig().providers.b!, modelInputModalities: { m2: ["audio"] } },
+            },
+            combos: undefined,
+          }),
+        },
       ];
       for (const { config } of cases) {
         saveConfig(config);

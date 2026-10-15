@@ -36,12 +36,15 @@ export function comboImagesSupported(targets: ComboTarget[], models: ModelOption
 
 /**
  * Exact targets that need a text-only declaration so the Vision Sidecar covers
- * them when the combo accepts images. Deduplicated in submission order.
+ * them when the combo accepts images. Deduplicated in submission order. Empty
+ * while any member blocks images: the switch is forced off then, so a save must
+ * not declare the remaining members text-only behind the operator's back.
  */
 export function comboVisionSidecarTargets(
   targets: ComboTarget[],
   models: ModelOption[],
 ): Array<{ provider: string; model: string }> {
+  if (!comboImagesSupported(targets, models)) return [];
   const seen = new Set<string>();
   const out: Array<{ provider: string; model: string }> = [];
   for (const target of targets) {
