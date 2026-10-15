@@ -431,7 +431,11 @@ export type AdapterEvent =
   // output_item.added(in_progress) and end → the matching output_item.done(completed|failed) under
   // the SAME output index, so the activity animates instead of flashing completed instantly.
   | { type: "web_search_call_begin"; id: string }
-  | { type: "web_search_call_end"; id: string; queries: string[]; status?: "completed" | "failed"; sources?: OcxUrlCitation[] }
+  | {
+      type: "web_search_call_end"; id: string; queries: string[]; status?: "completed" | "failed"; sources?: OcxUrlCitation[];
+      /** Anthropic's server-side web_fetch (adapters/anthropic.ts): the opened page and its `web_fetch_tool_result` content, verbatim. */
+      fetch?: { url: string; result: unknown };
+    }
   | {
       type: "done";
       usage?: OcxUsage;

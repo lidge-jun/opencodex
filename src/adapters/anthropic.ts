@@ -521,13 +521,13 @@ function streamedToolArgumentsParse(assembled: string): boolean {
   }
 }
 
-/** The query a server-side web_search streamed as its input; [] when it did not parse. */
-function webSearchQueries(json: string): string[] {
+/** A string field of a server tool's streamed input (web_search `query`, web_fetch `url`); "" when it did not parse. */
+function serverToolInputField(json: string, key: "query" | "url"): string {
   try {
-    const query = (JSON.parse(json) as { query?: unknown } | null)?.query;
-    return typeof query === "string" && query.length > 0 ? [query] : [];
+    const value = (JSON.parse(json) as Record<string, unknown> | null)?.[key];
+    return typeof value === "string" ? value : "";
   } catch {
-    return [];
+    return "";
   }
 }
 
@@ -1244,7 +1244,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       let pendingStopReason: string | undefined;
       let emittedDone = false;
       let sawVisibleText = false;
-      /** The open server-side web_search call, until its web_search_tool_result block. */
+      /** The open server-side web_search / web_fetch call, until its result block. */
       let serverSearch: { id: string; json: string; streaming: boolean } | undefined;
 
       const emitDone = function* (): Generator<AdapterEvent> {
@@ -1329,8 +1329,8 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
                   budget.openCall(currentToolCallId);
                   yield { type: "tool_call_start", id: currentToolCallId, name: currentToolCallName };
                 }
-                if (block.type === "server_tool_use" && block.name === "web_search" && typeof block.id === "string") {
-                  // Only the query is collected here (input_json_delta below). The search cell
+                if (block.type === "server_tool_use" && (block.name === "web_search" || block.name === "web_fetch") && typeof block.id === "string") {
+                  // Only the input (query / url) is collected here (input_json_delta below). The cell
                   // opens at its result: a call Anthropic defers beside a client tool_use has
                   // no result in this response and must not surface as a completed search.
                   serverSearch = { id: block.id, json: "", streaming: true };
@@ -1338,15 +1338,34 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
                 if (block.type === "web_search_tool_result" && typeof block.tool_use_id === "string") {
                   const hits = Array.isArray(block.content) ? block.content as Array<{ url?: unknown; title?: unknown }> : undefined;
                   // The begin/end pair the sidecar emits. A result whose call came in an earlier response has no query here.
+                  const query = serverSearch?.id === block.tool_use_id ? serverToolInputField(serverSearch.json, "query") : "";
                   yield { type: "web_search_call_begin", id: block.tool_use_id };
                   yield {
                     type: "web_search_call_end",
                     id: block.tool_use_id,
-                    queries: serverSearch?.id === block.tool_use_id ? webSearchQueries(serverSearch.json) : [],
+                    queries: query ? [query] : [],
                     // A failed search carries one error object instead of the hit list.
                     status: hits ? "completed" : "failed",
                     sources: (hits ?? []).flatMap(h => typeof h.url === "string"
                       ? [{ url: h.url, ...(typeof h.title === "string" ? { title: h.title } : {}) }] : []),
+                  };
+                  serverSearch = undefined;
+                }
+                if (block.type === "web_fetch_tool_result" && typeof block.tool_use_id === "string") {
+                  // Relayed as the same cell, opened at the result for the same reason; the result is
+                  // carried verbatim (a web_fetch_result document or a web_fetch_tool_error).
+                  const result = block.content ?? { type: "web_fetch_tool_error", error_code: "unavailable" };
+                  const url = (result as { url?: unknown }).url;
+                  yield { type: "web_search_call_begin", id: block.tool_use_id };
+                  yield {
+                    type: "web_search_call_end",
+                    id: block.tool_use_id,
+                    queries: [],
+                    status: (result as { type?: unknown }).type === "web_fetch_result" ? "completed" : "failed",
+                    fetch: {
+                      url: typeof url === "string" ? url : serverSearch?.id === block.tool_use_id ? serverToolInputField(serverSearch.json, "url") : "",
+                      result,
+                    },
                   };
                   serverSearch = undefined;
                 }
@@ -1395,7 +1414,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
                   yield { type: "tool_call_delta", arguments: delta.partial_json };
                 } else if (delta.type === "input_json_delta" && typeof delta.partial_json === "string" && serverSearch?.streaming
                     && serverSearch.json.length < 4096) {
-                  // Capped: a query past 4 KiB loses its label (queries: []), never the search.
+                  // Capped: an input past 4 KiB loses its label (query / url), never the call.
                   serverSearch.json += delta.partial_json;
                 }
                 break;

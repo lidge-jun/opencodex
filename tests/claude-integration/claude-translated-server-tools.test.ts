@@ -67,6 +67,7 @@ async function claudeTurn(
   frames: Record<string, unknown>[],
   target: "anth" | "gpt" = "anth",
   messages: unknown[] = [{ role: "user", content: "What did Bun release? https://bun.sh/blog" }],
+  { stream = true, direct = false }: { stream?: boolean; direct?: boolean } = {},
 ): Promise<{ wire: Record<string, unknown>; clientSse: string }> {
   const wires: string[] = [];
   const fetch = (async (_input: unknown, init?: RequestInit) => {
@@ -81,6 +82,7 @@ async function claudeTurn(
     port: 0, defaultProvider: "anth",
     claudeCode: { nativePassthrough: false },
     webSearchSidecar: { enabled: false },
+    ...(direct ? { protocols: { rollout: { directEncoders: true } } } : {}),
     providers: {
       anth: { adapter: "anthropic", baseUrl, authMode: "key", apiKey: "sk-ant-fixture", models: [MODEL], fetch },
       gpt: { adapter: "openai-chat", baseUrl: "https://gpt.invalid/v1", authMode: "key", apiKey: "sk-fixture", models: ["g"], fetch },
@@ -93,7 +95,7 @@ async function claudeTurn(
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      model: "combo/waterfall", max_tokens: 64, stream: true,
+      model: direct ? `anth/${MODEL}` : "combo/waterfall", max_tokens: 64, stream,
       tools: [{ name: "Read", description: "read", input_schema: { type: "object", properties: {} } }, WEB_SEARCH, WEB_FETCH],
       messages,
     }),
@@ -188,6 +190,50 @@ describe("server-side search across responses", () => {
     expect(wireText).not.toContain("server_tool_use");
     expect(wireText).toContain("Bun shipped.");
   });
+});
+
+const FETCH_RESULT = {
+  type: "web_fetch_result", url: "https://bun.sh/blog", retrieved_at: "2026-10-15T00:00:00Z",
+  content: { type: "document", title: "Bun blog", citations: { enabled: true }, source: { type: "text", media_type: "text/plain", data: "Bun 2 is out." } },
+};
+const fetchTurn = (result: unknown) => [
+  MESSAGE_START,
+  { type: "content_block_start", index: 0, content_block: { type: "server_tool_use", id: "srvtoolu_f", name: "web_fetch", input: {} } },
+  { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: "{\"url\":\"https://bun.sh/blog\"}" } },
+  { type: "content_block_stop", index: 0 },
+  { type: "content_block_start", index: 1, content_block: { type: "web_fetch_tool_result", tool_use_id: "srvtoolu_f", content: result } },
+  { type: "content_block_stop", index: 1 },
+  ...SEARCH_TURN.slice(7, 10),
+  { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 5, server_tool_use: { web_fetch_requests: 1 } } },
+  { type: "message_stop" },
+];
+
+describe("server-side web_fetch reaches the Claude client", () => {
+  for (const [lane, opts] of [["bridge stream", {}], ["bridge JSON", { stream: false }], ["direct encoder", { direct: true }]] as const) {
+    test(`${lane}: server_tool_use web_fetch + its web_fetch_tool_result, verbatim`, async () => {
+      for (const result of [FETCH_RESULT, { type: "web_fetch_tool_error", error_code: "url_not_accessible" }]) {
+        const { clientSse } = await claudeTurn("https://api.anthropic.com", fetchTurn(result), "anth", undefined, opts);
+        let blocks: Record<string, unknown>[];
+        let usage: Record<string, unknown>;
+        if ("stream" in opts) {
+          const message = JSON.parse(clientSse) as { content: Record<string, unknown>[]; usage: Record<string, unknown> };
+          blocks = message.content;
+          usage = message.usage;
+        } else {
+          const frames = clientFrames(clientSse);
+          blocks = blockStarts(clientSse);
+          const input = frames.find(f => f.type === "content_block_delta" && (f.delta as Record<string, unknown>).type === "input_json_delta")!;
+          blocks[0] = { ...blocks[0], input: JSON.parse((input.delta as { partial_json: string }).partial_json) };
+          usage = frames.find(f => f.type === "message_delta")!.usage as Record<string, unknown>;
+        }
+        expect(blocks.map(b => b.type)).toEqual(["server_tool_use", "web_fetch_tool_result", "text"]);
+        expect(blocks[0]).toMatchObject({ name: "web_fetch", input: { url: "https://bun.sh/blog" } });
+        expect(blocks[1]).toEqual({ type: "web_fetch_tool_result", tool_use_id: blocks[0]!.id, content: result });
+        // A fetch is not a search.
+        expect(usage.server_tool_use).toBeUndefined();
+      }
+    });
+  }
 });
 
 describe("anthropic adapter: typed web tools beside function tools", () => {

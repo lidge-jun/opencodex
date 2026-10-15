@@ -677,12 +677,15 @@ export function bridgeToResponsesSSE(
       // leaves a "Searching the web" spinner spinning forever.
       // `sources` rides on the done item (additive field; codex-rs serde ignores unknown fields) so
       // downstream translators (claude outbound) can fill web_search_tool_result content.
-      const closeCurrentWebSearch = (status: "completed" | "failed", queries: string[], sources?: { url: string; title?: string }[]) => {
+      // `fetch` (Anthropic's server-side web_fetch) makes the cell a page open and rides its result
+      // verbatim as `fetch_result`, for the same claude outbound translator.
+      const closeCurrentWebSearch = (status: "completed" | "failed", queries: string[], sources?: { url: string; title?: string }[], fetch?: { url: string; result: unknown }) => {
         if (!currentWebSearch) return;
         const item = {
           type: "web_search_call", id: currentWebSearch.itemId, status,
-          action: webSearchAction(queries),
+          action: webSearchAction(queries, fetch),
           ...(sources && sources.length > 0 ? { sources } : {}),
+          ...(fetch ? { fetch_result: fetch.result } : {}),
         };
         emit("response.output_item.done", { output_index: currentWebSearch.outputIndex, item });
         retainFinishedItem(item as OutputItem);
@@ -1220,7 +1223,7 @@ export function bridgeToResponsesSSE(
                 currentWebSearch = { itemId: wsItemId2, eventId: event.id, outputIndex };
               }
               const safeSources = safeWebSearchSources(event.sources);
-              closeCurrentWebSearch(event.status ?? "completed", event.queries, safeSources);
+              closeCurrentWebSearch(event.status ?? "completed", event.queries, safeSources, event.fetch);
               // Queue this search's sources for the next assistant message (dedup by URL).
               if (safeSources.length > 0) {
                 for (const source of safeSources) {
