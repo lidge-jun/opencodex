@@ -1,8 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { parseRequest } from "../../src/responses/parser";
 import { buildResponseJSON } from "../../src/bridge";
-import { expandPreviousResponseInput } from "../../src/responses/state";
-import type { AdapterEvent, OcxParsedRequest } from "../../src/types";
+import type { AdapterEvent } from "../../src/types";
 describe("Issue #6469: Responses Request Parser & Serializer Offline Regression", () => {
   describe("B. Call ID preservation and linkage", () => {
     test("preserves call_id across serialization and links toolResult correctly", () => {
