@@ -183,10 +183,10 @@ export default function Combos({
     const catalogued = new Set<string>();
     const parseModalities = (raw: unknown): string[] | undefined =>
       Array.isArray(raw)
-        ? raw
-          .filter((modality): modality is string => typeof modality === "string")
-          .map((modality) => modality.trim())
-          .filter(Boolean)
+        ? raw.flatMap((modality) => {
+          const trimmed = typeof modality === "string" ? modality.trim() : "";
+          return trimmed ? [trimmed] : [];
+        })
         : undefined;
     for (const row of modelRows) {
       if (!row || typeof row !== "object") continue;

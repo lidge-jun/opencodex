@@ -8,6 +8,7 @@ import {
   newComboTarget,
 } from "../combo-workspace-data";
 import { IconArrowDown, IconArrowUp, IconGrip, IconPlus, IconTrash } from "../icons";
+import { navigateHash } from "../hash-routing";
 import { useT } from "../i18n/shared";
 import { Switch } from "../ui";
 import { formatProviderDisplayName } from "../provider-icons";
@@ -140,7 +141,9 @@ export function ComboCapabilities({
               {t("cws.capability.imageInputSidecarDisabled", {
                 models: sidecarTargets.map(({ provider, model }) => `${provider}/${model}`).join(", "),
               })}{" "}
-              <a href="#dashboard">{t("nav.dashboard")}</a>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => navigateHash("dashboard")}>
+                {t("nav.dashboard")}
+              </button>
             </p>
           ) : null}
         </div>
