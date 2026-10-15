@@ -151,10 +151,11 @@ fn perform(app: &AppHandle, action: ClickAction) {
             .map_err(|error| error.to_string()),
         ClickAction::Enable => crate::login_autostart::enable(app),
         // launchd keeps its override whatever the plist says; the person turns it back on.
-        ClickAction::OpenLoginItems => app
-            .opener()
-            .open_url(login_registration::LOGIN_ITEMS_SETTINGS, None::<String>)
-            .map_err(|error| error.to_string()),
+        ClickAction::OpenLoginItems => crate::process_spawn::with_spawn(|| {
+            app.opener()
+                .open_url(login_registration::LOGIN_ITEMS_SETTINGS, None::<String>)
+        })
+        .map_err(|error| error.to_string()),
         ClickAction::Nothing => Ok(()),
     };
     if let Err(error) = result {

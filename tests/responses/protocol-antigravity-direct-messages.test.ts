@@ -31,6 +31,7 @@ let isolatedCodexHome: IsolatedCodexHome | null = null;
 let releaseSpendHome: (() => void) | undefined;
 let originalFetch: typeof fetch;
 let upstreamBodies: string[] = [];
+let replyTool: string | undefined;
 
 beforeEach(async () => {
   clearGenericFailoverHealth();
@@ -41,6 +42,7 @@ beforeEach(async () => {
   process.env.OPENCODEX_HOME = testDir;
   releaseSpendHome = acquireOwnedSpendHome();
   upstreamBodies = [];
+  replyTool = undefined;
   await saveCredential("google-antigravity", {
     access: "fixture-access",
     refresh: "fixture-refresh",
@@ -58,7 +60,7 @@ beforeEach(async () => {
           candidates: [{
             content: {
               role: "model",
-              parts: [
+              parts: replyTool ? [{ functionCall: { name: replyTool, args: { q: "fixture" } } }] : [
                 { text: "weighing it", thought: true, thoughtSignature: "c2lnLWFuc3dlcg==" },
                 { text: "direct answer" },
               ],
@@ -169,6 +171,31 @@ async function traceFor(requestId: string): Promise<Record<string, unknown> | un
 }
 
 describe("Antigravity direct lane through the Messages ingress", () => {
+  for (const direct of [false, true]) for (const stream of [false, true]) {
+    for (const catalog of ["empty", "omitted", "partial"] as const) {
+      test(`tool catalog ${catalog}, direct=${direct}, SSE=${stream}`, async () => {
+        replyTool = "Write";
+        const body = { ...messagesBody(stream), messages: [{ role: "user", content: "fixture question" }] };
+        if (catalog === "empty") body.tools = [];
+        if (catalog === "omitted") delete body.tools;
+        const result = await send(antigravityConfig(direct), body, `catalog-${catalog}-${direct}-${stream}`);
+        expect(upstreamBodies).toHaveLength(1);
+        if (catalog === "empty") {
+          expect(result.text).toContain("undeclared_tool_call");
+          expect(result.text).not.toContain('"type":"tool_use"');
+          expect(result.text).not.toContain("message_stop");
+        } else {
+          expect(result.status, result.text).toBe(200);
+          expect(result.text).not.toContain("undeclared_tool_call");
+          expect(result.text).toContain('"name":"Write"');
+        }
+        expect(await traceFor(result.requestId)).toMatchObject({
+          mode: direct ? "translated" : "legacy-bridge",
+          requestPath: direct ? ["messages", "ir", "other"] : ["messages", "responses-internal", "ir", "other"],
+        });
+      });
+    }
+  }
   for (const stream of [false, true]) {
     test(`same upstream wire and same answer as the bridge (stream=${stream})`, async () => {
       const bridge = await send(antigravityConfig(false), messagesBody(stream), `bridge-${stream}`);
