@@ -27,7 +27,11 @@ afterAll(() => {
   removeTreeWithRetry(home);
 });
 
-async function wireTtls(callerTtl: "1h" | undefined, cacheRetention?: "short" | "long"): Promise<unknown[]> {
+async function wireTtls(
+  callerTtl: "1h" | undefined,
+  cacheRetention?: "short" | "long",
+  messageTtl: "1h" | "5m" | "unset" = callerTtl ?? "unset",
+): Promise<unknown[]> {
   const wires: string[] = [];
   const fetch = (async (_input: unknown, init?: RequestInit) => {
     wires.push(String(init?.body));
@@ -53,6 +57,7 @@ async function wireTtls(callerTtl: "1h" | undefined, cacheRetention?: "short" | 
     combos: { waterfall: { strategy: "failover", targets: [{ provider: "anth", model: MODEL }, { provider: "gpt", model: "g" }] } },
   } as unknown as OcxConfig;
   const cc = { type: "ephemeral", ...(callerTtl ? { ttl: callerTtl } : {}) };
+  const messageCc = { type: "ephemeral", ...(messageTtl === "unset" ? {} : { ttl: messageTtl }) };
   const response = await handleClaudeMessages(new Request("http://localhost/v1/messages", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -63,7 +68,7 @@ async function wireTtls(callerTtl: "1h" | undefined, cacheRetention?: "short" | 
       messages: [
         { role: "user", content: "First." },
         { role: "assistant", content: "Done." },
-        { role: "user", content: [{ type: "text", text: "Continue.", cache_control: cc }] },
+        { role: "user", content: [{ type: "text", text: "Continue.", cache_control: messageCc }] },
       ],
     }),
   }), config, { model: "", provider: "" });
@@ -90,5 +95,10 @@ describe("translated Claude lane cache TTL", () => {
 
   test("explicit operator cacheRetention wins over the caller hint", async () => {
     expect(new Set(await wireTtls("1h", "short"))).toEqual(new Set([undefined]));
+  });
+
+  test("a caller mixing a 1h prefix with a 5m tail is not upgraded to 1h everywhere", async () => {
+    expect(new Set(await wireTtls("1h", undefined, "5m"))).toEqual(new Set([undefined]));
+    expect(new Set(await wireTtls("1h", undefined, "unset"))).toEqual(new Set([undefined]));
   });
 });

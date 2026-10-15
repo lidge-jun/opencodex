@@ -389,9 +389,11 @@ export type ClaudeCacheKeySource = "metadata" | "system" | null;
 
 /**
  * The translated lane places its own prompt-cache breakpoints, so the caller's are dropped;
- * their TTL is the one thing worth keeping. Any caller breakpoint asking for `ttl: "1h"`
- * (Claude Code on a subscription marks them so) maps to `cacheRetention: "long"`; otherwise
- * undefined, leaving the default. Read out of body: the Responses body has no field for it.
+ * their TTL is the one thing worth keeping. When every caller breakpoint asks for `ttl: "1h"`
+ * (Claude Code on a subscription marks them so) this maps to `cacheRetention: "long"`. A mixed
+ * caller (1h prefix, 5m tail) stays on the default: "long" also makes the moving per-turn
+ * breakpoint 1h, which bills writes the caller asked to keep at the 5m rate at the 1h rate.
+ * Read out of body: the Responses body has no field for it.
  */
 export function callerCacheRetention(raw: unknown): "long" | undefined {
   if (!isRec(raw)) return undefined;
@@ -402,7 +404,8 @@ export function callerCacheRetention(raw: unknown): "long" | undefined {
       ? raw.messages.flatMap(m => isRec(m) && Array.isArray(m.content) ? m.content : [])
       : []),
   ];
-  return blocks.some(b => isRec(b) && isRec(b.cache_control) && b.cache_control.ttl === "1h")
+  const ttls = blocks.flatMap(b => isRec(b) && isRec(b.cache_control) ? [b.cache_control.ttl] : []);
+  return ttls.length > 0 && ttls.every(ttl => ttl === "1h")
     ? "long"
     : undefined;
 }
