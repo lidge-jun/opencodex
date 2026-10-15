@@ -99,7 +99,7 @@ describe("ocx logs history", () => {
     expect(parsed.nextCursor).toBe("cursor-2");
     expect(parsed.entries).toHaveLength(1);
 
-    const jsonl = await run(["observe", "logs", "history", "--jsonl"], page());
+    const jsonl = await run(["logs", "history", "--jsonl"], page());
     expect(jsonl.code).toBe(0);
     expect(jsonl.out).toContain("\"requestId\":\"req/1\"");
     expect(jsonl.out).not.toContain("nextCursor");
@@ -139,7 +139,7 @@ describe("ocx logs get", () => {
   });
 
   test("missing request id is usage, and a 404 is exit 4", async () => {
-    expect((await run(["observe", "logs", "get"], {})).code).toBe(2);
+    expect((await run(["logs", "get"], {})).code).toBe(2);
     const missing = await run(["logs", "get", "missing"], { error: "not found" }, 404);
     expect(missing.code).toBe(4);
   });
