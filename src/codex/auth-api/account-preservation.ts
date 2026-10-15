@@ -46,7 +46,7 @@ export async function handleCodexAccountPreservation(req: Request, config: OcxCo
     return jsonResponse({
       ok: true, enabled, affectedAccountIds, identityKnown: getSignedInCodexIdentity() !== undefined,
       nextAccountId,
-      nextUsesSignedInQuota: enabled && nextAccountId !== null && affectedAccountIds.includes(nextAccountId),
+      nextUsesSignedInQuota: nextAccountId !== null && affectedAccountIds.includes(nextAccountId),
       pinnedAccountId: pinnedCodexAccountId(runtime) ?? null,
       bindings: update?.applyToBound ? "released-for-next-request" : "retained",
       releasedPin,

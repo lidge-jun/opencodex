@@ -149,7 +149,7 @@ test("status is observational; disabling preserves and restores custom prioritie
   const result = await (await api(c)).json();
   expect(result.nextAccountId).toBe("other"); expect(c.activeCodexAccountId).toBe("copy");
   const off = await (await api(c, { enabled: false })).json();
-  expect(off.nextAccountId).toBe("copy"); expect(c.codexAccountPriorities).toEqual({ copy: 2, other: -2 });
+  expect(off.nextAccountId).toBe("copy"); expect(off.nextUsesSignedInQuota).toBe(true); expect(c.codexAccountPriorities).toEqual({ copy: 2, other: -2 });
 });
 for (const body of [null, [], {}, { enabled: "true" }, { enabled: true, applyToBound: 1 }, { enabled: false, applyToBound: true }, { enabled: true, extra: true }]) {
   test(`invalid management policy body ${JSON.stringify(body)} is rejected`, async () => {

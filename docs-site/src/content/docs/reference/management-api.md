@@ -742,7 +742,7 @@ manager. Its routes are:
 | `POST /api/codex-auth/accounts/clear-cooldown` | Clear runtime cooldown for one account or all accounts | 400 invalid id |
 | `GET, PUT /api/codex-auth/active` | Read or select the active account | 400 invalid or missing account; 409 paused/legacy-row conflict or `account_selection_unavailable` |
 | `PUT /api/codex-auth/auto-switch` | Set the global quota threshold with `{ threshold }`, or an account override with `{ id, threshold }`; `null` restores global inheritance, and `__main__` selects the Desktop login | 400 invalid id/threshold; 404 missing account |
-| `GET /api/codex-auth/preserve-signed-in` | Read policy, current `affectedAccountIds`, `identityKnown`, `nextAccountId`, `nextUsesSignedInQuota`, `pinnedAccountId`, `bindings`, `priorityFailbackEnabled`, and `fallbackConsumesSignedInQuota` | 503 native profile busy/unreadable |
+| `GET /api/codex-auth/preserve-signed-in` | Read policy, current `affectedAccountIds`, `identityKnown`, `nextAccountId`, `nextUsesSignedInQuota` (actual next choice, even when disabled), `pinnedAccountId`, `bindings`, `priorityFailbackEnabled`, and `fallbackConsumesSignedInQuota` | 503 native profile busy/unreadable |
 | `PUT /api/codex-auth/preserve-signed-in` | Strict `{ enabled: boolean, applyToBound?: boolean }`; explicit `applyToBound: true` requires enabled, releases affected bindings/pin for next request; reports `releasedPin` | 400 invalid body; 503 native profile busy/unreadable |
 | `PUT, PATCH /api/codex-auth/pool-strategy` | Update Codex account-pool selection strategy | 400 invalid strategy/config |
 | `PUT /api/codex-auth/failover` | Set the account failover threshold | 400 invalid threshold |
