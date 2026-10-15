@@ -685,6 +685,9 @@ export async function executeComboResponses(
   // is gone, so carry the loop's own classification decision instead of re-deriving a
   // weaker one from the status alone (#4149).
   let lastFailureClassifiesOverflow = false;
+  // Local input admission refusals (#1524), while every failed target so far was one: such a
+  // target sent nothing, so an exhausted ladder must not be reported as a provider rejection.
+  let localAdmissionRefusals: string[] | undefined = [];
   // The first quota/rate-limit refusal of the ladder. A fallback that then refuses its own
   // credential or plan (401/403, or a 400 the ladder hopped past) says nothing about why the
   // request failed: the primary target ran out. Returning that fallback refusal told clients
@@ -1052,6 +1055,12 @@ export async function executeComboResponses(
       Date.now() - started,
       failure.usage,
     );
+    if (failure.upstreamCode === "input_admission_refused" && attempt.sendCount === 0) {
+      attempt.errorCode = failure.upstreamCode;
+      localAdmissionRefusals?.push(failure.upstreamMessage ?? "");
+    } else {
+      localAdmissionRefusals = undefined;
+    }
     attemptRetained = true;
     lastFailure = failure.response;
     if (!quotaFailure && (lastFailure.status === 429 || lastFailure.status === 402)) {
@@ -1232,9 +1241,14 @@ export async function executeComboResponses(
     lastFailure?.status === 413
     && lastFailureClassifiesOverflow
   ) {
+    if (localAdmissionRefusals?.length) logCtx.errorCode = "input_admission_refused";
+    const localMessage = localAdmissionRefusals?.length
+      ? `opencodex refused this turn locally; nothing was sent upstream. No target of combo ${comboId} `
+        + `can fit its input: ${localAdmissionRefusals.join(" ")} Compact the conversation before retrying.`
+      : undefined;
     return (rawBody as { stream?: unknown } | null)?.stream === true
-      ? streamingContextOverflowResponse(requestedModel, options.translatorBudget)
-      : jsonContextOverflowResponse();
+      ? streamingContextOverflowResponse(requestedModel, options.translatorBudget, localMessage)
+      : jsonContextOverflowResponse(localMessage);
   }
   return failure;
 }

@@ -508,7 +508,7 @@ existing combo policy already treats as a safe hop. That ordering is the whole p
 total window cannot hold the turn plus the caller's allowance answers 200, emits a few hundred
 tokens and stops on `finish_reason: length`, which the Anthropic surface renders as an output-token
 error naming a limit the model never approached — and by then output has committed and no later
-target may be tried.
+target may be tried. When every failed target of an exhausted combo was refused this way with a send count of 0, `src/server/responses/core-combo.ts` keeps the `context_length_exceeded` overflow envelope that clients compact on, but replaces the provider wording from `context-overflow.ts` with a proxy-owned message saying the turn was refused locally, carrying each target's estimate and window. Those attempts, and the final row, keep the code `input_admission_refused` instead of `http_413`. One target that reached a provider keeps the provider wording for the whole combo.
 
 Scope is deliberately narrow. Direct and single-target requests keep the loose 2.5x
 pathological-input gate, because they have nowhere to hop. Compaction turns stay exempt. Unknown
@@ -517,8 +517,8 @@ limits for custom providers. Canonical native slugs that the narrower pinned tab
 resolve their window from the generated in-tree bundle, which is what made the gate inert on the
 route where this was first observed; explicit provider and operator caps may only narrow it.
 
-Regression coverage: `tests/server/input-admission.test.ts` and
-`tests/helpers/combo-context-headroom-cases.ts`.
+Regression coverage: `tests/server/input-admission.test.ts`,
+`tests/helpers/combo-context-headroom-cases.ts` and `tests/responses/responses-context-overflow.test.ts`.
 
 Native steering retains fixed phase deadlines and reconciled replay output; see the [steering stability contract](../transports/streaming-health.md#steering-deadlines-and-replay-completeness).
 
