@@ -22,6 +22,9 @@ const encodedCredential = credential.replace(/[A-Za-z_]/g, ch => `\\u${ch.charCo
 const rejectedInputs = [
   `[${credential}]`,
   JSON.stringify(credential),
+  JSON.stringify(encodedCredential),
+  JSON.stringify([encodedCredential]),
+  JSON.stringify({ credentials: encodedCredential }),
   '{"type":"service_account","private_key":"fixture-key",}',
   "{'type':'authorized_user','client_secret':'fixture-secret','refresh_token':'fixture-refresh'}",
 ];
@@ -59,7 +62,7 @@ afterEach(() => {
 });
 
 test.each([resolveProviderApiKey, resolveProviderApiKeyQuietly])("keychain aliases refuse GCP payloads before wire-key resolution %#", resolve => {
-  for (const input of [credential, encodedCredential]) {
+  for (const input of [credential, encodedCredential, ...rejectedInputs]) {
     secrets.set("vertex/fixture", input);
     expect(() => resolve("keychain:vertex/fixture")).toThrow(/gcp-sa reference/);
     config.providers.vertex!.apiKey = "keychain:vertex/fixture";

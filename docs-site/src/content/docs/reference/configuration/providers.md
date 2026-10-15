@@ -1483,6 +1483,8 @@ credential JSON through a `keychain:` alias is refused, and cleanup preserves ac
 referenced through either marker spelling.
 Using a `keychain:` alias containing GCP JSON as an API key also refuses the request; select its
 `gcp-sa:` reference for Vertex authentication instead.
+Literal API keys must be plain token text: JSON objects, arrays and quoted JSON strings are refused
+in literal-key resolution and restore, including wrappers containing escaped credential text.
 Credential writes and marker persistence share the cleanup transaction lock, so concurrent
 removal cannot delete the stored JSON between read-back and the marker commit.
 
