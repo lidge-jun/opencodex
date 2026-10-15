@@ -142,3 +142,47 @@ for (const { transport, stream, cancelled, ready } of cases) {
     }
   });
 }
+
+for (const cancelledSignal of ["request", "option"] as const) {
+  test(`initial refresh capacity prioritizes independent ${cancelledSignal} cancellation`, async () => {
+    transportMode = "adapter";
+    await saveCredential(PROVIDER, { access: ACCESS, refresh: "fixture-initial-refresh", expires: 1,
+      accountId: "fixture-initial-account" });
+    const accountId = getAccountSet(PROVIDER)!.activeAccountId;
+    let finish!: () => void, started!: () => void;
+    const blocked = new Promise<void>(resolve => { finish = resolve; });
+    const entered = new Promise<void>(resolve => { started = resolve; });
+    oauth.OAUTH_PROVIDERS[PROVIDER]!.refresh = async () => {
+      started(); await blocked;
+      return { access: "fixture-initial-new", refresh: "fixture-initial-next", expires: Date.now() + 3_600_000 };
+    };
+    const waiting = Array.from({ length: oauth.MAX_OAUTH_TOKEN_REFRESH_WAITERS }, () =>
+      oauth.getValidAccessTokenForAccount(PROVIDER, accountId).catch(error => error));
+    await entered;
+    const requestAbort = new AbortController(), optionAbort = new AbortController();
+    const originalResolve = oauth.getValidAccessTokenSnapshot;
+    const resolve = spyOn(oauth, "getValidAccessTokenSnapshot").mockImplementation(async (...args) => {
+      try { return await originalResolve(...args); }
+      catch (error) {
+        expect(error).toBeInstanceOf(oauth.OAuthTokenRefreshBusyError);
+        (cancelledSignal === "request" ? requestAbort : optionAbort).abort();
+        throw error;
+      }
+    });
+    const config = { port: 0, defaultProvider: PROVIDER, providers: { [PROVIDER]: {
+      adapter: "openai-chat", authMode: "oauth", baseUrl: "https://fixture.invalid/v1", models: ["fixture-model"],
+      fetch: async () => { throw new Error("unexpected inference dispatch"); },
+    } } } as OcxConfig;
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json" }, signal: requestAbort.signal,
+        body: JSON.stringify({ model: `${PROVIDER}/fixture-model`, input: "fixture", stream: false }),
+      }), config, { model: "", provider: "" }, { abortSignal: optionAbort.signal });
+      expect(resolve).toHaveBeenCalledTimes(1);
+      expect(response.status).toBe(499);
+      expect(response.headers.get("retry-after")).toBeNull();
+      expect(await response.text()).toContain("client_cancelled");
+      expect(getAccountSet(PROVIDER)?.accounts.find(row => row.id === accountId)?.needsReauth).not.toBe(true);
+    } finally { resolve.mockRestore(); finish(); await Promise.all(waiting); }
+  });
+}

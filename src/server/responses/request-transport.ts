@@ -966,7 +966,7 @@ export async function prepareResponsesTransport(
         );
       }
       if (err instanceof OAuthTokenRefreshBusyError) {
-        return (options.abortSignal ?? req.signal).aborted ? clientCancelledResponse()
+        return options.abortSignal?.aborted || req.signal.aborted ? clientCancelledResponse()
           : formatErrorResponse(503, "server_error", err.message, { retryAfter: "1" });
       }
       if (err instanceof OAuthAccountPausedError) {
