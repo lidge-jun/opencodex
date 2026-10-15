@@ -706,6 +706,8 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         signal,
         inactivityTimeoutMs: routedModelStallTimeoutMs,
         translatorBudget,
+        // A pass that fails was still billed; the error path reports it with the hidden passes.
+        onErrorUsage: usage => { hiddenUsage = mergeUsage(hiddenUsage, usage); },
       })) {
         if (event.type === "heartbeat") yield event;
         // Kiro's explicit-completion protocol marks ordinary assistant text as commentary while
