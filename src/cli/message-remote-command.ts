@@ -49,6 +49,9 @@ export async function runRemoteMessageCommand(args: RemoteMessageArgs, env: Node
         emit({ ...store.publicState(), running, routes, pendingEnrollment: pendingRemoteEnrollment(store) });
       } else if (args.action === "hosts-probe") emit({ ssh: args.ssh, fingerprint: (await probeRemoteHost(args.ssh, budget, capacity)).fingerprint });
       else if (args.action === "hosts-add") emit(await enrollRemoteHost(store, args.alias, args.ssh, args.fingerprint, budget, capacity));
+      else if (args.action === "hosts-allow-inbound" || args.action === "hosts-deny-inbound") {
+        emit(store.setInbound(args.host, args.action === "hosts-allow-inbound"));
+      }
       else if (args.action === "hosts-remove") {
         const receipt = await removeRemoteHost(store, args.host, budget, capacity, undefined, undefined, args.transaction); emit(receipt);
         return receipt.remote === "removed" ? 0 : 3;

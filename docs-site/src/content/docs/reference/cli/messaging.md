@@ -113,13 +113,43 @@ ocx message serve --host worker --json
 
 Private probe records keep their alias-prefixed format even when your normal SSH
 configuration enables `HashKnownHosts`; your normal known_hosts file is not changed.
+Each enrollment attempt uses its own transaction-qualified pinned-key scratch file,
+removed after its SSH helper settles, including failures, without depending on another
+mutation owner's lock. If cleanup cannot be confirmed, the command reports an unknown
+storage outcome, not success. The recovery journal is separate.
+
+`hosts add worker` authorizes outbound messages to `worker`, **not arbitrary messages
+back into this initiating node**. The SSH control exchange authorizes that outbound
+direction at the receiving node using your existing SSH login. The enrollment receipt
+and `hosts list` show each node's local inbound policy. On the initiating node the
+default is `responses-only`: the peer can see and reply only to original local sender
+sessions awaiting a correlated response to a request this node sent. A response must
+match the request UUID, enrollment and original local destination; it cannot target
+another session or become an unsolicited request/notification.
+
+To grant broader access on either node, explicitly run on that node:
+
+```bash
+ocx message hosts allow-inbound <peer-alias-or-machine-uuid> --json
+# Withdraw the broad grant without removing enrollment:
+ocx message hosts deny-inbound <peer-alias-or-machine-uuid> --json
+```
+
+`allow-inbound` permits all three message kinds into **any loaded local Codex session**
+and exposes their directory metadata to that peer. It is not a responses-only grant.
+Consent changes apply to existing connections before subsequent reads/submissions.
+Older records without a local inbound policy default to `responses-only`, not broad access.
+Reply routes are bounded to 256 outstanding requests per foreground owner and expire
+after 24 hours or owner retirement/restart. No sender context means no reply route.
+A queued or uncertain response consumes its route; a definite native rejection does not.
+An expired/lost route requires explicit operator/sender reconciliation, never automatic replay.
 
 Each `serve` is foreground-owned: keep it running and use a separate terminal
 for messaging. At most four distinct `--host` selections may be supplied. Nothing
 installs a service or starts an owner automatically. SSH uses confirmed pinned
 host keys and your configured keys/agent; password prompts are disabled. The
-wrapper owns loopback-only forward and return routes, so the receiving node can
-reply without an SSH login back to the initiator.
+wrapper owns loopback-only forward and return routes, so the receiving node can send
+correlated replies without an SSH login back to the initiator, subject to the policy above.
 
 ```bash
 ocx message status --json
@@ -133,6 +163,10 @@ the validated source machine UUID and thread UUID; source identity is resolved o
 the source daemon, not guessed from a remote directory. Without sender context,
 there is no invented reply command. Local commands without `--host` retain their
 no-state/no-SSH/no-listener path.
+The receiver validates the complete canonical envelope against the authenticated
+machine and native message UUID, including reply host/command and standard peer guidance.
+A peer cannot label the wrapper as another machine or omit its non-user-message warning.
+Session names and thread IDs remain descriptive claims by that machine, not per-session authentication.
 
 Receiver-issued directional capabilities live in private messaging state under
 `OPENCODEX_HOME` (or the default OpenCodex configuration home). They never appear in

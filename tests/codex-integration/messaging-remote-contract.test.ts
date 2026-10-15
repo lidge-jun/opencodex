@@ -81,7 +81,10 @@ test.skipIf(process.platform === "win32")("upgrade admission and aggregate exhau
     }
     expect((await fetch(`${url}?token=synthetic`)).status).toBe(403);
     const release = capacity.reserve("connections", REMOTE_LIMITS.connections);
-    try { expect((await fetch(url)).status).toBe(503); } finally { release(); }
+    try {
+      await expect(authenticatedRemoteSocket(pair.aStore.requireEnabled(),
+        peerEndpoint(pair.aStore.peer("worker"), bridge.port), budget)).rejects.toThrow("authentication");
+    } finally { release(); }
     expect(pair.b.calls).toHaveLength(0);
     const socket = await authenticatedRemoteSocket(pair.aStore.requireEnabled(), peerEndpoint(pair.aStore.peer("worker"), bridge.port), budget);
     const closed = new Promise<void>(resolve => socket.addEventListener("close", () => resolve(), { once: true }));

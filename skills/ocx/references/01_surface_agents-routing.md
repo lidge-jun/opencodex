@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 60.
+Declared capabilities: 62.
 
 ### `ocx agent subagents force`
 
@@ -270,7 +270,7 @@ Drives no management route.
 
 Usage: `ocx message hosts add <alias> --ssh <destination> --fingerprint <SHA256> [--json]`
 
-Enroll one explicitly enabled peer after SSH fingerprint confirmation.
+Enroll outbound delivery and correlated return replies after SSH fingerprint confirmation.
 
 State-changing: yes. JSON mode: `envelope`.
 
@@ -281,6 +281,34 @@ Drives no management route.
 | `--ssh` | string | OpenSSH destination/alias. |
 | `--fingerprint` | string | Explicitly confirmed offered SSH host-key fingerprint. |
 | `--json` | boolean | Emit enrollment metadata, never credentials. |
+
+### `ocx message hosts allow-inbound`
+
+Usage: `ocx message hosts allow-inbound <alias-or-machine-uuid> [--json]`
+
+Explicitly allow this enrolled peer to send any message kind to local loaded sessions.
+
+State-changing: yes. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the local inbound grant, without credentials. |
+
+### `ocx message hosts deny-inbound`
+
+Usage: `ocx message hosts deny-inbound <alias-or-machine-uuid> [--json]`
+
+Restrict this peer to correlated replies on locally opened reply routes.
+
+State-changing: yes. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the narrowed local inbound grant. |
 
 ### `ocx message hosts list`
 

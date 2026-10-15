@@ -33,6 +33,9 @@ remote architecture. Enrollment/authentication/SSH require independent review.
   `thread/queue/add`; no generic RPC, lifecycle, turns or approval/config writes.
 - An owned -L/-R pair and bounded return lease support replies without a second
   SSH login. Live owner proof, not persisted ports, establishes route readiness.
+- Initiating enrollment grants outbound delivery and correlated replies only.
+  Broader local inbound delivery requires explicit per-peer consent; return transport
+  and capability possession do not substitute for that consent.
 - Discovery, final recipient revalidation and queue submission share one
   authenticated connection; exact receipt correlation, queued/not_sent/unknown,
   and no automatic resend.

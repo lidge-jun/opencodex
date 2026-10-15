@@ -48,7 +48,7 @@ function syncRemoteDirectory(path: string, sync = fsyncSync): void {
   } catch { throw remoteError("remote_storage_unknown", "Messaging storage changed, but its crash durability could not be confirmed; inspect state before explicit recovery."); }
   finally { if (fd !== undefined) closeSync(fd); }
 }
-/** Remove only an already-validated journal and persist its absence under the mutation lock. */
+/** Remove a validated private file durably; shared journals require the caller's mutation lock. */
 export function removeRemoteFile(path: string, remove = unlinkSync, sync = fsyncSync): void {
   assertNotRealHomeUnderTest(path); readRemoteFile(path);
   remove(path); syncRemoteDirectory(dirname(path), sync);

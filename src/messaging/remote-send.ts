@@ -1,8 +1,8 @@
 import { MessageBudget } from "./budget";
-import { authenticatedRemoteSocket } from "./remote-auth";
+import { authenticatedRemoteSocket, remoteControl } from "./remote-auth";
 import { discoverLoaded, resolveLoaded } from "./discovery";
 import { messageEnvelope, validateMessage, type MessageOptions } from "./envelope";
-import { resolveRemoteRoute } from "./remote-owner";
+import { ownerEndpoint, resolveRemoteRoute } from "./remote-owner";
 import { LocalMessageRpc } from "./rpc";
 import { localDaemonEndpoint } from "./socket";
 import { messageFailure, type MessageReceipt } from "./send";
@@ -51,7 +51,21 @@ export async function sendRemoteMessage(store: RemoteMessageStore,
     if (fresh.status === "notLoaded") throw new LocalMessagingError("target_not_loaded", "The destination unloaded before remote submission.");
     budget.throwIfEnded();
     store.requireCurrentPeer(route.state, route.peer);
+    const replyRoute = sender && options.kind === "request" ? {
+      peerId: route.peer.machine.id, transaction: route.peer.transaction,
+      messageId: receipt.messageId, threadId: sender.id,
+    } : undefined;
+    if (replyRoute) {
+      await remoteControl(route.state, ownerEndpoint(route.state), "message/reply-route", { ...replyRoute, action: "open" }, budget);
+      store.requireCurrentPeer(route.state, route.peer);
+      budget.throwIfEnded();
+    }
     Object.assign(receipt, await rpc.queueMessage(target.id, envelope.text, receipt.messageId));
+    if (replyRoute && receipt.status === "not_sent") {
+      try {
+        await remoteControl(route.state, ownerEndpoint(route.state), "message/reply-route", { ...replyRoute, action: "forget" }, budget);
+      } catch { /* No message was submitted; an unused bounded grant expires with the owner or its deadline. */ }
+    }
   } catch (error) { receipt.error = messageFailure(error); }
   finally { rpc?.close(); }
   return receipt;

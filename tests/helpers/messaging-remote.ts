@@ -20,20 +20,21 @@ export function remoteMessagingPair(handler?: (call: LocalCall) => unknown | Pro
   const reply = handleEnrollmentControl(bStore, { protocol: REMOTE_PROTOCOL, action: "enroll",
     params: { machine: aState.machine, transaction, returnCapability: incoming, port: aState.port } }) as { capability: string };
   aStore.mutate(state => { state.peers.push({ alias: "worker", machine: bState.machine, transaction, incoming,
-    outgoing: reply.capability, port: bState.port, ssh: null, hostKey: null, fingerprint: null }); });
+    outgoing: reply.capability, port: bState.port, ssh: null, hostKey: null, fingerprint: null, allowInbound: false }); });
   return { a, b, aStore, bStore,
     async owners(destinationHome = b.codexHome) {
       const aOwner = await startRemoteOwner(aStore, a.codexHome, []), bOwner = await startRemoteOwner(bStore, destinationHome, []);
       const budget = new MessageBudget();
+      const aGeneration = crypto.randomUUID(), bGeneration = crypto.randomUUID();
       try {
         // Offline lease fixture: TCP paths substitute for SSH forwarding; real SSH is a separate opt-in test.
         await remoteControl(aStore.requireEnabled(), peerEndpoint(aStore.peer("worker"), bOwner.port), "message/lease",
-          { port: aOwner.port, generation: crypto.randomUUID() }, budget);
+          { port: aOwner.port, generation: aGeneration }, budget);
         await remoteControl(bStore.requireEnabled(), peerEndpoint(bStore.peer(aState.machine.id), aOwner.port), "message/lease",
-          { port: bOwner.port, generation: crypto.randomUUID() }, budget);
+          { port: bOwner.port, generation: bGeneration }, budget);
       } catch (error) { await Promise.all([aOwner.close(), bOwner.close()]); throw error; }
       finally { budget.dispose(); }
-      return { aOwner, bOwner, close: () => Promise.all([aOwner.close(), bOwner.close()]) };
+      return { aOwner, bOwner, aGeneration, bGeneration, close: () => Promise.all([aOwner.close(), bOwner.close()]) };
     },
     close: () => Promise.all([a.close(), b.close()]), LOCAL_OTHER, LOCAL_TARGET,
   };

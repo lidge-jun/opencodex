@@ -3,6 +3,7 @@ import { isRecord, isThreadId, LocalMessagingError } from "./types";
 
 export const REMOTE_PROTOCOL = "ocx-message-remote/1";
 export const REMOTE_LIMITS = Object.freeze({ peers: 4, connections: 16, requests: 32, helpers: 10,
+  unauthenticated: 4,
   persistentHelpers: 8, transientHelpers: 2,
   outputBytes: 2 * 1024 * 1024, frameBytes: 1024 * 1024, storeBytes: 128 * 1024, authMs: 5000,
   leaseMs: 25000, shutdownMs: 3000 });
@@ -10,6 +11,7 @@ export interface MessageMachine { id: string; name: string }
 export interface RemotePeer {
   alias: string; machine: MessageMachine; transaction: string; incoming: string; outgoing: string;
   port: number; ssh: string | null; hostKey: string | null; fingerprint: string | null;
+  allowInbound?: boolean;
 }
 export interface RemoteState {
   protocol: typeof REMOTE_PROTOCOL; machine: MessageMachine; enabled: boolean; port: number;

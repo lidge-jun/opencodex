@@ -29,12 +29,23 @@ claimed to resist unrestricted same-uid access or privileged path replacement.
 `src/messaging/remote-enrollment.ts` uses a private temporary offered known-hosts
 file, an explicit confirmed fingerprint and the existing pinned SSH argument
 builders in `src/link/ssh-argv.ts`.
+Enrollment pins a transaction-and-attempt-qualified scratch file under the mutation
+lock, releases the lock before SSH, and removes only that file in `finally` after
+helper settlement without reacquiring the shared lock. Cleanup failure is an explicit
+unknown storage outcome; it never discards the journal. Concurrent/abandoned attempts
+cannot overwrite each other's pins.
 The builders force `HashKnownHosts=no` for their private alias-prefixed records, independently
 of the user's normal known-hosts policy.
 Enrollment changes no Remote Link record, provider credential or client routing. Both nodes must already be enabled. Versioned
 private SSH stdio exchanges receiver-issued capabilities independently in each
 direction; ordinary CLI receipts omit them. Capability possession authenticates
 an enrollment, not an individual same-uid agent session or user approval.
+The SSH receiver authorizes the initiating machine's outbound delivery. The initiator
+stores `allowInbound: false`: return transport is not consent for arbitrary inbound work.
+Missing legacy policy is response-only. Local `hosts allow-inbound` / `deny-inbound`
+changes only this node's current grant; peer control cannot widen it. Public listings
+and enrollment receipts report local policy. Explicit broad consent admits all kinds
+and loaded-session metadata; response-only admission exposes only opened reply targets.
 
 One generation-bound saved enrollment transaction survives a lost remote reply. Repeating the
 same add command reconciles the identical transaction and capabilities; a new
@@ -97,6 +108,17 @@ queue schemas; lifecycle, turns, approvals, config writes and arbitrary pass-thr
 are absent. Native notifications/history/private fields are not forwarded.
 The gateway records loaded IDs on that connection and revalidates the queue target
 before native submission. Revalidation and submission remain non-atomic.
+`src/messaging/remote-envelope.ts` reconstructs the canonical envelope from the
+authenticated peer machine and validates exact text equality, UUID correlation, reply
+host/command and standard guidance before native submission. Noncanonical/forged
+wrappers refuse; session metadata remains descriptive, not authenticated session authority.
+`src/messaging/remote-replies.ts` owns at most 256 reply grants, registered by local
+control before request dispatch and bound to peer/enrollment/request/local sender.
+Grants expire after 24 hours or owner restart; they are reserved synchronously before
+queueing and consumed on queued/unknown, restored on definite native rejection.
+An outgoing definite non-submission forgets its grant when control remains available.
+No sender context creates no grant. Read filtering and queue admission recheck current
+local consent; withdrawal affects already-attached clients. No automatic replay is added.
 
 `src/messaging/rpc.ts` retains its Unix-only default connection factory. Its
 explicit attach seam consumes an already-connected trusted transport without
@@ -127,6 +149,12 @@ session authority. Initiated routes remain conflicts.
 GatewayPorts configurations. Port selection alone does not prove readiness.
 Linux inspection requires the IPv4 listener table; only an absent IPv6 table is treated as
 empty. Permission, read and other inspection failures remain fail-closed.
+
+Authenticated connections alone consume the shared connection budget. A separate
+four-socket pre-authentication set retires its oldest unverified socket on overflow,
+so silent clients cannot reserve owner/renewal slots or hold all fresh proof admissions.
+Proof verification precedes promotion; unverified hello identities earn no privileged slots.
+This is bounded admission, not protection against unlimited same-host traffic/CPU flooding.
 
 The owner shares fixed total limits across peers and both route directions:
 16 connections, 32 active/pending requests, ten helpers (eight persistent tunnel children

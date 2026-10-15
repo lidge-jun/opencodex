@@ -14,10 +14,12 @@ export function parseRemoteState(value: unknown): RemoteState {
     || !Array.isArray(raw.peers) || raw.peers.length > REMOTE_LIMITS.peers) throw remoteError("invalid_remote_state", "Messaging state has an invalid schema.");
   const aliases = new Set<string>(), ids = new Set<string>(), transactions = new Set<string>();
   for (const item of raw.peers) {
-    const peer = exactRecord(item, ["alias", "machine", "transaction", "incoming", "outgoing", "port", "ssh", "hostKey", "fingerprint"]);
+    const peer = exactRecord(item, ["alias", "machine", "transaction", "incoming", "outgoing", "port", "ssh", "hostKey", "fingerprint",
+      ...(Object.hasOwn(item, "allowInbound") ? ["allowInbound"] : [])]);
     if (!validAlias(peer.alias) || !validMachine(peer.machine) || peer.machine.id === raw.machine.id
       || !isThreadId(peer.transaction) || !validCapability(peer.incoming) || !validCapability(peer.outgoing)
       || peer.incoming === peer.outgoing || !validPort(peer.port)
+      || (Object.hasOwn(peer, "allowInbound") && typeof peer.allowInbound !== "boolean")
       || (peer.ssh !== null && (typeof peer.ssh !== "string" || !isSshAlias(peer.ssh)))
       || (peer.hostKey !== null && (typeof peer.hostKey !== "string" || peer.hostKey.length > 8192))
       || (peer.fingerprint !== null && (typeof peer.fingerprint !== "string" || !/^SHA256:[A-Za-z0-9+/=]{1,64}$/.test(peer.fingerprint)))
@@ -77,6 +79,16 @@ export class RemoteMessageStore {
     if (peers.length !== 1) throw remoteError("unknown_peer", "No unique enrolled messaging peer matches this exact host.");
     return peers[0]!;
   }
+  /** Local, explicit consent only; possession of a peer capability cannot widen inbound access. */
+  setInbound(selector: string, allow: boolean) {
+    const peer = this.peer(selector);
+    this.mutate(state => {
+      const current = state.peers.find(item => item.machine.id === peer.machine.id && item.transaction === peer.transaction);
+      if (!current) throw remoteError("peer_revoked", "Enrollment changed before inbound consent was saved.");
+      current.allowInbound = allow;
+    });
+    return { machine: peer.machine, inbound: allow ? "messages" : "responses-only" };
+  }
   /** Revalidate captured route authority after awaits without retiring unrelated peer routes. */
   requireCurrentPeer(state: RemoteState, peer: RemotePeer): void {
     const current = this.requireEnabled();
@@ -93,6 +105,7 @@ export class RemoteMessageStore {
     const state = this.read();
     return state ? { protocol: state.protocol, machine: state.machine, enabled: state.enabled, port: state.port,
       peers: state.peers.map(peer => ({ alias: peer.alias, machine: peer.machine, direction: peer.ssh ? "initiating" : "return-only",
+        inbound: peer.allowInbound === true ? "messages" : "responses-only",
         fingerprint: peer.fingerprint })) } : { protocol: REMOTE_PROTOCOL, enabled: false, peers: [] };
   }
 }

@@ -9,6 +9,7 @@ export type RemoteMessageArgs = { action: "enable"; port?: number; json: boolean
   | { action: "hosts-probe"; ssh: string; json: boolean }
   | { action: "hosts-add"; alias: string; ssh: string; fingerprint: string; json: boolean }
   | { action: "hosts-remove"; host: string; transaction?: string; json: boolean }
+  | { action: "hosts-allow-inbound" | "hosts-deny-inbound"; host: string; json: boolean }
   | { action: "hosts-abandon"; transaction: string; json: boolean }
   | { action: "remote-operation"; host: string; local: MessageArgs; json: boolean };
 
@@ -22,9 +23,11 @@ export function parseRemoteMessageArgs(argv: readonly string[]): RemoteMessageAr
     return local ? { action: "remote-operation", host: argv[hostIndex + 1]!, local, json: local.json } : null;
   }
   if (action === "hosts") {
-    if (!["list", "probe", "add", "remove", "abandon"].includes(argv[1] ?? "")) return null;
+    if (!["list", "probe", "add", "remove", "abandon", "allow-inbound", "deny-inbound"].includes(argv[1] ?? "")) return null;
     action = `hosts-${argv[1]}`; start = 2;
-    if (action === "hosts-add" || action === "hosts-remove") { positional = argv[start++]; if (!validAlias(positional)) return null; }
+    if (["hosts-add", "hosts-remove", "hosts-allow-inbound", "hosts-deny-inbound"].includes(action)) {
+      positional = argv[start++]; if (!validAlias(positional)) return null;
+    }
   }
   const seen = new Set<string>(), flags: Record<string, string> = {}, hosts: string[] = [];
   for (let index = start; index < argv.length; index++) {
@@ -54,6 +57,7 @@ export function parseRemoteMessageArgs(argv: readonly string[]): RemoteMessageAr
     if (transaction !== undefined && !isThreadId(transaction)) return null;
     return { action, host: positional!, json, ...(transaction !== undefined ? { transaction } : {}) };
   }
+  if (action === "hosts-allow-inbound" || action === "hosts-deny-inbound") return { action, host: positional!, json };
   if (action === "hosts-abandon" && isThreadId(flags["--transaction"])) return { action, transaction: flags["--transaction"]!, json };
   if ((action === "hosts-probe" || action === "hosts-add") && flags["--ssh"] && isSshAlias(flags["--ssh"])) {
     if (action === "hosts-probe") return { action, ssh: flags["--ssh"], json };
