@@ -535,7 +535,7 @@ async fn finish_and_exit_after(app: &AppHandle, reason: ExitReason) {
     match (reason, verdict) {
         (ExitReason::UserQuit, _) => app.exit(0),
         (ExitReason::CoordinatedRestart, DrainVerdict::Drained) => {
-            app.restart();
+            crate::process_spawn::with_spawn(|| app.restart());
         }
         (ExitReason::CoordinatedRestart, _) => {
             crate::logging::log_once("the update restart was refused", verdict.describe());
@@ -574,7 +574,7 @@ pub async fn prepare_restart(app: &AppHandle) -> RestartReadiness {
 
 /// Come back, once the installer has finished and returned.
 pub fn complete_restart(app: &AppHandle) -> ! {
-    app.restart()
+    crate::process_spawn::with_spawn(|| app.restart())
 }
 
 /// Stop the runtime this app owns and confirm it is gone.
