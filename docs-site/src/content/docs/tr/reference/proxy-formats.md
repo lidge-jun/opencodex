@@ -44,6 +44,8 @@ Chat Completions ve Messages uç noktaları ertelenmiş araç kataloglarını de
 
 Ayrıca, her gelen bağlantıda sağlayıcının `default.` ad alanlı çağrısı, isteğin bildirdiği yalın araç adına normalleştirilir (`default.Read` → `Read`).
 
+Native Messages, `tools: []` ile birlikte sistem mesajlarındaki satır içi araç tanımlarını da tanır. Bu adlar kalıcı olarak kaldırılana kadar çağrılabilir; ilgisiz istemci araçlarına izin vermez. Barındırılan MCP çağrıları ve sunucu araçlarının argüman akışları native biçimlerini korur.
+
 ## Uç nokta genel bakışı
 
 | İstemci yüzeyi | Uç nokta | Başarılı akışsız sonuç | Başarılı akış veya soket sonucu |

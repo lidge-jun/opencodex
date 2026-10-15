@@ -1,4 +1,7 @@
 {
+  "messages-native-empty-inline.test.ts": "claude-integration",
+  "explicit-empty-tool-catalog.test.ts": "responses",
+  "explicit-empty-tool-catalog-history.test.ts": "responses",
   "codex-history-pending-wal.test.ts": "codex-integration",
   "compaction-history-framing.test.ts": "responses",
   "service-log.test.ts": "service",
@@ -776,7 +779,7 @@
   "management-provider-pinsless-validation.test.ts": "server", "management-provider-proto-override.test.ts": "server",
   "management-provider-reasoning-lists.test.ts": "server", "management-provider-reset-replay.test.ts": "server",
   "management-provider-synthetic-max.test.ts": "server", "management-provider-upstream-websocket.test.ts": "server",
-  "management-provider-validation.test.ts": "server", "management-provider-verbosity.test.ts": "server",
+  "management-provider-context-inference.test.ts": "server", "management-provider-validation.test.ts": "server", "management-provider-verbosity.test.ts": "server",
   "management-route-registry.test.ts": "server", "protocol-routes.test.ts": "server",
   "protocol-settings-route.test.ts": "server", "protocol-provider-summary.test.ts": "server",
   "management-workflow-budget-routes.test.ts": "server", "managing-cli.test.ts": "service",
