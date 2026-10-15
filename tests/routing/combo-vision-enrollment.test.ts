@@ -10,6 +10,7 @@ import { getConfigPath, saveConfig } from "../../src/config";
 import { handleManagementAPI } from "../../src/server/management-api";
 import type { OcxConfig } from "../../src/types";
 import { isModelVisionSidecarConsumer } from "../../src/vision/eligibility";
+import { MODEL_DISCOVERY_MAX_MODELS } from "../../src/providers/model-discovery-limits";
 import { catalogConvergenceFactory } from "../helpers/catalog-convergence";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -136,6 +137,32 @@ describe("combo Vision Sidecar enrollment", () => {
       }
       expect(readFileSync(getConfigPath(), "utf8")).toBe(before);
       expect(config.providers?.a?.modelCapabilities).toBeUndefined();
+    });
+  });
+  test("PUT rejects enrollment that would push a provider's modelCapabilities past its limit", async () => {
+    await withTempHome(async () => {
+      const base = baseConfig();
+      // A provider already at the cap: the patch alone is valid, the merged map is not.
+      const full = Object.fromEntries(
+        Array.from({ length: MODEL_DISCOVERY_MAX_MODELS }, (_, i) => [`filler-${i}`, { contextTier: "long_context" as const }]),
+      );
+      const config = baseConfig({
+        providers: { ...base.providers, b: { ...base.providers.b!, modelCapabilities: full } },
+        combos: undefined,
+      });
+      saveConfig(config);
+      const before = readFileSync(getConfigPath(), "utf8");
+      const response = await comboApi(config, "PUT", "/api/combos", {
+        id: "mixed",
+        visionSidecarTargets: [{ provider: "b", model: "m2" }],
+        combo: { targets: [{ provider: "a", model: "m1" }, { provider: "b", model: "m2" }] },
+      });
+      expect(response?.status).toBe(400);
+      expect(String((await responseJson(response)).error)).toContain("too many models");
+      // Nothing is published: neither the combo nor a truncation-bound declaration.
+      expect(readFileSync(getConfigPath(), "utf8")).toBe(before);
+      expect(Object.keys(config.providers?.b?.modelCapabilities ?? {})).toHaveLength(MODEL_DISCOVERY_MAX_MODELS);
+      expect(config.combos?.mixed).toBeUndefined();
     });
   });
   test("PUT rejects already-image-capable and audio-only sidecar targets instead of overwriting", async () => {

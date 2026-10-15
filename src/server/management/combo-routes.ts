@@ -365,9 +365,13 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
         patch[model] = { inputModalities: ["text"] };
         sidecarPatches.set(provider, patch);
       }
-      for (const patch of sidecarPatches.values()) {
-        const error = modelCapabilitiesConfigError(patch);
-        if (error) return jsonResponse({ error }, 400);
+      for (const [providerName, patch] of sidecarPatches) {
+        // Validate the map that will be persisted, not just the patch: a provider already at
+        // the modelCapabilities cap would otherwise save an oversized map that load-time
+        // sanitization truncates, silently dropping the new text-only declaration.
+        const merged = mergeModelCapabilities(config.providers?.[providerName]?.modelCapabilities, patch);
+        const error = modelCapabilitiesConfigError(patch) ?? (merged ? modelCapabilitiesConfigError(merged) : null);
+        if (error) return jsonResponse({ error: `visionSidecarTargets for provider "${providerName}": ${error}` }, 400);
       }
     }
     // Persist only non-default identity/capability fields so config stays sparse.
@@ -489,6 +493,11 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
           const provider = config.providers?.[providerName];
           if (!provider) continue;
           const capabilities = mergeModelCapabilities(provider.modelCapabilities, patch);
+          // Re-check under the config lock: a concurrent edit may have grown the map since
+          // the pre-check, and an oversized map must never be published.
+          if (capabilities && modelCapabilitiesConfigError(capabilities)) {
+            throw new Error("modelCapabilities would exceed its limit");
+          }
           if (capabilities === undefined) delete provider.modelCapabilities;
           else provider.modelCapabilities = capabilities;
         }
