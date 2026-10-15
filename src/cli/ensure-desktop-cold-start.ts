@@ -10,8 +10,9 @@
  *
  * Rules, in order:
  * - A running Desktop app is the supervisor. Wait for its proxy; never start a competing one.
- * - A durable Desktop claim with no running app: start Desktop (hidden, as a login launch would)
- *   where that is possible, then wait. Elsewhere, fail with guidance. A missing Desktop process
+ * - A durable Desktop claim with no running app: start Desktop (hidden, by the path its own
+ *   login registration recorded — LaunchServices never picks the bundle) where that is
+ *   verifiable, then wait. Elsewhere, fail with guidance. A missing Desktop process
  *   never authorizes a CLI proxy by itself; handing ownership to the CLI stays an explicit
  *   `ocx service install` consent step.
  * - Ownership or the process list that cannot be read is not evidence of absence: refuse.
@@ -22,9 +23,9 @@
  */
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, linkSync, readdirSync, readFileSync, readlinkSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, constants, existsSync, linkSync, readdirSync, readFileSync, readlinkSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join, win32 } from "node:path";
+import { basename, dirname, join, posix, win32 } from "node:path";
 import { getConfigDir } from "../config/paths";
 import { resolveServiceOwnership } from "../service/state";
 
@@ -220,11 +221,63 @@ export function inspectDesktopProcess(options: DesktopProcessOptions = {}): Desk
   }
 }
 
-/** Start the macOS app hidden, the same way its login item does. */
-export function launchDesktopApp(options: { platform?: NodeJS.Platform; run?: Execute } = {}): boolean {
+const DESKTOP_BUNDLE_ID = "com.opencodex.desktop";
+const DESKTOP_PLIST_LABEL = "OpenCodex";
+
+/**
+ * The app bundle the consented installation itself registered as its Start-at-Login program —
+ * not whichever bundle LaunchServices would resolve for our identifier. `open -b` answers a
+ * mutable per-user registry: any planted bundle claiming {@link DESKTOP_BUNDLE_ID} could be
+ * selected and executed in the real app's place. The recorded claim, this app's own install-id
+ * store, and the login registration it wrote are the durable evidence of which installation
+ * that is; a claim whose registration is absent, malformed, stale or points off a Desktop
+ * executable refuses the launch instead of guessing.
+ */
+function consentedDesktopBundle(home: string, installId: string, run: Execute): string | null {
+  const localId = readFileSync(
+    join(home, "Library", "Application Support", DESKTOP_BUNDLE_ID, "install-id"), "utf8",
+  ).trim();
+  if (!localId || localId !== installId) return null;
+  const plistPath = realpathSync(join(home, "Library", "LaunchAgents", `${DESKTOP_PLIST_LABEL}.plist`));
+  const registration = JSON.parse(
+    run("/usr/bin/plutil", ["-convert", "json", "-o", "-", plistPath], 3_000),
+  ) as { Label?: unknown; ProgramArguments?: unknown; Program?: unknown };
+  const args = registration.ProgramArguments;
+  // The shapes auto-launch writes: [program] or [program, "--autostart"]; see the migration
+  // rules in desktop/src-tauri/src/login_registration.rs, which classify anything else Leave.
+  // This is a macOS plist path, regardless of the host running an injected launch probe.
+  if (registration.Label !== DESKTOP_PLIST_LABEL || !Array.isArray(args)
+    || (args.length !== 1 && args.length !== 2) || typeof args[0] !== "string" || !posix.isAbsolute(args[0])
+    || (args.length === 2 && args[1] !== "--autostart")
+    || (registration.Program !== undefined && registration.Program !== args[0])) return null;
+  const executable = realpathSync(args[0]);
+  if (!isDesktopExecutable(executable, "darwin") || !statSync(executable).isFile()) return null;
+  accessSync(executable, constants.X_OK);
+  const bundle = dirname(dirname(dirname(executable)));
+  if (!bundle.endsWith(".app")) return null;
+  const info = JSON.parse(
+    run("/usr/bin/plutil", ["-convert", "json", "-o", "-", join(bundle, "Contents", "Info.plist")], 3_000),
+  ) as { CFBundleIdentifier?: unknown; CFBundleExecutable?: unknown };
+  // `open` uses this selector, so checking only the registration and identifier would
+  // validate one binary while launching another. The registered path is already canonical.
+  if (info.CFBundleIdentifier !== DESKTOP_BUNDLE_ID || info.CFBundleExecutable !== "opencodex-desktop") return null;
+  return realpathSync(join(bundle, "Contents", "MacOS", info.CFBundleExecutable)) === executable ? bundle : null;
+}
+
+/** Start the consented macOS app hidden, by the path its own login registration recorded. */
+export function launchDesktopApp(options: {
+  platform?: NodeJS.Platform;
+  run?: Execute;
+  home?: string;
+  ownership?: () => ReturnType<typeof resolveServiceOwnership>;
+} = {}): boolean {
   if ((options.platform ?? process.platform) !== "darwin") return false;
   try {
-    (options.run ?? execute)("/usr/bin/open", ["-g", "-b", "com.opencodex.desktop", "--args", "--autostart"], 10_000);
+    const owner = (options.ownership ?? resolveServiceOwnership)();
+    if (owner.kind !== "owned" || owner.ownership.owner !== "desktop") return false;
+    const bundle = consentedDesktopBundle(options.home ?? homedir(), owner.ownership.installId, options.run ?? execute);
+    if (bundle === null) return false;
+    (options.run ?? execute)("/usr/bin/open", ["-g", bundle, "--args", "--autostart"], 10_000);
     return true;
   } catch { return false; }
 }

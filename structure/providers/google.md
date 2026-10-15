@@ -11,6 +11,14 @@ explicit wire summary none win. Eligible CCA Gemini requests use `includeThought
 when provider opt-in and per-request display both allow it. Thought signatures remain attached
 to their tool calls independently; they never become Anthropic thinking signatures.
 
+The visibility marker is the boolean `thought: true`, not the presence of a `thoughtSignature`
+or the wording of the text. An unmarked signed text part remains ordinary assistant output;
+a signature-only part produces no text. Responses keeps summaries in reasoning items, Chat in
+`reasoning_content`, and Messages in thinking blocks. The handler-level synthetic matrix in
+`tests/responses/protocol-argon-thought-boundary.test.ts` checks Argon across buffered/SSE
+clients, coalesced/split upstream frames, direct/bridge lanes, explicit display suppression and
+tool calls. It verifies protocol separation, not live model behavior or another client's UI.
+
 > Decision record: [ADR-0055](../decisions/ADR-0055-google-thought-text-visibility-boundary.md)
 
 ## Google response-part field boundary
@@ -35,6 +43,14 @@ Vertex prefers Codex's opaque `prompt_cache_key` for session identity and falls 
 first-user-message derivation for clients that omit it; only the fixed hash is retained.
 Both streaming and non-streaming responses feed the store; request compilation happens before replay
 so matching uses the provider-visible tool name.
+
+`src/adapters/openai-responses/passthrough.ts` removes item-level `extra_content` through
+`stripProviderInputItemMetadata` in `src/adapters/openai-responses/request-strips.ts` only for
+OpenAI-operated Responses destinations (canonical ChatGPT Codex and the official OpenAI API).
+This outbound projection is shared by HTTP and WebSocket creates, including concrete combo/fallback
+children, and the direct native compact send in `src/server/responses/compact.ts`.
+It preserves caller-owned history for Google thought-signature replay and leaves arbitrary
+gateway extensions intact; it does not allowlist item fields or traverse tool arguments/results.
 
 > Decision record: [ADR-0057](../decisions/ADR-0057-google-tool-call-thought-signature-replay.md)
 

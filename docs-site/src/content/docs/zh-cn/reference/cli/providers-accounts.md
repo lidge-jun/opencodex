@@ -5,6 +5,13 @@ description: 提供方配置、凭据、配额，以及模型目录命令。
 
 这些命令用于配置上游提供方、认证账号、管理凭据池，并控制暴露给 Codex 的模型目录。
 
+使用剩余套餐额度可通过 `ocx account use-remaining openai main on` 开启，再用
+`ocx account use openai main` 选择主账号；`status --json` 查看状态，`off` 关闭。
+将 `main` 替换为唯一的池账号 ID 或别名即可控制该账号。开启后关闭该账号按用量提前切换；
+主账号的短、长窗口硬锁阈值延后到 100%。开关跨重启保留，关闭后恢复原有阈值。
+暂停、重新认证、上游冷却和付费 credits 权限仍然生效；此开关不会开启付费额度。
+详见[英文说明](/reference/cli/providers-accounts/#use-remaining-included-quota)。
+
 ## 提供方
 
 ### `ocx provider <subcommand>`

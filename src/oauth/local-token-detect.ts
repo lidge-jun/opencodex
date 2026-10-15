@@ -3,7 +3,7 @@
  * Read-only: never writes to external credential stores.
  * Ported from jawcode packages/ai/src/utils/oauth/local-token-detect.ts (xAI portion).
  */
-import { execSync } from "node:child_process";
+import { execFile, execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -107,6 +107,26 @@ function readClaudeSecureStorage(): string | null {
   // Do not let the default macOS Keychain entry shadow that requested credential file.
   if (process.env.CLAUDE_CONFIG_DIR?.trim()) return readClaudeCredentialsFile() ?? readClaudeKeychain();
   return readClaudeKeychain() ?? readClaudeCredentialsFile();
+}
+
+/** Non-blocking Keychain read for request paths; same item and timeout as the sync reader. */
+function readClaudeKeychainAsync(): Promise<string | null> {
+  if (process.platform !== "darwin") return Promise.resolve(null);
+  return new Promise(resolve => {
+    execFile("security", ["find-generic-password", "-s", CLAUDE_KEYCHAIN_SERVICE, "-w"], { encoding: "utf8", timeout: 5000 },
+      (error, stdout) => resolve(error ? null : stdout.trim() || null));
+  });
+}
+
+/**
+ * Async variant of {@link detectClaudeCodeToken} with the same source precedence. A request-path
+ * caller must not hold the event loop for a Keychain lookup (up to five seconds).
+ */
+export async function detectClaudeCodeTokenAsync(): Promise<OAuthCredentials | null> {
+  const raw = process.env.CLAUDE_CONFIG_DIR?.trim()
+    ? readClaudeCredentialsFile() ?? await readClaudeKeychainAsync()
+    : await readClaudeKeychainAsync() ?? readClaudeCredentialsFile();
+  return raw ? parseClaudeOauthPayload(raw) : null;
 }
 
 export function parseClaudeOauthPayload(raw: string): OAuthCredentials | null {

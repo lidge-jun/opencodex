@@ -201,7 +201,7 @@ Les échecs d’un combo se répartissent entre ceux qui entraînent un **bascul
 | HTTP 401, 403, 404, 408, 429, ou n'importe quel 5xx | Refroidissez la cible et passez à la prochaine cible éligible. |
 | Erreur classée comme erreur d’authentification, d’abonnement, de quota, de limitation de débit, de surcharge ou de serveur en amont | Place la cible en période de refroidissement et bascule, même si le statut seul ne suffit pas. |
 | Annulation client (499), `origin_rejected`, refus de cyber-politique, débordement de contexte ou autre demande invalide | Arrêtez et renvoyez l'erreur ; une autre cible ne rendrait pas la demande valide. |
-| Rejet structuré de `user`, valeur non prise en charge pour `reasoning.effort`/`reasoning_effort`, ou rejet d'entrée d'image propre à un modèle (`param: input`) | Bascule vers la cible admissible suivante avant le début de la sortie, sans délai de refroidissement ; voir Compatibilité des paramètres facultatifs ci-dessous. |
+| Rejet structuré de `user`, valeur non prise en charge pour `reasoning.effort`/`reasoning_effort`, rejet d'entrée d'image propre à un modèle (`param: input`), ou refus d'un média d'entrée que la route ne peut pas lire (`unsupported_input_modality`) | Bascule vers la cible admissible suivante avant le début de la sortie, sans délai de refroidissement ; voir Compatibilité des paramètres facultatifs ci-dessous. |
 | Premier appel d'outil d'un tour Responses exécuté par un adaptateur interne (`runTurn`) que la requête courante n'a pas déclaré, avant toute sortie et tout effet de bord non rejouable | Met la cible en refroidissement et bascule avec le même catalogue d'outils. Après une sortie visible ou un effet de bord non rejouable, le refus est définitif. Les requêtes Chat Completions et Anthropic Messages ne changent pas. |
 | Toute autre erreur non classifiée | Arrêtez et renvoyez l'erreur. |
 
@@ -370,6 +370,6 @@ gérer un refus de politique ou corriger l’origine de la demande rejetée. Les
 
 ## Compatibilité des paramètres facultatifs
 
-Exception aux erreurs 400 terminales : un rejet structuré de `user`, une valeur non prise en charge pour `reasoning.effort`/`reasoning_effort`, ou un rejet d’entrée d’image propre à un modèle (`param: input`) peut faire passer le combo à la cible admissible suivante avant le début de la sortie, sans délai de refroidissement. Le refus de sécurité, l’annulation et une sortie déjà commencée restent non rejouables.
+Exception aux erreurs 400 terminales : un rejet structuré de `user`, une valeur non prise en charge pour `reasoning.effort`/`reasoning_effort`, un rejet d’entrée d’image propre à un modèle (`param: input`), ou le refus d’un média d’entrée que la route ne peut pas lire (`unsupported_input_modality`) peut faire passer le combo à la cible admissible suivante avant le début de la sortie, sans délai de refroidissement. Le refus de sécurité, l’annulation et une sortie déjà commencée restent non rejouables.
 
 [Canonical compatibility details](/guides/combos/#request-local-target-compatibility).

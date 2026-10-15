@@ -519,7 +519,8 @@ describe("terminal guard bounded retention", () => {
         expect(requests[0]?.context.messages.at(-2)).toMatchObject({
           role: "assistant",
           content: [
-            { type: "thinking", thinking: "reasoning", signature: "signature", redacted: ["redacted"] },
+            { type: "thinking", thinking: "reasoning", signature: "signature" },
+            { type: "thinking", thinking: "", redacted: ["redacted"] },
             { type: "text", text: "Let me check." },
           ],
         });

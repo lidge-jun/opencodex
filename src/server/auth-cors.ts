@@ -30,6 +30,7 @@ import {
   providerForwardClientHeadersConfigError,
   reasoningSummaryDeliveryRecordConfigError,
   upstreamHttpVersionConfigError,
+  credentialPinnedProviderConfigError,
 } from "../config/provider-validation";
 import { providerDestinationConfigError } from "../lib/destination-policy";
 import { providerEgressConfigError } from "../lib/provider-egress";
@@ -912,6 +913,8 @@ export function providerManagementConfigError(
   if (reasoningSummaryDeliveryError) return `provider ${name} ${reasoningSummaryDeliveryError}`;
   const modelAdaptersError = modelAdapterRecordConfigError(raw.modelAdapters, "modelAdapters", name, typed);
   if (modelAdaptersError) return `provider ${name} ${modelAdaptersError}`;
+  const credentialPinError = credentialPinnedProviderConfigError(name, typed);
+  if (credentialPinError) return `provider ${name} ${credentialPinError}`;
   const preferHostedToolsError = modelPreferHostedToolsConfigError(
     raw.modelPreferHostedTools,
     "modelPreferHostedTools",

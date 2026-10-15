@@ -32,6 +32,9 @@ const hiddenImage: CatalogRow = {
 const textModel: CatalogRow = {
   provider: "text", id: "plain", inputModalities: ["text"], reasoningEfforts: ["high", "xhigh"],
 };
+const audioModel: CatalogRow = {
+  provider: "audio", id: "listen", inputModalities: ["audio"], reasoningEfforts: ["high"],
+};
 const target = (row: CatalogRow): Target => ({ provider: row.provider, model: row.id });
 const combo = (targets: Target[], extra: Record<string, unknown> = {}) => ({
   id: "hidden-test", model: "combo/hidden-test", strategy: "failover", stickyLimit: 1,
@@ -136,13 +139,27 @@ test("a disabled image-capable target enables the Image switch and stays visible
   expect(effortValues()).toEqual(["", "low", "high"]);
 });
 
+// Text-capable members are covered by the Vision Sidecar, so they keep images on.
 for (const [name, targets] of [
   ["text-only", [target(textModel)]],
-  ["unknown", [{ provider: "vision", model: "missing" }]],
   ["mixed image/text", [target(hiddenImage), target(textModel)]],
 ] as const) {
-  test(`${name} targets keep the Image switch off`, async () => {
+  test(`${name} targets keep the Image switch on through the Vision Sidecar`, async () => {
     mockCatalog([hiddenImage, textModel], [...targets]);
+    await mount();
+    await openDetail();
+    expectImages(true);
+  });
+}
+
+// Members the sidecar cannot cover still force the switch off.
+for (const [name, targets] of [
+  ["unknown", [{ provider: "vision", model: "missing" }]],
+  ["audio-only", [target(audioModel)]],
+  ["mixed text/audio-only", [target(textModel), target(audioModel)]],
+] as const) {
+  test(`${name} targets keep the Image switch off`, async () => {
+    mockCatalog([hiddenImage, textModel, audioModel], [...targets]);
     await mount();
     await openDetail();
     expectImages(false);
@@ -157,7 +174,9 @@ for (const provider of ["vision", "text"]) {
     ], [{ provider, model: "shared" }]);
     await mount();
     await openDetail();
-    expectImages(provider === "vision");
+    // The text row is sidecar-eligible, so both resolve to an enabled Image switch;
+    // the provider still decides which reasoning ladder applies.
+    expectImages(true);
     expect(effortValues()).toEqual(provider === "vision" ? ["", "low", "high"] : ["", "high", "xhigh"]);
   });
 }
@@ -221,6 +240,7 @@ test("cache remount and live revalidation preserve hidden-target capabilities", 
   const cached = readSessionListCacheEntry<{ capabilityModels: CatalogRow[]; models: CatalogRow[] }>(CACHE_KEY)!;
   expect(cached.data.capabilityModels).toEqual([{
     provider: "vision", id: "hidden", inputModalities: ["text", "image"], reasoningEfforts: ["low", "high"],
+    visionSidecarConsumer: false,
   }]);
   expect(cached.data.models).toEqual([]);
   await act(async () => { root!.unmount(); });
