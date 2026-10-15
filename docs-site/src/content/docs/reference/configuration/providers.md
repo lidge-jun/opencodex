@@ -15,6 +15,13 @@ compatibility fallback. With it, the order is: discovered/configured limits (the
 Azure metadata, model-ID metadata, enabled Context cap as the window, then 128k. An enabled
 Context cap still limits the result. Built-in providers keep their existing behavior and ignore the flag.
 
+`GET /api/providers` includes `inferContextWindow` only when configured, preserving both `true` and
+`false`. To change it, `PATCH /api/providers?name=<provider>` accepts `true`, `false`, or `null` to
+clear the setting and restore the default-off behavior; other types return `400`. Omitting it keeps
+the current setting. A same-name `POST /api/providers` also keeps an omitted setting, including
+`false` and any change committed while the save was validating. A submitted boolean wins, including
+`false`, even if the stored value is `true`.
+
 ```json
 { "providers": { "my-relay": { "adapter": "anthropic", "baseUrl": "https://relay.example/v1", "inferContextWindow": true } } }
 ```
@@ -69,6 +76,7 @@ separate. Full request URLs such as `/api/v1/responses` are not provider base UR
 | `contextCapValue?` | `number` | `350000` | Default used on first enable. A later enable restores the selected provider value. Updating the global value with `setAll: true` changes enabled caps only; `setAll: true` without a value enables all configured providers at the current global value. |
 | `codexAccounts?` | `CodexAccount[]` | `[]` | ChatGPT/Codex pool account metadata managed by Codex Auth. Secrets live separately in `codex-accounts.json`. |
 | `pausedCodexAccountIds?` | `string[]` | `[]` | Accounts excluded from Pool selection until resumed, including the main `__main__` account when paused. Manual pause and resume also update existing main and pool entries for the same account and workspace. |
+| `codexUseRemainingQuotaAccountIds?` | `string[]` | `[]` | Accounts opted into using their remaining included quota. Disables proactive usage switching for listed accounts; for `__main__`, effective short/long hard-lock thresholds become 100%. Original thresholds remain stored and apply again after disabling. Pause, authentication, eligibility, cooldown and paid-credit permission still apply. Managed by `ocx account use-remaining openai <id-or-main> on`; this persistent preference does not select the account. |
 | `creditCodexAccountIds?` | `string[]` | `[]` | Accounts allowed to keep serving from ChatGPT credits after a usage limit, including the main `__main__` account. Upstream does not refuse an account that holds credits at 100%; it serves the request and draws the balance. Spending is opt-in: an account not listed here is skipped by selection while one of its usage windows (weekly or monthly, only monthly on 30-day plans, or the 5-hour window) reads 100% with its reset still ahead, and returns once that reset passes. A weekly or monthly reading without a reset time does not hold the account; a 5-hour reading at 100% without a reset holds it only while that reading is still fresh. When no other account is available, automatic selection finds none rather than spending credits. An unlisted `__main__` is also refused, like a hard-lock refusal, when a request names it or carries its credential. Listing `__main__` does not lift the main-account hard lock (on by default at 98%), which still stops the main login first; turn the lock off to let the main account spend credits (a lock at 100% still stops it at 100%). New accounts start unlisted. Managed by the **Use credits** switch in the Codex Auth header and the **Use credits after limit** switch in each account card's **⋯** menu. |
 | `codexQuotaAutoRefresh?` | `Record<string, object>` | `{}` | Per-Codex-login-account opt-in for automatic `fiveHour` and `weekly` window activation in Pool mode; Direct mode does not run this worker. In Providers/Codex Auth **Advanced settings**, one control enables or disables both supported windows across all current main and added accounts. New accounts are not opted in automatically. Enable skips windows absent from live WHAM data; disable also clears stale enabled windows. The UI reuses granular `/api/settings` writes, reconciles partial failures, and retries the original ON/OFF intent without replacing unrelated settings or completed reset markers. The API still rejects enabling an unavailable window with HTTP 409. At a reported reset time, opencodex sends one minimal non-stored Codex message using that account's quota and persists the activated timestamp. This does not apply to API-key providers. |
 | `codexAccountNamespaces?` | `Record<string, string>` | — | Optional map from an arbitrary public model selector to a stored Codex account target. When account-qualified picker rows are enabled, each selector whose target is present adds separate `<selector>/<native-openai-model>` rows to the Codex picker; each row uses only that account. With any selector active, bare native rows are hidden in the picker, but their ids remain routable and listed by raw `/v1/models` unless explicitly disabled. |
@@ -283,7 +291,7 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `minMaxOutputTokens?` | `number` | Optional positive integer floor for explicit positive `max_output_tokens` budgets on `azure-openai`/`azure` Responses routes. Unset preserves the caller's cap. Setting it authorizes raising a smaller cap, which can increase output usage. Omitted or invalid request budgets are unchanged. |
 | `defaultMaxOutputTokens?` | `number` | Provider-wide `openai-chat` fallback when the client omits `max_output_tokens`. |
 | `modelMaxOutputTokens?` | `Record<string, number>` | Positive per-model `openai-chat` fallback budgets; exact/pattern matches beat the provider default. |
-| `modelCosts?` | `Record<string, Cost4>` | Per-model display prices (USD per 1M tokens), keyed by that provider's exact upstream model id — not a provider identifier or a routed `provider/model` label, e.g. `{ "deepseek-v4-flash": { "input": 0.14, "output": 0.28, "cacheRead": 0.0028, "cacheWrite": 0 } }`. Any model id is a valid key — custom providers may target any OpenAI-compatible endpoint through the `openai-chat` adapter, and local or internal provider ids work even when they are absent from the built-in catalogs. User-configured prices win over the built-in catalogs in the Logs `~$` and Usage estimates; historical entries are repriced from the current overlay, so editing a price can move past totals. The fallback order is user `modelCosts` → exact official correction → jawcode catalog → expected-price overlay → model-level vendor fallback, and an explicit all-zero user entry means a known-zero estimate; delete that model entry to restore automatic pricing. All-zero catalog metadata still falls through. Each rate must be a non-negative finite number at most 1,000,000 (USD per 1M tokens); out-of-range rows are rejected by the management boundary and dropped on load. Display-time estimation only: overlays never affect routing, account selection, quotas, or billing. |
+| `modelCosts?` | `Record<string, ProviderCostOverlay>` | Per-model display prices (USD per 1M tokens), keyed by that provider's exact upstream model id — not a provider identifier or a routed `provider/model` label, e.g. `{ "deepseek-v4-flash": { "input": 0.14, "output": 0.28, "cacheRead": 0.0028, "cacheWrite": 0 } }`. Any model id is a valid key — custom providers may target any OpenAI-compatible endpoint through the `openai-chat` adapter, and local or internal provider ids work even when they are absent from the built-in catalogs. User-configured prices win over the built-in catalogs in the Logs `~$` and Usage estimates; historical entries are repriced from the current overlay, so editing a price can move past totals. The fallback order is user `modelCosts` → exact official correction → jawcode catalog → expected-price overlay → model-level vendor fallback, and an explicit all-zero user entry means a known-zero estimate; delete that model entry to restore automatic pricing. All-zero catalog metadata still falls through. Each rate must be a non-negative finite number at most 1,000,000 (USD per 1M tokens); out-of-range rows are rejected by the management boundary and dropped on load. Display-time estimation only: overlays never affect routing, account selection, quotas, or billing. |
 | `headers?` | `Record<string, string>` | Extra upstream headers. Authorization, cookies, API-key headers, embedded newlines, and invalid names are rejected. Requests that ride the provider outbound wrapper — model discovery, connection tests, and other proxy-originated diagnostics such as the Ollama show probe — send `User-Agent: opencodex` unless a User-Agent is set here or by the provider preset. |
 | `forwardClientHeaders?` | `string[]` | `openai-responses` only: opt in to copying named inbound client metadata headers onto inference requests when the provider has not already set that header. Credential and transport-owned names such as `Authorization`, cookies, API-key headers, `Content-Type`, `Content-Length`, `Host`, and `x-oai-attestation` are rejected and also filtered at runtime. Header names are case-insensitive and may not repeat. `headers` remains authoritative; the existing caller `User-Agent` fallback still applies when neither surface sets one.  Supported names: `originator`, `x-client-request-id`, `x-codex-app-version`, `user-agent`; all other names are refused. |
 | `openRouterRouting?` | `OpenRouterProviderRouting` | Default OpenRouter `order`, `only`, and `allowFallbacks` preferences; valid only for canonical OpenRouter with `openai-chat`. |
@@ -412,6 +420,10 @@ and `modelContextWindows` for that exact id when needed. Unknown ids are not gue
 The destination is the adapter, the base URL (scheme and host compared without regard to case, trailing slashes ignored) and, when the request names one, the auth mode. Moving a provider to another destination drops the eight settings because they describe the previous upstream, and drops the key pool because its keys were issued for it. A save never merges the rest of the old row into the new one.
 
 `hideRawReasoning` is an operator display policy, so a save of the same provider name keeps its stored value whenever the request omits it, including after a destination move. A value sent in the request wins, including `false`.
+
+The optional `inferContextWindow` setting also survives same-name saves that omit it, including
+destination moves. Its read, update, and clear behavior is described under
+[Context windows on custom providers](#context-windows-on-custom-providers).
 
 `PATCH /api/providers?name=<provider>` changes only the fields it names and keeps every other stored field, whatever the destination. It accepts all eight settings; `null` clears one. It also accepts a boolean `hideRawReasoning` or `null` to clear it. For the two reasoning lists an empty array is stored as an explicit opt-out rather than removed.
 
@@ -1224,7 +1236,7 @@ provider in question.
 
 ### Managed record shapes
 
-`apiKeys[]` entries contain `id`, `name`, generated `key`, and ISO `createdAt` strings.
+`apiKeys[]` entries contain `id`, `name`, generated `key`, and ISO `createdAt` strings. Optional `allowMeteredComboTargets: true` explicitly permits targets marked `metered: true`; omitted or false consent denies them. The environment token never qualifies. Local loopback-only callers can instead use per-combo `allowMeteredTargets: true`; configured-key and linked callers still need key consent. See [Metered fallback consent](/guides/combos/#metered-fallback-consent).
 `codexAccounts[]` entries require `id`, `email`, and `isMain`, with optional `plan`,
 `chatgptAccountId`, and privacy-safe `logLabel`. These records are normally dashboard-managed.
 
@@ -1701,6 +1713,57 @@ Every consumer that answers "can this model take an image" applies one rule to t
 image is absent from the list. A row declaring only `audio` or `video` therefore counts as
 image-incapable, rather than being treated as a text model by one predicate and an image target
 by the other.
+
+### Prompt-length pricing
+
+In **Models → Price**, keep four base rates and choose a prompt-length mode:
+
+- **Automatic** keeps the catalog context rules. It is also the behavior of existing four-rate overrides without a policy.
+- **Flat rate** uses the base rates at every prompt length, disabling catalog context adjustments.
+- **Custom threshold** selects four absolute alternative rates using `>` or `≥` and one token threshold. The custom policy replaces the catalog context rule on both sides of the threshold.
+
+All prompt tokens count, including cache reads and writes, before billable-input subtraction.
+Output does not count toward the threshold. Once crossed, the alternative rates apply to the
+entire request, including output, not only the excess tokens. Custom rates are standard-speed
+rates: an applicable Fast/Priority premium applies once after the rates are selected and follows
+the catalog's relation between Priority and long-context pricing for that model. A confirmed
+Priority request shows the custom estimate as a lower bound only when the catalog declares that
+relation as `lower-bound`, as for xAI Grok, which publishes no combined rate. A model with no
+catalog context rule applies any Priority multiplier once. These settings control estimates; they
+do not change provider billing.
+**Reset to automatic** deletes the entire override and restores catalog prices and rules. Saving or
+editing the config updates live estimates and historical totals.
+
+For example, a Haiku 5.5 override with alternative rates strictly above 100,000 prompt tokens:
+
+```json
+{
+  "modelCosts": {
+    "claude-haiku-5-5": {
+      "input": 0.10,
+      "output": 0.50,
+      "cacheRead": 0.01,
+      "cacheWrite": 0.125,
+      "promptLengthPricing": {
+        "mode": "custom",
+        "thresholdTokens": 100000,
+        "comparison": "gt",
+        "rates": { "input": 0.50, "output": 2.50, "cacheRead": 0.05, "cacheWrite": 0.625 }
+      }
+    }
+  }
+}
+```
+
+This is an example of user-defined prices, not an official Haiku price list.
+Any positive safe-integer threshold, including `272000`, is supported; use `"gte"` for inclusive
+comparison. All four alternative rates are required and follow the base-rate limits, including zero.
+The other policy is `{ "mode": "flat" }`. Omit `promptLengthPricing` to retain automatic context
+rules with your base prices; an explicit `{ "mode": "automatic" }` is accepted and means the same,
+and saves from the dashboard or API store it as an absent field.
+
+Legacy `openai-multi` model price overrides retain valid prompt-length policies when startup
+migrates them to `openai`, including overrides keyed by `openai-multi/<model>`.
 
 ### Renamed API-key presets
 

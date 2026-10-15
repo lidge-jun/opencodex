@@ -626,7 +626,7 @@ JSON mode: `payload`.
 
 ### `ocx observe usage`
 
-Usage: `ocx observe usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok>] [--since <epoch-ms|ISO-datetime>] [--until <epoch-ms|ISO-datetime>] [--provider <name>] [--model <id>] [--api-key-id <id>] [--search <text>] [--json]`
+Usage: `ocx observe usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok>] [--since <epoch-ms|ISO-datetime>] [--until <epoch-ms|ISO-datetime>] [--provider <name>] [--model <id>] [--api-key-id <id>] [--search <text>] [--top <1-1000>] [--json]`
 
 Read token and estimated-cost usage.
 
@@ -646,13 +646,14 @@ State-changing: no.
 | `--model` | string | Filter model. |
 | `--json` | boolean | Emit the result as JSON. |
 | `--api-key-id` | string | Exact nonblank management key scope; connected clients refuse this before reading their enrolled key. |
-| `--search` | string | Model-row substring view over model/provider/resolvedModel; top100 by tokens. Whole-report totals stay unchanged. |
+| `--top` | number | 1-1000 human model rows; default 10, or 100 with --search. Applied after search; ignored with --json. Totals unchanged. |
+| `--search` | string | Model-row substring view over model/provider/resolvedModel; default top100 by tokens. Whole-report totals stay unchanged. |
 
 JSON mode: `payload`.
 
 - Also available as ocx usage. Connected clients read only their enrolled-key Hub report through /v1/usage; caller --api-key-id is refused before key read/transport and never grants management authority.
 - Nonclient --api-key-id uses /api/usage and requires matching filter acknowledgment. An unknown acknowledged key is empty/matched:false, not404. Custom-window acknowledgment remains required.
-- --search filters only returned model rows after scope acknowledgment. Blank search selects the top100 model rows; modelView reports match/return counts without recomputing totals.
+- --search filters only returned model rows after scope acknowledgment. Blank search selects the top100 model rows by default; modelView reports match/return counts without recomputing totals.
 
 ### `ocx observe storage`
 

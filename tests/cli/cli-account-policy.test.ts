@@ -55,6 +55,45 @@ function fixture(handler?: (call: Call, index: number) => unknown | Promise<unkn
 function result() { expect(stdout.mock.calls).toHaveLength(1); return JSON.parse(stdout.mock.calls[0]![0]); }
 function privateOutput() { expect(JSON.stringify([...stdout.mock.calls, ...stderr.mock.calls])).not.toContain(PRIVATE); }
 
+test.each(["on", "off", "status"])("use-remaining %s resolves one account and verifies the receipt", async action => {
+  const f = fixture(call => {
+    if (call.path.startsWith("/api/codex-auth/accounts/use-remaining")) return {
+      ok: true, id: "__main__", useRemainingQuota: action !== "off", autoSwitchThreshold: action === "off" ? 65 : 0,
+      mainAccountHardLock: { enabled: true, state: "ready", thresholds: { short: action === "off" ? 90 : 100, long: action === "off" ? 98 : 100 } },
+      token: PRIVATE,
+    };
+  });
+  expect(await policy("use-remaining", ["openai", "main", action, "--json"], f.deps)).toBe(0);
+  expect(f.calls[1]!.method).toBe(action === "status" ? "GET" : "PUT");
+  expect(f.calls[1]!.body).toEqual(action === "status" ? undefined : { id: "__main__", useRemainingQuota: action === "on" });
+  expect(result().useRemainingQuota).toBe(action !== "off"); privateOutput();
+});
+
+test("use-remaining refuses a misleading receipt before claiming success", async () => {
+  const f = fixture(call => call.path.includes("use-remaining") ? {
+    ok: true, id: "a", useRemainingQuota: true, autoSwitchThreshold: 95,
+  } : undefined);
+  expect(await policy("use-remaining", ["openai", "Alpha", "on", "--json"], f.deps)).toBe(1);
+  expect(stdout.mock.calls).toHaveLength(0);
+});
+
+test.each(["status", "threshold"])("auto-switch %s reports the remaining-quota override without losing the saved threshold", async action => {
+  const f = fixture(call => {
+    if (call.path === "/api/codex-auth/accounts") return { accounts: rows.map(row => ({ ...row, useRemainingQuota: row.id === "a" })) };
+    if (call.path === "/api/codex-auth/auto-switch") return { ok: true, id: "a", autoSwitchThresholdOverride: 42, autoSwitchThreshold: 0 };
+  });
+  expect(await policy("auto-switch", ["openai", action, ...(action === "threshold" ? ["42"] : []), "--account", "a", "--json"], f.deps)).toBe(0);
+  expect(result()).toMatchObject({ id: "a", autoSwitchThreshold: 0, autoSwitchThresholdOverride: action === "status" ? null : 42 });
+});
+
+test.each([["openai", "a"], ["openai", "a", "yes"], ["anthropic", "a", "on"], ["openai", "a", "on", "--all"]])(
+  "invalid use-remaining arguments are rejected before runtime access: %j", async args => {
+    const f = fixture();
+    expect(await policy("use-remaining", args, f.deps)).toBe(2);
+    expect(f.calls).toHaveLength(0);
+  },
+);
+
 describe("account policy argument and identity boundaries", () => {
   const invalid: [Parameters<typeof policy>[0], string[]][] = [
     ["credits", ["openai", "a"]], ["credits", ["openai", "a", "on", "--all"]],
