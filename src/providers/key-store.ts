@@ -1,8 +1,10 @@
 import { resolveEnvValue, saveConfigPreservingClaudeCode } from "../config";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import type { ProviderRegistryEntry } from "./registry";
+import { isGcpCredentialMaterial } from "../lib/gcp-adc";
 import {
   KEYCHAIN_REFERENCE_PREFIX,
+  GCP_CREDENTIAL_MARKER_PREFIX,
   invalidateResolvedProviderKeyCache,
   isKeychainReference,
   keychainAccount,
@@ -79,7 +81,7 @@ export function storeProviderKeyInKeychain(config: OcxConfig, name: string): { o
   const pool = provider.apiKeyPool ?? [];
   try {
     for (const entry of pool) {
-      if (isKeychainReference(entry.key)) continue;
+      if (entry.key.startsWith(GCP_CREDENTIAL_MARKER_PREFIX) || isKeychainReference(entry.key)) continue;
       const secret = resolveEnvValue(entry.key);
       if (!secret) continue; // unresolved env reference stays as-is
       const account = `${name}/${entry.id}`;
@@ -87,7 +89,7 @@ export function storeProviderKeyInKeychain(config: OcxConfig, name: string): { o
       written.push(account);
       planned.push(() => { entry.key = `${KEYCHAIN_REFERENCE_PREFIX}${account}`; });
     }
-    if (provider.apiKey && !isKeychainReference(provider.apiKey)) {
+    if (provider.apiKey && !provider.apiKey.startsWith(GCP_CREDENTIAL_MARKER_PREFIX) && !isKeychainReference(provider.apiKey)) {
       const active = pool.find(e => e.key === provider.apiKey || (isKeychainReference(e.key) && false));
       const secret = resolveEnvValue(provider.apiKey);
       if (secret) {
@@ -138,6 +140,9 @@ export function restoreProviderKeyFromKeychain(config: OcxConfig, name: string):
     let value: string | null = null;
     try { value = providerKeychainEntry(account).getPassword(); } catch { value = null; }
     if (!value) return { ok: false, error: `OS keychain has no readable secret for ${ref}; config left unchanged`, status: 503 };
+    if (isGcpCredentialMaterial(value)) {
+      return { ok: false, error: "GCP credentials must remain in the OS store; use a gcp-sa reference. Config left unchanged", status: 400 };
+    }
     resolved.set(account, value);
   }
   for (const entry of pool) {

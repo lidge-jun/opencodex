@@ -226,9 +226,10 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "login",
-    usage: "ocx login <provider>",
+    usage: "ocx login <provider> [--headless]",
     summary: "OAuth or API-key login for a provider.",
     details: [
+      "--headless (anthropic, anthropic2): no browser and no local port; approve in any browser and paste the displayed code.",
       "Codex/ChatGPT: ocx login codex runs the Codex account-pool login (same flow as ocx account login codex).",
       "That one needs a running proxy; the OAuth and API-key providers log in locally.",
       "'chatgpt' and 'openai' are the same route; an OpenAI platform API key is 'ocx login openai-apikey'.",
@@ -336,6 +337,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
       "add-key <provider> [--label <label>]  Add a key read only from piped stdin.",
       "pool <provider>          Read/edit runtime-supported pool policy.",
       "credits openai ...       Explicit paid-credit-after-limit policy; separate from displaying balances.",
+      "use-remaining openai <id|main> <on|off|status>  Use included quota up to its limit.",
       "quota-activation openai  Enable/disable one account reset-window refresh policy.",
       "anthropic-reset-grants   Read grant status only; consumption remains in the dashboard.",
       "login supports explicit browser/add-account options only for applicable flows; human verification remains required.",
@@ -447,7 +449,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   { name: "logs", usage: "ocx logs [filters] [--follow] [--json|--jsonl|--events]", summary: "Read or follow request logs." },
   {
     name: "usage",
-    usage: "ocx usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--api-key-id <id>] [--search <text>] [--json]",
+    usage: "ocx usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--api-key-id <id>] [--search <text>] [--top <1-1000>] [--json]",
     summary: "Report token usage and estimated cost (alias of ocx observe usage).",
   },
   {

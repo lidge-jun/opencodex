@@ -18,14 +18,14 @@ const raw = await Bun.file(new URL("../src/App.tsx", import.meta.url)).text();
  */
 const src = raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 
-test("the sidebar is nine group rows, in order, owning every sidebar page once", async () => {
+test("the sidebar is eight group rows, in order, owning every sidebar page once", async () => {
   const { NAV_GROUPS, groupForPage } = await import("../src/nav-groups");
   const { VALID_PAGES } = await import("../src/app-routing");
 
   // The exact rows, in order. A count alone would pass if a row were swapped for
   // another, and Routing folding into Models is precisely that kind of change.
   expect(NAV_GROUPS.map(group => group.id)).toEqual([
-    "dashboard", "connect", "codex-set", "providers", "models", "subagents", "advisor", "usage-logs", "remote",
+    "dashboard", "connect", "codex-set", "providers", "models", "subagents", "usage-logs", "remote",
   ]);
   expect(Object.fromEntries(NAV_GROUPS.map(group => [group.id, [...group.pages]]))).toEqual({
     dashboard: ["dashboard"],
@@ -34,8 +34,8 @@ test("the sidebar is nine group rows, in order, owning every sidebar page once",
     "codex-set": ["codex-set"],
     providers: ["providers"],
     models: ["models"],
-    subagents: ["subagents"],
-    advisor: ["advisor"],
+    // Advisor is a switcher member beside Subagents, not a row of its own.
+    subagents: ["subagents", "advisor"],
     // Usage leads, so the row opens Usage first.
     "usage-logs": ["usage", "logs", "storage"],
     // Last row, by request.
@@ -50,6 +50,7 @@ test("the sidebar is nine group rows, in order, owning every sidebar page once",
   expect(new Set(owned)).toEqual(new Set([...VALID_PAGES].filter(page => page !== "startup")));
   expect(groupForPage("startup")).toBeNull();
   expect(groupForPage("storage")?.id).toBe("usage-logs");
+  expect(groupForPage("advisor")?.id).toBe("subagents");
   expect(groupForPage("claude")?.id).toBe("connect");
   expect(groupForPage("remote-workspace")?.id).toBe("remote");
 

@@ -6,6 +6,26 @@ import { isPlainObject } from "./internal";
 import { activateDeferredTool } from "./tool-schema";
 import { stripOpenAiOnlyWebSearchFields } from "./web-search";
 
+/**
+ * Provider-opaque replay metadata is client history, not an OpenAI input-item field (#7111).
+ * The caller gates this on OpenAI-operated destinations; arbitrary gateways may accept it.
+ * Strip only the known extension, never an item-field allowlist that can erase newer wire fields
+ * or nested tool data. Copy on write so a later Google route can still replay its signature.
+ */
+export function stripProviderInputItemMetadata(body: unknown): unknown {
+  if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
+  let input: unknown[] | undefined;
+  for (let index = 0; index < body.input.length; index += 1) {
+    const item = body.input[index];
+    if (!isPlainObject(item) || !Object.hasOwn(item, "extra_content")) continue;
+    const next = { ...item };
+    delete next.extra_content;
+    input ??= [...body.input];
+    input[index] = next;
+  }
+  return input ? { ...body, input } : body;
+}
+
 export function stripInvalidItemIds(body: unknown): unknown {
   if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
 

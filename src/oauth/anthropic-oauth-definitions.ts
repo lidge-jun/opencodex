@@ -1,7 +1,7 @@
 import { ConfigMutationLockError } from "../config";
 import { deriveOAuthDefaultModel, deriveOAuthProviderConfig } from "../providers/derive";
 import type { AnthropicInstanceId } from "../providers/anthropic-instance-id";
-import { loginAnthropic, refreshAnthropicToken } from "./anthropic";
+import { ANTHROPIC_CODE_REDIRECT_URI, loginAnthropic, refreshAnthropicToken } from "./anthropic";
 import type { OAuthProviderDef } from "./index";
 import {
   clearOAuthRefreshIntent, clearOAuthRefreshIntentIfMatch, markOAuthRefreshIntentCleanupPending,
@@ -16,8 +16,10 @@ export function anthropicOAuthDefinition(instance: AnthropicInstanceId): OAuthPr
   return {
     login: (ctrl, opts) => loginAnthropic(ctrl, {
       instance, importLocal: instance === "anthropic2" || opts?.forceLogin ? "off" : "fallback",
+      codeMode: opts?.codeMode === true,
     }),
     refresh: refreshAnthropicToken,
+    codeRedirectUri: ANTHROPIC_CODE_REDIRECT_URI,
     providerConfig,
     defaultModel,
     // Subscription OAuth must never generate unattended traffic by default.

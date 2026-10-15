@@ -25,7 +25,9 @@ existing auth-store write lock. Display identities do not establish a duplicate.
 Refresh intent paths and credential-owner checks retain the actual instance.
 Pool 2 config publication rechecks the latest provider row under the config mutation
 lock; a collision preserves the custom row and reports any already-written orphan
-credential. No default-provider change accompanies that publication.
+credential. No default-provider change accompanies that publication. CLI preflight checks raw
+config ownership before tolerant loading and reports a custom-row collision or unreadable/malformed
+config through the fixed `configuration_error` reporter before prompting.
 
 Regression coverage: `tests/providers/provider-anthropic-instance.test.ts`,
 `tests/config/config-anthropic-instance-pool.test.ts`,
@@ -450,3 +452,5 @@ updating live state. A confirmed published write followed by bookkeeping failure
 pool and returns a fixed warning; an unpublished failure keeps old state. Unknown outcomes require
 reload and are not represented as a successful save. The GUI checkbox is a saved preference rather
 than a promise that a route is eligible; explicit rollout opt-outs still apply.
+
+The shared conversation-key precedence is implemented by `src/oauth/session-affinity-key.ts` and re-exported as `anthropicSessionKeyFromParts`; Anthropic routing semantics remain owned here. [Generic OAuth affinity](generic-account-pool.md#conversation-affinity) uses independent request-local receipts.

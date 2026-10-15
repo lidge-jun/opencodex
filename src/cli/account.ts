@@ -54,6 +54,7 @@ const ACCOUNT_USAGE = `Usage:
   ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]
   ocx account auto-switch <anthropic|anthropic2> <on|off|status|inherit|threshold <0-100>> --account <id> [--json]
   ocx account alias <provider> <account-or-key-id|alias> <display-name|-> [--json]
+  ocx account preserve-signed-in openai [on|off|status] [--apply-to-bound] [--json]
   ocx account priority <provider> <account-id|alias|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]
   ocx account pause <provider> <account-id|alias|main> [--json]
   ocx account resume <provider> <account-id|alias|main> [--json]
@@ -69,6 +70,7 @@ const ACCOUNT_USAGE = `Usage:
   ocx account login <provider> [--id <account-id>] [--reauth] [--open-browser on|off] [--add-account on|off] [--code -] [--no-wait] [--json]
   ocx account pool <provider> [--enabled on|off] [--threshold N] [--strategy NAME] [--sticky N] [--quota-window W] [--json]
   ocx account credits openai <ID on|off|--all on|off> [--json]
+  ocx account use-remaining openai <ID|main> <on|off|status> [--json]
   ocx account quota-activation openai ID --window fiveHour|weekly <on|off> [--json]
   ocx account anthropic-reset-grants [ID] [--provider anthropic|anthropic2] [--json]
   ocx account code <provider> [--flow <flow-id>] [--json]   (reads the code from stdin)
@@ -459,11 +461,11 @@ async function cmdClear(rest: string[], deps: AccountDeps): Promise<number> {
 export async function cmdAccount(args: string[], deps: AccountDeps = {}): Promise<number> {
   const [sub, ...rest] = args;
   try {
-    if (["pool", "credits", "quota-activation", "anthropic-reset-grants"].includes(sub ?? "")
+    if (["pool", "credits", "quota-activation", "anthropic-reset-grants", "use-remaining"].includes(sub ?? "")
       || (sub === "auto-switch" && rest[0]?.trim().toLowerCase() === "openai"
         && rest.some(arg => arg === "--account" || arg.startsWith("--account=")))) {
       const { handleAccountPolicyCommand } = await import("./account-policy");
-      return handleAccountPolicyCommand(sub as "pool" | "auto-switch" | "credits" | "quota-activation" | "anthropic-reset-grants", rest, deps);
+      return handleAccountPolicyCommand(sub as "pool" | "auto-switch" | "credits" | "quota-activation" | "anthropic-reset-grants" | "use-remaining", rest, deps);
     }
     if (sub === "list") return await cmdList(rest, deps);
     if (sub === "history") {
@@ -476,6 +478,10 @@ export async function cmdAccount(args: string[], deps: AccountDeps = {}): Promis
     if (sub === "refresh") return await cmdRefresh(rest, deps);
     if (sub === "auto-switch") return await cmdAutoSwitch(rest, deps);
     if (sub === "alias" || sub === "rename") return await cmdAlias(rest, deps);
+    if (sub === "preserve-signed-in") {
+      const { cmdPreserveSignedIn } = await import("./account-preservation");
+      return cmdPreserveSignedIn(rest, deps);
+    }
     if (sub === "priority") return await cmdPriority(rest, deps);
     // #2702: the server routes existed and only the CLI caller was missing, so these were
     // dashboard-only capabilities.
