@@ -1,10 +1,5 @@
 # CLI management and discovery
 
-`ocx account use-remaining openai <id-or-main> on|off|status` in `src/cli/account-policy.ts`
-resolves the selected runtime's roster and validates the authenticated API receipt. It controls
-the [remaining included-quota preference](providers/openai-accounts.md#main-account-policy-observations);
-status is read-only, and account selection is a separate command.
-
 `src/cli/` contains the terminal management interface. Process ownership, startup, stop and service contracts remain in [Runtime](runtime.md); this document owns command discovery, help, management-client presentation and the generated operating reference.
 
 ## CLI readiness diagnostics
@@ -76,6 +71,8 @@ Management route declarations describe actual HTTP calls only; local Lab automat
 ## Account policy and runtime-setting results
 
 `src/cli/account-policy.ts` and `src/cli/account-policy-dto.ts` use the selected runtime's supported pool fields and validated roster. `src/cli/account-target.ts` shares pure selection precedence with the existing async helper; new policy writers never use the legacy transport fallback. Per-account threshold, one/all paid-credit permission, display preference and quota-window activation remain distinct operations. Reset-grant status is a typed GET with possible upstream status work; consumption/session acquisition is not exposed.
+
+`ocx account use-remaining openai <id-or-main> on|off|status` in `src/cli/account-policy.ts` resolves the selected runtime's roster and validates the authenticated API receipt, including the effective thresholds. It controls the [remaining included-quota preference](providers/openai-accounts.md#main-account-policy-observations), which is separate from paid-credit permission; status is read-only, and account selection is a separate command.
 
 `src/cli/account-auth.ts` validates branch-specific login options before code input and pins its login flow requests. Public handoff/state fields are rebuilt without tokens or arbitrary backend text. `src/cli/logout-command.ts` owns target parsing before credential access: local atomic removed/not-found behavior and live OAuth success remain different receipts, with no cross-target fallback. Native main signout is not an OAuth logout synonym.
 
