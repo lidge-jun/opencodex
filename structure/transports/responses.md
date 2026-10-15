@@ -402,7 +402,7 @@ always become unable to serve.
 
 The note is a prompt contract and grants no authority. Completed requests remain history unless a later user message asks to repeat them. Unfinished work continues only under existing authorization and within its scope, without asking for that authorization again while it still applies. Permission and confirmation gates remain authoritative: a pending decision or required permission must resolve before the dependent action. Checkpoints and delegations, including those from another thread, neither grant authority nor expand scope. Later user messages take priority, including pause, cancellation, replacement and scope changes.
 
-The continuation-note and continuation-wire tests establish prompt and wire contracts. `tests/responses/compaction-history-framing.test.ts` adds offline A/B projection, original-detail preservation, native passthrough isolation and multi-turn canonical replay/dedup coverage. These tests do not establish live model behavior or whether a model actually resumes the correct task.
+The continuation-note and continuation-wire tests establish prompt and wire contracts. `tests/responses/compaction-history-framing.test.ts` adds offline A/B projection, original-detail preservation, native passthrough isolation, multi-turn canonical replay/dedup coverage and exclusion of client-side summarizer turns ending in the canonical `COMPACT_PROMPT` (which carry no `compaction_trigger`). These tests do not establish live model behavior or whether a model actually resumes the correct task.
 
 > Decision record: [ADR-7003](../decisions/ADR-7003-decoded-checkpoint-continuation.md)
 

@@ -1,4 +1,4 @@
-import { appendCheckpointContinuationNote, SUMMARY_PREFIX } from "./compaction";
+import { appendCheckpointContinuationNote, COMPACT_PROMPT, SUMMARY_PREFIX } from "./compaction";
 
 type InputRecord = Record<string, unknown>;
 const isRecord = (value: unknown): value is InputRecord =>
@@ -35,6 +35,9 @@ function isContext(text: string): boolean {
 export function frameCompactionHistory<T extends { input?: unknown; instructions?: unknown }>(body: T): T {
   const input = body.input;
   if (!Array.isArray(input) || input.some(item => isRecord(item) && item.type === "compaction_trigger")) return body;
+  // Codex local compaction appends this user prompt without a compaction_trigger.
+  // Keep that summarizer turn free of generation-only continuation instructions.
+  if (plainUserText(input.at(-1))?.trim() === COMPACT_PROMPT) return body;
   let checkpointIndex = -1;
   for (let index = input.length - 1; index >= 0; index--) {
     if (plainUserText(input[index])?.startsWith(SUMMARY_PREFIX)) {

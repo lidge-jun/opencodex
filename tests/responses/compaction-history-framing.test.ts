@@ -4,7 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createResponsesPassthroughAdapter } from "../../src/adapters/openai-responses/passthrough";
-import { CHECKPOINT_CONTINUATION_NOTE, SUMMARY_PREFIX, encodeCompactionSummary } from "../../src/responses/compaction";
+import { CHECKPOINT_CONTINUATION_NOTE, COMPACT_PROMPT, SUMMARY_PREFIX, encodeCompactionSummary } from "../../src/responses/compaction";
 import { frameCompactionHistory, HISTORICAL_REQUEST_START, HISTORICAL_REQUEST_END } from "../../src/responses/compaction-history-framing";
 import { parseRequest } from "../../src/responses/parser";
 import { clearResponseStateForTests, expandPreviousResponseInput, previousResponseReplayPrefixLength, rememberResponseState } from "../../src/responses/state";
@@ -111,6 +111,23 @@ describe("plaintext checkpoint historical framing", () => {
     expect(JSON.stringify(parsed.context.messages[1])).toContain("zebra_42");
     expect(JSON.stringify(parsed.context.messages.at(-1))).not.toContain(HISTORICAL_REQUEST_START);
     expect(parsed.context.systemPrompt).toContain(CHECKPOINT_CONTINUATION_NOTE);
+  });
+
+  test("client-side compaction after a prior checkpoint stays a summarizer turn", () => {
+    // codex-rs local compaction appends its prompt as a user message, with no trigger item.
+    for (const content of [COMPACT_PROMPT, [{ type: "input_text", text: COMPACT_PROMPT }]]) {
+      const body = frozen({ model: "m", instructions: "Existing instruction.",
+        input: [...history(), { role: "user", content }] });
+      expect(frameCompactionHistory(body)).toBe(body);
+      const parsed = parseRequest(body);
+      expect(JSON.stringify(parsed.context.messages)).not.toContain(HISTORICAL_REQUEST_START);
+      expect(parsed.context.systemPrompt?.join("\n")).not.toContain(CHECKPOINT_CONTINUATION_NOTE);
+      const outbound = wire(gateway, body);
+      expect(outbound.input).toEqual(body.input);
+      expect(outbound.instructions).toBe(body.instructions);
+    }
+    const quoted = { input: [...history(), user(`Explain this prompt:\n${COMPACT_PROMPT}`)] };
+    expect(JSON.stringify(frameCompactionHistory(quoted).input)).toContain(HISTORICAL_REQUEST_START);
   });
 
   test("routed Responses frames a projection; both native OpenAI passthrough destinations preserve input", () => {

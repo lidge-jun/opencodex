@@ -684,7 +684,8 @@ This is enabled by default and needs no setting. Original request text and canon
 history are preserved. Native OpenAI Responses passthrough, summarizer turns, context wrappers,
 images/files and assistant/tool items are unchanged. The framing applies to plaintext checkpoints
 beginning with Codex's summary prefix; decoded OpenCodex checkpoints retain their existing
-continuation guidance. Framing is a prompt instruction, so model behavior can vary.
+continuation guidance. Client-side summarizer turns using Codex's standard compaction prompt
+also bypass framing. Framing is a prompt instruction, so model behavior can vary.
 
 ## Compaction routing
 
