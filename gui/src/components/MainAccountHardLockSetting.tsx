@@ -1,15 +1,34 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createBoundedFetch } from "../bounded-fetch";
 import { startVisibilityPoll } from "../visibility-poll";
-import { useT } from "../i18n/shared";
+import { useT, type TKey } from "../i18n/shared";
+import { Select } from "../ui";
+import { formatNamespacedModelId } from "../provider-icons";
 import { hardLockThresholds, type MainAccountHardLockStatus } from "../hooks/useCodexAccountPool";
 
 type Props = { apiBase: string; onSaved: () => Promise<boolean> };
-type Snapshot = { codexMainAccountHardLock: boolean; mainAccountHardLock: MainAccountHardLockStatus };
+type FallbackSetting = { enabled?: boolean; model?: string; reasoningEffort?: string } | null;
+type Snapshot = { codexMainAccountHardLock: boolean; mainAccountHardLock: MainAccountHardLockStatus; codexMainAccountHardLockFallback: FallbackSetting };
+type ModelInfo = { id: string; provider: string; namespaced: string; native?: boolean; disabled?: boolean };
+
+/** Same ladder the memory-models and compaction-routing panels offer for their targets. */
+const FALLBACK_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
+
+function readFallback(value: unknown): FallbackSetting {
+  if (value == null) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("settings shape");
+  const model = "model" in value && typeof value.model === "string" ? value.model.trim() : "";
+  if (!model) throw new Error("settings shape");
+  const effort = "reasoningEffort" in value ? value.reasoningEffort : undefined;
+  if (effort !== undefined && (typeof effort !== "string" || !FALLBACK_EFFORTS.includes(effort))) throw new Error("settings shape");
+  const enabled = "enabled" in value ? value.enabled : undefined;
+  if (enabled !== undefined && typeof enabled !== "boolean") throw new Error("settings shape");
+  return { model, ...(effort ? { reasoningEffort: effort } : {}), ...(enabled !== undefined ? { enabled } : {}) };
+}
 
 function readSnapshot(value: unknown): Snapshot {
   if (!value || typeof value !== "object") throw new Error("settings shape");
-  const payload = value as Partial<Snapshot>;
+  const payload = value as Partial<Snapshot> & { codexMainAccountHardLockFallback?: unknown };
   const policy = payload.mainAccountHardLock;
   if (typeof payload.codexMainAccountHardLock !== "boolean" || !policy
     || policy.enabled !== payload.codexMainAccountHardLock
@@ -17,7 +36,8 @@ function readSnapshot(value: unknown): Snapshot {
     || (policy.resetAt !== undefined && (typeof policy.resetAt !== "number" || !Number.isFinite(policy.resetAt)))) {
     throw new Error("settings shape");
   }
-  return payload as Snapshot;
+  const fallback = readFallback(payload.codexMainAccountHardLockFallback);
+  return { ...payload, codexMainAccountHardLock: payload.codexMainAccountHardLock, mainAccountHardLock: policy, codexMainAccountHardLockFallback: fallback } as Snapshot;
 }
 
 function HardLockConfirmation({ pending, thresholds, onCancel, onConfirm }: {
@@ -80,10 +100,40 @@ function HardLockSetting({ apiBase, onSaved }: Props) {
   const [saved, setSaved] = useState<boolean | null>(null);
   const [saving, setSaving] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const [fallback, setFallback] = useState<FallbackSetting>(null);
+  const [models, setModels] = useState<ModelInfo[]>([]);
+  const [fallbackSaving, setFallbackSaving] = useState(false);
+  const [fallbackError, setFallbackError] = useState(false);
   const busyRef = useRef(false);
   const mountedRef = useRef(false);
   const generationRef = useRef(0);
   const readAbortRef = useRef<AbortController | null>(null);
+  const modelsAbortRef = useRef<AbortController | null>(null);
+  const modelsLoadedRef = useRef(false);
+
+  const ensureModelsLoaded = useCallback(() => {
+    if (modelsLoadedRef.current || modelsAbortRef.current) return;
+    const controller = new AbortController();
+    modelsAbortRef.current = controller;
+    void (async () => {
+      try {
+        const response = await fetch(`${apiBase}/api/models`, { signal: controller.signal });
+        if (!response.ok) throw new Error("models");
+        const rows: unknown = await response.json();
+        if (!Array.isArray(rows)) throw new Error("models");
+        modelsLoadedRef.current = true;
+        if (mountedRef.current) {
+          setModels(rows.filter(row => row !== null && typeof row === "object"
+            && typeof (row as ModelInfo).namespaced === "string"
+            && (row as ModelInfo).native !== true
+            && (row as ModelInfo).disabled !== true) as ModelInfo[]);
+        }
+      } catch { /* saved value stays selectable */ }
+      finally {
+        if (modelsAbortRef.current === controller) modelsAbortRef.current = null;
+      }
+    })();
+  }, [apiBase]);
   const toggleRef = useRef<HTMLButtonElement>(null);
   const sectionRef = useRef<HTMLElement>(null);
   const restoreFocusRef = useRef(false);
@@ -100,6 +150,7 @@ function HardLockSetting({ apiBase, onSaved }: Props) {
       const next = readSnapshot(await response.json());
       if (!mountedRef.current || generation !== generationRef.current) return;
       setSnapshot(next);
+      setFallback(next.codexMainAccountHardLockFallback);
       setLoadError(false);
       setSaved(null);
     } catch {
@@ -117,6 +168,8 @@ function HardLockSetting({ apiBase, onSaved }: Props) {
       mountedRef.current = false;
       generationRef.current += 1;
       readAbortRef.current?.abort();
+      modelsAbortRef.current?.abort();
+      modelsAbortRef.current = null;
       window.clearTimeout(timeout);
       stop();
     };
@@ -190,6 +243,64 @@ function HardLockSetting({ apiBase, onSaved }: Props) {
   const cancel = () => {
     if (!busyRef.current) setConfirming(false);
   };
+
+  // One immediate save per change, the same contract as the shadow-call row: the switch,
+  // the model and the effort each PUT alone, and the switch keeps the configured model
+  // while off so turning it back on restores the same destination.
+  const saveFallback = async (next: Exclude<FallbackSetting, null>) => {
+    if (busyRef.current || fallbackSaving || !snapshot) return;
+    busyRef.current = true;
+    generationRef.current += 1;
+    readAbortRef.current?.abort();
+    setFallbackSaving(true);
+    setFallbackError(false);
+    const bounded = createBoundedFetch(15_000);
+    let acknowledged = false;
+    try {
+      const response = await fetch(`${apiBase}/api/settings`, {
+        method: "PUT", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ codexMainAccountHardLockFallback: next }),
+        signal: bounded.signal,
+      });
+      if (!response.ok) throw new Error("save");
+      const payload: unknown = await response.json();
+      if (!payload || typeof payload !== "object" || !("ok" in payload) || payload.ok !== true) {
+        throw new Error("unconfirmed");
+      }
+      const accepted = readSnapshot(payload);
+      acknowledged = true;
+      if (mountedRef.current) {
+        setSnapshot(accepted);
+        setFallback(accepted.codexMainAccountHardLockFallback);
+        setLoadError(false);
+      }
+    } catch {
+      if (mountedRef.current) setFallbackError(true);
+    } finally {
+      bounded.clear();
+    }
+    if (acknowledged) await refreshMain();
+    busyRef.current = false;
+    if (!mountedRef.current) return;
+    setFallbackSaving(false);
+    if (!acknowledged) void load();
+  };
+  const fallbackOn = fallback?.enabled !== false && Boolean(fallback?.model);
+  const toggleFallback = () => {
+    if (!fallback?.model) return;
+    void saveFallback({ ...fallback, enabled: !fallbackOn });
+  };
+  const changeFallbackModel = (model: string) => {
+    if (!model) return;
+    // Picking a destination is an enabling act: the model always lands with the reroute
+    // on, so a fresh setup configures in one pick and the switch only pauses/resumes.
+    const { enabled: _paused, ...rest } = fallback ?? {};
+    void saveFallback({ ...rest, model, ...(fallback?.enabled === false ? { enabled: true } : {}) });
+  };
+  const changeFallbackEffort = (effort: string) => {
+    void saveFallback({ ...(fallback ?? {}), ...(effort ? { reasoningEffort: effort } : { reasoningEffort: undefined }) });
+  };
+
   const retryRefresh = async () => {
     if (busyRef.current) return;
     busyRef.current = true;
@@ -232,6 +343,44 @@ function HardLockSetting({ apiBase, onSaved }: Props) {
         {saved !== null && !refreshError && <p role="status">{t(saved ? "codexAuth.mainHardLockEnabled" : "codexAuth.mainHardLockDisabled", thresholds)}</p>}
         {refreshError && <p role="status">{t("codexAuth.mainHardLockRefreshFailed")}{" "}
           <button type="button" className="link-btn" disabled={saving} onClick={() => { void retryRefresh(); }}>{t("common.retry")}</button>
+        </p>}
+      </div>
+      <div className="codex-main-hard-lock-fallback" role="group" aria-label={t("codexAuth.mainHardLockFallbackTitle")}
+        onFocusCapture={ensureModelsLoaded} onPointerDownCapture={ensureModelsLoaded} onClickCapture={ensureModelsLoaded}
+        style={{ flexBasis: "100%" }}>
+        <div className="spread" style={{ alignItems: "center" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+            <span className="font-semibold">{t("codexAuth.mainHardLockFallbackTitle")}</span>
+          </div>
+          <div className="setting-controls" style={{ flex: "0 1 auto" }}>
+            <button type="button" className={`switch ${fallbackOn ? "on" : ""}`}
+              onClick={toggleFallback}
+              disabled={fallbackSaving || loadError || !fallback?.model}
+              aria-label={t("codexAuth.mainHardLockFallbackTitle")} aria-pressed={fallbackOn}>
+              <span className="knob" />
+            </button>
+            <Select value={fallback?.model ?? ""}
+              options={[...new Set([fallback?.model, ...models.map(model => model.namespaced)]
+                .filter((value): value is string => Boolean(value)))]
+                .map(value => ({ value, label: formatNamespacedModelId(value, t) }))}
+              onChange={changeFallbackModel}
+              disabled={fallbackSaving || loadError}
+              label={t("codexAuth.mainHardLockFallbackModel")}
+              align="right" />
+            <Select value={fallback?.reasoningEffort ?? ""}
+              options={[{ value: "", label: t("codexAuth.mainHardLockFallbackDefaultEffort") },
+                ...FALLBACK_EFFORTS.map(value => ({ value, label: t(`models.reasoningEffort.${value}` as TKey) }))]}
+              onChange={changeFallbackEffort}
+              disabled={fallbackSaving || loadError || !fallbackOn}
+              label={t("codexAuth.mainHardLockFallbackEffort")}
+              align="right" />
+          </div>
+        </div>
+        <div className="muted setting-hint">{t("codexAuth.mainHardLockFallbackDesc")}</div>
+        {snapshot?.mainAccountHardLock.state === "blocked" && fallbackOn && fallback?.model
+          && <p role="status" className="codex-main-hard-lock-status is-blocked">{t("codexAuth.mainHardLockFallbackActive", { model: fallback.model })}</p>}
+        {fallbackError && <p role="alert">{t("codexAuth.mainHardLockFallbackSaveFailed")}{" "}
+          <button type="button" className="link-btn" disabled={fallbackSaving} onClick={() => { void load(); }}>{t("common.retry")}</button>
         </p>}
       </div>
       {confirming && <HardLockConfirmation pending={saving} thresholds={thresholds} onCancel={cancel} onConfirm={() => { void save(true); }} />}
