@@ -647,13 +647,15 @@ async function resolveAccessSnapshotForAccount(
   if (!waiter) throw new OAuthTokenRefreshBusyError();
   try {
     if (existing && replacedStaleFlight) {
-      // Keep the owner in the registry until admission succeeds. A full waiter gate must
-      // not discard the only evidence distinguishing this abort from an unknown rotation.
-      if (existing.settled && !retireSettledOAuthRefreshFlight(key, existing)) {
+      // A replacement would wait for this owner's lock anyway. Keep its registry slot
+      // through definitive-result cleanup and durable retirement, even with spare capacity.
+      // In particular, an ignored abort must not mark a late explicit rejection as uncertain.
+      await existing.promise.catch(() => {});
+      if (tokenRefreshes.get(key) === existing && !retireSettledOAuthRefreshFlight(key, existing)) {
         throw new OAuthTokenRefreshStaleError();
       }
-      if (tokenRefreshes.get(key) === existing) tokenRefreshes.delete(key);
-      existing = undefined;
+      // Other admitted replacements may have resumed first and installed the next flight.
+      existing = tokenRefreshes.get(key);
     }
     if (existing) {
       logOAuthEvent("OAuth refresh joined existing operation", { provider, accountId });

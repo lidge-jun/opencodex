@@ -150,3 +150,52 @@ for (const outcome of ["rejected", "rotated", "marker-io"] as const) {
     } finally { marker?.mockRestore(); clock.mockRestore(); finish(); await Promise.all(waiting); }
   });
 }
+
+for (const outcome of ["rejected", "marker-io"] as const) {
+  test(`unsaturated stale owner retains late ${outcome} evidence until settlement`, async () => {
+    const id = await seed("anthropic");
+    let started!: () => void, finish!: () => void;
+    const entered = new Promise<void>(resolve => { started = resolve; });
+    const blocked = new Promise<void>(resolve => { finish = resolve; });
+    let calls = 0;
+    OAUTH_PROVIDERS.anthropic!.refresh = async () => {
+      if (++calls === 1) {
+        started(); await blocked;
+        if (outcome === "rejected") throw new AnthropicTokenError("fixture unavailable", 503, undefined);
+        throw new OAuthTokenRefreshStaleError();
+      }
+      return { access: "fixture-unsaturated-new", refresh: "fixture-unsaturated-next", expires: Date.now() + 3_600_000 };
+    };
+    const old = getValidAccessTokenForAccount("anthropic", id).catch(error => error);
+    await entered;
+    const intent = readOAuthRefreshIntent("anthropic", id);
+    const clock = spyOn(Date, "now").mockReturnValue(Date.now() + 120_001);
+    const marker = spyOn(store, "markOAuthRefreshIntentStaleOwner");
+    if (outcome === "marker-io") marker.mockImplementation(() => { throw new Error("fixture retirement IO failure"); });
+    let replacement: Promise<unknown[]> | undefined;
+    try {
+      replacement = Promise.all(Array.from({ length: 8 }, () =>
+        getValidAccessTokenForAccount("anthropic", id).catch(error => error)));
+      await Promise.resolve(); await Promise.resolve();
+      // The old attempt still holds the lock and has no definitive result. No marker yet.
+      expect(readOAuthRefreshIntent("anthropic", id)).toEqual(intent);
+      expect(marker).not.toHaveBeenCalled();
+      finish();
+      expect(await old).toBeInstanceOf(OAuthTokenRefreshStaleError);
+      const results = await replacement;
+      if (outcome === "rejected") {
+        expect(results).toEqual(Array(8).fill("fixture-unsaturated-new"));
+        expect(calls).toBe(2);
+        expect(readOAuthRefreshIntent("anthropic", id)).toBeUndefined();
+      } else {
+        expect(results.every(result => result instanceof OAuthTokenRefreshStaleError)).toBe(true);
+        expect(readOAuthRefreshIntent("anthropic", id)).toEqual(intent);
+        marker.mockRestore(); clock.mockRestore();
+        await expect(getValidAccessTokenForAccount("anthropic", id)).rejects.toBeInstanceOf(OAuthTokenRefreshStaleError);
+        expect(readOAuthRefreshIntent("anthropic", id)).toMatchObject({ ...intent, staleOwner: true });
+        expect(calls).toBe(1);
+      }
+      expect(getAccountSet("anthropic")!.accounts.find(row => row.id === id)?.needsReauth).not.toBe(true);
+    } finally { marker.mockRestore(); clock.mockRestore(); finish(); await old; await replacement; }
+  });
+}
