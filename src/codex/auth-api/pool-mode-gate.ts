@@ -25,6 +25,7 @@ import type { PoolQuotaResult } from "./pool-quota-probe";
 import { fetchMainAccountInfoAttempt, fetchMainAccountInfo, MAIN_CACHE_TTL } from "./main-account-probe";
 import { fetchPoolAccountQuota, PoolQuotaProbeBusyError, POOL_CACHE_TTL, POOL_QUOTA_REFRESH_CONCURRENCY } from "./pool-quota-probe";
 import { getRuntimeConfig, configuredPoolAccount, mapWithConcurrency } from "./runtime-config";
+import { trackBackgroundWork } from "../../lib/background-work";
 
 let primeInFlight: Promise<void> | null = null;
 let lastPriorityFailbackPrimeAt: number | undefined;
@@ -259,7 +260,9 @@ export async function primeCodexPoolQuotas(
       && now - lastPriorityFailbackPrimeAt < CODEX_PRIORITY_FAILBACK_REFRESH_MS) return;
     lastPriorityFailbackPrimeAt = now;
   }
-  primeInFlight = (async () => {
+  // Tracked because most callers do not await it, yet it holds the native-main claim
+  // database open; whoever removes that directory settles it first (see background-work).
+  primeInFlight = trackBackgroundWork(`codex-pool-quota-prime:${reason}`, (async () => {
     const pool = (runtimeConfig.codexAccounts ?? []).filter(isSelectableCodexPoolAccount);
     const stale = pool.filter(a => {
       const q = getAccountQuota(a.id);
@@ -344,7 +347,7 @@ export async function primeCodexPoolQuotas(
     if (process.env.OPENCODEX_DEBUG_QUOTA === "1") {
       console.warn(`[codex-quota] prime done (reason=${reason}, pool=${pool.length}, refreshed=${stale.length})`);
     }
-  })().finally(() => { primeInFlight = null; });
+  })().finally(() => { primeInFlight = null; }));
   return primeInFlight;
 }
 

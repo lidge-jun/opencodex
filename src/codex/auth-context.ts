@@ -51,6 +51,7 @@ import {
 // The half-open TRANSIENT-HOLD lease (#4701). Not the quota-cooldown probe lease imported from
 // ./routing above -- different module, different domain, and a request never holds both.
 import { releaseTransientProbe } from "../routing/probe-lease";
+import { trackBackgroundWork } from "../lib/background-work";
 import {
   codexConversationIdentity,
   recordCodexThreadLineage,
@@ -1547,9 +1548,10 @@ async function resolveCodexAuthContextUnannotated(
     if (options.primeCodexPoolQuotas) {
       void options.primeCodexPoolQuotas(config, reason).catch(() => {});
     } else {
-      import("./auth-api")
+      // Tracked from the import on: the prime registers itself only once the module resolves.
+      void trackBackgroundWork(`codex-pool-quota-prime-import:${reason}`, import("./auth-api")
         .then(({ primeCodexPoolQuotas }) => primeCodexPoolQuotas(config, reason))
-        .catch(() => {});
+        .catch(() => {}));
     }
   }
   // Snapshot (not just the deadline) so a refused request can report WHY it is cooled:

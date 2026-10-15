@@ -43,6 +43,7 @@ $wanted = @(
   "Parse-StartupHealthText",
   "Start-StartupHealthProbe",
   "Complete-StartupHealthProbe",
+  "Stop-StartupHealthProbe",
   "Initialize-UpdateBadgeReader",
   "Parse-UpdateBadgeText",
   "Complete-UpdateBadgeProbe",
@@ -116,6 +117,7 @@ $script:startupRefreshMs = 20000
 $script:startupProbeProcess = $null
 $script:startupProbeOutputTask = $null
 $script:startupProbeErrorTask = $null
+$script:startupProbeTerminating = $false
 $script:startupProbeStarted = 0
 $script:startupProbeTimeoutMs = 30000
 $script:updateAvailable = $false
@@ -227,8 +229,8 @@ try {
   $observedAtAfterMaintenance = $script:updateBadgeObservedAt
   $updateItemVisibleAfterMaintenance = $updateItem.Visible
   $updateItemEnabledAfterMaintenance = $updateItem.Enabled
-  $terminatingAfterMaintenance = if ($badgeCase) { $script:updateBadgeTerminating } else { $false }
-  $trackedAfterMaintenance = if ($badgeCase) { $null -ne $script:updateBadgeProcess } else { $false }
+  $terminatingAfterMaintenance = if ($badgeCase) { $script:updateBadgeTerminating } else { $script:startupProbeTerminating }
+  $trackedAfterMaintenance = if ($badgeCase) { $null -ne $script:updateBadgeProcess } else { $null -ne $script:startupProbeProcess }
   $maxTickMs = $maintenanceMs
   $reapDeadline = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() + 2000
   do {

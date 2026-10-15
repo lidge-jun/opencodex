@@ -170,5 +170,5 @@ describe("Codex Desktop compatibility authority lifecycle", () => {
     expect(Buffer.from(await windowsAuthorityKeyProtection.unprotect(encrypted))).toEqual(original);
     const corrupted = Uint8Array.from(encrypted); corrupted[corrupted.length - 1] ^= 1;
     await expect(windowsAuthorityKeyProtection.unprotect(corrupted)).rejects.toThrow("desktop_compatibility_key_protection_failed");
-  }, 35_000);
+  }, 65_000); // three PowerShell calls, each bounded at 20s, plus margin
 });
