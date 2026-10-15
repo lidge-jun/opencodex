@@ -67,12 +67,16 @@ function loadNativeDpapi(): NativeDpapi | null {
       CryptProtectData: DPAPI_SIGNATURE,
       CryptUnprotectData: DPAPI_SIGNATURE,
     }).symbols;
-    kernel32 = dlopen(join(systemDirectory, "kernel32.dll"), { LocalFree: { args: ["ptr"], returns: "ptr" } }).symbols;
+    kernel32 = dlopen(join(systemDirectory, "kernel32.dll"), {
+      LocalFree: { args: ["ptr"], returns: "ptr" },
+      // Wipes by address, so clearing never depends on a JS view having been created.
+      RtlZeroMemory: { args: ["ptr", "u64"], returns: "void" },
+    }).symbols;
   } catch {
     return null;
   }
   const { CryptProtectData, CryptUnprotectData } = crypt32;
-  const { LocalFree } = kernel32;
+  const { LocalFree, RtlZeroMemory } = kernel32;
   nativeDpapi = (operation, data) => {
     const input = dataBlob(data);
     const entropy = dataBlob(ENTROPY);
@@ -92,10 +96,11 @@ function loadNativeDpapi(): NativeDpapi | null {
       if (length === 0 || length > MAX_INPUT) throw new Error("desktop_compatibility_key_size");
       return Uint8Array.from(view!);
     } finally {
-      // The unprotected buffer is cleartext key material; clear it before LocalFree releases it,
-      // including when the size check rejects it. LocalFree still runs if clearing throws.
+      // The unprotected buffer is cleartext key material; wipe it natively before LocalFree
+      // releases it, including when the size check or view creation fails. LocalFree still
+      // runs if wiping throws.
       try {
-        if (operation === "unprotect") view?.fill(0);
+        if (operation === "unprotect" && length > 0) RtlZeroMemory(address, length);
       } finally {
         LocalFree(address);
       }
