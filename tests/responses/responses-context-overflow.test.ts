@@ -12,6 +12,7 @@ import { isLateAttributionRefusal } from "../../src/server/responses/core-combo-
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { clearComboTargetCooldowns, coolComboTarget } from "../../src/combos";
 
 let testDir = "";
 let previousOcxHome: string | undefined;
@@ -426,19 +427,21 @@ describe("combo handling of the Ollama late-attribution refusal", () => {
 // must hear that from the proxy, with the estimate and each window, instead of the provider
 // wording an operator reads as an upstream rejection.
 describe("combo whose targets all fail local input admission", () => {
-  async function runCombo(stream: boolean, second: "local" | "upstream") {
+  async function runCombo(stream: boolean, second: "local" | "upstream" | "cooled") {
     let hits = 0;
     const local = upstream413(() => { hits += 1; });
     const first = { ...provider("openai-chat", local), modelContextWindows: { "kimi-k3": 1_000 } };
     const next = config({
       first,
-      second: second === "local"
-        ? { ...provider("openai-chat", local), modelContextWindows: { "kimi-k3": 2_000 } }
-        : provider("openai-chat", freePromptCap413(() => { hits += 1; })),
+      second: second === "upstream"
+        ? provider("openai-chat", freePromptCap413(() => { hits += 1; }))
+        : { ...provider("openai-chat", local), modelContextWindows: { "kimi-k3": 2_000 } },
     });
     next.combos = { fallback: { strategy: "failover", targets: [
       { provider: "first", model: "kimi-k3" }, { provider: "second", model: "kimi-k3" },
     ] } };
+    clearComboTargetCooldowns();
+    if (second === "cooled") coolComboTarget("fallback", { provider: "second", model: "kimi-k3" }, { retryAfter: "120" });
     const logCtx = { model: "", provider: "" } as RequestLogContext;
     const release = acquireOwnedSpendHome();
     try {
@@ -453,6 +456,7 @@ describe("combo whose targets all fail local input admission", () => {
       return { error, hits, attempts: logCtx.attempts ?? [], logCtx };
     } finally {
       release();
+      clearComboTargetCooldowns();
     }
   }
 
@@ -464,7 +468,7 @@ describe("combo whose targets all fail local input admission", () => {
     const message = String(error.message);
     expect(message).not.toBe(PROVIDER_INPUT_TOO_LARGE_MESSAGE);
     expect(message).toContain("refused this turn locally");
-    expect(message).toContain("combo fallback");
+    expect(message).toContain("No target of combo fallback that was tried");
     expect(message).toMatch(/~\d+ tokens/);
     expect(message).toContain("(1000 tokens)");
     expect(message).toContain("(2000 tokens)");
@@ -473,6 +477,16 @@ describe("combo whose targets all fail local input admission", () => {
       [413, 0, "input_admission_refused"],
     ]);
     expect(logCtx.errorCode).toBe("input_admission_refused");
+  });
+
+  test("a target skipped for cooldown is not claimed to be too small", async () => {
+    const { error, hits, attempts } = await runCombo(false, "cooled");
+    expect(hits).toBe(0);
+    const message = String(error.message);
+    expect(message).toContain("No target of combo fallback that was tried can fit its input");
+    expect(message).toContain("(1000 tokens)");
+    expect(message).not.toContain("(2000 tokens)");
+    expect(attempts.map(attempt => attempt.errorCode)).toEqual(["input_admission_refused"]);
   });
 
   test("a target that reached the provider keeps the provider wording", async () => {

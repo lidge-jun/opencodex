@@ -1244,7 +1244,7 @@ export async function executeComboResponses(
     if (localAdmissionRefusals?.length) logCtx.errorCode = "input_admission_refused";
     const localMessage = localAdmissionRefusals?.length
       ? `opencodex refused this turn locally; nothing was sent upstream. No target of combo ${comboId} `
-        + `can fit its input: ${localAdmissionRefusals.join(" ")} Compact the conversation before retrying.`
+        + `that was tried can fit its input: ${localAdmissionRefusals.join(" ")} Compact the conversation before retrying.`
       : undefined;
     return (rawBody as { stream?: unknown } | null)?.stream === true
       ? streamingContextOverflowResponse(requestedModel, options.translatorBudget, localMessage)
