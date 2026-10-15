@@ -996,6 +996,8 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
             yield* runSearchCall(call, callIndex === 0 ? iterationThinking : []);
           }
         } catch (e) {
+          // The bridge reports no usage for either error; the iterations already sent still count.
+          if (hiddenUsage) deps.onUsage?.(hiddenUsage);
           if (isTranslatorBudgetExceededError(e)) {
             yield {
               type: "error",
@@ -1005,8 +1007,6 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
               message: "upstream translation buffer exceeded the safe limit",
             };
           } else {
-            // The bridge reports no usage for this error; the iterations already sent still count.
-            if (hiddenUsage) deps.onUsage?.(hiddenUsage);
             yield { type: "error", message: e instanceof LoopError ? e.message : (e instanceof Error ? e.message : String(e)) };
           }
           return;
