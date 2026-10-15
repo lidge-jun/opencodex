@@ -407,12 +407,15 @@ function codexAccountPrioritiesError(value: unknown): string | null {
   return null;
 }
 
-function codexAccountPriorityFailbackError(value: unknown): string | null {
+function codexAccountSelectionPreferencesError(value: unknown): string | null {
   const raw = rawConfigRecord(value);
-  if (!raw || !Object.hasOwn(raw, "codexAccountPriorityFailback")) return null;
-  const enabled = raw.codexAccountPriorityFailback;
-  if (enabled === undefined || typeof enabled === "boolean") return null;
-  return "schema_invalid: codexAccountPriorityFailback: must be a boolean or omitted";
+  if (!raw) return null;
+  for (const key of ["codexAccountPriorityFailback", "codexPreserveSignedInAccount"]) {
+    if (raw[key] !== undefined && typeof raw[key] !== "boolean") {
+      return `schema_invalid: ${key}: must be a boolean or omitted`;
+    }
+  }
+  return null;
 }
 
 /**
@@ -720,7 +723,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? codexPoolError(value)
     ?? googleAntigravityStaticCatalogVersionError(value)
     ?? codexAccountPrioritiesError(value)
-    ?? codexAccountPriorityFailbackError(value)
+    ?? codexAccountSelectionPreferencesError(value)
     ?? poolCredentialGroupsError(value)
     ?? codexQuotaAutoRefreshError(value)
     ?? codexAccountPickerEnabledError(value)

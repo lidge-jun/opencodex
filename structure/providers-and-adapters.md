@@ -2,15 +2,15 @@
 GCP JSON storage in `src/providers/api-keys.ts` and durable-row snapshot/post-commit cleanup in `src/providers/gcp-credential-cleanup.ts` follow [Vertex credential markers](providers/google.md#vertex-credential-markers); malformed blank marker accounts do not block cleanup of valid accounts.
 Combo target `metered` metadata and configured-key opt-in follow the [runtime consent contract](runtime.md#request-local-target-compatibility). Subscription-to-Cursor-to-key regression coverage in `tests/adapters/anthropic/anthropic-subscription-chain.test.ts` checks unchanged healthy subscription wire bodies, effort, key authentication and cache controls, and structured runTurn 429 propagation. Configured spend ceilings bind adapter inference executors to the [seed and physical-start contract](transports/responses-spend.md#historical-pool-continuity-and-rollback). Zed completion and auth-recovery replays claim separately; token acquisition stays outside inference accounting. Claude CLI, CodeBuddy and Qoder each count one invocation toward the frozen request limit, seed before spawn and retain a producer through completion. Child-internal retries/tool turns are not separately counted; reported actual usage settles in full, including amounts above the seed estimate.
 Devin combines only [consecutive same-ID tool results](adapters/registry.md#devin-consecutive-tool-results), using linear accumulation while preserving intervening message slots, image parts and error markers without mutating the parsed request.
-Anthropic account pause, model routes, quota labels, and the separate `anthropic2` pool (its helpers, quota, reset grants and management surfaces) follow the [Anthropic account-pool contract](providers/anthropic-account-pool.md). Devin Messages follows the [per-turn output ordering contract](clients/claude-desktop.md#devin-messages-output-ordering), preserving late signatures before text/tools without changing Responses or Chat ordering.
+Claude CLI replay, client tool capture and usage admission follow [Claude CLI replay](providers/claude-cli-replay.md). Anthropic account pause, model routes, quota labels, and the separate `anthropic2` pool (its helpers, quota, reset grants and management surfaces) follow the [Anthropic account-pool contract](providers/anthropic-account-pool.md). Devin Messages follows the [per-turn output ordering contract](clients/claude-desktop.md#devin-messages-output-ordering), preserving late signatures before text/tools without changing Responses or Chat ordering. The DeepSeek Harness account provider follows the [DSH account contract](providers/dsh-account.md).
 
 API-key credit-balance refusals follow the [Anthropic billing recovery contract](providers/anthropic-key-billing.md). Managed native Anthropic serving UUID and observed CLI header continuity follow [native Messages](data-planes/protocol-paths.md#managed-native-messages); generated Responses retain the adapter's compatibility fingerprint.
 
-Per-account usage thresholds follow the [Anthropic account thresholds contract](providers/anthropic-account-thresholds.md).
+Opus 5.5 commentary follows the [signed progress-update contract](providers/anthropic-progress.md). Per-account usage thresholds follow the [Anthropic account thresholds contract](providers/anthropic-account-thresholds.md).
 A shared-quota Anthropic 429 or classified pre-output account 403 records the served account's cooldown even when the request has used its allowed retry sends. That final account remains excluded on the next request; combo target cooling for 429 is skipped only after the matching account cooldown is present. Exact revoked-token 401s persist generation-fenced reauthentication under [the Anthropic recovery contract](providers/anthropic-account-pool.md#revoked-oauth-access-token-recovery).
 
 The Anthropic helper sends share the same routing authority: `getAnthropicSidecarAccessToken` resolves the vision-describe and web-search sidecars' helper model through the same first-match route decision, so a routed send authenticates as the route's own account rather than whatever pool account happens to be active. A strict route with no eligible account fails the helper locally instead of silently falling back to the active outsider, matching the primary-traffic contract; callers without a pool config keep the plain stored-credential path.
-
+Generic OAuth conversation ownership follows [the generic account-pool contract](providers/generic-account-pool.md#conversation-affinity).
 ## GitHub Copilot Auto selection
 
 `src/providers/github-copilot-transport.ts` retains the credential-specific destination and headers. Automatic selection requires a nonempty catalog whose every valid row explicitly has `model_picker_enabled: false`; missing or malformed permissions retain named routes. Named picker projection removes only explicitly false rows.
@@ -64,15 +64,8 @@ Combo preflight allows the private search tool only while a search plan is activ
 The opt-in `inlineThinkTagModels` list follows static-policy override and model-rename rules;
 shared Kiro/Chat splitting and raw display follow [Chat compatibility](providers/chat-compat.md#inline-think-tag-recovery).
 
-Meta Muse management login in `src/server/management/oauth-account-routes.ts` requires a
-server-resolved `gui-session` before starting credential acquisition, including local import,
-device login, add-account and reauthentication. This principal is not a checkbox receipt;
-forged GUI headers and raw management credentials do not substitute for it. Direct CLI login
-and other OAuth providers retain their existing policies. `src/oauth/meta-muse-device.ts`
-cancels unparsed authorization/mint failures, including mint429, without reflecting their bodies.
-Management discovery and changing device/manual instructions follow the
-[OAuth continuation contract](gui-and-management-api.md#oauth-login-continuations); discovery
-filters the current principal without changing the direct CLI roster or relaxing login admission.
+Meta Muse import, device login, explicit paste recovery, consent and safe diagnostics follow
+the [Muse login contract](providers/meta-muse.md). Other providers retain their existing login policies.
 
 The capture-only bridge in `src/adapters/coding-agent/turn.ts` reports staging failures with
 the fixed `tool_bridge_setup_failed` error, never an OS error carrying private file paths.
@@ -571,7 +564,7 @@ boundary. `src/types/tools.ts` owns tool-name identity: namespaced and dotted na
 normalization, and `tool_choice` alias resolution, so every adapter matches a declared tool the
 same way. `src/types/wire.ts` owns accepted wire enumerations such as the per-provider upstream HTTP-version pin, shared by
 config load, management writes and fetch, so no boundary accepts a value another rejects. It also hard-pins OpenCode Go's
-`claude-haiku-5-5`, `minimax-m2.5`, `minimax-m2.7`, `minimax-m3`, and `union-alpha` to Anthropic across direct and captured static policy resolution, even with Chat/Responses overrides.
+`claude-haiku-5-5`, `minimax-m2.5`, `minimax-m2.7`, `minimax-m3`, and `union-alpha` to Anthropic across direct and captured static policy resolution, even with Chat/Responses overrides. Every `dsh-account` model is pinned to the `dsh-account` adapter whatever `baseUrl` says, because that adapter is the [DSH account token's destination boundary](providers/dsh-account.md#destinations).
 
 `src/types/config.ts` declares the optional per-phase `memoryModels` setting;
 `src/types/request.ts` carries the selected phase through combo handoffs without changing the

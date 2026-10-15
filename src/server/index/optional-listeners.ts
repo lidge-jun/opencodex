@@ -21,6 +21,7 @@ export { LINK_INGRESS_HOSTNAME } from "./link-listener";
 import type { ServerIngress } from "./serve-options";
 
 export interface OptionalListenerStartContext<T> {
+  startProxy?: typeof import("../../claude/intercept/connect-proxy").startConnectProxy;
   config: OcxConfig;
   publicPort: number;
   requestedPort?: number;
@@ -106,6 +107,7 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): O
       }
       supervisorStop = () => supervisor.stop();
       claudeIntercept.start({
+        startProxy: ctx.startProxy,
         config: ctx.config,
         publicPort: ctx.publicPort,
         requestedPort: ctx.requestedPort,

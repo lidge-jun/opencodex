@@ -242,7 +242,11 @@ function extractIterationThinking(events: AdapterEvent[]): OcxThinkingContent[] 
   };
 
   for (const e of events) {
-    if (e.type === "thinking_delta") {
+    if (e.type === "text_delta" && e.anthropicThinkingSignature) {
+      flushVisible();
+      flushRaw();
+      parts.push({ type: "thinking", thinking: e.text, signature: e.anthropicThinkingSignature });
+    } else if (e.type === "thinking_delta") {
       flushRaw();
       thinking += e.thinking;
     } else if (e.type === "reasoning_raw_delta") {
@@ -882,6 +886,10 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
 
           // Discarded iteration still contributed tokens — accumulate for the final onUsage.
           takeUsageFrom(split.passthrough);
+
+          for (const event of split.passthrough) {
+            if (event.type === "text_delta" && event.anthropicThinkingSignature) yield event;
+          }
 
           // Fulfill each image/video call, then inject ONE assistant turn (thinking once + all tool
           // calls) so Anthropic extended-thinking continuations stay valid across parallel calls.

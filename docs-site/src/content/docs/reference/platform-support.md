@@ -59,6 +59,25 @@ offers an input surface. Pasted keys use the same format and Model API validatio
 as imported ones. Management login requires a dashboard session before either
 credential-acquisition path; see the [provider guide](/guides/providers/).
 
+The macOS Keychain prompt appears on the machine running the proxy, which may be
+separate from your dashboard browser. OpenCodex allows up to 120 seconds to approve
+it. Cancel the dashboard login to stop the pending read. Missing entries, denied
+access, unavailable Keychain interaction, timeout, malformed credentials, and
+Model API validation failures have separate recovery messages. If import is
+blocked, the dashboard offers a paste field for an existing Muse Code API key; it
+does not automatically start another device grant. To use browser sign-in instead,
+choose **Add account** on an already configured provider. OpenCodex does not change
+Keychain access controls.
+
+If login still fails, report the exact displayed Muse error (including any HTTP
+status), OpenCodex version, `muse --version`, whether the dashboard is remote from
+the proxy, and how long the prompt was visible. In browser developer tools →
+Network, copy only the `error` field from `/api/oauth/login` or
+`/api/oauth/status?provider=meta-muse`. Do not share a HAR, request headers,
+auth files, Keychain output, account details, or the rest of the status response.
+These safe diagnostics distinguish local import from Meta validation failures;
+no credential dump is needed.
+
 For Responses requests to Meta, omitted or `auto` tool selection is supported.
 Explicit `none` sends `tools: []` and removes `additional_tools` items from the
 input. Forced, named, and `allowed_tools` selections return HTTP 400 before the

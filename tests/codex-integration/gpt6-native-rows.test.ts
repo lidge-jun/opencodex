@@ -139,7 +139,7 @@ test("GPT-6 Sol, Luna and Astra keep their 272k default and 872k long window", (
     expect(nativeOpenAiContextTier(slug)).toEqual({ defaultWindow: 272_000, longWindow: 872_000 });
     expect(nativeOpenAiContextWindow(slug, { modelWindows: { [slug]: 872_000 } })).toBe(872_000);
     expect(entries.find(entry => entry.slug === slug)).toMatchObject({
-      context_window: 272_000, max_context_window: 272_000, auto_compact_token_limit: 244_800,
+      context_window: 272_000, max_context_window: 872_000, auto_compact_token_limit: 244_800,
     });
   }
 });

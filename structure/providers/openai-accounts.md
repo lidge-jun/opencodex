@@ -316,6 +316,11 @@ as the writer. `"opencodex"`, a missing binary, or an older binary keeps the
 guarded writer above. While the test home guard is armed, auto resolution
 never spawns Codex. `ocx doctor` prints the active mode and its reason.
 
+## Preserve signed-in quota
+
+The opt-in preference that spends other pool accounts before the signed-in identity is
+described in [`openai-signed-in-preservation.md`](openai-signed-in-preservation.md).
+
 ## Manual account pause and resume
 
 Manual pause/resume in `src/codex/auth-api/account-pause-group.ts` resolves existing native-main

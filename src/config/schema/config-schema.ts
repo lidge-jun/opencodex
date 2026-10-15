@@ -51,6 +51,7 @@ import {
   providerHeadersConfigError,
   providerForwardClientHeadersConfigError,
   reasoningSummaryDeliveryRecordConfigError,
+  credentialPinnedProviderConfigError,
 } from "../provider-validation";
 import {
   CODEX_ACCOUNT_NAMESPACE_COMBO_ALIAS_COLLISION_ERROR,
@@ -313,6 +314,7 @@ export const configSchema = z.object({
   codexAccountAutoSwitchThresholds: z.unknown().optional().transform(salvageCodexAccountAutoSwitchThresholds),
   // An invalid optional preference must not discard providers or credential rows.
   codexAccountPriorityFailback: z.boolean().optional().catch(false),
+  codexPreserveSignedInAccount: z.boolean().optional().catch(false),
   // Absent or invalid keeps the sliding window on. Explicit false restores consecutive-only steering.
   codexFailureWindow: z.boolean().optional().catch(undefined),
   codexPinnedTransientPolicy: z.enum(["hold", "detour-new-threads"]).optional().catch("hold"),
@@ -599,6 +601,10 @@ export const configSchema = z.object({
         path: ["providers", redactSecretString(name), "modelAdapters"],
         message: modelAdaptersError,
       });
+    }
+    const credentialPinError = credentialPinnedProviderConfigError(name, provider);
+    if (credentialPinError) {
+      ctx.addIssue({ code: "custom", path: ["providers", redactSecretString(name)], message: credentialPinError });
     }
     const preferHostedToolsError = modelPreferHostedToolsConfigError(
       (provider as { modelPreferHostedTools?: unknown }).modelPreferHostedTools,

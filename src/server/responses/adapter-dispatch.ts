@@ -54,7 +54,7 @@ import { describeUpstreamConnectFailure } from "./upstream-error";
 import type { OpaqueBlobRecoveryGuard } from "./core-opaque-recovery";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import type { OAuthAccessSnapshot } from "../../oauth";
-import { OAuthAccountPausedError, OAuthLoginRequiredError, publicOAuthAuthenticationErrorMessage } from "../../oauth";
+import { OAuthAccountPausedError, OAuthLoginRequiredError, OAuthTokenRefreshBusyError, publicOAuthAuthenticationErrorMessage } from "../../oauth";
 import { getAccountSet, markAccountNeedsReauthIfGeneration } from "../../oauth/store";
 import { tryKiroAlternateAfterTerminalRefresh } from "../../oauth/kiro-terminal-failover";
 import { classifyKiroRefusal } from "../../adapters/kiro-refusal";
@@ -932,6 +932,15 @@ export async function prepareAdapterExchange(
         try {
           refreshed = await refreshResolvedOAuthSelection(transportState.sentOAuthSnapshot);
         } catch (err) {
+          const cancelled = options.abortSignal?.aborted || req.signal.aborted;
+          if (cancelled || err instanceof OAuthTokenRefreshBusyError) {
+            cleanupUpstreamAbort();
+            upstream.abort();
+            try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already closed */ }
+            releaseCodexAuthContextProbeLease(admissionState.authCtx);
+            return cancelled ? clientCancelledResponse()
+              : formatErrorResponse(503, "server_error", publicOAuthAuthenticationErrorMessage(err), { retryAfter: "1" });
+          }
           const failed = transportState.sentOAuthSnapshot;
           if (route.providerName === "google-antigravity" && !antigravityAuthRotationAttempted
             && err instanceof OAuthLoginRequiredError && failed

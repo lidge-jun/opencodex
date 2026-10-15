@@ -218,6 +218,13 @@ as OrcaRouter are reused until the provider revokes them); API-key login provide
 key, validate it when possible, and save the resulting provider config. The command prints the
 currently accepted OAuth and API-key provider ids when the name is missing or unknown.
 
+Failed OAuth logins exit with status 1 and print a fixed diagnostic: the HTTP status and standard
+OAuth error code (such as `invalid_grant`) when the provider returned one, `network_error` or
+`timeout` when the provider could not be reached, `configuration_error` with the reason when a
+local setting such as a Codex account namespace blocks the login, and `oauth_authentication_failed`
+otherwise. Pool 2 (`anthropic2`) also reports `configuration_error` before prompting when a custom
+provider owns that name or its config file cannot be read or parsed.
+
 Use the same command to **reauthenticate** after `ocx status` / `ocx doctor` reports
 reauthentication required or a terminal refresh failure (or use Reauthenticate in the dashboard).
 Codex pool accounts are not one of those OAuth or API-key providers, but `ocx login codex` reaches
@@ -238,7 +245,17 @@ ocx login xai
 ocx login anthropic
 ocx login orcarouter-oauth # browser consent + S256 PKCE
 ocx login orcarouter       # paste an existing API key
+ocx login anthropic --headless # no browser, no local port
 ```
+
+`--headless` runs the **code-display** login for hosts whose browser cannot reach the proxy's loopback
+callback (containers, remote servers). The command prints an authorization URL; approve it in any
+browser, and the provider shows a `code#state` string to paste back at the prompt. No callback port
+is bound and no browser is launched. Only `anthropic` and `anthropic2` support it today; any other provider exits
+with the list of providers that do. For Codex accounts use the device-code login instead,
+`ocx account login codex --device` — `ocx login codex --headless` is refused rather than passed on.
+The paste window is 10 minutes, and each login accepts one code: if the exchange fails, start a new login. A successful login becomes the provider's active account, exactly
+like a browser login.
 
 OAuth reauthentication preserves operator settings such as model selections, pricing overrides,
 and account failover preferences. Login-owned transport/authentication fields and registry-owned
@@ -302,7 +319,7 @@ Only fields named by `supported` may be written; null is not false, and an inert
 policy is not active pooling. Threshold zero and `enabled:false` are independent.
 Use `--enabled on|off`, `--threshold 0..100`, `--strategy`, `--sticky 1..100`, and
 `--quota-window` only where supported. OpenAI does not support pool enabled/window
-writes; `reset-first` is OpenAI-only, `least-loaded` Kiro-only, and Anthropic windows
+writes; `reset-first` is for OpenAI and generic OAuth pools (never Anthropic), `least-loaded` Kiro-only, and Anthropic windows
 are `five-hour`, `weekly`, `max-utilization`. Omitted fields stay unchanged.
 Read DTO fields such as routes, per-account concurrency or Anthropic `nativeMessages`
 do not imply a setter in this command; use only the listed CLI options. A save that
@@ -857,12 +874,50 @@ openai: { provider, autoSwitchThreshold: number, enabled: boolean }
 generic OAuth: { provider, autoSwitchThreshold: number | null, enabled: boolean, poolEnabled: boolean | null, inert: boolean | null }
 ```
 
+### `ocx account preserve-signed-in openai [on|off|status] [--apply-to-bound] [--json]`
+
+Opt in to **use other eligible accounts first and keep the signed-in ChatGPT/Codex Desktop
+identity as fallback**. A bare invocation or `status` reads the running proxy's policy, affected
+entry IDs, manual pin and next unbound choice. `on` persists `codexPreserveSignedInAccount: true`;
+`off` restores your existing custom account order without rewriting any priorities.
+
+The reserved group includes native `__main__` and ordinary pool entries with the same selected
+ChatGPT account/workspace **and** normalized member email. Sharing a workspace alone is insufficient.
+The group follows the latest physical login observed by the proxy's native-login lifecycle;
+no incoming request credential can define it. If member/workspace evidence is unavailable,
+`identityKnown: false` reports that only main can be identified. Status obtains a fresh owned
+observation; a busy or unreadable native profile returns 503 without applying the change.
+
+All four Codex strategies prefer other identities with quota headroom, preserving custom order
+within each group. Reserved entries remain fallback when preferred tiers drain. **Fallback can
+consume the signed-in quota**, subject to existing model access, pause, cooldown, reauthentication,
+hard-lock and paid-credit consent checks. This policy does not grant paid-credit consent.
+
+Healthy existing bindings stay in place, and manual pins and exact account-qualified model routes
+override the preference. To apply it to ongoing work, run:
+
+```bash
+ocx account preserve-signed-in openai on --apply-to-bound
+```
+
+This explicitly releases only affected bindings and any affected manual pin for the **next request**;
+in-flight requests keep their captured account. Unrelated bindings and pins remain. Moving work may
+lose its warm prompt cache, and account-scoped uploads or continuation state can prevent a move.
+`codexAccountPriorityFailback` remains a separate opt-in, with its existing quota-strategy,
+positive-threshold and fresh-observation conditions; it can also move work toward a preferred group.
+
+For **never use this identity through the pool**, use `ocx account pause openai main` instead:
+linked pause excludes main and matching pool entries without changing the desktop login file.
+Only requests that reach OpenCodex are controlled. This does not unlock an already-disabled
+desktop composer or promise to fix client-side quota gating.
+
 ### `ocx account priority <provider> <account-id|alias|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]`
 
 Reads or sets one Codex pool account's selection order: **higher is used earlier**, the default is
 `0`, and the range is `-100` through `100`. Only the `openai` Codex pool is ordered, so other
 providers exit 1. `main` targets the Codex Desktop login, which is ordered like any other pool
-account — `ocx account priority openai main last` is how you keep it as the reserve.
+account. `ocx account priority openai main last` lowers only that entry; use
+`preserve-signed-in` above to reserve its matching ordinary pool entries too.
 
 Preset words stand in for small integers: `first` is `+2`, `earlier` is `+1`, `normal` is `0`,
 `later` is `-1`, and `last` is `-2`. `reset` returns the account to the default and drops its stored

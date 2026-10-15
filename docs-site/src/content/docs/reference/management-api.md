@@ -605,9 +605,9 @@ Labels are read on login/import or refresh, never inferred from quota percentage
 | --- | --- | --- |
 | `GET /api/oauth/providers` | List providers with public OAuth login flows | — |
 | `GET /api/key-providers` | List providers configured through API-key login | — |
-| `POST /api/oauth/login` | Start an OAuth login or account-add flow | 400 unknown/invalid provider; `oauth_mutation_busy` |
-| `POST /api/oauth/login/code` | Submit a manual callback URL or authorization code | 400 invalid provider/code; `oauth_mutation_busy` |
-| `POST /api/oauth/login/cancel` | Cancel a public in-progress OAuth flow | 400 unknown provider |
+| `POST /api/oauth/login` | Start an OAuth login or account-add flow. `mode: "code"` starts a code-display login (Anthropic only) and returns `mode`, `flowId`, `expiresAt` | 400 unknown/invalid provider, invalid `mode`, `code_mode_unsupported`; `oauth_mutation_busy` |
+| `POST /api/oauth/login/code` | Submit a manual callback URL or authorization code. For a code-display flow (with `flowId`) returns the token-exchange outcome `{ok, account}` / `{ok:false, error}` | 400 invalid provider/code, `state_mismatch`, `invalid_or_expired_code`, `provider_unreachable`, `malformed_input`; 409 `no_pending_login`; `oauth_mutation_busy` |
+| `POST /api/oauth/login/cancel` | Cancel a public in-progress OAuth flow; an optional `flowId` names one code-display flow (a flow of another provider is refused) | 400 unknown provider |
 | `GET /api/oauth/status` | Poll one provider's OAuth flow | 400 unknown provider |
 | `POST /api/oauth/logout` | Remove the selected provider credential | 400 unknown provider; `oauth_mutation_busy` |
 | `GET /api/oauth/accounts` | List masked accounts; Anthropic and generic OAuth account rows include their `paused` state. Kiro rows include `autoSelectable` and a closed `skipReason` when excluded from automatic selection; an active singleton may still send. Quota remains opt-in. | 400 invalid provider |
@@ -765,6 +765,8 @@ manager. Its routes are:
 | `POST /api/codex-auth/accounts/clear-cooldown` | Clear runtime cooldown for one account or all accounts | 400 invalid id |
 | `GET, PUT /api/codex-auth/active` | Read or select the active account | 400 invalid or missing account; 409 paused/legacy-row conflict or `account_selection_unavailable` |
 | `PUT /api/codex-auth/auto-switch` | Set the global quota threshold with `{ threshold }`, or an account override with `{ id, threshold }`; `null` restores global inheritance, and `__main__` selects the Desktop login | 400 invalid id/threshold; 404 missing account |
+| `GET /api/codex-auth/preserve-signed-in` | Read policy, current `affectedAccountIds`, `identityKnown`, `nextAccountId`, `nextUsesSignedInQuota` (actual next choice, even when disabled), `pinnedAccountId`, `bindings`, `priorityFailbackEnabled`, and `fallbackConsumesSignedInQuota` | 503 native profile busy/unreadable |
+| `PUT /api/codex-auth/preserve-signed-in` | Strict `{ enabled: boolean, applyToBound?: boolean }`; explicit `applyToBound: true` requires enabled, releases affected bindings/pin for next request; reports `releasedPin` | 400 invalid body; 503 native profile busy/unreadable |
 | `PUT, PATCH /api/codex-auth/pool-strategy` | Update Codex account-pool selection strategy | 400 invalid strategy/config |
 | `PUT /api/codex-auth/failover` | Set the account failover threshold | 400 invalid threshold |
 | `GET /api/codex-auth/quota` | Read cached quota state by account | — |

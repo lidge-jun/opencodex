@@ -1,3 +1,4 @@
+import { withAnthropicProgressUpdates } from "./anthropic-progress";
 import type { IncomingMeta, ProviderAdapter } from "./base";
 import { createAdapterTierMetadata, type AdapterTierMetadata } from "../providers/fastwire";
 import { ANTHROPIC_FAST_MODE_BETA, mergeAnthropicBetaHeader } from "../providers/anthropic-fast";
@@ -31,7 +32,7 @@ import { decodeServerSentEvents } from "../lib/sse-decoder";
 import { isTranslatorBudgetExceededError, retainTranslatedEventBatch, type TranslatorBudget } from "../lib/translator-budget";
 import { isReasoningEffortOmitted, modelRecordValue } from "../reasoning-effort";
 import { applyAgentRouterLanguageFraming, isAgentRouterEndpoint } from "./agentrouter";
-import { rejectsCombinedSampling, rejectsForcedToolChoice, rejectsSamplingParameters, supportsExplicitThinkingDisable, usesAdaptiveThinking, usesBetweenToolsFloor } from "./anthropic-model-contract";
+import { claudeFamilyVersion, rejectsCombinedSampling, rejectsForcedToolChoice, rejectsSamplingParameters, supportsExplicitThinkingDisable, usesAdaptiveThinking, usesBetweenToolsFloor } from "./anthropic-model-contract";
 
 /** Map a user content part to an Anthropic content block (text or image source). */
 function toAnthropicContentPart(p: OcxContentPart): unknown {
@@ -770,11 +771,14 @@ function messagesToAnthropicFormat(
         const aMsg = msg as OcxAssistantMessage;
         const preface: unknown[] = [];
         const toolUses: unknown[] = [];
+        const originalOrder: unknown[] = [];
+        const appendPreface = (block: unknown) => { preface.push(block); originalOrder.push(block); };
+        let signed = false;
         const toolUseIds: string[] = [];
         for (const part of aMsg.content) {
           if (part.type === "text") {
             const text = (part as OcxTextContent).text;
-            if (text) preface.push({ type: "text", text });
+            if (text) appendPreface({ type: "text", text });
           } else if (part.type === "thinking") {
             const t = part as OcxThinkingContent;
             // History minted under another serving identity (or already rejected as opaque) is not
@@ -783,10 +787,11 @@ function messagesToAnthropicFormat(
             // Redacted blocks replay verbatim FIRST (they preceded the visible thinking block
             // in the original stream order preserved by the bridge envelope).
             for (const data of t.redacted ?? []) {
-              preface.push({ type: "redacted_thinking", data });
+              appendPreface({ type: "redacted_thinking", data });
             }
             if (isLikelyRealAnthropicThinkingSignature(t.signature)) {
-              preface.push({ type: "thinking", thinking: t.thinking, signature: t.signature });
+              signed = true;
+              appendPreface({ type: "thinking", thinking: t.thinking, signature: t.signature });
             }
           } else if (part.type === "toolCall") {
             const tc = part as OcxToolCall;
@@ -797,16 +802,20 @@ function messagesToAnthropicFormat(
             // rejects. An unrepresentable call becomes text instead, and its result follows it there.
             const wireCallId = callIds.allocate(tc.id);
             if (wireCallId === undefined) {
-              preface.push({ type: "text", text: unrepresentableToolCallText(tc, toolNames.toWire(flatName)) });
+              appendPreface({ type: "text", text: unrepresentableToolCallText(tc, toolNames.toWire(flatName)) });
               continue;
             }
             toolUseIds.push(wireCallId);
-            toolUses.push({ type: "tool_use", id: wireCallId, name: toolNames.toWire(flatName), input: tc.arguments });
+            const block = { type: "tool_use", id: wireCallId, name: toolNames.toWire(flatName), input: tc.arguments };
+            toolUses.push(block);
+            originalOrder.push(block);
           }
         }
         // Anthropic treats text/thinking after tool_use as ending the tool turn, which makes
         // earlier tool_use ids look unpaired (#620 / common multi-step history shape).
-        const content = [...preface, ...toolUses];
+        // Signed native blocks bind the source ordering, including updates between tool calls.
+        // Keep the legacy repair only for unsigned/cross-provider history.
+        const content = signed ? originalOrder : [...preface, ...toolUses];
         if (content.length === 0) break;
         messages.push({ role: "assistant", content });
         if (toolUseIds.length > 0) {
@@ -952,7 +961,8 @@ function normalizeAnthropicInputSchema(schema: unknown): Record<string, unknown>
 export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetention?: "none" | "short" | "long"): ProviderAdapter {
   const isOAuth = provider.authMode === "oauth";
   const toolNames = buildToolNameTransforms(provider);
-  return {
+  let progressUpdates = false;
+  return withAnthropicProgressUpdates({
     name: "anthropic",
 
     formatErrorBody: formatAnthropicErrorBody,
@@ -1017,6 +1027,8 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       // anyway, and thinking shares the caller's `max_tokens` — which truncates a small-budget
       // request before it can emit its stop sequence (#545). Say "disabled" out loud where the
         // model both defaults to thinking and accepts being told not to.
+      const family = claudeFamilyVersion(parsed.modelId);
+      progressUpdates = usesNativeAnthropicEndpoint(provider) && family?.family === "opus" && family.major === 5 && family.minor === 5;
       const effectiveReasoning = parsed.options.reasoning ?? defaultReasoningEffort(provider, parsed.modelId);
       if (effectiveReasoning === "none" && supportsExplicitThinkingDisable(parsed.modelId)) {
         body.thinking = { type: "disabled" };
@@ -1034,7 +1046,8 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
           // default 8192-token request can spend everything on thought and return empty text.
           // Opus 4.7+ defaults `display` to "omitted": the stream then carries signature-only
           // thinking blocks, so a Chat client sees minutes of heartbeats and no reasoning delta
-          // during a long think (#5824). Ask for summarized thinking unless the caller hides it.
+          // during a long think (#5824). Opus 5.5 uses the documented updates discriminator;
+          // other models request summarized thinking unless the caller hides it.
           body.thinking = parsed.options.hideThinkingSummary
             ? { type: "adaptive" }
             : { type: "adaptive", display: "summarized" };
@@ -1081,6 +1094,8 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         delete body.temperature;
         delete body.top_p;
       }
+
+      if (progressUpdates) body.thinking = { type: "adaptive", display: "updates" };
 
       if (rejectsSamplingParameters(parsed.modelId)) {
         // Opus 4.7+, Sonnet 5+, Haiku 5.5+ and Fable 400 on non-default sampling, with or without
@@ -1155,7 +1170,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       if (isOAuth) applyAnthropicOAuthAuth(headers, provider.apiKey);
       else applyAnthropicKeyAuth(headers, provider);
       if (provider.headers) Object.assign(headers, provider.headers);
-      mergeAnthropicBetaHeader(headers, fastSpeed?.betas ?? []);
+      mergeAnthropicBetaHeader(headers, [...(fastSpeed?.betas ?? []), ...(progressUpdates ? ["thinking-display-updates-2026-08-18"] : [])]);
 
       // Prompt caching: native Anthropic supports top-level automatic caching, which
       // follows the moving final block across turns. Keep one breakpoint slot free for it.
@@ -1570,5 +1585,5 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       }
     },
 
-  };
+  }, () => progressUpdates);
 }

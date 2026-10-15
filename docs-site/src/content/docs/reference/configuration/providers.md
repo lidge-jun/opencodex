@@ -84,6 +84,7 @@ separate. Full request URLs such as `/api/v1/responses` are not provider base UR
 | `activeCodexAccountId?` | `string` | — | Manually selected Pool account for the next request. Selection clears thread affinity; in-flight requests keep captured credentials. |
 | `codexAccountPriorities?` | `Record<string, number>` | — | Per-account selection order for the Codex pool: account id → integer from `-100` to `100`, **higher is used earlier**, absent means `0`. This is an ordering boundary, not an eligibility one: selection narrows the already-eligible accounts to the highest tier that still has quota headroom, and `accountPoolStrategy` then picks within that tier. A tier is skipped only when every member is at or above its own nonzero effective usage threshold (account override or global default), cooling down, soft-avoided, paused, or needs reauthentication — unknown quota never drains a tier. Ordering never makes an ineligible account selectable and by default, never re-binds a thread that already has an account. The main `__main__` account participates on equal terms, which is how the Codex Desktop login can be set to drain last. With no entries the pool behaves exactly as before. A malformed map is ignored with a console warning (ordering off, no config repair). Managed by `ocx account priority` and the Codex Auth page. |
 | `activeCodexAccountPinned?` | `string` | — | Account id the operator last selected by hand. While set, a higher `codexAccountPriorities` tier cannot preempt it until the pin is released by drain, exclusion, deletion, or an explicit failover/promotion away. Ordinary round-robin movement inside the capped tier does not release it. Writing any `codexAccountPriorities` entry also releases the pin, so a pin made before an order existed cannot outrank one set afterward. `GET /api/codex-auth/active` reports both whether the effective account is pinned (`pinned`) and the account carrying the ceiling (`pinnedAccountId`). |
+| `codexPreserveSignedInAccount?` | `boolean` | `false` | Prefer other eligible Codex Pool identities before native main and ordinary entries matching its selected workspace and member email. Existing custom priorities are preserved inside each group. Healthy bindings and manual pins remain; exact account routes and Direct mode are unchanged. Fallback may consume signed-in quota under all existing guards. Use [account preserve-signed-in](/reference/cli/providers-accounts/#ocx-account-preserve-signed-in-openai-onoffstatus---apply-to-bound---json) for status or an explicit next-request binding transition. |
 | `codexAccountPriorityFailback?` | `boolean` | `false` | Opt-in return of ongoing Codex Pool tasks to a usable higher-priority account under the `quota` strategy. Requests trigger a background quota refresh at most once every five minutes, including failed refresh attempts. When recent quota observations show headroom, the next request may rebind even if its current account is below the threshold. This explicit preference can discard a warm prompt cache; it does not change default cache affinity. No requests means no polling. Manual pins, model access, cooldowns, pauses and reauthentication exclusions still apply; in-flight requests keep their captured account. Requires the current source account's effective threshold to be positive (an override of 0 disables it; a positive override works with global 0); exact account routes and Direct mode are unchanged. |
 | `autoSwitchThreshold?` | `number` | `80` | Usage threshold for placing new/unbound work. `quota` can re-evaluate unbound tasks on their next request once usage crosses this threshold. Bound tasks keep their account past the threshold by default (`pool.cacheAffinity`); they leave only when that account is exhausted or otherwise cannot serve, and then only for an account with genuine quota headroom and strictly lower usage. Set `pool.cacheAffinity: false` to re-evaluate bound tasks at this threshold, still only onto such a destination. `fill-first` uses it only as the drain point for unbound assignment; normal `round-robin` selection does not use it. The score uses the hottest known 5h, weekly, or 30d quota window. `0` disables usage-based proactive switching only, not unbound assignment or failure recovery. |
 | `codexAccountAutoSwitchThresholds?` | `Record<string, number>` | — | Per-account overrides for `autoSwitchThreshold`: account id → integer from `0` to `100`. An absent entry inherits the global value; `0` disables usage-driven switching only when that account is the source. `quota` uses the current source account's effective threshold for bound-task re-evaluation and unbound switching. Fill-first drain and selection-order tier headroom are evaluated against each account's own effective threshold; main-account pins and subagent fallback also use the relevant account's effective threshold. Supports the main `__main__` account. A malformed map is ignored with a warning. Managed by each account card on the Codex Auth page; disabling an override removes its entry. Enabling the override copies the current global threshold into a fixed account value. The override, including `0`, takes precedence over later global changes. Disabling it sends `threshold: null`, removes the entry, and restores inheritance of the current global threshold and future global changes. |
@@ -151,6 +152,15 @@ stops at its own **872,000** ceiling. Per-model `providers.openai.modelContextWi
 and `modelAutoCompactTokenLimits` can narrow its window and soft compaction budget. For example,
 `modelAutoCompactTokenLimits: { "gpt-6-astra": 700000 }` lowers the long-window default of 784,800.
 An explicit smaller provider cap or target limit still wins, including native-alias combos.
+
+Without a configured hard limit, the native catalog keeps the advertised `max_context_window`
+separate from the default `context_window` (for Astra, 872,000 versus 272,000). Compaction still
+uses the effective default window. To give one model 500,000 tokens and the others 300,000, set
+`providers.openai.contextWindow` to `300000` and
+`providers.openai.modelContextWindows` to `{ "gpt-6.1-sol": 500000 }`.
+The per-model value overrides the provider window; `providerContextCaps.openai`, when enabled,
+remains a ceiling for every native model and must be at least `500000` for this example.
+Each model's own capacity still bounds the result.
 
 The API row has 1,050,000 context, 922,000 maximum input, 128,000 maximum output, text/image input,
 and API reasoning efforts through `max`. OpenCodex's routed synthetic Ultra control retains its
@@ -1149,7 +1159,8 @@ second account.
 | --- | --- | --- | --- |
 | `oauthAccountFailover.enabled?` | `boolean` | presence-driven | Global override for the **pre-dispatch account preference** only. `false` stops a healthy request being steered toward the account with more known headroom. It does **not** disable 429 rotation. |
 | `providers.<name>.oauthAccountFailover.enabled?` | `boolean` | inherits | Per-provider override for the same preference; beats the global setting in either direction. `false` declines the preference for this provider even when the global setting is `true`, and `true` opts this provider in even when the global setting is `false`. Reactive 429 rotation is unaffected either way. |
-| `providers.<name>.oauthAccountFailover.strategy?` | `"quota" \| "round-robin" \| "fill-first" \| "least-loaded"` (Kiro only) | — | Kiro's `least-loaded` picks the eligible account with the fewest in-flight requests, using account order for ties. It requires `pool.kernel` and proactive preference; other strategies retain their existing rules. |
+| `providers.<name>.oauthAccountFailover.sessionAffinity?` | `"conversation" \| "none"` | `"none"` | Opt-in conversation pinning for generic OAuth pools. Requires proactive `enabled: true` (provider or inherited global value). Existing sessions keep their account ahead of the new-session strategy until it becomes unavailable. |
+| `providers.<name>.oauthAccountFailover.strategy?` | `"quota" \| "round-robin" \| "fill-first" \| "reset-first" \| "least-loaded"` (Kiro only) | — | Kiro's `least-loaded` picks the eligible account with the fewest in-flight requests, using account order for ties. It requires `pool.kernel` and proactive preference; other strategies retain their existing rules. `reset-first` also requires `pool.kernel`: among eligible accounts that are not exhausted, the first attempt (while the proactive preference is on) and a 429 rotation both prefer the account whose quota resets soonest (the weekly window when one is reported, otherwise the 5-hour window), with more headroom breaking ties. Exhausted accounts go last. Without quota evidence, or when a passive provider has evidence for only some accounts, it falls back to headroom order. The Anthropic pool does not accept it. |
 | `providers.kiro.oauthAccountFailover.maxConcurrentPerAccount?` | integer 1–100 | unlimited | A process-local per-account queue holds a slot through response completion or cancellation. A full selected account waits at most 250 ms, then returns 503 `account_capacity` with `Retry-After: 1`. The cap does not move the request to another account. |
 | `providers.<name>.oauthAccountFailover.autoSwitchThreshold?` | `number` | `80` | 0–100 usage percent at which `fill-first` advances off the active account (#695). Set with `ocx account auto-switch <provider> threshold <n>`. Read only under `pool.kernel` with `strategy: "fill-first"`; an account with no measured usage counts as under the threshold. |
 | `providers.<name>.oauthAccountFailover.stickyLimit?` | `number` | `1` | Successful dispatches retained on one `round-robin` selection, 1–100 (#695). Read only under `pool.kernel` with `strategy: "round-robin"`. |
@@ -1178,9 +1189,26 @@ and the `ocx account strategy` / `ocx account auto-switch` / `ocx account sticky
 preference. `quotaWindow` is not part of the generic contract. Codex (`/api/codex-auth`) and Anthropic
 (`anthropicAccountPool`) keep their own contracts unchanged.
 
-Deliberately narrower than `anthropicAccountPool`: no session affinity, no quota-ranked
-selection, no probe leases. It answers one question — the account that just returned 429 is
-cooled, is there another one available.
+Set `providers.<name>.oauthAccountFailover.sessionAffinity` to `"conversation"` together with
+`enabled: true` to keep a conversation on its admitted account. Session identity uses the client
+thread marker, session headers, thread header, then `prompt_cache_key`; a shared Desktop cache
+cohort is excluded. Bindings are isolated by provider, configuration home and authenticated caller
+principal. Unauthenticated local callers share the local scope. No session marker means no binding.
+
+New sessions use the existing strategy (`pool.kernel` still gates round-robin/fill-first).
+Existing sessions stay pinned even when another account has more quota. A pause, reauthentication
+requirement, family cooldown or incompatible model roster releases the binding; existing bounded
+failure recovery binds the admitted replacement. Kiro's concurrency cap still waits or refuses
+rather than moving a healthy bound conversation merely to balance load.
+
+In this mode automatic choices, including unkeyed requests and failovers, stay request-local:
+the dashboard's selected account remains the operator's selection. Request history still attributes
+the serving account. Manual selection, same-account reselection and roster/policy revision changes
+invalidate provider bindings, including writes from another process. An ordinary refresh keeps the
+same account. Fill-first retains its current account in memory without changing the saved selection.
+Bindings expire after 24 hours without admission, are bounded to 2,000 entries process-wide
+(including fill-first cursors), and are lost on restart. Set `sessionAffinity: "none"` or disable
+proactive preference to release them. Codex and Anthropic retain their own affinity contracts.
 
 The Codex pool and the Anthropic pool are excluded and keep their own rotation; enabling this
 changes neither. A provider with a single stored account is a strict no-op, and no cooldown is
@@ -1819,3 +1847,23 @@ raised output allowance would exceed that ceiling.
   }
 }
 ```
+
+### Native Chat thinking replay
+
+These Chat reasoning lists also apply to native `/v1/chat/completions` tool-call continuation.
+The proxy preserves supplied `reasoning_content` and restores omitted reasoning from upstream
+JSON or SSE responses using tool-call ids. Original reasoning replay requires a stable
+`thread-id`, `session_id`, or `session-id` header on each request and the same provider, endpoint,
+model and credential. The cache is process-local and bounded; a restart, expiry, eviction, or
+missing conversation header uses the configured minimal placeholder instead. A placeholder
+cannot reconstruct lost reasoning. Clients should retain upstream `reasoning_content` in their
+assistant history for reliable resumed conversations.
+
+When `preserveReasoningContentModels` is unset, DeepSeek Flash/Pro model names are recognized
+across versions, including `deepseek-v4.1-flash`, namespaced ids and gateway suffixes. Explicit
+lists remain authoritative: `preserveReasoningContentModels: []` disables automatic repair,
+while `requiresReasoningPlaceholderModels: []` disables placeholders and still allows cached
+original reasoning. Other model families require the preserve declaration.
+Tool-enabled DeepSeek requests also require reasoning on earlier assistant answers without tool
+calls. The configured placeholder fills these omissions; no original reasoning can be recovered
+from the tool-call cache for those turns. Preserve their supplied reasoning for full fidelity.

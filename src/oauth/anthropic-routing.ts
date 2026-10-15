@@ -19,7 +19,6 @@ import { clearAllAnthropicFamilyQuota, anthropicModelQuotaFor, anthropicModelPer
  */
 import { clearAllAnthropicRatePauses, anthropicRatePolicyFor, classifyAnthropic429, anthropicRetryAfterMs } from "./anthropic-rate-limit-policy";
 import { REFRESH_SKEW_MS } from "./refresh-policy";
-import { createHash } from "node:crypto";
 import { captureOAuthAccountSelection, commitOAuthAccountSelection, credentialGeneration, getAccountSet, getAccountCredential, getAccountCredentialWithStatus } from "./store";
 import type { OAuthAccessSnapshot } from "./index";
 import { getCachedProviderAccountQuota } from "../providers/quota";
@@ -273,26 +272,7 @@ export function formatAnthropicProviderForLog(
   return `${providerName}-${formatAnthropicAccountOrdinal(accountId)}`;
 }
 
-export function anthropicSessionKeyFromParts(input: {
-  sessionIdHeader?: string | null;
-  threadIdHeader?: string | null;
-  promptCacheKey?: string | null;
-  clientThreadId?: string | null;
-  /** When true, prompt_cache_key is a shared Desktop cohort — ignore it for affinity. */
-  promptCacheKeyIsSharedCohort?: boolean;
-}): string | null {
-  const preferred = input.clientThreadId?.trim()
-    || input.sessionIdHeader?.trim()
-    || input.threadIdHeader?.trim()
-    || "";
-  if (preferred) {
-    return preferred.length <= 128 ? preferred : createHash("sha256").update(preferred).digest("hex");
-  }
-  if (input.promptCacheKeyIsSharedCohort) return null;
-  const cacheKey = input.promptCacheKey?.trim() ?? "";
-  if (!cacheKey) return null;
-  return cacheKey.length <= 128 ? cacheKey : createHash("sha256").update(cacheKey).digest("hex");
-}
+export { oauthSessionKeyFromParts as anthropicSessionKeyFromParts } from "./session-affinity-key";
 
 
 export type AnthropicCooldownRecoveryClaim = Readonly<{

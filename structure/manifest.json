@@ -48,6 +48,13 @@
   ],
   "docs": [
     {
+      "path": "providers/generic-account-pool.md",
+      "tier": 4,
+      "title": "Generic OAuth Account Pool",
+      "scope": "Opt-in conversation ownership, request-local selection receipts and bounded release for generic OAuth pools.",
+      "documents": ["src/oauth/", "src/server/", "src/types/"]
+    },
+    {
       "path": "overview.md",
       "tier": 1,
       "title": "Overview",
@@ -191,6 +198,15 @@
       ]
     },
     {
+      "path": "subagent-capacity.md",
+      "tier": 2,
+      "title": "Subagent Surface And Capacity",
+      "scope": "Surface mode, hybrid global flag, concurrent child limits and canonical Codex setting ownership.",
+      "documents": [
+        "src/codex/"
+      ]
+    },
+    {
       "path": "advisor.md",
       "tier": 2,
       "title": "Advisor Sidecar",
@@ -330,6 +346,13 @@
       ]
     },
     {
+      "path": "providers/anthropic-progress.md",
+      "tier": 4,
+      "title": "Anthropic progress updates",
+      "scope": "Opus 5.5 progress display, visible commentary, and exact signed-block replay.",
+      "documents": ["src/adapters/", "src/bridge/", "src/responses/", "src/claude/", "src/types/", "src/server/", "src/web-search/", "src/images/"]
+    },
+    {
       "path": "providers/anthropic-account-thresholds.md",
       "tier": 4,
       "title": "Anthropic Account Thresholds",
@@ -337,11 +360,25 @@
       "documents": ["src/oauth/"]
     },
     {
+      "path": "providers/meta-muse.md",
+      "tier": 4,
+      "title": "Meta Muse Login",
+      "scope": "CLI credential import, approval lifecycle, explicit recovery and account-free login diagnostics.",
+      "documents": ["src/oauth/meta-muse.ts", "src/oauth/meta-muse-keychain.ts", "src/oauth/meta-muse-errors.ts", "src/oauth/login-cli.ts"]
+    },
+    {
       "path": "providers/oauth-reconciliation.md",
       "tier": 4,
       "title": "OAuth Preset Reconciliation",
       "scope": "Operator limits and per-model declarations across startup reconciliation and OAuth upsert.",
       "documents": ["src/oauth/"]
+    },
+    {
+      "path": "providers/claude-cli-replay.md",
+      "tier": 4,
+      "title": "Claude CLI Replay",
+      "scope": "Claude CLI stable replay, canonical tool schemas, capture-only client tool ownership and subscription usage admission.",
+      "documents": ["src/adapters/"]
     },
     {
       "path": "providers-and-adapters.md",
@@ -384,6 +421,18 @@
       ]
     },
     {
+      "path": "providers/dsh-account.md",
+      "tier": 4,
+      "title": "DeepSeek Harness Account Provider",
+      "scope": "Explicit read-only DSH credential import, verified account identity, disabled refresh, pinned inference and probe destinations, and authoritative-empty quota.",
+      "documents": [
+        "src/oauth/dsh.ts",
+        "src/adapters/dsh-account.ts",
+        "src/providers/dsh-account-destination.ts",
+        "src/providers/quota/dsh-account.ts"
+      ]
+    },
+    {
       "path": "providers/anthropic-account-pool.md",
       "tier": 4,
       "title": "Anthropic Account Pool",
@@ -395,6 +444,13 @@
         "src/server/management/anthropic-pool-settings.ts",
         "src/sidecar/anthropic-binding.ts"
       ]
+    },
+    {
+      "path": "providers/oauth-code-display-login.md",
+      "tier": 4,
+      "title": "OAuth Code-Display Login",
+      "scope": "Headless code-display OAuth login: flow ownership, expiry, unsupported providers, single-operator store.",
+      "documents": ["src/oauth/", "src/server/management/"]
     },
     {
       "path": "providers/openai-tiers.md",
@@ -414,6 +470,13 @@
         "src/codex/",
         "src/config.ts"
       ]
+    },
+    {
+      "path": "providers/openai-signed-in-preservation.md",
+      "tier": 4,
+      "title": "Preserve Signed-In Codex Quota",
+      "scope": "Opt-in effective priority bands that spend other pool accounts before the signed-in identity, its identity observation and management API.",
+      "documents": ["src/codex/account-preservation.ts", "src/codex/signed-in-identity.ts", "src/codex/auth-api/account-preservation.ts", "src/cli/account-preservation.ts"]
     },
     {
       "path": "providers/cursor.md",
