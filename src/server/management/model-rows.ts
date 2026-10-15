@@ -52,7 +52,7 @@ import { reconcileSuccessfulModelDiscoveries } from "../../providers/new-model-p
 import { initialModelSelectionPending, pendingModelSelectionProviders } from "../../providers/initial-model-selection";
 import { catalogFastRowEligible, fastRowId } from "../fast-row";
 import { knownEffortRowIds } from "../effort-row";
-import { isVisionSidecarConsumer } from "../../vision/eligibility";
+import { visionSidecarConsumerClassifier } from "../../vision/eligibility";
 
 /**
  * One row of the `/api/models` list. Routed rows spread a `CatalogModel`, so the shape is
@@ -506,6 +506,7 @@ export async function listManagementModelRows(
   // a hidden real `x--fast` must never become a synthetic selector for another model.
   const knownIds = config.fastRows === false ? new Set<string>() : knownEffortRowIds(config);
   for (const row of rows) knownIds.add(row.namespaced);
+  const isVisionSidecarConsumer = visionSidecarConsumerClassifier(config);
   return rows.map(row => {
     const pending = initialModelSelectionPending(config.providers[row.provider]);
     const modelCosts = Object.hasOwn(config.providers, row.provider)
@@ -531,7 +532,7 @@ export async function listManagementModelRows(
       ...row,
       // One shared definition with the request path: the GUI must not re-derive consumer
       // status from declared-vs-advertised modalities (see the field doc above).
-      visionSidecarConsumer: isVisionSidecarConsumer(config, row.provider, row.id),
+      visionSidecarConsumer: isVisionSidecarConsumer(row.provider, row.id),
       ...(!row.native && modelCosts !== undefined && Object.hasOwn(modelCosts, row.id)
         ? { manualPricing: true } : {}),
       ...(pending ? { disabled: true, initialSelectionPending: true } : {}),
