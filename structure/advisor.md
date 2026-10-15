@@ -35,6 +35,8 @@ boundary from router, lifecycle, Responses core and management API, including di
   Counters are shared with empty-completion retries. Usage includes the terminal rejected leg.
   `tests/advisor/advisor-continuation-limit.test.ts` covers a worker that never stops calling;
   `tests/advisor/advisor-responses-wiring.test.ts` exercises real streaming and buffered delivery.
+  Client catalog checks wrap the Advisor guard, so synthetic calls are consumed internally before
+  final worker output is checked against current client declarations, including direct encoders.
 - Run-turn adapters: preflight support only — the automatic pre-dispatch consultation attempt
   applies, but the synthetic tool is never injected because the run-turn loop cannot intercept it.
 - Native OpenAI passthrough: no advisor support in PR1. The request path is byte-identical to a
@@ -177,6 +179,10 @@ per-request plan closure. Task-scoped preflight state is a bounded, process-loca
 worker model; a client with no stable identity is excluded from it on purpose. After a proxy
 restart the table is empty, so a task in progress may receive one more preflight attempt —
 fail-open for correctness and only one extra expert call.
+
+## Dashboard model selection
+
+`gui/src/components/AdvisorModelSelect.tsx` loads `/api/models` independently of the settings editor and uses the shared `Select`. Values are exact `namespaced` routing selectors, never display names or lowercased input. Disabled and initial-selection-pending rows are excluded from new choices. A current value outside the selectable catalog remains visible with a warning; load failures preserve it and expose retry. Clearing saves the existing empty-model state. The catalog provides no text-consultation eligibility guarantee; the operator chooses a text-capable model. API and CLI model-string validation remains unchanged.
 
 ## Policies
 

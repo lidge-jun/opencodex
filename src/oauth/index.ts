@@ -1,4 +1,5 @@
 import type { KiroOAuthMetadata, OAuthController, OAuthCredentials } from "./types";
+import { mapFill } from "../providers/resolved-model-policy-merge";
 import { initializeProviderModelSelection } from "../providers/initial-model-selection";
 import type { OcxConfig, OcxProviderConfig, RefreshPolicy } from "../types";
 import { getDefaultConfig, initializePersistedConfigIfMissing, loadConfig, mutatePersistedConfig, observeInitialConfigState, saveConfig } from "../config";
@@ -452,6 +453,14 @@ export class OAuthProviderPublicationError extends Error {
   }
 }
 
+/** A local configuration conflict found before any credential is written; its text is fixed. */
+export class OAuthProviderNamespaceCollisionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OAuthProviderNamespaceCollisionError";
+  }
+}
+
 export class OAuthReauthIdentityMismatchError extends Error {
   constructor() {
     super("Signed-in account does not match the selected account. Sign in with the same account.");
@@ -484,6 +493,7 @@ export function publicOAuthAuthenticationErrorMessage(error: unknown): string {
     (error instanceof OAuthLoginRequiredError && isOAuthProvider(error.provider))
     || error instanceof OAuthAccountPausedError
     || error instanceof OAuthProviderPublicationError
+    || error instanceof OAuthProviderNamespaceCollisionError
     // Reauth identity outcomes carry fixed, account-free remediation text. Dropping them to the
     // generic message hides WHICH failure the user must fix (sign in with the selected account).
     || error instanceof OAuthReauthIdentityMismatchError
@@ -1239,26 +1249,21 @@ const OAUTH_RECONCILE_FIELDS: (keyof OcxProviderConfig)[] = [
 // preserves explicit saved values.
 
 /**
- * Output-budget fields an OAuth preset may refresh but must never erase.
- *
- * These stay on the reconcile list so a preset that does declare a budget still
- * refreshes the saved row. What changes is the other branch: when the preset
- * declares nothing, the operator's value survives instead of being deleted.
- *
- * Without that, the fields behaved as if they could not be configured at all.
- * No OAuth preset seeds either one, so the delete branch was the only branch
- * these two ever took, and a hand-edited `defaultMaxOutputTokens` was gone
- * before the first turn of the next startup — leaving the adapter's own
- * fallback as the only reachable output cap (#5190).
- *
- * Scoped to the output budget on purpose. The input side (`contextWindow`,
- * `modelContextWindows`) describes what the account's models are, which the
- * preset and live discovery do own; an output budget is a spend decision the
- * operator makes.
+ * Saved limits and per-model declarations are operator input, including Copilot's
+ * long-context evidence. Presets supply missing defaults, not replacements for
+ * configured entries. Catalog rosters, capability lists and seeded reasoning
+ * ladders still refresh below; unseeded tiers remain operator input.
+ * Without provenance, a saved seed cannot be distinguished from an operator edit.
  */
+const OAUTH_OPERATOR_MAP_FIELDS: ReadonlySet<keyof OcxProviderConfig> = new Set([
+  "modelContextWindows", "modelMaxOutputTokens", "modelInputModalities",
+  "modelReasoningEffortMap", "reasoningEffortMap",
+]);
+const OAUTH_OPERATOR_LIMIT_FIELDS: ReadonlySet<keyof OcxProviderConfig> = new Set([
+  "contextWindow", "defaultMaxOutputTokens",
+]);
 const OAUTH_PRESERVE_WHEN_PRESET_UNSET: ReadonlySet<keyof OcxProviderConfig> = new Set([
-  "defaultMaxOutputTokens",
-  "modelMaxOutputTokens",
+  "reasoningEfforts",
 ]);
 
 const GOOGLE_ANTIGRAVITY_PROVIDER = "google-antigravity";
@@ -1298,7 +1303,23 @@ function applyOAuthPresetCatalog(
 ): void {
   for (const field of OAUTH_RECONCILE_FIELDS) {
     if (JSON.stringify(provider[field]) === JSON.stringify(preset[field])) continue;
-    if (preset[field] !== undefined) {
+    if (field === "modelReasoningEfforts") {
+      // Known unmarked ladders are saved catalog seeds, not evidence of an
+      // operator override. Preserve unseeded rows and explicit authoritative
+      // overrides; refresh the preset-owned rows (e.g. xAI's effort ladder).
+      const authoritative = provider.modelReasoningEffortsAuthoritative === true;
+      provider.modelReasoningEfforts = mapFill(
+        authoritative ? preset.modelReasoningEfforts : provider.modelReasoningEfforts,
+        authoritative ? provider.modelReasoningEfforts : preset.modelReasoningEfforts,
+      )[0];
+    } else if (OAUTH_OPERATOR_MAP_FIELDS.has(field)) {
+      provider[field] = mapFill<unknown>(
+        preset[field] as Record<string, unknown> | undefined,
+        provider[field] as Record<string, unknown> | undefined,
+      )[0] as never;
+    } else if (OAUTH_OPERATOR_LIMIT_FIELDS.has(field) && provider[field] !== undefined) {
+      continue;
+    } else if (preset[field] !== undefined) {
       provider[field] = cloneProviderField(preset[field]) as never;
     } else if (!OAUTH_PRESERVE_WHEN_PRESET_UNSET.has(field)) {
       delete provider[field];
@@ -1494,7 +1515,7 @@ export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
   if (!def) return;
   if (provider === GOOGLE_ANTIGRAVITY_PROVIDER) migrateLegacyAntigravityStaticCatalog(config);
   const namespaceCollision = codexAccountNamespaceProviderCollisionError(config.codexAccountNamespaces, provider);
-  if (namespaceCollision) throw new Error(namespaceCollision);
+  if (namespaceCollision) throw new OAuthProviderNamespaceCollisionError(namespaceCollision);
   const existing = config.providers[provider];
   const providerConfig = def.resolveProviderConfig?.(config) ?? def.providerConfig;
   // Clone operator state, including xAI wire choices and their migration version.
@@ -1591,7 +1612,7 @@ export async function runLogin(
       preflightConfig.codexAccountNamespaces,
       provider,
     );
-    if (namespaceCollision) throw new Error(namespaceCollision);
+    if (namespaceCollision) throw new OAuthProviderNamespaceCollisionError(namespaceCollision);
   }
   if (provider === "anthropic2" && observeInitialConfigState() !== "exists") {
     throw new OAuthProviderPublicationError(provider, false);

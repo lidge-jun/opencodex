@@ -292,8 +292,8 @@ function publishes(container: unknown, id: string): boolean {
  *
  * Under those two conditions the rewrite is worse than a no-op, because it never converges.
  * `startServer` runs this migration and then `reconcileOAuthProviders`, and
- * `applyOAuthPresetCatalog` copies the preset’s record over the saved one whenever the two
- * differ. The deletion is undone inside the same boot, the config is written twice, and the user
+ * `applyOAuthPresetCatalog` fills missing preset keys into the saved metadata maps.
+ * The deletion is undone inside the same boot, the config is written twice, and the user
  * is told about a rename that never sticks on every single start. Issue #5066 is exactly that:
  * `ANTIGRAVITY_MODEL_CONTEXT_WINDOWS` derives a window for every compatibility alias, so
  * `modelContextWindows` holds a key for all nine retired Flash ids beside the live ones — the
