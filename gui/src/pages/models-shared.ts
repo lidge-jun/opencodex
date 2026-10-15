@@ -187,6 +187,24 @@ export const NATIVE_CAP_OPTION_SET = new Set(NATIVE_CAP_OPTIONS);
 export const CUSTOM_OPTION = "custom";
 export const THREAD_OPTIONS = [4, 8, 16, 32, 64, 128, 256, 500, 1000];
 export const THREAD_OPTION_SET = new Set(THREAD_OPTIONS);
+
+/**
+ * The /api/v2 maxConcurrentThreadsPerSession field is expressed in the ACTIVE backend's
+ * units: the [agents] keys (v1/base/hybrid, enabled:false) count child agents, while
+ * the V2 storage counts the root agent's own slot too (total = children + 1). The
+ * control always presents the logical child count, so only the V2-total case translates
+ * across the root slot — the same boundary v2TotalLimitToV1ChildLimit /
+ * v1ChildLimitToV2TotalLimit keep in src/codex/features.ts. A stored V2 total of 1
+ * (root only) has no representable child count >= 1 and clamps to 1, matching upstream.
+ */
+export function threadLimitToChildCount(limit: number, v2Enabled: boolean): number {
+  return v2Enabled ? Math.max(1, limit - 1) : limit;
+}
+
+export function childCountToThreadLimit(children: number, v2Enabled: boolean): number {
+  return v2Enabled ? children + 1 : children;
+}
+
 export const PAGE = 60; // rows rendered per provider before a "show more"
 
 export const COLLAPSED_KEY_V2 = "ocx-models-collapsed:v2";

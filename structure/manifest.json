@@ -191,6 +191,15 @@
       ]
     },
     {
+      "path": "subagent-capacity.md",
+      "tier": 2,
+      "title": "Subagent Surface And Capacity",
+      "scope": "Surface mode, hybrid global flag, concurrent child limits and canonical Codex setting ownership.",
+      "documents": [
+        "src/codex/"
+      ]
+    },
+    {
       "path": "advisor.md",
       "tier": 2,
       "title": "Advisor Sidecar",

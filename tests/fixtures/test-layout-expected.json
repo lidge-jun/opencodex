@@ -499,6 +499,7 @@
   "codex-transition-state-first-use-regression.test.ts": "codex-integration",
   "codex-transition-state-race.test.ts": "codex-integration", "codex-transition-state.test.ts": "codex-integration",
   "codex-user-identity.test.ts": "codex-integration", "codex-v2-gate.test.ts": "codex-integration",
+  "codex-agent-thread-limit.test.ts": "codex-integration",
   "codex-warmup.test.ts": "codex-integration", "codex-web-search-switch.test.ts": "codex-integration",
   "codex-websocket-registry.test.ts": "codex-integration", "codex-write-lock.test.ts": "codex-integration",
   "coding-agent-tool-result-images.test.ts": "adapters", "cold-spawn-warmup.test.ts": "ci-workflows",
