@@ -418,7 +418,7 @@ JSON mode: `envelope`.
 
 Usage: `ocx system codex-restart --yes [--json]`
 
-Restart the Codex desktop app and app-servers.
+Restart the Codex app-servers, and the desktop app when its model picker predates the catalog.
 
 State-changing: yes.
 
@@ -428,13 +428,13 @@ State-changing: yes.
 
 | Flag | Value | Meaning |
 |---|---|---|
-| `--yes` | boolean | Required: fully quits and relaunches the operator's Codex desktop app, which may discard unsaved composer drafts, model-picker selections, and pending approval prompts; also restarts its app-servers. |
+| `--yes` | boolean | Required: restarts the Codex app-servers, interrupting running turns, and fully quits and relaunches the operator's Codex desktop app when its model picker predates the current catalog or that cannot be determined, which may discard unsaved composer drafts, model-picker selections, and pending approval prompts. |
 | `--json` | boolean | Emit the restart result as JSON. |
 
 JSON mode: `payload`.
 
 - `sync --restart-codex` is not a substitute: it restarts only as a side effect after a catalog or cache write, so it cannot restart a healthy install on request.
-- Restarts the Codex desktop app as well as the app-servers, through the same module the CLI uses. When the proxy itself runs inside the Codex app it refuses instead, because restarting the app would kill the request.
+- Restarts the app-servers through the same module the CLI uses. The desktop app is quit and relaunched only when it launched before the current catalog was written, because its model picker is built at launch; otherwise it is left running and respawns its own app-server, keeping unsaved client state. An unreadable desktop or catalog state falls back to the full restart. When the proxy itself runs inside the Codex app the desktop restart is refused, because restarting the app would kill the request.
 - --yes is mandatory because this interrupts a running editor session and may discard unsaved composer drafts, model-picker selections, and pending approval prompts; it must never happen because an agent guessed a subcommand.
 
 ### `ocx logs filter`

@@ -13,7 +13,7 @@ import { handleProviderRuntimeCommand } from "../../src/cli/provider-runtime";
 import { providerQuotaLine } from "../../src/cli/account-extended";
 import { formatAccountTable } from "../../src/cli/account";
 import { handleConnectCommand } from "../../src/cli/connect";
-import { handleSystemCommand } from "../../src/cli/system-command";
+import { codexRestartLines, handleSystemCommand } from "../../src/cli/system-command";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
 
@@ -29,6 +29,8 @@ describe("ocx system codex-restart confirmation", () => {
       expect(requests).toHaveLength(0);
       const warning = errors.mock.calls.flat().join(" ");
       expect(warning).toContain("requires --yes");
+      expect(warning).toContain("restarts the Codex app-servers");
+      expect(warning).toContain("model picker predates the current catalog");
       expect(warning).toContain("fully quits and relaunches the Codex desktop app");
       expect(warning).toContain("unsaved composer drafts");
       expect(warning).toContain("model-picker selections");
@@ -49,14 +51,26 @@ describe("ocx system codex-restart confirmation", () => {
       const text = output.mock.calls.flat().join("\n");
       if (wantsJson) expect(JSON.parse(text)).toEqual(result);
       else {
-        expect(text).toContain("Codex desktop app");
-        expect(text).toContain("restart requested.");
-        expect(text).toContain("Unsaved composer drafts");
-        expect(text).toContain("model-picker selections");
-        expect(text).toContain("pending approval prompts");
-        expect(text).not.toContain("restarted");
+        expect(text).toContain("No Codex app-server needed stopping.");
+        expect(text).toContain("The Codex desktop app was not restarted (self_ancestry).");
+        expect(text).not.toContain("relaunched");
       }
     } finally { output.mockRestore(); }
+  });
+
+  test.each([
+    [{ code: "stopped", stopped: [1, 2], desktopApp: { attempted: false, relaunch: "skipped", reason: "picker_current" } },
+      ["Stopped 2 Codex app-server(s)", "left running", "unsaved drafts and pending approvals were kept"], ["may have been lost"]],
+    [{ code: "stopped", stopped: [1], desktopApp: { attempted: true, relaunch: "started", stopped: [9], surviving: [] } },
+      ["quit and relaunched", "predated the current catalog", "may have been lost"], ["left running"]],
+    [{ code: "nothing_running", stopped: [], desktopApp: { attempted: true, relaunch: "skipped", reason: "relaunch_failed" } },
+      ["restart did not complete (relaunch_failed)", "may have been lost"], ["left running"]],
+    [{ code: "enumeration_unavailable", stopped: [], desktopApp: { attempted: false, relaunch: "skipped", reason: "no_targets" } },
+      ["Could not list Codex app-servers", "is not running"], ["may have been lost"]],
+  ])("reports whether unsaved desktop state survived (%#)", (result, present, absent) => {
+    const text = codexRestartLines(result).join("\n");
+    for (const fragment of present) expect(text).toContain(fragment);
+    for (const fragment of absent) expect(text).not.toContain(fragment);
   });
 });
 
