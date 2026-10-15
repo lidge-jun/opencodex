@@ -286,6 +286,10 @@ describe("claude-cli child environment carries no credential and no proxy destin
     // Without USER the CLI reports "not logged in" on a signed-in machine: it looks its own keychain
     // entry up by account name. The value is a name, not a credential — no token is added here.
     const previous = process.env.USER;
+    // The test preload sandboxes CLAUDE_CONFIG_DIR, which the child env forwards by design
+    // (covered in claude-cli-usage-admission.test.ts); clear it so this set stays exact.
+    const previousConfigDir = process.env.CLAUDE_CONFIG_DIR;
+    delete process.env.CLAUDE_CONFIG_DIR;
     process.env.USER = "ocx-probe-user";
     try {
       const env = buildChildEnv(CLAUDE_CLI_PROFILE, "");
@@ -298,6 +302,7 @@ describe("claude-cli child environment carries no credential and no proxy destin
     } finally {
       if (previous === undefined) delete process.env.USER;
       else process.env.USER = previous;
+      if (previousConfigDir !== undefined) process.env.CLAUDE_CONFIG_DIR = previousConfigDir;
     }
   });
 

@@ -340,7 +340,7 @@
       "path": "providers/claude-cli-replay.md",
       "tier": 4,
       "title": "Claude CLI Replay",
-      "scope": "Claude CLI stable replay, canonical tool schemas and capture-only client tool ownership.",
+      "scope": "Claude CLI stable replay, canonical tool schemas, capture-only client tool ownership and subscription usage admission.",
       "documents": ["src/adapters/"]
     },
     {

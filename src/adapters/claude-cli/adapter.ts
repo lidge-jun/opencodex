@@ -15,6 +15,7 @@ import {
   CODEBUDDY_TOOL_LIMITS,
 } from "../codebuddy/tool-bridge";
 import { CLAUDE_CLI_PROFILES, type ClaudeCliProfile } from "./profiles";
+import { checkClaudeUsageAdmission, recordClaudeUsageRefusal, type ClaudeAdmission } from "./usage-admission";
 import { buildStableClaudeConversationInput, CLAUDE_REPLAY_SYSTEM_PROMPT, stableClaudeToolBridge } from "./stable-replay";
 
 // The coding-agent bridge is protocol-level infrastructure shared with CodeBuddy. Its MCP server
@@ -29,7 +30,12 @@ const TOOL_BRIDGE_SYSTEM_PROMPT = [
 ].join("\n");
 
 export type { SpawnFn } from "../coding-agent/turn";
-export type ClaudeCliAdapterDeps = CodingAgentDeps;
+export type ClaudeCliAdapterDeps = CodingAgentDeps & {
+  /** Subscription preflight; defaults to the cached local quota read. */
+  usageAdmission?: (model: string) => Promise<ClaudeAdmission>;
+  /** Records a limit the CLI itself reported; defaults to the shared admission cache. */
+  usageRefusal?: (message: string) => void | Promise<void>;
+};
 
 /** Native Claude Code installs under the account's home even when a service has an old PATH. */
 export function findClaudeCliBinary(
@@ -67,14 +73,17 @@ export const CLAUDE_CLI_QUIET_ENV: Readonly<Record<string, string>> = {
  *
  * No credential is layered here on purpose. Claude Code reads the operator's own sign-in (the
  * macOS Keychain entry, or `~/.claude/.credentials.json` elsewhere), which is exactly the property
- * this provider exists for: the token never enters OpenCodex, its config, or a child environment.
+ * this provider exists for: the token never enters OpenCodex's config, store, or a child
+ * environment. The usage preflight (`./usage-admission.ts`) reads that sign-in in memory only, to
+ * ask Anthropic's usage endpoint whether the subscription has room; nothing is imported or stored.
  *
  * The shared base env also drops every inherited `ANTHROPIC_*` variable, which is what keeps a
  * `claude` the operator already points at this proxy from looping back into it.
  *
- * `USER` is the one inherited name added back, and it is not a credential: the CLI resolves its own
- * sign-in by account name, so a scoped env without it makes a signed-in machine answer "not logged
- * in". Measured with `claude auth status` under `env -i`: `USER` alone reports `loggedIn: true`,
+ * `USER` and an optional `CLAUDE_CONFIG_DIR` are added back, and neither is a credential: the
+ * config dir selects the CLI profile the usage preflight also reads, and the CLI resolves its own
+ * sign-in by account name, so a scoped env without `USER` makes a signed-in machine answer "not
+ * logged in". Measured with `claude auth status` under `env -i`: `USER` alone reports `loggedIn: true`,
  * `LOGNAME` alone or neither reports `loggedIn: false`.
  */
 export function buildChildEnv(_profile: ClaudeCliProfile, _apiKey: string): Record<string, string> {
@@ -84,6 +93,8 @@ export function buildChildEnv(_profile: ClaudeCliProfile, _apiKey: string): Reco
   };
   const user = process.env.USER;
   if (user) env.USER = user;
+  const configDir = process.env.CLAUDE_CONFIG_DIR?.trim();
+  if (configDir) env.CLAUDE_CONFIG_DIR = configDir;
   return env;
 }
 
@@ -197,6 +208,11 @@ export function createClaudeCliAdapter(provider: OcxProviderConfig, deps: Claude
     },
 
     async runTurn(parsed, incoming, emit): Promise<void> {
+      const admission = await (deps.usageAdmission ?? checkClaudeUsageAdmission)(parsed.modelId);
+      if (admission.state === "exhausted") {
+        emit({ type: "error", message: admission.message ?? "Claude subscription usage is exhausted; launches are paused until the reset.", status: 429, errorType: "rate_limit_error", code: "claude_subscription_cooldown", retryable: false });
+        return;
+      }
       if (hasImageInput(parsed)) {
         emit({
           type: "error",
@@ -270,7 +286,12 @@ export function createClaudeCliAdapter(provider: OcxProviderConfig, deps: Claude
           provider,
           parsed,
           incoming,
-          emit: withClaudeLoginHint(emit),
+          emit: withClaudeLoginHint(event => {
+            if (event.type === "error") {
+              void Promise.resolve((deps.usageRefusal ?? recordClaudeUsageRefusal)(event.message)).catch(() => {});
+            }
+            emit(event);
+          }),
           ...(toolBridge ? { toolBridge } : {}),
           conversationInput: buildStableClaudeConversationInput,
           buildArgs: (profile, req, prov) => buildArgs(profile as ClaudeCliProfile, req, prov, promptFile),

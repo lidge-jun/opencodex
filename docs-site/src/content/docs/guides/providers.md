@@ -1199,6 +1199,12 @@ CLI headlessly (`claude -p`, `stream-json`) once per turn:
   only the client's selected tools (the same bridge CodeBuddy uses). The CLI captures the call and
   the turn ends there; approval, sandboxing, execution and the returned result stay with Codex,
   Pi, or another client. Built-in tools and every other MCP server remain disabled.
+- **Subscription limits:** before each launch OpenCodex asks Anthropic's usage endpoint, with the
+  CLI's own sign-in read in memory, whether the plan's 5-hour, weekly or model-specific window is
+  full. An exhausted plan is refused locally with HTTP 429 `claude_subscription_cooldown` and a
+  `Retry-After` for the reset, instead of starting a CLI that would fail. The answer is cached for
+  a minute in `claude-usage-admission.json` under the OpenCodex home (percentages, reset times and
+  a hashed account key only). If the check cannot run, the turn proceeds.
 - **Destination:** the canonical row names `https://api.anthropic.com` because that is where the
   subscription's traffic lands. OpenCodex never sends that request itself, and overriding the base
   URL fails closed rather than handing the turn to another environment.
