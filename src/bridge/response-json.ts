@@ -1,3 +1,4 @@
+import { anthropicProgressItems } from "../responses/anthropic-progress";
 import type {
   AdapterEvent,
   OcxMessagePhase,
@@ -386,6 +387,16 @@ function buildResponseJSONWithBudget(
         flushToolCall();
         break;
       case "text_delta":
+        if (options?.compaction && e.anthropicThinkingSignature) break;
+        if (e.anthropicThinkingSignature) {
+          rawReasoningForNextToolCall = "";
+          flushText("commentary");
+          flushSummaryReasoning();
+          flushRawReasoning();
+          flushToolCall();
+          for (const item of anthropicProgressItems(e.text, e.anthropicThinkingSignature, budget)) pushOutput(item as OutputItem);
+          break;
+        }
         // Only flush on an explicit phase change. A later delta that omits `phase` must keep
         // appending under the previously established phase.
         if (currentText.bytes > 0 && e.phase !== undefined && currentTextPhase !== e.phase) flushText("commentary");

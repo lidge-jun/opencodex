@@ -180,6 +180,10 @@ worker model; a client with no stable identity is excluded from it on purpose. A
 restart the table is empty, so a task in progress may receive one more preflight attempt —
 fail-open for correctness and only one extra expert call.
 
+## Dashboard model selection
+
+`gui/src/components/AdvisorModelSelect.tsx` loads `/api/models` independently of the settings editor and uses the shared `Select`. Values are exact `namespaced` routing selectors, never display names or lowercased input. Disabled and initial-selection-pending rows are excluded from new choices. A current value outside the selectable catalog remains visible with a warning; load failures preserve it and expose retry. Clearing saves the existing empty-model state. The catalog provides no text-consultation eligibility guarantee; the operator chooses a text-capable model. API and CLI model-string validation remains unchanged.
+
 ## Policies
 
 - `manual` (default): only an explicit worker `advisor()` call consults.

@@ -64,6 +64,17 @@ Shipped v1 configs migrate automatically to marker 2 and one option-aware row. T
 is retained once at `~/.opencodex/config.json.pre-openai-tiers-v2.bak`; restore it with
 `cp ~/.opencodex/config.json.pre-openai-tiers-v2.bak ~/.opencodex/config.json`.
 
+## Claude Opus 5.5 progress updates
+
+When the `anthropic` adapter sends Claude Opus 5.5 to `api.anthropic.com` (OAuth or API key),
+OpenCodex requests Anthropic's [progress-update display mode](https://platform.claude.com/docs/en/build-with-claude/thinking#progress-updates).
+Progress updates and mid-turn acknowledgements appear as visible assistant commentary in Codex,
+even when thinking summaries are hidden. Reasoning summaries are omitted in this mode because
+Anthropic cannot distinguish progress updates from reasoning under `display: "summarized"`.
+The original signed thinking blocks are preserved for tool continuation; no signature is decoded
+or rewritten. Updates appear once their signed block completes. Other models and compatible
+third-party endpoints retain their existing thinking display behavior.
+
 ## Anthropic image input
 
 The built-in Claude model seeds advertise text and image input for both `anthropic` (OAuth) and
@@ -145,6 +156,9 @@ Cursor, Kiro, Zed Hosted AI and Nous Portal are login-only and have no API-key e
 login-only too: `ocx login google-antigravity` signs in with your Google account over the Cloud Code
 Assist wire, and the `google` preset beside it is the AI Studio Gemini API — a different product
 reached with its own key, not a key mode for the same login.
+The Antigravity Accounts tab shows an observed membership tier as a badge beside the account
+label, using the upstream tier ID (for example `free-tier` or `gemini-pro`). No badge appears
+when the plan is unknown; it does not affect routing or quota.
 
 Gemini 4 Argon (`gemini-4-argon`) is listed on the `google` preset with low, medium (the
 default), and high thinking levels. Google offers it on the paid Gemini API tier only, not the free
@@ -153,6 +167,14 @@ tier. On `google-antigravity`, Argon is listed with the same three levels, which
 eligible Enterprise accounts. Cloud Code Assist serves Argon only to the Antigravity CLI client, so
 OpenCodex sends Argon requests and model discovery with the CLI User-Agent
 (`antigravity/cli/1.3.4`) and keeps the IDE User-Agent for every other model.
+
+For Gemini on Antigravity, including Argon, provider-marked thought summaries stay separate
+from the answer: Responses uses reasoning summary items, Chat Completions uses
+`reasoning_content`, and Messages uses `thinking` blocks. Clients decide how to display those
+fields. A Responses client can request `reasoning.summary: "none"` to suppress summaries;
+this does not turn off the model's internal reasoning. A thought signature is continuation
+metadata and can accompany ordinary text, so its presence alone does not hide that text.
+OpenCodex preserves unmarked answer text even when its wording sounds like planning or analysis.
 
 The built-in `google-antigravity` model list is Gemini 3.8 Flash (`gemini-3.8-flash`), Gemini 4 Argon
 (`gemini-4-argon`), Claude Opus 5.5 (`claude-opus-5-5`), and Claude Sonnet 5.5

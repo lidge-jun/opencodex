@@ -85,7 +85,7 @@ describe("desktop startup surface", () => {
   test("the spawn event stream is consumed rather than discarded", () => {
     const sidecar = code(SIDECAR);
     expect(sidecar).not.toContain("_events");
-    expect(sidecar).toContain("let (events, child) = command.spawn()");
+    expect(sidecar).toMatch(/let \(events, child\) =\s*crate::process_spawn::with_spawn\(\|\| command.spawn\(\)\)/);
     expect(sidecar).toContain("watch.follow(events)");
     expect(sidecar).toContain("CommandEvent::Terminated(payload)");
   });
@@ -121,7 +121,7 @@ describe("desktop startup surface", () => {
     expect(proxy).toContain("timeout_at(deadline, self.is_alive())");
     // The stop is the bundled CLI's now, under its own deadline.
     const stop = code(repoPath("desktop/src-tauri/src/runtime_stop.rs"));
-    expect(stop).toContain("timeout_at(deadline, command.output())");
+    expect(stop).toContain("crate::process_spawn::with_spawn_async(command.output())");
     expect(stop).toContain("pub const DEADLINE: Duration");
   });
 
