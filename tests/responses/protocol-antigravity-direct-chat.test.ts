@@ -30,6 +30,7 @@ let isolatedCodexHome: IsolatedCodexHome | null = null;
 let releaseSpendHome: (() => void) | undefined;
 let originalFetch: typeof fetch;
 let upstreamBodies: string[] = [];
+let replyParts: Record<string, unknown>[] = [];
 
 beforeEach(async () => {
   clearGenericFailoverHealth();
@@ -40,6 +41,7 @@ beforeEach(async () => {
   process.env.OPENCODEX_HOME = testDir;
   releaseSpendHome = acquireOwnedSpendHome();
   upstreamBodies = [];
+  replyParts = [{ text: "direct answer" }];
   await saveCredential("google-antigravity", {
     access: "fixture-access",
     refresh: "fixture-refresh",
@@ -54,7 +56,7 @@ beforeEach(async () => {
       upstreamBodies.push(typeof init?.body === "string" ? init.body : "");
       const payload = {
         response: {
-          candidates: [{ content: { role: "model", parts: [{ text: "direct answer" }] }, finishReason: "STOP" }],
+          candidates: [{ content: { role: "model", parts: replyParts }, finishReason: "STOP" }],
           usageMetadata: { promptTokenCount: 11, candidatesTokenCount: 3, totalTokenCount: 14 },
         },
       };
@@ -116,14 +118,14 @@ function chatBody(stream: boolean): Record<string, unknown> {
   };
 }
 
-async function send(direct: boolean, stream: boolean): Promise<{ status: number; text: string; requestId: string }> {
+async function send(direct: boolean, stream: boolean, overrides: Record<string, unknown> = {}): Promise<{ status: number; text: string; requestId: string }> {
   const config = antigravityConfig(direct);
   saveConfig(config);
   const requestId = `agy-direct-${direct}-${stream}-${crypto.randomUUID()}`;
   const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(chatBody(stream)),
+    body: JSON.stringify({ ...chatBody(stream), ...overrides }),
   }), config, { model: "", provider: "" }, { requestId, start: Date.now() });
   return { status: response.status, text: await response.text(), requestId };
 }
@@ -155,6 +157,41 @@ async function traceFor(requestId: string): Promise<Record<string, unknown> | un
 }
 
 describe("Antigravity direct lane through the Chat ingress", () => {
+  const lookup = { name: "lookup", parameters: { type: "object", properties: {} } };
+  const catalogs = [
+    { name: "empty", body: { tools: [] }, refused: true },
+    { name: "omitted", body: { tools: undefined }, refused: false },
+    { name: "partial", body: { tools: [{ type: "function", function: { ...lookup, name: "other" } }] }, refused: false },
+    { name: "empty with current legacy declaration", body: { tools: [], functions: [lookup] }, refused: false },
+    { name: "empty with unrelated legacy declaration", body: { tools: [], functions: [{ ...lookup, name: "other" }] }, refused: true },
+    { name: "empty with text answer", body: { tools: [] }, refused: false, text: true },
+  ];
+  for (const stream of [false, true]) for (const catalog of catalogs) {
+    test(`${catalog.name} retains bridge behavior (stream=${stream})`, async () => {
+      replyParts = catalog.text ? [{ text: "direct answer" }]
+        : [{ functionCall: { name: "lookup", args: { q: "fixture" } } }];
+      for (const direct of [false, true]) {
+        const result = await send(direct, stream, catalog.body);
+        if (catalog.refused) {
+          expect(result.status).toBe(stream ? 200 : 502);
+          expect(result.text).toContain("undeclared_tool_call");
+          expect(result.text).not.toContain('"name":"lookup"');
+          expect(result.text).not.toContain("[DONE]");
+          expect(result.text).not.toContain('"finish_reason":"tool_calls"');
+        } else {
+          expect(result.status).toBe(200);
+          expect(result.text).not.toContain("undeclared_tool_call");
+          expect(result.text).toContain(catalog.text ? "direct answer" : '"name":"lookup"');
+          if (stream) expect(result.text).toContain("[DONE]");
+        }
+        expect(await traceFor(result.requestId)).toMatchObject({
+          requestPath: direct ? ["chat", "ir", "other"] : ["chat", "responses-internal", "ir", "other"],
+        });
+      }
+      expect(upstreamBodies).toHaveLength(2);
+    });
+  }
+
   for (const stream of [false, true]) {
     test(`same upstream wire and same answer as the bridge (stream=${stream})`, async () => {
       const bridge = await send(false, stream);

@@ -337,6 +337,13 @@
       "documents": ["src/oauth/"]
     },
     {
+      "path": "providers/oauth-reconciliation.md",
+      "tier": 4,
+      "title": "OAuth Preset Reconciliation",
+      "scope": "Operator limits and per-model declarations across startup reconciliation and OAuth upsert.",
+      "documents": ["src/oauth/"]
+    },
+    {
       "path": "providers/claude-cli-replay.md",
       "tier": 4,
       "title": "Claude CLI Replay",
