@@ -7,8 +7,7 @@ Explicit Codex CLI installation observation supplies no selected-runtime proof t
 
 Native steering follows [the shared WebSocket contract](transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
 
-Catalog discovery remains separate from the Responses final-route
-[core module ownership](transports/responses.md#core-module-ownership). This surface retains its existing behavior.
+Catalog discovery remains separate from the Responses final-route [core module ownership](transports/responses.md#core-module-ownership).
 
 The configuration-only [plaintext V2 contract](subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. CLI installation inspection reason codes, including Windows deferral, follow the [runtime inspection contract](runtime.md#lifecycle).
@@ -23,6 +22,7 @@ Accounts added through the [Orca import](codex-home.md#orca-source-owned-account
 validation-pending. Import alone supplies no entitlement evidence for the model catalog.
 
 ## Shared catalog
+Vision-sidecar attachment metadata is projected after provider discovery/cache reads in `src/codex/catalog/routed-gather.ts`. The gather captures `visionSidecar.enabled !== false` before awaiting discovery, and `src/codex/catalog/gather-capture.ts` includes that effective flag in the flight key. Provider TTL/stale rows exclude synthetic sidecar image input; custom rows and synthesized combo members use the same captured switch. Explicit/native image modalities remain intact, and enabled advertisement retains the existing config-based consumer predicate without probing credential availability. Coverage: `tests/codex-integration/catalog-vision-sidecar-disabled.test.ts`.
 Custom-provider missing windows use [source-labelled vendor estimates](catalog-vendor-context.md) only when the provider opts in with `inferContextWindow: true`; these remain distinct from asserted routing capacity.
 Static policy and observed catalog evidence are separate authorities. Antigravity grouping and selection projection follow the [discovered effort-family contract](providers-and-adapters.md#antigravity-effort-families).
 `src/providers/resolved-model-policy.ts` resolves and freezes only registry/operator static facts,

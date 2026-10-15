@@ -141,7 +141,11 @@ failures after response headers have started are delivered as `response.failed` 
 Image routing is capability-aware. Before an image-bearing upstream send, opencodex resolves the selected model's effective input modalities from runtime provider evidence, explicit operator declarations, backend/registry metadata, and generated vendor metadata. A target positively known to be text-only goes through the Vision Sidecar first; the image is described **before** the main call and replaced inline with text. A target positively known to support images receives the image directly. Unknown custom models keep the existing compatibility behavior rather than being guessed text-only.
 
 For the canonical ChatGPT Codex route, opencodex uses the `openai-codex` metadata bundle rather than public OpenAI API metadata, so backend-specific modality differences are respected. The native Chat fast path uses the same gate and cannot bypass a known text-only verdict. Without an available sidecar plan, raw images are stripped before a proven text-only backend.
-Combos advertise image input only when every member accepts images, either natively or through a
+With `visionSidecar.enabled: false`, the model catalog does not add sidecar-backed image input to
+text-only models, including custom rows and combo members. Native image support and explicitly
+configured image modalities are preserved. Omitting `enabled` keeps sidecar advertisement on;
+catalog visibility does not establish that sidecar credentials or capacity are available.
+Combos advertise image input only when every member accepts images, either natively or through an enabled
 sidecar, and the combo's `imageInput` setting is not disabled, so clients such as the Codex app
 allow attachments instead of blocking them before the sidecar runs. When
 `visionSidecar.model` is absent or blank, the OpenAI execution path, Dashboard, and management API
