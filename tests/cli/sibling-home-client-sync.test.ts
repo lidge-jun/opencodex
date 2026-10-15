@@ -448,7 +448,8 @@ test("a registered custom-home owner is proven through its own runtime record", 
   const verdict = await findCrossHomeOwnerDetailed({ homeDir: fx.home });
   expect(verdict.kind).toBe("indeterminate");
   expect(verdict.kind === "indeterminate" ? verdict.port : null).toBe(port);
-  expect(await markCrossHomeSibling()).toBe(true);
+  await expect(markCrossHomeSibling({ homeDir: fx.home })).rejects.toThrow("refusing startup");
+  expect(siblingOfLivePort()).toBeNull();
   resetSiblingStartForTests();
 
   registerOwnerRegistryHome(homeA);
@@ -466,8 +467,8 @@ test("a live legacy record without an attestation secret fails closed", async ()
   writeFileSync(join(fx.grok, "config.toml"), grokFence(port));
   const verdict = await findCrossHomeOwnerDetailed({ homeDir: fx.home });
   expect(verdict.kind).toBe("indeterminate");
-  expect(await markCrossHomeSibling()).toBe(true);
-  expect(siblingOfLivePort()).toBe(port);
+  await expect(markCrossHomeSibling({ homeDir: fx.home })).rejects.toThrow("refusing startup");
+  expect(siblingOfLivePort()).toBeNull();
 });
 
 test("a dropped attestation probe retries inside the shared deadline", async () => {
@@ -507,6 +508,22 @@ test("one shared deadline bounds every candidate probe", async () => {
   });
   expect(verdict.kind).toBe("indeterminate");
   expect(calls).toBe(0);
+});
+
+test("exhausted discovery refuses startup without persisting a false sibling", async () => {
+  const fx = fixture();
+  const ownerPid = process.pid + 1;
+  const port = healthServer(ownerPid);
+  defaultRuntime(fx, ownerPid, port);
+  writeFileSync(join(fx.grok, "config.toml"), grokFence(port));
+  const options = { homeDir: fx.home, io: { deadlineAt: 0, nowFn: () => 0 } };
+
+  await expect(markCrossHomeSibling(options)).rejects.toThrow("refusing startup");
+  expect(siblingOfLivePort()).toBeNull();
+
+  // A fresh attempt can still prove the real owner after the transient failure.
+  expect(await markCrossHomeSibling({ homeDir: fx.home })).toBe(true);
+  expect(siblingOfLivePort()).toBe(port);
 });
 
 test("an attested sibling record defers to the owner port it names", async () => {
@@ -622,7 +639,7 @@ test("an unlocated owner refuses start and ensure rather than claiming an unmark
   }
   expect(readOwnerRegistry().truncated).toBe(true);
   expect(await findCrossHomeOwnerDetailed({ homeDir: fx.home })).toMatchObject({ kind: "indeterminate", port: null });
-  await expect(markCrossHomeSibling()).rejects.toThrow("refusing startup");
+  await expect(markCrossHomeSibling({ homeDir: fx.home })).rejects.toThrow("refusing startup");
   expect(siblingOfLivePort()).toBeNull();
   await expect(markLiveHomeSibling({ pid: process.pid, port: 42101 })).rejects.toThrow("refusing startup");
   expect(siblingOfLivePort()).toBeNull();
@@ -636,7 +653,7 @@ test("an unlocated owner refuses start and ensure rather than claiming an unmark
 async function secondaryStartPreservesBytes(
   fx: ReturnType<typeof fixture>,
   ownerPort: number,
-  expectedSiblingPort: number,
+  expectedSiblingPort: number | null,
 ): Promise<void> {
   const reservation = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("reserved") });
   const secondaryPort = reservation.port;
@@ -657,6 +674,14 @@ async function secondaryStartPreservesBytes(
     cwd: fx.root, env: { ...process.env, NO_PROXY: "127.0.0.1,localhost" }, stdout: "pipe", stderr: "pipe",
   });
   trackChild(child);
+  if (expectedSiblingPort === null) {
+    const output = await finishChildOutput(child);
+    expect(await child.exited).not.toBe(0);
+    expect(JSON.stringify(output)).toContain("refusing startup");
+    expect(existsSync(join(fx.ocx, "runtime-port.json"))).toBe(false);
+    expect([grokPath, codexPath, claudePath].map(path => readFileSync(path))).toEqual(before);
+    return;
+  }
   const runtime = await waitForRuntime(join(fx.ocx, "runtime-port.json"), child);
   expect(runtime.siblingOfPort).toBe(expectedSiblingPort);
   await waitForClientStartup(child);
@@ -686,7 +711,7 @@ test("an unreadable listener on a managed port vetoes shared writes end to end",
   const managed = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("unreadable", { status: 500 }) });
   servers.push(managed);
   const ownerPort = managed.port;
-  await secondaryStartPreservesBytes(fx, ownerPort, ownerPort);
+  await secondaryStartPreservesBytes(fx, ownerPort, null);
 }, 30_000);
 
 test("a live legacy record without an attestation secret vetoes shared writes end to end", async () => {
@@ -699,7 +724,7 @@ test("a live legacy record without an attestation secret vetoes shared writes en
     pid: ownerPid, port: ownerPort,
   }));
   registerOwnerRegistryHome(homeA);
-  await secondaryStartPreservesBytes(fx, ownerPort, ownerPort);
+  await secondaryStartPreservesBytes(fx, ownerPort, null);
 }, 30_000);
 
 test("a registry-only discovered owner vetoes shared writes end to end", async () => {
