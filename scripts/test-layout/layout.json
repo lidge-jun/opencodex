@@ -369,6 +369,7 @@
     "cl01-openai-chat-review-regressions.test.ts": "routing",
     "cl01-review-regressions.test.ts": "routing",
     "claude-529-mapping.test.ts": "claude-integration",
+    "claude-client-refusal-status.test.ts": "claude-integration",
     "claude-agent-startup-sync.test.ts": "claude-integration",
     "claude-agents-inject-client.test.ts": "claude-integration",
     "claude-agents-inject.test.ts": "claude-integration",

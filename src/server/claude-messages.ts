@@ -47,7 +47,7 @@ import {
   REPLAY_REFUSED_STATUS,
   UPSTREAM_RESET_REPLAY_REFUSED_CODE,
 } from "../lib/upstream-retry";
-import { UNDECLARED_TOOL_CALL_ERROR_CODE } from "../lib/errors";
+import { recognizedUpstreamError, UNDECLARED_TOOL_CALL_ERROR_CODE } from "../lib/errors";
 import { resolveClientRetryAfter } from "../lib/retry-after";
 import { anthropicRateLimitHeaders } from "./anthropic-rate-limit-headers";
 import { upstreamMessagesRequestIdHeaders } from "./messages-response-headers";
@@ -1560,8 +1560,14 @@ async function handleClaudeMessagesWithBudget(
         "translation_buffer_limit",
       );
     }
+    // A declared client refusal keeps its 4xx: as a 502 Claude Code retries a verdict that cannot
+    // change. Server classes and rate limits keep the 502 this path has always answered.
+    const refusalStatus = recognizedUpstreamError(translatedError ?? {})?.httpStatus;
     return new Response(JSON.stringify(message), {
-      status: isError ? (translatedError?.code === "context_length_exceeded" ? 400 : 502) : 200,
+      status: isError
+        ? translatedError?.code === "context_length_exceeded" ? 400
+          : refusalStatus !== undefined && refusalStatus < 429 ? refusalStatus : 502
+        : 200,
       headers: { "Content-Type": "application/json" },
     });
   }

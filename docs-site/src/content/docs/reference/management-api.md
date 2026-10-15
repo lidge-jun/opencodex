@@ -290,10 +290,11 @@ upstream model evidence remains absent rather than being inferred from the reque
 
 Failed request rows can include bounded `upstreamErrorType`, `upstreamErrorCode`, and
 `upstreamRequestId` diagnostics. On the Codex upstream WebSocket path, a bare error followed by
-EOF retains recognized rate-limit or overload codes in the synthesized failed terminal.
-Request logs record these as 429 for `rate_limit_exceeded` / `rate_limit_error`, or 503 for
-`server_is_overloaded` / `overloaded_error`. A recognized type without a code uses the same
-status. On the streaming path, an explicit unknown code records the 5xx status the Codex
+EOF retains recognized rate-limit, overload, or client-refusal codes in the synthesized failed terminal.
+Request logs record these as 429 for `rate_limit_exceeded` / `rate_limit_error`, 503 for
+`server_is_overloaded` / `overloaded_error`, and 400/401/403/404 for `invalid_request_error` /
+`authentication_error` / `permission_error` / `not_found_error`. A recognized type without a code
+uses the same status. On the streaming path, an explicit unknown code records the 5xx status the Codex
 WebSocket wrapper states as a top-level integer `status` or `status_code` (one of the two, not
 both); otherwise, and for buffered JSON callers, it remains a generic 502 failure. The client
 terminal keeps `upstream_server_error` for unknown codes either way. Bare-error status is provisional:
