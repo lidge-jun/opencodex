@@ -14,7 +14,7 @@ import {
   createLocalAttestationProof,
 } from "../../src/lib/local-management-attestation";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-import { repoPath } from "../helpers/repo-root";
+import { helperPath, repoPath } from "../helpers/repo-root";
 import { captureStartupChildOutput, STARTUP_OUTPUT_TAIL_CHARS } from "../helpers/startup-child-output";
 
 const originalEnv = { ...process.env };
@@ -372,7 +372,7 @@ test("a secondary ensure parent preserves shared Grok, Codex and Claude agent by
     checkForUpdates: false, clientIntegrations: { codex: true, grok: true, "claude-desktop": false },
     claudeCode: { injectAgents: false, systemEnv: false }, providers: {}, defaultProvider: "openai",
   }));
-  const ensure = Bun.spawn([process.execPath, repoPath("src/cli/index.ts"), "ensure"], {
+  const ensure = Bun.spawn([process.execPath, "--preload", helperPath("ensure-without-desktop-preload.ts"), repoPath("src/cli/index.ts"), "ensure"], {
     cwd: fx.root, env: { ...process.env, NO_PROXY: "127.0.0.1,localhost" }, stdout: "pipe", stderr: "pipe",
   });
   trackChild(ensure);
@@ -390,7 +390,7 @@ test("a secondary ensure parent preserves shared Grok, Codex and Claude agent by
 
   // A fresh ensure parent sees this home's live sibling after the primary goes down.
   servers.pop()?.stop(true);
-  const again = Bun.spawn([process.execPath, repoPath("src/cli/index.ts"), "ensure"], {
+  const again = Bun.spawn([process.execPath, "--preload", helperPath("ensure-without-desktop-preload.ts"), repoPath("src/cli/index.ts"), "ensure"], {
     cwd: fx.root, env: { ...process.env, NO_PROXY: "127.0.0.1,localhost" }, stdout: "pipe", stderr: "pipe",
   });
   trackChild(again);
