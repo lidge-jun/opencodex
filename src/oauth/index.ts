@@ -58,8 +58,8 @@ import { resolveProviderTransport } from "../providers/xai-transport";
 import { detectGrokCliToken, hasComparableGrokIdentity, isSameGrokIdentity, shouldAdoptGrokGeneration } from "./local-token-detect";
 import { logOAuthEvent } from "./log";
 import { captureConfigGeneration, sweepExpiredOnWrite } from "../lib/state-store-sweeper";
-import { admitLoginFlow, classifyLoginCodeError, clearManualCodeSlot, CodeLoginUnsupportedError, ensureManualCodeSlot, kiroLoginSettling, latestLoginFlowKey, loginAbort, loginState, recordStartedLoginFlow, settleLoginFlow, waitForManualLoginCode, type LoginCodeError, type OAuthLoginHint } from "./login-flow-state";
-export { cancelLoginFlow, clearLoginState, CodeLoginUnsupportedError, reconcileOAuthFlowState, submitLoginCode, submitManualLoginCode, waitForLoginSettled } from "./login-flow-state";
+import { admitLoginFlow, classifyLoginCodeError, clearManualCodeSlot, CodeLoginUnsupportedError, ensureManualCodeSlot, kiroLoginSettling, latestLoginFlowKey, loginAbort, loginFlowProvider, loginState, recordStartedLoginFlow, settleLoginFlow, waitForManualLoginCode, type LoginCodeError, type OAuthLoginHint } from "./login-flow-state";
+export { cancelLoginFlow, clearLoginState, CodeLoginUnsupportedError, isCodeLoginFlow, loginFlowAccountId, reconcileOAuthFlowState, submitLoginCode, submitManualLoginCode, waitForLoginSettled } from "./login-flow-state";
 export type { LoginCodeError, LoginFlowState } from "./login-flow-state";
 import { randomUUID } from "node:crypto";
 export {
@@ -1780,7 +1780,8 @@ export function getLoginStatus(provider: string, maskEmails = true, flowId?: str
   const cred = getCredential(provider);
   // `flowId` reads one of several concurrent flows; without it, the provider's newest flow.
   const flowKey = flowId ?? latestLoginFlowKey(provider);
-  const st = flowKey === undefined ? undefined : loginState.get(flowKey);
+  // An explicit flow id from another provider must not leak that flow's lifecycle or hint.
+  const st = flowKey === undefined || loginFlowProvider(flowKey) !== provider ? undefined : loginState.get(flowKey);
   const set = getAccountSet(provider);
   const accounts: OAuthAccountSummary[] | undefined = set?.accounts.map(a => ({
     id: a.id,
@@ -1874,7 +1875,7 @@ export async function startLoginFlow(
       if (!urlResolved) reject(error ?? new Error("OAuth login was superseded"));
       return true;
     };
-    const settle = async (error?: unknown): Promise<void> => {
+    const settle = async (error?: unknown, cred?: OAuthCredentials): Promise<void> => {
       // Cancellation deletes this controller and records its own terminal result. A late provider
       // rejection (or an older flow settling after a replacement starts) must not overwrite that
       // state or delete the replacement flow's controller/manual-code slot.
@@ -1891,7 +1892,10 @@ export async function startLoginFlow(
       if (finalError === undefined) {
         loginAbort.delete(flowId);
         clearManualCodeSlot(flowId);
-        settleLoginFlow(flowId);
+        // Record which row this flow wrote, so its caller is answered with that account rather
+        // than with whichever account happens to be active when it looks.
+        const saved = cred?.refresh ? getAccountSet(provider)?.accounts.find(a => a.credential.refresh === cred.refresh) : undefined;
+        settleLoginFlow(flowId, saved ? { accountId: saved.id } : {});
         // Local-token import (grok-cli / Claude Code keychain) completes WITHOUT firing onAuth —
         // resolve so the GUI call returns instead of hanging.
         if (!urlResolved) resolve({ url: "", instructions: "Logged in via an existing local CLI/keychain token — no browser needed." });
@@ -1911,7 +1915,7 @@ export async function startLoginFlow(
       if (loginAbort.get(flowId)?.controller !== abort) throw new OAuthLoginSupersededError();
     };
     void runLogin(provider, ctrl, opts, { assertCurrentOwner }).then(
-      () => settle(),
+      (cred) => settle(undefined, cred),
       (e: unknown) => settle(e),
     ).catch((e: unknown) => {
       // settle catches lifecycle failures, so this is only a defensive promise-boundary guard.

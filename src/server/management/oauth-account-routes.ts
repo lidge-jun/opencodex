@@ -23,8 +23,10 @@ import {
 import {
   clearLoginState,
   getLoginStatus,
+  isCodeLoginFlow,
   isPublicOAuthProvider,
   listOAuthProviders,
+  loginFlowAccountId,
   OAUTH_PROVIDERS,
   publicOAuthAuthenticationErrorMessage,
   startLoginFlow,
@@ -391,7 +393,11 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     if (consentRequired) return consentRequired;
     const flowId = typeof body.flowId === "string" ? body.flowId : undefined;
     const maskEmails = emailMaskingEnabled(config);
-    const codeFlow = flowId !== undefined || getLoginStatus(provider, maskEmails).mode === "code";
+    // Only a code flow of THIS provider gets the outcome-waiting contract; that flow is single-use,
+    // so at most one request ever waits on it. A flow id naming anything else (a callback flow,
+    // another provider's flow, nothing) has no code login to complete.
+    const codeFlow = isCodeLoginFlow(provider, flowId);
+    if (flowId !== undefined && !codeFlow) return jsonResponse({ ok: false, error: "no_pending_login" }, 409);
     const input = typeof body.input === "string" ? body.input : typeof body.code === "string" ? body.code : "";
     // Authorization responses are measured in hundreds of bytes; never accept the
     // generic management-body allowance here.
@@ -421,11 +427,13 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       const failure = status.errorCode ?? "invalid_or_expired_code";
       return jsonResponse({ ok: false, error: failure }, failure === "no_pending_login" ? 409 : 400);
     }
-    const account = status.accounts?.find(entry => entry.id === status.activeAccountId);
-    return jsonResponse({
-      ok: true,
-      account: { id: account?.id ?? status.activeAccountId, email: account?.email ?? status.email },
-    });
+    // A flow dropped while waiting (logout, clear) never completed, whatever the store now holds.
+    if (status.status !== "complete") return jsonResponse({ ok: false, error: "no_pending_login" }, 409);
+    // The account THIS flow wrote, which need not be the active one (reauth of an inactive account,
+    // or a concurrent login that finished later).
+    const savedId = loginFlowAccountId(provider, submitted.flowId);
+    const account = savedId === undefined ? undefined : status.accounts?.find(entry => entry.id === savedId);
+    return jsonResponse({ ok: true, ...(account ? { account: { id: account.id, email: account.email } } : {}) });
   }
 
   if (url.pathname === "/api/oauth/status" && req.method === "GET") {

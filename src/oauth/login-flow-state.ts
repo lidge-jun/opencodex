@@ -53,6 +53,8 @@ export interface LoginFlowState {
   /** Epoch ms after which a paste is refused as `no_pending_login`. */
   expiresAt?: number;
   errorCode?: LoginCodeError;
+  /** Account row this flow persisted, once it settled successfully. An id, never a credential. */
+  accountId?: string;
 }
 
 /** Keyed by flow id. */
@@ -215,7 +217,7 @@ function wakeLoginWaiters(flowKey: string): void {
  */
 export function settleLoginFlow(
   flowKey: string,
-  outcome: { error?: string; errorCode?: LoginCodeError } = {},
+  outcome: { error?: string; errorCode?: LoginCodeError; accountId?: string } = {},
 ): void {
   const current = loginState.get(flowKey);
   // A flow already dropped (logout, reap) has nothing left to report; releasing its waiters is
@@ -227,9 +229,23 @@ export function settleLoginFlow(
       hint: undefined,
       error: outcome.error,
       errorCode: outcome.errorCode,
+      accountId: outcome.accountId,
     });
   }
   wakeLoginWaiters(flowKey);
+}
+
+/** True when the named flow (or, without one, the provider's newest flow) is this provider's code flow. */
+export function isCodeLoginFlow(provider: string, flowId?: string): boolean {
+  const flowKey = flowId ?? latestLoginFlowKey(provider);
+  return flowKey !== undefined && loginFlowProvider(flowKey) === provider && loginState.get(flowKey)?.mode === "code";
+}
+
+/** The account a settled, successful flow persisted; undefined for any other flow or provider. */
+export function loginFlowAccountId(provider: string, flowId: string): string | undefined {
+  const state = loginState.get(flowId);
+  if (!state?.done || state.error || loginFlowProvider(flowId) !== provider) return undefined;
+  return state.accountId;
 }
 
 /** Drop one flow's state entirely; waiters are released rather than left hanging. */
@@ -413,6 +429,13 @@ export function submitLoginCode(
   // paste's outcome, so it is refused instead.
   if (st.mode === "code" && slot.delivered) {
     return { ok: false, error: "login already received a code", code: "no_pending_login" };
+  }
+  // Without the expected state a paste cannot be checked here, and stashing it would spend the
+  // flow's single use on input the callback loop later throws away. The URL a caller needs to
+  // obtain a code is published only after the state is registered, so this is only reachable
+  // by racing the start.
+  if (st.mode === "code" && slot.expectedState === undefined) {
+    return { ok: false, error: "login is not ready for a code yet", code: "no_pending_login" };
   }
   // Synchronous validation (validated request/ack): reject un-parseable input and
   // authorization responses (url/query kind) whose state is missing or mismatched

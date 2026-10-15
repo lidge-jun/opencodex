@@ -10,6 +10,7 @@ import {
   clearLoginState,
   getLoginStatus,
   startLoginFlow,
+  submitLoginCode,
   submitManualLoginCode,
   supportsCodeLoginMode,
   waitForLoginSettled,
@@ -303,6 +304,124 @@ describe("OAuth code-display login", () => {
       await server.stop(true);
       mock.restore();
     }
+  });
+
+  test("a successful paste answers with the account this flow wrote, not the active one", async () => {
+    const mock = installTokenMock(request => ({ kind: "ok", uuid: request.code, email: `${request.code}@example.com` }));
+    const server = startServer(0);
+    try {
+      for (const code of ["account-a", "account-b"]) {
+        const { state } = await startCodeLogin();
+        const ok = await postCode({ provider: "anthropic", flowId: getLoginStatus("anthropic").flowId, input: `${code}#${state}` }, server);
+        expect(ok.status).toBe(200);
+      }
+      const set = getAccountSet("anthropic")!;
+      const idA = set.accounts.find(account => account.credential.email === "account-a@example.com")!.id;
+      const idB = set.accounts.find(account => account.credential.email === "account-b@example.com")!.id;
+      expect(set.activeAccountId).toBe(idB);
+      const started = await startLoginFlow("anthropic", { forceLogin: true, codeMode: true, reauthAccountId: idA });
+      const state = new URL(started.url).searchParams.get("state")!;
+      const reauth = await postCode({ provider: "anthropic", flowId: getLoginStatus("anthropic").flowId, input: `account-a#${state}` }, server);
+      expect(reauth.status).toBe(200);
+      const body = await reauth.json() as { ok: boolean; account?: { id: string } };
+      expect(body.ok).toBe(true);
+      expect(body.account?.id).toBe(idA);
+    } finally {
+      await server.stop(true);
+      mock.restore();
+    }
+  });
+
+  test("a flow cleared while its exchange runs answers no_pending_login, not success", async () => {
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const originalFetch = globalThis.fetch;
+    let tokenCalls = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (!String(input).startsWith(TOKEN_URL)) return originalFetch(input, init);
+      tokenCalls += 1;
+      await held;
+      return new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400, headers: { "Content-Type": "application/json" } });
+    }) as typeof fetch;
+    const server = startServer(0);
+    try {
+      const { state } = await startCodeLogin();
+      const pending = postCode({ provider: "anthropic", flowId: getLoginStatus("anthropic").flowId, input: `code#${state}` }, server);
+      while (tokenCalls === 0) await Bun.sleep(5);
+      clearLoginState("anthropic");
+      const response = await pending;
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({ ok: false, error: "no_pending_login" });
+    } finally {
+      release();
+      await server.stop(true);
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("a paste racing the start is refused without spending the flow", async () => {
+    const mock = installTokenMock(okReply());
+    try {
+      const starting = startLoginFlow("anthropic", { forceLogin: true, codeMode: true });
+      const flowId = getLoginStatus("anthropic").flowId!;
+      const early = submitLoginCode("anthropic", "code#not-the-state", flowId);
+      expect(early).toMatchObject({ ok: false, code: "no_pending_login" });
+      const state = new URL((await starting).url).searchParams.get("state")!;
+      expect(submitLoginCode("anthropic", `real-code#${state}`, flowId)).toMatchObject({ ok: true, flowId });
+      expect(await waitForLoginSettled("anthropic", 5_000, flowId)).toBe(true);
+      expect(getLoginStatus("anthropic", true, flowId).status).toBe("complete");
+      expect(mock.requests.map(request => request.code)).toEqual(["real-code"]);
+    } finally {
+      mock.restore();
+    }
+  });
+
+  test("a flow id is only usable with its own provider and only for a code flow", async () => {
+    const server = startServer(0);
+    try {
+      const { state } = await startCodeLogin();
+      const flowId = getLoginStatus("anthropic").flowId!;
+      const foreign = getLoginStatus("xai", true, flowId);
+      expect(foreign.status).toBe("idle");
+      expect(foreign.hint).toBeUndefined();
+      expect(foreign).not.toHaveProperty("flowId");
+      const crossed = await postCode({ provider: "xai", flowId, input: `code#${state}` }, server);
+      expect(crossed.status).toBe(409);
+      expect(await crossed.json()).toEqual({ ok: false, error: "no_pending_login" });
+      clearLoginState("anthropic");
+      // A callback flow has a flow id too, but no outcome-waiting paste contract.
+      await startLoginFlow("anthropic", { forceLogin: true }, { flowId: "callback-flow" });
+      const callback = await postCode({ provider: "anthropic", flowId: "callback-flow", input: "code" }, server);
+      expect(callback.status).toBe(409);
+      expect(await callback.json()).toEqual({ ok: false, error: "no_pending_login" });
+      expect(getLoginStatus("anthropic", true, "callback-flow").status).toBe("pending");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("a failed headless CLI login prints only the fixed reason, never the provider body", async () => {
+    const { handleLogin } = await import("../../src/oauth/login-cli");
+    const { AnthropicTokenError } = await import("../../src/oauth/anthropic");
+    let stderr = "";
+    const errorSpy = spyOn(console, "error").mockImplementation((...args: unknown[]) => { stderr += args.join(" "); });
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    const exitSpy = spyOn(process, "exit").mockImplementation(((code?: number) => { throw new Error(`exit ${code}`); }) as never);
+    try {
+      await expect(handleLogin("anthropic", {
+        ask: async () => "secret-code#state",
+        runLogin: async () => {
+          throw new AnthropicTokenError('token exchange failed: {"code":"secret-code","code_verifier":"secret-verifier"}', 400, "invalid_grant");
+        },
+      }, { codeMode: true })).rejects.toThrow("exit 1");
+    } finally {
+      errorSpy.mockRestore();
+      logSpy.mockRestore();
+      exitSpy.mockRestore();
+    }
+    expect(stderr).toContain("invalid_or_expired_code");
+    expect(stderr).not.toContain("secret-code");
+    expect(stderr).not.toContain("secret-verifier");
   });
 
   test("a code flow is single-use: a second paste during the exchange is refused", async () => {

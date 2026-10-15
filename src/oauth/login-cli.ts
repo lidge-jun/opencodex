@@ -9,7 +9,8 @@ import {
   requestBoundLocalProviderReload,
   type LocalProviderReloadResult,
 } from "../server/local-provider-reload-client";
-import { DEPRECATED_OAUTH_PROVIDER_ALIASES, isPublicOAuthProvider, listOAuthProviders, runLogin, supportsCodeLoginMode } from "./index";
+import { DEPRECATED_OAUTH_PROVIDER_ALIASES, isPublicOAuthProvider, listOAuthProviders, publicOAuthAuthenticationErrorMessage, runLogin, supportsCodeLoginMode } from "./index";
+import { classifyLoginCodeError } from "./login-flow-state";
 import { KEY_LOGIN_PROVIDERS, isKeyLoginProvider, validateApiKey, type KeyLoginProvider } from "./key-providers";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { configuredAdminToken } from "../lib/admin-secrets";
@@ -162,16 +163,23 @@ async function handleCodeLogin(name: string, deps: LoginCliDeps): Promise<void> 
     console.error(`${name} has no code-display login. Providers that do: ${listCodeLoginProviders().join(", ")}`);
     process.exit(1);
   }
-  await withPrompt(deps.ask, async (ask) => {
-    await login(name, {
-      onAuth: ({ url, instructions }) => {
-        console.log(`\n🔐 Open this URL in any browser to approve ${name}:\n${url}\n`);
-        if (instructions) console.log(instructions);
-      },
-      onProgress: (m) => console.log(`   ${m}`),
-      onManualCodeInput: async () => await ask("Paste the code shown after approval: "),
-    }, { codeMode: true });
-  });
+  try {
+    await withPrompt(deps.ask, async (ask) => {
+      await login(name, {
+        onAuth: ({ url, instructions }) => {
+          console.log(`\n🔐 Open this URL in any browser to approve ${name}:\n${url}\n`);
+          if (instructions) console.log(instructions);
+        },
+        onProgress: (m) => console.log(`   ${m}`),
+        onManualCodeInput: async () => await ask("Paste the code shown after approval: "),
+      }, { codeMode: true });
+    });
+  } catch (error) {
+    // Never let the raw error reach stderr: a token endpoint's error body can quote the pasted
+    // code back. Only fixed, allowlisted text and the machine-readable reason are printed.
+    console.error(`\n❌ ${name} login failed (${classifyLoginCodeError(error)}): ${publicOAuthAuthenticationErrorMessage(error)}`);
+    process.exit(1);
+  }
   const reload = await notifyRunningProxyAfterOAuthLogin(name);
   console.log(`\n✅ Logged in to ${name}. Try: ocx sync`);
   for (const line of modelSelectionGuidance(name)) console.log(line);
