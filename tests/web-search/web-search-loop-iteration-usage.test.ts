@@ -84,4 +84,14 @@ describe("web-search loop iteration usage", () => {
     expect(clientUsage).toBeFalsy();
     expect(reported).toEqual([expect.objectContaining({ inputTokens: 1000, outputTokens: 50 })]);
   });
+
+  test("a translator-budget failure after a search still reports the iterations already sent", async () => {
+    const { reported, text } = await drive([
+      search("first", usage(1000, 50)),
+      [{ type: "error", status: 502, code: "translation_buffer_limit", message: "over budget" }],
+    ]);
+    expect(text).toContain("translation_buffer_limit");
+    expect(reported).toEqual([expect.objectContaining({ inputTokens: 1000, outputTokens: 50 })]);
+  });
+
 });
