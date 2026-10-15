@@ -171,6 +171,7 @@ for (const outcome of ["rejected", "marker-io"] as const) {
     const intent = readOAuthRefreshIntent("anthropic", id);
     const clock = spyOn(Date, "now").mockReturnValue(Date.now() + 120_001);
     const marker = spyOn(store, "markOAuthRefreshIntentStaleOwner");
+    const info = spyOn(console, "info").mockImplementation(() => {});
     if (outcome === "marker-io") marker.mockImplementation(() => { throw new Error("fixture retirement IO failure"); });
     let replacement: Promise<unknown[]> | undefined;
     try {
@@ -190,12 +191,15 @@ for (const outcome of ["rejected", "marker-io"] as const) {
       } else {
         expect(results.every(result => result instanceof OAuthTokenRefreshStaleError)).toBe(true);
         expect(readOAuthRefreshIntent("anthropic", id)).toEqual(intent);
+        const notices = info.mock.calls.map(([message]) => message)
+          .filter(message => String(message).includes("OAuth refresh flight retirement deferred"));
+        expect(notices).toEqual(["[opencodex] OAuth refresh flight retirement deferred provider=anthropic reason=storage_failure"]);
         marker.mockRestore(); clock.mockRestore();
         await expect(getValidAccessTokenForAccount("anthropic", id)).rejects.toBeInstanceOf(OAuthTokenRefreshStaleError);
         expect(readOAuthRefreshIntent("anthropic", id)).toMatchObject({ ...intent, staleOwner: true });
         expect(calls).toBe(1);
       }
       expect(getAccountSet("anthropic")!.accounts.find(row => row.id === id)?.needsReauth).not.toBe(true);
-    } finally { marker.mockRestore(); clock.mockRestore(); finish(); await old; await replacement; }
+    } finally { info.mockRestore(); marker.mockRestore(); clock.mockRestore(); finish(); await old; await replacement; }
   });
 }

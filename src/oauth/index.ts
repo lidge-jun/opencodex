@@ -137,7 +137,7 @@ export const MAX_OAUTH_TOKEN_REFRESH_WAITERS = 256;
 const tokenRefreshWaiters = createAdmissionGate("oauth_token_refresh_waiters", MAX_OAUTH_TOKEN_REFRESH_WAITERS);
 const OAUTH_TOKEN_REFRESH_FLIGHT_STALE_MS = 120_000;
 interface OAuthRefreshFlightEvidence { flightId: string; dispatched: boolean }
-interface OAuthTokenRefreshFlight extends OAuthRefreshFlightEvidence { promise: Promise<OAuthAccessSnapshot>; startedAt: number; abort: AbortController; settled?: boolean }
+interface OAuthTokenRefreshFlight extends OAuthRefreshFlightEvidence { promise: Promise<OAuthAccessSnapshot>; startedAt: number; abort: AbortController; settled?: boolean; retirementDeferredLogged?: boolean }
 const tokenRefreshes = new Map<string, OAuthTokenRefreshFlight>();
 export class OAuthTokenRefreshBusyError extends Error {
   readonly code = "OAUTH_TOKEN_REFRESH_BUSY";
@@ -594,18 +594,25 @@ export function observeActiveOAuthAccessToken(
 function retireSettledOAuthRefreshFlight(key: string, flight: OAuthTokenRefreshFlight): boolean {
   if (!flight.settled) return false;
   const [provider, accountId] = key.split("\0");
+  const defer = (reason: "uncertain_intent" | "intent_changed" | "storage_failure"): false => {
+    if (!flight.retirementDeferredLogged) {
+      flight.retirementDeferredLogged = true;
+      logOAuthEvent("OAuth refresh flight retirement deferred", { provider: provider ?? "unknown", reason });
+    }
+    return false;
+  };
   try {
     if (provider && accountId && isAnthropicOAuthInstance(provider)) {
       const intent = readOAuthRefreshIntent(provider, accountId);
-      if (intent?.uncertain) return false;
+      if (intent?.uncertain) return defer("uncertain_intent");
       if (intent?.flightId === flight.flightId && !intent.staleOwner && !intent.cleanupPending) {
         const retired = flight.dispatched
           ? markOAuthRefreshIntentStaleOwner(provider, accountId, intent.generation, flight.flightId)
           : clearObservedAnthropicRefreshIntent(provider, accountId, intent);
-        if (!retired) return false;
+        if (!retired) return defer("intent_changed");
       }
     }
-  } catch { return false; }
+  } catch { return defer("storage_failure"); }
   if (tokenRefreshes.get(key) === flight) tokenRefreshes.delete(key);
   return true;
 }
