@@ -724,6 +724,41 @@ test("native openai-responses route carries prompt_cache_key + synthesized sessi
   }
 });
 
+test("non-canonical openai-responses Claude route keeps the caller's max_tokens cap", async () => {
+  let body: Record<string, unknown> | undefined;
+  const upstream = Bun.serve({
+    port: 0,
+    async fetch(req) {
+      body = await req.json() as Record<string, unknown>;
+      return new Response([
+        `event: response.output_text.delta\ndata: ${JSON.stringify({ delta: "Hello" })}\n\n`,
+        `event: response.completed\ndata: ${JSON.stringify({ response: { status: "completed", usage: { input_tokens: 10, output_tokens: 2 } } })}\n\n`,
+      ].join(""), { headers: { "Content-Type": "text/event-stream" } });
+    },
+  });
+  saveConfig({
+    port: 0,
+    defaultProvider: "gateway",
+    providers: {
+      gateway: { adapter: "openai-responses", baseUrl: `${upstream.url.toString().replace(/\/$/, "")}/v1`, apiKey: "k", allowPrivateNetwork: true },
+    },
+  } as OcxConfig);
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/messages", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "gateway/gpt-test", max_tokens: 128, messages: [{ role: "user", content: "hi" }] }),
+    });
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(body?.max_output_tokens).toBe(128);
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
 test("native openai-responses Claude route logs cyber terminals as 400 cyber_policy", async () => {
   clearRequestLogsForTests();
   const upstream = Bun.serve({

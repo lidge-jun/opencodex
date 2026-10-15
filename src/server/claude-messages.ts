@@ -1193,7 +1193,8 @@ async function handleClaudeMessagesWithBudget(
       clientEncoder = { protocol: "messages", stream, model: requestedModel, inputTokenFloor: claudeRequestTokenFloor() };
     }
     if (route.provider.adapter === "openai-responses") {
-      delete internalBody.max_output_tokens;
+      // max_output_tokens is the caller's spend cap: the adapter strips it only for the canonical
+      // ChatGPT backend that rejects it (#5753), so other Responses gateways keep the cap.
       delete internalBody.temperature;
       delete internalBody.top_p;
       delete internalBody.stop;
