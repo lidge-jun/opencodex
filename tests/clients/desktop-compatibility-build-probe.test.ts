@@ -47,3 +47,52 @@ test("a failed probe is closed and the next fresh query can recover", async () =
   expect(await probe.check()).toBe(false); expect(await probe.check()).toBe(true);
   await probe.close();
 });
+
+test("build assessment exposes only the last completed public package metadata", async () => {
+  let install: DesktopAppInstall | null = null, calls = 0;
+  const probe = createInstalledBuildProbe(async () => (++calls, install));
+  expect(probe.lastResult()).toBeNull();
+  install = installed("26.1007.9446.0");
+  expect(await probe.check()).toBe(false);
+  const unverified = probe.lastResult();
+  expect(unverified).toMatchObject({ assessedVersion: DESKTOP_COMPATIBILITY_ASSESSED_VERSION, observedVersion: "26.1007.9446.0", verified: false });
+  expect(unverified!.completedAt).toBeGreaterThan(0);
+  expect(JSON.stringify(unverified)).not.toContain("WindowsApps");
+  install = installed();
+  expect(await probe.check()).toBe(true);
+  expect(probe.lastResult()).toMatchObject({ observedVersion: DESKTOP_COMPATIBILITY_ASSESSED_VERSION, verified: true });
+  install = { ...installed(), root: "E:\elsewhere\not-a-package-name" };
+  expect(await probe.check()).toBe(false);
+  expect(probe.lastResult()!.observedVersion).toBeNull();
+  install = null;
+  expect(await probe.check()).toBe(false);
+  expect(probe.lastResult()!.observedVersion).toBeNull();
+  const settled = probe.lastResult()!;
+  expect(calls).toBe(4); await probe.close();
+  expect(probe.lastResult()).toEqual(settled);
+});
+
+test("an interrupted in-flight check preserves the last completed assessment", async () => {
+  let calls = 0, queryAborted = false, secondStarted!: () => void;
+  const started = new Promise<void>(resolve => { secondStarted = resolve; });
+  const probe = createInstalledBuildProbe(signal => { calls++; return calls === 1 ? Promise.resolve(installed())
+    : new Promise<DesktopAppInstall | null>(resolve => { secondStarted(); signal.addEventListener("abort", () => { queryAborted = true; resolve(installed("9.9.9.9")); }, { once: true }); }); });
+  expect(await probe.check()).toBe(true);
+  const pending = probe.check();
+  await started; expect(calls).toBe(2);
+  let settled = false; void pending.then(() => { settled = true; });
+  await Bun.sleep(0); expect(settled).toBe(false);
+  const closing = probe.close(); expect(queryAborted).toBe(true);
+  expect(await pending).toBe(false); await closing;
+  expect(probe.lastResult()!.verified).toBe(true);
+  expect(probe.lastResult()!.observedVersion).toBe(DESKTOP_COMPATIBILITY_ASSESSED_VERSION);
+});
+
+test("a completed probe failure reports unverified instead of retaining a stale verdict", async () => {
+  let calls = 0;
+  const probe = createInstalledBuildProbe(async () => (++calls === 1 ? installed() : Promise.reject(new Error("fixture failure"))));
+  expect(await probe.check()).toBe(true);
+  expect(await probe.check()).toBe(false);
+  expect(probe.lastResult()).toMatchObject({ observedVersion: null, verified: false });
+  await probe.close();
+});
