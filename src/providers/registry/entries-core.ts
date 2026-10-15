@@ -526,6 +526,8 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     dashboardPreset: true,
     note: "Import-first: reuses your installed and signed-in DeepSeek Harness Desktop account. Add account imports the grant from ~/.dsh/.credentials.yaml and verifies it with the DeepSeek platform.",
     dashboardUrl: "https://platform.deepseek.com",
+    // Static catalog: the account token never authorizes model discovery (src/oauth/model-discovery-auth.ts).
+    liveModels: false,
     defaultModel: DSH_ACCOUNT_DEFAULT_MODEL,
     models: [...DSH_ACCOUNT_MODELS],
     modelContextWindows: DSH_ACCOUNT_MODEL_CONTEXT_WINDOWS,

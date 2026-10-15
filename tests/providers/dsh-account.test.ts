@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getProviderRegistryEntry } from "../../src/providers/registry";
-import { deriveProviderPresets } from "../../src/providers/derive";
+import { deriveOAuthProviderConfig, deriveProviderPresets } from "../../src/providers/derive";
 import { OAUTH_PROVIDERS } from "../../src/oauth";
 import { fetchDshAccountQuota } from "../../src/providers/quota/dsh-account";
 import { AUTHORITATIVE_EMPTY_QUOTA, TERMINAL_QUOTA_FAILURE } from "../../src/providers/quota/report-cache";
@@ -20,6 +20,9 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { resolveAdapter, resolveWireProtocolOverride } from "../../src/server/adapter-resolve";
 import { modelAdapterRecordConfigError } from "../../src/config/provider-validation";
+import { mayResolveModelsOAuth } from "../../src/oauth/model-discovery-auth";
+import { resolveModelsAuthToken } from "../../src/oauth";
+import { fetchProviderModels } from "../../src/codex/catalog/provider-models";
 import { parseRequest } from "../../src/responses/parser";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
 
@@ -439,5 +442,62 @@ describe("dsh-account wire pin keeps the account token on the DSH adapter", () =
     } finally {
       await server.stop(true);
     }
+  });
+});
+
+describe("dsh-account token stays out of discovery and retires on a quota 401", () => {
+  const originalFetch = globalThis.fetch;
+  const originalHome = process.env.OPENCODEX_HOME;
+  let tmpHome: string;
+
+  beforeEach(() => {
+    tmpHome = mkdtempSync(join(tmpdir(), "ocx-dsh-discovery-home-"));
+    process.env.OPENCODEX_HOME = tmpHome;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    if (originalHome !== undefined) process.env.OPENCODEX_HOME = originalHome;
+    else delete process.env.OPENCODEX_HOME;
+    removeTreeWithRetry(tmpHome);
+  });
+
+  const seed = (access: string) => saveCredential("dsh-account", {
+    access, refresh: access, expires: Date.now() + 3_600_000, accountId: "dsh-quota-user", source: "credential-file",
+  });
+
+  test("an edited Cursor row cannot resolve the DSH token for model discovery", async () => {
+    await seed("dsh_discovery_token");
+    const edited: OcxProviderConfig = { adapter: "cursor", baseUrl: "https://evil.example", authMode: "oauth" };
+    const sends: string[] = [];
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
+      sends.push(input instanceof Request ? input.url : String(input));
+      return new Response("{}", { status: 200 });
+    }) as typeof fetch;
+    expect(mayResolveModelsOAuth("dsh-account", edited)).toBe(false);
+    expect(await resolveModelsAuthToken("dsh-account", edited)).toBeUndefined();
+    await fetchProviderModels("dsh-account", edited, 0);
+    expect(sends).toEqual([]);
+    expect(deriveOAuthProviderConfig("dsh-account")?.liveModels).toBe(false);
+  });
+
+  test("a quota 401 marks exactly the probed credential needsReauth", async () => {
+    await seed("dsh_quota_rejected");
+    const probed = getAccountSet("dsh-account")!.accounts[0]!;
+    globalThis.fetch = (async () => new Response("{}", { status: 401 })) as typeof fetch;
+    const result = await fetchDshAccountQuota("dsh-account", "dsh_quota_rejected", { accountId: probed.id, credential: probed.credential });
+    expect(result).toBe(TERMINAL_QUOTA_FAILURE);
+    expect(getAccountSet("dsh-account")!.accounts[0]!.needsReauth).toBe(true);
+  });
+
+  test("a quota 401 for a replaced credential leaves the re-imported one usable", async () => {
+    await seed("dsh_quota_old");
+    const stale = getAccountSet("dsh-account")!.accounts[0]!;
+    await seed("dsh_quota_reimported");
+    globalThis.fetch = (async () => new Response("{}", { status: 401 })) as typeof fetch;
+    await fetchDshAccountQuota("dsh-account", "dsh_quota_old", { accountId: stale.id, credential: stale.credential });
+    const current = getAccountSet("dsh-account")!.accounts[0]!;
+    expect(current.credential.access).toBe("dsh_quota_reimported");
+    expect(current.needsReauth).not.toBe(true);
   });
 });

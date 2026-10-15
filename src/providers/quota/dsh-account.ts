@@ -1,10 +1,19 @@
 import { DSH_PLATFORM_ORIGIN } from "../../oauth/dsh";
 import { asRecord, QUOTA_JSON_READ_FAILURE, readQuotaJson, REQUEST_TIMEOUT_MS } from "../quota-wire";
 import { AUTHORITATIVE_EMPTY_QUOTA, TERMINAL_QUOTA_FAILURE, type ProviderQuotaProbeResult } from "./report-cache";
+import { credentialGeneration, markAccountNeedsReauthIfGeneration } from "../../oauth/store";
+import type { OAuthCredentials } from "../../oauth/types";
+
+/** The stored account whose token is probed; a rejection retires exactly this credential generation. */
+export interface DshQuotaProbeOwner {
+  accountId: string;
+  credential: OAuthCredentials;
+}
 
 export async function fetchDshAccountQuota(
-  _provider: string,
+  provider: string,
   accessToken: string,
+  owner?: DshQuotaProbeOwner,
 ): Promise<ProviderQuotaProbeResult> {
   if (!accessToken || !accessToken.trim()) return null;
 
@@ -20,6 +29,12 @@ export async function fetchDshAccountQuota(
     });
 
     if (response.status === 401) {
+      // A DSH grant never refreshes, so the platform rejecting it retires this credential the same
+      // way an inference 401 does. Generation-checked: a re-import that landed meanwhile stays usable.
+      if (owner) {
+        await markAccountNeedsReauthIfGeneration(provider, owner.accountId, credentialGeneration(owner.credential))
+          .catch(() => false);
+      }
       return TERMINAL_QUOTA_FAILURE;
     }
     if (!response.ok) {
