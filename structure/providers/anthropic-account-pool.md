@@ -25,7 +25,9 @@ existing auth-store write lock. Display identities do not establish a duplicate.
 Refresh intent paths and credential-owner checks retain the actual instance.
 Pool 2 config publication rechecks the latest provider row under the config mutation
 lock; a collision preserves the custom row and reports any already-written orphan
-credential. No default-provider change accompanies that publication.
+credential. No default-provider change accompanies that publication. CLI preflight checks raw
+config ownership before tolerant loading and reports a custom-row collision or unreadable/malformed
+config through the fixed `configuration_error` reporter before prompting.
 
 Regression coverage: `tests/providers/provider-anthropic-instance.test.ts`,
 `tests/config/config-anthropic-instance-pool.test.ts`,

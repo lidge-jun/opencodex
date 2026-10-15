@@ -152,6 +152,15 @@ and `modelAutoCompactTokenLimits` can narrow its window and soft compaction budg
 `modelAutoCompactTokenLimits: { "gpt-6-astra": 700000 }` lowers the long-window default of 784,800.
 An explicit smaller provider cap or target limit still wins, including native-alias combos.
 
+Without a configured hard limit, the native catalog keeps the advertised `max_context_window`
+separate from the default `context_window` (for Astra, 872,000 versus 272,000). Compaction still
+uses the effective default window. To give one model 500,000 tokens and the others 300,000, set
+`providers.openai.contextWindow` to `300000` and
+`providers.openai.modelContextWindows` to `{ "gpt-6.1-sol": 500000 }`.
+The per-model value overrides the provider window; `providerContextCaps.openai`, when enabled,
+remains a ceiling for every native model and must be at least `500000` for this example.
+Each model's own capacity still bounds the result.
+
 The API row has 1,050,000 context, 922,000 maximum input, 128,000 maximum output, text/image input,
 and API reasoning efforts through `max`. OpenCodex's routed synthetic Ultra control retains its
 existing wire-effort mapping; it is not an additional API effort. There is no Astra `-pro` alias.
@@ -1150,7 +1159,7 @@ second account.
 | `oauthAccountFailover.enabled?` | `boolean` | presence-driven | Global override for the **pre-dispatch account preference** only. `false` stops a healthy request being steered toward the account with more known headroom. It does **not** disable 429 rotation. |
 | `providers.<name>.oauthAccountFailover.enabled?` | `boolean` | inherits | Per-provider override for the same preference; beats the global setting in either direction. `false` declines the preference for this provider even when the global setting is `true`, and `true` opts this provider in even when the global setting is `false`. Reactive 429 rotation is unaffected either way. |
 | `providers.<name>.oauthAccountFailover.sessionAffinity?` | `"conversation" \| "none"` | `"none"` | Opt-in conversation pinning for generic OAuth pools. Requires proactive `enabled: true` (provider or inherited global value). Existing sessions keep their account ahead of the new-session strategy until it becomes unavailable. |
-| `providers.<name>.oauthAccountFailover.strategy?` | `"quota" \| "round-robin" \| "fill-first" \| "least-loaded"` (Kiro only) | — | Kiro's `least-loaded` picks the eligible account with the fewest in-flight requests, using account order for ties. It requires `pool.kernel` and proactive preference; other strategies retain their existing rules. |
+| `providers.<name>.oauthAccountFailover.strategy?` | `"quota" \| "round-robin" \| "fill-first" \| "reset-first" \| "least-loaded"` (Kiro only) | — | Kiro's `least-loaded` picks the eligible account with the fewest in-flight requests, using account order for ties. It requires `pool.kernel` and proactive preference; other strategies retain their existing rules. `reset-first` also requires `pool.kernel`: among eligible accounts that are not exhausted, the first attempt (while the proactive preference is on) and a 429 rotation both prefer the account whose quota resets soonest (the weekly window when one is reported, otherwise the 5-hour window), with more headroom breaking ties. Exhausted accounts go last. Without quota evidence, or when a passive provider has evidence for only some accounts, it falls back to headroom order. The Anthropic pool does not accept it. |
 | `providers.kiro.oauthAccountFailover.maxConcurrentPerAccount?` | integer 1–100 | unlimited | A process-local per-account queue holds a slot through response completion or cancellation. A full selected account waits at most 250 ms, then returns 503 `account_capacity` with `Retry-After: 1`. The cap does not move the request to another account. |
 | `providers.<name>.oauthAccountFailover.autoSwitchThreshold?` | `number` | `80` | 0–100 usage percent at which `fill-first` advances off the active account (#695). Set with `ocx account auto-switch <provider> threshold <n>`. Read only under `pool.kernel` with `strategy: "fill-first"`; an account with no measured usage counts as under the threshold. |
 | `providers.<name>.oauthAccountFailover.stickyLimit?` | `number` | `1` | Successful dispatches retained on one `round-robin` selection, 1–100 (#695). Read only under `pool.kernel` with `strategy: "round-robin"`. |
@@ -1811,3 +1820,23 @@ raised output allowance would exceed that ceiling.
   }
 }
 ```
+
+### Native Chat thinking replay
+
+These Chat reasoning lists also apply to native `/v1/chat/completions` tool-call continuation.
+The proxy preserves supplied `reasoning_content` and restores omitted reasoning from upstream
+JSON or SSE responses using tool-call ids. Original reasoning replay requires a stable
+`thread-id`, `session_id`, or `session-id` header on each request and the same provider, endpoint,
+model and credential. The cache is process-local and bounded; a restart, expiry, eviction, or
+missing conversation header uses the configured minimal placeholder instead. A placeholder
+cannot reconstruct lost reasoning. Clients should retain upstream `reasoning_content` in their
+assistant history for reliable resumed conversations.
+
+When `preserveReasoningContentModels` is unset, DeepSeek Flash/Pro model names are recognized
+across versions, including `deepseek-v4.1-flash`, namespaced ids and gateway suffixes. Explicit
+lists remain authoritative: `preserveReasoningContentModels: []` disables automatic repair,
+while `requiresReasoningPlaceholderModels: []` disables placeholders and still allows cached
+original reasoning. Other model families require the preserve declaration.
+Tool-enabled DeepSeek requests also require reasoning on earlier assistant answers without tool
+calls. The configured placeholder fills these omissions; no original reasoning can be recovered
+from the tool-call cache for those turns. Preserve their supplied reasoning for full fidelity.

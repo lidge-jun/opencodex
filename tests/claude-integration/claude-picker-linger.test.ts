@@ -43,20 +43,22 @@ async function refusalWithEndlessUpload() {
   const replied = Promise.withResolvers<void>();
   const ended = Promise.withResolvers<void>();
   const closed = Promise.withResolvers<void>();
+  const pumped = Promise.withResolvers<void>();
   let isClosed = false;
   socket.on("data", chunk => {
     received.push(Buffer.from(chunk));
     if (Buffer.concat(received).includes("\r\n\r\n")) replied.resolve();
   });
   socket.once("end", () => ended.resolve());
-  socket.once("close", () => { isClosed = true; closed.resolve(); });
+  // Close also ends the pump: Bun drops a TLS write callback still pending when the peer resets
+  // the socket (the drop below does exactly that), so waiting on the callback alone can hang.
+  socket.once("close", () => { isClosed = true; closed.resolve(); pumped.resolve(); });
   await new Promise<void>(resolve => socket.once("secureConnect", () => resolve()));
   // An unrelayable target is refused with 400 while 32 MiB are still advertised.
   socket.write("POST //[ HTTP/1.1\r\nHost: claude.ai\r\nContent-Length: 33554432\r\n\r\n");
   const chunk = Buffer.alloc(1024, 0x61);
   let sent = 0;
   let pumping = true;
-  const pumped = Promise.withResolvers<void>();
   /** Writes chunks one after another, each after the previous one was flushed, until stopped. */
   const pump = () => {
     if (!pumping || isClosed || socket.destroyed) { pumped.resolve(); return; }

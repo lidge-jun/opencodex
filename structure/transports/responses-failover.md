@@ -245,7 +245,7 @@ the failure on the current target.
 
 `src/server/responses/run-turn-execution.ts` handles a structured pre-output 401 for `isOAuth401ReplayProvider` runTurn routes with one generation-fenced forced refresh and an `auth-recovery` hop. A terminal refresh may admit a surviving account; otherwise the client gets the login instruction. Devin quota `permission_denied` (429) and plain permission denial (403) do not trigger this path.
 An `oauth`-source Devin key rejected with 401 needs reauthentication because Cognition has no refresh endpoint. A `local-cli` slot with a stored account ID or email can adopt a changed CLI key after host and bounded identity validation; [OAuth/Devin ownership](../providers-and-adapters.md) defines the locked store check across aliases. An identity-less CLI import instead needs an explicit `ocx login devin` after rotation. Unreadable files and transient probes leave the account unflagged. A pause during refresh returns 403 without retry, reauth, or replacing the stored key. Kiro's terminal alternate requires `OAuthLoginRequiredError`; transient refresh failures do not enter it.
-Tests: `tests/responses/responses-devin-401-replay.test.ts` and `tests/server/server-kiro-refusal-e2e.test.ts`.
+Forced-refresh capacity exhaustion on adapter, passthrough and runTurn paths is a local retryable refusal: before response commitment it returns 503 with Retry-After: 1, and cancellation from either the request signal or the option signal wins with 499. The runTurn controller links and cleans up both signals. It does not rotate an account or require login. A runTurn readiness heartbeat that already committed SSE leaves HTTP 200 in place but emits a retryable server-error capacity event without the rejected credential's authentication code. Tests: `tests/responses/responses-devin-401-replay.test.ts`, `tests/responses/responses-oauth-refresh-capacity.test.ts` and `tests/server/server-kiro-refusal-e2e.test.ts`.
 
 ## Optional client transport hints
 
@@ -500,8 +500,8 @@ output actually share. When the caller declared `max_output_tokens`,
 `checkComboTargetInputAdmission` requires both `estimated input <= ceiling` and
 `estimated input + min(declared output, target output ceiling) <= window`, so the output reserve
 is counted once rather than charged twice against an already-tightened input budget.
-Both direct and combo estimates omit replayed assistant thinking for `openai-chat` models outside
-`preserveReasoningContentModels`, matching the adapter's wire omission; other targets still count it.
+Both direct and combo estimates use the Chat adapter's effective thinking replay policy (explicit
+preserve lists, or DeepSeek Flash/Pro detection when unset), omitting thinking only when that wire omits it.
 
 The refusal is local: HTTP 413 `input_admission_refused` before any upstream bytes are sent, which
 existing combo policy already treats as a safe hop. That ordering is the whole point. A target whose

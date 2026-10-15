@@ -30,6 +30,7 @@ import {
 } from "../../oauth/anthropic-routing";
 import {
   OAuthAccountPausedError,
+  OAuthTokenRefreshBusyError,
   getValidAccessSnapshotForAccount,
   forceRefreshOAuthAccessSnapshot,
   getValidAccessTokenSnapshot,
@@ -179,6 +180,7 @@ export async function prepareResponsesTransport(
     || route.providerName === "orcarouter-oauth"
     // runTurn transport: the replay runs on the first-event preflight in run-turn-execution.
     || route.providerName === "devin"
+    || route.providerName === "dsh-account"
   ) && route.provider.authMode === "oauth";
   let sentOAuthSnapshot: OAuthAccessSnapshot | undefined;
   // One inference-401 replay belongs to this request, even when Auto changes exchange wire.
@@ -1002,6 +1004,10 @@ export async function prepareResponsesTransport(
           "invalid_request_error",
           `${redactSecretString(err.message)}. Remove or reconfigure provider '${safeProviderName}' in the OpenCodex configuration.`,
         );
+      }
+      if (err instanceof OAuthTokenRefreshBusyError) {
+        return options.abortSignal?.aborted || req.signal.aborted ? clientCancelledResponse()
+          : formatErrorResponse(503, "server_error", err.message, { retryAfter: "1" });
       }
       if (err instanceof OAuthAccountPausedError) {
         return formatErrorResponse(403, "permission_error", publicOAuthAuthenticationErrorMessage(err));

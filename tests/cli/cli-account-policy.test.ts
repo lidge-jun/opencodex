@@ -218,6 +218,14 @@ describe("pool field masks and actual policy projection", () => {
     expect(f.calls[1]!.body).toEqual({ provider: "anthropic", enabled: false, autoSwitchThreshold: 0 });
     expect(result()).toMatchObject({ enabled: false, enabledEffective: false, autoSwitchThreshold: 0 });
   });
+  test("a generic pool accepts reset-first and sends it unchanged", async () => {
+    const config: OcxConfig = { port: 10100, defaultProvider: "google-antigravity", providers: { "google-antigravity": { adapter: "google", baseUrl: "https://example.test" } } };
+    const dto = unifiedPoolSettingsDto(config, "google-antigravity", "generic");
+    const f = fixture(c => c.method === "GET" ? dto : { ...dto, ...c.body });
+    expect(await policy("pool", ["google-antigravity", "--strategy", "reset-first", "--json"], f.deps)).toBe(0);
+    expect(f.calls[1]!.body).toEqual({ provider: "google-antigravity", strategy: "reset-first" });
+    expect(result()).toMatchObject({ kind: "generic", strategy: "reset-first" });
+  });
   test("Codex enabled rejects even dishonest supported field list", async () => {
     const dto = unifiedPoolSettingsDto({ port: 10100, providers: {}, defaultProvider: "openai" }, "openai", "codex");
     const f = fixture(() => ({ ...dto, supported: [...dto.supported, "enabled"] }));

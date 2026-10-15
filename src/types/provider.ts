@@ -728,7 +728,7 @@ export interface OcxProviderConfig {
      * contract. Consumed by the selector only while `pool.kernel` is on; with the flag off
      * it is still merely persisted, so omitted and set behave the same.
      */
-    strategy?: "quota" | "round-robin" | "fill-first" | "least-loaded";
+    strategy?: "quota" | "round-robin" | "fill-first" | "reset-first" | "least-loaded";
     /**
      * 0-100 usage percent at which fill-first advances off the active account (#695).
      * Read only under `pool.kernel` with `strategy: "fill-first"`; 80 when unset, matching

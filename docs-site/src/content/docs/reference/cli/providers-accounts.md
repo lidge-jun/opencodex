@@ -218,6 +218,13 @@ as OrcaRouter are reused until the provider revokes them); API-key login provide
 key, validate it when possible, and save the resulting provider config. The command prints the
 currently accepted OAuth and API-key provider ids when the name is missing or unknown.
 
+Failed OAuth logins exit with status 1 and print a fixed diagnostic: the HTTP status and standard
+OAuth error code (such as `invalid_grant`) when the provider returned one, `network_error` or
+`timeout` when the provider could not be reached, `configuration_error` with the reason when a
+local setting such as a Codex account namespace blocks the login, and `oauth_authentication_failed`
+otherwise. Pool 2 (`anthropic2`) also reports `configuration_error` before prompting when a custom
+provider owns that name or its config file cannot be read or parsed.
+
 Use the same command to **reauthenticate** after `ocx status` / `ocx doctor` reports
 reauthentication required or a terminal refresh failure (or use Reauthenticate in the dashboard).
 Codex pool accounts are not one of those OAuth or API-key providers, but `ocx login codex` reaches
@@ -238,7 +245,17 @@ ocx login xai
 ocx login anthropic
 ocx login orcarouter-oauth # browser consent + S256 PKCE
 ocx login orcarouter       # paste an existing API key
+ocx login anthropic --headless # no browser, no local port
 ```
+
+`--headless` runs the **code-display** login for hosts whose browser cannot reach the proxy's loopback
+callback (containers, remote servers). The command prints an authorization URL; approve it in any
+browser, and the provider shows a `code#state` string to paste back at the prompt. No callback port
+is bound and no browser is launched. Only `anthropic` and `anthropic2` support it today; any other provider exits
+with the list of providers that do. For Codex accounts use the device-code login instead,
+`ocx account login codex --device` — `ocx login codex --headless` is refused rather than passed on.
+The paste window is 10 minutes, and each login accepts one code: if the exchange fails, start a new login. A successful login becomes the provider's active account, exactly
+like a browser login.
 
 OAuth reauthentication preserves operator settings such as model selections, pricing overrides,
 and account failover preferences. Login-owned transport/authentication fields and registry-owned
@@ -302,7 +319,7 @@ Only fields named by `supported` may be written; null is not false, and an inert
 policy is not active pooling. Threshold zero and `enabled:false` are independent.
 Use `--enabled on|off`, `--threshold 0..100`, `--strategy`, `--sticky 1..100`, and
 `--quota-window` only where supported. OpenAI does not support pool enabled/window
-writes; `reset-first` is OpenAI-only, `least-loaded` Kiro-only, and Anthropic windows
+writes; `reset-first` is for OpenAI and generic OAuth pools (never Anthropic), `least-loaded` Kiro-only, and Anthropic windows
 are `five-hour`, `weekly`, `max-utilization`. Omitted fields stay unchanged.
 Read DTO fields such as routes, per-account concurrency or Anthropic `nativeMessages`
 do not imply a setter in this command; use only the listed CLI options. A save that
