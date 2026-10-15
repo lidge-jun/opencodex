@@ -47,7 +47,7 @@ import {
   REPLAY_REFUSED_STATUS,
   UPSTREAM_RESET_REPLAY_REFUSED_CODE,
 } from "../lib/upstream-retry";
-import { recognizedUpstreamError, UNDECLARED_TOOL_CALL_ERROR_CODE } from "../lib/errors";
+import { isClientClosedMessage, recognizedUpstreamError, UNDECLARED_TOOL_CALL_ERROR_CODE } from "../lib/errors";
 import { resolveClientRetryAfter } from "../lib/retry-after";
 import { anthropicRateLimitHeaders } from "./anthropic-rate-limit-headers";
 import { upstreamMessagesRequestIdHeaders } from "./messages-response-headers";
@@ -1561,12 +1561,15 @@ async function handleClaudeMessagesWithBudget(
       );
     }
     // A declared client refusal keeps its 4xx: as a 502 Claude Code retries a verdict that cannot
-    // change. Server classes and rate limits keep the 502 this path has always answered.
+    // change. Server classes and rate limits keep the 502 this path has always answered. A 400
+    // worded as a client close answers the 499 httpStatusFromTerminalError logs for it.
     const refusalStatus = recognizedUpstreamError(translatedError ?? {})?.httpStatus;
     return new Response(JSON.stringify(message), {
       status: isError
         ? translatedError?.code === "context_length_exceeded" ? 400
-          : refusalStatus !== undefined && refusalStatus < 429 ? refusalStatus : 502
+          : refusalStatus !== undefined && refusalStatus < 429
+            ? refusalStatus === 400 && isClientClosedMessage(String(translatedError?.message ?? "")) ? 499 : refusalStatus
+            : 502
         : 200,
       headers: { "Content-Type": "application/json" },
     });

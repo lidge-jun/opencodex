@@ -32,10 +32,14 @@ afterEach(() => {
   if (testDir) removeTreeWithRetry(testDir);
 });
 
-async function send(errorType: string, stream: boolean): Promise<{ status: number; calls: number; text: string }> {
+async function send(
+  errorType: string,
+  stream: boolean,
+  message = `upstream says ${errorType}`,
+): Promise<{ status: number; calls: number; text: string }> {
   let calls = 0;
   const frames = 'data: {"type":"response.in_progress"}\n\n'
-    + `data: ${JSON.stringify({ type: "error", error: { type: errorType, message: `upstream says ${errorType}` } })}\n\n`;
+    + `data: ${JSON.stringify({ type: "error", error: { type: errorType, message } })}\n\n`;
   const upstream = Bun.serve({
     port: 0,
     fetch() {
@@ -95,6 +99,12 @@ test.each(["invalid_request_error", "permission_error"])(
 test("server-class overload keeps the 502 it had", async () => {
   const result = await send("overloaded_error", false);
   expect(result.status).toBe(502);
+}, 15_000);
+
+test("non-streaming: an invalid_request_error worded as a client close answers 499, as it is logged", async () => {
+  const result = await send("invalid_request_error", false, "client closed request during web-search");
+  expect(result.status).toBe(499);
+  expect((await send("permission_error", false, "client closed request")).status).toBe(403);
 }, 15_000);
 
 test("a codeless invalid_request_error worded as a client close stays 499", () => {
