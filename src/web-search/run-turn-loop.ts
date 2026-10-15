@@ -124,7 +124,12 @@ function extractIterationContent(events: AdapterEvent[]): OcxAssistantContentPar
     rawReasoning = "";
   };
   for (const e of events) {
-    if (e.type === "thinking_delta") {
+    if (e.type === "text_delta" && e.anthropicThinkingSignature) {
+      flushText();
+      flushVisible();
+      flushRaw();
+      parts.push({ type: "thinking", thinking: e.text, signature: e.anthropicThinkingSignature });
+    } else if (e.type === "thinking_delta") {
       flushText();
       flushRaw();
       thinking += e.thinking;

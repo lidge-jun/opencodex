@@ -146,3 +146,27 @@ describe("issue #950 — image-bridge synthetic tool round (raw reasoning)", () 
     expect(seenAssistants[0]!.find(p => p.type === "thinking")).toMatchObject({ thinking: REASONING });
   });
 });
+
+
+test("signed progress preceding image generation remains thinking on the internal replay", async () => {
+  let replay: unknown;
+  const adapter: ProviderAdapter = { ...mockAdapter, buildRequest: async parsed => {
+    replay = parsed.context.messages.find(m => m.role === "assistant")?.content;
+    return { url: "https://test/v1/chat", method: "POST", headers: {}, body: "{}" };
+  } };
+  streamQueue = [[
+    { type: "thinking_delta", thinking: "" },
+    { type: "thinking_signature", signature: "ReasoningSignature123456==" },
+    { type: "text_delta", text: "Creating the requested image.", phase: "commentary", anthropicThinkingSignature: "ProgressSignature123456==" },
+    { type: "tool_call_start", id: "call_progress", name: "image_gen" },
+    { type: "tool_call_delta", arguments: '{"prompt":"a cat"}' },
+    { type: "tool_call_end" }, { type: "done" },
+  ], [{ type: "text_delta", text: "ready" }, { type: "done" }]];
+  const response = await runWithImageBridge({ parsed: makeParsed(), adapter, plan: imagePlan, maxRounds: 1 });
+  await response.text();
+  expect(replay).toEqual([
+    { type: "thinking", thinking: "", signature: "ReasoningSignature123456==" },
+    { type: "thinking", thinking: "Creating the requested image.", signature: "ProgressSignature123456==" },
+    expect.objectContaining({ type: "toolCall", id: "call_progress" }),
+  ]);
+});

@@ -64,6 +64,17 @@ Shipped v1 configs migrate automatically to marker 2 and one option-aware row. T
 is retained once at `~/.opencodex/config.json.pre-openai-tiers-v2.bak`; restore it with
 `cp ~/.opencodex/config.json.pre-openai-tiers-v2.bak ~/.opencodex/config.json`.
 
+## Claude Opus 5.5 progress updates
+
+When the `anthropic` adapter sends Claude Opus 5.5 to `api.anthropic.com` (OAuth or API key),
+OpenCodex requests Anthropic's [progress-update display mode](https://platform.claude.com/docs/en/build-with-claude/thinking#progress-updates).
+Progress updates and mid-turn acknowledgements appear as visible assistant commentary in Codex,
+even when thinking summaries are hidden. Reasoning summaries are omitted in this mode because
+Anthropic cannot distinguish progress updates from reasoning under `display: "summarized"`.
+The original signed thinking blocks are preserved for tool continuation; no signature is decoded
+or rewritten. Updates appear once their signed block completes. Other models and compatible
+third-party endpoints retain their existing thinking display behavior.
+
 ## Anthropic image input
 
 The built-in Claude model seeds advertise text and image input for both `anthropic` (OAuth) and

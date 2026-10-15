@@ -278,3 +278,9 @@ Dashboard Fast-row persistence and client refresh follow the [Fast selector rows
 The [compaction routing override](responses-failover.md#compaction-routing-overrides) changes model and effort scalars on the already-read request body, before parsing, within the existing body-reader budget.
 
 `src/lib/sse-decoder.ts` recognizes CR, LF and CRLF line endings, including CRLF split between fetch chunks. Delimiters are consumed before field retention; event/comment ordering, EOF dispatch and translator-budget release remain shared across all three forms. The delimiter search keeps native `indexOf` cursors for the next CR and LF in each decoded chunk, so scanning stays linear for every framing.
+
+The Opus 5.5 progress normalizer in `src/adapters/anthropic-progress.ts` reserves its one-block
+thinking/signature buffer before concatenation, replaces signatures rather than appending, and
+releases reservations on completion, overflow and cancellation. Buffered response transformation
+charges each replacement event while its source batch remains retained; the bridge then owns
+the signed envelope and visible commentary pair through its existing output accounting.

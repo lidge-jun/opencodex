@@ -401,7 +401,9 @@ export interface OcxProviderContinuationState {
 
 export type AdapterEvent =
   | { type: "heartbeat"; replayUnsafe?: true; preflightReady?: true }
-  | { type: "text_delta"; text: string; phase?: OcxMessagePhase }
+  | { type: "text_delta"; text: string; phase?: OcxMessagePhase;
+      /** Complete documented Anthropic progress block: text remains signed thinking on replay. */
+      anthropicThinkingSignature?: string }
   | { type: "thinking_delta"; thinking: string }
   // Anthropic extended-thinking round-trip: signature_delta for the current thinking block, and
   // opaque redacted_thinking blocks. Both must be replayed verbatim or tool-use turns 400.

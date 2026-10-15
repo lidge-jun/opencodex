@@ -1,3 +1,4 @@
+import { anthropicProgressEnvelope, isAnthropicProgressMirror } from "./anthropic-progress";
 import type {
   OcxAssistantMessage,
   OcxContentPart,
@@ -239,6 +240,7 @@ export function parseRequest(
   } else if (data.input) {
     for (let inputIndex = 0; inputIndex < data.input.length; inputIndex++) {
       const item = data.input[inputIndex];
+      if (inputIndex > 0 && isAnthropicProgressMirror(item, anthropicProgressEnvelope(data.input[inputIndex - 1]))) continue;
       const effectiveType = (item as { type?: string }).type ?? ("role" in item ? "message" : undefined);
       const itemRole = (item as { role?: string }).role;
       const externalTaskInput = effectiveType === "function_call_output" ? externalTaskInputContent(item) : undefined;

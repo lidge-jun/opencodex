@@ -1,6 +1,6 @@
+import { assistantReplayContent } from "../../responses/assistant-replay";
 import type {
   AdapterEvent,
-  OcxAssistantContentPart,
   OcxAssistantMessage,
   OcxParsedRequest,
   OcxUsage,
@@ -121,21 +121,7 @@ export function analyzeTerminalTurn(parsed: OcxParsedRequest, events: readonly A
 }
 
 function assistantMessageFromEvents(events: readonly AdapterEvent[], timestamp: number): OcxAssistantMessage | undefined {
-  let text = "";
-  let thinking = "";
-  let signature: string | undefined;
-  const redacted: string[] = [];
-  for (const event of events) {
-    if (event.type === "text_delta") text += event.text;
-    else if (event.type === "thinking_delta") thinking += event.thinking;
-    else if (event.type === "thinking_signature") signature = event.signature;
-    else if (event.type === "redacted_thinking") redacted.push(event.data);
-  }
-  const content: OcxAssistantContentPart[] = [];
-  if (thinking || signature || redacted.length > 0) {
-    content.push({ type: "thinking", thinking, ...(signature ? { signature } : {}), ...(redacted.length > 0 ? { redacted } : {}) });
-  }
-  if (text) content.push({ type: "text", text });
+  const content = assistantReplayContent(events);
   if (content.length === 0) return undefined;
   return { role: "assistant", content, timestamp };
 }

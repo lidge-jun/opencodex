@@ -6,7 +6,7 @@ With a valid delay, `src/bridge/internal.ts` maps typed HTTP 429 `rate_limit_err
 `resource_exhausted`, `rate_limit_exceeded`, and `slow_down` to `rate_limit_exceeded`.
 `src/lib/retry-delay.ts` formats typed and message-only rate-limit advice with the longest
 lower bound first; competing original hints are retained under an explicit provider-detail label.
-Other explicit verdicts, proxy replay budgets and event ordering are unchanged. This creates
+Other explicit verdicts, proxy replay budgets and event ordering are unchanged. Signed Anthropic progress follows the [progress-update contract](../providers/anthropic-progress.md). This creates
 no reasoning/history item; client retry policy, Grok HTTP status and combo preflight stay intact.
 
 ## Compaction image input

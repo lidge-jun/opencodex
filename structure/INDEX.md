@@ -62,6 +62,7 @@ Per-vendor contracts and the adapter authority that constructs them.
 
 | Doc | Scope |
 | --- | --- |
+| [`providers/anthropic-progress.md`](providers/anthropic-progress.md) | Opus 5.5 progress display, visible commentary, and exact signed-block replay. |
 | [`providers/anthropic-account-thresholds.md`](providers/anthropic-account-thresholds.md) | Account-owned usage thresholds, inheritance, routing boundaries and durable policy changes. |
 | [`providers-and-adapters.md`](providers-and-adapters.md) | Provider and adapter selection, the adapter inventory, live model discovery, and the hosted-search continuation bridge. |
 | [`providers/jev-decision.md`](providers/jev-decision.md) | JEV Combo decision methods (TypeSafe, self-hosted System One rows, opencodex models), the decision request path, dashboard surfaces, and the content-free statistics projection. |
@@ -140,13 +141,13 @@ A source area can be described by more than one doc, because these docs are orga
 | `scripts/` | [`overview.md`](overview.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `scripts/generate-ocx-skill-surface.ts` | [`cli-management.md`](cli-management.md) |
 | `skills/ocx/` | [`cli-management.md`](cli-management.md) |
-| `src/adapters/` | [`runtime.md`](runtime.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`data-planes/inbound-compat.md`](data-planes/inbound-compat.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/cursor.md`](providers/cursor.md)<br>[`providers/chat-compat.md`](providers/chat-compat.md)<br>[`adapters/registry.md`](adapters/registry.md) |
+| `src/adapters/` | [`runtime.md`](runtime.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`data-planes/inbound-compat.md`](data-planes/inbound-compat.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/cursor.md`](providers/cursor.md)<br>[`providers/chat-compat.md`](providers/chat-compat.md)<br>[`adapters/registry.md`](adapters/registry.md) |
 | `src/advisor/` | [`advisor.md`](advisor.md) |
 | `src/bridge.ts` | [`transports/responses.md`](transports/responses.md) |
-| `src/bridge/` | [`transports/responses.md`](transports/responses.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md) |
+| `src/bridge/` | [`transports/responses.md`](transports/responses.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md) |
 | `src/chat/` | [`runtime.md`](runtime.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`data-planes/inbound-compat.md`](data-planes/inbound-compat.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/chat-compat.md`](providers/chat-compat.md) |
 | `src/chatgpt/` | [`clients/chatgpt-desktop.md`](clients/chatgpt-desktop.md) |
-| `src/claude/` | [`runtime.md`](runtime.md)<br>[`clients/claude-desktop.md`](clients/claude-desktop.md)<br>[`clients/claude-desktop-config-reads.md`](clients/claude-desktop-config-reads.md) |
+| `src/claude/` | [`runtime.md`](runtime.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md)<br>[`clients/claude-desktop.md`](clients/claude-desktop.md)<br>[`clients/claude-desktop-config-reads.md`](clients/claude-desktop-config-reads.md) |
 | `src/cli.ts` | [`runtime.md`](runtime.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `src/cli/` | [`runtime.md`](runtime.md)<br>[`config.md`](config.md)<br>[`local-messaging.md`](local-messaging.md)<br>[`cli-management.md`](cli-management.md)<br>[`clients/integrations.md`](clients/integrations.md)<br>[`clients/codex-desktop.md`](clients/codex-desktop.md)<br>[`clients/chatgpt-desktop.md`](clients/chatgpt-desktop.md)<br>[`clients/claude-desktop.md`](clients/claude-desktop.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `src/client/` | [`runtime.md`](runtime.md)<br>[`clients/claude-desktop.md`](clients/claude-desktop.md) |
@@ -167,7 +168,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/generated/` | [`runtime.md`](runtime.md) |
 | `src/github/` | [`runtime.md`](runtime.md) |
 | `src/grok/` | [`runtime.md`](runtime.md) |
-| `src/images/` | [`runtime.md`](runtime.md)<br>[`transports/inventory.md`](transports/inventory.md) |
+| `src/images/` | [`runtime.md`](runtime.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md) |
 | `src/index.ts` | [`runtime.md`](runtime.md) |
 | `src/integrations/` | [`clients/integrations.md`](clients/integrations.md)<br>[`clients/qoder.md`](clients/qoder.md) |
 | `src/lab/` | [`runtime.md`](runtime.md)<br>[`adapters/compatibility-lab.md`](adapters/compatibility-lab.md) |
@@ -190,11 +191,11 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/reasoning-effort.ts` | [`runtime.md`](runtime.md) |
 | `src/remote-control/` | [`remote-workspace.md`](remote-workspace.md) |
 | `src/remote/` | [`runtime.md`](runtime.md) |
-| `src/responses/` | [`runtime.md`](runtime.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/responses.md`](transports/responses.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/kiro.md`](providers/kiro.md)<br>[`providers/xai-grok.md`](providers/xai-grok.md)<br>[`providers/chat-compat.md`](providers/chat-compat.md) |
+| `src/responses/` | [`runtime.md`](runtime.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/responses.md`](transports/responses.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/kiro.md`](providers/kiro.md)<br>[`providers/xai-grok.md`](providers/xai-grok.md)<br>[`providers/chat-compat.md`](providers/chat-compat.md) |
 | `src/router.ts` | [`runtime.md`](runtime.md) |
 | `src/routing/` | [`catalog.md`](catalog.md) |
 | `src/routing/history/` | [`dashboard-and-usage.md`](dashboard-and-usage.md) |
-| `src/server/` | [`runtime.md`](runtime.md)<br>[`codex-prompts.md`](codex-prompts.md)<br>[`catalog.md`](catalog.md)<br>[`subagents.md`](subagents.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/responses.md`](transports/responses.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`transports/responses-failover.md`](transports/responses-failover.md)<br>[`transports/policy-fallback.md`](transports/policy-fallback.md)<br>[`transports/streaming-health.md`](transports/streaming-health.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`data-planes/images.md`](data-planes/images.md)<br>[`data-planes/inbound-compat.md`](data-planes/inbound-compat.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/jev-decision.md`](providers/jev-decision.md)<br>[`providers/xai-grok.md`](providers/xai-grok.md)<br>[`adapters/registry.md`](adapters/registry.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`dashboard-and-usage.md`](dashboard-and-usage.md)<br>[`clients/claude-desktop.md`](clients/claude-desktop.md)<br>[`ops/service-and-sidecars.md`](ops/service-and-sidecars.md) |
+| `src/server/` | [`runtime.md`](runtime.md)<br>[`codex-prompts.md`](codex-prompts.md)<br>[`catalog.md`](catalog.md)<br>[`subagents.md`](subagents.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/responses.md`](transports/responses.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`transports/responses-failover.md`](transports/responses-failover.md)<br>[`transports/policy-fallback.md`](transports/policy-fallback.md)<br>[`transports/streaming-health.md`](transports/streaming-health.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`data-planes/images.md`](data-planes/images.md)<br>[`data-planes/inbound-compat.md`](data-planes/inbound-compat.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/jev-decision.md`](providers/jev-decision.md)<br>[`providers/xai-grok.md`](providers/xai-grok.md)<br>[`adapters/registry.md`](adapters/registry.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`dashboard-and-usage.md`](dashboard-and-usage.md)<br>[`clients/claude-desktop.md`](clients/claude-desktop.md)<br>[`ops/service-and-sidecars.md`](ops/service-and-sidecars.md) |
 | `src/server/gui-pair-delivery.ts` | [`remote-link.md`](remote-link.md) |
 | `src/server/index.ts` | [`adapters/compatibility-lab.md`](adapters/compatibility-lab.md) |
 | `src/server/management/anthropic-pool-settings.ts` | [`providers/anthropic-account-pool.md`](providers/anthropic-account-pool.md) |
@@ -217,7 +218,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/storage/` | [`runtime.md`](runtime.md) |
 | `src/tray/` | [`runtime.md`](runtime.md) |
 | `src/types.ts` | [`runtime.md`](runtime.md)<br>[`config.md`](config.md) |
-| `src/types/` | [`providers-and-adapters.md`](providers-and-adapters.md) |
+| `src/types/` | [`providers/anthropic-progress.md`](providers/anthropic-progress.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md) |
 | `src/update/` | [`runtime.md`](runtime.md)<br>[`ops/service-and-sidecars.md`](ops/service-and-sidecars.md) |
 | `src/update/job-supervised-restart.ts` | [`ops/update-supervised-recovery.md`](ops/update-supervised-recovery.md) |
 | `src/update/job.ts` | [`ops/update-supervised-recovery.md`](ops/update-supervised-recovery.md) |
@@ -225,7 +226,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/usage/` | [`runtime.md`](runtime.md)<br>[`providers/jev-decision.md`](providers/jev-decision.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`dashboard-and-usage.md`](dashboard-and-usage.md)<br>[`companion.md`](companion.md) |
 | `src/usage/timeline.ts` | [`gui-and-management-api.md`](gui-and-management-api.md) |
 | `src/vision/` | [`runtime.md`](runtime.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md) |
-| `src/web-search/` | [`runtime.md`](runtime.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md) |
+| `src/web-search/` | [`runtime.md`](runtime.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md) |
 | `tests/` | [`ops/test-sandbox-cleanup.md`](ops/test-sandbox-cleanup.md) |
 
 ### Not described by any doc

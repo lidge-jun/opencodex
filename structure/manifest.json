@@ -330,6 +330,13 @@
       ]
     },
     {
+      "path": "providers/anthropic-progress.md",
+      "tier": 4,
+      "title": "Anthropic progress updates",
+      "scope": "Opus 5.5 progress display, visible commentary, and exact signed-block replay.",
+      "documents": ["src/adapters/", "src/bridge/", "src/responses/", "src/claude/", "src/types/", "src/server/", "src/web-search/", "src/images/"]
+    },
+    {
       "path": "providers/anthropic-account-thresholds.md",
       "tier": 4,
       "title": "Anthropic Account Thresholds",

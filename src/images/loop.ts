@@ -241,7 +241,11 @@ function extractIterationThinking(events: AdapterEvent[]): OcxThinkingContent[] 
   };
 
   for (const e of events) {
-    if (e.type === "thinking_delta") {
+    if (e.type === "text_delta" && e.anthropicThinkingSignature) {
+      flushVisible();
+      flushRaw();
+      parts.push({ type: "thinking", thinking: e.text, signature: e.anthropicThinkingSignature });
+    } else if (e.type === "thinking_delta") {
       flushRaw();
       thinking += e.thinking;
     } else if (e.type === "reasoning_raw_delta") {
