@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
-  EMPTY_CUSTOM, EMPTY_RATES, INVALID, buildDraftCost, loadDraft, parseModelCost, receiptMatches,
+  EMPTY_CUSTOM, INVALID, buildDraftCost, loadDraft, parseModelCost, receiptMatches,
   type CustomDraft, type ModelCost, type RateDraft,
 } from "../src/components/model-price-cost";
 
