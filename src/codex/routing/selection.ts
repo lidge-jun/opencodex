@@ -1,7 +1,8 @@
 import { getEffectiveCodexAutoSwitchThreshold } from "../account-auto-switch";
 import { codexAccountUsesCreditsAfterLimit, isCodexAccountHeldForCredits } from "../account-credit-use";
 import { isCodexAccountPaused } from "../account-pause";
-import { codexAccountPriorityLookup, pinnedCodexAccountId } from "../account-priority";
+import { pinnedCodexAccountId } from "../account-priority";
+import { codexSelectionPriorityLookup } from "../account-preservation";
 import { isSelectableCodexPoolAccount } from "../account-id";
 import { isAccountNeedsReauth } from "../account-runtime-state";
 import { isCodexAccountUsable, type CodexAccountUsabilityOptions } from "../account-usability";
@@ -248,7 +249,7 @@ export function getEligiblePoolAccounts(
   const pinned = pinnedCodexAccountId(config);
   return selectPriorityTier(
     withoutModelDeniedAccounts(ids, selectionOptions?.deniedModelAccountIds, pinned),
-    codexAccountPriorityLookup(config),
+    codexSelectionPriorityLookup(config),
     id => hasCodexQuotaHeadroom(config, id, selectionOptions, now),
     pinned,
   );
@@ -767,7 +768,7 @@ export function pickPriorityPreemption(
     && eligible.includes(pinned)
     && hasCodexQuotaHeadroom(config, pinned, selectionOptions, now)
   ) return null;
-  const priorityOf = codexAccountPriorityLookup(config);
+  const priorityOf = codexSelectionPriorityLookup(config);
   if (priorityOf(eligible[0]!) <= priorityOf(active)) return null;
   // Members without headroom are in the tier only because a sibling has some;
   // picking one would hand the request straight back to a drained account.

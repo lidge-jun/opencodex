@@ -1,3 +1,4 @@
+import { observeSignedInCodexIdentity } from "./signed-in-identity";
 import { existsSync, readFileSync } from "node:fs";
 import {
   deleteConfigTopLevelKey,
@@ -8,7 +9,7 @@ import {
 import { captureConfigTopLevelRollback } from "../config/rebase-provenance";
 import { removeCodexAccountCredential } from "./account-store";
 import { clearAccountNeedsReauth } from "./account-runtime-state";
-import { getMainChatgptAccountId, readCodexTokensResult } from "./auth-collision";
+import { readCodexTokensResult } from "./auth-collision";
 import { MAIN_CODEX_ACCOUNT_ID, setMainAccountPlan } from "./main-account";
 import { clearAccountQuota } from "./quota";
 import { clearCodexUpstreamHealthForAccount, clearThreadAccountMapForAccount } from "./routing";
@@ -16,7 +17,7 @@ import { clearCodexUpstreamHealthForAccount, clearThreadAccountMapForAccount } f
 import { clearCodexPoolRefreshFailure } from "./pool-refresh-backoff";
 import { invalidateCodexWebSocketsForAccount } from "./websocket-registry";
 import { clearMainAccountCredentialPresence, clearMainAccountInfoCache, observeMainQuotaCredential, observeMainQuotaIdentity } from "./main-account-cache";
-import { extractAccountIdClaims } from "../oauth/chatgpt";
+import { extractAccountId, extractAccountIdClaims } from "../oauth/chatgpt";
 import { forgetCodexAccountPause } from "./account-pause";
 import { forgetCodexAccountCreditUse } from "./account-credit-use";
 import { clearCodexAccountPin, forgetCodexAccountPriority } from "./account-priority";
@@ -66,7 +67,11 @@ function purgeMainCodexAccountRuntimeState(): void {
  * cooldown, quota, reauth, and thread affinity do not leak across accounts.
  */
 export function reconcileMainCodexAccountRuntimeState(): boolean {
-  const currentAccountId = getMainChatgptAccountId();
+  const read = readCodexTokensResult();
+  const currentAccountId = read.status === "ok"
+    ? extractAccountId(read.tokens.id_token, read.tokens.access_token) ?? (read.tokens.account_id || null)
+    : null;
+  if (read.status === "ok") observeSignedInCodexIdentity(read.tokens);
   // A missing/malformed auth.json is an unknown identity, not a confirmed account switch. Keep the
   // prior observation and its safety state until a real account id can be read again.
   if (currentAccountId === null) return false;
@@ -110,6 +115,7 @@ export function initializeMainAccountPolicyBinding(authPath: string): boolean {
   const previousAccountId = observedMainChatgptAccountId;
   observedMainChatgptAccountId = accountId;
   if (previousAccountId !== undefined && previousAccountId !== accountId) purgeMainCodexAccountRuntimeState();
+  observeSignedInCodexIdentity(tokens);
   observeMainQuotaIdentity(accountId);
   return observeMainQuotaCredential(tokens.access_token, accountId) !== undefined;
 }
@@ -122,6 +128,7 @@ export function applyConfirmedMainCodexAccountTransition(
   fromAccountId: string,
   toAccountId: string,
 ): boolean {
+  observeSignedInCodexIdentity();
   if (!fromAccountId || !toAccountId || fromAccountId === toAccountId) {
     if (toAccountId) {
       observedMainChatgptAccountId = toAccountId;
@@ -137,6 +144,7 @@ export function applyConfirmedMainCodexAccountTransition(
 
 export function resetMainCodexAccountIdentityTrackingForTests(): void {
   observedMainChatgptAccountId = undefined;
+  observeSignedInCodexIdentity();
   clearMainAccountCredentialPresence();
 }
 

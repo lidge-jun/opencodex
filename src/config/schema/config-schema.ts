@@ -307,6 +307,7 @@ export const configSchema = z.object({
   codexAccountAutoSwitchThresholds: z.unknown().optional().transform(salvageCodexAccountAutoSwitchThresholds),
   // An invalid optional preference must not discard providers or credential rows.
   codexAccountPriorityFailback: z.boolean().optional().catch(false),
+  codexPreserveSignedInAccount: z.boolean().optional().catch(false),
   // Absent or invalid keeps the sliding window on. Explicit false restores consecutive-only steering.
   codexFailureWindow: z.boolean().optional().catch(undefined),
   codexPinnedTransientPolicy: z.enum(["hold", "detour-new-threads"]).optional().catch("hold"),

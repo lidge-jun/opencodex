@@ -3,6 +3,14 @@ import type { Capability } from "./capability-types";
 /** Account pool operations and physical native-login profiles have separate owners. */
 export const ACCOUNT_CAPABILITIES: readonly Capability[] = [
   {
+    command: ["account", "preserve-signed-in"], summary: "Prefer other Codex identities and reserve the native sign-in as fallback.",
+    usage: "ocx account preserve-signed-in openai [on|off|status] [--apply-to-bound] [--json]",
+    routes: [{ method: "GET", path: "/api/codex-auth/preserve-signed-in" }, { method: "PUT", path: "/api/codex-auth/preserve-signed-in" }],
+    flags: [{ name: "--apply-to-bound", value: "boolean", summary: "With on, release protected bindings and pins for the next request." }, { name: "--json", value: "boolean", summary: "Emit affected entries, next unbound choice and pin/binding semantics." }],
+    mutates: true, json: "payload",
+    details: ["Default/status reads. Custom priorities are preserved. Bound threads and manual pins remain unless explicitly released. Exact-account models override the preference. Fallback can spend signed-in quota; linked pause excludes it instead."],
+  },
+  {
     command: ["logout"],
     summary: "Remove the active stored OAuth credential for a provider locally.",
     usage: "ocx logout <provider> [--live] [--json]",

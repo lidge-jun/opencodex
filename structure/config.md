@@ -500,7 +500,7 @@ Client connection metadata stores a stable `apiKeyId` and a non-secret rotation 
 
 Codex display-cache expiry, retained blocking main-policy evidence, and reset history follow the [quota cache contract](providers/openai-tiers.md#quota-cache-and-short-window-history); automatic account decisions also use [spendable credit evidence](providers/openai-tiers.md#spendable-codex-credits).
 
-`codexPool.excludedPlans` is interpreted only by automatic selection; its all-excluded and explicit-route behavior follows the [plan exclusion contract](providers/openai-accounts.md#automatic-pool-plan-exclusions). Optional `codexPool.startIdleWindows` defaults off and follows the [idle-window steering contract](providers/openai-accounts.md#idle-window-steering), using real new requests to start observed idle 5-hour windows.
+`codexPreserveSignedInAccount` is an optional boolean defaulting off; malformed loads fall back to false and malformed writes are rejected. Its [identity-aware ordering contract](providers/openai-accounts.md#preserve-signed-in-quota) preserves custom priorities. `codexPool.excludedPlans` is interpreted only by automatic selection; its all-excluded and explicit-route behavior follows the [plan exclusion contract](providers/openai-accounts.md#automatic-pool-plan-exclusions). Optional `codexPool.startIdleWindows` defaults off and follows the [idle-window steering contract](providers/openai-accounts.md#idle-window-steering), using real new requests to start observed idle 5-hour windows.
 
 Connected CLI usage follows the [client-scoped hub usage contract](dashboard-and-usage.md#usage-accounting); local management and account data remain separate.
 

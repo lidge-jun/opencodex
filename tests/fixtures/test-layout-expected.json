@@ -1,4 +1,6 @@
 {
+  "codex-preserve-signed-in.test.ts": "codex-integration",
+  "cli-account-preservation.test.ts": "cli",
   "codex-history-pending-wal.test.ts": "codex-integration",
   "service-log.test.ts": "service",
   "service-health-sentinel-policy.test.ts": "service",

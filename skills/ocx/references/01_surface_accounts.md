@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 40.
+Declared capabilities: 41.
 
 ### `ocx account login`
 
@@ -354,6 +354,28 @@ JSON mode: `envelope`.
 
 - Without --account the existing pool-wide operation remains. OpenAI per-account status reads override plus effective threshold; on writes80, off0, inherit null, threshold a validated0–100 integer.
 - New OpenAI policy writes require successful unambiguous roster evidence and never fall back to a raw unresolved selector. These are routing thresholds, not pool enablement or paid-credit permission.
+
+### `ocx account preserve-signed-in`
+
+Usage: `ocx account preserve-signed-in openai [on|off|status] [--apply-to-bound] [--json]`
+
+Prefer other Codex identities and reserve the native sign-in as fallback.
+
+State-changing: yes.
+
+| Method | Route |
+|---|---|
+| GET | `/api/codex-auth/preserve-signed-in` |
+| PUT | `/api/codex-auth/preserve-signed-in` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--apply-to-bound` | boolean | With on, release protected bindings and pins for the next request. |
+| `--json` | boolean | Emit affected entries, next unbound choice and pin/binding semantics. |
+
+JSON mode: `payload`.
+
+- Default/status reads. Custom priorities are preserved. Bound threads and manual pins remain unless explicitly released. Exact-account models override the preference. Fallback can spend signed-in quota; linked pause excludes it instead.
 
 ### `ocx logout`
 

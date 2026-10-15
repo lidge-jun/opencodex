@@ -1,6 +1,6 @@
 # GUI And Management API
 
-Anthropic OAuth account DTOs include `autoSwitchThresholdOverride` (integer or null),
+`GET/PUT /api/codex-auth/preserve-signed-in` and CLI `account preserve-signed-in` expose the [signed-in quota policy](providers/openai-accounts.md#preserve-signed-in-quota); strict boolean writes can explicitly release affected bindings/pins for the next request after persistence. The GUI retains its existing account controls. Anthropic OAuth account DTOs include `autoSwitchThresholdOverride` (integer or null),
 `autoSwitchThreshold` (pool default) and `effectiveAutoSwitchThreshold`. The dedicated
 `PUT /api/oauth/accounts/auto-switch` accepts `{ provider: "anthropic", accountId, threshold }`;
 explicit null restores inheritance and missing/invalid values fail. Other providers are rejected.

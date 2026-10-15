@@ -1,3 +1,4 @@
+import { handleCodexAccountPreservation } from "./account-preservation";
 import { persistCodexAccountSelection } from "./account-selection";
 import { CODEX_ACCOUNT_LOG_LABEL_RE, codexAccountLogLabel } from "../account-label";
 import { poolQuotaHistoryIdentity, readCodexAccountRecord } from "../account-store";
@@ -34,6 +35,9 @@ export async function handleCodexAuthAPI(
   convergeCodexCatalog?: CodexAuthCatalogConvergence,
   principal?: import("../../server/management-auth").ManagementPrincipal,
 ): Promise<Response | null> {
+  if (url.pathname === "/api/codex-auth/preserve-signed-in" && (req.method === "GET" || req.method === "PUT")) {
+    return handleCodexAccountPreservation(req, config);
+  }
   if (url.pathname === "/api/codex-auth/accounts" && req.method === "GET") {
     const forceRefresh = url.searchParams.get("refresh") === "1" || url.searchParams.get("refresh") === "true";
     return jsonResponse({ accounts: await listCodexAuthAccounts(config, forceRefresh) });

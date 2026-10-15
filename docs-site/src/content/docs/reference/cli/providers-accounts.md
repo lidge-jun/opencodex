@@ -815,12 +815,50 @@ openai: { provider, autoSwitchThreshold: number, enabled: boolean }
 generic OAuth: { provider, autoSwitchThreshold: number | null, enabled: boolean, poolEnabled: boolean | null, inert: boolean | null }
 ```
 
+### `ocx account preserve-signed-in openai [on|off|status] [--apply-to-bound] [--json]`
+
+Opt in to **use other eligible accounts first and keep the signed-in ChatGPT/Codex Desktop
+identity as fallback**. A bare invocation or `status` reads the running proxy's policy, affected
+entry IDs, manual pin and next unbound choice. `on` persists `codexPreserveSignedInAccount: true`;
+`off` restores your existing custom account order without rewriting any priorities.
+
+The reserved group includes native `__main__` and ordinary pool entries with the same selected
+ChatGPT account/workspace **and** normalized member email. Sharing a workspace alone is insufficient.
+The group follows the latest physical login observed by the proxy's native-login lifecycle;
+no incoming request credential can define it. If member/workspace evidence is unavailable,
+`identityKnown: false` reports that only main can be identified. Status obtains a fresh owned
+observation; a busy or unreadable native profile returns 503 without applying the change.
+
+All four Codex strategies prefer other identities with quota headroom, preserving custom order
+within each group. Reserved entries remain fallback when preferred tiers drain. **Fallback can
+consume the signed-in quota**, subject to existing model access, pause, cooldown, reauthentication,
+hard-lock and paid-credit consent checks. This policy does not grant paid-credit consent.
+
+Healthy existing bindings stay in place, and manual pins and exact account-qualified model routes
+override the preference. To apply it to ongoing work, run:
+
+```bash
+ocx account preserve-signed-in openai on --apply-to-bound
+```
+
+This explicitly releases only affected bindings and any affected manual pin for the **next request**;
+in-flight requests keep their captured account. Unrelated bindings and pins remain. Moving work may
+lose its warm prompt cache, and account-scoped uploads or continuation state can prevent a move.
+`codexAccountPriorityFailback` remains a separate opt-in, with its existing quota-strategy,
+positive-threshold and fresh-observation conditions; it can also move work toward a preferred group.
+
+For **never use this identity through the pool**, use `ocx account pause openai main` instead:
+linked pause excludes main and matching pool entries without changing the desktop login file.
+Only requests that reach OpenCodex are controlled. This does not unlock an already-disabled
+desktop composer or promise to fix client-side quota gating.
+
 ### `ocx account priority <provider> <account-id|alias|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]`
 
 Reads or sets one Codex pool account's selection order: **higher is used earlier**, the default is
 `0`, and the range is `-100` through `100`. Only the `openai` Codex pool is ordered, so other
 providers exit 1. `main` targets the Codex Desktop login, which is ordered like any other pool
-account — `ocx account priority openai main last` is how you keep it as the reserve.
+account. `ocx account priority openai main last` lowers only that entry; use
+`preserve-signed-in` above to reserve its matching ordinary pool entries too.
 
 Preset words stand in for small integers: `first` is `+2`, `earlier` is `+1`, `normal` is `0`,
 `later` is `-1`, and `last` is `-2`. `reset` returns the account to the default and drops its stored
