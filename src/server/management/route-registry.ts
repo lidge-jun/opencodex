@@ -99,6 +99,8 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   // codex/auth-api
   { method: "DELETE", path: "/api/codex-auth/accounts", module: "codex/auth-api/routes", mutates: true },
   { method: "GET", path: "/api/codex-auth/accounts", module: "codex/auth-api/routes", mutates: false },
+  { method: "GET", path: "/api/codex-auth/accounts/use-remaining", module: "codex/auth-api/routes", mutates: false },
+  { method: "PUT", path: "/api/codex-auth/accounts/use-remaining", module: "codex/auth-api/routes", mutates: true },
   { method: "GET", path: "/api/codex-auth/active", module: "codex/auth-api/routes", mutates: false },
   { method: "GET", path: "/api/codex-auth/login-status", module: "codex/auth-api/routes", mutates: false },
   { method: "GET", path: "/api/codex-auth/quota", module: "codex/auth-api/routes", mutates: false },

@@ -49,6 +49,7 @@ import { rememberResponseState } from "../../responses/state";
 import { trackStreamLifetime } from "../lifecycle";
 import { awaitThoughtSignatureDurability } from "../../responses/thought-signature-replay";
 import { undeclaredToolCallMessage } from "../responses-undeclared-tool-guard";
+import { emptyToolCatalogRefusal, guardEmptyToolCatalogEvents, guardEmptyToolCatalogStream } from "../../lib/empty-tool-catalog";
 // LOCAL PATCH (runturn-websearch)
 import { planWebSearch } from "../../web-search";
 import { runTurnWebSearchInitialParsed, runTurnWebSearchLoop } from "../../web-search/run-turn-loop";
@@ -87,6 +88,7 @@ export async function executeResponsesRunTurn(
     | "translatorBudget"
     | "inboundWire"
     | "toolBridgeMaps"
+    | "clientToolCatalogRestriction"
     | "rememberKiroDeliveredFinalAnswer"
     | "responseStateOptions"
   >,
@@ -699,14 +701,19 @@ export async function executeResponsesRunTurn(
       return orderMessagesOutput(retryQueue.stream());
     };
 
-    const { toolNsMap, declaredToolNames, toolParameterSchemas, freeformToolNames, bareCustomToolNames, toolSearchToolNames } = toolBridgeMaps;
+    const clientToolCatalog = requestState.clientToolCatalogRestriction && route.provider.authMode !== "forward"
+      ? requestState.clientToolCatalogRestriction : undefined;
+    const { toolNsMap, declaredToolNames, toolParameterSchemas, freeformToolNames, bareCustomToolNames, toolSearchToolNames } = clientToolCatalog
+      ? { ...toolBridgeMaps, ...clientToolCatalog } : toolBridgeMaps;
     const enforceDeclaredToolNames = inboundWire !== "chat" && inboundWire !== "anthropic";
     const classifyUndeclaredFirstTool = (
       event: AdapterEvent,
     ): Extract<AdapterEvent, { type: "error" }> | undefined => {
-      if (!enforceDeclaredToolNames || event.type !== "tool_call_start") return undefined;
       // This tool is declared to the adapter by the private search loop.
-      if (wsPlan && event.name === WEB_SEARCH_TOOL_NAME) return undefined;
+      if (wsPlan && event.type === "tool_call_start" && event.name === WEB_SEARCH_TOOL_NAME) return undefined;
+      const emptyCatalogRefusal = emptyToolCatalogRefusal(event, clientToolCatalog);
+      if (emptyCatalogRefusal) return emptyCatalogRefusal;
+      if (!enforceDeclaredToolNames || event.type !== "tool_call_start") return undefined;
       const effectiveName = normalizeDeclaredToolName(event.name, declaredToolNames, undefined, bareCustomToolNames);
       if (declaredToolNames.has(effectiveName)) return undefined;
       return {
@@ -776,9 +783,13 @@ export async function executeResponsesRunTurn(
         if (preflight.error || preflight.empty) {
           runTurnAbort.abort();
           queue.close();
-          const message = preflight.error?.message ?? "Adapter ended before producing a response";
-          const failure = formatErrorResponse(preflight.error?.code === SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE ? 503 : 502,
-            preflight.error?.code === SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE ? SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE : "upstream_error", redactSecretString(message));
+          const classified = adapterFailureFromEvent(preflight.error ?? {
+            type: "error", status: 502, message: "Adapter ended before producing a response",
+          });
+          const storageRefusal = preflight.error?.code === SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE;
+          const failure = formatErrorResponse(storageRefusal ? 503 : classified.httpStatus,
+            storageRefusal ? SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE : classified.error.type,
+            redactSecretString(classified.error.message), { code: classified.error.code, classified: true });
           // A replay-unsafe heartbeat means the adapter already ran a local side effect, so the
           // combo must not send this turn to another target: the failure stays with this child.
           if (preflight.replayUnsafe) markResponseNonReplayable(failure);
@@ -824,7 +835,7 @@ export async function executeResponsesRunTurn(
           console.warn(emptyCompletionNotice(route.providerName, route.modelId));
         });
       const sseStream = bridgeToResponsesSSE(
-        guardedSource, parsed._responseModelId ?? parsed.modelId, toolNsMap, freeformToolNames, toolSearchToolNames,
+        guardEmptyToolCatalogStream(guardedSource, clientToolCatalog, translatorBudget), parsed._responseModelId ?? parsed.modelId, toolNsMap, freeformToolNames, toolSearchToolNames,
         () => {
           cancelResponseCompletion();
           runTurnAbort.abort();
@@ -961,6 +972,7 @@ export async function executeResponsesRunTurn(
         }
         events = searched;
       }
+      events = guardEmptyToolCatalogEvents(events, clientToolCatalog, translatorBudget);
       if (options.comboAttempt) {
         const firstMeaningfulIndex = events.findIndex(event => event.type !== "heartbeat");
         const firstMeaningful = firstMeaningfulIndex === -1 ? undefined : events[firstMeaningfulIndex];
@@ -974,12 +986,13 @@ export async function executeResponsesRunTurn(
           ? classifyUndeclaredFirstTool(firstMeaningful)
           : undefined;
         if (!firstMeaningful || firstMeaningful.type === "error" || classifiedError) {
-          const message = classifiedError?.message ?? (firstMeaningful?.type === "error"
-            ? firstMeaningful.message
-            : "Adapter ended before producing a response");
+          const classified = adapterFailureFromEvent(classifiedError ?? (firstMeaningful?.type === "error"
+            ? firstMeaningful
+            : { type: "error", status: 502, message: "Adapter ended before producing a response" }));
           const storageRefusal = firstMeaningful?.type === "error" && firstMeaningful.code === SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE;
-          const failure = formatErrorResponse(storageRefusal ? 503 : 502,
-            storageRefusal ? SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE : "upstream_error", redactSecretString(message));
+          const failure = formatErrorResponse(storageRefusal ? 503 : classified.httpStatus,
+            storageRefusal ? SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE : classified.error.type,
+            redactSecretString(classified.error.message), { code: classified.error.code, classified: true });
           if (replayUnsafe) markResponseNonReplayable(failure);
           return failure;
         }
