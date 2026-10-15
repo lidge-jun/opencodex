@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -15,6 +15,7 @@ import {
   type DesktopOwnershipState,
   type DesktopProcessState,
 } from "../../src/cli/ensure-desktop-cold-start";
+import type { ServiceOwnershipResolution } from "../../src/service/state";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 interface Calls { launches: number; waits: number[]; released: number }
@@ -158,11 +159,109 @@ describe("Desktop process detection by executable identity", () => {
     expect(inspectDesktopProcess({ platform: "win32", env, run: () => { throw new Error("denied"); } })).toBe("unknown");
   });
 
-  test("only macOS launches Desktop, hidden, through its bundle identifier", () => {
+  const owned = {
+    kind: "owned" as const,
+    ownership: { owner: "desktop" as const, installId: "install-a", consentGeneration: 1 },
+    revision: 3,
+  };
+  /** A fake consented install: app-local install-id, a LaunchAgent plist, and a bundle on disk. */
+  function fakeDesktopHome(options: {
+    installId?: string; args?: string[]; bareArgs?: boolean; label?: string; identifier?: string;
+    plist?: "present" | "absent"; executable?: "present" | "absent"; bundleName?: string;
+  } = {}) {
+    const home = mkdtempSync(join(tmpdir(), "ocx-desktop-home-"));
+    const bundle = join(home, "Applications", options.bundleName ?? "OpenCodex.app");
+    const executable = join(bundle, "Contents", "MacOS", "opencodex-desktop");
+    mkdirSync(join(bundle, "Contents", "MacOS"), { recursive: true });
+    if (options.executable !== "absent") { writeFileSync(executable, ""); chmodSync(executable, 0o755); }
+    writeFileSync(join(bundle, "Contents", "Info.plist"), "");
+    const store = join(home, "Library", "Application Support", "com.opencodex.desktop");
+    mkdirSync(store, { recursive: true });
+    if (options.installId !== undefined) writeFileSync(join(store, "install-id"), `${options.installId}\n`);
+    mkdirSync(join(home, "Library", "LaunchAgents"), { recursive: true });
+    if (options.plist !== "absent") writeFileSync(join(home, "Library", "LaunchAgents", "OpenCodex.plist"), "");
     const seen: string[][] = [];
-    expect(launchDesktopApp({ platform: "darwin", run: (command, args) => { seen.push([command, ...args]); return ""; } })).toBe(true);
-    expect(seen).toEqual([["/usr/bin/open", "-g", "-b", "com.opencodex.desktop", "--args", "--autostart"]]);
-    expect(launchDesktopApp({ platform: "darwin", run: () => { throw new Error("no app"); } })).toBe(false);
+    const run = (command: string, args: string[]) => {
+      seen.push([command, ...args]);
+      const target = args[args.length - 1] ?? "";
+      if (command !== "/usr/bin/plutil") return "";
+      if (target.endsWith(`${"OpenCodex"}.plist`)) {
+        return JSON.stringify({
+          Label: options.label ?? "OpenCodex",
+          ProgramArguments: options.bareArgs ? [executable] : (options.args ?? [executable, "--autostart"]),
+        });
+      }
+      if (target.endsWith("Info.plist")) return JSON.stringify({ CFBundleIdentifier: options.identifier ?? "com.opencodex.desktop" });
+      return "";
+    };
+    return { home, bundle, seen, run };
+  }
+  const launch = (fixture: ReturnType<typeof fakeDesktopHome>, ownership: () => ServiceOwnershipResolution = () => owned) =>
+    launchDesktopApp({ platform: "darwin", home: fixture.home, ownership, run: fixture.run });
+
+  test("a Desktop claim launches the app its own login registration recorded, never a bundle-id lookup", () => {
+    const fixture = fakeDesktopHome({ installId: "install-a" });
+    try {
+      expect(launch(fixture)).toBe(true);
+      expect(fixture.seen.at(-1)).toEqual(["/usr/bin/open", "-g", realpathSync(fixture.bundle), "--args", "--autostart"]);
+      expect(fixture.seen.flat().includes("-b")).toBe(false);
+    } finally { removeTreeWithRetry(fixture.home); }
+  });
+
+  test("the registration shape auto-launch writes without --autostart is still the consented path", () => {
+    const fixture = fakeDesktopHome({ installId: "install-a", bareArgs: true });
+    try {
+      expect(launch(fixture)).toBe(true);
+      expect(fixture.seen.at(-1)).toEqual(["/usr/bin/open", "-g", realpathSync(fixture.bundle), "--args", "--autostart"]);
+    } finally { removeTreeWithRetry(fixture.home); }
+  });
+
+  test("a non-app directory refuses the launch without reading its Info.plist or waiting for a proxy", async () => {
+    for (const bundleName of ["OpenCodex", "OpenCodex.app.backup"]) {
+      const fixture = fakeDesktopHome({ installId: "install-a", bundleName });
+      try {
+        const calls = fresh();
+        const dependencies = deps({ ownership: "desktop", process: "absent" }, calls);
+        dependencies.launchDesktop = () => launch(fixture);
+        const result = await runDesktopColdStart(dependencies);
+        expect(result.kind === "failed" && result.message).toContain("Open OpenCodex manually");
+        expect(calls.waits).toEqual([]);
+        expect(calls.released).toBe(1);
+        expect(fixture.seen).toHaveLength(1);
+        expect(fixture.seen[0]?.[0]).toBe("/usr/bin/plutil");
+        expect(fixture.seen[0]?.at(-1)).toEndWith("OpenCodex.plist");
+      } finally { removeTreeWithRetry(fixture.home); }
+    }
+  });
+
+  test("a claim without matching install-id, registration or Desktop executable refuses the launch", () => {
+    for (const fixture of [
+      fakeDesktopHome({ installId: "other-install" }),
+      fakeDesktopHome({ installId: "install-a", plist: "absent" }),
+      fakeDesktopHome({ installId: "install-a", label: "OtherApp" }),
+      fakeDesktopHome({ installId: "install-a", args: [join(tmpdir(), "elsewhere", "opencodex-desktop")] }),
+      fakeDesktopHome({ installId: "install-a", args: ["executable-only-name"] }),
+      fakeDesktopHome({ installId: "install-a", identifier: "com.example.fake" }),
+    ]) {
+      try {
+        expect(launch(fixture)).toBe(false);
+        expect(fixture.seen.flat().includes("com.opencodex.desktop")).toBe(false);
+        expect(fixture.seen[0]?.[0]).not.toBe("/usr/bin/open");
+      } finally { removeTreeWithRetry(fixture.home); }
+    }
+    // install-id store absent entirely.
+    const noId = fakeDesktopHome();
+    try { expect(launch(noId)).toBe(false); } finally { removeTreeWithRetry(noId.home); }
+  });
+
+  test("a claim that is not a recorded Desktop owner, or a failing lookup, never launches", () => {
+    const fixture = fakeDesktopHome({ installId: "install-a" });
+    try {
+      expect(launch(fixture, () => ({ kind: "none", revision: 2 }))).toBe(false);
+      expect(launch(fixture, () => ({ kind: "owned", ownership: { owner: "cli", installId: "install-a", consentGeneration: 1 }, revision: 2 }))).toBe(false);
+      expect(fixture.seen).toEqual([]);
+    } finally { removeTreeWithRetry(fixture.home); }
+    expect(launchDesktopApp({ platform: "darwin", home: mkdtempSync(join(tmpdir(), "ocx-desktop-empty-")), ownership: () => owned, run: () => { throw new Error("no app"); } })).toBe(false);
     expect(launchDesktopApp({ platform: "linux", run: () => { throw new Error("must not run"); } })).toBe(false);
   });
 });
