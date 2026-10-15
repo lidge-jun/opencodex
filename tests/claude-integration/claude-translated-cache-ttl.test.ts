@@ -3,6 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
+import { callerCacheRetention } from "../../src/claude/inbound";
 import type { OcxConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -122,5 +123,30 @@ describe("translated Claude lane cache TTL", () => {
     // Breakpoints nested in a tool_result's content count too.
     expect(new Set(await wireTtls("1h", undefined, "1h", undefined, "5m"))).toEqual(new Set([undefined]));
     expect(new Set(await wireTtls("1h", undefined, "1h", undefined, "1h"))).toEqual(new Set(["1h"]));
+  });
+});
+
+describe("callerCacheRetention walks every block container", () => {
+  const h1 = { type: "ephemeral", ttl: "1h" };
+  const m5 = { type: "ephemeral", ttl: "5m" };
+  const body = (nested: unknown) => ({
+    system: [{ type: "text", text: "s", cache_control: h1 }],
+    messages: [{ role: "user", content: [{ type: "tool_result", tool_use_id: "t", content: [nested] }] }],
+  });
+
+  test("a 5m breakpoint deep inside search_result or document content keeps the default", () => {
+    expect(callerCacheRetention(body({ type: "search_result", source: "s", title: "t",
+      content: [{ type: "text", text: "x", cache_control: m5 }] }))).toBeUndefined();
+    expect(callerCacheRetention(body({ type: "document",
+      source: { type: "content", content: [{ type: "text", text: "x", cache_control: m5 }] } }))).toBeUndefined();
+    expect(callerCacheRetention(body({ type: "search_result", source: "s", title: "t",
+      content: [{ type: "text", text: "x", cache_control: h1 }] }))).toBe("long");
+  });
+
+  test("a cache_control key inside tool input or schema is caller data, not a breakpoint", () => {
+    expect(callerCacheRetention({
+      tools: [{ name: "T", input_schema: { type: "object", properties: { cache_control: h1 } } }],
+      messages: [{ role: "assistant", content: [{ type: "tool_use", id: "t", name: "T", input: { cache_control: h1 } }] }],
+    })).toBeUndefined();
   });
 });

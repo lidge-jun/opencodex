@@ -397,20 +397,24 @@ export type ClaudeCacheKeySource = "metadata" | "system" | null;
  */
 export function callerCacheRetention(raw: unknown): "long" | undefined {
   if (!isRec(raw)) return undefined;
-  const blocks: unknown[] = [
-    // Top-level automatic caching is a breakpoint too; omitting it would read a 1h prefix with a
-    // 5m automatic tail as all-1h.
-    raw,
-    ...(Array.isArray(raw.system) ? raw.system : []),
-    ...(Array.isArray(raw.tools) ? raw.tools : []),
-    ...(Array.isArray(raw.messages)
-      ? raw.messages.flatMap(m => isRec(m) && Array.isArray(m.content)
-        // A tool_result's own content blocks can carry breakpoints as well.
-        ? m.content.flatMap(b => isRec(b) && Array.isArray(b.content) ? [b, ...b.content] : [b])
-        : [])
-      : []),
-  ];
-  const ttls = blocks.flatMap(b => isRec(b) && isRec(b.cache_control) ? [b.cache_control.ttl] : []);
+  // Top-level automatic caching is a breakpoint too, and content blocks nest (tool_result,
+  // search_result, document sources), so every block container is walked. Tool inputs and
+  // schemas are caller data, not blocks: a `cache_control` key there is not a breakpoint.
+  const ttls: unknown[] = [];
+  const visit = (node: unknown, depth: number): void => {
+    if (depth > 16) return;
+    if (Array.isArray(node)) { for (const item of node) visit(item, depth + 1); return; }
+    if (!isRec(node)) return;
+    if (isRec(node.cache_control)) ttls.push(node.cache_control.ttl);
+    for (const [key, value] of Object.entries(node)) {
+      if (key !== "cache_control" && key !== "input" && key !== "input_schema"
+        && (Array.isArray(value) || isRec(value))) visit(value, depth + 1);
+    }
+  };
+  if (isRec(raw.cache_control)) ttls.push(raw.cache_control.ttl);
+  visit(raw.system, 0);
+  visit(raw.tools, 0);
+  visit(raw.messages, 0);
   return ttls.length > 0 && ttls.every(ttl => ttl === "1h")
     ? "long"
     : undefined;
