@@ -384,6 +384,7 @@
       "documents": [
         "src/oauth/dsh.ts",
         "src/adapters/dsh-account.ts",
+        "src/providers/dsh-account-destination.ts",
         "src/providers/quota/dsh-account.ts"
       ]
     },

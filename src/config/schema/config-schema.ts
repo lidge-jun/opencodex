@@ -49,6 +49,7 @@ import {
   providerHeadersConfigError,
   providerForwardClientHeadersConfigError,
   reasoningSummaryDeliveryRecordConfigError,
+  credentialPinnedProviderConfigError,
 } from "../provider-validation";
 import {
   CODEX_ACCOUNT_NAMESPACE_COMBO_ALIAS_COLLISION_ERROR,
@@ -593,6 +594,10 @@ export const configSchema = z.object({
         path: ["providers", redactSecretString(name), "modelAdapters"],
         message: modelAdaptersError,
       });
+    }
+    const credentialPinError = credentialPinnedProviderConfigError(name, provider);
+    if (credentialPinError) {
+      ctx.addIssue({ code: "custom", path: ["providers", redactSecretString(name)], message: credentialPinError });
     }
     const preferHostedToolsError = modelPreferHostedToolsConfigError(
       (provider as { modelPreferHostedTools?: unknown }).modelPreferHostedTools,

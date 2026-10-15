@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,7 +19,11 @@ import { startServer } from "../../src/server";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { resolveAdapter, resolveWireProtocolOverride } from "../../src/server/adapter-resolve";
-import { modelAdapterRecordConfigError } from "../../src/config/provider-validation";
+import { credentialPinnedProviderConfigError, modelAdapterRecordConfigError } from "../../src/config/provider-validation";
+import { resolveSidecarAuth } from "../../src/sidecar/auth";
+import { buildLabProviderAuthHeaders } from "../../src/lib/lab-live-route-production";
+import * as oauthIndex from "../../src/oauth";
+import { loadConfig } from "../../src/config";
 import { mayResolveModelsOAuth } from "../../src/oauth/model-discovery-auth";
 import { resolveModelsAuthToken } from "../../src/oauth";
 import { fetchProviderModels } from "../../src/codex/catalog/provider-models";
@@ -395,7 +399,7 @@ describe("dsh-account wire pin keeps the account token on the DSH adapter", () =
   test.each([
     "https://api.deepseek.com/v1",
     "https://evil.example/v1",
-  ])("a hand-edited openai-chat row at %s sends only to the pinned DSH endpoint", async (rowBaseUrl) => {
+  ])("a hand-edited openai-chat row at %s is rejected at load and sends nothing", async (rowBaseUrl) => {
     saveConfig({
       port: 0,
       hostname: "127.0.0.1",
@@ -433,12 +437,8 @@ describe("dsh-account wire pin keeps the account token on the DSH adapter", () =
         body: JSON.stringify({ model: "dsh-account/deepseek-flash", max_tokens: 10, messages: [{ role: "user", content: "hi" }] }),
       });
       await resp.text();
-      expect(sends.length).toBe(1);
-      for (const send of sends) {
-        expect(send.url).toBe("https://api.deepseek.com/anthropic/v1/messages");
-        expect(send.headers.get("x-dsh-auth-token")).toBe("dsh_pinned_wire_token");
-        expect(send.headers.get("authorization")).toBeNull();
-      }
+      expect(loadConfig().providers["dsh-account"]).toBeUndefined();
+      expect(sends).toEqual([]);
     } finally {
       await server.stop(true);
     }
@@ -499,5 +499,62 @@ describe("dsh-account token stays out of discovery and retires on a quota 401", 
     const current = getAccountSet("dsh-account")!.accounts[0]!;
     expect(current.credential.access).toBe("dsh_quota_reimported");
     expect(current.needsReauth).not.toBe(true);
+  });
+});
+
+describe("dsh-account row stays pinned for every helper that resolves its token", () => {
+  const originalHome = process.env.OPENCODEX_HOME;
+  let tmpHome: string;
+
+  beforeEach(() => {
+    tmpHome = mkdtempSync(join(tmpdir(), "ocx-dsh-row-pin-home-"));
+    process.env.OPENCODEX_HOME = tmpHome;
+  });
+
+  afterEach(() => {
+    if (originalHome !== undefined) process.env.OPENCODEX_HOME = originalHome;
+    else delete process.env.OPENCODEX_HOME;
+    removeTreeWithRetry(tmpHome);
+  });
+
+  test("validation accepts the canonical row and rejects an edited adapter or destination", () => {
+    for (const baseUrl of ["https://api.deepseek.com/anthropic", "https://api.deepseek.com", undefined]) {
+      expect(credentialPinnedProviderConfigError("dsh-account", { adapter: "dsh-account", baseUrl })).toBeNull();
+    }
+    for (const adapter of ["anthropic", "cursor", "openai-chat", "openai-responses"]) {
+      expect(credentialPinnedProviderConfigError("dsh-account", { adapter, baseUrl: "https://api.deepseek.com/anthropic" }))
+        .toContain("adapter must stay");
+    }
+    for (const baseUrl of ["https://evil.example", "https://api.deepseek.com/v1", "http://api.deepseek.com/anthropic"]) {
+      expect(credentialPinnedProviderConfigError("dsh-account", { adapter: "dsh-account", baseUrl })).toContain("baseUrl must stay");
+    }
+    // Other providers are untouched, including an Anthropic row at a custom gateway.
+    expect(credentialPinnedProviderConfigError("anthropic", { adapter: "anthropic", baseUrl: "https://evil.example" })).toBeNull();
+  });
+
+  test("Anthropic helpers never select a dsh-account row, even one edited onto the anthropic adapter", async () => {
+    await saveCredential("dsh-account", {
+      access: "dsh_helper_token", refresh: "dsh_helper_token", expires: Date.now() + 3_600_000,
+      accountId: "dsh-helper-user", source: "credential-file",
+    });
+    const auth = resolveSidecarAuth({
+      providers: { "dsh-account": { adapter: "anthropic", authMode: "oauth", baseUrl: "https://evil.example" } },
+    } as unknown as OcxConfig);
+    expect(auth.isAnthropicAuth).toBe(false);
+    expect(auth.anthropicProviderName).toBeUndefined();
+  });
+
+  test("Compatibility Lab refuses dsh-account before resolving its token", async () => {
+    const snapshot = spyOn(oauthIndex, "getValidAccessTokenSnapshot");
+    try {
+      for (const baseUrl of ["https://api.deepseek.com/anthropic", "https://evil.example"]) {
+        const config = { providers: { "dsh-account": { adapter: "dsh-account", authMode: "oauth", baseUrl } } } as unknown as OcxConfig;
+        await expect(buildLabProviderAuthHeaders({ providerId: "dsh-account", baseUrl } as never, config))
+          .rejects.toMatchObject({ message: expect.stringContaining("dsh-account probes are not supported") });
+      }
+      expect(snapshot).not.toHaveBeenCalled();
+    } finally {
+      snapshot.mockRestore();
+    }
   });
 });
