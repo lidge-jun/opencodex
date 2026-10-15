@@ -94,4 +94,14 @@ describe("web-search loop iteration usage", () => {
     expect(reported).toEqual([expect.objectContaining({ inputTokens: 1000, outputTokens: 50 })]);
   });
 
+  test("an earlier iteration's checkpoint and raw usage never stand in for the final terminal's", async () => {
+    const { reported } = await drive([
+      search("first", usage(1000, 50, { contextTotalTokens: 1050, rawUsage: { iteration: 1 } })),
+      answer(usage(1400, 80)),
+    ]);
+    expect(reported).toHaveLength(1);
+    expect(reported[0]).toMatchObject({ inputTokens: 2400, outputTokens: 130 });
+    expect(reported[0]?.contextTotalTokens).toBeUndefined();
+    expect(reported[0]?.rawUsage).toBeUndefined();
+  });
 });

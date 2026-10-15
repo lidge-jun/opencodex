@@ -150,6 +150,13 @@ function terminalUsage(events: AdapterEvent[]): OcxUsage | undefined {
   return undefined;
 }
 
+/** Hidden iterations add counters only: their checkpoint and raw wire usage are not the final terminal's. */
+function countersOnly(usage: OcxUsage | undefined): OcxUsage | undefined {
+  if (!usage) return undefined;
+  const { contextTotalTokens: _context, rawUsage: _raw, ...counters } = usage;
+  return counters;
+}
+
 /**
  * Collect the thinking block that preceded a web_search call in this iteration's events, so the
  * replayed assistant turn can carry it. Anthropic extended thinking REQUIRES the assistant
@@ -1036,7 +1043,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       hideRawReasoning: parsed.options.hideRawReasoning,
       ...(deps.stallTimeoutSec !== undefined ? { stallTimeoutSec: deps.stallTimeoutSec } : {}),
       ...(deps.onFirstOutput ? { onFirstOutput: deps.onFirstOutput } : {}),
-      ...(deps.onUsage ? { onUsage: (usage: OcxUsage | undefined) => deps.onUsage?.(mergeUsage(hiddenUsage, usage)) } : {}),
+      ...(deps.onUsage ? { onUsage: (usage: OcxUsage | undefined) => deps.onUsage?.(mergeUsage(countersOnly(hiddenUsage), usage)) } : {}),
       ...(deps.onCompletedResponse ? { onCompletedResponse: deps.onCompletedResponse } : {}),
     },
   );
