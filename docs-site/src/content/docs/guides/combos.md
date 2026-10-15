@@ -739,8 +739,9 @@ task workflow.
 ### Dashboard
 
 Open the local dashboard and choose **Models → Combos**. The workspace creates, edits, renames, and removes
-combos, and its target picker excludes disabled models, nested combos, and the credential-only JEV
-provider. **Create JEV Auto** opens the same Combo editor with an editable decision target template;
+combos. Its model selectors include hidden models: catalog visibility only controls external model
+lists, not internal Combo selection, and selecting a hidden model does not make it visible externally.
+The target picker still excludes disabled providers, nested combos, and the credential-only JEV provider. **Create JEV Auto** opens the same Combo editor with an editable decision target template;
 an existing `jev-auto` id or alias is reported instead of creating a duplicate. A JEV Combo also shows
 **Decision service** (TypeSafe JEV or a configured `jev-decision` provider) and **Decision timeout
 (ms)**, and the Combos overview lists each JEV Combo's decision service, endpoint, and timeout.

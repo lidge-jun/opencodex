@@ -461,12 +461,12 @@ Chat helper admission in `src/server/responses/core.ts` follows the [deferred st
 
 ## Combo editor routing quota
 
-`src/server/management/provider-routes.ts` projects `routingQuota` after each quota read using the
-current provider configuration and [scoped inference evidence](runtime.md#scoped-provider-quota-for-combo-selection).
-The DTO carries only state, observation time and an exclusive `validUntil`; cached display reports
-and private credential bindings are unchanged. Known states expire within 30 minutes; exhaustion
-may expire earlier when the runtime predicate clears at a reset boundary, accounting for other
-windows and persistent USD blockers.
+`gui/src/pages/Combos.tsx` supplies all non-Combo management catalog rows to internal model selectors, including hidden models. Catalog visibility does not restrict Combo member or JEV decision-model selection and selecting a hidden model does not change its external visibility. Disabled-provider, decision-service and recursion exclusions remain unchanged; the v2 workspace cache avoids reusing v1 visibility-filtered candidates.
+
+`src/server/management/provider-routes.ts` projects `routingQuota` after each quota read using the current provider
+configuration and [scoped inference evidence](runtime.md#scoped-provider-quota-for-combo-selection). The DTO carries only state,
+observation time and an exclusive `validUntil`; cached display reports and private credential bindings are unchanged. Known states
+expire within 30 minutes; exhaustion may expire earlier when the runtime predicate clears at a reset boundary, accounting for other windows and persistent USD blockers.
 
 `gui/src/combo-workspace-data.ts` accepts only this projection for quota-based Save/Create blocking.
 Missing, invalid or expired evidence is unknown. `gui/src/pages/Combos.tsx` wakes at the rendered

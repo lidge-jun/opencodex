@@ -305,8 +305,9 @@ Arayüzü](/tr/guides/sub-agent-surface/) sayfasına bakın.
 
 Yerel kontrol panelini açın ve **Modeller → Kombolar** seçeneğini belirleyin.
 Çalışma alanı komboları oluşturur, düzenler, yeniden adlandırır ve kaldırır;
-hedef seçicisi ise devre dışı bırakılmış modelleri ve iç içe geçmiş komboları
-hariç tutar.
+model seçicileri gizli modelleri de içerir. Görünürlük yalnızca dış model listelerini etkiler,
+kombo içindeki seçimi etkilemez; gizli bir modeli seçmek onu dışarıda görünür yapmaz.
+Hedef seçicisi devre dışı sağlayıcıları, iç içe komboları ve yalnızca karar hizmeti sunan JEV sağlayıcılarını hariç tutar.
 
 Her hedef ayrıca canlı bir kota rozeti gösterir: **Kullanılabilir**, **Kota tükendi** veya **Kota bilinmiyor**.
 Düzenleyici, kota nedeniyle Kaydet ve Oluştur işlemlerini yalnızca kullanılabilir hedeflerin tümü için yapılandırılmış kimlik bilgisine ait çıkarım sınırının tükendiğini doğrulayan geçerli sunucu bilgisi varsa engeller. Yalnızca görüntüleme amaçlı hesap, model, arama ve MCP kotaları ya da eksik veya süresi dolmuş yönlendirme kanıtları bu engellemeye neden olmaz. Engelleme, ilgili sıfırlama zamanında veya verinin güncellik süresi dolduğunda sona erer ve sayfa etkin ya da görünür olduğunda yeniden kontrol edilir; Yenile, hem kombo verilerini hem de kotaları yeniden yükler.

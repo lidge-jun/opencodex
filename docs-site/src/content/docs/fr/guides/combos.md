@@ -277,7 +277,7 @@ flux de travail des tâches.
 ### Tableau de bord
 
 Ouvrez le tableau de bord local et choisissez **Modèles → Combos**. L'espace de travail crée, modifie, renomme et supprime
-combos, et son sélecteur de cible exclut les modèles désactivés et les combos imbriqués.
+les combos. Les sélecteurs de modèles incluent les modèles masqués : la visibilité ne concerne que les listes externes, pas la sélection interne des combos. Sélectionner un modèle masqué ne le rend pas visible. Le sélecteur de cible exclut toujours les fournisseurs désactivés, les combos imbriqués et les fournisseurs JEV réservés au service de décision.
 
 Chaque cible affiche aussi un badge de quota en direct : **Disponible**, **Quota épuisé** ou **Quota inconnu**.
 L’éditeur bloque Enregistrer et Créer pour une raison de quota uniquement lorsque chaque cible utilisable dispose d’une confirmation serveur encore valide indiquant que la limite d’inférence liée à ses identifiants configurés est épuisée. Les quotas de compte, de modèle, de recherche et de MCP fournis uniquement à titre d’affichage, ainsi que les informations de routage absentes ou expirées, ne déclenchent pas ce blocage. Le blocage expire à la réinitialisation applicable ou à l’expiration de la validité des données et fait l’objet d’une nouvelle vérification lorsque la page devient active ou visible ; Actualiser recharge à la fois les données des combos et les quotas.
