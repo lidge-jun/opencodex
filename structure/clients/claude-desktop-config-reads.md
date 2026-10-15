@@ -1,7 +1,7 @@
 # Claude Desktop Configuration Reads
 
 Every read of Desktop library configuration — selected-profile inspection, `_meta.json` parsing,
-foreign-key preservation during writes, refresh mode re-resolution, the refresh fingerprint hash,
+foreign-key preservation during writes, backup creation and rollback, refresh mode re-resolution, the refresh fingerprint hash,
 the picker profile's inspection and apply snapshots, and the connection-owned store's metadata and
 profile reads — goes through the shared verified regular-file reader in
 `src/claude/desktop-3p-library.ts` (`readDesktopLibraryBytes`/`readDesktopLibraryText`). The path
@@ -18,5 +18,23 @@ failure keeps its own errno. Inspection reports the refusal through its existing
 in `src/claude/desktop-remote-store-io.ts` layers its size cap, private-file mode and post-read
 identity contract on top of the same read and reports it as `unsafe`.
 
-Tests: `tests/clients/desktop-3p-removal.test.ts`, `tests/clients/desktop-remote-store.test.ts`, and
+Optional metadata and profile reads treat only a missing directory entry as absent. Dangling links
+and other read failures refuse before profile publication. A gateway apply captures one profile
+snapshot (`readDesktopProfileSnapshot`); those verified bytes supply the preserved foreign keys,
+the `.bak` copy, and rollback. Before backup and again in the no-follow writer's pre-rename hook,
+the verified optional reader compares the live bytes with that snapshot (including absence).
+Drift refuses with `desktop_profile_changed`, without retrying; a non-regular entry still refuses
+without opening a FIFO or following a link. Drift detected before backup leaves the backup and
+metadata untouched; drift during temp staging leaves the concurrent live profile and metadata
+untouched. These are bounded optimistic checks, not a filesystem transaction with external writers.
+When metadata publication fails, rollback restores the captured bytes without reopening the
+backup; a profile the same apply created is removed instead. Rollback is ownership-aware: the same
+compare-and-swap helper (`assertDesktopProfileUnchanged`) checks that the live profile still holds
+the bytes this apply published, before acting and again before the restore rename. If another
+writer changed it, rollback is skipped, that profile is preserved, and the metadata error is
+reported with "profile rollback skipped". A failed rollback keeps the metadata error as the
+primary cause and reports that profile rollback also failed. An absent profile does not adopt a
+leftover backup from an earlier operation.
+
+Tests: `tests/clients/desktop-3p-write-files.test.ts`, `tests/clients/desktop-3p-removal.test.ts`, `tests/clients/desktop-remote-store.test.ts`, and
 `tests/claude-integration/claude-desktop-picker-profile.test.ts`.
