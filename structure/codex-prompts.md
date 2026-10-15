@@ -58,6 +58,7 @@ matches the submitted input. Refusals and newer edits keep their drafts.
 runs `codex debug prompt-input` in that home, bounded in time and in bytes, maps each rendered section
 onto a layer, and takes no caller-supplied directory. Captured process output is never serialized
 back: a failure is a classified kind plus a fixed phrase and the resolved command.
+Non-object messages and content items are skipped, and only string text is extracted; output with no recognized sections returns `output-invalid`, while a resolved installed runtime that cannot spawn returns `program-not-found`.
 
 The base prompt is absent from that output, because Codex discards `base_instructions` before
 rendering `prompt.input`. It is read from configuration instead, and it is read before the subprocess

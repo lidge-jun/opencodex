@@ -13,7 +13,7 @@ Download `OpenCodex-<version>-macos.dmg` from the [latest release](https://githu
 
 Release builds of `OpenCodex.app` are signed with a Developer ID, use the hardened runtime, and are notarized by Apple with the ticket stapled to the app. On first launch, macOS normally asks only for the standard confirmation for an app downloaded from the internet. If macOS still blocks it, open **System Settings → Privacy & Security** and choose **Open Anyway** for OpenCodex. Apps you build yourself are ad-hoc signed; see [Build from source](#build-from-source).
 
-The app shows its startup progress in a window when you open it. It enables **Start at Login** once on first launch; you can turn that off from the tray menu. Later launches from the login item start with the window hidden while the tray remains available.
+The app shows its startup progress in a window when you open it. It enables **Start at Login** once on first launch; you can turn that off from the tray menu. The tray item is checked only when this copy of the app is registered and macOS has not disabled the login item; otherwise its label says why (see [Desktop app](/guides/desktop-app/)). Later launches from the login item start with the window hidden while the tray remains available.
 
 ## Menu bar and usage panel
 

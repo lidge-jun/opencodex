@@ -6,7 +6,7 @@ import { CODEX_RESPONSES_LITE_HEADER, CODEX_RESPONSES_LITE_METADATA_KEY } from "
 import { createTestTranslatorBudget } from "../../helpers/translator-budget";
 import { clearBridgeSearchReplayCacheForTests } from "../../../src/responses/bridge-search-replay-cache";
 
-const canonical: OcxProviderConfig = { adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" };
+const canonical: OcxProviderConfig = { projectResponsesLiteHostedSearchHistory: true, adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" };
 const search = (i: number) => ({ type: "web_search_call", id: `ws_search_${i}`, status: "completed", action: [
   { type: "search", query: "reference query", queries: ["query-one", "query-two"], sources: [{ type: "url", url: "https://example.test/reference", title: "Reference" }] },
   { type: "open_page", url: "https://example.test/open" },
@@ -47,18 +47,18 @@ test.each(["gpt-6.1-sol", "gpt-6-luna", "gpt-6-astra"])("ordinary Codex Lite %s 
   expect(metadata[0].action).toEqual(raw.input[2].action); expect(metadata[1].action.url).toBe("https://example.test/open"); expect(metadata[2].action.pattern).toBe("needle");
 });
 
-test("bridge memo hits restore destination calls/results first; only misses become notes", async () => {
+test.each([true, false])("bridge memo hits restore destination calls/results before projection opt-in=%s", async enabled => {
   const { bridgeSearchReplayScope, rememberBridgeSearchReplay } = await import("../../../src/responses/bridge-search-replay-cache");
   const scope = { clientPrincipalId: "fixture-principal", clientThreadId: "fixture-thread", current: {
     providerName: "openai", adapterName: "openai-responses", modelId: "gpt-6.1-sol", providerDestinationIdentity: "fixture-destination", credentialIdentity: "fixture-credential",
   } };
   rememberBridgeSearchReplay(bridgeSearchReplayScope(scope), "ws_search_0", { callId: "memo-call", name: "web_search", argumentsText: "{}", output: "executed bridge result" });
-  const { body } = build(fixture(), { ...canonical, webSearchBridge: { enabled: true, backend: "openai" } }, parsed => { parsed._reasoningReplayScope = scope; });
-  expect(notes(body)).toHaveLength(3);
+  const { body } = build(fixture(), { ...canonical, projectResponsesLiteHostedSearchHistory: enabled, webSearchBridge: { enabled: true, backend: "openai" } }, parsed => { parsed._reasoningReplayScope = scope; });
+  expect(notes(body)).toHaveLength(enabled ? 3 : 0);
   const index = body.input.findIndex((item: any) => item.call_id === "memo-call");
   expect(body.input[index]).toEqual({ type: "function_call", call_id: "memo-call", name: "web_search", arguments: "{}" });
   expect(body.input[index + 1]).toEqual({ type: "function_call_output", call_id: "memo-call", output: "executed bridge result" });
-  expect(body.input.some((item: any) => item.type === "web_search_call")).toBe(false);
+  expect(body.input.filter((item: any) => item.type === "web_search_call")).toHaveLength(enabled ? 0 : 3);
   expect(JSON.stringify(notes(body))).not.toContain("reference query");
 });
 
@@ -251,4 +251,39 @@ test.each(["true", "false"])("native compaction flags preserve hosted history fo
     const {body}=build(raw,canonical,parsed=>{parsed._compactionRequest=true;},new Headers({[CODEX_RESPONSES_LITE_HEADER]:lite}));
     expect(notes(body)).toHaveLength(0); expect(body.input.filter((x:any)=>x.type==="web_search_call")).toHaveLength(4);
   }
+});
+
+// Opt-in is independent of protocol intent: neither setting nor Lite selects the other.
+test.each([undefined, false, true, "true", "false", 1, 0, null, {}, []].map(setting => ({ setting })))("ordinary hosted projection requires the literal boolean provider opt-in: $setting", ({ setting }) => {
+  for (const signal of ["true", "false", "absent", "ws-true", "ws-false", "conflict"]) {
+    const raw = fixture();
+    const headers = new Headers();
+    if (signal === "true" || signal === "false") headers.set(CODEX_RESPONSES_LITE_HEADER, signal);
+    if (signal === "ws-true" || signal === "ws-false" || signal === "conflict") {
+      raw.client_metadata = { [CODEX_RESPONSES_LITE_METADATA_KEY]: signal === "ws-false" ? "false" : "true" };
+    }
+    if (signal === "conflict") headers.set(CODEX_RESPONSES_LITE_HEADER, "false");
+    const provider = { ...canonical };
+    delete provider.projectResponsesLiteHostedSearchHistory;
+    if (setting !== undefined) (provider as any).projectResponsesLiteHostedSearchHistory = setting;
+    const { body, request } = build(raw, provider, undefined, headers);
+    const project = setting === true && (signal === "true" || signal === "ws-true");
+    expect(notes(body)).toHaveLength(project ? 4 : 0);
+    expect(body.input.filter((item: any) => item.type === "web_search_call")).toHaveLength(project ? 0 : 4);
+    expect(body.tools).toEqual(raw.tools);
+    expect(body.input.find((item: any) => item.type === "reasoning")).toEqual(raw.input[1]);
+    expect(body.client_metadata).toEqual(raw.client_metadata);
+    expect(new Headers(request.headers).get(CODEX_RESPONSES_LITE_HEADER)).toBe(headers.get(CODEX_RESPONSES_LITE_HEADER));
+    expect(body.projectResponsesLiteHostedSearchHistory).toBeUndefined();
+  }
+});
+
+test.each([true, false])("portable/routed summaries retain their existing default projection with ordinary opt-in=%s", enabled => {
+  const { body } = build(fixture(), { ...canonical, projectResponsesLiteHostedSearchHistory: enabled }, parsed => {
+    parsed._compactionRequest = true; parsed._portableCompaction = true;
+  });
+  expect(notes(body)).toHaveLength(4);
+  expect(body.input.some((item: any) => item.type === "web_search_call")).toBe(false);
+  expect(body.tools).toBeUndefined();
+  expect(body.tool_choice).toBeUndefined();
 });

@@ -124,39 +124,43 @@ export function writeCachedHubState(owner: HubStateOwner, state: HubStateDTO, fe
  * banner reading `state unavailable (hub_state_http_507)` sends the reader looking for a client
  * bug when the hub has in fact answered and said something.
  */
-export function hubStateFailureReason(error: unknown): string {
+export function hubStateFailureReason(error: unknown, peer: "hub" | "Home" = "hub"): string {
+  // A Remote Link Child reads the same route from its Home (#6957); the sentences name the peer
+  // the operator actually configured.
+  const holder = peer === "Home" ? "this Child's link key" : "this client's data key";
   if (error instanceof HubClientError) {
     switch (error.code) {
       case "hub_state_not_a_hub":
         return "the remote host does not publish hub state";
       case "hub_state_unsupported":
-        return "this hub is too old to report its state; upgrade the hub";
+        return `this ${peer} is too old to report its state; upgrade the ${peer}`;
       case "hub_state_unauthorized":
-        return "the hub rejected this client's data key";
+        return `the ${peer} rejected ${holder}`;
       case "hub_state_schema_invalid":
       case "hub_state_invalid":
-        return "the hub returned an unreadable hub-state document";
+        return `the ${peer} returned an unreadable hub-state document`;
       case "hub_state_content_type_invalid":
         // Usually a captive portal, a TLS-terminating proxy or an error page in front of the
         // hub: the request reached SOMETHING, and that something is not the hub's API.
-        return "the hub's state response was not JSON";
+        return `the ${peer}'s state response was not JSON`;
       case "body_too_large":
-        return "the hub's state response exceeded the allowed size";
+        return `the ${peer}'s state response exceeded the allowed size`;
       case "unreachable":
-        return "the hub is unreachable";
+        return `the ${peer} is unreachable`;
       case "redirect_refused":
-        return "the hub redirected the state request";
+        return `the ${peer} redirected the state request`;
       default: {
         const status = error.code.startsWith("hub_state_http_")
           ? error.code.slice("hub_state_http_".length)
           : null;
         return status && /^\d+$/.test(status)
-          ? `the hub answered HTTP ${status} to the state request`
+          ? `the ${peer} answered HTTP ${status} to the state request`
           : error.code;
       }
     }
   }
-  return "the hub state could not be read";
+  if (error instanceof Error && error.name === "LinkRelayAuthenticationError") return error.message;
+  return `the ${peer} state could not be read`;
 }
 
 export interface ResolveHubStateOptions {
@@ -178,6 +182,8 @@ export interface ResolveHubStateOptions {
   allowNetwork?: boolean;
   /** False skips the cache write, for read-only callers. */
   persist?: boolean;
+  /** Which peer the sentences name: a hub, or a Remote Link Child's Home. */
+  peer?: "hub" | "Home";
 }
 
 function withAge(
@@ -218,8 +224,8 @@ export async function resolveHubState(options: ResolveHubStateOptions): Promise<
   } catch (error) {
     // Deliberately no local-state fallback here. A stale cache is still the HUB's state; the
     // client's own providers and logins are not, at any age.
-    if (error instanceof HubClientError && error.code === "hub_state_not_a_hub") return withAge("unavailable", null, undefined, now, hubStateFailureReason(error));
-    return fromCache(hubStateFailureReason(error));
+    if (error instanceof HubClientError && error.code === "hub_state_not_a_hub") return withAge("unavailable", null, undefined, now, hubStateFailureReason(error, options.peer));
+    return fromCache(hubStateFailureReason(error, options.peer));
   }
   const fetchedAt = new Date(now).toISOString();
   if (options.persist !== false) writeCachedHubState(options.owner, state, fetchedAt);

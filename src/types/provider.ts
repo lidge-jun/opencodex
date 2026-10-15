@@ -433,6 +433,11 @@ export interface OcxProviderConfig {
    */
   preserveResponsesMessageMetadata?: boolean;
   /**
+   * Opt in to lossy hosted-search history notes on ordinary canonical Codex Lite requests.
+   * Default off; only literal true enables it, and non-Lite/native compact stay unchanged.
+   */
+  projectResponsesLiteHostedSearchHistory?: boolean;
+  /**
    * Treat this provider's `modelReasoningEfforts` as authoritative at the wire, not only in the
    * catalog. Adapters that ship their own per-model effort table (currently `command-code`)
    * otherwise let that table win for models it knows, so a widened row is advertised in the
@@ -622,6 +627,11 @@ export interface OcxProviderConfig {
   contextWindow?: number;
   /** Per-model fallback when context metadata is absent; otherwise caps the reported window. */
   modelContextWindows?: Record<string, number>;
+  /**
+   * Custom providers only, default off: fill a missing context window from bundled model-ID
+   * metadata before the Context cap / 128k fallback. An estimate, not verified relay capacity.
+   */
+  inferContextWindow?: boolean;
   /** Per-model Copilot upstream tier; only the github-copilot route sends it. */
   modelContextTiers?: Record<string, "default" | "long_context">;
   /** Model-specific Codex catalog input modalities, e.g. ["text"] or ["text", "image"]. */
@@ -639,6 +649,8 @@ export interface OcxProviderConfig {
    * Responses `max_output_tokens`. Adapters still let an explicit request win.
    */
   defaultMaxOutputTokens?: number;
+  /** Opt-in Azure Responses floor for explicit positive output budgets; may raise the caller cap. */
+  minMaxOutputTokens?: number;
   /** Model-specific fallback output token budgets. Exact/model-pattern entries beat the provider default. */
   modelMaxOutputTokens?: Record<string, number>;
   /**

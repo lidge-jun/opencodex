@@ -65,6 +65,16 @@ A failed link does not silently switch to a local provider.
 The Child returns a retryable `503` without forwarding the link key or request when its tunnel is failed, stopped, or not supervised.
 It also keeps the key local when another process owns the tunnel port; free that port so the Child's SSH tunnel can bind it.
 
+## What a Child shows and manages
+
+A Child runs on the Home's providers, accounts and settings, so the Home is where you change them.
+
+- **Dashboard.** The Child's dashboard shows the Home's state read-only and says "Managed by Home <name> over Remote Link". Dashboard and Providers read the Home through the link, and the usage strip in the header shows the Home's quota. The model list is not shown on a Child, because building it runs provider discovery on the Home; Codex on the Child already offers the Home's models. For the same reason, the delegation and sidecar model pickers on a Child list the native models and the Home's current choices, not the Home's full routed list. Saving a change there is refused with a message that names the Home; make the change in the Home's dashboard. The Child's browser never receives a Home credential.
+- **Codex settings.** `ocx sync` on the Child (and connecting it) applies the Codex settings OpenCodex manages on the Home: Fast mode, the multi-agent mode, the web search sidecar switch, and the native sub-agent defaults when the Home syncs them. `ocx sync` and `ocx status` list the values that came from the Home. The default reasoning effort and the effort levels shown in the Codex app's model picker are Codex app settings on each computer; OpenCodex does not manage them on any computer.
+- **CLI.** Commands that only read, such as `ocx account list`, `ocx provider quota` and `ocx usage`, read the Home. They show what the Home has already observed: a read from a Child never makes the Home probe a provider, refresh a token or start a process, so quota and account details are as fresh as the Home's own activity keeps them. Reads that only exist to run provider discovery or a forced refresh, such as `ocx models live`, `ocx models preset show` and `ocx account list --quota`, are refused like changes. Commands that change configuration are refused with one message that names the Home and the link and says no request was sent. `ocx status` describes the Home and the link. `ocx provider list` and `ocx config get` still show this computer's own configuration, labelled as local and inactive while the computer is linked. `ocx config set`, `ocx config unset` and `ocx config import` still write locally, each with the same note, and `ocx provider add`, `remove` and `set-default` are refused because those providers are not used while linked.
+
+These reads need an OpenCodex version with the Remote Link management relay on both the Home and the Child. An older Home answers with a message asking you to upgrade it.
+
 ## Remove a Child
 
 Select **Disconnect** for the Child and confirm the alias. The Home stops the tunnel, revokes that Child's link key, and removes the saved link record.

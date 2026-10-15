@@ -511,6 +511,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
                   outBody,
                   destinationDecodesNativeCompactionBlob(provider),
                   threadServingIdentityChanged,
+                  parsed._compactionRequest !== true,
                 ),
                 {
                   preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true,
@@ -583,9 +584,9 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       // here, on the serialized body, not on the parsed selector. One place covers both the
       // HTTP and the WebSocket outbound, because the WS path transports this same request
       // instead of rebuilding it.
-      // Codex Lite history policy: replay remaining hosted actions as untrusted metadata,
+      // Opt-in Codex Lite history policy: replay remaining hosted actions as untrusted metadata,
       // after bridge restoration/tool validation. Tool declarations and other input stay intact.
-      if (url === `${CODEX_FORWARD_BASE_URL}/responses`
+      if (provider.projectResponsesLiteHostedSearchHistory === true && url === `${CODEX_FORWARD_BASE_URL}/responses`
         && !parsed._compactionRequest && !parsed._portableCompaction
         && codexResponsesLiteSelected(headers, finalBody)
         && isPlainObject(finalBody) && Array.isArray(finalBody.input)

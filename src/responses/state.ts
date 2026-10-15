@@ -710,11 +710,6 @@ export function sweepOrphanedResponseSpills(): number {
 type SnapshotWriteOutcome = "stable" | "unstable" | "failed";
 
 async function writeBoundedSnapshot(path: string, attemptLimit: number): Promise<SnapshotWriteOutcome> {
-  // Serialize writers so concurrent flush + debounce cannot race on temps / ACL (#612).
-  const previous = persistGate;
-  let release!: () => void;
-  persistGate = new Promise<void>(resolve => { release = resolve; });
-  await previous;
   try {
     for (let attempt = 0; attempt < attemptLimit; attempt += 1) {
       const revision = stateRevision;
@@ -751,13 +746,19 @@ async function writeBoundedSnapshot(path: string, attemptLimit: number): Promise
         lastSnapshotTarget = resolveWriteTarget(path);
       }
       persistAttemptHookForTests?.();
-      if (revision === stateRevision) return "stable";
+      if (revision === stateRevision) {
+        // Cancel only the timer whose mutation this stable revision includes,
+        // before an awaiting caller's microtask can record a newer revision.
+        if (persistTimer) clearTimeout(persistTimer);
+        persistTimer = null;
+        pendingPersistPath = null;
+        drainPendingSpillUnlinks();
+        return "stable";
+      }
     }
     return "unstable";
   } catch {
     return "failed";
-  } finally {
-    release();
   }
 }
 
@@ -792,21 +793,30 @@ function schedulePersistAt(path: string, replace = false): void {
 }
 
 async function persistNow(path: string, awaitFollowUp = false): Promise<void> {
-  if (persistTimer) {
-    clearTimeout(persistTimer);
-    persistTimer = null;
-  }
-  pendingPersistPath = null;
-  const attemptLimit = awaitFollowUp ? MAX_SNAPSHOT_REWRITE_ATTEMPTS : 1;
-  let outcome = await writeBoundedSnapshot(path, attemptLimit);
-  if (outcome === "unstable" && awaitFollowUp) {
-    if (persistTimer) clearTimeout(persistTimer);
-    persistTimer = null;
+  // Include follow-up scheduling in the gate: releasing after only the disk write
+  // lets shutdown observe an empty timer before the background pass re-arms it.
+  const previous = persistGate;
+  let release!: () => void;
+  persistGate = new Promise<void>(resolve => { release = resolve; });
+  await previous;
+  try {
+    if (persistTimer) {
+      clearTimeout(persistTimer);
+      persistTimer = null;
+    }
     pendingPersistPath = null;
-    outcome = await writeBoundedSnapshot(path, attemptLimit);
+    const attemptLimit = awaitFollowUp ? MAX_SNAPSHOT_REWRITE_ATTEMPTS : 1;
+    let outcome = await writeBoundedSnapshot(path, attemptLimit);
+    if (outcome === "unstable" && awaitFollowUp) {
+      if (persistTimer) clearTimeout(persistTimer);
+      persistTimer = null;
+      pendingPersistPath = null;
+      outcome = await writeBoundedSnapshot(path, attemptLimit);
+    }
+    if (outcome === "unstable" && !awaitFollowUp) schedulePersistAt(path, true);
+  } finally {
+    release();
   }
-  if (outcome === "stable") drainPendingSpillUnlinks();
-  else if (outcome === "unstable" && !awaitFollowUp) schedulePersistAt(path, true);
 }
 
 function schedulePersist(): void {
@@ -816,15 +826,8 @@ function schedulePersist(): void {
 }
 
 async function flushResponseSnapshot(): Promise<void> {
-  if (persistTimer) {
-    await persistNow(pendingPersistPath ?? snapshotPath(), true);
-    return;
-  }
-  // No pending timer: still await any in-flight write so shutdown does not race (#612).
+  // The gate includes the background pass's timer decision, not just its write.
   await persistGate;
-  // A bounded background pass may have scheduled its same-path follow-up while
-  // this flush was waiting on the single-flight gate. Shutdown owns one awaited
-  // bounded follow-up rather than returning behind that unref'd timer.
   if (persistTimer) await persistNow(pendingPersistPath ?? snapshotPath(), true);
 }
 

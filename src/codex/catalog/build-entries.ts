@@ -48,7 +48,8 @@ import { NATIVE_RESERVE_MODEL } from "./native-models";
 import { isReserveCatalogProjection, type ReserveCatalogProjection } from "./reserve";
 import { deriveEntry, finishUpstreamNativeEntry, isExactComboCatalogEntry } from "./derive-entry";
 import { PICKER_ORDER_PRIORITY_BASE, SPAWN_PRIORITY_FIELD } from "./subagent-roster";
-import { preserveOperatorUltraFastTiers } from "./operator-tiers";
+import { applyConfiguredUltraFast } from "./configured-tiers";
+import { applyNativeUltraFastTier } from "./native-ultrafast";
 
 export interface ObservedCatalogEntryBuildInput {
   readonly template: RawEntry | null;
@@ -473,6 +474,8 @@ export function applyFullModelPickerOrder(entries: RawEntry[], order: readonly s
 export interface ObservedCatalogMergeInput {
   /** Preserve operator-supplied Ultra Fast only from the exact persisted routed row. */
   readonly ultraFastTier?: boolean;
+  /** Current captured wire declarations; disk rows and templates never populate this set. */
+  readonly configuredUltraFastSlugs?: ReadonlySet<string>;
   readonly catalogModels: readonly RawEntry[];
   readonly baselineCatalogModels: readonly RawEntry[];
   readonly routedEntries: readonly RawEntry[];
@@ -514,6 +517,7 @@ export interface ObservedCatalogMergeInput {
  */
 export function mergeCatalogEntriesFromObservedState({
   ultraFastTier = false,
+  configuredUltraFastSlugs = new Set(),
   catalogModels,
   baselineCatalogModels,
   routedEntries,
@@ -865,7 +869,7 @@ export function mergeCatalogEntriesFromObservedState({
     if (typeof entry.slug !== "string" || !entry.slug.includes("/")
       || isNativeAliasCatalogEntry(entry) || isExactComboCatalogEntry(entry, exactComboSlugs)
       || trustedAccountBoundNativeCatalogSlug(entry) !== undefined) continue;
-    preserveOperatorUltraFastTiers(entry, operatorRows.get(entry.slug), ultraFastTier);
+    applyConfiguredUltraFast(entry, operatorRows.get(entry.slug), configuredUltraFastSlugs.has(entry.slug), ultraFastTier);
   }
   const finalRoutedEntrySet = new Set(finalRoutedEntries);
   const degradedPreservedCount = preservedRoutedEntries.filter(entry => {
@@ -931,6 +935,11 @@ export function mergeCatalogEntriesFromObservedState({
           levels.flatMap(level => typeof level.effort === "string" ? [level.effort] : []),
         );
       }
+    }
+    // Native Astra/Sol rows (bare and account-bound) gain or lose the documented Ultrafast
+    // choice with the switch; aliases, combos and reserve projections keep their own tiers.
+    if (!reserveProjection && !exactCombo && m.owned_by !== COMBO_NAMESPACE && !isNativeAliasCatalogEntry(e)) {
+      applyNativeUltraFastTier(e, ultraFastTier);
     }
     if (wsEnabled) e.supports_websockets = true;
     else {

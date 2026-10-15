@@ -3,6 +3,8 @@ import { execFile } from "node:child_process";
 import { join } from "node:path";
 import { durableBunPath } from "../lib/bun-runtime";
 import { selfLaunchArgv } from "../lib/self-launch-argv";
+import { isDesktopSupervised } from "../lib/system-restart-contract";
+import { withLoginShellPath } from "./login-shell-path";
 import {
   WINDOWS_SCHTASKS_CREATE_ACCESS_DENIED_MARKER,
   isWindowsSchtasksCreateAccessDenied,
@@ -66,6 +68,8 @@ interface StartupInstallLaunch {
   execFile?: typeof execFile;
   /** Overrides Bun's own standalone detection, which a source-mode test cannot flip. */
   isStandaloneExecutable?: boolean;
+  isDesktopSupervised?: () => boolean;
+  withLoginShellPath?: (env: NodeJS.ProcessEnv) => Promise<NodeJS.ProcessEnv>;
 }
 let installLaunch: StartupInstallLaunch = {};
 
@@ -169,7 +173,16 @@ export function installFailureDetail(stdout: string, stderr: string, error: Erro
   return classifyCliInstallFailure(stdout, stderr, error).detail;
 }
 
-function runCliInstall(
+/**
+ * Under OpenCodex Desktop the proxy has the GUI launch PATH, where no user-installed Codex is
+ * visible. The shim installer gets the user's login-shell PATH instead (#6971).
+ */
+async function installChildEnv(action: StartupInstallAction): Promise<NodeJS.ProcessEnv> {
+  if (action !== "install-shim" || !(installLaunch.isDesktopSupervised ?? isDesktopSupervised)()) return process.env;
+  return (installLaunch.withLoginShellPath ?? withLoginShellPath)(process.env);
+}
+
+async function runCliInstall(
   action: StartupInstallAction,
   options?: { repair?: boolean },
 ): Promise<{ stdout: string; stderr: string }> {
@@ -183,13 +196,14 @@ function runCliInstall(
     isStandaloneExecutable: installLaunch.isStandaloneExecutable,
   });
   const run = installLaunch.execFile ?? execFile;
+  const env = await installChildEnv(action);
   return new Promise((resolve, reject) => {
     const timeout = process.platform === "win32" && action === "install-service"
       ? 0
       : 60_000;
     run(bun, argv, {
       encoding: "utf8",
-      env: process.env,
+      env,
       // A fresh Windows scheduler install now owns its UAC prompt inside this CLI
       // transaction. Killing only the CLI at 60s can orphan its elevated schtasks child,
       // which may register the task after the Dashboard has reported failure. Keep the

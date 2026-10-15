@@ -21,7 +21,7 @@ import {
   cmdRoutes,
   cmdStrategy,
 } from "./account-extended";
-import { apiError, apiJson, classifyAccount, fetchRows, proxyUnreachable, resolveBaseUrl, type AccountDeps, type AccountRow, type AccountType, type ApiResult }
+import { accountClassificationConfig, apiError, apiJson, classifyAccount, fetchRows, proxyUnreachable, resolveBaseUrl, type AccountDeps, type AccountRow, type AccountType, type ApiResult }
   from "./account-api";
 
 export { classifyAccount } from "./account-api";
@@ -199,7 +199,12 @@ async function cmdList(rest: string[], deps: AccountDeps): Promise<number> {
     console.error(ACCOUNT_USAGE);
     return 1;
   }
-  const config = deps.loadConfigImpl?.() ?? loadConfig();
+  const classification = await accountClassificationConfig(deps, deps.loadConfigImpl?.() ?? loadConfig());
+  if ("error" in classification) {
+    console.error(`Error: ${classification.error}`);
+    return 1;
+  }
+  const config = classification.config;
   const baseUrl = await resolveBaseUrl(deps);
   if (!baseUrl) return proxyUnreachable();
 
@@ -289,7 +294,12 @@ async function cmdCurrent(rest: string[], deps: AccountDeps): Promise<number> {
     console.error(ACCOUNT_USAGE);
     return 1;
   }
-  const config = deps.loadConfigImpl?.() ?? loadConfig();
+  const classification = await accountClassificationConfig(deps, deps.loadConfigImpl?.() ?? loadConfig());
+  if ("error" in classification) {
+    console.error(`Error: ${classification.error}`);
+    return 1;
+  }
+  const config = classification.config;
   const c = classifyAccount(config, name);
   if ("error" in c) {
     console.error(`Error: ${c.error}. Known candidates: ${candidateNames(config)}`);
@@ -332,7 +342,20 @@ async function cmdUse(rest: string[], deps: AccountDeps): Promise<number> {
     console.error(ACCOUNT_USAGE);
     return 1;
   }
-  const config = deps.loadConfigImpl?.() ?? loadConfig();
+  // #6957: an account change on a link Child is refused before any Home read.
+  if (!deps.baseUrl) {
+    const refusal = (await import("./link-child")).linkChildProviderChangeRefusal("ocx account use");
+    if (refusal) {
+      console.error(`Error: ${refusal}`);
+      return 1;
+    }
+  }
+  const classification = await accountClassificationConfig(deps, deps.loadConfigImpl?.() ?? loadConfig());
+  if ("error" in classification) {
+    console.error(`Error: ${classification.error}`);
+    return 1;
+  }
+  const config = classification.config;
   const c = classifyAccount(config, name);
   if ("error" in c) {
     console.error(`Error: ${c.error}. Known candidates: ${candidateNames(config)}`);
@@ -392,7 +415,20 @@ async function cmdClear(rest: string[], deps: AccountDeps): Promise<number> {
     console.error(ACCOUNT_USAGE);
     return 1;
   }
-  const config = deps.loadConfigImpl?.() ?? loadConfig();
+  // #6957: an account change on a link Child is refused before any Home read.
+  if (!deps.baseUrl) {
+    const refusal = (await import("./link-child")).linkChildProviderChangeRefusal("ocx account clear");
+    if (refusal) {
+      console.error(`Error: ${refusal}`);
+      return 1;
+    }
+  }
+  const classification = await accountClassificationConfig(deps, deps.loadConfigImpl?.() ?? loadConfig());
+  if ("error" in classification) {
+    console.error(`Error: ${classification.error}`);
+    return 1;
+  }
+  const config = classification.config;
   const c = classifyAccount(config, name);
   if ("error" in c) {
     console.error(`Error: ${c.error}. Known candidates: ${candidateNames(config)}`);

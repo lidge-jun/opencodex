@@ -165,6 +165,13 @@ target's own recovery decision, while the physical-send total is what binds ever
 
 ## Durable spend reservations
 
+Azure's opt-in `minMaxOutputTokens` is resolved by `effectiveAzureOutputBudget` in
+`src/adapters/azure.ts` for both serialization and spend admission. Final Responses route
+normalization reserves the effective explicit output cap; Combo prepayment computes it for
+each concrete target before booking. Neither path changes the caller-owned cap or carries
+one target's floor to the next. `tests/responses/responses-spend-anchor.test.ts` checks
+both Azure aliases, direct and Combo dispatch, refusal below the floor and wire-time reservation.
+
 The request's send budget bounds how many times it may reach upstream; the spend ledger bounds
 what those sends may cost, and it is the only bound here that survives a restart. Its production
 caller is `request-spend.ts`, installed on the execution budget at genuine ingress in `core.ts`

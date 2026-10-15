@@ -33,6 +33,7 @@ import { fetchMainAccountInfoAttempt, EMPTY_MAIN_ACCOUNT_INFO, mainResetCreditsF
 import { fetchPoolAccountQuota, PoolQuotaProbeBusyError, POOL_QUOTA_REFRESH_CONCURRENCY } from "./pool-quota-probe";
 import type { PoolQuotaResult } from "./pool-quota-probe";
 import { getRuntimeConfig, configuredPoolAccount, mapWithConcurrency } from "./runtime-config";
+import { isPassiveRead } from "../../lib/passive-read";
 
 export function quotaForPlan<T extends Omit<StoredAccountQuota, "updatedAt"> | StoredAccountQuota | null>(
   quota: T,
@@ -274,13 +275,25 @@ export async function listCodexAuthAccountsSnapshot(
   pruneCodexCredits([MAIN_CODEX_ACCOUNT_ID, ...poolAccounts.map(account => account.id)]);
   // One redaction decision for the whole snapshot, read once from the operator's config (#3859).
   const maskEmails = emailMaskingEnabled(runtimeConfig);
-  const mainResult = await fetchMainAccountInfoAttempt(forceRefresh, 1, undefined, false,
-    forceRefresh, false, runtimeConfig);
+  // A passive read (a Remote Link Child's, #6959) reports what this machine already observed: no
+  // token refresh, no WHAM probe, and so none of the plan or credential writes they make.
+  const passive = isPassiveRead();
+  const mainResult: Awaited<ReturnType<typeof fetchMainAccountInfoAttempt>> = passive
+    ? { info: getMainAccountInfoCache() ?? EMPTY_MAIN_ACCOUNT_INFO, credentialChecked: false, hasCredential: false,
+      identityGeneration: captureMainAccountIdentityGeneration() }
+    : await fetchMainAccountInfoAttempt(forceRefresh, 1, undefined, false, forceRefresh, false, runtimeConfig);
   const refreshedPool = await mapWithConcurrency(poolAccounts, POOL_QUOTA_REFRESH_CONCURRENCY, async account => {
     const cred = getCodexAccountCredential(account.id);
     let quotaResult: PoolQuotaResult;
     if (!cred) {
       quotaResult = { quota: null, needsReauth: true };
+    } else if (passive) {
+      quotaResult = {
+        quota: getAccountQuota(account.id),
+        needsReauth: false,
+        credentialGeneration: readCodexAccountRecord(account.id)?.generation,
+        quotaProbeSkipped: true,
+      };
     } else {
       try {
         // Credits are process-local while pool quota is hydrated from disk, so right after a
@@ -410,6 +423,8 @@ export async function listCodexAuthAccountsSnapshot(
   };
   // Project the refusal and DTO in the same owned synchronous observation. A same-account grant
   // replacement during earlier pool probes must not inherit the previous grant's refusal.
+  // A passive read opens no claim database (its lock file is hardened on open).
+  if (passive) return projectSnapshot();
   const projectionLease = tryAcquireNativeMainProfileClaim();
   if (!projectionLease) return projectSnapshot();
   try {

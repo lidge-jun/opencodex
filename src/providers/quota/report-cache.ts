@@ -344,3 +344,17 @@ export function isProviderQuotaReportCurrent(value: ProviderQuotaReport): boolea
   return (generation === undefined || isMainAccountIdentityGenerationLive(generation))
     && (accountReportCurrent.get(value)?.() ?? true);
 }
+
+/**
+ * The reports this process already holds for the configured providers, for a passive read (#6959):
+ * no probe, token refresh, account snapshot or publication into routing evidence. The Home's own
+ * dashboard and traffic keep the cache current.
+ */
+export function heldProviderQuotaReports(configuredProviders: readonly string[]): ProviderQuotaResponse {
+  const held = getProviderQuotaReportCache()?.response;
+  const configured = new Set(configuredProviders);
+  return {
+    generatedAt: held?.generatedAt ?? Date.now(),
+    reports: (held?.reports ?? []).filter(item => configured.has(item.provider) && isProviderQuotaReportCurrent(item)),
+  };
+}

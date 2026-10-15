@@ -121,12 +121,16 @@ export function ownerState(record: OwnerEvidence | null, deps: OwnerDeps): "dead
     return deps.isProcessAlive(record.pid) === false ? "dead" : "live";
   } catch { return "live"; }
 }
+/** Type, no symlink, and current-user ownership on POSIX, judged on one captured observation. */
+export function safeNamespaceStat(stat: LockStat, kind: "file" | "directory", deps: OwnerDeps): boolean {
+  const uid = deps.uid();
+  return !stat.isSymbolicLink() && (kind === "file" ? stat.isFile() : stat.isDirectory())
+    && (deps.platform === "win32" || (uid !== undefined
+      && stat.uid === (typeof stat.uid === "bigint" ? BigInt(uid) : uid)));
+}
 export function safeNamespace(path: string, kind: "file" | "directory", deps: OwnerDeps, missing = false): boolean {
   try {
-    const stat = lockFileOperation(() => deps.lstat(path), deps.platform), uid = deps.uid();
-    return !stat.isSymbolicLink() && (kind === "file" ? stat.isFile() : stat.isDirectory())
-      && (deps.platform === "win32" || (uid !== undefined
-        && stat.uid === (typeof stat.uid === "bigint" ? BigInt(uid) : uid)));
+    return safeNamespaceStat(lockFileOperation(() => deps.lstat(path), deps.platform), kind, deps);
   } catch (error) {
     if (error instanceof LockFileBusy) throw error;
     return missing && (error as NodeJS.ErrnoException).code === "ENOENT";

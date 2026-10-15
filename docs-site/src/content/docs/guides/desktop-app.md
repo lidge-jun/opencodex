@@ -98,28 +98,39 @@ On POSIX, the shim preserves shell-exported Anthropic settings when launch-proof
 are available. If proof generation fails, and for Windows direct execution, the bundled
 CLI retains its existing stripping of untrusted Anthropic environment settings.
 
-On macOS and Linux, `ocx status` shows `Runtime supervisor: OpenCodex Desktop` when
-it verifies that the desktop app runs its bundled proxy, even without recorded ownership.
-Turn on **Start at Login** in the OpenCodex menu instead of installing a background
-service. Startup safety credits the app only when its login registration is verified;
+On macOS, Linux and Windows, `ocx status` and `ocx doctor` identify OpenCodex Desktop
+when they verify that the app runs its bundled proxy, even without recorded ownership.
+`ocx status` shows `Runtime supervisor: OpenCodex Desktop`; neither command recommends
+CLI service repairs for that runtime. On macOS and Linux, turn on **Start at Login**
+in the OpenCodex menu instead of installing a background service. Startup safety credits the app only when its login registration is verified;
 if it cannot be verified, follow the Desktop guidance in status.
 The Startup page then labels the Desktop row **Running · Start at Login not verified**.
-The menu checkbox only shows that the login item file exists. If it is already checked,
-make sure macOS allows OpenCodex to open at login under System Settings → General →
-Login Items & Extensions. While the app runs the proxy, the Startup page keeps the
-background service and launcher shim installers disabled; to use them instead, quit
-OpenCodex and run `ocx service install` or `ocx codex-shim install` in a terminal.
+On macOS the menu's **Start at Login** item is checked only when Startup safety would
+verify the same registration. Otherwise the item is unchecked and its label says why:
+**disabled by macOS** opens System Settings → General → Login Items & Extensions, where
+you allow OpenCodex to open at login; **another OpenCodex copy** means the login item
+belongs to a different copy of the app, so turn it off from that copy; **registered app
+is missing** means the login item names an app that no longer exists, so delete
+`~/Library/LaunchAgents/OpenCodex.plist` and turn the item on again; **status unknown**
+means the registration could not be read. While the app runs the proxy, the Startup page keeps the
+background service installer disabled; to use it instead, quit OpenCodex and run
+`ocx service install` in a terminal. The Codex launcher shim can still be installed there.
+When a Codex launch finds no proxy, the shim waits for OpenCodex to restart it, opens
+OpenCodex on macOS if it quit, and otherwise reports an error instead of starting a second
+proxy. If the shim reads "activation not confirmed", add
+`. ~/.opencodex/codex-shell-env.sh` to your shell startup file after other PATH setup.
 
 The bundled CLI is `/Applications/OpenCodex.app/Contents/MacOS/ocx` on macOS and
 `/usr/bin/ocx` for the Linux deb package. Run that executable with `status` to check
-the app's proxy. Windows supervision detection is unsupported.
+the app's proxy. Windows also verifies live supervision, but **Start at Login** remains
+unverified there and Desktop receives no startup protection credit.
 
 While the CLI detects Desktop supervising the proxy, `ocx service install`, `repair`,
 `start`, and `restart` refuse before changing the service, even without recorded ownership
 or verified login registration. Quit OpenCodex, then run `ocx service install` to move
 startup management to the CLI. A duplicate `ocx start` names the Desktop supervisor.
 
-Use **Check for Updates…** in the tray to update the app's bundle. `ocx update` refuses
+Use **Check for Updates…** in the tray to update the app's bundle. The bundled compiled CLI reports `installer: "standalone"` and `reason: "standalone_install"` from `ocx system update check`, with `canUpdate: false` and guidance to use Desktop updates. `ocx update` refuses
 package replacement while Desktop supervises the proxy, even for a separate npm/Bun install;
 quit OpenCodex first to update that install. An accepted `ocx restart` reports that Desktop
 starts the replacement and waits for it to become healthy. A newer PATH CLI cannot use
@@ -129,9 +140,8 @@ Terminal `ocx stop` still stops the proxy, but Desktop may start it again after 
 backoff. Use **Stop proxy** or **Quit** in the tray to keep it stopped. Ordinary stop prints
 this reminder on stderr; `ocx stop --json` skips the supervision probe and reminder.
 
-These guards are early warnings in current CLIs and runtimes; older versions can lack them,
-and Windows does not support the supervision probe. A probe that saw Desktop but could not
-finish verification also blocks the operation. Once blocked, a later inconclusive probe
+These guards are early warnings in current CLIs and runtimes; older versions can lack them.
+A probe that saw Desktop but could not finish verification also blocks the operation. Once blocked, a later inconclusive probe
 does not clear it; a check must positively show no Desktop supervision. With no prior
 Desktop evidence, an inconclusive or unsupported probe keeps the existing command behavior.
 Recorded-ownership guards still apply independently.

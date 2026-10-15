@@ -50,7 +50,7 @@ describe("API surface resolution", () => {
 });
 
 describe("protocol settings resolution", () => {
-  test("defaults are legacy policy with every rollout switch off", () => {
+  test("defaults are legacy policy with every rollout switch off except the Antigravity direct lane", () => {
     expect(resolveProtocolSettings(cfg({}))).toEqual({
       unrepresentable: "legacy",
       rollout: {
@@ -58,9 +58,21 @@ describe("protocol settings resolution", () => {
         managedMessagesNative: false,
         managedMessagesNativeOAuth: false,
         directEncoders: false,
+        antigravityDirect: true,
         shadowPlan: false,
       },
     });
+  });
+
+  test("the Antigravity direct lane is on unless explicitly off, and fails closed on malformed input", () => {
+    const lane = (protocols: unknown) => resolveProtocolSettings(cfg({ protocols } as never)).rollout.antigravityDirect;
+    expect(lane(undefined)).toBe(true);
+    expect(lane({ rollout: {} })).toBe(true);
+    expect(lane({ rollout: { antigravityDirect: true } })).toBe(true);
+    expect(lane({ rollout: { antigravityDirect: false } })).toBe(false);
+    expect(lane({ rollout: { antigravityDirect: "true" } })).toBe(false);
+    expect(lane({ rollout: "on" })).toBe(false);
+    expect(lane("on")).toBe(false);
   });
 
   test("only literal true enables a switch and OAuth requires the key-auth switch", () => {

@@ -294,7 +294,14 @@ done < <(
 # drops files is the one failure here that stays green. Each shard still runs its files in sorted
 # order. Refresh the table with scripts/ci/test-durations.ts from hosted job logs.
 batch_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-readonly DURATIONS_FILE="${BUN_TEST_DURATIONS_FILE:-$batch_script_dir/test-durations.tsv}"
+# Windows runners weigh files with their own table. Per-file cost there is not a constant multiple of
+# Linux or macOS cost (process start and filesystem work dominate different files), and one shared
+# table balanced either Linux and macOS or Windows, never all three (#6982).
+default_durations_file="$batch_script_dir/test-durations.tsv"
+if [[ "${RUNNER_OS:-}" == "Windows" && -f "$batch_script_dir/test-durations.windows.tsv" ]]; then
+  default_durations_file="$batch_script_dir/test-durations.windows.tsv"
+fi
+readonly DURATIONS_FILE="${BUN_TEST_DURATIONS_FILE:-$default_durations_file}"
 durations_source="/dev/null"
 if [[ -f "$DURATIONS_FILE" ]]; then
   durations_source="$DURATIONS_FILE"
@@ -318,6 +325,18 @@ fallback_ms="$(
     | awk '{ values[NR] = $1 } END { value = (NR > 0 ? values[int((NR + 1) / 2)] : 1000); print (value > 0 ? value : 1) }'
 )"
 readonly FALLBACK_MS="$fallback_ms"
+
+# One private Bun transpiler cache for every batch in this shard. Left unset, each batch's
+# preload creates an empty cache of its own, so the first child a batch spawns re-transpiles
+# its whole module graph from nothing (0.67s cold against 0.20s warm for the journal/CLI graph
+# on macOS). On Windows runners that cold load is what pushed first spawns to 15-40s and past
+# their deadlines. mktemp -d creates a fresh directory only this job can write, which is the
+# protected explicit cache createIsolatedTestEnvironment accepts; an operator's value is kept.
+if [[ -z "${BUN_RUNTIME_TRANSPILER_CACHE_PATH+x}" ]]; then
+  shard_transpiler_cache="$(mktemp -d -t ocx-bun-transpiler-cache.XXXXXX)"
+  trap 'rm -rf -- "$shard_transpiler_cache"' EXIT
+  export BUN_RUNTIME_TRANSPILER_CACHE_PATH="$shard_transpiler_cache"
+fi
 
 assignment_file="$(mktemp -t ocx-bun-test-shards.XXXXXX)"
 printf '%s\n' "${GENERAL_FILES[@]}" \
@@ -403,7 +422,9 @@ if (( pending_count > 0 )); then
 fi
 readonly TOTAL_BATCHES=${#BATCH_STARTS[@]}
 echo "Shard ${SHARD_SPEC}: ${#SELECTED_FILES[@]} files in ${TOTAL_BATCHES} primary Bun processes (scope ${TEST_FILE_SCOPE}, batch size <= ${BATCH_SIZE}, timeout ${BATCH_TIMEOUT_SECONDS}s)."
-echo "Predicted shard time from recorded durations: $((predicted_ms / 1000))s; a file without a record weighs ${FALLBACK_MS}ms and a batch closes before ${BATCH_BUDGET_MS}ms."
+durations_label="no duration table"
+[[ "$durations_source" == "/dev/null" ]] || durations_label="${durations_source##*/}"
+echo "Predicted shard time from recorded durations (${durations_label}): $((predicted_ms / 1000))s; a file without a record weighs ${FALLBACK_MS}ms and a batch closes before ${BATCH_BUDGET_MS}ms."
 echo "Nothing here is retried. A test failure, a process timeout and a Bun runtime crash each fail this shard on their first occurrence."
 echo "A timeout or a crash is additionally swept one file per process for attribution, after the shard has already failed; that sweep cannot turn it green."
 

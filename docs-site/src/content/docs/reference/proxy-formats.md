@@ -34,9 +34,9 @@ This does not retry filtered model responses or interrupted streams.
 
 ## Codex-native ordinary Lite hosted-search history
 
-For ordinary requests to canonical ChatGPT Codex `/responses`, only explicitly selected Responses Lite requests project unreferenced remaining `web_search_call` history into labeled assistant reference notes. The final `x-openai-internal-codex-responses-lite` header selects Lite only when its value is exactly `true`; an explicit `false` overrides frame metadata. Without a recognized header value, a valid string-map `client_metadata.ws_request_header_x_openai_internal_codex_responses_lite` value of `true` is used, matching the existing WS metadata handling. Non-Lite or unrecognized effective intent retains structural history; malformed metadata does not override an explicit HTTP `true`. Model names, subscription authentication, missing hosted declarations and `additional_tools` alone do not select this policy; no header or metadata is rewritten to make it apply. It applies to new threads/forks, cross-model continuations and cache misses/restarts, without diagnostic settings. Only a valid same-scope bridge memo proves an original function call/result that can be restored first; an ID prefix, model name or missing memo cannot determine the issuer. A hosted cell exactly referenced by a same-input `item_reference.id` is retained. `store:false` removes references earlier, and its remaining hosted history can be projected. Tool declarations/Lite `additional_tools`, choices, client call/result pairs, reasoning/native ciphertext, non-hosted order and caller raw history retain their existing contracts.
+Ordinary requests retain structural hosted-search history by default, including Responses Lite requests. To opt in to lossy reference notes, set `providers.openai.projectResponsesLiteHostedSearchHistory: true` in `config.json` (an actual boolean, not the string `"true"`). The per-provider setting defaults to off; omission or `false` keeps structural history. Even when enabled, projection applies only to ordinary requests whose final destination is exact canonical ChatGPT Codex `/responses` and whose effective request intent explicitly selects Responses Lite. It converts unreferenced remaining `web_search_call` history into labeled assistant reference notes. The final `x-openai-internal-codex-responses-lite` header selects Lite only when its value is exactly `true`; an explicit `false` overrides frame metadata. Without a recognized header value, a valid string-map `client_metadata.ws_request_header_x_openai_internal_codex_responses_lite` value of `true` is used, matching the existing WS metadata handling. Non-Lite or unrecognized effective intent retains structural history; malformed metadata does not override an explicit HTTP `true`. Model names, subscription authentication, missing hosted declarations and `additional_tools` alone do not select this policy; no header or metadata is rewritten to make it apply. Once enabled, it applies to new threads/forks, cross-model continuations and cache misses/restarts, without diagnostic settings. Only a valid same-scope bridge memo proves an original function call/result that can be restored first; an ID prefix, model name or missing memo cannot determine the issuer. A hosted cell exactly referenced by a same-input `item_reference.id` is retained. `store:false` removes references earlier, and its remaining hosted history can be projected. Tool declarations/Lite `additional_tools`, choices, client call/result pairs, reasoning/native ciphertext, non-hosted order and caller raw history retain their existing contracts.
 
-Within that Lite boundary, this is an explicit **lossy history policy**, not a claim that hosted calls are invalid schema or that all upstream errors are fixed. Notes carry untrusted status/action metadata and allowlisted URL/title/type from both action and top-level sources, never instructions or fetched page bodies: 2,048 UTF-16 units per string, 20 entries per list, 65,536 serialized bytes for all projected notes, then an omission note. IDs and unknown fields are dropped from converted cells. HTTP/SSE and WS share the final ordinary builder.
+Within that opted-in Lite boundary, this is an explicit **lossy history policy**, not a claim that hosted calls are invalid schema or that all upstream errors are fixed. Notes carry untrusted status/action metadata and allowlisted URL/title/type from both action and top-level sources, never instructions or fetched page bodies: 2,048 UTF-16 units per string, 20 entries per list, 65,536 serialized bytes for all projected notes, then an omission note. IDs and unknown fields are dropped from converted cells. HTTP/SSE and WS share the final ordinary builder.
 
 Public OpenAI API and other destinations do not gain ordinary or native-compact projection. Native `/responses/compact` remains its existing endpoint/account-scrub/official opaque-output path and retains structural hosted history. Portable/routed summaries reuse their existing projection trigger and default reference behavior; the shared renderer additionally retains allowlisted top-level sources there. No new retry, source classification or compaction summarizer is introduced.
 
@@ -78,6 +78,34 @@ WebSocket. An upstream rejection fails the upgrade with 502; a ten-second handsh
 returns 504, and client cancellation returns 499. Bun does not expose the exact upstream handshake status, so an upstream 404/410
 cannot currently be forwarded precisely. A successful connection preserves the initial session
 frames in order. This handshake policy is separate from the Responses WebSocket transport.
+
+## Undeclared tool calls
+
+On the Responses endpoint, when a request declares a tool catalog, a native passthrough reply
+that calls a client-executed tool outside that catalog fails the turn instead of relaying the
+call: a `response.failed` event with error code `undeclared_tool_call`, then `data: [DONE]`;
+buffered JSON returns HTTP 502 with the same code. The refusal runs before the response can
+enter continuation state, and it stands down only for `authMode: "forward"` providers or a
+request with no declared catalog.
+
+The Chat Completions and Messages endpoints honor deferred tool catalogs: those clients may
+declare a partial catalog and discover the rest at runtime through their own tool registry,
+which — not the translated catalog snapshot — owns the full declaration boundary. A call
+outside the declared list is relayed for the client to validate; a call invented against an
+explicitly empty `tools: []` is still refused, because no deferred registry exists under an
+empty declaration. Those refusals keep the `undeclared_tool_call` code on every wire:
+
+- **Chat Completions:** a `data:` frame containing an OpenAI-style `error` object carrying the
+  code, then the stream closes without a success completion or `[DONE]`; buffered JSON returns
+  HTTP 502 with the code.
+- **Messages:** an Anthropic `event: error` frame whose body is
+  `{ "type": "error", "error": { "type": "api_error", "code": "undeclared_tool_call", ... } }`,
+  without a successful `message_stop` or `[DONE]`; buffered JSON returns HTTP 502 `api_error`
+  with the code. A deterministic catalog violation is never reported as a retryable
+  `overloaded_error` (HTTP 529).
+
+Separately, on every inbound wire, a provider's `default.`-namespaced call is normalized back
+to the bare tool name the request declared (`default.Read` → `Read`).
 
 ## Endpoint overview
 

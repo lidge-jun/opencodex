@@ -260,4 +260,182 @@ describe("codex-journal recovery diagnostics", () => {
       else expect(existsSync(join(testDir, "opencodex.config.toml"))).toBe(mode === "unlink-EPERM");
     });
   }
+
+  test("profile removal refusal rolls back published config", () => {
+    const journal = seed("process", injected, true);
+    const result = runScript(testDir, `
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const { spyOn } = require("bun:test");
+      const section = require("./src/codex/inject/config-write-section");
+      const { removeCodexConfig } = require("./src/codex/inject/remove");
+      let reached = false, publishedFirst = false, refused = false;
+      const hook = spyOn(section, "removeCodexProfileEntry").mockImplementation(() => {
+        reached = true;
+        publishedFirst = !fs.readFileSync(path.join(process.env.CODEX_HOME, "config.toml"), "utf8").includes('model_provider = "opencodex"');
+        throw new Error("fixture profile removal refused");
+      });
+      try { removeCodexConfig(); } catch { refused = true; }
+      finally { hook.mockRestore(); }
+      console.log(JSON.stringify({ reached, publishedFirst, refused }));
+    `);
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ reached: true, publishedFirst: true, refused: true });
+    expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(injected);
+    expect(readFileSync(join(testDir, "opencodex.config.toml"), "utf8")).toBe(profile);
+    expect(readFileSync(join(testDir, "opencodex-journal.json"), "utf8")).toBe(journal);
+  });
+  for (const boundary of ["before-removal-read", "before-recovery-capture", "nested-before-removal-read", "nested-before-recovery-capture"] as const) {
+    test(`profile removal preserves in-place edits ${boundary}`, () => {
+      const journal = seed("process", injected, true);
+      const edited = `${injected}# concurrent user edit\n`.replace(/\n/g, "\r\n");
+      const result = runScript(testDir, `
+        const fs = require("node:fs");
+        const path = require("node:path");
+        const { spyOn } = require("bun:test");
+        const section = require("./src/codex/inject/config-write-section");
+        const locks = require("./src/codex/config-write-lock");
+        const { removeCodexConfig } = require("./src/codex/inject/remove");
+        const configPath = path.join(process.env.CODEX_HOME, "config.toml");
+        const edited = ${JSON.stringify(edited)};
+        const beforeRead = ${JSON.stringify(boundary)}.endsWith("before-removal-read");
+        const owner = beforeRead ? section : locks;
+        const method = beforeRead ? "beginCodexWriteSection" : "withConfigWriteRecovery";
+        const original = owner[method];
+        let peerEdited = false, sameInode = false, publishedFirst = false, refused = false;
+        const remove = (held) => {
+          const editHook = spyOn(owner, method).mockImplementation((...args) => {
+            if (!peerEdited) {
+              const inode = fs.statSync(configPath, { bigint: true }).ino;
+              fs.writeFileSync(configPath, edited);
+              sameInode = fs.statSync(configPath, { bigint: true }).ino === inode;
+              peerEdited = true;
+            }
+            return original(...args);
+          });
+          const profileHook = spyOn(section, "removeCodexProfileEntry").mockImplementation(() => {
+            const published = fs.readFileSync(configPath, "utf8");
+            publishedFirst = !published.includes('model_provider = "opencodex"')
+              && published.includes("# concurrent user edit");
+            throw new Error("fixture profile removal refused");
+          });
+          try { removeCodexConfig({ heldConfigWriteLock: held }); }
+          finally { editHook.mockRestore(); profileHook.mockRestore(); }
+        };
+        try {
+          if (${JSON.stringify(boundary)}.startsWith("nested-")) {
+            locks.withConfigWriteLock(configPath, held => locks.withConfigWriteRecovery(configPath, held, () => remove(held)));
+          } else remove();
+        } catch { refused = true; }
+        console.log(JSON.stringify({ peerEdited, sameInode, publishedFirst, refused }));
+      `);
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual({
+        peerEdited: true, sameInode: true, publishedFirst: boundary === "before-removal-read", refused: true,
+      });
+      expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(edited);
+      expect(readFileSync(join(testDir, "opencodex.config.toml"), "utf8")).toBe(profile);
+      expect(readFileSync(join(testDir, "opencodex-journal.json"), "utf8")).toBe(journal);
+    });
+  }
+  test("nested removal retains the outer preimage after an owned publication", () => {
+    const journal = seed("process", injected, true);
+    const result = runScript(testDir, `
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const { spyOn } = require("bun:test");
+      const { atomicWriteFile } = require("./src/config");
+      const section = require("./src/codex/inject/config-write-section");
+      const locks = require("./src/codex/config-write-lock");
+      const { removeCodexConfig } = require("./src/codex/inject/remove");
+      const configPath = path.join(process.env.CODEX_HOME, "config.toml");
+      let publishedFirst = false, refused = false;
+      const hook = spyOn(section, "removeCodexProfileEntry").mockImplementation(() => {
+        const published = fs.readFileSync(configPath, "utf8");
+        publishedFirst = !published.includes('model_provider = "opencodex"') && published.includes("# owned edit");
+        throw new Error("fixture profile removal refused");
+      });
+      try {
+        locks.withConfigWriteLock(configPath, held => locks.withConfigWriteRecovery(configPath, held, () => {
+          locks.publishConfigWrite(configPath, held, (target, hooks) =>
+            atomicWriteFile(target, ${JSON.stringify(injected)} + "# owned edit\\n", undefined, hooks));
+          removeCodexConfig({ heldConfigWriteLock: held });
+        }));
+      } catch { refused = true; }
+      finally { hook.mockRestore(); }
+      console.log(JSON.stringify({ publishedFirst, refused }));
+    `);
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ publishedFirst: true, refused: true });
+    expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(injected);
+    expect(readFileSync(join(testDir, "opencodex.config.toml"), "utf8")).toBe(profile);
+    expect(readFileSync(join(testDir, "opencodex-journal.json"), "utf8")).toBe(journal);
+  });
+  test("dangling generated-profile metadata refuses the complete pair", () => {
+    const journal = seed("process", injected, true);
+    const result = runScript(testDir, `
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const { spyOn } = require("bun:test");
+      const profilePath = path.join(process.env.CODEX_HOME, "opencodex.config.toml");
+      fs.unlinkSync(profilePath);
+      const lstat = fs.lstatSync;
+      const hook = spyOn(fs, "lstatSync").mockImplementation((target, ...args) =>
+        path.basename(String(target)) === "opencodex.config.toml"
+          ? { isSymbolicLink: () => true }
+          : lstat(target, ...args));
+      let out;
+      try { out = require("./src/codex/journal").restoreJournalState(); }
+      finally { hook.mockRestore(); }
+      console.log(JSON.stringify(out));
+    `);
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ complete: false, profileRestoreFailed: true, configRewritten: false, profileRewritten: false });
+    expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(injected);
+    expect(readFileSync(join(testDir, "opencodex-journal.json"), "utf8")).toBe(journal);
+  });
+  test("generated profile disappearance at type observation is treated as absence", () => {
+    seed("process", injected, true);
+    const result = runScript(testDir, `
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const { spyOn } = require("bun:test");
+      const profilePath = path.join(process.env.CODEX_HOME, "opencodex.config.toml");
+      const lstat = fs.lstatSync;
+      let vanished = false;
+      const hook = spyOn(fs, "lstatSync").mockImplementation((target, ...args) => {
+        if (!vanished && path.basename(String(target)) === "opencodex.config.toml") {
+          vanished = true;
+          fs.unlinkSync(profilePath);
+          throw Object.assign(new Error("fixture missing profile"), { code: "ENOENT" });
+        }
+        return lstat(target, ...args);
+      });
+      let out;
+      try { out = require("./src/codex/journal").restoreJournalState(); }
+      finally { hook.mockRestore(); }
+      console.log(JSON.stringify({ vanished, out }));
+    `);
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ vanished: true, out: { complete: true, profileRestored: true } });
+    expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(original);
+    expect(existsSync(join(testDir, "opencodex.config.toml"))).toBe(false);
+    expect(existsSync(join(testDir, "opencodex-journal.json"))).toBe(false);
+  });
+  test.skipIf(process.platform === "win32")("a real dangling generated-profile symlink preserves recovery evidence", () => {
+    const journal = seed("process", injected, true);
+    const result = runScript(testDir, `
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const profilePath = path.join(process.env.CODEX_HOME, "opencodex.config.toml");
+      fs.unlinkSync(profilePath);
+      fs.symlinkSync(path.join(process.env.CODEX_HOME, "missing-profile-target.toml"), profilePath);
+      const out = require("./src/codex/journal").restoreJournalState();
+      console.log(JSON.stringify({ out, link: fs.lstatSync(profilePath).isSymbolicLink() }));
+    `);
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ link: true, out: { complete: false, profileRestoreFailed: true } });
+    expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(injected);
+    expect(readFileSync(join(testDir, "opencodex-journal.json"), "utf8")).toBe(journal);
+  });
 });

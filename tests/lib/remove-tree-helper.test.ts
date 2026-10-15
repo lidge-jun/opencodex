@@ -1,10 +1,15 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { settleBackgroundWork, trackBackgroundWork } from "../../src/lib/background-work";
 import {
   REMOVE_RETRY_BUDGET_MS,
   REMOVE_RETRY_MAX_DELAY_MS,
   removeRetrySchedule,
+  removeTestTempTreeAsync,
 } from "../../scripts/test-temp";
-import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { removeTreeAfterBackgroundWork, removeTreeWithRetry } from "../helpers/remove-tree";
 
 function codedError(code: string, message = code): Error & { code: string } {
   return Object.assign(new Error(message), { code });
@@ -83,5 +88,45 @@ describe("removeRetrySchedule", () => {
 
   test("a budget too small for one wait yields a single attempt", () => {
     expect(removeRetrySchedule(10)).toEqual([]);
+  });
+});
+// The Windows EBUSY in native Codex pool compaction (#7088, #7091) was an in-process holder: an
+// un-awaited quota prime kept a claim database open across an await, and teardown retried with
+// Bun.sleepSync, which stops the loop the holder needed to close it. These cases pin that shape.
+describe("removal while in-process work holds the tree", () => {
+  test("a blocking retry loop cannot outwait an async holder, and says what is running", async () => {
+    let held = true;
+    const holder = trackBackgroundWork("fixture-holder", Bun.sleep(1).then(() => { held = false; }));
+    expect(() => removeTreeWithRetry("ignored", {
+      remove: () => { if (held) throw codedError("EBUSY", "held"); },
+      sleep: () => undefined,
+    })).toThrow(/in-process background work still running: fixture-holder/);
+    await holder;
+    expect(held).toBe(false);
+  });
+
+  test("the async removal yields between attempts so the holder can release", async () => {
+    let held = true;
+    void Bun.sleep(1).then(() => { held = false; });
+    let attempts = 0;
+    await removeTestTempTreeAsync("ignored", {
+      delays: [5, 5, 5, 5, 5, 5, 5, 5],
+      remove: () => { attempts += 1; if (held) throw codedError("EBUSY", "held"); },
+    });
+    expect(held).toBe(false);
+    expect(attempts).toBeGreaterThan(1);
+  });
+
+  test("teardown settles tracked work before the first removal", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-remove-after-work-"));
+    let wroteLate = false;
+    void trackBackgroundWork("late-writer", Bun.sleep(10).then(() => {
+      writeFileSync(join(root, "late.json"), "{}");
+      wroteLate = true;
+    }));
+    await removeTreeAfterBackgroundWork(root);
+    expect(wroteLate).toBe(true);
+    expect(existsSync(root)).toBe(false);
+    expect((await settleBackgroundWork({ timeoutMs: 0 })).pending).toEqual([]);
   });
 });

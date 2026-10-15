@@ -41,6 +41,7 @@ import type { KiroRefusalKind } from "../adapters/kiro-refusal";
 import { kiroAccountEvidence } from "../providers/kiro-usage";
 import { kiroEvidenceIdentity } from "../providers/kiro-account-state-disk";
 import { kiroAccountSupportsModel } from "../providers/kiro-model-catalog";
+import { antigravityAccountSupportsModel } from "../providers/antigravity-account-roster";
 import { ACCOUNT_QUOTA_TTL_MS } from "../providers/quota-wire";
 import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
 import { subscribeOAuthAccountPauseChanges } from "../lib/account-selection-events";
@@ -248,11 +249,31 @@ export function eligibleFailoverAccounts(providerName: string, now = Date.now(),
   return eligibleIdsIn(getAccountSet(providerName), providerName, now, family);
 }
 
-/** Model evidence only ranks accounts already eligible and below any configured cap. */
+/** Whether an account's own model listing includes `model`; undefined when unknown. */
+function accountListsModel(providerName: string, accountId: string, model: string): boolean | undefined {
+  if (providerName === "kiro") return kiroAccountSupportsModel(accountId, model);
+  if (providerName === "google-antigravity") return antigravityAccountSupportsModel(providerName, accountId, model);
+  return undefined;
+}
+
+/**
+ * Model evidence only ranks accounts already eligible and below any configured cap.
+ *
+ * Kiro and Antigravity both gate models per account. For Antigravity (Claude 4.6 vs 5.5, Argon)
+ * an account whose discovered roster lists the model wins; an account whose roster omits it is
+ * skipped while any other remains; an account with no roster yet is unknown and stays usable.
+ */
 export function preferKiroModelSupport(
   providerName: string, ids: string[], model?: string | null, config?: OcxConfig,
 ): string[] {
-  if (providerName !== "kiro" || !model) return ids;
+  if (!model) return ids;
+  if (providerName === "google-antigravity") {
+    const positive = ids.filter(id => accountListsModel(providerName, id, model) === true);
+    if (positive.length) return positive;
+    const notListedAgainst = ids.filter(id => accountListsModel(providerName, id, model) !== false);
+    return notListedAgainst.length ? notListedAgainst : ids;
+  }
+  if (providerName !== "kiro") return ids;
   const cap = config?.providers?.kiro?.oauthAccountFailover?.maxConcurrentPerAccount;
   const withRoom = typeof cap === "number" && Number.isInteger(cap) && cap >= 1 && cap <= 100
     ? ids.filter(id => accountInFlight("kiro", id) < cap) : ids;
@@ -631,10 +652,13 @@ export function preferredInitialAccount(
   const modelEligible = preferKiroModelSupport(providerName,
     eligibleFailoverAccounts(providerName, now, classifyModelFamilyForQuota(providerName, requestedModelId)),
     requestedModelId, config);
-  const activeLacks = providerName === "kiro" && !!active && !!requestedModelId
-    && kiroAccountSupportsModel(active, requestedModelId) === false;
+  const activeLacks = (providerName === "kiro" || providerName === "google-antigravity")
+    && !!active && !!requestedModelId
+    && accountListsModel(providerName, active, requestedModelId) === false;
   const listingSibling = activeLacks
-    ? modelEligible.find(id => id !== active && kiroModelListingHasRoom(config, id, requestedModelId!))
+    ? modelEligible.find(id => id !== active && (providerName === "kiro"
+      ? kiroModelListingHasRoom(config, id, requestedModelId!)
+      : accountListsModel(providerName, id, requestedModelId!) === true))
     : undefined;
   if (listingSibling) return listingSibling;
 

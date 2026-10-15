@@ -18,8 +18,8 @@ remain, and the note asks the next model to reopen unresolved visual evidence. P
 commentary-only or unphased histories stay intact. Sidecar preparation projects parsed messages before
 vision planning. The projection does not rewrite `_rawBody` or stored history; later vision preprocessing
 may rewrite the request-local raw body for transport safety. Normal generation and native compaction
-stay unchanged. Both routed v1 and v2 pass through this boundary;
-raw Responses gateways retain their existing text-only compaction conversion.
+stay unchanged. Both routed v1 and v2 pass through this boundary; raw Responses gateways retain their existing text-only compaction conversion.
+The [decoded checkpoint continuation contract](responses.md#decoded-checkpoint-continuation) governs the conditional system note and its authorization limits.
 
 ## Direct MCP calls in code mode
 
@@ -293,34 +293,34 @@ There is no rule that strips whatever precedes the first dot: a legitimate tool 
 one in another provider's vocabulary, and a replayed item names a call that already happened, which
 is the worst place to guess.
 
-Membership enforcement is that flag, `enforceDeclaredToolNames`, and only the `responses` inbound
-wire enforces. Explicit enforcement with no declared catalog also refuses client tool calls rather
-than treating the missing set as permission. A routed provider that names a tool the request never declared ends the turn there:
+Membership enforcement refuses a routed provider that names a tool the request never declared:
 `src/bridge/sse.ts` emits `response.failed` and `src/bridge/response-json.ts` returns a failed
 response, both carrying `undeclared client tool`. That is the #1700 contract and it stands. Codex
 executes a top-level tool call, so a hallucinated `apply_patch` — which under code mode exists only
 as a nested `tools.apply_patch(...)` helper inside `exec` — is refused before it reaches the
 runtime, where it previously surfaced as a bare `aborted` with the file untouched.
 
-The `chat` and `anthropic` inbound wires relay the call instead. This is a deliberate reversal of
-#1700's scope for those two wires, not an oversight. Both vendor specs make the client's own runner
-responsible for validating a tool call and then executing or denying it, and harnesses on those
-endpoints defer part of their catalog to conserve prompt tokens and discover the rest at runtime.
-Enforcing membership against a partial catalog killed those streams mid-turn with a 502 and cost the
-caller the whole turn. This proxy executes no tool call on any wire, so scoping enforcement off
-these two moves the decision to the party that already makes it rather than removing it.
+Translated lanes (`src/server/responses/run-turn-execution.ts`, `adapter-delivery.ts`) derive
+enforcement from `inboundWire`: only `responses` refuses an undeclared client-executed call. The
+native lane computes `undeclaredToolGuardActive` once in `passthrough-dispatch.ts`: `responses`
+refuses against any readable catalog; `chat` and `anthropic` refuse only under an explicit empty
+catalog (below). `passthrough-delivery.ts` reads that flag for SSE and buffered JSON alike, before
+continuation state is stored. Otherwise `chat` and `anthropic` replies relay the call: those
+harnesses may defer part of their catalog to conserve prompt tokens and discover the rest at
+runtime, and both vendor specs leave the client's own runner responsible for validating it —
+membership enforcement against a partial catalog would kill those streams mid-turn.
 
-An explicitly empty catalog still authorizes nothing on the wire that enforces. A request declaring
-an empty tool list is making a statement rather than omitting one, which is how the passthrough
-guard reads it through `clientExplicitWireToolCatalog` in
-`src/server/responses/passthrough-dispatch.ts`.
+An explicitly empty catalog authorizes nothing wherever enforcement runs — deferred wires
+included: `tools: []` is a statement, not an omission, and no deferred registry exists under
+it. The ingresses carry the fact as `clientDeclaredEmptyToolCatalog`
+(`src/server/chat-completions.ts`, `src/server/claude-messages.ts`) since translation drops an
+empty catalog with the rest; `hasExplicitEmptyToolCatalog` reads a verbatim `tools: []` or
+`additional_tools: []` too. Refusals keep `undeclared_tool_call` across the buffered envelope
+and endpoint projections, so Messages sees a deterministic `api_error`, never `overloaded_error`.
 
-The passthrough SSE/JSON refusal is wire-scoped too: only `responses` rejects undeclared calls.
-`undeclaredToolGuardActive` still gates namespace normalization and continuation suppression on every wire,
-standing down only for `authMode: "forward"` and requests with no catalog; relayed undeclared calls are not remembered.
-
-`src/server/responses/run-turn-execution.ts`, `src/server/responses/adapter-delivery.ts`, and
-`src/server/responses/passthrough-delivery.ts` scope membership refusal from `inboundWire` for SSE and JSON alike.
+`undeclaredToolGuardActive` gates refusal and continuation suppression, standing down only for
+`authMode: "forward"`, deferred catalogs, and absent ones; a refused turn never enters
+continuation state. `default.` normalization is scoped separately.
 
 ## Selection outlives the declaration check
 
@@ -474,7 +474,7 @@ event, or as an errored SSE body after it, rather than as a retryable fetch
 failure, so HTTP fallback cannot duplicate that inference. The one exception is a
 socket that closed or errored before any Responses event on a provider that opted
 into `retryOnReset`: the passthrough dispatch may spend the request's replacement
-grant on one HTTP send (see [ambiguous-resend gate](responses-failover.md#ambiguous-resend-gate)).
+grant on one HTTP send (see [ambiguous-resend gate](responses-failover.md#ambiguous-resend-gate)). An authoritative upstream refusal before any output is not one of those ambiguous settles (#6969). On an opt-in exchange (`preOutputRefusalHold`, set only by the native Pool dispatch and its alternate-account send, never with native control) empty `response.created`/`response.in_progress`/`response.queued` frames are queued without committing for at most 10 s and never past half of `connectTimeoutMs` after the send started, with the prelude headers frozen at the first one. A bare `error` frame with a single transient 5xx wrapper status (or, with no wrapper alias, the recognized overload class), or an empty `response.failed` of the overload class, then settles as a replayable gateway status of that status. Quota or rate-limit identities, 4xx frames, stream ids, conflicting response ids or competing aliases never qualify, and message text can only veto. Any other settle during the hold — output, an unqualified frame, socket death, silence, abort, size limits, the hold deadline — first commits the queued preamble, so it is the same committed body failure it was before. The dispatch restores a surviving projection to the original event stream (byte for byte, same markers and stage record) right after its Pool block.
 A standalone no-response
 exchange has a 90-second prelude deadline in addition to the upgrade deadline.
 That prelude deadline is a ceiling, not a floor: the exchange runs under the

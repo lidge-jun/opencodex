@@ -5,6 +5,12 @@ description: 提供者条目、身份验证、端点、模型目录、配额、�
 
 提供者用于告诉 opencodex 模型位于哪里、使用哪种线协议适配器，以及请求如何进行身份验证。
 
+## 自定义渠道的上下文窗口
+
+自定义渠道未报告或配置模型窗口时，OpenCodex 依次使用 Azure 元数据、按模型 ID 查询的内置厂商/聚合元数据、已启用的 Context cap，最后回退到 128k。已有发现值与配置值取较小者，Context cap 仍会向下限制窗口，内置渠道行为不变。精确 ID 优先，大小写或点号/短横线变体仅在无冲突时匹配；未知或浮动别名不猜测。推断会影响 Codex 压缩预算和其他客户端目录（含 Claude 长上下文选择），但不作为中转实测能力供路由使用。同名模型不保证中转支持官方窗口；请用 modelContextWindows 或 Context cap 设置中转实际上限。不会自动开启 cap，也不会调用模型探测。OpenAI API 窗口不代表 Codex 订阅窗口。
+
+该推断默认关闭，需要按渠道设置 `inferContextWindow: true` 开启。未开启时，缺少窗口的模型使用已启用的 Context cap，否则回退到 128k。
+
 ## 首次注册时的模型选择
 
 新的非 OAuth 连接会等待可靠的模型列表，再公开模型。如果 Models 标签页中去重后的模型行达到20个，所有模型开关初始为 OFF，但提供者本身保持 ACTIVE。实际认证方式为 OAuth 或 ChatGPT 登录的连接保留默认设置。
@@ -86,6 +92,7 @@ selector，而不是分配一个新名称。
 | `requestPacing?` | `{ enabled, requestsPerMinute?, minIntervalMs?, maxConcurrentRequests?, models? }` | 可选的客户端出站请求启动节流，与上游用量、计费和限流指标相互独立。`maxConcurrentRequests` 是限制进行中请求数的正整数，提供商或模型规则都可以只配置此项。提供商限制适用于所有模型，`models` 按上游模型精确 ID 匹配，并可增加延迟或收紧并发限制。排队等待不计入响应头超时。覆盖 HTTP 以及显式适配器 `fetchResponse`/`runTurn` 调用。配置并发上限时，标准 Responses WebSocket 请求改用 HTTP/SSE，以便在响应体完成、出错或取消时释放并发名额。 对包括 Cursor 在内的 `runTurn` 适配器，并发上限计算进行中的回合数，而非物理发送数：同一回合内的 RunSSE 和 BidiAppend 可以重叠，其他回合仍须等待。后续发送仍遵守启动间隔。 |
 | `responsesPath?` | `string` | 用于 key-auth `openai-responses` 请求的相对资源路径。必须以 `/` 开头，且不能包含 scheme、query 或 fragment。 |
 | `chatCompletionsPath?` | `string` | 用于 `openai-chat` 请求的相对资源路径，是 `responsesPath` 的对应项，适用相同的路径规则。当同一上游以不同前缀提供 Chat Completions 和 Responses 时需要此配置：按模型的 wire override 只更换适配器而不改动 `baseUrl`，否则已启用的 Chat 请求会被发送到 Responses base。随附示例为 Z.AI。 |
+| `projectResponsesLiteHostedSearchHistory?` | `boolean` | 默认关闭。仅实际布尔值 `true` 可为此 provider 显式启用有损 hosted-search 历史投影，且只作用于最终目的地精确为标准 ChatGPT Codex `/responses`、明确选择 Responses Lite 的普通请求。省略或设为 `false` 时保留结构化历史；字符串和数字无效。不会启用 Lite、改变传输，也不影响 native compact、公开 OpenAI API／其他目的地或既有 portable/routed compaction 投影。详见[Lite 搜索历史](/zh-cn/reference/proxy-formats/#codex-原生普通-lite-请求的搜索历史)。 |
 | `upstreamWebsocket?` | `boolean` | 为 `openai-responses` 请求选择性启用上游 Responses WebSocket 传输（默认 `false`）。仅对第一方 `https://api.openai.com/v1` 上游生效；自定义提供者端点始终使用有界 HTTP/SSE，因为 Bun 无法在分配完整消息之前对入站 WebSocket 消息实施大小限制。对于规范 ChatGPT `openai` 提供商，省略该字段会在符合条件的轮次使用上游 WebSocket，`false` 通过 HTTP/SSE 发送流式轮次，`true` 会被拒绝；设为 `false` 时，原生轮次中操控与注入不可用。该字段独立于客户端侧的 `websockets` 设置，且不改变端点或凭据。普通 HTTP 仍使用 SSE；非 Responses 路径和 `openai-chat` 请求仍使用 HTTP。 |
 | `supportsServiceTier?` | `boolean` | `service_tier` 能力的三态。`true`：fast 模式可以注入，调用方提供的值也会被保留。`false`：剥离该字段且绝不注入（已明确不支持的上游不会收到它）。未设置：未分类——调用方提供的值原样保留，fast 模式绝不注入。注册表已对官方 OpenAI（`true`）、DeepSeek 和 Volcengine Ark（`false`）分类；仅对真正支持分层的自定义网关显式设置。 |
 | `responseTierAuthoritative?` | `boolean` | 响应等级是否足以确认或否定 Fast。对响应元数据不具权威性的链路显式设为 `false`；未设置时保持原有行为。不会启用 Fast 或修改出站参数。详见[响应服务等级的可信度](#响应服务等级的可信度)。 |
@@ -101,9 +108,10 @@ selector，而不是分配一个新名称。
 | `modelDisplayNames?` | `Record<string, string>` | 持久的仅显示名称，以此提供者的精确原生模型 id 为键。键区分大小写。名称优先于提供者目录元数据，并且不会改变身份验证、适配器、路由、计费或上游请求。该映射最多可包含 2,000 个条目，与发现上限相同。 |
 | `contextWindow?` | `number` | 上游缺少元数据时使用的提供者级上下文数值；有元数据时作为上限，保留更小的实时数值。Models 面板中与 `providerContextCaps` 分开设置。 |
 | `modelContextWindows?` | `Record<string, number>` | 按模型设置的上下文数值与上限。优先于 `contextWindow`：窗口未知时采用所配置的数值，而更小的实时元数据仍然优先。 |
+| `inferContextWindow?` | `boolean` | 仅限自定义渠道，默认关闭。设为 `true` 时用内置模型元数据补全缺失窗口；这是估计值，不代表中转的实测容量。 |
 | `modelInputModalities?` | `Record<string, string[]>` | 按模型设置的输入提示，例如 `["text"]` 或 `["text", "image"]`。 |
 | `modelMaxInputTokens?` | `Record<string, number>` | 正数型、按模型设置的最大输入限制，用于目录自动压缩提示。 |
-| `modelAutoCompactTokenLimits?` | `Record<string, number>` | 按模型设置的正安全整数软自动压缩预算。该值只能降低“上下文或最大输入的 90%”这一有效上限；没有已知的权威上下文窗口时不会输出。对于规范 `openai`，键必须是受支持的精确原生模型 ID，且不得包含提供者或账户选择器前缀。提供者 PATCH 会合并条目；将某个键设为 `null` 会删除该键，将整个字段设为 `null` 会清空映射。这些 `null` 删除标记仅适用于 PATCH。 |
+| `modelAutoCompactTokenLimits?` | `Record<string, number>` | 按模型设置的正安全整数软自动压缩预算。该值只能降低“上下文或最大输入的 90%”这一有效上限；无法解析出有效上下文窗口时不会输出。对于规范 `openai`，键必须是受支持的精确原生模型 ID，且不得包含提供者或账户选择器前缀。提供者 PATCH 会合并条目；将某个键设为 `null` 会删除该键，将整个字段设为 `null` 会清空映射。这些 `null` 删除标记仅适用于 PATCH。 |
 | `defaultMaxOutputTokens?` | `number` | 当客户端省略 `max_output_tokens` 时，`openai-chat` 的提供者级回退值。 |
 | `modelMaxOutputTokens?` | `Record<string, number>` | 正数型、按模型设置的 `openai-chat` 回退预算；精确/模式匹配优先于提供者默认值。 |
 | `modelCosts?` | `Record<string, Cost4>` | 按模型设置的显示价格（每 100 万 token 的美元数），以该提供者的精确上游模型 ID 为键（不是提供者标识符或路由后的 `provider/model` 标签），值为四个字段：`input`、`output`、`cacheRead`、`cacheWrite`（示例：`{ "deepseek-v4-flash": { "input": 0.14, "output": 0.28, "cacheRead": 0.0028, "cacheWrite": 0 } }`）。任何模型 ID 都是有效键——自定义提供者可以通过 `openai-chat` 适配器指向任意 OpenAI 兼容端点，即使不存在于内置目录中，本地 OpenAI 兼容和内部提供者的 ID 同样有效。用户配置的价格在 Logs 的 `~$` 和 Usage 估算中优先于内置目录；历史条目也会按当前覆盖项重新计价，因此修改价格可能改变过去的总额（回退顺序：用户配置 → jawcode 目录 → expected-price 覆盖 → 模型级厂商价格）；用户明确将所有费率设为零时，会得到已知的零费用估算；删除该模型的覆盖项即可恢复自动定价。目录中的全零价格仍会回退到下一个来源。每个费率必须是大于等于 0 的有限数字，且不超过 1,000,000（每 100 万 token 的美元数）；超出范围的条目会在管理边界被拒绝，并在加载时被丢弃。仅用于显示的估算：覆盖项不影响路由、账户选择、配额或计费。 |
@@ -252,6 +260,10 @@ affinity。这些策略不能规避 provider enforcement。
 | `anthropicAccountPool.stickyLimit?` | `number` | `1` | 在一次轮询选择中保留的成功新会话绑定次数。范围 1–100。 |
 
 只有共享5小时或每周额度明确拒绝的429才会冷却账户并切换。临时速率限制保留亲和性，只暂停该账户的请求准入；每个请求最多一次短暂的同账户重试和一次合格兄弟账户切换。没有依据响应头的429只允许一次同账户短暂重试，不冷却账户，也不生成Retry-After。默认单账户行为不变。Fable专属拒绝不限制Sonnet；手动选择和亲和性均检查请求模型的共享与家族额度。被动家族信息在30分钟或已知重置时到期，由一个服务请求串行重新验证。使用阈值仍是软偏好，全部候选耗尽时保留原有回退，不是用量或账单硬上限。亲和性是进程本地的，并且有大小上限。令牌刷新失败保留原有重新认证规则。明确的订阅或账户计费 403 可在输出前切换账户，并按 `Retry-After` 或默认十分钟冷却；普通权限拒绝不会切换。如果所有合格账户都在冷却，客户端会在已知时收到带 `Retry-After` 的 429，而不是身份验证错误。
+
+当请求可用的每个账户都因配额耗尽而被挂起（共享 5 小时或每周窗口，或所请求模型家族的每周窗口）时，这个 429 是用量上限而不是速率限制：Responses 正文的 `error.type` 和 `error.code` 为 `usage_limit_reached`；若每个被挂起账户的上游重置时间都已知，还会带上 `resets_at`（最早重置的 epoch 秒）。Codex 会停止并显示何时可以重试，而不是一直重试到 "exceeded retry limit"。最后一个账户因配额耗尽被拒且没有可替换账户时，也会得到同样的响应。只要有一个被挂起账户只是临时限速、正在重新验证模型家族或因权限被拒，响应就保持可重试的 `rate_limit_exceeded`。Combo 目标保持速率限制形式，以便 combo 转到下一个目标。原生 `/v1/messages` 保持 Anthropic 的 `rate_limit_error` 类型，消息中会说明用量上限。
+
+只要一次新的用量读取（仪表盘的提供方页面，或 `ocx account list anthropic --quota --refresh`）显示被拒绝的每个窗口都低于 100%，配额冷却就会提前解除，无论它来自 `Retry-After` 还是窗口重置。这适用于升级套餐或窗口提前重新开放的情况。在拒绝之前开始的读取永远不会解除它，权限类 403 冷却会等到其截止时间。
 
 :::caution[Experimental]
 除非你理解 Anthropic 账户策略风险，否则请保持关闭。若不确定，优先手动使用 `ocx account use anthropic <id>` 切换。

@@ -36,6 +36,10 @@ remain invalid. Ordinary function/custom tool results still require a nonempty
 `call_id`. The envelope metadata identifies a compatibility shape and grants no
 additional permissions. Native passthrough and routed (portable) compaction apply the same user-turn mapping to their raw bodies; the direct native `/responses/compact` forward keeps its existing raw-body rules.
 
+## Checkpoint continuation after routed compaction
+
+A routed model replays an OpenCodeX `ocx1:` checkpoint as plain user text next to the retained earlier requests. When a request carries such a decoded checkpoint, OpenCodeX adds a short note to the system instructions (translated routes) or `instructions` (Responses passthrough). The note frames completed requests as history and permits continuation only of unfinished work already authorized and still within that scope, without asking for the same authorization again while it applies. Existing permission and confirmation gates remain in force: pending decisions or required permissions must be resolved before dependent actions. Checkpoints and delegations, including those from another thread, grant no authority or expanded scope. Later user messages take priority, including a pause, cancellation, replacement, or scope change. Compaction requests, opaque native blobs and requests without a checkpoint do not receive the note.
+
 ## `openai-chat`
 
 **Targets:** OpenAI **Chat Completions** (`POST {baseUrl}/chat/completions`; a trailing `/chat/completions` or `/` on `baseUrl` is stripped first) and every compatible
@@ -73,6 +77,11 @@ transport; it does not infer subscription attribution from the inbound protocol.
   collects `usage`. Providers listed in `reasoningDetailsModels` (MiniMax M-series) instead read
   structured `delta.reasoning_details` segments, whose `text` arrives as cumulative snapshots and
   is prefix-diffed, and replay preserved reasoning as a `reasoning_details` array.
+- For `api.mistral.ai`, both response paths also accept typed `text` and `thinking`
+  arrays. Text keeps its bytes and order; thinking stays separate from the answer.
+  Adjacent text blocks share inline-tag parsing; typed thinking resets it.
+  Unsupported or malformed array blocks return an upstream error. Other hosts
+  keep their existing behavior. This does not add Mistral signature replay.
 - Suppresses bare `<tool_call>` text when it duplicates a structured call, and collapses two
   immediately adjacent identical blocks when exactly one structured call agrees with their function
   and input. A doubled `input` is reduced to one copy, joined either directly or by one newline,

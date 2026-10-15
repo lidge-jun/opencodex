@@ -30,7 +30,8 @@ error, including a foreign AbortError, still fails its case. Callers settle that
 draining producers/reaps and restoring or removing a home. The helper does not replace
 fixture-specific cleanup or claim OS ACL coverage for synthetic tests.
 
-`tests/helpers/fixture-teardown.ts` owns management-auth, OAuth live-update, and Anthropic instance
+`tests/helpers/fixture-teardown.ts` owns management-auth, OAuth live-update, Codex quota-auto-refresh
+case roots (`tests/codex-integration/codex-quota-auto-refresh.test.ts`), and Anthropic instance
 root removal (`tests/helpers/anthropic-instance-fixture.ts`).
 It settles producers, then each root's config flights, closes the request-history SQLite index,
 drains each root's ACL work, and only then removes drained roots. A producer or history failure
@@ -38,3 +39,14 @@ blocks every removal; a root-specific drain failure preserves that root while ot
 can be removed. Removal failures do not stop later roots. Environment restoration runs in finally,
 and the first failure is rethrown. Undrained roots remain for run-level sandbox cleanup.
 `tests/ci-workflows/fixture-teardown-helper.test.ts` verifies ordering and failure gating with injected owners.
+
+`tests/helpers/spawn-test-child.ts` owns behavior and warm-up children on the parent's live
+event loop. It captures output continuously, kills at the child deadline, and bounds exit/pipe
+observation with a separate five-second grace. Results distinguish deadline expiry, observed
+exit (`reaped`) and pipe closure; an unobserved exit does not prove fixture handles were released.
+The affected catalog/status/routing fixtures retain roots after timeout or unproven exit/EOF
+for sandbox recovery rather than deleting against uncertain child handles. Explicit environments
+are complete allowlists. Catalog tick children drain their config ACL
+flights/reaps before normal exit. Child work deadlines remain separate from outer test budgets,
+which reserve time for termination and teardown. The shared warm-up regressions exercise a live
+interval after work completes and a descendant retaining stdout after its parent exits.

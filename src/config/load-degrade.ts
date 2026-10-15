@@ -3,6 +3,7 @@ import { isSubagentModelEntry, rawSubagentModelForce } from "./subagent-models";
 import { chmodSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { compactionRecoveryConfigError } from "./schema/compaction-recovery";
+import { desktopCompatibilityConfigError } from "./schema/desktop-compatibility";
 import { blockedModelRedirectsError } from "./schema/blocked-model-redirects";
 import { anthropicSidecarConfigError } from "./schema/anthropic-account-pool";
 import {
@@ -16,6 +17,7 @@ import {
 } from "./provider-validation";
 import { UPSTREAM_HOST_CIRCUIT_MAX_THRESHOLD } from "../codex/upstream-host-health";
 import { hardenSecretPath } from "../lib/windows-secret-acl";
+import { isPassiveRead } from "../lib/passive-read";
 import { redactSecretString } from "../lib/redact";
 import { isValidProviderName } from "./provider-name";
 import { MODEL_ALIAS_PATTERN } from "../providers/default-aliases";
@@ -49,10 +51,13 @@ import {
 import { hasWarnedInheritedFastWireConflict, markWarnedInheritedFastWireConflict } from "./warn-memo";
 
 export function hardenExistingSecret(path: string): void {
-  if (existsSync(path)) {
-    try { chmodSync(path, 0o600); } catch { /* best-effort */ }
+  if (existsSync(path) && !isPassiveRead()) {
     if (process.platform === "win32") {
+      // Preserve the ACL helper's metadata observation across reads. Windows chmod does
+      // not establish a private DACL and can invalidate that observation before every load.
       hardenSecretPath(path, { required: false });
+    } else {
+      try { chmodSync(path, 0o600); } catch { /* best-effort */ }
     }
   }
 }
@@ -128,6 +133,7 @@ export function warnDegradedCompactionRouting(rawParsed: unknown, validated: Ocx
 export function warnDegradedTopLevelOptIns(rawParsed: unknown, validated: OcxConfig): void {
   setCodexWsReuseAcrossTurns(validated.codexWsReuseAcrossTurns === true);
   if (compactionRecoveryConfigError(rawParsed)) console.warn("⚠️  invalid compactionRecovery disabled; the original compaction failure is preserved");
+  if (desktopCompatibilityConfigError(rawParsed)) console.warn("Invalid desktopCompatibility startup preference ignored; no desktop compatibility service will start automatically.");
   if (blockedModelRedirectsError(rawParsed)) console.warn("⚠️  invalid blockedModelRedirects ignored; provider routing remains available");
   const chatgptDesktop = chatgptDesktopConfigIssue(rawParsed);
   if (chatgptDesktop) console.warn(`⚠️  config.json ${chatgptDesktop} — the whole chatgptDesktop block is ignored, so the ChatGPT desktop integration reads as off`);

@@ -33,6 +33,17 @@ Bazı xAI Chat Completions retleri, HTTP 200 ve `finish_reason: content_filter` 
 
 Kombo olmayan bir Responses isteğinde OpenCodex, izin listesindeki bu 403'ü `status: "incomplete"` ve `incomplete_details.reason: "content_filter"` içeren bir HTTP 200 Responses yanıtına dönüştürür. Dönüştürme openai-chat bağdaştırıcı yolunda ve openai-responses geçişinde (grok-4.6 / grok-4.5 OAuth) çalışır. Akış da aynı incomplete sınırını kullanır. Boş veya yalnızca boşluk içeren 403 gövdeleri hata olarak kalır. Abonelik, kredi, yetki ve `not allowed to use this model` 403'leri hata olarak kalır. Kombo yük devretmesi özgün HTTP 403'ü görmeye devam eder.
 
+## Bildirilmemiş araç çağrıları
+
+Responses uç noktasında, bir istek araç kataloğu bildirdiğinde, bu kataloğun dışında istemci tarafından çalıştırılan bir aracı çağıran native passthrough yanıtı, çağrıyı aktarmak yerine turu başarısız kılar: `undeclared_tool_call` hata kodlu bir `response.failed` olayı ve ardından `data: [DONE]`; arabelleğe alınmış JSON aynı kodla HTTP 502 döndürür. Ret, yanıt devam durumuna girmeden önce gerçekleşir ve yalnızca `authMode: "forward"` sağlayıcıları veya bildirilmiş kataloğu olmayan istekler için devre dışıdır.
+
+Chat Completions ve Messages uç noktaları ertelenmiş araç kataloglarını destekler: bu istemciler kataloğun yalnızca bir bölümünü bildirebilir ve kalanını çalışma zamanında kendi araç kayıt defterleri aracılığıyla keşfedebilir — tam bildirim sınırına çevrilmiş katalog anlık görüntüsü değil bu kayıt defteri sahiptir. Bildirilen listenin dışındaki bir çağrı, istemcinin doğrulaması için aktarılır; açıkça boş `tools: []` üzerine kurulan bir çağrı yine de reddedilir, çünkü boş bir bildirimin altında ertelenmiş kayıt defteri bulunmaz. Bu retler de her bağlantıda `undeclared_tool_call` kodunu korur:
+
+- **Chat Completions:** kodu taşıyan OpenAI biçimli bir `error` nesnesi içeren `data:` çerçevesi gönderilir; ardından başarılı tamamlanma veya `[DONE]` olmadan akış kapatılır. Arabelleğe alınmış JSON kodla birlikte HTTP 502 döndürür.
+- **Messages:** gövdesi `{ "type": "error", "error": { "type": "api_error", "code": "undeclared_tool_call", ... } }` olan bir Anthropic `event: error` çerçevesi gönderilir; başarılı `message_stop` veya `[DONE]` gönderilmez. Arabelleğe alınmış JSON kodla birlikte HTTP 502 `api_error` döndürür. Deterministik bir katalog ihlali asla yeniden denenebilir `overloaded_error` (HTTP 529) olarak raporlanmaz.
+
+Ayrıca, her gelen bağlantıda sağlayıcının `default.` ad alanlı çağrısı, isteğin bildirdiği yalın araç adına normalleştirilir (`default.Read` → `Read`).
+
 ## Uç nokta genel bakışı
 
 | İstemci yüzeyi | Uç nokta | Başarılı akışsız sonuç | Başarılı akış veya soket sonucu |

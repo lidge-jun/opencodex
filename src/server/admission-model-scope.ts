@@ -1,5 +1,6 @@
 import type { DataPlaneAdmission } from "./auth-cors";
 import type { OcxApiKeyEntry, OcxConfig } from "../types";
+import { markResponseNonReplayable } from "../lib/upstream-retry";
 
 /**
  * Per-admission-key model and provider scope.
@@ -155,10 +156,12 @@ export function admissionModelDeniedBody(error: AdmissionModelDeniedError): {
  * indistinguishable from a typo in the model name.
  */
 export function admissionModelDeniedResponse(error: AdmissionModelDeniedError): Response {
-  return new Response(JSON.stringify(admissionModelDeniedBody(error)), {
+  const response = new Response(JSON.stringify(admissionModelDeniedBody(error)), {
     status: 403,
     headers: { "Content-Type": "application/json" },
   });
+  markResponseNonReplayable(response);
+  return response;
 }
 
 /**

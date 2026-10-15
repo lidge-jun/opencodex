@@ -1,6 +1,9 @@
 use serde_json::Value;
 use std::{env, fs, path::PathBuf, process::Command};
 
+#[path = "../src/fixture_env.rs"]
+mod fixture_env;
+
 #[test]
 fn eager_eof_releases_upstream_abort_listeners_and_reader() {
     let result = contract(
@@ -251,6 +254,7 @@ console.log('@@catalog-contract@@'+JSON.stringify(answer));
         );
         let mut command = hidden(Command::new(bun));
         command.env_clear();
+        fixture_env::arm_test_home_guard(&mut command, &root.join("original-home")).unwrap();
         if let Some(system) = env::var_os("SystemRoot") {
             command.env("SystemRoot", &system).env("WINDIR", &system);
         }
@@ -624,4 +628,39 @@ return answers;
         }
         assert_eq!(answer["reaped"], true);
     }
+}
+
+#[test]
+fn home_guard_survives_fixture_home_replacement() {
+    let result = contract(
+        "home-guard",
+        r#"
+const guard = await import(pathToFileURL(join(process.env.CONTRACT_REPO, 'src/lib/test-home-guard.ts')).href);
+const original = process.env.OCX_REAL_HOME;
+let homeRefused = false, codexRefused = false;
+try { guard.assertNotRealHomeUnderTest(join(original, '.opencodex')); } catch { homeRefused = true; }
+try { guard.assertNotRealCodexHomeUnderTest(join(original, '.codex')); } catch { codexRefused = true; }
+guard.assertNotRealHomeUnderTest(root);
+guard.assertNotRealCodexHomeUnderTest(root);
+return {
+  armed: process.env.OCX_TEST_HOME_GUARD === '1',
+  rewritten: process.env.HOME !== original && process.env.USERPROFILE !== original,
+  homeRefused, codexRefused, fixtureAllowed: true
+};
+"#,
+    );
+    assert_eq!(result["armed"], true);
+    assert_eq!(result["rewritten"], true);
+    assert_eq!(result["homeRefused"], true);
+    assert_eq!(result["codexRefused"], true);
+    assert_eq!(result["fixtureAllowed"], true);
+}
+
+#[test]
+fn home_guard_requires_an_absolute_protected_home() {
+    let mut command = Command::new("unused-fixture");
+    let error =
+        fixture_env::arm_test_home_guard(&mut command, std::path::Path::new("relative-home"))
+            .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
 }

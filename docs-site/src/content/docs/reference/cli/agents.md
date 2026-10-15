@@ -1035,13 +1035,25 @@ explicit fields and may combine with existing system options. Showing credits is
 a display preference, not paid-credit opt-in; system Ultra Fast is separate from
 provider Fast.
 
-Ultra Fast is an opt-in retention setting, not a capability or entitlement claim.
-With `--ultra-fast-tier on`, sync and catalog convergence retain an existing routed
+Ultra Fast is an opt-in setting, default off. With `--ultra-fast-tier on`, the
+generated catalog adds the Ultrafast speed choice to native `gpt-6-astra` and
+`gpt-6.1-sol` (including account-bound rows), so the Codex picker offers it next to
+Fast. Ultrafast requires an eligible ChatGPT plan; the catalog cannot check that,
+so turn the setting on only if your plan includes it. Other models and the default
+speed are unchanged.
+
+For routed models, sync and catalog convergence retain an existing routed
 row's operator-supplied `ultrafast` entries in `service_tiers` and
 `additional_speed_tiers` alongside its current Fast capability. Declarations belong
 to the exact provider/model slug; they are not copied to other models. The setting
 does not create missing declarations or restore removed models. Turning it off
-removes Ultra Fast from ordinary routed rows on the next catalog regeneration.
+removes Ultra Fast from ordinary routed rows and the generated native choice on the
+next catalog regeneration.
+
+The proxy's Fast mode decides what reaches the backend: when it is unset, a selected
+Ultrafast request is forwarded as `service_tier: "ultrafast"`; `fastMode: true`
+replaces any tier with Fast (`priority`), and `fastMode: false` removes the tier.
+Leave Fast mode unset to use Ultrafast.
 
 ```bash
 ocx system settings --json

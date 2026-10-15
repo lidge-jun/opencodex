@@ -4,7 +4,7 @@ description: Connect opencodex to OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code
 ---
 
 The **Connect** page writes opencodex's provider block into a client's own config
-file, and removes it again. Eighteen clients work this way, each with a switch:
+file, and removes it again. Nineteen clients work this way, each with a switch:
 
 | Client | Config file | Format | When the change takes effect | Credential |
 |---|---|---|---|---|
@@ -22,6 +22,7 @@ file, and removes it again. Eighteen clients work this way, each with a switch:
 | Aside | `~/.aside/u/<account>/models.json` | JSON | after fully quitting and reopening Aside | loopback placeholder |
 | Raycast | `~/.config/raycast/ai/providers.yaml` | YAML | immediately on save — Raycast watches the file | none — loopback only |
 | omo (Pi / senpi) | `~/.omo/agent/models.json` | JSON | new sessions | loopback placeholder |
+| Qoder | `settings.json` in `$QODER_CONFIG_DIR`, default `~/.qoder` | JSON | new sessions | loopback placeholder |
 | Cline CLI | `~/.cline/data/settings/providers.json` and sibling `models.json` | JSON pair | after stopping and restarting Cline | loopback placeholder |
 | Kilo | first existing `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json`, or `config.json` under `~/.config/kilo` | JSONC | new sessions | `OPENCODEX_KILO_API_KEY` |
 | Command Code | `~/.commandcode/providers.json` (on Windows with the default home: use `HOME ?? USERPROFILE` only if nonblank and Windows-absolute, otherwise `homedir()`; a separately supplied home is preserved; append `.commandcode\providers.json`) | JSON | next launch of Command Code | none — keyless loopback (`apiKey: false`) |
@@ -32,6 +33,25 @@ file, and removes it again. Eighteen clients work this way, each with a switch:
 (LazyCodex) gets its own section on the same tab, shown only when LazyCodex is detected, described in
 [omo (Codex / LazyCodex) role models](#omo-codex--lazycodex-role-models). OpenCode-based omo
 (oh-my-opencode) keeps its own config under OpenCode; opencodex does not read or write it.
+
+Qoder IDE / qodercli supports export and managed configuration through the Dashboard and CLI:
+
+```bash
+ocx export --client qoder --json
+ocx integration client enable --client qoder
+ocx integration client disable --client qoder
+```
+
+Qoder uses `settings.json` in `QODER_CONFIG_DIR` when that variable is set, and
+`~/.qoder/settings.json` otherwise; a relative `QODER_CONFIG_DIR` is refused. Enable merges `providers.opencodex` and
+OpenCodex entries in `modelConfigs.customModels`, preserving other providers, custom models,
+and settings. Disable removes the recorded OpenCodex entries; restore uses the existing
+snapshot workflow. The provider's default model is the first model in the sorted export.
+Custom models use their catalog context window, falling back to 128000 input tokens.
+The generated API key is a non-secret placeholder: Qoder integration requires loopback
+access and refuses an authenticated non-loopback bind. When the dedicated unauthenticated
+loopback listener is enabled, exports point Qoder at that listener. `ocx sync` and catalog
+changes refresh an already enabled Qoder integration like the other managed clients.
 
 Generated catalogs include only enabled models from each provider selection. This applies to both
 downloads and managed integrations, including Pi and Aside. The management model list still shows
@@ -286,6 +306,17 @@ Aside uses the same preview and confirmation flow for one selected profile at a 
 profiles** remains a separate bulk action and is not bound to one combined preview.
 
 ## What to expect, honestly
+
+**Managed configuration files are limited to 4 MiB (4,194,304 UTF-8 bytes).**
+The shared integration reader refuses larger files as unsafe to read, and the writer
+refuses a merged configuration that exceeds the same limit with `write_failed`, leaving
+the original configuration unchanged. Cline's recovery marker also has this limit;
+it includes both files' before-and-after contents plus metadata, so Cline can hit the
+limit even when each individual file is smaller than 4 MiB.
+
+Back up the client configuration yourself, then remove unneeded entries or reduce the
+exported model list before retrying. **Replace** does not bypass the limit. If the
+configuration must stay larger, manage it manually instead of using the Connect switch.
 
 **Formatting is generally not preserved.** Applying parses a config and writes it back
 out, so JSON, JSON5 and TOML may be reformatted and comments in JSON5 or TOML are lost.
@@ -560,6 +591,9 @@ the provider store moves to `<dataBaseDir>/.zcode/v2/provider_config.json`.
 `ZCODE_DATA_BASE_DIR` is a separate native selector and is not an alias for `ZCODE_DATA_DIR`.
 
 Unreadable, malformed or relative bootstrap settings leave the active root unknown.
+The bootstrap must be a regular file of at most 4 MiB; symbolic links and special files
+are refused during export and integration path discovery. Repair the bootstrap file or
+supply an explicit `ZCODE_DATA_DIR` to select the intended data root.
 Apply, overwrite and refresh refuse with a repair message instead of claiming a successful
 legacy write. An existing explicit provider file can still establish the active store.
 Ownership recorded at the original default config or store keeps its path, fingerprints

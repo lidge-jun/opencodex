@@ -169,7 +169,7 @@ export async function handleExportCommand(argv: string[], deps: ExportCommandDep
     const spec = EXPORT_CLIENTS[client];
     const root = await runtimeBaseUrl(deps);
     let built: { document: unknown; text: string };
-    if (client === "raycast" || client === "droid") {
+    if (client === "raycast" || client === "droid" || client === "qoder") {
       // The dial address alone cannot distinguish a wildcard authenticated bind
       // from loopback. Let the live server resolve its admission/listener policy;
       // saved config can differ from the process serving this request.

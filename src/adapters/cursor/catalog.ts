@@ -244,6 +244,14 @@ export const CURSOR_CAPABILITIES: Record<string, CursorCapability> = {
     defaultVariant: "regular",
     variants: { regular: { levels: ["low", "medium", "high"] } },
   },
+  // 261014 preemptive, like gemini-3.8-flash: Cursor's models page lists Gemini 4 Argon, but the
+  // live GetUsableModels id is unverified. Inert until the live roster lists this id.
+  "gemini-4-argon": {
+    displayName: "Gemini 4 Argon",
+    window: CONTEXT_GEMINI,
+    defaultVariant: "regular",
+    variants: { regular: { levels: ["low", "medium", "high"] } },
+  },
   // Seeded from the live GetUsableModels roster attached to #4820, which advertises six
   // muse-spark-1.3 effort variants. The ladder stops at xhigh on purpose: see the matching
   // effort-map entry for why Cursor advertising `-max` is not evidence that it runs.

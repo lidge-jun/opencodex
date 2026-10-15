@@ -1,5 +1,6 @@
 # Claude Desktop Integration
 
+The separate [CLI tier-default apply](../gui-and-management-api.md) writes the shared Claude Code user settings through `src/claude/model-default-settings.ts`. It pairs selected aliases with labels derived by `claudeTierDisplayName` in `src/claude/context-windows.ts`; preview includes the label edits, with an empty replacement indicating removal. Existing labels are managed only when they exactly match the generated name for their current alias; all other labels remain user-owned, including empty or non-string values. A matching generated label is removed only when its explicitly selected tier is replaced by a non-alias. An unset tier retains both its settings model ID and display label. Identical manually entered labels cannot be distinguished from generated ones. Code processes started by other applications can inherit those explicitly applied defaults; Desktop family profile assignments are not edited by this operation. `tests/claude-integration/claude-model-default-labels.test.ts` covers this ownership and preview/apply contract.
 Native result continuations and function-result injection follow [the mode-specific result and control contract](../transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
 Explicit Codex CLI installation observation does not launch or reconfigure a desktop client. See the [read-only observation contract](../runtime.md#explicit-codex-cli-installation-observation).
 
@@ -92,7 +93,7 @@ traffic through a local interception proxy, which Anthropic may treat as a terms
 owned settings are still observed; otherwise the field is `null`.
 `/api/sync` and roster-update auto-apply never write a gateway profile while the resolved mode is
 first-party; both re-resolve after model discovery before writing.
-Background refresh preserves the selected owned gateway profile's mode, refuses symlinked library, metadata, profile or backup paths and non-regular profiles, and rechecks admission, the selected owned metadata entry and its applied fingerprint in the no-follow writer's pre-rename hook; it leaves metadata and backup bytes unchanged.
+Background refresh preserves the selected owned gateway profile's mode, refuses symlinked library, metadata, profile or backup paths and non-regular profiles, and rechecks admission, the selected owned metadata entry and its applied fingerprint in the no-follow writer's pre-rename hook; it leaves metadata and backup bytes unchanged. Desktop library configuration reads follow [`clients/claude-desktop-config-reads.md`](claude-desktop-config-reads.md).
 
 Mode switches establish the replacement before removing the previous connection. A failed
 first-party apply (disabled intercept, CA failure, unreadable settings or foreign env) preserves
@@ -231,8 +232,21 @@ After a complete response, HTTP/2 closes only that stream with `RST_STREAM NO_ER
 HTTP/1.1 refusals, generated 502s and early replies advertise `Connection: close` only while input is unfinished; after the writable finishes,
 the listener unpipes the upstream upload, reads and discards remaining input, and ends the socket
 gracefully so queued response bytes flush. Errors and premature downstream closes still destroy
-the request. Draining adds no upload deadline or byte cap and does not wait for request-body
-completion before ending the response side. Body completion removes the input-cleanup listeners,
+the request. The request-side drain adds no upload deadline or byte cap and does not wait for request-body
+completion before ending the response side. Bun 1.4.3's HTTP server ends a `Connection: close`
+response with `socket.destroySoon()` before the listener's own finish handler runs, which reset
+the splice before the reply reached the client; every HTTP/1.1 reply that closes unfinished input
+(refusal, generated 502, early upstream reply) therefore replaces that socket's `destroySoon` with
+the same resume-and-`end()`. The TCP front
+enables half-open reads once a ClientHello is recognized and, when the backend side ends, unpipes
+and keeps discarding client ciphertext, so a client still writing an abandoned upload reads the
+reply and FIN and can close (Bun 1.4.2 otherwise left it open). That front-side discard is bounded:
+once the reply has flushed to the client socket (`finish`), the connection is dropped after
+`PICKER_ABANDONED_INPUT_LINGER_MS` (30 s), so a peer that keeps trickling an abandoned upload cannot
+hold it until shutdown (#6984). The timer is armed only after the reply has left the process, so
+it cannot cut a reply that is still being written; `finish` is not peer receipt, though, and a client
+that also stops reading for the whole budget can still lose unread reply bytes when the drop fires.
+A connection that closes first cancels the timer. Body completion removes the input-cleanup listeners,
 leaving long-lived responses and SSE subscriptions independent of upload cleanup. Completed HTTP/1.1 uploads retain keep-alive on generated 502s and can reuse the same client socket.
 `tests/claude-integration/claude-picker-upload.test.ts` covers headers-only refusals on both
 protocols, byte-exact early replies under backpressure, completed uploads with SSE, cancellation,
@@ -373,16 +387,25 @@ occupied" once a catalog exceeded 365 routes, because stale assignments are reta
 the set only grows. 2026 is still allocated first, so existing assignments keep their slots, and
 2027-2035 are reached only after it fills. Years before 2026 stay rejected: dated ids such as
 `claude-opus-4-8-20250201` are real Anthropic snapshot ids and the inbound decoder relies on that
-distinction. At render time each stored slot becomes a unique `p`-prefixed four-character wire
-code, disjoint from the historical three-character hash namespace. Claude Desktop strips terminal
+distinction. At render time each stored slot becomes a unique `claude-fable-5-pXXX` wire
+id, disjoint from the historical three-character hash namespace. Desktop 2.31226 recognizes
+the fable prefix in its effort fallback, whereas a suffixed Opus id misses its canonical table
+(#7006). This is client compatibility, not authoritative per-provider effort metadata.
+Claude Desktop strips terminal
 dates when comparing active-session model identity, so writing
 the persisted date slots directly would collapse every managed route to `claude-opus-4-8` and
-suppress `set_model` between them (#3782). The registry accepts both forms during migration. If an
+suppress `set_model` between them (#3782). The registry accepts dates and previous
+`claude-opus-4-8-pXXX` wire IDs during migration. If an
 active real Anthropic id claims a persisted date slot, reconciliation reallocates the non-Anthropic
 route before rendering. If any synthetic or compatibility alias matches an active real Anthropic id,
 the conflicting routed row or compatibility binding is omitted with a warning, and the real
 Anthropic identity remains unclaimed; a profile alias can never overwrite native routing.
 `src/claude/desktop-profile.ts` owns the slot range and wire conversion.
+The native launcher (`src/cli/claude.ts`) clears proxy-only profile IDs, except genuine
+IDs known from the registry or declared models/profile. Active synthetic bindings take
+priority over stale declarations. Discovery uses `resolvableDesktop3pAlias` in
+`src/claude/desktop-3p.ts`: synthetic IDs must decode to their advertised route;
+real Anthropic IDs retain identity passthrough.
 
 Persisted date-shaped Desktop IDs can overlap genuine native model IDs. When available discovery and
 mapping evidence cannot resolve one, Messages and count-tokens return HTTP 503 with the fixed

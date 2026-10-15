@@ -9,6 +9,7 @@ import { selfLaunchArgv } from "../lib/self-launch-argv";
 import { desktopStartupOwnership } from "../service/desktop-startup";
 import type { OcxConfig } from "../types";
 import { truncateRetainedUtf8 } from "../lib/admission";
+import { isPassiveRead } from "../lib/passive-read";
 
 const CACHE_TTL_MS = 30_000;
 const PROBE_TIMEOUT_MS = startupHealthProbeBudgetMs();
@@ -69,6 +70,8 @@ export function getStartupHealthSnapshot(
 ): StartupHealth {
   const now = deps.now ?? Date.now;
   if (cached && now() - cached.timestamp < CACHE_TTL_MS) return cached.value;
+  // A passive read (a Remote Link Child's, #6959) starts no diagnostic process on this machine.
+  if (isPassiveRead()) return staleOrFallback(config);
   refreshInBackground(config, deps);
   return staleOrFallback(config);
 }
@@ -114,6 +117,7 @@ function conservativeFallback(config: Pick<OcxConfig, "codexAutoStart">): Startu
     serviceSupported: process.platform === "win32" || process.platform === "darwin" || process.platform === "linux",
     shimInstalled: shim.installed,
     shimHealthy: shim.healthy,
+    ...(shim.activationPending ? { shimActivationPending: true } : {}),
     platform: process.platform,
     diagnosticStale: true,
   });
@@ -189,6 +193,7 @@ export async function getCachedStartupHealth(
 ): Promise<StartupHealth> {
   const now = deps.now ?? Date.now;
   if (cached && now() - cached.timestamp < CACHE_TTL_MS) return cached.value;
+  if (isPassiveRead()) return staleOrFallback(config);
   refreshInBackground(config, deps);
   // An expired or empty read is an explicit protection check. Wait for the
   // isolated probe instead of presenting a synthetic failure while that probe

@@ -23,7 +23,7 @@ import { CODEX_RESPONSES_HTTP_URL, CODEX_RESPONSES_WS_URL, CODEX_WS_FRAME_HEADER
 import { codexWsExchange } from "./codex-ws-exchange";
 import { CodexWsSession } from "./codex-ws-session";
 import { codexWsPool, codexWsReuseIdentity } from "./codex-ws-pool";
-import { codexWsCreateFrameExceedsLimit } from "./codex-ws-wire";
+import { codexWsCreateFrameExceedsLimit, type CodexWsPreOutputRefusalHold } from "./codex-ws-wire";
 import { isLoopbackUrl, rewriteWebSocketDial } from "../../plugins/upstream-hooks";
 import { outboundCredentials } from "../../lib/outbound-credential-registry";
 export { CODEX_WS_LIVENESS_PING_INTERVAL_MS, CODEX_WS_RESPONSE_PRELUDE_TIMEOUT_MS, MAX_CODEX_WS_FRAME_BYTES, MAX_CODEX_WS_QUEUE_BYTES,
@@ -163,6 +163,8 @@ export async function codexWsUpstreamFetch(
   nativeControl?: NativeResponseControl,
   beforeContinuation?: () => Promise<void>,
   onPhysicalDispatch?: () => void,
+  /** Opt-in pre-output refusal hold (#6969); see codexWsExchange. */
+  preOutputRefusalHold?: CodexWsPreOutputRefusalHold,
 ): Promise<Response> {
   const prepared = prepareCodexWsRequest(url, init);
   if (!prepared) return sseFallback(url, prepareCodexHttpInit(url, init));
@@ -248,6 +250,7 @@ export async function codexWsUpstreamFetch(
     session, url, init, prepared, sseFallback, onQuota, beforeDispatch,
     nativeControl: control,
     beforeContinuation, onPhysicalDispatch,
+    preOutputRefusalHold,
     bunVersion: typeof runtime === "string" ? runtime : runtime.version,
   });
 }

@@ -1,6 +1,7 @@
 import { ensureManagementClaudeIntercept, interceptStartRefusal, interceptStatus } from "./claude-intercept-routes";
 import { persistCommittedDesktopGateway } from "../../claude/desktop-gateway-state";
 import { captureDesktopAppliedMarker, commitDesktopAppliedMarker } from "../../claude/desktop-applied-marker";
+import { isPassiveRead } from "../../lib/passive-read";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname } from "node:path";
@@ -228,6 +229,32 @@ async function injectionModelOptions(config: OcxConfig, models: readonly Catalog
       stored === m.namespaced || slugEquals(stored, m.provider, m.model)
     )));
   return [...nativeModels, ...routedModels];
+}
+
+/**
+ * The GET /api/injection-model body. `routed` is the discovered routed catalog, or `null` in a
+ * passive read (a Remote Link Child's, #6959). That body lists the native
+ * options and the current pick, which is all a read-only Child shows.
+ */
+export async function injectionModelView(config: OcxConfig, routed: readonly CatalogModel[] | null) {
+  const { CODEX_REASONING_LEVELS } = await import("../../reasoning-effort");
+  const available = await injectionModelOptions(config, routed ?? []);
+  const picked = config.injectionModel;
+  if (routed === null && picked && !available.some(option => option.namespaced === picked)) {
+    const slash = picked.indexOf("/");
+    available.push(slash > 0
+      ? { provider: picked.slice(0, slash), model: picked.slice(slash + 1), namespaced: picked }
+      : { provider: "openai", model: picked, namespaced: picked });
+  }
+  return {
+    multiAgentGuidanceEnabled: multiAgentGuidanceEnabled(config),
+    syncCodexSubagentDefaults: subagentDefaultSyncEffective(config),
+    model: config.injectionModel ?? null,
+    effort: config.injectionEffort ?? null,
+    prompt: config.injectionPrompt ?? null,
+    efforts: CODEX_REASONING_LEVELS.map(l => l.effort),
+    available,
+  };
 }
 
 export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise<Response | null> {
@@ -620,16 +647,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
   // effort the prompt tells the agent to pass to spawn_agent. GET returns the current
   // picks + available models/efforts; PUT sets or clears them.
   if (url.pathname === "/api/injection-model" && req.method === "GET") {
-    const { CODEX_REASONING_LEVELS } = await import("../../reasoning-effort");
-    return jsonResponse({
-      multiAgentGuidanceEnabled: multiAgentGuidanceEnabled(config),
-      syncCodexSubagentDefaults: subagentDefaultSyncEffective(config),
-      model: config.injectionModel ?? null,
-      effort: config.injectionEffort ?? null,
-      prompt: config.injectionPrompt ?? null,
-      efforts: CODEX_REASONING_LEVELS.map(l => l.effort),
-      available: await injectionModelOptions(config, await fetchAllModels(config)),
-    });
+    return jsonResponse(await injectionModelView(config, isPassiveRead() ? null : await fetchAllModels(config)));
   }
   // Read-only: sizes the described delegated work and proposes a model and effort from the
   // same options GET offers. The page applies an accepted proposal through the PUT below.
@@ -1379,6 +1397,24 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
   }
 
   // Claude Code inbound settings (GUI "Claude ON" toggle + Claude page).
+  if (url.pathname === "/api/claude-code/model-defaults" && (req.method === "GET" || req.method === "POST")) {
+    const { previewClaudeModelDefaults, applyClaudeModelDefaults, ModelDefaultsRecoveryError } = await import("../../claude/model-default-settings");
+    try {
+      if (req.method === "GET") return jsonResponse(previewClaudeModelDefaults(config.claudeCode?.tierModels));
+      let body: unknown;
+      try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
+      if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).length !== 1 ||
+          !("fingerprint" in body) || typeof body.fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(body.fingerprint)) {
+        return jsonResponse({ error: "fingerprint is required" }, 400);
+      }
+      return jsonResponse(applyClaudeModelDefaults(config.claudeCode?.tierModels, body.fingerprint));
+    } catch (error) {
+      rethrowManagementBodyTooLarge(error);
+      if (error instanceof ModelDefaultsRecoveryError) return jsonResponse({ error: error.message, code: error.message, backupPath: error.backupPath }, 500);
+      const code = error instanceof Error && error.message === "settings_changed" ? "settings_changed" : "settings_unavailable";
+      return jsonResponse({ error: code, code }, code === "settings_changed" ? 409 : 500);
+    }
+  }
   if (url.pathname === "/api/claude-code" && req.method === "GET") {
     const models = await fetchAllModels(config);
     const { listCatalogNativeSlugs } = await import("../../codex/catalog");
@@ -1495,10 +1531,10 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     });
   }
   if (url.pathname === "/api/claude-code" && req.method === "PUT") {
-    // NOTE: model / tierModels / maxContextTokens / alwaysEnableEffort are
+    // NOTE: model / maxContextTokens / alwaysEnableEffort are
     // CONFIG-ONLY back-compat fields — the GUI no longer offers controls for them
-    // (default model is owned by Claude Code's /model picker; roster agents
-    // supersede tiers; auto-context supersedes the max-context pair; effort rides
+    // (default model is owned by Claude Code's /model picker;
+    // auto-context supersedes the max-context pair; effort rides
     // regardless on 2.1.207). PUT keeps validating them so hand-written configs
     // and older GUIs stay safe; GUI saves omit them and the spread preserves them.
     let parsedBody: unknown;
@@ -1817,7 +1853,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       }
     }
     if (body.tierModels !== undefined) {
-      // CONFIG-ONLY back-compat (GUI pickers removed — roster agents supersede tiers).
+      // Family defaults also serve third-party callers that request native tier aliases.
       if (body.tierModels === null) {
         delete next.tierModels;
       } else if (!isPlainObject(body.tierModels)) {

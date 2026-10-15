@@ -1,6 +1,6 @@
 import { linkSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { ownEvidence, ownerState, safeNamespace, type OwnerDeps, type OwnerEvidence } from "./prompt-lock-owner";
+import { ownEvidence, ownerState, safeNamespace, safeNamespaceStat, type OwnerDeps, type OwnerEvidence } from "./prompt-lock-owner";
 import { ChangedLock as ChangedClaim, checkEntry, checkIdentity, guarded, type Entry, type Namespace } from "./prompt-lock-evidence";
 import { LockFileBusy, lockFileOperation } from "./prompt-lock-io";
 
@@ -41,8 +41,18 @@ export function withLockClaim<T>(
     if (error instanceof LockFileBusy) return { ok: false };
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
   }
-  if (!safeNamespace(directory, "directory", deps)) throw new UnsafeLockNamespace(directory);
-  const parents = [root, { path: directory, stat: io(() => deps.lstat(directory)) }];
+  // A peer's cleanup removes the empty claims directory, so it can vanish between our mkdir and
+  // this read. That is contention, not an unsafe namespace and not a crash: report it as busy.
+  // One observation is both validated and kept as the parent witness, so a replacement that
+  // appears after a missing read can never be trusted without its own ownership check.
+  let directoryStat: ReturnType<OwnerDeps["lstat"]>;
+  try { directoryStat = io(() => deps.lstat(directory)); }
+  catch (error) {
+    if (error instanceof LockFileBusy || (error as NodeJS.ErrnoException).code === "ENOENT") return { ok: false };
+    throw error;
+  }
+  if (!safeNamespaceStat(directoryStat, "directory", deps)) throw new UnsafeLockNamespace(directory);
+  const parents = [root, { path: directory, stat: directoryStat }];
   const claimDirectoryGone = (): boolean => {
     try { const now = deps.lstat(directory); return now.dev !== parents[1].stat.dev || now.ino !== parents[1].stat.ino; }
     catch { return true; }

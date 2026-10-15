@@ -6,6 +6,30 @@ description: Provider entries, authentication, endpoints, model catalogs, quotas
 A provider tells opencodex where a model lives, which wire adapter it speaks, and how requests are
 authenticated.
 
+## Context windows on custom providers
+
+When a custom provider omits a model's context window, OpenCodex can infer it from the bundled
+model metadata. This is off by default: set `inferContextWindow: true` on the provider to turn it
+on. Without it, a model with no window uses the enabled Context cap as its window, then the 128k
+compatibility fallback. With it, the order is: discovered/configured limits (the smaller wins),
+Azure metadata, model-ID metadata, enabled Context cap as the window, then 128k. An enabled
+Context cap still limits the result. Built-in providers keep their existing behavior and ignore the flag.
+
+```json
+{ "providers": { "my-relay": { "adapter": "anthropic", "baseUrl": "https://relay.example/v1", "inferContextWindow": true } } }
+```
+
+Original-vendor API tables take precedence over aggregator tables. Exact IDs are preferred;
+case and dot/hyphen variants are accepted only when unambiguous. Unknown IDs, floating `~` aliases
+and conflicting matches are not guessed. OpenAI API windows do not describe Codex subscription
+limits. An inferred window affects Codex's compaction budget and other connected clients' catalogs,
+including Claude long-context selection, but is recorded separately from asserted routing capacity.
+
+A matching model ID does **not** verify your relay's actual capacity. If it serves less than the
+vendor window, set `modelContextWindows` or the provider's **Context cap** before using long sessions.
+OpenCodex does not enable a cap automatically or probe the model. Successful smaller requests do not
+prove the full inferred window works. Existing configured windows remain in control.
+
 ## Initial model selection
 
 New non-OAuth connections wait for a reliable model list before exposing models. If that list contains at least 20 distinct Models-tab rows, all model switches start OFF; the provider itself stays ACTIVE. OAuth and ChatGPT-login connections keep their defaults, based on the effective authentication mode.
@@ -146,7 +170,14 @@ it needs `client_version` **0.153.0 or later** and is the Codex default. GPT-6 S
 
 | Model | Default context | Opt-in ceiling | Default effort | Reasoning ladder |
 | --- | ---: | ---: | --- | --- |
-| `gpt-6.1-sol` | 272,000 | 872,000 | `low` | `low` through `ultra` |
+| `gpt-6.1-sol` | 500,000 | 872,000 | `low` | `low` through `ultra` |
+
+OpenAI raised GPT-6.1 Sol's default context in Codex and Work from 272,000 to 500,000 tokens on
+October 11, 2026, so the native row now defaults to 500,000 and compacts at 450,000. The bundled
+Codex catalog still reads 272,000, so opencodex sets the new default itself. A configured window or
+provider cap still lowers it, and the long-window opt-in still stops at 872,000: OpenAI describes
+the model maximum as 1M without saying how that maps onto Codex's window and input limits, so
+opencodex does not advertise more than the ceiling it can verify.
 
 The same `providerContextCaps.openai`, `modelContextWindows` and `modelAutoCompactTokenLimits`
 levers apply as for Astra. On the OpenAI API (`openai-apikey`), `gpt-6.1-sol` has 1,050,000
@@ -220,6 +251,7 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `responsesPath?` | `string` | Relative resource path for key-auth `openai-responses` requests. It must start with `/` and contain no scheme, query, or fragment. |
 | `chatCompletionsPath?` | `string` | Relative resource path for `openai-chat` requests, the mirror of `responsesPath` and subject to the same shape rules. Needed when one upstream serves Chat Completions and Responses under different prefixes: a per-model wire override changes the adapter and leaves `baseUrl` alone, so without this an opted-in Chat request would be sent to the Responses base. Z.AI is the shipped example. |
 | `allowEncryptedV2AgentTasks?` | `boolean` | Disabled by default. Trust a direct key-auth `openai-responses` provider to consume or relay opaque encrypted V2 sub-agent tasks unchanged. Eligible routes skip `agentTaskRecovery`; all other routes keep the existing recovery or fail-closed behavior. OpenCodex does not decrypt, translate, or recover tasks sent through this opt-in. |
+| `projectResponsesLiteHostedSearchHistory?` | `boolean` | Default off. Set the actual boolean `true` to opt this provider into lossy projection of unreferenced hosted-search history for ordinary requests to exact canonical ChatGPT Codex `/responses` with explicit Responses Lite intent. Omission or `false` retains structural history; strings and numbers are invalid. It does not enable Lite, change transport, or affect native compact, public OpenAI API/other destinations, or existing portable/routed compaction projection. See [Lite hosted-search history](/reference/proxy-formats/#codex-native-ordinary-lite-hosted-search-history). |
 | `upstreamWebsocket?` | `boolean` | Opt-in upstream Responses WebSocket transport for `openai-responses` requests (default false). Honored only for the first-party `https://api.openai.com/v1` upstream; custom-provider endpoints always use bounded HTTP/SSE because Bun cannot enforce an inbound WebSocket message limit before allocating the complete message. For the canonical ChatGPT `openai` provider, omitting it keeps the upstream WebSocket on eligible turns, an explicit `false` sends streaming turns over HTTP/SSE, and provider management rejects `true`; with `false`, native mid-turn steering and injection are unavailable. The field is independent of the client-facing `websockets` setting and changes neither the endpoint nor the credential. Plain HTTP remains on SSE; non-Responses paths and `openai-chat` requests stay on HTTP. |
 | `supportsServiceTier?` | `boolean` | Tri-state canonical Fast capability fallback. `true` publishes Fast in the catalog, satisfies service-tier routing requirements, contributes a supported fingerprint, and lets fast mode inject the provider's canonical wire value on a compatible final adapter. `false` strips the field and never injects, and exact model declarations cannot reopen it. Absent leaves the provider unclassified: fast mode does not inject or normalize a canonical caller value, and caller values obey the final wire's forwarding permission (`chatServiceTier` on Chat; passthrough on Responses). The registry classifies canonical OpenAI (`true`), DeepSeek, and Volcengine Ark (`false`); set it explicitly only for custom gateways that genuinely support tiers. |
 | `responseTierAuthoritative?` | `boolean` | Whether the response tier can confirm or deny Fast. Set `false` explicitly for routes with non-authoritative response metadata; omission preserves existing behavior. This does not enable Fast or change outbound parameters. See [Response service-tier authority](#response-service-tier-authority). |
@@ -227,7 +259,7 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `modelSupportsServiceTier?` | `Record<string, boolean>` | Exact upstream model capability overrides. Exact `true` enables canonical Fast for that model; exact `false` narrows provider defaults. An explicit provider-level `supportsServiceTier: false` remains fail-closed and cannot be reopened. Exact `true` does not authorize foreign caller-tier forwarding on Chat. Undeclared models fall back to provider-wide behavior. Management `PATCH /api/providers` merges entries and accepts `null` to clear one. |
 | `chatServiceTier?` | `boolean` | Provider-wide Chat-wire opt-in for forwarding caller `service_tier` values. On a classified route it governs foreign values such as `flex`, not proxy-owned canonical Fast after capability validation; on an unclassified route it governs every caller value because no Fast capability has been validated. Exact model capability does not authorize foreign forwarding. Responses routes retain their capability-based caller forwarding behavior. |
 | `promptCacheKey?` | `boolean` | Provider-wide `openai-chat` opt-in for forwarding a `prompt_cache_key`. The adapter forwards the key it is given and never invents one, but the key is not always the caller's: Claude Messages translation derives one from `metadata.user_id`, or from a model/system/tools cohort when no metadata is sent. Default off. Enable only when the upstream documents support, because strict gateways may reject the unknown field with HTTP 400. |
-| `preserveResponsesReasoningContent?` | `boolean` | Keep plaintext reasoning content on replayed Responses reasoning items instead of blanking it (blanking is the ChatGPT backend's rule). Enable for upstreams whose contract accepts reasoning replay, such as DeepSeek or a self-hosted Kimi on vLLM. Proxy-minted `ocxr1` envelopes are always stripped. A hand-configured `openai-responses` provider without it logs one warning per host the first time plaintext reasoning is dropped. `preserveReasoningContentModels` does not affect this wire. |
+| `preserveResponsesReasoningContent?` | `boolean` | Default off for custom providers. In **Providers → Settings**, enable **Replay plaintext reasoning** for a custom Responses endpoint only if it accepts this history. This sends prior plaintext reasoning to that endpoint and may increase token use. Keep plaintext reasoning content on replayed Responses reasoning items instead of blanking it (blanking is the ChatGPT backend's rule). Enable for upstreams whose contract accepts reasoning replay, such as DeepSeek or a self-hosted Kimi on vLLM. Proxy-minted `ocxr1` envelopes are always stripped. A hand-configured `openai-responses` provider without it logs one warning per host the first time plaintext reasoning is dropped. `preserveReasoningContentModels` does not affect this wire. |
 | `preserveResponsesInputItemIds?` | `boolean` | Default off. Preserve valid `input[].id` when `store: false` for explicitly trusted launcher relays that require turn identity. Ordinary Responses providers keep stripping IDs; xAI custom-call ID repair remains active. |
 | `preserveResponsesMessageMetadata?` | `boolean` | Default off. Preserve private `internal_chat_message_metadata_passthrough` on input items for explicitly trusted launcher relays. This forwards private turn/session metadata to that destination; do not enable for ordinary gateways. |
 | `dropResponsesReasoningItems?` | `boolean` | Remove replayed Responses `reasoning` items from continuation input entirely, instead of forwarding them with blanked content. This is lossy: summaries, item ids, and `encrypted_content` go with them, so no reasoning item from the previous turn remains in the forwarded input. It does not remove `previous_response_id`, so an upstream holding its own turn state may still reach it. Enable only for an upstream that rejects reasoning replay outright — the built-in Volcengine Ark Coding Plan preset sets it because validated tool continuations answered `400 InvalidParameter` otherwise. Set it to `false` on that provider to forward reasoning items again. |
@@ -244,10 +276,12 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `modelDisplayNames?` | `Record<string, string>` | Durable labels used only for display, keyed by this provider's exact upstream model id. Labels win over provider catalog metadata, survive discovery refreshes and provider edits, and never change authentication, adapter behavior, routing, billing, upstream request construction, the routed `provider/model` selector, or the upstream wire model. Keys are exact and case sensitive. Unknown model ids are kept so a temporarily missing model receives its label when it returns. The map accepts at most 2,000 entries, matching the discovery limit. |
 | `contextWindow?` | `number` | Provider-wide context fallback when upstream metadata is absent; otherwise a cap that retains smaller live metadata. The Models dashboard exposes this separately from `providerContextCaps`. |
 | `modelContextWindows?` | `Record<string, number>` | Per-model context fallbacks/caps. These override `contextWindow`: an unknown window uses the configured value, while smaller live metadata remains authoritative. |
+| `inferContextWindow?` | `boolean` | Custom providers only, default off. `true` fills a missing window from bundled model-ID metadata ([details](#context-windows-on-custom-providers)); the value is an estimate, not verified relay capacity. |
 | `modelContextTiers?` | `Record<string, "default" \| "long_context">` | Per-model upstream tier for `github-copilot`. `long_context` sends `contextTier: "long_context"`. Catalog metadata grows only with an exact per-model `modelContextWindows` value that documents the supported window; that value wins before the provider cap. An unknown model keeps its observed window. Unconfigured passthrough requests retain a caller-supplied `contextTier` field on any provider. |
 | `modelInputModalities?` | `Record<string, string[]>` | Per-model input hints such as `["text"]` or `["text", "image"]`. |
 | `modelMaxInputTokens?` | `Record<string, number>` | Positive per-model max input limits used for catalog auto-compaction hints. |
-| `modelAutoCompactTokenLimits?` | `Record<string, number>` | Positive safe-integer per-model soft auto-compaction budgets. Values can only lower the effective 90%-of-context/max-input envelope and are omitted when no authoritative context window is known. For canonical `openai`, keys must be exact supported native model IDs without provider or account-selector prefixes. Provider PATCH merges entries; set a key to `null` to delete it or the whole field to `null` to clear the map. These `null` tombstones are PATCH-only. |
+| `modelAutoCompactTokenLimits?` | `Record<string, number>` | Positive safe-integer per-model soft auto-compaction budgets. Values can only lower the effective 90%-of-context/max-input envelope and are omitted when no context window is resolved. For canonical `openai`, keys must be exact supported native model IDs without provider or account-selector prefixes. Provider PATCH merges entries; set a key to `null` to delete it or the whole field to `null` to clear the map. These `null` tombstones are PATCH-only. |
+| `minMaxOutputTokens?` | `number` | Optional positive integer floor for explicit positive `max_output_tokens` budgets on `azure-openai`/`azure` Responses routes. Unset preserves the caller's cap. Setting it authorizes raising a smaller cap, which can increase output usage. Omitted or invalid request budgets are unchanged. |
 | `defaultMaxOutputTokens?` | `number` | Provider-wide `openai-chat` fallback when the client omits `max_output_tokens`. |
 | `modelMaxOutputTokens?` | `Record<string, number>` | Positive per-model `openai-chat` fallback budgets; exact/pattern matches beat the provider default. |
 | `modelCosts?` | `Record<string, Cost4>` | Per-model display prices (USD per 1M tokens), keyed by that provider's exact upstream model id — not a provider identifier or a routed `provider/model` label, e.g. `{ "deepseek-v4-flash": { "input": 0.14, "output": 0.28, "cacheRead": 0.0028, "cacheWrite": 0 } }`. Any model id is a valid key — custom providers may target any OpenAI-compatible endpoint through the `openai-chat` adapter, and local or internal provider ids work even when they are absent from the built-in catalogs. User-configured prices win over the built-in catalogs in the Logs `~$` and Usage estimates; historical entries are repriced from the current overlay, so editing a price can move past totals. The fallback order is user `modelCosts` → exact official correction → jawcode catalog → expected-price overlay → model-level vendor fallback, and an explicit all-zero user entry means a known-zero estimate; delete that model entry to restore automatic pricing. All-zero catalog metadata still falls through. Each rate must be a non-negative finite number at most 1,000,000 (USD per 1M tokens); out-of-range rows are rejected by the management boundary and dropped on load. Display-time estimation only: overlays never affect routing, account selection, quotas, or billing. |
@@ -949,6 +983,23 @@ Active usage probes preserve absent family windows unless the response authorita
 Affinity is process-local
 and size-bounded. Token-refresh credential failures retain the existing reauthentication policy. Classified pre-output account-entitlement/billing 403s clear affinity and cool the account for `Retry-After`, or ten minutes by default, before trying an eligible replacement. Generic or request-level 403s remain terminal; see [Claude account recovery](/guides/claude-code/). If all eligible accounts are cooling, clients receive 429 with
 `Retry-After` when known, not an authentication error.
+
+When every account the request can use is held on spent quota (a shared 5-hour or weekly window,
+or the requested model family's weekly window), that 429 is a usage limit rather than a rate limit:
+the Responses body carries `error.type` and `error.code` `usage_limit_reached` and, when the
+upstream reset of every held account is known, `resets_at` (epoch seconds of the earliest reset).
+Codex stops on this answer and shows when to try again instead of retrying until
+"exceeded retry limit". The last account's own spent-quota refusal gets the same answer once no
+replacement is left. If any held account is only throttled, revalidating a model family, or
+refused for entitlement, the answer stays the retryable `rate_limit_exceeded`. Combo targets keep
+the rate-limit form so the combo can move to its next target. Native `/v1/messages` keeps
+Anthropic's `rate_limit_error` type; its message names the usage limit.
+
+A quota cooldown lifts early once a fresh usage reading (the dashboard Providers page, or
+`ocx account list anthropic --quota --refresh`) shows every window the refusal rejected below
+100%, whether the cooldown came from `Retry-After` or a window reset. This covers a plan upgrade
+or a window that reopened early. A reading taken before the refusal never lifts it, and
+entitlement 403 cooldowns wait for their deadline.
 
 Anthropic responses also report the serving account's 5-hour and weekly utilization, and whichever
 of those two a given response carries is recorded against that account — each window independently,
@@ -1655,3 +1706,28 @@ by the other.
 ### Renamed API-key presets
 
 A provider saved under another name, such as `CommandCode`, inherits missing reasoning-effort metadata when its adapter and fixed API-key endpoint match a registry preset. Your explicit per-model lists, including `[]`, remain authoritative. An omitted provider-wide list inherits the preset default; an explicit list remains unchanged. This does not match OAuth, unrelated endpoints, or templated/custom endpoint presets.
+
+### Azure model-validation output budgets
+
+Some Azure Responses deployments reject Claude Code's tiny model-switch validation budget.
+If your deployment reports that `max_output_tokens` is below its minimum, configure
+`minMaxOutputTokens` on that Azure provider to the minimum your endpoint requires (for
+example, `16` for an endpoint that reports that minimum). This is opt-in: it raises every
+smaller positive integer budget on that provider, not just validation requests. Larger
+budgets are preserved, and other adapters do not apply this setting in this change.
+Spend admission reserves the effective output budget before dispatch, including each Combo
+target's prepaid send. A configured spend ceiling can therefore reject a request whose
+raised output allowance would exceed that ceiling.
+
+```json
+{
+  "providers": {
+    "azure": {
+      "adapter": "azure-openai",
+      "baseUrl": "https://YOUR_RESOURCE.openai.azure.com/openai/v1",
+      "apiKey": "${AZURE_OPENAI_API_KEY}",
+      "minMaxOutputTokens": 16
+    }
+  }
+}
+```

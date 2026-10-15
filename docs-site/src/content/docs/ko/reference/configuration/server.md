@@ -23,7 +23,7 @@ description: 리스너, 원격 접근, admission 키, 타임아웃, 저장소, �
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | disabled | 선택적으로 활성화하는 보관 세션 정리 정책입니다. 절대 암묵적으로 활성화되지 않습니다. |
 | `appOwnedMemoryBudgetMb?` | `number` | `256` | 제거 가능한 앱 소유 로그, 캐시, blob, continuation payload에 대한 MiB 단위 상한입니다. 범위는 64–4096이며 RSS 상한은 아닙니다. |
 | `metricsExport.enabled?` | `boolean` | `false` | 인증된 `GET /api/metrics`에서 프로세스 로컬 집계 요청 메트릭을 활성화합니다. 재시작이 필요하며, 비활성화 상태에서는 404를 반환하고 exporter 동작을 시작하지 않습니다. |
-| `serviceHealthRecovery.enabled?` | `boolean` | `false` | 백그라운드 서비스용 선택적 복구입니다. 작은 감시 프로세스가 `/healthz`를 확인하고, 프록시가 살아 있지만 연속 프로브에 약 1분 동안 전혀 응답하지 않으면 종료해 서비스 관리자(작업 스케줄러, launchd, systemd, WinSW)가 다시 시작하게 합니다. 관리되는 서비스 자식 프로세스에서만 시작되며, 멈춘 프로세스가 처리 중이던 요청은 재전송하지 않습니다. 시간당 최대 3회. 재시작이 필요합니다. |
+| `serviceHealthRecovery.enabled?` | `boolean` | `false` | 백그라운드 서비스용 선택적 복구입니다. 작은 감시 프로세스가 `/healthz`를 확인하고, 프록시가 살아 있지만 연속 프로브에 약 1분 동안 전혀 응답하지 않으면 종료해 서비스 관리자(작업 스케줄러, launchd, systemd, WinSW)가 다시 시작하게 합니다. 관리되는 서비스 자식 프로세스에서만 시작되며, 멈춘 프로세스가 처리 중이던 요청은 재전송하지 않습니다. 시간당 최대 3회. 재시작이 필요합니다. 자동 복구에는 숫자 바인드 주소(또는 기본 localhost/와일드카드 매핑)가 필요합니다. DNS 바인드 이름은 모니터링하지 않습니다. 기록된 주소 또는 포트가 변경되면 모니터링이 중지됩니다. |
 | `codexAutoStart?` | `boolean` | `true` | Codex shim이 Codex를 실행하기 전에 `ocx ensure`를 돌리도록 허용합니다. `false`이면 ensure는 아무 작업도 하지 않습니다. |
 | `codexShimAutoRestore?` | `boolean` | `true` | 완료된 외부 Codex 업데이트가 설치된 shim을 교체한 뒤 복원합니다. 환경 변수로 끌 수 있습니다: `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`. |
 | `syncResumeHistory?` | `boolean` | `true` | 되돌릴 수 있는 Codex App history 호환성입니다. 원래 메타데이터는 `ocx stop` / `ocx restore`가 백업하고 복원합니다. |

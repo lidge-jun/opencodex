@@ -784,6 +784,8 @@ export function providerManagementConfigError(
     delete canonicalCandidate.pinnedReasoningEffort;
     delete canonicalCandidate.modelPinnedReasoningEfforts;
     delete canonicalCandidate.responsesSnapshotRepair;
+    // Explicit history-loss opt-in changes request content, never auth or transport identity.
+    delete canonicalCandidate.projectResponsesLiteHostedSearchHistory;
     // modelCosts is a user-owned display overlay, not part of the canonical
     // forward seed; it is validated separately below (providerModelCostsConfigError).
     delete canonicalCandidate.modelCosts;
@@ -919,12 +921,17 @@ export function providerManagementConfigError(
     typed,
   );
   if (preferHostedToolsError) return `provider ${name} ${preferHostedToolsError}`;
+  if (raw.projectResponsesLiteHostedSearchHistory !== undefined && typeof raw.projectResponsesLiteHostedSearchHistory !== "boolean") {
+    return `provider ${name} projectResponsesLiteHostedSearchHistory must be a boolean`;
+  }
   if (raw.responsesSnapshotRepair !== undefined && typeof raw.responsesSnapshotRepair !== "boolean") {
     return `provider ${name} responsesSnapshotRepair must be a boolean`;
   }
   if (raw.xaiResponsesXSearch !== undefined && typeof raw.xaiResponsesXSearch !== "boolean") {
     return `provider ${name} xaiResponsesXSearch must be a boolean`;
   }
+  const minMaxOutputError = positiveIntegerConfigError(raw.minMaxOutputTokens, "minMaxOutputTokens");
+  if (minMaxOutputError) return `provider ${name} ${minMaxOutputError}`;
   const defaultMaxOutputError = positiveIntegerConfigError(raw.defaultMaxOutputTokens, "defaultMaxOutputTokens");
   if (defaultMaxOutputError) return `provider ${name} ${defaultMaxOutputError}`;
   const maxOutputError = positiveIntegerRecordConfigError(raw.modelMaxOutputTokens, "modelMaxOutputTokens");
@@ -1051,6 +1058,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   preserveResponsesReasoningContent: "editor",
   preserveResponsesInputItemIds: "editor",
   preserveResponsesMessageMetadata: "editor",
+  projectResponsesLiteHostedSearchHistory: "editor",
   dropResponsesReasoningItems: "editor",
   modelReasoningEffortsAuthoritative: "editor",
   decodesNativeCompactionBlobs: "editor",
@@ -1085,6 +1093,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   newModelPolicy: "editor",
   modelPreset: "editor",
   contextWindow: "editor",
+  inferContextWindow: "editor",
   modelContextWindows: "editor",
   modelContextTiers: "editor",
   modelInputModalities: "editor",
@@ -1092,6 +1101,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   modelMaxInputTokens: "runtime",
   modelAutoCompactTokenLimits: "editor",
   defaultMaxOutputTokens: "editor",
+  minMaxOutputTokens: "editor",
   modelMaxOutputTokens: "editor",
   modelCosts: "editor",
   headers: "redacted",

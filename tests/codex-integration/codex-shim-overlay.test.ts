@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { autoRestoreCodexShim, inspectCodexShimBackingForCommand, installCodexShim, setCodexShimProbeObservationMsForTests, uninstallCodexShim } from "../../src/codex/shim";
+import { autoRestoreCodexShim, diagnoseCodexShim, inspectCodexShimBackingForCommand, installCodexShim, setCodexShimProbeObservationMsForTests, uninstallCodexShim } from "../../src/codex/shim";
 import { readState, stateFiles } from "../../src/codex/shim-state-file";
 
 function fixture(run: (f: { root: string; home: string; native: string; wrapper: string; envFile: string; statePath: string; version: (name: string) => string }) => void): void {
@@ -41,7 +41,67 @@ function invoke(wrapper: string) {
   return spawnSync(wrapper, ["--version"], { encoding: "utf8", env: process.env, timeout: 5000 });
 }
 
+function changePersistedDevices(statePath: string): void {
+  const state = JSON.parse(readFileSync(statePath, "utf8"));
+  state.wrapperIdentity.dev += 1;
+  state.envIdentity.dev += 1;
+  writeFileSync(statePath, JSON.stringify(state));
+}
+
 describe.skipIf(process.platform === "win32")("Unix private Codex overlay", () => {
+  test("persisted device drift retains ownership for diagnosis, repair and uninstall", () => fixture(f => {
+    expect(installCodexShim().installed).toBe(true);
+    changePersistedDevices(f.statePath);
+    const wrapper = lstatSync(f.wrapper).ino;
+    const native = lstatSync(f.native).ino;
+    process.env.PATH = `${dirname(f.wrapper)}:${process.env.PATH}`;
+    expect(diagnoseCodexShim()).toMatchObject({ healthy: true, runnable: true, active: true });
+    expect(autoRestoreCodexShim({ enabled: () => { throw new Error("unchanged overlay needs no repair"); } }).status).toBe("healthy");
+    expect(installCodexShim()).toMatchObject({ installed: false, runnable: true });
+    expect(lstatSync(f.wrapper).ino).toBe(wrapper);
+    // A safe mode drift forces publication through the persisted ownership checks.
+    chmodSync(f.envFile, 0o644);
+    expect(autoRestoreCodexShim({ enabled: () => true, stabilitySleep: () => {} }).status).toBe("restored");
+    expect(diagnoseCodexShim().healthy).toBe(true);
+    changePersistedDevices(f.statePath);
+    expect(uninstallCodexShim().removed).toBe(true);
+    expect(existsSync(f.wrapper)).toBe(false);
+    expect(existsSync(f.envFile)).toBe(false);
+    expect(lstatSync(f.native).ino).toBe(native);
+  }));
+
+  for (const artifact of ["wrapper", "environment"] as const) {
+    test.each(["inode", "content"])(`persisted device drift still refuses ${artifact} %s changes`, mutation => fixture(f => {
+      expect(installCodexShim().installed).toBe(true);
+      changePersistedDevices(f.statePath);
+      const path = artifact === "wrapper" ? f.wrapper : f.envFile;
+      const original = readFileSync(path, "utf8");
+      const inode = lstatSync(path).ino;
+      if (mutation === "inode") {
+        // Retain the old inode so even a filesystem that reuses deleted inodes must differ.
+        renameSync(path, `${path}.previous`);
+        writeFileSync(path, original, { mode: artifact === "wrapper" ? 0o755 : 0o600 });
+        expect(lstatSync(path).ino).not.toBe(inode);
+      } else {
+        writeFileSync(path, artifact === "wrapper"
+          ? original.replaceAll(f.native, `${f.native}.foreign`)
+          : `${original}\n# foreign environment\n`);
+        expect(readFileSync(path, "utf8")).not.toBe(original);
+        expect(lstatSync(path).ino).toBe(inode);
+      }
+      const targets = [f.wrapper, f.envFile, f.statePath, f.native];
+      const saved = targets.map(target => ({ content: readFileSync(target, "utf8"), ino: lstatSync(target).ino }));
+      expect(diagnoseCodexShim().runnable).toBe(false);
+      expect(autoRestoreCodexShim({ enabled: () => true }).status).toBe("ineligible");
+      expect(installCodexShim()).toMatchObject({ installed: false, refused: true });
+      expect(uninstallCodexShim().removed).toBe(false);
+      targets.forEach((target, index) => {
+        expect(readFileSync(target, "utf8")).toBe(saved[index]!.content);
+        expect(lstatSync(target).ino).toBe(saved[index]!.ino);
+      });
+    }));
+  }
+
   test("fresh install preserves the native symlink inode and creates no manager backup", () => fixture(f => {
     const native = lstatSync(f.native);
     const target = readlinkSync(f.native);

@@ -317,3 +317,26 @@ test("supervision evidence must match the identity-checked live PID before evalu
   expect(selected).toEqual({ startup: live, startupSource: "live" });
   expect(fallbackCalls).toBe(0);
 });
+
+test("on Windows a durable Desktop claim beside the same proven pair overrides an older live verdict (#6853)", () => {
+  const live = startupPayload() as StartupHealth;
+  const supervised = supervisedPayload();
+  const owned = { ...supervised, platform: "win32", protection: "none", status: "at-risk", rebootSafe: false,
+    desktop: { ...supervised.desktop, owned: true, loginEnabled: false, viable: false } } as StartupHealth;
+  const select = (fallback: StartupHealth, probe: () => ReturnType<NonNullable<Parameters<typeof selectStatusStartupHealth>[2]>> = () => SUPERVISION) =>
+    selectStatusStartupHealth(live, () => fallback, probe, LIVE.pid);
+  expect(select(owned)).toEqual({ startup: owned, startupSource: "local-supervision-override" });
+  expect(select({ ...owned, desktop: { ...owned.desktop!, owned: false } })).toEqual({ startup: { ...owned, desktop: { ...owned.desktop!, owned: false } }, startupSource: "local-supervision-override" });
+  // macOS and Linux keep requiring an unowned reading.
+  for (const platform of ["darwin", "linux"] as const) {
+    expect(select({ ...owned, platform })).toEqual({ startup: live, startupSource: "live" });
+  }
+  const unchanged = { startup: live, startupSource: "live" };
+  expect(select({ ...owned, desktop: { ...owned.desktop!, supervisor: { ...owned.desktop!.supervisor!, supervisorPid: 3132 } } })).toEqual(unchanged);
+  expect(select({ ...owned, desktop: { ...owned.desktop!, supervisor: undefined } })).toEqual(unchanged);
+  expect(select(owned, () => ({ kind: "unknown", reason: "probe-timeout", desktopSeen: true }))).toEqual(unchanged);
+  // A modern runtime publishes its own Desktop diagnostic, which stays authoritative.
+  const modern = { ...live, platform: "win32", desktop: { owned: true, loginEnabled: false, running: false, viable: false } } as StartupHealth;
+  expect(selectStatusStartupHealth(modern, () => owned, () => SUPERVISION, LIVE.pid)).toEqual({ startup: modern, startupSource: "live" });
+});
+

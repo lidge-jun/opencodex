@@ -49,7 +49,9 @@ const filters = Bun.YAML.parse(String(filterStep?.with?.filters ?? "")) as Recor
 
 /** The native gate covers exactly these three jobs; anything else is drift. */
 const NATIVE_GATED = ["platform-macos", "widget", "desktop-shell"] as const;
-/** The two smoke jobs whose matrix legs shrink with the native selection. */
+/** The macOS jobs never run on a pull request; they run after merge, on push. */
+const MACOS_JOBS = ["platform-macos", "widget"] as const;
+/** The two smoke jobs whose matrix legs shrink with the event and native selection. */
 const MATRIX_JOBS = ["keyring-smoke", "npm-global-smoke"] as const;
 
 type SelectionInputs = { event_name: string; ci: string; native: string; desktop?: string };
@@ -107,15 +109,19 @@ function evaluate(expression: string, inputs: SelectionInputs): boolean {
   return truthy(term(unwrapped, inputs));
 }
 
-/** Every way an event can combine with the two filter outputs, and what must happen. */
+/**
+ * Every way an event can combine with the two filter outputs, and what must happen.
+ * `macos` is platform-macos and widget, which never run on a pull request;
+ * `desktopShell` is the ubuntu desktop-shell job, which still follows the native filter.
+ */
 const SELECTION_SCENARIOS = [
   // The filter outputs are deliberately false for push and dispatch: selection
   // there must not depend on them at all, or the event guard has been lost.
-  { name: "a push", inputs: { event_name: "push", ci: "false", native: "false" }, selected: true },
-  { name: "a workflow_dispatch", inputs: { event_name: "workflow_dispatch", ci: "false", native: "false" }, selected: true },
-  { name: "a pull request that touches native paths", inputs: { event_name: "pull_request", ci: "true", native: "true" }, selected: true },
-  { name: "a pull request that touches no native path", inputs: { event_name: "pull_request", ci: "true", native: "false" }, selected: false },
-  { name: "an out-of-scope pull request", inputs: { event_name: "pull_request", ci: "false", native: "false" }, selected: false },
+  { name: "a push", inputs: { event_name: "push", ci: "false", native: "false" }, macos: true, desktopShell: true },
+  { name: "a workflow_dispatch", inputs: { event_name: "workflow_dispatch", ci: "false", native: "false" }, macos: true, desktopShell: true },
+  { name: "a pull request that touches native paths", inputs: { event_name: "pull_request", ci: "true", native: "true" }, macos: false, desktopShell: true },
+  { name: "a pull request that touches no native path", inputs: { event_name: "pull_request", ci: "true", native: "false" }, macos: false, desktopShell: false },
+  { name: "an out-of-scope pull request", inputs: { event_name: "pull_request", ci: "false", native: "false" }, macos: false, desktopShell: false },
 ] as const;
 
 /** The matrix output a smoke job consumes, read back out of its own strategy. */
@@ -139,20 +145,20 @@ function emitterStep(outputName: string) {
   return step;
 }
 
-function renderFilterOutputs(text: string, inputs: { ci: string; native: string }): string {
+function renderFilterOutputs(text: string, inputs: { ci: string; native: string; event: string }): string {
   // A pull_request emitter sees the plain filter value; the nightly override only matters on schedule.
   const rendered = text.replace(/\$\{\{\s*(?:github\.event_name == 'schedule' && 'true' \|\| )?steps\.filter\.outputs\.([a-z_-]+)\s*\}\}/g, (_match, name: string) => {
     if (name === "ci") return inputs.ci;
     if (name === "native") return inputs.native;
     throw new Error(`unsupported filter output in emitter: ${name}`);
-  });
+  }).replace(/\$\{\{\s*github\.event_name\s*\}\}/g, inputs.event);
   const leftover = rendered.indexOf("${{");
   if (leftover >= 0) throw new Error(`unrendered expression in emitter: ${rendered.slice(leftover, leftover + 80)}`);
   return rendered;
 }
 
 /** Run the emitter step the way Actions would, and parse what it wrote to GITHUB_OUTPUT. */
-function emittedOutputs(jobName: string, ci: string, native: string): { exitCode: number; values: Record<string, string> } {
+function emittedOutputs(jobName: string, ci: string, native: string, event = "push"): { exitCode: number; values: Record<string, string> } {
   const step = emitterStep(matrixOutputName(jobName));
   const directory = mkdtempSync(join(tmpdir(), "ocx-ci-scope-"));
   try {
@@ -163,8 +169,8 @@ function emittedOutputs(jobName: string, ci: string, native: string): { exitCode
       GITHUB_ENV: join(directory, "github-env"),
       GITHUB_STEP_SUMMARY: join(directory, "step-summary"),
     };
-    for (const [key, value] of Object.entries(step.env ?? {})) env[key] = renderFilterOutputs(String(value), { ci, native });
-    const run = renderFilterOutputs(String(step.run ?? ""), { ci, native });
+    for (const [key, value] of Object.entries(step.env ?? {})) env[key] = renderFilterOutputs(String(value), { ci, native, event });
+    const run = renderFilterOutputs(String(step.run ?? ""), { ci, native, event });
     const result = Bun.spawnSync(["/bin/bash", "-e", "-o", "pipefail", "-c", run], { env, cwd: directory });
     const values: Record<string, string> = {};
     try {
@@ -194,10 +200,10 @@ function emittedOutputs(jobName: string, ci: string, native: string): { exitCode
   }
 }
 
-function legsFor(jobName: string, ci: "true" | "false", native: "true" | "false"): string[] {
+function legsFor(jobName: string, ci: "true" | "false", native: "true" | "false", event = "push"): string[] {
   const outputName = matrixOutputName(jobName);
-  const { exitCode, values } = emittedOutputs(jobName, ci, native);
-  expect(exitCode, `${jobName} emitter failed under ci=${ci} native=${native}`).toBe(0);
+  const { exitCode, values } = emittedOutputs(jobName, ci, native, event);
+  expect(exitCode, `${jobName} emitter failed under event=${event} ci=${ci} native=${native}`).toBe(0);
   const raw = values[outputName];
   expect(`${jobName} emitted ${outputName}:${typeof raw === "string" && raw.length > 0}`)
     .toBe(`${jobName} emitted ${outputName}:true`);
@@ -294,13 +300,11 @@ function runGate(inputs: GateInputs, results: Record<string, string>): { gatedJo
 }
 
 describe("the push trigger", () => {
-  test("carries main and preview, and no longer dev", () => {
+  test("carries main and preview, and never dev", () => {
     // main and preview must stay: release.yml requires a successful push-event
     // run for the exact release SHA and states that a pull_request run does not
-    // qualify, so removing either breaks publication. dev is the deliberate
-    // removal — its integration evidence is the pull_request run, and
-    // workflow_dispatch covers anything else — so the push run stopped doubling
-    // the full matrix behind a merge that was just verified as a PR.
+    // qualify, so removing either breaks publication. dev is deliberately absent
+    // (CI policy): cross-platform legs run on dev only by manual dispatch.
     expect([...(workflow.on?.push?.branches ?? [])].sort()).toEqual(["main", "preview"]);
   });
 });
@@ -348,34 +352,34 @@ describe("the native path filter", () => {
 });
 
 describe("the native-gated jobs", () => {
-  const condition = jobs["platform-macos"]?.if ?? "";
-
-  test("are exactly platform-macos, widget and desktop-shell on one shared condition", () => {
-    expect(`widget:${jobs.widget?.if}`).toBe(`widget:${condition}`);
-    // desktop-shell widens only the native term: package-affecting changes also select it so the
-    // Linux packaged-shell E2E runs. Everything else about the condition is shared.
-    const widened = condition.replace(
-      "needs.changes.outputs.native == 'true'",
-      "(needs.changes.outputs.native == 'true' || needs.changes.outputs.desktop == 'true')",
+  test("keep macOS off pull requests and leave desktop-shell on the native filter", () => {
+    // platform-macos and widget run on macOS runners, which pull requests never pay for.
+    for (const name of MACOS_JOBS) {
+      expect(`${name}:${jobs[name]?.if}`).toBe(`${name}:github.event_name != 'pull_request'`);
+    }
+    // desktop-shell runs on ubuntu, so pull requests keep selecting it through the
+    // native filter, widened by the package-affecting desktop filter.
+    expect(jobs["desktop-shell"]?.if).toBe(
+      "github.event_name != 'pull_request' || (needs.changes.outputs.ci == 'true' && (needs.changes.outputs.native == 'true' || needs.changes.outputs.desktop == 'true'))",
     );
-    expect(widened).not.toBe(condition);
-    expect(`desktop-shell:${jobs["desktop-shell"]?.if}`).toBe(`desktop-shell:${widened}`);
-    // A fourth job carrying the native output would silently join the gate, and
+    // Another job carrying the native output would silently join the gate, and
     // a gate the aggregate does not know about is the failure this file exists
     // for — so name the full set rather than sampling it.
     const carrying = Object.entries(jobs)
       .filter(([, job]) => (job?.if ?? "").includes("needs.changes.outputs.native"))
       .map(([name]) => name)
       .sort();
-    expect(carrying).toEqual([...NATIVE_GATED].sort());
+    expect(carrying).toEqual(["desktop-shell"]);
   });
 
   for (const scenario of SELECTION_SCENARIOS) {
-    test(`${scenario.name} ${scenario.selected ? "selects" : "does not select"} them`, () => {
-      for (const name of NATIVE_GATED) {
+    test(`${scenario.name} selects macOS=${scenario.macos} desktop-shell=${scenario.desktopShell}`, () => {
+      for (const name of MACOS_JOBS) {
         expect(`${name}:${evaluate(jobs[name]?.if ?? "", { ...scenario.inputs })}`)
-          .toBe(`${name}:${scenario.selected}`);
+          .toBe(`${name}:${scenario.macos}`);
       }
+      expect(`desktop-shell:${evaluate(jobs["desktop-shell"]?.if ?? "", { ...scenario.inputs })}`)
+        .toBe(`desktop-shell:${scenario.desktopShell}`);
     });
   }
 });
@@ -409,10 +413,12 @@ describe("the smoke matrices", () => {
     }
   });
 
-  test.skipIf(cannotRunEmitters)("keep ubuntu and windows unconditionally and macos only under the native selection", () => {
+  test.skipIf(cannotRunEmitters)("run ubuntu only on pull requests; off-PR keep ubuntu and windows and add macos under the native selection", () => {
     for (const jobName of MATRIX_JOBS) {
-      expect(legsFor(jobName, "true", "false").sort()).toEqual(["ubuntu-latest", "windows-latest"]);
-      expect(legsFor(jobName, "true", "true").sort()).toEqual(["macos-latest", "ubuntu-latest", "windows-latest"]);
+      expect(legsFor(jobName, "true", "false", "pull_request")).toEqual(["ubuntu-latest"]);
+      expect(legsFor(jobName, "true", "true", "pull_request")).toEqual(["ubuntu-latest"]);
+      expect(legsFor(jobName, "true", "false", "push").sort()).toEqual(["ubuntu-latest", "windows-latest"]);
+      expect(legsFor(jobName, "true", "true", "push").sort()).toEqual(["macos-latest", "ubuntu-latest", "windows-latest"]);
     }
   });
 
@@ -460,8 +466,14 @@ describe("the aggregate gate", () => {
     expect(bad).toBe("");
   });
 
+  test.skipIf(cannotRunGate)("never requests macOS on a native pull request, but still requests desktop-shell", () => {
+    const { expectations } = runGate({ ...PR_WITHOUT_NATIVE, native: "true" }, {});
+    for (const name of MACOS_JOBS) expect(`${name}:${expectations[name]}`).toBe(`${name}:not-requested`);
+    expect(expectations["desktop-shell"]).toBe("requested");
+  });
+
   test.skipIf(cannotRunGate)("still fails a requested native job that reports skipped", () => {
-    const selectedNative = { ...PR_WITHOUT_NATIVE, native: "true" } as const;
+    const selectedNative = { ...PR_WITHOUT_NATIVE, eventName: "push", native: "true" };
     const { expectations } = runGate(selectedNative, {});
     for (const name of NATIVE_GATED) expect(`${name}:${expectations[name]}`).toBe(`${name}:requested`);
     const results: Record<string, string> = {};

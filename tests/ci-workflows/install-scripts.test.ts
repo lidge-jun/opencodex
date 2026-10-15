@@ -67,7 +67,7 @@ describe("install scripts", () => {
     expect(pkg.exports?.["."]?.bun).toBe("./src/index.ts");
     expect(pkg.exports?.["."]?.default).toBe("./bin/package-main.mjs");
     // Bun 1.4.2 fixes the Windows fetch streaming regression reported in #6684.
-    // CI's testRunnerBun stays on 1.4.0: 1.4.2 segfaults while RE-LOADING the bunfig
+    // CI's testRunnerBun skipped 1.4.2: it segfaults while RE-LOADING the bunfig
     // preload that `--isolate` re-enters once per test file:
     // `load_preloads -> JSModuleLoader::loadModule -> JSPromise::status` dereferences a dead
     // promise and the process dies with "Segmentation fault at address 0x10". It is a crash in
@@ -87,10 +87,16 @@ describe("install scripts", () => {
     // #4821 (2026-09-17) reverted #4064 (2026-09-09). #6713 run 37631558263 reproduced
     // the crash on Linux 1/4, macOS 2/2 and Windows 9/9; individual files pass.
     // Today's diagnostic sweep cannot turn a crashed primary batch green.
+    //
+    // testRunnerBun then moved from 1.4.0 to 1.4.3 for oven-sh/bun#44581 (#4956): 1.4.0's
+    // Bun.spawnSync lost a child's exit once finalizers released polls on its private wait loop,
+    // and spun past its own timeout. Scratch run 38213764818 stalled 8 of 252 Linux shard 1/4
+    // batch-5 runs that way (CLI child a zombie, its pidfd armed but never polled).
+    // tests/ci-workflows/test-runner-spawnsync-finalizer.test.ts keeps the runner above it.
     // Rejoin after the upstream runner crash is fixed and a green `lane=all` dispatch
     // proves the unified version; then delete testRunnerBun and the setup action's role.
     expect(pkg.dependencies?.bun).toBe("1.4.2");
-    expect(pkg.testRunnerBun).toBe("1.4.0");
+    expect(pkg.testRunnerBun).toBe("1.4.3");
     expect(pkg.dependencies?.zod).toBe("4.4.3");
     expect(pkg.devDependencies?.typescript).toBe("7.0.2");
     expect(pkg.devDependencies?.["@types/bun"]).toBe("1.4.0");

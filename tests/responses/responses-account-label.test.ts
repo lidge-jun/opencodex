@@ -228,6 +228,10 @@ describe("Responses account usage attribution", () => {
                 primary: { used_percent: 10, window_minutes: 10080 },
               } });
               payload({ type: "response.created", response: { id: "quota-response" } });
+              // #6969: a Pool exchange holds empty lifecycle frames; the first output event is what
+              // commits the response here, so the handler returns before the final quota frame.
+              payload({ type: "response.output_item.added", response_id: "quota-response", output_index: 0,
+                item: { id: "quota-item", type: "message", role: "assistant", content: [] } });
               void finalQuotaAllowed.then(() => {
                 payload({ type: "codex.rate_limits", rate_limits: {
                   primary: { used_percent: 100, window_minutes: 10080 },

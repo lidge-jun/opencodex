@@ -26,6 +26,42 @@ research-preview access. See
 [Anthropic Fast configuration](/reference/configuration/providers/#anthropic-fast-anthropic-speed)
 for the exact model and recovery scope.
 
+## Tier defaults for CLI and external launchers
+
+In the Claude Code tab, select an Opus, Sonnet, Haiku or Fable default and **Save**.
+These `claudeCode.tierModels` defaults are passed to new `ocx claude` launches. They do not
+change the currently selected main model, reasoning effort or Desktop family assignments.
+
+Applications that launch `claude` directly do not receive the `ocx` launcher's environment.
+After saving, choose **Preview Claude settings**, review the `ANTHROPIC_DEFAULT_*_MODEL`
+changes, then **Apply to Claude settings**. This changes the OpenCodex host's Claude user
+settings, not a remote browser's computer. Start a new Claude process to use the new values;
+the operation does not stop or restart existing sessions. It does not configure routing or
+authentication, so the direct caller must already be connected to OpenCodex.
+
+Selected routing aliases are paired with `ANTHROPIC_DEFAULT_*_MODEL_NAME` labels, using the
+same readable names as the model picker. Preview includes both IDs and label changes; the
+alias remains the submitted model ID. An existing label is managed only if it exactly matches
+the generated name for its current alias. Other labels, including empty values, are preserved.
+A manually entered label identical to that generated name is indistinguishable from a managed label.
+
+Only explicitly selected tier IDs are applied. An unset tier leaves its existing model ID
+and its display label untouched. Replacing an alias with a first-party
+ID or another non-alias also removes its matching generated label. Preview shows label removal
+as an empty replacement; custom labels and unrelated settings remain intact.
+Missing files are supported, but existing empty or corrupt files are
+refused. Changes since preview require a new preview. Apply briefly moves the current
+document into a private `model-default-backups/apply-*/settings.json` directory under the
+Claude config directory, validates the captured document, then publishes exclusively.
+It never replaces a concurrent writer's new file, including during rollback. Avoid editing
+or launching Claude while applying: another reader can see the brief missing-file interval.
+The filesystem must support same-volume moves and hard links; unsupported operations fail
+without an overwrite fallback. After an interrupted apply or a failed automatic restore,
+inspect this backup location and reconcile newer edits before restoring. Windows/Linux
+filesystem behavior must be verified separately; a local test is not cross-platform proof.
+Verify the resolved provider/model in request logs: selecting a tier is not proof of the
+actual model served. This is especially useful for external classifiers requesting Sonnet.
+
 ## Claude OAuth account pool (experimental)
 
 Native Anthropic subscription passthrough retains the upstream `anthropic-ratelimit-*`
@@ -224,6 +260,16 @@ New installs use **gateway** by default. Its third-party profile, described belo
 whole app to OpenCodex as its inference gateway. Chat runs locally through OpenCodex and the
 claude.ai-only features are unavailable. The legacy `--static` / `--hybrid` /
 `--discovery-only` flags also select gateway.
+
+Gateway profiles use distinct model aliases with a `claude-fable-5-` prefix so
+Claude Desktop 2.31226 can offer its effort control without treating every routed
+model as the same active model. These aliases do not change the upstream model or
+your displayed labels and family defaults. Previous aliases remain decodable for
+existing sessions. Reapply the gateway profile and fully quit/reopen Desktop to
+load the new list. The static picker uses Desktop's fallback effort menu; it does
+not advertise an authoritative per-provider ladder, and the selected provider's
+normal effort normalization still applies. This remains a client-version-specific
+compatibility mechanism.
 
 ### First-party (opt-in)
 
@@ -457,8 +503,9 @@ Support/Claude/configLibrary` on macOS, `%APPDATA%\Claude\configLibrary` on Wind
 `CLAUDE_USER_DATA_DIR` for an alternate Desktop user-data root. The legacy `Claude-3p` directory is
 not read or deleted automatically.
 
-Non-Anthropic routes receive stable aliases such as `claude-opus-4-8-p01q`, with a `p`-prefixed
-four-character code. OpenCodex keeps a separate synthetic date slot internally so existing profile
+Non-Anthropic routes receive stable aliases such as `claude-fable-5-p01q`, with a `p`-prefixed
+four-character code. Previous `claude-opus-4-8-p...` profile IDs remain decode-only compatibility
+IDs; new profiles use the Fable form. OpenCodex keeps a separate synthetic date slot internally so existing profile
 assignments stay stable, but it does not expose that date as the Desktop model id: current Desktop
 builds strip terminal dates when comparing active-session models, which can suppress model changes.
 Real Anthropic Claude routes keep
@@ -585,7 +632,7 @@ for every Claude Code CLI row (`Routed by OpenCodex to <provider>/<model>`; nati
 | Surface | Format | Example |
 | --- | --- | --- |
 | Claude Code CLI | `ocx-claude-<provider>--<model>` (plain) or `ocx-claude2-…` (escaped) | `ocx-claude-native--gpt-5.6-sol` |
-| Claude Desktop 3P | `claude-opus-4-8-p<code>` (3-char base36 profile slot) | `claude-opus-4-8-p01q` |
+| Claude Desktop 3P | `claude-fable-5-p<code>` (3-char base36 profile slot) | `claude-fable-5-p01q` |
 
 The proxy picks the family per request: `?ids=cli` or `?ids=desktop` wins; otherwise the
 `claude-code/*` user-agent gets the readable CLI form and other clients get the Desktop code.
@@ -593,7 +640,7 @@ Both families decode forever — a model saved in `settings.json` under either f
 Each entry carries an honest display name such as `gemini-3-pro (gemini)`, plus full model
 capabilities (reasoning-effort ladder, thinking types) in the official ModelInfo shape so Claude
 Desktop's third-party gateway mode can offer its effort selector. Real Anthropic models keep their
-canonical ids. The synthetic 2026 date is an internal slot, not a release date. Legacy hash aliases and `claude-ocx-<provider>--<model>` / `claude-ocx2-<provider>--<model>` ids from older configs still resolve. A legacy id configured in an OpenCodex model slot (`claudeCode.model`, `tierModels`, `smallFastModel`) is sent to Claude Code in its current spelling automatically. A legacy id saved by Claude Code's own picker still routes, but Claude Code keeps its 200k accounting for that id. Pick `ocx-claude-` for a saved `claude-ocx-` id, and `ocx-claude2-` for a saved escaped `claude-ocx2-` id, so the real context window and compact both apply.
+canonical ids. The synthetic 2026 date is an internal slot, not a release date. Legacy hash aliases and `claude-ocx-<provider>--<model>` / `claude-ocx2-<provider>--<model>` ids from older configs still resolve. A legacy id configured in an OpenCodex model slot (`claudeCode.model`, `tierModels`, `smallFastModel`) is sent to Claude Code in its current spelling automatically. A legacy id saved by Claude Code's own picker still routes, but Claude Code keeps its 200k accounting for that id. Pick `ocx-claude-` for a saved `claude-ocx-` id, and `ocx-claude2-` for a saved escaped `claude-ocx2-` id, so the effective catalog context window and compact both apply.
 
 Older managed profiles exposed their internal `YYYYMMDD` slots directly. Affected Desktop builds strip
 that terminal date when comparing active-session models, so two distinct routes can look identical
@@ -644,7 +691,10 @@ keep their canonical ids on both surfaces.
 
 ### Context-variant `[1m]` marker
 
-Models with an authoritative context window of 1M, or at least the 829,800-token default
+These checks use the effective catalog window, which can include a [custom-provider estimate](/reference/configuration/providers/#context-windows-on-custom-providers).
+An estimate does not verify the relay's actual capacity.
+
+Models with an effective catalog context window of 1M, or at least the 829,800-token default
 compaction threshold, get an extra `…[1m]` picker row; the floor is fixed, so a custom compaction
 value does not lower it, and Claude models on an Anthropic route need a genuine 1M. Turning
 auto-context off limits the row to 1M windows. Selecting it makes Claude Code
@@ -656,8 +706,8 @@ resolution and routing.
 Claude Code accounts 200k tokens for any model it does not recognize. **Auto context** (on by
 default) fixes that:
 
-1. Launch env slots get the `[1m]` marker when the model's real window is above 200k **and** at
-   least the configured auto-compact threshold. Discovery and Desktop picker rows do not follow
+1. Launch env slots get the `[1m]` marker when the model's effective catalog window is above 200k
+   **and** at least the configured auto-compact threshold. Discovery and Desktop picker rows do not follow
    that threshold: they use the fixed 829,800-token floor (a genuine 1M for Claude models on an
    Anthropic route).
 2. `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (default `829800`, range `100000`–`1000000`) is injected so
@@ -675,11 +725,26 @@ window breaks that model — the chat errors out before the summary can fire.
 A model's advertised context window does not guarantee that a tool-heavy request fits the
 upstream input limit. A classified input-limit rejection reaches Claude Code as
 `invalid_request_error` with `context_length_exceeded`, worded the way Anthropic words it
-(`prompt is too long: …`, with token counts when the provider states them), so Claude Code
+(`prompt is too long: …`), so Claude Code
 compacts the conversation and retries on its own; a non-streaming response uses HTTP 400 instead
-of a retryable 502. Providers on the native Messages lane get the same wording. A throughput
-limit that only mentions tokens (for example "too many tokens per minute") keeps its text and is
-not treated as an overflow. If compaction itself still exceeds the limit, preserve the original
+of a retryable 502. Providers on the native Messages lane get the same wording.
+
+Overflow normalization uses only the first **65,536 UTF-16 code units** of the provider's error
+message, including messages that already use Anthropic's wording. This is a string-length limit,
+not a byte or token limit. Text beyond it is discarded without an ellipsis or truncation marker,
+so diagnostic details and token counts near the end may be absent from the error Claude Code
+receives. The added `prompt is too long:` prefix, followed by a space, can make the final message
+longer than this retained portion.
+
+Within that portion, recognized Anthropic wording is kept; otherwise OpenCodex emits
+`prompt is too long: <requested> tokens > <limit> maximum` only when it finds
+`maximum context length is <limit> tokens` followed by `resulted in <requested> tokens` or
+`you requested <requested> tokens`. It uses the first stated limit and the first matching request
+count after it. If that pair is missing, reversed, or cut off, it prefixes the retained text with
+`prompt is too long:` followed by a space, without inventing counts. A throughput limit that only mentions tokens
+(for example "too many tokens per minute") keeps its text and is not treated as an overflow.
+
+If compaction itself still exceeds the limit, preserve the original
 history and try compacting a fork with fewer enabled tool or MCP schemas, if your client supports
 that workflow. A `[1m]` marker or larger client accounting setting does not raise the upstream
 limit, and OpenCodex does not silently remove history or tools to make it fit.
@@ -697,8 +762,9 @@ Desktop 3P (`prefer1m`) and generated subagents. Set `200k` to opt out: nothing 
 automatically, `CLAUDE_CODE_AUTO_COMPACT_WINDOW` is not injected, and Desktop 3P drops `prefer1m`
 while keeping `supports1m`. A selector you mark `[1m]` yourself stays available (generated and
 forced subagents still drop a marker the model's window cannot carry), and discovery still lists
-the `· 1M` rows of genuine 1M models. `200k` wins over auto-context: a compact window you export no
-longer turns automatic marking on, though opencodex leaves your own export in place.
+the `· 1M` rows of models with catalog windows of at least 1M. `200k` wins over auto-context: a
+compact window you export no longer turns automatic marking on, though opencodex leaves your own
+export in place.
 
 ```bash
 ocx claude config set --context-accounting 200k
@@ -1032,7 +1098,7 @@ set (automatic with `ocx claude`). Run `ocx claude` to refresh the gateway model
 `ANTHROPIC_BASE_URL`. Open a new terminal, or re-run `ocx claude`.
 
 **200k context ceiling despite big model** — Select the `[1m]` variant in the picker, or enable
-auto-context (on by default). If the picker shows no `[1m]` row, the model's authoritative context
+auto-context (on by default). If the picker shows no `[1m]` row, the model's effective catalog context
 window may be below the fixed 829,800-token floor.
 
 **High token count from skill loads** — The bundled `claude-api` skill (~136k tokens) auto-loads
@@ -1091,7 +1157,7 @@ the confirmed obsolete token file and applying first-party mode again; never del
 
 ### First-party picker context markers
 
-The Desktop Code-tab picker adds `[1m]` to routed models whose authoritative context window is at least one million tokens or at least the 829,800-token default compaction threshold (for example a native GPT-6 model opted into its 872k window), so Claude uses its 1M accounting instead of the smaller custom-model fallback. Claude models on an Anthropic route still need a genuine 1M. Labels, profile order, and provider routes stay unchanged. Unknown and shorter windows remain unmarked. The picker cannot guarantee that a Desktop or remote runner receives the matching compaction environment, so a long-window model that outgrows its real window gets a `prompt is too long` error, which Claude Code answers by compacting. Desktop 3P `supports1m`/`prefer1m` and generated subagents follow the same rule. The paired auto-context setup for `ocx claude` is unchanged. An existing conversation keeps its saved selector until you select the model again from the refreshed picker.
+The Desktop Code-tab picker adds `[1m]` to routed models whose effective catalog context window is at least one million tokens or at least the 829,800-token default compaction threshold (for example a native GPT-6 model opted into its 872k window), so Claude uses its 1M accounting instead of the smaller custom-model fallback. Claude models on an Anthropic route still need a genuine 1M. Labels, profile order, and provider routes stay unchanged. Unknown and shorter windows remain unmarked. The picker cannot guarantee that a Desktop or remote runner receives the matching compaction environment, so a long-window model that outgrows its real window gets a `prompt is too long` error, which Claude Code answers by compacting. Desktop 3P `supports1m`/`prefer1m` and generated subagents follow the same rule. The paired auto-context setup for `ocx claude` is unchanged. An existing conversation keeps its saved selector until you select the model again from the refreshed picker.
 
 ### Forced Claude Code subagent model
 
@@ -1099,7 +1165,7 @@ The Subagents page offers **Force all subagents onto one model**, off by default
 
 `ocx agent subagents force combo/tev-auto` sets `claudeCode.subagentModelForce`; `ocx agent subagents force -` clears it. `ocx agent status` reports the setting. `GET /api/subagent-models` returns `force`, `forceAvailable`, and `forceStatus`; `PUT` accepts `{ "force": "combo/tev-auto" }` or `{ "force": null }` without changing the roster. Omitting `force` leaves it unchanged. Invalid or unexposed targets are rejected on write; stale targets are reported and skipped at launch.
 
-This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` when the authoritative window reaches the fixed 829,800-token floor, and only for a genuine 1M window on Anthropic Claude models and bare `claude-*` selectors; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
+This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` when the effective catalog window reaches the fixed 829,800-token floor, and only for a genuine 1M window on Anthropic Claude models and bare `claude-*` selectors; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
 
 Claude Code **2.1.257 or newer** is required for FORCE. Plugin and built-in agents (including Explore/Plan) and per-call model arguments are overridden. Forks and subagent skills with `model: inherit` keep the main conversation model. The main loop and Haiku/small-fast sidecars are unaffected. Existing roster files remain available.
 

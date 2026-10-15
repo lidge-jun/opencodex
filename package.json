@@ -1,6 +1,6 @@
 {
   "name": "@bitkyc08/opencodex",
-  "version": "2.84.0",
+  "version": "2.87.0",
   "description": "Universal provider proxy for OpenAI Codex & Claude Code — use any LLM with Codex CLI/App/SDK and Claude Code",
   "type": "module",
   "main": "./bin/package-main.mjs",
@@ -24,7 +24,6 @@
     "assets/claude-code-models.gif",
     "assets/codex-app-picker.png",
     "assets/sponsors/orcarouter.png",
-    "assets/sponsors/packycode.png",
     "assets/sponsors/tokenlab-light.png",
     "assets/sponsors/tokenlab-dark.png",
     "README.md",
@@ -41,7 +40,7 @@
   "trustedDependencies": [
     "bun"
   ],
-  "testRunnerBun": "1.4.0",
+  "testRunnerBun": "1.4.3",
   "scripts": {
     "dev": "bun run src/cli/index.ts start",
     "dev:proxy": "bun run src/cli/index.ts start",

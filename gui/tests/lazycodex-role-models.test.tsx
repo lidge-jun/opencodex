@@ -208,11 +208,11 @@ test("says when omo.jsonc was skipped because of its comments", async () => {
   rolesBody = { ...(rolesBody as object), omoJsonc: { state: "comments" } };
   omoWriteStatus = "skipped_comments";
   await mount();
-  expect(container.textContent).toContain("omo.jsonc contains comments");
+  expect(container.textContent).toContain("omo.jsonc has comments");
   await pick("librarian", "gpt-5.5");
   await act(async () => { saveButton("librarian").click(); });
   await settle();
-  expect(container.textContent).toContain("saving would remove its comments");
+  expect(container.textContent).toContain("comments a save would remove");
 });
 
 test("a failed omo.jsonc mirror can be retried with the same model", async () => {

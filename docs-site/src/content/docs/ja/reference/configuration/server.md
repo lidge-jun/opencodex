@@ -23,7 +23,7 @@ description: リスナー、リモート アクセス、アドミッション �
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` |無効 |アーカイブされたセッションのクリーンアップ ポリシーをオプトインします。暗黙的に有効になることはありません。 |
 | `appOwnedMemoryBudgetMb?` | `number` | `256` |排除可能なアプリ所有のログ、キャッシュ、BLOB、および継続ペイロードの MiB の上限。範囲は 64 ～ 4096。 RSSキャップではありません。 |
 | `metricsExport.enabled?` | `boolean` | `false` | 認証済み `GET /api/metrics` でプロセスローカルの集約リクエストメトリクスを有効にします。再起動が必要です。無効時は 404 となり、エクスポーター処理は開始されません。 |
-| `serviceHealthRecovery.enabled?` | `boolean` | `false` | バックグラウンドサービス向けのオプトイン復旧。小さな監視プロセスが `/healthz` を確認し、プロキシが生きたまま連続プローブに約 1 分間まったく応答しない場合に終了させ、サービスマネージャー（タスク スケジューラ、launchd、systemd、WinSW）に再起動させます。管理対象サービスの子プロセスでのみ起動し、停止したプロセスが保持していたリクエストは再送しません。1 時間あたり最大 3 回。再起動が必要です。 |
+| `serviceHealthRecovery.enabled?` | `boolean` | `false` | バックグラウンドサービス向けのオプトイン復旧。小さな監視プロセスが `/healthz` を確認し、プロキシが生きたまま連続プローブに約 1 分間まったく応答しない場合に終了させ、サービスマネージャー（タスク スケジューラ、launchd、systemd、WinSW）に再起動させます。管理対象サービスの子プロセスでのみ起動し、停止したプロセスが保持していたリクエストは再送しません。1 時間あたり最大 3 回。再起動が必要です。自動復旧には数値のバインドアドレス（または既定の localhost/ワイルドカード マッピング）が必要です。DNS バインド名は監視されません。記録されたアドレスまたはポートが変更されると監視が停止します。 |
 | `codexAutoStart?` | `boolean` | `true` | Codex を起動する前に、Codex シムで `ocx ensure` を実行させます。 False を指定すると、操作が行われないことが保証されます。 |
 | `codexShimAutoRestore?` | `boolean` | `true` |完了した外部 Codex アップデートによってインストールされたシムが置き換えられた後、インストールされているシムを復元します。環境オプトアウト: `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`。 |
 | `syncResumeHistory?` | `boolean` | `true` | Codex App 履歴の互換性を元に戻すことができます。元のメタデータは `ocx stop` / `ocx restore` によってバックアップおよび復元されます。 |

@@ -1,5 +1,7 @@
+import { canInferVendorContext, vendorContextInference } from "./vendor-context";
 import { effectiveProviderAlias, effectiveProviderAliasDecision } from "../../providers/default-aliases";
 import { initialModelSelectionPending } from "../../providers/initial-model-selection";
+import { supportsConfiguredUltraFast } from "./configured-tiers";
 import { execFileSync } from "node:child_process";
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
@@ -250,6 +252,7 @@ export function configuredReasoningSummarySupport(prov: OcxProviderConfig | unde
   return modelRecordValue(prov.modelReasoningSummaryDelivery, id) !== undefined ? true : undefined;
 }
 
+/** Reapply configured limits and captured wire capabilities without trusting stale discovery hints. */
 export function applyProviderConfigHints(
   name: string,
   prov: OcxProviderConfig,
@@ -309,7 +312,12 @@ export function applyProviderConfigHints(
   // owns catalog publication, including an explicit provider-level false.
   const supportsServiceTier = serviceTierSupportFromPolicy(fastPolicy);
   const {
+    contextWindowInference: _staleContextInference,
+    contextWindow: _previousContextWindow,
+    contextCap: previousContextCap,
+    contextCapped: previousContextCapped,
     supportsServiceTier: _staleServiceTier,
+    supportsUltraFastTier: _staleUltraFastTier,
     fastTierDescription: _staleFastTierDescription,
     providerAlias: _staleProviderAlias,
     suppressSyntheticMax: _staleSuppressSyntheticMax,
@@ -317,16 +325,23 @@ export function applyProviderConfigHints(
   } = model;
   // 已发现窗口只允许被配置值压低；缺窗口时，已开的 Context cap 就是实际窗口。
   const discoveredWindow = githubCopilotCatalogContextWindow(name, prov, model.id,
-    typeof model.contextWindow === "number" && model.contextWindow > 0 ? model.contextWindow : undefined);
+    !model.contextWindowInference && typeof model.contextWindow === "number" && model.contextWindow > 0 ? model.contextWindow : undefined);
   const projectedLimits = clampObservedModelLimits(staticPolicy.model, {
     ...(discoveredWindow !== undefined ? { contextWindow: discoveredWindow } : {}),
     ...(typeof model.maxInputTokens === "number" && model.maxInputTokens > 0 ? { maxInputTokens: model.maxInputTokens } : {}),
   });
+  const azureWindow = positiveSafeInteger(azureMetadata?.contextWindow);
+  const inferredWindow = projectedLimits.contextWindow === undefined && azureWindow === undefined && canInferVendorContext(name, prov)
+    ? vendorContextInference(model.id) : undefined;
   const hintedWindow = projectedLimits.contextWindow
-    ?? positiveSafeInteger(azureMetadata?.contextWindow)
+    ?? azureWindow
+    ?? inferredWindow?.contextWindow
     ?? (providerCap !== undefined ? resolveUnknownRoutedContextWindow(providerCap) : undefined);
   const hinted = {
     ...modelWithoutServiceTier,
+    ...(!model.contextWindowInference && previousContextCap !== undefined
+      ? { contextCap: previousContextCap, contextCapped: previousContextCapped } : {}),
+    ...(inferredWindow ? { contextWindowInference: inferredWindow } : {}),
     ...(displayName !== undefined ? { displayName } : {}),
     ...(providerAlias !== undefined ? { providerAlias } : {}),
     ...(hintedWindow !== undefined ? { contextWindow: hintedWindow } : {}),
@@ -343,6 +358,7 @@ export function applyProviderConfigHints(
     ...(typeof supportsReasoningSummaries === "boolean" ? { supportsReasoningSummaries } : {}),
     ...(typeof supportsVerbosity === "boolean" ? { supportsVerbosity } : {}),
     ...(typeof supportsServiceTier === "boolean" ? { supportsServiceTier } : {}),
+    supportsUltraFastTier: supportsConfiguredUltraFast(fastPolicy),
     ...(supportsServiceTier === true && fastPolicy.fastTierDescription !== undefined
       ? { fastTierDescription: fastPolicy.fastTierDescription }
       : {}),
@@ -431,7 +447,9 @@ export function suppressedSyntheticMaxCatalogSlugs(
   }
   return slugs;
 }
-export const QUIET_AUTHORITATIVE_CATALOG_PROVIDERS = new Set(["kimi", "xai"]);
+// google-antigravity: the static lineup is an entitlement superset (Claude 5.5 and Gemini 4 Argon
+// are per-account), so a live roster that omits some of it is the expected case, not drift.
+export const QUIET_AUTHORITATIVE_CATALOG_PROVIDERS = new Set(["kimi", "xai", "google-antigravity"]);
 
 export const CALLABLE_CONFIGURED_COMPATIBILITY_MODELS: Readonly<Record<string, ReadonlySet<string>>> = {
   // CodeBuddy's vendor defaults are real callable selectors — both the bundled manifests

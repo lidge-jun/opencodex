@@ -29,6 +29,17 @@ Responses 表示是这座桥的中心。原生兼容的路由可以跳过部分�
 
 在非 combo 的 Responses 请求上，OpenCodex 会把该 allowlist 中的 403 改写为 HTTP 200 Responses，`status: "incomplete"`，`incomplete_details.reason: "content_filter"`。openai-chat 适配器路径和 openai-responses passthrough（grok-4.6 / grok-4.5 OAuth）都会改写。流式响应使用同一 incomplete 边界。空正文 403 仍是错误。订阅、额度、权限以及 `not allowed to use this model` 的 403 仍是错误。combo 故障切换仍会看到原始 HTTP 403。
 
+## 未声明的工具调用
+
+在 Responses 端点上，当请求声明了工具目录时，原生直通响应若调用目录之外由客户端执行的工具，本轮会失败而不会转发该调用：流式响应发送带有错误代码 `undeclared_tool_call` 的 `response.failed` 事件，然后发送 `data: [DONE]`；缓冲式 JSON 返回 HTTP 502 和相同错误代码。拒绝发生在响应进入续接状态之前。只有 `authMode: "forward"` 提供方或未声明目录的请求才跳过这一拒绝。
+
+Chat Completions 和 Messages 端点支持延迟提供的工具目录：客户端可先声明部分目录，再通过自己的工具注册表在运行时发现其余工具；完整声明边界由客户端注册表决定，而不是翻译后的目录快照。目录之外的调用会转发给客户端验证；但针对显式空目录 `tools: []` 的调用仍会被拒绝。此类拒绝在每种协议中都保留 `undeclared_tool_call`：
+
+- **Chat Completions：**发送包含带有该错误代码的 OpenAI 风格 `error` 对象的 `data:` 帧，然后关闭流，不发送成功完成标记或 `[DONE]`；缓冲式 JSON 返回 HTTP 502 和该代码。
+- **Messages：**发送 Anthropic `event: error` 帧，正文为 `{ "type": "error", "error": { "type": "api_error", "code": "undeclared_tool_call", ... } }`，不发送成功的 `message_stop` 或 `[DONE]`；缓冲式 JSON 返回 HTTP 502 `api_error` 和该代码。确定性的目录违规不会被报告为可重试的 `overloaded_error`（HTTP 529）。
+
+此外，在所有入站协议中，提供方返回的 `default.` 命名空间调用都会规范化为客户端声明的裸名称，即使延迟目录规则关闭了上述拒绝检查。
+
 ## 端点总览
 
 | 客户端表面 | 端点 | 成功的非流式结果 | 成功的流式或套接字结果 |
@@ -318,8 +329,8 @@ Anthropic 来源的失败会以 Anthropic 的错误封装呈现，因此该方�
 
 ## Codex 原生普通 Lite 请求的搜索历史
 
-发往标准 ChatGPT Codex `/responses` 的普通请求中，只有明确选择 Responses Lite 的请求才会把未被同输入引用的剩余 `web_search_call` 历史转为带标签的 assistant 参考说明。最终 `x-openai-internal-codex-responses-lite` header 值精确为 `true` 时选择 Lite；明确的 `false` 优先于 frame metadata。没有可识别 header 值时，采用有效字符串 map 中 `client_metadata.ws_request_header_x_openai_internal_codex_responses_lite` 的 `true` 值，沿用既有 WS metadata 语义。最终有效意图为非 Lite 或无法识别时保留结构化历史；格式无效的 metadata 不会覆盖明确的 HTTP `true`。模型名、订阅鉴权、hosted 声明缺失或仅有 `additional_tools` 都不能选择这项策略；不会为触发转换而改写 header 或 metadata。新 thread、fork、跨模型续聊、缓存未命中或重启后都适用，不依赖诊断设置。只有有效同 scope bridge memo 能证明并先恢复原函数调用及结果；ID 前缀、模型名或 memo 缺失不能判断来源。若同输入的 `item_reference.id` 精确指向某 hosted cell，该 cell 保留；`store:false` 会先移除引用，剩余 hosted 历史可投影。工具声明、Lite `additional_tools`、选择、call/result 配对、推理/原生密文、非 hosted 顺序及调用方 raw 历史保持原契约。
+普通请求默认保留结构化 hosted-search 历史，Responses Lite 请求也一样。若要选择有损参考说明，请在 `config.json` 中设置 `providers.openai.projectResponsesLiteHostedSearchHistory: true`（必须是布尔值，不能是字符串 `"true"`）。该设置按 provider 配置且默认关闭；省略或设为 `false` 时保留结构化历史。即使已启用，也只有最终目的地精确为标准 ChatGPT Codex `/responses` 且当前有效意图明确选择 Responses Lite 的普通请求，才会把未被同输入引用的剩余 `web_search_call` 历史转为带标签的 assistant 参考说明。最终 `x-openai-internal-codex-responses-lite` header 值精确为 `true` 时选择 Lite；明确的 `false` 优先于 frame metadata。没有可识别 header 值时，采用有效字符串 map 中 `client_metadata.ws_request_header_x_openai_internal_codex_responses_lite` 的 `true` 值，沿用既有 WS metadata 语义。最终有效意图为非 Lite 或无法识别时保留结构化历史；格式无效的 metadata 不会覆盖明确的 HTTP `true`。模型名、订阅鉴权、hosted 声明缺失或仅有 `additional_tools` 都不能选择这项策略；不会为触发转换而改写 header 或 metadata。启用后适用于新 thread、fork、跨模型续聊、缓存未命中或重启，不依赖诊断设置。只有有效同 scope bridge memo 能证明并先恢复原函数调用及结果；ID 前缀、模型名或 memo 缺失不能判断来源。若同输入的 `item_reference.id` 精确指向某 hosted cell，该 cell 保留；`store:false` 会先移除引用，剩余 hosted 历史可投影。工具声明、Lite `additional_tools`、选择、call/result 配对、推理/原生密文、非 hosted 顺序及调用方 raw 历史保持原契约。
 
-这是仅在上述 Lite 边界内默认采用的**有损历史策略**，不是 hosted schema 非法或所有上游错误已修复的断言。说明标为不可信参考数据，复制 status/action 及 action 或顶层 sources 中允许的 URL/title/type，不是指令或网页正文；每字符串最多 2,048 个 UTF-16 单元、每列表 20 项、全部已投影说明共 65,536 字节，超出的 action 用省略说明替代，转换项不复制 ID 或未知字段。HTTP/SSE 与 WS 共用普通请求的最终 builder。
+这是仅在上述显式启用的 Lite 边界内采用的**有损历史策略**，不是 hosted schema 非法或所有上游错误已修复的断言。说明标为不可信参考数据，复制 status/action 及 action 或顶层 sources 中允许的 URL/title/type，不是指令或网页正文；每字符串最多 2,048 个 UTF-16 单元、每列表 20 项、全部已投影说明共 65,536 字节，超出的 action 用省略说明替代，转换项不复制 ID 或未知字段。HTTP/SSE 与 WS 共用普通请求的最终 builder。
 
 公开 OpenAI API 及其他目的地不新增普通或 native compact 投影。原生 `/responses/compact` 保持既有端点、账户清理及官方 opaque 输出路径，保留结构化 hosted 历史。portable/routed 摘要仍沿用原有触发条件与默认引用行为；共享 renderer 在这些既有路径中也补充顶层 sources 白名单保留。本次不增加重试、来源分类或新的 compaction summarizer。

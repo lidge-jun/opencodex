@@ -47,6 +47,9 @@ Shared parsing and streaming follow the [request-copy](../transports/byte-accoun
 
 ## Reasoning and tool-result compatibility
 
+For `api.mistral.ai`, `src/adapters/openai-chat/response-events.ts` preserves typed text/thinking arrays in both response paths and rejects unsupported blocks. Inline-tag parsing crosses adjacent text blocks but resets at typed reasoning. It adds no signature replay.
+Tests: `tests/adapters/openai/openai-chat-mistral-content.test.ts`; other hosts, byte budgets and configured replay rules keep their existing behavior.
+
 ### Inline think-tag recovery
 
 A gateway that serves a thinking model without a server-side reasoning parser returns the chain

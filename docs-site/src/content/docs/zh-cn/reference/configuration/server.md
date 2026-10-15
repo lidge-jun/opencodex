@@ -24,7 +24,7 @@ description: 监听、远程访问、准入密钥、超时、存储、侧车、�
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | disabled | 可选启用的归档会话清理策略。不会被隐式启用。 |
 | `appOwnedMemoryBudgetMb?` | `number` | `256` | 可逐出应用自有日志、缓存、blob 和续传载荷的内存上限，单位 MiB。范围 64–4096；不是 RSS 上限。 |
 | `metricsExport.enabled?` | `boolean` | `false` | 在经过认证的 `GET /api/metrics` 上启用进程本地的请求聚合指标。需要重启；禁用时该路径返回 404，且不会启动任何导出活动。 |
-| `serviceHealthRecovery.enabled?` | `boolean` | `false` | 后台服务的可选恢复：一个小型守护进程探测 `/healthz`，当代理进程仍存活但在连续探测中约一分钟毫无响应时将其终止，由服务管理器（任务计划程序、launchd、systemd、WinSW）重新启动。仅受管服务子进程会启动它；卡住进程持有的请求不会重放。每小时最多 3 次。需要重启。 |
+| `serviceHealthRecovery.enabled?` | `boolean` | `false` | 后台服务的可选恢复：一个小型守护进程探测 `/healthz`，当代理进程仍存活但在连续探测中约一分钟毫无响应时将其终止，由服务管理器（任务计划程序、launchd、systemd、WinSW）重新启动。仅受管服务子进程会启动它；卡住进程持有的请求不会重放。每小时最多 3 次。需要重启。自动恢复需要数字绑定地址（或默认的 localhost/通配符映射）；不监控 DNS 绑定名称。记录的地址或端口发生更改时会停止监控。 |
 | `codexAutoStart?` | `boolean` | `true` | 允许 Codex shim 在启动 Codex 之前运行 `ocx ensure`。设为 false 会让 ensure 变成无操作。 |
 | `codexShimAutoRestore?` | `boolean` | `true` | 在完成外部 Codex 更新并覆盖安装的 shim 之后恢复该 shim。环境退出开关：`OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`。 |
 | `syncResumeHistory?` | `boolean` | `true` | 可逆的 Codex App 历史兼容性。原始元数据会被备份，并由 `ocx stop` / `ocx restore` 恢复。 |

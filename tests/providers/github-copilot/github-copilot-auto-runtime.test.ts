@@ -13,6 +13,9 @@ import { filterCatalogVisibleModels } from "../../../src/codex/catalog/model-vis
 import { reconcileSuccessfulModelDiscoveries } from "../../../src/providers/new-model-policy";
 import type { OcxConfig } from "../../../src/types";
 import { createRequestExecutionBudget } from "../../../src/lib/request-execution-budget";
+import { isNonReplayableResponse } from "../../../src/lib/upstream-retry";
+import { clearComboSelectionState } from "../../../src/combos/resolve";
+import { clearComboTargetCooldowns } from "../../../src/combos/failover";
 import { acquireOwnedSpendHome } from "../../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
 
@@ -25,12 +28,16 @@ beforeEach(() => {
   process.env.OPENCODEX_HOME = home;
   clearCopilotAutoModelsForTests();
   clearGenericFailoverHealth();
+  clearComboSelectionState();
+  clearComboTargetCooldowns();
   release = acquireOwnedSpendHome();
 });
 afterEach(() => {
   release?.();
   globalThis.fetch = previousFetch;
   clearGenericFailoverHealth();
+  clearComboSelectionState();
+  clearComboTargetCooldowns();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   removeTreeWithRetry(home);
@@ -40,6 +47,11 @@ function request(input: unknown, stream = true): Request {
   return new Request("http://localhost/v1/responses", { method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ model: "github-copilot/auto", input, stream,
       tools: [{ type: "function", name: "lookup", parameters: { type: "object", properties: { name: { type: "string" } } } }] }) });
+}
+
+function scopedAdmission(config: OcxConfig, allowedModels: string[]) {
+  config.apiKeys = [{ id: "copilot-scope", name: "fixture", allowedModels }] as OcxConfig["apiKeys"];
+  return { kind: "configured" as const, keyId: "copilot-scope", source: "bearer" as const };
 }
 /** Seed two synthetic OAuth accounts in the test-owned home, select A, and return store IDs for rotation assertions. */
 async function accounts() {
@@ -54,7 +66,7 @@ async function accounts() {
   return { a, b };
 }
 /** Return an Auto provider config and send ledger; options drive refusal, expiry, rotation, and tool events through both inference wires. */
-function fixture(options: { nativeExpiry?: boolean; nativeFirst?: boolean; native429?: boolean; onNativeCancel?: () => void; chatRefresh?: boolean; closedNativeBody?: boolean; renewedChatRefusal?: boolean; rotate?: boolean; tool?: boolean; key?: boolean; refusal?: number; negotiationRefusal?: number; negotiationRefusalAt?: number; alwaysRefuse?: boolean; advanceAfterIntent?: () => void; onSession?: (count: number) => void; malformedSessionAt?: number; negotiationRetryAfter?: string } = {}) {
+function fixture(options: { nativeExpiry?: boolean; nativeFirst?: boolean; native429?: boolean; onNativeCancel?: () => void; chatRefresh?: boolean; closedNativeBody?: boolean; renewedChatRefusal?: boolean; rotate?: boolean; rotateAt?: number; tool?: boolean; key?: boolean; refusal?: number; negotiationRefusal?: number; negotiationRefusalAt?: number; alwaysRefuse?: boolean; advanceAfterIntent?: () => void | Promise<void>; onSession?: (count: number) => void | Promise<void>; malformedSessionAt?: number; negotiationRetryAfter?: string; replyText?: string; onInference?: (count: number) => void | Promise<void> } = {}) {
   const sent: Array<{ host: string; path: string; token: string | null; body: any; signal?: AbortSignal | null }> = [];
   let inferenceCount = 0;
   let sessionCount = 0;
@@ -84,7 +96,7 @@ function fixture(options: { nativeExpiry?: boolean; nativeFirst?: boolean; nativ
       supported_endpoints: [options.nativeExpiry ? (expiredNative ? "/chat/completions" : "/responses") : options.native429 ? (account === "a" ? "/responses" : "/chat/completions") : options.chatRefresh ? (renewed ? "/responses" : "/chat/completions") : options.nativeFirst ? (headers.get("authorization")!.includes("-renewed") ? "/chat/completions" : "/responses") : account === "a" ? "/chat/completions" : "/responses"] }] });
     if (destination.pathname === "/models/session") {
       sessionCount++;
-      options.onSession?.(sessionCount);
+      await options.onSession?.(sessionCount);
       if (sessionCount === options.malformedSessionAt) return Response.json({ session_token: "must-not-echo" });
       if (options.negotiationRefusal && (sessionCount === (options.negotiationRefusalAt ?? 1) || (options.alwaysRefuse && sessionCount >= (options.negotiationRefusalAt ?? 1)))) return Response.json({ token: "must-not-echo" },
         { status: options.negotiationRefusal, headers: { "retry-after": options.negotiationRetryAfter ?? "12" } });
@@ -92,7 +104,7 @@ function fixture(options: { nativeExpiry?: boolean; nativeFirst?: boolean; nativ
     }
     if (destination.pathname === "/models/session/intent") {
       intentCount++;
-      if (intentCount === 1) options.advanceAfterIntent?.();
+      if (intentCount === 1) await options.advanceAfterIntent?.();
       return Response.json({ candidate_models: [model] });
     }
     expect(body.model).toBe(model);
@@ -100,6 +112,7 @@ function fixture(options: { nativeExpiry?: boolean; nativeFirst?: boolean; nativ
     if (options.nativeExpiry && options.negotiationRefusal === 401)
       expect(headers.get("authorization")).toBe(`Bearer synthetic-access-${"a"}-renewed`);
     inferenceCount++;
+    await options.onInference?.(inferenceCount);
     if (options.nativeFirst && options.closedNativeBody && inferenceCount === 1)
       return Response.json({ error: { message: "native-inference-secret" } }, { status: 401 });
     if (options.nativeFirst && inferenceCount === 1) return new Response(new ReadableStream({
@@ -107,7 +120,7 @@ function fixture(options: { nativeExpiry?: boolean; nativeFirst?: boolean; nativ
       cancel() { cancelledNativeBodies++; options.onNativeCancel?.(); },
     }), { status: options.native429 ? 429 : 401, headers: { "content-type": "application/json", "retry-after": "1" } });
     if (options.chatRefresh && inferenceCount === 1) return Response.json({ error: { message: "refresh" } }, { status: 401 });
-    if (options.rotate && inferenceCount === 1) return Response.json({ error: { message: "limited" } }, { status: options.refusal ?? 429, headers: { "retry-after": "1" } });
+    if (options.rotate && inferenceCount === (options.rotateAt ?? 1)) return Response.json({ error: { message: "limited" } }, { status: options.refusal ?? 429, headers: { "retry-after": "1" } });
     if (destination.pathname === "/responses") return Response.json({ id: "resp-fixture", model, object: "response", status: "completed",
       output: [{ id: "msg-fixture", type: "message", role: "assistant", content: [{ type: "output_text", text: "ok" }] }],
       usage: { input_tokens: 2, output_tokens: 1 } });
@@ -117,7 +130,7 @@ function fixture(options: { nativeExpiry?: boolean; nativeFirst?: boolean; nativ
       choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
       usage: { prompt_tokens: 2, completion_tokens: 1 } });
     const tool = options.tool && inferenceCount === (options.nativeFirst ? 2 : 1);
-    const delta = tool ? { tool_calls: [{ index: 0, id: "call_lookup", type: "function", function: { name: "lookup", arguments: '{"name":"file"}' } }] } : { content: "ok" };
+    const delta = tool ? { tool_calls: [{ index: 0, id: "call_lookup", type: "function", function: { name: "lookup", arguments: '{"name":"file"}' } }] } : { content: options.replyText ?? "ok" };
     return new Response(`data: ${JSON.stringify({ id: "chat-fixture", model, choices: [{ index: 0, delta, finish_reason: null }] })}\n\ndata: ${JSON.stringify({ id: "chat-fixture", model, choices: [{ index: 0, delta: {}, finish_reason: tool ? "tool_calls" : "stop" }] })}\n\ndata: [DONE]\n\n`, { headers: { "content-type": "text/event-stream" } });
   }) as typeof fetch;
   const config: OcxConfig = { port: 0, defaultProvider: "github-copilot", providers: { "github-copilot": {
@@ -427,6 +440,63 @@ describe("Copilot Auto through the Responses pipeline", () => {
     expect(await response.text()).not.toContain("must-not-echo");
     expect(sent.filter(call => call.path === "/chat/completions")).toHaveLength(0);
   });
+  test("Auto negotiation is denied when its selected model is outside the admission scope", async () => {
+    await accounts();
+    const { config, sent } = fixture();
+    const admission = scopedAdmission(config, ["github-copilot/auto"]);
+    const response = await handleResponses(request("hello"), config, { model: "", provider: "" }, { admission });
+
+    expect(response.status).toBe(403);
+    const body = await response.text();
+    expect(body).toContain("model_not_allowed_for_key");
+    expect(body).not.toContain("gpt-4o");
+    expect(sent.filter(call => ["/chat/completions", "/responses"].includes(call.path))).toHaveLength(0);
+  });
+  test("a negotiated denial names the caller's selector, not the resolved Auto model id", async () => {
+    await accounts();
+    const { config } = fixture();
+    const admission = scopedAdmission(config, ["github-copilot/auto"]);
+    const response = await handleResponses(request("hello", false), config, { model: "", provider: "" }, { admission });
+    expect(response.status).toBe(403);
+    const { error } = await response.json() as { error: { type: string; model: string; message: string } };
+    expect(error.type).toBe("model_not_allowed_for_key");
+    expect(error.model).toBe("github-copilot/auto");
+    expect(error.message).toContain("github-copilot/auto");
+  });
+  test("a key scope removed while negotiation is in flight does not widen the request", async () => {
+    await accounts();
+    let config!: OcxConfig;
+    const f = fixture({ onSession: () => { config.apiKeys = []; } });
+    config = f.config;
+    const admission = scopedAdmission(config, ["github-copilot/auto"]);
+    const response = await handleResponses(request("hello", false), config, { model: "", provider: "" }, { admission });
+    expect(response.status).toBe(403);
+    expect(await response.text()).toContain("model_not_allowed_for_key");
+    expect(f.sent.filter(call => ["/chat/completions", "/responses"].includes(call.path))).toHaveLength(0);
+  });
+  test("Auto negotiation dispatches a model admitted by scope", async () => {
+    await accounts();
+    const { config, sent } = fixture();
+    const admission = scopedAdmission(config, ["github-copilot/auto", "gpt-4o"]);
+    const response = await handleResponses(request("hello"), config, { model: "", provider: "" }, { admission });
+
+    expect(response.status).toBe(200);
+    expect(sent.filter(call => call.path === "/chat/completions").map(call => call.body.model)).toEqual(["gpt-4o"]);
+  });
+  test("dispatch-retried Auto selection outside admission scope returns 403", async () => {
+    const { b } = await accounts();
+    const { config, sent } = fixture({
+      advanceAfterIntent: async () => { await setActiveAccount("github-copilot", b); },
+    });
+    const admission = scopedAdmission(config, ["github-copilot/auto", "gpt-4o"]);
+    const response = await handleResponses(request("hello", false), config, { model: "", provider: "" }, { admission });
+
+    expect(response.status).toBe(403);
+    const body = await response.text();
+    expect(body).toContain("model_not_allowed_for_key");
+    expect(body).not.toContain("gpt-5.4");
+    expect(sent.filter(call => ["/chat/completions", "/responses"].includes(call.path))).toHaveLength(0);
+  });
   test.each([401, 429])("key pool %s rotation reacquires a new session and endpoint", async status => {
     const { config, sent } = fixture({ key: true, rotate: true, refusal: status });
     await saveConfig(config);
@@ -492,6 +562,23 @@ describe("Copilot Auto through the Responses pipeline", () => {
     expect(await response.text()).toContain("limited");
     expect(sent.filter(call => ["/chat/completions", "/responses"].includes(call.path))).toHaveLength(1);
     expect(sent.filter(call => call.path === "/models/session")).toHaveLength(2);
+  });
+  test("web-search key rotation into a model outside the key scope ends with the scope refusal", async () => {
+    const { config, sent } = fixture({ key: true, rotate: true });
+    config.webSearchSidecar = { backend: "exa", exaApiKey: "synthetic-search-key" };
+    saveConfig(config);
+    const admission = scopedAdmission(config, ["github-copilot/auto", "gpt-4o"]);
+    const req = new Request("http://localhost/v1/responses", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "github-copilot/auto", input: "hello", stream: false, tools: [{ type: "web_search" }] }) });
+    const response = await handleResponses(req, config, { model: "", provider: "" }, { admission });
+    expect(response.status).toBe(403);
+    expect(isNonReplayableResponse(response)).toBe(true);
+    const text = await response.text();
+    expect(JSON.parse(text).error.type).toBe("model_not_allowed_for_key");
+    expect(text).not.toContain("gpt-5.4");
+    // Account A's gpt-4o was sent once and refused; B's gpt-5.4 was negotiated but never sent.
+    expect(sent.filter(call => ["/chat/completions", "/responses"].includes(call.path)).map(call => call.body.model))
+      .toEqual(["gpt-4o"]);
   });
 
   test("Auto-only catalog retains manual preferences and requires explicit picker selection", async () => {
@@ -571,6 +658,105 @@ describe("Copilot Auto through the Responses pipeline", () => {
       ["b.githubcopilot.com", "/responses", "gpt-5.4", "synthetic-session-b"],
     ]);
     expect(sent.filter(call => call.path === "/models/session").map(call => call.host)).toEqual(["a.githubcopilot.com", "b.githubcopilot.com"]);
+  });
+  test.each([false, true])("expired native Auto scope denial is terminal before inference, stream=%s", async stream => {
+    await accounts();
+    const actualNow = Date.now;
+    let offset = 0;
+    Date.now = () => actualNow() + offset;
+    try {
+      const { config, sent } = fixture({
+        nativeExpiry: true, advanceAfterIntent: () => { offset = 61_000; },
+      });
+      const admission = scopedAdmission(config, ["github-copilot/auto", "gpt-4o"]);
+      const response = await handleResponses(request("hello", stream), config, { model: "", provider: "" }, { admission });
+      expect(response.status).toBe(403);
+      expect(isNonReplayableResponse(response)).toBe(true);
+      const text = await response.text();
+      expect(text).toContain("model_not_allowed_for_key");
+      expect(text).not.toContain("gpt-5.4");
+      expect(sent.filter(call => ["/chat/completions", "/responses"].includes(call.path))).toHaveLength(0);
+    } finally { Date.now = actualNow; }
+  });
+  test.each([false, true])("Auto scope denial stops account recovery, key=%s", async key => {
+    await accounts();
+    const { config, sent } = fixture({ key, rotate: true });
+    if (key) await saveConfig(config);
+    const admission = scopedAdmission(config, ["github-copilot/auto", "gpt-4o"]);
+    const response = await handleResponses(request("hello", false), config, { model: "", provider: "" }, { admission });
+    expect(response.status).toBe(403);
+    expect(isNonReplayableResponse(response)).toBe(true);
+    const text = await response.text();
+    expect(text).toContain("model_not_allowed_for_key");
+    expect(text).not.toContain("gpt-5.4");
+    expect(sent.filter(call => ["/chat/completions", "/responses"].includes(call.path)).map(call => call.body.model))
+      .toEqual(["gpt-4o"]);
+  });
+  test("a local Auto scope refusal cannot hop to an otherwise allowed combo target", async () => {
+    await accounts();
+    const { config } = fixture();
+    let fallbackSends = 0;
+    config.providers.fallback = {
+      adapter: "openai-chat", authMode: "key", apiKey: "synthetic-fallback-key",
+      baseUrl: "https://fallback.invalid/v1", models: ["allowed"],
+      fetch: (async () => {
+        fallbackSends++;
+        return Response.json({
+          id: "fallback-fixture", model: "allowed",
+          choices: [{ message: { role: "assistant", content: "unexpected fallback" }, finish_reason: "stop" }],
+        });
+      }) as typeof fetch,
+    };
+    config.combos = {
+      scopedAuto: {
+        strategy: "failover",
+        targets: [{ provider: "github-copilot", model: "auto" }, { provider: "fallback", model: "allowed" }],
+      },
+    };
+    const admission = scopedAdmission(config, ["github-copilot/auto", "fallback/allowed"]);
+    const req = new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "combo/scopedAuto", stream: false, input: "hello" }),
+    });
+    const response = await handleResponses(req, config, { model: "", provider: "" }, { admission });
+    expect(response.status).toBe(403);
+    expect(isNonReplayableResponse(response)).toBe(true);
+    // The combo boundary keeps the stable scope envelope instead of rewrapping it as upstream_error.
+    const { error } = await response.json() as { error: { type: string; model: string } };
+    expect(error.type).toBe("model_not_allowed_for_key");
+    expect(fallbackSends).toBe(0);
+  });
+  test("terminal continuation emits the scope refusal without a replacement inference", async () => {
+    const { b } = await accounts();
+    const { config, sent } = fixture({
+      replyText: "I will modify the file now.",
+      onInference: async count => { if (count === 1) await setActiveAccount("github-copilot", b); },
+    });
+    config.providers["github-copilot"]!.terminalContinuationGuard = true;
+    const admission = scopedAdmission(config, ["github-copilot/auto", "gpt-4o"]);
+    const response = await handleResponses(request("Modify the file now."), config, { model: "", provider: "" }, { admission });
+    const text = await response.text();
+    expect(text).toContain("model_not_allowed_for_key");
+    expect(text).not.toContain("gpt-5.4");
+    expect(sent.filter(call => ["/chat/completions", "/responses"].includes(call.path))).toHaveLength(1);
+  });
+  test("OAuth 429 during terminal continuation preserves the scope refusal", async () => {
+    await accounts();
+    const { config, sent } = fixture({ rotate: true, rotateAt: 2, replyText: "I will modify the file now." });
+    globalThis.fetch = config.providers["github-copilot"]!.fetch as typeof fetch;
+    config.providers["github-copilot"]!.terminalContinuationGuard = true;
+    const admission = scopedAdmission(config, ["github-copilot/auto", "gpt-4o"]);
+    const response = await handleResponses(request("Modify the file now."), config, { model: "", provider: "" }, { admission });
+    const text = await response.text();
+    const inference = sent.filter(call => ["/chat/completions", "/responses"].includes(call.path));
+    expect(inference.map(call => [call.host, call.body.model])).toEqual([
+      ["a.githubcopilot.com", "gpt-4o"], ["a.githubcopilot.com", "gpt-4o"],
+    ]);
+    const sessions = sent.filter(call => call.path === "/models/session").map(call => call.host);
+    expect(sessions[0]).toBe("a.githubcopilot.com");
+    expect(sessions.at(-1)).toBe("b.githubcopilot.com");
+    expect(text).toContain("model_not_allowed_for_key");
+    expect(text).not.toContain("gpt-5.4");
   });
 });
 

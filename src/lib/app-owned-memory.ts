@@ -1,3 +1,5 @@
+import { isPassiveRead } from "./passive-read";
+
 export type AppOwnedRetainedCategory = "logs" | "caches" | "blobs" | "continuation";
 export type AppOwnedObservedCategory = "translator" | "serialized_tails";
 
@@ -14,6 +16,11 @@ export interface RetainedStoreRegistration {
   category: AppOwnedRetainedCategory;
   snapshot(): RetainedStoreSnapshot;
   evictOldest(): number;
+  /**
+   * Eviction only releases memory: no spill, snapshot or other write. Only such stores are
+   * demoted inside a passive read (#6959); the rest wait for this process's own next enforcement.
+   */
+  passiveEvictable?: true;
 }
 
 export interface ObservedBufferRegistration {
@@ -168,11 +175,15 @@ function nextCandidate(
   snapshots: ReadonlyMap<string, RetainedStoreSnapshot>,
   ineligible: Set<string>,
 ): RetainedStoreRegistration | undefined {
+  // A passive read (a Remote Link Child's, #6959) demotes only stores whose eviction is memory-only:
+  // a continuation spills to disk and a replay cache rewrites its snapshot.
+  const passive = isPassiveRead();
   for (const category of CATEGORY_ORDER) {
     let candidate: RetainedStoreRegistration | undefined;
     let candidateAt = Number.POSITIVE_INFINITY;
     for (const registration of retainedStores.values()) {
       if (registration.category !== category || ineligible.has(registration.id)) continue;
+      if (passive && registration.passiveEvictable !== true) continue;
       const snapshot = snapshots.get(registration.id);
       if (!snapshot || snapshot.evictableBytes <= 0) continue;
       const oldestAt = snapshot.oldestAt;

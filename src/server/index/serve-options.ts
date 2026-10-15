@@ -1,5 +1,6 @@
 import type { Server, ServerWebSocket } from "bun";
 import type { StartServerDeps } from "./startup-warnings";
+import { isLinkManagementPath } from "../../link/management-routes";
 import {
   GUI_PAIRING_EXCHANGE_BODY_LIMIT,
   REMOTE_WORKSPACE_PAIRING_BODY_LIMIT,
@@ -373,6 +374,12 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         if (requestUrl.pathname === "/v1/catalog" && requestUrl.search === ""
           && (req.method === "GET" || req.method === "HEAD")
           && admission.kind === "configured") onAuthenticatedCatalog(admission.keyId);
+        // #6957: the Child's read-only view of this Home. Admitted by the link key above and by
+        // the shared table in src/link/management-routes.ts; never reachable on another ingress.
+        if (isLinkManagementPath(requestUrl.pathname)) {
+          const { handleLinkManagementRequest } = await import("./link-management");
+          return withCors(await handleLinkManagementRequest(req, requestUrl, config, requestManagementApiDeps, managementSessionControl), req, policy);
+        }
       }
       const url = requestUrl;
       const admissionOptions = { linkIngress: policy.linkIngress?.allowedKeyIds };
@@ -1048,7 +1055,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           );
           const { buildAnthropicModelInfos } = await import("../../claude/model-info");
           const { resolveAutoContext } = await import("../../claude/context-windows");
-          const { activeDesktop3pAlias } = await import("../../claude/desktop-3p");
+          const { resolvableDesktop3pAlias } = await import("../../claude/desktop-3p");
           // Per-surface id family (devlog 050): explicit ?ids= wins; otherwise the
           // Claude Code CLI discovery UA (`claude-code/<version>`, binary n_()) gets
           // readable claude-ocx ids and every other client (Desktop 3P) keeps the
@@ -1064,7 +1071,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             goOrdered,
             resolveAutoContext(config.claudeCode),
             idStyle,
-            activeDesktop3pAlias,
+            resolvableDesktop3pAlias,
             desktopInputs.nativeContextCap,
             config.fastMode,
             // Explicit opt-out omits the Fast predicate.

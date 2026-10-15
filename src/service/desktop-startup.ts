@@ -1,10 +1,10 @@
 import { execFileSync } from "node:child_process";
 import { accessSync, constants, lstatSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve, win32 } from "node:path";
 import { readPid } from "../config/process-state";
 import { resolveServiceOwnership, sameServiceOwnershipSubject, type ServiceOwnershipResolution } from "./state";
-import { inspectDesktopSupervision, processIdentity, procfs, type ProcReader } from "./desktop-supervision.mjs";
+import { inspectDesktopSupervision, processIdentity, procfs, type DesktopSupervisionDeps, type ProcReader } from "./desktop-supervision.mjs";
 
 export interface DesktopStartupDiagnostic {
   /** Durable desktop claim; failed supervision does not release ownership. */
@@ -14,7 +14,11 @@ export interface DesktopStartupDiagnostic {
   loginRegistration?: "loaded" | "registered-not-loaded";
   running: boolean;
   viable: boolean;
-  /** Live parentage when no durable claim exists; never converts supervision into ownership. */
+  /**
+   * Proven live parentage; never converts supervision into ownership. macOS and Linux report it
+   * only without a durable claim. Windows also reports it beside a durable Desktop claim, because
+   * older Windows runtimes never published a Desktop diagnostic that status could defer to.
+   */
   supervisor?: { supervisorPid: number; runtimePid: number; app: string };
 }
 
@@ -45,12 +49,16 @@ interface DesktopStartupDeps {
   run?: typeof run;
   env?: NodeJS.ProcessEnv;
   proc?: ProcReader;
+  windowsProcesses?: DesktopSupervisionDeps["windowsProcesses"];
+  now?: () => number;
+  /** The Desktop's own install id (Tauri app_config_dir); null when unreadable. */
+  readWindowsInstallId?: () => string | null;
 }
 
 /** Cheap ownership-only snapshot: no launchd/process probes on the server request path. */
 export function desktopStartupOwnership(deps: DesktopStartupDeps = {}): DesktopStartupDiagnostic | undefined {
   const platform = deps.platform ?? process.platform;
-  if (platform !== "darwin" && platform !== "linux") return undefined;
+  if (platform !== "darwin" && platform !== "linux" && platform !== "win32") return undefined;
   const owner = (deps.ownership ?? resolveServiceOwnership)();
   return owner.kind === "owned" && owner.ownership.owner === "desktop"
     ? deriveDesktopStartup({ owned: true, loginEnabled: false, running: false }) : undefined;
@@ -114,12 +122,38 @@ function macLoginRegistration(deps: DesktopStartupDeps) {
   }
   const program = /^\s*program = (.+)$/m.exec(loaded)?.[1];
   const loadedPath = /^\s*path = (.+)$/m.exec(loaded)?.[1];
+  // macOS 13+ Background Task Management can take over the user LaunchAgent and resubmit it
+  // through smd; launchctl then names the submitter instead of the plist (#7019). The loaded
+  // job no longer points at the registration, so credit it like an unloaded job: same program,
+  // and the entire registration re-read unchanged.
+  if (program !== undefined && loadedPath !== undefined && SMD_SUBMITTED.test(loadedPath)
+    && /^\s*managed_by = (.+)$/m.exec(loaded)?.[1] === SERVICE_MANAGEMENT && realpathSync(program) === app) {
+    const final = capture();
+    if (!final || JSON.stringify(first) !== JSON.stringify(final)) return { app, proxy, loginEnabled: false };
+    return { app, proxy, loginEnabled: true, loginRegistration: "loaded" as const };
+  }
   const loginEnabled = program !== undefined && realpathSync(program) === app
     && loadedPath !== undefined && realpathSync(loadedPath) === first.registrationPath;
   return { app, proxy, loginEnabled, ...(loginEnabled ? { loginRegistration: "loaded" as const } : {}) };
 }
 
+/** launchctl's `path` for a job Background Task Management resubmitted through smd. */
+const SMD_SUBMITTED = /^\(submitted by smd\.\d+\)$/;
+const SERVICE_MANAGEMENT = "com.apple.xpc.ServiceManagement";
+
 type DesktopLoginFacts = Pick<DesktopStartupDiagnostic, "loginEnabled" | "loginRegistration">;
+
+/**
+ * Start at Login credit for one Desktop app copy. The tray's Start at Login item ports this
+ * judgment (desktop/src-tauri/src/login_registration.rs); both run the cases in
+ * tests/fixtures/desktop-login-registration-cases.json. Throws when evidence is unreadable.
+ */
+export function macLoginFactsFor(app: string, deps: DesktopStartupDeps): DesktopLoginFacts {
+  const login = macLoginRegistration(deps);
+  return login !== null && login.app === app
+    ? { loginEnabled: login.loginEnabled, ...(login.loginRegistration ? { loginRegistration: login.loginRegistration } : {}) }
+    : { loginEnabled: false };
+}
 
 function diagnoseSupervisedStartup(deps: DesktopStartupDeps, ownerRevision: number, loginFor: (app: string) => DesktopLoginFacts): DesktopStartupDiagnostic | undefined {
   const evidence = inspectDesktopSupervision(deps);
@@ -144,12 +178,7 @@ export function diagnoseMacDesktopStartup(deps: DesktopStartupDeps = {}): Deskto
   if ((deps.platform ?? process.platform) !== "darwin") return undefined;
   const ownership = deps.ownership ?? resolveServiceOwnership;
   const owner = ownership();
-  if (owner.kind === "none") return diagnoseSupervisedStartup(deps, owner.revision, app => {
-    const login = macLoginRegistration(deps);
-    return login !== null && login.app === app
-      ? { loginEnabled: login.loginEnabled, ...(login.loginRegistration ? { loginRegistration: login.loginRegistration } : {}) }
-      : { loginEnabled: false };
-  });
+  if (owner.kind === "none") return diagnoseSupervisedStartup(deps, owner.revision, app => macLoginFactsFor(app, deps));
   if (owner.kind !== "owned" || owner.ownership.owner !== "desktop") return undefined;
   const facts: Omit<DesktopStartupDiagnostic, "viable"> = { owned: true, loginEnabled: false, running: false };
   const execute = deps.run ?? run;
@@ -265,5 +294,50 @@ export function diagnoseLinuxDesktopStartup(deps: DesktopStartupDeps = {}): Desk
 
 /** Platform dispatch for the full (probing) desktop startup diagnostic. */
 export function diagnoseDesktopStartup(deps: DesktopStartupDeps = {}): DesktopStartupDiagnostic | undefined {
-  return (deps.platform ?? process.platform) === "linux" ? diagnoseLinuxDesktopStartup(deps) : diagnoseMacDesktopStartup(deps);
+  const platform = deps.platform ?? process.platform;
+  if (platform === "linux") return diagnoseLinuxDesktopStartup(deps);
+  if (platform === "win32") return diagnoseWindowsDesktopStartup(deps);
+  return diagnoseMacDesktopStartup(deps);
+}
+
+/** Tauri resolves app_config_dir to the roaming AppData folder plus the bundle identifier. */
+function readWindowsInstallId(env: NodeJS.ProcessEnv): string | null {
+  const appData = env.APPDATA;
+  if (!appData || !/^[A-Za-z]:[\\/]/.test(appData)) return null;
+  try {
+    return readFileSync(win32.join(appData, "com.opencodex.desktop", "install-id"), "utf8").trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Read-only Windows desktop ownership and live parent/child checks. Windows Start at Login is
+ * not verified, so it is never credited and Desktop never reads as startup protection here;
+ * the diagnostic still names the supervisor so status and doctor stop recommending service repairs.
+ */
+export function diagnoseWindowsDesktopStartup(deps: DesktopStartupDeps = {}): DesktopStartupDiagnostic | undefined {
+  if ((deps.platform ?? process.platform) !== "win32") return undefined;
+  const ownership = deps.ownership ?? resolveServiceOwnership;
+  const owner = ownership();
+  if (owner.kind === "none") return diagnoseSupervisedStartup(deps, owner.revision, () => ({ loginEnabled: false }));
+  if (owner.kind !== "owned" || owner.ownership.owner !== "desktop") return undefined;
+  const facts = { owned: true, loginEnabled: false, running: false };
+  try {
+    const installId = deps.readWindowsInstallId ? deps.readWindowsInstallId() : readWindowsInstallId(deps.env ?? process.env);
+    if (installId !== owner.ownership.installId) return deriveDesktopStartup(facts);
+    const evidence = inspectDesktopSupervision(deps);
+    if (evidence.kind !== "desktop") return deriveDesktopStartup(facts);
+    // Only the same live chain, read again after the claim, earns running and the supervisor.
+    const final = inspectDesktopSupervision({ ...deps, targetPid: evidence.runtimePid });
+    const current = ownership();
+    if (final.kind !== "desktop" || final.runtimePid !== evidence.runtimePid
+      || final.supervisorPid !== evidence.supervisorPid || final.app !== evidence.app
+      || current.kind === "unknown" || !sameServiceOwnershipSubject(owner, current)) return deriveDesktopStartup(facts);
+    const { supervisorPid, runtimePid, app } = final;
+    return deriveDesktopStartup({ ...facts, running: true, supervisor: { supervisorPid, runtimePid, app } });
+  } catch {
+    // Unreadable evidence never grants running or releases the claim.
+    return deriveDesktopStartup(facts);
+  }
 }

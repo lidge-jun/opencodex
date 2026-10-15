@@ -35,6 +35,11 @@ caller credential as the Pool selection. An exact account binding remains bound 
 
 ## Config injection
 
+`ocx sync` removes reasoning efforts unsupported by the selected Codex runtime from the catalog.
+It reports a clamp when its runtime identity, removed efforts or affected models change; unchanged
+syncs preserve the diagnostic timestamp and do not repeat that notice. This compatibility
+projection does not require running `ocx doctor`. If a clamp clears and later returns, it is reported again.
+
 OpenCodex serializes its Codex configuration writes. On Windows, a file temporarily held open
 by another process gets a short, bounded retry. If access stays busy, retry the operation shortly;
 OpenCodex preserves the existing lock evidence and does not use that access failure to take over
@@ -387,6 +392,8 @@ $CODEX_HOME/opencodex.config.toml
 $CODEX_HOME/opencodex-catalog.json
 $CODEX_HOME/models_cache.json
 ```
+
+On macOS, opencodex checks the Codex app’s bundled CLI in `/Applications/ChatGPT.app` and then `~/Applications/ChatGPT.app` after explicit selections, shims, PATH, established installs, and the runnable bare `codex` fallback, requires the bundle’s XML `Info.plist` identity to be `com.openai.codex`, and never automatically replaces a runnable persisted selection with an app candidate.
 
 On WSL, if `CODEX_HOME` is unset and the Linux `~/.codex` directory is absent or holds no Codex state
 (`config.toml`, `auth.json`, `sessions`, `history.jsonl`), opencodex also
@@ -768,6 +775,11 @@ Add a display name from the CLI (the proxy syncs the catalog right away when liv
 ocx models add deepseek deepseek-v4 --display-name "DeepSeek V4" --context-window 128000
 ```
 
+For custom providers, omitting an explicit context window lets the catalog use the
+[context-window fallback rules](/reference/configuration/providers/#context-windows-on-custom-providers).
+Model-ID estimates apply only when the provider sets `inferContextWindow: true`; set an explicit
+window or Context cap when the relay supports less than the model's vendor window.
+
 Remote Codex clients can fetch the same generated catalog with an ordinary **data-plane** key
 — the same credential they already use for `/v1/responses`, not an admin token:
 
@@ -954,6 +966,16 @@ ocx service install    # persistent: auto-starts on login and respawns on crash
 `ocx status` shows whether the proxy is running and prints the same restart hint when
 it is not; `ocx doctor` reports restart safety (service/shim coverage).
 
+### Upstream overload before any output
+
+When the ChatGPT backend declines a pooled native Codex turn with `server_is_overloaded` or
+another server error before it has produced any output, opencodex retries the same account
+with a short, capped backoff and then moves the turn to one other eligible Pool account.
+A pinned account (an account-qualified model) is retried but never moved. Once any output
+has reached Codex the turn is never sent again. If every attempt is declined, Codex receives
+the same error it would have received without the retries. Native compact requests move to
+another Pool account on a server error in the same way.
+
 ### Codex autostart shim
 
 Run `ocx codex-shim install` to install the optional launcher wrapper. It runs
@@ -979,6 +1001,133 @@ removes the private overlay files and leaves native Codex intact. Windows keeps 
 script wrappers; uninstall restores the saved launcher. See the
 [CLI lifecycle reference](/reference/cli/lifecycle/#ocx-codex-shim-installstatusuninstallremove).
 
+## Experimental Windows desktop compatibility
+
+**Codex Set → Desktop compatibility** provides local controls for a bounded compatibility
+trial while retaining the native Codex login. This is an experimental relay, not a guarantee
+that every Codex build or exhausted-account state can recover its composer.
+
+1. Inspect status, prepare the encrypted certificate and review its fingerprint before
+   registering trust. Windows may ask for confirmation. Trust applies to the current Windows
+   user and allows the local relay to handle `chatgpt.com` traffic.
+2. Start observation. Save drafts, close Codex, then use **Open Codex** in this panel to launch
+   the packaged app with the managed connection. The panel never forcibly closes an existing app.
+3. Only after eligible exhaustion is observed, **Run 3-minute trial** offers a separate account-wide
+   consent. It adjusts two UI flags across the signed-in account, not just the selected model.
+   Actual usage, credits, spending restrictions and server limits remain unchanged. A produced
+   response alone does not establish that the composer recovered.
+
+An original response showing available usage or a protected state ends the trial immediately.
+Available credits or active Luna Reserve also leave the response unchanged and end the trial,
+even when ordinary usage is exhausted. This preserves the app's existing entitlement state.
+If eligible exhaustion appears again, another explicit trial is required; the earlier consent
+does not silently reactivate correction.
+
+**Return to observation** disarms correction. The three-minute limit bounds response correction,
+not the time until Codex refreshes its display. Expiry and returning to observation request a
+fresh usage response; the app may retain its previous display until that response arrives.
+The panel shows this limitation before trial consent and while awaiting the original response;
+it cannot confirm the app's cache refresh. **Stop service** closes its connections and leaves
+the certificate for reuse; active connections may be interrupted. For renewal or trust removal,
+stop the service and close Codex first. Renewal prepares a new untrusted certificate; review the
+new fingerprint before registering it. An uncertain action is not automatically retried.
+Certificates are restricted to TLS server authentication. If status shows `renewal-required`,
+stop the service and close Codex, then renew the older certificate before starting again.
+The native API URL must match the proxy's actual listener address and port. IPv4 and IPv6
+loopback addresses are not interchangeable here; ambiguous `localhost` aliases are refused.
+Codex's automatic MCP connection refresh and configuration formatting do not invalidate
+observation. Model, authentication, profile and routing changes still require a fresh
+observation context; the service does not silently adopt those changes during a trial.
+
+The service preserves its PAC address and local connection ports for reuse after a restart.
+With the same trusted certificate, an already configured app can reconnect through its cached
+PAC; restarting the service never resumes a correction trial. If a saved port cannot be bound
+or connection metadata is invalid, startup refuses rather than silently assigning another
+address. The first successful start owns `codex-desktop-compatibility/connection.json` under
+the OpenCodex home. Do not delete that file as a routine restart fix: a different address
+requires launching the app with a fresh managed connection.
+
+Current support is limited to the assessed Windows build `26.924.2738.0`, native file-based
+login. HTTP/HTTPS proxies and authenticated SOCKS5 proxies are supported through the shared
+outbound policy; NO_PROXY can explicitly select a direct route. Failed proxy connections do not
+fall back to direct egress. OpenCodex managed client mode is not yet supported by these controls.
+For this desktop relay, HTTP(S) `ALL_PROXY` also applies when `HTTPS_PROXY` is unset. An invalid
+`HTTPS_PROXY` refuses the operation instead of falling back to `ALL_PROXY`.
+Unknown app builds refuse correction; the integration does not patch application files or
+switch to login-free mode.
+The native root config and its selected profile must route `openai_base_url` to this process's
+actual local data listener. A different provider, destination or unsupported override refuses
+observation startup. This check does not determine a conversation's selected model or prove
+that project-local overrides are absent. If routing or the installed app build changes during
+a trial, correction is refused before the next usage response; periodic checks also return
+an idle trial to observation. Original responses and other app traffic continue to relay.
+Native login-file replacement or token rotation also invalidates the trial, even when the
+same account returns. Stop and start observation to bind the current login before another
+explicit trial; old responses cannot authorize the replacement session.
+Changes to the root Codex config (except its MCP server table and formatting), provider configuration, model aliases, routing profiles,
+fallback, compaction or memory-model routes also invalidate the observation context. Restoring the previous
+settings does not restore its consent: stop and start observation, then confirm a new trial
+when eligible. This detects changes to those configured routes, not which model a conversation
+actually selects; an unchanged mixed-provider configuration is not proof of provider isolation.
+
+After certificate preparation and a successful manual start, enable **Resume observation when
+OpenCodex starts** in the same panel. The optional OpenCodex configuration
+`"desktopCompatibility": { "startOnProxyStart": true }` resumes **observation only** when the model
+proxy starts. Omission or `false` disables this automatic start. It reuses the saved endpoints
+and trusted certificate, never launches Codex or enrolls trust, and never resumes an Apply trial.
+Automatic observation waits for startup configuration sync to finish. Failed sync or a wait
+longer than two minutes leaves observation off; inspect its status and start it manually after
+resolving the startup problem. The model proxy continues to follow its own readiness policy.
+If prerequisites are missing, observation stays off and the model proxy continues running.
+Saving this preference does not start or stop the current service. Use its separate service
+controls for immediate changes. If a save cannot be confirmed, refresh its status before retrying.
+
+A running service does not establish that Codex is connected through it. A normal app launch or
+an app updater can omit the managed connection argument. Save drafts, close Codex, then use
+**Open Codex** in this panel to restore that connection. This control never closes the app for you.
+After a Codex update, an unassessed app version refuses correction until its compatibility is
+reviewed; reinstalling the certificate does not make an unassessed build supported.
+
+On Windows, an explicit OpenCodex full-app restart preserves an already active loopback
+compatibility PAC argument only when the current OpenCodex process owns the serving compatibility
+runtime. A stale or foreign endpoint is refused before stopping Codex; replacement of the runtime
+during restart also prevents managed relaunch. The app launches through Windows package activation. It checks the
+package identity and routing argument after launch; unreadable or conflicting main-app routing arguments cause
+a refusal before the restart. This does not enable a compatibility mode, install a certificate,
+or watch and restart the app automatically. Normal launches without that routing argument keep
+their existing behavior.
+
+### Transport coverage and recovery evidence
+
+The compatibility panel reports identity-checked JSON/SSE usage responses and currently
+bound streams separately from open connections. These are lifetime relay observations,
+including requests made by diagnostic clients. They do not identify the sending native
+process, prove that the app updated its authoritative cache, or prove composer recovery.
+No request body, token, account ID or source IP is added to this diagnostic status.
+
+[Issue #6196](https://github.com/lidge-jun/opencodex/issues/6196) reports a macOS build whose
+authoritative gate requests originate in the bundled Rust app-server and bypass Chromium
+PAC settings. A healthy PAC, certificate or synthetic request cannot establish coverage
+of that transport. This Windows experiment is not a fix for that macOS design blocker.
+
+Before adding another platform or transport, document and validate this sequence:
+
+1. Identify the actual process and transport that sends each authoritative gate request.
+2. Prove that an app-origin request reaches the intended relay, separately from test clients.
+3. Verify the response schema and the app's cache/update path for the exact installed build.
+4. On natural account exhaustion, verify original-composer submission, independent-provider
+   completion, and preservation of sign-in, Chat, existing threads and remote connections.
+5. Verify shutdown, ordinary launch, restart and update behavior; do not infer one from another.
+
+The present policy handles only `/backend-api/wham/usage` and its `/stream` endpoint.
+Conversation initialization and other endpoints, including their `blocked_features` and
+`limits_progress`, pass unchanged. Their presence is not permission to clear them: they may
+represent unrelated restrictions. The Windows build's renderer-to-Electron fetch path does
+not establish the network path of a different OS/build or every app-server RPC. App-server
+routing requires its own reviewed design; changing model-provider URLs alone is not proof
+that account, login or remote-control traffic follows the same route. No automatic app-server
+wrapper, global proxy change or login rewrite is installed by these controls.
+
 ## Routed models during Codex reserve mode
 
 Codex Pool can optionally protect stored pool accounts at a selected 5-hour or weekly usage
@@ -997,7 +1146,7 @@ When the ChatGPT 5-hour quota is exhausted, Codex may offer a reserve fallback m
 **every other entry unselectable — including opencodex routed models**, even though those
 run on independent providers and credentials and consume none of the exhausted quota.
 
-**This is a Codex client behavior and the proxy cannot change it.** The reserve state
+**This is a Codex client behavior that ordinary model-proxy routing cannot change.** The reserve state
 arrives from the ChatGPT backend on the client's own authenticated connection, not through
 the proxy. The desktop app polls `backend-api/wham/usage` and treats reserve as active when
 the response carries `rate_limit_upsell.banner_type = "luna_reserve"`, the primary
@@ -1055,6 +1204,15 @@ When an account reaches 100% on a usage window and still holds credits, upstream
 For an opted-in, unpaused main account with a full usage window, the background recovery cycle renews spendable credit observations from three minutes of age, even while the dashboard is closed. It prepares a valid token before the authenticated usage lookup so the balance can be observed again before its five-minute freshness limit. Missing, zero, restricted or retracted credits keep the account eligible for recovery lookups under the existing retry backoff. Requests remain refused until a fresh positive balance or unlimited credits are observed; `has_credits` alone or approximate message counts do not prove a spendable balance. With consent on, this credit-evidence refusal's `Retry-After` is at most five minutes, or a sooner included-quota reset; without consent it still follows the included-quota reset. A failed or incomplete lookup does not refresh old balance evidence. The separate main-account hard lock, needs-reauth quarantine and upstream retry delays still apply. This metadata lookup does not send a model validation request or set or clear the account's needs-reauth state.
 
 Background revalidation is separate and off by default. It requires Token Guardian, the `openai` provider's `proactive` refresh policy, and `tokenGuardian.codexWarmupEnabled`. It skips accounts awaiting deferred registration validation.
+
+### After a ChatGPT plan upgrade
+
+Refresh the main account's quota in Codex Auth after changing your ChatGPT plan. When the
+authenticated usage response confirms a long window has replaced the five-hour window,
+opencodex removes the old five-hour reading from both request admission and account selection.
+An allowed response with primary and secondary windows can omit the optional tertiary window.
+This recovery uses your included plan allowance and does not require enabling **Use credits**.
+Partial or invalid usage data retains the previous block until recovery is confirmed.
 
 ### Cancelling main-account device reauthentication
 

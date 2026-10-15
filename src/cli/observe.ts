@@ -210,8 +210,12 @@ async function usage(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     if (token.kind !== "present" || token.fingerprint !== connection.value.tokenFingerprint) {
       throw new Error("Client usage unavailable: the enrolled data key is missing or changed; repair the client connection");
     }
+    // A Remote Link Child sends this read through the connection-bound link relay (#6957).
+    const link = connection.value.transport === "link" && connection.value.link;
+    const peerFetch = deps.fetchImpl
+      ?? (link ? (await import("../client/link-home")).linkBoundFetch(connection.value, token.token) : undefined);
     result = await fetchHubUsage(connection.value.serverUrl, token.token, new URLSearchParams(suffix), {
-      fetchImpl: deps.fetchImpl, timeoutMs: 60_000,
+      fetchImpl: peerFetch, timeoutMs: 60_000, ...(link ? { peer: "Home" as const } : {}),
     });
     const current = readClientConnectionState();
     const currentToken = readServiceApiTokenState();

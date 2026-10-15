@@ -288,7 +288,8 @@ describe("live V2 real-handler refusal and incomplete convergence", () => {
     }) as typeof fetch };
     expect(await cmdV2(["on", "--live", "--json"], { runtimeApi,
       execFile: () => { throw new Error("Local fallback is forbidden"); } })).toBe(1);
-    expect(requests).toBe(1); expect(toggles).toBe(1);
+    // Errors ride along so a refusal before the native toggle names its cause in CI.
+    expect({ requests, toggles, errors }).toMatchObject({ requests: 1, toggles: 1 });
     if (failure === "native-failure") { expect(out).toEqual([]); expect(readFileSync(path, "utf8")).toBe(before); }
     else expect(readOutput()).toMatchObject({ enabled: true, catalogRefresh: { status: "failed", partialWrite: true } });
     expect(out.join("\n") + errors.join("\n")).not.toContain(privateText);

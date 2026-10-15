@@ -199,6 +199,8 @@ $CODEX_HOME/opencodex-catalog.json
 $CODEX_HOME/models_cache.json
 ```
 
+macOS에서는 명시적 선택, shim, PATH, 기존 설치 경로와 실행 가능한 기본 `codex` 후보 뒤에 `/Applications/ChatGPT.app`, `~/Applications/ChatGPT.app` 순서로 Codex 앱의 번들 CLI를 확인하며, 번들의 XML `Info.plist` 식별자가 `com.openai.codex`여야 하고 실행 가능한 저장된 선택을 앱 후보로 자동 교체하지 않습니다.
+
 WSL에서는 `CODEX_HOME`이 비어 있고 Linux `~/.codex` 디렉터리가 없거나 Codex 상태(`config.toml`, `auth.json`, `sessions`, `history.jsonl`)가 전혀 없을 때 `/mnt/c/Users/*/.codex/config.toml` 아래의 단일 Windows Codex Desktop home도 확인합니다. 후보가 정확히 하나면 그 디렉터리를 사용하므로 WSL app-server mode와 Windows Codex Desktop이 같은 config와 auth 파일을 공유합니다. 이 탐지를 덮으려면 `CODEX_HOME`을 명시하세요.
 
 Windows에서 Orca shell은 `CODEX_HOME`과 `ORCA_CODEX_HOME`을 Orca의 번들 런타임 home으로 설정할 수 있지만, ChatGPT/Codex app은 여전히 `%USERPROFILE%\\.codex`를 읽습니다. `ocx status`와 `ocx doctor`는 이 정확한 불일치를 경고하고, 경로는 가린 채 대상 home을 출력합니다. 해당 Orca shell에서 background service를 설치했다면 먼저 원래 shell에서 uninstall하고, `CODEX_HOME`을 app home으로 설정한 뒤 `ORCA_CODEX_HOME`을 해제하고, sync/restore를 다시 실행한 다음 service를 다시 설치하세요.
@@ -290,6 +292,8 @@ CLI에서 표시 이름을 추가할 수 있습니다(proxy가 live 상태면 ca
 ```bash
 ocx models add deepseek deepseek-v4 --display-name "DeepSeek V4" --context-window 128000
 ```
+
+사용자 지정 공급자에서 컨텍스트 창을 명시하지 않으면 카탈로그는 모델 ID 추정을 포함한 [컨텍스트 창 보완 규칙](/ko/reference/configuration/providers/#사용자-지정-공급자의-컨텍스트)을 사용해요. 중계 서비스가 공급업체의 창보다 적은 용량을 지원하면 창이나 Context cap을 명시하세요.
 
 원격 Codex client는 관리자 토큰이 아니라 일반 데이터 플레인 키(`/v1/responses`에 이미 사용하는 것과 같은 자격 증명)로 같은 생성된 catalog를 가져올 수 있습니다:
 

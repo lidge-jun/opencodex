@@ -94,7 +94,7 @@ each candidate and skips one that cannot carry the request.
 
 ## Rollout switches
 
-These switches stage the new paths. Each defaults to off, and a switch that is off changes nothing.
+These switches stage the new paths. Each defaults to off except `antigravityDirect`, and a switch that is off changes nothing.
 
 | Switch | When on |
 | --- | --- |
@@ -102,6 +102,7 @@ These switches stage the new paths. Each defaults to off, and a switch that is o
 | `managedMessagesNative` | A Messages request whose route is a direct, key-authenticated Anthropic provider is sent as Messages instead of through the bridge. Routes that need bridge-only behaviour (a pinned effort, blocked-skill elision, the web-search sidecar, vision preprocessing, synthetic rows) stay on the bridge. |
 | `managedMessagesNativeOAuth` | Native Messages for the unpooled `anthropic` OAuth provider on `api.anthropic.com`. Effective only together with `managedMessagesNative`; a pooled Anthropic OAuth account set stays on the bridge. |
 | `directEncoders` | For a non-Responses upstream, the answer to a Chat or Messages client is encoded directly from the adapter's events instead of through the internal Responses stream. The request side is unchanged. |
+| `antigravityDirect` | **On by default**; set it to `false` to turn it off. A Chat or Messages request whose route is one Google Antigravity provider skips the internal Responses body in both directions: the conversation is decoded from the client body straight into what the Google adapter compiles from, and the answer is encoded directly as with `directEncoders`. The path reads `chat -> ir -> other` or `messages -> ir -> other`. Request settings (model, effort, limits, tool choice) still pass through the usual policies, so account rotation, effort rules and usage are unchanged. Combos, policies, a hosted web-search tool, images for a model marked text-only, a model the shadow-call intercept could rewrite, and text the proxy rewrites (a skills catalog, a generated-image link) stay on the bridge, and the log row names the reason. |
 | `shadowPlan` | At the end of each Chat or Messages request, the plan a preview would have predicted is compared with the path the request took; a disagreement adds `planMismatch: true` to the log row's path record. No second request is sent. |
 
 Change them with the CLI or by editing `protocols` in `config.json`
@@ -132,7 +133,8 @@ does not display it yet.
 These paths still use the internal Responses bridge or are not covered:
 
 - Chat and Messages requests are still decoded into a Responses-shaped body before the IR, including
-  on a translated path.
+  on a translated path. The exception is a Chat or Messages request to a single Google Antigravity route,
+  unless `antigravityDirect` is set to `false`.
 - Routing-policy candidates, combos reached through an effort row, combo candidates while
   `nativeChatCombos` is off, and Messages combos.
 - Direct encoding (`directEncoders`) covers only a concrete, non-Responses route in streaming
@@ -149,9 +151,14 @@ These paths still use the internal Responses bridge or are not covered:
   Credential placement remains proxy-owned and beta allowlisting still applies. Missing or invalid
   identity uses the existing compatibility headers; compatible hosts and generated Responses retain
   their current behavior. Headers alone do not authorize requests or establish official support.
+  The TypeScript Agent SDK's `sdk-ts` user-agent entrypoint is recognized with the same required
+  identity headers, preserving its allowlisted native feature betas on first-party Anthropic requests.
 - Native Chat over OAuth is not planned. Native Messages over Anthropic OAuth covers only an
   unpooled account; a pooled account set stays on the bridge.
 - The managed native Messages path forwards a caller's `anthropic-beta` values only from a short
   allowlist and only to `api.anthropic.com`, drops
   top-level fields outside its allowlist without a feature effect, and does not apply
   `claudeCode.stabilizePromptCache`.
+  A recognized Claude Code client keeps `context-management-2025-06-27` together with its
+  `context_management` body field. Dropped beta names appear once in the proxy log as
+  `anthropic-beta-dropped=<names>`.

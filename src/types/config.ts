@@ -30,6 +30,11 @@ export interface OcxProtocolsConfig {
     managedMessagesNativeOAuth?: boolean;
     /** Chat and Messages clients are encoded directly from adapter events. */
     directEncoders?: boolean;
+    /**
+     * Chat requests to a concrete Google Antigravity route decode straight into the IR and are
+     * answered through the direct encoders, with no internal Responses body in either direction.
+     */
+    antigravityDirect?: boolean;
     /** Compare the dispatch plan with the observed path; never sends a second request. */
     shadowPlan?: boolean;
   };
@@ -581,12 +586,13 @@ export interface OcxConfig {
   /**
    * Opt-in Ultra Fast service tier, default off.
    *
-   * This does NOT synthesize an `ultrafast` row: `src/codex/data/upstream-models.json`
-   * advertises only `priority`, and PR #2994 was closed precisely because a catalog row
-   * the wire cannot honor is a picker entry that lies. What the flag turns on is honesty
-   * about a tier the operator supplies themselves — the catalog stops stripping an
-   * `ultrafast` the user configured, and the request path names it instead of recording
-   * "no fast tier was requested".
+   * On native GPT-6 Astra and GPT-6.1 Sol rows (bare and account-bound), the flag adds the
+   * Ultrafast speed choice OpenAI documents for those two models, so the Codex picker offers
+   * it even though `model_catalog_json` replaces ChatGPT's live, plan-aware model list
+   * (`src/codex/catalog/native-ultrafast.ts`). On routed rows it still never invents a tier:
+   * it keeps an `ultrafast` the operator configured from being stripped on regeneration
+   * (PR #2994 was closed for adding one the wire could not honor). Turning it off withdraws
+   * the generated native tier on the next catalog write.
    */
   ultraFastTier?: boolean;
   /**
@@ -599,6 +605,13 @@ export interface OcxConfig {
   codexMainAccountHardLock?: boolean;
   /** Per-window percentages: short defaults to 90, long to 98; integers 80..100, short <= long. */
   codexMainAccountHardLockThresholds?: { short?: number; long?: number };
+  /**
+   * Who refreshes the native main ChatGPT login in CODEX_HOME (#2999). "codex" asks the Codex
+   * binary through app-server `getAuthStatus` and never writes auth.json; "opencodex" keeps the
+   * guarded writer. Absent means "codex" when a Codex binary at or above the supported version
+   * is found, otherwise "opencodex". "codex" also falls back when no such binary exists.
+   */
+  nativeMainRefresh?: "codex" | "opencodex";
   /** Explicit top-level deletion intent used by stale whole-config rebases. */
   configRebaseProvenance?: OcxConfigRebaseProvenance | Record<string, unknown>;
   /** OpenAI provider-contract migration marker (v2 = single `openai` provider with account mode). */
@@ -770,6 +783,8 @@ export interface OcxConfig {
   };
   /** Opt-in failure-only recovery; never replaces the initial compaction model. */
   compactionRecovery?: { enabled: boolean; model: string; allowDevinInvalidArgument?: boolean };
+  /** Explicit opt-in; resumes Observe only using an existing trusted certificate and endpoints. */
+  desktopCompatibility?: { startOnProxyStart: boolean };
   /**
    * Destination model for Codex's own memory pipeline, per phase
    * (src/server/responses/memory-models.ts).
@@ -1028,6 +1043,16 @@ export interface OcxConfig {
   cacheRetention?: "none" | "short" | "long";
   /** Web-search sidecar: route web_search for non-OpenAI models through a gpt-mini via ChatGPT passthrough. */
   webSearchSidecar?: OcxWebSearchSidecarConfig;
+  /**
+   * Advisor sidecar: an OpenCodex-owned expert consultation runtime. The proxy injects a synthetic
+   * `advisor` tool into routed worker turns, executes the configured expert model itself (loopback
+   * through the normal routing authority, so the advisor may be ANY routable provider/model), and
+   * reinjects the advice so the original worker continues. `policy: "preflight"` additionally
+   * attempts one automatic consultation per task without worker cooperation, once the task has
+   * produced orientation evidence. Task context is sent only after
+   * `contextSharingConsent` is the current version; `enabled` does not grant that consent.
+   */
+  advisor?: OcxAdvisorConfig;
   /** Vision sidecar: describe images via a gpt vision model so text-only models can "see" them. */
   visionSidecar?: OcxVisionSidecarConfig;
   /** /v1/images relay for codex's built-in image_gen tool. */
@@ -1550,6 +1575,38 @@ export interface OcxVisionSidecarConfig {
   maxDescriptionsPerTurn?: number;
   /** Sidecar fetch timeout (ms). */
   timeoutMs?: number;
+}
+
+/**
+ * Advisor sidecar configuration. Kept deliberately small for PR1: no adaptive trigger knobs
+ * (failedValidations / noProgressCycles / semanticClassifier) — those belong to a later PR.
+ */
+export interface OcxAdvisorConfig {
+  /** Master switch. Default: false — the advisor stays off the request path entirely. */
+  enabled?: boolean;
+  /**
+   * The expert model consulted by the sidecar. Any model string the routing authority accepts:
+   * a bare native model ("gpt-6-astra"), an explicit "provider/model" ("anthropic/claude-...",
+   * "xai/grok-..."), or an account-qualified native model ("<namespace>/gpt-6-astra").
+   */
+  model?: string;
+  /** Reasoning effort for the advisor call. Validated against the canonical effort ladder. */
+  effort?: "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+  /**
+   * When the advisor is consulted. "manual" (default): only when the worker explicitly calls the
+   * synthetic `advisor` tool. "preflight": OpenCodex additionally attempts one automatic
+   * consultation per task once the task has produced orientation evidence (an assistant tool call
+   * or a tool result after the latest user message).
+   */
+  policy?: "manual" | "preflight";
+  /** Advisor fetch timeout (ms). Default 120000. */
+  timeoutMs?: number;
+  /**
+   * Operator consent to send task conversation and tool results to the configured Advisor
+   * provider. Only `"v1"` is current. Absent or any other value means the runtime must not
+   * send task context. `enabled: true` does not grant this, and upgrades do not write it.
+   */
+  contextSharingConsent?: "v1";
 }
 
 export interface OcxWebSearchSidecarConfig {

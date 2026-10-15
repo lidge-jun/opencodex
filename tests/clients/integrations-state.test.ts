@@ -794,14 +794,31 @@ describe("installation detection is independent of config state", () => {
  * from. Rationale and the per-client table: 020 §1 amendment.
  */
 describe("the loopback-only set is one fact, read through one seam", () => {
-  test("omp, pi, kimi, gajae, dsh, mcode, zcode, commandcode, prime, aside, raycast, omo and cline are loopback-only and nobody else is", () => {
+  test("identifies exactly the registered loopback-only clients", () => {
     const loopbackOnly = INTEGRATION_CLIENT_IDS.filter(id => isLoopbackOnly(id));
-    expect(loopbackOnly).toEqual(["pi", "omp", "kimi", "gajae", "dsh", "mcode", "zcode", "commandcode", "prime", "aside", "raycast", "omo", "cline", "droid"]);
+    expect(loopbackOnly).toEqual(["qoder", "pi", "omp", "kimi", "gajae", "dsh", "mcode", "zcode", "commandcode", "prime", "aside", "raycast", "omo", "cline", "droid"]);
   });
 
   test("the registry restates nothing — it reads the export spec", () => {
     for (const id of INTEGRATION_CLIENT_IDS) {
       expect(isLoopbackOnly(id)).toBe(EXPORT_CLIENTS[id].loopbackOnly);
     }
+  });
+});
+
+describe("the managed file size bound", () => {
+  test("a config past the read bound classifies unsafe, never absent", () => {
+    mkdirSync(join(home, ".pi", "agent"), { recursive: true });
+    const path = join(home, ".pi", "agent", "models.json");
+    writeFileSync(path, `{"pad":"${"x".repeat(4 * 1024 * 1024)}"}\n`);
+    const status = readIntegrationState(input());
+    /*
+     * Too large to read is a read failure like any other: the file reports
+     * unsafe rather than absent, so nothing mistakes it for an empty target
+     * a write could replace.
+     */
+    expect(status.state).toBe("unsafe");
+    expect(status.reason).toBe("unparseable");
+    expect(loadTarget(fileIO(), path)).toEqual({ ok: false, why: "read-failed" });
   });
 });

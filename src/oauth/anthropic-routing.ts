@@ -72,10 +72,25 @@ export type { AnthropicAccountPoolConfig } from "../types/anthropic-account-pool
 
 /** Local admission refusal across async dispatch; never treat it as provider reachability evidence. */
 export class AnthropicAccountCooldownError extends Error {
-  constructor(readonly retryAfterSeconds: number | null, readonly routePosition?: number) {
-    super(routePosition === undefined
-      ? "All Anthropic OAuth accounts are temporarily rate-limited"
-      : "Anthropic OAuth accounts for this model route are temporarily rate-limited");
+  /** The retryable wording, kept unchanged for combo children: combo failover classifies by prose too. */
+  readonly retryableMessage: string;
+  constructor(
+    readonly retryAfterSeconds: number | null,
+    readonly routePosition?: number,
+    /**
+     * Set only when no account the route can use is admissible and every held one is out on
+     * spent quota (#6991). `resetsAt` is the earliest upstream window reset among them (epoch
+     * ms), or null when any held account's reset is unknown. Null overall means at least one hold
+     * is a transient throttle or an entitlement refusal, which a client retry may outlast.
+     */
+    readonly usageLimit: { readonly resetsAt: number | null } | null = null,
+  ) {
+    const scope = routePosition === undefined ? "All Anthropic OAuth accounts" : "Anthropic OAuth accounts for this model route";
+    const retryable = `${scope} are temporarily rate-limited`;
+    super(usageLimit === null ? retryable
+      : usageLimit.resetsAt === null ? `${scope} have reached their usage limit`
+        : `${scope} have reached their usage limit; the first one resets at ${new Date(usageLimit.resetsAt).toISOString()}`);
+    this.retryableMessage = retryable;
     this.name = "AnthropicAccountCooldownError";
   }
 }
@@ -104,6 +119,18 @@ interface AccountHealth {
   refusalStatus: 429 | 403;
   /** Windows a 429 reported as rejected, whatever set the deadline; empty when it named none. */
   refusedQuotaWindows: AnthropicQuotaWindow[];
+  /**
+   * When the rejected windows reopen according to upstream's reset headers, kept even when
+   * Retry-After set the deadline. A usage-limit answer reports this, never an admission deadline.
+   */
+  quotaResetAt?: number;
+}
+
+/** See `anthropicAccountHold`: the latest hold on one account and its known window reset. */
+interface AnthropicAccountHold {
+  until: number;
+  quota: boolean;
+  resetAt?: number;
 }
 
 interface AffinityEntry {
@@ -164,6 +191,32 @@ function parseRateLimitReset(
   }
   if (latest === undefined) return undefined;
   return { delayMs: latest - now, rejectedQuotaWindows };
+}
+
+/**
+ * When every window a refusal reported as rejected reopens, per upstream's reset headers; undefined
+ * unless each rejected window carries a usable reset. Unlike `parseRateLimitReset`, which picks the
+ * best available admission deadline, this is reported to the client as the usage-limit reset, so a
+ * weekly window with no reset cannot hide behind a five-hour one that has one.
+ */
+function rejectedWindowsResetAt(headers: AnthropicRateLimitHeaders | null | undefined, now: number): number | undefined {
+  if (!headers) return undefined;
+  const usableReset = (header: string): number | undefined => {
+    const resetAt = Number(headers.get(header)?.trim()) * 1000;
+    return Number.isFinite(resetAt) && delayUntil(resetAt, now) !== undefined ? resetAt : undefined;
+  };
+  const rejected = rejectedQuotaWindowsIn(headers);
+  if (!rejected.length) {
+    return headers.get("anthropic-ratelimit-unified-status")?.trim() === "rejected"
+      ? usableReset("anthropic-ratelimit-unified-reset") : undefined;
+  }
+  let latest = 0;
+  for (const window of rejected) {
+    const resetAt = usableReset(`anthropic-ratelimit-unified-${window === "five-hour" ? "5h" : "7d"}-reset`);
+    if (resetAt === undefined) return undefined;
+    latest = Math.max(latest, resetAt);
+  }
+  return latest;
 }
 
 interface ScoredAccount {
@@ -308,6 +361,8 @@ type RoutingFacadeSymbol =
   | "hasAnthropicFailoverQuorum"
   | "forgetAnthropicFailoverQuorum"
   | "getAnthropicPoolRetryAfterSeconds"
+  | "anthropicPoolCooldownError"
+  | "anthropicPoolUsageLimitAfterRefusal"
   | "pickAlternateAnthropicAccount"
   | "resolveAnthropicAccountForSession"
   | "resolveAnthropicDispatchAccountId"
@@ -330,7 +385,7 @@ const handlers = new Map<AnthropicInstanceId, RoutingHandlers>();
 function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting {
   const PROVIDER = instance;
   const poolKey = anthropicPoolKey(instance);
-  const { anthropicFamilyRejected, anthropicFamilyRetryAt, anthropicModelExhausted, clearAnthropicFamilyQuota } = anthropicModelQuotaFor(instance);
+  const { anthropicFamilyRejected, anthropicFamilyRetryAt, anthropicFamilyHoldState, anthropicModelExhausted, clearAnthropicFamilyQuota } = anthropicModelQuotaFor(instance);
   const { anthropicRatePauseUntil, clearAnthropicRatePauses, pauseAnthropicRateAdmission } = anthropicRatePolicyFor(instance);
   const { anthropicCooldownGeneration, clearAnthropicCooldownGenerations, noteAnthropicCooldownMutation } = anthropicCooldownRecoveryFor(instance);
   // Request-owned config authorizes selection/commit. Namespace-only credential and roster
@@ -371,7 +426,26 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
 
 
   /**
-   * Capture the exact reset-derived refusal a fresh usage probe is allowed to recover.
+   * The windows a fresh usage read must show open before it may lift this cooldown, or null when
+   * no usage read can lift it.
+   *
+   * Only a 429 is quota evidence: `recordAnthropicAccountRefusal` keeps a 429 only after
+   * classifying it as shared quota, and a 403 is an entitlement refusal that usage cannot answer.
+   * The deadline source does not matter (#6989). Anthropic sends Retry-After on a spent window as
+   * well, set to that window's reset, so a `retry-after` cooldown that named rejected windows
+   * carries exactly the evidence a `reset-derived` one does; the read decides, not the header.
+   * A refusal that named no window can only be the aggregate unified status. It stays claimable
+   * when reset-derived, as before, but no usage reading covers it, so it is always retained.
+   */
+  function recoverableQuotaWindows(entry: AccountHealth): readonly AnthropicQuotaWindow[] | null {
+    if (entry.refusalStatus !== 429) return null;
+    if (entry.rejectedQuotaWindows?.length) return entry.rejectedQuotaWindows;
+    if (entry.refusedQuotaWindows.length) return entry.refusedQuotaWindows;
+    return entry.cooldownSource === "reset-derived" ? [] : null;
+  }
+
+  /**
+   * Capture the exact quota refusal a fresh usage probe is allowed to recover.
    *
    * The generation fence matters because the usage request is asynchronous: a newer 429 may
    * arrive while it is in flight, and an older answer must never erase that newer refusal.
@@ -381,13 +455,14 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
     now = Date.now(),
   ): AnthropicCooldownRecoveryClaim | null {
     const entry = upstreamHealth.get(accountId);
-    if (!entry || entry.cooldownUntil <= now || entry.cooldownSource !== "reset-derived") return null;
+    if (!entry || entry.cooldownUntil <= now || recoverableQuotaWindows(entry) === null) return null;
     return { instance, accountId, cooldownGeneration: entry.cooldownGeneration, claimedAt: now };
   }
 
   /**
-   * Clear only the claimed reset-derived cooldown when a fresh, complete usage result proves
-   * headroom in every window that upstream previously reported as rejected.
+   * Clear only the claimed quota cooldown when a fresh, complete usage result proves headroom in
+   * every window that upstream previously reported as rejected. A result read before the claim
+   * (`updatedAt < claimedAt`) is stale and settles nothing.
    */
   function settleAnthropicCooldownRecovery(
     claim: AnthropicCooldownRecoveryClaim,
@@ -395,12 +470,12 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
   ): AnthropicCooldownRecoverySettlement {
     if (claim.instance !== instance) return "superseded";
     const entry = upstreamHealth.get(claim.accountId);
-    if (!entry || entry.cooldownSource !== "reset-derived"
+    const windows = entry ? recoverableQuotaWindows(entry) : null;
+    if (!entry || windows === null
       || entry.cooldownGeneration !== claim.cooldownGeneration
       || anthropicCooldownGeneration(claim.accountId) !== claim.cooldownGeneration
       || !Number.isFinite(quota.updatedAt) || quota.updatedAt < claim.claimedAt) return "superseded";
-    const windows = entry.rejectedQuotaWindows;
-    if (!windows?.length) return "retained";
+    if (!windows.length) return "retained";
     const recovered = windows.every(window => {
       const percent = window === "five-hour" ? quota.fiveHourPercent : quota.weeklyPercent;
       return typeof percent === "number" && Number.isFinite(percent) && percent >= 0 && percent < 100;
@@ -450,7 +525,7 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
     const required: readonly AnthropicQuotaWindow[] = named.length ? named : ["five-hour", "weekly"];
     if (entry.refusalStatus !== 429 || !required.every(window => clearedWindows.has(window))) {
       // Kept, but reads that started before the grant are now stale. Move the entry to the same
-      // new generation so a fresh usage read can still recover a reset-derived cooldown.
+      // new generation so a fresh usage read can still recover a 429 quota cooldown.
       entry.cooldownGeneration = noteAnthropicCooldownMutation(accountId);
       return "uncovered";
     }
@@ -646,23 +721,90 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
 
   /** Earliest remaining cooldown among cooled Anthropic accounts, for client Retry-After. */
   function getAnthropicPoolRetryAfterSeconds(now = Date.now(), decision: AnthropicRouteDecision | null = null, model?: string): number | null {
+    return anthropicPoolCooldownError(now, decision, model).retryAfterSeconds;
+  }
+
+  /**
+   * What keeps one account out of admission, and whether that is spent quota (#6991).
+   *
+   * Every hold must lift before the account can serve, so the latest one decides. A 429 health
+   * entry is quota by construction (only a shared-quota classification records one), whatever its
+   * deadline source; a 403 entry is an entitlement refusal; an admission pause is a transient
+   * throttle; a family exclusion is a spent family window unless a revalidation send is already
+   * in flight. A tie goes to the transient hold, because then a retry at that instant may succeed.
+   *
+   * The reported reset is computed apart from that admission order: the account's usage reopens
+   * when the last of its quota holds' upstream windows resets, and it is unknown when any of them
+   * lacks a known reset. Admission deadlines are not resets: they may be Retry-After, the
+   * sixty-second default or the thirty-minute family evidence lifetime.
+   */
+  function anthropicAccountHold(accountId: string, now: number, model?: string): AnthropicAccountHold | null {
+    const latest = { until: 0, quota: false };
+    let quotaResetAt = 0;
+    let quotaResetKnown = true;
+    const consider = (until: number | undefined, quota: boolean, reset?: number) => {
+      if (until === undefined || until <= now) return;
+      if (quota) {
+        if (reset === undefined || reset <= now) quotaResetKnown = false;
+        else quotaResetAt = Math.max(quotaResetAt, reset);
+      }
+      if (until < latest.until || (until === latest.until && quota)) return;
+      latest.until = until;
+      latest.quota = quota;
+    };
+    const entry = getAnthropicAccountHealthSnapshot(accountId, now) ? upstreamHealth.get(accountId) : undefined;
+    consider(entry?.cooldownUntil, entry?.refusalStatus === 429, entry?.quotaResetAt);
+    consider(anthropicRatePauseUntil(accountId, now), false);
+    const family = anthropicFamilyHoldState(accountId, model);
+    consider(anthropicFamilyRetryAt(accountId, model, now), family?.revalidating === false, family?.resetAt);
+    if (latest.until === 0) return null;
+    return { until: latest.until, quota: latest.quota,
+      ...(latest.quota && quotaResetKnown && quotaResetAt > 0 ? { resetAt: quotaResetAt } : {}) };
+  }
+
+  /**
+   * The local refusal for a pool (or model route) with no admissible account. Retry-After is the
+   * earliest hold among accounts the route can use once they recover. The refusal is a usage limit
+   * only when no account the route can use is admissible and every held one is out on spent quota;
+   * then a client retry before that instant cannot succeed, and Codex should stop and show the
+   * reset instead of retrying. The reset is the earliest known window reset, and is omitted when
+   * any held account's reset is unknown, since that account could reopen first.
+   */
+  function anthropicPoolCooldownError(now = Date.now(), decision: AnthropicRouteDecision | null = null, model?: string): AnthropicAccountCooldownError {
     const set = getAccountSet(PROVIDER);
-    if (!set) return null;
+    if (!set) return new AnthropicAccountCooldownError(null, decision?.position);
     // Once an explicit fallback route has no eligible declared account, selection may use
     // the ordinary pool. Its earliest usable cooldown must determine the advertised wait.
     const fallbackExpanded = decision?.fallback === true
       && !getEligibleAnthropicAccounts(now, model).some(id => decision.accounts.includes(id));
     let earliest: number | null = null;
+    let allQuota = true;
+    let earliestReset: number | null = null;
+    let resetsKnown = true;
     for (const account of set.accounts) {
       if (account.paused === true || account.needsReauth === true || !isPoolCredentialUsable(account.id, now)) continue;
       if (decision && !fallbackExpanded && !decision.accounts.includes(account.id)) continue;
-      const snap = getAnthropicAccountHealthSnapshot(account.id, now);
-      const until = Math.max(snap?.cooldownUntil ?? 0, anthropicRatePauseUntil(account.id, now) ?? 0, anthropicFamilyRetryAt(account.id, model, now) ?? 0);
-      if (until <= now) continue;
-      if (earliest === null || until < earliest) earliest = until;
+      const hold = anthropicAccountHold(account.id, now, model);
+      if (!hold) continue;
+      if (!hold.quota) allQuota = false;
+      else if (hold.resetAt === undefined) resetsKnown = false;
+      else if (earliestReset === null || hold.resetAt < earliestReset) earliestReset = hold.resetAt;
+      if (earliest === null || hold.until < earliest) earliest = hold.until;
     }
-    if (earliest === null || earliest <= now) return null;
-    return Math.max(1, Math.ceil((earliest - now) / 1000));
+    if (earliest === null) return new AnthropicAccountCooldownError(null, decision?.position);
+    const exhausted = allQuota && routeCandidates(getEligibleAnthropicAccounts(now, model), decision).length === 0;
+    return new AnthropicAccountCooldownError(Math.max(1, Math.ceil((earliest - now) / 1000)), decision?.position,
+      exhausted ? { resetsAt: resetsKnown ? earliestReset : null } : null);
+  }
+
+  /**
+   * After an upstream refusal found no replacement: the usage-limit refusal when the pool is
+   * exhausted as defined above, else null. A refusal that left an admissible sibling (a send
+   * budget ran out, a request-scoped 429) or a sibling on a transient hold is not exhaustion.
+   */
+  function anthropicPoolUsageLimitAfterRefusal(now = Date.now(), decision: AnthropicRouteDecision | null = null, model?: string): AnthropicAccountCooldownError | null {
+    const refusal = anthropicPoolCooldownError(now, decision, model);
+    return refusal.usageLimit === null ? null : refusal;
   }
 
   function pickLowestUsage(config: OcxConfig, excludeId: string | undefined, now: number, decision: AnthropicRouteDecision | null = null, model?: string, excludedAccountIds?: ReadonlySet<string>): string | null {
@@ -993,7 +1135,7 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
     const now = Date.now();
     const selection = resolveAnthropicAccountForSession(sessionKey, config, now, decision, model);
     if (selection.reason === "all-cooled") {
-      throw new AnthropicAccountCooldownError(getAnthropicPoolRetryAfterSeconds(now, decision, model), decision?.position);
+      throw anthropicPoolCooldownError(now, decision, model);
     }
     if (selection.reason === "paused" || !selection.accountId || !getEligibleAnthropicAccounts(now, model).includes(selection.accountId)) {
       const { OAuthAccountPausedError, OAuthLoginRequiredError } = await import("./index");
@@ -1127,6 +1269,7 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
     // account is back in the rotation a minute later.
     const parsedRetry = parseRetryAfterMs(retryAfterHeader, now);
     const resetDerived = status === 429 && parsedRetry === undefined ? parseRateLimitReset(rateLimitHeaders, now) : undefined;
+    const quotaResetAt = status === 429 ? rejectedWindowsResetAt(rateLimitHeaders, now) : undefined;
     const cooldownMs = parsedRetry ?? resetDerived?.delayMs ?? (status === 403 ? ACCOUNT_REFUSAL_COOLDOWN_MS : DEFAULT_COOLDOWN_MS);
     const cooldownGeneration = noteAnthropicCooldownMutation(failedAccountId);
     upstreamHealth.set(failedAccountId, {
@@ -1139,6 +1282,7 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
       recordedAt: now,
       refusalStatus: status,
       refusedQuotaWindows: status === 429 ? rejectedQuotaWindowsIn(rateLimitHeaders) : [],
+      ...(quotaResetAt !== undefined ? { quotaResetAt } : {}),
     });
     sweepExpiredOnWrite(now);
     clearAnthropicSessionAffinityForAccount(failedAccountId);
@@ -1320,7 +1464,8 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
     captureAnthropicCooldownRecovery, settleAnthropicCooldownRecovery, getAnthropicAccountHealthSnapshot,
     clearAnthropicAccountCooldown, clearAnthropicAccountCooldownForReset, sweepExpiredAnthropicRoutingHealth, clearAnthropicAccountPoolState,
     anthropicSessionAffinitySizeForTests, getEligibleAnthropicAccounts, hasAnthropicFailoverQuorum,
-    forgetAnthropicFailoverQuorum, getAnthropicPoolRetryAfterSeconds, pickAlternateAnthropicAccount,
+    forgetAnthropicFailoverQuorum, getAnthropicPoolRetryAfterSeconds, anthropicPoolCooldownError,
+    anthropicPoolUsageLimitAfterRefusal, pickAlternateAnthropicAccount,
     resolveAnthropicAccountForSession, resolveAnthropicDispatchAccountId, bindAnthropicSessionAffinity,
     clearAnthropicSessionAffinityForAccount, rotateAnthropicAccountOn429, rotateAnthropicAccountOnRefusal,
     recordAnthropicAccount429, recordAnthropicAccountRefusal, promoteAnthropicActiveAccount,
@@ -1432,6 +1577,14 @@ export function forgetAnthropicFailoverQuorum(): void {
 
 export function getAnthropicPoolRetryAfterSeconds(now = Date.now(), decision: AnthropicRouteDecision | null = null, model?: string): number | null {
   return anthropicRoutingFor("anthropic").getAnthropicPoolRetryAfterSeconds(now, decision, model);
+}
+
+export function anthropicPoolCooldownError(now = Date.now(), decision: AnthropicRouteDecision | null = null, model?: string): AnthropicAccountCooldownError {
+  return anthropicRoutingFor("anthropic").anthropicPoolCooldownError(now, decision, model);
+}
+
+export function anthropicPoolUsageLimitAfterRefusal(now = Date.now(), decision: AnthropicRouteDecision | null = null, model?: string): AnthropicAccountCooldownError | null {
+  return anthropicRoutingFor("anthropic").anthropicPoolUsageLimitAfterRefusal(now, decision, model);
 }
 
 export function pickAlternateAnthropicAccount(

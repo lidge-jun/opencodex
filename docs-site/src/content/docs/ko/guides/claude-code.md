@@ -14,6 +14,29 @@ Messages API를 통해 사용하는 Devin 경로(SWE-2 포함)에서는 늦게 �
 이 출력 순서 수정으로 Cognition이 생성된 일부 시스템 텍스트를 거부하는 별개의 문제가 해결되지는 않아요.
 시스템 지시와 안전 제약은 그대로 유지해요.
 
+## CLI와 외부 실행 앱의 티어 기본값
+
+Claude Code 탭에서 Opus, Sonnet, Haiku, Fable 기본 모델을 선택한 뒤 **저장**하세요.
+`claudeCode.tierModels` 값은 새 `ocx claude` 실행에 전달되며, 현재 주 모델이나 추론 강도,
+Desktop의 모델 계열 할당은 바꾸지 않아요.
+
+`claude`를 직접 실행하는 앱에는 `ocx`의 환경 변수가 전달되지 않아요. 저장 후
+**Claude 설정 미리보기**에서 `ANTHROPIC_DEFAULT_*_MODEL` 변경을 확인하고 **Claude 설정에 적용**을
+누르세요. 변경 대상은 브라우저가 있는 PC가 아니라 OpenCodex 호스트의 Claude 사용자 설정이에요.
+새 값을 사용하려면 새 Claude 프로세스를 실행해야 해요. 기존 세션을 강제 재시작하지 않으며,
+라우팅이나 인증 연결도 설정하지 않으므로 직접 실행하는 앱의 OpenCodex 연결은 이미 준비되어 있어야 해요.
+
+명시적으로 선택한 티어만 적용해요. **미지정**은 기존 Claude 설정을 유지하며 네이티브 모델로
+초기화하지 않아요. 파일이 없으면 생성할 수 있지만, 기존의 빈 파일이나 손상된 JSON은 거부해요.
+미리보기 이후 설정이 바뀌면 다시 미리보기가 필요해요.
+
+적용 시 실제 파일을 Claude 설정 디렉터리의 비공개 `model-default-backups/apply-*/settings.json`으로
+잠시 이동해 내용을 확인하고, 대상에 다른 파일이 없을 때만 새 설정을 게시해요. 충돌이나 복원 중에도
+다른 프로그램이 만든 파일을 덮어쓰지 않아요. 잠깐 파일이 없는 구간이 있으므로 적용 중에는 설정 편집이나
+Claude 실행을 피하세요. 같은 볼륨의 이동과 하드 링크를 지원해야 하며, 실패 시 덮어쓰기 방식으로 우회하지 않아요.
+중단이나 자동 복원 실패 후에는 이 백업과 최신 변경을 대조해서 복원하세요. Windows와 Linux 동작은
+별도로 검증해야 해요. 실제 제공된 모델은 요청 로그로 확인하세요. Sonnet을 요청하는 외부 분류기에도 유용해요.
+
 ## 빠른 시작
 
 ```bash
@@ -284,7 +307,7 @@ import/export는 로컬 설정만 다뤄요. 허브 프로필을 바꾸지 않�
 능력 정보(추론 강도 사다리, thinking 타입)를 실어 보냅니다 — Claude Desktop의 서드파티
 게이트웨이 모드가 추론 강도 선택 UI를 열 수 있게 하기 위해서입니다. 실제 Anthropic 모델은
 원래 id를 그대로 유지합니다. 합성된 2026 날짜는 내부 슬롯이며 출시일이 아닙니다. 구버전의
-해시 별칭과 `claude-ocx-<provider>--<model>`, `claude-ocx2-<provider>--<model>` 별칭도 계속 해석됩니다. 저장된 `claude-ocx-`는 `ocx-claude-`로, 이스케이프된 `claude-ocx2-`는 `ocx-claude2-`로 한 번 다시 고르면 실제 컨텍스트 창과 compact가 함께 적용됩니다. 컨텍스트가 1M이거나 기본 압축 임곗값(829,800) 이상인 모델에는
+해시 별칭과 `claude-ocx-<provider>--<model>`, `claude-ocx2-<provider>--<model>` 별칭도 계속 해석됩니다. 저장된 `claude-ocx-`는 `ocx-claude-`로, 이스케이프된 `claude-ocx2-`는 `ocx-claude2-`로 한 번 다시 고르면 카탈로그의 유효 컨텍스트 창과 compact가 함께 적용됩니다. 컨텍스트가 1M이거나 기본 압축 임곗값(829,800) 이상인 모델에는
 `…[1m]` 행이 하나 더 생깁니다 — 이걸 고르면 Claude Code가 그 모델의 컨텍스트를 1M로 계산합니다
 (자동 요약 유지, 프록시가 표식을 떼고 라우팅). 선택하면 Claude Code의
 `settings.json` `model` 필드에 저장되고, 인바운드 요청에서
@@ -299,7 +322,7 @@ Claude Code 2.1.129 이상은 `GET /v1/models?limit=1000`에서 게이트웨이 
 | 화면 | 형식 | 예시 |
 | --- | --- | --- |
 | Claude Code CLI | `ocx-claude-<provider>--<model>` (plain) 또는 `ocx-claude2-…` (escaped) | `ocx-claude-native--gpt-5.6-sol` |
-| Claude Desktop 3P | `claude-opus-4-8-p<code>` (3자리 base36 프로필 슬롯) | `claude-opus-4-8-p01q` |
+| Claude Desktop 3P | `claude-fable-5-p<code>` (3자리 base36 프로필 슬롯) | `claude-fable-5-p01q` |
 
 프록시는 요청마다 계열을 골라요. `?ids=cli` 또는 `?ids=desktop`이 우선하고, 지정하지 않으면
 `claude-code/*` user-agent에는 읽기 쉬운 CLI 형식을, 다른 클라이언트에는 Desktop 코드를
@@ -344,7 +367,9 @@ v2 별칭은 이스케이프를 펼쳐요. 읽기 쉬운 형식으로 표현할 
 
 ### 컨텍스트 변형 `[1m]` 표식
 
-공식 컨텍스트 창이 1M이거나 기본 압축 임곗값(829,800) 이상인 모델에는 `…[1m]` 선택기 행이 하나 더
+이 판단에는 카탈로그의 유효 컨텍스트 창을 쓰며, [사용자 지정 공급자의 추정값](/ko/reference/configuration/providers/#사용자-지정-공급자의-컨텍스트)이 포함될 수 있어요. 추정값은 중계 서비스의 실제 용량을 보장하지 않아요.
+
+카탈로그의 유효 컨텍스트 창이 1M이거나 기본 압축 임곗값(829,800) 이상인 모델에는 `…[1m]` 선택기 행이 하나 더
 생겨요. 이 기준은 고정이라 압축 값을 직접 바꿔도 낮아지지 않고, Anthropic 경로의 Claude 모델은 실제 1M이어야
 해요. 자동 컨텍스트를 끄면 1M 모델만 해당해요. 실제 창을 넘으면 `prompt is too long` 오류가 오고 Claude Code가 자동으로 압축해요. 이 행을 선택하면 Claude Code가
 전체 1M 컨텍스트를 계산해요. 프록시는 별칭 해석과 라우팅 전에 대소문자를 구분하지 않고 `[1m]`
@@ -355,7 +380,7 @@ v2 별칭은 이스케이프를 펼쳐요. 읽기 쉬운 형식으로 표현할 
 Claude Code는 알 수 없는 모델의 컨텍스트를 200k 토큰으로 계산해요. 기본으로 켜져 있는 **자동
 컨텍스트**는 이 문제를 해결해요.
 
-1. 실행 환경 슬롯에는 실제 컨텍스트 창이 200k보다 크고 설정한 자동 압축 임곗값 이상일 때
+1. 실행 환경 슬롯에는 카탈로그의 유효 컨텍스트 창이 200k보다 크고 설정한 자동 압축 임곗값 이상일 때
    `[1m]` 표식이 붙어요. 디스커버리와 Desktop 선택기 행은 그 임곗값을 따르지 않고, 고정된 829,800 토큰 하한
    (Anthropic 경로의 Claude 모델은 실제 1M)을 써요.
 2. `CLAUDE_CODE_AUTO_COMPACT_WINDOW`(기본값 `829800`, 범위 `100000`–`1000000`)를 주입해 해당
@@ -370,6 +395,10 @@ Claude Code는 알 수 없는 모델의 컨텍스트를 200k 토큰으로 계산
 **연결 → Claude**에서 압축 값을 조절할 수 있어요. **경고:** 모델의 실제 컨텍스트 창보다 크게 올리면
 요약을 시작하기 전에 채팅 오류가 발생해요.
 
+컨텍스트 초과 오류를 정규화할 때는 제공자 오류 메시지의 첫 65,536 UTF-16 코드 단위만 사용해요.
+뒤쪽 진단 내용이나 토큰 수는 별도 잘림 표시 없이 빠질 수 있어요.
+자세한 제한과 토큰 수 처리 조건은 [영문 가이드](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling)를 참고하세요.
+
 1M 미만인 네이티브 Anthropic 모델에는 자동으로 표식을 붙이지 않아요. 직접 내보낸 압축 값은 실행 슬롯 표식에서 항상
 우선하며, 프록시는 **사용자가 지정한** 값을 기준으로 어떤 모델에 안전하게 표식을 붙일지 결정해요.
 디스커버리 행은 그 값을 무시하고 고정 하한을 유지해요.
@@ -381,7 +410,7 @@ Claude Code는 알 수 없는 모델의 컨텍스트를 200k 토큰으로 계산
 긴 컨텍스트 모델이 실행 환경 슬롯, Desktop 선택기, Desktop 3P(`prefer1m`), 생성된 서브에이전트에서 1M으로
 잡혀요. `200k`로 바꾸면 자동 `[1m]` 표식을 붙이지 않고 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`도 넣지 않으며,
 Desktop 3P는 `supports1m`은 남기고 `prefer1m`만 빼요. 직접 `[1m]`을 붙인 선택은 계속 쓸 수 있어요(생성된
-서브에이전트와 강제 서브에이전트는 모델 창이 감당하지 못하는 표식을 여전히 떼요). 디스커버리 목록에는 실제 1M 모델의
+서브에이전트와 강제 서브에이전트는 모델 창이 감당하지 못하는 표식을 여전히 떼요). 디스커버리 목록에는 카탈로그 창이 1M 이상인 모델의
 `· 1M` 행이 계속 나와요. `200k`는 자동 컨텍스트보다 우선해요. 직접 export한 압축 값이 있어도 자동 표식은 다시 켜지지
 않고, 그 export 값은 opencodex가 건드리지 않아요.
 
@@ -683,7 +712,7 @@ Anthropic 백엔드를 명시하면 의도적으로 실패 후 중단해요.
 `ANTHROPIC_BASE_URL`이 오래된 값일 수 있어요. 새 터미널을 열거나 `ocx claude`를 다시 실행하세요.
 
 **대형 모델인데도 컨텍스트가 200k로 제한됨** — 선택기에서 `[1m]` 변형을 고르거나 기본으로
-켜져 있는 자동 컨텍스트를 사용하세요. 선택기에 `[1m]` 행이 없다면 모델의 공식 컨텍스트 창이
+켜져 있는 자동 컨텍스트를 사용하세요. 선택기에 `[1m]` 행이 없다면 카탈로그에 표시된 모델의 유효 컨텍스트 창이
 고정된 829,800 토큰 하한보다 작을 수 있어요.
 
 **스킬을 불러올 때 토큰 수가 많음** — 번들 `claude-api` 스킬(약 136k 토큰)은 Claude 모델을
@@ -704,7 +733,7 @@ The Subagents page offers **Force all subagents onto one model**, off by default
 
 `ocx agent subagents force combo/tev-auto` sets `claudeCode.subagentModelForce`; `ocx agent subagents force -` clears it. `ocx agent status` reports the setting. `GET /api/subagent-models` returns `force`, `forceAvailable`, and `forceStatus`; `PUT` accepts `{ "force": "combo/tev-auto" }` or `{ "force": null }` without changing the roster. Omitting `force` leaves it unchanged. Invalid or unexposed targets are rejected on write; stale targets are reported and skipped at launch.
 
-This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` when the authoritative window reaches the fixed 829,800-token floor, and only for a genuine 1M window on Anthropic Claude models and bare `claude-*` selectors; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
+This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` when the effective catalog window reaches the fixed 829,800-token floor, and only for a genuine 1M window on Anthropic Claude models and bare `claude-*` selectors; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
 
 Claude Code **2.1.257 or newer** is required for FORCE. Plugin and built-in agents (including Explore/Plan) and per-call model arguments are overridden. Forks and subagent skills with `model: inherit` keep the main conversation model. The main loop and Haiku/small-fast sidecars are unaffected. Existing roster files remain available.
 

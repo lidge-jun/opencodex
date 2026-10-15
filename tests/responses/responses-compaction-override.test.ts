@@ -951,7 +951,7 @@ describe("hosted search history at the compaction boundary", () => {
     }
   });
 
-  test.each(["ordinary", "native-v1", "native-v2"])("%s preserves its native history/compaction contract", async mode => {
+  test.each(["ordinary", "native-v1", "native-v2"])("%s retains hosted search history", async mode => {
     const settings = config();
     delete settings.compactionRouting;
     settings.providers.openai = { adapter: "openai-responses", authMode: "forward", codexAccountMode: "direct", baseUrl: "https://chatgpt.com/backend-api/codex" };
@@ -966,9 +966,7 @@ describe("hosted search history at the compaction boundary", () => {
     const response = await (mode === "native-v1" ? handleResponsesCompact : handleResponses)(req, settings, { model: "", provider: "" });
     expect(response.status).toBe(200);
     await response.text();
-    expect(outbound!.input.filter((item: any) => item.type === "web_search_call")).toHaveLength(mode === "ordinary" ? 0 : 3);
-    if (mode === "ordinary") expect(outbound!.input.filter((item: any) => item.role === "assistant"
-      && item.content?.[0]?.text?.startsWith("Historical hosted web search metadata"))).toHaveLength(3);
+    expect(outbound!.input.filter((item: any) => item.type === "web_search_call")).toHaveLength(3);
     expect(outbound!.tools).toContainEqual({ type: "web_search" });
   });
 });

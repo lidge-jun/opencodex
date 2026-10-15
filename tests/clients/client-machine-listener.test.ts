@@ -463,10 +463,77 @@ describe("client machine listener in link mode", () => {
     expect((await fetch(url, { method: "POST", headers: await guiHeaders(server, true), body: "{}" })).status).toBe(404);
 
     const machine = await fetch(new URL("/api/machine/status", server.url), { headers });
-    const body = await machine.json() as { machineBase: string; sharedBase: string; sharedServerOrigin: string };
-    expect(body.sharedBase).toBe(body.machineBase);
+    const body = await machine.json() as {
+      machineBase: string; sharedBase: string; sharedServerOrigin: string; managementTransport: string; link?: unknown;
+    };
+    // #6957: the dashboard's shared plane is this listener's relay base, read-only, to the Home.
+    expect(body.sharedBase).toBe(`${body.machineBase}/api/machine/hub-relay`);
+    expect(body.managementTransport).toBe("relay");
+    expect(body.link).toEqual({ linkId: `lnk_${"b".repeat(16)}`, home: "home-mac", readOnly: true });
     expect(body.sharedServerOrigin).toBe(body.machineBase);
     expect(body.machineBase).toBe(`http://127.0.0.1:${server.port}`);
+  });
+
+  test("relays an allowlisted dashboard read to the Home with the link key and no browser credential", async () => {
+    writeKey();
+    const { server, upstream } = linkListener({ reply: () => Response.json([{ name: "home-provider" }]) });
+    const url = new URL("/api/machine/hub-relay/api/providers", server.url);
+    expect((await fetch(url)).status).toBe(401);
+    expect(upstream).toHaveLength(0);
+
+    const headers = await guiHeaders(server);
+    headers.set("Cookie", "browser=1");
+    const relayed = await fetch(url, { headers });
+    expect(relayed.status).toBe(200);
+    expect(await relayed.json()).toEqual([{ name: "home-provider" }]);
+    expect(upstream).toHaveLength(1);
+    const sent = upstream[0]!;
+    expect(sent.url).toBe(`http://127.0.0.1:${TUNNEL_PORT}/v1/link-management/api/providers`);
+    expect(sent.method).toBe("GET");
+    expect(sent.headers.get("authorization")).toBe(`Bearer ${LINK_KEY}`);
+    for (const name of ["x-opencodex-api-key", "x-opencodex-gui-origin", "cookie", "origin"]) {
+      expect({ name, value: sent.headers.get(name) }).toEqual({ name, value: null });
+    }
+  });
+
+  test("refuses every change and every unlisted read with the Child refusal, before any request", async () => {
+    writeKey();
+    const { server, upstream } = linkListener();
+    const cases: Array<[string, string]> = [
+      ["PUT", "/api/machine/hub-relay/api/settings"],
+      ["POST", "/api/machine/hub-relay/api/providers"],
+      ["GET", "/api/machine/hub-relay/api/logs"],
+      ["GET", "/api/machine/hub-relay/api/provider-quotas?refresh=1"],
+      ["GET", "/api/machine/hub-relay/api/oauth/accounts?provider=anthropic&quota=1"],
+      ["GET", "/api/machine/hub-relay/api/models"],
+      ["GET", "/api/machine/hub-relay/api/diagnostics/project-config"],
+    ];
+    for (const [method, path] of cases) {
+      const response = await fetch(new URL(path, server.url), {
+        method, headers: await guiHeaders(server, method !== "GET"), ...(method === "GET" ? {} : { body: "{}" }),
+      });
+      expect({ method, path, status: response.status }).toEqual({ method, path, status: 403 });
+      const body = await response.json() as { error: string; code: string };
+      expect(body.code).toBe("link_child_read_only");
+      expect(body.error).toContain("Remote Link Child managed by Home home-mac");
+      expect(body.error).toContain(`lnk_${"b".repeat(16)}`);
+      expect(body.error).toContain("No request was sent.");
+      expect(body.error).not.toContain("relay transport");
+    }
+    expect(upstream).toHaveLength(0);
+  });
+
+  test("bootstraps the shared plane with this listener's own session and never relays the data-plane prefix", async () => {
+    writeKey();
+    const { server, upstream } = linkListener();
+    const bootstrap = await fetch(new URL("/api/machine/hub-relay/opencodex-session", server.url));
+    expect(bootstrap.status).toBe(200);
+    expect(meta(await bootstrap.text(), "opencodex-session-token")).toStartWith("ocx_session_");
+    // An unauthenticated local caller cannot reach the Home's management reads through the
+    // Child's data-plane ingress: that path relays only the data-plane table.
+    const direct = await fetch(new URL("/v1/link-management/api/providers", server.url));
+    expect(direct.status).toBe(404);
+    expect(upstream).toHaveLength(0);
   });
 
   test("a hub-transport client has no link status route", async () => {

@@ -566,12 +566,13 @@ describe("sidecar on429 wiring", () => {
     //                rotateAntigravityAccountOnAuthRefusal instead. The new default
     //                only moves OAuth traffic; key-auth defaults and Anthropic's own
     //                wire/pool remain unchanged.
-    //   anthropic = 3: the same, MINUS runTurn -- that path is Cursor-only (cursor.ts is the
-    //                  sole adapter implementing runTurn), so Anthropic cannot reach it.
-    //   key       = 4: hasKeyPoolFailover guards the two 429 response loops, the
-    //                  pre-stream 401 recovery site (a rejected key rotates instead of
-    //                  failing the request), and the pre-output Anthropic credit-balance
-    //                  loop (#6958). The billing loop needs only the key rotator: an
+    //   anthropic = 3: its existing HTTP recovery sites; the self-authenticated Claude
+    //                  CLI does not authorize API-key recovery through runTurn.
+    //   key       = 7: hasKeyPoolFailover guards the three existing HTTP sites (two 429
+    //                  response loops and the pre-stream 401 recovery site), the pre-output
+    //                  Anthropic credit-balance loop (#6958), plus runTurn preflight activation,
+    //                  its explicitly permitted API-key recovery arm, and the streaming
+    //                  preflight stall bound. The billing loop needs only the key rotator: an
     //                  OAuth credit refusal already rotates through the Anthropic account
     //                  arm, and generic OAuth has no credit-balance contract. Send-accounting
     //                  eligibility goes through isAnthropicBillingKeyPool, which is not a
@@ -582,7 +583,7 @@ describe("sidecar on429 wiring", () => {
     // updating the matching number. That decision is the thing this test exists to force.
     expect(counts.generic).toBe(5);
     expect(counts.anthropic).toBe(3);
-    expect(counts.key).toBe(4);
+    expect(counts.key).toBe(7);
   });
 
   test("the verify-account arm moves via auth-refusal rotation, never rate-limit", () => {

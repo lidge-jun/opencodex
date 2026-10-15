@@ -21,6 +21,7 @@ import { imageGenToolCallAliases } from "../responses-image-gen-repair";
 import { rememberResponseState, isBodyNonPersistable } from "../../responses/state";
 import {
   currentTurnWireToolCatalogBody,
+  hasExplicitEmptyToolCatalog,
   hasExplicitWireToolCatalog,
   collectDeclaredWireToolNames,
   collectDeclaredBareWireToolNames,
@@ -91,7 +92,7 @@ import {
   safeHostLabel,
 } from "./fetch-helpers";
 import { classifyPoolRecoveryDispatch } from "../../routing/probe-lease";
-import { clientCancelledResponse } from "./core-errors";
+import { anthropicPoolCooldownResponse, clientCancelledResponse } from "./core-errors";
 import {
   upstreamHostCircuitOpenResponse,
   usesCodexForwardPoolAuth,
@@ -101,6 +102,8 @@ import {
   shouldRetryCodexPoolAccountQuota,
   shouldRetryCodexPoolAccountTransient,
   retryCodexPoolOnAlternateAccount,
+  PoolPreOutputRefusals,
+  poolPreOutputRefusalHold,
 } from "./core-codex-account";
 import {
   clearCodexModelDenialEvidence,
@@ -185,6 +188,7 @@ export async function preparePassthroughExchange(
     | "selectedForwardHeaders"
     | "clientRequestedStream"
     | "inboundWire"
+    | "clientDeclaredEmptyToolCatalog"
     | "substituteMainCredential"
     | "callerAuthHeaders"
     | "subagentFallbackAccountId"
@@ -251,6 +255,7 @@ export async function preparePassthroughExchange(
     responseStateOptions,
     clientRequestedStream,
     inboundWire,
+    clientDeclaredEmptyToolCatalog,
     substituteMainCredential,
     callerAuthHeaders,
   } = requestState;
@@ -529,10 +534,18 @@ export async function preparePassthroughExchange(
           declaredWireToolNames.add(name);
         }
       }
+      // Chat and Anthropic inbounds may deliver tools deferred/partially: their client registry
+      // owns the full catalog, so this guard cannot read the translated body as the authorization
+      // boundary. An explicit empty catalog — flagged by the translating ingress or present
+      // verbatim in a replayed body — is still a deny-all the caller declared; everything else
+      // stays deferred to the caller's own tool handling.
       undeclaredToolGuardActive = (
-        declaredWireToolNames.size > 0
-        || clientDeclaredNamelessCallTypes.size > 0
-        || clientExplicitWireToolCatalog
+        inboundWire === "responses"
+          ? declaredWireToolNames.size > 0
+            || clientDeclaredNamelessCallTypes.size > 0
+            || clientExplicitWireToolCatalog
+          : clientDeclaredEmptyToolCatalog
+            || hasExplicitEmptyToolCatalog(clientToolAuthorizationBody)
       ) && route.provider.authMode !== "forward";
       options.nativeControl?.configureToolAuthorization?.(
         undeclaredToolGuardActive,
@@ -949,8 +962,7 @@ export async function preparePassthroughExchange(
           return formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(refusal));
         }
         if (refusal instanceof AnthropicAccountCooldownError) {
-          return formatErrorResponse(429, "rate_limit_error", refusal.message,
-            refusal.retryAfterSeconds === null ? undefined : { retryAfter: String(refusal.retryAfterSeconds) });
+          return anthropicPoolCooldownResponse(refusal, { comboAttempt: options.comboAttempt, logCtx });
         }
         return formatErrorResponse(403, "permission_error", publicOAuthAuthenticationErrorMessage(refusal));
       }
@@ -1005,6 +1017,9 @@ export async function preparePassthroughExchange(
     // Stable per request: the Combo booking (`reserveDispatch`) already started and froze the spend
     // policy, so `spendEnforced` cannot change before dispatch even though no reporter starts it here.
     const receiptMode = !sendBudgetState.adapterSendBudget?.spendEnforced && Boolean(options.comboInitialSend);
+    // #6969: Pool sends hold empty lifecycle frames so a pre-output refusal reaches the ladder below.
+    const preOutputRefusals = new PoolPreOutputRefusals();
+    const preOutputRefusalHold = () => poolPreOutputRefusalHold(admissionState.authCtx, route.provider, connectMs, options.comboAttempt);
     try {
       // Transient-5xx pre-stream retry (devlog/_plan/260716_claudecode_hardening/010):
       // the ChatGPT backend emits transient 502/520s that an immediate retry absorbs.
@@ -1035,11 +1050,12 @@ export async function preparePassthroughExchange(
               onCodexWsQuota: codexWsQuotaObserver(admissionState.authCtx, route.provider, route.modelId),
               beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
                 ? createCodexAuthDispatchGuard(admissionState.authCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
+              preOutputRefusalHold: preOutputRefusalHold(),
             }),
             route.provider.authMode === "forward")
             // Every real attempt response — including an intermediate 5xx the
             // retry wrapper replaces — proves the host was reached (#914 review).
-            .then(adoptObservedResponse);
+            .then(adoptObservedResponse).then(preOutputRefusals.observe);
         },
         { abortSignal: upstream.signal, label: safeHostLabel(request.url),
           attempts: sendBudgetState.initialSendAllowance(transientSendAttempts()),
@@ -1050,6 +1066,8 @@ export async function preparePassthroughExchange(
         },
       );
     } catch (err) {
+      preOutputRefusals.recordOnLocalExit(err, options.abortSignal?.aborted === true || req.signal.aborted,
+        config, admissionState.authCtx, route.provider, route.modelId);
       return transportFailureResponse(err);
     } finally {
       request.releaseBodyObservation?.();
@@ -1676,6 +1694,7 @@ export async function preparePassthroughExchange(
           passthroughEstimate,
           stream: upstreamRequestsStream,
           httpOnly: canonicalBufferedJson,
+          preOutputRefusalHold: preOutputRefusalHold(),
           onResponse: (response, retryAuthCtx, retryRequest) => {
             adoptCodexWsStage(response);
             captureAffinityResponse(
@@ -1702,6 +1721,8 @@ export async function preparePassthroughExchange(
         }
       }
     }
+    // #6969: a projection nothing above recovered goes on as the original stream, before any reader.
+    upstreamResponse = preOutputRefusals.restore(upstreamResponse);
     // The deterministic route record cannot classify history it never observed (restart, expiry,
     // eviction, or an older transcript). Inspect only a bounded clone of a 4xx whose exact outbound
     // Responses body still carries opaque state, then rebuild once through the ordinary adapter
@@ -1969,6 +1990,7 @@ export async function preparePassthroughExchange(
     connectMs,
     localUpstream,
     upstreamResponse,
+    terminalOutcomeRecorded: preOutputRefusals.outcomeRecorded,
   };
 }
 

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -22,13 +22,13 @@ import {
 } from "../../src/responses/bridge-search-replay-cache";
 import { startServer } from "../../src/server";
 import { handleResponses } from "../../src/server/responses";
-import type { OcxConfig } from "../../src/types";
+import type { AdapterEvent, OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { managementFetch } from "../helpers/management-auth";
 import { resolveContextPrincipal } from "../../src/server/auth-cors";
 import { resetProviderRequestPacingForTest, setProviderRequestPacingRuntimeForTest, waitForProviderRequestSlot } from "../../src/providers/request-pacing";
-import { providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../../src/providers/api-key-selection";
+import { providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport, commitProviderApiKeySelection } from "../../src/providers/api-key-selection";
 import { routedProviderConfig } from "../../src/router";
 import type { OcxProviderTransport } from "../../src/providers/xai-transport";
 
@@ -1423,4 +1423,307 @@ test("a dispatch-time key switch rebuilds the bridged-search restore under the n
     await server.stop(true);
     resetProviderRequestPacingForTest();
   }
+});
+
+
+// Real CLI adapters with an injected child; no provider process or upstream request is made.
+import { EventEmitter } from "node:events";
+import { Readable, Writable } from "node:stream";
+import type { ChildProcess } from "node:child_process";
+import * as runTurnResolver from "../../src/server/adapter-resolve";
+import * as runTurnKeyPool from "../../src/providers/key-failover";
+import { createQoderAdapter } from "../../src/adapters/qoder/adapter";
+import { createCodeBuddyAdapter } from "../../src/adapters/codebuddy/adapter";
+import { clearQoderBinaryCache } from "../../src/adapters/qoder/profiles";
+import { clearCodeBuddyBinaryCache } from "../../src/adapters/codebuddy/profiles";
+import { createRequestExecutionBudget, CODEX_TEXT_GUARDED_BUDGET_POLICY } from "../../src/lib/request-execution-budget";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import type { RequestLogContext } from "../../src/server/request-log";
+import { clearResponseStateForTests, flushResponseState } from "../../src/responses/state";
+import { closeRequestHistoryIndex } from "../../src/routing/history/indexer";
+
+async function cliKeyRecoveryCase(options: {
+  adapter?: "qoder" | "codebuddy"; stream?: boolean; vendorCode?: number; result?: string;
+  exitCode?: number; stderr?: string; prefix?: AdapterEvent;
+  poolSize?: number; allFail?: boolean; manualSwitch?: boolean; cancel?: boolean;
+  budget?: "total" | "hop";
+  stallFirstEvent?: boolean; stallTimeoutSec?: number; healthyFirst?: boolean;
+} = {}) {
+  const adapterName = options.adapter ?? "qoder";
+  clearQoderBinaryCache(); clearCodeBuddyBinaryCache();
+  const config = { port: 0, defaultProvider: "cli-pool",
+    ...(options.stallTimeoutSec ? { stallTimeoutSec: options.stallTimeoutSec } : {}),
+    providers: { "cli-pool": {
+    adapter: adapterName, authMode: "key", baseUrl: adapterName === "qoder" ? "https://qoder.com" : "https://www.codebuddy.ai",
+    apiKey: "synthetic-cli-a", models: ["test"], liveModels: false,
+    apiKeyPool: [
+      { id: "a", key: "synthetic-cli-a" }, { id: "b", key: "synthetic-cli-b" },
+    ].slice(0, options.poolSize ?? 2),
+  } } } as OcxConfig;
+  saveConfig(config);
+  const sent = Promise.withResolvers<void>();
+  const releaseFailure = Promise.withResolvers<void>();
+  const seen: string[] = [];
+  const order: string[] = [];
+  const errors: Array<Extract<AdapterEvent, { type: "error" }>> = [];
+  const abort = new AbortController();
+  const budget = createRequestExecutionBudget(options.budget === "total"
+    ? { ...CODEX_TEXT_GUARDED_BUDGET_POLICY, maxTotalModelSends: 1, baseSendAllowance: 1, finalRecoveryAllowance: 0 }
+    : undefined);
+  const reserve = budget.reserveDispatch.bind(budget);
+  if (options.budget === "hop") budget.reserveDispatch = intent => intent.sendClass === "auth-recovery"
+    ? { allowed: false, reason: "alternate-target-exhausted" } : reserve(intent);
+  const releaseOwner = acquireOwnedSpendHome();
+  const rotate401 = spyOn(runTurnKeyPool, "rotateProviderTransportOn401");
+  const rotate429 = spyOn(runTurnKeyPool, "rotateProviderTransportOn429");
+  const original = runTurnResolver.resolveAdapter;
+  const resolver = spyOn(runTurnResolver, "resolveAdapter").mockImplementation((provider, retention, providerId) => {
+    if (providerId !== "cli-pool" && provider.adapter !== adapterName) return original(provider, retention, providerId);
+    const create = adapterName === "qoder" ? createQoderAdapter : createCodeBuddyAdapter;
+    const adapter = create(provider, { which: () => "/synthetic/cli", killGraceMs: 100,
+      spawn: (_file, _args, childOptions) => {
+        const key = String(childOptions.env?.[adapterName === "qoder" ? "QODER_PERSONAL_ACCESS_TOKEN" : "CODEBUDDY_API_KEY"]);
+        seen.push(key);
+        const failing = options.allFail || (key === "synthetic-cli-a" && !options.healthyFirst);
+        const child = new EventEmitter() as ChildProcess;
+        child.exitCode = null;
+        child.stdin = new Writable({ write(_chunk, _encoding, done) { done(); } });
+        child.stderr = Readable.from(failing && options.stderr ? [options.stderr] : []);
+        child.kill = () => true;
+        child.stdout = Readable.from((async function* () {
+          if (failing || options.healthyFirst) {
+            sent.resolve();
+            if (options.manualSwitch || options.stallFirstEvent) await releaseFailure.promise;
+            order.push("cli-output");
+          }
+          if (failing) {
+            if (options.exitCode === undefined) yield Buffer.from(JSON.stringify({
+              type: "result", is_error: true, error_code: options.vendorCode,
+              result: options.result ?? "invalid personal access token",
+            }) + "\n");
+          } else {
+            yield Buffer.from(JSON.stringify({ type: "assistant", message: { content: [
+              { type: "text", text: options.healthyFirst ? "healthy on A" : "recovered on B" },
+            ] } }) + "\n");
+            yield Buffer.from('{"type":"result","is_error":false}\n');
+          }
+          child.exitCode = failing ? options.exitCode ?? 0 : 0;
+          child.emit("close", child.exitCode);
+        })());
+        return child;
+      },
+    });
+    const run = adapter.runTurn!;
+    adapter.runTurn = (parsed, incoming, emit) => run(parsed, incoming, event => {
+      if (event.type === "error") {
+        errors.push(event);
+        if (options.prefix) emit(options.prefix);
+        if (options.cancel) abort.abort();
+        emit(event);
+      } else emit(event);
+    });
+    return adapter;
+  });
+  const logCtx: RequestLogContext = { model: "", provider: "" };
+  try {
+    const request = new Request("http://localhost/v1/responses", { method: "POST", signal: abort.signal,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "cli-pool/test", input: "synthetic recovery fixture", stream: options.stream ?? false, store: false }) });
+    const pending = handleResponses(request, config, logCtx, { sendBudget: budget, abortSignal: abort.signal });
+    if (options.manualSwitch) {
+      await sent.promise;
+      const current = loadConfig();
+      const outcome = commitProviderApiKeySelection(current, "cli-pool", row => {
+        row.apiKey = "synthetic-cli-b";
+        return { changed: true, value: undefined };
+      });
+      expect(outcome.status).toBe("committed");
+      releaseFailure.resolve();
+    }
+    const response = await pending;
+    order.push("response");
+    if (options.stallFirstEvent) releaseFailure.resolve();
+    const body = await response.text();
+    return { seen, errors, body, budgetUsed: budget.used, logCtx, order,
+      failedSelections: [...rotate401.mock.calls, ...rotate429.mock.calls].map(call => ({
+        key: call[3]?.attemptedKey, entry: call[3]?.attemptedSelection?.entryId,
+        reference: call[3]?.attemptedSelection?.reference,
+      })),
+      active: loadConfig().providers["cli-pool"]!.apiKey,
+      aCooldown: getKeyCooldownUntil("cli-pool", "a"), bCooldown: getKeyCooldownUntil("cli-pool", "b") };
+  } finally {
+    releaseFailure.resolve();
+    abort.abort(); resolver.mockRestore(); rotate401.mockRestore(); rotate429.mockRestore();
+    releaseOwner(); closeRequestHistoryIndex();
+    await flushResponseState(); clearResponseStateForTests();
+  }
+}
+
+describe("runTurn API-key recovery", () => {
+  test.each([
+    { exitCode: 1, stderr: "QoderAuthError: QODER_PERSONAL_ACCESS_TOKEN contains a token that was rejected", stream: false, status: 401 },
+    { result: "You've reached your daily usage limit for Chat. Come back tomorrow...", stream: true, status: 429 },
+  ])("real CLI evidence recovers %j", async fixture => {
+    const result = await cliKeyRecoveryCase(fixture);
+    expect(result.errors[0]).toMatchObject({ status: fixture.status, apiKeyRecovery: true });
+    expect(result.errors[0]!.code).toBe(fixture.status === 401 ? "invalid_api_key"
+      : "insufficient_quota");
+    expect(result.seen).toEqual(["synthetic-cli-a", "synthetic-cli-b"]);
+    expect(result.body).toContain("recovered on B");
+    expect(result.body).not.toContain("apiKeyRecovery");
+    expect(result.active).toBe("synthetic-cli-b");
+    expect(result.aCooldown).not.toBeNull();
+    expect(result.bCooldown).toBeNull();
+    expect(result.budgetUsed).toBe(2);
+  });
+
+  test("CodeBuddy multi-key healthy stream starts SSE without key-pool preflight", async () => {
+    const queueModule = await import("../../src/adapters/run-turn-queue");
+    const preflight = spyOn(queueModule, "preflightAdapterEvents");
+    try {
+      // The CLI cannot release output until the Response exists; no timing race is involved.
+      const result = await cliKeyRecoveryCase({ adapter: "codebuddy", stream: true,
+        healthyFirst: true, stallFirstEvent: true, stallTimeoutSec: 1 });
+      expect(preflight).not.toHaveBeenCalled();
+      expect(result.order).toEqual(["response", "cli-output"]);
+      expect(result.body).toContain("healthy on A");
+      expect(result.seen).toEqual(["synthetic-cli-a"]);
+      expect(result.errors).toEqual([]);
+      expect(result.budgetUsed).toBe(1);
+      expect(result.aCooldown).toBeNull();
+      expect(result.bCooldown).toBeNull();
+    } finally {
+      preflight.mockRestore();
+    }
+  });
+
+  test.each([401, 429])("late %s from sent A preserves manually selected B", async status => {
+    const result = await cliKeyRecoveryCase({ manualSwitch: true, vendorCode: status === 401 ? 105 : 118 });
+    expect(result.seen).toEqual(["synthetic-cli-a", "synthetic-cli-b"]);
+    expect(result.active).toBe("synthetic-cli-b");
+    expect(result.bCooldown).toBeNull();
+    expect(result.failedSelections).toEqual([{
+      key: "synthetic-cli-a", entry: "a", reference: "synthetic-cli-a",
+    }]);
+    // A stale revision cannot file health against the newly selected credential.
+    expect(result.aCooldown).toBeNull();
+    expect(result.body).toContain("recovered on B");
+  });
+
+  test("rechecks the failed key after adapter refresh before applying key recovery", async () => {
+    const transportModule = await import("../../src/server/responses/request-transport");
+    const prepare = transportModule.prepareResponsesTransport;
+    const refreshEntered = Promise.withResolvers<void>();
+    const resumeRefresh = Promise.withResolvers<void>();
+    let refreshConfig: OcxConfig | undefined;
+    let refreshed: { key?: string; runnable: boolean; binding: unknown } | undefined;
+    let refreshes = 0;
+    const transportSpy = spyOn(transportModule, "prepareResponsesTransport").mockImplementation(async (...args) => {
+      const transport = await prepare(...args);
+      if (transport instanceof Response) return transport;
+      const refresh = transport.refreshRunTurnAdapter;
+      transport.refreshRunTurnAdapter = async parsed => {
+        refreshes++;
+        refreshConfig = args[0].config;
+        refreshEntered.resolve();
+        await resumeRefresh.promise;
+        const adapter = await refresh(parsed);
+        // Assert outside recovery: its catch must not swallow a failed test assertion.
+        refreshed = { key: args[2].route.provider.apiKey, runnable: !!adapter.runTurn,
+          binding: transport.adapterBindings.get(adapter) };
+        return adapter;
+      };
+      return transport;
+    });
+    const pending = cliKeyRecoveryCase({ vendorCode: 105 });
+    try {
+      await Promise.race([
+        refreshEntered.promise,
+        pending.then(() => { throw new Error("recovery completed without entering adapter refresh"); }),
+      ]);
+      // Rotation passed the first guard; publish the manual selection to this request and disk.
+      expect(refreshConfig!.providers["cli-pool"]!.apiKey).toBe("synthetic-cli-b");
+      expect(loadConfig().providers["cli-pool"]!.apiKey).toBe("synthetic-cli-b");
+      expect(commitProviderApiKeySelection(refreshConfig!, "cli-pool", row => {
+        row.apiKey = "synthetic-cli-a";
+        return { changed: true, value: undefined };
+      }).status).toBe("committed");
+      resumeRefresh.resolve();
+      const result = await pending;
+      expect(refreshed).toMatchObject({ key: "synthetic-cli-a", runnable: true,
+        binding: { kind: "api-key", provider: { apiKey: "synthetic-cli-a", _apiKeyAttempt: { entryId: "a" } } } });
+      expect(refreshes).toBe(1);
+      expect(result.seen).toEqual(["synthetic-cli-a"]);
+      expect(result.active).toBe("synthetic-cli-a");
+      expect(result.bCooldown).toBeNull();
+      expect(result.body).toContain("invalid_api_key");
+      // The later attempt guard also prevents sending A; only this guard refunds the unused hop.
+      expect(result.budgetUsed).toBe(1);
+    } finally {
+      resumeRefresh.resolve();
+      await pending.catch(() => {});
+      transportSpy.mockRestore();
+    }
+  });
+
+  test.each([
+    ["Team daily usage limit reached", { result: "Team daily usage limit reached" }],
+    ["This model's credit usage limit reached", { result: "This model's credit usage limit reached" }],
+    ["Shared daily usage limit reached", { result: "Shared daily usage limit reached" }],
+    ["999 + supported account daily text", { vendorCode: 999, result: "You've reached your daily usage limit for Chat. Come back tomorrow..." }],
+    ["999 + authentication text", { vendorCode: 999, result: "invalid personal access token" }],
+  ])("nonrecoverable qoder failure (%s) prevents key failover", async (_name, fixture) => {
+    const result = await cliKeyRecoveryCase(fixture);
+    expect(result.seen).toEqual(["synthetic-cli-a"]);
+    expect(result.active).toBe("synthetic-cli-a");
+    expect(result.aCooldown).toBeNull();
+    expect(result.bCooldown).toBeNull();
+    expect(result.budgetUsed).toBe(1);
+  });
+
+  test.each([
+    { type: "text_delta", text: "already visible" },
+    { type: "heartbeat", replayUnsafe: true },
+  ] satisfies AdapterEvent[])("output boundary %j forbids recovery", async prefix => {
+    const result = await cliKeyRecoveryCase({ prefix, stream: true });
+    expect(result.seen).toEqual(["synthetic-cli-a"]);
+    expect(result.aCooldown).toBeNull(); expect(result.bCooldown).toBeNull();
+  });
+
+  test.each(["total", "hop"] as const)("exhausted %s budget keeps original error and key health", async budget => {
+    const result = await cliKeyRecoveryCase({ budget });
+    expect(result.seen).toEqual(["synthetic-cli-a"]);
+    expect(result.aCooldown).toBeNull(); expect(result.bCooldown).toBeNull();
+    expect(result.body).toContain("invalid_api_key");
+    expect(result.budgetUsed).toBe(1);
+  });
+
+  test("cancellation forbids recovery and cooldown", async () => {
+    const result = await cliKeyRecoveryCase({ cancel: true });
+    expect(result.seen).toEqual(["synthetic-cli-a"]);
+    expect(result.aCooldown).toBeNull(); expect(result.bCooldown).toBeNull();
+  });
+
+  test("a single key does not replay", async () => {
+    const result = await cliKeyRecoveryCase({ poolSize: 1 });
+    expect(result.seen).toEqual(["synthetic-cli-a"]);
+    expect(result.aCooldown).toBeNull();
+    expect(result.body).toContain("invalid_api_key");
+  });
+
+  test("both keys failing stops at two physical sends", async () => {
+    const result = await cliKeyRecoveryCase({ allFail: true, vendorCode: 118 });
+    expect(result.seen).toEqual(["synthetic-cli-a", "synthetic-cli-b"]);
+    expect(result.body).toContain("insufficient_quota");
+    expect(result.aCooldown).not.toBeNull(); expect(result.bCooldown).not.toBeNull();
+    expect(result.budgetUsed).toBe(2);
+  });
+
+  test("a silent first event cannot hold the SSE response past the stall bound", async () => {
+    const result = await cliKeyRecoveryCase({ stream: true, vendorCode: 105, stallFirstEvent: true, stallTimeoutSec: 1 });
+    expect(result.order).toEqual(["response", "cli-output"]);
+    expect(result.seen).toEqual(["synthetic-cli-a", "synthetic-cli-b"]);
+    expect(result.body).toContain("recovered on B");
+    expect(result.aCooldown).not.toBeNull();
+  });
 });

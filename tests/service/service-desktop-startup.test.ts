@@ -414,7 +414,8 @@ test("unsupported platforms never probe; thrown ps or PID readers produce bounde
   expect(inspectDesktopSupervision({ ...f.deps, readPid: () => { throw new Error("private contents"); } })).toEqual({
     kind: "unknown", reason: "probe-failed", desktopSeen: false,
   });
-  for (const platform of ["win32", "freebsd"] as const) {
+  // Windows now probes (#6853); see service-desktop-supervision-windows.test.ts.
+  for (const platform of ["freebsd", "aix"] as const) {
     expect(inspectDesktopSupervision({ platform, readPid: () => { throw new Error("must not probe"); } })).toEqual({ kind: "unsupported" });
   }
 });

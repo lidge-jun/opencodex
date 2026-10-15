@@ -85,6 +85,11 @@ pub fn apply_start_at_login_default(app: &AppHandle) -> StartAtLogin {
 /// It runs once, behind its own marker, and only where autostart is already on. It never turns the
 /// setting on and never turns it off; the worst case is an entry that keeps its old arguments and a
 /// login launch that shows its window, which is the visible failure rather than the silent one.
+///
+/// On macOS the marker lives in a config directory every copy of the app shares, while the plugin
+/// rewrites whatever plist exists. The rewrite is therefore limited to this copy's own entry in the
+/// exact shape the plugin writes; another or a missing copy, or any key the rewrite would drop, is
+/// left untouched and unmarked (#6972).
 pub fn adopt_launch_origin_argument(app: &AppHandle) {
     let Ok(dir) = app.path().app_config_dir() else {
         return;
@@ -102,6 +107,23 @@ pub fn adopt_launch_origin_argument(app: &AppHandle) {
     // that is already enabled, so retrying after a transient registry, LaunchAgent or desktop-file
     // error is free — and claiming the marker first would suppress the migration permanently and
     // leave a login launch showing its window forever.
+    #[cfg(target_os = "macos")]
+    {
+        use crate::login_registration::Migration;
+        let Ok(home) = app.path().home_dir() else {
+            return;
+        };
+        match crate::login_registration::judge_migration(&home) {
+            Migration::Rewrite => {
+                if crate::login_autostart::enable(app).is_err() {
+                    return;
+                }
+            }
+            Migration::Absent => {}
+            Migration::Leave => return,
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
     match app.autolaunch().is_enabled() {
         Ok(true) => {
             if crate::login_autostart::enable(app).is_err() {

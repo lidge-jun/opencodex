@@ -43,6 +43,7 @@ $wanted = @(
   "Parse-StartupHealthText",
   "Start-StartupHealthProbe",
   "Complete-StartupHealthProbe",
+  "Stop-StartupHealthProbe",
   "Initialize-UpdateBadgeReader",
   "Parse-UpdateBadgeText",
   "Complete-UpdateBadgeProbe",
@@ -116,6 +117,7 @@ $script:startupRefreshMs = 20000
 $script:startupProbeProcess = $null
 $script:startupProbeOutputTask = $null
 $script:startupProbeErrorTask = $null
+$script:startupProbeTerminating = $false
 $script:startupProbeStarted = 0
 $script:startupProbeTimeoutMs = 30000
 $script:updateAvailable = $false
@@ -137,21 +139,14 @@ $script:pendingOldProxyPid = $null
 $script:pendingProcess = $null
 
 $childPid = 0
-if ($Scenario -eq "BadgeStaleFailure") {
-  $script:updateAvailable = $true
-  $script:updateBadgeObservedAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - $script:updateBadgeExpiryMs - 1000L
-  $notify.Icon = $offlineUpdateIcon
-  $updateItem.Visible = $true
-  $updateItem.Enabled = $true
-  if ($notify.Icon -ne "offline-update" -or -not $updateItem.Visible -or -not $updateItem.Enabled) {
-    throw "stale case did not start from a dotted icon and available menu"
-  }
-}
 try {
   $badgeCase = $Scenario.StartsWith("Badge")
   if ($badgeCase) {
-    $script:updateBadgeAttemptAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-    Start-UpdateBadgeProbe
+    # Match production startup: the first tick launches the probe; later ticks
+    # maintain it. Do not charge first-use JSON/file initialization to reaping.
+    Initialize-UpdateBadgeReader
+    $script:updateBadgeAttemptAt = 0L
+    Update-TrayState
     if ($null -eq $script:updateBadgeProcess) { throw "badge probe did not start" }
   } elseif ($Scenario -eq "Online") {
     # First tick settles wasOnline and launches the probe through the real
@@ -167,6 +162,17 @@ try {
   }
   $probe = if ($badgeCase) { $script:updateBadgeProcess } else { $script:startupProbeProcess }
   $childPid = $probe.Id
+  # Seed the stale presentation after startup, before the maintenance under test.
+  if ($Scenario -eq "BadgeStaleFailure") {
+    $script:updateAvailable = $true
+    $script:updateBadgeObservedAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - $script:updateBadgeExpiryMs - 1000L
+    $notify.Icon = $offlineUpdateIcon
+    $updateItem.Visible = $true
+    $updateItem.Enabled = $true
+    if ($notify.Icon -ne "offline-update" -or -not $updateItem.Visible -or -not $updateItem.Enabled) {
+      throw "stale case did not start from a dotted icon and available menu"
+    }
+  }
   $iconBeforeMaintenance = $notify.Icon
   $updateAvailableBeforeMaintenance = $script:updateAvailable
   $observedAtBeforeMaintenance = $script:updateBadgeObservedAt
@@ -190,7 +196,20 @@ try {
     }
     if (-not $task.IsFaulted) { throw "badge overflow reader did not enforce the byte cap" }
   } else {
-    Start-Sleep -Milliseconds 500
+    # Process.Start returning does not mean PowerShell has executed the PID write.
+    # Wait for this child's readiness before backdating its timeout and killing it.
+    $pidFile = $env:OCX_PROBE_TEST_PID_FILE
+    $readyDeadline = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() + 5000
+    $ready = $false
+    do {
+      if ($pidFile -and [System.IO.File]::Exists($pidFile)) {
+        try { $ready = @([System.IO.File]::ReadAllLines($pidFile)) -contains [string]$childPid } catch { $ready = $false }
+      }
+      if ($ready) { break }
+      if ($probe.HasExited) { throw "probe exited before reporting readiness" }
+      Start-Sleep -Milliseconds 20
+    } while ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() -lt $readyDeadline)
+    if (-not $ready) { throw "probe did not report readiness within 5s" }
   }
   if ($Scenario -ne "BadgeStaleFailure" -and $probe.HasExited) { throw "probe child exited before maintenance" }
   $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
@@ -210,8 +229,8 @@ try {
   $observedAtAfterMaintenance = $script:updateBadgeObservedAt
   $updateItemVisibleAfterMaintenance = $updateItem.Visible
   $updateItemEnabledAfterMaintenance = $updateItem.Enabled
-  $terminatingAfterMaintenance = if ($badgeCase) { $script:updateBadgeTerminating } else { $false }
-  $trackedAfterMaintenance = if ($badgeCase) { $null -ne $script:updateBadgeProcess } else { $false }
+  $terminatingAfterMaintenance = if ($badgeCase) { $script:updateBadgeTerminating } else { $script:startupProbeTerminating }
+  $trackedAfterMaintenance = if ($badgeCase) { $null -ne $script:updateBadgeProcess } else { $null -ne $script:startupProbeProcess }
   $maxTickMs = $maintenanceMs
   $reapDeadline = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() + 2000
   do {

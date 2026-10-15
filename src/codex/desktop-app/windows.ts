@@ -13,6 +13,7 @@
 import { execFileSync } from "node:child_process";
 import { sep, win32 } from "node:path";
 import { resolveTrustedWindowsPowerShellExe, resolveTrustedWindowsTaskkillExe } from "../../lib/windows-elevation";
+import { activateWindowsCodexCompatibility, assertWindowsCompatibilityContext, captureWindowsCompatibilityContext } from "../desktop-compatibility/windows-package-command";
 import {
   isUnderRoot,
   type DesktopAppAdapter,
@@ -50,8 +51,7 @@ function isMemberExecutable(executable: string, root: string): boolean {
  * changes between builds, so a literal AUMID would silently stop matching and
  * then either do nothing or — worse — match a package we did not mean.
  */
-function discoverPackage(exec: DesktopExec): DesktopAppInstall | null {
-  const script = [
+export const WINDOWS_PACKAGE_DISCOVERY_SCRIPT = [
     "$ErrorActionPreference='SilentlyContinue'",
     "Import-Module Appx -ErrorAction SilentlyContinue",
     "$p = Get-AppxPackage -Name OpenAI.Codex",
@@ -60,17 +60,23 @@ function discoverPackage(exec: DesktopExec): DesktopAppInstall | null {
     "  $p.PackageFamilyName; $p.InstallLocation; \"$($p.PackageFamilyName)!App\"",
     "}",
   ].join("; ");
-  let stdout: string;
-  try {
-    stdout = exec(resolveTrustedWindowsPowerShellExe(), ["-NoProfile", "-NonInteractive", "-Command", script], POWERSHELL_PROBE_OPTIONS);
-  } catch {
-    return null;
-  }
+
+export function parseWindowsDesktopPackage(stdout: string): DesktopAppInstall | null {
   const lines = stdout.split(/\r?\n/).map(line => line.trim()).filter(line => line.length > 0);
   if (lines.length < 3 || lines[0] === "MISS") return null;
   const [family, installLocation, aumid] = lines;
   if (!family || !installLocation || !aumid) return null;
   return { id: family, root: installLocation, relaunch: aumid };
+}
+
+function discoverPackage(exec: DesktopExec): DesktopAppInstall | null {
+  let stdout: string;
+  try {
+    stdout = exec(resolveTrustedWindowsPowerShellExe(), ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_PACKAGE_DISCOVERY_SCRIPT], POWERSHELL_PROBE_OPTIONS);
+  } catch {
+    return null;
+  }
+  return parseWindowsDesktopPackage(stdout);
 }
 
 /**
@@ -100,7 +106,8 @@ function listPackageProcesses(exec: DesktopExec, install: DesktopAppInstall): De
     "    if ($o -and $o.ReturnValue -eq 0 -and $o.User) {",
     "      $owner = if ($o.Domain) { \"$($o.Domain)\\$($o.User)\" } else { $o.User }",
     "      if ($owner -ieq $me) {",
-    "        \"$($_.ProcessId) $($_.ParentProcessId) $($_.CreationDate.ToString('o')) $($_.ExecutablePath)\"",
+    "        $encoded=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$_.CommandLine))",
+    "        \"$($_.ProcessId) $($_.ParentProcessId) $($_.CreationDate.ToString('o')) $($_.ExecutablePath)`t$encoded\"",
     "      }",
     "    }",
     "  }",
@@ -126,7 +133,9 @@ function listPackageProcesses(exec: DesktopExec, install: DesktopAppInstall): De
 }
 
 function parseProcessLine(line: string, root: string): DesktopProcess | null {
-  const match = /^\s*(\d+)\s+(\d+)\s+(\S+)(?:\s+(.+))?$/.exec(line);
+  const [listing, encoded, ...extra] = line.split("\t");
+  if (extra.length || (encoded && (encoded.length > 65_536 || !/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)))) return null;
+  const match = /^\s*(\d+)\s+(\d+)\s+(\S+)(?:\s+(.+))?$/.exec(listing ?? "");
   if (!match) return null;
   const pid = Number(match[1]);
   const parentPid = Number(match[2]);
@@ -143,7 +152,8 @@ function parseProcessLine(line: string, root: string): DesktopProcess | null {
   // Authoritative membership. PowerShell StartsWith already cheap-filtered, but
   // that test is a string prefix and is how a sibling install would sneak in.
   if (!isMemberExecutable(executable, root)) return null;
-  return { pid, parentPid, createdAt, executable };
+  return { pid, parentPid, createdAt, executable,
+    ...(encoded !== undefined ? { commandLine: Buffer.from(encoded, "base64").toString("utf8") } : {}) };
 }
 
 /**
@@ -215,13 +225,16 @@ export const windowsDesktopAppAdapter: DesktopAppAdapter = {
     exec(resolveTrustedWindowsTaskkillExe(), ["/PID", String(root.pid), "/T", "/F"], POWERSHELL_PROBE_OPTIONS);
   },
 
-  captureRelaunchContext(): Record<string, string> {
-    // The session is supplied by the shell:AppsFolder launch, so nothing needs
-    // carrying forward.
-    return {};
+  captureRelaunchContext(_exec, _install, processes): Record<string, string> {
+    return captureWindowsCompatibilityContext(processes);
   },
 
-  relaunch(exec, install): void {
+  relaunch(exec, install, context): void {
+    if (context.codexCompatibilityPacUrl) {
+      assertWindowsCompatibilityContext(context);
+      activateWindowsCodexCompatibility(exec, install, context.codexCompatibilityPacUrl);
+      return;
+    }
     // Throws on failure so the ladder reports relaunch_failed. The old code
     // returned targets_survived here, which was dishonest: everything HAD died
     // and it was the relaunch that failed.

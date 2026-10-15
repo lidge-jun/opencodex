@@ -1,6 +1,6 @@
 # Model Catalog
 
-Activation-owned metadata discovery no longer refreshes known deadlines merely because quota snapshots age. See the [quota activation contract](providers/openai-tiers.md#public-provider-contract). Pool 2 discovery uses the [instance credential ownership contract](providers/anthropic-account-pool.md#discovery-credential-ownership). The retained writer uses an observed catalog's nonblocking runtime snapshot for effort diagnostics; it does not run a synchronous version probe. Portable Rust-driven Bun contracts run in `.github/workflows/catalog-async-contracts.yml` on Linux, macOS and Windows.
+Activation-owned metadata discovery no longer refreshes known deadlines merely because quota snapshots age. See the [quota activation contract](providers/openai-tiers.md#public-provider-contract). Pool 2 discovery uses the [instance credential ownership contract](providers/anthropic-account-pool.md#discovery-credential-ownership). The retained writer uses an observed catalog's nonblocking runtime snapshot for effort diagnostics; it does not run a synchronous version probe. Unchanged clamp diagnostics follow the [effort-clamp observation contract](catalog-effort-clamp.md). Portable Rust-driven Bun contracts run in `.github/workflows/catalog-async-contracts.yml` on Linux, macOS and Windows.
 
 Native result continuations and function-result injection follow [the mode-specific result and control contract](transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
 Explicit Codex CLI installation observation supplies no selected-runtime proof to catalog discovery or publication. See the [read-only observation contract](runtime.md#explicit-codex-cli-installation-observation).
@@ -23,7 +23,7 @@ Accounts added through the [Orca import](codex-home.md#orca-source-owned-account
 validation-pending. Import alone supplies no entitlement evidence for the model catalog.
 
 ## Shared catalog
-
+Custom-provider missing windows use [source-labelled vendor estimates](catalog-vendor-context.md) only when the provider opts in with `inferContextWindow: true`; these remain distinct from asserted routing capacity.
 Static policy and observed catalog evidence are separate authorities. Antigravity grouping and selection projection follow the [discovered effort-family contract](providers-and-adapters.md#antigravity-effort-families).
 `src/providers/resolved-model-policy.ts` resolves and freezes only registry/operator static facts,
 hard wire pins, aliases, and explicit false/empty declarations. Discovery responses, generated
@@ -95,7 +95,7 @@ Cache invalidation reports an unchanged derived cache separately from a failed r
 
 Custom rows replace discovered rows that encode to the same Codex-facing slug. For a provider whose captured discovery declares an order (`preferFirst`), `src/codex/catalog/routed-gather.ts` puts the replacement in the discovered row's slot; every other provider keeps discovered rows first and custom rows after them, as before. Coverage: `tests/codex-integration/catalog-custom-ordering.test.ts`.
 
-On the default `opencodex-catalog.json` path, sync deliberately uses two catalog sources: Codex's bundled catalog supplies a current native entry template, while the actual on-disk catalog supplies the rows being merged. This split is
+On the default `opencodex-catalog.json` path, sync deliberately uses two catalog sources: Codex's bundled catalog supplies a current native entry template, while the actual on-disk catalog supplies the rows being merged. `src/codex/catalog/bundled.ts` treats unsupported bundled-model commands, spawn failures and structurally invalid model rows (null, arrays or other non-objects) as unavailable in both synchronous and asynchronous loading, preserving the existing catalog fallback. This split is
 required because empty or partial provider discovery must preserve routed entries and genuine user-native rows from the file that will be overwritten; a bundled catalog never contains those rows. Retained sync and evidence-bound convergence
 share an explicit observed-state merge policy and restore native priorities from the once-only pristine backup rather than from a catalog whose priorities may already have been rewritten. A configured custom catalog remains the native
 metadata/template authority even when a bundled-catalog memo is warm. Both paths may use an admitted matching bundled memo only as installed-runtime capability evidence to remove unsupported reasoning efforts; convergence never probes Codex
@@ -112,9 +112,9 @@ to the native default singleton. A default must belong to the projected list. Fu
 is still not inferred from a GPT name. Stored configuration and native capability maps are
 unchanged. Request-time native effort clamps remain canonical-forward only.
 
-The shared merge preserves operator-supplied Ultra Fast metadata through `src/codex/catalog/operator-tiers.ts` when the writer explicitly passes the enabled `ultraFastTier` setting. Only an exact persisted routed slug supplies that
-metadata; native templates, baseline backups, account rows and combo aliases are not sources. The overlay runs after admission and fresh capability generation, preserves Fast policy, and never creates a row or invents a tier. Disabling the
-flag removes Ultra Fast from ordinary routed rows. An explicit operator Ultra Fast default is retained only alongside a supplied tier declaration. Coverage: `tests/codex-integration/ultrafast-tier-honesty.test.ts`.
+The shared merge uses `src/codex/catalog/configured-tiers.ts` to project Ultra Fast into Codex's native speed picker only for an eligible captured service-tier wire explicitly mapping `ultrafast` to `ultrafast`. Both writers pass current exact routed slugs; templates, native/account rows and combos cannot grant the capability. Generated choices carry an exact-slug ownership marker so removing the declaration also removes stale generated tiers, even with operator retention enabled; publication leaves the default unchanged. Coverage: `tests/codex-integration/configured-ultrafast-picker.test.ts`.
+Separately, `src/codex/catalog/operator-tiers.ts` preserves a hand-supplied Ultra Fast tier from the exact persisted routed row only when `ultraFastTier` is enabled. Baselines and native templates cannot supply it. Current configured capability takes precedence; previously generated tiers cannot become operator evidence. Both overlays run after admission, preserve Fast policy and never create rows. Disabling `ultraFastTier` removes only independently supplied operator tiers; disabling the wire declaration removes generated ones. Operator defaults are retained only alongside an independently supplied tier declaration. Coverage: `tests/codex-integration/ultrafast-tier-honesty.test.ts`.
+Native rows are the one place the `ultraFastTier` flag itself adds a tier. `src/codex/catalog/native-ultrafast.ts` appends the documented `{ id: "ultrafast", name: "Ultrafast" }` descriptor to `service_tiers` and `"ultrafast"` to `additional_speed_tiers` on bare and trusted account-bound `gpt-6-astra` and `gpt-6.1-sol` rows, after the existing Fast tier and only when no Ultrafast entry is present. Codex reads the picker from `model_catalog_json` instead of ChatGPT's plan-aware live list, so without it Desktop never offers the choice. Each field it fills is recorded in the row's `opencodex_generated_service_tiers` marker, and disabling withdraws only marked fields (and only the unedited descriptor), so an operator-written native entry survives even when its text matches. Aliases, combos, reserve projections and other models are untouched, and the default tier never changes. Coverage: `tests/codex-integration/native-ultrafast-picker.test.ts`.
 
 The observed-state merge tracks the current invocation's freshly generated custom row objects
 after detaching its inputs. Those rows already own their complete reasoning projection, so the
@@ -320,6 +320,7 @@ preserving custom descriptions and other stored row fields.
 
 GPT-6 Sol and Luna (2026-09-22) and GPT-6.1 Sol (2026-09-29, `low` default effort) are self-described the same way, from their roster-pinned
 rows: labels `GPT-6-Sol` / `GPT-6-Luna`, 272,000 default context and 872,000 opt-in ceiling,
+except GPT-6.1 Sol's default context, raised to 500,000 by `NATIVE_GPT61_SOL_CONTEXT` (OpenAI, 2026-10-11; ceiling kept at 872,000),
 `medium` default. Sol ships low-through-ultra; Luna stops at `max`, and no path may add `ultra` to
 it: `nativeLadderIncludesUltra` answers from the self-described row (or an alias's source row), so
 `ensureGpt56ReasoningLevels` restores `max` everywhere but adds `ultra` only where the pinned row

@@ -58,6 +58,31 @@ describe("startup installer child launch (#6963)", () => {
   });
 });
 
+describe("startup installer PATH under OpenCodex Desktop (#6971)", () => {
+  async function installChildPath(action: StartupInstallAction, desktop: boolean): Promise<{ path: string | undefined; probed: number }> {
+    let path: string | undefined;
+    let probed = 0;
+    setStartupInstallLaunchForTests({
+      isStandaloneExecutable: true,
+      isDesktopSupervised: () => desktop,
+      withLoginShellPath: async env => { probed++; return { ...env, PATH: "/opt/homebrew/bin:/usr/bin" }; },
+      execFile: ((_file: string, _args: readonly string[], opts: { env: NodeJS.ProcessEnv }, callback: (error: Error | null, stdout: string, stderr: string) => void) => {
+        path = opts.env.PATH;
+        callback(null, "ok", "");
+        return {} as never;
+      }) as never,
+    });
+    await runStartupInstallAction(action, {});
+    return { path, probed };
+  }
+
+  test("the shim installer sees the user's login-shell PATH only under Desktop", async () => {
+    expect(await installChildPath("install-shim", true)).toEqual({ path: "/opt/homebrew/bin:/usr/bin", probed: 1 });
+    resetStartupInstallStateForTests();
+    expect(await installChildPath("install-shim", false)).toEqual({ path: process.env.PATH, probed: 0 });
+  });
+});
+
 describe("startup install actions", () => {
   test("maps the allowlisted actions to fixed CLI argv", () => {
     expect(startupInstallArgv("install-service")).toEqual(["service", "install"]);

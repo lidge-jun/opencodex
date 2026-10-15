@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getLoginStatus, getValidAccessTokenForAccount, OAUTH_PROVIDERS, refreshGenericAccountWithLock } from "../../src/oauth";
+import { getLoginStatus, getValidAccessTokenForAccount, OAuthLoginRequiredError, OAUTH_PROVIDERS, refreshGenericAccountWithLock } from "../../src/oauth";
 import { credentialGeneration, getAccountSet, saveAccountCredential, saveCredential, setAccountPaused } from "../../src/oauth/store";
 import type { OAuthCredentials } from "../../src/oauth/types";
 import { handleManagementAPI } from "../../src/server/management-api";
@@ -113,6 +113,55 @@ describe("Kiro AWS SSO refresh attention", () => {
     expect(getLoginStatus("kiro").accounts?.[0]?.needsReauth).toBeUndefined();
     expect(getAccountSet("kiro")!.accounts[0]!.needsReauth).toBeUndefined();
   });
+
+  test("desktop 401 Bad credentials quarantines the rejected generation", async () => {
+    stored = { ...stored, kiro: { profileArn, authType: "kiro_desktop" } };
+    await saveAccountCredential("kiro", accountId, stored);
+    const urls: string[] = [];
+    globalThis.fetch = (async input => {
+      urls.push(String(input));
+      return Response.json({ message: "Bad credentials" }, { status: 401 });
+    }) as typeof fetch;
+    const error = await refresh().then(() => undefined, reason => reason);
+    expect(error).toBeInstanceOf(OAuthLoginRequiredError);
+    expect(urls).toEqual(["https://prod.us-east-1.auth.desktop.kiro.dev/refreshToken"]);
+    expect(getAccountSet("kiro")!.accounts[0]!.needsReauth).toBe(true);
+    expect(getLoginStatus("kiro").loggedIn).toBe(false);
+  });
+
+  test("desktop Bad credentials during matching CLI recovery quarantines the account", async () => {
+    seedCli(profileArn, false);
+    const urls: string[] = [];
+    globalThis.fetch = (async input => {
+      const url = String(input);
+      urls.push(url);
+      return url.endsWith("/refreshToken")
+        ? Response.json({ message: "Bad credentials" }, { status: 401 })
+        : Response.json(rejection, { status: 400 });
+    }) as typeof fetch;
+    const error = await refresh().then(() => undefined, reason => reason);
+    expect(urls).toEqual(["https://oidc.us-east-1.amazonaws.com/token", "https://prod.us-east-1.auth.desktop.kiro.dev/refreshToken"]);
+    expect(error).toBeInstanceOf(OAuthLoginRequiredError);
+    expect(getAccountSet("kiro")!.accounts[0]!.needsReauth).toBe(true);
+  });
+
+  for (const [label, status, payload, authType] of [
+    ["desktop 401 with another message", 401, { message: "Unauthorized" }, "kiro_desktop"],
+    ["desktop 400 Bad credentials", 400, { message: "Bad credentials" }, "kiro_desktop"],
+    ["AWS SSO 401 Bad credentials", 401, { message: "Bad credentials" }, "aws_sso_oidc"],
+  ] as const) {
+    test(`${label} does not quarantine`, async () => {
+      if (authType === "kiro_desktop") {
+        stored = { ...stored, kiro: { profileArn, authType } };
+        await saveAccountCredential("kiro", accountId, stored);
+      }
+      rejectRefresh(status, payload);
+      const error = await refresh().then(() => undefined, reason => reason);
+      expect(error).toBeDefined();
+      expect(error).not.toBeInstanceOf(OAuthLoginRequiredError);
+      expect(getAccountSet("kiro")!.accounts[0]!.needsReauth).toBeUndefined();
+    });
+  }
 
   for (const [label, status, payload] of [
     ["5xx", 503, rejection], ["different input error", 400, { error: "invalid_client" }],

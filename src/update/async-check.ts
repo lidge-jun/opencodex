@@ -51,7 +51,7 @@ export async function latestVersionAsync(
   installer: Installer,
   deps: AsyncLookupDeps = defaultDeps,
 ): Promise<string | null> {
-  if (installer === "source" || installer === "mise") return null;
+  if (installer === "source" || installer === "standalone" || installer === "mise") return null;
   let owner: PnpmGlobalOwner | null | undefined;
   try { owner = installer === "pnpm" ? await deps.ownerFn() : undefined; }
   catch { return null; }

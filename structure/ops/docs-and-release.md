@@ -86,7 +86,7 @@ Manual navigation is defined in `docs-site/astro.config.mjs`. When adding a publ
 sidebar and either add localized copies or intentionally accept Starlight fallback behavior.
 
 Provider preset totals are recounted from the current registry when a preset lands. The
-documented split is 103 total: 84 key-based, 15 OAuth, three local, and one default
+documented split is 104 total: 85 key-based, 15 OAuth, three local, and one default
 ChatGPT-forward preset. The English provider guide, all seven translated copies, and all eight
 quickstarts carry the same counts.
 
@@ -236,7 +236,7 @@ CI setup uses the [Bun runtime and test-runner pins](../runtime.md#bun-runtime-a
 `scripts/test.ts` owns `SERIAL_FULL_SUITE_FILES`, the shared process-isolation roster. Local
 full-suite runs, both macOS paths, and `scripts/ci/run-bun-test-batches.sh` execute those files
 alone with fresh process homes, including launchd repair and standalone home/lease cases. Hosted batches assign shard membership by the per-file durations
-in `scripts/ci/test-durations.tsv` (sorted round-robin when nothing is recorded), run each shard's
+in `scripts/ci/test-durations.tsv` (Windows: `scripts/ci/test-durations.windows.tsv`; sorted round-robin when nothing is recorded), run each shard's
 files in sorted order and split only process boundaries; every selected file still runs once.
 Ordinary macOS shards select 1/3, 2/3 and 3/3 from the full file list; macOS control selects 1/1. Both
 execute sequential batches of at most 12 files with one worker.
@@ -422,9 +422,9 @@ The `package-standalone` job in `.github/workflows/release.yml` also builds Bun 
 `ocx` archives for Linux, macOS, and Windows, bundles `gui/dist`, smoke-tests `/healthz`, and
 publishes SHA-256 sidecars for the attach job. Each archive also carries the target-matching
 `@napi-rs/keyring` native addon under `keyring/`; the macOS release installs both optional Darwin
-packages so its separate arm64 and x64 builds cannot silently reuse the hosted runner's
-architecture. Desktop preparation copies those same pinned assets into Tauri resources. The loader
-and packaged-app proof are owned by the [desktop keyring contract](../desktop-shell.md#packaged-native-keyring-binding).
+packages so its separate arm64 and x64 builds cannot silently reuse the hosted runner's architecture. Desktop preparation
+copies those same pinned assets into Tauri resources. The loader and packaged-app proof are owned by the [desktop keyring contract](../desktop-shell.md#packaged-native-keyring-binding).
+`src/lib/standalone.ts` recognizes Bun's file-URL virtual roots after one URL decode, including Windows `%7EBUN`, and resolves runtime assets beside the real executable. Invalid/non-file URLs and double-encoded markers remain source paths; `tests/lib/standalone.test.ts` and `tests/service/standalone-service.test.ts` cover this distinction.
 
 Opening a release starts with the `dev` pre-move. Dispatch
 `.github/workflows/dev-version-bump.yml` with the intended version, merge the pull request it opens,

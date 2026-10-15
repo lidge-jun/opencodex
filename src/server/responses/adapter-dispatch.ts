@@ -24,7 +24,7 @@ import {
   sealRequestAttemptIdentity,
   recordAttemptCredentialSource,
 } from "../request-log";
-import { clientCancelledResponse, readDisplaySafeErrorText, normalizeUpstreamErrorText } from "./core-errors";
+import { anthropicPoolCooldownResponse, clientCancelledResponse, readDisplaySafeErrorText, normalizeUpstreamErrorText } from "./core-errors";
 import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
 import { redactSecretString } from "../../lib/redact";
 import { rewriteUpstreamPolicyRefusal } from "./policy-refusal";
@@ -112,6 +112,7 @@ import { mapCodexAuthContextErrorToResponse } from "./codex-auth-error";
 import { chargeWorkflowSends } from "../../lib/workflow-budget";
 import { isAntigravityValidationRefusal } from "./antigravity-validation-refusal";
 import { unboundPoolSpendRefusalResponse } from "../workflow-refusal";
+import { AdmissionModelDeniedError, admissionModelDeniedResponse } from "../admission-model-scope";
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function prepareAdapterExchange(
@@ -225,8 +226,13 @@ export async function prepareAdapterExchange(
 
 
   let selfContainedJudgment: boolean | undefined;
+  // On the Antigravity direct lane the raw body carries only settings; judge the body the bridge
+  // would have sent, built only if an ambiguous reset actually asks.
+  const directRequest = options.directRequest;
   const requestIsSelfContained = (): boolean =>
-    selfContainedJudgment ??= selfContainedResponsesBody(parsed._rawBody);
+    selfContainedJudgment ??= selfContainedResponsesBody(directRequest
+      ? { ...(parsed._rawBody as Record<string, unknown>), ...directRequest.bridgeConversation() }
+      : parsed._rawBody);
   const claimPreHeaderResend = (): boolean => authorizeResendForRecovery(
     "pre-header", "connection-reset",
     ambiguousResendAllowanceFor(route.provider, requestIsSelfContained, claimAmbiguousResend),
@@ -541,6 +547,10 @@ export async function prepareAdapterExchange(
       return storageRefusal;
     }
     const refusal = err instanceof UpstreamRetryEvidenceError ? err.cause : err;
+    if (refusal instanceof AdmissionModelDeniedError) {
+      releaseCodexAuthContextProbeLease(admissionState.authCtx);
+      return admissionModelDeniedResponse(refusal);
+    }
     const codexRefusal = mapCodexAuthContextErrorToResponse(unwrapUpstreamRetryEvidenceError(err), {
       now: Date.now(), accountSelector: route.codexAccountNamespace,
     });
@@ -556,8 +566,7 @@ export async function prepareAdapterExchange(
       return formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(refusal));
     }
     if (refusal instanceof AnthropicAccountCooldownError) {
-      return formatErrorResponse(429, "rate_limit_error", refusal.message,
-        refusal.retryAfterSeconds === null ? undefined : { retryAfter: String(refusal.retryAfterSeconds) });
+      return anthropicPoolCooldownResponse(refusal, { comboAttempt: options.comboAttempt, logCtx });
     }
     // A budget refusal is a decision this process made, not an upstream fault. Reporting it as
     // 502 does more than mislabel it: the Codex client retries 5xx and does not retry a 429, so
@@ -811,6 +820,13 @@ export async function prepareAdapterExchange(
           releaseCodexAuthContextProbeLease(admissionState.authCtx);
           return { failed: storageRefusal };
         }
+        const scopeRefusal = unwrapUpstreamRetryEvidenceError(err);
+        if (!options.abortSignal?.aborted && scopeRefusal instanceof AdmissionModelDeniedError) {
+          cleanupUpstreamAbort();
+          upstream.abort();
+          releaseCodexAuthContextProbeLease(admissionState.authCtx);
+          return { failed: admissionModelDeniedResponse(scopeRefusal) };
+        }
         const codexRefusal = !options.abortSignal?.aborted && mapCodexAuthContextErrorToResponse(unwrapUpstreamRetryEvidenceError(err), {
           now: Date.now(), accountSelector: route.codexAccountNamespace,
         });
@@ -835,8 +851,7 @@ export async function prepareAdapterExchange(
           return { failed: formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(refusal)) };
         }
         if (refusal instanceof AnthropicAccountCooldownError) {
-          return { failed: formatErrorResponse(429, "rate_limit_error", refusal.message,
-            refusal.retryAfterSeconds === null ? undefined : { retryAfter: String(refusal.retryAfterSeconds) }) };
+          return { failed: anthropicPoolCooldownResponse(refusal, { comboAttempt: options.comboAttempt, logCtx }) };
         }
         // Same rule on the recovery leg: the ladder refused to send again, so the answer names
         // this proxy rather than the provider it never reached.
@@ -1541,7 +1556,17 @@ export async function prepareAdapterExchange(
           // The hop's permit is already settled by the dispatch boundary above; continuing
           // only skips the remaining arms, it does not abandon a reservation.
           if (isNonReplayableResponse(upstreamResponse)) continue recovery;
-       } catch {
+       } catch (err) {
+          // A local admission denial is terminal for the whole request: rotating to another
+          // account cannot re-scope the key, so the refusal answers in place of the 429.
+          const scopeRefusal = unwrapUpstreamRetryEvidenceError(err);
+          if (!options.abortSignal?.aborted && scopeRefusal instanceof AdmissionModelDeniedError) {
+            hop.permit?.release();
+            cleanupUpstreamAbort();
+            upstream.abort();
+            releaseCodexAuthContextProbeLease(admissionState.authCtx);
+            return admissionModelDeniedResponse(scopeRefusal);
+          }
          // A throw before the send — snapshot fetch, credential application, adapter
           // resolution — must hand the reservation back. Without this the ladder charges the
           // request for a send it never made, and a later recovery in the same request is
@@ -1805,6 +1830,14 @@ export async function prepareAdapterExchange(
           requestState.subagentFallbackAccountId,
         );
       }
+      // The last pool account just refused on spent quota and recovery found no replacement:
+      // answer the usage limit now (#6991), so Codex stops instead of retrying into the local
+      // refusal that every later attempt meets until the first window reopens.
+      const poolUsageLimit = upstreamResponse.status === 429 && anthropicInstance && route.provider.authMode === "oauth"
+        ? anthropicRoutingFor(anthropicInstance).anthropicPoolUsageLimitAfterRefusal(Date.now(), transportState.anthropicRouteDecision, route.modelId)
+        : null;
+      // Combo children returned above; the flag is passed anyway so this site states the same rule.
+      if (poolUsageLimit) return anthropicPoolCooldownResponse(poolUsageLimit, { comboAttempt: options.comboAttempt, logCtx });
       // Upstreams occasionally echo request details in error bodies — scrub token-shaped
       // material before it reaches the client-facing error surface.
       const upstreamRetryAfter = upstreamResponse.headers.get("retry-after");

@@ -448,12 +448,26 @@ neither prove nor contradict a native surface.
 The two checks are asymmetric on purpose: evidence needs a rendered section, while the
 contradiction check reads every heading and declaration line, quoted or not, so text copied into
 the listing can push a turn toward `null` but cannot hide another surface.
+The parse uses bounded linear scans: descriptions over `1 << 20` string code units carry no nested evidence, declarations over `64 * 1024` code units are not recognized, and quoted text and comments are skipped while matching delimiters; return generics must close fully.
 Nested evidence never produces `v2`. When the model supports tool search (every OpenCodex catalog
-row), codex-rs defers the V1 tools and leaves them out of the description, and no other
-per-request V1 signal exists: codex-rs sends its own `<multi_agent_mode>` item only on V2 and pins the
-version per session, so neither the saved mode nor the catalog stamp proves a conversation's
-surface. Those turns stay `null` and receive no V1 proactive text (#6844). A tool description that
-copies a complete V1 section verbatim cannot be told apart from the host's own rendering.
+row), codex-rs defers the V1 tools and leaves them out of the description. Its own
+`<multi_agent_mode>` item exists only on V2 and it pins the version per session, so neither the saved
+mode nor the catalog stamp proves a conversation's surface. The one request-visible signal is the
+developer `<tools>` world-state fragment codex-rs sends when its default-off
+`deferred_tool_world_state` feature is on (Codex Desktop sessions receive it): a
+`Deferred tool namespaces:` snapshot, then `Added`/`Removed` diffs. `src/server/responses/deferred-collab-surface.ts`
+replays those fragments in input order from developer messages only, each text part standing alone,
+and treats a current `multi_agent_v1` row as V1 evidence. It counts only beside a host that can load
+deferred tools (the genuine code-mode `exec` above, or a structured `tool_search` tool), and it is
+conservative under the 4 KiB budget: omitted rows never establish a namespace, omitted removals and
+malformed fragments clear what was carried. The evidence combines exactly like the rendered listing:
+it never yields `v2`, a different direct surface or a rendered foreign collaboration claim makes the
+turn `null`, and a removal withdraws only deferred evidence. The row proves that some V1 tool is
+deferred, not that `spawn_agent` is; only an embedder's own tool allowlist can split them (codex-rs's
+guardian allowlist drops the whole namespace), and such a host gets advisory text it cannot act on.
+Feature-off clients still carry no V1 evidence and stay `null` (#6844). A tool description that
+copies a complete V1 section verbatim, or a forged developer item, cannot be told apart from the
+host's own rendering.
 
 Replay deduplication compares the latest exact generated developer text separately for
 each tag family, preserving built-in ??custom ??built-in transitions without duplicating

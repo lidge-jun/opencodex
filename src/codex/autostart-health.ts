@@ -35,6 +35,7 @@ export interface StartupHealthInputs {
   shimHealthy: boolean;
   platform: NodeJS.Platform;
   diagnosticStale?: boolean;
+  shimActivationPending?: boolean;
   routingAdoption?: RoutingAdoptionEvidence;
 }
 
@@ -55,6 +56,8 @@ export interface StartupHealth {
   serviceConflict: boolean;
   shimInstalled: boolean;
   shimHealthy: boolean;
+  /** Intact PATH-overlay shim this process could not see active; activate it rather than repair it. */
+  shimActivationPending?: boolean;
   shimCoverage: ShimCoverage;
   serviceSupported: boolean;
   platform: NodeJS.Platform;
@@ -171,6 +174,7 @@ export function collectStartupHealth(
     serviceSupported: service.supported,
     shimInstalled: shim.installed,
     shimHealthy: shim.healthy,
+    ...(shim.activationPending ? { shimActivationPending: true } : {}),
     platform: process.platform,
     ...(routingAdoption ? { routingAdoption } : {}),
   });
