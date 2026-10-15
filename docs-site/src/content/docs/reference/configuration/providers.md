@@ -1761,6 +1761,9 @@ The other policy is `{ "mode": "flat" }`. Omit `promptLengthPricing` to retain a
 rules with your base prices; an explicit `{ "mode": "automatic" }` is accepted and means the same,
 and saves from the dashboard or API store it as an absent field.
 
+Legacy `openai-multi` model price overrides retain valid prompt-length policies when startup
+migrates them to `openai`, including overrides keyed by `openai-multi/<model>`.
+
 ### Renamed API-key presets
 
 A provider saved under another name, such as `CommandCode`, inherits missing reasoning-effort metadata when its adapter and fixed API-key endpoint match a registry preset. Your explicit per-model lists, including `[]`, remain authoritative. An omitted provider-wide list inherits the preset default; an explicit list remains unchanged. This does not match OAuth, unrelated endpoints, or templated/custom endpoint presets.

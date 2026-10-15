@@ -196,6 +196,24 @@ describe("Models manual price editor", () => {
     await flush();
   }
 
+  test("custom comparison options stay inside the modal and selection restores trigger focus", async () => {
+    await mount();
+    await open();
+    await chooseMode("custom");
+    const comparison = container.querySelector<HTMLButtonElement>('dialog [role="combobox"]')!;
+    await act(async () => comparison.click());
+    await flush();
+    const menu = testWindow.document.querySelector('[role="listbox"]')!;
+    expect(menu.closest("dialog") === container.querySelector("dialog")).toBe(true);
+    const inclusive = [...menu.querySelectorAll<HTMLButtonElement>('[role="option"]')]
+      .find(option => option.textContent?.includes("Greater than or equal to"))!;
+    await act(async () => inclusive.click());
+    await flush();
+    expect(comparison.textContent).toContain("Greater than or equal to");
+    expect(testWindow.document.querySelector('[role="listbox"]')).toBeNull();
+    expect(testWindow.document.activeElement === comparison).toBe(true);
+  });
+
   test("real routed and custom rows expose Price; badges use manualPricing and exclude native/combo aliases", async () => {
     await mount();
     expect(container.querySelectorAll('[aria-label^="Edit price for "]')).toHaveLength(2);

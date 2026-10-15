@@ -246,7 +246,7 @@ export default function ModelPriceDialog({ model, apiBase, onRefresh, onClose }:
             </div>
             <div>
               <label className="field-label" htmlFor={`${id}-comparison`}>{t("pricing.override.comparison")}</label>
-              <Select id={`${id}-comparison`} label={t("pricing.override.comparison")} value={customDraft.comparison} disabled={locked}
+              <Select id={`${id}-comparison`} label={t("pricing.override.comparison")} value={customDraft.comparison} disabled={locked} portal={false}
                 describedBy={helpId} options={[{ value: "gt", label: t("pricing.override.comparisonGt") }, { value: "gte", label: t("pricing.override.comparisonGte") }]}
                 onChange={value => setCustomDraft(current => ({ ...current, comparison: value as "gt" | "gte" }))} />
             </div>

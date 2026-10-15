@@ -10,6 +10,12 @@ rejects malformed/unknown nested fields on writes and copies only validated poli
 display, dropping an explicit `automatic` policy so absence is the single stored form of
 Automatic; load degradation drops an invalid model row without losing the provider.
 
+`src/providers/openai-tiers.ts` accepts these same rate and policy shapes through the shared
+`validCost4` predicate in the pure `src/usage/user-cost-validation.ts` module when migrating
+legacy `openai-multi` overlays. It rejects unknown row
+fields and malformed policies, and preserves valid policies while rewriting model keys to `openai`.
+`tests/adapters/openai/openai-provider-option-migration.test.ts` covers preservation and rejection.
+
 `src/server/management/model-routes.ts` serves `GET/PUT /api/providers/{provider}/model-costs`.
 GET and successful PUT receipts retain all four rates and the optional validated policy.
 A `cost: null` write removes the entire model override. Writes retain atomic persistence,
@@ -35,6 +41,8 @@ Parsing, draft building, per-field validation and receipt comparison live in the
 `gui/src/components/model-price-cost.ts`; the dialog sends no policy for Automatic, validates
 complete policy receipts before refreshing the model list and retains its uncertain-outcome/reload
 flow. `gui/tests/models-price-editor.test.tsx` covers this behavior.
+The comparison Select renders its menu inside the modal dialog so native modal inertness does
+not block pointer or keyboard interaction with its options.
 
 `src/usage/cost.ts` selects rates against inclusive `usage.inputTokens`, before subtracting cache
 reads/writes for cost estimates; output is excluded from threshold selection. Alternative rates

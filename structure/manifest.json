@@ -540,6 +540,7 @@
         "src/server/management/model-routes.ts",
         "src/usage/cost.ts",
         "src/usage/user-cost-overlays.ts",
+        "src/usage/user-cost-validation.ts",
         "gui/src/components/ModelPriceDialog.tsx"
       ]
     },
