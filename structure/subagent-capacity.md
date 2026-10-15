@@ -60,7 +60,7 @@ including hybrid mode with the global `multi_agent_v2` flag disabled. Its displa
 children only. Surface selection and capacity are independent; raising the cap neither spawns
 children automatically nor guarantees faster execution.
 
-`GET/PUT /api/v2` retains its existing `maxThreads` units: with `enabled: false`, N means N
+`GET/PUT /api/v2` retains its existing `maxConcurrentThreadsPerSession` units: with `enabled: false`, N means N
 children; with `enabled: true`, N+1 includes the primary thread. The GUI subtracts one for display
 and adds one on save only when that global flag is enabled. Catalog-selected v2 in hybrid mode
 does not change those API units. An unset limit leaves the default to the native runtime.
