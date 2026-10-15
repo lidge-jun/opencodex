@@ -408,9 +408,10 @@ export function advanceComboAfterFailure(
   // including the pool's OWN "all accounts are cooled" 429, which refuses locally before it picks
   // one. That is what keeps this from trading a blackhole for a hammer: when nothing else is
   // holding the target back, the target cooldown still does.
-  const accountScoped = options.cooldownScope === "target"
-    && options.status === 429
-    && options.failedAccount !== undefined;
+  // A 402 credit refusal is the provider-scoped twin: the caller names an account only after the
+  // pool has cooled it and still holds an eligible sibling.
+  const accountScoped = options.failedAccount !== undefined
+    && (options.status === 429 ? options.cooldownScope === "target" : options.status === 402);
   // "none" records no cooldown at all: the failure described the request, not the target, so
   // the target must stay immediately selectable for the next (differently shaped) request.
   if (options.cooldownScope !== "none" && !accountScoped) {

@@ -55,6 +55,7 @@ import { memoryModelRouteReason } from "./memory-models";
 import { baseProviderLabel, poolAccountProviderLabel } from "../../providers/label";
 import { getAccountSet } from "../../oauth/store";
 import { configuredAnthropicInstance } from "../../providers/anthropic-instance";
+import { isAnthropicBillingFailure } from "../../providers/anthropic-billing-refusal";
 import {
   anthropicRoutingFor,
   formatAnthropicProviderForLog,
@@ -156,6 +157,27 @@ function cooledGenericOAuthAccountLabel(
     ? label : undefined;
 }
 
+/**
+ * A 402 credit-balance refusal names one Anthropic OAuth account -- the evidence the pool already
+ * accepts on a 403 -- but the pool rotates only on 401/403/429, so the 402 reaches the combo with
+ * that account still selectable. Cool it under the pool's entitlement backoff and spare the target
+ * only while a sibling is eligible; a lone account or an exhausted pool still cools the target.
+ */
+function creditRefusedAnthropicAccountLabel(
+  config: OcxConfig, providerName: string, modelId: string, label: string | undefined,
+  message: string, code: string | null | undefined,
+): string | undefined {
+  const instance = configuredAnthropicInstance(config, providerName);
+  if (!label || !instance || config.providers[providerName]?.authMode !== "oauth"
+    || !isAnthropicBillingFailure(402, message, code)) return undefined;
+  const routing = anthropicRoutingFor(instance);
+  const matches = getAccountSet(instance)?.accounts.filter(account =>
+    formatAnthropicProviderForLog(instance, account.id) === label) ?? [];
+  return matches.length === 1
+    && routing.recordAnthropicAccountRefusal(config, matches[0]!.id, 403, null)
+    && routing.getEligibleAnthropicAccounts(Date.now(), modelId).length > 0
+    ? label : undefined;
+}
 
 /**
  * True only for the Anthropic OAuth pool's OWN "all accounts cooled" 429. Its Retry-After is the
@@ -1156,12 +1178,13 @@ export async function executeComboResponses(
     const failedTargetKey = targetKey(pick.target);
     let failedTargetCooldownRecorded = false;
     // The dispatch rewrote this to name the pool account that actually served the turn.
-    const failedAccount = cooledPoolAccountLabel(
-      config,
-      pick.target.provider,
-      pick.target.model,
-      poolAccountProviderLabel(childLog.provider, pick.target.provider),
-    ) ?? (failure.response.status === 429 && failureCooldownScope === "target"
+    const poolAccountLabel = poolAccountProviderLabel(childLog.provider, pick.target.provider);
+    const failedAccount = failure.response.status === 402
+      ? creditRefusedAnthropicAccountLabel(
+        config, pick.target.provider, pick.target.model, poolAccountLabel, failure.classificationText, failure.upstreamCode,
+      )
+      : cooledPoolAccountLabel(config, pick.target.provider, pick.target.model, poolAccountLabel)
+      ?? (failure.response.status === 429 && failureCooldownScope === "target"
       ? cooledGenericOAuthAccountLabel(config, pick.target.provider, pick.target.model, childLog.accountLogLabel, failure.retryAfter)
       : undefined);
     // The target still cools on the pool's own refusal (the anti-hammer guard), but for the local
