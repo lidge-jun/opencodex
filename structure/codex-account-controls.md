@@ -74,6 +74,39 @@ routing. Coverage: `tests/codex-integration/codex-credits-after-limit.test.ts`,
 `gui/tests/codex-credit-spend.test.tsx`.
 
 
+## Hard-lock fallback routing
+
+`codexMainAccountHardLockFallback` extends the main-account hard lock: while the lock reads
+`blocked` and no Codex account can serve a request, `src/server/responses/main-hard-lock-routing.ts`
+rewrites that request to the configured model (plus an optional reasoning effort) before combo
+dispatch reads `model`. The rewrite is bounded on every side so it can never widen what the lock
+protects:
+
+- `getEligiblePoolAccounts` is consulted under the request model's quota scope whenever canonical
+  `openai` is in Pool mode, so "the Pool can serve it" shares the dispatch's own eligibility and
+  scoped-cooldown rules. An empty eligible list (or Direct mode, which never consults stored Pool
+  accounts) is what makes the fallback the request's only way through; the lock excludes the main
+  account there itself.
+- Only bare Codex-native selectors qualify. Provider-qualified rows, combos, account namespaces
+  (including `nativeAlias` combos), compaction triggers, shadow-intercepted helper calls and policy
+  routes name their own destination on purpose, and Luna Reserve keeps its own admission. A
+  Codex-native fallback target (bare `gpt-*` or canonical `openai/gpt-*`) never applies — rerouting
+  to the same blocked route would re-enter the refusal, so the honest behavior is the refusal.
+- Rewritten turns mark a credential-domain rewrite, strip foreign reasoning ciphertext, preserve
+  the caller's inbound selector for API-key scope checks and `requestedModel` logging (including
+  combo fallback targets), and do not overwrite the session lane's remembered combo.
+- A malformed section (blank or padded model, undeclared effort) disables the reroute entirely —
+  the same disable-don't-widen reading as the compaction override — while the load and write
+  boundaries report the malformation. The lock's own refusal behavior is untouched either way.
+
+The dashboard row mirrors the shadow-call row: the model pick, the effort and the switch each
+save immediately, and the switch writes `enabled: false` — a remembered pause that keeps the
+model — rather than clearing it. Settings projection and writes live beside the hard-lock keys in
+`src/server/management/config-routes.ts`; `null` clears the section. Coverage:
+`tests/codex-integration/main-account-hard-lock-fallback-routing.test.ts` and the fallback cases in
+`tests/config/settings-main-account-hard-lock.test.ts` plus
+`gui/tests/main-account-hard-lock-setting.test.tsx`.
+
 ## Stored-account authentication policy
 
 Exact pool selectors also honor the credits-after-limit policy. `pool-credit-policy.ts` reads cached usage and configured plan metadata without credential I/O. Authentication checks before and after credential acquisition; provider overrides, materialization and recovery rechecks retain the live policy privately by context identity. `createCodexAuthDispatchGuard` rechecks live credit policy at HTTP and Responses WebSocket dispatch after pacing or retry backoff, alongside the independent Reserve guard. A policy refusal releases unused probes and never quarantines a valid credential. Coverage: `tests/codex-integration/codex-pool-credit-policy.test.ts`.

@@ -527,13 +527,16 @@ mod command {
     pub(super) fn run(program: &str, args: &[&str], timeout: Duration) -> Result<String, RunError> {
         let slot = Slot::take().ok_or(RunError::Failed)?;
         let deadline = Instant::now() + timeout;
-        let mut child = Command::new(program)
-            .args(args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|_| RunError::Failed)?;
+        let spawn = || {
+            Command::new(program)
+                .args(args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+        };
+        let child = crate::process_spawn::with_spawn(spawn);
+        let mut child = child.map_err(|_| RunError::Failed)?;
         let readers = [drain(child.stdout.take()), drain(child.stderr.take())];
         let status = loop {
             match child.try_wait() {
@@ -579,6 +582,29 @@ mod command {
 
         #[test]
         fn a_command_past_its_deadline_holds_the_only_slot_until_it_ends() {
+            // Measure command deadlines in a fresh process: the parent's executable-fixture
+            // writers may hold the test spawn lock longer than this test's timing budget.
+            const CHILD: &str = "OCX_LOGIN_COMMAND_DEADLINE_CHILD";
+            if std::env::var_os(CHILD).is_none() {
+                let output = crate::process_spawn::with_spawn(|| {
+                    Command::new(std::env::current_exe().unwrap())
+                        .args([
+                            "--exact",
+                            "login_registration::command::tests::a_command_past_its_deadline_holds_the_only_slot_until_it_ends",
+                            "--nocapture",
+                        ])
+                        .env(CHILD, "1")
+                        .output()
+                })
+                .unwrap();
+                assert!(
+                    output.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+                return;
+            }
             let started = Instant::now();
             assert_eq!(
                 run("/bin/sleep", &["1"], Duration::from_millis(50)),

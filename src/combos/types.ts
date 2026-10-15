@@ -39,12 +39,16 @@ export interface NormalizedComboTarget {
   weight: number;
   /** Emergency-only target, deferred under `cooldownWaitPolicy` (#5691). */
   lastResort: boolean;
+  /** Pay-per-use target; requires key consent or loopback-only operator consent. */
+  metered: boolean;
   reasoningEfforts?: OcxComboDefaultEffort[];
   /** Optional JEV decision description. */
   modelProfile?: string;
 }
 
 export interface NormalizedComboConfig {
+  /** Operator consent, effective only on a loopback-only proxy. */
+  allowMeteredTargets?: boolean;
   strategy: OcxComboStrategy;
   stickyLimit: number;
   cooldownMs?: number;
@@ -164,6 +168,9 @@ export function comboConfigIssues(
   }
 
   const body = raw as Record<string, unknown>;
+  if (body.allowMeteredTargets !== undefined && typeof body.allowMeteredTargets !== "boolean") {
+    issues.push({ path: ["allowMeteredTargets"], message: "allowMeteredTargets must be a boolean" });
+  }
   if (typeof body.alias === "string") {
     const alias = body.alias.toLowerCase();
     for (const [providerName, provider] of Object.entries(providers)) {
@@ -427,6 +434,12 @@ export function comboConfigIssues(
         message: `targets[${i}].lastResort must be a boolean`,
       });
     }
+    if (target.metered !== undefined && typeof target.metered !== "boolean") {
+      issues.push({
+        path: ["targets", i, "metered"],
+        message: `targets[${i}].metered must be a boolean`,
+      });
+    }
     if (target.modelProfile !== undefined
       && (typeof target.modelProfile !== "string"
         || target.modelProfile.trim().length === 0
@@ -477,6 +490,7 @@ export function normalizeComboConfig(raw: OcxComboConfig): NormalizedComboConfig
     : null;
   return {
     strategy: raw.strategy ?? "failover",
+    ...(raw.allowMeteredTargets === true ? { allowMeteredTargets: true } : {}),
     stickyLimit: raw.stickyLimit ?? 1,
     cooldownMs: raw.cooldownMs,
     waitForCooldownMs: raw.waitForCooldownMs ?? COMBO_DEFAULT_WAIT_FOR_COOLDOWN_MS,
@@ -503,6 +517,7 @@ export function normalizeComboConfig(raw: OcxComboConfig): NormalizedComboConfig
         ? { modelProfile: target.modelProfile.trim() }
         : {}),
       lastResort: target.lastResort === true,
+      metered: target.metered === true,
     })),
   };
 }

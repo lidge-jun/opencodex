@@ -264,3 +264,50 @@ test("changing active account discards the previous refresh feedback", async () 
   expect(host.textContent).not.toContain("Quota check completed");
   expect(findButton("Refresh quotas")?.disabled).toBe(false);
 });
+
+test("Antigravity badges expose canonical tier IDs across locales and preserve account controls", async () => {
+  win.localStorage.setItem("ocx-lang", "zh");
+  const item = { ...oauthItem, name: "google-antigravity" };
+  const calls: string[] = [];
+  const handlers = authHandlers({
+    onPauseAccount: (_provider, _account, paused) => { calls.push(paused ? "pause" : "resume"); },
+    onReauth: (_provider, id) => { calls.push(id!); },
+  });
+  const row = { id: "ag-1", active: true, paused: false };
+  const view = (plan?: string | null, paused = false, needsReauth = false, pausingAccountId: string | null = null) =>
+    <ProviderAuthPanel item={item} apiBase="" accounts={[{ ...row, plan, paused, needsReauth }]}
+      pausingAccountId={pausingAccountId} authHandlers={handlers} />;
+  const main = () => host.querySelector(".pwi-auth-row-main") as HTMLButtonElement;
+  const badge = () => main().querySelector(".pwi-auth-row-heading .badge");
+  const control = (text: string) => Array.from(host.querySelectorAll("button")).find(button => button.textContent?.trim() === text) as HTMLButtonElement;
+
+  for (const plan of ["free-tier", "gemini-pro", "gemini-ultra", "standard-tier"]) {
+    await render(view(plan));
+    expect(badge()?.textContent).toBe(plan);
+    expect(main().getAttribute("aria-label")).toContain(` — ${plan} — `);
+    expect(main().getAttribute("aria-current")).toBe("true");
+    expect(main().disabled).toBe(false);
+  }
+  await act(async () => { control("暂停")!.click(); });
+  expect(calls).toEqual(["pause"]);
+
+  await render(view("gemini-pro", true));
+  expect(badge()?.textContent).toBe("gemini-pro");
+  expect(main().disabled).toBe(true);
+  await act(async () => { control("恢复")!.click(); });
+  expect(calls).toEqual(["pause", "resume"]);
+
+  await render(view("gemini-pro", false, true));
+  expect(main().disabled).toBe(true);
+  await act(async () => { control("重新认证")!.click(); });
+  expect(calls).toEqual(["pause", "resume", "ag-1"]);
+
+  await render(view("gemini-pro", false, false, row.id));
+  expect(control("暂停")?.disabled).toBe(true);
+  expect(control("暂停")?.getAttribute("aria-busy")).toBe("true");
+  for (const plan of [null, undefined]) {
+    await render(view(plan));
+    expect(badge()).toBeNull();
+    expect(main().getAttribute("aria-label")).not.toMatch(/null|undefined|gemini-pro/);
+  }
+});

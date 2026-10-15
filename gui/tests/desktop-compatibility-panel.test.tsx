@@ -22,7 +22,7 @@ afterEach(async () => {
   for (const key of keys) Object.defineProperty(globalThis, key, { configurable: true, value: previous[key] });
 });
 const requests: { url: string; method: string; body?: unknown }[] = [];
-function server(uncertain = false, certificateState?: string, usagePhase?: string, observation?: Record<string, unknown>) {
+function server(uncertain = false, certificateState?: string, usagePhase?: string, observation?: Record<string, unknown>, buildAssessment?: unknown) {
   requests.length = 0; let trusted = false, startup = false;
   globalThis.fetch = (async (input, init) => {
     const url = String(input), method = init?.method ?? "GET";
@@ -34,6 +34,7 @@ function server(uncertain = false, certificateState?: string, usagePhase?: strin
     if (method === "POST") { trusted = true; if (uncertain) throw new TypeError("uncertain response"); return Response.json({ ok: true }); }
     return Response.json(url.endsWith("/certificate") ? { ok: true, certificate: { supported: true, state: trusted ? "trusted" : certificateState ?? "prepared", busy: null,
       fingerprint: (url.startsWith("/second") ? "B" : "A").repeat(64) } } : { ok: true, runtime: { supported: true, phase: usagePhase ? "running" : "off", running: !!usagePhase,
+        ...(buildAssessment !== undefined ? { buildAssessment } : {}),
         ...(usagePhase ? { usage: { mode: "observe", phase: usagePhase, outputs: 0, appCacheConfirmed: false, ...(observation ? { observation } : {}) } } : {}) } });
   }) as typeof fetch;
 }
@@ -125,6 +126,42 @@ test("managed client mode never falls back to mutating the shared hub", async ()
   await render("/machine", true);
   expect(container.textContent).toContain("unavailable in OpenCodex managed client mode");
   expect(requests).toHaveLength(0); expect(container.querySelector("button")).toBeNull();
+});
+test("a completed build assessment shows verified and last observed versions without claiming support", async () => {
+  server(false, "trusted", undefined, undefined,
+    { assessedVersion: "26.924.2738.0", observedVersion: "26.1007.9446.0", verified: false, completedAt: 1770000000000, privatePath: "fixture-secret" });
+  const container = await mount();
+  expect(container.textContent).toContain("Verified package version");
+  expect(container.textContent).toContain("Last observed package version");
+  expect(container.textContent).not.toContain("Installed package version");
+  expect(container.textContent).toContain("26.924.2738.0");
+  expect(container.textContent).toContain("26.1007.9446.0");
+  expect(container.textContent).toContain(new Date(1770000000000).toLocaleString("en"));
+  expect(container.textContent).not.toContain("fixture-secret");
+  expect(container.textContent).not.toContain("Not detected");
+});
+test("a build assessment without an observed version reports detection, not verification", async () => {
+  server(false, "trusted", undefined, undefined,
+    { assessedVersion: "26.924.2738.0", observedVersion: null, verified: false, completedAt: 1770000000000 });
+  const container = await mount();
+  expect(container.textContent).toContain("Last observed package version");
+  expect(container.textContent).toContain("Not detected");
+  expect(container.textContent).toContain(new Date(1770000000000).toLocaleString("en"));
+});
+test("no probe result hides the build version rows", async () => {
+  server(false, "trusted");
+  const container = await mount();
+  expect(container.textContent).not.toContain("Last observed package version");
+  expect(container.textContent).not.toContain("Observed at");
+});
+test("a stopped runtime still presents a stale verified check as a past observation, not current proof", async () => {
+  server(false, "trusted", undefined, undefined,
+    { assessedVersion: "26.924.2738.0", observedVersion: "26.924.2738.0", verified: true, completedAt: 1770000000000 });
+  const container = await mount();
+  expect(container.textContent).toContain("Last observed package version");
+  expect(container.textContent).toContain(new Date(1770000000000).toLocaleString("en"));
+  expect(container.textContent).not.toContain("Installed package version");
+  expect(container.textContent).not.toContain("currently installed");
 });
 test("auto-start toggle writes once with the displayed revision and rechecks the saved state", async () => {
   server(); const container = await mount();

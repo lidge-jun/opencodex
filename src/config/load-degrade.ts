@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { compactionRecoveryConfigError } from "./schema/compaction-recovery";
 import { desktopCompatibilityConfigError } from "./schema/desktop-compatibility";
 import { blockedModelRedirectsError } from "./schema/blocked-model-redirects";
+import { mainAccountHardLockFallbackError } from "./schema/main-account-hard-lock-fallback";
 import { anthropicSidecarConfigError } from "./schema/anthropic-account-pool";
 import {
   modelPinnedEffortsConfigError,
@@ -135,6 +136,7 @@ export function warnDegradedTopLevelOptIns(rawParsed: unknown, validated: OcxCon
   if (compactionRecoveryConfigError(rawParsed)) console.warn("⚠️  invalid compactionRecovery disabled; the original compaction failure is preserved");
   if (desktopCompatibilityConfigError(rawParsed)) console.warn("Invalid desktopCompatibility startup preference ignored; no desktop compatibility service will start automatically.");
   if (blockedModelRedirectsError(rawParsed)) console.warn("⚠️  invalid blockedModelRedirects ignored; provider routing remains available");
+  if (mainAccountHardLockFallbackError(rawParsed)) console.warn("⚠️  invalid codexMainAccountHardLockFallback ignored; the main-account hard lock still refuses while blocked");
   const chatgptDesktop = chatgptDesktopConfigIssue(rawParsed);
   if (chatgptDesktop) console.warn(`⚠️  config.json ${chatgptDesktop} — the whole chatgptDesktop block is ignored, so the ChatGPT desktop integration reads as off`);
   warnDegradedStreamMode(rawParsed, validated);

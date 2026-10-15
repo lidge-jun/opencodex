@@ -18,6 +18,7 @@ import {
   isCyberPolicyCode,
   isCyberPolicyMessage,
   SEND_BUDGET_EXHAUSTED_CODE,
+  UNDECLARED_TOOL_CALL_ERROR_CODE,
 } from "../lib/errors";
 import { reportDispatchSends, type RequestExecutionBudget, type SingleUseDispatchPermit } from "../lib/request-execution-budget";
 import type { AdmissionLease } from "../lib/admission";
@@ -74,7 +75,7 @@ import {
   recordAttemptCredentialSource,
   type RequestLogContext,
 } from "./request-log";
-import { jsonCompletionSse, nativeChatSse, structuredError, usageFromChat } from "./chat-native-sse";
+import { chatResponseHasUndeclaredToolCalls, UNDECLARED_CHAT_TOOL_MESSAGE, jsonCompletionSse, nativeChatSse, structuredError, usageFromChat } from "./chat-native-sse";
 import { beginInferenceAttempt, type InferenceAttempt } from "./inference/attempt";
 import { createFinalRequestLog } from "./inference/final-log";
 import { registerTurn, unregisterTurn } from "./lifecycle";
@@ -275,6 +276,10 @@ export async function runNativeChatAttempt(
 ): Promise<Response> {
   const { req, config, logCtx, logIds, route, requestedModel, requestedStream, translatorBudget, finishLog } = execution;
   const { sendBudget } = execution;
+  const clientDeclaredEmptyToolCatalog = Array.isArray(execution.chatBody.tools) && execution.chatBody.tools.length === 0;
+  const declaredLegacyFunctionNames = new Set<string>(clientDeclaredEmptyToolCatalog && Array.isArray(execution.chatBody.functions)
+    ? execution.chatBody.functions.flatMap(fn => isRec(fn) && typeof fn.name === "string" && fn.name.length > 0 ? [fn.name] : [])
+    : []);
   const { attempt } = attemptHandle;
   const onFirstOutput = execution.onFirstOutput
     ?? (logIds ? () => recordFirstOutput(logCtx, logIds.start) : undefined);
@@ -740,6 +745,8 @@ export async function runNativeChatAttempt(
       signal: upstream.signal,
       stallTimeoutSec: config.stallTimeoutSec,
       localUpstream: isLocalUpstream(activeProvider.baseUrl),
+      clientDeclaredEmptyToolCatalog,
+      declaredLegacyFunctionNames,
       onFirstOutput,
       onUsage: usage => {
         if (!recordKeyWireAttemptUsage(logCtx, usage)) {
@@ -839,6 +846,9 @@ export async function runNativeChatAttempt(
       logCtx.usage = usage;
       attempt.usage = usage;
     }
+  }
+  if (clientDeclaredEmptyToolCatalog && chatResponseHasUndeclaredToolCalls(completion, declaredLegacyFunctionNames)) {
+    return fail(502, UNDECLARED_CHAT_TOOL_MESSAGE, "upstream_error", UNDECLARED_TOOL_CALL_ERROR_CODE);
   }
   onFirstOutput?.();
   try {
