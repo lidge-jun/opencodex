@@ -1072,6 +1072,7 @@
   "shutdown-launcher.test.ts": "service", "sidebar-routes.test.ts": "server",
   "sidebar-star-state.test.ts": "server", "sidecar-abort.test.ts": "vision",
   "sidecar-auth.test.ts": "vision", "sidecar-candidates.test.ts": "vision",
+  "sidecar-settings-vision-catalog.test.ts": "vision",
   "sidecar-settings-vision-controls.test.ts": "vision", "sidecar-settings-vision-filter.test.ts": "vision",
   "sidecar-settings-web-search-gate.test.ts": "vision", "sidecar-settings-web-search-off.test.ts": "vision",
   "sidecar-settings-web-search-stream.test.ts": "vision", "sidecar-tracker.test.ts": "vision",

@@ -226,6 +226,10 @@ timeout, and limit.
 omitted keys unchanged. `timeoutMs` uses the runtime integer bounds
 (1–2147483647 ms).
 
+When the effective Vision switch changes, saving also refreshes the managed Codex catalog and
+model cache. The response reports `catalogRefreshPending: true` if that refresh did not complete;
+the saved switch is retained, and catalog publication does not confirm that a running client has reloaded it.
+
 The web-search sidecar card carries the same control shape: the model picker's first row is
 **Off**. Off does two things, and the second one is the reason the row exists. OpenCodex stops
 intercepting `web_search`, and the Codex integration writes Codex's own

@@ -128,6 +128,10 @@ Dashboard 和管理 API 都使用 `gpt-5.6-luna` 作为回退。启动时仍会�
 
 `PUT /api/sidecar-settings` 接受相同字段。部分更新会保留未提交的键。`timeoutMs` 使用运行时整数边界（1–2147483647 毫秒）。
 
+Vision 的实际启用状态改变时，保存后也会刷新受管理的 Codex 目录和模型缓存。
+若刷新未完成，响应会返回 `catalogRefreshPending: true`，已保存的开关设置仍然保留。
+目录发布成功并不表示运行中的客户端已重新加载目录。
+
 Web 搜索 sidecar 卡片采用相同的控件形态：模型选择器的第一行是 **关闭 (Off)**。关闭会停止
 OpenCodex 对 `web_search` 的拦截，同时 Codex 集成会把 `web_search = "disabled"`
 写入 `~/.codex/config.toml`；因为 Codex 在自身模式如此声明前会一直声明其原生托管的

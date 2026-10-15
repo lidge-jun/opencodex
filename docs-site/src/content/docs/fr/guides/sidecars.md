@@ -88,9 +88,12 @@ les échecs de génération postérieurs à l'envoi des en-têtes sont transmis 
 Lorsqu'un modèle routé figure dans le `noVisionModels` de son fournisseur — ou est déclaré texte seul pour ce modèle
 via `modelInputModalities` — et qu'une requête porte une image, opencodex décrit chaque image **avant** l'appel principal
 et la remplace par du texte, à condition qu'un plan de sidecar vision soit disponible. Sans plan disponible, l'image brute
-est supprimée au lieu d'être transmise à un backend texte seul. Le catalogue de modèles annonce l'entrée image pour chaque
-modèle couvert par le sidecar. Les combos annoncent l'entrée image seulement lorsque chaque membre accepte les images,
-nativement ou via un sidecar, et que le paramètre `imageInput` du combo n'est pas désactivé, afin que des clients comme
+est supprimée au lieu d'être transmise à un backend texte seul. Avec `visionSidecar.enabled: false`, le catalogue de modèles
+n'ajoute pas d'entrée image fournie par le sidecar aux modèles texte seuls, y compris les entrées personnalisées et les
+membres des combos. La prise en charge native des images et les modalités image explicitement configurées sont conservées.
+Si `enabled` est omis, l'annonce des capacités du sidecar reste activée ; la présence dans le catalogue ne garantit pas
+que les identifiants ou la capacité du sidecar sont disponibles. Les combos annoncent l'entrée image seulement lorsque
+chaque membre accepte les images, nativement ou via un sidecar activé, et que le paramètre `imageInput` du combo n'est pas désactivé, afin que des clients comme
 l'application Codex autorisent les pièces jointes au lieu de les bloquer avant l'exécution du sidecar. Lorsque
 `visionSidecar.model` est absent ou vide, le chemin d'exécution OpenAI, le tableau de bord et l'API de gestion
 utilisent le modèle de repli `gpt-5.6-luna`. Au démarrage, une ancienne valeur `gpt-5.6-luna` explicitement enregistrée
@@ -163,6 +166,8 @@ le délai d'attente et la limite précédemment choisis.
 `PUT /api/sidecar-settings` accepte les mêmes champs. Les mises à jour partielles laissent
 les clés omises inchangées. `timeoutMs` utilise les limites entières de l'environnement d'exécution
 (1–2147483647 ms).
+
+Un changement de l'état d'activation effectif de Vision via `PUT /api/sidecar-settings` actualise le catalogue et le cache gérés après l'enregistrement ; `catalogRefreshPending=true` signale que cette actualisation n'a pas abouti et ne constitue pas un accusé de réception du client.
 
 La carte du service auxiliaire de recherche web reprend la même forme de contrôle : la première
 ligne du sélecteur de modèle est **Désactivé (Off)**. La désactivation arrête l'interception de

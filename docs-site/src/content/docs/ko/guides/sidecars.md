@@ -142,6 +142,10 @@ OpenAI 실행 경로, Dashboard, 관리 API는 `gpt-5.6-luna`를 폴백으로 �
 
 `PUT /api/sidecar-settings`는 같은 필드를 받습니다. 부분 업데이트는 보내지 않은 키를 유지합니다. `timeoutMs`는 런타임 정수 범위(1–2147483647 ms)를 사용합니다.
 
+비전의 실제 활성화 상태가 바뀌면 저장 후 관리되는 Codex 카탈로그와 모델 캐시도 갱신합니다.
+갱신을 완료하지 못하면 응답의 `catalogRefreshPending`이 `true`가 되며 저장된 설정은 유지됩니다.
+카탈로그 갱신 완료가 실행 중인 클라이언트의 다시 읽기를 확인하는 것은 아닙니다.
+
 웹 검색 사이드카 카드도 같은 구성입니다. 모델 선택기의 첫 행은 **끔 (Off)** 행입니다. 끄면
 OpenCodex가 `web_search` 가로채기를 멈추고 Codex 통합이 `~/.codex/config.toml`에
 `web_search = "disabled"`를 씁니다. Codex는 자체 모드가 그렇게 될 때까지 네이티브 호스팅

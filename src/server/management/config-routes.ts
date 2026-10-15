@@ -353,6 +353,7 @@ function publicVisionSidecarSettings(
   };
 }
 
+/** Serve validated settings and publish catalog-affecting changes after persistence. */
 export async function handleConfigRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
   const readStartupHealth = deps.getCachedStartupHealth ?? getCachedStartupHealth;
@@ -1058,6 +1059,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     // Read BEFORE the mutation below: the Codex-side key follows the switch, and a flip is the
     // only case that owes a config.toml rewrite.
     const webSearchEnabledBefore = config.webSearchSidecar?.enabled !== false;
+    const visionEnabledBefore = config.visionSidecar?.enabled !== false;
     if (body.webSearch) {
       const pairTouched = body.webSearch.model !== undefined || body.webSearch.backend !== undefined || body.webSearch.anthropicInstance !== undefined;
       // Validate against the backend the caller SUBMITTED, across the whole
@@ -1193,6 +1195,11 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       }
     }
     saveConfigPreservingClaudeCode(config);
+    // Publish the changed attachment affordance to both the managed catalog and Codex cache.
+    // Use the existing bounded catalog-only path after persistence, outside the config lock.
+    const catalogRefresh = visionEnabledBefore !== (config.visionSidecar?.enabled !== false)
+      ? await convergeCodexCatalog()
+      : undefined;
     // The sidecar's own switch is only half of what "off" means: Codex keeps declaring its native
     // hosted `web_search` tool until its own mode says otherwise, and the tool a client advertises
     // is the one the model reaches for — which is why an MCP search server needs the client-side
@@ -1218,6 +1225,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
         ...(ws.xSearch ? { xSearch: ws.xSearch } : {}),
       },
       codexWebSearch,
+      catalogRefreshPending: catalogRefresh ? catalogRefreshIsPending(catalogRefresh) : false,
       vision: publicVisionSidecarSettings(config, vision),
       visionModels: vision.models,
       // Echoed for the same reason GET always carries it: the dashboard rebuilds

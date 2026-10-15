@@ -1643,6 +1643,7 @@
     "sidecar-abort.test.ts": "vision",
     "sidecar-auth.test.ts": "vision",
     "sidecar-candidates.test.ts": "vision",
+    "sidecar-settings-vision-catalog.test.ts": "vision",
     "sidecar-settings-vision-controls.test.ts": "vision",
     "sidecar-settings-vision-filter.test.ts": "vision",
     "sidecar-settings-web-search-gate.test.ts": "vision",
