@@ -25,7 +25,7 @@ import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { accessSync, constants, existsSync, linkSync, readdirSync, readFileSync, readlinkSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join, win32 } from "node:path";
+import { basename, dirname, isAbsolute, join, win32 } from "node:path";
 import { getConfigDir } from "../config/paths";
 import { resolveServiceOwnership } from "../service/state";
 
@@ -246,18 +246,21 @@ function consentedDesktopBundle(home: string, installId: string, run: Execute): 
   // The shapes auto-launch writes: [program] or [program, "--autostart"]; see the migration
   // rules in desktop/src-tauri/src/login_registration.rs, which classify anything else Leave.
   if (registration.Label !== DESKTOP_PLIST_LABEL || !Array.isArray(args)
-    || (args.length !== 1 && args.length !== 2) || typeof args[0] !== "string"
+    || (args.length !== 1 && args.length !== 2) || typeof args[0] !== "string" || !isAbsolute(args[0])
     || (args.length === 2 && args[1] !== "--autostart")
     || (registration.Program !== undefined && registration.Program !== args[0])) return null;
   const executable = realpathSync(args[0]);
-  if (!isDesktopExecutable(executable, "darwin")) return null;
+  if (!isDesktopExecutable(executable, "darwin") || !statSync(executable).isFile()) return null;
   accessSync(executable, constants.X_OK);
   const bundle = dirname(dirname(dirname(executable)));
   if (!bundle.endsWith(".app")) return null;
   const info = JSON.parse(
     run("/usr/bin/plutil", ["-convert", "json", "-o", "-", join(bundle, "Contents", "Info.plist")], 3_000),
-  ) as { CFBundleIdentifier?: unknown };
-  return info.CFBundleIdentifier === DESKTOP_BUNDLE_ID ? bundle : null;
+  ) as { CFBundleIdentifier?: unknown; CFBundleExecutable?: unknown };
+  // `open` uses this selector, so checking only the registration and identifier would
+  // validate one binary while launching another. The registered path is already canonical.
+  if (info.CFBundleIdentifier !== DESKTOP_BUNDLE_ID || info.CFBundleExecutable !== "opencodex-desktop") return null;
+  return realpathSync(join(bundle, "Contents", "MacOS", info.CFBundleExecutable)) === executable ? bundle : null;
 }
 
 /** Start the consented macOS app hidden, by the path its own login registration recorded. */
