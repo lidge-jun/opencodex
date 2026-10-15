@@ -266,6 +266,8 @@
   "chat-native-decline-reason.test.ts": "responses", "chat-inbound-reasoning-replay.test.ts": "responses",
   "chat-inline-document-bytes.test.ts": "responses", "chat-json-sse-fallback.test.ts": "responses",
   "chat-media-translation.test.ts": "responses", "chat-native-developer-role.test.ts": "responses",
+  "chat-native-reasoning-replay.test.ts": "responses",
+  "chat-native-reasoning-scope.test.ts": "responses",
   "chat-native-image-normalization.test.ts": "responses", "chat-native-spend.test.ts": "responses",
   "chat-refusal-scope.test.ts": "responses", "chat-refusal.test.ts": "responses",
   "chat-responses-control-integration.test.ts": "responses", "chat-responses-control-scope.test.ts": "responses",

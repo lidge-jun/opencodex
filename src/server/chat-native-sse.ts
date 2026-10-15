@@ -136,6 +136,7 @@ interface NativeChatSseOptions {
   localUpstream?: boolean;
   onFirstOutput?: () => void;
   onUsage: (usage: OcxUsage) => void;
+  onChunk?: (value: Rec) => void;
   onTerminal?: (status: number, message?: string) => void;
   onCancel?: () => void;
 }
@@ -272,6 +273,7 @@ export function nativeChatSse(
       return;
     }
     const usage = usageFromChat(parsed.usage);
+    options.onChunk?.(parsed);
     if (usage) options.onUsage(usage);
     const choices = Array.isArray(parsed.choices) ? parsed.choices : [];
     const finished = choices.some(choice => isRec(choice) && typeof choice.finish_reason === "string" && choice.finish_reason.length > 0);
