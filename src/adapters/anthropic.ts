@@ -1330,17 +1330,19 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
                   yield { type: "tool_call_start", id: currentToolCallId, name: currentToolCallName };
                 }
                 if (block.type === "server_tool_use" && block.name === "web_search" && typeof block.id === "string") {
-                  // Anthropic ran the caller's typed web_search: surface it as the same search
-                  // cell the sidecar emits. The query arrives as input_json_delta below.
+                  // Only the query is collected here (input_json_delta below). The search cell
+                  // opens at its result: a call Anthropic defers beside a client tool_use has
+                  // no result in this response and must not surface as a completed search.
                   serverSearch = { id: block.id, json: "", streaming: true };
-                  yield { type: "web_search_call_begin", id: block.id };
                 }
-                if (block.type === "web_search_tool_result" && serverSearch && block.tool_use_id === serverSearch.id) {
+                if (block.type === "web_search_tool_result" && typeof block.tool_use_id === "string") {
                   const hits = Array.isArray(block.content) ? block.content as Array<{ url?: unknown; title?: unknown }> : undefined;
+                  // The begin/end pair the sidecar emits. A result whose call came in an earlier response has no query here.
+                  yield { type: "web_search_call_begin", id: block.tool_use_id };
                   yield {
                     type: "web_search_call_end",
-                    id: serverSearch.id,
-                    queries: webSearchQueries(serverSearch.json),
+                    id: block.tool_use_id,
+                    queries: serverSearch?.id === block.tool_use_id ? webSearchQueries(serverSearch.json) : [],
                     // A failed search carries one error object instead of the hit list.
                     status: hits ? "completed" : "failed",
                     sources: (hits ?? []).flatMap(h => typeof h.url === "string"

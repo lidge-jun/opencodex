@@ -66,6 +66,7 @@ async function claudeTurn(
   baseUrl: string,
   frames: Record<string, unknown>[],
   target: "anth" | "gpt" = "anth",
+  messages: unknown[] = [{ role: "user", content: "What did Bun release? https://bun.sh/blog" }],
 ): Promise<{ wire: Record<string, unknown>; clientSse: string }> {
   const wires: string[] = [];
   const fetch = (async (_input: unknown, init?: RequestInit) => {
@@ -94,7 +95,7 @@ async function claudeTurn(
     body: JSON.stringify({
       model: "combo/waterfall", max_tokens: 64, stream: true,
       tools: [{ name: "Read", description: "read", input_schema: { type: "object", properties: {} } }, WEB_SEARCH, WEB_FETCH],
-      messages: [{ role: "user", content: "What did Bun release? https://bun.sh/blog" }],
+      messages,
     }),
   }), config, { model: "", provider: "" });
   expect(response.status).toBe(200);
@@ -143,6 +144,49 @@ describe("translated Claude lane carries typed web tools to Anthropic", () => {
     expect(clientSse).toContain("Bun shipped.");
     const usage = frames.find(f => f.type === "message_delta")!.usage as Record<string, unknown>;
     expect(usage.server_tool_use).toEqual({ web_search_requests: 1 });
+  });
+});
+
+const MESSAGE_START = SEARCH_TURN[0]!;
+const MESSAGE_END = SEARCH_TURN.slice(-2);
+const blockStarts = (clientSse: string) => clientFrames(clientSse)
+  .filter(f => f.type === "content_block_start").map(f => f.content_block as Record<string, unknown>);
+
+describe("server-side search across responses", () => {
+  test("a search Anthropic defers beside a client tool_use is not surfaced as a completed search", async () => {
+    const { clientSse } = await claudeTurn("https://api.anthropic.com", [
+      MESSAGE_START,
+      ...SEARCH_TURN.slice(1, 5),
+      { type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "toolu_1", name: "Read", input: {} } },
+      { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: "{}" } },
+      { type: "content_block_stop", index: 1 },
+      { type: "message_delta", delta: { stop_reason: "tool_use", stop_sequence: null }, usage: { output_tokens: 3 } },
+      { type: "message_stop" },
+    ]);
+    expect(blockStarts(clientSse).map(b => b.type)).toEqual(["tool_use"]);
+  });
+
+  test("a result whose call came in an earlier response still reaches the client by its tool_use_id", async () => {
+    const { clientSse } = await claudeTurn("https://api.anthropic.com", [MESSAGE_START, ...SEARCH_TURN.slice(5, 10), ...MESSAGE_END]);
+    const starts = blockStarts(clientSse);
+    expect(starts.map(b => b.type)).toEqual(["server_tool_use", "web_search_tool_result", "text"]);
+    expect(starts[1]).toMatchObject({ tool_use_id: starts[0]!.id, content: [{ type: "web_search_result", url: "https://bun.sh/blog" }] });
+  });
+
+  test("a replayed search pair without encrypted_content never reaches Anthropic", async () => {
+    const { wire } = await claudeTurn("https://api.anthropic.com", OK_TURN, "anth", [
+      { role: "user", content: "What did Bun release?" },
+      { role: "assistant", content: [
+        { type: "server_tool_use", id: "srvtoolu_1", name: "web_search", input: { query: "bun release" } },
+        { type: "web_search_tool_result", tool_use_id: "srvtoolu_1", content: [{ type: "web_search_result", url: "https://bun.sh/blog", title: "Bun blog" }] },
+        { type: "text", text: "Bun shipped." },
+      ] },
+      { role: "user", content: "More?" },
+    ]);
+    const wireText = JSON.stringify(wire.messages);
+    expect(wireText).not.toContain("web_search_tool_result");
+    expect(wireText).not.toContain("server_tool_use");
+    expect(wireText).toContain("Bun shipped.");
   });
 });
 
