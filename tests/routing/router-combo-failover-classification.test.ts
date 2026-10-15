@@ -57,6 +57,7 @@ describe("combo failure cooldown scope", () => {
       "tool_catalog_too_large",
       "cursor_root_envelope_limit",
       "target_incompatible",
+      "unsupported_input_modality",
     ]) {
       expect(comboFailureCooldownScope(400, "refused locally", { code })).toBe("none");
     }
@@ -111,7 +112,7 @@ describe("combo failure cooldown scope", () => {
 
 describe("combo failure hop/stop verdicts", () => {
   test("model-scoped rejections hop to the next target", () => {
-    for (const code of ["model_not_found", "model_unavailable", "unsupported_model"]) {
+    for (const code of ["model_not_found", "model_unavailable", "unsupported_model", "unsupported_input_modality"]) {
       expect(comboFailureDecision(400, "upstream rejected the model", { code })).toBe("hop");
     }
   });

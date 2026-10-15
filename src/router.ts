@@ -629,7 +629,8 @@ function crossProviderRedirectTarget(config: OcxConfig, providerName: string, va
   }
 }
 
-function isBareOpenAiFamilyModel(modelId: string): boolean {
+/** Exported for the main-account hard-lock fallback: only this family is ever redirected. */
+export function isBareOpenAiFamilyModel(modelId: string): boolean {
   return !modelId.includes("/")
     && (/^(?:gpt-|o1-|o3-|o4-)/.test(modelId) || CODEX_INTERNAL_OPENAI_MODELS.has(modelId));
 }

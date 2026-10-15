@@ -113,7 +113,7 @@ function describeScope(data: UsageReportInput): string {
   return terminalText(parts.join(", "));
 }
 
-export function formatUsageReport(data: UsageReportInput, options?: { modelView?: UsageModelView }): string[] {
+export function formatUsageReport(data: UsageReportInput, options?: { modelView?: UsageModelView; modelRowLimit?: number }): string[] {
   const summary = data.summary ?? {};
   const lines: string[] = [describeScope(data), ""];
   if (data.source === "hub" && data.scope === "client") {
@@ -192,7 +192,7 @@ export function formatUsageReport(data: UsageReportInput, options?: { modelView?
   const models = view ? (data.models ?? []) : (data.models ?? []).filter(row => row.requests > 0);
   if (models.length > 0) {
     lines.push("");
-    const shown = models.slice(0, view?.limit ?? MAX_MODEL_ROWS);
+    const shown = models.slice(0, view?.limit ?? options?.modelRowLimit ?? MAX_MODEL_ROWS);
     lines.push(...table(
       ["MODEL", "PROVIDER", "REQUESTS", "TOKENS", "EST. COST"],
       shown.map(row => [row.model ?? "-", row.provider, count(row.requests), count(row.totalTokens), usd(row.estimatedCostUsd)]),

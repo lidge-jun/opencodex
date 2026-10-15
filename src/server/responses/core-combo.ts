@@ -6,7 +6,7 @@ import {
   isDeclaredReasoningEffort,
   resolveEffortAtOrBelow,
 } from "../../reasoning-effort";
-import { resolveAdmissionModelScope, routeAllowedByScope } from "../admission-model-scope";
+import { admissionMayUseMeteredComboTargets, resolveAdmissionModelScope, routeAllowedByScope } from "../admission-model-scope";
 import { recordAttemptRequestedEffort } from "../request-log";
 import {
   CODEX_TEXT_GUARDED_BUDGET_POLICY,
@@ -317,9 +317,10 @@ export async function executeComboResponses(
   options: HandleResponsesOptions & { translatorBudget: TranslatorBudget },
   requestDispatchers: ResponsesDispatchers,
 ): Promise<Response> {
-  const requestedModel = typeof (rawBody as { model?: unknown } | null)?.model === "string"
-    ? (rawBody as { model: string }).model
-    : `combo/${comboId}`;
+  const requestedModel = options.mainHardLockFallbackOverride?.sourceModel
+    ?? (typeof (rawBody as { model?: unknown } | null)?.model === "string"
+      ? (rawBody as { model: string }).model
+      : `combo/${comboId}`);
   Object.assign(logCtx, {
     requestedModel,
     model: requestedModel,
@@ -449,8 +450,10 @@ export async function executeComboResponses(
   let comboPayloadReadable = false;
   const payloadEligible = (target: (typeof combo.targets)[number]): boolean =>
     comboPayloadReadable || !unreadableEncryptedAgentTask || canDecryptUnreadableAgentTask(target);
+  const meteredAllowed = admissionMayUseMeteredComboTargets(config, options.admission, combo);
   const targetEligible = (target: (typeof combo.targets)[number]): boolean =>
-    (combo.strategy !== "jev" || target.provider !== JEV_PROVIDER_ID)
+    (meteredAllowed || !target.metered)
+    && (combo.strategy !== "jev" || target.provider !== JEV_PROVIDER_ID)
     && payloadEligible(target)
     && reasoningReplayEligible(target)
     && (protocolLanes?.pickable(target) ?? true);
@@ -524,6 +527,9 @@ export async function executeComboResponses(
     now?: number;
   }) => pickComboTargetWithWait(config, comboId, {
     ...pickOptions,
+    // Every pick, including the recovery picks that skip `targetEligible`, keeps metered
+    // targets away from callers that may not spend on them.
+    eligible: target => (meteredAllowed || !target.metered) && (pickOptions.eligible?.(target) ?? true),
     waitForCooldownMs: combo.waitForCooldownMs,
     abortSignal: options.abortSignal,
   });
@@ -853,7 +859,8 @@ export async function executeComboResponses(
         // The live config can change while the child is streaming. Never retain credentials.
         const currentCombo = getCombo(config, comboId);
         const provider = config.providers[completedTarget.provider];
-        if (!options.compactionRoutingOverride && Object.hasOwn(config.providers, completedTarget.provider)
+        if (!options.compactionRoutingOverride && !options.mainHardLockFallbackOverride
+          && Object.hasOwn(config.providers, completedTarget.provider)
           && provider && provider.disabled !== true
           && currentCombo?.targets.some(target => targetKey(target) === targetKey(completedTarget))) {
           rememberComboForLane(sessionLaneIdFromRequest(req.headers), comboId, completedTarget, model, writerGeneration);
