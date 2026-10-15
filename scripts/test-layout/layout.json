@@ -76,6 +76,7 @@
     "owner-registry-acl.test.ts": "config",
     "minimax-combo-image-input.test.ts": "providers",
     "web-search-forced-declaration.test.ts": "web-search",
+    "web-search-loop-iteration-usage.test.ts": "web-search",
     "claude-devin-output-order.test.ts": "claude-integration",
     "codex-config-preservation.test.ts": "codex-integration",
     "codex-credits.test.ts": "codex-integration",
