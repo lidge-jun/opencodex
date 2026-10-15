@@ -23,10 +23,20 @@ Every private path must be user-owned without extended ACLs (macOS/Linux) or car
 user/SYSTEM/Administrators DACL (Windows root; children inherit it), otherwise nothing is written.
 Atomic replacement flushes and closes its write handle before publishing the new file by rename,
 so the published executable is never held open for writing by the replacing thread.
-Unix Rust tests share a read/write lock between executable fixture writers and subprocess spawns.
-Spawns may overlap each other, but no child can inherit a fixture's writable descriptor before exec
-closes it; closing the parent's close-on-exec descriptor alone does not release a forked duplicate.
-The lock exists only in test builds and leaves ordinary record writes concurrent with spawn stress.
+`desktop/src-tauri/src/process_spawn.rs` owns a production process-wide Unix read/write gate.
+Executable atomic writes take it exclusively before opening the temporary file and release it after
+closing and publishing; ordinary record and rc writes do not take it. Process creation takes a shared
+guard through exec, so no child inherits the writable executable descriptor. Closing only the parent's
+close-on-exec descriptor would leave a forked duplicate writable until that child's exec.
+The same guard covers runtime start (`sidecar.rs`), resolve, claim and stop output futures, macOS
+launchctl/plutil probes (`login_registration.rs`), browser and Login Items launchers, updater install
+helpers and app restart. Shell-plugin output futures take the guard while being polled, including the
+initial synchronous spawn, and release it before yielding; waiting for output never retains a guard.
+The configured LaunchAgent registration and Linux autostart write files without spawning commands.
+Windows uses the same call sites without a lock. Rust fixture writers and spawners use this production
+mechanism too; tests cover exclusion in both directions, spawn errors and async Pending release.
+A queued writer permits further spawns until existing launchers finish, avoiding deadlock when a plugin
+waits for a main-thread callback that launches another process. Only an active writer blocks spawns.
 
 `desktop/src-tauri/src/cli_command_posix.rs` generates a fail-closed shim, shared PATH helper
 and final managed zsh/bash/fish blocks. Reconcile separates desired rc targets from recorded

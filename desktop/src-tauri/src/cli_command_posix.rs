@@ -673,7 +673,8 @@ pub fn remove_plan(store: &Store, current: &Record) -> Result<(Record, Vec<Chang
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use record::tests::{bundle, with_spawn, Temp};
+    use crate::process_spawn::with_spawn;
+    use record::tests::{bundle, Temp};
     #[cfg(target_os = "macos")]
     fn stable_bundle_fixture() -> Temp {
         // Stable bundles cannot live under the OS temp directory. Keep the fixture
@@ -1036,7 +1037,7 @@ mod tests {
         ] {
             record::atomic(&t.0.join("cli"), None, inspect, 0o700).unwrap();
             {
-                let _writer = record::tests::executable_write();
+                let _writer = crate::process_spawn::executable_write();
                 fs::write(&shim, rendered).unwrap();
             }
             let out = with_spawn(|| {

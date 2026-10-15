@@ -454,7 +454,7 @@ mod tests {
     }
     fn selected_observation_case(case: &str) {
         let t = Temp::new();
-        let result = record::tests::with_spawn(|| {
+        let result = crate::process_spawn::with_spawn(|| {
             std::process::Command::new(std::env::current_exe().unwrap())
                 .args([
                     "--exact",
@@ -580,7 +580,7 @@ mod tests {
         }
     }
     fn disabled_selector_case(action: &str) {
-        let result = record::tests::with_spawn(|| {
+        let result = crate::process_spawn::with_spawn(|| {
             std::process::Command::new(std::env::current_exe().unwrap())
                 .args([
                     "--exact",

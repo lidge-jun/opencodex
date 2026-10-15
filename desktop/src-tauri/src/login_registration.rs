@@ -535,10 +535,7 @@ mod command {
                 .stderr(Stdio::piped())
                 .spawn()
         };
-        #[cfg(test)]
-        let child = crate::cli_command_record::tests::with_spawn(spawn);
-        #[cfg(not(test))]
-        let child = spawn();
+        let child = crate::process_spawn::with_spawn(spawn);
         let mut child = child.map_err(|_| RunError::Failed)?;
         let readers = [drain(child.stdout.take()), drain(child.stderr.take())];
         let status = loop {
@@ -589,7 +586,7 @@ mod command {
             // writers may hold the test spawn lock longer than this test's timing budget.
             const CHILD: &str = "OCX_LOGIN_COMMAND_DEADLINE_CHILD";
             if std::env::var_os(CHILD).is_none() {
-                let output = crate::cli_command_record::tests::with_spawn(|| {
+                let output = crate::process_spawn::with_spawn(|| {
                     Command::new(std::env::current_exe().unwrap())
                         .args([
                             "--exact",

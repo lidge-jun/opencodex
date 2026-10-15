@@ -548,8 +548,8 @@ fn replace(from: &Path, to: &Path) -> Result<()> {
     io(fs::rename(from, to))
 }
 pub fn atomic(path: &Path, before: Option<&[u8]>, after: &[u8], mode: u32) -> Result<()> {
-    #[cfg(all(test, unix))]
-    let _executable_write = (mode & 0o111 != 0).then(tests::executable_write);
+    #[cfg(unix)]
+    let _executable_write = (mode & 0o111 != 0).then(crate::process_spawn::executable_write);
     let parent = path.parent().ok_or("unsafe-file")?;
     check(parent, true)?;
     rc_acl_check(path)?;
@@ -1150,22 +1150,7 @@ impl Store {
 pub(crate) mod tests {
     use super::*;
     #[cfg(unix)]
-    static EXECUTABLE_IO: std::sync::RwLock<()> = std::sync::RwLock::new(());
-    #[cfg(unix)]
-    pub(crate) fn executable_write() -> std::sync::RwLockWriteGuard<'static, ()> {
-        EXECUTABLE_IO
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-    #[cfg(unix)]
-    pub(crate) fn with_spawn<T>(spawn: impl FnOnce() -> T) -> T {
-        // CLOEXEC closes descriptors at exec, not fork. Exclude executable writers until
-        // the child's exec has completed; allow the lock stress test's spawners to overlap.
-        let _guard = EXECUTABLE_IO
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        spawn()
-    }
+    use crate::process_spawn::with_spawn;
     #[cfg(unix)]
     #[test]
     fn executable_writes_wait_for_process_spawns_but_record_writes_do_not() {
