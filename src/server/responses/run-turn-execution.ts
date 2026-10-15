@@ -77,7 +77,7 @@ const RUNTURN_WS_ROUTE_STATE_KEYS = [
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function executeResponsesRunTurn(
-  requestContext: Pick<ResponsesRequestContext, "options" | "logCtx" | "config">,
+  requestContext: Pick<ResponsesRequestContext, "req" | "options" | "logCtx" | "config">,
   admissionState: ResponsesAdmissionState,
   requestState: Pick<
     PreparedResponsesRequest,
@@ -127,7 +127,7 @@ export async function executeResponsesRunTurn(
   >,
   completionPolicy: Pick<ResponsesCompletionPolicy, "emptyCompletionGuardEnabled">,
 ): Promise<Response> {
-  const { options, logCtx, config } = requestContext;
+  const { req, options, logCtx, config } = requestContext;
   const {
     selectionIsCurrent,
     adapterBindings,
@@ -186,7 +186,9 @@ export async function executeResponsesRunTurn(
   }
 
     const runTurnAbort = new AbortController();
-    const cleanupRunTurnAbort = linkAbortSignal(runTurnAbort, options.abortSignal);
+    const cleanupRequestAbort = linkAbortSignal(runTurnAbort, req.signal);
+    const cleanupOptionAbort = linkAbortSignal(runTurnAbort, options.abortSignal);
+    const cleanupRunTurnAbort = (): void => { cleanupRequestAbort(); cleanupOptionAbort(); };
     const devinProducers = new Set<AbortController>();
     const orderMessagesOutput = (source: AsyncIterable<AdapterEvent>): AsyncIterable<AdapterEvent> =>
       inboundWire === "anthropic" && transportState.runTurnAdapter.name === "devin" && !routedCompaction

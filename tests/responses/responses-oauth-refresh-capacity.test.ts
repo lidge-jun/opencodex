@@ -59,10 +59,12 @@ afterEach(() => {
 afterAll(() => { mock.module("../../src/server/adapter-resolve", () => originalResolver); });
 
 const cases = (["adapter", "passthrough", "runTurn"] as const).flatMap(transport =>
-  [false, true].flatMap(stream => [false, true].map(cancelled => ({ transport, stream, cancelled, ready: false }))));
-cases.push({ transport: "runTurn", stream: true, cancelled: false, ready: true });
-for (const { transport, stream, cancelled, ready } of cases) {
-  test(`${transport} fresh auth then 401 maps saturated refresh correctly (stream=${stream}, cancelled=${cancelled}, ready=${ready})`, async () => {
+  [false, true].flatMap(stream => [false, true].map(cancelled => ({ transport, stream, cancelled, ready: false, requestOnly: false }))));
+cases.push({ transport: "runTurn", stream: true, cancelled: false, ready: true, requestOnly: false });
+for (const stream of [false, true]) cases.push({ transport: "runTurn", stream, cancelled: true, ready: false, requestOnly: true });
+cases.push({ transport: "runTurn", stream: true, cancelled: true, ready: true, requestOnly: true });
+for (const { transport, stream, cancelled, ready, requestOnly } of cases) {
+  test(`${transport} fresh auth then 401 maps saturated refresh correctly (stream=${stream}, cancelled=${cancelled}, ready=${ready}, requestOnly=${requestOnly})`, async () => {
     transportMode = transport;
     runTurnReady = ready;
     await saveCredential(PROVIDER, {
@@ -70,7 +72,7 @@ for (const { transport, stream, cancelled, ready } of cases) {
       accountId: "fixture-refresh-capacity-account",
     });
     const snapshot = await oauth.getValidAccessTokenSnapshot(PROVIDER);
-    const controller = new AbortController();
+    const controller = new AbortController(), optionController = new AbortController();
     let releaseRefresh!: () => void;
     let enteredRefresh!: () => void;
     const blocked = new Promise<void>(resolve => { releaseRefresh = resolve; });
@@ -98,7 +100,7 @@ for (const { transport, stream, cancelled, ready } of cases) {
         if (error instanceof oauth.OAuthTokenRefreshBusyError) {
           busyRejections++;
           // Cancel at the refusal boundary so each transport's catch must prioritize it.
-          if (cancelled) controller.abort();
+          if (cancelled) { controller.abort(); if (!requestOnly) optionController.abort(); }
         }
         throw error;
       }
@@ -118,7 +120,7 @@ for (const { transport, stream, cancelled, ready } of cases) {
       const response = await handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST", headers: { "content-type": "application/json" }, signal: controller.signal,
         body: JSON.stringify({ model: `${PROVIDER}/fixture-model`, input: "fixture", stream }),
-      }), config, { model: "", provider: "" }, { abortSignal: controller.signal });
+      }), config, { model: "", provider: "" }, { abortSignal: optionController.signal });
       const body = await response.text();
       expect(inferenceSends).toBe(1);
       expect(runTurnSends).toBe(transport === "runTurn" ? 1 : 0);
@@ -131,7 +133,12 @@ for (const { transport, stream, cancelled, ready } of cases) {
       if (!cancelled) expect(body).toContain("OAuth token refresh capacity reached");
       expect(body).not.toContain("authentication_error");
       expect(body).not.toContain("unauthenticated");
-      if (ready) expect(body).toContain("response.failed");
+      if (ready) {
+        const failure = body.split("\n").filter(line => line.startsWith("data: {"))
+          .map(line => JSON.parse(line.slice(6))).find(frame => frame.type === "response.failed");
+        expect(failure?.response.retryable).toBe(!cancelled);
+        expect(failure?.response.error.type).toBe(cancelled ? "client_cancelled" : "server_error");
+      }
       expect(body).not.toContain(ACCESS);
       expect(getAccountSet(PROVIDER)?.activeAccountId).toBe(snapshot.accountId);
       expect(getAccountSet(PROVIDER)?.accounts.find(row => row.id === snapshot.accountId)?.needsReauth).not.toBe(true);
