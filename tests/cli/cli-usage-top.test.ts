@@ -53,6 +53,7 @@ describe("usage human model limit", () => {
     try {
       expect(await observe.handleObserveCommand(["usage", "--top", value], { baseUrl: "http://cli.test", fetchImpl: fakeFetch(async () => { calls++; return Response.json(report); }) })).toBe(2);
       expect(calls).toBe(0);
+      expect(err.mock.calls.map(call => String(call[0])).join("\n")).toContain("--top must be an integer between 1 and 1000");
     } finally { err.mockRestore(); }
   });
   test.each([[], ["--search="]].map(flags => ({ flags })))("JSON ignores the human limit with %j", async ({ flags }) => {
@@ -97,7 +98,7 @@ describe("usage human model limit", () => {
       expect(await observe.handleObserveCommand(["usage", "--top", "1001", "--json"], { baseUrl: "http://cli.test", fetchImpl: fakeFetch(async () => { calls++; return Response.json(report); }) })).toBe(2);
       expect(calls).toBe(0);
       const message = err.mock.calls.map(call => String(call[0])).join("\n");
-      expect(message).toContain("--top must be between 1 and 1000");
+      expect(message).toContain("--top must be an integer between 1 and 1000");
       expect(message).not.toContain("--top cannot be combined");
     } finally { err.mockRestore(); }
   });

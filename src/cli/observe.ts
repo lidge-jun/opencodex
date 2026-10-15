@@ -174,8 +174,7 @@ async function indexStatus(argv: string[], deps: RuntimeApiDeps): Promise<void> 
 async function usage(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const search = takeUsageSearchOption(args);
-  const top = takeIntegerOption(args, "--top", { min: 1 });
-  if (top !== undefined && top > 1000) throw new CliUsageError("--top must be between 1 and 1000", USAGE);
+  const top = takeIntegerOption(args, "--top", { min: 1, max: 1000 });
   const wantsJson = takeFlag(args, "--json");
   const range = takeOption(args, "--range") ?? "30d";
   const surface = takeOption(args, "--surface") ?? "all";
