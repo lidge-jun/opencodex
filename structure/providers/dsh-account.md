@@ -4,7 +4,7 @@
 
 ## Import
 
-`src/oauth/dsh.ts` reads `$DSH_HOME/.credentials.yaml` (default `~/.dsh/.credentials.yaml`) only inside `loginDshAccount`, which runs on `ocx login dsh-account` or the dashboard's add-account action. Nothing else reads the file, and nothing in opencodex writes, deletes or changes the permissions of it. The `deepseek-account-platform/default` grant record is validated against `https://platform.deepseek.com/auth-api/v0/users/current` with manual redirects before anything is stored.
+`src/oauth/dsh.ts` reads `$DSH_HOME/.credentials.yaml` (default `~/.dsh/.credentials.yaml`) only inside `loginDshAccount`, which runs on `ocx login dsh-account` or the dashboard's **Log in** action for the provider. Nothing else reads the file, and nothing in opencodex writes, deletes or changes the permissions of it. The `deepseek-account-platform/default` grant record is validated against `https://platform.deepseek.com/auth-api/v0/users/current` with manual redirects before anything is stored.
 
 Only a successful business response with a nonempty authoritative account ID imports. A missing ID fails closed; email, phone and display name never supply a slot identity, so two DSH accounts sharing an email land in different slots and reauthentication uses the shared account-ID comparison in `src/oauth/index.ts`. Parser and transport failures surface fixed error codes instead of credential or profile fragments.
 
