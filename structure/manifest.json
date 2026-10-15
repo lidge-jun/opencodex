@@ -337,6 +337,13 @@
       "documents": ["src/oauth/"]
     },
     {
+      "path": "providers/claude-cli-replay.md",
+      "tier": 4,
+      "title": "Claude CLI Replay",
+      "scope": "Claude CLI stable replay, canonical tool schemas and capture-only client tool ownership.",
+      "documents": ["src/adapters/"]
+    },
+    {
       "path": "providers-and-adapters.md",
       "tier": 4,
       "title": "Providers And Adapters",

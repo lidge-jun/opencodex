@@ -1183,15 +1183,22 @@ CLI headlessly (`claude -p`, `stream-json`) once per turn:
   variable (a `claude` already pointed at this proxy therefore cannot loop back into it), telemetry,
   feedback and the auto-updater disabled, and `--tools ""`, `--strict-mcp-config` plus
   `--setting-sources ""`. The harness loads no CLAUDE.md, skill, hook, plugin or MCP server from the
-  machine and can neither read, write, exec nor browse. No session is persisted between turns.
+  machine and can neither read, write, exec nor browse. No session is persisted between turns. The
+  official CLI is found on `PATH`, or at the native install location (`~/.local/bin/claude`) when
+  a service starts OpenCodex with an older `PATH`.
 - **System prompt:** the caller's system and developer prompts replace the Claude Code preset
   (`--system-prompt-file`), so the turn answers the client's contract rather than the harness
   persona. The folded prompt is staged in a private per-turn file (mode `0600`) and passed by path,
   because process arguments are world-readable through process listing; a request that carries
-  neither a system nor a developer prompt gets an empty file, which replaces the preset with nothing.
-- **Tool ownership:** v1 is text and reasoning only, exactly like the CodeBuddy and Qoder presets:
-  with no tool channel, approval, sandboxing and execution stay with the client. The shared
-  capture-only tool bridge is the documented follow-up.
+  neither a system nor a developer prompt gets only the fixed conversation-replay instructions.
+- **Conversation caching:** each message is replayed as a separate stable text block, with the
+  current message formatted identically to its later history representation. Long history is cut
+  only at whole-message checkpoints. Tool catalogs serialize deterministically. Claude Code
+  controls cache breakpoints, so this makes prompt-cache reuse possible without guaranteeing it.
+- **Tool ownership:** when the request carries tools, an isolated capture-only MCP catalog exposes
+  only the client's selected tools (the same bridge CodeBuddy uses). The CLI captures the call and
+  the turn ends there; approval, sandboxing, execution and the returned result stay with Codex,
+  Pi, or another client. Built-in tools and every other MCP server remain disabled.
 - **Destination:** the canonical row names `https://api.anthropic.com` because that is where the
   subscription's traffic lands. OpenCodex never sends that request itself, and overriding the base
   URL fails closed rather than handing the turn to another environment.
