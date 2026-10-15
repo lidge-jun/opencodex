@@ -6,6 +6,7 @@ import { basename, join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { atomicReplaceDesktopConfig, writeDesktop3pConfig } from "../../src/claude/desktop-3p";
 import { parseMetadata, readDesktopProfileForeignKeys, readDesktopProfileSnapshot } from "../../src/claude/desktop-3p-library";
+import * as desktopLibrary from "../../src/claude/desktop-3p-library";
 import { isTestHomeGuardArmed } from "../../src/lib/test-home-guard";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -132,9 +133,94 @@ test("metadata publication failure restores the previous regular profile bytes",
   } finally { publishing.mockRestore(); }
 });
 
+for (const change of ["edit", "replace", "remove", "create"] as const) {
+  test(`normal apply refuses a concurrent profile ${change} without changing metadata or backup`, () => {
+    const initial = writeProfile();
+    expect(initial.written).toBe(true);
+    const profile = initial.path, meta = join(library, "_meta.json");
+    const metadata = fs.readFileSync(meta), original = fs.readFileSync(profile);
+    const edited = Buffer.from(JSON.stringify({ ...JSON.parse(original.toString()), userSetting: "concurrent edit" }));
+    const backup = Buffer.from("previous backup\n");
+    fs.writeFileSync(`${profile}.bak`, backup);
+    if (change === "create") fs.unlinkSync(profile);
+    const readSnapshot = desktopLibrary.readDesktopProfileSnapshot;
+    const reading = spyOn(desktopLibrary, "readDesktopProfileSnapshot").mockImplementation(path => {
+      const snapshot = readSnapshot(path);
+      if (path === profile) {
+        if (change === "remove") fs.unlinkSync(path);
+        else if (change === "replace") {
+          const replacement = join(library, "replacement.json");
+          fs.writeFileSync(replacement, edited);
+          fs.renameSync(replacement, path);
+        } else fs.writeFileSync(path, edited);
+      }
+      return snapshot;
+    });
+    try {
+      expect(writeProfile("replacement-fixture-key")).toMatchObject({ written: false, reason: "desktop_profile_changed" });
+      if (change === "remove") expect(fs.existsSync(profile)).toBe(false);
+      else expect(fs.readFileSync(profile)).toEqual(edited);
+      expect(fs.readFileSync(`${profile}.bak`)).toEqual(backup);
+      expect(fs.readFileSync(meta)).toEqual(metadata);
+    } finally { reading.mockRestore(); }
+  });
+}
+
+test("normal apply refuses a profile edit while the replacement temp is being written", () => {
+  const initial = writeProfile();
+  expect(initial.written).toBe(true);
+  const profile = initial.path, meta = join(library, "_meta.json"), metadata = fs.readFileSync(meta);
+  const original = fs.readFileSync(profile), edited = Buffer.from('{"userSetting":"late edit"}\n');
+  const open = fs.openSync, write = fs.writeFileSync;
+  let profileTemp: number | undefined, changed = false;
+  const opening = spyOn(fs, "openSync").mockImplementation(((path, flags, mode) => {
+    const fd = open(path, flags, mode);
+    if (String(path).startsWith(`${profile}.ocx.`)) profileTemp = fd;
+    return fd;
+  }) as typeof fs.openSync);
+  const writing = spyOn(fs, "writeFileSync").mockImplementation(((path, bytes, options) => {
+    write(path, bytes, options);
+    if (path === profileTemp && !changed) { changed = true; write(profile, edited); }
+  }) as typeof fs.writeFileSync);
+  try {
+    expect(writeProfile("replacement-fixture-key")).toMatchObject({ written: false, reason: "desktop_profile_changed" });
+    expect(changed).toBe(true);
+    expect(fs.readFileSync(profile)).toEqual(edited);
+    expect(fs.readFileSync(`${profile}.bak`)).toEqual(original);
+    expect(fs.readFileSync(meta)).toEqual(metadata);
+    expect(fs.readdirSync(library).some(name => name.endsWith(".tmp"))).toBe(false);
+  } finally { writing.mockRestore(); opening.mockRestore(); }
+});
+
+for (const existing of [true, false]) {
+  test(`metadata failure remains primary if ${existing ? "profile restore" : "new-profile cleanup"} also fails`, () => {
+    const initial = existing ? writeProfile() : undefined;
+    const meta = join(library, "_meta.json"), metadata = existing ? fs.readFileSync(meta) : undefined;
+    const rename = fs.renameSync, unlink = fs.unlinkSync;
+    let metadataFailed = false;
+    const publishing = spyOn(fs, "renameSync").mockImplementation((source, destination) => {
+      if (destination === meta) { metadataFailed = true; throw new Error("fixture metadata failure"); }
+      if (metadataFailed && destination === initial?.path) throw new Error("fixture restore failure");
+      rename(source, destination);
+    });
+    const removing = spyOn(fs, "unlinkSync").mockImplementation(path => {
+      if (!existing && metadataFailed && String(path).endsWith(".json")) throw new Error("fixture cleanup failure");
+      unlink(path);
+    });
+    try {
+      expect(writeProfile("replacement-fixture-key")).toMatchObject({
+        written: false,
+        reason: `fixture metadata failure (profile rollback also failed: fixture ${existing ? "restore" : "cleanup"} failure)`,
+      });
+      if (existing) expect(fs.readFileSync(meta)).toEqual(metadata!);
+      else expect(fs.existsSync(meta)).toBe(false);
+    } finally { removing.mockRestore(); publishing.mockRestore(); }
+  });
+}
+
 for (const scenario of ["backup", "rollback"] as const) {
-  // The writer reads the profile once; backup and rollback reuse those verified bytes, so a FIFO
-  // swapped onto the profile or its backup is never opened and rollback still restores the original.
+  // Revalidation refuses a FIFO swapped onto the profile; rollback reuses verified bytes even if
+  // the backup becomes a FIFO. Neither path can block on an unsafe synchronous read.
   test.skipIf(process.platform === "win32")(`normal writer never opens a ${scenario} path swapped to a FIFO`, () => {
     const initial = writeProfile();
     expect(initial.written).toBe(true);
@@ -183,10 +269,12 @@ for (const scenario of ["backup", "rollback"] as const) {
     expect(child.error).toBeUndefined();
     expect(child.status).toBe(0);
     if (scenario === "backup") {
-      expect(JSON.parse(child.stdout)).toMatchObject({ swapped: true, result: { written: true, path: profile } });
-      expect(fs.readFileSync(`${profile}.bak`)).toEqual(original);
-      expect(fs.lstatSync(profile).isFile()).toBe(true);
-      expect(JSON.parse(fs.readFileSync(profile, "utf8")).inferenceGatewayApiKey).toBe("replacement-fixture-key");
+      expect(JSON.parse(child.stdout)).toMatchObject({
+        swapped: true, result: { written: false, reason: "desktop_config_not_regular" },
+      });
+      expect(fs.existsSync(`${profile}.bak`)).toBe(false);
+      expect(fs.lstatSync(profile).isFIFO()).toBe(true);
+      expect(fs.readFileSync(meta)).toEqual(metadata);
     } else {
       expect(JSON.parse(child.stdout)).toMatchObject({
         swapped: true, result: { written: false, reason: "fixture metadata failure" },

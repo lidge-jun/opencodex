@@ -93,6 +93,7 @@ export function readOptionalDesktopLibraryBytes(path: string): Buffer | undefine
   }
 }
 
+/** Read optional verified metadata; a present file must contain an entries array. */
 export function parseMetadata(path: string): Desktop3pMetadata {
   const bytes = readOptionalDesktopLibraryBytes(path);
   if (bytes === undefined) return { entries: [] };
@@ -136,7 +137,7 @@ export interface DesktopProfileSnapshot {
   foreign: Record<string, unknown>;
 }
 
-/** One verified read feeds key preservation, the backup, and rollback, so none reopens the path. */
+/** Capture verified bytes for key preservation, backup and rollback; publication revalidates them. */
 export function readDesktopProfileSnapshot(path: string): DesktopProfileSnapshot {
   const bytes = readOptionalDesktopLibraryBytes(path);
   if (bytes === undefined) return { foreign: {} };
@@ -148,6 +149,7 @@ export function readDesktopProfileSnapshot(path: string): DesktopProfileSnapshot
   return { bytes, foreign };
 }
 
+/** Preserve settings outside the gateway-owned keys from a verified profile. */
 export function readDesktopProfileForeignKeys(path: string): Record<string, unknown> {
   return readDesktopProfileSnapshot(path).foreign;
 }

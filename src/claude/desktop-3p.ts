@@ -6,6 +6,7 @@ import { canonicalDirectory } from "./desktop-remote-store-io";
 import {
   resolveDesktop3pConfigLibraryPath, parseMetadata, SAFE_DESKTOP_PROFILE_ID, isRecord,
   isOwnedDesktopEntry, isOwnedDesktopGatewayEntry, profilePath, readDesktopProfileSnapshot, readDesktopLibraryText, readDesktopLibraryBytes,
+  readOptionalDesktopLibraryBytes,
   type Desktop3pConfigLibraryOptions, type Desktop3pMetadata, type Desktop3pMetadataEntry,
 } from "./desktop-3p-library";
 export { resolveDesktop3pConfigLibraryPath, type Desktop3pConfigLibraryOptions } from "./desktop-3p-library";
@@ -800,6 +801,7 @@ function desktopRefreshPathsSafe(libraryPath: string, configPath?: string): bool
   } catch { return false; }
 }
 
+/** Publish a gateway profile from a verified snapshot, rolling it back if metadata fails. */
 function writeDesktop3pConfigWithGenerator(
   generate: () => object,
   refreshOnly?: { requiredId: string; expectedFingerprint: string; admit: () => boolean },
@@ -854,8 +856,14 @@ function writeDesktop3pConfigWithGenerator(
       // Roll back from the verified bytes in memory: reopening the backup could meet a swapped
       // entry and leave the new profile beside the old metadata. A profile this call created is
       // unreferenced once metadata failed, so remove it rather than orphan one per retry.
-      if (previous.bytes) writeDesktopConfigBytes(configPath, previous.bytes);
-      else try { unlinkSync(configPath); } catch { /* An unreferenced profile is inert; report metaError. */ }
+      try {
+        if (previous.bytes !== undefined) writeDesktopConfigBytes(configPath, previous.bytes);
+        else unlinkSync(configPath);
+      } catch (rollbackError) {
+        const base = metaError instanceof Error ? metaError.message : String(metaError);
+        const detail = rollbackError instanceof Error ? rollbackError.message : String(rollbackError);
+        throw new AggregateError([metaError, rollbackError], `${base} (profile rollback also failed: ${detail})`, { cause: metaError });
+      }
       throw metaError;
     }
     return { written: true, path: configPath, fingerprint };
@@ -866,7 +874,8 @@ function writeDesktop3pConfigWithGenerator(
 }
 
 /**
- * Back up the caller's verified bytes of an existing owned config, then atomically replace it.
+ * Compare the live profile with the caller's verified bytes before backup and before replacement.
+ * Refuse drift without retrying; backup and rollback continue to use the original verified bytes.
  * `previous` is undefined only for an absent profile, which leaves any older backup alone.
  * Exported for failure-path tests.
  */
@@ -874,11 +883,18 @@ export function atomicReplaceDesktopConfig(
   path: string,
   content: string,
   previous: Buffer | undefined,
-  writer: (path: string, content: string) => void = atomicWriteFile,
+  writer: typeof atomicWriteFileNoFollow = atomicWriteFileNoFollow,
 ): { backupPath?: string } {
+  const validateBeforeRename = () => {
+    const current = readOptionalDesktopLibraryBytes(path);
+    if (previous === undefined ? current !== undefined : current === undefined || !previous.equals(current)) {
+      throw new Error("desktop_profile_changed");
+    }
+  };
+  validateBeforeRename();
   const backupPath = `${path}.bak`;
   if (previous !== undefined) writeDesktopConfigBytes(backupPath, previous);
-  writer(path, content);
+  writer(path, content, undefined, { validateBeforeRename });
   return previous === undefined ? {} : { backupPath };
 }
 
