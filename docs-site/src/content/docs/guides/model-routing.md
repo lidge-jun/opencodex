@@ -117,6 +117,8 @@ Routing and catalog visibility are separate controls:
   It raises the advertised window only when that exact model has a known per-model window
   in `modelContextWindows` (for example, `1000000`); an unknown model keeps its live window.
   An explicit per-model window wins, then the existing provider cap applies.
+  Saved windows and tier selections survive startup and OAuth re-login. OAuth presets fill
+  missing per-model defaults while keeping your configured entries, including on xAI.
   The `"default"` tier retains normal live context metadata.
   The dashboard control is planned separately.
 

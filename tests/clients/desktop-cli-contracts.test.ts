@@ -108,7 +108,7 @@ describe("desktop CLI contracts", () => {
     const body = runner.slice(0, runner.indexOf("\n}"));
     // A missing binary, a failed spawn and a deadline all answer the same way.
     expect(body.match(/Resolution::Unknown/g) || []).toHaveLength(3);
-    expect(body).toContain("timeout_at(deadline, command.output())");
+    expect(body).toContain("crate::process_spawn::with_spawn_async(command.output())");
   });
 
   test("the startup sequence refuses to start on anything but a proven absence", () => {
