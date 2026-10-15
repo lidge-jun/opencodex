@@ -171,8 +171,9 @@ describe("Linux sentinel pidfd binding (#6987)", () => {
 });
 
 function pidfdCount(): number {
+  // Before Linux 6.9 a pidfd is an anonymous inode; pidfs (6.9+) names it pidfd:[<inode>].
   return readdirSync("/proc/self/fd").filter(fd => {
-    try { return readlinkSync(`/proc/self/fd/${fd}`) === "anon_inode:[pidfd]"; } catch { return false; }
+    try { return /^(anon_inode:\[pidfd\]|pidfd:\[\d+\])$/.test(readlinkSync(`/proc/self/fd/${fd}`)); } catch { return false; }
   }).length;
 }
 
