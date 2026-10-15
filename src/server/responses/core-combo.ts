@@ -52,14 +52,15 @@ import {
 import { hasUnreadableEncryptedAgentTask } from "./encrypted-payload";
 import { routeConcreteModel, comboRouteDecisionTrace } from "../../router";
 import { memoryModelRouteReason } from "./memory-models";
-import { poolAccountProviderLabel } from "../../providers/label";
+import { baseProviderLabel, poolAccountProviderLabel } from "../../providers/label";
 import { getAccountSet } from "../../oauth/store";
 import { configuredAnthropicInstance } from "../../providers/anthropic-instance";
 import {
   anthropicRoutingFor,
   formatAnthropicProviderForLog,
 } from "../../oauth/anthropic-routing";
-import { codexAccountLogLabel } from "../../codex/account-label";
+import { codexAccountLogLabel, oauthAccountLogLabel } from "../../codex/account-label";
+import { isGenericFailoverProvider, rotateGenericOAuthAccountOn429 } from "../../oauth/generic-account-failover";
 import { codexQuotaScopeForModel, getCodexQuotaHealthSnapshot } from "../../codex/routing";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import type { AgentTaskRecoveryFailureReason } from "./agent-task-recovery";
@@ -132,6 +133,26 @@ function cooledPoolAccountLabel(config: OcxConfig, providerName: string, modelId
     `${providerName}-${codexAccountLogLabel(account)}` === label);
   return matches.length === 1
     && getCodexQuotaHealthSnapshot(matches[0]!.id, codexQuotaScopeForModel(modelId))
+    ? label : undefined;
+}
+
+/**
+ * The generic OAuth pool's counterpart of `cooledPoolAccountLabel`. Its 429 names one account
+ * through `accountLogLabel`, but the per-request account budget can end the pool's own rotation
+ * before the last refused account is recorded. Hand that account to the pool's rotator, which
+ * cools it under the pool's own Retry-After policy, and spare the target only when the pool still
+ * has an eligible sibling. A lone account or an all-cooled pool returns null and cools the target.
+ */
+function cooledGenericOAuthAccountLabel(
+  config: OcxConfig, providerName: string, modelId: string, label: string | undefined, retryAfter: string | undefined,
+): string | undefined {
+  const provider = config.providers[providerName];
+  if (!label || !provider || !isGenericFailoverProvider(providerName, provider)) return undefined;
+  const base = baseProviderLabel(providerName);
+  const matches = getAccountSet(providerName)?.accounts.filter(account =>
+    oauthAccountLogLabel(account.id, base) === label) ?? [];
+  return matches.length === 1
+    && rotateGenericOAuthAccountOn429(config, providerName, matches[0]!.id, retryAfter, Date.now(), modelId)
     ? label : undefined;
 }
 
@@ -1140,7 +1161,9 @@ export async function executeComboResponses(
       pick.target.provider,
       pick.target.model,
       poolAccountProviderLabel(childLog.provider, pick.target.provider),
-    );
+    ) ?? (failure.response.status === 429 && failureCooldownScope === "target"
+      ? cooledGenericOAuthAccountLabel(config, pick.target.provider, pick.target.model, childLog.accountLogLabel, failure.retryAfter)
+      : undefined);
     // The target still cools on the pool's own refusal (the anti-hammer guard), but for the local
     // fallback rather than the pool's restated per-account Retry-After.
     const poolLocalRefusal = isAnthropicPoolLocalRefusal(
