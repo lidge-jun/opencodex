@@ -313,6 +313,8 @@ A usage probe cannot clear this non-reset-derived cooldown. Plan renewal therefo
 no permanent reauthentication flag, though a renewed account waits for cooldown expiry.
 The main dispatch, pre-output empty-completion retry, web-search and image bridge use the
 same bounded recovery and record the final refusal even when no retry sends remain.
+Each records the rotated send as `oauth-account-403` (cause `credential-rejected`), not the
+quota recovery `anthropic-oauth-429`, as the native Messages path already did.
 A streamed terminal continuation after assistant output and search after live output or a
 published search call cannot rotate on 403. Non-streaming buffered continuations may recover.
 No eligible replacement preserves the upstream 403; generic 401 handling is unchanged.

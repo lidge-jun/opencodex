@@ -442,7 +442,8 @@ export function createAdapterContinuations(
             );
             sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, transportState.activeAdapter.name, logCtx.accountLogLabel);
             recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, transportState.activeAdapter.name);
-            nextContinuationRecoveryKind = response.status === 401 ? "oauth-401" : "anthropic-oauth-429";
+            nextContinuationRecoveryKind = response.status === 401 ? "oauth-401"
+              : response.status === 403 ? "oauth-account-403" : "anthropic-oauth-429";
             continue;
           } catch {
             // fall through to emit continuation error below

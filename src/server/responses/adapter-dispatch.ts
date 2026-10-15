@@ -1348,7 +1348,8 @@ export async function prepareAdapterExchange(
           );
           sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, transportState.activeAdapter.name, logCtx.accountLogLabel);
           recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, transportState.activeAdapter.name);
-         const result = await rebuildAndRefetch(upstreamResponse.status === 401 ? "oauth-401" : "anthropic-oauth-429");
+         const result = await rebuildAndRefetch(upstreamResponse.status === 401 ? "oauth-401"
+           : upstreamResponse.status === 403 ? "oauth-account-403" : "anthropic-oauth-429");
          if ("failed" in result) return result.failed;
          upstreamResponse = result;
           if (isNonReplayableResponse(upstreamResponse)) continue recovery;
