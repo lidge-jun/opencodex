@@ -4,6 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   getValidAccessTokenForAccount,
+  getValidAccessTokenSnapshot,
+  getValidAccessSnapshotForAccount,
+  MAX_OAUTH_TOKEN_REFRESH_WAITERS,
+  OAuthTokenRefreshBusyError,
   refreshGenericAccountWithLock,
   OAuthLoginRequiredError,
   OAuthTokenRefreshStaleError,
@@ -13,6 +17,9 @@ import type { OAuthCredentials } from "../../src/oauth/types";
 import { ChatGptTokenError, ChatGptTokenRequestError, refreshChatGPTToken } from "../../src/oauth/chatgpt";
 import { getAccountCredential, getAccountSet, saveCredential } from "../../src/oauth/store";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { getActiveTurnCount, tryAdmitTurn } from "../../src/server/lifecycle";
+import { handleResponses } from "../../src/server/responses";
+import type { OcxConfig } from "../../src/types";
 
 // Gate/CAS refresh races can exceed the 5s default under windows-latest contention
 // (same flake class as kiro-oauth / oauth queue budgets).
@@ -402,4 +409,129 @@ describe("ChatGPT refresh through the registered provider", () => {
     } finally { clock.mockRestore(); }
   });
 
+});
+
+/** Real resolver calls retain refresh admission after their client turn has cancelled. */
+describe("OAuth refresh consumer admission", () => {
+  test("cancelled callers cannot grow one pending refresh beyond the consumer limit", async () => {
+    const accountId = await seedExpiredKimi();
+    let finish!: () => void;
+    let started!: () => void;
+    const entered = new Promise<void>(resolve => { started = resolve; });
+    const blocked = new Promise<void>(resolve => { finish = resolve; });
+    const tracker = stubKimiRefresh(async () => {
+      started();
+      await blocked;
+      return { access: "fixture-refreshed", refresh: "fixture-rotated", expires: Date.now() + 3_600_000 };
+    });
+    const waiting: Promise<unknown>[] = [];
+    const rejected: unknown[] = [];
+    const activeBefore = getActiveTurnCount();
+    try {
+      for (let i = 0; i < MAX_OAUTH_TOKEN_REFRESH_WAITERS + 44; i++) {
+        const controller = new AbortController();
+        const lease = tryAdmitTurn(undefined, controller.signal);
+        expect(lease).not.toBeNull();
+        const promise = i % 2 === 0 ? getValidAccessTokenSnapshot("kimi")
+          : getValidAccessSnapshotForAccount("kimi", accountId);
+        waiting.push(promise.catch(error => { rejected.push(error); }));
+        controller.abort(new Error("fixture disconnected"));
+        lease?.release();
+      }
+      await entered;
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(getActiveTurnCount()).toBe(activeBefore);
+      expect(rejected).toHaveLength(44);
+      expect(rejected.every(error => error instanceof OAuthTokenRefreshBusyError)).toBe(true);
+      expect(tracker.calls()).toBe(1);
+      expect(getAccountCredential("kimi", accountId)?.access).toBe("kimi-old");
+      expect(getAccountSet("kimi")?.accounts.find(row => row.id === accountId)?.needsReauth).not.toBe(true);
+    } finally {
+      finish();
+      await Promise.all(waiting);
+    }
+    await expect(getValidAccessTokenForAccount("kimi", accountId)).resolves.toBe("fixture-refreshed");
+    expect(tracker.calls()).toBe(1);
+  });
+
+  test("rejected shared refresh releases all consumers and permits one later retry", async () => {
+    const accountId = await seedExpiredKimi();
+    let fail!: () => void;
+    let started!: () => void;
+    const entered = new Promise<void>(resolve => { started = resolve; });
+    const blocked = new Promise<void>((_resolve, reject) => { fail = () => reject(new Error("fixture transient failure")); });
+    stubKimiRefresh(async () => { started(); await blocked; throw new Error("unreachable"); });
+    const waiting = Array.from({ length: MAX_OAUTH_TOKEN_REFRESH_WAITERS }, () =>
+      getValidAccessTokenForAccount("kimi", accountId).catch(error => error));
+    try {
+      await entered;
+      // Do not await an over-budget control without a deadline: the unpatched resolver waits.
+      let refused: unknown;
+      const overflow = getValidAccessTokenForAccount("kimi", accountId).catch(error => { refused = error; });
+      waiting.push(overflow);
+      await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+      expect(refused).toBeInstanceOf(OAuthTokenRefreshBusyError);
+    } finally { fail(); await Promise.all(waiting); }
+    const tracker = stubKimiRefresh(async () => ({
+      access: "fixture-retry", refresh: "fixture-next", expires: Date.now() + 3_600_000,
+    }));
+    await expect(getValidAccessTokenForAccount("kimi", accountId)).resolves.toBe("fixture-retry");
+    expect(tracker.calls()).toBe(1);
+    expect(getAccountSet("kimi")?.accounts.find(row => row.id === accountId)?.needsReauth).not.toBe(true);
+  });
+
+  test("fresh snapshots remain usable while refresh consumers are full", async () => {
+    const expiredId = await seedExpiredKimi();
+    await saveCredential("kimi", { access: "fixture-cached", refresh: "fixture-cached-refresh",
+      expires: Date.now() + 3_600_000, accountId: "fixture-cached-account" });
+    const freshId = getAccountSet("kimi")!.activeAccountId;
+    let finish!: () => void;
+    let started!: () => void;
+    const entered = new Promise<void>(resolve => { started = resolve; });
+    const blocked = new Promise<void>(resolve => { finish = resolve; });
+    const tracker = stubKimiRefresh(async () => { started(); await blocked; return {
+      access: "fixture-finished", refresh: "fixture-finished-refresh", expires: Date.now() + 3_600_000,
+    }; });
+    const waiting = Array.from({ length: MAX_OAUTH_TOKEN_REFRESH_WAITERS }, () =>
+      getValidAccessTokenForAccount("kimi", expiredId).catch(error => error));
+    try {
+      await entered;
+      await expect(getValidAccessTokenForAccount("kimi", freshId)).resolves.toBe("fixture-cached");
+      expect(tracker.calls()).toBe(1);
+    } finally { finish(); await Promise.all(waiting); }
+  });
+});
+
+
+test("Responses maps exhausted OAuth refresh consumers to retryable capacity, not login failure", async () => {
+  const accountId = await seedExpiredKimi();
+  let finish!: () => void;
+  let started!: () => void;
+  const entered = new Promise<void>(resolve => { started = resolve; });
+  const blocked = new Promise<void>(resolve => { finish = resolve; });
+  stubKimiRefresh(async () => { started(); await blocked; return {
+    access: "fixture-finished", refresh: "fixture-rotated", expires: Date.now() + 3_600_000,
+  }; });
+  const waiting = Array.from({ length: MAX_OAUTH_TOKEN_REFRESH_WAITERS }, () =>
+    getValidAccessTokenForAccount("kimi", accountId).catch(error => error));
+  let inferenceSends = 0;
+  const config = { port: 0, defaultProvider: "kimi", providers: { kimi: {
+    adapter: "openai-chat", authMode: "oauth", baseUrl: "https://fixture.invalid/v1", models: ["fixture-model"],
+    fetch: async () => { inferenceSends++; throw new Error("unexpected fixture send"); },
+  } } } as OcxConfig;
+  try {
+    await entered;
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "kimi/fixture-model", input: "fixture", stream: false }),
+    }), config, { model: "", provider: "" });
+    expect(response.status).toBe(503);
+    expect(response.headers.get("retry-after")).toBe("1");
+    const body = await response.text();
+    expect(body).toContain("OAuth token refresh capacity reached");
+    expect(body).not.toContain("kimi-old");
+    expect(inferenceSends).toBe(0);
+    expect(getAccountSet("kimi")?.accounts.find(row => row.id === accountId)?.needsReauth).not.toBe(true);
+  } finally { finish(); await Promise.all(waiting); }
 });
