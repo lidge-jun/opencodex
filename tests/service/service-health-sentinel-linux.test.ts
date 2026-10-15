@@ -107,6 +107,11 @@ describe("Linux sentinel pidfd binding (#6987)", () => {
     f.duringProbe(() => { throw new Error("ffi"); });
     expect(f.open().kind).toBe("refused");
     expect(f.calls.slice(-2)).toEqual([["close", 17], ["dispose"]]);
+    const bound = fixture();
+    const opened = bound.open();
+    if (opened.kind !== "bound") throw new Error("not bound");
+    bound.api.signal = () => { throw new Error("ffi"); };
+    expect(opened.handle.terminate()).toBe("failed");
   });
 
   test.each([1, 38])("termination errno %s never falls back to a numeric PID", errno => {

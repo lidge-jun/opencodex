@@ -97,7 +97,9 @@ export function openParentPidfd(
         close,
         terminate: () => {
           if (closed || signalled) return "not_target";
-          const sent = api.signal(fd!, 9);
+          // A throwing binding must settle the recorded intent as "failed", like process.kill does.
+          let sent: CallResult;
+          try { sent = api.signal(fd!, 9); } catch { return "failed"; }
           if (sent.value < 0) return sent.errno === ESRCH ? "not_target" : "failed";
           signalled = true;
           return "terminated";
