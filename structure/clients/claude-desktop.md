@@ -140,7 +140,7 @@ configuration. Ordinary Chat-tab traffic is out of scope for both modes.
 regular-file descriptor, rejects links and foreign POSIX owners, and never replaces invalid
 existing entries. Creation hardens before no-replace publication. The authenticated listener
 reads this current authority for every CONNECT; absence or invalidity denies admission.
-An explicit first-party apply can recreate a missing token and the live listener follows it
+Startup refreshes an owned settings env only after a successful CONNECT bind, using the handle's actual port. A port collision leaves settings unchanged; production keeps the configured or derived port so existing Claude processes retain a stable endpoint. An explicit first-party apply can recreate a missing token and the live listener follows it
 without restart. Rejected CONNECT requests include a Basic proxy-authentication challenge.
 Temporary cleanup failures warn without replacing a committed result or an earlier error;
 retained temporary entries keep their ACL memo until absence is confirmed. Established tunnels

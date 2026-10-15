@@ -7,6 +7,7 @@ import { EMPTY_TOOL_OUTPUT_ANNOTATION, isWhitespaceOnlyTextPartArray } from "../
 import { identifyRoutedModel } from "../identity";
 import { buildNonOpenAIToolCatalogNudgeForTools, shouldInjectNonOpenAIToolCatalogNudge } from "../tool-catalog-nudge";
 import { peekReasoningForCall } from "../../responses/reasoning-replay-cache";
+import { chatReasoningReplayPolicy } from "./reasoning-replay";
 import type { ClaudeThinkingProjection } from "../../lib/claude-request-projection";
 import { inlineDocumentDataUrl } from "../../responses/inline-document";
 import type { OcxAssistantMessage, OcxContentPart, OcxParsedRequest, OcxProviderConfig, OcxTextContent, OcxThinkingContent, OcxToolCall } from "../../types";
@@ -75,7 +76,7 @@ export function openAIChatSerializesThinking(
   modelId: string,
 ): ClaudeThinkingProjection {
   return {
-    text: modelInList(provider.preserveReasoningContentModels, modelId),
+    text: chatReasoningReplayPolicy(provider, modelId).preserve,
     // The wire has no `signature` field — base64 replay tokens are Anthropic-wire-only.
     signature: false,
     // A `redacted_thinking` block is opaque provider data with no Chat representation: the
@@ -267,7 +268,7 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
           // recorded under every call id — join unique texts only.
           if (cached.length > 0) {
             reasoningContent = [...new Set(cached)].join("\n");
-          } else if (modelInList(provider.requiresReasoningPlaceholderModels ?? provider.preserveReasoningContentModels, parsed.modelId)) {
+          } else if (chatReasoningReplayPolicy(provider, parsed.modelId).placeholder) {
             // Fallback (extends #950 and #1193; fixes #5421): the replay cache is
             // bounded (64 entries / 256 KiB / 1 h TTL) and always misses on
             // long sessions, and some thinking/tool rounds carry no recorded
@@ -354,7 +355,7 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
           const orphanReasoning =
             cachedReasoning
             || (wireSerializesThinking
-              && modelInList(provider.requiresReasoningPlaceholderModels ?? provider.preserveReasoningContentModels, parsed.modelId)
+              && chatReasoningReplayPolicy(provider, parsed.modelId).placeholder
               ? " "
               : undefined);
           const orphanReasoningFields: Record<string, unknown> = !orphanReasoning

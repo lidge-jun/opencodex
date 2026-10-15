@@ -41,6 +41,7 @@ runs helper features around provider requests.
 | `codexProviderDisplayName?` | `string` | `"OpenCodex Proxy"` | Label Codex shows for the injected `opencodex` provider, written as its `name` field in `config.toml` and the reference profile. Presentation only: routing resolves through the provider id `opencodex`, so a rename never moves `model_provider = "opencodex"` or the `[model_providers.opencodex]` header and cannot orphan threads already tagged with that id. Codex refuses to load a provider with no name, so there is no way to omit the field — choose a neutral label instead. A blank, over-128-character, or control-character value is ignored and the default label is written. |
 | `codexMainAccountHardLock?` | `boolean` | `true` | Block new identity-matched main-account requests at their per-window threshold. Only explicit `false` opts out. See [main-account protection](/reference/cli/providers-accounts/#main-account-quota-protection). |
 | `codexMainAccountHardLockThresholds?` | `{ short?: number; long?: number }` | `{ short: 90, long: 98 }` | Independent 5h and weekly/monthly thresholds. Integers 80–100, with `short <= long`. Invalid persisted fields fall back to defaults; the settings API rejects invalid writes before mutation. |
+| `codexMainAccountHardLockFallback?` | `{ enabled?: boolean; model?: string; reasoningEffort?: string }` | off | Extended hard-lock settings: while the lock blocks and no Codex account can serve the request, qualifying native-Codex-model requests reroute to `model` with `reasoningEffort` instead of failing. `enabled: false` pauses the reroute and keeps the model. An absent section or model keeps the refusal behavior; a usable Pool account still serves first. `reasoningEffort` must be a declared effort; invalid persisted sections degrade to off and the settings API rejects invalid writes before mutation. See [main-account protection](/reference/cli/providers-accounts/#main-account-quota-protection). |
 | `nativeMainRefresh?` | `"codex" \| "opencodex"` | auto | Who refreshes the native main ChatGPT login in `CODEX_HOME`. `"codex"` asks the Codex binary (app-server `getAuthStatus`, Codex 0.130.0 or newer, found through the same runtime resolution as `ocx sync`, including the ChatGPT app bundle) and never writes `auth.json`; this also works when Codex stores its login in the OS keyring. `"opencodex"` keeps OpenCodex's guarded `auth.json` writer. Unset picks `"codex"` when a supported binary is found; without one, both unset and `"codex"` fall back to the guarded writer. `ocx doctor` shows the active mode under Native main refresh. |
 | `resetCreditAutoRedeem?` | `{ enabled?: boolean; leadTimeMinutes?: number }` | off | Opt-in: redeem the main Codex account's soonest-expiring reset credit `leadTimeMinutes` (1–60, default 10) before it expires. Every attempt re-reads the upstream credit list first and skips when the credit is gone (for example, redeemed by hand); the `redeem_request_id` is journaled in `$OPENCODEX_HOME/reset-credit-auto-redeem.json` before the call so a crash replays the same idempotent request instead of spending a second credit. Servers sharing this configuration directory coordinate reservations and settlements so one process does not replace another's request record. Logs carry a hashed account key only. |
 | `syncResumeHistory?` | `boolean` | `true` | Reversible Codex App history compatibility. Original metadata is backed up and restored by `ocx stop` / `ocx restore`. |
@@ -671,6 +672,21 @@ Messages admission. This setting does not add a global authorization boundary.
 Auto auth selects subscription when stored Claude auth is found, proxy when none is found, and
 subscription with a warning when detection is inconclusive. See
 [Claude Code auth mode](/guides/claude-code/#auth-mode).
+
+## Retained requests after compaction
+
+For translated providers and routed Responses gateways, OpenCodex automatically frames
+plain-text user requests before the latest readable Codex checkpoint as historical context.
+Requests the checkpoint reports as completed should not be repeated; retained text remains
+available for unfinished work within its existing authorization. Later user input takes priority,
+including pauses, cancellations and changes of scope. A checkpoint grants no new permission.
+
+This is enabled by default and needs no setting. Original request text and canonical thread/replay
+history are preserved. Native OpenAI Responses passthrough, summarizer turns, context wrappers,
+images/files and assistant/tool items are unchanged. The framing applies to plaintext checkpoints
+beginning with Codex's summary prefix; decoded OpenCodex checkpoints retain their existing
+continuation guidance. Client-side summarizer turns using Codex's standard compaction prompt
+also bypass framing. Framing is a prompt instruction, so model behavior can vary.
 
 ## Compaction routing
 

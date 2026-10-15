@@ -471,11 +471,28 @@ Explicit all-zero user rates mean a known-zero estimate; **Reset to automatic** 
 override and restores the usual catalog fallback. These remain display estimates, not bills.
 
 `GET /api/providers/{provider}/model-costs` returns `{ provider, modelCosts }`, with sanitized
-four-rate entries keyed by exact upstream model ID. `PUT` on the same route accepts
-`{ modelId, cost }`, where `cost` is `{ input, output, cacheRead, cacheWrite }` or `null` to reset.
+four-rate entries and their optional `promptLengthPricing` policy, keyed by exact upstream model ID.
+`PUT` on the same route accepts `{ modelId, cost }`, where `cost` contains
+`{ input, output, cacheRead, cacheWrite }` and optionally `promptLengthPricing`, or is `null` to reset.
 All four rates must be finite numbers from 0 through 1,000,000, in USD per 1M tokens.
 Unknown fields and malformed rates are rejected. A write preserves other models' overrides
 and returns `{ ok: true, provider, modelId, cost }`; reset returns `cost: null`.
+
+The **Model price** dialog offers **Automatic**, **Flat rate**, and **Custom threshold**
+prompt-length pricing. Automatic (also the default when the policy is absent) retains catalog
+context rules with the saved base rates. Flat disables context adjustments. Custom selects four
+absolute alternative rates using one positive safe-integer `thresholdTokens` and `comparison`
+(`"gt"` for `>`, `"gte"` for `≥`). All prompt tokens count, including cache reads and writes;
+output does not. The selected rates apply to the whole request, including output, not just the
+excess tokens. Custom replaces the catalog context rule both below and above its threshold.
+Custom rates are standard-speed rates: an applicable Fast/Priority adjustment applies once after
+rate selection and follows the catalog's Priority relation for that model. Only a model whose
+catalog relation is `lower-bound` reports `priorityLowerBound: true`; a model with no catalog rule
+applies any Priority multiplier once.
+`{ "mode": "automatic" }` is accepted on write and stored as an absent policy, so GET and PUT
+receipts never contain it.
+**Reset to automatic** removes the entire override, including base rates and the policy.
+See the [configuration example](../configuration/providers/#prompt-length-pricing).
 
 ```bash
 ocx models price ollama/custom-model --json
@@ -588,9 +605,9 @@ Labels are read on login/import or refresh, never inferred from quota percentage
 | --- | --- | --- |
 | `GET /api/oauth/providers` | List providers with public OAuth login flows | — |
 | `GET /api/key-providers` | List providers configured through API-key login | — |
-| `POST /api/oauth/login` | Start an OAuth login or account-add flow | 400 unknown/invalid provider; `oauth_mutation_busy` |
-| `POST /api/oauth/login/code` | Submit a manual callback URL or authorization code | 400 invalid provider/code; `oauth_mutation_busy` |
-| `POST /api/oauth/login/cancel` | Cancel a public in-progress OAuth flow | 400 unknown provider |
+| `POST /api/oauth/login` | Start an OAuth login or account-add flow. `mode: "code"` starts a code-display login (Anthropic only) and returns `mode`, `flowId`, `expiresAt` | 400 unknown/invalid provider, invalid `mode`, `code_mode_unsupported`; `oauth_mutation_busy` |
+| `POST /api/oauth/login/code` | Submit a manual callback URL or authorization code. For a code-display flow (with `flowId`) returns the token-exchange outcome `{ok, account}` / `{ok:false, error}` | 400 invalid provider/code, `state_mismatch`, `invalid_or_expired_code`, `provider_unreachable`, `malformed_input`; 409 `no_pending_login`; `oauth_mutation_busy` |
+| `POST /api/oauth/login/cancel` | Cancel a public in-progress OAuth flow; an optional `flowId` names one code-display flow (a flow of another provider is refused) | 400 unknown provider |
 | `GET /api/oauth/status` | Poll one provider's OAuth flow | 400 unknown provider |
 | `POST /api/oauth/logout` | Remove the selected provider credential | 400 unknown provider; `oauth_mutation_busy` |
 | `GET /api/oauth/accounts` | List masked accounts; Anthropic and generic OAuth account rows include their `paused` state. Kiro rows include `autoSelectable` and a closed `skipReason` when excluded from automatic selection; an active singleton may still send. Quota remains opt-in. | 400 invalid provider |

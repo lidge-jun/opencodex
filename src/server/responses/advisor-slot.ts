@@ -1,3 +1,4 @@
+import { assistantReplayContent } from "../../responses/assistant-replay";
 /**
  * Core-owned registration slot for the optional advisor subsystem (src/advisor).
  *
@@ -100,23 +101,7 @@ function assistantMessageFromLeg(
   held: readonly HeldAdvisorCall[],
   timestamp: number,
 ): OcxAssistantMessage | undefined {
-  let text = "";
-  let thinking = "";
-  let signature: string | undefined;
-  const redacted: string[] = [];
-  for (const event of events) {
-    if (event.type === "text_delta") text += event.text;
-    else if (event.type === "thinking_delta") thinking += event.thinking;
-    else if (event.type === "thinking_signature") signature = event.signature;
-    else if (event.type === "redacted_thinking") redacted.push(event.data);
-  }
-  if (text.length > MAX_LEG_TEXT_CHARS) text = text.slice(0, MAX_LEG_TEXT_CHARS);
-  if (thinking.length > MAX_LEG_THINKING_CHARS) thinking = thinking.slice(0, MAX_LEG_THINKING_CHARS);
-  const content: OcxAssistantContentPart[] = [];
-  if (thinking || signature || redacted.length > 0) {
-    content.push({ type: "thinking", thinking, ...(signature ? { signature } : {}), ...(redacted.length > 0 ? { redacted } : {}) });
-  }
-  if (text) content.push({ type: "text", text });
+  const content = assistantReplayContent(events);
   for (const call of held) {
     if (!call.closed) continue;
     content.push({

@@ -33,7 +33,7 @@ function publicCombo(value: unknown): Record<string, unknown> {
     } else if (Object.hasOwn(RANGES, key)) {
       const [min, max] = RANGES[key]!;
       if (typeof child !== "number" || !Number.isSafeInteger(child) || child < min || child > max) invalid();
-    } else if (key === "nativeAlias") {
+    } else if (key === "nativeAlias" || key === "allowMeteredTargets") {
       if (typeof child !== "boolean") invalid();
     } else invalid();
     result[key] = child;

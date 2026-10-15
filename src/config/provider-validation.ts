@@ -1,4 +1,5 @@
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
+import { resolveDshAccountMessagesUrl } from "../providers/dsh-account-destination";
 import { redactSecretString } from "../lib/redact";
 import {
   isValidModelDiscoveryModelId,
@@ -389,6 +390,27 @@ export function modelAdapterRecordConfigError(
   return null;
 }
 
+
+/**
+ * The `dsh-account` row owns the DeepSeek Harness account token, which every helper resolves by this
+ * provider name. Keeping the row on its own adapter and DeepSeek's Anthropic host means no generic
+ * helper (Anthropic sidecars, discovery, probes) can be pointed at another destination with it.
+ */
+export function credentialPinnedProviderConfigError(
+  providerName: string,
+  provider: { adapter?: unknown; baseUrl?: unknown },
+): string | null {
+  if (providerName !== "dsh-account") return null;
+  if (provider.adapter !== undefined && provider.adapter !== "dsh-account") {
+    return 'adapter must stay "dsh-account": its account token is pinned to that adapter';
+  }
+  if (typeof provider.baseUrl === "string") {
+    try { resolveDshAccountMessagesUrl(provider.baseUrl); } catch {
+      return "baseUrl must stay on https://api.deepseek.com/anthropic: its account token is pinned to that host";
+    }
+  }
+  return null;
+}
 
 function capabilityRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value)
