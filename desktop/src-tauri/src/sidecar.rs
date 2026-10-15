@@ -205,7 +205,8 @@ pub fn start(
         .args(["start", "--port", &endpoint.port.to_string()])
         .env("OPENCODEX_GUI_DIST", gui_dist)
         .env(SUPERVISED_ENV, "1");
-    let (events, child) = command.spawn().map_err(|error| error.to_string())?;
+    let (events, child) =
+        crate::process_spawn::with_spawn(|| command.spawn()).map_err(|error| error.to_string())?;
     let watch = watch.for_child(child.pid());
     watch.follow(events);
     Ok(child)

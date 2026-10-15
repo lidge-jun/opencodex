@@ -606,6 +606,13 @@ export interface OcxConfig {
   /** Per-window percentages: short defaults to 90, long to 98; integers 80..100, short <= long. */
   codexMainAccountHardLockThresholds?: { short?: number; long?: number };
   /**
+   * Extended hard-lock settings: while the lock blocks and no Codex account can serve a
+   * qualifying request, the request reroutes to `model` (with `reasoningEffort` when set)
+   * instead of failing. The lock itself stays on and releases on its own as before; an
+   * absent section or model means the refusal behavior is unchanged.
+   */
+  codexMainAccountHardLockFallback?: { enabled?: boolean; model?: string; reasoningEffort?: string };
+  /**
    * Who refreshes the native main ChatGPT login in CODEX_HOME (#2999). "codex" asks the Codex
    * binary through app-server `getAuthStatus` and never writes auth.json; "opencodex" keeps the
    * guarded writer. Absent means "codex" when a Codex binary at or above the supported version

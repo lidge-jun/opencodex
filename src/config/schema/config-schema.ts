@@ -5,6 +5,7 @@ import { anthropicAccountPoolSchema } from "./anthropic-account-pool";
 import { compactionRecoverySchema } from "./compaction-recovery";
 import { desktopCompatibilitySchema } from "./desktop-compatibility";
 import { blockedModelRedirectsSchema } from "./blocked-model-redirects";
+import { mainAccountHardLockFallbackSchema } from "./main-account-hard-lock-fallback";
 import {
   agentTaskRecoverySchema,
   catalogAutoRefreshSchema,
@@ -222,6 +223,9 @@ export const configSchema = z.object({
     short: z.number().int().min(MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT).max(100).optional().catch(undefined),
     long: z.number().int().min(MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT).max(100).optional().catch(undefined),
   }).optional().catch(undefined),
+  // A malformed fallback section disables only the reroute, never the lock's refusal
+  // behavior; the management write boundary still rejects the bad value.
+  codexMainAccountHardLockFallback: mainAccountHardLockFallbackSchema.optional().catch(undefined),
   // #2999: a malformed hand edit falls back to auto detection rather than rejecting the config.
   nativeMainRefresh: z.enum(["codex", "opencodex"]).optional().catch(undefined),
   // Future versions remain opaque through passthrough-compatible whole-config saves.
