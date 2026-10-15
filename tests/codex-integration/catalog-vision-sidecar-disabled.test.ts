@@ -123,6 +123,48 @@ describe("catalog respects the disabled vision sidecar", () => {
     expect(calls).toBe(1);
   });
 
+  test("stale cache and failure cooldown reproject the current sidecar setting", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls++;
+      return calls === 1 ? modelsResponse() : new Response("unavailable", { status: 503 });
+    }) as typeof fetch;
+    const on = config(true, true);
+    on.modelCacheTtlMs = 0;
+    expect(modalities(await gatherRoutedModels(on), "no-vision")).toEqual(["text", "image"]);
+    const off = config(false, true);
+    off.modelCacheTtlMs = 0;
+    expect(modalities(await gatherRoutedModels(off), "no-vision")).toEqual(["text"]);
+    expect(modalities(await gatherRoutedModels(on), "no-vision")).toEqual(["text", "image"]);
+    expect(modalities(await gatherRoutedModels(off), "no-vision")).toEqual(["text"]);
+    expect(calls).toBe(2);
+  });
+
+  test("disabled projection preserves live native image evidence without widening discovery-only text rows", async () => {
+    globalThis.fetch = (async () => Response.json({ data: [
+      { id: "live-native", input_modalities: ["text", "image"] },
+      { id: "live-text", input_modalities: ["text"] },
+    ] })) as typeof fetch;
+    const off = await gatherRoutedModels(config(false, true));
+    const on = await gatherRoutedModels(config(true, true));
+    for (const rows of [off, on]) {
+      expect(modalities(rows, "live-native")).toEqual(["text", "image"]);
+      expect(modalities(rows, "live-text")).toEqual(["text"]);
+    }
+  });
+
+  test.each([false, true])("mixed native and exact text-only combo uses enabled=%s", async enabled => {
+    const fixture = config(enabled);
+    fixture.providers[providerName]!.modelCapabilities!["declared-text"] = { inputModalities: ["text"] };
+    fixture.combos = { mixed: { targets: [
+      { provider: providerName, model: "declared-text" },
+      { provider: providerName, model: "vision-native" },
+    ] } };
+    const entries = buildCatalogEntries(null, [], await gatherRoutedModels(fixture));
+    expect(entries.find(row => row.slug === "combo/mixed")?.input_modalities)
+      .toEqual(enabled ? ["text", "image"] : ["text"]);
+  });
+
   test("opposite settings cannot join the same pending gather", async () => {
     let started!: () => void;
     let release!: () => void;
