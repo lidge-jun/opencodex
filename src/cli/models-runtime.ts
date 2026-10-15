@@ -21,7 +21,7 @@ import { redactSecretString } from "../lib/redact";
 import type { ProviderCostOverlay } from "../types";
 import { resolveMatchedPrice } from "../usage/cost";
 import { MAX_COST4_RATE } from "../usage/expected-prices";
-import { isValidCost4Rate } from "../usage/user-cost-overlays";
+import { isValidCost4Rate, validCost4 } from "../usage/user-cost-overlays";
 
 const USAGE = `Usage:
   ocx models display-name <provider/raw-model> (--set <text> | --clear) [--json]
@@ -89,8 +89,8 @@ function priceRecord(value: unknown): value is Record<string, unknown> {
 const PRICE_RATE_KEYS = ["input", "output", "cacheRead", "cacheWrite"] as const;
 
 function validPriceCost(value: unknown): value is ProviderCostOverlay {
-  return priceRecord(value) && Object.keys(value).length === PRICE_RATE_KEYS.length
-    && PRICE_RATE_KEYS.every(key => Object.hasOwn(value, key) && isValidCost4Rate(value[key]));
+  return priceRecord(value) && validCost4(value)
+    && Object.keys(value).every(key => key === "promptLengthPricing" || (PRICE_RATE_KEYS as readonly string[]).includes(key));
 }
 
 async function price(write: boolean, argv: string[], deps: RuntimeApiDeps): Promise<void> {
@@ -135,7 +135,9 @@ async function priceRequest(write: boolean, argv: string[], deps: RuntimeApiDeps
     }
     // The API map owns manual overrides; bundled defaults remain derived rather
     // than being persisted as overrides that would mask later catalog updates.
-    const effectiveCost = cost ?? resolveMatchedPrice(provider, modelId, undefined, [])?.cost4 ?? null;
+    const effectiveCost = cost
+      ? { input: cost.input, output: cost.output, cacheRead: cost.cacheRead, cacheWrite: cost.cacheWrite }
+      : resolveMatchedPrice(provider, modelId, undefined, [])?.cost4 ?? null;
     printData({ provider, modelId, cost, effectiveCost }, wantsJson, [
       effectiveCost === null ? `${selector}: automatic pricing (unknown)`
         : `${selector}: ${JSON.stringify(effectiveCost)} USD per 1M tokens${cost === null ? " (automatic estimate)" : ""}`,
@@ -161,17 +163,42 @@ async function priceRequest(write: boolean, argv: string[], deps: RuntimeApiDeps
     }
     return value;
   };
-  const cost: ProviderCostOverlay | null = auto ? null : {
+  // Validate every rate before any request, so a bad flag never reaches the management plane.
+  const rates: ProviderCostOverlay | undefined = auto ? undefined : {
     input: rate(input!, "--input"),
     output: rate(output!, "--output"),
     cacheRead: rate(cacheRead ?? "0", "--cache-read"),
     cacheWrite: rate(cacheWrite ?? "0", "--cache-write"),
   };
+  // A base-rate write replaces the whole row, so read the current row first and carry the
+  // stored prompt-length policy for exactly this model forward instead of silently deleting it.
+  let carriedPromptLengthPricing: ProviderCostOverlay["promptLengthPricing"];
+  if (rates) {
+    const current = await runtimeRequest<unknown>(path, {}, deps);
+    if (!priceRecord(current) || current.provider !== provider || !priceRecord(current.modelCosts)
+      || !Object.values(current.modelCosts).every(validPriceCost)) {
+      throw new Error("Invalid model price response");
+    }
+    if (Object.hasOwn(current.modelCosts, modelId)) {
+      carriedPromptLengthPricing = (current.modelCosts[modelId] as ProviderCostOverlay).promptLengthPricing;
+    }
+  }
+  const cost: ProviderCostOverlay | null = rates
+    ? { ...rates, ...(carriedPromptLengthPricing ? { promptLengthPricing: carriedPromptLengthPricing } : {}) }
+    : null;
   const result = await runtimeRequest(path, { method: "PUT", body: JSON.stringify({ modelId, cost }) }, deps);
+  // Absent and { mode: "automatic" } are the same policy (the server stores automatic as
+  // absent), and key order carries no meaning in a JSON receipt, so compare canonically.
+  const canonicalPolicy = (policy: ProviderCostOverlay["promptLengthPricing"]): string =>
+    policy === undefined || policy.mode === "automatic" ? `{"mode":"automatic"}`
+      : JSON.stringify(policy, (_key, item: unknown) => (item && typeof item === "object" && !Array.isArray(item)
+        ? Object.fromEntries(Object.entries(item as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+        : item));
   const receivedCost = priceRecord(result) ? result.cost : undefined;
   if (!priceRecord(result) || result.ok !== true || result.provider !== provider || result.modelId !== modelId
     || (cost === null ? receivedCost !== null : !validPriceCost(receivedCost)
-      || !PRICE_RATE_KEYS.every(key => receivedCost[key] === cost[key]))) {
+      || !PRICE_RATE_KEYS.every(key => receivedCost[key] === cost[key])
+      || canonicalPolicy(receivedCost.promptLengthPricing) !== canonicalPolicy(cost.promptLengthPricing))) {
     throw new Error("Invalid model price persistence receipt");
   }
   // Project the acknowledged fields only; unrelated response fields are not CLI output.
