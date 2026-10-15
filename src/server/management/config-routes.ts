@@ -4,6 +4,7 @@ import { getMainAccountExternalUsageWarning } from "../../codex/main-account-ext
 import { getObservedMainQuotaIdentityKey } from "../../codex/main-account-cache";
 import { compactionRoutingSchema, memoryModelsSchema } from "../../config/schema/leaf-validators";
 import { compactionRecoverySchema } from "../../config/schema/compaction-recovery";
+import { mainAccountHardLockFallbackSchema } from "../../config/schema/main-account-hard-lock-fallback";
 import { anthropicSidecarPatchError } from "../../config/schema/anthropic-account-pool";
 import { isAnthropicInstanceId } from "../../providers/anthropic-instance-id";
 import { captureConfigTopLevelRollback } from "../../config/rebase-provenance";
@@ -424,6 +425,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       // Absent means on by default: the GUI renders a switch enabled unless explicit false.
       fastRows: config.fastRows !== false,
       codexMainAccountHardLock: isMainAccountHardLockEnabled(config),
+      // Absent means off: the fallback is an extension of the lock, so the GUI renders
+      // the extended fields empty unless an explicit section exists.
+      codexMainAccountHardLockFallback: config.codexMainAccountHardLockFallback ?? null,
       mainAccountHardLock: { ...getMainAccountHardLockStatus(config),
         externalUsage: getMainAccountExternalUsageWarning(getObservedMainQuotaIdentityKey()) },
       // Absent means the historical auto-open, so the GUI can render the toggle
@@ -530,6 +534,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       fastRows?: unknown;
       codexMainAccountHardLock?: unknown;
       codexMainAccountHardLockThresholds?: unknown;
+      codexMainAccountHardLockFallback?: unknown;
       codexDesktopAuthless?: unknown;
       codexClientCompaction?: unknown;
       compactionRouting?: unknown;
@@ -547,12 +552,13 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       && body.fastRows === undefined
       && body.codexMainAccountHardLock === undefined
       && body.codexMainAccountHardLockThresholds === undefined
+      && body.codexMainAccountHardLockFallback === undefined
       && body.codexDesktopAuthless === undefined
       && body.codexClientCompaction === undefined
       && body.compactionRouting === undefined
       && body.compactionRecovery === undefined
       && body.memoryModels === undefined) {
-      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, codexQuotaAutoRefresh, oauthOpenBrowser, showCodexCredits, ultraFastTier, fastRows, codexMainAccountHardLock, codexMainAccountHardLockThresholds, codexDesktopAuthless, codexClientCompaction, compactionRouting, compactionRecovery, or memoryModels" }, 400);
+      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, codexQuotaAutoRefresh, oauthOpenBrowser, showCodexCredits, ultraFastTier, fastRows, codexMainAccountHardLock, codexMainAccountHardLockThresholds, codexMainAccountHardLockFallback, codexDesktopAuthless, codexClientCompaction, compactionRouting, compactionRecovery, or memoryModels" }, 400);
     }
     if (body.codexAutoStart !== undefined && typeof body.codexAutoStart !== "boolean") {
       return jsonResponse({ error: "codexAutoStart boolean is required" }, 400);
@@ -596,6 +602,13 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       if ((hardLockThresholds.short ?? defaults.short) > (hardLockThresholds.long ?? defaults.long)) {
         return jsonResponse({ error: "codexMainAccountHardLockThresholds short must not exceed long" }, 400);
       }
+    }
+    // null clears the section, like compactionRouting; a present section must fully parse.
+    const hardLockFallback = body.codexMainAccountHardLockFallback == null
+      ? body.codexMainAccountHardLockFallback
+      : mainAccountHardLockFallbackSchema.safeParse(body.codexMainAccountHardLockFallback);
+    if (hardLockFallback != null && !hardLockFallback.success) {
+      return jsonResponse({ error: "codexMainAccountHardLockFallback requires a nonblank model selector and an optional declared reasoningEffort" }, 400);
     }
     if (body.codexDesktopAuthless !== undefined && typeof body.codexDesktopAuthless !== "boolean") {
       return jsonResponse({ error: "codexDesktopAuthless boolean is required" }, 400);
@@ -672,6 +685,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       hasCodexMainAccountHardLockThresholds: Object.hasOwn(config, "codexMainAccountHardLockThresholds"),
       codexMainAccountHardLock: config.codexMainAccountHardLock,
       hasCodexMainAccountHardLock: Object.hasOwn(config, "codexMainAccountHardLock"),
+      codexMainAccountHardLockFallback: config.codexMainAccountHardLockFallback,
+      hasCodexMainAccountHardLockFallback: Object.hasOwn(config, "codexMainAccountHardLockFallback"),
       codexDesktopAuthless: config.codexDesktopAuthless,
       hasCodexDesktopAuthless: Object.hasOwn(config, "codexDesktopAuthless"),
       codexClientCompaction: config.codexClientCompaction,
@@ -717,6 +732,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       if (hardLockThresholds !== undefined) config.codexMainAccountHardLockThresholds = { ...hardLockThresholds };
       if (body.codexMainAccountHardLock === false) config.codexMainAccountHardLock = false;
       else if (body.codexMainAccountHardLock === true) deleteConfigTopLevelKey(config, "codexMainAccountHardLock");
+      if (hardLockFallback === null) deleteConfigTopLevelKey(config, "codexMainAccountHardLockFallback");
+      else if (hardLockFallback?.success) config.codexMainAccountHardLockFallback = hardLockFallback.data;
       if (body.codexDesktopAuthless === true) config.codexDesktopAuthless = true;
       else if (body.codexDesktopAuthless === false) deleteConfigTopLevelKey(config, "codexDesktopAuthless");
       if (body.codexClientCompaction === true) config.codexClientCompaction = true;
@@ -775,6 +792,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       if (previousSettings.hasCodexMainAccountHardLock) {
         config.codexMainAccountHardLock = previousSettings.codexMainAccountHardLock;
       } else deleteConfigTopLevelKey(config, "codexMainAccountHardLock");
+      if (previousSettings.hasCodexMainAccountHardLockFallback) {
+        config.codexMainAccountHardLockFallback = previousSettings.codexMainAccountHardLockFallback;
+      } else deleteConfigTopLevelKey(config, "codexMainAccountHardLockFallback");
       if (previousSettings.hasCodexDesktopAuthless) {
         config.codexDesktopAuthless = previousSettings.codexDesktopAuthless;
       } else deleteConfigTopLevelKey(config, "codexDesktopAuthless");
@@ -840,6 +860,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       // phases as "Off" while the server kept them.
       memoryModels: config.memoryModels ?? null,
       codexMainAccountHardLock: isMainAccountHardLockEnabled(config),
+      codexMainAccountHardLockFallback: config.codexMainAccountHardLockFallback ?? null,
       mainAccountHardLock: { ...getMainAccountHardLockStatus(config),
         externalUsage: getMainAccountExternalUsageWarning(getObservedMainQuotaIdentityKey()) },
       startupHealth: await readStartupHealthSnapshot(config),

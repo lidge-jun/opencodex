@@ -52,11 +52,16 @@ Failure before publication preserves the original removable identity; staging is
 An older authority without the server-only EKU reports `renewal-required`: serving and trust
 registration refuse it, while exact trust removal and deliberate renewal remain available.
 
-`src/codex/desktop-compatibility/windows-key-protection.ts` uses trusted PowerShell
-and bounded stdin/stdout, never command-line secrets or plaintext fallback. CurrentUser
-protects against other OS identities, not another process using the same credentials.
+`src/codex/desktop-compatibility/windows-key-protection.ts` calls CurrentUser
+`CryptProtectData`/`CryptUnprotectData` in-process on Windows x64, loading `crypt32.dll`
+from the `GetSystemDirectoryW` path and clearing unprotected output before `LocalFree`.
+Windows ARM64, where Bun FFI is unavailable, keeps the trusted PowerShell helper with
+bounded stdin/stdout. Both write the same blob format; neither puts secrets on a command
+line or falls back to plaintext. CurrentUser protects against other OS identities, not
+another process using the same credentials.
 `tests/clients/desktop-compatibility-authority.test.ts` covers persistence, refusal,
-and a real Windows DPAPI round trip with synthetic data.
+a real Windows DPAPI round trip with synthetic data, and a PowerShell-written key opening
+in-process.
 
 ## Certificate setup API
 

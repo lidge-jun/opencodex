@@ -7,6 +7,7 @@ import {
   hasHeadroomEvidence,
   isAccountQuotaExhausted,
   rankAccountsByHeadroom,
+  rankAccountsByResetFirst,
 } from "../../src/oauth/account-quota-rank";
 import {
   clearPoolRotationState,
@@ -28,6 +29,7 @@ import {
   saveCredential,
   setActiveAccount,
 } from "../../src/oauth/store";
+import { clearAntigravityAccountRosters, recordAntigravityAccountRoster } from "../../src/providers/antigravity-account-roster";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
@@ -378,3 +380,98 @@ describe("modular Responses model-family forwarding", () => {
   }
 });
 
+describe("Antigravity reset-first weekly prioritization", () => {
+  test("prefers account whose weekly allowance resets earliest, even with less headroom", () => {
+    const now = Date.now();
+    setCachedProviderAccountQuotaForTests("google-antigravity", "a", {
+      updatedAt: now,
+      customWindows: [
+        { label: "Gem", percent: 45, resetAt: now + 2 * 3600_000 },
+        { label: "Gem (Weekly)", percent: 99, resetAt: now + 2 * 86400_000 },
+      ],
+    });
+    setCachedProviderAccountQuotaForTests("google-antigravity", "b", {
+      updatedAt: now,
+      customWindows: [
+        { label: "Gem", percent: 0, resetAt: now + 5 * 3600_000 },
+        { label: "Gem (Weekly)", percent: 5, resetAt: now + 7 * 86400_000 },
+      ],
+    });
+    expect(rankAccountsByHeadroom("google-antigravity", ["a", "b"], "gemini-3.8-flash")[0]).toBe("b");
+    expect(rankAccountsByResetFirst("google-antigravity", ["b", "a"], "gemini-3.8-flash", now)[0]).toBe("a");
+  });
+
+  async function seedResetFirstPair(now: number): Promise<string[]> {
+    for (const accountId of ["acct-soon", "acct-later"]) {
+      await saveCredential("google-antigravity", {
+        access: "access-" + accountId,
+        refresh: "refresh-" + accountId,
+        expires: now + 3_600_000,
+        accountId,
+      } as never);
+    }
+    const ids = getAccountSet("google-antigravity")?.accounts.map(a => a.id) ?? [];
+    expect(ids.length).toBe(2);
+    setCachedProviderAccountQuotaForTests("google-antigravity", ids[0]!, {
+      updatedAt: now,
+      customWindows: [
+        { label: "Gem", percent: 20 },
+        { label: "Gem (Weekly)", percent: 80, resetAt: now + 2 * 86400_000 },
+      ],
+    });
+    setCachedProviderAccountQuotaForTests("google-antigravity", ids[1]!, {
+      updatedAt: now,
+      customWindows: [
+        { label: "Gem", percent: 0 },
+        { label: "Gem (Weekly)", percent: 10, resetAt: now + 7 * 86400_000 },
+      ],
+    });
+    return ids;
+  }
+
+  function resetFirstConfig(kernel: boolean): OcxConfig {
+    return {
+      providers: {
+        "google-antigravity": {
+          ...PROVIDER,
+          oauthAccountFailover: { enabled: true, strategy: "reset-first" },
+        },
+      },
+      oauthAccountFailover: { enabled: true },
+      pool: { kernel },
+    } as unknown as OcxConfig;
+  }
+
+  test("preferredInitialAccount selects soonest reset and sticks until failure", async () => {
+    const now = Date.now();
+    const ids = await seedResetFirstPair(now);
+    const cfg = resetFirstConfig(true);
+    await setActiveAccount("google-antigravity", ids[1]!);
+    expect(preferredInitialAccount(cfg, "google-antigravity", now, "gemini-3.8-flash")).toBe(ids[0]);
+    await setActiveAccount("google-antigravity", ids[0]!);
+    expect(preferredInitialAccount(cfg, "google-antigravity", now, "gemini-3.8-flash")).toBeNull();
+    expect(rotateGenericOAuthAccountOn429(cfg, "google-antigravity", ids[0]!, null, now, "gemini-3.8-flash")).toBe(ids[1]);
+  });
+
+  test("a stored reset-first is inert while pool.kernel is off", async () => {
+    const now = Date.now();
+    const ids = await seedResetFirstPair(now);
+    // The healthy active account keeps the request on the quota path; reset-first would move it.
+    await setActiveAccount("google-antigravity", ids[1]!);
+    expect(preferredInitialAccount(resetFirstConfig(false), "google-antigravity", now, "gemini-3.8-flash")).toBeNull();
+  });
+
+  test("the first-attempt pick skips an account whose model roster omits the requested model", async () => {
+    const now = Date.now();
+    const ids = await seedResetFirstPair(now);
+    try {
+      // The soonest-reset account lists only another model; the later one lists the request's.
+      recordAntigravityAccountRoster("google-antigravity", ids[0]!, [{ id: "gemini-other", wireModelId: "gemini-other" }] as never, now);
+      recordAntigravityAccountRoster("google-antigravity", ids[1]!, [{ id: "gemini-3.8-flash", wireModelId: "gemini-3.8-flash" }] as never, now);
+      await setActiveAccount("google-antigravity", ids[1]!);
+      expect(preferredInitialAccount(resetFirstConfig(true), "google-antigravity", now, "gemini-3.8-flash")).toBeNull();
+    } finally {
+      clearAntigravityAccountRosters("google-antigravity");
+    }
+  });
+});

@@ -1,3 +1,4 @@
+import { anthropicProgressEnvelope, isAnthropicProgressMirror } from "./anthropic-progress";
 import type {
   OcxAssistantMessage,
   OcxContentPart,
@@ -28,6 +29,7 @@ import { mapToolChoice, buildTools, customToolNamespaces } from "./parser-tools"
 import { parseTextFormat } from "./parser-text-format";
 import { externalTaskInputContent } from "./task-input";
 import { normalizeVisualizationContext } from "./visualization-directives";
+import { frameCompactionHistory } from "./compaction-history-framing";
 
 /**
  * Wrap a remembered proxy-side signature as provider metadata for a replayed tool call.
@@ -189,7 +191,7 @@ export function parseRequest(
   if (!parsed.success) {
     throw new Error(`responses parse error: ${parsed.error.message}`);
   }
-  const data = parsed.data;
+  const data = frameCompactionHistory(parsed.data);
   const now = Date.now();
   const messages: OcxMessage[] = [];
   // Built before the item loop: a custom_tool_call echoed back in `input` needs the
@@ -239,6 +241,7 @@ export function parseRequest(
   } else if (data.input) {
     for (let inputIndex = 0; inputIndex < data.input.length; inputIndex++) {
       const item = data.input[inputIndex];
+      if (inputIndex > 0 && isAnthropicProgressMirror(item, anthropicProgressEnvelope(data.input[inputIndex - 1]))) continue;
       const effectiveType = (item as { type?: string }).type ?? ("role" in item ? "message" : undefined);
       const itemRole = (item as { role?: string }).role;
       const externalTaskInput = effectiveType === "function_call_output" ? externalTaskInputContent(item) : undefined;

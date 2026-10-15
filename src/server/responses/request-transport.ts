@@ -176,6 +176,7 @@ export async function prepareResponsesTransport(
     || route.providerName === "orcarouter-oauth"
     // runTurn transport: the replay runs on the first-event preflight in run-turn-execution.
     || route.providerName === "devin"
+    || route.providerName === "dsh-account"
   ) && route.provider.authMode === "oauth";
   let sentOAuthSnapshot: OAuthAccessSnapshot | undefined;
   // One inference-401 replay belongs to this request, even when Auto changes exchange wire.

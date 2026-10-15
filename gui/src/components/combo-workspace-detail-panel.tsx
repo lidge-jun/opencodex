@@ -49,6 +49,7 @@ export function DetailPanel({
   providers,
   models,
   capabilityModels = models,
+  visionEnabled,
   onBack,
   onSaved,
   onRequestRemove,
@@ -70,6 +71,8 @@ export function DetailPanel({
   providers: ProviderOption[];
   models: ModelOption[];
   capabilityModels?: ModelOption[];
+  /** Vision Sidecar enabled state; undefined = unknown, renders no warning. */
+  visionEnabled?: boolean;
   onBack?: () => void;
   onSaved: (item: ComboItem) => void;
   onRequestRemove?: () => void;
@@ -411,6 +414,7 @@ export function DetailPanel({
               models={capabilityModels}
               imageInput={draft.imageInput ?? "auto"}
               reasoningEffortMode={draft.reasoningEffortMode ?? "strict"}
+              visionEnabled={visionEnabled}
               disabled={busy}
               onChange={(patch) => updateDraft((d) => ({ ...d, ...patch }))}
             />

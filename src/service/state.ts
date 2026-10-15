@@ -172,20 +172,19 @@ function defaultOpenCodexHome(): string {
 }
 
 export function serviceStatePathsForOpenCodexHome(opencodexHome: string): string[] {
-  return serviceStateFilesFor(opencodexHome, defaultOpenCodexHome());
+  // Bun caches the startup home: parallel workers inherit the wrapper's HOME even
+  // after the preload gives each one a sandbox. Tests must not share that mirror,
+  // including serial cases that select different OPENCODEX_HOME fixtures.
+  return serviceStateFilesFor(opencodexHome, isTestHomeGuardArmed() ? opencodexHome : defaultOpenCodexHome());
 }
 
 export function serviceStatePaths(): string[] {
   const paths = serviceStatePathsForOpenCodexHome(currentOpenCodexHome());
   if (!isTestHomeGuardArmed()) return paths;
   /*
-   * Under an armed test process the legacy default-home entry IS the developer's real
-   * `~/.opencodex/service-state.json`. It is there so an install made before
-   * OPENCODEX_HOME was set can still be found, but it means a test whose OPENCODEX_HOME
-   * points at a sandbox still writes their live install state — observed while building
-   * the launchd repair coverage: one case replaced the real record's codexHome and
-   * opencodexHome with temp-directory paths. Drop it rather than deny the write, so the
-   * sandbox path keeps working and the real one is simply not in the list.
+   * The test resolver omits the legacy mirror; still reject an explicit or fallback
+   * OPENCODEX_HOME that names the developer's real home. A missing fixture pin must
+   * never allow a test to read or replace their live service installation.
    *
    * The predicate is the guard's own, not a local `resolve()` compare: the guard
    * canonicalizes through `realpath`, and on macOS a sandbox under `/var/folders/...`

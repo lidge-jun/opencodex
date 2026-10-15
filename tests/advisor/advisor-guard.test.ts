@@ -203,7 +203,7 @@ describe("createAdvisorGuard — manual advisor() interception", () => {
       firstEvents: (async function* () {
         yield { type: "thinking_delta", thinking: "weighing options" };
         yield { type: "thinking_signature", signature: "sig-1" };
-        yield { type: "text_delta", text: "Consulting." };
+        yield { type: "text_delta", text: "Consulting.", phase: "commentary", anthropicThinkingSignature: "ProgressSignature123456==" };
         yield* advisorCallEvents("a1");
         yield { type: "done" };
       })(),
@@ -212,7 +212,7 @@ describe("createAdvisorGuard — manual advisor() interception", () => {
 
     const assistant = requests[0]!.context.messages.find(m => m.role === "assistant");
     expect(assistant && assistant.content.some(p => p.type === "thinking" && p.thinking === "weighing options")).toBe(true);
-    expect(assistant && assistant.content.some(p => p.type === "text" && p.text === "Consulting.")).toBe(true);
+    expect(assistant && assistant.content.some(p => p.type === "thinking" && p.thinking === "Consulting." && p.signature === "ProgressSignature123456==")).toBe(true);
   });
 
   test("the second advisor call in one leg sees the first call's advice", async () => {

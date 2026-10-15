@@ -17,13 +17,31 @@ import {
   type OcxErrorPayload,
 } from "../lib/errors";
 
+const PINNED_VERDICT_CODES = new Set([CYBER_POLICY_ERROR_CODE, "client_closed_request"]);
+
 export function formatErrorResponse(
   status: number,
   type: string,
   message: string,
-  options?: { code?: string | null; retryAfter?: string | null },
+  options?: { code?: string | null; retryAfter?: string | null; classified?: boolean },
 ): Response {
   const error = classifyError(status, type, message);
+  // A combo child holding an adapterFailureFromEvent verdict has already classified this
+  // failure. Re-deriving it from the status folded insufficient_quota into rate_limit_exceeded
+  // and a 400 modality refusal into invalid_request_error, so the combo loop cooled and hopped
+  // on the wrong evidence. The child body reaches only that loop, whose consumer re-applies
+  // this formatter's allowlist before anything reaches a client. The overrides below still win.
+  // The caller's code fills in only where its type and message add nothing to what the status
+  // alone says. A verdict read from the full message (quota, credentials, cyber policy, context
+  // overflow, catalog size) outranks a generic adapter code: the consumer sees only the first
+  // 500 characters, so replacing it turned a late cyber refusal into a hop and spent quota into a
+  // target cooldown. The baseline uses a neutral type because an untyped adapter event arrives
+  // with a type adapterFailureFromEvent already inferred from that same message.
+  const messageVerdict = error.code !== classifyError(status, "upstream_error", "").code;
+  if (options?.classified && options.code && !messageVerdict && !PINNED_VERDICT_CODES.has(error.code ?? "")) {
+    error.type = type;
+    error.code = options.code;
+  }
   if (options?.code === SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE) {
     error.type = "server_error";
     error.code = SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE;
