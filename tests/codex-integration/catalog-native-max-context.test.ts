@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { CODEX_ACCOUNT_BOUND_CATALOG_KIND } from "../../src/codex/catalog/account-models";
 import { nativeContextLimits, type NativeContextLimitsInput } from "../../src/codex/catalog/metadata";
-import { applyNativeOpenAiContextOverride, type RawEntry } from "../../src/codex/catalog/parsing";
+import { applyNativeOpenAiContextOverride, ensureStrictCatalogFields, type RawEntry } from "../../src/codex/catalog/parsing";
 
 function nativeRow(slug = "gpt-6-astra"): RawEntry {
   return { slug, context_window: 272_000, max_context_window: 872_000 };
@@ -88,6 +88,17 @@ describe("#7075 native advertised maximum is independent of the default window",
     expect(row).toMatchObject({ context_window: 272_000, max_context_window: 872_000 });
     applyNativeOpenAiContextOverride(row, { cap: 300_000 });
     expect(row).toMatchObject({ context_window: 272_000, max_context_window: 300_000 });
+  });
+
+  test.each([
+    [CODEX_ACCOUNT_BOUND_CATALOG_KIND, "work/gpt-6-astra", false, 872_000],
+    [undefined, "work/gpt-6-astra", false, 272_000],
+    [CODEX_ACCOUNT_BOUND_CATALOG_KIND, "work/nested/gpt-6-astra", false, 272_000],
+    [CODEX_ACCOUNT_BOUND_CATALOG_KIND, "work/gpt-6-astra", true, 272_000],
+  ])("strict normalization preserves only trusted native selector maxima (%s, %s, routed=%s)", (kind, slug, isRouted, maximum) => {
+    const row = { ...nativeRow(slug), opencodex_catalog_kind: kind };
+    ensureStrictCatalogFields(row, { isRouted });
+    expect(row).toMatchObject({ context_window: 272_000, max_context_window: maximum });
   });
 
   test("configured values above a short model's capacity never raise its maximum", () => {

@@ -631,7 +631,8 @@ export function ensureStrictCatalogFields(
   if (
     typeof entry.max_context_window !== "number"
     || entry.max_context_window <= 0
-    || ((options.isRouted === true || !isNativeOpenAiEntry(entry)) && entry.max_context_window > contextWindow)
+    || ((options.isRouted === true || (!isNativeOpenAiEntry(entry)
+      && trustedAccountBoundNativeCatalogSlug(entry) === undefined)) && entry.max_context_window > contextWindow)
   ) {
     entry.max_context_window = contextWindow;
   }

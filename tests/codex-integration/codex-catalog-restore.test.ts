@@ -415,11 +415,10 @@ describe("Codex catalog restore", () => {
     expect(synced.map(m => m.slug)).toContain("gpt-5.6-luna");
     // gpt-5.4 is no longer a native catalog member, and no surviving native has a 1M window.
     expect(synced.map(m => m.slug)).not.toContain("gpt-5.4");
-    // No long-window opt-in: sync narrows the emitted max to Astra's default window.
-    // The pinned 872k ceiling is available only when the operator enables the larger window.
+    // Without a configured hard limit, sync keeps Astra's default and advertised maximum separate.
     expect(synced.find(m => m.slug === "gpt-6-astra")).toMatchObject({
       context_window: 272_000,
-      max_context_window: 272_000,
+      max_context_window: 872_000,
       auto_compact_token_limit: 244_800,
     });
   }, { timeout: 15_000 });

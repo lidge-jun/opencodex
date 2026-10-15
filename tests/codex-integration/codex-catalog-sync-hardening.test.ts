@@ -557,7 +557,7 @@ describe("Codex catalog sync hardening", () => {
     const rows = JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<Record<string, unknown>>;
     expect(rows.find(row => row.slug === "team/gpt-daybreak-blue-latest")).toMatchObject({
       context_window: 272_000,
-      max_context_window: 272_000,
+      max_context_window: 922_000,
       auto_compact_token_limit: 244_800,
       comp_hash: "3000",
       tool_mode: "code_mode_only",

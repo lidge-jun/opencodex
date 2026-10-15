@@ -34,7 +34,9 @@ serves less. Tests: `tests/codex-integration/vendor-context.test.ts`.
 default `context_window`. Only configured hard limits narrow that maximum: the exact model's
 window overrides the provider window, then the provider context cap bounds either. Both paths
 share validation and precedence through `nativeOpenAiConfiguredContextLimit` in
-`src/codex/catalog/metadata.ts`. Compaction and max input still follow the effective default
+`src/codex/catalog/metadata.ts`. Strict normalization preserves the maximum for trusted
+account-selector native rows too; ordinary routed rows remain bounded by their effective window.
+Compaction and max input still follow the effective default
 window, including retained lower soft budgets. Native capacity remains defined by the
 [native passthrough contract](catalog.md#native-passthrough). Covered by
 `tests/codex-integration/catalog-native-max-context.test.ts`.
