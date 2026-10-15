@@ -8,7 +8,7 @@ import { readClientConnectionState, sameClientConnectionOwner } from "../client/
 import { fetchHubUsage } from "../client/hub-client";
 import { readServiceApiTokenState } from "../lib/service-secrets";
 import { redactSecretString } from "../lib/redact";
-import { rangeWindow, USAGE_SURFACES, type UsageFilterEcho, type UsageSummary } from "../usage/summary";
+import { rangeWindow, USAGE_SURFACES } from "../usage/summary";
 import type { UsageTimeWindow } from "../usage/time-range";
 import {
   CliUsageError,
@@ -32,8 +32,14 @@ export type UsageCompareDeps = RuntimeApiDeps & { now?: () => number };
 const METRICS = ["requests", "totalTokens", "inputTokens", "outputTokens", "cachedInputTokens", "estimatedCostUsd"] as const;
 type Metric = typeof METRICS[number];
 type Totals = Partial<Record<Metric, number>>;
-type ScopedUsage = (UsageSummary | { summary?: Totals; customWindow?: boolean; since?: number | null; until?: number; usageIncomplete?: boolean })
-  & { filter?: UsageFilterEcho };
+type ScopedUsage = {
+  customWindow?: boolean;
+  since?: number | null;
+  until?: number;
+  summary?: Totals;
+  usageIncomplete?: boolean;
+  filter?: Record<string, unknown>;
+};
 
 function query(params: Record<string, string | number | undefined>): string {
   const search = new URLSearchParams();
@@ -209,7 +215,7 @@ async function readUsage(
       if (error instanceof RuntimeApiError && error.code === "proxy_not_running") throw error;
       throw new Error("Key-scoped usage could not be read. Check runtime access and retry.");
     }
-    if (result?.filter?.apiKeyId !== apiKeyId) {
+    if (result.filter?.apiKeyId !== apiKeyId) {
       throw new Error("The server did not confirm the requested API key scope. Upgrade and restart the proxy, then retry.");
     }
   }
