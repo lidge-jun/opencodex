@@ -67,7 +67,9 @@ fn opens_in_default_browser(url: &Url) -> bool {
 
 pub fn open_in_default_browser(url: &Url) {
     if opens_in_default_browser(url) {
-        let _ = tauri_plugin_opener::open_url(url.as_str(), None::<&str>);
+        let _ = crate::process_spawn::with_spawn(|| {
+            tauri_plugin_opener::open_url(url.as_str(), None::<&str>)
+        });
     }
 }
 

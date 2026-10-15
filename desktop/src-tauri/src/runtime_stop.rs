@@ -270,7 +270,12 @@ async fn run_with_args(app: &AppHandle, deadline: Instant, argv: Vec<String>) ->
             return StopResult::Failed(format!("the bundled CLI could not be started ({error})"))
         }
     };
-    match timeout_at(deadline, command.output()).await {
+    match timeout_at(
+        deadline,
+        crate::process_spawn::with_spawn_async(command.output()),
+    )
+    .await
+    {
         Ok(Ok(output)) => read(output.status.code(), &output.stdout, &output.stderr),
         Ok(Err(error)) => StopResult::Failed(format!("the bundled CLI could not be run ({error})")),
         Err(_) => {

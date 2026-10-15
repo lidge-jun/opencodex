@@ -10,6 +10,7 @@ import type { Database } from "bun:sqlite";
 import { closeSync, fstatSync, openSync, readSync } from "node:fs";
 import {
   encodePersistedRequestedModel,
+  exactFileIdentity,
   type PersistedUsageEntry,
   type UsageLogRevision,
 } from "../../usage/log";
@@ -177,8 +178,11 @@ export function ingestSourceTail(
     fd = openSync(path, "r");
     const stat = fstatSync(fd);
     const expected = options.expected;
-    if (expected && (Number(stat.dev) !== Number(expected.dev) || Number(stat.ino) !== Number(expected.ino))) {
-      throw new RequestHistoryIndexStaleError("usage log changed before indexing");
+    if (expected) {
+      const opened = exactFileIdentity(fd);
+      if (opened.dev !== expected.dev || opened.ino !== expected.ino) {
+        throw new RequestHistoryIndexStaleError("usage log changed before indexing");
+      }
     }
     const size = options.endOffset === undefined
       ? Number(stat.size)
