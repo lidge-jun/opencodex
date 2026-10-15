@@ -1,4 +1,4 @@
-import { isOpenCodeGoGeminiDestination, OPENCODE_GO_MODEL_WIRES, OPENCODE_GO_LEGACY_NAME_PINS, type OpenCodeGoDestination } from "./opencode-go";
+import { isOpenCodeGoGeminiDestination, OPENCODE_GO_BASE_URL, OPENCODE_GO_MODEL_WIRES, OPENCODE_GO_LEGACY_NAME_PINS, type OpenCodeGoDestination } from "./opencode-go";
 
 /**
  * Accepted values for the per-provider upstream HTTP-version pin (#1668). Shared by the
@@ -45,9 +45,12 @@ export const MODEL_ADAPTER_OVERRIDE_ALLOWED: ReadonlySet<string> = new Set([
 /** Native Go wire pins share the exact-model table with registry Responses defaults. */
 export function captureWireAdapterHardPins(providerName: string, provider?: WirePinProvider): Readonly<Record<string, string>> {
   if (providerName !== "opencode-go") return Object.freeze({});
+  // The existing Go preset pins saved URLs to this endpoint before dispatch. Pure policy
+  // captures must use that same destination even when handed an unnormalized config row.
+  const destination = provider && { ...provider, baseUrl: OPENCODE_GO_BASE_URL };
   return Object.freeze(Object.fromEntries(Object.entries(OPENCODE_GO_MODEL_WIRES).filter(([modelId, wire]) =>
     (wire === "anthropic" && OPENCODE_GO_LEGACY_NAME_PINS.has(modelId))
-    || (wire !== "openai-responses" && isOpenCodeGoGeminiDestination(provider)),
+    || (wire !== "openai-responses" && isOpenCodeGoGeminiDestination(destination)),
   )));
 }
 

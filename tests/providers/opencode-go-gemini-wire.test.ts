@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { createGoogleAdapter } from "../../src/adapters/google";
 import { providerConfigSeed } from "../../src/providers/derive";
 import { fastPolicyForModel } from "../../src/providers/service-tier";
+import { isOpenCodeGoGeminiDestination } from "../../src/types/opencode-go";
 import { getProviderRegistryEntry } from "../../src/providers/registry";
 import { captureRouteStaticPolicy, routedProviderConfig } from "../../src/router";
 import { buildProtocolProviderSummary } from "../../src/protocols/provider-summary";
@@ -14,7 +15,7 @@ import { withTestTranslatorBudget } from "../helpers/translator-budget";
 
 const MODEL = "gemini-4-argon-contributor";
 const ENDPOINT = `https://opencode.ai/inference/go/v1/models/${MODEL}`;
-const BASES = ["https://opencode.ai/zen/go/v1", "https://opencode.ai/inference/go/v1"];
+const BASES = ["https://opencode.ai/zen/go/v1", "https://opencode.ai/inference/go/v1", "https://custom.invalid/v1"];
 const SIGNATURE = "synthetic-gemini-thought-signature-for-tool-continuation";
 
 /** Build a synthetic URL with embedded credentials to exercise the destination rejection. */
@@ -33,7 +34,11 @@ function go(overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig {
 describe("OpenCode Go Gemini wire (#7097)", () => {
   test("runtime, static policy, Fast and protocol summary agree on the exact pin", () => {
     for (const baseUrl of BASES) {
-      const provider = go({ baseUrl, modelAdapters: { [MODEL]: "openai-responses" } });
+      const configured = go({ baseUrl, modelAdapters: { [MODEL]: "openai-responses" } });
+      expect(captureRouteStaticPolicy("opencode-go", MODEL, configured).model.adapter).toBe("google");
+      expect(fastPolicyForModel(configured, MODEL, "opencode-go").adapter).toBe("google");
+      const provider = routedProviderConfig("opencode-go", configured);
+      expect(provider.baseUrl).toBe(BASES[0]!);
       for (const inbound of ["responses", "chat", "anthropic"] as const) {
         const policy = captureRouteStaticPolicy("opencode-go", MODEL, provider, undefined, inbound);
         expect(policy.model.adapter).toBe("google");
@@ -71,10 +76,12 @@ describe("OpenCode Go Gemini wire (#7097)", () => {
     { googleMode: "vertex" }, { googleMode: "cloud-code-assist" },
   ] satisfies Partial<OcxProviderConfig>[])("does not pin an unrelated destination or auth mode: %j", overrides => {
     const provider = go(overrides);
-    expect(resolveWireProtocolOverride("opencode-go", MODEL, provider).adapter).toBe("openai-chat");
-    expect(captureRouteStaticPolicy("opencode-go", MODEL, provider).model.adapter).not.toBe("google");
-    expect(fastPolicyForModel(provider, MODEL, "opencode-go").adapter).not.toBe("google");
-    if (overrides.baseUrl) expect(routedProviderConfig("opencode-go", provider).baseUrl).toBe(overrides.baseUrl);
+    expect(isOpenCodeGoGeminiDestination(provider)).toBe(false);
+    const name = overrides.baseUrl ? "custom-go" : "opencode-go";
+    expect(resolveWireProtocolOverride(name, MODEL, provider).adapter).toBe("openai-chat");
+    expect(captureRouteStaticPolicy(name, MODEL, provider).model.adapter).not.toBe("google");
+    expect(fastPolicyForModel(provider, MODEL, name).adapter).not.toBe("google");
+    if (overrides.baseUrl) expect(routedProviderConfig(name, provider).baseUrl).toBe(overrides.baseUrl);
   });
 
   test("AI Studio keeps its own endpoint and API-key header", async () => {
@@ -174,7 +181,7 @@ describe("OpenCode Go Gemini Responses dispatch", () => {
     });
   }
 
-  test("a same-named custom provider sends its key only to its configured destination", async () => {
+  test("a differently named custom provider sends its key only to its configured destination", async () => {
     releaseSpendHome = acquireOwnedSpendHome();
     const requests: Array<{ url: string; headers: Headers }> = [];
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -183,8 +190,8 @@ describe("OpenCode Go Gemini Responses dispatch", () => {
     }) as typeof fetch;
     const response = await handleResponses(new Request("http://localhost/v1/responses", {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model: `opencode-go/${MODEL}`, input: "ping", stream: false }),
-    }), { providers: { "opencode-go": go({ baseUrl: "https://custom.invalid/v1", apiKey: "custom-key" }) } } as OcxConfig,
+      body: JSON.stringify({ model: `custom-go/${MODEL}`, input: "ping", stream: false }),
+    }), { providers: { "custom-go": { adapter: "openai-chat", baseUrl: "https://custom.invalid/v1", apiKey: "custom-key" } } } as OcxConfig,
     { model: "", provider: "" });
     expect(response.status).toBe(200);
     await response.text();

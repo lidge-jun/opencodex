@@ -719,14 +719,16 @@ is left as it is; register the preview by hand with
 `ocx models add minimax MiniMax-M3.1-Flash-Preview --context-window 1000000`.
 
 **OpenCode Go** routes `gemini-4-argon-contributor` through its Gemini API, including
-streaming and tool-result continuations. This applies to the built-in Go endpoint and
-`https://opencode.ai/inference/go/v1` with key authentication. A custom destination
-saved under the same provider name retains its own URL and does not receive this pin.
+streaming and tool-result continuations. The existing `opencode-go` preset keeps its
+historical URL pinning: saved custom URLs, including `https://opencode.ai/inference/go/v1`,
+route through the canonical `https://opencode.ai/zen/go/v1` endpoint and inherit Go defaults.
+Gemini then uses Go's native model endpoint with key authentication. A differently named
+custom provider keeps its configured URL and does not receive this Gemini pin.
 Go selects protocols by exact model ID: GPT 6 Luna, GPT 5.6 Luna, Grok 4.6/4.7 and
 Muse Spark Contributor use Responses; Claude Haiku 5.5, MiniMax M2.7/M3 and
 Qwen3.7 Plus/3.8 Max/3.8 Flash use Anthropic Messages. Legacy MiniMax M2.5 and
 Union Alpha also retain Messages. Models without a listed wire retain Chat.
-New native pins apply only to canonical Go destinations with key authentication.
+New native pins apply to the pinned Go destination with key authentication.
 Responses models still accept an explicit `modelAdapters` override.
 Gemini uses `low`, `medium` and `high` thinking levels; higher requested efforts clamp to `high`.
 

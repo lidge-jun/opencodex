@@ -2,6 +2,8 @@
  * Unknown models retain Chat. Responses entries are overridable registry defaults;
  * the native wires are hard pins because modelAdapters cannot select those adapters.
  */
+export const OPENCODE_GO_BASE_URL = "https://opencode.ai/zen/go/v1";
+
 export const OPENCODE_GO_MODEL_WIRES: Readonly<Record<string, "google" | "anthropic" | "openai-responses">> = Object.freeze({
   "gemini-4-argon-contributor": "google",
   "claude-haiku-5-5": "anthropic",

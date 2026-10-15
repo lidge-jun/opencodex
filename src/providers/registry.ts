@@ -98,7 +98,7 @@ export function normalizedProviderEndpoint(value: string): string {
  * OAuth/forward providers stay pinned because their credentials must never be sent to an
  * arbitrary same-named host. Existing key presets keep their historical pinning behavior; a new
  * preset can opt into collision preservation, in which case its fixed endpoint owns only rows
- * that still match that destination or a declared alias.
+ * that still match that destination.
  */
 export function providerMatchesRegistryTransport(
   id: string,
@@ -111,10 +111,10 @@ export function providerMatchesRegistryTransport(
   // The opt-in is intentionally limited to fixed key destinations. Fail closed if a future
   // registry edit combines it with an override/template despite the registry parity tests.
   if (entry.allowBaseUrlOverride || /\{[^}]*\}/.test(entry.baseUrl)) return false;
-  if (typeof provider.baseUrl !== "string" || provider.adapter !== entry.adapter) return false;
+  if (typeof provider.baseUrl !== "string") return false;
+  if (provider.adapter !== entry.adapter) return false;
   if (provider.authMode !== undefined && provider.authMode !== "key") return false;
-  return [entry, ...(entry.destinationAliases ?? [])].some(destination => destination.adapter === provider.adapter
-    && normalizedProviderEndpoint(provider.baseUrl) === normalizedProviderEndpoint(destination.baseUrl));
+  return normalizedProviderEndpoint(provider.baseUrl) === normalizedProviderEndpoint(entry.baseUrl);
 }
 /**
  * Resolve the registry entry a configured provider actually points at, by TRANSPORT

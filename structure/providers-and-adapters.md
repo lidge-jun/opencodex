@@ -397,10 +397,10 @@ stripped). The paired modality declaration is the guard in both cases, which is 
 without one is left alone — that row is either a half-finished repair or a deliberate operator
 entry, and the projection does not guess which. The row must also still be the registry's own:
 identity resolves through `providerMatchesRegistryTransport`, the rule `enrichProviderFromRegistry`
-applies before it writes registry metadata, plus the entry's adapter. `opencode-go` opts into
-`preserveCustomDestination`, so only rows still pointing at its registry destination are repaired;
-same-named custom endpoints keep their saved capabilities, just as they do during enrichment.
-`modelCapabilities` is never written: it is the
+applies before it writes registry metadata, plus the entry's adapter. `opencode-go` is a pinned
+key preset without `preserveCustomDestination`, so its id alone claims a row — exactly as it does
+for enrichment — and an entry that opts into destination preservation narrows the projection with
+it. `modelCapabilities` is never written: it is the
 axis that outranks every source here, so it is where a deliberate text-only override belongs
 (`ocx provider edit <provider> --model <id> --text-only` writes it) and the one declaration a
 restart cannot take back.
@@ -571,7 +571,7 @@ boundary. `src/types/tools.ts` owns tool-name identity: namespaced and dotted na
 normalization, and `tool_choice` alias resolution, so every adapter matches a declared tool the
 same way. `src/types/wire.ts` owns accepted wire enumerations such as the per-provider upstream HTTP-version pin, shared by
 config load, management writes and fetch, so no boundary accepts a value another rejects. It also hard-pins OpenCode Go's
-Anthropic models across runtime and static policy resolution, even with Chat/Responses overrides. Fixed-key entries preserving custom destinations recognize same-adapter destination aliases as registry-owned and retain the configured canonical URL. `src/types/opencode-go.ts` shares exact native pins (including Qwen3.7 Plus/3.8 Max/3.8 Flash) and overridable Responses defaults (including GPT 6 Luna); new native pins require a canonical Go key destination while the five legacy name pins retain compatibility; unknown models retain Chat. `tests/providers/opencode-go-model-protocols.test.ts` covers resolution and dispatch.
+Anthropic models across runtime and static policy resolution, even with Chat/Responses overrides. The existing `opencode-go` preset pins saved URLs to its canonical endpoint; its inference alias supplies destination metadata and affinity to differently named rows. `src/types/opencode-go.ts` shares exact native pins (including Qwen3.7 Plus/3.8 Max/3.8 Flash) and overridable Responses defaults (including GPT 6 Luna); new native pins use the pinned canonical Go key destination even in pure policy captures of saved rows, while the five legacy name pins retain compatibility; unknown models retain Chat. `tests/providers/opencode-go-model-protocols.test.ts` covers resolution and dispatch.
 
 `src/types/config.ts` declares the optional per-phase `memoryModels` setting;
 `src/types/request.ts` carries the selected phase through combo handoffs without changing the

@@ -117,7 +117,7 @@ export function resolvedBaseUrl(
   if (entry.allowBaseUrlOverride && !configuredIsResolved) {
     throw new Error(`Invalid baseUrl for provider "${entry.id}": expected a nonblank URL without unresolved placeholders`);
   }
-  return (/\{[^}]*\}/.test(entry.baseUrl) || entry.allowBaseUrlOverride || entry.preserveCustomDestination) && configuredIsResolved
+  return (/\{[^}]*\}/.test(entry.baseUrl) || entry.allowBaseUrlOverride) && configuredIsResolved
     ? [configured, "operator"]
     : [entry.baseUrl, "registry"];
 }

@@ -130,15 +130,14 @@ describe("stale vision classification migration", () => {
     expect(projectStaleVisionClassifications(config(atOwnHost), [entry]).changed).toBe(false);
   });
 
-  test("preserves a same-named OpenCode Go row at a custom destination", () => {
-    // Go preserves custom destinations, so its registry migration must not change capabilities
-    // for an endpoint the registry does not describe.
-    const config = staleConfig(undefined, undefined, "openai-chat", "https://operator-gateway.example/v1");
-    const before = structuredClone(config);
-    const projection = projectStaleVisionClassifications(config);
-    expect(projection.changed).toBe(false);
-    expect(projection.config).toEqual(before);
-    expect(projection.warnings).toEqual([]);
+  test("still repairs a pinned preset row at any destination", () => {
+    // opencode-go is an existing key preset without preserveCustomDestination: the registry claims
+    // that id itself, and enrichment fills its seed into such a row for the same reason. The
+    // projection follows that policy instead of inventing a narrower one of its own.
+    const projection = projectStaleVisionClassifications(
+      staleConfig(undefined, undefined, "openai-chat", "https://operator-gateway.example/v1"),
+    );
+    expect(projection.changed).toBe(true);
   });
 
   test("is a no-op on a config without the provider", () => {

@@ -1,4 +1,4 @@
-import { OPENCODE_GO_RESPONSES_DEFAULTS } from "../../types/opencode-go";
+import { OPENCODE_GO_BASE_URL, OPENCODE_GO_RESPONSES_DEFAULTS } from "../../types/opencode-go";
 import { KIRO_MODELS, KIRO_MODEL_CONTEXT_WINDOWS, KIRO_MODEL_REASONING_EFFORTS } from "../kiro-models";
 import { DEVIN_MODEL_CONTEXT_WINDOWS, DEVIN_MODEL_EFFORTS, DEVIN_DEFAULT_EFFORTS } from "../../adapters/devin/live-models";
 import { ANTIGRAVITY_MODELS, ANTIGRAVITY_MODEL_CONTEXT_WINDOWS, ANTIGRAVITY_MODEL_EFFORTS, ANTIGRAVITY_MODEL_INPUT_MODALITIES } from "../antigravity-models";
@@ -825,10 +825,8 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     escapeBuiltinToolNames: true,
   },
   {
-    id: "opencode-go", label: "opencode go", adapter: "openai-chat", baseUrl: "https://opencode.ai/zen/go/v1",
+    id: "opencode-go", label: "opencode go", adapter: "openai-chat", baseUrl: OPENCODE_GO_BASE_URL,
     destinationAliases: [{ adapter: "openai-chat", baseUrl: "https://opencode.ai/inference/go/v1" }],
-    // Preserve custom URLs before the endpoint-scoped Gemini pin is evaluated (#7097).
-    preserveCustomDestination: true,
     authKind: "key", featured: true, dashboardUrl: "https://opencode.ai/auth", defaultModel: "kimi-k2.7-code",
     jawcodeBundle: "opencode-go", note: "GLM, DeepSeek, Kimi, Qwen, MiMo…",
     // Zen Go can close a Chat stream after a fully assembled function call without sending

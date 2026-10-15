@@ -7,10 +7,11 @@ HTTPS OpenCode Go destinations (`/zen/go/v1` or `/inference/go/v1`), excluding u
 query, fragment, nonstandard ports and Google OAuth/Vertex modes. `src/types/wire.ts`
 selects `google` for the table's Gemini model on the `opencode-go` row; runtime, static policy, Fast
 policy and protocol summaries share the pin. User-configurable adapter overrides stay
-limited to the two OpenAI wires. The Go registry preserves custom destinations before
-normalization so a same-named custom row cannot acquire this credential route. The registry
-recognizes `/inference/go/v1` as a canonical alias, preserving its URL, sibling wire defaults
-and affinity; arbitrary custom destinations remain outside that ownership.
+limited to the two OpenAI wires. The existing `opencode-go` preset keeps historical name-based
+ownership and pins saved custom or inference URLs to `/zen/go/v1` before dispatch. Pure policy
+captures apply the same canonical destination. A differently named custom Chat provider keeps
+its configured URL and does not acquire the Google pin. The registry recognizes `/inference/go/v1`
+as a destination alias for metadata and affinity on differently named rows.
 
 `src/adapters/google.ts` sends the compiled Gemini body to
 `https://opencode.ai/inference/go/v1/models/gemini-4-argon-contributor`, with
