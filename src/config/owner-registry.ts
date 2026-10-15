@@ -24,21 +24,19 @@
  */
 
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { atomicWriteFileNoFollow } from "./atomic-write";
 import { getConfigDir } from "./paths";
-import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
+import { assertNotRealHomeUnderTest, isTestHomeGuardArmed } from "../lib/test-home-guard";
 import { hardenSecretDir } from "../lib/windows-secret-acl";
 
 const REGISTRY_DIR_NAME = "ocx-homes";
 /**
- * Test seam, not a user knob: os.homedir() resolves the passwd database on POSIX,
- * so rewriting HOME inside a test process cannot move the anchor and the armed
- * test-home guard would rightly refuse the write. Suites point this at their own
- * fixture home; production always leaves it unset so the default home stays the
- * one locator every sibling can find.
+ * Test seam, not a user knob. The sandbox pins this for inherited child environments;
+ * guarded callers without it use their selected config home. Production leaves it
+ * unset so the default home stays the one locator every sibling can find.
  */
 const REGISTRY_DIR_ENV = "OCX_OWNER_REGISTRY_DIR";
 const REGISTRY_ENTRY_SUFFIX = ".json";
@@ -60,8 +58,23 @@ function registryBaseDir(): string {
 /** The shared directory the registry lives under. */
 export function ownerRegistryDir(): string {
   const override = process.env[REGISTRY_DIR_ENV]?.trim();
-  if (override) return resolve(override);
-  return join(registryBaseDir(), REGISTRY_DIR_NAME);
+  const dir = override ? resolve(override)
+    : join(isTestHomeGuardArmed() ? getConfigDir() : registryBaseDir(), REGISTRY_DIR_NAME);
+  // Bun caches the startup home, so HOME rewrites cannot isolate this anchor.
+  // Check reads and removals too, including an inherited override or symlink that
+  // points back into the protected home. An unpinned guarded caller fails closed.
+  if (isTestHomeGuardArmed()) {
+    for (let ancestor = dir; ;) {
+      assertNotRealHomeUnderTest(ancestor);
+      // Follow an existing alias before walking parents; missing children reach
+      // their nearest existing ancestor on the next iterations.
+      try { ancestor = realpathSync.native(ancestor); } catch { /* not created yet */ }
+      const parent = dirname(ancestor);
+      if (parent === ancestor) break;
+      ancestor = parent;
+    }
+  }
+  return dir;
 }
 
 function registryEntryPath(dir: string, home: string): string {
@@ -76,14 +89,6 @@ function registryEntryPath(dir: string, home: string): string {
 export function registerOwnerRegistryHome(home: string): void {
   try {
     const dir = ownerRegistryDir();
-    // Guard every ancestor of the write target: an override that still resolves
-    // under the protected ~/.opencodex must not slip past the test home guard.
-    for (let ancestor = dir; ;) {
-      assertNotRealHomeUnderTest(ancestor);
-      const parent = dirname(ancestor);
-      if (parent === ancestor) break;
-      ancestor = parent;
-    }
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     // This locator contains no secret, but its deterministic entry names must not
     // give another local user a place to plant a destination symlink. Refuse a

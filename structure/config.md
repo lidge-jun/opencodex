@@ -77,7 +77,7 @@ scrub-before-unlink failure path, and explicit residual-temp errors. A caller mu
 `src/config/persist-unlocked.ts` and `src/config/live-reconcile.ts` follow the [publication-aware rollback contract](gui-and-management-api.md#durable-provider-patch). `src/config/live-reconcile.ts` adopts committed model discovery and disabled selectors together with their scoped live merge baselines. A later manual enable therefore removes the automatic disable instead of having a stale three-way merge restore it. Unrelated live config baselines are not advanced by that adoption.
 
 Owner-registry publication first refuses a directory symlink, applies POSIX mode `0700`, and requires `hardenSecretDir` for the locator directory. On Windows the default secret-directory ACL grants the current owner full control before removing inherited and broad-user access, without elevated-stage reader grants. A hardening failure skips this best-effort publication before any pointer is written.
-
+Under the armed test-home guard, `src/config/owner-registry.ts` uses the selected config home when its test override is absent and rejects protected-home destinations before reads, publication or retirement; production keeps the shared default-home registry. See [test state isolation](ops/test-sandbox-cleanup.md).
 Windows hardening in the atomic writer is applied once per write, not once per harden call. Both calls stay
 `required: true` and still fail the write closed, but the pre-rename call resolves through the
 `src/lib/windows-secret-acl.ts` success memo: after the content write the writer re-asserts that the
