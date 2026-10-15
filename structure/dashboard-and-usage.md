@@ -2,7 +2,7 @@
 
 Dashboard page contracts, usage accounting and request metrics, and the management settings that
 back individual dashboard surfaces. Serving, authentication boundaries, and `/api/*` ownership are
-in [GUI and management API](gui-and-management-api.md).
+in [GUI and management API](gui-and-management-api.md). Model-price editing and estimate selection follow [pricing](pricing.md).
 
 ## UX boundary
 
@@ -280,7 +280,7 @@ inheriting its bounds, so deleting a ledger row removes it from the grouping.
 whole rows byte for byte through the shared atomic writer, refuses the rename unless the source is
 the exact revision that was copied, and then discards the Logs ring, the retained aggregates and the
 request-history index so no surface serves rows the ledger no longer has. That index (`src/routing/history/`) rebuilds a ledger of at least `REQUEST_HISTORY_WORKER_REBUILD_MIN_BYTES` (1 MiB) on a worker thread (#6990): `rebuild-worker.ts`, driven by `rebuild-job.ts`, ingests the ledger snapshot the refresh recorded into a private `<index>.rebuild-<pid>-<n>` file through the same `ingest.ts` the inline path uses, switches it to WAL and closes it; the serving thread then closes the old index and renames the build over it. Async readers wait for the build; the routing-time sync entry never does and throws `RequestHistoryIndexBusyError`, which health scoring reads as unknown evidence. A close discards the build, rejects waiting readers with `RequestHistoryIndexClosedError`, and removes the build files only after the worker thread exits. For 30 s after a worker build fails (other than on a replaced ledger), async readers and manual rebuilds rebuild inline instead, while routing-time reads keep reporting busy.
-`src/usage/summary.ts` turns that file into the `/api/usage` shape — totals, daily zero-filled
+Ledger revisions in `src/usage/log.ts` capture device/inode identifiers from bigint descriptor stats as exact decimal strings; history metadata, ingestion, cooperative scans and retention compare them without narrowing to Numbers, preserving distinct NTFS identifiers above 2^53. An older index containing a rounded identifier fails the identity check and rebuilds once. `src/usage/summary.ts` turns that file into the `/api/usage` shape — totals, daily zero-filled
 grid, model and provider breakdowns, and `measured / reported / unreported / unsupported / estimated` counts. Each scope also aggregates end-to-end output throughput (#6309): measured output tokens and wall-clock `durationMs` are summed over attempts reporting both, exposing `throughputTokensPerSec` — a token-sum-over-duration-sum, never a mean of per-request rates. `throughputSamples` counts qualifying attempts (legacy rows without attempts contribute one); nonpositive or nonfinite tokens/timing are excluded. The Usage summary and Models/Providers tables display the rate and sample basis, or unavailable when none qualify.
 All three throughput displays use the same finite-number guard as their tooltip; malformed or nonfinite rates are unavailable rather than formatted.
 The management route scans the ledger from its beginning in fixed 1 MiB chunks on a

@@ -222,6 +222,9 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
     const requestedCombo: Record<string, unknown> = body.combo;
     const effectiveCombo = {
       ...requestedCombo,
+      ...(!Object.hasOwn(requestedCombo, "allowMeteredTargets") && previous?.allowMeteredTargets === true
+        ? { allowMeteredTargets: true }
+        : {}),
       ...(!Object.hasOwn(requestedCombo, "cooldownMs") && previous?.cooldownMs !== undefined
         ? { cooldownMs: previous.cooldownMs }
         : {}),
@@ -249,7 +252,7 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
               // A non-record entry stays as the client sent it so comboConfigError reports it.
               // Reading `lastResort` off it here would throw in place of that structured 400.
               if (!isPlainRecord(target)) return target;
-              if (Object.hasOwn(target, "lastResort")) return target;
+              if (["lastResort", "metered"].every(key => Object.hasOwn(target, key))) return target;
               const rawProvider = target.provider;
               const rawModel = target.model;
               if (typeof rawProvider !== "string" || typeof rawModel !== "string") return target;
@@ -260,7 +263,13 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
               const before = previous.targets.find(
                 candidate => candidate.provider === provider && candidate.model === model,
               );
-              return before?.lastResort ? { ...target, lastResort: true } : target;
+              // `metered` is carried the same way: dropping it on a GUI round-trip would open a
+              // pay-per-use target to every issued key.
+              return {
+                ...target,
+                ...(!Object.hasOwn(target, "lastResort") && before?.lastResort ? { lastResort: true } : {}),
+                ...(!Object.hasOwn(target, "metered") && before?.metered ? { metered: true } : {}),
+              };
             }),
           }
         : {}),
@@ -389,9 +398,10 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
       // would add a noise key to every target of every combo, including ones that never use
       // the policy (#5736). Only the opt-in value is stored, matching how the combo-level
       // policy is handled in sparseComboConfig.
-      targets: normalizedBase.targets.map(({ lastResort, modelProfile, ...target }) => ({
+      targets: normalizedBase.targets.map(({ lastResort, metered, modelProfile, ...target }) => ({
         ...target,
         ...(lastResort ? { lastResort: true } : {}),
+        ...(metered ? { metered: true } : {}),
         ...(modelProfile ? { modelProfile } : {}),
       })),
       ...(normalizedAlias ? { alias: normalizedAlias } : {}),

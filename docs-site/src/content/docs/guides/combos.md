@@ -15,6 +15,17 @@ This is useful when you want either:
 Combos sit in front of normal provider routing. Read [Model Routing](/guides/model-routing/) first
 if `provider/model` selectors are new to you.
 
+## Metered fallback consent
+
+Mark a pay-per-use combo target with `"metered": true` when it follows subscription targets. Omitted or false consent denies metered dispatch. Choose consent for your deployment:
+
+- **Local Claude Code or Codex:** on a loopback-only proxy, set `"allowMeteredTargets": true` on the combo, or run `ocx combo set <id> --allow-metered-targets on`. This explicitly permits local callers to use its marked targets. The default is false; `off` clears consent. Loopback authentication does not read API keys.
+- **Network or linked callers:** the caller's configured `apiKeys[]` entry must have `"allowMeteredComboTargets": true`. A proxy with a non-loopback listener ignores the combo flag, including on its secondary loopback listener. Linked callers also retain their configured-key consent requirement when the primary listener is loopback. The environment token never qualifies.
+
+Request headers cannot grant consent. Model/provider scopes still apply. This covers initial selection, failover and recovery across combo strategies, compaction, Messages, Chat Completions and WebSocket requests, and a subagent model fallback naming a combo alias. A collapsed fallback tries a usable unmetered target before refusing. Unmarked targets retain existing behavior; metering is declared by the operator rather than detected automatically.
+
+For example, a failover chain can target Anthropic OAuth, then Cursor, then `{ "provider": "anthropic-apikey", "model": "claude-opus-5-5", "metered": true }`. Without consent, exhaustion returns the last unmetered error, with one exception: an earlier 429 or 402 quota refusal takes precedence over a later 400, 401 or 403. If the subscription target returns 429 and Cursor then refuses with 401 or 403, the caller receives the subscription's 429, because the spent subscription explains the failure and Cursor's credential refusal does not. Dashboard saves retain omitted target metering and combo consent; explicitly setting either to false clears it. These consent fields are configured through the config file or API; the combo flag is also available through the CLI, while the dashboard does not expose it.
+
 ## 60-second quickstart
 
 This example creates `combo/main` with Anthropic first and OpenAI second. Both providers must
@@ -540,7 +551,7 @@ Combo failures are divided into **hop** failures and **terminal** failures.
 | Classified authentication, subscription, quota, rate-limit, overload, or upstream-server error | Cool the target and hop, even when the status alone is not sufficient. |
 | Client cancellation (499), `origin_rejected`, cyber-policy refusal, context overflow, or other invalid request | Stop and return the error; another target would not make the request valid. |
 | Exact HTTP 400 saying a model is not supported when using Codex with a ChatGPT account | Try the next declared target before output commitment. The message must be the whole refusal in `detail`, `error.message`, or bare text; competing `detail` and `error` envelopes stay terminal. This does not quarantine the account or cool every model on the provider. |
-| Structured HTTP 400 rejecting optional `user`, an unsupported reasoning effort, or model-scoped image input | Hop before output commitment without cooling; see request-local target compatibility below. |
+| Structured HTTP 400 rejecting optional `user`, an unsupported reasoning effort, model-scoped image input, or input media the route cannot read (`unsupported_input_modality`) | Hop before output commitment without cooling; see request-local target compatibility below. |
 | First tool call of a Responses turn run by an in-process adapter (`runTurn`) that the current request did not declare, before any output or replay-unsafe side effect | Cool the target and hop with the same tool catalog. After visible output or a replay-unsafe side effect the refusal is final. Chat Completions and Anthropic Messages requests are unchanged. |
 | Any other unclassified error | Stop and return the error. |
 
@@ -650,7 +661,7 @@ instead of growing memory without a bound.
 
 When routing Claude Code to the canonical ChatGPT Codex backend, OpenCodex removes the unsupported top-level `user` metadata field without changing the session/cache key, input messages, tool schemas, or safety identifiers. Public Responses API and noncanonical forward gateways keep that field.
 
-A combo can also advance after an intact HTTP 400 `invalid_request_error` that specifically rejects `user`, reports `unsupported_value` for `reasoning.effort`/`reasoning_effort`, or reports `param: input` with an exact model-scoped `does not support image inputs` rejection. This is a mismatch for that request, not evidence that the target is unhealthy, so it records no cooldown. This compatibility recovery does not silently change `none` into a different effort or broaden this exception to arbitrary invalid requests. Policy refusals, cancellation and already-committed output remain non-replayable. A single-target request still returns an unresolved upstream rejection.
+A combo can also advance after an intact HTTP 400 `invalid_request_error` that specifically rejects `user`, reports `unsupported_value` for `reasoning.effort`/`reasoning_effort`, or reports `param: input` with an exact model-scoped `does not support image inputs` rejection. A route that refuses the request's media with code `unsupported_input_modality`, such as image input sent to a CLI provider route without a verified multimodal contract, advances the same way. This is a mismatch for that request, not evidence that the target is unhealthy, so it records no cooldown. This compatibility recovery does not silently change `none` into a different effort or broaden this exception to arbitrary invalid requests. Policy refusals, cancellation and already-committed output remain non-replayable. A single-target request still returns an unresolved upstream rejection.
 
 ## Default reasoning effort
 
@@ -780,7 +791,7 @@ ocx combo remove <id> --yes
 ```
 
 `set` also accepts `--strategy`, `--sticky`, `--effort`, `--alias`, `--native-alias`,
-`--display-name`, `--decision-provider`, `--decision-timeout`, and `--rename-from`. Use `-` as the
+`--allow-metered-targets on|off`, `--display-name`, `--decision-provider`, `--decision-timeout`, and `--rename-from`. Use `-` as the
 value of `--effort`, `--alias`, `--display-name`, `--decision-provider`, or `--decision-timeout` to
 clear that field. The two decision flags apply only to `--strategy jev`. `--native-alias` requires a currently supported bare native
 model alias and a non-empty display name. `create` and `update` are aliases for `set`; `delete` is an alias for

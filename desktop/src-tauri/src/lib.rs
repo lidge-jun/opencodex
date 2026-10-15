@@ -46,6 +46,7 @@ mod tray_login;
 #[allow(dead_code)]
 #[path = "popup.rs"]
 mod popup_portable_test;
+mod process_spawn;
 mod proxy;
 mod resolve;
 mod runtime_stop;
