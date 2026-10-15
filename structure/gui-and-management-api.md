@@ -572,6 +572,8 @@ Pairing-grant source limiting applies only to invalid guesses from an allowed br
 
 ## Durable provider PATCH
 
+`PUT /api/combos` shares this transaction for combo changes, rename references, disabled selectors and request-only Vision Sidecar enrollment; see `tests/routing/combo-vision-enrollment.test.ts`.
+
 `src/server/management/provider-routes.ts` commits every provider PATCH variant through
 `src/server/management/provider-patch-transaction.ts`, including standalone default-provider
 and account-mode changes. The synchronous mutation lock encloses snapshot, mutation, save,
@@ -590,9 +592,7 @@ Reconciliation, model-cache invalidation, quota/thread-cache changes, priming an
 convergence remain after successful persistence in their existing order. Pacing-only updates
 keep their existing no-catalog-refresh behavior. The regression suite is
 `tests/server/management-provider-atomicity.test.ts`.
-
 > Decision record: [Durable provider PATCH](decisions/ADR-0104-durable-provider-patch.md)
-
 > Decision record: [Publication-aware rollback](decisions/ADR-0120-provider-patch-publication-boundary.md)
 
 Automatic account exhaustion and recovery use the [spendable Codex credit evidence contract](providers/openai-tiers.md#spendable-codex-credits), including independent freshness, upstream refusal, and reset-ticket separation. The PINNED badge confirms before sending a null selection, which clears the pin and returns routing to automatic while bound threads keep their captured account. The dashboard also sends `expectedPinnedAccountId`; the persisted mutation rejects a changed pin with `account_pin_changed` before writing. Refused or uncertain releases reload `/active` and close the old confirmation without claiming that the prior selection survived.
