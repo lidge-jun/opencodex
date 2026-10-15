@@ -116,8 +116,14 @@ function attemptSamplesFor(
 ): HealthSample[] | undefined {
   if (!row.rowJson) return undefined;
   try {
-    const parsed = JSON.parse(row.rowJson) as { attempts?: unknown; closeReason?: unknown; terminalStatus?: unknown };
-    if (!Array.isArray(parsed.attempts)) return undefined;
+    const parsed = JSON.parse(row.rowJson) as {
+      attempts?: unknown;
+      closeReason?: unknown;
+      terminalStatus?: unknown;
+      failureCause?: unknown;
+    };
+    // A local refusal logged before any attempt began never reached a target.
+    if (!Array.isArray(parsed.attempts)) return parsed.failureCause === "local-refusal" ? [] : undefined;
     const attempts = parsed.attempts.filter(
       (attempt): attempt is Record<string, unknown> =>
         !!attempt && typeof attempt === "object" && !Array.isArray(attempt),
