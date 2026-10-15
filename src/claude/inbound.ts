@@ -387,6 +387,26 @@ function canonicalJson(value: unknown): string {
 /** Provenance of the generated prompt_cache_key (never serialized into the wire body). */
 export type ClaudeCacheKeySource = "metadata" | "system" | null;
 
+/**
+ * The translated lane places its own prompt-cache breakpoints, so the caller's are dropped;
+ * their TTL is the one thing worth keeping. Any caller breakpoint asking for `ttl: "1h"`
+ * (Claude Code on a subscription marks them so) maps to `cacheRetention: "long"`; otherwise
+ * undefined, leaving the default. Read out of body: the Responses body has no field for it.
+ */
+export function callerCacheRetention(raw: unknown): "long" | undefined {
+  if (!isRec(raw)) return undefined;
+  const blocks: unknown[] = [
+    ...(Array.isArray(raw.system) ? raw.system : []),
+    ...(Array.isArray(raw.tools) ? raw.tools : []),
+    ...(Array.isArray(raw.messages)
+      ? raw.messages.flatMap(m => isRec(m) && Array.isArray(m.content) ? m.content : [])
+      : []),
+  ];
+  return blocks.some(b => isRec(b) && isRec(b.cache_control) && b.cache_control.ttl === "1h")
+    ? "long"
+    : undefined;
+}
+
 export interface ClaudeInboundTranslation {
   body: Rec;
   cacheKeySource: ClaudeCacheKeySource;

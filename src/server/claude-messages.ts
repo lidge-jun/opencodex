@@ -28,7 +28,7 @@ import {
   planMessagesAntigravityDirect,
   type MessagesDirectPlan,
 } from "./messages-antigravity-direct";
-import { AnthropicRequestError, DesktopModelMappingUnavailableError, extractOcxEffortDirective, extractOcxRouteDirective, nativeAnthropicProjection, resolveInboundModel, type ClaudeCacheKeySource } from "../claude/inbound";
+import { AnthropicRequestError, callerCacheRetention, DesktopModelMappingUnavailableError, extractOcxEffortDirective, extractOcxRouteDirective, nativeAnthropicProjection, resolveInboundModel, type ClaudeCacheKeySource } from "../claude/inbound";
 import { nativeReasoningTag, type NativeReasoningOwner } from "../responses/reasoning-replay-cache";
 import { isKnownDesktop3pModelId, resolveDesktop3pAlias } from "../claude/desktop-3p";
 import { resolveAlias, claudeCodeNativeAlias, legacyAliasForNative } from "../claude/alias";
@@ -1409,7 +1409,11 @@ async function handleClaudeMessagesWithBudget(
   // BEFORE translation (the translated Anthropic stream has no response.completed
   // frame, so tapping it records a bogus 502 with no usage/cache detail).
   const finalizeNativeLog = createFinalRequestLog(logIds, logCtx).finish;
-  const upstream = await handleResponses(internalReq, buildClaudeReplayConfig(config), logCtx, {
+  const upstream = await handleResponses(internalReq, {
+    ...buildClaudeReplayConfig(config),
+    // Operator config wins; otherwise the caller's own 1h breakpoints keep 1h here.
+    cacheRetention: config.cacheRetention ?? callerCacheRetention(anthropicBody),
+  }, logCtx, {
     // Routing keeps Claude-only sidecar overrides; admission policy must follow the live owner.
     codexAuthPolicy: config,
     ...(logIds?.admission ? { admission: logIds.admission } : {}),
