@@ -26,6 +26,19 @@ const search: AdapterEvent[] = [
   { type: "tool_call_end" },
 ];
 
+for (const live of [false, true]) test(`signed search progress is displayed once and retained for replay (live=${live})`, async () => {
+  const progress: AdapterEvent = { type: "text_delta", text: "Checking sources.", phase: "commentary", anthropicThinkingSignature: "SyntheticProgressSignature123456==" };
+  const requests: OcxParsedRequest[] = [];
+  const out = await collect(runTurnWebSearchLoop(stream([progress, ...search, done]), {
+    parsed, plan: { ...plan, streamRoutedModelOutput: live },
+    dispatch: request => { requests.push(request); return stream(answer); },
+  }));
+  expect(out.filter(e => e.type === "text_delta" && e.text === progress.text)).toEqual([progress]);
+  expect(out.indexOf(progress)).toBeLessThan(out.findIndex(e => e.type === "web_search_call_begin"));
+  const assistant = requests[0]!.context.messages.find(m => m.role === "assistant");
+  expect(assistant?.content[0]).toEqual({ type: "thinking", thinking: progress.text, signature: progress.anthropicThinkingSignature });
+});
+
 describe("runTurn search recovery", () => {
   test("complete search survives a truncated done", async () => {
     let calls = 0;

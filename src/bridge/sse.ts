@@ -1,3 +1,4 @@
+import { anthropicProgressItems } from "../responses/anthropic-progress";
 import type {
   AdapterEvent,
   OcxMessagePhase,
@@ -841,6 +842,7 @@ export function bridgeToResponsesSSE(
           // its compaction UI renders nothing mid-turn, so nothing is lost visually.
           if (options?.compaction) {
             if (event.type === "text_delta") {
+              if (event.anthropicThinkingSignature) continue;
               compaction = appendString(
                 compaction,
                 event.text,
@@ -871,6 +873,29 @@ export function bridgeToResponsesSSE(
               break;
             }
             case "text_delta": {
+              if (event.anthropicThinkingSignature) {
+                rawReasoningForNextToolCall = "";
+                closeCurrentMessage("commentary");
+                closeCurrentReasoning();
+                closeCurrentRawReasoning();
+                flushHiddenRawReasoning();
+                flushHiddenReasoningEnvelope();
+                if (currentToolCall) closeCurrentToolCall();
+                for (const item of anthropicProgressItems(event.text, event.anthropicThinkingSignature, budget)) {
+                  emit("response.output_item.added", { output_index: outputIndex, item: { ...item, ...(item.type === "message" ? { status: "in_progress", content: [] } : {}) } });
+                  if (item.type === "message") {
+                    const part = item.content![0];
+                    emit("response.content_part.added", { item_id: item.id, output_index: outputIndex, content_index: 0, part: { ...part, text: "" } });
+                    emit("response.output_text.delta", { item_id: item.id, output_index: outputIndex, content_index: 0, delta: event.text });
+                    emit("response.output_text.done", { item_id: item.id, output_index: outputIndex, content_index: 0, text: event.text });
+                    emit("response.content_part.done", { item_id: item.id, output_index: outputIndex, content_index: 0, part });
+                  }
+                  emit("response.output_item.done", { output_index: outputIndex, item });
+                  retainFinishedItem(item as OutputItem);
+                  outputIndex++;
+                }
+                break;
+              }
               if (currentReasoning) closeCurrentReasoning();
               if (currentRawReasoning) closeCurrentRawReasoning();
               flushHiddenRawReasoning();

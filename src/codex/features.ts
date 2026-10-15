@@ -44,6 +44,10 @@ import { resolveCodexHomeDir } from "./home";
 import { resolveAndPersistCodexRuntime } from "./runtime";
 import { decodeOverlayState } from "./shim-state-file";
 import { canonicalizeOpenCodexModeHint } from "./multi-agent-mode-policy";
+import { rootAssignmentKey, sourceText, splitSourceLines } from "./toml-source-lines";
+
+const AGENTS_THREAD_LIMIT_KEY = "max_concurrent_threads_per_session";
+const LEGACY_AGENTS_THREAD_LIMIT_KEY = "max_threads";
 
 /** Upstream codex-rs feature key: allow `request_user_input` in Default mode. */
 export const DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE_KEY = "default_mode_request_user_input";
@@ -328,36 +332,31 @@ export function isDefaultModeRequestUserInputEnabled(configPath?: string): boole
 }
 
 /**
- * TRUE when config.toml still carries `[agents] max_threads` — codex-rs REFUSES to
- * boot with that key while multi_agent_v2 is enabled ("agents.max_threads cannot be
- * set when features.multi_agent_v2 is enabled", core/src/config/mod.rs:1421). The
- * `ocx v2 on` flow warns about it instead of editing config itself.
+ * Whether either spelling of the [agents] limit is present, including invalid
+ * values. Keep the exported compatibility name; migrations must remove both.
  */
 export function hasAgentsMaxThreads(configPath?: string): boolean {
   const content = readConfigText(configPath);
   if (content === null) return false;
   const parsed = parsedTomlTable(content, "agents");
-  if (parsed !== null) return Object.hasOwn(parsed, "max_threads");
-  const agents = tomlTableBody(content, "agents");
-  if (agents === null) return false;
-  return /^\s*max_threads\s*=/m.test(agents);
+  if (parsed !== null) return Object.hasOwn(parsed, AGENTS_THREAD_LIMIT_KEY) || Object.hasOwn(parsed, LEGACY_AGENTS_THREAD_LIMIT_KEY);
+  return agentsThreadLimitEntries(content).entries.length > 0;
 }
 
-/** Current legacy v1 `[agents] max_threads`, or null when absent/invalid. */
+/** Canonical [agents] limit, falling back to max_threads only when absent. */
 export function getAgentsMaxThreads(configPath?: string): number | null {
   const content = readConfigText(configPath);
   if (content === null) return null;
   const parsed = parsedTomlTable(content, "agents");
   if (parsed !== null) {
-    const value = parsed.max_threads;
+    const value = Object.hasOwn(parsed, AGENTS_THREAD_LIMIT_KEY) ? parsed[AGENTS_THREAD_LIMIT_KEY] : parsed[LEGACY_AGENTS_THREAD_LIMIT_KEY];
     return typeof value === "number" && Number.isInteger(value) && value >= 1 ? value : null;
   }
-  const agents = tomlTableBody(content, "agents");
-  if (agents === null) return null;
-  const m = agents.match(/^\s*max_threads\s*=\s*(\d+)\s*(?:#.*)?$/m);
-  if (!m) return null;
-  const value = Number(m[1]);
-  return Number.isInteger(value) && value >= 1 ? value : null;
+  // Unrelated valid 64-bit integers can make Bun reject the whole document.
+  // Decode the same isolated structural assignment the editor uses, including
+  // quoted keys and non-decimal integers, rather than treating unreadable as unset.
+  const entries = agentsThreadLimitEntries(content).entries;
+  return (entries.find(entry => entry.key === AGENTS_THREAD_LIMIT_KEY) ?? entries[0])?.value ?? null;
 }
 
 /**
@@ -1310,31 +1309,57 @@ function editAgentsMaxThreads(value: number | null, configPath?: string, migrate
   const path = configPath ?? activeCodexConfigPath();
   return editCodexConfigToml(path, (content): TomlEditOutcome => {
     const eol = dominantEol(content);
-    const lines = content.split(/\r?\n/);
-    const headerIdx = lines.findIndex(l => /^\s*\[agents\]\s*(?:#.*)?$/.test(l));
+    const { lines, headerIdx, entries } = agentsThreadLimitEntries(content);
     if (headerIdx === -1) {
       if (value === null) return { next: content };
-      const separator = lines.length > 0 && lines[lines.length - 1] !== "" ? [""] : [];
-      lines.push(...separator, "[agents]", `max_threads = ${value}${migratedComment ?? ""}`);
-      return { next: applyEol(lines.join("\n"), eol) };
+      const separator = content.length > 0 && !content.endsWith("\n") ? eol : "";
+      return { next: `${content}${separator}${eol}[agents]${eol}${AGENTS_THREAD_LIMIT_KEY} = ${value}${migratedComment ?? ""}${eol}` };
     }
-    let end = lines.length;
-    for (let i = headerIdx + 1; i < lines.length; i++) {
-      if (/^\s*\[/.test(lines[i])) { end = i; break; }
+    const selected = entries.find(entry => entry.key === AGENTS_THREAD_LIMIT_KEY) ?? entries[0];
+    if (entries.length === 1 && selected?.key === AGENTS_THREAD_LIMIT_KEY && selected.value === value
+      && value !== null && mergeTrailingComments(selected.comment, migratedComment) === (selected.comment ?? "")) return { next: content };
+    let comment = selected?.comment;
+    for (const entry of entries) comment = mergeTrailingComments(comment, entry.comment);
+    comment = mergeTrailingComments(comment, migratedComment);
+    for (const entry of [...entries].reverse()) {
+      if (value !== null && entry === selected) {
+        const line = lines[entry.index]!;
+        line.text = `${line.text.match(/^\s*/)?.[0] ?? ""}${AGENTS_THREAD_LIMIT_KEY} = ${value}${comment}`;
+      } else lines.splice(entry.index, 1);
     }
-    const keyRe = /^(\s*)max_threads\s*=\s*(\d+)(\s*#.*)?$/;
-    for (let i = headerIdx + 1; i < end; i++) {
-      const m = lines[i].match(keyRe);
-      if (!m) continue;
-      if (value === null) lines.splice(i, 1);
-      else if (Number(m[2]) === value && (!migratedComment || migratedComment === m[3])) return { next: content };
-      else lines[i] = `${m[1]}max_threads = ${value}${mergeTrailingComments(m[3], migratedComment)}`;
-      return { next: applyEol(lines.join("\n"), eol) };
+    if (value !== null && !selected) {
+      if (!lines[headerIdx]!.eol) lines[headerIdx]!.eol = eol;
+      lines.splice(headerIdx + 1, 0, { text: `${AGENTS_THREAD_LIMIT_KEY} = ${value}${comment}`, eol, structural: true });
     }
-    if (value === null) return { next: content };
-    lines.splice(headerIdx + 1, 0, `max_threads = ${value}${migratedComment ?? ""}`);
-    return { next: applyEol(lines.join("\n"), eol) };
+    return { next: sourceText(lines) };
   });
+}
+
+/** Only structural assignments in the supported agents table are editable. */
+function agentsThreadLimitEntries(content: string) {
+  const lines = splitSourceLines(content);
+  const headerIdx = lines.findIndex(line => line.structural && /^\s*\[agents\]\s*(?:#.*)?$/.test(line.text));
+  const entries: Array<{ index: number; key: string; value: number | null; comment?: string; editable: boolean }> = [];
+  if (headerIdx !== -1) {
+    for (let index = headerIdx + 1; index < lines.length; index++) {
+      const line = lines[index]!;
+      if (!line.structural) continue;
+      if (/^\s*\[/.test(line.text)) break;
+      const key = rootAssignmentKey(line.text);
+      if (key !== AGENTS_THREAD_LIMIT_KEY && key !== LEGACY_AGENTS_THREAD_LIMIT_KEY) continue;
+      const assignment = findTomlAssignment(line.text, key);
+      const editable = assignment !== null && (index + 1 === lines.length || lines[index + 1]!.structural);
+      let value: unknown;
+      try { value = (Bun.TOML.parse(line.text) as Record<string, unknown>)[key]; } catch {
+        // Match the reader's large-integer fallback without widening edit syntax.
+        const integer = assignment && /^\d+$/.exec(line.text.slice(assignment.valueStart, assignment.valueEnd).trim());
+        if (integer) value = Number(integer[0]);
+      }
+      entries.push({ index, key, editable, value: typeof value === "number" && Number.isInteger(value) && value >= 1 ? value : null,
+        comment: assignment ? line.text.slice(assignment.valueEnd).match(/\s*#.*$/)?.[0] : undefined });
+    }
+  }
+  return { lines, headerIdx, entries };
 }
 
 function removeMaxConcurrentThreads(configPath?: string): ConfigEditResult {
@@ -1439,7 +1464,9 @@ function discoverStoredThreadLimit(configPath?: string): { value: number; units:
 }
 
 function activeThreadComment(content: string, v2Enabled: boolean): string | undefined {
-  const legacy = tomlTableBody(content, "agents")?.match(/^\s*max_threads\s*=\s*\d+(\s*#.*)$/m)?.[1];
+  const entries = agentsThreadLimitEntries(content).entries;
+  let legacy = (entries.find(entry => entry.key === AGENTS_THREAD_LIMIT_KEY) ?? entries[0])?.comment;
+  for (const entry of entries) legacy = mergeTrailingComments(legacy, entry.comment) || undefined;
   const dedicated = tomlTableBody(content, "features.multi_agent_v2")
     ?.match(/^\s*max_concurrent_threads_per_session\s*=\s*\d+(\s*#.*)$/m)?.[1];
   const features = tomlTableBody(content, "features");
@@ -1503,8 +1530,8 @@ export type MultiAgentV2TransitionResult =
   | { ok: true; changed: boolean; threadLimit: number | null }
   | { ok: false; error: string; retryable?: boolean };
 
-function transitionConfigError(content: string): string | null {
-  if (/^\s*(?:features\.multi_agent_v2(?:\.[A-Za-z0-9_]+)?|agents\.max_threads)\s*=/m.test(content)) {
+function transitionConfigError(content: string, explicitThreadLimit: boolean): string | null {
+  if (/^\s*(?:features\.multi_agent_v2(?:\.[A-Za-z0-9_]+)?|agents\.(?:max_threads|max_concurrent_threads_per_session))\s*=/m.test(content)) {
     return "dotted multi-agent config keys are not supported for automatic migration";
   }
   const dedicatedTables = content.match(/^\s*\[features\.multi_agent_v2\]\s*(?:#.*)?$/gm) ?? [];
@@ -1521,9 +1548,18 @@ function transitionConfigError(content: string): string | null {
   if (features && /^\s*multi_agent_v2\.(?:enabled|max_concurrent_threads_per_session)\s*=/m.test(features)) {
     return "dotted multi_agent_v2 fields are not supported for automatic migration";
   }
-  const agents = tomlTableBody(content, "agents");
-  if ((agents?.match(/^\s*max_threads\s*=/gm) ?? []).length > 1) {
-    return "duplicate agents.max_threads definitions cannot be migrated safely";
+  const entries = agentsThreadLimitEntries(content).entries;
+  const parsedAgents = parsedTomlTable(content, "agents");
+  for (const key of [AGENTS_THREAD_LIMIT_KEY, LEGACY_AGENTS_THREAD_LIMIT_KEY]) {
+    const matches = entries.filter(entry => entry.key === key);
+    if (matches.length > 1) return `duplicate agents.${key} definitions cannot be migrated safely`;
+    if (parsedAgents && Object.hasOwn(parsedAgents, key) && matches.length === 0) {
+      return "unsupported agents thread-limit storage cannot be migrated safely";
+    }
+  }
+  if (entries.some(entry => !entry.editable)) return "unsupported agents thread-limit value cannot be migrated safely";
+  if (!explicitThreadLimit && (entries.some(entry => entry.value === null) || (entries.length === 2 && entries[0]!.value !== entries[1]!.value))) {
+    return "conflicting or invalid agents thread-limit aliases require an explicit thread limit";
   }
   const dedicated = tomlTableBody(content, "features.multi_agent_v2");
   if ((dedicated?.match(/^\s*max_concurrent_threads_per_session\s*=/gm) ?? []).length > 1) {
@@ -1542,15 +1578,15 @@ export function transitionMultiAgentV2(
   toggleFeature: (enabled: boolean, env: NodeJS.ProcessEnv, validateBeforeSpawn: () => void) => void,
   options: { configPath?: string; threadLimit?: number; heldConfigWriteLock?: LockHandle } = {},
 ): MultiAgentV2TransitionResult {
-  if (options.threadLimit !== undefined && (!Number.isInteger(options.threadLimit) || options.threadLimit < 1)) {
-    return { ok: false, error: "thread limit must be an integer >= 1" };
+  if (options.threadLimit !== undefined && (!Number.isSafeInteger(options.threadLimit) || options.threadLimit < 1)) {
+    return { ok: false, error: "thread limit must be a safe integer >= 1" };
   }
   const path = options.configPath ?? activeCodexConfigPath();
   if (codexHomeIsAbsent(dirname(path))) return { ok: false, error: `config.toml not readable at ${path}` };
   const runTransition = (held: LockHandle): MultiAgentV2TransitionResult => {
   const original = readConfigText(path);
   if (original === null) return { ok: false, error: `config.toml not readable at ${path}` };
-  const preflightError = transitionConfigError(original);
+  const preflightError = transitionConfigError(original, options.threadLimit !== undefined);
   if (preflightError) return { ok: false, error: preflightError };
   const beforeEnabled = isMultiAgentV2Enabled(path);
   // A caller-supplied limit is already in the DESTINATION backend's units and is
@@ -1572,6 +1608,9 @@ export function transitionMultiAgentV2(
     threadLimit = discovered.units === "v1-child"
       ? v1ChildLimitToV2TotalLimit(discovered.value)
       : v2TotalLimitToV1ChildLimit(discovered.value);
+  }
+  if (threadLimit !== null && !Number.isSafeInteger(threadLimit)) {
+    return { ok: false, error: "stored thread limit cannot be written safely; supply an explicit safe integer limit" };
   }
   const migratedComment = activeThreadComment(original, beforeEnabled);
   try {
@@ -1606,7 +1645,8 @@ export function transitionMultiAgentV2(
           return editAgentsMaxThreads(threadLimit, tempPath, migratedComment);
         });
         if (!target.ok) throw new Error(target.error);
-        if (getMaxConcurrentThreads(path) !== null || getAgentsMaxThreads(path) !== threadLimit) throw new Error("v1 thread-limit migration postcondition failed");
+        const agents = parsedTomlTable(readConfigText(path) ?? "", "agents");
+        if (getMaxConcurrentThreads(path) !== null || getAgentsMaxThreads(path) !== threadLimit || (agents && Object.hasOwn(agents, LEGACY_AGENTS_THREAD_LIMIT_KEY))) throw new Error("v1 thread-limit migration postcondition failed");
       }
       return { ok: true, changed: readConfigText(path) !== original, threadLimit };
     });

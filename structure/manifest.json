@@ -191,6 +191,15 @@
       ]
     },
     {
+      "path": "subagent-capacity.md",
+      "tier": 2,
+      "title": "Subagent Surface And Capacity",
+      "scope": "Surface mode, hybrid global flag, concurrent child limits and canonical Codex setting ownership.",
+      "documents": [
+        "src/codex/"
+      ]
+    },
+    {
       "path": "advisor.md",
       "tier": 2,
       "title": "Advisor Sidecar",
@@ -330,6 +339,13 @@
       ]
     },
     {
+      "path": "providers/anthropic-progress.md",
+      "tier": 4,
+      "title": "Anthropic progress updates",
+      "scope": "Opus 5.5 progress display, visible commentary, and exact signed-block replay.",
+      "documents": ["src/adapters/", "src/bridge/", "src/responses/", "src/claude/", "src/types/", "src/server/", "src/web-search/", "src/images/"]
+    },
+    {
       "path": "providers/anthropic-account-thresholds.md",
       "tier": 4,
       "title": "Anthropic Account Thresholds",
@@ -342,6 +358,13 @@
       "title": "OAuth Preset Reconciliation",
       "scope": "Operator limits and per-model declarations across startup reconciliation and OAuth upsert.",
       "documents": ["src/oauth/"]
+    },
+    {
+      "path": "providers/claude-cli-replay.md",
+      "tier": 4,
+      "title": "Claude CLI Replay",
+      "scope": "Claude CLI stable replay, canonical tool schemas, capture-only client tool ownership and subscription usage admission.",
+      "documents": ["src/adapters/"]
     },
     {
       "path": "providers-and-adapters.md",
@@ -381,6 +404,18 @@
         "src/providers/anthropic-billing-ownership.ts",
         "src/providers/anthropic-billing-recovery.ts",
         "src/providers/request-pacing.ts"
+      ]
+    },
+    {
+      "path": "providers/dsh-account.md",
+      "tier": 4,
+      "title": "DeepSeek Harness Account Provider",
+      "scope": "Explicit read-only DSH credential import, verified account identity, disabled refresh, pinned inference and probe destinations, and authoritative-empty quota.",
+      "documents": [
+        "src/oauth/dsh.ts",
+        "src/adapters/dsh-account.ts",
+        "src/providers/dsh-account-destination.ts",
+        "src/providers/quota/dsh-account.ts"
       ]
     },
     {
@@ -539,6 +574,23 @@
         "src/routing/history/",
         "src/server/",
         "src/usage/"
+      ]
+    },
+    {
+      "path": "pricing.md",
+      "tier": 5,
+      "title": "Model Price Overrides",
+      "scope": "User price policies, prompt-length rate selection, persistence and estimate cache invalidation.",
+      "documents": [
+        "src/config/live-reconcile.ts",
+        "src/cli/models-runtime.ts",
+        "src/types/provider.ts",
+        "src/config/schema/leaf-validators.ts",
+        "src/server/management/model-routes.ts",
+        "src/usage/cost.ts",
+        "src/usage/user-cost-overlays.ts",
+        "src/usage/user-cost-validation.ts",
+        "gui/src/components/ModelPriceDialog.tsx"
       ]
     },
     {

@@ -148,7 +148,7 @@ function printLocalStatus(deps: V2CliDeps): number {
     const modeHint = getMultiAgentModeHintText();
     log.log(`multi_agent_mode_hint_text: ${modeHint === null ? "(unset — effort-derived policy: ultra=proactive, else explicit)" : JSON.stringify(modeHint)}`);
     if (isEnabled() && hasMaxThreads()) {
-      log.log("WARNING: [agents] max_threads is set — codex refuses to start while multi_agent_v2 is enabled. Remove it from config.toml (concurrency lives in features.multi_agent_v2.max_concurrent_threads_per_session).");
+      log.log("WARNING: [agents] max_concurrent_threads_per_session / max_threads is set — codex refuses to start while multi_agent_v2 is enabled. Remove the agents limit from config.toml (concurrency lives in features.multi_agent_v2.max_concurrent_threads_per_session).");
     }
     return 0;
 }

@@ -49,6 +49,7 @@ import { validateDevinApiBaseUrl } from "./devin/api-base";
 import { loginGithubCopilot, refreshGithubCopilotToken, validateCopilotApiBaseUrl } from "./github-copilot";
 import { loginCommandCode, refreshCommandCodeToken } from "./command-code";
 import { loginMetaMuse, refreshMetaMuseToken } from "./meta-muse";
+import { DSH_ACCOUNT_AUTH } from "./dsh";
 import { loginOrcaRouter, orcaRouterInferenceBaseUrl, refreshOrcaRouterKey } from "./orcarouter";
 import { ANTIGRAVITY_DISCOVERY_UA } from "../adapters/google-antigravity-wire";
 import { deriveOAuthDefaultModel, deriveOAuthProviderConfig } from "../providers/derive";
@@ -241,6 +242,11 @@ function oauthDefaultModel(id: string): string {
 }
 
 export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
+  "dsh-account": {
+    ...DSH_ACCOUNT_AUTH,
+    providerConfig: oauthConfig("dsh-account"),
+    defaultModel: oauthDefaultModel("dsh-account"),
+  },
   "command-code": {
     // Add-account/reauth must not reimport the current local CLI credential.
     login: (ctrl, opts) => loginCommandCode(ctrl, { importLocal: opts?.forceLogin ? "off" : "fallback" }),
@@ -463,6 +469,14 @@ export class OAuthProviderPublicationError extends Error {
   }
 }
 
+/** A local configuration conflict found before any credential is written; its text is fixed. */
+export class OAuthProviderNamespaceCollisionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OAuthProviderNamespaceCollisionError";
+  }
+}
+
 export class OAuthReauthIdentityMismatchError extends Error {
   constructor() {
     super("Signed-in account does not match the selected account. Sign in with the same account.");
@@ -495,6 +509,7 @@ export function publicOAuthAuthenticationErrorMessage(error: unknown): string {
     (error instanceof OAuthLoginRequiredError && isOAuthProvider(error.provider))
     || error instanceof OAuthAccountPausedError
     || error instanceof OAuthProviderPublicationError
+    || error instanceof OAuthProviderNamespaceCollisionError
     // Reauth identity outcomes carry fixed, account-free remediation text. Dropping them to the
     // generic message hides WHICH failure the user must fix (sign in with the selected account).
     || error instanceof OAuthReauthIdentityMismatchError
@@ -677,6 +692,7 @@ const FORCE_REFRESH_PROVIDERS = new Set([
   "google-antigravity",
   "orcarouter-oauth",
   "devin",
+  "dsh-account",
 ]);
 
 export async function forceRefreshOAuthAccessSnapshot(
@@ -1516,7 +1532,7 @@ export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
   if (!def) return;
   if (provider === GOOGLE_ANTIGRAVITY_PROVIDER) migrateLegacyAntigravityStaticCatalog(config);
   const namespaceCollision = codexAccountNamespaceProviderCollisionError(config.codexAccountNamespaces, provider);
-  if (namespaceCollision) throw new Error(namespaceCollision);
+  if (namespaceCollision) throw new OAuthProviderNamespaceCollisionError(namespaceCollision);
   const existing = config.providers[provider];
   const providerConfig = def.resolveProviderConfig?.(config) ?? def.providerConfig;
   // Clone operator state, including xAI wire choices and their migration version.
@@ -1615,7 +1631,7 @@ export async function runLogin(
       preflightConfig.codexAccountNamespaces,
       provider,
     );
-    if (namespaceCollision) throw new Error(namespaceCollision);
+    if (namespaceCollision) throw new OAuthProviderNamespaceCollisionError(namespaceCollision);
   }
   if (provider === "anthropic2" && observeInitialConfigState() !== "exists") {
     throw new OAuthProviderPublicationError(provider, false);

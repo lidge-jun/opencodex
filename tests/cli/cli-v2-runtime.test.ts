@@ -12,6 +12,7 @@ import { createTempHome, type TempHome } from "../helpers/temp-home";
 import { catalogConvergenceFactory } from "../helpers/catalog-convergence";
 
 let home: TempHome, out: string[], errors: string[], path: string;
+const ocxConfigPath = () => home.path(".opencodex", "config.json");
 let logs: ReturnType<typeof spyOn>, errs: ReturnType<typeof spyOn>, network: ReturnType<typeof spyOn>;
 const privateText = "synthetic-private-native-error";
 const committed = { status: "committed", changed: false, degraded: false, notices: [] };
@@ -19,7 +20,7 @@ const syncOk = { status: "applied", ok: true, catalogExists: true, catalogWritte
   added: 0, catalogPath: null, message: privateText, refreshOutcome: "committed" };
 const readOutput = () => JSON.parse(out.join("\n"));
 function config(extra: Record<string, unknown> = {}) {
-  writeFileSync(home.path("config.json"), JSON.stringify({ providers: {}, defaultProvider: "openai", multiAgentMode: "default", ...extra }));
+  writeFileSync(ocxConfigPath(), JSON.stringify({ providers: {}, defaultProvider: "openai", multiAgentMode: "default", ...extra }));
 }
 function native(enabled = false, threads = 12) {
   writeFileSync(path, `[features.multi_agent_v2]\nenabled = ${enabled}\nmax_concurrent_threads_per_session = ${threads}\n`);
@@ -57,6 +58,11 @@ function transport(body: unknown = state({ ok: true, catalogRefresh: committed }
 }
 beforeEach(() => {
   home = createTempHome("ocx-cli-v2-runtime-"); mkdirSync(home.codexHome);
+  // Match real sibling homes. Hardening an OPENCODEX_HOME ancestor on Windows
+  // can propagate inherited ACL metadata into its child CODEX_HOME and change
+  // config.toml's ctime during the native writer's preimage read fence.
+  process.env.OPENCODEX_HOME = home.path(".opencodex");
+  mkdirSync(process.env.OPENCODEX_HOME);
   path = join(home.codexHome, "config.toml"); config(); native();
   const binary = home.path("synthetic-codex");
   writeFileSync(binary, Buffer.concat([Buffer.from([0x7f, 0x45, 0x4c, 0x46]), Buffer.from("multi_agent_mode_hint_text")]));
@@ -80,11 +86,11 @@ describe("v2 preparse and literal hints", () => {
     ["mode-hint", "--json=true"], ["mode-hint", "--live=yes"], ["mode-hint", "before", "--", "after"], ["mode-hint", "--", " "], ["unknown"],
   ];
   test.each(bad.map(args => [args] as const))("local malformed argv refuses before effects %j", async args => {
-    const before = readFileSync(path, "utf8"), cfg = readFileSync(home.path("config.json"), "utf8");
+    const before = readFileSync(path, "utf8"), cfg = readFileSync(ocxConfigPath(), "utf8");
     const local = localDeps();
     expect(await cmdV2([...args], local.deps, async () => { throw new Error("No discovery"); })).toBe(1);
     expect(local.actions).toEqual([]); expect(local.syncPorts).toEqual([]);
-    expect(readFileSync(path, "utf8")).toBe(before); expect(readFileSync(home.path("config.json"), "utf8")).toBe(cfg);
+    expect(readFileSync(path, "utf8")).toBe(before); expect(readFileSync(ocxConfigPath(), "utf8")).toBe(cfg);
     expect(out).toEqual([]);
   });
   test.each([["status"], ["on"], ["off"], ["threads", "5"], ["keep-native-v1", "on"], ["mode-hint", "hint"]].map(args => [args] as const))(
@@ -122,7 +128,7 @@ describe("live V2 fixed management operations", () => {
     [["mode-hint", "--clear"], { multiAgentModeHintText: null }], [["mode-hint", "  custom  "], { multiAgentModeHintText: "  custom  " }],
   ];
   test.each(cases)("maps %j and leaves local state untouched", async (args, body) => {
-    const before = readFileSync(path, "utf8"), cfg = readFileSync(home.path("config.json"), "utf8"), files = readdirSync(home.root);
+    const before = readFileSync(path, "utf8"), cfg = readFileSync(ocxConfigPath(), "utf8"), files = readdirSync(home.root);
     const live = transport();
     expect(await cmdV2([...args, "--live", "--json"], { runtimeApi: live.runtimeApi,
       isEnabled: () => { throw new Error("No native read"); }, execFile: () => { throw new Error("No native process"); } })).toBe(0);
@@ -131,7 +137,7 @@ describe("live V2 fixed management operations", () => {
     expect(live.calls[0]!.init.redirect).toBe("error");
     expect(live.calls[0]!.init.method).toBe(body ? "PUT" : "GET");
     expect(body ? JSON.parse(String(live.calls[0]!.init.body)) : live.calls[0]!.init.body).toEqual(body);
-    expect(readFileSync(path, "utf8")).toBe(before); expect(readFileSync(home.path("config.json"), "utf8")).toBe(cfg);
+    expect(readFileSync(path, "utf8")).toBe(before); expect(readFileSync(ocxConfigPath(), "utf8")).toBe(cfg);
     expect(readdirSync(home.root)).toEqual(files); expect(readOutput().target).toBe("live");
   });
   test.each([[404, 4], [409, 5], [400, 1], [502, 1], [503, 1], [401, 1]])("safe refusal HTTP %i exits %i", async (status, code) => {
@@ -161,6 +167,13 @@ describe("live V2 fixed management operations", () => {
 });
 
 describe("local V2 state and synchronization graph", () => {
+  test("status identifies the canonical agents key in a global-V2 conflict", async () => {
+    writeFileSync(path, "[features.multi_agent_v2]\nenabled = true\n\n[agents]\nmax_concurrent_threads_per_session = 16\n");
+    const local = localDeps();
+    expect(await cmdV2(["status"], local.deps)).toBe(0);
+    expect(out.join("\n")).toContain("WARNING: [agents] max_concurrent_threads_per_session / max_threads is set");
+    expect(local.actions).toEqual([]);
+  });
   test.each([["mode", "default"], ["keep-native-v1", "off"], ["on"]].map(args => [args] as const))(
     "required sync runs with undefined port for %j", async args => {
       const local = localDeps();
@@ -170,11 +183,20 @@ describe("local V2 state and synchronization graph", () => {
     });
   test.each([["status"], ["off"], ["threads", "7"], ["mode-hint", "sample"]].map(args => [args] as const))(
     "no new synchronization for %j", async args => {
-      if (args[0] === "off") writeFileSync(path, "[features.multi_agent_v2]\nenabled = false\n\n[agents]\nmax_threads = 12\n");
+      if (args[0] === "off") writeFileSync(path, "[features.multi_agent_v2]\nenabled = false\n\n[agents]\nmax_concurrent_threads_per_session = 12\n");
       const local = localDeps();
       expect(await cmdV2([...args, "--json"], local.deps, async () => { throw new Error("No port discovery"); })).toBe(0);
       expect(local.syncPorts).toEqual([]); expect(readOutput().sync.status).toBe("not-attempted");
     });
+  test("off normalizes a legacy-only limit and synchronizes the changed config", async () => {
+    writeFileSync(path, "[features.multi_agent_v2]\nenabled = false\n\n[agents]\nmax_threads = 12\n");
+    const local = localDeps();
+    expect(await cmdV2(["off", "--json"], local.deps)).toBe(0);
+    expect(local.actions).toEqual([]);
+    expect(local.syncPorts).toEqual([undefined]);
+    expect(readOutput()).toMatchObject({ ok: true, changed: true, state: { enabled: false, maxConcurrentThreadsPerSession: 12 } });
+    expect(Bun.TOML.parse(readFileSync(path, "utf8")).agents).toEqual({ max_concurrent_threads_per_session: 12 });
+  });
   test.each([undefined, {}, { ok: true }, { ...syncOk, catalogExists: "true" }, { ...syncOk, refreshOutcome: "unknown" }])(
     "unknown injected sync is unverified, preserving landed state %j", async result => {
       const local = localDeps(null); local.deps.sync = async () => result;
@@ -275,9 +297,10 @@ describe("live V2 real-handler refusal and incomplete convergence", () => {
     const { handleManagementAPI } = await import("../../src/server/management-api");
     const { loadConfig } = await import("../../src/config");
     const before = readFileSync(path, "utf8"); let requests = 0, toggles = 0;
+    const nativeResponses: unknown[] = [];
     const runtimeApi: RuntimeApiDeps = { baseUrl: "http://localhost", fetchImpl: (async (url: string | URL | Request, init?: RequestInit) => {
       requests++; const headers = new Headers(init?.headers); headers.set("Host", "localhost");
-      return await handleManagementAPI(new Request(String(url), { ...init, headers }), new URL(String(url)), loadConfig(), {
+      const response = await handleManagementAPI(new Request(String(url), { ...init, headers }), new URL(String(url)), loadConfig(), {
         toggleCodexMultiAgentV2: enabled => {
           toggles++;
           if (failure === "native-failure") throw new Error(privateText);
@@ -285,11 +308,13 @@ describe("live V2 real-handler refusal and incomplete convergence", () => {
         },
         createManagementConvergeCodex: catalogConvergenceFactory(() => {}, { status: "failed", reason: "disk", phase: "commit", retryable: true, partialWrite: true }),
       }) ?? new Response(null, { status: 404 });
+      nativeResponses.push({ status: response.status, body: (await response.clone().text()).replaceAll(privateText, "<synthetic-private-error>") });
+      return response;
     }) as typeof fetch };
     expect(await cmdV2(["on", "--live", "--json"], { runtimeApi,
       execFile: () => { throw new Error("Local fallback is forbidden"); } })).toBe(1);
     // Errors ride along so a refusal before the native toggle names its cause in CI.
-    expect({ requests, toggles, errors }).toMatchObject({ requests: 1, toggles: 1 });
+    expect({ requests, toggles, errors, nativeResponses }).toMatchObject({ requests: 1, toggles: 1 });
     if (failure === "native-failure") { expect(out).toEqual([]); expect(readFileSync(path, "utf8")).toBe(before); }
     else expect(readOutput()).toMatchObject({ enabled: true, catalogRefresh: { status: "failed", partialWrite: true } });
     expect(out.join("\n") + errors.join("\n")).not.toContain(privateText);

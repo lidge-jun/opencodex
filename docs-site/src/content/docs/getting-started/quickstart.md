@@ -18,7 +18,7 @@ ocx init
 
 `ocx init` walks you through:
 
-1. **Pick a provider** — choose one of the 104 built-in registry presets or `custom` to type a base
+1. **Pick a provider** — choose one of the 105 built-in registry presets or `custom` to type a base
    URL and adapter.
 2. **API key** — paste a key, or reference an environment variable like `${ANTHROPIC_API_KEY}`.
 3. **Default model** — for key, local, and custom providers, accept the preset or enter a model id.
@@ -145,6 +145,14 @@ ocx stop          # stop the proxy and restore native Codex
 ocx restore       # restore native Codex without stopping (alias: ocx eject)
 ocx restore back  # route Codex through the still-running proxy again
 ```
+
+## Startup ownership could not be verified
+
+If startup reports `Shared-client owner could not be verified` and `refusing startup`,
+OpenCodex could not safely decide whether another proxy owns the shared client settings.
+It stops before publishing a new runtime or changing those settings. Retry startup after
+local connectivity recovers; an installed background service retries through its service manager.
+A timeout does not permanently turn the new process into a secondary instance.
 
 ## Next
 

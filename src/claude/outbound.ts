@@ -1,3 +1,4 @@
+import { anthropicProgressEnvelope, isAnthropicProgressMirror } from "../responses/anthropic-progress";
 /**
  * Claude Code outbound: internal /v1/responses output -> Anthropic Messages API shapes.
  *
@@ -553,7 +554,13 @@ export function responsesSseToAnthropicSse(
         terminalDelivered = true;
       };
 
+      let progressMirrorId: string | undefined;
       const handleFrame = (eventName: string, data: Rec) => {
+        const frameItem = isRec(data.item) ? data.item : null;
+        if (progressMirrorId && (data.item_id === progressMirrorId || frameItem?.id === progressMirrorId)) {
+          if (eventName === "response.output_item.done") progressMirrorId = undefined;
+          return;
+        }
         switch (eventName) {
           case "response.created":
           case "response.in_progress": {
@@ -772,6 +779,15 @@ export function responsesSseToAnthropicSse(
                 ensureBlock("thinking");
               }
               if (open?.kind === "thinking") {
+                if (env?.upd && typeof env.txt === "string") {
+                  // This plaintext was deliberately surfaced as commentary, unlike hidden reasoning.
+                  progressMirrorId = env.upd;
+                  const bytes = Buffer.byteLength(env.txt);
+                  translatorBudget.chargeRetained(bytes, { kind: "reasoning" });
+                  translatorBudget.releaseRetained(open.thinkingBufBytes ?? 0, { kind: "reasoning" });
+                  open.thinkingBuf = env.txt;
+                  open.thinkingBufBytes = bytes;
+                }
                 if (env?.sig) open.reasoningSig = env.sig;
                 if (native) open.reasoningNative = typeof item.id === "string" && item.id.length > 0 ? { enc: native, id: item.id } : { enc: native };
                 closeOpenBlock();
@@ -976,7 +992,8 @@ export function responsesJsonToAnthropicMessage(json: unknown, model: string, tr
   let sawToolUse = false;
   let webSearchRequests = 0;
 
-  for (const raw of output) {
+  for (const [index, raw] of output.entries()) {
+    if (index > 0 && isAnthropicProgressMirror(raw, anthropicProgressEnvelope(output[index - 1], translatorBudget))) continue;
     if (!isRec(raw)) continue;
     switch (raw.type) {
       case "message": {
@@ -1010,7 +1027,7 @@ export function responsesJsonToAnthropicMessage(json: unknown, model: string, tr
         const native = nativeEncryptedReasoning(encrypted);
         const tag = native && nativeReasoningTagFor?.(native);
         if (parts.length > 0 || env?.sig || tag) {
-          const text = parts.join("\n\n");
+          const text = env?.upd ? env.txt! : parts.join("\n\n");
           const nat = tag ? { enc: native, model, tag, ...(typeof raw.id === "string" && raw.id.length > 0 ? { id: raw.id } : {}) } : undefined;
           content.push({ type: "thinking", thinking: text, signature: env?.sig ?? encodeReasoningEnvelope({ txt: text, ...(nat ? { nat } : {}) }, translatorBudget) });
         }
