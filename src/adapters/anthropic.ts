@@ -804,8 +804,8 @@ function messagesToAnthropicFormat(
           } else if (part.type === "thinking") {
             const t = part as OcxThinkingContent;
             // Server blocks that preceded this reasoning keep their place, even when it is dropped below.
-            for (const data of t.redacted ?? []) preface.push(...replayed(`redacted:${data}`));
-            preface.push(...replayed(`thinking:${t.signature}`));
+            for (const data of t.redacted ?? []) for (const b of replayed(`redacted:${data}`)) appendPreface(b);
+            for (const b of replayed(`thinking:${t.signature}`)) appendPreface(b);
             // History minted under another serving identity (or already rejected as opaque) is not
             // this destination's to verify: drop its opaque blocks, as the Responses passthrough does.
             if (parsed._stripReasoningEncryptedContent === true) continue;
