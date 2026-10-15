@@ -97,7 +97,7 @@ describe("ocx usage compare", () => {
 
   test("JSON carries delta, percent change, and 1d as today", async () => {
     const expected = compareUsageWindows("today", NOW);
-    const result = await run(["observe", "usage", "compare", "--range", "1d", "--json"]);
+    const result = await run(["usage", "compare", "--range", "1d", "--json"]);
     expect(result.code).toBe(0);
     const body = JSON.parse(result.out) as {
       schemaVersion: number;

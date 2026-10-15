@@ -142,7 +142,7 @@ describe("ocx capabilities output", () => {
     try { code = await runCapabilities(["--json", "--route", "/api/usage"]); } finally { cap.restore(); }
     expect(code).toBe(0);
     const parsed = JSON.parse(cap.lines.join("\n")) as { capabilities: { invocation: string }[] };
-    expect(parsed.capabilities.map(c => c.invocation)).toEqual(["ocx usage", "ocx models order set", "ocx combo stats", "ocx companion usage", "ocx observe usage"]);
+    expect(parsed.capabilities.map(c => c.invocation)).toEqual(["ocx usage", "ocx models order set", "ocx combo stats", "ocx companion usage", "ocx observe usage", "ocx usage compare"]);
   });
 
   test("an unmatched route exits non-zero instead of reporting empty success", async () => {
