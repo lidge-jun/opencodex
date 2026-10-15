@@ -673,6 +673,7 @@ pub fn remove_plan(store: &Store, current: &Record) -> Result<(Record, Vec<Chang
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use crate::process_spawn::with_spawn;
     use record::tests::{bundle, Temp};
     #[cfg(target_os = "macos")]
     fn stable_bundle_fixture() -> Temp {
@@ -701,13 +702,13 @@ mod tests {
             command.arg("-N");
         }
         assert!(
-            command
+            with_spawn(|| command
                 .arg(path)
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
-                .status()
-                .unwrap()
-                .success(),
+                .status())
+            .unwrap()
+            .success(),
             "acl-command-failed"
         );
     }
@@ -969,7 +970,7 @@ mod tests {
             if let Some(path) = path {
                 command.env("PATH", path);
             }
-            let output = command.output().unwrap();
+            let output = with_spawn(|| command.output()).unwrap();
             assert!(output.status.success());
             assert_eq!(String::from_utf8(output.stdout).unwrap(), expected);
         }
@@ -988,14 +989,16 @@ mod tests {
             0o700,
         )
         .unwrap();
-        let out = std::process::Command::new(&shim)
-            .env_clear()
-            .env("ANTHROPIC_AUTH_TOKEN", "dummy")
-            .env("ANTHROPIC_API_KEY", "")
-            .env("OCX_NODE_LAUNCH_CONTEXT", "untrusted")
-            .arg("status")
-            .output()
-            .unwrap();
+        let out = with_spawn(|| {
+            std::process::Command::new(&shim)
+                .env_clear()
+                .env("ANTHROPIC_AUTH_TOKEN", "dummy")
+                .env("ANTHROPIC_API_KEY", "")
+                .env("OCX_NODE_LAUNCH_CONTEXT", "untrusted")
+                .arg("status")
+                .output()
+        })
+        .unwrap();
         assert!(out.status.success());
         let text = String::from_utf8(out.stdout).unwrap();
         let lines: Vec<_> = text.lines().collect();
@@ -1011,9 +1014,7 @@ mod tests {
         assert!(!text.contains("dummy"));
         fs::remove_file(cli).unwrap();
         assert_eq!(
-            std::process::Command::new(&shim)
-                .env_clear()
-                .output()
+            with_spawn(|| std::process::Command::new(&shim).env_clear().output())
                 .unwrap()
                 .status
                 .code(),
@@ -1035,13 +1036,18 @@ mod tests {
                 .replace("-N32", "-N1"),
         ] {
             record::atomic(&t.0.join("cli"), None, inspect, 0o700).unwrap();
-            fs::write(&shim, rendered).unwrap();
-            let out = std::process::Command::new(&shim)
-                .env_clear()
-                .env("OCX_NODE_LAUNCH_CONTEXT", "inherited")
-                .arg("status")
-                .output()
-                .unwrap();
+            {
+                let _writer = crate::process_spawn::executable_write();
+                fs::write(&shim, rendered).unwrap();
+            }
+            let out = with_spawn(|| {
+                std::process::Command::new(&shim)
+                    .env_clear()
+                    .env("OCX_NODE_LAUNCH_CONTEXT", "inherited")
+                    .arg("status")
+                    .output()
+            })
+            .unwrap();
             assert!(out.status.success());
             assert_eq!(out.stdout, b"\nstatus\n");
             fs::remove_file(t.0.join("cli")).unwrap();
@@ -1197,15 +1203,17 @@ mod tests {
                 // System rc files may print to stdout (Ubuntu's /etc/bash.bashrc sudo hint), so only
                 // the marked result lines count; a failed lookup or CLI run still fails the shell, and
                 // the end marker makes any extra CLI output line fail the comparison.
-                let output = command
-                    .args([
-                        "-i",
-                        "-c",
-                        "p=$(command -v ocx) || exit 11; o=$(ocx hello) || exit 12; \
+                let output = with_spawn(|| {
+                    command
+                        .args([
+                            "-i",
+                            "-c",
+                            "p=$(command -v ocx) || exit 11; o=$(ocx hello) || exit 12; \
                          printf 'OCX-PATH:%s\\nOCX-OUT:%s:OCX-END\\n' \"$p\" \"$o\"",
-                    ])
-                    .output()
-                    .expect("cannot start real shell");
+                        ])
+                        .output()
+                })
+                .expect("cannot start real shell");
                 assert!(output.status.success(), "{shell}: command failed");
                 let stdout = String::from_utf8(output.stdout).expect("shell stdout is not UTF-8");
                 let marked = |tag: &str| {
