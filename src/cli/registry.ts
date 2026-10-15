@@ -226,9 +226,10 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "login",
-    usage: "ocx login <provider>",
+    usage: "ocx login <provider> [--headless]",
     summary: "OAuth or API-key login for a provider.",
     details: [
+      "--headless (anthropic, anthropic2): no browser and no local port; approve in any browser and paste the displayed code.",
       "Codex/ChatGPT: ocx login codex runs the Codex account-pool login (same flow as ocx account login codex).",
       "That one needs a running proxy; the OAuth and API-key providers log in locally.",
       "'chatgpt' and 'openai' are the same route; an OpenAI platform API key is 'ocx login openai-apikey'.",

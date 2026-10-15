@@ -349,7 +349,7 @@ inside the click's user activation; only http(s) URLs get it. Once a device code
 provider pollers stretch their budget to `gui/src/oauth-login-budget.ts` (longer than the longest
 provider grant) instead of cancelling a still-valid grant at the browser-flow budget.
 
-> Decision record: [OAuth login continuations](decisions/ADR-5877-oauth-login-continuations.md)
+> Decision record: [OAuth login continuations](decisions/ADR-5877-oauth-login-continuations.md); headless `mode: "code"` logins: [OAuth code-display login](providers/oauth-code-display-login.md).
 
 ### Claude Desktop picker management
 
