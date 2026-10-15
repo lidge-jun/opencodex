@@ -55,17 +55,49 @@ export class UnknownComboError extends Error {
 export class NoAvailableComboTargetsError extends Error {
   readonly code = "combo_unavailable";
 
-  constructor(readonly comboId: string) {
-    super(`No available targets for combo: ${comboId}`);
+  constructor(readonly comboId: string, readonly reasons = "") {
+    super(`No available targets for combo: ${comboId}${reasons ? ` (${reasons})` : ""}`);
     this.name = "NoAvailableComboTargetsError";
   }
 }
 
+function providerExclusionReason(config: OcxConfig, target: OcxComboTarget, now: number): string | undefined {
+  const provider = Object.hasOwn(config.providers, target.provider) ? config.providers[target.provider] : undefined;
+  if (!provider) return "provider missing";
+  if (provider.disabled === true) return "provider disabled";
+  return cachedProviderQuotaIsExhausted(getCachedProviderRoutingQuota(target.provider, provider, now), now, target.model)
+    ? "quota exhausted"
+    : undefined;
+}
+
 function targetProviderIsUsable(config: OcxConfig, target: OcxComboTarget, now: number): boolean {
-  if (!Object.hasOwn(config.providers, target.provider)) return false;
-  const provider = config.providers[target.provider];
-  if (!provider || provider.disabled === true) return false;
-  return !cachedProviderQuotaIsExhausted(getCachedProviderRoutingQuota(target.provider, provider, now), now, target.model);
+  return providerExclusionReason(config, target, now) === undefined;
+}
+
+/**
+ * Why each target of a combo cannot be picked right now, for a zero-attempt refusal. Only the
+ * configured provider/model and a coarse label are named, never account or request data.
+ */
+export function comboExclusionReasons(
+  config: OcxConfig,
+  comboId: string,
+  eligible?: (target: NormalizedComboTarget) => boolean,
+  now = Date.now(),
+): string {
+  return (getCombo(config, comboId)?.targets ?? []).flatMap(target => {
+    let reason = providerExclusionReason(config, target, now);
+    const cooldown = reason ? undefined : earliestComboCooldown(comboId, [target], now);
+    if (cooldown) reason = `cooldown ${Math.max(1, Math.ceil((cooldown.expiry - now) / 1000))}s`;
+    if (!reason && eligible) {
+      try {
+        if (!eligible(target)) reason = "ineligible for this request";
+      } catch {
+        // An eligibility check can exhaust the translator budget; the target still was not picked.
+        reason = "ineligible for this request";
+      }
+    }
+    return reason ? [`${targetKey(target)}: ${reason}`] : [];
+  }).join("; ");
 }
 
 /** Capture usable providers' quota cooldowns; request eligibility is deferred to exhaustion. */
@@ -612,6 +644,6 @@ export function tryPickComboModel(config: OcxConfig, modelId: string, preview = 
   if (!comboId) return null;
   if (!getCombo(config, comboId)) throw new UnknownComboError(comboId);
   const picked = pickComboTarget(config, comboId, { preview });
-  if (!picked) throw new NoAvailableComboTargetsError(comboId);
+  if (!picked) throw new NoAvailableComboTargetsError(comboId, comboExclusionReasons(config, comboId));
   return picked;
 }

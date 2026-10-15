@@ -31,6 +31,7 @@ import {
   comboDefaultEffort,
   isComboTargetInCooldown,
   snapshotComboQuotaCooldowns,
+  comboExclusionReasons,
   noteComboSuccess,
   comboFailureDecision,
   advanceComboAfterFailure,
@@ -549,7 +550,8 @@ export async function executeComboResponses(
       );
       return options.abortSignal?.aborted
         ? clientCancelledResponse()
-        : comboUnavailable(comboId);
+        : comboUnavailable(comboId, undefined,
+          comboExclusionReasons(config, comboId, target => meteredAllowed || !target.metered));
     }
     if (!(await recoverUnreadableEncryptedTask())) {
       return options.abortSignal?.aborted
@@ -565,13 +567,13 @@ export async function executeComboResponses(
     if (onlyReplayIncompatibleTargetsRemain()) return targetIncompatibleResponse();
     return options.abortSignal?.aborted
       ? clientCancelledResponse()
-      : comboUnavailable(comboId);
+      : comboUnavailable(comboId, undefined, comboExclusionReasons(config, comboId, targetEligible));
   }
   let jevDecision: JevDecision | undefined;
   if (combo.strategy === "jev") {
     const choices = eligibleJevComboChoices(config, comboId, targetEligible, Date.now());
     const first = choices[0];
-    if (!first) return comboUnavailable(comboId);
+    if (!first) return comboUnavailable(comboId, undefined, comboExclusionReasons(config, comboId, targetEligible));
     const resolvedFailOpenEffort = resolveEffortAtOrBelow(
       "medium",
       first.candidate.reasoningEfforts,
