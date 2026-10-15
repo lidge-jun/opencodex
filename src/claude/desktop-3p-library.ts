@@ -130,12 +130,24 @@ export const OPENCODEX_DESKTOP_PROFILE_KEYS = new Set([
   "inferenceModels",
 ]);
 
-export function readDesktopProfileForeignKeys(path: string): Record<string, unknown> {
+export interface DesktopProfileSnapshot {
+  /** Verified bytes of the existing profile; undefined only when the entry is absent. */
+  bytes?: Buffer;
+  foreign: Record<string, unknown>;
+}
+
+/** One verified read feeds key preservation, the backup, and rollback, so none reopens the path. */
+export function readDesktopProfileSnapshot(path: string): DesktopProfileSnapshot {
   const bytes = readOptionalDesktopLibraryBytes(path);
-  if (bytes === undefined) return {};
+  if (bytes === undefined) return { foreign: {} };
   const parsed = JSON.parse(bytes.toString("utf8")) as unknown;
   if (!isRecord(parsed)) throw new Error("Claude Desktop 3P profile is not a JSON object");
-  return Object.fromEntries(
+  const foreign = Object.fromEntries(
     Object.entries(parsed).filter(([key]) => !OPENCODEX_DESKTOP_PROFILE_KEYS.has(key)),
   );
+  return { bytes, foreign };
+}
+
+export function readDesktopProfileForeignKeys(path: string): Record<string, unknown> {
+  return readDesktopProfileSnapshot(path).foreign;
 }

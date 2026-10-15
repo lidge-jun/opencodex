@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { atomicReplaceDesktopConfig, writeDesktop3pConfig } from "../../src/claude/desktop-3p";
-import { parseMetadata, readDesktopProfileForeignKeys } from "../../src/claude/desktop-3p-library";
+import { parseMetadata, readDesktopProfileForeignKeys, readDesktopProfileSnapshot } from "../../src/claude/desktop-3p-library";
 import { isTestHomeGuardArmed } from "../../src/lib/test-home-guard";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -68,7 +68,7 @@ test.skipIf(process.platform === "win32")("a dangling profile is not treated as 
   const path = join(library, "profile.json");
   fs.symlinkSync(join(root, "missing-profile.json"), path);
   expect(() => readDesktopProfileForeignKeys(path)).toThrow("desktop_config_not_regular");
-  expect(() => atomicReplaceDesktopConfig(path, "{}\n")).toThrow("desktop_config_not_regular");
+  expect(() => readDesktopProfileSnapshot(path)).toThrow("desktop_config_not_regular");
   expect(fs.lstatSync(path).isSymbolicLink()).toBe(true);
   expect(fs.existsSync(`${path}.bak`)).toBe(false);
 });
@@ -92,11 +92,26 @@ test("backup preserves exact bytes and an absent profile does not adopt a stale 
   const path = join(library, "bytes.json");
   const bytes = Buffer.from([0x7b, 0xff, 0x00, 0xfe, 0x7d]);
   fs.writeFileSync(path, bytes);
-  expect(atomicReplaceDesktopConfig(path, "{}\n")).toEqual({ backupPath: `${path}.bak` });
+  expect(atomicReplaceDesktopConfig(path, "{}\n", fs.readFileSync(path))).toEqual({ backupPath: `${path}.bak` });
   expect(fs.readFileSync(`${path}.bak`)).toEqual(bytes);
   fs.unlinkSync(path);
-  expect(atomicReplaceDesktopConfig(path, "{}\n")).toEqual({});
+  expect(atomicReplaceDesktopConfig(path, "{}\n", undefined)).toEqual({});
   expect(fs.readFileSync(`${path}.bak`)).toEqual(bytes);
+});
+
+test("metadata publication failure removes a profile the same apply created", () => {
+  const meta = join(library, "_meta.json");
+  const rename = fs.renameSync;
+  const publishing = spyOn(fs, "renameSync").mockImplementation((source, destination) => {
+    if (destination === meta) throw new Error("fixture metadata failure");
+    rename(source, destination);
+  });
+  try {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      expect(writeProfile()).toMatchObject({ written: false, reason: "fixture metadata failure" });
+      expect(fs.readdirSync(library)).toEqual([]);
+    }
+  } finally { publishing.mockRestore(); }
 });
 
 test("metadata publication failure restores the previous regular profile bytes", () => {
@@ -118,11 +133,13 @@ test("metadata publication failure restores the previous regular profile bytes",
 });
 
 for (const scenario of ["backup", "rollback"] as const) {
-  test.skipIf(process.platform === "win32")(`normal writer refuses a ${scenario} source swapped to a FIFO`, () => {
+  // The writer reads the profile once; backup and rollback reuse those verified bytes, so a FIFO
+  // swapped onto the profile or its backup is never opened and rollback still restores the original.
+  test.skipIf(process.platform === "win32")(`normal writer never opens a ${scenario} path swapped to a FIFO`, () => {
     const initial = writeProfile();
     expect(initial.written).toBe(true);
     const profile = initial.path, meta = join(library, "_meta.json");
-    const metadata = fs.readFileSync(meta), fifo = join(root, "replacement.fifo");
+    const metadata = fs.readFileSync(meta), original = fs.readFileSync(profile), fifo = join(root, "replacement.fifo");
     expect(spawnSync("mkfifo", [fifo], { timeout: 5000 }).status).toBe(0);
     // Bound the process even if a regression blocks inside a synchronous copy. The real
     // writer and SQLite lifecycle lock run against this fixture with inherited home guards.
@@ -165,12 +182,18 @@ for (const scenario of ["backup", "rollback"] as const) {
     });
     expect(child.error).toBeUndefined();
     expect(child.status).toBe(0);
-    expect(JSON.parse(child.stdout)).toMatchObject({
-      swapped: true, result: { written: false, reason: "desktop_config_not_regular" },
-    });
-    expect(fs.lstatSync(scenario === "backup" ? profile : `${profile}.bak`).isFIFO()).toBe(true);
-    expect(fs.readFileSync(meta)).toEqual(metadata);
-    if (scenario === "backup") expect(fs.existsSync(`${profile}.bak`)).toBe(false);
-    else expect(JSON.parse(fs.readFileSync(profile, "utf8")).inferenceGatewayApiKey).toBe("replacement-fixture-key");
+    if (scenario === "backup") {
+      expect(JSON.parse(child.stdout)).toMatchObject({ swapped: true, result: { written: true, path: profile } });
+      expect(fs.readFileSync(`${profile}.bak`)).toEqual(original);
+      expect(fs.lstatSync(profile).isFile()).toBe(true);
+      expect(JSON.parse(fs.readFileSync(profile, "utf8")).inferenceGatewayApiKey).toBe("replacement-fixture-key");
+    } else {
+      expect(JSON.parse(child.stdout)).toMatchObject({
+        swapped: true, result: { written: false, reason: "fixture metadata failure" },
+      });
+      expect(fs.lstatSync(`${profile}.bak`).isFIFO()).toBe(true);
+      expect(fs.readFileSync(profile)).toEqual(original);
+      expect(fs.readFileSync(meta)).toEqual(metadata);
+    }
   }, 20000);
 }

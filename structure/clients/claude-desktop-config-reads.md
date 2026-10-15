@@ -19,10 +19,13 @@ in `src/claude/desktop-remote-store-io.ts` layers its size cap, private-file mod
 identity contract on top of the same read and reports it as `unsafe`.
 
 Optional metadata and profile reads treat only a missing directory entry as absent. Dangling links
-and other read failures refuse before profile publication. Backups preserve verified bytes through
-the atomic writer; rollback verifies the backup again before publishing it. An unsafe backup
-refuses rollback and reports the existing writer failure result rather than claiming restoration.
-An absent profile does not adopt a leftover backup from an earlier operation.
+and other read failures refuse before profile publication. A gateway apply reads the existing
+profile once (`readDesktopProfileSnapshot`); those verified bytes supply the preserved foreign
+keys, the `.bak` copy, and the rollback, so neither the profile nor its backup is reopened after
+inspection and a swapped entry cannot block or divert either step. When metadata publication
+fails, rollback restores those bytes; a profile the same apply created is removed instead, so a
+retry cannot accumulate unreferenced profiles. An absent profile does not adopt a leftover backup
+from an earlier operation.
 
 Tests: `tests/clients/desktop-3p-write-files.test.ts`, `tests/clients/desktop-3p-removal.test.ts`, `tests/clients/desktop-remote-store.test.ts`, and
 `tests/claude-integration/claude-desktop-picker-profile.test.ts`.
