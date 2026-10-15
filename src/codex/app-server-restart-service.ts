@@ -34,6 +34,7 @@ import type {
   CodexRestartResponse,
 } from "../lib/codex-restart-contract";
 import { getServerListenPort } from "../server/lifecycle";
+import type { DesktopPickerState } from "./desktop-app/picker-freshness";
 
 async function defaultRestartDesktopApp(): Promise<CodexDesktopRestartSummary> {
   const { restartCodexDesktopApp } = await import("./desktop-app-restart");
@@ -47,9 +48,20 @@ async function defaultRestartDesktopApp(): Promise<CodexDesktopRestartSummary> {
   };
 }
 
+async function defaultDesktopPickerState(): Promise<DesktopPickerState> {
+  const { readCodexDesktopPickerState } = await import("./desktop-app/picker-freshness");
+  return readCodexDesktopPickerState();
+}
+
+function desktopLeftRunning(reason: "picker_current" | "no_targets"): CodexDesktopRestartSummary {
+  return { attempted: false, stopped: [], surviving: [], relaunch: "skipped", reason };
+}
+
 export interface CodexRestartServiceIo {
   /** Desktop-restart seam, so a route test cannot terminate the developer's own Codex. */
   restartDesktopApp?: () => Promise<CodexDesktopRestartSummary>;
+  /** Whether the desktop picker predates the catalog; decides if the shell must restart. */
+  desktopPickerState?: () => Promise<DesktopPickerState>;
   /** Process-layer seam, forwarded to every app-server-processes call. */
   processIo?: CodexAppServerProcessIo;
   /** Catalog refresh seam. Resolves to whether a catalog or cache write happened. */
@@ -146,15 +158,30 @@ async function runCodexRestart(io: CodexRestartServiceIo): Promise<CodexRestartR
   (io.resetStateCache ?? resetCodexAppServerCatalogStateCache)();
   const before = (io.collectState ?? collectCodexAppServerCatalogState)(io.processIo ?? {});
 
-  // Done here, before the early returns, because the model picker lives in the DESKTOP
-  // app: "no app-server is running" is not a reason to leave a stale roster on screen,
-  // and an operator who pressed restart still wants the app back on the current catalog.
+  // Decided here, before the early returns, because the model picker lives in the DESKTOP
+  // app: "no app-server is running" is not a reason to leave a stale roster on screen.
+  //
+  // The shell restarts only when its picker predates the catalog (#4761). Quitting it
+  // discards composer drafts, unsent picker selections and pending approvals, and when
+  // the picker is already current the app-server restart below is all the operator
+  // needs: the desktop respawns its app-server child, which rereads config and catalog.
+  // An unreadable picker state takes the full restart, the behaviour before #4761.
   //
   // allowHandoff is false and that is deliberate. The handoff waits for the CALLING
   // process to exit, and this runs inside a long-lived proxy that does not, so every
   // handoff started here would sit out its window and fail after the operator had
   // already been told it was handed off. An honest refusal beats that.
-  const desktop = await (io.restartDesktopApp ?? defaultRestartDesktopApp)();
+  let picker: DesktopPickerState;
+  try {
+    picker = await (io.desktopPickerState ?? defaultDesktopPickerState)();
+  } catch {
+    picker = "unknown";
+  }
+  const desktop = picker === "current"
+    ? desktopLeftRunning("picker_current")
+    : picker === "not_running"
+      ? desktopLeftRunning("no_targets")
+      : await (io.restartDesktopApp ?? defaultRestartDesktopApp)();
 
   const nothingToDo = (): CodexRestartResponse => ({
     desktopApp: desktop,

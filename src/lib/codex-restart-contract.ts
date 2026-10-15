@@ -36,6 +36,10 @@ export interface CodexAppServerStateResponse {
  * The desktop half of a restart. Scalar-only for the same reason as the rest of this
  * contract: pid lists and a closed-vocabulary reason, never a command line or an OS
  * error message, both of which routinely embed a path or a username.
+ *
+ * `reason: "picker_current"` means the shell was deliberately left running because it
+ * launched after the current catalog was written, so only the app-servers restarted and
+ * the operator's unsaved client state was kept (#4761).
  */
 export interface CodexDesktopRestartSummary {
   attempted: boolean;
