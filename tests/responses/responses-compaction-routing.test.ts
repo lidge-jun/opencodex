@@ -17,7 +17,6 @@ import { externalTaskInputContent } from "../../src/responses/task-input";
 import { looksLikeBackendCiphertext } from "../../src/server/responses/encrypted-payload";
 import * as adapterResolveModule from "../../src/server/adapter-resolve";
 import * as visionModule from "../../src/vision";
-import * as authApiModule from "../../src/codex/auth-api";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import {
   CODEX_QUOTA_PROBE_INTERVAL_MS,
@@ -337,21 +336,6 @@ describe("native compact usage reporting", () => {
 
 describe("native Codex pool compaction", () => {
   beforeEach(takeSpendHome);
-  // handleResponsesCompact resolves its account through resolveCodexAuthContext, which fires the
-  // pre-route quota prime without awaiting it. That prime opens the native-main claim file under
-  // this case's CODEX_HOME and then awaits ACL hardening, which is an async subprocess on Windows.
-  // Teardown removes the directory with a synchronous retry loop, so the hardening can never finish
-  // and close the file, and every retry fails with EBUSY. The prime is single-flight across cases,
-  // so the failure lands on whichever case is tearing down while it runs. None of these cases
-  // assert on priming, so the module export the lazy import resolves through is stubbed here.
-  let primeSpy: ReturnType<typeof spyOn> | undefined;
-  beforeEach(() => {
-    primeSpy = spyOn(authApiModule, "primeCodexPoolQuotas").mockResolvedValue(undefined);
-  });
-  afterEach(() => {
-    primeSpy?.mockRestore();
-    primeSpy = undefined;
-  });
   test("ignores a retired Spark reset without cooling later compact requests", async () => {
     const testDir = mkdtempSync(join(tmpdir(), "ocx-compact-scope-"));
     const previousOpencodexHome = process.env.OPENCODEX_HOME;
@@ -481,7 +465,7 @@ describe("native Codex pool compaction", () => {
         new Headers({ authorization: "Bearer main-token" }),
         config,
         "pool",
-        { modelId: "gpt-5.6-sol", primeCodexPoolQuotas: async () => {} },
+        { modelId: "gpt-5.6-sol" },
       );
       expect(nextProbe).toMatchObject({ probeQuotaScope: "shared" });
       releaseCodexAuthContextProbeLease(nextProbe);
@@ -551,7 +535,7 @@ describe("native Codex pool compaction", () => {
         new Headers({ authorization: "Bearer main-token" }),
         config,
         "pool",
-        { modelId: "gpt-5.6-sol", primeCodexPoolQuotas: async () => {} },
+        { modelId: "gpt-5.6-sol" },
       );
       expect(nextProbe).toMatchObject({ probeQuotaScope: "shared" });
       releaseCodexAuthContextProbeLease(nextProbe);

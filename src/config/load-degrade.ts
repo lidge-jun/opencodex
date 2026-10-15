@@ -52,9 +52,12 @@ import { hasWarnedInheritedFastWireConflict, markWarnedInheritedFastWireConflict
 
 export function hardenExistingSecret(path: string): void {
   if (existsSync(path) && !isPassiveRead()) {
-    try { chmodSync(path, 0o600); } catch { /* best-effort */ }
     if (process.platform === "win32") {
+      // Preserve the ACL helper's metadata observation across reads. Windows chmod does
+      // not establish a private DACL and can invalidate that observation before every load.
       hardenSecretPath(path, { required: false });
+    } else {
+      try { chmodSync(path, 0o600); } catch { /* best-effort */ }
     }
   }
 }

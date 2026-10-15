@@ -445,7 +445,7 @@ queue or be misreported as evictable memory. One caller-owned retry is allowed a
 `ETIMEDOUT`; the first timeout does not install a `spill-failed` tombstone. Required ACL failures
 remain fail-closed after that bounded recovery. Optional config-directory hardening uses a separate
 per-directory async single-flight, while required config mutation writers retain their existing
-awaited or synchronous fail-closed boundary.
+awaited or synchronous fail-closed boundary. Snapshot persistence serializes the entire background pass, including its follow-up timer decision. Shutdown awaits that gate before consuming a pending pass; a stable bounded rewrite cancels the mutation timer whose bytes it incorporated. `tests/responses/responses-state-flush-race.test.ts` covers overlap with a background rewrite and leaves no redundant persistence timer after flush.
 
 Each ordinary async spill write attempt owns one 30-second ACL budget shared across directory, temp,
 and exclusive-copy destination hardening; the single timeout retry receives one fresh whole-attempt
