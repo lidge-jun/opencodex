@@ -69,7 +69,8 @@ HTTP 경계는 `server/index/serve-options.ts`가 맡고, Responses 데이터 �
    건드리지 않은 채 종료 상태, 지연 시간, 프로바이더/모델, 최선 추정 토큰 사용량을 기록합니다.
 
 요청 전 입력량 추정은 라우팅된 어댑터가 실제로 보내는 내용을 따릅니다. `openai-chat` 모델이
-`preserveReasoningContentModels`에 없으면 어댑터가 이전 assistant thinking을 보내지 않으므로
+명시적 `preserveReasoningContentModels` 목록 또는 미설정 시 DeepSeek Flash/Pro 감지에 따른
+유효 thinking 보존 정책에서 제외되면 어댑터가 이전 assistant thinking을 보내지 않으므로
 추정에서도 뺍니다. 그래서 보내지도 않는 기록 때문에 로컬 컨텍스트 한도에서 잘못 거부되는 일이
 없습니다. reasoning을 보존하는 모델과 다른 어댑터는 이전 thinking을
 실제로 보내므로 계속 계산에 넣습니다.

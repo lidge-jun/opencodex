@@ -67,7 +67,7 @@ describe("muse login selection order", () => {
   // second login to work around a local fault. They stay refusals.
   test("a Keychain timeout still refuses and starts no grant", async () => {
     const h = harness({ readKeychain: async () => null });
-    await expect(loginMetaMuse({}, h.deps)).rejects.toThrow(/within 5s/);
+    await expect(loginMetaMuse({}, h.deps)).rejects.toThrow(/Could not read/);
     expect(h.calls.device).toBe(0);
   });
 

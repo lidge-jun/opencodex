@@ -56,7 +56,9 @@ function providerFixture(adapterId: string, wire: AdapterWire): OcxProviderConfi
     ? "https://api.xiaomimimo.com/api/free-ai/openai/chat"
     : adapterId === "azure" || adapterId === "azure-openai"
       ? "https://example.openai.azure.com/openai/v1"
-      : baseUrls[wire];
+      : adapterId === "dsh-account"
+        ? "https://api.deepseek.com/anthropic"
+        : baseUrls[wire];
   return {
     adapter: adapterId,
     baseUrl,

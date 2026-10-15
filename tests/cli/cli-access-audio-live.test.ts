@@ -8,6 +8,10 @@ import type { OcxConfig } from "../../src/types";
 
 const KEY = "ocx_data_audio_live_synthetic";
 const argv = ["live-check", "--model", "synthetic-live", "--api-key-stdin", "--json"];
+// The suite runner scales this inner deadline to 5s (8s on Windows). Its test must
+// outlive readiness failure plus the fixture's 500ms close deadline and assertions.
+const NON_READY_WAIT_MS = isolationBudgetMs(20);
+const NON_READY_TEST_MS = NON_READY_WAIT_MS + 1_500;
 const originalToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const servers: ReturnType<typeof Bun.serve>[] = [];
 let out: ReturnType<typeof spyOn<typeof console, "log">>;
@@ -128,11 +132,11 @@ describe("live audio readiness and bounded closure", () => {
     const f = fixture([JSON.stringify(frame)]);
     // The ready timer starts before the socket opens; a 20 ms budget can expire before the
     // client sends session.update on a loaded runner (macOS control, run 37457452698).
-    expect(await handleAccessAudioCommand(argv, deps(f.server.port!, { audioReadyTimeoutMs: isolationBudgetMs(20) }))).toBe(1);
+    expect(await handleAccessAudioCommand(argv, deps(f.server.port!, { audioReadyTimeoutMs: NON_READY_WAIT_MS }))).toBe(1);
     expect(JSON.parse(output())).toMatchObject({ ready: false });
     await f.closeObserved;
     expect(f.messages.map((m: unknown) => (m as { type: string }).type)).toEqual(["session.update", "session.close"]);
-  });
+  }, NON_READY_TEST_MS);
   test.each([
     "malformed", "null", "[]", JSON.stringify({ type: [] }),
     JSON.stringify({ type: "error", message: KEY }), JSON.stringify({ type: "protocol.error", message: KEY }),

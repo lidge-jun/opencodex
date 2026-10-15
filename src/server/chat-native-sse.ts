@@ -171,6 +171,7 @@ interface NativeChatSseOptions {
   declaredLegacyFunctionNames?: ReadonlySet<string>;
   onFirstOutput?: () => void;
   onUsage: (usage: OcxUsage) => void;
+  onChunk?: (value: Rec) => void;
   onTerminal?: (status: number, message?: string) => void;
   onCancel?: () => void;
 }
@@ -358,6 +359,7 @@ export function nativeChatSse(
       return;
     }
     const usage = usageFromChat(parsed.usage);
+    options.onChunk?.(parsed);
     if (usage) options.onUsage(usage);
     if (options.clientDeclaredEmptyToolCatalog && !inspectToolCalls(parsed)) {
       fail(controller, UNDECLARED_CHAT_TOOL_MESSAGE, UNDECLARED_TOOL_CALL_ERROR_CODE);
