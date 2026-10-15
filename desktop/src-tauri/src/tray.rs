@@ -224,9 +224,10 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
                 else {
                     return;
                 };
-                let _ = app
-                    .opener()
-                    .open_url(format!("{}#/usage", endpoint.url("/")), None::<String>);
+                let _ = crate::process_spawn::with_spawn(|| {
+                    app.opener()
+                        .open_url(format!("{}#/usage", endpoint.url("/")), None::<String>)
+                });
             }
             "start-at-login" => {
                 #[cfg(target_os = "macos")]

@@ -410,7 +410,7 @@ pub async fn install(app: &AppHandle, update: Update) -> Result<(), String> {
         ));
     }
 
-    if let Err(error) = update.install(package) {
+    if let Err(error) = crate::process_spawn::with_spawn(|| update.install(package)) {
         // The installer returned a failure. The runtime was stopped for an install that did not
         // happen, so the app brings one back instead of sitting drained.
         recover_after_failed_install(app);

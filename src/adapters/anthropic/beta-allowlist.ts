@@ -14,22 +14,27 @@
  * Proxy-owned betas (the OAuth pair, the fast-mode beta) are not listed here: the lane sets them
  * itself from the provider's own configuration, exactly as the adapter does.
  *
- * LEAF MODULE: no runtime import, so the builder, the lane and tests can read it freely.
+ * Imports only the leaf schema-pairing table; no provider, credential or transport code.
  */
+
+import { ANTHROPIC_BETA_BODY_PAIRS } from "./beta-body-pairs";
+export { CONTEXT_MANAGEMENT_BETA, THINKING_BINDING_BETA } from "./beta-body-pairs";
 
 /** Where the native lane sends: Anthropic's own API, or an Anthropic-compatible third party. */
 export type AnthropicProviderClass = "first-party" | "compatible";
 
 /**
  * Betas a caller may forward to `api.anthropic.com`. Deliberately short: only a value whose
- * effect is limited to how the model uses the body it already sent, with no new body field,
- * no billing tier and no retained server state, belongs here.
+ * effect is limited to how the model uses the body it already sent, with
+ * no billing tier and no retained server state, belongs here. Beta-gated body fields
+ * are admitted only through the shared pairing table.
  */
 const FIRST_PARTY_BETAS: readonly string[] = [
   // Lets thinking blocks appear between tool calls in one assistant turn. No request field;
   // the thinking and tool blocks it affects are already on the lane's field allowlist, and the
   // proxy's own OAuth quota probe sends it (`src/providers/quota/vendor-probes-oauth.ts`).
   "interleaved-thinking-2025-05-14",
+  ...ANTHROPIC_BETA_BODY_PAIRS.filter(pair => !pair.nativeClientOnly).map(pair => pair.beta),
 ];
 
 /**
@@ -39,10 +44,6 @@ const FIRST_PARTY_BETAS: readonly string[] = [
  */
 const COMPATIBLE_BETAS: readonly string[] = [];
 const INLINE_TOOLS_BETA = "inline-tools-2026-09-15";
-/** Pairs with the top-level `context_management` body field; the builder forwards that field
- * only when this beta survives the allowlist, so header and body never disagree. */
-export const CONTEXT_MANAGEMENT_BETA = "context-management-2025-06-27";
-
 /**
  * Published betas this lane recognizes but does not forward. Only these, and the allowlisted
  * values above, are ever named in the log; the list grants nothing on the wire.
@@ -82,7 +83,7 @@ const NATIVE_CLIENT_BETAS: readonly string[] = [
   "thinking-display-updates-2026-08-18",
   "prompt-caching-scope-2026-01-05",
   "mid-conversation-system-2026-04-07",
-  CONTEXT_MANAGEMENT_BETA,
+  ...ANTHROPIC_BETA_BODY_PAIRS.filter(pair => pair.nativeClientOnly).map(pair => pair.beta),
 ];
 const NATIVE_CLIENT_ALLOWLIST = new Map(NATIVE_CLIENT_BETAS.map(beta => [beta.toLowerCase(), beta]));
 

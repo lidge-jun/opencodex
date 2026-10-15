@@ -394,7 +394,7 @@ the provider default, then the adapter omits `max_tokens`.
 
 Both fields must stay positive finite integers at disk-config and management validation boundaries.
 Registry entries may seed them through `providerConfigSeed`, key-login derivation, OAuth reconcile,
-and `routeModel`, but user config overrides registry defaults per field/key.
+and `routeModel`, but user config overrides registry defaults per field/key. Startup and login follow the [OAuth reconciliation contract](providers/oauth-reconciliation.md).
 
 `src/providers/resolved-model-policy.ts` is the detached static-policy authority for this merge
 contract. It preserves each field's existing rule rather than assigning one global priority:
