@@ -84,15 +84,21 @@ function loadNativeDpapi(): NativeDpapi | null {
     }
     const length = output.readUInt32LE(0);
     const address = Number(output.readBigUInt64LE(8)) as Pointer;
-    const view = length > 0 ? new Uint8Array(toArrayBuffer(address, 0, length)) : null;
+    // Every step after a successful call sits inside try so the native buffer is always
+    // released, even if creating the view over it throws.
+    let view: Uint8Array | null = null;
     try {
+      view = length > 0 ? new Uint8Array(toArrayBuffer(address, 0, length)) : null;
       if (length === 0 || length > MAX_INPUT) throw new Error("desktop_compatibility_key_size");
       return Uint8Array.from(view!);
     } finally {
       // The unprotected buffer is cleartext key material; clear it before LocalFree releases it,
-      // including when the size check rejects it.
-      if (operation === "unprotect") view?.fill(0);
-      LocalFree(address);
+      // including when the size check rejects it. LocalFree still runs if clearing throws.
+      try {
+        if (operation === "unprotect") view?.fill(0);
+      } finally {
+        LocalFree(address);
+      }
     }
   };
   return nativeDpapi;
