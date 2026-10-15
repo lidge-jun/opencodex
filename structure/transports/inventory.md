@@ -417,3 +417,5 @@ Only the proxy handshake carries proxy credentials. The raw upgraded socket rema
 the relay does not decode WebSocket payloads. After CONNECT the paused outer stream resumes
 before TLS-over-TLS negotiation. Test fixture CA trust is confined to child processes or
 injected test socket options, never the user's OS trust store.
+
+Generic OAuth conversation ownership and request-local selection receipts follow [generic OAuth affinity](../providers/generic-account-pool.md#conversation-affinity).

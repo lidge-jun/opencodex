@@ -450,3 +450,5 @@ updating live state. A confirmed published write followed by bookkeeping failure
 pool and returns a fixed warning; an unpublished failure keeps old state. Unknown outcomes require
 reload and are not represented as a successful save. The GUI checkbox is a saved preference rather
 than a promise that a route is eligible; explicit rollout opt-outs still apply.
+
+The shared conversation-key precedence is implemented by `src/oauth/session-affinity-key.ts` and re-exported as `anthropicSessionKeyFromParts`; Anthropic routing semantics remain owned here. [Generic OAuth affinity](generic-account-pool.md#conversation-affinity) uses independent request-local receipts.

@@ -7,9 +7,9 @@ import { isBuiltinAnthropicInstanceRow } from "../providers/anthropic-instance";
  * exists is Anthropic's — behind its own opt-in. So xAI, Cursor, Kimi, GitHub Copilot,
  * Antigravity and Nous have no recovery path on a 429 even with several accounts logged in.
  *
- * Deliberately narrower than the Anthropic pool: no session affinity, no quota-ranked selection,
- * no probe leases. Those carry provider-specific meaning; this module only answers "the account
- * that just 429'd is cooled, is there another one we may use".
+ * Conversation ownership lives in generic-session-affinity.ts; this module owns account
+ * eligibility, quota-ranked preference and bounded refusal recovery. Probe leases remain
+ * provider-specific.
  *
  * NOT a home for Codex (`codex/routing.ts` owns quota scopes and probe leases) or Anthropic
  * (`oauth/anthropic-routing.ts` owns affinity and a fail-closed local-cli credential rule).
@@ -416,6 +416,7 @@ function pickFillFirstGenericAccount(
   now: number,
   requestedModelId?: string | null,
   accountRows?: ReadonlyMap<string, ProviderAccount>,
+  preferBelowThreshold = false,
 ): string | null {
   const stableAll = stableGenericRoster(providerName);
   if (stableAll.length < 2) return null;
@@ -431,6 +432,11 @@ function pickFillFirstGenericAccount(
   }
   const start = activeId ? stableAll.indexOf(activeId) : -1;
   const ring = start >= 0 ? [...stableAll.slice(start + 1), ...stableAll.slice(0, start)] : stableAll;
+  if (preferBelowThreshold) {
+    const below = ring.find(id => id !== activeId && eligible.has(id)
+      && !isOverAutoSwitchThreshold(providerName, id, threshold, requestedModelId, accountRows?.get(id)));
+    if (below) return below;
+  }
   for (const id of ring) {
     if (id !== activeId && eligible.has(id)) return id;
   }
@@ -634,6 +640,7 @@ export function preferredInitialAccount(
   providerName: string,
   now = Date.now(),
   requestedModelId?: string | null,
+  activeAccountOverride?: string,
 ): string | null {
   // The PROACTIVE predicate, not the reactive one: this steers a request upstream has not
   // refused, so `oauthAccountFailover.enabled: false` must still be able to refuse it.
@@ -642,7 +649,7 @@ export function preferredInitialAccount(
   // active id separately would delay manual selection and account removal.
   const selected = getAccountSet(providerName);
   if (!selected) return null;
-  const active = selected.activeAccountId;
+  const active = activeAccountOverride ?? selected.activeAccountId;
   const accountRows = new Map(selected.accounts.map(account => [account.id, account]));
   const order = selected.accounts
     .filter(account => account.paused !== true && account.needsReauth !== true)
@@ -694,7 +701,7 @@ export function preferredInitialAccount(
     return picked && picked !== active ? picked : null;
   }
   if (strategy === "fill-first") {
-    const picked = pickFillFirstGenericAccount(config, providerName, active, now, requestedModelId, accountRows);
+    const picked = pickFillFirstGenericAccount(config, providerName, active, now, requestedModelId, accountRows, activeAccountOverride !== undefined);
     return picked && picked !== active ? picked : null;
   }
 

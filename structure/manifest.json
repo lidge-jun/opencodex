@@ -48,6 +48,13 @@
   ],
   "docs": [
     {
+      "path": "providers/generic-account-pool.md",
+      "tier": 4,
+      "title": "Generic OAuth Account Pool",
+      "scope": "Opt-in conversation ownership, request-local selection receipts and bounded release for generic OAuth pools.",
+      "documents": ["src/oauth/", "src/server/", "src/types/"]
+    },
+    {
       "path": "overview.md",
       "tier": 1,
       "title": "Overview",

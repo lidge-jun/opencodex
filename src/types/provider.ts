@@ -712,6 +712,8 @@ export interface OcxProviderConfig {
     /** Kiro OAuth only: active serving requests per account, 1..100. */
     maxConcurrentPerAccount?: number;
     enabled?: boolean;
+    /** Opt-in process-local conversation ownership; requires proactive enablement. */
+    sessionAffinity?: "conversation" | "none";
     /**
      * Generic OAuth pool selection strategy (#695). Persisted through the pool-settings
      * contract. Consumed by the selector only while `pool.kernel` is on; with the flag off

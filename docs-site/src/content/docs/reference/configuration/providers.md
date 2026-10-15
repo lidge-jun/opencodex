@@ -1137,6 +1137,7 @@ second account.
 | --- | --- | --- | --- |
 | `oauthAccountFailover.enabled?` | `boolean` | presence-driven | Global override for the **pre-dispatch account preference** only. `false` stops a healthy request being steered toward the account with more known headroom. It does **not** disable 429 rotation. |
 | `providers.<name>.oauthAccountFailover.enabled?` | `boolean` | inherits | Per-provider override for the same preference; beats the global setting in either direction. `false` declines the preference for this provider even when the global setting is `true`, and `true` opts this provider in even when the global setting is `false`. Reactive 429 rotation is unaffected either way. |
+| `providers.<name>.oauthAccountFailover.sessionAffinity?` | `"conversation" \| "none"` | `"none"` | Opt-in conversation pinning for generic OAuth pools. Requires proactive `enabled: true` (provider or inherited global value). Existing sessions keep their account ahead of the new-session strategy until it becomes unavailable. |
 | `providers.<name>.oauthAccountFailover.strategy?` | `"quota" \| "round-robin" \| "fill-first" \| "least-loaded"` (Kiro only) | — | Kiro's `least-loaded` picks the eligible account with the fewest in-flight requests, using account order for ties. It requires `pool.kernel` and proactive preference; other strategies retain their existing rules. |
 | `providers.kiro.oauthAccountFailover.maxConcurrentPerAccount?` | integer 1–100 | unlimited | A process-local per-account queue holds a slot through response completion or cancellation. A full selected account waits at most 250 ms, then returns 503 `account_capacity` with `Retry-After: 1`. The cap does not move the request to another account. |
 | `providers.<name>.oauthAccountFailover.autoSwitchThreshold?` | `number` | `80` | 0–100 usage percent at which `fill-first` advances off the active account (#695). Set with `ocx account auto-switch <provider> threshold <n>`. Read only under `pool.kernel` with `strategy: "fill-first"`; an account with no measured usage counts as under the threshold. |
@@ -1166,9 +1167,26 @@ and the `ocx account strategy` / `ocx account auto-switch` / `ocx account sticky
 preference. `quotaWindow` is not part of the generic contract. Codex (`/api/codex-auth`) and Anthropic
 (`anthropicAccountPool`) keep their own contracts unchanged.
 
-Deliberately narrower than `anthropicAccountPool`: no session affinity, no quota-ranked
-selection, no probe leases. It answers one question — the account that just returned 429 is
-cooled, is there another one available.
+Set `providers.<name>.oauthAccountFailover.sessionAffinity` to `"conversation"` together with
+`enabled: true` to keep a conversation on its admitted account. Session identity uses the client
+thread marker, session headers, thread header, then `prompt_cache_key`; a shared Desktop cache
+cohort is excluded. Bindings are isolated by provider, configuration home and authenticated caller
+principal. Unauthenticated local callers share the local scope. No session marker means no binding.
+
+New sessions use the existing strategy (`pool.kernel` still gates round-robin/fill-first).
+Existing sessions stay pinned even when another account has more quota. A pause, reauthentication
+requirement, family cooldown or incompatible model roster releases the binding; existing bounded
+failure recovery binds the admitted replacement. Kiro's concurrency cap still waits or refuses
+rather than moving a healthy bound conversation merely to balance load.
+
+In this mode automatic choices, including unkeyed requests and failovers, stay request-local:
+the dashboard's selected account remains the operator's selection. Request history still attributes
+the serving account. Manual selection, same-account reselection and roster/policy revision changes
+invalidate provider bindings, including writes from another process. An ordinary refresh keeps the
+same account. Fill-first retains its current account in memory without changing the saved selection.
+Bindings expire after 24 hours without admission, are bounded to 2,000 entries process-wide
+(including fill-first cursors), and are lost on restart. Set `sessionAffinity: "none"` or disable
+proactive preference to release them. Codex and Anthropic retain their own affinity contracts.
 
 The Codex pool and the Anthropic pool are excluded and keep their own rotation; enabling this
 changes neither. A provider with a single stored account is a strict no-op, and no cooldown is
