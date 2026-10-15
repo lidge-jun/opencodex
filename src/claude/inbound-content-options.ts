@@ -91,9 +91,9 @@ export function declaredAnthropicServerTools(raw: unknown): Rec[] | undefined {
  * Completed Anthropic server-tool exchanges (`server_tool_use` + `web_search_tool_result` /
  * `web_fetch_tool_result`) in the caller's assistant history. The Responses body drops them, so
  * an Anthropic destination re-inserts them out of body, keyed by the block that follows each run
- * in its message: `call:<tool_use id>` or `text:<text>`, both of which survive translation. A run
- * with neither, an unpaired call, a non-Anthropic id, or a search hit without `encrypted_content`
- * is not replayable and stays dropped.
+ * in its message: `call:<tool_use id>`, `text:<text>`, `thinking:<signature>` or
+ * `redacted:<data>`, all of which survive translation. A run with none, an unpaired call, a
+ * non-Anthropic id, or a search hit without `encrypted_content` is not replayable and stays dropped.
  */
 export function replayedAnthropicServerBlocks(raw: unknown): Map<string, Rec[]> | undefined {
   if (!isRec(raw) || !Array.isArray(raw.messages)) return undefined;
@@ -107,7 +107,10 @@ export function replayedAnthropicServerBlocks(raw: unknown): Map<string, Rec[]> 
         run.push({ ...block, cache_control: undefined });
         continue;
       }
-      const key = block.type === "tool_use" ? `call:${String(block.id)}` : block.type === "text" ? `text:${String(block.text)}` : undefined;
+      const key = block.type === "tool_use" ? `call:${String(block.id)}`
+        : block.type === "text" ? `text:${String(block.text)}`
+        : block.type === "thinking" ? `thinking:${String(block.signature)}`
+        : block.type === "redacted_thinking" ? `redacted:${String(block.data)}` : undefined;
       const uses = run.filter(b => b.type === "server_tool_use");
       const results = run.filter(b => b.type !== "server_tool_use");
       const replayable = uses.length > 0 && uses.length === results.length

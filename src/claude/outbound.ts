@@ -233,9 +233,9 @@ export function webSearchPairFromItem(item: Rec): {
 } {
   const action = isRec(item.action) ? item.action : {};
   const completed = item.status !== "failed";
-  if (isRec(item.anthropic_blocks)) {
-    const { use, result } = item.anthropic_blocks as { use: Rec; result: Rec };
-    return { id: String(use.id), name: String(use.name), resultType: String(result.type), input: use.input as Rec, resultContent: result.content, completed };
+  const { use, result } = isRec(item.anthropic_blocks) ? item.anthropic_blocks : {};
+  if (isRec(use) && isRec(result) && typeof use.id === "string" && typeof use.name === "string" && typeof result.type === "string") {
+    return { id: use.id, name: use.name, resultType: result.type, input: isRec(use.input) ? use.input : {}, resultContent: result.content, completed };
   }
   const id = typeof item.id === "string" && item.id.length > 0 ? item.id : `srvtoolu_${uuid()}`;
   const queries = Array.isArray(action.queries)

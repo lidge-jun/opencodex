@@ -3,6 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createAnthropicAdapter } from "../../src/adapters/anthropic";
+import { webSearchPairFromItem } from "../../src/claude/outbound";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
 import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
@@ -309,4 +310,24 @@ describe("a server-tool exchange the client replays reaches Anthropic in place",
       toolUse,
     ]);
   });
+
+  test("a pair between thinking blocks stays between them", async () => {
+    const [use, result] = (await claudeTurn("https://api.anthropic.com", SEARCH_TURN).then(r => clientContent(r.clientSse))).slice(0, 2);
+    const thinking = (signature: string) => ({ type: "thinking", thinking: `t ${signature}`, signature });
+    const redacted = { type: "redacted_thinking", data: "RedactedPayload0123456789" };
+    const second = [{ ...use, id: "srvtoolu_2" }, { ...result, tool_use_id: "srvtoolu_2" }];
+    const assistant = [thinking("SigOne0123456789abcdef"), use, result, thinking("SigTwo0123456789abcdef"), ...second, redacted];
+    const { wire } = await claudeTurn("https://api.anthropic.com", OK_TURN, "anth", followUp([...assistant, { type: "text", text: "Bun shipped." }]));
+    const content = (wire.messages as { content: Record<string, unknown>[] }[])[1]!.content;
+    expect(content.map(b => b.id ?? b.tool_use_id ?? b.type)).toEqual([
+      "thinking", "srvtoolu_1", "srvtoolu_1", "thinking", "srvtoolu_2", "srvtoolu_2", "redacted_thinking", "text",
+    ]);
+  });
+});
+
+test("a malformed anthropic_blocks falls back to the rebuilt pair", () => {
+  for (const anthropic_blocks of [{}, { use: {}, result: {} }, { use: { id: 1, name: "web_search" }, result: { type: "web_search_tool_result" } }]) {
+    const pair = webSearchPairFromItem({ type: "web_search_call", id: "ws_1", action: { type: "search", query: "q" }, anthropic_blocks });
+    expect(pair).toMatchObject({ id: "ws_1", name: "web_search", resultType: "web_search_tool_result", input: { query: "q" } });
+  }
 });
