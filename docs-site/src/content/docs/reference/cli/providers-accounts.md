@@ -374,6 +374,22 @@ percentages, for example `{ "short": 90, "long": 98 }`. Both must be integers fr
 and `short` must not exceed `long`; omitted fields use the defaults. The settings API accepts the
 same object and returns the effective values in `mainAccountHardLock.thresholds`.
 
+**While the lock blocks, requests can fall back to another model instead of failing.** The
+**Fallback while blocked** row sits beside the protection switch and works like the shadow-call
+row: picking a model — for example `deepseek/deepseek-chat` — turns the reroute on immediately,
+the optional thinking effort applies to it, and the switch pauses the reroute without forgetting
+the model. While the block is in force and no Codex account can serve a request for a native Codex
+model, that request is routed to the fallback model (with the configured effort) instead of being
+refused. A usable Pool account still serves the request first; provider-qualified selectors,
+combos, account-qualified rows and Luna Reserve keep their own destinations; and a fallback that
+itself names a native Codex model is ignored, because rerouting gpt-* to gpt-* would only re-enter
+the same refusal. The lock itself is unchanged: it releases on its own as before, and the reroute
+ends with it. Configure `codexMainAccountHardLockFallback` in `config.json` as
+`{ "model": "deepseek/deepseek-chat", "reasoningEffort": "low" }`; `enabled: false` pauses the
+reroute while keeping the model. An absent section, an omitted model, or a malformed section means
+requests are refused as usual; `reasoningEffort` must be a declared effort. The settings API
+accepts the same object, rejects invalid writes before mutation, and `null` clears the section.
+
 The dashboard and `ocx status` show **possible usage outside opencodex** when fresh readings rise
 by at least one point in the same reset episode without recent main-account activity through this
 proxy. This is an advisory observation, not proof: a long-running turn can also cause it. The lock

@@ -55,6 +55,7 @@ a page with an overlay title bar and no strip cannot be dragged or zoomed at all
 Linux keep the native title bar: the shell ships no min/max/close widgets of its own, and the
 sidebar-top layout applies unchanged beneath it.
 
+Process creation shares the Unix guard with executable publication; see [Desktop-owned terminal command](desktop-terminal-command.md).
 ## Startup, quit and the tray
 
 The window is created and shown before anything is registered, resolved, probed or started, and
