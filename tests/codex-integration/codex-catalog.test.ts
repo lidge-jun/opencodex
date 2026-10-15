@@ -5780,12 +5780,12 @@ describe("Codex catalog routed normalization", () => {
     { label: "empty", models: [] as string[] },
   ])("static Go $label models expose only the inherited default, not the metadata roster", async ({ models: configuredModels }) => {
     const provider: OcxProviderConfig = {
-      adapter: "openai-chat", baseUrl: "https://opencode-go.test/v1", apiKey: "sk-test",
+      adapter: "openai-chat", baseUrl: "https://opencode.ai/zen/go/v1", apiKey: "sk-test",
       liveModels: false,
       ...(configuredModels === undefined ? {} : { models: configuredModels }),
     };
-    // Go keeps the registry's historical name-based ownership even with this fixture URL.
-    // This was never a genuinely default-less provider after capture-time enrichment.
+    // Registry defaults belong to canonical Go destinations; custom rows stay operator-owned.
+    // A canonical row inherits its default at capture time without importing the metadata roster.
     expect(providerMatchesRegistryTransportWithStaticGuards("opencode-go", provider)).toBe(true);
     const enriched = structuredClone(provider);
     enrichProviderFromRegistry("opencode-go", enriched);

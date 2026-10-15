@@ -283,6 +283,7 @@
     "catalog-modelalias-unique-sync.test.ts": "codex-integration",
     "catalog-oauth-observation.test.ts": "codex-integration",
     "catalog-opencode-go-context-window.test.ts": "codex-integration",
+    "catalog-opencode-go-static.test.ts": "codex-integration",
     "catalog-remote-pull.test.ts": "codex-integration",
     "catalog-retain-models.test.ts": "codex-integration",
     "catalog-routed-comp-hash.test.ts": "codex-integration",
