@@ -1088,6 +1088,13 @@ an app updater can omit the managed connection argument. Save drafts, close Code
 After a Codex update, an unassessed app version refuses correction until its compatibility is
 reviewed; reinstalling the certificate does not make an unassessed build supported.
 
+The panel can also report the last completed build check as diagnostic metadata: the package
+version this build was assessed against, the package version observed at that check, whether
+they matched, and when the check finished. It is a past observation, not a live reading of the
+installed package. After the service stops, the app updates, or a check is still running or was
+interrupted, it can lag the actual installation; only a completed probe refreshes it, and a
+`verified` result describes the package observed at that check, not whatever is installed now.
+
 On Windows, an explicit OpenCodex full-app restart preserves an already active loopback
 compatibility PAC argument only when the current OpenCodex process owns the serving compatibility
 runtime. A stale or foreign endpoint is refused before stopping Codex; replacement of the runtime

@@ -5,10 +5,12 @@ export interface CompatibilityCertificate {
 export interface CompatibilityRuntime {
   supported: boolean; phase: "off" | "starting" | "running" | "stopping" | "cleanup-required"; running: boolean;
   contextFailure?: "build_unverified" | "native_routing_unverified" | null;
+  buildAssessment?: CompatibilityBuildAssessment | null;
   usage?: { mode: "observe" | "apply"; phase: string; outputs: number; appCacheConfirmed: false;
     observation?: { jsonSnapshots: number; streamSnapshots: number; validatedActiveStreams: number; lastSnapshotAt: number | null;
       sourceProcessVerified: false; composerRecoveryVerified: false } };
 }
+export interface CompatibilityBuildAssessment { assessedVersion: string; observedVersion: string | null; verified: boolean; completedAt: number }
 export interface CompatibilitySnapshot { certificate: CompatibilityCertificate; runtime: CompatibilityRuntime }
 export interface CompatibilityStartupSettings { startOnProxyStart: boolean; revision: string }
 export type CompatibilityAction =
@@ -58,6 +60,21 @@ export function parseCompatibilityRuntime(value: unknown): CompatibilityRuntime 
   if (value.contextFailure !== undefined) {
     if (value.contextFailure !== null && value.contextFailure !== "build_unverified" && value.contextFailure !== "native_routing_unverified") throw new CompatibilityApiError("invalid_runtime_status");
     runtime.contextFailure = value.contextFailure;
+  }
+  if (value.buildAssessment !== undefined) {
+    if (value.buildAssessment === null) runtime.buildAssessment = null;
+    else {
+      const assessment = value.buildAssessment;
+      const version = (candidate: unknown) => typeof candidate === "string" && /^\d{1,5}(\.\d{1,5}){3}$/.test(candidate);
+      if (!object(assessment) || !version(assessment.assessedVersion)
+        || !(assessment.observedVersion === null || version(assessment.observedVersion))
+        || typeof assessment.verified !== "boolean"
+        || !Number.isSafeInteger(assessment.completedAt) || Number(assessment.completedAt) < 0 || Number(assessment.completedAt) > 8.64e15
+        || assessment.verified === true && assessment.observedVersion !== assessment.assessedVersion) throw new CompatibilityApiError("invalid_runtime_status");
+      runtime.buildAssessment = { assessedVersion: assessment.assessedVersion as string,
+        observedVersion: assessment.observedVersion === null ? null : assessment.observedVersion as string,
+        verified: assessment.verified as boolean, completedAt: assessment.completedAt as number };
+    }
   }
   if (value.usage !== undefined) {
     if (!object(value.usage) || typeof value.usage.mode !== "string" || !["observe", "apply"].includes(value.usage.mode) || typeof value.usage.phase !== "string"

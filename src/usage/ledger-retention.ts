@@ -22,6 +22,7 @@ import { closeSync, fstatSync, openSync, readSync, writeSync } from "node:fs";
 import { atomicWriteFileStreamed } from "../config/atomic-write";
 import {
   currentUsageLogRevision,
+  exactFileIdentity,
   usageLogIdentityKey,
   usageLogPath,
   usageLogRevisionKey,
@@ -127,7 +128,7 @@ export function enforceUsageLedgerSizeLimit(
   let sourceClosed = false;
   try {
     const opened = fstatSync(sourceFd);
-    if (Number(opened.size) !== captured.size || Number(opened.ino) !== captured.ino) {
+    if (Number(opened.size) !== captured.size || exactFileIdentity(sourceFd).ino !== captured.ino) {
       return { kind: "deferred", currentBytes: captured.size, reason: "revision-changed" };
     }
     const start = firstRowBoundary(sourceFd, Math.max(0, captured.size - target), captured.size);

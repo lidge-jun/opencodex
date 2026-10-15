@@ -97,6 +97,8 @@ import { createFinalRequestLog, type FinalRequestLogMeta } from "./inference/fin
 import { registerTurn, unregisterTurn } from "./lifecycle";
 import { nativeMessagesDeclineReason, type NativeMessagesSelector } from "./messages-native-eligibility";
 import { messagesSecondaryInstanceUnavailable } from "./messages-native-selector";
+import { guardNativeMessagesEmptyToolCatalog, nativeMessagesClientToolName, nativeMessagesInlineToolNames } from "./messages-native-tool-guard";
+import { UNDECLARED_TOOL_CALL_ERROR_CODE, undeclaredToolCallMessage } from "./responses-undeclared-tool-guard";
 import {
   nativeOAuthBindingIsCurrent,
   NativeOAuthSelectionChangedError,
@@ -315,6 +317,8 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
   const { req, config, logCtx, logIds, route, body, requestedModel, translatorBudget } = options;
   const nativeInstance = configuredAnthropicInstance(config, route.providerName);
   const requestedStream = body.stream === true;
+  const clientDeclaredEmptyToolCatalog = Array.isArray(body.tools) && body.tools.length === 0;
+  const declaredInlineTools = clientDeclaredEmptyToolCatalog ? nativeMessagesInlineToolNames(body) : undefined;
   logCtx.inboundProtocol = "messages";
   logCtx.model = route.modelId;
   logCtx.provider = route.providerName;
@@ -794,15 +798,22 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     const renamed = activeRequest.oauthToolNames
       ? restoreOAuthToolNamesInSse(observed, activeRequest.oauthToolNames, translatorBudget)
       : observed;
-    const source = echoRequestedModel(renamed, requestedModel);
+    const echoed = echoRequestedModel(renamed, requestedModel);
+    let toolRefusal: string | undefined;
+    const source = clientDeclaredEmptyToolCatalog
+      ? guardNativeMessagesEmptyToolCatalog(echoed, translatorBudget, message => {
+        toolRefusal = message;
+        logCtx.errorCode = UNDECLARED_TOOL_CALL_ERROR_CODE;
+      }, declaredInlineTools)
+      : echoed;
     if (requestedStream) {
       transferTurnToStream();
       const relayed = tapAnthropicSseForLog(source, logCtx, (status, meta) => {
         try {
           cleanupAbort();
           bindUsage(logCtx.usage);
-          finishLog(status, undefined, meta);
-          if (meta.closeReason !== "terminal") upstream.abort();
+          finishLog(toolRefusal ? 502 : status, toolRefusal, toolRefusal ? { ...meta, terminalStatus: "failed" } : meta);
+          if (toolRefusal || meta.closeReason !== "terminal") upstream.abort();
         } finally {
           releaseStreamTurn();
         }
@@ -833,6 +844,11 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       if (message.type === "error") {
         const error = isRec(message.error) ? message.error : {};
         const text = typeof error.message === "string" ? error.message : "upstream stream failed";
+        if (toolRefusal) {
+          upstream.abort();
+          finishLog(502, toolRefusal, { closeReason: "terminal", terminalStatus: "failed" });
+          return fail(502, toolRefusal, "api_error", UNDECLARED_TOOL_CALL_ERROR_CODE);
+        }
         // The tap's own verdict (a reset, a stall, the byte cap) closes this row with the same meta
         // as the streaming lane's row; a plain upstream error event keeps the non_stream row.
         const tapMeta = tapState.meta;
@@ -884,6 +900,11 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
   const message = activeRequest.oauthToolNames
     ? restoreOAuthToolNamesInMessage(parsedMessage, activeRequest.oauthToolNames)
     : parsedMessage;
+  const undeclaredTool = clientDeclaredEmptyToolCatalog ? nativeMessagesClientToolName(message, declaredInlineTools) : undefined;
+  if (undeclaredTool !== undefined) {
+    logCtx.errorCode = UNDECLARED_TOOL_CALL_ERROR_CODE;
+    return fail(502, undeclaredToolCallMessage(undeclaredTool), "api_error", UNDECLARED_TOOL_CALL_ERROR_CODE);
+  }
   bindUsage(anthropicUsageToOcx(isRec(message.usage) ? message.usage : undefined));
   if (logIds) recordFirstOutput(logCtx, logIds.start);
   try {
