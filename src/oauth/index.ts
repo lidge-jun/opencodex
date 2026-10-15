@@ -453,6 +453,14 @@ export class OAuthProviderPublicationError extends Error {
   }
 }
 
+/** A local configuration conflict found before any credential is written; its text is fixed. */
+export class OAuthProviderNamespaceCollisionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OAuthProviderNamespaceCollisionError";
+  }
+}
+
 export class OAuthReauthIdentityMismatchError extends Error {
   constructor() {
     super("Signed-in account does not match the selected account. Sign in with the same account.");
@@ -485,6 +493,7 @@ export function publicOAuthAuthenticationErrorMessage(error: unknown): string {
     (error instanceof OAuthLoginRequiredError && isOAuthProvider(error.provider))
     || error instanceof OAuthAccountPausedError
     || error instanceof OAuthProviderPublicationError
+    || error instanceof OAuthProviderNamespaceCollisionError
     // Reauth identity outcomes carry fixed, account-free remediation text. Dropping them to the
     // generic message hides WHICH failure the user must fix (sign in with the selected account).
     || error instanceof OAuthReauthIdentityMismatchError
@@ -1506,7 +1515,7 @@ export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
   if (!def) return;
   if (provider === GOOGLE_ANTIGRAVITY_PROVIDER) migrateLegacyAntigravityStaticCatalog(config);
   const namespaceCollision = codexAccountNamespaceProviderCollisionError(config.codexAccountNamespaces, provider);
-  if (namespaceCollision) throw new Error(namespaceCollision);
+  if (namespaceCollision) throw new OAuthProviderNamespaceCollisionError(namespaceCollision);
   const existing = config.providers[provider];
   const providerConfig = def.resolveProviderConfig?.(config) ?? def.providerConfig;
   // Clone operator state, including xAI wire choices and their migration version.
@@ -1603,7 +1612,7 @@ export async function runLogin(
       preflightConfig.codexAccountNamespaces,
       provider,
     );
-    if (namespaceCollision) throw new Error(namespaceCollision);
+    if (namespaceCollision) throw new OAuthProviderNamespaceCollisionError(namespaceCollision);
   }
   if (provider === "anthropic2" && observeInitialConfigState() !== "exists") {
     throw new OAuthProviderPublicationError(provider, false);

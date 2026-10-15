@@ -10,6 +10,7 @@ import { isAnthropicInstanceId } from "../providers/anthropic-instance-id";
 export function pricingFamilyProvider(provider: string): string {
   return isAnthropicInstanceId(provider) ? "anthropic" : provider;
 }
+import type { PromptLengthPricing } from "../types/provider";
 
 /**
  * Expected-price overlay for models whose jawcode cost rows are missing or all-zero
@@ -46,6 +47,8 @@ export interface ExpectedPriceOverlay {
   provider: string;
   modelId: string;
   cost4: Cost4;
+  /** User-owned context policy; catalog rows leave this absent. */
+  promptLengthPricing?: PromptLengthPricing;
   source: string;
   verifiedAt: string;
   status: ExpectedPriceStatus;

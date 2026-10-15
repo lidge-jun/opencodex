@@ -130,3 +130,13 @@ ocx v2 mode v1
 ```
 
 CLI onay istemez. Aynı ayardır; bu sayfanın anlattıklarını bilerek seçin.
+
+## Eşzamanlı alt ajan sınırı
+
+**Models → Model settings** içindeki alt ajan sınırı, ana ajan hariç eşzamanlı alt ajanların
+azami sayısını belirler. Genel v2 bayrağı kapalı olan hibrit mod dahil v1, base ve v2'de
+kullanılabilir. Arayüz modu bu sınırdan bağımsız olarak seçilir.
+
+Sınırı artırmak daha fazla alt ajana izin verir; onları otomatik oluşturmaz veya daha hızlı
+çalışmayı garanti etmez. Değişiklikten sonra yeni bir Codex oturumu başlatın. Uzun süredir çalışan
+App ana bilgisayarı eski sınırı kullanmaya devam ediyorsa o ana bilgisayarı yeniden başlatın.

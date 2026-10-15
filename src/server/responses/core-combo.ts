@@ -6,7 +6,7 @@ import {
   isDeclaredReasoningEffort,
   resolveEffortAtOrBelow,
 } from "../../reasoning-effort";
-import { resolveAdmissionModelScope, routeAllowedByScope } from "../admission-model-scope";
+import { admissionMayUseMeteredComboTargets, resolveAdmissionModelScope, routeAllowedByScope } from "../admission-model-scope";
 import { recordAttemptRequestedEffort } from "../request-log";
 import {
   CODEX_TEXT_GUARDED_BUDGET_POLICY,
@@ -450,8 +450,10 @@ export async function executeComboResponses(
   let comboPayloadReadable = false;
   const payloadEligible = (target: (typeof combo.targets)[number]): boolean =>
     comboPayloadReadable || !unreadableEncryptedAgentTask || canDecryptUnreadableAgentTask(target);
+  const meteredAllowed = admissionMayUseMeteredComboTargets(config, options.admission, combo);
   const targetEligible = (target: (typeof combo.targets)[number]): boolean =>
-    (combo.strategy !== "jev" || target.provider !== JEV_PROVIDER_ID)
+    (meteredAllowed || !target.metered)
+    && (combo.strategy !== "jev" || target.provider !== JEV_PROVIDER_ID)
     && payloadEligible(target)
     && reasoningReplayEligible(target)
     && (protocolLanes?.pickable(target) ?? true);
@@ -525,6 +527,9 @@ export async function executeComboResponses(
     now?: number;
   }) => pickComboTargetWithWait(config, comboId, {
     ...pickOptions,
+    // Every pick, including the recovery picks that skip `targetEligible`, keeps metered
+    // targets away from callers that may not spend on them.
+    eligible: target => (meteredAllowed || !target.metered) && (pickOptions.eligible?.(target) ?? true),
     waitForCooldownMs: combo.waitForCooldownMs,
     abortSignal: options.abortSignal,
   });

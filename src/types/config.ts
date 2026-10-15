@@ -349,6 +349,12 @@ export interface OcxApiKeyEntry {
    * that is the only point at which the model about to be billed is known.
    */
   allowedModels?: string[];
+  /**
+   * Lets this key reach combo targets marked `metered`. Absent means no: an issued key stops
+   * at the last unmetered target. The environment token never qualifies. A loopback bind
+   * reads no key; local operator consent is instead declared on the combo.
+   */
+  allowMeteredComboTargets?: boolean;
 }
 
 export interface OcxPendingApiKeyRotation {
@@ -619,6 +625,8 @@ export interface OcxConfig {
    * is found, otherwise "opencodex". "codex" also falls back when no such binary exists.
    */
   nativeMainRefresh?: "codex" | "opencodex";
+  /** Use included quota to 100% for these accounts; preserves thresholds and credit-spending policy. */
+  codexUseRemainingQuotaAccountIds?: string[];
   /** Explicit top-level deletion intent used by stale whole-config rebases. */
   configRebaseProvenance?: OcxConfigRebaseProvenance | Record<string, unknown>;
   /** OpenAI provider-contract migration marker (v2 = single `openai` provider with account mode). */
@@ -1345,10 +1353,18 @@ export interface OcxComboTarget {
    * see `OcxComboConfig.cooldownWaitPolicy` (#5691).
    */
   lastResort?: boolean;
+  /**
+   * Pay-per-use target (for example an API-key row behind subscription targets). Only the
+   * configured keys with `allowMeteredComboTargets: true`, or a loopback-only combo
+   * with `allowMeteredTargets: true`, may reach it.
+   */
+  metered?: boolean;
 }
 
 export interface OcxComboConfig {
   targets: OcxComboTarget[];
+  /** Operator consent for metered targets on a loopback-only proxy. Default false; public listeners still require key consent. */
+  allowMeteredTargets?: boolean;
   /** Ordered failover (default), round-robin, weighted random, least-used, or quota reset-window selection. */
   strategy?: OcxComboStrategy;
   /** Successful requests retained on one RR selection batch. Default 1; range 1..100. */

@@ -5,7 +5,7 @@ export interface UsageModelView {
   query: string;
   matchedModelCount: number;
   returnedModelCount: number;
-  limit: 100;
+  limit: number;
   truncated: boolean;
 }
 
@@ -36,7 +36,7 @@ export function takeUsageSearchOption(args: string[]): string | undefined {
   return value;
 }
 
-export function selectUsageModelView<T extends { models?: unknown }>(report: T, rawQuery: string): Omit<T, "models"> & { models: SearchableModel[]; modelView: UsageModelView } {
+export function selectUsageModelView<T extends { models?: unknown }>(report: T, rawQuery: string, limit = 100): Omit<T, "models"> & { models: SearchableModel[]; modelView: UsageModelView } {
   if (!report || !Array.isArray(report.models)) throw new Error("Invalid usage model rows; retry after checking the runtime.");
   const models = report.models.map((raw: unknown): SearchableModel => {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("Invalid usage model row.");
@@ -53,6 +53,6 @@ export function selectUsageModelView<T extends { models?: unknown }>(report: T, 
   const matching = models.toSorted((a, b) => b.totalTokens - a.totalTokens).filter(row => !query
     || row.model.toLowerCase().includes(query) || row.provider.toLowerCase().includes(query)
     || (row.resolvedModel ?? "").toLowerCase().includes(query));
-  const selected = matching.slice(0, 100);
-  return { ...report, models: selected, modelView: { query, matchedModelCount: matching.length, returnedModelCount: selected.length, limit: 100, truncated: matching.length > selected.length } };
+  const selected = matching.slice(0, limit);
+  return { ...report, models: selected, modelView: { query, matchedModelCount: matching.length, returnedModelCount: selected.length, limit, truncated: matching.length > selected.length } };
 }
