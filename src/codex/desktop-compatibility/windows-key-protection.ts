@@ -4,6 +4,10 @@ import { resolveTrustedWindowsPowerShellExe } from "../../lib/windows-elevation"
 const MAX_INPUT = 65_536;
 const MAX_OUTPUT = 131_072;
 const PURPOSE = "opencodex/codex-desktop-compatibility/authority/v1";
+// A cold Windows PowerShell that must also load System.Security has been measured past 10s on a
+// loaded machine (Windows CI run 38591626343). The call is async and off the request path, so a
+// wider bound costs nothing while healthy and turns a slow start into success instead of a refusal.
+const DPAPI_TIMEOUT_MS = 20_000;
 const SCRIPT = [
   "$ErrorActionPreference='Stop'",
   "Add-Type -AssemblyName System.Security",
@@ -31,7 +35,7 @@ function runDpapi(operation: "protect" | "unprotect", data: Uint8Array): Promise
   if (data.byteLength === 0 || data.byteLength > MAX_INPUT) return Promise.reject(new Error("desktop_compatibility_key_size"));
   return new Promise((resolve, reject) => {
     const child = execFile(resolveTrustedWindowsPowerShellExe(), ["-NoProfile", "-NonInteractive", "-Command", SCRIPT], {
-      timeout: 10_000, maxBuffer: MAX_OUTPUT, windowsHide: true, encoding: "utf8",
+      timeout: DPAPI_TIMEOUT_MS, maxBuffer: MAX_OUTPUT, windowsHide: true, encoding: "utf8",
     }, (error, stdout) => {
       // Do not include PowerShell stderr, command output or the input in a propagated error.
       if (error || !/^[A-Za-z0-9+/]+={0,2}$/.test(stdout.trim())) {

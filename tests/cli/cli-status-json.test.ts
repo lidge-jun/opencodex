@@ -20,12 +20,14 @@ import { findDeadPid } from "../helpers/dead-pid";
 import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmColdSpawn } from "../helpers/cold-spawn-warmup";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS, STORE_BUDGET_MS } from "../helpers/test-budget";
+import { spawnTestChild } from "../helpers/spawn-test-child";
 import { inspectClientRotationRecoveryGate, readClientConnectionState } from "../../src/client/state";
 import * as lifecycleLock from "../../src/client/lifecycle-lock";
 import { writeDesktopDisconnectReceipt } from "../../src/claude/desktop-remote-store";
 
 const repoRoot = dirname(fileURLToPath(new URL("../../package.json", import.meta.url)));
 const cliPath = join(repoRoot, "src", "cli", "index.ts");
+const undrainedStatusHomes = new Set<string>();
 
 function runStatusJson(opencodexHome: string) {
   return spawnSync(process.execPath, [cliPath, "status", "--json"], {
@@ -62,7 +64,7 @@ async function withStatusVersionFixture<T>(
     try {
       await server?.stop(true);
     } finally {
-      removeTreeWithRetry(home);
+      if (!undrainedStatusHomes.has(home)) removeTreeWithRetry(home);
     }
   }
 }
@@ -72,28 +74,16 @@ async function runTimedStatus(
   codexHome: string,
   json: boolean,
   deadlineMs: number,
-): Promise<{ stdout: string; stderr: string; exitCode: number; timedOut: boolean; elapsedMs: number }> {
-  const startedAt = performance.now();
-  const child = Bun.spawn([process.execPath, cliPath, "status", ...(json ? ["--json"] : [])], {
+): ReturnType<typeof spawnTestChild> {
+  // Until exit and pipe closure are observed, fixture removal has no release evidence.
+  undrainedStatusHomes.add(home);
+  const result = await spawnTestChild([process.execPath, cliPath, "status", ...(json ? ["--json"] : [])], {
     cwd: repoRoot,
     env: { ...process.env, OPENCODEX_HOME: home, CODEX_HOME: codexHome },
-    stdout: "pipe", stderr: "pipe",
+    deadlineMs,
   });
-  let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
-    child.kill("SIGKILL");
-  }, deadlineMs);
-  try {
-    const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
-    ]);
-    return { stdout, stderr, exitCode, timedOut, elapsedMs: performance.now() - startedAt };
-  } finally {
-    clearTimeout(timer);
-    if (child.exitCode === null) child.kill("SIGKILL");
-    await child.exited;
-  }
+  if (!result.timedOut && result.reaped && result.pipesClosed) undrainedStatusHomes.delete(home);
+  return result;
 }
 
 describe("status version skew projection", () => {
@@ -106,7 +96,7 @@ describe("status version skew projection", () => {
     await warmColdSpawn("cli-index/status", async deadlineMs => {
       await withStatusVersionFixture(packageVersion(), "ocx-status-skew-cold-", async ({ home, codexHome }) => {
         const result = await runTimedStatus(home, codexHome, true, deadlineMs);
-        expect(result.timedOut).toBe(false);
+        expect(result).toMatchObject({ timedOut: false, reaped: true, pipesClosed: true });
         expect({ exitCode: result.exitCode, stderr: result.stderr }).toEqual({ exitCode: 0, stderr: "" });
         const parsed = JSON.parse(result.stdout);
         expect(parsed.schemaVersion).toBe(1);
@@ -137,7 +127,7 @@ describe("status version skew projection", () => {
           `[status-version-skew] proxy=${proxyVersion ?? "undefined"} `
           + `format=${json ? "json" : "human"} elapsedMs=${result.elapsedMs.toFixed(0)}`,
         );
-        expect(result.timedOut).toBe(false);
+        expect(result).toMatchObject({ timedOut: false, reaped: true, pipesClosed: true });
         // Preserve both gates while surfacing the child error when startup fails.
         expect({ exitCode: result.exitCode, stderr: result.stderr }).toEqual({ exitCode: 0, stderr: "" });
         if (json) {

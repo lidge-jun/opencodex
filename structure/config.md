@@ -62,7 +62,7 @@ test seam and the mutation types remain re-exported through `src/config.ts`. Suc
 `src/config/paths.ts` is the single owner of `OPENCODEX_HOME` expansion and resolution. It exposes
 the config directory and `config.json` path and retains the existing cache rule: a relative home is
 resolved once for each distinct raw environment value, so a later working-directory change cannot
-silently move the active installation.
+silently move the active installation. Config reads in this leaf and `src/config/load-degrade.ts` use NTFS ACLs on Windows and private POSIX modes elsewhere. Windows reads omit `chmod` before ACL hardening so repeated loads preserve successful object/freshness observations; external metadata changes still invalidate them. Directory flights keep their existing flush/reap lifecycle, and file/required-write failure policy is unchanged. `tests/windows/windows-config-read-acl-memo.test.ts` covers repeated loads, external invalidation and POSIX permissions.
 
 `src/config/process-state.ts` derives `ocx.pid` and `runtime-port.json` from that resolved directory.
 It owns their byte-compatible writes, parsing, expected-PID filters, cheap liveness, full OCX command
