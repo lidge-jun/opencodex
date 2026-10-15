@@ -160,5 +160,11 @@ These paths still use the internal Responses bridge or are not covered:
   top-level fields outside its allowlist without a feature effect, and does not apply
   `claudeCode.stabilizePromptCache`.
   A recognized Claude Code client keeps `context-management-2025-06-27` together with its
-  `context_management` body field. Dropped beta names appear once in the proxy log as
-  `anthropic-beta-dropped=<names>`.
+  `context_management` body field. For first-party Anthropic key and OAuth requests, any native
+  Messages client can send `thinking-binding-controls-2026-08-01` with `thinking.block_binding`
+  on adaptive or enabled thinking. The proxy strips that nested field when the beta is absent or
+  the destination does not support it, preserving the rest of the thinking configuration. Cloud
+  vendor endpoints and third-party compatible providers do not inherit first-party beta support.
+  Pairing uses the final header, including operator-configured betas; a beta alone is valid for
+  [thinking transformation diagnostics](https://platform.claude.com/docs/en/build-with-claude/preserved-thinking).
+  Dropped beta names appear once in the proxy log as `anthropic-beta-dropped=<names>`.

@@ -16,6 +16,8 @@ sidecar côté proxy invisible du client — même un worker qui ne spawn jamais
 
 ## Configuration
 
+Sur la page **Advisor**, choisissez le modèle dans le catalogue. Le sélecteur conserve exactement les identifiants natifs, de fournisseur, de compte, personnalisés et de combo. Les modèles désactivés ou en attente de sélection initiale ne sont pas proposés. Un identifiant enregistré absent du catalogue reste visible avec un avertissement, jusqu’à son remplacement ou sa suppression. Un échec de chargement conserve la sélection et propose de réessayer. Choisissez un modèle capable de fournir des conseils textuels : le catalogue ne garantit pas la compatibilité des consultations. La CLI et l’API acceptent toujours les chaînes de modèle prises en charge par le routeur.
+
 ```json
 {
   "advisor": {

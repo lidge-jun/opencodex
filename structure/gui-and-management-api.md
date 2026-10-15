@@ -32,7 +32,7 @@ Automatic activation retains its existing settings controls; dashboard quota que
 The companion settings contract in `src/companion/` persists menu-bar and widget preferences.
 `src/server/management/companion-routes.ts` exposes them and the usage timeline from
 `src/usage/timeline.ts`; its query and missing-measurement behavior follows [companion usage](companion.md).
-Only `/api/advisor/settings` lazily loads `advisor-routes.ts`, refreshing the config-scoped factory after a successful save; default requests stay outside [the optional Advisor subsystem](advisor.md).
+Only `/api/advisor/settings` lazily loads `advisor-routes.ts`, refreshing the config-scoped factory after a successful save; default requests stay outside [the optional Advisor subsystem](advisor.md). The dashboard selector follows the [catalog selection contract](advisor.md#dashboard-model-selection), preserving unknown saved selectors and catalog failure feedback.
 
 Native result continuations and function-result injection follow [the mode-specific result and control contract](transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
 Explicit Codex CLI installation observation is a local CLI surface, not a management API or GUI update permission. See the [read-only observation contract](runtime.md#explicit-codex-cli-installation-observation).
