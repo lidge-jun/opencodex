@@ -37,6 +37,7 @@
   "messages-native-scope.test.ts": "claude-integration", "catalog-auto-review-row.test.ts": "codex-integration",
   "cli-log-view-filter.test.ts": "cli",
   "cli-usage-model-search.test.ts": "cli",
+  "cli-usage-top.test.ts": "cli",
   "cli-companion-usage.test.ts": "cli",
   "cli-account-key-quota.test.ts": "cli",
   "cli-observe-snapshot.test.ts": "cli",

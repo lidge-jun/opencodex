@@ -22,7 +22,7 @@
     "management-sidecar-anthropic-instance.test.ts": "server", "anthropic2-usage-attribution.test.ts": "usage", "vision-anthropic-instance-sidecar.test.ts": "vision", "web-search-anthropic-instance.test.ts": "web-search",
     "provider-anthropic-instance.test.ts": "providers", "config-anthropic-instance-pool.test.ts": "config", "oauth-anthropic-instance-registration.test.ts": "oauth", "oauth-anthropic-instance-refresh.test.ts": "oauth",
     "claude-picker-upload.test.ts": "claude-integration", "claude-picker-linger.test.ts": "claude-integration", "messages-native-scope.test.ts": "claude-integration", "catalog-auto-review-row.test.ts": "codex-integration",
-    "cli-log-view-filter.test.ts": "cli", "cli-usage-model-search.test.ts": "cli", "cli-companion-usage.test.ts": "cli", "cli-account-key-quota.test.ts": "cli",
+    "cli-log-view-filter.test.ts": "cli", "cli-usage-model-search.test.ts": "cli", "cli-usage-top.test.ts": "cli", "cli-companion-usage.test.ts": "cli", "cli-account-key-quota.test.ts": "cli",
     "cli-observe-snapshot.test.ts": "cli", "cli-access-data-plane.test.ts": "cli", "cli-access-key-guard.test.ts": "cli", "cli-access-rename.test.ts": "cli",
     "cli-access-audio.test.ts": "cli", "cli-access-audio-live.test.ts": "cli", "cli-log-follow.test.ts": "cli", "cli-injection-follow.test.ts": "cli",
     "cli-usage-scope.test.ts": "cli", "cli-system-health.test.ts": "cli", "cli-companion-timeline.test.ts": "cli", "server-cli-key-probe-admission.test.ts": "server",
