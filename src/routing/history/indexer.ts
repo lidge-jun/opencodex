@@ -195,7 +195,7 @@ function readStoredMetaField(dbHandle: Database, key: string): string {
   return metaValue(dbHandle, key) ?? "";
 }
 
-function sourceIdentityMatches(dbHandle: Database, revision: UsageLogRevision | null): boolean {
+export function sourceIdentityMatches(dbHandle: Database, revision: UsageLogRevision | null): boolean {
   const stored = readIndexedMeta(dbHandle);
   if (revision === null) return stored.sourceSize === 0;
   const storedPath = readStoredMetaField(dbHandle, HISTORY_META_KEYS.sourcePath);
