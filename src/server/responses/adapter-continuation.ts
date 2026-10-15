@@ -440,6 +440,16 @@ export function createAdapterContinuations(
               resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
               config.cacheRetention,
             );
+            // Rebind both the continuation clone and the outer request that persists the response.
+            for (const requestParsed of [nextParsed, parsed]) {
+              bindRouteReasoningReplayScope({
+                parsed: requestParsed,
+                providerName: route.providerName,
+                provider: route.provider,
+                adapterName: transportState.activeAdapter.name,
+                oauthCredentialSnapshot: transportState.replayOAuthCredentialSnapshot,
+              });
+            }
             sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, transportState.activeAdapter.name, logCtx.accountLogLabel);
             recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, transportState.activeAdapter.name);
             nextContinuationRecoveryKind = response.status === 401 ? "oauth-401" : "anthropic-oauth-429";
