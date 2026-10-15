@@ -444,7 +444,14 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
       "`inspect star` reads the repository star status only. Starring uses your GitHub identity and is available from the dashboard alone.",
     ],
   },
-  { name: "logs", usage: "ocx logs [filters] [--follow] [--json|--jsonl|--events]", summary: "Read or follow request logs." },
+  {
+    name: "logs",
+    usage: "ocx logs [filters] [--follow] [--json|--jsonl|--events]; ocx logs history [selectors] [--cursor <token>] [--json|--jsonl]; ocx logs get <request-id> [--json]",
+    summary: "Read or follow request logs.",
+    details: [
+      "Default reads the recent ring. `history` pages the derived index with a resumable cursor; `get` reads one canonical row; `explain` is the route-decision view.",
+    ],
+  },
   {
     name: "usage",
     usage: "ocx usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--api-key-id <id>] [--search <text>] [--json]",

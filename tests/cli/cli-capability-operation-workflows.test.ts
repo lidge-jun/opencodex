@@ -80,6 +80,16 @@ describe("operation capability workflows use existing handlers", () => {
     expect(await handleObserveCommand(["logs", "explain", "req/1", "--json"], explain.deps)).toBe(0);
     expect(explain.requests).toEqual([{ method: "GET", path: "/api/request-history/req%2F1/route-decision", body: null }]);
   });
+  test("logs history pages the index and get reads one canonical row", async () => {
+    const io = transport({ entries: [], hasMore: false, index: { indexedRows: 0 } });
+    expect(capability("logs history").routes).toEqual([{ method: "GET", path: "/api/request-history" }]);
+    expect(await handleObserveCommand(["logs", "history", "--provider", "xai", "--limit", "10", "--json"], io.deps)).toBe(0);
+    expect(io.requests).toEqual([{ method: "GET", path: "/api/request-history?provider=xai&limit=10", body: null }]);
+    const get = transport({ requestId: "req/1" });
+    expect(capability("logs get").routes).toEqual([{ method: "GET", path: "/api/request-history/{id}" }]);
+    expect(await handleObserveCommand(["logs", "get", "req/1", "--json"], get.deps)).toBe(0);
+    expect(get.requests).toEqual([{ method: "GET", path: "/api/request-history/req%2F1", body: null }]);
+  });
   test("usage keeps surface and custom bounds in the actual request", async () => {
     const io = transport({ customWindow: true, since: 1000, until: 2000 });
     expect(capability("observe usage").flags.map(flag => flag.name)).toContain("--surface");

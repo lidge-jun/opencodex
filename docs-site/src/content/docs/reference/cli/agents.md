@@ -450,6 +450,24 @@ Any displayed totals reflect readable records only. If a filter has no readable 
 the warning and guidance instead of total lines; skipped records may contain matches.
 `--json` preserves the response-level `usageIncomplete` diagnostic and reason.
 
+### Page indexed request history
+
+```bash
+ocx logs history --provider xai --status 200 --limit 50 --json
+ocx logs history --cursor '<nextCursor>' --json
+ocx logs get <request-id> --json
+```
+
+`ocx observe logs history` and `ocx observe logs get` are the equivalent family
+forms. These read the derived request-history index, not the recent `ocx logs`
+ring. `--limit` is 1–100 (default 50). `--from` and `--to` accept epoch
+milliseconds or full ISO datetimes with a timezone and are inclusive. `--json`
+returns `{entries,hasMore,nextCursor,index}`. `--jsonl` emits rows only; when
+more pages exist, `nextCursor=…` is printed on stderr so a caller can resume
+without mixing the token into the row stream. Empty matches succeed. `get`
+returns one canonical row by request ID; `ocx logs explain` remains the
+route-decision view for that same ID.
+
 ### Filter a bounded log snapshot
 
 ```bash

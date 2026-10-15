@@ -14,6 +14,7 @@ import {
 } from "./runtime-api";
 import { followLogs } from "./log-follow";
 import { handleLogFilterCommand } from "./log-view-filter";
+import { handleLogGetCommand, handleLogHistoryCommand } from "./log-history";
 import { followInjection } from "./injection-follow";
 import type { ObserveStreamDeps } from "./observe-stream";
 import { formatUsageReport } from "./usage-report";
@@ -30,6 +31,8 @@ const USAGE = `Usage:
   ocx observe logs [--provider <name>] [--model <id>] [--status <code>]
       [--conversation <id>] [--account <label>] [--limit <n>] [--follow] [--json|--jsonl] [--events]
   ocx logs explain <request-id> [--json]
+  ocx logs history [selectors] [--cursor <token>] [--limit <1-100>] [--json|--jsonl]
+  ocx logs get <request-id> [--json]
   ocx logs filter [selectors] [--scan-limit <1..2000>] [--limit <1..2000>] [--json|--jsonl]
   ocx logs rebuild-index
   ocx logs index-status
@@ -320,6 +323,8 @@ export async function handleObserveCommand(argv: string[], deps: ObserveStreamDe
     if (sub === "logs") {
       const action = rest[0];
       if (action === "filter") streamExit = await handleLogFilterCommand(rest.slice(1), deps, formatLog);
+      else if (action === "history") await handleLogHistoryCommand(rest.slice(1), deps, formatLog);
+      else if (action === "get") await handleLogGetCommand(rest.slice(1), deps, formatLog);
       else if (action === "explain") await explain(rest.slice(1), deps);
       else if (action === "rebuild-index") await rebuildIndex(rest.slice(1), deps);
       else if (action === "index-status") await indexStatus(rest.slice(1), deps);
