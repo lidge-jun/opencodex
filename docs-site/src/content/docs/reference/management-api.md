@@ -650,6 +650,12 @@ setting interacts with `claudeCode.enabled` across upgrades and downgrades.
 | `GET, PUT /api/provider-context-caps` | Read or update global, all-provider, or one-provider context caps | 400 invalid request; 404 unknown provider |
 | `GET /api/provider-presets` | Return GUI provider presets derived from the runtime registry | — |
 
+Provider reads include the optional boolean `inferContextWindow` when configured. Provider PATCH
+accepts only a boolean or `null` to clear this setting; omission preserves it. A same-name POST
+also preserves an omitted setting, including the latest stored `false`; an explicit submitted
+boolean wins. See [Context windows on custom providers](/reference/configuration/providers/#context-windows-on-custom-providers)
+for its default-off, custom-provider-only behavior.
+
 The provider context-cap response includes `caps` (active limits) and `values` (last selected
 values, retained while disabled). Enabling a provider without `value` restores its selection,
 or uses the global `contextCapValue` on first enable. This also applies to OpenAI: the switch
@@ -855,6 +861,17 @@ ports or overwrite the existing connection record. Restart returns to Observe, n
 `native_routing_unverified` means the native root/profile routing cannot be matched to this
 process's bound OpenCodex listener. Runtime status may expose `contextFailure` for this condition
 or `build_unverified`. These states disable response correction without claiming an app repair.
+
+A status response can also carry `buildAssessment`, the public metadata of the last completed
+build check: `assessedVersion` (the exact package this runtime was assessed against),
+`observedVersion`, `verified` and `completedAt`. It records a past observation, not a live
+install reading: a stopped runtime, an app update or a pending or interrupted check can leave it
+older than the installed package, and only a completed check replaces it. `observedVersion` is
+null unless discovery matched the assessed package family and entry point; an identified newer
+build keeps its own version with `verified` false, and `verified` always describes the package
+observed at `completedAt`, never whatever is installed later. The field is absent until the
+service creates its probe during start and `null` until that probe finishes a check; reading
+status never starts one.
 
 Apply requires a recently observed eligible exhaustion snapshot and lasts at most three minutes
 at the response layer. It changes two account-UI gate flags, not usage percentages, credits,
