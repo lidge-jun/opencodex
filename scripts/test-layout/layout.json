@@ -1249,6 +1249,7 @@
     "oauth-open-browser-choice.test.ts": "oauth",
     "oauth-open-url-result.test.ts": "oauth",
     "oauth-provider-reconcile.test.ts": "oauth",
+    "oauth-reconcile-operator-maps.test.ts": "oauth",
     "oauth-public-surface.test.ts": "oauth",
     "oauth-reauth-bind.test.ts": "oauth",
     "oauth-refresh-generic-lock.test.ts": "oauth",
