@@ -154,6 +154,14 @@ eligible Enterprise accounts. Cloud Code Assist serves Argon only to the Antigra
 OpenCodex sends Argon requests and model discovery with the CLI User-Agent
 (`antigravity/cli/1.3.4`) and keeps the IDE User-Agent for every other model.
 
+For Gemini on Antigravity, including Argon, provider-marked thought summaries stay separate
+from the answer: Responses uses reasoning summary items, Chat Completions uses
+`reasoning_content`, and Messages uses `thinking` blocks. Clients decide how to display those
+fields. A Responses client can request `reasoning.summary: "none"` to suppress summaries;
+this does not turn off the model's internal reasoning. A thought signature is continuation
+metadata and can accompany ordinary text, so its presence alone does not hide that text.
+OpenCodex preserves unmarked answer text even when its wording sounds like planning or analysis.
+
 The built-in `google-antigravity` model list is Gemini 3.8 Flash (`gemini-3.8-flash`), Gemini 4 Argon
 (`gemini-4-argon`), Claude Opus 5.5 (`claude-opus-5-5`), and Claude Sonnet 5.5
 (`claude-sonnet-5-5`), each with low, medium, and high efforts. What you actually see is your
