@@ -38,6 +38,7 @@ export const RESPONSES_CORE_MODULES = [
   "skills-snapshot.ts",
   "shadow-target-availability.ts",
   "compaction-routing.ts",
+  "main-hard-lock-routing.ts",
   "compaction-recovery.ts",
   "compaction-recovery-policy.ts",
   "memory-models.ts",

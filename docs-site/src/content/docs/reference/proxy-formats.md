@@ -85,7 +85,11 @@ declare a partial catalog and discover the rest at runtime through their own too
 which — not the translated catalog snapshot — owns the full declaration boundary. A call
 outside the declared list is relayed for the client to validate; a call invented against an
 explicitly empty `tools: []` is still refused, because no deferred registry exists under an
-empty declaration. Those refusals keep the `undeclared_tool_call` code on every wire:
+empty declaration. This applies to managed native routes and translated responses, including
+client tool calls in final hosted-search, image or video responses. Only the current turn's declaration applies;
+omitted, partial, and hosted-only catalogs keep their existing behavior. Caller-forward routes
+retain their exemption, and internal hosted operations are unaffected. Those refusals keep the
+`undeclared_tool_call` code on every wire:
 
 - **Chat Completions:** a `data:` frame containing an OpenAI-style `error` object carrying the
   code, then the stream closes without a success completion or `[DONE]`; buffered JSON returns
@@ -95,6 +99,10 @@ empty declaration. Those refusals keep the `undeclared_tool_call` code on every 
   without a successful `message_stop` or `[DONE]`; buffered JSON returns HTTP 502 `api_error`
   with the code. A deterministic catalog violation is never reported as a retryable
   `overloaded_error` (HTTP 529).
+
+Native Messages also recognizes inline system-message tool definitions alongside `tools: []`.
+Those names remain callable until permanently removed; an inline declaration does not authorize
+unrelated client tools. Hosted MCP calls and server-tool argument streams retain their native shape.
 
 Separately, on every inbound wire, a provider's `default.`-namespaced call is normalized back
 to the bare tool name the request declared (`default.Read` → `Read`).

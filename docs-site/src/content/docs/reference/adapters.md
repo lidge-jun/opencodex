@@ -164,6 +164,11 @@ body and response, with narrow compatibility rewrites for routed gateways.
 `forward` uses configured static headers without relaying caller authorization; `key` uses the
 configured provider key.
 
+When history from Google is replayed to canonical ChatGPT Codex or the official OpenAI Responses
+API, the adapter removes item-level `extra_content` from the outgoing HTTP request or WebSocket
+create. Native `/responses/compact` applies the same projection. The original history keeps the Google
+thought signature for later Google turns. Other Responses gateways retain their extensions.
+
 The adapter preserves the incoming client's `User-Agent` as a fallback in both auth modes because
 some Responses-compatible providers use the Codex client fingerprint for compatibility behavior.
 An explicitly configured provider `User-Agent` remains authoritative regardless of header casing;

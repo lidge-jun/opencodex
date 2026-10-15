@@ -33,7 +33,7 @@ import { redactSecretString } from "../../lib/redact";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
 
 
-import { NATIVE_OPENAI_CONTEXT_OVERRIDES, SUPPORTED_NATIVE_OPENAI_SLUGS, UPSTREAM_NATIVE_ENTRIES, hasNativeOpenAiCapabilityMetadata, nativeMultiAgentVersion, nativeOpenAiAutoCompactTokenLimit, nativeOpenAiContextWindow, nativeOpenAiMaxInputTokens, type NativeContextLimitsInput } from "./metadata";
+import { NATIVE_OPENAI_CONTEXT_OVERRIDES, SUPPORTED_NATIVE_OPENAI_SLUGS, UPSTREAM_NATIVE_ENTRIES, hasNativeOpenAiCapabilityMetadata, nativeMultiAgentVersion, nativeOpenAiAutoCompactTokenLimit, nativeOpenAiConfiguredContextLimit, nativeOpenAiContextWindow, nativeOpenAiMaxInputTokens, type NativeContextLimitsInput } from "./metadata";
 import { clampAutoCompactTokenLimit } from "../../providers/auto-compact-budget";
 import { trustedAccountBoundNativeCatalogSlug } from "./account-models";
 import { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "./kinds";
@@ -506,7 +506,7 @@ export function isNativeOpenAiEntry(entry: RawEntry): boolean {
  * Narrow any already-resolved native window by the user levers.
  *
  * Used for the fields the accessors do not own (`max_context_window`, and preserved rows
- * that carry no static override) so every field on a row lands at the same width.
+ * that carry no static override). The advertised maximum may exceed the default window.
  */
 function narrowNativeMaxContextWindow(
   slug: string,
@@ -514,12 +514,7 @@ function narrowNativeMaxContextWindow(
   limits?: NativeContextLimitsInput,
 ): number | undefined {
   if (typeof value !== "number" || value <= 0) return value;
-  const resolved = nativeOpenAiContextWindow(slug, limits);
-  const authoritative = nativeOpenAiContextWindow(slug);
-  // The accessor pair tells us how far the levers moved this slug; apply the same delta to a
-  // field the accessor does not model, without ever raising it.
-  if (resolved === undefined || authoritative === undefined) return value;
-  return Math.min(value, Math.max(resolved, 1));
+  return applyProviderContextCap(value, nativeOpenAiConfiguredContextLimit(slug, limits));
 }
 
 export function applyNativeOpenAiContextOverride(entry: RawEntry, limits?: NativeContextLimitsInput): void {
@@ -636,7 +631,8 @@ export function ensureStrictCatalogFields(
   if (
     typeof entry.max_context_window !== "number"
     || entry.max_context_window <= 0
-    || ((options.isRouted === true || !isNativeOpenAiEntry(entry)) && entry.max_context_window > contextWindow)
+    || ((options.isRouted === true || (!isNativeOpenAiEntry(entry)
+      && trustedAccountBoundNativeCatalogSlug(entry) === undefined)) && entry.max_context_window > contextWindow)
   ) {
     entry.max_context_window = contextWindow;
   }

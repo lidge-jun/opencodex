@@ -29,6 +29,8 @@ import { repoPath, repoRoot } from "../helpers/repo-root";
 import { captureStartupChildOutput, STARTUP_OUTPUT_TAIL_CHARS } from "../helpers/startup-child-output";
 
 const CHILD_TIMEOUT_MS = 10_000;
+// Allow both child phases and cleanup to finish before Bun aborts the test.
+const CHILD_TEST_TIMEOUT_MS = 3 * CHILD_TIMEOUT_MS;
 const configModuleUrl = pathToFileURL(repoPath("src/config.ts")).href;
 const generationGuardRaceScript = `
   import { existsSync, writeFileSync } from "node:fs";
@@ -353,7 +355,7 @@ test("two real processes racing one generation run exactly one callback", async 
       generation: { value: 0 },
     });
   } finally { await stopGuardRaceChildren(children); }
-});
+}, CHILD_TEST_TIMEOUT_MS);
 
 test("generation-race readiness reports a child's early exit and stderr", async () => {
   const readyPath = join(testRoot, "exited.ready");
@@ -366,7 +368,7 @@ test("generation-race readiness reports a child's early exit and stderr", async 
     expect(guardRaceDiagnostics([child])).toContain("fixture generation startup error");
     expect(child.process.exitCode).toBe(7);
   } finally { await stopGuardRaceChildren([child]); }
-});
+}, CHILD_TEST_TIMEOUT_MS);
 
 test("generation-race diagnostics drain both pipes with bounded tails", async () => {
   const readyPath = join(testRoot, "output.ready");
@@ -385,7 +387,7 @@ test("generation-race diagnostics drain both pipes with bounded tails", async ()
     expect(output.stdout.tail).toEndWith("stdout-tail");
     expect(output.stderr.tail).toEndWith("stderr-tail");
   } finally { await stopGuardRaceChildren([child]); }
-});
+}, CHILD_TEST_TIMEOUT_MS);
 
 test("generation-race cleanup reaps a child still waiting after readiness", async () => {
   const readyPath = join(testRoot, "held.ready");
@@ -396,7 +398,7 @@ test("generation-race cleanup reaps a child still waiting after readiness", asyn
   try { await waitForPaths([readyPath], [child]); }
   finally { await stopGuardRaceChildren([child]); }
   expect(child.process.exitCode !== null || child.process.signalCode !== null).toBe(true);
-});
+}, CHILD_TEST_TIMEOUT_MS);
 
 test("a throwing guard callback rolls back and releases the transaction", () => {
   expect(() => withExpectedConfigGenerationSync({ value: 0 }, () => {

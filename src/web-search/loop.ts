@@ -6,6 +6,7 @@ import { cloneProviderOpaqueToolCallMetadata } from "../responses/provider-opaqu
 import type { AttemptRecoveryKind } from "../usage/log";
 import { isTruncatedStopReason } from "../responses/truncated-stop-reason";
 import { bridgeToResponsesSSE } from "../bridge";
+import { guardEmptyToolCatalogStream, type ClientToolCatalogRestriction } from "../lib/empty-tool-catalog";
 import { runWebSearch, type SidecarOutcome, type SidecarOutcomeRecorder, type SidecarSettings } from "./executor";
 import { runAnthropicWebSearch } from "./anthropic-executor";
 import { runXaiWebSearch, type XaiSearchOptions } from "./xai-executor";
@@ -276,6 +277,7 @@ class LoopError extends Error {
  */
 export interface WebSearchLoopDeps {
   parsed: OcxParsedRequest;
+  clientToolCatalogRestriction?: ClientToolCatalogRestriction;
   adapter: ProviderAdapter;
   incomingMeta: IncomingMeta;
   /**
@@ -1001,7 +1003,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   }
 
   const sse = bridgeToResponsesSSE(
-    produce(), parsed._responseModelId ?? parsed.modelId, toolNsMap, freeform, toolSearch, () => {
+    guardEmptyToolCatalogStream(produce(), deps.clientToolCatalogRestriction, translatorBudget), parsed._responseModelId ?? parsed.modelId, toolNsMap, freeform, toolSearch, () => {
       const elapsed = Date.now() - loopT0;
       if (executedSearchCount > 0 || searchesExecuted > 0) {
         console.warn(`[web-search-loop] cancelled — ${executedSearchCount} real searches, ${searchesExecuted - executedSearchCount} placeholders, ${elapsed}ms`);
@@ -1011,6 +1013,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
     {
       translatorBudget,
       replayCacheScope: parsed._reasoningReplayScope,
+      ...(deps.clientToolCatalogRestriction ? { ...deps.clientToolCatalogRestriction, enforceDeclaredToolNames: false } : {}),
       ...(deps.forceEmptyResponseId ? { responseId: "" } : {}),
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       hideRawReasoning: parsed.options.hideRawReasoning,

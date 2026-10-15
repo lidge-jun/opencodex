@@ -130,3 +130,13 @@ ocx v2 mode v1
 ```
 
 The CLI does not prompt. It is the same setting, so choose it knowing what this page describes.
+
+## Concurrent child limit
+
+In **Models → Model settings**, the subagent limit control sets the maximum number of concurrent
+child agents, excluding the primary agent. It remains available in v1, base and v2, including
+hybrid mode with the global v2 flag disabled. Choose the surface mode separately from this limit.
+
+Raising the cap permits more children; it does not create them automatically or guarantee faster
+execution. Start a new Codex session after changing the limit. If a long-running App host still
+uses the previous limit, restart that host.

@@ -29,6 +29,7 @@ import { mapToolChoice, buildTools, customToolNamespaces } from "./parser-tools"
 import { parseTextFormat } from "./parser-text-format";
 import { externalTaskInputContent } from "./task-input";
 import { normalizeVisualizationContext } from "./visualization-directives";
+import { frameCompactionHistory } from "./compaction-history-framing";
 
 /**
  * Wrap a remembered proxy-side signature as provider metadata for a replayed tool call.
@@ -190,7 +191,7 @@ export function parseRequest(
   if (!parsed.success) {
     throw new Error(`responses parse error: ${parsed.error.message}`);
   }
-  const data = parsed.data;
+  const data = frameCompactionHistory(parsed.data);
   const now = Date.now();
   const messages: OcxMessage[] = [];
   // Built before the item loop: a custom_tool_call echoed back in `input` needs the

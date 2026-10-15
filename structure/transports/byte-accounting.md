@@ -279,6 +279,12 @@ The [compaction routing override](responses-failover.md#compaction-routing-overr
 
 `src/lib/sse-decoder.ts` recognizes CR, LF and CRLF line endings, including CRLF split between fetch chunks. Delimiters are consumed before field retention; event/comment ordering, EOF dispatch and translator-budget release remain shared across all three forms. The delimiter search keeps native `indexOf` cursors for the next CR and LF in each decoded chunk, so scanning stays linear for every framing.
 
+Native Chat's optional reasoning capture (`src/server/chat-native-reasoning.ts`) charges retained
+reasoning and tool ids before concatenation and reserves the previous string during replacement.
+Its separate 256 KiB/64-call bound drops the fallback capture without interrupting the wire relay.
+Terminal, error and cancellation paths release collector retention; the shared replay cache owns
+its own bounded text after insertion. The [native continuation contract](../data-planes/inbound-compat.md#native-chat-thinking-continuation) defines replay scope and cache-miss behavior.
+
 The Opus 5.5 progress normalizer in `src/adapters/anthropic-progress.ts` reserves its one-block
 thinking/signature buffer before concatenation, replaces signatures rather than appending, and
 releases reservations on completion, overflow and cancellation. Buffered response transformation
