@@ -25,7 +25,7 @@ import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { accessSync, constants, existsSync, linkSync, readdirSync, readFileSync, readlinkSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, win32 } from "node:path";
+import { basename, dirname, join, posix, win32 } from "node:path";
 import { getConfigDir } from "../config/paths";
 import { resolveServiceOwnership } from "../service/state";
 
@@ -245,8 +245,9 @@ function consentedDesktopBundle(home: string, installId: string, run: Execute): 
   const args = registration.ProgramArguments;
   // The shapes auto-launch writes: [program] or [program, "--autostart"]; see the migration
   // rules in desktop/src-tauri/src/login_registration.rs, which classify anything else Leave.
+  // This is a macOS plist path, regardless of the host running an injected launch probe.
   if (registration.Label !== DESKTOP_PLIST_LABEL || !Array.isArray(args)
-    || (args.length !== 1 && args.length !== 2) || typeof args[0] !== "string" || !isAbsolute(args[0])
+    || (args.length !== 1 && args.length !== 2) || typeof args[0] !== "string" || !posix.isAbsolute(args[0])
     || (args.length === 2 && args[1] !== "--autostart")
     || (registration.Program !== undefined && registration.Program !== args[0])) return null;
   const executable = realpathSync(args[0]);

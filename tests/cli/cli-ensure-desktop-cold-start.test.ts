@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
 import {
   acquireDesktopLaunchLease,
   DESKTOP_COLD_START_TIMEOUT_MS,
@@ -171,7 +171,10 @@ describe("Desktop process detection by executable identity", () => {
     plist?: "present" | "absent"; executable?: "present" | "absent" | "directory"; bundleName?: string;
     bundleExecutable?: unknown; program?: unknown; relativeProgram?: boolean;
   } = {}) {
-    const home = mkdtempSync(join(tmpdir(), "ocx-desktop-home-"));
+    // Keep the bundle on cwd's drive: Windows relative() returns an absolute path across drives.
+    const fixtureRoot = join(process.cwd(), ".tmp");
+    mkdirSync(fixtureRoot, { recursive: true });
+    const home = mkdtempSync(join(fixtureRoot, "ocx-desktop-home-"));
     const bundle = join(home, "Applications", options.bundleName ?? "OpenCodex.app");
     const executable = join(bundle, "Contents", "MacOS", "opencodex-desktop");
     mkdirSync(join(bundle, "Contents", "MacOS"), { recursive: true });
@@ -184,7 +187,9 @@ describe("Desktop process detection by executable identity", () => {
     mkdirSync(store, { recursive: true });
     if (options.installId !== undefined) writeFileSync(join(store, "install-id"), `${options.installId}\n`);
     mkdirSync(join(home, "Library", "LaunchAgents"), { recursive: true });
-    const program = options.relativeProgram ? relative(process.cwd(), executable) : executable;
+    // A root-relative POSIX spelling also reaches this same-drive fixture on Windows.
+    const absoluteProgram = process.platform === "win32" ? executable.slice(2).replaceAll("\\", "/") : executable;
+    const program = options.relativeProgram ? relative(process.cwd(), executable) : absoluteProgram;
     const registration = { Label: options.label ?? "OpenCodex", RunAtLoad: true,
       ProgramArguments: options.bareArgs ? [program] : (options.args ?? [program, "--autostart"]),
       ...("program" in options ? { Program: options.program } : {}) };
@@ -196,7 +201,7 @@ describe("Desktop process detection by executable identity", () => {
       if (command !== "/usr/bin/plutil") return "";
       return readFileSync(target, "utf8");
     };
-    return { home, bundle, executable, seen, run };
+    return { home, bundle, executable, program, seen, run };
   }
   const launch = (fixture: ReturnType<typeof fakeDesktopHome>, ownership: () => ServiceOwnershipResolution = () => owned) =>
     launchDesktopApp({ platform: "darwin", home: fixture.home, ownership, run: fixture.run });
@@ -239,6 +244,8 @@ describe("Desktop process detection by executable identity", () => {
   test("an existing relative registration path cannot select a bundle from the caller's working directory", () => {
     const fixture = fakeDesktopHome({ installId: "install-a", relativeProgram: true });
     try {
+      expect(isAbsolute(fixture.program)).toBe(false);
+      expect(realpathSync(fixture.program)).toBe(realpathSync(fixture.executable));
       expect(launch(fixture)).toBe(false);
       expect(fixture.seen.some(call => call[0] === "/usr/bin/open")).toBe(false);
     } finally { removeTreeWithRetry(fixture.home); }
@@ -259,6 +266,8 @@ describe("Desktop process detection by executable identity", () => {
   test("malformed registration arguments and a conflicting Program never launch", () => {
     for (const options of [{ args: [] }, { args: [123] }, { args: "opencodex-desktop" },
       { args: ["/some/app", "--other"] }, { args: ["/some/app", "--autostart", "extra"] },
+      { args: ["C:\\OpenCodex.app\\Contents\\MacOS\\opencodex-desktop"] },
+      { args: ["C:OpenCodex.app\\Contents\\MacOS\\opencodex-desktop"] },
       { program: "/another/app" }, { program: null }]) {
       const fixture = fakeDesktopHome({ installId: "install-a", ...options });
       try { expect(launch(fixture)).toBe(false); expect(fixture.seen).toHaveLength(1); }
@@ -271,7 +280,7 @@ describe("Desktop process detection by executable identity", () => {
     try {
       const plist = join(fixture.home, "Library", "LaunchAgents", "OpenCodex.plist");
       const registration = JSON.parse(readFileSync(plist, "utf8"));
-      writeFileSync(plist, JSON.stringify({ ...registration, Program: fixture.executable }));
+      writeFileSync(plist, JSON.stringify({ ...registration, Program: fixture.program }));
       expect(launch(fixture)).toBe(true);
       for (const failingCommand of ["/usr/bin/plutil", "/usr/bin/open"]) {
         expect(launchDesktopApp({ platform: "darwin", home: fixture.home, ownership: () => owned,
@@ -343,7 +352,11 @@ describe("Desktop process detection by executable identity", () => {
       expect(launch(fixture, () => ({ kind: "owned", ownership: { owner: "cli", installId: "install-a", consentGeneration: 1 }, revision: 2 }))).toBe(false);
       expect(fixture.seen).toEqual([]);
     } finally { removeTreeWithRetry(fixture.home); }
-    expect(launchDesktopApp({ platform: "linux", run: () => { throw new Error("must not run"); } })).toBe(false);
+    for (const platform of ["linux", "win32"] as const) {
+      const commands: string[] = [];
+      expect(launchDesktopApp({ platform, run: command => { commands.push(command); return ""; } })).toBe(false);
+      expect(commands).toEqual([]);
+    }
   });
 });
 
