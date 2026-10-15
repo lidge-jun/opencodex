@@ -40,7 +40,8 @@ so matching uses the provider-visible tool name.
 `stripProviderInputItemMetadata` in `src/adapters/openai-responses/request-strips.ts` only for
 OpenAI-operated Responses destinations (canonical ChatGPT Codex and the official OpenAI API).
 This outbound projection is shared by HTTP and WebSocket creates, including concrete combo/fallback
-children. It preserves caller-owned history for Google thought-signature replay and leaves arbitrary
+children, and the direct native compact send in `src/server/responses/compact.ts`.
+It preserves caller-owned history for Google thought-signature replay and leaves arbitrary
 gateway extensions intact; it does not allowlist item fields or traverse tool arguments/results.
 
 > Decision record: [ADR-0057](../decisions/ADR-0057-google-tool-call-thought-signature-replay.md)

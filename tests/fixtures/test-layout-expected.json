@@ -864,6 +864,7 @@
   "openai-provider-option-tooling.test.ts": "adapters/openai", "openai-provider-option.test.ts": "adapters/openai",
   "responses-forward-client-headers.test.ts": "responses", "openai-responses-passthrough.test.ts": "responses",
   "responses-native-item-extensions.test.ts": "responses",
+  "responses-native-item-extensions-compact.test.ts": "responses",
   "responses-main-quota-observation.test.ts": "responses",
   "compaction-continuation-note.test.ts": "responses",
   "compaction-continuation-wire.test.ts": "responses",

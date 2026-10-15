@@ -192,7 +192,7 @@ fails (#4853). The key is scoped by DESTINATION rather than by the canonical sur
 `src/server/responses/compact.ts` spreads the caller's raw body into the native
 `/responses/compact` request without passing through this adapter, and that endpoint is offered
 only to OpenAI-operated destinations; stripping on the canonical predicate would make
-`openai-apikey` behave differently on its two endpoints.
+`openai-apikey` behave differently on its two endpoints. Native compact also applies the [Google replay projection](../providers/google.md#google-tool-call-thought-signature-replay) before its direct send.
 
 This table is not an unknown-parameter sanitizer, and the distinction is the point. It lists keys a
 client is observed to send, so an unrecognized top-level key reaches the wire untouched rather than
