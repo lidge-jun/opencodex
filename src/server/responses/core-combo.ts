@@ -252,6 +252,30 @@ interface JevComboChoice {
   candidate: JevCandidate;
 }
 
+/** A target's JEV effort choices, or undefined when an explicit allowlist has none still supported. */
+function jevChoiceEfforts(
+  config: OcxConfig,
+  target: NonNullable<ReturnType<typeof getCombo>>["targets"][number],
+): OcxComboDefaultEffort[] | undefined {
+  let ladder: string[] | undefined;
+  try {
+    const route = routeConcreteModel(config, targetKey(target));
+    ladder = supportedLadderFor({ provider: route.provider, modelId: route.modelId });
+  } catch {
+    // Preserve the existing routing-failure surface. Unknown capability becomes the explicit
+    // no-effort choice rather than broadening JEV's effort allowlist.
+    ladder = undefined;
+  }
+  const supportedEfforts = (ladder ?? []).filter(isCodexReasoningEffort) as OcxComboDefaultEffort[];
+  const configuredEfforts = target.reasoningEfforts;
+  const reasoningEfforts = configuredEfforts === undefined
+    ? supportedEfforts
+    : configuredEfforts.filter(effort => supportedEfforts.includes(effort));
+  // An explicit allowlist is restrictive. If catalog capabilities drift until no configured
+  // effort remains supported, omit the target instead of silently broadening JEV's choices.
+  return configuredEfforts !== undefined && reasoningEfforts.length === 0 ? undefined : reasoningEfforts;
+}
+
 /** Enumerate the current ordinary Combo eligibility set without retaining attempted picks. */
 function eligibleJevComboChoices(
   config: OcxConfig,
@@ -270,23 +294,8 @@ function eligibleJevComboChoices(
     excluded.add(key);
     // The TypeSafe row owns a decision credential, not an inference transport.
     if (pick.target.provider === JEV_PROVIDER_ID) continue;
-    let ladder: string[] | undefined;
-    try {
-      const route = routeConcreteModel(config, key);
-      ladder = supportedLadderFor({ provider: route.provider, modelId: route.modelId });
-    } catch {
-      // Preserve the existing routing-failure surface. Unknown capability becomes the explicit
-      // no-effort choice rather than broadening JEV's effort allowlist.
-      ladder = undefined;
-    }
-    const supportedEfforts = (ladder ?? []).filter(isCodexReasoningEffort) as OcxComboDefaultEffort[];
-    const configuredEfforts = pick.target.reasoningEfforts;
-    const reasoningEfforts = configuredEfforts === undefined
-      ? supportedEfforts
-      : configuredEfforts.filter(effort => supportedEfforts.includes(effort));
-    // An explicit allowlist is restrictive. If catalog capabilities drift until no configured
-    // effort remains supported, omit the target instead of silently broadening JEV's choices.
-    if (configuredEfforts !== undefined && reasoningEfforts.length === 0) continue;
+    const reasoningEfforts = jevChoiceEfforts(config, pick.target);
+    if (!reasoningEfforts) continue;
     choices.push({
       pick: { ...pick, attempted: [key] },
       candidate: {
@@ -573,7 +582,10 @@ export async function executeComboResponses(
   if (combo.strategy === "jev") {
     const choices = eligibleJevComboChoices(config, comboId, targetEligible, Date.now());
     const first = choices[0];
-    if (!first) return comboUnavailable(comboId, undefined, comboExclusionReasons(config, comboId, targetEligible));
+    if (!first) {
+      return comboUnavailable(comboId, undefined, comboExclusionReasons(config, comboId, target =>
+        targetEligible(target) && target.provider !== JEV_PROVIDER_ID && jevChoiceEfforts(config, target) !== undefined));
+    }
     const resolvedFailOpenEffort = resolveEffortAtOrBelow(
       "medium",
       first.candidate.reasoningEfforts,
