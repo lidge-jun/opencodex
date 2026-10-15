@@ -1,4 +1,5 @@
 {
+  "catalog-native-max-context.test.ts": "codex-integration",
   "codex-history-pending-wal.test.ts": "codex-integration",
   "service-log.test.ts": "service",
   "service-health-sentinel-policy.test.ts": "service",

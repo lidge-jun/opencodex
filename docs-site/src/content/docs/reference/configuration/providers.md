@@ -144,6 +144,15 @@ and `modelAutoCompactTokenLimits` can narrow its window and soft compaction budg
 `modelAutoCompactTokenLimits: { "gpt-6-astra": 700000 }` lowers the long-window default of 784,800.
 An explicit smaller provider cap or target limit still wins, including native-alias combos.
 
+Without a configured hard limit, the native catalog keeps the advertised `max_context_window`
+separate from the default `context_window` (for Astra, 872,000 versus 272,000). Compaction still
+uses the effective default window. To give one model 500,000 tokens and the others 300,000, set
+`providers.openai.contextWindow` to `300000` and
+`providers.openai.modelContextWindows` to `{ "gpt-6.1-sol": 500000 }`.
+The per-model value overrides the provider window; `providerContextCaps.openai`, when enabled,
+remains a ceiling for every native model and must be at least `500000` for this example.
+Each model's own capacity still bounds the result.
+
 The API row has 1,050,000 context, 922,000 maximum input, 128,000 maximum output, text/image input,
 and API reasoning efforts through `max`. OpenCodex's routed synthetic Ultra control retains its
 existing wire-effort mapping; it is not an additional API effort. There is no Astra `-pro` alias.

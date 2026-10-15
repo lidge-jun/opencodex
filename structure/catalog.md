@@ -313,7 +313,7 @@ it does not relabel HTTP model listings or virtual `*-pro` rows.
 
 Astra has its own pinned native row: 272,000 default context, 872,000 opt-in ceiling,
 low-through-ultra effort, low default, and native multi-agent effort `xhigh`. The native-alias
-fallback passes the same configured limits to context, max input and compaction. Unrelated routed
+fallback passes configured limits to context, max input and compaction; [maximum windows](catalog-vendor-context.md#native-maximum-windows) remain separate. Unrelated routed
 templates clear the native multi-agent effort; canonical Astra-forward custom rows retain it and
 the pinned Fast speed description. Sync repairs only the exact old built-in Astra Fast description,
 preserving custom descriptions and other stored row fields.
