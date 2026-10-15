@@ -87,8 +87,13 @@ export function StartupDetailsSection({
   const { t } = useI18n();
   // Repair only rewrites stale assets — conflict/disabled need uninstall/reinstall, not repair.
   const serviceNeedsRepair = data.serviceSupported && data.serviceInstalled && data.serviceStale && !data.serviceConflict;
-  const shimNeedsRepair = data.shimInstalled && !data.shimHealthy;
-  const actionsDisabled = installBusy !== null || failed || loading || desktopManagesStartup(data);
+  // An intact overlay that is not yet on the shell's PATH needs activation; reinstalling changes nothing.
+  const shimAwaitingActivation = data.shimInstalled && !data.shimHealthy && data.shimActivationPending === true;
+  const shimNeedsRepair = data.shimInstalled && !data.shimHealthy && !shimAwaitingActivation;
+  const shimActionsDisabled = installBusy !== null || failed || loading;
+  // Desktop owns startup, so a second supervisor stays off. The shim is safe under Desktop: its
+  // `ocx ensure` waits for or starts the Desktop app instead of a competing CLI proxy (#6971).
+  const serviceActionsDisabled = shimActionsDisabled || desktopManagesStartup(data);
 
   return (
     <section className="panel startup-details">
@@ -113,34 +118,35 @@ export function StartupDetailsSection({
             no={t(data.serviceConflict ? "startup.conflict" : data.serviceStale ? "startup.stale" : data.serviceInstalled ? "startup.unhealthy" : data.serviceSupported ? "startup.notInstalled" : "startup.unsupported")}
           />
           {data.serviceSupported && !data.serviceInstalled && (
-            <button type="button" className="btn btn-primary btn-sm" aria-label={`${t("startup.service")} - ${t("startup.install")}`} disabled={actionsDisabled} onClick={() => onInstall("install-service")}>
+            <button type="button" className="btn btn-primary btn-sm" aria-label={`${t("startup.service")} - ${t("startup.install")}`} disabled={serviceActionsDisabled} onClick={() => onInstall("install-service")}>
               {t(installBusy === "install-service" ? "startup.installing" : "startup.install")}
             </button>
           )}
           {serviceNeedsRepair && (
-            <button type="button" className="btn btn-primary btn-sm" aria-label={`${t("startup.service")} - ${t("startup.repair")}`} disabled={actionsDisabled} onClick={() => onInstall("install-service", { repair: true })}>
+            <button type="button" className="btn btn-primary btn-sm" aria-label={`${t("startup.service")} - ${t("startup.repair")}`} disabled={serviceActionsDisabled} onClick={() => onInstall("install-service", { repair: true })}>
               {t(installBusy === "install-service" ? "startup.repairing" : "startup.repair")}
             </button>
           )}
         </div>
       </div>
       <div className="startup-detail-row">
-        <div><strong>{t("startup.shim")}</strong><span>{t("startup.shimHint")}</span></div>
+        <div><strong>{t("startup.shim")}</strong><span>{t(shimAwaitingActivation ? "startup.shimActivationHint" : "startup.shimHint")}</span></div>
         <div className="startup-detail-actions">
           <StartupStateBadge
             ok={data.shimHealthy && data.autostartEnabled}
             yes={t(data.shimCoverage === "cli-only" ? "startup.cliOnly" : "startup.healthy")}
             no={t(data.shimInstalled
-              ? data.shimHealthy && !data.autostartEnabled ? "startup.installedDisabled" : "startup.stale"
+              ? data.shimHealthy && !data.autostartEnabled ? "startup.installedDisabled"
+                : shimAwaitingActivation ? "startup.shimActivationPending" : "startup.stale"
               : "startup.notInstalled")}
           />
           {!data.shimInstalled && (
-            <button type="button" className="btn btn-primary btn-sm" aria-label={`${t("startup.shim")} - ${t("startup.install")}`} disabled={actionsDisabled} onClick={() => onInstall("install-shim")}>
+            <button type="button" className="btn btn-primary btn-sm" aria-label={`${t("startup.shim")} - ${t("startup.install")}`} disabled={shimActionsDisabled} onClick={() => onInstall("install-shim")}>
               {t(installBusy === "install-shim" ? "startup.installing" : "startup.install")}
             </button>
           )}
           {shimNeedsRepair && (
-            <button type="button" className="btn btn-primary btn-sm" aria-label={`${t("startup.shim")} - ${t("startup.repair")}`} disabled={actionsDisabled} onClick={() => onInstall("install-shim", { repair: true })}>
+            <button type="button" className="btn btn-primary btn-sm" aria-label={`${t("startup.shim")} - ${t("startup.repair")}`} disabled={shimActionsDisabled} onClick={() => onInstall("install-shim", { repair: true })}>
               {t(installBusy === "install-shim" ? "startup.repairing" : "startup.repair")}
             </button>
           )}
@@ -270,7 +276,7 @@ export function StartupRecoverySection({
             </button>
           </div>
         )}
-        {!desktopManagesStartup(data) && <div className="startup-command-row">
+        <div className="startup-command-row">
           <div>
             <strong>{t("startup.command.shim")}</strong>
             <code>{data.commands.installShim}</code>
@@ -278,7 +284,7 @@ export function StartupRecoverySection({
           <button type="button" className="btn btn-ghost btn-sm" onClick={() => onCopy(data.commands.installShim)}>
             {copied === data.commands.installShim ? t("startup.copied") : t("startup.copy")}
           </button>
-        </div>}
+        </div>
         <div className="startup-command-row">
           <div>
             <strong>{t("startup.command.native")}</strong>

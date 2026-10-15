@@ -6,6 +6,7 @@ import { handleResponses, handleResponsesCompact } from "../../src/server/respon
 import { decodeCompactionSummary, encodeCompactionSummary } from "../../src/responses/compaction";
 import { decodeRetainedCompaction, encodeRetainedCompaction } from "../../src/responses/retained-compaction";
 import { prepareCompactionRetention } from "../../src/server/responses/compaction-retention";
+import { bridgeToResponsesSSE } from "../../src/bridge";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import { parseRequest } from "../../src/responses/parser";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
@@ -56,6 +57,26 @@ function archives(): string[] {
 }
 
 describe("routed v2 retention", () => {
+  test.each([undefined, {}, { maxTokens: 1 }, { enabled: false, maxTokens: 1 }])(
+    "retention stays off without an explicit true opt-in (%j)", async setting => {
+      let sent = "";
+      globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+        sent = await new Request(url, init).text();
+        return jsonResponse(completedPayload("progress"));
+      }) as typeof fetch;
+      for (const v1 of [true, false]) {
+        const config = keyProviderConfig();
+        config.reasoningRetention = setting;
+        const request = compactionRequest(v1 ? { model: "gw/some-model", input: [reasoning] } : body());
+        const response = await (v1 ? handleResponsesCompact : handleResponses)(request, config, { model: "", provider: "" });
+        const output = await result(response);
+        expect(sent).toContain("excluded option A");
+        expect(JSON.stringify(output)).not.toContain("ocx2:");
+        expect(JSON.stringify(output)).not.toContain("locally retained assistant reasoning");
+        expect(archives()).toEqual([]);
+      }
+    });
+
   test.each([false, true])("exact reasoning survives compaction, replay and repeated compaction (stream=%s)", async stream => {
     let sent = "";
     globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
@@ -66,6 +87,7 @@ describe("routed v2 retention", () => {
       ]) : jsonResponse(completedPayload("current progress"));
     }) as typeof fetch;
     const config = keyProviderConfig();
+    config.reasoningRetention = { enabled: true };
     const first = await result(await handleResponses(compactionRequest(body(stream)), config, { model: "", provider: "" }));
     expect(first.output).toHaveLength(1);
     expect(first.output[0].type).toBe("compaction");
@@ -90,7 +112,7 @@ describe("routed v2 retention", () => {
 
   test("canonical native v2 retains its original protocol and creates no local archive", async () => {
     const config = keyProviderConfig({ authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" });
-    config.reasoningRetention = { maxTokens: 1 };
+    config.reasoningRetention = { enabled: true, maxTokens: 1 };
     let sent = "";
     globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
       sent = await new Request(url, init).text();
@@ -118,6 +140,7 @@ describe("routed v2 retention", () => {
       return jsonResponse(completedPayload("progress"));
     }) as typeof fetch;
     const config = keyProviderConfig();
+    config.reasoningRetention = { enabled: true };
     const first = await result(await handleResponses(compactionRequest(body()), config, { model: "", provider: "" }));
     const compact = await handleResponsesCompact(compactionRequest({ model: "gw/some-model", input: first.output }), config, { model: "", provider: "" });
     const next = await compact.json() as { output: unknown[] };
@@ -129,7 +152,7 @@ describe("routed v2 retention", () => {
   test("overflow archives exact text and publishes the path in the single envelope", async () => {
     globalThis.fetch = (async () => jsonResponse(completedPayload("progress"))) as typeof fetch;
     const config = keyProviderConfig();
-    config.reasoningRetention = { maxTokens: 1 };
+    config.reasoningRetention = { enabled: true, maxTokens: 1 };
     const json = await result(await handleResponses(compactionRequest(body()), config, { model: "", provider: "" }));
     const data = decodeRetainedCompaction(json.output[0].encrypted_content)!;
     expect(data.reasoning).toEqual([]);
@@ -141,7 +164,7 @@ describe("routed v2 retention", () => {
 
   test.each([false, true].flatMap(stream => ["failed", "incomplete", "empty", "opaque", "http-error", "cancelled"].map(outcome => [stream, outcome] as const)))("stream=%s %s does not retain a provisional archive", async (stream, outcome) => {
     const config = keyProviderConfig();
-    config.reasoningRetention = { maxTokens: 1 };
+    config.reasoningRetention = { enabled: true, maxTokens: 1 };
     const abort = new AbortController();
     globalThis.fetch = (async () => {
       expect(archives()).toHaveLength(1);
@@ -170,9 +193,53 @@ describe("routed v2 retention", () => {
     expect(archives()).toEqual([]);
   });
 
+  test.each([undefined, {}, { maxTokens: 1 }, { enabled: false, maxTokens: 1 }])(
+    "disabled preparation allocates no retention state or archive (%j)", setting => {
+      const config = keyProviderConfig();
+      config.reasoningRetention = setting;
+      const parsed = parseRequest(body());
+      const raw = parsed._rawBody;
+      const messages = parsed.context.messages;
+      const budget = createTranslatorBudget();
+      expect(prepareCompactionRetention(parsed, config, undefined, budget, new AbortController().signal)).toBeUndefined();
+      expect(parsed._rawBody).toBe(raw);
+      expect(parsed.context.messages).toBe(messages);
+      expect(parsed._compactionRetention).toBeUndefined();
+      expect(archives()).toEqual([]);
+      expect(budget.snapshot().currentBytes).toBe(0);
+      budget.dispose();
+    });
+
+  test("completed-frame overflow removes the provisional archive", async () => {
+    const config = keyProviderConfig();
+    config.reasoningRetention = { enabled: true, maxTokens: 1 };
+    const parsed = parseRequest(body(true));
+    const budget = createTranslatorBudget({ maxTurnBytes: 4096 });
+    const retention = prepareCompactionRetention(parsed, config, undefined, budget, new AbortController().signal)!;
+    expect(archives()).toHaveLength(1);
+    async function* events() {
+      yield { type: "text_delta" as const, text: "summary" };
+      yield { type: "done" as const };
+    }
+    try {
+      const stream = bridgeToResponsesSSE(events(), "model", undefined, undefined, undefined, undefined, 2000, {
+        compaction: true, compactionRetention: parsed._compactionRetention, translatorBudget: budget,
+        onCompletedResponse() {
+          budget.chargeRetained(4096 - budget.snapshot().currentBytes, { kind: "retained_collectors" });
+        },
+      });
+      const text = await retention.deliver(new Response(stream)).text();
+      expect(text).toContain("response.output_item.done");
+      expect(text).toContain("translation_buffer_limit");
+      expect(text).toContain("response.failed");
+      expect(text).not.toContain('event: response.completed');
+      expect(archives()).toEqual([]);
+    } finally { retention.dispose(); budget.dispose(); }
+  });
+
   test("body cancellation cleans up before a stalled upstream cancel settles", () => {
     const config = keyProviderConfig();
-    config.reasoningRetention = { maxTokens: 1 };
+    config.reasoningRetention = { enabled: true, maxTokens: 1 };
     const parsed = parseRequest(body(true));
     const budget = createTranslatorBudget();
     const retention = prepareCompactionRetention(parsed, config, undefined, budget, new AbortController().signal)!;
@@ -186,7 +253,7 @@ describe("routed v2 retention", () => {
 
   test("same-target retries reuse one provisional archive", async () => {
     const config = keyProviderConfig({ retryOn429: { attempts: 1, intervalMs: 1, maxIntervalMs: 1 } });
-    config.reasoningRetention = { maxTokens: 1 };
+    config.reasoningRetention = { enabled: true, maxTokens: 1 };
     const files: string[][] = [];
     globalThis.fetch = (async () => {
       files.push(archives());

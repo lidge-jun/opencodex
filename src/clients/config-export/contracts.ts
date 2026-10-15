@@ -202,6 +202,7 @@ export interface ExportContext {
 export type DroidReasoningDefaults = Record<string, string>;
 
 export type ExportClientId =
+  | "qoder"
   | "opencode"
   | "pi"
   | "omp"

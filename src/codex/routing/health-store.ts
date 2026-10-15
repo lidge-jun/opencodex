@@ -163,7 +163,7 @@ export function deleteScopedHealth(accountId: string, scope: CodexQuotaScope): v
 }
 
 /** Live quota-refusal avoidance for an account, including the lane the request belongs to. */
-function codexQuotaAvoidUntil(
+export function codexQuotaAvoidUntil(
   accountId: string,
   quotaScope: CodexQuotaScope | undefined,
   now: number,

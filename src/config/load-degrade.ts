@@ -3,6 +3,7 @@ import { isSubagentModelEntry, rawSubagentModelForce } from "./subagent-models";
 import { chmodSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { compactionRecoveryConfigError } from "./schema/compaction-recovery";
+import { desktopCompatibilityConfigError } from "./schema/desktop-compatibility";
 import { blockedModelRedirectsError } from "./schema/blocked-model-redirects";
 import { anthropicSidecarConfigError } from "./schema/anthropic-account-pool";
 import {
@@ -51,9 +52,12 @@ import { hasWarnedInheritedFastWireConflict, markWarnedInheritedFastWireConflict
 
 export function hardenExistingSecret(path: string): void {
   if (existsSync(path) && !isPassiveRead()) {
-    try { chmodSync(path, 0o600); } catch { /* best-effort */ }
     if (process.platform === "win32") {
+      // Preserve the ACL helper's metadata observation across reads. Windows chmod does
+      // not establish a private DACL and can invalidate that observation before every load.
       hardenSecretPath(path, { required: false });
+    } else {
+      try { chmodSync(path, 0o600); } catch { /* best-effort */ }
     }
   }
 }
@@ -131,6 +135,7 @@ export function warnDegradedTopLevelOptIns(rawParsed: unknown, validated: OcxCon
   const retentionWarning = degradedReasoningRetentionWarning(rawParsed, validated);
   if (retentionWarning) console.warn(retentionWarning);
   if (compactionRecoveryConfigError(rawParsed)) console.warn("⚠️  invalid compactionRecovery disabled; the original compaction failure is preserved");
+  if (desktopCompatibilityConfigError(rawParsed)) console.warn("Invalid desktopCompatibility startup preference ignored; no desktop compatibility service will start automatically.");
   if (blockedModelRedirectsError(rawParsed)) console.warn("⚠️  invalid blockedModelRedirects ignored; provider routing remains available");
   const chatgptDesktop = chatgptDesktopConfigIssue(rawParsed);
   if (chatgptDesktop) console.warn(`⚠️  config.json ${chatgptDesktop} — the whole chatgptDesktop block is ignored, so the ChatGPT desktop integration reads as off`);
@@ -146,7 +151,7 @@ export function warnDegradedTopLevelOptIns(rawParsed: unknown, validated: OcxCon
 
 export function degradedReasoningRetentionWarning(rawParsed: unknown, validated: OcxConfig): string | null {
   if (rawConfigRecord(rawParsed)?.reasoningRetention === undefined || validated.reasoningRetention !== undefined) return null;
-  return "config.json reasoningRetention is invalid — using the default 20% share and 100,000 token cap";
+  return "config.json reasoningRetention is invalid — reasoning retention is disabled";
 }
 
 /**

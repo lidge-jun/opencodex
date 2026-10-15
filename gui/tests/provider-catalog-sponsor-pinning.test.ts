@@ -16,13 +16,13 @@ const row = (id: string, label: string, sponsor?: CatalogPreset["sponsor"]): Cat
 test("sponsors are pinned first, Main before Standard, alphabetical within a tier", () => {
   const input = [
     row("zeta", "Zeta"),
-    row("packycode", "PackyCode", "standard"),
+    row("lumen", "Lumen", "standard"),
     row("alpha", "Alpha"),
     row("tokenlab", "TokenLab", "standard"),
     row("orcarouter", "OrcaRouter", "standard"),
     row("moon", "Moon Labs", "main"),
   ];
-  expect(pinSponsors(input).map(p => p.id)).toEqual(["moon", "orcarouter", "packycode", "tokenlab", "zeta", "alpha"]);
+  expect(pinSponsors(input).map(p => p.id)).toEqual(["moon", "lumen", "orcarouter", "tokenlab", "zeta", "alpha"]);
 });
 
 test("alphabetical among sponsors ignores registry position and case", () => {

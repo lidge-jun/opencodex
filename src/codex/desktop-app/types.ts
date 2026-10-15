@@ -51,6 +51,8 @@ export interface DesktopProcess {
   createdAt: string;
   /** Absolute executable path, used for membership and the shell predicate. */
   executable: string;
+  /** Windows-only private launch context; never included in restart results or logs. */
+  commandLine?: string;
 }
 
 export interface DesktopAppAdapter {

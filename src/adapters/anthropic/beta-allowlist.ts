@@ -6,7 +6,10 @@
  * list for the destination's provider class; a match is re-emitted in this file's own spelling,
  * so no caller byte ever reaches the wire, and everything else is dropped. The caller learns
  * nothing about which value was dropped, and the trace records only that something was
- * (`anthropic-beta-dropped`), never the value.
+ * (`anthropic-beta-dropped`). The proxy log names a dropped value only when it is on this file's
+ * closed list of published beta names ({@link KNOWN_UNFORWARDED_BETAS}); anything else is counted,
+ * never echoed, so a caller-chosen value (which may carry an account or tenant name) cannot reach
+ * the log, while drift in the known set stays visible by name.
  *
  * Proxy-owned betas (the OAuth pair, the fast-mode beta) are not listed here: the lane sets them
  * itself from the provider's own configuration, exactly as the adapter does.
@@ -36,6 +39,37 @@ const FIRST_PARTY_BETAS: readonly string[] = [
  */
 const COMPATIBLE_BETAS: readonly string[] = [];
 const INLINE_TOOLS_BETA = "inline-tools-2026-09-15";
+/** Pairs with the top-level `context_management` body field; the builder forwards that field
+ * only when this beta survives the allowlist, so header and body never disagree. */
+export const CONTEXT_MANAGEMENT_BETA = "context-management-2025-06-27";
+
+/**
+ * Published betas this lane recognizes but does not forward. Only these, and the allowlisted
+ * values above, are ever named in the log; the list grants nothing on the wire.
+ */
+const KNOWN_UNFORWARDED_BETAS: readonly string[] = [
+  "claude-code-20250219",
+  "oauth-2025-04-20",
+  "fast-mode-2026-02-01",
+  "thinking-token-count-2026-05-13",
+  "mid-conversation-tool-changes-2026-07-01",
+  "advanced-tool-use-2025-11-20",
+  "effort-2025-11-24",
+  "extended-cache-ttl-2025-04-11",
+  "context-1m-2025-08-07",
+  "tool-search-tool-2025-10-19",
+  "files-api-2025-04-14",
+  "token-efficient-tools-2025-02-19",
+  "fine-grained-tool-streaming-2025-05-14",
+  "code-execution-2025-08-25",
+  "mcp-client-2025-04-04",
+  "web-fetch-2025-09-10",
+  "computer-use-2025-01-24",
+  "output-128k-2025-02-19",
+  "structured-outputs-2025-11-13",
+  "skills-2025-10-02",
+  "model-context-window-exceeded-2025-08-26",
+];
 
 /** An observed Claude client already requested these native body schemas. Advisor may
  * perform its explicitly requested model sub-inference; no feature or body is injected. */
@@ -48,6 +82,7 @@ const NATIVE_CLIENT_BETAS: readonly string[] = [
   "thinking-display-updates-2026-08-18",
   "prompt-caching-scope-2026-01-05",
   "mid-conversation-system-2026-04-07",
+  CONTEXT_MANAGEMENT_BETA,
 ];
 const NATIVE_CLIENT_ALLOWLIST = new Map(NATIVE_CLIENT_BETAS.map(beta => [beta.toLowerCase(), beta]));
 
@@ -62,9 +97,22 @@ const MAX_CALLER_BETA_HEADER_CHARS = 2048;
 export interface AllowlistedAnthropicBetas {
   /** Allowlisted values in this file's spelling, first-seen order, no duplicates. */
   betas: string[];
-  /** Whether any non-empty caller value was left out. Never says which. */
+  /** Whether any non-empty caller value was left out. */
   dropped: boolean;
+  /**
+   * Log-safe names of the dropped values: a value is named only when it is on this file's closed
+   * list of known beta names; every other dropped value is summarized by
+   * `droppedUnrecognized`. Bounded, deduplicated, never part of the wire or the trace.
+   */
+  droppedNames: string[];
+  /** Dropped values left unnamed (not a known beta, past the name cap, or an oversized header). */
+  droppedUnrecognized: number;
 }
+
+const LOGGABLE_BETA_NAMES: ReadonlySet<string> = new Set([
+  ...KNOWN_UNFORWARDED_BETAS, ...NATIVE_CLIENT_BETAS, ...FIRST_PARTY_BETAS,
+].map(beta => beta.toLowerCase()));
+const MAX_DROPPED_NAMES = 16;
 
 /**
  * Filter the caller's comma-separated `anthropic-beta` header for one provider class. An absent
@@ -75,20 +123,51 @@ export function allowlistAnthropicBetas(
   providerClass: AnthropicProviderClass,
   features: { inlineTools?: boolean; observedNativeClient?: boolean } = {},
 ): AllowlistedAnthropicBetas {
-  if (typeof callerHeader !== "string" || callerHeader.trim() === "") return { betas: [], dropped: false };
-  if (callerHeader.length > MAX_CALLER_BETA_HEADER_CHARS) return { betas: [], dropped: true };
+  if (typeof callerHeader !== "string" || callerHeader.trim() === "") {
+    return { betas: [], dropped: false, droppedNames: [], droppedUnrecognized: 0 };
+  }
+  if (callerHeader.length > MAX_CALLER_BETA_HEADER_CHARS) {
+    return { betas: [], dropped: true, droppedNames: [], droppedUnrecognized: 1 };
+  }
   const allowed = providerClass === "first-party" && features.observedNativeClient ? NATIVE_CLIENT_ALLOWLIST : ALLOWLISTS[providerClass];
   const betas: string[] = [];
-  let dropped = false;
+  const droppedNames: string[] = [];
+  let droppedUnrecognized = 0;
   for (const part of callerHeader.split(",")) {
     const token = part.trim().toLowerCase();
     if (!token) continue;
     const canonical = allowed.get(token) ?? (providerClass === "first-party" && features.inlineTools
       && token === INLINE_TOOLS_BETA ? INLINE_TOOLS_BETA : undefined);
-    if (canonical === undefined) dropped = true;
-    else if (!betas.includes(canonical)) betas.push(canonical);
+    if (canonical !== undefined) {
+      if (!betas.includes(canonical)) betas.push(canonical);
+    } else if (LOGGABLE_BETA_NAMES.has(token) && droppedNames.length < MAX_DROPPED_NAMES) {
+      if (!droppedNames.includes(token)) droppedNames.push(token);
+    } else {
+      droppedUnrecognized++;
+    }
   }
-  return { betas, dropped };
+  return { betas, dropped: droppedNames.length > 0 || droppedUnrecognized > 0, droppedNames, droppedUnrecognized };
+}
+
+const loggedDropSets = new Set<string>();
+const MAX_LOGGED_DROP_SETS = 64;
+
+/**
+ * One proxy log line per distinct dropped set per process: `anthropic-beta-dropped=<names>`.
+ * Only the log-safe names from {@link allowlistAnthropicBetas} are written; other values are
+ * reported as a count. Repeated requests with the same set stay quiet.
+ */
+export function logDroppedAnthropicBetas(
+  result: Pick<AllowlistedAnthropicBetas, "droppedNames" | "droppedUnrecognized">,
+  warn: (line: string) => void = console.warn,
+): void {
+  if (result.droppedNames.length === 0 && result.droppedUnrecognized === 0) return;
+  const names = [...result.droppedNames].sort().join(",");
+  const key = `${names}|${result.droppedUnrecognized > 0 ? "u" : ""}`;
+  if (loggedDropSets.has(key) || loggedDropSets.size >= MAX_LOGGED_DROP_SETS) return;
+  loggedDropSets.add(key);
+  const unrecognized = result.droppedUnrecognized > 0 ? ` (+${result.droppedUnrecognized} unnamed)` : "";
+  warn(`[anthropic] anthropic-beta-dropped=${names || "-"}${unrecognized}`);
 }
 
 /** The allowlist for one class, for documentation and tests. */

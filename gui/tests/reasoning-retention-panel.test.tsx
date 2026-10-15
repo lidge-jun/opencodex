@@ -11,7 +11,7 @@ let previous: Record<string, PropertyDescriptor | undefined>;
 let win: Window;
 let root: Root | undefined;
 let container: HTMLDivElement;
-let setting: { maxContextPercent?: number; maxTokens?: number } | null;
+let setting: { enabled?: boolean; maxContextPercent?: number; maxTokens?: number } | null;
 let failLoad: boolean;
 let failSave: boolean;
 let writes: unknown[];
@@ -63,22 +63,81 @@ async function change(id: string, value: string) {
     input.dispatchEvent(new win.Event("input", { bubbles: true }) as unknown as Event);
   });
 }
-test("loads defaults, saves custom limits and resets to defaults", async () => {
+async function toggleEnabled() {
+  await act(async () => { button("Enable reasoning retention").click(); });
+}
+function enabledButton() { return button("Enable reasoning retention"); }
+
+test.each([null, { enabled: false }, { maxTokens: 50000, maxContextPercent: 10 }])(
+  "starts off without explicit opt-in: %j", async initial => {
+    setting = initial;
+    await render();
+    expect(enabledButton().getAttribute("aria-pressed")).toBe("false");
+    expect(container.querySelector("#reasoning-retention-percent")).toBeNull();
+    expect(container.querySelector("#reasoning-retention-tokens")).toBeNull();
+    expect(button("Save").disabled).toBe(true);
+    expect(writes).toEqual([]);
+  },
+);
+
+test("advanced settings starts collapsed and opens through its summary", async () => {
   await render();
+  const details = container.querySelector<HTMLDetailsElement>("details")!;
+  const summary = details.querySelector("summary")!;
+  expect(summary.textContent).toBe("Advanced settings");
+  expect(details.open).toBe(false);
+  await act(async () => { summary.click(); });
+  expect(details.open).toBe(true);
+  expect(details.contains(enabledButton())).toBe(true);
+  expect(container.textContent).toContain("plaintext reasoning");
+  expect(container.textContent).toContain("no total-size limit or expiry");
+});
+
+test("explicit enable saves numeric defaults and disable persists off", async () => {
+  await render();
+  await toggleEnabled();
+  expect(writes).toEqual([]);
+  expect(button("Save").disabled).toBe(false);
+  await act(async () => { button("Save").click(); });
+  expect(writes).toEqual([{ reasoningRetention: { enabled: true, maxContextPercent: 20, maxTokens: 100000 } }]);
+  await toggleEnabled();
+  expect(container.querySelector("#reasoning-retention-tokens")).toBeNull();
+  await act(async () => { button("Save").click(); });
+  expect(writes.at(-1)).toEqual({ reasoningRetention: { enabled: false } });
+  await render("/reload");
+  expect(enabledButton().getAttribute("aria-pressed")).toBe("false");
+  expect(button("Save").disabled).toBe(true);
+});
+
+test("legacy threshold-only settings remain off until explicitly enabled", async () => {
+  setting = { maxContextPercent: 12.5, maxTokens: 50000 };
+  await render();
+  await toggleEnabled();
+  expect(container.querySelector<HTMLInputElement>("#reasoning-retention-tokens")!.value).toBe("50000");
+  await act(async () => { button("Save").click(); });
+  expect(writes).toEqual([{ reasoningRetention: { enabled: true, maxContextPercent: 12.5, maxTokens: 50000 } }]);
+});
+
+test("saves custom limits and reset removes settings and turns off", async () => {
+  await render();
+  await toggleEnabled();
   expect(container.querySelector<HTMLInputElement>('#reasoning-retention-percent')!.value).toBe("20");
   expect(container.querySelector<HTMLInputElement>('#reasoning-retention-tokens')!.value).toBe("100000");
   await change("percent", "12.5");
   await change("tokens", "50000");
   await act(async () => { button("Save").click(); });
-  expect(writes).toEqual([{ reasoningRetention: { maxContextPercent: 12.5, maxTokens: 50000 } }]);
+  expect(writes).toEqual([{ reasoningRetention: { enabled: true, maxContextPercent: 12.5, maxTokens: 50000 } }]);
   await render("/reload");
   expect(container.querySelector<HTMLInputElement>('#reasoning-retention-tokens')!.value).toBe("50000");
-  await act(async () => { button("Restore defaults").click(); });
+  await act(async () => { button("Reset and turn off").click(); });
   expect(writes.at(-1)).toEqual({ reasoningRetention: null });
-  expect(container.querySelector<HTMLInputElement>('#reasoning-retention-percent')!.value).toBe("20");
+  expect(enabledButton().getAttribute("aria-pressed")).toBe("false");
+  expect(container.querySelector("#reasoning-retention-percent")).toBeNull();
+  expect(button("Reset and turn off").disabled).toBe(true);
 });
 test("invalid numeric limits disable save and expose validation", async () => {
   await render();
+  await toggleEnabled();
   for (const [id, value] of [["percent", "0"], ["percent", "101"], ["tokens", "1.5"], ["tokens", ""]]) {
     await change(id, value);
     expect(button("Save").disabled).toBe(true);
@@ -90,6 +149,7 @@ test("invalid numeric limits disable save and expose validation", async () => {
 test.each([["percent", "0", "tokens", "12.5"], ["tokens", "1.5", "percent", "50000"]])(
   "only invalid %s is associated with the validation alert", async (id, invalidValue, otherId, validValue) => {
     await render();
+    await toggleEnabled();
     await change(id!, invalidValue!);
     const invalid = container.querySelector<HTMLInputElement>(`#reasoning-retention-${id}`)!;
     const valid = container.querySelector<HTMLInputElement>(`#reasoning-retention-${otherId}`)!;
@@ -112,6 +172,7 @@ test("save failures keep edits and load failures can retry", async () => {
   expect(button("Save").disabled).toBe(true);
   failLoad = false;
   await act(async () => { button("Retry").click(); });
+  await toggleEnabled();
   await change("tokens", "50000"); failSave = true;
   await act(async () => { button("Save").click(); });
   expect(container.querySelector('[role="alert"]')?.textContent).toContain("Could not save");
@@ -123,16 +184,18 @@ test("missing settings payload disables writes instead of assuming defaults", as
   globalThis.fetch = (async () => Response.json({})) as typeof fetch;
   await render();
   expect(button("Save").disabled).toBe(true);
-  expect(button("Restore defaults").disabled).toBe(true);
+  expect(button("Reset and turn off").disabled).toBe(true);
   expect(container.querySelector('[role="alert"]')?.textContent).toContain("Could not load");
   globalThis.fetch = normalFetch;
   await act(async () => { button("Retry").click(); });
+  await toggleEnabled();
   await change("tokens", "50000");
   expect(button("Save").disabled).toBe(false);
 });
 
 test("pending save disables controls and duplicate clicks send only one update", async () => {
   await render();
+  await toggleEnabled();
   await change("tokens", "50000");
   const pending = Promise.withResolvers<Response>();
   globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
@@ -142,19 +205,21 @@ test("pending save disables controls and duplicate clicks send only one update",
   await act(async () => { button("Save").click(); button("Save").click(); });
   expect(writes).toHaveLength(1);
   expect(button("Save").disabled).toBe(true);
+  expect(enabledButton().disabled).toBe(true);
+  expect(button("Reset and turn off").disabled).toBe(true);
   expect(container.querySelector<HTMLInputElement>('#reasoning-retention-tokens')!.disabled).toBe(true);
-  await act(async () => { pending.resolve(Response.json({ reasoningRetention: { maxTokens: 50000, maxContextPercent: 20 } })); });
+  await act(async () => { pending.resolve(Response.json({ reasoningRetention: { enabled: true, maxTokens: 50000, maxContextPercent: 20 } })); });
   expect(container.querySelector('[role="status"]')?.textContent).toContain("saved");
 });
 
 test("a late response from the previous API target cannot replace current settings", async () => {
   const pending = Promise.withResolvers<Response>();
   globalThis.fetch = (async (input: unknown) => String(input).startsWith("/old/")
-    ? pending.promise : Response.json({ reasoningRetention: { maxTokens: 60000 } })) as typeof fetch;
+    ? pending.promise : Response.json({ reasoningRetention: { enabled: true, maxTokens: 60000 } })) as typeof fetch;
   await render("/old");
   expect(button("Save").disabled).toBe(true);
   await render("/new");
   expect(container.querySelector<HTMLInputElement>('#reasoning-retention-tokens')!.value).toBe("60000");
-  await act(async () => { pending.resolve(Response.json({ reasoningRetention: { maxTokens: 123 } })); });
+  await act(async () => { pending.resolve(Response.json({ reasoningRetention: { enabled: true, maxTokens: 123 } })); });
   expect(container.querySelector<HTMLInputElement>('#reasoning-retention-tokens')!.value).toBe("60000");
 });

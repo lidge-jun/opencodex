@@ -228,6 +228,8 @@ Browser 或 Computer Use。原生 OpenAI 条目会保持其上游 tool mode 不�
 ocx models add deepseek deepseek-v4 --display-name "DeepSeek V4" --context-window 128000
 ```
 
+对于自定义渠道，省略显式窗口后，目录会使用包括模型 ID 推断在内的[上下文窗口回退规则](/zh-cn/reference/configuration/providers/#自定义渠道的上下文窗口)。如果中转支持的容量低于厂商窗口，请显式设置窗口或 Context cap。
+
 远程 Codex 客户端可以使用普通的数据面密钥（与 `/v1/responses` 所用凭据相同，而非管理员令牌）拉取同一个生成好的 catalog：
 
 ```bash

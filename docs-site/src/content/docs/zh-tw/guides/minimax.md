@@ -39,7 +39,7 @@ custom_provider:
           context: 1000000
 ```
 
-實際產生的模型清單，以及已知的 context window 與 reasoning effort 階梯，來自正在執行的 OpenCodex 目錄。若模型沒有權威的 context window 或 effort 階梯，該欄位就會省略，不會填入猜測值。MCode 會在工作階段中保留目前選擇的 effort，因此 OpenCodex 匯出 `effortOptions` 時不會覆寫該選擇。這個區塊不會寫入真實金鑰、不會取代 `defaultModel`，也不會改變 MiniMax 登入。在 MCode 中，請選取 `custom_provider:opencodex/...` 下的模型。
+產生的模型清單、context window 與 reasoning effort 階梯來自正在執行的 OpenCodex 目錄。視窗可能包含[自訂供應商的推斷值](/zh-tw/reference/configuration/providers/#自訂供應商的上下文視窗)；若目錄中沒有視窗或 effort 階梯，則省略對應欄位。MCode 會在工作階段中保留目前選擇的 effort，因此 OpenCodex 匯出 `effortOptions` 時不會覆寫該選擇。這個區塊不會寫入真實金鑰、不會取代 `defaultModel`，也不會改變 MiniMax 登入。在 MCode 中，請選取 `custom_provider:opencodex/...` 下的模型。
 
 `ocx mcode` 會先驗證此供應商指向目前執行中的代理，再啟動用戶端。初次啟用後，當連接埠或目錄能力變更時，`ocx sync` 會更新受管理的區塊。自動同步不會建立無主區塊、不會重建你已移除的區塊，也不會覆寫 OpenCodex 寫入後又被修改的檔案；若要刻意重新連接，請使用啟用指令。停用或復原則透過同一套可稽核的整合系統：
 

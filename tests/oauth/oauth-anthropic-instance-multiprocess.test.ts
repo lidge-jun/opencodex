@@ -125,8 +125,16 @@ async function runWriters(values: readonly [OAuthCredentials, OAuthCredentials],
     writeFileSync(join(root, "start"), "start\n");
 
     const finished = await bounded(Promise.all(output), INTERNAL_DEADLINE_MS, "completion");
-    finished.forEach(([exitCode, stdout, stderr]) => {
-      expect(exitCode).toBe(0);
+    finished.forEach(([exitCode, stdout, stderr], index) => {
+      let failure: unknown = null;
+      if (exitCode !== 0) {
+        try {
+          failure = JSON.parse(readFileSync(join(root, `${instances[index]}-failure.json`), "utf8"));
+        } catch {
+          failure = { phase: "diagnostic-unavailable" };
+        }
+      }
+      expect(exitCode, `Anthropic registration writer completion: ${JSON.stringify({ instance: instances[index], failure })}`).toBe(0);
       // Assert lengths so even a failing logging check does not print credential text.
       expect(stdout.length).toBe(0);
       expect(stderr.length).toBe(0);

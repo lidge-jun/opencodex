@@ -15,6 +15,10 @@ import { dirname } from "node:path";
 import { readCodexCatalogPath } from "../../src/codex/catalog/parsing";
 import { effectiveModelReasoningEfforts } from "../../src/server/management/model-rows";
 import { routedSlug } from "../../src/providers/slug-codec";
+import { handleAgentSettingsRoutes } from "../../src/server/management/agent-settings-routes";
+import type { ManagementContext } from "../../src/server/management/context";
+import { readFileSync } from "node:fs";
+import { MANAGEMENT_JSON_BODY_MAX_BYTES, managementBodyTooLargeResponse } from "../../src/server/management/body";
 
 /**
  * `PUT /api/model-settings` writes per-model overrides onto a routed row.
@@ -30,6 +34,7 @@ const MODEL = "vendor/model";
 let home: string;
 let previousHome: string | undefined;
 let previousCodexHome: string | undefined;
+let previousClaudeHome: string | undefined;
 
 function fixture(): OcxConfig {
   return {
@@ -54,9 +59,11 @@ function fixture(): OcxConfig {
 beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME;
   previousCodexHome = process.env.CODEX_HOME;
+  previousClaudeHome = process.env.CLAUDE_CONFIG_DIR;
   home = mkdtempSync(join(tmpdir(), "ocx-model-settings-"));
   process.env.OPENCODEX_HOME = home;
   process.env.CODEX_HOME = join(home, "codex");
+  process.env.CLAUDE_CONFIG_DIR = join(home, "claude");
 });
 
 afterEach(() => {
@@ -66,6 +73,8 @@ afterEach(() => {
   else process.env.OPENCODEX_HOME = previousHome;
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = previousCodexHome;
+  if (previousClaudeHome === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+  else process.env.CLAUDE_CONFIG_DIR = previousClaudeHome;
   removeTreeWithRetry(home);
 });
 
@@ -98,6 +107,39 @@ function harness(config = fixture(), converge?: () => Promise<never>, save?: (sa
   }
   return { call, config, persisted, get convergeCalls() { return convergeCalls; } };
 }
+
+test("Claude defaults route previews, validates and applies with a stale-preview refusal", async () => {
+  const config = fixture();
+  config.claudeCode = { tierModels: { opus: "combo/opus", sonnet: "combo/sonnet", haiku: "combo/haiku" } };
+  const url = new URL("http://127.0.0.1/api/claude-code/model-defaults");
+  const call = (method: string, body?: unknown) => handleAgentSettingsRoutes({
+    config, url, req: new Request(url, { method, ...(body === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }) }),
+    deps: {},
+  } as ManagementContext);
+  const previewResponse = await call("GET");
+  expect(previewResponse!.status).toBe(200);
+  const preview = await previewResponse!.json() as { fingerprint: string; changes: unknown[] };
+  expect(preview.changes).toHaveLength(3);
+  expect((await call("POST", { fingerprint: "invalid" }))!.status).toBe(400);
+  expect((await call("POST", { fingerprint: "0".repeat(64) }))!.status).toBe(409);
+  expect((await call("POST", { fingerprint: preview.fingerprint }))!.status).toBe(200);
+  expect(JSON.parse(readFileSync(join(process.env.CLAUDE_CONFIG_DIR!, "settings.json"), "utf8")).env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("combo/opus");
+  expect((await call("POST", { fingerprint: preview.fingerprint }))!.status).toBe(409);
+});
+
+test("Claude defaults route preserves the shared request body limit", async () => {
+  const config = fixture();
+  const url = new URL("http://127.0.0.1/api/claude-code/model-defaults");
+  const req = new Request(url, { method: "POST", body: " ".repeat(MANAGEMENT_JSON_BODY_MAX_BYTES + 1) });
+  let rejected = false;
+  try {
+    await handleAgentSettingsRoutes({ config, url, req, deps: {} } as ManagementContext);
+  } catch (error) {
+    rejected = true;
+    expect(managementBodyTooLargeResponse(error, req, config)?.status).toBe(413);
+  }
+  expect(rejected).toBe(true);
+});
 
 describe("per-model settings API", () => {
   test("restoring modalities also clears the exact legacy declaration", async () => {

@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -121,6 +122,30 @@ describe("applyReasoningRetention", () => {
     const snapshot = JSON.stringify(input);
     expect(() => applyReasoningRetention(input, { archiveDir, maxTokens: 1 })).toThrow();
     expect(JSON.stringify(input)).toBe(snapshot);
+  });
+
+  test("partial archive write failure removes only the owned file", () => {
+    const archiveDir = setup();
+    const originalWrite = fs.writeFileSync;
+    const write = spyOn(fs, "writeFileSync").mockImplementation((path, ..._args) => {
+      originalWrite(path, "partial plaintext");
+      throw new Error("fixture ENOSPC");
+    });
+    try {
+      expect(() => applyReasoningRetention([reasoningItem("full reasoning")], { archiveDir, maxTokens: 1 })).toThrow("fixture ENOSPC");
+      expect(readdirSync(archiveDir)).toEqual([]);
+    } finally { write.mockRestore(); }
+  });
+
+  test("exclusive-open collision preserves the existing archive", () => {
+    const archiveDir = setup();
+    const path = join(archiveDir, "reasoning-1970-01-01T00-00-00-000Z-i.md");
+    writeFileSync(path, "existing archive");
+    const random = spyOn(Math, "random").mockReturnValue(0.5);
+    try {
+      expect(() => applyReasoningRetention([reasoningItem("new reasoning")], { archiveDir, maxTokens: 1, now: 0 })).toThrow();
+      expect(readFileSync(path, "utf-8")).toBe("existing archive");
+    } finally { random.mockRestore(); }
   });
 
   test("archives reasoning over the absolute cap even when the context window is unknown", () => {

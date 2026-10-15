@@ -1,7 +1,7 @@
 import { beginCodexWriteSection, publishCodexArtifact } from "./inject/config-write-section";
 import { createHash } from "node:crypto";
 import type { AtomicWriteHooks } from "../config/atomic-write";
-import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { atomicWriteFile } from "../config";
 import { assertCodexHomeOwner, codexHomeIsAbsent, CODEX_HOME_JOURNAL_FILE, CodexHomeOwnerRefusal, opencodexHomeForInjection, readCodexHomeJournal, type CodexHomeOwnerRefusalReason } from "./codex-home-owner";
@@ -347,6 +347,21 @@ export function restoreJournalState(
     };
   }
 
+  // A matching byte hash does not authorize following a newly substituted profile link.
+  // Refuse the complete pair before restoring config or deleting its recovery journal.
+  let profileIsSymlink = false;
+  if (profileUnchanged && (!comparison.profileAlreadyOriginal || comparison.originalProfile === null)) {
+    try { profileIsSymlink = lstatSync(CODEX_PROFILE_PATH).isSymbolicLink(); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  }
+  if (profileIsSymlink) {
+    return {
+      configRestored: comparison.configAlreadyOriginal, profileRestored: false,
+      configRewritten: false, profileRewritten: false,
+      configChanged: !configUnchanged, profileChanged: false,
+      complete: false, unverified: false, profileRestoreFailed: true as const,
+    };
+  }
   assertCodexHomeOwner(CODEX_HOME);
   let configRestored = comparison.configAlreadyOriginal;
   let profileRestored = comparison.profileAlreadyOriginal;

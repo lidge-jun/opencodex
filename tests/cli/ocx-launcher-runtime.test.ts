@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { bundledBunPath } from "../../src/lib/bun-runtime";
 import { findDesktopCli, findPathBun, type PathBunIo } from "../../src/lib/bun-path-runtime.mjs";
@@ -395,6 +395,16 @@ describe.skipIf(!runnable)("ocx package launcher effective Bun runtime", () => {
   }, EFFECTIVE_RUNTIME_TEST_TIMEOUT_MS);
 });
 
+function pathFixtureRoot(prefix: string): string {
+  if (process.platform === "win32") return mkdtempSync(join(tmpdir(), prefix));
+  // A trusted-executable fixture cannot live beneath a shared temp ancestor whose
+  // owner is neither root nor this user (common in user-namespace sandboxes).
+  // Keep the launcher package isolated from this checkout's installed Bun.
+  const base = join(dirname(repoPath()), ".tmp", "path-bun-fixtures");
+  mkdirSync(base, { recursive: true, mode: 0o700 });
+  return mkdtempSync(join(base, prefix));
+}
+
 function pathProbeFixture(platform: NodeJS.Platform = "linux", stdout = "1.4.0\n") {
   const calls: Array<{ path: string; args: string[]; timeout: number; shell: boolean; maxBuffer: number }> = [];
   let clock = 0;
@@ -402,6 +412,15 @@ function pathProbeFixture(platform: NodeJS.Platform = "linux", stdout = "1.4.0\n
     now: () => clock,
     realpath: path => path,
     stat: () => ({ isFile: () => true, mode: 0o755 }),
+    lstat: path => ({
+      isFile: () => path.endsWith("/bun"),
+      isDirectory: () => !path.endsWith("/bun") && !path.endsWith("/alias"),
+      isSymbolicLink: () => path.endsWith("/alias"),
+      mode: path.endsWith("/bun") ? 0o755 : path.endsWith("/alias") ? 0o777 : 0o755,
+      uid: 0,
+    }),
+    readlink: () => "/first",
+    geteuid: () => 1000,
     access: () => {},
     isRealBunBinary: () => true,
     spawnSync: (path, args, options) => {
@@ -505,15 +524,74 @@ describe("failure-only Desktop CLI pointer", () => {
 });
 
 describe("real PATH Bun validation", () => {
+  test("normalizes case-variant macOS PATH spelling after validating its ancestry", () => {
+    const fixture = pathProbeFixture("darwin");
+    fixture.io.realpath = path => path.replace("/OPT/fixture", "/opt/fixture");
+    expect(fixture.find({ PATH: "/OPT/fixture/bin" })).toEqual({ path: "/opt/fixture/bin/bun", version: "1.4.0" });
+    expect(fixture.calls).toHaveLength(2);
+  });
+
+  test("a foreign-owned entry below a root-owned sticky ancestor is refused before spawning", () => {
+    const fixture = pathProbeFixture();
+    fixture.io.lstat = path => ({
+      isFile: () => path.endsWith("/bun"), isDirectory: () => !path.endsWith("/bun"),
+      isSymbolicLink: () => false,
+      uid: path === "/tmp/foreign" ? 2000 : 0,
+      mode: path === "/tmp" ? 0o1777 : 0o755,
+    });
+    expect(fixture.find({ PATH: "/tmp/foreign/bin" })).toBeNull();
+    expect(fixture.calls).toHaveLength(0);
+  });
+
+  test("a user-owned entry below a shared sticky ancestor is refused before spawning", () => {
+    const fixture = pathProbeFixture();
+    fixture.io.lstat = path => ({
+      isFile: () => path.endsWith("/bun"), isDirectory: () => !path.endsWith("/bun"),
+      isSymbolicLink: () => false,
+      uid: path === "/tmp" ? 0 : 1000,
+      mode: path === "/tmp" ? 0o1777 : 0o755,
+    });
+    expect(fixture.find({ PATH: "/tmp/own/bin" })).toBeNull();
+    expect(fixture.calls).toHaveLength(0);
+  });
+
   test.each(["file-group", "file-world", "parent-group", "parent-world"])("rejects POSIX %s write access before spawning", kind => {
     const fixture = pathProbeFixture();
-    fixture.io.stat = path => ({
-      isFile: () => true,
+    const trustedLstat = fixture.io.lstat!;
+    fixture.io.lstat = path => ({
+      ...trustedLstat(path),
       mode: 0o755 | ((kind.startsWith("file") === path.endsWith("/bun"))
         ? (kind.endsWith("group") ? 0o020 : 0o002) : 0),
     });
     expect(fixture.find({ PATH: "/unsafe" })).toBeNull();
     expect(fixture.calls).toHaveLength(0);
+  });
+
+  test("rejects a writable original PATH symlink directory before spawning", () => {
+    const fixture = pathProbeFixture();
+    fixture.io.realpath = path => path === "/alias/bun" ? "/untrusted/bun" : path;
+    fixture.io.readlink = () => "/untrusted";
+    fixture.io.lstat = path => path === "/alias"
+      ? { isFile: () => false, isDirectory: () => false, isSymbolicLink: () => true, mode: 0o777, uid: 1000 }
+      : path === "/untrusted"
+        ? { isFile: () => false, isDirectory: () => true, isSymbolicLink: () => false, mode: 0o777, uid: 1000 }
+        : {
+          isFile: () => path.endsWith("/bun"),
+          isDirectory: () => !path.endsWith("/bun"),
+          isSymbolicLink: () => false,
+          mode: 0o755,
+          uid: 0,
+        };
+    expect(fixture.find({ PATH: "/alias" })).toBeNull();
+    expect(fixture.calls).toHaveLength(0);
+  });
+
+  test("accepts a trusted original PATH symlink directory", () => {
+    const fixture = pathProbeFixture();
+    fixture.io.realpath = path => path === "/alias/bun" ? "/trusted/bun" : path;
+    fixture.io.readlink = () => "/trusted";
+    expect(fixture.find({ PATH: "/alias" })?.path).toBe("/trusted/bun");
+    expect(fixture.calls).toHaveLength(2);
   });
 
   test("Windows does not interpret POSIX write mode bits", () => {
@@ -568,7 +646,7 @@ describe("real PATH Bun validation", () => {
     const visited: string[] = [];
     fixture.io.realpath = path => { visited.push(path); return path; };
     expect(fixture.find({ PATH: ":.:relative:~/bin:/trusted" })?.path).toBe("/trusted/bun");
-    expect(visited).toEqual(["/trusted/bun"]);
+    expect(visited).toEqual(["/trusted/bun", "/trusted/bun"]);
   });
 
   test("Windows accepts UNC bun.exe and deduplicates case aliases", () => {
@@ -582,7 +660,7 @@ describe("real PATH Bun validation", () => {
   });
 
   test.skipIf(process.platform === "win32")("real padded version-only script fails the identity check", () => {
-    const root = mkdtempSync(join(tmpdir(), "ocx-path-identity-"));
+    const root = pathFixtureRoot("ocx-path-identity-");
     try {
       const path = join(root, "bun");
       writeFileSync(path, '#!/bin/sh\nif [ "$1" = "--version" ]; then printf "1.4.0\\n"; else exit 1; fi\n#' + "x".repeat(REAL_BUN_MIN_BYTES));
@@ -592,7 +670,7 @@ describe("real PATH Bun validation", () => {
   });
 
   test.skipIf(process.platform === "win32")("real writable file and resolved parent are rejected", () => {
-    const root = mkdtempSync(join(tmpdir(), "ocx-path-mode-"));
+    const root = pathFixtureRoot("ocx-path-mode-");
     try {
       const path = join(root, "bun");
       writeFileSync(path, '#!/bin/sh\nprintf "1.4.0\\n"\n#' + "x".repeat(REAL_BUN_MIN_BYTES));
@@ -605,8 +683,69 @@ describe("real PATH Bun validation", () => {
     } finally { removeTree(root); }
   });
 
+  test.skipIf(process.platform === "win32")("writable original PATH directory is rejected before spawning its symlinked Bun", () => {
+    const root = pathFixtureRoot("ocx-path-symlink-dir-");
+    try {
+      const trusted = join(root, "trusted");
+      const writable = join(root, "writable");
+      mkdirSync(trusted, { mode: 0o700 });
+      mkdirSync(writable, { mode: 0o700 });
+      const binary = join(trusted, "bun");
+      const link = join(writable, "bun");
+      writeFileSync(binary, "fixture");
+      chmodSync(binary, 0o755);
+      chmodSync(writable, 0o777);
+      symlinkSync(binary, link);
+      let spawns = 0;
+      const selected = findPathBun({
+        env: { PATH: writable },
+        pinnedVersion: "1.4.2",
+        io: {
+          lstat: lstatSync,
+          readlink: readlinkSync,
+          realpath: realpathSync.native,
+          geteuid: () => process.geteuid?.(),
+          spawnSync: () => { spawns++; return { status: 0, stdout: "1.4.2" }; },
+        },
+      });
+      expect(selected).toBeNull();
+      expect(spawns).toBe(0);
+    } finally { removeTree(root); }
+  });
+
+  test.skipIf(process.platform === "win32")("trusted Bun symlink is accepted", () => {
+    const root = pathFixtureRoot("ocx-path-trusted-symlink-");
+    try {
+      const directory = join(root, "bin");
+      mkdirSync(directory, { mode: 0o700 });
+      const binary = join(root, "bun-real");
+      const link = join(directory, "bun");
+      writeFileSync(binary, "fixture");
+      chmodSync(binary, 0o755);
+      symlinkSync(binary, link);
+      const selected = findPathBun({
+        env: { PATH: directory },
+        pinnedVersion: "1.4.2",
+        io: {
+          lstat: lstatSync,
+          readlink: readlinkSync,
+          realpath: realpathSync.native,
+          stat: statSync,
+          geteuid: () => process.geteuid?.(),
+          access: () => {},
+          isRealBunBinary: () => true,
+          spawnSync: (_path, args) => ({
+            status: 0,
+            stdout: args[0] === "--version" ? "1.4.2" : "1.4.2",
+          }),
+        },
+      });
+      expect(selected).toEqual({ path: realpathSync.native(binary), version: "1.4.2" });
+    } finally { removeTree(root); }
+  });
+
   test("real PATH validation rejects the small stub and accepts the complete executable", () => {
-    const root = mkdtempSync(join(tmpdir(), "ocx-path-bun-"));
+    const root = pathFixtureRoot("ocx-path-bun-");
     try {
       const first = join(root, "first"), last = join(root, "last");
       mkdirSync(first); mkdirSync(last);
@@ -615,7 +754,11 @@ describe("real PATH Bun validation", () => {
       if (process.platform === "win32") copyFileSync(process.execPath, join(last, name));
       else writeFileSync(join(last, name), '#!/bin/sh\ncase "$1" in --version|-e) printf "1.4.0\\n";; *) exit 1;; esac\n#' + "x".repeat(REAL_BUN_MIN_BYTES));
       chmodSync(join(first, name), 0o755); chmodSync(join(last, name), 0o755);
-      const selected = findPathBun({ env: { ...process.env, PATH: [first, last].join(process.platform === "win32" ? ";" : ":") }, pinnedVersion: "1.4.2", deadlineMs: process.platform === "win32" ? INTERNAL_DEADLINE_MS : 2000 });
+      const env = { ...process.env, PATH: [first, last].join(process.platform === "win32" ? ";" : ":") };
+      // Windows keeps the inherited variable under its stored case (e.g. `Path`);
+      // the resolver's case-insensitive lookup would reach it before this override.
+      for (const key of Object.keys(env)) if (key !== "PATH" && key.toLowerCase() === "path") delete env[key];
+      const selected = findPathBun({ env, pinnedVersion: "1.4.2", deadlineMs: process.platform === "win32" ? INTERNAL_DEADLINE_MS : 2000 });
       expect(selected?.path).toBe(realpathSync.native(join(last, name)));
       expect(selected?.version).toMatch(/^1\.(?:[4-9]|[1-9]\d+)\./);
     } finally { removeTree(root); }
@@ -633,7 +776,7 @@ function warmCopiedBun(path: string): void {
 }
 
 function launcherFallbackFixture(mode: "missing" | "bundled" | "repair" | "broken" | "override" | "none" | "inspection" | "rejected") {
-  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-path-launcher-")));
+  const root = realpathSync.native(pathFixtureRoot("ocx-path-launcher-"));
   try {
     const node = spawnSync("node", ["-p", "process.execPath"], { encoding: "utf8", windowsHide: true }).stdout.trim();
     const version = spawnSync(process.execPath, ["--version"], { encoding: "utf8", windowsHide: true }).stdout.trim();
@@ -712,7 +855,7 @@ describe.skipIf(!nodeAvailable)("PATH fallback negative activation", () => {
     expect(result.stderr).not.toContain("using PATH Bun");
   });
   test.skipIf(process.platform === "win32")("real version probe returns null within the deadline", () => {
-    const root = mkdtempSync(join(tmpdir(), "ocx-path-timeout-"));
+    const root = pathFixtureRoot("ocx-path-timeout-");
     try {
       const path = join(root, "bun");
       writeFileSync(path, '#!/bin/sh\nexec /bin/sleep 5\n#' + "x".repeat(REAL_BUN_MIN_BYTES));

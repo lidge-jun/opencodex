@@ -23,6 +23,7 @@ import { getRoutingProfile, POLICY_NAMESPACE, resolvePolicyProfileId } from "../
 import { resolveWireProtocolOverride } from "../server/adapter-resolve";
 import { nativeChatDeclineReason } from "../server/chat-native-eligibility";
 import { nativeMessagesDeclineReason } from "../server/messages-native-eligibility";
+import { antigravityDirectDeclineReason, antigravityMessagesDeclineReason } from "../server/antigravity-direct-eligibility";
 import { messagesSelectorTargetsSecondaryInstance, messagesSecondaryInstanceUnavailable } from "../server/messages-native-selector";
 import { parseSyntheticRowId } from "../server/fast-row";
 import type { OcxConfig } from "../types";
@@ -125,6 +126,7 @@ function candidateFor(
   const adapter = provider.adapter ?? "openai-responses";
   let declineReasons: ProtocolReasonCode[] = [];
   let nativeEligible = false;
+  let directEligible = false;
   // With `nativeChatCombos` on, the combo loop judges each Chat candidate as the concrete route it
   // is (PF-07), so the preview must too; a policy still resolves one candidate on the bridge.
   const comboChildNative = inbound === "chat" && routeKind === "combo"
@@ -136,25 +138,46 @@ function candidateFor(
     ...(routeKind === "direct" || comboChildNative ? {} : { routeKind }),
   };
   if (inbound === "chat") {
-    const reason = rows.effortRow ? "effort-row" : nativeChatDeclineReason(settled, chatBodyForFeatures(features), config);
+    const body = chatBodyForFeatures(features);
+    const reason = rows.effortRow ? "effort-row" : nativeChatDeclineReason(settled, body, config);
     nativeEligible = reason === undefined;
     if (reason) declineReasons = [reason];
-  } else if (inbound === "messages" && resolveProtocolSettings(config, settled.providerName).rollout.managedMessagesNative) {
-    // The runtime rule itself. With the switch off nothing is judged, so the default preview
-    // is exactly what it was before the managed native lane existed.
-    // Pinned effort is judged from config and the route; blocked-skill elision and the web-search
-    // sidecar depend on body content no feature describes, so a preview cannot predict them.
-    // Anthropic OAuth (PF-10) is judged from config alone: the rollout switch, the provider, its
-    // host and `anthropicAccountPool.enabled`. The stored-account quorum a sender supplies is
-    // never read here, so a preview selects, resolves and refreshes no account.
-    const reason = nativeMessagesDeclineReason(settled, messagesBodyForFeatures(features), config, {
-      ...rows,
-      claudeCode: config.claudeCode,
-    });
-    nativeEligible = reason === undefined;
-    if (reason) declineReasons = [reason];
+    // The Antigravity direct lane, judged by the ingress's own rule, for a standalone route only:
+    // a combo child is dispatched from the full Responses body even when `nativeChatCombos`
+    // judges it as a concrete route above. A hosted web-search tool and the other body-content
+    // declines are not described by any Chat feature, so a preview cannot predict them.
+    directEligible = !nativeEligible && routeKind === "direct"
+      && antigravityDirectDeclineReason(settled, { ...body, model: rows.routeSelector }, config) === undefined;
+  } else if (inbound === "messages") {
+    const body = messagesBodyForFeatures(features);
+    if (resolveProtocolSettings(config, settled.providerName).rollout.managedMessagesNative) {
+      // The runtime rule itself. With the switch off nothing is judged, so the default preview
+      // is exactly what it was before the managed native lane existed.
+      // Pinned effort is judged from config and the route; blocked-skill elision and the web-search
+      // sidecar depend on body content no feature describes, so a preview cannot predict them.
+      // Anthropic OAuth (PF-10) is judged from config alone: the rollout switch, the provider, its
+      // host and `anthropicAccountPool.enabled`. The stored-account quorum a sender supplies is
+      // never read here, so a preview selects, resolves and refreshes no account.
+      const reason = nativeMessagesDeclineReason(settled, body, config, {
+        ...rows,
+        claudeCode: config.claudeCode,
+      });
+      nativeEligible = reason === undefined;
+      if (reason) declineReasons = [reason];
+    }
+    // The Antigravity direct lane for a standalone route, as for Chat. The ingress plans it on the
+    // resolved selector, which is `rows.routeSelector`.
+    directEligible = !nativeEligible && routeKind === "direct"
+      && antigravityMessagesDeclineReason(settled, body, rows.routeSelector, config) === undefined;
   }
-  return { provider: route.providerName, model: route.modelId, adapter, nativeEligible, declineReasons };
+  return {
+    provider: route.providerName,
+    model: route.modelId,
+    adapter,
+    nativeEligible,
+    ...(directEligible ? { directEligible } : {}),
+    declineReasons,
+  };
 }
 
 /** Whether the Messages ingress could forward this selector with a caller's own credential. */

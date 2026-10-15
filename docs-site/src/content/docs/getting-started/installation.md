@@ -40,9 +40,14 @@ which leaves the bundled Bun runtime unprepared. After trying permitted bundled-
 recovery, the launcher can use an executable Bun from an absolute PATH directory if its
 stable version has the pinned major and a minor at least the pinned minor. With the current
 1.4.2 dependency, that means 1.4.0 or newer within major 1. Bounded version-policy and identity
-checks require `bun --version` to match `bun -e`'s `Bun.version`; on POSIX, the resolved file
-and its parent directory must not be group- or world-writable. A one-line stderr notice names
-the selected Bun version. Bun is still bundled; installing it yourself is optional.
+checks require `bun --version` to match `bun -e`'s `Bun.version`. On POSIX, the launcher checks
+the whole candidate path, including ancestor directories and components reached through
+symlinks. Each traversed directory and symlink, and the resolved executable, must be owned by
+root or the launcher's effective user. Directories and the resolved executable must not be
+group- or world-writable; symlink permission bits are not used. Shared writable ancestors
+such as `/tmp` are rejected even with the sticky bit, so protecting only the executable and
+its immediate parent is insufficient. A one-line stderr notice names the selected Bun version.
+Bun is still bundled; installing it yourself is optional.
 
 If no runtime works, the error still includes “the `bun` dependency is not installed” when
 the dependency is missing. On macOS, it also names an executable Desktop CLI found at

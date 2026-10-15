@@ -204,6 +204,8 @@ export function applyCatalogModelMetadata(entry: RawEntry, model?: CatalogModel)
  * Two real sources exist and both are consulted here, in the same precedence the
  * writers use (`applyCatalogMetadata` runs first, the model's own fields
  * overwrite it): the `CatalogModel` and the generated jawcode metadata table.
+ * Vendor-ID fallback windows are estimates for client budgets, recorded separately rather
+ * than promoted to serving-provider assertions.
  * Reading only the model would silently drop every provider whose capabilities
  * live in that table.
  */
@@ -230,7 +232,8 @@ function stampCapabilityProvenance(entry: RawEntry, model: CatalogModel): void {
   entry.opencodex_capability_provenance = {
     provider: model.provider,
     model_id: model.id,
-    ...(contextWindow !== undefined ? { context_window: contextWindow } : {}),
+    ...(contextWindow !== undefined && !model.contextWindowInference ? { context_window: contextWindow } : {}),
+    ...(model.contextWindowInference ? { inferred_context_window: contextWindow, context_window_inference: { ...model.contextWindowInference } } : {}),
     ...(inputModalities !== undefined ? { input_modalities: [...inputModalities] } : {}),
     ...(Array.isArray(model.capabilities) && model.capabilities.length > 0
       ? { capabilities: [...model.capabilities] }

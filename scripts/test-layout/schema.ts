@@ -4,7 +4,7 @@ import { maskNonCode, specifierSites, tokenize } from "./tokens";
 
 /**
  * The tests/ layout map merges layout.json's authoritative basename -> directory table with
- * seeds.json beside it. Its `domains` regexes place a brand-new test before it joins `explicit`;
+ * optional explicit-map shards and seeds.json beside it. Its `domains` regexes place a brand-new test before it joins `explicit`;
  * `migrated` lists domains whose files have already left the root.
  */
 export interface DomainSpec {
@@ -27,7 +27,7 @@ export function seedsPathFor(path: string): string {
 }
 
 export function loadLayout(path: string = LAYOUT_PATH): Layout {
-  const parsed = JSON.parse(readFileSync(path, "utf8")) as Pick<Layout, "version" | "root" | "explicit">;
+  const parsed = JSON.parse(readFileSync(path, "utf8")) as Pick<Layout, "version" | "root" | "explicit"> & { explicitShards?: string[] };
   const seedsPath = seedsPathFor(path);
   const seeds = JSON.parse(readFileSync(seedsPath, "utf8")) as Pick<Layout, "keepAtRoot" | "domains" | "migrated">;
   if (parsed.version !== 1 || parsed.root !== "tests") {
@@ -42,7 +42,26 @@ export function loadLayout(path: string = LAYOUT_PATH): Layout {
   if (typeof parsed.explicit !== "object" || parsed.explicit === null || Array.isArray(parsed.explicit)) {
     throw new Error(`${path}: explicit must be an object`);
   }
-  return { ...parsed, ...seeds };
+  if (parsed.explicitShards !== undefined && !Array.isArray(parsed.explicitShards)) {
+    throw new Error(`${path}: explicitShards must be an array`);
+  }
+  const explicit = { ...parsed.explicit };
+  for (const name of parsed.explicitShards ?? []) {
+    if (typeof name !== "string" || !/^[a-z][a-z0-9-]*\.json$/.test(name)) {
+      throw new Error(`${path}: explicit shard must be a sibling JSON filename`);
+    }
+    const shardPath = join(dirname(path), name);
+    const shard: unknown = JSON.parse(readFileSync(shardPath, "utf8"));
+    if (typeof shard !== "object" || shard === null || Array.isArray(shard)) {
+      throw new Error(`${shardPath}: explicit shard must be an object`);
+    }
+    for (const [test, target] of Object.entries(shard)) {
+      if (typeof target !== "string") throw new Error(`${shardPath}: target for ${test} must be a string`);
+      if (Object.hasOwn(explicit, test)) throw new Error(`${shardPath}: duplicate explicit test ${test}`);
+      explicit[test] = target;
+    }
+  }
+  return { ...parsed, ...seeds, explicit };
 }
 
 /**

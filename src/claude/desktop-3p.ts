@@ -5,12 +5,12 @@ import { applyRemoteDesktopStore, inspectRemoteDesktopCleanup, restoreRemoteDesk
 import { canonicalDirectory } from "./desktop-remote-store-io";
 import {
   resolveDesktop3pConfigLibraryPath, parseMetadata, SAFE_DESKTOP_PROFILE_ID, isRecord,
-  isOwnedDesktopEntry, isOwnedDesktopGatewayEntry, profilePath, readDesktopProfileForeignKeys,
+  isOwnedDesktopEntry, isOwnedDesktopGatewayEntry, profilePath, readDesktopProfileForeignKeys, readDesktopLibraryText, readDesktopLibraryBytes,
   type Desktop3pConfigLibraryOptions, type Desktop3pMetadata, type Desktop3pMetadataEntry,
 } from "./desktop-3p-library";
 export { resolveDesktop3pConfigLibraryPath, type Desktop3pConfigLibraryOptions } from "./desktop-3p-library";
 import { createHash, randomUUID } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, lstatSync, unlinkSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, lstatSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { atomicWriteFile, readConfigDiagnostics, withConfigMutationLockSync } from "../config";
 import { atomicWriteFileNoFollow } from "../config/atomic-write";
@@ -20,6 +20,7 @@ import {
   reconcileDesktopProfile,
   renderDesktopProfile,
   validDateAlias,
+  legacyDesktopProfileWireAlias,
   type DesktopProfileModel,
 } from "./desktop-profile";
 import { nativeOpenAiContextWindow, type NativeContextLimitsInput } from "../codex/catalog";
@@ -223,7 +224,7 @@ function collectDesktop3pModels(
         ...(model.supports1m ? { supports1m: true, prefer1m: true } : {}),
       });
     }
-    // Hash aliases from both pre-profile generations are compatibility-only and can
+    // Previous profile IDs and both hash generations are compatibility-only and can
     // collide. Bind them in stable route order so changing a family default or
     // rendered ordering can never silently rebind an old Desktop id.
     for (const model of [...rendered].sort((a, b) => a.route.localeCompare(b.route))) {
@@ -231,7 +232,8 @@ function collectDesktop3pModels(
       const providerEnd = model.route.indexOf("/");
       const provider = model.route.slice(0, providerEnd);
       const id = model.route.slice(providerEnd + 1);
-      for (const legacy of [desktop3pAlias(provider, id), legacyDesktop3pAlias(provider, id)]) {
+      const storedAlias = reconciled.assignments[model.route]!.alias;
+      for (const legacy of [legacyDesktopProfileWireAlias(storedAlias), desktop3pAlias(provider, id), legacyDesktop3pAlias(provider, id)]) {
         if (realAnthropicIds.has(legacy)) {
           console.warn(`[opencodex] Claude Desktop legacy alias ${legacy} for ${model.route} conflicts with a real Anthropic model; ignoring the alias`);
           continue;
@@ -360,6 +362,11 @@ export function isKnownDesktop3pModelId(id: string): boolean {
   return desktop3pRegistry.has(id) || desktop3pRealAnthropicIds.has(id);
 }
 
+/** Real catalog IDs retain identity even when their spelling resembles an alias. */
+export function isRealDesktop3pModelId(id: string): boolean {
+  return desktop3pRealAnthropicIds.has(id);
+}
+
 /** Only missing IDs in the emitted Desktop namespaces are managed-alias errors. */
 export function isUnresolvedDesktop3pAlias(id: string): boolean {
   if (isKnownDesktop3pModelId(id)) return false;
@@ -369,12 +376,19 @@ export function isUnresolvedDesktop3pAlias(id: string): boolean {
   if (isKnownDesktop3pModelId(base)) return false;
   return validDateAlias(base)
     || /^claude-opus-4-(?:8-)?[a-z][a-z0-9]{2}$/.test(base)
-    || /^claude-opus-4-8-p[0-9a-z]{3}$/.test(base);
+    || /^claude-(?:opus-4-8|fable-5)-p[0-9a-z]{3}$/.test(base);
 }
 
 /** Alias selected by the installed profile registry, falling back to the legacy hash shape. */
 export function activeDesktop3pAlias(provider: string, modelId: string): string {
   return desktop3pAliasesByRoute.get(`${provider}/${modelId}`) ?? desktop3pAlias(provider, modelId);
+}
+
+/** Discovery cannot offer a skipped alias or one owned by a different route. */
+export function resolvableDesktop3pAlias(provider: string, modelId: string): string | undefined {
+  if (provider === "anthropic" && modelId.startsWith("claude-")) return modelId;
+  const alias = activeDesktop3pAlias(provider, modelId);
+  return resolveDesktop3pAlias(alias) === `${provider}/${modelId}` ? alias : undefined;
 }
 
 /**
@@ -476,7 +490,7 @@ export function inspectDesktop3pConfigLibrary(
   let profile: Record<string, unknown>;
   let fingerprint: string;
   try {
-    const source = readFileSync(selectedProfilePath, "utf8");
+    const source = readDesktopLibraryText(selectedProfilePath);
     const parsed = JSON.parse(source) as unknown;
     if (!isRecord(parsed)) return { kind: "broken", libraryPath, selectedProfilePath, appliedId, residualPaths, ownedProfileActive };
     profile = parsed;
@@ -709,7 +723,7 @@ export function writeDesktop3pConfig(
         const metadata = parseMetadata(join(inspected.libraryPath, "_meta.json"));
         if (!isOwnedDesktopGatewayEntry(metadata.entries.find(entry => entry.id === inspected.appliedId))) return refused;
         try {
-          const selected = JSON.parse(readFileSync(inspected.selectedProfilePath, "utf8")) as Record<string, unknown>;
+          const selected = JSON.parse(readDesktopLibraryText(inspected.selectedProfilePath)) as Record<string, unknown>;
           mode = selected.modelDiscoveryEnabled !== true ? "static"
             : Array.isArray(selected.inferenceModels) ? "hybrid" : "discovery";
         } catch { return refused; }
@@ -825,7 +839,7 @@ function writeDesktop3pConfigWithGenerator(
             const freshMetadata = parseMetadata(metadataPath);
             if (freshMetadata.appliedId !== refreshOnly.requiredId
               || !isOwnedDesktopGatewayEntry(freshMetadata.entries.find(entry => entry.id === refreshOnly.requiredId))
-              || createHash("sha256").update(readFileSync(configPath)).digest("hex").slice(0, 16) !== refreshOnly.expectedFingerprint) {
+              || createHash("sha256").update(readDesktopLibraryBytes(configPath)).digest("hex").slice(0, 16) !== refreshOnly.expectedFingerprint) {
               throw new Error();
             }
           } catch { throw new Error("desktop_refresh_only_skipped"); }

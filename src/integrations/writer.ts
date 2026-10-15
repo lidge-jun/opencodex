@@ -18,7 +18,7 @@ import { shouldInjectApiAuthHeader } from "../codex/inject";
 import { detachedConfigSnapshot } from "../config/admitted-identity";
 import { copyPlainData } from "../lib/plain-data";
 import type { OcxConfig } from "../types";
-import { PARSE_FAILED, defaultIntegrationIO, loadTarget, parseConfig, type IntegrationIO } from "./config-io";
+import { IntegrationWriteSizeError, PARSE_FAILED, defaultIntegrationIO, loadTarget, parseConfig, type IntegrationIO } from "./config-io";
 import { inspectKiloCandidates } from "./kilo-candidates";
 import {
   fingerprint,
@@ -162,6 +162,15 @@ function commit(args: CommitArgs): WriteOutcome {
     }
   } catch (error) {
     if (transactionStarted) return compensate(args, error, "could not write both Cline files");
+    if (error instanceof IntegrationWriteSizeError && args.snapshotPath) {
+      try {
+        args.store.discardUncommittedSnapshot(clientId, args.entry.opId);
+      } catch (cleanupError) {
+        return refuse(clientId, "write_failed", args.state,
+          `${messageOf(error)}; could not remove the unused backup: ${messageOf(cleanupError)}`, args.snapshotPath);
+      }
+      return refuse(clientId, "write_failed", args.state, messageOf(error));
+    }
     return refuse(clientId, "write_failed", args.state, messageOf(error), args.snapshotPath);
   }
   try {

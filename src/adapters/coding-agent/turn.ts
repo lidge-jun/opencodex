@@ -105,6 +105,14 @@ export function redactSecrets(text: string, tokenEnv: string | undefined, creden
     .replace(/\b(sk-[A-Za-z0-9_-]{6,})\b/g, "[redacted]");
 }
 
+export type CodingAgentFailure = {
+  profile: CodingAgentProviderProfile;
+  error: Extract<AdapterEvent, { type: "error" }>;
+} & (
+  | { source: "result"; frame: Record<string, unknown> }
+  | { source: "process-exit"; exitCode: number; stderr: string }
+);
+
 /** Inputs for one headless CLI turn: region profiles, request context, and family-specific arg/env builders. */
 export interface CodingAgentTurnInput {
   /** Region profiles for this family; the turn fails closed if the base URL matches none. */
@@ -123,6 +131,8 @@ export interface CodingAgentTurnInput {
    * The MCP handler never executes the client tool.
    */
   toolBridge?: CodingAgentToolBridgeInput;
+  /** Vendor semantics and recovery permission stay with the adapter. */
+  classifyFailure?: (failure: CodingAgentFailure) => Extract<AdapterEvent, { type: "error" }>;
   deps: CodingAgentDeps;
 }
 
@@ -495,7 +505,11 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
             break;
           }
         }
-        const mappedEvents = mapStreamMessageToEvents(message, state);
+        const mappedEvents = mapStreamMessageToEvents(message, state).map(event => {
+          if (message.type !== "result" || event.type !== "error") return event;
+          if (input.classifyFailure) return input.classifyFailure({ source: "result", frame: message, error: event, profile });
+          return event;
+        });
         if (state.toolCallLimitExceeded) {
           emitOnce({
             type: "error",
@@ -726,14 +740,13 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
       const exitMsg = stderr
         ? `${profile.label} CLI exited with code ${child.exitCode}: ${stderr}`
         : `${profile.label} CLI exited with non-zero exit code ${child.exitCode}`;
-      emitOnce({
-        type: "error",
-        message: exitMsg,
-        status: 502,
-        errorType: "upstream_error",
-        code: "process_exit_error",
-        retryable: false,
-      });
+      const error: Extract<AdapterEvent, { type: "error" }> = {
+        type: "error", message: exitMsg, status: 502, errorType: "upstream_error",
+        code: "process_exit_error", retryable: false,
+      };
+      emitOnce(input.classifyFailure
+        ? input.classifyFailure({ source: "process-exit", exitCode: child.exitCode, stderr, error, profile })
+        : error);
     } else if (toolBridge && deferredResultDone !== undefined && !sawSelectedToolTurnStop()) {
       emitOnce({
         type: "error",

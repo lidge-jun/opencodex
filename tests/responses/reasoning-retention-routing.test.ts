@@ -43,9 +43,10 @@ const historical = (text: string) => ({ type: "message", role: "user",
 describe("retained reasoning public wire contracts", () => {
   test.each([undefined, 1])("routed fallback preserves opaque compaction exactly (cap=%s)", async maxTokens => {
     const config = keyProviderConfig();
+    config.reasoningRetention = { enabled: true };
     config.providers.openai = { adapter: "openai-responses", authMode: "forward", codexAccountMode: "direct",
       baseUrl: "https://chatgpt.com/backend-api/codex" };
-    Object.assign(config, { reasoningRetention: { maxTokens } });
+    Object.assign(config, { reasoningRetention: { enabled: true, maxTokens } });
     const item = { type: "compaction", id: "cmp_retention_opaque", encrypted_content: "  native-opaque+/==\n" };
     const calls: string[] = [];
     globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
@@ -71,6 +72,7 @@ describe("retained reasoning public wire contracts", () => {
   test.each(["openai-responses", "openai-chat"] as const)("ordinary %s turns replay retained text as history, not new reasoning", async adapter => {
     const original = "  historical reasoning\n原文保持空格  ";
     const config = keyProviderConfig({ adapter });
+    config.reasoningRetention = { enabled: true };
     let sent: Record<string, any> = {};
     globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
       sent = await new Request(url, init).json() as Record<string, any>;
@@ -149,7 +151,7 @@ describe("retained reasoning public wire contracts", () => {
   test("oversized reasoning is archived verbatim and the replacement summary names the local file", async () => {
     const original = "large original reasoning\n准确原文";
     const config = keyProviderConfig();
-    config.reasoningRetention = { maxTokens: 1 };
+    config.reasoningRetention = { enabled: true, maxTokens: 1 };
     let sent = "";
     globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
       sent = await new Request(url, init).text();
@@ -177,7 +179,7 @@ describe("retained reasoning public wire contracts", () => {
   test.each(["http-error", "failed", "incomplete", "empty-summary", "non-json", "transport-error", "cancelled", "cancelled-body"])(
     "%s removes only the new archive and preserves a previous successful archive", async outcome => {
       const config = keyProviderConfig();
-      config.reasoningRetention = { maxTokens: 1 };
+      config.reasoningRetention = { enabled: true, maxTokens: 1 };
       const body = { model: "gw/some-model", input: [reasoning("original reasoning"),
         { type: "message", role: "user", content: "question" }] };
       globalThis.fetch = (async () => jsonResponse(completedPayload("successful summary"))) as typeof fetch;
@@ -221,7 +223,7 @@ describe("retained reasoning public wire contracts", () => {
 
   test.each([true, false])("same-request retries reuse one archive (successful=%s)", async successful => {
     const config = keyProviderConfig({ retryOn429: { attempts: 1, intervalMs: 1, maxIntervalMs: 1 } });
-    config.reasoningRetention = { maxTokens: 1 };
+    config.reasoningRetention = { enabled: true, maxTokens: 1 };
     const archiveDir = join(home, "reasoning-archive");
     const sentArchives: string[][] = [];
     globalThis.fetch = (async () => {

@@ -11,7 +11,7 @@
  *  - errors: {type:"error", error:{type,message}}; may arrive mid-stream after HTTP 200.
  */
 import { createHash } from "node:crypto";
-import { httpStatusFromTerminalError } from "../lib/errors";
+import { httpStatusFromTerminalError, UNDECLARED_TOOL_CALL_ERROR_CODE } from "../lib/errors";
 import { isTransientUpstreamStatus } from "../lib/upstream-retry";
 import {
   isTranslatorBudgetExceededError,
@@ -81,12 +81,16 @@ export function anthropicErrorType(status: number): string {
  * (devlog/_plan/261009_claude_1m_default/010).
  */
 const CLAUDE_PROMPT_TOO_LONG_RE = /prompt is too long|input is too long for requested model/i;
-const STATED_CONTEXT_COUNTS_RE = /maximum context length is (\d+) tokens[\s\S]*?(?:resulted in|you requested) (\d+) tokens/i;
+const MAX_OVERFLOW_MESSAGE_CHARS = 64 * 1024;
+const STATED_CONTEXT_LIMIT_RE = /maximum context length is (\d+) tokens/i;
+const STATED_REQUEST_COUNT_RE = /(?:resulted in|you requested) (\d+) tokens/i;
 
 export function claudePromptTooLongMessage(message: string): string {
+  message = message.slice(0, MAX_OVERFLOW_MESSAGE_CHARS);
   if (CLAUDE_PROMPT_TOO_LONG_RE.test(message)) return message;
-  const counts = STATED_CONTEXT_COUNTS_RE.exec(message);
-  if (counts) return `prompt is too long: ${counts[2]} tokens > ${counts[1]} maximum`;
+  const limit = STATED_CONTEXT_LIMIT_RE.exec(message);
+  const requested = limit && STATED_REQUEST_COUNT_RE.exec(message.slice(limit.index + limit[0].length));
+  if (limit && requested) return `prompt is too long: ${requested[1]} tokens > ${limit[1]} maximum`;
   return `prompt is too long: ${message}`;
 }
 
@@ -804,11 +808,14 @@ export function responsesSseToAnthropicSse(
             // Unclassified status-absent response.failed (relaySseWithFailedTail synthetic
             // tail) still lands on a transient 5xx here — the mid-stream reset shape maps to
             // overloaded_error by design.
+            // The undeclared-tool refusal is deterministic and proxy-owned, not an upstream
+            // condition: keep its api_error type and code instead of a retryable overload.
+            const deterministic = code === UNDECLARED_TOOL_CALL_ERROR_CODE;
             fail(
               status,
               message,
-              true,
-              code === "context_length_exceeded" ? code : undefined,
+              !deterministic,
+              deterministic || code === "context_length_exceeded" ? code : undefined,
             );
             break;
           }

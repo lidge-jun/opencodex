@@ -26,12 +26,15 @@ import {
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath, repoRoot } from "../helpers/repo-root";
+import { captureStartupChildOutput, STARTUP_OUTPUT_TAIL_CHARS } from "../helpers/startup-child-output";
 
 const CHILD_TIMEOUT_MS = 10_000;
 const configModuleUrl = pathToFileURL(repoPath("src/config.ts")).href;
 const generationGuardRaceScript = `
   import { existsSync, writeFileSync } from "node:fs";
-  import { withExpectedConfigGenerationSync } from ${JSON.stringify(configModuleUrl)};
+  process.stderr.write("generation-race: importing config\\n");
+  const { withExpectedConfigGenerationSync } = await import(${JSON.stringify(configModuleUrl)});
+  process.stderr.write("generation-race: config imported\\n");
 
   const payload = JSON.parse(process.env.OCX_TEST_PAYLOAD);
   const waitFor = path => {
@@ -42,14 +45,17 @@ const generationGuardRaceScript = `
     }
   };
   writeFileSync(payload.readyPath, "ready");
+  process.stderr.write("generation-race: ready\\n");
   waitFor(payload.releasePath);
 
   const result = withExpectedConfigGenerationSync({ value: 0 }, () => {
+    process.stderr.write("generation-race: callback entered\\n");
     writeFileSync(payload.callbackPath, payload.id);
     waitFor(payload.peerOutcomePath);
     return payload.id;
   });
   writeFileSync(payload.outcomePath, JSON.stringify(result));
+  process.stderr.write("generation-race: outcome written\\n");
   process.stdout.write(JSON.stringify(result));
 `;
 
@@ -61,29 +67,74 @@ function config(port = 10100): OcxConfig {
   return { port, providers: {}, defaultProvider: "openai" };
 }
 
-async function waitForPaths(paths: readonly string[]): Promise<void> {
+type GuardRaceChild = {
+  id: string;
+  readyPath: string;
+  process: ReturnType<typeof Bun.spawn>;
+  output: ReturnType<typeof captureStartupChildOutput>;
+};
+
+function trackGuardRaceChild(child: ReturnType<typeof Bun.spawn>, id: string, readyPath: string): GuardRaceChild {
+  return { id, readyPath, process: child,
+    output: captureStartupChildOutput(child.stdout as ReadableStream<Uint8Array>, child.stderr as ReadableStream<Uint8Array>) };
+}
+
+function guardRaceDiagnostics(children: readonly GuardRaceChild[]): string {
+  return JSON.stringify(children.map(child => {
+    const { stdout, stderr, elapsedMs, lastOutputAgoMs } = child.output.snapshot();
+    return {
+      id: child.id, pid: child.process.pid, exitCode: child.process.exitCode, signalCode: child.process.signalCode,
+      ready: existsSync(child.readyPath), stdout, stderr, elapsedMs, lastOutputAgoMs,
+    };
+  }));
+}
+
+async function waitForPaths(paths: readonly string[], children: readonly GuardRaceChild[]): Promise<void> {
   const deadline = Date.now() + CHILD_TIMEOUT_MS;
   while (!paths.every(existsSync)) {
-    if (Date.now() >= deadline) throw new Error(`timed out waiting for ${paths.join(", ")}`);
+    const exited = children.find(child => !existsSync(child.readyPath)
+      && (child.process.exitCode !== null || child.process.signalCode !== null));
+    if (exited) {
+      await exited.output.finish();
+      throw new Error(`generation child exited before readiness: ${guardRaceDiagnostics(children)}`);
+    }
+    if (Date.now() >= deadline) {
+      const missing = paths.filter(path => !existsSync(path));
+      throw new Error(`timed out waiting for ${missing.join(", ")}; children: ${guardRaceDiagnostics(children)}`);
+    }
     await Bun.sleep(5);
   }
 }
 
 async function collectGuardRaceChild(
-  child: ReturnType<typeof Bun.spawn>,
+  child: GuardRaceChild,
 ): Promise<Record<string, unknown>> {
-  const timeout = setTimeout(() => child.kill(), CHILD_TIMEOUT_MS);
+  const timeout = setTimeout(() => { try { child.process.kill(); } catch { /* Exit may race the deadline. */ } }, CHILD_TIMEOUT_MS);
   try {
-    const [exitCode, stdout, stderr] = await Promise.all([
-      child.exited,
-      new Response(child.stdout).text(),
-      new Response(child.stderr).text(),
-    ]);
-    expect(exitCode, stderr).toBe(0);
-    return JSON.parse(stdout) as Record<string, unknown>;
+    const exitCode = await child.process.exited;
+    const output = await child.output.finish();
+    expect(exitCode, output.stderr.tail).toBe(0);
+    return JSON.parse(output.stdout.tail) as Record<string, unknown>;
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function stopGuardRaceChildren(children: readonly GuardRaceChild[]): Promise<void> {
+  const reaped = await Promise.all(children.map(async child => {
+    if (child.process.exitCode === null && child.process.signalCode === null) {
+      try { child.process.kill("SIGKILL"); } catch { /* Observe exit/reap below even if exit raced the kill. */ }
+    }
+    let cleanupTimer: ReturnType<typeof setTimeout> | undefined;
+    const exited = await Promise.race([
+      child.process.exited.then(() => true),
+      new Promise<boolean>(resolve => { cleanupTimer = setTimeout(() => resolve(false), 1000); }),
+    ]);
+    clearTimeout(cleanupTimer);
+    await child.output.finish();
+    return exited;
+  }));
+  if (reaped.some(exited => !exited)) throw new Error(`generation child could not be reaped: ${guardRaceDiagnostics(children)}`);
 }
 
 beforeEach(() => {
@@ -272,7 +323,7 @@ test("two real processes racing one generation run exactly one callback", async 
       outcomePath: join(testRoot, `${id}.outcome`),
       peerOutcomePath: join(testRoot, `${peerId}.outcome`),
     };
-    return Bun.spawn([process.execPath, "--eval", generationGuardRaceScript], {
+    return trackGuardRaceChild(Bun.spawn([process.execPath, "--eval", generationGuardRaceScript], {
       cwd: repoRoot(),
       env: {
         ...process.env,
@@ -283,23 +334,68 @@ test("two real processes racing one generation run exactly one callback", async 
       stdin: "ignore",
       stdout: "pipe",
       stderr: "pipe",
+    }), id, payload.readyPath);
+  });
+
+  try {
+    await waitForPaths([join(testRoot, "a.ready"), join(testRoot, "b.ready")], children);
+    writeFileSync(releasePath, "go");
+    const results = await Promise.all(children.map(collectGuardRaceChild));
+
+    expect(results.filter(result => result.kind === "matched")).toHaveLength(1);
+    expect(results.filter(result => (
+      result.kind === "conflict"
+      || (result.kind === "unavailable" && result.reason === "busy")
+    ))).toHaveLength(1);
+    expect(["a", "b"].filter(id => existsSync(join(testRoot, `${id}.callback`)))).toHaveLength(1);
+    expect(readConfigGeneration()).toEqual({
+      kind: "ready",
+      generation: { value: 0 },
     });
-  });
+  } finally { await stopGuardRaceChildren(children); }
+});
 
-  await waitForPaths([join(testRoot, "a.ready"), join(testRoot, "b.ready")]);
-  writeFileSync(releasePath, "go");
-  const results = await Promise.all(children.map(collectGuardRaceChild));
+test("generation-race readiness reports a child's early exit and stderr", async () => {
+  const readyPath = join(testRoot, "exited.ready");
+  const child = trackGuardRaceChild(Bun.spawn([process.execPath, "--eval",
+    "console.error('fixture generation startup error'); process.exit(7);"],
+  { stdin: "ignore", stdout: "pipe", stderr: "pipe" }), "exited", readyPath);
+  try {
+    await child.process.exited;
+    await expect(waitForPaths([readyPath], [child])).rejects.toThrow("generation child exited before readiness");
+    expect(guardRaceDiagnostics([child])).toContain("fixture generation startup error");
+    expect(child.process.exitCode).toBe(7);
+  } finally { await stopGuardRaceChildren([child]); }
+});
 
-  expect(results.filter(result => result.kind === "matched")).toHaveLength(1);
-  expect(results.filter(result => (
-    result.kind === "conflict"
-    || (result.kind === "unavailable" && result.reason === "busy")
-  ))).toHaveLength(1);
-  expect(["a", "b"].filter(id => existsSync(join(testRoot, `${id}.callback`)))).toHaveLength(1);
-  expect(readConfigGeneration()).toEqual({
-    kind: "ready",
-    generation: { value: 0 },
-  });
+test("generation-race diagnostics drain both pipes with bounded tails", async () => {
+  const readyPath = join(testRoot, "output.ready");
+  const script = `import { writeFileSync } from 'node:fs';
+    await Bun.write(Bun.stdout, 'x'.repeat(256 * 1024) + 'stdout-tail');
+    await Bun.write(Bun.stderr, 'y'.repeat(256 * 1024) + 'stderr-tail');
+    writeFileSync(${JSON.stringify(readyPath)}, 'ready');`;
+  const child = trackGuardRaceChild(Bun.spawn([process.execPath, "--eval", script],
+    { stdin: "ignore", stdout: "pipe", stderr: "pipe" }), "output", readyPath);
+  try {
+    await waitForPaths([readyPath], [child]);
+    await child.process.exited;
+    const output = await child.output.finish();
+    expect(output.stdout.tail.length).toBeLessThanOrEqual(STARTUP_OUTPUT_TAIL_CHARS);
+    expect(output.stderr.tail.length).toBeLessThanOrEqual(STARTUP_OUTPUT_TAIL_CHARS);
+    expect(output.stdout.tail).toEndWith("stdout-tail");
+    expect(output.stderr.tail).toEndWith("stderr-tail");
+  } finally { await stopGuardRaceChildren([child]); }
+});
+
+test("generation-race cleanup reaps a child still waiting after readiness", async () => {
+  const readyPath = join(testRoot, "held.ready");
+  const script = `import { writeFileSync } from 'node:fs';
+    writeFileSync(${JSON.stringify(readyPath)}, 'ready'); await Bun.sleep(60_000);`;
+  const child = trackGuardRaceChild(Bun.spawn([process.execPath, "--eval", script],
+    { stdin: "ignore", stdout: "pipe", stderr: "pipe" }), "held", readyPath);
+  try { await waitForPaths([readyPath], [child]); }
+  finally { await stopGuardRaceChildren([child]); }
+  expect(child.process.exitCode !== null || child.process.signalCode !== null).toBe(true);
 });
 
 test("a throwing guard callback rolls back and releases the transaction", () => {

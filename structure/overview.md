@@ -137,7 +137,7 @@ still cover the rule, which is a judgement only review makes.
   separately in `tests/cli/restore-completes-shared-teardown.test.ts` and are not bound to this id.
   Enforced by `tests/codex-integration/codex-catalog-restore.test.ts`.
 - **INV-TESTS-01** — `tests/` is organised by domain (`tests/<domain>/`, mirroring `src/`); the explicit map
-  is `scripts/test-layout/layout.json`, with regex seeds and migration state in
+  is `scripts/test-layout/layout.json` plus its `explicitShards` sibling maps, with regex seeds and migration state in
   `scripts/test-layout/seeds.json`, and `tests/test-layout.test.ts` rejects a test outside its
   domain. Only the two layout guards sit at the root. Source-oracle tests reach the repository
   through `tests/helpers/repo-root.ts`, never `import.meta.dir + "/.."`. Provider additions register
@@ -301,4 +301,4 @@ Dashboard Fast-row persistence and client refresh follow the [Fast selector rows
 
 Codex compaction can select a request-local model through the
 [existing Responses handlers](transports/responses-failover.md#compaction-routing-overrides) for the configured
-manual and automatic triggers, while subsequent turns keep their conversation settings. The optional [ongoing priority failback](providers/openai-accounts.md#ongoing-priority-failback) is distinct from default cache affinity and changes no credential-eligibility boundary. Routed v1/v2 compaction uses `src/responses/reasoning-retention.ts` to keep readable reasoning out of the summarizer: text within the smaller of 20% of the compacting window and 100000 estimated tokens (both configurable) returns as exact historical context after a readable summary succeeds; an unknown window uses the absolute cap. Overflow is archived under the resolved OpenCodex home with a path notice. Native compact and opaque compaction output retain their original protocols.
+manual and automatic triggers, while subsequent turns keep their conversation settings. The optional [ongoing priority failback](providers/openai-accounts.md#ongoing-priority-failback) is distinct from default cache affinity and changes no credential-eligibility boundary. Only explicit `reasoningRetention.enabled: true` (advanced, default off) makes routed v1/v2 compaction use `src/responses/reasoning-retention.ts` to keep readable reasoning out of the summarizer: text within the smaller of 20% of the compacting window and 100000 estimated tokens (both configurable) returns as exact historical context after a readable summary succeeds; an unknown window uses the absolute cap. Overflow is archived under the resolved OpenCodex home with a path notice. Native compact and opaque compaction output retain their original protocols.

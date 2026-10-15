@@ -33,7 +33,9 @@ export interface RenderedDesktopModel extends DesktopProfileModel {
 // renderDesktopProfile() converts it to a letter-first wire id because current
 // Claude Desktop strips terminal dates before comparing model identities.
 const DATE_ALIAS = /^claude-opus-4-8-(202[6-9]\d{4}|203[0-5]\d{4})$/;
-const PROFILE_WIRE_PREFIX = "claude-opus-4-8-";
+// Desktop 2.31226's effort fallback recognizes fable prefixes, while Opus
+// requires an exact canonical id. Keep the suffix so set_model stays distinct.
+const PROFILE_WIRE_PREFIX = "claude-fable-5-";
 const LEGACY_YEAR = 2026;
 const LEGACY_DAY_COUNT = 365;
 const ALIAS_FIRST_YEAR = 2026;
@@ -142,6 +144,13 @@ export function desktopProfileWireAlias(alias: string): string {
   const day = Number(match[1]!.slice(6, 8));
   const slot = Math.round((Date.UTC(year, month - 1, day) - Date.UTC(ALIAS_FIRST_YEAR, 0, 1)) / 86_400_000);
   return `${PROFILE_WIRE_PREFIX}p${slot.toString(36).padStart(3, "0")}`;
+}
+
+/** Decode-only profile namespace emitted before the Desktop effort compatibility fix. */
+export function legacyDesktopProfileWireAlias(alias: string): string {
+  return validDateAlias(alias)
+    ? desktopProfileWireAlias(alias).replace(PROFILE_WIRE_PREFIX, "claude-opus-4-8-")
+    : alias;
 }
 
 export function parseDesktopProfile(value: unknown): DesktopProfile {

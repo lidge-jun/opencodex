@@ -32,6 +32,27 @@ describe("Kiro social device grant", () => {
     expect(JSON.stringify(done)).not.toMatch(/private-access|private-refresh|private-device/);
   });
 
+  test("accepts the authorized status the social poll returns after a pending reply", async () => {
+    fixture = kiroDeviceFixture();
+    const polls = [
+      { status: "authorization_pending", accessToken: null, refreshToken: null, profileArn: null },
+      { status: "authorized", identityProvider: "Google", accessToken: "private-access", refreshToken: "private-refresh", profileArn },
+    ];
+    fixture.setPost(async url => url.endsWith("/authorization") ? response(socialAuthorization) : response(polls.shift()!));
+    const start = await startKiroDeviceLogin("google", "admin-token");
+    fixture.advance(5_000);
+    expect((await statusKiroDeviceLogin(start.flowId, "admin-token"))?.state).toBe("pending");
+    expect(getAccountSet("kiro")).toBeNull();
+    fixture.advance(5_000);
+    const done = await statusKiroDeviceLogin(start.flowId, "admin-token");
+    expect(done?.state).toBe("done");
+    expect(polls).toHaveLength(0);
+    const account = getAccountSet("kiro")?.accounts[0];
+    expect(account?.credential.refresh).toBe("private-refresh");
+    expect(account?.credential.kiro?.profileArn).toBe(profileArn);
+    expect(JSON.stringify(done)).not.toMatch(/private-access|private-refresh|private-device/);
+  });
+
   test("unknown approval status or malformed profile persists nothing", async () => {
     for (const approval of [
       { status: "strange", accessToken: "a", refreshToken: "r", profileArn },

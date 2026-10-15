@@ -160,6 +160,19 @@
       ]
     },
     {
+      "path": "catalog-vendor-context.md",
+      "tier": 2,
+      "title": "Custom-provider context estimates",
+      "scope": "Bundled model-ID window fallback, ambiguity handling, and inferred-capacity provenance.",
+      "documents": [
+        "src/codex/catalog/vendor-context.ts",
+        "src/codex/catalog/model-hints.ts",
+        "src/codex/catalog/parsing.ts",
+        "src/codex/catalog/routed-gather.ts",
+        "src/codex/catalog/effort.ts"
+      ]
+    },
+    {
       "path": "catalog-effort-clamp.md",
       "tier": 2,
       "title": "Effort-clamp observations",
@@ -175,6 +188,18 @@
         "src/codex/",
         "src/providers/",
         "src/server/"
+      ]
+    },
+    {
+      "path": "advisor.md",
+      "tier": 2,
+      "title": "Advisor Sidecar",
+      "scope": "The OpenCodex-owned expert consultation sidecar: synthetic advisor tool, preflight policy, loopback consultation through the routing authority, and the optional-subsystem seam.",
+      "documents": [
+        "src/advisor/",
+        "src/server/responses/advisor-slot.ts",
+        "src/server/responses/advisor-plan-slot.ts",
+        "src/lib/advisor-activation.ts"
       ]
     },
     {
@@ -497,6 +522,7 @@
         "src/codex/",
         "src/lib/",
         "src/quota/",
+        "src/routing/history/",
         "src/server/",
         "src/usage/"
       ]
@@ -512,6 +538,13 @@
         "src/integrations/",
         "src/lib/"
       ]
+    },
+    {
+      "path": "clients/codex-desktop.md",
+      "tier": 5,
+      "title": "Codex Desktop Compatibility",
+      "scope": "Windows package activation, restart context, and protected compatibility authority persistence.",
+      "documents": ["src/codex/", "src/cli/"]
     },
     {
       "path": "clients/chatgpt-desktop.md",
@@ -534,6 +567,25 @@
         "src/cli/",
         "src/client/",
         "src/server/"
+      ]
+    },
+    {
+      "path": "clients/claude-desktop-config-reads.md",
+      "tier": 5,
+      "title": "Claude Desktop Configuration Reads",
+      "scope": "Verified regular-file reads of Claude Desktop config-library metadata, profiles and snapshots.",
+      "documents": [
+        "src/claude/"
+      ]
+    },
+    {
+      "path": "clients/qoder.md",
+      "tier": 5,
+      "title": "Qoder Client Integration",
+      "scope": "Qoder settings.json provider and custom-model ownership, export and loopback placeholder rules.",
+      "documents": [
+        "src/clients/",
+        "src/integrations/"
       ]
     },
     {
@@ -586,6 +638,13 @@
       ]
     },
     {
+      "path": "ops/service-logging.md",
+      "tier": 6,
+      "title": "Managed Service Logging",
+      "scope": "Service-only console timestamps and bounded copy-truncate log retention.",
+      "documents": ["src/service/logging.ts"]
+    },
+    {
       "path": "ops/service-health-recovery.md",
       "tier": 6,
       "title": "Service Health Recovery",
@@ -596,6 +655,17 @@
         "src/service/health-sentinel-policy.ts",
         "src/service/health-sentinel-probe.ts",
         "src/service/health-sentinel-windows.ts"
+      ]
+    },
+    {
+      "path": "ops/update-supervised-recovery.md",
+      "tier": 6,
+      "title": "Update Supervised Recovery",
+      "scope": "Manager-first recovery after a failed post-update service refresh, and the non-zero unsupervised fallback.",
+      "documents": [
+        "src/update/supervised-recovery.mjs",
+        "src/update/job-supervised-restart.ts",
+        "src/update/job.ts"
       ]
     },
     {

@@ -1,5 +1,6 @@
 # Claude Desktop Integration
 
+The separate [CLI tier-default apply](../gui-and-management-api.md) writes the shared Claude Code user settings through `src/claude/model-default-settings.ts`. It pairs selected aliases with labels derived by `claudeTierDisplayName` in `src/claude/context-windows.ts`; preview includes the label edits, with an empty replacement indicating removal. Existing labels are managed only when they exactly match the generated name for their current alias; all other labels remain user-owned, including empty or non-string values. A matching generated label is removed only when its explicitly selected tier is replaced by a non-alias. An unset tier retains both its settings model ID and display label. Identical manually entered labels cannot be distinguished from generated ones. Code processes started by other applications can inherit those explicitly applied defaults; Desktop family profile assignments are not edited by this operation. `tests/claude-integration/claude-model-default-labels.test.ts` covers this ownership and preview/apply contract.
 Native result continuations and function-result injection follow [the mode-specific result and control contract](../transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
 Explicit Codex CLI installation observation does not launch or reconfigure a desktop client. See the [read-only observation contract](../runtime.md#explicit-codex-cli-installation-observation).
 
@@ -92,7 +93,7 @@ traffic through a local interception proxy, which Anthropic may treat as a terms
 owned settings are still observed; otherwise the field is `null`.
 `/api/sync` and roster-update auto-apply never write a gateway profile while the resolved mode is
 first-party; both re-resolve after model discovery before writing.
-Background refresh preserves the selected owned gateway profile's mode, refuses symlinked library, metadata, profile or backup paths and non-regular profiles, and rechecks admission, the selected owned metadata entry and its applied fingerprint in the no-follow writer's pre-rename hook; it leaves metadata and backup bytes unchanged.
+Background refresh preserves the selected owned gateway profile's mode, refuses symlinked library, metadata, profile or backup paths and non-regular profiles, and rechecks admission, the selected owned metadata entry and its applied fingerprint in the no-follow writer's pre-rename hook; it leaves metadata and backup bytes unchanged. Desktop library configuration reads follow [`clients/claude-desktop-config-reads.md`](claude-desktop-config-reads.md).
 
 Mode switches establish the replacement before removing the previous connection. A failed
 first-party apply (disabled intercept, CA failure, unreadable settings or foreign env) preserves
@@ -386,16 +387,25 @@ occupied" once a catalog exceeded 365 routes, because stale assignments are reta
 the set only grows. 2026 is still allocated first, so existing assignments keep their slots, and
 2027-2035 are reached only after it fills. Years before 2026 stay rejected: dated ids such as
 `claude-opus-4-8-20250201` are real Anthropic snapshot ids and the inbound decoder relies on that
-distinction. At render time each stored slot becomes a unique `p`-prefixed four-character wire
-code, disjoint from the historical three-character hash namespace. Claude Desktop strips terminal
+distinction. At render time each stored slot becomes a unique `claude-fable-5-pXXX` wire
+id, disjoint from the historical three-character hash namespace. Desktop 2.31226 recognizes
+the fable prefix in its effort fallback, whereas a suffixed Opus id misses its canonical table
+(#7006). This is client compatibility, not authoritative per-provider effort metadata.
+Claude Desktop strips terminal
 dates when comparing active-session model identity, so writing
 the persisted date slots directly would collapse every managed route to `claude-opus-4-8` and
-suppress `set_model` between them (#3782). The registry accepts both forms during migration. If an
+suppress `set_model` between them (#3782). The registry accepts dates and previous
+`claude-opus-4-8-pXXX` wire IDs during migration. If an
 active real Anthropic id claims a persisted date slot, reconciliation reallocates the non-Anthropic
 route before rendering. If any synthetic or compatibility alias matches an active real Anthropic id,
 the conflicting routed row or compatibility binding is omitted with a warning, and the real
 Anthropic identity remains unclaimed; a profile alias can never overwrite native routing.
 `src/claude/desktop-profile.ts` owns the slot range and wire conversion.
+The native launcher (`src/cli/claude.ts`) clears proxy-only profile IDs, except genuine
+IDs known from the registry or declared models/profile. Active synthetic bindings take
+priority over stale declarations. Discovery uses `resolvableDesktop3pAlias` in
+`src/claude/desktop-3p.ts`: synthetic IDs must decode to their advertised route;
+real Anthropic IDs retain identity passthrough.
 
 Persisted date-shaped Desktop IDs can overlap genuine native model IDs. When available discovery and
 mapping evidence cannot resolve one, Messages and count-tokens return HTTP 503 with the fixed

@@ -2,18 +2,8 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, openSync, readFileSync, writeSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  atomicWriteFile,
-  getConfigDir,
-  loadConfig,
-} from "../config";
-import {
-  readPid,
-  readRuntimePort,
-  removePid,
-  removeRuntimePort,
-  verifyPidIdentity,
-} from "../config/process-state";
+import { atomicWriteFile, getConfigDir, loadConfig } from "../config";
+import { readPid, readRuntimePort, removePid, removeRuntimePort, verifyPidIdentity } from "../config/process-state";
 import { isProcessAlive, killProxy } from "../lib/process-control";
 import { selfLaunchArgv } from "../lib/self-launch-argv";
 import { killWindowsSchedulerWrappers } from "../lib/windows-service-wrappers";
@@ -33,9 +23,10 @@ import {
 } from "../server/proxy-liveness";
 import { isServiceInstalled, isServiceViable, readServiceBackend, stopWindows } from "../service";
 import { runUpdateRestartWithOwnershipLease, type ServiceOwnershipResolution } from "./restart-ownership";
+import { restartServiceManagerAfterUpdate, unsettledManagerRestartFailure, unsupervisedRestartFailure, type ManagerRestartFn } from "./job-supervised-restart";
 import {
   type Channel, type Installer,
-  PKG,
+  PKG, STANDALONE_UPDATE_HINT,
   checkUpdatePackageIntegrity,
   currentVersion,
   defaultUpdateTag,
@@ -492,17 +483,17 @@ export function checkForUpdate(
   const ownership = deps.detectInstallOwnership?.();
   const installer = ownership?.installer ?? deps.detectInstall();
   const channel = requestedChannel ?? normalizeUpdateChannel(null, current);
-  const latest = installer === "source" ? null : deps.latestVersion(channel);
+  const latest = installer === "source" || installer === "standalone" ? null : deps.latestVersion(channel);
   const updateAvailable = !!latest && isNewer(latest, current, channel);
   let reason: string | undefined;
-  let command = installer === "source"
+  let command = installer === "standalone" ? STANDALONE_UPDATE_HINT : installer === "source"
     ? manualSourceCommand()
     : installer === "mise"
       ? (ownership && deps.miseUpdateCommand?.(ownership)) ?? ""
       : updateExecutionCommand(installer, channel).display;
 
-  if (installer === "source") {
-    reason = "source_checkout";
+  if (installer === "source" || installer === "standalone") {
+    reason = installer === "source" ? "source_checkout" : "standalone_install";
   } else if (installer === "mise") {
     reason = command ? "externally_managed" : "external_ownership_invalid";
   } else if (!latest) {
@@ -517,7 +508,7 @@ export function checkForUpdate(
     channel,
     installer,
     updateAvailable,
-    canUpdate: installer !== "source" && installer !== "mise" && updateAvailable,
+    canUpdate: installer !== "source" && installer !== "standalone" && installer !== "mise" && updateAvailable,
     command,
     releaseNotesUrl: RELEASE_NOTES_URL,
     ...(reason ? { reason } : {}),
@@ -1005,6 +996,7 @@ export interface RestartIo {
   releaseForServiceManagerFn?: () => void;
   /** Re-acquire the lease for the direct-start fallthrough, then re-run the veto; a notice stops the restart. */
   reacquireForDirectStartFn?: () => { readonly notice: string; readonly failed: boolean } | null;
+  restartServiceManagerFn?: ManagerRestartFn; // launchd/systemd restart before a managed direct fallback (#7043)
   probeProxy?: (port: number, hostname?: string) => Promise<boolean>;
   /** Richer /healthz read for update-correlated restart evidence (pid + version). */
   probeProxyIdentity?: (port: number, hostname?: string) => Promise<RestartProxyIdentity | null>;
@@ -1035,7 +1027,7 @@ export interface RestartIo {
     job: UpdateJobState,
     captured?: { port: number; hostname: string; oldPid?: number },
     io?: RestartIo,
-  ) => Promise<false | void>;
+  ) => Promise<false | void | "unsupervised">;
   /**
    * PIDs currently LISTENing on the captured port. Used to widen the post-update
    * kill allowlist beyond the pre-update PID (Windows often leaves a respawned
@@ -1098,7 +1090,7 @@ async function restartAfterUpdate(
   job: UpdateJobState,
   captured?: { port: number; hostname: string; oldPid?: number },
   io: RestartIo = {},
-): Promise<false | void> {
+): Promise<false | void | "unsupervised"> {
   const serviceInstalled = (io.serviceInstalledFn ?? isServiceInstalled)();
   const config = loadConfig();
   // Stop-first update already cleared pid/runtime state, so the pre-update capture is
@@ -1250,6 +1242,12 @@ async function restartAfterUpdate(
     }
   }
 
+  // #7043: a managed install asks launchd/systemd first; only the manager's own job counts as recovered.
+  const managed = !serviceInstalled ? "failed" : await (io.restartServiceManagerFn ?? restartServiceManagerAfterUpdate)(
+    { port, hostname, release: io.releaseForServiceManagerFn }, line => updateJob(job, {}, line));
+  if (managed === "supervised") return;
+  if (managed === "unsettled") { updateJob(job, ...unsettledManagerRestartFailure(port)); return false; }
+  const fallback = serviceInstalled ? "unsupervised" as const : undefined; // every exit below is unproven ownership
   // The service refresh ran outside the lease; take it back so the veto and the kills/start below stay serialized.
   const restartVeto = io.reacquireForDirectStartFn?.();
   if (restartVeto) {
@@ -1282,7 +1280,7 @@ async function restartAfterUpdate(
     );
     if (liveHolders.length > 0) {
       updateJob(job, {}, `Live holder(s) remain on port ${port}; not starting on another port. Retry 'ocx start --port ${port}'.`);
-      return;
+      return fallback;
     }
     // Dead PIDs can still own LISTEN rows. SetTcpEntry needs elevation (rc 317 on a
     // normal update worker), so poll until netstat is empty and the start runtime can bind.
@@ -1306,7 +1304,7 @@ async function restartAfterUpdate(
             + `${formatPortHolders(port, listPids, verifyOcx, directAllow)} `
             + `Retry 'ocx start --port ${port}'.`,
         );
-        return;
+        return fallback;
       }
     }
   }
@@ -1314,7 +1312,7 @@ async function restartAfterUpdate(
   // retries on missing /healthz after prepare + ghost-LISTEN clear.
   if (io.spawnStart) {
     io.spawnStart(job, job.installer, port, launcher);
-    return;
+    return fallback;
   }
   const sleep = io.sleepMs ?? ((ms: number) => new Promise<void>(r => setTimeout(r, ms)));
   const probe = io.probeProxy ?? (async (p: number, host?: string) => (
@@ -1334,7 +1332,7 @@ async function restartAfterUpdate(
         {},
         `Proxy already healthy on ${hostname}:${port} at ${expectedVersion}; skipping pinned start.`,
       );
-      return;
+      return fallback;
     }
   }
   const attempts = 3;
@@ -1393,12 +1391,13 @@ async function restartAfterUpdate(
     child.once("close", retireChild);
     const healthDeadline = now() + perAttemptHealthMs;
     while (now() < healthDeadline) {
-      if (await probe(port, hostname)) return;
+      if (await probe(port, hostname)) return fallback;
       await sleep(500);
     }
   }
   // Exhausted retries: do not leave a hung pinned-start child owning the port.
   killSpawnAttempt(lastChild);
+  return fallback;
 }
 
 /** Compact listen-holder summary for update-job logs when reclaim fails. */
@@ -1454,7 +1453,7 @@ export function restartAfterUpdateForTests(
   job: UpdateJobState,
   captured: { port: number; hostname: string; oldPid?: number },
   io: RestartIo,
-): Promise<false | void> {
+): Promise<false | void | "unsupervised"> {
   return restartAfterUpdate(job, captured, io);
 }
 
@@ -1729,12 +1728,13 @@ export async function finishGuiUpdateRestart(
     }
   }
   const restartFn = io.restartAfterUpdateFn ?? restartAfterUpdate;
-  if ((await restartFn(job, captured, io)) === false) return false;
-  if (!usesNodeLauncher(installer)) {
-    // Bun/source: health alone remains enough unless a richer identity probe is supplied.
-    if (!io.probeProxyIdentity) return confirmRestartedProxy(job, captured, io);
-  }
-  return confirmPackageManagerExplicitRestart(job, captured, io);
+  const restarted = await restartFn(job, captured, io);
+  if (restarted === false) return false;
+  // Bun/source: health alone remains enough unless a richer identity probe is supplied.
+  const confirm = !usesNodeLauncher(installer) && !io.probeProxyIdentity ? confirmRestartedProxy : confirmPackageManagerExplicitRestart;
+  const confirmed = await confirm(job, captured, io);
+  if (confirmed && restarted === "unsupervised") updateJob(job, ...unsupervisedRestartFailure(captured.port)); // #7043
+  return confirmed && restarted !== "unsupervised";
 }
 
 /**

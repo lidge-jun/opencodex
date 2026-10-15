@@ -1,3 +1,4 @@
+import type { VendorContextInference } from "./vendor-context";
 import { isCodexControlPlaneModel } from "../control-plane-models";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -120,6 +121,8 @@ export interface CatalogModel {
   suppressSyntheticMax?: boolean;
   defaultReasoningEffort?: string;
   contextWindow?: number;
+  /** Bundled fallback only; never a serving-provider capability assertion. */
+  contextWindowInference?: VendorContextInference;
   maxInputTokens?: number;
   /** Model-scoped output-token ceiling; omitted when no authoritative value is known. */
   maxOutputTokens?: number;
@@ -139,6 +142,8 @@ export interface CatalogModel {
   supportsVerbosity?: boolean;
   /** Whether this exact routed model has a verified OpenAI-compatible service tier. */
   supportsServiceTier?: boolean;
+  /** Captured eligible service-tier wire explicitly maps ultrafast to ultrafast. */
+  supportsUltraFastTier?: boolean;
   /** Optional provider-specific copy for the advertised Fast tier. */
   fastTierDescription?: string;
   supportsReasoningSummaries?: boolean;

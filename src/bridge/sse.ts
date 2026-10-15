@@ -1272,7 +1272,7 @@ export function bridgeToResponsesSSE(
                 emit("response.completed", {
                   response,
                 });
-                if (options?.compaction && !event.compactionEncryptedContent) options.compactionRetention?.commit();
+                if (!closed && !terminated && options?.compaction && !event.compactionEncryptedContent) options.compactionRetention?.commit();
                 reportTerminal("completed");
               }
               terminalEvent = true;

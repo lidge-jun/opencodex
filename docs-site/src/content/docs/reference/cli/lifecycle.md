@@ -437,6 +437,10 @@ read-only SQLite inspection. Zero-byte, empty-unversioned, and rowless states ar
 from catalog/app-server health, so a successful catalog refresh is not mistaken for successful
 Codex config injection.
 
+The pending-history check reads a checkpointed WAL-mode `state_5.sqlite` even when Codex is
+closed and its `-wal`/`-shm` files are absent. Missing sidecars alone do not indicate a history
+integrity failure. Backup manifests and restore targets still undergo integrity validation.
+
 After stopping the OpenCodex proxy/service, explicitly preserve and move a proven non-authoritative
 coordinator, then retry sync:
 
@@ -793,6 +797,23 @@ any stale-baked-path finding.
 On Windows the scheduler backend keeps its own richer status output, which already
 reported Task Scheduler registration separately from proxy reachability.
 
+### Service logs
+
+The managed proxy writes stdout and stderr to `~/.opencodex/service.log`
+(or `$OPENCODEX_HOME/service.log` with a custom home). When `OCX_SERVICE` is set,
+`ocx start` prefixes every console log line, including multiline diagnostics,
+with a UTC ISO-8601 timestamp such as `2026-10-14T03:04:05.678Z`.
+Foreground output and other CLI commands keep their existing format.
+
+The service checks the log size at startup and once per minute. Above 20 MiB it
+copies the newest 20 MiB into `service.log.1`, moves the previous archive to
+`service.log.2`, and truncates the active file in place so the service manager's
+open append handles remain usable. The active file can exceed the threshold
+between checks; each archive is limited to 20 MiB. Rotation failures do not stop
+the service. Copy-truncate can lose lines written during the copy, and an archive
+may begin partway through a line. Existing Windows wrapper messages keep their
+wrapper format.
+
 On macOS this also covers a subtler failure: `launchctl load` reports failure on
 stderr while exiting 0, so a load that did not take used to leave launchd running a
 **previous** version of the service definition while the command printed a checkmark.
@@ -847,6 +868,11 @@ If installation is refused or the wrapper cannot run, the command exits nonzero 
 reports the failure reason. A runnable Unix wrapper counts as a successful install even before
 activation in the current shell; an already-installed healthy shim also counts as success.
 For Windows installations that expose only `codex.exe`, use `ocx service install` for autostart.
+
+On macOS/APFS, a reboot can change filesystem device numbers. An unchanged private wrapper and
+shell environment remain owned after that change, so status, repair, and uninstall continue to
+work. OpenCodex still checks their recorded inodes, paths, owner, permissions, and content/launcher
+binding; replaced or unvalidated files are preserved.
 
 After brew/fnm and other PATH setup, run the activation command printed by install. With the default
 home, it is:
@@ -1008,6 +1034,8 @@ with bounded, read-only provenance inspection. `ocx system codex-cli-update chec
 package registry or install an update.
 
 ### `ocx update [--tag latest|preview]`
+
+Compiled standalone installs, including the Windows MSI Desktop bundle, are updated through **Check for Updates…** in OpenCodex Desktop, or by reinstalling the standalone binary from [GitHub Releases](https://github.com/lidge-jun/opencodex/releases). `ocx system update check` reports `installer: "standalone"`, `canUpdate: false`, and `reason: "standalone_install"` with that guidance. `ocx update` exits unsuccessfully with the same hint; it does not run a package-manager update for the compiled executable. A genuine source checkout still reports `installer: "source"` and `reason: "source_checkout"`.
 
 When OpenCodex is installed through mise, this command exits unsuccessfully before stopping the proxy or changing package files and shows `mise upgrade <tool>`, using the verified local mise alias. Update checks remain available and report the installation as externally managed. An unreadable or inconsistent mise ownership record fails closed without guessing a tool name, and `--tag preview` never changes mise's configured selection.
 

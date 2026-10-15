@@ -15,7 +15,7 @@ Bun-native TypeScript with no separate server compile step.
 - `tests/` — Bun tests in domain directories that mirror `src/`
   (`tests/<domain>/*.test.ts`; `providers/` and `adapters/` have one more
   level for the larger vendors). The explicit map is
-  `scripts/test-layout/layout.json`, with regex seeds and migration state in
+  `scripts/test-layout/layout.json` plus its `explicitShards` sibling maps, with regex seeds and migration state in
   `scripts/test-layout/seeds.json`; `tests/test-layout.test.ts` enforces that every file resolves to a
   domain and sits in it, and only the two layout guards live at the root.
   Shared helpers in `tests/helpers/`, fixtures in `tests/fixtures/`, broader
@@ -23,7 +23,7 @@ Bun-native TypeScript with no separate server compile step.
   through `tests/helpers/repo-root.ts` (`repoRoot()`, `repoPath()`,
   `helperPath()`, `fixturePath()`), never `import.meta.dir + "/.."`. A new
   test file lands in its domain directory and needs an entry in both
-  `layout.json` `explicit` and `tests/fixtures/test-layout-expected.json`
+  `layout.json` `explicit` (or its domain shard) and a `tests/fixtures/test-layout-expected*.json` shard
   (`tests/test-layout-tooling.test.ts` names the missing one); the regex
   seeds in `seeds.json` place a conventionally named file until then.
   History: `devlog/_fin/260905_test_modularization_and_windows/`.
@@ -268,7 +268,7 @@ fails `file-size ratchet: repository` for your branch and for every branch cut f
 Two branches can each stay under a cap alone and sum over it together; that is what
 happened in #4908, #5011 and #5018. The remedy is always a move, never a number: put the
 new case in a sibling file, byte for byte, and register it in **both**
-`scripts/test-layout/layout.json` and `tests/fixtures/test-layout-expected.json`.
+`scripts/test-layout/layout.json` (or its domain shard) and a `tests/fixtures/test-layout-expected*.json` shard.
 `d3ca5522db` is the original precedent.
 
 A moved test is not automatically the same test. One case moved out of
@@ -364,6 +364,14 @@ than nudged.
   invisible on its author's profile. The 27 landings already in that state are
   recorded in [`CREDITS.md`](./CREDITS.md); `missing_coauthor_credit` in
   `.github/scripts/pr-carry-attribution.cjs` is why the list should not grow.
+
+## CI policy (maintainer decision — do not change)
+
+- Pull requests run **only the fast Ubuntu subset**.
+- Full cross-platform (macOS/Windows) CI runs **only** via manual
+  `workflow_dispatch` and on push to `main`/`preview` (release lines).
+- **Never** add a `dev` push trigger, or `pull_request` runs for macOS/Windows
+  jobs, to any workflow. PRs that change this policy will be closed.
 
 ## Branch policy
 

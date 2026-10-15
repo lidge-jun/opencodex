@@ -64,6 +64,7 @@ export const compactionRoutingSchema = z.object({
 }).strict();
 
 export const reasoningRetentionSchema = z.object({
+  enabled: z.boolean().optional(),
   maxContextPercent: z.number().gt(0).max(100).optional(),
   maxTokens: z.number().int().positive().optional(),
 }).strict();
@@ -336,6 +337,7 @@ export const providerConfigSchema = z.object({
   responseTierAuthoritative: z.boolean().optional(),
   fastEnabled: z.boolean().optional(),
   supportsServiceTier: z.boolean().optional(),
+  inferContextWindow: z.boolean().optional(),
   modelSupportsServiceTier: z.record(z.string().min(1), z.boolean()).optional(),
   modelSuppressSyntheticMax: z.record(z.string().min(1), z.boolean()).optional(),
   preserveResponsesReasoningContent: z.boolean().optional(),

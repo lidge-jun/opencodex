@@ -4,11 +4,49 @@ import type { AdapterRequest, ProviderAdapter } from "../base";
 import { mapReasoningEffort } from "../../reasoning-effort";
 import { buildSystemPrompt, MAX_TOOL_BLOCK_STARTS } from "../coding-agent/protocol";
 import { buildCodingAgentToolCatalog, CodingAgentToolCatalogError } from "../coding-agent/tool-catalog";
-import { baseScopedEnv, runCodingAgentTurn, type CodingAgentDeps, type CodingAgentToolBridgeInput } from "../coding-agent/turn";
+import { baseScopedEnv, runCodingAgentTurn, type CodingAgentDeps, type CodingAgentToolBridgeInput, type CodingAgentFailure } from "../coding-agent/turn";
 import { QODER_PROFILES, resolveQoderProfile, type QoderProfile } from "./profiles";
 import { QoderScaffoldFilter, QODER_SCAFFOLD_ERROR_CODE, qoderScaffoldErrorMessage } from "./scaffold-guard";
 
 export type QoderAdapterDeps = CodingAgentDeps;
+
+function classifyQoderFailure(failure: CodingAgentFailure): Extract<AdapterEvent, { type: "error" }> {
+  const { error, profile } = failure;
+  const auth = (): typeof error => ({
+    ...error, status: 401, errorType: "authentication_error", code: "invalid_api_key",
+    retryable: false, apiKeyRecovery: true,
+  });
+  if (failure.source === "process-exit") {
+    return failure.exitCode === 41 || (failure.exitCode === 1
+      && failure.stderr.includes("QoderAuthError")
+      && !!profile.tokenEnv && failure.stderr.includes(profile.tokenEnv)
+      && /token (?:that )?was rejected/i.test(failure.stderr))
+      ? auth() : error;
+  }
+  const code = failure.frame.error_code;
+  if (code === 105) return auth();
+  if (code === 114) return {
+    ...error, status: 403, errorType: "permission_error", code: "permission_denied", retryable: false,
+  };
+  if (typeof code === "number" && [110, 113, 115, 116, 117, 118, 119, 122].includes(code)) {
+    return {
+      ...error, status: 429, errorType: "insufficient_quota", code: "insufficient_quota", retryable: false,
+      ...(code === 110 || code === 118 ? { apiKeyRecovery: true as const } : {}),
+    };
+  }
+  if (typeof code === "number") return error;
+  if (/daily usage limit|credit usage limit/i.test(error.message)) {
+    const isAccountDaily = /^You've reached your daily usage limit for Chat\b/i.test(error.message.trim())
+      && !/\b(?:team|model|shared)\b/i.test(error.message);
+    return {
+      ...error, status: 429, errorType: "insufficient_quota", code: "insufficient_quota",
+      retryable: false,
+      ...(isAccountDaily ? { apiKeyRecovery: true as const } : {}),
+    };
+  }
+  if (/\binvalid (?:personal access )?token\b|\btoken (?:was |that was )?rejected\b|\bqoder authentication rejected\b/i.test(error.message)) return auth();
+  return error;
+}
 
 const QODER_MCP_SERVER_NAME = "opencodex";
 const QODER_MCP_SERVER_PATH = fileURLToPath(new URL("../coding-agent/mcp-server.ts", import.meta.url));
@@ -164,6 +202,7 @@ export function createQoderAdapter(provider: OcxProviderConfig, deps: QoderAdapt
       const system = buildSystemPrompt(parsed);
       await runCodingAgentTurn({
           profiles: QODER_PROFILES,
+          classifyFailure: classifyQoderFailure,
           provider,
           parsed,
           incoming,

@@ -329,8 +329,8 @@ export async function syncEnabledClientIntegrations(
     config,
     port,
   }, unattended
-    ? ["mcode", "pi", "aside", "raycast", "omo", "commandcode", "droid", "opencode", "kilo"]
-    : ["mcode", "pi", "aside", "raycast", "omo", "cline", "commandcode", "droid", "opencode", "kilo"],
+    ? ["mcode", "pi", "aside", "raycast", "omo", "commandcode", "droid", "opencode", "kilo", "qoder"]
+    : ["mcode", "pi", "aside", "raycast", "omo", "cline", "commandcode", "droid", "opencode", "kilo", "qoder"],
   ...unattended ? [{ refreshOnly: true, admit }] as const : []));
 
   return out;
@@ -618,7 +618,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       ? body.memoryModels
       : memoryModelsSchema.safeParse(body.memoryModels);
     const reasoningRetention = body.reasoningRetention == null ? body.reasoningRetention : reasoningRetentionSchema.safeParse(body.reasoningRetention);
-    if (reasoningRetention != null && !reasoningRetention.success) return jsonResponse({ error: "reasoningRetention requires maxContextPercent greater than 0 and at most 100 and/or positive integer maxTokens; no other fields are allowed" }, 400);
+    if (reasoningRetention != null && !reasoningRetention.success) return jsonResponse({ error: "reasoningRetention requires optional boolean enabled, maxContextPercent greater than 0 and at most 100 and/or positive integer maxTokens; no other fields are allowed" }, 400);
     if (memoryModels != null && !memoryModels.success) {
       return jsonResponse({ error: "memoryModels requires a nonblank model and an optional declared reasoningEffort per configured phase, and no other fields" }, 400);
     }

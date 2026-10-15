@@ -1,6 +1,6 @@
-import { isNonReplayableResponse, markResponseNonReplayable } from "../../lib/upstream-retry";
 import type { TranslatorBudget } from "../../lib/translator-budget";
 import { finalizeTranslatorBudgetResponse } from "../../lib/translator-budget";
+import { isNonReplayableResponse, markResponseNonReplayable } from "../../lib/upstream-retry";
 import {
   isNativePassthroughSseResponse,
   markNativePassthroughSseResponse,
@@ -70,10 +70,10 @@ export function finalizeAccountLease(response: Response, release: () => void, on
     async cancel(reason) { onCancel?.(); try { await reader.cancel(reason); } finally { finish(); } },
   });
   const wrapped = new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+  if (isNonReplayableResponse(response)) markResponseNonReplayable(wrapped);
   if (isNativePassthroughSseResponse(response)) markNativePassthroughSseResponse(wrapped);
   if (isEagerRelaySseResponse(response)) markEagerRelaySseResponse(wrapped);
   if (isPreinspectedJsonResponse(response)) markPreinspectedJsonResponse(wrapped);
-  if (isNonReplayableResponse(response)) markResponseNonReplayable(wrapped);
   if (runTurnAdapterSseResponses.has(response)) runTurnAdapterSseResponses.add(wrapped);
   return wrapped;
 }

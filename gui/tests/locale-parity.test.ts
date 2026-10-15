@@ -171,6 +171,9 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   "integrations.tab.kilo",
   "api.clientConfig.clientKilo",
   "api.clientConfig.clientDroid",
+  // Qoder is a product name, identical in every locale.
+  "integrations.tab.qoder",
+  "api.clientConfig.clientQoder",
   // Command Code is a product name, identical in every locale.
   "integrations.tab.commandcode",
   "api.clientConfig.clientCommandCode",

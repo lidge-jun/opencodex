@@ -31,6 +31,7 @@ export const PROTOCOL_ROLLOUT_KEYS = [
   "managedMessagesNative",
   "managedMessagesNativeOAuth",
   "directEncoders",
+  "antigravityDirect",
   "shadowPlan",
 ] as const satisfies readonly (keyof ProtocolRolloutSettings)[];
 const ROLLOUT_KEYS = new Set<string>(PROTOCOL_ROLLOUT_KEYS);

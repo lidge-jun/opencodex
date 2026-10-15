@@ -160,7 +160,8 @@ export default function Startup({ apiBase, machineApiBase = apiBase, connected =
           // serviceViable, not installed-and-running: a stale or conflicting
           // service can be both while the page still reports it unhealthy.
           ? next.serviceViable
-          : next.shimInstalled && next.shimHealthy;
+          // An activation-pending shim is installed; only the user's shell can finish it.
+          : next.shimInstalled && (next.shimHealthy || next.shimActivationPending === true);
         return satisfied ? null : current;
       });
       paintedRef.current = true;

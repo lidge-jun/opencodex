@@ -1,9 +1,11 @@
 import { removeDesktop3pStandardPivot, writeDesktop3pConfig } from "../../src/claude/desktop-3p";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import * as configIO from "../../src/config";
+import { repoPath } from "../helpers/repo-root";
 import { saveConfig, loadConfig, readConfigDiagnostics, atomicWriteFile } from "../../src/config";
 import { withClientLifecycleSync, type ClientLifecycleHeld } from "../../src/client/lifecycle-lock";
 import { serviceApiTokenFingerprint, writeServiceApiTokenFile, replaceServiceApiTokenFile, writeTokenBackup, serviceApiTokenBackupPath, removeServiceApiTokenFileIfOwned } from "../../src/lib/service-secrets";
@@ -359,4 +361,37 @@ describe("connection-owned Desktop projection store", () => {
     expect(readDesktopDisconnectReceipt()).toMatchObject({ kind: "valid", value: { phase: "complete" } });
     expect(inspectRemoteDesktopCleanup().kind).toBe("absent");
   });
+
+  test.skipIf(process.platform === "win32")("a regular-to-FIFO swap during a store read is refused and classified unsafe", () => {
+    const target = join(library, "original.json");
+    const fifo = join(dir, "store-read-replacement");
+    writeFileSync(target, "{}\n");
+    expect(spawnSync("mkfifo", [fifo], { timeout: 5000 }).status).toBe(0);
+    // Bound the parent even if a regression reintroduces a blocking open: the child swaps the
+    // regular profile for the FIFO at the shared reader's open, then performs the store read.
+    // "unsafe" is the store's classification of the reader refusal; "conflict" would mean only
+    // the post-read identity recheck fired, and a hang is killed by the child timeout.
+    const code = `import { spyOn } from "bun:test";
+      import * as fs from "node:fs";
+      import { StoreIO } from ${JSON.stringify(repoPath("src/claude/desktop-remote-store-io.ts"))};
+      import { DesktopStoreError } from ${JSON.stringify(repoPath("src/claude/desktop-remote-store-state.ts"))};
+      const open = fs.openSync;
+      spyOn(fs, "openSync").mockImplementation((path, flags, mode) => {
+        if (path === ${JSON.stringify(target)}) fs.renameSync(${JSON.stringify(fifo)}, path);
+        return open(path, flags, mode);
+      });
+      try {
+        new StoreIO().read(${JSON.stringify(target)});
+        console.log("read_not_refused");
+      } catch (error) {
+        console.log(error instanceof DesktopStoreError ? error.reason : "unexpected_error");
+      }`;
+    const child = spawnSync(process.execPath, ["--no-env-file", "-e", code], {
+      env: { ...process.env }, encoding: "utf8", timeout: 10000, maxBuffer: 1024 * 1024,
+    });
+    expect(child.error).toBeUndefined();
+    expect(child.status).toBe(0);
+    expect(child.stdout.trim()).toBe("unsafe");
+    expect(lstatSync(target).isFIFO()).toBe(true);
+  }, 20000);
 });

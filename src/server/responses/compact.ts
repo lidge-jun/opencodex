@@ -22,7 +22,7 @@ import {
 import { resolveProviderApiKey } from "../../providers/key-store";
 import { parseRequest } from "../../responses/parser";
 import { buildCompactV1Output, COMPACT_PROMPT, decodeCompactionSummary, extractCompactUserMessages } from "../../responses/compaction";
-import { applyReasoningRetention, appendRetentionNotice } from "../../responses/reasoning-retention";
+import { applyReasoningRetention, appendRetentionNotice, type ReasoningRetentionResult } from "../../responses/reasoning-retention";
 import { FORWARD_HEADERS, sanitizeReasoningInputContent } from "../../adapters/openai-responses";
 import { expandPreviousResponseInput, previousResponseProviderState, rememberResponseState } from "../../responses/state";
 import { repairLegacyDottedToolCallNames } from "../../responses/legacy-dotted-tool-name-repair";
@@ -1542,12 +1542,12 @@ export async function handleResponsesCompact(
   const rawInputItems = Array.isArray(raw.input) ? (raw.input as unknown[]) : [];
   // Keep readable reasoning local until success, outside the summarizer request.
   // Opaque compaction responses below keep their original protocol and ciphertext.
-  const retention = applyReasoningRetention(rawInputItems, {
+  const retention: ReasoningRetentionResult = config.reasoningRetention?.enabled === true ? applyReasoningRetention(rawInputItems, {
     archiveDir: join(getConfigDir(), "reasoning-archive"),
     contextWindow: route.staticPolicy.model.contextWindow ?? route.staticPolicy.model.maxInputTokens,
     maxContextPercent: config.reasoningRetention?.maxContextPercent,
     maxTokens: config.reasoningRetention?.maxTokens,
-  });
+  }) : { input: rawInputItems };
   let keepArchive = false;
   try {
     const inputItems = retention.input;

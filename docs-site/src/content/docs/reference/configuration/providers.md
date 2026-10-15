@@ -6,6 +6,30 @@ description: Provider entries, authentication, endpoints, model catalogs, quotas
 A provider tells opencodex where a model lives, which wire adapter it speaks, and how requests are
 authenticated.
 
+## Context windows on custom providers
+
+When a custom provider omits a model's context window, OpenCodex can infer it from the bundled
+model metadata. This is off by default: set `inferContextWindow: true` on the provider to turn it
+on. Without it, a model with no window uses the enabled Context cap as its window, then the 128k
+compatibility fallback. With it, the order is: discovered/configured limits (the smaller wins),
+Azure metadata, model-ID metadata, enabled Context cap as the window, then 128k. An enabled
+Context cap still limits the result. Built-in providers keep their existing behavior and ignore the flag.
+
+```json
+{ "providers": { "my-relay": { "adapter": "anthropic", "baseUrl": "https://relay.example/v1", "inferContextWindow": true } } }
+```
+
+Original-vendor API tables take precedence over aggregator tables. Exact IDs are preferred;
+case and dot/hyphen variants are accepted only when unambiguous. Unknown IDs, floating `~` aliases
+and conflicting matches are not guessed. OpenAI API windows do not describe Codex subscription
+limits. An inferred window affects Codex's compaction budget and other connected clients' catalogs,
+including Claude long-context selection, but is recorded separately from asserted routing capacity.
+
+A matching model ID does **not** verify your relay's actual capacity. If it serves less than the
+vendor window, set `modelContextWindows` or the provider's **Context cap** before using long sessions.
+OpenCodex does not enable a cap automatically or probe the model. Successful smaller requests do not
+prove the full inferred window works. Existing configured windows remain in control.
+
 ## Initial model selection
 
 New non-OAuth connections wait for a reliable model list before exposing models. If that list contains at least 20 distinct Models-tab rows, all model switches start OFF; the provider itself stays ACTIVE. OAuth and ChatGPT-login connections keep their defaults, based on the effective authentication mode.
@@ -251,10 +275,12 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `modelDisplayNames?` | `Record<string, string>` | Durable labels used only for display, keyed by this provider's exact upstream model id. Labels win over provider catalog metadata, survive discovery refreshes and provider edits, and never change authentication, adapter behavior, routing, billing, upstream request construction, the routed `provider/model` selector, or the upstream wire model. Keys are exact and case sensitive. Unknown model ids are kept so a temporarily missing model receives its label when it returns. The map accepts at most 2,000 entries, matching the discovery limit. |
 | `contextWindow?` | `number` | Provider-wide context fallback when upstream metadata is absent; otherwise a cap that retains smaller live metadata. The Models dashboard exposes this separately from `providerContextCaps`. |
 | `modelContextWindows?` | `Record<string, number>` | Per-model context fallbacks/caps. These override `contextWindow`: an unknown window uses the configured value, while smaller live metadata remains authoritative. |
+| `inferContextWindow?` | `boolean` | Custom providers only, default off. `true` fills a missing window from bundled model-ID metadata ([details](#context-windows-on-custom-providers)); the value is an estimate, not verified relay capacity. |
 | `modelContextTiers?` | `Record<string, "default" \| "long_context">` | Per-model upstream tier for `github-copilot`. `long_context` sends `contextTier: "long_context"`. Catalog metadata grows only with an exact per-model `modelContextWindows` value that documents the supported window; that value wins before the provider cap. An unknown model keeps its observed window. Unconfigured passthrough requests retain a caller-supplied `contextTier` field on any provider. |
 | `modelInputModalities?` | `Record<string, string[]>` | Per-model input hints such as `["text"]` or `["text", "image"]`. |
 | `modelMaxInputTokens?` | `Record<string, number>` | Positive per-model max input limits used for catalog auto-compaction hints. |
-| `modelAutoCompactTokenLimits?` | `Record<string, number>` | Positive safe-integer per-model soft auto-compaction budgets. Values can only lower the effective 90%-of-context/max-input envelope and are omitted when no authoritative context window is known. For canonical `openai`, keys must be exact supported native model IDs without provider or account-selector prefixes. Provider PATCH merges entries; set a key to `null` to delete it or the whole field to `null` to clear the map. These `null` tombstones are PATCH-only. |
+| `modelAutoCompactTokenLimits?` | `Record<string, number>` | Positive safe-integer per-model soft auto-compaction budgets. Values can only lower the effective 90%-of-context/max-input envelope and are omitted when no context window is resolved. For canonical `openai`, keys must be exact supported native model IDs without provider or account-selector prefixes. Provider PATCH merges entries; set a key to `null` to delete it or the whole field to `null` to clear the map. These `null` tombstones are PATCH-only. |
+| `minMaxOutputTokens?` | `number` | Optional positive integer floor for explicit positive `max_output_tokens` budgets on `azure-openai`/`azure` Responses routes. Unset preserves the caller's cap. Setting it authorizes raising a smaller cap, which can increase output usage. Omitted or invalid request budgets are unchanged. |
 | `defaultMaxOutputTokens?` | `number` | Provider-wide `openai-chat` fallback when the client omits `max_output_tokens`. |
 | `modelMaxOutputTokens?` | `Record<string, number>` | Positive per-model `openai-chat` fallback budgets; exact/pattern matches beat the provider default. |
 | `modelCosts?` | `Record<string, Cost4>` | Per-model display prices (USD per 1M tokens), keyed by that provider's exact upstream model id — not a provider identifier or a routed `provider/model` label, e.g. `{ "deepseek-v4-flash": { "input": 0.14, "output": 0.28, "cacheRead": 0.0028, "cacheWrite": 0 } }`. Any model id is a valid key — custom providers may target any OpenAI-compatible endpoint through the `openai-chat` adapter, and local or internal provider ids work even when they are absent from the built-in catalogs. User-configured prices win over the built-in catalogs in the Logs `~$` and Usage estimates; historical entries are repriced from the current overlay, so editing a price can move past totals. The fallback order is user `modelCosts` → exact official correction → jawcode catalog → expected-price overlay → model-level vendor fallback, and an explicit all-zero user entry means a known-zero estimate; delete that model entry to restore automatic pricing. All-zero catalog metadata still falls through. Each rate must be a non-negative finite number at most 1,000,000 (USD per 1M tokens); out-of-range rows are rejected by the management boundary and dropped on load. Display-time estimation only: overlays never affect routing, account selection, quotas, or billing. |
@@ -1679,3 +1705,28 @@ by the other.
 ### Renamed API-key presets
 
 A provider saved under another name, such as `CommandCode`, inherits missing reasoning-effort metadata when its adapter and fixed API-key endpoint match a registry preset. Your explicit per-model lists, including `[]`, remain authoritative. An omitted provider-wide list inherits the preset default; an explicit list remains unchanged. This does not match OAuth, unrelated endpoints, or templated/custom endpoint presets.
+
+### Azure model-validation output budgets
+
+Some Azure Responses deployments reject Claude Code's tiny model-switch validation budget.
+If your deployment reports that `max_output_tokens` is below its minimum, configure
+`minMaxOutputTokens` on that Azure provider to the minimum your endpoint requires (for
+example, `16` for an endpoint that reports that minimum). This is opt-in: it raises every
+smaller positive integer budget on that provider, not just validation requests. Larger
+budgets are preserved, and other adapters do not apply this setting in this change.
+Spend admission reserves the effective output budget before dispatch, including each Combo
+target's prepaid send. A configured spend ceiling can therefore reject a request whose
+raised output allowance would exceed that ceiling.
+
+```json
+{
+  "providers": {
+    "azure": {
+      "adapter": "azure-openai",
+      "baseUrl": "https://YOUR_RESOURCE.openai.azure.com/openai/v1",
+      "apiKey": "${AZURE_OPENAI_API_KEY}",
+      "minMaxOutputTokens": 16
+    }
+  }
+}
+```

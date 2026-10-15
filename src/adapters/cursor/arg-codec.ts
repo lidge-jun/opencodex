@@ -18,21 +18,33 @@ function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
   return true;
 }
 
-export function decodeCursorArgValue(value: Uint8Array): unknown {
+/**
+ * `preserveStrings` is for freeform tool bodies (#7049). A freeform `input` is text whatever it
+ * looks like, so a body that happens to be valid JSON (`{}`, `42`, `null`) must not be
+ * re-parsed into a non-string. A protobuf string Value is taken as-is; raw UTF-8 bytes are still
+ * unquoted when they are one JSON string literal, and otherwise kept as the raw text.
+ */
+export function decodeCursorArgValue(value: Uint8Array, options: { preserveStrings?: boolean } = {}): unknown {
   try {
     const parsed = fromBinary(ValueSchema, value);
     if (!sameBytes(toBinary(ValueSchema, parsed), value)) throw new Error("not canonical protobuf Value bytes");
     const jsonValue = toJson(ValueSchema, parsed);
-    return typeof jsonValue === "string" ? parseJsonText(jsonValue) : jsonValue;
+    if (typeof jsonValue !== "string") return jsonValue;
+    return options.preserveStrings ? jsonValue : parseJsonText(jsonValue);
   } catch {
-    return parseJsonText(textDecoder.decode(value));
+    const text = textDecoder.decode(value);
+    const parsed = parseJsonText(text);
+    return options.preserveStrings && typeof parsed !== "string" ? text : parsed;
   }
 }
 
-export function decodeCursorArgsMap(args: { [key: string]: Uint8Array } | undefined): Record<string, unknown> {
+export function decodeCursorArgsMap(
+  args: { [key: string]: Uint8Array } | undefined,
+  options: { preserveStrings?: boolean } = {},
+): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(args ?? {})) {
-    out[key] = decodeCursorArgValue(value);
+    out[key] = decodeCursorArgValue(value, options);
   }
   return out;
 }

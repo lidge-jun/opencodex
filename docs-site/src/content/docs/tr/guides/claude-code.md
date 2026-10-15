@@ -268,7 +268,7 @@ değerini ayarlayın. Eski `Claude-3p` dizini otomatik olarak okunmaz veya
 silinmez.
 
 Anthropic harici rotalar, `p` önekli dört karakterli bir kod kullanan
-`claude-opus-4-8-p01q` gibi kararlı takma adlar alır. OpenCodex profil atamalarını
+`claude-fable-5-p01q` gibi kararlı takma adlar alır. OpenCodex profil atamalarını
 kararlı tutmak için dahili olarak sentetik tarih yuvaları saklar; ancak güncel
 Desktop sürümleri etkin oturum modellerini karşılaştırırken sondaki tarihleri
 kaldırdığı ve model değişimini engelleyebildiği için bu tarihi Desktop model kimliği olarak yayımlamaz. Mevcut
@@ -438,7 +438,7 @@ satırı için bir tane gönderir (`Routed by OpenCodex to <provider>/<model>`; 
 | Yüzey | Format | Örnek |
 | --- | --- | --- |
 | Claude Code CLI | `ocx-claude-<provider>--<model>` (düz) veya `ocx-claude2-…` (kaçışlı) | `ocx-claude-openai--gpt-5.6-sol` |
-| Claude Desktop 3P | `claude-opus-4-8-p<code>` (3 karakterli base36 profil yuvası) | `claude-opus-4-8-p01q` |
+| Claude Desktop 3P | `claude-fable-5-p<code>` (3 karakterli base36 profil yuvası) | `claude-fable-5-p01q` |
 
 Proxy, istek başına aileyi seçer: `?ids=cli` veya `?ids=desktop` kazanır; aksi
 takdirde `claude-code/*` kullanıcı aracısı okunabilir CLI biçimini alır ve diğer
@@ -514,7 +514,9 @@ kimliklerini korur.
 
 ### Bağlam değişkeni `[1m]` işaretçisi
 
-Yetkili bağlam penceresi 1M olan veya varsayılan sıkıştırma eşiği olan 829.800
+Bu kontroller, [özel sağlayıcı tahmini](/tr/reference/configuration/providers/#özel-sağlayıcılarda-bağlam-penceresi) içerebilen etkin katalog penceresini kullanır. Tahmin, aracının gerçek kapasitesini doğrulamaz.
+
+Etkin katalog bağlam penceresi 1M olan veya varsayılan sıkıştırma eşiği olan 829.800
 tokene ulaşan modeller fazladan bir `…[1m]` seçici satırı alır. Bu taban sabittir:
 sıkıştırma değerini değiştirmek onu düşürmez ve Anthropic rotasındaki Claude
 modellerinin gerçekten 1M olması gerekir. Otomatik bağlam kapatılırsa satır yalnızca
@@ -527,7 +529,7 @@ sonekini kaldırır.
 Claude Code, tanımadığı herhangi bir model için 200k token hesabı yapar.
 **Otomatik bağlam** (varsayılan olarak açık) bunu düzeltir:
 
-1. Başlatma ortam yuvaları, gerçek pencere 200k'nın üzerinde **ve** en az yapılandırılmış
+1. Başlatma ortam yuvaları, etkin katalog penceresi 200k'nın üzerinde **ve** en az yapılandırılmış
    otomatik sıkıştırma eşiğindeyken `[1m]` işaretçisini alır. Keşif ve Desktop seçici
    satırları bu eşiği izlemez: sabit 829.800 token tabanını kullanırlar (Anthropic
    rotasındaki Claude modelleri için gerçek 1M).
@@ -545,6 +547,10 @@ Claude Code, tanımadığı herhangi bir model için 200k token hesabı yapar.
 Sıkıştırma değeri Claude sayfasında ayarlanabilir. **Uyarı:** bir modelin gerçek
 penceresinin üzerine çıkarmak o modeli bozar — sohbet özetleme tetiklenmeden
 önce hata verir.
+
+Bağlam taşması hataları normalleştirilirken sağlayıcının hata mesajının yalnızca ilk 65.536 UTF-16 kod birimi kullanılır.
+Bu sınırdan sonraki tanılama ayrıntıları veya token sayıları, kesilme işareti eklenmeden kaybolabilir.
+Kesin sınırlar ve token sayılarının aktarılma koşulları için [İngilizce kılavuza](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling) bakın.
 
 1M altı yerel Anthropic modelleri hiçbir zaman otomatik olarak işaretlenmez.
 Kendi dışa aktardığınız sıkıştırma penceresi, başlatma yuvası işaretlemesinde her zaman kazanır (proxy hangi modellerin
@@ -858,7 +864,7 @@ veya `ocx claude` komutunu yeniden çalıştırın.
 
 **Büyük modele rağmen 200k bağlam tavanı** — Seçicide `[1m]` varyantını seçin
 veya otomatik bağlamı etkinleştirin (varsayılan olarak açık). Seçici hiçbir
-`[1m]` satırı göstermiyorsa, modelin yetkili bağlam penceresi sabit 829.800
+`[1m]` satırı göstermiyorsa, modelin etkin katalog bağlam penceresi sabit 829.800
 token tabanının altında olabilir.
 
 **Yetenek yüklemelerinden kaynaklanan yüksek token sayısı** — Paketlenmiş
@@ -886,7 +892,7 @@ The Subagents page offers **Force all subagents onto one model**, off by default
 
 `ocx agent subagents force combo/tev-auto` sets `claudeCode.subagentModelForce`; `ocx agent subagents force -` clears it. `ocx agent status` reports the setting. `GET /api/subagent-models` returns `force`, `forceAvailable`, and `forceStatus`; `PUT` accepts `{ "force": "combo/tev-auto" }` or `{ "force": null }` without changing the roster. Omitting `force` leaves it unchanged. Invalid or unexposed targets are rejected on write; stale targets are reported and skipped at launch.
 
-This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` when the authoritative window reaches the fixed 829,800-token floor, and only for a genuine 1M window on Anthropic Claude models and bare `claude-*` selectors; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
+This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` when the effective catalog window reaches the fixed 829,800-token floor, and only for a genuine 1M window on Anthropic Claude models and bare `claude-*` selectors; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
 
 Claude Code **2.1.257 or newer** is required for FORCE. Plugin and built-in agents (including Explore/Plan) and per-call model arguments are overridden. Forks and subagent skills with `model: inherit` keep the main conversation model. The main loop and Haiku/small-fast sidecars are unaffected. Existing roster files remain available.
 

@@ -94,6 +94,51 @@ pub fn render_shim(cli: &Path, owner: &str) -> Result<String> {
 pub fn render_helper(bin: &Path) -> Result<String> {
     Ok(HELPER.replace("@BIN@", &quote(bin)?))
 }
+const TEMPORARY_ROOTS: [&str; 6] = [
+    "/tmp",
+    "/private/tmp",
+    "/var/tmp",
+    "/private/var/tmp",
+    "/var/folders",
+    "/private/var/folders",
+];
+/// A caller-selected TMPDIR only proves transience when it resolves inside a recognized
+/// temporary root or is itself a shared sticky directory. An arbitrary override such as
+/// TMPDIR=$HOME can name an ordinary ancestor of a permanent install.
+fn environment_temp_root(temp_dir: &Path) -> Option<PathBuf> {
+    let real = fs::canonicalize(temp_dir).ok()?;
+    if TEMPORARY_ROOTS
+        .iter()
+        .map(Path::new)
+        .any(|root| real.starts_with(root))
+    {
+        return Some(real);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if fs::metadata(&real)
+            .map(|m| m.permissions().mode() & 0o1777 == 0o1777)
+            .unwrap_or(false)
+        {
+            return Some(real);
+        }
+    }
+    None
+}
+fn is_temporary_bundle_path(path: &Path, temp_dir: &Path) -> bool {
+    let env_root = environment_temp_root(temp_dir);
+    TEMPORARY_ROOTS
+        .iter()
+        .map(Path::new)
+        .chain(env_root.as_deref())
+        .any(|root| path.starts_with(root))
+        || path.starts_with("/Volumes")
+}
+fn has_app_translocation_marker(path: &Path) -> bool {
+    path.components()
+        .any(|component| component.as_os_str().to_str() == Some("AppTranslocation"))
+}
 pub fn block(shell: &str, root: &Path) -> Result<String> {
     let body = if shell == "fish" {
         format!(
@@ -148,10 +193,9 @@ pub fn stable_bundle(exe: &Path, debug: bool, version: &str) -> Result<Bundle> {
     if debug {
         return Err("development-launch".into());
     }
-    let raw = text(exe)?;
-    if raw.starts_with("/Volumes/")
-        || raw.starts_with("/private/var/folders/") && raw.contains("/AppTranslocation/")
-        || raw.contains("/tmp/.mount_")
+    text(exe)?;
+    if has_app_translocation_marker(exe)
+        || is_temporary_bundle_path(exe, &std::env::temp_dir())
         || std::env::var_os("APPIMAGE").is_some()
         || std::env::var_os("APPDIR").is_some()
     {
@@ -159,7 +203,7 @@ pub fn stable_bundle(exe: &Path, debug: bool, version: &str) -> Result<Bundle> {
     }
     let real = fs::canonicalize(exe).map_err(|_| "bundle-unavailable")?;
     let s = text(&real)?;
-    if s.starts_with("/Volumes/") || s.contains("/AppTranslocation/") || s.contains("/tmp/.mount_")
+    if has_app_translocation_marker(&real) || is_temporary_bundle_path(&real, &std::env::temp_dir())
     {
         return Err("temporary-bundle".into());
     }
@@ -205,6 +249,82 @@ pub fn stable_bundle(exe: &Path, debug: bool, version: &str) -> Result<Bundle> {
         cli_executable: text(&cli)?,
         version: version.into(),
     })
+}
+
+#[cfg(test)]
+mod temporary_bundle_path_tests {
+    use super::{has_app_translocation_marker, is_temporary_bundle_path};
+    use std::path::Path;
+
+    #[test]
+    fn temporary_bundle_roots_are_component_aware() {
+        let temp_dir = Path::new("/var/folders/test/app");
+        for path in [
+            "/tmp/App.app/Contents/MacOS/app",
+            "/private/tmp/App.app/Contents/MacOS/app",
+            "/var/tmp/App.app/Contents/MacOS/app",
+            "/private/var/tmp/App.app/Contents/MacOS/app",
+            "/var/folders/xx/App.app/Contents/MacOS/app",
+            "/private/var/folders/xx/App.app/Contents/MacOS/app",
+            "/Volumes/Installer/App.app/Contents/MacOS/app",
+        ] {
+            assert!(
+                is_temporary_bundle_path(Path::new(path), temp_dir),
+                "{path}"
+            );
+        }
+        for path in [
+            "/Applications/OpenCodex.app/Contents/MacOS/app",
+            "/Users/alice/Applications/OpenCodex.app/Contents/MacOS/app",
+            "/tmp-old/OpenCodex.app/Contents/MacOS/app",
+            "/private/var/folder-old/OpenCodex.app/Contents/MacOS/app",
+        ] {
+            assert!(
+                !is_temporary_bundle_path(Path::new(path), temp_dir),
+                "{path}"
+            );
+        }
+        assert!(is_temporary_bundle_path(
+            Path::new("/var/folders/test/app/OpenCodex.app/Contents/MacOS/app"),
+            temp_dir,
+        ));
+        assert!(has_app_translocation_marker(Path::new(
+            "/Volumes/Installer/AppTranslocation/OpenCodex.app/Contents/MacOS/app"
+        )));
+        assert!(!has_app_translocation_marker(Path::new(
+            "/Volumes/Installer/AppTranslocation-old/OpenCodex.app/Contents/MacOS/app"
+        )));
+    }
+
+    #[test]
+    fn environment_temp_dir_must_prove_transience() {
+        // An ordinary ancestor named by a custom TMPDIR must not misclassify a stable
+        // install; "/" resolves but is not a shared sticky directory, and a missing
+        // path cannot be verified as temporary at all.
+        for temp_dir in ["/", "/definitely/absent/ocx-tmpdir"] {
+            let temp_dir = Path::new(temp_dir);
+            assert!(
+                !is_temporary_bundle_path(
+                    Path::new("/Applications/OpenCodex.app/Contents/MacOS/app"),
+                    temp_dir,
+                ),
+                "{temp_dir:?}"
+            );
+            assert!(
+                !is_temporary_bundle_path(
+                    Path::new("/Users/alice/Applications/OpenCodex.app/Contents/MacOS/app"),
+                    temp_dir,
+                ),
+                "{temp_dir:?}"
+            );
+        }
+        // The recognized temporary roots still prove transience on their own.
+        let temp_dir = Path::new("/var/folders/test/app");
+        assert!(is_temporary_bundle_path(
+            Path::new("/var/folders/test/app/OpenCodex.app/Contents/MacOS/app"),
+            temp_dir,
+        ));
+    }
 }
 // Return exact block range, including its line terminator. Reject malformed or changed markers.
 fn range(bytes: &[u8], expected: &str) -> Result<Option<std::ops::Range<usize>>> {
@@ -554,6 +674,24 @@ pub fn remove_plan(store: &Store, current: &Record) -> Result<(Record, Vec<Chang
 mod tests {
     use super::*;
     use record::tests::{bundle, Temp};
+    #[cfg(target_os = "macos")]
+    fn stable_bundle_fixture() -> Temp {
+        // Stable bundles cannot live under the OS temp directory. Keep the fixture
+        // in this checkout, with the production raw/canonical checks still enabled.
+        let base = fs::canonicalize(env!("CARGO_MANIFEST_DIR"))
+            .unwrap()
+            .join(".tmp");
+        assert!(
+            !is_temporary_bundle_path(&base, &std::env::temp_dir())
+                && !has_app_translocation_marker(&base),
+            "stable bundle tests require a checkout outside temporary/translocated locations"
+        );
+        fs::create_dir_all(&base).unwrap();
+        record::check(&base, true).unwrap();
+        let root = base.join(format!("ocx-stable-bundle-{}", uuid::Uuid::new_v4()));
+        record::private_dir(&root).unwrap();
+        Temp(root)
+    }
     #[cfg(target_os = "macos")]
     fn rc_acl(path: &Path, add: bool) {
         let mut command = std::process::Command::new("/bin/chmod");
@@ -913,7 +1051,7 @@ mod tests {
     #[test]
     fn stable_macos_bundle_requires_an_executable_sibling_and_checks_canonical_location() {
         use std::os::unix::fs::{symlink, PermissionsExt};
-        let t = Temp::new();
+        let t = stable_bundle_fixture();
         let app = t.0.join("App.app/Contents/MacOS");
         fs::create_dir_all(&app).unwrap();
         let exe = app.join("app");
@@ -986,11 +1124,12 @@ mod tests {
         let npm = t.0.join("npm-bin");
         record::private_dir(&npm).unwrap();
         record::atomic(&npm.join("ocx"), None, b"#!/bin/sh\necho npm-ocx\n", 0o700).unwrap();
-        let app = if cfg!(target_os = "macos") {
-            t.0.join("Applications/OpenCodex.app/Contents/MacOS")
-        } else {
-            t.0.join("usr/bin")
-        };
+        #[cfg(target_os = "macos")]
+        let stable = stable_bundle_fixture();
+        #[cfg(target_os = "macos")]
+        let app = stable.0.join("Applications/OpenCodex.app/Contents/MacOS");
+        #[cfg(not(target_os = "macos"))]
+        let app = t.0.join("usr/bin");
         fs::create_dir_all(&app).unwrap();
         let exe = app.join("OpenCodex");
         let cli = app.join("ocx");

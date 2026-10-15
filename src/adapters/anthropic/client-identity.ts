@@ -21,7 +21,7 @@ function valid(name: typeof NAMES[number], value: string): boolean {
   if (!value || Buffer.byteLength(value) > MAX_VALUE_BYTES || /[^\x20-\x7e]/.test(value)) return false;
   if (name === "User-Agent") {
     const entrypoint = interceptEntrypoint(value);
-    return entrypoint === "cli" || entrypoint === "sdk-cli" || entrypoint === "sdk"
+    return entrypoint === "cli" || entrypoint === "sdk-cli" || entrypoint === "sdk" || entrypoint === "sdk-ts"
       || (DESKTOP_ENTRYPOINTS as readonly string[]).includes(entrypoint ?? "");
   }
   if (name === "X-App") return value === "cli";

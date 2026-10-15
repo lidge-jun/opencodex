@@ -82,6 +82,7 @@ import { preservesPhysicalComboProvider, resolveComboId } from "../combos";
 import { captureRouteStaticPolicy, routedProviderConfig, routeModel, type RouteResult } from "../router";
 import { POLICY_NAMESPACE, resolvePolicyProfileId } from "../routing/profile";
 import type { AnthropicClientIdentity } from "../adapters/anthropic/client-identity";
+import { logDroppedAnthropicBetas } from "../adapters/anthropic/beta-allowlist";
 import type { OcxConfig, OcxProviderConfig, OcxUsage } from "../types";
 import { resolveWireProtocolOverride } from "./adapter-resolve";
 import {
@@ -469,7 +470,10 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       clientIdentity: options.clientIdentity,
     });
     if (built.strippedOpaqueState && rejectUnrepresentable) throw new NativeOpaqueStateRefusal();
-    if (built.droppedBetas) addProtocolEntryReason(logCtx, "anthropic-beta-dropped");
+    if (built.droppedBetas) {
+      addProtocolEntryReason(logCtx, "anthropic-beta-dropped");
+      logDroppedAnthropicBetas({ droppedNames: built.droppedBetaNames, droppedUnrecognized: built.droppedUnrecognizedBetas });
+    }
     if (built.strippedOpaqueState) addProtocolEntryReason(logCtx, "opaque-state-stripped");
     return built;
   };

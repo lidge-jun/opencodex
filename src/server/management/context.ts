@@ -45,6 +45,10 @@ export interface ManagementRequestIngress {
 }
 
 export interface ManagementApiDeps {
+  desktopStartupSettings?: import("../../codex/desktop-compatibility/startup-settings").DesktopStartupSettingsService;
+  desktopCertificateService?: import("../../codex/desktop-compatibility/certificate-service").DesktopCertificateService;
+  desktopCompatibilityRuntime?: import("../../codex/desktop-compatibility/runtime").DesktopCompatibilityRuntime;
+  onDesktopCompatibilityShutdown?: (shutdown: () => Promise<void>) => void;
   /** Bound to this server's lifecycle owner; absent in direct route tests. */
   listLowQuotaEvents?: (limit?: number) => LowQuotaEvent[];
   /** Bound Claude intercept state, injectable for isolated management-route tests. */

@@ -24,6 +24,7 @@ import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from "nod
 import { basename, dirname, isAbsolute, join, resolve, win32 } from "node:path";
 import { shouldInjectApiAuthHeader, standaloneCodexRoutingTarget } from "../codex/inject";
 import { FORMAT_MEDIA_TYPE, serializeDocument, type ConfigFormat } from "../integrations/serialize";
+import { fileIO } from "../integrations/config-io";
 import { canonicalizeReasoningEfforts } from "../reasoning-effort";
 import { expandFastExportModels } from "./config-export/fast-models";
 import { probeHostname } from "../server/proxy-liveness";
@@ -81,6 +82,8 @@ import {
 
 export type { CommandCodeGeneratedConfig, CommandCodeModelEntry, CommandCodeProviderBlock };
 export { buildCommandCodeClientConfig, summarizeCommandCode, buildCommandCodeContribution, commandCodeProviderRoot };
+import { buildQoderClientConfig, summarizeQoder, buildQoderContribution, qoderConfigPath } from "./config-export/qoder";
+export { buildQoderClientConfig, qoderConfigPath, qoderHomeDir, type QoderGeneratedConfig } from "./config-export/qoder";
 
 
 
@@ -475,10 +478,8 @@ export type ZcodePathIO = {
   readText: (path: string) => { kind: "text"; text: string } | { kind: "missing" } | { kind: "failed"; code?: string };
 };
 const zcodePathIO: ZcodePathIO = {
-  readText: path => {
-    try { return { kind: "text", text: readFileSync(path, "utf8") }; }
-    catch (error) { return (error as NodeJS.ErrnoException).code === "ENOENT" ? { kind: "missing" } : { kind: "failed" }; }
-  },
+  /** Shares the integration reader's four-MiB limit and regular-file-only bootstrap contract. */
+  readText: path => fileIO().readText(path),
 };
 export class ZcodeSettingsPathError extends ClientPathError {}
 
@@ -1429,6 +1430,18 @@ export function clineSettingsDir(env: OpencodeLaunchEnv = process.env, home: str
 }
 
 export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
+  qoder: {
+    id: "qoder",
+    filename: "qoder-settings.json",
+    destination: env => qoderConfigPath(env),
+    apiKeyEnv: "",
+    exportHint: "Qoder reads a non-secret placeholder from settings.json; loopback needs no key.",
+    build: buildQoderClientConfig,
+    format: "json",
+    summarize: summarizeQoder,
+    buildContribution: buildQoderContribution,
+    loopbackOnly: true,
+  },
   opencode: {
     id: "opencode",
     filename: "opencode.json",

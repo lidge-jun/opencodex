@@ -16,6 +16,7 @@ import {
   isOwnedDesktopGatewayEntry,
   parseMetadata,
   profilePath,
+  readDesktopLibraryText,
   resolveDesktop3pConfigLibraryPath,
   SAFE_DESKTOP_PROFILE_ID,
   type Desktop3pConfigLibraryOptions,
@@ -73,6 +74,12 @@ function readFileSnapshot(path: string): { exists: boolean; content?: string } {
   return existsSync(path) ? { exists: true, content: readFileSync(path, "utf8") } : { exists: false };
 }
 
+// Desktop library paths go through the verified regular-file reader: a swapped FIFO or symlink
+// must surface as a refusal, never as a blocking open. Our own picker state file keeps the plain read.
+function readLibrarySnapshot(path: string): { exists: boolean; content?: string } {
+  return existsSync(path) ? { exists: true, content: readDesktopLibraryText(path) } : { exists: false };
+}
+
 function restoreFile(path: string, snapshot: { exists: boolean; content?: string }): void {
   if (snapshot.exists) {
     rollbackAtomicWriteFile(path, snapshot.content ?? "");
@@ -98,7 +105,7 @@ function pickerEntry(metadata: Desktop3pMetadata): Desktop3pMetadataEntry | unde
 }
 
 function profileObject(path: string): Record<string, unknown> {
-  const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+  const parsed = JSON.parse(readDesktopLibraryText(path)) as unknown;
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error("picker_profile_unreadable");
   }
@@ -175,10 +182,10 @@ function applyDesktopPickerProfileLocked(options: { proxyPort: number } & Deskto
     const alreadySelected = selectedId === entryId;
     const priorState = readPickerState(previousStatePath);
     const previousAppliedId = alreadySelected ? priorState?.previousAppliedId ?? null : selectedId;
-    const oldMeta = readFileSnapshot(metaPath);
-    const oldProfile = readFileSnapshot(profile);
+    const oldMeta = readLibrarySnapshot(metaPath);
+    const oldProfile = readLibrarySnapshot(profile);
     const backupPath = `${profile}.bak`;
-    const oldBackup = readFileSnapshot(backupPath);
+    const oldBackup = readLibrarySnapshot(backupPath);
     const oldState = readFileSnapshot(previousStatePath);
     const changed = !alreadySelected || !oldProfile.exists || oldProfile.content !== target;
     if (!changed) return { ok: true, changed: false, path: profile };

@@ -14,6 +14,26 @@ Messages API 経由の Devin ルート（SWE-2 を含む）では、テキスト
 この出力順序の修正は、生成された一部のシステムテキストを Cognition が拒否する別の問題を解決するものではありません。
 システム指示と安全上の制約は保持されます。
 
+## CLIと外部ランチャーのティア既定値
+
+Claude CodeタブでOpus、Sonnet、Haiku、Fableの既定モデルを選択し、**保存**してください。
+`claudeCode.tierModels`は新しい`ocx claude`起動に渡されます。現在の主モデル、推論強度、
+Desktopのモデル系列割り当ては変更しません。
+
+`claude`を直接起動するアプリには`ocx`の環境変数が渡されません。保存後、**Claude設定をプレビュー**で
+`ANTHROPIC_DEFAULT_*_MODEL`の変更を確認し、**Claude設定に適用**を選びます。対象はブラウザーのPCではなく
+OpenCodexホストのClaudeユーザー設定です。反映には新しいClaudeプロセスが必要です。既存セッションは再起動せず、
+ルーティングや認証も設定しないため、直接起動するアプリのOpenCodex接続は事前に設定してください。
+
+明示的に選んだティアのみ適用します。**未指定**は既存のClaude設定を維持し、ネイティブモデルには戻しません。
+ファイルがない場合は作成できますが、既存の空ファイルや壊れたJSONは拒否します。プレビュー後の変更には再プレビューが必要です。
+
+適用は実際のファイルをClaude設定ディレクトリ内の非公開`model-default-backups/apply-*/settings.json`へ一時移動し、
+内容を検証してから、対象が空いている場合のみ新設定を公開します。競合や復元時も他の書き込みを上書きしません。
+ファイルが一時的に存在しないため、適用中は設定の編集やClaude起動を避けてください。同一ボリュームの移動と
+ハードリンクが必要で、失敗時に上書きへ切り替えません。中断や自動復元失敗後はバックアップと新しい編集を照合してください。
+WindowsとLinuxは別々に検証が必要です。実際の提供モデルはリクエストログで確認します。Sonnetを使う外部分類器にも有用です。
+
 ## クイックスタート
 
 ```bash
@@ -264,7 +284,7 @@ Claude Code 2.1.129 以降は `GET /v1/models?limit=1000` でゲートウェイ�
 | 画面 | 形式 | 例 |
 | --- | --- | --- |
 | Claude Code CLI | `ocx-claude-<provider>--<model>` (plain) または `ocx-claude2-…` (escaped) | `ocx-claude-native--gpt-5.6-sol` |
-| Claude Desktop 3P | `claude-opus-4-8-p<code>` (3 桁の base36 プロファイルスロット) | `claude-opus-4-8-p01q` |
+| Claude Desktop 3P | `claude-fable-5-p<code>` (3 桁の base36 プロファイルスロット) | `claude-fable-5-p01q` |
 
 プロキシはリクエストごとに系列を選びます。`?ids=cli` または `?ids=desktop` が優先し、指定しないと
 `claude-code/*` user-agent には読みやすい CLI 形式を、他のクライアントには Desktop コードを
@@ -272,7 +292,7 @@ Claude Code 2.1.129 以降は `GET /v1/models?limit=1000` でゲートウェイ�
 引き続き動作します。古い設定の `claude-ocx-<provider>--<model>` / `claude-ocx2-<provider>--<model>` も
 引き続き解決されますが、保存済みの旧 ID はルーティングされても Claude Code 側では 200k として計算されます。
 保存済みの `claude-ocx-` は `ocx-claude-` に、エスケープ付きの `claude-ocx2-` は `ocx-claude2-` に一度選び直すと、
-実際のコンテキストウィンドウと compact が両方とも適用されます。
+カタログの有効なコンテキストウィンドウと compact が両方とも適用されます。
 
 Claude Desktop のフッターピッカーで実行中の 3P 会話のモデルが切り替わらない場合は、
 `/model <id>` を試せますが、影響を受ける Desktop ビルドではこの回避策も失敗することがあります。
@@ -312,7 +332,9 @@ v2 エイリアスはエスケープを展開します。読みやすい形式�
 
 ### コンテキスト変種 `[1m]` 標識
 
-公式コンテキストウィンドウが 1M、またはデフォルトの圧縮しきい値（829,800）以上のモデルには `…[1m]` ピッカー行がもう一つできます。
+これらの判定にはカタログの有効なウィンドウを使い、[カスタムプロバイダー向けの推定値](/ja/reference/configuration/providers/#カスタムプロバイダーのコンテキスト)が含まれる場合があります。推定値は中継サービスの実際の容量を保証しません。
+
+カタログの有効なコンテキストウィンドウが 1M、またはデフォルトの圧縮しきい値（829,800）以上のモデルには `…[1m]` ピッカー行がもう一つできます。
 この基準は固定で、圧縮値を変えても下がりません。Anthropic 経路の Claude モデルは実際に 1M である必要があります。自動コンテキストをオフにすると
 1M のモデルだけが対象です。実際のウィンドウを超えると `prompt is too long` エラーが返り、Claude Code が自動で圧縮します。この行を選ぶと Claude Code が
 全体 1M コンテキストを計算します。プロキシはエイリアス解決とルーティング前に大文字小文字を区別せず `[1m]`
@@ -323,7 +345,7 @@ v2 エイリアスはエスケープを展開します。読みやすい形式�
 Claude Code は未知モデルのコンテキストを 200k トークンとして計算します。デフォルトでオンの**自動
 コンテキスト**がこの問題を解決します。
 
-1. 起動時の環境スロットには、実際のコンテキストウィンドウが 200k より大きく、設定した自動圧縮しきい値以上のとき
+1. 起動時の環境スロットには、カタログの有効なコンテキストウィンドウが 200k より大きく、設定した自動圧縮しきい値以上のとき
    `[1m]` 標識が付きます。ディスカバリーと Desktop のピッカー行はこのしきい値に従わず、固定の 829,800 トークン下限
    （Anthropic 経路の Claude モデルは実際の 1M）を使います。
 2. `CLAUDE_CODE_AUTO_COMPACT_WINDOW`(デフォルト `829800`、範囲 `100000`–`1000000`)を注入し、該当
@@ -338,6 +360,10 @@ Claude Code は未知モデルのコンテキストを 200k トークンとし�
 **接続 → Claude** で圧縮値を調整できます。**警告:** モデルの実際のコンテキストウィンドウより大きく上げると
 要約を開始する前にチャットエラーが発生します。
 
+コンテキスト超過エラーの正規化では、プロバイダーのエラーメッセージの先頭 65,536 UTF-16 コード単位だけを使います。
+末尾の診断情報やトークン数は、省略を示す印なしで失われることがあります。
+詳しい制限とトークン数の扱いは[英語ガイド](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling)を参照してください。
+
 1M 未満のネイティブ Anthropic モデルには自動で標識を付けません。自分で export した圧縮値は起動スロットの標識に優先し、プロキシは**ユーザーが指定した**値を基準にどのモデルに安全に標識を付けるか決定します。ディスカバリー行はその export を無視し、固定の下限を保ちます。
 直接編集した設定値が不正な場合は 829,800 に戻ります。
 
@@ -347,7 +373,7 @@ Claude Code は未知モデルのコンテキストを 200k トークンとし�
 長いコンテキストのモデルが起動環境スロット、Desktop ピッカー、Desktop 3P（`prefer1m`）、生成されたサブエージェントで 1M として扱われます。
 `200k` にすると `[1m]` 標識を自動では付けず、`CLAUDE_CODE_AUTO_COMPACT_WINDOW` も注入せず、Desktop 3P は `supports1m` を残して
 `prefer1m` だけを外します。自分で `[1m]` を付けた選択は引き続き使えます（生成されたサブエージェントと強制サブエージェントは、モデルのウィンドウが支えられない標識を引き続き外します）。
-ディスカバリーには実際に 1M のモデルの `· 1M` 行が引き続き表示されます。`200k` は自動コンテキストより優先され、自分で export した圧縮値があっても自動標識は
+ディスカバリーにはカタログのウィンドウが 1M 以上のモデルの `· 1M` 行が引き続き表示されます。`200k` は自動コンテキストより優先され、自分で export した圧縮値があっても自動標識は
 再び有効になりません。その export 値自体は opencodex が変更しません。
 
 ```bash
@@ -618,7 +644,7 @@ Anthropic バックエンドを明示すると意図的に失敗後停止しま�
 `ANTHROPIC_BASE_URL` が古い値の可能性があります。新規ターミナルを開くか `ocx claude` を再実行してください。
 
 **大型モデルなのにコンテキストが 200k に制限される** — ピッカーで `[1m]` 変種を選ぶか、デフォルトでオンの
-自動コンテキストを使ってください。ピッカーに `[1m]` 行がない場合はモデルの公式コンテキストウィンドウが
+自動コンテキストを使ってください。ピッカーに `[1m]` 行がない場合はカタログ上のモデルの有効なコンテキストウィンドウが
 固定の 829,800 トークン下限より小さい可能性があります。
 
 **スキル呼び出し時のトークン数が多い** — バンドル `claude-api` スキル(約 136k トークン)は Claude モデルに
@@ -639,7 +665,7 @@ The Subagents page offers **Force all subagents onto one model**, off by default
 
 `ocx agent subagents force combo/tev-auto` sets `claudeCode.subagentModelForce`; `ocx agent subagents force -` clears it. `ocx agent status` reports the setting. `GET /api/subagent-models` returns `force`, `forceAvailable`, and `forceStatus`; `PUT` accepts `{ "force": "combo/tev-auto" }` or `{ "force": null }` without changing the roster. Omitting `force` leaves it unchanged. Invalid or unexposed targets are rejected on write; stale targets are reported and skipped at launch.
 
-This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` when the authoritative window reaches the fixed 829,800-token floor, and only for a genuine 1M window on Anthropic Claude models and bare `claude-*` selectors; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
+This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` when the effective catalog window reaches the fixed 829,800-token floor, and only for a genuine 1M window on Anthropic Claude models and bare `claude-*` selectors; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
 
 Claude Code **2.1.257 or newer** is required for FORCE. Plugin and built-in agents (including Explore/Plan) and per-call model arguments are overridden. Forks and subagent skills with `model: inherit` keep the main conversation model. The main loop and Haiku/small-fast sidecars are unaffected. Existing roster files remain available.
 

@@ -18,6 +18,7 @@ export function prepareCompactionRetention(
   budget: TranslatorBudget,
   signal: AbortSignal,
 ) {
+  if (config.reasoningRetention?.enabled !== true) return undefined;
   const raw = parsed._rawBody as Record<string, unknown>;
   const retention = applyReasoningRetention(raw.input, {
     archiveDir: join(getConfigDir(), "reasoning-archive"), contextWindow,

@@ -7,6 +7,9 @@ import type { ResponsesEffects } from "./response-effects";
 import type { ResponsesSendBudget } from "./request-send-budget";
 import { formatErrorResponse } from "../../bridge";
 import { planWebSearch, buildWebSearchTool, runWithWebSearch } from "../../web-search";
+import { createRegisteredAdvisorPlan } from "./advisor-plan-slot";
+import { ADVISOR_TOOL_NAME } from "./advisor-slot";
+import { buildToolBridgeMaps } from "./collaboration";
 import {
   planImageBridge,
   planVideoBridge,
@@ -30,6 +33,8 @@ import {
 } from "../../oauth/generic-account-failover";
 import { classifyKiroRefusal } from "../../adapters/kiro-refusal";
 import { isNonReplayableResponse } from "../../lib/upstream-retry";
+import { unwrapUpstreamRetryEvidenceError } from "../../codex/auth-context";
+import { AdmissionModelDeniedError, admissionModelDeniedResponse } from "../admission-model-scope";
 import { noteKiroMonthlyRefusal, noteKiroServedSuccess } from "../../providers/kiro-usage";
 import { persistKiroAccountState } from "../../providers/kiro-account-state-disk";
 import { anthropicPoolCooldownResponse, readDisplaySafeErrorText } from "./core-errors";
@@ -60,6 +65,7 @@ export async function executeResponsesSidecars(
     | "inboundWire"
     | "selectedForwardHeaders"
     | "translatorBudget"
+    | "toolBridgeMaps"
     | "rememberKiroDeliveredFinalAnswer"
     | "responseStateOptions"
   >,
@@ -169,6 +175,25 @@ export async function executeResponsesSidecars(
     }
   }
 
+  // Advisor sidecar plan (optional subsystem; null when disabled, unconfigured, or when this
+  // request IS an advisor loopback consultation — the recursion fence). The plan carries
+  // request-scoped state only; preflight keeps fixed policy separate from user-role advice
+  // before the worker is dispatched. Registration seam: the core path sees only
+  // `parsed._advisorGuard`; only an activated factory can load the optional implementation.
+  const advisorPlan = options.advisorInternal === true
+    ? null
+    : await createRegisteredAdvisorPlan({
+      config,
+      workerIdentity: `${route.modelId} (provider ${route.providerName})`,
+      workerModelId: route.modelId,
+      abortSignal: options.abortSignal,
+    });
+  // Preflight only on real worker turns: a routed-compaction turn is a summarization request,
+  // and injecting advice into it would pollute the summary Codex replaces its history with.
+  if (advisorPlan && !routedCompaction) {
+    await advisorPlan.preflightInject(parsed);
+  }
+
   // Image / web-search sidecars: plan once, then dispatch with runTurn-aware priority.
   // Routed-compaction turns must NOT hit the image bridge: compaction clears tools/_webSearch but
   // leaves _imageGeneration, so planImageBridge would activate and return a normal Responses
@@ -198,6 +223,20 @@ export async function executeResponsesSidecars(
   // A single request may rotate once for a verification refusal. Keep this separate from the
   // broader OAuth failover count: a sidecar turn can also spend that count on rate-limit recovery.
   let antigravityValidationRotationAttempted = false;
+  // A replacement credential whose Copilot Auto negotiation leaves the key's scope ends the turn.
+  // The loops only see "no rotation" and fail with the original, replayable 429, so the refusal
+  // is held here and answers in place of that failure.
+  let sidecarScopeDenial: AdmissionModelDeniedError | undefined;
+  const noteSidecarScopeDenial = (error: unknown): void => {
+    const refusal = unwrapUpstreamRetryEvidenceError(error);
+    if (refusal instanceof AdmissionModelDeniedError) sidecarScopeDenial ??= refusal;
+  };
+  const sidecarScopeRefusal = (response: Response): Response | undefined => {
+    if (!sidecarScopeDenial || response.ok) return undefined;
+    void response.body?.cancel().catch(() => {});
+    releaseSearchProbeLease();
+    return admissionModelDeniedResponse(sidecarScopeDenial);
+  };
   /** Admit a replacement credential, or leave the loop's original refusal authoritative. */
   const rotateSidecarProviderOn429 = async (
     retryAfter: string | null,
@@ -264,7 +303,8 @@ export async function executeResponsesSidecars(
           return null;
         }
         transportState.genericFailovers += 1;
-      } catch {
+      } catch (error) {
+        noteSidecarScopeDenial(error);
         hop.permit?.release();
         return null;
       }
@@ -284,7 +324,10 @@ export async function executeResponsesSidecars(
     } else if (rotated) {
       route.provider = rotated;
       try { await resolveCopilotSelection(retryParsed ?? parsed); }
-      catch { return null; } // Keep the sidecar's original refusal when replacement negotiation fails.
+      catch (error) { // Keep the sidecar's original refusal when replacement negotiation fails.
+        noteSidecarScopeDenial(error);
+        return null;
+      }
     } else if (
       // A POSITIVE gate, not an early return. An early `return null` here made every later arm
       // unreachable: Anthropic never has a genericFailoverAccountId (isGenericFailoverProvider
@@ -326,7 +369,8 @@ export async function executeResponsesSidecars(
           return null;
         }
         if (route.providerName === "kiro") transportState.genericFailovers += 1;
-      } catch {
+      } catch (error) {
+        noteSidecarScopeDenial(error);
         hop.permit?.release();
         return null;
       }
@@ -527,6 +571,8 @@ export async function executeResponsesSidecars(
         notifyResponseComplete(response);
       },
     });
+    const imgScopeRefusal = sidecarScopeRefusal(imgResponse);
+    if (imgScopeRefusal) return imgScopeRefusal;
     if (imgResponse.body) {
       const imgTurnAc = new AbortController();
       imgTurnAc.signal.addEventListener("abort", cancelResponseCompletion, { once: true });
@@ -622,6 +668,8 @@ export async function executeResponsesSidecars(
         notifyResponseComplete(response);
       },
     });
+    const wsScopeRefusal = sidecarScopeRefusal(loopResponse);
+    if (wsScopeRefusal) return wsScopeRefusal;
     // A routed Anthropic model whose last pool account refused on spent quota fails the loop's
     // first iteration with a generic 429 before any search runs. Answer the usage limit instead,
     // as the main path does (#6991), so Codex stops rather than retrying the whole turn.
@@ -643,6 +691,33 @@ export async function executeResponsesSidecars(
     }
     releaseSearchProbeLease();
     return wsResponse;
+  }
+
+  // Advisor synthetic tool + stream guard: attach ONLY when this function is about to hand the
+  // request back to the normal translated exchange (no sidecar loop claimed the turn, not a
+  // run-turn adapter, not compaction). The web-search/image loops own their own event handling;
+  // run-turn adapters execute their own loop; both would leak the synthetic tool call they
+  // cannot intercept. Preflight (above) still applies to those paths — only the tool does not.
+  if (advisorPlan && !routedCompaction && !transportState.adapter.runTurn && !wsPlan && !imgPlan && !vidPlan) {
+    // A client-declared tool named "advisor" would collide with the synthetic injection (one
+    // wire name, two schemas); the synthetic runtime owns the name for this turn.
+    parsed.context.tools = [
+      ...(parsed.context.tools ?? []).filter(t => !t.advisor && t.name !== ADVISOR_TOOL_NAME),
+      advisorPlan.tool,
+    ];
+    // The advisor tool joined AFTER prepare computed the bridge maps; recompute so the tool is
+    // declared (undeclared-tool guard, tool_choice mapping, schema repair) on this turn.
+    //
+    // Rebuild WITHOUT the budget: prepare already charged every tool in the catalog, and
+    // buildToolBridgeMaps charges each name it registers, so re-passing the budget would bill the
+    // whole catalog a second time and can trip `translation_buffer_limit` for a large MCP catalog.
+    // Charge only the one entry that is genuinely new — the synthetic advisor tool is a bare
+    // function tool, so it retains its wire name and its bare name (collaboration.ts:187, :233).
+    requestState.toolBridgeMaps = buildToolBridgeMaps(parsed);
+    translatorBudget.chargeRetained(new TextEncoder().encode(ADVISOR_TOOL_NAME).byteLength * 2, {
+      kind: "retained_collectors",
+    });
+    advisorPlan.attachGuard(parsed);
   }
 
   return undefined;

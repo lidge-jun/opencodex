@@ -112,6 +112,7 @@ import { mapCodexAuthContextErrorToResponse } from "./codex-auth-error";
 import { chargeWorkflowSends } from "../../lib/workflow-budget";
 import { isAntigravityValidationRefusal } from "./antigravity-validation-refusal";
 import { unboundPoolSpendRefusalResponse } from "../workflow-refusal";
+import { AdmissionModelDeniedError, admissionModelDeniedResponse } from "../admission-model-scope";
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function prepareAdapterExchange(
@@ -225,8 +226,13 @@ export async function prepareAdapterExchange(
 
 
   let selfContainedJudgment: boolean | undefined;
+  // On the Antigravity direct lane the raw body carries only settings; judge the body the bridge
+  // would have sent, built only if an ambiguous reset actually asks.
+  const directRequest = options.directRequest;
   const requestIsSelfContained = (): boolean =>
-    selfContainedJudgment ??= selfContainedResponsesBody(parsed._rawBody);
+    selfContainedJudgment ??= selfContainedResponsesBody(directRequest
+      ? { ...(parsed._rawBody as Record<string, unknown>), ...directRequest.bridgeConversation() }
+      : parsed._rawBody);
   const claimPreHeaderResend = (): boolean => authorizeResendForRecovery(
     "pre-header", "connection-reset",
     ambiguousResendAllowanceFor(route.provider, requestIsSelfContained, claimAmbiguousResend),
@@ -541,6 +547,10 @@ export async function prepareAdapterExchange(
       return storageRefusal;
     }
     const refusal = err instanceof UpstreamRetryEvidenceError ? err.cause : err;
+    if (refusal instanceof AdmissionModelDeniedError) {
+      releaseCodexAuthContextProbeLease(admissionState.authCtx);
+      return admissionModelDeniedResponse(refusal);
+    }
     const codexRefusal = mapCodexAuthContextErrorToResponse(unwrapUpstreamRetryEvidenceError(err), {
       now: Date.now(), accountSelector: route.codexAccountNamespace,
     });
@@ -809,6 +819,13 @@ export async function prepareAdapterExchange(
           upstream.abort();
           releaseCodexAuthContextProbeLease(admissionState.authCtx);
           return { failed: storageRefusal };
+        }
+        const scopeRefusal = unwrapUpstreamRetryEvidenceError(err);
+        if (!options.abortSignal?.aborted && scopeRefusal instanceof AdmissionModelDeniedError) {
+          cleanupUpstreamAbort();
+          upstream.abort();
+          releaseCodexAuthContextProbeLease(admissionState.authCtx);
+          return { failed: admissionModelDeniedResponse(scopeRefusal) };
         }
         const codexRefusal = !options.abortSignal?.aborted && mapCodexAuthContextErrorToResponse(unwrapUpstreamRetryEvidenceError(err), {
           now: Date.now(), accountSelector: route.codexAccountNamespace,
@@ -1539,7 +1556,17 @@ export async function prepareAdapterExchange(
           // The hop's permit is already settled by the dispatch boundary above; continuing
           // only skips the remaining arms, it does not abandon a reservation.
           if (isNonReplayableResponse(upstreamResponse)) continue recovery;
-       } catch {
+       } catch (err) {
+          // A local admission denial is terminal for the whole request: rotating to another
+          // account cannot re-scope the key, so the refusal answers in place of the 429.
+          const scopeRefusal = unwrapUpstreamRetryEvidenceError(err);
+          if (!options.abortSignal?.aborted && scopeRefusal instanceof AdmissionModelDeniedError) {
+            hop.permit?.release();
+            cleanupUpstreamAbort();
+            upstream.abort();
+            releaseCodexAuthContextProbeLease(admissionState.authCtx);
+            return admissionModelDeniedResponse(scopeRefusal);
+          }
          // A throw before the send — snapshot fetch, credential application, adapter
           // resolution — must hand the reservation back. Without this the ladder charges the
           // request for a send it never made, and a later recovery in the same request is

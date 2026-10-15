@@ -5,7 +5,7 @@
  */
 
 import { expandRetainedCompactionInput } from "./retained-compaction";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { estimateTokens } from "../lib/token-estimate";
 import { decodeReasoningEnvelope } from "./reasoning-envelope";
@@ -133,7 +133,15 @@ export function applyReasoningRetention(
   mkdirSync(options.archiveDir, { recursive: true, mode: 0o700 });
   const stamp = new Date(options.now ?? Date.now()).toISOString().replace(/[:.]/g, "-");
   const path = join(options.archiveDir, "reasoning-" + stamp + "-" + Math.random().toString(36).slice(2, 8) + ".md");
-  writeFileSync(path, texts.join("\n\n---\n\n"), { encoding: "utf-8", mode: 0o600, flag: "wx" });
+  // Only a successful exclusive open grants ownership; an occupied path is never removed.
+  const fd = openSync(path, "wx", 0o600);
+  let failure: unknown;
+  try { writeFileSync(fd, texts.join("\n\n---\n\n"), "utf-8"); } catch (error) { failure = error; }
+  try { closeSync(fd); } catch (error) { failure ??= error; }
+  if (failure !== undefined) {
+    try { rmSync(path); } catch { /* preserve the original I/O error; cleanup is best-effort */ }
+    throw failure;
+  }
 
   const limitDescription = windowKnown
     ? percent + "% of the context window, capped at " + limit + " tokens"

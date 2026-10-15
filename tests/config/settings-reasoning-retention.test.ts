@@ -26,7 +26,7 @@ function harness(failSave = false) {
 test("reasoning retention settings round-trip, preserve omission, and reset", async () => {
   const h = harness();
   expect(await (await h.call())!.json()).toMatchObject({ reasoningRetention: null });
-  const value = { maxContextPercent: 12.5, maxTokens: 50000 };
+  const value = { enabled: true, maxContextPercent: 12.5, maxTokens: 50000 };
   expect(await (await h.call({ reasoningRetention: value }))!.json()).toMatchObject({ reasoningRetention: value });
   expect(h.config.reasoningRetention).toEqual(value);
   expect(await (await h.call())!.json()).toMatchObject({ reasoningRetention: value });
@@ -37,7 +37,7 @@ test("reasoning retention settings round-trip, preserve omission, and reset", as
 });
 test("reasoning retention rejects invalid values before persistence", async () => {
   const h = harness();
-  for (const value of [{ maxContextPercent: 0 }, { maxContextPercent: 101 }, { maxTokens: 0 }, { maxTokens: 1.5 }, { maxTokens: "100" }, { extra: true }]) {
+  for (const value of [{ enabled: "true" }, { enabled: 1 }, { maxContextPercent: 0 }, { maxContextPercent: 101 }, { maxTokens: 0 }, { maxTokens: 1.5 }, { maxTokens: "100" }, { extra: true }]) {
     expect((await h.call({ reasoningRetention: value }))!.status).toBe(400);
   }
   expect(h.saves()).toBe(0);
@@ -55,12 +55,12 @@ test("reasoning retention save failure rolls back update and reset", async () =>
 test("reasoning retention candidate writes strictly validate optional fields", () => {
   const defaults = getDefaultConfig();
   expect(defaults.reasoningRetention).toBeUndefined();
-  for (const value of [{ maxContextPercent: 12.5 }, { maxTokens: 50000 }, { maxContextPercent: 20, maxTokens: 100000 }]) {
+  for (const value of [{ enabled: true }, { enabled: false }, { maxContextPercent: 12.5 }, { maxTokens: 50000 }, { maxContextPercent: 20, maxTokens: 100000 }]) {
     const validated = validateConfigCandidate({ ...defaults, reasoningRetention: value });
     expect(validated.ok).toBe(true);
     if (validated.ok) expect(validated.config.reasoningRetention).toEqual(value);
   }
-  for (const value of [null, [], "20", { maxContextPercent: 0 }, { maxContextPercent: 101 },
+  for (const value of [null, [], "20", { enabled: "false" }, { maxContextPercent: 0 }, { maxContextPercent: 101 },
     { maxContextPercent: Infinity }, { maxContextPercent: NaN }, { maxTokens: -1 },
     { maxTokens: 1.5 }, { maxTokens: "100" }, { maxTokens: 1, extra: true }]) {
     expect(validateConfigCandidate({ ...defaults, reasoningRetention: value }).ok).toBe(false);
@@ -123,3 +123,12 @@ for (const enabled of [false, true]) {
     }
   });
 }
+
+test("reasoning retention enable and disable preserve explicit booleans", async () => {
+  const h = harness();
+  for (const enabled of [true, false]) {
+    const value = { enabled, maxTokens: 1000 };
+    expect(await (await h.call({ reasoningRetention: value }))!.json()).toMatchObject({ reasoningRetention: value });
+    expect(h.config.reasoningRetention?.enabled).toBe(enabled);
+  }
+});

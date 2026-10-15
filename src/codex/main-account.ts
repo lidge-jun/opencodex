@@ -31,6 +31,12 @@ import { advanceCodexCredentialMutationEpoch } from "./credential-mutation-epoch
 import { withNativeMainExclusiveClaim } from "./native-main-claim";
 import { resolveNativeProfileContext } from "./native-profile-store";
 import { isNativeMainTrafficBlocked } from "./native-profile-startup";
+import { loadConfig } from "../config";
+import {
+  requestCodexAuthStatus,
+  resolveNativeMainRefreshMode,
+  type CodexAuthStatus,
+} from "./native-main-refresh-mode";
 
 export { MAIN_CODEX_ACCOUNT_ID } from "./account-id";
 
@@ -48,13 +54,11 @@ type MainAuthJsonCredential = {
   path: string;
   rawSha256: string;
   /**
-   * Filesystem identity of the file the hash was taken from (#2999).
-   *
-   * A content hash cannot tell "unchanged" from "replaced with a file that happens to
-   * hash the same", and more importantly it is read at a different instant than the
-   * rename. Carrying dev+ino lets the pre-rename guard ask the sharper question: is this
-   * still the same file, not merely one with the same bytes. `null` when the target could
-   * not be stat'ed, which is treated as "cannot prove identity" rather than "matches".
+   * Filesystem identity of the file the hash was taken from. It catches a writer that
+   * replaces auth.json by rename with identical bytes. It does not see Codex's own writes:
+   * Codex rewrites auth.json in place (truncate + write), which keeps dev and ino, so only
+   * the content hash notices those, and only once the new bytes are visible (#2999).
+   * `null` when the target could not be stat'ed, which fails closed.
    */
   identity: { dev: number; ino: number } | null;
   root: Record<string, unknown>;
@@ -66,6 +70,8 @@ type MainAuthJsonCredential = {
 
 export interface NativeMainRefreshDependencies {
   refreshToken?: (refreshToken: string, options: { signal: AbortSignal }) => Promise<OAuthCredentials>;
+  /** Codex-mode seam: one app-server `getAuthStatus` call. Used only when Codex owns the refresh. */
+  codexAuthStatus?: (options: { refresh: boolean; signal: AbortSignal }) => Promise<CodexAuthStatus>;
   signal?: AbortSignal;
   /** Metadata-only refresh must not retract a concurrent traffic reauth quarantine. */
   preserveReauth?: boolean;
@@ -264,10 +270,9 @@ function assertMainAuthJsonSnapshotUnchanged(expected: MainAuthJsonCredential): 
   if (!current || current.path !== expected.path || current.rawSha256 !== expected.rawSha256) {
     throw new MainAuthJsonChangedDuringRefreshError();
   }
-  // Identity, not just content (#2999). A writer can land between this check and the
-  // rename, and rename(2) replaces unconditionally - so the narrower the question asked
-  // here, the smaller the window where a Codex login gets silently overwritten. An
-  // unreadable identity on either side fails closed: unprovable is not the same as equal.
+  // Also refuse a rename-based replacement with identical bytes. An unreadable identity on
+  // either side fails closed. This narrows the window; rename(2) still replaces
+  // unconditionally after this check returns.
   assertMainAuthJsonIdentityUnchanged(expected);
 }
 
@@ -288,9 +293,7 @@ function persistRefreshedMainAuthJson(
   assertNotRealCodexHomeUnderTest(resolveCodexHomeDir());
   const accessToken = refreshed.access;
   const refreshToken = refreshed.refresh || expected.refreshToken!;
-  const chatgptAccountId = refreshed.accountId
-    ?? extractAccountId(undefined, accessToken)
-    ?? expected.chatgptAccountId;
+  const { chatgptAccountId } = inFlightMainAccountToken(expected, refreshed);
   const tokens = {
     ...expected.tokens,
     access_token: accessToken,
@@ -475,6 +478,12 @@ async function resolveMainAccountToken(
   const signal = dependencies.signal
     ? AbortSignal.any([dependencies.signal, refreshTimeout])
     : refreshTimeout;
+  // An injected exchange is the guarded writer by definition. Otherwise Codex refreshes its own
+  // login whenever a supported binary exists, unless the operator chose "opencodex" (#2999).
+  const refreshMode = dependencies.refreshToken
+    ? null
+    : await resolveNativeMainRefreshMode(loadConfig());
+  if (signal.aborted) throw signal.reason;
   const lockKey = refreshGrantFingerprintForToken(initial.refreshToken);
   // Two locks, because they guard two different things that live in two different
   // homes. `withCodexRefreshFileLock` is keyed on the grant fingerprint and lives
@@ -508,6 +517,11 @@ async function resolveMainAccountToken(
           && mainAccessTokenFresh(locked.accessToken, Date.now(), MAIN_TOKEN_REFRESH_SKEW_MS)) {
           return { accessToken: locked.accessToken!, chatgptAccountId: locked.chatgptAccountId };
         }
+        if (refreshMode?.mode === "codex") {
+          const command = refreshMode.command!;
+          return refreshThroughCodex(locked, rejectedAccessToken, dependencies, refreshTimeout,
+            dependencies.codexAuthStatus ?? (options => requestCodexAuthStatus(command, options)));
+        }
         const refresh = dependencies.refreshToken ?? refreshNativeMainGrant;
         let refreshed: OAuthCredentials;
         if (signal.aborted) throw signal.reason;
@@ -539,7 +553,19 @@ async function resolveMainAccountToken(
         // Once the exchange starts, only its own timeout may abort it: a successful
         // rotating grant retires the old refresh token. Save the only live grant before
         // honoring caller cancellation, while retaining the external-writer guards.
-        const result = persistRefreshedMainAuthJson(locked, refreshed);
+        let result: { accessToken: string; chatgptAccountId: string };
+        try {
+          result = persistRefreshedMainAuthJson(locked, refreshed);
+        } catch (cause) {
+          if (!(cause instanceof MainAuthJsonChangedDuringRefreshError)) throw cause;
+          // Another writer owns auth.json now (#2999). The exchange already succeeded, so
+          // failing the request would waste it. Serve the new access token to this request
+          // only: leave the file as the other writer left it, keep nothing as the main
+          // credential, and do not retire the grant.
+          noteNativeMainRefresh("publish-refused-served-in-flight");
+          if (dependencies.signal?.aborted) throw dependencies.signal.reason;
+          return inFlightMainAccountToken(locked, refreshed);
+        }
         // A permitted in-flight success speaks only for its own profile and grant.
         clearMainRefreshGrantRejection(mainRefreshGrantKey(locked)!);
         if (dependencies.preserveReauth !== true) clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
@@ -554,6 +580,64 @@ async function resolveMainAccountToken(
     }
     throw cause;
   }
+}
+
+/** The refreshed bearer for one request whose save was refused; never stored anywhere. */
+function inFlightMainAccountToken(
+  expected: MainAuthJsonCredential,
+  refreshed: OAuthCredentials,
+): { accessToken: string; chatgptAccountId: string } {
+  return {
+    accessToken: refreshed.access,
+    chatgptAccountId: refreshed.accountId
+      ?? extractAccountId(undefined, refreshed.access)
+      ?? expected.chatgptAccountId,
+  };
+}
+
+/**
+ * Codex mode (#2999): Codex refreshes and stores its own login; OpenCodex only uses the bearer.
+ *
+ * auth.json is not read again after the call. In keyring mode Codex deletes the file once the
+ * keyring save succeeds, so the RPC answer is the only place the new token exists for us.
+ * The call runs on the refresh timeout alone: killing app-server mid-exchange could retire
+ * the grant before Codex saves its successor.
+ */
+async function refreshThroughCodex(
+  locked: MainAuthJsonCredential,
+  rejectedAccessToken: string | undefined,
+  dependencies: NativeMainRefreshDependencies,
+  refreshTimeout: AbortSignal,
+  authStatus: NonNullable<NativeMainRefreshDependencies["codexAuthStatus"]>,
+): Promise<{ accessToken: string; chatgptAccountId: string }> {
+  let status: CodexAuthStatus;
+  try {
+    status = await authStatus({ refresh: true, signal: refreshTimeout });
+  } catch (cause) {
+    noteNativeMainRefresh("codex-unavailable");
+    throw new MainAccountTokenRefreshError("transient", { cause });
+  }
+  if (status.authMethod === "chatgpt" && !status.authToken) {
+    // The only permanent-failure signal the response carries: Codex withholds the token once
+    // its refresh was refused for good. The specific OAuth code is not on the wire.
+    noteNativeMainRefresh("codex-reauth");
+    markMainRefreshGrantRejected(mainRefreshGrantKey(locked)!);
+    throw new MainAccountTokenRefreshError("reauth");
+  }
+  const token = status.authToken;
+  if (status.authMethod !== "chatgpt" || !token) {
+    noteNativeMainRefresh("codex-no-chatgpt-login");
+    throw new MainAccountTokenRefreshError("transient");
+  }
+  // A transient Codex refresh failure still answers with its cached bearer.
+  if (token === rejectedAccessToken || !mainAccessTokenFresh(token, Date.now(), 0)) {
+    noteNativeMainRefresh("codex-transient");
+    throw new MainAccountTokenRefreshError("transient");
+  }
+  noteNativeMainRefresh("codex-ok");
+  if (dependencies.preserveReauth !== true) clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+  if (dependencies.signal?.aborted) throw dependencies.signal.reason;
+  return { accessToken: token, chatgptAccountId: extractAccountId(undefined, token) ?? locked.chatgptAccountId };
 }
 
 /** Refresh the CLI-owned native credential before upstream I/O and publish it atomically. */

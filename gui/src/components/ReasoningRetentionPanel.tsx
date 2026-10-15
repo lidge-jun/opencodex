@@ -2,19 +2,25 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useT } from "../i18n/shared";
 import { createBoundedFetch } from "../bounded-fetch";
 import { requireJson } from "../pages/dashboard-shared";
+import { Switch } from "../ui";
 
-type Setting = { maxContextPercent?: number; maxTokens?: number } | null;
+type Setting = { enabled?: boolean; maxContextPercent?: number; maxTokens?: number } | null;
 function readSetting(payload: { reasoningRetention?: Setting }): Setting {
   if (!("reasoningRetention" in payload)) throw new Error("Missing reasoningRetention settings");
   return payload.reasoningRetention ?? null;
 }
 
 export default function ReasoningRetentionPanel({ apiBase }: { apiBase: string }) {
-  return <ReasoningRetentionControls key={apiBase} apiBase={apiBase} />;
+  const t = useT();
+  return <details className="panel">
+    <summary className="font-semibold">{t("reasoningRetention.advanced")}</summary>
+    <ReasoningRetentionControls key={apiBase} apiBase={apiBase} />
+  </details>;
 }
 function ReasoningRetentionControls({ apiBase }: { apiBase: string }) {
   const t = useT();
   const [saved, setSaved] = useState<Setting | undefined>();
+  const [enabled, setEnabled] = useState(false);
   const [percent, setPercent] = useState("20");
   const [tokens, setTokens] = useState("100000");
   const [busy, setBusy] = useState(false);
@@ -24,6 +30,7 @@ function ReasoningRetentionControls({ apiBase }: { apiBase: string }) {
   const pending = useRef<ReturnType<typeof createBoundedFetch> | null>(null);
   const accept = useCallback((value: Setting) => {
     setSaved(value);
+    setEnabled(value?.enabled === true);
     setPercent(String(value?.maxContextPercent ?? 20));
     setTokens(String(value?.maxTokens ?? 100000));
   }, []);
@@ -56,8 +63,10 @@ function ReasoningRetentionControls({ apiBase }: { apiBase: string }) {
   }, [load]);
   const validPercent = percent.trim() !== "" && Number.isFinite(Number(percent)) && Number(percent) > 0 && Number(percent) <= 100;
   const validTokens = tokens.trim() !== "" && Number.isSafeInteger(Number(tokens)) && Number(tokens) > 0;
-  const valid = validPercent && validTokens;
-  const changed = Number(percent) !== (saved?.maxContextPercent ?? 20) || Number(tokens) !== (saved?.maxTokens ?? 100000);
+  const valid = !enabled || (validPercent && validTokens);
+  const changed = enabled !== (saved?.enabled === true) || (enabled && (
+    Number(percent) !== (saved?.maxContextPercent ?? 20) || Number(tokens) !== (saved?.maxTokens ?? 100000)
+  ));
   const save = async (reset = false) => {
     if (pending.current || saved === undefined || (!reset && !valid)) return;
     const request = createBoundedFetch(15_000);
@@ -66,7 +75,9 @@ function ReasoningRetentionControls({ apiBase }: { apiBase: string }) {
     try {
       const response = await fetch(`${apiBase}/api/settings`, {
         method: "PUT", headers: { "Content-Type": "application/json" }, signal: request.signal,
-        body: JSON.stringify({ reasoningRetention: reset ? null : { maxContextPercent: Number(percent), maxTokens: Number(tokens) } }),
+        body: JSON.stringify({ reasoningRetention: reset ? null : enabled
+          ? { enabled: true, maxContextPercent: Number(percent), maxTokens: Number(tokens) }
+          : { enabled: false } }),
       });
       const value = readSetting(await requireJson(response));
       if (active.current && pending.current === request) { accept(value); setFeedback("saved"); }
@@ -79,11 +90,14 @@ function ReasoningRetentionControls({ apiBase }: { apiBase: string }) {
     }
   };
   const disabled = busy || saved === undefined || loadError;
-  return <section className="panel" aria-labelledby="reasoning-retention-title" aria-busy={busy || (saved === undefined && !loadError)}>
+  return <section aria-labelledby="reasoning-retention-title" aria-busy={busy || (saved === undefined && !loadError)}>
     <div className="font-semibold" id="reasoning-retention-title">{t("reasoningRetention.title")}</div>
     <p className="muted setting-hint">{t("reasoningRetention.description")}</p>
+    <p className="muted setting-hint">{t("reasoningRetention.storageHint")}</p>
+    <Switch on={enabled} disabled={disabled} label={t("reasoningRetention.enable")} showLabel
+      onClick={() => { setEnabled(value => !value); setFeedback(null); }} />
     <div className="row" style={{ flexWrap: "wrap", alignItems: "flex-end" }}>
-      <label className="field-label" htmlFor="reasoning-retention-percent">{t("reasoningRetention.percent")}
+      {enabled && <><label className="field-label" htmlFor="reasoning-retention-percent">{t("reasoningRetention.percent")}
         <input id="reasoning-retention-percent" className="input" type="number" min="0" max="100" step="any" value={percent} disabled={disabled}
           aria-invalid={!validPercent || undefined} aria-describedby={!validPercent ? "reasoning-retention-error" : undefined}
           onInput={e => { setPercent(e.currentTarget.value); setFeedback(null); }} />
@@ -92,7 +106,7 @@ function ReasoningRetentionControls({ apiBase }: { apiBase: string }) {
         <input id="reasoning-retention-tokens" className="input" type="number" min="1" step="1" value={tokens} disabled={disabled}
           aria-invalid={!validTokens || undefined} aria-describedby={!validTokens ? "reasoning-retention-error" : undefined}
           onInput={e => { setTokens(e.currentTarget.value); setFeedback(null); }} />
-      </label>
+      </label></>}
       <button type="button" className="btn btn-primary" disabled={disabled || !valid || !changed} onClick={() => { void save(); }}>{t("common.save")}</button>
       <button type="button" className="btn btn-ghost" disabled={disabled || (saved === null && !changed)} onClick={() => { void save(true); }}>{t("reasoningRetention.reset")}</button>
     </div>

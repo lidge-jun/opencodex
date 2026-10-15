@@ -122,10 +122,24 @@ function macLoginRegistration(deps: DesktopStartupDeps) {
   }
   const program = /^\s*program = (.+)$/m.exec(loaded)?.[1];
   const loadedPath = /^\s*path = (.+)$/m.exec(loaded)?.[1];
+  // macOS 13+ Background Task Management can take over the user LaunchAgent and resubmit it
+  // through smd; launchctl then names the submitter instead of the plist (#7019). The loaded
+  // job no longer points at the registration, so credit it like an unloaded job: same program,
+  // and the entire registration re-read unchanged.
+  if (program !== undefined && loadedPath !== undefined && SMD_SUBMITTED.test(loadedPath)
+    && /^\s*managed_by = (.+)$/m.exec(loaded)?.[1] === SERVICE_MANAGEMENT && realpathSync(program) === app) {
+    const final = capture();
+    if (!final || JSON.stringify(first) !== JSON.stringify(final)) return { app, proxy, loginEnabled: false };
+    return { app, proxy, loginEnabled: true, loginRegistration: "loaded" as const };
+  }
   const loginEnabled = program !== undefined && realpathSync(program) === app
     && loadedPath !== undefined && realpathSync(loadedPath) === first.registrationPath;
   return { app, proxy, loginEnabled, ...(loginEnabled ? { loginRegistration: "loaded" as const } : {}) };
 }
+
+/** launchctl's `path` for a job Background Task Management resubmitted through smd. */
+const SMD_SUBMITTED = /^\(submitted by smd\.\d+\)$/;
+const SERVICE_MANAGEMENT = "com.apple.xpc.ServiceManagement";
 
 type DesktopLoginFacts = Pick<DesktopStartupDiagnostic, "loginEnabled" | "loginRegistration">;
 

@@ -292,9 +292,29 @@ wait signal does not release an acquired lock while the exchange runs.
 Successful refresh publishes access and refresh tokens and advances the
 credential mutation epoch before clearing grant rejection and applicable
 reauth quarantine, then throws the caller's abort reason if cancelled.
-Snapshot and identity checks still refuse an external auth writer, including
-when the caller also cancelled. Same-identity device reauth obtains a new login
+Snapshot and identity checks still refuse to overwrite an external auth writer,
+including when the caller also cancelled. A save refused after a successful
+exchange serves the new access token to that request only: auth.json stays as
+the other writer left it, the rotated grant is kept nowhere, and the old grant
+is not marked rejected (#2999). Same-identity device reauth obtains a new login
 grant rather than rotating the existing grant and keeps its pre-publication fence.
+
+## Native-main refresh ownership
+
+`src/codex/native-main-refresh-mode.ts` decides who refreshes the native main
+login (#2999). `nativeMainRefresh: "codex"`, the default whenever the Codex
+runtime resolved by `src/codex/runtime.ts` is 0.130.0 or newer, starts a
+short-lived `codex -c model_provider="openai" app-server` under the same
+CODEX_HOME and calls `getAuthStatus` with `includeToken` and `refreshToken`.
+OpenCodex uses the returned `authToken` for the request and writes nothing; it
+does not read auth.json again afterwards, because Codex in keyring mode deletes
+the file. A `chatgpt` method with a null token is the only permanent-failure
+signal on the wire and marks the grant rejected (reauth). An unreachable binary,
+a non-ChatGPT method, or the same or an expired bearer is transient. The
+exchange runs on the refresh timeout alone, under the same claim and grant lock
+as the writer. `"opencodex"`, a missing binary, or an older binary keeps the
+guarded writer above. While the test home guard is armed, auto resolution
+never spawns Codex. `ocx doctor` prints the active mode and its reason.
 
 ## Manual account pause and resume
 
@@ -520,6 +540,22 @@ The main-account admission policy defaults to 90% for short windows and 98% for 
 Policy evidence retention uses the minimum configurable 80%, so a partial update or elapsed reset
 cannot erase a reading that may block under an allowed configuration. Fresh lower usage and
 validated window-absence evidence still own recovery.
+
+A hard-lock refusal reaches every Responses client as HTTP 429 with `error.type`/`error.code`
+`usage_limit_reached` (#7046), on HTTP through `cooldownErrorResponse` and on the WebSocket
+error frame, so Codex ends the turn and marks a Goal usage-limited instead of sleeping through a
+transient retry. `Retry-After` and `resets_at` (epoch seconds) name the same instant, and both
+are omitted when nothing is known. When unpinned Pool selection reached main, `resolveCodexAuthContext`
+annotates the refusal with `nextCodexPoolRecoveryAt` (`src/codex/routing/pool-recovery.ts`): the
+earliest time a stored Pool account's every routing hold ends (quota cooldown, quota avoidance, soft
+avoidance, pool-refresh backoff, credits-off usage-limit reset), skipping paused, plan-excluded,
+quarantined, unusable or model-denied accounts, accounts outside a gated model's resolved roster (all
+of them when no roster resolved), accounts under the failure-window guard or a hold with an unknown
+end, and accounts with no recorded hold. That
+instant replaces main's reset when it comes first, and is held to at least 60 s. It is only a retry
+hint: selection is re-run from fresh state on the retry, and neither the guard, its thresholds nor
+account eligibility change. Pins, Reserve and dispatch-time refusals keep main's reset.
+Covered by `tests/codex-integration/main-account-hard-lock-usage-limit.test.ts`.
 
 The outside-usage detector keeps a separate process-local baseline keyed by observed main identity.
 Only validated fresh percentages with a known normalized reset from the current observation enter it;

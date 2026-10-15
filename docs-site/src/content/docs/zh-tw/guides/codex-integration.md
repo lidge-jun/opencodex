@@ -227,6 +227,8 @@ provider 與原生 OpenAI 行銷名稱都維持不動。
 ocx models add deepseek deepseek-v4 --display-name "DeepSeek V4" --context-window 128000
 ```
 
+對於自訂供應商，省略明確的視窗後，目錄會使用包括模型 ID 推斷在內的[上下文視窗回退規則](/zh-tw/reference/configuration/providers/#自訂供應商的上下文視窗)。若中轉支援的容量低於廠商視窗，請明確設定視窗或 Context cap。
+
 遠端 Codex client 可以使用一般的資料平面金鑰取得相同的產生目錄——與 `/v1/responses` 所用的憑證相同，而非管理或管理員權杖：
 
 ```bash

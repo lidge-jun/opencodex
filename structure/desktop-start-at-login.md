@@ -11,6 +11,11 @@ only "the LaunchAgent plist exists". `desktop/src-tauri/src/login_registration.r
 step — plist shape, `launchctl print-disabled` override, registered app equal to this running
 copy, loaded `program`/`path` or the exact service-not-found answer with an unchanged
 re-read — so the item is checked exactly when Startup safety would credit this copy (#6972).
+On macOS 13+ Background Task Management can resubmit the LaunchAgent through smd, and
+`launchctl print` then reports `path = (submitted by smd.<pid>)` with
+`managed_by = com.apple.xpc.ServiceManagement` instead of the plist path. That loaded job is
+credited only when its `program` is this copy and the whole registration re-reads unchanged,
+the same rule as the service-not-found answer (#7019).
 The cases in `tests/fixtures/desktop-login-registration-cases.json` run against both
 implementations (`login_registration::tests` and
 `tests/service/service-desktop-login-registration.test.ts`); a change to either judgment

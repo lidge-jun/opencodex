@@ -146,6 +146,25 @@ login-only too: `ocx login google-antigravity` signs in with your Google account
 Assist wire, and the `google` preset beside it is the AI Studio Gemini API — a different product
 reached with its own key, not a key mode for the same login.
 
+Gemini 4 Argon (`gemini-4-argon`) is listed on the `google` preset with low, medium (the
+default), and high thinking levels. Google offers it on the paid Gemini API tier only, not the free
+tier. On `google-antigravity`, Argon is listed with the same three levels, which map to the
+`gemini-4-argon-low`, `-medium`, and `-high` wire models. Google limits it there to AI Ultra and
+eligible Enterprise accounts. Cloud Code Assist serves Argon only to the Antigravity CLI client, so
+OpenCodex sends Argon requests and model discovery with the CLI User-Agent
+(`antigravity/cli/1.3.4`) and keeps the IDE User-Agent for every other model.
+
+The built-in `google-antigravity` model list is Gemini 3.8 Flash (`gemini-3.8-flash`), Gemini 4 Argon
+(`gemini-4-argon`), Claude Opus 5.5 (`claude-opus-5-5`), and Claude Sonnet 5.5
+(`claude-sonnet-5-5`), each with low, medium, and high efforts. What you actually see is your
+account's own model discovery, because Google enables models per account: some accounts list
+Claude Sonnet 4.6 and Claude Opus 4.6 (Thinking), others only Claude Opus and Sonnet 5.5 (directly
+billed, non-trial Pro or Ultra plans), and Gemini 4 Argon only on Ultra and Enterprise. Both Claude
+generations map: 4.6 takes its effort as a thinking level, 5.5 as its `-low`, `-medium`, or
+`-high` model. With several Antigravity accounts and `oauthAccountFailover.enabled`, a request
+prefers an account whose discovery lists the requested model. Saved selections of models that left
+the list keep routing as before.
+
 To check which mode a provider is actually using, open it on the Providers page: the **Connection**
 block's **Authentication** row reads `OAuth`, `API key`, `ChatGPT passthrough`, `Local`, or
 `No key needed`. It is a provider-level setting, so the account rows below it do not repeat it.
@@ -473,6 +492,10 @@ a later successful automatic refresh also clears the attention state. This statu
 classify the refresh grant as revoked or disable future refresh attempts. Network and server
 errors do not trigger this status.
 
+For desktop-auth accounts, an HTTP 401 with exactly `Bad credentials` requires a new login
+and immediately marks the rejected credential generation as needing re-authentication.
+Other messages, statuses, and AWS SSO responses do not trigger this desktop-specific rule.
+
 ### Kiro credential import
 
 The dashboard offers native Builder ID, Google, and GitHub device login without Kiro CLI.
@@ -512,12 +535,12 @@ an ambiguous token selection), when `KIROCLI_DB_PATH` / `KIRO_CLI_DB_FILE` redir
 from the live CLI store, or when an existing primary CLI database has no recognized token row.
 Repair or remove the unreadable database under the normal `kiro-cli` data path, unset those import
 selectors, then retry. Signing in from a machine with no existing `kiro-cli` session is unaffected.
-The native dashboard choices are add-only and do not sign out `kiro-cli`. A device dialog shows the code and verification destination. Only recognized Kiro or Builder ID hosts are opened as links; an unexpected destination is shown as copyable text for review. Closing the dialog sends cancellation and leaves a bounded background status check to reconcile a commit already in progress. A stalled status response is retried; exhausting the flow deadline produces the neutral ended outcome rather than claiming success.
+The native dashboard choices are add-only and do not sign out `kiro-cli`. A device dialog shows the code and verification destination. Only recognized Kiro or Builder ID hosts are opened as links; an unexpected destination is shown as copyable text for review. Closing the dialog sends cancellation and leaves a bounded background status check to reconcile a commit already in progress. A stalled status response is retried; exhausting the flow deadline produces the neutral ended outcome rather than claiming success. Google and GitHub approval completes when Kiro reports `authorized` (or the legacy `approved` status) with valid tokens and a profile ARN.
 The account list marks Kiro accounts excluded from automatic selection with a reason, when available.
 
 ## 3. API-key catalog
 
-opencodex ships 103 built-in presets: 84 key-based, 15 OAuth, three local, and one default
+opencodex ships 104 built-in presets: 85 key-based, 15 OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it; validation is provider-specific. Notable entries:
 
@@ -542,13 +565,11 @@ router, `orcarouter/auto`, that grades each prompt and picks the model. Create a
 [OrcaRouter console](https://www.orcarouter.ai/console); the preset pins the row near the top of the
 Add provider picker and marks it as a sponsor, and nothing else about routing or defaults changes.
 
-**PackyCode** ([sponsor](https://github.com/lidge-jun/opencodex/blob/main/SPONSORS.md)) is an API
+**PackyCode** is an API
 relay for Claude Code, Codex, Gemini and more. The preset targets their OpenAI-compatible Chat
 Completions endpoint, `https://cf.api.fan/v1`, with live model discovery narrowed to what your
 token group allows (`gpt-5.5` and `gpt-5.1-codex` are seeded). Register at
-[packyapi.com](https://www.packyapi.com/register?aff=k5KT) and create a Codex-group token; the preset
-pins the row near the top of the Add provider picker and marks it as a sponsor, and nothing else about
-routing or defaults changes.
+[packyapi.com](https://www.packyapi.com) and create a Codex-group token.
 
 **Opper** is the EU-hosted AI gateway from Opper AI (Stockholm): one key (created at
 [platform.opper.ai](https://platform.opper.ai)) and one OpenAI-compatible endpoint in front of 700+
@@ -610,6 +631,7 @@ region-pinned EU routes, is at [opper.ai/models](https://opper.ai/models). Opper
 | Kilo | `https://api.kilo.ai/api/gateway` |
 | Opper | `https://api.opper.ai/v3/compat` |
 | TokenLab | `https://api.tokenlab.sh/v1` |
+| Modelflare | `https://modelflare.dev/v1` |
 | OpenGateway | `https://apis.opengateway.ai/v1` |
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
@@ -659,6 +681,19 @@ prefixes remain separate: `tokenlab/gpt-5.6-terra` sends `gpt-5.6-terra` upstrea
 TokenLab's [terms](https://tokenlab.sh/tos) and [privacy policy](https://tokenlab.sh/privacy-policy)
 apply to requests sent to this service. The preset pins the row near the top of the Add provider
 picker and marks it as a sponsor, and nothing else about routing or defaults changes.
+
+**Modelflare** is an OpenAI-compatible relay at `https://modelflare.dev/v1`. Select **Modelflare**
+in `ocx init` or the dashboard's **Add provider** picker, or run `ocx provider add modelflare`, and
+give it your key directly or as the reference `${MODELFLARE_API_KEY}` so the key stays in your
+environment. The preset uses Chat Completions and seeds four models that
+were verified with chat, streaming and tool calls: `glm-5.3-flash` (the default),
+`claude-sonnet-5-5`, `gpt-6.1-sol` and `deepseek-v4-flash`. You can add other Chat-compatible
+Modelflare models as custom models. Image and video models use separate Modelflare endpoints and
+do not work through this Chat preset. An ordinary Modelflare key is bound to one routing group and
+can call only that group's models, so use a Smart key for the full seeded set, or pass
+`--default-model` with a model your key's group serves.
+`deepseek-v4.1-flash` is listed upstream but currently answers 503, so the preset leaves it out.
+Upstream latency varies from a few seconds to about 30 seconds, with occasional transient 503s.
 
 The MiniMax and MiniMax (CN) provider cards can also show Coding Plan quota when the configured
 key has an active plan. The dashboard reads the plan's 5-hour window and, when present, weekly
@@ -1097,7 +1132,8 @@ OpenCodex provides official adapter support for Qoder through the `qoder` (Globa
 - **Model Discovery:** `qoder --list-models` is the authoritative entitlement roster for the current PAT. The cache is bound to an irreversible fingerprint of the token, so switching accounts never reuses another account's roster. If discovery fails, the provider degrades to a stale cache and then the documented static seed.
 - **Tool Ownership:** The CLI runs single-turn `stream-json` with `--tools ""`, `--strict-mcp-config`, setting sources disabled, and session persistence disabled, so Codex keeps exclusive tool ownership. Client-declared tools are exposed through an isolated request-scoped MCP server.
 - **Image Input:** Qoder Global accepts image input through the Qoder CLI. OpenCodex forwards supported image inputs that reach the Global adapter to the CLI without maintaining a per-model vision capability allowlist there. Image compatibility and any model-specific preprocessing or routing are handled by Qoder. OpenCodex does not use the static discovery fallback roster to classify per-model vision capability. Qoder CN keeps its existing sidecar classification, and any residual raw-image request that reaches the CN adapter is rejected as `unsupported_input_modality`. OpenCodex serializes history before the current turn, but Qoder does not persist sessions, so prior images are replayed on later turns. In observed multi-turn image conversations, replayed images can become unreliably associated or effectively ordered relative to the historical text they originally accompanied.
-- **Quota:** No public quota API is used, so totals and reset times are unavailable. Insufficient-credit errors (vendor code 118) surface as HTTP 429 `insufficient_quota`.
+- **PAT recovery:** For both Qoder presets, a multi-key API-key pool can switch to another PAT on a supported authentication rejection or account-level quota exhaustion, but only before response content or an event that makes replay unsafe. Recovery requires Qoder-specific classification and respects credential-hop and send budgets; an HTTP 401/429 or quota message alone is not permission to replay. Single-key configurations do not rotate. Sharing the CLI runner does not enable this API-key recovery for CodeBuddy or self-authenticated Claude CLI.
+- **Quota:** No public quota API is used, so totals and reset times are unavailable. Codes 110 (account daily limit) and 118 (personal Credits exhaustion) report `insufficient_quota` and permit consideration of PAT recovery. Other supported quota codes also report `insufficient_quota` but do not authorize it. Numeric error codes take precedence: an unrecognized numeric code does not fall back to quota or authentication text. Without a numeric code, only the supported account-daily message beginning “You've reached your daily usage limit for Chat”, with no team/model/shared qualifier, grants quota recovery; generic credit-limit text does not. Only quota failures eligible for PAT recovery enter key cooldown handling. When such a failure has no reset time, the failed key uses the existing default cooldown; nonrecoverable quota classifications do not create a cooldown through this path, and no next-day reset is inferred.
 - **Operators:** Qoder Global is operated by BRIGHT ZENITH PRIVATE LIMITED under the [product service terms](https://qoder.com/product-service); Qoder CN by 通义云启（杭州）信息技术有限公司 with Alibaba Cloud. Verify `ocx provider test qoder` (or `qoder-cn`) after configuring.
 
 ### Claude Code CLI (subscription)

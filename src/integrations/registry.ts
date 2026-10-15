@@ -17,6 +17,8 @@ import { dirname, join } from "node:path";
 import {
   ClientPathError,
   buildDroidContribution,
+  qoderConfigPath,
+  qoderHomeDir,
   clineConfigPath,
   clineSettingsDir,
   droidConfigPath,
@@ -280,6 +282,11 @@ function xdgConfigHome(env: NodeJS.ProcessEnv, home: string): string {
 }
 
 export const INTEGRATION_CLIENTS: Record<IntegrationClientId, IntegrationClientSpec> = {
+  qoder: {
+    id: "qoder",
+    configPath: qoderConfigPath,
+    detectDir: (env = process.env, home = homedir()) => qoderHomeDir(env, home),
+  },
   opencode: {
     id: "opencode",
     // These take `home` explicitly. The export registry's `destination` reads

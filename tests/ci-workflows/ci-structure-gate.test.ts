@@ -78,10 +78,12 @@ test("the aggregate gate expects the job instead of ignoring it", () => {
   expect(script).toContain("CHANGES_STRUCTURE");
 });
 
-test("app changes select the macOS widget job", () => {
+test("app changes reach the macOS widget job after merge", () => {
   expect(filters.ci).toContain("app/**");
   expect(filters.ci).toContain("desktop/**");
+  // The widget runs on macOS, so pull requests skip it and the push into dev runs it.
+  expect(workflow.on?.push?.paths ?? []).toContain("app/**");
   const widget = workflow.jobs?.widget;
-  expect(widget?.if).toContain("needs.changes.outputs.ci == 'true'");
+  expect(widget?.if).toBe("github.event_name != 'pull_request'");
   expect(Array.isArray(widget?.needs) ? widget?.needs : []).toContain("changes");
 });

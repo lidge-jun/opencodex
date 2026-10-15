@@ -23,7 +23,7 @@ Accounts added through the [Orca import](codex-home.md#orca-source-owned-account
 validation-pending. Import alone supplies no entitlement evidence for the model catalog.
 
 ## Shared catalog
-
+Custom-provider missing windows use [source-labelled vendor estimates](catalog-vendor-context.md) only when the provider opts in with `inferContextWindow: true`; these remain distinct from asserted routing capacity.
 Static policy and observed catalog evidence are separate authorities. Antigravity grouping and selection projection follow the [discovered effort-family contract](providers-and-adapters.md#antigravity-effort-families).
 `src/providers/resolved-model-policy.ts` resolves and freezes only registry/operator static facts,
 hard wire pins, aliases, and explicit false/empty declarations. Discovery responses, generated
@@ -112,9 +112,9 @@ to the native default singleton. A default must belong to the projected list. Fu
 is still not inferred from a GPT name. Stored configuration and native capability maps are
 unchanged. Request-time native effort clamps remain canonical-forward only.
 
-The shared merge preserves operator-supplied Ultra Fast metadata through `src/codex/catalog/operator-tiers.ts` when the writer explicitly passes the enabled `ultraFastTier` setting. Only an exact persisted routed slug supplies that
-metadata; native templates, baseline backups, account rows and combo aliases are not sources. The overlay runs after admission and fresh capability generation, preserves Fast policy, and never creates a row or invents a tier. Disabling the
-flag removes Ultra Fast from ordinary routed rows. An explicit operator Ultra Fast default is retained only alongside a supplied tier declaration. Coverage: `tests/codex-integration/ultrafast-tier-honesty.test.ts`.
+The shared merge uses `src/codex/catalog/configured-tiers.ts` to project Ultra Fast into Codex's native speed picker only for an eligible captured service-tier wire explicitly mapping `ultrafast` to `ultrafast`. Both writers pass current exact routed slugs; templates, native/account rows and combos cannot grant the capability. Generated choices carry an exact-slug ownership marker so removing the declaration also removes stale generated tiers, even with operator retention enabled; publication leaves the default unchanged. Coverage: `tests/codex-integration/configured-ultrafast-picker.test.ts`.
+Separately, `src/codex/catalog/operator-tiers.ts` preserves a hand-supplied Ultra Fast tier from the exact persisted routed row only when `ultraFastTier` is enabled. Baselines and native templates cannot supply it. Current configured capability takes precedence; previously generated tiers cannot become operator evidence. Both overlays run after admission, preserve Fast policy and never create rows. Disabling `ultraFastTier` removes only independently supplied operator tiers; disabling the wire declaration removes generated ones. Operator defaults are retained only alongside an independently supplied tier declaration. Coverage: `tests/codex-integration/ultrafast-tier-honesty.test.ts`.
+Native rows are the one place the `ultraFastTier` flag itself adds a tier. `src/codex/catalog/native-ultrafast.ts` appends the documented `{ id: "ultrafast", name: "Ultrafast" }` descriptor to `service_tiers` and `"ultrafast"` to `additional_speed_tiers` on bare and trusted account-bound `gpt-6-astra` and `gpt-6.1-sol` rows, after the existing Fast tier and only when no Ultrafast entry is present. Codex reads the picker from `model_catalog_json` instead of ChatGPT's plan-aware live list, so without it Desktop never offers the choice. Each field it fills is recorded in the row's `opencodex_generated_service_tiers` marker, and disabling withdraws only marked fields (and only the unedited descriptor), so an operator-written native entry survives even when its text matches. Aliases, combos, reserve projections and other models are untouched, and the default tier never changes. Coverage: `tests/codex-integration/native-ultrafast-picker.test.ts`.
 
 The observed-state merge tracks the current invocation's freshly generated custom row objects
 after detaching its inputs. Those rows already own their complete reasoning projection, so the

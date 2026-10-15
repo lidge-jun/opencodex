@@ -22,9 +22,9 @@ export function DashboardOverviewPanels(props: Dash) {
       </div>
       <DashboardSidecarPanels d={props} />
       <CompactionRoutingPanel apiBase={props.apiBase} models={props.models} providers={props.providers} />
-      <ReasoningRetentionPanel apiBase={props.apiBase} />
       <MemoryModelsPanel apiBase={props.apiBase} models={props.models} />
       <MemoryObservabilityCard apiBase={props.apiBase} />
+      <ReasoningRetentionPanel apiBase={props.apiBase} />
     </>
   );
 }
