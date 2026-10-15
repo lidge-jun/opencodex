@@ -338,11 +338,12 @@ test("timed-out OAuth replay keeps its reserved dispatch permit until Devin send
   expect(retryBudgetUsed).toBe(2);
 });
 
-test("combo children retain their existing preflight failure", async () => {
+// A combo child hands the structured limit to the combo loop, which owns cooldown and Retry-After.
+test("combo children carry the structured preflight limit without Retry-After", async () => {
   const response = await run({ comboAttempt: true });
-  expect(response.status).toBe(502);
+  expect(response.status).toBe(429);
   expect(response.headers.get("retry-after")).toBeNull();
-  await response.text();
+  expect(JSON.parse(await response.text()).error).toMatchObject({ type: "rate_limit_error", code: "rate_limit_exceeded" });
 });
 
 test.each([

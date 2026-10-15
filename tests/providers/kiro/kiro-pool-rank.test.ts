@@ -488,3 +488,12 @@ describe("pre-dispatch account preference", () => {
     }
   });
 });
+
+test("reset-first retains account-bound Kiro headroom and exhaustion when resets are unknown", async () => {
+  const { rankAccountsByResetFirst } = await import("../../../src/oauth/account-quota-rank");
+  seedPercent("kiro", "a", 90);
+  seedPercent("kiro", "b", 10);
+  seedExhausted("c");
+  expect(rankAccountsByResetFirst("kiro", ["a", "c", "b"], undefined, Date.now(), roster("a", "b", "c")))
+    .toEqual(["b", "a", "c"]);
+});

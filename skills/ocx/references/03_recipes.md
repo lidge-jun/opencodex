@@ -697,7 +697,7 @@ The target's `supported` list decides which fields can be written. Preserve null
 `enabledEffective`, and optional `inert`: null is not false, stored policy is not
 proof of an available account, and threshold zero is not the pool enable switch.
 OpenAI has no pool `--enabled` or `--quota-window` writer. `reset-first` strategy
-is OpenAI-only; `least-loaded` is Kiro-only. Anthropic pool windows are
+is for OpenAI and generic OAuth pools, never Anthropic; `least-loaded` is Kiro-only. Anthropic pool windows are
 `five-hour`, `weekly`, `max-utilization`. For a requested supported policy edit:
 
 ```bash

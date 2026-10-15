@@ -72,6 +72,11 @@ export async function buildLabProviderAuthHeaders(
       && configuredAnthropicInstance(config, routeContext.providerId) !== routeContext.providerId) {
       throw new TransportError("auth_blocked", "anthropic instance unavailable");
     }
+    // The DSH account token is sent only by its own adapter to its pinned endpoint; the generic
+    // probe transport would use another endpoint and auth scheme.
+    if (routeContext.providerId === "dsh-account") {
+      throw new TransportError("auth_blocked", "dsh-account probes are not supported");
+    }
     try {
       const snapshot = await getValidAccessTokenSnapshot(routeContext.providerId);
       headers.Authorization = `Bearer ${snapshot.accessToken}`;

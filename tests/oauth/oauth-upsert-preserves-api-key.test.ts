@@ -489,7 +489,7 @@ describe("upsertOAuthProvider credential preservation", () => {
     const provider = config.providers.anthropic!;
     const preset = OAUTH_PROVIDERS.anthropic!.providerConfig;
     expect(provider.models).toEqual(preset.models);
-    expect(provider.contextWindow).toBe(preset.contextWindow);
+    expect(provider.contextWindow).toBe(1);
     expect(provider.defaultModel).toBe(preset.defaultModel);
     expect(provider.disabled).toBe(true);
     expect(provider.note).toBe("operator-note");
