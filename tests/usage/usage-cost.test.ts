@@ -818,6 +818,21 @@ describe("summary price coverage on partly measured requests", () => {
     expect(gpt([row("began", [{ ...attempt(1), status: 503, firstOutputMs: 40 }, served])])).toMatchObject(unpriced);
     expect(gpt([row("silent", [{ ...attempt(1), status: 200 }, served])])).toMatchObject(unpriced);
   });
+
+  test("a retry row reported from its last leg does not total a cost an earlier leg may have added", () => {
+    // Non-combo retry: the row's status and usage come from the served leg alone, so the row reads
+    // `reported` while an earlier leg died mid-stream without usage.
+    const usage = { inputTokens: 100, outputTokens: 10 };
+    const entry = {
+      ...row("retry", [{ ...attempt(1), status: 502, streamAborted: true }, attempt(2, usage)]),
+      usageStatus: "reported" as const, usage,
+    };
+    expect(summarizeUsage([entry], "30d", Date.UTC(2026, 5, 28, 12)).summary)
+      .toMatchObject({ requests: 1, pricedRequests: 0, unpricedRequests: 1, estimatedCostUsd: 0 });
+    const refused = { ...entry, attempts: [attempt(1), attempt(2, usage)] };
+    expect(summarizeUsage([refused], "30d", Date.UTC(2026, 5, 28, 12)).summary)
+      .toMatchObject({ requests: 1, pricedRequests: 1, unpricedRequests: 0 });
+  });
 });
 
 describe("OpenAI API-reference pricing", () => {

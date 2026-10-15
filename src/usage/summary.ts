@@ -303,7 +303,10 @@ export function computeEntryCost(entry: PersistedUsageEntry): EntryCostInfo {
         isPriced = true;
       }
     }
-    return { tier, estimate: null, attemptEstimates, costTotal, isPriced };
+    // A usage-less leg that may have generated billed tokens leaves the total unknown, not short.
+    const unknownCost = entry.attempts.some((attempt, index) =>
+      !attemptEstimates[index] && !attempt.usage && !spentNothing(attempt));
+    return { tier, estimate: null, attemptEstimates, costTotal, isPriced: isPriced && !unknownCost };
   }
   const estimate = estimateRequestCost({
     ...usageModelPriceOptions(entry, entry),
