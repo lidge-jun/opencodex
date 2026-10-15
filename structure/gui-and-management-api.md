@@ -246,7 +246,7 @@ that disable back to disk.
 `src/server/index.ts` authenticates and routes `/api/*`, then delegates to
 `src/server/management-api.ts`, which composes the route modules under `src/server/management/`.
 Codex account routes live in `src/codex/auth-api/routes.ts` because they own the credential store, not
-because they are a different plane. Upstream account response reads and OrcaRouter key exchange follow the [bounded ingestion contract](transports/inventory.md#bounded-response-ingestion-and-orcarouter-login).
+because they are a different plane. Authenticated GET/PUT `/api/codex-auth/accounts/use-remaining` follows the [main-account policy contract](providers/openai-accounts.md#main-account-policy-observations). Upstream account response reads and OrcaRouter key exchange follow the [bounded ingestion contract](transports/inventory.md#bounded-response-ingestion-and-orcarouter-login).
 
 The registered route set is larger than the areas described below; the code is the route SOT. What
 this document owns is which module holds which area and what invariant that area must not break.

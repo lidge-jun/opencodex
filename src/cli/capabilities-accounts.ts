@@ -163,6 +163,17 @@ export const ACCOUNT_CAPABILITIES: readonly Capability[] = [
     details: ["Reads the target supported-field list before a narrow PUT. Null/unsupported, stored/effective and generic inert policy stay distinct; disabling does not promise that reactive429 rotation stops.","No local classification/defaults are round-tripped into the live target; supported-field reads are not CAS."],
   },
   {
+    command: ["account", "use-remaining"],
+    usage: "ocx account use-remaining openai <id|alias|main> <on|off|status> [--json]",
+    summary: "Choose whether one Codex account keeps using its remaining included quota.",
+    routes: [{ method: "GET", path: "/api/codex-auth/accounts" },
+      { method: "GET", path: "/api/codex-auth/accounts/use-remaining" }, { method: "PUT", path: "/api/codex-auth/accounts/use-remaining" }],
+    flags: [{ name: "--json", value: "boolean", summary: "Emit the validated account policy." }],
+    mutates: true, json: "envelope",
+    details: ["On disables proactive usage switching for the selected account and raises main-account protection to 100%. Off restores the configured thresholds.",
+      "This is a persistent preference, not account selection. Pause, reauthentication, cooldown, entitlement and paid-credit policy still apply."],
+  },
+  {
     command: ["account","credits"],
     usage: "ocx account credits openai <id|alias|main> <on|off> [--json]; ocx account credits openai --all <on|off> [--json]",
     summary: "Explicitly opt one or all current Codex accounts into paid credits after quota limits.",

@@ -612,6 +612,8 @@ export interface OcxConfig {
    * is found, otherwise "opencodex". "codex" also falls back when no such binary exists.
    */
   nativeMainRefresh?: "codex" | "opencodex";
+  /** Use included quota to 100% for these accounts; preserves thresholds and credit-spending policy. */
+  codexUseRemainingQuotaAccountIds?: string[];
   /** Explicit top-level deletion intent used by stale whole-config rebases. */
   configRebaseProvenance?: OcxConfigRebaseProvenance | Record<string, unknown>;
   /** OpenAI provider-contract migration marker (v2 = single `openai` provider with account mode). */

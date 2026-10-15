@@ -35,6 +35,7 @@
   "provider-anthropic-instance.test.ts": "providers", "config-anthropic-instance-pool.test.ts": "config", "oauth-anthropic-instance-registration.test.ts": "oauth", "oauth-anthropic-instance-refresh.test.ts": "oauth",
   "claude-picker-upload.test.ts": "claude-integration", "claude-picker-linger.test.ts": "claude-integration",
   "messages-native-scope.test.ts": "claude-integration", "catalog-auto-review-row.test.ts": "codex-integration",
+  "codex-use-remaining-quota.test.ts": "codex-integration",
   "cli-log-view-filter.test.ts": "cli",
   "cli-usage-model-search.test.ts": "cli",
   "cli-companion-usage.test.ts": "cli",
