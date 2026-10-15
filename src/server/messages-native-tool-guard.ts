@@ -7,12 +7,38 @@ import { createSseBlockBuffer, sseDataPayload } from "./sse-payload-rewrite";
 
 type Rec = Record<string, unknown>;
 const isRec = (value: unknown): value is Rec => value !== null && typeof value === "object" && !Array.isArray(value);
+const NO_DECLARED_TOOLS: ReadonlySet<string> = new Set();
+
+/** Inline system-message definitions extend an otherwise empty native catalog. */
+export function nativeMessagesInlineToolNames(body: Rec): ReadonlySet<string> {
+  const definitions = new Set<string>();
+  const active = new Set<string>();
+  if (!Array.isArray(body.messages)) return active;
+  for (const message of body.messages) {
+    if (!isRec(message) || message.role !== "system" || !Array.isArray(message.content)) continue;
+    for (const block of message.content) {
+      if (!isRec(block) || !isRec(block.tool)) continue;
+      const tool = block.tool;
+      if (block.type === "tool_addition" && tool.type === "tool_definition" && isRec(tool.definition)
+        && typeof tool.definition.name === "string" && tool.definition.name.length > 0) {
+        definitions.add(tool.definition.name);
+        active.add(tool.definition.name);
+      } else if (tool.type === "tool_reference" && typeof tool.name === "string") {
+        if (block.type === "tool_addition" && definitions.has(tool.name)) active.add(tool.name);
+        // Like native admission, only a permanent removal withdraws a declaration.
+        if (block.type === "tool_removal" && (message.clear_at === undefined || message.clear_at === "never")) active.delete(tool.name);
+      }
+    }
+  }
+  return active;
+}
 
 /** Inspect only native message content; opaque extension fields do not carry client calls. */
-export function nativeMessagesClientToolName(value: unknown): string | undefined {
+export function nativeMessagesClientToolName(value: unknown, declared: ReadonlySet<string> = NO_DECLARED_TOOLS): string | undefined {
   if (!isRec(value)) return undefined;
   const content = Array.isArray(value.content) ? value.content : [];
-  const block = content.find(item => isRec(item) && item.type === "tool_use");
+  const block = content.find(item => isRec(item) && item.type === "tool_use"
+    && (typeof item.name !== "string" || !declared.has(item.name)));
   if (isRec(block)) return typeof block.name === "string" ? block.name : "<unnamed>";
   return undefined;
 }
@@ -22,6 +48,7 @@ export function guardNativeMessagesEmptyToolCatalog(
   source: ReadableStream<Uint8Array>,
   budget: TranslatorBudget,
   onRefusal: (message: string) => void,
+  declared: ReadonlySet<string> = NO_DECLARED_TOOLS,
 ): ReadableStream<Uint8Array> {
   const reader = source.getReader();
   const decoder = new TextDecoder();
@@ -31,7 +58,7 @@ export function guardNativeMessagesEmptyToolCatalog(
     if (bytes > TRANSLATOR_MAX_SSE_EVENT_BYTES) throw new Error("upstream SSE event exceeded the safe limit");
   });
   // Hosted tools share input_json_delta with client tools, but cannot grant client authority.
-  const serverToolBlocks = new Set<number>();
+  const permittedInputBlocks = new Set<number>();
   let queuedBytes = 0;
   let settled = false;
   const releaseQueued = () => {
@@ -40,8 +67,8 @@ export function guardNativeMessagesEmptyToolCatalog(
   };
   const clear = () => {
     buffer.clear();
-    budget.releaseRetained(serverToolBlocks.size * 32, scope);
-    serverToolBlocks.clear();
+    budget.releaseRetained(permittedInputBlocks.size * 32, scope);
+    permittedInputBlocks.clear();
   };
   const enqueue = (controller: ReadableStreamDefaultController<Uint8Array>, text: string) => {
     const bytes = Buffer.byteLength(text);
@@ -73,13 +100,14 @@ export function guardNativeMessagesEmptyToolCatalog(
       // Stream clients use the payload type; the buffered collector uses the event field.
       const isEvent = (type: string) => data.type === type || eventName === type;
       terminal = isEvent("message_stop") || isEvent("error");
-      let name = isEvent("message_start") ? nativeMessagesClientToolName(data.message) : undefined;
-      if (isEvent("content_block_start") && isRec(data.content_block) && data.content_block.type === "tool_use") {
+      let name = isEvent("message_start") ? nativeMessagesClientToolName(data.message, declared) : undefined;
+      if (isEvent("content_block_start") && isRec(data.content_block) && data.content_block.type === "tool_use"
+        && (typeof data.content_block.name !== "string" || !declared.has(data.content_block.name))) {
         name ??= typeof data.content_block.name === "string" ? data.content_block.name : "<unnamed>";
       }
       const index = typeof data.index === "number" && Number.isSafeInteger(data.index) ? data.index : undefined;
       if (isEvent("content_block_delta") && isRec(data.delta) && data.delta.type === "input_json_delta"
-        && (index === undefined || !serverToolBlocks.has(index))) name ??= "<unnamed>";
+        && (index === undefined || !permittedInputBlocks.has(index))) name ??= "<unnamed>";
       if (name !== undefined) {
         clear();
         const message = redactSecretString(undeclaredToolCallMessage(name));
@@ -91,12 +119,13 @@ export function guardNativeMessagesEmptyToolCatalog(
         return;
       }
       if (isEvent("content_block_start") && index !== undefined && isRec(data.content_block)) {
-        if (serverToolBlocks.delete(index)) budget.releaseRetained(32, scope);
-        if (data.content_block.type === "server_tool_use") {
+        if (permittedInputBlocks.delete(index)) budget.releaseRetained(32, scope);
+        if (data.content_block.type === "server_tool_use" || data.content_block.type === "mcp_tool_use"
+          || data.content_block.type === "tool_use" && typeof data.content_block.name === "string" && declared.has(data.content_block.name)) {
           budget.chargeRetained(32, scope);
-          serverToolBlocks.add(index);
+          permittedInputBlocks.add(index);
         }
-      } else if (isEvent("content_block_stop") && index !== undefined && serverToolBlocks.delete(index)) {
+      } else if (isEvent("content_block_stop") && index !== undefined && permittedInputBlocks.delete(index)) {
         budget.releaseRetained(32, scope);
       }
     }

@@ -300,27 +300,27 @@ executes a top-level tool call, so a hallucinated `apply_patch` — which under 
 as a nested `tools.apply_patch(...)` helper inside `exec` — is refused before it reaches the
 runtime, where it previously surfaced as a bare `aborted` with the file untouched.
 
-Translated lanes (`src/server/responses/run-turn-execution.ts`, `adapter-delivery.ts`) enforce
-declared-name membership on the Responses inbound wire. Native Responses passthrough computes
-`undeclaredToolGuardActive` once in `passthrough-dispatch.ts`; `passthrough-delivery.ts` uses it
-for SSE and buffered JSON before continuation state is stored. Chat and Anthropic callers may
-omit their catalog, declare part of it, or declare only hosted tools while retaining a deferred
-client registry. Those cases retain their existing delivery behavior.
+Translated Responses delivery enforces declared-name membership. Native passthrough computes
+`undeclaredToolGuardActive` in `passthrough-dispatch.ts` and applies it in `passthrough-delivery.ts` before continuation state.
+Chat and Anthropic retain their delivery behavior for absent, partial and hosted-only deferred catalogs.
 
-A current-turn explicit empty catalog also restricts client output on managed native Chat and
-Messages, translated adapter and run-turn delivery, direct client encoders, and final hosted-search,
-image or video output. Calls outside current-turn declarations become `undeclared_tool_call` before client
-delivery or continuation state, with no successful terminal after refusal. With no declarations,
-every client tool call is refused; other declarations in the same turn remain usable. Internal
-hosted-search, vision, image and advisor operations retain their existing execution behavior.
+A current-turn explicit empty catalog restricts client output on managed native Chat and Messages,
+translated adapter and run-turn delivery, direct client encoders, and final hosted-search, image
+or video output. Calls outside current-turn declarations become `undeclared_tool_call` before
+client delivery or continuation state, without a successful terminal after refusal. Other current
+declarations remain usable; internal hosted-search, vision, image and advisor work stays unchanged.
+Native Messages includes inline system-message definitions, honors permanent removals and re-offered
+known definitions, and compares restored OAuth names. Hosted `server_tool_use` and `mcp_tool_use`
+input deltas are tracked separately from client-executed `tool_use` blocks.
 
-The ingresses carry the declaration as `clientDeclaredEmptyToolCatalog`
-(`src/server/chat-completions.ts`, `src/server/claude-messages.ts`) because translation can omit
-an empty `tools` array. Request preparation snapshots current-turn declarations before hosted
-tools are added. Explicit `tools: []` or empty `additional_tools` activates the restriction;
-replayed declarations neither activate it nor grant names. Refusals keep `undeclared_tool_call` in
-buffered envelopes and endpoint projections; Messages sees `api_error`, never `overloaded_error`.
-Caller-forward routes retain their exemption; `default.` normalization remains separate.
+Ingress `clientDeclaredEmptyToolCatalog` (`src/server/chat-completions.ts`, `src/server/claude-messages.ts`)
+survives omission during translation. Preparation snapshots declarations after direct decoding, before hosted-tool rewrites.
+Direct Chat with `tools: []` and legacy functions reads their names from the bridge projection;
+empty and omitted catalogs need no extra projection. Explicit `tools: []` or empty `additional_tools`
+activates the restriction; replayed declarations neither activate it nor grant names. Delivery
+normalization uses those names; direct custom `exec` helpers use the bridge compiler. Refusals keep `undeclared_tool_call` in buffered envelopes and endpoint
+projections; Messages sees `api_error`, never `overloaded_error`. Caller-forward routes retain their
+exemption; `default.` normalization remains separate.
 
 ## Selection outlives the declaration check
 

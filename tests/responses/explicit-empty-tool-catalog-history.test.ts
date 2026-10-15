@@ -221,6 +221,24 @@ describe("explicit empty catalog current-turn and continuation boundaries", () =
         });
       }
 
+      for (const custom of [false, true]) {
+        test(`${label}: empty catalog plus current ${custom ? "custom apply_patch" : "MCP namespace"} remains callable`, async () => {
+          const config = setup(lane);
+          nextCall = custom ? "apply_patch" : "mcp__fixture__lookup";
+          const response = await post(config, wire, stream, { tools: [], input: [
+            { type: "additional_tools", role: "developer", tools: custom
+              ? [{ type: "custom", name: "apply_patch", format: { type: "text" } }]
+              : [{ type: "namespace", name: "mcp__fixture", tools: [tool("lookup")] }] },
+            userInput,
+          ] });
+          expect(response.status).toBe("completed");
+          expect(response.error).toBeUndefined();
+          expect(response.output).toEqual(expect.arrayContaining([expect.objectContaining(custom
+            ? { type: "custom_tool_call", name: "apply_patch", input: "{}" }
+            : { type: "function_call", name: "lookup", namespace: "mcp__fixture", arguments: "{}" })]));
+        });
+      }
+
       test(`${label}: forward authentication keeps its empty-catalog exemption`, async () => {
         const config = setup(lane, "forward");
         nextCall = "Write";

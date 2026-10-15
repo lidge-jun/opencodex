@@ -241,11 +241,6 @@ Messages as its `ping`, neither counted as output, first output, usage or a rela
 behavior that differs is backpressure: the Messages converter read the bridge eagerly, while the
 encoder steps one event per pull.
 
-Direct encoders receive the same [explicit empty client-catalog guard](../transports/responses-wire-shapes.md#declared-tool-membership-by-inbound-wire)
-as translated adapter and run-turn delivery, before a client tool event reaches the writer or
-continuation state. That restriction uses the same current-turn names during delivery normalization;
-custom `exec` recovery uses the Responses bridge's compiler. Hosted operations retain their existing behavior.
-
 The server side is `src/server/inference/client-encoder-delivery.ts`, described with the
 [Responses transport](../transports/responses.md#direct-client-encoders). A directly encoded
 attempt is traced with `markAttemptProtocolPath`: the request path is still the bridge path
@@ -295,9 +290,6 @@ usage and the request log. The conversation travels as `HandleResponsesOptions.d
   decodes again if the core settled a different model id, because identity naming (#5217) and the
   assistant placeholder carry it, and it re-checks a named tool choice against the decoded
   catalog, which the settings-only parse could not see.
-- The explicit-empty catalog snapshot follows that decode. If `tools: []` accompanies current
-  legacy Chat functions, it reads their wire names from the bridge projection before route or
-  hosted-tool rewrites. Empty and omitted catalogs need no extra conversation projection.
 - `evidence` replaces `evidenceFromBody(parsed._rawBody)` for policy routing, with the values the
   bridge body would have given (a non-empty catalog; an image in a user message, not in a tool
   result, which that scan never read).
@@ -533,11 +525,8 @@ guard and the tool-call-id repair the caller-forward passthrough runs. A streami
 upstream SSE relayed through `tapAnthropicSseForLog`, which records usage and the
 terminal and applies the body stall and size guards; a non-streaming caller gets the upstream JSON
 (or a folded stream). Either way `model` is rewritten to the selector the client sent, as the
-translated lane answers (`message_start.message.model` on a stream, found within the first 64 KiB;
-other permitted content is relayed as is). A current-turn explicit empty client catalog applies
-the [shared output refusal](../transports/responses-wire-shapes.md#declared-tool-membership-by-inbound-wire)
-before native client `tool_use` content is delivered, in streaming and buffered responses.
-Upstream errors answer in Anthropic shape with the translated lane's status
+translated lane answers (`message_start.message.model` in the first 64 KiB); explicit empty catalogs apply the
+[declared-tool guard](../transports/responses-wire-shapes.md#declared-tool-membership-by-inbound-wire). Upstream errors answer in Anthropic shape with the translated lane's status
 policy (transient 5xx as 529, replay refusals kept non-retryable). `count_tokens` estimates the
 body the builder would send when the route is eligible, and sends nothing.
 `tests/adapters/anthropic/anthropic-messages-passthrough.test.ts`,

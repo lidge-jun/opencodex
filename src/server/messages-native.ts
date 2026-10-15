@@ -97,7 +97,7 @@ import { createFinalRequestLog, type FinalRequestLogMeta } from "./inference/fin
 import { registerTurn, unregisterTurn } from "./lifecycle";
 import { nativeMessagesDeclineReason, type NativeMessagesSelector } from "./messages-native-eligibility";
 import { messagesSecondaryInstanceUnavailable } from "./messages-native-selector";
-import { guardNativeMessagesEmptyToolCatalog, nativeMessagesClientToolName } from "./messages-native-tool-guard";
+import { guardNativeMessagesEmptyToolCatalog, nativeMessagesClientToolName, nativeMessagesInlineToolNames } from "./messages-native-tool-guard";
 import { UNDECLARED_TOOL_CALL_ERROR_CODE, undeclaredToolCallMessage } from "./responses-undeclared-tool-guard";
 import {
   nativeOAuthBindingIsCurrent,
@@ -318,6 +318,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
   const nativeInstance = configuredAnthropicInstance(config, route.providerName);
   const requestedStream = body.stream === true;
   const clientDeclaredEmptyToolCatalog = Array.isArray(body.tools) && body.tools.length === 0;
+  const declaredInlineTools = clientDeclaredEmptyToolCatalog ? nativeMessagesInlineToolNames(body) : undefined;
   logCtx.inboundProtocol = "messages";
   logCtx.model = route.modelId;
   logCtx.provider = route.providerName;
@@ -803,7 +804,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       ? guardNativeMessagesEmptyToolCatalog(echoed, translatorBudget, message => {
         toolRefusal = message;
         logCtx.errorCode = UNDECLARED_TOOL_CALL_ERROR_CODE;
-      })
+      }, declaredInlineTools)
       : echoed;
     if (requestedStream) {
       transferTurnToStream();
@@ -899,7 +900,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
   const message = activeRequest.oauthToolNames
     ? restoreOAuthToolNamesInMessage(parsedMessage, activeRequest.oauthToolNames)
     : parsedMessage;
-  const undeclaredTool = clientDeclaredEmptyToolCatalog ? nativeMessagesClientToolName(message) : undefined;
+  const undeclaredTool = clientDeclaredEmptyToolCatalog ? nativeMessagesClientToolName(message, declaredInlineTools) : undefined;
   if (undeclaredTool !== undefined) {
     logCtx.errorCode = UNDECLARED_TOOL_CALL_ERROR_CODE;
     return fail(502, undeclaredToolCallMessage(undeclaredTool), "api_error", UNDECLARED_TOOL_CALL_ERROR_CODE);

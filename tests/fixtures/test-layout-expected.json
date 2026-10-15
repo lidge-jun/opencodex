@@ -1,4 +1,5 @@
 {
+  "messages-native-empty-inline.test.ts": "claude-integration",
   "explicit-empty-tool-catalog.test.ts": "responses",
   "explicit-empty-tool-catalog-history.test.ts": "responses",
   "codex-history-pending-wal.test.ts": "codex-integration",

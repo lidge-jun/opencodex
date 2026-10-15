@@ -100,6 +100,10 @@ retain their exemption, and internal hosted operations are unaffected. Those ref
   with the code. A deterministic catalog violation is never reported as a retryable
   `overloaded_error` (HTTP 529).
 
+Native Messages also recognizes inline system-message tool definitions alongside `tools: []`.
+Those names remain callable until permanently removed; an inline declaration does not authorize
+unrelated client tools. Hosted MCP calls and server-tool argument streams retain their native shape.
+
 Separately, on every inbound wire, a provider's `default.`-namespaced call is normalized back
 to the bare tool name the request declared (`default.Read` → `Read`).
 
