@@ -856,11 +856,21 @@ function writeDesktop3pConfigWithGenerator(
       // Roll back from the verified bytes in memory: reopening the backup could meet a swapped
       // entry and leave the new profile beside the old metadata. A profile this call created is
       // unreferenced once metadata failed, so remove it rather than orphan one per retry.
+      // Rollback is ownership-aware: it acts only while the live profile still holds the bytes
+      // this call published, checked by the same comparison that guarded publication.
+      const base = metaError instanceof Error ? metaError.message : String(metaError);
+      const published = Buffer.from(configJson);
+      let owned = false;
+      const stillOwned = () => { owned = false; assertDesktopProfileUnchanged(configPath, published); owned = true; };
       try {
-        if (previous.bytes !== undefined) writeDesktopConfigBytes(configPath, previous.bytes);
+        stillOwned();
+        if (previous.bytes !== undefined) writeDesktopConfigBytes(configPath, previous.bytes, stillOwned);
         else unlinkSync(configPath);
       } catch (rollbackError) {
-        const base = metaError instanceof Error ? metaError.message : String(metaError);
+        if (!owned) {
+          // Another writer replaced the profile after publication; its bytes win over our rollback.
+          throw new Error(`${base} (profile rollback skipped: profile changed after publish)`, { cause: metaError });
+        }
         const detail = rollbackError instanceof Error ? rollbackError.message : String(rollbackError);
         throw new AggregateError([metaError, rollbackError], `${base} (profile rollback also failed: ${detail})`, { cause: metaError });
       }
@@ -885,12 +895,7 @@ export function atomicReplaceDesktopConfig(
   previous: Buffer | undefined,
   writer: typeof atomicWriteFileNoFollow = atomicWriteFileNoFollow,
 ): { backupPath?: string } {
-  const validateBeforeRename = () => {
-    const current = readOptionalDesktopLibraryBytes(path);
-    if (previous === undefined ? current !== undefined : current === undefined || !previous.equals(current)) {
-      throw new Error("desktop_profile_changed");
-    }
-  };
+  const validateBeforeRename = () => assertDesktopProfileUnchanged(path, previous);
   validateBeforeRename();
   const backupPath = `${path}.bak`;
   if (previous !== undefined) writeDesktopConfigBytes(backupPath, previous);
@@ -898,7 +903,15 @@ export function atomicReplaceDesktopConfig(
   return previous === undefined ? {} : { backupPath };
 }
 
+/** Single compare-and-swap check: the live profile must still hold `expected` (undefined = absent). */
+function assertDesktopProfileUnchanged(path: string, expected: Buffer | undefined): void {
+  const current = readOptionalDesktopLibraryBytes(path);
+  if (expected === undefined ? current !== undefined : current === undefined || !expected.equals(current)) {
+    throw new Error("desktop_profile_changed");
+  }
+}
+
 /** Publish the verified bytes without reopening the source or decoding its backup contents. */
-function writeDesktopConfigBytes(path: string, bytes: Buffer): void {
-  atomicWriteFileStreamed(path, descriptor => { writeFileSync(descriptor, bytes); });
+function writeDesktopConfigBytes(path: string, bytes: Buffer, validateBeforeRename?: () => void): void {
+  atomicWriteFileStreamed(path, descriptor => { writeFileSync(descriptor, bytes); }, validateBeforeRename ? { validateBeforeRename } : {});
 }

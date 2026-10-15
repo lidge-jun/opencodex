@@ -218,6 +218,43 @@ for (const existing of [true, false]) {
   });
 }
 
+for (const timing of ["existing", "created", "restoring"] as const) {
+  test(`metadata failure preserves a profile another writer changed after publish (${timing})`, () => {
+    const initial = timing === "created" ? undefined : writeProfile();
+    const meta = join(library, "_meta.json"), metadata = initial ? fs.readFileSync(meta) : undefined;
+    const concurrent = Buffer.from('{"userSetting":"other writer"}\n');
+    const rename = fs.renameSync, write = fs.writeFileSync;
+    let metadataFailed = false, changed = false, profile = initial?.path;
+    const publishing = spyOn(fs, "renameSync").mockImplementation((source, destination) => {
+      if (destination === meta) {
+        metadataFailed = true;
+        if (timing !== "restoring") { write(profile!, concurrent); changed = true; }
+        throw new Error("fixture metadata failure");
+      }
+      rename(source, destination);
+      if (!metadataFailed && String(destination).endsWith(".json")) profile = String(destination);
+    });
+    // "restoring" edits the live profile while the rollback temp is written, after the first check.
+    const writing = spyOn(fs, "writeFileSync").mockImplementation(((path, bytes, options) => {
+      write(path, bytes, options);
+      if (timing === "restoring" && metadataFailed && typeof path === "number" && !changed) {
+        changed = true; write(profile!, concurrent);
+      }
+    }) as typeof fs.writeFileSync);
+    try {
+      expect(writeProfile("replacement-fixture-key")).toMatchObject({
+        written: false, reason: "fixture metadata failure (profile rollback skipped: profile changed after publish)",
+      });
+      expect(changed).toBe(true);
+      expect(fs.readFileSync(profile!)).toEqual(concurrent);
+      if (metadata) expect(fs.readFileSync(meta)).toEqual(metadata);
+      else expect(fs.existsSync(meta)).toBe(false);
+      expect(fs.readdirSync(library).some(name => name.includes(".ocx."))).toBe(false);
+    } finally { writing.mockRestore(); publishing.mockRestore(); }
+  });
+}
+
+
 for (const scenario of ["backup", "rollback"] as const) {
   // Revalidation refuses a FIFO swapped onto the profile; rollback reuses verified bytes even if
   // the backup becomes a FIFO. Neither path can block on an unsafe synchronous read.
