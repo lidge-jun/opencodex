@@ -105,7 +105,7 @@ describe("authenticated native discovery", () => {
     const future = built.find(entry => entry.slug === FUTURE)!;
     expect(future).toMatchObject({ display_name: row().display_name, description: row().description,
       supported_reasoning_levels: row().supported_reasoning_levels, default_reasoning_level: "high",
-      context_window: 123_000, max_context_window: 123_000, base_instructions: "Upstream future instructions" });
+      context_window: 123_000, max_context_window: 456_000, base_instructions: "Upstream future instructions" });
     expect(built.filter(entry => entry.slug === FUTURE)).toHaveLength(1);
     expect(nativeOpenAiContextTier(FUTURE)).toEqual({ defaultWindow: 123_000, longWindow: 456_000 });
     expect(nativeOpenAiContextWindow(FUTURE, { modelWindows: { [FUTURE]: 1_000_000 } })).toBe(456_000);
@@ -141,7 +141,7 @@ describe("authenticated native discovery", () => {
     expect(nativeOpenAiContextTier("gpt-6.1-sol")).toEqual({ defaultWindow: 500_000, longWindow: 872_000 });
     expect(nativeOpenAiContextWindow("gpt-6.1-sol", { modelWindows: { "gpt-6.1-sol": 1_000_000 } })).toBe(872_000);
     expect(buildCatalogEntries(null, ["gpt-6.1-sol"], []).find(entry => entry.slug === "gpt-6.1-sol"))
-      .toMatchObject({ context_window: 500_000, max_context_window: 500_000, auto_compact_token_limit: 450_000 });
+      .toMatchObject({ context_window: 500_000, max_context_window: 872_000, auto_compact_token_limit: 450_000 });
   });
 
   test("failed or empty roster fetches cannot register models", async () => {

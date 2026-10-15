@@ -769,7 +769,7 @@ JSON mode: `payload`.
 
 ### `ocx combo set`
 
-Usage: `ocx combo set <id> [--targets <provider/model[:weight],...> | --targets-file <FILE|->] [--strategy <failover|round-robin|random|least-used|reset-window|jev>] [--sticky <1-100|->] [--effort <low|medium|high|xhigh|max|ultra|->] [--effort-mode <fallback|force|->] [--alias <name|->] [--native-alias [on|off]] [--display-name <label|->] [--decision-provider <provider|-> | --decision-model <route|->] [--decision-timeout <ms|->] [--rename-from <id>] [--image-input <auto|disabled>] [--reasoning-effort-mode <strict|adaptive>] [--json]`
+Usage: `ocx combo set <id> [--targets <provider/model[:weight],...> | --targets-file <FILE|->] [--strategy <failover|round-robin|random|least-used|reset-window|jev>] [--sticky <1-100|->] [--effort <low|medium|high|xhigh|max|ultra|->] [--effort-mode <fallback|force|->] [--alias <name|->] [--native-alias [on|off]] [--allow-metered-targets <on|off>] [--display-name <label|->] [--decision-provider <provider|-> | --decision-model <route|->] [--decision-timeout <ms|->] [--rename-from <id>] [--image-input <auto|disabled>] [--reasoning-effort-mode <strict|adaptive>] [--json]`
 
 Create, update or rename a combo.
 
@@ -782,6 +782,7 @@ State-changing: yes.
 
 | Flag | Value | Meaning |
 |---|---|---|
+| `--allow-metered-targets` | string | on grants operator consent to metered targets only on a loopback-only proxy; off clears it. |
 | `--targets` | string | Ordered provider/model[:weight] list; required for creation. |
 | `--strategy` | string | Routing strategy. |
 | `--sticky` | string | Round-robin limit 1-100; - resets. |

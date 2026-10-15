@@ -83,6 +83,7 @@ import { attachRequestSpendTracker } from "./responses/request-spend";
 import { workflowRefusalResponse } from "./workflow-refusal";
 import type { ComboProtocolSource } from "./responses/core-combo-native";
 import type { ProtocolEnvelope } from "../protocols/envelope";
+import { nativeChatReplayScope, bindNativeChatReplayScope, nativeChatReasoningCapture } from "./chat-native-reasoning";
 
 export { isNativeChatRouteEligible, nativeChatDeclineReason } from "./chat-native-eligibility";
 
@@ -326,6 +327,7 @@ export async function runNativeChatAttempt(
   const physicalBudget = sendBudget ?? createInferenceSendBudget(req, logCtx);
   let activeAdapter: ProviderAdapter = createOpenAIChatAdapter(activeProvider);
   let activeRequest: AdapterRequest;
+  const replayScope = nativeChatReplayScope(req.headers);
   let retainedRequestBytes = 0;
   const releaseRetainedRequest = () => {
     if (retainedRequestBytes === 0) return;
@@ -338,6 +340,7 @@ export async function runNativeChatAttempt(
     retainedRequestBytes = bytes;
   };
   const buildActiveRequest = () => {
+    bindNativeChatReplayScope(replayScope, activeProvider, route.providerName, route.modelId);
     recordAttemptCredentialSource(attempt, route.providerName, activeProvider, activeAdapter.name);
     return buildOpenAIChatPassthroughRequest(
       activeProvider,
@@ -347,6 +350,7 @@ export async function runNativeChatAttempt(
       fastPolicyForModel(activeProvider, route.modelId, route.providerName, "chat"),
       config.fastMode,
       route.providerName,
+      replayScope,
     );
   };
   try {
@@ -709,6 +713,7 @@ export async function runNativeChatAttempt(
   }
 
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+  const reasoningCapture = nativeChatReasoningCapture(activeProvider, route.modelId, replayScope, translatorBudget);
   if (contentType.includes("text/event-stream") && response.body) {
     if (requestedStream) transferTurnToStream();
     let terminalStatus: number | undefined;
@@ -748,6 +753,7 @@ export async function runNativeChatAttempt(
       clientDeclaredEmptyToolCatalog,
       declaredLegacyFunctionNames,
       onFirstOutput,
+      onChunk: reasoningCapture.observe,
       onUsage: usage => {
         if (!recordKeyWireAttemptUsage(logCtx, usage)) {
           logCtx.usage = usage;
@@ -755,6 +761,7 @@ export async function runNativeChatAttempt(
         }
       },
       onTerminal: (status: number, message?: string) => {
+        reasoningCapture.finish(status < 400);
         terminalStatus = status;
         if (!requestedStream) return;
         try {
@@ -765,8 +772,9 @@ export async function runNativeChatAttempt(
           releaseStreamTurn();
         }
       },
-      ...(requestedStream ? {
-        onCancel: () => {
+      onCancel: () => {
+        reasoningCapture.finish(false);
+        if (requestedStream) {
           try {
             cleanupAbort();
             upstream.abort();
@@ -774,8 +782,8 @@ export async function runNativeChatAttempt(
           } finally {
             releaseStreamTurn();
           }
-        },
-      } : {}),
+        }
+      },
     });
     if (requestedStream) {
       return new Response(stream, {
@@ -840,6 +848,7 @@ export async function runNativeChatAttempt(
   if (error) return fail(error.status ?? 502, error.message, error.type, error.code);
   const completion = chatCompletionJson(parsedJson);
   if (!completion) return fail(502, "upstream response contained no choices", "upstream_error");
+  reasoningCapture.json(completion);
   const usage = usageFromChat(completion.usage);
   if (usage) {
     if (!recordKeyWireAttemptUsage(logCtx, usage)) {

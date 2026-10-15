@@ -114,3 +114,17 @@ ocx account login openai --device
 
 See [Codex Integration](/guides/codex-integration/) for what the injection
 writes and how routing is chosen.
+
+## OAuth refresh capacity reached
+
+If a Responses request reports `OAuth token refresh capacity reached`, wait at
+least one second before retrying. The proxy limits pending OAuth refresh work
+to 256 consumers per process, including requests waiting on the same refresh.
+A disconnected request keeps its refresh reservation until that work settles;
+requests using fresh cached credentials can still proceed.
+
+Before a response starts, this temporary refusal returns HTTP 503 with
+`Retry-After: 1`. A stream that has already started instead ends with a server
+error. Capacity refusal does not mark the account as needing reauthentication,
+so signing in again is unnecessary for this error. A refresh that never settles
+can continue occupying capacity; the limit does not impose a refresh deadline.

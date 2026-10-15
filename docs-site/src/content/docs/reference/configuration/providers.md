@@ -76,6 +76,7 @@ separate. Full request URLs such as `/api/v1/responses` are not provider base UR
 | `contextCapValue?` | `number` | `350000` | Default used on first enable. A later enable restores the selected provider value. Updating the global value with `setAll: true` changes enabled caps only; `setAll: true` without a value enables all configured providers at the current global value. |
 | `codexAccounts?` | `CodexAccount[]` | `[]` | ChatGPT/Codex pool account metadata managed by Codex Auth. Secrets live separately in `codex-accounts.json`. |
 | `pausedCodexAccountIds?` | `string[]` | `[]` | Accounts excluded from Pool selection until resumed, including the main `__main__` account when paused. Manual pause and resume also update existing main and pool entries for the same account and workspace. |
+| `codexUseRemainingQuotaAccountIds?` | `string[]` | `[]` | Accounts opted into using their remaining included quota. Disables proactive usage switching for listed accounts; for `__main__`, effective short/long hard-lock thresholds become 100%. Original thresholds remain stored and apply again after disabling. Pause, authentication, eligibility, cooldown and paid-credit permission still apply. Managed by `ocx account use-remaining openai <id-or-main> on`; this persistent preference does not select the account. |
 | `creditCodexAccountIds?` | `string[]` | `[]` | Accounts allowed to keep serving from ChatGPT credits after a usage limit, including the main `__main__` account. Upstream does not refuse an account that holds credits at 100%; it serves the request and draws the balance. Spending is opt-in: an account not listed here is skipped by selection while one of its usage windows (weekly or monthly, only monthly on 30-day plans, or the 5-hour window) reads 100% with its reset still ahead, and returns once that reset passes. A weekly or monthly reading without a reset time does not hold the account; a 5-hour reading at 100% without a reset holds it only while that reading is still fresh. When no other account is available, automatic selection finds none rather than spending credits. An unlisted `__main__` is also refused, like a hard-lock refusal, when a request names it or carries its credential. Listing `__main__` does not lift the main-account hard lock (on by default at 98%), which still stops the main login first; turn the lock off to let the main account spend credits (a lock at 100% still stops it at 100%). New accounts start unlisted. Managed by the **Use credits** switch in the Codex Auth header and the **Use credits after limit** switch in each account card's **⋯** menu. |
 | `codexQuotaAutoRefresh?` | `Record<string, object>` | `{}` | Per-Codex-login-account opt-in for automatic `fiveHour` and `weekly` window activation in Pool mode; Direct mode does not run this worker. In Providers/Codex Auth **Advanced settings**, one control enables or disables both supported windows across all current main and added accounts. New accounts are not opted in automatically. Enable skips windows absent from live WHAM data; disable also clears stale enabled windows. The UI reuses granular `/api/settings` writes, reconciles partial failures, and retries the original ON/OFF intent without replacing unrelated settings or completed reset markers. The API still rejects enabling an unavailable window with HTTP 409. At a reported reset time, opencodex sends one minimal non-stored Codex message using that account's quota and persists the activated timestamp. This does not apply to API-key providers. |
 | `codexAccountNamespaces?` | `Record<string, string>` | — | Optional map from an arbitrary public model selector to a stored Codex account target. When account-qualified picker rows are enabled, each selector whose target is present adds separate `<selector>/<native-openai-model>` rows to the Codex picker; each row uses only that account. With any selector active, bare native rows are hidden in the picker, but their ids remain routable and listed by raw `/v1/models` unless explicitly disabled. |
@@ -83,6 +84,7 @@ separate. Full request URLs such as `/api/v1/responses` are not provider base UR
 | `activeCodexAccountId?` | `string` | — | Manually selected Pool account for the next request. Selection clears thread affinity; in-flight requests keep captured credentials. |
 | `codexAccountPriorities?` | `Record<string, number>` | — | Per-account selection order for the Codex pool: account id → integer from `-100` to `100`, **higher is used earlier**, absent means `0`. This is an ordering boundary, not an eligibility one: selection narrows the already-eligible accounts to the highest tier that still has quota headroom, and `accountPoolStrategy` then picks within that tier. A tier is skipped only when every member is at or above its own nonzero effective usage threshold (account override or global default), cooling down, soft-avoided, paused, or needs reauthentication — unknown quota never drains a tier. Ordering never makes an ineligible account selectable and by default, never re-binds a thread that already has an account. The main `__main__` account participates on equal terms, which is how the Codex Desktop login can be set to drain last. With no entries the pool behaves exactly as before. A malformed map is ignored with a console warning (ordering off, no config repair). Managed by `ocx account priority` and the Codex Auth page. |
 | `activeCodexAccountPinned?` | `string` | — | Account id the operator last selected by hand. While set, a higher `codexAccountPriorities` tier cannot preempt it until the pin is released by drain, exclusion, deletion, or an explicit failover/promotion away. Ordinary round-robin movement inside the capped tier does not release it. Writing any `codexAccountPriorities` entry also releases the pin, so a pin made before an order existed cannot outrank one set afterward. `GET /api/codex-auth/active` reports both whether the effective account is pinned (`pinned`) and the account carrying the ceiling (`pinnedAccountId`). |
+| `codexPreserveSignedInAccount?` | `boolean` | `false` | Prefer other eligible Codex Pool identities before native main and ordinary entries matching its selected workspace and member email. Existing custom priorities are preserved inside each group. Healthy bindings and manual pins remain; exact account routes and Direct mode are unchanged. Fallback may consume signed-in quota under all existing guards. Use [account preserve-signed-in](/reference/cli/providers-accounts/#ocx-account-preserve-signed-in-openai-onoffstatus---apply-to-bound---json) for status or an explicit next-request binding transition. |
 | `codexAccountPriorityFailback?` | `boolean` | `false` | Opt-in return of ongoing Codex Pool tasks to a usable higher-priority account under the `quota` strategy. Requests trigger a background quota refresh at most once every five minutes, including failed refresh attempts. When recent quota observations show headroom, the next request may rebind even if its current account is below the threshold. This explicit preference can discard a warm prompt cache; it does not change default cache affinity. No requests means no polling. Manual pins, model access, cooldowns, pauses and reauthentication exclusions still apply; in-flight requests keep their captured account. Requires the current source account's effective threshold to be positive (an override of 0 disables it; a positive override works with global 0); exact account routes and Direct mode are unchanged. |
 | `autoSwitchThreshold?` | `number` | `80` | Usage threshold for placing new/unbound work. `quota` can re-evaluate unbound tasks on their next request once usage crosses this threshold. Bound tasks keep their account past the threshold by default (`pool.cacheAffinity`); they leave only when that account is exhausted or otherwise cannot serve, and then only for an account with genuine quota headroom and strictly lower usage. Set `pool.cacheAffinity: false` to re-evaluate bound tasks at this threshold, still only onto such a destination. `fill-first` uses it only as the drain point for unbound assignment; normal `round-robin` selection does not use it. The score uses the hottest known 5h, weekly, or 30d quota window. `0` disables usage-based proactive switching only, not unbound assignment or failure recovery. |
 | `codexAccountAutoSwitchThresholds?` | `Record<string, number>` | — | Per-account overrides for `autoSwitchThreshold`: account id → integer from `0` to `100`. An absent entry inherits the global value; `0` disables usage-driven switching only when that account is the source. `quota` uses the current source account's effective threshold for bound-task re-evaluation and unbound switching. Fill-first drain and selection-order tier headroom are evaluated against each account's own effective threshold; main-account pins and subagent fallback also use the relevant account's effective threshold. Supports the main `__main__` account. A malformed map is ignored with a warning. Managed by each account card on the Codex Auth page; disabling an override removes its entry. Enabling the override copies the current global threshold into a fixed account value. The override, including `0`, takes precedence over later global changes. Disabling it sends `threshold: null`, removes the entry, and restores inheritance of the current global threshold and future global changes. |
@@ -150,6 +152,15 @@ stops at its own **872,000** ceiling. Per-model `providers.openai.modelContextWi
 and `modelAutoCompactTokenLimits` can narrow its window and soft compaction budget. For example,
 `modelAutoCompactTokenLimits: { "gpt-6-astra": 700000 }` lowers the long-window default of 784,800.
 An explicit smaller provider cap or target limit still wins, including native-alias combos.
+
+Without a configured hard limit, the native catalog keeps the advertised `max_context_window`
+separate from the default `context_window` (for Astra, 872,000 versus 272,000). Compaction still
+uses the effective default window. To give one model 500,000 tokens and the others 300,000, set
+`providers.openai.contextWindow` to `300000` and
+`providers.openai.modelContextWindows` to `{ "gpt-6.1-sol": 500000 }`.
+The per-model value overrides the provider window; `providerContextCaps.openai`, when enabled,
+remains a ceiling for every native model and must be at least `500000` for this example.
+Each model's own capacity still bounds the result.
 
 The API row has 1,050,000 context, 922,000 maximum input, 128,000 maximum output, text/image input,
 and API reasoning efforts through `max`. OpenCodex's routed synthetic Ultra control retains its
@@ -290,7 +301,7 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `minMaxOutputTokens?` | `number` | Optional positive integer floor for explicit positive `max_output_tokens` budgets on `azure-openai`/`azure` Responses routes. Unset preserves the caller's cap. Setting it authorizes raising a smaller cap, which can increase output usage. Omitted or invalid request budgets are unchanged. |
 | `defaultMaxOutputTokens?` | `number` | Provider-wide `openai-chat` fallback when the client omits `max_output_tokens`. |
 | `modelMaxOutputTokens?` | `Record<string, number>` | Positive per-model `openai-chat` fallback budgets; exact/pattern matches beat the provider default. |
-| `modelCosts?` | `Record<string, Cost4>` | Per-model display prices (USD per 1M tokens), keyed by that provider's exact upstream model id — not a provider identifier or a routed `provider/model` label, e.g. `{ "deepseek-v4-flash": { "input": 0.14, "output": 0.28, "cacheRead": 0.0028, "cacheWrite": 0 } }`. Any model id is a valid key — custom providers may target any OpenAI-compatible endpoint through the `openai-chat` adapter, and local or internal provider ids work even when they are absent from the built-in catalogs. User-configured prices win over the built-in catalogs in the Logs `~$` and Usage estimates; historical entries are repriced from the current overlay, so editing a price can move past totals. The fallback order is user `modelCosts` → exact official correction → jawcode catalog → expected-price overlay → model-level vendor fallback, and an explicit all-zero user entry means a known-zero estimate; delete that model entry to restore automatic pricing. All-zero catalog metadata still falls through. Each rate must be a non-negative finite number at most 1,000,000 (USD per 1M tokens); out-of-range rows are rejected by the management boundary and dropped on load. Display-time estimation only: overlays never affect routing, account selection, quotas, or billing. |
+| `modelCosts?` | `Record<string, ProviderCostOverlay>` | Per-model display prices (USD per 1M tokens), keyed by that provider's exact upstream model id — not a provider identifier or a routed `provider/model` label, e.g. `{ "deepseek-v4-flash": { "input": 0.14, "output": 0.28, "cacheRead": 0.0028, "cacheWrite": 0 } }`. Any model id is a valid key — custom providers may target any OpenAI-compatible endpoint through the `openai-chat` adapter, and local or internal provider ids work even when they are absent from the built-in catalogs. User-configured prices win over the built-in catalogs in the Logs `~$` and Usage estimates; historical entries are repriced from the current overlay, so editing a price can move past totals. The fallback order is user `modelCosts` → exact official correction → jawcode catalog → expected-price overlay → model-level vendor fallback, and an explicit all-zero user entry means a known-zero estimate; delete that model entry to restore automatic pricing. All-zero catalog metadata still falls through. Each rate must be a non-negative finite number at most 1,000,000 (USD per 1M tokens); out-of-range rows are rejected by the management boundary and dropped on load. Display-time estimation only: overlays never affect routing, account selection, quotas, or billing. |
 | `headers?` | `Record<string, string>` | Extra upstream headers. Authorization, cookies, API-key headers, embedded newlines, and invalid names are rejected. Requests that ride the provider outbound wrapper — model discovery, connection tests, and other proxy-originated diagnostics such as the Ollama show probe — send `User-Agent: opencodex` unless a User-Agent is set here or by the provider preset. |
 | `forwardClientHeaders?` | `string[]` | `openai-responses` only: opt in to copying named inbound client metadata headers onto inference requests when the provider has not already set that header. Credential and transport-owned names such as `Authorization`, cookies, API-key headers, `Content-Type`, `Content-Length`, `Host`, and `x-oai-attestation` are rejected and also filtered at runtime. Header names are case-insensitive and may not repeat. `headers` remains authoritative; the existing caller `User-Agent` fallback still applies when neither surface sets one.  Supported names: `originator`, `x-client-request-id`, `x-codex-app-version`, `user-agent`; all other names are refused. |
 | `openRouterRouting?` | `OpenRouterProviderRouting` | Default OpenRouter `order`, `only`, and `allowFallbacks` preferences; valid only for canonical OpenRouter with `openai-chat`. |
@@ -1148,7 +1159,8 @@ second account.
 | --- | --- | --- | --- |
 | `oauthAccountFailover.enabled?` | `boolean` | presence-driven | Global override for the **pre-dispatch account preference** only. `false` stops a healthy request being steered toward the account with more known headroom. It does **not** disable 429 rotation. |
 | `providers.<name>.oauthAccountFailover.enabled?` | `boolean` | inherits | Per-provider override for the same preference; beats the global setting in either direction. `false` declines the preference for this provider even when the global setting is `true`, and `true` opts this provider in even when the global setting is `false`. Reactive 429 rotation is unaffected either way. |
-| `providers.<name>.oauthAccountFailover.strategy?` | `"quota" \| "round-robin" \| "fill-first" \| "least-loaded"` (Kiro only) | — | Kiro's `least-loaded` picks the eligible account with the fewest in-flight requests, using account order for ties. It requires `pool.kernel` and proactive preference; other strategies retain their existing rules. |
+| `providers.<name>.oauthAccountFailover.sessionAffinity?` | `"conversation" \| "none"` | `"none"` | Opt-in conversation pinning for generic OAuth pools. Requires proactive `enabled: true` (provider or inherited global value). Existing sessions keep their account ahead of the new-session strategy until it becomes unavailable. |
+| `providers.<name>.oauthAccountFailover.strategy?` | `"quota" \| "round-robin" \| "fill-first" \| "reset-first" \| "least-loaded"` (Kiro only) | — | Kiro's `least-loaded` picks the eligible account with the fewest in-flight requests, using account order for ties. It requires `pool.kernel` and proactive preference; other strategies retain their existing rules. `reset-first` also requires `pool.kernel`: among eligible accounts that are not exhausted, the first attempt (while the proactive preference is on) and a 429 rotation both prefer the account whose quota resets soonest (the weekly window when one is reported, otherwise the 5-hour window), with more headroom breaking ties. Exhausted accounts go last. Without quota evidence, or when a passive provider has evidence for only some accounts, it falls back to headroom order. The Anthropic pool does not accept it. |
 | `providers.kiro.oauthAccountFailover.maxConcurrentPerAccount?` | integer 1–100 | unlimited | A process-local per-account queue holds a slot through response completion or cancellation. A full selected account waits at most 250 ms, then returns 503 `account_capacity` with `Retry-After: 1`. The cap does not move the request to another account. |
 | `providers.<name>.oauthAccountFailover.autoSwitchThreshold?` | `number` | `80` | 0–100 usage percent at which `fill-first` advances off the active account (#695). Set with `ocx account auto-switch <provider> threshold <n>`. Read only under `pool.kernel` with `strategy: "fill-first"`; an account with no measured usage counts as under the threshold. |
 | `providers.<name>.oauthAccountFailover.stickyLimit?` | `number` | `1` | Successful dispatches retained on one `round-robin` selection, 1–100 (#695). Read only under `pool.kernel` with `strategy: "round-robin"`. |
@@ -1177,9 +1189,26 @@ and the `ocx account strategy` / `ocx account auto-switch` / `ocx account sticky
 preference. `quotaWindow` is not part of the generic contract. Codex (`/api/codex-auth`) and Anthropic
 (`anthropicAccountPool`) keep their own contracts unchanged.
 
-Deliberately narrower than `anthropicAccountPool`: no session affinity, no quota-ranked
-selection, no probe leases. It answers one question — the account that just returned 429 is
-cooled, is there another one available.
+Set `providers.<name>.oauthAccountFailover.sessionAffinity` to `"conversation"` together with
+`enabled: true` to keep a conversation on its admitted account. Session identity uses the client
+thread marker, session headers, thread header, then `prompt_cache_key`; a shared Desktop cache
+cohort is excluded. Bindings are isolated by provider, configuration home and authenticated caller
+principal. Unauthenticated local callers share the local scope. No session marker means no binding.
+
+New sessions use the existing strategy (`pool.kernel` still gates round-robin/fill-first).
+Existing sessions stay pinned even when another account has more quota. A pause, reauthentication
+requirement, family cooldown or incompatible model roster releases the binding; existing bounded
+failure recovery binds the admitted replacement. Kiro's concurrency cap still waits or refuses
+rather than moving a healthy bound conversation merely to balance load.
+
+In this mode automatic choices, including unkeyed requests and failovers, stay request-local:
+the dashboard's selected account remains the operator's selection. Request history still attributes
+the serving account. Manual selection, same-account reselection and roster/policy revision changes
+invalidate provider bindings, including writes from another process. An ordinary refresh keeps the
+same account. Fill-first retains its current account in memory without changing the saved selection.
+Bindings expire after 24 hours without admission, are bounded to 2,000 entries process-wide
+(including fill-first cursors), and are lost on restart. Set `sessionAffinity: "none"` or disable
+proactive preference to release them. Codex and Anthropic retain their own affinity contracts.
 
 The Codex pool and the Anthropic pool are excluded and keep their own rotation; enabling this
 changes neither. A provider with a single stored account is a strict no-op, and no cooldown is
@@ -1235,7 +1264,7 @@ provider in question.
 
 ### Managed record shapes
 
-`apiKeys[]` entries contain `id`, `name`, generated `key`, and ISO `createdAt` strings.
+`apiKeys[]` entries contain `id`, `name`, generated `key`, and ISO `createdAt` strings. Optional `allowMeteredComboTargets: true` explicitly permits targets marked `metered: true`; omitted or false consent denies them. The environment token never qualifies. Local loopback-only callers can instead use per-combo `allowMeteredTargets: true`; configured-key and linked callers still need key consent. See [Metered fallback consent](/guides/combos/#metered-fallback-consent).
 `codexAccounts[]` entries require `id`, `email`, and `isMain`, with optional `plan`,
 `chatgptAccountId`, and privacy-safe `logLabel`. These records are normally dashboard-managed.
 
@@ -1713,6 +1742,57 @@ image is absent from the list. A row declaring only `audio` or `video` therefore
 image-incapable, rather than being treated as a text model by one predicate and an image target
 by the other.
 
+### Prompt-length pricing
+
+In **Models → Price**, keep four base rates and choose a prompt-length mode:
+
+- **Automatic** keeps the catalog context rules. It is also the behavior of existing four-rate overrides without a policy.
+- **Flat rate** uses the base rates at every prompt length, disabling catalog context adjustments.
+- **Custom threshold** selects four absolute alternative rates using `>` or `≥` and one token threshold. The custom policy replaces the catalog context rule on both sides of the threshold.
+
+All prompt tokens count, including cache reads and writes, before billable-input subtraction.
+Output does not count toward the threshold. Once crossed, the alternative rates apply to the
+entire request, including output, not only the excess tokens. Custom rates are standard-speed
+rates: an applicable Fast/Priority premium applies once after the rates are selected and follows
+the catalog's relation between Priority and long-context pricing for that model. A confirmed
+Priority request shows the custom estimate as a lower bound only when the catalog declares that
+relation as `lower-bound`, as for xAI Grok, which publishes no combined rate. A model with no
+catalog context rule applies any Priority multiplier once. These settings control estimates; they
+do not change provider billing.
+**Reset to automatic** deletes the entire override and restores catalog prices and rules. Saving or
+editing the config updates live estimates and historical totals.
+
+For example, a Haiku 5.5 override with alternative rates strictly above 100,000 prompt tokens:
+
+```json
+{
+  "modelCosts": {
+    "claude-haiku-5-5": {
+      "input": 0.10,
+      "output": 0.50,
+      "cacheRead": 0.01,
+      "cacheWrite": 0.125,
+      "promptLengthPricing": {
+        "mode": "custom",
+        "thresholdTokens": 100000,
+        "comparison": "gt",
+        "rates": { "input": 0.50, "output": 2.50, "cacheRead": 0.05, "cacheWrite": 0.625 }
+      }
+    }
+  }
+}
+```
+
+This is an example of user-defined prices, not an official Haiku price list.
+Any positive safe-integer threshold, including `272000`, is supported; use `"gte"` for inclusive
+comparison. All four alternative rates are required and follow the base-rate limits, including zero.
+The other policy is `{ "mode": "flat" }`. Omit `promptLengthPricing` to retain automatic context
+rules with your base prices; an explicit `{ "mode": "automatic" }` is accepted and means the same,
+and saves from the dashboard or API store it as an absent field.
+
+Legacy `openai-multi` model price overrides retain valid prompt-length policies when startup
+migrates them to `openai`, including overrides keyed by `openai-multi/<model>`.
+
 ### Renamed API-key presets
 
 A provider saved under another name, such as `CommandCode`, inherits missing reasoning-effort metadata when its adapter and fixed API-key endpoint match a registry preset. Your explicit per-model lists, including `[]`, remain authoritative. An omitted provider-wide list inherits the preset default; an explicit list remains unchanged. This does not match OAuth, unrelated endpoints, or templated/custom endpoint presets.
@@ -1741,3 +1821,23 @@ raised output allowance would exceed that ceiling.
   }
 }
 ```
+
+### Native Chat thinking replay
+
+These Chat reasoning lists also apply to native `/v1/chat/completions` tool-call continuation.
+The proxy preserves supplied `reasoning_content` and restores omitted reasoning from upstream
+JSON or SSE responses using tool-call ids. Original reasoning replay requires a stable
+`thread-id`, `session_id`, or `session-id` header on each request and the same provider, endpoint,
+model and credential. The cache is process-local and bounded; a restart, expiry, eviction, or
+missing conversation header uses the configured minimal placeholder instead. A placeholder
+cannot reconstruct lost reasoning. Clients should retain upstream `reasoning_content` in their
+assistant history for reliable resumed conversations.
+
+When `preserveReasoningContentModels` is unset, DeepSeek Flash/Pro model names are recognized
+across versions, including `deepseek-v4.1-flash`, namespaced ids and gateway suffixes. Explicit
+lists remain authoritative: `preserveReasoningContentModels: []` disables automatic repair,
+while `requiresReasoningPlaceholderModels: []` disables placeholders and still allows cached
+original reasoning. Other model families require the preserve declaration.
+Tool-enabled DeepSeek requests also require reasoning on earlier assistant answers without tool
+calls. The configured placeholder fills these omissions; no original reasoning can be recovered
+from the tool-call cache for those turns. Preserve their supplied reasoning for full fidelity.

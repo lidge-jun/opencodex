@@ -112,7 +112,18 @@ function normalizedEndpoint(value: unknown): string | undefined {
   }
 }
 
+/**
+ * Providers whose adapter is their credential boundary: the adapter alone pins the destination and
+ * the auth header for an account token. No model may switch wires, whatever `baseUrl` or the row's
+ * own `adapter` says, because a generic wire would send that token as a Bearer key to the configured
+ * URL. The empty prefix covers every model id.
+ */
+const CREDENTIAL_PINNED_ADAPTERS: Readonly<Record<string, Readonly<Record<string, string>>>> = Object.freeze({
+  "dsh-account": Object.freeze({ "": "dsh-account" }),
+});
+
 function prefixPinsFor(providerName: string, provider: WirePinProvider | undefined): Readonly<Record<string, string>> | undefined {
+  if (Object.hasOwn(CREDENTIAL_PINNED_ADAPTERS, providerName)) return CREDENTIAL_PINNED_ADAPTERS[providerName];
   if (!provider || !Object.hasOwn(WIRE_ADAPTER_PIN_PREFIXES, providerName)) return undefined;
   const rule = WIRE_ADAPTER_PIN_PREFIXES[providerName]!;
   return normalizedEndpoint(provider.baseUrl) === rule.endpoint ? rule.prefixes : undefined;

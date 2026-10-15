@@ -124,7 +124,12 @@ function extractIterationContent(events: AdapterEvent[]): OcxAssistantContentPar
     rawReasoning = "";
   };
   for (const e of events) {
-    if (e.type === "thinking_delta") {
+    if (e.type === "text_delta" && e.anthropicThinkingSignature) {
+      flushText();
+      flushVisible();
+      flushRaw();
+      parts.push({ type: "thinking", thinking: e.text, signature: e.anthropicThinkingSignature });
+    } else if (e.type === "thinking_delta") {
       flushText();
       flushRaw();
       thinking += e.thinking;
@@ -533,6 +538,9 @@ export async function* runTurnWebSearchLoop(
         return;
       }
 
+      for (const event of replayEvents) {
+        if (event.type === "text_delta" && event.anthropicThinkingSignature) yield event;
+      }
       const iterationContent = extractIterationContent(split.passthrough);
       for (const [callIndex, call] of split.calls.entries()) {
         if (abortSignal?.aborted) { yield abortEvent(); return; }

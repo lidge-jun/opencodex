@@ -1,5 +1,6 @@
 import { readExistingSpendSalt, spendPoolAliasesError, validatePoolAliasOwners } from "../lib/spend-pool-alias-validation";
 import { isSubagentModelEntry, rawSubagentModelForce } from "./subagent-models";
+import { validRemainingQuotaAccountIds } from "../codex/account-use-remaining";
 import { protocolConfigSchema } from "./schema/config-schema";
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync } from "node:fs";
@@ -8,6 +9,7 @@ import * as z from "zod/v4";
 import { compactionRecoveryConfigError } from "./schema/compaction-recovery";
 import { desktopCompatibilityConfigError } from "./schema/desktop-compatibility";
 import { blockedModelRedirectsError } from "./schema/blocked-model-redirects";
+import { mainAccountHardLockFallbackError } from "./schema/main-account-hard-lock-fallback";
 import type { OcxConfig } from "../types";
 import { anthropicAccountPoolConfigError, anthropicOAuthInstanceConfigError, anthropicSidecarConfigError } from "./schema/anthropic-account-pool";
 import { configReasoningPinsConfigError } from "./provider-validation";
@@ -136,6 +138,7 @@ function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown): Conf
   warnings.push(...degradedCodexAccountPriorityWarnings(rawParsed, normalized));
   warnings.push(...degradedListenerWarnings(rawParsed, normalized));
   if (blockedModelRedirectsError(rawParsed)) warnings.push("blockedModelRedirects ignored: expected a map of nonempty model keys to nonempty string targets");
+  if (mainAccountHardLockFallbackError(rawParsed)) warnings.push("codexMainAccountHardLockFallback ignored: expected a nonblank model selector and an optional declared reasoningEffort");
   const quotaAutoRefreshWarning = degradedCodexQuotaAutoRefreshWarning(rawParsed, normalized);
   if (quotaAutoRefreshWarning) warnings.push(quotaAutoRefreshWarning);
   if (rawEffort !== undefined && !isClaudeSubagentEffort(rawEffort)) {
@@ -404,12 +407,15 @@ function codexAccountPrioritiesError(value: unknown): string | null {
   return null;
 }
 
-function codexAccountPriorityFailbackError(value: unknown): string | null {
+function codexAccountSelectionPreferencesError(value: unknown): string | null {
   const raw = rawConfigRecord(value);
-  if (!raw || !Object.hasOwn(raw, "codexAccountPriorityFailback")) return null;
-  const enabled = raw.codexAccountPriorityFailback;
-  if (enabled === undefined || typeof enabled === "boolean") return null;
-  return "schema_invalid: codexAccountPriorityFailback: must be a boolean or omitted";
+  if (!raw) return null;
+  for (const key of ["codexAccountPriorityFailback", "codexPreserveSignedInAccount"]) {
+    if (raw[key] !== undefined && typeof raw[key] !== "boolean") {
+      return `schema_invalid: ${key}: must be a boolean or omitted`;
+    }
+  }
+  return null;
 }
 
 /**
@@ -503,6 +509,12 @@ function creditCodexAccountIdsError(value: unknown): string | null {
   if (ids === undefined) return null;
   if (Array.isArray(ids) && ids.every(id => typeof id === "string" && /^[a-zA-Z0-9._-]{1,64}$/.test(id))) return null;
   return "schema_invalid: creditCodexAccountIds: must be an array of account ids or omitted";
+}
+
+function remainingQuotaAccountIdsError(value: unknown): string | null {
+  const ids = rawConfigRecord(value)?.codexUseRemainingQuotaAccountIds;
+  return ids === undefined || validRemainingQuotaAccountIds(ids) ? null
+    : "schema_invalid: codexUseRemainingQuotaAccountIds: must be an array of Codex account ids or omitted";
 }
 
 function oauthOpenBrowserError(value: unknown): string | null {
@@ -695,6 +707,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
   const anthropicError = anthropicOAuthInstanceConfigError(value) ?? anthropicAccountPoolConfigError(value) ?? anthropicSidecarConfigError(value);
   if (anthropicError) return { ok: false, error: anthropicError };
   const boundaryError = blockedModelRedirectsError(value)
+    ?? mainAccountHardLockFallbackError(value)
     ?? compactionRecoveryConfigError(value) ?? desktopCompatibilityConfigError(value) ?? configReasoningPinsConfigError(value)
     ?? blankHostnameError(value)
     ?? (rawSubagentModelForce(value) !== undefined && !isSubagentModelEntry(rawSubagentModelForce(value)) ? "schema_invalid: claudeCode.subagentModelForce: expected a safe roster-style model id" : null)
@@ -710,7 +723,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? codexPoolError(value)
     ?? googleAntigravityStaticCatalogVersionError(value)
     ?? codexAccountPrioritiesError(value)
-    ?? codexAccountPriorityFailbackError(value)
+    ?? codexAccountSelectionPreferencesError(value)
     ?? poolCredentialGroupsError(value)
     ?? codexQuotaAutoRefreshError(value)
     ?? codexAccountPickerEnabledError(value)
@@ -719,6 +732,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? oauthOpenBrowserError(value)
     ?? showCodexCreditsError(value)
     ?? creditCodexAccountIdsError(value)
+    ?? remainingQuotaAccountIdsError(value)
     ?? runtimeRoleError(value)
     ?? remoteGuiConfigError(value)
     ?? clientConnectionConfigError(value)

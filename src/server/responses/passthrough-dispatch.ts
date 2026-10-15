@@ -141,7 +141,7 @@ import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { refreshPoolForwardAuth, refreshNativeMainForwardAuth, withClaudeNativeSession } from "./core-auth";
 import { bindRouteReasoningReplayScope } from "./core-replay";
 import type { OAuthAccessSnapshot } from "../../oauth";
-import { OAuthAccountPausedError, OAuthLoginRequiredError, publicOAuthAuthenticationErrorMessage } from "../../oauth";
+import { OAuthAccountPausedError, OAuthLoginRequiredError, OAuthTokenRefreshBusyError, publicOAuthAuthenticationErrorMessage } from "../../oauth";
 import { AnthropicAccountCooldownError } from "../../oauth/anthropic-routing";
 import { resolveCopilotApiBaseUrl } from "../../oauth/github-copilot";
 import {
@@ -1358,6 +1358,8 @@ export async function preparePassthroughExchange(
       } catch (err) {
         upstream.abort();
         releaseCodexAuthContextProbeLease(admissionState.authCtx);
+        if (options.abortSignal?.aborted || req.signal.aborted) return clientCancelledResponse();
+        if (err instanceof OAuthTokenRefreshBusyError) return formatErrorResponse(503, "server_error", publicOAuthAuthenticationErrorMessage(err), { retryAfter: "1" });
         return formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(err));
       }
       if (route.provider.googleMode === "cloud-code-assist" && !refreshed.projectId) {

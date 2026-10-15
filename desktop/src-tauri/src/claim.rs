@@ -163,7 +163,12 @@ pub async fn run(app: &AppHandle, argv: Vec<String>, deadline: Instant) -> Claim
             return ClaimResult::Failed(format!("the bundled CLI could not be started ({error})"))
         }
     };
-    match timeout_at(deadline, command.output()).await {
+    match timeout_at(
+        deadline,
+        crate::process_spawn::with_spawn_async(command.output()),
+    )
+    .await
+    {
         Ok(Ok(output)) => read(output.status.code(), &output.stdout, &output.stderr),
         Ok(Err(error)) => {
             ClaimResult::Failed(format!("the bundled CLI could not be run ({error})"))

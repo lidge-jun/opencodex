@@ -344,7 +344,7 @@ describe("legacy ChatGPT OAuth public-surface exclusion", () => {
     });
     const saveSpy = spyOn(oauthStore, "saveCredential").mockImplementation(async (provider, credential) => {
       credentialWrites += 1;
-      await originalSaveCredential(provider, credential);
+      const receipt = await originalSaveCredential(provider, credential);
       const changed = config();
       changed.defaultProvider = "concurrent";
       changed.providers.concurrent = {
@@ -357,6 +357,7 @@ describe("legacy ChatGPT OAuth public-surface exclusion", () => {
       };
       saveConfig(changed);
       changedAfterCredential = true;
+      return receipt;
     });
 
     try {
@@ -406,7 +407,7 @@ describe("legacy ChatGPT OAuth public-surface exclusion", () => {
       expires: Date.now() + 60_000,
     });
     const saveSpy = spyOn(oauthStore, "saveCredential").mockImplementation(async (provider, credential) => {
-      await originalSaveCredential(provider, credential);
+      const receipt = await originalSaveCredential(provider, credential);
       const changed = loadConfig();
       changed.providers.xai = {
         ...changed.providers.xai!,
@@ -418,6 +419,7 @@ describe("legacy ChatGPT OAuth public-surface exclusion", () => {
         ],
       };
       saveConfig(changed);
+      return receipt;
     });
 
     try {
@@ -800,7 +802,7 @@ describe("legacy ChatGPT OAuth public-surface exclusion", () => {
       };
     };
     const saveSpy = spyOn(oauthStore, "saveCredential").mockImplementation(async (provider, credential) => {
-      await originalSaveCredential(provider, credential);
+      const receipt = await originalSaveCredential(provider, credential);
       const concurrentConfig = config();
       concurrentConfig.defaultProvider = "concurrent";
       concurrentConfig.providers.concurrent = {
@@ -813,6 +815,7 @@ describe("legacy ChatGPT OAuth public-surface exclusion", () => {
       };
       concurrentConfig.claudeCode = { authMode: "proxy" };
       saveConfig(concurrentConfig);
+      return receipt;
     });
 
     try {

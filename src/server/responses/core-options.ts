@@ -15,6 +15,7 @@ import type { InboundWire } from "../../providers/registry";
 import type { ExplicitOpenAiCallerAuth } from "../../providers/openai-sidecar";
 import type { CallerDirectAuth } from "../../providers/caller-authorization";
 import type { CompactionRoutingOverride } from "./compaction-routing";
+import type { MainHardLockFallbackOverride } from "./main-hard-lock-routing";
 import type { TranslatorBudget } from "../../lib/translator-budget";
 import type { NativeReasoningOwner } from "../../responses/reasoning-replay-cache";
 import type { TransientSendBudget } from "../../lib/upstream-retry";
@@ -207,6 +208,8 @@ export interface HandleResponsesOptions {
   /** Internal handoff: the memory phase this turn belongs to, so combo children keep its routing. */
   memoryModelPhase?: "extract" | "consolidation";
   compactionRoutingOverride?: CompactionRoutingOverride | null;
+  /** Internal handoff: the hard-lock fallback rewrote this turn; the log shows `sourceModel`. */
+  mainHardLockFallbackOverride?: MainHardLockFallbackOverride | null;
   /** Internal combo handoff for one parent-validated continuation snapshot. */
   comboReplaySnapshot?: {
     sourceBody: unknown;
