@@ -86,6 +86,13 @@ Two honesty markers to respect:
 - Under `--provider` or `--model`, per-account rows are **withheld** rather than filtered, because
   account totals cannot be honestly re-partitioned by provider.
 
+## `ocx usage compare --json`
+
+CLI envelope `schemaVersion: 1` with `range`, `days`, `filter`, then `current` and `previous`
+(`since`, `until`, `summary`, `usageIncomplete`), plus `delta`, `change` (percent, or `null` when
+the previous value is zero and the current value is not), and `incomplete`. Totals are request,
+token and estimated-cost fields only; use `ocx usage --json` for provider/model/account rows.
+
 ## `ocx account list <provider> --json`
 
 `accounts[]` with `id`, `email`, `plan`, `paused`, `selected`, `priority`, and `needsReauth`. Quota

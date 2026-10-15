@@ -416,6 +416,7 @@ Inspect proxy requests, usage, storage, memory, and debug data. The direct alias
 | --- | --- |
 | `ocx logs [filters] [--follow] [--json|--jsonl|--events]` | `ocx observe logs` |
 | `ocx usage [--range <today|1d|7d|30d|all>] [--since <timestamp> --until <timestamp>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--api-key-id <id>] [--json]` | `ocx observe usage` |
+| `ocx usage compare [--range <today|1d|7d|30d>] [--json]` | `ocx observe usage compare` |
 | `ocx storage [--json]` | `ocx observe storage` |
 | `ocx memory [--json]` | `ocx observe memory` |
 
@@ -449,6 +450,23 @@ When some usage records cannot be included, human output warns, including when t
 Any displayed totals reflect readable records only. If a filter has no readable matches, the output shows
 the warning and guidance instead of total lines; skipped records may contain matches.
 `--json` preserves the response-level `usageIncomplete` diagnostic and reason.
+
+### Compare a range with the previous equal window
+
+```bash
+ocx usage compare --range today --json
+ocx usage compare --range 7d --provider xai
+```
+
+`ocx observe usage compare` is the equivalent family form. The command reads `GET /api/usage`
+twice: the named range ending now, then the same range evaluated one equal window earlier
+(one local day for `today`/`1d`, seven for `7d`, thirty for `30d`). Default range is `30d`.
+`--range all` is refused because open history has no previous equal window. `--since` and
+`--until` are not accepted; the windows are derived. Surface, provider, model, and API-key
+filters apply to both reads. Human output prints current, previous, signed delta, and percent
+change. `--json` is `{schemaVersion,range,current,previous,delta,change,incomplete}`. The two
+reads are sequential, not an atomic snapshot. Custom `since`/`until` on each response must
+match the requested window.
 
 ### Filter a bounded log snapshot
 

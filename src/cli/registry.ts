@@ -447,8 +447,11 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   { name: "logs", usage: "ocx logs [filters] [--follow] [--json|--jsonl|--events]", summary: "Read or follow request logs." },
   {
     name: "usage",
-    usage: "ocx usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--api-key-id <id>] [--search <text>] [--json]",
+    usage: "ocx usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--api-key-id <id>] [--search <text>] [--json]; ocx usage compare [--range <today|1d|7d|30d>] [--json]",
     summary: "Report token usage and estimated cost (alias of ocx observe usage).",
+    details: [
+      "`compare` reads the current named range and the previous equal window; `--range all` is refused.",
+    ],
   },
   {
     name: "storage",

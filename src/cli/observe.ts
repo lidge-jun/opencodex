@@ -17,6 +17,7 @@ import { handleLogFilterCommand } from "./log-view-filter";
 import { followInjection } from "./injection-follow";
 import type { ObserveStreamDeps } from "./observe-stream";
 import { formatUsageReport } from "./usage-report";
+import { handleUsageCompareCommand } from "./usage-compare";
 import { selectUsageModelView, takeUsageSearchOption } from "./usage-model-search";
 import { USAGE_RANGES, USAGE_SURFACES, type UsageSummary, type UsageFilterEcho } from "../usage/summary";
 import { parseUsageTimeWindow, type UsageTimeWindow } from "../usage/time-range";
@@ -36,6 +37,8 @@ const USAGE = `Usage:
   ocx observe usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok>]
       [--since <epoch-ms|ISO-datetime>] [--until <epoch-ms|ISO-datetime>]
       [--provider <name>] [--model <id>] [--api-key-id <id>] [--search <text>] [--json]
+  ocx usage compare [--range <today|1d|7d|30d>] [--surface <all|codex|claude|grok>]
+      [--provider <name>] [--model <id>] [--api-key-id <id>] [--json]
   ocx observe storage [codex-logs [status|protect|unprotect|repair|compact] [--mode <compat|quiet>]] [--json]
   ocx observe memory [--json]
   ocx observe debug [--json]
@@ -325,7 +328,10 @@ export async function handleObserveCommand(argv: string[], deps: ObserveStreamDe
       else if (action === "index-status") await indexStatus(rest.slice(1), deps);
       else streamExit = await logs(rest, deps);
     }
-    else if (sub === "usage") await usage(rest, deps);
+    else if (sub === "usage") {
+      if (rest[0] === "compare") await handleUsageCompareCommand(rest.slice(1), deps);
+      else await usage(rest, deps);
+    }
     else if (sub === "storage") await storage(rest, deps);
     else if (sub === "memory") await simple("/api/system/memory", rest, deps);
     else if (sub === "debug") await simple("/api/debug", rest, deps);

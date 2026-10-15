@@ -86,6 +86,28 @@ describe("operation capability workflows use existing handlers", () => {
     expect(await handleObserveCommand(["usage", "--range", "7d", "--surface", "claude", "--since", "1000", "--until", "2000", "--json"], io.deps)).toBe(0);
     expect(io.requests).toEqual([{ method: "GET", path: "/api/usage?range=7d&surface=claude&since=1000&until=2000", body: null }]);
   });
+  test("usage compare reads current then previous equal windows", async () => {
+    expect(capability("usage compare").routes).toEqual([{ method: "GET", path: "/api/usage" }]);
+    const requests: string[] = [];
+    const deps = {
+      baseUrl: "http://capability.invalid",
+      now: () => Date.UTC(2026, 9, 15, 15, 30, 0),
+      fetchImpl: async (input: RequestInfo | URL) => {
+        const url = new URL(String(input));
+        requests.push(url.pathname + url.search);
+        return Response.json({
+          customWindow: true,
+          since: Number(url.searchParams.get("since")),
+          until: Number(url.searchParams.get("until")),
+          summary: { requests: 1, totalTokens: 1, estimatedCostUsd: 1 },
+        });
+      },
+    };
+    expect(await handleObserveCommand(["usage", "compare", "--range", "today", "--json"], deps)).toBe(0);
+    expect(requests).toHaveLength(2);
+    expect(requests[0]!.startsWith("/api/usage?range=today&")).toBe(true);
+    expect(requests[1]!.startsWith("/api/usage?range=today&")).toBe(true);
+  });
   test("system settings distinguishes read from submitted field writes", async () => {
     const leaf = capability("system settings");
     expect(leaf.mutates).toBe(true);

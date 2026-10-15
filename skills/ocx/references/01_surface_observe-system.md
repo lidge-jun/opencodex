@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 92.
+Declared capabilities: 93.
 
 ### `ocx companion`
 
@@ -62,6 +62,7 @@ JSON mode: `payload`.
 - Alias of observe usage. Connected clients read only their enrolled-key Hub report through /v1/usage; caller --api-key-id is refused before key read/transport and never grants management authority.
 - Nonclient --api-key-id uses /api/usage and requires matching filter acknowledgment. An unknown acknowledged key is empty/matched:false, not404. Custom-window acknowledgment remains required.
 - --search filters only returned model rows after scope acknowledgment. Blank search selects the top100 model rows; modelView reports match/return counts without recomputing totals.
+- Nested compare reads the named range and the previous equal window; --range all is refused.
 
 ### `ocx logs`
 
@@ -653,6 +654,32 @@ JSON mode: `payload`.
 - Also available as ocx usage. Connected clients read only their enrolled-key Hub report through /v1/usage; caller --api-key-id is refused before key read/transport and never grants management authority.
 - Nonclient --api-key-id uses /api/usage and requires matching filter acknowledgment. An unknown acknowledged key is empty/matched:false, not404. Custom-window acknowledgment remains required.
 - --search filters only returned model rows after scope acknowledgment. Blank search selects the top100 model rows; modelView reports match/return counts without recomputing totals.
+
+### `ocx usage compare`
+
+Usage: `ocx usage compare [--range <today|1d|7d|30d>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--api-key-id <id>] [--json]`
+
+Compare a usage range with the previous equal window.
+
+State-changing: no.
+
+| Method | Route |
+|---|---|
+| GET | `/api/usage` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--range` | string | today \| 1d \| 7d \| 30d; default 30d. all is refused. |
+| `--surface` | string | all \| codex \| claude \| grok; default all. |
+| `--provider` | string | Filter provider. |
+| `--model` | string | Filter model. |
+| `--api-key-id` | string | Exact nonblank management key scope; connected clients refuse this. |
+| `--json` | boolean | Emit current, previous, delta and change percentages. |
+
+JSON mode: `envelope`.
+
+- Two sequential GET /api/usage reads: the named range at now, then the same range shifted back one equal window. Custom since/until must be acknowledged on both. --range all is refused.
+- Also accepted after observe usage. Default range is 30d. This is not an atomic snapshot.
 
 ### `ocx observe storage`
 
