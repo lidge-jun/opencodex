@@ -49,7 +49,7 @@ Typecheck's `include: ["src"]` does not validate new tests; Bun execution does.
 
 ## Consultation
 
-Architect handle: `01a13f77-e06f-7af1-b42f-9613cc14910e`.
+Architect proposal and reflection are retained in the local coordinator evidence.
 - ARGON-SEP-01/02 accepted: keep one classifier and existing output channels.
 - ARGON-SEP-03 accepted: provenance is not proof of observed upstream behavior.
 - ARGON-SEP-04 amended: add handler-level coverage and current contract clarification.
@@ -84,3 +84,8 @@ force upstream marked thoughts when hidden to test output suppression, not just 
 The full 2,330-file suite is not run locally: this tests/docs-only change has bounded integration
 coverage and shares the host with concurrent coding workloads. Broader coverage remains with
 the PR's required CI. Neither this exception nor synthetic tests certify external harness UI.
+
+Fresh independent final review: PASS, no actionable defects. The fresh reader identified the
+result as synthetic regression coverage, with the live symptom explicitly unverified. No prose
+change was requested. The investigation is closed with that limitation; PR integration is
+tracked by the coordinator. Runtime source is unchanged.
