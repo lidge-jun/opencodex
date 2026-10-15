@@ -86,6 +86,11 @@ function CompatibilityPanel({ apiBase, active }: { apiBase: string; active: bool
         {snapshot.certificate.fingerprint && <dd className="mono text-label" style={{ overflowWrap: "anywhere" }}>{snapshot.certificate.fingerprint}</dd>}
         {snapshot.certificate.expiresAt !== undefined && <><dt>{t("desktopCompat.expiry")}</dt><dd>{new Date(snapshot.certificate.expiresAt).toLocaleString(locale)}</dd></>}
         <dt>{t("desktopCompat.runtime")}</dt><dd><code>{snapshot.runtime.phase}</code>{snapshot.runtime.usage && <> · <code>{snapshot.runtime.usage.mode}</code></>}</dd>
+        {snapshot.runtime.buildAssessment && <>
+          <dt>{t("desktopCompat.assessedPackage")}</dt><dd><code>{snapshot.runtime.buildAssessment.assessedVersion}</code></dd>
+          <dt>{t("desktopCompat.observedPackage")}</dt><dd><code>{snapshot.runtime.buildAssessment.observedVersion ?? t("desktopCompat.noObservedPackage")}</code></dd>
+          <dt>{t("desktopCompat.lastObservedAt")}</dt><dd>{new Date(snapshot.runtime.buildAssessment.completedAt).toLocaleString(locale)}</dd>
+        </>}
       </dl>
       {snapshot.certificate.renewalDue && <p className="notice-warn">{t("desktopCompat.renewalDue")}</p>}
       {snapshot.runtime.usage?.mode === "apply" && <p className="notice-warn">{t("desktopCompat.trialRisk")}</p>}

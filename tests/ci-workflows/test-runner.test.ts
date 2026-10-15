@@ -292,13 +292,14 @@ describe("test runner captured output", () => {
 
 describe("test runner isolation", () => {
   test("redirects user homes to a disposable root", () => {
-    const isolated = createIsolatedTestEnvironment({ PATH: "/test/bin", HOME: "/real/home" });
+    const isolated = createIsolatedTestEnvironment({ PATH: "/test/bin", HOME: "/real/home", OCX_OWNER_REGISTRY_DIR: "/real/registry" });
     try {
       expect(isolated.env).toMatchObject({
         PATH: "/test/bin",
         HOME: isolated.root,
         USERPROFILE: isolated.root,
         OPENCODEX_HOME: join(isolated.root, ".opencodex"),
+        OCX_OWNER_REGISTRY_DIR: join(isolated.root, ".opencodex", "ocx-homes"),
         CODEX_HOME: join(isolated.root, ".codex"),
         TEMP: join(isolated.root, "tmp"),
         TMP: join(isolated.root, "tmp"),
