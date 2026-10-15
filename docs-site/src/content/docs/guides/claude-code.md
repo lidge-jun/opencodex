@@ -273,7 +273,9 @@ compatibility mechanism.
 
 Gateway apply refuses unreadable or non-regular configuration files, including dangling metadata
 links, before creating a new profile. If the metadata update fails, apply restores the profile's
-previous contents, or removes a profile it had just created. Apply rechecks the profile before
+previous contents, or removes a profile it had just created, but only while the profile still holds
+what apply wrote; if another program changed it in the meantime, apply keeps that version and
+reports "profile rollback skipped". Apply rechecks the profile before
 backup and replacement; if it detects a concurrent edit, it refuses with `desktop_profile_changed`.
 Review the edit and reapply. If restoring the profile also fails after a metadata error, the
 reported reason includes both failures; reconcile the profile and metadata before retrying.

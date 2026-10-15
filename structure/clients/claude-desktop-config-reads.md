@@ -28,9 +28,13 @@ without opening a FIFO or following a link. Drift detected before backup leaves 
 metadata untouched; drift during temp staging leaves the concurrent live profile and metadata
 untouched. These are bounded optimistic checks, not a filesystem transaction with external writers.
 When metadata publication fails, rollback restores the captured bytes without reopening the
-backup; a profile the same apply created is removed instead. A failed rollback keeps the metadata
-error as the primary cause and reports that profile rollback also failed. An absent profile does
-not adopt a leftover backup from an earlier operation.
+backup; a profile the same apply created is removed instead. Rollback is ownership-aware: the same
+compare-and-swap helper (`assertDesktopProfileUnchanged`) checks that the live profile still holds
+the bytes this apply published, before acting and again before the restore rename. If another
+writer changed it, rollback is skipped, that profile is preserved, and the metadata error is
+reported with "profile rollback skipped". A failed rollback keeps the metadata error as the
+primary cause and reports that profile rollback also failed. An absent profile does not adopt a
+leftover backup from an earlier operation.
 
 Tests: `tests/clients/desktop-3p-write-files.test.ts`, `tests/clients/desktop-3p-removal.test.ts`, `tests/clients/desktop-remote-store.test.ts`, and
 `tests/claude-integration/claude-desktop-picker-profile.test.ts`.
