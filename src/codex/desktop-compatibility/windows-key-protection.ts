@@ -62,11 +62,12 @@ function loadNativeDpapi(): NativeDpapi | null {
   let crypt32;
   let kernel32;
   try {
-    crypt32 = dlopen(join(resolveTrustedWindowsSystemDirectory(), "crypt32.dll"), {
+    const systemDirectory = resolveTrustedWindowsSystemDirectory();
+    crypt32 = dlopen(join(systemDirectory, "crypt32.dll"), {
       CryptProtectData: DPAPI_SIGNATURE,
       CryptUnprotectData: DPAPI_SIGNATURE,
     }).symbols;
-    kernel32 = dlopen("kernel32.dll", { LocalFree: { args: ["ptr"], returns: "ptr" } }).symbols;
+    kernel32 = dlopen(join(systemDirectory, "kernel32.dll"), { LocalFree: { args: ["ptr"], returns: "ptr" } }).symbols;
   } catch {
     return null;
   }
@@ -83,14 +84,14 @@ function loadNativeDpapi(): NativeDpapi | null {
     }
     const length = output.readUInt32LE(0);
     const address = Number(output.readBigUInt64LE(8)) as Pointer;
+    const view = length > 0 ? new Uint8Array(toArrayBuffer(address, 0, length)) : null;
     try {
       if (length === 0 || length > MAX_INPUT) throw new Error("desktop_compatibility_key_size");
-      const view = new Uint8Array(toArrayBuffer(address, 0, length));
-      const bytes = Uint8Array.from(view);
-      // The unprotected buffer is cleartext key material; clear it before LocalFree releases it.
-      if (operation === "unprotect") view.fill(0);
-      return bytes;
+      return Uint8Array.from(view!);
     } finally {
+      // The unprotected buffer is cleartext key material; clear it before LocalFree releases it,
+      // including when the size check rejects it.
+      if (operation === "unprotect") view?.fill(0);
       LocalFree(address);
     }
   };
