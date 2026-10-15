@@ -64,15 +64,8 @@ Combo preflight allows the private search tool only while a search plan is activ
 The opt-in `inlineThinkTagModels` list follows static-policy override and model-rename rules;
 shared Kiro/Chat splitting and raw display follow [Chat compatibility](providers/chat-compat.md#inline-think-tag-recovery).
 
-Meta Muse management login in `src/server/management/oauth-account-routes.ts` requires a
-server-resolved `gui-session` before starting credential acquisition, including local import,
-device login, add-account and reauthentication. This principal is not a checkbox receipt;
-forged GUI headers and raw management credentials do not substitute for it. Direct CLI login
-and other OAuth providers retain their existing policies. `src/oauth/meta-muse-device.ts`
-cancels unparsed authorization/mint failures, including mint429, without reflecting their bodies.
-Management discovery and changing device/manual instructions follow the
-[OAuth continuation contract](gui-and-management-api.md#oauth-login-continuations); discovery
-filters the current principal without changing the direct CLI roster or relaxing login admission.
+Meta Muse import, device login, explicit paste recovery, consent and safe diagnostics follow
+the [Muse login contract](providers/meta-muse.md). Other providers retain their existing login policies.
 
 The capture-only bridge in `src/adapters/coding-agent/turn.ts` reports staging failures with
 the fixed `tool_bridge_setup_failed` error, never an OS error carrying private file paths.

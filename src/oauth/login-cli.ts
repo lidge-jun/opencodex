@@ -144,6 +144,10 @@ export async function handleOAuthLogin(name: string, deps: LoginCliDeps = {}): P
   await withPrompt(deps.ask, async (ask) => {
     await login(name, {
       onAuth: ({ url, instructions }) => {
+        if (!url) {
+          if (instructions) console.log(instructions);
+          return;
+        }
         console.log(`\n🔐 Opening browser for ${name} login...\n${url}\n`);
         if (instructions) console.log(instructions);
         // The controller does not await onAuth, so the launcher's answer cannot be reported from

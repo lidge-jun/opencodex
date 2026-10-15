@@ -956,7 +956,10 @@ stored by `muse login`. With no local credential, or on another platform, it sta
 browser device-approval flow. Add-account and reauthentication skip local import to avoid
 reusing the account being replaced. OpenCodex never launches the Muse CLI. If device login
 fails without cancellation, an available manual-input surface can accept a pasted key;
-that key faces the same format and Model API validation as an imported key. See
+that key faces the same format and Model API validation as an imported key. On macOS,
+approve the Keychain prompt on the proxy host within 120 seconds. Import refusals
+show the failure reason and offer an existing-key paste field without starting another
+login. Add account on an already configured provider bypasses local import. See
 [Platform support](/reference/platform-support/) for the full per-platform picture.
 
 Starting any Meta Muse login through the management API requires a dashboard session,

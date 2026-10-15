@@ -337,6 +337,13 @@
       "documents": ["src/oauth/"]
     },
     {
+      "path": "providers/meta-muse.md",
+      "tier": 4,
+      "title": "Meta Muse Login",
+      "scope": "CLI credential import, approval lifecycle, explicit recovery and account-free login diagnostics.",
+      "documents": ["src/oauth/meta-muse.ts", "src/oauth/meta-muse-keychain.ts", "src/oauth/meta-muse-errors.ts", "src/oauth/login-cli.ts"]
+    },
+    {
       "path": "providers-and-adapters.md",
       "tier": 4,
       "title": "Providers And Adapters",
