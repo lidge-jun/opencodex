@@ -302,6 +302,7 @@ explicit `lastResort: false`. `--image-input auto|disabled` and
 `--reasoning-effort-mode strict|adaptive` preserve omission, while explicit `auto`
 and `strict` override saved disabled/adaptive values. Reasoning-effort mode is
 separate from `--effort-mode fallback|force`, which governs the default effort.
+`--allow-metered-targets on|off` grants or clears operator consent for marked combo targets on a loopback-only proxy; public and linked callers still need configured-key consent.
 `--native-alias on|off` preserves explicit false; the legacy bare flag means true.
 Turning it off may require the intended alias clear, `--native-alias off --alias -`,
 to avoid retaining an incompatible native alias. Set/rename is an upsert without
