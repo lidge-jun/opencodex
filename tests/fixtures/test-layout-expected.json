@@ -1,4 +1,5 @@
 {
+  "gcp-sa-marker.test.ts": "adapters/google", "gcp-sa-adapter.test.ts": "adapters/google", "management-gcp-credential-input.test.ts": "server",
   "codex-history-pending-wal.test.ts": "codex-integration",
   "service-log.test.ts": "service",
   "service-health-sentinel-policy.test.ts": "service",

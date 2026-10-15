@@ -1,6 +1,8 @@
 import { contextTierRecordConfigError, modelCapabilitiesConfigError, mergeModelCapabilities } from "../../config/provider-validation";
 import { DECLARABLE_HOSTED_TOOL_TYPES } from "../../responses/hosted-tool-policy";
 import { randomUUID } from "node:crypto";
+import { cleanupRemovedGcpCredentials, providerGcpCredentialMarkers, snapshotProviderGcpCredentialMarkers } from "../../providers/gcp-credential-cleanup";
+import { providerCredentialInputError } from "../../providers/api-keys";
 import { readFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import type { CatalogModel } from "../../codex/catalog";
@@ -1073,6 +1075,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       if (resolvedError) return jsonResponse({ error: resolvedError, code: "invalid_provider_destination" }, 400);
     }
 
+    let removedCredentials: string[] = [];
     const outcome = mutatePersistedConfig<ProviderEditorMutationValue>(persisted => {
       if (!isDeepStrictEqual(providerEditorConfigDTO(persisted), baselineResult.value)) {
         return {
@@ -1095,6 +1098,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
           initializeProviderModelSelection(name, provider, undefined, candidate.config);
         }
       }
+      removedCredentials = Object.values(persisted.providers).flatMap(providerGcpCredentialMarkers);
       persisted.defaultProvider = candidate.config.defaultProvider;
       persisted.providers = structuredClone(candidate.config.providers);
       persisted.disabledModels = candidate.config.disabledModels;
@@ -1120,6 +1124,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       return jsonResponse({ error: outcome.value.error, code: outcome.value.code }, outcome.value.status);
     }
 
+    cleanupRemovedGcpCredentials(removedCredentials);
     adoptProviderEditorCandidate(config, outcome.value.config);
     reconcileLiveStateStores();
     refreshConfigDerivedRegistries(outcome.value.config);
@@ -1137,16 +1142,15 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     return jsonResponse({ success: true, catalogRefresh });
   }
 
-  // Add (or overwrite) a single provider. Merges into the live in-memory config and
-  // persists — existing providers' real keys are never round-tripped (unlike PUT /api/config,
-  // which would re-save the masked keys from GET). Live routing picks it up immediately.
+  // Provider POST merges directly; existing secrets never round-trip through masked DTOs.
   if (url.pathname === "/api/providers" && req.method === "POST") {
     let body: { name?: unknown; provider?: unknown; setDefault?: boolean };
     try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     const name = typeof body.name === "string" ? body.name.trim() : "";
     if (!isPlainRecord(body.provider)) return jsonResponse({ error: "provider must be a plain object" }, 400);
-    // Same prohibition as PATCH: the canonical OpenAI row never carries these fields, and a clear
-    // form would otherwise be normalized away before the merged-row guard could see it.
+    const credentialError = providerCredentialInputError(body.provider);
+    if (credentialError) return jsonResponse({ error: credentialError }, 400);
+    // Reject canonical-row clears before normalization hides their ownership.
     if (name === "openai" && (Object.hasOwn(body.provider, "autoReviewModel") || Object.hasOwn(body.provider, "autoReviewModelOverrides"))) {
       return jsonResponse({ error: "provider openai must not include autoReviewModel or autoReviewModelOverrides" }, 400);
     }
@@ -1357,7 +1361,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const candidate = stripRegistryOnlyStaticHeaders(name, prov);
     const previous = Object.getOwnPropertyDescriptor(config.providers, name);
     const rollback = pinsOwned ? captureConfigTopLevelRollback(config, ["defaultProvider", "modelDiscovery", "disabledModels"]) : undefined;
-    let validationError: string | undefined;
+    let validationError: string | undefined, removedCredentials: string[] = [];
     withConfigMutationLockSync(() => {
       validationError = anthropicInstancePublicationError(name, candidate, config.providers[name]);
       if (validationError) return;
@@ -1375,6 +1379,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
             });
           }
         }
+        removedCredentials = snapshotProviderGcpCredentialMarkers(name, config.providers[name]);
         config.providers[name] = candidate;
         if (body.setDefault === true) config.defaultProvider = name;
         (deps.saveConfigPreservingClaudeCode ?? save)(config);
@@ -1388,6 +1393,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       }
     });
     if (validationError !== undefined) return jsonResponse({ error: validationError }, 400);
+    cleanupRemovedGcpCredentials(removedCredentials);
     reconcileLiveStateStores();
     if (prov.apiKey && prov.apiKeyPool) {
       const { addProviderApiKey } = await import("../../providers/api-keys");
@@ -1849,11 +1855,13 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     // Deleting still succeeds; the response names the shadow-call target left without a provider.
     const shadowDependency = shadowInterceptProviderDependency(config, name);
     if (fallbackDefault) config.defaultProvider = fallbackDefault;
+    const removedCredentials = snapshotProviderGcpCredentialMarkers(name, config.providers[name]);
     delete config.providers[name];
     const { dropProviderCustomModels } = await import("../../providers/provider-id-rewrite");
     const droppedCustomModels = dropProviderCustomModels(config, name);
     forgetProviderContextCap(config, name);
     save(config);
+    cleanupRemovedGcpCredentials(removedCredentials);
     await replaceProviderAccountSet(name, null);
     reconcileLiveStateStores();
     const { clearModelCache: clearCache } = await import("../../codex/model-cache");

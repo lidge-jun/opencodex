@@ -21,6 +21,8 @@ import { loadKeyringBinding } from "../lib/keyring-native";
 import type { OcxProviderConfig } from "../types";
 
 export const KEYCHAIN_REFERENCE_PREFIX = "keychain:";
+/** Stored GCP JSON uses the same OS service, but must never be restored as a literal API key. */
+export const GCP_CREDENTIAL_MARKER_PREFIX = "gcp-sa:";
 export const PROVIDER_KEYCHAIN_SERVICE = "opencodex.provider-api-key.v1";
 
 export interface ProviderKeychainEntry {
@@ -125,7 +127,7 @@ export type ProviderKeyStoreKind = "keychain" | "env" | "file" | "none";
 export function providerKeyStoreKind(provider: Pick<OcxProviderConfig, "apiKey"> | undefined): ProviderKeyStoreKind {
   const key = provider?.apiKey;
   if (!key) return "none";
-  if (isKeychainReference(key)) return "keychain";
+  if (key.startsWith(GCP_CREDENTIAL_MARKER_PREFIX) || isKeychainReference(key)) return "keychain";
   if (/^\$\{?\w+\}?$/.test(key)) return "env";
   return "file";
 }
