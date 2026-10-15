@@ -145,6 +145,9 @@ Cursor, Kiro, Zed Hosted AI and Nous Portal are login-only and have no API-key e
 login-only too: `ocx login google-antigravity` signs in with your Google account over the Cloud Code
 Assist wire, and the `google` preset beside it is the AI Studio Gemini API — a different product
 reached with its own key, not a key mode for the same login.
+The Antigravity Accounts tab shows an observed membership tier as a badge beside the account
+label, using the upstream tier ID (for example `free-tier` or `gemini-pro`). No badge appears
+when the plan is unknown; it does not affect routing or quota.
 
 Gemini 4 Argon (`gemini-4-argon`) is listed on the `google` preset with low, medium (the
 default), and high thinking levels. Google offers it on the paid Gemini API tier only, not the free

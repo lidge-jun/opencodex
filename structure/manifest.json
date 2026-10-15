@@ -337,6 +337,13 @@
       "documents": ["src/oauth/"]
     },
     {
+      "path": "providers/oauth-reconciliation.md",
+      "tier": 4,
+      "title": "OAuth Preset Reconciliation",
+      "scope": "Operator limits and per-model declarations across startup reconciliation and OAuth upsert.",
+      "documents": ["src/oauth/"]
+    },
+    {
       "path": "providers-and-adapters.md",
       "tier": 4,
       "title": "Providers And Adapters",
@@ -525,6 +532,23 @@
         "src/routing/history/",
         "src/server/",
         "src/usage/"
+      ]
+    },
+    {
+      "path": "pricing.md",
+      "tier": 5,
+      "title": "Model Price Overrides",
+      "scope": "User price policies, prompt-length rate selection, persistence and estimate cache invalidation.",
+      "documents": [
+        "src/config/live-reconcile.ts",
+        "src/cli/models-runtime.ts",
+        "src/types/provider.ts",
+        "src/config/schema/leaf-validators.ts",
+        "src/server/management/model-routes.ts",
+        "src/usage/cost.ts",
+        "src/usage/user-cost-overlays.ts",
+        "src/usage/user-cost-validation.ts",
+        "gui/src/components/ModelPriceDialog.tsx"
       ]
     },
     {
