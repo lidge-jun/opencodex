@@ -737,13 +737,13 @@ function messagesToAnthropicFormat(
   toolNames: { toWire: (name: string) => string },
   serverReplay?: ReadonlyMap<string, readonly Record<string, unknown>[]>,
 ): { system: string | undefined; messages: unknown[] } {
-  // The client's server-tool exchanges go back ahead of the block they preceded, matched by that
-  // anchor's occurrence count so an identical earlier text cannot take a later turn's run.
-  const seenAnchors = new Map<string, number>();
+  // The client's server-tool exchanges go back ahead of the block they preceded. Their anchors are
+  // unique in the caller's history (replayedAnthropicServerBlocks drops repeated ones); each is used once.
+  const pendingReplay = new Map(serverReplay);
   const replayed = (anchor: string) => {
-    const n = seenAnchors.get(anchor) ?? 0;
-    seenAnchors.set(anchor, n + 1);
-    return serverReplay?.get(`${anchor}#${n}`) ?? [];
+    const blocks = pendingReplay.get(anchor) ?? [];
+    pendingReplay.delete(anchor);
+    return blocks;
   };
   // One allocator for the whole request: a tool_result must resolve to the SAME wire id its
   // call got, and two distinct raw ids must never collapse into one. Conforming ids are claimed
