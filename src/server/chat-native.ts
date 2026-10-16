@@ -587,6 +587,7 @@ export async function runNativeChatAttempt(
     let retries = 0;
     while (
       response.status === 429
+      && responseOwnsDistributedKey
       // A 429 this proxy synthesized for a refused reset replay is not a provider rate
       // limit: waiting and re-sending here is exactly the duplicate inference the refusal
       // exists to stop. It kept the same shape under the old 502 only because 502 never
