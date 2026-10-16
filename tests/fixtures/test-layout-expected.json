@@ -517,6 +517,8 @@
   "codex-plugins-doctor.test.ts": "codex-integration", "codex-pool-plan-exclusion.test.ts": "codex-integration",
   "codex-pool-refresh-backoff.test.ts": "codex-integration",
   "codex-pool-request-owned-main.test.ts": "codex-integration", "codex-pool-rotation.test.ts": "codex-integration",
+    "codex-quota-weighted.test.ts": "codex-integration",
+    "codex-quota-weighted-recovery.test.ts": "codex-integration",
   "codex-priority-failback.test.ts": "codex-integration", "codex-idle-window.test.ts": "codex-integration",
   "codex-prompt-adopt.test.ts": "codex-integration", "codex-prompt-base-variants.test.ts": "codex-integration",
   "codex-prompt-journal.test.ts": "codex-integration", "codex-prompt-layers-read.test.ts": "codex-integration",

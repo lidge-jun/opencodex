@@ -79,7 +79,7 @@ pause <provider> <id|alias|main>  將帳號移出自動選擇。
 resume <provider> <id|alias|main>  將暫停的帳號放回自動選擇。
 pause-exhausted <provider>  暫停所有配額已用盡的帳號。
 clear-cooldown <openai|anthropic> <id|alias|main>  清除上游失敗後設定的冷卻。
-strategy <provider> [<quota|round-robin|fill-first|reset-first>]  帳號池放置策略；省略取值即讀取目前值。
+strategy <provider> [<quota|round-robin|fill-first|reset-first|quota-weighted>]  帳號池放置策略；省略取值即讀取目前值。
 sticky <provider> [<1-100>]  已綁定執行緒在同一帳號上保留的請求數；省略取值即讀取目前值。
 remove <provider> <id|alias|main> --yes  在存在檢查後移除已儲存的帳號或金鑰。
 add-key <provider> [--label <label>]  僅從 piped stdin 讀取並新增金鑰。
@@ -359,3 +359,11 @@ ocx models remove deepseek/deepseek-v4 --yes
 帶斜線的模型選擇器為路由（`anthropic/claude-opus-5`）；裸 id 被視為原生 OpenAI 模型，因此 `--native` 僅在需要對一個否則看起來是路由的 id 強制該判讀時才需要。
 
 `--modalities` 僅接受 `text`、`image` 與 `audio`。Codex 將該欄位解析為封閉列舉，並拒絕包含任何其他值的整個目錄，因此 `add`、`edit` 與管理 API 都會拒絕錯誤值，而非儲存目錄寫入器稍後必須剝除的內容（#759）。
+
+### `quota-weighted`
+
+新建或未綁定任務分配給剩餘額度最多的帳號；接近重置只為本視窗加少量平分決勝權重（最多 +10%，較寬檔 +5%），只影響剩餘份額接近的候選比較。剩餘相同則均勻輪轉；額度未知的帳號在被觀測到之前保留少量比例探測份額。各視窗共同限制權重，健康會話保持綁定。達到帳號有效門檻後停止分配新任務；所有帳號均達門檻時不回退到目前帳號。未知額度只獲小份額。獨立模型額度使用原配額模式。此模式僅適用於 Codex。
+
+```sh
+ocx account pool openai --strategy quota-weighted
+```

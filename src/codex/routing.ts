@@ -809,7 +809,7 @@ export function previewCodexAccountForRequest(
     quotaScope,
     strategySelectionOptionsForModelDetour(config, now, quotaScope, selectionOptions),
   );
-  if (strategyPick) return strategyPick;
+  if (strategyPick || accountPoolStrategyForScope(config, quotaScope) === "quota-weighted") return strategyPick;
 
   let active = getEffectiveActiveCodexAccountId(config) ?? null;
   if (!active) {
@@ -1147,6 +1147,10 @@ export function resolveCodexAccountForThreadDetailed(
       if (sharesActiveSelection(strategyPick, selectionOptions)) promoteActiveCodexAccount(config, strategyPick);
     }
     return { status: "selected", accountId: strategyPick, affinity: affinityAfterRelease(threadId, releaseReason) };
+  }
+
+  if (accountPoolStrategyForScope(config, quotaScope) === "quota-weighted") {
+    return { status: "none", affinity: affinityOnNoAccount(threadId, releaseReason) };
   }
 
   let active = getEffectiveActiveCodexAccountId(config);

@@ -1,3 +1,4 @@
+import { codexQuotaSchedulingWeight, codexQuotaUnknownForScheduling, dominantTierKernelWeights } from "./quota-weighted";
 import { getEffectiveCodexAutoSwitchThreshold } from "../account-auto-switch";
 import { codexAccountUsesCreditsAfterLimit, isCodexAccountHeldForCredits } from "../account-credit-use";
 import { isCodexAccountPaused } from "../account-pause";
@@ -21,6 +22,7 @@ import { MAIN_CODEX_ACCOUNT_ID, getMainAccountPlan } from "../main-account";
 import type { OcxConfig } from "../../types";
 import { CODEX_FAILURE_WINDOW_MS, computeCodexUsageScore } from "./cooldown-math";
 import { failureWindowSteersNewThreads } from "./failure-window";
+import { canAcquireCodexQuotaProbeLease, canAcquireCodexQuotaScopeProbeLease } from "./probe-lease";
 import {
   codexPoolKeyForScope,
   dropSpentCredentialFailure,
@@ -201,6 +203,7 @@ export function getEligiblePoolAccounts(
   quotaScope?: CodexQuotaScope,
   selectionOptions?: CodexAccountUsabilityOptions,
   skipFailoverReadyCandidates = false,
+  includeRecoverableHealth: false | "ready" | "blocked" = false,
 ): readonly string[] {
   const excludedPlans = excludedCodexPoolPlanKeys(config);
   const ids = (config.codexAccounts ?? [])
@@ -211,10 +214,10 @@ export function getEligiblePoolAccounts(
       && !isCodexAccountHeldAtUsageLimit(config, account.id, now, selectionOptions)
       && !isAccountNeedsReauth(account.id)
       && (!skipFailoverReadyCandidates || !shouldFailover(config, account.id, now)))
-    .filter(account => getCodexQuotaHealthSnapshot(account.id, quotaScope, now) === null)
-    .filter(account => !isCodexAccountSoftAvoided(account.id, now))
-    .filter(account => !failureWindowSteersNewThreads(config, account.id, now))
-    .filter(account => !isCodexQuotaAvoided(account.id, quotaScope, now))
+    .filter(account => includeRecoverableHealth || getCodexQuotaHealthSnapshot(account.id, quotaScope, now) === null)
+    .filter(account => includeRecoverableHealth || !isCodexAccountSoftAvoided(account.id, now))
+    .filter(account => includeRecoverableHealth || !failureWindowSteersNewThreads(config, account.id, now))
+    .filter(account => includeRecoverableHealth || !isCodexQuotaAvoided(account.id, quotaScope, now))
     .filter(account => !isCodexPoolRefreshCooling(account.id, now))
     .filter(account => isCodexAccountUsable(config, account.id, selectionOptions))
     .map(account => account.id);
@@ -223,15 +226,15 @@ export function getEligiblePoolAccounts(
   if (
     excludeId !== MAIN_CODEX_ACCOUNT_ID
     && !isCodexAccountPaused(config, MAIN_CODEX_ACCOUNT_ID)
-    && getCodexQuotaHealthSnapshot(MAIN_CODEX_ACCOUNT_ID, quotaScope, now) === null
-    && !isCodexAccountSoftAvoided(MAIN_CODEX_ACCOUNT_ID, now)
-    && !failureWindowSteersNewThreads(config, MAIN_CODEX_ACCOUNT_ID, now)
+    && (includeRecoverableHealth || getCodexQuotaHealthSnapshot(MAIN_CODEX_ACCOUNT_ID, quotaScope, now) === null)
+    && (includeRecoverableHealth || !isCodexAccountSoftAvoided(MAIN_CODEX_ACCOUNT_ID, now))
+    && (includeRecoverableHealth || !failureWindowSteersNewThreads(config, MAIN_CODEX_ACCOUNT_ID, now))
     // The main login is not in `config.codexAccounts`, so it never passes through the
     // filters above and this is the only place an avoidance window can exclude it. Without
     // this the window a refusal announced applies to the pool but not to the account that
     // earned it: the cooldown caps at fifteen minutes, the window runs up to six hours, and
     // in between the main account returns as a first-class candidate.
-    && !isCodexQuotaAvoided(MAIN_CODEX_ACCOUNT_ID, quotaScope, now)
+    && (includeRecoverableHealth || !isCodexQuotaAvoided(MAIN_CODEX_ACCOUNT_ID, quotaScope, now))
     && !isCodexPoolRefreshCooling(MAIN_CODEX_ACCOUNT_ID, now)
     && !isCodexAccountHeldAtUsageLimit(config, MAIN_CODEX_ACCOUNT_ID, now, selectionOptions)
     && (!skipFailoverReadyCandidates || !shouldFailover(config, MAIN_CODEX_ACCOUNT_ID, now))
@@ -239,6 +242,14 @@ export function getEligiblePoolAccounts(
   ) {
     ids.unshift(MAIN_CODEX_ACCOUNT_ID);
   }
+  // Readiness must narrow BEFORE priority: a literal Retry-After or an owned probe
+  // cannot mask a soft-avoided account that final auth could already admit.
+  const candidates = includeRecoverableHealth === "ready" ? ids.filter(id => {
+    const cooldown = getCodexQuotaHealthSnapshot(id, quotaScope, now);
+    return cooldown === null || (cooldown.quotaScope
+      ? canAcquireCodexQuotaScopeProbeLease(id, cooldown.quotaScope, now)
+      : canAcquireCodexQuotaProbeLease(id, now));
+  }) : ids;
   // Single choke point for selection order: every strategy, failover, and preview
   // reaches the pool through here, so tiering applies once rather than per picker.
   // Eligibility above is unchanged — this only narrows an already-eligible list.
@@ -248,9 +259,11 @@ export function getEligiblePoolAccounts(
   // is selected. Both steps narrow an already-eligible list and neither can empty it.
   const pinned = pinnedCodexAccountId(config);
   return selectPriorityTier(
-    withoutModelDeniedAccounts(ids, selectionOptions?.deniedModelAccountIds, pinned),
+    withoutModelDeniedAccounts(candidates, selectionOptions?.deniedModelAccountIds, pinned),
     codexSelectionPriorityLookup(config),
-    id => hasCodexQuotaHeadroom(config, id, selectionOptions, now),
+    id => accountPoolStrategyForScope(config, quotaScope) === "quota-weighted"
+      ? quotaWeightForAccount(config, id, now, selectionOptions) > 0
+      : hasCodexQuotaHeadroom(config, id, selectionOptions, now),
     pinned,
   );
 }
@@ -267,7 +280,7 @@ function listEligibleCodexAccountIds(
 /** Shared reset timestamps are not evidence for independent model-quota groups. */
 export function accountPoolStrategyForScope(config: OcxConfig, quotaScope?: CodexQuotaScope) {
   const strategy = normalizeCodexAccountPoolStrategy(config.accountPoolStrategy);
-  return strategy === "reset-first" && isIndependentCodexQuotaScope(quotaScope) ? "quota" : strategy;
+  return (strategy === "reset-first" || strategy === "quota-weighted") && isIndependentCodexQuotaScope(quotaScope) ? "quota" : strategy;
 }
 
 function stickyLimitForConfig(config: OcxConfig): number {
@@ -474,13 +487,26 @@ export function pickUnboundStrategyAccount(
   const poolKey = codexPoolKeyForScope(quotaScope);
 
   let picked: string | null = null;
-  if (strategy === "round-robin") {
-    const eligible = listEligibleCodexAccountIds(config, now, quotaScope, selectionOptions);
-    const limit = stickyLimitForConfig(config);
-    if (!commit) {
-      return peekRoundRobinAccount(poolKey, eligible, limit);
+  if (strategy === "round-robin" || strategy === "quota-weighted") {
+    let weights = strategy === "quota-weighted"
+      ? quotaWeightedCandidates(config, listEligibleCodexAccountIds(config, now, quotaScope, selectionOptions), now, selectionOptions) : undefined;
+    if (weights && ![...weights.raw.values()].some(weight => weight > 0)) {
+      // Last resort only: soft avoidance must not strand recovery after the capped hard
+      // cooldown. Keep policy/usability fences and positive RAW scheduling weight;
+      // final auth still owns cooldown deadlines and the single recovery-probe lease.
+      const recovery = (readiness: "ready" | "blocked") => getEligiblePoolAccounts(
+        config, undefined, now, quotaScope, selectionOptions, false, readiness,
+      ).filter(id => quotaWeightForAccount(config, id, now, selectionOptions) > 0);
+      const ready = recovery("ready");
+      weights = quotaWeightedCandidates(config, ready.length > 0 ? ready : recovery("blocked"), now, selectionOptions);
     }
-    picked = pickRoundRobinAccount(poolKey, eligible, limit);
+    const eligible = weights ? [...weights.raw].filter(([, weight]) => weight > 0).map(([id]) => id)
+      : listEligibleCodexAccountIds(config, now, quotaScope, selectionOptions);
+    const limit = strategy === "quota-weighted" ? 1 : stickyLimitForConfig(config);
+    if (!commit) {
+      return peekRoundRobinAccount(poolKey, eligible, limit, weights?.kernel);
+    }
+    picked = pickRoundRobinAccount(poolKey, eligible, limit, weights?.kernel);
     if (!picked) return null;
     if (commitSharedActive && sharesActiveSelection(picked, selectionOptions)) {
       if (!isIndependentCodexQuotaScope(quotaScope)
@@ -509,6 +535,24 @@ export function pickUnboundStrategyAccount(
   }
 
   return null;
+}
+
+/**
+ * Same candidate weights for new assignments and failure alternates; eligibility stays upstream.
+ * `raw` carries the positive-weight eligibility set, `kernel` the dominant-tier weights the
+ * rotation kernel consumes; non-dominant accounts keep weight 0 so seeds and failure fallback
+ * can still reach them.
+ */
+function quotaWeightForAccount(config: OcxConfig, id: string, now: number, options?: CodexAccountUsabilityOptions): number {
+  return codexQuotaSchedulingWeight(getAccountQuota(id), getPoolAccountPlanForSelection(config, id, options),
+    getEffectiveCodexAutoSwitchThreshold(config, id), now, codexAccountUsesCreditsAfterLimit(config, id));
+}
+
+function quotaWeightedCandidates(config: OcxConfig, ids: readonly string[], now: number, options?: CodexAccountUsabilityOptions) {
+  const raw = new Map(ids.map(id => [id, quotaWeightForAccount(config, id, now, options)] as const));
+  const kernel = dominantTierKernelWeights(raw, id => codexQuotaUnknownForScheduling(getAccountQuota(id),
+    getPoolAccountPlanForSelection(config, id, options), now, codexAccountUsesCreditsAfterLimit(config, id)));
+  return { raw, kernel };
 }
 
 export function getPoolAccountPlan(config: OcxConfig, accountId: string): string | undefined {
@@ -659,9 +703,11 @@ export function pickAlternateCodexAccount(
   // result: when the excluded account is the only healthy member of the top
   // tier, the tier walk must be free to descend instead of selecting that tier
   // and then handing back an empty list.
-  if (strategy === "round-robin") {
+  if (strategy === "round-robin" || strategy === "quota-weighted") {
     const eligible = getEligiblePoolAccounts(config, excludeId, now, quotaScope, selectionOptions);
-    return pickRoundRobinAccount(codexPoolKeyForScope(quotaScope), eligible, stickyLimitForConfig(config));
+    const weights = strategy === "quota-weighted" ? quotaWeightedCandidates(config, eligible, now, selectionOptions) : undefined;
+    const ids = weights ? eligible.filter(id => weights.raw.get(id)! > 0) : eligible;
+    return pickRoundRobinAccount(codexPoolKeyForScope(quotaScope), ids, weights ? 1 : stickyLimitForConfig(config), weights?.kernel);
   }
   if (strategy === "fill-first") {
     const eligible = getEligiblePoolAccounts(config, excludeId, now, quotaScope, selectionOptions);
@@ -692,9 +738,12 @@ export function peekAlternateCodexAccount(
   quotaScope?: CodexQuotaScope,
   selectionOptions?: CodexAccountUsabilityOptions,
 ): string | null {
-  if (accountPoolStrategyForScope(config, quotaScope) === "round-robin") {
+  const strategy = accountPoolStrategyForScope(config, quotaScope);
+  if (strategy === "round-robin" || strategy === "quota-weighted") {
     const eligible = getEligiblePoolAccounts(config, excludeId, now, quotaScope, selectionOptions);
-    return peekRoundRobinAccount(codexPoolKeyForScope(quotaScope), eligible, stickyLimitForConfig(config));
+    const weights = strategy === "quota-weighted" ? quotaWeightedCandidates(config, eligible, now, selectionOptions) : undefined;
+    const ids = weights ? eligible.filter(id => weights.raw.get(id)! > 0) : eligible;
+    return peekRoundRobinAccount(codexPoolKeyForScope(quotaScope), ids, weights ? 1 : stickyLimitForConfig(config), weights?.kernel);
   }
   return pickAlternateCodexAccount(config, excludeId, now, quotaScope, selectionOptions);
 }

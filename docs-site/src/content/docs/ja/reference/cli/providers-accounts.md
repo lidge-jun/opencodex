@@ -95,7 +95,7 @@ pause <provider> <id|alias|main>  Hold an account out of automatic selection.
 resume <provider> <id|alias|main>  Return a paused account to automatic selection.
 pause-exhausted <provider>  Pause every account whose quota is spent.
 clear-cooldown <openai|anthropic> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
-strategy <provider> [<quota|round-robin|fill-first|reset-first>]  Pool placement strategy; omit the value to read it.
+strategy <provider> [<quota|round-robin|fill-first|reset-first|quota-weighted>]  Pool placement strategy; omit the value to read it.
 sticky <provider> [<1-100>]  Requests a bound thread keeps on one account; omit the value to read it.
 priority <provider> <id|alias|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
 remove <provider> <id|alias|main> --yes  Remove a stored account or key after an existence check.
@@ -347,3 +347,11 @@ ocx models remove deepseek/deepseek-v4 --yes
 スラッシュの付いたモデル セレクターはルーティングされます (`anthropic/claude-opus-5`)。裸の ID はネイティブ OpenAI モデルとして扱われるため、`--native` は、ルーティングされているように見える ID の読み取りを強制する場合にのみ必要です。
 
 `--modalities` は、`text`、`image`、および `audio` のみを受け入れます。 Codex はそのフィールドを閉じた列挙型として解析し、他の値を含むカタログ全体を拒否するため、`add`、`edit`、および管理 API はすべて、カタログ作成者が後で削除する必要があるものを保存するのではなく、不正な値を拒否します (#759)。
+
+### `quota-weighted`
+
+新規・未紐付けタスクは残り枠が最大のアカウントに割り当てます。近いリセットは自分の期間に最大+10%(広い帯では+5%)のタイブレーク加点を行うだけで、残り枠が近い候補間の順位に影響します。同率なら均等にローテーションし、枠不明のアカウントは観測されるまで小さな按分プローブ分を保持します。各期間の枠が重みを制限します。正常な会話の紐付けは維持します。しきい値以上のアカウントには新規配分せず、すべてが上限に達すると現在のアカウントへフォールバックしません。独立モデル枠はquota方式を使います。Codex専用です。
+
+```sh
+ocx account pool openai --strategy quota-weighted
+```

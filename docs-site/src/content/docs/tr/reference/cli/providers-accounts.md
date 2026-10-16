@@ -129,7 +129,7 @@ pause <provider> <id|alias|main>  Hold an account out of automatic selection.
 resume <provider> <id|alias|main>  Return a paused account to automatic selection.
 pause-exhausted <provider>  Pause every account whose quota is spent.
 clear-cooldown <openai|anthropic> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
-strategy <provider> [<quota|round-robin|fill-first|least-loaded|reset-first>]  Havuz stratejisi; least-loaded yalnızca Kiro içindir.
+strategy <provider> [<quota|round-robin|fill-first|least-loaded|reset-first|quota-weighted>]  Havuz stratejisi; least-loaded yalnızca Kiro içindir.
 sticky <provider> [<1-100>]  Requests a bound thread keeps on one account; omit the value to read it.
 priority <provider> <id|alias|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
 remove <provider> <id|alias|main> --yes  Remove a stored account or key after an existence check.
@@ -518,3 +518,11 @@ kapalı bir enum olarak ayrıştırır ve başka herhangi bir değer içeren tü
 kataloğu reddeder, bu nedenle `add`, `edit` ve yönetim API'si katalog
 yazıcısının daha sonra çıkarması gereken bir şeyi saklamak yerine hatalı değeri
 reddeder (#759).
+
+### `quota-weighted`
+
+Yeni ve bağlanmamış görevler kalan kotası en yüksek hesaba atanır; yakın sıfırlama yalnızca kendi penceresine küçük bir eşitlik bozma eklemesi yapar (en fazla +%10, geniş bantta +%5) ve kalan kotası yakın adayların sırasını etkiler. Eşit kalanlar sırayla döner; kotası bilinmeyen hesap gözlenene kadar küçük bir oransal yoklama payı tutar. Her pencere ağırlığı sınırlar; sağlıklı bağlantılar korunur. Eşiğe ulaşan hesaba yeni görev verilmez; tüm hesaplar eşikteyse etkin hesaba geri dönülmez. Bağımsız model kotaları quota kullanır. Yalnızca Codex.
+
+```sh
+ocx account pool openai --strategy quota-weighted
+```

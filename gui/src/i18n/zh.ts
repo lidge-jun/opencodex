@@ -2103,6 +2103,10 @@ export const zh: Record<TKey, string> = {
 
   "accountPool.strategy": "轮换策略",
   "accountPool.strategyDesc": "OpenCodex 如何为新建/未绑定任务分配账号。",
+  "accountPool.strategyQuotaWeighted": "额度与刷新加权",
+  "accountPool.strategyHintQuotaWeighted": "新任务分配给剩余额度最多的账号，相同则轮转；临近刷新只加少量平分决胜权重。各额度窗口共同限制权重，健康任务保持绑定；独立模型额度使用配额模式。",
+  "accountPool.weightedBelowThreshold": "低于 {threshold}% 加权分配",
+  "accountPool.weightedThresholdOff": "额度阈值过滤已关闭",
   "accountPool.strategyResetFirst": "额度即将刷新优先",
   "accountPool.strategyHintResetFirst": "在低于用量阈值的账号中，优先选择下次5小时或周额度重置最早的账号。已绑定任务遵循配置的亲和策略。独立模型额度按用量排序。",
   "accountPool.strategyQuota": "配额",

@@ -546,7 +546,7 @@ pause <provider> <id|alias|main>  Hold an account out of automatic selection.
 resume <provider> <id|alias|main>  Return a paused account to automatic selection.
 pause-exhausted <provider>  Pause every account whose quota is spent.
 clear-cooldown <openai|anthropic> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
-strategy <provider> [<quota|round-robin|fill-first|least-loaded|reset-first>]  Pool placement strategy; least-loaded is Kiro-only.
+strategy <provider> [<quota|round-robin|fill-first|least-loaded|reset-first|quota-weighted>]  Pool placement strategy; least-loaded is Kiro-only.
 sticky <provider> [<1-100>]  Requests a bound thread keeps on one account; omit the value to read it.
 priority <provider> <id|alias|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
 remove <provider> <id|alias|main> --yes  Remove a stored account or key after an existence check.
@@ -1316,3 +1316,11 @@ The file is limited to 64 KiB. The server validates each route and stores it und
 
 Vision and web-search helpers match their own model independently and can fail locally when their
 strict route has no eligible account. See [Anthropic helper account routing](/reference/configuration/providers/#anthropicaccountpool-experimental).
+
+### `quota-weighted`
+
+Opt-in `quota-weighted` (Codex only) assigns new/unbound tasks to the account with the highest remaining-quota score; a fresh near reset adds only a small tie-break lift to its own window (at most +10%, or +5% in the wider band), so reset urgency can decide close scores. Equal shares rotate evenly, and an account with unknown quota keeps a small proportional probe share until it is observed. The tightest window caps the weight, so a near 5-hour reset cannot override tight weekly headroom. Healthy task bindings stay. Known accounts at their effective threshold are excluded from new assignments; if all candidates are filtered, no active-account fallback occurs. Unknown governing quota gets a small share, not full unused capacity. Threshold zero disables only threshold filtering. Independent model quotas use quota ordering; optional idle-window steering keeps its precedence. This balances relative quota percentages, not absolute token capacity across plans.
+
+```sh
+ocx account pool openai --strategy quota-weighted
+```

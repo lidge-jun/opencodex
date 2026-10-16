@@ -2086,6 +2086,10 @@ export const de: Record<TKey, string> = {
 
   "accountPool.strategy": "Rotationsstrategie",
   "accountPool.strategyDesc": "Wie OpenCodex einer neuen/ungebundenen Aufgabe ein Konto zuweist.",
+  "accountPool.strategyQuotaWeighted": "Kontingent- und Reset-Gewichtung",
+  "accountPool.strategyHintQuotaWeighted": "Neue Aufgaben gehen an das Konto mit dem größten Restkontingent; Gleichstand rotiert. Nahe Resets geben nur einen kleinen Gleichstandsbonus. Jedes Zeitfenster begrenzt das Gewicht. Gesunde Bindungen bleiben. Unabhängige Modellkontingente nutzen den Kontingentmodus.",
+  "accountPool.weightedBelowThreshold": "Gewichtet unter {threshold}%",
+  "accountPool.weightedThresholdOff": "Kontingentschwellenfilter aus",
   "accountPool.strategyResetFirst": "Nächste Rücksetzung zuerst",
   "accountPool.strategyHintResetFirst": "Unterhalb der Nutzungsschwelle wird die nächste 5-Stunden- oder Wochenrücksetzung bevorzugt. Gebundene Aufgaben folgen der konfigurierten Affinitätsregel. Unabhängige Modellkontingente werden nach Nutzung geordnet.",
   "accountPool.strategyQuota": "Kontingent",

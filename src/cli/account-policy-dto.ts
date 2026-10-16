@@ -19,7 +19,7 @@ const fields = z.enum(["enabled", "strategy", "stickyLimit", "autoSwitchThreshol
 export const poolSchema = z.object({
   provider: z.string(), kind: z.enum(["codex", "anthropic", "generic"]), supported: z.array(fields),
   enabled: z.boolean().nullable(), enabledEffective: z.boolean(),
-  strategy: z.enum(["quota", "round-robin", "fill-first", "reset-first", "least-loaded"]).nullable(),
+  strategy: z.enum(["quota", "round-robin", "fill-first", "reset-first", "quota-weighted", "least-loaded"]).nullable(),
   stickyLimit: z.number().int().min(1).max(100).nullable(), autoSwitchThreshold: nullableThreshold,
   quotaWindow: z.enum(["five-hour", "weekly", "max-utilization"]).nullable(),
   maxConcurrentPerAccount: z.number().int().min(1).max(100).nullable(),

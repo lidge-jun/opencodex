@@ -138,6 +138,7 @@ describe("account pool strategy helpers", () => {
     expect(normalizeAccountPoolStrategy("round-robin")).toBe("round-robin");
     expect(normalizeAccountPoolStrategy("fill-first")).toBe("fill-first");
     expect(normalizeAccountPoolStrategy("reset-first")).toBe("reset-first");
+    expect(normalizeAccountPoolStrategy("quota-weighted")).toBe("quota-weighted");
     expect(normalizeAccountPoolStrategy("weighted")).toBe(DEFAULT_ACCOUNT_POOL_STRATEGY);
     expect(normalizeAccountPoolStrategy(undefined)).toBe("quota");
   });
@@ -743,4 +744,26 @@ test("canonical reset-first settings survive a read and an empty successful writ
     return new Response(null, { status: 204 });
   });
   expect(written?.strategy).toBe("reset-first");
+});
+
+describe("Codex quota-weighted controls", () => {
+  test("renders weighted placement and threshold semantics without RR sticky controls", () => {
+    const render = (threshold: number) => renderToStaticMarkup(<LanguageProvider><AccountPoolStrategyControls
+      codex strategy="quota-weighted" threshold={threshold} stickyDraft="1"
+      onStrategyChange={() => {}} onStickyDraftChange={() => {}} onStickyCommit={() => {}} /></LanguageProvider>);
+    expect(render(80)).toContain("Quota &amp; reset weighted");
+    expect(render(80)).toContain("Weighted below 80%");
+    expect(render(80)).toContain("healthy bindings stay");
+    expect(render(80)).not.toContain("New/unbound assignments before rotate");
+    expect(render(0)).toContain("Quota threshold filter off");
+  });
+  test("canonical write roundtrips only the requested weighted strategy", async () => {
+    let body: unknown;
+    const result = await putCodexPoolStrategy("", { strategy: "quota-weighted" }, async (_url, init) => {
+      body = JSON.parse(String(init?.body));
+      return Response.json({ provider: "openai", kind: "codex", strategy: "quota-weighted", stickyLimit: 1 });
+    });
+    expect(body).toEqual({ provider: "openai", strategy: "quota-weighted" });
+    expect(result?.strategy).toBe("quota-weighted");
+  });
 });

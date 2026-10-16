@@ -761,40 +761,42 @@ describe("unified pool-settings contract (#695 wp5c)", () => {
     if (dir) removeTreeWithRetry(dir);
   });
 
-  test("reset-first round-trips through Codex settings and generic pools, never Anthropic", async () => {
+  test.each(["reset-first", "quota-weighted"])("%s round-trips through Codex settings and supported pool kinds", async strategy => {
     const server = startServer(0);
     try {
       const write = async (provider: string, strategy: string) => fetch(new URL("/api/pool/settings", server.url), {
         method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider, strategy }),
       });
-      const result = await write("openai", "reset-first");
+      const result = await write("openai", strategy);
       expect(result.status).toBe(200);
-      expect(await result.json()).toMatchObject({ kind: "codex", strategy: "reset-first" });
-      expect(loadConfig().accountPoolStrategy).toBe("reset-first");
+      expect(await result.json()).toMatchObject({ kind: "codex", strategy: strategy });
+      expect(loadConfig().accountPoolStrategy).toBe(strategy);
       const canonical = await fetch(new URL("/api/pool/settings?provider=openai", server.url));
-      expect(await canonical.json()).toMatchObject({ strategy: "reset-first" });
+      expect(await canonical.json()).toMatchObject({ strategy: strategy });
       const legacy = new Request("http://localhost/api/codex-auth/active");
       const legacyRead = await handleCodexAuthAPI(legacy, new URL(legacy.url), loadConfig());
-      expect(await legacyRead!.json()).toMatchObject({ accountPoolStrategy: "reset-first" });
-      // The Anthropic runtime implements quota/round-robin/fill-first only, so that kind
-      // refuses reset-first instead of storing a strategy it would ignore.
-      const rejected = await write("anthropic", "reset-first");
+      expect(await legacyRead!.json()).toMatchObject({ accountPoolStrategy: strategy });
+      const rejected = await write("anthropic", strategy);
       expect(rejected.status).toBe(400);
       expect((await rejected.json() as { error: string }).error).toBe("strategy must be one of: quota, round-robin, fill-first");
-      // A generic OAuth pool accepts and round-trips it.
-      const antigravityWrite = await write("google-antigravity", "reset-first");
-      expect(antigravityWrite.status).toBe(200);
-      expect(await antigravityWrite.json()).toMatchObject({ kind: "generic", strategy: "reset-first" });
-      const antigravityRead = await fetch(new URL("/api/pool/settings?provider=google-antigravity", server.url));
-      expect(await antigravityRead.json()).toMatchObject({ kind: "generic", strategy: "reset-first" });
-      expect(loadConfig().providers["google-antigravity"]?.oauthAccountFailover?.strategy).toBe("reset-first");
+      const genericWrite = await write("google-antigravity", strategy);
+      if (strategy === "reset-first") {
+        expect(genericWrite.status).toBe(200);
+        expect(await genericWrite.json()).toMatchObject({ kind: "generic", strategy });
+        const genericRead = await fetch(new URL("/api/pool/settings?provider=google-antigravity", server.url));
+        expect(await genericRead.json()).toMatchObject({ kind: "generic", strategy });
+        expect(loadConfig().providers["google-antigravity"]?.oauthAccountFailover?.strategy).toBe(strategy);
+      } else {
+        expect(genericWrite.status).toBe(400);
+        await genericWrite.text();
+      }
       const compatibility = new Request("http://localhost/api/codex-auth/pool-strategy", {
-        method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ strategy: "reset-first" }),
+        method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ strategy: strategy }),
       });
       const compatibilityWrite = await handleCodexAuthAPI(compatibility, new URL(compatibility.url), loadConfig());
       expect(compatibilityWrite!.status).toBe(200);
-      expect(await compatibilityWrite!.json()).toMatchObject({ accountPoolStrategy: "reset-first" });
-      expect(loadConfig().accountPoolStrategy).toBe("reset-first");
+      expect(await compatibilityWrite!.json()).toMatchObject({ accountPoolStrategy: strategy });
+      expect(loadConfig().accountPoolStrategy).toBe(strategy);
     } finally {
       await server.stop(true);
     }

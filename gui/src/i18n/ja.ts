@@ -2530,6 +2530,10 @@ export const ja: Record<TKey, string> = {
 
   "accountPool.strategy": "ローテーション戦略",
   "accountPool.strategyDesc": "OpenCodex が新規/未紐付けタスクへアカウントを割り当てる方法です。",
+  "accountPool.strategyQuotaWeighted": "残量・リセット加重",
+  "accountPool.strategyHintQuotaWeighted": "新規タスクは残り枠最大のアカウントに割り当て、同率はローテーションします。リセット直前は同点決着用のわずかな加点のみです。各期間の枠が重みを制限し、正常な紐付けは維持します。独立したモデル枠はクォータ方式を使います。",
+  "accountPool.weightedBelowThreshold": "{threshold}% 未満で加重配分",
+  "accountPool.weightedThresholdOff": "使用量しきい値フィルター無効",
   "accountPool.strategyResetFirst": "リセットが近い順",
   "accountPool.strategyHintResetFirst": "使用率のしきい値未満から、次の5時間枠または週次枠のリセットが最も近いアカウントを選びます。紐付け済みタスクは設定されたアフィニティ方針に従います。独立したモデル枠は使用率順です。",
   "accountPool.strategyQuota": "クォータ",

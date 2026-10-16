@@ -205,7 +205,7 @@ pause <provider> <id|alias|main>  Hold an account out of automatic selection.
 resume <provider> <id|alias|main>  Return a paused account to automatic selection.
 pause-exhausted <provider>  Pause every account whose quota is spent.
 clear-cooldown <openai|anthropic> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
-strategy <provider> [<quota|round-robin|fill-first|reset-first>]  Pool placement strategy; omit the value to read it.
+strategy <provider> [<quota|round-robin|fill-first|reset-first|quota-weighted>]  Pool placement strategy; omit the value to read it.
 sticky <provider> [<1-100>]  Requests a bound thread keeps on one account; omit the value to read it.
 priority <provider> <id|alias|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
 remove <provider> <id|alias|main> --yes  Remove a stored account or key after an existence check.
@@ -473,3 +473,11 @@ ocx models remove deepseek/deepseek-v4 --yes
 일반 토큰 갱신은 기록을 유지합니다. 재로그인·삭제·계정 교체는 이전 기록과 분리합니다. 네이티브 메인 계정과 로그인 저장 전 조회는 포함하지 않습니다. 기록이 없다는 것은 관측 부족이며 사용량 0을 뜻하지 않습니다. 이 명령은 쿼터를 소비하지 않습니다. 관측을 바탕으로 한 용량 추정에는 아래 한계가 적용됩니다.
 
 같은 초기화 구간의 관측과 계정별 사용 기록이 있으면 보고된 토큰 기준 용량 추정도 표시합니다. 표본 수와 낮은 신뢰도를 함께 표시하며, 쿼터 반올림·외부 사용량·로그 라벨 유지 여부 때문에 제공자의 실제 토큰 한도와 다를 수 있습니다. 기록이 없거나 잘렸으면 근거 부족으로 표시합니다. `--limit`은 표시할 기록 수만 제한하며 추정 입력은 전체 보관 범위입니다.
+
+### `quota-weighted`
+
+새 작업과 미연결 작업은 잔여 할당량이 가장 많은 계정에 배정합니다. 가까운 초기화는 자신의 기간에 최대 +10%(넓은 구간은 +5%)의 동점 가산만 더할 뿐 잔여량이 비슷한 후보의 순위에 영향을 줍니다. 동률이면 균등하게 순환하고, 할당량을 알 수 없는 계정은 관측될 때까지 작은 비례 프로브 몫을 유지합니다. 각 기간의 한도를 함께 적용합니다. 정상 대화 연결은 유지합니다. 임계값 이상의 계정에는 새 작업을 배분하지 않으며 모든 계정이 임계값에 도달하면 현재 계정으로 돌아가지 않습니다. 독립 모델 할당량은 quota 모드를 사용합니다. Codex 전용입니다.
+
+```sh
+ocx account pool openai --strategy quota-weighted
+```
