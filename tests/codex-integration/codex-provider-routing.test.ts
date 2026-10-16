@@ -175,13 +175,21 @@ test("reserved provider IDs cannot claim consent", () => {
 test("concurrent sync processes leave a complete restorable config", () => {
   run(`
     allow();
+    const before = readFileSync(path, "utf8");
     const jobs = [18273, 18274, 18275].map(port => Bun.spawn([process.execPath, "--eval",
-      'import { injectCodexConfig } from "./src/codex/inject"; const result = await injectCodexConfig(' + port + ', {}); if (!result.success && !result.retryable) process.exit(2);'
+      'import { injectCodexConfig } from "./src/codex/inject"; const result = await injectCodexConfig(' + port + ', {}); process.stdout.write(JSON.stringify(result)); if (!result.success && !result.retryable) process.exit(2);'
     ], { cwd: process.cwd(), env: process.env, stdout: "pipe", stderr: "pipe" }));
-    const outcomes = await Promise.all(jobs.map(async job => ({ code: await job.exited, error: await new Response(job.stderr).text() })));
+    const outcomes = await Promise.all(jobs.map(async job => ({ code: await job.exited, error: await new Response(job.stderr).text(), output: await new Response(job.stdout).text() })));
     if (outcomes.some(result => result.code !== 0)) throw new Error("concurrent sync failed: " + JSON.stringify(outcomes));
+    const results = outcomes.map(outcome => JSON.parse(outcome.output));
+    if (results.some(result => !result.success && result.retryable !== true)) throw new Error("non-retryable concurrent result");
+    if (results.every(result => !result.success)) {
+      if (readFileSync(path, "utf8") !== before) throw new Error("retry-only syncs mutated config");
+      const converged = await injectCodexConfig(18273, {});
+      if (!converged.success || converged.configChanged !== true) throw new Error("uncontended sync did not converge: " + JSON.stringify(converged));
+    }
     const config = Bun.TOML.parse(readFileSync(path, "utf8"));
-    if (![18273, 18274, 18275].some(port => config.model_providers[id].base_url === "http://127.0.0.1:" + port + "/v1")) throw new Error("no sync published");
+    if (![18273, 18274, 18275].some(port => config.model_providers[id].base_url === "http://127.0.0.1:" + port + "/v1")) throw new Error("no sync published: " + JSON.stringify(outcomes));
   `);
   run("restoreApprovedCodexProviders();");
   expect(readFileSync(join(codexHome, "config.toml"), "utf8")).toBe(original);
