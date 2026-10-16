@@ -99,7 +99,7 @@ describe("the client registries cannot drift apart", () => {
     const guiRouting = await import("../../gui/src/app-routing");
 
     const expected = [...EXPORT_CLIENT_IDS].sort();
-    expect(expected).toHaveLength(19);
+    expect(expected).toHaveLength(20);
 
     expect([...INTEGRATION_CLIENT_IDS].sort()).toEqual(expected);
     expect([...gui.CLIENTS].sort()).toEqual(expected);
@@ -266,6 +266,7 @@ describe("every client survives a full lifecycle", () => {
     dsh: "llm-pi-ai:\n  providers:\n    mine:\n      api: openai-completions\n",
     mcode: "custom_provider:\n  mine:\n    name: Keep Me\n",
     zcode: '{\n  "provider": {\n    "builtin:zai-start-plan": { "name": "Keep Me", "kind": "anthropic" }\n  }\n}\n',
+    "gentle-shell": '{"providers":{"mine":{"api":"http://keep-me"}}}\n',
     // Prime reads Pi's models.json contract, so it seeds the same shape.
     prime: '{\n  "providers": {\n    "mine": { "api": "http://keep-me" }\n  }\n}\n',
     // Aside reads the same models.json contract as Pi and Prime.

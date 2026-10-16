@@ -40,6 +40,7 @@ export const TABS: readonly TabDefinition[] = [
   { id: "cursor", hash: "integrations/cursor", labelKey: "integrations.tab.cursor" },
   { id: "opencode", hash: "integrations/opencode", labelKey: "integrations.tab.opencode" },
   { id: "pi", hash: "integrations/pi", labelKey: "integrations.tab.pi" },
+  { id: "gentle-shell", hash: "integrations/gentle-shell", labelKey: "integrations.tab.gentleShell" },
   { id: "omp", hash: "integrations/omp", labelKey: "integrations.tab.omp" },
   { id: "hermes", hash: "integrations/hermes", labelKey: "integrations.tab.hermes" },
   { id: "openclaw", hash: "integrations/openclaw", labelKey: "integrations.tab.openclaw" },
@@ -62,6 +63,7 @@ export const TABS: readonly TabDefinition[] = [
 export const FILE_CLIENTS = new Set<FileIntegrationClientId>([
   "opencode",
   "pi",
+  "gentle-shell",
   "omp",
   "hermes",
   "openclaw",

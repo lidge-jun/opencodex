@@ -1,7 +1,7 @@
 # Responses Failover And Replay
 
 Combo `metered` eligibility follows the [runtime consent contract](../runtime.md#request-local-target-compatibility), including recovery selections. In `src/server/responses/run-turn-execution.ts`, streaming and buffered pre-output failures retain structured adapter status/type/code via `adapterFailureFromEvent`, and `formatErrorResponse`'s `classified` option keeps that verdict in the child body instead of re-deriving it from the status, wherever its type and message add nothing to what the status alone says; a verdict read from the message (quota, credentials, cyber policy, context overflow, catalog size) still outranks a generic adapter code, and spend-ledger, cyber-policy and replay-refusal overrides still win, and `consumeComboFailure` re-applies the client allowlist. Spend-ledger storage refusal remains 503. This preserves an exhausted subscription chain’s 429 response, a child's `insufficient_quota`, and the cool-free hop on `unsupported_input_modality` in `src/combos/failover.ts`. Coverage: `tests/adapters/anthropic/anthropic-subscription-chain.test.ts` and `tests/responses/responses-combo-run-turn-classified-failure.test.ts`.  `src/server/responses/request-transport.ts` resolves the final Anthropic model ID once for each enabled-pool request and holds its model route through admission. The three account-refusal retry sites in `adapter-dispatch.ts`, `adapter-continuation.ts` and `sidecar-execution.ts` use the same route, keep the original refusal if no replacement exists inside it, and preserve existing send and output replay limits. A local cooldown returns 429 with the earliest known Retry-After among accounts the route can use when they recover, and answers a usage limit when every held account is on spent quota ([quota exhaustion answer](../providers/anthropic-account-pool.md#quota-exhaustion-answer-and-fresh-read-recovery)); explicit fallback includes usable ordinary-pool accounts even when the saved route IDs have been removed, while a strict route stays route-scoped. Selection, refusal and 429-rotation logs use the rule’s 1-based `route:#<n>` position, never its name.
-Classified 429 admission follows the [Anthropic account-pool contract](../providers/anthropic-account-pool.md#classified-429-admission). Classified account-entitlement 403 recovery follows the [Anthropic account-pool contract](../providers/anthropic-account-pool.md#account-entitlement-refusal-recovery).
+Classified 429 admission follows the [Anthropic account-pool contract](../providers/anthropic-account-pool.md#classified-429-admission). Classified account-entitlement 403 recovery and combo 402 credit-refusal cooldowns follow the [Anthropic account-pool contract](../providers/anthropic-account-pool.md#account-entitlement-refusal-recovery); combo error normalization preserves the original physical-send proof, and a stale credential cannot cool its replacement.
 `src/server/responses/compaction-recovery-policy.ts` is a pure eligibility policy, not a dispatcher.
 It requires explicit configuration and normalized attempt evidence, preserves ordinary requests,
 and refuses cancellation, committed semantic output, tool effects, protected failures, exhausted
@@ -508,7 +508,7 @@ existing combo policy already treats as a safe hop. That ordering is the whole p
 total window cannot hold the turn plus the caller's allowance answers 200, emits a few hundred
 tokens and stops on `finish_reason: length`, which the Anthropic surface renders as an output-token
 error naming a limit the model never approached — and by then output has committed and no later
-target may be tried.
+target may be tried. When every failed target of an exhausted combo was refused this way with a send count of 0, `src/server/responses/core-combo.ts` keeps the `context_length_exceeded` overflow envelope that clients compact on, but replaces the provider wording from `context-overflow.ts` with a proxy-owned message saying the turn was refused locally, carrying each tried target's estimate and window (a target skipped for cooldown is not claimed to be too small). Those attempts, and the final row, keep the code `input_admission_refused` instead of `http_413`. One target that reached a provider keeps the provider wording for the whole combo.
 
 Scope is deliberately narrow. Direct and single-target requests keep the loose 2.5x
 pathological-input gate, because they have nowhere to hop. Compaction turns stay exempt. Unknown
@@ -517,8 +517,8 @@ limits for custom providers. Canonical native slugs that the narrower pinned tab
 resolve their window from the generated in-tree bundle, which is what made the gate inert on the
 route where this was first observed; explicit provider and operator caps may only narrow it.
 
-Regression coverage: `tests/server/input-admission.test.ts` and
-`tests/helpers/combo-context-headroom-cases.ts`.
+Regression coverage: `tests/server/input-admission.test.ts`,
+`tests/helpers/combo-context-headroom-cases.ts` and `tests/responses/responses-context-overflow.test.ts`.
 
 Native steering retains fixed phase deadlines and reconciled replay output; see the [steering stability contract](../transports/streaming-health.md#steering-deadlines-and-replay-completeness).
 

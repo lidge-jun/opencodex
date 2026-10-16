@@ -1,71 +1,13 @@
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { useKeyedClientResource } from "../client-resource";
 import { readJsonOrThrow } from "../fetch-json";
 import { IconLink, IconMonitor, IconPlus, IconRefresh, IconTerminal, IconTrash } from "../icons";
-import { type TKey, useT } from "../i18n/shared";
+import { useT } from "../i18n/shared";
 import { Notice, Select } from "../ui";
 import { confirmAction } from "../action-dialogs";
 import { remoteWorkspacePairingCommands } from "../remote-workspace-command";
-
-type RuntimeProfile = "codex" | "claude" | "pi";
-type RemoteCapability = "workspace.read" | "workspace.write" | "workspace.exec";
-type RemoteAccessMode = "read-only" | "workspace";
-type SessionStatus = "starting" | "ready" | "running" | "waiting_for_executor" | "failed" | "stopped";
-
-interface RemoteRoot { id: string; label: string }
-interface RemoteDevice {
-  id: string;
-  name: string;
-  platform: string;
-  capabilities: RemoteCapability[];
-  roots: RemoteRoot[];
-  online: boolean;
-  createdAt: string;
-  lastSeenAt: string | null;
-}
-interface RuntimeAvailability { available: boolean; version?: string; reason?: string }
-interface SessionEvent { sequence: number; at: string; type: "status" | "assistant" | "tool" | "error"; text: string }
-interface RemoteSession {
-  id: string;
-  profile: RuntimeProfile;
-  accessMode: RemoteAccessMode;
-  deviceId: string;
-  deviceName: string;
-  rootId: string;
-  rootLabel: string;
-  capabilities: RemoteCapability[];
-  tools: string[];
-  threadId: string | null;
-  resumable: boolean;
-  status: SessionStatus;
-  createdAt: string;
-  updatedAt: string;
-  events: SessionEvent[];
-}
-interface RemoteWorkspaceState {
-  available: boolean;
-  reason?: string;
-  devices: RemoteDevice[];
-  runtimes: Record<RuntimeProfile, RuntimeAvailability>;
-  sessions: RemoteSession[];
-}
-interface PairingGrant { code: string; expiresAt: string }
-
-const PROFILES: RuntimeProfile[] = ["codex", "claude", "pi"];
-const PROFILE_LABEL: Record<RuntimeProfile, string> = { codex: "Codex", claude: "Claude Code", pi: "Pi" };
-const STATUS_TKEY: Record<SessionStatus, TKey> = {
-  starting: "remote.status.starting",
-  ready: "remote.status.ready",
-  running: "remote.status.running",
-  waiting_for_executor: "remote.status.waiting",
-  failed: "remote.status.failed",
-  stopped: "remote.status.stopped",
-};
-const EVENT_TKEY: Record<Exclude<SessionEvent["type"], "assistant">, TKey> = {
-  status: "remote.event.status",
-  tool: "remote.event.tool",
-  error: "remote.event.error",
-};
+import { RemoteWorkspaceChats } from "../components/remote-workspace/RemoteWorkspaceChats";
+import { PROFILES, PROFILE_LABEL, type RuntimeProfile, type RemoteAccessMode, type RemoteSession, type RemoteWorkspaceState, type RemoteDevice, type PairingGrant } from "../components/remote-workspace/types";
 
 function isRuntimeProfile(value: string): value is RuntimeProfile {
   return value === "codex" || value === "claude" || value === "pi";
@@ -103,11 +45,7 @@ export default function RemoteWorkspace({ apiBase, hubOrigin }: { apiBase: strin
   const [selectedSessionId, setSelectedSessionId] = useState("");
   const [localSession, setLocalSession] = useState<RemoteSession | null>(null);
   const [pairing, setPairing] = useState<PairingGrant | null>(null);
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<"pair" | "session" | "revoke" | null>(null);
-  const [promptPending, setPromptPending] = useState(false);
-  const [stopPending, setStopPending] = useState(false);
-  const stoppedSessionId = useRef<string | null>(null);
   const [notice, setNotice] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const [copiedCommand, setCopiedCommand] = useState<"posix" | "powershell" | null>(null);
 
@@ -129,33 +67,10 @@ export default function RemoteWorkspace({ apiBase, hubOrigin }: { apiBase: strin
     ? selectedProfile
     : availableProfiles[0] ?? selectedProfile;
   const remoteSessions = state?.sessions ?? [];
-  const fallbackSession = [...remoteSessions].reverse().find(session => session.status !== "stopped");
-  const candidate = remoteSessions.find(session => session.id === selectedSessionId)
-    ?? (localSession?.id === selectedSessionId ? localSession : null)
-    ?? fallbackSession
-    ?? localSession;
-  const wantedSessionId = candidate?.id;
-  const polledSession = remoteSessions.find(session => session.id === wantedSessionId);
-  const selectedLocal = localSession?.id === wantedSessionId ? localSession : null;
-  const selectedSession = selectedLocal && (!polledSession
-    || (selectedLocal.events.at(-1)?.sequence ?? 0) > (polledSession.events.at(-1)?.sequence ?? 0))
-    ? selectedLocal : polledSession;
-  const effectiveSession = selectedSession
-    ?? fallbackSession
-    ?? localSession;
-
-  const prompt = drafts[effectiveSession?.id ?? ""] ?? "";
-  const setPrompt = (value: string | ((current: string) => string)) => {
-    const id = effectiveSession?.id;
-    if (!id) return;
-    setDrafts(current => ({ ...current, [id]: typeof value === "function" ? value(current[id] ?? "") : value }));
-  };
+  const sessions = localSession && !remoteSessions.some(session => session.id === localSession.id)
+    ? [...remoteSessions, localSession] : remoteSessions;
+  if (localSession && state?.sessions.some(session => session.id === localSession.id)) setLocalSession(null);
   const stale = Boolean(state && !resource.lastAttemptOk);
-  const canSend = Boolean(effectiveSession && prompt.trim() && busy === null && !promptPending && !stopPending && !stale
-    && effectiveSession.status !== "running" && effectiveSession.status !== "starting"
-    && effectiveSession.status !== "stopped"
-    && !(effectiveSession.status === "failed" && effectiveSession.resumable === false)
-    && !(effectiveSession.status === "waiting_for_executor" && !devices.find(device => device.id === effectiveSession.deviceId)?.online));
 
   const pairingCommands = useMemo(() => {
     if (!pairing) return { posix: "", powershell: "" };
@@ -205,50 +120,6 @@ export default function RemoteWorkspace({ apiBase, hubOrigin }: { apiBase: strin
     } finally { setBusy(null); }
   };
 
-  const sendPrompt = async () => {
-    if (!effectiveSession || !canSend) return;
-    const target = effectiveSession;
-    const submitted = prompt;
-    setPromptPending(true);
-    setNotice(null);
-    let responseStatus: number | undefined;
-    try {
-      const response = await fetch(`${apiBase}/api/remote-workspace/sessions/${target.id}/prompt`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ prompt: submitted }),
-      });
-      responseStatus = response.status;
-      const session = await readJsonOrThrow<RemoteSession>(response, t("remote.requestFailed"));
-      if (!session) throw new Error(t("remote.requestFailed"));
-      setPrompt(current => current === submitted ? "" : current);
-      if (stoppedSessionId.current !== target.id) setLocalSession(session);
-      void resource.refresh();
-    } catch (error) {
-      if (stoppedSessionId.current !== target.id) {
-        const rejected = responseStatus !== undefined && responseStatus >= 400 && responseStatus < 500;
-        setNotice({ tone: "err", text: rejected
-          ? error instanceof Error ? error.message : t("remote.requestFailed")
-          : t("remote.submissionUnknown") });
-        void resource.refresh();
-      }
-    } finally { setPromptPending(false); }
-  };
-
-  const stopSession = async () => {
-    if (!effectiveSession || stopPending) return;
-    const target = effectiveSession;
-    setStopPending(true);
-    try {
-      await mutate(`/api/remote-workspace/sessions/${target.id}`, { method: "DELETE" }, t("remote.requestFailed"));
-      stoppedSessionId.current = target.id;
-      setLocalSession({ ...target, status: "stopped" });
-      void resource.refresh();
-    } catch (error) {
-      setNotice({ tone: "err", text: error instanceof Error ? error.message : t("remote.requestFailed") });
-    } finally { setStopPending(false); }
-  };
-
   const revokeDevice = async (device: RemoteDevice) => {
     if (!(await confirmAction({ message: t("remote.revokeConfirm", { name: device.name }), confirmLabel: t("common.remove"), tone: "danger" }))) return;
     setBusy("revoke");
@@ -265,7 +136,7 @@ export default function RemoteWorkspace({ apiBase, hubOrigin }: { apiBase: strin
     setCopiedCommand(await copyText(command) ? kind : null);
   };
 
-  if (resource.loading && !state) return <div className="alert">{t("remote.loading")}</div>;
+  if (!state && !resource.error) return <div className="alert">{t("remote.loading")}</div>;
   if (resource.error && !state) {
     return <><Notice tone="err">{t("remote.loadFailed")}</Notice><button type="button" className="btn btn-ghost" onClick={() => void resource.refresh()}>{t("common.retry")}</button></>;
   }
@@ -337,7 +208,7 @@ export default function RemoteWorkspace({ apiBase, hubOrigin }: { apiBase: strin
                       type="button"
                       className="remote-revoke"
                       aria-label={t("remote.revoke")}
-                      disabled={busy !== null || promptPending || stopPending}
+                      disabled={busy !== null}
                       onClick={() => void revokeDevice(device)}
                     ><IconTrash /></button>
                   </div>
@@ -366,47 +237,14 @@ export default function RemoteWorkspace({ apiBase, hubOrigin }: { apiBase: strin
             {!state?.runtimes?.[effectiveProfile]?.available && state?.runtimes?.[effectiveProfile]?.reason
               ? <p className="remote-runtime-reason">{state.runtimes[effectiveProfile].reason}</p>
               : null}
-            <button type="button" className="btn btn-primary remote-start" onClick={() => void createSession()} disabled={!effectiveDevice?.online || !effectiveRoot || !state?.runtimes?.[effectiveProfile]?.available || busy !== null || promptPending || stopPending}>
+            <button type="button" className="btn btn-primary remote-start" onClick={() => void createSession()} disabled={!effectiveDevice?.online || !effectiveRoot || !state?.runtimes?.[effectiveProfile]?.available || busy !== null}>
               <IconTerminal /> {t("remote.startSession")}
             </button>
           </section>
 
-          <section className="panel remote-console-panel">
-            <div className="remote-section-title">
-              <div><h3>{t("remote.sessions")}</h3>{effectiveSession ? <small>{PROFILE_LABEL[effectiveSession.profile]} · {effectiveSession.deviceName}/{effectiveSession.rootLabel} · {effectiveSession.accessMode === "read-only" ? t("remote.access.readOnly") : effectiveSession.capabilities.includes("workspace.exec") ? t("remote.access.workspace") : t("remote.access.workspaceFilesOnly")}</small> : null}</div>
-              {effectiveSession ? <span className={`remote-status remote-status--${effectiveSession.status}`}>{t(STATUS_TKEY[effectiveSession.status])}</span> : null}
-            </div>
-            {remoteSessions.length > 1 ? (
-              <Select value={effectiveSession?.id ?? ""} options={remoteSessions.map(session => ({ value: session.id, label: `${PROFILE_LABEL[session.profile]} · ${session.deviceName}/${session.rootLabel}` }))} onChange={setSelectedSessionId} label={t("remote.sessions")} />
-            ) : null}
-            {!effectiveSession ? <p className="remote-empty remote-empty--console">{t("remote.noSessions")}</p> : (
-              <>
-                <div className="remote-events" aria-live="polite" aria-label={t("remote.events")}>
-                  {effectiveSession.events.length === 0 ? <p className="remote-empty">{t("remote.noEvents")}</p> : effectiveSession.events.map(event => (
-                    <div key={event.sequence} className={`remote-event remote-event--${event.type}`}>
-                      <span>{event.type === "assistant" ? PROFILE_LABEL[effectiveSession.profile] : t(EVENT_TKEY[event.type])}</span>
-                      <p>{event.text}</p>
-                    </div>
-                  ))}
-                </div>
-                {effectiveSession.status === "failed" && effectiveSession.resumable === false
-                  ? <Notice tone="err">{t("remote.notResumable")}</Notice>
-                  : null}
-                <label className="remote-composer">
-                  <span className="field-label">{t("remote.prompt")}</span>
-                  <textarea className="input" rows={4} value={prompt} onChange={event => setPrompt(event.target.value)} placeholder={t("remote.promptPlaceholder")} disabled={effectiveSession.status === "stopped" || (effectiveSession.status === "failed" && effectiveSession.resumable === false)} onKeyDown={event => {
-                    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); void sendPrompt(); }
-                  }} />
-                </label>
-                <div className="remote-console-actions">
-                  <button type="button" className="btn btn-primary" onClick={() => void sendPrompt()} disabled={!canSend}>{t("remote.send")}</button>
-                  <button type="button" className="btn btn-danger" onClick={() => void stopSession()} disabled={stopPending || effectiveSession.status === "stopped"}>{t("remote.stop")}</button>
-                </div>
-              </>
-            )}
-          </section>
         </div>
       </div>
+      <RemoteWorkspaceChats key={apiBase} apiBase={apiBase} sessions={sessions} devices={devices} selectedSessionId={selectedSessionId} stale={stale} refresh={resource.refresh} />
     </section>
   );
 }

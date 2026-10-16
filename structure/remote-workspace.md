@@ -39,6 +39,23 @@ The listener retains an awaited shutdown callback only after optional activation
 
 `gui/src/pages/RemoteWorkspace.tsx` defaults to read-only access, displays actual effective capabilities, and keeps Stop available while a prompt is pending. Error retries preserve draft text. The UI explains explicit Hub opt-in in each locale; no historical screenshot is evidence of the current surface.
 
+The session console supports a session sidebar and up to four independent conversation panes in
+both dashboard hosts. Dragging a session to an edge splits or moves its pane; accessible split
+buttons and keyboard-resizable separators offer the same layout controls. Closing a pane only
+changes the view. Drafts, prompt admission, local response cursors and Stop state are keyed by
+session so an in-flight request never disables an unrelated conversation. This is a dashboard
+feature; neither the upstream Codex terminal UI nor the official desktop renderer is modified.
+
+`gui/src/components/remote-workspace/RemoteWorkspaceChats.tsx` owns the session rail, panes and
+resize/drop controls; `split-layout.ts` validates and transforms the persisted layout tree.
+`use-session-actions.ts` isolates drafts, concurrent prompt requests and Stop races by session,
+while `types.ts` shares the dashboard contracts with the page. Only layout identifiers, axes
+and ratios are stored locally; draft text and session output remain in memory. Separators support
+axis-specific arrow keys and Home/End bounds. At viewport widths up to 760px, panes stack
+without separators or horizontal scrolling while the saved desktop split tree remains intact.
+A track that holds a nested split reserves that subtree's minimum width (`minLayoutWidth`), so
+side-by-side splits never scroll inside a pane column; an oversized tree scrolls the pane surface once.
+
 Hub runtime admission counts pending create/resume starts as well as live handles against global and per-device limits; every outcome releases its reservation. Stop and shutdown reclaim late resumed handles before clearing ownership. Coordinator result size limits normalize both response text and success, so bridge and MCP callers receive consistent errors.
 
 Prompt HTTP admission returns 202 with the existing session/event cursor; tracked operations publish terminal status for polling and attach a rejection observer immediately. Reconnect/resume cannot publish ready while a turn is active. The dashboard prefers newer local event cursors over stale polling, favors authoritative polling on ties, retains unconfirmed draft text with an uncertainty notice, and never retries prompt POSTs automatically.

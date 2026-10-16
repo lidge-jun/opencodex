@@ -559,8 +559,11 @@ describe("sidecar on429 wiring", () => {
     // The counts differ by rotator because the recovery sites differ, and each number is a
     // statement about which providers can recover where:
     //
-    //   generic  = 5: streaming loop, continuation loop, sidecar hook, runTurn preflight,
-    //                native Responses passthrough. The Antigravity 403 verify-account
+    //   generic  = 6: streaming loop, continuation loop, sidecar hook, runTurn preflight,
+    //                native Responses passthrough, plus the combo failure attribution in
+    //                core-combo.ts, which sends nothing: it records the refused account the
+    //                request budget left uncooled and spares the combo target only when the
+    //                rotator names a sibling. The Antigravity 403 verify-account
     //                arm deliberately does NOT use this rotator: a verification refusal
     //                must not record rate-limit cooldown semantics, so it moves via
     //                rotateAntigravityAccountOnAuthRefusal instead. The new default
@@ -581,7 +584,7 @@ describe("sidecar on429 wiring", () => {
     //
     // Adding a recovery site means deciding, deliberately, which rotators it needs and
     // updating the matching number. That decision is the thing this test exists to force.
-    expect(counts.generic).toBe(5);
+    expect(counts.generic).toBe(6);
     expect(counts.anthropic).toBe(3);
     expect(counts.key).toBe(7);
   });

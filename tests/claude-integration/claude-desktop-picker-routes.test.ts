@@ -234,7 +234,7 @@ describe("without a running picker controller", () => {
     // Off macOS the offline status says why first: picker mode is macOS-only.
     expect(status.body.picker).toMatchObject({
       effective: false,
-      reason: process.platform === "darwin" ? "proxy_unavailable" : "unsupported_platform",
+      reason: process.platform === "darwin" || process.platform === "win32" ? "proxy_unavailable" : "unsupported_platform",
     });
     const on = await put({ enabled: true, persist: true });
     expect(on.status).toBe(503);

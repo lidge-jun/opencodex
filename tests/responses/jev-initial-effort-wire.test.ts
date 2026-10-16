@@ -230,6 +230,20 @@ test("ordinary force invariant is not relaxed", () => {
     .toThrow("force combo default effort requires a valid defaultEffort");
 });
 
+test("a JEV combo whose only allowlist is unsupported names that target in its 503", async () => {
+  const f = fixture("responses", "model", "high");
+  f.config.providers.a!.reasoningEfforts = [];
+  f.config.combos!.auto!.targets[0]!.reasoningEfforts = ["high"];
+  const response = await handleResponses(new Request("http://localhost/v1/responses", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "combo/auto", input: "Solve the fixture task.", stream: false }),
+  }), f.config, { model: "", provider: "" }, {});
+  expect(response.status).toBe(503);
+  expect(((await response.json()) as { error: { message: string } }).error.message)
+    .toBe("No available targets for combo: auto (a/m: ineligible for this request)");
+  expect(f.inference.bodies).toHaveLength(0);
+});
+
 for (const lane of ["native", "responses"] as const) {
   test(`${lane}: unallowlisted service effort fails open without applying the rejected effort`, async () => {
     const f = fixture(lane, "typesafe", "high");

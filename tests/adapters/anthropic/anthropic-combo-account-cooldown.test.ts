@@ -182,3 +182,76 @@ test("a lone OAuth account without pool cooldown still cools the combo target", 
   expect(isComboTargetInCooldown("pooled", TARGET)).toBe(true);
   expect(sentTokens).toHaveLength(1);
 });
+
+/** The pool's own credit-balance wording (`isAccountRefusal`), on a 402. */
+function creditRefused(): Response {
+  return Response.json({ type: "error", error: {
+    type: "billing_error",
+    message: "Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.",
+  } }, { status: 402 });
+}
+
+test("one account's 402 credit refusal does not cool the combo target while a sibling is eligible", async () => {
+  const ids = await seed(2);
+  const config = configFor(() => answered());
+  const anthropic = config.providers.anthropic as OcxProviderConfig & { fetch: typeof fetch };
+  // Only the first account is out of credit; the second still answers.
+  anthropic.fetch = (async (_input, init) => {
+    const token = String(new Headers(init?.headers).get("authorization"));
+    sentTokens.push(token);
+    return token === `Bearer ${credential(0).access}` ? creditRefused() : answered();
+  }) as typeof fetch;
+  const fallbackSends: string[] = [];
+  config.providers.fallback = {
+    adapter: "anthropic", baseUrl: "https://fallback.test", authMode: "key", apiKey: "synthetic-fallback-key",
+    models: [MODEL], fetch: (async () => { fallbackSends.push("B"); return answered(); }) as typeof fetch,
+  } as OcxProviderConfig;
+  config.combos = { pooled: { strategy: "failover", targets: [TARGET, { provider: "fallback", model: MODEL }] } };
+
+  expect((await post(config)).status).toBe(200);
+  expect(sentTokens).toEqual([`Bearer ${credential(0).access}`]);
+  expect(fallbackSends).toEqual(["B"]);
+  // The refusal names one account: the pool cools it, and the target stays usable for the other.
+  expect(isComboTargetInCooldown("pooled", TARGET)).toBe(false);
+  expect(getAnthropicAccountHealthSnapshot(ids[0]!)).not.toBeNull();
+
+  sentTokens = [];
+  expect((await post(config)).status).toBe(200);
+  expect(sentTokens).toEqual([`Bearer ${credential(1).access}`]);
+  expect(fallbackSends).toEqual(["B"]);
+}, 20_000);
+
+test("402 credit refusals from every pool account still cool the combo target", async () => {
+  await seed(2);
+  const config = configFor(creditRefused);
+  // The first refusal leaves a sibling and spares the target; the second leaves none.
+  for (let attempt = 0; attempt < 2; attempt++) expect((await post(config)).status).toBe(402);
+  expect(sentTokens).toHaveLength(2);
+  expect(isComboTargetInCooldown("pooled", TARGET)).toBe(true);
+}, 20_000);
+
+test("a 402 consumed after re-login cannot cool the replacement credential in the same account slot", async () => {
+  const ids = await seed(2);
+  const replacement = { ...credential(2), accountId: credential(0).accountId };
+  let replaced = false;
+  const config = configFor(() => new Response(new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      // Zero buffering starts this only when recovery reads the physically bound response body.
+      await saveCredential("anthropic", replacement);
+      replaced = true;
+      controller.enqueue(new TextEncoder().encode(JSON.stringify({ type: "error", error: {
+        type: "billing_error",
+        message: "Your credit balance is too low to access the Anthropic API.",
+      } })));
+      controller.close();
+    },
+  }, { highWaterMark: 0 }), { status: 402, headers: { "content-type": "application/json" } }));
+
+  expect((await post(config)).status).toBe(402);
+  expect(replaced).toBe(true);
+  expect(sentTokens).toEqual([`Bearer ${credential(0).access}`]);
+  const current = getAccountSet("anthropic")!.accounts.find(account => account.id === ids[0]);
+  expect(current?.credential.access).toBe(replacement.access);
+  expect(getAnthropicAccountHealthSnapshot(ids[0]!)).toBeNull();
+  expect(getAnthropicAccountHealthSnapshot(ids[1]!)).toBeNull();
+}, 20_000);

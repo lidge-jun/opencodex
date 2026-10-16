@@ -419,7 +419,8 @@ export async function executeResponsesSidecars(
         hop.permit?.release();
         return null;
       }
-      recoveryKind = originalResponse?.status === 401 ? "oauth-401" : "anthropic-oauth-429";
+      recoveryKind = originalResponse?.status === 401 ? "oauth-401"
+        : originalResponse?.status === 403 ? "oauth-account-403" : "anthropic-oauth-429";
       sidecarBudget.ownCredentialHop(hop.permit);
     } else {
       // No key pool, no generic OAuth roster, no Anthropic pool could produce a replacement

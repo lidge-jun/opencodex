@@ -123,7 +123,7 @@ let testWindow: Window;
 const originalFetch = globalThis.fetch;
 
 const API_BASE = "http://localhost";
-const CACHE_KEY = `ocx.combos.workspace.v1:${API_BASE}`;
+const CACHE_KEY = `ocx.combos.workspace.v2:${API_BASE}`;
 const CACHED_PAGE = {
   combos: [],
   providers: [{ name: "openai", disabled: false, hiddenFromPicker: false, authMode: "forward", adapter: "openai", baseUrl: "https://api.openai.com/v1", defaultModel: "gpt-5" }],
