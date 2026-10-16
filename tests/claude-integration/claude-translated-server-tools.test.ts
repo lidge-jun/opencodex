@@ -371,8 +371,10 @@ describe("a server-tool exchange the client replays reaches Anthropic in place",
       { role: "user", content: "Search" }, { role: "assistant", content: assistant },
       { role: "user", content: "More?" },
     ]);
-    const messages = wire.messages as { content: Record<string, unknown>[] }[];
-    expect(messages[3]!.content).toEqual([thinking, text, redacted, thinking, redacted, text]);
+    const messages = wire.messages as { role: string; content: Record<string, unknown>[] }[];
+    // Reasoning splits this source turn into adjacent translated assistant messages.
+    const later = messages.slice(3).filter(m => m.role === "assistant").flatMap(m => m.content);
+    expect(later).toEqual([thinking, text, redacted, thinking, redacted, text]);
     expect(messages[1]!.content).toEqual([{ type: "text", text: "Bun shipped." }]);
   });
 
