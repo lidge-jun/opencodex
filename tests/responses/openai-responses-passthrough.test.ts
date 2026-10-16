@@ -2000,7 +2000,7 @@ describe("OpenAI Responses passthrough sanitization", () => {
     // recorded a legacy web_search_call replays that stored item every turn. DeepSeek's
     // parser rejects an action without `queries` (#930) and Console Go rejects one
     // without `query` (#3071) — so upgrading alone would leave those threads broken.
-    const adapter = createResponsesPassthroughAdapter(provider);
+    const adapter = createResponsesPassthroughAdapter({ ...provider, authMode: "key", apiKey: "fixture-key", baseUrl: "https://api.openai.com/v1" });
     const request = adapter.buildRequest({
       modelId: "provider-model",
       context: { messages: [] },
@@ -2030,7 +2030,7 @@ describe("OpenAI Responses passthrough sanitization", () => {
     // strings. Copying a non-string first member would satisfy the presence check and
     // still fail the Console Go validator this repair exists to satisfy — a repair that
     // reports success and produces an invalid shape is worse than no repair.
-    const adapter = createResponsesPassthroughAdapter(provider);
+    const adapter = createResponsesPassthroughAdapter({ ...provider, authMode: "key", apiKey: "fixture-key", baseUrl: "https://api.openai.com/v1" });
     const request = adapter.buildRequest({
       modelId: "provider-model",
       context: { messages: [] },
@@ -2056,7 +2056,7 @@ describe("OpenAI Responses passthrough sanitization", () => {
   });
 
   test("repairs a partly-malformed or already-queried empty action (#3071)", () => {
-    const adapter = createResponsesPassthroughAdapter(provider);
+    const adapter = createResponsesPassthroughAdapter({ ...provider, authMode: "key", apiKey: "fixture-key", baseUrl: "https://api.openai.com/v1" });
     const request = adapter.buildRequest({
       modelId: "provider-model",
       context: { messages: [] },
@@ -2096,7 +2096,7 @@ describe("OpenAI Responses passthrough sanitization", () => {
       { item: { type: "agent_message", id: "msg_wrong-dialect", content: [{ type: "output_text", text: "routed reply" }] }, expectedId: undefined },
       { item: { type: "agent_message", id: "amsg_1", content: [{ type: "output_text", text: "routed reply" }] }, expectedId: "amsg_1" },
     ];
-    const input = cases.map(({ item }) => item);
+    const input = cases.map(({ item }) => item), savedInput = structuredClone(input);
     const request = adapter.buildRequest({
       modelId: "gpt-5.5",
       context: { messages: [] },
@@ -2105,14 +2105,14 @@ describe("OpenAI Responses passthrough sanitization", () => {
       _rawBody: { model: "gpt-5.5", input },
     }, { headers: new Headers({ authorization: "Bearer token" }) });
     const body = JSON.parse(request.body) as { input: Record<string, unknown>[] };
-
     cases.forEach(({ expectedId }, index) => {
       if (expectedId === undefined) expect(body.input[index]).not.toHaveProperty("id");
       else expect(body.input[index].id).toBe(expectedId);
     });
     expect(body.input[5]).toEqual(input[5]);
+    for (const index of [8, 9]) expect(body.input[index]).toMatchObject({ type: "web_search_call", status: "completed" });
+    expect(input).toEqual(savedInput);
   });
-
   test("strips all item ids when store is false and preserves them otherwise", () => {
     const adapter = createResponsesPassthroughAdapter(provider);
     const input = [

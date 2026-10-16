@@ -220,7 +220,8 @@ export type ExportClientId =
   | "cline"
   | "commandcode"
   | "kilo"
-  | "droid";
+  | "droid"
+  | "gentle-shell";
 
 export interface ExportClientSpec {
   id: ExportClientId;

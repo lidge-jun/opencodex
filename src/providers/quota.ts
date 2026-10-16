@@ -68,7 +68,6 @@ import {
 } from "./quota/vendor-probes-oauth";
 import { fetchCommandCodeQuota, fetchKimiQuota, keyQuotaReaderForProvider } from "./quota/vendor-probes-key";
 import { antigravityQuotaDiagnosticIdentity, fetchAntigravityQuota, probeAntigravityUsageQuota } from "./quota/antigravity";
-import { projectAccountQuotaRow } from "./quota/account-row";
 import { persistKiroAccountState } from "./kiro-account-state-disk";
 import { kiroProbeCurrent, kiroProbeIdentity } from "./quota/kiro-account-probe";
 export type { ProviderQuota, ProviderQuotaCreditsUsd, ProviderQuotaWindow } from "./quota-types";
@@ -539,6 +538,7 @@ export async function fetchProviderAccountQuotas(
   if (!set) return [];
   return mapQuotaRoster(set.accounts, async account => {
     const entry = await fetchAccountQuota(provider, account.id, forceRefresh, providerConfig, liveConfig);
+    const { projectAccountQuotaRow } = await import("./quota/account-row");
     return projectAccountQuotaRow(provider, account.id, entry, providerConfig);
   });
 }

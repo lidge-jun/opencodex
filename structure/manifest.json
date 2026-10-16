@@ -127,6 +127,13 @@
       ]
     },
     {
+      "path": "codex-provider-routing.md",
+      "tier": 2,
+      "title": "Custom Codex Provider Routing",
+      "scope": "Explicit provider-ID routing consent, URL-only publication and recovery.",
+      "documents": ["src/codex/provider-routing.ts", "src/cli/codex-provider.ts"]
+    },
+    {
       "path": "codex-home.md",
       "tier": 2,
       "title": "Codex Home",
@@ -153,6 +160,16 @@
       "documents": [
         "src/messaging/",
         "src/cli/"
+      ]
+    },
+    {
+      "path": "codex-cli-update.md",
+      "tier": 2,
+      "title": "Codex CLI Update Plan",
+      "scope": "Read-only update planning, isolated npm environment, and complete process observation.",
+      "documents": [
+        "src/codex/cli-update-plan.ts",
+        "src/codex/app-server-processes.ts"
       ]
     },
     {
@@ -245,6 +262,20 @@
       ]
     },
     {
+      "path": "transports/native-reasoning-retention.md",
+      "tier": 3,
+      "title": "Native Reasoning Retention",
+      "scope": "Optional native reasoning ciphertext forwarding on model/account switches, configuration and management controls.",
+      "documents": [
+        "src/config/",
+        "src/types/",
+        "src/responses/",
+        "src/server/",
+        "src/adapters/",
+        "gui/"
+      ]
+    },
+    {
       "path": "transports/responses-wire-shapes.md",
       "tier": 3,
       "title": "Responses Wire Shapes",
@@ -269,16 +300,16 @@
       ]
     },
     {
-        "path": "transports/policy-fallback.md",
-        "tier": 3,
-        "title": "Policy Candidate Fallback",
-        "scope": "Original policy authorization, concrete candidate retries and physical destination deduplication.",
-        "documents": [
-          "src/server/"
-        ]
-      },
-      {
-        "path": "transports/responses-spend.md",
+      "path": "transports/policy-fallback.md",
+      "tier": 3,
+      "title": "Policy Candidate Fallback",
+      "scope": "Original policy authorization, concrete candidate retries and physical destination deduplication.",
+      "documents": [
+        "src/server/"
+      ]
+    },
+    {
+      "path": "transports/responses-spend.md",
       "tier": 3,
       "title": "Responses Spend Reservations",
       "scope": "Credential-hop and durable spend reservations, and what a spent budget tells the client.",
@@ -358,7 +389,9 @@
       "tier": 4,
       "title": "Anthropic Account Thresholds",
       "scope": "Account-owned usage thresholds, inheritance, routing boundaries and durable policy changes.",
-      "documents": ["src/oauth/"]
+      "documents": [
+        "src/oauth/"
+      ]
     },
     {
       "path": "providers/meta-muse.md",

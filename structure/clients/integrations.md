@@ -2,20 +2,7 @@
 
 Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts.
 
-The client-integration subsystem writes one generated OpenCodex provider contribution into a
-third-party client's existing config without taking ownership of the rest of that file. Its core
-promise is reversibility: apply snapshots first, writes atomically, records exactly what it owns,
-and refuses refresh, disable, or restore when the current file cannot be classified safely. Qoder specifics live in [`clients/qoder.md`](qoder.md).
-Managed client targets are inspected without following a final symbolic link, and their atomic
-replacement addresses the named directory entry rather than resolving that link again at commit.
-Uninstall runs the same coordinated disable path for every strict ownership record before removing
-OpenCodex state, including the legacy Aside owner and every child profile store under
-`integrations/aside-profiles/<profileId>/`. `src/cli/uninstall-integrations.ts` validates all stores
-and registered Aside paths before mutation; `src/integrations/aside-profile-context.ts` supplies
-the guarded child stores. An unreadable record, conflict, or failed compensation aborts config
-removal and retains remaining recovery state. Earlier successful disables are not rolled back;
-failed compensation can leave an intermediate client file. Inspect the reported client files and
-retained snapshots before retrying; preserved recovery state does not prove restoration completed.
+The client-integration subsystem writes one generated OpenCodex provider contribution into a third-party client's existing config without taking ownership of the rest of that file. Its core promise is reversibility: apply snapshots first, writes atomically, records exactly what it owns, and refuses refresh, disable, or restore when the current file cannot be classified safely. Qoder specifics live in [`clients/qoder.md`](qoder.md). Managed client targets are inspected without following a final symbolic link, and their atomic replacement addresses the named directory entry rather than resolving that link again at commit. Uninstall runs the same coordinated disable path for every strict ownership record before removing OpenCodex state, including the legacy Aside owner and every child profile store under `integrations/aside-profiles/<profileId>/`. `src/cli/uninstall-integrations.ts` validates all stores and registered Aside paths before mutation; `src/integrations/aside-profile-context.ts` supplies the guarded child stores. An unreadable record, conflict, or failed compensation aborts config removal and retains remaining recovery state. Earlier successful disables are not rolled back; failed compensation can leave an intermediate client file. Inspect the reported client files and retained snapshots before retrying; preserved recovery state does not prove restoration completed.
 
 > Decision record: [ADR-0107](../decisions/ADR-0107-uninstall-integration-recovery.md)
 
@@ -482,6 +469,14 @@ separate. Restore reconciles target intent from validated snapshot ownership wit
 sibling policy. Profile journal views retain source-store provenance for older legacy entries. A profile that is off beside a stale block is never re-enabled automatically; the CLI names its preview-then-enable recovery (`src/cli/aside-profile-recovery.ts`), and a malformed policy that falls back to all-off produces a load-time warning.
 
 The shared atomic replacement publisher also identifies explicit Remote Workspace file writes as `remote-workspace`; its isolated owner and support limits are documented in [Remote Workspace](../remote-workspace.md).
+
+## Gentle Shell home discovery
+
+The `gentle-shell` client reuses Pi's serializer/options but stamps its own ownership identity for `providers.opencodex`. The registry resolves config and detect paths from one bootstrap read per observation; export uses that same resolver. Owned-catalog refresh includes this client, while Pi's existing path and behavior remain unchanged.
+
+`src/clients/gentle-shell-path.ts` resolves the persistent launcher home from `GENTLE_SHELL_CONFIG` (default `~/.gentle-shell/config.json`) and its `home` selector. Saved custom paths win over `GENTLE_SHELL_HOME`; isolated/default selection uses that variable or `~/.gentle-shell/agent`. Malformed JSON follows the launcher's isolated fallback, but an unreadable, unsafe or oversized bootstrap refuses discovery. Relative paths (including literal `~`) refuse: a proxy cannot infer another process's working directory. One-off launcher flags are not observable by this integration.
+
+Link mode and destinations aliasing Pi's default, configured or preserved original home refuse with a Pi-integration remedy. Canonical existing ancestors and existing file identities catch directory aliases and hard-linked catalogs. The resolver never changes launcher preferences or client files. The existing writer retains responsibility for target validation, ownership, snapshots and atomic replacement.
 
 ## omo variants
 

@@ -62,3 +62,5 @@ including cache reads/writes and the inherited catalog band for both Anthropic O
 policy-only edits invalidate price memoization and usage caches; identical reloads remain stable.
 `tests/server/model-costs-pricing-cache.test.ts` exercises warmed cache invalidation and reset.
 These settings affect estimates, not upstream billing or official catalog price lists.
+
+Only reported or estimated usage is priced by `src/usage/cost.ts`. Partial tokens on an unreported or unsupported attempt do not establish its full cost. `src/usage/summary.ts` marks a multi-attempt request unpriced when any potentially billed attempt lacks measured usage, while a refusal before generation without usage remains a known zero. Measured attempts retain their individual estimates.

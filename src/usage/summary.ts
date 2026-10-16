@@ -10,7 +10,7 @@ import {
   type PersistedUsageEntry,
   type UsageStatus,
 } from "./log";
-import { type AttemptCostEstimate, type CostEstimate, estimateAttemptCost, estimateRequestCost, serviceTierContext, type ServiceTierContext, tokensPerSecond } from "./cost";
+import { type AttemptCostEstimate, type CostEstimate, estimateAttemptCost, estimateRequestCost, isMeasuredStatus, serviceTierContext, type ServiceTierContext, tokensPerSecond } from "./cost";
 
 /**
  * Canonical range members. The warm-up loop in the management usage route
@@ -303,7 +303,10 @@ export function computeEntryCost(entry: PersistedUsageEntry): EntryCostInfo {
         isPriced = true;
       }
     }
-    return { tier, estimate: null, attemptEstimates, costTotal, isPriced };
+    // An unmeasured leg that may have generated billed tokens leaves the total unknown, not short.
+    const unknownCost = entry.attempts.some((attempt, index) =>
+      !attemptEstimates[index] && (!attempt.usage || !isMeasuredStatus(attempt.usageStatus)) && !spentNothing(attempt));
+    return { tier, estimate: null, attemptEstimates, costTotal, isPriced: isPriced && !unknownCost };
   }
   const estimate = estimateRequestCost({
     ...usageModelPriceOptions(entry, entry),
@@ -426,10 +429,6 @@ function blankTotals(): UsageSummaryTotals {
     cacheSynthesizedRequests: 0,
     cacheUnknownRequests: 0,
   };
-}
-
-function isMeasuredStatus(status: UsageStatus): boolean {
-  return status === "reported" || status === "estimated";
 }
 
 export interface UsageAttribution {
@@ -814,14 +813,28 @@ function blankRequestCounts(): UsageRequestCounts {
   };
 }
 
+/**
+ * A usage-less attempt that provably cost nothing: it never reached upstream, or upstream refused it
+ * with an HTTP error before any output (providers do not bill a pre-generation 429/401/5xx). One
+ * whose stream began, aborted, or ended without a status may have generated billed tokens, so it
+ * stays an unknown cost. A request made only of such zeros carries neither fact and counts unpriced.
+ */
+function spentNothing(attempt: NonNullable<PersistedUsageEntry["attempts"]>[number] | undefined): boolean {
+  if (!attempt || attempt.usage) return false;
+  if (attempt.sendCount === 0 || attempt.locallyAnswered === true) return true;
+  return attempt.status >= 400 && attempt.streamAborted !== true && attempt.firstOutputMs === undefined;
+}
+
 function bumpRequestCounts(counts: UsageRequestCounts, facts: number, amount = 1): void {
   counts.requests += amount;
   const status = statusFromRequestFacts(facts);
   if (isMeasuredStatus(status)) counts.measuredRequests += amount;
   if (status === "reported") counts.reportedRequests += amount;
   else if (status === "estimated") counts.estimatedRequests += amount;
-  if ((facts & REQUEST_PRICED) !== 0) counts.pricedRequests += amount;
-  if ((facts & REQUEST_UNPRICED) !== 0) counts.unpricedRequests += amount;
+  // Unpriced dominates: one unpriceable part makes the request's cost unknown, and counting it
+  // on both sides overstated price coverage.
+  if ((facts & REQUEST_PRICED) !== 0 && (facts & REQUEST_UNPRICED) === 0) counts.pricedRequests += amount;
+  else counts.unpricedRequests += amount;
 }
 
 function mergeRequestCounts(target: UsageRequestCounts, source: UsageRequestCounts): void {
@@ -1557,7 +1570,7 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
         : costInfo.estimate;
       const ordinal = this.nextOrdinal++;
       const facts = requestStatusFact(attribution.usageStatus)
-        | (estimate ? REQUEST_PRICED : REQUEST_UNPRICED);
+        | (estimate ? REQUEST_PRICED : spentNothing(entry.attempts?.[index]) ? 0 : REQUEST_UNPRICED);
       const modelKey = this.addModelAttribution(partition, attribution, estimate, ordinal);
       modelFacts.set(modelKey, (modelFacts.get(modelKey) ?? 0) | facts);
       if (this.mode === "row-unique") {

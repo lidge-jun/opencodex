@@ -813,6 +813,13 @@ export interface OcxConfig {
   };
   /** Opt-in failure-only recovery; never replaces the initial compaction model. */
   compactionRecovery?: { enabled: boolean; model: string; allowDevinInvalidArgument?: boolean };
+  /** Explicit opt-in (enabled === true), default off, for routed v1/v2 readable reasoning retention.
+   * Defaults: 20% of the compacting model's context window and 100,000 tokens (the smaller limit).
+   * Unknown windows use maxTokens alone; overflow is archived locally with a path notice.
+   * Native and opaque compaction output keep their existing protocols. */
+  reasoningRetention?: { enabled?: boolean; maxContextPercent?: number; maxTokens?: number };
+  /** Canonical ChatGPT reasoning replay allowances; both default off. */
+  nativeReasoningRetention?: { modelSwitch?: boolean; accountSwitch?: boolean };
   /** Explicit opt-in; resumes Observe only using an existing trusted certificate and endpoints. */
   desktopCompatibility?: { startOnProxyStart: boolean };
   /**

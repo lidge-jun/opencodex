@@ -52,11 +52,11 @@ function fixture(keyCap = true): OcxConfig {
   saveConfig(config);
   return config;
 }
-function status(config: OcxConfig) { return providerRequestPacingStatus(NAME, config.providers[NAME]!); }
+function status(config: OcxConfig) { return providerRequestPacingStatus(config.defaultProvider!, config.providers[config.defaultProvider!]!); }
 function keyStatus(config: OcxConfig, id: string) { return status(config).keys!.find(key => key.id === id)!; }
 function cool(config: OcxConfig, index: number) {
-  const selection = { ...captureProviderApiKeySelection({ ...config.providers[NAME]!, apiKey: KEYS[index] }), distributed: true };
-  expect(recordDistributedKeyFailure(config, NAME, selection, 429, Date.now(), "30")).toBe(true);
+  const selection = { ...captureProviderApiKeySelection({ ...config.providers[config.defaultProvider!]!, apiKey: KEYS[index] }), distributed: true };
+  expect(recordDistributedKeyFailure(config, config.defaultProvider!, selection, 429, Date.now(), "30")).toBe(true);
 }
 async function queue(config: OcxConfig, id: string) {
   const deadline = Date.now() + 2_000;
@@ -68,7 +68,7 @@ async function queue(config: OcxConfig, id: string) {
 function start(config: OcxConfig, abort: AbortController) {
   const logCtx: RequestLogContext = { model: "", provider: "" };
   const req = new Request("http://localhost/v1/responses/compact", { method: "POST", headers: { "content-type": "application/json" },
-    signal: AbortSignal.any([abort.signal, AbortSignal.timeout(5_000)]), body: JSON.stringify({ model: `${NAME}/test`, input: [{ role: "user", content: "fixture question" }], stream: false }) });
+    signal: AbortSignal.any([abort.signal, AbortSignal.timeout(5_000)]), body: JSON.stringify({ model: `${config.defaultProvider}/test`, input: [{ role: "user", content: "fixture question" }], stream: false }) });
   const pending = handleResponsesCompact(req, config, logCtx).then(async response => ({ response, text: await response.text(), logCtx }));
   void pending.catch(() => {});
   return pending;
@@ -247,6 +247,23 @@ test("a synthetic non-replayable compact 429 never cools a distributed key", asy
   unchanged(config); noLeaks(config);
 });
 
+for (const statusCode of [401, 429]) test(`compact static Authorization ${statusCode} retains pool availability`, async () => {
+  const config = fixture();
+  config.providers[NAME]!.supportsNativeCompactEndpoint = true;
+  config.providers[NAME]!.headers = { Authorization: "Bearer fixture-override" };
+  globalThis.fetch = (async (input, init) => {
+    seen.push({ key: new Headers(init?.headers).get("authorization"), url: String(input), body: JSON.parse(String(init?.body)), headers: new Headers(init?.headers) });
+    return Response.json({ error: { message: "fixture refusal" } }, { status: statusCode });
+  }) as typeof fetch;
+  for (let request = 0; request < 4; request++) {
+    expect((await start(config, new AbortController())).response.status).toBe(statusCode);
+    expect(seen).toHaveLength(request + 1);
+    for (const id of ["k1", "k2", "k3"]) expect(getKeyCooldownUntil(NAME, id)).toBeNull();
+  }
+  expect(seen.map(row => row.key)).toEqual(Array(4).fill("Bearer fixture-override"));
+  unchanged(config); noLeaks(config);
+});
+
 for (const cancel of [false, true]) test(`active manual key switch readmits the selected key (cancel=${cancel})`, async () => {
   const config = fixture();
   config.providers[NAME]!.requestPacing = { enabled: true, keys: { maxConcurrentRequests: 1 } };
@@ -280,3 +297,37 @@ for (const cancel of [false, true]) test(`active manual key switch readmits the 
     noLeaks(config);
   } finally { abort.abort(); heldA.release(); heldB.release(); await pending.catch(() => undefined); }
 }, 10_000);
+
+for (const reselect of [false, true]) test(`gateway compact preserves custom transport after key admission (reselect=${reselect})`, async () => {
+  const config = fixture();
+  const provider = config.providers[NAME]!;
+  config.providers = { "gateway-key-fixture": provider };
+  config.defaultProvider = "gateway-key-fixture";
+  provider.baseUrl = "https://gateway.example/v1";
+  provider.responsesPath = "/custom-responses";
+  provider.supportsNativeCompactEndpoint = true;
+  provider.headers = { "x-gateway-static": "initial" };
+  saveConfig(config);
+  const held = reselect ? await waitForProviderRequestSlot(config.defaultProvider, provider) : undefined;
+  const abort = new AbortController();
+  const pending = start(config, abort);
+  try {
+    if (reselect) {
+      await queue(config, "k1");
+      cool(config, 0);
+      provider.headers = { "x-gateway-static": "replacement" };
+      provider.responsesPath = "/refreshed-responses";
+      provider.apiKeySelectionRevision = "gateway-revision";
+      held!.release();
+    }
+    const result = await pending;
+    expect(result.response.status).toBe(200);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.key).toBe(`Bearer ${KEYS[reselect ? 1 : 0]}`);
+    expect(seen[0]!.url).toBe(`https://gateway.example/v1/${reselect ? "refreshed-responses" : "custom-responses"}/compact`);
+    expect(seen[0]!.headers.get("x-gateway-static")).toBe(reselect ? "replacement" : "initial");
+    expect(seen[0]!.headers.get("chatgpt-account-id")).toBeNull();
+    expect(seen[0]!.body).toMatchObject({ model: "test", input: [{ role: "user", content: "fixture question" }] });
+    noLeaks(config);
+  } finally { abort.abort(); held?.release(); await pending.catch(() => undefined); }
+});

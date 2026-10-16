@@ -900,10 +900,12 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(result.status).toBe(0);
     const value = JSON.parse(result.stdout.trim());
     expect(value.preflight.success).toBe(true);
+    expect(value.preflight.configChanged).not.toBe(true);
     expect(value.before).toBe(original);
     expect(value.afterPreflight).toBe(original);
     expect(value.journalAfterPreflight).toBe(false);
     expect(value.committed.success).toBe(true);
+    expect(value.committed.configChanged).toBe(true);
     expect(value.injected).toContain('base_url = "https://hub.example.test/v1"');
     expect(value.injected).toContain('env_key = "OPENCODEX_API_AUTH_TOKEN"');
     expect(value.owner).toEqual({ kind: "client", apiKeyId: "client-key-1" });
@@ -971,9 +973,13 @@ describe("injectCodexConfig integration (Design B)", () => {
   test("re-inject over a Design B config is idempotent", () => {
     writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
 
-    expect(runInject(codexHome, ocxHome).status).toBe(0);
+    const firstResult = runInject(codexHome, ocxHome);
+    expect(firstResult.status, firstResult.stderr).toBe(0);
+    expect(JSON.parse(firstResult.stdout)).toMatchObject({ success: true, configChanged: true });
     const first = readFileSync(join(codexHome, "config.toml"), "utf8");
-    expect(runInject(codexHome, ocxHome).status).toBe(0);
+    const secondResult = runInject(codexHome, ocxHome);
+    expect(secondResult.status, secondResult.stderr).toBe(0);
+    expect(JSON.parse(secondResult.stdout)).toMatchObject({ success: true, configChanged: false });
     const second = readFileSync(join(codexHome, "config.toml"), "utf8");
 
     expect(second.match(/openai_base_url/g)?.length).toBe(1);
@@ -1514,6 +1520,7 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(result.message).toContain("routing NOT injected");
     expect(result.message).toContain('external model_provider "custom"');
     expect(result.configApplied).toBe(false);
+    expect(result.configChanged).not.toBe(true);
     expect(result.message).toContain("http://127.0.0.1:10100/v1");
     expect(result.message).toContain("Responses passthrough");
     expect(result.nativeSubagentDefaultsWarning).toContain("external model_provider");

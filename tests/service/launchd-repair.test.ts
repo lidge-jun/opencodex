@@ -328,10 +328,51 @@ describe("installLaunchd: repair must not be an outage (#4236 defect 1)", () => 
       sleepSync: ms => { delays.push(ms); },
     });
 
-    // 5 × 200 ms per evicted domain, then give up and try the bootstrap anyway — a wedged
-    // domain must reach the diagnosable throw rather than hang.
-    expect(delays).toEqual(Array.from({ length: 10 }, () => 200));
-    expect(verbs(argv).filter(v => v === "print")).toHaveLength(10);
+    // 125 × 200 ms (launchd's 20 s ExitTimeOut plus margin) per evicted domain, then give up
+    // and try the bootstrap anyway — a wedged domain must reach the diagnosable throw rather
+    // than hang.
+    expect(delays).toEqual(Array.from({ length: 250 }, () => 200));
+    expect(verbs(argv).filter(v => v === "print")).toHaveLength(250);
+  });
+
+  test("a job still draining after bootout is waited out, so repair never strands the service", () => {
+    // The stale-plist repair incident: `bootout` returns at once while the old proxy drains
+    // for several seconds. Until it exits, `print` answers 0 (`state = SIGTERMed`) and
+    // `bootstrap` fails with 5; bootstrapping into that window, then retrying and rolling
+    // back into it too, left nothing loaded once the old job finally exited.
+    const plistPath = fixturePlist();
+    writeFileSync(plistPath, "<plist>legacy launcher, KeepAlive true</plist>", "utf8");
+    let state: "old" | "exiting" | "gone" | "new" = "old";
+    let exitingPolls = 0;
+    const argv: string[][] = [];
+    const launchctl = ((args: string[]): LaunchctlResult => {
+      argv.push([...args]);
+      const [verb, target = ""] = args;
+      const gui = target.startsWith("gui/");
+      if (state === "exiting" && ++exitingPolls > 30) state = "gone"; // ~6 s of drain
+      if (verb === "bootout") {
+        if (gui && (state === "old" || state === "new")) { state = "exiting"; return ok(); }
+        return fail(3, "Boot-out failed: 3: No such process");
+      }
+      if (verb === "print") return gui && state !== "gone" ? ok() : fail(113, "Could not find service");
+      if (verb === "bootstrap") {
+        if (state !== "gone") return fail(5, "Bootstrap failed: 5: Input/output error");
+        state = "new";
+        return ok();
+      }
+      return ok();
+    }) as typeof runLaunchctl;
+    const probe = ((): LaunchdLoadProbe => state === "new"
+      ? { state: "loaded-current", domain: "gui/501" }
+      : state === "gone" ? { state: "not-loaded" } : { state: "loaded-stale", domain: "gui/501" }
+    ) as typeof probeLaunchdLoadState;
+
+    const outcome = installLaunchd({ launchctl, plistPath, probe, sleepSync: () => {} });
+
+    expect(outcome.reloaded).toBe(true);
+    expect(state).toBe("new");
+    expect(verbs(argv).filter(v => v === "bootstrap")).toHaveLength(1);
+    expect(readFileSync(plistPath, "utf8")).toBe(renderedPlist());
   });
 
   test("a bootout that evicted nothing is not settled", () => {

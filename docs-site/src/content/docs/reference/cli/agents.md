@@ -417,6 +417,7 @@ Inspect proxy requests, usage, storage, memory, and debug data. The direct alias
 | --- | --- |
 | `ocx logs [filters] [--follow] [--json|--jsonl|--events]` | `ocx observe logs` |
 | `ocx usage [--range <today|1d|7d|30d|all>] [--since <timestamp> --until <timestamp>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--api-key-id <id>] [--search <text>] [--top <1-1000>] [--json]` | `ocx observe usage` |
+| `ocx usage compare [--range <today|1d|7d|30d>] [--json]` | `ocx observe usage compare` |
 | `ocx storage [--json]` | `ocx observe storage` |
 | `ocx memory [--json]` | `ocx observe memory` |
 
@@ -450,6 +451,43 @@ When some usage records cannot be included, human output warns, including when t
 Any displayed totals reflect readable records only. If a filter has no readable matches, the output shows
 the warning and guidance instead of total lines; skipped records may contain matches.
 `--json` preserves the response-level `usageIncomplete` diagnostic and reason.
+
+### Compare a range with the previous equal window
+
+```bash
+ocx usage compare --range today --json
+ocx usage compare --range 7d --provider xai
+```
+
+`ocx observe usage compare` is the equivalent family form. The command reads `GET /api/usage`
+twice: the named range ending now, then the same range evaluated one equal window earlier
+(one local day for `today`/`1d`, seven for `7d`, thirty for `30d`). Default range is `30d`.
+`--range all` is refused because open history has no previous equal window. `--since` and
+`--until` are not accepted; the windows are derived. Surface, provider, model, and API-key
+filters apply to both reads. Human output prints current, previous, signed delta, and percent
+change. `--json` is `{schemaVersion,range,current,previous,delta,change,incomplete}`. The two
+reads are sequential, not an atomic snapshot. Custom `since`/`until` on each response must
+match the requested window. Both reads use the same connection and credential. If the
+connection, account, or credential changes during the command, it reports an owner
+mismatch and asks you to retry instead of printing a comparison.
+
+### Page indexed request history
+
+```bash
+ocx logs history --provider xai --status 200 --limit 50 --json
+ocx logs history --cursor '<nextCursor>' --json
+ocx logs get <request-id> --json
+```
+
+`ocx observe logs history` and `ocx observe logs get` are the equivalent family
+forms. These read the derived request-history index, not the recent `ocx logs`
+ring. `--limit` is 1–100 (default 50). `--from` and `--to` accept epoch
+milliseconds or full ISO datetimes with a timezone and are inclusive. `--json`
+returns `{entries,hasMore,nextCursor,index}`. `--jsonl` emits rows only; when
+more pages exist, `nextCursor=…` is printed on stderr so a caller can resume
+without mixing the token into the row stream. Empty matches succeed. `get`
+returns one canonical row by request ID; `ocx logs explain` remains the
+route-decision view for that same ID.
 
 ### Filter a bounded log snapshot
 
@@ -1085,9 +1123,9 @@ ocx system codex-cli-update check --json
 
 `check` makes no package-registry request and inspects bounded configured-candidate provenance evidence,
 including a redacted executable location and ownership evidence. Trusted published-launcher context authenticates
-the candidate snapshot, not successful Codex execution. Because this one-shot command never executes Codex,
-environment and persisted candidates remain report-only (`managed: false`, normally `selection_unattested`);
-`selectionAttested` remains `false`. The JSON report exposes `candidateAvailable`, `candidateVersion`, `candidateSource`,
+the candidate snapshot, not successful Codex execution. On POSIX, selection is attested only when the runtime
+resolver selects the same canonical environment candidate without executing it. A linked npm-global manifest
+can then establish `managed: true` when it proves ownership and, if a candidate version is reported, that version matches the manifest; persisted candidates remain unattested. The JSON report exposes `candidateAvailable`, `candidateVersion`, `candidateSource`,
 and `selectionAttested`. Inspecting the configured candidate requires a trusted published-launcher context;
 a direct Bun/source launch has no such proof, ignores ambient and persisted candidate state, and may report
 `candidate_unavailable` on POSIX. On Windows this first slice performs no candidate or configuration filesystem I/O:
@@ -1101,6 +1139,26 @@ version-manager, unverified standalone, and ambiguous shim states are reported a
 and are never classified as managed.
 
 On Windows, a captured bare command such as `CODEX_CLI_PATH=codex`, a remote path, or a device path reports `candidate_path_unavailable` instead. Those cases have a captured candidate; its path is not eligible for this inspection.
+
+#### Read-only Codex CLI update plan
+
+```bash
+ocx system codex-cli-update plan --channel latest --json
+```
+
+Run through the published Node launcher with the intended `CODEX_CLI_PATH` in the shell environment.
+The plan requires an attested POSIX npm-global installation and a linked package manifest version.
+It queries the official npm registry for an exact version, SHA-512 integrity and same-origin tarball,
+using the launcher's captured PATH and isolated temporary npm configuration, cache and logs. Proxy
+settings and `NODE_EXTRA_CA_CERTS` remain supported; cleanup is best-effort. No Codex command runs.
+
+An applicable plan reports `applicable: true` and a deterministic `planId` binding platform,
+installation-root digest, installed version, channel and target version/integrity. The plan is never
+persisted. It refuses downgrades, already-current versions, active Codex sessions and incomplete
+process observation. Windows returns `windows_inspection_deferred` before registry/process queries.
+A refusal exits 0: inspect `applicable` and `refusal`. The printed install argv is indicative; this
+command installs nothing, changes no application state and never signals a session. No apply command
+is exposed, and a plan ID is not installation authorization.
 
 #### Explicit installation observation on Windows x64
 

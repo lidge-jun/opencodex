@@ -41,12 +41,14 @@ const NATIVE_MARKS: Record<Exclude<OverviewClientId, ExportClientId>, string> = 
  *
  * A value may still be null: that is the honest answer for a client whose
  * vendor publishes nothing usable, and `ClientMark` renders a monogram for it.
- * Today none are, which `integration-marks.test.ts` pins.
+ * Gentle Shell uses that fallback, which `integration-marks.test.ts` pins.
  */
 export const INTEGRATION_MARKS: Record<OverviewClientId, string | null> = {
   ...NATIVE_MARKS,
   opencode: CLIENT_MARKS.opencode ?? null,
   pi: CLIENT_MARKS.pi ?? null,
+  // No verified square Gentle Shell asset: use its own monogram, not Pi's mark.
+  "gentle-shell": null,
   omp: CLIENT_MARKS.omp ?? null,
   hermes: CLIENT_MARKS.hermes ?? null,
   openclaw: CLIENT_MARKS.openclaw ?? null,

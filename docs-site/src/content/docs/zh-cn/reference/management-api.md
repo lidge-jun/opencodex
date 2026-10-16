@@ -164,6 +164,7 @@ Aside 配置档的变更在这种情况下仍会保存一件事：确认之后�
 | `GET /api/config` | 返回已脱敏、对管理安全的配置 DTO | — |
 | `PUT /api/config` | 禁用的完整配置替换保护 | 405；请改用聚焦端点 |
 | `GET, PUT /api/settings` | 读取运行时/启动设置，或更新自动启动、流模式、应用拥有的内存预算和 `codexAccountPickerEnabled` | 400 无效、非对象或空更新 |
+| `GET, PUT /api/native-reasoning-retention` | 读取模型/账号推理保留开关；部分 PUT 保留未提交字段，JSON `null` 恢复默认值。见 [原生推理密文保留](/zh-cn/reference/configuration/#原生推理密文保留)。 | 400 未知字段、无效类型或非对象/非 null 输入 |
 | `GET /api/startup-health` | 读取缓存的服务/shim 启动健康状态 | — |
 | `POST /api/startup-action` | 安装或修复服务或 Codex shim | 400 无效动作；500 动作失败 |
 | `GET, POST /api/windows-tray` | 读取 Windows 托盘状态，或安装、启动、停止、卸载它 | 400 不支持的平台/动作；500 操作失败 |

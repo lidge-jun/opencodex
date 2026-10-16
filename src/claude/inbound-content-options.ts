@@ -76,6 +76,17 @@ export function toolsToResponses(tools: unknown): Rec[] | undefined {
   return out.length > 0 ? out : undefined;
 }
 
+/**
+ * The caller's typed Anthropic web tools (`web_search_*`, `web_fetch_*`), as declared. The
+ * Responses body has no slot for them — web_search becomes the hosted sidecar tool above and
+ * web_fetch is dropped — so an Anthropic destination receives them out of body, unchanged.
+ */
+export function declaredAnthropicServerTools(raw: unknown): Rec[] | undefined {
+  if (!isRec(raw) || !Array.isArray(raw.tools)) return undefined;
+  const tools = raw.tools.filter((t): t is Rec => isRec(t) && typeof t.type === "string" && /^web_(search|fetch)_\d+$/.test(t.type));
+  return tools.length > 0 ? tools : undefined;
+}
+
 export function toolChoiceToResponses(choice: unknown, body: Rec): void {
   if (!isRec(choice)) return;
   if (choice.disable_parallel_tool_use === true) body.parallel_tool_calls = false;

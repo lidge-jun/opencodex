@@ -28,11 +28,11 @@ afterEach(() => {
   removeTreeWithRetry(root);
 });
 
-function runInject(env: Record<string, string>, validateOnly = false): { result: { success: boolean; message: string }; stderr: string } {
+function runInject(env: Record<string, string>, validateOnly = false): { result: { success: boolean; message: string; configChanged?: boolean }; stderr: string } {
   const script = `
     const { injectCodexConfig } = require("./src/codex/inject");
     injectCodexConfig(10100, {}, ${validateOnly ? "{ validateOnly: true }" : "{}"}).then(result => {
-      console.log(JSON.stringify({ success: result.success, message: result.message }));
+      console.log(JSON.stringify({ success: result.success, message: result.message, configChanged: result.configChanged }));
     });
   `;
   const spawned = spawnSync(process.execPath, ["--eval", script], {
@@ -50,6 +50,7 @@ test("a Codex home without config.toml is bootstrapped and routed", () => {
   mkdirSync(codexHome);
   const { result, stderr } = runInject({ CODEX_HOME: codexHome, OPENCODEX_HOME: join(root, "ocx") });
   expect(result.success, stderr).toBe(true);
+  expect(result.configChanged).toBe(true);
   const config = readFileSync(join(codexHome, "config.toml"), "utf8");
   expect(config).toContain("opencodex");
 });
@@ -59,6 +60,7 @@ test("a validate-only preflight passes without creating config.toml", () => {
   mkdirSync(codexHome);
   const { result, stderr } = runInject({ CODEX_HOME: codexHome, OPENCODEX_HOME: join(root, "ocx") }, true);
   expect(result.success, stderr).toBe(true);
+  expect(result.configChanged).not.toBe(true);
   expect(existsSync(join(codexHome, "config.toml"))).toBe(false);
 });
 
@@ -69,6 +71,7 @@ test("a missing default Codex home is refused with an actionable message and not
     CODEX_HOME: "", HOME: home, USERPROFILE: home, OPENCODEX_HOME: join(root, "ocx"),
   });
   expect(result.success).toBe(false);
+  expect(result.configChanged).not.toBe(true);
   expect(result.message).toContain("does not exist yet");
   expect(result.message).toContain("CODEX_HOME");
   expect(existsSync(join(home, ".codex"))).toBe(false);
@@ -79,10 +82,14 @@ test("a failure inside the write boundary after bootstrap rolls config.toml back
   mkdirSync(codexHome);
   const script = `
     const inject = require("./src/codex/inject");
-    inject.setBeforeHistoryArtifactCommitForTests(() => { throw new Error("fixture failure after bootstrap"); });
+    let reachedArtifactCommit = false;
+    inject.setBeforeHistoryArtifactCommitForTests(() => {
+      reachedArtifactCommit = true;
+      throw new Error("fixture failure after bootstrap");
+    });
     inject.injectCodexConfig(10100, {}, {}).then(
-      result => console.log(JSON.stringify({ settled: "result", success: result.success })),
-      error => console.log(JSON.stringify({ settled: "error", message: String(error && error.message) })),
+      result => console.log(JSON.stringify({ settled: "result", success: result.success, configChanged: result.configChanged, reachedArtifactCommit })),
+      error => console.log(JSON.stringify({ settled: "error", message: String(error && error.message), reachedArtifactCommit })),
     );
   `;
   const spawned = spawnSync(process.execPath, ["--eval", script], {
@@ -92,7 +99,9 @@ test("a failure inside the write boundary after bootstrap rolls config.toml back
     timeout: SPAWN_BUDGET_MS - 5_000,
   });
   const lines = (spawned.stdout ?? "").trim().split("\n");
-  const outcome = JSON.parse(lines[lines.length - 1] ?? "{}") as { settled?: string; success?: boolean };
+  const outcome = JSON.parse(lines[lines.length - 1] ?? "{}") as { settled?: string; success?: boolean; configChanged?: boolean; reachedArtifactCommit?: boolean };
+  expect(outcome.reachedArtifactCommit, spawned.stderr).toBe(true);
+  expect(outcome.configChanged).not.toBe(true);
   expect(outcome.settled === "error" || outcome.success === false, spawned.stderr).toBe(true);
   expect(existsSync(join(codexHome, "config.toml"))).toBe(false);
 });

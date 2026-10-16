@@ -277,6 +277,39 @@ export function isSelfIdentifiedOpaqueBlobRejection(bodyText: string): boolean {
 
 
 /**
+ * Opted-in native reasoning retention forwards ciphertext another model or account minted. ChatGPT
+ * can refuse it inside a 200 stream -- a Codex WebSocket `error` frame or `response.failed` --
+ * rather than as an HTTP 4xx, so the passthrough inspects the zero-output prelude of exactly these
+ * requests. Ordinary turns keep the function-output-only inspection.
+ */
+export function retainedReasoningStreamCandidate(parsed: OcxParsedRequest, outboundBody: string | undefined): boolean {
+  return parsed._nativeReasoningRetainedAcrossRoute === true
+    && parsed._stripReasoningEncryptedContent !== true
+    && outboundResponsesBodyCarriesOpaqueBlob(outboundBody);
+}
+
+/**
+ * Whether a stream-prelude payload is a self-identified refusal of retained ciphertext. A match marks
+ * the projected failure as the 4xx it is, so the shared single-shot trigger accepts it.
+ */
+export function retainedReasoningStreamRejection(
+  payload: unknown,
+  parsed: OcxParsedRequest,
+  outboundBody: string | undefined,
+  preflightLog: RequestLogContext,
+): boolean {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  if (!retainedReasoningStreamCandidate(parsed, outboundBody)) return false;
+  const { type, response } = payload as { type?: unknown; response?: { error?: unknown } };
+  if (type !== "error" && type !== "response.failed") return false;
+  const envelope = type === "error" ? payload : { error: response?.error };
+  if (!isSelfIdentifiedOpaqueBlobRejection(JSON.stringify(envelope))) return false;
+  preflightLog.terminalHttpStatus = 400;
+  return true;
+}
+
+
+/**
  * Whether an upstream Responses 4xx authoritatively rejected opaque replay state.
  *
  * The outbound-body check is intentional: the inbound transcript may contain a proxy envelope or
@@ -411,6 +444,8 @@ export async function consoleGoUploadRejectionBody(
 
 export function prepareOpaqueBlobRecovery(parsed: OcxParsedRequest): void {
   parsed._stripReasoningEncryptedContent = true;
+  delete parsed._nativeReasoningRetainedAcrossRoute;
+  parsed._stripNativeCompactionEncryptedContent = true;
   // The destination rejected state another serving identity minted. A reasoning item's id names
   // an item in that identity's store, so it goes with the blob.
   parsed._dropForeignReasoningItemIds = true;

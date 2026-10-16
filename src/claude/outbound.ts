@@ -223,10 +223,20 @@ export function sanitizeWebSearchInput(input: unknown): Rec {
 /**
  * Map a Responses `web_search_call` item to its Anthropic pair: the server_tool_use
  * input (query/queries) and the web_search_tool_result content (hits, or the error
- * object when the search failed). Shared by the SSE and JSON translation paths.
+ * object when the search failed). An item carrying `fetch_result` is Anthropic's
+ * server-side web_fetch and maps to web_fetch + its web_fetch_tool_result, verbatim.
+ * Shared by the SSE and JSON translation paths.
  */
-export function webSearchPairFromItem(item: Rec): { id: string; input: Rec; resultContent: unknown; completed: boolean } {
+export function webSearchPairFromItem(item: Rec): {
+  id: string; name: "web_search" | "web_fetch"; resultType: string; input: Rec; resultContent: unknown; completed: boolean;
+} {
   const action = isRec(item.action) ? item.action : {};
+  const id = typeof item.id === "string" && item.id.length > 0 ? item.id : `srvtoolu_${uuid()}`;
+  const completed = item.status !== "failed";
+  if (item.fetch_result !== undefined) {
+    const input = { url: typeof action.url === "string" ? action.url : "" };
+    return { id, name: "web_fetch", resultType: "web_fetch_tool_result", input, resultContent: item.fetch_result, completed };
+  }
   const queries = Array.isArray(action.queries)
     ? action.queries.filter((q): q is string => typeof q === "string" && q.length > 0)
     : [];
@@ -234,7 +244,6 @@ export function webSearchPairFromItem(item: Rec): { id: string; input: Rec; resu
   const input = sanitizeWebSearchInput(
     queries.length > 1 ? { queries } : { query: queries[0] ?? query },
   );
-  const completed = item.status !== "failed";
   let resultContent: unknown;
   if (completed) {
     const hits: Rec[] = [];
@@ -249,8 +258,7 @@ export function webSearchPairFromItem(item: Rec): { id: string; input: Rec; resu
   } else {
     resultContent = { type: "web_search_tool_result_error", error_code: "unavailable" };
   }
-  const id = typeof item.id === "string" && item.id.length > 0 ? item.id : `srvtoolu_${uuid()}`;
-  return { id, input, resultContent, completed };
+  return { id, name: "web_search", resultType: "web_search_tool_result", input, resultContent, completed };
 }
 
 /**
@@ -712,7 +720,7 @@ export function responsesSseToAnthropicSse(
               const toolIndex = blockIndex++;
               emit("content_block_start", {
                 type: "content_block_start", index: toolIndex,
-                content_block: { type: "server_tool_use", id: pair.id, name: "web_search" },
+                content_block: { type: "server_tool_use", id: pair.id, name: pair.name },
               });
               emit("content_block_delta", {
                 type: "content_block_delta", index: toolIndex,
@@ -722,10 +730,10 @@ export function responsesSseToAnthropicSse(
               const resultIndex = blockIndex++;
               emit("content_block_start", {
                 type: "content_block_start", index: resultIndex,
-                content_block: { type: "web_search_tool_result", tool_use_id: pair.id, content: pair.resultContent },
+                content_block: { type: pair.resultType, tool_use_id: pair.id, content: pair.resultContent },
               });
               emit("content_block_stop", { type: "content_block_stop", index: resultIndex });
-              if (pair.completed) webSearchRequests++;
+              if (pair.completed && pair.name === "web_search") webSearchRequests++;
               break;
             }
             // Close the matching open block (message/reasoning items close implicitly on
@@ -1051,9 +1059,9 @@ export function responsesJsonToAnthropicMessage(json: unknown, model: string, tr
       case "web_search_call": {
         // Server-side search: emit the Anthropic pair. Does NOT set sawToolUse.
         const pair = webSearchPairFromItem(raw);
-        content.push({ type: "server_tool_use", id: pair.id, name: "web_search", input: pair.input });
-        content.push({ type: "web_search_tool_result", tool_use_id: pair.id, content: pair.resultContent });
-        if (pair.completed) webSearchRequests++;
+        content.push({ type: "server_tool_use", id: pair.id, name: pair.name, input: pair.input });
+        content.push({ type: pair.resultType, tool_use_id: pair.id, content: pair.resultContent });
+        if (pair.completed && pair.name === "web_search") webSearchRequests++;
         break;
       }
       default:

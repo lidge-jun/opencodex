@@ -2,8 +2,9 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { handleCodexAuthAPI } from "../../src/codex/auth-api/routes";
 import {
-  clearAccountNeedsReauth, clearMainAccountInfoCache, handleCodexAuthAPI, isAccountNeedsReauth, markAccountNeedsReauth,
+  clearAccountNeedsReauth, clearMainAccountInfoCache, isAccountNeedsReauth, markAccountNeedsReauth,
   type CodexAuthAccountDto,
 } from "../../src/codex/auth-api";
 import { MAIN_CODEX_ACCOUNT_ID, setMainAccountPlan } from "../../src/codex/main-account";

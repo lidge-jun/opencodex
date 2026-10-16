@@ -15,6 +15,7 @@
  * routed models get a short "history was compacted" note instead.
  */
 
+import { decodeRetainedCompaction, RETAINED_COMPACTION_PREFIX } from "./retained-compaction";
 import type { TranslatorBudget } from "../lib/translator-budget";
 
 const ciphertextLeases = new WeakMap<object, { budget: TranslatorBudget; bytes: number }>();
@@ -57,7 +58,7 @@ export const SUMMARY_PREFIX = "Another language model started to solve this prob
 export const OPAQUE_COMPACTION_NOTE = "[earlier conversation was compacted; the summary is stored in a format this model cannot read]";
 
 /**
- * Prompt contract for a routed model receiving a decoded `ocx1` checkpoint as user text (#6764).
+ * Prompt contract for a routed model receiving a decoded `ocx1`/`ocx2` checkpoint as user text (#6764).
  * It preserves existing authorization scope and permission gates; it grants no authority.
  * Kept apart from SUMMARY_PREFIX, which the v1 retention and recovery paths match exactly.
  */
@@ -94,6 +95,10 @@ export function encodeCompactionSummary(summary: string): string {
 
 /** Decode an `ocx1:` envelope; returns null for real (OpenAI-encrypted) blobs or garbage. */
 export function decodeCompactionSummary(encryptedContent: string): string | null {
+  if (encryptedContent.startsWith(RETAINED_COMPACTION_PREFIX)) {
+    const retained = decodeRetainedCompaction(encryptedContent);
+    return retained ? [retained.summary, ...retained.reasoning].join("\n\n") : null;
+  }
   if (!encryptedContent.startsWith(OCX_COMPACTION_PREFIX)) return null;
   try {
     return Buffer.from(encryptedContent.slice(OCX_COMPACTION_PREFIX.length), "base64").toString("utf-8");

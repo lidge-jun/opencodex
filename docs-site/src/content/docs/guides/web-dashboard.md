@@ -111,6 +111,7 @@ is visible) and never forces an upstream refresh.
 | Area | What it does |
 | --- | --- |
 | **Dashboard summary** | Multi-agent mode, online state, version, uptime, provider count, 30-day token total, active providers, and available native/routed models. |
+| **Native reasoning retention** | Independently opt into reasoning ciphertext forwarding on native model or account changes. Both default off; account retention is experimental. See [the configuration scope](/reference/configuration/server/#native-reasoning-retention). |
 | **Sub-agent delegation** | Choose a native or routed model and optional reasoning effort shared by OpenCodex delegation guidance and the separate native-default opt-in. This is not a proxy-side per-spawn router; see below. |
 | **Sidecars** | Choose the web-search model and effort plus the vision-description model. Changes apply on the next request. |
 | **Maintenance** | Resync the Codex model catalog, inspect project-local config bypass warnings, check the latest or preview release, and run an update with optional proxy restart. In the desktop shell, its update entry opens the native app update page instead of running the package updater. |
@@ -203,7 +204,11 @@ The **Usage** summary and Models/Providers tables show end-to-end output through
 
 The **Usage** Models and Providers tables show the estimated priced portion for each row. Requests
 without a matching price or usable usage are counted as excluded beside that amount when the proxy
-reports pricing coverage fields. A row with only excluded requests shows an em dash with that count
+reports pricing coverage fields. Usage that was only partly measured (`unreported` or `unsupported`)
+is not priced, and one excluded part excludes the whole request from that row's priced count. A
+leg that reached no upstream, or that upstream refused with an HTTP error before any output, spent
+nothing and does not; a leg whose response began (or ended without a status) but reported no usage
+may have been billed, so it does. A row with only excluded requests shows an em dash with that count
 instead of a zero-dollar estimate, and a displayed zero-dollar value is a confirmed priced estimate.
 An older proxy that reports no coverage fields keeps a bare em dash with no count, so missing
 coverage stays distinct from an all-excluded row and from a confirmed zero estimate.

@@ -769,8 +769,9 @@ task workflow.
 ### Dashboard
 
 Open the local dashboard and choose **Models → Combos**. The workspace creates, edits, renames, and removes
-combos, and its target picker excludes disabled models, nested combos, and the credential-only JEV
-provider. **Create JEV Auto** opens the same Combo editor with an editable decision target template;
+combos. Its model selectors include hidden models: catalog visibility only controls external model
+lists, not internal Combo selection, and selecting a hidden model does not make it visible externally.
+The target picker still excludes disabled providers, nested combos, and the credential-only JEV provider. **Create JEV Auto** opens the same Combo editor with an editable decision target template;
 an existing `jev-auto` id or alias is reported instead of creating a duplicate. A JEV Combo also shows
 **Decision service** (TypeSafe JEV or a configured `jev-decision` provider) and **Decision timeout
 (ms)**, and the Combos overview lists each JEV Combo's decision service, endpoint, and timeout.
@@ -873,7 +874,10 @@ running opencodex instance that receives model requests.
 
 Every target is currently ineligible: for example, its provider is disabled, it is cooling down,
 it has already been attempted for this request, or an encrypted v2 task excludes it. Check target
-provider state and recent upstream errors. For cooldowns, follow an observed `Retry-After` value first;
+provider state and recent upstream errors. When no target was attempted, the error message lists
+why each target was skipped, for example
+`No available targets for combo: fast (openai/gpt-6: quota exhausted; anthropic/claude-opus-5-5: cooldown 42s)`.
+For cooldowns, follow an observed `Retry-After` value first;
 Codex reset headers also take precedence over `cooldownMs`.
 If neither upstream signal is usable, the configured `cooldownMs` applies, or the upstream fallback applies
 when it is unset (5 seconds for request-rate codes `1302`/`1305`, 10 minutes for a spent usage

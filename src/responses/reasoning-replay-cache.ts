@@ -200,12 +200,34 @@ function sweepExpiredOpaqueBlobRejections(at: number): void {
 export function reasoningReplayServingIdentityChanged(
   scope: OcxReasoningReplayScopeRef | undefined,
 ): boolean {
+  return reasoningReplayServingIdentityChange(scope) !== undefined;
+}
+
+/** Known durable route differences; an unknown issuer never establishes compatibility. */
+export function reasoningReplayServingIdentityChange(
+  scope: OcxReasoningReplayScopeRef | undefined,
+): {
+  providerChanged: boolean;
+  destinationChanged: boolean;
+  adapterChanged: boolean;
+  modelChanged: boolean;
+  credentialChanged: boolean;
+} | undefined {
   const current = servingIdentityFor(scope);
-  if (!current) return false;
+  if (!current) return undefined;
   const at = now();
   sweepExpiredServingIdentities(at);
   const previous = servingIdentities.get(current.threadId);
-  return previous !== undefined && previous.identity !== current.identity;
+  if (previous === undefined || previous.identity === current.identity) return undefined;
+  const before = JSON.parse(previous.identity) as ReasoningReplayIdentityTuple;
+  const after = JSON.parse(current.identity) as ReasoningReplayIdentityTuple;
+  return {
+    providerChanged: before[0] !== after[0],
+    destinationChanged: before[1] !== after[1],
+    adapterChanged: before[2] !== after[2],
+    modelChanged: before[3] !== after[3],
+    credentialChanged: before[4] !== after[4],
+  };
 }
 
 /**

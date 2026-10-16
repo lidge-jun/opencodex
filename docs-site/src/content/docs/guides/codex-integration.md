@@ -464,10 +464,10 @@ other providers keep their defaults.
 Authenticated loopback routing normally keeps Codex on its built-in `openai` provider identity.
 That preserves native thread identity, but it also makes Codex request native remote compaction.
 When a routed provider cannot return a native compaction blob, OpenCodeX stores the summary in its
-own `ocx1:` envelope. Native ChatGPT cannot verify that envelope if OpenCodeX is later removed from
+own `ocx1:`/`ocx2:` envelope. Native ChatGPT cannot verify that envelope if OpenCodeX is later removed from
 the request path.
 
-On an authenticated loopback route, enable client-side compaction to keep V2 sub-agent routing while preventing new `ocx1:` compaction summaries. Non-loopback and API-key routes retain their existing provider and authentication behavior:
+On an authenticated loopback route, enable client-side compaction to keep V2 sub-agent routing while preventing new `ocx1:`/`ocx2:` compaction summaries. Non-loopback and API-key routes retain their existing provider and authentication behavior:
 
 ```bash
 ocx system settings --client-compaction on   # or "codexClientCompaction": true in config.json
@@ -495,7 +495,7 @@ selected provider. V2 sub-agent requests keep their existing provider selection 
 accounting. Client-side compaction does not change plaintext delivery, encrypted task passthrough
 through `allowEncryptedV2AgentTasks`, or configured recovery and fallback behavior.
 
-This preference affects future compactions only, and it rewrites no existing `ocx1:` payload in
+This preference affects future compactions only, and it rewrites no existing `ocx1:`/`ocx2:` payload in
 any configuration, so use the explicit history recovery workflow for a thread that needs one.
 
 Whether resume-history metadata is re-tagged depends on which form the injection takes. On its
@@ -1621,6 +1621,42 @@ The shared SSE decoder accepts LF, CRLF and standalone CR line endings, even whe
 Choosing an account-qualified model does not enable credit spending. Stored accounts obey **Use credits after limit** during authentication, when credentials are prepared, and before Responses HTTP or WebSocket dispatch after pacing or retry waits. A held request reports the credit policy, not an authentication failure; wait for the reset, choose another account, or explicitly enable that account’s credit spending.
 
 Stored-account vision and web-search helpers also recheck this policy before sending, including retries. If consent changes or a limit is reached after helper selection, the helper reports the policy refusal without sending that attempt. The standalone search relay returns a reset-bound 429. Caller-owned Direct credentials retain their existing behavior.
+
+## Opt in a custom provider to managed local routing
+
+A custom provider such as `chatgpt-http` may use `supports_websockets = false`
+to keep HTTP transport. OpenCodex leaves custom providers untouched by default.
+To delegate only that provider's URL to OpenCodex, run:
+
+```sh
+ocx codex-provider allow chatgpt-http
+ocx start
+```
+
+The first command explains the scope and asks for confirmation, defaulting to No.
+For an explicitly approved scripted operation, use `allow chatgpt-http --yes`.
+Consent applies to this provider ID in the selected `CODEX_HOME`; it does not
+approve other providers or other homes. Start and sync update only its `base_url`
+to the local proxy. Its identity, WebSocket setting, other TOML fields and history
+remain unchanged. Keep the proxy running while using this route.
+Turning the Codex integration OFF also prevents approved-provider URL updates on
+start or sync; the saved provider consent remains available when you turn it back on.
+
+This mode supports explicit Responses provider tables with `requires_openai_auth = true`
+and no custom credentials or headers. Non-loopback targets, authless Desktop mode
+and client compaction require the existing dedicated integration instead.
+
+`ocx stop` and `ocx restore` restore recorded URLs while keeping consent for a later
+start. Run `ocx codex-provider status` to list approvals, or
+`ocx codex-provider revoke chatgpt-http` to restore its managed URL and remove consent.
+A URL changed outside OpenCodex is preserved and requires revoke followed by a new
+approval; OpenCodex does not silently adopt the replacement as a new baseline.
+The original URL assignment is retained in private recovery metadata under
+`OPENCODEX_HOME`, separately from the native config journal.
+
+Startup safety recognizes an approved provider's recorded managed URL as OpenCodex routing.
+This does not install restart protection: a manually started proxy still needs a viable
+background service to recover automatically after a restart.
 
 ## Native Desktop relay CONNECT validation
 

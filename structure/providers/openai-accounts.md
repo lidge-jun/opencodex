@@ -37,6 +37,8 @@ preserving a stale one would block every later migration.
 
 ## Model and wire identity
 
+The optional [native reasoning retention policy](../transports/native-reasoning-retention.md#runtime-boundary) can permit reasoning ciphertext forwarding across a known model or account change on the same canonical ChatGPT destination. It does not change account selection, entitlement, cache isolation, continuation-id ownership or uploaded-file retention; cross-account acceptance is not guaranteed.
+
 Native Spark membership and its model-specific request/tool exceptions are removed; the shared
 [catalog retirement policy](../catalog.md#shared-catalog) preserves historical user selections.
 

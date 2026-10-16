@@ -65,6 +65,12 @@ export const compactionRoutingSchema = z.object({
     .optional(),
 }).strict();
 
+export const reasoningRetentionSchema = z.object({
+  enabled: z.boolean().optional(),
+  maxContextPercent: z.number().gt(0).max(100).optional(),
+  maxTokens: z.number().int().positive().optional(),
+}).strict();
+
 /**
  * One phase of Codex's memory pipeline. A present phase must name a model: the GUI's "Off"
  * removes the phase instead of blanking it, so an empty entry would only ever come from a
@@ -348,9 +354,12 @@ export const providerConfigSchema = z.object({
   preserveResponsesReasoningContent: z.boolean().optional(),
   preserveResponsesInputItemIds: z.boolean().optional(),
   preserveResponsesMessageMetadata: z.boolean().optional(),
+  projectResponsesLiteHostedSearchHistory: z.boolean().optional(),
   dropResponsesReasoningItems: z.boolean().optional(),
   modelReasoningEffortsAuthoritative: z.boolean().optional(),
   decodesNativeCompactionBlobs: z.boolean().optional(),
+  supportsNativeCompactionTrigger: z.boolean().optional(),
+  supportsNativeCompactEndpoint: z.boolean().optional(),
   allowEncryptedV2AgentTasks: z.boolean().optional(),
   allowPrivateNetwork: z.boolean().optional(),
   // Per-provider egress (#2894): absent inherits the global proxy decision, "direct"/null

@@ -378,7 +378,8 @@ Returned history and route-decision payloads expose only masked request metadata
 (for example opaque `apiKeyId` labels). They do not include credentials, raw
 prompt bodies, or provider secrets.
 
-CLI: `ocx logs explain <request-id>`, `ocx logs rebuild-index`,
+CLI: `ocx logs history`, `ocx logs get <request-id>`,
+`ocx logs explain <request-id>`, `ocx logs rebuild-index`,
 `ocx logs index-status`, `ocx route policy list | show | dry-run | evaluate`.
 
 ## Migration

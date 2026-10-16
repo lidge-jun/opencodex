@@ -177,6 +177,46 @@ with `forwardClientHeaders`; provider `headers` win for this option, and credent
 names are refused. Canonical ChatGPT forward auth retains its separate fixed header allowlist.
 Only `originator`, `x-client-request-id`, `x-codex-app-version`, and `user-agent` are supported by `forwardClientHeaders`; arbitrary names are rejected on load/write and ignored at runtime.
 
+### Native compaction on custom gateways
+
+Responses compatibility alone is not evidence of native compaction support. Custom gateways
+continue using portable text summaries unless the operator declares the relevant capability:
+
+- `supportsNativeCompactionTrigger: true` preserves v2 `compaction_trigger` requests and native output.
+- `supportsNativeCompactEndpoint: true` opts key/local/forward routes into the separate v1 endpoint.
+  OAuth retains routed compaction and its existing credential lifecycle. V2 support does not imply v1 support.
+- `decodesNativeCompactionBlobs: true` preserves native blobs on subsequent turns when there is
+  no known serving-provider mismatch. Neither generation flag implies this replay capability.
+
+Custom native v1 also honors `preserveResponsesReasoningContent: true` for plaintext reasoning
+input, just like ordinary custom Responses requests. Absent or `false` keeps content blank;
+OpenAI-operated compact destinations keep blanking even if the flag is set. Internal `ocxr1:`
+envelopes are always removed. Plaintext preservation is independent of the generation flags,
+native blob replay capability, and serving-identity checks.
+
+If the custom provider also requires adjacent tool results (`requiresAdjacentResponsesToolResults: true`),
+both ordinary Responses and native v1 remove opaque reasoning ciphertext and require plaintext replay.
+Missing `reasoning_text` is filled from the item's `summary_text`, or a minimal placeholder if no
+usable summary exists. Existing plaintext is preserved. OpenAI-operated compact keeps its own policy.
+
+For a gateway whose **v2 generation and replay** have both been verified, merge these fields into
+its existing provider configuration, retaining its real URL and configured authentication:
+
+```json
+{
+  "adapter": "openai-responses",
+  "supportsNativeCompactionTrigger": true,
+  "decodesNativeCompactionBlobs": true
+}
+```
+
+These flags do not make the gateway an official OpenAI destination, forward caller credentials,
+change account selection, or bypass normal compatibility sanitization. Validate an actual compact
+response and continued conversation, not just HTTP 200. Keep blobs on the backend that minted them;
+cross-provider compaction routing overrides still use portable summaries. V1 fallback summaries
+remain portable even when the destination separately accepts v2 triggers. Native-capable routes
+are excluded from portable emergency compaction recovery for their respective protocol.
+
 Adapter selection does not select the upstream transport. Eligible requests can use the
 [upstream WebSocket proxy route](/reference/proxy-formats/#json-and-sse-output); invalid or unsupported
 WebSocket proxy settings fall back to HTTP/SSE. HTTP fetch-based Responses handling uses the

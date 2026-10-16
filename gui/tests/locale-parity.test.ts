@@ -145,6 +145,7 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   "integrations.tab.grok",
   "integrations.tab.opencode",
   "integrations.tab.pi",
+  "integrations.tab.gentleShell", // Product name, retained in the original spelling.
   "integrations.tab.omp",
   "integrations.tab.hermes",
   "integrations.tab.openclaw",

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { getConfigPath } from "../../src/config";
 import { setPersistedConfigMutationBeforeCommitForTests } from "../../src/config/persisted-mutation";
 import * as mutationLock from "../../src/config/mutation-lock";
-import { handleCodexAuthAPI } from "../../src/codex/auth-api";
+import { handleCodexAuthAPI } from "../../src/codex/auth-api/routes";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import {
   clearCodexUpstreamHealth,

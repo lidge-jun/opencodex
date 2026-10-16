@@ -61,13 +61,13 @@ import {
   type UpstreamSendRecovery,
   UPSTREAM_RESET_REPLAY_REFUSED_CODE,
 } from "../lib/upstream-retry";
+import { distributedKeyPhysicalFetch, distributedKeyResponseOwner, recordDistributedResponseFailure } from "../providers/api-key-response-ownership";
 import { providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../providers/api-key-selection";
 import { RequestPacingQueueOverloadError } from "../providers/request-pacing";
 import {
   hasKeyPoolFailover,
   rateLimitRetryDelayMs,
   rateLimitRetryPolicyFor,
-  recordDistributedKeyFailure,
   rotateProviderTransportOn401,
   rotateProviderTransportOn429,
   selectProactiveApiKeyTransport,
@@ -93,7 +93,7 @@ import {
   resolvePassthroughBodyGuard,
   sanitizePassthroughToolCallIds,
   tapAnthropicSseForLog,
-} from "./claude-messages";
+} from "./messages-shared";
 import { beginInferenceAttempt } from "./inference/attempt";
 import { createFinalRequestLog, type FinalRequestLogMeta } from "./inference/final-log";
 import { registerTurn, unregisterTurn } from "./lifecycle";
@@ -616,10 +616,6 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
             const releaseFamily = snapshot && oauthBinding ? anthropicModelQuotaFor(oauthBinding.instance).claimAnthropicFamilyRevalidation(snapshot.accountId, route.modelId) : () => {};
             if (!releaseFamily) throw new AnthropicAccountCooldownError(1);
             const selection = activeProvider._apiKeyAttempt;
-            const ownsDistributedKey = !selection?.distributed
-              || (activeProvider.apiKeyTransport === "bearer"
-                ? headers.get("authorization") === `Bearer ${activeProvider.apiKey}` && !headers.has("x-api-key")
-                : headers.get("x-api-key") === activeProvider.apiKey && !headers.has("authorization"));
             let dispatched: Response;
             const spendReport = createPhysicalSendReporter(physicalBudget, () => ({
               poolId: logCtx.spendPoolId ?? route.providerName, identityId: logCtx.accountLogLabel,
@@ -640,7 +636,9 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
               if (snapshot && !sendOwner) throw new NativeOAuthSelectionChangedError();
               physicalSendsUsed++;
               dispatched = await sendWithConnectionPolicy(
-                anthropicBillingPhysicalFetch((activeProvider as OcxProviderTransport).fetch ?? execute, route.providerName, activeProvider),
+                distributedKeyPhysicalFetch(
+                  anthropicBillingPhysicalFetch((activeProvider as OcxProviderTransport).fetch ?? execute, route.providerName, activeProvider),
+                  route.providerName, activeProvider, wire.url, activeProvider.apiKeyTransport === "bearer" ? "authorization" : "x-api-key"),
                 wire.url,
                 applyUpstreamRecoveryInit({ ...init, method: "POST", headers, body: wire.body }, transportRecovery),
                 { providerName: route.providerName, provider: activeProvider },
@@ -664,12 +662,13 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
                 }
               } catch { /* Passive observation must not fail the response. */ }
             }
+            const ownsDistributedKey = !selection?.distributed
+              || distributedKeyResponseOwner(dispatched, config, route.providerName) !== null;
             distributedResponseOwnsKey = ownsDistributedKey;
             const failureStatus = dispatched.status;
             pendingDistributedFailure = selection?.distributed && ownsDistributedKey && (failureStatus === 401 || failureStatus === 429)
               && !isNonReplayableResponse(dispatched)
-              ? () => { recordDistributedKeyFailure(config, route.providerName, selection, failureStatus,
-                Date.now(), dispatched.headers.get("retry-after")); }
+              ? () => { recordDistributedResponseFailure(dispatched, config, route.providerName, req.signal); }
               : undefined;
             if (!dispatched.ok) await recordKeyAttemptFailure(logCtx, dispatched, init.signal ?? upstream.signal);
             return dispatched;

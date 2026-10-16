@@ -3,7 +3,7 @@ import { loadConfig } from "../config";
 import { initializeMainAccountPolicyBinding } from "./account-lifecycle";
 import { isMainAccountHardLockEnabled } from "./main-account-hard-lock";
 import { clearAccountNeedsReauth } from "./account-runtime-state";
-import { MAIN_CODEX_ACCOUNT_ID } from "./main-account";
+import { MAIN_CODEX_ACCOUNT_ID } from "./account-id";
 import {
   probeNativeProfileRecoveryState,
   resolveNativeProfileContext,

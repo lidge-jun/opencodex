@@ -268,7 +268,7 @@ converted. A retained previous-response ID does not override an explicit custom-
 > Decision record: [ADR-0052](../decisions/ADR-0052-reasoning-and-tool-result-compatibility.md)
 
 ## Declared hosted-tool denials
-
+The explicitly selected Codex Responses Lite ordinary unreferenced history projection follows [hosted-search continuation binding](../providers-and-adapters.md#hosted-search-continuation-binding): it changes historical cells, not hosted tool declarations or action capability.
 A gateway that speaks the Responses API does not necessarily accept everything OpenAI accepts.
 `unsupportedHostedTools` is how such a destination says so: it names the hosted tool declarations
 this provider rejects, and `stripUnsupportedHostedTools` in

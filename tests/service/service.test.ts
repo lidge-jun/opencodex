@@ -3546,10 +3546,12 @@ describe("launchctl load verification", () => {
     // A runLaunchctl RESULT, not a spawnSync result.
     const failedLoad = () => ({ ok: true, stdout: "", stderr: "Load failed: 5: Input/output error" });
     const cleanLoad = () => ({ ok: true, stdout: "", stderr: "" });
+    const readPlist = () => "<plist/>";
 
     test("returns without consulting launchd when the load is clean", () => {
       expect(() => startLaunchd({
         launchctl: cleanLoad,
+        readPlist: () => { throw new Error("must not read a plist on a clean load"); },
         matches: () => { throw new Error("must not be consulted on a clean load"); },
       })).not.toThrow();
     });
@@ -3563,7 +3565,7 @@ describe("launchctl load verification", () => {
       const log = spyOn(console, "log").mockImplementation(() => {});
       try {
         expect(() => startLaunchd({
-          launchctl: failedLoad,
+          launchctl: failedLoad, readPlist,
           matches: () => ({ loaded: true, matchesPlist: true }),
         })).not.toThrow();
       } finally {
@@ -3576,7 +3578,7 @@ describe("launchctl load verification", () => {
       const lines: string[] = [];
       const log = spyOn(console, "log").mockImplementation(m => { lines.push(String(m)); });
       try {
-        startLaunchd({ launchctl: failedLoad, matches: () => ({ loaded: true, matchesPlist: true }) });
+        startLaunchd({ launchctl: failedLoad, readPlist, matches: () => ({ loaded: true, matchesPlist: true }) });
       } finally {
         log.mockRestore();
       }
@@ -3585,7 +3587,7 @@ describe("launchctl load verification", () => {
 
     test("throws with the bootout hint when the loaded job is stale", () => {
       expect(() => startLaunchd({
-        launchctl: failedLoad,
+        launchctl: failedLoad, readPlist,
         matches: () => ({ loaded: true, matchesPlist: false }),
       })).toThrow(/bootout/);
     });
@@ -3594,7 +3596,7 @@ describe("launchctl load verification", () => {
       // The plist exists (this is an installed service) — reloading it is `repair`,
       // not a re-registration.
       expect(() => startLaunchd({
-        launchctl: failedLoad,
+        launchctl: failedLoad, readPlist,
         matches: () => ({ loaded: false, matchesPlist: false }),
       })).toThrow(/service repair/);
     });

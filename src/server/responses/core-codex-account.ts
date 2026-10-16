@@ -32,6 +32,7 @@ import {
   type CodexWsPreOutputRefusalHold,
 } from "./codex-ws-wire";
 import type { RequestLogContext } from "../request-log";
+import type { AttemptRecoveryKind } from "../../usage/log";
 import type { DataPlaneAdmission } from "../auth-cors";
 import type { InboundWire } from "../../providers/registry";
 import type { BunRuntimeGateInput } from "./ws-upstream";
@@ -909,6 +910,8 @@ export async function retryCodexPoolOnAlternateAccount(
       applyAccountChangeConversationStateScrub({
         body: parsed._rawBody,
         parsed,
+        preserveReasoningEncryptedContent: isCanonicalOpenAiForwardProvider(retryProvider)
+          && parsed._nativeReasoningRetention?.accountSwitch === true,
         bindingKey: binding.bindingKey,
         servingAccountId: binding.accountId,
         priorAccountId: firstAuthCtx.accountId,
@@ -971,6 +974,10 @@ export async function retryCodexPoolOnAlternateAccount(
   // What this diff does fix is that the rungs are now CHARGED instead of free.
   const maxRetrySends = retrySameConfirmedAccount ? 7 : 1;
   let retrySendCount = 0;
+  // The gated-model 400 has no roster kind; it stays unattributed as before.
+  const moveRecovery: AttemptRecoveryKind | undefined = outcomeStatus === 429 || outcomeStatus === 402
+    ? "oauth-account-429"
+    : isTransientUpstreamStatus(outcomeStatus) ? "transient-5xx" : undefined;
   let upstreamResponse: Response;
   try {
     while (true) {
@@ -1005,7 +1012,10 @@ export async function retryCodexPoolOnAlternateAccount(
         // The move is a physical send like any other, so the root workflow is charged too.
         chargeWorkflowSends(args.options.workflowRootId, 1);
       }
-      noteProviderAttemptSend(logCtx, route.providerName, route.provider, passthroughEstimate);
+      // A move seals the first account's attempt here. Give it the status that account actually
+      // answered, not the 502 the split infers, and name why the second send exists.
+      if (logCtx.activeAttempt && logCtx.activeAttempt.status < 100) logCtx.activeAttempt.status = firstResponse.status;
+      noteProviderAttemptSend(logCtx, route.providerName, route.provider, passthroughEstimate, moveRecovery);
       try {
         upstreamResponse = await fetchWithHeaderTimeout(
           request.url,
