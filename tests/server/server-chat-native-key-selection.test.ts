@@ -252,10 +252,13 @@ for (const statusCode of [401, 429]) for (const rewrite of ["credential", "desti
         if (sameKeyRetry) expect(getKeyCooldownUntil(NAME, "k1")).toBeNull();
         else expect(getKeyCooldownUntil(NAME, "k1")).not.toBeNull();
       } else {
-        expect(result.response.status).toBe(statusCode);
-        expect(seen).toHaveLength(1);
-        expect(seen[0]!.key).toBe(rewrite === "credential" ? "Bearer fixture-plugin-key" : `Bearer ${KEYS[0]}`);
-        expect(seen[0]!.url).toBe(rewrite === "destination" ? "https://replacement.example/v1/chat/completions" : "https://gateway.example/v1/chat/completions");
+        const sameKeyRetry = retry && statusCode === 429;
+        expect(result.response.status).toBe(sameKeyRetry ? 200 : statusCode);
+        expect(seen).toHaveLength(sameKeyRetry ? 2 : 1);
+        for (const row of seen) {
+          expect(row.key).toBe(rewrite === "credential" ? "Bearer fixture-plugin-key" : `Bearer ${KEYS[0]}`);
+          expect(row.url).toBe(rewrite === "destination" ? "https://replacement.example/v1/chat/completions" : "https://gateway.example/v1/chat/completions");
+        }
         expect(getKeyCooldownUntil(NAME, "k1")).toBeNull();
       }
       for (const id of ["k2", "k3"]) expect(getKeyCooldownUntil(NAME, id)).toBeNull();
