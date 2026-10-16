@@ -11,6 +11,8 @@ The lockfile selects patched `serde_with` and `time` releases, with compatible e
 `serde` and `serde_json` pins in `desktop/src-tauri/Cargo.toml`. Build and test with the
 committed lockfile (`--locked`); the dependency update does not change app configuration,
 the bundled model proxy, or the minimum supported operating-system versions.
+The manual-poll regression in `desktop/src-tauri/src/process_spawn.rs` uses
+`std::task::Waker::noop()`, available since Rust 1.85 and covered by that minimum.
 
 `desktop/ui/` is the startup surface. Once the runtime reports healthy, a visible or manually
 launched shell navigates the webview to the proxy's loopback dashboard (`/#/usage`) rather than
