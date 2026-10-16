@@ -86,8 +86,11 @@ test("a refusal cannot hide a measured attempt with no matching price", () => {
     pricedRequests: 1, unpricedRequests: 0, unmeteredRequests: 0, estimatedCostUsd: baselineCost.costTotal,
   });
   expect(classification(actual.summary)).toEqual(classification(baseline.summary));
-  // The refusal adds a physical attempt; every other per-model field stays the same.
-  const models = (result: typeof actual) => result.models.map(({ attemptCount: _attemptCount, ...model }) => model)
+  // Compare model usage and pricing; the refusal adds an unreported physical attempt.
+  const models = (result: typeof actual) => result.models.map(({ provider, model, requests, inputTokens,
+    outputTokens, totalTokens, pricedRequests, unpricedRequests, priceCoverageRatio, estimatedCostUsd }) =>
+    ({ provider, model, requests, inputTokens, outputTokens, totalTokens,
+      pricedRequests, unpricedRequests, priceCoverageRatio, estimatedCostUsd }))
     .sort((a, b) => `${a.provider}/${a.model}`.localeCompare(`${b.provider}/${b.model}`));
   expect(models(actual)).toEqual(models(baseline));
 });
