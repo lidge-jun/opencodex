@@ -792,6 +792,7 @@ Qwen3.7 Plus/3.8 Max/3.8 Flash use Anthropic Messages. Legacy MiniMax M2.5 and
 Union Alpha also retain Messages. Models without a listed wire retain Chat.
 New native pins apply to the pinned Go destination with key authentication.
 Responses models still accept an explicit `modelAdapters` override.
+When reading an older saved configuration, OpenCodex ignores obsolete Chat/Responses overrides for the newly pinned Gemini and Qwen models, along with their formerly valid Responses-only hosted-tool preferences. Other providers, accounts and routing remain available. Reads leave the file unchanged; a later explicit configuration edit saves the upgraded values. New overrides for these native models are still rejected.
 Gemini uses `low`, `medium` and `high` thinking levels; higher requested efforts clamp to `high`.
 
 OpenCode Go requires a stable session identifier for routing. OpenCodex sends
