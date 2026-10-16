@@ -164,8 +164,9 @@ import {
   UnsupportedContentEncodingError,
 } from "../request-decompress";
 import { resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve";
-import { hasKeyPoolFailover, recordDistributedKeyFailure, rotateProviderTransportOn429, selectProactiveApiKeyTransport, transientRetryPolicyFor } from "../../providers/key-failover";
+import { hasKeyPoolFailover, rotateProviderTransportOn429, selectProactiveApiKeyTransport, transientRetryPolicyFor } from "../../providers/key-failover";
 import { transientSendCapFor } from "./request-send-budget";
+import { distributedKeyPhysicalFetch, recordDistributedResponseFailure } from "../../providers/api-key-response-ownership";
 import { providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../../providers/api-key-selection";
 import { stampApiKeyAccountLabel } from "../../providers/label";
 import { shouldAttemptImageTierRetry } from "../image-retry";
@@ -1203,7 +1204,8 @@ export async function handleResponsesCompact(
               if (!rebindPhysicalSend(sendBudget, { poolId: logCtx.spendPoolId ?? route.providerName,
                 identityId: logCtx.accountLogLabel })) throw new SendBudgetExhaustedError(safeHostLabel(compactUrl));
               noteProviderAttemptSend(logCtx, route.providerName, sendProvider, logCtx.usageLogInputTokens, upstreamRecovery);
-              return sendWithConnectionPolicy((sendProvider as { fetch?: typeof fetch }).fetch ?? execute, compactUrl,
+              return sendWithConnectionPolicy(
+                distributedKeyPhysicalFetch((sendProvider as { fetch?: typeof fetch }).fetch ?? execute, route.providerName, sendProvider, compactUrl), compactUrl,
                 { ...init, headers: sendHeaders, body: JSON.stringify({ ...buildCompactSendBody() as typeof compactBody, model: route.modelId }) },
                 { providerName: route.providerName, provider: sendProvider });
             } : undefined,
@@ -1283,9 +1285,7 @@ export async function handleResponsesCompact(
       return formatErrorResponse(502, "upstream_error", "Failed to connect to compact upstream");
     }
 
-    if ((upstream.status === 401 || upstream.status === 429) && !isNonReplayableResponse(upstream)) {
-      recordDistributedKeyFailure(config, route.providerName, compactProvider._apiKeyAttempt, upstream.status, Date.now(), upstream.headers.get("retry-after"));
-    }
+    recordDistributedResponseFailure(upstream, config, route.providerName, req.signal);
     if (
       upstream.status === 401
       && (authCtx.kind === "main-pool" || authCtx.kind === "pool")

@@ -30,9 +30,10 @@ describe("service state home isolation", () => {
           import { homedir } from "node:os";
           import { readServiceInstallState, serviceStatePathsForOpenCodexHome,
             writeServiceInstallState } from ${JSON.stringify(stateModule)};
-          // Match the preload: changing HOME cannot move Bun's cached startup home.
           const startupHome = homedir();
-          process.env.HOME = process.env.USERPROFILE = ${JSON.stringify(home.path("worker"))};
+          // Windows homedir() follows USERPROFILE changes. Keep production's default
+          // home stable; only guarded callers exercise a rewritten worker home.
+          if (${guarded}) process.env.HOME = process.env.USERPROFILE = ${JSON.stringify(home.path("worker"))};
           const before = readServiceInstallState();
           const pinned = serviceStatePathsForOpenCodexHome(${JSON.stringify(nextConfigHome)});
           writeServiceInstallState("scheduler", null);
