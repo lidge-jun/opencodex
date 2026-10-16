@@ -63,17 +63,33 @@ test("a refusal cannot hide a measured attempt with no matching price", () => {
     { ...measured, ordinal: 2, provider: "unknown-provider", model: "unknown-model" },
     { ...measured, ordinal: 3 },
   ];
-  const aggregate = aggregateAttemptUsage(attempts);
-  expect(aggregate.status).toBe("unreported");
-  const entry = { ...row(attempts), timestamp: Date.UTC(2026, 5, 28), usageStatus: aggregate.status, usage: aggregate.usage };
-  const cost = computeEntryCost(entry);
+  const entryFor = (legs: Attempt[]): PersistedUsageEntry => {
+    const aggregate = aggregateAttemptUsage(legs);
+    return { ...row(legs), timestamp: Date.UTC(2026, 5, 28), usageStatus: aggregate.status, usage: aggregate.usage };
+  };
+  const withRefusal = entryFor(attempts);
+  const withoutRefusal = entryFor(attempts.slice(1));
+  expect(withRefusal.usageStatus).toBe("unreported");
+  expect(withoutRefusal.usageStatus).toBe("reported");
+  const cost = computeEntryCost(withRefusal);
+  const baselineCost = computeEntryCost(withoutRefusal);
+  expect(baselineCost.isPriced).toBe(true);
+  expect(baselineCost.costTotal).toBeGreaterThan(0);
   expect(cost.attemptEstimates?.map(Boolean)).toEqual([false, false, true]);
-  expect(cost.costTotal).toBeGreaterThan(0);
-  const { summary } = summarizeUsage([entry], "30d", Date.UTC(2026, 5, 28, 12));
-  expect(summary).toMatchObject({
-    requests: 1, pricedRequests: 0, unpricedRequests: 1, unmeteredRequests: 0, estimatedCostUsd: 0,
+  expect({ ...cost, attemptEstimates: cost.attemptEstimates?.slice(1) }).toEqual(baselineCost);
+  const summarize = (entry: PersistedUsageEntry) => summarizeUsage([entry], "30d", Date.UTC(2026, 5, 28, 12));
+  const actual = summarize(withRefusal);
+  const baseline = summarize(withoutRefusal);
+  const classification = ({ pricedRequests, unpricedRequests, unmeteredRequests, estimatedCostUsd }: typeof actual.summary) =>
+    ({ pricedRequests, unpricedRequests, unmeteredRequests, estimatedCostUsd });
+  expect(classification(baseline.summary)).toEqual({
+    pricedRequests: 1, unpricedRequests: 0, unmeteredRequests: 0, estimatedCostUsd: baselineCost.costTotal,
   });
-  expect(cost.isPriced).toBe(false);
+  expect(classification(actual.summary)).toEqual(classification(baseline.summary));
+  // The refusal adds a physical attempt; every other per-model field stays the same.
+  const models = (result: typeof actual) => result.models.map(({ attemptCount: _attemptCount, ...model }) => model)
+    .sort((a, b) => `${a.provider}/${a.model}`.localeCompare(`${b.provider}/${b.model}`));
+  expect(models(actual)).toEqual(models(baseline));
 });
 
 test("a row of known-zero refusals stays unmetered", () => {
