@@ -335,12 +335,7 @@ cleanup, mode/profile commit, and the optional picker enable cannot race. `runDe
 that controller when one exists. With no controller (intercept disabled, client role, or a failed
 picker-proxy bind), its offline operations remove leftover picker artifacts without creating a
 terminator, and refuse enable with `proxy_unavailable`.
-
-Windows startup with picker intent off retains a dormant controller without binding the picker
-relay or starting its refresh timer. A later enable validates mode, integration and preference,
-then binds the relay under that controller's lock and starts the runtime. Concurrent enables
-share one relay; a failed lazy bind reports `proxy_unavailable` and can be retried. Live intercept
-state and its handle expose the bound port after activation, and shutdown closes that relay.
+Windows with picker intent off retains a dormant controller without binding the relay or starting refresh. Enable checks mode, integration and preference, then binds and starts under the lock. Concurrent enables share one relay; failed lazy binds can retry. State and handle publish the bound port, and shutdown closes it.
 
 The controller disarms the picker runtime before disable or cleanup. The disarm latch makes new
 `claude.ai` CONNECTs blind immediately and is cleared only by a completed, checked enable. If an
