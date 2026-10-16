@@ -102,7 +102,7 @@ The dashboard, the management API, and third-party client config ownership.
 | [`pricing.md`](pricing.md) | User price policies, prompt-length rate selection, persistence and estimate cache invalidation. |
 | [`clients/integrations.md`](clients/integrations.md) | Third-party client config ownership, snapshots, refresh, disable, and restore. |
 | [`clients/codex-desktop.md`](clients/codex-desktop.md) | Windows package activation, restart context, and protected compatibility authority persistence. |
-| [`clients/chatgpt-desktop.md`](clients/chatgpt-desktop.md) | Experimental macOS app-server stdout shim, opt-in launch, restore and failure boundaries. |
+| [`clients/chatgpt-desktop.md`](clients/chatgpt-desktop.md) | Experimental macOS app-server stdout shim and local-CA TLS intercept, opt-in launch/watcher, restore and failure boundaries. |
 | [`clients/claude-desktop.md`](clients/claude-desktop.md) | Claude Desktop profile ownership and config-library resolution. |
 | [`clients/claude-desktop-config-reads.md`](clients/claude-desktop-config-reads.md) | Verified regular-file reads of Claude Desktop config-library metadata, profiles and snapshots. |
 | [`clients/qoder.md`](clients/qoder.md) | Qoder settings.json provider and custom-model ownership, export and loopback placeholder rules. |
@@ -200,6 +200,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/lib/` | [`overview.md`](overview.md)<br>[`runtime.md`](runtime.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`transports/responses-failover.md`](transports/responses-failover.md)<br>[`transports/responses-spend.md`](transports/responses-spend.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`dashboard-and-usage.md`](dashboard-and-usage.md)<br>[`clients/integrations.md`](clients/integrations.md)<br>[`ops/service-and-sidecars.md`](ops/service-and-sidecars.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `src/lib/advisor-activation.ts` | [`advisor.md`](advisor.md) |
 | `src/lib/gui-pair-intent.ts` | [`remote-link.md`](remote-link.md) |
+| `src/lib/socks5-handshake.ts` | [`clients/chatgpt-desktop.md`](clients/chatgpt-desktop.md) |
 | `src/lib/windows-owner-acl.ts` | [`remote-link.md`](remote-link.md) |
 | `src/link/` | [`remote-link.md`](remote-link.md) |
 | `src/messaging/` | [`local-messaging.md`](local-messaging.md) |
@@ -230,6 +231,8 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/` | [`providers/generic-account-pool.md`](providers/generic-account-pool.md)<br>[`runtime.md`](runtime.md)<br>[`codex-prompts.md`](codex-prompts.md)<br>[`catalog.md`](catalog.md)<br>[`subagents.md`](subagents.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/responses.md`](transports/responses.md)<br>[`transports/native-reasoning-retention.md`](transports/native-reasoning-retention.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`transports/responses-failover.md`](transports/responses-failover.md)<br>[`transports/policy-fallback.md`](transports/policy-fallback.md)<br>[`transports/streaming-health.md`](transports/streaming-health.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`data-planes/images.md`](data-planes/images.md)<br>[`data-planes/inbound-compat.md`](data-planes/inbound-compat.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/jev-decision.md`](providers/jev-decision.md)<br>[`providers/xai-grok.md`](providers/xai-grok.md)<br>[`adapters/registry.md`](adapters/registry.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`dashboard-and-usage.md`](dashboard-and-usage.md)<br>[`clients/claude-desktop.md`](clients/claude-desktop.md)<br>[`ops/service-and-sidecars.md`](ops/service-and-sidecars.md) |
 | `src/server/gui-pair-delivery.ts` | [`remote-link.md`](remote-link.md) |
 | `src/server/index.ts` | [`adapters/compatibility-lab.md`](adapters/compatibility-lab.md) |
+| `src/server/index/chatgpt-unblock-lifecycle.ts` | [`clients/chatgpt-desktop.md`](clients/chatgpt-desktop.md) |
+| `src/server/index/optional-listeners.ts` | [`clients/chatgpt-desktop.md`](clients/chatgpt-desktop.md) |
 | `src/server/inference/advisor-diagnostics.ts` | [`advisor.md`](advisor.md) |
 | `src/server/management/` | [`providers/oauth-code-display-login.md`](providers/oauth-code-display-login.md) |
 | `src/server/management/anthropic-pool-settings.ts` | [`providers/anthropic-account-pool.md`](providers/anthropic-account-pool.md) |

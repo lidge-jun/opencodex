@@ -26,6 +26,8 @@ export function skipsCodexShimAutoRestore(command: string | undefined, args: str
   // `resolve` is read-only inspection for embedding shells: a lookup made to populate
   // a consent surface must not trigger a shim repair side effect first.
   if (command === "resolve") return true;
+  // Watcher identity validation must remain read-only before any app action.
+  if (command === "internal" && args[1] === "chatgpt-bundle-preflight") return true;
   // The desktop's approval-bound stop must validate its snapshot before any unrelated
   // CLI repair changes the installation it was approved against.
   if (command === "stop" && args.some(arg => arg.startsWith("--expect-"))) return true;

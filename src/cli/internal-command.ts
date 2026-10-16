@@ -25,6 +25,11 @@ function optionValue(args: readonly string[], name: string): string | undefined 
 
 export async function handleInternalCommand(args: readonly string[]): Promise<number> {
   const sub = args[0];
+  if (sub === "chatgpt-bundle-preflight") {
+    if (args.length !== 2 || !args[1]) return 2;
+    const { runChatgptWatcherBundlePreflight } = await import("../chatgpt/desktop-unblock/bundle-preflight");
+    return runChatgptWatcherBundlePreflight(args[1]);
+  }
   if (sub === "chatgpt-app-server-filter") {
     if (args.length > 2 || (args[1] !== undefined && args[1] !== "--self-test")) {
       console.error(USAGE);

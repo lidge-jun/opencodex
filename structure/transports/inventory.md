@@ -32,6 +32,7 @@ surface is listed here so a maintainer can find the owner without grepping:
 
 | Transport | Owner | Invariant worth knowing |
 | --- | --- | --- |
+| Shared SOCKS5 handshake | `src/lib/socks5-handshake.ts`, `src/lib/socks5-fetch.ts`, `src/lib/desktop-upstream-tunnel.ts`, `src/chatgpt/desktop-unblock/ws-upstream.ts` | Fetch tunnels, the native desktop relay and the optional ChatGPT intercept WebSocket relay share method negotiation, bounded URL-credential decoding, RFC 1929 authentication and CONNECT framing. Callers own socket disposal, deadlines and bytes after CONNECT; the handshake imports no optional integration. |
 | Azure OpenAI Responses | `src/adapters/azure.ts` | Deployment-shaped URLs on top of the Responses contract. |
 | Responses custom-tool preview | `src/bridge/sse.ts`, `src/server/responses-custom-tool-repair.ts`, `src/responses/progressive-freeform-input.ts`, `src/responses/freeform-wrapper-scan.ts` | Direct adapter events and routed function restoration share one progressive wrapper decoder over one bounded JSON classification of the prefix, so property order and escaped key spellings preview as the wrapper completion unwraps them. Fence-shaped `exec`/`apply_patch` prefixes stay held until authoritative completion normalization, while each caller retains its own patch-envelope and byte-budget policy. |
 | Meta Muse Responses tool names | `src/responses/muse-tool-name-alias.ts`, `src/adapters/openai-responses.ts` | `api.meta.ai` only: function names over 64 characters or containing characters outside `[a-zA-Z0-9_-]` become collision-safe wire aliases and are restored before the client sees them. |
@@ -323,9 +324,12 @@ and `tests/server/account-pool-management-api.test.ts`.
 
 ## SOCKS5 dispatch boundary
 
-`src/lib/socks5-handshake.ts` shares RFC1928/RFC1929 framing between the fetch tunnel and
-native desktop raw TLS dial. Credential decoding is bounded and failures retain the fetch
+`src/lib/socks5-handshake.ts` shares RFC1928/RFC1929 framing among the fetch tunnel, native
+desktop raw TLS dial and optional ChatGPT intercept WebSocket relay. Credential decoding is bounded and failures retain the fetch
 transport's public `Socks5FetchError` contract. This extraction reuses lcxhh521's PR5947 work.
+A handshake caller's omitted password produces the same empty-password bytes as a
+username-only proxy URL; the proxy's authentication reply still decides acceptance.
+`tests/lib/socks5-handshake.test.ts` pins both the wire bytes and refusal before CONNECT.
 
 HTTPS tunnels in `src/lib/socks5-fetch.ts` give the TLS handshake its own absolute
 30-second deadline after SOCKS CONNECT. Successful TLS clears that deadline before
@@ -340,7 +344,9 @@ mutates proxy environment keys. Anthropic token-host DNS failure proves an unsen
 only when both this immutable startup snapshot and the current environment are proxy-free.
 `src/server/responses/fetch-helpers.ts` routes the built-in HTTP executor through
 configured outbound fetch, preserving physical-send admission and dispatch override.
-Native WebSocket selection stays on HTTP SSE while SOCKS5 is configured.
+Native provider WebSocket selection stays on HTTP SSE while SOCKS5 is configured.
+The optional ChatGPT intercept has a separate raw upgrade relay whose SOCKS5 CONNECT
+shares `src/lib/socks5-handshake.ts` with fetch; see [ChatGPT Desktop](../clients/chatgpt-desktop.md#optional-local-ca-send-unblock-intercept).
 Proxy-selected discovery peers remain unpinnable, and private destinations still
 require explicit private-network permission plus NO_PROXY before direct transport.
 

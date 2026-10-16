@@ -199,6 +199,24 @@ describe("restore validates the discovered app before any quit or open", () => {
       expect(result.calls.filter(call => ["pgrep", "ps", "/usr/bin/osascript", "/usr/bin/open"].includes(call.command))).toEqual([]);
     });
   }
+  test("restore refuses while the intercept watcher is loaded, before quit or open", () => {
+    // The watcher would put the intercept switches straight back on the relaunched app.
+    const result = run({ flag: false, missingBinary: true, running: true, watcherLoaded: true });
+    expect(result.code).toBe(1);
+    expect(result.launcherExists).toBe(true);
+    expect(result.stderr).toContain("Uninstall the launch watcher");
+    expect(result.calls.filter(call => ["pgrep", "ps", "/usr/bin/osascript", "/usr/bin/open"].includes(call.command))).toEqual([]);
+  });
+  for (const watcherLoaded of [false, true]) {
+    test(`restore checks launchd without reading watcher files (loaded=${watcherLoaded})`, () => {
+      const result = run({ flag: false, missingBinary: true, running: true, watcherLoaded, watcherFilesUnreadable: true });
+      expect(result.code).toBe(watcherLoaded ? 1 : 0);
+      expect(result.launcherExists).toBe(watcherLoaded);
+      expect(result.calls.some(call => call.command === "/usr/bin/open")).toBe(!watcherLoaded);
+      if (watcherLoaded) expect(result.stderr).toContain("Uninstall the launch watcher");
+      expect(result.stderr).not.toContain("cannot be read");
+    });
+  }
   for (const sub of ["launch", "restore"]) {
     for (const scenario of [
       { pgrepFails: true }, { pgrepFails: true, pgrepTimeout: true },
@@ -276,9 +294,9 @@ describe("restore validates the discovered app before any quit or open", () => {
     expect(result.calls).toEqual([]);
   });
   test("status names a dropped chatgptDesktop block next to the off flag", () => {
-    const result = run({ sub: "status", configRaw: JSON.stringify({ chatgptDesktop: { appServerShim: true, unblockSend: true } }) });
+    const result = run({ sub: "status", configRaw: JSON.stringify({ chatgptDesktop: { appServerShim: true, unblockPort: true } }) });
     expect(result.code).toBe(0);
-    expect(result.stdout).toContain('app-server shim (experimental): off (config.json chatgptDesktop: Unrecognized key: "unblockSend"');
+    expect(result.stdout).toContain('app-server shim (experimental): off (config.json chatgptDesktop: Unrecognized key: "unblockPort"');
     expect(result.stdout).toContain("the whole chatgptDesktop block is ignored)");
   });
   test("status shows a plain off for a valid, absent or unreadable block", () => {
@@ -292,7 +310,7 @@ describe("restore validates the discovered app before any quit or open", () => {
   test("a launch refused with no dropped block keeps the ordinary opt-in message", () => {
     const result = run({ sub: "launch", flag: false, configRaw: "{}" });
     expect(result.code).toBe(1);
-    expect(result.stderr).toContain("set chatgptDesktop.appServerShim: true before launching");
+    expect(result.stderr).toContain("Enable chatgptDesktop.appServerShim or chatgptDesktop.unblockSend before launching");
     expect(result.stderr).not.toContain("whole chatgptDesktop block is ignored");
   });
   test("launch still requires opt-in and an app-server binary", () => {

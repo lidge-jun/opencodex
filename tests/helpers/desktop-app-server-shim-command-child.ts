@@ -62,7 +62,7 @@ mock.module("node:child_process", () => ({ ...childProcess, spawnSync(command: s
   if (command === "/usr/bin/open" && scenario.openFails) return { status: 1, stdout: "", stderr: "fixture open failed" };
   return { status: 0, stdout: "", stderr: "" };
 } }));
-mock.module("../../src/config", () => ({ loadConfig: () => ({ chatgptDesktop: { appServerShim: scenario.flag === true } }) }));
+mock.module("../../src/config", () => ({ loadConfig: () => ({ chatgptDesktop: { appServerShim: scenario.flag === true, unblockSend: scenario.intercept === true } }) }));
 // A refused launch explains a dropped chatgptDesktop block from the config file; never read this
 // machine's config here.
 mock.module("../../src/config/diagnostics", () => ({ readConfigFileSnapshot: () => ({ raw: scenario.configRaw }) }));
@@ -78,6 +78,36 @@ mock.module("../../src/chatgpt/app-server-shim/launcher", () => ({
   resolveChatgptCodexBinary: () => scenario.missingBinary ? null : binary,
   writeChatgptShimLauncher: () => { fs.writeFileSync(launcher, "new launcher"); },
 }));
+// The send-unblock intercept is out of scope here, and its live probes (listening port, launchd agent,
+// keychain trust, a running opencodex) must never reach this machine. Its watcher is absent unless
+// the scenario loads one.
+mock.module("../../src/chatgpt/desktop-unblock/launch-watcher", () => ({
+  chatgptAppCommandLine: () => null,
+  chatgptCommandLineHasPac: () => false,
+  chatgptCommandLineHasRule: () => false,
+  chatgptUnblockWatcherLoaded: () => scenario.watcherLoaded === true,
+  chatgptUnblockWatcherStatus: () => {
+    if (scenario.watcherFilesUnreadable) throw new Error("fixture: installed watcher files cannot be read");
+    return {
+      scriptInstalled: false, plistInstalled: false, agentLoaded: scenario.watcherLoaded === true,
+      scriptUpToDate: false, plistUpToDate: false,
+    };
+  },
+  installChatgptUnblockWatcher: (options: { appPath: string }) => {
+    calls.push({ command: "watcher-install", args: [options.appPath] });
+  },
+  launchChatgptWithRule: (...args: unknown[]) => {
+    calls.push({ command: "intercept-launch", args: [args[4] as string] });
+    return { ok: true, output: "" };
+  },
+  probeChatgptUnblockListener: async () => ({ state: scenario.intercept ? "ours" : "down" }),
+  uninstallChatgptUnblockWatcher: () => undefined,
+}));
+mock.module("../../src/server/proxy-liveness", () => ({ findLiveProxy: async () => null }));
+mock.module("../../src/chatgpt/desktop-unblock/ca-trust", () => ({
+  inspectChatgptCaTrust: async () => "missing",
+  chatgptCaTrustCommand: () => "",
+}));
 const { handleChatgptCommand } = await import("../../src/cli/chatgpt-command");
-const code = await handleChatgptCommand([scenario.sub ?? "restore"], "darwin");
+const code = await handleChatgptCommand([scenario.sub ?? "restore", ...(scenario.sub === "install-watcher" ? ["--yes"] : [])], "darwin");
 console.log(JSON.stringify({ code, calls, launcherExists: fs.existsSync(launcher), launcherContent: fs.existsSync(launcher) ? fs.readFileSync(launcher, "utf8") : null, root, shell, binary }));

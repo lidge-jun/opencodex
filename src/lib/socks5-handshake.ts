@@ -1,11 +1,12 @@
 /**
- * The SOCKS5 handshake both raw outbound transports share: method negotiation
+ * The SOCKS5 handshake raw outbound transports share: method negotiation
  * (RFC 1928), the optional RFC 1929 username/password subnegotiation, and the
  * CONNECT exchange.
  *
- * `src/lib/socks5-fetch.ts` (the HTTP tunnel) and
- * `src/lib/desktop-upstream-tunnel.ts` (the native desktop relay's raw
- * dial) each own their socket, their timeouts, and what happens after CONNECT;
+ * `src/lib/socks5-fetch.ts` (the HTTP tunnel),
+ * `src/lib/desktop-upstream-tunnel.ts` (the native desktop relay), and
+ * `src/chatgpt/desktop-unblock/ws-upstream.ts` (the ChatGPT intercept relay)
+ * each own their socket, their timeouts, and what happens after CONNECT;
  * this module only frames bytes through the reader each hands it, so a
  * credentialed `socks5://` proxy URL authenticates identically whether the caller
  * is a fetch or a raw WebSocket upgrade. When the URL carries credentials the
@@ -27,6 +28,7 @@ const SOCKS5_SUCCESS = 0x00;
 /** RFC 1929 credentials decoded from the proxy URL, each bounded to one length byte. */
 export interface Socks5Credentials {
   username?: Uint8Array;
+  /** Omission preserves the empty-password bytes produced by a username-only proxy URL. */
   password?: Uint8Array;
 }
 
@@ -77,13 +79,14 @@ export async function socks5Handshake(
   reader.write(Buffer.from([SOCKS5_VERSION, methods.length, ...methods]));
   const greeting = await reader.readExact(2, signal);
   if (greeting[0] !== SOCKS5_VERSION) throw new Socks5HandshakeError("SOCKS5 proxy returned an invalid greeting");
-  if (greeting[1] === SOCKS5_USER_PASS && credentials.username && credentials.password) {
+  if (greeting[1] === SOCKS5_USER_PASS && credentials.username) {
+    const password = credentials.password ?? new Uint8Array(0);
     reader.write(Buffer.from([
       0x01,
       credentials.username.byteLength,
       ...credentials.username,
-      credentials.password.byteLength,
-      ...credentials.password,
+      password.byteLength,
+      ...password,
     ]));
     const auth = await reader.readExact(2, signal);
     if (auth[0] !== 0x01 || auth[1] !== 0x00) throw new Socks5HandshakeError("SOCKS5 proxy authentication failed");

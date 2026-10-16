@@ -1,7 +1,7 @@
 /** Plain-quota gate rewriting; usage display and non-quota restrictions are preserved. */
 const PLAIN_QUOTA_REACHED_TYPE = "rate_limit_reached";
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
