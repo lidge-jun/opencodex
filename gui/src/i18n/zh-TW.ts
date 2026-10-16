@@ -3002,6 +3002,7 @@ export const zhTW: Record<TKey, string> = {
   "logs.detail.attempt.recovery.key401": "API 金鑰重新驗證",
   "logs.detail.attempt.recovery.oauthAccount403": "需要驗證帳號 (403)",
   "logs.detail.attempt.recovery.oauthAccount429": "帳號速率受限 (429)",
+  "logs.detail.attempt.recovery.oauthAccount402": "帳號配額已用盡 (402)",
   "logs.detail.attempt.recovery.opaqueBlobRejection": "已捨棄過期加密狀態",
   "logs.detail.attempt.recovery.reasoningEffortDowngrade": "已降低推理強度",
   "logs.detail.attempt.recovery.anthropicFastDowngrade": "快速模式遭拒，改以標準速度重試",
