@@ -85,7 +85,7 @@ State-changing: yes.
 
 | Flag | Value | Meaning |
 |---|---|---|
-| `--restart-codex` | boolean | Restart the Codex app-servers and fully quit and relaunch the Codex desktop app after a catalog or cache write, on macOS, Linux and Windows. |
+| `--restart-codex` | boolean | Restart the Codex app-servers and fully quit and relaunch the Codex desktop app after a catalog, cache, or changed configuration write, on macOS, Linux and Windows. |
 | `--restart-app-server-only` | boolean | Restart only the Codex app-servers and leave the desktop app running; wins over --restart-codex when both are given. |
 | `--restart-desktop-app` | boolean | Deprecated alias of --restart-codex. |
 

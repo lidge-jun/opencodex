@@ -152,6 +152,8 @@ ocx status --json
 
 ### `ocx sync [--restart-codex] [--restart-app-server-only]`
 
+显式指定重启标志后，即使目录和缓存的字节未变，成功提交 `config.toml` 更改也会触发重启。仅处理配置的操作若没有更改、被拒绝、仅作预检或写入已回滚，则不会触发重启。未指定重启标志时，sync 不会自动重启 Codex。
+
 从每个已配置的提供方获取实时模型列表，并将合并后的目录重新注入 Codex。在添加提供方后运行，或用于刷新可用模型。
 
 如果仍有长期运行的 Codex `app-server` 进程，`ocx sync` 会警告它们可能继续提供旧的内存模型列表，即使 `opencodex-catalog.json` / `models_cache.json` 已更新。传入 `--restart-codex` 会重启匹配的 `codex … app-server` 和 `codex-code-mode-host` 进程，并在 macOS、Linux 和 Windows 上完全退出再重新启动 Codex 桌面应用，让模型选择器重新读取目录。进行中的对话会结束。故意避免使用宽泛的 `pkill -f codex` 匹配。

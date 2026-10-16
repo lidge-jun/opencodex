@@ -474,11 +474,15 @@ const commandRunners: Record<string, CommandRunner> = {
       code = 1;
       console.error("Codex sync did not complete. Fix the reported Codex config issue and retry.");
     }
-    // Only warn/restart when a catalog or models_cache write actually happened. This is
+    // Catalog/model-cache writes retain their warning/restart handling. This is
     // deliberately not an `else`: refreshCodexModelCatalog runs before injectCodexConfig,
     // so a sync can fail (`ok: false`) after the catalog was already rewritten — which is
     // exactly when a long-lived app-server is holding the stale list.
-    if (synced.catalogWritten || synced.cacheSynced) {
+    // A configuration-only change also needs a reload, but only when explicitly
+    // requested. A successful no-op or refused write is never restart authority.
+    const requestedConfigRestart = (restartScope.appServers || restartScope.desktopApp)
+      && synced.ok && synced.configChanged === true;
+    if (synced.catalogWritten || synced.cacheSynced || requestedConfigRestart) {
       await handleRestartScopeAfterWrite(restartScope, console);
     }
     // `ocx sync` is a direct CLI path; it does not call the management

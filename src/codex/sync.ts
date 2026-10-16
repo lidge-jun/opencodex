@@ -33,6 +33,8 @@ export interface CodexSyncResult {
   catalogPath: string | null;
   catalogExists: boolean;
   catalogWritten: boolean;
+  /** Committed configuration-byte change, never inferred from a successful no-op. */
+  configChanged?: boolean;
   cacheSynced: boolean;
   /**
    * Whether the catalog owner committed a validated catalog or refused the
@@ -214,6 +216,7 @@ export async function syncModelsToCodex(
     return {
       status: "applied",
       ok: result.success,
+      ...(result.success && result.configChanged === true ? { configChanged: true } : {}),
       added: 0,
       catalogPath: null,
       catalogExists: false,
@@ -332,6 +335,7 @@ export async function syncModelsToCodex(
   return {
     status: "applied",
     ok: result.success,
+    ...(result.success && result.configChanged === true ? { configChanged: true } : {}),
     added,
     ...(refreshOutcome ? { refreshOutcome } : {}),
     catalogPath,

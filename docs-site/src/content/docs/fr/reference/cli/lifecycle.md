@@ -155,6 +155,8 @@ La section **OAuth reliability** indique si le stockage des identifiants est acc
 
 ### `ocx sync [--restart-codex] [--restart-app-server-only]`
 
+Un redémarrage explicitement demandé a également lieu après une modification de `config.toml` validée et enregistrée, même si les octets du catalogue et du cache restent identiques. Une opération sans changement de configuration, un refus, une validation préalable ou une écriture annulée ne le déclenche pas. Sans option de redémarrage, sync ne redémarre jamais Codex automatiquement.
+
 Récupère la liste active des modèles de chaque fournisseur configuré et réinjecte le catalogue fusionné dans Codex. Exécutez cette commande après l’ajout d’un fournisseur ou pour actualiser les modèles disponibles.
 
 Avant la découverte des fournisseurs ou le remplacement du catalogue et du cache, `ocx sync` vérifie que la configuration Codex gérée peut recevoir l’injection. Si cette validation refuse la configuration, la commande renvoie un code non nul, affiche la cause précise sur stderr et laisse le catalogue ainsi que le cache existants inchangés. `ocx restore back` effectue la même vérification préalable sans écriture avant de réactiver le routage.

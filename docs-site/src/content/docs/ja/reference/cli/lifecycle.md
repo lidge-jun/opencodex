@@ -156,6 +156,8 @@ ocx status --json
 
 ### `ocx sync [--restart-codex] [--restart-app-server-only]`
 
+再起動フラグを明示した場合、カタログとキャッシュのバイト列が変わらなくても、`config.toml` の変更が正常にコミットされれば再起動します。設定だけを扱う操作が変更なし、拒否、事前検証、ロールバックとなった場合は再起動しません。再起動フラグがなければ、sync が Codex を自動的に再起動することはありません。
+
 構成されているすべてのプロバイダーからライブ モデル リストを取得し、マージされたカタログを Codex に再挿入します。プロバイダーを追加した後、または利用可能なモデルを更新するために実行します。
 
 存続期間の長い Codex `app-server` プロセスがまだ実行されている場合、`ocx sync` は、`opencodex-catalog.json` / `models_cache.json` が更新されても、以前のメモリ内モデル リストを提供し続ける可能性があることを警告します。`--restart-codex` を渡すと、一致する `codex … app-server` および `codex-code-mode-host` プロセスを再起動し、さらに macOS、Linux、Windows で Codex デスクトップ アプリを完全に終了して再起動します。モデル ピッカーがカタログを読み直すためです。進行中の会話は終了します。広範な `pkill -f codex` 一致は意図的に回避されます。

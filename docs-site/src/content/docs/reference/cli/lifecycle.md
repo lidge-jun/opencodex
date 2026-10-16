@@ -493,6 +493,8 @@ upstream status but never consumes or resumes a grant.
 
 ### `ocx sync [--restart-codex] [--restart-app-server-only]`
 
+An explicitly requested restart also runs after a successful committed `config.toml` change, even if the catalog and cache bytes are unchanged. A configuration-only no-op, refusal, preflight, or rolled-back write does not trigger it. Without a restart flag, sync never automatically restarts Codex.
+
 Fetch the live model list from every configured provider and re-inject the merged catalog into Codex.
 Run it after adding a provider or to refresh available models.
 
