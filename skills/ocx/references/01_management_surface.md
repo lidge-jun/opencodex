@@ -30,7 +30,7 @@ These answer in the CLI head and never reach the proxy, so they work with nothin
 | [accounts](01_surface_accounts.md) | 42 |
 | [agents-routing](01_surface_agents-routing.md) | 51 |
 | [integrations](01_surface_integrations.md) | 41 |
-| [observe-system](01_surface_observe-system.md) | 95 |
+| [observe-system](01_surface_observe-system.md) | 96 |
 | [access-remote](01_surface_access-remote.md) | 32 |
 | [lab](01_surface_lab.md) | 21 |
 
@@ -1421,6 +1421,6 @@ Original invocation order. These headings preserve links to the previous single-
 
 ## Counts
 
-- declared capabilities: 342
+- declared capabilities: 343
 - of those, state-changing: 208
 - head-resolved invocations: 2
