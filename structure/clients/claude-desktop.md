@@ -275,8 +275,8 @@ predecessor before writing the credential, verifies readback, then commits metad
 it removes the journal last. Recovery requires matching journal/store identity; missing initialized
 credentials, unavailable storage or inconsistent metadata fail closed without publishing a replacement.
 Gateway/off startup does not read or initialize an OS picker credential unless an applied picker
-profile needs recovery. macOS retains its dormant runtime/controller for later explicit activation;
-Windows without picker intent or an applied profile constructs neither picker runtime/controller nor relay. Activation uses the same persistent authority path.
+profile needs recovery. Both macOS and Windows retain a dormant runtime/controller for explicit activation;
+Windows without picker intent or an applied profile defers relay binding and refresh. Activation uses the same persistent authority path.
 On macOS trust is added without a policy string: Chromium
 skips host-scoped trust settings, so `inspectPickerTrust` treats a current CA whose exported user
 trust settings carry `kSecTrustSettingsPolicyString` as untrusted and an explicit trust step replaces it; an
