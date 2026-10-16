@@ -2018,19 +2018,22 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
           </SettingsRow>
         )}
         {v2 && v2.multiAgentMode === "v2" && (
-          <SettingsRow label={t("models.keepNativeOnV1")} muted={false} caption>
-            <Switch
-              on={v2.keepNativeChatGptOnV1 === true}
-              onClick={() => void setKeepNativeChatGptOnV1(!v2.keepNativeChatGptOnV1)}
-              disabled={v2Busy}
-              label={t("models.keepNativeOnV1")}
-            />
-            <Tooltip content={t("models.keepNativeOnV1Hint")} side="top" maxWidth={360}>
-              <span className="models-v2-keep-native-info" aria-label={t("models.keepNativeOnV1Hint")}>
-                <IconInfo width={13} height={13} aria-hidden="true" />
-              </span>
-            </Tooltip>
-          </SettingsRow>
+          <div className="models-v2-keep-native-row">
+            <div className="models-v2-keep-native">
+              <span className="models-v2-keep-native-label text-caption">{t("models.keepNativeOnV1")}</span>
+              <Switch
+                on={v2.keepNativeChatGptOnV1 === true}
+                onClick={() => void setKeepNativeChatGptOnV1(!v2.keepNativeChatGptOnV1)}
+                disabled={v2Busy}
+                label={t("models.keepNativeOnV1")}
+              />
+              <Tooltip content={t("models.keepNativeOnV1Hint")} side="top" maxWidth={360}>
+                <span className="models-v2-keep-native-info" aria-label={t("models.keepNativeOnV1Hint")}>
+                  <IconInfo width={13} height={13} aria-hidden="true" />
+                </span>
+              </Tooltip>
+            </div>
+          </div>
         )}
         {pendingSurface && (
           <SubagentSurfaceWarningModal

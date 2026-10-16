@@ -753,7 +753,7 @@
     "config-account-thresholds.test.ts": "config",
     "config-blocked-model-redirects.test.ts": "config",
     "config-catalog-auto-refresh.test.ts": "config",
-    "config-commandcode-claude-pin.test.ts": "config", "config-opencode-zen-upgrade.test.ts": "config",
+    "config-commandcode-claude-pin.test.ts": "config", "config-opencode-zen-upgrade.test.ts": "config", "config-opencode-go-upgrade.test.ts": "config",
     "config-load-degrade.test.ts": "config",
     "protocol-settings.test.ts": "config",
     "config-mutation-lock.test.ts": "config",

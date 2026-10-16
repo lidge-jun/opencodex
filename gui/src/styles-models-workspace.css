@@ -170,7 +170,7 @@
 */
 .models-control-top-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto;
   row-gap: var(--space-1);
   margin-bottom: var(--space-3);
   min-width: 0;
@@ -178,6 +178,7 @@
 
 /* One labelled control: label group left, action group right, both vertically centered. */
 .models-control-row {
+  grid-column: 1 / -1;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -239,6 +240,31 @@
   margin-bottom: var(--space-2);
   flex-wrap: wrap;
   align-items: center;
+}
+
+/* The v2 qualifier stays under the Sub-agent controls; the other settings rows
+   still span the panel so their labels and controls retain the shared edges. */
+.models-v2-keep-native-row {
+  grid-column: 2;
+  justify-self: end;
+  display: flex;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.models-v2-keep-native {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.models-v2-keep-native-label {
+  color: var(--muted);
+  white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Sits in the same 24px gutter as the Sub-agent help button directly above it,
@@ -548,6 +574,20 @@
 /* ── Responsive ───────────────────────────────────────── */
 
 @media (max-width: 1160px) {
+  .models-control-top-row {
+    grid-template-columns: 1fr;
+  }
+
+  .models-v2-keep-native-row {
+    grid-column: 1;
+    justify-self: start;
+    justify-content: flex-start;
+  }
+
+  .models-v2-keep-native-label {
+    white-space: normal;
+  }
+
   .models-shadow-model-slot {
     flex: 1 1 12rem;
     width: auto;

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import {
@@ -67,6 +67,25 @@ describe("import-cycle ratchet: scanner", () => {
     for (const ext of ["ts", "tsx", "mts"]) writeFileSync(join(src, "nested", `index.${ext}`), "export const b = 1;");
     const resolved = basename(Bun.resolveSync("./nested", src));
     expect(scanGraph(root).get("src/a.ts")).toEqual([`src/nested/${resolved}`]);
+  });
+
+  test.each(["ts", "tsx", "mts"])("symlinked roots preserve index.%s cycle identities", extension => {
+    const base = mkdtempSync(join(tmpdir(), "ocx-import-symlink-"));
+    const physical = join(base, "physical");
+    const root = join(base, "alias");
+    try {
+      mkdirSync(join(physical, "src", "nested"), { recursive: true });
+      writeFileSync(join(physical, "src", "a.ts"), 'import { b } from "./nested"; export const a = b;');
+      writeFileSync(join(physical, "src", "nested", `index.${extension}`),
+        'import { a } from "../a"; export const b = a;' + (extension === "tsx" ? " export const view = <span/>;" : ""));
+      symlinkSync(physical, root, process.platform === "win32" ? "junction" : "dir");
+      const graph = scanGraph(root);
+      expect(graph.get("src/a.ts")).toEqual([`src/nested/index.${extension}`]);
+      expect(graph.get(`src/nested/index.${extension}`)).toEqual(["src/a.ts"]);
+      expect(cyclicModules(graph)).toEqual(["src/a.ts", `src/nested/index.${extension}`]);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
   });
 
   test("only load-time value imports form edges", () => {

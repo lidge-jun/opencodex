@@ -1639,6 +1639,8 @@ Consent applies to this provider ID in the selected `CODEX_HOME`; it does not
 approve other providers or other homes. Start and sync update only its `base_url`
 to the local proxy. Its identity, WebSocket setting, other TOML fields and history
 remain unchanged. Keep the proxy running while using this route.
+Turning the Codex integration OFF also prevents approved-provider URL updates on
+start or sync; the saved provider consent remains available when you turn it back on.
 
 This mode supports explicit Responses provider tables with `requires_openai_auth = true`
 and no custom credentials or headers. Non-loopback targets, authless Desktop mode

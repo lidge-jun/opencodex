@@ -6,7 +6,8 @@
  */
 import { readClientConnectionState, sameClientConnectionOwner } from "../client/state";
 import { fetchHubUsage } from "../client/hub-client";
-import { readServiceApiTokenState } from "../lib/service-secrets";
+import { readServiceApiTokenState, serviceApiTokenFingerprint } from "../lib/service-secrets";
+import { runningProxyUpdateHeaders } from "../oauth/login-cli";
 import { redactSecretString } from "../lib/redact";
 import { rangeWindow, USAGE_SURFACES } from "../usage/summary";
 import type { UsageTimeWindow } from "../usage/time-range";
@@ -16,6 +17,7 @@ import {
   rejectArgs,
   RuntimeApiError,
   runtimeRequest,
+  runtimeBaseUrl,
   takeFlag,
   takeOption,
   takeOptionWithSyntax,
@@ -174,22 +176,54 @@ function formatCompare(input: {
   return lines;
 }
 
+// Private command-local authority; neither credentials nor fingerprints enter output.
+function captureUsageOwner() {
+  const connection = readClientConnectionState();
+  if (connection.kind === "invalid" || connection.kind === "mismatched") {
+    throw new Error(`Client usage unavailable: ${connection.reason}`);
+  }
+  const token = readServiceApiTokenState();
+  if (connection.kind === "connected" && (token.kind !== "present" || token.fingerprint !== connection.value.tokenFingerprint)) {
+    throw new Error("Client usage unavailable: the enrolled data key is missing or changed; repair the client connection");
+  }
+  const headers = runningProxyUpdateHeaders();
+  const fingerprint = connection.kind === "connected" ? connection.value.tokenFingerprint
+    : serviceApiTokenFingerprint(headers.get("X-OpenCodex-API-Key") ?? "");
+  return { connection, token, headers, fingerprint };
+}
+type UsageOwner = ReturnType<typeof captureUsageOwner>;
+
+function assertUsageOwner(owner: UsageOwner): void {
+  const current = readClientConnectionState();
+  const expected = owner.connection;
+  let same = current.kind === expected.kind;
+  if (expected.kind === "connected") {
+    const token = readServiceApiTokenState();
+    same = current.kind === "connected" && sameClientConnectionOwner(current.value, expected.value)
+      && current.value.transport === expected.value.transport
+      && JSON.stringify(current.value.link) === JSON.stringify(expected.value.link)
+      && current.value.tokenFingerprint === owner.fingerprint
+      && token.kind === "present" && token.fingerprint === owner.fingerprint;
+  } else {
+    same &&= serviceApiTokenFingerprint(runningProxyUpdateHeaders().get("X-OpenCodex-API-Key") ?? "") === owner.fingerprint;
+  }
+  if (!same) throw new Error("Usage owner changed during comparison; no comparison was produced. Retry for the current connection and credential.");
+}
+
 async function readUsage(
   suffix: string,
   window: UsageTimeWindow,
   apiKeyId: string | undefined,
   deps: RuntimeApiDeps,
+  owner: UsageOwner,
 ): Promise<ScopedUsage> {
-  const connection = readClientConnectionState();
-  if (connection.kind === "invalid" || connection.kind === "mismatched") {
-    throw new Error(`Client usage unavailable: ${connection.reason}`);
-  }
+  assertUsageOwner(owner);
+  const { connection, token } = owner;
   let result: ScopedUsage;
   if (connection.kind === "connected") {
     if (apiKeyId !== undefined) {
       throw new CliUsageError("--api-key-id is unavailable on connected clients; run on the hub for a selected key, or omit it for this client's usage", USAGE_COMPARE_USAGE);
     }
-    const token = readServiceApiTokenState();
     if (token.kind !== "present" || token.fingerprint !== connection.value.tokenFingerprint) {
       throw new Error("Client usage unavailable: the enrolled data key is missing or changed; repair the client connection");
     }
@@ -199,18 +233,11 @@ async function readUsage(
     result = await fetchHubUsage(connection.value.serverUrl, token.token, new URLSearchParams(suffix.replace(/^\?/, "")), {
       fetchImpl: peerFetch, timeoutMs: 60_000, ...(link ? { peer: "Home" as const } : {}),
     });
-    const current = readClientConnectionState();
-    const currentToken = readServiceApiTokenState();
-    if (current.kind !== "connected" || !sameClientConnectionOwner(current.value, connection.value)
-      || current.value.tokenFingerprint !== token.fingerprint
-      || currentToken.kind !== "present" || currentToken.fingerprint !== token.fingerprint) {
-      throw new Error("Client connection changed while reading usage; retry for the current connection");
-    }
   } else if (apiKeyId === undefined) {
-    result = await runtimeRequest(`/api/usage${suffix}`, {}, deps);
+    result = await runtimeRequest(`/api/usage${suffix}`, { headers: owner.headers }, deps);
   } else {
     try {
-      result = await runtimeRequest(`/api/usage${suffix}`, { redirect: "error", credentials: "omit" }, deps);
+      result = await runtimeRequest(`/api/usage${suffix}`, { redirect: "error", credentials: "omit", headers: owner.headers }, deps);
     } catch (error) {
       if (error instanceof RuntimeApiError && error.code === "proxy_not_running") throw error;
       throw new Error("Key-scoped usage could not be read. Check runtime access and retry.");
@@ -222,6 +249,7 @@ async function readUsage(
   if (result?.customWindow !== true || result.since !== window.since || result.until !== window.until) {
     throw new Error("The server did not confirm the requested custom usage window. Upgrade and restart the proxy, then retry.");
   }
+  assertUsageOwner(owner);
   return result;
 }
 
@@ -247,8 +275,10 @@ export async function handleUsageCompareCommand(argv: string[], deps: UsageCompa
   if (!Number.isSafeInteger(now) || now < 0) throw new CliUsageError("compare clock is invalid", USAGE_COMPARE_USAGE);
   const windows = compareUsageWindows(range, now);
   const filters = { range, surface, provider, model, apiKeyId };
-  const currentReport = await readUsage(query({ ...filters, since: windows.current.since, until: windows.current.until }), windows.current, apiKeyId, deps);
-  const previousReport = await readUsage(query({ ...filters, since: windows.previous.since, until: windows.previous.until }), windows.previous, apiKeyId, deps);
+  const owner = captureUsageOwner();
+  const readDeps = owner.connection.kind === "disconnected" ? { ...deps, baseUrl: await runtimeBaseUrl(deps) } : deps;
+  const currentReport = await readUsage(query({ ...filters, since: windows.current.since, until: windows.current.until }), windows.current, apiKeyId, readDeps, owner);
+  const previousReport = await readUsage(query({ ...filters, since: windows.previous.since, until: windows.previous.until }), windows.previous, apiKeyId, readDeps, owner);
   const current = totalsOf(currentReport);
   const previous = totalsOf(previousReport);
   const deltaTotals: Totals = {};

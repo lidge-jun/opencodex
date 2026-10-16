@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
+import { registerUpstreamRewriter } from "../../src/plugins/upstream-hooks";
 import { apiKeyAccountLogLabel } from "../../src/codex/account-label";
 import { captureProviderApiKeySelection } from "../../src/providers/api-key-selection";
 import { clearKeyCooldowns, forgetApiKeyRotationCursor, getKeyCooldownUntil, recordDistributedKeyFailure } from "../../src/providers/key-failover";
@@ -227,6 +228,44 @@ test("chat owned 401 rotates the rejected distributed credential before output",
   expect(getKeyCooldownUntil(NAME, "k2")).toBeNull();
   unchanged(config); noLeaks(config);
 });
+
+for (const statusCode of [401, 429]) for (const rewrite of ["credential", "destination", "none"] as const) for (const retry of [false, true]) {
+  test(`chat physical ${statusCode} ownership after ${rewrite} rewrite (retry=${retry})`, async () => {
+    const config = fixture();
+    if (retry) config.providers[NAME]!.retryOn429 = { attempts: 1, intervalMs: 0, respectRetryAfter: false };
+    const off = registerUpstreamRewriter("fixture-key-owner", target => {
+      if (rewrite === "credential") target.headers.set("authorization", "Bearer fixture-plugin-key");
+      if (rewrite === "destination") target.url = "https://replacement.example/v1/chat/completions";
+    });
+    const reply = globalThis.fetch;
+    globalThis.fetch = (async (input, init) => {
+      if (seen.length) return reply(input, init);
+      seen.push({ key: new Headers(init?.headers).get("authorization"), url: String(input), body: JSON.parse(String(init?.body)) });
+      return Response.json({ error: { type: "upstream_error", message: "fixture refusal" } }, { status: statusCode });
+    }) as typeof fetch;
+    try {
+      const result = await start(config, new AbortController());
+      if (rewrite === "none") {
+        expect(result.response.status).toBe(200);
+        const sameKeyRetry = retry && statusCode === 429;
+        expect(seen.map(row => row.key)).toEqual([`Bearer ${KEYS[0]}`, `Bearer ${KEYS[sameKeyRetry ? 0 : 1]}`]);
+        if (sameKeyRetry) expect(getKeyCooldownUntil(NAME, "k1")).toBeNull();
+        else expect(getKeyCooldownUntil(NAME, "k1")).not.toBeNull();
+      } else {
+        const sameKeyRetry = retry && statusCode === 429;
+        expect(result.response.status).toBe(sameKeyRetry ? 200 : statusCode);
+        expect(seen).toHaveLength(sameKeyRetry ? 2 : 1);
+        for (const row of seen) {
+          expect(row.key).toBe(rewrite === "credential" ? "Bearer fixture-plugin-key" : `Bearer ${KEYS[0]}`);
+          expect(row.url).toBe(rewrite === "destination" ? "https://replacement.example/v1/chat/completions" : "https://gateway.example/v1/chat/completions");
+        }
+        expect(getKeyCooldownUntil(NAME, "k1")).toBeNull();
+      }
+      for (const id of ["k2", "k3"]) expect(getKeyCooldownUntil(NAME, id)).toBeNull();
+      unchanged(config); noLeaks(config);
+    } finally { off(); }
+  });
+}
 
 for (const cancel of [false, true]) test(`active manual key switch readmits the selected key (cancel=${cancel})`, async () => {
   const config = fixture();

@@ -164,8 +164,9 @@ import {
   UnsupportedContentEncodingError,
 } from "../request-decompress";
 import { resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve";
-import { hasKeyPoolFailover, recordDistributedKeyFailure, rotateProviderTransportOn429, selectProactiveApiKeyTransport, transientRetryPolicyFor } from "../../providers/key-failover";
+import { hasKeyPoolFailover, rotateProviderTransportOn429, selectProactiveApiKeyTransport, transientRetryPolicyFor } from "../../providers/key-failover";
 import { transientSendCapFor } from "./request-send-budget";
+import { distributedKeyPhysicalFetch, recordDistributedResponseFailure } from "../../providers/api-key-response-ownership";
 import { providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../../providers/api-key-selection";
 import { stampApiKeyAccountLabel } from "../../providers/label";
 import { shouldAttemptImageTierRetry } from "../image-retry";
@@ -1203,7 +1204,8 @@ export async function handleResponsesCompact(
               if (!rebindPhysicalSend(sendBudget, { poolId: logCtx.spendPoolId ?? route.providerName,
                 identityId: logCtx.accountLogLabel })) throw new SendBudgetExhaustedError(safeHostLabel(compactUrl));
               noteProviderAttemptSend(logCtx, route.providerName, sendProvider, logCtx.usageLogInputTokens, upstreamRecovery);
-              return sendWithConnectionPolicy((sendProvider as { fetch?: typeof fetch }).fetch ?? execute, compactUrl,
+              return sendWithConnectionPolicy(
+                distributedKeyPhysicalFetch((sendProvider as { fetch?: typeof fetch }).fetch ?? execute, route.providerName, sendProvider, compactUrl), compactUrl,
                 { ...init, headers: sendHeaders, body: JSON.stringify({ ...buildCompactSendBody() as typeof compactBody, model: route.modelId }) },
                 { providerName: route.providerName, provider: sendProvider });
             } : undefined,
@@ -1283,9 +1285,7 @@ export async function handleResponsesCompact(
       return formatErrorResponse(502, "upstream_error", "Failed to connect to compact upstream");
     }
 
-    if ((upstream.status === 401 || upstream.status === 429) && !isNonReplayableResponse(upstream)) {
-      recordDistributedKeyFailure(config, route.providerName, compactProvider._apiKeyAttempt, upstream.status, Date.now(), upstream.headers.get("retry-after"));
-    }
+    recordDistributedResponseFailure(upstream, config, route.providerName, req.signal);
     if (
       upstream.status === 401
       && (authCtx.kind === "main-pool" || authCtx.kind === "pool")
@@ -1792,10 +1792,16 @@ export async function handleResponsesCompact(
     if (typeof compactionItems[0]!.encrypted_content === "string"
       && compactionItems[0]!.encrypted_content.trim().length > 0
       && !compactionItems[0]!.encrypted_content.startsWith("ocx1:")) {
-      const result = new Response(JSON.stringify({ output: compactionItems }), {
+      // Failover may reach native compaction after readable reasoning was withheld locally.
+      // The opaque item cannot contain that text, so publish it (or its archive notice) alongside.
+      const output = [...compactionItems, ...(retention.retainedReasoning ?? [])];
+      if (retention.archived) output.push({ type: "message", role: "user",
+        content: [{ type: "input_text", text: appendRetentionNotice("", retention.archived).trimStart() }] });
+      const result = new Response(JSON.stringify({ output }), {
         headers: { "Content-Type": "application/json" },
       });
       if (!options.compactionRoutingOverride) rememberCompactHandoffRoute(req, admission, raw.model);
+      keepArchive = true;
       return result;
     }
     const encrypted = compactionItems[0]!.encrypted_content;
@@ -1812,7 +1818,7 @@ export async function handleResponsesCompact(
     keepArchive = true;
     return result;
   } finally {
-    // Only a readable replacement summary publishes this request's archive path.
+    // Keep an archive only after successful replacement history publishes its path.
     if (!keepArchive && retention.archived) rmSync(retention.archived.path, { force: true });
   }
 }

@@ -467,7 +467,9 @@ twice: the named range ending now, then the same range evaluated one equal windo
 filters apply to both reads. Human output prints current, previous, signed delta, and percent
 change. `--json` is `{schemaVersion,range,current,previous,delta,change,incomplete}`. The two
 reads are sequential, not an atomic snapshot. Custom `since`/`until` on each response must
-match the requested window.
+match the requested window. Both reads use the same connection and credential. If the
+connection, account, or credential changes during the command, it reports an owner
+mismatch and asks you to retry instead of printing a comparison.
 
 ### Page indexed request history
 
