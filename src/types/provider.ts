@@ -872,6 +872,13 @@ export interface OcxProviderConfig {
    */
   responsesSnapshotRepair?: boolean;
   /**
+   * Infer the commentary/final_answer phase on assistant messages for Responses passthrough
+   * providers whose upstream omits it (e.g. third-party gateways). Codex desktop collapses
+   * commentary into progress rows; without this every narration renders fully expanded.
+   * Disabled by default and applied only to client-facing SSE.
+   */
+  messagePhaseInference?: boolean;
+  /**
    * Opt-in hosted-web-search bridge for this KEY-auth Responses passthrough provider (#3761).
    * Absent or disabled leaves the passthrough byte-identical to today.
    */
