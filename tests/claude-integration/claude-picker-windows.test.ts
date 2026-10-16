@@ -6,6 +6,7 @@ import { connect as tlsConnect, type TLSSocket } from "node:tls";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
+import { handleManagementAPI } from "../../src/server/management-api";
 import { flushConfigDirHardeningAndReaps, hardenConfigDir } from "../../src/config/paths";
 import { resetHardenedStateForTests, setAsyncIcaclsRunnerForTests, setPlatformForTests } from "../../src/lib/windows-secret-acl";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -249,6 +250,55 @@ test("explicit enable on Windows activates the picker profile once trusted", asy
     expect(inspected.proxyUrl).toBe("http://127.0.0.1:" + String(handle?.pickerProxyPort));
   }
 }, 30_000);
+
+for (const disabledBy of ["preference", "desktop-integration", "gateway-mode"] as const) {
+  test(`Windows management enable binds the dormant picker after ${disabledBy} changes`, async () => {
+    const { root, config } = setup(disabledBy !== "gateway-mode");
+    if (disabledBy === "preference") config.claudeCode!.intercept!.picker = false;
+    if (disabledBy === "desktop-integration") config.clientIntegrations = { "claude-desktop": false };
+    saveConfig(config);
+    const trust = windowsTrust({ trusted: false });
+    const fake = memoryPickerCaStore();
+    const proxies: Array<Awaited<ReturnType<typeof startConnectProxy>>> = [];
+    const handle = await startClaudeIntercept({
+      config, configDir: root, publicPort: 10100,
+      dispatch: async () => new Response(), loadPickerRoutes: routes,
+      pickerPlatform: "win32", pickerCaStore: fake.store, pickerSecurity: trust.run,
+      startProxy: async (_port, options) => {
+        const proxy = await startConnectProxy(0, options);
+        proxies.push(proxy);
+        return proxy;
+      },
+    });
+    handles.push(handle);
+    expect(proxies).toHaveLength(1);
+    expect(handle?.pickerProxyPort).toBeNull();
+    expect(trust.calls).toEqual([]);
+    expect(existsSync(pickerCaCertPath(root))).toBe(false);
+
+    config.claudeCode!.desktopMode = "first-party";
+    config.clientIntegrations = { "claude-desktop": true };
+    saveConfig(config);
+    const url = new URL("http://127.0.0.1:10100/api/claude-desktop/picker");
+    const enable = async () => handleManagementAPI(new Request(url, {
+      method: "PUT", headers: { Host: url.host, "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: true, persist: true }),
+    }), url, config, {}, "admin-token", undefined, { trustedLoopback: true });
+    const response = await enable();
+    expect(response?.status).toBe(200);
+    expect(await response!.json()).toMatchObject({ ok: true, picker: { effective: true, profile: "applied", trust: "trusted" } });
+    expect(proxies).toHaveLength(2);
+    expect(handle?.pickerProxyPort).toBe(proxies[1]!.port);
+    expect(inspectDesktopPickerProfile({ configDir: root, platform: "win32" })).toMatchObject({
+      kind: "applied", proxyUrl: `http://127.0.0.1:${proxies[1]!.port}`,
+    });
+    expect((await enable())?.status).toBe(200);
+    expect(proxies).toHaveLength(2);
+    await handle!.stop();
+    handles.splice(handles.indexOf(handle), 1);
+    await expect(fetch(`http://127.0.0.1:${proxies[1]!.port}`)).rejects.toThrow();
+  }, 30_000);
+}
 
 test("Windows reload retains fingerprint and issues no trust mutations", async () => {
   const { root, config } = setup(true);
