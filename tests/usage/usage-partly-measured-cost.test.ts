@@ -56,6 +56,26 @@ test("a send the client cancelled before output is an unknown cost, not a known 
   expect(models).toEqual([expect.objectContaining({ model: "gpt-5.5", pricedRequests: 0, unpricedRequests: 1 })]);
 });
 
+test("a refusal cannot hide a measured attempt with no matching price", () => {
+  const { usage: _usage, ...withoutUsage } = measured;
+  const attempts: Attempt[] = [
+    { ...withoutUsage, status: 429, usageStatus: "unreported" },
+    { ...measured, ordinal: 2, provider: "unknown-provider", model: "unknown-model" },
+    { ...measured, ordinal: 3 },
+  ];
+  const aggregate = aggregateAttemptUsage(attempts);
+  expect(aggregate.status).toBe("unreported");
+  const entry = { ...row(attempts), timestamp: Date.UTC(2026, 5, 28), usageStatus: aggregate.status, usage: aggregate.usage };
+  const cost = computeEntryCost(entry);
+  expect(cost.attemptEstimates?.map(Boolean)).toEqual([false, false, true]);
+  expect(cost.costTotal).toBeGreaterThan(0);
+  const { summary } = summarizeUsage([entry], "30d", Date.UTC(2026, 5, 28, 12));
+  expect(summary).toMatchObject({
+    requests: 1, pricedRequests: 0, unpricedRequests: 1, unmeteredRequests: 0, estimatedCostUsd: 0,
+  });
+  expect(cost.isPriced).toBe(false);
+});
+
 test("a row of known-zero refusals stays unmetered", () => {
   const { usage: _usage, ...withoutUsage } = measured;
   const attempts: Attempt[] = [{ ...withoutUsage, status: 429, usageStatus: "unreported" }];
