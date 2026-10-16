@@ -1,6 +1,6 @@
 ---
 title: 어드바이저
-description: OpenCodex가 소유한 전문가 상담 사이드카 — 구성된 전문가 모델이 라우팅된 워커에게 조언을 반환하며, manual과 preflight 정책을 제공합니다.
+description: manual, preflight 및 증거 기반 adaptive 정책을 제공하는 독립 전문가 상담.
 ---
 
 어드바이저는 워커의 작업을 검토하고 조언을 반환하는 독립 전문가 모델입니다. 상담은 OpenCodex가 엔드투엔드로 소유합니다. 프록시가 워커 턴에 합성 `advisor` 도구를 주입하고, 정상적인 라우팅 권위를 통해 상담을 직접 실행하며, 조언을 재주입해 원래 워커가 계속 진행하게 합니다. 워커는 위임하지 않고, 아무것도 spawn하지 않으며, 제공자 자격 증명도 가지지 않습니다.
@@ -28,11 +28,12 @@ description: OpenCodex가 소유한 전문가 상담 사이드카 — 구성된 
 | `enabled?` | `boolean` | `false` | 마스터 스위치. 비활성화 시 요청 경로에 어드바이저 동작이 전혀 없습니다. |
 | `model?` | `string` | — | 전문가 모델. 라우터가 허용하는 모든 모델 문자열: 네이티브 모델(`gpt-6-astra`), 명시적 `provider/model`(`anthropic/claude-sonnet-4-6`, `xai/grok-...`), 계정 한정 네이티브 모델. 크로스 프로바이더를 완전히 지원합니다. |
 | `effort?` | `string` | `"max"` | 어드바이저 호출의 추론 강도(`low`~`ultra`). |
-| `policy?` | `"manual" \| "preflight"` | `"manual"` | 상담 시점. |
+| `policy?` | `"manual" \| "preflight" \| "adaptive"` | `"manual"` | 상담 시점. |
+| `maxConsultationsPerTask?` | `integer` | `3` | 적응형 작업 상담 한도(1–3회 시도, 수동 호출 포함). |
 | `timeoutMs?` | `number` | `120000` | 루프백 상담 타임아웃. |
 | `contextSharingConsent?` | `"v1"` | 없음 | 설정된 어드바이저 프로바이더로 작업 맥락을 보내는 운영자 동의. 현재 값은 `"v1"`뿐입니다. 없거나, 오래되었거나, 다른 값이면 작업 내용을 보내지 않습니다. `enabled: true`만으로는 동의가 아닙니다. |
 
-대시보드 **Advisor** 페이지 또는 `ocx advisor status|on|off|set --model <model> --effort <effort> --policy <manual|preflight>`로 관리합니다.
+대시보드 **Advisor** 페이지 또는 `ocx advisor status|on|off|set --model <model> --effort <effort> --policy <manual|preflight|adaptive>`로 관리합니다.
 
 현재 동의가 없으면 `ocx advisor on`은 프로바이더 간 전송을 켜지 않습니다. 고지를 출력하고 멈춥니다. `ocx advisor on --ack-context-sharing`와 `ocx advisor consent`가 `v1`을 기록합니다. `ocx advisor consent --revoke`는 동의를 지우고 전송을 즉시 멈춥니다. `ocx advisor set`은 동의를 부여하지 않습니다. 대시보드의 동의 확인란은 미리 선택되지 않습니다.
 
@@ -80,5 +81,13 @@ OpenCodex는 프로바이더 API 키, Authorization 헤더, OAuth 토큰, 백엔
 ## PR1 제한
 
 - 네이티브 OpenAI 패스스루 턴(ChatGPT 풀 워커)에는 합성 도구가 주입되지 않습니다. 어드바이저는 라우팅(번역) 제공자를 대상으로 합니다. preflight 상담은 run-turn 어댑터에 적용되지만 도구는 적용되지 않습니다.
-- 적응형 트리거가 없습니다: 막힘 감지, 반복 실패 분석, 에스컬레이션 계층, 다중 어드바이저, 투표가 없습니다. `manual`과 `preflight`만 있습니다.
+- 의미 기반 막힘 감지, 완료 검토, 단계별 에스컬레이션, 다중 전문가 또는 투표는 제공하지 않습니다.
 - preflight 중복 제거 원장은 프로세스 내에 있습니다. 프록시 재시작 후 진행 중인 작업은 preflight 상담을 한 번 더 받을 수 있습니다.
+
+## 증거 기반 적응형 상담과 활동 기록
+
+`adaptive`는 초기 상담 외에 같은 작업 디렉터리의 같은 검증이 실패하고, 이후 파일 편집이 성공한 뒤 새 검증 실행도 실패했을 때 상담합니다. 검증 성공은 실패 상태를 지웁니다. 편집 전에 시작한 검증은 수정 후 재시도가 아닙니다. 초기 상담과 수정 실패 상담은 별도로 중복을 방지하며 자동 상담에는 안정적인 대화 식별자가 필요합니다. 짝지어진 도구 호출/결과와 명시적 종료 코드가 필요합니다. 복잡한 스크립트, 일괄 호출, shell 편집 및 모호한 출력은 트리거하지 않습니다.
+
+`ocx advisor set --policy adaptive --max-consultations 2`로 설정합니다. 수동 및 자동 시도는 작업별 1–3회 예산을 공유하며 전송 전에 `OPENCODEX_HOME/advisor-budget.sqlite`에 예약합니다. 프록시 재시작이나 Worker 변경으로 초기화되지 않습니다. 작업 다이제스트, 횟수, 만료 시간만 보관하며 첫 시도 후 24시간에 만료됩니다(최대 512개 작업). 예산을 사용할 수 없어도 Worker는 계속합니다. 전송된 실패·취소 호출도 비용이 발생할 수 있으므로 예약을 돌려주지 않습니다. 안정적인 식별자가 없으면 요청별 수동 상담만 가능합니다.
+
+Advisor 페이지와 `ocx advisor activity --json`(`GET /api/advisor/activity`)은 이 프로세스의 최근 24시간 상담 메타데이터를 최대 100개 표시합니다. 화면이 보일 때 5초마다 갱신합니다. 이유, 상태, 모델, 시간, 보고된 입력/출력 토큰, 요청 및 어댑터 매핑 추론값을 포함합니다. 작업 본문, 명령, 조언, 대화 식별자는 저장하지 않으며 재시작 시 사라집니다. 매핑은 전송 파라미터의 증거일 뿐 내부 추론을 보장하지 않습니다. 미보고 값은 알 수 없음으로 유지하며 정확한 비용이나 조언 채택을 추정하지 않습니다.

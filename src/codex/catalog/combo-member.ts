@@ -100,7 +100,7 @@ import type {
   CatalogSourceEvidence,
   CatalogTrustedOpenAiApiPolicySnapshot,
 } from "../convergence-types";
-import { applyProviderConfigHints, configuredAutoCompactTokenLimit, positiveSafeInteger } from "./model-hints";
+import { applyProviderConfigHints, configuredAutoCompactTokenLimit, positiveSafeInteger, withVisionSidecarInput } from "./model-hints";
 
 /** Model ids each provider must retain for combo catalog derivation (OCX-111). */
 export function configuredComboTargetModelsByProvider(
@@ -219,6 +219,7 @@ export function resolveComboCatalogMember(
   callerFallback?: ComboCatalogMemberFallback,
   metadataModelIdCaseFold?: boolean,
   metadataConfigDir?: string,
+  visionSidecarEnabled = true,
 ): CatalogModel | undefined {
   const existing = memberByKey.get(targetKey(target));
   const prov = providers.get(target.provider);
@@ -226,6 +227,16 @@ export function resolveComboCatalogMember(
   // Disabled providers never contribute members — even a complete discovery row
   // is unusable for catalog derivation while the provider is off.
   if (prov?.disabled === true) return undefined;
+
+  /** Preserve custom modality overrides while filling missing provider metadata. */
+  const withProviderHints = (model: CatalogModel): CatalogModel => {
+    const hinted = prov
+      ? applyProviderConfigHints(target.provider, prov, model, contextCap, metadataModelIdCaseFold, undefined, metadataConfigDir, visionSidecarEnabled)
+      : model;
+    return model.catalogKind === CODEX_CUSTOM_MODEL_CATALOG_KIND && model.inputModalities !== undefined
+      ? withVisionSidecarInput({ ...hinted, inputModalities: [...model.inputModalities] }, prov, visionSidecarEnabled)
+      : hinted;
+  };
 
   const withFallbackMetadata = (member: CatalogModel): CatalogModel => {
     const contextWindow = typeof member.contextWindow === "number" && member.contextWindow > 0
@@ -276,7 +287,7 @@ export function resolveComboCatalogMember(
     // supplies a vision sidecar. Apply the same provider hints used for thin
     // rows before deriving a combo from this complete row.
     const hinted = prov && isModelVisionSidecarConsumer(prov, existing.id)
-      ? applyProviderConfigHints(target.provider, prov, existing, contextCap, metadataModelIdCaseFold, undefined, metadataConfigDir)
+      ? withProviderHints(existing)
       : existing;
     const capped = applyProviderContextCap(hinted.contextWindow, contextCap);
     if (capped === undefined || capped === existing.contextWindow) {
@@ -298,9 +309,7 @@ export function resolveComboCatalogMember(
     id: target.model,
     provider: target.provider,
   };
-  const hinted = prov
-    ? applyProviderConfigHints(target.provider, prov, base, contextCap, metadataModelIdCaseFold, undefined, metadataConfigDir)
-    : base;
+  const hinted = withProviderHints(base);
   const hintedContext = typeof hinted.contextWindow === "number" && hinted.contextWindow > 0
     ? hinted.contextWindow
     : undefined;

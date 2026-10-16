@@ -391,6 +391,9 @@ describe("fetchProviderQuotaReports", () => {
     expect(byProvider["google-antigravity"]?.quota.customWindows).toEqual([
       { label: "Gem", percent: 36, resetAt: Date.parse("2026-07-05T14:00:00Z") },
       { label: "Cla", percent: 79, resetAt: Date.parse("2026-07-05T15:00:00Z") },
+      { label: "gemini-3.6-flash-medium", modelId: "gemini-3.6-flash-medium", percent: 36, resetAt: Date.parse("2026-07-05T14:00:00Z") },
+      { label: "claude-sonnet-4.6 · sonnet", modelId: "claude-sonnet-4.6", percent: 79, resetAt: Date.parse("2026-07-05T15:00:00Z") },
+      { label: "autocomplete", modelId: "autocomplete", percent: 99, resetAt: Date.parse("2026-07-05T16:00:00Z") },
     ]);
     expect(byProvider.cursor?.source).toBe("cursor:period-usage");
     expect(byProvider.cursor?.reverseEngineered).toBe(true);
@@ -3473,7 +3476,10 @@ describe("fetchProviderQuotaReports", () => {
         expect(resolved).toEqual(urls.map(url => ({ url, benchmark: true, private: false, mihomo: true })));
         expect(posted).toEqual(urls.map(url => ({ url, address: "198.18.56.214", tls: true, auth: "Bearer agy-canonical-access", body: JSON.stringify({ project: "agy-canonical-project" }), signal: true })));
         expect(result.reports[0]?.source).toBe(fallback ? "google-antigravity:fetchAvailableModels" : "google-antigravity:retrieveUserQuotaSummary");
-        expect(result.reports[0]?.quota.customWindows).toEqual([{ label: "Gem", percent: fallback ? 25 : 40 }]);
+        expect(result.reports[0]?.quota.customWindows).toEqual([
+          { label: "Gem", percent: fallback ? 25 : 40 },
+          ...(fallback ? [{ label: "gemini", modelId: "gemini", percent: 25 }] : []),
+        ]);
         expect(plainFetchCalls).toEqual([]);
       });
     }
@@ -3493,7 +3499,10 @@ describe("fetchProviderQuotaReports", () => {
           },
         });
         const result = await fetchProviderQuotaReports(config(baseUrl), true);
-        expect(result.reports[0]?.quota.customWindows).toEqual([{ label: "Gem", percent: 25 }]);
+        expect(result.reports[0]?.quota.customWindows).toEqual([
+          { label: "Gem", percent: 25 },
+          { label: "gemini", modelId: "gemini", percent: 25 },
+        ]);
         expect(resolved).toEqual([{ url: summaryUrl, private: false }, { url: modelsUrl, private: false }]);
         expect(posted).toEqual([summaryUrl, modelsUrl]);
         expect(plainFetchCalls).toEqual([]);
@@ -3547,7 +3556,10 @@ describe("fetchProviderQuotaReports", () => {
           },
         });
         const result = await fetchProviderQuotaReports(config(), true);
-        expect(result.reports[0]?.quota.customWindows).toEqual([{ label: "Gem", percent: 25 }]);
+        expect(result.reports[0]?.quota.customWindows).toEqual([
+          { label: "Gem", percent: 25 },
+          { label: "gemini", modelId: "gemini", percent: 25 },
+        ]);
         expect(posted).toEqual([summaryUrl, modelsUrl]);
         expect(plainFetchCalls).toEqual([]);
       });

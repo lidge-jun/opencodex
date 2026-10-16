@@ -29,6 +29,30 @@ spellings. `src/providers/key-store.ts` leaves GCP markers stored during ordinar
 store/restore and refuses to restore GCP JSON through a keychain alias; the shared classification
 in `src/providers/api-key-resolve.ts` reports those markers as OS-stored credentials.
 
+## OpenCode Go Gemini transport
+
+`src/types/opencode-go.ts` declares the shared exact-model Go protocol table and scopes its Google pins to fixed-key
+HTTPS OpenCode Go destinations (`/zen/go/v1` or `/inference/go/v1`), excluding userinfo,
+query, fragment, nonstandard ports and Google OAuth/Vertex modes. `src/types/wire.ts`
+selects `google` for the table's Gemini model on the `opencode-go` row; runtime, static policy, Fast
+policy and protocol summaries share the pin. User-configurable adapter overrides stay
+limited to the two OpenAI wires. The existing `opencode-go` preset keeps historical name-based
+ownership and pins saved custom or inference URLs to `/zen/go/v1` before dispatch. Pure policy
+captures apply the same canonical destination. A differently named custom Chat provider keeps
+its configured URL and does not acquire the Google pin. The registry recognizes `/inference/go/v1`
+as a destination alias for metadata and affinity on differently named rows.
+
+`src/adapters/google.ts` sends the compiled Gemini body to
+`https://opencode.ai/inference/go/v1/models/gemini-4-argon-contributor`, with
+`:generateContent` or `:streamGenerateContent?alt=sse`, using the selected key as Bearer
+authorization. The existing Go session helper adds affinity for the settled Google wire.
+An empty key fails locally with an OpenCode Go diagnostic; AI Studio keeps its own diagnostic.
+The preset declares Gemini's `low`/`medium`/`high` thinking-level ladder; higher requested
+Codex efforts clamp to `high` through the existing effort resolver.
+AI Studio, Vertex and Antigravity retain their own transport contracts. Mocked dispatch
+and thought-signature continuation coverage lives in `tests/providers/opencode-go-gemini-wire.test.ts`;
+these fixtures do not attest live upstream availability.
+
 ## Google thought-text visibility boundary
 
 Google-family parts with `thought: true` stay separate from assistant output. After a CCA

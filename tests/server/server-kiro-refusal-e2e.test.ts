@@ -522,3 +522,84 @@ describe("Kiro refusal recovery through Responses", () => {
     });
   }
 });
+
+/**
+ * #4312: Kiro's CONTENT_FILTERED / GUARDRAIL_INTERVENED stop is an `incomplete` with
+ * `retryable: false`. A Responses client must see it as a terminal `response.failed` on every
+ * delivery that owns a bridge call: the adapter stream, both sidecar loops, and runTurn. No
+ * runTurn adapter emits this verdict today, so that case drives the same event through a
+ * `runTurn` stand-in on the Kiro registry entry.
+ */
+describe("Kiro content-filter stop through Responses streaming", () => {
+  const frame = (eventType: string, payload: Record<string, unknown>) => encodeMessage(
+    { ":message-type": "event", ":event-type": eventType },
+    new TextEncoder().encode(JSON.stringify(payload)));
+  const filtered = (stopReason: string) => new Response(Buffer.concat([
+    frame("assistantResponseEvent", { content: "Partial." }),
+    frame("metadataEvent", { stopReason }),
+  ]), { headers: { "content-type": "application/vnd.amazon.eventstream" } });
+  const lookupTool = { type: "function", name: "lookup", description: "Look something up.",
+    parameters: { type: "object", properties: { q: { type: "string" } }, required: ["q"] } };
+  const xai = { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", authMode: "key",
+    apiKey: "synthetic", models: ["grok-4"] };
+
+  for (const [label, stopReason, extra, tools] of [
+    ["adapter delivery", "CONTENT_FILTERED", {}, [lookupTool]],
+    ["adapter delivery", "GUARDRAIL_INTERVENED", {}, [lookupTool]],
+    ["web-search sidecar loop", "CONTENT_FILTERED",
+      { webSearchSidecar: { backend: "exa", exaApiKey: "synthetic" } },
+      [{ type: "web_search" }]],
+    ["image sidecar loop", "CONTENT_FILTERED",
+      { images: { bridgeEnabled: true }, providers: { ...config().providers, xai } }, [{ type: "image_generation" }]],
+    ["runTurn delivery", "CONTENT_FILTERED", {}, [lookupTool]],
+  ] as const) {
+    test(`${label}: ${stopReason} ends with one response.failed carrying invalid_prompt`, async () => {
+      await seed();
+      saveConfig({ ...config(), ...extra } as OcxConfig);
+      let sends = 0;
+      globalThis.fetch = (async (input, init) => {
+        const url = input instanceof Request ? input.url : String(input);
+        if (url.startsWith("https://runtime.") && url.endsWith(".kiro.dev/")) {
+          sends++;
+          return filtered(stopReason);
+        }
+        return realFetch(input, init);
+      }) as typeof fetch;
+      const originalCreate = ADAPTER_REGISTRY.kiro.create;
+      if (label === "runTurn delivery") {
+        ADAPTER_REGISTRY.kiro.create = (provider, context) => ({
+          ...originalCreate(provider, context),
+          async runTurn(_parsed, _incoming, emit) {
+            sends++;
+            emit({ type: "text_delta", text: "Partial." });
+            emit({ type: "incomplete", reason: "content_filter", retryable: false, endTurn: false,
+              message: `Kiro stopped with ${stopReason} before an explicit final answer` });
+          },
+        });
+      }
+      const server = startServer(0);
+      try {
+        const response = await realFetch(new URL("/v1/responses", server.url), {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ model: "kiro/claude-sonnet-4.5", input: "hello", stream: true, tools }),
+        });
+        expect(response.status).toBe(200);
+        const text = await response.text();
+        const terminals = text.split("\n\n").flatMap(block => {
+          const name = block.split("\n").find(line => line.startsWith("event: "))?.slice(7) ?? "";
+          const data = block.split("\n").find(line => line.startsWith("data: "))?.slice(6);
+          return /^response\.(completed|incomplete|failed)$/.test(name) && data
+            ? [{ name, response: JSON.parse(data).response as Record<string, any> }] : [];
+        });
+        expect(terminals.map(terminal => terminal.name)).toEqual(["response.failed"]);
+        const failed = terminals[0]!.response;
+        expect(failed.error.type).toBe("invalid_request_error");
+        expect(failed.error.code).toBe("invalid_prompt");
+        expect(failed.error.message).toContain(stopReason);
+        expect(failed.retryable).toBe(false);
+        // The refusal is neither replayed on the same account nor rotated to the other one.
+        expect(sends).toBe(1);
+      } finally { ADAPTER_REGISTRY.kiro.create = originalCreate; await server.stop(true); }
+    });
+  }
+});

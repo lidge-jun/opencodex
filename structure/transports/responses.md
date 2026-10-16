@@ -585,16 +585,16 @@ machine for those encoders, so a change to item boundaries, tool naming or termi
 `sse.ts` has to be made there too; the parity tests fail when the two diverge. `src/bridge/errors.ts` (`formatErrorResponse`) formats error responses and
 keeps only allowlisted transport verdict codes and the explicit local `spend_ledger_storage_unavailable` identity ([storage refusal contract](responses-spend.md#durable-spend-reservations)). Adapter error events take a different path:
 `src/bridge/internal.ts` preserves explicit verdicts except cyber-policy and known rate-limit mappings
-([client retry advice](responses-wire-shapes.md#client-rate-limit-retry-advice)). The shared usage shaping's `input_tokens_details` and
-`output_tokens_details` are always emitted, with zero defaults, because strict Responses clients
-deserialize them as required fields.
+([client retry advice](responses-wire-shapes.md#client-rate-limit-retry-advice)). Explicit incomplete reasons follow the [reason contract](responses-wire-shapes.md#adapter-incomplete-reasons).
+The shared usage shaping's `input_tokens_details` and `output_tokens_details` are always emitted,
+with zero defaults, because strict Responses clients deserialize them as required fields.
 
-
-Active-turn admission owns workflow admission, so both remain held until a streaming body finishes or
-is cancelled.
+Active-turn admission owns workflow admission, so both remain held until a streaming body finishes or is cancelled.
 
 The shared endpoint path also preserves the cyber-policy stop when a malformed UTF-8 5xx body is
 replacement-decoded; other malformed-body usage, quota, reset evidence and classification retain the
 status-only fallback. Rebuilt failures remain non-replayable and cyber-policy failures carry neither
 `Retry-After` nor quota-reset metadata. The [Responses failover contract](responses-failover.md)
 owns the bounded recovery and replay decisions.
+
+On the `responses` inbound wire only (`terminalRefusalAsFailed`, set by the same test as `enforceDeclaredToolNames` in `src/server/responses/adapter-delivery.ts`, `src/server/responses/run-turn-execution.ts` and the sidecar loops started from `src/server/responses/sidecar-execution.ts`), an adapter `incomplete` with `reason: "content_filter"` and `retryable: false` is delivered as `response.failed` whose `error` and `last_error` carry `invalid_request_error` / `invalid_prompt` with `retryable: false` and the turn's usage, built by `src/bridge/terminal-refusal.ts`: Codex retries every `response.incomplete` without reading `incomplete_details.retryable` and ends a turn only on a terminal-refusal `error.code` (#4312). The Anthropic and Kiro adapters emit that event today. Inside a combo a refusal with no output never reaches the client as a stream: `src/server/responses/combo-stream-preflight.ts` converts the zero-output `response.failed` into an HTTP 400 JSON error with the same `invalid_prompt` code, and `comboFailureDecision` stops the chain on it instead of sending the refused prompt to the next target (`tests/routing/combo-terminal-refusal.test.ts`). The web-search and image sidecar loops (`src/web-search/loop.ts`, `src/images/loop.ts`) check `isTerminalRefusalIncomplete` before looping, on every inbound wire: a refused iteration that carried a sidecar call ends the turn instead of running the call and re-asking the model with the refused context (`tests/web-search/web-search-terminal-refusal.test.ts`, `tests/images/loop-terminal-refusal.test.ts`); `src/web-search/run-turn-loop.ts` already stops on any incomplete. Every other incomplete, the chat and Anthropic inbound wires, and `buildResponseJSON` keep the incomplete shape. A `response.failed` built from an adapter error carries `retryable: false` for every code in `isTerminalRefusalCode` (`src/lib/errors.ts`), not only cyber policy. `tests/adapters/bridge-terminal-refusal.test.ts` pins both, `tests/server/server-terminal-refusal-wiring.test.ts` pins which inbound wire opts in, and `tests/server/server-kiro-refusal-e2e.test.ts` pins the adapter, runTurn and both sidecar-loop deliveries.

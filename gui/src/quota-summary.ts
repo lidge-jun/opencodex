@@ -17,6 +17,7 @@ export type QuotaSummarySeverity = "normal" | "warn" | "critical";
 
 export interface QuotaSummaryWindow {
   id: string;
+  modelId?: string;
   /** Fixed window label (5h / weekly / monthly / credits). */
   labelKey?: TKey;
   /** Provider-named window label, shown verbatim. */
@@ -57,13 +58,15 @@ function summaryWindows(quota: AccountQuota): QuotaSummaryWindow[] {
   const windows: QuotaSummaryWindow[] = quotaWindows(quota).map(window => {
     const percent = finite(window.percent) ? window.percent : undefined;
     const resetMs = resetTimestamp(window.reset);
+    const modelId = "modelId" in window ? window.modelId : undefined;
     return {
       id: window.id,
+      ...(modelId !== undefined ? { modelId } : {}),
       ...("key" in window && window.key ? { labelKey: window.key } : {}),
       ...("label" in window && typeof window.label === "string" ? { label: window.label } : {}),
       ...(percent !== undefined ? { percent } : {}),
       ...(resetMs !== null ? { resetAt: resetMs } : {}),
-      severity: quotaSeverity(percent),
+      severity: modelId === undefined ? quotaSeverity(percent) : "normal",
     };
   });
   const credits = quota.creditsUsd;
@@ -81,7 +84,7 @@ function summaryWindows(quota: AccountQuota): QuotaSummaryWindow[] {
 }
 
 function pickHeadline(windows: QuotaSummaryWindow[]): QuotaSummaryWindow | undefined {
-  const measured = windows.filter(window => window.percent !== undefined);
+  const measured = windows.filter(window => window.modelId === undefined && window.percent !== undefined);
   const byId = new Map(measured.map(window => [window.id, window]));
   for (const id of HEADLINE_ORDER) {
     const hit = byId.get(id);

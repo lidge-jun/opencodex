@@ -519,7 +519,8 @@ export async function getTokenForAccountQuotaProbe(provider: string, accountId: 
 export function accountQuotaProbeSkip(provider: string, accountId: string): AccountQuotaCacheEntry | undefined {
   if (!supportsPerAccountQuota(provider)) return { ts: Date.now(), quota: null, unavailable: true };
   if (getAccountCredentialWithStatus(provider, accountId)?.paused !== true) return undefined;
-  return accountQuotaCache.get(accountCacheKey(provider, accountId)) ?? { ts: Date.now(), quota: null, unavailable: true };
+  const cached = accountQuotaCache.get(accountCacheKey(provider, accountId));
+  return cached && cached.isCurrent?.() !== false ? cached : { ts: Date.now(), quota: null, unavailable: true };
 }
 
 export function explicitQuotaConfig(provider: string, configured?: OcxProviderConfig): OcxProviderConfig | undefined {

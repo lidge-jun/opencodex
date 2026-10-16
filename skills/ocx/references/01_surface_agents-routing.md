@@ -203,6 +203,7 @@ State-changing: yes.
 | Method | Route |
 |---|---|
 | GET | `/api/advisor/settings` |
+| GET | `/api/advisor/activity` |
 | PUT | `/api/advisor/settings` |
 
 | Flag | Value | Meaning |
@@ -215,6 +216,8 @@ JSON mode: `payload`.
 - `on` does not grant consent. Without current consent it refuses and prints the disclosure. `on --ack-context-sharing` records consent v1 and enables. `consent --revoke` removes consent and stops task-context transfer.
 - The advisor model may be any routable model string: a bare native model, an explicit `provider/model`, or an account-qualified native model.
 - `policy: preflight` makes OpenCodex attempt one automatic consultation per task with a stable conversation identity once the task shows orientation evidence (an assistant tool call or a tool result after the latest user message). Without a stable identity, each eligible request may trigger another consultation. `policy: manual` consults only when the worker calls the synthetic `advisor` tool. Neither path sends task context without current context-sharing consent.
+- `policy: adaptive` adds evidence-based failed-repair consultation after the same validation fails, a file edit completes, and validation fails again. Automatic calls require a stable conversation identity. `set --max-consultations <1-3>` caps adaptive task attempts, including manual calls, in a durable 24-hour budget. No semantic stuck detection is claimed.
+- `activity` reads up to 100 recent consultation metadata records (trigger, status, models, requested and mapped effort, duration, reported tokens); no task or advice content is retained. Records are process-local and expire after 24 hours. Missing mapped effort means unreported, not successful application.
 
 ### `ocx agent status`
 

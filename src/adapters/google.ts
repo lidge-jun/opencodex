@@ -1,6 +1,8 @@
+import { openCodeZenGeminiEndpoint } from "../types/opencode-zen";
 import type { AdapterFetchContext, AdapterRequest, ProviderAdapter } from "./base";
 import { debugDroppedFrame, debugProviderDiagnosticLazy } from "../lib/debug";
 import { createToolCallIdAllocator } from "./tool-call-id";
+import { openCodeGoGeminiEndpoint } from "../types/opencode-go";
 import { createImageBudget, materializeInlineImage, MAX_ENCODED_BYTES_PER_IMAGE, artifactHttpUrl } from "../images/artifacts";
 import type {
   AdapterEvent,
@@ -872,6 +874,7 @@ function invalidGoogleShapeEvent(
   };
 }
 
+/** Build Gemini transport and response parsing for AI Studio, Vertex, Cloud Code Assist or Go. */
 export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapter {
   const toolSchemaPolicy = provider.googleToolSchemaPolicy ?? "compatible";
   const toolSchemaProfile = {
@@ -953,6 +956,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         }
       : {}),
 
+    /** Compile an admitted request into the selected Gemini endpoint, body and authentication. */
     async buildRequest(parsed: OcxParsedRequest) {
       // Structured-output admission runs FIRST, before messagesToGeminiFormat writes
       // lastInjectedCallIds/lastReasoningReplayScope: a refused request must not leave
@@ -991,7 +995,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
             mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning),
             provider.baseUrl,
           ).wireModelId
-        : provider.googleMode === "vertex"
+        : provider.googleMode === "vertex" || openCodeZenGeminiEndpoint(provider, parsed.modelId) !== undefined
           ? parsed.modelId
           : resolveDirectGeminiWireModelId(parsed.modelId, provider.directGeminiWireRenames !== false);
       returnsThoughtSummaries = provider.googleMode === "cloud-code-assist"
@@ -1214,11 +1218,22 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         return { url, method: "POST", headers, body: JSON.stringify(compiled.body) };
       }
 
-      // ai-studio (default): Generative Language API + x-goog-api-key.
-      const url = `${provider.baseUrl}/v1beta/models/${routedModelId}:${method}${streamParam}`;
+      // Go and Zen use separate guarded Gemini endpoints; AI Studio retains /v1beta.
+      const goEndpoint = openCodeGoGeminiEndpoint(provider, routedModelId);
+      const zenEndpoint = openCodeZenGeminiEndpoint(provider, routedModelId);
+      const endpoint = goEndpoint ?? zenEndpoint ?? `${provider.baseUrl}/v1beta/models/${routedModelId}`;
+      const url = `${endpoint}:${method}${streamParam}`;
       const apiKey = provider.apiKey?.trim();
-      if (!apiKey) throw new Error("google (AI Studio) requires a non-empty API key");
-      headers["x-goog-api-key"] = apiKey;
+      if (!apiKey) throw new Error(`${goEndpoint ? "OpenCode Go" : zenEndpoint ? "OpenCode Zen" : "google (AI Studio)"} requires a non-empty API key`);
+      if (goEndpoint) {
+        // Console inference documents Bearer auth. Send only the selected Go key.
+        for (const name of Object.keys(headers)) {
+          if (["authorization", "x-goog-api-key", "x-api-key"].includes(name.toLowerCase())) delete headers[name];
+        }
+        headers["Authorization"] = `Bearer ${apiKey}`;
+      } else {
+        headers["x-goog-api-key"] = apiKey;
+      }
 
       const compiled = compileGoogleWireBody(body, toolSchemaProfile, toolSchemaPolicy);
       reportToolSchemaLoss(compiled.toolSchemaLossReport);

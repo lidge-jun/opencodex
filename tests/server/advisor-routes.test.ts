@@ -3,6 +3,7 @@ import { handleAdvisorRoutes, parseAdvisorSettingsPatch } from "../../src/server
 import { handleCompanionRoutes } from "../../src/server/management/companion-routes";
 import type { ManagementApiDeps, ManagementContext } from "../../src/server/management/context";
 import type { OcxConfig } from "../../src/types";
+import { advisorActivityStore } from "../../src/advisor/activity";
 
 /**
  * One complete `ManagementContext` for the route tests. Direct dispatch means the untrusted
@@ -43,6 +44,23 @@ const baseConfig = (): OcxConfig => ({
   port: 10100,
   providers: {},
 }) as OcxConfig;
+
+test("Advisor activity is routed through management and isolated by runtime config", async () => {
+  const config = baseConfig();
+  const store = advisorActivityStore(config);
+  const id = store.start({ trigger: "repair_failure", workerModel: "worker", advisorModel: "expert", requestedEffort: "max" });
+  store.finish(id, { status: "ok", durationMs: 20, effectiveEffort: null });
+  const { ctx } = makeCtx(config, "GET");
+  ctx.req = new Request("http://localhost/api/advisor/activity");
+  ctx.url = new URL(ctx.req.url);
+  const body = await (await handleCompanionRoutes(ctx))!.json();
+  expect(body.entries).toHaveLength(1);
+  expect(body.entries[0]).toMatchObject({ trigger: "repair_failure", effectiveEffort: null });
+  expect(body.retention).toBe("process");
+  const other = makeCtx(baseConfig(), "GET").ctx;
+  other.req = new Request(ctx.req.url); other.url = new URL(ctx.req.url);
+  expect((await (await handleAdvisorRoutes(other))!.json()).entries).toHaveLength(0);
+});
 
 describe("GET /api/advisor/settings", () => {
   test("returns resolved settings with defaults and availability", async () => {
@@ -113,7 +131,7 @@ describe("PUT /api/advisor/settings", () => {
   test("invalid values are refused with a named field and nothing is saved", async () => {
     for (const bad of [
       { effort: "ultra-plus" },
-      { policy: "adaptive" },
+      { policy: "semantic" },
       { model: 42 },
       { enabled: "yes" },
       { unknown: true },

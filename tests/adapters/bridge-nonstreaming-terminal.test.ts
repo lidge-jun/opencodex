@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { bridgeToResponsesSSE, buildResponseJSON } from "../../src/bridge";
+import { createResponsesPassthroughAdapter } from "../../src/adapters/openai-responses";
+import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import { isTruncatedStopReason, truncationReasonFor } from "../../src/responses/truncated-stop-reason";
 import type { AdapterEvent } from "../../src/types";
 
@@ -93,6 +95,77 @@ describe("buffered turns without an adapter terminal", () => {
       { status?: string } | undefined;
     expect(call?.status).toBe("completed");
   });
+});
+
+describe("explicit incomplete reasons use the Responses vocabulary", () => {
+  const cases = [
+    ["length", "max_output_tokens"],
+    ["max_tokens", "max_output_tokens"],
+    ["model_context_window_exceeded", "max_output_tokens"],
+    ["refusal", "content_filter"],
+    ["content-filter", "content_filter"],
+    [" SAFETY ", "content_filter"],
+    ["max_output_tokens", "max_output_tokens"],
+    ["content_filter", "content_filter"],
+    ["max_messages", "max_messages"],
+    ["steered", "steered"],
+    ["adapter_eof", "adapter_eof"],
+    [" provider_specific_stop ", " provider_specific_stop "],
+  ] as const;
+
+  async function project(events: AdapterEvent[], streaming: boolean) {
+    if (!streaming) return buildResponseJSON(events, "routed/model");
+    const text = await sseText(events);
+    expect(terminalEventNames(text)).toEqual(["response.incomplete"]);
+    const terminal = text.split("\n\n").find(frame => frame.startsWith("event: response.incomplete\n"));
+    const data = terminal?.split("\n").find(line => line.startsWith("data: "))?.slice(6);
+    expect(data).toBeDefined();
+    return JSON.parse(data!).response;
+  }
+
+  for (const streaming of [true, false]) {
+    test.each(cases)(`stream=${streaming}: %s becomes %s without losing metadata`, async (reason, expected) => {
+      const response = await project([
+        { type: "text_delta", text: "partial answer" },
+        {
+          type: "incomplete", reason, message: "provider stopped this turn", retryable: false,
+          usage: { inputTokens: 10, outputTokens: 2 },
+        },
+      ], streaming);
+      expect(response).toMatchObject({
+        status: "incomplete",
+        incomplete_details: { reason: expected, message: "provider stopped this turn", retryable: false },
+        usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
+      });
+      expect(response.output.find((item: { type: string }) => item.type === "message").content[0].text)
+        .toBe("partial answer");
+    });
+  }
+
+  for (const upstreamStream of [true, false]) {
+    test(`passthrough stream=${upstreamStream} length reaches both projections as max_output_tokens`, async () => {
+      const adapter = createResponsesPassthroughAdapter({
+        adapter: "openai-responses", baseUrl: "https://provider.example/v1", authMode: "forward",
+      });
+      const budget = createTranslatorBudget();
+      try {
+        const payload = { status: "incomplete", incomplete_details: { reason: "length" } };
+        const events: AdapterEvent[] = [];
+        if (upstreamStream) {
+          const wire = `event: response.incomplete\ndata: ${JSON.stringify({ type: "response.incomplete", response: payload })}\n\n`;
+          for await (const event of adapter.parseStream(new Response(wire), budget)) events.push(event);
+        } else {
+          events.push(...await adapter.parseResponse!(Response.json(payload), budget));
+        }
+        expect(events).toEqual([{ type: "incomplete", reason: "max_output_tokens" }]);
+        for (const streaming of [true, false]) {
+          expect(await project(events, streaming)).toMatchObject({
+            status: "incomplete", incomplete_details: { reason: "max_output_tokens" },
+          });
+        }
+      } finally { budget.dispose(); }
+    });
+  }
 });
 
 describe("compaction is never installed from a truncated turn", () => {

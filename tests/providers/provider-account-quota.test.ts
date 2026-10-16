@@ -738,7 +738,7 @@ describe("google-antigravity per-account quota (#1082)", () => {
     const byId = Object.fromEntries(rows.map(row => [row.accountId, row]));
     const [idA, idB] = [idFor("a@example.com"), idFor("b@example.com")];
     expect(Object.keys(byId).sort()).toEqual([idA, idB].sort());
-    const windows = (id: string) => byId[id]!.quota!.customWindows!.map(w => `${w.label}=${w.percent}`);
+    const windows = (id: string) => byId[id]!.quota!.customWindows!.filter(w => w.modelId === undefined).map(w => `${w.label}=${w.percent}`);
     expect(windows(idA)).toEqual(["Gem=14", "Gem (Weekly)=14", "Cla=62", "Cla (Weekly)=62"]);
     expect(windows(idB)).toEqual(["Gem=3", "Gem (Weekly)=3", "Cla=9", "Cla (Weekly)=9"]);
     expect(byId[idA]!.quota!.customWindows![0]!.resetAt).toBeDefined();
@@ -772,7 +772,7 @@ describe("google-antigravity per-account quota (#1082)", () => {
     const rows = await fetchProviderAccountQuotas("google-antigravity");
     const byId = Object.fromEntries(rows.map(row => [row.accountId, row]));
     const [idA, idB] = [idFor("a@example.com"), idFor("b@example.com")];
-    const windows = (id: string) => byId[id]!.quota!.customWindows!.map(w => `${w.label}=${w.percent}`);
+    const windows = (id: string) => byId[id]!.quota!.customWindows!.filter(w => w.modelId === undefined).map(w => `${w.label}=${w.percent}`);
     expect(windows(idA)).toEqual(["Gem=14", "Cla=62"]);
     expect(windows(idB)).toEqual(["Gem=3", "Cla=9"]);
     expect(byId[idA]!.quota!.customWindows![0]!.resetAt).toBeDefined();
@@ -817,8 +817,8 @@ describe("google-antigravity per-account quota (#1082)", () => {
         expect(posted.filter(row => row.auth === auth)).toEqual(urls.map(url => ({ url, auth, project, address: "198.18.56.214", tls: true, signal: true })));
       }
       const byId = Object.fromEntries(rows.map(row => [row.accountId, row]));
-      expect(byId[idFor("a@example.com")]?.quota?.customWindows?.map(w => w.percent)).toEqual(fallback ? [14, 62] : [14, 14, 62, 62]);
-      expect(byId[idFor("b@example.com")]?.quota?.customWindows?.map(w => w.percent)).toEqual(fallback ? [3, 9] : [3, 3, 9, 9]);
+      expect(byId[idFor("a@example.com")]?.quota?.customWindows?.filter(w => w.modelId === undefined).map(w => w.percent)).toEqual(fallback ? [14, 62] : [14, 14, 62, 62]);
+      expect(byId[idFor("b@example.com")]?.quota?.customWindows?.filter(w => w.modelId === undefined).map(w => w.percent)).toEqual(fallback ? [3, 9] : [3, 3, 9, 9]);
       expect(plainFetchCalls).toBe(0);
     });
   }
@@ -896,7 +896,79 @@ describe("google-antigravity per-account quota (#1082)", () => {
     expect(cached.quotaFailure).toBe("access_denied");
     await saveCredential("google-antigravity", { ...credential, access: "agy-third" });
     expect(cached.quotaFailureIsCurrent?.()).toBe(false);
-    expect((await fetchProviderAccountQuotas("google-antigravity"))[0]).not.toHaveProperty("quotaFailure");
+    expect((await fetchProviderAccountQuotas("google-antigravity"))[0]).toHaveProperty("quotaFailure", "access_denied");
+  });
+
+  test("same-id credential and project replacement invalidates cached model quota measurements", async () => {
+    const credential = { access: "agy-model-first", refresh: "r1", expires: Date.now() + 3600_000, projectId: "proj-model-first", accountId: "agy-model", email: "model@example.com" };
+    await saveCredential("google-antigravity", credential);
+    setAntigravityAccountQuotaTransportForTests({
+      resolveAddresses: async () => ({ hostname: "daily-cloudcode-pa.googleapis.com", addresses: [{ address: "142.250.0.1", family: 4 }], privateNetwork: false }),
+      pinnedPost: async url => url.endsWith("retrieveUserQuotaSummary")
+        ? new Response(null, { status: 404 })
+        : new Response(JSON.stringify({ models: {
+            "gemini-3.8-flash-high": { quotaInfo: { remainingFraction: 0.76 } },
+          } }), { status: 200, headers: { "content-type": "application/json" } }),
+    });
+
+    const [row] = await fetchProviderAccountQuotas("google-antigravity", true);
+    const accountId = idFor("model@example.com");
+    expect(row?.quota?.customWindows).toContainEqual({
+      label: "gemini-3.8-flash-high", modelId: "gemini-3.8-flash-high", percent: 24,
+    });
+    expect(getCachedProviderAccountQuota("google-antigravity", accountId)?.customWindows)
+      .toContainEqual({ label: "gemini-3.8-flash-high", modelId: "gemini-3.8-flash-high", percent: 24 });
+
+    await saveCredential("google-antigravity", { ...credential, access: "agy-model-second", projectId: "proj-model-second" });
+    expect(getCachedProviderAccountQuota("google-antigravity", accountId)).toBeNull();
+  });
+
+  test.each(["unchanged", "grant", "project", "both"] as const)("paused model quota retains only current credential and project (%s)", async replacement => {
+    const { setAccountPaused } = await import("../../src/oauth/store");
+    const credential = { access: "paused-model-first", refresh: "paused-refresh", expires: Date.now() + 3600_000,
+      projectId: "paused-project-first", accountId: "paused-model-user", email: "paused-model@example.com" };
+    await saveCredential("google-antigravity", credential);
+    let posts = 0;
+    globalThis.fetch = (async () => { throw new Error("unexpected external quota transport"); }) as typeof fetch;
+    setAntigravityAccountQuotaTransportForTests({
+      resolveAddresses: async () => ({ hostname: "daily-cloudcode-pa.googleapis.com",
+        addresses: [{ address: "142.250.0.1", family: 4 }], privateNetwork: false }),
+      pinnedPost: async url => {
+        posts++;
+        return url.endsWith("retrieveUserQuotaSummary") ? new Response(null, { status: 404 })
+          : Response.json({ models: { "gemini-paused-model": { quotaInfo: { remainingFraction: 0.76 } } } });
+      },
+    });
+    const [seeded] = await fetchProviderAccountQuotas("google-antigravity", true);
+    const accountId = idFor("paused-model@example.com");
+    expect(seeded?.quota?.customWindows).toContainEqual({
+      label: "gemini-paused-model", modelId: "gemini-paused-model", percent: 24,
+    });
+    expect(posts).toBe(2);
+    if (replacement !== "unchanged") {
+      await saveCredential("google-antigravity", { ...credential,
+        ...(replacement !== "project" ? { access: "paused-model-second" } : {}),
+        ...(replacement !== "grant" ? { projectId: "paused-project-second" } : {}),
+      });
+      expect(idFor("paused-model@example.com")).toBe(accountId);
+    }
+    await setAccountPaused("google-antigravity", accountId, true);
+    const expected = replacement === "unchanged" ? seeded!.quota : null;
+    expect(getCachedProviderAccountQuota("google-antigravity", accountId)).toEqual(expected);
+    const [paused] = await fetchProviderAccountQuotas("google-antigravity", true);
+    expect(posts).toBe(2);
+    expect(paused?.quota).toEqual(expected);
+    if (replacement !== "unchanged") expect(paused?.unavailable).toBe(true);
+    else {
+      expect(paused?.unavailable).toBeUndefined();
+      expect(paused?.isCurrent?.()).toBe(true);
+      expect(Object.keys(paused!)).not.toContain("isCurrent");
+      // A sibling roster read may await before management projects this already-returned row.
+      await saveCredential("google-antigravity", { ...credential, access: "paused-model-later" });
+      expect(paused?.isCurrent?.()).toBe(false);
+      expect(getCachedProviderAccountQuota("google-antigravity", accountId)).toBeNull();
+      expect(posts).toBe(2);
+    }
   });
 
   test("NO_PROXY denial preserves an unavailable account row without sending its bearer", async () => {
@@ -1068,7 +1140,7 @@ describe("google-antigravity Fake-IP TUN quota probes without HTTP proxy (#3781)
       expect(rows[0]!.accountId).toBe(idFor("a@example.com"));
       expect(rows[0]!.unavailable).toBeUndefined();
       expect(rows[0]!.quotaFailure).toBeUndefined();
-      expect(rows[0]!.quota?.customWindows?.map(w => `${w.label}=${w.percent}`)).toEqual(fallback ? ["Gem=14", "Cla=62"] : ["Gem=14", "Gem (Weekly)=14", "Cla=62", "Cla (Weekly)=62"]);
+      expect(rows[0]!.quota?.customWindows?.filter(w => w.modelId === undefined).map(w => `${w.label}=${w.percent}`)).toEqual(fallback ? ["Gem=14", "Cla=62"] : ["Gem=14", "Gem (Weekly)=14", "Cla=62", "Cla (Weekly)=62"]);
       expect(plainFetchCalls).toBe(0);
     });
   }

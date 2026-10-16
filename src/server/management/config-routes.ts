@@ -122,6 +122,8 @@ import {
 } from "../../lib/debug-settings";
 import type { OcxClaudeCodeConfig, OcxConfig, OcxCustomModel, OcxProviderConfig } from "../../types";
 import { shadowCallTargetError } from "./shadow-call-validation";
+import { autoReviewOverrideConfigError } from "../../config/provider-validation";
+import { ConfigWritePublishedError } from "../../config/persist-unlocked";
 import { drainAndShutdown } from "../lifecycle";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
@@ -354,6 +356,7 @@ function publicVisionSidecarSettings(
   };
 }
 
+/** Serve validated settings and publish catalog-affecting changes after persistence. */
 export async function handleConfigRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
   const readStartupHealth = deps.getCachedStartupHealth ?? getCachedStartupHealth;
@@ -1079,6 +1082,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     // Read BEFORE the mutation below: the Codex-side key follows the switch, and a flip is the
     // only case that owes a config.toml rewrite.
     const webSearchEnabledBefore = config.webSearchSidecar?.enabled !== false;
+    const visionEnabledBefore = config.visionSidecar?.enabled !== false;
     if (body.webSearch) {
       const pairTouched = body.webSearch.model !== undefined || body.webSearch.backend !== undefined || body.webSearch.anthropicInstance !== undefined;
       // Validate against the backend the caller SUBMITTED, across the whole
@@ -1214,6 +1218,11 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       }
     }
     saveConfigPreservingClaudeCode(config);
+    // Publish the changed attachment affordance to both the managed catalog and Codex cache.
+    // Use the existing bounded catalog-only path after persistence, outside the config lock.
+    const catalogRefresh = visionEnabledBefore !== (config.visionSidecar?.enabled !== false)
+      ? await convergeCodexCatalog()
+      : undefined;
     // The sidecar's own switch is only half of what "off" means: Codex keeps declaring its native
     // hosted `web_search` tool until its own mode says otherwise, and the tool a client advertises
     // is the one the model reaches for — which is why an MCP search server needs the client-side
@@ -1239,6 +1248,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
         ...(ws.xSearch ? { xSearch: ws.xSearch } : {}),
       },
       codexWebSearch,
+      catalogRefreshPending: catalogRefresh ? catalogRefreshIsPending(catalogRefresh) : false,
       vision: publicVisionSidecarSettings(config, vision),
       visionModels: vision.models,
       // Echoed for the same reason GET always carries it: the dashboard rebuilds
@@ -1289,6 +1299,39 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       model: sci.model ?? "",
       sourceModels: shadowSourceModels(sci.sourceModels),
     });
+  }
+
+  if (url.pathname === "/api/auto-review-settings" && req.method === "GET") {
+    const override = config.autoReviewOverride ?? {};
+    return jsonResponse({ enabled: override.enabled === true, model: override.model?.trim() ?? "" });
+  }
+
+  if (url.pathname === "/api/auto-review-settings" && req.method === "PUT") {
+    let raw: unknown;
+    try { raw = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
+    if (!isPlainRecord(raw)) return jsonResponse({ error: "body must be a JSON object" }, 400);
+    const body = raw as { enabled?: unknown; model?: unknown };
+    const shapeError = autoReviewOverrideConfigError(body, "body");
+    if (shapeError) return jsonResponse({ error: shapeError }, 400);
+    const rollback = captureConfigTopLevelRollback(config, ["autoReviewOverride"]);
+    try {
+      config.autoReviewOverride = { ...config.autoReviewOverride };
+      if (typeof body.enabled === "boolean") config.autoReviewOverride.enabled = body.enabled;
+      if (typeof body.model === "string") {
+        const trimmed = body.model.trim();
+        if (trimmed === "") delete config.autoReviewOverride.model;
+        else config.autoReviewOverride.model = trimmed;
+      }
+      (deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode)(config);
+    } catch (error) {
+      if (!(error instanceof ConfigWritePublishedError)) rollback();
+      throw error;
+    }
+    // The catalog carries the reviewer stamps, so the new selector has to reach it now; the
+    // disposition travels in the body like every other catalog-affecting route.
+    const catalogRefresh = await convergeCodexCatalog();
+    const override = config.autoReviewOverride;
+    return jsonResponse({ ok: true, enabled: override.enabled === true, model: override.model ?? "", catalogRefresh });
   }
   return null;
 }

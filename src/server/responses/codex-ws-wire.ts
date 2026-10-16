@@ -1,3 +1,4 @@
+import { normalizeResponsesIncompleteReason } from "../../responses/incomplete-reason";
 import { MAX_CLIENT_SSE_FRAME_BYTES } from "../sse-frame-buffer";
 import {
   isTransientUpstreamStatus,
@@ -523,12 +524,12 @@ export function normalizeResponsesWsRelayEvent(text: string): ResponsesWsRelayEv
     return null;
   }
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
-  const record = payload as Record<string, unknown>;
+  const record = normalizeResponsesIncompleteReason(payload as Record<string, unknown>);
   if (typeof record.type !== "string") return null;
   // A native error may be pretty-printed JSON. SSE prefixes one data line;
   // embedded physical newlines would otherwise truncate the JSON for readers.
   if (record.type !== "response.done") return {
-    type: record.type, text: /[\r\n]/.test(text) ? JSON.stringify(record) : text, payload: record,
+    type: record.type, text: record !== payload || /[\r\n]/.test(text) ? JSON.stringify(record) : text, payload: record,
   };
 
   const response = record.response;

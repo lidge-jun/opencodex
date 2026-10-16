@@ -66,8 +66,10 @@ OAuth 账户时使用 `anthropic`，否则使用 `openai`。显式选择 `anthro
 
 当路由模型列在其 provider 的 `noVisionModels` 中，或该模型在 `modelInputModalities` 中被声明为仅文本，
 并且请求包含图像时，只要有可用的 vision sidecar plan，opencodex 就会在主调用**之前**描述每张图像并用文字替换图像。
-如果没有可用 plan，原始图像会被移除，而不会继续转发给纯文本后端。模型目录会为每个由 sidecar 覆盖的模型声明图像输入。
-只有当每个 combo 成员都能原生或通过 sidecar 接受图像、且 combo 的 `imageInput` 设置未禁用时，combo 才会声明图像输入；
+如果没有可用 plan，原始图像会被移除，而不会继续转发给纯文本后端。当 `visionSidecar.enabled: false` 时，
+模型目录不会为纯文本模型添加由 sidecar 提供的图像输入，包括自定义模型和 combo 成员。原生图像支持和显式配置的
+图像输入会保留。省略 `enabled` 时，默认仍会声明 sidecar 图像支持；目录中的声明不保证 sidecar 凭据或容量可用。
+只有当每个 combo 成员都能原生或通过已启用的 sidecar 接受图像、且 combo 的 `imageInput` 设置未禁用时，combo 才会声明图像输入；
 这样 Codex 应用等客户端会允许附件，而不会在 sidecar 运行前阻止它们。当 `visionSidecar.model` 缺失或为空时，OpenAI 执行路径、
 Dashboard 和管理 API 都使用 `gpt-5.6-luna` 作为回退。启动时仍会把明确保存的旧
 `gpt-5.4-mini` 值迁移到 `gpt-5.6-luna`；该迁移只作用于已保存值，不适用于缺失的 model 字段。
@@ -125,6 +127,10 @@ Dashboard 和管理 API 都使用 `gpt-5.6-luna` 作为回退。启动时仍会�
 `timeoutMs`，同时保留已有的模型、后端和推理强度控件。停用不会删除这些设置；重新启用后仍会保留原来的模型、后端、推理强度、超时和次数上限。
 
 `PUT /api/sidecar-settings` 接受相同字段。部分更新会保留未提交的键。`timeoutMs` 使用运行时整数边界（1–2147483647 毫秒）。
+
+Vision 的实际启用状态改变时，保存后也会刷新受管理的 Codex 目录和模型缓存。
+若刷新未完成，响应会返回 `catalogRefreshPending: true`，已保存的开关设置仍然保留。
+目录发布成功并不表示运行中的客户端已重新加载目录。
 
 Web 搜索 sidecar 卡片采用相同的控件形态：模型选择器的第一行是 **关闭 (Off)**。关闭会停止
 OpenCodex 对 `web_search` 的拦截，同时 Codex 集成会把 `web_search = "disabled"`

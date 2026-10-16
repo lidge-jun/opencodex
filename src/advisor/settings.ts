@@ -10,12 +10,12 @@ import { ADVISOR_CONTEXT_SHARING_CONSENT_VERSION } from "./disclosure";
 
 export { ADVISOR_CONTEXT_SHARING_CONSENT_VERSION };
 
-export type AdvisorPolicy = "manual" | "preflight";
+export type AdvisorPolicy = "manual" | "preflight" | "adaptive";
 
 export const ADVISOR_EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"] as const;
 export type AdvisorEffort = (typeof ADVISOR_EFFORTS)[number];
 
-export const ADVISOR_POLICIES = ["manual", "preflight"] as const;
+export const ADVISOR_POLICIES = ["manual", "preflight", "adaptive"] as const;
 
 export interface AdvisorSettings {
   enabled: boolean;
@@ -23,6 +23,8 @@ export interface AdvisorSettings {
   effort: AdvisorEffort;
   policy: AdvisorPolicy;
   timeoutMs: number;
+  /** Adaptive task budget, including manual calls. Stable task identity is required. */
+  maxConsultationsPerTask: number;
   /**
    * Current context-sharing consent, or null when absent, stale, or malformed.
    * `enabled` does not imply this. Only the current version allows data transfer.
@@ -44,6 +46,7 @@ export const DEFAULT_ADVISOR_SETTINGS: Readonly<AdvisorSettings> = Object.freeze
   effort: "max",
   policy: "manual",
   timeoutMs: 120_000,
+  maxConsultationsPerTask: 3,
   contextSharingConsent: null,
   sources: Object.freeze({
     enabled: "default",
@@ -65,6 +68,10 @@ export function isValidAdvisorEffort(value: unknown): value is AdvisorEffort {
 
 export function isValidAdvisorPolicy(value: unknown): value is AdvisorPolicy {
   return typeof value === "string" && (ADVISOR_POLICIES as readonly string[]).includes(value);
+}
+
+export function isValidAdvisorTaskLimit(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 3;
 }
 
 /** True only for the current context-sharing consent version. Anything else is not a grant. */
@@ -102,6 +109,8 @@ export function resolveAdvisorSettings(config: Pick<OcxConfig, "advisor">): Advi
     effort,
     policy,
     timeoutMs,
+    maxConsultationsPerTask: isValidAdvisorTaskLimit(raw.maxConsultationsPerTask)
+      ? raw.maxConsultationsPerTask : DEFAULT_ADVISOR_SETTINGS.maxConsultationsPerTask,
     contextSharingConsent,
     sources: {
       enabled: typeof raw.enabled === "boolean" ? "configured" : "default",

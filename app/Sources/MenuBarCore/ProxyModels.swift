@@ -163,6 +163,7 @@ public struct UsageAccountRow: Decodable, Equatable, Sendable {
 }
 
 public struct QuotaWindow: Decodable, Equatable, Sendable {
+    public let modelId: String?
     public let label: String?
     public let percent: Double?
     public let resetAt: Double?
@@ -188,6 +189,7 @@ public struct QuotaReport: Decodable, Equatable, Sendable {
 
 /// A provider-agnostic view of quota, since the window key differs per provider.
 public struct NormalizedQuota: Equatable, Sendable {
+    public let modelId: String?
     public let provider: String
     public let providerLabel: String
     public let percent: Double?
@@ -219,10 +221,10 @@ public extension QuotaReport {
         let name = label ?? provider
         var windows: [NormalizedQuota] = []
 
-        func append(_ percent: Double?, _ windowLabel: String, _ resetAt: Double?) {
+        func append(_ percent: Double?, _ windowLabel: String, _ resetAt: Double?, _ modelId: String? = nil) {
             guard percent != nil || resetAt != nil else { return }
             windows.append(NormalizedQuota(
-                provider: provider, providerLabel: name, percent: percent,
+                modelId: modelId, provider: provider, providerLabel: name, percent: percent,
                 windowLabel: windowLabel, resetAt: Self.date(from: resetAt)
             ))
         }
@@ -232,7 +234,7 @@ public extension QuotaReport {
         append(quota?.monthlyPercent, "month", quota?.monthlyResetAt)
 
         for window in quota?.customWindows ?? [] {
-            append(window.percent, window.label ?? "window", window.resetAt)
+            append(window.percent, window.label ?? "window", window.resetAt, window.modelId)
         }
 
         return windows
@@ -240,7 +242,8 @@ public extension QuotaReport {
 
     /// The single window that best represents current pressure, for the compact row.
     ///
-    /// Selection is **highest reported usage**, not longest horizon. Every window can
+    /// Diagnostic model rows are retained in details and excluded here. Selection is
+    /// **highest reported usage**, not longest horizon. Every aggregate window can
     /// stop work: a provider at 99% of a five-hour limit and 10% of its monthly limit is
     /// blocked right now, and showing the monthly 10% would paint that row green while
     /// the user cannot make a request. Ties break toward the longer horizon, since that
@@ -250,7 +253,7 @@ public extension QuotaReport {
     /// em dash rather than a misleading zero.
     func normalized() -> NormalizedQuota {
         let name = label ?? provider
-        let windows = normalizedWindows()
+        let windows = normalizedWindows().filter { $0.modelId == nil }
 
         // Longer horizons rank higher only as a tie-breaker.
         func horizonRank(_ label: String) -> Int {
@@ -271,7 +274,7 @@ public extension QuotaReport {
         } ?? windows.first
 
         return preferred ?? NormalizedQuota(
-            provider: provider, providerLabel: name, percent: nil,
+            modelId: nil, provider: provider, providerLabel: name, percent: nil,
             windowLabel: "—", resetAt: nil
         )
     }

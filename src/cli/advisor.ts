@@ -3,18 +3,20 @@ import { CliUsageError, printData, rejectArgs, runCliAction, runtimeRequest, tak
 
 const USAGE = `Usage:
   ocx advisor status [--json]
+  ocx advisor activity [--json]
   ocx advisor on [--ack-context-sharing] [--json]
   ocx advisor off [--json]
   ocx advisor consent [--revoke] [--json]
-  ocx advisor set [--model <model>] [--effort <effort>] [--policy <manual|preflight>] [--timeout-ms <ms>] [--json]`;
+  ocx advisor set [--model <model>] [--effort <effort>] [--policy <manual|preflight|adaptive>] [--max-consultations <1-3>] [--timeout-ms <ms>] [--json]`;
 
-const VALUED_FLAGS = new Set(["--model", "--effort", "--policy", "--timeout-ms"]);
+const VALUED_FLAGS = new Set(["--model", "--effort", "--policy", "--timeout-ms", "--max-consultations"]);
 
 interface SetOptions {
   model?: string;
   effort?: string;
   policy?: string;
   timeoutMs?: string;
+  maxConsultations?: string;
 }
 
 function parseSetArgs(args: string[]): SetOptions {
@@ -30,10 +32,11 @@ function parseSetArgs(args: string[]): SetOptions {
     if (arg === "--model") options.model = value;
     else if (arg === "--effort") options.effort = value;
     else if (arg === "--policy") options.policy = value;
+    else if (arg === "--max-consultations") options.maxConsultations = value;
     else options.timeoutMs = value;
   }
   if (Object.keys(options).length === 0) {
-    throw new CliUsageError("advisor set requires at least one of --model, --effort, --policy, --timeout-ms", USAGE);
+    throw new CliUsageError("advisor set requires a model, effort, policy, task limit, or timeout option", USAGE);
   }
   return options;
 }
@@ -125,6 +128,11 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   if (options.model !== undefined) patch.model = options.model;
   if (options.effort !== undefined) patch.effort = options.effort;
   if (options.policy !== undefined) patch.policy = options.policy;
+  if (options.maxConsultations !== undefined) {
+    const limit = Number(options.maxConsultations);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 3) throw new CliUsageError("--max-consultations must be an integer between 1 and 3", USAGE);
+    patch.maxConsultationsPerTask = limit;
+  }
   if (options.timeoutMs !== undefined) {
     const parsed = Number(options.timeoutMs);
     if (!Number.isFinite(parsed)) throw new CliUsageError("--timeout-ms must be a number", USAGE);
@@ -140,6 +148,12 @@ export async function handleAdvisorCommand(argv: string[], deps: RuntimeApiDeps 
   return runCliAction(async () => {
     const [sub = "status", ...rest] = argv;
     if (sub === "status") await status(rest, deps);
+    else if (sub === "activity") {
+      const args = [...rest];
+      const wantsJson = takeFlag(args, "--json");
+      rejectArgs(args, USAGE);
+      printData(await runtimeRequest("/api/advisor/activity", {}, deps), wantsJson);
+    }
     else if (sub === "on") await setEnabled(true, rest, deps);
     else if (sub === "off") await setEnabled(false, rest, deps);
     else if (sub === "consent") await consent(rest, deps);
