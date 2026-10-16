@@ -480,20 +480,37 @@ function configHasProviderAutoReview(config: Pick<OcxConfig, "providers">): bool
     provider.autoReviewModel !== undefined || provider.autoReviewModelOverrides !== undefined);
 }
 
+/**
+ * The global override selector, when the operator enabled it and named a model.
+ *
+ * Occupies the same slot as Codex's root `auto_review_model` fallback and wins over it: an
+ * enabled Model-settings choice is the operator's explicit pick, while a disabled or blank block
+ * leaves the root selector in charge. Provider-scoped stamps keep their precedence separately.
+ */
+export function resolveAutoReviewOverrideSelector(
+  config?: Pick<OcxConfig, "autoReviewOverride">,
+): string | undefined {
+  const block = config?.autoReviewOverride;
+  if (block?.enabled !== true) return undefined;
+  const model = typeof block.model === "string" ? block.model.trim() : "";
+  return model.length > 0 ? model : undefined;
+}
+
 /** Apply the root Codex auto-review selector after the final catalog merge. */
 export function finalizeAutoReviewModelOverride(
   models: RawEntry[] | undefined,
   sourceModels: readonly RawEntry[] = [],
-  config?: Pick<OcxConfig, "providers">,
+  config?: Pick<OcxConfig, "providers" | "autoReviewOverride">,
 ): AutoReviewModelOverrideResult {
   if (models && sourceModels.length > 0) preserveNativeAutoReviewModelOverrides(
     models.filter(entry => !isCodexControlPlaneModel(entry.slug)),
     sourceModels.filter(entry => !isCodexControlPlaneModel(entry.slug)),
   );
+  const rootValue = resolveAutoReviewOverrideSelector(config) ?? readConfiguredAutoReviewModel();
   if (config && configHasProviderAutoReview(config)) {
-    return applyConfiguredAutoReviewModelOverride(models, readConfiguredAutoReviewModel(), config, sourceModels);
+    return applyConfiguredAutoReviewModelOverride(models, rootValue, config, sourceModels);
   }
-  return applyAutoReviewModelOverride(models, readConfiguredAutoReviewModel(), sourceModels);
+  return applyAutoReviewModelOverride(models, rootValue, sourceModels);
 }
 /**
  * Why an account-gated native model stopped being offered, but only when the answer is one the

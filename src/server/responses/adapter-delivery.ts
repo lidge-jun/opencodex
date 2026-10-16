@@ -206,6 +206,7 @@ export async function deliverAdapterResponse(
         declaredToolNames,
         bareCustomToolNames,
         enforceDeclaredToolNames: options.inboundWire !== "chat" && options.inboundWire !== "anthropic",
+        terminalRefusalAsFailed: options.inboundWire !== "chat" && options.inboundWire !== "anthropic",
         toolParameterSchemas,
         ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
         ...(routedCompaction ? { compaction: true } : {}),

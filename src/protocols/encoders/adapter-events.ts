@@ -729,7 +729,7 @@ export function encodeAdapterEventStream(
             terminal = {
               status: "incomplete",
               incomplete: {
-                reason: event.reason,
+                reason: truncationReasonFor(event.reason) ?? event.reason,
                 ...(event.message ? { message: event.message } : {}),
                 ...(event.retryable !== undefined ? { retryable: event.retryable } : {}),
               },

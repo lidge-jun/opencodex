@@ -2,12 +2,12 @@
 
 ## Client rate-limit retry advice
 
-With a valid delay, `src/bridge/internal.ts` maps typed HTTP 429 `rate_limit_error` codes
-`resource_exhausted`, `rate_limit_exceeded`, and `slow_down` to `rate_limit_exceeded`.
-`src/lib/retry-delay.ts` formats typed and message-only rate-limit advice with the longest
-lower bound first; competing original hints are retained under an explicit provider-detail label.
-Other explicit verdicts, proxy replay budgets and event ordering are unchanged. Signed Anthropic progress follows the [progress-update contract](../providers/anthropic-progress.md). This creates
-no reasoning/history item; client retry policy, Grok HTTP status and combo preflight stay intact.
+With a valid delay, `src/bridge/internal.ts` maps typed HTTP 429 `rate_limit_error` codes `resource_exhausted`, `rate_limit_exceeded`, and `slow_down` to `rate_limit_exceeded`. `src/lib/retry-delay.ts` formats typed and message-only rate-limit advice with the longest lower bound first; competing original hints are retained under an explicit provider-detail label. Other explicit verdicts, proxy replay budgets and event ordering are unchanged. Signed Anthropic progress follows the [progress-update contract](../providers/anthropic-progress.md). This creates no reasoning/history item; client retry policy, Grok HTTP status and combo preflight stay intact.
+
+## Adapter incomplete reasons
+
+`src/bridge/sse.ts`, `src/bridge/response-json.ts`, and `src/protocols/encoders/adapter-events.ts` normalize explicit incomplete reasons with `truncationReasonFor(reason) ?? reason`: known output-limit aliases become `max_output_tokens`, and refusal/filter aliases become `content_filter`. `src/responses/incomplete-reason.ts` applies the same classifier to native Responses JSON and SSE delivery in `src/server/responses/passthrough-delivery.ts` and to WebSocket frames in `src/server/responses/codex-ws-wire.ts`, including native control chains. It copies only changed `incomplete_details.reason` metadata, leaving output content and all other response fields intact. The compaction parser in `src/adapters/openai-responses/passthrough.ts` also normalizes its internal incomplete event. `tests/responses/incomplete-reason-normalization.test.ts` covers native HTTP delivery, WS terminal normalization and both adapter parser formats.
+Unknown reasons remain verbatim, including `adapter_eof`, `max_messages`, and `steered`; message, retryability, usage, and incomplete status are preserved. `tests/adapters/bridge-nonstreaming-terminal.test.ts` covers both Responses projections and real passthrough parsing; the direct Chat and Messages parity suites cover the client-wire outcomes.
 
 ## Compaction image input
 
@@ -203,7 +203,7 @@ and Muse against both response formats.
 
 The canonical OpenCode Go transport derives `x-opencode-session` from the existing hashed session
 lane and the final per-model wire protocol. One conversation keeps one opaque affinity value within
-each protocol across ingress surfaces, retries, and key rotation, while Anthropic, Responses, and
+each protocol across ingress surfaces, retries, and key rotation, while Gemini, Anthropic, Responses, and
 Chat turns use separate namespaces and sibling subagents remain distinct. Destination recognition
 uses the original routed provider while the generated hash uses the settled adapter, so selecting an
 Anthropic hard pin cannot make the canonical Go destination disappear from transport recognition.
@@ -211,7 +211,7 @@ An operator-supplied header wins case-insensitively. Renamed providers are cover
 fixed key-auth destination still matches the registry; custom and lookalike URLs receive nothing.
 OpenCode Go's exact `claude-haiku-5-5`, `minimax-m2.5`, `minimax-m2.7`, `minimax-m3`, and `union-alpha`
 model ids are hard-pinned to Anthropic from every inbound; Haiku uses Messages in Go's [endpoint table](https://opencode.ai/docs/go/#endpoints).
-Sibling models retain their Chat or Responses selection. This wire choice and the session namespace
+The exact `gemini-4-argon-contributor` follows the [Go Gemini transport contract](../providers/google.md#opencode-go-gemini-transport). Siblings retain Chat or Responses. This wire choice and the session namespace
 do not assert upstream availability after the Messages endpoint accepts the session header.
 `src/adapters/openai-responses/web-search.ts` also drops the provider-rejected
 `search_content_types` and `indexed_web_access` fields from plain `web_search` tools while
@@ -529,8 +529,7 @@ request-log accounting without promoting a truncated repair candidate. Terminal 
 
 ## Inbound history and code-mode shell wire repairs
 
-Inbound function-call history with a missing JSON object prefix is repaired for every provider when
-restoring it produces an object; other malformed argument strings replay as `{}` (`src/responses/parser.ts`).
+Inbound function-call history with a missing JSON object prefix is repaired for every provider when restoring it produces an object. A terminal MiMo `</function></tool_call>` suffix is removed only when the remaining text parses as an object unchanged or after restoring a closing brace or quote and brace. Valid JSON containing these tags stays opaque; unrelated malformed arguments replay as `{}` without logging their content (`src/responses/parser.ts`). Regression coverage lives in `tests/responses/responses-mimo-envelope.test.ts`.
 Function-wrapper restoration supports `default.`-prefixed `exec` and `apply_patch` aliases while
 retaining the existing ambiguity and foreign-grammar boundaries.
 

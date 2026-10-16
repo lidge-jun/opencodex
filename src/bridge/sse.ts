@@ -13,7 +13,7 @@ import {
   classifyError,
   cyberPolicyErrorType,
   CYBER_POLICY_ERROR_CODE,
-  isCyberPolicyCode,
+  isTerminalRefusalCode,
   type OcxErrorPayload,
 } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
@@ -51,6 +51,7 @@ import {
 } from "../lib/translator-budget";
 import { adapterFailureFromEvent, emptyChunks, joinChunks, ownedBudgetAbandonedMs, responsesUsage, toolCallArgumentsCouldBeJson, toolCallArgumentsUsable, uuid, webSearchAction } from "./internal";
 import type { OutputItem, StringChunks } from "./internal";
+import { terminalRefusalFailure } from "./terminal-refusal";
 
 function sseEvent(name: string, data: Record<string, unknown>): string {
   return `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -121,6 +122,12 @@ export function bridgeToResponsesSSE(
      * would reach the client under the invented name instead of the normalized one.
      */
     enforceDeclaredToolNames?: boolean;
+    /**
+     * Deliver a non-retryable upstream refusal as `response.failed` with a terminal-refusal code
+     * instead of `response.incomplete` (see `./terminal-refusal`). Set only for the Responses
+     * inbound wire: the chat and Anthropic encoders read the incomplete to report a filter stop.
+     */
+    terminalRefusalAsFailed?: boolean;
     /** Declared parameter schema per tool name; repairs integral-float integer args (#1611). */
     toolParameterSchemas?: ReadonlyMap<string, Record<string, unknown>>;
     /**
@@ -1312,12 +1319,25 @@ export function bridgeToResponsesSSE(
               flushHiddenReasoningEnvelope();
               options?.onUsage?.(event.usage);
               await awaitThoughtSignatureDurability();
+              const refusal = options?.terminalRefusalAsFailed ? terminalRefusalFailure(event) : undefined;
+              if (refusal) {
+                emit("response.failed", {
+                  response: {
+                    ...responseSnapshot("failed", finishedItems, event.endTurn),
+                    usage: responsesUsage(event.usage),
+                    ...refusal,
+                  },
+                });
+                reportTerminal("failed");
+                terminalEvent = true;
+                break;
+              }
               emit("response.incomplete", {
                 response: {
                   ...responseSnapshot("incomplete", finishedItems, event.endTurn),
                   usage: responsesUsage(event.usage),
                   incomplete_details: {
-                    reason: event.reason,
+                    reason: truncationReasonFor(event.reason) ?? event.reason,
                     ...(event.message ? { message: event.message } : {}),
                     ...(event.retryable !== undefined ? { retryable: event.retryable } : {}),
                   },
@@ -1350,7 +1370,7 @@ export function bridgeToResponsesSSE(
                   ...(event.usage ? { usage: responsesUsage(event.usage) } : {}),
                   error: failure.error,
                   last_error: failure.error,
-                  ...(isCyberPolicyCode(failure.error.code)
+                  ...(isTerminalRefusalCode(failure.error.code)
                     ? { retryable: false }
                     : event.retryable !== undefined ? { retryable: event.retryable } : {}),
                 },
@@ -1391,7 +1411,7 @@ export function bridgeToResponsesSSE(
               ...responseSnapshot("failed", finishedItems),
               error: failure,
               last_error: failure,
-              ...(isCyberPolicyCode(failure.code) ? { retryable: false } : {}),
+              ...(isTerminalRefusalCode(failure.code) ? { retryable: false } : {}),
             },
           });
           reportTerminal("failed");

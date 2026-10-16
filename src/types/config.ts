@@ -576,6 +576,21 @@ export interface OcxConfig {
   /** Enable the shipped model alias patterns for providers without an override. */
   defaultModelAliases?: boolean;
   /**
+   * When `true`, the raw OpenAI-compatible `/v1/models` list publishes a safe alias (e.g.
+   * `SEK-glm-4.7-flash`) as the row `id` instead of `provider/nativeId`
+   * (e.g. `Seek/glm-4.7-flash`).  The original `provider/nativeId` moves to a
+   * new `native_id` field so clients that need it can still read it.
+   *
+   * **Default: `false`** — the historical `provider/nativeId` form remains the
+   * published `id`, and the alias is in the informational `alias_of` field.
+   *
+   * Codex (`client_version`) and Anthropic-specific discovery retain their own
+   * identities and are unchanged. Ambiguous or shadowed short aliases retain the
+   * qualified ID, as do aliases with unparseable synthetic Fast siblings.
+   * Existing requests using `provider/nativeId` continue to work unchanged.
+   */
+  preferModelAliasIds?: boolean;
+  /**
    * Opt-in Cursor Private Inference compatibility rows. When true, `/v1/models`
    * adds `<base-id>--<effort>` selectors for reasoning-capable model ids absent
    * from Cursor's built-in effort table. Omitted/false preserves discovery output.
@@ -857,6 +872,19 @@ export interface OcxConfig {
    /** Optional override of intercepted source-model prefixes (default: gpt-6-luna, gpt-5.6-luna). */
    sourceModels?: string[];
  };
+  /**
+   * Global auto-review (approval reviewer) selector for every catalog row, written by the
+   * Models settings panel. During catalog sync OpenCodex stamps it as
+   * `auto_review_model_override` on rows that carry no provider-scoped stamp, so an enabled block
+   * wins over Codex's own root `auto_review_model`; disabling it restores that fallback.
+   * `autoReviewModel` keeps its precedence on its own provider's rows.
+   */
+  autoReviewOverride?: {
+    /** When true, the configured model replaces the reviewer on every unowned row. */
+    enabled?: boolean;
+    /** Public catalog selector in `provider/model` form; blank or absent clears the override. */
+    model?: string;
+  };
   /**
    * Optional map of blocked model IDs to their replacement model IDs.
    * When configured, incoming requests targeting a blocked model (including

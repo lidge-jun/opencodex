@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { OcxProviderConfig } from "../types";
 import { registryEntryForProviderDestination } from "./registry";
+import { isOpenCodeGoGeminiDestination } from "../types/opencode-go";
 
 export const OPENCODE_GO_SESSION_HEADER = "x-opencode-session";
 
@@ -44,7 +45,8 @@ export function resolveOpenCodeGoTransport<T extends OcxProviderConfig>(
     Pick<OcxProviderConfig, "baseUrl" | "adapter">
     & Partial<Pick<OcxProviderConfig, "authMode">>,
 ): T {
-  if (registryEntryForProviderDestination(destinationProvider)?.id !== "opencode-go") return provider;
+  if (registryEntryForProviderDestination(destinationProvider)?.id !== "opencode-go"
+    && !(provider.adapter === "google" && isOpenCodeGoGeminiDestination(provider))) return provider;
   if (!sessionLane) return provider;
   if (hasHeaderCaseInsensitive(provider.headers, OPENCODE_GO_SESSION_HEADER)) return provider;
 

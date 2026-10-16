@@ -6,6 +6,7 @@ import {
   modelPinnedEffortsConfigError,
   pinnedReasoningEffortConfigError,
   modelDisplayNamesConfigError,
+  autoReviewOverrideConfigError,
   autoReviewModelOverridesConfigError,
   autoReviewModelTargetConfigError,
   normalizeNonBlankStringArray,
@@ -28,6 +29,7 @@ import {
   PROVIDER_WEB_SEARCH_BRIDGE_BACKENDS,
   UPSTREAM_HTTP_VERSION_VALUES,
   type OcxProviderConfig,
+  type OcxConfig,
   type FastWire,
   type ProviderCostOverlay,
 } from "../../types";
@@ -256,6 +258,12 @@ const autoReviewModelOverridesSchema = z.unknown().superRefine((value, ctx) => {
   const error = autoReviewModelOverridesConfigError(value, "autoReviewModelOverrides", true);
   if (error) ctx.addIssue({ code: "custom", message: error });
 }).transform(value => normalizeAutoReviewModelOverrides(value));
+
+/** Global auto-review override block; a malformed hand edit is stripped by load degradation. */
+export const autoReviewOverrideSchema = z.unknown().superRefine((value, ctx) => {
+  const error = autoReviewOverrideConfigError(value, "autoReviewOverride");
+  if (error) ctx.addIssue({ code: "custom", message: error });
+}).transform(value => value as NonNullable<OcxConfig["autoReviewOverride"]>);
 
 const modelCapabilitiesSchema = z.unknown().superRefine((value, ctx) => {
   const error = modelCapabilitiesConfigError(value);
