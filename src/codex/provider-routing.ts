@@ -125,8 +125,8 @@ function accepts(fieldUrl: string, saved: Approval): boolean {
 /** Called by start/sync, never prompts and never broadens the approved provider set. */
 export function injectApprovedCodexProvider(id: string, target: CodexRoutingTarget, beforeWrite?: () => void, validateOnly = false): false | { configChanged: boolean } {
   return inWriteSection((held, content, record) => {
+    if (!Object.hasOwn(record.providers, id)) return false;
     const apply = () => {
-      if (!Object.hasOwn(record.providers, id)) return false;
       target = validateCodexRoutingTarget(target);
       if (target.requiresAdmissionToken || target.desktopAuthless || target.clientCompaction || !isLoopbackHostname(new URL(target.baseUrl).hostname)) {
         throw new Error("Approved custom providers support only authenticated Codex on a local loopback proxy without client compaction.");
@@ -148,7 +148,7 @@ export function injectApprovedCodexProvider(id: string, target: CodexRoutingTarg
       publish(CODEX_CONFIG_PATH, field.replace(`base_url = ${tomlString(target.baseUrl)}`), held);
       return { configChanged: true };
     };
-    return withConfigMutationLockSync(apply);
+    return validateOnly ? apply() : withConfigMutationLockSync(apply);
   });
 }
 

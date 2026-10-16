@@ -106,8 +106,11 @@ test("validation is read-only, revocation restores managed URL and removes futur
   run(`
     allow();
     const before = readFileSync(path, "utf8");
+    const { readdirSync } = await import("node:fs");
+    const entries = JSON.stringify(readdirSync(process.env.OPENCODEX_HOME).sort());
     await injectCodexConfig(10100, {}, { validateOnly: true });
     if (readFileSync(path, "utf8") !== before) throw new Error("validation wrote config");
+    if (JSON.stringify(readdirSync(process.env.OPENCODEX_HOME).sort()) !== entries) throw new Error("validation created mutation metadata");
     await injectCodexConfig(10100, {});
     if (await handleCodexProviderCommand(["revoke", id]) !== 0) throw new Error("revoke failed");
     const result = await injectCodexConfig(10100, {});
