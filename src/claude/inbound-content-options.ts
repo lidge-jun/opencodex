@@ -87,6 +87,33 @@ export function declaredAnthropicServerTools(raw: unknown): Rec[] | undefined {
   return tools.length > 0 ? tools : undefined;
 }
 
+/** Validate original call/result order without inventing inputs or pairing a later call backwards. */
+function replayableServerRun(run: readonly Rec[]): boolean {
+  const pending = new Map<string, Rec>();
+  const completed = new Set<string>();
+  for (const block of run) {
+    if (block.type === "server_tool_use") {
+      const { id, name, input } = block;
+      if (typeof id !== "string" || !id.startsWith("srvtoolu_") || pending.has(id) || completed.has(id)
+        || (name !== "web_search" && name !== "web_fetch") || !isRec(input)) return false;
+      const prototype = Object.getPrototypeOf(input);
+      const required = input[name === "web_search" ? "query" : "url"];
+      if ((prototype !== Object.prototype && prototype !== null)
+        || typeof required !== "string" || required.trim().length === 0) return false;
+      pending.set(id, block);
+    } else {
+      const id = block.tool_use_id;
+      if (typeof id !== "string") return false;
+      const call = pending.get(id);
+      if (!call || block.type !== `${call.name}_tool_result`
+        || (Array.isArray(block.content) && !block.content.every(h => isRec(h) && typeof h.encrypted_content === "string"))) return false;
+      pending.delete(id);
+      completed.add(id);
+    }
+  }
+  return completed.size > 0 && pending.size === 0;
+}
+
 /**
  * Completed Anthropic server-tool exchanges (`server_tool_use` + `web_search_tool_result` /
  * `web_fetch_tool_result`) in the caller's assistant history. The Responses body drops them, so
@@ -118,15 +145,7 @@ export function replayedAnthropicServerBlocks(raw: unknown): Map<string, Rec[]> 
         : block.type === "thinking" ? `thinking:${String(block.signature)}`
         : block.type === "redacted_thinking" ? `redacted:${String(block.data)}` : undefined;
       if (anchor) count(anchor);
-      const uses = run.filter(b => b.type === "server_tool_use");
-      const results = run.filter(b => b.type !== "server_tool_use");
-      const resultsById = new Map(results.map(r => [r.tool_use_id, r]));
-      const useIds = new Set(uses.map(u => u.id));
-      const replayable = uses.length > 0 && uses.length === results.length
-        && useIds.size === uses.length && resultsById.size === results.length
-        && uses.every(u => typeof u.id === "string" && u.id.startsWith("srvtoolu_") && resultsById.get(u.id)?.type === `${u.name}_tool_result`)
-        && results.every(r => !Array.isArray(r.content) || r.content.every(h => isRec(h) && typeof h.encrypted_content === "string"));
-      if (anchor && replayable) out.set(anchor, run);
+      if (anchor && replayableServerRun(run)) out.set(anchor, run);
       run = [];
     }
   }

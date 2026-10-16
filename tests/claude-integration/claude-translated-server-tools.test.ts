@@ -416,6 +416,39 @@ describe("a server-tool exchange the client replays reaches Anthropic in place",
       expect((wire.messages as { content: unknown }[])[1]!.content).toEqual([{ type: "text", text: "Bun shipped." }]);
     }
   });
+
+  test("malformed server-tool input drops the exchange without changing its unique text anchor", async () => {
+    const [use, result, text] = clientContent((await claudeTurn("https://api.anthropic.com", SEARCH_TURN)).clientSse);
+    for (const [name, field, resultType] of [["web_search", "query", "web_search_tool_result"], ["web_fetch", "url", "web_fetch_tool_result"]] as const) {
+      for (const input of [undefined, null, [], "invalid", {}, { [field]: 42 }, { [field]: "" }, { [field]: "  " }]) {
+        const call = { ...use, name, input };
+        const matched = { ...result, type: resultType, ...(name === "web_fetch" ? { content: FETCH_RESULT } : {}) };
+        const { wire } = await claudeTurn("https://api.anthropic.com", OK_TURN, "anth", followUp([call, matched, text]));
+        const messages = wire.messages as { content: unknown }[];
+        expect(messages[1]!.content).toEqual([{ type: "text", text: "Bun shipped." }]);
+        expect(JSON.stringify(messages)).not.toContain("server_tool_use");
+        expect(JSON.stringify(messages)).not.toContain(resultType);
+      }
+    }
+  });
+
+  test("a result before its call drops the exchange instead of replaying the reversed pair", async () => {
+    const [use, result, text] = clientContent((await claudeTurn("https://api.anthropic.com", SEARCH_TURN)).clientSse);
+    const { wire } = await claudeTurn("https://api.anthropic.com", OK_TURN, "anth", followUp([result, use, text]));
+    const messages = wire.messages as { content: unknown }[];
+    expect(messages[1]!.content).toEqual([{ type: "text", text: "Bun shipped." }]);
+    expect(JSON.stringify(messages)).not.toContain("server_tool_use");
+    expect(JSON.stringify(messages)).not.toContain("web_search_tool_result");
+  });
+
+  test("overlapping calls replay in source order when each result follows its own call", async () => {
+    const [use, result, text] = clientContent((await claudeTurn("https://api.anthropic.com", SEARCH_TURN)).clientSse);
+    const secondUse = { ...use, id: "srvtoolu_second" };
+    const secondResult = { ...result, tool_use_id: "srvtoolu_second" };
+    const turn = [use, secondUse, secondResult, result, text];
+    const { wire } = await claudeTurn("https://api.anthropic.com", OK_TURN, "anth", followUp(turn));
+    expect((wire.messages as { content: unknown }[])[1]!.content).toEqual(turn);
+  });
 });
 
 test("a malformed anthropic_blocks falls back to the rebuilt pair", () => {
