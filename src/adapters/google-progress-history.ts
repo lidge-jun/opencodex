@@ -1,0 +1,50 @@
+/**
+ * Gemini progress-text history trimming.
+ *
+ * Gemini models, observed on Gemini 4 Argon over Cloud Code Assist, sometimes skip their thinking
+ * channel on a tool-calling turn and plan in the visible text instead. The provider sends that
+ * planning as an ordinary text part without a thought marker, for example a progress line in the
+ * user's language followed by "Let's read google.ts 580-1700 first." Once one turn like that is
+ * replayed as history, the model copies the pattern on the turns that follow, so the leak grows
+ * through the rest of the session. Replaying the same 300K-token request with the leaked tails
+ * removed from the history stopped the leak, while stronger system-prompt wording did not.
+ *
+ * The fix is on the history side only. A replayed model turn that ends in a tool call is
+ * intermediate progress, and the Google brevity instruction already asks for a single short line
+ * there, so its text is replayed as its lead sentence. Visible output is never rewritten, final
+ * answers (turns without tool calls) are replayed in full, and the split is punctuation-based so
+ * it works the same in every language without matching any wording.
+ */
+
+/**
+ * Sentence end: ASCII terminal punctuation followed by whitespace or the end (so "google.ts" is
+ * not a boundary), full-width CJK terminal punctuation anywhere, or a line break.
+ */
+const SENTENCE_END = /[.!?](?=\s|$)|[\u3002\uFF01\uFF1F]|\n/g;
+
+/** Ignore boundaries this early so list markers and short labels ("1.", "Done.") do not become the whole lead. */
+const MIN_LEAD_LENGTH = 8;
+
+/** Whether replayed progress text for this model is trimmed to its lead sentence. */
+export function trimsGeminiProgressHistory(modelId: string): boolean {
+  return /gemini/i.test(modelId);
+}
+
+/**
+ * The lead sentence of a replayed progress text, or undefined when nothing usable remains.
+ * Text without a sentence boundary is already a single sentence and is returned whole.
+ */
+export function geminiProgressLead(text: string): string | undefined {
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return undefined;
+  SENTENCE_END.lastIndex = 0;
+  let end = trimmed.length;
+  for (let match = SENTENCE_END.exec(trimmed); match; match = SENTENCE_END.exec(trimmed)) {
+    const boundary = match.index + match[0].length;
+    if (boundary >= MIN_LEAD_LENGTH) { end = boundary; break; }
+  }
+  const lead = trimmed.slice(0, end).trim();
+  // A code-fence opener is not a sentence; replaying it alone would leave an unclosed fence.
+  if (lead.length === 0 || lead.startsWith("```")) return undefined;
+  return lead;
+}

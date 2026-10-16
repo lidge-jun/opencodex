@@ -131,6 +131,23 @@ valid requests.
 
 > Decision record: [ADR-5008](../decisions/ADR-5008-google-opening-functioncall-repair.md)
 
+## Gemini progress-text history
+
+Gemini sometimes skips its thinking channel on a tool-calling turn and plans in visible text
+instead: a progress line followed by unmarked planning such as "Let's read google.ts next."
+Replayed whole, that tail is copied by every later turn of the session. When
+`messagesToGeminiFormat` serializes an assistant turn that contains a tool call for a model id
+containing `gemini`, it keeps only the lead sentence of the turn's first non-empty text part and
+drops the turn's other text parts. `src/adapters/google-progress-history.ts` owns the split: ASCII
+`.`, `!` or `?` followed by whitespace, full-width CJK terminal punctuation, or a line break,
+ignoring boundaries in the first eight characters. It never matches wording.
+
+Final answers (assistant turns without tool calls), non-Gemini models such as Claude on
+Antigravity, tool calls, their signatures and client-visible output are unchanged. A leak in the
+current response is still delivered as ordinary text; the trim keeps it from propagating.
+`tests/adapters/google/gemini-progress-history.test.ts` covers CCA and AI Studio Gemini, the
+Claude exemption and the split.
+
 ## Structured output on generateContent
 
 A caller's Responses `text.format` reaches the Gemini wire as
