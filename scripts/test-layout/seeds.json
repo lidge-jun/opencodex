@@ -9,7 +9,7 @@
   "domains": {
     "providers": {
       "match": [
-        "^(?:aside(?!-profile)|auto|azure|baseten|chutes|cline(?!-(?:client|writer))|command|commandcode|context(?!-compat|-history)|crusoe|cyber|deepinfra|deepseek|digitalocean|exa|featherless|forward|hyperbolic|kimi|meta|mimo|minimax|moonshot|muse|new|nous|novita|nscale|nvidia|opencode(?!-kilo)|openrouter|qwen38|sambanova|umans|vercel|zcode|zhipu)-"
+        "^(?:aside(?!-profile)|auto|azure|baseten|chutes|cline(?!-(?:client|writer))|command(?!-code-client)|commandcode|context(?!-compat|-history)|crusoe|cyber|deepinfra|deepseek|digitalocean|exa|featherless|forward|hyperbolic|kimi|meta|mimo|minimax|moonshot|muse|new|nous|novita|nscale|nvidia|opencode(?!-kilo)|openrouter|qwen38|sambanova|umans|vercel|zcode|zhipu)-"
       ],
       "children": {
         "cursor": [
@@ -40,7 +40,7 @@
         "^context-history\\.test\\.ts$",
         "^aside-profiles-routes",
         "^update-async-routes\\.test\\.ts$",
-        "^(?:account|alias|bounded|cancel|config\\.test\\.ts|consume|data|debug|error|errors|fetch|health|input|loopback|management|memory|outbound|owned|passive|port|ports\\.test\\.ts|proxy|relay|response|retry|server|session|sidebar|stream|v2)-",
+        "^(?!bounded-file-read\\.test\\.ts$)(?:account|alias|bounded|cancel|config\\.test\\.ts|consume|data|debug|error|errors|fetch|health|input|loopback|management|memory|outbound|owned|passive|port|ports\\.test\\.ts|proxy|relay|response|retry|server|session|sidebar|stream|v2)-",
         "^subagent-model-force-api\\.test\\.ts$"
       ]
     },
@@ -106,7 +106,7 @@
     },
     "lib": {
       "match": [
-        "^(?:acl|clearable|credential|debug\\.test\\.ts|optional|redact\\.test\\.ts|remove|self|stall|strict|transient)-"
+        "^(?:acl|bounded|clearable|credential|debug\\.test\\.ts|optional|redact\\.test\\.ts|remove|self|stall|strict|transient)-"
       ]
     },
     "clients": {
@@ -114,7 +114,8 @@
         "^aside-profile(?!s-routes)",
         "^cline-(?:client|writer)(?:-|[.])",
         "^opencode-kilo-",
-        "^(?:desktop|omp|pi|prime|remote|sync)-"
+        "^(?:desktop|omp|pi|prime|remote|sync)-",
+        "^command-code-client(?:-|[.])"
       ]
     },
     "service": {

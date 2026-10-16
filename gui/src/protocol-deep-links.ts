@@ -11,6 +11,7 @@
  */
 import { isProtocol, type Protocol, type UpstreamWire } from "../../src/protocols/contract";
 import { navigateHash, normalizeHashPath, splitHashQuery } from "./hash-routing";
+import { canonicalHashPath } from "./app-routing";
 
 export const COMPATIBILITY_HASH = "models/compatibility";
 export const PROVIDERS_HASH = "providers";
@@ -39,7 +40,11 @@ export function compatibilityPairHash(pair: Partial<ProtocolPairFilter>): string
 }
 
 function readQuery(hash: string, path: string): URLSearchParams | null {
-  const parts = splitHashQuery(normalizeHashPath(hash));
+  /*
+   * Read the destination, not a legacy spelling the route hook is about to replace without
+   * an event: a cold #claude/account must open Anthropic's Accounts tab on Providers.
+   */
+  const parts = splitHashQuery(canonicalHashPath(hash));
   return parts.path === path ? new URLSearchParams(parts.query) : null;
 }
 

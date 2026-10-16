@@ -78,10 +78,13 @@ jobs:
           persist-credentials: false
 
       # The repository-owned composite action, not a hand-pinned setup-bun SHA: it
-      # resolves the Bun version from package.json so the runtime SOT stays in one
-      # place. An independently pinned action here would drift from every other job.
+      # selects package.json's test-runner pin even for this single-file test so
+      # validation follows the CI runner contract (see setup-project-bun/action.yml).
+      # This job edits version metadata; it does not compile a shipped runtime.
       - name: Setup project Bun
         uses: ./.github/actions/setup-project-bun
+        with:
+          role: test-runner
 
       - name: Install dependencies
         run: bun install --frozen-lockfile

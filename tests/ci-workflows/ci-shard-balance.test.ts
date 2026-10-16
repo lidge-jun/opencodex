@@ -12,7 +12,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import { mergeDurations, parseJobLog, parseTable, renderTable } from "../../scripts/ci/test-durations";
+import { DURATIONS_TABLE, mergeDurations, parseJobLog, parseTable, renderTable, WINDOWS_DURATIONS_TABLE } from "../../scripts/ci/test-durations";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
 import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
@@ -40,7 +40,20 @@ const FAKE_TIMEOUT = [
   "",
 ].join("\n");
 
-function runShard(shard: string, options: { durations?: Record<string, number> | null; batchSize?: string; timeoutSeconds?: string } = {}): string[][] {
+type ShardOptions = {
+  durations?: Record<string, number> | null;
+  batchSize?: string;
+  timeoutSeconds?: string;
+  /** Leave BUN_TEST_DURATIONS_FILE unset so the runner picks its own committed table. */
+  defaultTable?: boolean;
+  env?: Record<string, string>;
+};
+
+function runShard(shard: string, options: ShardOptions = {}): string[][] {
+  return runShardWithOutput(shard, options).batches;
+}
+
+function runShardWithOutput(shard: string, options: ShardOptions = {}): { batches: string[][]; output: string } {
   const directory = mkdtempSync(join(tmpdir(), "ocx-shard-balance-"));
   try {
     const bin = join(directory, "bin");
@@ -68,17 +81,19 @@ function runShard(shard: string, options: { durations?: Record<string, number> |
         TMPDIR: join(directory, "tmp"),
         BUN_TEST_BATCH_SIZE: options.batchSize ?? "12",
         ...(options.timeoutSeconds ? { BUN_TEST_BATCH_TIMEOUT_SECONDS: options.timeoutSeconds } : {}),
-        BUN_TEST_DURATIONS_FILE: durations,
+        ...(options.defaultTable ? {} : { BUN_TEST_DURATIONS_FILE: durations }),
         OPENCODEX_BUN_PATH: join(bin, "bun"),
         FIXTURE_ISOLATED: ISOLATED,
         FIXTURE_CALLS: calls,
+        ...options.env,
       },
       stdout: "pipe",
       stderr: "pipe",
     });
     const output = `${result.stdout.toString()}${result.stderr.toString()}`;
     expect(`status:${result.exitCode}`, output).toBe("status:0");
-    return readFileSync(calls, "utf8").split("\n").filter(Boolean).map(line => line.split(" "));
+    const batches = readFileSync(calls, "utf8").split("\n").filter(Boolean).map(line => line.split(" "));
+    return { batches, output };
   } finally {
     removeTreeWithRetry(directory);
   }
@@ -126,6 +141,16 @@ describe.skipIf(process.platform === "win32")("duration-weighted shards, execute
     const batches = runShard("1/1", { durations, batchSize: "3", timeoutSeconds: "2" });
     expect(batches.map(batch => batch.length)).toEqual([3, 3]);
   }, SPAWN_BUDGET_MS);
+
+  test("Windows runners default to their own table, and an explicit table still wins", () => {
+    const tableUsed = (env: Record<string, string>, defaultTable = true) =>
+      /Predicted shard time from recorded durations \(([^)]+)\)/
+        .exec(runShardWithOutput("1/1", { defaultTable, env, durations: { "alpha.test.ts": 1 } }).output)?.[1];
+    expect(tableUsed({ RUNNER_OS: "Windows" })).toBe("test-durations.windows.tsv");
+    expect(tableUsed({ RUNNER_OS: "Linux" })).toBe("test-durations.tsv");
+    expect(tableUsed({ RUNNER_OS: "macOS" })).toBe("test-durations.tsv");
+    expect(tableUsed({ RUNNER_OS: "Windows" }, false)).toBe("durations.tsv");
+  }, SPAWN_BUDGET_MS);
 });
 
 describe("the duration table tool", () => {
@@ -163,6 +188,38 @@ describe("the duration table tool", () => {
     expect(samples.get("tests/b/two.test.ts")).toEqual([400]);
   });
 
+  test("reads Windows shard headers, which print backslash paths, under forward-slash keys", () => {
+    const windows = [
+      "windows 8/9\tUNKNOWN STEP\t2026-10-12T08:52:18.9199935Z ##[group]shard 8/9 batch 1/45 (6 files)",
+      "windows 8/9\tUNKNOWN STEP\t2026-10-12T08:52:18.9851789Z ##[group]tests\\adapters\\anthropic\\one.test.ts:",
+      "windows 8/9\tUNKNOWN STEP\t2026-10-12T08:52:19.5906751Z ##[endgroup]",
+    ].join("\r\n");
+    expect(Object.fromEntries(parseJobLog(windows))).toEqual({ "tests/adapters/anthropic/one.test.ts": [671] });
+  });
+
+  test("refresh --table writes the named table and leaves the shared one alone", () => {
+    const directory = mkdtempSync(join(tmpdir(), "ocx-durations-table-"));
+    try {
+      const log = join(directory, "windows.log");
+      const table = join(directory, "windows.tsv");
+      writeFileSync(log, [
+        "2026-10-12T08:52:18.9199935Z ##[group]shard 8/9 batch 1/45 (1 files)",
+        "2026-10-12T08:52:18.9851789Z ##[group]tests\\ci-workflows\\ci-shard-balance.test.ts:",
+        "2026-10-12T08:52:19.5906751Z ##[endgroup]",
+      ].join("\r\n"));
+      const shared = readFileSync(DURATIONS_TABLE, "utf8");
+      const result = Bun.spawnSync(
+        [process.execPath, repoPath("scripts", "ci", "test-durations.ts"), "refresh", "--table", table, "--source", "fixture", log],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      expect(result.exitCode, result.stderr.toString()).toBe(0);
+      expect(parseTable(readFileSync(table, "utf8"))).toEqual(new Map([["tests/ci-workflows/ci-shard-balance.test.ts", 671]]));
+      expect(readFileSync(DURATIONS_TABLE, "utf8")).toBe(shared);
+    } finally {
+      removeTreeWithRetry(directory);
+    }
+  }, SPAWN_BUDGET_MS);
+
   test("merges new measurements over kept rows and drops files that no longer exist", () => {
     const previous = new Map([["tests/kept.test.ts", 70], ["tests/gone.test.ts", 90], ["tests/remeasured.test.ts", 5]]);
     const measured = new Map([["tests/remeasured.test.ts", [100, 300]], ["tests/zero.test.ts", [0]]]);
@@ -171,13 +228,15 @@ describe("the duration table tool", () => {
     expect(parseTable(renderTable(merged, "fixture"))).toEqual(merged);
   });
 
-  test("the committed table is well formed", () => {
-    const text = readFileSync(repoPath("scripts", "ci", "test-durations.tsv"), "utf8");
-    const rows = text.split("\n").filter(line => line !== "" && !line.startsWith("#"));
-    expect(rows.length).toBeGreaterThan(0);
-    for (const row of rows) expect(row).toMatch(/^\d+\ttests\/\S+$/);
-    const paths = rows.map(row => row.split("\t")[1]!);
-    expect(paths).toEqual([...new Set(paths)].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)));
-    expect(parseTable(text).size).toBe(rows.length);
-  });
+  for (const table of [DURATIONS_TABLE, WINDOWS_DURATIONS_TABLE]) {
+    test(`the committed table ${table.split(/[\\/]/).pop()} is well formed`, () => {
+      const text = readFileSync(table, "utf8");
+      const rows = text.split("\n").filter(line => line !== "" && !line.startsWith("#"));
+      expect(rows.length).toBeGreaterThan(0);
+      for (const row of rows) expect(row).toMatch(/^\d+\ttests\/\S+$/);
+      const paths = rows.map(row => row.split("\t")[1]!);
+      expect(paths).toEqual([...new Set(paths)].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)));
+      expect(parseTable(text).size).toBe(rows.length);
+    });
+  }
 });

@@ -15,7 +15,7 @@ import { createToolChoiceResolver, namespacedToolName } from "../types";
 import { responsesRequestSchema } from "./schema";
 import { providerMetadataFromResponsesFunctionCall } from "./provider-opaque-metadata";
 import { lookupReplayThoughtSignature } from "./thought-signature-replay";
-import { compactionItemToText, isCompactionItemType } from "./compaction";
+import { CHECKPOINT_CONTINUATION_NOTE, compactionItemToText, decodeCompactionSummary, isCompactionItemType } from "./compaction";
 import { previousResponseReplayPrefixLength } from "./state";
 import { decodeReasoningEnvelope } from "./reasoning-envelope";
 import { hasRoutedIdentity, nameRoutedIdentity } from "../adapters/identity";
@@ -64,6 +64,35 @@ function repairJsonObjectEnvelope(text: string): Record<string, unknown> | undef
     /* fall through to the tolerated-{} path */
   }
   return undefined;
+}
+
+/**
+ * Decode a function call's serialized arguments the way history replay tolerates them: empty
+ * or non-JSON text becomes `{}` instead of failing every later turn, and the one bounded
+ * lost-brace corruption above is repaired. Shared with the direct Chat decoder
+ * (`src/protocols/codecs/chat-ir.ts`) so both decode the same call to the same object.
+ */
+export function functionCallArgumentsFromText(callId: string, rawArguments: string | undefined): Record<string, unknown> {
+  let args: Record<string, unknown> = {};
+  const rawArgs = rawArguments?.trim();
+  if (rawArgs) {
+    try {
+      const parsed: unknown = JSON.parse(rawArgs);
+      if (isObj(parsed)) args = parsed;
+    } catch {
+      // One observed serialization corruption loses exactly the JSON object's opening
+      // brace; the closed envelope is tight enough to repair back into a call the
+      // routed model can still see and retry, instead of replaying {} forever.
+      const repaired = repairJsonObjectEnvelope(rawArgs);
+      if (repaired === undefined) {
+        console.warn(`[parser] function_call ${callId} has non-JSON arguments; defaulting to {}`);
+      } else {
+        args = repaired;
+        console.warn(`[parser] function_call ${callId} arguments lost the JSON opening brace; repaired from history`);
+      }
+    }
+  }
+  return args;
 }
 
 
@@ -193,6 +222,7 @@ export function parseRequest(
   // Remote compaction v2: the input tail carries `{type:"compaction_trigger"}` and Codex expects a
   // synthetic `{type:"compaction"}` output item (src/responses/compaction.ts). Flagged for the server.
   let compactionRequest = false;
+  let decodedCheckpoint = false;
   let contextCompactionBoundary = false;
   let continuationConversationMessageIndex: number | undefined;
 
@@ -261,6 +291,7 @@ export function parseRequest(
         if (inputIndex >= replayedInputPrefixLength) contextCompactionBoundary = true;
         const encrypted = (item as { encrypted_content?: unknown }).encrypted_content;
         if (effectiveType === "context_compaction" && typeof encrypted !== "string") continue;
+        if (typeof encrypted === "string" && decodeCompactionSummary(encrypted) !== null) decodedCheckpoint = true;
         pendingReasoning.length = 0;
         messages.push({
           role: "user",
@@ -395,25 +426,7 @@ export function parseRequest(
         const call = item as { id?: string; call_id: string; name: string; arguments?: string; namespace?: string; extra_content?: unknown };
         // Tolerate empty/non-JSON arguments (e.g. a no-arg tool call serialized as "") instead of
         // throwing — a single poisoned history item would otherwise 400 every subsequent turn.
-        let args: Record<string, unknown> = {};
-        const rawArgs = call.arguments?.trim();
-        if (rawArgs) {
-          try {
-            const parsed: unknown = JSON.parse(rawArgs);
-            if (isObj(parsed)) args = parsed;
-          } catch {
-            // One observed serialization corruption loses exactly the JSON object's opening
-            // brace; the closed envelope is tight enough to repair back into a call the
-            // routed model can still see and retry, instead of replaying {} forever.
-            const repaired = repairJsonObjectEnvelope(rawArgs);
-            if (repaired === undefined) {
-              console.warn(`[parser] function_call ${call.call_id} has non-JSON arguments; defaulting to {}`);
-            } else {
-              args = repaired;
-              console.warn(`[parser] function_call ${call.call_id} arguments lost the JSON opening brace; repaired from history`);
-            }
-          }
-        }
+        const args = functionCallArgumentsFromText(call.call_id, call.arguments);
         // Do NOT map Responses item `id` (fc_/ctc_/…) onto `thoughtSignature`. That field is
         // reserved for Gemini/Antigravity opaque thought tokens; forwarding item ids as
         // thoughtSignature 400s Antigravity (Base64 / TYPE_BYTES). Continuity for CCA comes from
@@ -586,6 +599,10 @@ export function parseRequest(
     .map(t => loadedToolNames.has(namespacedToolName(t.namespace, t.name))
       ? { ...t, loadedFromToolSearch: true }
       : t);
+  // #6764: the decoded checkpoint is ordinary user text on this route. Say in the system prompt
+  // what it is, so a retained earlier request that it reports as completed is not repeated.
+  // A compaction request is a summarizer turn and must not be told to continue.
+  if (decodedCheckpoint && !compactionRequest) systemPrompt.push(CHECKPOINT_CONTINUATION_NOTE);
   const context: OcxContext = {
     ...(systemPrompt.length > 0 ? { systemPrompt } : {}),
     messages,

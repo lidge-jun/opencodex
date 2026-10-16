@@ -1,4 +1,7 @@
 /** Response-header policy for managed Anthropic sends; no account or request payload data. */
+import type { AnthropicInstanceId } from "../providers/anthropic-instance-id";
+import type { GenerationContext } from "../lib/state-store-sweeper";
+import { credentialGeneration, getAccountCredential } from "./store";
 export type AnthropicRateLimitKind = "shared-quota" | "family-quota" | "transient-rate" | "request-scoped-unknown";
 export type RateLimitHeaders = Pick<Headers, "get">;
 export const ANTHROPIC_SHORT_RETRY_MS = 100;
@@ -22,16 +25,68 @@ export function classifyAnthropic429(headers: RateLimitHeaders, now = Date.now()
   return "request-scoped-unknown";
 }
 
-const pauses = new Map<string, number>();
+function createAnthropicRatePolicy(instance: AnthropicInstanceId) {
+  let pauses: Map<string, { until: number; generation: string }> | undefined;
+  function pauseAnthropicRateAdmission(accountId: string, until: number): void {
+    const credential = getAccountCredential(instance, accountId);
+    if (!credential) return;
+    const now = Date.now();
+    const generation = credentialGeneration(credential);
+    const rows = pauses ??= new Map();
+    for (const [id, pause] of rows) if (pause.until <= now) rows.delete(id);
+    const previous = rows.get(accountId);
+    rows.set(accountId, { until: Math.max(previous?.generation === generation ? previous.until : 0, until), generation });
+  }
+  function anthropicRatePauseUntil(accountId: string, now = Date.now()): number | undefined {
+    const pause = pauses?.get(accountId);
+    if (!pause) return undefined;
+    const credential = getAccountCredential(instance, accountId);
+    if (pause.until <= now || !credential || credentialGeneration(credential) !== pause.generation) {
+      pauses!.delete(accountId); return undefined;
+    }
+    return pause.until;
+  }
+  function clearAnthropicRatePauses(): void { pauses = undefined; }
+  function reconcileAnthropicRatePauses(context: GenerationContext): number {
+    let removed = 0;
+    for (const id of pauses?.keys() ?? []) {
+      if (context.oauthAccountKeys.has(`${instance}\0${id}`)) continue;
+      pauses!.delete(id); removed++;
+    }
+    return removed;
+  }
+  function sweepExpiredAnthropicRatePauses(now = Date.now()): number {
+    let removed = 0;
+    for (const [id, pause] of pauses ?? []) if (pause.until <= now) { pauses!.delete(id); removed++; }
+    return removed;
+  }
+  return Object.freeze({ instance, pauseAnthropicRateAdmission, anthropicRatePauseUntil,
+    clearAnthropicRatePauses, reconcileAnthropicRatePauses, sweepExpiredAnthropicRatePauses });
+}
+export type AnthropicRatePolicy = ReturnType<typeof createAnthropicRatePolicy>;
+const instances = new Map<AnthropicInstanceId, AnthropicRatePolicy>();
+export function anthropicRatePolicyFor(instance: AnthropicInstanceId): AnthropicRatePolicy {
+  let facade = instances.get(instance);
+  if (!facade) { facade = createAnthropicRatePolicy(instance); instances.set(instance, facade); }
+  return facade;
+}
+export function reconcileAllAnthropicRatePauses(context: GenerationContext): number {
+  let removed = 0;
+  for (const facade of instances.values()) removed += facade.reconcileAnthropicRatePauses(context);
+  return removed;
+}
+export function sweepExpiredAllAnthropicRatePauses(now = Date.now()): number {
+  let removed = 0;
+  for (const facade of instances.values()) removed += facade.sweepExpiredAnthropicRatePauses(now);
+  return removed;
+}
+export function clearAllAnthropicRatePauses(): void {
+  for (const facade of instances.values()) facade.clearAnthropicRatePauses();
+}
 export function pauseAnthropicRateAdmission(accountId: string, until: number): void {
-  const now = Date.now();
-  for (const [id, deadline] of pauses) if (deadline <= now) pauses.delete(id);
-  pauses.set(accountId, Math.max(pauses.get(accountId) ?? 0, until));
+  anthropicRatePolicyFor("anthropic").pauseAnthropicRateAdmission(accountId, until);
 }
 export function anthropicRatePauseUntil(accountId: string, now = Date.now()): number | undefined {
-  const until = pauses.get(accountId);
-  if (until === undefined) return undefined;
-  if (until <= now) { pauses.delete(accountId); return undefined; }
-  return until;
+  return anthropicRatePolicyFor("anthropic").anthropicRatePauseUntil(accountId, now);
 }
-export function clearAnthropicRatePauses(): void { pauses.clear(); }
+export function clearAnthropicRatePauses(): void { anthropicRatePolicyFor("anthropic").clearAnthropicRatePauses(); }

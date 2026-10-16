@@ -1,7 +1,13 @@
 export const spillCounters = {
   writes: 0, writeFailures: 0, readFailures: 0,
   aclRetryReturnedTimeouts: 0, aclTimeoutMemoRefusals: 0,
+  capacityRefusals: 0, headroomEvictions: 0,
 };
+
+/** Test-only: zero every spill counter, including ones added later. */
+export function resetSpillCountersForTests(): void {
+  for (const key of Object.keys(spillCounters) as Array<keyof typeof spillCounters>) spillCounters[key] = 0;
+}
 
 export type ResponseSpillWriteFailureCode =
   | "EACLRETRYEXHAUSTED"
@@ -101,6 +107,12 @@ export function noteSpillWriteFailure(
   // Count terminal publications, not ACL calls or a transient first attempt.
   if (origin === "retry_returned_timeout") spillCounters.aclRetryReturnedTimeouts += 1;
   else if (origin === "timeout_memo_refusal") spillCounters.aclTimeoutMemoRefusals += 1;
+}
+
+/** A publication refused because the durable spill cap could not make room for it (#6747). */
+export function noteSpillCapacityRefusal(): void {
+  spillCounters.capacityRefusals += 1;
+  noteSpillWriteFailure(null, "ECAPACITY");
 }
 /**
  * Admission-boundary observability (test-visible). directSpills: oversized

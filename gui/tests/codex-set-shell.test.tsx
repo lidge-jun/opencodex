@@ -99,14 +99,14 @@ function json(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } });
 }
 
-async function mountShell(): Promise<{ root: Root; container: HTMLElement }> {
+async function mountShell(apiBase = "", machineApiBase = apiBase): Promise<{ root: Root; container: HTMLElement }> {
   const { createRoot } = await import("react-dom/client");
   const container = document.createElement("div");
   document.body.append(container);
   let root!: Root;
   await act(async () => {
     root = createRoot(container);
-    root.render(<LanguageProvider><CodexSet apiBase="" /></LanguageProvider>);
+    root.render(<LanguageProvider><CodexSet apiBase={apiBase} machineApiBase={machineApiBase} /></LanguageProvider>);
   });
   return { root, container };
 }
@@ -123,7 +123,7 @@ async function mountPrompt(): Promise<{ root: Root; container: HTMLElement }> {
   return { root, container };
 }
 
-function panel(container: HTMLElement, name: "multiauth" | "prompt"): HTMLElement | null {
+function panel(container: HTMLElement, name: "multiauth" | "prompt" | "desktop"): HTMLElement | null {
   return container.querySelector("#codex-set-panel-" + name);
 }
 
@@ -135,6 +135,25 @@ test("1. #codex-set renders Multi-auth, and Prompt is not mounted", async () => 
   expect(multi!.hasAttribute("hidden")).toBe(false);
   // Case 4: Prompt does not mount until first visited.
   expect(panel(container, "prompt")).toBeNull();
+  expect(panel(container, "desktop")).toBeNull();
+  await act(async () => { root.unmount(); });
+});
+
+test("desktop compatibility deep link mounts only its read-only status surface", async () => {
+  testWindow.location.hash = "#codex-set/desktop";
+  const calls = stubRoutes(call => json(call.url.endsWith("/settings") ? { ok: true, settings: { startOnProxyStart: false, revision: "a".repeat(64) } } : call.url.endsWith("/certificate")
+    ? { ok: true, certificate: { supported: true, state: "missing", busy: null } }
+    : { ok: true, runtime: { supported: true, phase: "off", running: false } }));
+  const { container, root } = await mountShell("/shared", "/machine");
+  expect(hashBelongsToPage("codex-set/desktop", "codex-set")).toBe(true);
+  expect(resolveAppHashChange("codex-set/desktop").replaceTo).toBeNull();
+  expect(panel(container, "desktop")?.hasAttribute("hidden")).toBe(false);
+  expect(panel(container, "multiauth")).toBeNull(); expect(panel(container, "prompt")).toBeNull();
+  expect(new Set(calls.map(call => call.url))).toEqual(new Set([
+    "/machine/api/codex/desktop-compatibility/settings", "/machine/api/codex/desktop-compatibility/certificate",
+    "/machine/api/codex/desktop-compatibility/runtime",
+  ]));
+  expect(calls.every(call => call.method === "GET" && call.url.startsWith("/machine/api/codex/desktop-compatibility/"))).toBe(true);
   await act(async () => { root.unmount(); });
 });
 

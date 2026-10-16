@@ -1,8 +1,10 @@
 // INV-CLIPICKER-01: cc catalog rows only for CLI-classified, CLI-first-party requests; registry-decodable aliases only; fail-open.
 import { afterAll, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { flushConfigDirHardeningAndReaps } from "../../src/config/paths";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { activeDesktop3pAlias, buildDesktop3pRegistry, resolveDesktop3pAlias } from "../../src/claude/desktop-3p";
 import { DESKTOP_3P_REGISTRY_RETRY_MS, ensureDesktop3pRegistry } from "../../src/claude/desktop-3p-startup";
 import { reconcileClaudeFirstPartySettings } from "../../src/claude/first-party-settings";
@@ -31,7 +33,10 @@ afterAll(async () => {
 
 function tempDir(prefix: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
-  cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+  cleanups.push(async () => {
+    await flushConfigDirHardeningAndReaps(dir);
+    removeTreeWithRetry(dir);
+  });
   return dir;
 }
 

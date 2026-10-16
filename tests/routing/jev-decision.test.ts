@@ -10,6 +10,7 @@ import {
   type JevCandidate,
   type ResolveJevDecisionOptions,
 } from "../../src/combos/jev";
+import { anthropicToResponsesBody } from "../../src/claude/inbound";
 import type { OcxConfig } from "../../src/types";
 
 const candidates: JevCandidate[] = [
@@ -136,6 +137,133 @@ describe("JEV bounded decision state", () => {
     expect(state.step.last_tool_output_tail).toBe("Tool before\ntool after");
     expect(JSON.stringify(state)).not.toContain("ASSISTANT_MACHINE_SECRET");
     expect(JSON.stringify(state)).not.toContain("TOOL_MACHINE_SECRET");
+  });
+
+  test.each(["string", "blocks"])("extracts the real first Claude Code task from %s content", shape => {
+    const task = "Fix the parser and add a regression test.";
+    const reminders = [
+      `<system-reminder>Project CLAUDE.md guidance\n${"Follow project conventions.\n".repeat(200)}</system-reminder>`,
+      "<system-reminder>User context and attribution guidance.</system-reminder>",
+    ];
+    const content = shape === "string"
+      ? [...reminders, task].join("\n\n")
+      : [...reminders, task].map(text => ({ type: "text", text }));
+    const body = anthropicToResponsesBody({
+      model: "claude-sonnet-4-6",
+      messages: [{ role: "user", content }],
+    });
+    const original = JSON.stringify(body);
+
+    expect(original).toContain("<system-reminder>");
+    expect(buildJevState(body)).toEqual({
+      task,
+      signals: { has_image: false, tool_history: false },
+      step: { type: "user_turn" },
+    });
+    expect(JSON.stringify(body)).toBe(original);
+  });
+
+  test("strips reminders from the latest task and preserves head/tail clipping", () => {
+    const task = `${"h".repeat(380)}${"t".repeat(380)}`;
+    const body = anthropicToResponsesBody({
+      model: "claude-sonnet-4-6",
+      messages: [
+        { role: "user", content: "An older request." },
+        { role: "assistant", content: "Ready for the next request." },
+        {
+          role: "user",
+          content: `<system-reminder>${"context".repeat(40_000)}</system-reminder>\n${task}`,
+        },
+      ],
+    });
+
+    expect(buildJevState(body)).toEqual({
+      task: `${"h".repeat(320)}\n[...]\n${"t".repeat(173)}`,
+      signals: { has_image: false, tool_history: false },
+      step: { type: "user_turn" },
+      previous_assistant: "Ready for the next request.",
+    });
+  });
+
+  test("uses protected nesting semantics without salvaging reminder contents as a Codex goal", () => {
+    const reminder = '<system-reminder><codex_internal_context source="goal">Quoted goal</codex_internal_context></system-reminder>';
+    expect(buildJevState({ input: reminder })).toMatchObject({ task: "" });
+    expect(buildJevState({
+      input: `<codex_internal_context source="goal">Active goal${reminder}</codex_internal_context>`,
+    })).toMatchObject({ task: "Active goal" });
+    expect(buildJevState({
+      input: "<system-reminder>Outer<system-reminder>Inner</system-reminder>Outer</system-reminder>Real task",
+    })).toMatchObject({ task: "Real task" });
+    expect(buildJevState({
+      input: "Visible task<system-reminder>Unclosed context",
+    })).toMatchObject({ task: "Visible task" });
+    expect(buildJevState({ input: "<system-reminder>Unclosed context" })).toMatchObject({ task: "" });
+    expect(buildJevState({ input: "Before<system-reminder>Context</system-reminder>after" }))
+      .toMatchObject({ task: "Before\nafter" });
+  });
+
+  test("removes Claude Code reminders from converted assistant and tool-result tails", () => {
+    const reminder = `<system-reminder>${"Context only. ".repeat(200)}</system-reminder>`;
+    const body = anthropicToResponsesBody({
+      model: "claude-sonnet-4-6",
+      messages: [
+        { role: "user", content: "Continue the investigation." },
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: `Visible plan${reminder}visible follow-up${reminder}` },
+            { type: "tool_use", id: "call-1", name: "Read", input: { file: "example.ts" } },
+          ],
+        },
+        {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "call-1", content: `Visible result${reminder}` }],
+        },
+      ],
+    });
+
+    expect(buildJevState(body)).toEqual({
+      task: "Continue the investigation.",
+      signals: { has_image: false, tool_history: true },
+      step: { type: "tool_step", last_tool_output_tail: "Visible result", tool_call: { name: "Read" } },
+      previous_assistant: "Visible plan\nvisible follow-up",
+    });
+  });
+
+  test("keeps reminder-free states byte-identical to the pre-reminder behavior", () => {
+    const task = `  ${"h".repeat(380)}<example>ordinary markup</example>${"t".repeat(380)}  `;
+    const body = anthropicToResponsesBody({
+      model: "claude-sonnet-4-6",
+      messages: [
+        { role: "user", content: task },
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: `  ${"a".repeat(300)}<example>plan</example>  ` },
+            { type: "tool_use", id: "call-1", name: "Read", input: { file: "example.ts" } },
+          ],
+        },
+        {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "call-1", content: `  ${"z".repeat(600)}  ` }],
+        },
+      ],
+    });
+    const expected = {
+      task: `${"h".repeat(320)}\n[...]\n${"t".repeat(173)}`,
+      signals: { has_image: false, tool_history: true },
+      step: { type: "tool_step", last_tool_output_tail: "z".repeat(520), tool_call: { name: "Read" } },
+      previous_assistant: `${"a".repeat(217)}<example>plan</example>`,
+    };
+
+    expect(JSON.stringify(buildJevState(body))).toBe(JSON.stringify(expected));
+    expect(JSON.stringify(buildJevState({ input: task }))).toBe(JSON.stringify({
+      task: expected.task,
+      signals: { has_image: false, tool_history: false },
+      step: { type: "user_turn" },
+    }));
+    expect(buildJevState({ input: "<environment_context>Context</environment_context>Codex task" }))
+      .toMatchObject({ task: "Codex task" });
   });
 
   test("salvages an envelope-only active goal but drops catalog-only envelopes", () => {

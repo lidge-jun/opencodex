@@ -98,6 +98,31 @@ function claudeBody(): Record<string, unknown> {
   };
 }
 
+test("prompt-cache opt-in leaves native token footers and tool-result turns verbatim", async () => {
+  const captured: Captured[] = [];
+  const upstream = mockAnthropicUpstream(captured);
+  saveConfig(cfg(upstream.url.toString().replace(/\/$/, ""), { stabilizePromptCache: true }));
+  const server = startServer(0);
+  const body = claudeBody();
+  body.system = "System.\n\n<total_tokens>1000 tokens left</total_tokens>";
+  body.messages = [
+    { role: "assistant", content: [{ type: "tool_use", id: "call_read", name: "Read", input: {} }] },
+    { role: "user", content: [{ type: "tool_result", tool_use_id: "call_read", content: "file contents" }] },
+  ];
+  try {
+    const res = await fetch(new URL("/v1/messages", server.url), {
+      method: "POST", headers: OAUTH_HEADERS, body: JSON.stringify(body),
+    });
+    expect(res.status).toBe(200);
+    await res.text();
+    expect(captured).toHaveLength(1);
+    expect(captured[0]!.body).toEqual(body);
+  } finally {
+    await server.stop(true);
+    await upstream.stop(true);
+  }
+});
+
 test("unmapped claude model + sk-ant credential passes through verbatim", async () => {
   const captured: Captured[] = [];
   const upstream = mockAnthropicUpstream(captured);

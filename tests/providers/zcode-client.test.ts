@@ -1,19 +1,28 @@
 import { describe, expect, test } from "bun:test";
-import { join } from "node:path";
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import {
   ClientPathError,
   LOOPBACK_API_KEY_PLACEHOLDER,
   OPENCODE_PROVIDER_ID,
+  ZcodeSettingsPathError,
   buildClientConfig,
   buildClientConfigText,
   buildClientContribution,
+  buildZcodeStoreContribution,
+  zcodeBootstrapSettingsPath,
   zcodeConfigPath,
   zcodeHomeDir,
   type ExportContext,
+  type ManagedFragment,
   type ZcodeGeneratedConfig,
 } from "../../src/clients/config-export";
 import type { OcxConfig } from "../../src/types";
 import { handleZcodeCommand } from "../../src/cli/integrations";
+import { repoPath } from "../helpers/repo-root";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const CONFIG = {
   port: 10100,
@@ -162,6 +171,84 @@ describe("ZCode reasoning export", () => {
   });
 });
 
+describe("ZCode provider store", () => {
+  /** The model-rule fragments of one store contribution, keyed by modelId. */
+  function modelRules(ctx: ExportContext): Map<string, unknown> {
+    const rules = new Map<string, unknown>();
+    for (const fragment of buildZcodeStoreContribution(ctx).fragments as readonly ManagedFragment[]) {
+      if (fragment.path[0] !== "config" || fragment.path[1] !== "modelConfigRules") continue;
+      rules.set((fragment.value as { modelId: string }).modelId, fragment.value);
+    }
+    return rules;
+  }
+
+  test("model rules carry the catalog's image support and effort ladder, not just the context window", () => {
+    const rules = modelRules({
+      ...context(),
+      models: [
+        {
+          namespaced: "opencode-go/mimo-v2.6-pro",
+          provider: "opencode-go",
+          id: "mimo-v2.6-pro",
+          contextWindow: 600_000,
+          inputModalities: ["text", "image"],
+          reasoningEfforts: ["max", "low", "high", "none", "medium", "xhigh"],
+          defaultReasoningEffort: "medium",
+        },
+      ],
+    });
+    expect(rules.get("opencode-go/mimo-v2.6-pro")).toEqual({
+      providerId: OPENCODE_PROVIDER_ID,
+      modelId: "opencode-go/mimo-v2.6-pro",
+      config: {
+        properties: { contextWindow: 600_000, inputFormat: { supportsImage: true } },
+        optionSpecs: { reasoningLevel: { values: ["low", "medium", "high", "xhigh", "max"] } },
+      },
+    });
+  });
+
+  test("a text-only row asserts no inputFormat and keeps the client's own defaults", () => {
+    const rules = modelRules({
+      ...context(),
+      models: [{ namespaced: "xai/grok-5", provider: "xai", id: "grok-5", contextWindow: 262_144 }],
+    });
+    expect(rules.get("xai/grok-5")).toEqual({
+      providerId: OPENCODE_PROVIDER_ID,
+      modelId: "xai/grok-5",
+      config: { properties: { contextWindow: 262_144 } },
+    });
+  });
+
+  test("a row without a context window still ships a rule when it has capabilities to assert", () => {
+    const rules = modelRules({
+      ...context(),
+      models: [
+        { namespaced: "mystery/vision", provider: "mystery", id: "vision", inputModalities: ["text", "image"], reasoningEfforts: ["low", "high"] },
+      ],
+    });
+    expect(rules.get("mystery/vision")).toEqual({
+      providerId: OPENCODE_PROVIDER_ID,
+      modelId: "mystery/vision",
+      config: {
+        properties: { inputFormat: { supportsImage: true } },
+        optionSpecs: { reasoningLevel: { values: ["low", "high"] } },
+      },
+    });
+  });
+
+  test("a row with nothing authoritative to assert ships no rule, and audio-only ships none either", () => {
+    const rules = modelRules({
+      ...context(),
+      models: [
+        { namespaced: "mystery/model", provider: "mystery", id: "model" },
+        { namespaced: "zenmux/audio-only", provider: "zenmux", id: "audio-only", inputModalities: ["audio"], contextWindow: 100_000, reasoningEfforts: ["low"] },
+      ],
+    });
+    expect(rules.has("mystery/model")).toBe(false);
+    expect(rules.has("zenmux/audio-only")).toBe(false);
+  });
+});
+
 describe("ocx zcode CLI alias", () => {
   /** Captures the client-integration requests the alias forwards. */
   function fakeRuntime(): { deps: { baseUrl: string; fetchImpl: typeof fetch }; requests: Array<{ path: string; method: string; body: unknown }> } {
@@ -218,3 +305,77 @@ describe("ocx zcode CLI alias", () => {
     expect(requests.some(r => r.path === "/api/client-integrations/restore" && r.method === "POST" && (r.body as { opId?: string }).opId === "op-1")).toBe(true);
   });
 });
+
+/** Runs a synchronous case in a temporary bootstrap home, cleaning up after the callback. */
+function withBootstrapFixture(run: (home: string, settings: string) => void): void {
+  const home = mkdtempSync(join(tmpdir(), "ocx-zcode-bootstrap-"));
+  const settings = zcodeBootstrapSettingsPath(home);
+  mkdirSync(dirname(settings), { recursive: true });
+  try { run(home, settings); } finally { removeTreeWithRetry(home); }
+}
+
+/**
+ * Probes Windows file-symlink support; only EPERM or EACCES allows this regression to skip.
+ * POSIX runs the regression without a probe, and unexpected filesystem errors still fail.
+ */
+function canCreateBootstrapSymlink(): boolean {
+  if (process.platform !== "win32") return true;
+  let supported = true;
+  withBootstrapFixture((home, settings) => {
+    const target = join(home, "symlink-probe.json");
+    writeFileSync(target, "{}");
+    try { symlinkSync(target, settings, "file"); }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "EPERM" && code !== "EACCES") throw error;
+      supported = false;
+    }
+  });
+  return supported;
+}
+
+test("default ZCode bootstrap lookup preserves absence and ordinary relocation", () => {
+  withBootstrapFixture((home, settings) => {
+    expect(zcodeHomeDir({}, home)).toBe(join(home, ".zcode"));
+    const base = join(home, "relocated");
+    writeFileSync(settings, JSON.stringify({ dataBaseDir: base }));
+    expect(zcodeHomeDir({}, home)).toBe(join(base, ".zcode"));
+    expect(zcodeConfigPath({}, home)).toBe(join(base, ".zcode", "v2", "config.json"));
+  });
+});
+test("default ZCode bootstrap lookup enforces the shared four-MiB boundary", () => {
+  withBootstrapFixture((home, settings) => {
+    const bounded = "{}" + " ".repeat(4 * 1024 * 1024 - 2);
+    writeFileSync(settings, bounded);
+    expect(zcodeHomeDir({}, home)).toBe(join(home, ".zcode"));
+    writeFileSync(settings, bounded + " ");
+    expect(() => zcodeHomeDir({}, home)).toThrow(ZcodeSettingsPathError);
+    expect(readFileSync(settings, "utf8")).toBe(bounded + " ");
+    expect(zcodeHomeDir({ ZCODE_DATA_DIR: join(home, "explicit") }, home)).toBe(join(home, "explicit"));
+  });
+});
+test.skipIf(!canCreateBootstrapSymlink())("default ZCode bootstrap lookup refuses final symlinks without changing the target", () => {
+  withBootstrapFixture((home, settings) => {
+    const target = join(home, "target.json");
+    const content = JSON.stringify({ dataBaseDir: join(home, "relocated") });
+    writeFileSync(target, content);
+    symlinkSync(target, settings, "file");
+    expect(() => zcodeHomeDir({}, home)).toThrow(ZcodeSettingsPathError);
+    expect(readFileSync(target, "utf8")).toBe(content);
+    expect(lstatSync(settings).isSymbolicLink()).toBe(true);
+    unlinkSync(target);
+    expect(() => zcodeHomeDir({}, home)).toThrow(ZcodeSettingsPathError);
+  });
+});
+test.skipIf(process.platform === "win32")("default ZCode bootstrap lookup refuses a FIFO without waiting for a writer", () => {
+  withBootstrapFixture((home, settings) => {
+    expect(spawnSync("mkfifo", [settings], { timeout: 2_000 }).status).toBe(0);
+    const result = spawnSync(process.execPath, ["--eval", `
+      const { zcodeHomeDir, ZcodeSettingsPathError } = await import("./src/clients/config-export.ts");
+      try { zcodeHomeDir({}, process.env.ZCODE_BOOTSTRAP_TEST_HOME); process.exitCode = 2; }
+      catch (error) { if (!(error instanceof ZcodeSettingsPathError)) throw error; }
+    `], { cwd: repoPath(), env: { ...process.env, ZCODE_BOOTSTRAP_TEST_HOME: home }, timeout: 5_000 });
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+  });
+}, 10_000);

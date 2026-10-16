@@ -10,7 +10,7 @@ import { resolveModelPolicy } from "../../../src/providers/resolved-model-policy
 import { resolveOutputCeiling } from "../../../src/server/responses/input-admission";
 
 // Anthropic's per-model overview pages (platform.claude.com/docs/en/models/<slug>/overview,
-// read 2026-09-30) put the synchronous Messages API maximum at 128K for every seeded Claude
+// read 2026-10-08) put the synchronous Messages API maximum at 128K for every seeded Claude
 // model except Haiku 4.5, which is 64K. The 300K figure on those pages belongs to the Message
 // Batches extended-output beta and does not apply to the synchronous route.
 const HIGH_OUTPUT = 128_000;
@@ -42,6 +42,7 @@ describe("Anthropic per-model output maxima", () => {
     // Haiku 4.5 carries no entry on purpose, so it must still resolve the default and not 128K.
     expect(ANTHROPIC_MODEL_MAX_OUTPUT_TOKENS[HAIKU]).toBeUndefined();
     expect(ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS).toBe(64_000);
+    expect(ANTHROPIC_MODEL_MAX_OUTPUT_TOKENS["claude-haiku-5-5"]).toBe(HIGH_OUTPUT);
   });
 
   for (const providerName of PROVIDERS) {

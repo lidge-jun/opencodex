@@ -113,11 +113,18 @@ export function isLoopbackTarget(host: string): boolean {
   return /^(0x[0-9a-f]+|\d+)(\.(0x[0-9a-f]+|\d+))*$/.test(host);
 }
 
-function respond(socket: Socket, status: number, reason: string, headers: Readonly<Record<string, string>> = {}): void {
+function respond(
+  socket: Socket, status: number, reason: string, headers: Readonly<Record<string, string>> = {}, body = "",
+): void {
   if (socket.destroyed) return;
   const extra = Object.entries(headers).map(([name, value]) => `${name}: ${value}\r\n`).join("");
-  socket.end(`HTTP/1.1 ${status} ${reason}\r\n${extra}Connection: close\r\nContent-Length: 0\r\n\r\n`);
+  const type = body ? "Content-Type: text/plain; charset=utf-8\r\n" : "";
+  socket.end(`HTTP/1.1 ${status} ${reason}\r\n${extra}${type}Connection: close\r\nContent-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`);
 }
+
+// Plain proxied HTTP (often loopback MCP traffic missing a NO_PROXY bypass) lands here; say why.
+const CONNECT_ONLY_BODY = "OpenCodex Claude intercept proxy accepts only CONNECT tunnels. "
+  + "Exclude this host via NO_PROXY (loopback and unspecified hosts: 127.0.0.1,localhost,::1,0.0.0.0).\n";
 
 function splice(client: Socket, upstream: Socket, pending: Uint8Array): void {
   const teardown = () => {
@@ -173,7 +180,7 @@ function handleConnection(socket: Socket, options: ResolvedConnectProxyOptions):
     // Bytes after the head belong to the tunnel (a client may pipeline its TLS ClientHello).
     let pending = head.subarray(end + 4);
     if (!target) {
-      respond(socket, 405, "Method Not Allowed");
+      respond(socket, 405, "Method Not Allowed", { Allow: "CONNECT" }, CONNECT_ONLY_BODY);
       return;
     }
     if (options.authToken !== undefined) {

@@ -203,8 +203,20 @@ function runStatusProbe(options: {
       (async () => {
         let exitCode, catalogUnchanged, commandCode;
         if (process.env.FIXTURE_SURFACE === "status") {
+          // General status also probes the hub. Keep this readiness fixture offline,
+          // and assert the request so swallowed transport failures cannot hide drift.
+          const requests = [];
+          globalThis.fetch = async input => {
+            const url = input instanceof Request ? input.url : String(input);
+            requests.push(url);
+            if (url !== "https://hub.example.test/v1/hub-state") throw new Error("unexpected fixture request: " + url);
+            return Response.json({ error: "offline fixture" }, { status: 503 });
+          };
           const { collectStatus } = require("./src/cli/status");
           const view = await collectStatus();
+          if (JSON.stringify(requests) !== JSON.stringify(["https://hub.example.test/v1/hub-state"])) {
+            throw new Error("unexpected status fixture requests: " + JSON.stringify(requests));
+          }
           const observed = calls();
           console.log(JSON.stringify({
             lines: [], commandCode: 0, status: view.json.connection,

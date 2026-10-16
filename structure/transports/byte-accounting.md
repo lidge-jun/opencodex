@@ -15,6 +15,26 @@ the translator budget, which is why so many documents link here rather than rest
 
 ## Request-copy accounting
 
+Native Ollama late-output attribution uses `src/lib/json-byte-size.ts` to count the
+parts as one JSON string before constructing its caption. The exact count includes
+one pair of quotes, escaping, UTF-8 and surrogate pairs spanning parts, without a
+joined or encoded measurement copy. The cumulative 256 KiB request budget admits
+its exact boundary; `tests/providers/ollama/ollama-native-v4.test.ts` covers this rule.
+Adapter-build budget refusals use the existing HTTP 413 formatter in initial and recovery
+builds. Its wire error type/code is `request_too_large`, with the standard translation-buffer
+message; `translation_buffer_limit` is the internal verdict. Ollama endpoint and adapter
+abort-guard regressions cover refusal before the initial send or any recovery send.
+Existing client-cancellation and deliberately preserved recovery-refusal precedence remain.
+The late-attribution refusal is the one exception to that message: it throws
+`OllamaLateAttributionBudgetError`, which reports the full 256 KiB limit, and
+`lateAttributionLimitResponse()` in `src/server/responses/context-overflow.ts` returns the same
+413 `request_too_large` wire with a proxy-owned message that names the cause, the limit and the
+recovery (start a new thread). It is deliberately not a context overflow: a compaction on the
+same Ollama route resends the same history and is refused again. A combo member's refusal
+reaches the client only as that literal constant envelope (`isLateAttributionRefusal` requires
+the exact constant, the local wire code, status 413 and a replayable attempt); every other
+classification input is left untouched.
+
 The Google tool-schema loss report retains fixed categories, bounded counts, and endpoint class
 only. It copies no request content and adds no bytes to the upstream wire; see the
 [Google provider contract](../providers/google.md#google-tool-schema-loss-reporting).
@@ -43,7 +63,9 @@ An already-aborted request or explicitly oversized declaration keeps the existin
 
 The lease covers upload, parsing, downstream awaits and response consumption. It is released on
 response EOF/error or after producer cancellation settles, not when parsing or response headers
-complete. A pending read resolving as EOF during cancellation does not release it early. The
+complete. Request abort after work returns cancels the producer even if the response is unconsumed;
+abort during work waits for its response before cancelling. Abort and explicit cancellation share
+one settlement/finalizer, which removes the abort listener. A pending read resolving as EOF during cancellation does not release it early. The
 outermost response wrapper preserves bytes and metadata and adds no eager pull. Internal direct
 combo/translation calls share their HTTP owner's reservation rather than reserving again.
 
@@ -60,6 +82,12 @@ lifetime or change default-cap concurrency. `tests/server/server-request-body-si
 lifecycle, cancellation races, protocol envelopes, and the real HTTP admission boundary.
 
 ## Stream-buffer accounting
+
+HTTP owners in `src/server/responses/core.ts`, `src/server/chat-completions.ts` and `src/server/claude-messages.ts` pass the request abort signal to `src/lib/translator-budget.ts`. An aborted request releases its owned translator budget even when its response body is never consumed. Abort finalization changes accounting only; the transport keeps ownership of producer cancellation and response terminal precedence. Explicit body cancellation also releases the budget before awaiting upstream reader cancellation. EOF and read errors share the same idempotent finalizer, which removes its abort listener. Responses lifetime wrapping in `src/server/responses/core-lifetime.ts` preserves native, eager-relay and preinspected-response markers. `tests/adapters/translator-budget-lifetime.test.ts` holds cancellation pending and covers abort before wrapping, abort after wrapping, explicit cancellation and successful EOF.
+
+Disposed budgets ignore late call, reservation, charge and observation work; reservations created before disposal cannot resurrect per-turn or aggregate counters. The same Bun contract checks both accounting scopes before any producer cancellation and while an explicit cancellation is pending. Every producer must honor its transport abort link; disposed accounting does not provide a byte cap to work that outlives its request.
+
+Prepared success, cancellation and timeout responses retain their bytes, status and headers when wrapping starts with an aborted request; its dead request budget is disposed immediately. This observer does not replace a transport verdict with a different abort error or an artificial EOF.
 
 Devin's [Messages ordering buffer](../clients/claude-desktop.md#devin-messages-output-ordering) charges retained
 semantic events consumed from the independently bounded adapter queue to the shared translator
@@ -207,6 +235,30 @@ The same focused tests cover these lifecycle paths and Unicode code-unit limit b
 Native steering retains fixed phase deadlines and reconciled replay output; see the [steering stability contract](../transports/streaming-health.md#steering-deadlines-and-replay-completeness).
 
 Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.
+
+## Durable spill admission
+
+`enforceSpilledResponseBudget` in `src/responses/state.ts` owns the durable spill ceiling
+described in [Codex home](../codex-home.md). A queued publication, and the shutdown fallback, call it
+with the headroom their write needs on top of what is already accounted; called with no argument it
+only brings the store back under the ceiling. With headroom it evicts oldest-first, deferred
+superseded generations before installed spills, down to the ceiling minus that headroom, and only
+while the room is reachable: bytes eviction cannot touch — in-flight reservations, superseded
+generations a job owns, and unreclaimable paths — plus the headroom must fit under the ceiling. That
+is re-read after every eviction, and once the publication cannot fit nothing more is evicted; the
+caller refuses it as a `spill-failed` tombstone. An impossible publication therefore never costs an
+unrelated continuation, and neither does one whose envelope exceeds the replay ceiling: admission
+skips reclaim for it because it would end in `EFBIG` anyway.
+
+`deleteResponseSpill` in `src/responses/spill-store.ts` reports a failed unlink (anything but a
+missing file) to the spill queue, which charges that path in its unreclaimable ledger until the path
+is gone. Every later accounting read sees the file, so admission never counts space that was never
+freed; a single no-argument pruning pass still works from its local total and may stop short, leaving
+the remainder to the next pass. The orphan sweep settles such files once the unlink can succeed. `spillCapacityRefusals` and
+`spillHeadroomEvictions` on the memory endpoint are the cumulative refusal and admission-eviction
+counts. `tests/responses/responses-spill-admission-headroom.test.ts` covers headroom eviction,
+exact fit, impossible and inherited publications, pinned reservations, the shutdown fallback,
+deferred-first order, reload replay and failed unlinks.
 
 ## Unicode pattern normalization
 

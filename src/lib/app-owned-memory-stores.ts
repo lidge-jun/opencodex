@@ -169,12 +169,16 @@ export const APP_OWNED_RETAINED_STORE_REGISTRATIONS = [
     category: "caches",
     snapshot: usageSummaryRetainedStoreSnapshot,
     evictOldest: evictOldestUsageSummaryForBudget,
+    // Deletes one in-memory summary entry.
+    passiveEvictable: true,
   },
   {
     id: "usage_snapshot",
     category: "caches",
     snapshot: usageSnapshotRetainedStoreSnapshot,
     evictOldest: evictOldestUsageSnapshot,
+    // Drops the retained ledger snapshot or one unpinned aggregate, both in memory.
+    passiveEvictable: true,
   },
   {
     id: "cursor_blobs",

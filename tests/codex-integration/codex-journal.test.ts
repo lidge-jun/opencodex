@@ -1,6 +1,6 @@
 import { describe, expect, test, beforeEach, afterEach, setDefaultTimeout } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, lstatSync, symlinkSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -304,7 +304,7 @@ describe("codex-journal", () => {
     expect(existsSync(journalPath)).toBe(false);
   });
 
-  test("reconcileJournal handles corrupt JSON gracefully", () => {
+  test("reconcileJournal preserves corrupt JSON without authorizing recovery", () => {
     const journalPath = join(testDir, "opencodex-journal.json");
     writeFileSync(journalPath, "NOT VALID JSON{{{", "utf8");
 
@@ -315,7 +315,8 @@ describe("codex-journal", () => {
     `);
     expect(r.status).toBe(0);
     expect(JSON.parse(r.stdout).restored).toBe(false);
-    expect(existsSync(journalPath)).toBe(false);
+    expect(readFileSync(journalPath, "utf8")).toBe("NOT VALID JSON{{{");
+    expect(r.stderr).toContain("ownership could not be verified");
   });
 
   test("reconcileJournal no-ops when no journal exists", () => {
@@ -386,19 +387,21 @@ describe("codex-journal", () => {
     expect(existsSync(journalPath)).toBe(false);
   });
 
-  test("removeJournal cleans up", () => {
+  test("removeJournal refuses unknown journal evidence", () => {
     const journalPath = join(testDir, "opencodex-journal.json");
     writeFileSync(journalPath, "{}", "utf8");
 
     const r = runScript(testDir, `
       const { removeJournal } = require("./src/codex/journal");
-      removeJournal();
+      let refusal;
+      try { removeJournal(); } catch (error) { refusal = error.reason; }
       const fs = require("fs");
       const path = require("path");
-      console.log(JSON.stringify({ exists: fs.existsSync(path.join(process.env.CODEX_HOME, "opencodex-journal.json")) }));
+      console.log(JSON.stringify({ refusal, exists: fs.existsSync(path.join(process.env.CODEX_HOME, "opencodex-journal.json")) }));
     `);
     expect(r.status).toBe(0);
-    expect(JSON.parse(r.stdout).exists).toBe(false);
+    expect(JSON.parse(r.stdout)).toEqual({ refusal: "owner-unknown", exists: true });
+    expect(readFileSync(journalPath, "utf8")).toBe("{}");
   });
 
   test("removeCodexConfig is a successful no-op when Codex is not installed", () => {
@@ -415,6 +418,80 @@ describe("codex-journal", () => {
     expect(result.remove.message).toContain("no native restore was needed");
     expect(result.restore.success).toBe(true);
     expect(existsSync(join(testDir, "opencodex.config.toml"))).toBe(false);
+  });
+
+  for (const originalProfile of [null, 'model_provider = "openai"\n']) {
+    for (const symlinked of [true, false]) {
+    test.skipIf(process.platform === "win32")(`native journal restore ${symlinked ? "preserves a symlinked" : "restores a regular"} ${originalProfile === null ? "generated" : "existing"} profile before config writes`, () => {
+      const configPath = join(testDir, "config.toml");
+      const profilePath = join(testDir, "opencodex.config.toml");
+      const targetPath = join(testDir, "journal-profile-target.toml");
+      const journalPath = join(testDir, "opencodex-journal.json");
+      const injectedConfig = '# Auto-injected by opencodex\nopenai_base_url = "http://127.0.0.1:10100/v1"\n';
+      const injectedProfile = 'model_provider = "opencodex"\n';
+      const journal = JSON.stringify({ version: 1, originalConfig: Buffer.from('model_provider = "openai"\n').toString("base64"),
+        originalProfile: originalProfile === null ? null : Buffer.from(originalProfile).toString("base64"),
+        injectedConfigHash: createHash("sha256").update(injectedConfig).digest("hex"),
+        injectedProfileHash: createHash("sha256").update(injectedProfile).digest("hex"),
+        pid: 999999, timestamp: new Date().toISOString() });
+      writeFileSync(configPath, injectedConfig);
+      writeFileSync(targetPath, injectedProfile);
+      writeFileSync(journalPath, journal);
+      if (symlinked) symlinkSync(targetPath, profilePath, "file");
+      else writeFileSync(profilePath, injectedProfile);
+      const result = runScript(testDir, `
+        const { restoreNativeCodex } = require("./src/codex/inject");
+        const out = restoreNativeCodex({ skipHistory: true });
+        console.log(JSON.stringify({success: out.success, config: out.artifacts.config}));
+      `);
+      expect(result.status).toBe(0);
+      const out = JSON.parse(result.stdout);
+      if (symlinked) {
+        expect(out.success).toBe(false);
+        expect(out.config.state).toBe("failed");
+        expect(readFileSync(configPath, "utf8")).toBe(injectedConfig);
+        expect(readFileSync(journalPath, "utf8")).toBe(journal);
+        expect(existsSync(profilePath)).toBe(true);
+        expect(lstatSync(profilePath).isSymbolicLink()).toBe(true);
+        expect(out.config.changed).toBe(false);
+      } else {
+        expect(out.config.state).toBe("ok");
+        expect(readFileSync(configPath, "utf8")).toBe('model_provider = "openai"\n');
+        expect(existsSync(journalPath)).toBe(false);
+        if (originalProfile === null) expect(existsSync(profilePath)).toBe(false);
+        else expect(readFileSync(profilePath, "utf8")).toBe(originalProfile);
+      }
+      expect(existsSync(targetPath)).toBe(true);
+      expect(readFileSync(targetPath, "utf8")).toBe(injectedProfile);
+    });
+    }
+  }
+
+  test.skipIf(process.platform === "win32")("removeCodexConfig refuses a symlinked profile without changing its target or config", () => {
+    const configPath = join(testDir, "config.toml");
+    const profilePath = join(testDir, "opencodex.config.toml");
+    const targetPath = join(testDir, "external-profile.toml");
+    const journalPath = join(testDir, "opencodex-journal.json");
+    const config = '# Auto-injected by opencodex\nopenai_base_url = "http://127.0.0.1:10100/v1"\n';
+    const target = 'model_provider = "openai"\nmodel = "external-profile"\n';
+    const journal = '{"recovery":"sentinel"}\n';
+    writeFileSync(configPath, config, "utf8");
+    writeFileSync(targetPath, target, "utf8");
+    writeFileSync(journalPath, journal, "utf8");
+    symlinkSync(targetPath, profilePath, "file");
+
+    const r = runScript(testDir, `
+      const { removeCodexConfig } = require("./src/codex/inject");
+      console.log(JSON.stringify(removeCodexConfig()));
+    `);
+
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout).success).toBe(false);
+    expect(JSON.parse(r.stdout).message).toContain("symbolic link");
+    expect(readFileSync(configPath, "utf8")).toBe(config);
+    expect(readFileSync(targetPath, "utf8")).toBe(target);
+    expect(readFileSync(journalPath, "utf8")).toBe(journal);
+    expect(existsSync(profilePath)).toBe(true);
   });
 
   test("removeCodexConfig reports damaged managed-default cleanup and preserves the ambiguous value", () => {
@@ -913,7 +990,7 @@ describe("codex-journal", () => {
     // outcome the removal wanted.
     expect(body).toContain('=== "ENOENT"');
     // And completeness still gates journal deletion.
-    expect(body).toContain("if (complete) removeJournal();");
+    expect(body).toMatch(/if \(complete\) \{\s*try \{ publishCodexArtifact\(JOURNAL_PATH, held, \(_path, hooks\) => removeJournal\(hooks\)\)/);
   });
 
   test("a sibling instance neither restores, injects over, nor drops the live owner's journal", () => {

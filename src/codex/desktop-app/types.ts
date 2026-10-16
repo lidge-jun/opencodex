@@ -7,7 +7,7 @@
  * PID-reuse and fail-closed reasoning from being re-derived three times, once per
  * operating system, with two of the three getting it subtly wrong.
  *
- * Design and audit history: `devlog/_plan/260913_cross_platform_desktop_app_restart/`.
+ * Design and audit history: `devlog/_fin/260913_cross_platform_desktop_app_restart/`.
  */
 import { sep } from "node:path";
 
@@ -51,6 +51,8 @@ export interface DesktopProcess {
   createdAt: string;
   /** Absolute executable path, used for membership and the shell predicate. */
   executable: string;
+  /** Windows-only private launch context; never included in restart results or logs. */
+  commandLine?: string;
 }
 
 export interface DesktopAppAdapter {

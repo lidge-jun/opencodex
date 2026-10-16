@@ -321,8 +321,8 @@ the requested model id only; effort remains owned by the caps described under
 Codex overrides a child's spawn-time model with the root `model` key of
 `$CODEX_HOME/agents/<role>.toml`, so that pin decides which model a role runs on.
 `src/codex/agent-role-models.ts` is opencodex's only writer into those files, and it writes only
-that one key, only when a user picks a role's model in the dashboard's omo (Codex / LazyCodex)
-section on the Codex tab (`PUT /api/codex-agent-roles/{role}`) or with `ocx agent roles set`,
+the root `model` and `model_reasoning_effort` keys, each only when the request carries it, only when a user saves a role in the dashboard's omo (Codex / LazyCodex)
+section on the omo tab (`PUT /api/codex-agent-roles/{role}`) or with `ocx agent roles set`,
 and only while LazyCodex is detected. No sync, startup, or
 catalog path calls it, and opencodex never creates, repairs, or removes a role file.
 
@@ -341,7 +341,18 @@ catalog path calls it, and opencodex never creates, repairs, or removes a role f
 - The role name must equal a listed `*.toml` stem, which is also the path-traversal check. The
   target must be a regular file owned by the running user; the replacement is atomic and does
   not follow a symbolic link.
-- The same pick is mirrored into LazyCodex's `codex.agents.<role>.model`; that half belongs to
+- On `PUT /api/codex-agent-roles/{role}`, `effort` is optional: omitted keeps the role's
+  `model_reasoning_effort`, a level inserts or replaces it, and JSON `null` removes its root line
+  and trailing comment. Only a one-line string value can be removed; a multiline or non-string
+  value is refused with 409 `unsupported_model_value`, leaving both TOML and omo.jsonc unchanged.
+  Removal preserves the BOM, line endings, and all other bytes; an absent key is a no-op.
+  Clearing the role-level override lets Codex resolve effort normally (spawn value, `[agents]`
+  default, parent). The dashboard offers **Inherit effort** on every row and sends `null` to clear.
+- `model` is optional too: omitted leaves the root pin, or its absence, untouched, so a role that
+  inherits its model can set or clear its effort alone; the dashboard sends `{ "effort": ... }` for a
+  row without a pin. A `null` model is refused with 400 `invalid_model` (a save never removes a pin),
+  and a body with neither key is refused with 400 `empty_update` before any role file is read.
+- The same pick is mirrored into LazyCodex's `[codex].agents.<role>` as `model` and, for an effort LazyCodex can express, `reasoning`; that half belongs to
   [client integrations](clients/integrations.md#omo-codex-lazycodex-role-models). The role file is written first
   and stands even when the mirror is skipped.
 
@@ -373,8 +384,14 @@ the same refusal as the PUT. Applying a proposal is the ordinary
   which keeps a standard role on the cheaper model. Unpriced, unmapped models are never proposed. A role
   gets the lowest sufficient tier, then the lowest price. Effort binds to ladder positions of the chosen
   model (floor, default or middle, the rung above, ceiling), collapsing inside the range; it is proposed
-  only for a role whose file already sets `model_reasoning_effort`, and written by the same span-preserving
-  editor as `model`, located by the same TOML-aware scan.
+  for every sized role whose chosen model has a non-empty ladder. Apply and `--apply` insert or
+  replace `model_reasoning_effort` through the same span-preserving editor as `model`, located by
+  the same TOML-aware scan. An empty ladder gives `proposedEffort: null`, meaning no proposal;
+  Apply omits `effort` and preserves the existing pin. A null proposal never means a null PUT. A routed
+  model's ladder is its row's
+  `reasoningEfforts`; a row that declares none takes the ladder the written Codex catalog shows for it, an
+  explicit empty list stays empty, and a row without its own default takes the catalog's default when that
+  rung is on the ladder.
 
 The sizing call is injectable (`completeCodexRoleSizing` on the management deps), so route tests answer it
 without a provider. Sibling instances refuse the preview too: it sits under the refused
@@ -388,11 +405,10 @@ most 1500 characters, the role excerpt limit); `proposeDelegationModel` in
 `src/server/management/codex-role-auto-assign.ts` sends it as one role named `delegated-work` with the same
 parser and the role rubric followed by a short addendum (`DELEGATED_WORK_SIZING_SYSTEM_PROMPT`) that has the
 sizer size the described one-shot work rather than a standing role; the role rubric's own text is unchanged.
-It maps the answer with the same `buildRoleProposals`. Two things differ from roles in the mapping,
-both at the call site: candidates are the `available` list `GET /api/injection-model` offers (one helper
-builds both), with effort ladders cut to the Codex levels `PUT /api/injection-model` accepts, and
-`alwaysProposeEffort` proposes an effort even when none is set, because the delegation effort is a
-picker of its own. The route writes nothing; the page shows tier, effort, rationale and move triggers,
+It maps the answer with the same `buildRoleProposals`. Candidates are the `available` list
+`GET /api/injection-model` offers (one helper builds both), with effort ladders cut to the Codex
+levels `PUT /api/injection-model` accepts. As with roles, a non-empty ladder gives an effort
+proposal even when no effort is set; an empty ladder gives none. The route writes nothing; the page shows tier, effort, rationale and move triggers,
 and **Use this** goes through the page's ordinary `PUT /api/injection-model` save. It is not
 sibling-refused, like the `PUT` it feeds, since both touch only this instance's config.
 
@@ -416,6 +432,42 @@ V1 uses the shared `MULTI_AGENT_MODE_HINT_RECOMMENDATION.text` inside `<multi_ag
 at `max` or `ultra`. Only the separate explicit delegation-request trigger changes; user,
 authority, task-scope and collaboration-tool rules remain applicable. This is guidance,
 not an enforcement mechanism or a change to native settings or tool access.
+
+Both guidance paths start from `collabSurface()`, which reads only what the request declares. A
+directly declared `spawn_agent` and its companions decide the surface as before. Codex
+code-mode-only turns declare no collaboration tool on the wire, so
+`src/server/responses/code-mode-collab-surface.ts` also reads the nested listing that codex-rs
+renders inside the custom `exec` description: a tool heading, its description, and a final
+`exec tool declaration:` fence naming the same tool. It accepts only a freeform, un-namespaced
+`exec` that starts with the codex-rs template line, ignores headings inside fences or without their
+own declaration, and counts only `multi_agent_v1__spawn_agent` as V1 evidence. Any other
+`spawn_agent` or V2 companion beside it, or a different direct surface, makes the turn
+contradictory (`null`), which also withdraws a direct V2 surface's designation and effort cap.
+Collaboration-named tools in an `mcp__` namespace, direct or nested, are MCP server tools and
+neither prove nor contradict a native surface.
+The two checks are asymmetric on purpose: evidence needs a rendered section, while the
+contradiction check reads every heading and declaration line, quoted or not, so text copied into
+the listing can push a turn toward `null` but cannot hide another surface.
+The parse uses bounded linear scans: descriptions over `1 << 20` string code units carry no nested evidence, declarations over `64 * 1024` code units are not recognized, and quoted text and comments are skipped while matching delimiters; return generics must close fully.
+Nested evidence never produces `v2`. When the model supports tool search (every OpenCodex catalog
+row), codex-rs defers the V1 tools and leaves them out of the description. Its own
+`<multi_agent_mode>` item exists only on V2 and it pins the version per session, so neither the saved
+mode nor the catalog stamp proves a conversation's surface. The one request-visible signal is the
+developer `<tools>` world-state fragment codex-rs sends when its default-off
+`deferred_tool_world_state` feature is on (Codex Desktop sessions receive it): a
+`Deferred tool namespaces:` snapshot, then `Added`/`Removed` diffs. `src/server/responses/deferred-collab-surface.ts`
+replays those fragments in input order from developer messages only, each text part standing alone,
+and treats a current `multi_agent_v1` row as V1 evidence. It counts only beside a host that can load
+deferred tools (the genuine code-mode `exec` above, or a structured `tool_search` tool), and it is
+conservative under the 4 KiB budget: omitted rows never establish a namespace, omitted removals and
+malformed fragments clear what was carried. The evidence combines exactly like the rendered listing:
+it never yields `v2`, a different direct surface or a rendered foreign collaboration claim makes the
+turn `null`, and a removal withdraws only deferred evidence. The row proves that some V1 tool is
+deferred, not that `spawn_agent` is; only an embedder's own tool allowlist can split them (codex-rs's
+guardian allowlist drops the whole namespace), and such a host gets advisory text it cannot act on.
+Feature-off clients still carry no V1 evidence and stay `null` (#6844). A tool description that
+copies a complete V1 section verbatim, or a forged developer item, cannot be told apart from the
+host's own rendering.
 
 Replay deduplication compares the latest exact generated developer text separately for
 each tag family, preserving built-in ??custom ??built-in transitions without duplicating
@@ -503,7 +555,7 @@ The account history response can include a [low-confidence effective capacity es
 
 Account quota surfaces use [safe probe diagnostics](transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
-Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](transports/responses.md) documents this boundary, and native Chat removes effort only for an explicit empty declaration or no-reasoning model.
+Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](transports/responses.md) documents this boundary, and native Chat capability stripping applies only for an explicit empty declaration or no-reasoning model; an initial JEV null choice separately strips caller effort.
 
 Live sideband admission and its bounded upstream handshake follow the [runtime contract](runtime.md#live-sideband-handshake); the ordinary Responses WebSocket exchange remains separate.
 
@@ -543,6 +595,6 @@ Automatic account exhaustion and recovery use the [spendable Codex credit eviden
 
 ### Forced Claude Code subagent model
 
-`src/claude/subagent-model.ts` shares the roster alias and authoritative context-marker resolver with routed launch force. `claudeCode.subagentModelForce` is opt-in and default-off. Force availability excludes retained unavailable roster entries. Caller-added `[1m]` suffixes require finite authoritative million-token capacity or an exact advertised marked identity; exact upstream ids remain literal, while legacy roster marker handling is unchanged. The generated-agent legacy directive cannot replace a wire selector matching the configured forced alias. `src/claude/subagent-force-status.ts` performs bounded, read-only server-local version and settings-key inspection; unknown is not supported.
+`src/claude/subagent-model.ts` shares the roster alias and authoritative context-marker resolver with routed launch force. `claudeCode.subagentModelForce` is opt-in and default-off. Force availability excludes retained unavailable roster entries. Caller-added `[1m]` suffixes require a finite authoritative long window (`src/claude/long-context.ts`: 1M, or at least the 829,800 default compact window; a genuine 1M for Claude models on either Anthropic pool or a bare `claude-*` id) or an exact advertised marked identity; generated markers follow the same rule; exact upstream ids remain literal, while legacy roster marker handling is unchanged. `claudeCode.contextAccounting` `"200k"` stops automatic marking on generated and forced selectors; an explicit `[1m]` still follows the window rule above ([Claude Desktop picker mode](clients/claude-desktop.md#picker-mode-the-desktop-egress-proxy)). The generated-agent legacy directive cannot replace a wire selector matching the configured forced alias. `src/claude/subagent-force-status.ts` performs bounded, read-only server-local version and settings-key inspection; unknown is not supported.
 
 Explicit gateway selectors outrank generated-agent `ocx-route` fallback independently of saved force state. `src/claude/inbound-model-options.ts` shares this precedence across Messages and count-tokens; bare Claude fallback and requests without directives retain their existing behavior. Native Claude force targets use reversible native aliases, restored before existing credential/model-map checks. Connected launch exposure comes from fresh authenticated gateway rows, not cached context-window keys; acquisition is independent of cache-write success.

@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,9 +17,21 @@ const cliPath = join(repoRoot, "src", "cli", "index.ts");
 setDefaultTimeout(SPAWN_BUDGET_MS);
 
 function runCli(args: string[], env: Record<string, string> = {}) {
-  const result = spawnSync(process.execPath, [cliPath, ...args], {
+  const fixtureHome = env.OPENCODEX_HOME;
+  const preload = fixtureHome ? join(fixtureHome, "no-live-sync.ts") : undefined;
+  if (preload) {
+    mkdirSync(join(fixtureHome!, "codex"), { recursive: true });
+    writeFileSync(preload, `
+      import { mock } from "bun:test";
+      const path = ${JSON.stringify(join(repoRoot, "src/server/proxy-liveness.ts"))};
+      const original = await import(path);
+      mock.module(path, () => ({ ...original, findLiveProxy: async () => null }));
+      globalThis.fetch = () => { throw new Error("fixture network forbidden"); };
+    `);
+  }
+  const result = spawnSync(process.execPath, [...(preload ? ["--preload", preload] : []), cliPath, ...args], {
     cwd: repoRoot,
-    env: { ...process.env, ...env },
+    env: { ...process.env, ...env, ...(fixtureHome ? { CODEX_HOME: join(fixtureHome, "codex") } : {}) },
     encoding: "utf8",
     timeout: INTERNAL_DEADLINE_MS,
     killSignal: "SIGKILL",

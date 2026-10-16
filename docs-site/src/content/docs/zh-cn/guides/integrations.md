@@ -1,9 +1,9 @@
 ---
 title: 集成
-description: 从仪表盘将 opencodex 连接到 OpenCode、Pi、OMP、Hermes、OpenClaw、Kimi Code、gjc、DeepSeek Harness、MiniMax Code、ZCode、Prime Agent、Aside、Raycast、omo、Cline CLI、Kilo 和 Factory Droid；每个客户端都有独立开关，且每次写入前都会备份。
+description: 从仪表盘将 opencodex 连接到 OpenCode、Pi、OMP、Hermes、OpenClaw、Kimi Code、gjc、DeepSeek Harness、MiniMax Code、ZCode、Prime Agent、Aside、Raycast、omo、Cline CLI、Kilo、Command Code 和 Factory Droid；每个客户端都有独立开关，且每次写入前都会备份。
 ---
 
-**Integrations** 标签页可将 opencodex 的提供商配置块写入客户端自己的配置文件，也可再次移除。以下 17 个客户端都采用这种方式，各有独立开关：
+**连接** 标签页可将 opencodex 的提供商配置块写入客户端自己的配置文件，也可再次移除。以下 18 个客户端都采用这种方式，各有独立开关：
 
 | 客户端 | 配置文件 | 格式 | 变更生效时间 | 凭据 |
 |---|---|---|---|---|
@@ -14,15 +14,16 @@ description: 从仪表盘将 opencodex 连接到 OpenCode、Pi、OMP、Hermes、
 | OpenClaw | `~/.openclaw/openclaw.json` | JSON5 | 运行中的网关立即生效 | `OPENCODEX_OPENCLAW_API_KEY` |
 | Kimi Code | `~/.kimi-code/config.toml` | TOML | 重启或执行 `/reload` 后 | 回环占位符 |
 | gjc | `~/.gjc/agent/models.yml` | YAML | 新会话，或打开 `/model` 时 | 非敏感回环占位符 |
-| DeepSeek Harness (DSH) | `$DSH_HOME/settings.yaml`（默认 `~/.dsh/settings.yaml`） | YAML | 热重载 | 非敏感回环 bearer 占位符 |
+| DeepSeek Harness (DSH) | `$DSH_HOME/profiles/desktop/cordis.patch.yml`（默认 `~/.dsh/profiles/desktop/cordis.patch.yml`）；DSH Desktop 创建该 profile 之前为 `$DSH_HOME/settings.yaml` | YAML | 热重载 | 非敏感回环 bearer 占位符 |
 | MiniMax Code | `~/.minimax/config.yaml` | YAML | 新会话，或打开模型选择器后 | 回环占位符 |
 | Prime Agent | `~/.prime/agent/models.json` | JSON | 新会话 | 回环占位符 |
-| ZCode | `~/.zcode/v2/config.json` | JSON | 重启后 | 回环占位符 |
+| ZCode | `~/.zcode/v2/provider_config.json` (schemaVersion 1)；旧版回退路径：`~/.zcode/v2/config.json` | JSON | 重启后 | 回环占位符 |
 | Aside | `~/.aside/u/<account>/models.json` | JSON | 完全退出并重新打开 Aside 后 | 回环占位符 |
 | Raycast | `~/.config/raycast/ai/providers.yaml` | YAML | 保存后立即生效——Raycast 监视该文件 | 无——仅回环 |
 | omo | `~/.omo/agent/models.json` | JSON | 新会话 | 回环占位符 |
 | Cline CLI | `~/.cline/data/settings/providers.json` 及同目录下的 `models.json` | JSON 文件对 | 停止并重启 Cline 后 | 回环占位符 |
 | Kilo | `~/.config/kilo` 下最先存在的 `kilo.jsonc`、`kilo.json`、`opencode.jsonc`、`opencode.json` 或 `config.json`（`XDG_CONFIG_HOME` 可迁移目录；均不存在时创建 `kilo.jsonc`） | JSONC | 新会话 | `OPENCODEX_KILO_API_KEY` |
+| Command Code | `~/.commandcode/providers.json` (Windows 使用默认主目录时：仅当 `HOME ?? USERPROFILE` 的值非空、非纯空白且为 Windows 绝对路径时使用，否则使用 `homedir()`；单独传入的主目录保持不变；文件位于其下的 `.commandcode\providers.json`) | JSON | 下次启动 Command Code 时 | 无 — 无密钥回环 (`apiKey: false`) |
 | Factory Droid | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` Windows 上) | JSON | 文件变更时立即生效 | 无密钥回环 |
 
 生成的目录只包含各提供商选择中已启用的模型。下载文件和托管集成都遵循这一规则，Pi 和 Aside 也不例外。管理模型列表仍显示完整阵容，以便启用更多模型。
@@ -41,7 +42,7 @@ modelProfile:
 
 托管 OpenCode 集成管理两个片段：`provider.opencodex`（opencode V1）和 `providers.opencodex`（opencode V2）。两个片段携带相同的各模型已声明推理选择与默认值：旧版块以模型 options 中的默认值加变体映射表达，V2 块以模型 settings 加原生变体数组表达，因此两者都会写入并保持同步；它们使用相同的提供商与模型 id，opencode V2 会将它们合并为一个提供商条目。Apply、Refresh、Disable 和 Restore 都作用于两个片段；其他提供商、代理、快捷键与 MCP 条目保持不变。这两个片段都基于生效的规范模型元数据构建——Kilo 导出和 `ocx opencode` 启动器也是如此。显式自定义覆盖始终优先，被清空的推理阶梯保持为空；不会为未声明阶梯或默认值的模型捏造任何值。携带权威的上下文上限时会同时携带输出上限：已知的输出值（显式或目录元数据）优先，否则使用 schema 必需的 32000 回退值（按上下文截断）；没有权威上下文上限时整个 limit 块都会省略。能力、推理阶梯、默认值和可选的输入上限只在已知时写入。V2 块的原生 capabilities 对象需要已知的 tools 值，因此工具支持未知时会整体省略而不写残缺的对象，旧版块中的模态声明保持不变。不捏造阶梯，但仍会写入控制而非选项：V2 块始终携带显式的变体数组——无声明时为空数组，因为省略会让 OpenCode 自行合成 low/medium/high；已知有固定推理但无可调阶梯的模型获得的是仅禁用的抑制而非推理强度：旧版 OpenCode 配置块和 Kilo 都会禁用客户端原本会生成的每一个阶梯 id。两者都不会添加可选的推理强度。可选变体可以覆盖已知时写入的逐模型推理默认值——包括 `none`，且仅当模型自身声明的阶梯包含它时才会提供。无论客户端选择什么，代理面向上游的固定策略仍作用于实际发出的请求。
 
-托管 DSH 支持的最低兼容版本为 **DSH 0.1.0-rc.6**。OpenCodex 只管理 `llm-pi-ai.providers.opencodex`；Apply 和 Refresh 替换该片段，Disable 只移除该片段，Restore 恢复已记录的快照。DSH 会热重载提供商变更。这些操作不会改变用户的默认模型或原生 `deepseek-official` 提供商。托管 DSH 集成目前仅支持回环地址，绝不会写入真实凭据。
+托管 DSH 支持的最低兼容版本为 **DSH 0.1.0-rc.6**。DSH 0.1.7 及以上版本从 `$DSH_HOME/profiles/desktop/cordis.patch.yml` 中的 `[id=llm-pi-ai].config.providers.opencodex` 行读取提供商路由。Desktop profile 和补丁都存在时，OpenCodex 只写入该行。若 `$DSH_HOME/profiles/desktop/package.json` 存在但缺少 `cordis.patch.yml`，Apply 会拒绝执行：请创建内容为 `[]` 的 `cordis.patch.yml`（DSH 为新 profile 写入的空补丁），然后重新启用集成；仅在没有 Desktop profile 时，才使用 `$DSH_HOME/settings.yaml` 中的 `llm-pi-ai.providers.opencodex`。Apply 和 Refresh 替换该片段，Disable 只移除该片段，Restore 恢复已记录的快照。DSH 会热重载提供商变更。这些操作不会改变用户的默认模型或原生 `deepseek-official` 提供商。托管 DSH 集成目前仅支持回环地址，绝不会写入真实凭据。
 
 MiniMax Code 依次遵循 `MINIMAX_DATA_DIR`、`MAVIS_DATA_DIR`，否则使用 `~/.minimax`。其托管配置块只管理 `custom_provider.opencodex`，不会更改 `defaultModel`、所选 MiniMax 凭据来源或用户的 MiniMax 登录。连接后，在 MCode 中选择 `custom_provider:opencodex/<provider/model>` 条目。刷新集成还会刷新各模型可靠的上下文窗口和推理强度选项；未知能力会省略，MCode 会话中的当前强度保持不变。
 
@@ -51,7 +52,7 @@ Aside 为每个已注册的配置文件（包括本地配置文件）分别保�
 
 Aside 有一项特殊注意事项：运行中的应用会自行重写 `models.json`，因此应用集成后必须完全退出并重新打开 Aside，类似 Claude Desktop 的重启要求。Aside 配置块只适用于回环地址，绝不包含真实凭据。
 
-托管 Raycast 集成支持 **macOS 和 Windows**。Custom Providers 是 **Raycast Pro** 功能：免费方案下仍会写入文件，但 `ocx integration client status --client raycast` 和 Integrations 页面会显示警告，因为 Raycast 不会读取该文件。在 macOS 或 Windows 上，请先打开 Raycast → Settings → AI → **Reveal Providers Config**，确保 `ai` 文件夹存在。在这些受支持的平台上，opencodex 以该文件夹作为安装信号；文件夹不存在时会报告客户端未安装。即使文件夹存在，Linux 仍不受支持。
+托管 Raycast 集成支持 **macOS 和 Windows**。Custom Providers 是 **Raycast Pro** 功能：免费方案下仍会写入文件，但 `ocx integration client status --client raycast` 和 **连接** 页面会显示警告，因为 Raycast 不会读取该文件。在 macOS 或 Windows 上，请先打开 Raycast → Settings → AI → **Reveal Providers Config**，确保 `ai` 文件夹存在。在这些受支持的平台上，opencodex 以该文件夹作为安装信号；文件夹不存在时会报告客户端未安装。即使文件夹存在，Linux 仍不受支持。
 
 状态字段 `aiDirPresent` 只表示 `~/.config/raycast/ai` 是否存在，与 Raycast 应用是否安装或平台是否受支持无关。它不能证明 Raycast 已安装或可用。CLI 会单独打印 `plan` 行；当 `aiDirPresent` 为 false 时，还会添加 macOS/Windows 设置说明。`--json` 保留原始状态，包括嵌套的 `raycast` 配置块。macOS 和 Windows 上的 Raycast 都读取 `~/.config/raycast/ai/providers.yaml`，且不遵循 `XDG_CONFIG_HOME`，因此该路径不可迁移。
 
@@ -103,7 +104,7 @@ Aside 对单个选中配置文件采用相同的预览和确认流程。**Sync a
 
 ## 实际效果与限制
 
-**通常不会保留格式。** 应用操作会解析配置并重新写出，因此 JSON、JSON5 和 TOML 的排版可能变化，JSON5 或 TOML 中的注释也会丢失。OMP、DSH 和 Hermes 是例外：它们的 YAML 写入器分别只修补 `providers.opencodex` 和 `llm-pi-ai.providers.opencodex`，逐字节保留无关提供商的注释和格式。如果无法安全确定准确的源码范围，操作会拒绝执行。对于其他客户端，如需先前文件的原始字节，请使用 Restore；快照是逐字节副本。
+**通常不会保留格式。** 应用操作会解析配置并重新写出，因此 JSON、JSON5 和 TOML 的排版可能变化，JSON5 或 TOML 中的注释也会丢失。OMP、DSH 和 Hermes 是例外：OMP 和 Hermes 的 YAML 写入器只修补 `providers.opencodex`。DSH 在 Desktop profile 存在时修补 `$DSH_HOME/profiles/desktop/cordis.patch.yml` 中的 `[id=llm-pi-ai].config.providers.opencodex` 行；仅在没有该 profile 时，才修补 `$DSH_HOME/settings.yaml` 中的 `llm-pi-ai.providers.opencodex`。这些写入器逐字节保留无关提供商的注释和格式。如果无法安全确定准确的源码范围，操作会拒绝执行。对于其他客户端，如需先前文件的原始字节，请使用 Restore；快照是逐字节副本。
 
 **如果无法忠实重写某个值，开关也会拒绝执行。** 往返转换覆盖这些格式实际使用的值类型；无法覆盖时，例如 TOML 使用 `inf` 或 `nan` 而当前解析器无法准确读回，应用操作会停止并说明原因，不会写入改变后的值却声称成功。界面会指出文件名，磁盘内容保持不变。你仍可手动编辑该文件；拒绝的只是自动重写。
 
@@ -146,7 +147,7 @@ ocx mcode
 
 连接后，`ocx sync` 和 `POST /api/sync` 会按当前模型选择、上下文窗口及推理强度级别刷新已管理的 MCode、Pi、Aside、Raycast、omo、OpenCode 和 Kilo 目录。代理启动时会刷新已管理的 Raycast 目录。模型可见性、提供商选择或预设变化，也会刷新已连接的 Pi、Aside、Raycast、omo、OpenCode 和 Kilo 目录。缺失、被外部编辑或不安全的配置块不会被触碰；此前归 OpenCodex 管理、但被你手动删除的配置块也不会重建。已启用的 Aside 配置文件是“仅刷新已管理配置块”规则的例外：如果账户目录存在且从未有过已管理配置块，当该位置为空时，同步可以创建首个配置块。此前连接过 Aside 会默认对所有已注册配置文件启用这一行为。同步不会创建缺失的账户目录，也不会替换手动配置块。拒绝或重叠的刷新会按客户端分别报告。启动新的 Pi、OpenCode 或 Kilo 会话，或完全退出并重新打开 Aside，才能加载更新后的文件。Aside 刷新要求[运行中的兼容代理](#aside-配置文件控制)。
 
-如果 Models 同时显示 **“Model selection saved”** 和客户端刷新警告，说明选择已保存，但一个或多个客户端文件未能更新。警告会指出受影响的客户端，以及适用时的 Aside 配置文件，并解释拒绝原因。启动新会话前，请打开 **Integrations** 检查该客户端或配置文件。处理报告的问题后，重试 `ocx sync`；重叠操作必须先完成。如果警告包含备份路径，或指出恢复未完成，请在重试前检查恢复状态。仅有选择保存成功的提示，并不能证明客户端文件恢复完成。
+如果 Models 同时显示 **“Model selection saved”** 和客户端刷新警告，说明选择已保存，但一个或多个客户端文件未能更新。警告会指出受影响的客户端，以及适用时的 Aside 配置文件，并解释拒绝原因。启动新会话前，请打开 **连接** 检查该客户端或配置文件。处理报告的问题后，重试 `ocx sync`；重叠操作必须先完成。如果警告包含备份路径，或指出恢复未完成，请在重试前检查恢复状态。仅有选择保存成功的提示，并不能证明客户端文件恢复完成。
 
 独立的 MiniMax 平台 CLI（`mmx`）不是文件开关集成。其文本命令使用 MiniMax 的 Anthropic 兼容端点，因此 OpenCodex 提供隔离凭据且仅限回环地址的启动器：
 
@@ -183,6 +184,8 @@ ocx integration client restore --client aside --profile 1 --op <opId>
 
 ## ZCode 3.14 及更新版本
 
+以上路径为默认值。在默认主目录的 `~/.zcode/v2/setting.json` 中设置绝对路径 `dataBaseDir` 后，存储路径变为 `<dataBaseDir>/.zcode/v2/provider_config.json`。`ZCODE_DATA_DIR` 直接指定 `.zcode` 根目录并优先于设置；`ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` 优先指定提供商文件。设置格式错误、不可读或使用相对路径时，新应用和刷新会被拒绝。已有所有权和恢复记录保留。参见[路径与恢复规则的英文原文](https://opencodex.me/guides/integrations/#zcode-314-and-later)。
+
 ZCode 3.14 将自定义提供商移至 `~/.zcode/v2/provider_config.json`，而 `~/.zcode/v2/config.json` 只能通过新文件缺失时运行的一次性导入影响它。ZCode 首次运行就会创建新文件，因此任何已启动过的安装都已经用完导入机会；写入 `config.json` 不会生效。
 
 可以时，opencodex 会直接写入 `provider_config.json`。启用集成会向该文件添加 `opencodex` 提供商规则，目录刷新会更新它，禁用时则准确移除 opencodex 写入的内容。文件中的其他规则保持不变，包括其他提供商针对也出现在我们目录中的模型 id 所保留的规则。如果某条规则带有 `opencodex` id 却并非由 opencodex 写入，它会被视为冲突，而不会被直接接管；请在 ZCode 中解决，或明确选择覆盖。
@@ -216,6 +219,18 @@ Undo 会恢复**两个原始字节串**，包括原本不存在的文件。操�
 
 下载文件 `cline-config-bundle.json` 包含两个原生文档成员：对应 `providers.json` 的 `settings`，以及对应 `models.json` 的 `catalog`。它本身不是 Cline 设置文件。建议使用集成命令，以获得带日志的合并和回滚。此生成集成不支持远程准入接线，需要免认证的回环访问。
 
+## omo (Codex / LazyCodex) 角色推理强度
+
+检测到 LazyCodex 后，可以在 omo 标签页的 **omo (Codex / LazyCodex)** 部分为 `$CODEX_HOME/agents/*.toml` 中的每个角色选择模型和推理强度，然后点击 **保存**。没有固定模型的角色所在行可以只保存推理强度，该角色仍继承其模型。opencodex 只更新该角色文件根级的 `model` 和 `model_reasoning_effort` 键，缺少的固定值会插入到文件开头附近；角色的指令、其他注释和其他键保持不变。只更改模型的保存不会发送 `effort`，两个文件中的推理强度都保持原样。选择某个级别会插入或替换角色文件中的 `model_reasoning_effort`；如果 LazyCodex 支持该级别，还会写入 `~/.omo/omo.jsonc` 的 `[codex].agents.<role>.reasoning`（`ultra` 只保留在角色文件中，并移除旧的 `reasoning`）。在命令行中可以用 `ocx agent roles set <role> <model> --effort <level>` 完成同样的操作。
+
+每一行都提供 **继承推理强度**，包括已固定推理强度的角色。把已固定的强度改为该选项并保存时，会发送 `"effort": null`：移除角色文件根级的 `model_reasoning_effort` 行及其行尾注释，以及 omo.jsonc 中的 `[codex].agents.<role>.reasoning`。模型固定保持不变。之后 Codex 会像对待任何没有自身覆盖值的角色一样确定推理强度（显式的启动值、`[agents]` 默认值或父会话），而不是使用固定的模型默认值。只能移除现有的单行字符串值；多行或非字符串值会以 409 `unsupported_model_value` 被拒绝，两个文件都不会改变。
+
+在 `PUT /api/codex-agent-roles/{role}` 中省略 `model` 时，角色文件中的 `model` 固定值和 omo.jsonc 中的 `model` 都保持原样，因此没有固定模型的角色会继续继承模型，只更改或清除推理强度。仪表盘会为这样的行发送只包含推理强度的请求；如果 omo.jsonc 中没有该角色的条目，只有保存 LazyCodex 支持的推理强度级别时，才会创建只包含 `reasoning` 的条目。保存永远不会移除模型固定值，因此 `null` 模型会以 400 `invalid_model` 被拒绝；既没有 `model` 也没有 `effort` 的请求会在读取角色文件或 omo.jsonc 之前以 400 `empty_update` 被拒绝。`ocx agent roles set` 始终需要指定模型。
+
+如果 `~/.omo/omo.jsonc` 不存在，不会创建它。如果其中包含注释，保存会删除这些注释，因此不会改动该文件，请手动设置该值。跳过镜像不会撤销角色文件的保存。如果角色文件已保存但 omo.jsonc 写入失败，该行的按钮会变为 **重试 omo.jsonc**，重新发送同一推理强度选择，包括通过 **继承推理强度** 进行的清除（`null`）。在重试成功之前，该角色之后任何不改动推理强度的 **保存** 或 **自动分配** 的 **应用** 都会一并发送这个待处理的选择；明确选择的推理强度会取代它。
+
+**自动分配** 会为每个已评估、且所选模型的推理强度级别列表不为空的角色提出推理强度；**应用**、**全部应用** 或 `ocx agent roles suggest --apply` 会插入或替换该角色的 `model_reasoning_effort`。推理强度取自所选模型自身的级别：最低级别、默认级别、比默认高一级，或最高级别。级别列表为空时不提出推理强度（`proposedEffort: null`）；此时 **应用** 会省略 `effort`，保留已有的固定强度。`null` 提案永远不会清除固定的推理强度。
+
 ## Kilo
 
 Kilo CLI、VS Code 和 JetBrains 共用一份全局配置。此集成只在 `~/.config/kilo` 下最先存在的 `kilo.jsonc`、`kilo.json`、`opencode.jsonc`、`opencode.json` 或 `config.json` 中写入 `provider.opencodex`。`XDG_CONFIG_HOME` 可以迁移该目录；如果候选文件均不存在，则创建 `kilo.jsonc`。不会修改项目配置。
@@ -233,7 +248,7 @@ ocx export --client kilo --out ./kilo.jsonc
 
 ## GitHub Copilot 应用
 
-GitHub Copilot 桌面应用可以将 opencodex 用作兼容 OpenAI 的模型提供方。这需要手动配置客户端，Integrations 标签页没有对应的开关；它也不同于上游 `github-copilot` 提供方，后者使用 Copilot 订阅作为 opencodex 的后端。
+GitHub Copilot 桌面应用可以将 opencodex 用作兼容 OpenAI 的模型提供方。这需要手动配置客户端，**连接** 标签页没有对应的开关；它也不同于上游 `github-copilot` 提供方，后者使用 Copilot 订阅作为 opencodex 的后端。
 
 1. 启动 opencodex 并确认它能正常响应：
 

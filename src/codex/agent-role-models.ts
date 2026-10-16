@@ -1,11 +1,12 @@
 /**
- * The dashboard's write of one Codex agent role's model, and optionally its reasoning effort.
+ * The dashboard's write of one Codex agent role's model, its reasoning effort, or both.
  *
  * Codex overrides the spawn-time model with the root `model` pin in
  * `$CODEX_HOME/agents/<role>.toml`, so that pin is what decides a child's model. This module
- * edits exactly that value, plus the root `model_reasoning_effort` when a caller passes one, and
- * nothing else: every other byte of the file, including the instructions multiline string that
- * usually mentions `model =` in prose, is left as it was.
+ * edits exactly that value when a caller passes a model, plus the root `model_reasoning_effort`
+ * when a caller passes an effort, and nothing else: every other byte of the file, including the
+ * instructions multiline string that usually mentions `model =` in prose, is left as it was. An
+ * omitted model leaves the pin as it is, so a role that inherits its model keeps inheriting it.
  * It runs only on an explicit user action; no sync or startup path calls it.
  */
 import { lstatSync, readFileSync } from "node:fs";
@@ -97,6 +98,21 @@ export function setTomlRootReasoningEffort(content: string, effort: string): str
   return setTomlRootString(content, locateTomlReasoningEffortKey(content), "model_reasoning_effort", effort);
 }
 
+export function removeTomlRootReasoningEffort(content: string): string {
+  const location = locateTomlReasoningEffortKey(content);
+  if (!location?.inRootTable) return content;
+  if (!location.span) {
+    throw new AgentRoleModelError("unsupported_model_value", "the existing model_reasoning_effort value is not a one-line string");
+  }
+  const lines = content.split("\n");
+  // A terminated line goes with its own newline. An unterminated last line is emptied instead,
+  // so the previous line keeps its terminator (and its \r in a CRLF file).
+  if (location.line < lines.length - 1) lines.splice(location.line, 1);
+  else lines[location.line] = "";
+  const bom = location.line === 0 && content.startsWith("\ufeff") ? "\ufeff" : "";
+  return bom + lines.join("\n");
+}
+
 export function readCodexAgentRoleEffort(role: string, codexHome: string): string | null {
   try {
     const location = locateTomlReasoningEffortKey(readFileSync(roleFile(role, codexHome), "utf8"));
@@ -148,9 +164,9 @@ function assertValidRoleToml(role: string, text: string, stage: "before" | "afte
 
 export function writeCodexAgentRoleModel(
   role: string,
-  model: string,
+  model: string | undefined,
   codexHome: string,
-  effort?: string,
+  effort?: string | null,
 ): { status: "written" | "unchanged" } {
   requireKnownRole(role, codexHome);
   const path = roleFile(role, codexHome);
@@ -159,10 +175,12 @@ export function writeCodexAgentRoleModel(
   }
   const before = readFileSync(path, "utf8");
   assertValidRoleToml(role, before, "before");
-  const withModel = setTomlRootModel(before, validateAgentRoleModel(model));
+  const withModel = model === undefined ? before : setTomlRootModel(before, validateAgentRoleModel(model));
   const after = effort === undefined
     ? withModel
-    : setTomlRootReasoningEffort(withModel, validateAgentRoleEffort(effort));
+    : effort === null
+      ? removeTomlRootReasoningEffort(withModel)
+      : setTomlRootReasoningEffort(withModel, validateAgentRoleEffort(effort));
   if (after === before) return { status: "unchanged" };
   assertValidRoleToml(role, after, "after");
   assertIntegrationWriteOwnership(path);

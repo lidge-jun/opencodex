@@ -26,6 +26,8 @@ import {
 import type { ProxyRestartRequestOutcome } from "./tray-proxy";
 import { packageVersion } from "./help";
 import { computeVersionSkew } from "./version-skew";
+import { readUpdateRestartHome } from "./update-restart-home";
+import { UpdateRestartRequired } from "./update-restart-candidate";
 
 export const SYSTEM_RESTART_REQUEST_TIMEOUT_MS = 5_000;
 export const SYSTEM_RESTART_ATTESTATION_TIMEOUT_MS = 4_000;
@@ -38,6 +40,7 @@ export interface BoundSystemRestartDeps {
   now?: () => number;
   /** Invoking CLI version for the skew guard; defaults to this bundle's package version. */
   cliVersion?: string;
+  readUpdateHome?: typeof readUpdateRestartHome;
 }
 
 function rejected(code: string): ProxyRestartRequestOutcome {
@@ -90,6 +93,8 @@ export async function requestBoundSystemRestart(
     return rejected("restart_target_runtime_mismatch");
   }
 
+  let updateHome: ReturnType<typeof readUpdateRestartHome> | undefined;
+  try { updateHome = (deps.readUpdateHome ?? readUpdateRestartHome)(); } catch { /* normal in-place restart remains available */ }
   const attestationBudget = remaining(deadlineAt, now, SYSTEM_RESTART_ATTESTATION_TIMEOUT_MS);
   if (attestationBudget <= 0) return rejected("restart_deadline_expired");
 
@@ -143,9 +148,9 @@ export async function requestBoundSystemRestart(
   const proxyVersion = fenced
     ? body.installedVersion as string
     : typeof body.version === "string" ? body.version : undefined;
-  if (computeVersionSkew(deps.cliVersion ?? ownCliVersion(), proxyVersion).skewed) {
-    return rejected("restart_version_skew");
-  }
+  const cliVersion = deps.cliVersion ?? ownCliVersion();
+  const skew = computeVersionSkew(cliVersion, proxyVersion);
+  if (skew.skewed && skew.relation !== "cli-newer") return rejected("restart_version_skew");
 
   let observed: LiveProxy | null;
   try {
@@ -154,6 +159,18 @@ export async function requestBoundSystemRestart(
     return rejected("restart_target_recheck_failed");
   }
   if (!sameRestartTarget(target, observed)) return rejected("restart_target_changed");
+  if (skew.relation === "cli-newer") {
+    if (!updateHome) return rejected("update_restart_home_unverified");
+    const current = readRuntime(target.pid);
+    if (!current || current.pid !== runtime.pid || current.port !== runtime.port
+      || current.hostname !== runtime.hostname || current.attestationSecret !== runtime.attestationSecret) {
+      return rejected("restart_target_changed");
+    }
+    return { accepted: false, uncertain: false, error: new UpdateRestartRequired({
+      target: { ...target, pid: target.pid, version: proxyVersion },
+      runtime: { ...runtime, attestationSecret: runtime.attestationSecret }, cliVersion, home: updateHome,
+    }) };
+  }
 
   const capability = createSystemRestartCapability(
     runtime.attestationSecret,

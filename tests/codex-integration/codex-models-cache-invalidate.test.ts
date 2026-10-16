@@ -16,6 +16,9 @@ import { flushConfigDirHardening } from "../../src/config/paths";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
+/** Every K acquisition states its intent (#6529); these tests exercise the lock, not the intent. */
+const TEST_CATALOG_WRITE = { intent: "cache", writer: "test" } as const;
+
 const emptyConfig = {
   port: 10100,
   defaultProvider: "openai",
@@ -69,7 +72,7 @@ describe("invalidateCodexModelsCache write gate (#476 / #518)", () => {
       models: [{ slug: "gpt-5.5" }],
     }, null, 2) + "\n");
     const invalidate = () => withCatalogWriteSerialization(codexHome, permit =>
-      invalidateCodexModelsCacheWithPermitOutcome(permit, codexHome));
+      invalidateCodexModelsCacheWithPermitOutcome(permit, codexHome), TEST_CATALOG_WRITE);
 
     expect(invalidate()).toMatchObject({ kind: "completed", value: "written" });
     const cachePath = join(codexHome, "models_cache.json");
@@ -94,7 +97,7 @@ describe("invalidateCodexModelsCache write gate (#476 / #518)", () => {
       process.env.CODEX_HOME = ambientCodexHome;
 
       const outcome = withCatalogWriteSerialization(codexHome, permit =>
-        invalidateCodexModelsCacheWithPermit(permit, codexHome));
+        invalidateCodexModelsCacheWithPermit(permit, codexHome), TEST_CATALOG_WRITE);
 
       expect(outcome).toMatchObject({ kind: "completed", value: true });
       expect(existsSync(join(ambientCodexHome, "models_cache.json"))).toBe(false);

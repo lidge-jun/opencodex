@@ -68,6 +68,7 @@ let previewResponse: (body: Record<string, unknown>, signal?: AbortSignal | null
  * unknown path can be driven.
  */
 let failExtraSources = false;
+let lazycodexRoles: Record<string, unknown>;
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -141,6 +142,7 @@ beforeEach(() => {
     }));
   };
   failExtraSources = false;
+  lazycodexRoles = { lazycodex: { detected: false }, omoJsonc: null, roles: [] };
 
   const mockFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
@@ -213,6 +215,8 @@ beforeEach(() => {
     if (url.includes("/api/grok")) {
       return failExtraSources ? json({ error: "nope" }, 500) : json({ present: false, models: [] });
     }
+    if (url.endsWith("/api/codex-agent-roles")) return json(lazycodexRoles);
+    if (url.endsWith("/api/subagent-models")) return json({ available: ["gpt-5.6-sol"] });
     if (method === "PUT") return putResponse(request);
     if (url.includes("/restore")) return json({ ok: true, clientId: "hermes", changed: true, state: "current", message: "restored" });
     return stateResponse();
@@ -286,12 +290,50 @@ test("the DSH surface uses localized ownership semantics and its own API route",
   // form; the full product name still lives on the API Keys page (api.clientConfig.clientDsh).
   expect(text).toContain("DSH");
   expect(text).not.toContain("DeepSeek Harness (DSH)");
-  expect(text).toContain("llm-pi-ai.providers.opencodex");
+  // DSH 0.1.7+ reads the llm-pi-ai row of the Desktop profile patch; settings.yaml is the fallback.
+  expect(text).toContain("llm-pi-ai row");
+  expect(text).toContain("$DSH_HOME/profiles/desktop/cordis.patch.yml");
+  expect(text).toContain("$DSH_HOME/settings.yaml");
   expect(text).toContain("hot reload");
   expect(text).toContain("default model");
   expect(text).toContain("deepseek-official");
   expect(text).toContain("loopback");
   expect(requests.some(request => request.url.endsWith("/api/client-integrations/dsh"))).toBe(true);
+});
+
+test("a DSH profile without its patch tells the operator which file to create and with what", async () => {
+  const patch = "/tmp/home/.dsh/profiles/desktop/cordis.patch.yml";
+  stateResponse = () => json(status({
+    clientId: "dsh",
+    state: "absent",
+    configPath: "/tmp/home/.dsh/settings.yaml",
+    supersededBy: patch,
+    supersededReason: "missing-store",
+    missingStoreDocument: "[]",
+  }));
+  await mountClient(true, "dsh");
+
+  const text = container.textContent ?? "";
+  expect(text).toContain(`This client keeps its providers in ${patch}, which is missing.`);
+  expect(text).toContain(`Create ${patch} containing [], then press Apply again.`);
+  expect(text).not.toContain("which opencodex does not write");
+
+  // The apply preview refuses; its dialog covers that notice, so it names the path itself.
+  previewResponse = () => json(previewPlan("apply", {
+    clientId: "dsh",
+    changes: [],
+    fingerprint: "p7:unbound",
+    canApply: false,
+    willChange: false,
+    refusalReason: "superseded_store",
+    supersededReason: "missing-store",
+    missingStoreDocument: "[]",
+  }));
+  await act(async () => { toggleSwitch().click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 20)); });
+  const dialog = container.querySelector("dialog")?.textContent ?? "";
+  expect(dialog).toContain(`Create ${patch} containing [], then press Apply again.`);
+  expect(requests.some(request => request.method === "PUT")).toBe(false);
 });
 
 test("Droid reasoning defaults use one frozen snapshot for review and commit", async () => {
@@ -936,6 +978,22 @@ test("a failed first read does not claim nothing is installed either", async () 
   expect(text).toContain("Could not load integration state.");
   expect(text).not.toContain("No installed clients were detected");
   expect(text).toContain("Hermes");
+});
+
+test("a failed first status read on a client page offers Retry, which reads again", async () => {
+  // The page used to show only the error notice, so recovering from a transient failure
+  // meant reloading the dashboard.
+  stateResponse = () => json({ error: "nope" }, 503);
+  await mountClient();
+  expect(container.textContent ?? "").toContain("Could not load integration state.");
+  const retry = buttonByText("Retry");
+  expect(retry).toBeDefined();
+
+  const before = requests.filter(request => request.method === "GET" && !request.url.includes("/journal")).length;
+  await act(async () => { retry!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 30)); });
+  const after = requests.filter(request => request.method === "GET" && !request.url.includes("/journal")).length;
+  expect(after).toBeGreaterThan(before);
 });
 
 test("the aggregate Aside overview toggle stays unbound", async () => {
@@ -1743,6 +1801,55 @@ test("the tab strip marks every client tab and leaves the two non-client tabs ba
   // The label lost its "CLI": the mark carries that identity now, and the row
   // covers the app and SDK too.
   expect(codexTab.textContent).toBe("Codex");
+});
+
+test("the LazyCodex role section sits on the omo tab and only when LazyCodex is detected", async () => {
+  const [{ createRoot }, { LanguageProvider }, { default: Integrations }] = await Promise.all([
+    import("react-dom/client"),
+    import("../src/i18n/provider"),
+    import("../src/pages/Integrations"),
+  ]);
+  // Every tab panel is mounted, and the section shows only on the active one. Seeding the role list's
+  // store renders it in the first commit, so placement is checked without waiting on a request.
+  type Roles = { detected: boolean; roles: unknown[]; omoJsonc: unknown; available: string[]; efforts: string[] };
+  const render = async (hash: string, roles: Roles) => {
+    testWindow.location.hash = hash;
+    mountCount += 1;
+    apiBase = `http://ocx-test-${mountCount}.invalid`;
+    lazycodexRoles = { lazycodex: { detected: roles.detected }, omoJsonc: roles.omoJsonc, roles: roles.roles };
+    setClientResourceData(`lazycodex-role-models:${apiBase}`, roles);
+    await act(async () => {
+      root?.unmount();
+      root = createRoot(container);
+      root.render(
+        <LanguageProvider>
+          <Integrations apiBase={apiBase} />
+        </LanguageProvider>,
+      );
+    });
+  };
+  // Compared as a list: under happy-dom, toBeNull() also accepts an HTMLElement, so it cannot fail here.
+  const panelsWithSection = () => [...container.querySelectorAll(".lazycodex-role-models")]
+    .map(element => element.closest("[id^='integrations-panel-']")?.id ?? "outside");
+
+  // Pi-based omo alone: no tab shows anything of LazyCodex.
+  await render("#integrations/omo", { detected: false, roles: [], omoJsonc: null, available: [], efforts: [] });
+  expect(panelsWithSection()).toEqual([]);
+
+  const detected: Roles = {
+    detected: true,
+    roles: [{ role: "explorer", model: "gpt-5.6-sol", effort: null, omoJsoncModel: null }],
+    omoJsonc: { state: "present" },
+    available: ["gpt-5.6-sol"],
+    efforts: ["low", "medium", "high"],
+  };
+  await render("#integrations/omo", detected);
+  expect(panelsWithSection()).toEqual(["integrations-panel-omo"]);
+  expect(container.querySelector("#integrations-panel-omo .lazycodex-role-models")?.textContent).toContain("explorer");
+
+  // The Codex tab no longer carries it.
+  await render("#integrations/codex", detected);
+  expect(panelsWithSection()).toEqual([]);
 });
 
 test("Droid target changes discard the draft and its confirmation", async () => {

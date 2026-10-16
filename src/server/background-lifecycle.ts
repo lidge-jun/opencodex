@@ -14,6 +14,7 @@ import {
 } from "../storage/policy-scheduler";
 import { startQuotaResetPoller, stopQuotaResetPoller } from "../quota/reset-poller";
 import {
+  setCatalogAutoRefreshClientFanout,
   startCatalogAutoRefresh,
   stopCatalogAutoRefresh,
   syncCatalogAutoRefreshCadence,
@@ -40,6 +41,7 @@ type ProcessLoops = {
 
 type LeaseOwner = {
   token: symbol;
+  fanoutRevoked: boolean;
   applyPolicy: PolicyApply;
   resources: ServerResourceOwnerLease;
   lowQuota: LowQuotaRegistration;
@@ -48,6 +50,7 @@ type LeaseOwner = {
 export type ServerBackgroundLifecycleLease = {
   scheduleStartupRun(): void;
   listLowQuotaEvents(limit?: number): LowQuotaEvent[];
+  revokeClientFanout(): void;
   release(): Promise<void>;
   releaseAfterFailedStart(): void;
 };
@@ -59,6 +62,25 @@ let cleanupInProgress = false;
 function setLivePolicyOwner(applyPolicy: PolicyApply | null): void {
   setStorageCleanupPolicyLiveSink(applyPolicy);
   setStorageCleanupPolicyJobLiveApply(applyPolicy);
+}
+
+/** Resolve the current process owner at delivery time so lease hand-over cannot retain an old port. */
+async function refreshConnectedClientsAfterCatalogChange(isCurrent: () => boolean) {
+  const captured = owners.findLast(owner => !owner.fanoutRevoked);
+  if (!captured) return [];
+  const current = () => isCurrent() && !captured.fanoutRevoked && owners.includes(captured);
+  const [{ readRuntimePort }, { loadConfig }, { localClientSyncAllowed }, { syncEnabledClientIntegrations }] =
+    await Promise.all([
+      import("../config/process-state"),
+      import("../config"),
+      import("../codex/desired-state"),
+      import("./management/config-routes"),
+    ]);
+  const runtime = readRuntimePort(process.pid);
+  const config = loadConfig();
+  // An explicit catalog tick on a hub is not permission to enroll its local clients.
+  if (!runtime || !current() || !localClientSyncAllowed(config)) return [];
+  return syncEnabledClientIntegrations(runtime.port, config, {}, { unattended: { isCurrent: current } });
 }
 
 function startProcessLoops(applyPolicy: PolicyApply): ProcessLoops {
@@ -83,6 +105,7 @@ function startProcessLoops(applyPolicy: PolicyApply): ProcessLoops {
     // and interval timers are unref'd. The scheduler
     // module keeps every heavy import inside its tick, so naming it statically here
     // costs a module record and nothing else.
+    setCatalogAutoRefreshClientFanout(refreshConnectedClientsAfterCatalogChange);
     startCatalogAutoRefresh();
     // The scheduler starts at its default cadence because resolving the operator's value
     // reads the config barrel. Fire-and-forget: startup must not await an optional
@@ -106,6 +129,7 @@ function startProcessLoops(applyPolicy: PolicyApply): ProcessLoops {
     stopStorageCleanupScheduler();
     stopQuotaResetPoller();
     stopCatalogAutoRefresh();
+    setCatalogAutoRefreshClientFanout(null);
     setLivePolicyOwner(null);
     throw error;
   }
@@ -119,6 +143,7 @@ function stopProcessLoops(): void {
   stopStorageCleanupScheduler();
   stopQuotaResetPoller();
   stopCatalogAutoRefresh();
+  setCatalogAutoRefreshClientFanout(null);
   setLivePolicyOwner(null);
 }
 
@@ -181,6 +206,7 @@ export function acquireServerBackgroundLifecycle(
 
   const owner: LeaseOwner = {
     token: Symbol("server-background-lifecycle"),
+    fanoutRevoked: false,
     applyPolicy,
     resources: acquireServerResourceOwner(),
     lowQuota: registerCodexLowQuotaProtection(config),
@@ -206,6 +232,7 @@ export function acquireServerBackgroundLifecycle(
     return stopStoragePolicyWorker().finally(() => { cleanupInProgress = false; });
   }
   return {
+    revokeClientFanout() { owner.fanoutRevoked = true; },
     listLowQuotaEvents(limit) { return owner.lowQuota.listEvents(limit); },
     scheduleStartupRun() {
       if (owners.some(candidate => candidate.token === owner.token)) {

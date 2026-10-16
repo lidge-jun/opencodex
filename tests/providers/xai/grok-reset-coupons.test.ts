@@ -20,9 +20,26 @@ import {
 } from "../../../src/grok/reset-coupons";
 import {
   grokCouponJournalPath,
+  markGrokResetCouponAttempt,
   openGrokResetCouponOperation,
   recordGrokResetCouponSettlement,
 } from "../../../src/grok/reset-coupon-ledger";
+
+function trailerFrame(text: string): Uint8Array<ArrayBuffer> {
+  const frame = encodeGrpcWebEnvelope(new TextEncoder().encode(text)) as Uint8Array<ArrayBuffer>;
+  frame[0] = 0x80;
+  return frame;
+}
+
+function combineFrames(...frames: Uint8Array[]): Uint8Array<ArrayBuffer> {
+  const bytes = new Uint8Array(frames.reduce((length, frame) => length + frame.length, 0));
+  let offset = 0;
+  for (const frame of frames) {
+    bytes.set(frame, offset);
+    offset += frame.length;
+  }
+  return bytes;
+}
 
 describe("grok reset coupons", () => {
   let tempDir: string;
@@ -273,6 +290,109 @@ describe("grok reset coupons", () => {
     expect(grpcErr.statusMessage).toContain("Invalid token_id");
   });
 
+  for (const rpc of ["inspection", "redemption"] as const) {
+    for (const response of ["empty", "data-only", "missing-status", "invalid-status"] as const) {
+      it(`${rpc} rejects HTTP 200 ${response} without a confirmed gRPC status`, async () => {
+        let bytes = new Uint8Array(0);
+        if (response === "data-only") bytes = encodeGrpcWebEnvelope(new Uint8Array(0));
+        if (response === "missing-status" || response === "invalid-status") {
+          const payload = new TextEncoder().encode(response === "missing-status"
+            ? "grpc-message:ok\r\n" : "grpc-status:0garbage\r\n");
+          bytes = new Uint8Array(5 + payload.length);
+          bytes[0] = 0x80;
+          new DataView(bytes.buffer).setUint32(1, payload.length, false);
+          bytes.set(payload, 5);
+        }
+        const fetchFn: typeof fetch = async () => new Response(bytes, { status: 200 });
+        const result = rpc === "inspection"
+          ? getGrokRemainingResets({ accessToken: "fixture-token", fetchFn })
+          : redeemGrokResetCoupon({ accessToken: "fixture-token", tokenId: "fixture-coupon", fetchFn });
+        await expect(result).rejects.toThrow("Grok coupon response has no confirmed gRPC status");
+      });
+    }
+  }
+
+  it("retains every raw grpc-status value while preserving legacy trailer fields", () => {
+    const parsed = parseGrpcWebTrailers(new TextEncoder().encode(
+      "grpc-status:3\r\nGrpc-Status:malformed\r\ngrpc-status:0\r\ngrpc-message:ok\r\n",
+    ));
+    expect(parsed.status).toBe(0);
+    expect(parsed.metadata["grpc-status"]).toBe("0");
+    expect(parsed.statusMessage).toBe("ok");
+    expect(parsed.statusValues).toEqual(["3", "malformed", "0"]);
+  });
+
+  it("accumulates statuses across trailers while preserving the last trailer fields", () => {
+    const decoded = decodeGrpcWebResponse(combineFrames(
+      trailerFrame("grpc-status:3\r\ngrpc-message:first\r\n"),
+      trailerFrame("grpc-status:0\r\ngrpc-message:last\r\n"),
+    ));
+    expect(decoded.status).toBe(0);
+    expect(decoded.statusMessage).toBe("last");
+    expect(decoded.trailers?.metadata["grpc-status"]).toBe("0");
+    expect(decoded.statusValues).toEqual(["3", "0"]);
+    expect(decoded.framingComplete).toBe(false);
+  });
+
+  const zeroTrailer = trailerFrame("grpc-status:0\r\n");
+  it("reports complete framing for identical zero trailer frames", () => {
+    const decoded = decodeGrpcWebResponse(combineFrames(zeroTrailer, zeroTrailer));
+    expect(decoded.framingComplete).toBe(true);
+  });
+
+  const unconfirmedResponses = [
+    ["3 then 0 in one trailer", trailerFrame("grpc-status:3\r\ngrpc-status:0\r\n")],
+    ["malformed then 0", trailerFrame("grpc-status:malformed\r\ngrpc-status:0\r\n")],
+    ["separate trailer frames 3 and 0", combineFrames(trailerFrame("grpc-status:3\r\n"), zeroTrailer)],
+    ["a differing second trailer frame", combineFrames(zeroTrailer, trailerFrame("grpc-status:0\r\ngrpc-message:ok\r\n"))],
+    ["a partial header after a zero trailer", combineFrames(zeroTrailer, new Uint8Array([128, 0, 0, 0]))],
+    ["an unknown flag 0x01", combineFrames(new Uint8Array([1, 0, 0, 0, 0]), zeroTrailer)],
+    ["a data frame after a trailer", combineFrames(zeroTrailer, encodeGrpcWebEnvelope(new Uint8Array(0)))],
+  ] as const;
+
+  for (const rpc of ["inspection", "redemption"] as const) {
+    const call = (bytes: Uint8Array<ArrayBuffer>) => {
+      const fetchFn: typeof fetch = async () => new Response(bytes, { status: 200 });
+      return rpc === "inspection"
+        ? getGrokRemainingResets({ accessToken: "fixture-token", fetchFn })
+        : redeemGrokResetCoupon({ accessToken: "fixture-token", tokenId: "fixture-coupon", fetchFn });
+    };
+
+    for (const [description, bytes] of unconfirmedResponses) {
+      it(`${rpc} rejects ${description} as unconfirmed`, async () => {
+        await expect(call(bytes)).rejects.toThrow("Grok coupon response has no confirmed gRPC status");
+      });
+    }
+
+    for (const [description, bytes] of [
+      ["identical zeros in one trailer", trailerFrame("grpc-status:0\r\ngrpc-status:0\r\n")],
+      ["identical zero trailer frames", combineFrames(zeroTrailer, zeroTrailer)],
+    ] as const) {
+      it(`${rpc} accepts ${description} (compatibility control)`, async () => {
+        expect(await call(bytes)).toMatchObject(rpc === "inspection" ? { tokens: [] } : { success: true, status: 0 });
+      });
+    }
+
+    it(`${rpc} rejects 0 then 3 (compatibility control)`, async () => {
+      await expect(call(trailerFrame("grpc-status:0\r\ngrpc-status:3\r\n"))).rejects.toThrow();
+    });
+
+    it(`${rpc} preserves GrpcWebError for unanimous nonzero statuses (compatibility control)`, async () => {
+      await expect(call(trailerFrame("grpc-status:3\r\ngrpc-status:3\r\n"))).rejects.toBeInstanceOf(GrpcWebError);
+    });
+  }
+
+  it("accepts a redemption with an explicit successful gRPC trailer", async () => {
+    const payload = new TextEncoder().encode("grpc-status:0\r\n");
+    const bytes = new Uint8Array(5 + payload.length);
+    bytes[0] = 0x80;
+    new DataView(bytes.buffer).setUint32(1, payload.length, false);
+    bytes.set(payload, 5);
+    const fetchFn: typeof fetch = async () => new Response(bytes, { status: 200 });
+    expect(await redeemGrokResetCoupon({ accessToken: "fixture-token", tokenId: "fixture-coupon", fetchFn }))
+      .toMatchObject({ success: true, status: 0 });
+  });
+
   it("handles crash-safe ledger open and idempotent replay", () => {
     const ledgerPath = grokCouponJournalPath(tempDir);
 
@@ -283,11 +403,14 @@ describe("grok reset coupons", () => {
     }, undefined, ledgerPath);
     expect(first.kind).toBe("execute");
 
+    markGrokResetCouponAttempt("op-uuid-1", "tok-456", undefined, ledgerPath);
     recordGrokResetCouponSettlement({
       operationId: "op-uuid-1",
+      accountId: "acc-123",
       tokenId: "tok-456",
       code: "redeemed",
       status: "success",
+      expectedStatus: "attempted",
     }, undefined, ledgerPath);
 
     // Re-opening the same settled operationId replays the durable outcome
@@ -299,6 +422,60 @@ describe("grok reset coupons", () => {
     expect(replay.kind).toBe("replay");
     expect(replay.code).toBe("redeemed");
     expect(replay.settledAt).toBeDefined();
+  });
+
+  it("replays an interrupted attempt without a code and settles it later", () => {
+    const ledgerPath = grokCouponJournalPath(tempDir);
+    const identity = { accountId: "acc-123", tokenId: "tok-456", operationId: "op-uuid-2" };
+
+    openGrokResetCouponOperation(identity, undefined, ledgerPath);
+    markGrokResetCouponAttempt("op-uuid-2", "tok-456", undefined, ledgerPath);
+
+    // An attempted-but-never-settled op replays with no code: the route must
+    // reconcile upstream rather than trusting the record as a success.
+    const interrupted = openGrokResetCouponOperation(identity, undefined, ledgerPath);
+    expect(interrupted.kind).toBe("replay");
+    expect(interrupted.code).toBeUndefined();
+    expect(interrupted.tokenId).toBe("tok-456");
+
+    // Once a confirmed upstream response is settled, open replays that outcome.
+    recordGrokResetCouponSettlement(
+      { operationId: "op-uuid-2", accountId: "acc-123", tokenId: "tok-456", code: "redeemed", status: "success", expectedStatus: "attempted" },
+      undefined,
+      ledgerPath,
+    );
+    const settled = openGrokResetCouponOperation(identity, undefined, ledgerPath);
+    expect(settled.kind).toBe("replay");
+    expect(settled.code).toBe("redeemed");
+  });
+
+  it("expires stranded open and attempted records past the retention window", () => {
+    const ledgerPath = grokCouponJournalPath(tempDir);
+    const t0 = 1_700_000_000_000;
+    const DAY = 24 * 60 * 60_000;
+
+    openGrokResetCouponOperation(
+      { accountId: "acc-123", tokenId: "tok-456", operationId: "op-old" },
+      t0,
+      ledgerPath,
+    );
+    markGrokResetCouponAttempt("op-old", "tok-456", t0, ledgerPath);
+
+    // A later write prunes the stranded attempt...
+    openGrokResetCouponOperation(
+      { accountId: "acc-123", tokenId: "tok-999", operationId: "op-new" },
+      t0 + 31 * DAY,
+      ledgerPath,
+    );
+
+    // ...so the same operationId can open fresh instead of being a dead
+    // record occupying the 256-operation cap forever.
+    const reopened = openGrokResetCouponOperation(
+      { accountId: "acc-123", tokenId: "tok-456", operationId: "op-old" },
+      t0 + 31 * DAY + 1,
+      ledgerPath,
+    );
+    expect(reopened.kind).toBe("execute");
   });
 
   it("refreshes token on 401 when integrated with refresh provider stub", async () => {

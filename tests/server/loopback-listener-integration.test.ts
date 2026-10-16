@@ -157,6 +157,47 @@ describe("hub management ingress", () => {
     }
   }, SERVER_BUDGET_MS);
 
+  test("client export through management ingress names the public bound port and ingress refuses inference", async () => {
+    const managementPort = await freePort();
+    const publicPort = await findAvailablePort(0, "127.0.0.1", { reservedPort: managementPort });
+    saveConfig({
+      ...hubIngressConfig(managementPort),
+      port: 0,
+      unauthenticatedLoopbackListener: { enabled: false },
+      claudeCode: { intercept: { enabled: false } },
+      defaultProvider: "static",
+      providers: {
+        static: {
+          adapter: "openai-chat",
+          baseUrl: "https://provider.example.test/v1",
+          liveModels: false,
+          models: ["static-model"],
+        },
+      },
+    });
+    const server = startServer(publicPort);
+    const base = `http://127.0.0.1:${managementPort}`;
+    const headers = {
+      Host: "hub.example.test",
+      Origin: "https://hub.example.test",
+      "x-opencodex-api-key": "admin-secret",
+    };
+    try {
+      expect(server.port).not.toBe(managementPort);
+      const exported = await fetch(`${base}/api/client-config?client=opencode`, { headers });
+      expect(exported.status).toBe(200);
+      const body = await exported.json() as {
+        config: { provider: { opencodex: { options: { baseURL: string } } } };
+      };
+      expect(body.config.provider.opencodex.options.baseURL).toBe(`http://127.0.0.1:${server.port}/v1`);
+      expect(body.config.provider.opencodex.options.baseURL).not.toContain(`:${managementPort}/`);
+      const inference = await fetch(`${base}/v1/models`, { headers });
+      expect(inference.status).toBe(404);
+    } finally {
+      await server.stop(true);
+    }
+  }, SERVER_BUDGET_MS);
+
   test("default-denies every data, health, readiness, WebSocket, and unknown-static route", async () => {
     const managementPort = await freePort();
     const publicPort = await findAvailablePort(0, "127.0.0.1", { reservedPort: managementPort });

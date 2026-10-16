@@ -1,3 +1,4 @@
+import { AnthropicHelperUnavailableError } from "../sidecar/auth";
 /**
  * Serve Codex's built-in `/v1/alpha/search` when no ChatGPT forward provider exists.
  *
@@ -101,7 +102,12 @@ export function resolveAlphaSearchSidecar(config: OcxConfig): AlphaSearchSidecar
   if (backend === "openai") return { status: "unconfigured" };
   switch (backend) {
     case "anthropic": {
-      const found = findAnthropicSidecarProvider(config);
+      let found;
+      try { found = findAnthropicSidecarProvider(config); }
+      catch (error) {
+        if (error instanceof AnthropicHelperUnavailableError) return { status: "missing-credential", backend };
+        throw error;
+      }
       return found
         ? { status: "ready", sidecar: { backend, providerName: found.providerName, provider: found.provider, config } }
         : { status: "missing-credential", backend };

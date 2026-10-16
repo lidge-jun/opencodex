@@ -1,4 +1,4 @@
-import { lstatSync, realpathSync } from "node:fs";
+import { lstatSync, readdirSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 // POSIX path operations on purpose: every path this module classifies is a macOS path. The
 // host's own path module would build backslash or drive-letter paths on Windows and make the
@@ -15,7 +15,11 @@ const { join, resolve } = posix;
  * synced folder turns ordinary requests into intermittent 502s (#6314). This only answers
  * "is it likely synced"; the guard itself stays strict.
  */
-export type SyncedStateLocation = "icloud-drive" | "file-provider" | "icloud-desktop-documents";
+export type SyncedStateLocation =
+  | "icloud-drive"
+  | "file-provider"
+  | "icloud-desktop-documents"
+  | "google-drive-desktop-documents";
 
 export interface SyncedStateLocationProbe {
   readonly platform?: NodeJS.Platform;
@@ -24,23 +28,34 @@ export interface SyncedStateLocationProbe {
   readonly realpath?: (path: string) => string;
   /** Whether a directory entry exists at the path, without following it. */
   readonly entryExists?: (path: string) => boolean;
+  /** Entry names in a directory. An unreadable directory is empty, not an error. */
+  readonly listEntries?: (dir: string) => readonly string[];
 }
 
 const defaultEntryExists = (path: string): boolean => {
   try { lstatSync(path); return true; } catch { return false; }
 };
 
+const defaultListEntries = (dir: string): readonly string[] => {
+  try { return readdirSync(dir); } catch { return []; }
+};
+
 /**
  * Advisory only. Apple publishes no API a CLI can ask, so this reads the observed layout:
  * iCloud Drive lives under ~/Library/Mobile Documents, File Provider clients (OneDrive, Dropbox,
  * Google Drive) under ~/Library/CloudStorage, and with "Desktop & Documents Folders" turned on
- * iCloud Drive holds a Desktop/Documents entry of its own. A false positive costs one warning
- * line; nothing is refused on the strength of it.
+ * iCloud Drive holds a Desktop/Documents entry of its own. Google Drive for desktop can also
+ * sync the native Desktop and Documents folders without moving them under CloudStorage (#6314).
+ * The cheap signals for that are a DriveFS directory or a `GoogleDrive-*` CloudStorage folder.
+ * They do not read which folders the app was told to sync, so Drive being installed can warn
+ * even when Documents is not selected. A false positive costs one warning line; nothing is
+ * refused on the strength of it.
  */
 export function syncedStateLocation(dir: string, probe: SyncedStateLocationProbe = {}): SyncedStateLocation | undefined {
   if ((probe.platform ?? process.platform) !== "darwin") return undefined;
   const realpath = probe.realpath ?? ((path: string) => realpathSync.native(path));
   const entryExists = probe.entryExists ?? defaultEntryExists;
+  const listEntries = probe.listEntries ?? defaultListEntries;
   const canonical = (path: string): string => {
     try { return realpath(path); } catch { return resolve(path); }
   };
@@ -56,17 +71,42 @@ export function syncedStateLocation(dir: string, probe: SyncedStateLocationProbe
   if (within(mobileDocuments)) return "icloud-drive";
   if (within(join(home, "Library", "CloudStorage"))) return "file-provider";
   for (const folder of ["Desktop", "Documents"]) {
-    if (within(join(home, folder)) && entryExists(join(mobileDocuments, "com~apple~CloudDocs", folder))) {
-      return "icloud-desktop-documents";
+    if (!within(join(home, folder))) continue;
+    if (entryExists(join(mobileDocuments, "com~apple~CloudDocs", folder))) return "icloud-desktop-documents";
+    if (googleDriveAppearsToSyncDesktopDocuments(home, entryExists, listEntries)) {
+      return "google-drive-desktop-documents";
     }
   }
   return undefined;
+}
+
+/**
+ * Presence only. Drive for desktop keeps its config under DriveFS and, on current macOS,
+ * a `GoogleDrive-*` directory in CloudStorage. Either one means the app is in use. Missing
+ * or unreadable markers are "not detected", never a startup failure.
+ */
+function googleDriveAppearsToSyncDesktopDocuments(
+  home: string,
+  entryExists: (path: string) => boolean,
+  listEntries: (dir: string) => readonly string[],
+): boolean {
+  const driveFs = join(home, "Library", "Application Support", "Google", "DriveFS");
+  try {
+    if (entryExists(driveFs)) return true;
+  } catch { /* unreadable marker */ }
+  try {
+    return listEntries(join(home, "Library", "CloudStorage"))
+      .some((name) => name.toLowerCase().startsWith("googledrive-"));
+  } catch {
+    return false;
+  }
 }
 
 const LOCATION_LABEL: Record<SyncedStateLocation, string> = {
   "icloud-drive": "inside iCloud Drive",
   "file-provider": "inside a cloud-storage (File Provider) folder",
   "icloud-desktop-documents": "in Desktop or Documents, which iCloud Drive appears to sync",
+  "google-drive-desktop-documents": "in Desktop or Documents, which Google Drive appears to sync",
 };
 
 /** The startup warning. Names the location kind, never the path. */

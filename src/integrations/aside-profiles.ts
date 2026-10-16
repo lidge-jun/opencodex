@@ -8,7 +8,7 @@ import { readIntegrationState, type IntegrationState, type IntegrationStatus } f
 import {
   applyIntegrationCoordinated, disableIntegrationCoordinated,
   overwriteIntegrationCoordinated, refreshIntegrationCoordinated,
-  type IntegrationWriteInput,
+  type CoordinatedIntegrationOptions, type IntegrationWriteInput,
 } from "./writer";
 import {
   asideProfileEnabled, asideProfileFailure, asideProfileScope, asideWriteInput,
@@ -260,7 +260,10 @@ export function mutateAsideProfiles(
   });
 }
 
-export function refreshAsideProfiles(input: AsideProfilesInput): Promise<Array<OwnedIntegrationRefreshOutcome & { profileId: number }>> {
+export function refreshAsideProfiles(
+  input: AsideProfilesInput,
+  options?: { refreshOnly?: boolean; guard?: CoordinatedIntegrationOptions["guard"] },
+): Promise<Array<OwnedIntegrationRefreshOutcome & { profileId: number }>> {
   const policy = input.config.asideProfileSync;
   const selected = Object.values(policy?.profiles ?? {}).some(enabled => enabled === true);
   if (!selected && (policy?.allProfiles === false
@@ -272,11 +275,15 @@ export function refreshAsideProfiles(input: AsideProfilesInput): Promise<Array<O
       try {
         const scope = asideProfileScope(ctx, profile);
         const owned = scope.store.readRecords().aside !== undefined;
+        if (options?.refreshOnly && !owned) continue;
         const bound = await asideWriteInput(ctx, scope);
         // A surviving ownership record means a removed block stays removed.
         // A newly discovered, enabled profile may receive its first safe apply.
         const operation = owned ? refreshIntegrationCoordinated : applyIntegrationCoordinated;
-        const result = await operation(bound, { lockSeams: input.lockSeams });
+        const result = await operation(bound, {
+          lockSeams: input.lockSeams,
+          ...(options?.guard ? { guard: options.guard } : {}),
+        });
         outcomes.push({
           client: "aside", profileId: profile.id, ok: result.ok,
           ...(result.ok ? { changed: result.changed } : {}),

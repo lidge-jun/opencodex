@@ -1,6 +1,8 @@
 import { createHash, randomUUID, X509Certificate } from "node:crypto";
 import { chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { canonicalPickerConfigDir, ensurePersistentPickerCa } from "./picker-ca-persistence";
+import type { PickerCaStore } from "./picker-ca-store";
 import { withClientLifecycleSync } from "../../client/lifecycle-lock";
 import {
   ALL_IP_ADDRESS_BASES,
@@ -405,29 +407,58 @@ export function acknowledgePendingPickerCaUntrust(
  * unconditional so a later failed rotation can never leave that key behind.
  */
 export function discardPickerCaKey(configDir: string): void {
+  try {
+    const stat = lstatSync(pickerStateDir(configDir));
+    if (!stat.isDirectory() || (process.platform !== "win32" && stat.uid !== process.getuid!())) {
+      throw new Error("picker_ca_directory_unsafe");
+    }
+  } catch (error) {
+    if (error !== null && typeof error === "object" && (error as { code?: unknown }).code === "ENOENT") return;
+    throw error;
+  }
   rmSync(join(pickerStateDir(configDir), "ca.key"), { force: true });
 }
 
-export function ensurePickerCa(configDir: string, options: { rotation?: "startup" } = {}): PickerCa {
+export function ensurePickerCa(configDir: string, options: { rotation?: "startup"; persistent?: boolean; store?: PickerCaStore } = {}): PickerCa {
+  mkdirSync(configDir, { recursive: true, mode: 0o700 });
+  configDir = canonicalPickerConfigDir(configDir);
   const dir = pickerStateDir(configDir);
-  // The signing key must never survive this process: another process under the same user could
-  // otherwise steal it and later take over the predictable loopback proxy. Drop a key left (or
-  // restored) by an older release on every call, including cache hits.
+  // Persistent startup stores the signing key in the OS credential store; plain calls keep an
+  // in-process authority. Both paths remove legacy plaintext ca.key files, including cache hits.
   discardPickerCaKey(configDir);
   const cached = processAuthorities.get(dir);
-  const pickerCa = cached ?? (() => {
+  const create = () => cached ?? (() => {
     const ca = createCertificateAuthority({ commonName: PICKER_CA_COMMON_NAME, permittedDnsNames: [PICKER_HOST] });
     return { ...ca, fingerprint: pickerCaFingerprints(ca.certPem).sha256 };
   })();
   mkdirSync(dir, { recursive: true, mode: 0o700 });
-  lockedPickerCa(configDir, () => {
+  const pickerCa = lockedPickerCa(configDir, () => {
     if (readPendingPickerCaUntrust(configDir)) throw new Error("picker_ca_pending_untrust");
+    if (options.persistent) {
+      return ensurePersistentPickerCa({
+        configDir, stateDir: dir, store: options.store, acceptsAuthority: acceptsPickerAuthority, create,
+        predecessor: ca => {
+          const published = publishedPickerCa(configDir);
+          if (published === ca.certPem || published === null) return null;
+          if (livePublishedOwner(configDir, published)) throw new Error("picker_ca_live_owner");
+          const outgoing = publicCertificate(published);
+          if (outgoing && options.rotation !== "startup") throw new Error("picker_ca_rotation_requires_startup");
+          return outgoing?.certPem ?? null;
+        },
+        publishMetadata: publishPem,
+        publish: (ca, predecessor) => {
+          if (predecessor) writePendingPickerCaUntrust(configDir, publicCertificate(predecessor)!);
+          publishAuthority(configDir, ca);
+        },
+      });
+    }
+    const pickerCa = create();
     const published = publishedPickerCa(configDir);
     if (published === pickerCa.certPem) {
       // The signing key is still in this process. A missing/stale owner file must not let a
       // second process rotate this live authority after an otherwise harmless cached ensure.
       if (!currentProcessOwnsPublishedCa(configDir, pickerCa)) publishOwner(configDir, pickerCa);
-      return;
+      return pickerCa;
     }
     if (published !== null && livePublishedOwner(configDir, published)) {
       throw new Error("picker_ca_live_owner");
@@ -438,14 +469,17 @@ export function ensurePickerCa(configDir: string, options: { rotation?: "startup
       writePendingPickerCaUntrust(configDir, outgoing);
     }
     publishAuthority(configDir, pickerCa);
+    return pickerCa;
   });
-  if (!cached) processAuthorities.set(dir, pickerCa);
+  if (!cached || options.persistent) processAuthorities.set(dir, pickerCa);
   return pickerCa;
 }
 
 /** Fingerprint of this process's authority only — null until ensurePickerCa has run. */
 export function publishedPickerCaSha256(configDir: string): string | null {
-  const cached = processAuthorities.get(pickerStateDir(configDir));
+  let canonical: string;
+  try { canonical = canonicalPickerConfigDir(configDir); } catch { return null; }
+  const cached = processAuthorities.get(pickerStateDir(canonical));
   return cached ? pickerCaFingerprints(cached.certPem).sha256 : null;
 }
 

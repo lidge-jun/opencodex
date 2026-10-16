@@ -15,6 +15,7 @@ import { withUpstreamHttpVersion } from "../lib/upstream-http-version";
 import { parseSidecarSSE, type WebSearchResult } from "./parse";
 import type { CodexUpstreamOutcome } from "../codex/routing";
 import { NATIVE_RESERVE_MODEL } from "../codex/catalog/native-models";
+import { openAiSidecarCreditRefusal } from "../providers/openai-sidecar-credit";
 
 export interface SidecarSettings {
   model: string;
@@ -78,6 +79,7 @@ export async function runWebSearch(
   settings: SidecarSettings,
   abortSignal?: AbortSignal,
   recordOutcome?: SidecarOutcomeRecorder,
+  beforeDispatch?: () => void,
 ): Promise<SidecarOutcome> {
   if (settings.reserveCompatibility && settings.model === NATIVE_RESERVE_MODEL) {
     return { text: "", sources: [], error: "Luna Reserve compatibility is only available as a conversation model, not a search helper. Choose another search helper model." };
@@ -115,16 +117,19 @@ export async function runWebSearch(
       // defined init, and withUpstreamHttpVersion spreads the result, so `protocol` and the
       // recovery fields (`connection: close` + Bun's transport-level `keepalive: false`) survive
       // together. The reverse order needs a `?? init` fallback to type-check at all.
-      recovery => fetch(url, withUpstreamHttpVersion(url, applyUpstreamRecoveryInit({
-        method: "POST",
-        headers,
-        body: JSON.stringify(body),
-        signal: linkedSignal.signal,
-        // Credential-bearing: do not follow a cross-origin 3xx. Bun strips `Authorization`
-        // across origins but forwards nonstandard headers such as `chatgpt-account-id`,
-        // `session_id`, and `x-codex-turn-metadata` to the redirect target.
-        redirect: "manual",
-      }, recovery), forwardProvider)),
+      recovery => {
+        beforeDispatch?.();
+        return fetch(url, withUpstreamHttpVersion(url, applyUpstreamRecoveryInit({
+          method: "POST",
+          headers,
+          body: JSON.stringify(body),
+          signal: linkedSignal.signal,
+          // Credential-bearing: do not follow a cross-origin 3xx. Bun strips `Authorization`
+          // across origins but forwards nonstandard headers such as `chatgpt-account-id`,
+          // `session_id`, and `x-codex-turn-metadata` to the redirect target.
+          redirect: "manual",
+        }, recovery), forwardProvider));
+      },
       {
         replaySafe: true,
         abortSignal: linkedSignal.signal,
@@ -180,6 +185,8 @@ export async function runWebSearch(
       detachBodyGuard();
     }
   } catch (e) {
+    const policyRefusal = openAiSidecarCreditRefusal(e);
+    if (policyRefusal) return { text: "", sources: [], error: policyRefusal.message };
     const kind = e instanceof Error && e.name === "TimeoutError" ? "timeout" : "connect_error";
     const callerAborted = abortSignal?.aborted === true
       && linkedSignal.signal.aborted

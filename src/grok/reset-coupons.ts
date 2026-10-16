@@ -230,6 +230,19 @@ function buildGrokHeaders(accessToken: string): Record<string, string> {
 /**
  * Reads available Grok reset tokens for the authenticated xAI account.
  */
+function assertConfirmedCouponStatus(decoded: ReturnType<typeof decodeGrpcWebResponse>): void {
+  const rawStatus = decoded.statusValues[0];
+  // The shared decoder defaults a missing/malformed status to zero. Coupon
+  // availability and an irreversible redemption need affirmative confirmation.
+  if (decoded.framingComplete !== true || rawStatus === undefined
+    || decoded.statusValues.some((value) => !/^\d+$/.test(value)
+      || !Number.isSafeInteger(Number(value)) || value !== rawStatus)) {
+    throw new Error("Grok coupon response has no confirmed gRPC status");
+  }
+  const status = Number(rawStatus);
+  if (status !== 0) throw new GrpcWebError(status, decoded.statusMessage ?? "Unknown gRPC error");
+}
+
 export async function getGrokRemainingResets(options: GetRemainingResetsOptions): Promise<{ tokens: GrokResetCoupon[] }> {
   const fetchImpl = options.fetchFn ?? globalThis.fetch;
   const endpoint = options.endpoint ?? GROK_GET_REMAINING_RESETS_ENDPOINT;
@@ -251,9 +264,7 @@ export async function getGrokRemainingResets(options: GetRemainingResetsOptions)
   const rawBytes = new Uint8Array(await res.arrayBuffer());
   const decoded = decodeGrpcWebResponse(rawBytes);
 
-  if (decoded.status !== 0) {
-    throw new GrpcWebError(decoded.status, decoded.statusMessage ?? "Unknown gRPC error");
-  }
+  assertConfirmedCouponStatus(decoded);
 
   if (decoded.messages.length === 0) {
     return { tokens: [] };
@@ -285,9 +296,7 @@ export async function redeemGrokResetCoupon(options: RedeemResetOptions): Promis
   const rawBytes = new Uint8Array(await res.arrayBuffer());
   const decoded = decodeGrpcWebResponse(rawBytes);
 
-  if (decoded.status !== 0) {
-    throw new GrpcWebError(decoded.status, decoded.statusMessage ?? "Unknown gRPC error");
-  }
+  assertConfirmedCouponStatus(decoded);
 
   return {
     success: true,

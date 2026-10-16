@@ -4,7 +4,7 @@ import { createLocalAttestationChallenge, LOCAL_ATTESTATION_CHALLENGE_HEADER, LO
 import { createLocalAsideSyncCapability, LOCAL_ASIDE_SYNC_CAPABILITY_HEADER, LOCAL_ASIDE_SYNC_CAPABILITY_TTL_MS, LOCAL_ASIDE_SYNC_CAPABILITY_VERSION, LOCAL_ASIDE_SYNC_EXPECTED_PID_HEADER, LOCAL_ASIDE_SYNC_EXPIRES_AT_HEADER, LOCAL_ASIDE_SYNC_METHOD, LOCAL_ASIDE_SYNC_NONCE_HEADER, LOCAL_ASIDE_SYNC_PATH } from "../lib/local-aside-sync-contract";
 import { directLocalHttpFetch } from "../server/direct-local-http";
 import { findLiveProxy, isOpencodexHealthz, probeHostname } from "../server/proxy-liveness";
-import { runtimeRequest, RuntimeApiError, type RuntimeApiDeps } from "./runtime-api";
+import { runtimeRequest, RuntimeApiError, PROXY_NOT_RUNNING_MESSAGE, type RuntimeApiDeps } from "./runtime-api";
 
 /** Aside policy and file writes share the running server's mutation owner. Never fall back locally. */
 export async function refreshAsideProfilesThroughServer(
@@ -27,7 +27,7 @@ export async function refreshAsideProfilesThroughServer(
     const deadline = controller.signal;
     try {
       const live = await (deps.findLiveProxy ?? findLiveProxy)();
-      if (!live) throw new RuntimeApiError("Proxy is not running. Start it with: ocx start", 503, null);
+      if (!live) throw new RuntimeApiError(PROXY_NOT_RUNNING_MESSAGE, 503, null, "proxy_not_running");
       if (live.source !== "runtime" || live.pid === null) {
         throw new RuntimeApiError("Aside profile synchronization requires an attested running proxy", 503, null);
       }

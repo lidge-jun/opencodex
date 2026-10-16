@@ -129,6 +129,26 @@
       ]
     },
     {
+      "path": "codex-prompts.md",
+      "tier": 2,
+      "title": "Codex Prompts",
+      "scope": "Prompt-layer repair, base import previews and bounded text-probe sources.",
+      "documents": [
+        "src/codex/",
+        "src/server/"
+      ]
+    },
+    {
+      "path": "local-messaging.md",
+      "tier": 3,
+      "title": "Local Codex Messaging",
+      "scope": "Command-local metadata discovery, Unix RPC queued submission, peer envelopes, receipts and owned lifecycle bounds.",
+      "documents": [
+        "src/messaging/",
+        "src/cli/"
+      ]
+    },
+    {
       "path": "catalog.md",
       "tier": 2,
       "title": "Model Catalog",
@@ -138,6 +158,26 @@
         "src/routing/",
         "src/server/"
       ]
+    },
+    {
+      "path": "catalog-vendor-context.md",
+      "tier": 2,
+      "title": "Custom-provider context estimates",
+      "scope": "Bundled model-ID window fallback, ambiguity handling, and inferred-capacity provenance.",
+      "documents": [
+        "src/codex/catalog/vendor-context.ts",
+        "src/codex/catalog/model-hints.ts",
+        "src/codex/catalog/parsing.ts",
+        "src/codex/catalog/routed-gather.ts",
+        "src/codex/catalog/effort.ts"
+      ]
+    },
+    {
+      "path": "catalog-effort-clamp.md",
+      "tier": 2,
+      "title": "Effort-clamp observations",
+      "scope": "Persisted effort-clamp observation identity and idempotent sync notices.",
+      "documents": ["src/codex/runtime.ts", "src/codex/catalog/effort.ts"]
     },
     {
       "path": "subagents.md",
@@ -151,15 +191,28 @@
       ]
     },
     {
+      "path": "advisor.md",
+      "tier": 2,
+      "title": "Advisor Sidecar",
+      "scope": "The OpenCodex-owned expert consultation sidecar: synthetic advisor tool, preflight policy, loopback consultation through the routing authority, and the optional-subsystem seam.",
+      "documents": [
+        "src/advisor/",
+        "src/server/responses/advisor-slot.ts",
+        "src/server/responses/advisor-plan-slot.ts",
+        "src/lib/advisor-activation.ts"
+      ]
+    },
+    {
       "path": "transports/byte-accounting.md",
       "tier": 3,
       "title": "Byte Accounting",
-      "scope": "Request-copy and stream-buffer byte accounting shared by parsing, SSE rewriting, the adapters, and the translator budget.",
+      "scope": "Request-copy and stream-buffer byte accounting shared by parsing, SSE rewriting, the adapters, and the translator budget, plus durable spill admission.",
       "documents": [
         "src/adapters/",
         "src/chat/",
         "src/lib/",
-        "src/server/"
+        "src/server/",
+        "src/responses/"
       ]
     },
     {
@@ -312,13 +365,28 @@
       ]
     },
     {
+      "path": "providers/anthropic-key-billing.md",
+      "tier": 4,
+      "title": "Anthropic API-key Billing Recovery",
+      "scope": "Exact billing refusal evidence, immutable physical credential ownership, pacing provenance and bounded pre-output key recovery.",
+      "documents": [
+        "src/providers/anthropic-billing-refusal.ts",
+        "src/providers/anthropic-billing-ownership.ts",
+        "src/providers/anthropic-billing-recovery.ts",
+        "src/providers/request-pacing.ts"
+      ]
+    },
+    {
       "path": "providers/anthropic-account-pool.md",
       "tier": 4,
       "title": "Anthropic Account Pool",
-      "scope": "Anthropic OAuth account pause, model routes, and quota labels.",
+      "scope": "Anthropic OAuth instances (primary and Pool 2), account pause, model routes, quota labels, and pool-bound helpers, quota, reset grants and management surfaces.",
       "documents": [
         "src/oauth/",
-        "src/providers/"
+        "src/providers/",
+        "src/providers/quota/anthropic-account-quota.ts",
+        "src/server/management/anthropic-pool-settings.ts",
+        "src/sidecar/anthropic-binding.ts"
       ]
     },
     {
@@ -418,6 +486,17 @@
       ]
     },
     {
+      "path": "cli-management.md",
+      "tier": 5,
+      "title": "CLI management and discovery",
+      "scope": "Terminal help and capability metadata, management-client output and the generated operating reference.",
+      "documents": [
+        "src/cli/",
+        "scripts/generate-ocx-skill-surface.ts",
+        "skills/ocx/"
+      ]
+    },
+    {
       "path": "gui-and-management-api.md",
       "tier": 5,
       "title": "GUI And Management API",
@@ -443,6 +522,7 @@
         "src/codex/",
         "src/lib/",
         "src/quota/",
+        "src/routing/history/",
         "src/server/",
         "src/usage/"
       ]
@@ -458,6 +538,13 @@
         "src/integrations/",
         "src/lib/"
       ]
+    },
+    {
+      "path": "clients/codex-desktop.md",
+      "tier": 5,
+      "title": "Codex Desktop Compatibility",
+      "scope": "Windows package activation, restart context, and protected compatibility authority persistence.",
+      "documents": ["src/codex/", "src/cli/"]
     },
     {
       "path": "clients/chatgpt-desktop.md",
@@ -483,6 +570,25 @@
       ]
     },
     {
+      "path": "clients/claude-desktop-config-reads.md",
+      "tier": 5,
+      "title": "Claude Desktop Configuration Reads",
+      "scope": "Verified regular-file reads of Claude Desktop config-library metadata, profiles and snapshots.",
+      "documents": [
+        "src/claude/"
+      ]
+    },
+    {
+      "path": "clients/qoder.md",
+      "tier": 5,
+      "title": "Qoder Client Integration",
+      "scope": "Qoder settings.json provider and custom-model ownership, export and loopback placeholder rules.",
+      "documents": [
+        "src/clients/",
+        "src/integrations/"
+      ]
+    },
+    {
       "path": "desktop-shell.md",
       "tier": 6,
       "title": "Desktop shell",
@@ -490,6 +596,32 @@
       "documents": [
         "desktop/",
         "src/server/management/companion-routes.ts"
+      ]
+    },
+    {
+      "path": "desktop-terminal-command.md",
+      "tier": 6,
+      "title": "Desktop-owned terminal command",
+      "scope": "Desktop-owned ocx command on PATH: record and journal, POSIX shim and shell blocks, Windows user Path, private-path ACL policy, and the local Terminal command page.",
+      "documents": [
+        "desktop/src-tauri/src/cli_command.rs",
+        "desktop/src-tauri/src/cli_command_record.rs",
+        "desktop/src-tauri/src/cli_command_posix.rs",
+        "desktop/src-tauri/src/cli_command_windows.rs",
+        "desktop/ui/cli.html",
+        "desktop/ui/cli.js"
+      ]
+    },
+    {
+      "path": "desktop-start-at-login.md",
+      "tier": 6,
+      "title": "Desktop Start at Login",
+      "scope": "macOS tray Start at Login judgment shared with Startup safety, its parity fixture, click rules, and the guarded launch-origin migration.",
+      "documents": [
+        "desktop/src-tauri/src/first_run.rs",
+        "desktop/src-tauri/src/login_registration.rs",
+        "desktop/src-tauri/src/tray_login.rs",
+        "src/service/desktop-startup.ts"
       ]
     },
     {
@@ -503,6 +635,37 @@
         "src/service-manager-probe.ts",
         "src/sidecar/",
         "src/update/"
+      ]
+    },
+    {
+      "path": "ops/service-logging.md",
+      "tier": 6,
+      "title": "Managed Service Logging",
+      "scope": "Service-only console timestamps and bounded copy-truncate log retention.",
+      "documents": ["src/service/logging.ts"]
+    },
+    {
+      "path": "ops/service-health-recovery.md",
+      "tier": 6,
+      "title": "Service Health Recovery",
+      "scope": "Opt-in sentinel that turns a hung but listening managed service proxy into an exit its manager restarts.",
+      "documents": [
+        "src/service/health-sentinel-launch.ts",
+        "src/service/health-sentinel-main.ts",
+        "src/service/health-sentinel-policy.ts",
+        "src/service/health-sentinel-probe.ts",
+        "src/service/health-sentinel-windows.ts"
+      ]
+    },
+    {
+      "path": "ops/update-supervised-recovery.md",
+      "tier": 6,
+      "title": "Update Supervised Recovery",
+      "scope": "Manager-first recovery after a failed post-update service refresh, and the non-zero unsupervised fallback.",
+      "documents": [
+        "src/update/supervised-recovery.mjs",
+        "src/update/job-supervised-restart.ts",
+        "src/update/job.ts"
       ]
     },
     {
@@ -553,9 +716,12 @@
       "path": "remote-link.md",
       "tier": 3,
       "title": "Remote Link",
-      "scope": "SSH machine-link building blocks: OpenSSH argument policy, ssh_config candidates, tunnel lifecycle reducer and the private link store.",
+      "scope": "SSH machine-link building blocks: OpenSSH argument policy, ssh_config candidates, tunnel lifecycle reducer, the private link store, and standalone pairing-grant delivery.",
       "documents": [
-        "src/link/"
+        "src/link/",
+        "src/lib/gui-pair-intent.ts",
+        "src/lib/windows-owner-acl.ts",
+        "src/server/gui-pair-delivery.ts"
       ]
     },
     {

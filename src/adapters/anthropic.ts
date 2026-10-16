@@ -624,9 +624,14 @@ function usageFromAnthropic(usage: unknown): OcxUsage | undefined {
   // canonical inclusive convention (types.ts OcxUsage / devlog 070).
   const inputTokens = input + read + write;
   if (!Number.isFinite(inputTokens)) return undefined;
+  // Thinking is a reported subset of output, not extra billable output or an
+  // estimate from visible summaries. Invalid optional detail leaves totals intact.
+  const thinking = isAnthropicRecord(usage.output_tokens_details) ? usage.output_tokens_details.thinking_tokens : undefined;
+  const reasoningOutputTokens = typeof thinking === "number" && Number.isFinite(thinking) && thinking >= 0 && thinking <= output ? thinking : undefined;
   return {
     inputTokens,
     outputTokens: output,
+    ...(reasoningOutputTokens !== undefined ? { reasoningOutputTokens } : {}),
     ...(hasCache ? {
       cachedInputTokens: read,
       cacheReadInputTokens: read,
@@ -1011,7 +1016,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       // "none" is not the same as absent. Omitting `thinking` lets a default-on model think
       // anyway, and thinking shares the caller's `max_tokens` — which truncates a small-budget
       // request before it can emit its stop sequence (#545). Say "disabled" out loud where the
-      // model both defaults to thinking and accepts being told not to.
+        // model both defaults to thinking and accepts being told not to.
       const effectiveReasoning = parsed.options.reasoning ?? defaultReasoningEffort(provider, parsed.modelId);
       if (effectiveReasoning === "none" && supportsExplicitThinkingDisable(parsed.modelId)) {
         body.thinking = { type: "disabled" };
@@ -1078,7 +1083,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       }
 
       if (rejectsSamplingParameters(parsed.modelId)) {
-        // Opus 4.7+, Sonnet 5+ and Fable 400 on any non-default sampling parameter, with or without
+        // Opus 4.7+, Sonnet 5+, Haiku 5.5+ and Fable 400 on non-default sampling, with or without
         // thinking (anthropic-model-contract.ts).
         delete body.temperature;
         delete body.top_p;
@@ -1362,7 +1367,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
               }
               case "message_stop": {
                 yield* emitDone();
-                break;
+                return;
               }
               case "ping": {
                 // A data-only `{"type":"ping"}` record carries no SSE `event:` line, so the

@@ -1,5 +1,7 @@
 import type { CodexAccountMode, OcxProviderConfig } from "../types";
+import { COST_VENDOR_PRIORITY, getModelMetadata, getModelMetadataCaseInsensitive } from "../generated/model-metadata";
 import { cloneFastWire } from "./fastwire";
+import { isAzureModelMetadataDestination, publishedAzureModelMetadata, type AzureModelMetadata } from "./azure-model-metadata";
 import { resolveModelPolicy } from "./resolved-model-policy";
 import {
   PROVIDER_REGISTRY,
@@ -245,6 +247,8 @@ export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderCon
     // Preserve the registry auth kind verbatim (including "local") so fail-closed gates that
     // distinguish local runtimes from API-key providers keep working after the seed round-trip.
     authMode: entry.authKind,
+    ...(entry.id === "anthropic2" && entry.authKind === "oauth" && entry.oauthFamily === "anthropic"
+      ? { anthropicOAuthInstance: "anthropic2" as const } : {}),
     ...(entry.codexAccountMode ? { codexAccountMode: entry.codexAccountMode } : {}),
     ...(entry.keyOptional !== undefined ? { keyOptional: entry.keyOptional } : {}),
     ...(entry.freeTier !== undefined ? { freeTier: entry.freeTier } : {}),
@@ -647,6 +651,25 @@ export function deriveJawcodeAliases(): Record<string, string> {
 export function shouldCaseFoldMetadataModelId(providerId: string): boolean {
   const entry = PROVIDER_REGISTRY.find(row => row.id === providerId);
   return entry?.metadataModelIdNormalize === "case-insensitive";
+}
+
+const AZURE_VENDOR_METADATA_PRIORITY = [
+  "azure-openai",
+  ...COST_VENDOR_PRIORITY.filter(provider => provider !== "azure-openai"),
+];
+
+/**
+ * Fill missing Azure model metadata by destination and known model id. Custom provider
+ * names miss PROVIDER_ALIASES; arbitrary deployment aliases still need explicit metadata.
+ */
+export function azureVendorModelMetadata(baseUrl: string | undefined, modelId: string, metadataConfigDir?: string): AzureModelMetadata | undefined {
+  if (!isAzureModelMetadataDestination(baseUrl)) return undefined;
+  const published = publishedAzureModelMetadata(modelId, metadataConfigDir);
+  for (const provider of AZURE_VENDOR_METADATA_PRIORITY) {
+    const meta = getModelMetadata(provider, modelId) ?? getModelMetadataCaseInsensitive(provider, modelId);
+    if (meta) return { ...meta, ...published };
+  }
+  return published;
 }
 
 function entryToPreset(entry: ProviderRegistryEntry): DerivedProviderPreset {

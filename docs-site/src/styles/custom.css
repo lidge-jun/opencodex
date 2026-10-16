@@ -639,9 +639,13 @@ main:has(.lp) .content-panel:first-child { padding-block: 0; }
   justify-content: center;
   min-height: 0;
   width: 100%;
+  aspect-ratio: 900 / 802;
+  max-width: 58rem;
+  flex: none;
 }
 .lp-scrub-canvas {
   display: none;
+  aspect-ratio: 900 / 802;
   max-width: min(58rem, 100%);
   width: 100%;
   height: auto;
@@ -650,6 +654,7 @@ main:has(.lp) .content-panel:first-child { padding-block: 0; }
 }
 .lp-scrub-poster {
   display: block;
+  aspect-ratio: 900 / 802;
   max-width: min(58rem, 100%);
   width: 100%;
   height: auto;
@@ -802,6 +807,63 @@ main:has(.lp) .content-panel:first-child { padding-block: 0; }
   text-decoration: none;
 }
 .lp-next-col a:hover { text-decoration: underline; text-underline-offset: 3px; }
+
+.lp-github-row { display: flex; justify-content: center; padding-bottom: 2rem; }
+.lp-github-cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.625rem;
+  min-height: 44px;
+  padding: 0.625rem 1rem;
+  max-width: 100%;
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: var(--ocx-radius-pill);
+  background: var(--ocx-surface);
+  color: var(--sl-color-white);
+  font-size: 1rem;
+  text-decoration: none;
+}
+.lp-github-cta svg { flex: none; }
+.lp-github-cta > span:first-of-type { min-width: 0; }
+.lp-github-cta [data-gh-stars] { min-width: 6ch; text-align: end; font-variant-numeric: tabular-nums; }
+.lp-github-cta:hover { border-color: var(--sl-color-gray-3); }
+.lp-github-cta:focus-visible { outline: 2px solid var(--sl-color-accent); outline-offset: 3px; }
+
+/* Mobile text and links stay readable within each sheet. Desktop keeps its
+   existing composition; commands wrap instead of hiding overflow. */
+@media (max-width: 48rem) {
+  .lp-hero-copy h1 { font-size: clamp(1.875rem, 5.5vw, 2.5rem); overflow-wrap: anywhere; }
+  .lp-kline { font-size: clamp(2rem, 5vw, 2.5rem); }
+  .lp .lp-kline { animation: none; clip-path: none; }
+  .lp-sub { font-size: 1rem; }
+  .lp .lp-cell p, .lp .lp-scrub-caption, .lp .lp-disclaimer,
+  .lp .lp-dl-meta, .lp .lp-dl-note, .lp .lp-dl-foot, .lp .lp-dl-reco,
+  .lp .lp-next-col h3, .lp .lp-next-col a, .lp .lp-dl-alt, .lp .lp-dl-btn { font-size: 1rem; }
+  .lp-announce, .lp-chip-more a, .lp-inline-link, .lp-dl-alt, .lp-dl-foot a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    min-width: 44px;
+  }
+  .lp-btn-primary, .lp-btn-ghost, .lp-dl-btn { min-height: 44px; }
+  .lp-terminal pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.875rem; line-height: 1.6; }
+  .lp-terminal code { white-space: inherit; }
+  .lp-note { display: block; white-space: normal; padding-left: 2ch; }
+  .lp-terminal code + code { display: inline-block; margin-top: 0.5rem; }
+  .lp-dl-foot code { white-space: normal; overflow-wrap: anywhere; max-width: 100%; }
+  .lp-next-col a { display: flex; align-items: center; min-height: 44px; padding-block: 0.25rem; }
+  .lp-next-col li + li { margin-top: 0.25rem; }
+  /* Remove the clipped heading embedded above the picker menus. */
+  .lp-cell-picker { --picker-crop: 3rem; }
+  .lp-cell-picker img {
+    flex: none;
+    height: auto;
+    max-height: none;
+    margin-top: calc(-1 * var(--picker-crop));
+    clip-path: inset(var(--picker-crop) 0 0 round var(--ocx-radius-sm));
+  }
+}
 
 .lp-disclaimer {
   margin: 0;
@@ -1118,6 +1180,9 @@ footer.sl-flex .meta { color: var(--sl-color-gray-4); }
       }
       @keyframes ocx-field-push { to { transform: scale(1.08); } }
       /* scrub canvas fills the stage height without overflowing the sheet */
+      .lp-scene-inner.lp-scrub .lp-scrub-stage {
+        width: min(100%, calc((100dvh - var(--sl-nav-height) - 12rem) * 900 / 802));
+      }
       .lp-scene-inner.lp-scrub .lp-scrub-canvas,
       .lp-scene-inner.lp-scrub .lp-scrub-poster {
         max-height: calc(100dvh - var(--sl-nav-height) - 12rem);

@@ -4,9 +4,12 @@ import { getMainAccountExternalUsageWarning } from "../../codex/main-account-ext
 import { getObservedMainQuotaIdentityKey } from "../../codex/main-account-cache";
 import { compactionRoutingSchema, memoryModelsSchema } from "../../config/schema/leaf-validators";
 import { compactionRecoverySchema } from "../../config/schema/compaction-recovery";
+import { anthropicSidecarPatchError } from "../../config/schema/anthropic-account-pool";
+import { isAnthropicInstanceId } from "../../providers/anthropic-instance-id";
 import { captureConfigTopLevelRollback } from "../../config/rebase-provenance";
 import type { IntegrationClientId } from "../../integrations/registry";
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { readFileSync } from "node:fs";
 import type { CatalogModel } from "../../codex/catalog";
 import { catalogModelSlug, invalidateCodexModelsCache, nativeContextLimits, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
@@ -85,7 +88,6 @@ import { getProviderRegistryEntry } from "../../providers/registry";
 import { VISION_REASONING_EFFORTS, isVisionReasoningEffort } from "../../reasoning-effort";
 import { normalizeVisionReasoningForModel } from "../../vision/reasoning";
 import {
-  findAnthropicVisionProvider,
   isValidVisionTimeoutMs,
   MAX_VISION_TIMEOUT_MS,
   MIN_VISION_TIMEOUT_MS,
@@ -105,6 +107,7 @@ import {
   webSearchModelIsRejected,
   webSearchModelOptionsFrom,
   webSearchModelRejection,
+  sidecarAnthropicPoolOptions, sidecarOptionsAuth, sidecarSettingsAfterPatch,
 } from "./web-search-sidecar-options";
 import { validateXaiSearchOptions } from "../../web-search/xai-executor";
 import { getDebugLogEntries } from "../../lib/debug-log-buffer";
@@ -150,7 +153,9 @@ async function sidecarVisionResponseSettings(config: OcxConfig): Promise<{
   const vs = config.visionSidecar ?? {};
   // Match the runtime's one selected Anthropic executor for both backend fallback
   // and catalog reachability; resolving it once prevents the two projections drifting.
-  const anthropicSidecar = findAnthropicVisionProvider(config);
+  const auth = sidecarOptionsAuth(config, vs.anthropicInstance);
+  const anthropicSidecar = auth.isAnthropicAuth && auth.anthropicProviderName && auth.anthropicProvider
+    ? { providerName: auth.anthropicProviderName, provider: auth.anthropicProvider, config } : undefined;
   // The routed backend reports its own namespaced model verbatim: it is the
   // dispatched value, and collapsing it through the legacy resolver would
   // display a describer the runtime is not using (roadmap 190).
@@ -178,6 +183,17 @@ interface ClientIntegrationSyncOutcome {
   readonly profileId?: number;
 }
 
+/** Only the Desktop write's own applied markers may change during a background projection. */
+function clientProjectionConfig(config: OcxConfig): OcxConfig {
+  const snapshot = structuredClone(config);
+  const profile = snapshot.claudeCode?.desktopProfile;
+  if (profile) {
+    delete profile.appliedFingerprint;
+    delete profile.appliedAt;
+  }
+  return snapshot;
+}
+
 /**
  * Re-inject native clients that are switched ON and every file integration whose
  * OpenCodex ownership record is the operator's durable opt-in.
@@ -201,17 +217,41 @@ export async function syncEnabledClientIntegrations(
   config: OcxConfig,
   deps: Pick<ManagementContext["deps"],
     "fetchAllModels" | "refreshOwnedCatalogIntegrations" | "writeDesktop3pConfig"> = {},
+  options: { unattended?: { isCurrent: () => boolean } } = {},
 ): Promise<ClientIntegrationSyncOutcome[]> {
   // A sibling instance passes its OWN port here; the Grok fence and the Desktop gateway profile
   // stay on the live owner's (`src/codex/sibling-start.ts`).
   if (port === undefined || siblingOfLivePort() !== null) return [];
-  const { claudeDesktopIntegrationEnabled, grokIntegrationEnabled } = await import("../../codex/desired-state");
+  const projectionConfig = options.unattended ? clientProjectionConfig(config) : undefined;
+  const { claudeDesktopIntegrationEnabled, grokIntegrationEnabled, localClientSyncAllowed } = await import("../../codex/desired-state");
   const out: ClientIntegrationSyncOutcome[] = [];
+  const unattended = options.unattended;
+  const admit = () => {
+    if (!unattended!.isCurrent()) return false;
+    const fresh = loadConfig();
+    return localClientSyncAllowed(fresh) && isDeepStrictEqual(clientProjectionConfig(fresh), projectionConfig);
+  };
+  const stale = () => unattended !== undefined && !admit();
+  if (stale()) return out;
+  const grok = unattended ? await import("../../grok/inject") : undefined;
 
-  if (grokIntegrationEnabled(config)) {
+  if (grokIntegrationEnabled(config) && (!grok || grok.grokManagedBlockPresent())) {
     try {
       const { syncGrokConfig } = await import("../../grok/sync");
-      const r = await syncGrokConfig(port, config, config.hostname ? { hostname: config.hostname } : {});
+      if (stale()) return out;
+      const grokDeps = grok ? {
+        fetchAllModels: deps.fetchAllModels ?? (await import("../management-api")).fetchAllModels,
+        injectGrokConfig: ((...args: Parameters<typeof grok.injectGrokConfig>) =>
+          admit() && grokIntegrationEnabled(loadConfig()) && grok.grokManagedBlockPresent()
+            ? grok.injectGrokConfig(...args)
+            : { ok: true, changed: false, message: "Grok refresh skipped" }),
+      } : undefined;
+      const r = unattended
+        ? await syncGrokConfig(port, config, {
+          ...config.hostname ? { hostname: config.hostname } : {},
+          refreshOnly: { admit },
+        }, grokDeps)
+        : await syncGrokConfig(port, config, config.hostname ? { hostname: config.hostname } : {}, grokDeps);
       out.push(r.ok
         ? { client: "grok", ok: true, changed: r.changed === true }
         : { client: "grok", ok: false, reason: r.message });
@@ -220,9 +260,11 @@ export async function syncEnabledClientIntegrations(
     }
   }
 
+  if (stale()) return out;
   const { observeClaudeDesktopMode, resolveClaudeDesktopMode } = await import("../../claude/desktop-first-party");
   // A first-party Desktop must never get a gateway profile written and selected by a sync.
-  if (claudeDesktopIntegrationEnabled(config) && resolveClaudeDesktopMode(config, observeClaudeDesktopMode(config)) !== "first-party") {
+  if (claudeDesktopIntegrationEnabled(config) && resolveClaudeDesktopMode(config, observeClaudeDesktopMode(config)) !== "first-party"
+    && (!unattended || !!config.claudeCode?.desktopProfile?.appliedFingerprint)) {
     try {
       const { writeDesktop3pConfig } = await import("../../claude/desktop-3p");
       const { desktopVisibleNativeSlugs, filterCatalogVisibleModels } = await import("../../codex/catalog");
@@ -236,12 +278,15 @@ export async function syncEnabledClientIntegrations(
         const latest = loadConfig();
         // Discovery awaited: the mode may have changed meanwhile. Re-resolve on the fresh read,
         // immediately before the writer, so a first-party switch during fetchAllModels still wins.
-        if (claudeDesktopIntegrationEnabled(latest) && resolveClaudeDesktopMode(latest, observeClaudeDesktopMode(latest)) !== "first-party") {
+        if (stale()) return;
+        if (claudeDesktopIntegrationEnabled(latest) && resolveClaudeDesktopMode(latest, observeClaudeDesktopMode(latest)) !== "first-party"
+          && (!unattended || !!latest.claudeCode?.desktopProfile?.appliedFingerprint)) {
           const routed = filterCatalogVisibleModels(models, latest)
             .map(model => ({ provider: model.provider, id: model.id, contextWindow: model.contextWindow }));
           const writtenProfile = latest.claudeCode?.desktopProfile;
           const markerBaseline = captureDesktopAppliedMarker(writtenProfile);
-          const r = (deps.writeDesktop3pConfig ?? writeDesktop3pConfig)(
+          // Keep the attended writer's argument count unchanged, including its lock test seam.
+          const writeArgs: Parameters<typeof writeDesktop3pConfig> = [
             port,
             [...desktopVisibleNativeSlugs(latest)],
             routed,
@@ -249,7 +294,13 @@ export async function syncEnabledClientIntegrations(
             "static",
             writtenProfile,
             nativeContextLimits(latest),
-          );
+          ];
+          if (unattended) {
+            writeArgs[7] = undefined;
+            writeArgs[8] = { appliedFingerprint: writtenProfile!.appliedFingerprint!, admit };
+          }
+          const r = (deps.writeDesktop3pConfig ?? writeDesktop3pConfig)(...writeArgs);
+          if (unattended && r.reason === "desktop_refresh_only_skipped") return;
           if (!r.written || !r.fingerprint) {
             out.push({ client: "claude-desktop", ok: false, reason: r.reason ?? "Claude Desktop write failed" });
           } else {
@@ -267,6 +318,7 @@ export async function syncEnabledClientIntegrations(
     }
   }
 
+  if (stale()) return out;
   const { refreshOwnedCatalogIntegrations } = await import("../../integrations/catalog-refresh");
   const refreshOwned = deps.refreshOwnedCatalogIntegrations ?? refreshOwnedCatalogIntegrations;
   out.push(...await refreshOwned({
@@ -276,7 +328,10 @@ export async function syncEnabledClientIntegrations(
     },
     config,
     port,
-  }, ["mcode", "pi", "aside", "raycast", "omo", "cline", "droid", "opencode", "kilo"]));
+  }, unattended
+    ? ["mcode", "pi", "aside", "raycast", "omo", "commandcode", "droid", "opencode", "kilo", "qoder"]
+    : ["mcode", "pi", "aside", "raycast", "omo", "cline", "commandcode", "droid", "opencode", "kilo", "qoder"],
+  ...unattended ? [{ refreshOnly: true, admit }] as const : []));
 
   return out;
 }
@@ -290,6 +345,8 @@ function publicVisionSidecarSettings(
     enabled: vs.enabled !== false,
     model: vision.model,
     backend: vs.backend,
+    ...(vs.anthropicInstance ? { anthropicInstance: vs.anthropicInstance } : {}),
+    anthropicPool: sidecarAnthropicPoolOptions(config, { ...vs, backend: vs.backend ?? (vision.models.find(row => row.value === vision.model)?.backend) }),
     reasoning: vision.reasoning,
     maxDescriptionsPerTurn: resolveMaxDescriptionsPerTurn(vs.maxDescriptionsPerTurn),
     timeoutMs: resolveVisionTimeoutMs(vs.timeoutMs),
@@ -882,6 +939,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
         enabled: ws.enabled !== false,
         model: ws.model ?? "gpt-5.6-luna",
         backend: ws.backend,
+        ...(ws.anthropicInstance ? { anthropicInstance: ws.anthropicInstance } : {}),
+        anthropicPool: sidecarAnthropicPoolOptions(config, ws),
         streamRoutedModelOutput: ws.streamRoutedModelOutput === true,
         ...(ws.xSearch ? { xSearch: ws.xSearch } : {}),
       },
@@ -902,10 +961,11 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     if (raw.webSearch !== undefined && !isPlainRecord(raw.webSearch)) return jsonResponse({ error: "webSearch must be an object" }, 400);
     if (raw.vision !== undefined && !isPlainRecord(raw.vision)) return jsonResponse({ error: "vision must be an object" }, 400);
     const body = raw as {
-      webSearch?: { enabled?: unknown; model?: unknown; backend?: unknown; reasoning?: unknown; streamRoutedModelOutput?: unknown; exaApiKey?: unknown; xSearch?: unknown };
+      webSearch?: { enabled?: unknown; model?: unknown; backend?: unknown; anthropicInstance?: unknown; reasoning?: unknown; streamRoutedModelOutput?: unknown; exaApiKey?: unknown; xSearch?: unknown };
       vision?: {
         model?: unknown;
         backend?: unknown;
+        anthropicInstance?: unknown;
         reasoning?: unknown;
         maxDescriptionsPerTurn?: unknown;
         enabled?: unknown;
@@ -913,6 +973,11 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       };
     };
     const WEB_SEARCH_BACKENDS_UNION = ["openai", "anthropic", "xai", "gemini", "exa"] as const;
+    const instanceError = anthropicSidecarPatchError(config, {
+      ...(body.webSearch ? { webSearchSidecar: body.webSearch } : {}),
+      ...(body.vision ? { visionSidecar: body.vision } : {}),
+    });
+    if (instanceError) return jsonResponse({ error: instanceError }, 400);
     if (body.webSearch && body.webSearch.backend !== undefined && body.webSearch.backend !== null
       && !WEB_SEARCH_BACKENDS_UNION.includes(body.webSearch.backend as never)) {
       return jsonResponse({ error: "webSearch.backend must be openai, anthropic, xai, gemini, exa, or null" }, 400);
@@ -956,7 +1021,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     // rejection body, so a 400 cannot cost two provider fetches.
     if (body.vision && typeof body.vision.model === "string" && body.vision.model !== "") {
       const requested = body.vision.model;
-      const candidates = await visionCandidateRows(config);
+      const candidates = await visionCandidateRows({ ...config, visionSidecar: sidecarSettingsAfterPatch(config.visionSidecar, body.vision) });
       const hint = body.vision.backend === "anthropic" || body.vision.backend === "openai"
         || body.vision.backend === "routed"
         ? body.vision.backend
@@ -994,7 +1059,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     // only case that owes a config.toml rewrite.
     const webSearchEnabledBefore = config.webSearchSidecar?.enabled !== false;
     if (body.webSearch) {
-      const pairTouched = body.webSearch.model !== undefined || body.webSearch.backend !== undefined;
+      const pairTouched = body.webSearch.model !== undefined || body.webSearch.backend !== undefined || body.webSearch.anthropicInstance !== undefined;
       // Validate against the backend the caller SUBMITTED, across the whole
       // union — not just openai/anthropic (#2457). The union check above has
       // already refused unknown literals, so a surviving string is a member;
@@ -1013,12 +1078,14 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
         ? body.webSearch.model || undefined
         : config.webSearchSidecar?.model;
       if (pairTouched && effectiveModel) {
-        const candidates = await webSearchCandidateRows(config);
+        const candidates = await webSearchCandidateRows({ ...config, webSearchSidecar: sidecarSettingsAfterPatch(config.webSearchSidecar, body.webSearch) });
         if (webSearchModelIsRejected(effectiveBackend, effectiveModel, candidates)) {
           return jsonResponse(webSearchModelRejection("webSearch.model", effectiveBackend, effectiveModel, candidates), 400);
         }
       }
       const webSearchCandidate = { ...config.webSearchSidecar };
+      if (body.webSearch.anthropicInstance === null) delete webSearchCandidate.anthropicInstance;
+      else if (isAnthropicInstanceId(body.webSearch.anthropicInstance)) webSearchCandidate.anthropicInstance = body.webSearch.anthropicInstance;
       if (typeof body.webSearch.model === "string") {
         if (body.webSearch.model === "") delete webSearchCandidate.model;
         else webSearchCandidate.model = body.webSearch.model;
@@ -1098,6 +1165,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     }
     if (body.vision) {
       config.visionSidecar = { ...config.visionSidecar };
+      if (body.vision.anthropicInstance === null) delete config.visionSidecar.anthropicInstance;
+      else if (isAnthropicInstanceId(body.vision.anthropicInstance)) config.visionSidecar.anthropicInstance = body.vision.anthropicInstance;
       if (typeof body.vision.model === "string") {
         if (body.vision.model === "") delete config.visionSidecar.model;
         else config.visionSidecar.model = body.vision.model;
@@ -1143,6 +1212,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
         enabled: ws.enabled !== false,
         model: ws.model ?? "gpt-5.6-luna",
         backend: ws.backend,
+        ...(ws.anthropicInstance ? { anthropicInstance: ws.anthropicInstance } : {}),
+        anthropicPool: sidecarAnthropicPoolOptions(config, ws),
         streamRoutedModelOutput: ws.streamRoutedModelOutput === true,
         ...(ws.xSearch ? { xSearch: ws.xSearch } : {}),
       },

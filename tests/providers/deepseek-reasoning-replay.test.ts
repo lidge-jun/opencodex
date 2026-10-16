@@ -6,8 +6,13 @@
  * flagged `preserveResponsesReasoningContent` now keep valid replay content while
  * still stripping proxy-minted `ocxr1` envelopes no upstream can decrypt.
  */
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { createResponsesPassthroughAdapter as createResponsesPassthroughAdapterProduction, sanitizeReasoningInputContent } from "../../src/adapters/openai-responses";
+import {
+  notePlaintextReasoningDropped,
+  plaintextReasoningDroppedNotice,
+  resetPlaintextReasoningNoticesForTests,
+} from "../../src/adapters/openai-responses/plaintext-reasoning-notice";
 import { enrichProviderFromRegistry, providerConfigSeed } from "../../src/providers/derive";
 import { getProviderRegistryEntry } from "../../src/providers/registry";
 import { OCX_REASONING_PREFIX } from "../../src/responses/reasoning-envelope";
@@ -268,5 +273,78 @@ describe("DeepSeek Responses replay keeps reasoning on the wire", () => {
     const body = buildBody(provider);
     const item = (body.input as Record<string, unknown>[])[0]!;
     expect(item.content).toEqual([]);
+  });
+});
+
+// #6675: the default blanking stays, but a custom Responses provider is told once how to opt out.
+describe("dropped plaintext reasoning notice", () => {
+  afterEach(() => resetPlaintextReasoningNoticesForTests());
+  const customVllm = (): OcxProviderConfig => ({ adapter: "openai-responses", baseUrl: "http://gpu-box.local:8000/v1", apiKey: "k" } as OcxProviderConfig);
+  const buildBody = (provider: OcxProviderConfig): Record<string, unknown> => {
+    const built = createResponsesPassthroughAdapter(provider).buildRequest({
+      modelId: "kimi-k3",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: { model: "kimi-k3", input: [reasoningItem()] },
+    } as Parameters<ReturnType<typeof createResponsesPassthroughAdapter>["buildRequest"]>[0], { headers: new Headers() });
+    return JSON.parse(String(built.body)) as Record<string, unknown>;
+  };
+
+  test("the sanitizer reports blanking of nonempty plaintext only", () => {
+    let calls = 0;
+    const onPlaintextReasoningBlanked = () => { calls += 1; };
+    sanitizeReasoningInputContent({ model: "m", input: [reasoningItem(), reasoningItem({ id: "rs_2" })] }, { onPlaintextReasoningBlanked });
+    expect(calls).toBe(1);
+    sanitizeReasoningInputContent({ model: "m", input: [reasoningItem()] }, { preserveRawReasoningContent: true, onPlaintextReasoningBlanked });
+    sanitizeReasoningInputContent({ model: "m", input: [reasoningItem({ content: [] })] }, { onPlaintextReasoningBlanked });
+    sanitizeReasoningInputContent({ model: "m", input: [reasoningItem({ content: [{ type: "reasoning_text", text: "" }] })] }, { onPlaintextReasoningBlanked });
+    expect(calls).toBe(1);
+  });
+
+  test("a custom destination is warned once, with no request content", () => {
+    const messages: string[] = [];
+    notePlaintextReasoningDropped(customVllm(), message => messages.push(message));
+    notePlaintextReasoningDropped(customVllm(), message => messages.push(message));
+    expect(messages).toEqual([plaintextReasoningDroppedNotice("gpu-box.local:8000")]);
+    expect(messages[0]).toContain("preserveResponsesReasoningContent");
+    expect(messages[0]).not.toContain("think step by step");
+  });
+
+  test("registry presets and OpenAI-operated destinations stay silent", () => {
+    const messages: string[] = [];
+    const warn = (message: string) => messages.push(message);
+    notePlaintextReasoningDropped({ ...providerConfigSeed(getProviderRegistryEntry("openai-apikey")!), apiKey: "sk-test" }, warn);
+    notePlaintextReasoningDropped({ ...providerConfigSeed(getProviderRegistryEntry("opengateway")!), adapter: "openai-responses", apiKey: "k" }, warn);
+    notePlaintextReasoningDropped({ adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" } as OcxProviderConfig, warn);
+    notePlaintextReasoningDropped({ ...customVllm(), authMode: "oauth" } as OcxProviderConfig, warn);
+    notePlaintextReasoningDropped({ ...customVllm(), adapter: "openai-chat" } as OcxProviderConfig, warn);
+    // Hand-configured openai-responses rows pointing at Azure's per-resource hosts.
+    for (const baseUrl of [
+      "https://contoso.openai.azure.com/openai/v1",
+      "https://contoso.services.ai.azure.com/openai/v1",
+      "https://contoso.cognitiveservices.azure.com/openai/v1",
+    ]) notePlaintextReasoningDropped({ ...customVllm(), baseUrl } as OcxProviderConfig, warn);
+    expect(messages).toEqual([]);
+  });
+
+  test("a lookalike host outside Azure is still treated as custom", () => {
+    const messages: string[] = [];
+    notePlaintextReasoningDropped({ ...customVllm(), baseUrl: "https://openai.azure.com.example.net/v1" } as OcxProviderConfig, message => messages.push(message));
+    expect(messages).toHaveLength(1);
+  });
+
+  test("the passthrough serializer still blanks a custom provider's reasoning and emits the notice", () => {
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const body = buildBody(customVllm());
+      expect((body.input as Record<string, unknown>[])[0]!.content).toEqual([]);
+      expect(warnSpy.mock.calls.map(call => String(call[0]))).toEqual([plaintextReasoningDroppedNotice("gpu-box.local:8000")]);
+      const preserved = buildBody({ ...customVllm(), baseUrl: "http://other-box.local/v1", preserveResponsesReasoningContent: true });
+      expect((preserved.input as Record<string, unknown>[])[0]!.content).toEqual([{ type: "reasoning_text", text: "think step by step" }]);
+      expect(warnSpy.mock.calls).toHaveLength(1);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });

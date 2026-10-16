@@ -111,7 +111,7 @@ ocx connect rotate --admin-token-stdin
 
 輪替期間，舊金鑰與新金鑰會在同一個 `apiKeyId` 下最多同時有效十分鐘。舊金鑰備份到 `service-api-token.prev`，新金鑰以原子方式安裝，透過 `/v1/catalog` 驗證後再提交。若提交結果不確定，請使用暫時權限重新執行命令；驗證兩個候選金鑰前不要刪除任何檔案。
 
-`ocx disconnect` 即使 hub 離線也能還原本機狀態，但不會撤銷 hub 金鑰。中斷後，唯一的撤銷入口是 hub 的 **Integrations → API Keys**。`ocx connect revoke --admin-token-stdin` 只能在仍連線時使用。
+`ocx disconnect` 即使 hub 離線也能還原本機狀態，但不會撤銷 hub 金鑰。中斷後，唯一的撤銷入口是 hub 的 **連線 → API 金鑰**。`ocx connect revoke --admin-token-stdin` 只能在仍連線時使用。
 
 ## Docker、回復與疑難排解
 

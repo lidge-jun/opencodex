@@ -165,6 +165,9 @@
 }
 
 .integration-restore-dialog .integration-path { margin: 10px 0; }
+/* A missing-store remedy names a path that may have no break opportunity (a long Windows path).
+   The notice text is a flex child, so it needs min-width: 0 before it can wrap. */
+.integration-client-page .notice > span { min-width: 0; overflow-wrap: anywhere; }
 
 /* Consequence facts are read in a fixed order; spacing separates the four
    questions without turning them into decorative cards. */
@@ -175,7 +178,7 @@
 .integration-plan h4, .integration-plan h5 { margin: 0 0 8px; }
 .integration-plan-group + .integration-plan-group { margin-top: 14px; }
 .integration-plan-details { display: flex; flex-direction: column; gap: 8px; }
-.integration-plan-details p { margin: 0; }
+.integration-plan-details p { margin: 0; overflow-wrap: anywhere; }
 .integration-plan-changes { margin: 0; padding-inline-start: 20px; }
 .integration-plan-changes li { margin: 4px 0; }
 .integration-plan-changes code { font-family: var(--font-code); overflow-wrap: anywhere; }

@@ -13,13 +13,14 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { quarantineFinalEperm, WRAPPED_TEST_ROOT_NAME, type LockedTempDiagnostic } from "./test-temp-lock";
 
 export const TEST_TEMP_OWNER_FILE = ".opencodex-test-owner.json";
 export const TEST_TEMP_RECOVERY_AGE_MS = 48 * 60 * 60 * 1000;
 
 const TEST_TEMP_OWNER_VERSION = 1;
 const TEST_TEMP_OWNER_KIND = "opencodex-test-root";
-const WRAPPED_TEST_ROOT = /^opencodex-test-[A-Za-z0-9]{6}$/;
+const WRAPPED_TEST_ROOT = WRAPPED_TEST_ROOT_NAME;
 const TRANSIENT_REMOVE_CODES = new Set(["EPERM", "EBUSY", "ENOTEMPTY"]);
 const DEFAULT_MAX_CANDIDATES = 10_000;
 const DEFAULT_MAX_TREE_ENTRIES = 250_000;
@@ -56,6 +57,9 @@ type RemoveTreeOptions = Readonly<{
   delays?: readonly number[];
   remove?: (path: string) => void;
   sleep?: (milliseconds: number) => void;
+  /** Test seam for the final-EPERM quarantine. Production omits it. */
+  lockDiagnostic?: LockedTempDiagnostic;
+  lockEnv?: Record<string, string | undefined>;
 }>;
 
 type RecoveryOptions = Readonly<{
@@ -195,8 +199,42 @@ export function removeTestTempTree(path: string, options: RemoveTreeOptions = {}
       remove(path);
       return;
     } catch (error) {
-      if (!TRANSIENT_REMOVE_CODES.has(errorCode(error)) || attempt === delays.length) throw error;
+      const transient = TRANSIENT_REMOVE_CODES.has(errorCode(error));
+      const finalAttempt = !transient || attempt === delays.length;
+      // The budget is not raised. A final Windows EPERM may be moved aside inside the
+      // contained run temp; every other terminal failure, including a live child, still throws.
+      if (finalAttempt && quarantineFinalEperm(path, error, options.lockDiagnostic, options.lockEnv)) return;
+      if (!transient || attempt === delays.length) throw error;
       sleep(delays[attempt]!);
+    }
+  }
+}
+
+/**
+ * The same policy, but the waits yield to the event loop.
+ *
+ * The synchronous loop is only correct when the handle holder is another process. When the
+ * holder is async work in THIS process -- an un-awaited quota prime holding a claim database
+ * across an icacls child or a fetch -- `Bun.sleepSync` stops the loop that work needs to reach
+ * its `finally`, so every retry fails until the budget is gone. Awaiting lets the owner finish.
+ */
+export async function removeTestTempTreeAsync(
+  path: string,
+  options: Omit<RemoveTreeOptions, "sleep"> & { sleep?: (milliseconds: number) => Promise<void> } = {},
+): Promise<void> {
+  const delays = options.delays ?? removeRetrySchedule(options.budgetMs);
+  const remove = options.remove ?? (target => rmSync(target, { recursive: true, force: true }));
+  const sleep = options.sleep ?? (milliseconds => Bun.sleep(milliseconds));
+  for (let attempt = 0; attempt <= delays.length; attempt += 1) {
+    try {
+      remove(path);
+      return;
+    } catch (error) {
+      const transient = TRANSIENT_REMOVE_CODES.has(errorCode(error));
+      const finalAttempt = !transient || attempt === delays.length;
+      if (finalAttempt && quarantineFinalEperm(path, error, options.lockDiagnostic, options.lockEnv)) return;
+      if (finalAttempt) throw error;
+      await sleep(delays[attempt]!);
     }
   }
 }

@@ -7,7 +7,7 @@
  */
 export type OAuthTosRiskLevel = "high" | "elevated";
 
-const HIGH_RISK = new Set(["anthropic", "google-antigravity", "meta-muse"]);
+const HIGH_RISK = new Set(["anthropic", "anthropic2", "google-antigravity", "meta-muse"]);
 const ELEVATED_RISK = new Set(["github-copilot", "cursor", "zed"]);
 
 export function oauthTosRisk(providerId: string): OAuthTosRiskLevel | null {
@@ -62,7 +62,7 @@ export type OAuthTosCopyKeys = {
 
 export function oauthTosCopyKeys(providerId: string, level: OAuthTosRiskLevel): OAuthTosCopyKeys {
   const id = providerId.trim().toLowerCase();
-  if (id === "anthropic") {
+  if (id === "anthropic" || id === "anthropic2") {
     return {
       title: "oauthTos.anthropicTitle",
       body: "oauthTos.anthropicBody",

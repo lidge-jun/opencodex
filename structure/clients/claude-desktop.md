@@ -1,5 +1,6 @@
 # Claude Desktop Integration
 
+The separate [CLI tier-default apply](../gui-and-management-api.md) writes the shared Claude Code user settings through `src/claude/model-default-settings.ts`. It pairs selected aliases with labels derived by `claudeTierDisplayName` in `src/claude/context-windows.ts`; preview includes the label edits, with an empty replacement indicating removal. Existing labels are managed only when they exactly match the generated name for their current alias; all other labels remain user-owned, including empty or non-string values. A matching generated label is removed only when its explicitly selected tier is replaced by a non-alias. An unset tier retains both its settings model ID and display label. Identical manually entered labels cannot be distinguished from generated ones. Code processes started by other applications can inherit those explicitly applied defaults; Desktop family profile assignments are not edited by this operation. `tests/claude-integration/claude-model-default-labels.test.ts` covers this ownership and preview/apply contract.
 Native result continuations and function-result injection follow [the mode-specific result and control contract](../transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
 Explicit Codex CLI installation observation does not launch or reconfigure a desktop client. See the [read-only observation contract](../runtime.md#explicit-codex-cli-installation-observation).
 
@@ -60,7 +61,9 @@ mutually exclusive on one machine:
 - **first-party** (opt-in, with account risk): Claude Desktop itself is left on claude.ai — login, Chat tab,
   connectors and remote control are untouched and no config-library profile is written. The apply
   writes only an authenticated `HTTPS_PROXY=http://opencodex:<token>@127.0.0.1:<port+100>` and `NODE_EXTRA_CA_CERTS=<config>/claude-intercept/ca.pem`
-  into the `env` block of Claude Code's `settings.json` (via `src/claude/intercept/settings.ts`),
+  into the `env` block of Claude Code's `settings.json` (via `src/claude/intercept/settings.ts`), plus a
+  loopback `NO_PROXY` bypass (`127.0.0.1,localhost,::1,0.0.0.0`) merged into any user value so local HTTP MCP servers
+  never reach the CONNECT-only proxy (#6936; removal restores the prior value from `opencodex-no-proxy.json`),
   creating the local authority first. Only the Claude Code process Desktop spawns for the Code tab
   (and its subagents, and any standalone `claude` CLI) reads that env, so only their
   `api.anthropic.com` traffic reaches the [Claude intercept pair](../runtime.md#claude-intercept-pair).
@@ -90,6 +93,7 @@ traffic through a local interception proxy, which Anthropic may treat as a terms
 owned settings are still observed; otherwise the field is `null`.
 `/api/sync` and roster-update auto-apply never write a gateway profile while the resolved mode is
 first-party; both re-resolve after model discovery before writing.
+Background refresh preserves the selected owned gateway profile's mode, refuses symlinked library, metadata, profile or backup paths and non-regular profiles, and rechecks admission, the selected owned metadata entry and its applied fingerprint in the no-follow writer's pre-rename hook; it leaves metadata and backup bytes unchanged. Desktop library configuration reads follow [`clients/claude-desktop-config-reads.md`](claude-desktop-config-reads.md).
 
 Mode switches establish the replacement before removing the previous connection. A failed
 first-party apply (disabled intercept, CA failure, unreadable settings or foreign env) preserves
@@ -179,9 +183,10 @@ The shared CONNECT primitive accepts optional `allowedTargets` authorities. It s
 normalizes that list at startup; an empty list denies all, and other host/port pairs receive 403
 before tunnel selection or dialing. Authentication and loopback refusal remain in force.
 Existing Claude consumers omit this option and retain blind forwarding; it enables no new integration or certificate trust.
+Windows local-CA publication in `src/claude/intercept/local-ca-files.ts` hardens legacy inherited DACLs only after verifying the current owner and exclusively current-user, SYSTEM or Administrators grants; already private directories skip hardening. Newly created exclusive files and directories are hardened before strict owner/ACL verification and before CA access. ACL verification, including inherited SQLite sidecar ACLs, is memoized by bigint device/inode/birthtime within one publication; birthtime distinguishes recycled file IDs while preserving same-volume rename identity. Path and descriptor identity checks remain active on every access, and removed or replaced entries retire their memo.
 The authority primitive accepts `validityDays` from 1 through 3650 for short-lived callers; omitted values preserve the existing 3650-day CA lifetime. This parameter does not install trust or rotate an existing authority.
 
-When the lifecycle passes `loadPickerRoutes` (the server always does), `startClaudeIntercept` also
+On macOS, when the lifecycle passes `loadPickerRoutes` (the server always does), `startClaudeIntercept` also
 wires Claude Desktop picker mode: a second loopback CONNECT proxy on the dedicated picker proxy
 port (`getClaudeInterceptState()?.pickerProxyPort`), used as Desktop's pinned egress proxy. Desktop
 also hands that proxy to the Claude Code processes it spawns, and the two trust different CAs, so
@@ -198,20 +203,80 @@ The User-Agent is a routing hint, not a trust boundary: a client that fakes it r
 any local process already reaches (the `api.anthropic.com` intercept is on the Claude Code proxy
 too; the `claude.ai` relay verifies upstream and adds no credential) and breaks only its own TLS,
 because each terminator presents a certificate only its intended client trusts. `claude.ai:443` is
-terminated by a `node:https` HTTP/1.1 relay (`picker-listener.ts`) only while the runtime's cached
+intercepted only while the runtime's cached
 decision is armed: macOS, persisted resolved Desktop mode first-party, Desktop intent on,
 `claudeCode.intercept.picker !== false`, no disarm latch, listener up, and the current picker CA
-trusted in the login keychain (`picker-trust.ts`). The picker CA (`picker-ca.ts`) carries critical
-name constraints permitting only `claude.ai` and excluding every IPv4 and IPv6 address. Its signing
-key exists only in the server process; only public certificates are written under
-`<OPENCODEX_HOME>/claude-picker/`. Every unbound intercept startup attempt makes a best-effort cleanup of legacy `ca.key` before eligibility checks, including client role, disabled routing/interception, and ephemeral public ports; cleanup failures do not block startup. See the [runtime lifecycle contract](../runtime.md#claude-intercept-pair). On restart the lifecycle keeps the applied
-profile row in place, and removes the prior public root only when the published certificate differs
-from this process's authority — a reused authority stays trusted, and a predecessor that cannot be
-untrusted leaves the picker disabled rather than trusted beside its replacement —
-then re-runs the controller's enable flow when that profile had been applied so the replacement
-authority is trusted (with the user's keychain consent) and the selection restored. Trust is added without a policy string: Chromium
+trusted in the login keychain (`picker-trust.ts`). A loopback TCP front in `picker-listener.ts`
+reads ClientHello ALPN through `src/claude/intercept/client-hello.ts`, reassembling across TCP
+splits and up to 16 TLS records within 64 KiB of wire bytes and a 10-second deadline. It splices
+the untouched connection to an HTTP/2 server when the client offers `h2`, or to the native
+`node:https` HTTP/1.1 relay otherwise. WebSocket connections use the latter: extended CONNECT
+is not enabled, so Chromium opens them over HTTP/1.1. HTTP/2 multiplexing avoids the connection
+starvation reported in #6511, where SSE subscriptions held Chromium's six per-origin HTTP/1.1
+connections and later requests queued before reaching the listener. Upstream remains one
+HTTP/1.1 request per client request. Incoming requests and ordinary upstream responses retain
+a 64 KiB header allowance for browser session cookies; Bun enforces the HTTP/2 inbound bound
+natively, counting name + value + 32 bytes per field and rejecting an oversized stream with
+`RST_STREAM ENHANCE_YOUR_CALM` before the request handler runs.
+The relay retains its 256-request aggregate ceiling across both HTTP versions and all sessions.
+Upload framing, not the method, determines whether input cleanup is needed: HTTP/2 headers
+without END_STREAM, or HTTP/1.1 transfer encoding or a positive Content-Length.
+Rejected unfinished uploads close after their empty reply's writable finishes; HTTP/2 uses the
+underlying stream's finish event rather than the compatibility response's finish event, which
+waits for both stream halves to close. HTTP/1.1 refusals advertise `Connection: close` only while input is unfinished.
+Early replies stop relaying unfinished input only after the downstream writable finishes or the
+response closes; upstream request closure alone does not prove a buffered reply was delivered.
+After a complete response, HTTP/2 closes only that stream with `RST_STREAM NO_ERROR` (RFC 9113
+§8.1), including a complete generated 502. Without a complete downstream response, cleanup uses
+`CANCEL` for a premature downstream close or an upstream close without a reply.
+HTTP/1.1 refusals, generated 502s and early replies advertise `Connection: close` only while input is unfinished; after the writable finishes,
+the listener unpipes the upstream upload, reads and discards remaining input, and ends the socket
+gracefully so queued response bytes flush. Errors and premature downstream closes still destroy
+the request. The request-side drain adds no upload deadline or byte cap and does not wait for request-body
+completion before ending the response side. Bun 1.4.3's HTTP server ends a `Connection: close`
+response with `socket.destroySoon()` before the listener's own finish handler runs, which reset
+the splice before the reply reached the client; every HTTP/1.1 reply that closes unfinished input
+(refusal, generated 502, early upstream reply) therefore replaces that socket's `destroySoon` with
+the same resume-and-`end()`. The TCP front
+enables half-open reads once a ClientHello is recognized and, when the backend side ends, unpipes
+and keeps discarding client ciphertext, so a client still writing an abandoned upload reads the
+reply and FIN and can close (Bun 1.4.2 otherwise left it open). That front-side discard is bounded:
+once the reply has flushed to the client socket (`finish`), the connection is dropped after
+`PICKER_ABANDONED_INPUT_LINGER_MS` (30 s), so a peer that keeps trickling an abandoned upload cannot
+hold it until shutdown (#6984). The timer is armed only after the reply has left the process, so
+it cannot cut a reply that is still being written; `finish` is not peer receipt, though, and a client
+that also stops reading for the whole budget can still lose unread reply bytes when the drop fires.
+A connection that closes first cancels the timer. Body completion removes the input-cleanup listeners,
+leaving long-lived responses and SSE subscriptions independent of upload cleanup. Completed HTTP/1.1 uploads retain keep-alive on generated 502s and can reuse the same client socket.
+`tests/claude-integration/claude-picker-upload.test.ts` covers headers-only refusals on both
+protocols, byte-exact early replies under backpressure, completed uploads with SSE, cancellation,
+failure and shutdown cleanup, and healthy sibling streams.
+The picker CA (`picker-ca.ts`) carries critical
+name constraints permitting only `claude.ai` and excluding every IPv4 and IPv6 address. Its exportable
+signing identity is protected by the OS credential store and scoped to the canonical config directory;
+normal restarts reuse the same validated certificate and key. No plaintext picker signing key is
+stored in that directory; public certificates and non-secret identity metadata remain under
+`<OPENCODEX_HOME>/claude-picker/`. Every unbound intercept startup attempt makes a best-effort cleanup of legacy `ca.key` before eligibility checks, including client role, disabled routing/interception, and ephemeral public ports; cleanup failures do not block startup. See the [runtime lifecycle contract](../runtime.md#claude-intercept-pair). Windows and Linux skip picker CA, credential-store and proxy construction entirely; the main intercept pair remains available.
+On restart the lifecycle keeps the applied profile and restores through the controller with
+`allowTrustPrompt: false`. An unchanged approved identity with an available credential store needs
+no Certificate Trust Settings add/remove operation. Missing, revoked or unknown trust leaves the
+picker pending; restore never installs trust. Explicit `on` or `trust` completes the trust step.
+Legacy predecessor cleanup may still require consent during migration. Native keychain unlock and
+application-access dialogs are controlled by macOS; restart or upgrade does not guarantee their absence.
+`picker-ca-store.ts` owns the versioned OS credential service, canonical-config identity namespace,
+bounded exact-shape payload, full constrained CA profile, validity and P-256 private-key match validation.
+`picker-ca-persistence.ts` validates public `authority.json` and `authority-init.json` records under
+the canonical CA lock, rejecting symlinks and mismatched pre-open/path and descriptor identities.
+Device and inode comparisons use bigint stats so distinct full-width file IDs cannot alias through numeric rounding. Zero inode identities and changed `ctimeNs` between the path snapshot and opened descriptor are rejected. Initialization journals the config identity, new fingerprint and public
+predecessor before writing the credential, verifies readback, then commits metadata and publication;
+it removes the journal last. Recovery requires matching journal/store identity; missing initialized
+credentials, unavailable storage or inconsistent metadata fail closed without publishing a replacement.
+Gateway/off startup does not read or initialize an OS picker credential unless an applied picker
+profile needs recovery. Its dormant macOS runtime/controller remains available for later explicit
+activation, which uses the same persistent authority path.
+Trust is added without a policy string: Chromium
 skips host-scoped trust settings, so `inspectPickerTrust` treats a current CA whose exported user
-trust settings carry `kSecTrustSettingsPolicyString` as untrusted and the trust step replaces it; an
+trust settings carry `kSecTrustSettingsPolicyString` as untrusted and an explicit trust step replaces it; an
 export it cannot read makes trust `unknown`, which never arms. A rotated-out picker certificate is
 removed from the login keychain as its replacement is published, and a failed removal stops the
 picker arming. Publication of `ca.pem` and `ca-owner.json` happens only inside the
@@ -221,11 +286,11 @@ certificate is rewritten under the lock so a second process cannot rotate out a 
 authority. The owner record carries the OS process start identity where the platform exposes one,
 so a reused PID does not count as the live owner; an older record without one still counts as live
 unless, on macOS, the PID's process started after the record was written.
-Before a startup rotation replaces `ca.pem`, the outgoing certificate's **public** PEM and its
+During legacy migration, before a replacement changes `ca.pem`, the outgoing certificate's **public** PEM and its
 SHA-1/SHA-256 go to `pending-untrust.json` (mode 0600, no key material); only one such record may
 exist, and a default `ensurePickerCa` call (the controller's enable/trust path) refuses while it
-does. Startup (`runtime.ts` via `picker-ca-cleanup.ts`) drains that record before and after
-rotation: it defers without calling `security` while the recorded certificate is still published by
+does. Activation (`runtime.ts` and the controller via `picker-ca-startup.ts` and `picker-ca-cleanup.ts`) drains that record before and after
+migration: it defers without calling `security` while the recorded certificate is still published by
 a live owner, untrusts a private temporary copy of the public PEM otherwise, and acknowledges the
 exact record only after a confirmed removal, so a failure survives process replacement and is
 retried by the next start. While the drain is incomplete and a Desktop picker profile is applied, the
@@ -239,11 +304,15 @@ intent and cannot repair the URL a running Desktop already pinned. The `claude.a
 certificate, streams every body and upgrade unchanged, and rewrites only the bootstrap response's
 local Code picker surfaces, `ccd` (what the Desktop Code tab reads) and its `code` fallback, never the
 remote `ccr` (`picker-bootstrap.ts`), failing open to the original bytes; the model list
-comes from a persisted snapshot (`picker-models.ts`), so a bootstrap never waits on discovery. Picker aliases carry `[1m]` only for authoritative windows of at least 1M, using the shared context marker helper with auto-context disabled. Sub-million opt-ins remain unmarked because the picker cannot guarantee the Desktop runner's compaction environment. A
+comes from a persisted snapshot (`picker-models.ts`), so a bootstrap never waits on discovery. Picker aliases carry `[1m]` for long windows (`src/claude/long-context.ts`: at least 1M, or at least the 829,800 default compact window), and Claude models on either Anthropic pool only at a genuine 1M. The picker cannot guarantee the Desktop runner's compaction environment, so an 872k route that outgrows its window relies on the `prompt is too long` envelope, which Claude Code compacts on; Desktop 3P `supports1m`/`prefer1m`, discovery `· 1M` rows and generated subagent markers use the same rule. `claudeCode.contextAccounting` (`src/types/config.ts`) is absent for the 1m default; the only stored value is `"200k"`, which stops automatic `[1m]` marking and `CLAUDE_CODE_AUTO_COMPACT_WINDOW` injection, drops Desktop 3P `prefer1m` while keeping `supports1m`, and still lists genuine 1M discovery rows. An explicit `[1m]` selector stays. `ocx claude config set --context-accounting` and `PUT /api/claude-code` write it (`"1m"` deletes the key). A
 CONNECT to claude.ai that arrives before the first refresh waits at most 3 s, then goes blind. A
 picker proxy bind failure only disables picker mode; a picker construction or start failure closes
-every socket the start had bound before rethrowing. Nothing is logged but method, bootstrap or
-other, and status.
+every socket the start had bound before rethrowing. Ordinary session cookies within the header
+allowance relay unchanged. Upstream header overflow returns an empty 502 and logs the fixed
+reason `upstream:headers-too-large`; other records contain only method, bootstrap or other,
+status, and fixed bootstrap rewrite outcomes. Header values and request paths are not logged.
+Upgraded connections retain raw TLS relay semantics; their upstream bytes do not pass through
+the ordinary HTTP response parser.
 
 ### Picker catalog rewrite bounds
 
@@ -318,16 +387,25 @@ occupied" once a catalog exceeded 365 routes, because stale assignments are reta
 the set only grows. 2026 is still allocated first, so existing assignments keep their slots, and
 2027-2035 are reached only after it fills. Years before 2026 stay rejected: dated ids such as
 `claude-opus-4-8-20250201` are real Anthropic snapshot ids and the inbound decoder relies on that
-distinction. At render time each stored slot becomes a unique `p`-prefixed four-character wire
-code, disjoint from the historical three-character hash namespace. Claude Desktop strips terminal
+distinction. At render time each stored slot becomes a unique `claude-fable-5-pXXX` wire
+id, disjoint from the historical three-character hash namespace. Desktop 2.31226 recognizes
+the fable prefix in its effort fallback, whereas a suffixed Opus id misses its canonical table
+(#7006). This is client compatibility, not authoritative per-provider effort metadata.
+Claude Desktop strips terminal
 dates when comparing active-session model identity, so writing
 the persisted date slots directly would collapse every managed route to `claude-opus-4-8` and
-suppress `set_model` between them (#3782). The registry accepts both forms during migration. If an
+suppress `set_model` between them (#3782). The registry accepts dates and previous
+`claude-opus-4-8-pXXX` wire IDs during migration. If an
 active real Anthropic id claims a persisted date slot, reconciliation reallocates the non-Anthropic
 route before rendering. If any synthetic or compatibility alias matches an active real Anthropic id,
 the conflicting routed row or compatibility binding is omitted with a warning, and the real
 Anthropic identity remains unclaimed; a profile alias can never overwrite native routing.
 `src/claude/desktop-profile.ts` owns the slot range and wire conversion.
+The native launcher (`src/cli/claude.ts`) clears proxy-only profile IDs, except genuine
+IDs known from the registry or declared models/profile. Active synthetic bindings take
+priority over stale declarations. Discovery uses `resolvableDesktop3pAlias` in
+`src/claude/desktop-3p.ts`: synthetic IDs must decode to their advertised route;
+real Anthropic IDs retain identity passthrough.
 
 Persisted date-shaped Desktop IDs can overlap genuine native model IDs. When available discovery and
 mapping evidence cannot resolve one, Messages and count-tokens return HTTP 503 with the fixed
@@ -403,6 +481,8 @@ data-token ownership, so displaying configuration cannot enter Desktop or client
 
 ## Claude Desktop config-library resolution
 
+`src/cli/claude-desktop-profile.ts` provides explicit runtime profile show/import through GET/PUT `/api/claude-desktop`. Bounded JSON input uses the canonical profile validator and the server retains unavailable-model, applied-marker and concurrent-save guards. Import saves desired state only; existing local show/import/apply commands retain their separate targets. The profile branch is dispatched before apply-mode aliases and never falls back to a local write.
+
 The Desktop profile writer and the management status probe share
 `resolveDesktop3pConfigLibraryPath`. The resolver reproduces Desktop's own rule rather than a guess:
 an explicit `CLAUDE_USER_DATA_DIR` (or the opencodex override) wins; on Windows
@@ -450,7 +530,7 @@ The explicit sync coordinator also accepts Cline CLI as a separate file integrat
 
 `claudeCode.stabilizePromptCache` is a default-off operator setting for
 [translated instruction stabilization](../data-planes/inbound-compat.md#opt-in-claude-instruction-stabilization).
-Config JSON preserves the boolean; only literal true activates the role-changing transform.
+Config JSON preserves the boolean; only literal true activates the transform, which drops recognized token footers and retains TaskCreate nudges as trailing user messages.
 The lightweight top-level CLI help counts Cline CLI among the fifteen registered export clients; registry parity remains covered by the client help and integration tests.
 
 Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](../catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
@@ -461,7 +541,7 @@ The account history response can include a [low-confidence effective capacity es
 
 Account quota surfaces use [safe probe diagnostics](../transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
-Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](../transports/responses.md) documents this boundary, and native Chat removes effort only for an explicit empty declaration or no-reasoning model.
+Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](../transports/responses.md) documents this boundary, and native Chat capability stripping applies only for an explicit empty declaration or no-reasoning model; an initial JEV null choice separately strips caller effort.
 
 Live sideband admission and its bounded upstream handshake follow the [runtime contract](../runtime.md#live-sideband-handshake); the ordinary Responses WebSocket exchange remains separate.
 
@@ -485,7 +565,13 @@ The [compaction routing override](../transports/responses-failover.md#compaction
 
 ## Routed bundled-skill text
 
+Translated tool results in `src/claude/inbound.ts` retain nonempty string `tool_reference.tool_name` values as `Tool loaded: <name>` text lines in the paired `function_call_output`, preserving mixed-content order and the error marker. Each marker ends with a newline and starts with one after text that does not, because text-only tool output is joined without separators downstream. References describe client output; they do not declare or authorize executable tools, enable translated server-side deferral, or alter native passthrough. `tests/claude-integration/claude-inbound-tool-reference.test.ts` covers reference-only results, mixed/error output, malformed names, caller immutability and the real Responses parser.
+
 `src/claude/inbound.ts` bounds the text-carrier skill-directory probe to 4,096 UTF-16 code units, plus one character to recognize the terminating newline. A longer first line is preserved intact instead of being scanned or stubbed; normal POSIX, Windows, mixed and UNC separators retain their basename matching. The existing 10,000-character payload threshold and `claudeCode.blockedSkills` policy remain: `claude-api` is blocked by default, and an explicit empty list disables elision. Native Anthropic passthrough and tool-call/result pairing are unchanged. `tests/claude-integration/claude-inbound.test.ts` covers the exact 4,096/4,097 boundary and a long newline-free carrier.
+
+`src/claude/inbound-content-options.ts` strips Claude Code's leading `x-anthropic-billing-header:` line from a string system prompt or from the first text block of a system array before it becomes Responses `instructions`, dropping a block left empty. The line's `cch` value rotates per request, so keeping it made the translated prefix and the system-derived fallback `prompt_cache_key` change every turn (#6627). The match is anchored at the prompt start, like the Antigravity strip in `src/adapters/google.ts`; native Anthropic passthrough does not use this translation and keeps the client preamble. `tests/claude-integration/claude-inbound.test.ts` covers string and array systems, header-only blocks, later mentions and key stability.
+
+`src/claude/outbound.ts` carries a Responses provider's own `encrypted_content` in an `ocxr1:` `nat` envelope (`src/responses/reasoning-envelope.ts`) only when the serving attempt has committed and `src/server/responses/core-replay.ts` supplied a durable destination and credential owner. The `nat.tag` HMAC binds the exact blob to that owner and the installation's persisted salt. `src/claude/inbound.ts` restores the blob and item id only for the same client-facing model; each route binding verifies the tag against its effective endpoint, including `responsesPath`, and generation-bearing credential, then removes a mismatch from both the raw reasoning item and the parser's thinking-signature carrier before send. Missing owner or tag fails closed, including direct-forward credentials and OAuth generation changes. Native Anthropic ingress projects away every `nat` on both native branches, dropping blob-only blocks and leaving signed or visible-text fields intact. A thinking block that closes before serving commit has no `nat`. Translated bodies that reason request `include: ["reasoning.encrypted_content"]`; a body without reasoning does not. Anthropic `sig` and `red` envelopes keep their existing behavior. `tests/claude-integration/claude-native-reasoning-provenance.test.ts` covers route ownership and native projection.
 
 ## Claude Code picker descriptions
 
@@ -494,6 +580,8 @@ The [compaction routing override](../transports/responses-failover.md#compaction
 ## Claude Code routed aliases and the context window
 
 `src/claude/alias.ts` mints Claude Code CLI aliases as `ocx-claude-<provider>--<model>`, or `ocx-claude2-` with `~s`/`~t` escapes when the model id holds `/` or `~`. The id contains `claude`, which the picker requires, and does not start with `claude-`: Claude Code 2.1.278 accounts an unrecognized `claude-` id at 200k and applies `CLAUDE_CODE_MAX_CONTEXT_TOKENS` to it only with `DISABLE_COMPACT=1`. Saved `claude-ocx-`/`claude-ocx2-` ids still decode, and `src/claude/context-windows.ts` and the connected-client map `readConnectedClaudeContextWindows` in `src/cli/claude.ts` register both spellings at the same window, and `decodeFablePickerAlias` in `src/server/claude-messages.ts` keeps a legacy native Fable picker value on the native passthrough, so a saved selector keeps its window lookup until it is re-picked. `effectiveModelEnv` emits a legacy selector configured in an OpenCodex slot in its current spelling (`currentClaudeAliasSpelling`), so Claude Code applies the window to it; a selection saved by Claude Code's own picker is outside OpenCodex's ownership and keeps 200k accounting until it is re-picked. `isProxyOnlyModelId` in `src/cli/claude.ts` treats all four prefixes as proxy-only for native fallback.
+
+Claude Code labels a tier row (Opus, Sonnet, Fable, Haiku) in `/model` as `ANTHROPIC_DEFAULT_<TIER>_MODEL_NAME`, then its own name for a first-party id, then the raw slot value, so an alias slot without a label shows the alias (#6926; read from the 2.1.296 binary). `claudeTierDisplayName` in `src/claude/context-windows.ts` derives the label from the alias in the spelling of the discovery `display_name` (`<slug> (native)`, `<model> (<provider>)`, ` · 1M`, and `(anthropic)` for the native-namespaced Fable picker alias); a trailing `--fast` stays in the model name, because without the catalog a Fast sibling cannot be told from a real `--fast` model, and a non-alias value gets none. The label is paired only with a slot opencodex wrote: `buildClaudeEnv` in `src/cli/claude.ts` labels a slot only when its `setDefault` wrote it, launchd system-env labels only tracked slots and sweeps a tracked label the config no longer produces, and the shell file exports the label inside the branch that exports the slot. A user-set slot or `_NAME` always wins, and `buildNativeClaudeEnv` drops a label equal to the one generated for a slot it strips.
 
 `claudeCode.maxContextTokens` injects only `CLAUDE_CODE_MAX_CONTEXT_TOKENS` on the `ocx claude`, launchd system-env and shell-hook paths; compact stays enabled and neither `DISABLE_COMPACT` nor `CLAUDE_CODE_AUTO_COMPACT_WINDOW` is injected beside it, whatever the value. A `DISABLE_COMPACT` an older release injected and tracked is unset by the system-env produced-key sweep while it still holds the injected `1`; a tracked key the user changed to another value is released from tracking without being deleted, and an untracked user value is never touched. `tests/claude-integration/claude-alias.test.ts`, `claude-context-windows.test.ts`, `claude-cli.test.ts` and `tests/server/system-env.test.ts` cover these.
 

@@ -72,6 +72,7 @@ export interface ResponseSpillPayload {
    */
   providerOutputStart?: number;
   providers?: OcxProviderContinuationState;
+  unforcedStoreFalse?: boolean;
 }
 
 export interface ResponseSpillRef {
@@ -496,6 +497,7 @@ function serializedSpill(
     items: state.items,
     ...(state.providerOutputStart !== undefined ? { providerOutputStart: state.providerOutputStart } : {}),
     ...(state.providers ? { providers: state.providers } : {}),
+    ...(state.unforcedStoreFalse ? { unforcedStoreFalse: state.unforcedStoreFalse } : {}),
   };
   const serialized = JSON.stringify(payload);
   if (serialized === undefined) throw new Error("Response spill serialization failed");
@@ -549,12 +551,14 @@ function validPayload(value: unknown, responseId: string): value is ResponseSpil
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const payload = value as Record<string, unknown>;
   const keys = Object.keys(payload);
-  if (keys.some(key => !["version", "responseId", "createdAt", "clientThreadId", "items", "providerOutputStart", "providers"].includes(key))) return false;
+  if (keys.some(key => !["version", "responseId", "createdAt", "clientThreadId", "items", "providerOutputStart", "providers", "unforcedStoreFalse"].includes(key))) return false;
   if (payload.version !== 1 || payload.responseId !== responseId) return false;
   if (typeof payload.createdAt !== "number" || !Number.isFinite(payload.createdAt)) return false;
   if (payload.clientThreadId !== undefined
     && (typeof payload.clientThreadId !== "string" || payload.clientThreadId.trim().length === 0)) return false;
+  if (payload.unforcedStoreFalse !== undefined && typeof payload.unforcedStoreFalse !== "boolean") return false;
   if (!Array.isArray(payload.items)) return false;
+  if (payload.unforcedStoreFalse === true && payload.providerOutputStart === undefined) return false;
   // A malformed boundary must degrade to "never skip", never to a bad index: reject the
   // payload outright so materialization treats it as corrupt rather than trusting it.
   if (payload.providerOutputStart !== undefined) {
@@ -761,10 +765,23 @@ export function readResponseSpill(responseId: string, ref: ResponseSpillRef): Re
 export function deleteResponseSpill(ref: ResponseSpillRef): void {
   if (!validSpillRef(ref)) return;
   const dir = responseSpillDirectory();
+  const path = join(dir, ref.fileName);
   try {
-    unlink(join(dir, ref.fileName));
+    unlink(path);
     fsyncDirectoryBestEffort(dir);
-  } catch { /* best effort */ }
+  } catch (error) {
+    // Still best effort, but no longer invisible: a file a failed unlink left behind occupies
+    // the volume, so the accounting owner keeps pricing it until the path is gone (#6747).
+    if (!isErrno(error, "ENOENT")) spillUnlinkFailureObserver?.(path, ref.payloadBytes);
+  }
+}
+
+type SpillUnlinkFailureObserver = (path: string, bytes: number) => void;
+let spillUnlinkFailureObserver: SpillUnlinkFailureObserver | null = null;
+
+/** The owner of spill accounting registers here so a failed unlink cannot under-report disk use. */
+export function setResponseSpillUnlinkFailureObserver(next: SpillUnlinkFailureObserver | null): void {
+  spillUnlinkFailureObserver = next;
 }
 
 type SpillDirNameKind = "spill" | "temp";

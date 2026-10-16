@@ -31,6 +31,7 @@ import {
 } from "../lib/translator-budget";
 import { redactSecretString, SENSITIVE_KEY_PATTERN } from "../lib/redact";
 import { parseDataUrl } from "./image";
+import { jsonStringPartsUtf8Bytes, jsonUtf8Bytes } from "../lib/json-byte-size";
 import {
   ollamaNativeChatUrl,
   ollamaNativeEndpointKind,
@@ -71,7 +72,7 @@ interface PendingToolCall {
   namespace?: string;
   wireName: string;
   order: number;
-  result?: OcxMessage & { role: "toolResult" };
+  results: Array<OcxMessage & { role: "toolResult" }>;
 }
 
 interface PendingToolBatch {
@@ -81,7 +82,7 @@ interface PendingToolBatch {
 }
 
 interface NativeStreamToolCall {
-  key: string;
+  fallbackKey: string;
   budgetKey: string;
   order: number;
   name: string;
@@ -110,6 +111,21 @@ const NATIVE_THINK_VALUES = new Set(["low", "medium", "high", "max"]);
 const NATIVE_TOOL_ID_MAX_LENGTH = 256;
 const NATIVE_TOOL_NAME_MAX_BYTES = 1024;
 const NATIVE_MAX_PENDING_TOOL_CALLS = 128;
+const NATIVE_MAX_LATE_ATTRIBUTION_BYTES = 256 * 1024;
+/** Proxy-owned refusal text for an exhausted late-attribution budget. A compaction on the same
+ *  Ollama route resends the same history, so the only reliable recovery is a new thread. */
+export const OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE =
+  "Late tool-output attribution for this conversation exceeded the 256 KiB per-request limit. Start a new thread to continue.";
+
+/** The late-attribution budget refusal, reporting the full limit rather than the bytes left. */
+export class OllamaLateAttributionBudgetError extends TranslatorBudgetExceededError {
+  readonly publicMessage = OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE;
+
+  constructor() {
+    super("request_copies", NATIVE_MAX_LATE_ATTRIBUTION_BYTES);
+    this.name = "OllamaLateAttributionBudgetError";
+  }
+}
 // Account for the retained Map key and call bookkeeping in addition to the provider's name.
 const NATIVE_TOOL_CALL_BOOKKEEPING_BYTES = 128;
 const NATIVE_TOOL_ID_CONTROL = /[\u0000-\u001f\u007f]/u;
@@ -307,7 +323,7 @@ function assistantTextThinkingAndCalls(message: OcxAssistantMessage): {
  * Build native replay messages without mutating the parsed history. Keep tool results
  * beside their originating batch, deferring intervening conversation until settlement.
  * Reserve replayed call IDs for response translation and mark missing results explicitly.
- * @throws When call IDs are invalid or results are orphaned, duplicated, or mismatched.
+ * @throws When call IDs are invalid or results are orphaned or mismatched.
  */
 function buildNativeMessages(
   parsed: OcxParsedRequest,
@@ -324,6 +340,8 @@ function buildNativeMessages(
   // owned by this adapter/request lifecycle rather than process-global state.
   reservedToolCallIds.clear();
   let pending: PendingToolBatch | undefined;
+  const issuedCalls = new Map<string, PendingToolCall>();
+  let lateAttributionBytes = 0;
   // Codex records mid-turn injections (a PostToolUse hook verdict, a context notice) between an
   // assistant tool call and that call's own tool result. Native Ollama needs the call and its
   // results adjacent, so those conversational messages wait here instead of closing the batch
@@ -341,10 +359,9 @@ function buildNativeMessages(
   const flushPending = (): void => {
     if (!pending) return;
     for (const call of pending.calls) {
-      if (!call.result) {
-        // No result exists anywhere in the replayed history: the turn was interrupted, or the
-        // result never reached it. State exactly that instead of inventing an outcome, and keep
-        // the conversation replayable.
+      if (call.results.length === 0) {
+        // No result was available when this batch settled. A later notification is carried
+        // separately, not used to invent an outcome at this earlier conversation boundary.
         messages.push({
           role: "tool",
           tool_call_id: call.id,
@@ -356,13 +373,18 @@ function buildNativeMessages(
         });
         continue;
       }
-      const translated = contentToNative(call.result.content, "tool result");
+      // A code-mode cell can yield, then notify repeatedly. Join once at settlement rather
+      // than repeatedly copying an ever-growing result, and never mutate the source history.
+      const fragments = call.results.map(result => ({
+        ...contentToNative(result.content, "tool result"), isError: result.isError,
+      }));
+      const images = fragments.flatMap(fragment => fragment.images ?? []);
       messages.push({
         role: "tool",
         tool_call_id: call.id,
         tool_name: call.wireName,
-        content: translated.content,
-        ...(translated.images ? { images: translated.images } : {}),
+        content: fragments.map(fragment => `${fragment.isError ? "ERROR: " : ""}${fragment.content}`).join("\n"),
+        ...(images.length ? { images } : {}),
       });
     }
     pending = undefined;
@@ -371,21 +393,41 @@ function buildNativeMessages(
 
   for (const message of parsed.context.messages) {
     if (message.role === "toolResult") {
-      if (!pending) {
-        throw new Error(`ollama-native orphan tool result ${message.toolCallId || "<missing-id>"}`);
-      }
-      const call = pending.byId.get(message.toolCallId);
+      const call = issuedCalls.get(message.toolCallId);
       if (!call) {
-        throw new Error(`ollama-native tool result ${message.toolCallId || "<missing-id>"} has no originating call`);
-      }
-      if (call.result) {
-        throw new Error(`ollama-native duplicate tool result for ${message.toolCallId}`);
+        throw new Error(pending
+          ? `ollama-native tool result ${message.toolCallId || "<missing-id>"} has no originating call`
+          : `ollama-native orphan tool result ${message.toolCallId || "<missing-id>"}`);
       }
       if (call.name !== message.toolName || call.namespace !== message.toolNamespace) {
         throw new Error(`ollama-native tool result ${message.toolCallId} names the wrong originating tool`);
       }
-      call.result = message;
-      pending.unresolvedCount--;
+      if (pending?.byId.has(call.id)) {
+        if (call.results.length === 0) pending.unresolvedCount--;
+        call.results.push(message);
+      } else {
+        // Reopening a settled batch would split a later call/result pair. Keep known late
+        // output explicitly attributed as conversation text instead of dropping it or
+        // fabricating another executable call. Unknown/mismatched identities still fail above.
+        // Generated attribution is not present in the inbound size estimate. Reserve its
+        // JSON wire bytes before joining strings, across all late outputs and all calls.
+        // Count the joined JSON string exactly, without constructing a measurement copy.
+        const attribution = ['[ocx] additional output for previously issued tool "',
+          call.wireName, '" (', call.id, '):\n', message.isError ? "ERROR: " : ""];
+        try {
+          lateAttributionBytes += jsonStringPartsUtf8Bytes(attribution, NATIVE_MAX_LATE_ATTRIBUTION_BYTES - lateAttributionBytes);
+        } catch (error) {
+          if (error instanceof TranslatorBudgetExceededError) throw new OllamaLateAttributionBudgetError();
+          throw error;
+        }
+        const translated = contentToNative(message.content, "late tool result");
+        const late: OllamaNativeMessage = { role: "user",
+          content: attribution.join("") + translated.content,
+          ...(translated.images ? { images: translated.images } : {}),
+        };
+        if (pending) deferred.push(late);
+        else messages.push(late);
+      }
       continue;
     }
 
@@ -450,8 +492,10 @@ function buildNativeMessages(
             namespace: call.namespace,
             wireName,
             order: index,
+            results: [],
           };
           wireCalls.push(pendingCall);
+          issuedCalls.set(call.id, pendingCall);
           return {
             type: "function" as const,
             id: call.id,
@@ -623,6 +667,7 @@ function nativeMessageEvents(message: JsonRecord, state: NativeStreamState, budg
   }
   if (message.tool_calls !== undefined) {
     if (!Array.isArray(message.tool_calls)) throw new Error("ollama-native response tool_calls was not an array");
+    const frameCalls = new Map<NativeStreamToolCall, string | undefined>();
     for (let position = 0; position < message.tool_calls.length; position++) {
       const rawCall = message.tool_calls[position];
       if (!isRecord(rawCall) || !isRecord(rawCall.function)) {
@@ -637,12 +682,16 @@ function nativeMessageEvents(message: JsonRecord, state: NativeStreamState, budg
       const args = assertObjectArguments(fn.arguments, "response tool call");
       const index = isFiniteNonNegativeInteger(fn.index) ? fn.index : undefined;
       const nativeId = validNativeToolCallId(rawCall.id);
-      const key = index === undefined ? `position:${position}` : `index:${index}`;
-      // Tool-call identity is explicitly keyed by the provider index when supplied: a later
-      // frame for the same index updates that call's arguments, while a distinct index creates a
-      // second call. This narrow tool-call compatibility rule is independent from text/thinking
-      // semantics, where every non-empty native field is an appended partial delta.
-      const existing = state.toolCalls.get(key);
+      const fallbackKey = index === undefined ? `position:${position}` : `index:${index}`;
+      // Native ids distinguish calls even when Ollama repeats index zero. Index/position are
+      // fallback identities only; within one frame only entries sharing an id may update a call.
+      // An id arriving for a call first seen without one still adopts that call by its fallback.
+      const available = (call: NativeStreamToolCall) =>
+        !frameCalls.has(call) || (nativeId !== undefined && frameCalls.get(call) === nativeId);
+      const calls = [...state.toolCalls.values()];
+      const existing = (nativeId ? calls.find(call => call.nativeId === nativeId && available(call)) : undefined)
+        ?? calls.find(call => call.fallbackKey === fallbackKey
+          && (!nativeId || !call.nativeId) && available(call));
       if (!existing && !state.allowParallelToolCalls && state.toolCalls.size > 0) {
         throw new Error("ollama-native provider emitted parallel tool calls while parallelToolCalls:false was requested");
       }
@@ -650,16 +699,14 @@ function nativeMessageEvents(message: JsonRecord, state: NativeStreamState, budg
         throw new Error(`ollama-native response exceeded ${NATIVE_MAX_PENDING_TOOL_CALLS} pending tool calls`);
       }
       if (existing) {
-        if (existing.name !== fn.name) throw new Error("ollama-native response reused a tool-call index for another function");
-        if (nativeId && existing.nativeId && nativeId !== existing.nativeId) {
-          throw new Error("ollama-native response changed a tool-call id for an existing index");
-        }
+        if (existing.name !== fn.name) throw new Error("ollama-native response reused a tool-call identity for another function");
         if (!existing.nativeId && nativeId) existing.nativeId = nativeId;
         replaceNativeToolArguments(existing, args, budget);
+        frameCalls.set(existing, nativeId);
       } else {
         const call: NativeStreamToolCall = {
-          key,
-          budgetKey: `ollama-native:${key}`,
+          fallbackKey,
+          budgetKey: `ollama-native:${state.nextToolOrder}`,
           order: state.nextToolOrder++,
           name: fn.name,
           ...(nativeId ? { nativeId } : {}),
@@ -679,7 +726,8 @@ function nativeMessageEvents(message: JsonRecord, state: NativeStreamState, budg
           });
           call.metadataBytes = metadataBytes;
           replaceNativeToolArguments(call, args, budget);
-          state.toolCalls.set(key, call);
+          state.toolCalls.set(call.budgetKey, call);
+          frameCalls.set(call, nativeId);
         } catch (error) {
           if (call.metadataBytes > 0) {
             budget.releaseRetained(call.metadataBytes, { kind: "tool_args" });

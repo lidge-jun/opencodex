@@ -4,7 +4,7 @@ import {
   handleCodexAuthAPI,
   setAccountQuotaFromParsed,
 } from "../../src/codex/auth-api";
-import { readCodexAccountRecord } from "../../src/codex/account-store";
+import { readCodexAccountRecord, saveCodexAccountCredential } from "../../src/codex/account-store";
 import { captureConfigGeneration } from "../../src/lib/state-store-sweeper";
 import type { OcxConfig } from "../../src/types";
 
@@ -104,6 +104,86 @@ export function registerPoolReauthCauseCases(
         reauthReason: "refresh_failed",
         health: { status: "reauth_required", reason: "refresh_failed" },
       });
+  });
+
+  test("passive listings stop refreshing a pool grant the token endpoint already declared dead", async () => {
+    const config = makeConfig();
+    // The credits switch forces a cache bypass for an account that never reported credits, and a
+    // dead grant never does, so this is the configuration where every poll used to refresh again.
+    config.showCodexCredits = true;
+    seedPoolAccount(config, {
+      id: "pool-dead-grant",
+      email: "pool-dead-grant@example.com",
+      expiresAt: Date.now() - 1,
+    });
+    const urls: string[] = [];
+    globalThis.fetch = (async input => {
+      urls.push(String(input));
+      return Response.json({ error: { code: "refresh_token_reused" } }, { status: 401 });
+    }) as typeof fetch;
+
+    const list = async (path: string) => {
+      const req = new Request(`http://localhost${path}`);
+      const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+      const data = await resp!.json() as {
+        accounts: Array<{ id: string; needsReauth?: boolean; reauthReason?: string }>;
+      };
+      return data.accounts.find(account => account.id === "pool-dead-grant");
+    };
+
+    expect(await list("/api/codex-auth/accounts")).toMatchObject({ needsReauth: true, reauthReason: "refresh_failed" });
+    expect(urls).toEqual(["https://auth.openai.com/oauth/token"]);
+    expect(readCodexAccountRecord("pool-dead-grant")).toMatchObject({ lastCodexValidationTerminal: true });
+
+    // Later polls, a forced listing, and a restart that lost the in-memory mark all report the
+    // stored verdict without another token request.
+    expect(await list("/api/codex-auth/accounts")).toMatchObject({ needsReauth: true, reauthReason: "refresh_failed" });
+    expect(await list("/api/codex-auth/accounts?refresh=1")).toMatchObject({ needsReauth: true, reauthReason: "refresh_failed" });
+    clearAccountNeedsReauth("pool-dead-grant");
+    expect(await list("/api/codex-auth/accounts")).toMatchObject({ needsReauth: true, reauthReason: "refresh_failed" });
+    expect(urls).toEqual(["https://auth.openai.com/oauth/token"]);
+  });
+
+  test("a dead pool grant is probed again after an explicit refresh command or a new credential", async () => {
+    const config = makeConfig();
+    seedPoolAccount(config, {
+      id: "pool-dead-grant-recovery",
+      email: "pool-dead-grant-recovery@example.com",
+      expiresAt: Date.now() - 1,
+    });
+    const urls: string[] = [];
+    globalThis.fetch = (async input => {
+      urls.push(String(input));
+      return Response.json({ error: { code: "refresh_token_reused" } }, { status: 401 });
+    }) as typeof fetch;
+    const listReq = new Request("http://localhost/api/codex-auth/accounts?refresh=1");
+    await handleCodexAuthAPI(listReq, new URL(listReq.url), config);
+    expect(urls).toHaveLength(1);
+
+    // An explicit refresh command retries the grant once per command, whichever principal sends it:
+    // `ocx account refresh` arrives as a raw-admin POST, the dashboard button as a GUI session.
+    const adminRefreshReq = new Request("http://localhost/api/codex-auth/accounts/refresh", { method: "POST" });
+    await handleCodexAuthAPI(adminRefreshReq, new URL(adminRefreshReq.url), config);
+    expect(urls).toHaveLength(2);
+    const refreshReq = new Request("http://localhost/api/codex-auth/accounts/refresh", { method: "POST" });
+    await handleCodexAuthAPI(refreshReq, new URL(refreshReq.url), config, undefined, "gui-session");
+    expect(urls).toHaveLength(3);
+    // Passive listings stay held between those commands.
+    const passiveReq = new Request("http://localhost/api/codex-auth/accounts?refresh=1");
+    await handleCodexAuthAPI(passiveReq, new URL(passiveReq.url), config);
+    expect(urls).toHaveLength(3);
+
+    // A re-login writes a new credential generation, which drops the terminal verdict.
+    saveCodexAccountCredential("pool-dead-grant-recovery", {
+      accessToken: "access-pool-dead-grant-recovery-2",
+      refreshToken: "refresh-pool-dead-grant-recovery-2",
+      expiresAt: Date.now() - 1,
+      chatgptAccountId: "acct-pool-dead-grant-recovery",
+    });
+    expect(readCodexAccountRecord("pool-dead-grant-recovery")?.lastCodexValidationTerminal).toBeUndefined();
+    const relistReq = new Request("http://localhost/api/codex-auth/accounts?refresh=1");
+    await handleCodexAuthAPI(relistReq, new URL(relistReq.url), config);
+    expect(urls).toHaveLength(4);
   });
 
   test("a transient pool token refresh failure does not raise reauthentication", async () => {

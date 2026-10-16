@@ -90,3 +90,53 @@ test("429 rotation reports the rotator's recovery kind", async () => {
   expect(await recoveryKindsFor(next => ({ adapter: next, recoveryKind: "key-429" })))
     .toEqual([undefined, "key-429"]);
 });
+
+test("web-search does not replay a verification refusal after routed output was committed", async () => {
+  globalThis.fetch = (async () => Response.json({
+    results: [{ title: "Fixture", url: "https://example.test/result", content: "synthetic result" }],
+  })) as typeof fetch;
+  let routedSends = 0;
+  let rotations = 0;
+  const adapter: ProviderAdapter = {
+    name: "mock-antigravity",
+    buildRequest: () => ({ url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" }),
+    fetchResponse: async () => {
+      routedSends++;
+      if (routedSends === 1) return new Response("ok", { status: 200 });
+      return new Response(JSON.stringify({ error: {
+        status: "PERMISSION_DENIED", message: "validate", details: [{ reason: "VALIDATION_REQUIRED" }],
+      } }), { status: 403 });
+    },
+    async *parseStream() {
+      yield { type: "text_delta", text: "I will check. " } satisfies AdapterEvent;
+      yield { type: "tool_call_start", id: "search-1", name: "web_search" } satisfies AdapterEvent;
+      yield { type: "tool_call_delta", arguments: JSON.stringify({ query: "fixture query" }) } satisfies AdapterEvent;
+      yield { type: "tool_call_end" } satisfies AdapterEvent;
+      yield { type: "done" } satisfies AdapterEvent;
+    },
+    async parseResponse() { throw new Error("parseResponse must be unreachable"); },
+  };
+
+  const response = await runWithWebSearch({
+    parsed: parseRequest({ model: "routed/model", input: "hi", stream: true, tools: [{ type: "web_search" }] }),
+    adapter,
+    incomingMeta: { headers: new Headers(), providerName: "google-antigravity", translatorBudget: createTestTranslatorBudget() },
+    backend: "exa",
+    exaApiKey: "synthetic-exa-key",
+    hostedTool: { type: "web_search" },
+    selectedForwardHeaders: new Headers(),
+    settings: { model: "exa-fixture-model", reasoning: "low", timeoutMs: 30_000 },
+    maxSearches: 1,
+    streamRoutedModelOutput: true,
+    on429: () => { rotations++; return null; },
+  });
+  const frames = await collectSse(response.body!);
+  const text = frames
+    .filter(frame => frame.data.type === "response.output_text.delta")
+    .map(frame => String(frame.data.delta ?? ""))
+    .join("");
+  expect(text).toContain("I will check.");
+  expect(routedSends).toBe(2);
+  expect(rotations).toBe(0);
+  expect(frames.some(frame => frame.event === "response.failed")).toBe(true);
+});

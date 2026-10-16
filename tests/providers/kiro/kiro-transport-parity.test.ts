@@ -103,7 +103,7 @@ test("budget refusal prevents alternate dispatch", async () => {
   }) as typeof fetch;
   const sendBudget = { reserveDispatch: () => {
     reservations++;
-    return reservations === 1 ? { allowed: true, permit: { use: () => true } } : { allowed: false, reason: "total-exhausted" };
+    return reservations === 1 ? { allowed: true, permit: { use: () => true, release: () => undefined } } : { allowed: false, reason: "total-exhausted" };
   } } as never;
   await expect(fetchKiroWithRetry(request, { executor, sendBudget })).rejects.toMatchObject({ name: "SendBudgetExhaustedError" });
   expect(urls).toEqual([request.url]);

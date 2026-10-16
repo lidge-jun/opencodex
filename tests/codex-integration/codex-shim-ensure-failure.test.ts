@@ -18,8 +18,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildUnixCodexShim } from "../../src/codex/shim";
 import { CODEX_SHIM_ENSURE_FAILED_DIAGNOSTIC } from "../../src/codex/shim-templates";
+import { isolateCodexShimEnvironment } from "../helpers/codex-shim-install-fixture";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
+
+isolateCodexShimEnvironment();
 
 /** The shim refuses to re-enter itself, so a nested test run must not inherit its guard state. */
 function cleanShimEnv(): NodeJS.ProcessEnv {

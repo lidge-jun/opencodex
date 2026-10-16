@@ -30,8 +30,8 @@ repository where no test can reach it. The role was previously decided by testin
 against `api.openai.com`, so every OpenAI-compatible gateway was assumed not to support a standard
 role until proven otherwise, and the instruction silently lost `developer` precedence.
 
-The translated `Qwen3.8-27B` Chat route follows its [pinned template](https://huggingface.co/Qwen/Qwen3.8-27B/blob/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0/chat_template.jinja): a late `system` raises, `developer` is unsupported, and a late `user` renders in place.
-Text-only developer items therefore keep their content and slot but use the `user` wire role,
+The translated `Qwen3.8-27B` Chat route follows its [pinned template](https://huggingface.co/Qwen/Qwen3.8-27B/blob/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0/chat_template.jinja): a late `system` raises, `developer` is unsupported, and a late `user` renders in place; the `OrcaSAQ-2-Cyber-27B` GGUF family pins the same contract and takes the same mapping.
+Flash-Next uses the same mapping for the exact `flash-next` and `Qwen3.8-Flash-Next` ids (the failure is reported in [#6242](https://github.com/lidge-jun/opencodex/issues/6242)). Gateway-namespaced ids such as LiteLLM's `openai/Qwen3.8-27B` and `oh-my-gpu/flash-next` match too. The Orca exception requires `GGUF` in the final model segment before any optional colon quant tag; non-GGUF Orca variants keep their configured mapping. Text-only developer items therefore keep their content and slot but use the `user` wire role,
 losing developer precedence. Other models retain the mapping above; native Chat passthrough
 is unchanged. The rule is recorded in `tests/fixtures/qwen38-27b-chat-template-contract.json`
 and exercised by `tests/adapters/openai/openai-chat-qwen38-leading-system.test.ts`.
@@ -46,6 +46,9 @@ configuration pages and Claude Code guides are held against their English source
 Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts.
 
 ## Reasoning and tool-result compatibility
+
+For `api.mistral.ai`, `src/adapters/openai-chat/response-events.ts` preserves typed text/thinking arrays in both response paths and rejects unsupported blocks. Inline-tag parsing crosses adjacent text blocks but resets at typed reasoning. It adds no signature replay.
+Tests: `tests/adapters/openai/openai-chat-mistral-content.test.ts`; other hosts, byte budgets and configured replay rules keep their existing behavior.
 
 ### Inline think-tag recovery
 
@@ -103,8 +106,8 @@ nonblank `id`/`name`/`namespace`, and fully representable nonempty text/image ou
 existing continuation conversation-boundary calculation. The metadata is structural,
 not authentication. Unknown/opaque/malformed parts reject the entire conversion;
 ordinary missing/empty tool call ids retain the existing translated-route 400 guard.
-Native passthrough and compaction retain raw-body handling. The leaf reuses the input
-content converter after validation and imports no optional subsystem.
+Passthrough and routed-compaction raw-body repairs emit it as a user turn (`externalTaskInputResponsesContent`,
+#6764); the direct native `/responses/compact` forward keeps its raw-body handling. The leaf imports no optional subsystem.
 Stateful developer-guidance injection reuses that validator for its raw insertion
 boundary, so parsed messages and stored raw history retain the same task/guidance order.
 
@@ -123,12 +126,11 @@ and synthesizing explicit "no tool result was recorded" answers only when no rea
 
 The native Ollama wire carries the same contract. `src/adapters/ollama-native.ts`
 `buildNativeMessages` defers `user`/`developer` messages while a batch is open; assistant text/thinking
-with no new tool calls is also deferred while results remain outstanding. Deferred messages retain
-arrival order after recorded results. An unresolved counter avoids rescanning calls per message.
-A new tool-call batch settles its predecessor; completed batches keep subsequent messages in place.
-Codex can record hook notices or commentary between calls and results. Missing results keep the
-`[ocx] no tool result was recorded for "<name>"` marker; orphan IDs, duplicates, and mismatched names
-still throw (#4842). `tests/providers/ollama/ollama-native.test.ts` covers replay and compaction.
+with no new tool calls is also deferred while results remain outstanding. Deferred messages retain arrival order after recorded results; an unresolved counter avoids rescanning calls per message.
+A new tool-call batch settles its predecessor. Additional results in an open batch join in arrival
+order, preserving images and error markers; known late output uses an attributed user-text carrier
+after any pending batch. Unknown IDs and mismatched names/namespaces still throw; missing results
+retain the unknown-status marker. Late-output attribution shares a 256 KiB generated JSON-byte budget per request, reserved before concatenation; overflow uses the HTTP 413 [byte-accounting contract](../transports/byte-accounting.md#request-copy-accounting) instead of truncating identities or output. The replay and tool-continuation tests under `tests/providers/ollama/` cover these paths. See the decision record below. Native response tool-call identity uses valid IDs before function-index/position fallbacks. Distinct IDs at index zero remain separate; repeated IDs replace arguments and cannot change function names. ID-less later frames can update an existing index (and an id may adopt a call first seen without one), but same-frame entries share a call only with the same ID. First-seen order, separate call budgets/retained metadata and the 128-call cap remain enforced. `parallelToolCalls:false` still fails closed before actionable tool events. `tests/providers/ollama/ollama-native-parser.test.ts` covers these contracts.
 
 Forward-mode OpenAI passthrough also repairs replayed `call_id` values longer than the Responses
 API's 64-character limit. Sidechat/fork replay can namespace routed-provider ids beyond that limit,
@@ -224,6 +226,7 @@ serving-identity record. That omission is intentional: binding those routes woul
 conversation's last-serving identity and cause a later main-model turn to strip valid blobs.
 
 > Decision record: [ADR-0051](../decisions/ADR-0051-reasoning-and-tool-result-compatibility.md)
+> Decision record: [ADR-6574](../decisions/ADR-6574-ollama-tool-continuations.md)
 
 DeepSeek's stateless Responses compatibility pass normalizes only unambiguous tool-call batches.
 Calls emitted before the first matched output stay together as one assistant batch, followed by
@@ -554,7 +557,7 @@ Claude Opus 5.5, Fable 5.1 and Sonnet 5.5 are upstream exceptions to the forced-
 adaptive thinking, for all three. The adapter sends `{type:"auto"}` for those choices so the
 request succeeds, but the caller's forced-tool guarantee cannot be preserved; the prompt
 must provide any required tool-use instruction. Other Claude model families retain the
-normal forced-choice mapping unless their own upstream contract says otherwise.
+normal forced-choice mapping: Haiku 5.5 retains `any`/named tools, uses adaptive thinking for low..max, and reasoning none sends `disabled` without effort. Its non-default sampling fields are dropped on every path.
 ## Unmapped modalities are recorded, not dropped
 
 The translated Chat route has no video mapping — this adapter does not implement one.
@@ -581,15 +584,12 @@ file part whose inline base64 bytes now have a lossless carrier; the native Chat
 unchanged. No audio transport and no automatic URL fetch is added, and no client filename,
 payload, URL or metadata is included in the new error messages.
 
-The shared coding-agent projection (CodeBuddy, Qoder) carries tool-result images as
-real image blocks rather than flattening them to the text `[image]`, and orders image
-blocks chronologically — history before current — so attachment order matches the
-prose the model reads beside them. Vendor tool execution stays disabled on both
+The shared coding-agent projection in `src/adapters/coding-agent/` (CodeBuddy, Qoder) carries supported tool-result image references as
+real image blocks. Current tool-result prose marks supported images as `[image attached below]` and unsupported references as `[image omitted: unsupported reference]`; historical tool-result prose retains `[image]` while supported references are also emitted as image blocks. In multi-turn projection, image blocks follow conversation order — history before current. Vendor tool execution stays disabled on both
 adapters. CodeBuddy refuses an unquoted, line-oriented full-width-bar DSML `calls`
 container followed by a named bare or namespaced invoke control line in either output channel; it
 preserves preceding answer text, never promotes vendor prose into execution authority,
-and leaves discussed or quoted literals and code examples untouched. Qoder's explicit
-refusal of original images is unchanged.
+and leaves discussed or quoted literals and code examples untouched. Qoder Global accepts image input through the Qoder CLI. OpenCodex forwards supported image inputs that reach the Global adapter in `src/adapters/qoder/` through the shared coding-agent projection without maintaining a per-model vision capability allowlist there. Image compatibility and any model-specific preprocessing or routing are handled by Qoder. OpenCodex does not use the static discovery fallback roster to classify per-model vision capability. Qoder CN keeps its sidecar classification and rejects residual raw-image requests that reach the adapter. OpenCodex serializes image blocks in conversation order, with history before the current turn. Because Qoder runs with `--no-session-persistence`, prior images are re-projected on later turns; in observed multi-turn image conversations, replayed images can become unreliably associated or effectively ordered relative to the historical text they originally accompanied, a known limitation of the current stateless Qoder projection path.
 
 Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.
 

@@ -1,3 +1,7 @@
+import { spendLedgerStorageErrorResponse } from "./spend-storage-error";
+import { createPhysicalSendReporter } from "../../lib/request-execution-budget";
+import { createInferenceSendBudget } from "../inference/context";
+import { unboundPoolSpendRefusalResponse } from "../workflow-refusal";
 import { capturePoolQuotaWriter } from "../../codex/account-store";
 import { previewXaiOauthWireModel } from "./core-normalize";
 import {
@@ -53,7 +57,7 @@ import { createAdapterEventQueue, preflightAdapterEvents } from "../../adapters/
 import {
   applyCodexAuthContextToProvider,
   callerCodexWorkspaceAccountId,
-  createCodexReserveDispatchGuard,
+  createCodexAuthDispatchGuard,
   unwrapUpstreamRetryEvidenceError,
   CodexMainProfileDrainingError,
   headersForCodexAuthContext,
@@ -182,6 +186,8 @@ import {
 import { hasResponsesItemIdRepair, relaySseWithResponsesItemIdRepair } from "../responses-item-id-repair";
 import type { EffectiveSubagentRoster, SpawnAgentSurface } from "../../codex/catalog";
 import { codexAuthContextLogLabel } from "../../codex/account-label";
+import { rebindPoolCreditPolicy } from "../../codex/pool-credit-policy";
+import { clientCancelledResponse } from "./core-errors";
 
 import {
   codexAccountGatedCanonicalWireModel,
@@ -194,6 +200,7 @@ import {
   usesCodexForwardPoolAuth,
 } from "./core";
 import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, safeOriginLabel } from "./fetch-helpers";
+import { shouldRetryCodexPoolAccountQuota, shouldRetryCodexPoolAccountTransient } from "./core-codex-account";
 import { mapCodexAuthContextErrorToResponse, nativeMainRefreshFailureResponse } from "./codex-auth-error";
 import { linkRequestSessionLane, sessionLaneIdFromRequest } from "../request-log-conversation";
 import { recallComboForLane } from "./combo-session-recall";
@@ -435,6 +442,9 @@ async function refreshPoolCompactContext(args: {
       generation: refreshed.generation,
       poolQuotaWriter: capturePoolQuotaWriter(authCtx.accountId, refreshed),
     };
+    // See the core counterpart: the spread dropped the WeakMap-bound credit policy, so a hold
+    // or opt-out landing during the refresh await would go unchecked on the copy.
+    rebindPoolCreditPolicy(authCtx, refreshedAuthCtx);
     const refreshedProvider = applyCodexAuthContextToProvider(
       stripCodexRuntimeProviderFields(provider),
       refreshedAuthCtx,
@@ -463,6 +473,16 @@ async function refreshPoolCompactContext(args: {
     if (isTerminalCompactPoolRefreshFailure(error)) {
       return { ok: false, quarantine: true, response: reauthResponse() };
     }
+    if (req.signal.aborted) {
+      return { ok: false, quarantine: false, response: clientCancelledResponse() };
+    }
+    // See the core counterpart: a policy refusal raised after a successful refresh maps like
+    // the admission path — a reset-bound 429, never a 503 mislabeled as a refresh failure.
+    const policyResponse = mapCodexAuthContextErrorToResponse(error, {
+      now: Date.now(),
+      accountSelector: args.codexAccountNamespace,
+    });
+    if (policyResponse) return { ok: false, quarantine: false, response: policyResponse };
     return {
       ok: false,
       quarantine: false,
@@ -707,6 +727,7 @@ export async function handleResponsesCompact(
   logCtx.provider = route.codexAccountNamespace
     ? `${route.providerName}-${route.codexAccountNamespace}`
     : route.providerName;
+  logCtx.spendPoolId = route.providerName;
   logCtx.providerAdapter = route.provider.adapter;
   // #4940, and the same refusal the ordinary Responses path makes in request-prepare.ts. Compact has
   // to repeat it rather than inherit it: the native branch below dispatches straight to
@@ -789,7 +810,7 @@ export async function handleResponsesCompact(
   // failure that hands off, continues here. The routed turn used to call handleResponses with
   // no budget at all, so `handleResponsesInner` minted a fresh four after the native attempt
   // had already spent some of the first one.
-  const sendBudget: RequestExecutionBudget = options.sendBudget ?? createRequestExecutionBudget();
+  const sendBudget: RequestExecutionBudget = options.sendBudget ?? createInferenceSendBudget(req, logCtx);
   // A manual override onto another backend must not mint ciphertext the conversation model cannot replay.
   const manualOverrideCrossesProvider = options.compactionRoutingOverride
     ? !compactionRoutingKeepsProviderIdentity(config, options.compactionRoutingOverride, route)
@@ -1007,19 +1028,32 @@ export async function handleResponsesCompact(
     // `kind === "pool"` and a main-pool credential left it false -- so 401 then 429 really did
     // reach five. The single sends spend the base allowance first and then the one shared
     // final-recovery reserve, which is the same rule the Responses path follows.
-    const sendSingleCompactAttempt = (
+    const sendSingleCompactAttempt = async (
       doFetch: () => Promise<Response>,
     ): Promise<Response> => {
       if (sendBudget.remainingBaseSends(TRANSIENT_RETRY_MAX_ATTEMPTS) > 0) {
-        sendBudget.used += 1;
-        return doFetch();
+        const report = createPhysicalSendReporter(sendBudget, () => ({ poolId: logCtx.spendPoolId ?? route.providerName,
+          identityId: logCtx.accountLogLabel }));
+        let started = false;
+        try {
+          if (report.beforeSend?.() === false) throw new SendBudgetExhaustedError(safeHostLabel(compactUrl));
+          started = true;
+          return await doFetch();
+        } finally {
+          try { if (started) report(1); }
+          finally { report.close?.(); }
+        }
       }
       const decision = sendBudget.reserveDispatch({
         sendClass: "auth-recovery",
         targetKey: compactTargetKey,
       });
       if (!decision.allowed) return Promise.reject(new SendBudgetExhaustedError(safeHostLabel(compactUrl)));
-      if (!decision.permit.use()) return Promise.reject(new SendBudgetExhaustedError(safeHostLabel(compactUrl)));
+      if (!decision.permit.use()) {
+        // Nothing was sent, so the reservation goes back rather than holding a send against the request.
+        decision.permit.release();
+        return Promise.reject(new SendBudgetExhaustedError(safeHostLabel(compactUrl)));
+      }
       return doFetch();
     };
     const sendCompactAttempt = (
@@ -1027,6 +1061,7 @@ export async function handleResponsesCompact(
       sendHeaders: Headers,
       recovery: "normal" | "single",
       sendAuthCtx: CodexAuthContext,
+      onPhysicalDispatch?: () => void,
     ): Promise<Response> => {
       const doFetch = (upstreamRecovery?: UpstreamSendRecovery) => fetchWithHeaderTimeout(
         compactUrl,
@@ -1042,7 +1077,8 @@ export async function handleResponsesCompact(
           providerName: route.providerName,
           modelId: route.modelId,
           beforeDispatch: isCanonicalOpenAiForwardProvider(sendProvider)
-            ? createCodexReserveDispatchGuard(sendAuthCtx, config, selectedModelId, admission) : undefined,
+            ? createCodexAuthDispatchGuard(sendAuthCtx, config, selectedModelId, admission) : undefined,
+          ...(onPhysicalDispatch ? { onPhysicalDispatch } : {}),
         }),
         // Every credential-bearing forward send gets manual redirects, not only
         // pool sends: direct mode carries the caller's credential too (#914).
@@ -1061,7 +1097,8 @@ export async function handleResponsesCompact(
           // Draws the shared remainder instead of a fresh three. Compact is a native endpoint
           // of the same logical turn, so its sends belong to the same cap.
           attempts: sendBudget.remainingBaseSends(TRANSIENT_RETRY_MAX_ATTEMPTS),
-          onSendsConsumed: (used: number) => { sendBudget.used += Math.max(0, used); },
+          onSendsConsumed: createPhysicalSendReporter(sendBudget, () => ({ poolId: logCtx.spendPoolId ?? route.providerName,
+            identityId: logCtx.accountLogLabel })),
         });
     };
 
@@ -1069,9 +1106,12 @@ export async function handleResponsesCompact(
     // actually happens, so every recorder call names the context that produced it.
     let outcomeCtx = authCtx;
     const localDispatchRefusal = (error: unknown): Response | undefined => {
-      const response = mapCodexAuthContextErrorToResponse(unwrapUpstreamRetryEvidenceError(error), {
-        now: Date.now(), accountSelector: route.codexAccountNamespace,
-      });
+      const cause = unwrapUpstreamRetryEvidenceError(error);
+      const response = spendLedgerStorageErrorResponse(error, logCtx) ?? (cause instanceof SendBudgetExhaustedError
+        ? unboundPoolSpendRefusalResponse(logCtx) ?? formatErrorResponse(429, "request_send_budget_exhausted", cause.message)
+        : mapCodexAuthContextErrorToResponse(cause, {
+          now: Date.now(), accountSelector: route.codexAccountNamespace,
+        }));
       if (response) {
         releaseUpstreamHostAdmission(compactHostAdmissionLease);
         compactHostAdmissionLease = null;
@@ -1184,6 +1224,53 @@ export async function handleResponsesCompact(
       }
     }
 
+    // The settle for an alternate send that threw, shared by the quota and transient moves. By the
+    // time it runs the request already names the alternate (outcomeCtx), so health goes to it.
+    const failedAlternateCompactSend = (err: unknown): Response => {
+      if (req.signal.aborted) {
+        recordCompactPoolOutcome(outcomeCtx, 499);
+        return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
+      }
+      const localRefusal = localDispatchRefusal(err);
+      if (localRefusal) return localRefusal;
+      const outcome = classifyTransportFailureKind(err);
+      // Host-level evidence stands regardless of pool membership (#914 review).
+      if (outcome === "connect_neutral") {
+        if (compactHostCircuitEnabled) {
+          recordUpstreamHostFailure(actualCompactHostKey, {
+            code: transportErrorCode(err),
+            threshold: config.upstreamHostCircuitThreshold,
+            lease: compactHostAdmissionLease,
+          });
+        } else {
+          recordUpstreamHostFailure(actualCompactHostKey, { code: transportErrorCode(err) });
+        }
+      } else {
+        releaseUpstreamHostAdmission(compactHostAdmissionLease);
+      }
+      compactHostAdmissionLease = null;
+      recordCompactPoolOutcome(outcomeCtx, outcome);
+      return formatErrorResponse(502, "upstream_error", "Failed to connect to compact upstream");
+    };
+    const scrubCompactStateForAlternate = (alternateAuthCtx: CodexAuthContext): void => {
+      const binding = conversationStateBindingFromAuth(
+        alternateAuthCtx,
+        (authCtx.kind === "pool" || authCtx.kind === "main-pool")
+          ? authCtx.affinityKey
+          : codexPoolAffinityKey(req.headers),
+      );
+      if (!binding) return;
+      for (const body of [raw, compactBody]) {
+        applyAccountChangeConversationStateScrub({
+          body,
+          bindingKey: binding.bindingKey,
+          servingAccountId: binding.accountId,
+          priorAccountId: authCtx.accountId,
+          logCtx,
+        });
+      }
+    };
+
     // Bounded same-request alternate: the regular /v1/responses path already does this
     // (core.ts:319-423) and recognizes exactly 429/402. Without it a pool rejection
     // surfaces to the client, which retries the compact task OUTSIDE the logical request
@@ -1284,57 +1371,81 @@ export async function handleResponsesCompact(
         await upstream.body?.cancel().catch(() => undefined);
         outcomeCtx = alternate.authCtx;
         logCtx.accountLogLabel = codexAuthContextLogLabel(alternate.authCtx, config);
-        {
-          const binding = conversationStateBindingFromAuth(
-            alternate.authCtx,
-            (authCtx.kind === "pool" || authCtx.kind === "main-pool")
-              ? authCtx.affinityKey
-              : codexPoolAffinityKey(req.headers),
-          );
-          if (binding) {
-            applyAccountChangeConversationStateScrub({
-              body: raw,
-              bindingKey: binding.bindingKey,
-              servingAccountId: binding.accountId,
-              priorAccountId: authCtx.accountId,
-              logCtx,
-            });
-            applyAccountChangeConversationStateScrub({
-              body: compactBody,
-              bindingKey: binding.bindingKey,
-              servingAccountId: binding.accountId,
-              priorAccountId: authCtx.accountId,
-              logCtx,
-            });
-          }
-        }
+        scrubCompactStateForAlternate(alternate.authCtx);
         try {
           upstream = await sendCompactAttempt(alternate.provider, alternate.headers, "single", alternate.authCtx);
         } catch (err) {
-          if (req.signal.aborted) {
-            recordCompactPoolOutcome(outcomeCtx, 499);
-            return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
+          return failedAlternateCompactSend(err);
+        }
+      }
+    }
+    // A transient 5xx that survived the same-account ladder above (#6969). The regular path moves
+    // it to another Pool account; compact used to move only on 429/402, so the client retried the
+    // compact task outside this request while another account sat idle. One bounded alternate send,
+    // the same guards as the quota move, and a 5xx whose body confirms quota keeps today's path.
+    if (
+      shouldRetryCodexPoolAccountTransient(upstream)
+      && !storedPool401ReplayAttempted
+      && usesCodexForwardPoolAuth(authCtx, route.provider)
+      && !authCtx.fixedAccount
+      && route.codexAccountMode
+      && outcomeCtx === authCtx
+      && !req.signal.aborted
+      && !conversationCarriesUploadedFiles(raw)
+      && !await shouldRetryCodexPoolAccountQuota(upstream, req.signal)
+    ) {
+      const firstStatus = upstream.status;
+      const firstRetryAfter = upstream.headers.get("retry-after");
+      const firstResetAt = [
+        upstream.headers.get("x-codex-primary-reset-at"),
+        upstream.headers.get("x-codex-secondary-reset-at"),
+        upstream.headers.get("x-codex-tertiary-reset-at"),
+      ].filter(Boolean);
+      const alternate = await resolveAlternateCompactContext({
+        req,
+        admission,
+        config,
+        route,
+        selectedModelId,
+        excludeAccountId: authCtx.accountId,
+        turnAdmissionLease,
+      });
+      if (alternate && req.signal.aborted) {
+        releaseCodexAuthContextProbeLease(alternate.authCtx);
+        recordCompactPoolOutcome(outcomeCtx, 499);
+        void upstream.body?.cancel(req.signal.reason).catch(() => undefined);
+        return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
+      }
+      if (alternate) {
+        const firstLabel = logCtx.accountLogLabel;
+        // B's identity before B's admission, so every budget and spend check runs against B. A's
+        // response stays intact until B is actually sent.
+        logCtx.accountLogLabel = codexAuthContextLogLabel(alternate.authCtx, config);
+        scrubCompactStateForAlternate(alternate.authCtx);
+        const recordFirstMove = () => {
+          recordCompactPoolOutcome(authCtx, firstStatus, { retryAfter: firstRetryAfter, resetAt: firstResetAt });
+          void upstream.body?.cancel().catch(() => undefined);
+          outcomeCtx = alternate.authCtx;
+        };
+        let alternateResponse: Response | undefined;
+        // Whether B's send actually left this process. Every local refusal before that point -- a
+        // spent budget, a dispatch guard such as disabled credits, a pacing refusal -- keeps A.
+        let alternateDispatched = false;
+        try {
+          alternateResponse = await sendCompactAttempt(alternate.provider, alternate.headers, "single", alternate.authCtx,
+            () => { alternateDispatched = true; });
+        } catch (err) {
+          if (alternateDispatched) {
+            recordFirstMove();
+            return failedAlternateCompactSend(err);
           }
-          const localRefusal = localDispatchRefusal(err);
-          if (localRefusal) return localRefusal;
-          const outcome = classifyTransportFailureKind(err);
-          // Host-level evidence stands regardless of pool membership (#914 review).
-          if (outcome === "connect_neutral") {
-            if (compactHostCircuitEnabled) {
-              recordUpstreamHostFailure(actualCompactHostKey, {
-                code: transportErrorCode(err),
-                threshold: config.upstreamHostCircuitThreshold,
-                lease: compactHostAdmissionLease,
-              });
-            } else {
-              recordUpstreamHostFailure(actualCompactHostKey, { code: transportErrorCode(err) });
-            }
-          } else {
-            releaseUpstreamHostAdmission(compactHostAdmissionLease);
-          }
-          compactHostAdmissionLease = null;
-          recordCompactPoolOutcome(outcomeCtx, outcome);
-          return formatErrorResponse(502, "upstream_error", "Failed to connect to compact upstream");
+          // Refused before anything left: A's answer and identity stand, recorded once below.
+          logCtx.accountLogLabel = firstLabel;
+          releaseCodexAuthContextProbeLease(alternate.authCtx);
+        }
+        if (alternateResponse) {
+          recordFirstMove();
+          upstream = alternateResponse;
         }
       }
     }

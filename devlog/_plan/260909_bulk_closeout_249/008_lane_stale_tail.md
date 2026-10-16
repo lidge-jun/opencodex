@@ -29,7 +29,7 @@ covered seven of this lane's nine issues. VERBATIM, 120_issue_verdicts.md:53-56:
 
 A second anchor is the 2026-09-07 release-recommendation pass, which already classified
 every one of these PRs as DEFER or NOT_NOW — a deferral, not a closure. VERBATIM,
-devlog/_plan/260907_next_release_recommendations/010_recommendations.md:66 and :76:
+devlog/_fin/260907_next_release_recommendations/010_recommendations.md:66 and :76:
 
 > #3463, #3389, #3652, #3635 (REIMPLEMENT later), #2921, #2280, #2366, #2362, #2355, #2213, #2230, #1645, #3741, #3738,
 

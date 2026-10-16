@@ -6,6 +6,8 @@ import { join } from "node:path";
 import {
   clearAnthropicAccountPoolState,
   getAnthropicAccountHealthSnapshot,
+  recordAnthropicAccount429,
+  recordAnthropicAccountRefusal,
 } from "../../../src/oauth/anthropic-routing";
 import { getAccountSet, saveAccountCredential, saveCredential } from "../../../src/oauth/store";
 import { clearAccountQuotaCache, fetchProviderAccountQuotas, getCachedProviderAccountQuota } from "../../../src/providers/quota";
@@ -106,16 +108,33 @@ describe("Anthropic reset-derived cooldown recovery", () => {
     expect(getAnthropicAccountHealthSnapshot(id)).toBeNull();
   });
 
-  test("successful quota reports do not clear Retry-After or guessed cooldowns", async () => {
+  test("successful quota reports clear named-window Retry-After and guessed cooldowns (#6989)", async () => {
     const id = await seed();
     globalThis.fetch = (async () => quotaResponse(0, 0)) as typeof fetch;
 
+    // The shared-quota helper names the five-hour window as rejected, so the read can answer it
+    // whichever deadline the refusal recorded.
     rotateAnthropicAccountOn429(config, id, "3600", null, Date.now());
+    expect(getAnthropicAccountHealthSnapshot(id)?.cooldownSource).toBe("retry-after");
+    await fetchProviderAccountQuotas("anthropic", true);
+    expect(getAnthropicAccountHealthSnapshot(id)).toBeNull();
+
+    rotateAnthropicAccountOn429(config, id, null, null, Date.now(), new Headers());
+    expect(getAnthropicAccountHealthSnapshot(id)?.cooldownSource).toBe("default");
+    await fetchProviderAccountQuotas("anthropic", true);
+    expect(getAnthropicAccountHealthSnapshot(id)).toBeNull();
+  });
+
+  test("successful quota reports do not clear windowless Retry-After or entitlement cooldowns", async () => {
+    const id = await seed();
+    globalThis.fetch = (async () => quotaResponse(0, 0)) as typeof fetch;
+
+    recordAnthropicAccount429(config, id, "3600", Date.now(), new Headers({ "anthropic-ratelimit-unified-status": "rejected" }));
     await fetchProviderAccountQuotas("anthropic", true);
     expect(getAnthropicAccountHealthSnapshot(id)?.cooldownSource).toBe("retry-after");
 
     clearAnthropicAccountPoolState();
-    rotateAnthropicAccountOn429(config, id, null, null, Date.now(), new Headers());
+    recordAnthropicAccountRefusal(config, id, 403, null, Date.now());
     await fetchProviderAccountQuotas("anthropic", true);
     expect(getAnthropicAccountHealthSnapshot(id)?.cooldownSource).toBe("default");
   });

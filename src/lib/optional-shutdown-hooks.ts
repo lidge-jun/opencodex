@@ -70,5 +70,40 @@ export function runOptionalShutdownHooks(): void {
 /** Test-only reset so an isolated lifecycle test does not inherit registrations. */
 export function resetOptionalShutdownHooksForTests(): void {
   hooks.clear();
+  drainStartHooks.clear();
+  drainStartHooksRan = false;
   hooksRan = false;
+}
+
+const drainStartHooks = new Map<string, ShutdownHook>();
+let drainStartHooksRan = false;
+
+/**
+ * Register work that must run the moment a drain begins, before in-flight turns are awaited.
+ * The service health sentinel (#6671) uses it: a deliberate stop whose drain stalls must stay a
+ * stop, so the sentinel is withdrawn before the drain can look unresponsive. Same contract as
+ * {@link registerOptionalShutdownHook}: keyed, synchronous, best-effort, detachable.
+ */
+export function registerDrainStartHook(key: string, hook: ShutdownHook): () => void {
+  drainStartHooks.set(key, hook);
+  return () => {
+    if (drainStartHooks.get(key) === hook) drainStartHooks.delete(key);
+  };
+}
+
+/** Run every drain-start hook. Never throws. */
+export function runDrainStartHooks(): void {
+  drainStartHooksRan = true;
+  for (const [key, hook] of [...drainStartHooks]) {
+    try {
+      hook();
+    } catch (err) {
+      console.warn(`[shutdown] drain-start hook "${key}" failed:`, err instanceof Error ? err.message : err);
+    }
+  }
+}
+
+/** Whether a drain has begun in this process; work that must not start mid-drain checks this. */
+export function didRunDrainStartHooks(): boolean {
+  return drainStartHooksRan;
 }

@@ -151,7 +151,7 @@ namespace, and cannot use reserved bare native families such as `gpt-*`, `o1-*`,
 | `alias?` | `string` | — | Optional public model id in place of the canonical picker slug. |
 | `nativeAlias?` | `boolean` | `false` | Let a currently supported bare native id take precedence only for that unqualified id. Bare `gpt-5.6-*` ids use Codex Pool/Direct credentials. Account-qualified routes remain distinct. Provider-qualified routes such as `openai-apikey/gpt-5.6-*` use their configured API-key route and never fall through to the native alias. |
 | `displayName?` | `string` | — | Display-only catalog label, required and non-empty for a native alias. |
-| `decisionProvider?` | `string` | `"jev"` | `strategy: "jev"` only. `"jev"` (the same as omitting it, and stored as omission) is the TypeSafe decision service, valid without a provider row; any other value must name a configured provider with `adapter: "jev-decision"` whose `baseUrl` ends in `/systemone`. |
+| `decisionProvider?` | `string` | `"jev"` | `strategy: "jev"` only. `"jev"` (the same as omitting it, and stored as omission) is the TypeSafe decision service, valid without a provider row; any other value must name a configured provider with `adapter: "jev-decision"` and a full HTTPS decision `baseUrl` (any path) or a local HTTP `/systemone` endpoint. Userinfo, query strings, and fragments are refused. |
 | `decisionModel?` | `string` | unset | `strategy: "jev"` only, mutually exclusive with `decisionProvider`. An ordinary opencodex route (for example `ollama/qwen3:4b`) asked to pick one offered option as JSON. It runs with the selected provider's stored credentials, never the caller's, and cannot resolve to this combo, any JEV combo, or a `jev-decision` row. |
 | `decisionTimeoutMs?` | `number` | `4000` | `strategy: "jev"` only. Decision deadline before failing open, 1000–120000 ms. |
 
@@ -376,5 +376,9 @@ CLI: `ocx logs explain <request-id>`, `ocx logs rebuild-index`,
 unchanged. Old `usage.jsonl` rows without `routeDecision` parse unchanged.
 The history index is disposable - deleting `routing-history.sqlite` triggers
 an automatic rebuild from `usage.jsonl` on the next query; `ocx logs
-rebuild-index` forces one. Nothing in this system auto-tunes weights,
-budgets, or candidate sets.
+rebuild-index` forces one. Once `usage.jsonl` reaches 1 MiB, a rebuild runs on
+a worker thread, so the proxy keeps serving requests while it runs. Until it
+finishes, history queries wait for it and routing profiles treat historical
+health as unknown evidence (the profile's `unknownEvidence.health` policy
+applies). Nothing in this system auto-tunes weights, budgets, or candidate
+sets.

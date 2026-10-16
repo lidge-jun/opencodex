@@ -1,9 +1,9 @@
 ---
 title: クライアント統合
-description: ダッシュボードから opencodex を OpenCode、Pi、OMP、Hermes、OpenClaw、Kimi Code、gjc、DeepSeek Harness、MiniMax Code、ZCode、Prime Agent、Aside、Raycast、omo、Cline CLI、Kilo、Factory Droid に接続します。クライアントごとにスイッチがあり、書き込み前には必ずバックアップを取ります。
+description: ダッシュボードから opencodex を OpenCode、Pi、OMP、Hermes、OpenClaw、Kimi Code、gjc、DeepSeek Harness、MiniMax Code、ZCode、Prime Agent、Aside、Raycast、omo、Cline CLI、Kilo、Command Code、Factory Droid に接続します。クライアントごとにスイッチがあり、書き込み前には必ずバックアップを取ります。
 ---
 
-**Integrations** タブは、各クライアントの設定ファイルに opencodex のプロバイダーブロックを書き込み、必要に応じて削除します。次の 17 クライアントは、それぞれのスイッチで管理できます。
+**接続** タブは、各クライアントの設定ファイルに opencodex のプロバイダーブロックを書き込み、必要に応じて削除します。次の 18 クライアントは、それぞれのスイッチで管理できます。
 
 | クライアント | 設定ファイル | 形式 | 変更が反映される時点 | 認証情報 |
 |---|---|---|---|---|
@@ -14,15 +14,16 @@ description: ダッシュボードから opencodex を OpenCode、Pi、OMP、Her
 | OpenClaw | `~/.openclaw/openclaw.json` | JSON5 | 稼働中のゲートウェイに直ちに反映 | `OPENCODEX_OPENCLAW_API_KEY` |
 | Kimi Code | `~/.kimi-code/config.toml` | TOML | 再起動時または `/reload` 実行時 | ループバック用プレースホルダー |
 | gjc | `~/.gjc/agent/models.yml` | YAML | 新しいセッションまたは `/model` を開いたとき | 秘密情報ではないループバック用プレースホルダー |
-| DeepSeek Harness (DSH) | `$DSH_HOME/settings.yaml`（デフォルトは `~/.dsh/settings.yaml`） | YAML | ホットリロード時 | 秘密情報ではないループバック用ベアラープレースホルダー |
+| DeepSeek Harness (DSH) | `$DSH_HOME/profiles/desktop/cordis.patch.yml`（デフォルトは `~/.dsh/profiles/desktop/cordis.patch.yml`）。DSH Desktop がこのプロファイルを作成するまでは `$DSH_HOME/settings.yaml` | YAML | ホットリロード時 | 秘密情報ではないループバック用ベアラープレースホルダー |
 | MiniMax Code | `~/.minimax/config.yaml` | YAML | 新しいセッションまたはモデル選択画面を開いた後 | ループバック用プレースホルダー |
 | Prime Agent | `~/.prime/agent/models.json` | JSON | 新しいセッション | ループバック用プレースホルダー |
-| ZCode | `~/.zcode/v2/config.json` | JSON | 再起動時 | ループバック用プレースホルダー |
+| ZCode | `~/.zcode/v2/provider_config.json` (schemaVersion 1); 旧形式のフォールバック: `~/.zcode/v2/config.json` | JSON | 再起動時 | ループバック用プレースホルダー |
 | Aside | `~/.aside/u/<account>/models.json` | JSON | Aside を完全に終了して開き直した後 | ループバック用プレースホルダー |
 | Raycast | `~/.config/raycast/ai/providers.yaml` | YAML | 保存後すぐ。Raycast がファイルを監視 | なし。ループバックのみ |
 | omo | `~/.omo/agent/models.json` | JSON | 新しいセッション | ループバック用プレースホルダー |
 | Cline CLI | `~/.cline/data/settings/providers.json` と同階層の `models.json` | JSON のペア | Cline の停止と再起動後 | ループバック用プレースホルダー |
 | Kilo | `~/.config/kilo` 内で最初に存在する `kilo.jsonc`、`kilo.json`、`opencode.jsonc`、`opencode.json`、`config.json`（`XDG_CONFIG_HOME` でディレクトリを変更可能。どれもなければ `kilo.jsonc` を作成） | JSONC | 新しいセッション | `OPENCODEX_KILO_API_KEY` |
+| Command Code | `~/.commandcode/providers.json` (Windows の既定ホームを使用する場合: `HOME ?? USERPROFILE` が空文字列や空白のみではなく Windows の絶対パスの場合に限り使用し、それ以外は `homedir()`。別途指定されたホームは保持。その配下の `.commandcode\providers.json`) | JSON | Command Code の次回起動時 | なし — キー不要のループバック (`apiKey: false`) |
 | Factory Droid | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` Windows の場合) | JSON | ファイル変更を即時反映 | キー不要のループバック |
 
 生成されるカタログには、各プロバイダーの選択で有効なモデルのみが含まれます。これはダウンロードと管理対象の統合の両方に適用され、Pi と Aside も対象です。管理画面のモデル一覧にはすべてのモデルが表示されるため、追加のモデルを有効にできます。
@@ -41,7 +42,7 @@ modelProfile:
 
 管理対象の OpenCode 統合は、`provider.opencodex`（opencode V1）と `providers.opencodex`（opencode V2）の 2 つの部分を所有します。両ブロックとも、宣言されたモデルごとの推論負荷の選択肢と既定値を同じ内容で持ちます。レガシーブロックではモデルの options の既定値とバリアントマップで、V2 ブロックではモデルの settings とネイティブなバリアント配列で表現され、両方が書き込まれて同期します。両者は同じプロバイダー ID とモデル ID を指定し、opencode V2 は 1 つのプロバイダー項目に統合します。Apply、Refresh、Disable、Restore は両方に作用し、他のプロバイダー、エージェント、キー割り当て、MCP 項目には触れません。これらのモデル定義は、Kilo のエクスポートや `ocx opencode` ランチャーと同じ実効的な正規モデルメタデータから作られます。明示的なカスタム上書きは常に優先され、空にクリアされた段階はそのまま維持され、段階も既定値も捏造されません。信頼できるコンテキスト上限が携帯され、その横に出力上限が並びます。出力は既知の値（明示的またはカタログメタデータ）が優先され、未知の場合はスキーマ必須の 32000 フォールバック（コンテキストにクランプ）が使われ、信頼できるコンテキストがなければ limit ブロック自体が省略されます。機能、負荷の段階、既定値、任意の入力上限は既知の場合にのみ書き込まれます。V2 ブロックのネイティブな capabilities オブジェクトには既知の tools 値が必要なため、ツール対応が不明な場合は一部分だけを書くのではなくオブジェクトごと省略され、レガシー側のモダリティ宣言はそのまま残ります。段階を捏造しない代わりに制御だけを書きます。V2 ブロックは常に明示的なバリアント配列を持ち、宣言がない場合は空になり、省略すると OpenCode が low/medium/high を合成するためです。固定された推論は既知だが調整可能な段階がないモデルには、選択可能な負荷ではなく無効化専用の抑止が書かれます。レガシー OpenCode ブロックも Kilo も、クライアントが本来生成する各段階 ID をすべて無効化します。どちらも選択可能な負荷は追加しません。選択可能なバリアント（モデル自身の段階が `none` を宣言している場合の `none` を含む）は、既知の場合に書き込まれる既定の推論負荷を上書きできます。クライアントが何を選んでも、プロキシの上流向けに固定されたポリシーは引き続き実際のリクエストに適用されます。
 
-管理対象の DSH 統合には **DSH 0.1.0-rc.6** 以降が必要です。OpenCodex が所有するのは `llm-pi-ai.providers.opencodex` のみです。Apply と Refresh はその部分を置き換え、Disable はその部分のみを削除し、Restore は記録されたスナップショットを戻します。DSH はプロバイダー変更をホットリロードします。これらの操作はユーザーのデフォルトモデルやネイティブの `deepseek-official` プロバイダーを変更しません。管理対象の DSH 統合は現在ループバック専用で、実際の認証情報は書き込みません。
+管理対象の DSH 統合には **DSH 0.1.0-rc.6** 以降が必要です。**DSH 0.1.7 以降**は Desktop プロファイルのパッチ `$DSH_HOME/profiles/desktop/cordis.patch.yml` からルートを読み込み、変更をホットリロードします。Desktop プロファイルとパッチが存在する場合、OpenCodex は `[id=llm-pi-ai].config.providers.opencodex` の行だけを書き込みます。`$DSH_HOME/profiles/desktop/package.json` が存在しても `cordis.patch.yml` がない場合、Apply は拒否されます。`[]`（DSH が新しいプロファイルに書き込む空のパッチ）を含む `cordis.patch.yml` を作成し、統合を再度有効にしてください。Desktop プロファイルがない場合に限り、`$DSH_HOME/settings.yaml` の `llm-pi-ai.providers.opencodex` をフォールバックとして使います。Apply と Refresh はその部分を置き換え、Disable はその部分のみを削除し、Restore は記録されたスナップショットを戻します。これらの操作はユーザーのデフォルトモデルやネイティブの `deepseek-official` プロバイダーを変更しません。管理対象の DSH 統合は現在ループバック専用で、実際の認証情報は書き込みません。
 
 MiniMax Code は `MINIMAX_DATA_DIR`、次に `MAVIS_DATA_DIR` を参照し、どちらもなければ `~/.minimax` を使います。管理対象ブロックが所有するのは `custom_provider.opencodex` のみです。`defaultModel`、選択済みの MiniMax 認証情報の取得元、ユーザーの MiniMax ログインは変更しません。接続後に MCode で `custom_provider:opencodex/<provider/model>` の項目を選んでください。統合の更新では、モデルごとの信頼できるコンテキストウィンドウと推論負荷の選択肢も更新されます。不明な機能は省略し、MCode のセッションが所有する現在の負荷は維持します。
 
@@ -51,7 +52,7 @@ Aside は、ローカルプロファイルも含め、登録済みの各プロ�
 
 Aside 固有の注意点として、稼働中のアプリ自身が `models.json` を書き換えます。適用後は Claude Desktop と同様に、Aside を完全に終了して開き直してください。Aside のブロックはループバック専用で、実際の認証情報は含みません。
 
-管理対象の Raycast 統合は **macOS と Windows** に対応します。Custom Providers は **Raycast Pro** の機能です。無料プランでもファイルは書き込まれますが、Raycast は読み込まないため、`ocx integration client status --client raycast` と Integrations ページに警告が表示されます。macOS または Windows では Raycast → Settings → AI → **Reveal Providers Config** を一度開き、`ai` フォルダーを作成してください。対応する OS では opencodex がそのフォルダーをインストール検出に使い、存在するまでクライアントを未インストールと報告します。フォルダーがあっても Linux は未対応です。
+管理対象の Raycast 統合は **macOS と Windows** に対応します。Custom Providers は **Raycast Pro** の機能です。無料プランでもファイルは書き込まれますが、Raycast は読み込まないため、`ocx integration client status --client raycast` と **接続** ページに警告が表示されます。macOS または Windows では Raycast → Settings → AI → **Reveal Providers Config** を一度開き、`ai` フォルダーを作成してください。対応する OS では opencodex がそのフォルダーをインストール検出に使い、存在するまでクライアントを未インストールと報告します。フォルダーがあっても Linux は未対応です。
 
 状態フィールド `aiDirPresent` が示すのは、Raycast のインストール状況や OS の対応状況とは無関係に、`~/.config/raycast/ai` の存在だけです。Raycast がインストール済み、または利用可能である証明にはなりません。CLI は `plan` を別行に表示し、`aiDirPresent` が false の場合は macOS/Windows での設定方法を追加します。`--json` は、入れ子の `raycast` ブロックを含む生の状態を維持します。Raycast は macOS と Windows の両方で `~/.config/raycast/ai/providers.yaml` を読み、`XDG_CONFIG_HOME` は尊重しないため、このパスは移動できません。
 
@@ -103,7 +104,7 @@ Aside も選択したプロファイル 1 件ずつ同じプレビューと確�
 
 ## 実際に起こること
 
-**通常、書式は保持されません。** 適用時には設定を解析して書き戻すため、JSON、JSON5、TOML は再整形され、JSON5 や TOML のコメントが失われることがあります。OMP、DSH、Hermes は例外です。それぞれの YAML 書き込み処理は `providers.opencodex` と `llm-pi-ai.providers.opencodex` の対象範囲だけを変更し、無関係なプロバイダーのコメントと書式をバイト単位で保持します。その正確な範囲を安全に識別できなければ、操作を拒否します。他のクライアントで以前のファイル内容が必要な場合は Restore を使ってください。スナップショットはバイト単位のコピーです。
+**通常、書式は保持されません。** 適用時には設定を解析して書き戻すため、JSON、JSON5、TOML は再整形され、JSON5 や TOML のコメントが失われることがあります。OMP、DSH、Hermes は例外です。YAML の書き込み処理は管理対象の範囲だけを変更します。OMP と Hermes では `providers.opencodex`、DSH では Desktop パッチの `[id=llm-pi-ai].config.providers.opencodex` が対象です。Desktop プロファイルがない場合に限り、DSH は `settings.yaml` の `llm-pi-ai.providers.opencodex` を使います。無関係なプロバイダーのコメントと書式はバイト単位で保持します。 その正確な範囲を安全に識別できなければ、操作を拒否します。他のクライアントで以前のファイル内容が必要な場合は Restore を使ってください。スナップショットはバイト単位のコピーです。
 
 **値を忠実に書き直せない場合も、スイッチは拒否します。** 通常使う値の種類は往復処理に対応していますが、たとえば利用可能なパーサーが正確に読み直せない `inf` や `nan` を使う TOML ファイルでは、変更された値を書いて成功とみなさず、適用を停止して理由を示します。ファイル名が表示され、ディスク上の内容は変わりません。手動編集は引き続き可能で、自動書き換えだけが拒否されます。
 
@@ -148,7 +149,7 @@ ocx mcode
 
 有効な Aside プロファイルは、通常の「所有済みのみ更新」の例外です。アカウントディレクトリが存在し、まだ所有ブロックがなく、その場所が空であれば、同期時に最初のブロックを作れます。以前の Aside 接続があれば、登録済みの全プロファイルでこの動作がデフォルトで有効になります。同期は存在しないアカウントディレクトリを作らず、手動のブロックも置き換えません。拒否または重複する更新は、クライアントごとに別々に報告されます。更新されたファイルを読み込むには、新しい Pi、OpenCode、Kilo セッションを開始するか、Aside を完全に終了して開き直してください。Aside の更新には[対応する稼働中のプロキシ](#aside-プロファイルの管理)が必要です。
 
-Models に **“Model selection saved”** とクライアント更新の警告が一緒に表示された場合、モデルの選択自体はすでに保存されていますが、1 件以上のクライアントファイルを更新できていません。警告には該当するクライアントと、必要に応じて Aside プロファイル、拒否理由が示されます。新しいセッションを始める前に **Integrations** で対象を確認してください。報告された問題を解消して `ocx sync` を再試行します。重複する操作は先に完了させてください。警告にバックアップパスがある、または復旧が未完了と表示される場合は、再試行前にその状態を調べてください。モデル選択の保存成功だけでは、クライアントファイルの復旧は確認できません。
+Models に **“Model selection saved”** とクライアント更新の警告が一緒に表示された場合、モデルの選択自体はすでに保存されていますが、1 件以上のクライアントファイルを更新できていません。警告には該当するクライアントと、必要に応じて Aside プロファイル、拒否理由が示されます。新しいセッションを始める前に **接続** で対象を確認してください。報告された問題を解消して `ocx sync` を再試行します。重複する操作は先に完了させてください。警告にバックアップパスがある、または復旧が未完了と表示される場合は、再試行前にその状態を調べてください。モデル選択の保存成功だけでは、クライアントファイルの復旧は確認できません。
 
 別製品の MiniMax プラットフォーム CLI（`mmx`）は、ファイル切り替え式の統合ではありません。そのテキストコマンドは MiniMax の Anthropic 互換エンドポイントを使うため、OpenCodex は認証情報を分離したループバック専用ランチャーを提供します。
 
@@ -185,6 +186,8 @@ ocx integration client restore --client aside --profile 1 --op <opId>
 
 ## ZCode 3.14 以降
 
+上記のパスは既定値です。既定のホームにある `~/.zcode/v2/setting.json` に絶対パスの `dataBaseDir` を指定すると、保存先は `<dataBaseDir>/.zcode/v2/provider_config.json` に移ります。`ZCODE_DATA_DIR` は `.zcode` ルートそのものを指定して設定値より優先され、`ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` はプロバイダーファイルのパスで優先されます。不正な設定、読み取れない設定、相対パスでは新しい適用と更新を拒否します。既存の所有権と復元記録は保持されます。[パスと復元規則の原文](https://opencodex.me/guides/integrations/#zcode-314-and-later)を参照してください。
+
 ZCode 3.14 はカスタムプロバイダーの保存先を `~/.zcode/v2/provider_config.json` に移しました。`~/.zcode/v2/config.json` からは、新しいファイルがない場合に一度だけ行われるインポートでしか参照されません。ZCode は初回起動時に新しいファイルを作るため、一度でも起動した環境ではインポートは済んでおり、`config.json` に書いても反映されません。
 
 opencodex は可能な場合、`provider_config.json` に直接書き込みます。統合を有効にすると `opencodex` プロバイダーの規則が追加され、カタログ更新でその内容が更新され、無効化では opencodex が書いた内容だけを削除します。ファイル内のその他の規則は維持されます。他のプロバイダーが opencodex と同じモデル ID に対して保持する規則も対象です。opencodex が書いていない `opencodex` ID の規則は、引き継ぐ対象ではなく競合です。ZCode 内で解決するか、明示的な上書きを使ってください。
@@ -218,6 +221,18 @@ Undo は、もともと存在しなかったファイルも含め、**元の両�
 
 ダウンロードされる `cline-config-bundle.json` には、`providers.json` 用の `settings` と `models.json` 用の `catalog` という 2 つのネイティブ文書要素が含まれます。それ自体は Cline の設定ファイルではありません。ジャーナル付きのマージとロールバックには統合コマンドを使ってください。生成された統合はリモートの受け入れ認証に対応せず、認証不要のループバックアクセスが必要です。
 
+## omo (Codex / LazyCodex) のロール別推論負荷
+
+LazyCodex が検出されると、omo タブの **omo (Codex / LazyCodex)** セクションで、`$CODEX_HOME/agents/*.toml` にある各ロールのモデルと推論負荷を選んで **保存** できます。モデルが固定されていないロールの行では推論負荷だけを保存でき、そのロールは引き続きモデルを継承します。opencodex はそのロールファイルのルートにある `model` と `model_reasoning_effort` のキーだけを更新し、存在しない固定値はファイルの先頭付近に追加します。ロールの指示、ほかのコメントやキーはそのまま残ります。モデルだけを変えて保存すると `effort` を送らないため、両方のファイルの推論負荷は変わりません。段階を選ぶとロールファイルの `model_reasoning_effort` を追加または置き換え、LazyCodex がその段階に対応していれば `~/.omo/omo.jsonc` の `[codex].agents.<role>.reasoning` にも書き込みます（`ultra` はロールファイルにだけ残り、以前の `reasoning` は削除されます）。コマンドラインでは `ocx agent roles set <role> <model> --effort <level>` で同じ操作ができます。
+
+推論負荷が固定されたロールも含め、すべての行に **推論エフォートを継承** があります。固定済みの推論負荷をこれに変えて保存すると `"effort": null` を送り、ロールファイルのルートの `model_reasoning_effort` 行とその行末コメント、omo.jsonc の `[codex].agents.<role>.reasoning` を削除します。モデルの固定は残ります。以後 Codex は、独自の値を持たないほかのロールと同じ方法で推論負荷を決めます（明示的な spawn 値、`[agents]` の既定値、または親セッション）。モデル固有の既定値に固定されるわけではありません。削除できるのは既存の 1 行の文字列値だけで、複数行または文字列以外の値は 409 `unsupported_model_value` で拒否され、両方のファイルは変更されません。
+
+`PUT /api/codex-agent-roles/{role}` で `model` を省略すると、ロールファイルの `model` の固定と omo.jsonc の `model` はそのまま残ります。そのため、固定のないロールはモデルを継承したまま、推論負荷だけが変わるか解除されます。ダッシュボードはそのような行に推論負荷だけのリクエストを送り、omo.jsonc にそのロールの項目がなければ、LazyCodex が対応する推論負荷の段階を保存する場合に限り、`reasoning` だけを持つ項目を作ります。保存でモデルの固定が消えることはないため、`null` のモデルは 400 `invalid_model` で拒否されます。`model` も `effort` もないリクエストは、ロールファイルや omo.jsonc を読む前に 400 `empty_update` で拒否されます。`ocx agent roles set` は常にモデルを受け取ります。
+
+`~/.omo/omo.jsonc` が存在しない場合は作成しません。コメントを含む場合は、保存するとコメントが消えるためファイルに触れません。その場合は値を手動で設定してください。ミラーをスキップしても、ロールファイルの保存は取り消されません。ロールファイルの保存に成功して omo.jsonc の書き込みに失敗した場合、その行のボタンが **omo.jsonc を再試行** に変わり、**推論エフォートを継承** による解除（`null`）を含めて同じ推論負荷の選択を再送します。再試行が成功するまでは、そのロールで推論負荷を変えずに行う次の **保存** や **自動割り当て** の **適用** も、保留中の選択を一緒に送ります。推論負荷を明示的に選ぶと、その値が優先されます。
+
+**自動割り当て** は、必要な能力と推論負荷を評価したロールのうち、選んだモデルの推論負荷の段階リストが空でないすべてのロールに推論負荷を提案します。**適用**、**すべて適用**、または `ocx agent roles suggest --apply` は、そのロールの `model_reasoning_effort` を追加または置き換えます。推論負荷は選んだモデル自身の段階から、最も低い段階、既定の段階、既定より 1 つ上の段階、最も高い段階のいずれかになります。段階リストが空なら推論負荷を提案せず（`proposedEffort: null`）、適用時は `effort` を送らないため既存の固定値はそのまま残ります。`null` の提案が固定値を消すことはありません。
+
 ## Kilo
 
 Kilo CLI、VS Code、JetBrains は同じグローバル設定を共有します。この統合は `~/.config/kilo` 内の `kilo.jsonc`、`kilo.json`、`opencode.jsonc`、`opencode.json`、`config.json` のうち最初に存在するファイルに `provider.opencodex` を書き込みます。`XDG_CONFIG_HOME` でこのディレクトリを変更できます。候補がなければ `kilo.jsonc` を作成します。プロジェクト設定には書き込みません。
@@ -235,7 +250,7 @@ ocx export --client kilo --out ./kilo.jsonc
 
 ## GitHub Copilot アプリ
 
-GitHub Copilot デスクトップアプリでは、opencodex を OpenAI 互換のモデルプロバイダーとして利用できます。これは手動で設定するクライアントで、Integrations タブのスイッチはありません。また、opencodex がバックエンドとして Copilot サブスクリプションを使う上流の `github-copilot` プロバイダーとは別のものです。
+GitHub Copilot デスクトップアプリでは、opencodex を OpenAI 互換のモデルプロバイダーとして利用できます。これは手動で設定するクライアントで、**接続** タブのスイッチはありません。また、opencodex がバックエンドとして Copilot サブスクリプションを使う上流の `github-copilot` プロバイダーとは別のものです。
 
 1. opencodex を起動し、応答することを確認します。
 

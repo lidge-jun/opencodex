@@ -12,7 +12,7 @@ import { spawn } from "node:child_process";
 import { loadConfig } from "../config";
 import { injectClaudeAgentDefs } from "../claude/agents-inject";
 import { CLAUDE_ALIAS_PREFIX_CURRENT, CLAUDE_ALIAS_PREFIX_CURRENT_V2, CLAUDE_ALIAS_PREFIX_V1, CLAUDE_ALIAS_PREFIX_V2 } from "../claude/alias";
-import { claudeToolSearchEnv, effectiveModelEnv, resolveAutoContext } from "../claude/context-windows";
+import { claudeTierDisplayName, claudeToolSearchEnv, effectiveModelEnv, isClaudeTierLabelSlot, resolveAutoContext } from "../claude/context-windows";
 import { claudeConfigDir, fetchGatewayModels, writeGatewayModelCache } from "../claude/gateway-cache";
 import { commandInvocation } from "../lib/win-exec";
 import { isProxyAdmissionSecret } from "../server/auth-cors";
@@ -32,7 +32,8 @@ import { DEFAULT_CATALOG_PATH } from "../codex/paths";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { aliasForNative, aliasForRoute, legacyAliasForNative, legacyAliasForRoute } from "../claude/alias";
-import { desktop3pAlias } from "../claude/desktop-3p";
+import { desktop3pAlias, isRealDesktop3pModelId, resolveDesktop3pAlias } from "../claude/desktop-3p";
+import { desktopProfileWireAlias, legacyDesktopProfileWireAlias } from "../claude/desktop-profile";
 import { inspectDesktopFirstParty } from "../claude/desktop-first-party";
 import { isClaudeInterceptProxyUrl, type ClaudeInterceptSettingsState } from "../claude/intercept/settings";
 import { withoutSiblingMarker } from "../codex/sibling-start";
@@ -211,10 +212,12 @@ export function buildClaudeEnv(
   // real cost to a documented entry point, and the escape hatch is the launcher: run
   // through `ocx` (the published bin) and genuine shell exports are preserved by proof.
   deleteUntrustedAnthropicSlots(env, deps);
-  const setDefault = (name: string, value: string | undefined) => {
-    if (value === undefined || value.length === 0) return;
-    if (env[name] !== undefined && env[name] !== "") return; // user wins
+  /** Returns whether the value was written; a value the user already has wins. */
+  const setDefault = (name: string, value: string | undefined): boolean => {
+    if (value === undefined || value.length === 0) return false;
+    if (env[name] !== undefined && env[name] !== "") return false; // user wins
     env[name] = value;
+    return true;
   };
   if (config.claudeCode?.subagentModelForce !== undefined) {
     const forced = resolveSubagentForceModel(config, contextWindows, deps.forceAvailableSelectors !== undefined ? { selectors: deps.forceAvailableSelectors } : { entries: deps.forceAvailable ?? [] });
@@ -415,7 +418,9 @@ export function buildClaudeEnv(
   // with automatic [1m] context-variant marking when the slot's target model has an
   // authoritative >=1M window (Claude Code then accounts 1M, compaction preserved).
   for (const [name, value] of Object.entries(effectiveModelEnv(config.claudeCode, contextWindows, auto))) {
-    setDefault(name, value);
+    // A tier slot this launch wrote gets its picker label too (#6926). A slot the user exported
+    // stays unlabelled, and a `<slot>_NAME` the user exported wins.
+    if (setDefault(name, value) && isClaudeTierLabelSlot(name)) setDefault(`${name}_NAME`, claudeTierDisplayName(value));
   }
   return env;
 }
@@ -614,11 +619,47 @@ const MODEL_ENV_SLOT_NAMES = [
   "ANTHROPIC_SMALL_FAST_MODEL",
 ] as const;
 
-const DESKTOP_3P_ALIAS = /^claude-opus-4(?:-8)?-[a-z][0-9a-z]{2}$/;
+const DESKTOP_3P_ALIAS = /^claude-(?:opus-4(?:-8)?-[a-z][0-9a-z]{2}|(?:opus-4-8|fable-5)-p[0-9a-z]{3})(?:--fast)?$/;
 
-export function isProxyOnlyModelId(value: string, providerNames: readonly string[] = []): boolean {
+export function nativeClaudeModelIds(config: OcxConfig): string[] {
+  const assignments = config.claudeCode?.desktopProfile?.assignments ?? {};
+  const routes = Object.keys(assignments);
+  const realProfileIds = new Set(routes.filter(route => route.startsWith("anthropic/claude-"))
+    .map(route => route.slice("anthropic/".length)));
+  // A native CLI starts without the server registry. Persisted profile bindings still
+  // identify proxy selectors, even when an old provider declaration has the same spelling.
+  const proxyProfileIds = new Set(routes.filter(route => !route.startsWith("anthropic/claude-"))
+    .flatMap(route => {
+      const alias = assignments[route]!.alias;
+      const slash = route.indexOf("/");
+      return [alias, desktopProfileWireAlias(alias), legacyDesktopProfileWireAlias(alias),
+        desktop3pAlias(route.slice(0, slash), route.slice(slash + 1))];
+    }));
+  // The configured default is a genuine declaration too: the catalog seeds it for static
+  // providers, so it must be recognized here even without a server registry.
+  const anthropic = config.providers.anthropic;
+  const declaredIds = [
+    ...(anthropic?.defaultModel ? [anthropic.defaultModel] : []),
+    ...(anthropic?.models ?? []), ...(anthropic?.selectedModels ?? []), ...(anthropic?.retainModels ?? []),
+  ];
+  return [...new Set([
+    ...realProfileIds,
+    ...declaredIds
+      .filter(id => {
+        const base = id.endsWith("--fast") ? id.slice(0, -"--fast".length) : id;
+        return id.startsWith("claude-") && (realProfileIds.has(id)
+          || (!proxyProfileIds.has(id) && !proxyProfileIds.has(base)));
+      }),
+  ])];
+}
+
+export function isProxyOnlyModelId(value: string, providerNames: readonly string[] = [], realAnthropicIds: readonly string[] = []): boolean {
   const id = value.trim().replace(/\[1m\]$/, "");
   if (!id) return false;
+  if (isRealDesktop3pModelId(id)) return false;
+  const base = id.endsWith("--fast") ? id.slice(0, -"--fast".length) : id;
+  if (resolveDesktop3pAlias(id) || resolveDesktop3pAlias(base)) return true;
+  if (realAnthropicIds.includes(id)) return false;
   const aliasPrefixes = [CLAUDE_ALIAS_PREFIX_CURRENT, CLAUDE_ALIAS_PREFIX_CURRENT_V2, CLAUDE_ALIAS_PREFIX_V1, CLAUDE_ALIAS_PREFIX_V2];
   if (aliasPrefixes.some(prefix => id.startsWith(prefix)) || DESKTOP_3P_ALIAS.test(id)) {
     return true;
@@ -680,9 +721,15 @@ export function buildNativeClaudeEnv(
   // otherwise settings.env can replace the destination while retaining the credential.
   if (hasOwnedAdmission) delete env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST;
   const providerNames = Object.keys(config.providers);
+  const realAnthropicIds = nativeClaudeModelIds(config);
   for (const name of MODEL_ENV_SLOT_NAMES) {
     const value = env[name];
-    if (value && isProxyOnlyModelId(value, providerNames)) delete env[name];
+    if (!value || !isProxyOnlyModelId(value, providerNames, realAnthropicIds)) continue;
+    delete env[name];
+    // The label opencodex paired with this slot names a proxy route the native session cannot use.
+    const labelName = `${name}_NAME`;
+    const label = claudeTierDisplayName(value);
+    if (isClaudeTierLabelSlot(name) && label !== undefined && env[labelName] === label) delete env[labelName];
   }
   if (deps.allowRootSkipPermissions === true && !env.IS_SANDBOX) env.IS_SANDBOX = "1";
   return env;
@@ -693,11 +740,12 @@ export function nativeModelOverride(
   configuredModel: string | undefined,
   args: readonly string[],
   providerNames: readonly string[] = [],
+  realAnthropicIds: readonly string[] = [],
 ): { flag?: string[]; warning?: string } {
-  if (!pickedModel || !isProxyOnlyModelId(pickedModel, providerNames)) return {};
+  if (!pickedModel || !isProxyOnlyModelId(pickedModel, providerNames, realAnthropicIds)) return {};
   if (args.some(arg => arg === "--model" || arg.startsWith("--model="))) return {};
   const fallback = configuredModel?.trim();
-  if (fallback && !isProxyOnlyModelId(fallback, providerNames)) {
+  if (fallback && !isProxyOnlyModelId(fallback, providerNames, realAnthropicIds)) {
     return {
       flag: ["--model", fallback],
       warning: `ℹ️ The saved model (${pickedModel}) requires the proxy. This native session will use ${fallback}.`,
@@ -858,6 +906,7 @@ async function launchNativeClaude(config: OcxConfig, args: string[], notice: str
     config.claudeCode?.model,
     args,
     providerNames,
+    nativeClaudeModelIds(config),
   );
   if (override.warning) console.error(override.warning);
   const allowRootSkipPermissions = shouldAllowRootSkipPermissions(args);

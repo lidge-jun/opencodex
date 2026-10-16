@@ -20,7 +20,7 @@ import { homedir } from "node:os";
 import { join, resolve, win32 } from "node:path";
 import { expandUserPath, getConfigDir, loadConfig } from "../config";
 import { recordOwnedConfigPath } from "./config-ownership";
-import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV, durableBunRuntime } from "./bun-runtime";
+import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV, durableBunRuntime, type DurableBunRuntime } from "./bun-runtime";
 import type { BunRuntimeSource } from "./bun-runtime";
 import { serviceApiTokenFilePath } from "./service-secrets";
 import { filterTransientServicePath } from "./transient-service-path";
@@ -408,7 +408,6 @@ export function winswStatusSummary(): string {
 }
 
 /** Default entry mirrors the Task Scheduler baking: durable Bun + cli.ts. */
-export function defaultWinswEntry(cliDir: string): WinswEntry {
-  const runtime = durableBunRuntime();
+export function defaultWinswEntry(cliDir: string, runtime: DurableBunRuntime = durableBunRuntime()): WinswEntry {
   return { bun: runtime.path, bunRuntimeSource: runtime.source, cli: join(cliDir, "cli", "index.ts") };
 }

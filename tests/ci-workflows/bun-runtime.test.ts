@@ -1,10 +1,13 @@
 import { describe, it, expect, afterAll, afterEach } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV, isRealBunBinary, bundledBunPath, durableBunPath, durableBunRuntime, reportedBunRuntimeSource, withProcessRuntimeProvenance } from "../../src/lib/bun-runtime";
+import { findPathBun } from "../../src/lib/bun-path-runtime.mjs";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
+import { INTERNAL_DEADLINE_MS } from "../helpers/test-budget";
 
 // realpath the temp root: on macOS /var is a symlink to /private/var, so a path built
 // from mkdtemp compares unequal to the same path resolved through process.cwd().
@@ -22,7 +25,25 @@ afterEach(() => {
 });
 afterAll(() => {
   removeTreeWithRetry(tmp);
+  for (const root of trustedPathRoots) removeTreeWithRetry(root);
 });
+
+// findPathBun rejects a PATH candidate beneath any group/other-writable ancestor,
+// which includes the shared temp root on POSIX ("/tmp" is 1777). A fixture that is
+// supposed to exercise a *trusted* PATH dir therefore cannot live under tmpdir().
+const trustedPathRoots: string[] = [];
+function trustedPathRoot(prefix: string): string {
+  if (process.platform === "win32") {
+    const root = mkdtempSync(join(tmpdir(), prefix));
+    trustedPathRoots.push(root);
+    return root;
+  }
+  const base = join(dirname(repoPath()), ".tmp", "path-bun-fixtures");
+  mkdirSync(base, { recursive: true, mode: 0o700 });
+  const root = mkdtempSync(join(base, prefix));
+  trustedPathRoots.push(root);
+  return root;
+}
 
 describe("isRealBunBinary (size gate vs placeholder stub)", () => {
   it("rejects the ~450-byte ASCII placeholder stub", () => {
@@ -50,6 +71,49 @@ describe("isRealBunBinary (size gate vs placeholder stub)", () => {
 });
 
 describe("bundledBunPath / durableBunPath", () => {
+  it("PATH-selected process provenance survives durable selection and project dotenv", () => {
+    const root = join(tmp, "path-dotenv");
+    mkdirSync(root, { recursive: true });
+    // The PATH fixture needs trusted ancestors (see trustedPathRoot); everything
+    // else in this case (HOME, dotenv, consumer script) stays under tmp.
+    const pathDir = join(trustedPathRoot("path-dotenv-"), "path");
+    mkdirSync(pathDir, { recursive: true });
+    const bun = join(pathDir, process.platform === "win32" ? "bun.exe" : "bun");
+    copyFileSync(process.execPath, bun);
+    chmodSync(bun, 0o755);
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      HOME: root, USERPROFILE: root,
+      OPENCODEX_HOME: join(root, "opencodex"), CODEX_HOME: join(root, "codex"),
+      GROK_HOME: join(root, "grok"), XDG_CACHE_HOME: join(root, "cache"),
+      BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", PATH: pathDir,
+    };
+    for (const key of Object.keys(env)) {
+      if (key.toLowerCase() === "path" && key !== "PATH") delete env[key];
+    }
+    delete env.OPENCODEX_BUN_PATH;
+    delete env.OCX_PATH_DOTENV_LOADED;
+    const pkg = JSON.parse(readFileSync(repoPath("package.json"), "utf8"));
+    // A copied bun.exe on a loaded win32 runner missed this 2s probe at 2.4s.
+    const selected = findPathBun({ env, pinnedVersion: pkg.dependencies.bun, deadlineMs: process.platform === "win32" ? INTERNAL_DEADLINE_MS : 2000 });
+    expect(selected).not.toBeNull();
+    const lateOverride = join(root, "dotenv-bun.exe");
+    writeFileSync(lateOverride, Buffer.alloc(1_000_000));
+    // Bun dotenv preserves backslashes in single quotes; JSON quoting doubles Windows separators.
+    writeFileSync(join(root, ".env"), `OPENCODEX_BUN_PATH='${lateOverride}'\nOCX_BUN_RUNTIME_SOURCE=override\nOCX_BUN_RUNTIME_PATH='${lateOverride}'\nOCX_PATH_DOTENV_LOADED=yes\n`);
+    const script = join(root, "consumer.ts");
+    writeFileSync(script, `import {durableBunRuntime,reportedBunRuntimeSource} from ${JSON.stringify(repoPath("src/lib/bun-runtime.ts"))};\nconsole.log(JSON.stringify({runtime:durableBunRuntime(),reported:reportedBunRuntimeSource(),dotenv:process.env.OCX_PATH_DOTENV_LOADED,override:process.env.OPENCODEX_BUN_PATH}));`);
+    const result = spawnSync(selected!.path, [script], {
+      cwd: root, encoding: "utf8", timeout: 30_000, windowsHide: true,
+      env: { ...env, [BUN_RUNTIME_SOURCE_ENV]: "process", [BUN_RUNTIME_PATH_ENV]: selected!.path },
+    });
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      runtime: { path: selected!.path, source: "process", overrideEnv: "OPENCODEX_BUN_PATH" },
+      reported: "process", dotenv: "yes", override: lateOverride,
+    });
+  });
+
   it("does not reselect a dotenv Bun override after the runtime has started", () => {
     const real = join(tmp, "override-bun.exe");
     const stub = join(tmp, "override-stub.exe");

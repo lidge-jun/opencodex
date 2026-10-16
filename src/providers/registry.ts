@@ -9,6 +9,7 @@ import { PROVIDER_REGISTRY_CORE } from "./registry/entries-core";
 import { PROVIDER_REGISTRY_EXTENDED } from "./registry/entries-extended";
 import { PROVIDER_REGISTRY_COMMUNITY } from "./registry/entries-community";
 
+import { anthropicInstanceRowShapeMatches } from "./anthropic-instance-id";
 export type {
   ProviderAuthKind, MetadataModelIdNormalize, InboundWire, ModelWireDefault,
   ResponsesTerminalRepairPolicy, ProviderModelDiscoveryScalar, ProviderModelDiscoveryPredicate,
@@ -96,10 +97,11 @@ export function normalizedProviderEndpoint(value: string): string {
  */
 export function providerMatchesRegistryTransport(
   id: string,
-  provider: Pick<OcxProviderConfig, "baseUrl" | "adapter"> & Partial<Pick<OcxProviderConfig, "authMode">>,
+  provider: Pick<OcxProviderConfig, "baseUrl" | "adapter"> & Partial<Pick<OcxProviderConfig, "authMode" | "anthropicOAuthInstance">>,
 ): boolean {
   const entry = getProviderRegistryEntry(id);
   if (!entry) return false;
+  if (id === "anthropic2") return entry.authKind === "oauth" && entry.oauthId === id && entry.oauthFamily === "anthropic" && anthropicInstanceRowShapeMatches(id, provider);
   if (entry.authKind !== "key" || entry.preserveCustomDestination !== true) return true;
   // The opt-in is intentionally limited to fixed key destinations. Fail closed if a future
   // registry edit combines it with an override/template despite the registry parity tests.
@@ -109,7 +111,6 @@ export function providerMatchesRegistryTransport(
   if (provider.authMode !== undefined && provider.authMode !== "key") return false;
   return normalizedProviderEndpoint(provider.baseUrl) === normalizedProviderEndpoint(entry.baseUrl);
 }
-
 /**
  * Resolve the registry entry a configured provider actually points at, by TRANSPORT
  * rather than by name.

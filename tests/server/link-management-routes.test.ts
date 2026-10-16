@@ -1,5 +1,7 @@
+import { remoteChildHttpArgv, REMOTE_CURL_PREFLIGHT } from "../../src/link/remote-probe";
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleManagementAPI } from "../../src/server/management-api";
@@ -13,7 +15,7 @@ import {
 import type { ManagementApiDeps } from "../../src/server/management/context";
 import type { OcxConfig } from "../../src/types";
 import type { LinkStore } from "../../src/link/store";
-import type { LinkSupervisor } from "../../src/link/supervisor";
+import { createLinkSupervisor, type LinkSupervisor } from "../../src/link/supervisor";
 import type { SshRunner, SshChild, SshRunResult } from "../../src/link/ssh-runner";
 import { quoteRemote, remoteOcxArgv } from "../../src/link/ssh-argv";
 import { trustedLoopbackForIngress, type ServerIngress } from "../../src/server/index/serve-options";
@@ -86,6 +88,18 @@ function harness() {
   return { deps, config: cfg, events, listener, callbacks, setListenerState: (state: typeof listenerState) => { listenerState = state; }, get store() { return current; } };
 }
 
+function childProbe(remote: string, h: ReturnType<typeof harness>): SshRunResult | null {
+  if (remote === remoteOcx(["config", "show", "--json"])) return { code: 0, stdout: '{"port":10100}', stderr: "" };
+  if (remote === quoteRemote(REMOTE_CURL_PREFLIGHT)) return { code: 0, stdout: "", stderr: "" };
+  if (remote === remoteOcx(["restart"])) { h.events.push("child-restart"); return { code: 0, stdout: "", stderr: "" }; }
+  if (remote === quoteRemote(remoteChildHttpArgv(10100, "healthz"))) return { code: 0, stdout: JSON.stringify({ service: "opencodex", pid: 123, port: 10100, ...(h.events.includes("child-restart") ? { role: "client" } : { restartCapability: "v1" }) }) + "\n200", stderr: "" };
+  if (remote === quoteRemote(remoteChildHttpArgv(10100, "v1/catalog"))) {
+    for (const callback of h.callbacks) callback(h.store.links.find(link => link.direction === "hub-initiated")!.apiKeyId);
+    return { code: 0, stdout: '{"models":[]}\n200', stderr: "" };
+  }
+  return null;
+}
+
 function applyRunner(h: ReturnType<typeof harness>, connectCode = 0): SshRunner {
   return {
     async run(argv, options) {
@@ -95,6 +109,7 @@ function applyRunner(h: ReturnType<typeof harness>, connectCode = 0): SshRunner 
       if (knownHostOption) writeFileSync(knownHostOption.slice("UserKnownHostsFile=".length), "client ssh-ed25519 AAAA\n");
       if (isBareOcx(argv)) return BARE_OCX;
       const remote = argv.at(-1) ?? "";
+      const child = childProbe(remote, h); if (child) return child;
       if (remote === remoteOcx(["--version"])) return { code: 0, stdout: "opencodex 2.66.0\n", stderr: "" };
       if (remote === remoteOcx(["link", "port"])) return { code: 0, stdout: JSON.stringify({ port: 2200 }), stderr: "" };
       if (remote.startsWith(`${remoteOcx(["connect", "--link", "--key-stdin", "--tunnel-port", "2200", "--link-id"])} `)) {
@@ -145,7 +160,7 @@ function versionRunner(remote: { probeCode: number; probeStderr: string; code: n
 }
 
 afterEach(() => {
-  if (temp) rmSync(temp, { recursive: true, force: true });
+  if (temp) removeTreeWithRetry(temp);
   temp = "";
 });
 
@@ -436,7 +451,7 @@ describe("link management routes", () => {
       sshRunner: {
         ...baseRunner,
         async run(argv: readonly string[], options?: { stdin?: string | Uint8Array }) {
-          if (argv.join(" ").includes("connect")) h.deps.writeLinkStore!({ ...h.store, links: [other, ...h.store.links] });
+          if ((argv.at(-1) ?? "").startsWith(`${remoteOcx(["connect", "--link"])} `)) h.deps.writeLinkStore!({ ...h.store, links: [other, ...h.store.links] });
           return baseRunner.run(argv, options);
         },
       },
@@ -465,6 +480,130 @@ describe("link management routes", () => {
     expect(h.store.links.map(link => link.alias)).toEqual(["other"]);
   });
 
+  test("R1c: force DELETE and POST reconnect cannot recreate a removed tunnel", async () => {
+    temp = mkdtempSync(join(tmpdir(), "ocx-link-force-remove-drain-"));
+    const h = harness();
+    const id = "lnk_0123456789abcdef";
+    h.deps.writeLinkStore!({ ...h.store, links: [{ id, alias: "child", direction: "hub-initiated", hostKeyFingerprint: "SHA256:abcdefghijklmnop", tunnelPort: 2200, apiKeyId: "key-1", createdAt: "2026-09-25T00:00:00.000Z" }] });
+    let exitOld!: (code: number) => void;
+    const oldExit = new Promise<number>(resolve => { exitOld = resolve; });
+    let killed!: () => void;
+    const draining = new Promise<void>(resolve => { killed = resolve; });
+    const live = new Set<SshChild>();
+    let spawned = 0;
+    let tick!: () => void;
+    const runner: SshRunner = {
+      async run() { throw new Error("force removal must skip remote disconnect"); },
+      spawnTunnel(argv) {
+        const first = spawned === 0;
+        let finish!: (code: number) => void;
+        const exited = first ? oldExit : new Promise<number>(resolve => { finish = resolve; });
+        const child: SshChild = { pid: 400 + spawned++, argv: [...argv], exited,
+          kill: () => { if (first) killed(); else finish(143); },
+        };
+        live.add(child);
+        void exited.then(() => live.delete(child));
+        return child;
+      },
+    };
+    const real = createLinkSupervisor({ readStore: () => h.store, runner,
+      readPidfile: () => null, writePidfile: () => {}, removePidfile: () => {},
+      setTimer: callback => { tick = callback; return 1 as unknown as ReturnType<typeof setInterval>; }, clearTimer: () => {},
+    });
+    real.start();
+    let closed = false;
+    let removalEntered!: () => void;
+    const removalStopping = new Promise<void>(resolve => { removalEntered = resolve; });
+    const stopLink = real.stopLink;
+    real.stopLink = linkId => {
+      const stopped = stopLink(linkId);
+      removalEntered();
+      return stopped;
+    };
+    const deps: ManagementApiDeps = { ...h.deps, sshRunner: runner, linkSupervisor: () => real,
+      revokeApiKey: () => true,
+      linkListener: () => ({ ...h.listener, close: async () => { closed = true; h.setListenerState("off"); } }),
+    };
+    const reconnect = call(`/api/link/${id}/reconnect`, "POST", undefined, deps, "admin-token", true, null, true, h.config);
+    await draining;
+    let removed = false;
+    const removal = call(`/api/link/${id}`, "DELETE", { force: true }, deps, "admin-token", true, null, true, h.config)
+      .then(response => { removed = true; return response; });
+    await removalStopping;
+    for (let turn = 0; turn < 12; turn += 1) await Promise.resolve();
+    const removedBeforeExit = removed;
+    const closedBeforeExit = closed;
+    const liveBeforeExit = live.size;
+    const spawnedBeforeExit = spawned;
+    exitOld(143);
+    try {
+      const [reconnected, deleted] = await Promise.all([reconnect, removal]);
+      expect(deleted?.status).toBe(200);
+      expect(reconnected?.status).toBe(503);
+      expect(await reconnected!.json()).toMatchObject({ error: { code: "link_unavailable" } });
+      expect(removedBeforeExit).toBe(false);
+      expect(closedBeforeExit).toBe(false);
+      expect(liveBeforeExit).toBe(1);
+      expect(spawnedBeforeExit).toBe(1);
+      expect(h.store.links).toHaveLength(0);
+      expect(closed).toBe(true);
+      tick();
+      expect(spawned).toBe(1);
+      expect(live.size).toBe(0);
+      expect(real.status()).toEqual([]);
+    } finally { await Promise.all([reconnect, removal]); await real.stop(); }
+  });
+
+  test.each([0, 1])("DELETE holds the real supervisor through remote cleanup (exit %s)", async code => {
+    temp = mkdtempSync(join(tmpdir(), "ocx-link-remove-hold-"));
+    const h = harness();
+    const id = "lnk_0123456789abcdef";
+    h.deps.writeLinkStore!({ ...h.store, links: [{ id, alias: "child", direction: "hub-initiated", hostKeyFingerprint: "SHA256:abcdefghijklmnop", tunnelPort: 2200, apiKeyId: "key-1", createdAt: "2026-09-25T00:00:00.000Z" }] });
+    let release!: (value: SshRunResult) => void;
+    const remote = new Promise<SshRunResult>(resolve => { release = resolve; });
+    let entered!: () => void;
+    const waiting = new Promise<void>(resolve => { entered = resolve; });
+    const live = new Set<SshChild>();
+    let spawned = 0;
+    let tick!: () => void;
+    const runner: SshRunner = {
+      async run() { entered(); return remote; },
+      spawnTunnel(argv) {
+        let exit!: (code: number) => void;
+        const exited = new Promise<number>(resolve => { exit = resolve; });
+        const child: SshChild = { pid: 400 + spawned++, argv: [...argv], exited, kill: () => exit(143) };
+        live.add(child);
+        void exited.then(() => live.delete(child));
+        return child;
+      },
+    };
+    const real = createLinkSupervisor({ readStore: () => h.store, runner,
+      readPidfile: () => null, writePidfile: () => {}, removePidfile: () => {},
+      setTimer: callback => { tick = callback; return 1 as unknown as ReturnType<typeof setInterval>; }, clearTimer: () => {},
+    });
+    real.start();
+    const deps = { ...h.deps, sshRunner: runner, linkSupervisor: () => real };
+    const removal = call(`/api/link/${id}`, "DELETE", {}, deps, "admin-token", true, null, true, h.config);
+    await waiting;
+    try {
+      expect(await real.reconnect(id)).toBe(false);
+      await real.reload();
+      tick();
+      expect(spawned).toBe(1);
+      expect(live.size).toBe(0);
+      release({ code, stdout: "", stderr: code ? "disconnect failed" : "" });
+      expect((await removal)?.status).toBe(code ? 502 : 200);
+      tick();
+      expect(spawned).toBe(code ? 2 : 1);
+      expect(live.size).toBe(code ? 1 : 0);
+      if (!code) expect(await real.reconnect(id)).toBe(false);
+    } finally {
+      release({ code, stdout: "", stderr: code ? "disconnect failed" : "" });
+      await removal;
+      await real.stop();
+    }
+  });
+
   test("restarts a hub tunnel before reporting a failed remote disconnect", async () => {
     temp = mkdtempSync(join(tmpdir(), "ocx-link-disconnect-failed-"));
     const h = harness();
@@ -486,6 +625,62 @@ describe("link management routes", () => {
     expect(await response!.json()).toMatchObject({ error: { code: "remote_disconnect_failed" } });
     expect(h.events).toContain("reload");
     expect(h.store.links).toHaveLength(1);
+  });
+
+  test("reconnect restarts a Home-initiated tunnel for either principal and refuses everything else", async () => {
+    temp = mkdtempSync(join(tmpdir(), "ocx-link-reconnect-"));
+    const h = harness();
+    const reconnected: string[] = [];
+    let restartable = true;
+    const deps: ManagementApiDeps = {
+      ...h.deps,
+      linkSupervisor: () => ({ ...supervisor(h.events), reconnect: async (id: string) => { reconnected.push(id); return restartable; } }),
+    };
+    h.deps.writeLinkStore!({ ...h.store, links: [{
+      id: "lnk_0123456789abcdef",
+      alias: "child",
+      direction: "hub-initiated",
+      hostKeyFingerprint: "SHA256:abcdefghijklmnop",
+      tunnelPort: 2200,
+      apiKeyId: "key-1",
+      createdAt: "2026-09-25T00:00:00.000Z",
+    }, {
+      id: "lnk_fedcba9876543210",
+      alias: "home",
+      direction: "client-initiated",
+      hostKeyFingerprint: null,
+      tunnelPort: 2201,
+      apiKeyId: "key-2",
+      createdAt: "2026-09-25T00:00:00.000Z",
+    }] });
+    const path = "/api/link/lnk_0123456789abcdef/reconnect";
+    const ok = await call(path, "POST", undefined, deps, "admin-token", true, null, true, h.config);
+    expect(ok?.status).toBe(200);
+    expect(await ok!.json()).toEqual({ linkId: "lnk_0123456789abcdef" });
+    expect(h.events).toContain("supervisor");
+    expect((await call(path, "POST", undefined, deps, "gui-session", true, "pairing", true, h.config))?.status).toBe(200);
+    expect(reconnected).toEqual(["lnk_0123456789abcdef", "lnk_0123456789abcdef"]);
+    expect((await call(path, "POST", undefined, deps, "admin-token", false, null, true, h.config))?.status).toBe(403);
+    expect((await call(path, "POST", undefined, deps, "admin-token", true, "tailscale-identity", true, h.config))?.status).toBe(403);
+    const childOwned = await call("/api/link/lnk_fedcba9876543210/reconnect", "POST", undefined, deps, "admin-token", true, null, true, h.config);
+    expect(childOwned?.status).toBe(409);
+    expect(await childOwned!.json()).toMatchObject({ error: { code: "link_not_home_initiated" } });
+    const missing = await call("/api/link/lnk_0000000000000000/reconnect", "POST", undefined, deps, "admin-token", true, null, true, h.config);
+    expect(missing?.status).toBe(404);
+    expect(await missing!.json()).toMatchObject({ error: { code: "link_not_found" } });
+    expect((await call("/api/link/not-a-link/reconnect", "POST", undefined, deps, "admin-token", true, null, true, h.config))?.status).toBe(400);
+    h.setListenerState("failed");
+    const unbound = await call(path, "POST", undefined, deps, "admin-token", true, null, true, h.config);
+    expect(unbound?.status).toBe(503);
+    expect(await unbound!.json()).toMatchObject({ error: { code: "listener_unavailable" } });
+    expect(reconnected).toHaveLength(2);
+    h.setListenerState("listening");
+    restartable = false;
+    const refused = await call(path, "POST", undefined, deps, "admin-token", true, null, true, h.config);
+    expect(refused?.status).toBe(503);
+    expect(await refused!.json()).toMatchObject({ error: { code: "link_unavailable" } });
+    expect(reconnected).toHaveLength(3);
+    expect(h.store.links).toHaveLength(2);
   });
 
   test("issue starts the supervisor once a recovered listener binds", async () => {
@@ -585,7 +780,7 @@ describe("link management routes", () => {
     expect((await after!.json()).links).toEqual([]);
   });
 
-  test("returns compensation_failed and retains the record when duplicate revoke fails", async () => {
+  test("duplicate apply is refused before issuing a key, without touching the existing link", async () => {
     temp = mkdtempSync(join(tmpdir(), "ocx-link-duplicate-compensation-"));
     const h = harness();
     const existing = { id: "lnk_0123456789abcdef", alias: "duplicate", direction: "hub-initiated" as const, hostKeyFingerprint: "SHA256:abcdefghijklmnop", tunnelPort: 2200, apiKeyId: "existing-key", createdAt: "2026-09-25T00:00:00.000Z" };
@@ -608,14 +803,14 @@ describe("link management routes", () => {
     expect((await call("/api/link/probe", "POST", { alias: "duplicate" }, routed, "gui-session", true, "pairing", true, h.config))?.status).toBe(200);
     expect((await call("/api/link/confirm-host", "POST", { alias: "duplicate", fingerprint: "SHA256:abcdefghijklmnop" }, routed, "gui-session", true, "pairing", true, h.config))?.status).toBe(200);
     const response = await call("/api/link/apply", "POST", { alias: "duplicate" }, routed, "gui-session", true, "pairing", true, h.config);
-    expect(response?.status).toBe(500);
-    expect(await response!.json()).toMatchObject({ error: { code: "compensation_failed" } });
-    expect(h.store.links).toHaveLength(2);
-    const status = await call("/api/link/status", "GET", undefined, routed, "gui-session", true, "pairing", true, h.config);
-    expect((await status!.json()).links.at(-1)).toMatchObject({ state: "failed", reason: "compensation_failed" });
+    expect(response?.status).toBe(409);
+    expect(await response!.json()).toMatchObject({ error: { code: "link_exists" } });
+    expect(h.store.links).toEqual([existing]);
+    expect(h.events).not.toContain("issue");
+    expect(h.events).not.toContain("revoke");
   });
 
-  test("apply observes command exit and first authenticated catalog admission", async () => {
+  test("apply observes restart and a fresh Child relay catalog after enrollment", async () => {
     temp = mkdtempSync(join(tmpdir(), "ocx-link-apply-"));
     const h = harness();
     const runner: SshRunner = {
@@ -626,6 +821,7 @@ describe("link management routes", () => {
         if (knownHostOption) writeFileSync(knownHostOption.slice("UserKnownHostsFile=".length), "client ssh-ed25519 AAAA\n");
         if (isBareOcx(argv)) return BARE_OCX;
         const remote = argv.at(-1) ?? "";
+      const child = childProbe(remote, h); if (child) return child;
         if (remote === remoteOcx(["--version"])) return { code: 0, stdout: "opencodex 2.66.0\n", stderr: "" };
         if (remote.startsWith(`${remoteOcx(["connect", "--link", "--key-stdin", "--tunnel-port", "2200", "--link-id"])} `)) {
           h.events.push("connect");
@@ -646,4 +842,56 @@ describe("link management routes", () => {
     expect(h.events.indexOf("reload")).toBeGreaterThan(-1);
     expect(h.events.indexOf("reload")).toBeLessThan(h.events.findIndex(event => event === "connect"));
   });
+});
+
+/**
+ * The link store's read-modify-write runs under the shared config mutation lock:
+ * while another process holds it the DELETE must fail fast and keep the record.
+ */
+test("remove refuses while a cross-process holder owns the config mutation lock", async () => {
+  temp = mkdtempSync(join(tmpdir(), "ocx-link-lock-"));
+  const previousHome = process.env.OPENCODEX_HOME;
+  process.env.OPENCODEX_HOME = temp;
+  const { pathToFileURL } = await import("node:url");
+  const { repoPath, repoRoot } = await import("../helpers/repo-root");
+  const { watchdogMs } = await import("../helpers/ci-watchdog");
+  const readyPath = join(temp, "holder-ready");
+  const releasePath = join(temp, "holder-release");
+  const configModuleUrl = pathToFileURL(repoPath("src/config.ts")).href;
+  const childSource = `
+    import { existsSync, writeFileSync } from "node:fs";
+    import { withConfigMutationLockSync } from ${JSON.stringify(configModuleUrl)};
+    withConfigMutationLockSync(() => {
+      writeFileSync(${JSON.stringify(readyPath)}, "ready");
+      while (!existsSync(${JSON.stringify(releasePath)})) Bun.sleepSync(10);
+    });
+  `;
+  const child = Bun.spawn([process.execPath, "-e", childSource], {
+    cwd: repoRoot(),
+    env: { ...process.env, OPENCODEX_HOME: temp },
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  try {
+    const deadline = performance.now() + watchdogMs(5_000);
+    while (!existsSync(readyPath) && performance.now() < deadline) await Bun.sleep(10);
+    expect(existsSync(readyPath)).toBe(true);
+    const h = harness();
+    const existing = { id: "lnk_0123456789abcdef", alias: "home", direction: "hub-initiated" as const, hostKeyFingerprint: "SHA256:abcdefghijklmnop", tunnelPort: 2200, apiKeyId: "key-1", createdAt: "2026-09-25T00:00:00.000Z" };
+    h.deps.writeLinkStore!({ ...h.store, links: [existing] });
+    const runner: SshRunner = {
+      async run() { return { code: 0, stdout: "", stderr: "" }; },
+      spawnTunnel: () => ({ pid: 1, argv: [], exited: Promise.resolve(0), kill() {} }),
+    };
+    const response = await call("/api/link/lnk_0123456789abcdef", "DELETE", {}, { ...h.deps, sshRunner: runner }, "admin-token", true, null, true, h.config);
+    expect(response?.status).toBe(503);
+    expect(await response!.json()).toMatchObject({ error: { code: "link_remove_failed" } });
+    expect(h.store.links).toHaveLength(1);
+  } finally {
+    writeFileSync(releasePath, "release");
+    await child.exited.catch(() => {});
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome;
+  }
 });

@@ -5,12 +5,21 @@ import {
   AtomicWriteResidualTempError,
   AtomicWriteSecretResidualError,
   atomicWriteFile,
-  getConfigDir,
   resolveWriteTarget,
   type AtomicWriteIO,
-} from "../../config";
+} from "../../config/atomic-write";
+import { getConfigDir } from "../../config/paths";
+import { readConfigAdmissionSnapshot } from "../../config/diagnostics";
+import { ConfigMutationLockError, withConfigMutationLockSync } from "../../config/mutation-lock";
+import { codexCatalogAuditPath } from "../catalog/write-audit";
+import type { CatalogAuditConfigSource, CatalogAuditRefusalReason, CatalogWriteAuditDetails } from "../catalog/write-audit-contract";
+import { ocxRoutedRowCount } from "../catalog/routed-removal";
+import { notifyCatalogPublication } from "../catalog/publication-observer";
 import {
   assertCatalogWritePermit,
+  auditCatalogWriteWithPermit,
+  catalogWritePermitContext,
+  CatalogWritePermitRefusal,
   type CatalogWritePermit,
 } from "../catalog-write-serialization";
 import {
@@ -61,14 +70,15 @@ let backupTempSequence = 0;
  * An unreadable or absent file reports "differs", so the caller performs the real
  * write; that also converges a file that does not exist yet.
  */
-export function preparedBytesDifferFromDisk(prepared: PreparedCatalogFileWrite): boolean {
-  let onDisk: Buffer;
-  try {
-    onDisk = readFileSync(prepared.path);
-  } catch {
-    return true;
-  }
-  return !onDisk.equals(Buffer.from(prepared.content, "utf8"));
+function readExistingCatalogBytes(path: string): Buffer | null {
+  try { return readFileSync(path); } catch { return null; }
+}
+
+export function preparedBytesDifferFromDisk(
+  prepared: PreparedCatalogFileWrite,
+  onDisk: Buffer | null = readExistingCatalogBytes(prepared.path),
+): boolean {
+  return onDisk === null || !onDisk.equals(Buffer.from(prepared.content, "utf8"));
 }
 
 function isMissingPathError(error: unknown): boolean {
@@ -199,16 +209,105 @@ function publishCatalogBackup(
   return "written";
 }
 
-/** Replace the active catalog with the caller's already-prepared bytes. */
+export type CatalogFileReplacement =
+  | { readonly kind: "written" }
+  | { readonly kind: "unchanged" }
+  | { readonly kind: "refused"; readonly reason: "unbacked-routed-clear" };
+
+function routedRowsFromJson(content: string): number | null {
+  try { return ocxRoutedRowCount(JSON.parse(content)); } catch { return null; }
+}
+
+function configSourceNow(): CatalogAuditConfigSource {
+  try {
+    const snapshot = readConfigAdmissionSnapshot();
+    return snapshot.kind === "read" ? snapshot.diagnostics.source
+      : snapshot.diagnostics.source === "default" ? "default" : "unreadable";
+  } catch { return "unreadable"; }
+}
+
+function routedRowsOnDisk(path: string): number | null {
+  try { return routedRowsFromJson(readFileSync(path, "utf8")); } catch { return null; }
+}
+
+function auditWrite(
+  permit: CatalogWritePermit,
+  home: string,
+  details: CatalogWriteAuditDetails,
+  register: boolean,
+): void {
+  try {
+    if (auditCatalogWriteWithPermit(permit, home, details) !== "created"
+      || !register || details.configSource !== "file") return;
+    // The manifest rejects external CODEX_HOME paths. Such audit files remain uninstall
+    // residuals; diagnostic creation does not widen config ownership or claim cleanup.
+    if (!recordOwnedConfigPath(getConfigDir(), codexCatalogAuditPath(home))) return;
+  } catch { /* Audit and registration failures cannot change the publication outcome. */ }
+}
+
+/** Audit an actual refusal before the replacement funnel. Caller must avoid a second funnel event. */
+export function auditRefusedCatalogReplacement(
+  permit: CatalogWritePermit,
+  home: string,
+  prepared: PreparedCatalogFileWrite,
+  reason: CatalogAuditRefusalReason,
+): void {
+  assertCatalogWritePermit(permit, home);
+  auditWrite(permit, home, {
+    target: "catalog", outcome: "refused", reason,
+    routedBefore: routedRowsOnDisk(prepared.path), routedAfter: routedRowsFromJson(prepared.content),
+    configSource: configSourceNow(),
+  }, true);
+}
+
+/** One funnel for exact-byte idempotence and intent admission, under a live K permit. */
 export function replaceActiveCodexCatalog(
   permit: CatalogWritePermit,
   owningCodexHome: string,
   prepared: PreparedCatalogFileWrite,
   io?: AtomicWriteIO,
-): void {
+): CatalogFileReplacement {
   assertCatalogWritePermit(permit, owningCodexHome);
+  const { intent } = catalogWritePermitContext(permit);
+  if (intent === "cache") {
+    throw new CatalogWritePermitRefusal("A models-cache permit cannot replace the Codex catalog.");
+  }
+  const onDisk = readExistingCatalogBytes(prepared.path);
+  if (!preparedBytesDifferFromDisk(prepared, onDisk)) {
+    notifyCatalogPublication({ kind: "published", path: prepared.path, intent });
+    return { kind: "unchanged" };
+  }
+  const routedBefore = onDisk === null ? null : routedRowsFromJson(onDisk.toString("utf8"));
+  const routedAfter = routedRowsFromJson(prepared.content);
+  const finish = (result: CatalogFileReplacement): CatalogFileReplacement => {
+    if (result.kind !== "unchanged") auditWrite(permit, owningCodexHome, {
+      target: "catalog", outcome: result.kind,
+      reason: result.kind === "refused" ? result.reason : undefined,
+      routedBefore, routedAfter, configSource: configSourceNow(),
+    }, io === undefined);
+    if (result.kind !== "refused") notifyCatalogPublication({ kind: "published", path: prepared.path, intent });
+    return result;
+  };
+  if (intent === "refresh" && (routedBefore ?? 0) > 0 && routedAfter === 0) {
+    // K -> C, including the replacement: a config save cannot race the authority check.
+    try {
+      return finish(withConfigMutationLockSync(() => {
+        const snapshot = readConfigAdmissionSnapshot();
+        if (snapshot.kind !== "read" || snapshot.diagnostics.source !== "file") {
+          return { kind: "refused", reason: "unbacked-routed-clear" } as const;
+        }
+        atomicWriteFile(prepared.path, prepared.content, io);
+        resetCodexAppServerCatalogStateCache();
+        return { kind: "written" } as const;
+      }));
+    } catch (error) {
+      if (error instanceof ConfigMutationLockError) return finish({ kind: "refused", reason: "unbacked-routed-clear" });
+      throw error;
+    }
+  }
   atomicWriteFile(prepared.path, prepared.content, io);
   resetCodexAppServerCatalogStateCache();
+  return finish({ kind: "written" });
 }
 
 /** Atomically publish the catalog-path-keyed immutable backup without clobbering. */
@@ -242,8 +341,16 @@ export function replaceCodexModelsCache(
   owningCodexHome: string,
   prepared: PreparedCatalogFileWrite,
   io?: AtomicWriteIO,
-): void {
+): Exclude<CatalogFileReplacement, { kind: "refused" }> {
   assertCatalogWritePermit(permit, owningCodexHome);
+  catalogWritePermitContext(permit);
+  if (!preparedBytesDifferFromDisk(prepared)) return { kind: "unchanged" };
+  const routedBefore = routedRowsOnDisk(prepared.path);
   atomicWriteFile(prepared.path, prepared.content, io);
   resetCodexAppServerCatalogStateCache();
+  auditWrite(permit, owningCodexHome, {
+    target: "cache", outcome: "written", routedBefore,
+    routedAfter: routedRowsFromJson(prepared.content), configSource: configSourceNow(),
+  }, io === undefined);
+  return { kind: "written" };
 }

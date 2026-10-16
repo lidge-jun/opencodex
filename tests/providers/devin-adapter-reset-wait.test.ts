@@ -20,7 +20,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDevinAdapter } from "../../src/adapters/devin";
 import { parseCatalogBuffer, setCachedCatalogForTests } from "../../src/adapters/devin/cloud-direct/catalog";
-import { encodeMessage, encodeString, encodeVarintField } from "../../src/adapters/devin/cloud-direct/wire";
+import { encodeMessage, encodeString, encodeVarintField, iterFields } from "../../src/adapters/devin/cloud-direct/wire";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import { saveCredential } from "../../src/oauth/store";
 import type { AdapterEvent } from "../../src/types";
@@ -35,6 +35,7 @@ const previousFetch = globalThis.fetch;
 const previousWait = process.env.OPENCODEX_DEVIN_STATED_RESET_WAIT_MS;
 let chatPosts = 0;
 let seenUrls: string[] = [];
+let trajectories: string[] = [];
 
 function seed(tenantHost = host): void {
   const buffer = Buffer.concat([encodeMessage(1, Buffer.concat([
@@ -65,16 +66,22 @@ function refusalResponse(message: string): Response {
 function stubTransport(message: string): void {
   chatPosts = 0;
   seenUrls = [];
-  globalThis.fetch = (async (input: RequestInfo | URL) => {
+  trajectories = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     // The seeded catalog cache means GetChatMessage is the only RPC this turn
     // performs; count it anyway so a replay is visible as a second send.
     seenUrls.push(String(input));
-    if (String(input).endsWith(new URL(CHAT_URL).pathname)) chatPosts += 1;
+    if (String(input).endsWith(new URL(CHAT_URL).pathname)) {
+      chatPosts += 1;
+      const request = Buffer.from(await (init!.body as Blob).arrayBuffer()).subarray(5);
+      const reference = [...iterFields(request)].find(field => field.num === 15)!.value as Buffer;
+      trajectories.push(([...iterFields(reference)].find(field => field.num === 1)!.value as Buffer).toString());
+    }
     return refusalResponse(message);
   }) as typeof fetch;
 }
 
-async function runOneTurn(abortSignal: AbortSignal = AbortSignal.timeout(5_000), comboAttempt = false): Promise<AdapterEvent[]> {
+async function runOneTurn(abortSignal: AbortSignal = AbortSignal.timeout(5_000), comboAttempt = false, headers = new Headers()): Promise<AdapterEvent[]> {
   const adapter = createDevinAdapter({ adapter: "devin", apiKey, baseUrl: host });
   const events: AdapterEvent[] = [];
   await adapter.runTurn!({
@@ -83,7 +90,7 @@ async function runOneTurn(abortSignal: AbortSignal = AbortSignal.timeout(5_000),
     context: { messages: [{ role: "user", content: "hi", timestamp: 1 }] },
     options: {},
   }, {
-    headers: new Headers(),
+    headers,
     translatorBudget: createTranslatorBudget(),
     abortSignal,
     comboAttempt,
@@ -137,7 +144,8 @@ describe("devin adapter stated-reset wait", () => {
     process.env.OPENCODEX_DEVIN_STATED_RESET_WAIT_MS = "3000";
     stubTransport("Your limit will reset in 1 second");
 
-    const events = await runOneTurn(AbortSignal.timeout(30_000));
+    const headers = new Headers({ "session-id": crypto.randomUUID() });
+    const events = await runOneTurn(AbortSignal.timeout(5_000), false, headers);
 
     expect(chatPosts).toBe(3);
     expect(events.some(event => event.type === "heartbeat" && event.preflightReady === true)).toBe(true);
@@ -145,6 +153,12 @@ describe("devin adapter stated-reset wait", () => {
     expect(error).toMatchObject({ status: 429, errorType: "rate_limit_error", code: "resource_exhausted" });
     expect(error?.message).toContain("retry after ~1s");
     expect(events.some(event => event.type === "done")).toBe(false);
+    expect(trajectories).toHaveLength(3);
+    expect(new Set(trajectories).size).toBe(1);
+    // Once retries finish, the next named turn reacquires the same retained id.
+    await runOneTurn(AbortSignal.timeout(3_000), true, headers);
+    expect(trajectories).toHaveLength(4);
+    expect(trajectories[3]).toBe(trajectories[0]);
   });
 
   test("a combo child returns the stated reset immediately despite a standalone wait allowance", async () => {

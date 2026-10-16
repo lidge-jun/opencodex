@@ -1,6 +1,6 @@
 /**
- * CLI head: version/help early exits, `ocx ready` pre-parse, and the bounded
- * Codex-shim auto-restore preflight, in that order (Phase 1 of the CLI
+ * CLI head: version/help early exits, ready/resolve pre-parse, lifecycle version
+ * notice, then bounded Codex-shim auto-restore preflight (Phase 1 of the CLI
  * deepening — moved out of src/cli/index.ts).
  *
  * `parseCliHead` is pure (no I/O, no process access) so the ordering and the
@@ -15,6 +15,8 @@ import { parseStopApproval } from "./stop-approval";
 import { maybeAutoRestoreCodexShim } from "./codex-shim-autorestore";
 import { findCommand } from "./registry";
 import { printUnknownCommand } from "./help-recovery";
+import { noteCredentialArgv, redactSecretArgs } from "./secret-args";
+import { maybeNoticeVersionSkew } from "./version-skew-notice";
 
 export interface CliHead {
   kind: "version" | "help" | "ready" | "resolve" | "command";
@@ -78,7 +80,13 @@ export function parseCliHead(argv: string[]): CliHead {
   return { kind: "command", command, args };
 }
 
+export function uninstallArgsError(command: string | undefined, args: string[]): string | undefined {
+  if ((command !== "uninstall" && command !== "remove") || args.length <= 1) return undefined;
+  return `ocx ${command} does not accept arguments (got: ${redactSecretArgs(args.slice(1)).join(" ")}). No changes were made. See: ocx help ${command}`;
+}
+
 export async function runCli(argv: string[]): Promise<CliHead> {
+  noteCredentialArgv(argv);
   const head = parseCliHead(argv);
   switch (head.kind) {
     case "version":
@@ -129,6 +137,12 @@ export async function runCli(argv: string[]): Promise<CliHead> {
         console.error("Usage: ocx stop [--json [--expect-pid <pid> --expect-port <port> --expect-hostname <host> --expect-config-home <home> --expect-cli-version <version> --expect-compatibility-token <hex>]]");
         process.exit(64);
       }
+      const uninstallError = uninstallArgsError(head.command, head.args);
+      if (uninstallError) {
+        console.error(uninstallError);
+        process.exit(2);
+      }
+      await maybeNoticeVersionSkew(head.command, head.args);
       maybeAutoRestoreCodexShim(head.command, head.args);
       return head;
   }

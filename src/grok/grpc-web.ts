@@ -5,6 +5,7 @@
 
 export interface GrpcWebTrailer {
   status: number;
+  statusValues: string[];
   statusMessage?: string;
   metadata: Record<string, string>;
 }
@@ -12,6 +13,8 @@ export interface GrpcWebTrailer {
 export interface DecodedGrpcWebResponse {
   messages: Uint8Array[];
   status: number;
+  statusValues: string[];
+  framingComplete: boolean;
   statusMessage?: string;
   trailers?: GrpcWebTrailer;
 }
@@ -51,6 +54,7 @@ export function parseGrpcWebTrailers(bytes: Uint8Array): GrpcWebTrailer {
   const text = new TextDecoder("utf-8").decode(bytes);
   const lines = text.split(/\r?\n/);
   const metadata: Record<string, string> = {};
+  const statusValues: string[] = [];
   let status = 0;
   let statusMessage: string | undefined;
 
@@ -62,6 +66,7 @@ export function parseGrpcWebTrailers(bytes: Uint8Array): GrpcWebTrailer {
     if (!key) continue;
     metadata[key] = value;
     if (key === "grpc-status") {
+      statusValues.push(value);
       const parsed = parseInt(value, 10);
       if (!Number.isNaN(parsed)) {
         status = parsed;
@@ -75,7 +80,7 @@ export function parseGrpcWebTrailers(bytes: Uint8Array): GrpcWebTrailer {
     }
   }
 
-  return { status, statusMessage, metadata };
+  return { status, statusValues, statusMessage, metadata };
 }
 
 /**
@@ -83,8 +88,11 @@ export function parseGrpcWebTrailers(bytes: Uint8Array): GrpcWebTrailer {
  */
 export function decodeGrpcWebResponse(bytes: Uint8Array): DecodedGrpcWebResponse {
   const messages: Uint8Array[] = [];
+  const statusValues: string[] = [];
   let offset = 0;
   let trailer: GrpcWebTrailer | undefined;
+  let firstTrailerPayload: Uint8Array | undefined;
+  let framingComplete = true;
 
   while (offset + HEADER_SIZE <= bytes.length) {
     const flag = bytes[offset];
@@ -99,10 +107,22 @@ export function decodeGrpcWebResponse(bytes: Uint8Array): DecodedGrpcWebResponse
 
     const payload = bytes.subarray(frameStart, frameEnd);
 
+    // Preserve legacy decoding; callers needing confirmation inspect framingComplete.
     if (flag === FRAME_DATA) {
+      if (firstTrailerPayload !== undefined) framingComplete = false;
       messages.push(payload);
     } else if (flag === FRAME_TRAILER) {
+      const firstTrailer = firstTrailerPayload;
+      if (firstTrailer === undefined) {
+        firstTrailerPayload = payload;
+      } else if (payload.length !== firstTrailer.length
+        || payload.some((byte, index) => byte !== firstTrailer[index])) {
+        framingComplete = false;
+      }
       trailer = parseGrpcWebTrailers(payload);
+      for (const value of trailer.statusValues) statusValues.push(value);
+    } else {
+      framingComplete = false;
     }
 
     offset = frameEnd;
@@ -114,6 +134,8 @@ export function decodeGrpcWebResponse(bytes: Uint8Array): DecodedGrpcWebResponse
   return {
     messages,
     status: finalStatus,
+    statusValues,
+    framingComplete: framingComplete && offset === bytes.length,
     statusMessage: finalMessage,
     trailers: trailer,
   };

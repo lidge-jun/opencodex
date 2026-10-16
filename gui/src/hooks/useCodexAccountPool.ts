@@ -107,7 +107,7 @@ export type CodexAccountLoadState = "loading" | "ready" | "error";
 
 export type CodexAccountActionResult<T extends object = Record<never, never>> =
   | ({ ok: true } & T)
-  | { ok: false; reason: "busy" | "request" | "reload" };
+  | { ok: false; reason: "busy" | "request" | "reload" | "pin_changed" };
 
 /**
  * The auto-switch threshold arrives on the same /active response as the account list.
@@ -155,7 +155,7 @@ export interface CodexAccountPoolController {
   activePinnedId: string | null;
 
   load(refreshQuota?: boolean, options?: { validatePending?: boolean }): Promise<boolean>;
-  switchAccount(id: string | null): Promise<CodexAccountActionResult<{ activeId: string | null }>>;
+  switchAccount(id: string | null, options?: { expectedPinnedAccountId: string }): Promise<CodexAccountActionResult<{ activeId: string | null }>>;
   setAccountPaused(id: string, paused: boolean): Promise<CodexAccountActionResult>;
   /** `null` resets the account to the default order. Accepts the `__main__` sentinel. */
   setAccountPriority(id: string, priority: number | null): Promise<CodexAccountActionResult>;
@@ -475,20 +475,25 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
     setPauseCount(pauseTokensRef.current!.size);
   }, []);
 
-  const switchAccount = useCallback(async (id: string | null) => {
+  const switchAccount = useCallback(async (id: string | null, options?: { expectedPinnedAccountId: string }) => {
     // Cross-gated with the order write, not just with itself: both PUTs move the pin,
     // and in opposite directions, so letting them overlap lets the client settle on
     // the inverse of the server's final pin until a reload happens to correct it.
     if (switchingRef.current || priorityMutationRef.current) return { ok: false, reason: "busy" } as const;
     switchingRef.current = id ?? "__main__";
     setSwitchingId(id ?? "__main__");
+    let failure: "request" | "pin_changed" = "request";
     try {
       const response = await fetch(`${apiBase}/api/codex-auth/active`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ accountId: id }),
+        body: JSON.stringify({ accountId: id, ...(options ? { expectedPinnedAccountId: options.expectedPinnedAccountId } : {}) }),
       });
-      if (!response.ok) throw new Error("account switch failed");
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({})) as { code?: unknown };
+        if (error.code === "account_pin_changed") failure = "pin_changed";
+        throw new Error("account switch failed");
+      }
       const result = await response.json().catch(() => ({})) as { activeCodexAccountId?: string | null };
       const selectedId = result.activeCodexAccountId ?? id;
       pendingActiveIdRef.current = {
@@ -498,14 +503,21 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
       setActiveId(selectedId ?? null);
       // A manual selection pins its target until the account drains or routing moves off
       // it. The badge follows the id, not /active's `pinned` boolean, so a same-tier
-      // sibling's turn does not make the operator's choice look released.
-      setActivePinnedId(selectedId ?? "__main__");
+      // sibling's turn does not make the operator's choice look released. A null request
+      // is the unpin path — the server cleared the pin, so nothing is marked.
+      setActivePinnedId(selectedId ?? null);
       // Reconcile in the background: the switch is already accepted upstream, so a slow
       // reload must not hold the caller's confirmation dialog open.
       void load();
       return { ok: true, activeId: selectedId ?? null } as const;
     } catch {
-      return { ok: false, reason: "request" } as const;
+      if (id === null) {
+        // A lost reply or unconfirmed publication can already have changed the saved pin.
+        // Observe /active before feedback; do not let an older optimistic pick mask it.
+        pendingActiveIdRef.current = null;
+        await load();
+      }
+      return { ok: false, reason: failure } as const;
     } finally {
       switchingRef.current = null;
       setSwitchingId(null);

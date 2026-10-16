@@ -1,4 +1,8 @@
-import type { ResponsesRequestContext, ResponsesAdmissionState, ResponsesDispatchers } from "./core-options";
+import type { HandleResponsesOptions, ResponsesRequestContext, ResponsesAdmissionState, ResponsesDispatchers } from "./core-options";
+import type { PolicyRequestEvidence } from "../../routing/evaluator";
+import type { RequestLogContext } from "../request-log";
+import { markProtocolEntry, protocolMarkFeatures } from "../../protocols/trace";
+import { isAntigravityRoute } from "../antigravity-direct-eligibility";
 import { capturePolicyRequestRoute, assertPolicyNormalizedRoute, recordPolicyPreparedDestination, policyCandidateRefusalResponse } from "./policy-request-scope";
 import {
   agentTaskRecoveryConfig,
@@ -33,6 +37,7 @@ import { resolveContextPrincipal } from "../auth-cors";
 import { resolveSkillsSnapshotScopeKey, snapshotSkillsCatalogInBody } from "./skills-snapshot";
 import {
   isShadowSourceModel,
+  shadowCallPreservesSelectedModel,
   shadowSourceModelPrefix,
   shouldInterceptShadowCall,
 } from "../../lib/shadow-call";
@@ -46,6 +51,7 @@ import {
   codexPoolAffinityKey,
   previewCodexPoolLineage,
   applyCodexAuthContextToProvider,
+  releaseCodexAuthContextProbeLease,
   hasCallerCodexBearer,
   requestOwnedMainPinState,
   requestOwnedMainCredentialIsLive,
@@ -58,10 +64,12 @@ import {
   previousResponseProviderState,
 } from "../../responses/state";
 import { formatErrorResponse } from "../../bridge";
+import { mapCodexAuthContextErrorToResponse } from "./codex-auth-error";
 import type { OcxParsedRequest } from "../../types";
 import { buildToolBridgeMaps } from "./collaboration";
 import { parseRequest } from "../../responses/parser";
 import { anthropicSessionKeyFromParts } from "../../oauth/anthropic-routing";
+import { configuredAnthropicInstance } from "../../providers/anthropic-instance";
 import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
 import { bindTurnTerminationScope, rememberDeliveredFinalAnswer } from "../../responses/turn-termination";
 import { observeCacheDiagnosticInbound, rebindCacheDiagnosticBody, requestLogSpeedLabel, readConfiguredCodexServiceTier } from "../request-log";
@@ -72,6 +80,7 @@ import {
   routeCompactionModel,
   routeModel,
   NoEligiblePolicyCandidateError,
+  AnthropicSecondaryInstanceUnavailableError,
 } from "../../router";
 import { evidenceFromBody } from "../../routing/request-evidence";
 import { OPENAI_CODEX_PROVIDER_ID, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
@@ -149,6 +158,48 @@ import {
 } from "./account-change-state";
 
 import { redactHostedImageDisplayPaths } from "../responses-hosted-image-display";
+
+/** Policy-routing evidence. The direct lane's settings-only body has no conversation to scan. */
+function routeEvidence(options: Pick<HandleResponsesOptions, "directRequest">, parsed: OcxParsedRequest): PolicyRequestEvidence {
+  return options.directRequest?.evidence ?? evidenceFromBody(parsed._rawBody);
+}
+
+/**
+ * Leave the Antigravity direct lane for this request: put the bridge conversation back on the
+ * Responses body so every `_rawBody` reader sees what the bridge would have sent, and trace the
+ * request as the bridge. The IR conversation already decoded stays: it equals what
+ * `parseRequest` builds from the restored body (`tests/protocols/chat-ir-parity.test.ts`).
+ */
+function restoreDirectRequestConversation(options: HandleResponsesOptions, body: unknown, logCtx: RequestLogContext): void {
+  const direct = options.directRequest;
+  if (!direct) return;
+  options.directRequest = undefined;
+  if (body && typeof body === "object" && !Array.isArray(body)) Object.assign(body, direct.bridgeConversation());
+  if (options.clientEncoder) options.clientEncoder = { ...options.clientEncoder, requestLane: "bridge" };
+  markProtocolEntry(logCtx, {
+    inbound: direct.protocol,
+    lane: "bridge",
+    reasonCodes: ["not-migrated"],
+    features: protocolMarkFeatures(logCtx) ?? [],
+  });
+}
+
+/**
+ * Leave the direct lane as soon as the route stops being the Antigravity route it was decided
+ * for. Called after every route assignment, so readers that run between a reroute and dispatch
+ * (canonical sanitization, ciphertext stripping, final normalization) see the bridge body.
+ */
+function leaveDirectLaneIfRerouted(
+  options: HandleResponsesOptions,
+  route: Pick<RouteResult, "providerName" | "modelId" | "provider">,
+  parsed: OcxParsedRequest,
+  logCtx: RequestLogContext,
+): void {
+  const direct = options.directRequest;
+  if (!direct) return;
+  if (route.providerName === direct.providerName && route.modelId === direct.modelId && isAntigravityRoute(route)) return;
+  restoreDirectRequestConversation(options, parsed._rawBody, logCtx);
+}
 
 /** Parses, selects, and admits one request without changing the dispatch policy. */
 export async function prepareResponsesRequest(
@@ -271,10 +322,11 @@ export async function prepareResponsesRequest(
     }
   }
   let shadowCallIntercepted = false;
-  // A spawned sub-agent turn names its model on purpose; gpt-6-luna is both the helper
-  // slug and a default sub-agent model, so neither intercept site may rewrite that turn.
+  // Luna is also selectable by users/children. Both intercept sites use the same
+  // per-turn provenance; WS frames must not inherit the handshake's classification.
   const threadSpawn = isThreadSpawnRequest(req.headers);
-  if (!concreteSelection && !options.compactionRoutingOverride && !options.internalDecisionCall && !threadSpawn && !memoryModelApplies && body && typeof body === "object" && !Array.isArray(body)) {
+  const preserveShadowModel = shadowCallPreservesSelectedModel(body, req.headers, options.inboundTransport);
+  if (!concreteSelection && !options.compactionRoutingOverride && !options.internalDecisionCall && !preserveShadowModel && !memoryModelApplies && body && typeof body === "object" && !Array.isArray(body)) {
     const shadowIntercept = config.shadowCallIntercept;
     const rawShadowModel = (body as { model?: unknown }).model;
     if (shadowIntercept?.enabled && shadowIntercept.model && typeof rawShadowModel === "string"
@@ -300,6 +352,9 @@ export async function prepareResponsesRequest(
   }
   if (comboId && Object.hasOwn(config.combos ?? {}, comboId)) {
     options.onRequestBodyRead?.();
+    // The Antigravity direct lane is decided for one concrete route; a body that reached a combo
+    // goes through the combo's own child loop with the full bridge conversation.
+    restoreDirectRequestConversation(options, body, logCtx);
     return requestDispatchers.handleComboResponses(req, body, comboId, config, logCtx, {
       ...options,
       // Concrete combo child selectors no longer match the shadow source model. Carry the
@@ -377,6 +432,14 @@ export async function prepareResponsesRequest(
   let toolBridgeMaps: ReturnType<typeof buildToolBridgeMaps>;
   try {
     parsed = parseRequest(body);
+    // Antigravity direct lane: the body carried only the request settings, so the parse above
+    // produced them with an empty conversation; the conversation itself comes straight from the
+    // client body. Inside this try so a decode error answers exactly like a parse error.
+    if (options.directRequest) parsed = options.directRequest.decode(parsed);
+    if (options.inboundWire === "anthropic") {
+      parsed._nativeReasoningReplay = options.nativeReasoningReplay;
+      parsed._nativeReasoningMint = options.nativeReasoningMint;
+    }
     parsed._promptCacheKeyIsSharedCohort = options.promptCacheKeyIsSharedCohort;
     // The body may have been rebuilt since the inbound observation (previous-response
     // expansion); alias the parsed raw body to the same draft so the outbound
@@ -520,6 +583,23 @@ export async function prepareResponsesRequest(
   // or a subagent fallback rewrites it, so a refusal names the client's own
   // request rather than a destination it never asked for.
   const inboundSelector = parsed.modelId;
+  const selectorTargetsSecondary = (selector: string): boolean => {
+    const slash = selector.indexOf("/");
+    if (slash <= 0) return false;
+    const qualifier = selector.slice(0, slash);
+    // Match router precedence: exact custom keys (including uppercase names) win over aliases.
+    if (Object.hasOwn(config.providers, qualifier)) return qualifier === "anthropic2";
+    return qualifier === "anthropic2"
+      || config.providers.anthropic2?.alias?.trim().toLowerCase() === qualifier.toLowerCase();
+  };
+  const explicitlyRequestsSecondary = selectorTargetsSecondary(inboundSelector);
+  const secondaryProvider = config.providers.anthropic2;
+  // Reserve an explicit B selector before an absent row can default-route it to A.
+  // Combo parents have already dispatched above; concrete children retain their own target.
+  if (explicitlyRequestsSecondary && (!secondaryProvider || secondaryProvider.disabled === true
+    || secondaryProvider.authMode === "oauth" && configuredAnthropicInstance(config, "anthropic2") !== "anthropic2")) {
+    return formatErrorResponse(401, "authentication_error", "Anthropic Pool 2 requires an enabled configured provider");
+  }
   const admissionScope = resolveAdmissionModelScope(config, options.admission);
   const captureInboundRoutePolicy = (candidate: RouteResult, captureRequestPolicy = true): RouteResult => {
     // Every route this request path produces passes through here: the direct
@@ -551,11 +631,21 @@ export async function prepareResponsesRequest(
     // no canonical OpenAI route for (#2901). Only the initial compaction route
     // may fall back to the configured default provider; combo attempts and the
     // later fallback/recovery re-routes keep the ordinary reservation.
-    const routeInbound = (modelId: string) => concreteSelection
-      ? routeConcreteModel(config, modelId)
-      : parsed._compactionRequest === true
-        ? routeCompactionModel(config, modelId, evidenceFromBody(parsed._rawBody))
-        : routeModel(config, modelId, evidenceFromBody(parsed._rawBody));
+    const routeInbound = (modelId: string) => {
+      const resolved = concreteSelection
+        ? routeConcreteModel(config, modelId)
+        : parsed._compactionRequest === true
+          ? routeCompactionModel(config, modelId, routeEvidence(options, parsed))
+          : routeModel(config, modelId, routeEvidence(options, parsed));
+      // A Pool 2 selector may leave Pool 2 only through an operator-configured cross-provider
+      // blocked-model redirect, which the router marks as a credential-domain rewrite. Any other
+      // destination means the selector fell through to default resolution, which stays refused.
+      const operatorRedirect = resolved.routeReason === "blocked-model-redirect" && resolved.credentialDomainRewrite === true;
+      if (selectorTargetsSecondary(modelId) && resolved.providerName !== "anthropic2" && !operatorRedirect) {
+        throw new Error("Anthropic Pool 2 selector cannot use the default provider");
+      }
+      return resolved;
+    };
     const resolveRoute = (modelId: string) => captureInboundRoutePolicy(routeInbound(modelId));
     // The phase's destination. Resolved through the admission-scoped resolver every other route
     // uses, and it fails closed exactly like the shadow target: falling back to the native model
@@ -578,7 +668,7 @@ export async function prepareResponsesRequest(
     }
     const _sci = config.shadowCallIntercept;
     let shadowRoute: RouteResult | undefined;
-    if (!concreteSelection && !memoryRoute && !options.memoryModelPhase && !options.compactionRoutingOverride && !options.internalDecisionCall && !threadSpawn && _sci?.enabled && _sci.model && isShadowSourceModel(parsed.modelId, _sci.sourceModels)) {
+    if (!concreteSelection && !memoryRoute && !options.memoryModelPhase && !options.compactionRoutingOverride && !options.internalDecisionCall && !preserveShadowModel && _sci?.enabled && _sci.model && isShadowSourceModel(parsed.modelId, _sci.sourceModels)) {
       const sourcePrefix = shadowSourceModelPrefix(parsed.modelId, _sci.sourceModels)!;
       let sourceIdentity = { providerName: OPENAI_CODEX_PROVIDER_ID, modelId: sourcePrefix };
       try {
@@ -617,6 +707,7 @@ export async function prepareResponsesRequest(
     if (parsed._compactionRequest === true || options.compactionRoutingOverride) parsed._cursorIsolateConversation = true;
     route = memoryRoute ?? shadowRoute ?? resolveRoute(options.policyFallbackCandidate
       ? `${options.policyFallbackCandidate.provider}/${options.policyFallbackCandidate.model}` : parsed.modelId);
+    leaveDirectLaneIfRerouted(options, route, parsed, logCtx);
     // Name the phase in the persisted route decision, so the request log says why this turn went to
     // the memory destination instead of leaving it looking like a plain user selection. Set here, on
     // the resolved route, so a combo child's own route carries it too.
@@ -642,6 +733,9 @@ export async function prepareResponsesRequest(
     logCtx.routeDecision = route.routeDecision;
     logCtx.policyEligibility = route.policyEligibility;
   } catch (err) {
+    if (err instanceof AnthropicSecondaryInstanceUnavailableError) {
+      return formatErrorResponse(401, "authentication_error", err.message);
+    }
     const policyRefusal = policyCandidateRefusalResponse(err);
     if (policyRefusal) return policyRefusal;
     if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(err);
@@ -853,8 +947,9 @@ export async function prepareResponsesRequest(
     if (fallback?.to && !slugsEquivalent(fallback.to, route.modelId)) {
       try {
         route = captureInboundRoutePolicy(
-          routeModel(config, fallback.to, evidenceFromBody(parsed._rawBody)),
+          routeModel(config, fallback.to, routeEvidence(options, parsed)),
         );
+        leaveDirectLaneIfRerouted(options, route, parsed, logCtx);
         credentialDomainWasRewritten = true;
         logCtx.routeDecision = route.routeDecision;
         logCtx.policyEligibility = route.policyEligibility;
@@ -1069,8 +1164,9 @@ export async function prepareResponsesRequest(
           if (fallback?.to && !slugsEquivalent(fallback.to, route.modelId)) {
             try {
               route = captureInboundRoutePolicy(
-                routeModel(config, fallback.to, evidenceFromBody(parsed._rawBody)),
+                routeModel(config, fallback.to, routeEvidence(options, parsed)),
               );
+              leaveDirectLaneIfRerouted(options, route, parsed, logCtx);
               credentialDomainWasRewritten = true;
               logCtx.routeDecision = route.routeDecision;
               logCtx.policyEligibility = route.policyEligibility;
@@ -1217,6 +1313,8 @@ export async function prepareResponsesRequest(
   // for streaming clients.
   const clientRequestedStream = parsed.stream;
   const admittedPolicyRoute = { providerName: route.providerName, modelId: route.modelId };
+  // Final guard before normalization may inject guidance into the raw body.
+  leaveDirectLaneIfRerouted(options, route, parsed, logCtx);
   await applyFinalRouteRequestNormalization({
     parsed,
     route,
@@ -1352,7 +1450,15 @@ export async function prepareResponsesRequest(
     substituteMainCredential = finalAuth.substituteMainCredential;
   }
 
-  route.provider = applyCodexAuthContextToProvider(route.provider, admissionState.authCtx, route.codexAccountMode);
+  try {
+    route.provider = applyCodexAuthContextToProvider(route.provider, admissionState.authCtx, route.codexAccountMode);
+  } catch (error) {
+    releaseCodexAuthContextProbeLease(admissionState.authCtx);
+    if (options.abortSignal?.aborted || req.signal.aborted) return clientCancelledResponse();
+    const mapped = mapCodexAuthContextErrorToResponse(error, { now: Date.now(), accountSelector: route.codexAccountNamespace });
+    if (mapped) return mapped;
+    throw error;
+  }
   applyCodexAccountGatedWireNormalization(parsed, route, logCtx);
   try {
     recordPolicyPreparedDestination(policyScope, route.providerName, parsed._wireModelOverride ?? parsed.modelId);
@@ -1408,6 +1514,11 @@ export async function prepareResponsesRequest(
   }
   return {
     inboundWire,
+    clientDeclaredEmptyToolCatalog: options.clientDeclaredEmptyToolCatalog === true,
+    // Admission facts later route rewrites must not re-derive: the selector the caller sent and
+    // the key scope as it stood when this request was admitted.
+    inboundSelector,
+    admissionScope,
     translatorBudget,
     parsed,
     toolBridgeMaps,

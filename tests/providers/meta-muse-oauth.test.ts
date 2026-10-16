@@ -86,7 +86,7 @@ describe("meta-muse registry entry", () => {
 
   test("keeps live discovery off — the real roster carries image and voice models", () => {
     expect(entry().liveModels).toBeFalsy();
-    expect(entry().models).toEqual([...MODELS]);
+    expect(entry().models).toEqual([...MODELS, "muse-wonder-1.0"]);
   });
 
   test("the note discloses every unsupported-use fact a user needs before opting in", () => {

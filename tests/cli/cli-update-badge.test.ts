@@ -1,12 +1,21 @@
-import { describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmModuleGraph } from "../helpers/cold-spawn-warmup";
 import { repoPath } from "../helpers/repo-root";
+import { INTERNAL_DEADLINE_MS } from "../helpers/test-budget";
 import { skipsCodexShimAutoRestore } from "../../src/cli/codex-shim-autorestore";
 
 describe("hidden package update badge command", () => {
+  // src/cli/index.ts is the static graph every ocx command loads. A cold bun.exe on win32
+  // spent 13.2s on the first spawn under parallel load, past a 12s literal. The warm-up
+  // pays that load once; the spawns below time a warm child against the shared deadline.
+  beforeAll(async () => {
+    await warmModuleGraph({ graph: "cli-index/update-badge", entry: repoPath("src", "cli", "index.ts") });
+  }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
+
   test("is exempt from CLI shim repair, including malformed arguments", () => {
     expect(skipsCodexShimAutoRestore("__update-badge", ["__update-badge"])).toBe(true);
     expect(skipsCodexShimAutoRestore("__update-badge", ["__update-badge", "unexpected"])).toBe(true);
@@ -24,7 +33,7 @@ describe("hidden package update badge command", () => {
     try {
       const env = { ...process.env, OPENCODEX_HOME: home, CODEX_HOME: codexHome };
       const result = spawnSync(process.execPath, [repoPath("src", "cli", "index.ts"), "__update-badge"], {
-        env, encoding: "utf8", timeout: 12_000, maxBuffer: 64 * 1024,
+        env, encoding: "utf8", timeout: INTERNAL_DEADLINE_MS, maxBuffer: 64 * 1024,
       });
       expect(result.error).toBeUndefined();
       expect(result.status).toBe(0);
@@ -41,7 +50,7 @@ describe("hidden package update badge command", () => {
       expect(existsSync(join(codexHome, "config.toml"))).toBe(false);
 
       const malformed = spawnSync(process.execPath, [repoPath("src", "cli", "index.ts"), "__update-badge", "unexpected"], {
-        env, encoding: "utf8", timeout: 12_000, maxBuffer: 64 * 1024,
+        env, encoding: "utf8", timeout: INTERNAL_DEADLINE_MS, maxBuffer: 64 * 1024,
       });
       expect(malformed.status).toBe(64);
       expect(malformed.stdout).toBe("");

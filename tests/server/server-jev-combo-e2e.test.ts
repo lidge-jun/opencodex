@@ -184,6 +184,78 @@ describe("JEV Combo runtime", () => {
     });
   });
 
+  test.each(["xhigh", "low", "high"])("records caller high and JEV's forced %s on the request and attempt", async forced => {
+    const config = makeConfig({ jevFetch: choiceFetch(`sol/gpt-5.6-sol:${forced}`) });
+    const parentLog: RequestLogContext = { model: "", provider: "" };
+    const childBodies: Record<string, unknown>[] = [];
+
+    const response = await execute(config, (body, childLog) => {
+      childBodies.push(body);
+      childLog.requestedEffort = (body.reasoning as { effort: string }).effort;
+      return success(String(body.model));
+    }, { reasoning: { effort: "high", summary: "auto" } }, undefined, parentLog);
+
+    expect(response.status).toBe(200);
+    expect(childBodies).toEqual([expect.objectContaining({ reasoning: { effort: forced, summary: "auto" } })]);
+    const expected = forced === "high" ? "high" : `high->${forced}`;
+    expect(parentLog.requestedEffort).toBe(expected);
+    expect(parentLog.attempts).toHaveLength(1);
+    expect(parentLog.attempts![0]!.requestedEffort).toBe(expected);
+  });
+
+  test("preserves a later child effort transition after JEV's forced effort", async () => {
+    const config = makeConfig({ jevFetch: choiceFetch("sol/gpt-5.6-sol:xhigh") });
+    const parentLog: RequestLogContext = { model: "", provider: "" };
+
+    const response = await execute(config, (body, childLog) => {
+      expect(body.reasoning).toMatchObject({ effort: "xhigh" });
+      childLog.requestedEffort = "xhigh->medium->low";
+      return success(String(body.model));
+    }, { reasoning: { effort: "high" } }, undefined, parentLog);
+
+    expect(response.status).toBe(200);
+    expect(parentLog.requestedEffort).toBe("high->xhigh->medium->low");
+    expect(parentLog.attempts![0]!.requestedEffort).toBe("high->xhigh->medium->low");
+  });
+
+  test("keeps JEV's forced effort on the failed attempt without leaking it into fallback", async () => {
+    const config = makeConfig({ jevFetch: choiceFetch("sol/gpt-5.6-sol:low") });
+    const parentLog: RequestLogContext = { model: "", provider: "" };
+    const efforts: string[] = [];
+
+    const response = await execute(config, (body, childLog) => {
+      const effort = (body.reasoning as { effort: string }).effort;
+      efforts.push(effort);
+      childLog.requestedEffort = effort;
+      return String(body.model).startsWith("sol/")
+        ? Response.json({ error: { message: "temporary outage" } }, { status: 503 })
+        : success(String(body.model));
+    }, { reasoning: { effort: "high" } }, undefined, parentLog);
+
+    expect(response.status).toBe(200);
+    expect(efforts).toEqual(["low", "high"]);
+    expect(parentLog.requestedEffort).toBe("high");
+    expect(parentLog.attempts?.map(attempt => attempt.requestedEffort)).toEqual(["high->low", "high"]);
+  });
+
+  test("retains today's label when the JEV target has no effort control", async () => {
+    const config = makeConfig({
+      jevFetch: choiceFetch("sol/gpt-5.6-sol:none"),
+      providerOverrides: { sol: { modelReasoningEfforts: { "gpt-5.6-sol": [] } } },
+    });
+    const parentLog: RequestLogContext = { model: "", provider: "" };
+
+    const response = await execute(config, (body, childLog) => {
+      expect(body.reasoning).toEqual({ summary: "auto" });
+      childLog.requestedEffort = undefined;
+      return success(String(body.model));
+    }, { reasoning: { effort: "high", summary: "auto" } }, undefined, parentLog);
+
+    expect(response.status).toBe(200);
+    expect(parentLog.requestedEffort).toBe("high");
+    expect(parentLog.attempts![0]!.requestedEffort).toBe("high");
+  });
+
   test("routes the initial call to JEV's allowlisted target and keeps direct/catalog rows", async () => {
     const jevRequests: Array<Record<string, unknown>> = [];
     const config = makeConfig({

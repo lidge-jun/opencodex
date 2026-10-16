@@ -61,6 +61,7 @@ async function mount(props: Partial<ApiKeysWorkspaceProps>): Promise<HTMLDivElem
   const container = document.createElement("div");
   document.body.append(container);
   const value: ApiKeysWorkspaceProps = {
+    apiBase: "",
     keys: [{
       id: "k1",
       name: "alpha",

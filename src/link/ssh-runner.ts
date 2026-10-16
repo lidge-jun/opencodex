@@ -1,6 +1,8 @@
 import { homedir } from "node:os";
 
 const DEFAULT_OUTPUT_BYTES = 64 * 1024;
+const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
+const TUNNEL_OUTPUT_EXIT_GRACE_MS = 250;
 const HINT_MAX_CHARS = 160;
 // Written as escapes on purpose: invisible and bidi controls must never sit literally in source.
 const ANSI_SEQUENCE = /\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)|\u001b\[[0-?]*[ -/]*[@-~]|\u001b[@-_]/g;
@@ -93,10 +95,21 @@ export class SshRunnerError extends Error {
   }
 }
 
-async function readOutput(stream: ReadableStream<Uint8Array>, maxBytes: number, kill?: () => void, fatalUtf8 = true): Promise<string> {
+async function readOutput(stream: ReadableStream<Uint8Array>, maxBytes: number, kill?: () => void, fatalUtf8 = true, exited?: Promise<number>, signal?: AbortSignal): Promise<string> {
   const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
+  let finished = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const cancel = (): void => { void reader.cancel().catch(() => {}); };
+  const onExit = (): void => {
+    if (!finished) timer = setTimeout(cancel, TUNNEL_OUTPUT_EXIT_GRACE_MS);
+  };
+  signal?.addEventListener("abort", cancel, { once: true });
+  if (signal?.aborted) cancel();
+  // A descendant may inherit a pipe after ssh exits. Cancellation completes pending reads
+  // immediately; do not await the underlying source's possibly unbounded cancel promise.
+  void exited?.then(onExit, onExit);
   try {
     for (;;) {
       const next = await reader.read();
@@ -104,11 +117,15 @@ async function readOutput(stream: ReadableStream<Uint8Array>, maxBytes: number, 
       total += next.value.byteLength;
       if (total > maxBytes) {
         kill?.();
+        cancel();
         throw new SshRunnerError("output_limit", `ssh output exceeded ${maxBytes} bytes`);
       }
       chunks.push(next.value);
     }
   } finally {
+    finished = true;
+    if (timer !== undefined) clearTimeout(timer);
+    signal?.removeEventListener("abort", cancel);
     reader.releaseLock();
   }
   const bytes = new Uint8Array(total);
@@ -149,8 +166,8 @@ export function createSshRunner(deps: { spawn?: typeof Bun.spawn; timeoutMs?: nu
     } catch (error) {
       throw new SshRunnerError("spawn", `could not spawn ${argv[0] ?? "ssh"}`, { cause: error });
     }
-    const stdout = readOutput(outputStream(child.stdout), DEFAULT_OUTPUT_BYTES, () => defaultKill(child, "SIGTERM"));
-    const stderr = readOutput(outputStream(child.stderr), DEFAULT_OUTPUT_BYTES, () => defaultKill(child, "SIGTERM"), false);
+    const stdout = readOutput(outputStream(child.stdout), DEFAULT_OUTPUT_BYTES, () => defaultKill(child, "SIGTERM"), true, child.exited);
+    const stderr = readOutput(outputStream(child.stderr), DEFAULT_OUTPUT_BYTES, () => defaultKill(child, "SIGTERM"), false, child.exited);
     void stdout.catch(() => {});
     void stderr.catch(() => {});
     return {
@@ -165,9 +182,13 @@ export function createSshRunner(deps: { spawn?: typeof Bun.spawn; timeoutMs?: nu
 
   return {
     async run(argv, options = {}) {
+      const timeoutMs = options.timeoutMs ?? defaultTimeoutMs;
+      if (!Number.isInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2_147_483_647) {
+        throw new SshRunnerError("timeout", "timeoutMs must be a positive integer at most 2147483647");
+      }
       const maxOutputBytes = options.maxOutputBytes ?? DEFAULT_OUTPUT_BYTES;
-      if (!Number.isInteger(maxOutputBytes) || maxOutputBytes < 0) {
-        throw new SshRunnerError("output_limit", "maxOutputBytes must be a non-negative integer");
+      if (!Number.isInteger(maxOutputBytes) || maxOutputBytes < 0 || maxOutputBytes > MAX_OUTPUT_BYTES) {
+        throw new SshRunnerError("output_limit", `maxOutputBytes must be an integer between 0 and ${MAX_OUTPUT_BYTES}`);
       }
       let child: Bun.Subprocess;
       try {
@@ -181,41 +202,50 @@ export function createSshRunner(deps: { spawn?: typeof Bun.spawn; timeoutMs?: nu
         throw new SshRunnerError("spawn", `could not spawn ${argv[0] ?? "ssh"}`, { cause: error });
       }
 
-      const stdout = readOutput(outputStream(child.stdout), Math.min(maxOutputBytes, DEFAULT_OUTPUT_BYTES), () => defaultKill(child, "SIGTERM"));
-      const stderr = readOutput(outputStream(child.stderr), Math.min(maxOutputBytes, DEFAULT_OUTPUT_BYTES), () => defaultKill(child, "SIGTERM"), false);
-      if (options.stdin !== undefined) {
-        try {
-          const input = child.stdin;
-          if (!input || typeof input === "number") throw new Error("ssh stdin was not piped");
-          await input.write(options.stdin);
-          await input.end();
-        } catch (error) {
-          child.kill("SIGTERM");
-          throw new SshRunnerError("spawn", "could not write ssh stdin", { cause: error });
-        }
-      }
-
-      const timeoutMs = options.timeoutMs ?? defaultTimeoutMs;
-      let timedOut = false;
+      const cancellation = new AbortController();
+      let stdout: Promise<string> | undefined;
+      let stderr: Promise<string> | undefined;
       let timer: ReturnType<typeof setTimeout> | undefined;
       const timeout = new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
-          timedOut = true;
-          defaultKill(child, "SIGTERM");
           reject(new SshRunnerError("timeout", `ssh command exceeded ${timeoutMs}ms`));
         }, timeoutMs);
       });
       try {
-        const code = await Promise.race([child.exited, timeout]);
-        const [out, err] = await Promise.all([stdout, stderr]);
-        if (timedOut) throw new SshRunnerError("timeout", `ssh command exceeded ${timeoutMs}ms`);
+        const outStream = outputStream(child.stdout), errStream = outputStream(child.stderr);
+        stdout = readOutput(outStream, maxOutputBytes, undefined, true, undefined, cancellation.signal);
+        stderr = readOutput(errStream, Math.min(maxOutputBytes, DEFAULT_OUTPUT_BYTES), undefined, false, undefined, cancellation.signal);
+        const stdin = async (): Promise<void> => {
+          if (options.stdin === undefined) return;
+          try {
+            const input = child.stdin;
+            if (!input || typeof input === "number") throw new Error("ssh stdin was not piped");
+            await input.write(options.stdin);
+            // A timed-out write may settle later; do not start another operation after failure.
+            if (cancellation.signal.aborted) return;
+            await input.end();
+          } catch (error) {
+            throw new SshRunnerError("spawn", "could not write ssh stdin", { cause: error });
+          }
+        };
+        // Observe all rejections immediately, including errors arriving after timeout. One
+        // deadline covers stdin, exit and EOF: an inherited output pipe is still unfinished work.
+        const [, code, out, err] = await Promise.race([
+          Promise.all([stdin(), child.exited, stdout, stderr]), timeout,
+        ]);
         return { code, stdout: out, stderr: err };
       } catch (error) {
+        cancellation.abort();
+        // Only terminate this local SSH child. A kill failure must not hide the original error.
+        try { defaultKill(child, "SIGTERM"); } catch { /* Preserve the command failure when an already-gone child cannot be signalled. */ }
         if (error instanceof SshRunnerError) throw error;
         throw new SshRunnerError("spawn", "ssh command failed", { cause: error });
       } finally {
         if (timer !== undefined) clearTimeout(timer);
-        void Promise.allSettled([stdout, stderr, child.exited]);
+        void child.exited.catch(() => {});
+        // reader.cancel closes pending reads even if the source's cancel promise never settles.
+        // Do not await stdin or process exit: neither is guaranteed to settle after SIGTERM.
+        await Promise.allSettled([stdout, stderr]);
       }
     },
     spawnTunnel,
@@ -227,3 +257,4 @@ export function createSshRunner(deps: { spawn?: typeof Bun.spawn; timeoutMs?: nu
 }
 
 export const SSH_OUTPUT_CAP_BYTES = DEFAULT_OUTPUT_BYTES;
+export const SSH_MAX_OUTPUT_BYTES = MAX_OUTPUT_BYTES;

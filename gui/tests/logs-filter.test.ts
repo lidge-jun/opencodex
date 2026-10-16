@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import {
   DEFAULT_LOG_FILTER_STATE,
   extractLogFilterOptions,
   filterLogs,
   hasActiveLogFilters,
 } from "../src/pages/logs-filter";
+import { hashLogConversationQuery, unwrapLogConversationQuery } from "../src/log-conversation-id";
 
 const NOW = 2_000_000_000_000;
 const logs = [
@@ -188,4 +190,64 @@ test("exact model choices distinguish prefix siblings and compose with a provide
   ];
   expect(filterLogs(rows, { ...DEFAULT_LOG_FILTER_STATE, model: "model-a", provider: "openai" }).map(row => row.id))
     .toEqual(["exact", "resolved", "attempt"]);
+});
+
+const digest32 = (raw: string) => createHash("sha256").update(raw).digest("hex").slice(0, 32);
+const CODEX_THREAD_ID = "019f6482-67d5-77c2-a643-02daddaa7115";
+
+describe("codex://threads paste in the conversation filter", () => {
+  test("unwraps the deep link to the bare thread id and hashes the unwrapped value", async () => {
+    expect(unwrapLogConversationQuery(`codex://threads/${CODEX_THREAD_ID}`)).toBe(CODEX_THREAD_ID);
+    expect(unwrapLogConversationQuery(`  CODEX://THREADS/${CODEX_THREAD_ID}/  `)).toBe(CODEX_THREAD_ID);
+    expect(unwrapLogConversationQuery(CODEX_THREAD_ID)).toBe(CODEX_THREAD_ID);
+    expect(unwrapLogConversationQuery("codex://other/x")).toBe("codex://other/x");
+    expect(unwrapLogConversationQuery("codex://threads/")).toBe("codex://threads/");
+    expect(unwrapLogConversationQuery(`codex://threads/${CODEX_THREAD_ID}?hostId=durable`)).toBe(CODEX_THREAD_ID);
+    expect(unwrapLogConversationQuery(`codex://threads/${CODEX_THREAD_ID}?hostId=remote-control%3Aexample-environment`)).toBe(CODEX_THREAD_ID);
+    expect(unwrapLogConversationQuery(`codex://threads/${CODEX_THREAD_ID}#frag`)).toBe(CODEX_THREAD_ID);
+    expect(await hashLogConversationQuery(`codex://threads/${CODEX_THREAD_ID}`))
+      .toEqual([digest32(CODEX_THREAD_ID), digest32(`codex://threads/${CODEX_THREAD_ID}`)]);
+    expect(await hashLogConversationQuery(`codex://threads/${CODEX_THREAD_ID}?hostId=durable`))
+      .toEqual([digest32(CODEX_THREAD_ID), digest32(`codex://threads/${CODEX_THREAD_ID}?hostId=durable`)]);
+    expect(await hashLogConversationQuery(CODEX_THREAD_ID)).toEqual([digest32(CODEX_THREAD_ID)]);
+  });
+
+  test("a literal codex://threads id a client sent still matches its whole-string digest", async () => {
+    const uri = `codex://threads/${CODEX_THREAD_ID}`;
+    const rows = [{ id: "literal", conversationId: digest32(uri) }];
+    const queryHash = await hashLogConversationQuery(uri);
+    expect(filterLogs(rows, { ...DEFAULT_LOG_FILTER_STATE, conversationId: uri, conversationQueryHash: queryHash }, NOW)
+      .map(row => row.id)).toEqual(["literal"]);
+  });
+
+  test("malformed or oversized pastes stay plain queries and never match", () => {
+    const slashFlood = `codex://threads/${"/".repeat(4000)}\u2028x`;
+    expect(unwrapLogConversationQuery(slashFlood)).toBe(slashFlood.trim());
+    expect(unwrapLogConversationQuery("codex://threads/id/extra")).toBe("codex://threads/id/extra");
+    const rows = [{ id: "hashed", conversationId: digest32(CODEX_THREAD_ID) }];
+    expect(filterLogs(rows, { ...DEFAULT_LOG_FILTER_STATE, conversationId: slashFlood }, NOW)).toEqual([]);
+    expect(filterLogs(rows, {
+      ...DEFAULT_LOG_FILTER_STATE,
+      conversationId: `codex://threads/${CODEX_THREAD_ID}?hostId=durable`,
+      conversationQueryHash: [digest32(CODEX_THREAD_ID)],
+    }, NOW).map(row => row.id)).toEqual(["hashed"]);
+  });
+
+  test("filterLogs matches a stored digest or raw id behind the pasted link", async () => {
+    const rows = [
+      { id: "hashed", conversationId: digest32(CODEX_THREAD_ID) },
+      { id: "raw", conversationId: "raw-thread" },
+      { id: "other", conversationId: digest32("other") },
+    ];
+    const queryHash = await hashLogConversationQuery(`codex://threads/${CODEX_THREAD_ID}`);
+    expect(filterLogs(rows, {
+      ...DEFAULT_LOG_FILTER_STATE,
+      conversationId: `codex://threads/${CODEX_THREAD_ID}`,
+      conversationQueryHash: queryHash,
+    }, NOW).map(row => row.id)).toEqual(["hashed"]);
+    expect(filterLogs(rows, {
+      ...DEFAULT_LOG_FILTER_STATE,
+      conversationId: "codex://threads/raw-thread",
+    }, NOW).map(row => row.id)).toEqual(["raw"]);
+  });
 });

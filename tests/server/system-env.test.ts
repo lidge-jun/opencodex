@@ -803,6 +803,49 @@ describe("systemEnv lever keys (devlog 136 B6)", () => {
     const haikuCalls = launchctlCommands().filter(c => c.includes("ANTHROPIC_DEFAULT_HAIKU_MODEL") && !c.includes("getenv"));
     expect(haikuCalls).toEqual([]);
   });
+
+  test("an alias tier slot gets its /model label in launchd and in the slot's own shell branch (#6926)", async () => {
+    const writes = capturedWrites();
+    const config = {
+      ...baseConfig,
+      claudeCode: { systemEnv: true, tierModels: { opus: "ocx-claude-native--gpt-6.1-sol", sonnet: "ocx-claude-p--it's" } },
+    } satisfies OcxConfig;
+    expect(await injectSystemEnv(4096, config)).toEqual({ injected: true });
+    const setCalls = launchctlCommands();
+    expect(setCalls).toContain("launchctl setenv ANTHROPIC_DEFAULT_OPUS_MODEL ocx-claude-native--gpt-6.1-sol");
+    expect(setCalls).toContain("launchctl setenv ANTHROPIC_DEFAULT_OPUS_MODEL_NAME gpt-6.1-sol (native)");
+    expect(setCalls).toContain("launchctl setenv ANTHROPIC_DEFAULT_SONNET_MODEL_NAME it's (p)");
+    const keys = JSON.parse(writes.filter(w => w.path.includes("system-env-port")).at(-1)!.data).injectedKeys as string[];
+    expect(keys).toEqual(expect.arrayContaining(["ANTHROPIC_DEFAULT_OPUS_MODEL_NAME", "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME"]));
+    const shell = writes.find(w => w.path.includes("claude-env.sh"))!.data;
+    expect(shell).toContain(`[ -z "\${ANTHROPIC_DEFAULT_OPUS_MODEL+x}" ] && export ANTHROPIC_DEFAULT_OPUS_MODEL='ocx-claude-native--gpt-6.1-sol' && [ -z "\${ANTHROPIC_DEFAULT_OPUS_MODEL_NAME+x}" ] && export ANTHROPIC_DEFAULT_OPUS_MODEL_NAME='gpt-6.1-sol (native)'`);
+    expect(shell).toContain(`export ANTHROPIC_DEFAULT_SONNET_MODEL='ocx-claude-p--it'\\''s' && [ -z "\${ANTHROPIC_DEFAULT_SONNET_MODEL_NAME+x}" ] && export ANTHROPIC_DEFAULT_SONNET_MODEL_NAME='it'\\''s (p)'`);
+    // A slot that is not an alias keeps its plain conditional line.
+    expect(shell).not.toContain("ANTHROPIC_SMALL_FAST_MODEL_NAME");
+  });
+
+  test("a user-owned launchd slot gets no generated label, and a label nothing produces is unset (#6926)", async () => {
+    const writes = capturedWrites();
+    trackingFile = trackingWithLevers(["ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME"]);
+    launchctlBaseUrl = "http://127.0.0.1:4096";
+    launchctlEnvValues.ANTHROPIC_DEFAULT_OPUS_MODEL = "ocx-claude-cursor--user-own";
+    launchctlEnvValues.ANTHROPIC_DEFAULT_HAIKU_MODEL = "ocx-claude-native--gpt-6-luna";
+    launchctlEnvValues.ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME = "gpt-6-luna (native)";
+    const config = {
+      ...baseConfig,
+      claudeCode: { systemEnv: true, tierModels: { opus: "ocx-claude-native--gpt-6.1-sol", haiku: "claude-haiku-5-5" } },
+    } satisfies OcxConfig;
+    expect(await injectSystemEnv(4096, config)).toEqual({ injected: true });
+    const setCalls = launchctlCommands();
+    expect(setCalls.filter(c => c.includes("ANTHROPIC_DEFAULT_OPUS_MODEL") && !c.includes("getenv"))).toEqual([]);
+    // The tracked haiku slot now holds a first-party id, so its tracked label is withdrawn.
+    expect(setCalls).toContain("launchctl setenv ANTHROPIC_DEFAULT_HAIKU_MODEL claude-haiku-5-5");
+    expect(setCalls).toContain("launchctl unsetenv ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME");
+    const keys = JSON.parse(writes.filter(w => w.path.includes("system-env-port")).at(-1)!.data).injectedKeys as string[];
+    expect(keys).not.toContain("ANTHROPIC_DEFAULT_OPUS_MODEL_NAME");
+    expect(keys).not.toContain("ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME");
+    expect(keys).toContain("ANTHROPIC_DEFAULT_HAIKU_MODEL");
+  });
 });
 
 test("system-env preserves the shell seam without a back-import", () => {

@@ -11,6 +11,7 @@
  * paid backend than the one the operator named.
  */
 import { formatErrorResponse } from "../bridge";
+import { openAiSidecarCreditRefusal } from "../providers/openai-sidecar-credit";
 import {
   CodexAccountCooldownError,
   codexMainProfileDrainingResponse,
@@ -202,6 +203,7 @@ export async function handleSearch(
   const sidecarExit = sidecarEnter("search");
   let upstreamResponse: Response | undefined;
   try {
+    upstream.beforeDispatch?.();
     upstreamResponse = await fetch(url, {
       method: "POST",
       headers,
@@ -233,6 +235,8 @@ export async function handleSearch(
     if (req.signal.aborted) {
       return formatErrorResponse(499, "client_closed_request", "search request canceled by client");
     }
+    const policyRefusal = openAiSidecarCreditRefusal(err);
+    if (policyRefusal) return cooldownErrorResponse(policyRefusal, Date.now(), accountNamespace);
     if (linkedSignal.signal.aborted || (err instanceof Error && err.name === "TimeoutError")) {
       upstream.recordOutcome?.("timeout");
       return formatErrorResponse(504, "upstream_error", "search upstream timed out");

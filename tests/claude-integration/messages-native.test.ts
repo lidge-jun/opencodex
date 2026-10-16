@@ -6,7 +6,7 @@
  * or service is reached.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
@@ -18,6 +18,7 @@ import type { AdmissionLease } from "../../src/lib/admission";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { startTruncatedSseUpstream } from "../helpers/truncated-sse-upstream";
+import { configureSharedSpendLedger, spendPolicyFromConfig } from "../../src/lib/spend-reservation-ledger";
 
 interface Seen {
   path: string;
@@ -191,6 +192,128 @@ async function settledRowFor(requestId: string) {
 }
 
 describe("managed native Messages", () => {
+  for (const stream of [false, true]) {
+    const cases: { name: string; controls: Record<string, unknown>; expected?: string }[] = [
+      ...["minimal", "low", "medium", "high", "xhigh", "max", "ultra"].map(effort => ({
+        name: `explicit ${effort}`, controls: { output_config: { effort }, thinking: { type: "adaptive" } }, expected: effort,
+      })),
+      { name: "explicit effort wins over budget", controls: { output_config: { effort: "xhigh" }, thinking: { type: "enabled", budget_tokens: 1024 } }, expected: "xhigh" },
+      { name: "explicit effort wins over disabled thinking", controls: { output_config: { effort: "low" }, thinking: { type: "disabled" } }, expected: "low" },
+      { name: "disabled thinking", controls: { thinking: { type: "disabled" } }, expected: "none" },
+      { name: "enabled budget", controls: { thinking: { type: "enabled", budget_tokens: 1024 } }, expected: "budget:1024" },
+      { name: "large enabled budget", controls: { thinking: { type: "enabled", budget_tokens: 32768 } }, expected: "budget:32768" },
+      { name: "invalid effort falls back to budget", controls: { output_config: { effort: "future-tier" }, thinking: { type: "enabled", budget_tokens: 2048 } }, expected: "budget:2048" },
+      { name: "invalid effort falls back to disabled", controls: { output_config: { effort: "future-tier" }, thinking: { type: "disabled" } }, expected: "none" },
+      { name: "adaptive without effort", controls: { thinking: { type: "adaptive" } } },
+      { name: "missing controls", controls: {} },
+      ...[null, [], "high", { effort: "" }, { effort: "future-tier" }, { effort: "HIGH" }, { effort: " high " }, { effort: 3 }, { effort: "none" }].map((output_config, index) => ({
+        name: `invalid output_config ${index}`, controls: { output_config },
+      })),
+      ...[null, [], "enabled", { type: "unknown", budget_tokens: 1024 }].map((thinking, index) => ({
+        name: `invalid thinking ${index}`, controls: { thinking },
+      })),
+      ...[undefined, null, "1024", 0, -1, 1024.5, Number.MAX_SAFE_INTEGER + 1].map((budget_tokens, index) => ({
+        name: `invalid budget ${index}`, controls: { thinking: { type: "enabled", budget_tokens } },
+      })),
+    ];
+    for (const { name, controls, expected } of cases) test(`logs requested effort: ${name}, stream=${stream}`, async () => {
+      const config = fixtureConfig(startUpstream());
+      const body = { model: "anth/claude-x", max_tokens: 64, messages: [{ role: "user", content: "fixture" }], ...controls, stream };
+      const wireBody = { ...JSON.parse(JSON.stringify(body)), model: "claude-x" };
+      const { requestId, response } = await send(config, body);
+      expect(response.status).toBe(200);
+      expect(seen).toHaveLength(1);
+      expect(seen[0]!.body).toEqual(wireBody);
+      const row = rowFor(requestId);
+      expect(row.protocolTrace?.mode).toBe("native");
+      expect(row.requestedEffort).toBe(expected);
+      expect(row.attempts).toHaveLength(1);
+      expect(row.attempts![0]!.requestedEffort).toBe(expected);
+      expect(row.effectiveEffort).toBeUndefined();
+      expect(row.reasoningWireField).toBeUndefined();
+      const persisted = readFileSync(join(testDir, "usage.jsonl"), "utf8").trim().split("\n")
+        .map(line => JSON.parse(line)).filter(entry => entry.requestId === requestId);
+      expect(persisted).toHaveLength(1);
+      expect(persisted[0].requestedEffort).toBe(expected);
+      expect(persisted[0].attempts[0].requestedEffort).toBe(expected);
+    });
+  }
+
+  for (const annotation of ["high->low", ""]) test(`preserves existing requested effort ${JSON.stringify(annotation)}`, async () => {
+    const config = fixtureConfig(startUpstream());
+    const body = { model: "anth/claude-x", max_tokens: 64, messages: [{ role: "user", content: "fixture" }], output_config: { effort: "xhigh" }, stream: false };
+    const logCtx = { model: "", provider: "", requestedEffort: annotation };
+    const requestId = `pf08-${crypto.randomUUID()}`;
+    const response = await handleClaudeMessages(messagesRequest(body), config, logCtx, { requestId, start: Date.now() });
+    await response.text();
+    expect(response.status).toBe(200);
+    expect(logCtx.requestedEffort).toBe(annotation);
+    expect(seen[0]!.body.output_config).toEqual(body.output_config);
+    const row = rowFor(requestId);
+    expect(row.protocolTrace?.mode).toBe("native");
+    expect(row.requestedEffort).toBe(annotation || undefined);
+    expect(row.attempts![0]!.requestedEffort).toBe(annotation || undefined);
+  });
+
+  test("key failover keeps requested effort on both physical attempts", async () => {
+    const config = fixtureConfig(startUpstream((entry, index) => index === 0
+      ? Response.json({ type: "error", error: { type: "authentication_error", message: "invalid x-api-key" } }, { status: 401 })
+      : ok(entry)), { pool: true });
+    const { response, requestId } = await send(config, { ...SOURCE_BODY, output_config: { effort: "xhigh" }, stream: false });
+    expect(response.status).toBe(200);
+    expect(seen).toHaveLength(2);
+    expect(seen[1]!.body).toEqual(seen[0]!.body);
+    const row = rowFor(requestId);
+    expect(row.protocolTrace?.mode).toBe("native");
+    expect(row.requestedEffort).toBe("xhigh");
+    expect(row.attempts).toHaveLength(2);
+    expect(row.attempts!.map(attempt => attempt.requestedEffort)).toEqual(["xhigh", "xhigh"]);
+  });
+
+  for (const initiallyEnforced of [false, true]) test(`freezes ${initiallyEnforced ? "enforced" : "observe-only"} policy across retries`, async () => {
+    const config = fixtureConfig(startUpstream((_entry, index) => {
+      if (index === 0) configureSharedSpendLedger(spendPolicyFromConfig(
+        initiallyEnforced ? {} : { pool: { maxTokens: 1 } }, undefined, ["anth"]));
+      return Response.json({ type: "error", error: { type: "rate_limit_error", message: "temporary" } }, { status: 429 });
+    }));
+    config.providers.anth!.retryOn429 = { attempts: 5, intervalMs: 1, maxIntervalMs: 1, respectRetryAfter: false };
+    configureSharedSpendLedger(spendPolicyFromConfig(initiallyEnforced ? { pool: { maxTokens: 100_000 } } : {}, undefined, ["anth"]));
+    const body = { model: "anth/claude-x", messages: [{ role: "user", content: "hello" }], max_tokens: 1 };
+    const { response, requestId } = await send(config, body);
+    expect(rowFor(requestId).protocolTrace?.mode).toBe("native");
+    expect(seen).toHaveLength(initiallyEnforced ? 4 : 6);
+    expect(response.status).toBe(429);
+    const records = readFileSync(join(testDir, "spend-ledger.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
+    expect(records.filter(record => record.kind === "reserve")).toHaveLength(seen.length);
+    if (!initiallyEnforced) {
+      const next = await send(config, body);
+      expect(next.response.status).toBe(429);
+      expect(next.response.headers.get("x-opencodex-local-refusal")).toBe("workflow_spend_exhausted");
+      expect(seen).toHaveLength(6);
+    }
+  }, 20_000);
+
+  for (const change of ["disable", "raise"] as const) test(`retains its initial ceiling when ${change} occurs before key failover`, async () => {
+    const body = { model: "anth/claude-x", messages: [{ role: "user", content: "hello" }], max_tokens: 1 };
+    const config = fixtureConfig(startUpstream((entry, index) => {
+      if (index === 0) {
+        configureSharedSpendLedger(spendPolicyFromConfig(change === "disable" ? {} : { pool: { maxTokens: 100_000 } }, undefined, ["anth"]));
+        return Response.json({ type: "error", error: { type: "rate_limit_error", message: "key rate limited" } },
+          { status: 429, headers: { "retry-after": "30" } });
+      }
+      return ok(entry);
+    }), { pool: true });
+    configureSharedSpendLedger(spendPolicyFromConfig({ pool: { maxTokens: estimateClaudeRequestTokens(body, body.model) + 1 } }, undefined, ["anth"]));
+    const { response, requestId } = await send(config, body);
+    expect(rowFor(requestId).protocolTrace?.mode).toBe("native");
+    expect(response.status).toBe(429);
+    expect(response.headers.get("x-opencodex-local-refusal")).toBe("workflow_spend_exhausted");
+    expect(seen).toHaveLength(1);
+    const next = await send(config, body);
+    expect(next.response.status).toBe(200);
+    expect(seen).toHaveLength(2);
+  });
+
   test("sends exactly the allowlisted source body with the provider key and no caller credential", async () => {
     const config = fixtureConfig(startUpstream());
     const { requestId, response, text } = await send(config, { ...SOURCE_BODY, stream: false }, {

@@ -24,6 +24,7 @@ description: 监听、远程访问、准入密钥、超时、存储、侧车、�
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | disabled | 可选启用的归档会话清理策略。不会被隐式启用。 |
 | `appOwnedMemoryBudgetMb?` | `number` | `256` | 可逐出应用自有日志、缓存、blob 和续传载荷的内存上限，单位 MiB。范围 64–4096；不是 RSS 上限。 |
 | `metricsExport.enabled?` | `boolean` | `false` | 在经过认证的 `GET /api/metrics` 上启用进程本地的请求聚合指标。需要重启；禁用时该路径返回 404，且不会启动任何导出活动。 |
+| `serviceHealthRecovery.enabled?` | `boolean` | `false` | 后台服务的可选恢复：一个小型守护进程探测 `/healthz`，当代理进程仍存活但在连续探测中约一分钟毫无响应时将其终止，由服务管理器（任务计划程序、launchd、systemd、WinSW）重新启动。仅受管服务子进程会启动它；卡住进程持有的请求不会重放。每小时最多 3 次。需要重启。自动恢复需要数字绑定地址（或默认的 localhost/通配符映射）；不监控 DNS 绑定名称。记录的地址或端口发生更改时会停止监控。 |
 | `codexAutoStart?` | `boolean` | `true` | 允许 Codex shim 在启动 Codex 之前运行 `ocx ensure`。设为 false 会让 ensure 变成无操作。 |
 | `codexShimAutoRestore?` | `boolean` | `true` | 在完成外部 Codex 更新并覆盖安装的 shim 之后恢复该 shim。环境退出开关：`OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`。 |
 | `syncResumeHistory?` | `boolean` | `true` | 可逆的 Codex App 历史兼容性。原始元数据会被备份，并由 `ocx stop` / `ocx restore` 恢复。 |
@@ -126,7 +127,7 @@ ssh -L 20100:localhost:10100 -L 1455:localhost:1455 you@remote
 Codex 会为标题、提交信息等任务使用较小的辅助模型。启用
 `shadowCallIntercept` 后，可将识别出的源模型前缀重定向到另一个已配置模型。替换后仍会保留为请求配置的推理强度。只有当客户端使用不同的辅助 ID 时，才设置 `sourceModels`。
 
-拦截依据模型进行：裸模型 ID 与 `sourceModels` 匹配的请求（包括普通的 `request_kind: "turn"` 请求）都可以被重定向。通过 `x-openai-subagent: collab_spawn` 或 `x-codex-turn-metadata` JSON 标头中的 `subagent_kind: "thread_spawn"` 标记为已生成子代理的请求不受拦截，因此显式生成的子代理会保留其模型。
+裸模型 ID 与 `sourceModels` 匹配的请求可以被拦截，但 `x-codex-turn-metadata` 同时包含 `request_kind: "turn"` 和 `thread_source: "user"` 的用户轮次保留所选模型。连接标头 `x-openai-subagent: collab_spawn`（HTTP 请求或 WebSocket 握手） 或元数据中的 `subagent_kind: "thread_spawn"` 标记的子代理也保留模型。WebSocket 的轮次元数据仅依据每帧的 `client_metadata["x-codex-turn-metadata"]`，不使用握手中的轮次元数据来分类后续帧。元数据缺失或格式错误时保留原有拦截行为。辅助调用也可能带有 `request_kind: "turn"`，因此仅凭该字段不能豁免。这些规则适用于具体模型和 combo 目标。
 
 ```json
 {
@@ -214,6 +215,45 @@ Claude Code **2.1.257 or newer** is required for FORCE. Plugin and built-in agen
 
 The dashboard warns about old or unknown CLI versions, unavailable targets, and either variable already present in `settings.json` → `env` (which overrides launch env). Detection is read-only and server-local: it cannot inspect another launch shell, another machine, or project-local settings. An unknown result is not proof of force support.
 
-## 令牌预留与额度限制
+## 历史池用量的连续性
 
-如果请求受 `spend.root.maxTokens`、`spend.identity.maxTokens` 或 `spend.pool.maxTokens` 限制，无法记录令牌预留时会拒绝发送，包括跟踪容量已满的情况。没有适用额度限制的请求仍保持仅观察模式。
+提供方池额度按路由选定的规范提供方计算，请求日志仍保留账户显示标签。
+对于当前配置的每个提供方 `P`，读取余额时会自动将本安装的加盐池别名 `h(pool, P)` 绑定到 `P`，
+相同别名下保留的历史余额也适用。独立的提供方额度不需要手动添加自映射，也不需要用盐值自行计算哈希。
+
+其他历史标签，包括带账户序号的标签，不会自动绑定。对于已核实归属的历史，在 `config.json` 顶层配置
+`spendPoolAliases`：键是本安装日志中的历史池加盐别名（32 位小写十六进制），值必须是已核实且当前已配置的提供方准确 ID，不得有首尾空格。
+当前名称或账户排列顺序不能证明历史归属。请妥善保密保存日志和盐值。
+
+自动绑定和显式映射都仅在读取时应用，不移动原始余额，也不把身份关联写入日志。
+删除显式映射会使该历史重新成为归属未知；但如果别名属于当前配置的提供方自身，自动绑定仍然生效。
+每份原始余额只计入所属组一次；仍未绑定的正余额则保守地计入每个候选池一次。
+已配置提供方自己的池别名不能映射到另一个提供方；新增提供方时会重新验证。验证只读取现有盐值，不创建盐值。
+无效映射保留原有额度并拒绝池准入。
+
+休眠的未知历史只有在最后活动时间严格早于 `spend.retentionDays` 的截止时间后才过期。
+容量压力不会提前删除正余额的未知历史。活动预留和 seed 即使为零令牌也会保留；
+只有删除记录持久化后，准入计算才使用减少后的余额。
+有适用额度的请求必须在每个目标/密钥首次发送前取得普通容量的预留。
+重试沿用相同范围。`L` 是整个请求共享的物理发送次数上限，在请求开始时固定。
+默认是 4 次，现有 OAuth 请求配置最多允许 18 次。所有物理发送共享这一有限上限。
+
+是否执行额度限制、适用的根请求／身份／池令牌额度，以及 `L`，都在请求开始时确定。
+配置变更仅影响变更后开始的请求。已经运行的请求在所有重试和后续发送中保留开始时的策略：
+启用或降低额度不会收紧它，提高或删除额度也不会放宽它。以仅观察模式开始的请求会保持该模式直到结束。
+最终结算等待报告完成；遗忘发送 ID 不会删除余额。无适用额度时保留原有仅观察行为，包括容量已满时省略记账。
+
+Claude CLI、CodeBuddy 和 Qoder 将一次 CLI 调用计为一次发送，启动前仍必须取得普通预留；无法预留就拒绝启动。
+CLI 内部重试和工具轮次不单独计入请求级发送次数上限，但费用按报告的实际使用量结算，包括超出初始估算的部分。
+
+### 回滚至 2.80.0：契约 C
+
+新记录使用普通 v1 格式和 `pool` 别名。未经修改的 2.80.0 可以按自身的逐标签规则读取、压缩并执行保留策略。
+请保留最新日志和盐值。降级后不保证规范提供方聚合，也不保证与从未升级、始终运行 2.80.0 的相同流量具有相同剩余额度。
+再次升级时，当前配置提供方的自动绑定及显式映射应用于仍然保留的原始余额。不需要启动屏障或对账命令。
+未发布实验版本的 `pool-current` / `poolContinuity` 历史不属于契约 C；原始余额作为未知历史保留到正常过期，
+不会立即转换或删除。
+
+完整但无效的记录（包括末行 `null`）会拒绝有额度限制的请求。压缩仍可保留有效余额，
+当前进程的拒绝状态持续到重启并读取干净日志。写入中断的最后一行 JSON 沿用原有恢复规则。
+详细边界及错误码见[英文原文](/reference/configuration/server/#historical-pool-continuity)。

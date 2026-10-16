@@ -73,6 +73,8 @@ export const DEVIN_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "claude-fable-5-1": 1_000_000,
   // 260929 preemptive: Claude Sonnet 5.5 (1M per Anthropic) seeded before Devin's live catalog lists it.
   "claude-sonnet-5-5": 1_000_000,
+  // 261008 preemptive: Haiku 5.5 (1M per Anthropic), ahead of Devin live discovery.
+  "claude-haiku-5-5": 1_000_000,
   "claude-sonnet-5": 1_000_000,
   "glm-5-2": 200_000,
   "glm-5-3": 1_048_576,
@@ -82,7 +84,7 @@ export const DEVIN_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "grok-4-5": 500_000,
   "grok-4-6": 500_000,
   // Live Devin catalog context_length, 2026-09-23:
-  // devlog/_plan/260923_grok47_parity/010_probe-evidence.md.
+  // devlog/_fin/260923_grok47_parity/010_probe-evidence.md.
   "grok-4-7": 500_000,
 };
 
@@ -310,7 +312,7 @@ export function selectDevinFamilyMember(
 export const DEVIN_MODEL_EFFORTS: Record<string, string[]> = {
   "swe-2": ["medium", "high", "max"],
   // Live Devin catalog, 2026-09-23:
-  // devlog/_plan/260923_grok47_parity/010_probe-evidence.md.
+  // devlog/_fin/260923_grok47_parity/010_probe-evidence.md.
   "grok-4-7": ["low", "medium", "high", "xhigh", "max"],
 };
 

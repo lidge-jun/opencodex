@@ -1,12 +1,38 @@
+import { mock } from "bun:test";
+import * as dns from "node:dns/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { saveConfig } from "../../src/config";
-import { fetchProviderModels } from "../../src/codex/catalog/provider-fetch";
-import { providerOutboundGet } from "../../src/lib/provider-outbound";
 import { PROXY_ENV_KEYS } from "../../src/lib/proxy-env";
-import { handleManagementAPI } from "../../src/server/management-api";
 import type { OcxConfig } from "../../src/types";
-import { ManagementRequest as Request } from "../helpers/management-auth";
+
+// Exercise real loopback HTTP transport without depending on the host resolver's
+// retry policy for intentionally unresolvable names. Keep destination-policy
+// real so it still classifies this child-local DNS failure itself.
+const proxyHostnames = new Set([
+  "proxy-only.invalid",
+  "connection-proxy.invalid",
+  "proxy-models.invalid",
+  "all-proxy-only.invalid",
+]);
+const dnsLookups: string[] = [];
+const unexpectedDnsLookups: string[] = [];
+mock.module("node:dns/promises", () => ({
+  ...dns,
+  lookup: async (hostname: string) => {
+    dnsLookups.push(hostname);
+    if (!proxyHostnames.has(hostname)) unexpectedDnsLookups.push(hostname);
+    throw Object.assign(new Error(`getaddrinfo ENOTFOUND ${hostname}`), {
+      code: "ENOTFOUND", syscall: "getaddrinfo", hostname,
+    });
+  },
+}));
+
+// Install the seam before loading production modules that capture lookup.
+const { saveConfig } = await import("../../src/config");
+const { fetchProviderModels } = await import("../../src/codex/catalog/provider-fetch");
+const { providerOutboundGet } = await import("../../src/lib/provider-outbound");
+const { handleManagementAPI } = await import("../../src/server/management-api");
+const { ManagementRequest: Request } = await import("../helpers/management-auth");
 
 const proxyKeys = PROXY_ENV_KEYS.flatMap(key => [key, key.toLowerCase()]);
 
@@ -135,7 +161,12 @@ try {
     models: [],
   }, 0);
 
+  if (unexpectedDnsLookups.length > 0) {
+    throw new Error(`Unexpected fixture DNS lookups: ${unexpectedDnsLookups.join(", ")}`);
+  }
+
   console.log(JSON.stringify({
+    dnsLookups,
     outbound,
     allProxy,
     managementProxy,

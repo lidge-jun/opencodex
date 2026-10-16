@@ -1,5 +1,5 @@
 import { OCX_SECTION_MARKER } from "../injected-marker";
-import { decodeBasicString } from "./encoding";
+import { decodeBasicString, lexicalLineStarts, matchKeyHead } from "./encoding";
 
 /**
  * Decoded string entries of a root-scope TOML array.
@@ -118,6 +118,25 @@ export function rootLines(content: string): string[] {
   return first === -1 ? lines : lines.slice(0, first);
 }
 
+/**
+ * Root-scope lines that start outside every string and composite span. Used by
+ * fallbacks that scan lines because the parser refused the file (for example a
+ * Codex-valid i64 Bun cannot represent): prose inside a multiline value must not
+ * be read as a setting. A file whose spans never close keeps the plain scan.
+ */
+export function scopedRootLines(content: string): string[] {
+  const lines = content.split("\n");
+  const starts = lexicalLineStarts(lines);
+  if (starts === null) return rootLines(content);
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    if (!starts[i]) continue;
+    if (TABLE_HEADER.test(lines[i]!)) break;
+    out.push(lines[i]!);
+  }
+  return out;
+}
+
 /** Lines of `[header]`'s body, up to the next table header. */
 export function tableLines(content: string, header: string): string[] | null {
   const lines = content.split("\n");
@@ -129,11 +148,40 @@ export function tableLines(content: string, header: string): string[] | null {
   return end === -1 ? rest : rest.slice(0, end);
 }
 
+/**
+ * A root-scope (`table === null`) or `[table]` boolean, reading only lines that
+ * start outside every string and composite span, so assignment-shaped prose in a
+ * multiline value is never reported as the setting. A file whose spans never
+ * close falls back to the plain line scan; Codex cannot load it either way.
+ */
+export function scopedBool(content: string, table: string | null, key: string): boolean | null {
+  const lines = content.split("\n");
+  const starts = lexicalLineStarts(lines);
+  if (starts === null) {
+    const scope = table === null ? rootLines(content) : tableLines(content, table);
+    return scope === null ? null : boolInLines(scope, key);
+  }
+  const top = (i: number) => starts[i] === true;
+  let from = 0;
+  if (table !== null) {
+    const escaped = table.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const header = new RegExp(`^\\s*\\[${escaped}\\]\\s*(?:#.*)?$`);
+    from = lines.findIndex((l, i) => top(i) && header.test(l)) + 1;
+    if (from === 0) return null;
+  }
+  for (let i = from; i < lines.length; i += 1) {
+    if (!top(i)) continue;
+    if (TABLE_HEADER.test(lines[i]!)) break;
+    const value = boolInLines([lines[i]!], key);
+    if (value !== null) return value;
+  }
+  return null;
+}
+
 export function boolInLines(lines: string[], key: string): boolean | null {
-  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const pattern = new RegExp(`^\\s*${escaped}\\s*=\\s*(true|false)\\s*(?:#.*)?$`);
   for (const line of lines) {
-    const m = pattern.exec(line);
+    const head = matchKeyHead(line, key);
+    const m = head === null ? null : /^(true|false)\s*(?:#.*)?$/.exec(head.rest);
     if (m) return m[1] === "true";
   }
   return null;

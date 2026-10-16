@@ -7,8 +7,8 @@ description: opencodex geliştirme — kurulum, düzen, kurallar ve yeni bir sa�
 
 Kaynak kod üzerinde geliştirme yapmak için `PATH` ortam değişkeninizde `bun` CLI
 aracının bulunması gerekir. Yayınlanan npm paketi kullanıcılar için kendi Bun
-çalışma zamanını paketler, ancak bu depodaki betikler yerel Bun kurulumunuz
-üzerinden çalışır.
+çalışma zamanını paketler; paket betikleri Bun'u bu paketlenmiş bağımlılıktan
+bulabilir.
 
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git

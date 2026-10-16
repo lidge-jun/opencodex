@@ -14,6 +14,9 @@ Export-client marks (used by the API tab's connect rows, not the provider list):
 
 - `cline-color.svg` — reuses the existing provider mark already tracked in this directory
   for Cline CLI; no new image was imported for the file integration.
+- `commandcode-color.svg` — reuses the Command Code provider mark already tracked in this
+  directory (the ⌘ mark in brand purple `#8C4EDD`, added in `b143984642`) for the Command
+  Code client integration; no new image was imported.
 
 - `pi.svg` — fetched 2026-08-02 from `https://pi.dev/favicon.svg`, the Pi
   project's own favicon, unmodified. Pi is `earendil-works/pi`

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  desktopCliPageUrl,
   desktopSession,
   desktopUpdatePageUrl,
   desktopShellVersion,
@@ -48,6 +49,16 @@ describe("desktop shell user-agent helpers", () => {
       .toBe("/api/update/badge?surface=desktop");
     expect(updateBadgeUrl("", "Mozilla/5.0 Chrome/140.0", "?desktop_session=" + id))
       .toBe("/api/update/badge");
+  });
+
+  test("routes terminal command settings to each platform's exact app origin", () => {
+    expect(desktopCliPageUrl(tauriMac)).toBe("tauri://localhost/cli.html");
+    expect(desktopCliPageUrl(tauriLinux)).toBe("tauri://localhost/cli.html");
+    expect(desktopCliPageUrl(tauriWindows)).toBe("http://tauri.localhost/cli.html");
+    for (const ua of [tauriMac, tauriLinux, tauriWindows]) {
+      expect(desktopCliPageUrl(ua.replace(/ OpenCodexDesktop\/\S+/, ""))).toBeNull();
+    }
+    expect(desktopCliPageUrl("OpenCodexDesktop/2.61.0")).toBeNull();
   });
 
   test("recognizes only absolute cross-origin HTTP links", () => {

@@ -21,6 +21,17 @@ export interface ApiKeyEntry {
 }
 
 /**
+ * Outcome of a stored-key reveal. `denied` is the server's standing answer to a
+ * dashboard session without stored-secret authority — a loopback session may
+ * list masked keys but cannot disclose one until the operator pairs this
+ * browser or signs in through a trusted identity. `failed` is the transient
+ * remainder: timeout, unreachable server, malformed answer.
+ */
+export type RevealKeyResult =
+  | { ok: true; key: string }
+  | { ok: false; kind: "denied" | "failed" };
+
+/**
  * A usage object the GUI can actually render. Coercing a malformed one to zeroes
  * would state "used zero times" about data we could not read — the exact false
  * confidence `attributionSince` exists to avoid.

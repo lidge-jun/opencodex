@@ -1,4 +1,5 @@
-import { parseQuotaFailureCode, type QuotaFailureCode } from "../providers/quota-types";
+import { configuredAnthropicInstance, isAnthropicOAuthInstance } from "../providers/anthropic-instance";
+import { parseQuotaFailureCode, type QuotaFailureCode, type ProviderQuota, type AccountQuotaMode } from "../providers/quota-types";
 /**
  * Data-access layer for `ocx account` (issue #180) — live-proxy HTTP client and
  * per-family account readers. Kept separate from account.ts (command handlers)
@@ -10,6 +11,10 @@ import { isPublicOAuthProvider } from "../oauth/index";
 import { getProviderRegistryEntry, providerCodexAccountMode } from "../providers/registry";
 import type { OcxConfig } from "../types";
 import { projectCodexQuotaRefreshOutcome, type CodexQuotaRefreshOutcome } from "../codex/quota-refresh-outcome";
+
+import { projectApiKeyQuotaRows } from "./account-key-quota";
+import { projectAccountHealth } from "./account-next-actions";
+import type { OAuthHealthLabel } from "../oauth/health";
 
 export type AccountType = "codex" | "oauth" | "api-key";
 
@@ -27,6 +32,11 @@ export interface AccountRow {
   masked?: string;
   active: boolean;
   needsReauth?: boolean;
+  /** Validated server health label and locally generated recovery guidance. */
+  health?: OAuthHealthLabel;
+  healthAction?: string;
+  /** Explicit paid-credit consent, reported only when supplied by the Codex API. */
+  creditsAfterLimit?: boolean;
   needsReauthReason?: "verify_account";
   autoSelectable?: boolean;
   skipReason?: "paused" | "needs_reauth" | "suspended" | "cooldown" | "quota_exhausted";
@@ -38,7 +48,8 @@ export interface AccountRow {
   priority?: number;
   /** Null means the account inherits the global usage-switch threshold. */
   autoSwitchThresholdOverride?: number | null;
-  quota?: CodexQuotaDto | null;
+  quota?: (CodexQuotaDto & Partial<ProviderQuota>) | null;
+  quotaMode?: AccountQuotaMode;
   quotaRefresh?: CodexQuotaRefreshOutcome;
   quotaUnavailable?: boolean;
   quotaFailure?: QuotaFailureCode;
@@ -100,6 +111,7 @@ export function classifyAccount(config: OcxConfig, name: string): ClassifyResult
   if (provider && !provider.authMode && (provider.apiKey || (provider.apiKeyPool?.length ?? 0) > 0)) {
     return { type: "api-key" };
   }
+  if (name === "anthropic2" && !configuredAnthropicInstance(config, name)) return { error: "Anthropic pool instance is not configured" };
   if (isPublicOAuthProvider(name)) return { type: "oauth" };
   if (provider) return { type: "api-key" };
   return { error: `unknown provider "${name}"` };
@@ -123,8 +135,9 @@ export async function apiJson(
   method: "GET" | "PUT" | "POST" | "DELETE",
   path: string,
   body?: unknown,
-  options: { signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal; redirect?: RequestRedirect } = {},
 ): Promise<ApiResult> {
+  if (baseUrl === LINK_HOME_BASE) return linkHomeApiJson(deps, method, path);
   const fetchImpl = deps.fetchImpl ?? fetch;
   try {
     const res = await fetchImpl(`${baseUrl}${path}`, {
@@ -132,6 +145,7 @@ export async function apiJson(
       headers: runningProxyUpdateHeaders(),
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: options.signal,
+      ...(options.redirect ? { redirect: options.redirect } : {}),
     });
     const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
     return { status: res.status, json };
@@ -150,7 +164,71 @@ export async function resolveBaseUrl(deps: AccountDeps): Promise<string | null> 
   if (deps.baseUrl) return deps.baseUrl;
   const live = await findLiveProxy();
   if (!live) return null;
+  if (live.role === "client") {
+    const { readLinkChildContext } = await import("./link-child");
+    if (readLinkChildContext()) return LINK_HOME_BASE;
+  }
   return `http://${probeHostname(live.hostname)}:${live.port}`;
+}
+
+/**
+ * Remote Link Child (#6957): account reads come from the Home over the link, and every account
+ * change is refused with the Child refusal. The marker is never a URL and never reaches fetch.
+ */
+export const LINK_HOME_BASE = "ocx-link-home:";
+
+async function linkHomeApiJson(deps: AccountDeps, method: string, path: string): Promise<ApiResult> {
+  const { readLinkChildContext, linkChildReadable, linkChildRefusal, readLinkHomeJson } = await import("./link-child");
+  const link = readLinkChildContext();
+  if (!link) return { status: 503, json: { error: "The Remote Link connection changed while the command ran; retry." } };
+  const pathname = new URL(path, "http://cli.invalid").pathname;
+  if (!linkChildReadable(method, path)) {
+    return { status: 403, json: { error: linkChildRefusal(link, `${method} ${pathname}`) } };
+  }
+  try {
+    const { status, body } = await readLinkHomeJson(link, path, deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {});
+    return { status, json: (body && typeof body === "object" ? body : { error: String(body ?? "") }) as Record<string, unknown> };
+  } catch (error) {
+    return { status: 503, json: { error: error instanceof Error ? error.message : String(error) } };
+  }
+}
+
+/**
+ * The config account commands classify providers against. On a Remote Link Child the local
+ * providers are inactive, so the Home's `/api/providers` projection (presence flags only) takes
+ * their place. Anywhere else the local config is returned. When the Home cannot be read the
+ * result is an error: classifying against the inactive local providers would answer for the
+ * wrong machine.
+ */
+export async function accountClassificationConfig(
+  deps: AccountDeps,
+  local: OcxConfig,
+): Promise<{ config: OcxConfig } | { error: string }> {
+  if (deps.baseUrl) return { config: local };
+  const { readLinkChildContext, readLinkHomeJson } = await import("./link-child");
+  const link = readLinkChildContext();
+  if (!link) return { config: local };
+  const unavailable = (detail: string) => ({ error: `Could not read the provider list from ${link.homePhrase} over Remote Link (${link.linkId}): ${detail}.` });
+  try {
+    const { status, body } = await readLinkHomeJson(link, "/api/providers", deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {});
+    if (status !== 200) {
+      // Keep the Home's own sentence (for example the upgrade instruction an older Home yields).
+      const message = body && typeof body === "object" && typeof (body as { error?: unknown }).error === "string"
+        ? (body as { error: string }).error : null;
+      return unavailable(message ?? `the Home answered HTTP ${status}`);
+    }
+    if (!Array.isArray(body)) return unavailable("the Home returned an unreadable provider list");
+    const providers: Record<string, unknown> = {};
+    for (const row of body) {
+      if (!row || typeof row !== "object" || typeof (row as { name?: unknown }).name !== "string") continue;
+      const { name, hasApiKey, ...rest } = row as Record<string, unknown> & { name: string };
+      // A placeholder marks presence for classification; no credential value crosses the link.
+      providers[name] = { ...rest, ...(hasApiKey === true ? { apiKey: "home-credential" } : {}) };
+    }
+    return { config: { ...local, providers: providers as OcxConfig["providers"] } };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 export function proxyUnreachable(transportError?: string): number {
@@ -256,6 +334,8 @@ interface CodexAccountDto {
   selectionExcludedReason?: "plan_excluded";
   selectionExcludedPlan?: string;
   health?: { reason?: string };
+  healthLabel?: unknown;
+  creditsAfterLimit?: unknown;
   priority?: number;
   autoSwitchThresholdOverride?: number | null;
   quota?: CodexQuotaDto | null;
@@ -322,6 +402,8 @@ export async function fetchCodexRows(
     plan: a.plan,
     active: a.id === activeId,
     needsReauth: a.needsReauth,
+    ...projectAccountHealth(a, "openai", a.id),
+    ...(typeof a.creditsAfterLimit === "boolean" ? { creditsAfterLimit: a.creditsAfterLimit } : {}),
     ...(a.selectionExcludedReason === "plan_excluded" ? {
       selectionExcludedReason: "plan_excluded" as const,
       ...(typeof a.selectionExcludedPlan === "string" ? { selectionExcludedPlan: a.selectionExcludedPlan } : {}),
@@ -346,6 +428,7 @@ interface OAuthAccountDto {
   email?: string;
   active?: boolean;
   needsReauth?: boolean;
+  healthLabel?: unknown;
   /** Present only for providers that support operator pause (generic OAuth pools). */
   paused?: boolean;
   autoSwitchThresholdOverride?: number | null;
@@ -390,8 +473,9 @@ async function fetchOAuthRows(
     email: a.email,
     active: a.active ?? a.id === activeId,
     needsReauth: a.needsReauth,
+    ...projectAccountHealth(a, name, a.id),
     ...(a.paused === true ? { paused: true } : {}),
-    ...(name === "anthropic" && Object.hasOwn(a, "autoSwitchThresholdOverride") ? { autoSwitchThresholdOverride: a.autoSwitchThresholdOverride } : {}),
+    ...(isAnthropicOAuthInstance(name) && Object.hasOwn(a, "autoSwitchThresholdOverride") ? { autoSwitchThresholdOverride: a.autoSwitchThresholdOverride } : {}),
     ...(a.needsReauthReason === "verify_account" ? { needsReauthReason: a.needsReauthReason } : {}),
     ...(name === "kiro" && typeof a.autoSelectable === "boolean"
       ? { autoSelectable: a.autoSelectable } : {}),
@@ -416,12 +500,19 @@ interface ApiKeyDto {
   active?: boolean;
 }
 
-async function fetchKeyRows(deps: AccountDeps, baseUrl: string, name: string): Promise<FamilyRows> {
-  const res = await apiJson(deps, baseUrl, "GET", `/api/providers/keys?name=${encodeURIComponent(name)}`);
+async function fetchKeyRows(deps: AccountDeps, baseUrl: string, name: string, quota?: { refresh?: boolean }): Promise<FamilyRows> {
+  const query = `?name=${encodeURIComponent(name)}${quota ? `&quota=1${quota.refresh ? "&refresh=1" : ""}` : ""}`;
+  const res = await apiJson(deps, baseUrl, "GET", `/api/providers/keys${query}`, undefined, quota ? { redirect: "error" } : {});
   if (res.status === 0) {
     return { rows: [], activeId: null, status: 0, networkDown: true, transportError: res.transportError };
   }
   if (res.status !== 200) return { rows: [], activeId: null, status: res.status, errorJson: res.json };
+  if (quota) {
+    try { return projectApiKeyQuotaRows(res.json, name); }
+    catch (error) {
+      return { rows: [], activeId: null, status: 200, errorJson: { error: error instanceof Error ? error.message : "Malformed API-key quota response." } };
+    }
+  }
   const activeId = typeof res.json.activeId === "string" ? res.json.activeId : null;
   const keys = Array.isArray(res.json.keys) ? res.json.keys as ApiKeyDto[] : [];
   const rows = keys.map(k => ({
@@ -444,7 +535,7 @@ export function fetchRows(
 ): Promise<FamilyRows> {
   if (type === "codex") return fetchCodexRows(deps, baseUrl, Boolean(quota?.refresh), quota !== undefined);
   if (type === "oauth") return fetchOAuthRows(deps, baseUrl, name, quota);
-  return fetchKeyRows(deps, baseUrl, name);
+  return fetchKeyRows(deps, baseUrl, name, quota);
 }
 
 export async function fetchProviderQuotaReport(

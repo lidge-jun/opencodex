@@ -25,6 +25,8 @@ export interface OcxTool {
   imageGeneration?: boolean;
   /** Synthetic video_gen tool: executed by the xAI video bridge sidecar. */
   videoGeneration?: boolean;
+  /** Synthetic advisor tool: the model's call is intercepted by the advisor sidecar (see src/advisor), never relayed to the client. */
+  advisor?: boolean;
 }
 
 /**
@@ -397,6 +399,13 @@ export type OcxToolChoice =
 
 export function isAllowedToolChoice(value: OcxToolChoice | undefined): value is { allowedTools: string[]; mode: "auto" | "required" } {
   return typeof value === "object" && value !== null && "allowedTools" in value;
+}
+
+export function requiresToolCall(choice: OcxToolChoice | undefined): boolean {
+  return choice === "required"
+    || (typeof choice === "object" && choice !== null && (
+      "name" in choice || ("mode" in choice && choice.mode === "required")
+    ));
 }
 
 /** Compile the request's tool-choice policy into a reusable advertisement/restoration predicate. */

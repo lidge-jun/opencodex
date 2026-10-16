@@ -1,3 +1,5 @@
+import { localManagementOrigin } from "../../src/lib/local-destinations";
+import { selectDefaultGuiUrl } from "../../src/cli/dispatch";
 import { request as httpRequest } from "node:http";
 import { getActiveTurnCount } from "../../src/server/lifecycle";
 // Holds INV-AUTH-01 from structure/overview.md; keep the id here if this file is split or renamed.
@@ -7,8 +9,6 @@ import { mkdtempSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getConfigPath, saveConfig } from "../../src/config";
-import { flushConfigDirHardeningForTests } from "../../src/config/paths";
-import { flushNativeMainStartupReleases } from "../../src/codex/native-profile-startup";
 import { clearContextSessionOwnersForTests } from "../../src/codex/context-owner";
 import { resetContextRelayActivationForTests } from "../../src/codex/context-compat";
 import { startServer } from "../../src/server";
@@ -32,7 +32,6 @@ import {
   setPlatformForTests,
   timedOutSecretPathCountForTests,
   hardenSecretDir,
-  flushWindowsSecretAclReapsBeforeRemoval,
 } from "../../src/lib/windows-secret-acl";
 import {
   LOCAL_ATTESTATION_CHALLENGE_HEADER,
@@ -92,7 +91,13 @@ import {
   createGuiPairingGrant,
 } from "../../src/server/gui-session";
 import { setSystemRestartIoForTests } from "../../src/server/management/system-restart";
-import { removeTreeWithRetry } from "../helpers/remove-tree";
+import {
+  hubConfig,
+  remoteConfig,
+  startEphemeralHubServer,
+  websocketHandshakeOpens,
+} from "../helpers/management-auth-fixture";
+import { drainAndRemoveFixtureRoots } from "../helpers/fixture-teardown";
 
 const previousHome = process.env.OPENCODEX_HOME;
 const previousCodexHome = process.env.CODEX_HOME;
@@ -105,85 +110,6 @@ function enableContextRelay(): void {
   resetContextRelayActivationForTests();
 }
 
-function remoteConfig(): OcxConfig {
-  return {
-    port: 0,
-    hostname: "0.0.0.0",
-    defaultProvider: "test",
-    providers: {
-      test: {
-        adapter: "openai-chat",
-        baseUrl: "https://example.test/v1",
-        disabled: true,
-        models: ["gpt-test"],
-      },
-    },
-  };
-}
-
-function hubConfig(publicOrigin = "https://hub.example.test"): OcxConfig {
-  return {
-    ...remoteConfig(),
-    runtimeRole: "hub",
-    hub: { managementPublicOrigin: publicOrigin },
-    remoteGui: { allowedTailscaleUsers: ["alice@example.test"] },
-    corsAllowOrigins: ["https://dashboard.example.test"],
-  };
-}
-
-/** Keep real ingress/handlers while the kernel allocates both ports at the actual bind. */
-async function startEphemeralHubServer(deps: Parameters<typeof startServer>[1]) {
-  const nativeServe = Bun.serve.bind(Bun);
-  const listeners: Array<ReturnType<typeof Bun.serve>> = [];
-  const hostnames: unknown[] = [];
-  const serveSpy = spyOn(Bun, "serve").mockImplementation((options) => {
-    const listener = nativeServe({ ...options, port: 0 } as Parameters<typeof Bun.serve>[0]);
-    listeners.push(listener);
-    hostnames.push("hostname" in options ? options.hostname : undefined);
-    return listener;
-  });
-  try {
-    let server: ReturnType<typeof startServer>;
-    try {
-      server = startServer(0, deps);
-    } finally {
-      // startServer is synchronous; restore before requests or any awaited cleanup.
-      serveSpy.mockRestore();
-    }
-    expect(listeners).toHaveLength(2);
-    expect(listeners[0]).toBe(server);
-    expect(hostnames).toEqual(["0.0.0.0", "127.0.0.1"]);
-    const managementPort = listeners[1]?.port;
-    if (!managementPort || managementPort === server.port) throw new Error("expected distinct live ingress ports");
-    return { server, managementPort };
-  } catch (error) {
-    await Promise.allSettled(listeners.map(async listener => { await listener.stop(true); }));
-    throw error;
-  }
-}
-
-function websocketHandshakeOpens(url: URL, token: string): Promise<boolean> {
-  return new Promise(resolve => {
-    const target = new URL("/v1/responses", url);
-    target.protocol = target.protocol === "https:" ? "wss:" : "ws:";
-    const socket = new WebSocket(target, {
-      headers: { "X-OpenCodex-API-Key": token },
-    } as unknown as string[]);
-    let settled = false;
-    const finish = (opened: boolean) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      try { socket.close(); } catch { /* already closed */ }
-      resolve(opened);
-    };
-    socket.addEventListener("open", () => finish(true));
-    socket.addEventListener("error", () => finish(false));
-    socket.addEventListener("close", () => finish(false));
-    const timer = setTimeout(() => finish(false), 5_000);
-  });
-}
-
 beforeEach(() => {
   testHome = mkdtempSync(join(tmpdir(), "ocx-management-auth-"));
   process.env.OPENCODEX_HOME = testHome;
@@ -194,31 +120,26 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  // Drain producers before the final handle-release barrier. Native-main
-  // release can finish ACL-backed startup work under CODEX_HOME and register
-  // another child reap; waiting for reaps before that release misses the child.
-  await flushNativeMainStartupReleases();
-  // Flush all homes before restoring environment variables, including startup
-  // rollback flights that no successfully returned server could have awaited.
-  await flushConfigDirHardeningForTests();
-  // The caller-facing ACL timeout may settle before icacls actually exits.
-  // Deletion waits for actual reaps, after every producer above has settled.
-  await flushWindowsSecretAclReapsBeforeRemoval(testHome);
-  resetContextRelayActivationForTests();
-  if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
-  else process.env.CODEX_HOME = previousCodexHome;
-  setSystemRestartIoForTests();
-  setIcaclsRunnerForTests(null);
-  setPlatformForTests(null);
-  resetHardenedStateForTests();
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
-  if (previousDataToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
-  else process.env.OPENCODEX_API_AUTH_TOKEN = previousDataToken;
-  if (previousAdminToken === undefined) delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
-  else process.env.OPENCODEX_ADMIN_AUTH_TOKEN = previousAdminToken;
-  if (testHome) removeTreeWithRetry(testHome);
+  const root = testHome;
   testHome = "";
+  resetContextRelayActivationForTests();
+  await drainAndRemoveFixtureRoots({
+    roots: root ? [{ path: root }] : [],
+    restoreEnvironment: () => {
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+      setSystemRestartIoForTests();
+      setIcaclsRunnerForTests(null);
+      setPlatformForTests(null);
+      resetHardenedStateForTests();
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      if (previousDataToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
+      else process.env.OPENCODEX_API_AUTH_TOKEN = previousDataToken;
+      if (previousAdminToken === undefined) delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
+      else process.env.OPENCODEX_ADMIN_AUTH_TOKEN = previousAdminToken;
+    },
+  });
 });
 
 describe("management and data-plane credential separation", () => {
@@ -1445,17 +1366,25 @@ describe("management and data-plane credential separation", () => {
 
   test("the management ingress preserves the one-use pairing exchange contract", async () => {
     const config = hubConfig();
+    // Reproduce the deployed Hub: the main process binds loopback, while this separately
+    // identified listener serves the configured public HTTPS management origin.
+    config.hostname = "127.0.0.1";
     config.hub = { ...config.hub, managementIngress: { enabled: true, port: 10101 } };
     saveConfig(config);
     const state = initializeManagementAuthState(config);
     if (!state.available) throw new Error("expected management auth state");
-    const created = createGuiPairingGrant("https://dashboard.example.test", config, state);
-    const { server, managementPort } = await startEphemeralHubServer({ managementAuthState: state });
+    const created = createGuiPairingGrant("https://hub.example.test", config, state);
+    const { server, managementPort } = await startEphemeralHubServer(
+      { managementAuthState: state },
+      ["127.0.0.1", "127.0.0.1"],
+    );
     const url = `http://127.0.0.1:${managementPort}/opencodex-session`;
     const headers = {
       Host: "hub.example.test",
-      Origin: "https://dashboard.example.test",
+      Origin: "https://hub.example.test",
       "content-type": "application/json",
+      "X-Forwarded-Host": "attacker.example.test",
+      "X-Forwarded-Proto": "http",
     };
     try {
       const adminAttempt = await fetch(url, {
@@ -1466,6 +1395,41 @@ describe("management and data-plane credential separation", () => {
       expect(adminAttempt.status).toBe(401);
       expect(state.pairingGrants.size).toBe(1);
 
+      const wrongHost = await fetch(url, {
+        method: "POST",
+        headers: { ...headers, Host: "attacker.example.test" },
+        body: JSON.stringify({ grant: created.grant }),
+      });
+      expect(wrongHost.status).toBe(401);
+      expect(state.pairingGrants.size).toBe(1);
+
+      const wrongOrigin = await fetch(url, {
+        method: "POST",
+        headers: { ...headers, Origin: "https://attacker.example.test" },
+        body: JSON.stringify({ grant: created.grant }),
+      });
+      expect(wrongOrigin.status).toBe(401);
+      expect(state.pairingGrants.size).toBe(1);
+
+      const wrongGrant = await fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ grant: `ocx_pair_${"x".repeat(43)}` }),
+      });
+      expect(wrongGrant.status).toBe(401);
+      expect(state.pairingGrants.size).toBe(1);
+
+      // The public/data listener cannot borrow the dedicated management listener's
+      // trusted ingress mark, even with matching forwarding headers supplied by a caller.
+      const publicAttempt = await fetch(new URL("/opencodex-session", server.url), {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ grant: created.grant }),
+      });
+      expect(publicAttempt.status).toBe(401);
+      expect(publicAttempt.headers.get("access-control-allow-origin")).not.toBe("https://hub.example.test");
+      expect(state.pairingGrants.size).toBe(1);
+
       const exchanged = await fetch(url, {
         method: "POST",
         headers,
@@ -1473,6 +1437,43 @@ describe("management and data-plane credential separation", () => {
       });
       expect(exchanged.status).toBe(200);
       expect(state.pairingGrants.size).toBe(0);
+
+      const html = await exchanged.text();
+      const meta = (name: string) => html.match(new RegExp(`name="opencodex-session-${name}" content="([^"]+)"`))?.[1];
+      const sessionToken = meta("token");
+      const csrfToken = meta("csrf");
+      expect(sessionToken?.startsWith("ocx_session_")).toBe(true);
+      expect(csrfToken?.length).toBeGreaterThan(0);
+      expect(meta("origin")).toBe("https://hub.example.test");
+      expect(meta("server-origin")).toBe("https://hub.example.test");
+
+      const apiHeaders = {
+        Host: "hub.example.test",
+        Origin: "https://hub.example.test",
+        "x-opencodex-api-key": sessionToken!,
+        "x-opencodex-gui-origin": "https://hub.example.test",
+      };
+      const unauthenticated = await fetch(`http://127.0.0.1:${managementPort}/api/link/status`, {
+        headers: { Host: "hub.example.test", Origin: "https://hub.example.test" },
+      });
+      expect(unauthenticated.status).toBe(401);
+
+      const linkStatus = await fetch(`http://127.0.0.1:${managementPort}/api/link/status`, { headers: apiHeaders });
+      expect(linkStatus.status).toBe(200);
+
+      const missingCsrf = await fetch(`http://127.0.0.1:${managementPort}/api/session/logout`, {
+        method: "POST",
+        headers: { ...apiHeaders, "content-type": "application/json" },
+        body: "{}",
+      });
+      expect(missingCsrf.status).toBe(401);
+
+      const logout = await fetch(`http://127.0.0.1:${managementPort}/api/session/logout`, {
+        method: "POST",
+        headers: { ...apiHeaders, "x-opencodex-csrf-token": csrfToken!, "content-type": "application/json" },
+        body: "{}",
+      });
+      expect(logout.status).toBe(200);
 
       const replay = await fetch(url, {
         method: "POST",
@@ -1916,65 +1917,6 @@ describe("codex app-server restart routes ride the management gate", () => {
 });
 
 
-test("log cursors remain behind management admission and origin gates", async () => {
-  const config = remoteConfig();
-  saveConfig(config);
-  const state = initializeManagementAuthState(config);
-  if (!state.available) throw new Error("expected management auth state");
-  const server = startServer(0, { managementAuthState: state });
-  const origin = server.url.origin;
-  const token = "ocx_session_log_cursor_test";
-  state.sessions.set(token, {
-    serverOrigin: origin, browserOrigin: origin, csrfToken: "csrf-log-test",
-    expiresAt: Date.now() + 60_000, issuance: "loopback",
-  });
-  const adminHeaders = { "x-opencodex-api-key": "admin-secret" };
-  const acceptedHeaders: HeadersInit[] = [adminHeaders, {
-    Origin: origin, "x-opencodex-api-key": token, "x-opencodex-gui-origin": origin,
-  }];
-  try {
-    const initial = await fetch(new URL("/api/logs", server.url), { headers: adminHeaders });
-    expect(initial.status).toBe(200);
-    const body = await initial.json() as { cursor: string };
-    expect(typeof body.cursor).toBe("string");
-    for (const suffix of ["", `?cursor=${body.cursor}`, "?cursor=malformed"]) {
-      const url = new URL(`/api/logs${suffix}`, server.url);
-      for (const credential of [undefined, "data-secret", "wrong-admin"]) {
-        const response = await fetch(url, { headers: credential ? { "x-opencodex-api-key": credential } : {} });
-        expect(response.status).toBe(401);
-        expect(await response.json()).toEqual({ error: "opencodex admin token required" });
-      }
-      const foreign = await fetch(url, { headers: { ...adminHeaders, Origin: "https://attacker.test" } });
-      expect(foreign.status).toBe(403);
-      await foreign.text();
-      for (const headers of acceptedHeaders) {
-        const allowed = await fetch(url, { headers });
-        expect(allowed.status).toBe(suffix.includes("malformed") ? 400 : 200);
-        await allowed.text();
-      }
-    }
-  } finally {
-    await server.stop(true);
-  }
-}, SERVER_BUDGET_MS);
-
-test("unavailable management authority rejects log cursors before parsing", async () => {
-  saveConfig(remoteConfig());
-  const server = startServer(0, { managementAuthState: { available: false, reason: "fixture unavailable" } });
-  try {
-    const legacy = Buffer.from(JSON.stringify({ v: 1, t: 1, id: "fixture" })).toString("base64url");
-    for (const suffix of ["", `?cursor=${legacy}`, "?cursor=malformed"]) {
-      const response = await fetch(new URL(`/api/logs${suffix}`, server.url), {
-        headers: { "x-opencodex-api-key": "admin-secret" },
-      });
-      expect(response.status).toBe(503);
-      expect(await response.json()).toMatchObject({ error: "management API unavailable" });
-    }
-  } finally {
-    await server.stop(true);
-  }
-}, SERVER_BUDGET_MS);
-
 test("a body exactly at the limit is still accepted for parsing", async () => {
   saveConfig(remoteConfig());
   const server = startServer(0);
@@ -1996,4 +1938,35 @@ test("a body exactly at the limit is still accepted for parsing", async () => {
   } finally {
     await server.stop(true);
   }
+});
+
+
+test("ocx gui and local CLI management retain loopback sessions on Hub management ingress", async () => {
+  const cfg = hubConfig();
+  cfg.hostname = "127.0.0.1";
+  cfg.hub = { ...cfg.hub, managementIngress: { enabled: true, port: 10101 } };
+  saveConfig(cfg);
+  const state = initializeManagementAuthState(cfg);
+  const { server, managementPort } = await startEphemeralHubServer({ managementAuthState: state }, ["127.0.0.1", "127.0.0.1"]);
+  const liveCfg = { ...cfg, hub: { ...cfg.hub, managementIngress: { enabled: true, port: managementPort } } };
+  const base = localManagementOrigin(liveCfg, server.port);
+  expect(selectDefaultGuiUrl(liveCfg, null, () => "127.0.0.1")).toBe(base);
+  try {
+    const bootstrap = await fetch(`${base}/opencodex-session`);
+    expect(bootstrap.status).toBe(200);
+    const html = await bootstrap.text();
+    const token = /name="opencodex-session-token" content="([^"]+)"/.exec(html)?.[1];
+    expect(token).toBeDefined();
+    expect(html).toContain(`name="opencodex-session-server-origin" content="${base}"`);
+    expect((await fetch(`${base}/api/config`, { headers: {
+      Origin: base, "x-opencodex-api-key": token!, "x-opencodex-gui-origin": base,
+    } })).status).toBe(200);
+    expect((await fetch(`${base}/api/config`, { headers: {
+      "x-opencodex-api-key": "admin-secret",
+    } })).status).toBe(200);
+    expect((await fetch(`${base}/api/config`)).status).toBe(401);
+    expect((await fetch(`${base}/api/config`, { headers: {
+      Origin: "https://evil.example.test", "x-opencodex-api-key": "admin-secret",
+    } })).status).toBe(403);
+  } finally { await server.stop(true); }
 });

@@ -16,6 +16,9 @@ import {
 } from "../../src/codex/user-identity";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
+/** Every K acquisition states its intent (#6529); these tests exercise the lock, not the intent. */
+const TEST_CATALOG_WRITE = { intent: "refresh", writer: "test" } as const;
+
 let codexHome = "";
 let otherHome = "";
 let previousCodexHome: string | undefined;
@@ -67,7 +70,7 @@ test("a callback holding a live permit may write for its own home", () => {
   const outcome = withCatalogWriteSerialization(codexHome, (permit) => {
     assertCatalogWritePermit(permit, codexHome);
     return "published";
-  });
+  }, TEST_CATALOG_WRITE);
 
   expect(outcome).toEqual({ kind: "completed", value: "published" });
 });
@@ -83,7 +86,7 @@ test("a permit leaked out of its callback is refused afterwards", () => {
     leaked = permit;
     expect(isCatalogWritePermitLive(permit)).toBe(true);
     return "done";
-  });
+  }, TEST_CATALOG_WRITE);
   expect(outcome.kind).toBe("completed");
 
   expect(isCatalogWritePermitLive(leaked!)).toBe(false);
@@ -96,7 +99,7 @@ test("a permit is revoked even when its callback throws", () => {
   expect(() => withCatalogWriteSerialization(codexHome, (permit) => {
     leaked = permit;
     throw new Error("callback exploded");
-  })).toThrow("callback exploded");
+  }, TEST_CATALOG_WRITE)).toThrow("callback exploded");
 
   expect(isCatalogWritePermitLive(leaked!)).toBe(false);
   expect(() => assertCatalogWritePermit(leaked!, codexHome)).toThrow();
@@ -108,14 +111,14 @@ test("a permit is revoked even when its callback throws", () => {
  */
 test("a permit cannot be reused by a later acquisition of the same home", () => {
   let first: CatalogWritePermit | undefined;
-  withCatalogWriteSerialization(codexHome, (permit) => { first = permit; });
+  withCatalogWriteSerialization(codexHome, (permit) => { first = permit; }, TEST_CATALOG_WRITE);
 
   const outcome = withCatalogWriteSerialization(codexHome, (second) => {
     expect(second).not.toBe(first);
     expect(() => assertCatalogWritePermit(first!, codexHome)).toThrow();
     assertCatalogWritePermit(second, codexHome);
     return "second-only";
-  });
+  }, TEST_CATALOG_WRITE);
   expect(outcome).toEqual({ kind: "completed", value: "second-only" });
 });
 
@@ -131,7 +134,7 @@ test("a live permit for one home is refused by a writer for another home", () =>
     expect(() => assertCatalogWritePermit(permit, otherHome))
       .toThrow("authorizes a different CODEX_HOME");
     return "home-bound";
-  });
+  }, TEST_CATALOG_WRITE);
   expect(outcome).toEqual({ kind: "completed", value: "home-bound" });
 });
 
@@ -148,7 +151,7 @@ test("a forged permit shaped like the real one is refused", () => {
         .toThrow("was not minted by the serialization owner");
     }
     return null;
-  });
+  }, TEST_CATALOG_WRITE);
 });
 
 /**
@@ -157,20 +160,20 @@ test("a forged permit shaped like the real one is refused", () => {
  */
 test("a second acquisition during a live callback is typed busy, not blocked", () => {
   const outcome = withCatalogWriteSerialization(codexHome, () => {
-    const nested = withCatalogWriteSerialization(codexHome, () => "should-not-run");
+    const nested = withCatalogWriteSerialization(codexHome, () => "should-not-run", TEST_CATALOG_WRITE);
     expect(nested).toEqual({ kind: "unavailable", reason: "busy" });
     return "outer-kept-k";
-  });
+  }, TEST_CATALOG_WRITE);
 
   expect(outcome).toEqual({ kind: "completed", value: "outer-kept-k" });
 });
 
 test("a different home is not excluded by a live acquisition", () => {
   const outcome = withCatalogWriteSerialization(codexHome, () => {
-    const other = withCatalogWriteSerialization(otherHome, () => "other-home-ran");
+    const other = withCatalogWriteSerialization(otherHome, () => "other-home-ran", TEST_CATALOG_WRITE);
     expect(other).toEqual({ kind: "completed", value: "other-home-ran" });
     return "independent";
-  });
+  }, TEST_CATALOG_WRITE);
 
   expect(outcome).toEqual({ kind: "completed", value: "independent" });
 });
@@ -182,15 +185,15 @@ test("a different home is not excluded by a live acquisition", () => {
 test("a callback error propagates rather than becoming a lock outcome", () => {
   expect(() => withCatalogWriteSerialization(codexHome, () => {
     throw new TypeError("derivation failed");
-  })).toThrow(TypeError);
+  }, TEST_CATALOG_WRITE)).toThrow(TypeError);
 
   // K must be released, so the next acquisition succeeds rather than hanging.
-  expect(withCatalogWriteSerialization(codexHome, () => "recovered"))
+  expect(withCatalogWriteSerialization(codexHome, () => "recovered", TEST_CATALOG_WRITE))
     .toEqual({ kind: "completed", value: "recovered" });
 });
 
 test("K creates its database private to the effective user", () => {
-  withCatalogWriteSerialization(codexHome, () => null);
+  withCatalogWriteSerialization(codexHome, () => null, TEST_CATALOG_WRITE);
   const path = resolveCodexCatalogSerializationDatabasePath(
     resolveEffectiveUserIdentity(),
     codexHome,

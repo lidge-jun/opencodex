@@ -59,35 +59,38 @@ describe("configured spend cannot dispatch without a capacity booking", () => {
     });
   }
 
-  test("an already-sent capacity failure preserves physical count without a false refusal", () => {
+  test("unclaimed enforced numeric reports cannot bypass normal seed capacity", () => {
     const f = fixture({ pool: { maxTokens: 1000 }, maxTrackedSends: 1 });
     f.ledger.reserve({ sendId: "busy", scopes: { poolId: "fixture-pool" }, inputTokens: 1, outputCeilingTokens: 0 });
     f.budget.used += 1;
-    expect(f.budget.used).toBe(1);
+    expect(f.budget.used).toBe(0);
     expect(f.tracker.refusals).toBe(0);
     expect(f.context.errorCode).toBeUndefined();
     expect(f.context.localTerminalReason).toBeUndefined();
     expect(f.ledger.snapshot("pool", "fixture-pool")?.reserved).toBe(1);
   });
 
-  test("enabling a ceiling affects the existing tracker on its next charge", () => {
+  test("enabling a ceiling applies to new requests while the started tracker remains observe-only", () => {
     const f = fixture({ maxTrackedScopes: 1 });
     expect(f.attempt().allowed).toBe(true);
     f.ledger.reconfigure({ ...f.ledger.policy, pool: { maxTokens: 1000 } });
-    expect(f.attempt().allowed).toBe(false);
-    expect(f.dispatched()).toBe(1);
-    expect(f.budget.used).toBe(1);
-    expect(f.tracker.refusals).toBe(1);
+    expect(f.attempt().allowed).toBe(true);
+    expect(f.dispatched()).toBe(2);
+    expect(f.tracker.refusals).toBe(0);
+    const next = createRequestSpendTracker(f.context, "fixture-root", f.ledger);
+    expect(next.charge()).toBe(false);
   });
 
-  test("newly resolved identity applies on the next charge without reconstructing the tracker", () => {
+  test("a newly resolved identity does not change a request that already started observe-only", () => {
     const f = fixture({ identity: { maxTokens: 1000 }, maxTrackedScopes: 1 });
     delete f.context.accountLogLabel;
     expect(f.attempt().allowed).toBe(true);
     f.context.accountLogLabel = "newly-resolved-account";
-    expect(f.attempt().allowed).toBe(false);
-    expect(f.dispatched()).toBe(1);
-    expect(f.budget.used).toBe(1);
+    expect(f.attempt().allowed).toBe(true);
+    expect(f.dispatched()).toBe(2);
+    expect(f.budget.used).toBe(2);
+    const next = createRequestSpendTracker(f.context, "fixture-root", f.ledger);
+    expect(next.charge()).toBe(false);
   });
 });
 
@@ -104,6 +107,7 @@ for (const [denial, code] of [
         // and actual journal failures/corruption are covered by the ledger regression suite.
         const ledger = Object.create(f.ledger) as typeof f.ledger;
         ledger.reserve = () => ({ reserved: false, denial });
+        ledger.reserveSeed = () => ({ reserved: false, denial });
         const tracker = createRequestSpendTracker(f.context, undefined, ledger);
         expect(tracker.charge({ alreadySent })).toBe(alreadySent || !enforced);
         expect(tracker.refusals).toBe(enforced && !alreadySent ? 1 : 0);

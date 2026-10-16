@@ -1,11 +1,15 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { findAvailablePort } from "../../src/server/ports";
 import { watchdogMs } from "../helpers/ci-watchdog";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
+import { randomBytes } from "node:crypto";
+import { createGuiPairCapability, GUI_PAIR_BROWSER_ORIGIN_HEADER, GUI_PAIR_CAPABILITY_HEADER,
+  GUI_PAIR_EXPECTED_PID_HEADER, GUI_PAIR_EXPIRES_AT_HEADER, GUI_PAIR_NONCE_HEADER, GUI_PAIR_PATH } from "../../src/lib/gui-pair-capability";
+import { GUI_PAIR_INTENT_HEADER } from "../../src/lib/gui-pair-intent";
 
 const DEADLINE = watchdogMs(30_000);
 
@@ -60,12 +64,15 @@ test("standalone CLI pairing crosses real HTTP admission once and stops before S
     const origin = `http://127.0.0.1:${port}`;
     writeFileSync(join(ocxHome, "config.json"), JSON.stringify({
       port, hostname: "127.0.0.1", runtimeRole: "standalone", providers: {}, defaultProvider: "openai",
+      apiKeys: [{ id: "paired-read-fixture", name: "Fixture", key: "ocx_data_paired_read_fixture",
+        createdAt: "2026-10-06T00:00:00.000Z" }],
       codexAutoStart: false, syncResumeHistory: false,
       clientIntegrations: { codex: false, grok: false, "claude-desktop": false },
       claudeCode: { enabled: false, systemEnv: false },
     }));
     const server = Bun.spawn([process.execPath, repoPath("src/cli/index.ts"), "start", "--port", String(port)], {
-      cwd: root, env, stdin: "ignore", stdout: "ignore", stderr: "ignore",
+      cwd: root, env,
+      stdin: "ignore", stdout: "ignore", stderr: "ignore",
     });
     children.add(server);
     const request = (path: string, init: RequestInit = {}) => fetch(`${origin}${path}`, {
@@ -114,20 +121,47 @@ test("standalone CLI pairing crosses real HTTP admission once and stops before S
     };
     await expectStatus(ordinary, false);
     await expectError(await joinRequest(headers(ordinary)), 403, "forbidden");
+    const reveal = (session: typeof ordinary) => request("/api/keys/reveal", {
+      method: "POST", headers: headers(session), body: JSON.stringify({ id: "paired-read-fixture" }),
+    });
+    const ordinaryReveal = await reveal(ordinary);
+    expect(ordinaryReveal.status, "automatic session cannot read a stored key").toBe(403);
+    await ordinaryReveal.body?.cancel();
+
+    // A process which reads runtime-state and reproduces its HMAC still lacks CLI write intent.
+    // No approved record is published here; no real user credential or external server is used.
+    const runtime = parseObject(readFileSync(join(ocxHome, "runtime-port.json"), "utf8"));
+    for (const fakeIntent of [undefined, "B".repeat(43)]) {
+      const nonce = randomBytes(32).toString("base64url"), expiresAt = Date.now() + 10_000;
+      const capability = createGuiPairCapability(String(runtime.attestationSecret), nonce, "POST", GUI_PAIR_PATH,
+        origin, server.pid, port, expiresAt)!;
+      const refused = await request(GUI_PAIR_PATH, { method: "POST", headers: {
+        "Content-Length": "0", [GUI_PAIR_EXPECTED_PID_HEADER]: String(server.pid),
+        [GUI_PAIR_NONCE_HEADER]: nonce, [GUI_PAIR_EXPIRES_AT_HEADER]: String(expiresAt),
+        [GUI_PAIR_BROWSER_ORIGIN_HEADER]: origin, [GUI_PAIR_CAPABILITY_HEADER]: capability,
+        ...(fakeIntent ? { [GUI_PAIR_INTENT_HEADER]: fakeIntent } : {}),
+      } });
+      expect(refused.status, "runtime-only pairing refuses without minting").toBe(403);
+      const denied = parseObject(await refused.text());
+      expect(denied.code).toBe("local_pairing_intent_required");
+    }
+    await expectStatus(ordinary, false);
 
     const mint = Bun.spawn([process.execPath, repoPath("src/cli/index.ts"), "gui", "pair", "--origin", origin, "--json"], {
       cwd: root, env, stdin: "ignore", stdout: "pipe", stderr: "ignore",
     });
     children.add(mint);
     const [mintExit, output] = await Promise.all([mint.exited, new Response(mint.stdout).text()]);
-    expect(mintExit, "actual gui pair CLI exit status (output withheld)").toBe(0);
+    expect(mintExit, "headless gui pair CLI succeeds (output withheld)").toBe(0);
     const minted = parseObject(output);
-    expect(minted.kind === "created", "CLI created a grant").toBe(true);
-    expect(typeof minted.grant === "string" && minted.grant.startsWith("ocx_pair_"), "CLI grant present").toBe(true);
+    expect(minted.kind === "created", "CLI retains its original grant response").toBe(true);
     expect(minted.browserOrigin === origin && minted.serverOrigin === origin, "CLI exact origin binding").toBe(true);
+    const grant = String(minted.grant);
+    expect(/^ocx_pair_[A-Za-z0-9_-]{43}$/.test(grant), "one-use code returned only to the CLI with write intent").toBe(true);
+    expect(readdirSync(join(ocxHome, "gui-pair-intents")).length, "one-use commitment removed").toBe(0);
     const redeem = (extraHeaders: Record<string, string> = {}) => request("/opencodex-session", {
       method: "POST", headers: { Origin: origin, "content-type": "application/json", ...extraHeaders },
-      body: JSON.stringify({ grant: minted.grant }),
+      body: JSON.stringify({ grant }),
     });
     // Refused attempts must not consume the valid grant.
     for (const extra of [{ Origin: "https://foreign.example.test" }, { Authorization: "Bearer invalid-test-credential" }]) {
@@ -136,6 +170,10 @@ test("standalone CLI pairing crosses real HTTP admission once and stops before S
       await refused.body?.cancel();
     }
     const paired = await bootstrap(await redeem(), origin);
+    const pairedReveal = await reveal(paired);
+    expect(pairedReveal.status, "config-write-authorized session may read a stored key").toBe(200);
+    expect(pairedReveal.headers.get("cache-control")).toBe("no-store");
+    expect(parseObject(await pairedReveal.text()).key === "ocx_data_paired_read_fixture", "exact fixture key returned").toBe(true);
     const replay = await redeem();
     expect(replay.status, "single-use grant replay refused").toBe(401);
     await replay.body?.cancel();

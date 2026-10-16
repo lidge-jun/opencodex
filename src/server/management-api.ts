@@ -54,7 +54,7 @@ import { noteExplicitShutdownRequested } from "./management/system-restart";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "./request-log";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../usage/cost";
 import type { PersistedUsageAttempt } from "../usage/log";
-import { isAllowedManagementOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "./auth-cors";
+import { inheritTrustedHubManagementRequest, isAllowedManagementOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "./auth-cors";
 import { applySystemEnvToggle } from "./system-env";
 
 import type { ManagementApiDeps } from "./management/context";
@@ -79,6 +79,9 @@ import { handleCodexPromptRoutes } from "./management/codex-prompt-routes";
 import { handleIntegrationRoutes } from "./management/integration-routes";
 import { handleNativeIntegrationRoutes } from "./management/native-integration-routes";
 import { handleClaudeDesktopPickerRoutes } from "./management/claude-desktop-picker-routes";
+import { handleDesktopCompatibilityRoutes } from "./management/desktop-compatibility-routes";
+import { handleDesktopCompatibilityRuntimeRoutes } from "./management/desktop-compatibility-runtime-routes";
+import { handleDesktopCompatibilitySettingsRoutes } from "./management/desktop-compatibility-settings-routes";
 import { handleCursorIntegrationRoutes } from "./management/cursor-integration-routes";
 import type { ManagementContext } from "./management/context";
 import type { ManagementPrincipal, ManagementSessionControl } from "./management-auth";
@@ -248,7 +251,9 @@ export async function handleManagementAPI(
     if (verified.status !== 200) {
       return jsonResponse({ error: "account switch body rejected" }, verified.status, req, config);
     }
+    const sourceReq = req;
     req = new Request(req.url, { method: req.method, headers: req.headers, body: Buffer.from(verified.body) });
+    inheritTrustedHubManagementRequest(sourceReq, req);
   }
   // Management bodies are small JSON (provider names, key ids, settings). Reject oversized
   // payloads before any handler buffers them — the data plane has its own decompression cap.
@@ -365,6 +370,9 @@ export async function handleManagementAPI(
     ??     (await handleNativeIntegrationRoutes(ctx))
     ??     (await handleCursorIntegrationRoutes(ctx))
     ??     (await handleClaudeDesktopPickerRoutes(ctx))
+    ??     (await handleDesktopCompatibilityRoutes(ctx))
+    ??     (await handleDesktopCompatibilityRuntimeRoutes(ctx))
+    ??     (await handleDesktopCompatibilitySettingsRoutes(ctx))
     ??     (await handleAgentSettingsRoutes(ctx))
     ??     (await handleCodexPromptRoutes(ctx))
     ??     (await handleOauthAccountRoutes(ctx))

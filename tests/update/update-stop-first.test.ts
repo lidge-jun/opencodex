@@ -687,6 +687,12 @@ esac
         expect(result.exitCode).toBe(1);
         expect(output).toContain("Stopping the running proxy before updating");
         expect(output).toContain("restarting the previous version directly");
+        expect(output).toContain("'ocx status'");
+        expect(output).toContain("let any in-progress recovery finish");
+        expect(output).toContain("confirm it has stopped before installing");
+        expect(output).toContain("'ocx stop'");
+        expect(output).toContain("Then run: npm install -g");
+        expect(output.indexOf("'ocx stop'")).toBeLessThan(output.indexOf("Then run: npm install -g"));
         expect(output).toContain(`Attempting to restart the proxy on port ${port}.`);
         expect(await waitForProxy(port, lastProbe => {
           console.error(new Error([

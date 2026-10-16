@@ -511,9 +511,9 @@ describe("ollama-native — request shape", () => {
     ]))).toThrow(/orphan tool result/);
   });
 
-  test("a duplicate result for the same call is still refused", () => {
+  test("additional results for the same call preserve every fragment", () => {
     const adapter = createOllamaNativeAdapter(ollamaProvider());
-    expect(() => adapter.buildRequest(parsedWith([
+    const { body } = adapter.buildRequest(parsedWith([
       { role: "user", content: "hi" },
       {
         role: "assistant",
@@ -522,7 +522,9 @@ describe("ollama-native — request shape", () => {
       },
       { role: "toolResult", toolCallId: "call_once", toolName: "exec", content: "once", isError: false, timestamp: 2 },
       { role: "toolResult", toolCallId: "call_once", toolName: "exec", content: "twice", isError: false, timestamp: 3 },
-    ]))).toThrow(/duplicate tool result/);
+    ]));
+    const messages = JSON.parse(body).messages;
+    expect(messages[2]).toMatchObject({ role: "tool", tool_call_id: "call_once", content: "once\ntwice" });
   });
 });
 
@@ -546,17 +548,46 @@ describe("ollama-native commentary validation and replay ownership", () => {
     });
   }
 
-  test("duplicate results remain rejected while commentary holds an unresolved batch", () => {
+  test("additional output does not consume another call's unresolved count", () => {
     const first = call("first");
     const second = call("second");
     const batch = { ...first, content: [...first.content, ...second.content] };
     const adapter = createOllamaNativeAdapter(ollamaProvider());
-    expect(() => adapter.buildRequest(parsedWith([batch, result("first"), commentary, result("first")]))).toThrow(/duplicate tool result/);
+    const { body } = adapter.buildRequest(parsedWith([
+      batch, result("first"), { ...result("first"), content: "additional A" },
+      commentary, { ...result("second"), content: "done B" },
+    ]));
+    const messages = JSON.parse(body).messages;
+    expect(messages.map((message: { role: string }) => message.role)).toEqual(["assistant", "tool", "tool", "assistant"]);
+    expect(messages[0].tool_calls.map((entry: { id: string }) => entry.id)).toEqual(["first", "second"]);
+    expect(messages[1]).toMatchObject({ tool_call_id: "first", content: "done\nadditional A" });
+    expect(messages[2]).toMatchObject({ tool_call_id: "second", content: "done B" });
+    expect(messages[3]).toMatchObject({ role: "assistant", content: "Working." });
   });
 
-  test("a result cannot cross a subsequent tool-call batch", () => {
+  test("late output after completed commentary uses an attributed conversation carrier", () => {
+    const { body } = createOllamaNativeAdapter(ollamaProvider()).buildRequest(parsedWith([
+      call("settled"), result("settled"), commentary,
+      { ...result("settled"), content: "late fragment" }, { role: "user", content: "next" },
+    ]));
+    const messages = JSON.parse(body).messages;
+    expect(messages.map((message: { role: string }) => message.role)).toEqual(["assistant", "tool", "assistant", "user", "user"]);
+    expect(messages[1]).toMatchObject({ tool_call_id: "settled", content: "done" });
+    expect(messages[2]).toMatchObject({ role: "assistant", content: "Working." });
+    expect(messages[3]).toEqual({ role: "user",
+      content: '[ocx] additional output for previously issued tool "ops__exec" (settled):\nlate fragment',
+    });
+    expect(messages[4]).toMatchObject({ role: "user", content: "next" });
+  });
+
+  test("known late output follows the subsequent batch without reopening its old call", () => {
     const adapter = createOllamaNativeAdapter(ollamaProvider());
-    expect(() => adapter.buildRequest(parsedWith([call("old"), commentary, call("new"), result("old")]))).toThrow(/has no originating call/);
+    const { body } = adapter.buildRequest(parsedWith([call("old"), commentary, call("new"), result("old")]));
+    const messages = JSON.parse(body).messages;
+    expect(messages[4]).toMatchObject({ role: "tool", tool_call_id: "new" });
+    expect(messages[5].role).toBe("user");
+    expect(messages[5].content).toContain("[ocx] additional output");
+    expect(messages[5].content).toContain("old");
   });
 
   for (const id of ["", "call_guard"]) {

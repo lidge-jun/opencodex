@@ -322,10 +322,16 @@ describe("routed compaction emergency integration", () => {
     const budget = createRequestExecutionBudget({ maxTotalModelSends: 2, baseSendAllowance: 2, finalRecoveryAllowance: 0, maxAlternateTargetSends: 1, maxTargetTransitions: 1 });
     const reservation = budget.reserveDispatch({ sendClass: "initial", targetKey: "source/swe-2", countedExternally: true });
     expect(reservation.allowed).toBe(true);
-    const response = await handleResponses(request(), config, { model: "", provider: "" }, { sendBudget: budget });
+    if (!reservation.allowed) throw new Error("synthetic source reservation refused");
+    const response = await handleResponses(request(), config, { model: "", provider: "" }, {
+      sendBudget: budget, comboDispatchPermit: reservation.permit,
+    });
     expect((await response.json()).status).toBe("completed");
     expect(sourceRequests).toBe(1);
     expect(calls.map(call => call.model)).toEqual(["rescue"]);
+    expect(budget.used).toBe(2);
+    expect(reservation.permit.assumeCharge()).toBe(false);
+    reservation.permit.release();
     expect(budget.used).toBe(2);
   });
 
@@ -428,5 +434,37 @@ describe("routed compaction emergency integration", () => {
     await response.text();
     expect(urls).toEqual(["https://api.openai.com/v1/responses/compact"]);
     expect(calls).toHaveLength(0);
+  });
+});
+
+
+describe("emergency compaction provider allowance matrix", () => {
+  // Independent expected counts: attempts 1/2/3 across shared caps 2/3/4.
+  test.each([
+    [1, 2, false, 1], [1, 3, false, 1], [1, 4, false, 1],
+    [2, 2, false, 1], [2, 3, false, 2], [2, 4, false, 2],
+    [3, 2, false, 1], [3, 3, false, 2], [3, 4, false, 3],
+    [1, 2, true, 1], [1, 3, true, 1], [1, 4, true, 1],
+    [2, 2, true, 1], [2, 3, true, 2], [2, 4, true, 2],
+    [3, 2, true, 1], [3, 3, true, 2], [3, 4, true, 3],
+  ] as const)("attempts=%s shared cap=%s reset policy=%s allows %s emergency sends", async (attempts, sharedCap, resetPolicy, expectedEmergencySends) => {
+    const config = settings();
+    config.providers.emergency = {
+      adapter: "openai-chat", authMode: "key", apiKey: "fixture-only", baseUrl: "https://emergency.example/v1",
+      transientRetryOn5xx: { attempts }, ...(resetPolicy ? { retryOnReset: {} } : {}),
+    };
+    let emergencyRequests = 0;
+    globalThis.fetch = (async () => {
+      emergencyRequests++;
+      return Response.json({ error: { code: "server_error", message: "Emergency unavailable" } }, { status: 500 });
+    }) as typeof fetch;
+    const budget = createRequestExecutionBudget({ maxTotalModelSends: sharedCap, baseSendAllowance: sharedCap, finalRecoveryAllowance: 0, maxAlternateTargetSends: 1, maxTargetTransitions: 1 });
+    const response = await handleResponses(request(), config, { model: "", provider: "" }, { sendBudget: budget });
+    expect(response.status).toBe(400);
+    expect(await response.text()).toContain("Source rejected compact fixture");
+    expect(calls.map(call => call.model)).toEqual(["swe-2"]);
+    expect(emergencyRequests).toBe(expectedEmergencySends);
+    expect(budget.used).toBe(1 + emergencyRequests);
+    expect(budget.used).toBeLessThanOrEqual(sharedCap);
   });
 });

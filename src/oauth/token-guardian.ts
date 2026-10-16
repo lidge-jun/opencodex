@@ -29,6 +29,7 @@ import { codexWarmupFailureReason, warmCodexAccount } from "../codex/warmup";
 import { getMainAccountToken, MAIN_CODEX_ACCOUNT_ID } from "../codex/main-account";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
 import { providerCodexAccountMode } from "../providers/registry";
+import { configuredAnthropicInstance } from "../providers/anthropic-instance";
 import { captureConfigGeneration, type GenerationContext } from "../lib/state-store-sweeper";
 import { tryAcquireNativeMainProfileClaim } from "../codex/native-main-admission";
 
@@ -144,6 +145,7 @@ export async function guardianSweep(nowMs: number = Date.now()): Promise<Guardia
   // skipping accounts already marked needsReauth (terminal; only a re-login fixes them) or
   // paused by the operator (manual exclusion from all automatic account use).
   for (const provider of listOAuthProviders()) {
+    if (provider === "anthropic2" && configuredAnthropicInstance(config, provider) === undefined) continue;
     if (resolveRefreshPolicy(provider, config) !== "proactive") continue;
     for (const account of listAccounts(provider)) {
       if (account.needsReauth || account.paused) continue;

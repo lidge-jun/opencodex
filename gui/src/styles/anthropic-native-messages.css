@@ -1,0 +1,12 @@
+.anthropic-pool-card__native-messages {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  cursor: pointer;
+}
+.anthropic-pool-card__native-messages > input { margin: var(--space-0-5) 0 0; accent-color: var(--accent); }
+.anthropic-pool-card__native-messages > input:focus-visible { outline: var(--space-0-5) solid var(--accent); outline-offset: var(--space-0-5); }
+.anthropic-pool-card__native-messages-copy { display: grid; gap: var(--space-1); max-width: var(--prose-measure); }
+.anthropic-pool-card__native-messages:has(input:disabled) { cursor: default; }
+.anthropic-pool-card__save-warning { margin: var(--space-2) var(--space-4); color: var(--amber); font-size: var(--text-label); line-height: var(--leading-body); }

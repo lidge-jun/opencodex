@@ -14,6 +14,7 @@ import {
 } from "../clients/config-export";
 import { canonicalContribution, fingerprint, semanticContribution, type OwnershipRecord } from "./ownership";
 import { readPath } from "./merge";
+import { serializeDocument } from "./serialize";
 
 type JsonObject = Record<string, unknown>;
 
@@ -49,6 +50,71 @@ export function isHermesAffinityUpgrade(
   return fingerprint(canonicalContribution(predecessor)) === record.blockFingerprint
     || (typeof record.semanticBlockFingerprint === "string"
       && fingerprint(semanticContribution(predecessor)) === record.semanticBlockFingerprint);
+}
+
+function removeDroidNormalizationFields(row: Record<string, unknown>): boolean {
+  let projected = false;
+  if (Object.hasOwn(row, "id")) {
+    delete row.id;
+    projected = true;
+  }
+  if (Object.hasOwn(row, "index")) {
+    delete row.index;
+    projected = true;
+  }
+  return projected;
+}
+
+function projectObservedDroidContribution(
+  contribution: ManagedContribution,
+): ManagedContribution {
+  if (contribution.clientId !== "droid") return contribution;
+  let projected = false;
+  const fragments = contribution.fragments.map(fragment => {
+    if (
+      fragment.path.length !== 2
+      || fragment.path[0] !== "customModels"
+      || !isObject(fragment.value)
+    ) return fragment;
+    const value = { ...fragment.value };
+    if (!removeDroidNormalizationFields(value)) return fragment;
+    projected = true;
+    return { ...fragment, value };
+  });
+  return projected ? { ...contribution, fragments } : contribution;
+}
+
+export function droidNormalizedContributionMatchesRecord(
+  observed: ManagedContribution,
+  record: OwnershipRecord,
+): boolean {
+  const projectedObserved = projectObservedDroidContribution(observed);
+  return projectedObserved !== observed
+    && (
+      fingerprint(canonicalContribution(projectedObserved)) === record.blockFingerprint
+      || (typeof record.semanticBlockFingerprint === "string"
+        && fingerprint(semanticContribution(projectedObserved)) === record.semanticBlockFingerprint)
+    );
+}
+
+export function droidNormalizedFileMatchesRecord(
+  document: unknown,
+  record: OwnershipRecord,
+): boolean {
+  if (record.clientId !== "droid") return false;
+  try {
+    const normalized = structuredClone(document);
+    let projected = false;
+    for (const path of record.fragmentPaths) {
+      if (path.length !== 2 || path[0] !== "customModels") return false;
+      const row = readPath(normalized, path);
+      if (!isObject(row)) return false;
+      if (removeDroidNormalizationFields(row)) projected = true;
+    }
+    return projected && fingerprint(serializeDocument(normalized, "json")) === record.fileFingerprint;
+  } catch {
+    return false;
+  }
 }
 
 function pathStartsWith(path: readonly string[], prefix: readonly string[]): boolean {

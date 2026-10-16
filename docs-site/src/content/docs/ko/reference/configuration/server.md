@@ -23,6 +23,7 @@ description: 리스너, 원격 접근, admission 키, 타임아웃, 저장소, �
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | disabled | 선택적으로 활성화하는 보관 세션 정리 정책입니다. 절대 암묵적으로 활성화되지 않습니다. |
 | `appOwnedMemoryBudgetMb?` | `number` | `256` | 제거 가능한 앱 소유 로그, 캐시, blob, continuation payload에 대한 MiB 단위 상한입니다. 범위는 64–4096이며 RSS 상한은 아닙니다. |
 | `metricsExport.enabled?` | `boolean` | `false` | 인증된 `GET /api/metrics`에서 프로세스 로컬 집계 요청 메트릭을 활성화합니다. 재시작이 필요하며, 비활성화 상태에서는 404를 반환하고 exporter 동작을 시작하지 않습니다. |
+| `serviceHealthRecovery.enabled?` | `boolean` | `false` | 백그라운드 서비스용 선택적 복구입니다. 작은 감시 프로세스가 `/healthz`를 확인하고, 프록시가 살아 있지만 연속 프로브에 약 1분 동안 전혀 응답하지 않으면 종료해 서비스 관리자(작업 스케줄러, launchd, systemd, WinSW)가 다시 시작하게 합니다. 관리되는 서비스 자식 프로세스에서만 시작되며, 멈춘 프로세스가 처리 중이던 요청은 재전송하지 않습니다. 시간당 최대 3회. 재시작이 필요합니다. 자동 복구에는 숫자 바인드 주소(또는 기본 localhost/와일드카드 매핑)가 필요합니다. DNS 바인드 이름은 모니터링하지 않습니다. 기록된 주소 또는 포트가 변경되면 모니터링이 중지됩니다. |
 | `codexAutoStart?` | `boolean` | `true` | Codex shim이 Codex를 실행하기 전에 `ocx ensure`를 돌리도록 허용합니다. `false`이면 ensure는 아무 작업도 하지 않습니다. |
 | `codexShimAutoRestore?` | `boolean` | `true` | 완료된 외부 Codex 업데이트가 설치된 shim을 교체한 뒤 복원합니다. 환경 변수로 끌 수 있습니다: `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`. |
 | `syncResumeHistory?` | `boolean` | `true` | 되돌릴 수 있는 Codex App history 호환성입니다. 원래 메타데이터는 `ocx stop` / `ocx restore`가 백업하고 복원합니다. |
@@ -162,7 +163,7 @@ ssh -L 20100:localhost:10100 -L 1455:localhost:1455 you@remote
 
 Codex는 제목과 커밋 메시지 같은 작업에 작은 보조 모델을 사용합니다. 인식된 source-model prefix를 다른 구성된 모델로 돌리려면 `shadowCallIntercept`를 활성화합니다. 대체 호출은 요청에 설정된 reasoning effort를 유지합니다. 클라이언트가 다른 helper id를 사용할 때만 `sourceModels`를 설정합니다.
 
-가로채기는 모델을 기준으로 합니다. 모델 ID가 `sourceModels`와 일치하는 모든 요청은 일반 `request_kind: "turn"` 요청을 포함해 다시 보낼 수 있습니다. `x-openai-subagent: collab_spawn` 또는 `x-codex-turn-metadata` JSON 헤더의 `subagent_kind: "thread_spawn"`로 생성된 자식으로 표시된 요청은 예외이므로, 명시적으로 생성된 서브에이전트는 모델을 유지합니다.
+한정되지 않은 모델 ID가 `sourceModels`와 일치하면 가로채기 대상이지만, `x-codex-turn-metadata`에 `request_kind: "turn"`과 `thread_source: "user"`가 함께 명시된 사용자 턴은 선택한 모델을 유지합니다. 연결 헤더 `x-openai-subagent: collab_spawn`(HTTP 요청 또는 WebSocket 핸드셰이크) 또는 메타데이터의 `subagent_kind: "thread_spawn"`으로 표시된 자식도 모델을 유지합니다. WebSocket에서 턴 메타데이터는 각 프레임의 `client_metadata["x-codex-turn-metadata"]`만 사용하며 핸드셰이크의 턴 메타데이터는 이후 프레임을 분류하지 않습니다. 메타데이터가 없거나 잘못된 형식이면 기존 가로채기 동작을 유지합니다. 헬퍼도 `request_kind: "turn"`을 사용할 수 있으므로 이 필드만으로는 예외가 되지 않습니다. 이 규칙은 구체적 모델 대상과 콤보 대상에 모두 적용됩니다.
 
 ```json
 {
@@ -257,6 +258,53 @@ Claude Code **2.1.257 or newer** is required for FORCE. Plugin and built-in agen
 
 The dashboard warns about old or unknown CLI versions, unavailable targets, and either variable already present in `settings.json` → `env` (which overrides launch env). Detection is read-only and server-local: it cannot inspect another launch shell, another machine, or project-local settings. An unknown result is not proof of force support.
 
-## 토큰 예약과 한도
+## 과거 풀 사용량의 연속성
 
-요청에 `spend.root.maxTokens`, `spend.identity.maxTokens`, `spend.pool.maxTokens` 중 하나가 적용되면 추적 용량 부족 등으로 토큰 예약을 기록할 수 없을 때 전송을 거부합니다. 적용되는 한도가 없는 요청은 계속 관측만 합니다.
+제공자 풀 한도는 실제로 선택된 제공자에 적용합니다. 요청 로그의 계정 표시 이름과는 구분합니다.
+현재 설정된 제공자 `P`는 잔액을 읽을 때 자신의 솔트 풀 별칭인 `h(pool, P)`와 자동으로 연결됩니다.
+같은 별칭에 남아 있는 과거 잔액도 여기에 속합니다. 제공자마다 독립적인 한도를 쓰려고 자기 매핑을 직접 넣거나
+솔트로 해시를 계산할 필요는 없습니다.
+
+다른 과거 표시 이름이나 계정 순번이 붙은 라벨은 자동으로 연결하지 않습니다.
+소유자를 확인한 과거 이력은 `config.json` 최상위의 `spendPoolAliases`에 매핑을 넣으세요.
+키는 같은 설치의 과거 풀 별칭인 32자리 소문자 16진수이고, 값은 현재 설정에 있는 확인된 제공자의 정확한 ID입니다.
+ID 앞뒤에 공백을 넣지 마세요.
+현재 이름이나 계정 순서만 보고 소유자를 추측하지 마세요. 저널과 솔트는 비공개로 보관하세요.
+
+자동 연결과 명시적 매핑은 잔액을 읽을 때만 적용합니다. 원래 잔액을 옮기거나 저널에 식별 연결 정보를 저장하지 않습니다.
+명시적 매핑을 삭제하면 그 이력은 다시 소유자 미확인 상태가 됩니다. 단, 현재 설정된 제공자 자신의 별칭이면 자동 연결이 남습니다.
+각 잔액은 연결된 제공자 그룹에 한 번만 계산합니다. 연결되지 않은 양수 잔액은 모든 후보 풀에 한 번씩 보수적으로 더합니다.
+설정된 제공자 자신의 솔트 별칭을 다른 제공자에 연결하면 거부합니다. 제공자를 추가할 때도 검사하며,
+검증 과정에서 새 솔트를 만들지는 않습니다. 매핑이 잘못돼도 기존 한도는 유지합니다.
+
+휴면 상태인 미확인 이력은 마지막 활동이 `spend.retentionDays`보다 오래됐을 때만 만료됩니다.
+용량이 부족해도 양수 이력을 먼저 지우지 않습니다. 진행 중인 예약과 seed는 0토큰이어도 보존하며,
+삭제 기록이 저장된 뒤에만 허용 여부를 판단하는 잔액을 줄입니다.
+한도가 적용되는 요청은 대상·키별 첫 전송 전에 일반 추적 용량으로 예약해야 합니다. 재시도는 같은 범위를 씁니다.
+`L`은 요청 전체가 공유하는 물리 전송 횟수 한도이며 요청이 시작할 때 고정됩니다. 기본은 4회이고,
+기존 OAuth 요청 프로필은 최대 18회까지 허용합니다. 모든 물리 전송이 이 유한한 한도를 함께 씁니다.
+
+한도 적용 여부, 적용할 루트·계정·제공자 풀의 토큰 한도, `L`은 요청이 시작할 때 정합니다.
+설정을 바꾸면 변경 후 시작하는 요청에만 적용됩니다. 이미 실행 중인 요청은 재시도와 후속 전송에서도 시작할 때의 정책을 유지합니다.
+한도를 켜거나 낮춰도 실행 중인 요청을 더 제한하지 않고, 높이거나 없애도 더 허용하지 않습니다.
+관측 모드로 시작한 요청은 끝날 때까지 관측 모드를 유지합니다.
+최종 정산은 보고가 끝날 때까지 기다립니다. 전송 ID를 지워도 잔액은 남습니다.
+적용되는 한도가 없으면 기존 관측 동작을 유지하며, 추적 용량이 찼을 때 기록을 생략하는 동작도 그대로입니다.
+
+Claude CLI·CodeBuddy·Qoder는 CLI 호출 한 번을 전송 한 번으로 셉니다. 실행 전 일반 예약이 필요하며, 예약하지 못하면 실행을 거부합니다.
+CLI 내부 재시도·도구 턴은 요청 전체 전송 횟수 한도에 따로 세지 않지만 비용은 보고된 실제 사용량으로 정산하며, 최초 추정량을 넘은 비용도 기록합니다.
+
+### 2.80.0으로 롤백: 계약 C
+
+새 기록은 기존 v1 형식과 `pool` 별칭을 씁니다. 수정하지 않은 2.80.0도 자신의 라벨별 규칙대로 읽고 압축·보존할 수 있습니다.
+최신 저널과 솔트를 유지하세요. 롤백 후 제공자별 통합 집계가 유지되거나, 같은 요청을 처음부터 2.80.0에서 처리했을 때와
+남은 한도가 같다는 보장은 없습니다. 다시 업그레이드하면 남아 있는 원래 잔액에
+현재 설정된 제공자의 자동 연결과 명시적 매핑을 적용합니다.
+별도의 실행 차단 장치나 조정 명령은 필요하지 않습니다.
+미공개 실험 버전의 `pool-current` / `poolContinuity` 이력은 계약 C에서 제외합니다.
+원래 잔액을 미확인 이력으로 보존하고 일반 보존 기간이 지난 뒤 만료시키며, 즉시 변환하거나 삭제하지 않습니다.
+
+완전하지만 잘못된 기록(마지막 줄의 `null` 포함)이 있으면 한도가 적용되는 요청을 거부합니다.
+압축은 유효한 잔액을 보존하며 계속할 수 있습니다. 실행 중 거부 상태는 재시작 뒤 깨끗한 저널을 읽을 때까지 남습니다.
+쓰다 끊긴 마지막 JSON 줄은 기존 복구 규칙을 따릅니다. 세부 조건과 오류 코드는
+[영문 원문](/reference/configuration/server/#historical-pool-continuity)을 참조하세요.

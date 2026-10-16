@@ -227,7 +227,7 @@ async function holdCatalogLock(sandbox: Sandbox): Promise<{
       writeFileSync(${JSON.stringify(ready)}, "ready");
       const waiter = new Int32Array(new SharedArrayBuffer(4));
       while (!existsSync(${JSON.stringify(release)})) Atomics.wait(waiter, 0, 0, 10);
-    });
+    }, { intent: "refresh", writer: "test" });
     if (outcome.kind !== "completed") throw new Error(JSON.stringify(outcome));
   `;
   const child = Bun.spawn([process.execPath, "--eval", script], {
@@ -714,3 +714,34 @@ test("two processes at the post-approval management seam serialize instead of in
   const fromB = slugs.some(s => s.includes("seam-model-b"));
   expect(fromA && fromB).toBe(false);
 }, SPAWN_BUDGET_MS);
+
+for (const ownership of ["foreign", "unknown"] as const) {
+  test(`sync-cache reports ${ownership} owner refusal in human and JSON output`, () => {
+    const sandbox = makeSandbox("ocx-cache-owner-refusal-");
+    const catalogPath = seedCatalog(sandbox, catalogBytes("list", true));
+    const cachePath = join(sandbox.codexHome, "models_cache.json");
+    writeFileSync(cachePath, "cache-before");
+    const foreignHome = join(sandbox.root, "other-opencodex"); mkdirSync(foreignHome);
+    writeFileSync(join(sandbox.codexHome, "opencodex-journal.json"), ownership === "unknown"
+      ? "unreadable journal evidence"
+      : JSON.stringify({ version: 1, originalConfig: "", originalProfile: null, pid: 1,
+        timestamp: "2026-10-04T00:00:00Z", opencodexHome: foreignHome }));
+    const before = readFileSync(catalogPath);
+    for (const json of [false, true]) {
+      const result = Bun.spawnSync([process.execPath,
+        ...withOwnedServiceHomePreload(["run", "src/cli/index.ts", "sync-cache", ...(json ? ["--json"] : [])], sandbox.preloadPath),
+      ], { cwd: repoRoot, env: sandboxChildEnv(sandbox), stdout: "pipe", stderr: "pipe" });
+      expect(result.exitCode).toBe(1);
+      if (json) {
+        expect(JSON.parse(result.stdout.toString())).toMatchObject({ ok: false, wrote: false,
+          outcome: "unavailable", reason: ownership === "foreign" ? "foreign-owner" : "owner-unknown" });
+      } else {
+        const warning = result.stderr.toString();
+        expect(warning).toContain(ownership === "foreign" ? "another OpenCodex home" : "could not be checked");
+        expect(warning).not.toContain(foreignHome);
+      }
+      expect(readFileSync(catalogPath)).toEqual(before);
+      expect(readFileSync(cachePath, "utf8")).toBe("cache-before");
+    }
+  }, SPAWN_BUDGET_MS);
+}

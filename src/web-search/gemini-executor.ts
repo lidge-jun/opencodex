@@ -15,7 +15,7 @@ import { cancelBodyOnAbort, signalWithTimeout } from "../lib/abort";
 import { readBoundedResponseBytes } from "../lib/bounded-body";
 import { sidecarEnter } from "../lib/sidecar-tracker";
 import { redactSecretString } from "../lib/redact";
-import { ANTIGRAVITY_REQUEST_UA } from "../adapters/google-antigravity-wire";
+import { antigravityUserAgentForWireModel } from "../adapters/google-antigravity-wire";
 import { resolveAntigravityEffortWireModel } from "../providers/antigravity-models";
 import { getProviderRegistryEntry } from "../providers/registry";
 import { MAX_SIDECAR_RESPONSE_BYTES, type WebSearchSource } from "./parse";
@@ -74,7 +74,7 @@ export async function runGeminiWebSearch(
         headers: {
           "Content-Type": "application/json",
           "Authorization": `Bearer ${token}`,
-          "User-Agent": ANTIGRAVITY_REQUEST_UA,
+          "User-Agent": antigravityUserAgentForWireModel(wireModelId),
         },
         body: JSON.stringify(envelope),
         signal: linkedSignal.signal,

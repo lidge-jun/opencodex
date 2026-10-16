@@ -381,7 +381,7 @@ describe("sidecar on429 wiring", () => {
 
     // Anthropic's pool is excluded from generic failover, so it needs its own arm here or a 429
     // inside a web-search/image turn is terminal while the same 429 on the main path rotates.
-    const anthropic = body.indexOf("rotateAnthropicAccountOnResponse(");
+    const anthropic = body.indexOf("rotateAnthropicAccountOnResponseForInstance(anthropicInstance,");
     expect(anthropic).toBeGreaterThan(oauth);
 
     // REACHABILITY, not mention. The first draft of this arm sat behind an unconditional early
@@ -426,11 +426,12 @@ describe("sidecar on429 wiring", () => {
     // bearer by hand would reintroduce the mixed-identity bug this helper exists to prevent.
     const snapshotUses = coreSource.match(/failoverAccountSnapshot\(/g) ?? [];
     const helperUses = coreSource.match(/applyFailoverSnapshot\(snapshot(?:, (?:next|retry)Parsed)?\)/g) ?? [];
-    // Nine includes Antigravity auth rotation, Kiro branches, native passthrough, plus
-    // the Antigravity 403 verify-account arm, which replays through the same snapshot
-    // helper so the rotated bearer keeps its account-matched project.
+    // Ten includes Antigravity auth rotation, Kiro branches, native passthrough, the
+    // Antigravity 403 verify-account arm, which replays through the same snapshot helper
+    // so the rotated bearer keeps its account-matched project, and the web-search sidecar's
+    // structured VALIDATION_REQUIRED rotation (#6710), which uses the same helper.
     // The explicit count keeps a newly added rotation site from skipping identity pairing.
-    expect(snapshotUses.length).toBe(9);
+    expect(snapshotUses.length).toBe(10);
     expect(helperUses.length).toBe(snapshotUses.length);
     // The bearer is written in exactly one place — inside the helper. Any other occurrence is a
     // rotation site that skipped the pairing rules.
@@ -548,7 +549,7 @@ describe("sidecar on429 wiring", () => {
     // identical limit recovers one loop over.
     const rotators = {
       key: /hasKeyPoolFailover\(/g,
-      anthropic: /rotateAnthropicAccountOnResponse\(/g,
+      anthropic: /rotateAnthropicAccountOnResponseForInstance\(anthropicInstance,/g,
       generic: /rotateGenericOAuthAccountOn429\(/g,
     };
     const counts = Object.fromEntries(
@@ -565,18 +566,24 @@ describe("sidecar on429 wiring", () => {
     //                rotateAntigravityAccountOnAuthRefusal instead. The new default
     //                only moves OAuth traffic; key-auth defaults and Anthropic's own
     //                wire/pool remain unchanged.
-    //   anthropic = 3: the same, MINUS runTurn -- that path is Cursor-only (cursor.ts is the
-    //                  sole adapter implementing runTurn), so Anthropic cannot reach it.
-    //   key       = 3: hasKeyPoolFailover guards the two 429 response loops plus the
-    //                  pre-stream 401 recovery site (a rejected key rotates instead of
-    //                  failing the request); the sidecar reaches the key pool through
+    //   anthropic = 3: its existing HTTP recovery sites; the self-authenticated Claude
+    //                  CLI does not authorize API-key recovery through runTurn.
+    //   key       = 7: hasKeyPoolFailover guards the three existing HTTP sites (two 429
+    //                  response loops and the pre-stream 401 recovery site), the pre-output
+    //                  Anthropic credit-balance loop (#6958), plus runTurn preflight activation,
+    //                  its explicitly permitted API-key recovery arm, and the streaming
+    //                  preflight stall bound. The billing loop needs only the key rotator: an
+    //                  OAuth credit refusal already rotates through the Anthropic account
+    //                  arm, and generic OAuth has no credit-balance contract. Send-accounting
+    //                  eligibility goes through isAnthropicBillingKeyPool, which is not a
+    //                  recovery site. The sidecar reaches the key pool through
     //                  rotateProviderTransportOn429 instead.
     //
     // Adding a recovery site means deciding, deliberately, which rotators it needs and
     // updating the matching number. That decision is the thing this test exists to force.
     expect(counts.generic).toBe(5);
     expect(counts.anthropic).toBe(3);
-    expect(counts.key).toBe(3);
+    expect(counts.key).toBe(7);
   });
 
   test("the verify-account arm moves via auth-refusal rotation, never rate-limit", () => {

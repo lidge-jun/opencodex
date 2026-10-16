@@ -24,6 +24,17 @@ Responses 表示是橋接的中心。原生相容的路由可跳過部分轉譯�
 
 在非 combo 的 Responses 請求上，OpenCodex 會把這種在允許清單中的 403 改寫為 HTTP 200 的 Responses 內容，帶有 `status: "incomplete"` 與 `incomplete_details.reason: "content_filter"`。改寫同時作用於 openai-chat 轉接器路徑與 openai-responses 直通（grok-4.6 / grok-4.5 OAuth）。串流使用相同的 incomplete 邊界。空白的 403 本文仍是錯誤。訂閱、點數、權限與 `not allowed to use this model` 的 403 仍是錯誤。Combo failover 仍看到原始的 HTTP 403。
 
+## 未宣告的工具呼叫
+
+在 Responses 端點上，當請求宣告了工具目錄時，原生直通回應若呼叫目錄之外由用戶端執行的工具，本回合會失敗而不會轉送該呼叫：串流回應傳送帶有錯誤碼 `undeclared_tool_call` 的 `response.failed` 事件，接著傳送 `data: [DONE]`；緩衝式 JSON 傳回 HTTP 502 與相同錯誤碼。拒絕發生在回應進入延續狀態之前。只有 `authMode: "forward"` 供應商或未宣告目錄的請求才略過這項拒絕。
+
+Chat Completions 與 Messages 端點支援延後提供的工具目錄：用戶端可先宣告部分目錄，再透過自己的工具登錄表於執行期間探索其餘工具；完整宣告邊界由用戶端登錄表決定，而非轉譯後的目錄快照。目錄之外的呼叫會轉送給用戶端驗證；但針對明確空目錄 `tools: []` 的呼叫仍會被拒絕。這些拒絕在每種協定中都保留 `undeclared_tool_call`：
+
+- **Chat Completions：**傳送包含帶有該錯誤碼的 OpenAI 格式 `error` 物件的 `data:` frame，然後關閉串流，不傳送成功完成訊號或 `[DONE]`；緩衝式 JSON 傳回 HTTP 502 與該錯誤碼。
+- **Messages：**傳送 Anthropic `event: error` frame，內文為 `{ "type": "error", "error": { "type": "api_error", "code": "undeclared_tool_call", ... } }`，不傳送成功的 `message_stop` 或 `[DONE]`；緩衝式 JSON 傳回 HTTP 502 `api_error` 與該錯誤碼。確定性的目錄違規不會被回報為可重試的 `overloaded_error`（HTTP 529）。
+
+此外，在所有輸入協定中，供應商回傳的 `default.` 命名空間呼叫都會正規化為用戶端宣告的裸名稱，即使延後目錄規則停用了上述拒絕檢查。
+
 ## 端點概覽
 
 | 客戶端介面 | 端點 | 成功的非串流結果 | 成功的串流或 socket 結果 |

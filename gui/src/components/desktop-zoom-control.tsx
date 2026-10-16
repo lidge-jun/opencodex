@@ -9,12 +9,15 @@ interface DesktopZoomControlProps {
   onStep: (action: ZoomAction) => void;
 }
 
-/** Sidebar row for the desktop window's page zoom; the same steps as Ctrl/Cmd + plus, minus and zero. */
+/**
+ * Icon-only page-zoom stepper for the desktop window; the same steps as Ctrl/Cmd + plus, minus
+ * and zero. It shares the theme row in the sidebar foot, so it carries no visible label of its own:
+ * the group name and each button's tooltip say what it does.
+ */
 export function DesktopZoomControl({ percent, canZoomIn, canZoomOut, onStep }: DesktopZoomControlProps) {
   const t = useT();
   return (
-    <div className="zoom-control" role="group" aria-label={t("zoom.label")}>
-      <span className="zoom-control__label">{t("zoom.label")}</span>
+    <div className="zoom-control" role="group" aria-label={t("zoom.label")} title={t("zoom.label")}>
       <button type="button" className="zoom-control__btn" disabled={!canZoomOut}
         onClick={() => onStep("out")} aria-label={t("zoom.out")} title={t("zoom.out")}>
         <IconMinus aria-hidden />

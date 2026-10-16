@@ -46,7 +46,7 @@ import {
 } from "../../integrations/mutation-flight";
 import { jsonResponse } from "../auth-cors";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
-import type { ManagementContext } from "./context";
+import { managementInferencePort, type ManagementContext } from "./context";
 import { exportSnapshotIdentity, loadExportModels, previewExportSnapshot } from "./model-rows";
 import {
   previewIntegration,
@@ -230,7 +230,7 @@ function asideOptions(ctx: ManagementContext): AsideProfileRouteOptions {
   return {
     input: () => input ??= {
       config: ctx.config,
-      port: Number(ctx.url.port) || ctx.config.port,
+      port: managementInferencePort(ctx),
       models: () => loadExportModels(ctx.config),
       store: integrationStore(),
       ...pathOverrides(),
@@ -252,7 +252,7 @@ async function buildIntegrationWriteInput(
     clientId,
     models: await loadExportModels(ctx.config),
     config: ctx.config,
-    port: Number(ctx.url.port) || ctx.config.port,
+    port: managementInferencePort(ctx),
     ...(droidReasoningDefaults === undefined ? {} : { droidReasoningDefaults: { ...droidReasoningDefaults } }),
     store,
     io: integrationMutationTestHooks?.io,
@@ -284,7 +284,7 @@ async function buildIntegrationPreviewInput(
       clientId,
       models: snapshot.models,
       config: ctx.config,
-      port: Number(ctx.url.port) || ctx.config.port,
+      port: managementInferencePort(ctx),
       ...(droidReasoningDefaults === undefined ? {} : { droidReasoningDefaults: { ...droidReasoningDefaults } }),
       store,
       io: integrationMutationTestHooks?.io,
@@ -316,6 +316,25 @@ function invalidClientResponse(ctx: ManagementContext): Response {
     code: "invalid_integration_client",
     validClients: INTEGRATION_CLIENT_IDS,
   }, 400, ctx.req, ctx.config);
+}
+
+/** Bind an explicitly scoped restore before profile delegation or mutation. */
+function restoreClientScopeResponse(ctx: ManagementContext, opId: string, expectedClientId: unknown, pathClientId?: IntegrationClientId): Response | null {
+  if (pathClientId !== undefined) {
+    if (expectedClientId !== undefined && (typeof expectedClientId !== "string" || !isIntegrationClientId(expectedClientId))) return invalidClientResponse(ctx);
+    if (expectedClientId !== undefined && expectedClientId !== pathClientId) return jsonResponse({ error: "restore identity does not match the client path", code: "integration_client_mismatch" }, 409, ctx.req, ctx.config);
+    expectedClientId = pathClientId;
+  }
+  if (expectedClientId === undefined) return null;
+  if (typeof expectedClientId !== "string" || !isIntegrationClientId(expectedClientId)) return invalidClientResponse(ctx);
+  try {
+    const operation = integrationStore().findOperation(opId);
+    if (!operation) return jsonResponse({ error: "integration operation not found", code: "integration_operation_not_found", opId }, 404, ctx.req, ctx.config);
+    if (operation.clientId !== expectedClientId) return jsonResponse({ error: "integration operation belongs to a different client", code: "integration_client_mismatch" }, 409, ctx.req, ctx.config);
+    return null;
+  } catch (error) {
+    return internalErrorResponse(error, ctx);
+  }
 }
 
 function isStringRecord(value: unknown): value is Record<string, string> {
@@ -619,7 +638,7 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
   if (url.pathname === "/api/client-integrations" && req.method === "GET") {
     try {
       const models = await loadExportModels(ctx.config);
-      const port = Number(url.port) || ctx.config.port;
+      const port = managementInferencePort(ctx);
       // One store for the whole collection read: without it this route retried
       // maintenance and counted snapshots in the default store even when the
       // caller had bound everything else to a temp root (A-gate round 13).
@@ -775,7 +794,7 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
     }
   }
 
-  if (url.pathname === "/api/client-integrations/restore/preview") {
+  if (url.pathname === "/api/client-integrations/restore/preview" || url.pathname === "/api/client-integrations/commandcode/restore/preview") {
     if (req.method !== "POST") return null;
     const parsed = await readJsonBody(ctx);
     if (parsed instanceof Response) return parsed;
@@ -786,6 +805,8 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
       return jsonResponse({ error: "confirmDrift must be a boolean", code: "invalid_confirm_drift" }, 400, req, ctx.config);
     }
     const opId = parsed.opId.trim();
+    const scopeResponse = restoreClientScopeResponse(ctx, opId, parsed.expectedClientId, url.pathname === "/api/client-integrations/commandcode/restore/preview" ? "commandcode" : undefined);
+    if (scopeResponse) return scopeResponse;
     try {
       const store = integrationStore();
       const operation = store.findOperation(opId);
@@ -819,7 +840,7 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
     }
   }
 
-  if (url.pathname === "/api/client-integrations/restore") {
+  if (url.pathname === "/api/client-integrations/restore" || url.pathname === "/api/client-integrations/commandcode/restore") {
     if (req.method !== "POST") return null;
     const parsed = await readJsonBody(ctx);
     if (parsed instanceof Response) return parsed;
@@ -837,6 +858,8 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
     }
 
     const opId = parsed.opId.trim();
+    const scopeResponse = restoreClientScopeResponse(ctx, opId, parsed.expectedClientId, url.pathname === "/api/client-integrations/commandcode/restore" ? "commandcode" : undefined);
+    if (scopeResponse) return scopeResponse;
     const confirmDrift = parsed.confirmDrift ?? false;
     const restoreBinding = planBindingOf(parsed);
     if (restoreBinding === "half") return halfBoundResponse(ctx);

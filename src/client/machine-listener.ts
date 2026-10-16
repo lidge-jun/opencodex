@@ -23,6 +23,8 @@ import { projectClientLinkChild, type ClientLinkSidecarRead } from "./link-statu
 import type { ClientLinkSupervisorStatus } from "./link-tunnel";
 import { packageVersion } from "../lib/package-version";
 import { linkRouteAllowed } from "../link/routes";
+import { linkHomeName, linkHomePhrase } from "./link-home";
+import { relayLinkManagementRead } from "./link-management-relay";
 
 const VERSION = packageVersion("0.0.0");
 const GUI_SPA_PATHS = new Set([
@@ -100,6 +102,8 @@ export function startMachineListener(
   if (linkMode && !connection.link) throw new Error("link machine listener requires link transport metadata");
   const managementAuth = deps.managementAuthState ?? initializeManagementAuthState(config);
   let hubReachability: HubReachability = "unknown";
+  const readSidecar = deps.readSidecar ?? (() => readClientLinkState());
+  const sidecarOrNull = () => { const read = readSidecarSafely(readSidecar); return read === "invalid" ? null : read; };
   const machineApiDeps: MachineApiDeps = {
     sync: deps.machineApi?.sync ?? syncConnectedClient,
     disconnect: deps.machineApi?.disconnect ?? disconnectClient,
@@ -108,8 +112,11 @@ export function startMachineListener(
     }),
     hubReachability: deps.machineApi?.hubReachability ?? (() => hubReachability),
     setHubReachability: deps.machineApi?.setHubReachability ?? (value => { hubReachability = value; }),
+    ...(linkMode ? { linkHomeName: () => linkHomeName(connection, sidecarOrNull) } : {}),
   };
-  const relayEnabled = !linkMode && connection.managementTransport === "relay";
+  // A link Child relays its dashboard's management reads to the Home over the link (#6957);
+  // a hub client relays over its management transport when that is `relay`.
+  const relayEnabled = linkMode || connection.managementTransport === "relay";
   // Link mode only. Everything is resolved once here, so a relayed request reads no file and
   // builds no policy: the key is cached, the loopback policy is fixed at bind like the listener.
   const inboundBodyLimit = resolveInboundBodyLimitBytes(config.maxInboundBodyBytes);
@@ -123,8 +130,6 @@ export function startMachineListener(
       relay: { fetchImpl: deps.fetchImpl, bodyLimitBytes: inboundBodyLimit, tunnel: deps.linkTunnel, ...deps.linkRelay },
     }
     : null;
-  const readSidecar = deps.readSidecar ?? (() => readClientLinkState());
-
   return (deps.serve ?? (options => Bun.serve(options)))({
     port: port ?? config.port ?? 10100,
     hostname: "127.0.0.1",
@@ -147,9 +152,29 @@ export function startMachineListener(
       }
       if (url.pathname.startsWith("/api/machine/hub-relay/")) {
         if (!relayEnabled) return json404(req);
+        const prefix = "/api/machine/hub-relay";
+        if (linkIngress) {
+          const suffix = `${url.pathname.slice(prefix.length)}${url.search}`;
+          // The dashboard's shared plane bootstraps here. On a link Child that plane is this
+          // listener, so it receives this listener's own session; no Home credential exists.
+          if (suffix === "/opencodex-session") {
+            if (req.method !== "GET") return json404(req);
+            const session = issueGuiSession(req, config, managementAuth, { trustedTailscaleIngress: false });
+            return session ? serveSessionBootstrap(session) : Response.json({ error: "session unavailable" }, { status: 503 });
+          }
+          const authError = requireManagementAuth(req, managementAuth, config);
+          if (authError) return authError;
+          if (managementPrincipal(req, managementAuth, config) !== "gui-session") {
+            return Response.json({ error: "opencodex machine GUI session required" }, { status: 401 });
+          }
+          const response = await relayLinkManagementRead(req, suffix, linkIngress, linkHomePhrase(connection, sidecarOrNull));
+          if (response.status === 401) hubReachability = "unauthorized";
+          else if (response.status >= 500) hubReachability = "offline";
+          else if (response.status !== 403) hubReachability = "online";
+          return response;
+        }
         const authError = requireMachineAuth(req, managementAuth, config);
         if (authError) return authError;
-        const prefix = "/api/machine/hub-relay";
         const suffix = `${url.pathname.slice(prefix.length)}${url.search}`;
         const response = await relayHubManagementRequest(req, suffix, {
           managementUrl: connection.managementUrl,

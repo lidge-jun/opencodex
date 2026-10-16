@@ -23,11 +23,11 @@
  *    nesting into a file holding the user's other providers would trade a
  *    silent no-op for a silent loss.
  */
-import { EXPORT_CLIENTS, ClientPathError, type BuildContribution, type ConfigFormat } from "../clients/config-export";
+import { EXPORT_CLIENTS, ClientPathError, zcodeLegacyHomeDir, zcodeProviderStorePath, type BuildContribution, type ConfigFormat } from "../clients/config-export";
 import { PARSE_FAILED, loadTarget, parseConfig, type IntegrationIO } from "./config-io";
 import { AmbiguousSelectorError, InvalidSelectorError, readPath } from "./merge";
 import type { OwnershipRecord } from "./ownership";
-import { INTEGRATION_CLIENTS, type IntegrationClientId } from "./registry";
+import { INTEGRATION_CLIENTS, resolveIntegrationPaths, type ResolvedIntegrationPaths, type IntegrationClientId } from "./registry";
 
 export interface IntegrationTarget {
   /** The file this operation reads, writes, journals and records ownership for. */
@@ -37,6 +37,12 @@ export interface IntegrationTarget {
   /** The contribution shape that file's reader understands. */
   readonly buildContribution: BuildContribution;
   /**
+   * The one YAML leaf patched in place in that file, or null when the writer
+   * re-renders the document. A client's config file and its store have
+   * different shapes, so this belongs to the target rather than the client.
+   */
+  readonly sourcePreservingYaml: { readonly path: readonly string[] } | null;
+  /**
    * Set when a write to the file above would not reach the client.
    *
    * `why` is carried rather than re-derived because the cases have different
@@ -45,6 +51,8 @@ export interface IntegrationTarget {
    * to is as effective as it ever was.
    */
   readonly ineffective: IneffectiveWrite | null;
+  /** Active root unknown; the named config is only a historical removal target. */
+  readonly pathError?: string;
 }
 
 export interface IneffectiveWrite {
@@ -60,9 +68,19 @@ export interface IneffectiveWrite {
    * with the store itself as the target: a client that bumps its schema after
    * we wrote the store leaves our block there, removable, and the file no
    * longer one we may merge into.
+   *
+   * `missing-store` — the store does not exist, but the client already manages it
+   * (DSH: a Desktop profile manifest is present). DSH renames `settings.yaml` to
+   * `settings.yaml.imported` and imports it on startup, so a config-file write would
+   * orphan our ownership record. `remedy` says how to bring the store back, and
+   * `emptyDocument` is what to create it with.
    */
-  readonly why: "owned-config-file" | "unestablished-schema";
+  readonly why: IneffectiveWriteReason;
+  readonly remedy?: string;
+  readonly emptyDocument?: string;
 }
+
+export type IneffectiveWriteReason = "owned-config-file" | "unestablished-schema" | "missing-store";
 
 function configFileTarget(
   clientId: IntegrationClientId,
@@ -74,6 +92,7 @@ function configFileTarget(
     configPath,
     format: exportSpec.format,
     buildContribution: exportSpec.buildContribution,
+    sourcePreservingYaml: INTEGRATION_CLIENTS[clientId].sourcePreservingYaml ?? null,
     ineffective,
   };
 }
@@ -87,6 +106,7 @@ function storeTarget(
     configPath,
     format: declared.format,
     buildContribution: declared.buildContribution,
+    sourcePreservingYaml: declared.sourcePreservingYaml ?? null,
     ineffective,
   };
 }
@@ -135,13 +155,50 @@ export function resolveIntegrationTarget(args: {
   record: OwnershipRecord | null;
   env?: NodeJS.ProcessEnv;
   home?: string;
+  resolvedPaths?: ResolvedIntegrationPaths;
 }): IntegrationTarget {
   const { clientId, configPath, io, record } = args;
   const declared = INTEGRATION_CLIENTS[clientId].currentStore;
   if (!declared) return configFileTarget(clientId, configPath, null);
-  const storePath = declared.path(args.env, args.home);
+  const paths = clientId === "zcode"
+    ? args.resolvedPaths ?? resolveIntegrationPaths(clientId, args.env, args.home, undefined, io)
+    : undefined;
+  const storePath = paths?.storePath ?? declared.path(args.env, args.home, io);
   const kind = io.statKind(storePath);
-  if (kind === "missing") return configFileTarget(clientId, configPath, null);
+  const owned = record !== null && record.clientId === clientId ? record : null;
+  const historicalStore = clientId === "zcode"
+    ? zcodeProviderStorePath({ ...(args.env ?? process.env), ZCODE_DATA_DIR: zcodeLegacyHomeDir(args.env, args.home) }, args.home, io)
+    : null;
+  if (clientId === "zcode" && owned && owned.configPath !== configPath && owned.configPath !== storePath
+    && owned.configPath !== historicalStore
+    && INTEGRATION_CLIENTS[clientId].bindsDriftedRecord?.(owned.configPath, args.env, args.home) !== true
+    && io.statKind(owned.configPath) !== "missing") {
+    throw new ClientPathError(`ZCode ownership remains at ${owned.configPath}. Its location cannot be bound to the current home or selectors; restore the original selectors and disable it before enabling a different data root. Ownership and recovery evidence are retained.`);
+  }
+  // An explicit provider-file selector can establish the active target even
+  // when the bootstrap is unreadable, but absence cannot justify a legacy write.
+  if (paths?.pathError && (!(args.env ?? process.env).ZCODE_PERSONAL_PROVIDER_CONFIG_FILE?.trim() || kind !== "file")) {
+    const removal = owned?.configPath === historicalStore
+      ? storeTarget(declared, historicalStore)
+      : configFileTarget(clientId, configPath, null);
+    return { ...removal, pathError: paths.pathError };
+  }
+  if (historicalStore && owned?.configPath === historicalStore && historicalStore !== storePath
+    && recordedBlockStillPresent(io, declared.format, historicalStore, owned)) {
+    return storeTarget(declared, historicalStore, { store: storePath, why: "owned-config-file" });
+  }
+  // Relocation must not orphan a block at the default historical path, even
+  // when the relocated store has not been created yet.
+  if (clientId === "zcode" && owned?.configPath === configPath && configPath !== paths?.configPath
+    && recordedBlockStillPresent(io, EXPORT_CLIENTS[clientId].format, configPath, owned)) {
+    return configFileTarget(clientId, configPath, { store: storePath, why: "owned-config-file" });
+  }
+  if (kind === "missing") {
+    const missing = declared.missingStore;
+    return missing?.readsStore(storePath, path => io.statKind(path)) === true
+      ? configFileTarget(clientId, configPath, { store: storePath, why: "missing-store", remedy: missing.remedy, emptyDocument: missing.emptyDocument })
+      : configFileTarget(clientId, configPath, null);
+  }
   // Only proven absence permits a legacy write. Unreadable or non-file stores
   // cannot establish what the client reads; preserve the recorded removal target.
   if (kind !== "file") {
@@ -159,7 +216,6 @@ export function resolveIntegrationTarget(args: {
    * file holds it. Disable has to remove what we wrote from where we wrote it,
    * and an apply must never leave a block in one file while writing another.
    */
-  const owned = record !== null && record.clientId === clientId ? record : null;
   if (owned?.configPath === storePath && recordedBlockStillPresent(io, declared.format, storePath, owned)) {
     return storeTarget(declared, storePath, established ? null : unestablished);
   }
@@ -191,6 +247,7 @@ export function declaredIntegrationTarget(args: {
   resolvedConfigPath: string;
   env?: NodeJS.ProcessEnv;
   home?: string;
+  io?: Pick<IntegrationIO, "readText">;
 }): IntegrationTarget | null {
   const { clientId, configPath, resolvedConfigPath } = args;
   if (configPath === resolvedConfigPath) return configFileTarget(clientId, configPath, null);
@@ -199,8 +256,11 @@ export function declaredIntegrationTarget(args: {
   }
   const declared = INTEGRATION_CLIENTS[clientId].currentStore;
   if (!declared) return null;
+  if (clientId === "zcode" && configPath === zcodeProviderStorePath(
+    { ...(args.env ?? process.env), ZCODE_DATA_DIR: zcodeLegacyHomeDir(args.env, args.home) }, args.home, args.io,
+  )) return storeTarget(declared, configPath);
   try {
-    if (declared.path(args.env, args.home) !== configPath) return null;
+    if (declared.path(args.env, args.home, args.io) !== configPath) return null;
   } catch (error) {
     // A store the operator relocated with a path we cannot resolve proves
     // nothing about the row, so the row is not a legal target.

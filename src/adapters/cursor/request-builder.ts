@@ -102,8 +102,8 @@ export function applyCursorToolBudget(
   const tryKeep = (tool: OcxTool): boolean => {
     if (keptSet.has(tool) || kept.length >= CURSOR_TOOL_COUNT_LIMIT) return keptSet.has(tool);
     // Repeated protobuf message fields serialize as concatenated tag/length/value entries,
-    // so each one-entry wrapper size is the exact additive contribution to McpTools.
-    const candidateBytes = cursorMcpToolEncodedSize(tool, toolChoice);
+    // so each wrapper uses the same catalog-dependent names and choice as registration.
+    const candidateBytes = cursorMcpToolEncodedSize(tool, toolChoice, eligible);
     if (keptBytes + candidateBytes > CURSOR_TOOL_BYTES_LIMIT) return false;
     kept.push(tool);
     keptSet.add(tool);
@@ -129,7 +129,7 @@ export function applyCursorToolBudget(
       if (!occupant || isCursorExecutionPathTool(occupant)) continue;
       kept.splice(i, 1);
       keptSet.delete(occupant);
-      keptBytes -= cursorMcpToolEncodedSize(occupant, toolChoice);
+      keptBytes -= cursorMcpToolEncodedSize(occupant, toolChoice, eligible);
       if (kept.length < CURSOR_TOOL_COUNT_LIMIT && keptBytes + needBytes <= CURSOR_TOOL_BYTES_LIMIT) {
         return;
       }
@@ -141,7 +141,7 @@ export function applyCursorToolBudget(
   // earlier same-priority pins; evict wait/patch/filler rather than ship wait-only.
   for (const tool of eligible) {
     if (!isCursorExecutionPathTool(tool) || keptSet.has(tool)) continue;
-    const need = cursorMcpToolEncodedSize(tool, toolChoice);
+    const need = cursorMcpToolEncodedSize(tool, toolChoice, eligible);
     if (need > CURSOR_TOOL_BYTES_LIMIT) continue;
     evictNonExecutionPath(need);
     tryKeep(tool);
@@ -157,7 +157,7 @@ export function applyCursorToolBudget(
       keptSet.delete(tool);
       const index = kept.indexOf(tool);
       if (index >= 0) kept.splice(index, 1);
-      keptBytes -= cursorMcpToolEncodedSize(tool, toolChoice);
+      keptBytes -= cursorMcpToolEncodedSize(tool, toolChoice, eligible);
     }
   }
 
@@ -171,8 +171,8 @@ export function applyCursorToolBudget(
 
 function catalogLimitNote(kept: readonly OcxTool[], omitted: readonly OcxTool[]): string | undefined {
   if (omitted.length === 0) return undefined;
-  const recoverable = kept.some(tool => tool.toolSearch || cursorToolWireName(tool) === "tool_search");
-  const names = omitted.slice(0, 12).map(cursorToolWireName);
+  const recoverable = kept.some(tool => tool.toolSearch || cursorToolWireName(tool, kept) === "tool_search");
+  const names = omitted.slice(0, 12).map(tool => cursorToolWireName(tool, kept));
   const remainder = omitted.length - names.length;
   const omittedSummary = `${names.join(", ")}${remainder > 0 ? `, and ${remainder} more` : ""}`;
   return recoverable
@@ -509,8 +509,21 @@ export function createCursorRequest(
 ): CursorRunRequest {
   const messages = cursorRequestMessagesFromRaw(parsed.context.messages);
   const activeText = [...messages].reverse().find(message => message.role === "user" || message.role === "developer")?.content ?? "";
-  const visibleTools = cursorToolsForActivePrompt(parsed.context.tools, activeText, parsed.options.toolChoice);
-  const budget = applyCursorToolBudget(visibleTools, parsed.options.toolChoice);
+  const catalog = parsed.context.tools ?? [];
+  const originalChoice = parsed.options.toolChoice;
+  // Resolve accepted bare wire aliases before filtering can remove their shell-bridge context.
+  // Keep the original selection so a semantic name cannot widen to a namespaced sibling.
+  const selectedTools = catalog.filter(tool => cursorToolAllowedByChoice(tool, originalChoice, catalog));
+  const semanticChoiceName = (name: string): string => selectedTools.find(tool =>
+    !tool.namespace && cursorToolWireName(tool, catalog) === name
+    && cursorToolAllowedByChoice(tool, { name }, catalog))?.name ?? name;
+  const toolChoice = originalChoice && typeof originalChoice === "object"
+    ? "name" in originalChoice
+      ? { ...originalChoice, name: semanticChoiceName(originalChoice.name) }
+      : { ...originalChoice, allowedTools: originalChoice.allowedTools.map(semanticChoiceName) }
+    : originalChoice;
+  const visibleTools = cursorToolsForActivePrompt(selectedTools, activeText, toolChoice);
+  const budget = applyCursorToolBudget(visibleTools, toolChoice);
   const limitNote = catalogLimitNote(budget.tools, budget.omitted);
   const model = normalizeCursorModelId(
     parsed.modelId,
@@ -536,7 +549,7 @@ export function createCursorRequest(
     ...(budget.tools.length === 0 && !cursorClientThreadOwner(parsed)
       ? { suppressDefaultCursorToolCatalog: true }
       : {}),
-    ...(parsed.options.toolChoice ? { toolChoice: parsed.options.toolChoice } : {}),
+    ...(toolChoice ? { toolChoice } : {}),
     ...(parsed.options.parallelToolCalls !== undefined ? { parallelToolCalls: parsed.options.parallelToolCalls } : {}),
   };
   const resolved = resolveCursorCheckpoint(parsed, request, options);

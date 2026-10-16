@@ -63,7 +63,7 @@ function parseEvidence(raw: unknown): { evidence: PolicyRequestEvidence; ok: boo
   return { evidence, ok: true };
 }
 
-function parseCandidateEvidence(raw: unknown): PolicyCandidateEvidence[] | null {
+function parseCandidateEvidence(raw: unknown, config: OcxConfig): PolicyCandidateEvidence[] | null {
   if (!Array.isArray(raw)) return null;
   const out: PolicyCandidateEvidence[] = [];
   for (const item of raw) {
@@ -87,10 +87,10 @@ function parseCandidateEvidence(raw: unknown): PolicyCandidateEvidence[] | null 
       // caller does not supply an explicit quota object, so a dry-run following
       // the documented shape reports the same cached account quota as routing.
       ...(item.quota === undefined && typeof item.codexAccountId === "string"
-        ? { quota: quotaEvidenceForCandidate({ provider, model, codexAccountId: item.codexAccountId }) }
+        ? { quota: quotaEvidenceForCandidate({ provider, model, codexAccountId: item.codexAccountId }, config) }
         : {}),
       ...(item.quota === undefined && typeof item.accountRef === "string" && typeof item.codexAccountId !== "string"
-        ? { quota: quotaEvidenceForCandidate({ provider, model, accountRef: item.accountRef }) }
+        ? { quota: quotaEvidenceForCandidate({ provider, model, accountRef: item.accountRef }, config) }
         : {}),
     });
   }
@@ -392,7 +392,7 @@ export async function handleRoutingProfileRoutes(ctx: ManagementContext): Promis
     if (labActivationRequired(config, getConfigDir())) activateLab(config, getConfigDir());
     const candidateEvidence = body.candidates === undefined
       ? assembleCandidateEvidence(config, resolvedProfile, now)
-      : parseCandidateEvidence(body.candidates);
+      : parseCandidateEvidence(body.candidates, config);
     if (candidateEvidence === null) {
       return jsonResponse({ error: { code: "invalid_candidates", message: "candidates must be an array of evidence objects" } }, 400, req, config);
     }

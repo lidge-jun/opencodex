@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { effectiveDeclaration, withoutComments } from "./helpers/css-declarations";
 
 /**
- * WP3 (devlog/_plan/260830_models_provider_header/040_cap_cluster_and_occupied_slot.md).
+ * WP3 (devlog/_fin/260830_models_provider_header/040_cap_cluster_and_occupied_slot.md).
  *
  * The defect the user actually reported: openai showed a 1.05M cap value and
  * anthropic showed nothing, because the cap Select was rendered only when the cap

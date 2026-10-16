@@ -61,7 +61,12 @@ app-server binary. It relaunches without that override and removes the launcher 
 `com.openai.codex` bundle is found it removes the launcher, relaunches nothing and
 exits 1. Status reports
 the experimental flag, launcher presence, and the verified bundle process's override
-without printing its environment. Other platforms reject all three operations.
+without printing its environment. Discovery exceptions and failed process inspection
+are unknown rather than evidence of an absent app. Launch preflights process inspection
+before writing the launcher; both operations refuse to open when exit cannot be confirmed.
+Restore keeps the launcher on those failures. A later probe may fail after launch has
+atomically updated it; this is not a transaction spanning the launcher and app restart.
+Other platforms reject all three operations.
 
 The launcher and its executable paths are local code-execution inputs. This
 integration installs no network listener, CA, PAC or background watcher, and

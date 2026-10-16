@@ -47,9 +47,9 @@ test("the decode rate uses the generation window when the row carries one", () =
   // A reasoning turn: 800 output tokens (reasoning included) generated from 1s to 9s, first
   // VISIBLE delta at 6s, stream closed at 10s. The post-TTFT window would be 4s and report 200.
   const row = { durationMs: 10_000, firstOutputMs: 6_000, usageStatus: "reported" as const, usage: { inputTokens: 10, outputTokens: 800 } };
-  expect(decodeTokPerSecondResult(row)).toEqual({ kind: "value", value: 200, estimated: true });
+  expect(decodeTokPerSecondResult(row)).toEqual({ kind: "value", value: 200, estimated: true, timingBasis: "legacy-post-visible-output" });
   expect(decodeTokPerSecondResult({ ...row, genStartMs: 1_000, lastOutputMs: 9_000 }))
-    .toEqual({ kind: "value", value: 100, estimated: true });
+    .toEqual({ kind: "value", value: 100, estimated: true, timingBasis: "generation-window" });
   // The floor still applies, and a generation window never falls back to the TTFT window.
   expect(decodeTokPerSecondResult({ ...row, genStartMs: 8_500, lastOutputMs: 9_000 }))
     .toEqual({ kind: "unavailable", reason: "decode_window_too_short" });

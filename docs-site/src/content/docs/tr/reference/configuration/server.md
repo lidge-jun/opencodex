@@ -24,6 +24,7 @@ yardımcı özellikleri nasıl çalıştıracağını kontrol eder.
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | devre dışı | İsteğe bağlı arşivlenmiş oturum temizleme politikası. Asla örtük olarak etkinleştirilmez. |
 | `appOwnedMemoryBudgetMb?` | `number` | `256` | Çıkarılabilir uygulamaya ait günlükler, önbellekler, bloblar ve devam yükleri için MiB cinsinden sınır. Aralık 64–4096; bir RSS sınırı değildir. |
 | `metricsExport.enabled?` | `boolean` | `false` | Kimliği doğrulanmış `GET /api/metrics` üzerinde süreç yerel toplu istek metriklerini etkinleştirir. Yeniden başlatma gerekir; devre dışıyken yol 404 döndürür ve dışa aktarıcı etkinliği başlamaz. |
+| `serviceHealthRecovery.enabled?` | `boolean` | `false` | Arka plan hizmeti için isteğe bağlı kurtarma: küçük bir gözcü süreç `/healthz` adresini yoklar ve proxy canlı kalıp art arda yoklamalara yaklaşık bir dakika hiç yanıt vermezse onu sonlandırır; hizmet yöneticisi (Görev Zamanlayıcı, launchd, systemd, WinSW) yeniden başlatır. Yalnızca yönetilen hizmet alt süreci başlatır; takılan sürecin tuttuğu istekler yeniden oynatılmaz. Saatte en fazla üç kurtarma. Yeniden başlatma gerekir. Otomatik kurtarma sayısal bir bağlantı adresi (veya varsayılan localhost/joker eşleştirme) gerektirir; DNS bağlantı adları izlenmez. Kaydedilen adresin veya bağlantı noktasının değişmesi izlemeyi durdurur. |
 | `codexAutoStart?` | `boolean` | `true` | Codex dolgusunun Codex'i başlatmadan önce `ocx ensure` çalıştırmasına izin verin. False, ensure'ı bir işlem yapmayan (no-op) hale getirir. |
 | `codexShimAutoRestore?` | `boolean` | `true` | Tamamlanan harici bir Codex güncellemesi değiştirdikten sonra kurulu bir dolguyu geri yükleyin. Ortam vazgeçmesi: `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`. |
 | `syncResumeHistory?` | `boolean` | `true` | Tersine çevrilebilir Codex App geçmişi uyumluluğu. Orijinal meta veriler yedeklenir ve `ocx stop` / `ocx restore` tarafından geri yüklenir. |
@@ -206,11 +207,14 @@ kullanır. Tanınan kaynak model öneklerini yapılandırılmış başka bir mod
 yönlendirmek için `shadowCallIntercept`'i etkinleştirin. Değiştirilen istek, yapılandırılmış
 akıl yürütme çabasını korur.
 `sourceModels`'ı yalnızca bir istemci farklı yardımcı kimlikleri kullandığında
-ayarlayın. Yakalama model tabanlıdır: çıplak model kimliği `sourceModels` ile
-eşleşen her istek, normal `request_kind: "turn"` istekleri dahil, yeniden
-yönlendirilebilir. `x-openai-subagent: collab_spawn` veya `x-codex-turn-metadata` JSON üst bilgisindeki
-`subagent_kind: "thread_spawn"` ile oluşturulmuş çocuk olarak işaretlenen istekler muaftır; açıkça oluşturulan
-bir alt aracının modeli korunur.
+ayarlayın. Çıplak model kimliği `sourceModels` ile eşleşen istekler yakalanabilir; ancak
+`x-codex-turn-metadata` içinde hem `request_kind: "turn"` hem de `thread_source: "user"` varsa
+kullanıcı turu seçtiği modeli korur. bağlantı üst bilgisi `x-openai-subagent: collab_spawn` (HTTP isteği veya WebSocket el sıkışması) veya meta verideki
+`subagent_kind: "thread_spawn"` ile işaretlenen çocuklar da modeli korur. WebSocket'te yalnızca her
+çerçevenin `client_metadata["x-codex-turn-metadata"]` değeri kullanılır; el sıkışmadaki tur meta verisi sonraki
+çerçeveleri sınıflandırmaz. Eksik veya bozuk meta veri mevcut yakalama davranışını korur. Yardımcı
+çağrılar da `request_kind: "turn"` taşıyabilir; bu alan tek başına muafiyet sağlamaz. Kurallar hem
+somut model hedeflerine hem de combo hedeflerine uygulanır.
 
 ```json
 {
@@ -317,3 +321,35 @@ This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_
 Claude Code **2.1.257 or newer** is required for FORCE. Plugin and built-in agents (including Explore/Plan) and per-call model arguments are overridden. Forks and subagent skills with `model: inherit` keep the main conversation model. The main loop and Haiku/small-fast sidecars are unaffected. Existing roster files remain available.
 
 The dashboard warns about old or unknown CLI versions, unavailable targets, and either variable already present in `settings.json` → `env` (which overrides launch env). Detection is read-only and server-local: it cannot inspect another launch shell, another machine, or project-local settings. An unknown result is not proof of force support.
+
+## Havuz harcama geçmişinin sürekliliği
+
+Havuz sınırı, istek günlüğündeki hesap etiketinden bağımsız olarak yönlendirmenin seçtiği kanonik sağlayıcıya uygulanır. Şu anda yapılandırılmış her `P` sağlayıcısı için bu kuruluma ait tuzlanmış havuz takma adı `h(pool, P)`, bakiyeler okunurken otomatik olarak `P` ile eşleştirilir. Aynı takma ad altında tutulan eski bakiyeler de buna dahildir. Bağımsız sağlayıcı sınırları için elle öz eşleme eklemek veya tuzu kullanarak karma hesaplamak gerekmez.
+
+Hesap sıra numarası içeren etiketler dahil diğer geçmiş etiketlerin sahibi otomatik olarak belirlenmez. Her özgün bakiye, eşleştiği sağlayıcı grubunda bir kez sayılır. Hâlâ eşleşmemiş pozitif bakiyeler, ihtiyatlı olmak için her aday havuza birer kez eklenir. Kesinleşmiş, rezerve edilmiş ve çözümlenmemiş kullanımın tümü hesaba katılır. Bu yüzden belirsiz geçmiş, kullanılmamış bir havuzu da sınırlayabilir. Güncel adlar ve hesap sırası geçmişin sahibini kanıtlamaz. Kök ve kimlik sınırları bağımsız kalır.
+
+Sahibini doğruladığınız geçmiş için `config.json` dosyasının en üst düzeyindeki `spendPoolAliases` alanına eşleme ekleyin; bu alan `spend` içinde olmamalıdır. Anahtar, bu kurulumun günlüğündeki tam 32 küçük harfli onaltılık karakterden oluşan tuzlanmış havuz takma adıdır. Değer, doğrulanmış ve şu anda yapılandırılmış sağlayıcının tam kimliğidir; başında veya sonunda boşluk bulunamaz. Günlüğü, tuzu ve eşleme kanıtını gizli tutun. Yapılandırılmış bir sağlayıcının kendi takma adı başka bir sağlayıcıya atanamaz. Sağlayıcı kümesi değiştiğinde doğrulama tekrarlanır; doğrulama mevcut tuzu okur, yenisini oluşturmaz.
+
+Otomatik ve açık eşlemeler yalnızca okuma sırasında uygulanır; özgün bakiyeleri taşımaz veya günlüğe kimlik bağlantısı yazmaz. Açık bir eşleme kaldırılınca geçmiş yeniden belirsiz olur; ancak takma ad halen yapılandırılmış bir sağlayıcının kendi takma adıysa otomatik eşleme sürer. Geçersiz eşlemeler yazılırken reddedilir. Elle yapılmış geçersiz bir değişiklik mevcut sınırları korur ve havuza yeni istek kabulünü engeller.
+
+Etkin olmayan belirsiz geçmiş, yalnızca son etkinliği `spend.retentionDays` eşiğinden kesin olarak daha eski olduğunda sona erer. Kapasite baskısı pozitif bakiyeler için bu süreyi kısaltmaz. Etkin rezervasyonlar ve hedefleri sıfır belirteçte bile korunur. Kabul kararında daha düşük toplam kullanılmadan önce silme kaydı kalıcı olarak yazılır.
+
+### Rezervasyonlar ve gönderim sınırı
+
+Kök, kimlik veya havuz sınırı geçerliyse her hedef ya da anahtarın ilk gönderimi normal izleme kapasitesinden bir rezervasyon gerektirir. Rezervasyon alınamazsa sağlayıcıya gönderim yapılmaz. Aynı hedefteki yeniden denemeler aynı kapsamları kullanır; farklı hedef veya anahtar yeni rezervasyon gerektirir. `L`, istek başladığında sabitlenen, isteğin tamamı için fiziksel gönderim sınırıdır. Varsayılan değer dörttür; mevcut OAuth istek profili en fazla on sekiz gönderime izin verir.
+
+Sınırların uygulanıp uygulanmayacağı, geçerli kök, kimlik ve havuz belirteç sınırları ile `L`, her isteğin başlangıcında belirlenir. Yapılandırma değişiklikleri yalnızca değişiklikten sonra başlayan istekleri etkiler. Devam eden istekler, tüm yeniden denemeler ve devam çağrıları için başlangıç politikalarını korur: bir sınırı etkinleştirmek veya düşürmek onları daha fazla kısıtlamaz; yükseltmek veya kaldırmak da daha fazla izin vermez. Yalnızca gözlem modunda başlayan bir istek, tamamlanana kadar bu modda kalır.
+
+Son hesaplaşma, başlamış gönderimlerin raporlarını bekler. Bir gönderim kimliği ancak muhasebesi kalıcılaştıktan sonra unutulur; bakiyesi silinmez. Sınır faturayı değil gönderim sayısını sınırlar: ilk tahmini aşan gerçek kullanımın tamamı kaydedilir. Geçerli bir harcama sınırı yoksa yalnızca gözlem davranışı sürer; izleme kapasitesi dolduğunda kayıtların atlanması da değişmez. Kimlik bağlantısı içeren yeni kontrol noktaları eklenmez.
+
+Claude CLI, CodeBuddy ve Qoder için her CLI çağrısı bir gönderim sayılır. Başlatmadan önce normal rezervasyon gerekir; alınamazsa çağrı reddedilir. CLI içindeki yeniden denemeler ve araç turları istek genelindeki gönderim sınırını ayrıca tüketmez. Maliyetleri, ilk tahmini aşan bölüm dahil, raporlanan gerçek kullanıma göre hesaplanır.
+
+### 2.80.0 sürümüne dönüş: C sözleşmesi
+
+Yeni kayıtlar olağan v1 biçimini ve `pool` takma ad alanını kullanır. Değiştirilmemiş 2.80.0 bunları kendi etiket bazlı kurallarıyla okur, günlüğü sıkıştırır ve saklama süresini uygular. Güncel günlüğü ve tuzu koruyun; eski bir kopyayı geri yüklemek, o kopyadan sonra kaydedilen harcamayı kaybettirir. Geriye dönük yama, başlatıcı engeli veya mutabakat komutu gerekmez.
+
+Sürüm düşürme, kanonik toplamların korunacağını veya aynı trafik baştan beri 2.80.0 üzerinde işlenseydi kalacak kotayla eşitliği garanti etmez. Yeniden yükseltmede, yapılandırılmış sağlayıcıların otomatik öz eşlemeleri ve güncel açık eşlemeler, 2.80.0 tarafından hâlâ tutulan özgün bakiyelere uygulanır. Yeni kontrol noktaları eski okuyucunun koruması gereken kimlik bağlantısı metaverisi içermez.
+
+Yayımlanmamış deneysel sürümlerin `pool-current` veya `poolContinuity` içeren günlükleri, daha sonra sıkıştırılsalar bile C sözleşmesinin dışındadır. Özgün bakiyeleri normal saklama süresi dolana kadar belirsiz geçmiş olarak tutulur; hemen dönüştürülmez veya silinmez.
+
+Tam ama geçersiz bir kayıt, son satırdaki `null` dahil, sınır uygulanan isteklerin kabulünü engeller. Sıkıştırma geçerli muhasebeyi temiz bir kontrol noktasında koruyabilir; çalışan süreç temiz günlükle yeniden başlatılana kadar ret durumu sürer. Yarım kalmış son JSON satırı mevcut kurtarma kurallarına tabidir. Ayrıntılar ve hata kodları için [İngilizce kaynağa](/reference/configuration/server/#historical-pool-continuity) bakın.

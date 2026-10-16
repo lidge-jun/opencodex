@@ -1,6 +1,6 @@
 # Docs And Release
 
-The activation scheduling contract is covered by `tests/codex-integration/codex-quota-auto-refresh.test.ts`, including restart recovery and bounded retries. See the [quota activation contract](../providers/openai-tiers.md#public-provider-contract).
+The activation scheduling contract is covered by `tests/codex-integration/codex-quota-auto-refresh.test.ts`, including restart recovery and bounded retries. See the [quota activation contract](../providers/openai-tiers.md#public-provider-contract). `.github/workflows/catalog-async-contracts.yml` runs portable Rust-owned Bun catalog contracts on Linux, macOS and Windows for runtime, fixture or dependency changes on pushes to `dev`/`main`/`preview`, pull requests or manual dispatch. It has read-only permissions and no release effect.
 
 Automatic package-tree restart holds a releasable data-plane drain until its scheduled
 service-home check succeeds. A veto releases that fence; a committed shutdown uses the
@@ -28,7 +28,7 @@ Shared parsing and streaming follow the [request-copy](../transports/byte-accoun
 
 Human-readable connect and sync-refresh diagnostics follow the [terminal rendering contract](../runtime.md#cli-readiness-diagnostics), with regression coverage for both paths in `tests/cli/cli-connect-readiness.test.ts`.
 
-`tests/cli/cli-config-show-client.test.ts` covers the separate read-only config annotation path:
+`tests/cli/cli-config-default-show.test.ts` covers optional-show parsing, offline display and explicit-action preservation; `tests/cli/cli-config-show-client.test.ts` covers the separate read-only config annotation path:
 `src/cli/config-command.ts` derives token ownership without importing the connect command or
 triggering catalog, lifecycle, or ACL-hardening work.
 
@@ -40,7 +40,7 @@ The Codex restart command follows the [CLI restart scope contract](../runtime.md
 
 The account reference documents the [Orca source-owned import](../codex-home.md#orca-source-owned-account-import).
 Its local-only command is declared in `src/cli/capabilities.ts`, and the generated skill surface
-lists its required source/registry paths and preview/apply flags.
+lists its required source/registry paths and preview/apply flags. The index and domain chapters follow the [CLI reference generation contract](../cli-management.md#generated-operating-reference).
 
 Local validation follows [the contributor test policy](../../AGENTS.md#commands): run the
 suite by default, with a documented resource exception requiring focused regression tests.
@@ -86,7 +86,7 @@ Manual navigation is defined in `docs-site/astro.config.mjs`. When adding a publ
 sidebar and either add localized copies or intentionally accept Starlight fallback behavior.
 
 Provider preset totals are recounted from the current registry when a preset lands. The
-documented split is 152 total: 134 key-based, 14 OAuth, three local, and one default
+documented split is 155 total: 136 key-based, 15 OAuth, three local, and one default
 ChatGPT-forward preset. The English provider guide, all seven translated copies, and all eight
 quickstarts carry the same counts.
 
@@ -211,8 +211,7 @@ contexts retain exit 0.
 
 The PR-target resolver accepts commit-index candidates only when their base repository's
 owner and name match the workflow repository. Foreign or incomplete fork-network entries
-cannot supply a write-job PR number. If no unique local current-head candidate remains,
-the existing repository-scoped open-PR lookup runs; absent or ambiguous matches emit no identity.
+cannot supply a write-job PR number. If no unique local current-head candidate remains, the existing repository-scoped open-PR lookup runs; absent or ambiguous matches emit no identity.
 
 | Workflow | Trigger | Purpose |
 | --- | --- | --- |
@@ -221,6 +220,7 @@ the existing repository-scoped open-PR lookup runs; absent or ambiguous matches 
 | `.github/workflows/release.yml` | Manual dispatch only | npm publish/dry-run workflow. The `preflight` job checks channel, version sources, tag, GitHub release, npm, global tag ordering and the `dev` pre-move before any packaging job starts. The publish job repeats those checks, requires a successful push-event Cross-platform CI run for the exact `GITHUB_SHA` (a pull-request run does not qualify), requires `dev` to outrank the target, then checks the target against the freshly fetched global tag set before publish or dry-run. After a real publish, `release-outcomes` reports the public GitHub release, the npm version read-back and the npm dist-tag as separate rows. |
 | `.github/workflows/deploy-docs.yml` | `push` to `main` touching `docs-site/**` or the workflow, or manual dispatch | Build and publish the Astro/Starlight docs site to GitHub Pages. This is the deploy path; the pull-request build gate is the `docs-site-build` job in `ci.yml`. |
 | `.github/workflows/service-lifecycle.yml` | `pull_request` to `main`/`dev` and `push` to `main`/`preview`, both filtered on the service path set (`src/service.ts`, `src/cli.ts`, `src/cli/index.ts`, `src/lib/bun-runtime.ts`, `package.json`, `bun.lock`, the workflow), or manual dispatch | Service-lifecycle smoke on three platforms: Linux systemd, macOS launchd, and Windows Scheduled Tasks. Each installs, verifies, stops via `ocx stop`, and uninstalls. The path list is kept in sync with the `release.yml` service-gate regex. |
+| `.github/workflows/catalog-async-contracts.yml` | `push` to `dev`/`main`/`preview` and any `pull_request`, both filtered on `src/**`, the diagnostic crate, the setup action, the workflow, `package.json` and `bun.lock`; or manual dispatch | Runs the Rust-owned Bun-module catalog contracts on Linux, macOS and Windows with synthetic homes and cleared child environments. Read-only (`contents: read`), no secrets, no release-eligibility effect. Pull-request runs share one concurrency group per PR and cancel superseded runs; push and manual runs each get their own group. |
 | `.github/workflows/enforce-pr-target.yml` | `pull_request_target` (opened, reopened, edited, labeled, unlabeled, ready_for_review, synchronize) plus default-branch `status` events filtered to successful `CodeRabbit` statuses | The `enforce-target` gate: rejects pull requests whose head ancestry sits on the `main` tip while far behind `dev`, rejects empty or malformed descriptions, requires a GUI screenshot when the title/body mentions `gui` (immediately waivable with the maintainer-controlled `gui-screenshot-waived` label; legacy maintainer comments remain compatibility evidence on later PR events), keeps contributor PRs in draft until a four-box readiness checklist is complete, verifies the CI / latest-dev / Codex+CodeRabbit-findings claims (review threads plus current-head CodeRabbit review-body findings outside the diff range), and adds a `review-ready` status label at the ready moment. CodeRabbit status SHAs must resolve to exactly one open current-head PR before writes. Stacked child PRs targeting another open PR's head skip the wrong-base gate. |
 | `.github/workflows/enforce-issue-quality.yml` | `issues` (opened, edited, reopened), `issue_comment` (created, edited), or manual dispatch with an issue number | Issue-template compliance gate. |
 | `.github/workflows/issue-quality-tests.yml` | `pull_request` and `push` to `main`/`preview` filtered on the issue/PR automation scripts, templates, and their workflows | Tests the issue and PR automation scripts themselves, so the gates cannot rot silently. |
@@ -229,16 +229,16 @@ the existing repository-scoped open-PR lookup runs; absent or ambiguous matches 
 | `.github/workflows/react-doctor.yml` | `pull_request` (opened, synchronize, reopened, ready_for_review) and `push` to `main`; no path filter | React-focused static review. Findings fail the job; write-scoped outputs stay disabled, a contract pinned by `tests/ci-workflows/ci-workflows.test.ts`. |
 | `.github/workflows/stale-needs-info.yml` | `schedule` only (daily 06:15 UTC); deliberately no manual dispatch | Closes issues left in needs-info past the grace period. Manual dispatch is omitted so a branch-selected run cannot execute that branch's body with issue write scope. |
 
-`pull_request_target`, `issues`, and `schedule` workflows always load from the repository default
-branch, not from `dev`. Landing a change to one of them on `dev` does not change live behavior until
-it is promoted, so those files follow the promotion model rather than ordinary integration.
+`pull_request_target`, `issues`, and `schedule` workflows always load from the repository default branch, not from `dev`. Landing a change to one of them on `dev` does not change live behavior until it is promoted, so those files follow the promotion model rather than ordinary integration.
+
+CI setup uses the [Bun runtime and test-runner pins](../runtime.md#bun-runtime-and-test-runner): test jobs (including development-version validation) choose `test-runner`, while release packaging, desktop/widget compilation and runtime smokes keep the default `runtime` role. Local layout verification resolves that test pin, and `gui/package.json` runs `scripts/test-with-pinned-bun.ts` to preserve its working directory, configuration and arguments on the same pin. The wrapper forwards SIGINT, SIGTERM and SIGHUP, waits for child exit and preserves interruption status (130, 143 or 129).
 
 `scripts/test.ts` owns `SERIAL_FULL_SUITE_FILES`, the shared process-isolation roster. Local
 full-suite runs, both macOS paths, and `scripts/ci/run-bun-test-batches.sh` execute those files
-alone with fresh process homes. Hosted batches assign shard membership by the per-file durations
-in `scripts/ci/test-durations.tsv` (sorted round-robin when nothing is recorded), run each shard's
+alone with fresh process homes, including launchd repair and standalone home/lease cases. Hosted batches assign shard membership by the per-file durations
+in `scripts/ci/test-durations.tsv` (Windows: `scripts/ci/test-durations.windows.tsv`; sorted round-robin when nothing is recorded), run each shard's
 files in sorted order and split only process boundaries; every selected file still runs once.
-Ordinary macOS shards select 1/2 and 2/2 from the full file list; macOS control selects 1/1. Both
+Ordinary macOS shards select 1/3, 2/3 and 3/3 from the full file list; macOS control selects 1/1. Both
 execute sequential batches of at most 12 files with one worker.
 Storage-policy and API-usage families run as singletons, as do manifest-declared files.
 This preserves full test membership but does not claim cross-batch shared-process coverage.
@@ -338,16 +338,16 @@ so the management route stays the single domain schema.
 
 The source runs on Bun, but the published package does **not** require a user-installed Bun.
 `package.json` `bin` points at `bin/ocx.mjs` (a Node shim), and the Bun runtime ships as the `bun`
-npm dependency (esbuild-style: a tiny main package plus platform-specific `@oven/bun-*`
+npm dependency pinned to `1.4.2` (esbuild-style: a tiny main package plus platform-specific `@oven/bun-*`
 `optionalDependencies`, finalized by the dependency's own `postinstall: node install.js`).
 
 Invariants:
 
-- `bin/ocx.mjs` resolves the bundled binary via `require.resolve("bun/package.json")` and a size gate
-  (`>= 1 MB`) that rejects the ~450-byte placeholder stub left by `--ignore-scripts`/pnpm; it then
-  lazy-runs `install.js` and execs `src/cli/index.ts` under Bun, propagating exit code and signal.
-  The Windows service wrapper applies the same gate before each launch and waits on a placeholder
-  instead of executing it ([Windows service wrapper](#windows-service-wrapper-and-incomplete-updates)).
+- `bin/ocx.mjs` selects explicit override, bundled Bun, allowed installer recovery, then validated PATH Bun.
+  `src/lib/bun-path-runtime.mjs` requires absolute entries, canonical regular/executable files, the >=1 MB gate, and rejects group/world-writable resolved files or parent directories on POSIX.
+  Bounded version-policy and identity checks require `--version` to match `-e`'s `Bun.version`, a stable version with the pinned major and minor ≥ pinned minor (currently 1.4.0 ≤ version < 2.0.0).
+  PATH selection stamps `process`; failure may name an installed Desktop CLI without executing it.
+  The [Windows service wrapper](#windows-service-wrapper-and-incomplete-updates) keeps its own placeholder wait gate; updater inspection never runs installer recovery.
 - `package.json` carries `"trustedDependencies": ["bun"]` so `bun install` runs the dependency's
   postinstall, and `"engines": { "node": ">=18" }` (Bun is no longer a user prerequisite).
 - The plain-Node launcher owns `OPENCODEX_BUN_PATH` selection before Bun can load project dotenv and
@@ -366,7 +366,7 @@ observed at startup. Replacing that manifest under a live process fences `/healt
 stability timer; if the same new manifest identity remains readable and distinct, the timer enters the existing
 drain-and-restart handoff without waiting for another request. A temporarily unreadable manifest
 is polled until readable and then receives a fresh full stability interval, while a return to the
-startup identity cancels the pending restart. Failed restart admission retries after the same
+startup identity cancels the pending restart. The replacement spawns `process.execPath`, which an in-place npm install leaves as the `bun` package's small placeholder until its postinstall runs, so while that path fails the `REAL_BUN_MIN_BYTES` gate the restart waits the same way and then debounces afresh; meanwhile `installedVersion` stays unreported, so a manual restart is refused as unsettled. Failed restart admission retries after the same
 bounded delay. Stopping the server before the accepted restart begins vetoes it, and a service child
 restarts only while it still owns the service home. Source checkouts and standalone binaries remain outside this fence.
 
@@ -401,7 +401,7 @@ respawn runs the replaced files at the same path, and refuses while that version
 Package release is npm-focused. `package.json` exposes `opencodex` and `ocx`, `prepublishOnly` runs
 typecheck and GUI build. `scripts/release.ts` accepts either an explicit version or
 `--bump patch|minor|major`; the stable and preview channels use separate resolvers in
-`scripts/version-line.ts`. It runs local typecheck, `bun test --isolate tests`, and
+`scripts/version-line.ts`. It runs local typecheck, tests on the pin selected by `scripts/lib/test-runner-bun.ts`, and
 `bun run privacy:scan` before the version bump, commit/push, Cross-platform CI wait, and GitHub
 Release workflow dispatch. Docs publishing is separate from npm release publishing.
 
@@ -422,9 +422,9 @@ The `package-standalone` job in `.github/workflows/release.yml` also builds Bun 
 `ocx` archives for Linux, macOS, and Windows, bundles `gui/dist`, smoke-tests `/healthz`, and
 publishes SHA-256 sidecars for the attach job. Each archive also carries the target-matching
 `@napi-rs/keyring` native addon under `keyring/`; the macOS release installs both optional Darwin
-packages so its separate arm64 and x64 builds cannot silently reuse the hosted runner's
-architecture. Desktop preparation copies those same pinned assets into Tauri resources. The loader
-and packaged-app proof are owned by the [desktop keyring contract](../desktop-shell.md#packaged-native-keyring-binding).
+packages so its separate arm64 and x64 builds cannot silently reuse the hosted runner's architecture. Desktop preparation
+copies those same pinned assets into Tauri resources. The loader and packaged-app proof are owned by the [desktop keyring contract](../desktop-shell.md#packaged-native-keyring-binding).
+`src/lib/standalone.ts` recognizes Bun's file-URL virtual roots after one URL decode, including Windows `%7EBUN`, and resolves runtime assets beside the real executable. Invalid/non-file URLs and double-encoded markers remain source paths; `tests/lib/standalone.test.ts` and `tests/service/standalone-service.test.ts` cover this distinction.
 
 Opening a release starts with the `dev` pre-move. Dispatch
 `.github/workflows/dev-version-bump.yml` with the intended version, merge the pull request it opens,

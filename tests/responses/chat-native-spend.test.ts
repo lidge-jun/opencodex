@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,6 +17,8 @@ import { estimateTokens } from "../../src/lib/token-estimate";
 import { getRequestLogEntries } from "../../src/server/request-log";
 import * as stateStores from "../../src/lib/state-store-registrations";
 import { translatorAggregateCurrentBytesForTests } from "../../src/lib/translator-budget";
+import { configureSharedSpendLedger, spendPolicyFromConfig } from "../../src/lib/spend-reservation-ledger";
+import { clearKeyCooldowns } from "../../src/providers/key-failover";
 
 let previousHome: string | undefined;
 let testDir = "";
@@ -39,6 +41,7 @@ function stopFixtureServers(): Promise<void> {
   })();
 }
 beforeEach(() => {
+  clearKeyCooldowns();
   activeServer = undefined;
   activeUpstream = undefined;
   activeRawUpstream = undefined;
@@ -58,6 +61,7 @@ afterEach(async () => {
   if (isolatedCodexHome) await flushWindowsSecretAclReapsBeforeRemoval(isolatedCodexHome.path);
   expect(spendLedgerOwnerSnapshot().ownership).toBe("unheld");
   resetProviderRequestPacingForTest();
+  clearKeyCooldowns();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   isolatedCodexHome?.restore();
@@ -125,7 +129,7 @@ test("native Chat refuses a physical send that exceeds the configured pool spend
   }
 });
 
-test("native Chat reports a spend refusal on a transient retry leg as local 429", async () => {
+test("native Chat reuses its normal seed on a stable transient retry and retains both liabilities", async () => {
   const messages = [{ role: "user", content: "hello" }];
   let upstreamSends = 0;
   const upstream = Bun.serve({
@@ -148,12 +152,75 @@ test("native Chat reports a spend refusal on a transient retry leg as local 429"
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ model: "mock/test-model", messages, max_tokens: 1 }),
   });
+  expect(response.status).toBe(503);
+  expect(response.headers.get("x-opencodex-local-refusal")).toBeNull();
+  expect(upstreamSends).toBe(2);
+  expect(getRequestLogEntries().findLast(row => row.inboundProtocol === "chat")).toMatchObject({
+    status: 503,
+  });
+});
+
+for (const initiallyEnforced of [false, true]) test(`native Chat freezes ${initiallyEnforced ? "enforced" : "observe-only"} policy across retries`, async () => {
+  let wires = 0;
+  activeUpstream = Bun.serve({ port: 0, fetch() {
+    if (++wires === 1) configureSharedSpendLedger(spendPolicyFromConfig(
+      initiallyEnforced ? {} : { pool: { maxTokens: 1 } }, undefined, ["mock"]));
+    return Response.json({ error: { message: "temporary" } }, { status: 503 });
+  } });
+  const config = mockConfig(new URL("/v1", activeUpstream.url).href, { transientRetryOn5xx: { attempts: 6 } });
+  if (initiallyEnforced) config.spend = { pool: { maxTokens: 100_000 } };
+  saveConfig(config);
+  activeServer = startServer(0);
+  const post = () => fetch(new URL("/v1/chat/completions", activeServer!.url), {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "mock/test-model", messages: [{ role: "user", content: "hello" }], max_tokens: 1 }),
+  });
+  const response = await post();
+  await response.text();
+  expect(wires).toBe(initiallyEnforced ? 4 : 6);
+  expect(response.status).toBe(initiallyEnforced ? 429 : 503);
+  const records = readFileSync(join(testDir, "spend-ledger.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
+  expect(records.filter(record => record.kind === "reserve")).toHaveLength(wires);
+  if (!initiallyEnforced) {
+    const next = await post();
+    await next.text();
+    expect(next.status).toBe(429);
+    expect(next.headers.get("x-opencodex-local-refusal")).toBe("workflow_spend_exhausted");
+    expect(wires).toBe(6);
+  }
+}, 20_000);
+
+for (const change of ["disable", "raise"] as const) test(`native Chat retains its initial ceiling when ${change} occurs before key failover`, async () => {
+  const messages = [{ role: "user", content: "hello" }];
+  let wires = 0;
+  activeUpstream = Bun.serve({ port: 0, fetch() {
+    if (++wires === 1) {
+      configureSharedSpendLedger(spendPolicyFromConfig(change === "disable" ? {} : { pool: { maxTokens: 100_000 } }, undefined, ["mock"]));
+      return Response.json({ error: { message: "key rate limited" } }, { status: 429, headers: { "retry-after": "30" } });
+    }
+    return Response.json({ id: "chat_fixture", object: "chat.completion", model: "test-model",
+      choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
+  } });
+  const config = mockConfig(new URL("/v1", activeUpstream.url).href, { apiKeyPool: [
+    { id: "first", key: "k", addedAt: 1 }, { id: "second", key: "k2", addedAt: 2 },
+  ] });
+  config.spend = { pool: { maxTokens: estimateTokens(JSON.stringify(messages), "mock/test-model") + 1 } };
+  saveConfig(config);
+  activeServer = startServer(0);
+  const post = () => fetch(new URL("/v1/chat/completions", activeServer!.url), {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "mock/test-model", messages, max_tokens: 1 }),
+  });
+  const response = await post();
+  await response.text();
   expect(response.status).toBe(429);
   expect(response.headers.get("x-opencodex-local-refusal")).toBe("workflow_spend_exhausted");
-  expect(upstreamSends).toBe(1);
-  expect(getRequestLogEntries().findLast(row => row.inboundProtocol === "chat")).toMatchObject({
-    status: 429, errorCode: "workflow_spend_exhausted",
-  });
+  expect(wires).toBe(1);
+  const next = await post();
+  await next.text();
+  expect(next.status).toBe(200);
+  expect(wires).toBe(2);
 });
 
 test("native Chat includes tool definitions in its pre-dispatch spend reservation", async () => {

@@ -154,7 +154,10 @@ async function runScenario(mode: string, childDeadlineMs = 30_000): Promise<Reco
     ? 'model_provider = "user-managed"\n[model_providers.user-managed]\nbase_url = "https://user.example.test/v1"\n'
     : 'model = "gpt-5"\n');
   if (mode === "legacy") writeFileSync(join(codex, "opencodex.config.toml"), '# user reference\nmodel = "gpt-5"\n');
-  if (mode === "external") writeFileSync(join(codex, "opencodex-journal.json"), "guarded journal sentinel\n");
+  if (mode === "external") writeFileSync(join(codex, "opencodex-journal.json"), JSON.stringify({
+    version: 1, originalConfig: "", originalProfile: null, pid: process.pid,
+    timestamp: "2026-01-01T00:00:00.000Z",
+  }));
   coordinators.push(resolveCodexCoordinatorDatabasePath(resolveEffectiveUserIdentity(), realpathSync.native(codex)));
   const child = Bun.spawn({
     cmd: [process.execPath, "--eval", SCRIPT], cwd: repoRoot(),
@@ -220,8 +223,14 @@ for (const mode of ["deny", "queued-native", "legacy", "external", "malformed", 
   test("client commit guard preserves every routing artifact (" + mode + ")", async () => {
     const result = await runScenario(mode);
     expect(result.result.success).toBe(false);
-    expect(result.result.message).toContain(mode.startsWith("async") ? "must be synchronous" : "client_guard_refused");
-    expect(result.guardCalls).toBe(1);
+    if (mode === "malformed") {
+      // Unknown home ownership refuses before a client callback can authorize cleanup.
+      expect(result.result.message).toContain("ownership could not be verified");
+      expect(result.guardCalls).toBe(0);
+    } else {
+      expect(result.result.message).toContain(mode.startsWith("async") ? "must be synchronous" : "client_guard_refused");
+      expect(result.guardCalls).toBe(1);
+    }
     expect(result.after).toEqual(result.before);
     if (mode === "queued-native") expect(result.observations).toContain("prepared");
     if (mode === "legacy") expect(result.contention.success).toBe(false);

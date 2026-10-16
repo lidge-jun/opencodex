@@ -230,6 +230,7 @@ export function mergeConfiguredModelsIntoLiveCatalog(opts: {
   seedVertexDefault?: boolean;
   retainComboTargets?: boolean;
   metadataModelIdCaseFold?: boolean;
+  metadataConfigDir?: string;
 }): { models: CatalogModel[]; droppedConfiguredIds: string[] } {
   const {
     name,
@@ -240,6 +241,7 @@ export function mergeConfiguredModelsIntoLiveCatalog(opts: {
     seedVertexDefault,
     retainComboTargets = true,
     metadataModelIdCaseFold,
+    metadataConfigDir,
   } = opts;
   const out = [...opts.models];
   const present = new Set(out.map(model => model.id));
@@ -248,7 +250,7 @@ export function mergeConfiguredModelsIntoLiveCatalog(opts: {
     if (present.has(candidate.id)) continue;
     const dated = out.find(live => isDatedVariantId(live.id, candidate.id));
     if (dated) {
-      out.push(applyProviderConfigHints(name, prov, { ...dated, id: candidate.id }, contextCap, metadataModelIdCaseFold));
+      out.push(applyProviderConfigHints(name, prov, { ...dated, id: candidate.id }, contextCap, metadataModelIdCaseFold, undefined, metadataConfigDir));
       present.add(candidate.id);
       continue;
     }

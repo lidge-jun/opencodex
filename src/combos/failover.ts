@@ -1,6 +1,7 @@
 import { parseResetCooldownMs } from "../codex/routing";
 import { classifyError, isCyberPolicyCode } from "../lib/errors";
 import { isNonReplayableUpstreamCode } from "../lib/upstream-retry";
+import { isAnthropicBillingFailure } from "../providers/anthropic-billing-refusal";
 import type { OcxComboTarget } from "../types";
 import { targetKey } from "./types";
 import {
@@ -11,6 +12,7 @@ import {
 
 interface TargetCooldown {
   cooldownUntil: number;
+  status?: number;
 }
 
 const DEFAULT_COOLDOWN_MS = 60_000;
@@ -195,6 +197,23 @@ export function remainingComboCooldownMs(comboId: string, now = Date.now()): num
   return soonest;
 }
 
+/** Snapshot active quota cooldowns without inspecting request eligibility or changing state. */
+export function snapshotComboQuotaCooldowns<T extends Pick<OcxComboTarget, "provider" | "model">>(
+  comboId: string,
+  targets: Iterable<T>,
+  now = Date.now(),
+): Array<{ target: T; cooldownUntil: number }> {
+  const snapshot: Array<{ target: T; cooldownUntil: number }> = [];
+  for (const target of targets) {
+    const key = cooldownMapKey(comboId, target);
+    const cooldown = targetCooldowns.get(key);
+    if (!cooldown || cooldown.cooldownUntil <= now) continue;
+    if (cooldown.status !== 429 && cooldown.status !== 402) continue;
+    snapshot.push({ target, cooldownUntil: cooldown.cooldownUntil });
+  }
+  return snapshot;
+}
+
 export function comboCooldownRetryAfterSeconds(comboId: string, now = Date.now()): string | undefined {
   const remainingMs = remainingComboCooldownMs(comboId, now);
   if (remainingMs === undefined) return undefined;
@@ -244,6 +263,7 @@ export function coolComboTarget(
   targetCooldowns.set(cooldownMapKey(comboId, target), {
     // Local fallbacks are capped at ten minutes; explicit server delays at one day.
     cooldownUntil: now + (serverDelayMs ?? Math.min(Math.max(cooldownMs, 1), MAX_COOLDOWN_MS)),
+    status: options?.status,
   });
   sweepExpiredOnWrite(now);
   return true;
@@ -544,6 +564,7 @@ export function comboFailureCooldownScope(
   options?: { code?: string | null },
 ): ComboFailureCooldownScope {
   const code = normalizedFailureCode(options?.code);
+  if (isAnthropicBillingFailure(status, message, options?.code)) return "provider";
   // Request-shape refusals first: an oversized request must not cool a healthy target.
   // A native transport can surface a zero-output model overflow as a generic
   // upstream_server_error carrying precise context-window prose, so consult the bounded
@@ -828,6 +849,7 @@ export function comboFailureDecision(
   // reaches that list and returns terminal before anything can ask whether the next target
   // could have served the request (#4903).
   if (isResponseFormatCapabilityRefusal(status, message, options?.code)) return "hop";
+  if (isAnthropicBillingFailure(status, message, options?.code)) return "hop";
   if (["origin_rejected", "context_length_exceeded", "invalid_request_error"].includes(error.code ?? "")) {
     return "stop";
   }

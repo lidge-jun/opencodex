@@ -1,6 +1,6 @@
 # Model Catalog
 
-Activation-owned metadata discovery no longer refreshes known deadlines merely because quota snapshots age. See the [quota activation contract](providers/openai-tiers.md#public-provider-contract).
+Activation-owned metadata discovery no longer refreshes known deadlines merely because quota snapshots age. See the [quota activation contract](providers/openai-tiers.md#public-provider-contract). Pool 2 discovery uses the [instance credential ownership contract](providers/anthropic-account-pool.md#discovery-credential-ownership). The retained writer uses an observed catalog's nonblocking runtime snapshot for effort diagnostics; it does not run a synchronous version probe. Unchanged clamp diagnostics follow the [effort-clamp observation contract](catalog-effort-clamp.md). Portable Rust-driven Bun contracts run in `.github/workflows/catalog-async-contracts.yml` on Linux, macOS and Windows.
 
 Native result continuations and function-result injection follow [the mode-specific result and control contract](transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
 Explicit Codex CLI installation observation supplies no selected-runtime proof to catalog discovery or publication. See the [read-only observation contract](runtime.md#explicit-codex-cli-installation-observation).
@@ -23,7 +23,7 @@ Accounts added through the [Orca import](codex-home.md#orca-source-owned-account
 validation-pending. Import alone supplies no entitlement evidence for the model catalog.
 
 ## Shared catalog
-
+Custom-provider missing windows use [source-labelled vendor estimates](catalog-vendor-context.md) only when the provider opts in with `inferContextWindow: true`; these remain distinct from asserted routing capacity.
 Static policy and observed catalog evidence are separate authorities. Antigravity grouping and selection projection follow the [discovered effort-family contract](providers-and-adapters.md#antigravity-effort-families).
 `src/providers/resolved-model-policy.ts` resolves and freezes only registry/operator static facts,
 hard wire pins, aliases, and explicit false/empty declarations. Discovery responses, generated
@@ -41,13 +41,13 @@ diagnostic/catalog provenance and must be resolved before policy capture. Exact 
 input-modality declarations outrank the registry/config modality map; an empty declaration
 falls through to that map.
 Anthropic numeric point releases inherit the nearest configured family context window before the
-provider-wide fallback. Exact model output limits precede the provider default output limit.
+provider-wide fallback. Exact model output limits precede the provider default output limit. For Azure OpenAI destinations (`*.openai.azure.com`), `src/providers/azure-model-metadata.ts` refreshes public models.dev Azure metadata during discovery under a two-second/16 MiB budget, coalesces callers per resolved config directory, caches for 24 hours, and keeps stale data offline. Snapshot, in-flight refresh and retry cooldown state are isolated by that directory; discovery admission captures that directory and threads it through refresh and all later hint lookups, including cached rows, configured retention, custom rows and combo members. Azure provider-result TTL and stale caches store only upstream rows; fresh, stale and cooldown reads apply root-specific metadata and configured retention after retrieval. Public metadata fetches reject redirects. `src/providers/derive.ts` merges published Azure fields over bundled Azure/vendor hints by exact or case-insensitive model id. Shared catalog hints fill missing input modalities and context/output limits, while explicit declarations, reported modalities/limits, sidecar coverage and configured caps retain precedence. Azure inference flags alone do not imply vision. Generation never fetches this snapshot, static policy remains unchanged, and arbitrary deployment aliases receive no guessed metadata.
 
 `src/codex/catalog.ts` builds a shared Codex-shaped catalog for CLI, TUI, App, and SDK. It:
 
 - preserves native OpenAI entries from the live catalog or static fallback, and emits
   gpt-5.6 natives from the pinned upstream models.json snapshot
-  (`src/codex/data/upstream-models.json` — exact per-slug ladders: luna has no ultra);
+  (`src/codex/data/upstream-models.json` — exact per-slug ladders: luna has no ultra); When native OpenAI rows are included and the final catalog has an ordinary bare native row other than Reserve (hidden rows count), `src/codex/catalog/control-plane.ts` separately preserves exactly one hidden `codex-auto-review` row or backfills its pinned metadata, including Low and the exact upstream ladder. It receives the ordinary native multi-agent projection but bypasses native synthesis, account cloning, picker/featured ordering, reasoning-ladder clamps and reviewer override stamps; Reserve-only/native-less catalogs omit it, and the final effort clamp removes persisted orphan reviewers; public lists and subagent rosters exclude it. The dependency-free `src/codex/control-plane-models.ts` shares the exact id set with the router without expanding visible native replacement authority;
 - reads pinned native rows only through `pinnedNativeModelRows()`
   (`src/codex/catalog/pinned-models.ts`): the codex-rs snapshot first, then rows from
   `src/codex/data/roster-pinned-models.json` whose slug the snapshot lacks. The roster file holds
@@ -95,16 +95,11 @@ Cache invalidation reports an unchanged derived cache separately from a failed r
 
 Custom rows replace discovered rows that encode to the same Codex-facing slug. For a provider whose captured discovery declares an order (`preferFirst`), `src/codex/catalog/routed-gather.ts` puts the replacement in the discovered row's slot; every other provider keeps discovered rows first and custom rows after them, as before. Coverage: `tests/codex-integration/catalog-custom-ordering.test.ts`.
 
-On the default `opencodex-catalog.json` path, sync deliberately uses two catalog sources: Codex's
-bundled catalog supplies a current native entry template, while the actual on-disk catalog supplies
-the rows being merged. This split is required because empty or partial provider discovery must
-preserve routed entries and genuine user-native rows from the file that will be overwritten; a
-bundled catalog never contains those rows. Retained sync and evidence-bound convergence share an
-explicit observed-state merge policy and restore native priorities from the once-only pristine
-backup rather than from a catalog whose priorities may already have been rewritten. A configured
-custom catalog remains the native metadata/template authority even when a bundled-catalog memo is
-warm. Both paths may use an admitted matching bundled memo only as installed-runtime capability
-evidence to remove unsupported reasoning efforts; convergence never probes Codex itself. The default-on scheduler in `src/codex/catalog-auto-refresh.ts` settles bundled runtime and authenticated Codex roster observations before admission, using dynamic imports, a 15-second source wait and the loader's bounded synchronous probes. Source failure uses existing evidence, while a stopped generation cannot start the next source or converge. A changed set records `reloadRequired` through `src/codex/catalog-refresh-status.ts` for observed running app-servers and logs one content-free restart hint; a no-op keeps it while processes remain stale or the restart observation is unknown and clears it when they are fresh or gone. Automatic refresh never restarts processes. `tests/codex-integration/catalog-auto-refresh-scheduler.test.ts` covers these boundaries.
+On the default `opencodex-catalog.json` path, sync deliberately uses two catalog sources: Codex's bundled catalog supplies a current native entry template, while the actual on-disk catalog supplies the rows being merged. `src/codex/catalog/bundled.ts` treats unsupported bundled-model commands, spawn failures and structurally invalid model rows (null, arrays or other non-objects) as unavailable in both synchronous and asynchronous loading, preserving the existing catalog fallback. This split is
+required because empty or partial provider discovery must preserve routed entries and genuine user-native rows from the file that will be overwritten; a bundled catalog never contains those rows. Retained sync and evidence-bound convergence
+share an explicit observed-state merge policy and restore native priorities from the once-only pristine backup rather than from a catalog whose priorities may already have been rewritten. A configured custom catalog remains the native
+metadata/template authority even when a bundled-catalog memo is warm. Both paths may use an admitted matching bundled memo only as installed-runtime capability evidence to remove unsupported reasoning efforts; convergence never probes Codex
+itself. The default-on scheduler in `src/codex/catalog-auto-refresh.ts` settles bundled runtime and authenticated Codex roster observations before admission, using dynamic imports, a 15-second source wait and asynchronous selected-runtime/model probes. Request metadata and templates use the same-selection last confirmed bundled memo, refresh its runtime observation every 15 seconds without awaiting it, and fall back to existing catalog/cache sources while a cold or changed selection settles. The bundled evidence keeps its 60-second freshness bound for convergence; failed request-triggered refreshes retain confirmed rows with a 60-second retry cooldown. Shared flights have a 45-second aggregate deadline, cancel obsolete selections and reject late catalog or runtime persistence after observed input/epoch changes. Explicit CLI synchronous loading and compatibility checks remain synchronous. Retained sync settles the async source before reading the content and evidence it later revalidates. Source failure uses existing evidence, while a stopped generation cannot start the next source or converge. A changed set records `reloadRequired` through `src/codex/catalog-refresh-status.ts` for observed running app-servers and logs one content-free restart hint; a no-op keeps it while processes remain stale or the restart observation is unknown and clears it when they are fresh or gone. Automatic refresh never restarts processes. A changed set also runs the client fan-out the server lifecycle registers through `setCatalogAutoRefreshClientFanout`; it refreshes only already-connected clients ([integrations](clients/integrations.md#owned-catalog-convergence)), binds each delivery to the newest unrevoked server owner and stops with the generation or that owner's revocation or release, refuses configuration drift except Desktop applied-marker updates, and logs only a failure count; `tests/codex-integration/catalog-auto-refresh-client-fanout.test.ts` covers it. `tests/codex-integration/catalog-auto-refresh-scheduler.test.ts` covers these boundaries. `src/codex/catalog/bundled.ts` and `src/codex/runtime.ts` prefer the recorded native `launcherPath` from validated schema-2 PATH-overlay state within their shim candidates, retaining legacy candidates and other priorities. `src/codex/features.ts` follows that backing only when the selected wrapper matches validated state; it never probes unrelated installations. Overlay state and activation follow [the runtime lifecycle contract](runtime.md#lifecycle).
 
 Custom Astra and Daybreak rows acquire native identity -- Responses Lite, multi-agent, context
 windows, display names -- only through the canonical `openai` forward destination and explicit
@@ -116,6 +111,10 @@ those catalog rows. An explicit empty list remains empty; a nonempty incompatibl
 to the native default singleton. A default must belong to the projected list. Full native identity
 is still not inferred from a GPT name. Stored configuration and native capability maps are
 unchanged. Request-time native effort clamps remain canonical-forward only.
+
+The shared merge uses `src/codex/catalog/configured-tiers.ts` to project Ultra Fast into Codex's native speed picker only for an eligible captured service-tier wire explicitly mapping `ultrafast` to `ultrafast`. Both writers pass current exact routed slugs; templates, native/account rows and combos cannot grant the capability. Generated choices carry an exact-slug ownership marker so removing the declaration also removes stale generated tiers, even with operator retention enabled; publication leaves the default unchanged. Coverage: `tests/codex-integration/configured-ultrafast-picker.test.ts`.
+Separately, `src/codex/catalog/operator-tiers.ts` preserves a hand-supplied Ultra Fast tier from the exact persisted routed row only when `ultraFastTier` is enabled. Baselines and native templates cannot supply it. Current configured capability takes precedence; previously generated tiers cannot become operator evidence. Both overlays run after admission, preserve Fast policy and never create rows. Disabling `ultraFastTier` removes only independently supplied operator tiers; disabling the wire declaration removes generated ones. Operator defaults are retained only alongside an independently supplied tier declaration. Coverage: `tests/codex-integration/ultrafast-tier-honesty.test.ts`.
+Native rows are the one place the `ultraFastTier` flag itself adds a tier. `src/codex/catalog/native-ultrafast.ts` appends the documented `{ id: "ultrafast", name: "Ultrafast" }` descriptor to `service_tiers` and `"ultrafast"` to `additional_speed_tiers` on bare and trusted account-bound `gpt-6-astra` and `gpt-6.1-sol` rows, after the existing Fast tier and only when no Ultrafast entry is present. Codex reads the picker from `model_catalog_json` instead of ChatGPT's plan-aware live list, so without it Desktop never offers the choice. Each field it fills is recorded in the row's `opencodex_generated_service_tiers` marker, and disabling withdraws only marked fields (and only the unedited descriptor), so an operator-written native entry survives even when its text matches. Aliases, combos, reserve projections and other models are untouched, and the default tier never changes. Coverage: `tests/codex-integration/native-ultrafast-picker.test.ts`.
 
 The observed-state merge tracks the current invocation's freshly generated custom row objects
 after detaching its inputs. Those rows already own their complete reasoning projection, so the
@@ -207,7 +206,7 @@ than pairing a durable account key with the provider registry's default host. Th
 the provider connection test and for refreshing catalog gathers of every OAuth row: the token and
 its origin come from one snapshot, so a Copilot account switch or a refresh that moves the
 account's API host cannot pair one account's token with another origin, and a key row never
-borrows a stored OAuth account's origin. When the snapshot carries no API host (a legacy credential), the destination comes only from static configuration validated against the vendor allowlist, or the vendor default, and never from the live credential store. If the stored
+borrows a stored OAuth account's origin. Copilot account permission evidence projects effective Auto-only visibility without deleting manual selections; see the [Copilot Auto contract](providers-and-adapters.md#github-copilot-auto-selection). Auto rows and live named rows apply captured provider capability hints and the context cap. Manual-capable rosters retain explicit configured and combo-target selectors through the shared retention contract; Auto-only rosters keep only Auto even when named selectors remain saved; ordinary selected-model allowlists, pending/disabled state and new-model policy remain authoritative for that row. When the snapshot carries no API host (a legacy credential), the destination comes only from static configuration validated against the vendor allowlist, or the vendor default, and never from the live credential store. If the stored
 destination is invalid, registered Devin discovery and routing use the registry's fixed base URL
 instead of a stale configured override. For Devin, the irreversible roster fingerprint covers
 both credential and validated destination, so switching either observes neither fresh nor stale
@@ -321,6 +320,7 @@ preserving custom descriptions and other stored row fields.
 
 GPT-6 Sol and Luna (2026-09-22) and GPT-6.1 Sol (2026-09-29, `low` default effort) are self-described the same way, from their roster-pinned
 rows: labels `GPT-6-Sol` / `GPT-6-Luna`, 272,000 default context and 872,000 opt-in ceiling,
+except GPT-6.1 Sol's default context, raised to 500,000 by `NATIVE_GPT61_SOL_CONTEXT` (OpenAI, 2026-10-11; ceiling kept at 872,000),
 `medium` default. Sol ships low-through-ultra; Luna stops at `max`, and no path may add `ultra` to
 it: `nativeLadderIncludesUltra` answers from the self-described row (or an alias's source row), so
 `ensureGpt56ReasoningLevels` restores `max` everywhere but adds `ultra` only where the pinned row
@@ -593,7 +593,7 @@ Subagent account previews and live routing share the [priority failback](provide
 
 ## Reasoning metadata refresh
 
-Startup and explicit catalog synchronization in `src/codex/sync.ts` refresh the optional
+The sync result in `src/codex/sync.ts` preserves the catalog owner's optional refreshOutcome even when config injection reports applied; injection success alone does not prove catalog convergence. [Provider CLI receipts](cli-management.md#provider-live-operations-and-bounded-editor-input) keep that distinction. Startup and explicit catalog synchronization refresh the optional
 `src/providers/reasoning-metadata.ts` effort snapshot for supported destinations before catalog
 gathering. Each sync waits at most two seconds for a fresh or shared fetch, then continues with the existing snapshot; the fetch retains its own abort deadline. Routed effort reads in
 `src/reasoning-effort.ts` use a snapshot immediately and request a best-effort background refresh

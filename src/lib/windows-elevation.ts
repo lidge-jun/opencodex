@@ -203,6 +203,12 @@ export function resolveTrustedWindowsPowerShellExe(): string {
   return assertTrustedSystemExecutable(candidate, "PowerShell");
 }
 
+/** Absolute System32\\reg.exe path; PATH, SystemRoot and WINDIR cannot select it. */
+export function resolveTrustedWindowsRegExe(): string {
+  const candidate = join(resolveTrustedWindowsSystemDirectory(), "reg.exe");
+  return assertTrustedSystemExecutable(candidate, "reg.exe");
+}
+
 /** Absolute path to System32\\schtasks.exe from a trusted system directory. */
 export function resolveTrustedWindowsSchtasksExe(): string {
   if (elevationExeOverridesForTests?.schtasks) {

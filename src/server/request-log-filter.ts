@@ -52,7 +52,7 @@ export function queryRequestLogs(
     for (const entry of logs) {
       if (provider && entry.provider !== provider && !entry.attempts?.some(attempt => attempt.provider === provider)) continue;
       if (conversationId && !matchesLogConversationId(entry.conversationId, conversationId)) continue;
-      if (model && entry.model !== model && !entry.attempts?.some(attempt => attempt.model === model)) continue;
+      if (model && !matchesModel(entry, model) && !entry.attempts?.some(attempt => matchesModel(attempt, model))) continue;
       if (account && entry.accountLogLabel !== account && !entry.attempts?.some(attempt => attempt.accountLogLabel === account)) continue;
       if (protocolMode && !matchesProtocolMode(entry, protocolMode)) continue;
       if (status && (statusClass === undefined ? String(entry.status) !== status : Math.floor(entry.status / 100) !== statusClass)) continue;
@@ -90,4 +90,9 @@ export function filterRequestLogs(logs: RequestLogEntry[], params: URLSearchPara
 
 export function filteredRequestLogCount(logs: RequestLogEntry[], params: URLSearchParams): number {
   return queryRequestLogs(logs, params).total;
+}
+
+/** A bare ID may itself contain slashes; compare against each observed destination as a whole. */
+function matchesModel(row: { provider?: string; model?: string }, model: string): boolean {
+  return row.model === model || (row.provider !== undefined && row.model !== undefined && `${row.provider}/${row.model}` === model);
 }

@@ -47,7 +47,7 @@ function settlePhysicalSends(log: RequestLogContext, budget: RequestExecutionBud
   // An external report may settle a prepaid booking without changing used. Its explicit
   // receipt outranks the numeric delta, or the same source send would be charged twice.
   const unreported = Math.max(0, sent - Math.max(reported, Math.max(0, budget.used - beforeUsed)));
-  if (unreported > 0) budget.used += unreported;
+  if (unreported > 0 && !budget.spendEnforced) budget.used += unreported;
   return sent;
 }
 

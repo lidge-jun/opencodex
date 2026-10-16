@@ -18,6 +18,7 @@ export type ResourceSnapshot<T> = {
 };
 
 type Store<T> = {
+  key: string;
   snapshot: ResourceSnapshot<T>;
   listeners: Set<() => void>;
   /** listener → requested poll interval (undefined = no poll from that subscriber) */
@@ -58,6 +59,8 @@ type Store<T> = {
  * different resource types (no runtime check — keys are an API contract).
  */
 const stores = new Map<string, Store<unknown>>();
+// Explicit invalidations survive store eviction and fresh session-cache seeds.
+const invalidatedKeys = new Set<string>();
 
 /**
  * Per-attempt deadline for every store fetch. Endpoints documented as slow finish in
@@ -81,6 +84,7 @@ function getStore<T>(key: string): Store<T> {
   let store = stores.get(key) as Store<T> | undefined;
   if (!store) {
     store = {
+      key,
       snapshot: {
         data: undefined,
         error: undefined,
@@ -360,6 +364,7 @@ async function runFetch<T>(
     if (gen !== store.generation || controller.signal.aborted) return;
     // Cleared on settle (not at subscribe) so StrictMode's aborted first mount still revalidates.
     store.seedNeedsRevalidate = false;
+    invalidatedKeys.delete(store.key);
     store.lastSettledAt = Date.now();
     store.snapshot = {
       data,
@@ -458,7 +463,7 @@ function subscribeResource<T>(
     const stale = typeof staleAfterMs === "number"
       && store.lastSettledAt !== undefined
       && Date.now() - store.lastSettledAt > staleAfterMs;
-    if (store.snapshot.data === undefined || store.seedNeedsRevalidate || stale) {
+    if (store.snapshot.data === undefined || store.seedNeedsRevalidate || invalidatedKeys.has(key) || stale) {
       void runFetch(store, fetcher, { replaceInflight: true, owner: onStoreChange, deadlineMs });
     }
   }
@@ -530,7 +535,7 @@ function seedClientResourceIfEmpty<T>(key: string, data: T, cachedAt?: number | 
   setClientResourceData(key, data);
   // A seed fresher than the staleness window skips the mount revalidation entirely:
   // that is the whole request saved on a tab revisit. Unknown age counts as stale.
-  if (typeof staleAfterMs === "number" && typeof cachedAt === "number" && Date.now() - cachedAt < staleAfterMs) {
+  if (!invalidatedKeys.has(key) && typeof staleAfterMs === "number" && typeof cachedAt === "number" && Date.now() - cachedAt < staleAfterMs) {
     store.seedNeedsRevalidate = false;
     store.lastSettledAt = cachedAt;
   }
@@ -638,6 +643,18 @@ export function useKeyedClientResource<T>(
   return resource;
 }
 
+/** Mark a resource stale without publishing a snapshot. Active subscribers refresh
+ * through runFetch; an inactive/evicted key revalidates on its next subscription. */
+export function invalidateClientResource(key: string): void {
+  invalidatedKeys.add(key);
+  const store = stores.get(key);
+  if (!store) return;
+  const entry = pickFetcherEntry(store);
+  if (entry) {
+    void runFetch(store, entry.fetcher, { replaceInflight: true, owner: entry.owner, deadlineMs: entry.deadlineMs });
+  }
+}
+
 /** Publish data for a key and invalidate any in-flight fetch so it cannot stomp this write. */
 export function setClientResourceData<T>(key: string, data: T) {
   const store = getStore<T>(key);
@@ -670,6 +687,7 @@ export function clearClientResourceStoresForTests(): void {
     store.inflightOwner = null;
   }
   stores.clear();
+  invalidatedKeys.clear();
   for (const [intervalMs, bucket] of [...pollBuckets]) {
     if (bucket.timer !== null) clearInterval(bucket.timer);
     pollBuckets.delete(intervalMs);

@@ -116,7 +116,7 @@ Some adapters share another adapter's routed-tool semantics while retaining inde
   outer error message. Each bounded replay evaluates its own typed delay or compatible message, so
   a later refusal may change between the raw reset sentence and the generated diagnostic without
   losing the next wait. Raw text stays internal because it can reflect credentials. Investigation and limits:
-  `devlog/_plan/260917_devin_input_ceiling/000_review.md`.
+  `devlog/_fin/260917_devin_input_ceiling/000_review.md`.
 
 The registry records those relationships with `contractParent`. A parent relationship does **not** mean the registry recursively constructs a parent adapter and injects it into the child. Azure and MiMo keep owning their existing internal composition. This avoids making production constructors depend on test/conformance needs and keeps this authority refactor behavior-neutral.
 
@@ -151,6 +151,24 @@ owned by the selected adapter's final compiler and cannot affect adapter selecti
 
 The shared Responses path follows the [bounded multipart recovery contract](../subagents.md#multipart-encrypted-task-recovery); credential admission and retry policy remain unchanged.
 
+## Empty assistant history
+
+`src/adapters/openai-chat/messages.ts` omits an assistant turn whose joined text is empty and
+that carries neither tool calls nor serialized reasoning while earlier tool calls still await
+their results, so the empty turn cannot split a call from its result. Outside that window, a
+standalone answer made of explicit blank text parts keeps `content: ""`, because dropping it
+would put two user turns next to each other on chat templates that require strict alternation.
+A message with no text parts at all (`content: ""` or `[]` on input) is still omitted, as it
+was before. Whitespace and nonempty answer text stay byte-exact; tool-call and reasoning-only
+continuations keep their existing content shape.
+
+On native Responses, `src/adapters/openai-responses/empty-assistant.ts` removes only explicit
+content-empty assistant message items sent to `api.kimi.com/coding/v1/responses`. Refusals,
+nonempty annotations, unknown parts/fields, reasoning and tools are retained. A same-input `item_reference` keeps its target message, even
+when empty, so filtering cannot create a dangling reference. Independent
+reasoning/call/result items, caller-owned raw history and other destinations are unchanged.
+`tests/adapters/openai/openai-empty-assistant-history.test.ts` covers both final wires.
+
 ## Moonshot `$ref`-with-siblings normalization
 
 Moonshot/Kimi enforce the draft-07 reading where `$ref` must stand alone and 400 the whole
@@ -173,6 +191,13 @@ The bridge keeps an open function, custom, or tool-search call incomplete when a
 A provider web search still in flight at that truncated terminal is finalized as `failed`, the same status it already receives from the error and explicit-incomplete terminals. It never returned results, so reporting it as `completed` would leave the client showing a finished search for a turn the provider cut short.
 
 `src/adapters/anthropic.ts` maps a `refusal` or `content_filter` stop reason to an explicit `incomplete` adapter event with `reason: "content_filter"` and `retryable: false` instead of `done` with that stopReason (#4312). Codex otherwise treats a filter incomplete without retryable as a dropped stream and retries a refusal that cannot succeed. Partial output, tool-call integrity, and usage are preserved; `max_tokens` remains a `done` so a legitimate truncation can continue.
+
+The translated Anthropic stream ends at `message_stop` after emitting its existing terminal
+classification and usage. The parser does not inspect later records in that response body;
+pre-terminal named pings, data-only pings and SSE comments remain heartbeats. Iterator closure
+releases decoder reservations, attempts reader cancellation and unlocking on a best-effort basis,
+and closes any remaining tool-call budget entry. A never-settling cancellation can delay direct-parser
+cleanup. `src/web-search/progress-stream.ts` continues to reject post-terminal adapter events.
 
 Chat helper admission in `src/server/responses/core.ts` follows the
 [deferred stored-main contract](../providers/openai-tiers.md): only a needed Direct OpenAI helper
@@ -269,3 +294,18 @@ Dashboard Fast-row persistence and client refresh follow the [Fast selector rows
 The registered Devin implementation in `src/adapters/devin.ts` maps data URLs to its native image field. Its textual fallback accepts only bounded HTTPS references and emits a fixed-size omission marker for unsupported or oversized values.
 
 A [compaction routing override](../transports/responses-failover.md#compaction-routing-overrides) selects its target before adapter resolution and uses the existing registry factory.
+
+## Devin consecutive tool results
+
+`mapOcxMessagesToDevin` in `src/adapters/devin.ts` combines only consecutive original-message
+tool results with the same call ID into one history prompt. Chunks retain arrival order, image
+parts and each in-band error marker; any failed chunk sets the combined prompt's error flag.
+Any intervening message, including one omitted by mapping, or a different call ID ends the run,
+so later results keep their chronological slots. The parsed request remains unchanged. Structured
+parts append to mapper-owned arrays; text-only runs join once at their boundary or first
+structured transition. Accumulation does not re-copy its growing prefix. The signed send reuses
+the initially mapped history; signature-withheld retries still build their separate variant.
+This is linear accumulation, not a global request-memory or execution-time bound.
+`tests/providers/devin-chat-wire-fixes.test.ts` covers these boundaries and protobuf fields #7,
+#9 and #10. This normalization addresses duplicate consecutive tool prompts, not every
+upstream `invalid_argument`.

@@ -1,3 +1,4 @@
+import { hashSpendAlias } from "../../src/lib/spend-pool-alias-validation";
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -7,11 +8,19 @@ import {
   DEFAULT_SPEND_RESERVATION_POLICY,
   type SpendJournal,
 } from "../../src/lib/spend-reservation-ledger";
-import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
+import { createRequestExecutionBudget, reportDispatchSends, createPhysicalSendReporter } from "../../src/lib/request-execution-budget";
 import { createRequestSpendTracker } from "../../src/server/responses/request-spend";
 import { SpendLedgerOwnerError, type SpendLedgerOwnerErrorCode } from "../../src/lib/spend-ledger-owner";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { parseRequest } from "../../src/responses/parser";
+import { routeModel } from "../../src/router";
+import { applyFinalRouteRequestNormalization } from "../../src/server/responses/core-normalize";
+import type { RequestLogContext } from "../../src/server/request-log";
+import type { OcxConfig } from "../../src/types";
+import { executeComboResponses } from "../../src/server/responses/core-combo";
+import { createTranslatorBudget } from "../../src/lib/translator-budget";
+import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
 
 /**
  * The durable spend ledger had no production caller (#4707).
@@ -88,6 +97,134 @@ describe("the request path books every physical send on the durable ledger", () 
     expect(root?.unresolved).toBe(1000);
   });
 
+  test("a canonical pool identity is independent of an account-specific display label", () => {
+    const journal = memoryJournal();
+    const ledger = createSpendReservationLedger({ journal, salt: "wiring-fixture" });
+    const tracker = createRequestSpendTracker(logContext({
+      provider: "anthropic-p123abc",
+      spendPoolId: "anthropic",
+    }), undefined, ledger);
+
+    expect(tracker.charge()).toBe(true);
+    expect(ledger.snapshot("pool", "anthropic")?.reserved).toBe(500);
+    const record = journal.lines.map(line => JSON.parse(line)).find(record => record.kind === "reserve");
+    expect(record.targets.find((target: { scope: string }) => target.scope === "pool").alias).toBe(hashSpendAlias("wiring-fixture", "pool", "anthropic"));
+  });
+
+  test("resolved Responses routes share a pool ceiling across account display labels", async () => {
+    const config: OcxConfig = { port: 0, defaultProvider: "pool", providers: {
+      pool: { adapter: "openai-chat", authMode: "oauth", baseUrl: "https://pool.example.test/v1" },
+    } };
+    const ledger = createSpendReservationLedger({ journal: memoryJournal(), policy: {
+      ...DEFAULT_SPEND_RESERVATION_POLICY, pool: { maxTokens: 500 },
+    } });
+    for (const [account, allowed] of [["account-a", true], ["account-b", false]] as const) {
+      const logCtx: RequestLogContext = { model: "", provider: "", usageLogInputTokens: 100,
+        spendOutputCeilingTokens: 300, accountLogLabel: account };
+      const parsed = parseRequest({ model: "pool/model", input: [] });
+      await applyFinalRouteRequestNormalization({ parsed, route: routeModel(config, parsed.modelId),
+        config, req: new Request("http://localhost/v1/responses"), logCtx, inboundWire: "responses" });
+      // Credential resolution gives each request its own account-qualified log label.
+      logCtx.provider = `pool-${account}`;
+      const tracker = createRequestSpendTracker(logCtx, `root-${account}`, ledger);
+      const budget = createRequestExecutionBudget(undefined, undefined, tracker);
+      const reporter = createPhysicalSendReporter(budget, () => ({ poolId: logCtx.spendPoolId, identityId: logCtx.accountLogLabel }));
+      expect(reporter.beforeSend?.()).toBe(allowed);
+      if (allowed) reporter(1);
+      reporter.close?.();
+      if (allowed) tracker.settle({ inputTokens: 100, outputTokens: 300 });
+      expect(ledger.snapshot("pool", logCtx.provider)?.reserved ?? 0).toBe(0);
+    }
+    expect(ledger.snapshot("pool", "pool")?.settled).toBe(400);
+    expect(ledger.snapshot("identity", "account-a")?.settled).toBe(400);
+    expect(ledger.snapshot("identity", "account-b")).toBeUndefined();
+    expect(ledger.snapshot("root", "root-account-a")?.settled).toBe(400);
+    expect(ledger.snapshot("root", "root-account-b")).toBeUndefined();
+  });
+
+  test("a fallback updates the pool for new sends without moving earlier spend", async () => {
+    const config: OcxConfig = { port: 0, defaultProvider: "first", providers: {
+      first: { adapter: "openai-chat", baseUrl: "https://first.example.test/v1" },
+      second: { adapter: "openai-chat", baseUrl: "https://second.example.test/v1" },
+    } };
+    const ledger = createSpendReservationLedger({ journal: memoryJournal(), policy: {
+      ...DEFAULT_SPEND_RESERVATION_POLICY, pool: { maxTokens: 500 },
+      poolAliases: { [hashSpendAlias("wiring-fixture", "pool", "first")]: "first", [hashSpendAlias("wiring-fixture", "pool", "second")]: "second" },
+    }, salt: "wiring-fixture" });
+    const logCtx: RequestLogContext = { model: "", provider: "", spendPoolId: "stale-route",
+      usageLogInputTokens: 100, spendOutputCeilingTokens: 300 };
+    const tracker = createRequestSpendTracker(logCtx, "fallback-root", ledger);
+    const budget = createRequestExecutionBudget(undefined, undefined, tracker);
+    for (const provider of ["first", "second"]) {
+      const parsed = parseRequest({ model: `${provider}/model`, input: [] });
+      await applyFinalRouteRequestNormalization({ parsed, route: routeModel(config, parsed.modelId),
+        config, req: new Request("http://localhost/v1/responses"), logCtx, inboundWire: "responses" });
+      logCtx.provider = `${provider}-account`;
+      const reporter = createPhysicalSendReporter(budget, () => ({ poolId: logCtx.spendPoolId }));
+      expect(reporter.beforeSend?.()).toBe(true); reporter(1); reporter.close?.();
+      expect(ledger.snapshot("pool", provider)?.reserved).toBe(400);
+    }
+    tracker.settle({ inputTokens: 100, outputTokens: 300 });
+    expect(ledger.snapshot("pool", "first")?.unresolved).toBe(400);
+    expect(ledger.snapshot("pool", "second")?.settled).toBe(400);
+    expect(ledger.snapshot("pool", "stale-route")).toBeUndefined();
+    expect(ledger.snapshot("root", "fallback-root")?.unresolved).toBe(400);
+    expect(ledger.snapshot("root", "fallback-root")?.settled).toBe(400);
+  });
+
+  test.each(["first", "second"])("combo reservations charge the resolved %s provider pool", async next => {
+    const config: OcxConfig = { port: 0, defaultProvider: "first", providers: {
+      first: { adapter: "openai-chat", apiKey: "fixture-first", baseUrl: "https://first.example.test/v1" },
+      second: { adapter: "openai-chat", apiKey: "fixture-second", baseUrl: "https://second.example.test/v1" },
+    }, combos: { spend: { strategy: "failover", targets: [
+      { provider: "first", model: "model-a" }, { provider: next, model: "model-b" },
+    ] } } };
+    const ledger = createSpendReservationLedger({ journal: memoryJournal(), policy: {
+      ...DEFAULT_SPEND_RESERVATION_POLICY, pool: { maxTokens: 500 },
+      poolAliases: { [hashSpendAlias("wiring-fixture", "pool", "first")]: "first", [hashSpendAlias("wiring-fixture", "pool", "second")]: "second" },
+    }, salt: "wiring-fixture" });
+    const logCtx: RequestLogContext = { model: "", provider: "", spendPoolId: "stale-route",
+      usageLogInputTokens: 100, spendOutputCeilingTokens: 300 };
+    const tracker = createRequestSpendTracker(logCtx, "combo-root", ledger);
+    const sendBudget = createRequestExecutionBudget(undefined, "combo-spend", tracker);
+    const translatorBudget = createTranslatorBudget();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (() => { throw new Error("unexpected external fetch"); }) as typeof fetch;
+    clearComboSelectionState();
+    clearComboTargetCooldowns();
+    let children = 0;
+    try {
+      const body = { model: "combo/spend", input: [] };
+      const response = await executeComboResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+      }), body, "spend", config, logCtx, { sendBudget, translatorBudget }, {
+        handleResponses: async (_req, _config, childLog, options) => {
+          children += 1;
+          const reporter = createPhysicalSendReporter(options!.sendBudget!, () => ({ poolId: childLog.spendPoolId,
+            identityId: childLog.accountLogLabel }), options!.comboDispatchPermit);
+          expect(reporter.beforeSend?.()).toBe(true); reporter(1); reporter.close?.();
+          childLog.provider += `-account-${children}`;
+          return children === 1
+            ? Response.json({ error: { message: "fixture outage" } }, { status: 503 })
+            : Response.json({ id: "fixture-response", output: [] });
+        },
+        handleComboResponses: async () => { throw new Error("unexpected nested combo"); },
+      });
+      expect(response.status).toBe(next === "first" ? 503 : 200);
+      expect(children).toBe(next === "first" ? 1 : 2);
+      expect(sendBudget.used).toBe(children);
+      expect(ledger.snapshot("pool", "first")?.reserved).toBe(400);
+      expect(ledger.snapshot("pool", "second")?.reserved).toBe(next === "second" ? 400 : undefined);
+      expect(ledger.snapshot("pool", "combo")).toBeUndefined();
+      expect(ledger.snapshot("pool", "stale-route")).toBeUndefined();
+    } finally {
+      globalThis.fetch = originalFetch;
+      translatorBudget.dispose();
+      clearComboSelectionState();
+      clearComboTargetCooldowns();
+    }
+  });
+
   test("a reservation the budget hands back releases its tokens instead of booking spend", () => {
     const ledger = createSpendReservationLedger({ journal: memoryJournal() });
     const tracker = createRequestSpendTracker(logContext(), "root-c", ledger);
@@ -106,21 +243,24 @@ describe("the request path books every physical send on the durable ledger", () 
     expect(root?.settled).toBe(0);
   });
 
-  test("a ledger ceiling refuses the dispatch instead of describing it afterwards", () => {
-    const ledger = createSpendReservationLedger({
-      journal: memoryJournal(),
-      policy: { ...DEFAULT_SPEND_RESERVATION_POLICY, root: { maxTokens: 900 } },
-    });
+  test("a normal first target refuses while stable retries reuse its anchor", () => {
+    const ledger = createSpendReservationLedger({ journal: memoryJournal(), policy: {
+      ...DEFAULT_SPEND_RESERVATION_POLICY, root: { maxTokens: 900 },
+    } });
     const tracker = createRequestSpendTracker(logContext(), "root-d", ledger);
     const budget = createRequestExecutionBudget(undefined, "lr-ceiling", tracker);
-
-    expect(budget.reserveDispatch({ sendClass: "initial", targetKey: "p|m" }).allowed).toBe(true);
-    const refused = budget.reserveDispatch({ sendClass: "transient", targetKey: "p|m" });
+    for (const sendClass of ["initial", "transient"] as const) {
+      const decision = budget.reserveDispatch({ sendClass, targetKey: "p|m" });
+      expect(decision.allowed).toBe(true);
+      if (!decision.allowed) throw new Error("stable retry refused");
+      expect(decision.permit.use()).toBe(true);
+    }
+    expect(ledger.snapshot("root", "root-d")?.reserved).toBe(1000);
+    const refused = budget.reserveDispatch({ sendClass: "account-failover", targetKey: "other|m" });
     expect(refused.allowed).toBe(false);
-    if (refused.allowed) throw new Error("unreachable");
+    if (refused.allowed) throw new Error("new target admitted");
     expect(refused.reason).toBe("spend-exhausted");
-    // Refused before the budget charged it, so the send is not counted either.
-    expect(budget.used).toBe(1);
+    expect(budget.used).toBe(2);
     expect(tracker.refusals).toBe(1);
   });
 
@@ -151,42 +291,24 @@ describe("the request path books every physical send on the durable ledger", () 
     expect(third.snapshot("root", "root-e")?.reserved).toBe(0);
   });
 
-  test("a send that already left is recorded past the ceiling, so the next one can be refused", () => {
-    // The canonical passthrough ladder does not reserve its physical sends; it reports them
-    // after the fetch through onSendsConsumed, which assigns through budget.used. A ceiling
-    // cannot refuse those -- the tokens are spent -- and DROPPING them is a fixpoint: the send
-    // that would cross the limit never joins the total, the total sits one send short of the
-    // ceiling forever, and nothing is ever refused. Recording it is what arms the refusal.
-    const ledger = createSpendReservationLedger({
-      journal: memoryJournal(),
-      policy: { ...DEFAULT_SPEND_RESERVATION_POLICY, root: { maxTokens: 900 } },
-    });
+  test("seeded already-sent usage crosses the ceiling without dropping liability", () => {
+    const ledger = createSpendReservationLedger({ journal: memoryJournal(), policy: {
+      ...DEFAULT_SPEND_RESERVATION_POLICY, root: { maxTokens: 900 },
+    } });
     const tracker = createRequestSpendTracker(logContext(), "root-f", ledger);
     const budget = createRequestExecutionBudget(undefined, "lr-reported", tracker);
-
-    budget.used += 1;
-    expect(ledger.snapshot("root", "root-f")?.reserved).toBe(500);
-    expect(ledger.exhausted("root", "root-f")).toBe(false);
-
-    // This one projects 1000 against a ceiling of 900 and is booked anyway, because it left.
-    budget.used += 1;
+    const reporter = createPhysicalSendReporter(budget, () => ({ poolId: "test-pool" }));
+    expect(reporter.beforeSend?.()).toBe(true);
+    expect(reporter.beforeSend?.()).toBe(true);
+    reporter(2); reporter.close?.();
     expect(ledger.snapshot("root", "root-f")?.reserved).toBe(1000);
     expect(ledger.exhausted("root", "root-f")).toBe(true);
-    // Nothing was refused after the fact -- there was nothing left to refuse.
     expect(tracker.refusals).toBe(0);
-
-    // The ceiling is now armed: the next send that asks BEFORE dispatching is refused.
-    const refused = budget.reserveDispatch({ sendClass: "transient", targetKey: "p|m" });
-    expect(refused.allowed).toBe(false);
-    if (refused.allowed) throw new Error("unreachable");
-    expect(refused.reason).toBe("spend-exhausted");
-
-    // And a send that already left cannot be handed back for free afterwards: it is marked
-    // dispatched when it is recorded, so a refund keeps the tokens as unresolved spend.
-    tracker.refund();
-    const root = ledger.snapshot("root", "root-f");
-    expect(root?.reserved).toBe(500);
-    expect(root?.unresolved).toBe(500);
+    tracker.settle({ inputTokens: 600 });
+    expect(ledger.snapshot("root", "root-f")?.unresolved).toBe(500);
+    expect(ledger.snapshot("root", "root-f")?.settled).toBe(600);
+    const next = createRequestExecutionBudget(undefined, undefined, createRequestSpendTracker(logContext(), "root-f", ledger));
+    expect(next.reserveDispatch({ sendClass: "initial", targetKey: "p|m" }).allowed).toBe(false);
   });
 
   test("under a configured ceiling a reservation that cannot be made durable refuses the send", () => {

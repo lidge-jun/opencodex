@@ -11,6 +11,7 @@ import { getDebugLogEntries, resetDebugLogBufferForTests } from "../../src/lib/d
 import { resetDebugSettingsForTests } from "../../src/lib/debug-settings";
 import { setDraining } from "../../src/server/lifecycle";
 import { startServer } from "../../src/server";
+import { findAvailablePort } from "../../src/server/ports";
 import { readDisplaySafeErrorText } from "../../src/server/responses/core";
 import { formatPassthroughUpstreamError } from "../../src/server/responses/passthrough-error";
 import type { OcxConfig, OcxParsedRequest } from "../../src/types";
@@ -348,13 +349,17 @@ describe("passthrough empty 503 (#452)", () => {
 });
 
 describe("drain 503 JSON (#452)", () => {
-  test("POST /v1/responses while draining returns JSON error body", async () => {
+  test("POST /v1/responses while draining returns retryable JSON with listener-policy CORS (#6642)", async () => {
     if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
-    delete process.env.OPENCODEX_API_AUTH_TOKEN;
+    process.env.OPENCODEX_API_AUTH_TOKEN = "drain-test-token";
+    const loopbackPort = await findAvailablePort(0, "127.0.0.1");
+    const publicPort = await findAvailablePort(0, "0.0.0.0", { reservedPort: loopbackPort });
     saveConfig({
-      port: 0,
+      port: publicPort,
+      hostname: "0.0.0.0",
+      unauthenticatedLoopbackListener: { enabled: true, port: loopbackPort },
       defaultProvider: "xiaomi",
       providers: {
         xiaomi: {
@@ -366,24 +371,35 @@ describe("drain 503 JSON (#452)", () => {
       },
     } as OcxConfig);
 
-    const server = startServer(0);
+    const server = startServer(publicPort);
     try {
       setDraining(true);
-      const response = await originalGlobalFetch(new URL("/v1/responses", server.url), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ model: "mimo-v2.5-pro", input: "hi" }),
-      });
-      expect(response.status).toBe(503);
-      expect(response.headers.get("retry-after")).toBe("5");
-      const json = await response.json() as { error?: { message?: string; code?: string | null } };
-      expect(json.error?.message).toContain("shutting down");
-      expect(json.error?.code).toBe("server_is_overloaded");
+      for (const port of [server.port, loopbackPort]) {
+        for (const origin of ["http://localhost:20100", "http://rebinding.example.test"]) {
+          const allowed = origin === "http://localhost:20100";
+          // The denied loopback request is same-origin by Host: public policy would echo it.
+          const host = !allowed && port === loopbackPort ? "rebinding.example.test" : `127.0.0.1:${port}`;
+          const response = await originalGlobalFetch(`http://127.0.0.1:${port}/v1/responses`, {
+            method: "POST",
+            headers: { "content-type": "application/json", Origin: origin, Host: host },
+            body: JSON.stringify({ model: "mimo-v2.5-pro", input: "hi" }),
+          });
+          expect(response.status).toBe(503);
+          expect(response.headers.get("content-type")).toContain("application/json");
+          expect(response.headers.get("retry-after")).toBe("5");
+          expect(response.headers.get("access-control-allow-origin"))
+            .toBe(allowed ? origin : `http://localhost:${server.port}`);
+          const json = await response.json() as { error?: { type?: string; message?: string; code?: string | null } };
+          expect(json.error?.code).toBe("server_restarting");
+          expect(json.error?.type).toBe("server_error");
+          expect(json.error?.message).toBe("OpenCodex is restarting; retry this request.");
+        }
+      }
     } finally {
       setDraining(false);
       await server.stop(true);
     }
-  });
+  }, SERVER_BUDGET_MS);
 });
 
 describe("openai-chat provider debug (#452)", () => {

@@ -1,3 +1,5 @@
+import { hasOrdinaryNativeOpenAiRow } from "./control-plane";
+import { isCodexControlPlaneModel } from "../control-plane-models";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
@@ -45,6 +47,7 @@ import {
   displayCodexRuntimePath,
   persistEffortClamp,
   resolveAndPersistCodexRuntime,
+  getCodexRuntimeSnapshot,
   UNCLAMPABLE_REASONING_EFFORTS,
   type EffortClampDiagnostic,
 } from "../runtime";
@@ -84,8 +87,14 @@ export function shouldApplyNativeEffortClamp(
     && isCanonicalOpenAiForwardProvider(provider);
 }
 
-export function catalogModelEfforts(slugs: readonly string[]): Map<string, string[]> {
-  const out = new Map<string, string[]>();
+export interface CatalogModelLadder {
+  readonly efforts: string[];
+  readonly defaultEffort?: string;
+}
+
+/** Each slug's reasoning ladder and default as the written Codex catalog offers them. */
+export function catalogModelLadders(slugs: readonly string[]): Map<string, CatalogModelLadder> {
+  const out = new Map<string, CatalogModelLadder>();
   if (slugs.length === 0) return out;
   const catalog = readCatalog(readCodexCatalogPath());
   if (!catalog) return out;
@@ -99,9 +108,17 @@ export function catalogModelEfforts(slugs: readonly string[]): Map<string, strin
       ? entry.supported_reasoning_levels as Array<{ effort?: string }>
       : [];
     const efforts = levels.flatMap(l => typeof l.effort === "string" ? [l.effort] : []);
-    if (efforts.length > 0) out.set(callerSlug, efforts);
+    if (efforts.length === 0) continue;
+    const defaultEffort = typeof entry.default_reasoning_level === "string" && efforts.includes(entry.default_reasoning_level)
+      ? entry.default_reasoning_level
+      : undefined;
+    out.set(callerSlug, defaultEffort === undefined ? { efforts } : { efforts, defaultEffort });
   }
   return out;
+}
+
+export function catalogModelEfforts(slugs: readonly string[]): Map<string, string[]> {
+  return new Map([...catalogModelLadders(slugs)].map(([slug, ladder]) => [slug, ladder.efforts]));
 }
 
 export function catalogEntryEfforts(entry: RawEntry): string[] {
@@ -187,6 +204,8 @@ export function applyCatalogModelMetadata(entry: RawEntry, model?: CatalogModel)
  * Two real sources exist and both are consulted here, in the same precedence the
  * writers use (`applyCatalogMetadata` runs first, the model's own fields
  * overwrite it): the `CatalogModel` and the generated jawcode metadata table.
+ * Vendor-ID fallback windows are estimates for client budgets, recorded separately rather
+ * than promoted to serving-provider assertions.
  * Reading only the model would silently drop every provider whose capabilities
  * live in that table.
  */
@@ -213,7 +232,8 @@ function stampCapabilityProvenance(entry: RawEntry, model: CatalogModel): void {
   entry.opencodex_capability_provenance = {
     provider: model.provider,
     model_id: model.id,
-    ...(contextWindow !== undefined ? { context_window: contextWindow } : {}),
+    ...(contextWindow !== undefined && !model.contextWindowInference ? { context_window: contextWindow } : {}),
+    ...(model.contextWindowInference ? { inferred_context_window: contextWindow, context_window_inference: { ...model.contextWindowInference } } : {}),
     ...(inputModalities !== undefined ? { input_modalities: [...inputModalities] } : {}),
     ...(Array.isArray(model.capabilities) && model.capabilities.length > 0
       ? { capabilities: [...model.capabilities] }
@@ -364,7 +384,9 @@ export function supportedCodexReasoningEffortsFromObservedCatalog(
 }
 
 export function codexSupportedReasoningEfforts(deps: BundledCatalogDeps = {}): ReadonlySet<string> | null {
-  return supportedCodexReasoningEffortsFromObservedCatalog(loadBundledCodexCatalog(deps));
+  return supportedCodexReasoningEffortsFromObservedCatalog(
+    deps.observedCatalog !== undefined ? deps.observedCatalog : loadBundledCodexCatalog(deps),
+  );
 }
 
 export function clampedDefaultEffort(original: string, surviving: readonly string[]): string {
@@ -385,7 +407,7 @@ export function clampEntryToCodexSupportedEfforts(
   entry: RawEntry,
   supported: ReadonlySet<string> | null,
 ): void {
-  if (!supported) return;
+  if (!supported || isCodexControlPlaneModel(entry.slug)) return;
   const levels = Array.isArray(entry.supported_reasoning_levels)
     ? entry.supported_reasoning_levels as Array<{ effort?: string }>
     : null;
@@ -532,6 +554,14 @@ export function clampCatalogModelsToObservedCodexSupport(
     else index += 1;
   }
 
+  // Only Reserve rows are currently omitted above; ordinary natives keep a fallback ladder.
+  // Also repair a persisted orphan so a removed Reserve can never leave a reviewer behind.
+  if (!hasOrdinaryNativeOpenAiRow(models)) {
+    for (let index = models.length - 1; index >= 0; index -= 1) {
+      if (isCodexControlPlaneModel(models[index]!.slug)) models.splice(index, 1);
+    }
+  }
+
   return {
     removedEfforts: [...removed].sort(),
     affectedModels: affected,
@@ -548,7 +578,11 @@ export function clampCatalogModelsToCodexSupport(models: RawEntry[], deps: Bundl
 
   let runtimePath = "codex";
   let runtimeVersion: string | null = null;
-  if (!deps.commandCandidates) {
+  if (deps.observedCatalog !== undefined && !deps.commandCandidates) {
+    const snapshot = getCodexRuntimeSnapshot();
+    runtimePath = snapshot.runtime.command;
+    runtimeVersion = snapshot.runtime.version;
+  } else if (!deps.commandCandidates) {
     try {
       const resolved = resolveAndPersistCodexRuntime({
         execFileSync: deps.execFileSync,
@@ -589,8 +623,8 @@ export function clampCatalogModelsToCodexSupport(models: RawEntry[], deps: Bundl
       removedEfforts: [...clamp.removedEfforts],
       affectedModels: [...clamp.affectedModels],
     };
-    for (const line of formatClampLogLines(diagnostic)) console.warn(line);
-    if (!deps.commandCandidates) persistEffortClamp(diagnostic, { configDir: deps.configDir });
+    const changed = deps.commandCandidates ? true : persistEffortClamp(diagnostic, { configDir: deps.configDir });
+    if (changed) for (const line of formatClampLogLines(diagnostic)) console.warn(line);
     deps.onEffortClamp?.(diagnostic);
   } else if (!deps.commandCandidates) {
     persistEffortClamp(null, { configDir: deps.configDir });

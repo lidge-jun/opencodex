@@ -7,13 +7,13 @@
  */
 import { anthropicBodyElidesBlockedSkill } from "../claude/inbound";
 import { isClaudeWebSearchToolName } from "../claude/outbound";
-import { isAnthropicAccountPoolEnabled } from "../oauth/anthropic-routing";
 import type { ProtocolReasonCode } from "../protocols/contract";
 import { featuresFromMessagesBody } from "../protocols/features";
 import { credentialDomainFor } from "../protocols/opaque-state";
 import { resolveProtocolSettings } from "../protocols/settings";
 import type { RouteResult } from "../router";
 import type { OcxConfig } from "../types";
+import { configuredAnthropicInstance } from "../providers/anthropic-instance";
 import { requiresVisionPreprocessing } from "../vision";
 import { resolvePinnedEffort } from "./effort-policy";
 
@@ -95,9 +95,8 @@ function bridgeOnlyPolicyApplies(
 /**
  * The credential rule. A proxy-managed key is native since PF-08. An Anthropic OAuth account
  * is native only with `managedMessagesNativeOAuth` on (itself effective only with
- * `managedMessagesNative`), only for the `anthropic` provider the OAuth store serves, and only
- * to `api.anthropic.com`. A pooled account set declines: rotation, session affinity and quota
- * ranking live in the Responses pipeline's transport and are not replicated here. `forward`
+ * `managedMessagesNative`), only for a configured Anthropic OAuth instance, and only
+ * to `api.anthropic.com`. Pool selection and recovery are resolved at native dispatch. `forward`
  * belongs to the caller.
  */
 function credentialDeclineReason(
@@ -108,10 +107,9 @@ function credentialDeclineReason(
   const provider = route.provider;
   if (provider.authMode === undefined || provider.authMode === "key") return undefined;
   if (provider.authMode !== "oauth") return "auth-mode-not-native";
-  if (!resolveProtocolSettings(config).rollout.managedMessagesNativeOAuth) return "auth-mode-not-native";
-  if (route.providerName !== "anthropic") return "auth-mode-not-native";
+  if (!resolveProtocolSettings(config, route.providerName).rollout.managedMessagesNativeOAuth) return "auth-mode-not-native";
+  if (!configuredAnthropicInstance(config, route.providerName)) return "auth-mode-not-native";
   if (!credentialDomainFor(provider)?.firstPartyAnthropic) return "auth-mode-not-native";
-  if (isAnthropicAccountPoolEnabled(config) || selector.oauthFailoverQuorum === true) return "oauth-account-pool";
   return undefined;
 }
 
@@ -135,7 +133,7 @@ export function nativeMessagesDeclineReason(
   config: OcxConfig,
   selector: NativeMessagesSelector = {},
 ): NativeMessagesDeclineReason | undefined {
-  if (!resolveProtocolSettings(config).rollout.managedMessagesNative) return "rollout-disabled";
+  if (!resolveProtocolSettings(config, route.providerName).rollout.managedMessagesNative) return "rollout-disabled";
   const provider = route.provider;
   if (provider.adapter !== "anthropic") return "cross-wire-ir";
   const credentialDecline = credentialDeclineReason(route, config, selector);

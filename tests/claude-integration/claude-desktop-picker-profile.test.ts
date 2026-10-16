@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -171,5 +172,23 @@ describe("Claude Desktop picker profile", () => {
     expect(isOwnedDesktopEntry({ id: picker, name: "opencodex-picker" })).toBe(true);
     expect(isOwnedDesktopGatewayEntry({ id: picker, name: "opencodex-picker" })).toBe(false);
     expect(inspectDesktop3pConfigLibrary({ env: env() })).toMatchObject({ kind: "standard", appliedId: picker });
+  });
+
+  test("a non-regular picker profile path inspects as unsafe instead of blocking", () => {
+    const picker = "picker";
+    mkdirSync(join(library, `${picker}.json`));
+    writeMetadata({ appliedId: picker, entries: [{ id: picker, name: "opencodex-picker" }] });
+    expect(inspectDesktopPickerProfile({ env: env(), configDir })).toEqual({ kind: "unsafe", reason: "desktop_config_not_regular" });
+  });
+
+  test("a FIFO swapped onto the picker profile path refuses instead of waiting", () => {
+    // Windows has no POSIX FIFO entry; the directory case above covers the portable contract.
+    if (process.platform === "win32") return;
+    const picker = "picker";
+    const result = spawnSync("mkfifo", [join(library, `${picker}.json`)]);
+    expect(result.status).toBe(0);
+    writeMetadata({ appliedId: picker, entries: [{ id: picker, name: "opencodex-picker" }] });
+    expect(inspectDesktopPickerProfile({ env: env(), configDir })).toEqual({ kind: "unsafe", reason: "desktop_config_not_regular" });
+    expect(applyDesktopPickerProfile({ proxyPort: 41234, env: env(), configDir })).toEqual({ ok: false, reason: "write_failed" });
   });
 });

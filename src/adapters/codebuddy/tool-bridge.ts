@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   namespacedToolName,
+  requiresToolCall,
   toolChoiceToolPredicate,
   type OcxParsedRequest,
   type OcxTool,
@@ -473,13 +474,6 @@ function codeBuddyToolAliases(wireNames: readonly string[]): Map<string, string>
   const hashedNames = wireNames.filter(wireName => !aliases.has(wireName)).sort();
   for (const wireName of hashedNames) aliases.set(wireName, codeBuddyToolAlias(wireName, used));
   return aliases;
-}
-
-function requiresToolCall(choice: OcxToolChoice | undefined): boolean {
-  return choice === "required"
-    || (typeof choice === "object" && choice !== null && (
-      "name" in choice || ("mode" in choice && choice.mode === "required")
-    ));
 }
 
 function validateToolNamePart(value: unknown): value is string {

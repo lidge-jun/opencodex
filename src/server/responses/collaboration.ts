@@ -9,6 +9,8 @@ import {
 import { parseRequest } from "../../responses/parser";
 import { externalTaskInputContent } from "../../responses/task-input";
 import { MULTI_AGENT_MODE_HINT_RECOMMENDATION } from "../../codex/multi-agent-mode-policy";
+import { analyzeCodeModeExec } from "./code-mode-collab-surface";
+import { deferredV1Evidence } from "./deferred-collab-surface";
 import { buildCompactV1Output, COMPACT_PROMPT, decodeCompactionSummary, extractCompactUserMessages } from "../../responses/compaction";
 import { FORWARD_HEADERS, sanitizeReasoningInputContent } from "../../adapters/openai-responses";
 import { expandPreviousResponseInput, previousResponseProviderState, rememberResponseState } from "../../responses/state";
@@ -316,26 +318,53 @@ export function isV1CollabSurface(parsed: OcxParsedRequest): boolean {
 
 
 export function collabSurface(parsed: OcxParsedRequest): "v1" | "v2" | null {
+  const direct = directCollabSurface(parsed.context.tools);
+  // #6844: code-mode-only turns nest the collaboration tools inside `exec`, and tool-search turns
+  // defer them entirely. A rendered V1 listing or the deferred-namespace fragment can each infer V1;
+  // neither ever yields v2, overrides a different direct surface, or survives a rendered foreign
+  // collaboration claim.
+  const codeMode = analyzeCodeModeExec(parsed.context.tools);
+  if (codeMode.renderedV1 && codeMode.foreignCollabClaim) return null;
+  const inferredV1 = codeMode.renderedV1 || deferredV1Evidence(parsed, codeMode);
+  if (!inferredV1) return direct.surface;
+  if (codeMode.foreignCollabClaim) return null;
+  return !direct.sawNativeCollabTool || direct.surface === "v1" ? "v1" : null;
+}
+
+function directCollabSurface(tools: OcxParsedRequest["context"]["tools"]): {
+  surface: "v1" | "v2" | null;
+  sawNativeCollabTool: boolean;
+} {
   let namespacedSpawn = false;
   let flatSpawn = false;
   let v1Only = false;
   let v2Only = false;
-  for (const t of parsed.context.tools ?? []) {
+  // Collaboration-named direct tools outside an MCP namespace; an MCP server's own send_message or
+  // spawn_agent says nothing about the native surface, matching the nested check.
+  let sawNativeCollabTool = false;
+  for (const t of tools ?? []) {
+    const native = !t.namespace?.startsWith("mcp__");
     if (t.name === "spawn_agent") {
       if (t.namespace) namespacedSpawn = true;
       else flatSpawn = true;
+      if (native) sawNativeCollabTool = true;
     } else if (t.name === "send_input" || t.name === "resume_agent" || t.name === "close_agent") {
       v1Only = true;
+      if (native) sawNativeCollabTool = true;
     } else if (t.name === "send_message" || t.name === "followup_task" || t.name === "interrupt_agent" || t.name === "list_agents") {
       v2Only = true;
+      if (native) sawNativeCollabTool = true;
     }
   }
-  if (!namespacedSpawn && !flatSpawn) return null; // no spawn_agent -> no collab surface
-  if (namespacedSpawn && flatSpawn) return null;   // contradictory spawn shapes
-  if (v1Only && v2Only) return null;               // contradictory companions
-  if (v1Only) return "v1";
-  if (v2Only) return "v2";
-  return namespacedSpawn ? "v1" : "v2"; // companionless fallbacks (legacy defaults)
+  const surface = (): "v1" | "v2" | null => {
+    if (!namespacedSpawn && !flatSpawn) return null; // no spawn_agent -> no collab surface
+    if (namespacedSpawn && flatSpawn) return null;   // contradictory spawn shapes
+    if (v1Only && v2Only) return null;               // contradictory companions
+    if (v1Only) return "v1";
+    if (v2Only) return "v2";
+    return namespacedSpawn ? "v1" : "v2"; // companionless fallbacks (legacy defaults)
+  };
+  return { surface: surface(), sawNativeCollabTool };
 }
 
 

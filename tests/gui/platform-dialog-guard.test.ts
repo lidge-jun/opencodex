@@ -11,7 +11,7 @@ import { repoPath, repoRoot } from "../helpers/repo-root";
  * JavaScript panel methods, so WKWebView suppresses the panel entirely. Thirteen consent
  * gates and seven result reports were inoperative there — including the sidebar stop and
  * refresh orbs — while the same dashboard worked in a browser.
- * See devlog/_plan/260921_app_runtime_ownership/050_webview_dialogs.md.
+ * See devlog/_fin/260921_app_runtime_ownership/050_webview_dialogs.md.
  *
  * CI could not have caught the original defect because the GUI tests encoded browser
  * dialogs as available: they stubbed `confirm()` to true and `alert()` to a no-op. A

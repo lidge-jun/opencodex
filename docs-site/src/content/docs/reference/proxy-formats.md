@@ -71,6 +71,34 @@ returns 504, and client cancellation returns 499. Bun does not expose the exact 
 cannot currently be forwarded precisely. A successful connection preserves the initial session
 frames in order. This handshake policy is separate from the Responses WebSocket transport.
 
+## Undeclared tool calls
+
+On the Responses endpoint, when a request declares a tool catalog, a native passthrough reply
+that calls a client-executed tool outside that catalog fails the turn instead of relaying the
+call: a `response.failed` event with error code `undeclared_tool_call`, then `data: [DONE]`;
+buffered JSON returns HTTP 502 with the same code. The refusal runs before the response can
+enter continuation state, and it stands down only for `authMode: "forward"` providers or a
+request with no declared catalog.
+
+The Chat Completions and Messages endpoints honor deferred tool catalogs: those clients may
+declare a partial catalog and discover the rest at runtime through their own tool registry,
+which — not the translated catalog snapshot — owns the full declaration boundary. A call
+outside the declared list is relayed for the client to validate; a call invented against an
+explicitly empty `tools: []` is still refused, because no deferred registry exists under an
+empty declaration. Those refusals keep the `undeclared_tool_call` code on every wire:
+
+- **Chat Completions:** a `data:` frame containing an OpenAI-style `error` object carrying the
+  code, then the stream closes without a success completion or `[DONE]`; buffered JSON returns
+  HTTP 502 with the code.
+- **Messages:** an Anthropic `event: error` frame whose body is
+  `{ "type": "error", "error": { "type": "api_error", "code": "undeclared_tool_call", ... } }`,
+  without a successful `message_stop` or `[DONE]`; buffered JSON returns HTTP 502 `api_error`
+  with the code. A deterministic catalog violation is never reported as a retryable
+  `overloaded_error` (HTTP 529).
+
+Separately, on every inbound wire, a provider's `default.`-namespaced call is normalized back
+to the bare tool name the request declared (`default.Read` → `Read`).
+
 ## Endpoint overview
 
 | Client surface | Endpoint | Successful non-stream result | Successful stream or socket result |
@@ -169,6 +197,44 @@ for final text and `session.updated` with `session.status="closed"`.
 
 This is the native opencodex data-plane shape. The request body must be a JSON object with a
 non-empty `model`. `input` may be a string or an array of Responses items.
+
+### Caller conversation header
+
+For HTTP `POST /v1/responses`, `POST /v1/messages`, and `POST /v1/chat/completions`, a client can send a stable
+`x-session-id` for each conversation. When no `session_id`, `session-id`, or `thread-id`
+header is present, opencodex promotes the marker to `session_id`. Managed Grok identity
+on Responses takes precedence too. Even an empty explicit header suppresses promotion.
+
+Use 1–128 ASCII letters, digits, `.`, `_`, `:`, or `-`, starting with a letter or digit.
+Surrounding whitespace is trimmed; missing or invalid markers are ignored. Loopback
+admission preserves the marker. Authenticated admission derives an opaque identifier
+from the marker and the admitted credential principal, so different credentials do not
+share a newly promoted identifier. Rotation changes this identifier; authenticated
+requests without a trusted principal are left unchanged.
+
+Use distinct markers for distinct conversations. This preserves conversation continuity
+for downstream consumers, but does not guarantee an upstream cache hit or measured savings.
+WebSocket frames, compact, and count_tokens do not use this promotion.
+
+On canonical ChatGPT-backed Responses dispatch, a non-empty explicit `session_id` wins.
+Otherwise, the first non-empty alias among `session-id`, then `thread-id`, supplies
+`session_id` if its value is safe; an invalid winning alias suppresses weaker identity.
+Empty header values are dropped before this step on every path (Responses auth header
+selection and the Claude Messages and Chat Completions bridges), so an empty header counts as
+absent: an empty `session-id` lets a valid `thread-id` win. The Claude metadata-derived
+session applies only when no non-empty canonical header or alias remains.
+Aliases keep their original names on the wire; their validated raw caller values are forwarded
+like an explicit `session_id`, without the principal scoping used for promoted `x-session-id`.
+This egress conversion does not change ingress affinity. Custom and API-key destinations are
+unchanged, and no identity is invented for requests without a conversation marker.
+
+For third-party clients, keep one caller-owned marker per conversation, including repeated
+`curl` requests. A shared `prompt_cache_key` or identical system/tools prefix is a cache cohort,
+not proof that two requests belong to one conversation. Requests without a conversation marker
+receive no invented stable session. OpenCodex also does not impersonate Codex by synthesizing
+an `originator`; a caller-supplied originator retains its normal forwarding rules. Header
+continuity does not establish a cache hit: compare the upstream's reported cached input tokens
+for your own repeated-prefix requests. An omitted cache-write count is not evidence of no write.
 
 ### Accepted request fields
 
@@ -317,6 +383,11 @@ When available, `input_tokens_details` can also include `cache_write_tokens`. Th
 detail objects are a compatibility guarantee for strict Responses clients; zero can mean "not
 reported," not necessarily "the provider performed no such work."
 
+For Anthropic upstreams, a reported `usage.output_tokens_details.thinking_tokens` is preserved as
+Responses `output_tokens_details.reasoning_tokens` and Chat `completion_tokens_details.reasoning_tokens`,
+for JSON and streaming replies. It is already included in the output-token total, not added again;
+missing or invalid detail is not estimated from visible thinking text. See [Anthropic's usage contract](https://platform.claude.com/docs/en/build-with-claude/thinking-steering-and-cost).
+
 ### Correlating a response with its request log
 
 Every admitted HTTP Responses reply carries an `x-opencodex-request-id` header holding a
@@ -329,8 +400,23 @@ named in `Access-Control-Expose-Headers`, which is what lets browser JavaScript 
 cross-origin — a custom `x-` header is otherwise invisible to `response.headers.get()` even when
 it is on the wire.
 
-Responses rejected at authentication or origin admission never reach this wrapper and carry no id,
-so a missing header means the request was refused before it was logged.
+Responses rejected at authentication or origin admission never reach this wrapper and carry no id.
+
+Logged `POST /v1/messages` replies carry the same OCX request-history id in **both**
+`request-id` and `x-opencodex-request-id`. This applies to native and translated replies,
+streaming and JSON, and logged refusals. Claude Code can use its persisted `requestId`
+metadata from `request-id` to join future transcripts to that OCX history row.
+
+On native delivered replies and upstream HTTP errors, an opaque Anthropic upstream
+`request-id` matching `req_[A-Za-z0-9_-]{1,128}` is preserved separately as
+`x-opencodex-upstream-request-id`. It is a provider diagnostic id, not an OCX ledger key.
+Missing or nonconforming upstream ids, and translated adapter ids, are omitted. These
+response headers are readable through CORS alongside existing exposed headers.
+
+No OCX id is added to authentication, origin, drain or active-turn refusals that have no
+request-log owner, or to count_tokens. Streaming headers identify the turn's eventual
+history row; they do not attest that final usage has already been saved. Old transcripts
+without a shared key remain unlinked; timestamp or token similarity is not an exact join.
 
 ### WebSocket upgrade on the same path
 

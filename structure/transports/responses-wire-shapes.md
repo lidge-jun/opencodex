@@ -18,8 +18,8 @@ remain, and the note asks the next model to reopen unresolved visual evidence. P
 commentary-only or unphased histories stay intact. Sidecar preparation projects parsed messages before
 vision planning. The projection does not rewrite `_rawBody` or stored history; later vision preprocessing
 may rewrite the request-local raw body for transport safety. Normal generation and native compaction
-stay unchanged. Both routed v1 and v2 pass through this boundary;
-raw Responses gateways retain their existing text-only compaction conversion.
+stay unchanged. Both routed v1 and v2 pass through this boundary; raw Responses gateways retain their existing text-only compaction conversion.
+The [decoded checkpoint continuation contract](responses.md#decoded-checkpoint-continuation) governs the conditional system note and its authorization limits.
 
 ## Direct MCP calls in code mode
 
@@ -67,7 +67,7 @@ to the Grok CLI gateway even if its saved base URL differs; custom provider IDs 
 default. API-key requests, translated Chat/Anthropic defaults and other Grok models retain their
 existing wire and tier policy. The OAuth lane is service-tier classified per model
 (`modelSupportsServiceTier` on the registry entry, live-probed 2026-09-13 and 2026-09-23;
-`devlog/_plan/260923_grok47_parity/010_probe-evidence.md` records 4.7): grok-4.7, grok-4.6, grok-4.5,
+`devlog/_fin/260923_grok47_parity/010_probe-evidence.md` records 4.7): grok-4.7, grok-4.6, grok-4.5,
 grok-4.3, grok-4.20-0309-reasoning, grok-4.20-0309-non-reasoning, grok-build-0.1 and
 grok-composer-2.5-fast accept `service_tier: "priority"` over Grok OAuth and echo it, so those
 routes resolve Fast-eligible, publish `--fast` rows, and forward a caller-sent tier on either wire (`chatServiceTier: true`) — except OAuth grok-4.7, whose Fast serializes `grok-4.7-build-fast` with no tier ([xAI Grok](../providers/xai-grok.md#oauth-fast-tier-priority-processing)).
@@ -208,10 +208,10 @@ uses the original routed provider while the generated hash uses the settled adap
 Anthropic hard pin cannot make the canonical Go destination disappear from transport recognition.
 An operator-supplied header wins case-insensitively. Renamed providers are covered only when their
 fixed key-auth destination still matches the registry; custom and lookalike URLs receive nothing.
-OpenCode Go's exact `union-alpha` model id is hard-pinned to the Anthropic wire from every inbound
-surface; sibling models retain their existing Chat or Responses selection. This wire choice and the
-session namespace do not assert upstream availability after the Messages endpoint accepts the
-session header.
+OpenCode Go's exact `claude-haiku-5-5`, `minimax-m2.5`, `minimax-m2.7`, `minimax-m3`, and `union-alpha`
+model ids are hard-pinned to Anthropic from every inbound; Haiku uses Messages in Go's [endpoint table](https://opencode.ai/docs/go/#endpoints).
+Sibling models retain their Chat or Responses selection. This wire choice and the session namespace
+do not assert upstream availability after the Messages endpoint accepts the session header.
 `src/adapters/openai-responses/web-search.ts` also drops the provider-rejected
 `search_content_types` and `indexed_web_access` fields from plain `web_search` tools while
 preserving preview tools. The two OpenCode Zen destinations gate that on a Contributor Muse id
@@ -293,34 +293,34 @@ There is no rule that strips whatever precedes the first dot: a legitimate tool 
 one in another provider's vocabulary, and a replayed item names a call that already happened, which
 is the worst place to guess.
 
-Membership enforcement is that flag, `enforceDeclaredToolNames`, and only the `responses` inbound
-wire enforces. Explicit enforcement with no declared catalog also refuses client tool calls rather
-than treating the missing set as permission. A routed provider that names a tool the request never declared ends the turn there:
+Membership enforcement refuses a routed provider that names a tool the request never declared:
 `src/bridge/sse.ts` emits `response.failed` and `src/bridge/response-json.ts` returns a failed
 response, both carrying `undeclared client tool`. That is the #1700 contract and it stands. Codex
 executes a top-level tool call, so a hallucinated `apply_patch` — which under code mode exists only
 as a nested `tools.apply_patch(...)` helper inside `exec` — is refused before it reaches the
 runtime, where it previously surfaced as a bare `aborted` with the file untouched.
 
-The `chat` and `anthropic` inbound wires relay the call instead. This is a deliberate reversal of
-#1700's scope for those two wires, not an oversight. Both vendor specs make the client's own runner
-responsible for validating a tool call and then executing or denying it, and harnesses on those
-endpoints defer part of their catalog to conserve prompt tokens and discover the rest at runtime.
-Enforcing membership against a partial catalog killed those streams mid-turn with a 502 and cost the
-caller the whole turn. This proxy executes no tool call on any wire, so scoping enforcement off
-these two moves the decision to the party that already makes it rather than removing it.
+Translated lanes (`src/server/responses/run-turn-execution.ts`, `adapter-delivery.ts`) derive
+enforcement from `inboundWire`: only `responses` refuses an undeclared client-executed call. The
+native lane computes `undeclaredToolGuardActive` once in `passthrough-dispatch.ts`: `responses`
+refuses against any readable catalog; `chat` and `anthropic` refuse only under an explicit empty
+catalog (below). `passthrough-delivery.ts` reads that flag for SSE and buffered JSON alike, before
+continuation state is stored. Otherwise `chat` and `anthropic` replies relay the call: those
+harnesses may defer part of their catalog to conserve prompt tokens and discover the rest at
+runtime, and both vendor specs leave the client's own runner responsible for validating it —
+membership enforcement against a partial catalog would kill those streams mid-turn.
 
-An explicitly empty catalog still authorizes nothing on the wire that enforces. A request declaring
-an empty tool list is making a statement rather than omitting one, which is how the passthrough
-guard reads it through `clientExplicitWireToolCatalog` in
-`src/server/responses/passthrough-dispatch.ts`.
+An explicitly empty catalog authorizes nothing wherever enforcement runs — deferred wires
+included: `tools: []` is a statement, not an omission, and no deferred registry exists under
+it. The ingresses carry the fact as `clientDeclaredEmptyToolCatalog`
+(`src/server/chat-completions.ts`, `src/server/claude-messages.ts`) since translation drops an
+empty catalog with the rest; `hasExplicitEmptyToolCatalog` reads a verbatim `tools: []` or
+`additional_tools: []` too. Refusals keep `undeclared_tool_call` across the buffered envelope
+and endpoint projections, so Messages sees a deterministic `api_error`, never `overloaded_error`.
 
-The passthrough guard is not wire-scoped. `undeclaredToolGuardActive` gates namespace normalization
-and continuation-state suppression as well as the refusal, and it stands down only for
-`authMode: "forward"` and for a request that declares no catalog at all.
-
-`src/server/responses/run-turn-execution.ts` and `src/server/responses/adapter-delivery.ts` set the
-flag from `inboundWire` on the streaming, buffered, and JSON paths alike, so the three cannot drift.
+`undeclaredToolGuardActive` gates refusal and continuation suppression, standing down only for
+`authMode: "forward"`, deferred catalogs, and absent ones; a refused turn never enters
+continuation state. `default.` normalization is scoped separately.
 
 ## Selection outlives the declaration check
 
@@ -390,20 +390,20 @@ Native passthrough SSE has TWO shapes, selected per request in
   `response.completed` closes the client stream even if upstream keeps HTTP/SSE
   alive. Darwin uses it for no-client-rewrite traffic only (neither image-gen
   aliases nor item-id repair) and is explicit-only: `auto` stays tee even after
-  a future threshold bump. One eager reader + byte-bounded
-  client queue + post-cancel bounded discard-drain replaces the tee and goes
-  directly to the response without a JS rewrite wrapper, preserving the full
-  inspection side-effect set (shared `createSseInspector` factory in `relay.ts`)
+  a future threshold bump. One eager reader, a byte-bounded client queue and a bounded post-cancel
+  discard-drain replace the tee without an additional JS rewrite wrapper. Producer teardown removes
+  both upstream abort listeners, so a live controller cannot retain its completed native reader.
+  The shared `createSseInspector` factory in `relay.ts` retains the complete inspection side effects,
   including the #44 late-terminal semantics.
 
-Both client readers retain a bounded, redacted message and the first structured refusal code from a bare upstream `error`.
+Both client readers retain a bounded, redacted message and the first structured refusal code from a bare upstream `error`. EOF synthesis also retains narrowly recognized rate-limit codes (`rate_limit_exceeded`, `rate_limit_error`) and overload codes (`server_is_overloaded`, `overloaded_error`); recognized types apply only without an explicit code.
 At EOF without a real terminal they synthesize `response.failed` rather than `adapter_eof`; a code without a message still
 produces a terminal. Codex retries codes outside its fatal set, so code and message follow the same candidate precedence;
 recognized refusal copy is used only when the event has no code. A read failure after refusal reports that refusal (#5176).
 The shared outbound rewrite masks diagnostics on real failed and incomplete terminals before SSE or buffered JSON delivery,
 while preserving status and output; failed turns are not retained as continuation state. Buffered JSON masks selected credentials in synthetic bare-error fields before log inspection or client formatting; request logs keep transport status.
 The delivering reader owns refusal evidence before EOF; asynchronous tee inspection cannot reliably supply it.
-Inspection still applies the bare-error rule at EOF for account health. Real terminals and caller cancellation take precedence.
+Inspection still applies the bare-error rule at EOF for account health. Real terminals and caller cancellation take precedence. Unknown codes retain `upstream_error` / `upstream_server_error` in the client tail; on the streaming path the log status takes the frame's Codex WebSocket wrapper 5xx when stated (buffered JSON callers keep their own presentation status). Refusal precedence is unchanged and classification adds no replay or retry. Bare-error log status is provisional until a genuine terminal supersedes it through `src/server/request-log-terminal-status.ts`.
 Native recovery preflight keeps the rejected body reader and bounded prefix for normal mid-stream failure, without decrypt retry.
 
 Native Responses may rebuild once when encrypted function/custom-tool output or
@@ -474,7 +474,7 @@ event, or as an errored SSE body after it, rather than as a retryable fetch
 failure, so HTTP fallback cannot duplicate that inference. The one exception is a
 socket that closed or errored before any Responses event on a provider that opted
 into `retryOnReset`: the passthrough dispatch may spend the request's replacement
-grant on one HTTP send (see [ambiguous-resend gate](responses-failover.md#ambiguous-resend-gate)).
+grant on one HTTP send (see [ambiguous-resend gate](responses-failover.md#ambiguous-resend-gate)). An authoritative upstream refusal before any output is not one of those ambiguous settles (#6969). On an opt-in exchange (`preOutputRefusalHold`, set only by the native Pool dispatch and its alternate-account send, never with native control) empty `response.created`/`response.in_progress`/`response.queued` frames are queued without committing for at most 10 s and never past half of `connectTimeoutMs` after the send started, with the prelude headers frozen at the first one. A bare `error` frame with a single transient 5xx wrapper status (or, with no wrapper alias, the recognized overload class), or an empty `response.failed` of the overload class, then settles as a replayable gateway status of that status. Quota or rate-limit identities, 4xx frames, stream ids, conflicting response ids or competing aliases never qualify, and message text can only veto. Any other settle during the hold — output, an unqualified frame, socket death, silence, abort, size limits, the hold deadline — first commits the queued preamble, so it is the same committed body failure it was before. The dispatch restores a surviving projection to the original event stream (byte for byte, same markers and stage record) right after its Pool block.
 A standalone no-response
 exchange has a 90-second prelude deadline in addition to the upgrade deadline.
 That prelude deadline is a ceiling, not a floor: the exchange runs under the
@@ -482,7 +482,7 @@ caller's abort signal, so a `connectTimeoutMs` shorter than 90 seconds cancels
 an already-sent create before the prelude timer fires.
 These are transport-fidelity guarantees, not a provider-billing guarantee.
 
-Every exchange also leaves a content-free stage record (`CodexWsStageRecord`, #4191): create-frame bytes (measured on failure only — the committed-success record keeps it null so the happy path never byte-counts a megabyte replay frame), send completion, numeric close code, elapsed, first-frame and first-response-event durations, frame counters, liveness ping/pong counts, pool reuse, and the OCX/Bun versions. The exchange pins the record on the resolved Response (`markCodexWsStage`, the same marker seam as `markCodexWsResponse`); `handleResponses` adopts it onto the serving attempt, and usage.jsonl persists it per attempt behind a drop-guard normalizer, so hand-edited rows cannot inject strings into the DTO. Later snapshots update the same response-local record in place, so an attempt holding the committed reference observes final success or failure counters. Each exchange supplies a complete fresh snapshot; separate responses keep distinct records. On eager-relay cancel-drain expiry, upstream cancellation finalizes the transport snapshot before the cancellation hook writes the usage row; an actual terminal observed within the drain still wins over cancellation. The record never carries conversation text, headers, close-reason text, or account identifiers, and it is not a fallback-eligibility signal: nothing it says permits a resend. The one replacement an operator can grant after a socket dies is the resend gate's decision (see [ambiguous-resend gate](responses-failover.md#ambiguous-resend-gate)).
+Every exchange also leaves a content-free stage record (`CodexWsStageRecord`, #4191): create-frame bytes (measured on failure only — the committed-success record keeps it null so the happy path never byte-counts a megabyte replay frame), send completion, numeric close code, elapsed, first-frame and first-response-event durations, frame counters, liveness ping/pong counts, pool reuse, the OCX/Bun versions, and (#6740) `terminalEvent` — the normalized `response.completed` / `response.failed` / `response.incomplete` / `error` frame that ended a plain exchange, observed before any synthetic tail — with `terminalErrorStatus`, the wrapper status of a terminal `error` frame. Both are null when no terminal frame arrived, on native-control exchanges (which can end on an acknowledgement), and on rows written before they existed; malformed persisted values read as null without dropping the stage. The exchange pins the record on the resolved Response (`markCodexWsStage`, the same marker seam as `markCodexWsResponse`); `handleResponses` adopts it onto the serving attempt, and usage.jsonl persists it per attempt behind a drop-guard normalizer, so hand-edited rows cannot inject strings into the DTO. Later snapshots update the same response-local record in place, so an attempt holding the committed reference observes final success or failure counters. Each exchange supplies a complete fresh snapshot; separate responses keep distinct records. On eager-relay cancel-drain expiry, upstream cancellation finalizes the transport snapshot before the cancellation hook writes the usage row; an actual terminal observed within the drain still wins over cancellation. The record never carries conversation text, headers, close-reason text, or account identifiers, and it is not a fallback-eligibility signal: nothing it says permits a resend. The one replacement an operator can grant after a socket dies is the resend gate's decision (see [ambiguous-resend gate](responses-failover.md#ambiguous-resend-gate)).
 
 Eligible complete-input creates can retain a canonical upstream socket within
 one selected account, credential, thread and turn. Model/tier and immutable

@@ -312,6 +312,218 @@ describe("ollama-native — buffered terminal contract", () => {
 });
 
 describe("ollama-native — tool calls", () => {
+  const capturedFrame = {
+    message: {
+      role: "assistant", content: "", tool_calls: [
+        { id: "PpZ8JqRmm", function: { index: 0, name: "read_file", arguments: { path: "/etc/hostname" } } },
+        { id: "DDe4wZqkx", function: { index: 0, name: "read_file", arguments: { path: "/etc/os-release" } } },
+      ],
+    },
+    done: false,
+  };
+  const toolTerminal = { done: true, done_reason: "tool_calls" };
+
+  test.each(["stream", "buffered"])("native identity: captured index-zero calls stay distinct (%s)", async mode => {
+    const adapter = createOllamaNativeAdapter(provider());
+    adapter.buildRequest(parsedWith([{ role: "user", content: "go" }], { parallelToolCalls: true }));
+    const budget = createTestTranslatorBudget({ maxCallArgumentBytes: 32 });
+    const events: AdapterEvent[] = [];
+    if (mode === "buffered") {
+      events.push(...await adapter.parseResponse!(new Response(JSON.stringify({ ...capturedFrame, ...toolTerminal })), budget));
+    } else {
+      for await (const event of adapter.parseStream(ndjsonResponse([capturedFrame, toolTerminal]), budget)) events.push(event);
+    }
+    expect(events.filter(event => event.type !== "heartbeat")).toEqual([
+      { type: "tool_call_start", id: "PpZ8JqRmm", name: "read_file" },
+      { type: "tool_call_delta", arguments: '{"path":"/etc/hostname"}' },
+      { type: "tool_call_end" },
+      { type: "tool_call_start", id: "DDe4wZqkx", name: "read_file" },
+      { type: "tool_call_delta", arguments: '{"path":"/etc/os-release"}' },
+      { type: "tool_call_end" },
+      { type: "done", stopReason: "tool_calls" },
+    ]);
+    expect(budget.snapshot()).toMatchObject({ activeCalls: 0, overflows: 0 });
+    // Buffered parsing retains the translated event batch until its response owner disposes it.
+    if (mode === "stream") expect(budget.snapshot().currentBytes).toBe(0);
+    budget.dispose();
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
+  test("native identity: captured parallel calls fail at the parallel policy guard", async () => {
+    const adapter = createOllamaNativeAdapter(provider());
+    adapter.buildRequest(parsedWith([{ role: "user", content: "go" }], { parallelToolCalls: false }));
+    const budget = createTestTranslatorBudget();
+    const events: AdapterEvent[] = [];
+    for await (const event of adapter.parseStream(ndjsonResponse([capturedFrame, toolTerminal]), budget)) events.push(event);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: "error", code: "invalid_ollama_native_payload" });
+    expect((events[0] as { message: string }).message).toContain("parallel tool calls");
+    expect((events[0] as { message: string }).message).not.toContain("changed a tool-call id");
+    expect(events.some(event => event.type === "tool_call_start")).toBe(false);
+    expect(budget.snapshot()).toMatchObject({ currentBytes: 0, activeCalls: 0, overflows: 0 });
+  });
+
+  test.each([0, 1])("native identity: repeated id replaces arguments even at index %i", async nextIndex => {
+    const adapter = createOllamaNativeAdapter(provider());
+    adapter.buildRequest(parsedWith([{ role: "user", content: "go" }], { parallelToolCalls: false }));
+    const events = await collect(adapter, ndjsonResponse([
+      frame({ tool_calls: [{ id: "stable", function: { index: 0, name: "read_file", arguments: { path: "old", stale: true } } }] }, false),
+      frame({ tool_calls: [{ id: "stable", function: { index: nextIndex, name: "read_file", arguments: { path: "new" } } }] }, false),
+      toolTerminal,
+    ]));
+    expect(events.filter(event => event.type !== "heartbeat")).toEqual([
+      { type: "tool_call_start", id: "stable", name: "read_file" },
+      { type: "tool_call_delta", arguments: '{"path":"new"}' },
+      { type: "tool_call_end" },
+      { type: "done", stopReason: "tool_calls" },
+    ]);
+  });
+
+  test.each(["index", "position"])("native identity: id-less %s updates across frames", async identity => {
+    const index = identity === "index" ? { index: 3 } : {};
+    const events = await collect(createOllamaNativeAdapter(provider()), ndjsonResponse([
+      frame({ tool_calls: [{ function: { ...index, name: "read_file", arguments: { path: "old", stale: true } } }] }, false),
+      frame({ tool_calls: [{ function: { ...index, name: "read_file", arguments: { path: "new" } } }] }, false),
+      toolTerminal,
+    ]));
+    const starts = events.filter(event => event.type === "tool_call_start");
+    expect(starts).toHaveLength(1);
+    expect(starts[0]).toMatchObject({ name: "read_file", id: expect.stringMatching(/^ollama_call_/) });
+    expect(events.filter(event => event.type === "tool_call_delta")).toEqual([{ type: "tool_call_delta", arguments: '{"path":"new"}' }]);
+    expect(events.at(-1)).toEqual({ type: "done", stopReason: "tool_calls" });
+  });
+
+  test("native identity: repeated id in one frame replaces arguments despite differing indexes", async () => {
+    const adapter = createOllamaNativeAdapter(provider());
+    adapter.buildRequest(parsedWith([{ role: "user", content: "go" }], { parallelToolCalls: false }));
+    const events = await collect(adapter, ndjsonResponse([
+      frame({ tool_calls: [
+        { id: "stable", function: { index: 0, name: "read_file", arguments: { path: "old" } } },
+        { id: "stable", function: { index: 1, name: "read_file", arguments: { path: "new" } } },
+      ] }, false),
+      toolTerminal,
+    ]));
+    expect(events.filter(event => event.type !== "heartbeat")).toEqual([
+      { type: "tool_call_start", id: "stable", name: "read_file" },
+      { type: "tool_call_delta", arguments: '{"path":"new"}' },
+      { type: "tool_call_end" },
+      { type: "done", stopReason: "tool_calls" },
+    ]);
+  });
+
+  test.each([0, 1])("native identity: id-less entries in one frame stay distinct at index %i", async secondIndex => {
+    const events = await collect(createOllamaNativeAdapter(provider()), ndjsonResponse([
+      frame({ tool_calls: [
+        { function: { index: 0, name: "read_file", arguments: { path: "old-first" } } },
+        { function: { index: secondIndex, name: "read_file", arguments: { path: "old-second" } } },
+      ] }, false),
+      frame({ tool_calls: [
+        { function: { index: 0, name: "read_file", arguments: { path: "first" } } },
+        { function: { index: secondIndex, name: "read_file", arguments: { path: "second" } } },
+      ] }, false),
+      toolTerminal,
+    ]));
+    const starts = events.filter(event => event.type === "tool_call_start");
+    expect(starts).toHaveLength(2);
+    expect(starts.map(event => event.name)).toEqual(["read_file", "read_file"]);
+    expect(new Set(starts.map(event => event.id)).size).toBe(2);
+    expect(events.filter(event => event.type === "tool_call_delta")).toEqual([
+      { type: "tool_call_delta", arguments: '{"path":"first"}' },
+      { type: "tool_call_delta", arguments: '{"path":"second"}' },
+    ]);
+    expect(events.at(-1)).toEqual({ type: "done", stopReason: "tool_calls" });
+  });
+
+  test("native identity: an id-less index updates an existing native-id call", async () => {
+    const events = await collect(createOllamaNativeAdapter(provider()), ndjsonResponse([
+      frame({ tool_calls: [{ id: "stable", function: { index: 0, name: "read_file", arguments: { path: "old" } } }] }, false),
+      frame({ tool_calls: [{ function: { index: 0, name: "read_file", arguments: { path: "new" } } }] }, false),
+      toolTerminal,
+    ]));
+    expect(events.filter(event => event.type !== "heartbeat")).toEqual([
+      { type: "tool_call_start", id: "stable", name: "read_file" },
+      { type: "tool_call_delta", arguments: '{"path":"new"}' },
+      { type: "tool_call_end" },
+      { type: "done", stopReason: "tool_calls" },
+    ]);
+  });
+
+  test("native identity: a later id adopts the id-less call at its index", async () => {
+    const adapter = createOllamaNativeAdapter(provider());
+    adapter.buildRequest(parsedWith([{ role: "user", content: "go" }], { parallelToolCalls: false }));
+    const events = await collect(adapter, ndjsonResponse([
+      frame({ tool_calls: [{ function: { index: 0, name: "read_file", arguments: { path: "old" } } }] }, false),
+      frame({ tool_calls: [{ id: "late", function: { index: 0, name: "read_file", arguments: { path: "new" } } }] }, false),
+      toolTerminal,
+    ]));
+    expect(events.filter(event => event.type !== "heartbeat")).toEqual([
+      { type: "tool_call_start", id: "late", name: "read_file" },
+      { type: "tool_call_delta", arguments: '{"path":"new"}' },
+      { type: "tool_call_end" },
+      { type: "done", stopReason: "tool_calls" },
+    ]);
+  });
+
+  test.each([0, 1])("native identity: the same id cannot change function at index %i", async nextIndex => {
+    const events = await collect(createOllamaNativeAdapter(provider()), ndjsonResponse([
+      frame({ tool_calls: [{ id: "stable", function: { index: 0, name: "read_file", arguments: {} } }] }, false),
+      frame({ tool_calls: [{ id: "stable", function: { index: nextIndex, name: "write_file", arguments: {} } }] }, false),
+      toolTerminal,
+    ]));
+    expect(events.at(-1)).toMatchObject({ type: "error", code: "invalid_ollama_native_payload" });
+    expect((events.at(-1) as { message: string }).message).toContain("another function");
+    expect(events.some(event => event.type === "tool_call_start")).toBe(false);
+  });
+
+  test("native identity: different ids and functions at one index across frames preserve order", async () => {
+    const events = await collect(createOllamaNativeAdapter(provider()), ndjsonResponse([
+      frame({ tool_calls: [{ id: "first", function: { index: 0, name: "read_file", arguments: { path: "first" } } }] }, false),
+      frame({ tool_calls: [{ id: "second", function: { index: 0, name: "write_file", arguments: { path: "second" } } }] }, false),
+      frame({ tool_calls: [{ id: "first", function: { index: 0, name: "read_file", arguments: { path: "updated" } } }] }, false),
+      toolTerminal,
+    ]));
+    expect(events.filter(event => event.type !== "heartbeat")).toEqual([
+      { type: "tool_call_start", id: "first", name: "read_file" },
+      { type: "tool_call_delta", arguments: '{"path":"updated"}' },
+      { type: "tool_call_end" },
+      { type: "tool_call_start", id: "second", name: "write_file" },
+      { type: "tool_call_delta", arguments: '{"path":"second"}' },
+      { type: "tool_call_end" },
+      { type: "done", stopReason: "tool_calls" },
+    ]);
+  });
+
+  test("native identity: the pending-call cap counts distinct ids at one index", async () => {
+    const adapter = createOllamaNativeAdapter(provider());
+    const calls = Array.from({ length: 129 }, (_, index) => ({
+      id: `call_${index}`, function: { index: 0, name: "read_file", arguments: {} },
+    }));
+    const accepted = await collect(adapter, ndjsonResponse([
+      frame({ tool_calls: calls.slice(0, 128) }, false), toolTerminal,
+    ]));
+    expect(accepted.filter(event => event.type === "tool_call_start").map(event => event.id)).toEqual(calls.slice(0, 128).map(call => call.id));
+    expect(accepted.at(-1)?.type).toBe("done");
+    const budget = createTestTranslatorBudget();
+    const rejected: AdapterEvent[] = [];
+    for await (const event of adapter.parseStream(ndjsonResponse([frame({ tool_calls: calls }, false)]), budget)) rejected.push(event);
+    expect(rejected.at(-1)).toMatchObject({ type: "error", code: "invalid_ollama_native_payload" });
+    expect((rejected.at(-1) as { message: string }).message).toContain("exceeded 128 pending tool calls");
+    expect(rejected.some(event => event.type === "tool_call_start")).toBe(false);
+    expect(budget.snapshot()).toMatchObject({ currentBytes: 0, activeCalls: 0, overflows: 0 });
+  });
+
+  test("native identity: distinct ids at one index retain separate metadata charges", async () => {
+    const budget = createTestTranslatorBudget({ maxTurnBytes: 2000 });
+    const frames = Array.from({ length: 3 }, (_, index) => frame({ tool_calls: [{
+      id: `call_${index}`, function: { index: 0, name: "n".repeat(700), arguments: {} },
+    }] }, false));
+    const events: AdapterEvent[] = [];
+    for await (const event of createOllamaNativeAdapter(provider()).parseStream(ndjsonResponse(frames), budget)) events.push(event);
+    expect(events.at(-1)).toMatchObject({ type: "error", code: "translation_buffer_limit" });
+    expect(events.some(event => event.type === "tool_call_start")).toBe(false);
+    expect(budget.snapshot()).toMatchObject({ currentBytes: 0, activeCalls: 0, overflows: 1 });
+  });
+
   test("indexed tool calls preserve order and identity", async () => {
     const adapter = createOllamaNativeAdapter(provider());
     const budget = createTestTranslatorBudget();

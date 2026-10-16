@@ -76,17 +76,14 @@ describe("antigravity CCA envelope", () => {
     expect(req.url).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse");
   });
 
-  test("exposes Gemini 3.8 and 3.7 Flash while retired Flash ids resolve to 3.7", async () => {
-    // Collapsed picker: base models only. 3.8 leads because CCA ranks it first in the
-    // Recommended sort; 3.7 stays because Google still serves it.
+  test("exposes the 3.8 / 4 / 5.5 / 5.5 lineup while retired Flash ids still resolve to 3.7", async () => {
+    // Collapsed picker: base models only, the static lineup confirmed 2026-10-14. Older models
+    // reach the picker only through live discovery.
     expect(ANTIGRAVITY_MODELS).toEqual([
       "gemini-3.8-flash",
-      "gemini-3.7-flash",
-      "gemini-3.1-pro",
-      "gemini-3.1-flash-image",
-      "claude-sonnet-4-6",
-      "claude-opus-4-6-thinking",
-      "gpt-oss-120b-medium",
+      "gemini-4-argon",
+      "claude-opus-5-5",
+      "claude-sonnet-5-5",
     ]);
     for (const hidden of [
       "gemini-3.6-flash",

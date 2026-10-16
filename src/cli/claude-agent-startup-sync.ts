@@ -64,6 +64,23 @@ export async function reconcileClientStartupBeforeReady<T>(
   return result;
 }
 
+/** Establish catalog observation before any unrelated startup reconciliation awaits. */
+export async function syncCodexBeforeCatalogObservation<T>(
+  gate: ReadinessGate,
+  syncCodex: (gate: ReadinessGate) => Promise<T>,
+  startObservation: () => void,
+): Promise<T> {
+  let ready = false;
+  const forwardingGate: ReadinessGate = {
+    getStatus: () => gate.getStatus(),
+    markReady: () => { ready = true; gate.markReady(); },
+    markFailed: () => { ready = false; gate.markFailed(); },
+  };
+  const result = await syncCodex(forwardingGate);
+  if (ready) startObservation();
+  return result;
+}
+
 /**
  * Reconcile the generated Claude Code roster after the proxy listener is live.
  *

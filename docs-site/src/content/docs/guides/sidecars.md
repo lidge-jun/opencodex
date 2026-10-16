@@ -45,6 +45,14 @@ When Codex requests hosted `web_search` for a non-passthrough routed model, open
    (default 3), then removes the search tool and forces a final answer. Real client tools such as
    `apply_patch` or shell finalize the turn so those calls reach Codex.
 
+When the model batches several queries into one `web_search` call, their results share one
+8,000-character tool result. The budget is divided across the queries before anything is cut, so no
+query disappears from the result. Shortened answers and unlisted sources are marked
+with their original sizes, which lets the model tell trimmed results from searches that found
+nothing. Structured-output turns receive the same information as one valid JSON document. If a call
+asks for more queries than one result can describe, opencodex lists each query's status without its
+content and counts any queries it could not list.
+
 Every routed-model iteration requests upstream `stream: true`, but by default opencodex fully
 buffers semantic events internally before deciding whether to search or return the final answer.
 Only the first iteration's final headers/status and 429 key rotations are acquired eagerly. Thus

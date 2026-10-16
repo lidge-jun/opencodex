@@ -2,6 +2,9 @@ import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { join } from "node:path";
 import { durableBunPath } from "../lib/bun-runtime";
+import { selfLaunchArgv } from "../lib/self-launch-argv";
+import { isDesktopSupervised } from "../lib/system-restart-contract";
+import { withLoginShellPath } from "./login-shell-path";
 import {
   WINDOWS_SCHTASKS_CREATE_ACCESS_DENIED_MARKER,
   isWindowsSchtasksCreateAccessDenied,
@@ -59,6 +62,20 @@ let finalizeImpl: FinalizeFn = finalizeWindowsSchedulerServiceRegistration;
 /** Test-only seam so elevation retry tests do not mock.module the service package. */
 export function setStartupInstallFinalizeForTests(next: FinalizeFn | null): void {
   finalizeImpl = next ?? finalizeWindowsSchedulerServiceRegistration;
+}
+
+interface StartupInstallLaunch {
+  execFile?: typeof execFile;
+  /** Overrides Bun's own standalone detection, which a source-mode test cannot flip. */
+  isStandaloneExecutable?: boolean;
+  isDesktopSupervised?: () => boolean;
+  withLoginShellPath?: (env: NodeJS.ProcessEnv) => Promise<NodeJS.ProcessEnv>;
+}
+let installLaunch: StartupInstallLaunch = {};
+
+/** Test-only seam: observe the installer child's argv and simulate a compiled `ocx`. */
+export function setStartupInstallLaunchForTests(next: StartupInstallLaunch | null): void {
+  installLaunch = next ?? {};
 }
 
 /** Snapshot of the install lock for diagnostics and tests. */
@@ -156,20 +173,37 @@ export function installFailureDetail(stdout: string, stderr: string, error: Erro
   return classifyCliInstallFailure(stdout, stderr, error).detail;
 }
 
-function runCliInstall(
+/**
+ * Under OpenCodex Desktop the proxy has the GUI launch PATH, where no user-installed Codex is
+ * visible. The shim installer gets the user's login-shell PATH instead (#6971).
+ */
+async function installChildEnv(action: StartupInstallAction): Promise<NodeJS.ProcessEnv> {
+  if (action !== "install-shim" || !(installLaunch.isDesktopSupervised ?? isDesktopSupervised)()) return process.env;
+  return (installLaunch.withLoginShellPath ?? withLoginShellPath)(process.env);
+}
+
+async function runCliInstall(
   action: StartupInstallAction,
   options?: { repair?: boolean },
 ): Promise<{ stdout: string; stderr: string }> {
   const bun = durableBunPath();
   const cli = join(import.meta.dir, "..", "cli", "index.ts");
-  const argv = [cli, ...startupInstallArgv(action, options)];
+  // The Desktop app and the Linux deb run a compiled `ocx`, where `process.execPath` is the CLI
+  // itself: prefixing the source entrypoint made it an unknown command and every dashboard
+  // Install/Repair failed (#6963). Same builder as the startup-health probe.
+  const argv = selfLaunchArgv(startupInstallArgv(action, options), {
+    sourceEntrypoint: cli,
+    isStandaloneExecutable: installLaunch.isStandaloneExecutable,
+  });
+  const run = installLaunch.execFile ?? execFile;
+  const env = await installChildEnv(action);
   return new Promise((resolve, reject) => {
     const timeout = process.platform === "win32" && action === "install-service"
       ? 0
       : 60_000;
-    execFile(bun, argv, {
+    run(bun, argv, {
       encoding: "utf8",
-      env: process.env,
+      env,
       // A fresh Windows scheduler install now owns its UAC prompt inside this CLI
       // transaction. Killing only the CLI at 60s can orphan its elevated schtasks child,
       // which may register the task after the Dashboard has reported failure. Keep the

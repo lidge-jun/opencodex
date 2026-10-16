@@ -18,6 +18,10 @@ import { PROVIDER_REGISTRY } from "../../src/providers/registry";
 import { deriveProviderPresets, providerConfigSeed } from "../../src/providers/derive";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../src/types";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
+import { createRequestExecutionBudget, CODEX_TEXT_GUARDED_BUDGET_POLICY } from "../../src/lib/request-execution-budget";
+import { createSpendReservationLedger } from "../../src/lib/spend-reservation-ledger";
+import { createRequestSpendTracker } from "../../src/server/responses/request-spend";
+import { createShippedSpendLedger, spendTestJournal, spendTestPolicy, testSpendSalt } from "../helpers/shipped-spend-ledger";
 
 const enc = new TextEncoder();
 
@@ -35,7 +39,7 @@ interface FakeChild extends EventEmitter {
   written: string[];
 }
 
-function fakeChild(stdout: Uint8Array[], opts: { stderr?: string; exitCode?: number } = {}): FakeChild {
+function fakeChild(stdout: Uint8Array[], opts: { stderr?: string; exitCode?: number; emitClose?: boolean } = {}): FakeChild {
   const child = new EventEmitter() as FakeChild;
   child.stdout = Readable.from(stdout);
   child.stderr = Readable.from(opts.stderr ? [enc.encode(opts.stderr)] : []);
@@ -44,7 +48,7 @@ function fakeChild(stdout: Uint8Array[], opts: { stderr?: string; exitCode?: num
   child.killed = false;
   child.exitCode = null;
   child.kill = () => { child.killed = true; return true; };
-  setTimeout(() => { child.exitCode = opts.exitCode ?? 0; child.emit("close", opts.exitCode ?? 0); }, 3);
+  if (opts.emitClose !== false) setTimeout(() => { child.exitCode = opts.exitCode ?? 0; child.emit("close", opts.exitCode ?? 0); }, 3);
   return child;
 }
 
@@ -119,6 +123,76 @@ describe("claude-cli is an official-harness provider, not a Messages relay", () 
   test("the adapter inherits the shared coding-agent contract instead of a second wire", () => {
     expect(getAdapterDefinition("claude-cli")?.contractParent).toBe("codebuddy");
     expect(effectiveAdapterContract("claude-cli").wire).toBe("codebuddy");
+  });
+});
+
+describe("CLI invocation spend admission", () => {
+  function accounting(maxTrackedSends = 10) {
+    const journal = spendTestJournal();
+    const ledger = createSpendReservationLedger({ journal, salt: testSpendSalt, now: () => 2,
+      policy: spendTestPolicy({ pool: { maxTokens: 50 }, maxTrackedSends }) });
+    const tracker = createRequestSpendTracker({ provider: "claude-cli", spendInputEstimateTokens: 1 }, undefined, ledger);
+    const policy = { ...CODEX_TEXT_GUARDED_BUDGET_POLICY };
+    const budget = createRequestExecutionBudget(policy, undefined, tracker);
+    return { journal, ledger, tracker, policy, budget };
+  }
+  const terminal = enc.encode(JSON.stringify({ type: "result", subtype: "success", is_error: false,
+    usage: { input_tokens: 70, output_tokens: 0 } }) + "\n");
+
+  test("full NORMAL seed capacity refuses before spawning the CLI", async () => {
+    const f = accounting(1);
+    f.ledger.reserve({ sendId: "busy", scopes: { poolId: "claude-cli" }, inputTokens: 1, outputCeilingTokens: 0 });
+    let spawns = 0;
+    const adapter = createClaudeCliAdapter(provider(), { which: () => "/test/claude",
+      spawn: () => { spawns++; return fakeChild([terminal]) as unknown as ChildProcess; } });
+    await expect(adapter.runTurn!(parsed(), { ...incoming(), sendBudget: f.budget }, () => {}))
+      .rejects.toMatchObject({ code: "request_send_budget_exhausted" });
+    expect(spawns).toBe(0);
+    expect(f.budget.physicalStarted).toBe(0);
+  });
+
+  test("a frozen invocation limit refuses the next CLI spawn after policy expansion", async () => {
+    const f = accounting();
+    Object.assign(f.policy, { maxTotalModelSends: 1, baseSendAllowance: 1 });
+    let spawns = 0;
+    const adapter = createClaudeCliAdapter(provider(), { which: () => "/test/claude",
+      spawn: () => { spawns++; return fakeChild([terminal]) as unknown as ChildProcess; } });
+    await adapter.runTurn!(parsed(), { ...incoming(), sendBudget: f.budget }, () => {});
+    Object.assign(f.policy, { maxTotalModelSends: 100, baseSendAllowance: 100 });
+    await expect(adapter.runTurn!(parsed(), { ...incoming(), sendBudget: f.budget }, () => {}))
+      .rejects.toMatchObject({ code: "request_send_budget_exhausted" });
+    expect(spawns).toBe(1);
+    expect(f.budget.physicalStarted).toBe(1);
+    expect(f.budget.physicalLimit).toBe(1);
+    f.tracker.settle({ inputTokens: 70 });
+  });
+
+  test("CLI terminal usage above its estimate settles only after the child is reaped", async () => {
+    const f = accounting();
+    const child = fakeChild([terminal], { emitClose: false });
+    const adapter = createClaudeCliAdapter(provider(), { which: () => "/test/claude",
+      spawn: () => child as unknown as ChildProcess });
+    let observedTerminal!: () => void;
+    const terminalSeen = new Promise<void>(resolve => { observedTerminal = resolve; });
+    const turn = adapter.runTurn!(parsed(), { ...incoming(), sendBudget: f.budget }, event => {
+      if (event.type !== "done") return;
+      f.tracker.settle(event.usage);
+      observedTerminal();
+    });
+    await terminalSeen;
+    let drained = false;
+    const drain = f.ledger.waitForReporterDrain().then(() => { drained = true; });
+    await Promise.resolve();
+    expect(drained).toBe(false);
+    expect(f.journal.lines.some(line => JSON.parse(line).kind === "forget")).toBe(false);
+    child.exitCode = 0;
+    child.emit("close", 0);
+    await turn;
+    await drain;
+    expect(f.budget.physicalStarted).toBe(1);
+    expect(f.ledger.snapshot("pool", "claude-cli")).toMatchObject({ settled: 70, reserved: 0 });
+    expect(createShippedSpendLedger({ journal: f.journal, salt: testSpendSalt, now: () => 2 })
+      .snapshot("pool", "claude-cli")?.settled).toBe(70);
   });
 });
 

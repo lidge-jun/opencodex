@@ -51,11 +51,14 @@ function fixtureDiagnostics(value: string): string {
   return CRASH_SIGNATURES.reduce((text, signature) => text.replaceAll(signature, "[simulated crash]"), value);
 }
 
+const MACOS_JOB = (Bun.YAML.parse(readFileSync(repoPath(".github/workflows/ci.yml"), "utf8")) as {
+  jobs: Record<string, { steps: Array<{ name?: string; run?: string }>; strategy?: { matrix?: { shard?: number[] } } }>;
+}).jobs["platform-macos"];
+// Every shard the workflow actually runs, so ownership is checked at the real divisor.
+const MACOS_SHARDS = MACOS_JOB?.strategy?.matrix?.shard ?? [];
+
 function macosTestBlock(shard: number): string {
-  const workflow = Bun.YAML.parse(readFileSync(repoPath(".github/workflows/ci.yml"), "utf8")) as {
-    jobs: Record<string, { steps: Array<{ name?: string; run?: string }> }>;
-  };
-  const run = workflow.jobs["platform-macos"]?.steps.find(step => step.name === "Test in fresh-process batches")?.run;
+  const run = MACOS_JOB?.steps.find(step => step.name === "Test in fresh-process batches")?.run;
   if (!run) throw new Error("platform-macos must contain its executable batch step");
   // Render the existing Actions expression too, so the old workflow reaches
   // the ownership assertions instead of failing with Bash's 'bad substitution'.
@@ -150,7 +153,7 @@ function runShell(directory: string, shard: number, scriptOverride?: string): Pr
         env: {
           PATH: `${join(directory, "bin")}:/usr/bin:/bin`, HOME: directory,
           TMPDIR: join(directory, "tmp"), RUNNER_TEMP: join(directory, "tmp"), CI: "true",
-          TEST_SHARD: `${shard}/2`, BUN_TEST_FILE_SCOPE: "all", BUN_TEST_BATCH_SIZE: "12",
+          TEST_SHARD: `${shard}/${MACOS_SHARDS.length}`, BUN_TEST_FILE_SCOPE: "all", BUN_TEST_BATCH_SIZE: "12",
           BUN_TEST_PARALLEL: "1", BUN_TEST_BATCH_TIMEOUT_SECONDS: "300", OCX_TEST_NO_QUEUE: "1",
           MACOS_FIXTURE_CONFIG: join(directory, "config.json"),
           MACOS_FIXTURE_LOG: join(directory, "invocations.jsonl"),
@@ -264,7 +267,7 @@ function optionValues(argv: string[], option: string): string[] {
 
 function selectedFiles(shard: number, collision = false): string[] {
   return [...SERIAL_FILES, ...GENERAL_FILES, ...(collision ? [`collision/${basename(SERIAL_FILES[0]!)}`] : [])]
-    .map(file => `tests/${file}`).sort().filter((_, index) => index % 2 === shard - 1);
+    .map(file => `tests/${file}`).sort().filter((_, index) => index % MACOS_SHARDS.length === shard - 1);
 }
 
 function expectBatchArguments(call: Invocation): void {
@@ -291,8 +294,10 @@ describe.skipIf(process.platform === "win32")("macOS bounded shard shell ownersh
     } finally { removeTreeWithRetry(directory); }
   }, SPAWN_BUDGET_MS);
 
-  test("both actual workflow shards own every file exactly once", async () => {
-    const runs = [await runShard(1), await runShard(2)];
+  test("every actual workflow shard owns its files, and together they run each file once", async () => {
+    expect(MACOS_SHARDS.length).toBeGreaterThan(1);
+    const runs = [];
+    for (const shard of MACOS_SHARDS) runs.push(await runShard(shard));
     for (const [index, run] of runs.entries()) {
       expect(run.status, run.output).toBe(0);
       const calls = testCalls(run);
@@ -310,7 +315,8 @@ describe.skipIf(process.platform === "win32")("macOS bounded shard shell ownersh
   }, SPAWN_BUDGET_MS);
 
   test("same basenames at distinct exact paths are not silently excluded", async () => {
-    const runs = [await runShard(1, { collision: true }), await runShard(2, { collision: true })];
+    const runs = [];
+    for (const shard of MACOS_SHARDS) runs.push(await runShard(shard, { collision: true }));
     for (const [index, run] of runs.entries()) {
       expect(run.status, run.output).toBe(0);
       expect(testCalls(run).flatMap(testPaths)).toEqual(selectedFiles(index + 1, true));
@@ -319,9 +325,11 @@ describe.skipIf(process.platform === "win32")("macOS bounded shard shell ownersh
 
   for (const target of ["main", SERIAL_FILES[1]!] as const) {
     const targetPath = target === "main" ? selectedFiles(1)[0]! : `tests/${target}`;
-    const primaryCount = selectedFiles(1).indexOf(targetPath) + 1;
+    // Inject into the shard that owns the target; any other shard never runs it.
+    const owner = MACOS_SHARDS.find(shard => selectedFiles(shard).includes(targetPath)) ?? 0;
+    const primaryCount = selectedFiles(owner).indexOf(targetPath) + 1;
     test(`${target}: assertion failure stops all later primary files`, async () => {
-      const run = await runShard(1, { target, outcomes: ["assert"] });
+      const run = await runShard(owner, { target, outcomes: ["assert"] });
       expect(run.status, run.output).toBe(ASSERTION_STATUS);
       const calls = testCalls(run);
       expect(calls).toHaveLength(primaryCount);
@@ -332,7 +340,7 @@ describe.skipIf(process.platform === "win32")("macOS bounded shard shell ownersh
 
     for (const [caseIndex, signature] of CRASH_SIGNATURES.entries()) {
       test(`${target}: signature crash stays red after clean diagnostic attribution (${caseIndex})`, async () => {
-        const run = await runShard(1, { target, outcomes: ["crash"], crashSignature: signature, crashStatus: SIGNATURE_ONLY_CRASH_STATUS });
+        const run = await runShard(owner, { target, outcomes: ["crash"], crashSignature: signature, crashStatus: SIGNATURE_ONLY_CRASH_STATUS });
         expect(run.status, run.output).toBe(SIGNATURE_ONLY_CRASH_STATUS);
         const calls = testCalls(run);
         expect(calls).toHaveLength(primaryCount + 1);
@@ -343,7 +351,7 @@ describe.skipIf(process.platform === "win32")("macOS bounded shard shell ownersh
     }
 
     test(`${target}: status-only crash cannot recover after repeated failure`, async () => {
-      const run = await runShard(1, { target, outcomes: ["crash", "crash"] });
+      const run = await runShard(owner, { target, outcomes: ["crash", "crash"] });
       expect(run.status, run.output).toBe(CRASH_STATUS);
       expect(testCalls(run)).toHaveLength(primaryCount + 1);
       expect(run.output).toContain("reproduces alone");
@@ -360,7 +368,7 @@ describe.skipIf(process.platform === "win32")("macOS bounded shard shell ownersh
     ["parent traversal", { manifest: ["serial/../serial/falcon.test.ts"] }],
   ];
   test.each(invalidManifests)("rejects %s before any test starts", async (_name, options) => {
-    for (const shard of [1, 2]) {
+    for (const shard of MACOS_SHARDS) {
       const run = await runShard(shard, options);
       expect(run.status, run.output).not.toBe(0);
       expect(testCalls(run)).toEqual([]);

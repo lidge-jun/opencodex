@@ -8,8 +8,17 @@ import {
 } from "../../link/store";
 import { linkStorePath } from "../../link/paths";
 import { linkRouteAllowed } from "../../link/routes";
+import { withConfigMutationLockSync } from "../../config/mutation-lock";
 
 export const LINK_INGRESS_HOSTNAME = "opencodex-link.invalid";
+
+/** Internal signal: the store's port differs from the port this bind landed on. */
+class LinkListenerPortMismatchError extends Error {
+  constructor(storedPort: number, boundPort: number) {
+    super(`stored port ${storedPort} differs from bound port ${boundPort}`);
+    this.name = "LinkListenerPortMismatchError";
+  }
+}
 
 export interface LinkListenerStartContext<T> {
   dispatch: (req: Request, server: Server<T>) => Promise<Response>;
@@ -118,29 +127,33 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
       closeWithoutAwait(bound);
       return;
     }
-    if (store.listenerPort === null) {
-      const port = bound.port;
-      if (!port || port === 0) {
-        closeWithoutAwait(bound);
-        reportFailure("bind", new Error("Bun did not report a concrete listener port"), "bind");
-        return;
-      }
-      try {
+    const port = bound.port;
+    if (!port || port === 0) {
+      closeWithoutAwait(bound);
+      reportFailure("bind", new Error("Bun did not report a concrete listener port"), "bind");
+      return;
+    }
+    try {
+      // Revalidate the admission and persist a new port in one mutation section.
+      // Even a known-port bind can race the deletion of its last recorded link.
+      const needed = withConfigMutationLockSync(() => {
         const current = readStore(storePath);
+        if (current.links.length === 0) return false;
         if (current.listenerPort !== null && current.listenerPort !== port) {
-          // Another writer fixed a different port while this bind ran. Tunnels target the stored
-          // port, so serving on this one would strand them: give it up and let the next
-          // ensureStarted() bind the stored port.
-          closeWithoutAwait(bound);
-          reportFailure("listenerPort persistence", new Error(`stored port ${current.listenerPort} differs from bound port ${port}`), "persist");
-          return;
+          throw new LinkListenerPortMismatchError(current.listenerPort, port);
         }
-        writeStore(storePath, { ...current, listenerPort: port });
-      } catch (error) {
+        if (current.listenerPort === null) writeStore(storePath, { ...current, listenerPort: port });
+        return true;
+      });
+      if (!needed) {
         closeWithoutAwait(bound);
-        reportFailure("listenerPort persistence", error, "persist");
+        setStatus("off", null, null);
         return;
       }
+    } catch (error) {
+      closeWithoutAwait(bound);
+      reportFailure("listenerPort persistence", error, "persist");
+      return;
     }
     listener = bound as Server<T>;
     relaySessions = sessions;

@@ -142,6 +142,8 @@ $CODEX_HOME/opencodex-catalog.json
 $CODEX_HOME/models_cache.json
 ```
 
+在 macOS 上，opencodex 在显式选择、shim、PATH、既有安装路径和可运行的裸 `codex` 后备命令之后，依次检查 `/Applications/ChatGPT.app` 和 `~/Applications/ChatGPT.app` 中的 Codex 应用内置 CLI，要求其 XML `Info.plist` 标识为 `com.openai.codex`，且不会用应用候选项自动替换仍可运行的已保存选择。
+
 在 WSL 中，如果未设置 `CODEX_HOME`，且 Linux 侧的 `~/.codex` 目录不存在或不含任何 Codex 状态（`config.toml`, `auth.json`, `sessions`, `history.jsonl`），opencodex 还会检查
 `/mnt/c/Users/*/.codex/config.toml` 下是否存在单一的 Windows Codex Desktop home。只要候选项恰好只有一个，
 它就会使用那个目录，让 WSL app-server mode 和 Windows Codex Desktop 共享同一份 config 与 auth 文件。
@@ -225,6 +227,8 @@ Browser 或 Computer Use。原生 OpenAI 条目会保持其上游 tool mode 不�
 ```bash
 ocx models add deepseek deepseek-v4 --display-name "DeepSeek V4" --context-window 128000
 ```
+
+对于自定义渠道，省略显式窗口后，目录会使用包括模型 ID 推断在内的[上下文窗口回退规则](/zh-cn/reference/configuration/providers/#自定义渠道的上下文窗口)。如果中转支持的容量低于厂商窗口，请显式设置窗口或 Context cap。
 
 远程 Codex 客户端可以使用普通的数据面密钥（与 `/v1/responses` 所用凭据相同，而非管理员令牌）拉取同一个生成好的 catalog：
 
@@ -326,6 +330,8 @@ fallback 行为，参见 [Sub-agent Surface](/guides/sub-agent-surface/)。
 `ocx account refresh openai` 和 `ocx account list openai --quota --refresh` 仅查询用量。模型验证会消耗配额，因此需要用户的仪表板会话：配额恢复后，打开 `ocx gui` 并点击 **Refresh quotas**。无界面主机也需要通过浏览器访问其仪表板；仅凭管理员令牌无法授权验证。暂停的账号可以完成验证，但不会因此恢复或被选中。模型授权错误会一直显示，直到验证或重新登录成功。
 
 在 **Codex Set → Multi-auth** 中，打开 **Codex Auth** 标题栏中的 **Codex 额度** 开关，即可在 Week 下方显示主账号和各池账号最近查询到的积分。默认关闭，并保存为 `showCodexCredits`。余额按地区格式显示；上游报告时会显示无限额或超额使用上限警告。由于没有积分总上限，条形表示可用状态而非百分比。此开关仅控制显示，新登录需等待其自身的查询结果。
+
+允许主账号在额度耗尽后使用积分且用量窗口已满时，后台恢复周期会从观察满三分钟起更新此前可用的积分余额，即使仪表盘已关闭。查询前先准备有效令牌，为五分钟有效期到期前重新观察余额留出时间。缺失、零余额、受限或已撤回的积分不会触发更新。查询失败或信息不完整不会刷新旧余额证据；证据过期后请求仍会被拒绝。独立的主账号硬锁和上游重试等待期限仍然适用。这是已认证的用量查询，不发送模型验证请求，也不会设置或清除账号的 needs-reauth 状态。
 
 后台重新验证是独立功能，默认关闭。它要求 Token Guardian、`openai` 的 `proactive` 刷新策略及 `tokenGuardian.codexWarmupEnabled`，并跳过等待注册验证的账号。
 

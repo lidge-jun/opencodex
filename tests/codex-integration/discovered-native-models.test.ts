@@ -128,6 +128,22 @@ describe("authenticated native discovery", () => {
     expect(NATIVE_OPENAI_MODELS.filter(slug => slug === "gpt-6.1-sol")).toHaveLength(1);
   });
 
+  test("a GPT-6.1 Sol roster's 500k/1M window cannot overwrite built-in metadata", async () => {
+    const snapshot = await fetchRoster([row("gpt-6.1-sol", {
+      context_window: 500_000, max_context_window: 1_000_000,
+    }), row()]);
+    expect(snapshot.modelsByAccount.get("future-test")?.has("gpt-6.1-sol")).toBe(true);
+    expect(persisted().models.map(model => model.slug)).toEqual([FUTURE]);
+    expect(discoveredNativeOpenAiModels()).not.toContain("gpt-6.1-sol");
+    expect(upstreamNativeEntry("gpt-6.1-sol")).toMatchObject({
+      display_name: "GPT-6.1-Sol", context_window: 272_000, max_context_window: 872_000,
+    });
+    expect(nativeOpenAiContextTier("gpt-6.1-sol")).toEqual({ defaultWindow: 500_000, longWindow: 872_000 });
+    expect(nativeOpenAiContextWindow("gpt-6.1-sol", { modelWindows: { "gpt-6.1-sol": 1_000_000 } })).toBe(872_000);
+    expect(buildCatalogEntries(null, ["gpt-6.1-sol"], []).find(entry => entry.slug === "gpt-6.1-sol"))
+      .toMatchObject({ context_window: 500_000, max_context_window: 500_000, auto_compact_token_limit: 450_000 });
+  });
+
   test("failed or empty roster fetches cannot register models", async () => {
     await fetchRoster([row()], Date.now(), 500);
     expect(discoveredNativeOpenAiModels()).toEqual([]);

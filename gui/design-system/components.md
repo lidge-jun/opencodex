@@ -3,12 +3,15 @@
 ## App shell and navigation
 
 - 데스크톱은 232px sidebar와 main content의 2열 구조다.
+- sidebar는 Dashboard, Connect, Codex, Providers, Models, Subagents, Usage & Logs, Remote Link 순서의 8개 행이다. Codex는 기존 Codex Set의 이름이며 `#codex-set`을 유지하고, Startup(`#startup`)은 sidebar 밖에 둔다.
+- Connect는 제목이 Connect인 Integrations 페이지를 열며 자체 tab strip에서 Codex, Claude, Claude Desktop, Grok Build 순서로 탭을 둔다. Claude에는 하위 탭이 없고 Claude Code 설정을 안쪽 사이드바 없이 한 페이지로 보여 준다. 섹션은 1P 스위치, 시작하기, 일반, 백그라운드 보조 모델, 모델 가로채기, 사용 가능한 모델 순서이고, 즉시 반영되는 Claude 연결 스위치가 맨 아래, 그 아래에 하단 고정 저장 바(변경 상태, 되돌리기, 저장)가 온다. Claude Desktop은 기본 모델과 빠른 작업 모델 카드, 모델 목록을 먼저 보여 주고 Opus/Fable/Sonnet/Haiku 등급 배치는 접힌 고급 영역에 둔다. 화면이 하나뿐일 때는 탭 줄을 두지 않는다. `#claude/code`는 유지하고 예전 `#claude/settings`는 Code로 리디렉션하며, Claude Desktop은 `#claude/desktop`의 독립 Connect 탭이다. 계정 관리는 Providers > Anthropic > Accounts에서만 제공하며 기존 `#claude/account`는 `#providers?provider=anthropic&tab=accounts`로 리디렉션한다. Connect에는 section switcher가 없다. 마지막 행인 Remote Link는 Remote Link(`#remote`)와 사용 가능한 경우 Remote Workspace(`#remote-workspace`)를 묶는다. Usage & Logs는 Usage(첫 페이지), Logs & Debug, Storage를 묶으며 모든 기존 URL과 hash를 유지한다.
+- 그룹 페이지 위의 section switcher는 Remote Link와 Usage & Logs에서 사용하며, 밑줄형 `.page-tabs`와 구분되는 pill 탐색이다. 이름 있는 `<nav>`와 `aria-current="page"` 버튼을 쓰고 Left/Right/Home/End로 포커스를 이동한다. 페이지를 바꿔도 활성화한 버튼의 포커스가 유지되도록 페이지마다 다시 마운트되는 error boundary 밖에 렌더링하며 모바일 터치 영역은 44px 이상이다. 스타일은 `gui/src/styles/section-switcher.css`에 둔다.
 - 760px 이하에서는 sidebar가 off-canvas drawer로 전환된다.
 - macOS 데스크톱에서는 네이티브 신호등과 겹치지 않도록 축소 줌에서 sidebar 폭과 모바일 상단 여백이 커진다.
 - `.nav-item`은 아이콘 17px, control text, 4px 세로 간격을 사용한다.
 - hover와 active는 같은 surface family를 쓰되 active는 semibold로 구분한다.
 - 메뉴마다 margin을 직접 추가하지 않고 `.sidebar nav`의 `gap`을 사용한다.
-- 데스크톱 레이아웃에서 `.sidebar nav`는 스크롤 영역이고 footer(언어, 테마, 줌, 프록시)는 항상 보인다. 창이 낮거나 페이지 줌으로 CSS 뷰포트가 줄어도 footer 컨트롤에 닿을 수 있어야 한다. 데스크톱 셸의 줌 컨트롤(`.zoom-control`)은 테마 행과 같은 행 높이를 쓴다.
+- 데스크톱 레이아웃에서 `.sidebar nav`는 스크롤 영역이고 footer(언어, 테마, 줌, 프록시)는 항상 보인다. 창이 낮거나 페이지 줌으로 CSS 뷰포트가 줄어도 footer 컨트롤에 닿을 수 있어야 한다. 테마는 해·달·모니터 세 아이콘을 담은 알약(`.theme-switch`)으로 고르고, 현재 모드는 채운 칸으로 표시한다. macOS·Linux 데스크톱 셸에서는 이 알약과 줌 스테퍼(`.zoom-control`)가 한 행(`.sidebar-display-row`)을 나눠 쓴다. 첫 테마 아이콘은 위 언어 아이콘과 같은 세로선에, 오른쪽 끝은 프록시 행 orb와 같은 10px 선에 맞춘다. 줌이 없는 Windows와 브라우저에서는 프록시 행과 같은 형태로 `테마` 라벨 뒤에 알약을 둔다.
 
 ## Buttons
 

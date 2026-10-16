@@ -6,6 +6,7 @@ import {
 import {
   configureSharedSpendLedger,
   spendPolicyFromConfig,
+  waitForSharedSpendReporterDrain,
 } from "../../lib/spend-reservation-ledger";
 import { warnIfSyncedStateDirectory } from "../../lib/synced-state-location";
 
@@ -26,7 +27,7 @@ export function waitForFailedStartRollback(error: unknown): Promise<void> {
 }
 
 export interface SpendLedgerServerLifecycle {
-  configure(spend: OcxSpendConfig | undefined): void;
+  configure(spend: OcxSpendConfig | undefined, poolAliases?: unknown, providerIds?: readonly string[]): void;
   track<T extends { stop(closeActiveConnections?: boolean): void | Promise<void> }>(server: T): T;
   release(): void;
   releaseAfterFailedStart(): Promise<void>;
@@ -36,7 +37,8 @@ export interface SpendLedgerServerLifecycle {
 export function acquireSpendLedgerServerLifecycle(configDir: string): SpendLedgerServerLifecycle {
   const owner: SpendLedgerOwnerLease = acquireSpendLedgerOwner(configDir);
   // Advisory: a synced state directory makes the journal's hard-link guard refuse intermittently
-  // (#6314). Said once at startup instead of being discovered from a 502.
+  // (#6314), including Google Drive syncing the native Desktop or Documents folder. Said once
+  // at startup instead of being discovered from a 502. The nlink guard itself is unchanged.
   warnIfSyncedStateDirectory(configDir);
   // Each entry returns whatever the listener's own stop returned. Typed as void-or-promise
   // because the rollback below has to WAIT on it: declaring it `() => void` let the call site
@@ -49,13 +51,18 @@ export function acquireSpendLedgerServerLifecycle(configDir: string): SpendLedge
     owner.release();
   };
   return {
-    configure(spend): void {
-      configureSharedSpendLedger(spendPolicyFromConfig(spend));
+    configure(spend, poolAliases, providerIds): void {
+      configureSharedSpendLedger(spendPolicyFromConfig(spend, poolAliases, providerIds));
     },
     track<T extends { stop(closeActiveConnections?: boolean): void | Promise<void> }>(server: T): T {
       // Capture the raw stop before startServer replaces the public method with full teardown.
       const stop = server.stop.bind(server);
-      failedStartStops.push(() => stop(true));
+      const drainedStop = async (closeActiveConnections?: boolean): Promise<void> => {
+        await stop(closeActiveConnections);
+        await waitForSharedSpendReporterDrain();
+      };
+      Object.defineProperty(server, "stop", { configurable: true, value: drainedStop });
+      failedStartStops.push(() => drainedStop(true));
       return server;
     },
     release,

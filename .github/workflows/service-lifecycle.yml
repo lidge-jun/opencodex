@@ -24,11 +24,11 @@ on:
       # produced no run and the gate dead-ended until a manual dispatch.
       - ".github/workflows/release.yml"
   push:
-    # Release lines only. release.yml needs a successful push run for the exact
-    # release SHA, and scripts/release.ts only releases from main or preview.
-    # Without a branch filter every feature-branch push whose range carried a
-    # dev merge touching these paths re-ran the macOS and Windows legs that the
-    # pull_request trigger above already runs for the same change.
+    # Release lines only (no dev: cross-platform legs run on dev by manual
+    # workflow_dispatch). Pull requests run only the Linux leg. main and preview
+    # must stay: release.yml needs a successful push run for the exact release
+    # SHA, and scripts/release.ts only releases from main or preview. Without a
+    # branch filter every feature-branch push would re-run all three legs.
     branches: [main, preview]
     paths:
       - "src/service.ts"
@@ -177,6 +177,8 @@ jobs:
           fi
 
   macos-launchd:
+    # Pull requests run the Linux leg only; macOS runs on manual dispatch and main/preview push.
+    if: github.event_name != 'pull_request'
     runs-on: macos-latest
     timeout-minutes: 10
     steps:
@@ -255,6 +257,8 @@ jobs:
           fi
 
   windows-schtasks:
+    # Pull requests run the Linux leg only; Windows runs on manual dispatch and main/preview push.
+    if: github.event_name != 'pull_request'
     runs-on: windows-latest
     timeout-minutes: 10
     steps:

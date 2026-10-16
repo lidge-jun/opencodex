@@ -1,4 +1,8 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import * as filesystem from "node:fs";
+import { repoPath } from "../helpers/repo-root";
+import { readDesktopLibraryText, parseMetadata, readDesktopProfileForeignKeys } from "../../src/claude/desktop-3p-library";
 import { saveConfig, readConfigDiagnostics } from "../../src/config";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -194,4 +198,86 @@ test("interrupted cleanup prefers the selected opencodex row and reports another
   expect(result).toMatchObject({ ok: false, changed: true, kind: "cleanup_incomplete" });
   expect(existsSync(join(library, `${selected}.json`))).toBe(false);
   expect(result.residualPaths).toContain(join(library, `${residual}.json`));
+});
+
+
+test("regular Desktop library reads preserve the exact text and foreign keys", () => {
+  const path = join(fixtureHome, "regular.json");
+  const source = JSON.stringify({ entries: [], foreign: "설정 값" }) + "\n";
+  writeFileSync(path, source);
+  expect(readDesktopLibraryText(path)).toBe(source);
+  expect(parseMetadata(path).entries).toEqual([]);
+  expect(readDesktopProfileForeignKeys(path).foreign).toBe("설정 값");
+  expect(readFileSync(path, "utf8")).toBe(source);
+});
+
+test("Desktop library reads refuse directories without reading their contents", () => {
+  expect(() => readDesktopLibraryText(fixtureHome)).toThrow("desktop_config_not_regular");
+});
+
+test.skipIf(process.platform === "win32")("Desktop library reads refuse symlinks without modifying the target", () => {
+  const target = join(fixtureHome, "target.json");
+  const link = join(fixtureHome, "link.json");
+  writeFileSync(target, "{}\n");
+  filesystem.symlinkSync(target, link);
+  expect(() => readDesktopLibraryText(link)).toThrow("desktop_config_not_regular");
+  expect(readFileSync(target, "utf8")).toBe("{}\n");
+  expect(filesystem.lstatSync(link).isSymbolicLink()).toBe(true);
+});
+
+for (const entry of ["_meta.json", "selected.json"]) {
+  test.skipIf(process.platform === "win32")(`Desktop inspection refuses a FIFO at ${entry} without a writer`, () => {
+    const library = join(fixtureHome, "fifo-library");
+    mkdirSync(library);
+    if (entry !== "_meta.json") writeFileSync(join(library, "_meta.json"), JSON.stringify({
+      appliedId: "selected", entries: [{ id: "selected", name: "foreign-fixture" }],
+    }));
+    const fifo = join(library, entry);
+    expect(spawnSync("mkfifo", [fifo], { timeout: 5000 }).status).toBe(0);
+    // Bound the parent even if a regression opens the FIFO synchronously. The child imports
+    // the real inspector and does not use a simulated read or start a production listener.
+    const code = `import { inspectDesktop3pConfigLibrary } from ${JSON.stringify(repoPath("src/claude/desktop-3p.ts"))};
+      console.log(JSON.stringify(inspectDesktop3pConfigLibrary({env:{OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR:${JSON.stringify(library)}}})));`;
+    const child = spawnSync(process.execPath, ["--no-env-file", "-e", code], {
+      env: { ...process.env }, encoding: "utf8", timeout: 10000, maxBuffer: 1024 * 1024,
+    });
+    expect(child.error).toBeUndefined();
+    expect(child.status).toBe(0);
+    expect(JSON.parse(child.stdout.trim()).kind).toBe(entry === "_meta.json" ? "unsafe" : "broken");
+    expect(filesystem.lstatSync(fifo).isFIFO()).toBe(true);
+  }, 20000);
+}
+
+test.skipIf(process.platform === "win32")("a regular-to-FIFO replacement between stat and open is refused", () => {
+  const path = join(fixtureHome, "race.json");
+  const fifo = join(fixtureHome, "replacement");
+  writeFileSync(path, "{}");
+  expect(spawnSync("mkfifo", [fifo], { timeout: 5000 }).status).toBe(0);
+  const open = filesystem.openSync;
+  const opening = spyOn(filesystem, "openSync").mockImplementation((target, flags, mode) => {
+    if (target === path) filesystem.renameSync(fifo, path);
+    return open(target, flags, mode);
+  });
+  try {
+    expect(() => readDesktopLibraryText(path)).toThrow("desktop_config_not_regular");
+    expect(filesystem.lstatSync(path).isFIFO()).toBe(true);
+  } finally { opening.mockRestore(); }
+});
+
+test.skipIf(process.platform === "win32")("a regular-to-symlink replacement between stat and open is refused", () => {
+  const path = join(fixtureHome, "race-link.json");
+  const target = join(fixtureHome, "link-target.json");
+  const link = join(fixtureHome, "link-replacement");
+  writeFileSync(path, "{}");
+  writeFileSync(target, "{}");
+  filesystem.symlinkSync(target, link);
+  const open = filesystem.openSync;
+  const opening = spyOn(filesystem, "openSync").mockImplementation((target_, flags, mode) => {
+    if (target_ === path) filesystem.renameSync(link, path);
+    return open(target_, flags, mode);
+  });
+  try {
+    expect(() => readDesktopLibraryText(path)).toThrow("desktop_config_not_regular");
+    expect(filesystem.lstatSync(path).isSymbolicLink()).toBe(true);
+  } finally { opening.mockRestore(); }
 });

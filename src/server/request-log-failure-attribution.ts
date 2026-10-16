@@ -21,6 +21,8 @@ export interface FinalRequestAttributionFacts {
   readonly closeReason?: "terminal" | "client_cancel" | "non_stream" | "body_stall" | "body_overflow" | undefined;
   readonly transportPhase?: "pre_headers" | "mid_stream" | "terminal_sse" | undefined;
   readonly terminalSource?: "upstream" | "synthetic" | undefined;
+  /** A failure cause proved by the transport's in-process verdict. */
+  readonly causeHint?: RequestFailureCause | undefined;
   /** The REQUEST's first-output observation, not the final attempt's. See below. */
   readonly outputObserved: boolean;
   readonly locallyAnswered: boolean;
@@ -53,6 +55,7 @@ export function attributeFinalRequest(facts: FinalRequestAttributionFacts): Stam
     ...(facts.closeReason ? { closeReason: facts.closeReason } : {}),
     ...(facts.transportPhase ? { transportPhase: facts.transportPhase } : {}),
     ...(facts.terminalSource ? { terminalSource: facts.terminalSource } : {}),
+    ...(facts.causeHint ? { causeHint: facts.causeHint } : {}),
     ...(facts.attempt?.streamAborted === true ? { streamAborted: true } : {}),
     outputObserved: facts.outputObserved,
     // The one fact that can raise a stage above `semantic-output`, and the reason it is counted

@@ -191,6 +191,30 @@
   margin-top: 12px;
 }
 
+.codex-set-custom__deleted {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+/* The composed projection is the text that actually ships, so its preview gets
+   the same wrapping rules as a layer body rather than one long scrollable line. */
+.codex-set-custom__preview {
+  margin-top: 8px;
+}
+
+.codex-set-custom__preview-body {
+  margin-top: 8px;
+  max-height: 240px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .codex-set-custom-dialog {
   max-width: 640px;
 }

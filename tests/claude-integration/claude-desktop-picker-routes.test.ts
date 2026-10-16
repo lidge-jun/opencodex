@@ -1,9 +1,12 @@
+import { memoryPickerCaStore } from "../helpers/picker-ca-store";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyDesktopPickerProfile, inspectDesktopPickerProfile } from "../../src/claude/desktop-picker-profile";
 import { startConnectProxy } from "../../src/claude/intercept/connect-proxy";
+import { createCertificateAuthority } from "../../src/claude/intercept/local-ca";
+import { PICKER_CA_COMMON_NAME, PICKER_HOST } from "../../src/claude/intercept/picker-ca";
 import { pickerCaCertPath, pickerCaFingerprints } from "../../src/claude/intercept/picker-ca";
 import type { PickerListenerOptions } from "../../src/claude/intercept/picker-listener";
 import { createPickerRuntime } from "../../src/claude/intercept/picker-runtime";
@@ -51,7 +54,7 @@ const security: SecurityRunner = async args => {
 };
 
 /** Start the intercept pair with picker mode wired, as the server lifecycle does. */
-async function startPicker(saved: OcxConfig, onDispatch?: (req: Request) => Response): Promise<number> {
+async function startPicker(saved: OcxConfig, onDispatch?: (req: Request) => Response, store = memoryPickerCaStore().store): Promise<number> {
   writeFileSync(join(root, "config.json"), JSON.stringify(saved));
   const requestedProxyPorts: number[] = [];
   handle = await startClaudeIntercept({
@@ -62,7 +65,7 @@ async function startPicker(saved: OcxConfig, onDispatch?: (req: Request) => Resp
     ...(onDispatch ? { desiredClients: () => ({ desktop: true, cli: false }) } : {}),
     loadPickerRoutes: async () => ({ nativeSlugs: [], routedModels: [{ provider: "xai", id: "grok-4.7", contextWindow: 256_000 }] }),
     pickerSecurity: security,
-    pickerPlatform: "darwin",
+    pickerCaStore: store, pickerPlatform: "darwin",
     // A probe that closes before startup does not reserve anything: the lifecycle's own
     // ephemeral TLS listener or another process can take the observed pair. Bind the real proxy
     // handlers directly on port 0 so the kernel owns both allocations until teardown.
@@ -205,7 +208,10 @@ describe("first-party turns picker mode on by default", () => {
   });
 
   test("callerAddedTrust reaches the controller: a refused CLI enable has its trust removed under the lock", async () => {
-    await startPicker(config({ claudeCode: { desktopMode: "gateway" } }));
+    const fake = memoryPickerCaStore();
+    await startPicker(config({ claudeCode: { desktopMode: "gateway" } }), undefined, fake.store);
+    const legacy = createCertificateAuthority({ commonName: PICKER_CA_COMMON_NAME, permittedDnsNames: [PICKER_HOST] });
+    mkdirSync(join(root, "claude-picker")); writeFileSync(pickerCaCertPath(root), legacy.certPem);
     // The CLI's trust step already ran; the server refuses because Desktop is not first-party.
     await dispatch("/api/claude-desktop/picker");
     keychain.trusted = true;
@@ -215,6 +221,9 @@ describe("first-party turns picker mode on by default", () => {
     expect(refused.body.picker.effective).toBe(false);
     expect(keychain.calls).toContain("remove-trusted-cert");
     expect(keychain.trusted).toBe(false);
+    expect(fake.writes).toBe(0);
+    expect(existsSync(join(root, "claude-picker", "authority.json"))).toBe(false);
+    expect(readFileSync(pickerCaCertPath(root), "utf8")).toBe(legacy.certPem);
   });
 });
 

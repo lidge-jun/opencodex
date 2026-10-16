@@ -16,6 +16,7 @@ import { pathToFileURL } from "node:url";
 import { createAdapterEventQueue } from "../adapters/run-turn-queue";
 import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxProviderContinuationState, OcxProviderOpaqueToolCallMetadata, OcxRequestOptions, OcxThinkingContent, OcxUsage, RateLimitRetryPolicy } from "../types";
 import { namespacedToolName, toolChoiceToolPredicate } from "../types";
+import { isAnthropicInstanceId } from "../providers/anthropic-instance-id";
 import { cloneProviderOpaqueToolCallMetadata } from "../responses/provider-opaque-metadata";
 import type { AttemptRecoveryKind } from "../usage/log";
 import { bridgeToResponsesSSE } from "../bridge";
@@ -299,6 +300,11 @@ export interface ImageBridgeDeps {
   onRequestBuilt?: (request: AdapterRequest) => void;
   abortSignal?: AbortSignal;
   onFirstOutput?: () => void;
+  /** Transfer prepaid cleanup before asynchronous inference can outlive Response construction. */
+  onProducerStart?: () => void;
+  onProducerEnd?: () => void;
+  /** Release a prepaid recovery that did not dispatch during this fetch iteration. */
+  onIterationEnd?: () => void;
   /** Max image-generation rounds before forcing a final answer. Defaults to 3; clamped to [0, 10]. */
   maxRounds?: number;
   /** Connect / response-header budget for non-runTurn iterations. */
@@ -308,7 +314,7 @@ export interface ImageBridgeDeps {
   /** Provider-specific fetch (e.g. xAI transport wrapper). Falls back to global fetch. */
   fetchImpl?: typeof globalThis.fetch;
   /** Bind physical dispatch to this iteration's built request; pacing remains owned by the loop. */
-  fetchForRequest?: (request: AdapterRequest, parsed: OcxParsedRequest) => typeof globalThis.fetch;
+  fetchForRequest?: (request: AdapterRequest, parsed: OcxParsedRequest, adapter: ProviderAdapter) => typeof globalThis.fetch;
   /** Reserve the routed provider's next request-start slot before each adapter dispatch. */
   waitForRequestSlot?: (signal?: AbortSignal) => Promise<ProviderRequestSlot | void>;
   /** Raw adapter usage at the terminal event, pre wire-normalization (see bridgeToResponsesSSE onUsage). */
@@ -371,6 +377,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
   let paidImageCalls = 0;
   let paidVideoCalls = 0;
   let hiddenUsage: OcxUsage | undefined;
+  let activeProducers = 0;
 
   const addUsage = (a: OcxUsage | undefined, b: OcxUsage | undefined): OcxUsage | undefined => {
     if (!a) return b;
@@ -513,19 +520,25 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       try {
         // Attempt telemetry must fire at dispatch time, not after collection.
         deps.onAttemptSend?.();
-        void adapter.runTurn(iterParsed, {
-          headers: deps.forwardHeaders ? new Headers(deps.forwardHeaders) : new Headers(),
-          ...(deps.incomingMeta.providerName ? { providerName: deps.incomingMeta.providerName } : {}),
-          abortSignal: signal,
-          translatorBudget,
-          pacingSlot,
-        }, emit).then(closeOnAbort).catch(err => {
+        activeProducers++;
+        let producer: Promise<void>;
+        try {
+          producer = adapter.runTurn(iterParsed, {
+            ...deps.incomingMeta,
+            headers: deps.forwardHeaders ? new Headers(deps.forwardHeaders) : new Headers(),
+            ...(deps.incomingMeta.providerName ? { providerName: deps.incomingMeta.providerName } : {}),
+            abortSignal: signal,
+            translatorBudget,
+            pacingSlot,
+          }, emit);
+        } catch (err) { producer = Promise.reject(err); }
+        void producer.then(closeOnAbort).catch(err => {
           if (accepting) {
             collectionError = err;
             if (isTranslatorBudgetExceededError(err)) internalAbort.abort(err);
           }
           closeOnAbort();
-        });
+        }).finally(() => { activeProducers--; deps.onProducerEnd?.(); });
         idle.reset();
         for await (const event of queue.stream()) {
           if (timedOut) break;
@@ -601,7 +614,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
           cachedRequest = request;
           cachedAdapter = requestAdapter;
         }
-        const requestFetch = deps.fetchForRequest?.(request, iterParsed) ?? fetchImpl;
+        const requestFetch = deps.fetchForRequest?.(request, iterParsed, requestAdapter) ?? fetchImpl;
         let response: Response;
         try {
           if (requestAdapter.fetchResponse) {
@@ -614,6 +627,9 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
                 returnRawErrors: true,
                 stream: true,
                 executor: requestFetch,
+                sendBudget: deps.incomingMeta.sendBudget,
+                onPhysicalSend: deps.incomingMeta.onPhysicalSend,
+                onRecoveryWithheld: deps.incomingMeta.onRecoveryWithheld,
               }));
             } finally {
               releaseProviderRequestSlot(slot);
@@ -688,7 +704,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       }
       // 429 key-failover parity with web-search / normal routed path.
       while ((prepared.response.status === 429
-        || (prepared.response.status === 403 && deps.incomingMeta?.providerName === "anthropic")
+        || ((prepared.response.status === 403 || prepared.response.status === 401) && isAnthropicInstanceId(deps.incomingMeta?.providerName))
         || (iterParsed._kiroAuthContext && (prepared.response.status === 400 || prepared.response.status === 403))) && deps.on429) {
         const rotated = await deps.on429(prepared.response.headers.get("retry-after"), prepared.response.headers,
           iterParsed, prepared.response);
@@ -733,6 +749,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       throw new LoopError(502, `Provider unreachable: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       headerDeadline.clear();
+      deps.onIterationEnd?.();
     }
   };
 
@@ -795,6 +812,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
   // non-2xx JSON. Skip for runTurn adapters: their "headers" are synthetic, and awaiting
   // queue.collect() before returning SSE starves clients of headers/heartbeats on slow first turns.
   const skipEagerDrain = !!adapter.runTurn;
+  if (skipEagerDrain) deps.onProducerStart?.();
   let firstPrepared: IterationResponse | undefined;
   if (!skipEagerDrain) {
     try {
@@ -1055,6 +1073,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
         }
       }
     } finally {
+      if (skipEagerDrain && activeProducers === 0) deps.onProducerEnd?.();
       if (abortSignal) abortSignal.removeEventListener("abort", linkAbort);
     }
   }

@@ -34,6 +34,7 @@ import {
   updateJobPath,
   type UpdateJobState,
 } from "../../src/update/job";
+import type { SupervisionEvidence } from "../../src/service/desktop-supervision.mjs";
 import { runUpdateRestartWithOwnershipLease } from "../../src/update/restart-ownership";
 import { serviceStatePaths, type ServiceOwnershipResolution } from "../../src/service/state";
 import { isolationBudgetMs, watchdogMs } from "../helpers/ci-watchdog";
@@ -219,14 +220,27 @@ async function serviceManagerChildAuthority(box: Sandbox): Promise<string> {
   return paths.at(-1)!;
 }
 
+/**
+ * A real lease holder in a separate process. It acquires through the lease module alone, on the
+ * paths this process resolved for the sandbox (sandbox() already proved them contained), and
+ * re-checks containment before it touches anything.
+ *
+ * It deliberately does not re-resolve them by importing src/service/state.ts. That import pulls
+ * in the whole config graph (~460 modules, ~1 s of CPU in a cold Bun child), and on hosted
+ * Windows runners a cold import of that size has a multi-second I/O-latency tail: holders were
+ * measured spending 8 s of wall time on ~0.6 s of CPU inside it, which is the acknowledgment
+ * budget below (B8, dev f924820652). The holder's job is to hold the real lease; that a
+ * service-manager child resolves the same authority from its stored environment is proven
+ * separately by serviceManagerChildAuthority().
+ */
 function spawnHolder(box: Sandbox, behavior: "release" | "ignore-eof" | "missing-ack" = "release"): FixtureChild {
   const ready = join(box.root, "holder-ready.json");
   const released = join(box.root, "holder-released");
+  const statePaths = serviceStatePaths();
   const child = trackChild(box, Bun.spawn([process.execPath, "-e", `
     const { writeFileSync, renameSync } = await import("node:fs");
     const { relative, isAbsolute, sep } = await import("node:path");
-    const { serviceStatePaths } = await import(${JSON.stringify(SERVICE_STATE_MODULE_URL)});
-    const paths = serviceStatePaths();
+    const paths = ${JSON.stringify(statePaths)};
     for (const candidate of paths) {
       const rel = relative(${JSON.stringify(box.root)}, candidate);
       if (!rel || rel === ".." || rel.startsWith(".." + sep) || isAbsolute(rel)) throw new Error("holder authority escaped");
@@ -853,4 +867,50 @@ describe("lease fixture containment and cleanup controls", () => {
       expect(canRemoveSandbox(box)).toBe(true);
     }, watchdogMs(20_000));
   }
+});
+
+
+describe("dashboard restart live Desktop veto", () => {
+  const desktop: SupervisionEvidence = {
+    kind: "desktop", runtimePid: 321, supervisorPid: 123, app: "/fixture/opencodex-desktop", proxy: "/fixture/ocx",
+  };
+  const unowned = (): ServiceOwnershipResolution => ({ kind: "none", revision: 0 });
+
+  test("Desktop and target-bound desktopSeen refuse before restart despite absent durable ownership", async () => {
+    for (const evidence of [desktop, { kind: "unknown", reason: "probe-failed", desktopSeen: true } as const]) {
+      const box = sandbox();
+      let mutations = 0;
+      const result = await runUpdateRestartWithOwnershipLease(unowned, async () => { mutations++; }, () => evidence);
+      expect(result).toEqual({ kind: "veto", notice: expect.stringContaining("OpenCodex Desktop runs this proxy") });
+      expect(mutations).toBe(0); expect(existsSync(box.lockDir)).toBe(false);
+    }
+  });
+
+  test("released refresh and direct fallback share a latch until none positively clears it", async () => {
+    const box = sandbox();
+    const evidence: SupervisionEvidence[] = [
+      { kind: "none" }, desktop, { kind: "unknown", reason: "probe-failed", desktopSeen: false },
+      { kind: "unsupported" }, { kind: "none" },
+    ];
+    let reads = 0;
+    const result = await runUpdateRestartWithOwnershipLease(unowned, async lease => {
+      expect(lease.vetoAgain()).toContain("OpenCodex Desktop");
+      lease.releaseForServiceManager();
+      expect(lease.reacquireForDirectStart()).toEqual({ notice: expect.stringContaining("OpenCodex Desktop"), failed: false });
+      expect(lease.vetoAgain()).toContain("OpenCodex Desktop");
+      expect(lease.vetoAgain()).toBeNull();
+      return "cleared";
+    }, () => { reads++; return evidence.shift()!; });
+    expect(result).toEqual({ kind: "ran", value: "cleared" });
+    expect(reads).toBe(5); expect(existsSync(box.lockDir)).toBe(false);
+  });
+
+  test("none, unsupported and plain unknown activate restart normally", async () => {
+    for (const evidence of [{ kind: "none" }, { kind: "unsupported" },
+      { kind: "unknown", reason: "probe-failed", desktopSeen: false }] as const) {
+      sandbox(); let mutations = 0;
+      const result = await runUpdateRestartWithOwnershipLease(unowned, async () => ++mutations, () => evidence);
+      expect(result).toEqual({ kind: "ran", value: 1 }); expect(mutations).toBe(1);
+    }
+  });
 });

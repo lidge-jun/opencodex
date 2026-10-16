@@ -103,7 +103,7 @@ describe("CLI help navigation", () => {
     for (const example of examples) {
       const tokens = example.trim().split(/\s+/);
       expect(tokens.slice(0, 2)).toEqual(["ocx", "provider"]);
-      expect(["list", "presets", "add", "show", "set-default", "edit", "remove"]).toContain(tokens[2]);
+      expect(["list", "presets", "add", "show", "set-default", "edit", "remove", "pacing", "snapshot"]).toContain(tokens[2]);
       expect(example).not.toMatch(/sk-[a-z]|Bearer [A-Za-z0-9]/);
     }
     expect(output).toContain("--api-key <key>");
@@ -148,6 +148,6 @@ describe("CLI help navigation", () => {
       fallbackToParent: true, write: value => { lines.push(value); },
     }));
     expect(stdout).toBe("");
-    expect(lines.join("\n")).toContain("ocx models context <status|value");
+    expect(lines.join("\n")).toContain("ocx models context provider <provider> <on|off>");
   });
 });

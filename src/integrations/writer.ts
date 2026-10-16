@@ -18,7 +18,7 @@ import { shouldInjectApiAuthHeader } from "../codex/inject";
 import { detachedConfigSnapshot } from "../config/admitted-identity";
 import { copyPlainData } from "../lib/plain-data";
 import type { OcxConfig } from "../types";
-import { defaultIntegrationIO, loadTarget, parseConfig, type IntegrationIO } from "./config-io";
+import { IntegrationWriteSizeError, PARSE_FAILED, defaultIntegrationIO, loadTarget, parseConfig, type IntegrationIO } from "./config-io";
 import { inspectKiloCandidates } from "./kilo-candidates";
 import {
   fingerprint,
@@ -33,12 +33,13 @@ import {
   refreshablePathsOf,
   semanticProtectedContributionFingerprint,
 } from "./ownership-policy";
-import { AmbiguousSelectorError, createdContainerPaths, mergeContribution, removeFragments } from "./merge";
+import { AmbiguousSelectorError, createdContainerPaths, mergeContribution, parseSegment, removeFragments } from "./merge";
 import {
   INTEGRATION_CLIENTS,
   assertDroidPathsUnambiguous,
   isLoopbackOnly,
   resolveIntegrationPaths,
+  type ResolvedIntegrationPaths,
   restoreOwnershipCollision,
   type IntegrationClientId,
 } from "./registry";
@@ -48,7 +49,7 @@ import type { IntegrationState } from "./state";
 import { serializeDocument, UnserializableValueError } from "./serialize";
 import { ClientPathError } from "../clients/config-export";
 import { matchesOperationResult, newOpId, type JournalEntry } from "./journal";
-import { observeIntegration, type IntegrationWriteInput, type RefusalReason } from "./mutation-plan";
+import { observeIntegration, restoreStoreDirectoryRefusal, type IntegrationWriteInput, type RefusalReason } from "./mutation-plan";
 import { createIntegrationStateStore, type IntegrationStateStore } from "./store";
 import {
   patchYamlFragmentSource,
@@ -161,6 +162,15 @@ function commit(args: CommitArgs): WriteOutcome {
     }
   } catch (error) {
     if (transactionStarted) return compensate(args, error, "could not write both Cline files");
+    if (error instanceof IntegrationWriteSizeError && args.snapshotPath) {
+      try {
+        args.store.discardUncommittedSnapshot(clientId, args.entry.opId);
+      } catch (cleanupError) {
+        return refuse(clientId, "write_failed", args.state,
+          `${messageOf(error)}; could not remove the unused backup: ${messageOf(cleanupError)}`, args.snapshotPath);
+      }
+      return refuse(clientId, "write_failed", args.state, messageOf(error));
+    }
     return refuse(clientId, "write_failed", args.state, messageOf(error), args.snapshotPath);
   }
   try {
@@ -300,6 +310,8 @@ function applyOrRefreshIntegration(
     return refuse(clientId, "superseded_store", classified.state,
       target.ineffective.why === "owned-config-file"
         ? `${clientId} now reads its providers from ${readsFrom}, and opencodex still has a block in ${configPath}, which it no longer reads. Disable the ${clientId} integration to remove that block, then enable it again to write ${readsFrom}.`
+        : target.ineffective.why === "missing-store"
+          ? `${clientId} reads its providers from ${readsFrom}, which does not exist. ${clientId} renames ${configPath} away and imports it on its next start, so opencodex will not write there. ${target.ineffective.remedy ?? fallback}`
         : readsFrom === configPath
           ? `opencodex does not recognise the schema of ${readsFrom}, the file ${clientId} reads its providers from, so it will not merge into it. ${fallback}`
           : `${clientId} now reads its providers from ${readsFrom}, whose schema opencodex does not recognise, so writing ${configPath} would change nothing it loads. ${fallback}`);
@@ -383,8 +395,15 @@ function applyOrRefreshIntegration(
   let created: string[];
   let text: string;
   try {
+    // The source patcher updates this selected row in place. Keep it in the
+    // semantic merge too, even when we originally created it, and retain that
+    // provenance so disable can still remove the row when it becomes empty.
+    const sourceRoot = target.sourcePreservingYaml?.path[0];
+    const retainedRow = sourceRoot && parseSegment(sourceRoot).kind === "select" ? sourceRoot : null;
+    const priorCreated = record?.createdContainers ?? [];
+    const prunable = new Set(priorCreated.filter(path => path !== retainedRow));
     const base = classified.state === "stale" && record
-      ? removeFragments(parsed, record.fragmentPaths, new Set(record.createdContainers ?? [])).doc
+      ? removeFragments(parsed, record.fragmentPaths, prunable).doc
       : classified.state === "conflict" && record
         /*
          * A forced overwrite of a `foreign-edit` conflict drops what the previous
@@ -399,26 +418,27 @@ function applyOrRefreshIntegration(
          * them, so a later disable removes our leaves and leaves their structure
          * standing.
          */
-        ? removeFragments(parsed, record.fragmentPaths, new Set(record.createdContainers ?? [])).doc
+        ? removeFragments(parsed, record.fragmentPaths, prunable).doc
         : parsed;
     // Computed against the document as it stands BEFORE the merge: afterwards
     // every container exists and "did we create this?" is unanswerable.
     created = createdContainerPaths(base, contribution);
+    if (retainedRow && priorCreated.includes(retainedRow)) created = [...new Set([retainedRow, ...created])];
     const nextDocument = mergeContribution(base, contribution);
     if (clientId === "cline") preserveClineSelection(parsed, nextDocument);
-    if (spec.sourcePreservingYaml && before !== null) {
-      const value = sourcePreservingFragmentValue(contribution, spec.sourcePreservingYaml.path);
+    if (target.sourcePreservingYaml && before !== null) {
+      const value = sourcePreservingFragmentValue(contribution, target.sourcePreservingYaml.path);
       const patched = value === undefined
         ? null
         : patchYamlFragmentSource(
             before,
-            spec.sourcePreservingYaml.path,
+            target.sourcePreservingYaml.path,
             { kind: "upsert", value },
             nextDocument,
           );
       if (patched === null) {
         return refuse(clientId, "unsafe", "unsafe",
-          yamlRefusalReason(before, spec.sourcePreservingYaml.path, configPath, "it was left alone"));
+          yamlRefusalReason(before, target.sourcePreservingYaml.path, configPath, "it was left alone"));
       }
       text = patched;
     } else {
@@ -565,12 +585,12 @@ export function disableIntegration(input: IntegrationWriteInput): WriteOutcome {
    * comment makes its ancestor user-owned without protecting our leaf.
    */
   const recordedCreated = record!.createdContainers ?? [];
-  const prunableCreated = spec.sourcePreservingYaml && before !== null
-    ? sourcePrunableYamlContainers(before, spec.sourcePreservingYaml.path, recordedCreated)
+  const prunableCreated = target.sourcePreservingYaml && before !== null
+    ? sourcePrunableYamlContainers(before, target.sourcePreservingYaml.path, recordedCreated)
     : recordedCreated;
   if (prunableCreated === null) {
     return refuse(clientId, "unsafe", "unsafe",
-      yamlRefusalReason(before ?? "", spec.sourcePreservingYaml!.path, configPath, "nothing was removed"));
+      yamlRefusalReason(before ?? "", target.sourcePreservingYaml!.path, configPath, "nothing was removed"));
   }
   let doc: unknown;
   let removed: boolean;
@@ -586,14 +606,14 @@ export function disableIntegration(input: IntegrationWriteInput): WriteOutcome {
   }
   let text: string;
   try {
-    if (spec.sourcePreservingYaml && before !== null) {
-      const patched = patchYamlFragmentSource(before, spec.sourcePreservingYaml.path, {
+    if (target.sourcePreservingYaml && before !== null) {
+      const patched = patchYamlFragmentSource(before, target.sourcePreservingYaml.path, {
         kind: "remove",
         createdContainers: prunableCreated,
       }, doc);
       if (patched === null) {
         return refuse(clientId, "unsafe", "unsafe",
-          yamlRefusalReason(before, spec.sourcePreservingYaml.path, configPath, "nothing was removed"));
+          yamlRefusalReason(before, target.sourcePreservingYaml.path, configPath, "nothing was removed"));
       }
       text = patched;
     } else {
@@ -633,8 +653,15 @@ export function restoreIntegration(input: IntegrationRestoreInput): WriteOutcome
   if (entry.clientId !== input.clientId) throw new Error("restore input names a different client than the operation");
 
   const clientId = entry.clientId;
-  const resolvedPath = input.resolvedPaths?.configPath
-    ?? INTEGRATION_CLIENTS[clientId].configPath(input.env, input.home);
+  let resolvedPath: string;
+  try {
+    resolvedPath = clientId === "zcode" || !input.resolvedPaths
+      ? resolveIntegrationPaths(clientId, input.env, input.home, undefined, io).configPath
+      : input.resolvedPaths.configPath;
+  } catch (error) {
+    if (!(error instanceof ClientPathError)) throw error;
+    return refuse(clientId, "unsafe", "unsafe", error.message);
+  }
   const configPath = entry.configPath;
   /*
    * Restore acts on the path the operation was journaled against. Resolving a
@@ -645,11 +672,15 @@ export function restoreIntegration(input: IntegrationRestoreInput): WriteOutcome
    * shape those bytes are in, which is what the state below is measured against.
    */
   const rowTarget = declaredIntegrationTarget({
-    clientId, configPath, resolvedConfigPath: resolvedPath, env: input.env, home: input.home,
+    clientId, configPath, resolvedConfigPath: resolvedPath, env: input.env, home: input.home, io,
   });
   if (rowTarget === null) {
     return refuse(clientId, "conflict", "conflict",
       `that operation was recorded for ${configPath}, which this client no longer writes; it now resolves to ${resolvedPath}`);
+  }
+  const directoryRefusal = restoreStoreDirectoryRefusal(input, configPath, io);
+  if (directoryRefusal !== null) {
+    return refuse(clientId, "unsafe", "unsafe", directoryRefusal);
   }
   /*
    * Preview refuses this in observeRestore. Refusing here too is what keeps an
@@ -713,9 +744,15 @@ export function restoreIntegration(input: IntegrationRestoreInput): WriteOutcome
   // exact bytes when the snapshot was taken. Re-deriving it from the file would
   // mean guessing which entries are ours, and a wrong guess deletes a user's.
   const restoredRecord = entry.priorRecord;
+  let restoredDocument = clientId === "droid" && restoredText !== null ? parseConfig(restoredText, "json") : undefined;
+  if (clientId === "commandcode" && restoredText !== null) {
+    const parsed = parseConfig(restoredText, "json");
+    // Restoring raw snapshot bytes must remain possible even when they are not parseable.
+    restoredDocument = parsed === PARSE_FAILED ? undefined : parsed;
+  }
   const fresh = buildIntegrationContribution(
     { ...input, droidReasoningDefaults: undefined }, rowTarget,
-    clientId === "droid" && restoredText !== null ? parseConfig(restoredText, "json") : undefined,
+    restoredDocument,
     restoredRecord,
   );
   /*
@@ -781,6 +818,11 @@ export interface CoordinatedIntegrationOptions {
    * non-null result refuses without writing anything.
    */
   revalidate?: (frozen: IntegrationWriteInput) => Promise<WriteOutcome | null>;
+  /**
+   * Synchronous last word, evaluated with no await between it and the transaction (after
+   * `revalidate` and any lock acquisition). A non-null result refuses without writing.
+   */
+  guard?: (frozen: IntegrationWriteInput) => WriteOutcome | null;
 }
 
 /** Freeze all mutable resolution seams before the first lock await. */
@@ -789,7 +831,7 @@ type FrozenIntegrationInput = IntegrationWriteInput & {
   io: IntegrationIO;
   env: NodeJS.ProcessEnv;
   home: string;
-  resolvedPaths: { configPath: string; detectDir: string };
+  resolvedPaths: ResolvedIntegrationPaths;
 };
 
 /**
@@ -829,7 +871,7 @@ function freezeIntegrationInput(input: IntegrationWriteInput): FrozenIntegration
    */
   const resolvedPaths = input.resolvedPaths
     ? { ...input.resolvedPaths }
-    : resolveIntegrationPaths(input.clientId, env, home, exportContextOf({ ...input, config, models: models.value }));
+    : resolveIntegrationPaths(input.clientId, env, home, exportContextOf({ ...input, config, models: models.value }), io);
   /*
    * The configuration and the roster are seams like the others, and they were the two still held
    * by reference. A coordinated write plans from this input, awaits the writer lock and a
@@ -862,6 +904,57 @@ function tryFreezeIntegrationInput(input: IntegrationWriteInput):
   }
 }
 
+/**
+ * The store lock to hold beside the config file's, or null.
+ *
+ * Only for a store whose directory exists: a lock is never what creates a
+ * client's profile. A store path that cannot be resolved names nothing to lock;
+ * target resolution reports it on its own.
+ */
+function storeLockFile(frozen: FrozenIntegrationInput): string | null {
+  const declared = INTEGRATION_CLIENTS[frozen.clientId].currentStore;
+  if (!declared?.lockFile) return null;
+  let storePath: string;
+  try {
+    storePath = declared.path(frozen.env, frozen.home, frozen.io);
+  } catch (error) {
+    if (error instanceof ClientPathError) return null;
+    throw error;
+  }
+  return frozen.io.statKind(dirname(storePath)) === "dir" ? declared.lockFile(storePath) : null;
+}
+
+/**
+ * Hold the config file's sibling lock, then the store's. Every operation takes
+ * them in that order, so two of ours cannot deadlock, and the client's own
+ * writer only ever holds one of them.
+ */
+function withClientLocks(
+  frozen: FrozenIntegrationInput,
+  suffix: ".lock",
+  operation: () => WriteOutcome,
+  options?: CoordinatedIntegrationOptions,
+): Promise<WriteOutcome> {
+  const run = async (heldStoreLock: string | null): Promise<WriteOutcome> => {
+    const refused = await options?.revalidate?.(frozen);
+    if (refused) return refused;
+    // A profile can appear while revalidation awaits. Acquire its lock and
+    // repeat the validation before observing or mutating its document.
+    const required = storeLockFile(frozen);
+    if (required !== null && required !== heldStoreLock) {
+      return withIntegrationWriterLock(required, () => run(required), options?.lockSeams, ".lock");
+    }
+    // No await between the last store probe and the synchronous transaction.
+    return operation();
+  };
+  return withIntegrationWriterLock(frozen.resolvedPaths.configPath, () => {
+    // Decide only after the outer lock has actually been acquired.
+    const storeLock = storeLockFile(frozen);
+    return storeLock === null ? run(null)
+      : withIntegrationWriterLock(storeLock, () => run(storeLock), options?.lockSeams, ".lock");
+  }, options?.lockSeams, suffix);
+}
+
 async function coordinatedWrite(
   input: IntegrationWriteInput,
   operation: (frozen: IntegrationWriteInput) => WriteOutcome,
@@ -871,24 +964,23 @@ async function coordinatedWrite(
   if (!prepared.ok) return prepared.refusal;
   const frozen = prepared.value;
   const spec = INTEGRATION_CLIENTS[frozen.clientId];
+  const guarded = (bound: IntegrationWriteInput) => options?.guard?.(bound) ?? operation(bound);
   if (!spec.writerLock) {
     const refused = await options?.revalidate?.(frozen);
-    return refused ?? operation(frozen);
+    return refused ?? guarded(frozen);
   }
 
   // An absent client home is not created merely to acquire a sibling lock.
   if (frozen.io.statKind(frozen.resolvedPaths.detectDir) !== "dir") {
     const refused = await options?.revalidate?.(frozen);
-    return refused ?? operation(frozen);
+    if (refused) return refused;
+    if (frozen.io.statKind(frozen.resolvedPaths.detectDir) !== "dir") return guarded(frozen);
   }
-  return withIntegrationWriterLock(
-    frozen.resolvedPaths.configPath,
-    async () => {
-      const refused = await options?.revalidate?.(frozen);
-      return refused ?? operation(frozen);
-    },
-    options?.lockSeams,
+  return withClientLocks(
+    frozen,
     spec.writerLock.suffix,
+    () => guarded(frozen),
+    options,
   );
 }
 
@@ -941,15 +1033,10 @@ export async function restoreIntegrationCoordinated(
       `${frozen.resolvedPaths.detectDir} is missing; restore will not create the client home`,
     );
   }
-  return withIntegrationWriterLock(
-    frozen.resolvedPaths.configPath,
-    async () => {
-      // An undo is bound like any other confirmation, and this is the only place where that check
-      // happens with the lock held and before the snapshot, the write and the journal row.
-      const refused = await options?.revalidate?.(frozen);
-      return refused ?? run();
-    },
-    options?.lockSeams,
+  return withClientLocks(
+    frozen,
     spec.writerLock.suffix,
+    run,
+    options,
   );
 }

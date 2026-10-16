@@ -4,15 +4,20 @@ import {
   rejectArgs,
   runCliAction,
   runtimeRequest,
+  runtimeBaseUrl,
   takeFlag,
   takeOption,
   type RuntimeApiDeps,
 } from "./runtime-api";
 
+import { handleSelectedKeyTest, type SelectedKeyTestDeps } from "./access-data-plane";
+import { handleAccessAudioCommand } from "./access-audio";
+
 const USAGE = `Usage:
   ocx access key [list] [--json]
   ocx access key create [name] [--json]
   ocx access key get <id-or-name> [--json]
+  ocx access key rename <id-or-name> <name> [--json]
   ocx access key set <id-or-name> [--allow-provider <name>]... [--allow-model <id>]... [--clear] [--json]
   ocx access key rotate <id> [--json]
   ocx access key rotate commit <id> <rotation-id> [--json]
@@ -20,7 +25,9 @@ const USAGE = `Usage:
   ocx access key remove <id> --yes [--json]
   ocx access endpoints [--json]
   ocx access models [--json]
-  ocx access test <model> [--protocol <chat|responses|messages>] [--json]`;
+  ocx access test <model> [--protocol <chat|responses|messages>] [--api-key-stdin] [--json]
+  ocx access audio transcribe <file> --model <id> --api-key-stdin [--json]
+  ocx access audio live-check --model <id> --api-key-stdin [--json]`;
 
 const UTC_ISO_INSTANT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
 
@@ -234,6 +241,56 @@ async function key(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   throw new CliUsageError(`unknown key command ${action}`, USAGE);
 }
 
+/** Rename never sends or prints a secret, and cannot silently choose duplicate ids. */
+async function renameKey(argv: string[], deps: RuntimeApiDeps): Promise<number> {
+  const args = [...argv];
+  const wantsJson = takeFlag(args, "--json");
+  const [selector, rawName] = args;
+  if (args.length !== 2 || !selector?.trim() || selector.startsWith("-") || !rawName
+    || /[\u0000-\u001f\u007f]/.test(rawName) || !rawName.trim() || rawName.trim().length > 64) {
+    console.error("Error: Supply one key id or unambiguous name and a new name of 1–64 characters without controls.");
+    return 2;
+  }
+  const name = rawName.trim();
+  try {
+    const pinned = { ...deps, baseUrl: await runtimeBaseUrl(deps) };
+    const before = await runtimeRequest<unknown>("/api/keys", { redirect: "error", credentials: "omit" }, pinned);
+    if (!before || typeof before !== "object" || !("keys" in before) || !Array.isArray(before.keys)
+      || before.keys.some(row => !row || typeof row !== "object" || Array.isArray(row)
+        || typeof row.id !== "string" || !row.id || typeof row.name !== "string")) throw new Error();
+    const rows = before.keys as Array<Record<string, unknown>>;
+    const wanted = selector.trim().toLowerCase();
+    if (rows.filter(row => (row.id as string).toLowerCase() === wanted).length > 1) {
+      throw new CliUsageError("Ambiguous key identity.");
+    }
+    const target = findKeyRow(rows, selector);
+    if (rows.filter(row => (row.id as string).toLowerCase() === (target.id as string).toLowerCase()).length !== 1) {
+      throw new CliUsageError("Ambiguous key identity.");
+    }
+    const result = await runtimeRequest<Record<string, unknown>>("/api/keys", {
+      method: "PATCH", body: JSON.stringify({ id: target.id, name }), redirect: "error", credentials: "omit",
+    }, pinned);
+    if (!result || typeof result !== "object" || Array.isArray(result) || result.id !== target.id || result.name !== name
+      || typeof result.createdAt !== "string" || !isUtcIsoInstant(result.createdAt)) throw new Error();
+    const projected: Record<string, unknown> = { id: result.id, name: result.name, createdAt: result.createdAt };
+    for (const scope of ["allowedProviders", "allowedModels"] as const) {
+      if (result[scope] === undefined) continue;
+      const value = result[scope];
+      if (!Array.isArray(value) || value.some(item => typeof item !== "string" || !item.trim() || item.length > 256)) throw new Error();
+      projected[scope] = [...value];
+    }
+    printData(projected, wantsJson, ["API key renamed.", ...scopeLines(projected)]);
+    return 0;
+  } catch (error) {
+    if (error instanceof CliUsageError) {
+      console.error("Error: API key selector is missing or ambiguous. List keys and use a unique id.");
+      return 2;
+    }
+    console.error("Error: API key rename was not confirmed. List keys to check the current name before retrying.");
+    return 1;
+  }
+}
+
 async function endpoints(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const wantsJson = takeFlag(args, "--json");
@@ -271,7 +328,13 @@ async function testModel(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   printData(result, wantsJson, [`${model}: ${protocol} request succeeded.`]);
 }
 
-export async function handleAccessCommand(argv: string[], deps: RuntimeApiDeps = {}): Promise<number> {
+export async function handleAccessCommand(argv: string[], deps: SelectedKeyTestDeps = {}): Promise<number> {
+  const [command, ...args] = argv;
+  if (command === "audio") return handleAccessAudioCommand(args, deps);
+  if (command === "test" && args.some(arg => arg === "--api-key-stdin" || arg.startsWith("--api-key-stdin="))) {
+    return handleSelectedKeyTest(args, deps);
+  }
+  if ((command === "key" || command === "keys") && args[0] === "rename") return renameKey(args.slice(1), deps);
   return runCliAction(async () => {
     const [sub = "key", ...rest] = argv;
     if (sub === "key" || sub === "keys") await key(rest, deps);

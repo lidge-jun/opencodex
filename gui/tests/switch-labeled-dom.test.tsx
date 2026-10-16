@@ -6,7 +6,7 @@ import { Switch } from "../src/ui";
 
 /**
  * WP1 rendered-DOM contract
- * (devlog/_plan/260830_models_provider_header/020_control_affordances.md).
+ * (devlog/_fin/260830_models_provider_header/020_control_affordances.md).
  *
  * The sibling .ts file pins source invariants. This file proves the property the
  * audit said a substring check cannot reach: the visible label ACTIVATES the

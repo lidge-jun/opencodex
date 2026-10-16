@@ -10,7 +10,7 @@ import {
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 
 type JevPost = NonNullable<ResolveJevDecisionOptions["post"]>;
-const CUSTOM_URL = "https://decider.example/v1/systemone";
+const CUSTOM_URL = "https://decider.example/v1/decisions";
 const ENV_SECRETS = {
   TYPESAFE_API_KEY: "typesafe-environment-secret",
   JEV_API_KEY: "jev-environment-secret",
@@ -86,6 +86,65 @@ function expectNoTypeSafeSecrets(init: Parameters<JevPost>[3]) {
 }
 
 describe("JEV decision destination credential ownership", () => {
+  test("an incompatible selected adapter never sends or falls back to TypeSafe", async () => {
+    const row: OcxProviderConfig = { ...customRow, adapter: "openai-chat" };
+    const { calls, post } = recordingPost();
+    expect(await resolveJevDecision({
+      body: { input: "Choose a target." }, candidates, fallback,
+      config: configWith("custom-decider", row), decisionProvider: "custom-decider", post,
+    })).toMatchObject({ ...fallback, gate: "missing_key" });
+    expect(calls).toHaveLength(0);
+  });
+
+  test.each(["oauth", "local", "forward"] as const)("authMode %s sends only the row's own key to its own endpoint", async (authMode) => {
+    const { calls, post } = recordingPost();
+    expect((await resolveJevDecision({
+      body: { input: "Choose a target." }, candidates, fallback,
+      config: configWith("custom-decider", { ...customRow, authMode }), decisionProvider: "custom-decider", post,
+    })).gate).toBe("apply");
+    expect(calls.map(call => call.url)).toEqual([CUSTOM_URL]);
+    expect(new Headers(calls[0]!.init.headers).get("authorization")).toBe("Bearer custom-secret");
+    expectNoTypeSafeSecrets(calls[0]!.init);
+  });
+
+  test.each([
+    [`${CUSTOM_URL}/`, `${CUSTOM_URL}/`],
+    ["https://decider.example/v1/systemone/", "https://decider.example/v1/systemone"],
+  ])("baseUrl %s is sent to %s", async (baseUrl, expected) => {
+    const { calls, post } = recordingPost();
+    await resolveJevDecision({
+      body: { input: "Choose a target." }, candidates, fallback,
+      config: configWith("custom-decider", { ...customRow, baseUrl }), decisionProvider: "custom-decider", post,
+    });
+    expect(calls.map(call => call.url)).toEqual([expected]);
+  });
+
+  test.each(["https:\t//@decider.example/v1/decisions", "https://decider.example/v1/decisions?", "https://:@decider.example/v1/decisions"])(
+    "baseUrl %j with a stripped delimiter never sends",
+    async (baseUrl) => {
+      const { calls, post } = recordingPost();
+      expect(await resolveJevDecision({
+        body: { input: "Choose a target." }, candidates, fallback,
+        config: configWith("custom-decider", { ...customRow, baseUrl }), decisionProvider: "custom-decider", post,
+      })).toMatchObject({ ...fallback, gate: "missing_key" });
+      expect(calls).toHaveLength(0);
+    },
+  );
+
+  test("a custom HTTPS path preserves caller cancellation by identity", async () => {
+    const controller = new AbortController();
+    const reason = new DOMException("caller stopped", "AbortError");
+    const post: JevPost = async (_name, _provider, url, init) => {
+      expect(url).toBe(CUSTOM_URL);
+      controller.abort(reason);
+      throw init.signal?.reason;
+    };
+    await expect(resolveJevDecision({
+      body: { input: "Choose a target." }, candidates, fallback,
+      config: configWith("custom-decider", customRow), decisionProvider: "custom-decider", post, signal: controller.signal,
+    })).rejects.toBe(reason);
+  });
+
   for (const apiKey of ["custom-secret", undefined]) {
     test(`self-hosted row with ${apiKey ? "its own key" : "no key"} never borrows TypeSafe environment secrets`, async () => {
       const { calls, post } = recordingPost();

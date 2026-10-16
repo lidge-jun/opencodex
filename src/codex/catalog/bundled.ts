@@ -28,7 +28,9 @@ import {
 import type { NormalizedComboConfig } from "../../combos/types";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { redactSecretString } from "../../lib/redact";
+import { isPassiveRead } from "../../lib/passive-read";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
+import { decodeOverlayState } from "../shim-state-file";
 
 
 import { activeCodexModelsCachePath, catalogBackupPathFor, findNativeTemplate, findSupportedNativeTemplate, isDefaultCatalogPath, legacyCatalogBackupPath, parseCatalogJson, readCatalog, readCatalogBackup, readCodexCatalogPath } from "./parsing";
@@ -38,6 +40,10 @@ import {
   parsePersistedCodexRuntime,
   peekCodexRuntimeProcessCache,
   resolveAndPersistCodexRuntime,
+  resolveAndPersistCodexRuntimeAsync,
+  codexRuntimeSelectionIdentity,
+  codexRuntimeStateEpoch,
+  execCodexFileAsync,
 } from "../runtime";
 import type {
   DeepReadonly,
@@ -62,7 +68,9 @@ export type ReadonlyRawCatalog = DeepReadonly<RawCatalog>;
 interface BundledCatalogMemo {
   /** Selected runtime identity; must change when doctor/sync picks a different binary. */
   readonly key: string;
+  readonly inputs: string;
   readonly expiresAt: number;
+  readonly refreshAt: number;
   readonly epoch: number;
   readonly valueIdentity: string;
   readonly value: ReadonlyRawCatalog | null;
@@ -75,6 +83,9 @@ export interface BundledCatalogCacheState {
 
 let bundledCatalogEpoch = 0;
 let bundledCatalogCache: BundledCatalogMemo | null = null;
+let bundledCatalogRetry: { inputs: string; epoch: number; after: number } | null = null;
+let bundledCatalogFlight: { inputs: string; epoch: number; controller: AbortController; promise: Promise<ReadonlyRawCatalog | null> } | null = null;
+const catalogAlwaysCurrent = () => true;
 
 function cloneAndDeepFreeze<T>(value: T): DeepReadonly<T> {
   const clone = (current: unknown): unknown => {
@@ -109,14 +120,18 @@ function publishBundledCatalogCache(
   const epoch = ++bundledCatalogEpoch;
   bundledCatalogCache = {
     key,
+    inputs: codexRuntimeSelectionIdentity({ discoverAlternatives: false }),
     expiresAt,
+    refreshAt: Math.min(expiresAt, Date.now() + 15_000),
     epoch,
     valueIdentity: `bundled:${epoch}`,
     value: value === null ? null : cloneAndDeepFreeze(value),
   };
+  bundledCatalogRetry = null;
 }
 
 function clearBundledCatalogCache(): void {
+  bundledCatalogFlight?.controller.abort();
   bundledCatalogEpoch += 1;
   bundledCatalogCache = null;
 }
@@ -161,12 +176,17 @@ export type ExecFile = (
     windowsHide: boolean;
     shell?: boolean;
     windowsVerbatimArguments?: boolean;
+    signal?: AbortSignal;
+    maxBuffer?: number;
   },
 ) => string;
 
 export interface BundledCatalogDeps {
+  /** Already-observed source for server clamping; null never triggers a probe. */
+  observedCatalog?: ReadonlyRawCatalog | null;
   commandCandidates?: () => string[];
   execFileSync?: ExecFile;
+  execFile?: (...args: Parameters<ExecFile>) => Promise<string>;
   onEffortClamp?: (diagnostic: EffortClampDiagnostic) => void;
   configDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -196,14 +216,20 @@ export function codexCommandCandidates(): string[] {
 
 export function codexShimCommandCandidates(): string[] {
   try {
-    const state = JSON.parse(readFileSync(join(getConfigDir(), "codex-shim.json"), "utf8")) as {
+    const configDir = getConfigDir();
+    const state = JSON.parse(readFileSync(join(configDir, "codex-shim.json"), "utf8")) as {
+      schema?: unknown;
+      mode?: unknown;
       wrapperPath?: unknown;
       originalPath?: unknown;
       backupPath?: unknown;
       wrappers?: Array<{ wrapperPath?: unknown; originalPath?: unknown; backupPath?: unknown }>;
     };
+    const overlay = decodeOverlayState(state, configDir);
+    if ((state.schema !== undefined || state.mode !== undefined) && !overlay) return [];
     const files = Array.isArray(state.wrappers) && state.wrappers.length > 0 ? state.wrappers : [state];
-    const out: string[] = [];
+    const out: string[] = overlay && isSpawnableCodexCandidate(overlay.launcherPath)
+      ? [overlay.launcherPath] : [];
     for (const file of files) {
       for (const value of [file.backupPath, file.originalPath, file.wrapperPath]) {
         if (typeof value !== "string" || value.length === 0) continue;
@@ -217,11 +243,11 @@ export function codexShimCommandCandidates(): string[] {
   }
 }
 
-export function runCodexDebugModels(
+export function runCodexDebugModels<T>(
   command: string,
-  execFile: ExecFile,
+  execFile: (...args: Parameters<ExecFile>) => T,
   deps: Pick<BundledCatalogDeps, "env" | "platform" | "existsSync"> = {},
-): string {
+): T {
   const args = ["debug", "models", "--bundled"];
   const invocation = codexExecInvocation(command, args, deps.platform ?? process.platform, {
     env: deps.env,
@@ -231,23 +257,19 @@ export function runCodexDebugModels(
     encoding: "utf8" as const,
     stdio: ["ignore", "pipe", "ignore"] as ["ignore", "pipe", "ignore"],
     timeout: 10_000,
+    maxBuffer: 64 * 1024 * 1024,
     windowsHide: true,
     ...invocation.options,
   });
 }
 
-export function loadBundledCodexCatalog(deps: BundledCatalogDeps = {}): ReadonlyRawCatalog | null {
-  const useCache = !deps.commandCandidates && !deps.execFileSync && !deps.configDir && !deps.env;
-  const execFile = deps.execFileSync ?? (execFileSync as unknown as ExecFile);
-  // Prefer the single resolved runtime so sync/clamp never probe a different binary
-  // than OpenCodex will launch. Tests may inject commandCandidates to stub probing.
-  let cacheKey: string | null = null;
-  const candidates = deps.commandCandidates?.() ?? (() => {
-    const resolved = resolveAndPersistCodexRuntime({
+function bundledRuntimeDeps(deps: BundledCatalogDeps) {
+  return {
       // Forward an INJECTED execFileSync only. Passing the real one unconditionally made
       // resolveCacheKey() bail out (it refuses to memoize injected-dep resolves), so every
       // catalog read re-ran the ~1s `codex --version` probe even on a warm cache hit.
       ...(deps.execFileSync ? { execFileSync: deps.execFileSync } : {}),
+      ...(deps.execFile ? { execFile: deps.execFile } : {}),
       configDir: deps.configDir,
       env: deps.env,
       platform: deps.platform,
@@ -259,28 +281,42 @@ export function loadBundledCodexCatalog(deps: BundledCatalogDeps = {}): Readonly
       // which alone can exceed the 3s budget `ocx claude` allows /api/claude-code. Priority
       // selection is identical either way; callers wanting discovery diagnostics opt in.
       discoverAlternatives: deps.discoverAlternatives ?? false,
-    });
-    if (useCache) {
-      cacheKey = bundledRuntimeKey(resolved.runtime);
-    }
-    return [resolved.runtime.command];
-  })();
+  };
+}
+
+function* bundledCatalogSteps(
+  candidates: string[],
+  cacheKey: string | null,
+  current: () => boolean = () => true,
+  publishFailure = true,
+): Generator<string, ReadonlyRawCatalog | null, string | null> {
+  if (cacheKey && bundledCatalogCache?.key === cacheKey && current()) {
+    // The driver validated this same command/version under the new pin/env inputs.
+    // Re-stamp the memo even if its TTL is due, so failed refresh keeps confirmed rows.
+    bundledCatalogCache = { ...bundledCatalogCache,
+      inputs: codexRuntimeSelectionIdentity({ discoverAlternatives: false }) };
+  }
   if (
-    useCache
-    && cacheKey
+    cacheKey
     && bundledCatalogCache
     && bundledCatalogCache.key === cacheKey
+    && bundledCatalogCache.inputs === codexRuntimeSelectionIdentity({ discoverAlternatives: false })
     && bundledCatalogCache.expiresAt > Date.now()
   ) {
+    if (!current()) return null;
+    bundledCatalogCache = { ...bundledCatalogCache, refreshAt: Date.now() + 15_000 };
     return bundledCatalogCache.value === null
       ? null
       : cloneAndDeepFreeze(bundledCatalogCache.value);
   }
   for (const command of unique(candidates)) {
-    try {
-      const catalog = parseCatalogJson(runCodexDebugModels(command, execFile, deps));
-      if (catalog && findNativeTemplate(catalog)) {
-        if (useCache && cacheKey) {
+      if (!current()) return null;
+      const output = yield command;
+      if (!current()) return null;
+      const catalog = output === null ? null : parseCatalogJson(output);
+      if (catalog && catalog.models?.every(row => row !== null && typeof row === "object" && !Array.isArray(row))
+        && findNativeTemplate(catalog)) {
+        if (cacheKey) {
           publishBundledCatalogCache(
             cacheKey,
             Date.now() + BUNDLED_CATALOG_CACHE_MS,
@@ -290,9 +326,8 @@ export function loadBundledCodexCatalog(deps: BundledCatalogDeps = {}): Readonly
         }
         return cloneAndDeepFreeze(catalog);
       }
-    } catch { /* try next candidate */ }
   }
-  if (useCache && cacheKey) {
+  if (cacheKey && (publishFailure || bundledCatalogCache?.key !== cacheKey || !bundledCatalogCache?.value) && current()) {
     publishBundledCatalogCache(
       cacheKey,
       Date.now() + BUNDLED_CATALOG_CACHE_MS,
@@ -300,6 +335,111 @@ export function loadBundledCodexCatalog(deps: BundledCatalogDeps = {}): Readonly
     );
   }
   return null;
+}
+
+/** Explicit synchronous CLI driver; request readers use the snapshot below. */
+export function loadBundledCodexCatalog(deps: BundledCatalogDeps = {}): ReadonlyRawCatalog | null {
+  const useCache = !deps.commandCandidates && !deps.execFileSync && !deps.execFile && !deps.configDir && !deps.env;
+  const resolved = deps.commandCandidates ? null : resolveAndPersistCodexRuntime(bundledRuntimeDeps(deps));
+  const inputs = codexRuntimeSelectionIdentity(bundledRuntimeDeps(deps));
+  const steps = bundledCatalogSteps(deps.commandCandidates?.() ?? [resolved!.runtime.command],
+    useCache ? bundledRuntimeKey(resolved!.runtime) : null,
+    () => inputs === codexRuntimeSelectionIdentity(bundledRuntimeDeps(deps)));
+  let step = steps.next();
+  while (!step.done) {
+    let output: string | null = null;
+    try { output = runCodexDebugModels(step.value, deps.execFileSync ?? (execFileSync as unknown as ExecFile), deps); }
+    catch { /* try next candidate */ }
+    step = steps.next(output);
+  }
+  return step.value;
+}
+
+/** Same candidate/parser authority, with version and bundled-model execs off the event loop. */
+export function loadBundledCodexCatalogAsync(
+  deps: BundledCatalogDeps = {},
+  isCurrent: () => boolean = catalogAlwaysCurrent,
+  signal?: AbortSignal,
+): Promise<ReadonlyRawCatalog | null> {
+  if (signal?.aborted || !isCurrent()) return Promise.resolve(null);
+  const view = (promise: Promise<ReadonlyRawCatalog | null>) => {
+    if (!signal) return promise.then(value => isCurrent() ? value : null);
+    let abort: (() => void) | undefined;
+    return Promise.race([promise, new Promise<null>(resolve => {
+      abort = () => resolve(null);
+      signal.addEventListener("abort", abort, { once: true });
+      if (signal.aborted) abort();
+    })]).then(value => isCurrent() && !signal.aborted ? value : null)
+      .finally(() => { if (abort) signal.removeEventListener("abort", abort); });
+  };
+  const runtimeDeps = bundledRuntimeDeps(deps);
+  const inputs = codexRuntimeSelectionIdentity(runtimeDeps);
+  const epoch = bundledCatalogEpoch;
+  const useCache = !deps.commandCandidates && !deps.execFileSync && !deps.execFile && !deps.configDir && !deps.env;
+  if (useCache && bundledCatalogFlight?.inputs === inputs && bundledCatalogFlight.epoch === epoch) {
+    return view(bundledCatalogFlight.promise);
+  }
+  // A passive read (a Remote Link Child's, #6959) runs no Codex binary and persists no runtime.
+  if (isPassiveRead()) return Promise.resolve(null);
+  const controller = new AbortController();
+  const flight = { inputs, epoch, controller, promise: Promise.resolve<ReadonlyRawCatalog | null>(null) };
+  if (useCache && !signal && isCurrent === catalogAlwaysCurrent) {
+    bundledCatalogFlight?.controller.abort();
+    bundledCatalogFlight = flight;
+  }
+  const abort = () => controller.abort();
+  signal?.addEventListener("abort", abort, { once: true });
+  if (signal?.aborted) abort();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let deadlineReached = false;
+  const work = (async () => {
+    const active = () => !controller.signal.aborted && isCurrent() && bundledCatalogEpoch === epoch;
+    const resolved = deps.commandCandidates ? null : await resolveAndPersistCodexRuntimeAsync({ ...runtimeDeps, signal: controller.signal },
+      () => active() && codexRuntimeSelectionIdentity(runtimeDeps) === inputs);
+    if (!active() || (!deps.commandCandidates && !resolved)) return null;
+    flight.inputs = codexRuntimeSelectionIdentity(runtimeDeps);
+    const runtimeEpoch = codexRuntimeStateEpoch();
+    const current = () => active() && runtimeEpoch === codexRuntimeStateEpoch()
+      && flight.inputs === codexRuntimeSelectionIdentity(runtimeDeps);
+    const steps = bundledCatalogSteps(deps.commandCandidates?.() ?? [resolved!.runtime.command],
+      useCache ? bundledRuntimeKey(resolved!.runtime) : null, current, false);
+    let step = steps.next();
+    while (!step.done) {
+      let output: string | null = null;
+      try { output = await runCodexDebugModels(step.value,
+        (file, args, options) => (deps.execFile ?? execCodexFileAsync)(file, args, { ...options, signal: controller.signal }), deps); }
+      catch { /* preserve last confirmed evidence on failure */ }
+      step = steps.next(output);
+    }
+    return step.value;
+  })().catch(() => null);
+  flight.promise = Promise.race([work, new Promise<null>(resolve => {
+    timer = setTimeout(() => { deadlineReached = true; controller.abort(); resolve(null); }, 45_000);
+    timer.unref?.();
+  })]).then(value => {
+    if (useCache && value === null && (!controller.signal.aborted || deadlineReached)
+      && isCurrent() && bundledCatalogEpoch === epoch
+      && flight.inputs === codexRuntimeSelectionIdentity(runtimeDeps)) {
+      bundledCatalogRetry = { inputs: flight.inputs, epoch, after: Date.now() + BUNDLED_CATALOG_CACHE_MS };
+    }
+    return value;
+  }).finally(() => {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", abort);
+    controller.abort();
+    if (bundledCatalogFlight === flight) bundledCatalogFlight = null;
+  });
+  return view(flight.promise);
+}
+
+/** Serve only the same selection's last confirmed catalog; refresh never holds a request. */
+export function bundledCodexCatalogSnapshot(): ReadonlyRawCatalog | null {
+  const inputs = codexRuntimeSelectionIdentity({ discoverAlternatives: false });
+  const memo = bundledCatalogCache?.inputs === inputs ? bundledCatalogCache : null;
+  const cooling = bundledCatalogRetry?.inputs === inputs && bundledCatalogRetry.epoch === bundledCatalogEpoch
+    && bundledCatalogRetry.after > Date.now();
+  if ((!memo || memo.refreshAt <= Date.now()) && !cooling) void loadBundledCodexCatalogAsync().catch(() => { /* bounded retry */ });
+  return memo?.value ? cloneAndDeepFreeze(memo.value) : null;
 }
 
 export type CatalogGatherProcessLocalObservation =
@@ -517,7 +657,7 @@ export function loadCatalogForSync(path: string): RawCatalog | null {
 
 export function readCurrentCatalogOrCache(): RawCatalog | null {
   const path = readCodexCatalogPath();
-  const bundled = isDefaultCatalogPath(path) ? loadBundledCodexCatalog() : null;
+  const bundled = isDefaultCatalogPath(path) ? bundledCodexCatalogSnapshot() : null;
   if (bundled) return JSON.parse(JSON.stringify(bundled)) as RawCatalog;
   return readCatalog(path) ?? readCatalog(activeCodexModelsCachePath());
 }
@@ -540,7 +680,7 @@ export function readCurrentCodexModelsCache(): RawCatalog | null {
 
 export function loadCatalogTemplate(): RawEntry | null {
   const catalogPath = readCodexCatalogPath();
-  const bundled = loadBundledCodexCatalog();
+  const bundled = bundledCodexCatalogSnapshot();
   // Template inheritance only. The validity gates in this file keep `findNativeTemplate`
   // so a catalog carrying only a newly launched native row stays valid (#2813).
   const native = findSupportedNativeTemplate(readCatalog(catalogPath))

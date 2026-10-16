@@ -93,7 +93,9 @@ async function finishChildOutput(child: ReturnType<typeof Bun.spawn>) {
 }
 
 async function waitForRuntime(path: string, child: ReturnType<typeof Bun.spawn>) {
-  const deadline = Date.now() + 15_000;
+  // Windows startup verifies the intercept CA ACLs (~2 s on hosted runners) and pre-existing
+  // runs already reached 13.6 s here; 25 s keeps a diagnostic watchdog inside the 30 s test budget.
+  const deadline = Date.now() + 25_000;
   while (Date.now() < deadline) {
     if (existsSync(path)) {
       try {
@@ -111,7 +113,7 @@ async function waitForRuntime(path: string, child: ReturnType<typeof Bun.spawn>)
 }
 
 async function waitForClientStartup(child: ReturnType<typeof Bun.spawn>): Promise<void> {
-  const deadline = Date.now() + 15_000;
+  const deadline = Date.now() + 25_000;
   while (Date.now() < deadline) {
     if (capturedChildren.get(child)!.snapshot().startupComplete) return;
     if (child.exitCode !== null) {

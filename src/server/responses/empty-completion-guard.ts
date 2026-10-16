@@ -293,11 +293,27 @@ export async function* guardEmptyCompletionEventStream(
         return;
       }
       if (event.type === "error") {
-        if (retries > 0 && event.status !== 499) {
+        if (event.replaySafeBeforeOutput === true && retries < maxRetries) {
+          // The upstream failed the turn before any text or tool call (#6876: Vertex dropped a
+          // malformed function call). Nothing actionable reached the client, so this is the same
+          // replay-safe shape as an empty completion: retry the identical turn once.
+          usage = mergeUsage(usage, event.usage);
+          retries += 1;
+          try {
+            source = await options.continuation();
+          } catch {
+            yield emptyCompletionRetryFailedEvent(usage, true);
+            return;
+          }
+          terminalSeen = true;
+          break;
+        }
+        if (retries > 0 && event.status !== 499 && event.replaySafeBeforeOutput !== true) {
           // The retry failed upstream. Its body cannot reach the client (the
           // 200 head went out with the first attempt), so state the failure in
           // the stream's own error framing — same move as the router's
-          // empty_completion_retry_failed. Client cancels (499) pass through.
+          // empty_completion_retry_failed. Client cancels (499) pass through, and a
+          // replay-safe failure that repeats keeps its own, more specific message.
           yield emptyCompletionRetryFailedEvent(mergeUsage(usage, event.usage), true);
           return;
         }

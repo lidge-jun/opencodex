@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 import {
   buildClaudeEnv as buildClaudeEnvWithIo,
   buildNativeClaudeEnv,
@@ -9,14 +10,16 @@ import {
   fetchClaudeCodeState,
   isProxyOnlyModelId,
   readConnectedClaudeContextWindows,
+  nativeClaudeModelIds,
   nativeModelOverride,
   readPickerDefaultModel,
   rootSkipPermissionsNotice,
   shouldAllowRootSkipPermissions,
 } from "../../src/cli/claude";
 import { buildClaudeContextWindows } from "../../src/claude/context-windows";
+import { buildDesktop3pRegistry } from "../../src/claude/desktop-3p";
 import { commandInvocation } from "../../src/lib/win-exec";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LivenessIo, LiveProxy } from "../../src/server/proxy-liveness";
@@ -184,6 +187,23 @@ describe("ocx claude native fallback", () => {
     expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBeUndefined();
   });
 
+  test("drops the picker label opencodex paired with a stripped alias slot, never a user label (#6926)", () => {
+    const env = buildNativeClaudeEnv(cfg(), {
+      ANTHROPIC_DEFAULT_OPUS_MODEL: "ocx-claude-native--gpt-6.1-sol",
+      ANTHROPIC_DEFAULT_OPUS_MODEL_NAME: "gpt-6.1-sol (native)",
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: "ocx-claude-native--gpt-6-luna",
+      ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME: "My helper",
+      ANTHROPIC_DEFAULT_SONNET_MODEL: "claude-sonnet-5-5",
+      ANTHROPIC_DEFAULT_SONNET_MODEL_NAME: "Sonnet (mine)",
+    }, { preBunAnthropicSlots: [] });
+    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBeUndefined();
+    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL_NAME).toBeUndefined();
+    expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBeUndefined();
+    expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME).toBe("My helper");
+    expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("claude-sonnet-5-5");
+    expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL_NAME).toBe("Sonnet (mine)");
+  });
+
   test("preserves an unrelated gateway, its user credential, and its host-managed guard", () => {
     for (const baseUrl of ["http://localhost:8080", "http://127.0.0.1:10100"]) {
       const env = buildNativeClaudeEnv(cfg({ port: 10100 }), {
@@ -207,6 +227,22 @@ describe("ocx claude native fallback", () => {
     expect(isProxyOnlyModelId("ocx-claude2-openrouter--a~sb[1m]")).toBe(true);
     expect(isProxyOnlyModelId("arn:aws:bedrock:region:acct:inference-profile/us.anthropic.model", ["mock"])).toBe(false);
     expect(isProxyOnlyModelId("claude-opus-5")).toBe(false);
+    expect(isProxyOnlyModelId("claude-fable-5-p000[1m]")).toBe(true);
+    expect(isProxyOnlyModelId("claude-opus-4-8-p000")).toBe(true);
+    expect(isProxyOnlyModelId("claude-fable-5")).toBe(false);
+    for (const alias of ["claude-fable-5-p000", "claude-opus-4-8-p000", "claude-opus-4-8-abc"]) {
+      expect(isProxyOnlyModelId(`${alias}--fast`)).toBe(true);
+      expect(isProxyOnlyModelId(`${alias}--fast[1m]`)).toBe(true);
+      expect(nativeModelOverride(`${alias}--fast[1m]`, "opus", []))
+        .toMatchObject({ flag: ["--model", "opus"] });
+      const env = buildNativeClaudeEnv(cfg(), {
+        ANTHROPIC_MODEL: `${alias}--fast`,
+        ANTHROPIC_DEFAULT_FABLE_MODEL: `${alias}--fast[1m]`,
+      });
+      expect(env.ANTHROPIC_MODEL).toBeUndefined();
+      expect(env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBeUndefined();
+    }
+    expect(isProxyOnlyModelId("claude-fable-5--fast")).toBe(false);
   });
 
   test("overrides a persisted proxy model only with a configured native model", () => {
@@ -215,6 +251,103 @@ describe("ocx claude native fallback", () => {
     expect(nativeModelOverride("claude-ocx2-abcd", "mock/model", [], ["mock"]).flag).toBeUndefined();
     expect(nativeModelOverride("claude-ocx2-abcd", "opus", ["--model", "sonnet"], ["mock"]))
       .toEqual({});
+  });
+
+  test("genuine Anthropic IDs are not replaced or stripped when they resemble profile aliases", () => {
+    try {
+      for (const id of ["claude-fable-5-p000", "claude-opus-4-8-p000"]) {
+        buildDesktop3pRegistry([], [{ provider: "anthropic", id }]);
+        expect(isProxyOnlyModelId(id)).toBe(false);
+        expect(nativeModelOverride(id, "opus", [])).toEqual({});
+        expect(buildNativeClaudeEnv(cfg(), { ANTHROPIC_MODEL: `${id}[1m]` }).ANTHROPIC_MODEL).toBe(`${id}[1m]`);
+        buildDesktop3pRegistry([], []);
+        const configured = cfg({
+          providers: { anthropic: { adapter: "anthropic", models: [`${id}--fast`] } },
+          claudeCode: { desktopProfile: {
+            version: 1, assignments: { [`anthropic/${id}`]: { family: "opus", alias: id } },
+            defaults: { opus: `anthropic/${id}`, fable: null, sonnet: null, haiku: null },
+          } },
+        });
+        const env = buildNativeClaudeEnv(configured, {
+          ANTHROPIC_MODEL: id, ANTHROPIC_DEFAULT_FABLE_MODEL: `${id}--fast[1m]`,
+        });
+        expect(env.ANTHROPIC_MODEL).toBe(id);
+        expect(env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe(`${id}--fast[1m]`);
+        configured.providers.anthropic!.models = undefined;
+        configured.providers.anthropic!.selectedModels = [`${id}--fast`];
+        expect(buildNativeClaudeEnv(configured, { ANTHROPIC_MODEL: `${id}--fast` }).ANTHROPIC_MODEL)
+          .toBe(`${id}--fast`);
+        configured.providers.anthropic!.selectedModels = undefined;
+        configured.providers.anthropic!.retainModels = [`${id}--fast`];
+        expect(buildNativeClaudeEnv(configured, { ANTHROPIC_MODEL: `${id}--fast[1m]` }).ANTHROPIC_MODEL)
+          .toBe(`${id}--fast[1m]`);
+        const retainedOnly = cfg({ providers: { anthropic: { adapter: "anthropic", retainModels: [id] } } });
+        expect(buildNativeClaudeEnv(retainedOnly, { ANTHROPIC_MODEL: `${id}[1m]` }).ANTHROPIC_MODEL)
+          .toBe(`${id}[1m]`);
+        expect(nativeModelOverride(id, "opus", [], ["anthropic"], [id])).toEqual({});
+        // The same spelling without genuine-model evidence is still proxy-only.
+        expect(isProxyOnlyModelId(id)).toBe(true);
+      }
+    } finally { buildDesktop3pRegistry([], []); }
+  });
+
+  test("an active synthetic binding takes priority over stale genuine-model declarations", () => {
+    const id = "claude-fable-5-p000";
+    const profile = { version: 1 as const,
+      assignments: { "mock/model": { family: "opus" as const, alias: "claude-opus-4-8-20260101" } },
+      defaults: { opus: "mock/model", fable: null, sonnet: null, haiku: null },
+    };
+    try {
+      buildDesktop3pRegistry([], [{ provider: "mock", id: "model" }], profile);
+      expect(isProxyOnlyModelId(id, [], [id])).toBe(true);
+      expect(isProxyOnlyModelId(`${id}--fast[1m]`, [], [`${id}--fast`])).toBe(true);
+      expect(nativeModelOverride(id, "opus", [], [], [id])).toMatchObject({ flag: ["--model", "opus"] });
+    } finally { buildDesktop3pRegistry([], []); }
+  });
+
+  test("cold native launch sheds profile bindings despite stale Anthropic catalog seeds", () => {
+    buildDesktop3pRegistry([], []);
+    const configured = cfg({
+      providers: { anthropic: { adapter: "anthropic", retainModels: ["claude-fable-5-p000--fast"],
+        models: ["claude-fable-5-p000"], selectedModels: ["claude-opus-4-8-p000"] } },
+      claudeCode: { desktopProfile: { version: 1,
+        assignments: { "mock/model": { family: "opus", alias: "claude-opus-4-8-20260101" } },
+        defaults: { opus: "mock/model", fable: null, sonnet: null, haiku: null },
+      } },
+    });
+    const env = buildNativeClaudeEnv(configured, {
+      ANTHROPIC_MODEL: "claude-fable-5-p000",
+      ANTHROPIC_DEFAULT_FABLE_MODEL: "claude-fable-5-p000--fast[1m]",
+      ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-opus-4-8-p000",
+    });
+    expect(env.ANTHROPIC_MODEL).toBeUndefined();
+    expect(env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBeUndefined();
+    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBeUndefined();
+  });
+
+  test("cold native launch keeps a genuine alias-shaped Anthropic defaultModel", () => {
+    buildDesktop3pRegistry([], []);
+    const id = "claude-fable-5-p000";
+    const configured = cfg({
+      providers: { anthropic: { adapter: "anthropic", liveModels: false, defaultModel: id } },
+    });
+    const env = buildNativeClaudeEnv(configured, {
+      ANTHROPIC_MODEL: id, ANTHROPIC_DEFAULT_FABLE_MODEL: `${id}[1m]`,
+    });
+    expect(env.ANTHROPIC_MODEL).toBe(id);
+    expect(env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe(`${id}[1m]`);
+    expect(nativeModelOverride(id, "opus", [], Object.keys(configured.providers), nativeClaudeModelIds(configured)))
+      .toEqual({});
+
+    // An active synthetic binding still outranks the stale default declaration.
+    configured.claudeCode = { desktopProfile: { version: 1,
+      assignments: { "mock/model": { family: "opus", alias: "claude-opus-4-8-20260101" } },
+      defaults: { opus: "mock/model", fable: null, sonnet: null, haiku: null },
+    } };
+    const bound = buildNativeClaudeEnv(configured, { ANTHROPIC_MODEL: id });
+    expect(bound.ANTHROPIC_MODEL).toBeUndefined();
+    expect(nativeModelOverride(id, "opus", [], Object.keys(configured.providers), nativeClaudeModelIds(configured)))
+      .toMatchObject({ flag: ["--model", "opus"] });
   });
 
   test("a connected client's window map keeps legacy claude-ocx selectors next to the current ones", () => {
@@ -231,7 +364,7 @@ describe("ocx claude native fallback", () => {
       expect(windows["ocx-claude-native--gpt-5.6-sol"]).toBe(272_000);
       expect(windows["claude-ocx-native--gpt-5.6-sol"]).toBe(272_000);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 
@@ -269,7 +402,7 @@ describe("ocx claude native fallback", () => {
       expect(warnings).toHaveLength(1);
     } finally {
       console.warn = realWarn;
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 });
@@ -371,6 +504,31 @@ describe("ocx claude env assembly", () => {
     const env = buildClaudeEnv(cfg(), 10100, { ANTHROPIC_DEFAULT_SONNET_MODEL: "claude-sonnet-5" }, buildClaudeContextWindows([], [], undefined, {}), AUTH_PRESENT);
     expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("claude-sonnet-5");
     expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("claude-opus-5-5[1m]");
+    // Claude Code names its own first-party ids; only an alias slot gets a label.
+    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL_NAME).toBeUndefined();
+    expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL_NAME).toBeUndefined();
+  });
+
+  test("an alias tier slot this launch writes carries its /model label (#6926)", () => {
+    const config = cfg({ claudeCode: { tierModels: { opus: "ocx-claude-native--gpt-6.1-sol", haiku: "claude-ocx-cursor--gpt-5.6-luna" } } });
+    const env = buildClaudeEnv(config, 10100, {}, {}, AUTH_PRESENT);
+    // The alias stays the submitted id; only the label is added.
+    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("ocx-claude-native--gpt-6.1-sol");
+    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL_NAME).toBe("gpt-6.1-sol (native)");
+    expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("ocx-claude-cursor--gpt-5.6-luna");
+    expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME).toBe("gpt-5.6-luna (cursor)");
+    // ANTHROPIC_SMALL_FAST_MODEL has no label variable in Claude Code.
+    expect(env.ANTHROPIC_SMALL_FAST_MODEL_NAME).toBeUndefined();
+
+    // A slot the user exported is theirs: no label is paired with a value opencodex did not write.
+    const userSlot = buildClaudeEnv(config, 10100, { ANTHROPIC_DEFAULT_OPUS_MODEL: "ocx-claude-cursor--other" }, {}, AUTH_PRESENT);
+    expect(userSlot.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("ocx-claude-cursor--other");
+    expect(userSlot.ANTHROPIC_DEFAULT_OPUS_MODEL_NAME).toBeUndefined();
+
+    // A label the user exported wins over the generated one.
+    const userLabel = buildClaudeEnv(config, 10100, { ANTHROPIC_DEFAULT_OPUS_MODEL_NAME: "Sol" }, {}, AUTH_PRESENT);
+    expect(userLabel.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("ocx-claude-native--gpt-6.1-sol");
+    expect(userLabel.ANTHROPIC_DEFAULT_OPUS_MODEL_NAME).toBe("Sol");
   });
 
   test("configured API key becomes the auth token (admission required)", () => {

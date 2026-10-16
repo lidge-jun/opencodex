@@ -16,7 +16,7 @@ import { startServer } from "../../src/server";
 import { createLocalAttestationSecret } from "../../src/lib/local-management-attestation";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
-import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { drainAndRemoveFixtureRoots } from "../helpers/fixture-teardown";
 
 /**
  * Regression: CLI OAuth login used to POST the bare OAuth preset into a running proxy.
@@ -52,12 +52,20 @@ beforeEach(() => {
   saveConfig(keyModeXaiConfig());
 });
 
-afterEach(() => {
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
-  isolatedCodexHome?.restore();
-  isolatedCodexHome = null;
-  if (testDir) removeTreeWithRetry(testDir);
+afterEach(async () => {
+  const dir = testDir, codexHome = isolatedCodexHome;
+  testDir = ""; isolatedCodexHome = null;
+  await drainAndRemoveFixtureRoots({
+    roots: [
+      ...(dir ? [{ path: dir }] : []),
+      ...(codexHome ? [{ path: codexHome.path, remove: () => codexHome.removeAfterDrain() }] : []),
+    ],
+    restoreEnvironment: () => {
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      codexHome?.restoreEnvironment();
+    },
+  });
 });
 
 describe("CLI OAuth live-update credential preservation", () => {

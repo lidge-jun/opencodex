@@ -9,6 +9,7 @@ import {
 	siApple,
 	siDeepseek,
 	siGoogle,
+	siGithub,
 	siLinux,
 	siMoonshotai,
 	siOllama,
@@ -20,6 +21,7 @@ import picker from '../assets/codex-app-picker.png';
 import heroFieldLight from '../assets/hero-route-light.png';
 import heroFieldDark from '../assets/hero-route-dark.png';
 import SiteJsonLd from './SiteJsonLd.astro';
+import { GITHUB_URL, getStarCount, formatStarCount } from '../data/github-stars';
 
 interface Props {
 	locale?: 'fr' | 'ko' | 'zh-cn' | 'zh-tw' | 'ru' | 'ja' | 'tr';
@@ -111,10 +113,19 @@ const fr = {
 	'Desktop app guide': 'Guide de l’app de bureau',
 	'Desktop App': 'App de bureau',
 	'Latest release': 'Dernière version',
+	'Star on GitHub': 'Ajouter une étoile sur GitHub',
+	'Star on GitHub, {count} stars': 'Ajouter une étoile sur GitHub, {count} étoiles',
 } as const;
 
 const t = <K extends keyof typeof fr>(en: K, ko: string, zh: string, ru: string, ja: string, zhTW: string, tr: string): string =>
 	locale === 'fr' ? fr[en] : locale === 'ko' ? ko : locale === 'zh-cn' ? zh : locale === 'zh-tw' ? zhTW : locale === 'ru' ? ru : locale === 'ja' ? ja : locale === 'tr' ? tr : en;
+
+const starCount = await getStarCount();
+const starLocale = locale || 'en';
+const githubCta = t('Star on GitHub', 'GitHub에서 별 주기', '在 GitHub 上加星', 'Поставить звезду на GitHub', 'GitHub でスターを付ける', '在 GitHub 上加星', 'GitHub’da yıldız verin');
+const starLabel = t('Star on GitHub, {count} stars', 'GitHub에서 별 주기, 별 {count}개', '在 GitHub 上加星，{count} 个星标', 'Поставить звезду на GitHub, {count} звёзд', 'GitHub でスターを付ける、{count} スター', '在 GitHub 上加星，{count} 個星標', 'GitHub’da yıldız verin, {count} yıldız');
+const githubAccessibleName = starCount === null ? githubCta
+	: starLabel.replace('{count}', new Intl.NumberFormat(starLocale).format(starCount));
 
 const icons: Record<string, string> = {
 	// Lucide outline paths (24x24, stroke)
@@ -358,7 +369,7 @@ const docsMap = [
 	<div class="lp-scene-inner lp-scrub">
 		<h2 class="lp-scrub-title">{t('Watch Codex run on a routed model.', '라우팅된 모델 위의 Codex를 그대로.', '看 Codex 跑在路由模型上。', 'Смотрите, как Codex работает на маршрутизированной модели.', 'ルーティングされたモデルで動く Codex を見る。', '看 Codex 跑在路由模型上。', 'Codex’in yönlendirilen bir model üzerinde çalışmasını izleyin.')}</h2>
 		<div class="lp-scrub-stage">
-			<canvas class="lp-scrub-canvas" data-base={base} data-count="158" width="960" height="856" aria-label={t('Codex App running a task on a routed non-OpenAI model', '라우팅된 비 OpenAI 모델에서 작업 중인 Codex App', 'Codex App 在路由的非 OpenAI 模型上执行任务', 'Codex App выполняет задачу на маршрутизированной модели не от OpenAI', 'ルーティングされた非 OpenAI モデルでタスクを実行する Codex App', 'Codex App 在路由的非 OpenAI 模型上執行任務', 'Codex App’in yönlendirilen OpenAI harici bir model üzerinde görev çalıştırması')}></canvas>
+			<canvas class="lp-scrub-canvas" data-base={base} data-count="158" width="900" height="802" aria-label={t('Codex App running a task on a routed non-OpenAI model', '라우팅된 비 OpenAI 모델에서 작업 중인 Codex App', 'Codex App 在路由的非 OpenAI 模型上执行任务', 'Codex App выполняет задачу на маршрутизированной модели не от OpenAI', 'ルーティングされた非 OpenAI モデルでタスクを実行する Codex App', 'Codex App 在路由的非 OpenAI 模型上執行任務', 'Codex App’in yönlendirilen OpenAI harici bir model üzerinde görev çalıştırması')}></canvas>
 			<Image src={demo} alt={t('Codex App running a task on a routed non-OpenAI model', '라우팅된 비 OpenAI 모델에서 작업 중인 Codex App', 'Codex App 在路由的非 OpenAI 模型上执行任务', 'Codex App выполняет задачу на маршрутизированной модели не от OpenAI', 'ルーティングされた非 OpenAI モデルでタスクを実行する Codex App', 'Codex App 在路由的非 OpenAI 模型上執行任務', 'Codex App’in yönlendirilen OpenAI harici bir model üzerinde görev çalıştırması')} loading="lazy" class="lp-scrub-poster" />
 		</div>
 		<p class="lp-scrub-caption">{t('One task, streamed end to end through opencodex.', '작업 하나가 opencodex를 관통해 끝까지 스트리밍됩니다.', '一个任务，经 opencodex 全程流式完成。', 'Одна задача — стриминг через opencodex от начала до конца.', '1 つのタスクが opencodex を経てエンドツーエンドでストリーミングされます。', '一個任務，經 opencodex 全程流式完成。', 'Tek bir görev, opencodex üzerinden uçtan uca canlı akışla tamamlanır.')}</p>
@@ -396,7 +407,7 @@ const docsMap = [
 			<article class="lp-cell lp-cell-claude">
 				<h3><svg class="lp-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={icons.terminal} /></svg>Claude Code</h3>
 				<p>{t('ocx claude launches Claude Code against the same port — every routed model in the /model picker, auto-context up to 1M, roster sub-agents, and your claude.ai login stays active.', 'ocx claude가 같은 포트로 Claude Code를 띄웁니다 — 라우팅된 모든 모델이 /model 선택기에 뜨고, 최대 1M auto-context, 로스터 서브에이전트, claude.ai 로그인은 그대로 유지됩니다.', 'ocx claude 让 Claude Code 连接同一端口 —— 所有路由模型出现在 /model 选择器中，auto-context 最高 1M，roster 子代理，claude.ai 登录保持不变。', 'ocx claude запускает Claude Code на том же порту — все маршрутизированные модели в селекторе /model, auto-context до 1M, подагенты из ростера, а ваш вход в claude.ai остаётся активным.', 'ocx claude が同じポートで Claude Code を起動します — ルーティングされたすべてのモデルが /model ピッカーに表示され、最大 1M の auto-context、ロスターのサブエージェント、claude.ai ログインはそのまま維持されます。', 'ocx claude 讓 Claude Code 連線同一連接埠 —— 所有路由模型出現在 /model 選擇器中，auto-context 最高 1M，roster 子代理，claude.ai 登入保持不變。', 'ocx claude, Claude Code’u aynı port üzerinden başlatır — /model seçicisindeki tüm yönlendirilmiş modeller, 1M’a kadar otomatik bağlam, alt ajanlar ve claude.ai oturumunuz aktif kalır.')}</p>
-				<img src={`${base}claude-code-models.gif`} alt={t('Claude Code running a routed model through opencodex — gpt-5.6-luna-medium active in the status bar', 'opencodex로 라우팅된 모델에서 돌아가는 Claude Code — 상태 표시줄에 gpt-5.6-luna-medium 활성', '通过 opencodex 运行路由模型的 Claude Code —— 状态栏显示 gpt-5.6-luna-medium 为当前模型', 'Claude Code на маршрутизированной модели через opencodex — gpt-5.6-luna-medium активна в строке состояния', 'opencodex でルーティングされたモデルで動作する Claude Code — ステータスバーに gpt-5.6-luna-medium が有効なモデルとして表示', '透過 opencodex 執行路由模型的 Claude Code —— 狀態列顯示 gpt-5.6-luna-medium 為目前模型', 'opencodex üzerinden yönlendirilen modeli çalıştıran Claude Code — durum çubuğunda gpt-5.6-luna-medium aktif')} loading="lazy" />
+				<img width="960" height="874" src={`${base}claude-code-models.gif`} alt={t('Claude Code running a routed model through opencodex — gpt-5.6-luna-medium active in the status bar', 'opencodex로 라우팅된 모델에서 돌아가는 Claude Code — 상태 표시줄에 gpt-5.6-luna-medium 활성', '通过 opencodex 运行路由模型的 Claude Code —— 状态栏显示 gpt-5.6-luna-medium 为当前模型', 'Claude Code на маршрутизированной модели через opencodex — gpt-5.6-luna-medium активна в строке состояния', 'opencodex でルーティングされたモデルで動作する Claude Code — ステータスバーに gpt-5.6-luna-medium が有効なモデルとして表示', '透過 opencodex 執行路由模型的 Claude Code —— 狀態列顯示 gpt-5.6-luna-medium 為目前模型', 'opencodex üzerinden yönlendirilen modeli çalıştıran Claude Code — durum çubuğunda gpt-5.6-luna-medium aktif')} loading="lazy" />
 			</article>
 			<article class="lp-cell">
 				<h3><svg class="lp-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={icons.search} /></svg>{t('Search & vision sidecars', '검색 & 비전 사이드카', '搜索与视觉边车', 'Сайдкары поиска и зрения', '検索 & ビジョンサイドカー', '搜尋與視覺邊車', 'Arama & görme sidecar’ları')}</h3>
@@ -412,6 +423,15 @@ const docsMap = [
 			</article>
 		</div>
 	</section>
+
+	<div class="lp-github-row">
+		<a class="lp-github-cta" href={GITHUB_URL} aria-label={githubAccessibleName}
+			data-gh-stars-label={starLabel} data-gh-stars-locale={starLocale}>
+			<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d={siGithub.path} /></svg>
+			<span>{githubCta}</span>
+			{starCount !== null && <span data-gh-stars={starCount}>{formatStarCount(starCount)}</span>}
+		</a>
+	</div>
 
 	<!-- full docs sitemap band: every section reachable from the landing -->
 	<section class="lp-next" aria-label={t('Documentation map', '문서 맵', '文档地图', 'Карта документации', 'ドキュメントマップ', '文件地圖', 'Dokümantasyon haritası')}>

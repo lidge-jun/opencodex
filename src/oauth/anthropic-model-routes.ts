@@ -1,3 +1,5 @@
+import type { AnthropicInstanceId } from "../providers/anthropic-instance-id";
+import { resolveAnthropicAccountPoolConfig } from "./anthropic-pool-config";
 import type { AnthropicModelRoute, OcxConfig } from "../types/config";
 
 export interface AnthropicRouteDecision {
@@ -79,12 +81,14 @@ function matches(pattern: string, modelId: string): boolean {
   return p === pattern.length;
 }
 
-export function resolveAnthropicModelRoute(
+export function resolveAnthropicModelRouteForInstance(
+  instance: AnthropicInstanceId,
   config: OcxConfig,
   modelId: string,
 ): { decision: AnthropicRouteDecision | null; error?: string } {
-  if (config.anthropicAccountPool?.enabled !== true) return { decision: null };
-  const raw = (config.anthropicAccountPool as { routes?: unknown } | undefined)?.routes;
+  const pool = resolveAnthropicAccountPoolConfig(config, instance);
+  if (pool.enabled !== true) return { decision: null };
+  const raw = pool.routes;
   if (raw === undefined) return { decision: null };
   const parsed = parseAnthropicModelRoutes(raw);
   if (!parsed.ok) return { decision: null, error: parsed.error };
@@ -102,4 +106,8 @@ export function routeCandidates(eligible: readonly string[], decision: Anthropic
   const available = new Set(eligible);
   const routed = decision.accounts.filter(id => available.has(id));
   return routed.length > 0 || !decision.fallback ? routed : [...eligible];
+}
+
+export function resolveAnthropicModelRoute(config: OcxConfig, modelId: string): { decision: AnthropicRouteDecision | null; error?: string } {
+  return resolveAnthropicModelRouteForInstance("anthropic", config, modelId);
 }

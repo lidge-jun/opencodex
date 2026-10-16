@@ -76,7 +76,7 @@ export function assemblePolicyCandidateEvidence(
       quota: quotaEvidenceForCandidate({
         provider: candidate.provider,
         model: candidate.model,
-      }),
+      }, config),
       cost: costEvidenceForCandidate({
         provider: candidate.provider,
         model: candidate.model,

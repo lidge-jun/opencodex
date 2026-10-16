@@ -1,15 +1,17 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { diagnoseMacDesktopStartup, desktopStartupOwnership } from "../../src/service/desktop-startup";
+import { getPidPath, getRuntimePortPath } from "../../src/config/process-state";
+import { deriveDesktopStartup, diagnoseMacDesktopStartup, desktopStartupOwnership, desktopLoginStatusSummary } from "../../src/service/desktop-startup";
+import { createSupervisionLatch, desktopSupervisionPaths, inspectDesktopSupervision, type SupervisionEvidence } from "../../src/service/desktop-supervision.mjs";
 import type { ServiceOwnershipResolution } from "../../src/service/state";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 function fixture() {
-  const home = mkdtempSync(join(tmpdir(), "ocx-desktop-startup-"));
+  const home = realpathSync(mkdtempSync(join(tmpdir(), "ocx-desktop-startup-")));
   roots.push(home);
   const app = join(home, "OpenCodex.app", "Contents", "MacOS", "opencodex-desktop").replaceAll("\\", "/");
   const proxy = join(home, "OpenCodex.app", "Contents", "MacOS", "ocx").replaceAll("\\", "/");
@@ -36,6 +38,7 @@ function fixture() {
       return state.changedOwner && state.ownerReads > 1 ? { kind: "none", revision: 2 } : state.owner;
     },
     readPid: () => { state.pidReads++; return state.changedPid && state.pidReads > 1 ? 101 : state.pid; },
+    readRuntimePortPid: () => null,
     run: (command: string, args: string[]) => {
       if (command === state.fail) throw new Error("unavailable evidence");
       if (command === "/usr/bin/plutil") return JSON.stringify(state.plist);
@@ -49,7 +52,196 @@ function fixture() {
 
 test("matching install, loaded login item and exact supervisor paths grant desktop protection", () => {
   const { deps } = fixture();
-  expect(diagnoseMacDesktopStartup(deps)).toEqual({ owned: true, loginEnabled: true, running: true, viable: true });
+  expect(diagnoseMacDesktopStartup(deps)).toEqual({ owned: true, loginEnabled: true, loginRegistration: "loaded", running: true, viable: true });
+});
+
+function unloadedLogin(f: ReturnType<typeof fixture>, stderr = 'Could not find service "OpenCodex" in domain for user gui: 501', status = 113, beforeMissing?: () => void) {
+  const original = f.deps.run;
+  f.deps.run = (command, args) => {
+    if (command === "/bin/launchctl" && args[0] === "print") {
+      beforeMissing?.();
+      throw Object.assign(new Error("launchctl print failed"), { status, stderr: Buffer.from(stderr), signal: null });
+    }
+    return original(command, args);
+  };
+}
+
+test("valid enabled registration protects the current supervisor before the next login loads it", () => {
+  for (const owned of [true, false]) {
+    const f = fixture();
+    if (!owned) f.state.owner = { kind: "none", revision: 0 };
+    unloadedLogin(f);
+    expect(diagnoseMacDesktopStartup(f.deps)).toMatchObject({
+      owned, loginEnabled: true, loginRegistration: "registered-not-loaded", running: true, viable: true,
+    });
+    const desktop = diagnoseMacDesktopStartup(f.deps)!;
+    expect(desktopLoginStatusSummary(desktop)).toContain("registered and enabled for next login");
+    expect(desktopLoginStatusSummary(desktop)).toContain("not loaded in this session");
+  }
+});
+
+test("next-login registration accepts default-enabled and false disabled overrides", () => {
+  for (const disabled of ['disabled services = { }', 'disabled services = { "OpenCodex" => false }']) {
+    const f = fixture(); f.state.disabled = disabled;
+    unloadedLogin(f, 'Bad request.\nCould not find service "OpenCodex" in domain for user gui: 501\n');
+    expect(diagnoseMacDesktopStartup(f.deps)).toMatchObject({ loginEnabled: true, viable: true });
+  }
+});
+
+test("unloaded login combines a boolean Disabled default with explicit launchd overrides", () => {
+  for (const owned of [true, false]) {
+    for (const [defaultDisabled, override, enabled] of [
+      [true, undefined, false], [false, undefined, true], [undefined, undefined, true],
+      [true, "enabled", true], [true, "false", true], [false, "disabled", false],
+      [false, "true", false], [true, "unknown", false], [false, "unknown", false],
+      ["false", undefined, false], ["false", "enabled", false], [null, "false", false],
+      [0, "enabled", false], [false, "enabled-extra", false],
+    ] as const) {
+      const f = fixture();
+      if (!owned) f.state.owner = { kind: "none", revision: 0 };
+      if (defaultDisabled !== undefined) Object.assign(f.state.plist, { Disabled: defaultDisabled });
+      f.state.disabled = override === undefined ? "disabled services = { }"
+        : `disabled services = { "OpenCodex" => ${override} }`;
+      unloadedLogin(f);
+      expect(diagnoseMacDesktopStartup(f.deps)).toMatchObject({ owned, loginEnabled: enabled, viable: enabled });
+    }
+  }
+});
+
+test("unloaded registration is not credited when its snapshot changes during print", () => {
+  const replace = (path: string) => {
+    writeFileSync(`${path}.replacement`, "fixture"); chmodSync(`${path}.replacement`, 0o700);
+    renameSync(`${path}.replacement`, path);
+  };
+  for (const owned of [true, false]) {
+    for (const mutate of [
+      (f: ReturnType<typeof fixture>) => { Object.assign(f.state.plist, { Disabled: true }); f.state.disabled = "disabled services = { }"; },
+      (f: ReturnType<typeof fixture>) => { f.state.disabled = 'disabled services = { "OpenCodex" => disabled }'; },
+      (f: ReturnType<typeof fixture>) => { f.state.disabled = "unreadable"; },
+      (f: ReturnType<typeof fixture>) => { f.state.disabled = 'disabled services = { "OpenCodex" => unknown }'; },
+      (f: ReturnType<typeof fixture>) => { f.state.plist.Label = "OtherApp"; },
+      (f: ReturnType<typeof fixture>) => { f.state.plist.RunAtLoad = false; },
+      (f: ReturnType<typeof fixture>) => { f.state.plist.ProgramArguments[1] = "--wrong"; },
+      (f: ReturnType<typeof fixture>) => { Object.assign(f.state.plist, { Program: f.proxy }); },
+      (f: ReturnType<typeof fixture>) => { f.state.plist.ProgramArguments[0] = fixture().app; },
+      (f: ReturnType<typeof fixture>) => { replace(f.plistPath); },
+      (f: ReturnType<typeof fixture>) => { rmSync(f.plistPath); },
+      (f: ReturnType<typeof fixture>) => { replace(f.app); },
+      (f: ReturnType<typeof fixture>) => { replace(f.proxy); },
+      (f: ReturnType<typeof fixture>) => { f.state.fail = "/usr/bin/plutil"; },
+    ]) {
+      const f = fixture();
+      if (!owned) f.state.owner = { kind: "none", revision: 0 };
+      unloadedLogin(f, undefined, undefined, () => mutate(f));
+      const diagnostic = diagnoseMacDesktopStartup(f.deps);
+      expect(diagnostic).toMatchObject({ owned, loginEnabled: false, viable: false });
+      expect(diagnostic?.loginRegistration).not.toBe("registered-not-loaded");
+    }
+  }
+});
+
+test("unloaded registration re-resolves executable symlink targets after print", () => {
+  if (process.platform === "win32") return; // Symlink creation requires Windows privileges.
+  for (const target of ["app", "proxy"] as const) {
+    const f = fixture(); const other = fixture();
+    unloadedLogin(f, undefined, undefined, () => {
+      rmSync(f[target]); symlinkSync(other[target], f[target]);
+    });
+    expect(diagnoseMacDesktopStartup(f.deps)).toMatchObject({ loginEnabled: false, viable: false });
+  }
+});
+
+test("registration replacement during the final enabled-state probe fails closed", () => {
+  const f = fixture(); unloadedLogin(f); const original = f.deps.run; let reads = 0;
+  f.deps.run = (command, args) => {
+    const result = original(command, args);
+    if (command === "/bin/launchctl" && args[0] === "print-disabled" && ++reads === 2) {
+      writeFileSync(`${f.plistPath}.replacement`, "fixture");
+      renameSync(`${f.plistPath}.replacement`, f.plistPath);
+    }
+    return result;
+  };
+  expect(diagnoseMacDesktopStartup(f.deps)).toMatchObject({ loginEnabled: false, viable: false });
+});
+
+test("loaded matching jobs still honor enabled overrides of Disabled true", () => {
+  for (const override of ["enabled", "false"]) {
+    const f = fixture(); Object.assign(f.state.plist, { Disabled: true });
+    f.state.disabled = `disabled services = { "OpenCodex" => ${override} }`;
+    expect(diagnoseMacDesktopStartup(f.deps)).toMatchObject({ loginEnabled: true, loginRegistration: "loaded", viable: true });
+  }
+});
+
+test("an absent loaded job cannot excuse malformed registration or disabled login", () => {
+  for (const change of [
+    (f: ReturnType<typeof fixture>) => { f.state.plist.Label = "OtherApp"; },
+    (f: ReturnType<typeof fixture>) => { f.state.plist.RunAtLoad = false; },
+    (f: ReturnType<typeof fixture>) => { f.state.plist.ProgramArguments[1] = "--wrong"; },
+    (f: ReturnType<typeof fixture>) => { f.state.plist.ProgramArguments[0] = f.proxy; },
+    (f: ReturnType<typeof fixture>) => { Object.assign(f.state.plist, { Program: f.proxy }); },
+    (f: ReturnType<typeof fixture>) => { f.state.disabled = 'disabled services = { "OpenCodex" => disabled }'; },
+    (f: ReturnType<typeof fixture>) => { f.state.disabled = 'disabled services = { "OpenCodex" => true }'; },
+    (f: ReturnType<typeof fixture>) => { f.state.disabled = "unreadable"; },
+    (f: ReturnType<typeof fixture>) => { f.state.disabled = 'disabled services = { "OpenCodex" => unknown }'; },
+    (f: ReturnType<typeof fixture>) => { f.state.fail = "/bin/launchctl"; },
+    (f: ReturnType<typeof fixture>) => { f.state.fail = "/usr/bin/plutil"; },
+  ]) {
+    const f = fixture(); change(f); unloadedLogin(f);
+    expect(diagnoseMacDesktopStartup(f.deps)).toMatchObject({ owned: true, loginEnabled: false, viable: false });
+  }
+});
+
+test("timeout and tool failures cannot masquerade as an absent loaded job", () => {
+  for (const failure of [{ code: "ETIMEDOUT" }, { code: "ENOENT" }, { signal: "SIGTERM" }]) {
+    const f = fixture(); const original = f.deps.run;
+    f.deps.run = (command, args) => {
+      if (command === "/bin/launchctl" && args[0] === "print") throw {
+        status: 113, stderr: 'Could not find service "OpenCodex" in domain for user gui: 501', ...failure,
+      };
+      return original(command, args);
+    };
+    expect(diagnoseMacDesktopStartup(f.deps)).toMatchObject({ loginEnabled: false, viable: false });
+  }
+});
+
+test("unloaded registration cannot retain unowned supervision across an ownership change", () => {
+  const f = fixture(); f.state.owner = { kind: "none", revision: 0 };
+  const original = f.deps.run;
+  f.deps.run = (command, args) => {
+    if (command === "/bin/launchctl" && args[0] === "print") {
+      f.state.owner = { kind: "owned", revision: 1, ownership: {
+        owner: "cli", installId: "new-cli-owner", consentGeneration: 1,
+      } };
+      throw { status: 113, stderr: 'Could not find service "OpenCodex" in domain for user gui: 501' };
+    }
+    return original(command, args);
+  };
+  expect(diagnoseMacDesktopStartup(f.deps)).toBeUndefined();
+});
+
+test("only explicit service absence receives unloaded registration credit", () => {
+  for (const [stderr, status] of [
+    ['Could not find service "OpenCodex" in domain for user gui: 501', 1],
+    ['Could not find service "OtherApp" in domain for user gui: 501', 113],
+    ['Could not find service "OpenCodex" in domain for user gui: 502', 113],
+    ["Operation not permitted", 113], ["", 113],
+    ['Could not find service "OpenCodex" in domain for user gui: 501\nOperation not permitted', 113],
+  ] as const) {
+    const f = fixture(); unloadedLogin(f, stderr, status);
+    expect(diagnoseMacDesktopStartup(f.deps)).toMatchObject({ loginEnabled: false, viable: false });
+  }
+});
+
+test("registered but unloaded login still requires the same running supervisor and owner", () => {
+  for (const mutate of [
+    (f: ReturnType<typeof fixture>) => { f.state.changedPid = true; },
+    (f: ReturnType<typeof fixture>) => { f.state.changedOwner = true; },
+    (f: ReturnType<typeof fixture>) => { f.state.parent = `1 ${f.proxy}`; },
+    (f: ReturnType<typeof fixture>) => { f.state.pid = null; },
+  ]) {
+    const f = fixture(); unloadedLogin(f); mutate(f);
+    expect(diagnoseMacDesktopStartup(f.deps)).toMatchObject({ owned: true, viable: false });
+  }
 });
 
 test("failed identity and login/process evidence retain the durable desktop claim", () => {
@@ -78,12 +270,12 @@ test("failed identity and login/process evidence retain the durable desktop clai
   }
 });
 
-test("other platforms and absent, CLI or unknown ownership cannot grant desktop protection", () => {
+test("other platforms and CLI or unknown ownership cannot grant desktop protection", () => {
   const f = fixture();
   expect(diagnoseMacDesktopStartup({ ...f.deps, platform: "linux" })).toBeUndefined();
   expect(f.state.ownerReads).toBe(0);
   for (const owner of [
-    { kind: "none", revision: 0 }, { kind: "unknown", reason: "unreadable" },
+    { kind: "unknown", reason: "unreadable" },
     { kind: "owned", revision: 1, ownership: { owner: "cli", installId: "installation-a", consentGeneration: 1 } },
   ] as ServiceOwnershipResolution[]) {
     f.state.owner = owner;
@@ -98,4 +290,202 @@ test("ownership-only fallback does not run external probes", () => {
     owned: true, loginEnabled: false, running: false, viable: false,
   });
   expect(f.state.pidReads).toBe(0);
+});
+
+test("an unowned Desktop supervisor receives login credit without install-id matching", () => {
+  const f = fixture(); f.state.owner = { kind: "none", revision: 0 };
+  rmSync(f.idPath);
+  expect(inspectDesktopSupervision(f.deps)).toEqual({
+    kind: "desktop", runtimePid: 100, supervisorPid: 200, app: realpathSync(f.app), proxy: realpathSync(f.proxy),
+  });
+  expect(diagnoseMacDesktopStartup(f.deps)).toEqual({
+    owned: false, loginEnabled: true, loginRegistration: "loaded", running: true, viable: true,
+    supervisor: { supervisorPid: 200, runtimePid: 100, app: realpathSync(f.app) },
+  });
+  expect(desktopStartupOwnership(f.deps)).toBeUndefined();
+});
+
+test("unowned login failures retain the supervisor but revoke restart viability", () => {
+  const changes = [
+    (f: ReturnType<typeof fixture>) => { f.state.disabled = 'disabled services = { "OpenCodex" => disabled }'; },
+    (f: ReturnType<typeof fixture>) => { f.state.plist.RunAtLoad = false; },
+    (f: ReturnType<typeof fixture>) => { f.state.loaded = `program = ${f.proxy}\npath = ${f.plistPath}`; },
+    (f: ReturnType<typeof fixture>) => { f.state.fail = "/bin/launchctl"; },
+    (f: ReturnType<typeof fixture>) => { f.state.fail = "/usr/bin/plutil"; },
+    (f: ReturnType<typeof fixture>) => { f.state.plist.ProgramArguments[0] = f.proxy; },
+  ];
+  for (const change of changes) {
+    const f = fixture(); f.state.owner = { kind: "none", revision: 0 }; change(f);
+    expect(diagnoseMacDesktopStartup(f.deps)).toEqual({
+      owned: false, loginEnabled: false, running: true, viable: false,
+      supervisor: { supervisorPid: 200, runtimePid: 100, app: realpathSync(f.app) },
+    });
+  }
+});
+
+test("a login registration for another app cannot credit the observed supervisor", () => {
+  const f = fixture(); const other = fixture(); f.state.owner = { kind: "none", revision: 0 };
+  f.state.plist.ProgramArguments[0] = other.app;
+  f.state.loaded = `program = ${other.app}\npath = ${f.plistPath}`;
+  expect(diagnoseMacDesktopStartup(f.deps)).toMatchObject({ loginEnabled: false, viable: false, supervisor: { app: realpathSync(f.app) } });
+});
+
+const loginSupervisionChanges: [string, (f: ReturnType<typeof fixture>) => void][] = [
+  ["runtime PID", f => { f.state.pid = 101; }],
+  ["supervisor PID", f => { f.state.child = `300 ${f.proxy}`; }],
+  ["supervisor app", f => {
+    const other = fixture(); f.state.child = `200 ${other.proxy}`; f.state.parent = `1 ${other.app}`;
+  }],
+  ["foreign parent", f => { f.state.parent = `1 ${f.proxy}`; }],
+  ["unreadable process", f => { f.state.fail = "/bin/ps"; }],
+];
+for (const [name, change] of loginSupervisionChanges) {
+  test(`unowned macOS supervision is discarded when ${name} changes during login verification`, () => {
+    const f = fixture(); f.state.owner = { kind: "none", revision: 0 };
+    const original = f.deps.run; let loginRead = false;
+    f.deps.run = (command, args) => {
+      if (command === "/usr/bin/plutil") { loginRead = true; change(f); }
+      return original(command, args);
+    };
+    expect(diagnoseMacDesktopStartup(f.deps)).toBeUndefined();
+    expect(loginRead).toBe(true);
+  });
+}
+
+const finalProbeOwnershipChanges: ServiceOwnershipResolution[] = [
+  { kind: "owned", revision: 1, ownership: { owner: "cli", installId: "installation-a", consentGeneration: 1 } },
+  { kind: "owned", revision: 1, ownership: { owner: "desktop", installId: "installation-a", consentGeneration: 1 } },
+  { kind: "unknown", reason: "unreadable" },
+  { kind: "none", revision: 1 },
+];
+for (const owner of finalProbeOwnershipChanges) {
+  const name = owner.kind === "owned" ? owner.ownership.owner : owner.kind;
+  test(`unowned macOS supervision is discarded when ownership becomes ${name} during the final probe`, () => {
+    const f = fixture(); f.state.owner = { kind: "none", revision: 0 };
+    const original = f.deps.run; let psReads = 0;
+    f.deps.run = (command, args) => {
+      if (command === "/bin/ps" && ++psReads === 5) f.state.owner = owner;
+      return original(command, args);
+    };
+    const desktop = diagnoseMacDesktopStartup(f.deps);
+    expect(psReads).toBeGreaterThanOrEqual(5);
+    expect(desktop).toBeUndefined();
+  });
+}
+
+test("unowned foreign parent, absent runtime and changing snapshots never receive supervision credit", () => {
+  const f = fixture(); f.state.owner = { kind: "none", revision: 0 }; f.state.parent = `1 ${f.proxy}`;
+  expect(inspectDesktopSupervision(f.deps)).toEqual({ kind: "none" });
+  expect(diagnoseMacDesktopStartup(f.deps)).toBeUndefined();
+  f.state.pid = null;
+  expect(inspectDesktopSupervision(f.deps)).toEqual({ kind: "none" });
+  expect(diagnoseMacDesktopStartup(f.deps)).toBeUndefined();
+  const changed = fixture(); changed.state.owner = { kind: "none", revision: 0 }; changed.state.changedPid = true;
+  expect(inspectDesktopSupervision(changed.deps)).toEqual({ kind: "unknown", reason: "snapshot-changed", desktopSeen: true });
+  const startup = fixture(); startup.state.owner = { kind: "none", revision: 0 }; startup.state.changedPid = true;
+  expect(diagnoseMacDesktopStartup(startup.deps)).toBeUndefined();
+});
+
+test("macOS rereads both child and parent identity, including the parent PID", () => {
+  const f = fixture(); const original = f.deps.run; let psReads = 0;
+  const run = (command: string, args: string[]) => {
+    if (command === "/bin/ps" && ++psReads === 4) return `2 ${f.app}`;
+    return original(command, args);
+  };
+  expect(inspectDesktopSupervision({ ...f.deps, run })).toEqual({ kind: "unknown", reason: "snapshot-changed", desktopSeen: true });
+  expect(psReads).toBe(4);
+});
+
+test("any disagreement between target, pid file and runtime-port pid is unknown", () => {
+  for (const [targetPid, portPid] of [[101, null], [100, 101], [101, 101]] as const) {
+    const f = fixture();
+    expect(inspectDesktopSupervision({ ...f.deps, targetPid, readRuntimePortPid: () => portPid })).toEqual({
+      kind: "unknown", reason: "pid-mismatch", desktopSeen: false,
+    });
+  }
+  const f = fixture(); f.state.owner = { kind: "none", revision: 0 };
+  expect(diagnoseMacDesktopStartup({ ...f.deps, readRuntimePortPid: () => 101 })).toBeUndefined();
+  expect(inspectDesktopSupervision({ ...f.deps, targetPid: 100, readRuntimePortPid: () => 100 })).toMatchObject({ kind: "desktop" });
+});
+
+test("unsupported platforms never probe; thrown ps or PID readers produce bounded unknown evidence", () => {
+  const f = fixture(); f.state.fail = "/bin/ps";
+  expect(inspectDesktopSupervision(f.deps)).toEqual({ kind: "unknown", reason: "probe-failed", desktopSeen: false });
+  expect(inspectDesktopSupervision({ ...f.deps, readPid: () => { throw new Error("private contents"); } })).toEqual({
+    kind: "unknown", reason: "probe-failed", desktopSeen: false,
+  });
+  // Windows now probes (#6853); see service-desktop-supervision-windows.test.ts.
+  for (const platform of ["freebsd", "aix"] as const) {
+    expect(inspectDesktopSupervision({ platform, readPid: () => { throw new Error("must not probe"); } })).toEqual({ kind: "unsupported" });
+  }
+});
+
+test("partially observed Desktop evidence fails closed when its sibling or permissions are invalid", () => {
+  const f = fixture(); f.state.child = `200 ${f.app}`;
+  expect(inspectDesktopSupervision(f.deps)).toEqual({ kind: "unknown", reason: "proxy-mismatch", desktopSeen: true });
+  f.state.child = `200 ${f.proxy}`; chmodSync(f.proxy, 0o600);
+  // Windows fixtures cannot express POSIX execute-bit denial.
+  if (process.platform !== "win32") {
+    expect(inspectDesktopSupervision(f.deps)).toEqual({ kind: "unknown", reason: "probe-failed", desktopSeen: true });
+  }
+});
+
+test("malformed ps output cannot clear a supervision latch as positive none evidence", () => {
+  const f = fixture(); f.state.child = "unparseable process row";
+  expect(inspectDesktopSupervision(f.deps)).toEqual({ kind: "unknown", reason: "probe-failed", desktopSeen: false });
+  f.state.child = `200 ${f.proxy}`; f.state.parent = "unparseable parent row";
+  expect(inspectDesktopSupervision(f.deps)).toEqual({ kind: "unknown", reason: "probe-failed", desktopSeen: false });
+});
+
+test("a supervision latch only clears a Desktop veto on positive none evidence", () => {
+  const desktop: SupervisionEvidence = { kind: "desktop", runtimePid: 100, supervisorPid: 200, app: "/app", proxy: "/ocx" };
+  const latch = createSupervisionLatch();
+  expect(latch.observe({ kind: "unknown", reason: "probe-failed", desktopSeen: false })).toBe(false);
+  expect(latch.observe(desktop)).toBe(true);
+  expect(latch.observe({ kind: "unknown", reason: "probe-failed", desktopSeen: false })).toBe(true);
+  expect(latch.observe({ kind: "unsupported" })).toBe(true);
+  expect(latch.observe({ kind: "none" })).toBe(false);
+  expect(latch.observe({ kind: "unknown", reason: "snapshot-changed", desktopSeen: true })).toBe(true);
+  expect(latch.observe({ kind: "none" })).toBe(false);
+  expect(latch.observe(desktop)).toBe(true);
+  expect(latch.observe({ kind: "none" })).toBe(false);
+});
+
+test("viability requires ownership or supervision, login and a running runtime", () => {
+  const supervisor = { supervisorPid: 200, runtimePid: 100, app: "/app" };
+  expect(deriveDesktopStartup({ owned: false, loginEnabled: true, running: true }).viable).toBe(false);
+  expect(deriveDesktopStartup({ owned: false, loginEnabled: true, running: true, supervisor }).viable).toBe(true);
+  expect(deriveDesktopStartup({ owned: false, loginEnabled: false, running: true, supervisor }).viable).toBe(false);
+  expect(deriveDesktopStartup({ owned: false, loginEnabled: true, running: false, supervisor }).viable).toBe(false);
+});
+
+test("Node-safe pid paths match config paths, including custom-home trimming and tilde expansion", () => {
+  const previous = process.env.OPENCODEX_HOME;
+  try {
+    for (const raw of [undefined, " ", "~", "~/test-supervision-home", "~\\test-supervision-home", "  ./test-supervision-home  "]) {
+      if (raw === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = raw;
+      expect(desktopSupervisionPaths()).toEqual({ pid: getPidPath(), runtimePort: getRuntimePortPath() });
+    }
+  } finally {
+    if (previous === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previous;
+  }
+});
+
+test("default readers correlate pid files and project only pid from runtime-port JSON", () => {
+  const f = fixture(); const previous = process.env.OPENCODEX_HOME;
+  process.env.OPENCODEX_HOME = f.deps.home;
+  try {
+    writeFileSync(join(f.deps.home, "ocx.pid"), "100\n");
+    writeFileSync(join(f.deps.home, "runtime-port.json"), JSON.stringify({ pid: 100, attestationSecret: "fixture-private" }));
+    const evidence = inspectDesktopSupervision({ platform: "darwin", run: f.deps.run });
+    expect(evidence).toEqual({ kind: "desktop", runtimePid: 100, supervisorPid: 200, app: realpathSync(f.app), proxy: realpathSync(f.proxy) });
+    expect(JSON.stringify(evidence)).not.toContain("fixture-private");
+    writeFileSync(join(f.deps.home, "runtime-port.json"), '{"pid":101}');
+    expect(inspectDesktopSupervision({ platform: "darwin", run: f.deps.run })).toEqual({ kind: "unknown", reason: "pid-mismatch", desktopSeen: false });
+  } finally {
+    if (previous === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previous;
+  }
 });

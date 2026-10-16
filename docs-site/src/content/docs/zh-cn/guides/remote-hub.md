@@ -111,7 +111,7 @@ ocx connect rotate --admin-token-stdin
 
 轮换期间，旧密钥和新密钥在同一个 `apiKeyId` 下最多同时有效十分钟。旧密钥备份到 `service-api-token.prev`，新密钥以原子方式安装，并通过 `/v1/catalog` 验证后提交。如果提交结果不确定，请使用临时权限重新运行命令；在验证两个候选密钥前不要删除任何文件。
 
-`ocx disconnect` 即使 hub 离线也能恢复本地状态，但不会吊销 hub 密钥。断开后，唯一的吊销入口是 hub 的 **Integrations → API Keys**。`ocx connect revoke --admin-token-stdin` 只能在仍连接时使用。
+`ocx disconnect` 即使 hub 离线也能恢复本地状态，但不会吊销 hub 密钥。断开后，唯一的吊销入口是 hub 的 **连接 → API 密钥**。`ocx connect revoke --admin-token-stdin` 只能在仍连接时使用。
 
 ## Docker、回滚与排障
 
@@ -173,3 +173,7 @@ services:
 - `/readyz` 返回 `200` 而 `/v1/catalog` 返回 `403 origin_rejected`：说明数据监听器绑在回环地址上却位于 TLS 前端之后，参见上文“为数据监听器提供 TLS”。
 - 浏览器 logout/expiry 只影响会话，不会吊销数据密钥。
 - `tailscale serve reset` 会删除节点上的所有映射，请先查看 `tailscale serve status`。
+
+## 关闭 Hub
+
+`ocx hub disable [--json]` 在一次经过验证的写入中移除 Hub 专用设置。现有密钥没有可信的客户端来源标记；先用 `ocx access key list --json` 查看 ID，再运行 `ocx hub disable --revoke-clients --client-key <id> [--json]`，可重复 `--client-key`。密钥名称不用于判断来源，未知 ID 或未选择 ID 的撤销请求会在修改前被拒绝。未选中的密钥保留。命令不会重启代理或修改外部发布配置；请按输出的提示重启，并检查 `tailscale serve status`。参见[英文详情](/guides/remote-hub/#return-a-hub-to-standalone)。

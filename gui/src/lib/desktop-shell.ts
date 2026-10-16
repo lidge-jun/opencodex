@@ -48,6 +48,21 @@ export function openDesktopUpdatePage(ua = currentUserAgent()): boolean {
   return true;
 }
 
+export function desktopCliPageUrl(ua = currentUserAgent()): string | null {
+  if (!isDesktopShell(ua)) return null;
+  const os = hostOs(ua);
+  if (os === "windows") return "http://tauri.localhost/cli.html";
+  if (os === "macos" || os === "linux") return "tauri://localhost/cli.html";
+  return null;
+}
+
+export function openDesktopCliPage(ua = currentUserAgent()): boolean {
+  const url = desktopCliPageUrl(ua);
+  if (!url) return false;
+  window.location.assign(url);
+  return true;
+}
+
 export function isExternalLink(
   href: string,
   origin = typeof location === "undefined" ? "" : location.origin,

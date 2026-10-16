@@ -11,6 +11,9 @@ import {
 } from "./runtime-api";
 
 const USAGE = `Usage:
+  ocx route policy create <id> --file <FILE|-> [--json]
+  ocx route policy update <id> --file <FILE|-> --expected-revision <revision> [--json]
+  ocx route policy remove <id> --yes [--json]
   ocx route policy list [--json]
   ocx route policy show <id> [--json]
   ocx route policy dry-run <id> [--model-context <tokens>] [--tools]
@@ -83,6 +86,11 @@ async function dryRun(argv: string[], deps: RuntimeApiDeps): Promise<void> {
 }
 
 export async function handleRoutePolicyCommand(argv: string[], deps: RuntimeApiDeps = {}): Promise<number> {
+  const [write, ...rest] = argv;
+  if (write === "create" || write === "update" || write === "remove") {
+    const { handleRoutePolicyWriteCommand } = await import("./route-policy-write");
+    return handleRoutePolicyWriteCommand(write, rest, deps);
+  }
   return runCliAction(async () => {
     const [sub, ...rest] = argv;
     if (!sub) throw new CliUsageError("route policy requires a subcommand (list, show, dry-run, evaluate)", USAGE);

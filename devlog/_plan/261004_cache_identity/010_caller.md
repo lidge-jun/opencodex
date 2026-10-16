@@ -1,0 +1,25 @@
+# Caller session header replacement
+
+Depends on roadmap only. Branch `codex/next-release-261004-cache-caller`, independent dev PR. Implements source #6521 with CS-01..04 refinements. Runtime scope is caller helper and serve-options; no global recall redesign.
+
+## File delta
+
+NEW `src/server/caller-session-identity.ts`: retain source `callerSessionId(headers)` validation: any explicit session_id/session-id/thread-id presence suppresses promotion, trim x-session-id and accept /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/. `withCallerSessionIdentity(req, admission)` returns the same request on skip, raw validated ID for loopback, and a stable opaque SHA-256 digest of a structured tuple of trusted `contextPrincipalIdOf(admission)` and conversation for authenticated callers. Unknown principal declines promotion. No body read, no persistent map, no raw credential storage. Clone with `new Request(req, {headers})` only when promoting.
+
+MODIFY `src/server/index/serve-options.ts`: import helper. Responses: after auth/origin checks form `sessionReq = withCallerSessionIdentity(withGrokSessionIdentity(req), admission)`; use sessionReq for runAdmittedHttpTurn and handleResponses. Messages: likewise form `sessionReq = withCallerSessionIdentity(req, admission)` for admission and handleClaudeMessages. Keep original req for timeout lookup, response CORS and cancellation callbacks. Grok and explicit identities win unchanged. Existing guards still run first.
+
+NEW `tests/server/caller-session-identity.test.ts`: carry all source cases and mocked handleResponses upstream-wire test, adapting signature to explicit loopback admission. Add explicit-empty precedence, exact 128/129 boundary, whitespace normalization, conflicting Grok/caller values, two trusted principals with same conversation, credential rotation and absent principal. Verify body bytes/method/url/abort and no-op object identity. Add behavioral ingress coverage for both Responses and Messages and verify admission receives the same promoted identity; use existing local fixture patterns, no live requests. Public combo recall separation may be demonstrated by resulting session lane keys and existing recall APIs. Source pins remain secondary coverage.
+
+MODIFY `tests/providers/xai/grok-session-identity.test.ts` and `tests/server/loopback-listener-admission.test.ts`: update changed source-wiring pins without dropping assertions. MODIFY `scripts/test-layout/layout.json` and `tests/fixtures/test-layout-expected.json`: add caller-session-identity to server. MODIFY `structure/runtime.md`, applicable inbound-compat/responses owner docs and `docs-site/src/content/docs/reference/proxy-formats.md`: describe headers, priority, trusted-principal namespace, loopback behavior, no cache-hit promise. Review mapped owner docs; update only affected contracts.
+
+## Activation and coverage
+
+Explicit or Grok header plus differing x-session-id -> explicit/Grok wire value. Invalid/absent x-session-id -> original request. Two different admitted principals with equal x-session-id -> distinct promoted lanes. Rotated trusted credential -> new lane. Abort original -> rewritten signal aborts. Responses/Messages fixture -> backend receives promoted header after ingress authorization. All original source behaviors are carried except authenticated raw-ID equality is deliberately replaced by principal-scoped identity, and unsupported cache-savings assertions are removed.
+
+Field chain: x-session-id creation is external caller; ingress validates and serializes session_id on Request; existing parsers consume it for affinity/logging and passthrough forwards it. No new persisted schema or deserializer.
+
+Verifier: `bun test tests/server/caller-session-identity.test.ts tests/providers/xai/grok-session-identity.test.ts tests/server/loopback-listener-admission.test.ts` plus typecheck, structure/privacy and both layout guards/file-size ratchet. These direct test paths observe this delta; source-only pins do not prove live behavior. Docs build observes the public page. No full/changed suite per resource contract. Independent security review required. Existing explicit/Grok caller-supplied identities retain existing semantics; this change makes no global authorization-isolation claim.
+
+Reflection refinement: use real combo recall read/write APIs for equal caller markers under different principals; same principal retains continuity. Test through actual admitted ingress in addition to helper tests.
+
+Implementation record: helper and both routes implemented; ingress regression moved into registered sibling `tests/server/caller-session-ingress.test.ts` to keep unit and endpoint concerns readable. The accidental compact-route edit found by main was removed before verification. Four behavior files passed 59 tests; layout/tooling/ratchet files passed 27 tests. Typecheck and docs build passed. Structure contracts consolidated into inbound-compat with links from capped runtime/Responses docs; their 600-line budgets are preserved. Publication waits for independent code review and current-head CI inspection.

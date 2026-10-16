@@ -22,6 +22,7 @@ import { setIntegrationEnabled } from "../../src/codex/desired-state";
 import { firstPartyDesired } from "../../src/claude/first-party-settings";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { flushConfigDirHardeningAndReaps } from "../../src/config/paths";
 
 let root = "";
 let library = "";
@@ -52,6 +53,12 @@ async function dispatch(path: string, init?: RequestInit, inputConfig: OcxConfig
   return { status: response!.status, body: await response!.json() as Record<string, any> };
 }
 
+// Attach the response body to every status failure so a hosted-runner flake classifies
+// itself (an environmental ca_unavailable, say, instead of a bare "Expected: 200 / Received: 500").
+function expectStatus(result: { status: number; body: unknown }, status: number): void {
+  expect(result.status, `body=${JSON.stringify(result.body)}`).toBe(status);
+}
+
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "ocx-desktop-1p-"));
   library = join(root, "desktop-library");
@@ -63,7 +70,8 @@ beforeEach(() => {
   writeFileSync(join(root, "config.json"), JSON.stringify(config()));
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await flushConfigDirHardeningAndReaps(root);
   for (const key of ENV_KEYS) {
     if (previous[key] === undefined) delete process.env[key];
     else process.env[key] = previous[key];
@@ -114,6 +122,13 @@ test("CLI apply flags: default gateway, legacy shape flags imply gateway, confli
   expect("error" in parseDesktopApplyArgs(["--bogus"], config())).toBe(true);
 });
 
+test("CLI apply rejects unknown arguments without echoing option values or operands", () => {
+  const rejected = parseDesktopApplyArgs(["--token=synthetic-secret", "synthetic-operand", "-tsynthetic-short",
+    "--token", "--synthetic-dash-value", "--bogus\u001b[2Jsynthetic-escape"], config());
+  expect(rejected).toEqual({ error: "알 수 없는 인자 6개 (값은 표시하지 않습니다). 사용 가능한 옵션: --first-party --gateway --static --hybrid --discovery-only" });
+  expect(JSON.stringify(rejected)).not.toContain("synthetic");
+});
+
 test("first-party apply writes only the proxy env, creates the CA, and removes cleanly", () => {
   mkdirSync(claudeDir, { recursive: true });
   writeFileSync(join(claudeDir, "settings.json"), JSON.stringify({ theme: "dark", env: { FOO: "bar" } }));
@@ -129,6 +144,7 @@ test("first-party apply writes only the proxy env, creates the CA, and removes c
     FOO: "bar",
     HTTPS_PROXY: expectedProxyUrl(10200),
     NODE_EXTRA_CA_CERTS: applied.env.NODE_EXTRA_CA_CERTS,
+    NO_PROXY: "127.0.0.1,localhost,::1,0.0.0.0",
   });
   expect(inspectDesktopFirstParty(config()).applied).toBe(true);
   // Desktop's own library is untouched: first-party never installs a gateway profile.
@@ -156,7 +172,7 @@ test("first-party apply refuses foreign proxy env and disabled intercept", () =>
 
 test("POST /api/claude-desktop/apply defaults to gateway; first-party is explicit and carries the account-risk notice", async () => {
   const byDefault = await dispatch("/api/claude-desktop/apply", { method: "POST" });
-  expect(byDefault.status).toBe(200);
+  expectStatus(byDefault, 200);
   expect(byDefault.body.riskWarning).toBeUndefined();
   expect(existsSync(join(claudeDir, "settings.json"))).toBe(false);
   const afterDefault = JSON.parse(readFileSync(join(root, "config.json"), "utf8")) as OcxConfig;
@@ -167,7 +183,7 @@ test("POST /api/claude-desktop/apply defaults to gateway; first-party is explici
   expect(gatewayStatus.body.riskWarning).toBeNull();
 
   const first = await dispatch("/api/claude-desktop/apply", { method: "POST", body: JSON.stringify({ mode: "first-party" }) }, afterDefault);
-  expect(first.status).toBe(200);
+  expectStatus(first, 200);
     expect(first.body).toMatchObject({
       ok: true,
       mode: "first-party",
@@ -195,7 +211,7 @@ test("POST /api/claude-desktop/apply defaults to gateway; first-party is explici
   expect(status.body.health.ok).toBe(true);
 
   const gateway = await dispatch("/api/claude-desktop/apply", { method: "POST", body: JSON.stringify({ mode: "gateway" }) }, saved);
-  expect(gateway.status).toBe(200);
+  expectStatus(gateway, 200);
   expect(settings().env?.HTTPS_PROXY).toBeUndefined();
   expect(settings().env?.NODE_EXTRA_CA_CERTS).toBeUndefined();
   const afterGateway = JSON.parse(readFileSync(join(root, "config.json"), "utf8")) as OcxConfig;
@@ -204,7 +220,7 @@ test("POST /api/claude-desktop/apply defaults to gateway; first-party is explici
 
   // Switching back replaces the gateway profile with the first-party env in one apply.
   const back = await dispatch("/api/claude-desktop/apply", { method: "POST", body: JSON.stringify({ mode: "first-party" }) }, afterGateway);
-  expect(back.status).toBe(200);
+  expectStatus(back, 200);
   expect(back.body).toMatchObject({ ok: true, mode: "first-party", applied: true, gatewayRemoved: true });
   expect(settings().env?.HTTPS_PROXY).toBe(expectedProxyUrl(10200));
   const afterBack = await dispatch("/api/claude-desktop/status", {}, afterGateway);
@@ -223,7 +239,7 @@ test("POST /api/claude-desktop/apply defaults to gateway; first-party is explici
 
 test("native toggle: enable applies gateway by default and never writes first-party env", async () => {
   const enabled = await dispatch("/api/native-integrations/claude-desktop", { method: "PUT", body: JSON.stringify({ enabled: true }) });
-  expect(enabled.status).toBe(200);
+  expectStatus(enabled, 200);
   expect(enabled.body).toMatchObject({ ok: true, state: "current", desiredEnabled: true });
   expect(enabled.body.message).not.toContain("suspend");
   expect(existsSync(join(claudeDir, "settings.json"))).toBe(false);
@@ -235,7 +251,7 @@ test("native toggle: explicit first-party enable warns about the account risk an
   const chosen = config({ claudeCode: { desktopMode: "first-party" } });
   writeFileSync(join(root, "config.json"), JSON.stringify(chosen));
   const enabled = await dispatch("/api/native-integrations/claude-desktop", { method: "PUT", body: JSON.stringify({ enabled: true }) }, chosen);
-  expect(enabled.status).toBe(200);
+  expectStatus(enabled, 200);
   expect(enabled.body).toMatchObject({ ok: true, changed: true, state: "current", desiredEnabled: true });
   expect(enabled.body.message).toContain("suspend the account");
   expect(settings().env?.HTTPS_PROXY).toBe(expectedProxyUrl(10200));
@@ -245,7 +261,7 @@ test("native toggle: explicit first-party enable warns about the account risk an
   expect(desktop?.state).toBe("current");
 
   const disabled = await dispatch("/api/native-integrations/claude-desktop", { method: "PUT", body: JSON.stringify({ enabled: false }) }, chosen);
-  expect(disabled.status).toBe(200);
+  expectStatus(disabled, 200);
   expect(disabled.body).toMatchObject({ ok: true, changed: true, state: "absent", desiredEnabled: false });
   expect(settings().env?.HTTPS_PROXY).toBeUndefined();
 });
@@ -254,7 +270,7 @@ test("native first-party ON pins the committed mode on a stale live config", asy
   writeFileSync(join(root, "config.json"), JSON.stringify(config({ claudeCode: { desktopMode: "first-party" } })));
   const live = config({ claudeCode: { desktopMode: "gateway" } });
   const enabled = await dispatch("/api/native-integrations/claude-desktop", { method: "PUT", body: JSON.stringify({ enabled: true }) }, live);
-  expect(enabled.status).toBe(200);
+  expectStatus(enabled, 200);
   expect(enabled.body).toMatchObject({ ok: true, state: "current", desiredEnabled: true });
   expect(live.claudeCode?.desktopMode).toBe("first-party");
   expect(firstPartyDesired(live).desktop).toBe(true);
@@ -262,7 +278,7 @@ test("native first-party ON pins the committed mode on a stale live config", asy
 
 test("native toggle: enabling into explicit first-party pivots an applied gateway profile and saves the mode marker", async () => {
   const gateway = await dispatch("/api/claude-desktop/apply", { method: "POST", body: JSON.stringify({ mode: "gateway" }) });
-  expect(gateway.status).toBe(200);
+  expectStatus(gateway, 200);
   const afterGateway = JSON.parse(readFileSync(join(root, "config.json"), "utf8")) as OcxConfig;
   expect(afterGateway.claudeCode?.desktopProfile?.appliedFingerprint).toBeTruthy();
   // The operator chose first-party in config while the gateway profile is still on disk.
@@ -270,7 +286,7 @@ test("native toggle: enabling into explicit first-party pivots an applied gatewa
   writeFileSync(join(root, "config.json"), JSON.stringify(chosen));
 
   const enabled = await dispatch("/api/native-integrations/claude-desktop", { method: "PUT", body: JSON.stringify({ enabled: true }) }, chosen);
-  expect(enabled.status).toBe(200);
+  expectStatus(enabled, 200);
   expect(enabled.body).toMatchObject({ ok: true, changed: true, state: "current", desiredEnabled: true });
   expect(settings().env?.HTTPS_PROXY).toBe(expectedProxyUrl(10200));
   const saved = JSON.parse(readFileSync(join(root, "config.json"), "utf8")) as OcxConfig;
@@ -287,7 +303,7 @@ test("native toggle: enabling into gateway saves the gateway mode marker like th
   const chosen = config({ claudeCode: { intercept: { enabled: false } } });
   writeFileSync(join(root, "config.json"), JSON.stringify(chosen));
   const enabled = await dispatch("/api/native-integrations/claude-desktop", { method: "PUT", body: JSON.stringify({ enabled: true }) }, chosen);
-  expect(enabled.status).toBe(200);
+  expectStatus(enabled, 200);
   expect(enabled.body).toMatchObject({ ok: true, state: "current", message: "Claude Desktop integration enabled." });
   expect(existsSync(join(claudeDir, "settings.json"))).toBe(false);
   const saved = JSON.parse(readFileSync(join(root, "config.json"), "utf8")) as OcxConfig;
@@ -320,7 +336,7 @@ test("first-party apply rebases the Claude hand-edit guard after its scoped mode
   armClaudeCodeBaseline(snapshot);
 
   const applied = await dispatch("/api/claude-desktop/apply", { method: "POST", body: JSON.stringify({ mode: "first-party" }) }, snapshot);
-  expect(applied.status).toBe(200);
+  expectStatus(applied, 200);
   expect(applied.body).toMatchObject({ mode: "first-party", saved: true });
 
   const handEdited = JSON.parse(readFileSync(join(root, "config.json"), "utf8")) as OcxConfig;
@@ -498,7 +514,7 @@ for (const surface of ["cli", "api"] as const) {
   for (const failure of ["intercept_disabled", "foreign_env", "unreadable", "ca_unavailable"] as const) {
     test(`${surface} failed first-party ${failure} leaves the gateway profile active`, async () => {
       const gateway = await dispatch("/api/claude-desktop/apply", { method: "POST", body: JSON.stringify({ mode: "gateway" }) });
-      expect(gateway.status).toBe(200);
+      expectStatus(gateway, 200);
       const saved = JSON.parse(readFileSync(join(root, "config.json"), "utf8")) as OcxConfig;
       const appliedFingerprint = saved.claudeCode!.desktopProfile!.appliedFingerprint!;
       const before = inspectDesktop3pConfigLibrary({ appliedFingerprint });
@@ -536,7 +552,7 @@ test("CLI gateway apply refusal leaves the first-party connection intact", async
 });
 
 test("a refused gateway cleanup restores the previous settings env", async () => {
-  expect((await dispatch("/api/claude-desktop/apply", { method: "POST", body: JSON.stringify({ mode: "gateway" }) })).status).toBe(200);
+  expectStatus(await dispatch("/api/claude-desktop/apply", { method: "POST", body: JSON.stringify({ mode: "gateway" }) }), 200);
   const saved = JSON.parse(readFileSync(join(root, "config.json"), "utf8")) as OcxConfig;
   mkdirSync(claudeDir, { recursive: true });
   const before = { theme: "dark", env: { FOO: "keep" } };
@@ -544,14 +560,14 @@ test("a refused gateway cleanup restores the previous settings env", async () =>
   const result = await dispatch("/api/claude-desktop/apply", { method: "POST", body: JSON.stringify({ mode: "first-party" }) }, saved, {
     removeDesktop3pStandardPivot: () => ({ ok: false, changed: false, kind: "unsafe", libraryPath: library, reason: "metadata_unreadable" }),
   });
-  expect(result.status).toBe(409);
+  expectStatus(result, 409);
   expect(result.body.code).toBe("claude_desktop_gateway_removal_failed");
   expect(settings()).toEqual(before);
   expect(inspectDesktop3pConfigLibrary({ appliedFingerprint: saved.claudeCode!.desktopProfile!.appliedFingerprint }).kind).toBe("gateway_ours");
 });
 
 test("a completed standard pivot keeps first-party active when credential cleanup is incomplete", async () => {
-  expect((await dispatch("/api/claude-desktop/apply", { method: "POST", body: JSON.stringify({ mode: "gateway" }) })).status).toBe(200);
+  expectStatus(await dispatch("/api/claude-desktop/apply", { method: "POST", body: JSON.stringify({ mode: "gateway" }) }), 200);
   const saved = JSON.parse(readFileSync(join(root, "config.json"), "utf8")) as OcxConfig;
   const result = await dispatch("/api/claude-desktop/apply", { method: "POST", body: JSON.stringify({ mode: "first-party" }) }, saved, {
     removeDesktop3pStandardPivot: options => {
@@ -560,7 +576,7 @@ test("a completed standard pivot keeps first-party active when credential cleanu
       return { ok: false, changed: true, kind: "cleanup_incomplete", libraryPath: library, residualPaths: ["fixture-residue"] };
     },
   });
-  expect(result.status).toBe(500);
+  expectStatus(result, 500);
   expect(result.body.reason).toBe("cleanup_incomplete");
   expect(inspectDesktopFirstParty(config()).applied).toBe(true);
   const after = JSON.parse(readFileSync(join(root, "config.json"), "utf8")) as OcxConfig;
@@ -586,7 +602,7 @@ for (const surface of ["api", "native", "cli"] as const) {
       const result = surface === "api"
         ? await dispatch("/api/claude-desktop/apply", { method: "POST", body: JSON.stringify({ mode: "gateway" }) }, initial)
         : await dispatch("/api/native-integrations/claude-desktop", { method: "PUT", body: JSON.stringify({ enabled: true }) }, initial);
-      expect(result.status).toBe(500);
+      expectStatus(result, 500);
       if (surface === "api") expect(result.body).toMatchObject({ applied: true, saved: true, mode: "gateway" });
       else expect(result.body.message).toContain("Gateway applied");
     }
@@ -634,9 +650,9 @@ test("a deleted token flips an applied env to stale and inspection does not recr
 
 test("the status routes never mint the proxy token", async () => {
   const status = await dispatch("/api/claude-desktop/status");
-  expect(status.status).toBe(200);
+  expectStatus(status, 200);
   const list = await dispatch("/api/native-integrations");
-  expect(list.status).toBe(200);
+  expectStatus(list, 200);
   expect(existsSync(claudeInterceptProxyTokenPath(root))).toBe(false);
 });
 
@@ -645,7 +661,7 @@ test("first-party apply and native enable refuse a changed configured port befor
   writeFileSync(join(root, "config.json"), JSON.stringify(live));
   for (const [path, body] of [["/api/claude-desktop/apply", { mode: "first-party" }], ["/api/native-integrations/claude-desktop", { enabled: true }]] as const) {
     const result = await dispatch(path, { method: path.endsWith("apply") ? "POST" : "PUT", body: JSON.stringify(body) }, live);
-    expect(result.status).toBe(409);
+    expectStatus(result, 409);
     expect(result.body.code).toBe("port_mismatch");
     expect(result.body.bound).toBe(10200);
     expect(result.body.configured).toBe(10300);

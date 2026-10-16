@@ -149,10 +149,6 @@ opencodex 也能為 Codex 認證管理 **ChatGPT 帳號池**。新增多個 Chat
 <td>感謝 <a href="https://www.orcarouter.ai/?utm_source=opencodex&utm_medium=readme">OrcaRouter</a> 贊助本專案！OrcaRouter 是面向正式環境的 OpenAI 相容 AI 閘道：自適應路由會為每則提示評分，送到達到你門檻的模型；自動 failover；路由規則即程式碼；供應商原價零加價並含 prompt 快取；每次呼叫都有 guardrail、agent 防火牆與請求日誌，涵蓋 200+ 模型。在「新增供應商」選擇器選 <code>OrcaRouter</code>，或執行 <code>ocx provider add orcarouter</code>；<code>orcarouter/auto</code> 就是自適應路由器。</td>
 </tr>
 <tr>
-<td width="180"><a href="https://www.packyapi.com/register?aff=k5KT"><img src="../assets/sponsors/packycode.png" alt="PackyCode" width="150"></a></td>
-<td>感謝 <a href="https://www.packyapi.com/register?aff=k5KT">PackyCode</a> 贊助本專案！PackyCode 是穩定、高效能的 API 轉送供應商，提供 Claude Code、Codex、Gemini 等轉送服務。具備自動 failover、智慧路由與無限並行，讓 AI 成為真正的生產力工具。<a href="https://www.packyapi.com/register?aff=k5KT">透過此連結註冊</a>即可開始！在「新增供應商」選擇器選 <code>PackyCode</code>，或執行 <code>ocx provider add packycode</code>。<br><sub>PackyCode 是一家稳定、高效的 API 中转服务商，提供 Claude Code、Codex、Gemini 等多种中转服务。具备自动故障转移、智能路由和无限并发等多种功能，让 AI 编程成为真正的生产力工具。<a href="https://www.packyapi.com/register?aff=k5KT">点此链接注册</a>，立即开始使用！</sub></td>
-</tr>
-<tr>
 <td width="180"><a href="https://tokenlab.sh/r/OPENCODEX"><picture><source media="(prefers-color-scheme: dark)" srcset="../assets/sponsors/tokenlab-dark.png"><img src="../assets/sponsors/tokenlab-light.png" alt="TokenLab" width="150"></picture></a></td>
 <td>感謝 <a href="https://tokenlab.sh/r/OPENCODEX">TokenLab</a> 贊助本專案！TokenLab 為程式設計智慧體提供統一的多模型 API，一把 API Key 即可接入主流模型，支援 OpenAI Responses、Chat Completions、Anthropic Messages 和 Gemini 原生 API 格式，以及串流輸出和工具呼叫。同時提供 MCP 伺服器和 Agent Skills，方便接入現有工作流程；交付模式可選，按量付費。在「新增供應商」選擇器選 <code>TokenLab</code>，或執行 <code>ocx provider add tokenlab</code>。</td>
 </tr>
@@ -307,7 +303,7 @@ OpenCodex 在下列類別中追蹤行程保留狀態。每一類都有文件化�
   儲存為固定，不會被淘汰。
 - **4 個觀測緩衝區**（翻譯累加器、image/OAuth/Grok 尾端）會
   監控進行中的位元組壓力，但不淘汰。
-- **28 個狀態儲存註冊**負責到期清掃（間隔 60 秒）與
+- **31 個狀態儲存註冊**負責到期清掃（間隔 60 秒）與
   設定世代調和，以移除過期的供應商／帳號鍵。
 - **路徑與指紋 memo**（工作區中繼資料、強化身分、安裝
   salt、mode-hint 能力）使用插入順序 LRU 上限（8–128 筆）。
@@ -437,8 +433,8 @@ CLI／設定／管理 API 參考——由 [`docs-site/`](../docs-site) 建置，
 
 ## 開發
 
-從原始碼開發需要 `PATH` 上有 `bun` CLI。這與已發布 npm
-套件打包的 Bun 執行環境不同，後者只給已安裝的 `ocx` 命令使用。
+從原始碼開發需要 `PATH` 上有 `bun` CLI。已發布的 npm 套件為已安裝的 `ocx` 命令打包自己的
+Bun 執行環境；套件指令碼也可能透過這個打包依賴解析 Bun。
 
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git

@@ -1,8 +1,8 @@
 /**
  * Which Anthropic OAuth routes take the managed native Messages lane (PF-10): the
  * `managedMessagesNativeOAuth` switch and its dependency on `managedMessagesNative`, the
- * `anthropic` provider on `api.anthropic.com` only, a pooled account set declining with
- * `oauth-account-pool`, and a planner that judges all of it from config without touching the
+ * `anthropic` provider on `api.anthropic.com` only, pooled accounts admitted at dispatch,
+ * and a planner that judges eligibility from config without touching the
  * OAuth store or the network.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -91,10 +91,10 @@ describe("OAuth native Messages eligibility", () => {
     }
   });
 
-  test("a pooled account set declines: the opt-in pool from config, the quorum from the sender", () => {
+  test("a pooled account set is native: selection and recovery are dispatch-owned", () => {
     const pooled = config({ ...BOTH, anthropicAccountPool: { enabled: true } } as Partial<OcxConfig>);
-    expect(nativeMessagesDeclineReason(route(), BODY, pooled)).toBe("oauth-account-pool");
-    expect(nativeMessagesDeclineReason(route(), BODY, config(BOTH), { oauthFailoverQuorum: true })).toBe("oauth-account-pool");
+    expect(nativeMessagesDeclineReason(route(), BODY, pooled)).toBeUndefined();
+    expect(nativeMessagesDeclineReason(route(), BODY, config(BOTH), { oauthFailoverQuorum: true })).toBeUndefined();
     expect(nativeMessagesDeclineReason(route(), BODY, config(BOTH), { oauthFailoverQuorum: false })).toBeUndefined();
   });
 });
@@ -106,9 +106,9 @@ describe("the planner judges OAuth from config alone", () => {
     expect(existsSync(getAuthStorePath())).toBe(false);
   });
 
-  test("a configured pool previews as oauth-account-pool", () => {
+  test("a configured pool previews native without reading account state", () => {
     const pooled = config({ ...BOTH, anthropicAccountPool: { enabled: true } } as Partial<OcxConfig>);
     const plan = buildProtocolPlanSnapshot(pooled, { model: "anthropic/claude-o", inbound: "messages", features: [] });
-    expect(plan.candidates[0]).toMatchObject({ nativeEligible: false, declineReasons: ["oauth-account-pool"] });
+    expect(plan.candidates[0]).toMatchObject({ nativeEligible: true, declineReasons: [] });
   });
 });

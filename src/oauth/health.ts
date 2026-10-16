@@ -1,7 +1,8 @@
+import { isAnthropicInstanceId } from "../providers/anthropic-instance-id";
 import type { MainAccountHardLockStatus } from "../codex/main-account-hard-lock";
 import type { MainAccountExternalUsageWarning } from "../codex/main-account-external-usage";
 import { getCodexAccountHealthSnapshot, type CodexCooldownSource } from "../codex/routing";
-import { getAnthropicAccountHealthSnapshot } from "./anthropic-routing";
+import { anthropicRoutingFor } from "./anthropic-routing";
 import { isAccountNeedsReauth } from "../codex/account-runtime-state";
 import { getCodexAccountCredential, listCodexAccountIds, readCodexAccountRecord } from "../codex/account-store";
 import { MAIN_CODEX_ACCOUNT_ID } from "../codex/main-account";
@@ -10,7 +11,7 @@ import { LOCAL_MANAGEMENT_READ_PATHS } from "../lib/local-management-capability"
 import { maskAccountId } from "../lib/privacy";
 import { findLiveProxy } from "../server/proxy-liveness";
 import { fetchBoundLocalManagementRead } from "../server/local-management-read-client";
-import { loadAuthStore, peekAuthStore, peekOAuthRefreshIntent, readOAuthRefreshIntent } from "./store";
+import { accountNeedsReauthForStatus, loadAuthStore, peekAuthStore, peekOAuthRefreshIntent, readOAuthRefreshIntent } from "./store";
 import type { ProviderAccount } from "./types";
 
 export type OAuthAccountHealth =
@@ -207,12 +208,13 @@ export function projectStoredOAuthAccountHealth(
   now = Date.now(),
   opts: { observeOnly?: boolean } = {},
 ): OAuthAccountHealth {
-  const anthropicSnap = provider === "anthropic"
-    ? getAnthropicAccountHealthSnapshot(account.id, now)
+  const anthropicSnap = isAnthropicInstanceId(provider)
+    ? anthropicRoutingFor(provider).getAnthropicAccountHealthSnapshot(account.id, now)
     : null;
+  const needsReauth = accountNeedsReauthForStatus(provider, account, now);
   return projectOAuthAccountHealth({
-    needsReauth: account.needsReauth === true,
-    reauthReason: account.needsReauth === true
+    needsReauth,
+    reauthReason: needsReauth
       ? (account.needsReauthReason ?? "refresh_failed")
       : undefined,
     cooldownUntilMs: anthropicSnap?.cooldownUntil,

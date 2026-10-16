@@ -98,7 +98,8 @@ const PAGES = [
     path: "readme/README.ru.md",
     retained: /(\d+) удерживаемых хранилищ/,
     observed: /(\d+) наблюдаемых буфера/,
-    stateStores: /(\d+) регистраций state-store/,
+    // Match the shared stem: the noun's ending follows the count (1 регистрация, 2 регистрации, 5 регистраций).
+    stateStores: /(\d+) регистраци[яий] state-store/,
     totalSentence: "удерживаемое процессом",
   },
   {

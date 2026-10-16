@@ -181,7 +181,7 @@ describe("file-size ratchet: scan filter", () => {
 
     // Prefix and exact exclusions. gui/dist without a trailing slash is listed
     // in the contract alongside gui/dist/ children.
-    expect(isScannedPath("devlog/_plan/260914_godfile_round2/010.md")).toBe(false);
+    expect(isScannedPath("devlog/_fin/260914_godfile_round2/010.md")).toBe(false);
     expect(isScannedPath("assets/banner.png")).toBe(false);
     expect(isScannedPath("docs-site/public/favicon.png")).toBe(false);
     expect(isScannedPath("docs-site/src/assets/og.png")).toBe(false);

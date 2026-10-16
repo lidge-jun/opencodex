@@ -162,16 +162,31 @@ describe("deletePath with a selector", () => {
     expect(deletePath({ providers: [OURS, THEIRS] }, SELECT, created).doc).toEqual({ providers: [THEIRS] });
   });
 
-  test("a leaf inside a selected element is removed without touching the element", () => {
+  test("a leaf inside a selected element keeps an element we did not create", () => {
+    const path = ["providers", "[id=opencodex]", "name"];
+    expect(deletePath({ providers: [{ id: "opencodex", name: "X" }] }, path, new Set(["providers"])).doc)
+      .toEqual({ providers: [{ id: "opencodex" }] });
+  });
+
+  test("an element we seeded is pruned once only its selector fields remain", () => {
+    // DSH's `- id: llm-pi-ai` profile row: an `{ id }` husk left behind is residue, not the user's.
     const path = ["providers", "[id=opencodex]", "name"];
     const created = new Set(["providers", "providers\u0000[id=opencodex]"]);
-    // The seeded element keeps its selector field, so it is never empty and the prune walk
-    // stops at it. No client owns a leaf inside a selected element today; when one does, it
-    // decides whether a `{ id }` husk is residue worth a dedicated rule.
-    expect(deletePath({ providers: [{ id: "opencodex", name: "X" }] }, path, created).doc)
-      .toEqual({ providers: [{ id: "opencodex" }] });
+    expect(deletePath({ providers: [{ id: "opencodex", name: "X" }] }, path, created).doc).toEqual({});
+    expect(deletePath({ providers: [{ id: "opencodex", name: "X" }, THEIRS] }, path, created).doc)
+      .toEqual({ providers: [THEIRS] });
+    // Anything else in the element is someone else's, so the element stays.
     expect(deletePath({ providers: [{ id: "opencodex", name: "X", extra: 1 }] }, path, created).doc)
       .toEqual({ providers: [{ id: "opencodex", extra: 1 }] });
+  });
+
+  test("a sequence root survives a leading selector in both directions", () => {
+    const path = ["[id=llm-pi-ai]", "config", "providers", "opencodex"];
+    const rows = [{ id: "ui-chat", config: { view: "detailed" } }];
+    const merged = setPath(rows, path, { api: "openai-responses" });
+    expect(merged).toEqual([...rows, { id: "llm-pi-ai", config: { providers: { opencodex: { api: "openai-responses" } } } }]);
+    const created = new Set(["[id=llm-pi-ai]", "[id=llm-pi-ai]\u0000config", "[id=llm-pi-ai]\u0000config\u0000providers"]);
+    expect(deletePath(merged, path, created)).toEqual({ doc: rows, removed: true });
   });
 });
 

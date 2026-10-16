@@ -1,6 +1,10 @@
+import type { SupervisionEvidence } from "../service/desktop-supervision.mjs";
+
 export declare function planUpdateRuntimeHandling(input: {
   ownership: { owner: string; installId: string; consentGeneration: number } | null;
   ownershipUnknown?: boolean;
+  /** Fresh evidence or the operation's supervision latch verdict. */
+  supervision?: SupervisionEvidence | boolean;
   serviceInstalled: boolean;
 }): {
   mayReplacePackage: boolean;
@@ -13,6 +17,8 @@ export declare function planStoppedRuntimeRecovery(input: {
   stopAttempted: boolean;
   ownership: { owner: string; installId: string; consentGeneration: number } | null;
   ownershipUnknown?: boolean;
+  /** Fresh evidence or the operation's supervision latch verdict. */
+  supervision?: SupervisionEvidence | boolean;
   sameOwner: boolean;
   liveness: "live" | "dead" | "unknown";
   serviceInstalled: boolean;

@@ -10,6 +10,14 @@ async function requireLiveProxy() {
     console.error("Proxy is not running. Start it with: ocx start");
     process.exit(1);
   }
+  if (live.role === "client") {
+    // Debug capture is the serving proxy's; a connected client has no management API (#6957).
+    const { readLinkChildContext, linkChildRefusal } = await import("./link-child");
+    const link = readLinkChildContext();
+    console.error(link ? linkChildRefusal(link, "ocx debug")
+      : "This listener runs in the client role and has no management API. Run this command on its serving hub. No request was sent.");
+    process.exit(1);
+  }
   return live;
 }
 

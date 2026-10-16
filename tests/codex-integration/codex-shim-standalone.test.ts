@@ -4,10 +4,12 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } fro
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildUnixCodexShim, buildWindowsCodexShim, buildWindowsPowerShellCodexShim } from "../../src/codex/shim-templates";
-import { prependPath } from "../helpers/codex-shim-install-fixture";
+import { isolateCodexShimEnvironment, prependPath } from "../helpers/codex-shim-install-fixture";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
 import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
+
+isolateCodexShimEnvironment();
 
 describe("standalone shim command generation (#6276)", () => {
   test("Unix invokes the executable directly without a virtual CLI entrypoint", () => {
@@ -89,7 +91,7 @@ exit 7
     expect(result.status, `${result.signal ?? ""}: ${result.stderr}`).toBe(0);
     const installed = JSON.parse(result.stdout);
     expect(installed.installed, installed.message).toBe(true);
-    return { wrapper, env, ensureFile, probeEnvFile };
+    return { wrapper: join(home, "bin", "codex"), env, ensureFile, probeEnvFile };
   }
 
   test("installs through the compiled probe and confines BUN_BE_BUN to its supervisor", () => {

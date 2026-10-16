@@ -306,13 +306,14 @@ describe("the Responses passthrough adapter", () => {
     } as OcxProviderConfig;
   }
 
-  function outboundInput(provider: OcxProviderConfig, cellId: string): Record<string, unknown>[] {
+  function outboundInput(provider: OcxProviderConfig, cellId: string, compact = false): Record<string, unknown>[] {
     const request = createResponsesPassthroughAdapter(provider).buildRequest({
       modelId: "glm-4.7",
       context: { messages: [] },
       stream: true,
       options: {},
       _rawBody: nextTurnBody(cellId),
+      _compactionRequest: compact,
       _reasoningReplayScope: replayScope(),
     }, { headers: new Headers() });
     return (JSON.parse(request.body) as { input: Record<string, unknown>[] }).input;
@@ -324,6 +325,15 @@ describe("the Responses passthrough adapter", () => {
     expect(input.some(item => item.type === "web_search_call")).toBe(false);
     expect(input[1]).toMatchObject({ type: "function_call", call_id: "call_1", name: "web_search" });
     expect(input[2]).toMatchObject({ type: "function_call_output", call_id: "call_1", output: "opencodex 2.50.0 shipped" });
+  });
+
+  test("portable compaction keeps bridge-restored results instead of replacing them with metadata", async () => {
+    const cellId = await runBridgedMixedLeg(GATEWAY_BASE_URL);
+    const input = outboundInput(providerFixture(true), cellId, true);
+    expect(input.some(item => item.type === "web_search_call")).toBe(false);
+    expect(input[1]).toMatchObject({ type: "function_call", call_id: "call_1", name: "web_search" });
+    expect(input[2]).toMatchObject({ type: "function_call_output", call_id: "call_1", output: "opencodex 2.50.0 shipped" });
+    expect(JSON.stringify(input)).not.toContain("Historical hosted web search metadata");
   });
 
   test("leaves the hosted cell alone when the provider has not opted in", async () => {

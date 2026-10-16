@@ -195,15 +195,14 @@ describe("POST /api/injection-model/suggest", () => {
   });
 });
 
-describe("buildRoleProposals alwaysProposeEffort", () => {
-  test("changes only the effort of a role that carries none", () => {
-    const classified = classifyRoleModelCandidates([{ model: "m", unitPrice: 1, efforts: ["low", "medium", "high"] }]);
+describe("buildRoleProposals effort", () => {
+  test("proposes an effort for a role that carries none, and none for a model without a ladder", () => {
     const sizing = new Map([["r", { sizing: { tier: "fast" as const, effort: "exhaustive" as const, rationale: "a", moveUpIf: "b", moveDownIf: "c" } }]]);
     const roles = [{ role: "r", model: null, effort: null }];
-    const [plain] = buildRoleProposals(roles, sizing, classified);
-    const [always] = buildRoleProposals(roles, sizing, classified, { alwaysProposeEffort: true });
-    expect(plain).toMatchObject({ proposedModel: "m", proposedEffort: null });
-    expect(always).toEqual({ ...plain!, proposedEffort: "high" } as typeof always);
+    const [laddered] = buildRoleProposals(roles, sizing, classifyRoleModelCandidates([{ model: "m", unitPrice: 1, efforts: ["low", "medium", "high"] }]));
+    const [bare] = buildRoleProposals(roles, sizing, classifyRoleModelCandidates([{ model: "m", unitPrice: 1, efforts: [] }]));
+    expect(laddered).toMatchObject({ proposedModel: "m", proposedEffort: "high" });
+    expect(bare).toMatchObject({ proposedModel: "m", proposedEffort: null });
   });
 });
 

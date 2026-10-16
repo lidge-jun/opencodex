@@ -65,7 +65,7 @@ Authorization: Bearer <admin-token>
 | `PUT /api/grok/selection` | 제외할 Grok 모델을 영속화합니다 | 400 잘못되었거나 너무 큰 선택 |
 | `POST /api/grok/apply` | 관리형 동기화를 통해 영속화된 Grok 구성을 적용합니다 | 409 `grok_apply_busy`; 400/500 적용 실패 |
 | `GET /api/grok/reset-coupons?accountId=...` | 활성 또는 지정된 xAI 계정의 남은 Grok billing reset 토큰과 유효 기간을 읽습니다 | 400 누락된 account; 401 인증되지 않음; 502 upstream gRPC-Web 오류 |
-| `POST /api/grok/reset-coupons/consume` | 사용할 수 있는 reset coupon을 교환합니다. 본문은 `{ accountId?, tokenId?, operationId? }`. 선택적 `operationId`(UUIDv4)는 교환을 멱등하게 만듭니다 — 같은 id를 반복하면 이중 교환 없이 저장된 결과를 재생합니다. | 400 잘못된 JSON/UUID; 401 인증되지 않음; 409 `identity_mismatch`; 502 upstream 오류; 503 ledger 용량 |
+| `POST /api/grok/reset-coupons/consume` | 사용할 수 있는 reset coupon을 교환합니다. 본문은 `{ accountId?, tokenId?, operationId? }`. 선택적 `operationId`(UUIDv4)는 교환을 멱등하게 만듭니다 — 같은 id를 반복하면 이중 교환 없이 저장된 결과를 재생합니다. | 400 잘못된 JSON/UUID; 401 인증되지 않음; 409 `operation_id_owned_by_another_account` / `coupon_unavailable` / `operation_token_mismatch` / `operation_state_changed` / `attempt_in_progress` / `attempt_unresolved`; 502 upstream 오류; 503 ledger 용량 / `ledger_unavailable`; 500 `attempt_mark_failed` |
 | `GET /api/anthropic/reset-grants?accountId=...` | Anthropic OAuth 계정 하나의 Claude 사용량 리셋 grant를 읽습니다. 사용 가능 여부, grant별 남은 리셋 수와 유효 기간, 초기화하는 한도, 아직 다시 보낼 수 있는 미확인 시도를 함께 돌려줍니다 | 400 일치하는 계정 없음; 401 재로그인 필요; 502 upstream 응답 없음 |
 | `POST /api/anthropic/reset-grants/consume` | 리셋 grant 하나를 사용합니다. 본문은 `{ accountId, grantId, operationId }`이고, `operationId`(UUIDv4)는 upstream 요청 ID로 그대로 전송되므로 같은 값을 다시 보내면 같은 요청을 재시도합니다. 대시보드 세션이 필요합니다. | 400 잘못된 본문; 401 재로그인 필요; 403 `session_required`; 409 `grant_not_usable`, `in_flight`, `unresolved_prior_operation`, `unknown_outcome_expired`, `operation_identity_mismatch`; 500 `journal_write_failed`; 502 `unknown_outcome`; 503 저널 사용 중, 열 수 없음, 또는 가득 참 |
 | `GET, PUT /api/claude-desktop` | Claude Desktop 라우팅/네이티브 프로필을 읽거나 저장합니다 | 400 잘못되었거나 사용할 수 없는 할당 |
@@ -73,11 +73,13 @@ Authorization: Bearer <admin-token>
 | `GET /api/claude-desktop/status` | 저장된 프로필과 적용된 프로필, Desktop 상태를 확인합니다 | 400 상태 읽기 실패 |
 | `GET, PUT /api/claude-code` | Claude Code gateway, auth-mode, model-map, context, agent, sidecar 설정을 읽거나 갱신합니다 | 400 잘못된 필드 또는 형태 |
 
-대시보드는 **Providers > xAI Grok > Accounts**에서 두 coupon 경로를 모두 사용합니다. 로그인한 각
-계정 행에는 남은 coupon 개수가 표시된 티켓 배지가 있으며, 이 배지는 유효 기간을 나열하고 만료가
-가장 가까운 coupon을 교환하는 대화 상자를 엽니다. 대화 상자는 클라이언트가 생성한 `operationId`를
-보내며, 재시도하는 대신 타임아웃 후 전송을 중단합니다. 저널 기록이 아직 열린 교환이 다시 실행되기
-때문입니다. `ocx account grok-reset-coupons`는 터미널 대응 명령으로 그대로 남습니다.
+`tokenId`를 보내면 비어 있지 않은 문자열이어야 합니다. 잘못된 값은 자격 증명을 읽거나 원장을 열기 전에 `400 invalid_token_id`로 거절됩니다. 30일 보존 기간 안에서 같은 `operationId` 재시도가 `accountId`를 생략하면 활성 계정이 바뀌어도 기록된 계정을 사용합니다. 실행 가능한 `open` 재시도가 `tokenId`를 생략하면 기록된 토큰을 사용합니다. 다른 계정이나 토큰을 명시하면 계속 거절됩니다. 대시보드는 확정 실패 뒤 해당 대기 요청에서 생긴 추측성 보류를 해제하여 새 작업을 명시적으로 확인할 수 있게 합니다. 실제 불확정 결과는 계속 보류합니다.
+
+교환 전에 ledger에 시도를 기록해 한 요청만 교환을 진행합니다. upstream의 교환 성공 응답이 확인된 경우에만 `redeemed`를 기록하며, 목록에서 쿠폰이 사라졌다는 사실만으로 이 operation의 성공을 판단하지 않습니다. 타임아웃이나 결과 저장 실패 후 재시도는 다시 교환하지 않고 가용성만 조회한 뒤 `attempt_unresolved`를 반환하며, 최근 시도는 `attempt_in_progress`를 반환합니다. 늦게 끝난 검사로 인한 거절은 아직 `open`인 operation에만 기록합니다. 같은 트랜잭션 안에서 계정과 토큰이 일치하는 확정된 최종 결과는 원래 코드와 HTTP 200으로 재생합니다. 결과가 미확정이거나 계정·토큰이 일치하지 않으면 `operation_state_changed`를 반환하며 같은 operation ID를 보존해 복구해야 합니다. ledger를 읽거나 잠글 수 없으면 교환 없이 `ledger_unavailable`을 반환합니다.
+
+결과를 확인하지 못한 사용 요청은 HTTP 502와 `error.code: "attempt_unresolved"`, 실제 `operationId`를 반환합니다. 이 ID를 보존하세요. 새 ID는 다른 작업을 시작합니다. CLI는 전송 전에 ID를 생성하고, 전송이나 응답이 불확실하면 같은 `--operation-id`를 보존하라는 안내를 출력합니다. 구버전 원장의 `open` 기록과 결과가 확인되지 않은 `redeem_failed` 기록은 불확정 상태로 격리되어 재사용 요청을 허용하지 않습니다.
+
+**Providers > xAI Grok > Accounts**의 계정별 티켓 배지에서 남은 쿠폰과 유효 기간을 확인합니다. 대화상자는 클라이언트가 생성한 `operationId`를 전송합니다. 전송이나 결과가 불확정이면 대시보드가 브라우저 탭 세션 동안 같은 시도를 보존하며, 대화상자를 닫았다 다시 열거나 페이지를 이동하거나 새로고침해도 유지합니다. 보존 기록은 요청을 보내기 전에 저장되고, 같은 `operationId`에 대한 확정 응답이 올 때만 해제됩니다. 새로고침은 GET만 보내고 추가 사용 POST를 허용하지 않습니다. `ocx account grok-reset-coupons`는 대응하는 터미널 명령입니다.
 
 Claude 사용량 리셋도 **Providers > Anthropic > Accounts**에서 같은 방식으로 씁니다. 로그인한
 계정 행마다 남은 리셋 수를 보여 주는 티켓 배지가 붙고, 대화상자에서 한 번 더 확인하면 리셋
@@ -313,6 +315,8 @@ OpenAI도 같은 규칙을 따르며, 스위치를 켠다고 별도의 922k 모�
 
 ### 시스템 수명 주기
 
+`POST /api/system/restart`는 본문이 없거나 `{}`이면 기본 60초 drain 유예 시간을 유지합니다. 관리 세션 또는 관리자 토큰을 사용하는 호출자는 `{"drainGraceMs":2000}`으로 짧은 유예 시간을 명시적으로 선택할 수 있습니다. 값은 1~60000밀리초의 정수여야 합니다. 잘못된 본문이나 값은 재시작을 시작하지 않고 400을 반환하며, 대상 프로세스에 한정된 로컬 재시작 capability는 이 옵션을 설정할 수 없습니다(403). 응답의 `drainTimeoutMs`는 처음 수락한 유예 시간을 나타내며 반복 호출은 기존 기한을 바꾸지 않습니다. 유예 시간에는 응답 전송 지연이 포함됩니다. 정리와 대체 프로세스 준비에는 각각 별도의 60초와 70초 예산이 유지됩니다. 중단된 요청이 이미 실행되었을 수 있으므로 재전송 전에 결과를 확인하세요. 자동 재전송은 추가되지 않습니다.
+
 | HTTP 메서드와 경로 | 목적 | 주요 오류 |
 | --- | --- | --- |
 | `GET /api/system/memory` | 프로세스, heap, stream, response-state, watchdog, active-turn의 스칼라 메트릭을 반환합니다 | — |
@@ -332,10 +336,10 @@ OpenAI도 같은 규칙을 따르며, 스위치를 켠다고 별도의 922k 모�
 | --- | --- | --- |
 | `GET, POST, DELETE /api/codex-auth/accounts` | Codex account를 나열/갱신하거나 삭제합니다. POST는 비활성화된 호환성 endpoint로만 유지되며, 성공한 DELETE는 `catalogRefreshPending`를 포함합니다. | POST는 항상 403 `manual_import_disabled`; DELETE 입력이 잘못되면 400 |
 | `PUT /api/codex-auth/accounts/alias` | 계정 alias를 설정하거나 지웁니다 | 400 잘못된 account/alias |
-| `PUT /api/codex-auth/accounts/pause` | 계정 하나를 일시 중지하거나 재개합니다 | 400 잘못된 account/state; 404 누락된 account |
+| `PUT /api/codex-auth/accounts/pause` | 계정과 동일한 로그인 정보를 가진 기존 메인/풀 항목을 수동으로 일시 중지하거나 재개합니다. `affectedAccountIds`를 반환합니다 | 400 잘못된 계정/상태; 404 계정 없음; 503 메인 계정의 로그인 정보가 사용 중이거나 읽을 수 없음 |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | quota가 소진된 account를 일시 중지합니다 | mutation-lock 실패는 503이 됩니다 |
 | `POST /api/codex-auth/accounts/clear-cooldown` | account 하나 또는 모든 account의 runtime cooldown을 지웁니다 | 400 잘못된 id |
-| `GET, PUT /api/codex-auth/active` | 활성 account를 읽거나 선택합니다 | 400 잘못되었거나 누락된 account; 409 paused/legacy-row 충돌 |
+| `GET, PUT /api/codex-auth/active` | 활성 account를 읽거나 선택합니다 | 400 잘못되었거나 누락된 account; 409 paused/legacy-row 충돌 또는 `account_selection_unavailable` |
 | `PUT /api/codex-auth/auto-switch` | `id`를 생략한 `{ threshold }`로 전역 임계값을, `{ id, threshold }`로 계정별 재정의 값을 설정합니다. `id: '__main__'`은 Codex Desktop 계정을 지정합니다. `id`가 지정된 경우 `threshold: null`은 재정의 값을 삭제하고 전역 임계값 상속을 복원합니다 | 400 잘못된 ID/임계값, 404 계정 없음 |
 | `PUT, PATCH /api/codex-auth/pool-strategy` | Codex account-pool 선택 전략을 업데이트합니다 | 400 잘못된 전략/구성 |
 | `PUT /api/codex-auth/failover` | account failover threshold를 설정합니다 | 400 잘못된 threshold |
@@ -346,6 +350,14 @@ OpenAI도 같은 규칙을 따르며, 스위치를 켠다고 별도의 922k 모�
 | `POST /api/codex-auth/login/code` | Codex 로그인 흐름용 수동 코드를 제출합니다 | 400 잘못된 흐름/code |
 | `POST /api/codex-auth/login/cancel` | `{ "flowId": "..." }`로 지정한 대기 중인 Codex 로그인만 취소합니다 | 400 흐름 ID 누락, 알 수 없음 또는 대기 중이 아님 |
 | `GET /api/codex-auth/login-status` | 흐름 또는 account 로그인 상태를 조회합니다. 새 계정 완료 시 복구가 필요할 때만 `catalogRefreshPending: true`를 포함합니다. | 알 수 없는 흐름은 `expired`로 보고되며, 활성 흐름이 없으면 `idle`로 보고됩니다 |
+
+`PUT /api/codex-auth/active`에는 `{ "accountId": "<id>" }`가 필요합니다. 선택을 지우려면
+`{ "accountId": null }`을 명시적으로 지정해야 합니다. 다른 프로세스가 저장된 계정을 변경했더라도
+현재 계정을 다시 선택하는 것은 명시적인 선택으로 처리됩니다. 서버는 관련 없는 저장된 설정을
+보존하고, 대시보드를 불러온 뒤 삭제되거나 일시 중지된 계정의 선택을 거부합니다. 저장된 구성을
+사용할 수 없거나 구성이 유효하지 않으면 기존 런타임 선택과 계정 어피니티는 변경되지 않습니다.
+설정을 다시 불러온 뒤 재시도하십시오. 성공 응답은 커밋된 선택을 나타냅니다. 기존 quota 및
+failover 규칙에 따라 고정이 해제될 수 있으며, `pinDrained`는 현재 알려진 고정 해제 사유를 나타냅니다.
 
 수동 소비가 `reset`으로 확인되면 같은 계정의 새 usage를 조회하여 기존 shared reset-derived
 쿨다운을 즉시 복구할 수 있습니다. 복구는 조건부입니다. 계정이 일시 정지되었거나 재인증이

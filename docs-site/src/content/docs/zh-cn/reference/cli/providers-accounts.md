@@ -15,7 +15,7 @@ description: 提供方配置、凭据、配额，以及模型目录命令。
 | 子命令 | 支持的标志 | 操作 |
 | --- | --- | --- |
 | `list` | `--json`, `--jsonl` | 列出已配置的提供方以及剩余的注册表条目。 `--jsonl` 为每个已配置的提供方输出一行 JSON 对象。 |
-| `add <name>` | `--adapter <adapter>`, `--base-url <url>`, `--api-key <key>`, `--default-model <model>`, `--set-default`, `--force`, `--json`, `--sync` | 添加一个注册表/自定义提供方。`--force` 会覆盖；`--sync` 会在有人类输出模式运行的代理上刷新配置。 |
+| `add <name>` | `--adapter <adapter>`, `--base-url <url>`, `--api-key <key>`, `--default-model <model>`, `--set-default`, `--force`, `--json`, `--sync` | 保存到本地。`--force` 允许覆盖；`--sync` 在 JSON 和普通输出模式下均会尝试同步。 |
 | `edit <name>` | 提供方字段标志，`--headers <json>`，`--json` | 在不替换密钥池的情况下，编辑经过校验的在线提供方字段。`--headers` 会合并自定义请求头；传入 `{}` 或 `-` 可清空。 |
 | `test <name>` | `--json` | 探测真实的上游模型端点。 |
 | `show <name>` | `--json` | 显示已屏蔽 API 密钥的配置。 |
@@ -25,6 +25,8 @@ description: 提供方配置、凭据、配额，以及模型目录命令。
 | `quota` | `--refresh`, `--json` | 读取提供方配额报告。 |
 | `presets` | `--json` | 列出仪表盘提供方预设。 |
 | `account-mode` | `pool`, `direct`, `--json` | 选择 Codex 账号的池化或直连路由。 |
+
+默认的 `add`、`remove` 和 `set-default` 修改本地配置。修改运行中的代理需加 `--live`，在线删除还需 `--yes`。`--sync --json` 同样会在保存后尝试同步；失败时保留保存结果，以非零状态退出，并返回 `needsSync: true`。`--live` 不能与 `--sync` 同用。pacing 和 snapshot/apply 操作见[英文指南](/reference/cli/providers-accounts/#snapshot-edit-and-apply-with-a-baseline)。
 
 ```bash
 ocx provider list --json
@@ -242,11 +244,7 @@ generic OAuth: { provider, autoSwitchThreshold: number | null, enabled: boolean,
 
 ### `ocx account login|reauth|code|cancel ...`
 
-在无头 shell 中运行基于浏览器或手动代码的账号认证。请使用
-`ocx account --help` 查看与提供方相关的命令形式。如果 Codex 账号登录已保存但模型目录刷新
-仍待完成，人类可读输出仍会成功退出，并在 stderr 打印固定的 `ocx sync` 恢复指引。使用
-`--json` 时 stdout 保持可解析，已完成的登录状态会包含 `catalogRefreshPending: true`，且不会
-打印人类可读警告。
+在无头 shell 中通过浏览器或手动代码完成账号认证。提供方对应的命令语法见 `ocx account --help`。即使 Codex 登录已保存，只要验证或模型目录刷新仍待完成，普通输出和 `--json` 都会返回退出码 1。已保存的登录信息会保留，不要仅因后续操作待完成就重新发起认证。目录刷新待完成时，普通输出会在 stderr 显示 `ocx sync` 指引；`--json` 则在可解析的 stdout 中保留状态和待完成标志，不混入提示文字。
 
 ### `ocx account remove <provider> <id|alias|main> --yes [--json]`
 
@@ -344,17 +342,15 @@ v1 恢复矩阵覆盖的是事务文件通过重命名发布后 OpenCodex 进程
 `disable` 和 `provider` 控制可见性；`selected` 控制提供方允许列表；`context` 控制提供方
 上下文上限；`shadow` 管理后台 shadow-call 拦截。
 
-这里提供仪表盘中所有逐模型操作，因此无头安装永远不需要 GUI 来管理目录。`add`、
-`remove` 和 `list-custom` 针对配置文件工作，并通过目录同步应用到正在运行的代理；
-其余命令会与在线管理 API 通信，并要求代理正在运行（`ocx start`，或已安装的服务）。
+`add` 和 `remove` 默认保存到本地；`--live` 修改运行中的代理。本地 `--json` 保存时若无代理，返回 `sync.status: "not-attempted"`、`needsSync: true`，退出码为 0。实际尝试的同步失败时保留保存结果，以非零码退出。`list-custom` 是本地列表。`display-name` 使用原始上游 ID，`order` 使用 picker 的 public ID。完整排列、featured 前缀与 native 顺序重置限制见[英文步骤](/reference/cli/providers-accounts/#display-names-and-picker-identities)。
 
 | 子命令 | 支持的标志 | 操作 |
 | --- | --- | --- |
 | `list` (默认) | `--provider <name>`, `--json` | 列出已配置提供方中预置的模型。 |
 | `live` | `--provider <name>`, `--json` | 读取运行中的目录，包括运行时发现的模型。各行会标记为 `native`/`routed`、`custom`，以及 `enabled`/`disabled`。 |
-| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>` | 注册一个提供方目录未公布的模型。 |
+| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>`, `--live`, `--json` | 在本地注册自定义模型，或使用 `--live` 在运行中的代理上注册。 |
 | `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--json` | 编辑自定义模型。`-` 会清空字段；`0` 会清空上下文窗口。 |
-| `remove <custom-id\|provider/modelId>` | `--yes` | 删除一个自定义模型。当 stdin 不是交互式终端时，必须提供 `--yes`。 |
+| `remove <custom-id\|provider/modelId>` | `--yes`, `--live`, `--json` | 删除自定义模型；使用 `--live` 或 `--json` 时必须加 `--yes`。 |
 | `list-custom` | `--json` | 显示所有自定义模型，以及其他子命令所使用的 `custom-id`。 |
 | `enable <provider/model\|native-model>` | `--native`, `--json` | 让一个模型对 Codex 可见。 |
 | `disable <provider/model\|native-model>` | `--native`, `--json` | 对 Codex 隐藏一个模型。 |

@@ -1,4 +1,5 @@
 import * as z from "zod/v4";
+import { anthropicAccountPoolSchema } from "./anthropic-account-pool";
 import { join } from "node:path";
 import { isValidProviderName } from "../provider-name";
 import {
@@ -43,8 +44,9 @@ import {
 import { getConfigDir } from "../paths";
 import { COMPACTION_TRIGGERS, validCompactionSourceModels } from "./compaction-triggers";
 
-/** Experimental macOS ChatGPT app-server shim; only a strict optional boolean is accepted. */
-export const chatgptDesktopSchema = z.object({ appServerShim: z.boolean().optional() }).strict();
+// The chatgptDesktop leaf lives in its own zod-only module so the `ocx chatgpt` command can explain
+// a dropped block without loading this file's provider and account validators.
+export { chatgptDesktopConfigIssue, chatgptDesktopSchema } from "./chatgpt-desktop";
 
 /** One definition of "usable secret", shared by the schema and the warnings. */
 export function isUsableApiKeySecret(value: unknown): value is string {
@@ -284,6 +286,9 @@ const providerNoProxySchema = z.unknown().superRefine((value, ctx) => {
  * fields pass through (preserved for runtime extensions).
  */
 export const providerConfigSchema = z.object({
+  anthropicAccountPool: anthropicAccountPoolSchema,
+  // Raw diagnostics/writes reject malformed provenance; tolerant loads preserve the custom row.
+  anthropicOAuthInstance: z.literal("anthropic2").optional().catch(undefined),
   modelCapabilities: modelCapabilitiesSchema.optional(),
   modelContextTiers: z.unknown().superRefine((value, ctx) => {
     const error = contextTierRecordConfigError(value);
@@ -326,6 +331,7 @@ export const providerConfigSchema = z.object({
   responseTierAuthoritative: z.boolean().optional(),
   fastEnabled: z.boolean().optional(),
   supportsServiceTier: z.boolean().optional(),
+  inferContextWindow: z.boolean().optional(),
   modelSupportsServiceTier: z.record(z.string().min(1), z.boolean()).optional(),
   modelSuppressSyntheticMax: z.record(z.string().min(1), z.boolean()).optional(),
   preserveResponsesReasoningContent: z.boolean().optional(),

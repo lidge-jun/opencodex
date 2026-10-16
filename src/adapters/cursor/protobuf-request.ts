@@ -1,7 +1,7 @@
 import { create, fromBinary, toBinary, toJson } from "@bufbuild/protobuf";
 import { fromJson, type JsonValue } from "@bufbuild/protobuf";
 import { ValueSchema } from "@bufbuild/protobuf/wkt";
-import type { OcxAssistantContentPart, OcxMessage, OcxToolResultMessage } from "../../types";
+import type { OcxAssistantContentPart, OcxMessage, OcxTool, OcxToolResultMessage } from "../../types";
 import { namespacedToolName } from "../../types";
 import type { CursorRunRequest } from "./types";
 import { cursorStructuredOutputInstructions } from "./structured-output";
@@ -224,6 +224,7 @@ function systemPromptBlobs(request: CursorRunRequest): RootBlobCandidate[] {
   const cursorToolGuidance = buildCursorToolGuidanceSystemNote(
     cursorToolsForActivePrompt(request.tools, activePromptText(request), request.toolChoice),
     request.toolChoice,
+    request.modelId,
   );
   if (cursorToolGuidance) prompts.push(cursorToolGuidance);
   return prompts.map(content => rootBlobCandidate({ role: "system", content }, "system"));
@@ -1299,12 +1300,13 @@ function toolCallStep(
   requestScope: CursorBlobRequestScopeToken,
   result?: OcxToolResultMessage,
   codeMode = false,
+  catalog?: readonly OcxTool[],
 ): Uint8Array {
   const args: Record<string, Uint8Array> = {};
   for (const [key, value] of Object.entries(part.arguments ?? {})) args[key] = argBytes(value);
   // Replay the same provider-isolated identity advertised in this request. Returned calls are
   // restored to the client name, so transcript parts carry the client name again on the next turn.
-  const toolName = cursorToolWireName(part);
+  const toolName = cursorToolWireName(part, catalog);
   const decodedResult = result ? decodeResultParts(result) : undefined;
   const serialize = (maxImages: number): Uint8Array => toBinary(ConversationStepSchema, create(ConversationStepSchema, {
     message: {
@@ -1357,8 +1359,12 @@ function toolResultPart(message: OcxToolResultMessage, codeMode: boolean, decode
   });
 }
 
-function assistantStep(part: OcxAssistantContentPart, requestScope: CursorBlobRequestScopeToken): Uint8Array | undefined {
-  if (part.type === "toolCall") return toolCallStep(part, requestScope);
+function assistantStep(
+  part: OcxAssistantContentPart,
+  requestScope: CursorBlobRequestScopeToken,
+  catalog?: readonly OcxTool[],
+): Uint8Array | undefined {
+  if (part.type === "toolCall") return toolCallStep(part, requestScope, undefined, false, catalog);
   if (part.type === "thinking") {
     return storeCursorBlob(toBinary(ConversationStepSchema, create(ConversationStepSchema, {
       message: {
@@ -1409,7 +1415,7 @@ function conversationTurns(
   const flush = () => {
     if (!current) return;
     for (const part of pendingToolCalls.values()) {
-      current.steps.push(toolCallStep(part, requestScope, missingToolResultFor(part), codeMode));
+      current.steps.push(toolCallStep(part, requestScope, missingToolResultFor(part), codeMode, request.tools));
     }
     turns.push(storeCursorBlob(toBinary(ConversationTurnStructureSchema, create(ConversationTurnStructureSchema, {
       turn: {
@@ -1451,7 +1457,7 @@ function conversationTurns(
           pendingToolCalls.set(part.id, part);
           continue;
         }
-        const step = assistantStep(part, requestScope);
+        const step = assistantStep(part, requestScope, request.tools);
         if (step) current.steps.push(step);
       }
       continue;
@@ -1478,7 +1484,7 @@ function conversationTurns(
       }
       const priorCall = pendingToolCalls.get(message.toolCallId);
       if (priorCall) {
-        current.steps.push(toolCallStep(priorCall, requestScope, message, codeMode));
+        current.steps.push(toolCallStep(priorCall, requestScope, message, codeMode, request.tools));
         pendingToolCalls.delete(message.toolCallId);
       } else {
         current.steps.push(storeCursorBlob(toBinary(ConversationStepSchema, create(ConversationStepSchema, {

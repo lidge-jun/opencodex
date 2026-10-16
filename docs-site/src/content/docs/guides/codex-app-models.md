@@ -314,6 +314,44 @@ advertised where it cannot be honored. An `openai-chat` destination can authoriz
 eligible model with `chatServiceTier: true`, or authorize only exact models with
 `modelSupportsServiceTier`; Responses routes do not need that extra Chat wire authorization.
 
+### Selecting Ultra Fast in Codex Desktop
+
+For a provider that supports `service_tier: "ultrafast"`, declare that wire mapping once.
+opencodex then publishes **Ultra Fast** in the routed model's native Codex speed menu;
+there is no need to edit `opencodex-catalog.json` after every sync.
+For example, merge these fields into an API provider configured for GPT-6.1 Sol:
+
+```json
+{
+  "models": ["gpt-6.1-sol"],
+  "modelSupportsServiceTier": { "gpt-6.1-sol": true },
+  "fastWire": {
+    "kind": "service-tier",
+    "canonicalToWire": { "priority": "priority", "ultrafast": "ultrafast" },
+    "foreignCallerTiers": "verbatim"
+  }
+}
+```
+
+The mapping applies to every Fast-eligible model on that provider. Use a separate provider
+entry if only some of its models support Ultra Fast. Keep opencodex's Fast mode on **Auto**
+(omit `fastMode`) so the app's speed selection reaches the provider; forced Fast sends
+`priority`, and forced Default drops the tier. Refresh the model catalog, restart Codex
+Desktop if it still has the old list, select the routed model, then choose **Ultra Fast**
+in its speed menu. Standard remains the default.
+
+Only an eligible `service-tier` wire with an explicit `ultrafast → ultrafast` mapping adds
+this choice. Ordinary Fast support, a GPT-like name, native/account rows and combo aliases
+do not enable it. Removing the mapping or disabling that model's service-tier support
+removes the generated choice from both the catalog and cache on the next successful sync.
+The separate `ultraFastTier` setting still only retains hand-supplied catalog tiers.
+
+[OpenAI's API guide](https://developers.openai.com/api/docs/guides/ultrafast-mode) documents
+Ultrafast for GPT-6 Astra and GPT-6.1 Sol. API access and
+[Codex plan/workspace access](https://learn.chatgpt.com/docs/agent-configuration/speed)
+are separate. A menu choice does not grant provider access or guarantee measured speed;
+Ultra Fast increases usage/cost, and Codex's own feature requirements still apply.
+
 ## Subagent selection
 
 Codex sorts picker-visible catalog entries by ascending `priority` and advertises the first five as

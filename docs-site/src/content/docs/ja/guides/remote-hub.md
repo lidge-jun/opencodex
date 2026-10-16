@@ -112,7 +112,7 @@ OAuth は `POST /api/oauth/login` で開始し、コールバックできない�
 
 キー更新では最大10分間、旧キーと新キーが同じ `apiKeyId` で有効です。旧キーを `service-api-token.prev` に保存し、新キーを原子的に置換して `/v1/catalog` で確認後に確定します。結果が不明な場合は一時権限を使って同じコマンドを再実行し、両候補の判定が終わるまで削除しないでください。
 
-`ocx disconnect` は hub が停止中でもローカル状態を復元しますが、hub のキーは失効させません。切断後は hub の **Integrations → API Keys** だけが失効経路です。`ocx connect revoke --admin-token-stdin` は接続中のみ利用できます。
+`ocx disconnect` は hub が停止中でもローカル状態を復元しますが、hub のキーは失効させません。切断後は hub の **接続 → API キー** だけが失効経路です。`ocx connect revoke --admin-token-stdin` は接続中のみ利用できます。
 
 ## Docker とトラブルシューティング
 

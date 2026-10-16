@@ -153,10 +153,6 @@ failover、アカウントの除外、affinity の失効、401/403 や 429 か�
 <td>このプロジェクトを支援してくださる <a href="https://www.orcarouter.ai/?utm_source=opencodex&utm_medium=readme">OrcaRouter</a> に感謝します。OrcaRouter は本番の AI 向けに作られた OpenAI 互換の AI ゲートウェイです。すべてのプロンプトを採点して基準を満たすモデルへ送る適応型ルーティング、自動 failover、コードとして書けるルーティングルール、プロンプトキャッシュ付きのマークアップなしプロバイダー価格、そして 200 以上のモデルへのすべての呼び出しに付くガードレール・エージェントファイアウォール・リクエストログを備えています。Add provider ピッカーで <code>OrcaRouter</code> を選ぶか <code>ocx provider add orcarouter</code> を実行してください。適応型ルーターは <code>orcarouter/auto</code> です。</td>
 </tr>
 <tr>
-<td width="180"><a href="https://www.packyapi.com/register?aff=k5KT"><img src="../assets/sponsors/packycode.png" alt="PackyCode" width="150"></a></td>
-<td>このプロジェクトを支援してくださる <a href="https://www.packyapi.com/register?aff=k5KT">PackyCode</a> に感謝します。PackyCode は安定した高性能の API リレープロバイダーで、Claude Code、Codex、Gemini などのリレーを提供しています。自動 failover、スマートルーティング、無制限の同時実行によって、AI を実際の生産性ツールに変えます。<a href="https://www.packyapi.com/register?aff=k5KT">このリンクから登録</a>してすぐに始めてください。Add provider ピッカーで <code>PackyCode</code> を選ぶか <code>ocx provider add packycode</code> を実行してください。<br><sub>PackyCode 是一家稳定、高效的 API 中转服务商，提供 Claude Code、Codex、Gemini 等多种中转服务。具备自动故障转移、智能路由和无限并发等多种功能，让 AI 编程成为真正的生产力工具。<a href="https://www.packyapi.com/register?aff=k5KT">点此链接注册</a>，立即开始使用！</sub></td>
-</tr>
-<tr>
 <td width="180"><a href="https://tokenlab.sh/r/OPENCODEX"><picture><source media="(prefers-color-scheme: dark)" srcset="../assets/sponsors/tokenlab-dark.png"><img src="../assets/sponsors/tokenlab-light.png" alt="TokenLab" width="150"></picture></a></td>
 <td>このプロジェクトを支援してくださる <a href="https://tokenlab.sh/r/OPENCODEX">TokenLab</a> に感謝します。TokenLab はコーディングエージェントに主要モデル向けの API キーを 1 つだけ提供し、OpenAI Responses と Chat Completions、Anthropic Messages、Gemini ネイティブ API の各形式に、ストリーミングとツール呼び出し込みで対応しています。MCP サーバーとエージェント Skills も用意されており、簡単に組み込めます。配信モードを選び、使った分だけ支払えます。Add provider ピッカーで <code>TokenLab</code> を選ぶか <code>ocx provider add tokenlab</code> を実行してください。<br><sub>TokenLab 为编程智能体提供统一的多模型 API，一枚 API Key 即可接入主流模型，支持 OpenAI Responses、Chat Completions、Anthropic Messages 和 Gemini 原生 API 格式，以及流式输出和工具调用。同时提供 MCP 服务器和 Agent Skills，方便接入现有工作流；交付模式可选，按量付费。</sub></td>
 </tr>
@@ -321,7 +317,7 @@ OpenCodex はプロセスが保持する状態を以下のカテゴリで追跡�
   退避されません。
 - **観測バッファ 4 個**（トランスレーターのアキュムレーター、画像・OAuth・Grok の tail）は処理中の
   バイト圧力を監視するだけで、退避はしません。
-- **state-store の登録 28 個**が期限切れの掃除（60 秒間隔）と config 世代の reconciliation を担い、
+- **state-store の登録 31 個**が期限切れの掃除（60 秒間隔）と config 世代の reconciliation を担い、
   古いプロバイダー／アカウントのキーを取り除きます。
 - **パスとフィンガープリントのメモ**（ワークスペースのメタデータ、hardened identity、インストール
   salt、mode-hint の capability）は挿入順の LRU 上限（8〜128 件）を使います。
@@ -460,8 +456,8 @@ opencodex は既定で `127.0.0.1` にバインドし、追加の認証を必要
 
 ## 開発
 
-ソース開発には `PATH` に `bun` CLI が必要です。これは公開 npm パッケージが同梱する Bun ランタイム
-とは別物で、同梱ランタイムはインストール済みの `ocx` コマンドだけが使います。
+ソース開発には `PATH` に `bun` CLI が必要です。公開 npm パッケージはインストール済みの `ocx`
+コマンド用に Bun ランタイムを同梱し、パッケージのスクリプトもこの同梱依存関係から Bun を解決することがあります。
 
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git

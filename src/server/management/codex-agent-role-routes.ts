@@ -1,6 +1,6 @@
 /**
  * Per-role model for omo (Codex / LazyCodex): `$CODEX_HOME/agents/<role>.toml` plus LazyCodex's
- * `codex.agents.<role>.model` mirror in omo.jsonc. Both halves exist only when LazyCodex is
+ * `"[codex]".agents.<role>` model and reasoning mirror in omo.jsonc. Both halves exist only when LazyCodex is
  * detected; Pi-based and OpenCode-based omo are never read here.
  *
  * Loaded on demand from `src/server/management-api.ts`, like the quota-reset handler, so a
@@ -40,6 +40,7 @@ export async function handleCodexAgentRoleRoutes(ctx: ManagementContext): Promis
       omoJsonc: { state: omoState.state },
       roles: roles.listCodexAgentRoleModels(codexHome).map(entry => ({
         ...entry,
+        effort: roles.readCodexAgentRoleEffort(entry.role, codexHome),
         omoJsoncModel: omoModels[entry.role] ?? null,
       })),
     }, 200, req, config);
@@ -95,12 +96,18 @@ export async function handleCodexAgentRoleRoutes(ctx: ManagementContext): Promis
     return jsonResponse({ error: "invalid JSON body" }, 400, req, config);
   }
 
-  let model: string;
-  let effort: string | undefined;
+  // An omitted model leaves the role's model pin (or its inheritance) alone, an omitted effort
+  // keeps the effort, and an effort of null clears it. A body with neither changes nothing, which
+  // is a client mistake rather than a save, so it is refused before any role file is read.
+  if (body?.model === undefined && body?.effort === undefined) {
+    return jsonResponse({ error: "send a model, an effort, or both", code: "empty_update" }, 400, req, config);
+  }
+  let model: string | undefined;
+  let effort: string | null | undefined;
   let toml: { status: "written" | "unchanged" };
   try {
-    model = roles.validateAgentRoleModel(body?.model);
-    effort = body?.effort === undefined || body.effort === null ? undefined : roles.validateAgentRoleEffort(body.effort);
+    model = body?.model === undefined ? undefined : roles.validateAgentRoleModel(body.model);
+    effort = body?.effort === undefined ? undefined : body.effort === null ? null : roles.validateAgentRoleEffort(body.effort);
     toml = roles.writeCodexAgentRoleModel(role, model, codexHome, effort);
   } catch (error) {
     if (error instanceof roles.AgentRoleModelError) {
@@ -114,9 +121,17 @@ export async function handleCodexAgentRoleRoutes(ctx: ManagementContext): Promis
   // The role TOML is what Codex obeys, so its write stands even when the omo mirror cannot follow.
   let omoStatus: ReturnType<typeof omo.writeOmoRoleModel> | "write_failed";
   try {
-    omoStatus = omo.writeOmoRoleModel(role, model, omo.omoJsoncPath());
+    const reasoning = effort === undefined ? undefined : effort === null ? null : omo.omoReasoningFor(effort);
+    omoStatus = omo.writeOmoRoleModel(role, model, omo.omoJsoncPath(), reasoning);
   } catch {
     omoStatus = "write_failed";
   }
-  return jsonResponse({ ok: true, role, model, ...(effort ? { effort } : {}), toml, omoJsonc: { status: omoStatus } }, 200, req, config);
+  return jsonResponse({
+    ok: true,
+    role,
+    ...(model !== undefined ? { model } : {}),
+    ...(effort !== undefined ? { effort } : {}),
+    toml,
+    omoJsonc: { status: omoStatus },
+  }, 200, req, config);
 }

@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import type { OcxConfig } from "../../types";
+import { ConfigWriteDestinationChanged, type LockHandle } from "../config-write-lock";
 import { CODEX_CONFIG_PATH } from "../paths";
 
 /**
@@ -18,11 +19,11 @@ export type InjectedV1SurfaceReconcile =
   | { ok: true; content: string; changed: boolean }
   | { ok: false; message: string };
 
-let toggleForTests: ((enabled: boolean) => void) | undefined;
+let toggleForTests: ((enabled: boolean, env: NodeJS.ProcessEnv, validateBeforeSpawn: () => void) => void) | undefined;
 
 /** Test seam: substitute the native `codex features` toggle so no Codex runtime is required. */
 export function setCodexMultiAgentV2ToggleForTests(
-  toggle: ((enabled: boolean) => void) | undefined,
+  toggle: ((enabled: boolean, env: NodeJS.ProcessEnv, validateBeforeSpawn: () => void) => void) | undefined,
 ): void {
   toggleForTests = toggle;
 }
@@ -43,7 +44,11 @@ export interface PreparedV1SurfaceReconcile {
    * only — `run()` re-checks the flag on the bytes present under the lock.
    */
   readonly enabledAtPrepare: boolean;
-  run(): InjectedV1SurfaceReconcile;
+  /**
+   * `heldConfigWriteLock` is the injector's own held write-lock handle: the
+   * transition would otherwise re-acquire the same file and refuse itself.
+   */
+  run(heldConfigWriteLock?: LockHandle): InjectedV1SurfaceReconcile;
 }
 
 /**
@@ -66,19 +71,22 @@ export async function prepareInjectedV1SurfaceReconcile(
   let toggle = toggleForTests;
   if (!toggle) {
     const { runCodexFeaturesCommand } = await import("../../cli/v2");
-    toggle = enabled => runCodexFeaturesCommand(enabled ? "enable" : "disable");
+    toggle = (enabled, env, validate) => runCodexFeaturesCommand(enabled ? "enable" : "disable", "multi_agent_v2", env, validate);
   }
   const resolvedToggle = toggle;
   return {
     enabledAtPrepare,
-    run() {
+    run(heldConfigWriteLock) {
       // Decide on the bytes present NOW, under the lock — the prepare-time
       // answer is stale the moment another writer could have touched the file.
       if (!isMultiAgentV2Enabled()) {
         return { ok: true, content: readFileSync(CODEX_CONFIG_PATH, "utf-8"), changed: false };
       }
-      const transition = transitionMultiAgentV2(false, resolvedToggle);
+      const transition = transitionMultiAgentV2(false, resolvedToggle, {
+        ...(heldConfigWriteLock !== undefined ? { heldConfigWriteLock } : {}),
+      });
       if (!transition.ok) {
+        if (transition.retryable === false) throw new ConfigWriteDestinationChanged(transition.error);
         return {
           ok: false,
           message: `Codex config injection refused: could not reconcile the v1 surface with the global multi_agent_v2 feature: ${transition.error}.`,

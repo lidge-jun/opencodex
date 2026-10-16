@@ -19,7 +19,8 @@ import { orderForModelPicker, catalogModelEfforts, nativeEffortClamp, nativeOpen
 import { claudeCodeAlias, claudeCodeNativeAlias } from "./alias";
 import { cursorFastIdFor } from "../adapters/cursor/catalog";
 import { desktop3pAlias } from "./desktop-3p";
-import { AUTO_CONTEXT_OFF, type AutoContextMode } from "./context-windows";
+import { AUTO_CONTEXT_OFF, shouldMarkOneMillion, UNPAIRED_AUTO_CONTEXT, type AutoContextMode } from "./context-windows";
+import { isAnthropicClaudeRoute } from "./long-context";
 
 const MODEL_INFO_CREATED_AT = "2026-01-01T00:00:00Z";
 const ANTHROPIC_EFFORT_RUNGS = new Set(["low", "medium", "high", "xhigh", "max"]);
@@ -102,19 +103,19 @@ function modelInfo(id: string, displayName: string, ladder: readonly string[], i
 
 /**
  * Which id family the discovery list carries (devlog 050): Claude Code (CLI)
- * gets readable `claude-ocx-*` ids; Claude Desktop keeps the hashed
- * `claude-opus-4-8-<code>` family its 3P config was written with. Both families
+ * gets readable `ocx-claude-*` ids; Claude Desktop keeps its profile's
+ * `claude-fable-5-p<code>` ids (legacy no-profile callers use hash aliases). Both families
  * decode in resolveInboundModel regardless of the style served here.
  */
 export type AnthropicIdStyle = "desktop3p" | "readable";
 
-/** Build the full anthropic-flavor discovery list (ids are Desktop 3P aliases). */
+/** Build discovery rows; a Desktop resolver can return undefined to withhold an unbound ID. */
 export function buildAnthropicModelInfos(
   nativeSlugs: readonly string[],
   routedModels: readonly CatalogModel[],
   auto: AutoContextMode = AUTO_CONTEXT_OFF,
   idStyle: AnthropicIdStyle = "desktop3p",
-  aliasForRoute: (provider: string, modelId: string) => string = desktop3pAlias,
+  aliasForRoute: (provider: string, modelId: string) => string | undefined = desktop3pAlias,
   nativeContextCap?: NativeContextLimitsInput,
   fastMode?: boolean,
   // Presence is the feature gate: the caller passes undefined when `fastRows` is off, so a
@@ -143,24 +144,26 @@ export function buildAnthropicModelInfos(
         ? claudeCodeAlias(m.provider, listed)
         : aliasForRoute(m.provider, m.id);
     }),
-  ]);
-  // [1m] picker variant (devlog 260712 B1): Claude Code accounts exactly 1M for ids
-  // carrying the marker (2.1.207 binary: /\[1m\]/i → 1e6, compaction preserved), so
-  // ONLY models with an authoritative >=1M window get a second selectable row —
-  // the auto-context widening that let a 372K route carry the marker (and be
-  // over-filled) is the #854 defect and does not come back. Guards (audit R1#11):
-  // same dedupe set, never double-suffix.
+  ].filter((id): id is string => typeof id === "string" && id.length > 0));
+  // [1m] picker variant (devlog 260712 B1; widened in devlog/_plan/261009_claude_1m_default/020):
+  // Claude Code accounts exactly 1M for ids carrying the marker (2.1.207 binary: /\[1m\]/i -> 1e6,
+  // compaction preserved). A discovery client may lack CLAUDE_CODE_AUTO_COMPACT_WINDOW, so the
+  // rule is the fixed unpaired one (long-context.ts), not the configurable launch compact window:
+  // a custom 350k window must not re-admit a 372k route (#854). The server's auto mode only turns
+  // widening off (autoContext: false / maxContextTokens), falling back to >= 1M. Base and Fast
+  // rows stay unmarked: this list is a choice list. Guards (audit R1#11): same dedupe set, never
+  // double-suffix.
+  const variantMode = auto.enabled ? UNPAIRED_AUTO_CONTEXT : AUTO_CONTEXT_OFF;
   const push1mVariant = (
     base: AnthropicModelInfo,
     contextWindow: number | undefined,
     maxInputTokens?: number,
     selectorId?: string,
+    mode: AutoContextMode = variantMode,
   ) => {
-    // The [1m] marker makes Claude Code account 1e6 tokens for the row, so it
-    // may only name models whose AUTHORITATIVE effective window is >= 1M —
-    // never the auto-context widening, which would mark a 372K route and have
-    // Claude Code over-fill it (the #854 defect).
-    if (contextWindow === undefined || contextWindow < ONE_MILLION) return;
+    // A window >= 1M always earns the row; a long window earns it under the unpaired rule,
+    // because an overflow is answered as `prompt is too long`, which Claude Code compacts on.
+    if (!shouldMarkOneMillion(contextWindow, mode)) return;
     if (base.id.includes("[1m]")) return;
     const id = selectorId ?? `${base.id}[1m]`;
     if (seen.has(id)) return;
@@ -170,9 +173,9 @@ export function buildAnthropicModelInfos(
     // (measured — see devlog/_plan/260817_native_gpt56_1m_context/001_measurement_evidence.md).
     // Advertising the flat 1e6 there would invite mid-session context_length_exceeded, so the
     // variant reports whichever of the two is smaller.
-    const advertised = typeof maxInputTokens === "number" && maxInputTokens > 0
-      ? Math.min(ONE_MILLION, maxInputTokens)
-      : ONE_MILLION;
+    // A long window under 1M must not be advertised as 1e6 input either.
+    const ceiling = typeof maxInputTokens === "number" && maxInputTokens > 0 ? maxInputTokens : contextWindow;
+    const advertised = typeof ceiling === "number" && ceiling > 0 ? Math.min(ONE_MILLION, ceiling) : ONE_MILLION;
     out.push({ ...base, id, display_name: `${base.display_name} · 1M`, max_input_tokens: advertised });
   };
   /**
@@ -198,7 +201,7 @@ export function buildAnthropicModelInfos(
   };
   for (const slug of nativeSlugs) {
     const id = idStyle === "readable" ? claudeCodeNativeAlias(slug) : aliasForRoute("native", slug);
-    if (seen.has(id)) continue;
+    if (!id || seen.has(id)) continue;
     seen.add(id);
     const nativeWindow = nativeOpenAiContextWindow(slug, nativeContextCap);
     const nativeMaxInput = nativeOpenAiMaxInputTokens(slug, nativeContextCap);
@@ -225,7 +228,7 @@ export function buildAnthropicModelInfos(
     const id = idStyle === "readable"
       ? claudeCodeAlias(m.provider, listedModelId)
       : aliasForRoute(m.provider, m.id);
-    if (seen.has(id)) continue;
+    if (!id || seen.has(id)) continue;
     seen.add(id);
     const groupStart = out.length;
     const ladder = Array.isArray(m.reasoningEfforts) ? m.reasoningEfforts : [];
@@ -251,7 +254,7 @@ export function buildAnthropicModelInfos(
       && listedModelId.startsWith("claude-fable-")
       ? `${claudeCodeNativeAlias(listedModelId)}[1m]`
       : undefined;
-    push1mVariant(info, m.contextWindow, routedMaxInput, oneMillionSelector);
+    push1mVariant(info, m.contextWindow, routedMaxInput, oneMillionSelector, isAnthropicClaudeRoute(m.provider, m.id) ? AUTO_CONTEXT_OFF : variantMode);
     // The whole model is passed, not a (provider, id) pair: a combo row lives in its own
     // namespace with no config.providers entry, so the caller classifies it from the
     // aggregated supportsServiceTier the row already carries.

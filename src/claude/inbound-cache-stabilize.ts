@@ -3,10 +3,10 @@
  * occasional TaskCreate nudges) into system text that becomes Responses
  * `instructions`. That churn breaks Muse/Go prefix cache on the instructions
  * prefix even when tools stay stable. Strip dynamics from instructions;
- * surface the latest notice on `input` instead.
+ * drop token footers and surface the latest TaskCreate notice on `input` instead.
  *
- * Relocation is identified by harness shape: only a trailing, unfenced,
- * canonical notice at the end of instructions is moved. An unmatched fence
+ * Peeling is identified by harness shape: only a trailing, unfenced,
+ * canonical notice at the end of instructions is removed. An unmatched fence
  * opener covers through EOF. No match → the original string is returned
  * byte-for-byte. The matcher is content identity only; `translateAnthropicRequest`
  * requires `claudeCode.stabilizePromptCache: true` before this helper runs. Claude Code
@@ -86,7 +86,6 @@ export function stabilizeClaudeInstructionsForPromptCache(
   const ranges = fencedRanges(instructions);
   let fenceIndex = ranges.length - 1;
   let end = instructions.length;
-  let latestTotal: string | null = null;
   let latestNudge: string | null = null;
   let peeled = false;
 
@@ -110,7 +109,6 @@ export function stabilizeClaudeInstructionsForPromptCache(
 
     while (fenceIndex >= 0 && ranges[fenceIndex]!.start > contentStart) fenceIndex--;
     if (fenceIndex >= 0 && contentStart < ranges[fenceIndex]!.end) break;
-    if (total && latestTotal === null) latestTotal = notice;
     if (nudge && latestNudge === null) latestNudge = notice;
     peeled = true;
 
@@ -123,8 +121,5 @@ export function stabilizeClaudeInstructionsForPromptCache(
   }
 
   if (!peeled) return { instructions, dynamicNotice: null };
-  const noticeParts: string[] = [];
-  if (latestTotal) noticeParts.push(latestTotal);
-  if (latestNudge) noticeParts.push(latestNudge);
-  return { instructions: instructions.slice(0, end), dynamicNotice: noticeParts.join("\n\n") };
+  return { instructions: instructions.slice(0, end), dynamicNotice: latestNudge };
 }

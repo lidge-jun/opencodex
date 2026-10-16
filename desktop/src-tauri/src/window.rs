@@ -125,6 +125,43 @@ fn is_update_page_url(url: &Url) -> bool {
     is_app_origin(url) && url.path() == "/update.html"
 }
 
+fn is_cli_page_url(url: &Url) -> bool {
+    is_local_settings_page("main", url) && url.path() == "/cli.html"
+}
+
+fn is_local_settings_page(label: &str, url: &Url) -> bool {
+    label == "main"
+        && is_app_origin(url)
+        && matches!(url.path(), "/update.html" | "/cli.html")
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.query().is_none()
+        && url.fragment().is_none()
+}
+
+pub fn require_cli_page(window: &WebviewWindow) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("CLI page unavailable".into());
+    }
+    let url = window.url().map_err(|_| "CLI page unavailable")?;
+    if !is_cli_page_url(&url) {
+        return Err("CLI page unavailable".into());
+    }
+    Ok(())
+}
+
+pub fn require_local_settings_page(window: &WebviewWindow) -> Result<(), String> {
+    let url = window.url().map_err(|_| "settings page unavailable")?;
+    if !is_local_settings_page(window.label(), &url) {
+        return Err("settings page unavailable".into());
+    }
+    Ok(())
+}
+
+pub fn shows_cli_page(window: &WebviewWindow) -> bool {
+    window.label() == "main" && window.url().is_ok_and(|url| is_cli_page_url(&url))
+}
+
 /// Whether the window currently shows the bundled update page. An unreadable URL reads as not.
 pub fn shows_update_page(window: &WebviewWindow) -> bool {
     window.url().is_ok_and(|url| is_update_page_url(&url))
@@ -184,11 +221,43 @@ pub fn set_tray_policy(app: &AppHandle, visible: bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_app_origin, is_update_page_url, opens_in_default_browser, webview_user_agent};
+    use super::{
+        is_app_origin, is_cli_page_url, is_local_settings_page, is_update_page_url,
+        opens_in_default_browser, webview_user_agent,
+    };
     use tauri::Url;
 
     fn url(value: &str) -> Url {
         Url::parse(value).expect("a url")
+    }
+
+    #[test]
+    fn cli_and_local_settings_require_main_and_exact_local_urls() {
+        for origin in ["tauri://localhost", "http://tauri.localhost"] {
+            for path in ["/update.html", "/cli.html"] {
+                let value = url(&format!("{origin}{path}"));
+                assert!(is_local_settings_page("main", &value));
+                assert!(!is_local_settings_page("popup", &value));
+                assert_eq!(is_cli_page_url(&value), path == "/cli.html");
+            }
+        }
+        for value in [
+            "http://127.0.0.1:10100/cli.html",
+            "https://tauri.localhost/cli.html",
+            "tauri://evil/cli.html",
+            "http://tauri.localhost:1420/cli.html",
+            "tauri://localhost:1420/cli.html",
+            "tauri://localhost/cli.html.evil",
+            "tauri://localhost/index.html",
+            "tauri://localhost/cli.html?path=x",
+            "tauri://localhost/cli.html#x",
+            "tauri://user@localhost/cli.html",
+            "http://tauri.localhost:1420/update.html",
+            "https://evil.example/update.html",
+        ] {
+            assert!(!is_local_settings_page("main", &url(value)), "{value}");
+            assert!(!is_cli_page_url(&url(value)), "{value}");
+        }
     }
 
     #[test]

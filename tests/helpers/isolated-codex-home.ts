@@ -5,6 +5,10 @@ import { removeTreeWithRetry } from "./remove-tree";
 
 export interface IsolatedCodexHome {
   path: string;
+  /** Restore CODEX_HOME without deleting an undrained tree. */
+  restoreEnvironment(): void;
+  /** Remove only after producers have drained; failures propagate. */
+  removeAfterDrain(): void;
   restore(): void;
 }
 
@@ -14,11 +18,19 @@ export function installIsolatedCodexHome(prefix = "ocx-codex-home-"): IsolatedCo
   writeFileSync(join(path, "config.toml"), 'model_catalog_json = "opencodex-catalog.json"\n', "utf8");
   process.env.CODEX_HOME = path;
 
+  let restored = false;
+  const restoreEnvironment = () => {
+    if (restored) return;
+    restored = true;
+    if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previousCodexHome;
+  };
   return {
     path,
+    restoreEnvironment,
+    removeAfterDrain() { removeTreeWithRetry(path); },
     restore() {
-      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
-      else process.env.CODEX_HOME = previousCodexHome;
+      restoreEnvironment();
       // The env restore above is the part other tests depend on; the directory is
       // disposable. On Windows a proxy or child that is still shutting down can hold
       // a file in this tree open past the retry budget, and rethrowing there failed a

@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -18,6 +18,7 @@ import {
   linkSshSpawnEnv,
   sshFailureHint,
   sshRunnerErrorHint,
+  SSH_OUTPUT_CAP_BYTES,
   SshRunnerError,
 } from "../../src/link/ssh-runner";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -139,10 +140,9 @@ test("quoteRemote allows only sh in command position and rejects NUL", () => {
 });
 
 test("remote ocx argv runs ocx through a single-quoted sh PATH prelude", () => {
-  expect(REMOTE_OCX_SCRIPT).toBe('PATH="$PATH:$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"; exec ocx "$@"');
   expect(remoteOcxArgv(["link", "port"])).toEqual(["sh", "-c", REMOTE_OCX_SCRIPT, "ocx", "link", "port"]);
   const argv = buildExecArgv({ alias: "delta.example.test", argv: remoteOcxArgv(["link", "issue", "--alias", "it's x", "--json"]), knownHostsFile: tempPath("remote-ocx") });
-  expect(argv.at(-1)).toBe(`sh '-c' 'PATH="$PATH:$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"; exec ocx "$@"' 'ocx' 'link' 'issue' '--alias' 'it'"'"'s x' '--json'`);
+  expect(argv.at(-1)).toBe(`sh '-c' '${REMOTE_OCX_SCRIPT.replaceAll("'", `'"'"'`)}' 'ocx' 'link' 'issue' '--alias' 'it'"'"'s x' '--json'`);
 });
 
 test.skipIf(process.platform !== "win32")("PowerShell parses the remote command as sh invocation", () => {
@@ -162,21 +162,43 @@ test.skipIf(process.platform !== "win32")("PowerShell parses the remote command 
   expect(result.stdout.toString().trim()).toBe("sh");
 });
 
+/** Install a stub `ocx` in `dir` that prints `label`, the PATH it ran with, and each argument in brackets. */
 function fakeOcx(dir: string, label: string): void {
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "ocx"), `#!/bin/sh\nprintf "%s\\n" "${label}" "$PATH"\nfor arg in "$@"; do printf "[%s]\\n" "$arg"; done\n`, { mode: 0o755 });
+}
+
+/**
+ * A remote PATH with only sh and a controlled uname. System directories may hold a real ocx;
+ * fixtureRemoteCommand maps the fixed Desktop/system candidates into the fixture as well.
+ */
+function shOnlyRemotePath(home: string): string {
+  const dir = join(home, "remote-bin");
+  mkdirSync(dir, { recursive: true });
+  symlinkSync("/bin/sh", join(dir, "sh"));
+  writeFileSync(join(dir, "uname"), "#!/bin/sh\nprintf 'Darwin\\n'\n", { mode: 0o755 });
+  return dir;
+}
+
+/** Keep fixed system candidates inside the fixture, regardless of the host's installed ocx. */
+function fixtureRemoteCommand(home: string, args: string[]): string {
+  const argv = remoteOcxArgv(args);
+  argv[2] = REMOTE_OCX_SCRIPT.replaceAll("/Applications/OpenCodex.app/Contents/MacOS/ocx", join(home, "app-ocx"))
+    .replaceAll("/usr/bin/ocx", join(home, "system-ocx"));
+  return quoteRemote(argv);
 }
 
 test.skipIf(process.platform === "win32")("the remote prelude appends ~/.bun/bin after the remote PATH and keeps every argument", () => {
   const home = mkdtempSync(join(tmpdir(), "ocx-link-remote-home-"));
   roots.push(home);
   fakeOcx(join(home, ".bun", "bin"), "bun");
-  const command = quoteRemote(remoteOcxArgv(["link", "issue", "--alias", "it's x", "--json"]));
-  const result = Bun.spawnSync(["/bin/sh", "-c", command], { env: { HOME: home, PATH: "/usr/bin:/bin" } });
+  const remotePath = shOnlyRemotePath(home);
+  const command = fixtureRemoteCommand(home, ["link", "issue", "--alias", "it's x", "--json"]);
+  const result = Bun.spawnSync(["/bin/sh", "-c", command], { env: { HOME: home, PATH: remotePath } });
   expect(result.exitCode).toBe(0);
   const lines = result.stdout.toString().trim().split("\n");
   expect(lines[0]).toBe("bun");
-  expect(lines[1]).toBe(`/usr/bin:/bin:${home}/.bun/bin:${home}/.local/bin:/opt/homebrew/bin:/usr/local/bin`);
+  expect(lines[1]).toBe(`${remotePath}:${home}/.bun/bin:${home}/.local/bin:/opt/homebrew/bin:/usr/local/bin`);
   expect(lines.slice(2)).toEqual(["[link]", "[issue]", "[--alias]", "[it's x]", "[--json]"]);
 });
 
@@ -185,7 +207,7 @@ test.skipIf(process.platform === "win32")("an ocx the remote PATH already resolv
   roots.push(home);
   fakeOcx(join(home, "first"), "first");
   fakeOcx(join(home, ".bun", "bin"), "bun");
-  const result = Bun.spawnSync(["/bin/sh", "-c", quoteRemote(remoteOcxArgv(["--version"]))], { env: { HOME: home, PATH: `${home}/first:/usr/bin:/bin` } });
+  const result = Bun.spawnSync(["/bin/sh", "-c", fixtureRemoteCommand(home, ["--version"])], { env: { HOME: home, PATH: `${home}/first:${shOnlyRemotePath(home)}` } });
   expect(result.exitCode).toBe(0);
   expect(result.stdout.toString().split("\n")[0]).toBe("first");
 });
@@ -197,8 +219,8 @@ test.skipIf(process.platform === "win32")("the constructed remote command preser
   mkdirSync(bin, { recursive: true });
   writeFileSync(join(bin, "ocx"), "#!/bin/sh\nprintf '%s\\0' \"$@\"\n", { mode: 0o755 });
   const args = ["it's x", "two\nlines", "火🔥", "x;$(echo no)", ""];
-  const remote = quoteRemote(remoteOcxArgv(args));
-  const result = Bun.spawnSync(["/bin/sh", "-c", remote], { env: { HOME: home, PATH: "/usr/bin:/bin" } });
+  const remote = fixtureRemoteCommand(home, args);
+  const result = Bun.spawnSync(["/bin/sh", "-c", remote], { env: { HOME: home, PATH: shOnlyRemotePath(home) } });
   expect(result.exitCode).toBe(0);
   expect(result.stdout).toEqual(new TextEncoder().encode(args.join("\0") + "\0"));
 });
@@ -259,9 +281,57 @@ test("runner still rejects invalid UTF-8 stdout", async () => {
   await expect(runner.run(["ssh"])).rejects.toMatchObject({ code: "decode" });
 });
 
+test("tunnel output retains diagnostics and releases inherited pipes shortly after exit", async () => {
+  let exit!: (code: number) => void;
+  const exited = new Promise<number>(resolve => { exit = resolve; });
+  let stderrController!: ReadableStreamDefaultController<Uint8Array>;
+  let cancelled = 0;
+  // Even an underlying cancellation that never resolves must not block the reader's cleanup.
+  const cancel = () => { cancelled += 1; return new Promise<void>(() => {}); };
+  const stdout = new ReadableStream<Uint8Array>({ cancel });
+  const stderr = new ReadableStream<Uint8Array>({
+    start(controller) { stderrController = controller; controller.enqueue(new TextEncoder().encode("Host key verification")); },
+    cancel,
+  });
+  const spawn = (() => ({ pid: 7, stdout, stderr, exited, kill() {} })) as unknown as typeof Bun.spawn;
+  const child = createSshRunner({ spawn }).spawnTunnel(["ssh", "-N", "--", "host"]);
+  let settled = false;
+  void child.stderr!.then(() => { settled = true; });
+  try {
+    await Bun.sleep(300);
+    expect(settled).toBe(false); // The grace starts at process exit, not spawn.
+    exit(255);
+    await Bun.sleep(20);
+    stderrController.enqueue(new TextEncoder().encode(" failed.\n"));
+    const deadline = Bun.sleep(1_000).then(() => "deadline");
+    expect(await Promise.race([child.stderr!, deadline])).toBe("Host key verification failed.\n");
+    expect(await Promise.race([child.stdout!, deadline])).toBe("");
+    expect(cancelled).toBe(2);
+    expect(stderr.locked).toBe(false);
+    expect(stdout.locked).toBe(false);
+  } finally {
+    exit(255);
+    if (stderr.locked) stderrController.close();
+  }
+});
+
 test("runner enforces stderr byte limit before replacement decoding", async () => {
   const runner = createSshRunner({ spawn: byteSpawn(new Uint8Array(), new Uint8Array([0xa1, 0xad])) });
   await expect(runner.run(["ssh"], { maxOutputBytes: 1 })).rejects.toMatchObject({ code: "output_limit" });
+});
+
+test("tunnel stderr still rejects and cancels output over the byte cap", async () => {
+  let cancelled = false;
+  const stderr = new ReadableStream<Uint8Array>({
+    start(controller) { controller.enqueue(new Uint8Array(SSH_OUTPUT_CAP_BYTES + 1)); },
+    cancel() { cancelled = true; },
+  });
+  const stdout = new ReadableStream<Uint8Array>({ start(controller) { controller.close(); } });
+  const spawn = (() => ({ pid: 7, stdout, stderr, exited: Promise.resolve(255), kill() {} })) as unknown as typeof Bun.spawn;
+  const child = createSshRunner({ spawn }).spawnTunnel(["ssh"]);
+  await expect(child.stderr!).rejects.toMatchObject({ code: "output_limit" });
+  expect(cancelled).toBe(true);
+  expect(stderr.locked).toBe(false);
 });
 
 test("the runner spawns commands and tunnels with the augmented environment", async () => {

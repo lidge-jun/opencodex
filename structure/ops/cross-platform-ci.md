@@ -1,5 +1,7 @@
 # Cross-platform CI
 
+`.github/workflows/catalog-async-contracts.yml` runs the Rust-owned Bun-module catalog contracts on Linux, macOS and Windows for affected pushes to `dev`/`main`/`preview`, pull requests or manual dispatch. The portable fixture uses synthetic homes and cleared child environments. This read-only workflow has no secrets, publication step or release-eligibility effect.
+
 The [desktop membership contract](../runtime.md#codex-desktop-process-membership) has adapter regression coverage on every host and real PowerShell prefilter regression coverage with synthetic CIM rows on Windows in `tests/clients/desktop-app-restart.test.ts`. A skipped Windows lane does not exercise that native filter; uid-dependent POSIX cases in `tests/clients/desktop-app-restart-posix.test.ts` are skipped on Windows.
 
 `.github/workflows/ci.yml` is the ordinary quality gate for runtime/package changes. A pull
@@ -11,9 +13,16 @@ request verifies Linux and TypeScript: Linux runs the suite in four shards with 
 `changes` job's native path filter selects the change. `dev` pushes start nothing — dev
 integration is covered by the pull-request run — while `main` and `preview` must remain push
 triggers because `release.yml` requires a successful push-event run for the exact release SHA
-and does not accept a pull-request run. Windows runs the full suite in nine shards only on manual
-`workflow_dispatch` with `lane=all` (or an empty lane), and an aggregate green `ci` check
-legitimately includes deliberate skips for every job the event did not request.
+and does not accept a pull-request run. Windows runs the full suite in nine shards on a
+Windows-sensitive pull request, on the nightly schedule, and on `workflow_dispatch` with
+`lane=all` (or an empty lane); it never joins the push run `release.yml` gates on. A pull request
+is Windows-sensitive when the `changes` job's `windows` path filter matches or an added
+`src/`/`tests/` line names a Windows marker; `scripts/ci/windows-sensitive-diff.sh` makes that call,
+treating the diff as data and selecting Windows when it cannot read the base parent. Wherever they run, `ci` requires them. The daily
+`schedule` runs main's workflow (GitHub schedules only the default branch) against one dev SHA the
+`changes` job resolves and every checkout reads, and requests the macOS control as well. An
+aggregate green `ci` check legitimately includes deliberate skips for every job the event did not
+request.
 
 This scoping accepts a real coverage loss: a green pull request no longer proves the macOS suite,
 the Rust toolchain, or the app bundle. Those regressions are caught at the promotion push to
@@ -47,21 +56,40 @@ manager guards remain active because the preload installs them before the lock b
 Test teardown follows the [sandbox cleanup contract](test-sandbox-cleanup.md).
 `tests/preload.ts` resolves cleanup dependencies after home/lock admission and before test cases; teardown awaits native-main startup releases and config hardening, then the sandbox's registered ACL child reaps before removing that root. Its synchronous exit fallback leaves an undrained root for ownership-checked stale recovery instead of blocking child cleanup with removal retries. `tests/ci-workflows/test-sandbox-cleanup.test.ts` pins that ordering with a delayed reap.
 `tests/helpers/test-sandbox-cleanup.ts` exposes case-scoped lifecycle ownership: cancellation starts listener stops while owned asynchronous work settles, and repeated close/stop calls share one promise. After teardown starts, only the lifecycle's own abort reason is absorbed; any other error, including a foreign AbortError, still fails its case. Callers settle that lifecycle before draining producers/reaps and restoring or removing a home. The helper does not replace fixture-specific cleanup or claim OS ACL coverage for synthetic tests.
-Shard membership follows recorded duration: `scripts/ci/test-durations.tsv` weighs each file,
-the heaviest file goes to the least-loaded shard, and a file without a row weighs the table's
+Shard membership follows recorded duration: `scripts/ci/test-durations.tsv` weighs each file on
+Linux and macOS and `scripts/ci/test-durations.windows.tsv` on Windows (selected by `RUNNER_OS`;
+`BUN_TEST_DURATIONS_FILE` overrides both), because Windows per-file cost is not a constant multiple
+of the other two and one table cannot balance all three (#6982). The heaviest file goes to the
+least-loaded shard, and a file without a row weighs the table's
 median, so an empty table reproduces sorted round-robin exactly. Every shard computes the whole
 assignment and refuses to run unless it covers every selected file once. A batch also closes
 before its predicted duration passes half the process timeout, which only adds process
-boundaries. `scripts/ci/test-durations.ts refresh` regenerates the table from hosted job logs.
+boundaries. `scripts/ci/test-durations.ts refresh` regenerates each table from its own platforms'
+hosted job logs (`--table` selects the Windows table).
 A test failure, a process timeout and a Bun runtime crash each fail their job on the first occurrence; the
 batch runner still sweeps a crashed or timed-out batch one file per process, but only to attribute a
 failure the shard has already taken. The aggregate `ci` gate derives, from the event and the `changes` outputs, which
 jobs this run actually requested, then requires `success` from every one of them and `skipped`
 from every job the event did not request — so a job that was requested and never started can no
-longer report as a deliberate skip. On a `lane=all` dispatch the gate additionally reads the
+longer report as a deliberate skip. Whenever Windows is requested the gate additionally reads the
 run's own job list through the Actions API and requires nine concrete successful `windows N/9`
 results, because a matrix rollup can report `success` when one matrix leg is skipped. A
 release that requires Windows proof still dispatches it for the exact publish SHA.
+Test sandboxes keep the runner's `LOCALAPPDATA`, so Windows PowerShell 5.1 children reuse the
+image's warm module-analysis cache. Replacing it with a freshly built seed made every child
+re-analyze modules and timed out seven shards on the first run of #6670.
+`scripts/test.ts` pins the default `BUN_RUNTIME_TRANSPILER_CACHE_PATH` beneath its exclusively
+created test root, in a `bun-transpiler-cache` directory (mode 0700 on POSIX). Cached JavaScript is
+executable input, so the runner never adopts, repairs, migrates or deletes the old fixed host-TEMP
+cache. Nested sandboxes and fixture children inherit the owning environment's cache even when
+HOME changes; only that owner's cleanup removes it. Separate environments and CI batches start
+with separate caches. This gives up automatic cross-batch reuse: cold Windows startup coverage
+must be evaluated without raising test deadlines or weakening assertions. An explicit override,
+including "" or "0" to disable caching, is preserved and remains the operator's protected-path
+responsibility. `tests/ci-workflows/test-runner.test.ts` covers isolation, legacy-path refusal,
+cleanup ownership, overrides and actual Bun children with different homes.
+Startup ACL reads use .NET, never module-autoloaded `Get-Acl`/`Set-Acl`
+(`tests/ci-workflows/ci-review-lanes.test.ts` scans `src/`).
 Across the jobs, the workflow runs:
 
 ```bash

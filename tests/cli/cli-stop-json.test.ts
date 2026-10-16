@@ -171,9 +171,11 @@ describe("ocx stop --json dispatch", () => {
     };
   }
 
-  function stopDeps(handleStop: CliDispatchDeps["handleStop"], args: string[]): CliDispatchDeps {
+  function stopDeps(handleStop: CliDispatchDeps["handleStop"], args: string[],
+    inspectDesktopSupervision: NonNullable<CliDispatchDeps["inspectDesktopSupervision"]> = () => ({ kind: "none" }),
+  ): CliDispatchDeps {
     const head: CliHead = { kind: "command", command: "stop", args };
-    return { args, head, handleStop } as unknown as CliDispatchDeps;
+    return { args, head, handleStop, inspectDesktopSupervision } as unknown as CliDispatchDeps;
   }
 
   test("emits exactly one JSON document and moves human output to stderr", async () => {
@@ -266,6 +268,97 @@ describe("ocx stop --json dispatch", () => {
       captured.restore();
       restoreExitCode();
     }
+  });
+
+  const desktopNotice = "OpenCodex Desktop may start this proxy again after a short backoff. Use Stop Proxy or Quit in the OpenCodex menu to keep it stopped.";
+  const desktop = { kind: "desktop", runtimePid: 4242, supervisorPid: 4200,
+    app: "/Applications/OpenCodex.app/Contents/MacOS/opencodex-desktop",
+    proxy: "/Applications/OpenCodex.app/Contents/MacOS/ocx" } as const;
+
+  for (const evidence of [desktop, { kind: "unknown", reason: "probe-timeout", desktopSeen: true }] as const) {
+    test(`ordinary stop warns on stderr before stopping: ${evidence.kind}`, async () => {
+      const restoreExitCode = withExitCode(0);
+      const captured = captureConsole();
+      const calls: string[] = [];
+      try {
+        const args = ["stop"];
+        const code = await dispatchCommand({ kind: "command", command: "stop", args }, stopDeps(async () => {
+          calls.push("stop");
+          expect(captured.stderr).toEqual([desktopNotice]);
+          console.log("Service manager stopped.");
+          return { ok: true, summary: summarize(record(), { exitCode: 0 }) };
+        }, args, () => { calls.push("inspect"); return evidence; }));
+        expect(code).toBe(0);
+        expect(process.exitCode).toBe(0);
+        expect(calls).toEqual(["inspect", "stop"]);
+        expect(captured.stderr).toEqual([desktopNotice]);
+        expect(captured.stdout[0]).toBe("Service manager stopped.");
+        expect(captured.stdout.some(line => line.includes("will fail until it is restarted"))).toBe(true);
+      } finally { captured.restore(); restoreExitCode(); }
+    });
+  }
+
+  for (const exitCode of [0, 1, STOP_HISTORY_INCOMPLETE_EXIT_CODE, STOP_HISTORY_DEFERRED_EXIT_CODE]) {
+    test(`Desktop stop --json never probes or emits supervision guidance, exit ${exitCode}`, async () => {
+      const restoreExitCode = withExitCode(exitCode);
+      const captured = captureConsole();
+      let stops = 0;
+      const summary = summarize(record(), { exitCode, failed: exitCode === 1,
+        historyOnly: exitCode === STOP_HISTORY_INCOMPLETE_EXIT_CODE,
+        historyDeferred: exitCode === STOP_HISTORY_DEFERRED_EXIT_CODE });
+      try {
+        const args = ["stop", "--json"];
+        const code = await dispatchCommand({ kind: "command", command: "stop", args }, stopDeps(async () => {
+          stops++;
+          return { ok: exitCode !== 1, summary };
+        }, args, () => { throw new Error("JSON stop must not inspect supervision"); }));
+        expect(stops).toBe(1);
+        expect(code).toBe(exitCode);
+        expect(process.exitCode).toBe(exitCode);
+        expect(captured.stdout).toEqual([JSON.stringify(summary)]);
+        expect(captured.stderr.some(line => line.includes("OpenCodex Desktop"))).toBe(false);
+      } finally { captured.restore(); restoreExitCode(); }
+    });
+  }
+
+  for (const evidence of [{ kind: "none" }, { kind: "unknown", reason: "probe-timeout", desktopSeen: false },
+    { kind: "unsupported" }] as const) {
+    test(`non-Desktop stop retains output and behavior: ${evidence.kind}`, async () => {
+      const restoreExitCode = withExitCode(0);
+      const captured = captureConsole();
+      let stops = 0;
+      try {
+        const args = ["stop"];
+        expect(await dispatchCommand({ kind: "command", command: "stop", args }, stopDeps(async () => {
+          stops++;
+          return { ok: true, summary: summarize(record(), { exitCode: 0 }) };
+        }, args, () => evidence))).toBe(0);
+        expect(stops).toBe(1);
+        expect(captured.stderr).toEqual([]);
+        expect(captured.stdout).toHaveLength(1);
+        expect(captured.stdout[0]).toContain("will fail until it is restarted");
+      } finally { captured.restore(); restoreExitCode(); }
+    });
+  }
+
+  test("Desktop supervision notice remains useful when stop detects a respawn", async () => {
+    const restoreExitCode = withExitCode(1);
+    const captured = captureConsole();
+    const summary = summarize(record({ proxy: "respawned", service: "stopped-respawnable", sharedTeardown: "skipped" }),
+      { failed: true, exitCode: 1 });
+    let stops = 0;
+    try {
+      const args = ["stop"];
+      expect(await dispatchCommand({ kind: "command", command: "stop", args }, stopDeps(async () => {
+        stops++;
+        return { ok: false, summary };
+      }, args, () => desktop))).toBe(1);
+      expect(stops).toBe(1);
+      expect(summary.runtimeDown).toBe(false);
+      expect(captured.stderr).toEqual([desktopNotice]);
+      expect(captured.stdout).toEqual([]);
+      expect(process.exitCode).toBe(1);
+    } finally { captured.restore(); restoreExitCode(); }
   });
 
   test("guarded JSON stop forwards approval and rejects partial args before action", async () => {

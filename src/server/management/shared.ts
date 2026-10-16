@@ -3,6 +3,7 @@ import { captureInitialSelectionBaseline, finalizeInitialModelSelection } from "
 import { captureModelDiscoveryBaseline, finalizeModelDiscovery } from "../../providers/new-model-policy-runtime";
 import { CatalogGatherBusyError } from "../../codex/catalog/routed-gather";
 import { initialModelSelectionPending } from "../../providers/initial-model-selection";
+import { isPassiveRead } from "../../lib/passive-read";
 import { readFileSync } from "node:fs";
 import type { CatalogModel } from "../../codex/catalog";
 import { catalogModelSlug, invalidateCodexModelsCache, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
@@ -89,6 +90,11 @@ export type TokPerSecondResult =
   | { kind: "value"; value: number; estimated: boolean }
   | { kind: "unavailable"; reason: MetricUnavailableReason };
 
+export type DecodeTimingBasis = "generation-window" | "legacy-post-visible-output";
+export type DecodeTokPerSecondResult =
+  | (Extract<TokPerSecondResult, { kind: "value" }> & { timingBasis: DecodeTimingBasis })
+  | Extract<TokPerSecondResult, { kind: "unavailable" }>;
+
 export type CostEstimateReason =
   | "usage_estimated"
   | "cache_detail_missing"
@@ -149,7 +155,7 @@ export const MIN_DECODE_WINDOW_MS = 1_000;
  */
 export function decodeTokPerSecondResult(
   entry: Pick<MetricSource, "durationMs" | "firstOutputMs" | "genStartMs" | "lastOutputMs" | "usageStatus" | "usage">,
-): TokPerSecondResult {
+): DecodeTokPerSecondResult {
   if (!entry.usage) return { kind: "unavailable", reason: "usage_missing" };
   if (entry.usageStatus === "unsupported") return { kind: "unavailable", reason: "usage_unsupported" };
   if (entry.usage.outputTokens <= 0) return { kind: "unavailable", reason: "output_missing" };
@@ -159,7 +165,8 @@ export function decodeTokPerSecondResult(
     if (generationMs <= 0) return { kind: "unavailable", reason: "invalid_duration" };
     if (generationMs < MIN_DECODE_WINDOW_MS) return { kind: "unavailable", reason: "decode_window_too_short" };
     const value = tokensPerSecond(entry.usage.outputTokens, generationMs);
-    return value === null ? { kind: "unavailable", reason: "invalid_duration" } : { kind: "value", value, estimated: true };
+    return value === null ? { kind: "unavailable", reason: "invalid_duration" }
+      : { kind: "value", value, estimated: true, timingBasis: "generation-window" };
   }
   // A row that predates TTFT capture, or a non-streaming turn that never recorded one, has no
   // window to measure. That is a different fact from a bad duration, so it gets its own reason.
@@ -173,7 +180,7 @@ export function decodeTokPerSecondResult(
   if (windowMs < MIN_DECODE_WINDOW_MS) return { kind: "unavailable", reason: "decode_window_too_short" };
   const value = tokensPerSecond(entry.usage.outputTokens, windowMs);
   if (value === null) return { kind: "unavailable", reason: "invalid_duration" };
-  return { kind: "value", value, estimated: true };
+  return { kind: "value", value, estimated: true, timingBasis: "legacy-post-visible-output" };
 }
 
 export function unavailableCostReason(entry: MetricSource): MetricUnavailableReason {
@@ -285,6 +292,8 @@ export async function fetchAllModels(
   /** Management renders disabled rows using this detached state after inventory drift. */
   publishProjection?: (projection: OcxConfig) => void,
 ): Promise<CatalogModel[]> {
+  // A Remote Link read: no upstream, no initial selection, no write (#6959).
+  if (isPassiveRead()) return [];
   const { gatherRoutedModels } = await import("../../codex/catalog");
   const baseline = captureInitialSelectionBaseline(config);
   const discoveryBaseline = captureModelDiscoveryBaseline(config);
@@ -358,7 +367,7 @@ export function stripRegistryOnlyStaticHeaders(name: string, provider: OcxProvid
 /** Shared Desktop profile DTO builder for the management API and CLI. */
 export async function buildClaudeDesktopState(config: OcxConfig, stored?: OcxClaudeDesktopProfile) {
   const { filterCatalogVisibleModels, nativeContextLimits, nativeOpenAiContextWindow, desktopVisibleNativeSlugs } = await import("../../codex/catalog");
-  const { DESKTOP_SUPPORTS_1M_THRESHOLD } = await import("../../claude/desktop-3p");
+  const { routeSupportsOneMillion } = await import("../../claude/long-context");
   const { reconcileDesktopProfile, renderDesktopProfile } = await import("../../claude/desktop-profile");
   const routed = filterCatalogVisibleModels(await fetchAllModels(config), config);
   const profileModels: DesktopProfileModel[] = [
@@ -407,8 +416,8 @@ export async function buildClaudeDesktopState(config: OcxConfig, stored?: OcxCla
     ...(modelByRoute.get(route)?.contextWindow ? { contextWindow: modelByRoute.get(route)!.contextWindow } : {}),
     effortSupported: effortByRoute.get(route) ?? false,
     // Read-only view of the 1M capability the written Desktop config already emits,
-    // derived from the SAME threshold so the dashboard chip can never disagree.
-    supports1m: (modelByRoute.get(route)?.contextWindow ?? 0) >= DESKTOP_SUPPORTS_1M_THRESHOLD,
+    // derived from the SAME predicate so the dashboard chip can never disagree.
+    supports1m: routeSupportsOneMillion(route, modelByRoute.get(route)?.contextWindow),
     assignment: profile.assignments[route]!,
   }));
   return {

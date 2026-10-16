@@ -177,6 +177,99 @@
   border-radius: var(--radius-sm);
 }
 
+/* Click-to-reveal key. Reads as a control (pointer, hover tint) without
+   becoming a button-shaped box that would outweigh the name column. */
+.awi-keylist-panel .awi-keylist-keywrap {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2, 8px);
+  min-width: 0;
+}
+
+.awi-keylist-panel .awi-keylist-key {
+  appearance: none;
+  background: none;
+  border: none;
+  margin: -2px -6px;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.awi-keylist-panel .awi-keylist-key code {
+  overflow-wrap: anywhere;
+}
+
+.awi-keylist-panel .awi-keylist-key:hover:not(:disabled),
+.awi-keylist-panel .awi-keylist-key.is-revealed {
+  background: var(--raised);
+}
+
+.awi-keylist-panel .awi-keylist-key:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+.awi-keylist-panel .awi-keylist-key:focus-visible,
+.awi-keylist-panel .awi-keylist-delete:focus-visible {
+  outline: 2px solid var(--accent-ring);
+  outline-offset: 2px;
+}
+
+/* Row delete stays visible at rest: a hover-only control has no affordance on
+   touch and was exactly what operators looked for and could not find. */
+.awi-keylist-panel .awi-keylist-actions-col,
+.awi-keylist-panel .awi-keylist-actions {
+  width: 1%;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.awi-keylist-panel .awi-keylist-delete {
+  appearance: none;
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.awi-keylist-panel .awi-keylist-delete:hover:not(:disabled) {
+  color: var(--red);
+  background: var(--red-soft);
+}
+
+.awi-keylist-panel .awi-keylist-delete:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.awi-keylist-panel .awi-keylist-confirm {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.awi-keylist-panel .awi-keylist-inline-error {
+  display: block;
+  margin-top: 4px;
+  font-size: var(--text-label);
+  white-space: normal;
+}
+
+@container apikeys-workspace (max-width: 560px) {
+  .awi-keylist-panel .awi-keylist-delete { width: 44px; height: 44px; }
+}
+
 /* The rail's styles lived here. It was replaced by the pinned `SectionTabs`
    strip (shared with Usage / Logs / Subagents) plus a key table in the Keys
    section, so nothing below renders `.apikeys-workspace-rail*` any more. */

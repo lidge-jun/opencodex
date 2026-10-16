@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   getValidMainAccountToken,
+  isMainAccountRefreshGrantRejected,
   setMainAuthJsonBeforeRenameHookForTests,
 } from "../../src/codex/main-account";
 import { codexCredentialMutationEpoch } from "../../src/codex/credential-mutation-epoch";
@@ -76,7 +77,7 @@ describe("native main token refresh", () => {
     expect(codexCredentialMutationEpoch()).toBe(epochBefore + 1);
   });
 
-  test("refuses to overwrite an external auth writer after refresh", async () => {
+  test("refuses to overwrite an external auth writer after refresh but serves the request", async () => {
     const authPath = join(home, "auth.json");
     writeFileSync(authPath, JSON.stringify({
       tokens: {
@@ -95,18 +96,22 @@ describe("native main token refresh", () => {
     setMainAuthJsonBeforeRenameHookForTests(() => writeFileSync(authPath, external));
 
     const epochBefore = codexCredentialMutationEpoch();
-    await expect(getValidMainAccountToken({
+    const token = await getValidMainAccountToken({
       refreshToken: async () => ({
         access: "new-access",
         refresh: "rotated-refresh",
         expires: Date.now() + 3_600_000,
         accountId: "account-main",
       }),
-    })).rejects.toThrow("changed while its token was refreshing");
+    });
 
+    // The exchange already succeeded, so this request runs on its own new bearer and
+    // account; the file stays exactly as the external writer left it.
+    expect(token).toEqual({ accessToken: "new-access", chatgptAccountId: "account-main" });
     expect(readFileSync(authPath, "utf8")).toBe(external);
     expect(readdirSync(home).filter(name => name.includes(".tmp"))).toEqual([]);
     expect(codexCredentialMutationEpoch()).toBe(epochBefore);
+    expect(isMainAccountRefreshGrantRejected()).toBe(false);
   });
 
   test("refresh failure leaves the original auth file byte-identical", async () => {
@@ -276,10 +281,9 @@ describe("publication never overwrites an external Codex writer (#2999)", () => 
     });
     setMainAuthJsonBeforeRenameHookForTests(() => { writeFileSync(authPath, external); });
 
-    // Refusal surfaces as MainAuthJsonChangedDuringRefreshError, the existing signal for
-    // "the file moved under us" - the caller retries against the new state rather than
-    // proceeding with a credential it no longer owns.
-    await expect(getValidMainAccountToken({ refreshToken: refreshOk })).rejects.toThrow();
+    // The save is refused, and the request that paid for the exchange still gets its token.
+    const token = await getValidMainAccountToken({ refreshToken: refreshOk });
+    expect(token).toEqual({ accessToken: "ocx-staged-access", chatgptAccountId: "account-main" });
 
     expect(readFileSync(authPath, "utf8")).toBe(external);
     expect(readFileSync(authPath, "utf8")).not.toContain("ocx-staged-access");
@@ -299,8 +303,9 @@ describe("publication never overwrites an external Codex writer (#2999)", () => 
       renameSync(swap, authPath);
     });
 
-    await expect(getValidMainAccountToken({ refreshToken: refreshOk })).rejects.toThrow();
+    const token = await getValidMainAccountToken({ refreshToken: refreshOk });
 
+    expect(token?.accessToken).toBe("ocx-staged-access");
     expect(readFileSync(authPath, "utf8")).toBe(identical);
     expect(readFileSync(authPath, "utf8")).not.toContain("ocx-staged-access");
   });
@@ -314,10 +319,38 @@ describe("publication never overwrites an external Codex writer (#2999)", () => 
       writeFileSync(authPath, JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: "other" } }));
     });
 
-    await expect(getValidMainAccountToken({ refreshToken: refreshOk })).rejects.toThrow();
+    await getValidMainAccountToken({ refreshToken: refreshOk });
 
     expect(existsSync(authPath)).toBe(true);
     expect(readdirSync(home).filter(name => name.startsWith("auth.json.")).length).toBe(0);
+  });
+
+  test("a torn in-place rewrite is left alone and the next read sees the writer's file", async () => {
+    // Codex rewrites auth.json in place (truncate, then write). A refresh that lands while the
+    // file is empty must not publish over it, must not mark the old grant rejected, and must
+    // not keep the rotated grant anywhere: the next read follows whatever Codex finished.
+    const authPath = join(home, "auth.json");
+    seedExpired(authPath);
+    const epochBefore = codexCredentialMutationEpoch();
+    setMainAuthJsonBeforeRenameHookForTests(() => { writeFileSync(authPath, ""); });
+
+    const token = await getValidMainAccountToken({ refreshToken: refreshOk });
+
+    expect(token).toEqual({ accessToken: "ocx-staged-access", chatgptAccountId: "account-main" });
+    expect(readFileSync(authPath, "utf8")).toBe("");
+    expect(codexCredentialMutationEpoch()).toBe(epochBefore);
+    expect(readdirSync(home).filter(name => name.includes(".tmp"))).toEqual([]);
+
+    const codexFinished = JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: { access_token: "codex-finished-access", refresh_token: "codex-refresh", account_id: "account-main" },
+    });
+    writeFileSync(authPath, codexFinished);
+    expect(isMainAccountRefreshGrantRejected()).toBe(false);
+    const next = await getValidMainAccountToken({
+      refreshToken: async () => { throw new Error("must not refresh a fresh Codex token"); },
+    });
+    expect(next).toEqual({ accessToken: "codex-finished-access", chatgptAccountId: "account-main" });
   });
 
   test("an uncontested publication still succeeds", async () => {
@@ -329,27 +362,82 @@ describe("publication never overwrites an external Codex writer (#2999)", () => 
     expect(readFileSync(authPath, "utf8")).toContain("ocx-staged-access");
   });
 
-  test("a caller cancelled during the refresh does not commit the late result", async () => {
-    // The refresh seam resolves after the caller aborted (a client that disconnected
-    // mid-/v1/models). The late result must never reach auth.json on behalf of a
-    // request that no longer exists: the publication is fenced before the rename,
-    // the file keeps its prior bytes, and the credential mutation epoch does not
-    // advance for a commit that never happened.
+  test("a caller cancelled during the refresh commits the rotated grant before rejecting", async () => {
+    // A successful exchange retires the old refresh token. Even after a client
+    // disconnect, publication must save the only live grant before reporting cancellation.
     const authPath = join(home, "auth.json");
     seedExpired(authPath);
-    const before = readFileSync(authPath, "utf8");
     const controller = new AbortController();
+    const abortReason = new Error("client disconnected");
     const epochBefore = codexCredentialMutationEpoch();
 
     await expect(getValidMainAccountToken({
       signal: controller.signal,
       refreshToken: async () => {
-        controller.abort(new Error("client disconnected"));
+        controller.abort(abortReason);
         return refreshOk();
       },
-    })).rejects.toThrow("client disconnected");
+    })).rejects.toBe(abortReason);
 
-    expect(readFileSync(authPath, "utf8")).toBe(before);
+    expect(JSON.parse(readFileSync(authPath, "utf8")).tokens).toMatchObject({
+      access_token: "ocx-staged-access",
+      refresh_token: "ocx-staged-refresh",
+      account_id: "account-main",
+    });
+    expect(codexCredentialMutationEpoch()).toBe(epochBefore + 1);
+  });
+
+  test("caller cancellation does not abort the token exchange signal", async () => {
+    const authPath = join(home, "auth.json");
+    seedExpired(authPath);
+    const controller = new AbortController();
+    const abortReason = new Error("client disconnected during exchange");
+    const epochBefore = codexCredentialMutationEpoch();
+    let exchangeAborted: boolean | undefined;
+
+    await expect(getValidMainAccountToken({
+      signal: controller.signal,
+      refreshToken: async (_refreshToken, options) => {
+        controller.abort(abortReason);
+        // Recorded rather than asserted here: a throw inside the seam would be masked by the
+        // caller's abort reason on the way out.
+        exchangeAborted = options.signal.aborted;
+        return refreshOk();
+      },
+    })).rejects.toBe(abortReason);
+
+    expect(exchangeAborted).toBe(false);
+    expect(JSON.parse(readFileSync(authPath, "utf8")).tokens).toMatchObject({
+      access_token: "ocx-staged-access",
+      refresh_token: "ocx-staged-refresh",
+      account_id: "account-main",
+    });
+    expect(codexCredentialMutationEpoch()).toBe(epochBefore + 1);
+  });
+
+  test("an external writer during a cancelled exchange still refuses publication", async () => {
+    const authPath = join(home, "auth.json");
+    seedExpired(authPath);
+    const external = JSON.stringify({
+      tokens: { access_token: "external-access", refresh_token: "external-refresh", account_id: "account-external" },
+    });
+    const controller = new AbortController();
+    const abortReason = new Error("client disconnected after external replacement");
+    const epochBefore = codexCredentialMutationEpoch();
+
+    await expect(getValidMainAccountToken({
+      signal: controller.signal,
+      refreshToken: async () => {
+        const swapPath = join(home, "external-auth.json");
+        writeFileSync(swapPath, external);
+        renameSync(swapPath, authPath);
+        controller.abort(abortReason);
+        return refreshOk();
+      },
+    })).rejects.toBe(abortReason);
+
+    expect(readFileSync(authPath, "utf8")).toBe(external);
+    expect(readdirSync(home).filter(name => name.includes(".tmp"))).toEqual([]);
     expect(codexCredentialMutationEpoch()).toBe(epochBefore);
   });
 });

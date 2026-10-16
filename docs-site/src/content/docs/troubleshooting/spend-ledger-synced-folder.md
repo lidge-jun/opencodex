@@ -3,14 +3,13 @@ title: Spend Ledger Refused in a Synced Folder
 description: Why requests can fail with "Spend-ledger storage could not be opened safely" when the opencodex state directory is inside iCloud Drive or another synced folder, and how to fix it.
 ---
 
-Some macOS users saw requests fail intermittently with HTTP 502 and this message, while
-other requests in the same session succeeded:
+Spend-ledger storage refusals return HTTP 503 with error type `server_error` and code
+`spend_ledger_storage_unavailable`. This is a local storage problem; it does not count against
+provider or account health. Request logs attribute it as `local-refusal`. An already streaming response carries the same code in its terminal
+error event. Other requests in the same session may succeed if the file condition is temporary.
 
-```text
-Provider unreachable: Spend-ledger storage could not be opened safely.
-```
-
-Current builds say which file and which check refused it, for example:
+Older builds reported HTTP 502 with a misleading "Provider unreachable" prefix. Current builds
+say which file and which check refused it, for example:
 
 ```text
 Spend-ledger storage could not be opened safely (journal: extra-hard-link).
@@ -45,10 +44,14 @@ the journal can have two links for a moment after an ordinary write. A request t
 that moment is refused, and the next one may succeed. Once the sync settles, the file is back to
 one link, so inspecting it afterwards shows nothing wrong.
 
-At startup opencodex now warns when the state directory resolves inside iCloud Drive
-(`~/Library/Mobile Documents`), a File Provider folder (`~/Library/CloudStorage`), or Desktop
-or Documents while iCloud Desktop & Documents sync appears to be on. The warning is advisory.
-The detection reads the folder layout and can be wrong in either direction.
+At startup opencodex warns when the state directory resolves inside iCloud Drive
+(`~/Library/Mobile Documents`), a File Provider folder (`~/Library/CloudStorage`), Desktop
+or Documents while iCloud Desktop & Documents sync appears to be on, or Desktop or Documents
+while Google Drive for desktop appears to be in use. The Google Drive hint is the presence
+of `~/Library/CloudStorage/GoogleDrive-*` or `~/Library/Application Support/Google/DriveFS`.
+It does not read which folders the app was told to sync, so Drive being installed can warn
+even when Documents is not selected. The warning is advisory. The detection reads the folder
+layout and can be wrong in either direction.
 
 ## Fix
 

@@ -19,6 +19,7 @@ import { codexPlanKey } from "../plan";
 import { MAIN_CODEX_ACCOUNT_ID, getMainAccountPlan } from "../main-account";
 import type { OcxConfig } from "../../types";
 import { CODEX_FAILURE_WINDOW_MS, computeCodexUsageScore } from "./cooldown-math";
+import { failureWindowSteersNewThreads } from "./failure-window";
 import {
   codexPoolKeyForScope,
   dropSpentCredentialFailure,
@@ -211,6 +212,7 @@ export function getEligiblePoolAccounts(
       && (!skipFailoverReadyCandidates || !shouldFailover(config, account.id, now)))
     .filter(account => getCodexQuotaHealthSnapshot(account.id, quotaScope, now) === null)
     .filter(account => !isCodexAccountSoftAvoided(account.id, now))
+    .filter(account => !failureWindowSteersNewThreads(config, account.id, now))
     .filter(account => !isCodexQuotaAvoided(account.id, quotaScope, now))
     .filter(account => !isCodexPoolRefreshCooling(account.id, now))
     .filter(account => isCodexAccountUsable(config, account.id, selectionOptions))
@@ -222,6 +224,7 @@ export function getEligiblePoolAccounts(
     && !isCodexAccountPaused(config, MAIN_CODEX_ACCOUNT_ID)
     && getCodexQuotaHealthSnapshot(MAIN_CODEX_ACCOUNT_ID, quotaScope, now) === null
     && !isCodexAccountSoftAvoided(MAIN_CODEX_ACCOUNT_ID, now)
+    && !failureWindowSteersNewThreads(config, MAIN_CODEX_ACCOUNT_ID, now)
     // The main login is not in `config.codexAccounts`, so it never passes through the
     // filters above and this is the only place an avoidance window can exclude it. Without
     // this the window a refusal announced applies to the pool but not to the account that
@@ -863,7 +866,7 @@ export function applyFailureFailover(
   selectionOptions?: CodexAccountUsabilityOptions,
   commitSharedSelection = true,
 ): string {
-  if (!shouldFailover(config, active, now)) return active;
+  if (!shouldFailover(config, active, now) && !failureWindowSteersNewThreads(config, active, now)) return active;
   const best = pickAlternateCodexAccount(config, active, now, quotaScope, selectionOptions);
   if (best) {
     // The scope still routes away from the failing account — that is this request's

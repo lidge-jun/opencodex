@@ -30,7 +30,7 @@ export interface KiroOAuthMetadata {
  *
  * The Model API is authenticated by the `LLM|` key in `access`; this token authenticates
  * the Meta ACCOUNT and exists only to mint that key and to read subscription usage
- * (devlog/_plan/260912_muse_device_oauth/002 A). Keeping it out of `access` is what lets
+ * (devlog/_fin/260912_muse_device_oauth/002 A). Keeping it out of `access` is what lets
  * every request path stay unchanged.
  *
  * It must never be added to `OAuthAccountSummary` (src/oauth/index.ts:1803) or to
@@ -62,6 +62,8 @@ export type OAuthCredentials = {
   email?: string;
   accountId?: string;
   source?: OAuthCredentialSource;
+  /** Validated upstream subscription label; null is an observed unknown, absent is not read. */
+  plan?: string | null;
   /** Private authenticated account proof; never projected into account summaries. */
   anthropicIdentity?: { v: 1; accountUuid: string; bearerSha256: string };
   /** Google Antigravity (Cloud Code Assist) discovered project id; injected into the CCA envelope. */
@@ -90,6 +92,8 @@ export interface ProviderAccount {
   credential: OAuthCredentials;
   /** Terminal refresh failure (invalid_grant / reused / revoked) — re-login required. */
   needsReauth?: boolean;
+  /** Kiro SSO refresh input-error evidence; status-only attention after this generation expires. */
+  refreshAttentionGeneration?: string;
   /** Operator exclusion from generic OAuth account selection until explicitly resumed. */
   paused?: boolean;
   /** Anthropic-only usage-switch override; absent inherits its pool default, zero disables it. */

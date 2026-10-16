@@ -29,7 +29,7 @@
  * never reported as "nothing to do". A stale picker is a much smaller problem than a
  * wrongly killed process.
  *
- * Design and audit history: devlog/_plan/260913_cross_platform_desktop_app_restart/.
+ * Design and audit history: devlog/_fin/260913_cross_platform_desktop_app_restart/.
  */
 import {
   acquireDesktopRestartLock,
@@ -89,6 +89,7 @@ export type DesktopAppRestartReason =
   | "self_ancestry"
   | "restart_in_flight"
   | "handoff_started"
+  | "relaunch_context_failed"
   | "targets_survived"
   | "relaunch_failed";
 
@@ -263,7 +264,9 @@ export function restartCodexDesktopApp(io: DesktopAppRestartIo = {}): DesktopApp
     // graphical session variables, and after termination there is nothing to read them
     // from. Ordering this wrongly works on macOS and Windows and produces a Linux app
     // that cannot reach the compositor.
-    const context = adapter.captureRelaunchContext(exec, install, processes);
+    let context: Record<string, string>;
+    try { context = adapter.captureRelaunchContext(exec, install, processes); }
+    catch { return skipped("relaunch_context_failed"); }
 
     const isAlive = io.isAlive ?? defaultIsAlive;
     const sleep = io.sleep ?? defaultSleep;
@@ -345,4 +348,3 @@ export function restartCodexDesktopApp(io: DesktopAppRestartIo = {}): DesktopApp
     if (!handedOff) releaseDesktopRestartLock(io.lock);
   }
 }
-

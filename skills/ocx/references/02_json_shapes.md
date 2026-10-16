@@ -1,20 +1,22 @@
 # JSON shapes
 
-What the `--json` envelopes look like, and which field to read. Field names here were taken from
-live responses, not from the source.
+Selected response shapes and fields to inspect. These are command-specific examples,
+not a universal schema; check the installed leaf help and the actual receipt.
 
-## Two envelope styles
+## Output modes
 
 `ocx capabilities --json` reports which style each verb uses, as `json: "payload"` or
 `json: "envelope"`.
 
-- **payload** — the management response, largely unwrapped. `ocx usage --json` returns the server
-  payload untouched.
+- **payload** — the management response, largely unwrapped. `ocx usage --json`
+  without `--search` preserves its existing report. Search adds a local model-row view.
 - **envelope** — a CLI-shaped object with its own schema, usually carrying `ok: true` plus the
   fields the verb operated on.
 - **none** — the verb has no `--json` mode.
 
-`--json` is accepted in any argv position.
+Output flags are parsed by each command, not globally. Preserve the documented
+operand order; do not add `--json` to a leaf marked `none`. `doctor` rejects it
+with exit 2. `v2` supports `--json` for both local and explicit `--live` targets.
 
 ## `ocx ready --json`
 
@@ -22,13 +24,15 @@ live responses, not from the source.
 {"ready":true,"status":"ready","pid":1443,"port":10100}
 ```
 
-The cheapest liveness check. `ready: false` with no error usually means still starting.
+A readiness probe, not a start command. `ready: false` can mean `pending`,
+`failed` or `unreachable`; only `pending` describes startup still in progress.
 
 ## `ocx status --json`
 
 Carries `schemaVersion`, then `proxy.running`, `proxy.pid`, `proxy.health.ok`, and a `dashboard`
 section. This is also where a version skew between your binary and the running proxy shows up —
-check it before trusting flags you just read about.
+check `versionSkew.relation` before trusting flags you just read about.
+`match` confirms version equality; `unknown` is not a match.
 
 ## `ocx logs --jsonl`
 
@@ -89,6 +93,16 @@ appears only under `--quota`.
 
 `paused` and `selected` are independent — a paused-but-selected account still receives requests.
 
+List/current account rows add a validated `health` label and optional `healthAction`
+with locally generated recovery guidance. Raw server summaries/actions are not echoed.
+Codex rows also preserve boolean `creditsAfterLimit` when supplied; absence means
+the server did not report this permission. Human rows show `paid-credits: on` only
+for `true`. Reading these fields does not grant paid-credit consent.
+
+Empty list results include onboarding commands in `notes`: OAuth/Codex login,
+API-key `account add-key` with human-controlled piped stdin, or global login help.
+Empty `account main list --json` adds `notes` pointing to `account main add <label>`.
+
 ## Pool settings
 
 `ocx account strategy|sticky <provider> --json` returns pool-neutral keys:
@@ -117,7 +131,8 @@ one with 409. The CLI handles that for you — it always previews first.
 
 ## Error shape
 
-A management error prints up to three lines and returns a non-zero code:
+A management error normally prints a message and optional reason/hint on stderr
+and returns a non-zero code; recovery details can add further lines:
 
 ```
 Error: <message>
@@ -125,6 +140,399 @@ reason: <machine-readable reason>
 hint: <what to do>
 ```
 
-Branch on `reason` in those stderr lines, never on the message prose. `--json` does **not** wrap
-API failures in `{error:{type,code,message}}`; `runCliAction` still prints the three-liner on
+Use `reason` when present, but it is optional; retain the exit code and stderr
+when absent. Nested server error objects do not have a universal CLI decoder. `--json` does **not** wrap
+API failures in `{error:{type,code,message}}`; `runCliAction` still prints prose on
 stderr and returns 4/5/1. Do not parse stdout for an error envelope that is not there.
+
+## Saved, applied, skipped and partial
+
+- Local `provider add <name> --json` returns `needsSync: true` unless an explicitly
+  requested `--sync` succeeds with `sync.status: "applied"` and `sync.ok: true`.
+  JSON output does not suppress sync. `sync` is omitted when not requested.
+- `models preset apply` can return `fallback: "preset-empty"`; selection is then
+  unchanged. Read `models selected <provider> --json` to check the effective list.
+- Client integration results can preserve saved intent while reporting individual
+  refused profiles. Inspect each profile and re-read status; partial is not full success.
+- `account pause-exhausted` includes `failedAccountCount`. Failed quota reads do
+  not establish that those accounts still have capacity.
+
+A local save or an accepted update is not proof that a client has reloaded its
+files. Do not automatically repeat a write whose apply or transport outcome is
+uncertain; read back first and preserve the reported limitations.
+
+## Provider write receipts
+
+Live add, remove, default selection, pacing and batch apply retain a validated
+public receipt. Fields vary by operation: `name`, `defaultProvider`,
+`droppedCustomModels`, `disabled`, `hasApiKey`, `xaiResponsesOptInState`,
+`dependentShadowIntercept` and `catalogRefresh` are optional. These examples are
+complete possible receipts, not a promise that every operation has each field.
+
+Saved and catalog committed (exit 0):
+
+```json
+{"success":true,"name":"example","catalogRefresh":{"status":"committed","changed":true,"degraded":false,"notices":[]}}
+```
+
+Saved but not converged (exit 1, still JSON on stdout):
+
+```json
+{"success":true,"name":"example","catalogRefresh":{"status":"skipped","reason":"busy","retryable":true}}
+```
+
+A failed catalog refresh also exits 1. `committed` can report `degraded: true`
+and notices; preserve those qualifications. `skipped` reasons `busy`, `stale`,
+`refused` and `catalog-unavailable` mean convergence remains pending. An absent,
+null or `skipped/not-requested` refresh can exit 0 without establishing a client
+sync. `retryable: true` is not authority to repeat the provider write.
+
+Local add has a different receipt: `action`, `provider`, `adapter`, `baseUrl`,
+`defaultModel`, `isDefault`, `source`, `modelSelection`, and `needsSync`. Requested
+sync adds `sync: {status, ok}`. A stopped proxy yields `sync: {"status":"not-running",
+"ok":false}`, `needsSync: true` and exit 1; the local provider is still saved.
+`failed` and `refused` also return nonzero. `skipped` or `catalog-only` with
+`ok: true` may exit 0 while retaining `needsSync: true`.
+
+## Provider editor and pacing reads
+
+`provider snapshot --json` returns exactly `{defaultProvider, providers}`: a
+redacted, validated editor document, with no receipt wrapper. Keep it unchanged
+as a batch baseline. Credentials, `headers` and GUI-only markers are not editable
+fields; raw config export is a separate human-only handoff.
+
+`provider pacing <name> --json` separates stored rules from runtime observations:
+
+```json
+{"provider":"example","rules":null,"status":{"provider":"example","enabled":false,"queued":0,"nextSlotInMs":0}}
+```
+
+`rules: null` means unconfigured, not a failed read. `status` can also include
+`inFlight`, `lastStartedAt` and `lastModelId`; it is not an editable rules object.
+HTTP errors still produce fixed prose on stderr and nonzero exit, not a JSON
+error envelope. A stale editor baseline returns exit 5; see
+[failure recovery](04_failure_semantics.md#provider-save-and-convergence-failures).
+
+Local requested sync also reports `configApplied` and `catalog: {exists,written,cacheSynced,converged}` when the backend returned a result. Its normalized `ok` requires catalog convergence for applied/catalog-only results. A successful config injection with a failed or refused catalog keeps `needsSync: true` and exits 1. An unchanged existing catalog can have `written: false` and `cacheSynced: false` while still converged; write counts alone do not establish failure. Raw backend warning strings and private paths are not emitted.
+
+## Model and routing write results
+
+Local custom-model add/remove JSON is `{action, model, needsSync, sync}`. `action`
+is `added` or `removed`; removal retains `model.id`, `model.provider`, `model.modelId`.
+With no proxy, `sync` is `{"status":"not-attempted","ok":false}` and exit is 0
+with `needsSync: true`: synchronization is opportunistic. Attempted sync can also
+report `configApplied` and `catalog: {exists, written, cacheSynced, converged}`.
+Only complete applied sync clears `needsSync`; attempted failures/refusals are nonzero.
+
+Live custom add instead returns the stored entry (`id`, `provider`, `modelId`,
+`addedAt`, optional metadata) plus `catalogRefresh`. Live remove returns
+`{ok, id, provider, modelId, catalogRefresh}`. Display-name writes return
+`{ok, provider, modelId, displayNameOverride, displayName, displayNameSource, catalogRefresh}`;
+source is `operator`, `provider` or `fallback`. A recognized saved-but-failed-refresh
+response instead has `saved: true`, provider/modelId/override and failed
+`catalogRefresh`, with exit 1.
+
+Order status returns `pickerOrder`, `pickerOrderMode`, routed-only `pickerAvailable`
+and `chosen` when known. A bare native saved ID is retained in `pickerOrder` even
+though absent from `pickerAvailable`. Missing `chosen` means unknown featured
+state. Order writes return `{ok, pickerOrder, pickerOrderMode, applied, force,
+catalogRefresh}`. Here `applied` is the featured roster, not client synchronization.
+Reset returns an empty saved order and null mode; it does not clear featured models.
+
+Profile show is the profile itself, with `id`, public `model`, opaque `revision`,
+and editable fields. Create/update returns `{success, id, model, profile,
+catalogRefresh}`; the new revision is `profile.revision`. Remove returns
+`{success, id, catalogRefresh}`. Combo set returns `{success, id, model, combo,
+catalogRefresh}`. Neither show metadata nor the write envelope is a file input.
+
+For these new live custom/order/display/profile writes and combo set, only a
+committed, nondegraded catalog refresh returns 0. Failed, skipped or degraded
+refresh preserves the saved domain receipt but returns 1. This is stricter than
+the provider-write receipt above; do not apply one exit rule to every command.
+
+## `ocx combo stats <stored-id> --json`
+
+The response has `comboId`, `range`, `since`, optional `until`, `generatedAt`,
+`summary`, `gates`, `backends`, `models`, and snapshot/history coverage fields.
+Useful `summary` pairs are `measuredModelAttempts/modelAttempts` and
+`decisionUsageReported/decisions`. Model token totals and decision token totals
+are separate observations. `averageLatencyMs`, `averageConfidence` and
+`averageChosenProbability` may be null. Zero decisions means no recorded
+observations in that window, not a successful or free run.
+
+Preserve `usageIncomplete`/`usageIncompleteReason`, `historyTruncated`,
+`truncatedPrefixBytes`, `entriesTruncated`, `entriesDropped`,
+`snapshotWindowStart` and `snapshotWindowEnd` when reporting coverage. Per-model
+rows retain `overflow` and nullable effort buckets. Missing/invalid required
+measurements cause refusal rather than fabricated zeros. No cost or savings
+field exists in this DTO.
+
+## Account policy receipts
+
+`account pool P --json` returns `provider`, `kind`, `supported`, `enabled`,
+`enabledEffective`, `strategy`, `stickyLimit`, `autoSwitchThreshold`, `quotaWindow`,
+`maxConcurrentPerAccount`, `routes`, and optional `routesError`/`inert`. Preserve
+nullable stored fields; `enabledEffective` is the effective boolean. `supported`
+lists writable fields, not a guarantee of account availability. `inert: true`
+must not be presented as active pooling.
+
+Per-account OpenAI threshold reads/writes return `{ok, id,
+autoSwitchThresholdOverride, autoSwitchThreshold}`. Null override means inheritance;
+the effective value is separately observed. Credits for one return
+`{ok, id, creditsAfterLimit}`; all returns `{ok, all, ids}` using the actual applied
+IDs. Quota activation returns `{ok, id, window, enabled, available}`, with window
+`fiveHour` or `weekly`; this is not a completed-refresh or reset-consumption receipt.
+
+Anthropic reset-grants returns `accountId`, `eligible`, nullable `ineligibleReason`,
+`atLimit`, `grants`, nullable `nextGrantId`, `weeklyResetsAt`, `cooldownUntil`,
+`pendingOperation`, and `journalAvailable`. Grants preserve counts, nullable dates,
+`clears`, `paused`, `usableNow`, `useRequiresLimit` and observed `percentUsed`.
+Pending operation contains operation/grant IDs and timing; it is never an instruction
+to resume spending. Empty grants and unavailable status differ.
+
+Login start/status returns the flow's public URL/device instructions and safe state;
+fields vary by flow. `flowId`, account identity and device code are different.
+`browserLaunch` is `started`, `failed` or `skipped` when reported. Preserve
+`validationPending` and `catalogRefreshPending`; `--no-wait` does not mean done.
+Live OAuth logout returns `{schemaVersion:1, success:true, provider, live:true}`.
+Local logout instead uses `{schemaVersion:1, ok, provider, removed}`, with
+`reason:"not_found"` and exit 4 when absent. Never invent `removed` for live logout.
+
+## Settings and v2 receipts
+
+Memory/compaction reads are `{memoryModels: blockOrNull}` or
+`{compactionRouting: blockOrNull}`. Writes add `catalogRefreshPending`: false exits
+0 without proving every client applied, true exits 1 after saving. Missing/malformed
+pending evidence becomes null plus `verification:"unverified"` and exit 1.
+An empty memory block stays `{}`; clear stays null. Neither stops the pipeline.
+
+New-option system writes return `{ok:true, settings: observedFields,
+catalogRefreshPending}` plus relevant `desktop` stored/effective/apply facts when
+requested. Unverified read-back adds `verification:"unverified"` and
+`unverifiedFields`; Ultra Fast is read back because PUT does not return it. Never
+replace missing evidence with the requested value. Pending or native apply refusal
+can also make the saved result nonzero.
+
+Injection default-sync writes return `{ok, multiAgentGuidanceEnabled,
+syncCodexSubagentDefaults, model, effort, prompt}` with actual normalized values.
+New sidecar-option writes return `{ok, webSearch|vision, codexWebSearch}`; the selected
+section contains validated public fields only. `codexWebSearch` is `{applied:true}`
+or `{applied:false, reason, retryable}`. An unverified new field is marked as such;
+deferred/refused apply differs from saved settings. Read sidecar status for complete
+observed settings, including supported web reasoning.
+
+Local v2 JSON is `{ok, target:"local", action, changed, state, sync}`. `changed`
+can be null when unknown; `state` can be null after read-back failure. Status,
+threads, hints and unchanged toggles can have `sync.status:"not-attempted"` without
+failure. Attempted sync includes safe config/catalog evidence; an unusable result
+is `{status:"unverified",ok:false}` and exits 1. It never fabricates server receipts.
+Live status has `target:"live"` plus validated v2 state, surface advisory and hint
+recommendation. Live writes add `ok:true` and full `catalogRefresh`; committed,
+nondegraded convergence is required for exit 0. These are distinct from settings'
+boolean pending flag.
+
+## Integration preview and recovery receipts
+
+Preview JSON is one validated version-1 plan: `clientId`, `operation`, optional
+`profileId`, `state`, `foreignEdit`, ordered `changes:[{kind,path}]`, `fingerprint`,
+`canApply`, `willChange`, and `refusalReason` when refused. It contains structural
+paths, not values. A valid refused or no-op preview exits 0; no mutation is implied.
+Only an applicable bound `pN:<32 lowercase hex>` token is a commit input.
+`pN:unbound` can describe refusal but cannot authorize or bind a write.
+
+Stale bound writes emit no stdout, fixed re-preview guidance on stderr and exit 5.
+They do not emit or auto-adopt a replacement plan. Successful mutation receipts
+contain `ok`, `clientId`, `state`, invocation-derived `operation`, optional
+`profileId`, `changed`, `opId`, `reason`, `residual`, and a separately labeled,
+redacted `snapshotPath` where supplied. A valid `ok:false` receipt exits 1;
+HTTP failures use their mapped exit and stderr instead of an invented JSON error.
+
+Journal deletion returns `{ok:true, opId, clientId, snapshotRemoved}` with optional
+`profileId`. False snapshot removal is committed retirement with incomplete cleanup
+and exit 1. Aside sync returns `{results:[...]}`; rows identify `client:"aside"`
+and `profileId`, then success `ok/changed` or refusal `ok/state/refusalReason/reason`
+and optional residual/backup facts. Empty results exit 0; any failed row exits 1.
+
+## Desktop, Cursor and Hub observations
+
+Runtime Desktop profile show returns `{profile, models, rendered, port}`; import
+adds `ok:true`. The profile is versioned assignments/defaults with applied markers
+when present. Models carry availability and assignment facts; rendered rows are
+not proof that a native client applied them. Import is save-only.
+
+Cursor status projects `privateInference`, `regularCursor`, `gateway`, `lastSeen`,
+`effortTable`, `models`, `guideUrl`. Gateway `apiKeyMode` is `credential` or
+`placeholder`, without returning a credential. Installer lookup is
+`{available,url,version,reason}`; unavailable means null URL/version and can have
+null reason. Both are observations with exit 0 when valid, never install receipts.
+
+Available Hub status is `{available:true,devices,runtimes,sessions}`. Runtimes
+reads return `{runtimes:{codex:{available,...},claude:{available,...},pi:{available,...}}}`;
+session reads return `{sessions:[...]}`. Device roots expose IDs/labels, not executor
+filesystem paths. Session events are public observed text with sequence/time/type;
+terminal rendering escapes controls. Empty lists on an available Hub succeed.
+
+Disabled Hub observation (outer HTTP 200) instead prints `available:false`, a fixed
+activation/Hub reason, `devices:[]`, `runtimes:{}`, `sessions:[]` and exits 1. Inner
+HTTP 409 exits 5 with stderr and no fabricated empty success.
+
+## Maintenance receipts
+
+New storage policy setters return `{ok:true,policy,job:{status}}`. Policy preserves
+`enabled`, nested `trigger:{archivedBytesOver}`, one target (`reduceToBytes` or
+`removeOldestPercent`), mode, schedule and optional last/next-run facts. Job status
+`idle`/`running` is observed state, not evidence this setter started cleanup.
+
+Forced link revocation returns `{linkId,remoteCleanup,recovery}`. Cleanup is
+`skipped` after a successful forced write, or `unverified` after idempotent
+link-not-found. This field comes from explicit CLI force intent, not a server
+cleanup report. Both can exit 0 while remote client recovery remains outstanding.
+
+## Request-log events and injection rows
+
+`logs --follow --events` implies JSONL. Each line has exactly the event envelope
+`{schemaVersion:1,type:"snapshot"|"append",rows,cursor,limit}`. For example, an
+empty legacy-window observation (no server cursor) is:
+
+```json
+{"schemaVersion":1,"type":"snapshot","rows":[],"cursor":null,"limit":200}
+```
+
+Replace on snapshot; append and retain only the newest limit rows on append.
+Preserve repeated IDs and order. The initial empty and reset/removal snapshots
+are meaningful; stable empty polls emit nothing. An opaque validated cursor is
+transport state, not a request ID or durable replay checkpoint. This reconstructs
+observed windows only, not traffic missed between polls or evicted beforehand.
+Legacy `--follow --jsonl` keeps row-shaped output and emits changed occurrences,
+including same-ID amendments and duplicates, but cannot encode removals/resets.
+
+Injection follow instead emits `{seq,at,line}` with positive strictly advancing
+sequence and epoch-millisecond timestamp. Its internal `after` advances; there is
+no epoch/gap marker, so no lossless/restart-safe claim is possible. Empty polls
+cannot distinguish no new data, disabled capture or missed history.
+
+## Timeline, health, key-scoped usage and rename
+
+Timeline JSON contains `appliedFilters:{models,hiddenProviders}`, epoch-second
+`start/end`, `bucketSeconds`, `buckets`, metric/aggregation/grouping, `series`,
+`availableModels`, `missingMeasurements`, `truncated`. Points are aligned to
+buckets; `end` is exclusive. Null models means all, hiddenProviders excludes.
+Empty series retains metadata. Positive missingMeasurements/truncated makes
+plotted zeros incomplete evidence, not measured zero usage.
+
+`system health --json` is `{status:"ok",service:"opencodex",version,uptime,pid,
+spendLedger}` with uptime in seconds. Ledger fields are ownership held/unheld,
+initialized/configured/degraded booleans, persistFailures and corruptRecords.
+A valid degraded observation can exit 0. Root health is only liveness; neither
+certifies every subsystem healthy.
+
+Non-client `usage --api-key-id` requires the response's exact `filter.apiKeyId`
+acknowledgment. `filter.matched:false` with empty traffic can be a valid unknown-ID
+result, not 404; retain incomplete/custom-window metadata. Connected self-only
+usage has its existing Hub envelope and rejects caller key-ID selection.
+Rename returns `{id,name,createdAt}` plus allowedProviders/allowedModels when
+present. It returns no plaintext or key prefix; list remains masked. Omitted
+scope fields in the PATCH preserve policy, and rename is not rotation or CAS.
+
+## Filtered log snapshots
+
+`ocx logs filter --json` returns a CLI view, distinct from follow events:
+
+```text
+{ schemaVersion: 1, logs, cursor, filters,
+  window: { scanLimit, loaded, matched, returned, limit } }
+```
+
+`loaded` is the observed raw window size, `matched` counts matches in that
+window, and `returned` is capped by the output limit. None counts all historical
+requests. `cursor` may be null and is not a filter replay token. The normalized
+`filters` describe local selection. JSONL emits rows only and omits this scope
+metadata; empty matches succeed. The command preserves row order and duplicates.
+
+## Usage model search
+
+`ocx usage --search <text> --json` retains the report's totals, provider/day/account
+rows, filter acknowledgment and incomplete/window metadata. Only `models` is
+replaced, and this local view is added:
+
+```text
+modelView: { query, matchedModelCount, returnedModelCount, limit: 100, truncated }
+```
+
+The normalized query is a case-insensitive substring across model, provider or
+resolved model. Rows sort by descending total tokens with stable ties before
+the top 100 are selected. Blank search is an explicit top-100 model view;
+omitting search keeps legacy output. No match does not mean the report has no
+usage, and model-row filtering never recalculates its totals or broadens scope.
+
+## Saved companion usage
+
+`ocx companion usage --json` reports the captured saved model/provider selection:
+
+```text
+{ schemaVersion: 1, filters: { models, hiddenProviders }, settingsUpdatedAt,
+  settingsCorrupt, settingsFallback,
+  ranges: { today: { status, data? }, "30d": { status, data? } }, partial }
+```
+
+Each range has `status: "available"` and safe filtered usage data, or
+`status: "unavailable"` with no fabricated data. An unavailable range sets
+`partial: true` and exit 1 while retaining the other result. Incomplete available
+data does not by itself make a transport partial; preserve its metadata and
+unknown metrics. Settings and ranges are sequential observations, not one atomic
+snapshot. Server defaults retain `settingsUpdatedAt: null` and
+`settingsFallback: true`; valid corrupt-file fallback additionally reports
+`settingsCorrupt: true` and a human-output warning. Malformed settings fail instead of being
+replaced by invented local defaults.
+
+## API-key pool quota
+
+`ocx account list <provider> --quota --json` retains `accounts` and `notes`.
+API-key rows add `quotaMode` (`probe`, `passive`, or `unsupported`), optional/null
+`quota` and `quotaUnavailable` when supplied. Public quota fields can include
+percentage/reset windows, `customWindows`, `creditsUsd`, Kiro credits and
+`updatedAt`; they are not restricted to Codex's quota fields. Missing readings
+remain unknown, and observed zero remains zero. No plaintext key or private
+publication identity enters these fields. A returned key row lacking quota-mode
+evidence cannot establish support and fails verification; an empty pool is valid.
+
+## Selected-key model report
+
+Unlike the unkeyed legacy payload, `access test ... --api-key-stdin --json` returns:
+
+```json
+{"schemaVersion":1,"control":{"outcome":"credential_required","status":401},"request":{"outcome":"succeeded","status":200},"response":{"protocol":"responses","text":["OK"],"completion":"complete"}}
+```
+
+Control outcomes are `not_run`, `credential_required`, `unavailable`; request
+outcomes are `not_run`, `succeeded`, `failed`, `unsupported_response`. Status is
+present only when HTTP status was observed. Optional safe response contains
+protocol, ordered text, complete/limited completion, and optional nonnegative
+inputTokens/outputTokens/totalTokens under usage. Missing counts are not zero.
+Response IDs, headers, tools, reasoning and metadata are not serialized.
+
+Native usable length-limited replies succeed with `completion:"limited"`; 2xx
+with refusal/content-filter/tool-only or unusable text is unsupported and nonzero.
+Operational failure prints one versioned not-run/failed report plus fixed stderr
+and exits 1. Invalid grammar/key input exits 2 without a fabricated report.
+Signals exit 130/143 without late output. Do not call any result a key-scope or
+billing certificate; it is a two-request observation with a cross-request race.
+Exact supplied-key text is replaced with `[redacted]` in allowed response strings;
+this is not arbitrary-encoding detection.
+
+## Explicit-key audio output
+
+Transcription success JSON is only `{"text":"..."}`, including a valid empty
+string. Failure leaves stdout empty, prints a fixed diagnostic on stderr and
+returns nonzero; no JSON error envelope or raw upstream body is printed.
+Live-check retains a versioned observation even on operational failure:
+
+```json
+{"schemaVersion":1,"ready":true,"close":"unverified","check":"session-readiness","event":"session.started"}
+```
+
+This partial example exits 1. `event` is optional and only session.started or
+session.updated; close is confirmed/unverified. Success requires actual readiness
+and normal closure, with no earlier failure; always inspect the exit code too.
+No key, encoded credential carrier, session ID, raw frame, close reason or tools
+enter this report. It is not a full voice-roundtrip or server lease-release receipt.

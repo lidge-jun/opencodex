@@ -199,6 +199,7 @@ describe("GET /api/system/memory", () => {
 	        spillLastWriteFailureOrigin: string | null;
 	        spillAclRetryReturnedTimeouts: number;
 	        spillAclTimeoutMemoRefusals: number;
+	        spillCapacityRefusals: number; spillHeadroomEvictions: number;
 	        spillLastWriteFailureAt: number | null;
 	        spillLastWriteSuccessAt: number | null;
 	        replayScopeMismatchDrops: number;
@@ -228,8 +229,12 @@ describe("GET /api/system/memory", () => {
     // responseState is a scalar-only continuation-store attribution block: numbers plus fixed
     // enum/null fields (no paths, messages, tokens, or account identifiers).
     // The exact count is pinned on purpose: a new field must be reviewed for privacy safety
-    // before it reaches this surface. 20 after #3522 added failure origins and counters.
-    expect(Object.keys(body.responseState)).toHaveLength(20);
+    // before it reaches this surface. 20 after #3522 added failure origins and counters; 22 after
+    // #6747 added the disk-cap refusal and admission-eviction counts (cumulative integers only).
+    expect(Object.keys(body.responseState)).toHaveLength(22);
+    for (const field of ["spillCapacityRefusals", "spillHeadroomEvictions"] as const) {
+      expect(Number.isSafeInteger(body.responseState[field]) && body.responseState[field] >= 0).toBe(true);
+    }
     const {
       spillWriteStatus,
       spillLastWriteFailureCode,

@@ -168,11 +168,50 @@ describe("native Chat candidates in a combo", () => {
     expect(b.bodies).toHaveLength(0);
     expect(rows).toHaveLength(1);
     expect(rows[0]!.status).toBe(200);
+    expect(rows[0]!.spend).toMatchObject({ sends: 1, unresolved: 0 });
     expect(rows[0]!.provider).toBe("combo");
     expect(rows[0]!.protocolTrace).toMatchObject({
       inbound: "chat", mode: "native", requestPath: ["chat", "chat"],
       attempts: [{ ordinal: 1, mode: "native", requestPath: ["chat", "chat"] }],
     });
+  });
+
+  test.each([
+    ["native", "low", "unset", "high->low"],
+    ["native", "xhigh", "unset", "high->xhigh"],
+    ["native", "high", "unset", "high"],
+    ["native", "low", "medium", "high->low->medium"],
+    ["bridge", "low", "unset", "high->low"],
+    ["bridge", "xhigh", "unset", "high->xhigh"],
+    ["bridge", "low", "medium", "high->low->medium"],
+  ] as const)("JEV wire effort: lane=%s, selected=%s, pin=%s, label=%s", async (lane, selected, pinned, label) => {
+    const native = lane === "native";
+    const pin = pinned === "unset" ? undefined : pinned;
+    const a = upstream(body => body.stream === true ? chatStream("effort fixture") : twoChoiceCompletion());
+    const config = comboConfig({
+      a: provider("openai-chat", a.baseUrl, {
+        models: ["m1"], liveModels: false, reasoningEfforts: ["low", "medium", "high", "xhigh"],
+        ...(pin ? { pinnedReasoningEffort: pin } : {}),
+      }),
+      jev: {
+        adapter: "jev-decision", baseUrl: "https://api.typesafe.ai/v1/systemone",
+        authMode: "key", apiKey: "decision-fixture", liveModels: false,
+        fetch: (async () => Response.json({ answers: { route: { choice: `a/m1:${selected}` } } })) as typeof fetch,
+      },
+    }, [{ provider: "a", model: "m1" }], native ? NATIVE_ON : undefined);
+    config.combos!.pair!.strategy = "jev";
+
+    const { response, rows } = await send(config, { stream: false, reasoning_effort: "high" });
+
+    expect(response.status).toBe(200);
+    expect(a.bodies).toHaveLength(1);
+    expect(a.bodies[0]!.reasoning_effort).toBe(pin ?? selected);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.jevDecision?.selected).toEqual({ provider: "a", model: "m1", effort: selected });
+    expect(rows[0]!.requestedEffort).toBe(label);
+    expect(rows[0]!.attempts).toHaveLength(1);
+    expect(rows[0]!.attempts![0]!.requestedEffort).toBe(label);
+    expect(rows[0]!.protocolTrace!.attempts![0]!.mode).toBe(native ? "native" : "legacy-bridge");
   });
 
   test("a failed native candidate fails over to the bridge within the shared send budget", async () => {
@@ -201,6 +240,7 @@ describe("native Chat candidates in a combo", () => {
     expect(b.bodies[0]).not.toHaveProperty("messages");
     expect(rows).toHaveLength(1);
     expect(rows[0]!.attempts?.map(attempt => attempt.status)).toEqual([503, 200]);
+    expect(rows[0]!.spend).toMatchObject({ sends: 4, unresolved: 0 });
     expect(rows[0]!.protocolTrace).toMatchObject({
       inbound: "chat",
       requestPath: ["chat", "responses"],

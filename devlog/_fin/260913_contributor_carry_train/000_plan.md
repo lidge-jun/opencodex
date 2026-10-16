@@ -10,7 +10,7 @@ request owning them. The goal also closes everything those landings actually
 resolve. `origin/dev` was `2df82f412` when this roadmap was written.
 
 This unit follows the 36-PR lane-stack merge in
-`devlog/_plan/260913_lane_stack_merge/`, which landed the maintainer-authored
+`devlog/_fin/260913_lane_stack_merge/`, which landed the maintainer-authored
 backlog. That batch is the precedent for the mechanism here; what changes is the
 authorship. Every branch in this train belongs to someone else, so attribution is
 a correctness requirement rather than a courtesy.

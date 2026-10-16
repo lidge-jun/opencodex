@@ -117,6 +117,8 @@ describe("GitHub Actions hardening", () => {
     expect(ci.jobs?.["select-windows-runner"]?.["timeout-minutes"]).toBe(2);
     expect(ci.jobs?.test?.["timeout-minutes"]).toBe(15);
     expect(ci.jobs?.gates?.["timeout-minutes"]).toBe(15);
+    // 20 with three shards, not a longer cap on two: two halves reached their
+    // 20-minute wall with tests still passing (#6978). See the rationale in ci.yml.
     expect(ci.jobs?.["platform-macos"]?.["timeout-minutes"]).toBe(20);
     // 75, not 30: the unsharded control measured 50m39s for a complete run and had
     // therefore never finished inside 30. See the rationale in ci.yml and #4905.
@@ -258,28 +260,30 @@ describe("GitHub Actions hardening", () => {
     // restores the timing-flake class this lane kept surfacing.
     const macosTestStep = macosSteps.find(step => step.name === "Test in fresh-process batches");
     expect(macosTestStep?.env).toMatchObject({
-      TEST_SHARD: "${{ matrix.shard }}/2", BUN_TEST_FILE_SCOPE: "all", BUN_TEST_BATCH_SIZE: "12",
+      TEST_SHARD: "${{ matrix.shard }}/3", BUN_TEST_FILE_SCOPE: "all", BUN_TEST_BATCH_SIZE: "12",
       BUN_TEST_PARALLEL: "1", BUN_TEST_BATCH_TIMEOUT_SECONDS: "300", OCX_TEST_NO_QUEUE: "1", OCX_TEST_FULL_SUITE: "1",
     });
     expect(macosTestStep?.run).toBe('bash scripts/ci/run-bun-test-batches.sh "$TEST_SHARD"');
     expect(macosSteps.some(step => step.run?.includes("coreutils") && step.run.includes("GITHUB_PATH"))).toBe(true);
-    const macosShards = (ci.jobs?.["platform-macos"] as {
-      strategy?: { "fail-fast"?: boolean; matrix?: { shard?: number[] } };
-    })?.strategy;
-    expect(macosShards?.["fail-fast"]).toBe(false);
-    expect(macosShards?.matrix?.shard).toEqual([1, 2]);
+    const macosJob = (ci.jobs?.["platform-macos"] as {
+      name?: string; strategy?: { "fail-fast"?: boolean; matrix?: { shard?: number[] } };
+    });
+    expect(macosJob?.strategy?.["fail-fast"]).toBe(false);
+    expect(macosJob?.strategy?.matrix?.shard).toEqual([1, 2, 3]);
+    // The divisor is written twice; a matrix that grows without both would run a
+    // shard selection that skips or repeats files under a misleading check name.
+    const macosShardCount = macosJob?.strategy?.matrix?.shard?.length;
+    expect(macosJob?.name).toBe(`macos \${{ matrix.shard }}/${macosShardCount}`);
+    expect(macosTestStep?.env?.TEST_SHARD).toBe(`\${{ matrix.shard }}/${macosShardCount}`);
 
     // Failure disposition belongs to the shared runner; the workflow has no recovery loop.
     expect(macosTestStep?.run).not.toContain("for attempt in");
     expect(macosTestStep?.run).not.toContain("while true");
     expect((ci.jobs?.["platform-macos"] as { needs?: string; if?: string })?.needs).toBe("changes");
-    // Native-gated together with widget and desktop-shell: on a pull request the
-    // job additionally requires the native path filter, so a src-only PR stops
-    // paying for a macOS shard. ci-scope-reduction.test.ts evaluates this
-    // condition against the events that select the job.
-    expect((ci.jobs?.["platform-macos"] as { if?: string })?.if).toBe(
-      "github.event_name != 'pull_request' || (needs.changes.outputs.ci == 'true' && needs.changes.outputs.native == 'true')",
-    );
+    // Pull requests never run macOS shards; they run after merge, on push to
+    // dev/main/preview. ci-scope-reduction.test.ts evaluates this condition
+    // against the events that select the job.
+    expect((ci.jobs?.["platform-macos"] as { if?: string })?.if).toBe("github.event_name != 'pull_request'");
 
     // Whole-pool control lives on dispatch so every push does not pay the
     // unsharded macOS critical path. Keep the unsharded full-membership control and the
@@ -295,7 +299,7 @@ describe("GitHub Actions hardening", () => {
     } | undefined;
     expect(macosControlJob?.name).toBe("macos control");
     expect(macosControlJob?.needs).toBe("changes");
-    expect(macosControlJob?.if).toBe("github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all' || github.event.inputs.lane == 'macos-control')");
+    expect(macosControlJob?.if).toBe("github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all' || github.event.inputs.lane == 'macos-control')");
     expect(macosControlJob?.["runs-on"]).toBe("macos-latest");
     expect(macosControlJob?.strategy).toBeUndefined();
     const macosControlSteps = macosControlJob?.steps ?? [];
@@ -309,20 +313,16 @@ describe("GitHub Actions hardening", () => {
     expect(macosControlSteps.some(step => step.run?.includes("--shard"))).toBe(false);
     expect(macosControlSteps.some(step => step.run?.includes("coreutils") && step.run.includes("GITHUB_PATH"))).toBe(true);
 
-    // Windows is dispatch-only: it gates nothing, not even the shipping
-    // boundary. The sharded promotion run surfaced ~207 Windows-only failures
-    // that pre-date every released version, so the leg became a measurement
-    // tool a maintainer runs by hand, not a gate. Assert the positive
-    // condition and the absence of every automatic trigger — a stray
-    // `|| github.ref == ...` would restore a red leg to the release path.
+    // Dispatch and the daily schedule request Windows; pull requests (which run
+    // only the fast Ubuntu subset) and pushes do not. Keep branch-ref shortcuts
+    // off this condition.
     const windowsIf = String((ci.jobs?.["platform-windows"] as { if?: string })?.if ?? "");
     expect(windowsIf).toBe(
-      "github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all')",
+      "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all')",
     );
     expect(windowsIf).not.toContain("refs/heads/main");
     expect(windowsIf).not.toContain("refs/heads/preview");
     expect(windowsIf).not.toContain("refs/heads/dev");
-    expect(windowsIf).not.toContain("pull_request");
 
     // A lane=macos-control dispatch must skip Windows so a red Windows burn-down
     // cannot fail the unsharded macOS control run. A plain dispatch still runs
@@ -5290,8 +5290,8 @@ describe("GitHub Actions hardening", () => {
     expect(rootPkg).toContain('"doctor:gui:if-changed": "bun scripts/doctor-gui-if-changed.ts"');
     expect(rootPkg).toContain('"lint:gui": "cd gui && bun run lint"');
     expect(rootPkg).toContain('"lint:gui:if-changed": "bun scripts/lint-gui-if-changed.ts"');
-    // Gating steps include lint and React Doctor only on gui/ pushes.
-    expect(rootPkg).toContain("bun run typecheck && bun run lint:gui:if-changed && bun run test");
+    // Gating steps include the gui typecheck, lint, and React Doctor only on gui/ pushes.
+    expect(rootPkg).toContain("bun run typecheck && bun run typecheck:gui:if-changed && bun run lint:gui:if-changed && bun run test");
     expect(rootPkg).toContain("bun run privacy:scan && bun run doctor:gui:if-changed");
   });
 });

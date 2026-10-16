@@ -1,12 +1,8 @@
 import type { OcxProviderConfig } from "./provider";
 import type { CodexAccount } from "./accounts";
-
-export interface AnthropicModelRoute {
-  name: string;
-  match: string;
-  accounts: string[];
-  fallback?: boolean;
-}
+import type { AnthropicAccountPoolConfig, OcxAccountPoolRotationStrategy } from "./anthropic-account-pool";
+import type { AnthropicInstanceId } from "../providers/anthropic-instance-id";
+export type { AnthropicAccountPoolConfig, AnthropicModelRoute, OcxAccountPoolRotationStrategy, OcxAccountPoolQuotaWindow } from "./anthropic-account-pool";
 
 /** Public inference API exposure. Responses and Chat Completions are always served. */
 export interface OcxApiSurfacesConfig {
@@ -34,6 +30,11 @@ export interface OcxProtocolsConfig {
     managedMessagesNativeOAuth?: boolean;
     /** Chat and Messages clients are encoded directly from adapter events. */
     directEncoders?: boolean;
+    /**
+     * Chat requests to a concrete Google Antigravity route decode straight into the IR and are
+     * answered through the direct encoders, with no internal Responses body in either direction.
+     */
+    antigravityDirect?: boolean;
     /** Compare the dispatch plan with the observed path; never sends a second request. */
     shadowPlan?: boolean;
   };
@@ -179,6 +180,15 @@ export interface OcxClaudeCodeConfig {
   /** Compact-window tokens for auto-context. Default 829_800 (AUTO_COMPACT_WINDOW_DEFAULT). */
   autoCompactWindow?: number;
   /**
+   * Context accounting on Claude surfaces (devlog/_plan/261009_claude_1m_default/030). Absent
+   * (the default) = "1m": long-window models are offered at 1M wherever opencodex picks the
+   * default (launch env slots, Desktop pickers, Desktop 3P prefer1m, generated subagents).
+   * "200k" is the opt-in: nothing is marked [1m] automatically and no compact window is injected;
+   * a selector the user marks [1m] keeps it, and discovery and Desktop 3P keep offering 1M as a
+   * choice. The only stored value; "1m" deletes the key.
+   */
+  contextAccounting?: "200k";
+  /**
    * Local CONNECT proxy + TLS listener that intercepts Claude Code's own `api.anthropic.com`
    * traffic without any `ANTHROPIC_BASE_URL` rewrite (src/claude/intercept). Claude Code reaches
    * it via `HTTPS_PROXY`/`NODE_EXTRA_CA_CERTS` in its settings env. Default: enabled on a
@@ -222,9 +232,9 @@ export interface OcxClaudeCodeConfig {
   /** Optional roster-style model forced on subagents at the next routed Claude Code launch. */
   subagentModelForce?: string;
   /** Claude-originated web-search override. Unset fields inherit the global sidecar settings. */
-  webSearchSidecar?: { backend?: "openai" | "anthropic" | "xai" | "gemini" | "exa"; model?: string };
+  webSearchSidecar?: { backend?: "openai" | "anthropic" | "xai" | "gemini" | "exa"; model?: string; anthropicInstance?: AnthropicInstanceId };
   /** Claude-originated vision override. Unset fields inherit the global sidecar settings. */
-  visionSidecar?: { backend?: "openai" | "anthropic" | "routed"; model?: string };
+  visionSidecar?: { backend?: "openai" | "anthropic" | "routed"; model?: string; anthropicInstance?: AnthropicInstanceId };
   /** Persisted Claude Desktop four-family routing profile. */
   desktopProfile?: OcxClaudeDesktopProfile;
   /**
@@ -514,6 +524,11 @@ export interface OcxConfig {
   skills?: OcxSkillsConfig;
   /** Opt-in process-local aggregate request metrics on the authenticated management plane. */
   metricsExport?: { enabled?: boolean };
+  /**
+   * Opt-in recovery of a managed service proxy that stays alive but stops answering /healthz:
+   * a separate sentinel process terminates it so its supervisor restarts it (#6671).
+   */
+  serviceHealthRecovery?: { enabled?: boolean };
   /** Opt in to one identical-turn retry when a Responses completion has no text or tool call. */
   emptyCompletionRetry?: boolean;
   /** Suppress allowlisted client-facing Codex transport hints; provider enforcement is unchanged. */
@@ -571,12 +586,13 @@ export interface OcxConfig {
   /**
    * Opt-in Ultra Fast service tier, default off.
    *
-   * This does NOT synthesize an `ultrafast` row: `src/codex/data/upstream-models.json`
-   * advertises only `priority`, and PR #2994 was closed precisely because a catalog row
-   * the wire cannot honor is a picker entry that lies. What the flag turns on is honesty
-   * about a tier the operator supplies themselves — the catalog stops stripping an
-   * `ultrafast` the user configured, and the request path names it instead of recording
-   * "no fast tier was requested".
+   * On native GPT-6 Astra and GPT-6.1 Sol rows (bare and account-bound), the flag adds the
+   * Ultrafast speed choice OpenAI documents for those two models, so the Codex picker offers
+   * it even though `model_catalog_json` replaces ChatGPT's live, plan-aware model list
+   * (`src/codex/catalog/native-ultrafast.ts`). On routed rows it still never invents a tier:
+   * it keeps an `ultrafast` the operator configured from being stripped on regeneration
+   * (PR #2994 was closed for adding one the wire could not honor). Turning it off withdraws
+   * the generated native tier on the next catalog write.
    */
   ultraFastTier?: boolean;
   /**
@@ -589,6 +605,13 @@ export interface OcxConfig {
   codexMainAccountHardLock?: boolean;
   /** Per-window percentages: short defaults to 90, long to 98; integers 80..100, short <= long. */
   codexMainAccountHardLockThresholds?: { short?: number; long?: number };
+  /**
+   * Who refreshes the native main ChatGPT login in CODEX_HOME (#2999). "codex" asks the Codex
+   * binary through app-server `getAuthStatus` and never writes auth.json; "opencodex" keeps the
+   * guarded writer. Absent means "codex" when a Codex binary at or above the supported version
+   * is found, otherwise "opencodex". "codex" also falls back when no such binary exists.
+   */
+  nativeMainRefresh?: "codex" | "opencodex";
   /** Explicit top-level deletion intent used by stale whole-config rebases. */
   configRebaseProvenance?: OcxConfigRebaseProvenance | Record<string, unknown>;
   /** OpenAI provider-contract migration marker (v2 = single `openai` provider with account mode). */
@@ -760,6 +783,8 @@ export interface OcxConfig {
   };
   /** Opt-in failure-only recovery; never replaces the initial compaction model. */
   compactionRecovery?: { enabled: boolean; model: string; allowDevinInvalidArgument?: boolean };
+  /** Explicit opt-in; resumes Observe only using an existing trusted certificate and endpoints. */
+  desktopCompatibility?: { startOnProxyStart: boolean };
   /**
    * Destination model for Codex's own memory pipeline, per phase
    * (src/server/responses/memory-models.ts).
@@ -1029,6 +1054,16 @@ export interface OcxConfig {
   cacheRetention?: "none" | "short" | "long";
   /** Web-search sidecar: route web_search for non-OpenAI models through a gpt-mini via ChatGPT passthrough. */
   webSearchSidecar?: OcxWebSearchSidecarConfig;
+  /**
+   * Advisor sidecar: an OpenCodex-owned expert consultation runtime. The proxy injects a synthetic
+   * `advisor` tool into routed worker turns, executes the configured expert model itself (loopback
+   * through the normal routing authority, so the advisor may be ANY routable provider/model), and
+   * reinjects the advice so the original worker continues. `policy: "preflight"` additionally
+   * attempts one automatic consultation per task without worker cooperation, once the task has
+   * produced orientation evidence. Task context is sent only after
+   * `contextSharingConsent` is the current version; `enabled` does not grant that consent.
+   */
+  advisor?: OcxAdvisorConfig;
   /** Vision sidecar: describe images via a gpt vision model so text-only models can "see" them. */
   visionSidecar?: OcxVisionSidecarConfig;
   /** /v1/images relay for codex's built-in image_gen tool. */
@@ -1063,6 +1098,8 @@ export interface OcxConfig {
    * upgrade against a number nobody chose.
    */
   spend?: OcxSpendConfig;
+  /** Historical salted pool aliases; h(pool,P) cannot map to Q != P for any configured provider P. */
+  spendPoolAliases?: Record<string, string>;
   /** Opt-in per-account activation of newly reset Codex quota windows. */
   codexQuotaAutoRefresh?: Record<string, {
     fiveHour?: boolean;
@@ -1188,6 +1225,18 @@ export interface OcxConfig {
   /** Consecutive non-2xx upstream responses before switching future new threads. Default 3. 0 = disabled. */
   upstreamFailoverThreshold?: number;
   /**
+   * Sliding 60s transient-failure ratio for Codex pool placement. Default on.
+   * Set false to steer new threads from the consecutive counter only.
+   */
+  codexFailureWindow?: boolean;
+  /**
+   * What a manual pin does while its failure window is degraded.
+   * `hold` keeps using it and logs a warning. `detour-new-threads` places only new threads elsewhere.
+   */
+  codexPinnedTransientPolicy?: "hold" | "detour-new-threads";
+  /** Opt-in: retain one Codex WebSocket per account and thread across turns. Default off. */
+  codexWsReuseAcrossTurns?: boolean;
+  /**
    * Opt-in provider-origin circuit threshold for proven pre-connection reachability failures.
    * Default 0 (disabled); range 0..20. The circuit never counts timeouts or HTTP responses.
    */
@@ -1227,19 +1276,7 @@ export interface OcxConfig {
    * upstream has just rate-limited only ever runs after a refusal, so stranding it while a
    * second logged-in account sits idle is a defect rather than a configuration choice.
    */
-  anthropicAccountPool?: {
-    enabled?: boolean;
-    /** Usage % threshold for new-session auto-pick. Default 80. 0 = disabled (affinity/active only). */
-    autoSwitchThreshold?: number;
-    /** New-session rotation strategy. Default quota (today's behaviour). */
-    strategy?: OcxAccountPoolRotationStrategy;
-    /** Successful new-session binds retained on one round-robin selection. Default 1; range 1..100. */
-    stickyLimit?: number;
-    /** Usage window for quota-based scoring. Default "five-hour" (today's behaviour). */
-    quotaWindow?: OcxAccountPoolQuotaWindow;
-    /** Ordered model allowlists; inactive while the pool is disabled. Stored account IDs only. */
-    routes?: AnthropicModelRoute[];
-  };
+  anthropicAccountPool?: AnthropicAccountPoolConfig;
   /**
    * Generic OAuth multi-account PROACTIVE account preference (#2568, #695).
    *
@@ -1270,10 +1307,6 @@ export interface OcxConfig {
   /** Additional exact origins allowed for CORS (e.g. HTTPS or chrome-extension://<id>). Loopback origins are always allowed. */
   corsAllowOrigins?: string[];
 }
-
-export type OcxAccountPoolRotationStrategy = "quota" | "round-robin" | "fill-first";
-
-export type OcxAccountPoolQuotaWindow = "five-hour" | "weekly" | "max-utilization";
 
 export type OcxComboStrategy = "failover" | "round-robin" | "random" | "least-used" | "reset-window" | "jev";
 export type OcxComboDefaultEffort = "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
@@ -1535,6 +1568,8 @@ export interface OcxSearchConfig {
 }
 
 export interface OcxVisionSidecarConfig {
+  /** Explicit Anthropic account pool; unset inherits the request's instance. */
+  anthropicInstance?: AnthropicInstanceId;
   /** Master switch. Default: enabled when the selected backend has a usable credential. */
   enabled?: boolean;
   /**
@@ -1553,7 +1588,41 @@ export interface OcxVisionSidecarConfig {
   timeoutMs?: number;
 }
 
+/**
+ * Advisor sidecar configuration. Kept deliberately small for PR1: no adaptive trigger knobs
+ * (failedValidations / noProgressCycles / semanticClassifier) — those belong to a later PR.
+ */
+export interface OcxAdvisorConfig {
+  /** Master switch. Default: false — the advisor stays off the request path entirely. */
+  enabled?: boolean;
+  /**
+   * The expert model consulted by the sidecar. Any model string the routing authority accepts:
+   * a bare native model ("gpt-6-astra"), an explicit "provider/model" ("anthropic/claude-...",
+   * "xai/grok-..."), or an account-qualified native model ("<namespace>/gpt-6-astra").
+   */
+  model?: string;
+  /** Reasoning effort for the advisor call. Validated against the canonical effort ladder. */
+  effort?: "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+  /**
+   * When the advisor is consulted. "manual" (default): only when the worker explicitly calls the
+   * synthetic `advisor` tool. "preflight": OpenCodex additionally attempts one automatic
+   * consultation per task once the task has produced orientation evidence (an assistant tool call
+   * or a tool result after the latest user message).
+   */
+  policy?: "manual" | "preflight";
+  /** Advisor fetch timeout (ms). Default 120000. */
+  timeoutMs?: number;
+  /**
+   * Operator consent to send task conversation and tool results to the configured Advisor
+   * provider. Only `"v1"` is current. Absent or any other value means the runtime must not
+   * send task context. `enabled: true` does not grant this, and upgrades do not write it.
+   */
+  contextSharingConsent?: "v1";
+}
+
 export interface OcxWebSearchSidecarConfig {
+  /** Explicit Anthropic account pool; unset inherits the request's instance. */
+  anthropicInstance?: AnthropicInstanceId;
   /** Master switch. Default: enabled when a forward (ChatGPT) provider exists and the caller is logged in. */
   enabled?: boolean;
   /**

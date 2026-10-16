@@ -172,6 +172,8 @@ CLI から表示名を追加します (プロキシは、ライブ時にカタ�
 ocx models add deepseek deepseek-v4 --display-name "DeepSeek V4" --context-window 128000
 ```
 
+カスタムプロバイダーでウィンドウを明示しない場合、カタログはモデル ID による推定を含む[コンテキストウィンドウの補完規則](/ja/reference/configuration/providers/#カスタムプロバイダーのコンテキスト)を使います。中継サービスの容量がベンダーのウィンドウより小さい場合は、ウィンドウまたは Context cap を明示してください。
+
 リモート Codex クライアントは、通常のデータプレーン キー（管理者トークンではなく、`/v1/responses` で既に使用しているものと同じ資格情報）で同じ生成済みカタログを取得できます。
 
 ```bash

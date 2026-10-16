@@ -169,7 +169,7 @@ function installAntigravityFetchMock(
 
 describe("Google Antigravity OAuth 429 retry and multi-account budget (#5880)", () => {
   test("an observed caller abort before a validation refusal sends no sibling request", async () => {
-    await seedAntigravityAccounts(2);
+    const accounts = await seedAntigravityAccounts(2);
     const cfg = antigravityConfig();
     saveConfig(cfg);
     const abort = new AbortController();
@@ -184,6 +184,10 @@ describe("Google Antigravity OAuth 429 retry and multi-account budget (#5880)", 
       { model: "gemini-3.8-flash", provider: "google-antigravity" }, { abortSignal: abort.signal });
     expect(sends).toBe(1);
     await response.text();
+    const cancelledAccount = getAccountSet("google-antigravity")!.accounts
+      .find(row => row.id === accounts[0]!.id)!;
+    expect(cancelledAccount.needsReauth).toBeFalsy();
+    expect(cancelledAccount.needsReauthReason).toBeUndefined();
   });
 
   test("a spent caller send budget keeps a classified 403 and sends no sibling request", async () => {

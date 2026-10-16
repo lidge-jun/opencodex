@@ -162,7 +162,27 @@ için [Alt Ajan Arayüzü](/tr/guides/sub-agent-surface/) sayfasına bakın.
 
 ## Remote Hub oturumları, anahtarları ve kullanımı
 
-Pano yönetim düzlemi doğrudan client→hub model trafiğinden ayrıdır. **Integrations → API Keys** bekleyen döndürmeyi gösterir, yeni sırrı bir kez görüntüler ve açık onay veya iptal ister. Tarayıcı logout yalnızca mevcut oturumu geçersiz kılar. Bağlı kullanım hub üzerinde `apiKeyId` ile filtrelenir; bağlantı kesilince yerel kayıt kullanılır ve yansıtma yapılmaz.
+Pano yönetim düzlemi doğrudan client→hub model trafiğinden ayrıdır. **Bağlantı → API Anahtarları** bekleyen döndürmeyi gösterir, yeni sırrı bir kez görüntüler ve açık onay veya iptal ister. Tarayıcı logout yalnızca mevcut oturumu geçersiz kılar. Bağlı kullanım hub üzerinde `apiKeyId` ile filtrelenir; bağlantı kesilince yerel kayıt kullanılır ve yansıtma yapılmaz.
+
+### Kaydedilmiş bir API anahtarını görüntüleme
+
+Kaydedilmiş bir anahtarın tam değerini göstermek için açık eşleştirme veya güvenilir Tailscale
+kimlik doğrulamasıyla oluşturulmuş bir pano oturumu gerekir. Otomatik yerel oturum maskelenmiş
+listeyi okuyabilir, ancak kaydedilmiş değerleri gösteremez. Yönetici belirteci de yalnızca oturumlara
+izin verilen bu işlemi çağıramaz. Mevcut Remote Hub eşleştirme akışını veya varsa güvenilir Tailscale girişini kullanın.
+
+Yerel eşleştirme formu yalnızca HTTP üzerinden doğrudan `127.0.0.1` veya `[::1]` IP adresinde açılmış,
+aynı origin'e sahip bağımsız panoda sunulur. Origin, sunucunun yapılandırılmış geri döngü IP bağlama
+adresine uymalıdır. `localhost` veya bir takma adres kullanıyorsanız sunucunun bağlama adresini kontrol edin:
+`127.0.0.1` için `http://127.0.0.1:<port>`, `::1` için `http://[::1]:<port>` adresinde yeniden açıp
+eşleştirin. hostname değeri `localhost` olan sunucuda uygun bir yerel eşleştirme origin'i yoktur.
+Pano, takma adresli URL'den gerçek bağlama adresini belirleyemediği için başka bir URL önermeden genel ret açıklamasını gösterir.
+
+Eşleştirmeden sonra değeri istemek için anahtara yeniden tıklayın. Eşleştirme tek başına anahtarı göstermez.
+Paylaşılan oturum temizlendiğinde veya değiştirildiğinde, eşleştirme başladığında, panelden ayrıldığınızda,
+tarayıcı sekmesi ya da masaüstü penceresi gizlendiğinde veya sunucu değiştiğinde gösterilen değerler ve
+kopyalama durumu temizlenir. Bir kez gösterilen yeni ve yedek anahtar değerleri de temizlenir.
+Yetkili oturumun süresi dolarsa veya iptal edilirse yeniden eşleştirin.
 
 Spawn geçersiz kılma garantisi **yerleşik** v2 rehberlik metni için geçerlidir.
 Özel bir `injectionPrompt` bu metnin yerini tamamen alır ve `{{model}}` ve
@@ -189,6 +209,10 @@ ve diğer sağlayıcılardan ayrıdır.
   **PINNED** rozeti gösterir ve boşaltılana, başka bir hesap seçene kadar veya
   herhangi bir hesabın seçim sırasını değiştirene kadar daha yüksek bir seçim
   sırası bu hesabı öncelikleyemez.
+  Rozete yeniden tıklamak sabitlemeyi kaldırmak için onay ister. Onay seçim bilgisini temizler;
+  bağlı iş parçacıkları mevcut hesaplarını korur, yeni veya bağlanmamış istekler yeniden seçim
+  sırasını ve eşikleri izler.
+  Onay açıkken sabitlenen hesap değişirse bu onay yeni sabitlemeyi kaldıramaz. İşlem reddedilirse veya sonuç belirsizse hesap görünümü yenilenir; yeniden onaylamadan önce mevcut seçimi kontrol edin.
 - Her hesap kartı bir **Seçim sırası (Selection order)** kontrolü taşır (İlk,
   Daha Önce, Normal, Daha Sonra, Son). Daha yüksek sıra önce kullanılır ve havuz
   ancak üzerindeki her hesap boşaldığında veya kullanılamaz olduğunda daha düşük

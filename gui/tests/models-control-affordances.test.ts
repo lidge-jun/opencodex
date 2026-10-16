@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { effectiveDeclaration, withoutComments } from "./helpers/css-declarations";
 
 /**
- * WP1 (devlog/_plan/260830_models_provider_header/020_control_affordances.md):
+ * WP1 (devlog/_fin/260830_models_provider_header/020_control_affordances.md):
  * three controls in the provider header were operable but carried no visible
  * meaning. `Switch` accepted a `label` and spent it entirely on `aria-label`, so
  * every switch in the app was, to a sighted user, an unlabeled knob.

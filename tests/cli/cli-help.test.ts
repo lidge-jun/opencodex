@@ -348,8 +348,8 @@ describe("CLI subcommand help", () => {
   });
 
   test("recover-history repairs one explicitly selected ocx1-compacted thread", () => {
-    const codexHome = mkdtempSync(join(tmpdir(), "ocx-recover-compaction-"));
-    const opencodexHome = mkdtempSync(join(tmpdir(), "ocx-recover-compaction-state-"));
+    const codexHome = mkdtempSync(join(tmpdir(), "ocx-rc-"));
+    const opencodexHome = mkdtempSync(join(tmpdir(), "ocx-rc-state-"));
     try {
       writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5"\n', "utf8");
       const threadId = "01a018e6-242f-7801-81b8-ffc0a5c6d589";

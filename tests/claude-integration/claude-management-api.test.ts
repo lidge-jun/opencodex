@@ -123,7 +123,8 @@ test("GET classifies settings against the injected bound listener", async () => 
     const get = async () => (await (await fetch(new URL("/api/claude-code", server.url))).json()) as Record<string, unknown>;
     expect(await get()).toMatchObject({ sharedProxy: "none", cliFirstPartyApplied: false,
       desktopFirstParty: false, interceptEligible: true, interceptRunning: false });
-    writeFileSync(settingsPath, JSON.stringify({ env }));
+    // A fully applied block carries the loopback bypass (#6936); without it the block is stale.
+    writeFileSync(settingsPath, JSON.stringify({ env: { ...env, NO_PROXY: "127.0.0.1,localhost,::1,0.0.0.0" } }));
     expect(await get()).toMatchObject({ sharedProxy: "stopped", cliFirstPartyApplied: false });
     bound = { proxyPort: 10200, caCertPath: env.NODE_EXTRA_CA_CERTS, pickerProxyPort: null };
     expect(await get()).toMatchObject({ sharedProxy: "live", cliFirstPartyApplied: true, interceptRunning: true });
@@ -155,7 +156,7 @@ test("GET keeps ineligible bound, stale and stopped states distinct", async () =
   saveConfig(current);
   const settingsPath = join(process.env.CLAUDE_CONFIG_DIR!, "settings.json");
   mkdirSync(process.env.CLAUDE_CONFIG_DIR!, { recursive: true });
-  writeFileSync(settingsPath, JSON.stringify({ env }));
+  writeFileSync(settingsPath, JSON.stringify({ env: { ...env, NO_PROXY: "127.0.0.1,localhost,::1,0.0.0.0" } }));
   let bound: { proxyPort: number; caCertPath: string; pickerProxyPort: null } | null =
     { proxyPort: 10200, caCertPath: env.NODE_EXTRA_CA_CERTS, pickerProxyPort: null };
   const server = startServer(0, { managementApi: { getClaudeInterceptState: () => bound } });
@@ -603,7 +604,7 @@ test("PUT round-trips three-state authMode (devlog 260720 + 260726_claude_auth_a
     get = await fetch(new URL("/api/claude-code", server.url)).then(r => r.json()) as Record<string, unknown>;
     expect(get.authMode).toBe("subscription");
     // Under Claude Code's own login it passes through natively and keeps its 1M window.
-    expect(sonnetTier(get)).toBe("claude-sonnet-5[1m]");
+    expect(sonnetTier(get)).toBe("claude-sonnet-5-5[1m]");
 
     // "auto" is the return path: it deletes the key so detection drives the mode again.
     const auto = await fetch(new URL("/api/claude-code", server.url), {
@@ -763,6 +764,7 @@ test.each([
   ["alwaysEnableEffort", true],
   ["autoContext", false],
   ["autoCompactWindow", 400_000],
+  ["contextAccounting", "200k"],
 ] as const)("%s-only PUT triggers system-env reconciliation", async (field, value) => {
   const applySpy = spyOn(systemEnv, "applySystemEnvToggle").mockResolvedValue({ reverted: false, reason: "test" });
   const server = startServer(0);
@@ -945,6 +947,28 @@ test("PUT/GET round-trips the context/effort levers (devlog 136 B6)", async () =
     expect(persisted.claudeCode?.maxContextTokens).toBeUndefined();
     expect(persisted.claudeCode?.alwaysEnableEffort).toBeUndefined();
   } finally {
+    await server.stop(true);
+  }
+});
+
+test("PUT/GET round-trips contextAccounting; 1m drops the key, anything else is a 400", async () => {
+  const applySpy = spyOn(systemEnv, "applySystemEnvToggle").mockResolvedValue({ reverted: false, reason: "test" });
+  const server = startServer(0);
+  const put = (contextAccounting: unknown) => fetch(new URL("/api/claude-code", server.url), {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ contextAccounting }),
+  });
+  const get = async () => (await fetch(new URL("/api/claude-code", server.url)).then(r => r.json()) as Record<string, unknown>).contextAccounting;
+  try {
+    expect(await get()).toBe("1m");
+    expect((await put("200k")).status).toBe(200);
+    expect(loadConfig().claudeCode?.contextAccounting).toBe("200k");
+    expect(await get()).toBe("200k");
+    expect((await put("1m")).status).toBe(200);
+    expect(loadConfig().claudeCode?.contextAccounting).toBeUndefined();
+    expect(await get()).toBe("1m");
+    expect((await put("500k")).status).toBe(400);
+  } finally {
+    applySpy.mockRestore();
     await server.stop(true);
   }
 });

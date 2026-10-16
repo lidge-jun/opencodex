@@ -96,6 +96,9 @@ export function outboundProxyConfigured(
   return OUTBOUND_PROXY_ENV_KEYS.some(key => proxyEnvPresent(key, env));
 }
 
+// Captured before config/proxy-env applies runtime changes; Bun retains startup proxy env.
+export const startupOutboundProxyConfigured = outboundProxyConfigured();
+
 /**
  * The value when `raw` is a proxy URL Bun fetch can actually use, else null.
  * Bun rejects unparseable values and non-http(s) schemes (UnsupportedProxyProtocol),

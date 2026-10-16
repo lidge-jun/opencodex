@@ -24,16 +24,19 @@ interface WebSearchModelOption {
 const USAGE = `Usage:
   ocx agent [status] [--json]
   ocx agent injection <status|set> [--model <id|->] [--effort <level|->]
-      [--prompt <text|->] [--guidance <on|off>] [--json]
+      [--prompt <text|->] [--guidance <on|off>] [--sync-codex-defaults <on|off>] [--json]
   ocx agent injection suggest <work description> [--model <id>] [--apply] [--json]
   ocx agent effort <status|set> [--main <level|->] [--subagent <level|->] [--json]
   ocx agent subagents <status|set|clear> [model,model...] [--json]
   ocx agent subagents force <model|-> [--json]
   ocx agent fallback <status|set|clear> [model,model...] [--poll-ms <5000-600000>] [--json]
-  ocx agent roles [status|set <role> <model>|suggest [--model <id>] [--apply]] [--json]
+  ocx agent roles [status|set <role> <model> [--effort <level>]|suggest [--model <id>] [--apply]] [--json]
   ocx agent sidecar <status|web|vision> [--list] [--model <id|->]
       [--backend web:<openai|anthropic|xai|gemini|exa|-> vision:<openai|anthropic|routed|->]
-      [--reasoning <level>] [--max-descriptions <n>] [--enabled <on|off>] [--json]
+      [--reasoning <level>] [--max-descriptions <n> (vision)] [--enabled <on|off>]
+      [--stream-routed-output <on|off> (web)] [--timeout-ms <1-2147483647> (vision)] [--json]
+  ocx agent memory-models <show|set|clear> [options] [--json]
+  ocx agent compaction-routing <show|set|clear> [options] [--json]
   ocx agent request-user-input [on|off] [--json]`;
 
 function clearable(value: string | undefined): string | null | undefined {
@@ -257,6 +260,7 @@ async function sidecar(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const backend = takeOption(args, "--backend");
   const reasoning = takeOption(args, "--reasoning");
   const maxDescriptionsPerTurn = takeIntegerOption(args, "--max-descriptions", { min: 1 });
+  if (section === "web" && maxDescriptionsPerTurn !== undefined) throw new CliUsageError("--max-descriptions applies only to the vision sidecar", USAGE);
   const enabled = takeBooleanOption(args, "--enabled");
   rejectArgs(args, USAGE);
   const settings: Record<string, unknown> = {};
@@ -307,7 +311,7 @@ async function sidecar(argv: string[], deps: RuntimeApiDeps): Promise<void> {
 interface CodexAgentRolesStatus {
   lazycodex?: { detected?: boolean };
   omoJsonc?: { state?: string } | null;
-  roles?: Array<{ role: string; model: string | null; omoJsoncModel: string | null }>;
+  roles?: Array<{ role: string; model: string | null; effort?: string | null; omoJsoncModel: string | null }>;
 }
 
 interface CodexRoleProposal {
@@ -389,7 +393,7 @@ async function roles(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     const rows = result.roles ?? [];
     printData(result, wantsJson, [
       "omo (Codex / LazyCodex): detected",
-      ...(rows.length === 0 ? ["No Codex agent roles found."] : rows.map(row => `${row.role}: ${row.model ?? "(no model pin)"}`)),
+      ...(rows.length === 0 ? ["No Codex agent roles found."] : rows.map(row => `${row.role}: ${row.model ?? "(no model pin)"}${row.effort ? ` (${row.effort})` : ""}`)),
       `omo.jsonc: ${result.omoJsonc?.state ?? "unknown"}`,
     ]);
     return;
@@ -399,18 +403,22 @@ async function roles(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     return;
   }
   if (action !== "set") throw new CliUsageError(`unknown roles action ${action}`, USAGE);
+  const effort = takeOption(args, "--effort");
+  // An empty value is a supplied flag, not an absent one: dropping it would change the model and
+  // silently ignore the effort the operator asked for.
+  if (effort !== undefined && effort.trim() === "") throw new CliUsageError("--effort needs a reasoning level", USAGE);
   const role = args.shift();
   const model = args.shift();
   if (!role || !model) throw new CliUsageError("a role and a model are required", USAGE);
   rejectArgs(args, USAGE);
   const result = await runtimeRequest<{ toml?: { status?: string }; omoJsonc?: { status?: string } }>(
     `/api/codex-agent-roles/${encodeURIComponent(role)}`,
-    { method: "PUT", body: JSON.stringify({ model }) },
+    { method: "PUT", body: JSON.stringify(effort !== undefined ? { model, effort } : { model }) },
     deps,
   );
   const omo = result.omoJsonc?.status;
   printData(result, wantsJson, [
-    `${role}: ${model} (role TOML ${result.toml?.status ?? "unknown"})`,
+    `${role}: ${model}${effort ? ` (${effort})` : ""} (role TOML ${result.toml?.status ?? "unknown"})`,
     omo === "skipped_comments"
       ? "omo.jsonc: not written, because it contains comments that a rewrite would lose."
       : `omo.jsonc: ${omo ?? "unknown"}`,
@@ -418,6 +426,19 @@ async function roles(argv: string[], deps: RuntimeApiDeps): Promise<void> {
 }
 
 export async function handleAgentCommand(argv: string[], deps: RuntimeApiDeps = {}): Promise<number> {
+  const has = (flag: string) => argv.some(arg => arg === flag || arg.startsWith(`${flag}=`));
+  if ((argv[0] === "injection" || argv[0] === "guidance") && has("--sync-codex-defaults")) {
+    const { handleInjectionDefaults } = await import("./agent-runtime-settings");
+    return handleInjectionDefaults(argv.slice(1), deps);
+  }
+  if (argv[0] === "sidecar" && (has("--stream-routed-output") || has("--timeout-ms"))) {
+    const { handleSidecarRuntimeSettings } = await import("./agent-runtime-settings");
+    return handleSidecarRuntimeSettings(argv.slice(1), deps);
+  }
+  if (argv[0] === "memory-models" || argv[0] === "compaction-routing") {
+    const { handleAgentSettingsCommand } = await import("./agent-settings");
+    return handleAgentSettingsCommand(argv[0], argv.slice(1), deps);
+  }
   return runCliAction(async () => {
     const [sub = "status", ...rest] = argv;
     if (sub === "status") await status(rest, deps);

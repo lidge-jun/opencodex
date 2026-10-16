@@ -200,6 +200,7 @@ commands. Tray and page installation share one atomic claim before taking `Pendi
 a failed download or drain restores that pending signed update and reenables retry. The
 page returns through the startup sequence's resolved dashboard URL, independently of the
 one-time initial navigation claim. The loopback dashboard has no updater IPC permission.
+Install/download failures with a known version show a manual-download hint and that version's GitHub release link; navigation errors do not.
 
 The window may navigate to the `tauri://` scheme, to the loopback endpoint the sequence resolved,
 and on Windows to `tauri.localhost`, which is where the pinned Tauri serves the app itself because
@@ -286,8 +287,10 @@ the tray's Stop (when it takes the phase), a quit's drain and an update's drain 
 runtime's exit can arrive, finishing a stop does not restore it, and the failure page's retry sets it
 again. A coordinated update remembers the intent it temporarily clears: an aborted update restores a
 previously wanted runtime, but never turns a completed tray Stop back on. A terminal
-`ocx stop` of the runtime this app started clears nothing, so the app starts it again after the
-backoff; the tray's Stop and Quit keep it stopped. The dashboard's own Stop, in the app's window or
+`ocx stop` of the runtime this app started clears nothing, so the app may start it again after
+backoff; the CLI warns on stderr, while `stop --json` skips the probe and notice. The tray's
+Stop and Quit keep it stopped. An accepted CLI restart says Desktop starts the replacement;
+the CLI never starts its own recovery replacement for a known supervised target. The dashboard's own Stop, in the app's window or
 a browser, is refused with `desktop_supervised` while the app supervises the runtime
 (`src/server/stop-teardown.ts`): it would be undone within seconds, after a full native-Codex
 teardown. Only a dashboard session is refused; `ocx stop` authenticates with the admin token. Every
@@ -330,6 +333,49 @@ terminal before its own silence wait or claim. Only parsed `stopped` or validate
 rechecks the approved subject and compatibility. Declining attaches as a guest; a failed claim
 does not pretend a stopped runtime was restored.
 
+Live supervision is a third independent fact, alongside liveness and durable ownership.
+On macOS and Linux, the read-only probe verifies that the runtime's direct parent is
+`opencodex-desktop` and the child executable is that app's sibling `ocx`; two complete
+process snapshots must agree. The target runtime PID, `ocx.pid`, and the PID in
+`runtime-port.json` must agree wherever present; mismatches make supervision unknown.
+The attestation secret is never included in supervision evidence. On Windows, `ocx.pid` and `runtime-port.json` must both name the runtime PID; its direct parent must be a live `opencodex-desktop.exe`; both images must have drive-qualified paths, with the runtime matching the Desktop image's sibling `ocx.exe` case-insensitively; parent and child must share a session; and the parent must have been created strictly before the child.
+Two snapshots must agree, with one bounded PowerShell `Win32_Process` read per snapshot and a six-second budget for the inspection. Inconclusive evidence is `unknown`, retaining `desktopSeen` when a Desktop image was observed. Windows Start at Login is not verified, so live supervision never grants startup protection there.
+
+Command guards use this live evidence independently of login registration and durable ownership.
+Each guarded service command, Node/Bun update run and dashboard restart decision uses one
+`createSupervisionLatch()` from `src/service/desktop-supervision.mjs`: `desktop` or
+`unknown` with `desktopSeen: true` blocks; only a later positive `none` clears it. A later
+plain `unknown` or `unsupported` cannot clear a prior block. Without a prior block, plain
+unknown and unsupported preserve the existing durable-owner and liveness decisions.
+Service install, repair, start and restart refuse before mutation, including registration staging.
+Update gates re-read supervision before stop, package replacement, restoration and recovery;
+they refuse even for a separate npm/Bun install. Use the app updater for its bundle, or quit
+Desktop before updating the CLI install. Service stop and uninstall remain available.
+These decisions follow [runtime ownership](runtime.md#background-service-runtime-ownership).
+
+The bypass ledger classifies these guards as **early warning**, not enforcement:
+
+| Guard | Surface / tier | Known limit and residual risk | Pass-through assertion |
+| --- | --- | --- | --- |
+| Service install/repair/start/restart | CLI before mutation / E3 | Older PATH CLIs or inconclusive evidence without Desktop seen can allow a second supervisor. | With no prior block, none/unsupported preserve ordinary command behavior. |
+| Node/Bun update, including pre-stop and recovery | CLI / E3 | Same limits; Desktop can start after the last check inside the stop window, leaving a short race. | None preserves the ordinary update decision. |
+| Dashboard restart veto | Server route / E3 | Older runtimes lack this guard. | None preserves the ordinary restart decision. |
+| Stop guidance | Notice only / E1 | Desktop may restart the stopped proxy. | `stop --json` neither probes nor emits the notice. |
+
+When ownership is `none`, `src/service/desktop-startup.ts` can report
+`supervisor: { supervisorPid, runtimePid, app }` with `owned: false`. Restart safety
+credits this live supervision only when that same app's Start at Login registration is
+verified, the proxy is running, and the diagnostic is fresh and viable. This evidence
+never creates or changes an ownership claim; unknown ownership and CLI-owned claims do
+not enter the unowned diagnostic branch. Unverified login registration produces Desktop
+recovery guidance with no recommended shell command.
+
+Older runtimes cannot report this evidence. When an attested live startup verdict has
+no desktop diagnostic but a local probe verifies Desktop supervision of that live PID,
+status and doctor use the shared selector's local verdict; status JSON records
+`startupSource: "local-supervision-override"`. The service summary uses that selected
+verdict too. On Windows, the local reading may be owned or unowned but must bind to the same runtime and supervisor PIDs; macOS and Linux require an unowned local reading. A live verdict that already carries desktop diagnostics remains authoritative.
+
 ### Desktop runtime ownership acceptance
 
 The consent surface labels the exact ownership subject it is about to record. A relaunch of the
@@ -361,6 +407,9 @@ on Windows write a quoted executable path followed by `--autostart`, preserving 
 plugin's registration name and Task Manager explicit-enable semantics. A Windows-specific
 launch-origin migration marker revisits older registrations once, only when already
 enabled; entries disabled in the tray or Task Manager stay disabled.
+
+The macOS tray item and the macOS side of this migration judge the login item the way Startup
+safety does; see [Desktop Start at Login](desktop-start-at-login.md).
 
 The WidgetKit extension in `app/` needs three things that Xcode's app-extension target
 would supply on its own, and SwiftPM has no such target: `@main` on
@@ -413,6 +462,11 @@ This is presence telemetry only; management
 authentication remains in the shared API boundary.
 The desktop webview uses a Mozilla-compatible `OpenCodexDesktop/` user-agent
 marker, which the GUI detects to identify the shell without using IPC.
+
+## Desktop-owned terminal command
+
+Installing, repairing and removing the Desktop-owned `ocx` command on PATH is documented in
+[Desktop-owned terminal command](desktop-terminal-command.md).
 
 ## Release packaging and updater
 

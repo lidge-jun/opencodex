@@ -184,9 +184,9 @@ describe("restore validates the discovered app before any quit or open", () => {
       });
       expect(result.error).toBeUndefined();
       expect(result.status).toBe(0);
-      return { ...JSON.parse(result.stdout.trim().split("\n").at(-1)!), stderr: result.stderr } as {
+      return { ...JSON.parse(result.stdout.trim().split("\n").at(-1)!), stdout: result.stdout, stderr: result.stderr } as {
         code: number; calls: Array<{ command: string; args: string[]; override?: string }>;
-        launcherExists: boolean; root: string; shell: string; binary: string; stderr: string;
+        launcherExists: boolean; launcherContent: string | null; root: string; shell: string; binary: string; stdout: string; stderr: string;
       };
     } finally { removeTreeWithRetry(dir); }
   };
@@ -197,6 +197,37 @@ describe("restore validates the discovered app before any quit or open", () => {
       expect(result.launcherExists).toBe(true);
       expect(result.stderr).toContain("Refusing to restore");
       expect(result.calls.filter(call => ["pgrep", "ps", "/usr/bin/osascript", "/usr/bin/open"].includes(call.command))).toEqual([]);
+    });
+  }
+  for (const sub of ["launch", "restore"]) {
+    for (const scenario of [
+      { pgrepFails: true }, { pgrepFails: true, pgrepTimeout: true },
+      { psFails: true, running: true }, { invalidPgrep: true }, { discoveryFails: true },
+    ]) {
+      test(`${sub} preserves the launcher and refuses unknown app state ${JSON.stringify(scenario)}`, () => {
+        const result = run({ sub, flag: true, ...scenario });
+        expect(result.code).toBe(1);
+        expect(result.launcherContent).toBe("preserve until restore succeeds");
+        expect(result.calls.some(call => ["/usr/bin/osascript", "/usr/bin/open"].includes(call.command))).toBe(false);
+        expect(result.stderr).not.toContain("private");
+      });
+    }
+  }
+  test("an inspection failure after quit does not authorize open or launcher removal", () => {
+    const result = run({ running: true, probeFailsAfterQuit: true });
+    expect(result.code).toBe(1);
+    expect(result.launcherContent).toBe("preserve until restore succeeds");
+    expect(result.calls.some(call => call.command === "/usr/bin/osascript")).toBe(true);
+    expect(result.calls.some(call => call.command === "/usr/bin/open")).toBe(false);
+  });
+  for (const scenario of [{ pgrepFails: true }, { discoveryFails: true }, { psFails: true, running: true }]) {
+    test(`status reports unknown without mutation ${JSON.stringify(scenario)}`, () => {
+      const result = run({ sub: "status", ...scenario });
+      expect(result.code).toBe(0);
+      expect(result.stdout).toContain("app: unknown");
+      expect(result.stdout).toContain("CODEX_CLI_PATH launcher: unknown");
+      expect(result.launcherContent).toBe("preserve until restore succeeds");
+      expect(result.stdout).not.toContain("private");
     });
   }
   test("valid restore works with the flag off and no bundled app-server", () => {
@@ -236,6 +267,33 @@ describe("restore validates the discovered app before any quit or open", () => {
     expect(result.code).toBe(0);
     expect(result.launcherExists).toBe(true);
     expect(result.calls.map(call => call.command)).toEqual(["pgrep", "ps"]);
+  });
+  test("a launch refused over a dropped chatgptDesktop block names the failing field", () => {
+    const result = run({ sub: "launch", flag: false, configRaw: JSON.stringify({ chatgptDesktop: { appServerShim: "yes" } }) });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("chatgptDesktop.appServerShim");
+    expect(result.stderr).toContain("whole chatgptDesktop block is ignored");
+    expect(result.calls).toEqual([]);
+  });
+  test("status names a dropped chatgptDesktop block next to the off flag", () => {
+    const result = run({ sub: "status", configRaw: JSON.stringify({ chatgptDesktop: { appServerShim: true, unblockSend: true } }) });
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain('app-server shim (experimental): off (config.json chatgptDesktop: Unrecognized key: "unblockSend"');
+    expect(result.stdout).toContain("the whole chatgptDesktop block is ignored)");
+  });
+  test("status shows a plain off for a valid, absent or unreadable block", () => {
+    for (const configRaw of [undefined, "{}", JSON.stringify({ chatgptDesktop: { appServerShim: false } }), "{not json"]) {
+      const result = run({ sub: "status", ...(configRaw === undefined ? {} : { configRaw }) });
+      const input = `configRaw=${configRaw === undefined ? "<no file>" : JSON.stringify(configRaw)}`;
+      expect(result.code, input).toBe(0);
+      expect(result.stdout, input).toContain("app-server shim (experimental): off\n");
+    }
+  });
+  test("a launch refused with no dropped block keeps the ordinary opt-in message", () => {
+    const result = run({ sub: "launch", flag: false, configRaw: "{}" });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("set chatgptDesktop.appServerShim: true before launching");
+    expect(result.stderr).not.toContain("whole chatgptDesktop block is ignored");
   });
   test("launch still requires opt-in and an app-server binary", () => {
     for (const scenario of [{ flag: false }, { flag: true, missingBinary: true }]) {

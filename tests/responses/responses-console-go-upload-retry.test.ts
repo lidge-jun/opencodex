@@ -282,7 +282,9 @@ describe("Console nonreplayable response boundary", () => {
       const response = await handleResponses(request(), cfg, { model: "", provider: "" });
       expect(response.status).toBe(400);
       expect(sends).toBe(1);
-      expect(await response.text()).toContain("Invalid upload request.");
+      expect(await response.json()).toEqual({ error: { type: "invalid_request_error",
+        message: "Provider error 400: upstream diagnostic withheld for a non-replayable failure",
+      } });
     });
   }
 });

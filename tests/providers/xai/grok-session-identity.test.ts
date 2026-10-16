@@ -129,5 +129,6 @@ describe("Grok turns reach the ChatGPT Codex backend with session_id", () => {
 test("the /v1/responses route hands handleResponses the Grok-promoted request", () => {
   // Pins the one-line wiring; the cases above call the helper directly.
   const source = readFileSync(repoPath("src", "server", "index", "serve-options.ts"), "utf8");
-  expect(source).toContain("await handleResponses(withGrokSessionIdentity(req), config, logCtx, {");
+  expect(source).toContain("const sessionReq = withCallerSessionIdentity(withGrokSessionIdentity(req), admission);");
+  expect(source).toContain("await handleResponses(sessionReq, config, logCtx, {");
 });

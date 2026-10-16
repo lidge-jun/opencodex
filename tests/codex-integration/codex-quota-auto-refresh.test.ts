@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -22,6 +22,7 @@ import type { OcxConfig } from "../../src/types";
 import { startupHealthFixture } from "../helpers/startup-health";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { clearAccountNeedsReauth, isAccountNeedsReauth } from "../../src/codex/account-runtime-state";
+import { drainAndRemoveFixtureRoots } from "../helpers/fixture-teardown";
 
 const NOW = 1_800_000_000_000;
 const RESET_SECONDS = NOW / 1000;
@@ -114,14 +115,20 @@ beforeEach(() => {
   resetCodexQuotaAutoRefreshForTests();
 });
 
-afterEach(() => {
+afterEach(async () => {
   globalThis.fetch = previousFetch;
   clearAccountNeedsReauth("pool-a");
   clearAccountQuota();
   resetCodexQuotaAutoRefreshForTests();
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
-  if (testHome && existsSync(testHome)) rmSync(testHome, { recursive: true, force: true });
+  // Windows may still hold credential-hardening handles after a quota assertion. Drain their
+  // owners before removal; synchronous EBUSY retries alone cannot deliver an async child reap.
+  await drainAndRemoveFixtureRoots({
+    roots: testHome ? [{ path: testHome }] : [],
+    restoreEnvironment: () => {
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+    },
+  });
 });
 
 describe("Codex quota window auto refresh", () => {

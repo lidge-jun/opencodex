@@ -78,6 +78,11 @@ export function sanitizeReasoningInputContent(
      * placeholder, rather than emitted in the shape the upstream 400s on.
      */
     requirePlaintextReasoning?: boolean;
+    /**
+     * Called once per sanitized body when a reasoning item that carried nonempty plaintext
+     * `reasoning_text` was blanked. Observability only; it never changes the body (#6675).
+     */
+    onPlaintextReasoningBlanked?: () => void;
   },
 ): unknown {
   if (!body || typeof body !== "object" || Array.isArray(body)) return body;
@@ -85,6 +90,7 @@ export function sanitizeReasoningInputContent(
   if (!Array.isArray(raw.input)) return body;
 
   let changed = false;
+  let blankedPlaintext = false;
   const input = raw.input.map(item => {
     if (!item || typeof item !== "object" || Array.isArray(item)) return item;
     const rec = item as Record<string, unknown>;
@@ -148,11 +154,15 @@ export function sanitizeReasoningInputContent(
     // guide merges reasoning items into the adjacent assistant message), so providers flagged
     // `preserveResponsesReasoningContent` keep it — deleting valid replay content there breaks
     // continuations after tool calls (issue #875 family).
-    if (blankContent) next.content = [];
+    if (blankContent) {
+      if (hasPlaintextReasoningContent(rec.content)) blankedPlaintext = true;
+      next.content = [];
+    }
     if (missingPlaintextReasoning) next.content = plaintextReasoningBackfill(next);
     return next;
   });
 
+  if (blankedPlaintext) opts?.onPlaintextReasoningBlanked?.();
   return changed ? { ...raw, input } : body;
 }
 

@@ -266,7 +266,8 @@ for (const adapter of ["anthropic", "openai-responses"] as const) {
       expect(Number(response.headers.get("retry-after"))).toBeGreaterThan(50);
       expect(Number(response.headers.get("retry-after"))).toBeLessThanOrEqual(60);
       const body = await response.json() as { error: { type: string; message: string } };
-      expect(body.error.type).toBe("rate_limit_error");
+      // The shared-quota helper names a rejected window, so the held route is out on spent quota (#6991).
+      expect(body.error.type).toBe("usage_limit_reached");
       expect(body.error.message.includes("model route")).toBe(enabled);
       expect(body.error.message).not.toContain("private-scope");
       expect(sends).toEqual([]);

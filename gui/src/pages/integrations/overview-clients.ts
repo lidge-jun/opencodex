@@ -151,6 +151,7 @@ const FILE_LABEL_KEY: Record<FileIntegrationClientId, TKey> = {
   dsh: "integrations.tab.dsh",
   mcode: "integrations.tab.mcode",
   zcode: "integrations.tab.zcode",
+  commandcode: "integrations.tab.commandcode",
   prime: "integrations.tab.prime",
   aside: "integrations.tab.aside",
   raycast: "integrations.tab.raycast",
@@ -158,6 +159,7 @@ const FILE_LABEL_KEY: Record<FileIntegrationClientId, TKey> = {
   cline: "integrations.tab.cline",
   kilo: "integrations.tab.kilo",
   droid: "integrations.tab.droid",
+  qoder: "integrations.tab.qoder",
 };
 
 /** A file client's block is in the file for both `current` and `stale`. */

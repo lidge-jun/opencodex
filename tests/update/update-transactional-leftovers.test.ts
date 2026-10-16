@@ -16,7 +16,7 @@ import {
   transactionalNpmUpdate,
 } from "../../src/update/transactional-install.mjs";
 import { planStoppedRuntimeRecovery } from "../../src/update/runtime-ownership.mjs";
-import { npmUpdateFailureGuidance } from "../../src/update/update-failure-guidance.mjs";
+import { manualUpdateFailureGuidance, npmUpdateFailureGuidance } from "../../src/update/update-failure-guidance.mjs";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const PKG = "@bitkyc08/opencodex";
@@ -183,7 +183,13 @@ describe("#5624 update failure at each step keeps the previous install and servi
     expect(recoveryFor(tx)).toEqual({ action: "manual", reason: "launcher-unavailable" });
     const guidance = npmUpdateFailureGuidance({ ...tx, pkgName: PKG, version: "2.0.0", tag: "latest" });
     expect(guidance.previousVersionKept).toBe(false);
-    expect(guidance.lines.join(" ")).toContain(".ocx-recovery.json");
+    const text = guidance.lines.join(" ");
+    expect(text).toContain(".ocx-recovery.json");
+    expect(text).toContain("'ocx status'");
+    expect(text).toContain("'ocx stop'");
+    expect(text).toContain("npm install -g");
+    expect(text.indexOf("'ocx status'")).toBeLessThan(text.indexOf("npm install -g"));
+    expect(text.indexOf("'ocx stop'")).toBeLessThan(text.indexOf("npm install -g"));
   });
 });
 
@@ -292,5 +298,50 @@ describe("#5624 leftovers from earlier update attempts", () => {
     } finally {
       removeTreeWithRetry(outside);
     }
+  });
+});
+
+describe("A3-06 manual update failure guidance", () => {
+  for (const command of [
+    { bin: "bun", args: ["add", "-g", `${PKG}@2.0.0`] },
+    { bin: "npm", args: ["install", "-g", "--allow-scripts=bun", `${PKG}@preview`] },
+    { bin: "pnpm", args: ["add", "-g", "--allow-build=bun", `${PKG}@2.0.0`] },
+  ]) {
+    test(`${command.bin}: status and owner stop precede reinstall and owner restart`, () => {
+      const lines = manualUpdateFailureGuidance({ ...command, platform: "linux" });
+      expect(lines[0]).toContain("'ocx status'");
+      expect(lines[0]).toContain("let any in-progress recovery finish");
+      expect(lines[1]).toContain("'ocx stop'");
+      expect(lines[1]).toContain("the owning service, or the desktop app");
+      expect(lines[1]).toContain("confirm it has stopped before installing");
+      expect(lines[2]).toBe(`Then run: ${command.bin} ${command.args.join(" ")}`);
+      expect(lines[3]).toContain("'ocx service restart'");
+      expect(lines[3]).toContain("desktop app");
+      expect(lines[3]).toContain("'ocx start' if unmanaged");
+    });
+  }
+
+  test("pnpm manual reinstall retains the verified executable and global group", () => {
+    const owner = {
+      commandPath: "/opt/r5 pnpm/pnpm", packagePath: "/opt/r5 global/5/node_modules/opencodex",
+      globalDir: "/opt/r5 global", globalRoot: "/opt/r5 global/5/node_modules",
+      globalBinDir: "/opt/r5 bin",
+    };
+    const lines = manualUpdateFailureGuidance({
+      bin: "pnpm", args: ["add", "-g", "--allow-build=bun", `${PKG}@2.0.0`], owner, platform: "linux",
+    });
+    expect(lines[2]).toBe("Then run: '/opt/r5 pnpm/pnpm' add '--global-dir=/opt/r5 global' '--config.global-bin-dir=/opt/r5 bin' -g --allow-build=bun @bitkyc08/opencodex@2.0.0");
+  });
+
+  test("Windows pnpm manual guidance quotes the owner paths for PowerShell", () => {
+    const owner = {
+      commandPath: "C:/r5 pnpm/pnpm.cmd", packagePath: "C:/r5 global/5/node_modules/opencodex",
+      globalDir: "C:/r5 global", globalRoot: "C:/r5 global/5/node_modules",
+      globalBinDir: "C:/r5's bin",
+    };
+    const lines = manualUpdateFailureGuidance({
+      bin: "pnpm", args: ["add", "-g", "--allow-build=bun", `${PKG}@preview`], owner, platform: "win32",
+    });
+    expect(lines[2]).toBe("Then run in PowerShell: & 'C:/r5 pnpm/pnpm.cmd' add '--global-dir=C:/r5 global' '--config.global-bin-dir=C:/r5''s bin' -g --allow-build=bun @bitkyc08/opencodex@preview");
   });
 });

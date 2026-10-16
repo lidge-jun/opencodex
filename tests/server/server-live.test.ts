@@ -1469,7 +1469,7 @@ describe("GET /readyz", () => {
 
       const health = await fetch(new URL("/healthz", server.url));
       const healthBody = await health.json() as Record<string, unknown>;
-      expect(healthBody.guiPairCapability).toBe("v1");
+      expect(healthBody.guiPairCapability).toBe("v2");
       expect(JSON.stringify(healthBody)).not.toContain("ocx_session_");
       expect(JSON.stringify(healthBody)).not.toContain("csrf");
     } finally {

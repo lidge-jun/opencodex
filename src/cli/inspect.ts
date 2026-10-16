@@ -35,6 +35,7 @@ const USAGE = `Usage:
   ocx inspect windows-tray [--json]
   ocx integration native [list] [--json]
   ocx integration native <claude|claude-desktop|codex|grok> <on|off> [--json]
+  ocx integration native cursor [status|local-installer] [--json]
   ocx agent request-user-input [on|off] [--json]`;
 
 /** A read that takes no arguments beyond `--json`. */
@@ -220,6 +221,10 @@ export async function handleInspectCommand(argv: string[], deps: RuntimeApiDeps 
 }
 
 export async function handleIntegrationCommand(argv: string[], deps: RuntimeApiDeps = {}): Promise<number> {
+  if (argv[0] === "native" && argv[1] === "cursor") {
+    const { handleCursorIntegrationCommand } = await import("./integration-cursor");
+    return handleCursorIntegrationCommand(argv.slice(2), deps);
+  }
   return runCliAction(async () => {
     const [sub, ...rest] = argv;
     if (sub === "native" || sub === undefined) await nativeIntegration(sub === undefined ? [] : rest, deps);

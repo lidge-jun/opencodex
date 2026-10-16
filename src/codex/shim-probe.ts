@@ -246,7 +246,7 @@ function readProbeMetadata(path: string, maxBytes: number): string | null {
   }
 }
 
-function probeUnixShimInstall(wrapperPath: string): UnixShimProbeResult {
+function probeUnixShimInstall(wrapperPath: string, childEnv?: NodeJS.ProcessEnv): UnixShimProbeResult {
   if (process.platform === "win32") return null;
   const probeDir = mkdtempSync(join(tmpdir(), "opencodex-shim-probe-"));
   const markerPath = join(probeDir, "result");
@@ -255,6 +255,7 @@ function probeUnixShimInstall(wrapperPath: string): UnixShimProbeResult {
   const stderrPath = join(probeDir, "stderr");
   const env: NodeJS.ProcessEnv = {
     ...process.env,
+    ...childEnv,
     BUN_BE_BUN: "1",
     OCX_SHIM_BYPASS: "1",
     OCX_SHIM_PROBE: "1",
@@ -329,12 +330,12 @@ function probeUnixShimInstall(wrapperPath: string): UnixShimProbeResult {
   }
 }
 
-function probeUnixShimFiles(files: readonly ShimFileState[]): UnixShimProbeResult {
+function probeUnixShimFiles(files: readonly ShimFileState[], childEnv?: NodeJS.ProcessEnv): UnixShimProbeResult {
   if (process.platform === "win32") return null;
   codexShimProbeHookForTests?.();
   return files
     .filter(file => !file.preserveOnly)
-    .map(file => probeUnixShimInstall(file.wrapperPath))
+    .map(file => probeUnixShimInstall(file.wrapperPath, childEnv))
     .find(result => result !== null) ?? null;
 }
 

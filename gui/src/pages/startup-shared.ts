@@ -5,7 +5,13 @@ export type StartupProtection = "service" | "desktop" | "shim" | "none";
 export type StartupInstallAction = "install-service" | "install-shim";
 
 export interface StartupHealthData {
-  desktop?: { owned: boolean; loginEnabled: boolean; running: boolean; viable: boolean };
+  desktop?: {
+    owned: boolean;
+    loginEnabled: boolean;
+    running: boolean;
+    viable: boolean;
+    supervisor?: { supervisorPid: number; runtimePid: number; app: string };
+  };
   status: StartupStatus;
   routingKind: "native" | "opencodex-local" | "custom-local" | "custom-remote" | "unknown";
   routingInjected: boolean;
@@ -22,9 +28,12 @@ export interface StartupHealthData {
   serviceSupported: boolean;
   shimInstalled: boolean;
   shimHealthy: boolean;
+  /** Intact PATH-overlay shim not seen active from the dashboard's PATH: show activation, not Repair. */
+  shimActivationPending?: boolean;
   shimCoverage: "full" | "cli-only" | "none";
   platform: string;
   recommendedCommand: string | null;
+  recommendedAction?: string | null;
   diagnosticStale: boolean;
   commands: {
     installService: string;

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import type { ProviderAdapter } from "../../src/adapters/base";
 import type { AdapterEvent, OcxConfig, OcxProviderConfig } from "../../src/types";
+import { TranslatorBudgetExceededError } from "../../src/lib/translator-budget";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 const actualResolver = await import("../../src/server/adapter-resolve");
@@ -55,6 +56,67 @@ function post(adapter: string, stream: boolean, abortSignal?: AbortSignal): Prom
 }
 
 describe("Responses abort guards", () => {
+  test("an initial adapter budget refusal returns 413 before any send", async () => {
+    let sends = 0;
+    let adapterSignal: AbortSignal | undefined;
+    adapterFactory = () => ({
+      name: "test-budget-build",
+      buildRequest(_parsed, incoming) {
+        adapterSignal = incoming?.abortSignal;
+        throw new TranslatorBudgetExceededError("request_copies", 1);
+      },
+      async fetchResponse() { sends += 1; return new Response("unreachable"); },
+      async *parseStream(): AsyncGenerator<AdapterEvent> { yield { type: "done" }; },
+    });
+    const response = await post("test-budget-build", false);
+    expect(response.status).toBe(413);
+    expect((await response.json()).error).toMatchObject({
+      type: "request_too_large", code: "request_too_large",
+      message: "request translation buffer exceeded the safe limit",
+    });
+    expect(sends).toBe(0);
+    expect(adapterSignal?.aborted).toBe(true);
+  });
+
+  for (const budgetError of [true, false]) {
+    test(`an image-retry build ${budgetError ? "budget refusal returns 413" : "ordinary error retains 400"} without a retry send`, async () => {
+      let builds = 0;
+      let sends = 0;
+      let adapterSignal: AbortSignal | undefined;
+      adapterFactory = provider => ({
+        name: "anthropic",
+        buildRequest(_parsed, incoming) {
+          builds += 1;
+          adapterSignal = incoming?.abortSignal;
+          if (builds > 1) throw budgetError
+            ? new TranslatorBudgetExceededError("request_copies", 1)
+            : new Error("fixture rebuild failure");
+          return { url: provider.baseUrl, method: "POST", headers: {}, body: "{}" };
+        },
+        async fetchResponse() {
+          sends += 1;
+          return new Response('{"error":{"type":"request_too_large","message":"image too large"}}', { status: 413 });
+        },
+        async *parseStream(): AsyncGenerator<AdapterEvent> { yield { type: "done" }; },
+      });
+      takeSpendHome();
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "fixture/model", stream: false, input: [{
+          role: "user", content: [{ type: "input_image", image_url: "data:image/png;base64,AA==" }],
+        }] }),
+      }), config("anthropic"), { model: "", provider: "" }, {});
+      expect(response.status).toBe(budgetError ? 413 : 400);
+      expect((await response.json()).error).toMatchObject(budgetError ? {
+        type: "request_too_large", code: "request_too_large",
+        message: "request translation buffer exceeded the safe limit",
+      } : { type: "invalid_request_error", code: "invalid_request_error", message: "fixture rebuild failure" });
+      expect(builds).toBe(2);
+      expect(sends).toBe(1);
+      expect(adapterSignal?.aborted).toBe(true);
+    });
+  }
+
   test("runTurn backlog overflow aborts the adapter signal", async () => {
     let adapterSignal: AbortSignal | undefined;
     let abortedAfterOverflow = false;

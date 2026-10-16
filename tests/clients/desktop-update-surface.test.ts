@@ -14,8 +14,8 @@ function evaluatePage(invoke?: (name: string) => Promise<unknown>, userAgent?: s
   const script = page.match(/<script nonce="__TAURI_SCRIPT_NONCE__">([\s\S]*?)<\/script>/)?.[1];
   if (!script) throw new Error("update page script missing");
   const handlers = new Map<string, (event?: unknown) => void>();
-  const nodes = new Map(["titlebar", "state", "error", "check", "install", "back"].map(id => [id, {
-    textContent: "", hidden: true, disabled: false,
+  const nodes = new Map(["titlebar", "state", "error", "manual", "release", "check", "install", "back"].map(id => [id, {
+    textContent: "", hidden: true, disabled: false, href: "",
     addEventListener: (name: string, callback: (event?: unknown) => void) => { handlers.set(`${id}:${name}`, callback); },
   }]));
   const timers = new Map<number, () => void>();
@@ -117,6 +117,47 @@ describe("bundled desktop update surface", () => {
     await settle();
     expect(nodes.get("error")?.textContent).toContain("600000 ms");
     expect(nodes.get("install")?.disabled).toBe(true);
+  });
+  test("a failed download offers the known version's manual installer", async () => {
+    const status = { currentVersion: "2.65.0", latestVersion: "2.66.0-preview.1", available: true, installing: false, checking: false };
+    const { nodes, handlers } = evaluatePage(name => name === "update_install"
+      ? Promise.reject(new Error("download failed")) : Promise.resolve(status));
+    await settle();
+    handlers.get("install:click")?.();
+    await settle();
+    expect(nodes.get("error")?.textContent).toContain("download failed");
+    expect(nodes.get("error")?.textContent).toContain("install the package manually");
+    expect(nodes.get("manual")?.hidden).toBe(false);
+    expect(nodes.get("release")?.textContent).toContain("2.66.0-preview.1");
+    expect(nodes.get("release")?.href).toBe("https://github.com/lidge-jun/opencodex/releases/tag/v2.66.0-preview.1");
+  });
+  test("an install failure without a known version has no manual hint", async () => {
+    const status = { currentVersion: "2.65.0", latestVersion: null, available: true, installing: false, checking: false };
+    const { nodes, handlers } = evaluatePage(name => name === "update_install"
+      ? Promise.reject(new Error("install failed")) : Promise.resolve(status));
+    await settle();
+    handlers.get("install:click")?.();
+    await settle();
+    expect(nodes.get("error")?.textContent).toBe("install failed");
+    expect(nodes.get("manual")?.hidden).toBe(true);
+    expect(nodes.get("release")?.href).toBe("");
+  });
+  test("navigation and check failures clear a previous manual hint", async () => {
+    const status = { currentVersion: "2.65.0", latestVersion: "2.66.0", available: true, installing: false, checking: false };
+    const { nodes, handlers } = evaluatePage(name => name === "update_status"
+      ? Promise.resolve(status) : Promise.reject(new Error(name + " failed")));
+    await settle();
+    handlers.get("install:click")?.();
+    await settle();
+    expect(nodes.get("manual")?.hidden).toBe(false);
+    handlers.get("back:click")?.();
+    await settle();
+    expect(nodes.get("error")?.textContent).toBe("return_to_dashboard failed");
+    expect(nodes.get("manual")?.hidden).toBe(true);
+    handlers.get("check:click")?.();
+    await settle();
+    expect(nodes.get("error")?.textContent).toBe("update_check failed");
+    expect(nodes.get("manual")?.hidden).toBe(true);
   });
   test("a page check superseded by a tray check stays checking until the tray result settles", async () => {
     const current = { currentVersion: "2.65.0", latestVersion: null, available: false, installing: false, checking: false };

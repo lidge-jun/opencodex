@@ -338,6 +338,8 @@ export function relaySseEagerBounded(
                 upstreamError,
                 terminalBoundary.upstreamRefusalCode(),
                 opts?.maskCredential,
+                terminalBoundary.upstreamErrorType(),
+                terminalBoundary.upstreamErrorCode(),
               );
             queuedBytes += upstreamErrorFrame.byteLength + terminalSentinel.byteLength;
             try {
@@ -478,6 +480,8 @@ export function relaySseEagerBounded(
         }
       }
     } finally {
+      upstream.signal.removeEventListener("abort", wakeUp);
+      upstream.signal.removeEventListener("abort", wakeParkedRead);
       // Release any retained rewrite-buffer bytes on every teardown path
       // (error, cancel, upstream abort) — consumption/EOF release alone
       // leaves them charged.

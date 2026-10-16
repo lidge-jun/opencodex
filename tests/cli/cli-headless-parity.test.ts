@@ -475,6 +475,13 @@ function fakeRuntime(responder?: (req: Request, body: unknown) => unknown) {
       const custom = responder?.(req, body);
       if (custom instanceof Response) return custom;
       if (custom !== undefined) return Response.json(custom);
+      if (req.method === "PATCH" && url.pathname === "/api/providers") return Response.json({ success: true, name: url.searchParams.get("name"), disabled: false, hasApiKey: false, catalogRefresh: null });
+      if (req.method === "PUT" && url.pathname === "/api/combos") {
+        const saved = body as { id: string; combo: Record<string, unknown> };
+        const combo = Object.fromEntries(Object.entries(saved.combo).filter(([key, value]) => value !== null || key === "defaultEffort"));
+        return Response.json({ success: true, id: saved.id, model: typeof combo.alias === "string" && combo.alias.trim() ? combo.alias.trim() : `combo/${saved.id}`, combo,
+          catalogRefresh: { status: "committed", changed: true, degraded: false, notices: [] } });
+      }
       return Response.json({ ok: true });
     },
   });
@@ -557,6 +564,7 @@ describe("headless GUI parity CLI", () => {
       ["/api/logs", "ocx observe"],
       ["/api/lab", "ocx lab"],
       ["/api/config", "ocx config"],
+      ["/api/advisor", "ocx advisor"],
       ["/api/companion", "ocx companion"],
       // The client machine plane. These are served by the connected client's own loopback
       // listener rather than the hub, and each one mirrors a connect-family command:
@@ -572,6 +580,9 @@ describe("headless GUI parity CLI", () => {
       // Claude reset grants: reading is an owed CLI verb (deferred-verb in the route
       // registry) and spending is dashboard-session-only by design.
       ["/api/anthropic/reset-grants", "(none — GUI reset-grant dialog; spend requires a dashboard session)"],
+      // The registry records read-only status as an owed CLI verb; trust, launch,
+      // settings and the account-wide trial intentionally require local GUI consent.
+      ["/api/codex/desktop-compatibility", "(none — local GUI confirmation; status CLI deferred in clients/codex-desktop.md)"],
       ["/api/protocols", "ocx api protocols/explain/policy"],
       ["/api/settings", "ocx system"],
       // Routing Intelligence (RI-04..RI-10): profiles + dry-run are mirrored by
@@ -952,7 +963,8 @@ describe("headless GUI parity CLI", () => {
       if (req.method === "PUT") {
         const update = body as { id: string; combo: Record<string, unknown> };
         persisted = { id: update.id, ...update.combo };
-        return { combo: persisted };
+        return { success: true, id: update.id, model: `combo/${update.id}`, combo: update.combo,
+          catalogRefresh: { status: "committed", changed: true, degraded: false, notices: [] } };
       }
       return undefined;
     });
@@ -992,6 +1004,23 @@ describe("headless GUI parity CLI", () => {
     expect(runtime.requests).toEqual([
       { path: "/api/codex-agent-roles", method: "GET", body: null },
       { path: "/api/codex-agent-roles/ocx%20explorer", method: "PUT", body: { model: "xai/grok-4.5" } },
+    ]);
+  });
+
+  test("agent roles set forwards --effort and refuses an empty one before any request", async () => {
+    const runtime = fakeRuntime(() => ({ toml: { status: "written" }, omoJsonc: { status: "written" } }));
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await handleAgentCommand(["roles", "set", "explorer", "a/model", "--effort", "high", "--json"], runtime.deps)).toBe(0);
+      expect(await handleAgentCommand(["roles", "set", "explorer", "b/model", "--effort", ""], runtime.deps)).toBe(2);
+      expect(errorSpy.mock.calls.map(call => String(call[0]))).toContain("Error: --effort needs a reasoning level");
+    } finally {
+      logSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+    expect(runtime.requests).toEqual([
+      { path: "/api/codex-agent-roles/explorer", method: "PUT", body: { model: "a/model", effort: "high" } },
     ]);
   });
 
@@ -1163,13 +1192,17 @@ describe("headless GUI parity CLI", () => {
 
   test("remote connect status is headless and revoke refuses disconnected state before hub traffic", async () => {
     let requests = 0;
+    const lockRoot = mkdtempSync(join(tmpdir(), "ocx-connect-parity-lock-"));
+    const lifecycleLockDeps = { lockPath: join(lockRoot, "client-lifecycle.sqlite") };
     const logSpy = spyOn(console, "log").mockImplementation(() => {});
     const errorSpy = spyOn(console, "error").mockImplementation(() => {});
     try {
       expect(await handleConnectCommand(["status", "--json"], {
+        lifecycleLockDeps,
         fetchImpl: async () => { requests += 1; return new Response(); },
       })).toBe(0);
       expect(await handleConnectCommand(["revoke", "--admin-token-stdin", "--json"], {
+        lifecycleLockDeps,
         stdinImpl: Readable.from(["ocx_admin_test\n"]),
         fetchImpl: async () => { requests += 1; return new Response(); },
       })).toBe(1);
@@ -1177,6 +1210,7 @@ describe("headless GUI parity CLI", () => {
     } finally {
       logSpy.mockRestore();
       errorSpy.mockRestore();
+      removeTreeWithRetry(lockRoot);
     }
   });
 
@@ -1587,6 +1621,44 @@ test("Aside status prints the empty-profile diagnostic for humans", async () => 
   try {
     expect(await handleClientIntegrationCommand(["status", "--client", "aside"], runtime.deps)).toBe(0);
     expect(log.mock.calls.flat().join("\n")).toContain("Open Aside to create a profile");
+  } finally { log.mockRestore(); }
+});
+
+test("Aside status names preview-then-enable commands only for off (stale) profiles", async () => {
+  const profiles = [
+    { clientId: "aside", profileId: 0, name: "A", enabled: false, state: "stale" },
+    { clientId: "aside", profileId: 1, name: "B", enabled: true, state: "stale" },
+    { clientId: "aside", profileId: 2, name: "C", enabled: false, state: "conflict" },
+    { clientId: "aside", profileId: 3, name: "D", enabled: false, state: "current" },
+    { clientId: "aside", profileId: 4, name: "E", enabled: false, state: "stale" },
+  ];
+  const runtime = fakeRuntime(() => ({ clientId: "aside", profiles }));
+  const log = spyOn(console, "log").mockImplementation(() => {});
+  try {
+    expect(await handleClientIntegrationCommand(["status", "--client", "aside"], runtime.deps)).toBe(0);
+    const text = log.mock.calls.flat().join("\n");
+    expect(text).toContain("0  A: off (stale)");
+    expect(text.match(/--operation apply --profile \d+/g)).toEqual(["--operation apply --profile 0", "--operation apply --profile 4"]);
+    expect(text.match(/enable --client aside --profile \d+/g)).toEqual(["enable --client aside --profile 0", "enable --client aside --profile 4"]);
+    expect(text).toContain("Then, if the preview permits the change and you accept it:");
+    log.mockClear();
+    expect(await handleClientIntegrationCommand(["status", "--client", "aside", "--json"], runtime.deps)).toBe(0);
+    expect(JSON.parse(log.mock.calls.flat().join("\n"))).toEqual({ clientId: "aside", profiles });
+    expect(runtime.requests.map(row => row.method)).toEqual(["GET", "GET"]);
+  } finally { log.mockRestore(); }
+});
+
+test("single Aside profile status adds recovery commands only when off (stale)", async () => {
+  let profile: Record<string, unknown> = { clientId: "aside", profileId: 4, enabled: false, state: "stale", installed: true };
+  const runtime = fakeRuntime(() => profile);
+  const log = spyOn(console, "log").mockImplementation(() => {});
+  try {
+    expect(await handleClientIntegrationCommand(["status", "--client", "aside", "--profile", "4"], runtime.deps)).toBe(0);
+    expect(log.mock.calls.flat().join("\n")).toContain("ocx integration client enable --client aside --profile 4");
+    profile = { ...profile, state: "conflict" }; log.mockClear();
+    expect(await handleClientIntegrationCommand(["status", "--client", "aside", "--profile", "4"], runtime.deps)).toBe(0);
+    expect(log.mock.calls.flat().join("\n")).not.toContain("enable --client aside");
+    expect(runtime.requests.map(row => row.path)).toEqual(["/api/client-integrations/aside/profiles/4", "/api/client-integrations/aside/profiles/4"]);
   } finally { log.mockRestore(); }
 });
 

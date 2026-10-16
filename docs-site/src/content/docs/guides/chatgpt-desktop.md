@@ -95,6 +95,13 @@ This integration installs no certificate, network listener, PAC, or background
 watcher. It does not log the app's messages or environment. Status reports whether
 the running ChatGPT bundle process carries the expected launcher override.
 
+If app discovery or process inspection fails, `status` reports `unknown` rather
+than `not running`. `launch` and `restore` refuse to reopen an app whose exit
+cannot be confirmed; restore keeps the launcher. Resolve the inspection error
+and retry. Launch checks before writing its launcher, but a later inspection can
+still fail after that atomic update; the commands do not guarantee an all-or-nothing
+restart transaction.
+
 ## Failure behavior and known limits
 
 When the platform is not macOS, the OpenCodex runtime is missing, or the filter

@@ -87,6 +87,24 @@ describe("two-plane API targets", () => {
     await expect(discoverApiTargets("")).rejects.toThrow("local machine plane unavailable");
   });
 
+  test("a Remote Link Child's relay targets this machine and carries the Home it is managed by", () => {
+    const machine = "http://localhost";
+    const linked = targetsFromMachineStatus("", {
+      ...status("relay"),
+      sharedBase: `${machine}/api/machine/hub-relay`,
+      sharedServerOrigin: machine,
+      link: { linkId: `lnk_${"a".repeat(16)}`, home: "home-box", readOnly: true },
+    });
+    expect(linked.shared).toMatchObject({ baseUrl: "/api/machine/hub-relay", serverOrigin: machine, transport: "relay" });
+    expect(linked.link).toEqual({ linkId: `lnk_${"a".repeat(16)}`, home: "home-box" });
+    const malformed = targetsFromMachineStatus("", {
+      ...status("relay"),
+      link: { linkId: "not-a-link", home: "x", readOnly: true },
+    });
+    expect(malformed.link).toBeUndefined();
+    expect(targetsFromMachineStatus("", status("relay")).link).toBeUndefined();
+  });
+
   test("rejects a non-string catalog fetch timestamp", async () => {
     globalThis.fetch = (async () => new Response(JSON.stringify({ ...status("direct"), catalogSyncedAt: 42 }), {
       headers: { "content-type": "application/json" },

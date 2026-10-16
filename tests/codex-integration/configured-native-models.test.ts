@@ -1,7 +1,7 @@
 /**
  * Configured native GPT models: a bare `gpt-*` id listed under `providers.openai.models` on the
  * canonical Codex forward provider becomes a native row with GPT-6 Sol capabilities and the GPT-6
- * 272k/872k context pair, with no code change. Plan: devlog/_plan/260923_configured_native_gpt_models/.
+ * 272k/872k context pair, with no code change. Plan: devlog/_fin/260923_configured_native_gpt_models/.
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import {

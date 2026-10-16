@@ -301,6 +301,9 @@ describe("fetchProviderAccountQuotas", () => {
           expires_in: 3600,
         }), { status: 200 });
       }
+      // A refresh also reads the account profile for its subscription plan (#6935); that is
+      // not a usage probe, so it must not be counted as one.
+      if (url.includes("/api/oauth/profile")) return new Response("{}", { status: 404 });
       const auth = new Headers(init?.headers).get("authorization") ?? "";
       if (auth.endsWith("token-bg-fresh")) {
         usageForBg += 1;

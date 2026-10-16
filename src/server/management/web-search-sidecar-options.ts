@@ -14,7 +14,9 @@
  * id outside (candidates ∪ auth slots) can never run and is refused.
  */
 import type { OcxConfig } from "../../types";
-import { AUTH_SLOT_MODELS, resolveSidecarAuth } from "../../sidecar/auth";
+import { AUTH_SLOT_MODELS, resolveSidecarAuth, resolveAnthropicSidecarAuth, resolveAnthropicHelperInstance, AnthropicHelperUnavailableError, type SidecarAuthState } from "../../sidecar/auth";
+import { ANTHROPIC_INSTANCE_IDS, isAnthropicInstanceId, type AnthropicInstanceId } from "../../providers/anthropic-instance-id";
+import { configuredAnthropicInstance } from "../../providers/anthropic-instance";
 import { pickerVisibleSidecarCandidates, type SidecarCandidate } from "../../sidecar/candidates";
 import { WEB_SEARCH_BACKENDS, webSearchSidecarCandidates } from "../../web-search/backends";
 import type { WebSearchBackendId } from "../../web-search/index";
@@ -23,6 +25,53 @@ import type { WebSearchBackendId } from "../../web-search/index";
 // executor admits the candidate, so inert arms (gemini/exa without config)
 // simply never produce rows.
 export type WebSearchBackend = WebSearchBackendId;
+
+export function sidecarAnthropicPoolOptions(config: OcxConfig,
+  settings: { backend?: string; anthropicInstance?: AnthropicInstanceId }, parentProviderName?: string): {
+    backend?: string; parent?: AnthropicInstanceId; selected?: AnthropicInstanceId;
+    resolved?: AnthropicInstanceId; mixed: boolean; available: AnthropicInstanceId[];
+    code?: "anthropic_helper_unavailable";
+  } {
+  const parent = configuredAnthropicInstance(config, parentProviderName);
+  const available = ANTHROPIC_INSTANCE_IDS.filter(instance => resolveAnthropicSidecarAuth(config, instance) !== undefined);
+  const base = { ...(settings.backend ? { backend: settings.backend } : {}), ...(parent ? { parent } : {}), ...(settings.anthropicInstance ? { selected: settings.anthropicInstance } : {}),
+    mixed: !!parent && !!settings.anthropicInstance && parent !== settings.anthropicInstance, available };
+  if (settings.backend !== "anthropic") return base;
+  try {
+    const resolved = resolveAnthropicHelperInstance(config, { backendFamily: "anthropic",
+      anthropicInstance: settings.anthropicInstance, parentProviderName });
+    const legacy = resolved === undefined ? resolveSidecarAuth(config).anthropicProviderName : resolved;
+    return { ...base, ...(isAnthropicInstanceId(legacy) ? { resolved: legacy } : {}) };
+  } catch (error) {
+    if (!(error instanceof AnthropicHelperUnavailableError)) throw error;
+    return { ...base, code: error.code };
+  }
+}
+
+/** An unavailable explicit pool removes its executor; it never resumes legacy discovery. */
+export function sidecarOptionsAuth(config: OcxConfig, instance?: AnthropicInstanceId): SidecarAuthState {
+  try { return resolveSidecarAuth(config, instance); }
+  catch (error) {
+    if (!(error instanceof AnthropicHelperUnavailableError)) throw error;
+    // Preserve other backend defaults while removing all Anthropic executor authority.
+    const otherBackends = { ...config, providers: Object.fromEntries(Object.entries(config.providers)
+      .filter(([, provider]) => provider.adapter !== "anthropic")) };
+    return { isCodexAuth: resolveSidecarAuth(otherBackends).isCodexAuth, isAnthropicAuth: false };
+  }
+}
+
+/** Apply only the helper identity fields to a typed, isolated validation snapshot. */
+export function sidecarSettingsAfterPatch<T extends { backend?: string; model?: string; anthropicInstance?: AnthropicInstanceId }>(
+  stored: T | undefined, patch: Record<string, unknown>,
+): T {
+  const next = { ...stored } as T;
+  for (const key of ["backend", "model", "anthropicInstance"] as const) {
+    const value = patch[key];
+    if (value === null || (key === "model" && value === "")) delete next[key];
+    else if (value !== undefined) Object.assign(next, { [key]: value });
+  }
+  return next;
+}
 
 export interface WebSearchCandidateRow extends SidecarCandidate {
   /** Executor backend that admitted this exact candidate row. */
@@ -41,7 +90,7 @@ export interface WebSearchModelOption {
 
 /** The candidate rows the web-search executors can actually run right now. */
 export async function webSearchCandidateRows(config: OcxConfig): Promise<WebSearchCandidateRow[]> {
-  const auth = resolveSidecarAuth(config);
+  const auth = sidecarOptionsAuth(config, config.webSearchSidecar?.anthropicInstance);
   const all = await pickerVisibleSidecarCandidates(config, auth);
   return webSearchSidecarCandidates(config, auth, all).flatMap(candidate => {
    const descriptor = WEB_SEARCH_BACKENDS.find(entry =>

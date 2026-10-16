@@ -4,6 +4,49 @@ How the Responses data plane reserves credential hops and durable spend before d
 spent budget tells the client. Dispatch and retry behavior is in
 [Responses transport](responses.md) and [Responses failover](responses-failover.md).
 
+## Prepaid initial sends
+
+`src/server/responses/core-combo.ts` derives each target scope before reserving its initial send.
+That reservation occupies the shared ceiling immediately; it is not a completed inference.
+`comboInitialSend` hands only that child's single-use permit to `request-send-budget.ts`.
+`initialSendAllowance` includes that one prepaid send while `remainingBaseSends` keeps every
+booking spent. Other pending external bookings never become this child's free headroom.
+Configured transient totals subtract an owner-local counter updated by physical receipts, adapter
+observers and retry-helper reports, not shared-ledger deltas. Earlier Combo targets, later bookings
+by other owners and the child's unsent booking do not consume that total; the shared ceiling and
+later-target holdback still intersect it.
+
+Initial passthrough and budgeted translated HTTP ladders report at the final executor admission,
+after pacing, credential rebuild and local egress checks, rather than at retry callback entry.
+The one-shot receipt survives rebuilt request init and nested executor wrappers. The WebSocket
+receipt runs immediately before the frame is sent; a refused receipt sends no frame and never
+permits SSE fallback.
+Adapter-owned dispatch claims the prepaid permit once through the live adapter view and closes
+its external booking with `assumeCharge`. A fresh derived scope binds its actual first endpoint
+without consuming a recovery transition; later endpoint moves keep ordinary transition limits.
+Unsent exits release once at Combo/ingress cleanup. Ordinary runTurn transfers cleanup at its first
+attempt; hosted media transfers before returning its streaming Response and retains ownership until
+its producer settles, including cancellation and synchronous failure before dispatch.
+Native Chat includes only its owning prepaid send in its initial ladder and confirms that permit at
+the final HTTP receipt; local egress refusal leaves it refundable. Initial-ladder receipts close their
+own external booking with `assumeCharge`; later sends reserve their own capacity instead of settling
+another owner's pending booking. Cleanup cannot refund real work. Detached judge budgets and leases stay separate.
+`tests/responses/responses-first-send-reservation.test.ts` and
+`tests/responses/responses-dispatch-receipt.test.ts` pin these boundaries.
+
+`src/server/responses/sidecar-send-budget.ts` binds hosted search/image/video inference to this same
+child-owned booking. Generic HTTP/WS uses the final physical-dispatch receipt; adapter-owned
+`fetchResponse`/`runTurn` receives the live budget and observers instead, never both charge paths.
+Receipt selection follows the actual iteration adapter after rotation. Hosted tool execution does
+not itself settle the model's booking. Children without an owning initial permit keep their existing
+accounting contract. The hosted reservation, producer and WS regression siblings in `tests/responses/`
+assert real synthetic inference, explicit durable settlement and unsent release without widening caps.
+Hosted credential hops stay open in this owner and the live pending-hop view until physical dispatch;
+generic receipts consume that exact permit, adapters claim it through the view, and fetch-iteration
+cleanup releases an unsent hop once, except while an asynchronous runTurn producer still owns it.
+Producer settlement performs that release instead, clearing only the matching pending-hop reference.
+Direct callers retain their prior hop reporting contract.
+
 ## Credential-hop reservations
 
 A credential rotation inside one provider's roster reserves a hop from the request's shared send
@@ -32,17 +75,41 @@ single target transition nor the alternate-target allowance: it was authorized w
 decision, and the endpoint fallback keeps ownership of the one transition it may still need.
 Admission, reservation and refund use the same alternate-target charging predicate. A validated
 rebase remains eligible after that allowance is spent, while replay safety and the total-send cap still apply.
+An externally reported rebase retains its exact pending receipt and prepaid proof. Releasing it
+refunds only charges it made; reporting or assuming that receipt prevents a later refund.
 
 The hop pays for a replay that some *other* layer dispatches, so which layer settles the
 reservation follows the dispatcher, not the ladder. A helper-routed replay reports the same
 physical send back through `onSendsConsumed`; that is what `countedExternally: true` names, and the
-reporter's first send settles the pending booking instead of adding a second charge. An adapter
+reporter's first send settles only its named pending permit instead of adding a second charge.
+`transientSendReporter` captures that permit before entering a helper; a later handoff cannot
+replace it. `reportDispatchSends` verifies shared-ledger ownership and consumes one receipt only.
+Native Chat combo children carry the same exact permit to their physical-send boundary.
+Reset-only generic combo helpers report their named prepaid receipt too, without changing
+the selected retry cap; compaction reconciliation therefore does not count that source again.
+Without enforced spend, numeric `used` updates and unnamed, foreign, released or already-reported permits charge
+sends without consuming another reservation. Enforced spend accepts only claimed physical starts; extra retries remain full charges. Reports may arrive
+out of reservation order; no FIFO ordering is required. An adapter
 that owns its transport — Kiro's reset ladder, Cursor's transport ladder, or Devin's bounded
 pre-output stated-reset replay — reserves once per physical send instead, so no reporter ever
 arrives. Those ladders are handed
 `adapterDispatchBudget`, a live delegating view of the same budget that spends a permit passed down
-through `pendingHopPermit` on the adapter's first reservation and closes the booking through
-`permit.assumeCharge()`. Letting both charge is how one physical send became two charges, and how a
+through `pendingHopPermit` on the adapter's first reservation. Claiming keeps that exact permit
+refundable across pacing and `beforeDispatch`; `use()` or `assumeCharge()` closes its external
+booking only at physical consumption. Both methods share the underlying single-use state, and
+release remains idempotent. A used or released exact-owned permit cannot authorize another send.
+When spend enforcement is inactive a combo-owned or compaction-prepaid send is settled by the
+physical-dispatch receipt; when it is active the shared physical-send reporter keeps ownership, so
+a send is never charged by both. Other callers keep early settlement only when enforcement is inactive;
+enforced permits stay refundable until execution.
+For a Codex WebSocket request, the receipt runs before the frame is sent and at most once across
+the WS attempt and its HTTP fallback. If WS send then fails and HTTP refuses before dispatch, that
+accepted booking remains charged even though no physical send occurred.
+The existing `refundableAdapterDispatchBudget` view stays available to direct Antigravity search;
+its legacy already-settled-hop replacement still requires a fresh admitted reservation.
+`tests/responses/responses-hosted-send-unsent-hop.test.ts` covers real Vertex hosted-search queued
+cancellation, search/image/video pre-dispatch failure, dispatched cancellation and transition admission.
+Letting both layers charge is how one physical send became two charges, and how a
 spent allowance answered a 429 with a synthetic error instead of the rate limit it was recovering
 from (#4709).
 
@@ -63,7 +130,7 @@ down, because a runTurn adapter is by definition the layer that sends. The passt
 the shape it already had: reserve with `countedExternally: true` and pass the permit to the rebuild.
 
 An explicit provider `transientRetryOn5xx.attempts` value is the exact physical-send total for that
-request. Once spent, a passthrough rebuild receives no final-recovery reserve and returns the
+request (target-local inside a Combo). Once spent, a passthrough rebuild receives no final-recovery reserve and returns the
 original upstream response. The guarded profile's shared reserve remains available only when the
 provider leaves that transient policy unconfigured; its existing hop-permit settlement is unchanged.
 
@@ -98,20 +165,152 @@ target's own recovery decision, while the physical-send total is what binds ever
 
 ## Durable spend reservations
 
+Azure's opt-in `minMaxOutputTokens` is resolved by `effectiveAzureOutputBudget` in
+`src/adapters/azure.ts` for both serialization and spend admission. Final Responses route
+normalization reserves the effective explicit output cap; Combo prepayment computes it for
+each concrete target before booking. Neither path changes the caller-owned cap or carries
+one target's floor to the next. `tests/responses/responses-spend-anchor.test.ts` checks
+both Azure aliases, direct and Combo dispatch, refusal below the floor and wire-time reservation.
+
 The request's send budget bounds how many times it may reach upstream; the spend ledger bounds
 what those sends may cost, and it is the only bound here that survives a restart. Its production
 caller is `request-spend.ts`, installed on the execution budget at genuine ingress in `core.ts`
 and parked on the log context so `addFinalRequestLog` can settle it. Native Chat installs the same tracker before its independent physical-send ladder and charges it immediately before each dispatch, so that fast path cannot bypass root, identity or provider-pool ceilings.
 
-The Responses path books by observing the budget's own send counter rather than calling each dispatch site; Native Chat directly charges messages, tool definitions and the output ceiling. That counter moves exactly once per physical send — a reservation increments it, a
-refund decrements it, and an externally reported send settles against a booking already counted —
-so one ledger entry per increment is one entry per send, and a dispatch path added later cannot
-forget to book. The previous attempt at this wiring shipped the whole reserve/dispatch/settle
-vocabulary with no caller at all (#4707), which is the failure mode this shape rules out.
+Unconfigured requests preserve the legacy counter observer: reservations increment the send
+counter, refunds decrement it, and named reports reconcile prepaid sends. Enforced requests use
+the seed and physical-start protocol below across Responses, native Messages and native Chat.
+Each transport claims immediately before inference I/O and retains a producer through completion.
 
-A booking is confirmed dispatched only once a LATER send exists, because that later send proves
-the earlier one left. The newest booking stays open, so a reservation the budget hands back
-during this process's lifetime can still be released for free.
+A request fixes its enforcement mode, token ceilings and physical-send limit L when it actually
+starts. Configuration changes apply to requests that start afterward. An in-flight request keeps
+its starting policy until completion, including when an operator enables, disables, raises or
+lowers a ceiling. Changing policy never resets that request's physical-send allowance. A request
+that starts observe-only keeps the existing observe-only path throughout its lifetime.
+The shared tracker captures once at the first actual spend admission or start; constructing a
+budget or reading its enforcement preview does not capture policy. Generic Responses paths that
+omit retry reporters still invoke that same capture before the wire. Re-entry's token-ceiling
+preflight and exact seed admission use the same frozen numeric policy and prepaid proof;
+pool continuity validation and shared tracking-capacity safeguards remain active.
+
+Provider-pool accounting uses the canonical routed provider identity, not the mutable display label
+that may identify an OAuth account in request logs. Responses final-route normalization captures
+that identity before credential selection labels the account, and replaces it when a fallback
+selects another provider. Earlier reservations retain the pool they originally charged. Native
+Messages therefore shares the same pool ceiling as Responses even when its Anthropic log label
+includes an account ordinal; root and account identity scopes remain independent.
+Before reserving each combo hop, `core-combo.ts` updates the parent tracker's pool to the resolved
+target provider; child account labels and the logical `combo` label do not create separate pools.
+
+### Historical pool continuity and rollback
+
+`src/lib/spend-pool-continuity.ts` applies the current provider roster and top-level
+`spendPoolAliases` mapping at read time. Each configured provider P automatically owns its
+ordinary salted `pool` alias, so its canonical bucket counts only toward P's group. Explicit
+mapping keys are exact salted historical aliases and values are current provider IDs. Other
+historical labels, including account-ordinal labels, remain unbound until explicitly mapped.
+Each positive unbound bucket overlays every candidate once; original counters and send targets
+never move or double-count. Restart reconstructs the same view from the current roster and mapping.
+
+Mappings and automatic self-bindings are read-time configuration, not journal metadata. Removing
+a provider or mapping changes the next view without rewriting counters or persisting identity links.
+`src/lib/spend-pool-alias-validation.ts` owns the salted hash and validates that P's own alias cannot
+map to Q. Padded mapping values and destinations absent from the current roster are rejected at the
+write boundary; hand-edited invalid mappings warn on load and refuse applicable pool admission with
+`workflow_pool_history_unresolved`, keeping existing ceilings. Configuration writes, provider-set
+changes, live reconfiguration and selected-provider admission enforce owner conflicts. Validation
+reads an existing home salt without creating one.
+
+Dormant unbound history expires only when its last activity is strictly before the configured
+retention cutoff. Capacity pressure cannot expire positive unknown history early. Live reservations
+and seed targets remain pinned, including zero-token targets. An ordinary v1 `drop` must persist
+before admission uses a reduced total; the overlay is then rebuilt before group eviction decisions.
+Mapped groups retain the existing active/exhausted protection and group-activity retention rules.
+
+New bookings use the existing `pool` hash domain for the canonical routed provider. Writers emit
+only ordinary v1 records and checkpoints, without `poolContinuity` metadata or a `pool-current`
+domain. Contract C is compatibility with the shipped 2.80.0 reader's own record interpretation:
+2.80.0 reads these counters, compacts them and expires them using its existing per-label rules.
+Downgrade does not preserve canonical cross-alias aggregation or promise the allowance 2.80.0
+would have computed for the same traffic without an upgrade. Keep the current journal and salt;
+restoring an older copy omits subsequent spend. Re-upgrade applies current provider self-bindings and explicit mappings
+to the original balances that survived ordinary old-version retention. There is no launch fence,
+wrapper enrollment or reconciliation command. `tests/lib/spend-contract-c.test.ts` uses the complete
+frozen 2.80.0 reader in `tests/fixtures/spend-ledger-2-80-0.ts.txt` for this contract.
+
+Unpublished experimental journals containing `pool-current` aliases or `poolContinuity` bindings
+are excluded from contract C, including later checkpoints that retain those opaque aliases. The
+reader ignores the deprecated bindings but preserves original balances and send targets as
+unbound history; it neither converts nor immediately deletes them. Ordinary durable retention
+applies. `tests/lib/spend-experimental-history.test.ts` covers replay, compaction and expiry.
+
+Compaction retains valid accounting even after a corrupt complete record. Configured admission
+remains refused while corruption is recorded in the live ledger; replay of the clean compacted
+journal restores enforcement, matching the shipped behavior. Complete final invalid JSON values
+such as `null` are corruption. An unparseable torn final line retains the existing conservative
+replay rule. Storage/corruption refusals use `workflow_spend_undurable`; unsafe-file and ownership
+errors remain storage failures. `tests/lib/spend-corruption-compat.test.ts` checks these boundaries.
+
+An ordinary observe-only reservation whose first write failed keeps bounded in-memory repair
+metadata until it resolves or is evicted. Before reporting dispatch or terminal usage, the ledger
+queues the missing ordinary reserve prefix ahead of those records. Later pruning or any admission,
+including observe-only admission, retries that queue so recovered storage retains the reservation.
+This grants no seed or overflow capacity and adds no journal record type or identity metadata.
+
+For requests with an applicable root, identity or pool ceiling, each selected target/key first
+obtains a normal-capacity pre-send seed through `reserveSeed`. A failed initial seed refuses the
+wire call, including rootless passthrough and generic adapter ingress. Stable retries reuse that
+seed; a real identity change must acquire its own normal seed. A prepaid combo child adopts only
+its exact permit on the same shared send ledger, excluding that reservation once from preflight.
+Reported additional sends reuse the seed's exact scope references through `reserveReportedFromSeed`
+and allocate no new scope keys. Already-started sends remain booked even during persistence failure.
+
+`src/lib/request-execution-budget.ts` shares a physical-start counter across derived budgets and
+freezes the finite positive limit L when the request starts. The default guarded limit is four;
+the initial bounded OAuth request profile allows at most eighteen.
+`createPhysicalSendReporter` owns selected-seed start receipts, reports only claimed sends and
+closes its producer after reconciliation. Adapter permits claim once at their physical boundary; their executor span keeps the start
+rebindable until OAuth selection reaches the wire, then reports and closes it. Zed completion
+requests and token-refresh replays use `src/adapters/physical-send.ts`; authentication exchanges
+remain outside the inference count. Kiro retains this span through its executor-side rebuild.
+Telemetry and raw numeric budget updates cannot create extra enforced send records. Native compact
+uses the same unbound-history refusal explanation and workflow header as other Responses executors.
+`request-spend.ts` waits for producers before terminal settlement, marks unknown usage lost, then
+persists ordinary `forget` records before releasing seeds. Each tracker waits only for its own
+reporters, so overlapping traffic cannot pin a completed request. Storage-failed cleanup stays
+queued on the ledger and retries on later admission, pruning, reconfiguration or reporter closure.
+Already-started reports retain a stable send ID and estimate through partial writes. Reporting a
+batch owns every pending start before its first append; same-seed retries reconcile those records
+without admitting another send. Owner errors propagate while preserving queued liability, and
+caller finalizers still close reporter leases so shutdown can drain after a failed report.
+An abandoned seed leaves every admission lookup immediately. Its remaining cleanup obligation
+stays separate, including when durable forgetting throws an ownership or unsafe-file error.
+Send-to-seed and reference-counted scope-pin indexes avoid scanning all seeds on admission.
+Forgotten send IDs do not subtract scope totals. Shutdown drains all reporters before
+releasing ledger ownership; restart resolves orphan reservations conservatively without reviving
+request capabilities.
+
+Claude CLI, CodeBuddy and Qoder use one CLI invocation as one physical-count unit. The shared
+`src/adapters/coding-agent/turn.ts` runner reserves a normal seed before spawning and keeps its
+producer until completion. Child-internal retries and tool turns do not each consume L because
+the proxy cannot observe those wire boundaries. Terminal actual usage, including usage above the
+initial estimate, still settles in full. This preserves configured CLI use while bounding launches.
+
+Within a fixed policy epoch, every live enforced request retains at least one normal-capacity
+seed. For normal send capacity M and largest admitted physical limit Lmax, retained sends are
+bounded by M × Lmax, with no overflow scope allocation. Legacy or experimental over-cap history
+is retained and can prevent new seeds; lowering policy limits does not erase existing accounting.
+`tests/lib/spend-seed-overflow.test.ts` covers capacity, delayed reports, persistence and finalization.
+Unconfigured traffic keeps ordinary record shapes and capacity omission behavior; it does not
+create seed instrumentation or identity checkpoints. `tests/lib/spend-zero-config-compat.test.ts`
+compares exact bytes with the shipped reader for equal pool inputs.
+
+Budget reservations retain their exact durable proof until their own dispatch/report confirms
+them. A later reservation does not confirm an earlier pending send. Refunds remove the exact
+send and original pool, and releasing an older permit preserves the latest surviving target.
+Legacy direct charges still infer dispatch from a later charge and leave their newest booking
+open. Report order updates terminal attribution; unrelated pending reservations remain independent.
+`tests/lib/spend-pool-continuity.test.ts` covers reversed child reports and exact-pool cancellation.
 
 Settlement follows what the request learned. The terminal usage belongs to the last send that
 left, so that one settles with the real figure; every earlier send failed without reporting usage
@@ -133,9 +332,9 @@ describing it afterwards, and the restart.
 The request tracker checks the current policy against the exact root, identity and pool scopes
 on each charge. With an applicable ceiling, any refused booking prevents a new dispatch,
 including full tracking capacity or a duplicate send id; the log uses the existing specific
-workflow refusal reason. Requests without an applicable ceiling remain observe-only. Reports
-of sends that already left stay permissive and do not count as local refusals; this guard does
-not promise complete accounting when those post-dispatch bookings fail.
+workflow refusal reason. Requests without an applicable ceiling remain observe-only. Enforced reports use their live seed and retain already-started liability without a new
+capacity admission. Observe-only reports keep the shipped permissive behavior, including omitted
+bookings at capacity.
 `tests/responses/responses-spend-capacity-guard.test.ts` covers these boundaries.
 
 The default policy still sets no token ceiling on any scope, so an unconfigured install accounts
@@ -171,9 +370,22 @@ one directory entry, owned by the process user. A refusal raises `SpendLedgerFil
 content (#6314). Before this, one sentence covered five conditions and two files. A macOS sync
 daemon briefly holding a second link to a journal inside a synced folder could then only be
 diagnosed from an instrumented build. The guard is unchanged.
+Responses dispatch maps this local refusal, including nested retry causes, to HTTP 503 with
+`type: "server_error"` and `code: "spend_ledger_storage_unavailable"`. The sanitized role,
+condition and synced-folder guidance reach the client without a "Provider unreachable" prefix.
+Passthrough and compact release admission leases without recording host or account-health
+failures; translated initial/recovery dispatch uses the same mapping. runTurn preserves the code
+in buffered HTTP 503 responses and Combo preflight; an already committed SSE response carries
+it in a structured terminal error. Generic upstream 503 remains `server_is_overloaded`.
+The request log marks this as a synthetic `local-refusal`, preserves the storage code, and
+releases only admission/probe leases: existing spend debt and dispatched-send charges remain.
+Both 502 and 503 already belong to the internal transient-status and Combo-hop sets, so
+this response correction does not change those retry sets.
 `src/lib/synced-state-location.ts` is the advisory half. `acquireSpendLedgerServerLifecycle`
 warns once at startup when the state directory resolves inside iCloud Drive, a File Provider
-folder, or Desktop/Documents with iCloud Desktop & Documents sync detected, and it refuses
+folder, Desktop/Documents with iCloud Desktop & Documents sync detected, or Desktop/Documents
+while Google Drive for desktop is present (`GoogleDrive-*` under CloudStorage, or DriveFS),
+and it refuses
 nothing on that basis. `tests/lib/spend-ledger-file-journal.test.ts` pins the refusal shape, and
 `tests/lib/synced-state-location.test.ts` pins the classification.
 

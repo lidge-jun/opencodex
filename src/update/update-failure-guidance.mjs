@@ -1,5 +1,5 @@
 /**
- * What to tell the operator after a failed npm self-update (#5624).
+ * What to tell the operator after a failed self-update (#5624).
  *
  * The transactional updater (`transactional-install.mjs`) either leaves the live package
  * untouched, rolls it back, or — only on a double fault — leaves it moved aside with a recovery
@@ -10,6 +10,28 @@
  * Plain ESM with no Bun APIs: the Node launcher (`bin/ocx.mjs`) imports it.
  */
 
+import { pnpmGlobalCommandArgs } from "./pnpm-global-install.mjs";
+
+/**
+ * Manual replacement must wait for recovery and stop the runtime through its owner first.
+ * @param {{ bin: string; args: string[]; owner?: import("./pnpm-global-install.mjs").PnpmGlobalOwner; platform?: NodeJS.Platform }} command
+ * @returns {string[]}
+ */
+export function manualUpdateFailureGuidance({ bin, args, owner, platform = process.platform }) {
+  const windows = platform === "win32";
+  const quote = value => /^[a-zA-Z0-9_@./:=-]+$/.test(value) ? value
+    : "'" + value.replaceAll("'", windows ? "''" : "'\\''") + "'";
+  const commandBin = owner ? owner.commandPath : bin;
+  const commandArgs = owner ? pnpmGlobalCommandArgs(args, owner) : args;
+  const install = (windows ? "& " : "") + [commandBin, ...commandArgs].map(quote).join(" ");
+  return [
+    "Next: run 'ocx status' and let any in-progress recovery finish.",
+    "If a proxy is running, stop it through its owner ('ocx stop', the owning service, or the desktop app) and confirm it has stopped before installing.",
+    (windows ? "Then run in PowerShell: " : "Then run: ") + install,
+    "After installation completes, restart through the owning service ('ocx service restart') or desktop app; run 'ocx start' if unmanaged.",
+  ];
+}
+
 /** Phases in which the live package was never touched. */
 const UNTOUCHED_PHASES = new Set(["stage", "verify", "swap-backup"]);
 
@@ -18,14 +40,17 @@ const UNTOUCHED_PHASES = new Set(["stage", "verify", "swap-backup"]);
  * @returns {{ previousVersionKept: boolean; lines: string[] }}
  */
 export function npmUpdateFailureGuidance({ phase, rolledBack, pkgName, version, tag }) {
-  const reinstall = "npm install -g --allow-scripts=bun " + pkgName + "@" + (version || tag || "latest");
+  const manual = manualUpdateFailureGuidance({
+    bin: "npm", args: ["install", "-g", "--allow-scripts=bun", pkgName + "@" + (version || tag || "latest")],
+  });
   const kept = UNTOUCHED_PHASES.has(phase ?? "") || rolledBack === true;
   if (!kept) {
     return {
       previousVersionKept: false,
       lines: [
         "The previous version was moved aside and could not be put back automatically.",
-        "Next: run the \"restore\" command recorded in .ocx-recovery.json next to the package, or reinstall with '" + reinstall + "'.",
+        "Next: run the \"restore\" command recorded in .ocx-recovery.json next to the package, or follow the manual reinstall steps below.",
+        ...manual,
       ],
     };
   }
@@ -33,8 +58,8 @@ export function npmUpdateFailureGuidance({ phase, rolledBack, pkgName, version, 
     previousVersionKept: true,
     lines: [
       "The previous version is still installed.",
-      "Next: run 'ocx update' again. If it fails the same way, run 'ocx stop', then '" + reinstall
-        + "', then 'ocx service restart' ('ocx start' when no background service is installed).",
+      "Next: run 'ocx update' again. If it fails the same way, reinstall manually:",
+      ...manual,
     ],
   };
 }

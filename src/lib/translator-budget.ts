@@ -1,3 +1,5 @@
+import { isNonReplayableResponse, markResponseNonReplayable } from "./upstream-retry";
+
 export const TRANSLATOR_MAX_CALL_ARGUMENT_BYTES = 2 * 1024 * 1024;
 export const TRANSLATOR_MAX_TURN_BYTES = 32 * 1024 * 1024;
 export const TRANSLATOR_MAX_SSE_EVENT_BYTES = 32 * 1024 * 1024;
@@ -191,6 +193,7 @@ class Budget implements TranslatorBudget {
   }
 
   openCall(id: string): void {
+    if (this.disposed) return;
     if (!this.calls.has(id)) {
       this.calls.set(id, { logicalBytes: 0, physicalBytes: 0 });
       aggregateActiveCalls += 1;
@@ -210,6 +213,7 @@ class Budget implements TranslatorBudget {
     bytes: number,
     scope: { kind: TranslatorBufferKind; callId?: string },
   ): TranslatorTransientReservation {
+    if (this.disposed) return { commitRetained() {}, release() {} };
     const admitted = normalizeBytes(bytes);
     if (scope.callId && admitted > this.maxCallArgumentBytes) {
       this.reject("tool_args", this.maxCallArgumentBytes);
@@ -222,6 +226,7 @@ class Budget implements TranslatorBudget {
     return {
       commitRetained: () => {
         if (state !== "reserved") return;
+        if (this.disposed) { state = "released"; return; }
         state = "committed";
         if (!scope.callId) return;
         const call = this.calls.get(scope.callId) ?? { logicalBytes: 0, physicalBytes: 0 };
@@ -234,6 +239,7 @@ class Budget implements TranslatorBudget {
       release: () => {
         if (state !== "reserved") return;
         state = "released";
+        if (this.disposed) return;
         this.charged.set(scope.kind, Math.max(0, (this.charged.get(scope.kind) ?? 0) - admitted));
         this.hardChargedBytes = Math.max(0, this.hardChargedBytes - admitted);
         this.changed();
@@ -242,6 +248,7 @@ class Budget implements TranslatorBudget {
   }
 
   chargeRetained(delta: number, scope: { kind: TranslatorBufferKind; callId?: string }): void {
+    if (this.disposed) return;
     const admitted = normalizeBytes(delta);
     if (scope.callId) {
       const call = this.calls.get(scope.callId) ?? { logicalBytes: 0, physicalBytes: 0 };
@@ -279,6 +286,7 @@ class Budget implements TranslatorBudget {
   }
 
   private observe(bytes: number): () => void {
+    if (this.disposed) return () => {};
     const observed = normalizeBytes(bytes);
     this.observedBytes += observed;
     this.changed();
@@ -369,7 +377,7 @@ export function resetTranslatorAggregateForTests(): void {
   aggregateOverflows = 0;
 }
 
-export function finalizeTranslatorBudgetResponse(response: Response, budget: TranslatorBudget): Response {
+export function finalizeTranslatorBudgetResponse(response: Response, budget: TranslatorBudget, signal?: AbortSignal): Response {
   if (!response.body) {
     budget.dispose();
     return response;
@@ -379,9 +387,12 @@ export function finalizeTranslatorBudgetResponse(response: Response, budget: Tra
   const finalize = () => {
     if (finalized) return;
     finalized = true;
+    signal?.removeEventListener("abort", finalize);
     budget.dispose();
   };
-  return new Response(new ReadableStream<Uint8Array>({
+  // The transport owns cancellation and terminal precedence. Abort releases only
+  // accounting here, including when no consumer ever pulls or cancels this body.
+  const body = new ReadableStream<Uint8Array>({
     async pull(controller) {
       try {
         const result = await reader.read();
@@ -395,7 +406,15 @@ export function finalizeTranslatorBudgetResponse(response: Response, budget: Tra
       }
     },
     async cancel(reason) {
-      try { await reader.cancel(reason); } finally { finalize(); }
+      finalize();
+      await reader.cancel(reason);
     },
-  }), { status: response.status, statusText: response.statusText, headers: response.headers });
+  });
+  if (signal?.aborted) finalize();
+  else signal?.addEventListener("abort", finalize, { once: true });
+  const finalizedResponse = new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+  // The rebuild above drops identity markers. A refusal that must not be replayed
+  // stays non-replayable through accounting finalization.
+  if (isNonReplayableResponse(response)) markResponseNonReplayable(finalizedResponse);
+  return finalizedResponse;
 }

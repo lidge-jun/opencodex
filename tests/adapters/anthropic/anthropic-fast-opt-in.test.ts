@@ -18,7 +18,7 @@ import { removeTreeWithRetry } from "../../helpers/remove-tree";
 /**
  * Anthropic fast mode draws usage credits at 2x price, so the `anthropic` and `anthropic-apikey`
  * registry entries mark their Fast lane opt-in: it stays off until `fastEnabled: true`
- * (devlog/_plan/260924_anthropic_fast_opt_in).
+ * (devlog/_fin/260924_anthropic_fast_opt_in).
  */
 
 setDefaultTimeout(60_000);

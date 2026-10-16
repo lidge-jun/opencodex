@@ -17,6 +17,14 @@ export const ENCRYPTED_FUNCTION_OUTPUT_REJECTION =
  * string for a client to be able to tell this apart from a provider rate limit.
  */
 export const SEND_BUDGET_EXHAUSTED_CODE = "request_send_budget_exhausted";
+export const SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE = "spend_ledger_storage_unavailable";
+/**
+ * Wire code for the undeclared-tool guard's deterministic refusal. Endpoint translators
+ * read it to keep the refusal non-retryable instead of folding it into the transient
+ * upstream-error class. Declared here rather than in the guard module because the shared
+ * envelope formatter decides whether the identity survives serialization.
+ */
+export const UNDECLARED_TOOL_CALL_ERROR_CODE = "undeclared_tool_call";
 
 /** First nonblank string across the canonical upstream error paths, in priority order. */
 export function upstreamErrorMessageFromPayload(payload: unknown): string | undefined {
@@ -357,6 +365,9 @@ export function isUpstreamResetReplayRefusedMessage(text: string): boolean {
 
 export function classifyError(status: number, type: string, message: string): OcxErrorPayload {
   const text = message.toLowerCase();
+  if (type === SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE) {
+    return { message, type: "server_error", code: SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE };
+  }
   if (type === "previous_response_not_found") {
     return { message, type: "invalid_request_error", code: "previous_response_not_found" };
   }
@@ -639,6 +650,24 @@ export function adapterFailureFromMessage(message: string): { httpStatus: number
   return { httpStatus, error };
 }
 
+/** Narrow structured classes carried through a synthesized bare-error terminal. */
+export function recognizedUpstreamError(error: { type?: unknown; code?: unknown }):
+  { type: string; code: string; httpStatus: 429 | 503 } | undefined {
+  const code = typeof error.code === "string" ? error.code : undefined;
+  // An explicit unknown code must not gain a recognized class from its type or copy.
+  if (code !== undefined && !["rate_limit_exceeded", "rate_limit_error", "server_is_overloaded", "overloaded_error"].includes(code)) return undefined;
+  if (code === "rate_limit_exceeded" || code === "rate_limit_error"
+    || (code === undefined && error.type === "rate_limit_error")) {
+    return { type: "rate_limit_error", code: code ?? "rate_limit_exceeded", httpStatus: 429 };
+  }
+  if (code === "server_is_overloaded" || code === "overloaded_error"
+    || (code === undefined && error.type === "overloaded_error")) {
+    return { type: error.type === "overloaded_error" ? "overloaded_error" : "server_error",
+      code: code ?? "server_is_overloaded", httpStatus: 503 };
+  }
+  return undefined;
+}
+
 /** Map a terminal Responses error object to the HTTP status we record in /api/logs. */
 export function httpStatusFromTerminalError(error: {
   type?: string;
@@ -646,10 +675,13 @@ export function httpStatusFromTerminalError(error: {
   message?: string;
 } | undefined): number {
   if (!error) return 502;
+  if (error.code === SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE) return 503;
   if (error.code === "client_closed_request" || error.code === "client_cancelled") return 499;
   if (isCyberPolicyCode(error.code) || (error.message ? isCyberPolicyMessage(error.message) : false)) {
     return 400;
   }
+  const recognized = recognizedUpstreamError(error);
+  if (recognized) return recognized.httpStatus;
   if (error.type === "rate_limit_error" || error.code === "rate_limit_exceeded") return 429;
   if (error.type === "authentication_error" || error.code === "invalid_api_key") return 401;
   if (

@@ -1,5 +1,7 @@
 # Kiro Provider
 
+Kiro retry permits retain their [physical executor span](../transports/responses-spend.md#historical-pool-continuity-and-rollback) through credential selection and rebuild. A newly selected identity needs its own normal-capacity seed before inference I/O; a refused permit leaves the executor untouched.
+
 Native steering follows [the shared WebSocket contract](../transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
 
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
@@ -15,7 +17,7 @@ It uses fixed Kiro authorization hosts, guarded outbound POSTs, and a bounded pr
 flow table. A flow ID is returned only at start; status and cancellation require that ID and
 the same management principal kind. Polling follows the server's interval, and only an exact
 approval shape reaches the protected OAuth store. Device codes and tokens never enter
-management responses. Native slots carry `loginOrigin: "kiro-device"`; kiro-cli reauth
+management responses. Social polling accepts `authorized` and the legacy `approved` alias, with the same token and profile checks. Native slots carry `loginOrigin: "kiro-device"`; kiro-cli reauth
 refuses them before starting CLI work. Upstream verification URLs require HTTPS, no credentials
 or control characters, and a 2048-character limit; user codes use 4–32 plain alphanumeric or
 hyphen characters. Completed flow results are consumed once, terminal entries expire after

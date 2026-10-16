@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, saveConfig } from "../../src/config";
+import { flushConfigDirHardeningAndReaps } from "../../src/config/paths";
 import { readRecentUsageEntries } from "../../src/usage/log";
 import { buildDesktop3pRegistry } from "../../src/claude/desktop-3p";
 import type { DesktopProfile } from "../../src/claude/desktop-profile";
@@ -63,7 +64,9 @@ beforeEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-afterEach(() => {
+afterEach(async () => {
+  if (testDir) await flushConfigDirHardeningAndReaps(testDir);
+  if (isolatedCodexHome) await flushConfigDirHardeningAndReaps(isolatedCodexHome.path);
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   if (previousDesktopConfigDir === undefined) delete process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
@@ -1573,7 +1576,7 @@ test("native passthrough precedes even invalid compatibility mode", async () => 
 test("compatibility survives management toggles and rejects Desktop source features", async () => {
   const { server: upstream, urls } = mockChatUpstreamCapturing();
   saveConfig(mockConfig(new URL("/v1", upstream.url).href, { compatibility: "enforce" }));
-  const server = startServer(0);
+  const server = startServer(0, { managementApi: { claudeAgentConfigDir: join(testDir, "claude-agents") } });
   try {
     for (const enabled of [false, true]) {
       const toggle = await fetch(new URL("/api/native-integrations/claude", server.url), {

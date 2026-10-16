@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { X509Certificate } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -287,8 +287,8 @@ test("one uncontended fresh authority publishes its certificate and owner exactl
   });
   expect(child.exitCode).toBe(0);
   const published = JSON.parse(child.stdout.toString()) as string[];
-  expect(published.filter(path => path === pickerCaCertPath(dir))).toHaveLength(1);
-  expect(published.filter(path => path === pickerCaOwnerPath(dir))).toHaveLength(1);
+  expect(published.filter(path => path === pickerCaCertPath(realpathSync(dir)))).toHaveLength(1);
+  expect(published.filter(path => path === pickerCaOwnerPath(realpathSync(dir)))).toHaveLength(1);
 });
 
 // The restart contract is process-scoped: a new process must mint its own authority, not reuse
@@ -574,7 +574,7 @@ test("a failed certificate replacement retains the public predecessor record and
       `import { spyOn } from "bun:test"; import * as fs from "node:fs";\n` +
       `const rename = fs.renameSync;\n` +
       `spyOn(fs, "renameSync").mockImplementation((from, to) => {\n` +
-      `  if (to === ${JSON.stringify(pickerCaCertPath(dir))}) throw new Error("injected CA rename failure");\n` +
+      `  if (to === ${JSON.stringify(pickerCaCertPath(realpathSync(dir)))}) throw new Error("injected CA rename failure");\n` +
       `  return rename(from, to);\n` +
       `});\n` +
       `const { ensurePickerCa } = await import(${JSON.stringify(PICKER_CA_MODULE_URL)});\n` +

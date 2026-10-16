@@ -48,6 +48,36 @@ describe("filterCatalogVisibleModels — per-provider allowlist", () => {
   });
 });
 
+describe("Copilot Auto uses the shared model visibility policy", () => {
+  const models = [m("github-copilot", "auto"), m("github-copilot", "gpt-4o"), m("other", "auto")];
+
+  test("pending initial selection hides every Copilot row", () => {
+    const config = cfg({ "github-copilot": { selectedModels: ["auto"],
+      initialModelSelection: { version: 1, registrationId: "00000000-0000-4000-8000-000000000000", status: "pending" } }, other: {} });
+    expect(filterCatalogVisibleModels(models, config)).toEqual([m("other", "auto")]);
+  });
+
+  test.each([
+    { selectedModels: ["gpt-4o"] },
+    { selectedModels: ["unknown-model"] },
+    { selectedModels: ["auto", "unknown-model"] },
+  ])("the saved allowlist %j applies to Auto", ({ selectedModels }) => {
+    const config = cfg({ "github-copilot": { selectedModels }, other: {} });
+    expect(filterCatalogVisibleModels(models, config).map(model => `${model.provider}/${model.id}`))
+      .toEqual([...models.filter(model => model.provider === "github-copilot" && selectedModels.includes(model.id))
+        .map(model => `${model.provider}/${model.id}`), "other/auto"]);
+  });
+
+  test("explicit Auto selection still yields to model and provider disables", () => {
+    const config = cfg({ "github-copilot": { selectedModels: ["auto"] }, other: {} });
+    expect(filterCatalogVisibleModels(models, config).map(model => model.id)).toEqual(["auto", "auto"]);
+    expect(filterCatalogVisibleModels(models, { ...config, disabledModels: ["github-copilot/auto"] }))
+      .toEqual([m("other", "auto")]);
+    config.providers["github-copilot"]!.disabled = true;
+    expect(filterCatalogVisibleModels(models, config)).toEqual([m("other", "auto")]);
+  });
+});
+
 describe("filterCatalogVisibleModels — slash-bearing ids", () => {
   // The Codex picker displays a slash-bearing native id in its ENCODED form, and
   // `ocx models remove` accepts that form too, so an allowlist is routinely written

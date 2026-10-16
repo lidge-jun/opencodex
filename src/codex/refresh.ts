@@ -1,8 +1,10 @@
 import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { invalidateCodexModelsCache, syncCatalogModels } from "./catalog";
 import type { ComboCatalogOmission } from "./catalog/aggregation";
-import { CODEX_MODELS_CACHE_PATH } from "./paths";
-import { atomicWriteFile } from "../config";
+import { getCodexHome } from "./paths";
+import { withCatalogWriteSerialization, CatalogWritePermitRefusal } from "./catalog-write-serialization";
+import { replaceCodexModelsCache } from "./internal/catalog-writer";
 import type { OcxConfig } from "../types";
 import type { CodexCatalogSyncOptions } from "./catalog/sync";
 
@@ -14,8 +16,12 @@ export interface CodexCatalogRefreshResult {
   cacheSynced: boolean;
   comboOmissions: ComboCatalogOmission[];
   refreshOutcome?: "committed" | "refused";
-  /** Desired OFF observed under K during the catalog commit; no cache write either. */
-  skippedReason?: "desired_disabled";
+  /**
+   * Desired OFF observed under K during the catalog commit, or a write refused because it would
+   * empty routed namespaces config.json does not back (#6529); no cache write either way.
+   */
+  skippedReason?: "desired_disabled" | "unbacked_routed_removal" | "foreign_owner" | "owner_unknown";
+  protectedRoutedNamespaces?: number;
 }
 
 interface RefreshDeps {
@@ -31,8 +37,13 @@ const defaultDeps: RefreshDeps = {
 };
 
 export function syncCodexModelsCacheFromCatalog(catalogPath: string): void {
-  const content = readFileSync(catalogPath, "utf8");
-  atomicWriteFile(CODEX_MODELS_CACHE_PATH, content);
+  const owningCodexHome = getCodexHome();
+  const outcome = withCatalogWriteSerialization(owningCodexHome, permit =>
+    replaceCodexModelsCache(permit, owningCodexHome, {
+      path: join(owningCodexHome, "models_cache.json"),
+      content: readFileSync(catalogPath, "utf8"),
+    }), { intent: "cache", writer: "cache-from-catalog" });
+  if (outcome.kind === "unavailable") throw new CatalogWritePermitRefusal(`Catalog cache synchronization unavailable (${outcome.reason}).`);
 }
 
 /**
@@ -50,9 +61,9 @@ export async function refreshCodexModelCatalog(
   const catalogExists = deps.existsSync(result.path);
   const catalogWritten = result.catalogWritten === true;
   const comboOmissions = result.comboOmissions ?? [];
-  if (result.skippedReason === "desired_disabled" || result.refreshOutcome === "refused") {
-    // The commit path observed OFF under K. Invalidate nothing: rewriting the
-    // models cache here would be exactly the routed-cache write the skip refused.
+  if (result.skippedReason !== undefined || result.refreshOutcome === "refused") {
+    // The commit path observed OFF, or an unbacked routed removal, under K. Invalidate
+    // nothing: rewriting the models cache here would be exactly the write the skip refused.
     return { ...result, catalogExists, catalogWritten: false, cacheSynced: false, comboOmissions };
   }
   if (!catalogExists) {

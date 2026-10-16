@@ -32,6 +32,7 @@ import {
   type OAuthActiveTokenObservation,
 } from "../../oauth";
 import { getAccountSet } from "../../oauth/store";
+import { mayResolveModelsOAuth } from "../../oauth/model-discovery-auth";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 import { modelInList } from "../../types";
 import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
@@ -147,6 +148,8 @@ export interface CapturedModelsRequest {
 }
 
 export interface CapturedProviderGather {
+  /** Public metadata reads and refreshes stay bound to this admission root. */
+  readonly metadataConfigDir: string;
   readonly name: string;
   readonly provider: OcxProviderConfig;
   readonly discovery: ResolvedProviderModelDiscovery;
@@ -353,6 +356,7 @@ export function captureProviderGather(
   retainConfiguredModelIds?: ReadonlySet<string>,
   config?: Pick<OcxConfig, "providers">,
 ): CapturedProviderGather {
+  const metadataConfigDir = getConfigDir();
   const enriched = detachedClone(withCanonicalOpenAiForwardAuthDefault(name, configured));
   enrichProviderFromRegistry(name, enriched);
   const registryTransportMatch = providerMatchesRegistryTransport(name, enriched);
@@ -389,15 +393,15 @@ export function captureProviderGather(
     ? authResolver.resolve(name, provider)
     : undefined;
   // A refreshing capture carries the stored origin so accounts on different hosts keep separate
-  // flights. The send is rebuilt from the auth the gather resolves, and the observed path never
+  // flights. Host-scoped auth rebuilds its request; B retains its configured captured target. Observed capture never
   // reads the live store.
   const oauthApiBaseUrl = observedAuth
     ? observedAuth.oauthApiBaseUrl
-    : authResolver.kind === "refreshing" && provider.authMode === "oauth"
+    : authResolver.kind === "refreshing" && provider.authMode === "oauth" && mayResolveModelsOAuth(name, provider)
       ? getOAuthCredentialApiBaseUrl(name)
       : undefined;
   const request = captureModelsRequest(name, provider, oauthApiBaseUrl);
-  const refreshingOAuthAccountId = !observedAuth && authResolver.kind === "refreshing" && provider.authMode === "oauth"
+  const refreshingOAuthAccountId = !observedAuth && authResolver.kind === "refreshing" && provider.authMode === "oauth" && mayResolveModelsOAuth(name, provider)
     ? getAccountSet(name)?.activeAccountId
     : undefined;
   const resolved = resolveProviderModelDiscovery(name, provider);
@@ -427,6 +431,7 @@ export function captureProviderGather(
   const effectiveAlias = effectiveProviderAliasDecision(name, configured, config);
   return Object.freeze({
     name,
+    metadataConfigDir,
     provider,
     discovery,
     policy,
@@ -481,6 +486,7 @@ export function captureGatherFlight(
     providerGraphIdentity: keyedGatherIdentity("catalog-gather-provider-graph-v1",
       providers.map(provider => ({
         name: provider.name,
+        metadataConfigDir: provider.metadataConfigDir,
         // `fetch` is a caller-owned transport executor, not admitted state: the
         // outbound transport honors it so a caller can supply its own HTTP path.
         // It is the one member of a provider row that is legitimately a function,
@@ -531,6 +537,7 @@ function providerCatalogFingerprint(name: string, prov: OcxProviderConfig): Reco
     live: prov.liveModels ?? null,
     base: prov.baseUrl ?? "",
     adapter: prov.adapter ?? "",
+    instance: prov.anthropicOAuthInstance ?? null,
     models: [...(prov.models ?? [])].sort(),
     retain: [...(prov.retainModels ?? [])].sort(),
     selected: [...(prov.selectedModels ?? [])].sort(),

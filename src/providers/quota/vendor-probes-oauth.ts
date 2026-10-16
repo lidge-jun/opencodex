@@ -2,7 +2,9 @@ import { markAnthropicFamilyEnumeration } from "./anthropic-family-headers";
 import { effectiveCodexAuthAccountId, fetchMainAccountInfoSnapshot, listCodexAuthAccountsSnapshot } from "../../codex/auth-api";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/main-account";
 import { getValidAccessToken } from "../../oauth";
-import { captureOAuthAccountSelection, getAccountCredential, getAccountSet } from "../../oauth/store";
+import { loadConfig } from "../../config";
+import { configuredAnthropicInstance, type AnthropicInstanceId } from "../anthropic-instance";
+import { captureOAuthAccountSelection, credentialGeneration, getAccountCredential, getAccountSet } from "../../oauth/store";
 import { hydrateKiroAccountState, persistKiroAccountState } from "../kiro-account-state-disk";
 import { kiroProbeCurrent, kiroProbeIdentity } from "./kiro-account-probe";
 import { fetchMuseKeyQuotaSnapshot } from "../muse-key-quota";
@@ -33,6 +35,7 @@ import {
 } from "./report-cache";
 import {
   accountCacheKey,
+  captureProviderAccountQuotaEpoch,
   accountQuotaCache,
   hydrateAccountQuotaCache,
   mayCommitAccountQuotaKey,
@@ -40,7 +43,7 @@ import {
 } from "./account-cache";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 import type { ProviderQuota, ProviderQuotaWindow } from "../quota-types";
-import { AnthropicQuotaProbeOwnershipError, assertAnthropicQuotaSendAllowed, probeAnthropicQuotaWithRecovery } from "./anthropic-cooldown-recovery";
+import { AnthropicQuotaProbeOwnershipError, anthropicCooldownRecoveryFor } from "./anthropic-cooldown-recovery";
 
 const XAI_BILLING_URL = "https://cli-chat-proxy.grok.com/v1/billing";
 const XAI_CREDITS_URL = `${XAI_BILLING_URL}?format=credits`;
@@ -324,9 +327,9 @@ async function readAnthropicUsageQuota(accessToken: string): Promise<ProviderQuo
  * This endpoint reports quota only. Its body carries `five_hour`, `seven_day`, the
  * model-scoped weekly buckets (`seven_day_fable`/`_opus`/`_sonnet`) and a `limits` array,
  * and **no subscription or tier field** — nor does the OAuth token response, which yields only
- * `account.uuid` and `account.email_address` (`src/oauth/anthropic.ts`). That is why
- * `OAuthAccountSummary.plan` is `null` for Anthropic rather than populated here (#3777); it is
- * a missing upstream field, not an unfinished mapping.
+ * `account.uuid` and `account.email_address` (`src/oauth/anthropic.ts`). Subscription labels
+ * instead come from the authenticated profile in `src/oauth/anthropic-identity.ts`, never
+ * from this quota response.
  *
  * A tier must not be inferred from what is here. Percentages are normalized per account, so a
  * Max x5 seat at 50% is byte-identical to a Max x20 seat at 50%, and the presence of a
@@ -337,38 +340,67 @@ export async function fetchAnthropicUsageQuota(
   accessToken: string,
   requireFreshDispatch = false,
 ): Promise<ProviderQuota | null> {
+  return fetchAnthropicUsageQuotaForInstance("anthropic", accessToken, requireFreshDispatch);
+}
+
+export async function fetchAnthropicUsageQuotaForInstance(
+  instance: AnthropicInstanceId,
+  accessToken: string,
+  requireFreshDispatch = false,
+): Promise<ProviderQuota | null> {
   // Recovery evidence must be requested after the claimed cooldown. Joining an older request
   // can return after the 429 while still describing provider state from before that refusal.
-  const joinable = requireFreshDispatch ? undefined : anthropicUsageInflight.get(accessToken);
+  const credentialIdentity = getAccountSet(instance)?.accounts.filter(row => row.credential.access === accessToken)
+    .map(row => [row.id, row.loginId, row.addedAt, credentialGeneration(row.credential)]);
+  const key = `${instance}\0${captureProviderAccountQuotaEpoch(instance)}\0${JSON.stringify(credentialIdentity)}\0${accessToken}`;
+  const joinable = requireFreshDispatch ? undefined : anthropicUsageInflight.get(key);
   if (joinable) return joinable;
 
   const probe = readAnthropicUsageQuota(accessToken).finally(() => {
-    if (anthropicUsageInflight.get(accessToken) === probe) anthropicUsageInflight.delete(accessToken);
+    if (anthropicUsageInflight.get(key) === probe) anthropicUsageInflight.delete(key);
   });
-  anthropicUsageInflight.set(accessToken, probe);
+  anthropicUsageInflight.set(key, probe);
   return probe;
 }
 
-export async function fetchAnthropicQuota(provider: string): Promise<ProviderQuotaReport | null> {
+/** `config` is the caller's live object; currency re-reads it instead of reloading the file. */
+export async function fetchAnthropicQuota(provider: string, config: OcxConfig = loadConfig()): Promise<ProviderQuotaReport | null> {
+  const instance = configuredAnthropicInstance(config, provider);
+  const target = config.providers[provider];
+  if (!instance || target?.disabled || target && target.authMode !== "oauth") return null;
+  const targetIdentity = JSON.stringify(target);
+  const targetCurrent = () => configuredAnthropicInstance(config, provider) === instance
+    && JSON.stringify(config.providers[provider]) === targetIdentity;
+  const recovery = anthropicCooldownRecoveryFor(instance);
   // Capture the account we intend to probe before awaiting — a mid-flight active
   // switch must not seed the wrong account's cache with this response.
-  const selection = captureOAuthAccountSelection("anthropic");
+  const selection = captureOAuthAccountSelection(instance);
   const probedAccountId = selection?.accountId;
-  const probedAccountKey = probedAccountId ? accountCacheKey("anthropic", probedAccountId) : null;
+  const initialRow = getAccountSet(instance)?.accounts.find(row => row.id === probedAccountId);
+  const epoch = captureProviderAccountQuotaEpoch(instance);
+  const incarnation = probedAccountId ? recovery.reserveAnthropicAccountIncarnation(probedAccountId) : undefined;
+  const probedAccountKey = probedAccountId ? accountCacheKey(instance, probedAccountId) : null;
   const writerGeneration = captureConfigGeneration();
   let accessToken: string;
   try {
-    accessToken = await getValidAccessToken("anthropic");
+    accessToken = await getValidAccessToken(instance);
   } catch {
     return null;
   }
   if (!probedAccountId || !probedAccountKey) return null;
+  const currentRow = getAccountSet(instance)?.accounts.find(row => row.id === probedAccountId);
+  if (!initialRow || !currentRow || initialRow.loginId !== currentRow.loginId || initialRow.addedAt !== currentRow.addedAt
+    || epoch !== captureProviderAccountQuotaEpoch(instance) || recovery.anthropicAccountIncarnation(probedAccountId) !== incarnation) return null;
   let quota: ProviderQuota | null;
   let anthropicCurrent: (() => boolean) | undefined;
   try {
-    const result = await probeAnthropicQuotaWithRecovery(probedAccountId, accessToken,
-      fresh => { assertAnthropicQuotaSendAllowed(probedAccountId, accessToken); return fetchAnthropicUsageQuota(accessToken, fresh); },
-      () => mayCommitAccountQuotaKey(probedAccountKey, writerGeneration));
+    const result = await recovery.probeAnthropicQuotaWithRecovery(probedAccountId, accessToken,
+      fresh => {
+        if (!targetCurrent()) throw new AnthropicQuotaProbeOwnershipError("quota target changed");
+        recovery.assertAnthropicQuotaSendAllowed(probedAccountId, accessToken);
+        return fetchAnthropicUsageQuotaForInstance(instance, accessToken, fresh);
+      },
+      () => targetCurrent() && mayCommitAccountQuotaKey(probedAccountKey, writerGeneration));
     if (result && !result.isCurrent()) return null;
     quota = result?.quota ?? null;
     anthropicCurrent = result?.isCurrent;
@@ -380,14 +412,14 @@ export async function fetchAnthropicQuota(provider: string): Promise<ProviderQuo
   // Share the active-account probe with the per-account cache so Providers-page
   // loads do not double-hit Anthropic's rate-limited usage endpoint.
   if (probedAccountId && probedAccountKey) {
-    const stillOwnsToken = getAccountCredential("anthropic", probedAccountId)?.access === accessToken;
+    const stillOwnsToken = getAccountCredential(instance, probedAccountId)?.access === accessToken;
     if (stillOwnsToken && anthropicCurrent?.() && mayCommitAccountQuotaKey(probedAccountKey, writerGeneration)) {
       accountQuotaCache.set(probedAccountKey, { ts: Date.now(), quota, isCurrent: anthropicCurrent });
     }
   }
   const quotaReport = report(provider, "anthropic:oauth-usage", quota);
   if (quotaReport && anthropicCurrent) {
-    accountReportCurrent.set(quotaReport, () => anthropicCurrent() && getAccountSet("anthropic")?.activeAccountId === probedAccountId);
+    accountReportCurrent.set(quotaReport, () => anthropicCurrent() && getAccountSet(instance)?.activeAccountId === probedAccountId);
   }
   return quotaReport;
 }

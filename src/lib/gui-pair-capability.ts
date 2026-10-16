@@ -3,7 +3,7 @@ import { isLocalAttestationSecret } from "./local-management-attestation";
 
 export const GUI_PAIR_METHOD = "POST";
 export const GUI_PAIR_PATH = "/api/gui/pairing-grants";
-export const GUI_PAIR_CAPABILITY_VERSION = "v1";
+export const GUI_PAIR_CAPABILITY_VERSION = "v2";
 export const GUI_PAIR_EXPECTED_PID_HEADER = "x-opencodex-gui-pair-expected-pid";
 export const GUI_PAIR_NONCE_HEADER = "x-opencodex-gui-pair-nonce";
 export const GUI_PAIR_EXPIRES_AT_HEADER = "x-opencodex-gui-pair-expires-at";

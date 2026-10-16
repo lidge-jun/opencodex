@@ -1,41 +1,26 @@
-import { readBoundedResponseBytes } from "../lib/bounded-body";
+import type { providerOutboundPost } from "../lib/provider-outbound";
+import type { OcxComboDefaultEffort, OcxConfig } from "../types";
 import {
-  providerOutboundPost,
-  providerRedirectError,
-} from "../lib/provider-outbound";
-import {
-  isKeychainReference,
-  keychainReferenceBelongsToProvider,
-  resolveProviderApiKey,
-} from "../providers/api-key-resolve";
-import { providerMatchesRegistryTransport } from "../providers/registry";
-import type { OcxComboDefaultEffort, OcxConfig, OcxProviderConfig } from "../types";
-import {
-  isSystemOneEndpoint,
-  JEV_DECISION_TIMEOUT_DEFAULT_MS,
-  JEV_DECISION_TIMEOUT_MAX_MS,
-  JEV_DECISION_TIMEOUT_MIN_MS,
   JEV_MAX_CANDIDATE_FIELD_CHARS,
 } from "./types";
 
-export const JEV_PROVIDER_ID = "jev";
-export const JEV_API_URL = "https://api.typesafe.ai/v1/systemone";
-export const JEV_MODEL = "jev-latest";
+import {
+  exchangeJevDecision,
+  JEV_PROVIDER_ID,
+} from "./jev-service-exchange";
+export {
+  JEV_API_URL,
+  JEV_MODEL,
+  JEV_PROVIDER_ID,
+  JEV_MAX_REQUEST_BYTES,
+  JEV_MAX_RESPONSE_BYTES,
+  jevDecisionTimeoutMs,
+} from "./jev-service-exchange";
 
 export const JEV_MAX_CANDIDATES = 64;
 /** Ollama's System One choice questions accept 2..26 options; other services share the floor. */
 const SELF_HOSTED_MIN_OPTIONS = 2;
 const SELF_HOSTED_MAX_OPTIONS = 26;
-/** Environment names that hold TypeSafe credentials; a self-hosted row may never reference them. */
-const TYPESAFE_ENV_KEYS = new Set(["TYPESAFE_API_KEY", "JEV_API_KEY"]);
-export const JEV_MAX_REQUEST_BYTES = 65_536;
-export const JEV_MAX_RESPONSE_BYTES = 65_536;
-const JEV_OUTBOUND_DEPENDENCIES = {
-  isCanonicalUrl: (name: string, url: string) => name === JEV_PROVIDER_ID && url === JEV_API_URL,
-  // Self-hosted decision models (Ollama tev1) listen on plain HTTP loopback. The outbound wrapper
-  // still requires the row's own allowPrivateNetwork and a literal local address for that.
-  allowLocalCleartextPost: true,
-};
 
 const TASK_CHARS = 500;
 const TASK_HEAD_CHARS = 320;
@@ -47,6 +32,7 @@ const TOOL_NAME_CHARS = 160;
 const VISIBLE_TEXT_CHUNK_CHARS = 16_384;
 
 const ENVELOPE_TAGS = [
+  "system-reminder",
   "codex_internal_context",
   "recommended_plugins",
   "environment_context",
@@ -302,7 +288,8 @@ function taskWithoutProtectedEnvelopes(text: string): string {
       }
     } else {
       if (stack.length === 0) appendTrimmedRange(visible, "\n", 0, 1);
-      if (!completedGoal && !goal && tag === "codex_internal_context") {
+      // A Codex goal quoted inside a Claude reminder is context, never a fallback task.
+      if (!completedGoal && !goal && tag === "codex_internal_context" && !stack.includes("system-reminder")) {
         goal = { sample: emptyTextSample(), pendingWhitespace: emptyTextSample() };
         goalDepth = stack.length;
       }
@@ -381,6 +368,7 @@ function hasImageContent(item: Record<string, unknown>): boolean {
   return item.content.some(part => isRecord(part) && (part.type === "input_image" || part.type === "image_url"));
 }
 
+/** Extract bounded task/assistant/tool evidence, omit protected envelopes, and attach configured target notes. */
 export function buildJevState(body: unknown, candidates: readonly JevCandidate[] = []): Record<string, unknown> {
   const input = isRecord(body) ? body.input : undefined;
   let task = "";
@@ -442,6 +430,7 @@ export function buildJevState(body: unknown, candidates: readonly JevCandidate[]
   };
 }
 
+/** Require task text, an image signal, or a tool-output tail; assistant context and operator notes alone do not suffice. */
 export function hasJevDecisionState(state: Record<string, unknown>): boolean {
   if (typeof state.task === "string" && state.task.trim()) return true;
   if (isRecord(state.signals) && state.signals.has_image === true) return true;
@@ -473,6 +462,7 @@ function candidateOptions(candidates: readonly JevCandidate[]): Map<string, JevR
   return options;
 }
 
+/** Check candidate count and field lengths before state extraction; the exchange separately caps serialized bytes. */
 export function candidatesFitRequestBounds(candidates: readonly JevCandidate[]): boolean {
   if (candidates.length > JEV_MAX_CANDIDATES) return false;
   return candidates.every(candidate => [candidate.key, candidate.provider, candidate.model]
@@ -547,6 +537,7 @@ export function buildJevRouteQuestion(
   };
 }
 
+/** Project only allowlisted, nonnegative safe-integer usage counters; omit missing or wholly invalid usage. */
 export function jevUsage(payload: Record<string, unknown>): Record<string, number> | undefined {
   if (!isRecord(payload.usage)) return undefined;
   const usage: Record<string, number> = {};
@@ -557,6 +548,7 @@ export function jevUsage(payload: Record<string, unknown>): Record<string, numbe
   return Object.keys(usage).length > 0 ? usage : undefined;
 }
 
+/** Validate an allowlisted route choice and any complete probability distribution; throw on invalid answers. */
 export function parseJevDecision(
   payload: unknown,
   candidates: readonly JevCandidate[],
@@ -609,6 +601,7 @@ export function parseJevDecision(
   };
 }
 
+/** Preserve the caller's eligible target/effort fallback while recording the failed gate, backend, and latency. */
 export function fallbackDecision(
   fallback: ResolveJevDecisionOptions["fallback"],
   gate: Exclude<JevDecision["gate"], "apply">,
@@ -616,113 +609,6 @@ export function fallbackDecision(
   backend: JevDecisionBackend,
 ): JevDecision {
   return { backend, ...fallback, gate, latencyMs };
-}
-
-/** The decision deadline: the configured value when in bounds, otherwise the four-second default. */
-export function jevDecisionTimeoutMs(value: number | undefined): number {
-  return value !== undefined
-    && Number.isInteger(value)
-    && value >= JEV_DECISION_TIMEOUT_MIN_MS
-    && value <= JEV_DECISION_TIMEOUT_MAX_MS
-    ? value
-    : JEV_DECISION_TIMEOUT_DEFAULT_MS;
-}
-
-function canonicalJevProvider(config: OcxConfig): OcxProviderConfig {
-  const configured = config.providers[JEV_PROVIDER_ID];
-  if (configured && providerMatchesRegistryTransport(JEV_PROVIDER_ID, configured)) return configured;
-  return {
-    adapter: "jev-decision",
-    baseUrl: JEV_API_URL,
-    authMode: "key",
-    liveModels: false,
-  };
-}
-
-interface JevDecisionEndpoint {
-  name: string;
-  provider: OcxProviderConfig;
-  url: string;
-  model: string;
-  apiKey: string | undefined;
-  /** Self-hosted System One services accept only string option descriptions. */
-  descriptiveCriteria: boolean;
-}
-
-function envReferenceName(value: string): string | undefined {
-  const braced = /^\$\{(\w+)\}$/.exec(value);
-  if (braced) return braced[1];
-  return value.startsWith("$") ? value.slice(1) : undefined;
-}
-
-/**
- * A self-hosted row may carry only its own secret: never a reference to the TypeSafe environment
- * keys, and never a keychain entry that belongs to another provider. `null` means refused.
- */
-function selfHostedApiKey(name: string, apiKey: string | undefined): string | undefined | null {
-  if (!apiKey) return undefined;
-  const envName = envReferenceName(apiKey);
-  if (envName !== undefined && TYPESAFE_ENV_KEYS.has(envName)) return null;
-  if (isKeychainReference(apiKey) && !keychainReferenceBelongsToProvider(apiKey, name)) return null;
-  return resolveProviderApiKey(apiKey)?.trim() || undefined;
-}
-
-/**
- * Resolve where one decision request goes and which credential it may carry.
- *
- * The `jev` id stays pinned to the canonical TypeSafe URL and `jev-latest`: its row key is used
- * only while the row still matches the registry transport, and the environment fallbacks exist
- * only for that URL. A retargeted `jev` row therefore keeps today's behavior instead of becoming a
- * custom destination. Any other id must be an enabled `jev-decision` row whose baseUrl is a
- * `/systemone` endpoint and which names its own model; only its own key may accompany it, so no
- * TypeSafe credential can reach a self-hosted service. `undefined` means no usable decision
- * service (reported through the existing `missing_key` gate); `null` means the request's
- * destination scope refused it before any credential access.
- */
-function jevDecisionEndpoint(
-  config: OcxConfig,
-  decisionProvider: string,
-  isDestinationAllowed?: ResolveJevDecisionOptions["isDestinationAllowed"],
-): JevDecisionEndpoint | undefined | null {
-  const configured = Object.hasOwn(config.providers, decisionProvider)
-    ? config.providers[decisionProvider]
-    : undefined;
-  if (configured?.disabled === true) return undefined;
-  if (decisionProvider === JEV_PROVIDER_ID) {
-    if (isDestinationAllowed?.(JEV_PROVIDER_ID, JEV_MODEL) === false) return null;
-    const configuredOwnsJev = configured
-      && providerMatchesRegistryTransport(JEV_PROVIDER_ID, configured);
-    const apiKey = (
-      configuredOwnsJev ? resolveProviderApiKey(configured.apiKey)?.trim() : undefined
-    ) || process.env.TYPESAFE_API_KEY?.trim()
-      || process.env.JEV_API_KEY?.trim();
-    if (!apiKey) return undefined;
-    return {
-      name: JEV_PROVIDER_ID,
-      provider: canonicalJevProvider(config),
-      url: JEV_API_URL,
-      model: JEV_MODEL,
-      apiKey,
-      descriptiveCriteria: false,
-    };
-  }
-  if (configured?.adapter !== "jev-decision" || typeof configured.baseUrl !== "string") return undefined;
-  const url = configured.baseUrl.trim().replace(/\/+$/, "");
-  if (!url || !isSystemOneEndpoint(url)) return undefined;
-  // `jev-latest` is TypeSafe's model name; a self-hosted host must name its own.
-  const model = configured.defaultModel?.trim() || configured.models?.[0]?.trim();
-  if (!model) return undefined;
-  if (isDestinationAllowed?.(decisionProvider, model) === false) return null;
-  const apiKey = selfHostedApiKey(decisionProvider, configured.apiKey);
-  if (apiKey === null) return undefined;
-  return {
-    name: decisionProvider,
-    provider: configured,
-    url,
-    model,
-    apiKey,
-    descriptiveCriteria: true,
-  };
 }
 
 /**
@@ -742,98 +628,29 @@ export async function resolveJevDecision(options: ResolveJevDecisionOptions): Pr
   if (options.candidates.length === 0) return failed("no_choices");
   if (!candidatesFitRequestBounds(options.candidates)) return failed("invalid");
 
-  const endpoint = jevDecisionEndpoint(options.config, options.decisionProvider ?? JEV_PROVIDER_ID, options.isDestinationAllowed);
-  if (endpoint === null) return failed("invalid");
-  if (!endpoint) return failed("missing_key");
-
-  let requestBody: string;
-  try {
+  const exchanged = await exchangeJevDecision(options, (endpoint) => {
     if (endpoint.descriptiveCriteria) {
       // Self-hosted choice questions accept 2..26 options; decide locally instead of spending a
       // round-trip on a request the service will refuse.
       const optionCount = candidateOptions(options.candidates).size;
-      if (optionCount < SELF_HOSTED_MIN_OPTIONS) return failed("no_choices");
-      if (optionCount > SELF_HOSTED_MAX_OPTIONS) return failed("invalid");
+      if (optionCount < SELF_HOSTED_MIN_OPTIONS) return "no_choices";
+      if (optionCount > SELF_HOSTED_MAX_OPTIONS) return "invalid";
     }
     const state = buildJevState(options.body, options.candidates);
-    if (!hasJevDecisionState(state)) return failed("no_state");
-    requestBody = JSON.stringify({
+    if (!hasJevDecisionState(state)) return "no_state";
+    return { body: JSON.stringify({
       model: endpoint.model,
       state,
       questions: buildJevRouteQuestion(options.candidates, { descriptiveCriteria: endpoint.descriptiveCriteria }),
-    });
-    if (new TextEncoder().encode(requestBody).byteLength > JEV_MAX_REQUEST_BYTES) return failed("invalid");
-  } catch {
-    return failed("invalid");
-  }
-
-  const timeoutMs = jevDecisionTimeoutMs(options.timeoutMs);
-  const timeoutSignal = AbortSignal.timeout(timeoutMs);
-  const signal = options.signal
-    ? AbortSignal.any([options.signal, timeoutSignal])
-    : timeoutSignal;
-  const post = options.post ?? providerOutboundPost;
-
-  try {
-    const response = await post(
-      endpoint.name,
-      endpoint.provider,
-      endpoint.url,
-      {
-        headers: {
-          ...(endpoint.apiKey ? { Authorization: `Bearer ${endpoint.apiKey}` } : {}),
-          "Content-Type": "application/json",
-        },
-        body: requestBody,
-        signal,
-      },
-      JEV_OUTBOUND_DEPENDENCIES,
-    );
-    if (options.signal?.aborted) throw options.signal.reason;
-
-    const redirectError = await providerRedirectError(response, endpoint.url);
-    if (redirectError) return failed("redirect");
-    if (!response.ok) {
-      try { void response.body?.cancel().catch(() => undefined); } catch { /* best effort */ }
-      return failed("http");
-    }
-
-    const bounded = await readBoundedResponseBytes(response, {
-      maxBytes: JEV_MAX_RESPONSE_BYTES,
-      signal,
-    });
-    if (options.signal?.aborted) throw options.signal.reason;
-    if (bounded.oversized) return failed("malformed");
-
-    let payload: unknown;
-    try {
-      const text = new TextDecoder("utf-8", { fatal: true }).decode(bounded.bytes);
-      payload = JSON.parse(text);
-    } catch {
-      return failed("malformed");
-    }
-
-    let parsed: ReturnType<typeof parseJevDecision>;
-    try {
-      parsed = parseJevDecision(payload, options.candidates);
-    } catch {
-      return failed("invalid");
-    }
-    if (options.signal?.aborted) throw options.signal.reason;
-    return {
-      backend,
-      ...parsed,
-      gate: "apply",
-      latencyMs: Math.max(0, now() - startedAt),
-    };
-  } catch (error) {
-    if (options.signal?.aborted) throw options.signal.reason;
-    if (timeoutSignal.aborted
-      || (error instanceof DOMException && error.name === "TimeoutError")) {
-      return failed("timeout");
-    }
-    return failed("network");
-  }
+    }) };
+  }, (payload) => parseJevDecision(payload, options.candidates));
+  if ("gate" in exchanged) return failed(exchanged.gate);
+  return {
+    backend,
+    ...exchanged.value,
+    gate: "apply",
+    latencyMs: Math.max(0, now() - startedAt),
+  };
 }
 
 export type JevDecisionProbeResult =

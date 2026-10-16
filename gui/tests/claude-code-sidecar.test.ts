@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import {
   applySidecarBackendChange,
   applySidecarModelChange,
+  applySidecarPoolChange,
   serializeSidecarOverride,
   sidecarSelectValue,
 } from "../src/pages/claude-code-sidecar";
@@ -71,4 +72,17 @@ test("Explicit backends trim whitespace-padded models before persist", () => {
     backend: "anthropic",
     model: "claude-sonnet-4",
   });
+});
+
+test("pool serializer omits untouched inheritance, carries B, and deletes only explicit edits", () => {
+  expect(serializeSidecarOverride({ backend: "anthropic", model: "claude-haiku-4-5" }))
+    .toEqual({ backend: "anthropic", model: "claude-haiku-4-5" });
+  const chosen = applySidecarPoolChange({ backend: "anthropic", model: "claude-haiku-4-5" }, "anthropic2");
+  expect(serializeSidecarOverride(chosen)).toEqual({ backend: "anthropic", model: "claude-haiku-4-5", anthropicInstance: "anthropic2" });
+  expect(serializeSidecarOverride(applySidecarPoolChange(chosen, "")))
+    .toEqual({ backend: "anthropic", model: "claude-haiku-4-5", anthropicInstance: null });
+  expect(serializeSidecarOverride(applySidecarBackendChange(chosen, "openai")))
+    .toEqual({ backend: "openai", model: "claude-haiku-4-5", anthropicInstance: null });
+  expect(serializeSidecarOverride(applySidecarPoolChange(undefined, "anthropic2")))
+    .toEqual({ backend: null, model: "", anthropicInstance: "anthropic2" });
 });

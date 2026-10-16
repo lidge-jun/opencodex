@@ -130,7 +130,9 @@ describe("two-plane integration call routing", () => {
     }
     expect(integrations).toContain("<ApiKeys apiBase={apiBase}");
     expect(integrations).toContain("<Grok apiBase={apiBase}");
-    expect(app).toContain("<Claude apiBase={sharedBase}");
+    // Claude is a Connect tab now; it gets Integrations' apiBase, which App sets to sharedBase.
+    expect(integrations).toContain("<Claude apiBase={apiBase} active={active} embedded />");
+    expect(app).toContain('{shellPage === "integrations" && <Integrations apiBase={sharedBase}');
     expect(integrations).toContain("<IntegrationsOverview apiBase={apiBase}");
     expect(integrations).toContain("`${machineApiBase}/api/machine/clients`");
     expect(integrations).toContain("`${machineApiBase}/api/machine/sync`");

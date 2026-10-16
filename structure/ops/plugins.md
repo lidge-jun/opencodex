@@ -46,6 +46,16 @@ or signs them.
   `src/lib/optional-shutdown-hooks.ts` under a per-file, per-registration key, so plugins sharing a
   display name, and several teardowns from one plugin, all run.
 
+## ACL inspector test seam
+
+`setPluginAclInspectorForTests(inspector?)` in `src/plugins/loader.ts` is a shipped mutable
+seam, test-only by intent, with no configuration or environment path. When installed, its
+result replaces ACL inspection for plugin directories, ancestors and files; owner and mode
+checks still run. Passing `undefined` restores the real inspector. Tests scope installation
+with `finally` and an `afterEach` reset and run serially because the override is module-global.
+Production callers must leave it unset; an in-process caller can misuse this export to bypass
+ACL inspection, so the test-only intent is a convention rather than an enforced boundary.
+
 ## Upstream rewrite slot
 
 `src/plugins/upstream-hooks.ts` is the only core-owned seam plugins attach to. It imports nothing,
@@ -60,7 +70,8 @@ so the request path depends on it without depending on the loader.
   with stale plugin headers. The per-turn headers in `CODEX_WS_FRAME_HEADERS`
   (`src/server/responses/codex-ws-request.ts`) ride in each frame's `client_metadata`, prepared
   before the rewrite and authoritative, so `planCodexWsDial` restores their original values and
-  they stay outside the reuse identity. Rewriting any earlier would
+  they stay outside the reuse identity. With `codexWsReuseAcrossTurns` (default off) those headers
+  are omitted from the handshake entirely, because one socket then serves later turns. Rewriting any earlier would
   hide the ChatGPT origin from the WebSocket selection and push Codex turns onto HTTP. The target
   carries the URL, mutable headers and the transport (`http` or `websocket`).
 - `sendWithConnectionPolicy` can run twice for one send (an override handing back to the supplied

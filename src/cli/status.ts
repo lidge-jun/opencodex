@@ -1,13 +1,15 @@
+import { collectCliPathDiagnostics, formatCliStatusHealthLabel, type CliPathDiagnostics } from "./cli-path-diagnostics";
 import type { CodexMainAccountPolicyHealth } from "../oauth/health";
 import { durableBunRuntime } from "../lib/bun-runtime";
 import { existsSync, readFileSync } from "node:fs";
 import { codexAutoStartEnabled, getConfigPath, readConfigDiagnostics } from "../config";
 import { getPidPath, readPid, readRuntimePort, type RuntimePortState } from "../config/process-state";
 import { diagnoseCodexBundledPlugins, type CodexPluginsDiagnostic } from "../codex/plugins-doctor";
-import { findLiveProxy, probeHostname } from "../server/proxy-liveness";
+import { findLiveProxy, probeHostname, type LiveProxy } from "../server/proxy-liveness";
 import type { OcxConfig } from "../types";
 import { diagnoseService, serviceLogPath } from "../service";
-import { collectStartupHealth, type StartupHealth } from "../codex/autostart-health";
+import { inspectDesktopSupervision } from "../service/desktop-supervision.mjs";
+import { collectStartupHealth, startupHealthReadBudgetMs, type StartupHealth } from "../codex/autostart-health";
 import { getCodexRoutingKind } from "../codex/inject";
 import { missingOwnedCatalogPath } from "../codex/inject/config-toml";
 import { CODEX_CONFIG_PATH } from "../codex/paths";
@@ -102,6 +104,16 @@ export type CliRemoteHubStatus = {
   truncated: boolean;
   /** The hub's own Claude Code toggle; a client cannot infer it from local config. */
   claudeCodeEnabled: boolean | null;
+  /**
+   * Present on a Remote Link Child (#6957): the peer is a Home reached over the link, not a hub,
+   * and every sentence names it that way. `codexSettings` lists the Home's Codex settings the
+   * last sync applied, or why the Child's local values are in effect.
+   */
+  link?: {
+    linkId: string;
+    homePhrase: string;
+    codexSettings: { source: "home"; fetchedAt: string; lines: string[] } | { source: "local"; reason: string };
+  };
 };
 
 export type CliStatusJson = {
@@ -150,6 +162,7 @@ export type CliStatusJson = {
   };
   connection: {
     state: "disconnected" | "connected" | "invalid" | "mismatched";
+    transport?: "hub" | "link";
     reason?: string;
     serverUrl?: string;
     managementUrl?: string;
@@ -215,6 +228,8 @@ export type CliStatusJson = {
    * ignores the key is unaffected, and `proxyVersion` is null when nothing is live.
    */
   versionSkew: VersionSkew;
+  cliCommand: CliPathDiagnostics;
+  startupSource: "live" | "local" | "local-supervision-override";
 };
 
 export type CliStatusView = {
@@ -251,7 +266,7 @@ export async function fetchLiveStartupHealth(
   deps: Parameters<typeof fetchBoundLocalManagementRead>[2] = {},
 ): Promise<StartupHealth | null> {
   const result = await fetchBoundLocalManagementRead(
-    live, LOCAL_MANAGEMENT_READ_PATHS.startupHealth, { timeoutMs: 1_500, ...deps, requireResponseProof: true },
+    live, LOCAL_MANAGEMENT_READ_PATHS.startupHealth, { timeoutMs: startupHealthReadBudgetMs(), ...deps, requireResponseProof: true },
   );
   if (result.kind !== "response" || !result.response.ok) return null;
   let payload: unknown;
@@ -259,12 +274,28 @@ export async function fetchLiveStartupHealth(
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
   const row = payload as Record<string, unknown>;
   if (row.status !== "native" && row.status !== "protected" && row.status !== "at-risk") return null;
-  if (row.protection !== "service" && row.protection !== "shim" && row.protection !== "none") return null;
+  if (row.protection !== "service" && row.protection !== "desktop" && row.protection !== "shim" && row.protection !== "none") return null;
   if (row.routingKind !== "native" && row.routingKind !== "opencodex-local"
     && row.routingKind !== "custom-local" && row.routingKind !== "custom-remote" && row.routingKind !== "unknown") return null;
   if (row.shimCoverage !== "full" && row.shimCoverage !== "cli-only" && row.shimCoverage !== "none") return null;
   if (typeof row.platform !== "string") return null;
   if (row.recommendedCommand !== null && typeof row.recommendedCommand !== "string") return null;
+  if (row.recommendedAction !== undefined && row.recommendedAction !== null
+    && (typeof row.recommendedAction !== "string" || row.recommendedAction.length > 512)) return null;
+  if (row.desktop !== undefined) {
+    if (!row.desktop || typeof row.desktop !== "object" || Array.isArray(row.desktop)) return null;
+    const desktop = row.desktop as Record<string, unknown>;
+    for (const key of ["owned", "loginEnabled", "running", "viable"] as const) {
+      if (typeof desktop[key] !== "boolean") return null;
+    }
+    if (desktop.supervisor !== undefined) {
+      if (!desktop.supervisor || typeof desktop.supervisor !== "object" || Array.isArray(desktop.supervisor)) return null;
+      const supervisor = desktop.supervisor as Record<string, unknown>;
+      if (typeof supervisor.supervisorPid !== "number" || !Number.isFinite(supervisor.supervisorPid)
+        || typeof supervisor.runtimePid !== "number" || !Number.isFinite(supervisor.runtimePid)
+        || typeof supervisor.app !== "string") return null;
+    }
+  }
   if (!row.commands || typeof row.commands !== "object" || Array.isArray(row.commands)) return null;
   for (const key of ["installService", "repairService", "installShim", "restoreNative"] as const) {
     if (typeof (row.commands as Record<string, unknown>)[key] !== "string") return null;
@@ -286,12 +317,40 @@ export async function fetchLiveStartupHealth(
   return payload as StartupHealth;
 }
 
-/** Prefer an attested live verdict and evaluate the local fallback only when live state is absent. */
+/** Older runtimes cannot report supervision; only that missing capability permits a local override. */
 export function selectStatusStartupHealth(
   liveStartup: StartupHealth | null,
   fallback: () => StartupHealth,
-): StartupHealth {
-  return liveStartup ?? fallback();
+  supervision?: () => ReturnType<typeof inspectDesktopSupervision>,
+  livePid?: number | null,
+): { startup: StartupHealth; startupSource: CliStatusJson["startupSource"] } {
+  if (!liveStartup) return { startup: fallback(), startupSource: "local" };
+  if (liveStartup.desktop === undefined && supervision) {
+    let evidence: ReturnType<typeof inspectDesktopSupervision> | undefined;
+    try { evidence = supervision(); }
+    catch { /* Failed optional evidence cannot replace an attested live verdict. */ }
+    if (evidence?.kind === "desktop" && evidence.runtimePid === livePid) {
+      const local = fallback();
+      const supervisor = local.desktop?.supervisor;
+      // The local probe runs later; it must still describe the same process pair. macOS and Linux
+      // accept only an unowned pair. On Windows an older runtime never published a Desktop
+      // diagnostic, so a durable Desktop claim beside proven live parentage qualifies too.
+      const ownershipEligible = local.desktop?.owned === false
+        || (local.desktop?.owned === true && local.platform === "win32");
+      if (ownershipEligible && supervisor
+        && supervisor.runtimePid === evidence.runtimePid && supervisor.supervisorPid === evidence.supervisorPid) {
+        return { startup: local, startupSource: "local-supervision-override" };
+      }
+    }
+  }
+  return { startup: liveStartup, startupSource: "live" };
+}
+
+export function runtimeSupervisorLine(startup: StartupHealth): string | null {
+  const supervisor = startup.desktop?.supervisor;
+  return supervisor
+    ? `Runtime supervisor: OpenCodex Desktop (pid ${supervisor.supervisorPid}, ${supervisor.app}); durable owner: ${startup.desktop?.owned ? "desktop" : "none"}`
+    : null;
 }
 
 /** Build the service summary from the same startup source that `ocx status` selected. */
@@ -299,18 +358,23 @@ export function statusServiceSummary(
   liveStartup: StartupHealth | null,
   service: Pick<ReturnType<typeof diagnoseService>, "installed" | "summary">,
   live: boolean,
+  // Which verdict was selected. A live proxy can still be described by the local reading when
+  // the runtime predates supervision reporting, so the label follows the verdict, not liveness.
+  startupSource?: CliStatusJson["startupSource"],
 ): string {
-  if (liveStartup) {
+  if (live && liveStartup) {
+    const supervisor = liveStartup.desktop?.supervisor ? "OpenCodex Desktop supervises the running proxy; " : "";
     if (liveStartup.protection === "service" && liveStartup.serviceViable) {
-      return `running under the live managed service (logs: ${serviceLogPath()})`;
+      return `${supervisor}running under the live managed service (logs: ${serviceLogPath()})`;
     }
     const state = [
       liveStartup.serviceInstalled ? "installed" : "absent",
       liveStartup.serviceRunning ? "running" : "not running",
       liveStartup.serviceViable ? "viable" : "not viable",
     ].join(", ");
-    const action = liveStartup.recommendedCommand ? `; run '${liveStartup.recommendedCommand}'` : "";
-    return `live startup reports service ${state}${action} (logs: ${serviceLogPath()})`;
+    const action = !liveStartup.desktop?.supervisor && liveStartup.recommendedCommand ? `; run '${liveStartup.recommendedCommand}'` : "";
+    const label = (startupSource ?? (live ? "live" : "local")) === "live" ? "live" : "local";
+    return `${supervisor}${label} startup reports service ${state}${action} (logs: ${serviceLogPath()})`;
   }
   return service.installed && !live
     ? `${service.summary} — registered but NOT serving; see ${serviceLogPath()} and re-run 'ocx service repair'`
@@ -450,8 +514,8 @@ function boundHubStateToken(
  * degradation.
  */
 export async function collectRemoteHubStatus(
-  connection: Pick<ClientConnectionStatus, "state" | "serverUrl" | "apiKeyId" | "connectedAt">,
-  options: { fetchImpl?: typeof fetch; timeoutMs?: number; now?: number } = {},
+  connection: Pick<ClientConnectionStatus, "state" | "serverUrl" | "apiKeyId" | "connectedAt"> & { transport?: "hub" | "link" },
+  options: { fetchImpl?: typeof fetch; timeoutMs?: number; now?: number; findChild?: () => Promise<LiveProxy | null> } = {},
 ): Promise<CliRemoteHubStatus> {
   if (connection.state !== "connected" || !connection.serverUrl || !connection.apiKeyId || !connection.connectedAt) {
     return disconnectedRemoteHubStatus();
@@ -463,14 +527,50 @@ export async function collectRemoteHubStatus(
     connectedAt: connection.connectedAt,
   };
   const bound = boundHubStateToken(readClientConnectionState(), readServiceApiTokenState(), owner);
+  // Link credentials never go to the persisted tunnel URL from this CLI. Ask the local Child
+  // without a credential; its connection-bound relay authenticates the actual Home connection.
+  let fetchImpl = options.fetchImpl;
+  let allowNetwork = true;
+  let localRelayFetchImpl: typeof fetch | undefined;
+  if (connection.transport === "link") {
+    const live = await (options.findChild ?? findLiveProxy)();
+    const current = readClientConnectionState();
+    allowNetwork = live?.role === "client" && current.kind === "connected" && sameClientConnectionOwner(current.value, owner);
+    if (allowNetwork && live) {
+      const localOrigin = `http://${probeHostname(live.hostname)}:${live.port}`;
+      localRelayFetchImpl = ((_, init) => (options.fetchImpl ?? fetch)(localOrigin + "/v1/hub-state", {
+        method: "GET", redirect: "manual", signal: init?.signal, headers: { Accept: "application/json" },
+      })) as typeof fetch;
+    }
+  }
+  // #6957: the Home's name, the link id and the Codex settings the last sync applied.
+  const linkState = readClientConnectionState();
+  const linkConnection = connection.transport === "link" && linkState.kind === "connected" && linkState.value.transport === "link" && linkState.value.link
+    ? linkState.value : null;
+  const linkHome = linkConnection ? await import("../client/link-home") : null;
   const resolved = await resolveHubState({
     owner,
-    token: bound.token,
+    token: connection.transport === "link" ? null : bound.token,
+    ...(localRelayFetchImpl ? { localRelayFetchImpl } : {}),
     ...(bound.withheldReason ? { withheldTokenReason: bound.withheldReason } : {}),
-    ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+    ...(fetchImpl ? { fetchImpl } : {}),
+    allowNetwork,
+    ...(connection.transport === "link" ? { peer: "Home" as const } : {}),
     ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
     ...(options.now === undefined ? {} : { now: options.now }),
   });
+  let link: CliRemoteHubStatus["link"];
+  if (linkConnection && linkHome) {
+    const { describeHomeCodexSettings } = await import("../link/codex-settings");
+    const record = linkHome.readHomeCodexSettingsRecord(linkConnection.link!.linkId);
+    link = {
+      linkId: linkConnection.link!.linkId,
+      homePhrase: linkHome.linkHomePhrase(linkConnection),
+      codexSettings: record
+        ? { source: "home", fetchedAt: record.fetchedAt, lines: describeHomeCodexSettings(record.document.settings) }
+        : { source: "local", reason: "no Home settings recorded yet; run: ocx sync" },
+    };
+  }
   return {
     connected: true,
     // The hub's own advertised origin when it publishes one; otherwise the URL this client
@@ -486,6 +586,7 @@ export async function collectRemoteHubStatus(
     subagentModels: resolved.state?.subagentModels ?? [],
     truncated: resolved.state?.truncated === true,
     claudeCodeEnabled: resolved.state ? resolved.state.claudeCode.enabled : null,
+    ...(link ? { link } : {}),
   };
 }
 
@@ -497,8 +598,24 @@ export async function collectRemoteHubStatus(
  * A buried `Remote hub: connected (<url>)` line — which is all this report had — does not stop
  * that, as #4236 demonstrated.
  */
-export function remoteHubBannerLine(remoteHub: CliRemoteHubStatus): string | null {
+export function remoteHubBannerLine(remoteHub: CliRemoteHubStatus, transport?: "hub" | "link"): string | null {
   if (!remoteHub.connected) return null;
+  if (remoteHub.link) {
+    const peer = `${remoteHub.link.homePhrase} over Remote Link (${remoteHub.link.linkId})`;
+    if (remoteHub.stateSource === "unavailable") {
+      return `⚠️  ${peer}: state unavailable (${remoteHub.reason ?? "unknown reason"}) — provider and login lines below are LOCAL and do not describe the Home.`;
+    }
+    const cached = remoteHub.stateSource === "cache"
+      ? ` — cached ${remoteHub.ageSeconds ?? "?"}s ago (${remoteHub.reason ?? "live read failed"})`
+      : "";
+    return `🔗 State from ${peer}${cached}: provider credentials, logins and delegable models below are the Home's, not this machine's.`;
+  }
+  if (transport === "link") {
+    const origin = remoteHub.origin ?? "unknown";
+    return remoteHub.stateSource === "unavailable"
+      ? `🔗 Remote Link Home ${origin}: provider credentials and routing come from Home. State unavailable (${remoteHub.reason ?? "unknown reason"}).`
+      : `🔗 State from Remote Link Home ${origin}${remoteHub.stateSource === "cache" ? " (cached)" : ""}: provider credentials, logins and models below come from Home.`;
+  }
   const origin = remoteHub.origin ?? "the hub";
   if (remoteHub.stateSource === "unavailable") {
     return `⚠️  Hub ${origin}: state unavailable (${remoteHub.reason ?? "unknown reason"}) — provider and login lines below are LOCAL and do not describe the hub.`;
@@ -513,32 +630,47 @@ export function remoteHubBannerLine(remoteHub: CliRemoteHubStatus): string | nul
  * The hub-sourced provider/login/model block, owned here so the sentences are testable without
  * spawning the CLI. Indentation is the caller's. Empty when nothing true is known.
  */
-export function remoteHubStatusLines(remoteHub: CliRemoteHubStatus): string[] {
-  if (!remoteHub.connected || remoteHub.stateSource === "unavailable") return [];
-  const origin = remoteHub.origin ?? "hub";
+export function remoteHubStatusLines(remoteHub: CliRemoteHubStatus, transport?: "hub" | "link"): string[] {
+  if (!remoteHub.connected) return [];
+  const settings = remoteHub.link ? linkCodexSettingsLines(remoteHub.link) : [];
+  if (remoteHub.stateSource === "unavailable") return settings;
+  const isLink = Boolean(remoteHub.link) || transport === "link";
+  const peer = remoteHub.link?.homePhrase ?? `${isLink ? "Home" : "hub"} ${remoteHub.origin ?? (isLink ? "Home" : "hub")}`;
+  const subject = isLink ? "the Home" : "the hub";
   const lines = [
-    `OAuth logins (hub ${origin}):`,
+    `OAuth logins (${peer}):`,
     ...(remoteHub.oauth.length === 0
-      ? ["  (the hub reported no OAuth providers)"]
+      ? [`  (${subject} reported no OAuth providers)`]
       : remoteHub.oauth.map(entry => `  ${entry.provider.padEnd(10)} ${entry.loggedIn ? "✓ logged in" : "✗ not logged in"}`)),
-    `Providers (hub ${origin}):`,
+    `Providers (${peer}):`,
     ...(remoteHub.providers.length === 0
-      ? ["  (the hub reported no providers)"]
+      ? [`  (${subject} reported no providers)`]
       : remoteHub.providers.map(provider => {
         // `authMode` is what keeps "no API key" from reading as "not configured": an `oauth`
         // provider legitimately has no key and is still fully usable.
         const credential = provider.hasCredential ? "credential stored" : `no API key (authMode ${provider.authMode ?? "key"})`;
         return `  ${provider.name.padEnd(10)} ${provider.adapter} — ${credential}${provider.disabled ? ", disabled" : ""}`;
       })),
-    `Delegable models (hub ${origin}): ${remoteHub.subagentModels.length === 0 ? "none" : remoteHub.subagentModels.join(", ")}`,
+    `Delegable models (${peer}): ${remoteHub.subagentModels.length === 0 ? "none" : remoteHub.subagentModels.join(", ")}`,
   ];
-  if (remoteHub.hubVersion) lines.push(`Hub version: ${remoteHub.hubVersion}`);
+  if (remoteHub.hubVersion) lines.push(`${remoteHub.link ? "Home" : "Hub"} version: ${remoteHub.hubVersion}`);
   // The hub told us its own lists are a prefix. Saying nothing here would make this report claim
   // completeness it does not have — the same shape of confident-and-wrong answer as #4236.
   if (remoteHub.truncated) {
-    lines.push("  (the hub truncated this state to fit its response caps; some rows are not listed)");
+    lines.push(`  (${subject} truncated this state to fit its response caps; some rows are not listed)`);
   }
-  return lines;
+  return [...lines, ...settings];
+}
+
+/** Which Codex settings the last sync took from the Home (#6957). */
+export function linkCodexSettingsLines(link: NonNullable<CliRemoteHubStatus["link"]>): string[] {
+  if (link.codexSettings.source === "local") {
+    return [`Codex settings: this machine's local values (${link.codexSettings.reason})`];
+  }
+  return [
+    `Codex settings from ${link.homePhrase} (applied ${link.codexSettings.fetchedAt}):`,
+    ...link.codexSettings.lines.map(line => `  ${line}`),
+  ];
 }
 
 export function selectListenTarget(
@@ -680,6 +812,7 @@ export function missingCodexCatalogLines(missingCatalogPath: string | null): str
 
 /** `mainAccountPolicy`: only `--json` asks; the human report reads the same accounts once via OAuth health. */
 export async function collectStatus(options: { mainAccountPolicy?: boolean } = {}): Promise<CliStatusView> {
+  const cliCommand = collectCliPathDiagnostics();
   const configDiagnostics = readConfigDiagnostics();
   const config = configDiagnostics.config;
   const claudeDesktop = {
@@ -710,7 +843,7 @@ export async function collectStatus(options: { mainAccountPolicy?: boolean } = {
   // Asked before the local probes below so a connected client's report is hub-sourced from its
   // first line. Bounded and failure-tolerant: an offline hub degrades the remoteHub block, it
   // does not fail `ocx status`.
-  const remoteHub = await collectRemoteHubStatus(clientConnection);
+  const remoteHub = await collectRemoteHubStatus({ ...clientConnection, transport: config.client?.transport });
   // Prefer identity-verified liveness (runtime-port + /healthz) over ocx.pid alone (#618).
   // Pass the already-resolved diagnostics config so findLiveProxy does not re-load and
   // warn on malformed config.json (status --json must stay stderr-clean).
@@ -757,14 +890,14 @@ export async function collectStatus(options: { mainAccountPolicy?: boolean } = {
   // A service can be registered and still not serve: the manager reports the job
   // either way. When the identity-probed live proxy provides an attested startup verdict,
   // prefer it over a shell-local service-manager probe that lacks the service environment.
-  const serviceSummary = statusServiceSummary(liveStartup, service, Boolean(live));
   const codexShim = diagnoseCodexShim();
   const codexShimSummary = codexShim.summary;
-  const startup = selectStatusStartupHealth(liveStartup, () => collectStartupHealth(config, {
+  const { startup, startupSource } = selectStatusStartupHealth(liveStartup, () => collectStartupHealth(config, {
     service,
     shim: codexShim,
     routingKind: getCodexRoutingKind(),
-  }));
+  }), live?.pid != null ? () => inspectDesktopSupervision({ targetPid: live.pid! }) : undefined, live?.pid);
+  const serviceSummary = statusServiceSummary(startup, service, Boolean(live), startupSource);
   const codexPlugins = diagnoseCodexBundledPlugins();
   const lastClamp = loadLastEffortClamp();
   const clampActive = effortClampAppliesToRuntime(lastClamp, resolvedRuntime.runtime);
@@ -869,7 +1002,7 @@ export async function collectStatus(options: { mainAccountPolicy?: boolean } = {
 
   return {
     proxyLabel,
-    healthLabel: health.label,
+    healthLabel: formatCliStatusHealthLabel(health.label, cliCommand, remoteHub.connected),
     json: {
       ...(mainAccountHardLock ? { mainAccountHardLock } : {}),
       schemaVersion: 1,
@@ -910,6 +1043,7 @@ export async function collectStatus(options: { mainAccountPolicy?: boolean } = {
       },
       connection: {
         state: clientConnection.state,
+        ...(config.client?.transport ? { transport: config.client.transport } : {}),
         ...(clientConnection.reason ? { reason: clientConnection.reason } : {}),
         ...(clientConnection.serverUrl ? { serverUrl: clientConnection.serverUrl } : {}),
         ...(clientConnection.managementUrl ? { managementUrl: clientConnection.managementUrl } : {}),
@@ -932,6 +1066,8 @@ export async function collectStatus(options: { mainAccountPolicy?: boolean } = {
       // fact about this install, not about the Codex runtime, and filing it there would
       // print it under the wrong heading (#2701).
       versionSkew,
+      cliCommand,
+      startupSource,
     },
   };
 }

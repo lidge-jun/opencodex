@@ -1,14 +1,15 @@
+import { createInferenceSendBudget } from "../inference/context";
 import type { ResponsesRequestContext } from "./core-options";
-import { createRequestExecutionBudget, isRequestExecutionBudget } from "../../lib/request-execution-budget";
+import { claimDispatchSpendProof, createPhysicalSendReporter, createRequestExecutionBudget, isRequestExecutionBudget, reportDispatchSends } from "../../lib/request-execution-budget";
 import {
   chargeWorkflowSends,
   workflowSendCeilingReached,
   workflowSpendCeilingReached,
 } from "../../lib/workflow-budget";
-import { workflowRefusalResponse } from "../workflow-refusal";
+import { poolContinuityRefusalReason, workflowRefusalResponse } from "../workflow-refusal";
 import type { AttemptRecoveryKind, AttemptRecoveryWithheld } from "../../usage/log";
 import { noteAttemptRecoveryWithheld, noteAttemptSend } from "../request-log";
-import { TRANSIENT_RETRY_MAX_ATTEMPTS } from "../../lib/upstream-retry";
+import { TRANSIENT_RETRY_MAX_ATTEMPTS, SendBudgetExhaustedError } from "../../lib/upstream-retry";
 import type {
   DispatchDecision,
   DispatchIntent,
@@ -52,17 +53,42 @@ export function createResponsesSendBudget(
   // fresh default of 3. It is now a holder carried on options, so a combo child inherits the
   // parent's spend instead of starting over per target -- both halves of the measured
   // amplification in #4546.
-  const sendBudget = options.sendBudget ?? createRequestExecutionBudget();
+  const sendBudget = options.sendBudget ?? createInferenceSendBudget(req, logCtx);
   // The root workflow is the user-visible task. A per-request cap cannot bound a fan-out that
   // sends once per child seven hundred times, so every send charged to the request is charged
   // to the root as well (#4546).
   const workflowRootId = req.headers.get("x-codex-parent-thread-id")?.trim() || undefined;
-  const noteTransientSends = (used: number): void => {
+  // A child that owns its Combo booking settles that exact permit through the reporter, even
+  // when its caller handed ownership over only as `comboInitialSend`.
+  const inheritedPermit = options.compactionRecoveryPermit ?? options.comboDispatchPermit
+    ?? options.comboInitialSend?.permit;
+  let pendingHopPermit: SingleUseDispatchPermit | undefined = options.compactionRecoveryPermit;
+  let initialPermit = options.comboInitialSend?.permit;
+  // Count this owner's physical sends, not later bookings made by other shared-ledger owners.
+  // Direct callers retain sends reported before this owner was constructed.
+  let targetSendsUsed = initialPermit ? 0 : Math.max(0,
+    sendBudget.used - (options.compactionRecoveryPermit ? 1 : 0));
+  /** Attribute reported physical sends to this owner; the prepaid booking is spent once reported. */
+  const noteTargetSends = (charged: number): void => {
+    targetSendsUsed += charged;
+    if (charged > 0) initialPermit = undefined;
+  };
+  const recordTransientSends = (used: number, permit?: SingleUseDispatchPermit): void => {
     const charged = Math.max(0, used);
-    sendBudget.used += charged;
+    noteTargetSends(charged);
+    reportDispatchSends(sendBudget, charged, permit);
     options.onCompactionRecoverySendsReported?.(charged);
     chargeWorkflowSends(workflowRootId, charged);
   };
+  const noteTransientSends = (used: number): void => recordTransientSends(used, pendingHopPermit ?? inheritedPermit);
+  // Capture at helper creation, before another leg can replace the pending handoff.
+  const transientSendReporter = (permit = pendingHopPermit ?? inheritedPermit) =>
+    createPhysicalSendReporter(sendBudget, () => ({ poolId: logCtx.spendPoolId ?? logCtx.provider,
+      identityId: logCtx.accountLogLabel }), permit, charged => {
+      noteTargetSends(Math.max(0, charged));
+      options.onCompactionRecoverySendsReported?.(charged);
+      chargeWorkflowSends(workflowRootId, charged);
+    });
   // Refused before any dispatch, and deliberately not by evicting the root's ledger entry:
   // dropping the record to make room would hand the fan-out a fresh allowance, which is the
   // laundering this ceiling exists to stop. The client is told the task needs a new grant
@@ -78,7 +104,17 @@ export function createResponsesSendBudget(
   // returns -- a refusal an operator cannot tell from an ordinary budget exhaustion, on a
   // ceiling they configured themselves. Asked before dispatch, it names the scope and the
   // number instead. Returns undefined and touches no ledger when no ceiling is configured.
-  const spentCeiling = workflowSpendCeilingReached(workflowRootId);
+  // Passthrough reports sends after they leave. Invalid or conflicting identity evidence
+  // still refuses here as well as in reserve(), including requests with no workflow root.
+  // Positive unbound balances alone are instead overlaid on each candidate pool below.
+  const continuityRefusal = poolContinuityRefusalReason();
+  if (continuityRefusal) {
+    return workflowRefusalResponse(continuityRefusal, logCtx, undefined, workflowRootId);
+  }
+  const prepaid = isRequestExecutionBudget(sendBudget)
+    ? claimDispatchSpendProof(sendBudget, options.compactionRecoveryPermit ?? options.comboDispatchPermit) : undefined;
+  const admissionPolicy = isRequestExecutionBudget(sendBudget) ? sendBudget.spendAdmissionPolicy : undefined;
+  const spentCeiling = workflowSpendCeilingReached(workflowRootId, undefined, logCtx.spendPoolId ?? logCtx.provider, prepaid, admissionPolicy);
   if (spentCeiling) {
     return workflowRefusalResponse(
       "workflow-spend-exhausted",
@@ -115,6 +151,7 @@ export function createResponsesSendBudget(
     // Ordinal 1 is skipped because the caller normally records it before dispatch. An adapter
     // that reports every send asks for it to be counted here instead, so that the first send is
     // logged where it actually happens rather than before admission could still refuse it.
+    targetSendsUsed += 1;
     if (send.ordinal <= 1 && options.includeFirst !== true) return;
     noteAttemptSend(logCtx.activeAttempt, inputTokens, send.recovery);
   };
@@ -157,7 +194,6 @@ export function createResponsesSendBudget(
    * refused and the request would answer with a synthetic 502 in place of the real 429 the hop
    * was recovering from.
    */
-  let pendingHopPermit: SingleUseDispatchPermit | undefined = options.compactionRecoveryPermit;
   /**
    * The budget an adapter's OWN dispatch ladder reserves against.
    *
@@ -171,19 +207,29 @@ export function createResponsesSendBudget(
    * The hop hands its reservation down through `pendingHopPermit`, the same seam the
    * passthrough ladder already uses, and this view spends it on the adapter's FIRST
    * reservation. Every later send in that ladder is a new physical send and is charged
-   * normally. A permit the adapter takes but never sends under is released through the same
-   * call it would have used for a reservation of its own, so an abandoned replay is refunded
-   * rather than left charged.
+   * normally. Claiming preserves the refundable single-use booking until physical dispatch;
+   * an abandoned replay releases only that exact booking.
    */
-  const adapterDispatchBudget: RequestExecutionBudget | undefined = adapterSendBudget === undefined
-    ? undefined
-    : adapterDispatchBudgetView(adapterSendBudget, {
-      claimHopPermit: () => {
-        const permit = pendingHopPermit;
-        pendingHopPermit = undefined;
-        return permit;
-      },
-    });
+  const permits = {
+    /** Transfer the initial booking once to the adapter dispatch owner. */
+    claimInitialPermit: () => {
+      const permit = initialPermit;
+      initialPermit = undefined;
+      return permit;
+    },
+    /** Transfer a pending recovery booking once, without creating a new allowance. */
+    claimHopPermit: () => {
+      const permit = pendingHopPermit;
+      pendingHopPermit = undefined;
+      return permit;
+    },
+  };
+  const adapterDispatchBudget = adapterSendBudget === undefined
+    ? undefined : adapterDispatchBudgetView(adapterSendBudget, permits);
+  // Preserve the existing opted-in view for direct callers, including its admitted replacement
+  // of an already-settled hop. Exact-owned Combo and sidecar handoffs use the ordinary view.
+  const refundableAdapterDispatchBudget = adapterSendBudget === undefined
+    ? undefined : adapterDispatchBudgetView(adapterSendBudget, permits, true);
   /**
    * How many sends a recovery leg may make, and the permit that authorises the last one.
    *
@@ -268,17 +314,41 @@ export function createResponsesSendBudget(
   return {
     workflowRootId,
     noteTransientSends,
+    transientSendReporter,
     remainingTransientSendBudget,
+    /** Only this child's prepaid send, not every pending external booking, is spendable here. */
+    initialSendAllowance: (cap: number): number => Math.min(cap,
+      remainingTransientSendBudget(cap) + (initialPermit ? 1 : 0)),
+    /** At final executor admission, settle only the owning booking or reserve this send. */
+    noteInitialDispatch: (prepaid = initialPermit): void => {
+      if (prepaid) {
+        if (!prepaid.assumeCharge()) throw new SendBudgetExhaustedError();
+        if (prepaid === initialPermit) initialPermit = undefined;
+      } else if (adapterSendBudget && (options.comboInitialSend || options.compactionRecoveryPermit)) {
+        const decision = adapterSendBudget.reserveDispatch({ sendClass: "transient",
+          targetKey: adapterSendBudget.lastTargetKey ?? `${logCtx.provider}/${logCtx.model}` });
+        if (!decision.allowed || !decision.permit.use()) throw new SendBudgetExhaustedError();
+      } else {
+        // Legacy direct callers can prebook without handing over a permit; keep their reporter.
+        noteTransientSends(1);
+        return;
+      }
+      targetSendsUsed += 1;
+      options.onCompactionRecoverySendsReported?.(1);
+      chargeWorkflowSends(workflowRootId, 1);
+    },
+    /** Physical sends reported by this owner; unrelated shared reservations cannot consume it. */
+    get targetSendsUsed(): number { return targetSendsUsed; },
     /**
-     * Physical sends this logical request has already made.
+     * Charged sends, including open prepaid reservations, across this logical request.
      *
-     * A live getter, not a snapshot: it is read once per dispatch leg to resolve a configured
-     * ladder, and a value frozen at construction would answer for a request that had sent
-     * nothing.
+     * A live getter, not a completed-send snapshot. Initial ladders use the child's own
+     * prepaid allowance and target-local count; shared admission keeps every booking spent.
      */
     get sendsUsed(): number { return sendBudget.used; },
     adapterSendBudget,
     adapterDispatchBudget,
+    refundableAdapterDispatchBudget,
     noteAdapterPhysicalSend,
     noteAdapterRecoveryWithheld,
     sendBudgetExhausted,
@@ -311,9 +381,21 @@ export type ResponsesSendBudget = Exclude<ReturnType<typeof createResponsesSendB
  */
 function adapterDispatchBudgetView(
   budget: RequestExecutionBudget,
-  hop: { claimHopPermit: () => SingleUseDispatchPermit | undefined },
+  hop: {
+    claimInitialPermit: () => SingleUseDispatchPermit | undefined;
+    claimHopPermit: () => SingleUseDispatchPermit | undefined;
+  },
+  legacyHopReplacement = false,
 ): RequestExecutionBudget {
   return {
+    get physicalStarted() { return budget.physicalStarted; },
+    get physicalLimit() { return budget.physicalLimit; },
+    get spendEnforced() { return budget.spendEnforced; },
+    get spendPolicyStarted() { return budget.spendPolicyStarted; },
+    get spendAdmissionPolicy() { return budget.spendAdmissionPolicy; },
+    startRequest: target => budget.startRequest?.(target),
+    claimPhysicalSend: () => budget.claimPhysicalSend?.(),
+    beginSpendProducer: () => budget.beginSpendProducer?.(),
     get used(): number { return budget.used; },
     set used(next: number) { budget.used = next; },
     logicalRequestId: budget.logicalRequestId,
@@ -330,6 +412,19 @@ function adapterDispatchBudgetView(
       // A dispatch whose upstream state is unknown is refused on its own merits. A hop that
       // already paid does not make an unsafe replay safe, so that check stays with the budget.
       if (intent.replaySafe !== false) {
+        // The Combo reserves a logical provider/model identity. The child's first actual
+        // endpoint is not a recovery transition; retain the original refundable permit.
+        const initialPermit = hop.claimInitialPermit();
+        if (initialPermit) {
+          budget.bindPrepaidTarget?.(intent.targetKey);
+          return { allowed: true, permit: {
+            sendClass: initialPermit.sendClass,
+            execute: run => initialPermit.execute ? initialPermit.execute(run) : run(),
+            use: () => initialPermit.assumeCharge(),
+            assumeCharge: () => initialPermit.assumeCharge(),
+            release: () => initialPermit.release(),
+          } };
+        }
         const hopPermit = hop.claimHopPermit();
         if (hopPermit && intent.targetKey !== budget.lastTargetKey) {
           // The rotated credential can select a different regional endpoint. Replace the
@@ -338,32 +433,37 @@ function adapterDispatchBudgetView(
           hopPermit.release();
           return budget.reserveDispatch({ ...intent, sendClass: hopPermit.sendClass });
         }
-        // Confirmed here rather than in `use()`: the adapter reserves immediately before it
-        // opens the transport, which is the same boundary the hop's own confirmation uses.
-        // A permit some other leg already settled returns false, and this falls through to a
-        // real reservation rather than handing the adapter a dead permit -- an adapter whose
-        // `use()` fails treats the request as exhausted and stops sending entirely.
-        if (hopPermit !== undefined && hopPermit.assumeCharge()) {
-          let spent = false;
-          return {
-            allowed: true,
-            permit: {
+        // Reservation precedes pacing and beforeDispatch. Transfer the exact open booking;
+        // only physical consumption closes external reporting and makes it non-refundable.
+        // The underlying permit enforces single use, including settlement by another owner.
+        if (hopPermit !== undefined) {
+          if (legacyHopReplacement) {
+            let settled = false;
+            let executionPermit = hopPermit;
+            const confirm = (): boolean => {
+              if (settled) return false;
+              settled = true;
+              if (hopPermit.assumeCharge()) return true;
+              // Preserve the old fallback for a permit another leg already settled.
+              const fresh = budget.reserveDispatch(intent);
+              if (!fresh.allowed) return false;
+              executionPermit = fresh.permit;
+              return fresh.permit.assumeCharge();
+            };
+            return { allowed: true, permit: {
               sendClass: hopPermit.sendClass,
-              use: (): boolean => {
-                if (spent) return false;
-                spent = true;
-                return true;
-              },
-              assumeCharge: (): boolean => {
-                if (spent) return false;
-                spent = true;
-                return true;
-              },
-              // The hop's charge is already settled and belongs to the leg that asked for it,
-              // so there is nothing here to refund.
-              release: (): void => {},
-            },
-          };
+              execute: run => executionPermit.execute ? executionPermit.execute(run) : run(),
+              use: confirm, assumeCharge: confirm,
+              release: () => { if (!settled) { settled = true; hopPermit.release(); } },
+            } };
+          }
+          return { allowed: true, permit: {
+            sendClass: hopPermit.sendClass,
+            execute: run => hopPermit.execute ? hopPermit.execute(run) : run(),
+            use: () => hopPermit.assumeCharge(),
+            assumeCharge: () => hopPermit.assumeCharge(),
+            release: () => hopPermit.release(),
+          } };
         }
       }
       return budget.reserveDispatch(intent);

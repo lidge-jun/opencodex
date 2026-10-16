@@ -1,11 +1,14 @@
 import { execFile, execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, join, posix } from "node:path";
 import { atomicWriteFile, getConfigDir } from "../config";
 import { codexExecInvocation, isSpawnableCodexCandidate } from "./exec-invocation";
 import { resolveCodexHomeDir } from "./home";
+import { decodeOverlayState } from "./shim-state-file";
 import { redactSecretString, redactUserPath } from "../lib/redact";
+import { SUBPROCESS_KILL_GRACE_MS, waitForSubprocessExit } from "../lib/bounded-subprocess";
+import { isPassiveRead } from "../lib/passive-read";
 
 export type CodexRuntimeSource =
   | "environment"
@@ -67,6 +70,8 @@ export type RuntimeExecFile = (
     shell?: boolean;
     windowsVerbatimArguments?: boolean;
     env?: NodeJS.ProcessEnv;
+    signal?: AbortSignal;
+    maxBuffer?: number;
   },
 ) => string;
 
@@ -76,6 +81,7 @@ export type RuntimeExecFileAsync = (
 ) => Promise<string>;
 
 export interface ResolveCodexRuntimeDeps {
+  signal?: AbortSignal;
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   configDir?: string;
@@ -84,6 +90,8 @@ export interface ResolveCodexRuntimeDeps {
   execFile?: RuntimeExecFileAsync;
   existsSync?: (path: string) => boolean;
   readFileSync?: (path: string, encoding: "utf8") => string;
+  /** Bounded in-process macOS bundle identity reader; injected readers bypass the memo. */
+  readBundleIdentifier?: (infoPlistPath: string) => string | null;
   now?: () => number;
   /**
    * When false, stop after the first valid priority candidate (skip PATH-wide
@@ -220,10 +228,11 @@ export function loadLastEffortClamp(
   }
 }
 
+/** Return whether a nonempty observation changed, so catalog notices share persistence's identity. */
 export function persistEffortClamp(
   diagnostic: EffortClampDiagnostic | null,
   deps: ResolveCodexRuntimeDeps = {},
-): void {
+): boolean {
   const configDir = deps.configDir ?? getConfigDir();
   const path = codexRuntimeClampStatePath(configDir);
   if (!diagnostic || diagnostic.removedEfforts.length === 0) {
@@ -232,8 +241,16 @@ export function persistEffortClamp(
     } catch {
       /* absent is fine */
     }
-    return;
+    return false;
   }
+  // This is an observation, not a heartbeat: rewriting updatedAt on every sync both churns disk
+  // and makes identical clamps look new after restart. Compare sets, not catalog enumeration order.
+  const previous = loadLastEffortClamp(deps);
+  const setKey = (values: readonly string[]) => JSON.stringify([...new Set(values)].sort());
+  if (previous && previous.runtimePath === diagnostic.runtimePath
+    && previous.runtimeVersion === diagnostic.runtimeVersion
+    && setKey(previous.removedEfforts) === setKey(diagnostic.removedEfforts)
+    && setKey(previous.affectedModels) === setKey(diagnostic.affectedModels)) return false;
   const payload: PersistedClampState = {
     version: 1,
     updatedAt: new Date((deps.now ?? Date.now)()).toISOString(),
@@ -244,6 +261,7 @@ export function persistEffortClamp(
   };
   mkdirSync(configDir, { recursive: true, mode: 0o700 });
   atomicWriteFile(path, `${JSON.stringify(payload, null, 2)}\n`);
+  return true;
 }
 
 export function displayCodexRuntimePath(command: string): string {
@@ -420,6 +438,9 @@ function versionProbePrecheck(command: string, deps: ResolveCodexRuntimeDeps): V
   // `codex --version` here is ~1s of blocking exec per candidate; on the
   // dashboard probe that cost made Windows report Codex as missing even when
   // the App install was sitting under LOCALAPPDATA/OpenAI/Codex/bin (issue 4458).
+  if (!macCodexAppIdentityMatches(command, deps)) {
+    return { ok: false, reason: "Codex app bundle identity mismatch or unavailable" };
+  }
   if (deps.probeVersion === false) return { ok: true, version: null };
   return null;
 }
@@ -486,23 +507,62 @@ function probeVersion(command: string, deps: ResolveCodexRuntimeDeps): VersionPr
   }
 }
 
-const defaultExecFileAsync: RuntimeExecFileAsync = (file, args, options) =>
+export const execCodexFileAsync: RuntimeExecFileAsync = (file, args, options) =>
   new Promise((resolve, reject) => {
+    if (options.signal?.aborted) { reject(new Error("Codex subprocess aborted")); return; }
     // execFile always pipes stdout/stderr; it takes no stdio option.
-    const { stdio: _stdio, ...execOptions } = options;
-    execFile(file, args, execOptions, (error, stdout) => (error ? reject(error) : resolve(String(stdout))));
+    // Own abort/deadline termination; execFile's built-in observer can settle the
+    // callback while a SIGTERM-ignoring child is still alive.
+    const { stdio: _stdio, signal: _signal, timeout: _timeout, ...execOptions } = options;
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let abort = () => {};
+    const finish = (error: Error | null, stdout = "") => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      options.signal?.removeEventListener("abort", abort);
+      if (error) reject(error); else resolve(stdout);
+    };
+    const child = execFile(file, args, execOptions, (error, stdout) => {
+      if (error && child.exitCode === null && child.signalCode === null) stop(error);
+      else finish(error, String(stdout));
+    });
+    const exited = new Promise<number>(resolveExit => {
+      child.once("exit", code => resolveExit(code ?? 1));
+      // A kill error is not exit proof; only failed spawn has no child to reap.
+      child.once("error", () => { if (!child.pid) resolveExit(1); });
+    });
+    // A reaper owns actual exit independently of caller-facing promise settlement.
+    let stopping = false;
+    const stop = (error: Error) => {
+      if (stopping) return;
+      stopping = true;
+      try { child.kill(); } catch { /* exit/error observation still owns reaping */ }
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      void waitForSubprocessExit({ exited, kill: () => child.kill("SIGKILL") }, SUBPROCESS_KILL_GRACE_MS);
+      finish(error);
+    };
+    abort = () => stop(new Error("Codex subprocess aborted"));
+    options.signal?.addEventListener("abort", abort, { once: true });
+    if (options.timeout > 0) {
+      timer = setTimeout(() => stop(new Error("Codex subprocess deadline exceeded")), options.timeout);
+      timer.unref?.();
+    }
+    if (options.signal?.aborted) abort();
   });
 
 /** probeVersion with the same sandbox and outcomes, but the exec never holds the event loop. */
 async function probeVersionAsync(command: string, deps: ResolveCodexRuntimeDeps): Promise<VersionProbeResult> {
   const settled = versionProbePrecheck(command, deps);
   if (settled) return settled;
-  const exec = deps.execFile ?? defaultExecFileAsync;
+  const exec = deps.execFile ?? execCodexFileAsync;
   let probeHome: string | undefined;
   try {
     probeHome = mkdtempSync(join(tmpdir(), "ocx-codex-probe-"));
     const { file, args, options } = versionProbeInvocation(command, deps, probeHome);
-    return versionProbeOutput(await exec(file, args, options));
+    return versionProbeOutput(await exec(file, args, { ...options, signal: deps.signal }));
   } catch (error) {
     return versionProbeError(error, probeHome);
   } finally {
@@ -516,13 +576,18 @@ function shimCandidates(deps: ResolveCodexRuntimeDeps): string[] {
   const platform = deps.platform ?? process.platform;
   try {
     const state = JSON.parse(read(join(configDir, "codex-shim.json"), "utf8")) as {
+      schema?: unknown;
+      mode?: unknown;
       wrapperPath?: unknown;
       originalPath?: unknown;
       backupPath?: unknown;
       wrappers?: Array<{ wrapperPath?: unknown; originalPath?: unknown; backupPath?: unknown }>;
     };
+    const overlay = decodeOverlayState(state, configDir);
+    if ((state.schema !== undefined || state.mode !== undefined) && !overlay) return [];
     const files = Array.isArray(state.wrappers) && state.wrappers.length > 0 ? state.wrappers : [state];
-    const out: string[] = [];
+    const out: string[] = overlay && isSpawnableCodexCandidate(overlay.launcherPath, platform)
+      ? [overlay.launcherPath] : [];
     for (const file of files) {
       for (const value of [file.backupPath, file.originalPath, file.wrapperPath]) {
         if (typeof value !== "string" || value.length === 0) continue;
@@ -548,6 +613,161 @@ function pathCandidates(deps: ResolveCodexRuntimeDeps): string[] {
     }
   }
   return [...new Set(out)];
+}
+
+/** Conventional Codex desktop bundles, ordered system before user. */
+function macCodexAppBundles(deps: ResolveCodexRuntimeDeps): string[] {
+  const env = deps.env ?? process.env;
+  const home = env.HOME?.trim() || env.USERPROFILE?.trim() || homedir();
+  return ["/Applications/ChatGPT.app", posix.join(home, "Applications/ChatGPT.app")];
+}
+
+function macCodexAppCommands(deps: ResolveCodexRuntimeDeps): string[] {
+  return macCodexAppBundles(deps).flatMap(bundle => [
+    `${bundle}/Contents/Resources/codex-cli/bin/codex`, `${bundle}/Contents/Resources/codex`,
+  ]);
+}
+
+function realpathOrNull(path: string): string | null {
+  try { return realpathSync(path); } catch { return null; }
+}
+
+/**
+ * Classify any path inside either bundle, including backing executables, by normalized and
+ * canonical forms with a segment boundary: a symlinked HOME (or /tmp -> /private/tmp) must not
+ * let a canonical bundle path skip the identity check or the handover exclusion.
+ */
+function macCodexAppBundleFor(command: string, deps: ResolveCodexRuntimeDeps): string | undefined {
+  if ((deps.platform ?? process.platform) !== "darwin" || !posix.isAbsolute(command)) return undefined;
+  const forms = [posix.normalize(command), realpathOrNull(command)].filter((form): form is string => Boolean(form));
+  return macCodexAppBundles(deps).find(bundle => {
+    const roots = [posix.normalize(bundle), realpathOrNull(bundle)].filter((root): root is string => Boolean(root));
+    return forms.some(form => roots.some(root => form.startsWith(`${root}/`)));
+  });
+}
+
+function macCodexAppIdentityMatches(command: string, deps: ResolveCodexRuntimeDeps): boolean {
+  const bundle = macCodexAppBundleFor(command, deps);
+  if (!bundle) return true;
+  try {
+    return (deps.readBundleIdentifier ?? readBoundedBundleIdentifier)(`${bundle}/Contents/Info.plist`) === "com.openai.codex";
+  } catch { return false; }
+}
+
+/** XML plist subset only: no external entity expansion, subprocess, or unbounded read. */
+function readBoundedBundleIdentifier(path: string): string | null {
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
+    const st = fstatSync(fd);
+    const limit = 64 * 1024;
+    if (!st.isFile() || st.size > limit) return null;
+    const bytes = Buffer.alloc(limit + 1);
+    let size = 0;
+    while (size < bytes.length) {
+      const count = readSync(fd, bytes, size, bytes.length - size, null);
+      if (!count) break;
+      size += count;
+    }
+    if (size > limit) return null;
+    // XML 1.0 Char: tab, LF, CR, U+0020-D7FF, U+E000-FFFD, U+10000-10FFFF (no surrogates after fatal decoding).
+    const xmlChar = (code: number): boolean => code === 9 || code === 10 || code === 13
+      || (code >= 0x20 && code <= 0xd7ff) || (code >= 0xe000 && code <= 0xfffd) || (code >= 0x10000 && code <= 0x10ffff);
+    const allXmlChars = (text: string): boolean => [...text].every(char => xmlChar(char.codePointAt(0)!));
+    const decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, size));
+    // Every character is checked before anything is stripped, the prolog included.
+    if (!allXmlChars(decoded)) return null;
+    // Only a well-formed UTF-8 declaration and Apple's DOCTYPE are accepted, anchored in the prolog, in that order.
+    const declaration = /^<\?xml\s+version=(["'])1\.[0-9]\1(?:\s+encoding=(["'])utf-8\2)?(?:\s+standalone=(["'])(?:yes|no)\3)?\s*\?>/i;
+    if (decoded.startsWith("<?") && !declaration.test(decoded)) return null;
+    const xml = decoded
+      .replace(declaration, "")
+      .replace(/^\s*<!DOCTYPE plist PUBLIC "-\/\/Apple\/\/DTD PLIST 1\.0\/\/EN" "http:\/\/www\.apple\.com\/DTDs\/PropertyList-1\.0\.dtd">/, "");
+    type Node = { name: string; text: string; children: Node[] };
+    const root: Node = { name: "root", text: "", children: [] };
+    const stack = [root];
+    const tokens = xml.match(/<!--[\s\S]*?-->|<[^>]*>|[^<]+/g) ?? [];
+    if (tokens.join("") !== xml) return null;
+    for (const token of tokens) {
+      if (token.startsWith("<!--")) {
+        // A comment may not contain "--" or end in "-" (XML 1.0 §2.5).
+        if (/--|-$/.test(token.slice(4, -3))) return null;
+        continue;
+      }
+      const parent = stack[stack.length - 1]!;
+      if (!token.startsWith("<")) {
+        if (token.includes("]]>")) return null;
+        parent.text += token;
+        continue;
+      }
+      const close = /^<\/(\w+)\s*>$/.exec(token);
+      if (close) {
+        if (stack.length === 1 || parent.name !== close[1]) return null;
+        stack.pop();
+        continue;
+      }
+      const open = /^<(plist|dict|array|key|string|integer|real|date|data|true|false)(?:\s+version="1\.0")?\s*(\/?)>$/.exec(token);
+      if (!open || (token.includes("version=") && open[1] !== "plist")) return null;
+      const node: Node = { name: open[1]!, text: "", children: [] };
+      parent.children.push(node);
+      if (!open[2]) stack.push(node);
+    }
+    if (stack.length !== 1 || root.text.trim() || root.children.length !== 1) return null;
+    const plist = root.children[0]!;
+    if (plist.name !== "plist" || plist.text.trim() || plist.children.length !== 1) return null;
+    const dict = plist.children[0]!;
+    if (dict.name !== "dict" || dict.text.trim() || dict.children.length % 2) return null;
+    const decode = (text: string): string => text.replace(/&([^;]*);|&/g, (_match, entity: string | undefined) => {
+      const named: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
+      if (entity && Object.hasOwn(named, entity)) return named[entity]!;
+      if (!entity || !/^#(?:[0-9]+|x[0-9a-fA-F]+)$/.test(entity)) throw new Error("invalid XML entity");
+      const value = entity.startsWith("#x") ? parseInt(entity.slice(2), 16) : Number(entity.slice(1));
+      if (!xmlChar(value)) throw new Error("invalid XML character");
+      return String.fromCodePoint(value);
+    });
+    // The identity only counts inside a document that is valid as a whole: every node, entity and
+    // literal character is checked, not just the CFBundleIdentifier pair.
+    const leafFormats: Record<string, RegExp> = {
+      integer: /^\s*[+-]?(?:\d+|0x[0-9a-fA-F]+)\s*$/,
+      real: /^\s*(?:[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|[+-]?(?:nan|inf(?:inity)?))\s*$/i,
+      date: /^\s*\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\s*$/,
+      data: /^[A-Za-z0-9+/=\s]*$/,
+    };
+    const validNode = (node: Node, inDict: "key" | "value" | null): boolean => {
+      if (!allXmlChars(node.text)) return false;
+      if (inDict === "key" && node.name !== "key") return false;
+      if (inDict !== "key" && node.name === "key") return false;
+      switch (node.name) {
+        case "dict":
+          return !node.text.trim() && node.children.length % 2 === 0
+            && node.children.every((child, index) => validNode(child, index % 2 === 0 ? "key" : "value"));
+        case "array":
+          return !node.text.trim() && node.children.every(child => validNode(child, null));
+        case "key": case "string":
+          decode(node.text);
+          return node.children.length === 0;
+        case "true": case "false":
+          return node.children.length === 0 && !node.text.trim();
+        case "integer": case "real": case "date": case "data":
+          return node.children.length === 0 && leafFormats[node.name]!.test(decode(node.text));
+        default:
+          return false;
+      }
+    };
+    if (!validNode(dict, null)) return null;
+    let identifier: string | null = null;
+    let keys = 0;
+    for (let i = 0; i < dict.children.length; i += 2) {
+      const key = dict.children[i]!, value = dict.children[i + 1]!;
+      if (key.name !== "key" || key.children.length) return null;
+      if (decode(key.text) !== "CFBundleIdentifier") continue;
+      keys++;
+      if (value.name !== "string" || value.children.length) return null;
+      identifier = decode(value.text);
+    }
+    return keys === 1 ? identifier : null;
+  } catch { return null; }
+  finally { if (fd !== undefined) closeSync(fd); }
 }
 
 /**
@@ -598,6 +818,10 @@ function installedCodexCandidates(deps: ResolveCodexRuntimeDeps): string[] {
     "/usr/local/bin/codex",
     "/opt/homebrew/bin/codex",
   ];
+  if (platform === "darwin") {
+    const exists = deps.existsSync ?? existsSync;
+    return [...posix, ...macCodexAppCommands(deps).filter(command => exists(command) && macCodexAppIdentityMatches(command, deps))];
+  }
   if (platform !== "linux") return posix;
   // Windows Codex Desktop in WSL app-server mode ships its Linux binary under the
   // effective Codex home as bin/wsl/<version-hash>/codex, and a Desktop update replaces
@@ -776,9 +1000,7 @@ function persistedRuntimeCacheStamp(deps: ResolveCodexRuntimeDeps): string {
   const configDir = deps.configDir ?? getConfigDir();
   const read = deps.readFileSync ?? ((path, encoding) => readFileSync(path, encoding));
   try {
-    const raw = parsePersistedCodexRuntime(read(codexRuntimeStatePath(configDir), "utf8"));
-    if (!raw) return "";
-    return `${raw.command}|${raw.selectedVersion ?? ""}|${raw.updatedAt ?? ""}`;
+    return read(codexRuntimeStatePath(configDir), "utf8");
   } catch {
     return "";
   }
@@ -787,10 +1009,12 @@ function persistedRuntimeCacheStamp(deps: ResolveCodexRuntimeDeps): string {
 function resolveCacheKey(deps: ResolveCodexRuntimeDeps): string | null {
   // Only memoize uninjected process-env resolves (settings/status hot paths).
   if (
-    deps.execFileSync
+    deps.signal
+    || deps.execFileSync
     || deps.execFile
     || deps.existsSync
     || deps.readFileSync
+    || deps.readBundleIdentifier
     || deps.readdirSync
     || deps.statSync
     || deps.configDir
@@ -798,8 +1022,14 @@ function resolveCacheKey(deps: ResolveCodexRuntimeDeps): string | null {
   ) {
     return null;
   }
+  return codexRuntimeSelectionIdentity(deps);
+}
+
+/** Exec-free input identity, including pin changes made by another process. */
+export function codexRuntimeSelectionIdentity(deps: ResolveCodexRuntimeDeps = {}): string {
   const env = deps.env ?? process.env;
   return JSON.stringify({
+    configDir: deps.configDir ?? getConfigDir(),
     cli: env.CODEX_CLI_PATH ?? "",
     path: env.PATH ?? "",
     platform: deps.platform ?? process.platform,
@@ -853,7 +1083,12 @@ export function resolveCodexRuntime(deps: ResolveCodexRuntimeDeps = {}): Resolve
   return cloneAndDeepFreeze(result);
 }
 
-let asyncResolveInflight: { key: string; epoch: number; promise: Promise<ResolveCodexRuntimeResult> } | null = null;
+interface AsyncRuntimeObservation {
+  readonly result: ResolveCodexRuntimeResult;
+  readonly inputs: string;
+  readonly epoch: number | null;
+}
+let asyncResolveInflight: { key: string; epoch: number; promise: Promise<AsyncRuntimeObservation> } | null = null;
 
 /**
  * resolveCodexRuntime for server request paths: same selection and process memo, but every
@@ -863,16 +1098,29 @@ let asyncResolveInflight: { key: string; epoch: number; promise: Promise<Resolve
 export async function resolveCodexRuntimeAsync(
   deps: ResolveCodexRuntimeDeps = {},
 ): Promise<ResolveCodexRuntimeResult> {
+  return cloneAndDeepFreeze((await resolveCodexRuntimeObservationAsync(deps)).result);
+}
+
+async function resolveCodexRuntimeObservationAsync(deps: ResolveCodexRuntimeDeps): Promise<AsyncRuntimeObservation> {
+  const inputs = codexRuntimeSelectionIdentity(deps);
+  const observed = (result: ResolveCodexRuntimeResult, epoch: number | null): AsyncRuntimeObservation => ({ result, inputs, epoch });
   // A deferred selection never execs, so the sync path is already nonblocking.
-  if (deps.probeVersion === false) return resolveCodexRuntime(deps);
-  const cacheKey = resolveCacheKey(deps);
+  if (deps.probeVersion === false) return observed(resolveCodexRuntime(deps), resolveCacheEpoch);
+  const cacheKey = resolveCacheKey({ ...deps, signal: undefined });
   if (cacheKey && resolveCache && resolveCache.key === cacheKey && Date.now() - resolveCache.at < RESOLVE_CACHE_MS) {
-    return cloneAndDeepFreeze(resolveCache.value);
+    return observed(cloneAndDeepFreeze(resolveCache.value), resolveCacheEpoch);
   }
-  if (!cacheKey) return cloneAndDeepFreeze(await resolveCodexRuntimeUncachedAsync(deps));
   const startedEpoch = resolveCacheEpoch;
+  // A cancellable miss owns its probes; a warm memo remains usable without a new child.
+  if (!cacheKey || deps.signal) {
+    const result = await resolveCodexRuntimeUncachedAsync(deps);
+    const current = !deps.signal?.aborted && resolveCacheEpoch === startedEpoch
+      && codexRuntimeSelectionIdentity(deps) === inputs;
+    if (current && cacheKey) publishResolveCache(cacheKey, Date.now(), result);
+    return observed(result, current ? resolveCacheEpoch : null);
+  }
   if (asyncResolveInflight?.key === cacheKey && asyncResolveInflight.epoch === startedEpoch) {
-    return cloneAndDeepFreeze(await asyncResolveInflight.promise);
+    return asyncResolveInflight.promise;
   }
   const promise = resolveCodexRuntimeUncachedAsync(deps).then(result => {
     // A persist or clear while the probes ran makes this answer the previous selection's;
@@ -880,13 +1128,14 @@ export async function resolveCodexRuntimeAsync(
     // rewrite codex-runtime.json without touching this epoch, so the key is read again too.
     if (resolveCacheEpoch === startedEpoch && resolveCacheKey(deps) === cacheKey) {
       publishResolveCache(cacheKey, Date.now(), result);
+      return observed(result, resolveCacheEpoch);
     }
-    return result;
+    return observed(result, null);
   }).finally(() => {
     if (asyncResolveInflight?.promise === promise) asyncResolveInflight = null;
   });
   asyncResolveInflight = { key: cacheKey, epoch: startedEpoch, promise };
-  return cloneAndDeepFreeze(await promise);
+  return promise;
 }
 
 /**
@@ -901,7 +1150,8 @@ export function getCodexRuntimeSnapshot(): ResolveCodexRuntimeResult {
   const cacheKey = resolveCacheKey({});
   const memo = resolveCache?.key === cacheKey ? resolveCache : null;
   if (memo && Date.now() - memo.at < RESOLVE_CACHE_MS) return cloneAndDeepFreeze(memo.value);
-  resolveCodexRuntimeAsync().catch(() => { /* the next read retries */ });
+  // A passive read (a Remote Link Child's, #6959) starts no version probes on this machine.
+  if (!isPassiveRead()) resolveCodexRuntimeAsync().catch(() => { /* the next read retries */ });
   if (memo) return cloneAndDeepFreeze(memo.value);
   return resolveCodexRuntime({ discoverAlternatives: false, probeVersion: false });
 }
@@ -947,10 +1197,18 @@ function* resolveCodexRuntimeSteps(
   for (const command of pathCandidates(deps)) {
     ordered.push({ command, source: "path" });
   }
-  for (const command of installedCodexCandidates(deps)) {
+  const installed = installedCodexCandidates(deps);
+  // Order by the generated app commands only: an established install path that links into the
+  // app keeps its precedence, while identity and handover use the canonical classification.
+  const appCommands = new Set(macCodexAppCommands(deps));
+  const appCandidates = installed.filter(command => appCommands.has(command));
+  for (const command of installed.filter(command => !appCommands.has(command))) {
     ordered.push({ command, source: "installed" });
   }
   ordered.push({ command: "codex", source: "fallback" });
+  for (const command of appCandidates) {
+    ordered.push({ command, source: "installed" });
+  }
 
   const seen = new Set<string>();
   const valid: ResolvedCodexRuntime[] = [];
@@ -972,13 +1230,16 @@ function* resolveCodexRuntimeSteps(
   // there is then nothing to compare it against.
   const persistedIsUnpinned = Boolean(persisted?.command) && !persistedCodexRuntimeIsPinned(persisted);
   for (const candidate of ordered) {
+    // Deferred resolution accepts the bare fallback without proving it exists; when a verified
+    // app CLI is present it must not preempt that app. Other platforms keep the old behaviour.
+    if (candidate.source === "fallback" && deps.probeVersion === false && appCandidates.length > 0) continue;
     const key = candidate.command.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
     if (
       deps.discoverAlternatives === false
       && valid.length > 0
-      && !(persistedIsUnpinned && candidate.source === "installed")
+      && !(persistedIsUnpinned && candidate.source === "installed" && !macCodexAppBundleFor(candidate.command, deps))
     ) {
       continue;
     }
@@ -1038,6 +1299,7 @@ function* resolveCodexRuntimeSteps(
         const newerDiscovered = valid
           .filter(item =>
             !sameRuntimeCommand(item.command, selected.command)
+            && !macCodexAppBundleFor(item.command, deps)
             && typeof item.version === "string"
             && typeof selected.version === "string"
             && compareCodexVersions(item.version, selected.version) > 0)
@@ -1081,7 +1343,10 @@ function resolveCodexRuntimeUncached(deps: ResolveCodexRuntimeDeps = {}): Resolv
 async function resolveCodexRuntimeUncachedAsync(deps: ResolveCodexRuntimeDeps): Promise<ResolveCodexRuntimeResult> {
   const steps = resolveCodexRuntimeSteps(deps);
   let step = steps.next();
-  while (!step.done) step = steps.next(await probeVersionAsync(step.value.command, deps));
+  while (!step.done) {
+    if (deps.signal?.aborted) throw new Error("Codex runtime resolution aborted");
+    step = steps.next(await probeVersionAsync(step.value.command, deps));
+  }
   return step.value;
 }
 
@@ -1090,6 +1355,24 @@ export function resolveAndPersistCodexRuntime(
   deps: ResolveCodexRuntimeDeps = {},
 ): ResolveCodexRuntimeResult {
   const result = resolveCodexRuntime(deps);
+  return persistResolvedCodexRuntime(result, deps);
+}
+
+/** Same selection/persistence as the CLI driver, with stale async results rejected. */
+export async function resolveAndPersistCodexRuntimeAsync(
+  deps: ResolveCodexRuntimeDeps = {},
+  isCurrent: () => boolean = () => true,
+): Promise<ResolveCodexRuntimeResult | null> {
+  const observation = await resolveCodexRuntimeObservationAsync(deps);
+  if (!isCurrent() || observation.epoch === null || observation.epoch !== resolveCacheEpoch
+    || observation.inputs !== codexRuntimeSelectionIdentity(deps)) return null;
+  return cloneAndDeepFreeze(persistResolvedCodexRuntime(observation.result, deps));
+}
+
+function persistResolvedCodexRuntime(
+  result: ResolveCodexRuntimeResult,
+  deps: ResolveCodexRuntimeDeps,
+): ResolveCodexRuntimeResult {
   // Only WRITE when the selection actually changed. persistCodexRuntime() clears the
   // in-process resolve memo and persistedRuntimeCacheStamp() folds `updatedAt` into the
   // cache key, so an unconditional rewrite made every caller re-run the ~1s
@@ -1138,6 +1421,5 @@ export function formatClampLogLines(diagnostic: EffortClampDiagnostic): string[]
   const efforts = diagnostic.removedEfforts.join(", ");
   return [
     `[opencodex] Removed unsupported reasoning efforts: ${efforts}`,
-    "[opencodex] Run ocx doctor for diagnosis and recovery.",
   ];
 }

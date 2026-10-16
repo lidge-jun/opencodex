@@ -54,7 +54,7 @@
  */
 
 import { appendFileSync, chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { dirname, join } from "node:path";
 // Definition-site import, not the ../config barrel -- same reasoning as
 // src/quota/reset-seen-store.ts: the barrel pulls ~154 modules into a hot path.
@@ -62,6 +62,8 @@ import { getConfigDir } from "../config/paths";
 // Type-only, so it is erased before this module has a runtime import graph at all. The
 // config SHAPE is what this file needs; the config loader is what the note above keeps out.
 import type { OcxSpendConfig, OcxSpendScopeConfig } from "../types/config";
+import { resolvePoolAliases } from "./spend-pool-continuity";
+import { hashSpendAlias, validatePoolAliasOwners } from "./spend-pool-alias-validation";
 import { assertNotRealHomeUnderTest } from "./test-home-guard";
 // Windows chmod does not remove inherited ACEs; this is the repository's icacls path.
 import { hardenSecretPath } from "./windows-secret-acl";
@@ -93,6 +95,9 @@ export interface SpendScopeLimit {
 }
 
 export interface SpendReservationPolicy {
+  /** Exact historical salted pool alias -> canonical provider. Malformed input fails closed. */
+  readonly poolAliases?: unknown;
+  readonly canonicalProviderIds?: readonly string[];
   readonly root: SpendScopeLimit;
   readonly identity: SpendScopeLimit;
   readonly pool: SpendScopeLimit;
@@ -147,7 +152,11 @@ export interface SpendUsage {
   readonly outputTokens: number;
 }
 
+/** Immutable numeric ceilings captured by one request; totals and capacity remain shared. */
+export type SpendAdmissionPolicy = Readonly<Pick<SpendReservationPolicy, "root" | "identity" | "pool">>;
+
 export interface SpendReservationRequest {
+  readonly admissionPolicy?: SpendAdmissionPolicy;
   /** Stable id of the physical send. Settlement is idempotent on this key. */
   readonly sendId: string;
   readonly scopes: SpendScopes;
@@ -181,12 +190,15 @@ export interface SpendReservationRequest {
  * to buy an unlimited number of physical sends while the scope totals never moved.
  */
 export type SpendDenial =
+  | { readonly reason: "pool-history-unresolved" }
   | {
       readonly reason: "spend-limit-exceeded";
       readonly scope: SpendScope;
       readonly scopeId: string;
       readonly limit: number;
       readonly projected: number;
+      /** Pool checks include all unbound positive history until an operator verifies its owner. */
+      readonly includesUnboundPoolHistory?: boolean;
     }
   /** This send id is already known -- open, settled, lost or abandoned. */
   | { readonly reason: "duplicate-send-id"; readonly sendId: string }
@@ -606,8 +618,30 @@ export interface ScopeSpendSnapshot {
   readonly exhausted: boolean;
 }
 
+/** In-memory proof of one booked send; never journaled or exposed in request logs. */
+export interface SpendReservationProof {
+  readonly ledger: SpendReservationLedger;
+  readonly sendId: string;
+}
+
+export interface SpendSeed { readonly sendId: string }
+export type SpendSeedDecision = { reserved: true; seed: SpendSeed } | { reserved: false; denial: SpendDenial };
+
 export interface SpendReservationLedger {
+  /** Tracker owners isolate cleanup barriers; omitted owners retain the installation barrier. */
+  reserveSeed(request: SpendReservationRequest, owner?: object): SpendSeedDecision;
+  reserveReportedFromSeed(seed: SpendSeed, request: { sendId: string; inputTokens: number; outputCeilingTokens: number }): boolean;
+  forgetResolved(sendIds: readonly string[], owner?: object): boolean;
+  finishSeed(seed: SpendSeed, owner?: object): boolean;
+  registerReporter(owner?: object): { close(): void };
+  /** Retry completed tracker cleanup on later admission or maintenance after storage recovers. */
+  deferCleanup(owner: object, cleanup: () => boolean): void;
+  waitForReporterDrain(): Promise<void>;
   reserve(request: SpendReservationRequest): SpendReservationDecision;
+  /** Pre-dispatch guard, including transports which report their sends after dispatch. */
+  checkPoolContinuity(): SpendDenial | undefined;
+  /** Whether any positive pool balance is still unbound and therefore charged to each candidate pool. */
+  hasUnboundPositivePoolHistory(): boolean;
   /**
    * The send left for upstream. Until this is called the reservation may be abandoned for
    * free; after it, a missing usage frame becomes unresolved spend. Returns false when the
@@ -624,6 +658,7 @@ export interface SpendReservationLedger {
   /**
    * Settle with real usage. Returns false when the send is unknown or already resolved --
    * double settlement is as wrong as none, so a repeat call changes nothing.
+   * Seeded terminal debt applies immediately; failed writes queue before durable forgetting.
    */
   settle(sendId: string, usage: SpendUsage): boolean;
   /**
@@ -632,7 +667,8 @@ export interface SpendReservationLedger {
    */
   markLost(sendId: string): boolean;
   snapshot(scope: SpendScope, scopeId: string): ScopeSpendSnapshot | undefined;
-  exhausted(scope: SpendScope, scopeId: string): boolean;
+  /** Exclude only a proven current dispatch's still-open reservation in this scope. */
+  exhausted(scope: SpendScope, scopeId: string, excludingSendId?: string, admissionPolicy?: SpendAdmissionPolicy): boolean;
   /**
    * Drop dormant scopes per the retention rule in SpendReservationPolicy. Cleanup also runs
    * automatically on every reservation, so nothing depends on a caller remembering this.
@@ -701,6 +737,31 @@ export function createSpendReservationLedger(options: {
   const compactAfterRecords = (): number => policy.compactAfterRecords ?? DEFAULT_COMPACT_AFTER_RECORDS;
   const scopes = new Map<string, ScopeState>();
   const reservations = new Map<string, Reservation>();
+  // Object identity is the capability: a copied sendId or another ledger's seed is not proof.
+  type SeedState = { targets: readonly ScopeRef[]; sends: Set<string>; abandoned: boolean; owner?: object };
+  const seeds = new Map<SpendSeed, SeedState>();
+  const seedBySend = new Map<string, SeedState>();
+  const pinnedKeys = new Map<string, number>();
+  const seedForSend = (send: string) => seedBySend.get(send);
+  const pinnedScope = (key: string): boolean => pinnedKeys.has(key);
+  const pendingRecords: JournalRecord[] = [];
+  // Bounded by live ordinary reservations; never persisted as new metadata.
+  const nondurableReserves = new Map<string, JournalRecord>();
+  const retainedOrdinary = new Set<string>();
+  let reporters = 0;
+  const ownerReporters = new WeakMap<object, number>();
+  const activeReporters = (owner?: object): number => owner === undefined ? reporters : ownerReporters.get(owner) ?? 0;
+  const drainWaiters = new Set<() => void>();
+  const deferredCleanups = new Map<object, () => boolean>();
+  let retryingCleanup = false;
+  const retryCleanup = (): void => {
+    if (retryingCleanup) return;
+    retryingCleanup = true;
+    try {
+      for (const [owner, cleanup] of deferredCleanups) if (cleanup()) deferredCleanups.delete(owner);
+    } finally { retryingCleanup = false; }
+  };
+  let poolContinuity = resolvePoolAliases(policy.poolAliases, salt, policy.canonicalProviderIds);
   let persistFailures = 0;
   let corruptRecords = 0;
   let recordsOnDisk = 0;
@@ -710,9 +771,8 @@ export function createSpendReservationLedger(options: {
    * credential id, a pool name -- never leaves this function, so nothing identifying is
    * written to disk or held in a map key.
    */
-  const aliasFor = (kind: SpendScope | "send", id: string): string =>
-    createHash("sha256").update(salt).update("\u0000").update(kind).update("\u0000").update(id)
-      .digest("hex").slice(0, 32);
+  const aliasFor = (kind: SpendScope | "send", id: string): string => hashSpendAlias(salt, kind, id);
+  const poolAliasFor = (provider: string): string => aliasFor("pool", provider);
 
   const scopeState = (scope: SpendScope, alias: string): ScopeState => {
     const key = scopeKey(scope, alias);
@@ -723,6 +783,37 @@ export function createSpendReservationLedger(options: {
     }
     return state;
   };
+
+  const historicalPools = (): Set<string> => new Set([...scopes].filter(([key, state]) =>
+    key.startsWith("pool\0") && state.settled + state.reserved + state.unresolved > 0,
+  ).map(([key]) => key.slice(5)));
+  const hasUnboundPositivePoolHistory = (): boolean => [...historicalPools()].some(alias => !poolContinuity.known(alias));
+  const poolState = (alias: string): { totals: ScopeState; includesUnboundHistory: boolean } | undefined => {
+    const group = poolContinuity.resolve(alias);
+    let total: ScopeState | undefined;
+    let includesUnboundHistory = false;
+    for (const [key, state] of scopes) {
+      if (!key.startsWith("pool\0")) continue;
+      const member = key.slice(5);
+      const unbound = !poolContinuity.known(member);
+      if (unbound) {
+        // Configured provider buckets bind at read time. Only unmapped historical labels
+        // absent from that roster remain unbound and overlay every candidate provider.
+        if (state.settled + state.reserved + state.unresolved === 0) continue;
+        includesUnboundHistory = true;
+      } else if (poolContinuity.resolve(member) !== group) {
+        continue;
+      }
+      total ??= { settled: 0, reserved: 0, unresolved: 0, lastSeenAt: 0 };
+      total.settled += state.settled;
+      total.reserved += state.reserved;
+      total.unresolved += state.unresolved;
+      total.lastSeenAt = Math.max(total.lastSeenAt, state.lastSeenAt);
+    }
+    return total ? { totals: total, includesUnboundHistory } : undefined;
+  };
+  const stateFor = (scope: SpendScope, alias: string): ScopeState | undefined =>
+    scope === "pool" ? poolState(alias)?.totals : scopes.get(scopeKey(scope, alias));
 
   const limitFor = (scope: SpendScope): number | undefined => policy[scope].maxTokens;
 
@@ -736,7 +827,7 @@ export function createSpendReservationLedger(options: {
     const refs: ScopeRef[] = [];
     if (targets.rootId !== undefined) refs.push({ scope: "root", alias: aliasFor("root", targets.rootId) });
     if (targets.identityId !== undefined) refs.push({ scope: "identity", alias: aliasFor("identity", targets.identityId) });
-    if (targets.poolId !== undefined) refs.push({ scope: "pool", alias: aliasFor("pool", targets.poolId) });
+    if (targets.poolId !== undefined) refs.push({ scope: "pool", alias: poolAliasFor(targets.poolId) });
     return refs;
   };
 
@@ -759,6 +850,29 @@ export function createSpendReservationLedger(options: {
     }
   };
 
+  // Already-sent debt owns its record before I/O, including an owner error that propagates.
+  const appendReported = (record: JournalRecord): void => {
+    pendingRecords.push(record);
+    if (pendingRecords.length === 1 && append(record)) pendingRecords.shift();
+  };
+
+  const flushPending = (): boolean => {
+    while (pendingRecords.length > 0) {
+      if (!append(pendingRecords[0]!)) return false;
+      pendingRecords.shift();
+    }
+    return true;
+  };
+
+  const repairReservePrefix = (send: string, reservation: Reservation): void => {
+    const reserve = nondurableReserves.get(send);
+    if (!reserve) return;
+    pendingRecords.push(reserve);
+    if (reservation.status === "dispatched") pendingRecords.push({ v: 1, kind: "dispatch", send, at: reservation.resolvedAt });
+    nondurableReserves.delete(send);
+    retainedOrdinary.add(send);
+  };
+
   const applyReserve = (send: string, targets: readonly ScopeRef[], tokens: number, at: number): void => {
     if (reservations.has(send)) return;
     reservations.set(send, { targets, tokens, status: "open", at, resolvedAt: at });
@@ -779,6 +893,8 @@ export function createSpendReservationLedger(options: {
   const applyResolve = (send: string, outcome: "settled" | "lost" | "abandoned", tokens: number, at: number): void => {
     const reservation = reservations.get(send);
     if (!reservation || !isLive(reservation.status)) return;
+    nondurableReserves.delete(send);
+    retainedOrdinary.delete(send);
     reservation.status = outcome;
     reservation.resolvedAt = at;
     for (const ref of reservation.targets) {
@@ -802,6 +918,8 @@ export function createSpendReservationLedger(options: {
     const reservation = reservations.get(send);
     if (!reservation || isLive(reservation.status)) return;
     reservations.delete(send);
+    nondurableReserves.delete(send);
+    retainedOrdinary.delete(send);
   };
 
   const applyDrop = (scope: SpendScope, alias: string): void => {
@@ -848,12 +966,13 @@ export function createSpendReservationLedger(options: {
       const line = lines[index] as string;
       const record = parseSpendJournalRecord(line);
       if (!record) {
-        // A rejected FINAL line is a torn tail write -- the process died between the write
-        // and its newline -- and is dropped quietly, because that record never completed and
-        // therefore never authorised anything. A rejected line ANYWHERE ELSE is different:
-        // the records after it did complete, so skipping it silently undercounts a scope and
-        // hands back budget. It is counted, and a configured limit refuses on it below.
-        if (index < lines.length - 1) corruptRecords += 1;
+        // A malformed final JSON line can be an incomplete tail write. Rejected records
+        // elsewhere cannot be skipped: later complete writes may have authorized spend.
+        // Only malformed JSON can be a torn tail. A complete unknown/invalid final
+        // record is evidence of an unsupported format, not permission to forget accounting.
+        let completeJson = false;
+        try { JSON.parse(line); completeJson = true; } catch { /* torn tail */ }
+        if (completeJson || index < lines.length - 1) corruptRecords += 1;
         continue;
       }
       switch (record.kind) {
@@ -880,10 +999,16 @@ export function createSpendReservationLedger(options: {
     // had already fired. An exhausted scope staying exhausted across a restart is the whole
     // reason this store is on disk.
     const reconciledAt = now();
+    const enforcedReplay = spendCeilingsConfigured(policy);
     for (const [send, reservation] of reservations) {
-      if (!isLive(reservation.status)) continue;
-      applyResolve(send, "lost", 0, reconciledAt);
-      append({ v: 1, kind: "lost", send, at: reconciledAt });
+      if (isLive(reservation.status)) {
+        const record: JournalRecord = { v: 1, kind: "lost", send, at: reconciledAt };
+        const durable = append(record);
+        applyResolve(send, "lost", 0, reconciledAt);
+        if (!durable && enforcedReplay) pendingRecords.push(record);
+      }
+      // No live producer or capability survives restart. Preserve totals, reclaim only IDs.
+      if (enforcedReplay && flushPending() && append({ v: 1, kind: "forget", send, at: reconciledAt })) applyForget(send);
     }
   }
 
@@ -900,24 +1025,76 @@ export function createSpendReservationLedger(options: {
    */
   const evictScopes = (at: number, force: boolean): number => {
     const cutoff = at - policy.retentionMs;
+    const activeKeys = new Set<string>();
+    for (const reservation of reservations.values()) if (isLive(reservation.status)) {
+      for (const ref of reservation.targets) activeKeys.add(scopeKey(ref.scope, ref.alias));
+    }
+    const idle = (key: string, state: ScopeState): boolean => state.reserved === 0
+      && !activeKeys.has(key) && !pinnedScope(key);
+    let removed = 0;
+    // Unknown original buckets expire at their own cutoff, even when the overlay is exhausted.
+    // This pass precedes group selection so a removed overlay cannot keep unrelated groups alive.
+    for (const [key, state] of scopes) {
+      if (!key.startsWith("pool\0") || poolContinuity.known(key.slice(5))
+        || !idle(key, state) || state.lastSeenAt >= cutoff) continue;
+      if (!flushPending() || !append({ v: 1, kind: "drop", scope: "pool", alias: key.slice(5), at })) continue;
+      scopes.delete(key);
+      removed += 1;
+    }
+    // Aggregate once per pass; resolving each candidate by scanning every scope is quadratic.
+    const pinnedPoolGroups = new Set<string>();
+    for (const key of activeKeys) if (key.startsWith("pool\0")) pinnedPoolGroups.add(poolContinuity.resolve(key.slice(5)));
+    for (const seed of seeds.values()) for (const ref of seed.targets) if (ref.scope === "pool") {
+      pinnedPoolGroups.add(poolContinuity.resolve(ref.alias));
+    }
+    const groups = new Map<string, ScopeState>();
+    const overlay: ScopeState = { settled: 0, reserved: 0, unresolved: 0, lastSeenAt: 0 };
+    for (const [key, state] of scopes) {
+      if (!key.startsWith("pool\0")) continue;
+      const alias = key.slice(5);
+      const known = poolContinuity.known(alias);
+      let total = overlay;
+      if (known) {
+        const group = poolContinuity.resolve(alias);
+        total = groups.get(group) ?? { settled: 0, reserved: 0, unresolved: 0, lastSeenAt: 0 };
+        groups.set(group, total);
+      }
+      total.settled += state.settled;
+      total.reserved += state.reserved;
+      total.unresolved += state.unresolved;
+      total.lastSeenAt = Math.max(total.lastSeenAt, state.lastSeenAt);
+    }
     const candidates: { key: string; scope: SpendScope; alias: string; seenAt: number }[] = [];
     for (const [key, state] of scopes) {
+      if (!idle(key, state)) continue;
       const separator = key.indexOf("\0");
       const scope = key.slice(0, separator) as SpendScope;
-      if (state.reserved > 0) continue;
-      if (isExhausted(scope, state)) continue;
-      if (!force && state.lastSeenAt >= cutoff) continue;
-      candidates.push({ key, scope, alias: key.slice(separator + 1), seenAt: state.lastSeenAt });
+      const alias = key.slice(separator + 1);
+      const unbound = scope === "pool" && !poolContinuity.known(alias);
+      // Pressure cannot shorten retention for unknown history, including zero-token keys.
+      if (unbound && state.settled + state.reserved + state.unresolved > 0) continue;
+      const group = scope === "pool" ? groups.get(poolContinuity.resolve(alias)) : undefined;
+      const effective = scope === "pool" && !unbound ? {
+        settled: (group?.settled ?? 0) + overlay.settled,
+        reserved: (group?.reserved ?? 0) + overlay.reserved,
+        unresolved: (group?.unresolved ?? 0) + overlay.unresolved,
+        lastSeenAt: group?.lastSeenAt ?? state.lastSeenAt,
+      } : state;
+      if (effective.reserved > 0 || (scope === "pool" && pinnedPoolGroups.has(poolContinuity.resolve(alias)))
+        || isExhausted(scope, effective)) continue;
+      if (!force && effective.lastSeenAt >= cutoff) continue;
+      candidates.push({ key, scope, alias, seenAt: state.lastSeenAt });
     }
     if (force) {
       candidates.sort((a, b) => a.seenAt - b.seenAt);
       candidates.length = Math.min(candidates.length, 1);
     }
     for (const candidate of candidates) {
+      if (!flushPending() || !append({ v: 1, kind: "drop", scope: candidate.scope, alias: candidate.alias, at })) continue;
       scopes.delete(candidate.key);
-      append({ v: 1, kind: "drop", scope: candidate.scope, alias: candidate.alias, at });
+      removed += 1;
     }
-    return candidates.length;
+    return removed;
   };
 
   /**
@@ -929,7 +1106,7 @@ export function createSpendReservationLedger(options: {
     const cutoff = at - policy.retentionMs;
     const candidates: { send: string; resolvedAt: number }[] = [];
     for (const [send, reservation] of reservations) {
-      if (isLive(reservation.status)) continue;
+      if (isLive(reservation.status) || seedForSend(send)) continue;
       if (!force && reservation.resolvedAt >= cutoff) continue;
       candidates.push({ send, resolvedAt: reservation.resolvedAt });
     }
@@ -937,11 +1114,15 @@ export function createSpendReservationLedger(options: {
       candidates.sort((a, b) => a.resolvedAt - b.resolvedAt);
       candidates.length = Math.min(candidates.length, 1);
     }
+    let removed = 0;
     for (const candidate of candidates) {
+      if (!flushPending() || !append({ v: 1, kind: "forget", send: candidate.send, at })) continue;
       reservations.delete(candidate.send);
-      append({ v: 1, kind: "forget", send: candidate.send, at });
+      nondurableReserves.delete(candidate.send);
+      retainedOrdinary.delete(candidate.send);
+      removed += 1;
     }
-    return candidates.length;
+    return removed;
   };
 
   /**
@@ -949,10 +1130,7 @@ export function createSpendReservationLedger(options: {
    * Bounded maps are not enough on their own: the file behind them is what replay reads, and
    * an uncompacted file grows forever on unique root and send ids.
    */
-  const compact = (at: number): void => {
-    const rewrite = journal?.rewrite;
-    if (!journal || !rewrite || recordsOnDisk < compactAfterRecords()) return;
-    const checkpoint: JournalRecord = {
+  const checkpointRecord = (at: number): Extract<JournalRecord, { kind: "checkpoint" }> => ({
       v: 1,
       kind: "checkpoint",
       at,
@@ -974,9 +1152,14 @@ export function createSpendReservationLedger(options: {
         at: reservation.at,
         resolvedAt: reservation.resolvedAt,
       })),
-    };
+  });
+
+  const compact = (at: number): void => {
+    const rewrite = journal?.rewrite;
+    // Restore shipped compaction semantics; corruption refusal persists until clean replay.
+    if (!journal || !rewrite || pendingRecords.length > 0 || recordsOnDisk < compactAfterRecords()) return;
     try {
-      rewrite.call(journal, [JSON.stringify(checkpoint)]);
+      rewrite.call(journal, [JSON.stringify(checkpointRecord(at))]);
       recordsOnDisk = 1;
     } catch (error) {
       if (error instanceof SpendLedgerOwnerError) throw error;
@@ -986,6 +1169,14 @@ export function createSpendReservationLedger(options: {
     }
   };
 
+  const preparePoolContinuity = (requestedProvider?: string): SpendDenial | undefined => {
+    const providers = [...(policy.canonicalProviderIds ?? []), ...(requestedProvider === undefined ? [] : [requestedProvider])];
+    if (!poolContinuity.valid || validatePoolAliasOwners(policy.poolAliases, salt, providers)) {
+      return { reason: "pool-history-unresolved" };
+    }
+    return undefined;
+  };
+
   /** The denial when tracking cannot fit this request, or undefined when it can. */
   const makeRoom = (refs: readonly ScopeRef[], at: number): SpendDenial | undefined => {
     evictSends(at, false);
@@ -993,9 +1184,8 @@ export function createSpendReservationLedger(options: {
     while (reservations.size >= maxTrackedSends()) {
       if (evictSends(at, true) === 0) return { reason: "tracking-capacity-exhausted" };
     }
-    let fresh = 0;
-    for (const ref of refs) if (!scopes.has(scopeKey(ref.scope, ref.alias))) fresh += 1;
-    while (scopes.size + fresh > maxTrackedScopes()) {
+    const freshCount = (): number => refs.filter(ref => !scopes.has(scopeKey(ref.scope, ref.alias))).length;
+    while (scopes.size + freshCount() > maxTrackedScopes()) {
       if (evictScopes(at, true) === 0) {
         return { reason: "tracking-capacity-exhausted", scope: refs[0]?.scope };
       }
@@ -1003,7 +1193,106 @@ export function createSpendReservationLedger(options: {
     return undefined;
   };
 
-  return {
+  const ledger: SpendReservationLedger = {
+    reserveSeed(request, owner): SpendSeedDecision {
+      assertOwnedAccounting?.();
+      // Initial anchors never borrow already-sent capacity or bypass token/durability checks.
+      const decision = ledger.reserve({ ...request, alreadySent: false });
+      if (!decision.reserved) return decision;
+      const seed: SpendSeed = Object.freeze({ sendId: request.sendId });
+      const send = aliasFor("send", seed.sendId);
+      const state: SeedState = { targets: reservations.get(send)!.targets, sends: new Set([send]), abandoned: false, owner };
+      seeds.set(seed, state);
+      seedBySend.set(send, state);
+      for (const ref of state.targets) {
+        const key = scopeKey(ref.scope, ref.alias);
+        pinnedKeys.set(key, (pinnedKeys.get(key) ?? 0) + 1);
+      }
+      return { reserved: true, seed };
+    },
+    reserveReportedFromSeed(seed, request): boolean {
+      assertOwnedAccounting?.();
+      const owned = seeds.get(seed);
+      const send = aliasFor("send", request.sendId);
+      if (!owned || owned.abandoned || owned.targets.some(ref => !scopes.has(scopeKey(ref.scope, ref.alias)))) return false;
+      const tokens = sanitizeTokens(request.inputTokens) + sanitizeTokens(request.outputCeilingTokens);
+      const existing = reservations.get(send);
+      if (existing || seedBySend.has(send)) {
+        return seedBySend.get(send) === owned && existing !== undefined && isLive(existing.status) && existing.tokens === tokens;
+      }
+      const at = now();
+      const record: JournalRecord = { v: 1, kind: "reserve", send, targets: [...owned.targets], tokens, at };
+      // Enrollment is stable before an owner error can escape the journal write.
+      applyReserve(send, owned.targets, tokens, at);
+      owned.sends.add(send);
+      seedBySend.set(send, owned);
+      appendReported(record);
+      compact(at);
+      return true;
+    },
+    forgetResolved(sendIds, owner): boolean {
+      assertOwnedAccounting?.();
+      if (activeReporters(owner) > 0) return false;
+      const sends = [...new Set(sendIds.map(id => aliasFor("send", id)))];
+      if (sends.some(send => { const seed = seedForSend(send); return seed && seed.owner !== owner; }) || !flushPending()) return false;
+      if (sends.some(send => { const entry = reservations.get(send); return entry && isLive(entry.status); })) return false;
+      for (const send of sends) {
+        if (!reservations.has(send)) continue;
+        if (!append({ v: 1, kind: "forget", send, at: now() })) return false;
+        applyForget(send);
+      }
+      return true;
+    },
+    finishSeed(seed, owner): boolean {
+      assertOwnedAccounting?.();
+      const owned = seeds.get(seed);
+      if (!owned || owned.owner !== owner || !flushPending()) return false;
+      if (owned.abandoned) {
+        // A never-sent provisional anchor cannot have delayed physical reports. Rebinding
+        // during another live producer is safe only for this explicitly abandoned capability.
+        const send = aliasFor("send", seed.sendId);
+        if (reservations.has(send)) {
+          if (!append({ v: 1, kind: "forget", send, at: now() })) return false;
+          applyForget(send);
+        }
+      } else if (activeReporters(owner) > 0) return false;
+      if ([...owned.sends].some(send => reservations.has(send))) return false;
+      seeds.delete(seed);
+      for (const send of owned.sends) seedBySend.delete(send);
+      for (const ref of owned.targets) {
+        const key = scopeKey(ref.scope, ref.alias);
+        const count = pinnedKeys.get(key)! - 1;
+        if (count === 0) pinnedKeys.delete(key); else pinnedKeys.set(key, count);
+      }
+      return true;
+    },
+    registerReporter(owner) {
+      assertOwnedAccounting?.();
+      reporters += 1;
+      if (owner) ownerReporters.set(owner, activeReporters(owner) + 1);
+      let closed = false;
+      return { close() {
+        if (closed) return;
+        closed = true;
+        reporters -= 1;
+        if (owner) {
+          const remaining = activeReporters(owner) - 1;
+          if (remaining === 0) ownerReporters.delete(owner); else ownerReporters.set(owner, remaining);
+        }
+        try { assertOwnedAccounting?.(); retryCleanup(); }
+        finally {
+          if (reporters === 0) { for (const resolve of drainWaiters) resolve(); drainWaiters.clear(); }
+        }
+      } };
+    },
+    deferCleanup(owner, cleanup) {
+      assertOwnedAccounting?.();
+      deferredCleanups.set(owner, cleanup);
+    },
+    waitForReporterDrain() {
+      assertOwnedAccounting?.();
+      return reporters === 0 ? Promise.resolve() : new Promise<void>(resolve => { drainWaiters.add(resolve); });
+    },
     // Every figure this ledger reports describes a journal it must still own. Reporting one
     // after ownership ended is the same error as writing then, with a quieter symptom.
     get persistFailures() { assertOwnedAccounting?.(); return persistFailures; },
@@ -1011,24 +1300,46 @@ export function createSpendReservationLedger(options: {
     get degraded() { assertOwnedAccounting?.(); return persistFailures > 0 || corruptRecords > 0; },
     get policy() { assertOwnedAccounting?.(); return policy; },
 
+    checkPoolContinuity(): SpendDenial | undefined {
+      assertOwnedAccounting?.();
+      if (policy.pool.maxTokens === undefined) return undefined;
+      if (corruptRecords > 0) return { reason: "journal-corrupt", corruptRecords };
+      return preparePoolContinuity();
+    },
+
+    hasUnboundPositivePoolHistory(): boolean {
+      assertOwnedAccounting?.();
+      return hasUnboundPositivePoolHistory();
+    },
+
     reserve(request: SpendReservationRequest): SpendReservationDecision {
       assertOwnedAccounting?.();
+      retryCleanup();
+      const pendingDurable = flushPending(); // Observe-only admissions also retry ordinary repair debt.
       const tokens = sanitizeTokens(request.inputTokens) + sanitizeTokens(request.outputCeilingTokens);
       const at = request.at ?? now();
       const send = aliasFor("send", request.sendId);
       const refs = refsFor(request.scopes);
-      const enforced = refs.some((ref) => limitFor(ref.scope) !== undefined);
+      const admissionLimit = (scope: SpendScope) => (request.admissionPolicy ?? policy)[scope].maxTokens;
+      const enforced = refs.some((ref) => admissionLimit(ref.scope) !== undefined);
 
       // A send id this ledger already knows is REFUSED. Returning success while booking
       // nothing -- the old behaviour -- let one id authorise an unlimited number of physical
       // sends with the scope totals never moving.
-      if (reservations.has(send)) {
+      if (reservations.has(send) || seedBySend.has(send)) {
         return { reserved: false, denial: { reason: "duplicate-send-id", sendId: request.sendId } };
       }
       // Replay could not prove these totals are complete, so a configured ceiling cannot be
       // enforced on them. Observe-only accounting continues and reports the degradation.
       if (enforced && corruptRecords > 0) {
         return { reserved: false, denial: { reason: "journal-corrupt", corruptRecords } };
+      }
+      if (enforced && request.alreadySent !== true && !pendingDurable) {
+        return { reserved: false, denial: { reason: "reserve-not-durable", sendId: request.sendId } };
+      }
+      const continuityDenial = preparePoolContinuity(request.scopes.poolId);
+      if (continuityDenial && enforced && request.alreadySent !== true) {
+        return { reserved: false, denial: continuityDenial };
       }
       const capacity = makeRoom(refs, at);
       if (capacity) return { reserved: false, denial: capacity };
@@ -1039,9 +1350,10 @@ export function createSpendReservationLedger(options: {
       for (const ref of refs) {
         // A recorded send has no limit to fail: it already happened, and the point of booking
         // it is to let the total go OVER the ceiling so the next request can be refused.
-        const limit = request.alreadySent === true ? undefined : limitFor(ref.scope);
+        const limit = request.alreadySent === true ? undefined : admissionLimit(ref.scope);
         if (limit === undefined) continue;
-        const state = scopes.get(scopeKey(ref.scope, ref.alias));
+        const poolView = ref.scope === "pool" ? poolState(ref.alias) : undefined;
+        const state = ref.scope === "pool" ? poolView?.totals : scopes.get(scopeKey(ref.scope, ref.alias));
         const projected = (state ? state.settled + state.reserved + state.unresolved : 0) + tokens;
         if (projected > limit) {
           const scopeId = ref.scope === "root"
@@ -1049,7 +1361,10 @@ export function createSpendReservationLedger(options: {
             : ref.scope === "identity" ? request.scopes.identityId : request.scopes.poolId;
           return {
             reserved: false,
-            denial: { reason: "spend-limit-exceeded", scope: ref.scope, scopeId: scopeId ?? "", limit, projected },
+            denial: {
+              reason: "spend-limit-exceeded", scope: ref.scope, scopeId: scopeId ?? "", limit, projected,
+              ...(poolView?.includesUnboundHistory ? { includesUnboundPoolHistory: true } : {}),
+            },
           };
         }
       }
@@ -1057,11 +1372,13 @@ export function createSpendReservationLedger(options: {
       // Durability BEFORE admission. The record goes to disk first, and under a configured
       // limit a failed write refuses the request rather than admitting one that a restart
       // would forget -- which is exactly the disk-full and permission case durability is for.
-      const durable = append({ v: 1, kind: "reserve", send, targets: refs, tokens, at });
+      const record: JournalRecord = { v: 1, kind: "reserve", send, targets: refs, tokens, at };
+      const durable = append(record);
       if (!durable && enforced && request.alreadySent !== true) {
         return { reserved: false, denial: { reason: "reserve-not-durable", sendId: request.sendId } };
       }
       applyReserve(send, refs, tokens, at);
+      if (!durable) nondurableReserves.set(send, record);
       compact(at);
       return { reserved: true, sendId: request.sendId, tokens, durable };
     },
@@ -1070,10 +1387,15 @@ export function createSpendReservationLedger(options: {
       assertOwnedAccounting?.();
       const send = aliasFor("send", sendId);
       const reservation = reservations.get(send);
+      if (reservation?.status === "dispatched" && seedForSend(send)) return true;
       if (!reservation || reservation.status !== "open") return false;
+      repairReservePrefix(send, reservation);
       const at = now();
       applyDispatch(send, at);
-      append({ v: 1, kind: "dispatch", send, at });
+      const record: JournalRecord = { v: 1, kind: "dispatch", send, at };
+      const retained = seedForSend(send) || retainedOrdinary.has(send);
+      if (retained) appendReported(record);
+      else append(record);
       return true;
     },
 
@@ -1085,8 +1407,12 @@ export function createSpendReservationLedger(options: {
       // upstream the tokens may already be billed, so the caller owes settle or markLost.
       if (!reservation || reservation.status !== "open") return false;
       const at = now();
+      const record: JournalRecord = { v: 1, kind: "abandon", send, at };
+      const seeded = seedForSend(send);
+      if (seeded && (!flushPending() || !append(record))) return false;
       applyResolve(send, "abandoned", 0, at);
-      append({ v: 1, kind: "abandon", send, at });
+      if (seeded) seeded.abandoned = true;
+      else append(record);
       return true;
     },
 
@@ -1095,10 +1421,16 @@ export function createSpendReservationLedger(options: {
       const send = aliasFor("send", sendId);
       const reservation = reservations.get(send);
       if (!reservation || !isLive(reservation.status)) return false;
+      repairReservePrefix(send, reservation);
       const tokens = sanitizeTokens(usage.inputTokens) + sanitizeTokens(usage.outputTokens);
       const at = now();
+      const record: JournalRecord = { v: 1, kind: "settle", send, tokens, at };
+      const seeded = seedForSend(send) || retainedOrdinary.has(send);
+      // Terminal usage cannot be refused: the tracker may never report it again, and
+      // the estimate can be smaller than the actual bill. Preserve ordered retryable debt.
+      if (seeded && (pendingRecords.length > 0 || !append(record))) pendingRecords.push(record);
       applyResolve(send, "settled", tokens, at);
-      append({ v: 1, kind: "settle", send, tokens, at });
+      if (!seeded) append(record);
       return true;
     },
 
@@ -1107,22 +1439,28 @@ export function createSpendReservationLedger(options: {
       const send = aliasFor("send", sendId);
       const reservation = reservations.get(send);
       if (!reservation || !isLive(reservation.status)) return false;
+      repairReservePrefix(send, reservation);
       const at = now();
+      const record: JournalRecord = { v: 1, kind: "lost", send, at };
+      const seeded = seedForSend(send) || retainedOrdinary.has(send);
+      if (seeded && (pendingRecords.length > 0 || !append(record))) pendingRecords.push(record);
       applyResolve(send, "lost", 0, at);
-      append({ v: 1, kind: "lost", send, at });
+      if (!seeded) append(record);
       return true;
     },
 
     knows(sendId: string): boolean {
       assertOwnedAccounting?.();
-      return reservations.has(aliasFor("send", sendId));
+      const send = aliasFor("send", sendId);
+      return reservations.has(send) || seedBySend.has(send);
     },
 
     snapshot(scope: SpendScope, scopeId: string): ScopeSpendSnapshot | undefined {
       // Reading accounting from a handle whose ownership has ended is as wrong as writing it:
       // the figures describe a journal this process no longer owns.
       assertOwnedAccounting?.();
-      const state = scopes.get(scopeKey(scope, aliasFor(scope, scopeId)));
+      const alias = scope === "pool" ? poolAliasFor(scopeId) : aliasFor(scope, scopeId);
+      const state = stateFor(scope, alias);
       if (!state) return undefined;
       return {
         settled: state.settled,
@@ -1132,14 +1470,23 @@ export function createSpendReservationLedger(options: {
       };
     },
 
-    exhausted(scope: SpendScope, scopeId: string): boolean {
+    exhausted(scope: SpendScope, scopeId: string, excludingSendId?: string, admissionPolicy?: SpendAdmissionPolicy): boolean {
       assertOwnedAccounting?.();
-      const state = scopes.get(scopeKey(scope, aliasFor(scope, scopeId)));
-      return state !== undefined && isExhausted(scope, state);
+      const alias = scope === "pool" ? poolAliasFor(scopeId) : aliasFor(scope, scopeId);
+      const state = stateFor(scope, alias);
+      if (!state) return false;
+      const own = excludingSendId === undefined ? undefined : reservations.get(aliasFor("send", excludingSendId));
+      const matches = own?.status === "open" && own.targets.some(target => target.scope === scope
+        && (scope === "pool" ? (!poolContinuity.known(target.alias) || poolContinuity.resolve(target.alias) === poolContinuity.resolve(alias)) : target.alias === alias));
+      const totals = matches ? { ...state, reserved: Math.max(0, state.reserved - own.tokens) } : state;
+      const limit = (admissionPolicy ?? policy)[scope].maxTokens;
+      return limit !== undefined && totals.settled + totals.reserved + totals.unresolved >= limit;
     },
 
     prune(at: number = now()): void {
       assertOwnedAccounting?.();
+      flushPending();
+      retryCleanup();
       // Removal requires BOTH inactive and not exhausted inside the window. An
       // exhausted-but-idle scope that was dropped would be recreated fresh under the
       // same id -- the exact laundering the ceiling exists to stop.
@@ -1149,9 +1496,22 @@ export function createSpendReservationLedger(options: {
 
     reconfigure(next: SpendReservationPolicy): void {
       assertOwnedAccounting?.();
+      retryCleanup();
       policy = next;
+      poolContinuity = resolvePoolAliases(policy.poolAliases, salt, policy.canonicalProviderIds);
     },
   };
+  return ledger;
+}
+
+/** Drain only an already-constructed ledger; shutdown must not open an unused journal. */
+export function waitForSharedSpendReporterDrain(): Promise<void> {
+  return sharedLedger?.waitForReporterDrain() ?? Promise.resolve();
+}
+
+/** Does no I/O for installations without a pool ceiling. */
+export function sharedPoolContinuityDenial(): SpendDenial | undefined {
+  return sharedPolicy.pool.maxTokens === undefined ? undefined : sharedSpendLedger().checkPoolContinuity();
 }
 
 let sharedLedger: SpendReservationLedger | undefined;
@@ -1189,9 +1549,11 @@ const spendScopeLimitFromConfig = (scope: OcxSpendScopeConfig | undefined): Spen
  * ceiling would start refusing real traffic on the first upgrade that ran this code, against
  * a number nobody chose. There is deliberately no default figure here at all.
  */
-export function spendPolicyFromConfig(spend: OcxSpendConfig | undefined): SpendReservationPolicy {
+export function spendPolicyFromConfig(spend: OcxSpendConfig | undefined, poolAliases?: unknown, canonicalProviderIds?: readonly string[]): SpendReservationPolicy {
   const retentionDays = spend?.retentionDays;
   return {
+    ...(poolAliases !== undefined ? { poolAliases } : {}),
+    ...(canonicalProviderIds !== undefined ? { canonicalProviderIds } : {}),
     root: spendScopeLimitFromConfig(spend?.root),
     identity: spendScopeLimitFromConfig(spend?.identity),
     pool: spendScopeLimitFromConfig(spend?.pool),

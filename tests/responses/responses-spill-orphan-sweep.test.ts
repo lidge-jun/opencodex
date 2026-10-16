@@ -19,6 +19,7 @@ import {
 import {
   PERIODIC_SPILL_SWEEP_OPTS,
   RESPONSE_SPILL_DIR_NAME,
+  resetPeriodicSpillSweepCursorForTests,
   responseSpillDirectory,
   setSpillIoForTest,
   sweepOrphanedResponseSpillsPeriodically,
@@ -78,6 +79,9 @@ describe("Periodic orphan response-spill sweep", () => {
   const priorHome = process.env["OPENCODEX_HOME"];
 
   beforeEach(() => {
+    // The periodic cursor is process-global. A leftover handle from the previous
+    // case would resume a directory this case does not own.
+    resetPeriodicSpillSweepCursorForTests();
     home = mkdtempSync(join(tmpdir(), "ocx-orphan-sweep-test-"));
     process.env["OPENCODEX_HOME"] = home;
     clearResponseStateMemoryForTests();
@@ -86,6 +90,7 @@ describe("Periodic orphan response-spill sweep", () => {
   });
 
   afterEach(() => {
+    resetPeriodicSpillSweepCursorForTests();
     setSpillIoForTest(null);
     setAsyncIcaclsRunnerForTests(null);
     setIcaclsRunnerForTests(null);
@@ -194,23 +199,49 @@ describe("Periodic orphan response-spill sweep", () => {
   });
 
   test("resumes past a full window of owned files on the next tick", () => {
-    const dir = responseSpillDirectory(home);
-    const owned = new Set<string>();
-    const orphans: string[] = [];
-    const total = PERIODIC_SPILL_SWEEP_OPTS.scanMax + 64;
-    for (let i = 0; i < total; i += 1) {
-      const ref = writeResponseSpillDurably(`resp_window_${i}`, { createdAt: Date.now(), items: [i] });
-      agePastGrace(join(dir, ref.fileName));
-      if (i % 20 === 0) orphans.push(ref.fileName);
-      else owned.add(ref.fileName);
+    // The liveness tick stops at a 25ms wall deadline. Filling a real directory
+    // and hoping three ticks finish is what failed on a slow runner (3 removals
+    // instead of every orphan). The seam below fixes the order, and the clock
+    // stays still so this case measures the scan window rather than the deadline.
+    const clock = 1_700_000_000_000;
+    const nowSpy = spyOn(Date, "now").mockImplementation(() => clock);
+    try {
+      const dir = responseSpillDirectory(home);
+      const ownedSpills: string[] = [];
+      const orphans: string[] = [];
+      for (let i = 0; i < 2; i += 1) {
+        const ownedRef = writeResponseSpillDurably(`resp_window_owned_${i}`, { createdAt: clock, items: [i] });
+        const orphanRef = writeResponseSpillDurably(`resp_window_orphan_${i}`, { createdAt: clock, items: [i] });
+        agePastGrace(join(dir, ownedRef.fileName));
+        agePastGrace(join(dir, orphanRef.fileName));
+        ownedSpills.push(ownedRef.fileName);
+        orphans.push(orphanRef.fileName);
+      }
+      const prefix = Array.from({ length: PERIODIC_SPILL_SWEEP_OPTS.scanMax }, (_, i) => `owned-prefix-${i}.txt`);
+      const names = [...prefix, ...ownedSpills, ...orphans];
+      const owned = new Set([...prefix, ...ownedSpills]);
+      let served = 0;
+      setSpillIoForTest({
+        readdirEntry() {
+          return served < names.length ? names[served++]! : null;
+        },
+      });
+
+      const first = sweepOrphanedResponseSpillsPeriodically(owned, dir);
+      expect(first.removed).toBe(0);
+      expect(served).toBe(PERIODIC_SPILL_SWEEP_OPTS.scanMax);
+      expect(orphans.filter(name => existsSync(join(dir, name)))).toEqual(orphans);
+      expect(ownedSpills.filter(name => existsSync(join(dir, name)))).toEqual(ownedSpills);
+
+      const second = sweepOrphanedResponseSpillsPeriodically(owned, dir);
+      expect(second.removed).toBe(orphans.length);
+      expect(served).toBe(names.length);
+      expect(orphans.filter(name => existsSync(join(dir, name)))).toEqual([]);
+      expect(ownedSpills.filter(name => existsSync(join(dir, name)))).toEqual(ownedSpills);
+      expect(spillFileNames(home).sort()).toEqual([...ownedSpills].sort());
+    } finally {
+      nowSpy.mockRestore();
     }
-
-    let removed = 0;
-    for (let tick = 0; tick < 3; tick += 1) removed += sweepOrphanedResponseSpillsPeriodically(owned, dir).removed;
-
-    expect(removed).toBe(orphans.length);
-    expect(orphans.filter(name => existsSync(join(dir, name)))).toEqual([]);
-    expect(spillFileNames(home)).toHaveLength(owned.size);
   });
 
   test("keeps advancing when enumeration alone would exhaust the tick deadline", () => {

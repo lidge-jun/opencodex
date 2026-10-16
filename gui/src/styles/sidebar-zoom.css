@@ -1,34 +1,72 @@
-/* ── Desktop shell: sidebar page-zoom control and a footer that stays reachable ──
+/* ── Desktop shell and sidebar foot: theme switch, page-zoom stepper, and a footer that stays reachable ──
    Kept out of styles.css, which is under a file-size cap that only moves down. Loaded after it
    (see main.tsx), so these rules follow the base .sidebar and .sidebar nav rules in the cascade. */
 
-/* Same row metrics as .theme-toggle so the language, theme and zoom rows read as one group. */
-.zoom-control { display: flex; align-items: center; gap: 4px; padding: 4px 10px; width: 100%; color: var(--muted); font-size: var(--text-control); }
-.zoom-control__label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.zoom-control__btn, .zoom-control__value {
+/* Theme and zoom share one row on macOS and Linux, where the desktop shell manages zoom. The row
+   keeps the foot's row height (3px + 28px pill + 3px) and its right edge sits on the same 10px
+   inset as the proxy orbs below. The 4px left inset puts the first theme icon on the same vertical
+   line as the language globe above it. Elsewhere the switch sits in a .sidebar-action-row behind a
+   "Theme" label, like the proxy row. */
+.sidebar-display-row { display: flex; align-items: center; justify-content: space-between; gap: 4px; min-width: 0; padding: 3px 10px 3px 4px; }
+
+/* Both controls are one bordered pill in the .sidebar-orb material. Children carry no borders of
+   their own; the current theme is shown by a fill. */
+.theme-switch, .zoom-control {
+  display: inline-flex; align-items: center; flex: 0 0 auto; height: 28px; padding: 0 1px;
+  color: var(--muted); font-size: var(--text-control);
+  border: 1px solid var(--border); border-radius: var(--radius-pill); background: var(--raised);
+}
+.theme-switch__btn, .zoom-control__btn, .zoom-control__value {
   display: inline-flex; align-items: center; justify-content: center;
-  height: 26px; padding: 0; border: none; border-radius: var(--radius-sm);
+  height: 24px; padding: 0; border: none; border-radius: var(--radius-pill);
   background: none; color: inherit; font: inherit; cursor: pointer;
   transition: background var(--motion-fast), color var(--motion-fast);
 }
-.zoom-control__btn { width: 26px; }
-.zoom-control__btn svg { width: 14px; height: 14px; }
-.zoom-control__value { min-width: 3.25rem; padding: 0 6px; font-variant-numeric: tabular-nums; }
-.zoom-control__btn:hover:not(:disabled), .zoom-control__value:hover { background: var(--accent-soft); color: var(--text); }
-.zoom-control__btn:focus-visible, .zoom-control__value:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
-.zoom-control__btn:disabled { opacity: 0.5; cursor: default; }
+.theme-switch__btn { width: 26px; }
+.theme-switch__btn svg { width: 14px; height: 14px; }
+.theme-switch__btn[aria-pressed="true"] { background: var(--accent-soft); color: var(--text); box-shadow: inset 0 0 0 1px var(--accent-ring); }
+.zoom-control__btn { width: 24px; }
+.zoom-control__btn svg { width: 12px; height: 12px; }
+.zoom-control__value { min-width: 2.75rem; padding: 0 4px; color: var(--text); font-size: 12px; font-variant-numeric: tabular-nums; }
+.theme-switch__btn:hover:not([aria-pressed="true"]), .zoom-control__btn:hover:not(:disabled), .zoom-control__value:hover { background: var(--accent-soft); color: var(--text); }
+.theme-switch__btn:focus-visible, .zoom-control__btn:focus-visible, .zoom-control__value:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 1px; }
+.zoom-control__btn:disabled { opacity: 0.4; cursor: default; }
+/* The drawer layout follows the 44px mobile touch height (design-system/components.md). The
+   drawer is up to 280px wide, so three 40px theme buttons still share the row with the zoom
+   stepper; the pill grows with its buttons instead of clipping a choice. */
+@media (max-width: 760px) {
+  .theme-switch { height: auto; }
+  .theme-switch__btn { width: 40px; height: 44px; }
+}
 
-/* Page zoom shrinks the CSS viewport, so a zoomed or short window is shorter than the menu plus
-   the footer. On the desktop layout the menu scrolls and the footer (language, theme, zoom, proxy)
-   stays reachable; the narrow layout keeps its drawer, which already scrolls as a whole. The
-   padding and the equal negative margin keep focus rings at the edges from being clipped by the
-   scroll box without moving anything. */
+/* The desktop menu scrolls without moving the footer in normal windows. Keep about three
+   rows visible even when page zoom shrinks the viewport; short windows can scroll the whole
+   sidebar once brand + menu + footer no longer fit. Padding and the equal negative margin
+   protect focus rings without moving anything. The narrow drawer keeps its own scrolling. */
 @media (min-width: 761px) {
   .sidebar nav {
     flex: 1 1 auto;
-    min-height: 0;
+    min-height: 7.5rem;
     overflow-y: auto;
     padding: 4px;
     margin: -4px;
+  }
+}
+
+@media (min-width: 761px) and (max-height: 480px) {
+  /* The rail drops its glass here: a backdrop-filter would make it the containing block of the
+     language menu below, and that menu would then scroll and clip with the rail in every engine
+     that treats a scroll container's fixed descendants like absolute ones. Opaque, the rail
+     leaves the menu anchored to the window. */
+  .sidebar {
+    overflow-y: auto; scroll-padding-top: calc(var(--titlebar-h, 40px) + 4px);
+    background: var(--rail); backdrop-filter: none; -webkit-backdrop-filter: none;
+  }
+  /* Anchor the non-portaled menu below the title strip so scrolling the footer cannot push it
+     off screen. Opaque like the rail, as in the no-backdrop-filter fallback in styles.css. */
+  .sidebar .lang-toggle .select-dropdown-beside {
+    position: fixed; top: calc(var(--titlebar-h, 40px) + 4px); bottom: auto; left: 14px; right: auto;
+    max-height: min(60vh, calc(100dvh - var(--titlebar-h, 40px) - 12px), 20rem);
+    background: var(--rail); backdrop-filter: none; -webkit-backdrop-filter: none;
   }
 }

@@ -42,6 +42,7 @@ import { RESERVE_METADATA_SOURCE_FIELD } from "./reserve";
 import {
   ACCOUNT_GATED_NATIVE_OPENAI_MODELS,
   NATIVE_GPT6_CONTEXT,
+  NATIVE_GPT61_SOL_CONTEXT,
   NATIVE_DAYBREAK_BLUE_MODEL,
   NATIVE_GPT6_ASTRA_MINOR_MODEL,
   NATIVE_GPT6_ASTRA_MODEL,
@@ -202,8 +203,9 @@ export const NATIVE_OPENAI_CONTEXT_OVERRIDES: Record<string, { contextWindow?: n
   // the row's own ceiling rather than the GPT-5.6 family's measured 922,000.
   [NATIVE_GPT6_SOL_MODEL]: { ...NATIVE_GPT6_CONTEXT },
   [NATIVE_GPT6_LUNA_MODEL]: { ...NATIVE_GPT6_CONTEXT },
-  // GPT-6.1 Sol's row (openai/codex models.json after #49318) ships the same 272,000 / 872,000 pair.
-  [NATIVE_GPT61_SOL_MODEL]: { ...NATIVE_GPT6_CONTEXT },
+  // GPT-6.1 Sol's row (openai/codex models.json after #49318) ships 272,000 / 872,000, but OpenAI
+  // raised its Codex & Work default to 500,000 on 2026-10-11; the 872,000 ceiling is unchanged.
+  [NATIVE_GPT61_SOL_MODEL]: { ...NATIVE_GPT61_SOL_CONTEXT },
   // Astra Minor borrows Astra's row, so it inherits Astra's numbers. No account we hold can reach
   // it, so this is inheritance, not a measurement.
   [NATIVE_GPT6_ASTRA_MINOR_MODEL]: { ...NATIVE_GPT6_CONTEXT },

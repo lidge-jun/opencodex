@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { effectiveDeclaration, withoutComments } from "./helpers/css-declarations";
 
 /**
- * WP2 (devlog/_plan/260830_models_provider_header/050_hover_affordance_and_column_gate.md).
+ * WP2 (devlog/_fin/260830_models_provider_header/050_hover_affordance_and_column_gate.md).
  *
  * The user's requirement was a hover affordance. The independent audit rejected the
  * first reading of it — hover that GATES, i.e. controls hidden until the pointer

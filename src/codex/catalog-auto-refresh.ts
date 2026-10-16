@@ -50,6 +50,14 @@ let generation = 0;
 /** setInterval does not skip a firing while the previous callback is still awaiting. */
 let inFlight = false;
 
+/** Refreshes already-connected clients after a changed catalog; owned by the server lifecycle. */
+export type CatalogChangedClientFanout =
+  (isCurrent: () => boolean) => Promise<ReadonlyArray<{ readonly ok: boolean }>>;
+let clientFanout: CatalogChangedClientFanout | null = null;
+export function setCatalogAutoRefreshClientFanout(fanout: CatalogChangedClientFanout | null): void {
+  clientFanout = fanout;
+}
+
 /** Read only a regular file, with a byte limit even if it grows after the stat. */
 function readBoundedRegularFile(path: string, maxBytes: number): string | null {
   let fd: number | undefined;
@@ -258,6 +266,17 @@ async function tick(): Promise<void> {
       console.info(reloadRequired
         ? "[catalog-auto-refresh] served model set changed; running Codex sessions keep the old list until restarted (ocx sync --restart-codex)"
         : "[catalog-auto-refresh] served model set changed");
+    }
+    const fanout = clientFanout;
+    if (outcome.changed && fanout) {
+      const current = () => entryGeneration === generation;
+      try {
+        const failed = (await fanout(current)).filter(result => !result.ok).length;
+        // Outcomes can contain private paths and reasons; only the failure count leaves this hook.
+        if (current() && failed > 0) console.warn(`[catalog-auto-refresh] ${failed} client integration(s) were not refreshed; ocx sync retries them`);
+      } catch {
+        if (current()) console.warn("[catalog-auto-refresh] client integrations were not refreshed; ocx sync retries them");
+      }
     }
   } catch {
     // A failed refresh is not an error worth surfacing: the next tick tries again.

@@ -155,7 +155,29 @@ OpenCodex demandent à Codex de transmettre les remplacements à `spawn_agent` ;
 
 ## Sessions, clés et usage Remote Hub
 
-Le plan de gestion du tableau de bord est séparé du trafic modèle direct client→hub. **Integrations → API Keys** affiche les rotations en attente, montre le secret de remplacement une seule fois et exige une validation ou une annulation explicite. La déconnexion du navigateur n'invalide que la session courante. L'usage connecté vient du hub filtré par `apiKeyId`; l'usage déconnecté est local, sans réplication.
+Le plan de gestion du tableau de bord est séparé du trafic modèle direct client→hub. **Connexion → Clés API** affiche les rotations en attente, montre le secret de remplacement une seule fois et exige une validation ou une annulation explicite. La déconnexion du navigateur n'invalide que la session courante. L'usage connecté vient du hub filtré par `apiKeyId`; l'usage déconnecté est local, sans réplication.
+
+### Afficher une clé API enregistrée
+
+L'affichage de la valeur complète d'une clé enregistrée exige une session du tableau de bord
+créée par un appairage explicite ou une identité Tailscale de confiance. Une session locale
+créée automatiquement peut lire la liste masquée, mais ne peut pas révéler les valeurs enregistrées.
+Le jeton administrateur ne peut pas non plus appeler cette opération réservée aux sessions.
+Utilisez le processus d'appairage Remote Hub existant ou une connexion Tailscale de confiance, si disponible.
+
+Le formulaire d'appairage local est proposé uniquement sur un tableau de bord autonome de même origine,
+ouvert en HTTP à l'adresse IP littérale `127.0.0.1` ou `[::1]`. L'origine doit correspondre à l'adresse
+IP de bouclage configurée pour l'écoute du serveur. Depuis `localhost` ou un alias, vérifiez cette adresse :
+rouvrez `http://127.0.0.1:<port>` pour une écoute sur `127.0.0.1`, ou `http://[::1]:<port>` pour
+une écoute sur `::1`, puis effectuez l'appairage. Un serveur dont le hostname est `localhost` n'a
+aucune origine admissible pour l'appairage local. Le tableau de bord ne peut pas déduire l'adresse
+d'écoute d'une URL avec un alias : il affiche donc le refus général sans suggérer une autre URL.
+
+Après l'appairage, cliquez à nouveau sur la clé pour demander sa valeur. L'appairage seul ne révèle aucune clé.
+Les valeurs affichées et l'état de copie sont effacés lorsque la session partagée est supprimée ou remplacée,
+au début d'un appairage, en quittant ce panneau, en masquant l'onglet ou la fenêtre de l'application,
+ou en changeant de serveur. Cela inclut les valeurs des clés créées ou remplacées, affichées une seule fois.
+Si la session autorisée expire ou est révoquée, effectuez à nouveau l'appairage.
 
 La garantie de remplacement lors d'une création de sous-agent s'applique au texte de consignes v2 **intégré**.
 Un `injectionPrompt` personnalisé remplace entièrement ce texte et doit contenir les espaces réservés
@@ -175,7 +197,8 @@ la connexion du compte appelant/principal. Les requêtes en cours conservent les
 capturés. Une réauthentification 401/403 ou un temps de recharge 429 peut effacer l'affinité et faire passer
 la route à un autre compte Pool admissible. Ce mécanisme est distinct d'`openai-apikey` et des autres fournisseurs.
 
-- Choisir manuellement un compte s'applique immédiatement : un fil déjà associé y passe à sa prochaine requête, et seules les requêtes déjà en cours conservent le compte capturé. Le choix manuel est aussi épinglé : la fiche affiche le badge **ÉPINGLÉ**, et un ordre de sélection supérieur ne peut pas prendre la priorité sur ce compte avant son épuisement, la sélection d'un autre compte ou la modification de l'ordre de sélection de n'importe quel compte.
+- Choisir manuellement un compte s'applique immédiatement : un fil déjà associé y passe à sa prochaine requête, et seules les requêtes déjà en cours conservent le compte capturé. Le choix manuel est aussi épinglé : la fiche affiche le badge **ÉPINGLÉ**, et un ordre de sélection supérieur ne peut pas prendre la priorité sur ce compte avant son épuisement, la sélection d'un autre compte ou la modification de l'ordre de sélection de n'importe quel compte. Sélectionner à nouveau le badge demande de confirmer la libération de l'épingle : une fois confirmée, la sélection est effacée, les fils déjà associés conservent le compte capturé, et les requêtes nouvelles ou sans association repassent à l'ordre de sélection et aux seuils.
+  Si le compte épinglé change pendant la confirmation, celle-ci ne peut pas libérer le nouveau compte épinglé. Après un refus ou un résultat incertain, la vue des comptes est actualisée ; vérifiez la sélection actuelle avant de confirmer à nouveau.
 - Chaque fiche de compte possède un contrôle **Ordre de sélection** (**Premier**, **Plus tôt**, **Normal**, **Plus tard**, **Dernier**). Les ordres supérieurs sont utilisés en premier ; le pool ne descend à un ordre inférieur qu'une fois tous les comptes supérieurs épuisés ou indisponibles. Un changement d'ordre s'applique dès la prochaine requête sans association et ne déplace jamais un fil déjà associé. Le compte Codex Desktop principal est ordonné comme les autres : il peut être placé en **Dernier** et conservé comme réserve. Un ordre défini avec `ocx account priority` en dehors de ces cinq préréglages reste visible et sélectionnable sur la fiche.
 - L'affinité des fils évite les changements à chaque requête. Avec `pool.cacheAffinity` activé (par défaut), un fil de longue durée n'est pas réassocié simplement parce que l'utilisation a atteint le seuil ; il reste jusqu'à ce que le compte soit épuisé ou ne puisse plus servir, puis seulement vers un compte dont l'utilisation est strictement inférieure et qui dispose d'une véritable marge de quota. Définissez le drapeau à `false` pour rétablir la réaffectation au seuil lorsqu'un compte admissible strictement moins utilisé existe.
 - Les nouvelles sessions peuvent choisir le compte admissible le moins utilisé. Pour les forfaits payants, le score retient la fenêtre connue la plus sollicitée parmi 5 h, une semaine et 30 jours ; les forfaits Go/Free utilisent uniquement la fenêtre de 30 jours.

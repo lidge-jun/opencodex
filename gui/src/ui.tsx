@@ -9,7 +9,7 @@ import { computeSelectMenuStyle } from "./select-position";
  * `label` is the accessible name. It is NOT rendered by default, which is correct
  * for a switch inside an already-labeled row and was also a defect: the two
  * provider-header switches passed a label and rendered a bare knob, so a sighted
- * user could not tell what they toggled (devlog/_plan/260830_models_provider_header/
+ * user could not tell what they toggled (devlog/_fin/260830_models_provider_header/
  * 020_control_affordances.md).
  *
  * `showLabel` renders the label as visible text INSIDE the button, so the words

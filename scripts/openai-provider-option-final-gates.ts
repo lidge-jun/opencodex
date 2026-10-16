@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { scanEvidence } from "./openai-provider-option-evidence-scan";
+import { getTestRunnerBun } from "./lib/test-runner-bun";
 
 export interface GateSpec {
   name: string;
@@ -126,7 +127,7 @@ if (import.meta.main) {
   const paths = ["030_e2e.json", "030_client_history.json", "030_runtime_smoke.json", "030_gate_summary.txt"].map(name => join(evidenceDir, name));
   const run = async (gate: GateSpec): Promise<GateResult> => {
     process.stdout.write(`[gate] ${gate.name}\n`);
-    const child = Bun.spawn(gate.command, {
+    const child = Bun.spawn(gate.command[0] === "bun" && gate.command[1] === "test" ? [getTestRunnerBun(), ...gate.command.slice(1)] : gate.command, {
       cwd: gate.cwd,
       env: gate.env ? { ...process.env, ...gate.env } : process.env,
       stdin: "ignore",

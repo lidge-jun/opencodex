@@ -1,4 +1,5 @@
 import { jsonResponse } from "../auth-cors";
+import { jevDecisionEndpointUrl } from "../../combos/jev-decision-contract";
 import type { ManagementContext } from "./context";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import { isPlainRecord } from "./shared";
@@ -29,7 +30,7 @@ function decisionServiceIssue(
   provider: DecisionRow,
   isSystemOneEndpoint: (url: string) => boolean,
 ): { url: string; model: string; issue?: "disabled" | "endpoint" | "model" } {
-  const url = typeof provider.baseUrl === "string" ? provider.baseUrl.trim().replace(/\/+$/, "") : "";
+  const url = typeof provider.baseUrl === "string" ? jevDecisionEndpointUrl(provider.baseUrl) : "";
   const model = provider.defaultModel?.trim() || provider.models?.[0]?.trim() || "";
   const issue = provider.disabled === true
     ? "disabled"

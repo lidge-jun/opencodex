@@ -100,3 +100,15 @@ describe("compaction emergency recovery policy", () => {
     expect(evidence.recoveryAttempts).toBe(0);
   });
 });
+
+describe("Ollama late-attribution refusal and emergency recovery", () => {
+  // The refusal's wire is 413 request_too_large, not a context code; an initial build
+  // refusal also has zero physical sends. Neither shape may start an emergency dispatch.
+  const refusal = { provider: "ollama-native", httpStatus: 413, errorCode: "request_too_large" } as const;
+  test("an initial build refusal (no physical send) does not recover", () => {
+    expect(decideCompactionRecovery(config, failure({ ...refusal, upstreamFailure: false })).recover).toBe(false);
+  });
+  test("a refusal after an earlier send still does not recover: request_too_large is not a context code", () => {
+    expect(decideCompactionRecovery(config, failure({ ...refusal, upstreamFailure: true })).recover).toBe(false);
+  });
+});

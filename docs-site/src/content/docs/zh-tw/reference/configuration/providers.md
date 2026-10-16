@@ -5,6 +5,12 @@ description: 供應商項目、認證、端點、模型目錄、配額、context
 
 供應商告訴 opencodex 模型在哪裡、它使用哪種 wire adapter，以及請求如何被認證。
 
+## 自訂供應商的上下文視窗
+
+自訂供應商未回報或設定模型視窗時，OpenCodex 依序使用 Azure 中繼資料、按模型 ID 查詢的內建廠商／聚合中繼資料、已啟用的 Context cap，最後回退至 128k。已發現值與設定值取較小者，Context cap 仍限制視窗，內建供應商行為不變。精確 ID 優先，大小寫或點號／連字號變體僅在無衝突時匹配；未知或浮動別名不猜測。推斷影響 Codex 壓縮預算及其他客戶端目錄（含 Claude 長上下文選擇），但不作為路由的實測能力。同名模型不保證中轉支援官方視窗；請用 modelContextWindows 或 Context cap 設定實際上限。不會自動啟用 cap，也不會呼叫模型探測。OpenAI API 視窗不代表 Codex 訂閱視窗。
+
+此推斷預設關閉，需按供應商設定 `inferContextWindow: true` 開啟。未開啟時，缺少視窗的模型使用已啟用的 Context cap，否則回退至 128k。
+
 ## 首次註冊時的模型選擇
 
 新的非 OAuth 連線會先等待可靠的模型清單，再公開模型。如果 Models 分頁中去重後的模型列達到20個，所有模型開關初始為 OFF，但供應商本身保持 ACTIVE。實際驗證方式為 OAuth 或 ChatGPT 登入的連線保留預設值。
@@ -31,7 +37,7 @@ ocx models provider openrouter on
 | `providerContextCapValues?` | `Record<string, number>` | `{}` | 各供應商最後選擇的上限，停用後仍保留。僅儲存這些值不會啟用上限。生效中的值優先於儲存的選擇值。 |
 | `contextCapValue?` | `number` | `350000` | 首次啟用時使用的預設值。再次啟用時恢復該供應商的選擇值。修改全域值時附帶 `setAll: true` 只會更新已啟用的上限；不帶值的 `setAll: true` 會以目前全域值啟用所有已設定供應商的上限。 |
 | `codexAccounts?` | `CodexAccount[]` | `[]` | 由 Codex Auth 管理的 ChatGPT/Codex 池帳號中繼資料。秘密分別存在 `codex-accounts.json`。 |
-| `pausedCodexAccountIds?` | `string[]` | `[]` | 被排除於池選擇直到恢復的帳號，包含暫停時的 main `__main__` 帳號。 |
+| `pausedCodexAccountIds?` | `string[]` | `[]` | 被排除於池選擇直到恢復的帳號，包含暫停時的 main `__main__` 帳號。 手動暫停或恢復會同步更新同一帳號、同一工作區的主登入與池內既有入口。 |
 | `codexAccountNamespaces?` | `Record<string, string>` | — | 公開模型選擇器命名空間到已儲存 Codex 帳號目標。這會驗證並持久化映射，但不會自行新增 picker 列或變更路由。 |
 | `activeCodexAccountId?` | `string` | — | 為下一個請求手動選擇的池帳號。選擇清除執行緒親和性；進行中的請求保留擷取的憑證。 |
 | `autoSwitchThreshold?` | `number` | `80` | 主動切換的用量閾值。`quota` 可在下一個請求時重新評估未綁定任務。綁定任務預設（`pool.cacheAffinity`）在越過閾值後仍會保留帳號，直到該帳號耗盡或無法繼續服務，並且只改綁到確有額度餘裕且用量嚴格更低的帳號。將 `pool.cacheAffinity` 設為 `false` 才會在此閾值重新評估綁定任務。`fill-first` 僅將其用作未綁定指派的排空點；一般 `round-robin` 選擇不使用它。分數使用最熱的已知 5h、週或 30d 配額視窗。`0` 僅停用基於用量的主動切換，而非未綁定指派或失敗復原。 |
@@ -40,6 +46,9 @@ ocx models provider openrouter on
 | `pool.cacheAffinity?` | `boolean` | `true` | 綁定 Codex 執行緒的 cache-affinity 排序，獨立於 `pool.kernel`。預設開啟；省略該鍵或設為 `true` 即為開啟，格式錯誤視為開啟。即時綁定優先於配額餘裕：`quota` 不會只因用量越過 `autoSwitchThreshold` 就移動執行緒。帳號暫停、無法使用或真正耗盡（已知用量 100%）時仍會離開，且只改綁到確有額度餘裕且用量嚴格更低的帳號。用量未知的帳號不會作為綁定任務的改綁目標。設為 `false` 可恢復依閾值重新綁定。親和性是重排而非釘死。 |
 | `accountPoolStickyLimit?` | `number` | `1` | 在前進一個 round-robin 選擇前保留的新／未綁定任務指派；計數器在任務綁定時前進，而非在上游成功後。範圍 1–100。 |
 | `upstreamFailoverThreshold?` | `number` | `3` | 未來新 session 容錯移轉前的連續暫時性失敗。設 `0` 停用。 |
+| `codexFailureWindow?` | `boolean` | `true` | 60 秒滑動失敗率，與連續計數併用。至少 20 次且失敗率 ≥25% 時帳號降級，只讓新執行緒避開；比率 ≤10% 並持續 30 秒後恢復。`false` 只使用連續計數。 |
+| `codexPinnedTransientPolicy?` | `"hold" \| "detour-new-threads"` | `"hold"` | 手動釘選帳號降級時，`hold` 繼續使用並記錄警告；`detour-new-threads` 只把新執行緒放到其他帳號。不會改派進行中的請求。 |
+| `codexWsReuseAcrossTurns?` | `boolean` | `false` | 選用：同一帳號與執行緒的 Codex WebSocket 跨回合重用。開啟後忙碌 socket 最多等待 750ms，模型或層級變更時最多保留 2 個 socket。 |
 | `modelCacheTtlMs?` | `number` | `300000` | Per-供應商 `/models` 快取的新鮮度視窗。 |
 | `cacheRetention?` | `"none" \| "short" \| "long"` | `"short"` | Anthropic prompt-cache 政策：停用、5 分鐘臨時或 1 小時延長。 |
 | `tokenGuardian?` | `OcxTokenGuardianConfig` | off | 可選的主動 OAuth refresh 與 Codex 帳號暖機政策。 |
@@ -74,9 +83,10 @@ ocx models provider openrouter on
 | `selectedModels?` | `string[]` | 探索後的目錄允許清單。非空時僅暴露那些 id；空或省略時暴露所有探索的模型。 |
 | `contextWindow?` | `number` | 供應商範圍的 Codex 可見 context 上限。較小的即時中繼資料被保留。 |
 | `modelContextWindows?` | `Record<string, number>` | Per-model context 上限。這些覆寫 `contextWindow` 且永不提高較小的即時中繼資料。 |
+| `inferContextWindow?` | `boolean` | 僅限自訂供應商，預設關閉。設為 `true` 時以內建模型中繼資料補足缺少的視窗；這是估計值，不代表中轉的實測容量。 |
 | `modelInputModalities?` | `Record<string, string[]>` | Per-model 輸入提示，如 `["text"]` 或 `["text", "image"]`。 |
 | `modelMaxInputTokens?` | `Record<string, number>` | 用於目錄自動壓縮提示的正數 per-model max input 限制。 |
-| `modelAutoCompactTokenLimits?` | `Record<string, number>` | Per-model 正安全整數型 soft 自動壓縮預算。此值只能降低「context 或 max input 的 90%」這個有效上限；沒有已知的權威 context window 時不會輸出。對 canonical `openai` 而言，key 必須是受支援的精確 native model ID，且不得含 provider 或 account-selector 前綴。Provider PATCH 會合併項目；將單一 key 設為 `null` 會刪除該 key，將整個欄位設為 `null` 會清空 map。這些 `null` tombstone 僅供 PATCH 使用。 |
+| `modelAutoCompactTokenLimits?` | `Record<string, number>` | Per-model 正安全整數型 soft 自動壓縮預算。此值只能降低「context 或 max input 的 90%」這個有效上限；無法解析出有效 context window 時不會輸出。對 canonical `openai` 而言，key 必須是受支援的精確 native model ID，且不得含 provider 或 account-selector 前綴。Provider PATCH 會合併項目；將單一 key 設為 `null` 會刪除該 key，將整個欄位設為 `null` 會清空 map。這些 `null` tombstone 僅供 PATCH 使用。 |
 | `defaultMaxOutputTokens?` | `number` | 當客戶端省略 `max_output_tokens` 時的供應商範圍 `openai-chat` 後備。 |
 | `modelMaxOutputTokens?` | `Record<string, number>` | 正數 per-model `openai-chat` 後援預算；精確／模式比對勝過供應商預設。 |
 | `headers?` | `Record<string, string>` | 額外上游標頭。Authorization、cookie、API-key 標頭、內嵌換行與無效名稱被拒絕。 |
@@ -106,8 +116,8 @@ ocx models provider openrouter on
 | `foldDeveloperRoleToSystem?` | `boolean` | 記錄某個 `openai-chat` 目的地是否接受 `developer` 角色。`foldDeveloperRoleToSystem` 未設定時以 `system` 傳送，`true` 時以 `system` 傳送，`false` 時以 `developer` 傳送。未設定表示尚未記錄該目的地的情況；`true` 記錄上游拒絕該角色；`false` 記錄其接受該角色。無論何者，訊息都保留在對話中的原有位置，只有角色改變。拒絕該角色的目的地會回應 `400 role 'developer' is not allowed`，該回合根本無法開始，這就是未記錄狀態預設摺疊的原因。 |
 | `parallelToolCalls?` | `boolean` | 切換平行工具呼叫。OpenAI Chat 預設開啟；非 chat adapter 僅在明確 `true` 時廣告。 |
 | `responsesItemIdRepair?` | `{ message?: string[]; reasoning?: string[]; repairMissingTerminalIds?: boolean }` | 預設停用的下游 SSE 修復，用於精確佔位 id 與缺失的終端 id。Function-call id 永不被重寫。 |
-| `transientRetryOn5xx?` | `{ enabled?: boolean; attempts?: number }` | 僅限使用金鑰認證的 `openai-chat` 與 `openai-responses` 供應商。`authMode: "forward"` 的供應商（ChatGPT 帳號池）從不讀取此選項，維持預設重試次數。選擇性重試串流開始前的暫時性上游狀態（500、502、503、504、520、521、522）：未設定時停用；只要有此物件即啟用，除非 `enabled: false`。涵蓋初始 `Responses` 請求、終止防護續接、原生 `/v1/chat/completions`，以及 429／帳號復原的重新擷取。`attempts` 是單一請求允許傳送至上游的總次數，包含第一次（1..10，預設 3）；這是與連線重設復原共用的單一請求範圍預算，因此 `3` 表示最多只有三個實際請求會送達供應商。等待採固定 400 毫秒、上限 5 秒的指數退避，並遵循 `Retry-After`。此機制獨立於處理速率限制的 `retryOn429`；串流中的失敗絕不重播。 |
-| `retryOnReset?` | `{ enabled?: boolean; replacements?: number }` | 僅限原生 `openai-responses` 供應商，包含 `authMode: "forward"`。可選擇性地替換一次在呼叫端尚未觀察到任何內容時就失敗的傳送：未設定時停用；只要有此物件即啟用，除非 `enabled: false`。涵蓋兩個不確定階段——回應標頭抵達前連線中斷，以及標頭之後 SSE 內文只載有控制事件時中斷。canonical ChatGPT upstream WebSocket 在 create 訊框送出之後、任何 Responses 事件抵達之前關閉或出錯時，也以相同方式處理，其替換傳送改走 HTTP。只有自我完備的請求才會被替換：`store: false`、完整的 `input`、沒有 `previous_response_id`／`conversation`／`stream_id`，且僅使用由用戶端執行的工具。`replacements` 是單一邏輯請求在所有環節與所有組合子請求中可進行的替換傳送次數（1..2，預設 1）；它既不是各環節的重試次數，也不是傳送預算，因此替換傳送仍必須落在該環節既有的傳送額度之內。已經產生輸出或工具呼叫的請求，無論此值為何都不會被替換。若上游已經開始第一次推論，被替換的推論仍可能計費，因此此選項預設停用。 |
+| `transientRetryOn5xx?` | `{ enabled?: boolean; attempts?: number }` | 僅限使用金鑰認證的 `openai-chat` 與 `openai-responses` 供應商。`authMode: "forward"` 的供應商（ChatGPT 帳號池）從不讀取此選項，維持預設重試次數。選擇性重試串流開始前的暫時性上游狀態（500、502、503、504、520、521、522）：未設定時停用；只要有此物件即啟用，除非 `enabled: false`。涵蓋初始 `Responses` 請求、終止防護續接、原生 `/v1/chat/completions`，以及 429／帳號復原的重新擷取。`attempts` 是單一請求允許傳送至上游的總次數，包含第一次（1..10，預設 3）；這是與連線重設復原共用的單一請求範圍預算，因此 `3` 表示最多只有三個實際請求會送達供應商。等待採固定 400 毫秒、上限 5 秒的指數退避，並遵循 `Retry-After`。此機制獨立於處理速率限制的 `retryOn429`；串流中的失敗絕不重播。 每個 Combo 目標都把預先預約的首次傳送計入該目標設定的總次數；`attempts: 1` 只傳送一次，不會退還預約來增加額度，也不會提高共用上限。傳送前的本機拒絕或取消會釋放未使用的預約。 |
+| `retryOnReset?` | `{ enabled?: boolean; replacements?: number }` | 適用於原生 `openai-responses` 供應商（包含 `authMode: "forward"`），以及收到上游回應標頭之前的通用 Responses 轉換傳送路徑。可選擇性地替換一次在呼叫端尚未觀察到任何內容時就失敗的傳送：未設定時停用；只要有此物件即啟用，除非 `enabled: false`。涵蓋兩個不確定階段——回應標頭抵達前連線中斷，以及標頭之後 SSE 內文只載有控制事件時中斷。canonical ChatGPT upstream WebSocket 在 create 訊框送出之後、任何 Responses 事件抵達之前關閉或出錯時，也以相同方式處理，其替換傳送改走 HTTP。只有自我完備的請求才會被替換：`store: false`、完整的 `input`、沒有 `previous_response_id`／`conversation`／`stream_id`，且僅使用由用戶端執行的工具。`replacements` 是單一邏輯請求在所有環節與所有組合子請求中可進行的替換傳送次數（1..2，預設 1）；它既不是各環節的重試次數，也不是傳送預算，因此替換傳送仍必須落在該環節既有的傳送額度之內。已經產生輸出或工具呼叫的請求，無論此值為何都不會被替換。若上游已經開始第一次推論，被替換的推論仍可能計費，因此此選項預設停用。 通用轉換傳送路徑的首次傳送和重建後的傳送都支援標頭之前連線重設後的替換，使用同一授權和傳送預算。配接器自行管理的傳輸，以及收到上游回應標頭之後的轉換串流故障，均不在此選項範圍內。 |
 | `autoToolChoiceOnlyModels?` | `string[]` | 其 `tool_choice` 僅接受 `auto` 或 `none` 的模型；強制選擇被降級。 |
 | `preserveReasoningContentModels?` | `string[]` | 需要在 chat 歷史中保留先前 assistant `reasoning_content` 的模型。從儀表板儲存時會保留已儲存的清單（包括 `[]`）。`PATCH /api/providers?name=<provider>` 接受陣列，或傳入 `null` 清除該欄位。將供應商改到其他轉接器、base URL 或驗證模式的儲存不會保留該清單（見下文）。 |
 | `reasoningDetailsModels?` | `string[]` | 以結構化 `reasoning_details` 陣列回傳思考內容的模型（啟用 `reasoning_split` 的 MiniMax M 系列）；串流增量為累積快照，以前綴差分處理，保留的推理以 `reasoning_details` 陣列而非 `reasoning_content` 字串重播。 |
@@ -184,8 +194,71 @@ API-key 供應商可持有字面值金鑰或環境參考。OAuth 供應商使用
 
 只有共用5小時或每週額度明確拒絕的429才會冷卻帳號並切換。暫時速率限制保留親和性，只暫停該帳號的請求准入；每個請求最多一次短暫的同帳號重試及一次合格兄弟帳號切換。沒有依據回應標頭的429只允許一次同帳號短暫重試，不冷卻帳號，也不產生Retry-After。預設單帳號行為不變。Fable專屬拒絕不限制Sonnet；手動選擇和親和性均檢查請求模型的共用與家族額度。被動家族資訊在30分鐘或已知重設時到期，由一個服務請求依序重新驗證。用量門檻仍是軟偏好，全部候選耗盡時保留原有退回機制，不是用量或帳單硬上限。親和性為行程本地且有界。Token 更新失敗保留原有重新認證規則。已分類的訂閱或帳號計費 403 可在輸出前切換帳號，並按 `Retry-After` 或預設十分鐘冷卻；一般權限拒絕不切換。若所有合格帳號都在冷卻，客戶端收到附帶已知 `Retry-After` 的 429，而非認證錯誤。
 
+當請求可用的每個帳號都因配額耗盡而被保留（共用 5 小時或每週視窗，或所請求模型家族的每週視窗）時，這個 429 是用量上限而非速率限制：Responses 本文的 `error.type` 與 `error.code` 為 `usage_limit_reached`；若每個被保留帳號的上游重設時間都已知，還會附上 `resets_at`（最早重設的 epoch 秒）。Codex 會停止並顯示何時可再試，而不是一路重試到 "exceeded retry limit"。最後一個帳號因配額耗盡被拒且沒有可替換帳號時，也會得到相同回應。只要有一個被保留帳號只是暫時限速、正在重新驗證模型家族或因權限被拒，回應就維持可重試的 `rate_limit_exceeded`。Combo 目標維持速率限制形式，讓 combo 能轉到下一個目標。原生 `/v1/messages` 維持 Anthropic 的 `rate_limit_error` 類型，訊息中會說明用量上限。
+
+只要一次新的用量讀取（儀表板的提供者頁面，或 `ocx account list anthropic --quota --refresh`）顯示每個被拒絕的視窗都低於 100%，配額冷卻就會提前解除，不論它來自 `Retry-After` 或視窗重設。這適用於升級方案或視窗提早重新開放的情況。在拒絕之前開始的讀取永遠不會解除它，權限類 403 冷卻會等到其截止時間。
+
 :::caution[實驗性]
 除非你了解 Anthropic 帳號政策風險，否則保持停用。不確定時偏好手動 `ocx account use anthropic <id>` 切換。
+:::
+
+### Anthropic · Pool 2 (`anthropic2`)
+
+`anthropic2`（「Anthropic · Pool 2」）是第二個內建的 Anthropic OAuth 供應商，擁有自己的帳戶池。它與 `anthropic` 使用同一套 Anthropic 實作：相同的登入流程、線路格式、原生 Messages 與 Responses 橋接以及模型中繼資料。只有帳號及其所在的帳戶池是分開的。以模型前綴選擇帳戶池：`anthropic/claude-sonnet-5` 使用主要帳戶池，`anthropic2/claude-sonnet-5` 使用 Pool 2。
+
+在你新增之前，Pool 2 處於休眠狀態。使用 `ocx login anthropic2` 登入，或在儀表板的供應商頁面新增 **Anthropic · 帳戶池 2**。首次登入成功後會建立帶有標記 `"anthropicOAuthInstance": "anthropic2"` 的 `providers.anthropic2`。Pool 2 永遠不會成為預設供應商：不帶前綴的 `claude-*` 模型名稱、預設模型以及 Claude Code 呼叫端轉送仍解析至 `anthropic`。你先前自行建立、沒有標記的 `anthropic2` 項目保留其自訂意義；登入會拒絕該名稱衝突，既不改寫該項目，也不改寫你的憑證。
+
+Pool 2 從自己的供應商項目讀取帳戶池設定。鍵、預設值與行為與上文的頂層 `anthropicAccountPool` 相同，且不從主要帳戶池繼承任何內容。`providers.anthropic.anthropicAccountPool`，以及任何其他供應商上的該欄位，都會被拒絕。
+
+```json
+{
+  "anthropicAccountPool": { "enabled": true, "strategy": "quota" },
+  "providers": {
+    "anthropic2": {
+      "adapter": "anthropic",
+      "authMode": "oauth",
+      "baseUrl": "https://api.anthropic.com",
+      "anthropicOAuthInstance": "anthropic2",
+      "anthropicAccountPool": { "enabled": true, "strategy": "round-robin" }
+    }
+  }
+}
+```
+
+兩個帳戶池在 opencodex 內部彼此隔離：
+
+- **憑證：** Pool 2 帳號以獨立的 `anthropic2` 鍵儲存在受保護的憑證存放區中。若登入的權杖或已驗證的 Anthropic 帳號已儲存在另一個帳戶池，該登入會被拒絕。
+- **帳戶池設定與執行階段狀態：** 選擇、工作階段親和性、冷卻、暫停、模型路由與各帳號閾值都只屬於一個帳戶池。路由的 `fallback: true` 只在同一帳戶池內放寬。
+- **配額與用量：** 用量探測、配額快取與用量歸屬依帳戶池分別記錄，因此同一個帳號 ID 同時存在於兩個帳戶池時，會有兩筆獨立記錄。
+- **重設額度：** Pool 2 使用自己的日誌（`anthropic2-reset-grant-ledger.json`），與維持不變的主要帳戶池日誌並存。
+- **復原：** 直接的 `anthropic2/<model>` 請求絕不會退回主要帳戶池，Pool 2 的速率限制或拒絕也絕不會讓主要帳戶池的帳號進入冷卻。明確指定兩個帳戶池的組合（combo）保留你宣告的目標。
+
+這種分離是 opencodex 內部的路由邊界。它不會改變 Anthropic 對待你帳號的方式，也不會消除上文所述的帳號政策風險。
+
+Pool 2 帳號只能透過瀏覽器 OAuth 新增。與 `anthropic` 不同，Pool 2 從不匯入、接管或回寫 Claude Code CLI 權杖；這項差異是刻意的。Pool 2 一開始是空的；沒有可用 Pool 2 帳號的 Pool 2 請求會以驗證錯誤失敗，而不會借用主要帳戶池或 Claude Code 的憑證。
+
+帳號命令與管理 API 以名稱指定帳戶池：`ocx account pool anthropic2 …`、`ocx account auto-switch anthropic2 …`、`ocx account routes anthropic2 …` 以及 `ocx account anthropic-reset-grants --provider anthropic2`。帳戶池設定與重設額度端點接受 `provider: "anthropic2"`；省略時仍使用主要帳戶池。
+
+#### 輔助功能的帳戶池選擇（`anthropicInstance`）
+
+網頁搜尋與視覺輔助功能在全域 `webSearchSidecar`、`visionSidecar` 設定以及 Claude Code 覆寫項目 `claudeCode.webSearchSidecar`、`claudeCode.visionSidecar` 中接受選用的 `anthropicInstance`。當輔助功能的後端為 Anthropic 時，儀表板會將其顯示為 **帳戶池** 選項。
+
+| 值 | 行為 |
+| --- | --- |
+| 未設定（預設） | 跟隨目前請求的帳戶池：`anthropic2/<model>` 請求使用 Pool 2，`anthropic/<model>` 請求使用主要帳戶池。來自其他供應商的請求保留現有的輔助功能探索邏輯，該邏輯從不選擇 Pool 2。 |
+| `"anthropic"` | 一律使用主要帳戶池。 |
+| `"anthropic2"` | 一律使用 Pool 2。 |
+
+此欄位僅在輔助功能的後端解析為 Anthropic 時生效。與其他後端一起設定會造成驗證錯誤；由於網頁搜尋預設使用 OpenAI，請同時設定 `"backend": "anthropic"`。以另一個帳戶池限定的輔助模型（例如 `anthropic/claude-sonnet-5` 搭配 `"anthropicInstance": "anthropic2"`）同樣會被拒絕。如果所選帳戶池沒有可用帳號，輔助功能會在送出任何內容之前失敗，不會切換到另一個帳戶池。此時主要請求會在沒有該輔助功能的情況下照常進行。未設定的選擇會儲存為缺省，而不是 `"anthropic"`。
+
+```json
+{
+  "webSearchSidecar": { "backend": "anthropic", "anthropicInstance": "anthropic2" }
+}
+```
+
+:::caution[降級]
+不含 Pool 2 的版本無法辨識 `anthropic2` 項目。安裝舊版之前，請停止代理、備份 `config.json` 與 `auth.json`，並從 `config.json` 中移除 `providers.anthropic2`。Pool 2 從不移動或改寫主要帳戶池的憑證。不支援在 Pool 2 啟用時就地降級。
 :::
 
 ### 受管記錄結構
@@ -369,7 +442,7 @@ Vercel AI Gateway 可在多個底層推論供應商之間路由一個模型。`v
 
 當探索應仍然執行但只有 selected id 應出現在 Codex 與 `/v1/models` 時，請使用 `selectedModels`。儀表板保留完整的探索清單供日後允許清單變更。
 
-預覽 GPT-5.6 後備項目使用相同機制。OpenAI API-key 預設以 context `922000` 與 max input `922000` 播種基礎與 Pro id；OpenRouter 以 context `922000` 播種 `openai/gpt-5.6-sol`、`openai/gpt-5.6-terra` 與 `openai/gpt-5.6-luna`。池／Direct 廣告 `922000`；同步目錄廣告 `max` 同時保持 `xhigh` 獨立。
+預覽 GPT-5.6 後備項目使用相同機制。OpenAI API-key 預設以 context `1050000` 與 max input `922000` 播種基礎與 Pro id；OpenRouter 以 context `1050000` 播種 `openai/gpt-5.6-sol`、`openai/gpt-5.6-terra` 與 `openai/gpt-5.6-luna`。原生池／Direct 的視窗遵循[保留 OpenAI 供應商政策](/reference/configuration/providers/#reserved-openai-providers)；同步目錄廣告 `max` 同時保持 `xhigh` 獨立。
 
 ```json
 {

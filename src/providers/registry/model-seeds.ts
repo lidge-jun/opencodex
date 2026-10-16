@@ -12,8 +12,10 @@ import type { ProviderModelDiscoverySpec } from "./types";
 // 260929 Claude Sonnet 5.5 (`claude-sonnet-5-5`, released 2026-09-28): 1M context / 128K output /
 // adaptive thinking / effort low..max with a high default, same price as Sonnet 5, per the Sonnet 5.5
 // overview, migration guide, effort and pricing pages (platform.claude.com).
-export const ANTHROPIC_MODELS = ["claude-fable-5-1", "claude-fable-5", "claude-sonnet-5-5", "claude-sonnet-5", "claude-opus-5-5", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"];
-export const ANTHROPIC_MODEL_CONTEXT_WINDOWS: Record<string, number> = { "claude-fable-5-1": 1_000_000, "claude-sonnet-5-5": 1_000_000, "claude-sonnet-5": 1_000_000, "claude-fable-5": 1_000_000, "claude-opus-5-5": 1_000_000, "claude-opus-5": 1_000_000, "claude-opus-4-8": 1_000_000, "claude-opus-4-7": 1_000_000, "claude-opus-4-6": 1_000_000, "claude-sonnet-4-6": 1_000_000, "claude-haiku-4-5": 200_000 };
+// 261008 Claude Haiku 5.5: 1M / 128K, adaptive thinking, effort low..max (default medium),
+// per platform.claude.com Haiku 5.5 overview, migration guide and pricing page.
+export const ANTHROPIC_MODELS = ["claude-fable-5-1", "claude-fable-5", "claude-sonnet-5-5", "claude-sonnet-5", "claude-opus-5-5", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-5-5", "claude-haiku-4-5"];
+export const ANTHROPIC_MODEL_CONTEXT_WINDOWS: Record<string, number> = { "claude-fable-5-1": 1_000_000, "claude-sonnet-5-5": 1_000_000, "claude-sonnet-5": 1_000_000, "claude-fable-5": 1_000_000, "claude-opus-5-5": 1_000_000, "claude-opus-5": 1_000_000, "claude-opus-4-8": 1_000_000, "claude-opus-4-7": 1_000_000, "claude-opus-4-6": 1_000_000, "claude-sonnet-4-6": 1_000_000, "claude-haiku-5-5": 1_000_000, "claude-haiku-4-5": 200_000 };
 // All seeded Claude models support vision: https://platform.claude.com/docs/en/models/overview
 export const ANTHROPIC_MODEL_INPUT_MODALITIES: Record<string, string[]> = Object.fromEntries(
   ANTHROPIC_MODELS.map(id => [id, ["text", "image"]]),
@@ -40,6 +42,7 @@ export const ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS = 64_000;
  * headroom arithmetic wrong.
  */
 export const ANTHROPIC_MODEL_MAX_OUTPUT_TOKENS: Record<string, number> = {
+  "claude-haiku-5-5": 128_000,
   "claude-fable-5-1": 128_000,
   "claude-fable-5": 128_000,
   "claude-sonnet-5-5": 128_000,
@@ -70,8 +73,8 @@ export const ANTHROPIC_MODEL_MAX_OUTPUT_TOKENS: Record<string, number> = {
  * do what it says:
  * - `minimal`: `adaptiveEffort` rewrites it to `low` (the adaptive wire 400s on it), so
  *   it is not a distinct setting.
- * - `none`: only sonnet >= 5 accepts an explicit thinking disable
- *   (`EXPLICIT_THINKING_DISABLE_FAMILY_MINIMUMS`); Fable rejects one outright.
+ * - `none`: thinking-off support differs by family (`anthropic-model-contract.ts`);
+ *   Haiku 5.5 accepts it without effort, while Fable rejects one outright.
  * - `ultra`: not an Anthropic concept, and it is degraded to `max` at the request
  *   boundary anyway (src/responses/parser.ts).
  */
@@ -126,7 +129,7 @@ export const ZAI_GLM_5X_SIDECAR_VISION_MODELS = ZAI_GLM_5X_MODELS.filter(id => i
  *
  * Authoritative source: `GET https://api.z.ai/api/v1/models` returns `input_modalities:
  * ["text"]` for glm-5.3 and `["text", "image"]` for glm-5.3-flash (captured in
- * devlog/_plan/260912_zcode_protocol_and_catalog/evidence/zai-responses-models.json).
+ * devlog/_fin/260912_zcode_protocol_and_catalog/evidence/zai-responses-models.json).
  * docs.z.ai/devpack/latest-model says the same in prose: "GLM-5.3 is a text-only model...
  * GLM-5.3-FLASH is a multimodal model". Upstream also lists video and file for Flash;
  * neither the internal vocabulary nor the export vocabulary can express them, so `image`
@@ -155,7 +158,7 @@ export const ZAI_GLM_5X_REASONING_EFFORTS: Record<string, string[]> = {
 // 260930 MiniMax-M3.1-Flash-Preview: Token Plan / MiniMax Code only, 1M context, thinking
 // always on (effort none or thinking disabled answers 400 code 2013), omitted effort = max.
 // It returns thinking as reasoning_content and ignores reasoning_split. The live /v1/models
-// roster does not list it yet. Evidence: devlog/_plan/260930_minimax_m31_flash_preview/.
+// roster does not list it yet. Evidence: devlog/_fin/260930_minimax_m31_flash_preview/.
 export const MINIMAX_M31_FLASH_PREVIEW = "MiniMax-M3.1-Flash-Preview";
 export const MINIMAX_MODELS = [
   MINIMAX_M31_FLASH_PREVIEW,
@@ -252,6 +255,23 @@ export const META_MUSE_CODE_REASONING_EFFORT_MAP: Record<string, string> = Objec
 /** Both Muse Spark 1.3 tiers publish a 1,048,576-token window (dev.meta.ai/docs/models). */
 export const META_MUSE_CONTEXT_WINDOW = 1_048_576;
 export const META_MUSE_MODELS = ["muse-spark-1.3", "muse-spark-1.3-contributor"];
+/*
+ * Muse Wonder (preview), announced 2026-10-12 (research.meta.ai/blog/muse-wonder). Per
+ * dev.meta.ai/docs/models and dev.meta.ai/docs/pricing-rate-limits, verified 2026-10-13:
+ * id muse-wonder-1.0, a 1,048,576-token window, reasoning effort "minimal" through "max",
+ * and Standard mode only on the Model API (no Contributor variant). Muse Wonder Full is
+ * reachable only inside Muse Code subscriptions and has no Model API id, so it is absent.
+ */
+export const META_MUSE_WONDER_MODEL = "muse-wonder-1.0";
+/** Roster both direct Meta providers serve: the Spark 1.3 tiers plus Muse Wonder. */
+export const META_MODEL_API_MODELS = [...META_MUSE_MODELS, META_MUSE_WONDER_MODEL];
+/** Model API ladders: Spark stops at xhigh; Wonder documents minimal..max. */
+export const META_MODEL_API_REASONING_EFFORTS: Record<string, string[]> = Object.fromEntries(
+  META_MODEL_API_MODELS.map(id => [id, id === META_MUSE_WONDER_MODEL ? META_MUSE_CODE_REASONING_EFFORTS : META_MUSE_REASONING_EFFORTS]),
+);
+export const META_MODEL_API_REASONING_EFFORT_MAPS: Record<string, Record<string, string>> = Object.fromEntries(
+  META_MODEL_API_MODELS.map(id => [id, id === META_MUSE_WONDER_MODEL ? META_MUSE_CODE_REASONING_EFFORT_MAP : META_MUSE_REASONING_EFFORT_MAP]),
+);
 /**
  * Daybreak program aliases. These `-latest` ids are the stable contract: OpenAI repoints
  * them at newer snapshots over time (red -> gpt-5.6-cyber, blue -> gpt-5.6-sol as of
@@ -413,7 +433,7 @@ export const COMMAND_CODE_IMAGE_MODELS = [
   // Live 2026-09-23 3x3 random-color grid (180x180) via ocx 2.62.0:
   // 4.7 read 9/9 in user messages and tool results; 4.6 read 9/9 and 8/9.
   // Neither route requested a vision sidecar. Evidence:
-  // devlog/_plan/260923_grok47_parity/010_probe-evidence.md.
+  // devlog/_fin/260923_grok47_parity/010_probe-evidence.md.
   "xai/grok-4.6",
   "xai/grok-4.7",
   // Native Z.AI VLM (docs.z.ai/guides/vlm/glm-5.3-flash). This exact id is already

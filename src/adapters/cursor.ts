@@ -65,6 +65,7 @@ import {
   type CursorTransportFactory,
 } from "./cursor/transport";
 import { cursorLiveRosterScope } from "./cursor/catalog";
+import { cursorUsesPlainToolWording } from "./cursor/tool-wording";
 
 export const CURSOR_API_URL = "https://api2.cursor.sh";
 
@@ -313,8 +314,10 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
           const armMidstreamEcho = cursorNeedsExternalToolContinuation(activeRequest.modelId) && replaysToolResult;
           const midstreamObserver = armMidstreamEcho ? new CursorMidstreamEchoObserver() : undefined;
           const midstreamFilter = armMidstreamEcho ? new ToolEnvelopeEchoFilter() : undefined;
+          // Claude's factual redirects allow truthful routing prose; it is not a failure claim.
           const armRoutingCommentarySniffer =
             isCursorExternalWireModel(activeRequest.modelId)
+            && !cursorUsesPlainToolWording(activeRequest.modelId)
             && (
               cursorRequestUsesCodeMode(activeRequest.tools, activeRequest.toolChoice)
               || cursorRequestHasShellAlias(activeRequest.tools)

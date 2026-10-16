@@ -1,7 +1,7 @@
 /** @jsxImportSource react */
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act, useState } from "react";
+import { act, useLayoutEffect, useState } from "react";
 import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
 import { useT } from "../src/i18n/shared";
@@ -37,6 +37,53 @@ const SNAPSHOT = {
   pendingOperation: null,
   journalAvailable: true,
 };
+
+test("switching pools rejects stale equal-ID reset reads and sends the selected provider", async () => {
+  const { createRoot } = await import("react-dom/client");
+  let controller!: ReturnType<typeof useAnthropicResetGrants>;
+  const reads: Array<{ provider: string; resolve: (response: Response) => void }> = [];
+  let spendBody: Record<string, unknown> | undefined;
+  globalThis.fetch = (async (input, init) => {
+    const url = new URL(String(input), "http://localhost");
+    if (init?.method === "POST") {
+      spendBody = JSON.parse(String(init.body));
+      return Response.json({ provider: "anthropic", code: "consumed", resetsLeft: 0 });
+    }
+    return new Promise<Response>(resolve => reads.push({ provider: url.searchParams.get("provider") ?? "anthropic", resolve }));
+  }) as typeof fetch;
+  function PoolHarness({ provider }: { provider: "anthropic" | "anthropic2" }) {
+    const current = useAnthropicResetGrants({ apiBase: "", provider, accountIds: ["acct-1"], enabled: true });
+    useLayoutEffect(() => { controller = current; }, [current]);
+    return null;
+  }
+  const host = testWindow.document.createElement("div");
+  const root = createRoot(host as unknown as HTMLElement);
+  try {
+    await act(async () => { root.render(<PoolHarness provider="anthropic2" />); });
+    expect(reads[0]?.provider).toBe("anthropic2");
+    await act(async () => { root.render(<PoolHarness provider="anthropic" />); });
+    expect(reads[1]?.provider).toBe("anthropic");
+    await act(async () => {
+      reads[1]!.resolve(Response.json({ ...SNAPSHOT, provider: "anthropic" }));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      reads[0]!.resolve(Response.json({ ...SNAPSHOT, provider: "anthropic2", atLimit: true }));
+      await Promise.resolve();
+    });
+    const current = controller.entries["acct-1"];
+    expect(current?.status).toBe("ready");
+    if (current?.status === "ready") expect(current.snapshot.atLimit).toBe(false);
+    await act(async () => { root.render(<PoolHarness provider="anthropic2" />); });
+    const outcome = await controller.spend("acct-1", { grantId: "fixture-grant", operationId: "11111111-1111-4111-8111-111111111111" });
+    expect(spendBody?.provider).toBe("anthropic2");
+    // A response cannot settle B's irreversible operation, even when the IDs match.
+    expect(outcome.kind).toBe("unknown");
+  } finally {
+    reads.forEach(read => read.resolve(Response.json({ ...SNAPSHOT, provider: read.provider })));
+    await act(async () => { root.unmount(); });
+  }
+});
 
 beforeEach(() => {
   testWindow = new Window({ url: "http://localhost/" });

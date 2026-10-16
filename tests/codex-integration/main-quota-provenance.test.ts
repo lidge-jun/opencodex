@@ -310,10 +310,11 @@ test("window replacement persists without carrying its proof into later partial 
   const publish = (data: WhamUsageResponse) => setAccountQuotaFromParsed(
     MAIN, parseUsageQuota(data), undefined, writer, parseMainPolicyUsageQuota(data),
   );
-  setAccountQuotaFromParsed(MAIN, { shortPercent: 100, shortWindowSeconds: 18_000, shortResetAt: 1 }, undefined, writer);
+  setAccountQuotaFromParsed(MAIN, { shortPercent: 100, shortWindowSeconds: 18_000,
+    shortResetAt: Date.now() / 1000 + 3_600 }, undefined, writer);
   expect(getMainAccountHardLockStatus(cfg).state).toBe("blocked");
   publish({ rate_limit: {
-    primary_window: null, secondary_window: { used_percent: 35, limit_window_seconds: 604_800 }, tertiary_window: null,
+    allowed: true, primary_window: { used_percent: 35, limit_window_seconds: 604_800 }, secondary_window: null,
   } });
   // Execute quota's actual debounced serializer through the existing deterministic clock.
   const persisted = flushPersistence();
@@ -323,6 +324,7 @@ test("window replacement persists without carrying its proof into later partial 
   writeFileSync(join(testDir, "codex-quota-cache.json"), persisted);
   expect(getMainAccountHardLockStatus(cfg).state).toBe("ready");
   expect(getMainPolicyQuota()?.shortPercent).toBeUndefined();
+  expect(getAccountQuota(MAIN)?.shortPercent).toBeUndefined();
   publish({ rate_limit: { primary_window: { used_percent: 99, limit_window_seconds: 18_000 } } });
   publish({ rate_limit: { primary_window: { used_percent: 0 } } });
   expect(getMainAccountHardLockStatus(cfg).state).toBe("blocked");

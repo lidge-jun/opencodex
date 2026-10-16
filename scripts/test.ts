@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { getTestRunnerBun } from "./lib/test-runner-bun";
 import {
   acquireTestRunLock,
   resolveWrappedTestRunLockPath,
@@ -15,6 +16,7 @@ import {
   removeTestTempTree,
   writeTestTempOwner,
 } from "./test-temp";
+import { listQuarantinedTestTemps } from "./test-temp-lock";
 
 export interface IsolatedTestEnvironment {
   root: string;
@@ -51,6 +53,8 @@ export function createIsolatedTestEnvironment(
   const opencodexHome = join(root, ".opencodex");
   const codexHome = join(root, ".codex");
   const containedTemp = createContainedTestTemp(root);
+  const transpilerCache = baseEnv.BUN_RUNTIME_TRANSPILER_CACHE_PATH ?? join(root, "bun-transpiler-cache");
+  if (baseEnv.BUN_RUNTIME_TRANSPILER_CACHE_PATH === undefined) mkdirSync(transpilerCache, { mode: 0o700 });
   mkdirSync(opencodexHome, { recursive: true });
   mkdirSync(codexHome, { recursive: true });
   if (process.platform === "win32") {
@@ -77,6 +81,10 @@ export function createIsolatedTestEnvironment(
       // real-home write guard can still know which path to protect.
       // (devlog 260730_codex_rs_upstream_v2_live_handoff/070.)
       OCX_REAL_HOME: baseEnv.OCX_REAL_HOME ?? homedir(),
+      // Same hand-off for the guard's Claude entry: the child gets a sandboxed
+      // CLAUDE_CONFIG_DIR below, so the developer's own value only survives here.
+      OCX_REAL_CLAUDE_CONFIG_DIR: baseEnv.OCX_REAL_CLAUDE_CONFIG_DIR
+        ?? (baseEnv.CLAUDE_CONFIG_DIR?.trim() || join(baseEnv.OCX_REAL_HOME ?? homedir(), ".claude")),
       // Pin git's global config to the developer's real one before HOME moves.
       //
       // git resolves ~/.gitconfig from HOME, so a sandboxed HOME makes it invisible.
@@ -88,10 +96,21 @@ export function createIsolatedTestEnvironment(
       // whichever adapter collected the metadata. Naming the file keeps the sandbox
       // (git still writes nothing here) while leaving git's own trust decisions intact.
       GIT_CONFIG_GLOBAL: baseEnv.GIT_CONFIG_GLOBAL ?? join(homedir(), ".gitconfig"),
+      // Cached JavaScript is executable input. Keep the default beneath the exclusively created
+      // private root; nested sandboxes and fixture children retain this path even when HOME moves.
+      // Independent runs start cold. A protected explicit cache can share across runs; "" and "0"
+      // still disable caching. Never adopt, repair or reclaim the old shared host-TEMP cache.
+      BUN_RUNTIME_TRANSPILER_CACHE_PATH: transpilerCache,
       HOME: root,
       USERPROFILE: root,
       OPENCODEX_HOME: opencodexHome,
       CODEX_HOME: codexHome,
+      // Client homes that otherwise default to os.homedir(). Bun keeps the home it read at
+      // startup, so a preload that only rewrites HOME leaves these at the developer's real
+      // directories, and Claude agent sync prunes generated files there (#6775). Pin them in
+      // the sandbox; never inherit a live override.
+      CLAUDE_CONFIG_DIR: join(root, ".claude"),
+      GROK_HOME: join(root, ".grok"),
       TEMP: containedTemp,
       TMP: containedTemp,
       TMPDIR: containedTemp,
@@ -364,6 +383,10 @@ export const SERIAL_FULL_SUITE_FILES = [
   "providers/cursor/cursor-native-exec-shell.test.ts",
   "codex-integration/issue-452-empty-503.test.ts",
   "adapters/openai/openai-provider-option-e2e.test.ts",
+  // Three Linux runs in a row timed out mid-file inside a 12-file batch while
+  // every case passed alone (37730984813, 37732846946, 37735238354, all test
+  // 1/4 batch 4): the same multi-file process-state class as the entries below.
+  "ci-workflows/ci-gui-typecheck-gate.test.ts",
   "ci-workflows/release-helper.test.ts",
   // The full macOS isolate pool stalled in the structure gate's synchronous Git
   // child after earlier files; fresh-process execution retains the same assertions.
@@ -395,6 +418,8 @@ export const SERIAL_FULL_SUITE_FILES = [
   "service/service.test.ts",
   "service/service-claim.test.ts",
   "service/service-wsl-home-ownership.test.ts",
+  "service/launchd-repair.test.ts",
+  "cli/cli-update-restart-home.test.ts",
   "codex-integration/native-codex-toggle.test.ts",
   "codex-integration/native-grok-toggle.test.ts",
 ] as const;
@@ -532,6 +557,42 @@ export function captureTestOutput(
   };
 }
 
+/**
+ * Remove a sandbox root after its lane exits.
+ *
+ * A contained subtree that was only renamed aside (`.trash-*`) is still inside this root.
+ * If that rename-aside is still locked when the root itself cannot be removed, the lane
+ * fails: swallowing it would hide a hold that outlasted the whole batch. A root that cannot
+ * be removed and has no quarantine left keeps the previous deferral, because a later run's
+ * stale-temp recovery is what retries that case.
+ */
+/** A green lane does not stay green when a quarantined tree is still locked at the end of the run. */
+export function exitCodeAfterTempSweep(
+  exitCode: number,
+  sweep: "removed" | "deferred" | "quarantine-remains",
+): number {
+  return sweep === "quarantine-remains" && exitCode === 0 ? 1 : exitCode;
+}
+
+export function settleIsolatedTestRoot(
+  root: string,
+  remove: (path: string) => void = removeTestTempTree,
+): "removed" | "deferred" | "quarantine-remains" {
+  try {
+    remove(root);
+    return "removed";
+  } catch (error) {
+    const remaining = listQuarantinedTestTemps(root);
+    if (remaining.length === 0) {
+      console.error("[test] deferred cleanup of one test root after Windows kept a handle open; a later run will retry it.");
+      return "deferred";
+    }
+    console.error(`[test] quarantined temp still could not be deleted: ${remaining.join(", ")}`);
+    console.error(error instanceof Error ? error.message : String(error));
+    return "quarantine-remains";
+  }
+}
+
 export async function runTestLane(
   lane: BunTestLane,
   runId: string,
@@ -541,6 +602,7 @@ export async function runTestLane(
     stdout: (value: string) => { process.stdout.write(value); },
     stderr: (value: string) => { process.stderr.write(value); },
   },
+  testRunner = getTestRunnerBun(),
 ): Promise<{ exitCode: number; output: string }> {
   const isolated = createIsolatedTestEnvironment({
     ...process.env,
@@ -554,7 +616,7 @@ export async function runTestLane(
   });
   const startedAt = Date.now();
   let interrupted: NodeJS.Signals | null = null;
-  const child = Bun.spawn([process.execPath, "test", ...lane.args], {
+  const child = Bun.spawn([testRunner, "test", ...lane.args], {
     env: isolated.env,
     stdin: "inherit",
     stdout: capture ? "pipe" : "inherit",
@@ -571,6 +633,7 @@ export async function runTestLane(
   process.once("SIGTERM", onTerminate);
 
   const exited = child.exited;
+  let laneResult: { exitCode: number; output: string } | undefined;
   try {
     let exitCode = await waitWithTimeout(exited, lane.timeoutMs);
     if (exitCode === null) {
@@ -593,19 +656,29 @@ export async function runTestLane(
       console.error("[test] captured output is incomplete; collected output is shown above.");
       if (exitCode === 0) exitCode = 1;
     }
-    if (exitCode === null) return { exitCode: 124, output };
-    if (interrupted === "SIGINT") return { exitCode: 130, output };
-    if (interrupted === "SIGTERM") return { exitCode: 143, output };
+    if (exitCode === null) {
+      laneResult = { exitCode: 124, output };
+      return laneResult;
+    }
+    if (interrupted === "SIGINT") {
+      laneResult = { exitCode: 130, output };
+      return laneResult;
+    }
+    if (interrupted === "SIGTERM") {
+      laneResult = { exitCode: 143, output };
+      return laneResult;
+    }
     const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
     console.warn(`[test] ${lane.label} finished in ${seconds}s (exit ${exitCode}).`);
-    return { exitCode, output };
+    laneResult = { exitCode, output };
+    return laneResult;
   } finally {
     process.off("SIGINT", onInterrupt);
     process.off("SIGTERM", onTerminate);
-    try {
-      isolated.cleanup();
-    } catch {
-      console.error("[test] deferred cleanup of one test root after Windows kept a handle open; a later run will retry it.");
+    if (laneResult) {
+      laneResult.exitCode = exitCodeAfterTempSweep(laneResult.exitCode, settleIsolatedTestRoot(isolated.root));
+    } else {
+      settleIsolatedTestRoot(isolated.root);
     }
   }
 }
@@ -652,6 +725,11 @@ export function ensureGuiDependencies(io: {
 }
 
 if (import.meta.main) {
+  let testRunner: string;
+  try { testRunner = getTestRunnerBun(); } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
   const requestedTests = process.argv.slice(2);
   const guiDependencies = ensureGuiDependencies();
   if (guiDependencies.kind === "failed") {
@@ -697,7 +775,7 @@ if (import.meta.main) {
       let exitCode = 0;
       let captured = "";
       for (const lane of resolveBunTestPlan(requestedTests, changedRun?.comparisonCommit)) {
-        const result = await runTestLane(lane, runId, inheritedLock, Boolean(changedRun));
+        const result = await runTestLane(lane, runId, inheritedLock, Boolean(changedRun), undefined, testRunner);
         captured += result.output;
         if (result.exitCode !== 0 && exitCode === 0) exitCode = result.exitCode;
         if ([124, 130, 143].includes(result.exitCode)) break;

@@ -62,7 +62,9 @@ test("family metadata uses the lower common capability instead of first-tier met
 });
 
 test("discovery mapping remains URL scoped and retires with cache generation", () => {
-  const base = "claude-opus-5-5";
+  // A family with no static ladder: Claude 5.5 now has one, so it no longer exercises the
+  // discovery-only fallback to the bare id.
+  const base = "claude-opus-6-1";
   registerAntigravityDiscoveredWireModels(baseUrl, parseAntigravityAvailableModels(payload(base))!, {
     provider: "family-test", cacheGeneration: captureModelCacheGeneration("family-test"),
   });

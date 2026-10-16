@@ -30,6 +30,7 @@ import {
   cursorFastPriceSupported,
   findContextTier,
   isLongContext,
+  pricingFamilyProvider,
   type Cost4,
   type ExpectedPriceOverlay,
   type ExpectedPriceStatus,
@@ -262,7 +263,7 @@ function resolveMatchedPriceExact(
   if (userOverlay) return userOverlay;
   if (!cursorFastPriceSupported(provider, modelId)) return null;
   const verifiedOverride = overlays === EXPECTED_PRICE_OVERLAYS
-    ? findVerifiedPriceOverride(provider, modelId)
+    ? findVerifiedPriceOverride(pricingFamilyProvider(provider), modelId)
     : undefined;
   if (verifiedOverride && verifiedOverride.status !== "unverified" && validCost4(verifiedOverride.cost4) && hasNonZeroCost(verifiedOverride.cost4)) {
     return {
@@ -291,7 +292,7 @@ function resolveMatchedPriceExact(
       ...cursorFastPriceProvenance(provider, modelId),
     };
   }
-  const overlay = findExpectedPriceOverlay(provider, modelId, overlays);
+  const overlay = findExpectedPriceOverlay(overlays === EXPECTED_PRICE_OVERLAYS ? pricingFamilyProvider(provider) : provider, modelId, overlays);
   if (!overlay || !validCost4(overlay.cost4) || !hasNonZeroCost(overlay.cost4)) {
     if (options.allowModelLevelFallback === false) return null;
     const fallback = resolveModelLevelPrice(provider, modelId);

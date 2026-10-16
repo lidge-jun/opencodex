@@ -58,11 +58,57 @@ describe("synced state directory detection (#6314)", () => {
   });
 
   test("the warning names the location kind and never a path", () => {
-    for (const location of ["icloud-drive", "file-provider", "icloud-desktop-documents"] as const) {
+    for (const location of ["icloud-drive", "file-provider", "icloud-desktop-documents", "google-drive-desktop-documents"] as const) {
       const text = syncedStateWarning(location).join("\n");
       expect(text).toContain("OPENCODEX_HOME");
       expect(text).not.toContain("/Users/");
     }
+    expect(syncedStateWarning("google-drive-desktop-documents").join("\n")).toContain("Google Drive");
+  });
+
+  test("Documents or Desktop counts when Google Drive for desktop is present (#6314)", () => {
+    const driveFs = `${HOME}/Library/Application Support/Google/DriveFS`;
+    const withDriveFs = probe({ entryExists: (path) => path === driveFs });
+    expect(syncedStateLocation(`${HOME}/Documents/ocx-trial/state`, withDriveFs)).toBe("google-drive-desktop-documents");
+    expect(syncedStateLocation(`${HOME}/Desktop/state`, withDriveFs)).toBe("google-drive-desktop-documents");
+    expect(syncedStateLocation(`${HOME}/.opencodex`, withDriveFs)).toBeUndefined();
+    expect(syncedStateLocation(`${HOME}/Documents-local/state`, withDriveFs)).toBeUndefined();
+
+    const listed = probe({
+      listEntries: (dir) => dir.endsWith("/CloudStorage") ? ["Dropbox", "GoogleDrive-user@example.com"] : [],
+    });
+    expect(syncedStateLocation(`${HOME}/Documents/state`, listed)).toBe("google-drive-desktop-documents");
+    expect(syncedStateLocation(`${HOME}/documents/state`, listed)).toBe("google-drive-desktop-documents");
+  });
+
+  test("a CloudStorage folder that is not Google Drive does not mark Documents as synced", () => {
+    const listed = probe({ listEntries: () => ["Dropbox", "OneDrive-work"] });
+    expect(syncedStateLocation(`${HOME}/Documents/state`, listed)).toBeUndefined();
+    const folded = probe({ listEntries: () => ["googledrive-work"] });
+    expect(syncedStateLocation(`${HOME}/Desktop/state`, folded)).toBe("google-drive-desktop-documents");
+  });
+
+  test("iCloud Desktop & Documents still wins when Google Drive is also present", () => {
+    const driveFs = `${HOME}/Library/Application Support/Google/DriveFS`;
+    const entryExists = (path: string): boolean => desktopDocumentsSynced(path) || path === driveFs;
+    expect(syncedStateLocation(`${HOME}/Documents/state`, probe({ entryExists }))).toBe("icloud-desktop-documents");
+  });
+
+  test("an unreadable Google Drive marker does not throw and does not warn", () => {
+    const entryExists = (path: string): boolean => {
+      if (path.endsWith("/Google/DriveFS")) throw Object.assign(new Error("unreadable"), { code: "EACCES" });
+      return false;
+    };
+    const listEntries = (): readonly string[] => {
+      throw Object.assign(new Error("unreadable"), { code: "EACCES" });
+    };
+    expect(syncedStateLocation(`${HOME}/Documents/state`, probe({ entryExists, listEntries }))).toBeUndefined();
+  });
+
+  test("Google Drive markers are ignored off macOS", () => {
+    const driveFs = `${HOME}/Library/Application Support/Google/DriveFS`;
+    const marked = probe({ platform: "linux", entryExists: (path) => path === driveFs });
+    expect(syncedStateLocation(`${HOME}/Documents/state`, marked)).toBeUndefined();
   });
 
   test("classification uses macOS path rules whatever host runs it", () => {

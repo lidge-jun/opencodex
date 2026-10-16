@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -12,17 +12,126 @@ import {
 } from "../../src/claude/intercept/settings";
 import { claudeInterceptEnabled, claudeInterceptProxyPort } from "../../src/claude/intercept/runtime";
 import { configSchema } from "../../src/config/schema/config-schema";
+import { applyClaudeModelDefaults, ModelDefaultsRecoveryError, previewClaudeModelDefaults } from "../../src/claude/model-default-settings";
 
 const CA = "/home/u/.opencodex/claude-intercept/ca.pem";
 const env = buildClaudeInterceptEnv(8846, CA, "test-token");
+const LOOPBACK = "127.0.0.1,localhost,::1,0.0.0.0";
+/** What apply writes into a block that had no NO_PROXY of its own. */
+const written = { ...env, NO_PROXY: LOOPBACK };
 
 function dir(): string {
   return mkdtempSync(join(tmpdir(), "ocx-intercept-settings-"));
 }
 
+function seed(configDir: string, doc: unknown): void {
+  writeFileSync(join(configDir, "settings.json"), JSON.stringify(doc));
+}
+
 function readSettings(configDir: string): Record<string, unknown> {
   return JSON.parse(readFileSync(join(configDir, "settings.json"), "utf8")) as Record<string, unknown>;
 }
+
+test("model default preview is read-only and apply changes only explicitly selected tiers", () => {
+  const configDir = dir();
+  const backups = dir();
+  const original = { model: "custom-main", env: { KEEP: "value", ANTHROPIC_DEFAULT_HAIKU_MODEL: "user-haiku" }, hooks: {} };
+  const raw = JSON.stringify(original);
+  writeFileSync(join(configDir, "settings.json"), raw);
+  const models = { opus: "combo/opus", sonnet: "combo/sonnet" };
+  const preview = previewClaudeModelDefaults(models, configDir);
+  expect(readFileSync(join(configDir, "settings.json"), "utf8")).toBe(raw);
+  expect(preview.changes.map(change => change.key)).toEqual(["ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL"]);
+  const result = applyClaudeModelDefaults(models, preview.fingerprint, configDir, backups);
+  expect(result.changed).toBe(true);
+  expect(readFileSync(result.backupPath!, "utf8")).toBe(raw);
+  expect(readSettings(configDir)).toEqual({ ...original, env: { ...original.env, ANTHROPIC_DEFAULT_OPUS_MODEL: "combo/opus", ANTHROPIC_DEFAULT_SONNET_MODEL: "combo/sonnet" } });
+  expect(applyClaudeModelDefaults(models, previewClaudeModelDefaults(models, configDir).fingerprint, configDir, backups).changed).toBe(false);
+});
+
+test("model default apply refuses stale settings or a changed saved tier", () => {
+  const configDir = dir();
+  const file = join(configDir, "settings.json");
+  writeFileSync(file, "{}");
+  const preview = previewClaudeModelDefaults({ opus: "combo/opus" }, configDir);
+  expect(() => applyClaudeModelDefaults({ opus: "other/model" }, preview.fingerprint, configDir, dir())).toThrow("settings_changed");
+  writeFileSync(file, '{"model":"edited"}');
+  expect(() => applyClaudeModelDefaults({ opus: "combo/opus" }, preview.fingerprint, configDir, dir())).toThrow("settings_changed");
+  expect(readSettings(configDir)).toEqual({ model: "edited" });
+});
+
+test("model default preview refuses malformed settings and non-object env", () => {
+  const configDir = dir();
+  for (const raw of ["", " ", "invalid", "[]", '{"env":[]}', '{"env":"invalid"}']) {
+    writeFileSync(join(configDir, "settings.json"), raw);
+    expect(() => previewClaudeModelDefaults({ opus: "combo/opus" }, configDir)).toThrow("settings_unreadable");
+    expect(readFileSync(join(configDir, "settings.json"), "utf8")).toBe(raw);
+  }
+});
+
+test("model default apply supports fresh installs without inventing an unselected main model", () => {
+  const configDir = dir();
+  const models = { opus: "combo/opus", sonnet: "combo/sonnet", haiku: "combo/haiku" };
+  const preview = previewClaudeModelDefaults(models, configDir);
+  expect(existsSync(join(configDir, "settings.json"))).toBe(false);
+  applyClaudeModelDefaults(models, preview.fingerprint, configDir, dir());
+  expect(readSettings(configDir)).toEqual({ env: {
+    ANTHROPIC_DEFAULT_OPUS_MODEL: "combo/opus", ANTHROPIC_DEFAULT_SONNET_MODEL: "combo/sonnet", ANTHROPIC_DEFAULT_HAIKU_MODEL: "combo/haiku",
+  } });
+});
+
+test("model default capture refuses late edits and restores the actual captured document", () => {
+  const configDir = dir();
+  const backups = dir();
+  const file = join(configDir, "settings.json");
+  writeFileSync(file, "{}");
+  const models = { opus: "combo/opus" };
+  const preview = previewClaudeModelDefaults(models, configDir);
+  const edited = '{"model":"late-edit","env":{"KEEP":"new"}}';
+  expect(() => applyClaudeModelDefaults(models, preview.fingerprint, configDir, backups, {
+    beforeCapture: () => writeFileSync(file, edited),
+  })).toThrow("settings_changed");
+  expect(readFileSync(file, "utf8")).toBe(edited);
+  expect(readFileSync(join(backups, readdirSync(backups)[0]!, "settings.json"), "utf8")).toBe(edited);
+});
+
+test("model default publication and rollback never overwrite a concurrent winner", () => {
+  for (const initiallyExists of [false, true]) {
+    const configDir = dir();
+    const backups = dir();
+    const file = join(configDir, "settings.json");
+    if (initiallyExists) writeFileSync(file, "{}");
+    const models = { opus: "combo/opus" };
+    const preview = previewClaudeModelDefaults(models, configDir);
+    const winner = '{"model":"concurrent-winner"}';
+    let failure: unknown;
+    try {
+      applyClaudeModelDefaults(models, preview.fingerprint, configDir, backups, {
+        beforePublish: () => writeFileSync(file, winner),
+      });
+    } catch (error) { failure = error; }
+    if (initiallyExists) {
+      expect(failure).toBeInstanceOf(ModelDefaultsRecoveryError);
+      const recovery = failure as ModelDefaultsRecoveryError;
+      expect(readFileSync(recovery.backupPath, "utf8")).toBe("{}");
+    } else expect((failure as Error).message).toBe("settings_changed");
+    expect(readFileSync(file, "utf8")).toBe(winner);
+    if (initiallyExists) expect(readFileSync(join(backups, readdirSync(backups)[0]!, "settings.json"), "utf8")).toBe("{}");
+    expect(readdirSync(configDir).some(name => name.startsWith(".model-defaults-"))).toBe(false);
+  }
+});
+
+test("model default publication failure restores the captured original without a rename fallback", () => {
+  const configDir = dir();
+  const file = join(configDir, "settings.json");
+  writeFileSync(file, '{"hooks":{}}');
+  const models = { opus: "combo/opus" };
+  const preview = previewClaudeModelDefaults(models, configDir);
+  expect(() => applyClaudeModelDefaults(models, preview.fingerprint, configDir, dir(), {
+    beforePublish: () => { throw new Error("publication_failed"); },
+  })).toThrow("publication_failed");
+  expect(readFileSync(file, "utf8")).toBe('{"hooks":{}}');
+});
 
 test("env block shape", () => {
   expect(env).toEqual({ HTTPS_PROXY: "http://opencodex:test-token@127.0.0.1:8846", NODE_EXTRA_CA_CERTS: CA });
@@ -32,8 +141,9 @@ test("apply creates settings.json when absent and is idempotent", () => {
   const configDir = dir();
   expect(inspectClaudeInterceptSettings(env, configDir)).toEqual({ kind: "absent" });
   expect(applyClaudeInterceptSettings(env, configDir)).toMatchObject({ ok: true, changed: true });
-  expect(readSettings(configDir)).toEqual({ env });
+  expect(readSettings(configDir)).toEqual({ env: written });
   expect(applyClaudeInterceptSettings(env, configDir)).toMatchObject({ ok: true, changed: false });
+  expect(readSettings(configDir)).toEqual({ env: written });
   expect(inspectClaudeInterceptSettings(env, configDir)).toEqual({ kind: "applied", env });
 });
 
@@ -43,7 +153,7 @@ test("apply preserves unrelated settings and env keys", () => {
   applyClaudeInterceptSettings(env, configDir);
   expect(readSettings(configDir)).toEqual({
     model: "opus",
-    env: { ANTHROPIC_MODEL: "gpt-x", FOO: "1", ...env },
+    env: { ANTHROPIC_MODEL: "gpt-x", FOO: "1", ...written },
     permissions: { allow: [] },
   });
 });
@@ -53,7 +163,7 @@ test("a previous port is stale and gets rewritten; a foreign proxy is left alone
   writeFileSync(join(configDir, "settings.json"), JSON.stringify({ env: { HTTPS_PROXY: "http://127.0.0.1:9000", NODE_EXTRA_CA_CERTS: CA } }));
   expect(inspectClaudeInterceptSettings(env, configDir)).toEqual({ kind: "stale", env: { HTTPS_PROXY: "http://127.0.0.1:9000", NODE_EXTRA_CA_CERTS: CA } });
   expect(applyClaudeInterceptSettings(env, configDir)).toMatchObject({ ok: true, changed: true });
-  expect(readSettings(configDir)).toEqual({ env });
+  expect(readSettings(configDir)).toEqual({ env: written });
 
   const foreign = dir();
   writeFileSync(join(foreign, "settings.json"), JSON.stringify({ env: { HTTPS_PROXY: "http://corp-proxy:3128" } }));
@@ -72,7 +182,7 @@ test("migrate rewrites an owned legacy env but never creates or touches foreign 
   const configDir = dir();
   writeFileSync(join(configDir, "settings.json"), JSON.stringify({ theme: "dark", env: { HTTPS_PROXY: "http://127.0.0.1:8846", NODE_EXTRA_CA_CERTS: CA } }));
   expect(migrateClaudeInterceptSettings(env, configDir)).toMatchObject({ ok: true, changed: true });
-  expect(readSettings(configDir)).toEqual({ theme: "dark", env });
+  expect(readSettings(configDir)).toEqual({ theme: "dark", env: written });
   expect(migrateClaudeInterceptSettings(env, configDir)).toMatchObject({ ok: true, changed: false });
 
   // Absent env stays absent — migration must not enable the integration by itself.
@@ -89,7 +199,9 @@ test("migrate rewrites an owned legacy env but never creates or touches foreign 
 
 test("remove deletes only owned values and drops an emptied env block", () => {
   const configDir = dir();
-  writeFileSync(join(configDir, "settings.json"), JSON.stringify({ model: "opus", env: { ...env } }));
+  writeFileSync(join(configDir, "settings.json"), JSON.stringify({ model: "opus" }));
+  applyClaudeInterceptSettings(env, configDir);
+  expect(readSettings(configDir)).toEqual({ model: "opus", env: written });
   expect(removeClaudeInterceptSettings(CA, configDir)).toMatchObject({ ok: true, changed: true });
   expect(readSettings(configDir)).toEqual({ model: "opus" });
   expect(removeClaudeInterceptSettings(CA, configDir)).toMatchObject({ ok: true, changed: false });
@@ -148,7 +260,7 @@ test("settings rollback refuses a newer managed proxy choice", () => {
   const configDir = dir();
   const rollback = captureClaudeInterceptSettingsRollback(env, configDir);
   applyClaudeInterceptSettings(env, configDir);
-  const newer = { ...env, HTTPS_PROXY: "http://127.0.0.1:12000" };
+  const newer = { ...written, HTTPS_PROXY: "http://127.0.0.1:12000" };
   writeFileSync(join(configDir, "settings.json"), JSON.stringify({ env: newer }));
   expect(rollback()).toBe(false);
   expect(readSettings(configDir)).toEqual({ env: newer });

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { spawnSync } from "node:child_process";
+import { spawnTestChild } from "../helpers/spawn-test-child";
+import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -76,7 +77,7 @@ beforeEach(() => {
   resetCatalogAutoRefreshForTests();
   resetCatalogAutoRefreshStatusForTests();
   sourceSpies = [
-    spyOn(bundled, "loadBundledCodexCatalog").mockReturnValue(null),
+    spyOn(bundled, "loadBundledCodexCatalogAsync").mockResolvedValue(null),
     spyOn(entitlements, "ensureCodexEntitlementFreshness").mockResolvedValue(undefined),
     spyOn(entitlements, "discoverCodexNativeRoster").mockResolvedValue("unavailable"),
     spyOn(appServerProcesses, "listCodexAppServerProcesses").mockReturnValue([]),
@@ -204,7 +205,7 @@ describe("catalog auto-refresh scheduler", () => {
   test.each(["none", "bundled", "roster", "discovery"])("sources settle before converge despite %s failure", async failure => {
     writeCatalogAutoRefreshConfig();
     const steps: string[] = [];
-    spyOn(bundled, "loadBundledCodexCatalog").mockImplementation(() => {
+    spyOn(bundled, "loadBundledCodexCatalogAsync").mockImplementation(async () => {
       steps.push("bundled");
       if (failure === "bundled") throw new Error("private source failure");
       return null;
@@ -227,7 +228,7 @@ describe("catalog auto-refresh scheduler", () => {
 
   test("stopping during source refresh prevents roster warm and convergence", async () => {
     writeCatalogAutoRefreshConfig();
-    spyOn(bundled, "loadBundledCodexCatalog").mockImplementation(() => {
+    spyOn(bundled, "loadBundledCodexCatalogAsync").mockImplementation(async () => {
       stopCatalogAutoRefresh();
       return null;
     });
@@ -316,7 +317,7 @@ describe("catalog auto-refresh scheduler", () => {
     await runCatalogAutoRefreshTickForTests();
     expect(catalogAutoRefreshTickCountForTests()).toBe(0);
     expect(convergeFactoryCalls).toBe(0);
-    expect(bundled.loadBundledCodexCatalog).not.toHaveBeenCalled();
+    expect(bundled.loadBundledCodexCatalogAsync).not.toHaveBeenCalled();
     expect(entitlements.ensureCodexEntitlementFreshness).not.toHaveBeenCalled();
     expect(lastCatalogAutoRefreshOutcome()).toBeNull();
   });
@@ -687,7 +688,7 @@ describe("catalog auto-refresh drift heal", () => {
     expect(selectDriftHealCatalogPath(journalPath, defaultPath, path => join(openCodexHome, path))).toBe(alternatePath);
   });
 
-  test("the drift branch passes a journaled non-default catalog to the injector", () => {
+  test("the drift branch passes a journaled non-default catalog to the injector", async () => {
     const root = mkdtempSync(join(tmpdir(), "ocx-heal-catalog-child-"));
     const home = join(root, "home");
     const ocx = join(root, "ocx");
@@ -734,22 +735,25 @@ describe("catalog auto-refresh drift heal", () => {
       spyOn(console, "info").mockImplementation(() => {});
       await scheduler.runCatalogAutoRefreshTickForTests();
       process.stdout.write(JSON.stringify({ received }));
+      await require(${JSON.stringify(fileURLToPath(new URL("../../src/config/paths.ts", import.meta.url)))}).flushConfigDirHardeningAndReaps(process.env.OPENCODEX_HOME);
     `;
+    let childCompleted = false;
     try {
-      const result = spawnSync(process.execPath, ["--eval", script], {
+      const result = await spawnTestChild([process.execPath, "--eval", script], {
         cwd: process.cwd(),
-        env: { ...process.env, HOME: home, OPENCODEX_HOME: ocx, CODEX_HOME: codex, TMPDIR: tmp },
-        encoding: "utf8",
-        timeout: 20_000,
+        env: { ...process.env, HOME: home, USERPROFILE: home, APPDATA: home,
+          OPENCODEX_HOME: ocx, CODEX_HOME: codex, TMPDIR: tmp, TMP: tmp, TEMP: tmp },
+        deadlineMs: 20_000,
       });
-      expect(result.status).toBe(0);
+      childCompleted = !result.timedOut && result.reaped && result.pipesClosed;
+      expect(result).toMatchObject({ exitCode: 0, timedOut: false, reaped: true, pipesClosed: true });
       expect(JSON.parse(result.stdout)).toEqual({ received: join(realpathSync.native(codex), "alternate-catalog.json") });
     } finally {
-      removeTreeWithRetry(root);
+      if (childCompleted) removeTreeWithRetry(root);
     }
-  });
+  }, SPAWN_BUDGET_MS);
 
-  test("a missing catalog defers injection until catalog convergence creates one", () => {
+  test("a missing catalog defers injection until catalog convergence creates one", async () => {
     const root = mkdtempSync(join(tmpdir(), "ocx-heal-missing-catalog-"));
     const home = join(root, "home");
     const ocx = join(root, "ocx");
@@ -795,23 +799,27 @@ describe("catalog auto-refresh drift heal", () => {
         deferred: info.some(line => line.includes("not re-injected this tick")) };
       await scheduler.runCatalogAutoRefreshTickForTests();
       process.stdout.write(JSON.stringify({ first, received, converges }));
+      await require(${JSON.stringify(fileURLToPath(new URL("../../src/config/paths.ts", import.meta.url)))}).flushConfigDirHardeningAndReaps(process.env.OPENCODEX_HOME);
     `;
+    let childCompleted = false;
     try {
-      const result = spawnSync(process.execPath, ["--eval", script], {
+      const result = await spawnTestChild([process.execPath, "--eval", script], {
         cwd: process.cwd(),
-        env: { ...process.env, HOME: home, OPENCODEX_HOME: ocx, CODEX_HOME: codex, TMPDIR: tmp },
-        encoding: "utf8", timeout: 20_000,
+        env: { ...process.env, HOME: home, USERPROFILE: home, APPDATA: home,
+          OPENCODEX_HOME: ocx, CODEX_HOME: codex, TMPDIR: tmp, TMP: tmp, TEMP: tmp },
+        deadlineMs: 20_000,
       });
-      expect(result.status).toBe(0);
+      childCompleted = !result.timedOut && result.reaped && result.pipesClosed;
+      expect(result).toMatchObject({ exitCode: 0, timedOut: false, reaped: true, pipesClosed: true });
       expect(JSON.parse(result.stdout)).toEqual({
         first: { received: [], converges: 1, catalogExists: true, rootsStillMissing: true, deferred: true },
         received: [join(realpathSync.native(codex), "opencodex-catalog.json")],
         converges: 2,
       });
     } finally {
-      removeTreeWithRetry(root);
+      if (childCompleted) removeTreeWithRetry(root);
     }
-  });
+  }, SPAWN_BUDGET_MS);
 
   test("invalid journal bytes and unsafe catalogs are read without mutation", () => {
     const journalPath = join(openCodexHome, "journal.json");
@@ -844,7 +852,7 @@ describe("catalog auto-refresh without a managed Codex client", () => {
     writeIntegrationOffConfig();
     await runCatalogAutoRefreshTickForTests();
     expect(convergeFactoryCalls).toBe(0);
-    expect(bundled.loadBundledCodexCatalog).not.toHaveBeenCalled();
+    expect(bundled.loadBundledCodexCatalogAsync).not.toHaveBeenCalled();
     expect(entitlements.ensureCodexEntitlementFreshness).not.toHaveBeenCalled();
     expect(entitlements.discoverCodexNativeRoster).not.toHaveBeenCalled();
     expect(catalogAutoRefreshTickCountForTests()).toBe(0);
@@ -854,7 +862,7 @@ describe("catalog auto-refresh without a managed Codex client", () => {
     writeIntegrationOffConfig({ enabled: true, intervalMinutes: 60 });
     await runCatalogAutoRefreshTickForTests();
     expect(convergeFactoryCalls).toBe(1);
-    expect(bundled.loadBundledCodexCatalog).not.toHaveBeenCalled();
+    expect(bundled.loadBundledCodexCatalogAsync).not.toHaveBeenCalled();
     expect(entitlements.ensureCodexEntitlementFreshness).not.toHaveBeenCalled();
     expect(entitlements.discoverCodexNativeRoster).not.toHaveBeenCalled();
   });

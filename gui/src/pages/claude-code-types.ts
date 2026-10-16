@@ -1,4 +1,4 @@
-import type { SidecarOverride } from "./claude-manual-env";
+import type { AnthropicPoolOptions, SidecarOverride } from "./claude-manual-env";
 
 export interface MapRow {
   id: string;
@@ -57,14 +57,24 @@ export interface ClaudeCodeState {
   maxContextTokens: number | null;
   autoContext: boolean;
   autoCompactWindow: number | null;
+  /** "1m" is the default; "200k" opts Claude surfaces out of automatic 1M (devlog 261009 030). */
+  contextAccounting: "1m" | "200k";
+  /**
+   * Accounting the server used when it built `effectiveModelEnv`. A draft can change
+   * `contextAccounting` before the next GET; the manual snippet must not mix the two.
+   */
+  servedContextAccounting?: "1m" | "200k";
+  /** Configured main slot. The manual snippet uses it to tell an explicit `[1m]` from an automatic one. */
+  model?: string;
   injectAgents: boolean;
   smallFastModel: string;
-  tierModels?: { haiku?: string };
+  tierModels?: { opus?: string; sonnet?: string; haiku?: string; fable?: string };
   effectiveModelEnv: Record<string, string>;
   available: string[];
   aliases: { id: string; display_name: string }[];
   webSearchSidecar?: SidecarOverride;
   visionSidecar?: SidecarOverride;
+  sidecarPools?: { webSearchSidecar: AnthropicPoolOptions; visionSidecar: AnthropicPoolOptions };
   port: number;
 }
 
@@ -95,4 +105,12 @@ export function formatCompactWindow(value: number, locale = "en"): string {
     return `${Math.round(value / 1_000)}k`;
   }
   return `${Math.round(value / 1_000)}k`;
+}
+
+/**
+ * The stored policy as the page edits it. A state cached by an older proxy, or read from one,
+ * has no field and is the "1m" default; anything but "200k" reads the same way.
+ */
+export function normalizeContextAccounting(value: unknown): "1m" | "200k" {
+  return value === "200k" ? "200k" : "1m";
 }

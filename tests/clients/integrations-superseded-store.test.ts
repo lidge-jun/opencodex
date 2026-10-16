@@ -123,6 +123,8 @@ describe("a client that moved its provider store", () => {
     createStore();
     const plan = previewIntegration(input(), { operation: "apply" });
     expect(plan.refusalReason).toBe("superseded_store");
+    expect(plan.supersededReason).toBe("unestablished-schema");
+    expect(plan.missingStoreDocument).toBeUndefined();
     expect(plan.canApply).toBe(false);
     expect(plan.willChange).toBe(false);
   });
@@ -150,6 +152,8 @@ describe("a client that moved its provider store", () => {
     // Both halves are true at once, and only the second one is new.
     expect(status.state).toBe("current");
     expect(status.supersededBy).toBe(storeFile);
+    expect(status.supersededReason).toBe("owned-config-file");
+    expect(status.missingStoreDocument).toBeUndefined();
   });
 
   test("disable still removes what we wrote before the client moved", () => {

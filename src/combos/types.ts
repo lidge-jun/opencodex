@@ -302,7 +302,7 @@ export function comboConfigIssues(
     } else if (!isSystemOneEndpoint(String(providers[decisionProvider]?.baseUrl ?? ""))) {
       issues.push({
         path: ["decisionProvider"],
-        message: `decisionProvider "${decisionProvider}" baseUrl must be the full decision endpoint ending in /systemone`,
+        message: `decisionProvider "${decisionProvider}" baseUrl must be a full HTTPS decision endpoint or an HTTP /systemone endpoint`,
       });
     } else if (options.requireUsableDecisionService && providers[decisionProvider]?.disabled === true) {
       issues.push({

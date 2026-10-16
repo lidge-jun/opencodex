@@ -28,6 +28,8 @@ export const RESPONSES_CORE_MODULES = [
   "core-auth.ts",
   "core-normalize.ts",
   "core-combo.ts",
+  "deferred-send-reporter.ts",
+  "combo-requested-effort.ts",
   "core-combo-native.ts",
   // Reached from core-combo.ts: the JEV model backend's internal decision turn.
   "jev-model-invoke.ts",
@@ -45,17 +47,23 @@ export const RESPONSES_CORE_MODULES = [
   "request-send-budget.ts",
   "passthrough-execution.ts",
   "passthrough-dispatch.ts",
+  // Reached from passthrough/adapter dispatch, compact and runTurn: local spend-ledger refusal mapping.
+  "spend-storage-error.ts",
   "reset-replay.ts",
   "passthrough-delivery.ts",
   "buffered-sse-json.ts",
   "terminal-error-redaction.ts",
+  "non-replayable-error.ts",
   "sidecar-execution.ts",
+  "sidecar-send-budget.ts",
   "completion-policy.ts",
   "run-turn-execution.ts",
   "adapter-dispatch.ts",
   "antigravity-validation-refusal.ts",
   "adapter-continuation.ts",
   "adapter-delivery.ts",
+  "advisor-slot.ts",
+  "advisor-plan-slot.ts",
   "policy-refusal.ts",
 ] as const;
 

@@ -2911,7 +2911,7 @@ describe("OpenAI Responses passthrough sanitization", () => {
     }]);
   });
 
-  test("external task parsing preserves the existing raw passthrough repair", () => {
+  test("raw passthrough emits external task input as the same user turn the parser does (#6764)", () => {
     const adapter = createResponsesPassthroughAdapter({
       adapter: "openai-responses", baseUrl: "https://api.x.ai/v1", authMode: "key" as const, apiKey: "xai-test",
     });
@@ -2925,7 +2925,7 @@ describe("OpenAI Responses passthrough sanitization", () => {
     expect(raw).toEqual(original);
     const body = JSON.parse(adapter.buildRequest(parsed, meta).body) as { input: unknown[] };
     expect(body.input).toEqual([{ type: "message", role: "user", content: [
-      { type: "input_text", text: "[tool output for unknown call]\nexternal input" },
+      { type: "input_text", text: "external input" },
     ] }]);
   });
 

@@ -32,7 +32,11 @@ import {
   resetMainAccountExternalUsageForTests,
 } from "../../src/codex/main-account-external-usage";
 import { clearCodexUpstreamHealth, clearThreadAccountMap, getCodexUpstreamHealth, getCodexQuotaHealthSnapshot, recordCodexUpstreamOutcome } from "../../src/codex/routing";
-import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar } from "../../src/providers/openai-sidecar";
+import {
+  listOpenAiForwardSidecarCandidates,
+  resolveCallerOwnedOpenAiSidecar,
+  resolveFirstUsableOpenAiSidecar,
+} from "../../src/providers/openai-sidecar";
 import { mapCodexAuthContextErrorToResponse } from "../../src/server/responses/codex-auth-error";
 import { handleResponses } from "../../src/server/responses/core";
 import { handleResponsesCompact } from "../../src/server/responses/compact";
@@ -578,6 +582,18 @@ describe("main quota policy at native admission", () => {
     forbidPhysicalReads();
     await expect(resolveFirstUsableOpenAiSidecar(listOpenAiForwardSidecarCandidates(cfg), caller(), cfg))
       .rejects.toBeInstanceOf(CodexMainAccountHardLockError);
+  });
+
+  test("a caller-owned voice join uses the same matched-main policy and never detours to Pool", () => {
+    // An existingCall join forwards the caller's own credential even in Pool mode. When that
+    // caller is the hard-locked main, the refusal must surface rather than a Pool account.
+    const cfg = config();
+    addAlternative(cfg);
+    observeMainQuotaCredential(bearer(), accountId);
+    quota(99);
+    forbidPhysicalReads();
+    expect(() => resolveCallerOwnedOpenAiSidecar(listOpenAiForwardSidecarCandidates(cfg), caller(), cfg))
+      .toThrow(CodexMainAccountHardLockError);
   });
 
   test("Responses applies matched-main policy only to the selected Codex-forward transport", async () => {

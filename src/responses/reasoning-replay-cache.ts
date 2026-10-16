@@ -19,7 +19,8 @@
  * long-lived proxy cannot grow without limit.
  */
 
-import { createHash, createHmac, randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { thoughtSignatureReplaySalt } from "./thought-signature-replay";
 import type {
   OcxProviderConfig,
   OcxReasoningReplayIdentity,
@@ -27,6 +28,21 @@ import type {
 } from "../types";
 
 const MAX_ENTRIES = 64;
+export interface NativeReasoningOwner { destination: string; credential: string }
+
+/** Bind exact ciphertext to the durable route that accepted it. */
+export function nativeReasoningTag(owner: NativeReasoningOwner | undefined, blob: string): string | undefined {
+  const salt = thoughtSignatureReplaySalt();
+  if (!owner || !salt || salt.length < 16 || blob.length === 0) return undefined;
+  return createHmac("sha256", salt).update("native-reasoning\0")
+    .update(JSON.stringify([owner.destination, owner.credential, createHash("sha256").update(blob).digest("hex")]))
+    .digest("hex");
+}
+
+export function nativeReasoningTagMatches(expected: string | undefined, presented: string | undefined): boolean {
+  if (!expected || !presented || !/^[a-f0-9]{64}$/.test(expected) || !/^[a-f0-9]{64}$/.test(presented)) return false;
+  return timingSafeEqual(Buffer.from(expected, "hex"), Buffer.from(presented, "hex"));
+}
 const MAX_TOTAL_BYTES = 256 * 1024;
 const TTL_MS = 60 * 60 * 1000;
 const OPAQUE_BLOB_REJECTION_TTL_MS = 5 * 60 * 1000;

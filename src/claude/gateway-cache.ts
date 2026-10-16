@@ -17,6 +17,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { localAdmissionToken, localInferenceDestination } from "../lib/local-destinations";
+import { assertNotRealClaudeConfigUnderTest } from "../lib/test-home-guard";
 import type { OcxConfig } from "../types";
 
 export interface GatewayModelRow {
@@ -46,11 +47,27 @@ export interface GatewayModelTarget {
 /** Claude Code config dir (CLAUDE_CONFIG_DIR override honored, like the CLI). */
 export function claudeConfigDir(): string {
   const custom = process.env.CLAUDE_CONFIG_DIR;
-  return custom && custom.length > 0 ? custom : join(homedir(), ".claude");
+  return custom && custom.length > 0 ? custom : join(currentUserHome(), ".claude");
+}
+
+/**
+ * The home Claude Code itself resolves. Claude Code runs on Node, whose `os.homedir()`
+ * consults HOME (POSIX) or USERPROFILE (Windows) at call time when it is set; Bun's
+ * `os.homedir()` keeps the value it read at startup. In production the two agree. Under
+ * the test preload, which rewrites HOME after Bun has started, only this one follows the
+ * sandbox — the cached value is the developer's real home (#6775). Exported for tests.
+ */
+export function currentUserHome(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): string {
+  const fromEnv = platform === "win32" ? env.USERPROFILE : env.HOME;
+  return fromEnv !== undefined && fromEnv !== "" ? fromEnv : homedir();
 }
 
 /** Write the cache file; returns its path or null (best-effort, never throws). */
 export function writeGatewayModelCache(baseUrl: string, models: readonly GatewayModelRow[], configDir = claudeConfigDir()): string | null {
+  // Outside the best-effort catch: an armed test process must not write here, and must
+  // fail loudly rather than degrade to "returned null".
+  // The file itself too: writeFileSync follows a link at gateway-models.json.
+  assertNotRealClaudeConfigUnderTest(configDir, join(configDir, "cache"), join(configDir, "cache", "gateway-models.json"));
   try {
     // Mirror the CLI's usable-id filter so our file matches what it would cache.
     const usable = models.filter(m => /(claude|anthropic)/i.test(m.id));

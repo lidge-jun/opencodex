@@ -3687,10 +3687,12 @@ describe("server local API auth", () => {
       expect(response.status).toBe(502);
       // #914: a dead-port refusal is pre-connection — host-wide, not account
       // evidence. Account health stays untouched; the (provider, host) ledger
-      // records the failure instead.
+      // records the failure instead, under whichever refusal code this Bun's fetch
+      // raised: 1.4.0 says ConnectionRefused, 1.4.3 says ECONNREFUSED, and
+      // PRE_CONNECT_REACHABILITY_CODES classifies both alike.
       expect(getCodexUpstreamHealth("pool-a")).toBeNull();
       expect(getUpstreamHostHealth(upstreamHostHealthKey("openai", "https://chatgpt.com")))
-        .toMatchObject({ consecutiveFailures: 1, lastFailureCode: "ConnectionRefused" });
+        .toMatchObject({ consecutiveFailures: 1, lastFailureCode: expect.stringMatching(/^(?:ConnectionRefused|ECONNREFUSED)$/) });
     } finally {
       await server.stop(true);
     }

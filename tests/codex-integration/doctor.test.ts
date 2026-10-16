@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import * as proxyLiveness from "../../src/server/proxy-liveness";
+import * as startupHealth from "../../src/codex/autostart-health";
+import * as cliStatus from "../../src/cli/status";
+import * as desktopSupervision from "../../src/service/desktop-supervision.mjs";
 import * as cliHelp from "../../src/cli/help";
 import { getDefaultConfig } from "../../src/config";
 import { spawnSync } from "node:child_process";
@@ -872,16 +875,21 @@ describe("doctor spill report wiring (end to end)", () => {
   let previousHome: string | undefined;
   let logged: string[];
   const realLog = console.log;
+  let restoreFetch: () => void;
 
   beforeEach(() => {
+    const fetch = spyOn(globalThis, "fetch").mockImplementation(async () => new Response(null, { status: 503 }));
+    restoreFetch = () => fetch.mockRestore();
     previousHome = process.env.OPENCODEX_HOME;
     tempHome = join(tmpdir(), `ocx-doctor-spill-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     mkdirSync(join(tempHome, "responses-state-spill"), { recursive: true });
     process.env.OPENCODEX_HOME = tempHome;
+    writeFileSync(join(tempHome, "config.json"), JSON.stringify({ port: 9, codexAutoStart: false }));
     logged = [];
     console.log = (...parts: unknown[]) => { logged.push(parts.join(" ")); };
   });
   afterEach(() => {
+    restoreFetch();
     console.log = realLog;
     if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousHome;
@@ -1010,16 +1018,21 @@ describe("doctor reclaim wiring (end to end)", () => {
   let previousHome: string | undefined;
   let logged: string[];
   const realLog = console.log;
+  let restoreFetch: () => void;
 
   beforeEach(() => {
+    const fetch = spyOn(globalThis, "fetch").mockImplementation(async () => new Response(null, { status: 503 }));
+    restoreFetch = () => fetch.mockRestore();
     previousHome = process.env.OPENCODEX_HOME;
     tempHome = join(tmpdir(), `ocx-doctor-temps-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     mkdirSync(tempHome, { recursive: true });
     process.env.OPENCODEX_HOME = tempHome;
+    writeFileSync(join(tempHome, "config.json"), JSON.stringify({ port: 9, codexAutoStart: false }));
     logged = [];
     console.log = (...parts: unknown[]) => { logged.push(parts.join(" ")); };
   });
   afterEach(() => {
+    restoreFetch();
     console.log = realLog;
     if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousHome;
@@ -1068,16 +1081,21 @@ describe("doctor reports an unclean prior proxy exit", () => {
   let previousHome: string | undefined;
   let logged: string[];
   const realLog = console.log;
+  let restoreFetch: () => void;
 
   beforeEach(() => {
+    const fetch = spyOn(globalThis, "fetch").mockImplementation(async () => new Response(null, { status: 503 }));
+    restoreFetch = () => fetch.mockRestore();
     tempHome = mkdtempSync(join(tmpdir(), "ocx-doctor-unclean-"));
     previousHome = process.env.OPENCODEX_HOME;
     process.env.OPENCODEX_HOME = tempHome;
+    writeFileSync(join(tempHome, "config.json"), JSON.stringify({ port: 9, codexAutoStart: false }));
     logged = [];
     console.log = (...args: unknown[]) => { logged.push(args.map(String).join(" ")); };
   });
 
   afterEach(() => {
+    restoreFetch();
     console.log = realLog;
     if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousHome;
@@ -1359,4 +1377,63 @@ describe("doctor Codex default model exposure (#4646)", () => {
       await server.stop(true);
     }
   });
+});
+
+
+describe("doctor desktop supervision projection", () => {
+  test.each(["live", "local-supervision-override", "stale"] as const)("%s uses Desktop recovery without service or restore hints", async source => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-doctor-supervision-"));
+    const previousHome = process.env.OPENCODEX_HOME;
+    const previousCodexHome = process.env.CODEX_HOME;
+    const previousExitCode = process.exitCode;
+    const restore: Array<() => void> = [];
+    try {
+      const codexHome = join(home, "codex");
+      mkdirSync(codexHome);
+      process.env.OPENCODEX_HOME = home;
+      process.env.CODEX_HOME = codexHome;
+      writeFileSync(join(home, "config.json"), JSON.stringify({ ...getDefaultConfig(), port: 9, codexAutoStart: false }));
+      const health = startupHealth.deriveStartupHealth({ routingKind: "opencodex-local", platform: "darwin",
+        autostartEnabled: true, serviceInstalled: false, serviceViable: false, serviceEnabled: false,
+        serviceRunning: false, serviceStale: false, serviceConflict: false, serviceSupported: true,
+        shimInstalled: false, shimHealthy: false, diagnosticStale: source === "stale",
+        desktop: { owned: false, loginEnabled: false, running: true, viable: false,
+          supervisor: { supervisorPid: 3131, runtimePid: 4242, app: "/fixture/opencodex-desktop" } } });
+      const old = { ...health, desktop: undefined, recommendedAction: undefined, recommendedCommand: "ocx service install" };
+      const logs: string[] = [];
+      const log = spyOn(console, "log").mockImplementation((...args: unknown[]) => logs.push(args.map(String).join(" ")));
+      restore.push(() => log.mockRestore());
+      const fetch = spyOn(globalThis, "fetch").mockImplementation(async () => new Response(null, { status: 503 }));
+      restore.push(() => fetch.mockRestore());
+      const live = spyOn(proxyLiveness, "findLiveProxy").mockResolvedValue({ pid: 4242, port: 9, source: "runtime" });
+      restore.push(() => live.mockRestore());
+      const liveStartup = spyOn(cliStatus, "fetchLiveStartupHealth").mockResolvedValue(source === "local-supervision-override" ? old : health);
+      restore.push(() => liveStartup.mockRestore());
+      let localCalls = 0;
+      const collect = spyOn(startupHealth, "collectStartupHealth").mockImplementation(() => { localCalls++; return health; });
+      restore.push(() => collect.mockRestore());
+      let probes = 0;
+      const inspect = spyOn(desktopSupervision, "inspectDesktopSupervision").mockImplementation(deps => {
+        expect(deps?.targetPid).toBe(4242);
+        probes++;
+        return { kind: "desktop", supervisorPid: 3131, runtimePid: 4242, app: "/fixture/opencodex-desktop", proxy: "/fixture/ocx" };
+      });
+      restore.push(() => inspect.mockRestore());
+      await runDoctor([]);
+      const hint = logs.find(line => line.includes("without persistent startup protection"));
+      expect(hint).toContain(health.recommendedAction!);
+      expect(hint).not.toContain("ocx service install");
+      expect(hint).not.toContain("ocx restore");
+      expect(probes).toBe(source === "local-supervision-override" ? 1 : 0);
+      expect(localCalls).toBe(source === "local-supervision-override" ? 1 : 0);
+    } finally {
+      for (const cleanup of restore.reverse()) cleanup();
+      process.exitCode = previousExitCode;
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+      removeTreeWithRetry(home);
+    }
+  }, STORE_BUDGET_MS);
 });

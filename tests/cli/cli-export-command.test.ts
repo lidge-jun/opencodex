@@ -577,7 +577,7 @@ describe("export allowlist parity", () => {
 });
 
 describe("keyless exports use the live management admission policy", () => {
-  for (const client of ["raycast", "droid"] as const) for (const secondary of [false, true]) {
+  for (const client of ["raycast", "droid", "qoder"] as const) for (const secondary of [false, true]) {
     test(`${client} live wildcard bind with secondary=${secondary} wins over saved loopback config`, async () => {
       const oldHome = process.env.OPENCODEX_HOME;
       const oldCodexHome = process.env.CODEX_HOME;
@@ -604,8 +604,9 @@ describe("keyless exports use the live management admission policy", () => {
         });
         if (secondary) {
           expect(result.code).toBe(0);
-          const document = JSON.parse(result.stdout) as { providers?: Array<{ base_url: string }>; customModels?: Array<{ baseUrl: string }> };
-          expect(client === "raycast" ? document.providers?.[0]?.base_url : document.customModels?.[0]?.baseUrl)
+          const document = JSON.parse(result.stdout) as { providers?: Array<{ base_url: string }> & { opencodex?: { baseUrl: string } }; customModels?: Array<{ baseUrl: string }> };
+          expect(client === "raycast" ? document.providers?.[0]?.base_url
+            : client === "qoder" ? document.providers?.opencodex?.baseUrl : document.customModels?.[0]?.baseUrl)
             .toBe("http://127.0.0.1:10237/v1");
           expect(readFileSync(out, "utf8")).toContain("10237/v1");
           expect(readFileSync(out, "utf8")).not.toContain("10999");
@@ -623,4 +624,30 @@ describe("keyless exports use the live management admission policy", () => {
       }
     });
   }
+});
+
+describe("ocx export with an unresolvable client destination", () => {
+  test("exports and writes --out once, reporting the destination as unknown", async () => {
+    const proxy = fakeProxy();
+    const oldDataDir = process.env.ZCODE_DATA_DIR;
+    // A relative override is a ClientPathError, the same class the ZCode bootstrap
+    // resolver raises for malformed or relative dataBaseDir settings (#6932).
+    process.env.ZCODE_DATA_DIR = "relative-zcode-root";
+    try {
+      const target = join(tempDir(), "zcode-config.json");
+      const result = await run(["--client", "zcode", "--out", target], { baseUrl: proxy.baseUrl });
+      expect(result.code).toBe(0);
+      expect(existsSync(target)).toBe(true);
+      expect(result.stdout).toContain("Destination: unknown (");
+      expect(result.stdout).toContain("ZCODE_DATA_DIR");
+
+      logs = [];
+      const json = await run(["--client", "zcode", "--json"], { baseUrl: proxy.baseUrl });
+      expect(json.code).toBe(0);
+      expect(() => JSON.parse(json.stdout)).not.toThrow();
+    } finally {
+      if (oldDataDir === undefined) delete process.env.ZCODE_DATA_DIR;
+      else process.env.ZCODE_DATA_DIR = oldDataDir;
+    }
+  });
 });

@@ -10,38 +10,24 @@
  * adapter-reported CatalogModel.contextWindow / the Anthropic registry for passthrough ids);
  * nothing is guessed.
  */
-import { aliasForNative, aliasForRoute, currentClaudeAliasSpelling, legacyAliasForNative, legacyAliasForRoute } from "./alias";
+import { aliasForNative, aliasForRoute, currentClaudeAliasSpelling, legacyAliasForNative, legacyAliasForRoute, resolveAlias } from "./alias";
 import { desktop3pAlias } from "./desktop-3p";
 import { nativeOpenAiContextWindow, type CatalogModel, type NativeContextLimitsInput } from "../codex/catalog";
 import { ANTHROPIC_MODEL_CONTEXT_WINDOWS } from "../providers/registry/model-seeds";
 import type { OcxClaudeCodeConfig } from "../types";
+import { AUTO_COMPACT_WINDOW_DEFAULT, AUTO_CONTEXT_FLOOR, ONE_MILLION } from "./long-context";
 
-const ONE_MILLION = 1_000_000;
+export { AUTO_COMPACT_WINDOW_DEFAULT, AUTO_CONTEXT_FLOOR } from "./long-context";
 
 /**
- * The native id each Claude Code tier alias resolves to (2.1.282: `--model opus` sends
- * `claude-opus-5-5`, `sonnet` sends `claude-sonnet-5`, `fable` sends `claude-fable-5-1`).
+ * The native id each Claude Code tier alias resolves to (2.1.296: `--model opus` sends
+ * `claude-opus-5-5`, `sonnet` sends `claude-sonnet-5-5`, `fable` sends `claude-fable-5-1`).
  * Behind a gateway Claude Code accounts an unmarked id at 200k, so an unset tier slot is filled
  * with this id when the map marks it (#5755). A marked alias cannot stand in: Claude Code sends
  * `sonnet[1m]` upstream unresolved. Haiku has no entry; its 200k window never marks.
  */
-const CLAUDE_CODE_NATIVE_TIERS = { opus: "claude-opus-5-5", sonnet: "claude-sonnet-5", fable: "claude-fable-5-1" } as const;
+const CLAUDE_CODE_NATIVE_TIERS = { opus: "claude-opus-5-5", sonnet: "claude-sonnet-5-5", fable: "claude-fable-5-1" } as const;
 
-/**
- * Auto-context defaults (devlog 260712 020, user-approved).
- *
- * The compact window is the token count at which Claude Code starts compacting, and it is
- * also the floor `shouldMarkOneMillion` uses — a model may only carry the marker if it can
- * host this window. 350,000 was chosen when the widest native row advertised 372,000.
- *
- * It now matches the auto-compaction limit the Codex catalog ships for the same models
- * (`nativeAutoCompactLimit`: 829,800 against the 922,000 native window). Leaving the two
- * apart meant one model compacting at 350k under Claude Code and at 829,800 under Codex.
- * The value stays clear of the measured 922,000 ceiling by ~92k, so compaction still has
- * room to run before the upstream refuses.
- */
-export const AUTO_COMPACT_WINDOW_DEFAULT = 829_800;
-export const AUTO_CONTEXT_FLOOR = 200_000;
 /** Binary-verified accepted range for CLAUDE_CODE_AUTO_COMPACT_WINDOW (2.1.207: pSo=1e5, yDs=1e6). */
 export const AUTO_COMPACT_WINDOW_MIN = 100_000;
 export const AUTO_COMPACT_WINDOW_MAX = ONE_MILLION;
@@ -59,14 +45,27 @@ export interface AutoContextMode {
   enabled: boolean;
   /** Effective CLAUDE_CODE_AUTO_COMPACT_WINDOW value (tokens). */
   compactWindow: number;
+  /** claudeCode.contextAccounting "200k": nothing is marked [1m] automatically, whatever its window. */
+  accounting200k?: true;
 }
 
 export const AUTO_CONTEXT_OFF: AutoContextMode = { enabled: false, compactWindow: AUTO_COMPACT_WINDOW_DEFAULT };
+
+/**
+ * Marking mode for surfaces whose runner may not inherit the compaction env (Desktop pickers,
+ * discovery, generated subagents). shouldMarkOneMillion under it equals isLongContextWindow
+ * (long-context.ts); kept as a mode so the existing marker helpers serve every surface.
+ */
+export const UNPAIRED_AUTO_CONTEXT: AutoContextMode = { enabled: true, compactWindow: AUTO_COMPACT_WINDOW_DEFAULT };
+
+/** The "200k" opt-in: no widening, no compact-window injection, no automatic marker. */
+export const ACCOUNTING_200K: AutoContextMode = { enabled: false, compactWindow: AUTO_COMPACT_WINDOW_DEFAULT, accounting200k: true };
 
 interface AutoContextConfigSlice {
   autoContext?: boolean;
   autoCompactWindow?: number;
   maxContextTokens?: number;
+  contextAccounting?: string;
 }
 
 function inAutoCompactRange(value: number): boolean {
@@ -90,6 +89,8 @@ function inAutoCompactRange(value: number): boolean {
  * to AUTO_COMPACT_WINDOW_DEFAULT (the management API rejects them; this guards hand-edits).
  */
 export function resolveAutoContext(claudeCode: AutoContextConfigSlice | undefined, envOverride?: string): AutoContextMode {
+  // The 200k opt-in wins over every other lever, a user-exported compact window included.
+  if (claudeCode?.contextAccounting === "200k") return ACCOUNTING_200K;
   if (claudeCode?.autoContext === false) return AUTO_CONTEXT_OFF;
   const maxCtx = claudeCode?.maxContextTokens;
   if (typeof maxCtx === "number" && Number.isFinite(maxCtx) && maxCtx > 0) return AUTO_CONTEXT_OFF;
@@ -132,6 +133,7 @@ export function claudeToolSearchEnv(value: boolean | string | undefined): string
  */
 export function shouldMarkOneMillion(window: number | undefined, auto: AutoContextMode): boolean {
   if (typeof window !== "number" || window <= 0) return false;
+  if (auto.accounting200k) return false;
   if (window >= ONE_MILLION) return true;
   return auto.enabled && window > AUTO_CONTEXT_FLOOR && window >= auto.compactWindow;
 }
@@ -248,7 +250,7 @@ export interface ClaudeTierModels {
  * value injected into BOTH haiku variables.
  */
 export function effectiveModelEnv(
-  claudeCode: { model?: string; smallFastModel?: string; tierModels?: ClaudeTierModels; autoContext?: boolean; autoCompactWindow?: number; maxContextTokens?: number } | undefined,
+  claudeCode: { model?: string; smallFastModel?: string; tierModels?: ClaudeTierModels; autoContext?: boolean; autoCompactWindow?: number; maxContextTokens?: number; contextAccounting?: string } | undefined,
   windows: Record<string, number>,
   autoOverride?: AutoContextMode,
 ): Record<string, string> {
@@ -272,6 +274,59 @@ export function effectiveModelEnv(
   const effectiveHaiku = claudeCode?.tierModels?.haiku ?? claudeCode?.smallFastModel;
   set("ANTHROPIC_DEFAULT_HAIKU_MODEL", effectiveHaiku);
   set("ANTHROPIC_SMALL_FAST_MODEL", effectiveHaiku);
+  return out;
+}
+
+/**
+ * Tier slots Claude Code pairs with a `<slot>_NAME` label (#6926). Its /model tier row is
+ * `label: <slot>_NAME ?? <first-party display name> ?? <slot value>` (2.1.296), and an
+ * `ocx-claude-*` alias is not a first-party id, so without the label the row prints the alias.
+ * The alias itself stays the submitted id: saved selections and inbound resolution depend on it.
+ */
+export const CLAUDE_TIER_LABEL_SLOTS = [
+  "ANTHROPIC_DEFAULT_OPUS_MODEL",
+  "ANTHROPIC_DEFAULT_SONNET_MODEL",
+  "ANTHROPIC_DEFAULT_FABLE_MODEL",
+  "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+] as const;
+
+export type ClaudeTierLabelSlot = (typeof CLAUDE_TIER_LABEL_SLOTS)[number];
+
+export function isClaudeTierLabelSlot(name: string): name is ClaudeTierLabelSlot {
+  return (CLAUDE_TIER_LABEL_SLOTS as readonly string[]).includes(name);
+}
+
+/**
+ * The picker label for a tier slot holding an OpenCodex alias, spelled like the discovery
+ * row's `display_name` (model-info.ts): `<slug> (native)`, `<model> (<provider>)` and a
+ * ` · 1M` variant. The native-namespaced `claude-*` selector is the Anthropic Fable picker
+ * alias, which discovery labels `(anthropic)`. A trailing `--fast` stays in the model name:
+ * without the catalog this cannot tell a synthetic Fast sibling from a real model whose id ends
+ * in `--fast`, and naming the exact model beats a prettier label that could name the wrong one.
+ * Anything that is not an alias (a first-party id, `provider/model`, a bare slug) gets no
+ * label: Claude Code either names it itself or the id is already what the user typed.
+ */
+export function claudeTierDisplayName(selector: string): string | undefined {
+  const trimmed = selector.trim();
+  const oneMillion = hasOneMillionMarker(trimmed);
+  const route = resolveAlias(stripOneMillionMarker(trimmed));
+  if (route === null) return undefined;
+  const slash = route.indexOf("/");
+  let provider = slash > 0 ? route.slice(0, slash) : "native";
+  const model = slash > 0 ? route.slice(slash + 1) : route;
+  if (!model) return undefined;
+  if (provider === "native" && model.startsWith("claude-")) provider = "anthropic";
+  return `${model} (${provider})${oneMillion ? " · 1M" : ""}`;
+}
+
+/** `{ "<slot>_NAME": label }` for each tier slot in `env` that holds an OpenCodex alias. */
+export function claudeTierDisplayNameEnv(env: Readonly<Record<string, string | undefined>>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const slot of CLAUDE_TIER_LABEL_SLOTS) {
+    const value = env[slot];
+    const label = value ? claudeTierDisplayName(value) : undefined;
+    if (label !== undefined) out[`${slot}_NAME`] = label;
+  }
   return out;
 }
 

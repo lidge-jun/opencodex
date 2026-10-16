@@ -11,7 +11,7 @@
  * so a process that dies between the two leaves a decision the next start can
  * act on — rather than artifacts the next start silently undoes.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,12 +19,14 @@ import { join } from "node:path";
 import { handleManagementAPI } from "../../src/server/management-api";
 import type { ManagementApiDeps } from "../../src/server/management/context";
 import type { OcxConfig } from "../../src/types";
+import * as serviceManagerProbe from "../../src/service-manager-probe";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 let fixtureRoot = "";
 let codexHome = "";
 let previousOpencodexHome: string | undefined;
 let previousCodexHome: string | undefined;
+let restoreServiceManagerProbe = () => {};
 const cleanup: string[] = [];
 
 function baseConfig(): OcxConfig {
@@ -73,6 +75,11 @@ function persistedCodexIntent(): unknown {
 }
 
 beforeEach(() => {
+  // The route fixture owns no service, and HOME cannot redirect launchctl/systemctl.
+  // Without this the host's own opencodex registration decides the case.
+  const probe = spyOn(serviceManagerProbe, "inspectServiceManagerInstallation")
+    .mockReturnValue({ kind: "absent" });
+  restoreServiceManagerProbe = () => probe.mockRestore();
   previousOpencodexHome = process.env.OPENCODEX_HOME;
   previousCodexHome = process.env.CODEX_HOME;
   // Native realpath resolves macOS /var aliases and expands Windows RUNNER~1
@@ -93,6 +100,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  restoreServiceManagerProbe();
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousOpencodexHome;
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
@@ -252,6 +260,12 @@ describe("turning Codex off", () => {
 });
 
 describe("turning Codex back on", () => {
+  test("enable inspects the fixture's service-manager evidence", async () => {
+    expect(serviceManagerProbe.inspectServiceManagerInstallation).not.toHaveBeenCalled();
+    await put(baseConfig(), { enabled: true });
+    expect(serviceManagerProbe.inspectServiceManagerInstallation).toHaveBeenCalled();
+  });
+
   test("removes the key rather than storing true", async () => {
     await put(baseConfig(), { enabled: false });
     expect(persistedCodexIntent()).toBe(false);

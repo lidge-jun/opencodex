@@ -5,7 +5,13 @@ Native result continuations and function-result injection follow [the mode-speci
 Native steering follows [the shared WebSocket contract](../transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
 
 Vision preprocessing and image/video/search execution use the Responses
-[core module ownership](../transports/responses.md#core-module-ownership). This surface retains its existing behavior.
+[core module ownership](../transports/responses.md#core-module-ownership). Hosted inference in
+`src/images/loop.ts` follows [prepaid initial sends](../transports/responses-spend.md#prepaid-initial-sends):
+fetchResponse/runTurn receives the adapter budget, while generic HTTP/WS reports final dispatch.
+Async media producers own unsent cleanup before the streaming Response returns. Iteration cleanup
+does not release a hosted hop while its runTurn producer is active; producer settlement releases any
+unsent hop and clears only its matching pending reference. Standalone Images and direct callers
+retain their existing behavior.
 
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
@@ -15,6 +21,8 @@ Codex Spark exception; standalone Images retain the separate relay contract belo
 [Responses transport](../transports/responses.md#responses-httpsse).
 
 Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](../transports/responses-wire-shapes.md#passthrough-sse-stream-shapes-314).
+
+Fetch-based Anthropic image bridge account recovery follows [the revoked-token contract](../providers/anthropic-account-pool.md#revoked-oauth-access-token-recovery), including output commitment and send-budget gates.
 
 ## Hosted Responses image display
 
@@ -179,7 +187,7 @@ Pool quota producers and account commands follow the [bounded raw-observation co
 
 Account quota surfaces use [safe probe diagnostics](../transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
-Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](../transports/responses.md) documents this boundary, and native Chat removes effort only for an explicit empty declaration or no-reasoning model.
+Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](../transports/responses.md) documents this boundary, and native Chat capability stripping applies only for an explicit empty declaration or no-reasoning model; an initial JEV null choice separately strips caller effort.
 
 Live sideband admission and its bounded upstream handshake follow the [runtime contract](../runtime.md#live-sideband-handshake); the ordinary Responses WebSocket exchange remains separate.
 

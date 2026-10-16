@@ -5,6 +5,12 @@ description: 공급자 항목, 인증, 엔드포인트, 모델 카탈로그, 할
 
 공급자는 opencodex에 모델의 위치, 사용하는 와이어 어댑터, 요청 인증 방식을 알려줍니다.
 
+## 사용자 지정 공급자의 컨텍스트
+
+모델 창이 보고되거나 설정되지 않으면 Azure 메타데이터, 모델 ID로 찾은 번들 공급업체/집계 메타데이터, 활성 Context cap, 128k 순서로 보완합니다. 보고된 값과 설정 값 중 작은 값을 유지하고 Context cap은 계속 상한으로 적용됩니다. 기본 공급자는 바뀌지 않습니다. 정확한 ID를 우선하며 대소문자 및 점/하이픈 변형은 충돌이 없을 때만 허용합니다. 추정값은 Codex 압축 예산과 Claude 등 클라이언트 카탈로그에 반영되지만 라우팅의 검증된 용량으로 취급하지 않습니다. 같은 모델 이름이 중계 서비스의 실제 용량을 보장하지 않으므로 modelContextWindows 또는 Context cap으로 실제 상한을 설정하세요. cap을 자동으로 켜거나 모델 시험 요청을 보내지 않습니다. OpenAI API 값은 Codex 구독의 제한이 아닙니다.
+
+이 추정은 기본적으로 꺼져 있습니다. 공급자별로 `inferContextWindow: true`를 설정해야 켜집니다. 설정하지 않으면 창이 없는 모델은 활성 Context cap, 그다음 128k를 사용합니다.
+
 ## 처음 등록할 때의 모델 선택
 
 신규 비-OAuth 연결은 신뢰할 수 있는 모델 목록을 확보할 때까지 모델 노출을 보류합니다. Models 탭의 중복 없는 모델 행이 20개 이상이면 모델 스위치를 모두 OFF로 설정합니다. 프로바이더는 활성 상태를 유지합니다. 실제 인증 방식이 OAuth나 ChatGPT 로그인인 연결은 기존 기본값을 유지합니다.
@@ -31,7 +37,7 @@ GUI에서 등록이나 OAuth 로그인을 마치면 Models 페이지로 이동�
 | `providerContextCapValues?` | `Record<string, number>` | `{}` | 공급자별로 마지막에 선택한 상한입니다. 꺼도 선택값이 남으며, 저장된 값만으로는 상한이 활성화되지 않습니다. 활성 값이 저장된 선택값보다 우선합니다. |
 | `contextCapValue?` | `number` | `350000` | 처음 켤 때 쓰는 기본값입니다. 다시 켜면 공급자별 선택값을 복원합니다. `setAll: true`와 함께 전역 값을 바꾸면 활성 상한만 갱신합니다. 값 없이 `setAll: true`를 보내면 설정된 모든 공급자의 상한을 현재 전역 값으로 켭니다. |
 | `codexAccounts?` | `CodexAccount[]` | `[]` | Codex Auth가 관리하는 ChatGPT/Codex 풀 계정 메타데이터입니다. 비밀 정보는 `codex-accounts.json`에 따로 저장됩니다. |
-| `pausedCodexAccountIds?` | `string[]` | `[]` | 일시 중지된 `__main__` 계정을 포함해, 재개될 때까지 Pool 선택에서 제외되는 계정입니다. |
+| `pausedCodexAccountIds?` | `string[]` | `[]` | 일시 중지된 `__main__` 계정을 포함해, 재개될 때까지 Pool 선택에서 제외되는 계정입니다. 수동 일시 중지 및 재개는 같은 계정과 워크스페이스의 기존 기본 로그인 및 풀 항목에도 적용됩니다. |
 | `codexAccountNamespaces?` | `Record<string, string>` | — | 임의의 공개 model selector를 저장된 Codex 계정 target에 연결하는 선택적 map입니다. 계정 한정 선택기 행이 활성화되어 있으면 target이 존재하는 각 selector는 Codex picker에 별도의 `<selector>/<native-openai-model>` row를 추가하며, 각 row는 해당 계정만 사용합니다. selector가 하나라도 활성화되면 bare native row는 picker에서 숨겨지지만, 명시적으로 비활성화하지 않는 한 해당 id는 계속 routing 가능하고 raw `/v1/models`에 표시됩니다. |
 | `codexAccountPickerEnabled?` | `boolean` | map이 비어 있으면 꺼짐 | 유효한 `codexAccountNamespaces` 매핑에서 account-qualified Codex 선택기 행을 생성할지 제어합니다. `true`는 매핑된 행의 표시를 허용합니다. 비어 있지 않은 map에서 생략하면 이전 버전과의 호환성을 위해 활성화된 것으로 취급되며, map이 비어 있으면 꺼집니다. `false`는 매핑을 삭제하거나 명시적 `<selector>/<native-openai-model>` 라우팅을 비활성화하지 않은 채 생성 행을 숨기고 선택기에 bare native 행을 복원합니다. |
 | `activeCodexAccountId?` | `string` | — | 다음 요청에 수동으로 선택한 Pool 계정입니다. 선택하면 thread 결속이 해제되며, 진행 중인 요청은 캡처한 자격 증명을 유지합니다. |
@@ -42,6 +48,9 @@ GUI에서 등록이나 OAuth 로그인을 마치면 Models 페이지로 이동�
 | `pool.cacheAffinity?` | `boolean` | `true` | 바인딩된 Codex 스레드의 cache-affinity 순서입니다. `pool.kernel`과는 별개이며 기본값은 켜짐입니다. 잘못된 값은 켜진 것으로 읽습니다. live 바인딩이 quota 여유보다 우선하므로 `quota`는 사용량이 `autoSwitchThreshold`를 넘었다는 이유만으로 스레드를 옮기지 않습니다. 해당 계정이 일시 중지되었거나 사용할 수 없거나 실제로 소진된 경우(알려진 usage 100%)에는 떠나되, 실제 quota 여유가 있고 usage가 더 낮은 계정으로만 옮깁니다. `false`로 두면 임계값 재바인딩이 복원됩니다. affinity는 고정이 아니라 재정렬입니다. |
 | `accountPoolStickyLimit?` | `number` | `1` | 한 round-robin 선택이 다음으로 넘어가기 전에 유지하는 새 작업/바인딩 없는 작업 배정 수입니다. 카운터는 업스트림 성공 뒤가 아니라 작업을 바인딩할 때 증가합니다. 범위 1–100이며 `accountPoolStrategy`가 `round-robin`일 때만 적용됩니다. |
 | `upstreamFailoverThreshold?` | `number` | `3` | 연속된 일시적 실패가 이 횟수에 도달하면 이후 새 세션은 failover됩니다. `0`으로 두면 비활성화됩니다. 일반 Responses와 네이티브 compact 전송에서 입증된 연결 전 DNS/TCP 도달 불가 실패는 provider-host 범위로 기록되며 계정 상태, 계정 쿨다운, 스레드/세션 선호도, 활성 계정 선택 또는 Pool 라우팅에 영향을 주지 않고 이 임계값에도 집계되지 않습니다. |
+| `codexFailureWindow?` | `boolean` | `true` | 60초 실패 비율. 20회 이상이고 25% 이상이면 계정이 저하되어 새 스레드만 피합니다. 10% 이하가 30초 유지되면 회복합니다. `false`면 연속 횟수만 사용합니다. |
+| `codexPinnedTransientPolicy?` | `"hold" \| "detour-new-threads"` | `"hold"` | 수동 핀이 저하되면 `hold`는 경고를 남기고 계속 사용하고, `detour-new-threads`는 새 스레드만 다른 계정에 둡니다. 이미 보낸 턴은 다시 보내지 않습니다. |
+| `codexWsReuseAcrossTurns?` | `boolean` | `false` | 같은 계정과 스레드의 Codex WebSocket을 턴 사이에 재사용합니다. 기본값은 꺼짐입니다. 켜면 바쁜 소켓을 최대 750ms 기다리고, 모델이나 티어가 바뀌어도 소켓을 최대 2개 유지합니다. |
 | `upstreamHostCircuitThreshold?` | `number` | `0` | 네이티브 OpenAI forward Responses와 compact 전송에서 입증된 연결 전 DNS/TCP 실패에 적용하는 선택적 회로 차단 임계값입니다. `0`은 비활성화하며, `1`~`20`은 이 횟수만큼 최종 논리 요청이 실패하면 provider-origin을 30초 동안 차단합니다. 차단 중에는 계정 선택이나 업스트림 전송 전에 `Retry-After`가 포함된 `503`을 반환하고, 시간이 지나면 반개방 요청 하나만 허용합니다. 타임아웃과 HTTP 응답은 집계하지 않으며, HTTP 응답이 하나라도 오면 회로를 닫습니다. Codex Pool 라우팅에서 계정이 고정되지 않은 경우에만 적용되며, `codexAccountMode: "direct"` 및 계정 한정 선택자에서는 동작하지 않습니다. |
 | `modelCacheTtlMs?` | `number` | `300000` | 공급자별 `/models` 캐시의 최신성 창입니다. |
 | `cacheRetention?` | `"none" \| "short" \| "long"` | `"short"` | Anthropic 프롬프트 캐시 정책입니다. 비활성, 5분짜리 임시, 1시간짜리 확장 중 하나입니다. |
@@ -66,7 +75,7 @@ managed map을 활성화하면 privacy-safe selector를 만들고, 이후 계정
 
 ## 예약된 OpenAI 공급자
 
-`openai`와 `openai-apikey`는 고정 예약 id입니다. `openai.codexAccountMode`의 기본값은 `"pool"`이며, 메인 계정과 추가된 계정 전체에서 선택합니다. `"direct"`는 현재 호출자/메인 로그인만 사용합니다. API는 설정된 API 키 또는 키 풀만 사용합니다. 모델 이름만 쓰거나 `openai-apikey/<model>`을 사용하십시오. 다른 라우트의 자격 증명으로는 대체하지 않습니다. API GPT-5.6 행에는 922,000 컨텍스트 / 922,000 최대 입력 메타데이터가 들어가며, Pro 가상 id는 기본 와이어 모델로 다시 쓰면서 `reasoning.mode: "pro"`를 적용합니다.
+`openai`와 `openai-apikey`는 고정 예약 id입니다. `openai.codexAccountMode`의 기본값은 `"pool"`이며, 메인 계정과 추가된 계정 전체에서 선택합니다. `"direct"`는 현재 호출자/메인 로그인만 사용합니다. API는 설정된 API 키 또는 키 풀만 사용합니다. 모델 이름만 쓰거나 `openai-apikey/<model>`을 사용하십시오. 다른 라우트의 자격 증명으로는 대체하지 않습니다. API GPT-5.6 행에는 1,050,000 컨텍스트 / 922,000 최대 입력 메타데이터가 들어가며, Pro 가상 id는 기본 와이어 모델로 다시 쓰면서 `reasoning.mode: "pro"`를 적용합니다.
 
 `openaiProviderTierVersion: 2`는 현재의 단일 공급자 투영을 표시합니다. 출시된 v1 설정을 마이그레이션하기 전에 opencodex는 `config.json.pre-openai-tiers-v2.bak`를 만들고, 기존에 다른 백업이 있더라도 덮어쓰지 않으며, 알려진 레거시 네임스페이스 지정 선택 id를 bare id로 다시 씁니다.
 
@@ -97,9 +106,10 @@ managed map을 활성화하면 privacy-safe selector를 만들고, 이후 계정
 | `modelDisplayNames?` | `Record<string, string>` | 이 공급자의 정확한 네이티브 모델 id를 키로 쓰는 영구 표시 전용 이름입니다. 키는 대소문자를 구분합니다. 이름은 공급자 카탈로그 메타데이터보다 우선하며 인증, 어댑터, 라우팅, 청구 또는 업스트림 요청을 바꾸지 않습니다. 맵은 발견 한도와 같은 최대 2,000개 항목을 가질 수 있습니다. |
 | `contextWindow?` | `number` | 업스트림 메타데이터가 없을 때 쓰이는 공급자 전반의 컨텍스트 값입니다. 메타데이터가 있으면 상한으로 동작해 더 작은 라이브 값을 그대로 둡니다. Models 대시보드에서 `providerContextCaps`와 별도로 설정합니다. |
 | `modelContextWindows?` | `Record<string, number>` | 모델별 컨텍스트 값이자 상한입니다. `contextWindow`보다 우선하며, 창 크기를 알 수 없으면 설정값을 쓰고 더 작은 라이브 메타데이터가 있으면 그쪽을 따릅니다. |
+| `inferContextWindow?` | `boolean` | 사용자 지정 공급자 전용이며 기본값은 꺼짐입니다. `true`이면 빠진 창을 번들 모델 메타데이터로 채웁니다. 추정값이며 중계의 실제 용량을 검증하지 않습니다. |
 | `modelInputModalities?` | `Record<string, string[]>` | `["text"]` 또는 `["text", "image"]` 같은 모델별 입력 힌트입니다. |
 | `modelMaxInputTokens?` | `Record<string, number>` | 카탈로그 자동 압축 힌트에 쓰는 양수 모델별 최대 입력 한도입니다. |
-| `modelAutoCompactTokenLimits?` | `Record<string, number>` | 모델별 양의 안전 정수형 소프트 자동 압축 예산입니다. 유효한 컨텍스트 또는 최대 입력의 90% 한도를 낮출 수만 있으며, 신뢰할 수 있는 컨텍스트 창을 알 수 없으면 내보내지 않습니다. canonical `openai`에서는 키가 공급자나 계정 선택자 접두사가 없는 정확한 지원 네이티브 모델 ID여야 합니다. 공급자 PATCH는 항목을 병합하며, 키를 `null`로 지정하면 해당 키를 삭제하고 필드 전체를 `null`로 지정하면 맵을 지웁니다. 이 `null` tombstone은 PATCH에서만 사용할 수 있습니다. |
+| `modelAutoCompactTokenLimits?` | `Record<string, number>` | 모델별 양의 안전 정수형 소프트 자동 압축 예산입니다. 유효한 컨텍스트 또는 최대 입력의 90% 한도를 낮출 수만 있으며, 유효 컨텍스트 창을 결정할 수 없으면 내보내지 않습니다. canonical `openai`에서는 키가 공급자나 계정 선택자 접두사가 없는 정확한 지원 네이티브 모델 ID여야 합니다. 공급자 PATCH는 항목을 병합하며, 키를 `null`로 지정하면 해당 키를 삭제하고 필드 전체를 `null`로 지정하면 맵을 지웁니다. 이 `null` tombstone은 PATCH에서만 사용할 수 있습니다. |
 | `defaultMaxOutputTokens?` | `number` | 클라이언트가 `max_output_tokens`를 생략했을 때 쓰는 공급자 전반의 `openai-chat` 폴백입니다. |
 | `modelMaxOutputTokens?` | `Record<string, number>` | 양수 모델별 `openai-chat` 폴백 예산입니다. 정확한 일치와 패턴 일치가 공급자 기본값보다 우선합니다. |
 | `modelCosts?` | `Record<string, Cost4>` | 모델별 표시 가격(100만 토큰당 USD). 해당 공급자의 정확한 업스트림 모델 ID를 키로 사용하며(공급자 식별자나 라우팅된 `provider/model` 레이블이 아님) 값은 `input`, `output`, `cacheRead`, `cacheWrite` 네 필드입니다(예: `{ "deepseek-v4-flash": { "input": 0.14, "output": 0.28, "cacheRead": 0.0028, "cacheWrite": 0 } }`). 커스텀 공급자는 `openai-chat` 어댑터로 임의의 OpenAI 호환 엔드포인트를 대상으로 할 수 있으며, 내장 카탈로그에 없는 로컬·내부 공급자 ID도 유효합니다. 사용자 구성 가격은 Logs `~$` 및 Usage 추정에서 내장 카탈로그보다 우선합니다. 기존 항목도 현재 오버레이로 다시 계산되므로 가격을 편집하면 과거 합계가 바뀔 수 있습니다(폴백 순서: 사용자 설정 → jawcode 카탈로그 → expected-price 오버레이 → 모델별 벤더 가격). 사용자가 모든 요율을 명시적으로 0으로 설정하면 비용을 0으로 추정합니다. 자동 가격으로 되돌리려면 해당 모델 항목을 삭제하세요. 카탈로그의 전부 0인 요율은 계속 다음 소스로 폴백합니다. 각 요율은 0 이상의 유한한 숫자이며 최대 1,000,000(100만 토큰당 USD)입니다. 범위를 벗어난 행은 관리 경계에서 거부되고 로드 시 삭제됩니다. 표시 전용 추정이며 라우팅·계정 선택·할당량·청구에는 영향을 주지 않습니다. |
@@ -134,8 +144,8 @@ managed map을 활성화하면 privacy-safe selector를 만들고, 이후 계정
 | `responsesItemIdRepair?` | `{ message?: string[]; reasoning?: string[]; repairMissingTerminalIds?: boolean; repairInvalidIds?: boolean }` | 기본값이 꺼진 downstream SSE 복구입니다. 정확한 자리표시자 id, 누락된 종료 id, 그리고(`repairInvalidIds`) 정규 `msg_`/`rs_` 접두사가 없는 message/reasoning id를 복구합니다. function-call id는 다시 쓰지 않습니다. 내장 DeepSeek은 마지막 두 가지를 기본으로 켭니다. |
 | `responsesSnapshotRepair?` | `boolean` | 기본값이 꺼진 클라이언트용 복구입니다. SSE와 JSON의 Responses 수명 주기에서 누락된 status, output, 도구 메타데이터를 채우며 raw 검사와 영속화는 변경하지 않습니다. |
 | `retryOn429?` | `{ enabled?: boolean; attempts?: number; intervalMs?: number; maxIntervalMs?: number; respectRetryAfter?: boolean }` | API-key 프로바이더 전용(`authMode: "key"`). 동일 대상 429 재시도: `retryOn429`가 없으면 기능이 꺼져 있고, 객체가 있으면 `enabled: false`가 아닌 한 활성화됩니다. 429 시 대기(업스트림 `Retry-After` 또는 고정 간격) 후 키 장애 조치 전에 동일 키로 동일 요청을 재전송합니다 — 일반 텍스트 턴 복구 루프, Responses passthrough, 이미지/비디오 브리지, web-search 사이드카, 터미널 연속 요청을 모두 포함합니다. 재전송 대상은 프리스트림 HTTP 429 응답뿐이며, 커스텀 `runTurn` 전송은 HTTP 재시도 루프에서 제외됩니다. `attempts`는 첫 429 이후의 동일 키 재전송 횟수(총 전송 = `attempts` + 1)이며, 메인 복구 루프·터미널 가드 연속 요청·브리지 재시도가 공유하는 요청 단위 예산입니다. `attempts`를 모두 소진해도 동일 키 재전송만 중단되며, 이후에는 일반 키 장애 조치 또는 최종 오류 처리가 사용 가능한 대상에 따라 진행됩니다 — 키 인증 passthrough 와이어에는 장애 조치가 없으므로 소진된 429가 그대로 반환됩니다. Codex 자체는 429를 재시도하지 않으므로 단일 키 프로바이더의 유일한 방어선입니다. 기본값: `enabled: true`, `attempts: 3`, `intervalMs: 5000`, `maxIntervalMs: 60000`(단일 대기는 `maxIntervalMs`로 상한, 그 자체는 600000으로 상한), `respectRetryAfter: true`. |
-| `transientRetryOn5xx?` | `{ enabled?: boolean; attempts?: number }` | 키 인증 `openai-chat` 및 `openai-responses` 프로바이더 전용입니다. `authMode: "forward"` 프로바이더(ChatGPT 계정 풀)는 이 옵션을 읽지 않고 기본 재시도 단계를 유지합니다. 스트림 시작 전의 일시적인 업스트림 상태(500, 502, 503, 504, 520, 521, 522)를 선택적으로 재시도합니다. 이 옵션이 없으면 꺼져 있고, 객체가 있으면 `enabled: false`가 아닌 한 활성화됩니다. 최초 Responses 요청, 터미널 가드 연속 요청, 네이티브 `/v1/chat/completions`, 429/계정 복구 재조회를 포함합니다. `attempts`는 최초 전송을 포함하여 요청 하나에 허용되는 업스트림 전송의 총횟수(1..10, 기본값 3)입니다. 연결 재설정 복구와 요청 단위 예산 하나를 공유하므로 `3`이면 실제로 프로바이더에 도달하는 요청은 최대 세 번입니다. 대기에는 400ms로 고정된 지수 백오프를 사용하고 상한은 5초이며 `Retry-After`를 따릅니다. 속도 제한을 처리하는 `retryOn429`와는 별개이며, 스트림 도중의 실패는 절대 재전송하지 않습니다. |
-| `retryOnReset?` | `{ enabled?: boolean; replacements?: number }` | 네이티브 `openai-responses` 프로바이더 전용이며 `authMode: "forward"`도 포함합니다. 호출자가 아무것도 관측하지 못한 채 실패한 전송을 선택적으로 대체합니다. 이 옵션이 없으면 꺼져 있고, 객체가 있으면 `enabled: false`가 아닌 한 활성화됩니다. 응답 헤더가 오기 전에 연결이 끊어진 경우와, 헤더 이후 SSE 본문이 제어 이벤트만 실은 채 끊어진 경우를 모두 다룹니다. canonical ChatGPT 업스트림 WebSocket에서 create 프레임을 보낸 뒤 Responses 이벤트가 오기 전에 소켓이 닫히거나 오류가 난 경우도 같은 방식으로 다루며, 이때 대체 전송은 HTTP로 보냅니다. 자체 완결된 요청만 대체합니다. `store: false`, 완전한 `input`, `previous_response_id`·`conversation`·`stream_id` 없음, 클라이언트가 실행하는 도구만 해당합니다. `replacements`는 모든 구간과 모든 콤보 자식을 합쳐 논리 요청 하나가 만들 수 있는 대체 전송 횟수입니다(1..2, 기본값 1). 구간별 재시도 횟수도 전송 예산도 아니므로, 대체 전송도 해당 구간이 이미 가진 전송 허용량 안에 들어가야 합니다. 이미 출력이나 도구 호출을 내보낸 요청은 이 값과 무관하게 대체하지 않습니다. 원본 전송이 이미 시작됐다면 대체한 추론도 과금될 수 있어서 기본값은 꺼짐입니다. |
+| `transientRetryOn5xx?` | `{ enabled?: boolean; attempts?: number }` | 키 인증 `openai-chat` 및 `openai-responses` 프로바이더 전용입니다. `authMode: "forward"` 프로바이더(ChatGPT 계정 풀)는 이 옵션을 읽지 않고 기본 재시도 단계를 유지합니다. 스트림 시작 전의 일시적인 업스트림 상태(500, 502, 503, 504, 520, 521, 522)를 선택적으로 재시도합니다. 이 옵션이 없으면 꺼져 있고, 객체가 있으면 `enabled: false`가 아닌 한 활성화됩니다. 최초 Responses 요청, 터미널 가드 연속 요청, 네이티브 `/v1/chat/completions`, 429/계정 복구 재조회를 포함합니다. `attempts`는 최초 전송을 포함하여 요청 하나에 허용되는 업스트림 전송의 총횟수(1..10, 기본값 3)입니다. 연결 재설정 복구와 요청 단위 예산 하나를 공유하므로 `3`이면 실제로 프로바이더에 도달하는 요청은 최대 세 번입니다. 대기에는 400ms로 고정된 지수 백오프를 사용하고 상한은 5초이며 `Retry-After`를 따릅니다. 속도 제한을 처리하는 `retryOn429`와는 별개이며, 스트림 도중의 실패는 절대 재전송하지 않습니다. 각 Combo 대상은 선예약한 첫 전송을 해당 대상의 설정 총횟수에 포함합니다. `attempts: 1`은 한 번만 전송하며, 예약을 환불해 여유를 만들거나 공유 상한을 늘리지 않습니다. 전송 전 로컬 거부나 취소는 미사용 예약을 해제합니다. |
+| `retryOnReset?` | `{ enabled?: boolean; replacements?: number }` | 네이티브 `openai-responses` 프로바이더(`authMode: "forward"` 포함)와 업스트림 헤더 수신 전의 일반 Responses 변환 전송 경로에 적용됩니다. 호출자가 아무것도 관측하지 못한 채 실패한 전송을 선택적으로 대체합니다. 이 옵션이 없으면 꺼져 있고, 객체가 있으면 `enabled: false`가 아닌 한 활성화됩니다. 응답 헤더가 오기 전에 연결이 끊어진 경우와, 헤더 이후 SSE 본문이 제어 이벤트만 실은 채 끊어진 경우를 모두 다룹니다. canonical ChatGPT 업스트림 WebSocket에서 create 프레임을 보낸 뒤 Responses 이벤트가 오기 전에 소켓이 닫히거나 오류가 난 경우도 같은 방식으로 다루며, 이때 대체 전송은 HTTP로 보냅니다. 자체 완결된 요청만 대체합니다. `store: false`, 완전한 `input`, `previous_response_id`·`conversation`·`stream_id` 없음, 클라이언트가 실행하는 도구만 해당합니다. `replacements`는 모든 구간과 모든 콤보 자식을 합쳐 논리 요청 하나가 만들 수 있는 대체 전송 횟수입니다(1..2, 기본값 1). 구간별 재시도 횟수도 전송 예산도 아니므로, 대체 전송도 해당 구간이 이미 가진 전송 허용량 안에 들어가야 합니다. 이미 출력이나 도구 호출을 내보낸 요청은 이 값과 무관하게 대체하지 않습니다. 원본 전송이 이미 시작됐다면 대체한 추론도 과금될 수 있어서 기본값은 꺼짐입니다. 일반 변환 전송 경로에서는 최초 전송과 재구축한 전송 모두 같은 대체 권한과 전송 예산으로 헤더 수신 전 연결 리셋을 대체합니다. 어댑터가 자체 관리하는 전송 경로와 업스트림 헤더 수신 후 변환 스트림 장애는 제외됩니다. |
 | `autoToolChoiceOnlyModels?` | `string[]` | `tool_choice`가 `auto` 또는 `none`만 받는 모델입니다. 강제 선택은 낮은 수준으로 바뀝니다. |
 | `preserveReasoningContentModels?` | `string[]` | chat 기록에서 이전 assistant `reasoning_content`가 필요한 모델입니다. 대시보드에서 저장해도 저장된 목록(`[]` 포함)은 유지됩니다. `PATCH /api/providers?name=<provider>`는 배열 또는 지우기 위한 `null`을 받습니다. 어댑터, 기본 URL, 인증 모드를 바꿔 다른 목적지로 옮기는 저장에서는 유지되지 않습니다(아래 절 참고). |
 | `reasoningDetailsModels?` | `string[]` | thinking을 구조화된 `reasoning_details` 배열로 반환하는 모델(`reasoning_split` 사용 MiniMax M 시리즈). 스트림 델타는 누적 스냅샷이라 prefix-diff로 처리하고, 보존된 reasoning은 `reasoning_content` 문자열 대신 `reasoning_details` 배열로 리플레이합니다. |
@@ -226,8 +236,71 @@ affinity 초기화 뒤의 기존 작업도 포함될 수 있습니다. 출력 �
 
 공유 5시간/주간 할당량의 거부가 확인된 429만 계정 쿨다운과 전환을 유발합니다. 일시적인 속도 제한은 affinity를 유지하며 해당 계정의 전송만 잠시 중지합니다. 요청마다 짧은 동일 계정 재시도 한 번과 적격한 다른 계정 전환 한 번까지만 허용됩니다. 근거 헤더가 없는 429는 동일 계정에서 한 번만 짧게 재시도하며 계정 상태를 냉각하지 않고 Retry-After를 만들어 붙이지 않습니다. 기본 단일 계정 동작은 유지됩니다. Fable 전용 거부는 Sonnet을 제한하지 않습니다. 수동 선택과 affinity도 요청 모델의 공유/계열 할당량을 확인합니다. 수동 조회가 아닌 응답 헤더의 계열 근거는 30분 또는 알려진 리셋 시각에 만료되며 요청 하나로 재확인합니다. 사용량 임계값은 소프트 선호이고 모든 후보가 소진되면 기존 폴백을 유지합니다. 사용량 또는 결제 하드 캡이 아닙니다. 결속은 프로세스 로컬이며 크기가 제한됩니다. 토큰 갱신 실패는 기존 재인증 규칙을 따릅니다. 확인된 구독 또는 계정 결제 403은 출력 전에 다른 계정으로 전환하며 `Retry-After` 또는 기본 10분 동안 냉각합니다. 일반 권한 거부는 전환하지 않습니다. 적격한 계정이 모두 쿨다운 중이면, 클라이언트는 인증 오류가 아니라 알려진 경우 `Retry-After`가 포함된 429를 받습니다.
 
+요청이 쓸 수 있는 모든 계정이 소진된 할당량(공유 5시간·주간 창, 또는 요청 모델 계열의 주간 창)으로 묶여 있으면 그 429는 속도 제한이 아니라 사용량 한도입니다. Responses 본문의 `error.type`과 `error.code`는 `usage_limit_reached`이고, 묶인 모든 계정의 업스트림 리셋 시각을 알면 `resets_at`(가장 이른 리셋의 epoch 초)도 담습니다. Codex는 "exceeded retry limit"까지 재시도하지 않고 언제 다시 시도할지 보여 주며 멈춥니다. 마지막 계정이 할당량 소진으로 거부하고 대체 계정이 없을 때도 같은 응답을 받습니다. 묶인 계정 중 하나라도 일시적 속도 제한, 모델 계열 재확인 중, 권한 거부 상태라면 재시도 가능한 `rate_limit_exceeded`를 유지합니다. Combo 대상은 다음 대상으로 넘어갈 수 있도록 속도 제한 형식을 유지합니다. 네이티브 `/v1/messages`는 Anthropic의 `rate_limit_error` 타입을 유지하고 메시지에서 사용량 한도를 알립니다.
+
+새 사용량 조회(대시보드 프로바이더 페이지 또는 `ocx account list anthropic --quota --refresh`)에서 거부된 모든 창이 100% 미만으로 나오면, 할당량 쿨다운은 `Retry-After`에서 왔든 창 리셋에서 왔든 일찍 풀립니다. 플랜 업그레이드나 창이 일찍 다시 열린 경우가 여기에 해당합니다. 거부 이전에 시작된 조회는 쿨다운을 풀지 않으며, 권한 403 쿨다운은 기한까지 기다립니다.
+
 :::caution[실험적 기능]
 Anthropic 계정 정책 위험을 이해하지 못한다면 이 기능은 꺼두십시오. 확신이 없으면 수동 `ocx account use anthropic <id>` 전환을 우선하십시오.
+:::
+
+### Anthropic · Pool 2 (`anthropic2`)
+
+`anthropic2`("Anthropic · Pool 2")는 자체 계정 풀을 가진 두 번째 내장 Anthropic OAuth 공급자입니다. `anthropic`과 같은 Anthropic 구현, 즉 같은 로그인 흐름, 와이어 형식, 네이티브 Messages와 Responses 브리지, 모델 메타데이터를 사용하며, 계정과 그 계정을 묶는 풀만 분리됩니다. 풀은 모델 접두사로 고릅니다. `anthropic/claude-sonnet-5`는 기본 풀을, `anthropic2/claude-sonnet-5`는 Pool 2를 사용합니다.
+
+Pool 2는 추가하기 전까지 비활성 상태입니다. `ocx login anthropic2`로 로그인하거나 대시보드 공급자 페이지에서 **Anthropic · 풀 2**를 추가하십시오. 첫 로그인이 성공하면 `"anthropicOAuthInstance": "anthropic2"` 표식이 붙은 `providers.anthropic2`가 만들어집니다. Pool 2는 기본 공급자가 되지 않습니다. 접두사 없는 `claude-*` 모델 이름, 기본 모델, Claude Code 호출자 전달은 계속 `anthropic`으로 해석됩니다. 예전에 직접 만든, 표식 없는 `anthropic2` 항목은 사용자 정의 의미를 유지하며, 로그인은 이름 충돌을 거부하고 그 항목과 자격 증명을 다시 쓰지 않습니다.
+
+Pool 2는 풀 설정을 자체 공급자 항목에서 읽습니다. 키, 기본값, 동작은 위의 최상위 `anthropicAccountPool`과 같고, 기본 풀에서 아무것도 상속하지 않습니다. `providers.anthropic.anthropicAccountPool`이나 다른 공급자에 둔 같은 필드는 거부됩니다.
+
+```json
+{
+  "anthropicAccountPool": { "enabled": true, "strategy": "quota" },
+  "providers": {
+    "anthropic2": {
+      "adapter": "anthropic",
+      "authMode": "oauth",
+      "baseUrl": "https://api.anthropic.com",
+      "anthropicOAuthInstance": "anthropic2",
+      "anthropicAccountPool": { "enabled": true, "strategy": "round-robin" }
+    }
+  }
+}
+```
+
+두 풀은 opencodex 안에서 분리됩니다.
+
+- **자격 증명:** Pool 2 계정은 보호된 자격 증명 저장소의 별도 키 `anthropic2` 아래에 저장됩니다. 토큰이나 검증된 Anthropic 계정이 이미 다른 풀에 저장된 로그인은 거부됩니다.
+- **풀 설정과 실행 상태:** 선택, 세션 결속, 쿨다운, 일시 중지, 모델 경로, 계정별 임계값은 한 풀에 속합니다. 경로의 `fallback: true`도 같은 풀 안에서만 넓어집니다.
+- **할당량과 사용량:** 사용량 조회, 할당량 캐시, 사용량 귀속은 풀별로 기록되므로, 두 풀에 같은 계정 ID가 있어도 기록은 따로 남습니다.
+- **리셋 부여:** Pool 2는 그대로 유지되는 기본 풀 저널 옆에 자체 저널(`anthropic2-reset-grant-ledger.json`)을 둡니다.
+- **복구:** `anthropic2/<model>` 직접 요청은 기본 풀로 넘어가지 않으며, Pool 2의 속도 제한이나 거부가 기본 풀 계정을 쿨다운시키지 않습니다. 두 풀을 모두 지정한 명시적 콤보는 선언한 대상을 그대로 유지합니다.
+
+이 분리는 opencodex 내부의 라우팅 경계입니다. Anthropic이 계정을 다루는 방식이나 위에서 설명한 계정 정책 위험은 바뀌지 않습니다.
+
+Pool 2 계정은 브라우저 OAuth로만 추가합니다. `anthropic`과 달리 Pool 2는 Claude Code CLI 토큰을 가져오거나, 채택하거나, 다시 쓰지 않으며, 이 차이는 의도된 것입니다. Pool 2는 빈 상태로 시작하고, 쓸 수 있는 Pool 2 계정이 없는 Pool 2 요청은 기본 풀이나 Claude Code 자격 증명을 빌리지 않고 인증 오류로 실패합니다.
+
+계정 명령과 관리 API는 풀을 이름으로 지정합니다: `ocx account pool anthropic2 …`, `ocx account auto-switch anthropic2 …`, `ocx account routes anthropic2 …`, `ocx account anthropic-reset-grants --provider anthropic2`. 풀 설정과 리셋 부여 엔드포인트는 `provider: "anthropic2"`를 받으며, 생략하면 기본 풀을 그대로 사용합니다.
+
+#### 보조 기능의 풀 선택 (`anthropicInstance`)
+
+웹 검색과 비전 보조 기능은 전역 `webSearchSidecar`, `visionSidecar` 설정과 Claude Code 재정의 `claudeCode.webSearchSidecar`, `claudeCode.visionSidecar`에서 선택적 `anthropicInstance`를 받습니다. 보조 기능의 백엔드가 Anthropic이면 대시보드에 **계정 풀** 선택 항목으로 나타납니다.
+
+| 값 | 동작 |
+| --- | --- |
+| 설정 안 함(기본값) | 현재 요청의 풀을 따릅니다. `anthropic2/<model>` 요청은 Pool 2를, `anthropic/<model>` 요청은 기본 풀을 사용합니다. 다른 공급자의 요청은 기존 보조 기능 탐색을 그대로 쓰며, 이 탐색은 Pool 2를 고르지 않습니다. |
+| `"anthropic"` | 항상 기본 풀을 사용합니다. |
+| `"anthropic2"` | 항상 Pool 2를 사용합니다. |
+
+이 필드는 보조 기능의 백엔드가 Anthropic으로 결정될 때만 적용됩니다. 다른 백엔드와 함께 설정하면 검증 오류입니다. 웹 검색의 기본 백엔드는 OpenAI이므로 `"backend": "anthropic"`도 함께 설정하십시오. `anthropic/claude-sonnet-5`에 `"anthropicInstance": "anthropic2"`를 지정하는 것처럼 다른 풀로 한정된 보조 모델도 거부됩니다. 고른 풀에 쓸 수 있는 계정이 없으면 보조 기능은 아무것도 보내기 전에 실패하며, 다른 풀로 바꾸지 않습니다. 이때 본 요청은 그 보조 기능 없이 그대로 진행됩니다. 설정하지 않은 선택은 `"anthropic"`이 아니라 값 없음으로 저장됩니다.
+
+```json
+{
+  "webSearchSidecar": { "backend": "anthropic", "anthropicInstance": "anthropic2" }
+}
+```
+
+:::caution[다운그레이드]
+Pool 2가 없는 버전은 `anthropic2` 항목을 이해하지 못합니다. 이전 버전을 설치하기 전에 프록시를 멈추고, `config.json`과 `auth.json`을 백업한 뒤, `config.json`에서 `providers.anthropic2`를 제거하십시오. Pool 2는 기본 풀 자격 증명을 옮기거나 다시 쓰지 않습니다. Pool 2가 활성 상태인 채로 제자리 다운그레이드하는 것은 지원하지 않습니다.
 :::
 
 ### 관리되는 레코드 구조
@@ -422,7 +495,7 @@ Vercel AI Gateway는 하나의 모델을 여러 기반 추론 공급자에 걸�
 표시 이름 재정의는 모델 ID, 기능을 포함한 메타데이터, 정렬 순서, 라우팅된 콤보 별칭 및 계정 선택자가 붙은 항목을 바꾸지 않습니다.
 이 로컬 카탈로그 재정의는 HTTP 모델 목록이나 가상 `*-pro` 항목의 이름을 바꾸지 않습니다.
 
-프리뷰 GPT-5.6 폴백 항목도 같은 메커니즘을 사용합니다. OpenAI API 키 프리셋은 base와 Pro id에 컨텍스트 `922000`, 최대 입력 `922000`을 채웁니다. OpenRouter는 `openai/gpt-5.6-sol`, `openai/gpt-5.6-terra`, `openai/gpt-5.6-luna`에 컨텍스트 `922000`을 채웁니다. Pool/Direct는 `922000`을 노출하고, 동기화된 카탈로그는 `xhigh`를 구분한 채 `max`를 노출합니다.
+프리뷰 GPT-5.6 폴백 항목도 같은 메커니즘을 사용합니다. OpenAI API 키 프리셋은 base와 Pro id에 컨텍스트 `1050000`, 최대 입력 `922000`을 채웁니다. OpenRouter는 `openai/gpt-5.6-sol`, `openai/gpt-5.6-terra`, `openai/gpt-5.6-luna`에 컨텍스트 `1050000`을 채웁니다. 네이티브 Pool/Direct 창은 [예약된 OpenAI 공급자 정책](/reference/configuration/providers/#reserved-openai-providers)을 따릅니다. 동기화된 카탈로그는 `xhigh`를 구분한 채 `max`를 노출합니다.
 
 ```json
 {

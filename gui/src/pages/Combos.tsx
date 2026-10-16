@@ -43,6 +43,7 @@ type CachedCombosPage = {
   combos: ComboItem[];
   providers: ProviderOption[];
   models: ModelOption[];
+  capabilityModels?: ModelOption[];
   cataloguedComboIds: string[];
 };
 type ProviderQuotasDto = { reports?: unknown };
@@ -169,6 +170,7 @@ export default function Combos({
     }));
 
     const models: ModelOption[] = [];
+    const capabilityModels: ModelOption[] = [];
     const catalogued = new Set<string>();
     for (const row of modelRows) {
       if (!row || typeof row !== "object") continue;
@@ -188,7 +190,6 @@ export default function Combos({
         catalogued.add(id);
         continue; // combos cannot nest other combos as targets
       }
-      if (model.disabled === true) continue;
       const reasoningEfforts = Array.isArray(model.reasoningEfforts)
         ? model.reasoningEfforts.filter((effort): effort is string => typeof effort === "string")
         : undefined;
@@ -198,25 +199,27 @@ export default function Combos({
           return trimmed ? [trimmed] : [];
         })
         : undefined;
-      models.push({
+      const option: ModelOption = {
         provider,
         id,
         namespaced: typeof model.namespaced === "string" ? model.namespaced : undefined,
         ...(reasoningEfforts ? { reasoningEfforts } : {}),
         ...(inputModalities && inputModalities.length > 0 ? { inputModalities } : {}),
-      });
+      };
+      capabilityModels.push(option);
+      if (model.disabled !== true) models.push(option);
     }
 
-    // Ensure each provider's defaultModel appears even if catalog fetch lagged.
+    // Add a default placeholder only when the catalog has no row, including disabled rows.
     for (const [name, provider] of Object.entries(allProviders)) {
       const defaultModel = typeof provider.defaultModel === "string" ? provider.defaultModel.trim() : "";
       if (!defaultModel || provider.disabled) continue;
-      if (!models.some(model => model.provider === name && model.id === defaultModel)) {
+      if (!capabilityModels.some(model => model.provider === name && model.id === defaultModel)) {
         models.push({ provider: name, id: defaultModel, namespaced: `${name}/${defaultModel}` });
       }
     }
 
-    const next = { combos, providers, models, cataloguedComboIds: [...catalogued] } satisfies CachedCombosPage;
+    const next = { combos, providers, models, capabilityModels, cataloguedComboIds: [...catalogued] } satisfies CachedCombosPage;
     writeSessionListCacheEntry(cacheKey, next);
     // Retain the coherent payload here — one place, on the success path, never during
     // render. See the `retainedData` note below.
@@ -296,6 +299,7 @@ export default function Combos({
   }, [combos.length, data, onCountChange]);
   const providers = data?.providers ?? [];
   const models = data?.models ?? [];
+  const capabilityModels = data?.capabilityModels ?? models;
   const cataloguedComboIds = new Set(data?.cataloguedComboIds ?? []);
 
   const saveCombo = async (item: ComboItem, isCreate: boolean, renameFrom?: string) => {
@@ -397,6 +401,7 @@ export default function Combos({
           providerQuotaStates={providerQuotaStates}
           providers={providers}
           models={models}
+          capabilityModels={capabilityModels}
           cataloguedComboIds={cataloguedComboIds}
           loading={false}
           onRefresh={() => { resource.refresh(); quotaResource.refresh(); }}

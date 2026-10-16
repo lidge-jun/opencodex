@@ -51,17 +51,29 @@ The Child waits for its configured port while the old process releases it. If a 
 
 If **Child** says to pair this machine first, open this computer's configured literal-loopback HTTP dashboard, for example `http://127.0.0.1:<configured-port>`. The local pairing form appears only when pairing is missing and the dashboard and API use the same loopback origin. Copy the form's `ocx gui pair --origin "http://127.0.0.1:<configured-port>"` command, run it in a terminal on this computer, and paste the one-use code into the form. Use the exact origin shown in the form; a provider API key or admin token is not a pairing code. Missing pairing is separate from a configured-port mismatch.
 
+On a Hub dashboard opened through a non-loopback address, the browser may have no loopback session or may have a shared session that cannot manage machine links. When Remote Link reports that session or permission problem, choose **Connect this dashboard to the hub** in the Remote Link page to open the one-time pairing form. Run the displayed command on the Hub and enter its code. The page validates the new session's Remote Link access before it closes the form.
+
 The **Child** role also requires a standalone OpenCodex runtime running on its configured port, because the Child restarts on exactly that port. If the dashboard says OpenCodex is not running on its configured port, restart it there first.
 
 ## Link status
 
 - **Connected** means the SSH tunnel is ready and the Child can use the Home link.
 - **Reconnecting** means the tunnel is being retried. Requests can temporarily return `503` with `Retry-After` while the retry is in progress. On a Child that connected from its own dashboard, a request first waits up to 15 seconds for the tunnel to come back.
-- **Failed** means the link needs attention. Check SSH authentication, the confirmed host key, forwarding, or the timeout reason shown in the dashboard. A Child that connected from its own dashboard keeps retrying by itself, after sleep, an outage or a restart: about once a minute after a timeout or forwarding error, and every five minutes after an authentication error. A changed host key is never retried.
+- **Failed** means the link needs attention. Check SSH authentication, the confirmed host key, forwarding, or the timeout reason shown in the dashboard. The side that runs the SSH tunnel keeps retrying by itself, after sleep, an outage or a restart: Home for a Child it added, and the Child for a link it joined from its own dashboard. It retries about once a minute after a timeout or forwarding error, and every five minutes after an authentication error. A changed host key is never retried. To try again at once, select **Retry** in the Home's dashboard or run `ocx link reconnect --link-id <id>` on the Home. It restarts that link's tunnel without restarting OpenCodex.
 
 A failed link does not silently switch to a local provider.
 The Child returns a retryable `503` without forwarding the link key or request when its tunnel is failed, stopped, or not supervised.
 It also keeps the key local when another process owns the tunnel port; free that port so the Child's SSH tunnel can bind it.
+
+## What a Child shows and manages
+
+A Child runs on the Home's providers, accounts and settings, so the Home is where you change them.
+
+- **Dashboard.** The Child's dashboard shows the Home's state read-only and says "Managed by Home <name> over Remote Link". Dashboard and Providers read the Home through the link, and the usage strip in the header shows the Home's quota. The model list is not shown on a Child, because building it runs provider discovery on the Home; Codex on the Child already offers the Home's models. For the same reason, the delegation and sidecar model pickers on a Child list the native models and the Home's current choices, not the Home's full routed list. Saving a change there is refused with a message that names the Home; make the change in the Home's dashboard. The Child's browser never receives a Home credential.
+- **Codex settings.** `ocx sync` on the Child (and connecting it) applies the Codex settings OpenCodex manages on the Home: Fast mode, the multi-agent mode, the web search sidecar switch, and the native sub-agent defaults when the Home syncs them. `ocx sync` and `ocx status` list the values that came from the Home. The default reasoning effort and the effort levels shown in the Codex app's model picker are Codex app settings on each computer; OpenCodex does not manage them on any computer.
+- **CLI.** Commands that only read, such as `ocx account list`, `ocx provider quota` and `ocx usage`, read the Home. They show what the Home has already observed: a read from a Child never makes the Home probe a provider, refresh a token or start a process, so quota and account details are as fresh as the Home's own activity keeps them. Reads that only exist to run provider discovery or a forced refresh, such as `ocx models live`, `ocx models preset show` and `ocx account list --quota`, are refused like changes. Commands that change configuration are refused with one message that names the Home and the link and says no request was sent. `ocx status` describes the Home and the link. `ocx provider list` and `ocx config get` still show this computer's own configuration, labelled as local and inactive while the computer is linked. `ocx config set`, `ocx config unset` and `ocx config import` still write locally, each with the same note, and `ocx provider add`, `remove` and `set-default` are refused because those providers are not used while linked.
+
+These reads need an OpenCodex version with the Remote Link management relay on both the Home and the Child. An older Home answers with a message asking you to upgrade it.
 
 ## Remove a Child
 
@@ -91,10 +103,13 @@ The Child uses the Home computer's providers and provider credentials through th
 ## CLI reference
 
 ```text
+ocx link probe <alias> [--json]
+ocx link add <alias> [--expect-fingerprint SHA256:…] [--json]
 ocx link port [--json]
 ocx link issue --alias <alias> --tunnel-port <port> [--json]
 ocx link status [--json]
 ocx link revoke --link-id <id> [--json]
+ocx link reconnect --link-id <id> [--json]
 ```
 
 ## Related guides
@@ -107,3 +122,26 @@ ocx link revoke --link-id <id> [--json]
 Update both the Home and Child when upgrading to connection-bound relay authentication. Before sending a relayed request's link credential or body, the Child verifies the Home on the same connection it will use for that request. A closed connection is not silently replaced. A Home without this protocol causes a retryable authentication error; upgrade the Home and Child, and re-link when the stored link is no longer recognized. There is no insecure fallback switch. An unexpired pending API-key rotation remains valid until it expires or the rotation is committed or aborted.
 
 Removing the final Home link drains pending authenticated relay requests before releasing its listener. Stopping the process still cancels active connections. This does not change which caller credentials are stripped or which routes can be relayed, and it does not replace SSH's host-key verification.
+
+
+### Standalone pairing authorization
+
+The existing `ocx gui pair --origin <local-origin>` command works while OpenCodex runs as a background service. Run it under the account that owns the service's private OpenCodex home, then enter the returned one-use code in the local dashboard. No server terminal, additional password, Windows Hello or hardware key is required. The CLI and server must use the same current version and configuration home; restart an older server after updating. Mixed-version Hub invitations also require updating the CLI and server together. Pairing refuses a symlinked configuration home or intent directory; use the actual protected directory as `OPENCODEX_HOME`.
+
+Internally, the CLI creates a short-lived authorization commitment and attempts to remove it after use or failure. Reading runtime information alone does not authorize pairing, and the verifier is not stored on disk. This is a private-home write-access boundary, not biometric or human-presence authentication: a program with full access to that user's files is still trusted. Existing Hub invitation authorization is unchanged. If a pairing request fails, run a fresh command after resolving the reported problem. This does not add Windows SSH Remote Link support.
+
+If a process is interrupted during pairing, rerun the command to obtain a new authorization. Do not manually remove pairing state while the service or a pairing command is running.
+
+On Windows, pairing fails closed if the intent folder or record is not private to the serving account, or its owner and permissions cannot be verified. Both entries must be owned by that account; Administrators ownership is accepted only when Administrators is the serving token's default owner and its administrator role is enabled. The permission list must be protected from inheritance and contain an ordinary Full Control allow entry for the serving account. Besides that, only plain allow entries for SYSTEM and the Administrators group are accepted, because SYSTEM and an elevated administrator can already take ownership of any file; a non-elevated administrator gains nothing from that entry. Child inheritance is allowed on the folder only. This is the list as Windows reports it: compatible duplicate entries for the same account count as one, and entries that grant nothing are ignored. The check leaves refused records in place and does not repair their permissions or change ownership. Restore a private configuration home, then run a fresh pairing command.
+
+The check covers the intent folder and record. It does not protect against replacement of ancestor folders, deletion rights on a parent folder, privileged restore operations or access through handles opened before permissions became private. A request with a matching commitment can block the server during a verification subprocess bounded at five seconds, even if its folder later fails the permission check. Executable lookup and process launch setup precede that timeout. CLI cleanup may perform one more verification. The five-second subprocess budget leaves room within the command's ten-second request timeout, but slow verification can still refuse pairing.
+
+## Add a Child from the terminal
+
+On the Home, run `ocx link probe child-a --json` to inspect the offered SSH fingerprint, key type and OpenCodex version. Verify the fingerprint through a trusted source. Then run `ocx link add child-a --expect-fingerprint SHA256:… --json`. The command probes again and refuses a mismatch before storing trust or issuing a key. Without the fingerprint flag, it requires an interactive terminal and an explicit `yes` after showing the fingerprint. It never prints the link key.
+
+Home-initiated connections now restart the Child after saving its connection, including capable older Child installations. The Child must already serve standalone OpenCodex on its configured port, expose bound restart support, and have curl installed. Update or disconnect a Child that fails this preflight. Desktop and system OpenCodex installations take precedence over generic PATH shims; broken candidates are skipped. Windows Children remain unsupported.
+
+Restart waits for running turns and may take several minutes. Success requires the restarted Child to serve the client role and relay a fresh complete catalog to this Home. SSH setup has a bounded allowance derived from measured latency; relay verification starts after restart with its own 15-second window. Errors name the failing phase. If an error reports residual Child configuration, run `ocx disconnect` and `ocx restart` on that Child before retrying. Home cleanup alone does not restore Child configuration. A CLI timeout reports an uncertain outcome; inspect Home `ocx link status` and Child `ocx connect status` first.
+
+On a Home-initiated Child, `ocx link status` reports role `child`, link identity and tunnel port from its saved connection even though its Home-side link store is empty. Locally unobserved tunnel state is `idle`. `ocx status` calls the peer a Remote Link Home. When Home runs in Hub mode, status reads its supported projection through the local Child relay. A standalone Home reports that it does not publish Hub state. Child-initiated tunnel identity comes from its valid sidecar; unreadable evidence does not claim a direction.

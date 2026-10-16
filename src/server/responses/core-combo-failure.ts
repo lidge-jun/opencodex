@@ -14,7 +14,9 @@ import {
 import { normalizeUpstreamErrorText } from "./core-errors";
 import { resolveClientRetryAfter } from "../../lib/retry-after";
 import { formatErrorResponse } from "../../bridge";
+import { OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE } from "../../adapters/ollama-native";
 import { isNonReplayableResponse, markResponseNonReplayable } from "../../lib/upstream-retry";
+import { MODEL_NOT_ALLOWED_FOR_KEY } from "../admission-model-scope";
 import { usageFromResponsesPayload } from "../request-log";
 import type { ResponsesTerminalStatus } from "../../bridge";
 
@@ -48,6 +50,9 @@ export async function consumeComboFailure(
   // display-safe body carries a recognized quota message.
   let quotaConfirmedByBody = false;
   const serverError = response.status >= 500 && response.status < 600;
+  // A local key-scope refusal is already the client's answer: rebuilding it as an upstream_error
+  // would hide the stable model_not_allowed_for_key type clients branch on.
+  let scopeRefusalBody: string | undefined;
   try {
     const body = await readBoundedResponseBody(response, { signal, reportUtf8Validity: serverError });
     // A 5xx body counts as quota or classification evidence only when it decoded as valid
@@ -69,6 +74,9 @@ export async function consumeComboFailure(
         upstreamCode = codexAccountModelRefusalHardStopCode(response.status, body.text) ?? normalized.code;
         upstreamMessage = normalized.message;
         upstreamType = normalized.type;
+      }
+      if (nonReplayable && response.status === 403 && upstreamType === MODEL_NOT_ALLOWED_FOR_KEY) {
+        scopeRefusalBody = body.text;
       }
     }
   } catch (error) {
@@ -105,7 +113,9 @@ export async function consumeComboFailure(
     now,
     includeDefault: false,
   });
-  const failureResponse = formatErrorResponse(
+  const failureResponse = scopeRefusalBody !== undefined
+    ? new Response(scopeRefusalBody, { status: 403, headers: { "Content-Type": "application/json" } })
+    : formatErrorResponse(
     response.status,
     cyberFailure ? (upstreamType ?? CYBER_POLICY_ERROR_CODE) : "upstream_error",
     message,
@@ -121,6 +131,7 @@ export async function consumeComboFailure(
     classificationText,
     ...(codexModelRefusal !== undefined ? { codexModelRefusal } : {}),
     ...(normalizedUpstreamCode !== undefined ? { upstreamCode: normalizedUpstreamCode } : {}),
+    ...(upstreamMessage !== undefined ? { upstreamMessage } : {}),
     ...(upstreamType !== undefined ? { upstreamType } : {}),
     ...(!cyberFailure && cooldownRetryAfter !== undefined ? { retryAfter: cooldownRetryAfter } : {}),
     // The EFFECTIVE classification decides, not the raw status. An upstream that wraps a quota
@@ -220,4 +231,16 @@ export function buildComboChildHeaders(parentHeaders: HeadersInit): Headers {
   childHeaders.delete("content-length");
   childHeaders.delete("content-encoding");
   return childHeaders;
+}
+
+/**
+ * A member's local Ollama late-attribution refusal: the exact proxy-owned constant on the exact
+ * local wire shape, from a replayable attempt. The caller replaces only the client response with
+ * the literal constant envelope; classification inputs are never rewritten.
+ */
+export function isLateAttributionRefusal(failure: ConsumedComboFailure): boolean {
+  return !failure.nonReplayable
+    && failure.response.status === 413
+    && failure.upstreamCode === "request_too_large"
+    && failure.upstreamMessage === OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE;
 }
