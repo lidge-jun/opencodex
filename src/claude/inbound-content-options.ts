@@ -92,12 +92,14 @@ export function declaredAnthropicServerTools(raw: unknown): Rec[] | undefined {
  * `web_fetch_tool_result`) in the caller's assistant history. The Responses body drops them, so
  * an Anthropic destination re-inserts them out of body, keyed by the block that follows each run
  * in its message: `call:<tool_use id>`, `text:<text>`, `thinking:<signature>` or
- * `redacted:<data>`, all of which survive translation. A run with none, an unpaired call, a
+ * `redacted:<data>`, all of which survive translation, suffixed `#<n>` for that anchor's n-th
+ * occurrence in the conversation so a repeated text keeps its own run. A run with none, an unpaired call, a
  * non-Anthropic id, or a search hit without `encrypted_content` is not replayable and stays dropped.
  */
 export function replayedAnthropicServerBlocks(raw: unknown): Map<string, Rec[]> | undefined {
   if (!isRec(raw) || !Array.isArray(raw.messages)) return undefined;
   const out = new Map<string, Rec[]>();
+  const seen = new Map<string, number>();
   for (const message of raw.messages) {
     if (!isRec(message) || message.role !== "assistant" || !Array.isArray(message.content)) continue;
     let run: Rec[] = [];
@@ -107,16 +109,19 @@ export function replayedAnthropicServerBlocks(raw: unknown): Map<string, Rec[]> 
         run.push({ ...block, cache_control: undefined });
         continue;
       }
-      const key = block.type === "tool_use" ? `call:${String(block.id)}`
+      const anchor = block.type === "tool_use" ? `call:${String(block.id)}`
         : block.type === "text" ? `text:${String(block.text)}`
         : block.type === "thinking" ? `thinking:${String(block.signature)}`
         : block.type === "redacted_thinking" ? `redacted:${String(block.data)}` : undefined;
+      const n = anchor ? seen.get(anchor) ?? 0 : 0;
+      if (anchor) seen.set(anchor, n + 1);
+      const key = anchor && `${anchor}#${n}`;
       const uses = run.filter(b => b.type === "server_tool_use");
       const results = run.filter(b => b.type !== "server_tool_use");
       const replayable = uses.length > 0 && uses.length === results.length
         && uses.every(u => typeof u.id === "string" && u.id.startsWith("srvtoolu_") && results.some(r => r.tool_use_id === u.id))
         && results.every(r => !Array.isArray(r.content) || r.content.every(h => isRec(h) && typeof h.encrypted_content === "string"));
-      if (key && replayable && !out.has(key)) out.set(key, run);
+      if (key && replayable) out.set(key, run);
       run = [];
     }
   }

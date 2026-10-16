@@ -311,6 +311,18 @@ describe("a server-tool exchange the client replays reaches Anthropic in place",
     ]);
   });
 
+  test("an identical earlier text does not take a later turn's exchange", async () => {
+    const turn1 = clientContent((await claudeTurn("https://api.anthropic.com", SEARCH_TURN)).clientSse);
+    const { wire } = await claudeTurn("https://api.anthropic.com", OK_TURN, "anth", [
+      { role: "user", content: "Hi" }, { role: "assistant", content: [{ type: "text", text: "Bun shipped." }] },
+      { role: "user", content: "What did Bun release?" }, { role: "assistant", content: turn1 }, { role: "user", content: "More?" },
+    ]);
+    const types = (wire.messages as { content: unknown }[])
+      .map(m => Array.isArray(m.content) ? m.content.map(b => String((b as Record<string, unknown>).type)) : []);
+    expect(types[1]).toEqual(["text"]);
+    expect(types[3]).toEqual(["server_tool_use", "web_search_tool_result", "text"]);
+  });
+
   test("a pair between thinking blocks stays between them", async () => {
     const [use, result] = (await claudeTurn("https://api.anthropic.com", SEARCH_TURN).then(r => clientContent(r.clientSse))).slice(0, 2);
     const thinking = (signature: string) => ({ type: "thinking", thinking: `t ${signature}`, signature });

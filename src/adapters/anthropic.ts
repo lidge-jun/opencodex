@@ -737,14 +737,13 @@ function messagesToAnthropicFormat(
   toolNames: { toWire: (name: string) => string },
   serverReplay?: ReadonlyMap<string, readonly Record<string, unknown>[]>,
 ): { system: string | undefined; messages: unknown[] } {
-  // The client's server-tool exchanges go back ahead of the block they preceded. Each key is used
-  // once. ponytail: an identical text reused across turns takes the run at its first occurrence;
-  // key on message index + text if that ever misplaces one.
-  const pendingReplay = new Map(serverReplay);
-  const replayed = (key: string) => {
-    const blocks = pendingReplay.get(key) ?? [];
-    pendingReplay.delete(key);
-    return blocks;
+  // The client's server-tool exchanges go back ahead of the block they preceded, matched by that
+  // anchor's occurrence count so an identical earlier text cannot take a later turn's run.
+  const seenAnchors = new Map<string, number>();
+  const replayed = (anchor: string) => {
+    const n = seenAnchors.get(anchor) ?? 0;
+    seenAnchors.set(anchor, n + 1);
+    return serverReplay?.get(`${anchor}#${n}`) ?? [];
   };
   // One allocator for the whole request: a tool_result must resolve to the SAME wire id its
   // call got, and two distinct raw ids must never collapse into one. Conforming ids are claimed
