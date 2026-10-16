@@ -141,7 +141,8 @@ containing `gemini`, the text before the turn's first tool call is replayed as t
 of its first non-empty text part; the other text parts before the call are dropped. Text after a
 tool call and turns with Responses `phase: "final_answer"` are replayed whole.
 `src/adapters/google-progress-history.ts` owns the split: ASCII `.`, `!` or `?` followed by
-whitespace, full-width CJK terminal punctuation, or a line break, with trailing closing quotes,
+whitespace, a script's own sentence terminator (CJK, Devanagari, Arabic, Armenian, Ethiopic,
+Myanmar), or a line break, with trailing closing quotes,
 brackets and Markdown emphasis kept. Boundaries that only close a leading list marker or
 `e.g.`/`i.e.`/`etc.`/`vs.` are skipped. It never matches wording.
 

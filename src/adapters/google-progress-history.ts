@@ -19,10 +19,11 @@
 
 /**
  * Sentence end: ASCII terminal punctuation followed by whitespace or the end (so "google.ts" and
- * "3.5" are not boundaries), full-width CJK terminal punctuation, or a line break. Closing quotes,
- * brackets and Markdown emphasis right after the punctuation belong to the sentence.
+ * "3.5" are not boundaries), a script's own sentence terminator (CJK 。！？, Devanagari
+ * ।॥, Arabic ۔؟, Armenian ։, Ethiopic ።, Myanmar ။), or a line break. Closing quotes, brackets and
+ * Markdown emphasis right after the punctuation belong to the sentence.
  */
-const SENTENCE_END = /[.!?]["'\u201D\u2019)\]*_`]*(?=\s|$)|[\u3002\uFF01\uFF1F]["'\u201D\u2019\u300D\u300F)\]*_`]*|\n/g;
+const SENTENCE_END = /[.!?]["'\u201D\u2019)\]*_`]*(?=\s|$)|[\u3002\uFF01\uFF1F\u0964\u0965\u06D4\u061F\u0589\u1362\u104B]["'\u201D\u2019\u300D\u300F)\]*_`]*|\n/g;
 
 /** A boundary that only closes a leading list marker ("1.", "a.") or a common abbreviation ("e.g."). */
 const NOT_A_SENTENCE = /^(?:\d{1,3}|[a-z])\.$|(?:^|\s)(?:e\.g|i\.e|etc|vs)\.$/i;

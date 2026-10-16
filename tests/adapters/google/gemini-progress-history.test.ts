@@ -79,6 +79,8 @@ describe("Gemini progress-text history", () => {
     expect(geminiProgressLead("次に google.ts を読みます。Let's go.")).toBe("次に google.ts を読みます。");
     expect(geminiProgressLead("Done. Let's read google.ts next.")).toBe("Done.");
     expect(geminiProgressLead("確認します。Let's inspect the encoder next.")).toBe("確認します。");
+    expect(geminiProgressLead("मैं फ़ाइल पढ़ूँगा। Let's read google.ts next.")).toBe("मैं फ़ाइल पढ़ूँगा।");
+    expect(geminiProgressLead("سأقرأ الملف۔ Let's read google.ts next.")).toBe("سأقرأ الملف۔");
     expect(geminiProgressLead("Reading **the docs.** Let's inspect the encoder next.")).toBe("Reading **the docs.**");
     expect(geminiProgressLead("Check e.g. the 3.5 encoder first. Then more.")).toBe("Check e.g. the 3.5 encoder first.");
     expect(geminiProgressLead("  \n ")).toBeUndefined();
