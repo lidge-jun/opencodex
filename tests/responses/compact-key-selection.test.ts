@@ -249,7 +249,8 @@ test("a synthetic non-replayable compact 429 never cools a distributed key", asy
 
 for (const statusCode of [401, 429]) test(`compact static Authorization ${statusCode} retains pool availability`, async () => {
   const config = fixture();
-  config.providers[NAME]!.headers = { Authorization: "Bearer fixture-compact-override" };
+  config.providers[NAME]!.supportsNativeCompactEndpoint = true;
+  config.providers[NAME]!.headers = { Authorization: "Bearer fixture-override" };
   globalThis.fetch = (async (input, init) => {
     seen.push({ key: new Headers(init?.headers).get("authorization"), url: String(input), body: JSON.parse(String(init?.body)), headers: new Headers(init?.headers) });
     return Response.json({ error: { message: "fixture refusal" } }, { status: statusCode });
@@ -259,7 +260,7 @@ for (const statusCode of [401, 429]) test(`compact static Authorization ${status
     expect(seen).toHaveLength(request + 1);
     for (const id of ["k1", "k2", "k3"]) expect(getKeyCooldownUntil(NAME, id)).toBeNull();
   }
-  expect(seen.map(row => row.key)).toEqual(Array(4).fill("Bearer fixture-compact-override"));
+  expect(seen.map(row => row.key)).toEqual(Array(4).fill("Bearer fixture-override"));
   unchanged(config); noLeaks(config);
 });
 
