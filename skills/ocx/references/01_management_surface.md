@@ -271,6 +271,10 @@ Original invocation order. These headings preserve links to the previous single-
 
 [Read-oriented task](01_surface_observe-system.md#ocx-system-codex-cli-update-attest)
 
+### `ocx system codex-cli-update plan`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-system-codex-cli-update-plan)
+
 ### `ocx system codex-restart`
 
 [State-changing task](01_surface_observe-system.md#ocx-system-codex-restart)

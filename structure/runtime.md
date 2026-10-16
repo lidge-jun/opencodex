@@ -73,7 +73,7 @@ After a CLI catalog/cache write, advisory restart guidance compares each running
 start time with the written catalog mtime. It reports only processes proven stale; a fresh or
 unreadable observation does not claim that another restart is required. Explicit
 `--restart-codex` and `--restart-app-server-only` retain their operator-consent semantics and act on
-verified matching processes regardless of the advisory freshness result. Read-only client diagnostics in `src/codex/native-profile-processes.ts` prefer full executable paths over inferred argv0; macOS comm and args are read separately and joined by PID, so unquoted Codex Framework helper paths do not become CLI clients. The initial split Codex.app framework-path token pair is also rejected when only a process basename is available; later path arguments do not override a client match. Quoted immediate script entrypoints remain supported for known interpreters. This classification does not change the app-server termination selector.
+verified matching processes regardless of the advisory freshness result. Read-only client diagnostics in `src/codex/native-profile-processes.ts` prefer full executable paths over inferred argv0; macOS comm and args are read separately and joined by PID, so unquoted Codex Framework helper paths do not become CLI clients. The initial split Codex.app framework-path token pair is also rejected when only a process basename is available; later path arguments do not override a client match. Quoted immediate script entrypoints remain supported for known interpreters. This classification does not change the app-server termination selector. Complete Linux procfs observation in `src/codex/app-server-processes.ts` ignores only per-process `ENOENT` disappearance races. Other read failures invalidate that observation: raw enumeration throws and catalog diagnostics report unknown. Restart enumeration skips unreadable entries and retains independently verified targets; its same-user and app-server-only signal boundary is unchanged.
 
 > Decision record: [ADR-0097](decisions/ADR-0097-post-write-app-server-freshness.md)
 
@@ -323,14 +323,14 @@ Explicit `codex-shim install` (`src/cli/dispatch.ts`) refuses with nonzero exit;
 Codex CLI update inspection is split from mutation. `system codex-cli-update check` makes no
 package-registry request and reads bounded provenance evidence for the configured launcher candidate, npm ownership layout,
 package metadata, and shim binding. The proof-bound launcher snapshot does not attest successful Codex execution;
-environment and persisted candidates remain report-only and cannot produce a managed classification in this one-shot command.
+POSIX selection is attested when the runtime resolver selects the same canonical environment candidate without executing it. A linked npm-global manifest can then establish managed ownership; persisted candidates stay unattested.
 On Windows this first slice performs no candidate/configuration filesystem I/O: it preserves only proof-captured
 absolute environment candidates for lexical app-bundle/version-manager reporting and otherwise fails closed. That
 fail-closed result records which observation was missing: a run with no proof-captured environment candidate reports
 `windows_inspection_deferred`, because persisted selection is never consulted there and the command cannot claim that
 no Codex CLI exists; a captured candidate whose path is not lexically eligible reports `candidate_path_unavailable`.
 POSIX keeps `candidate_unavailable` for an unobserved candidate.
-This check does not attest or admit a selected runtime. The command exposes no private mutation authority and does not query
+This check does not admit a runtime or authorize an install. The command exposes no private mutation authority and does not query
 a registry, execute Codex/npm, install, repair, stop, restart, or change configuration/cache state.
 
 The bridge enforces a heartbeat stall deadline. It defaults to 300 seconds sampled on a 2 s tick

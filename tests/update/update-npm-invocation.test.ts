@@ -12,6 +12,44 @@ const trustedNpm = "C:\\Program Files\\nodejs\\npm.cmd";
 const systemCmd = "C:\\Windows\\System32\\cmd.exe";
 
 describe("Windows npm update invocation", () => {
+  test.each([
+    "SystemRoot", "SYSTEMROOT", "sYsTeMrOoT", "windir", "WINDIR", "WiNdIr",
+    "ComSpec", "COMSPEC", "cOmSpEc",
+  ])("resolves the command processor from a copied %s environment key", key => {
+    // A sanitized environment is a plain object, without Windows process.env's
+    // case-insensitive property access. The npm path itself resolves in every case.
+    const env = { ...{
+      PATH: "C:\\Program Files\\nodejs", PATHEXT: ".CMD",
+      [key]: key.toLowerCase() === "comspec" ? systemCmd : "C:\\Windows",
+    } };
+    const deps = { cwd, exists: (path: string) => path === trustedNpm };
+    expect(resolveNpmCommand("win32", env, deps)).toBe(trustedNpm);
+    expect(npmInvocation(["view", "pkg@latest", "version"], "win32", env, deps)?.file).toBe(systemCmd);
+  });
+
+  test("preserves exact shell-key and SystemRoot precedence in copied environments", () => {
+    const env = {
+      PATH: "C:\\Program Files\\nodejs", PATHEXT: ".CMD",
+      SystemRoot: "C:\\Windows", SYSTEMROOT: "D:\\OtherWindows",
+      windir: "E:\\OtherWindows", ComSpec: "F:\\OtherWindows\\cmd.exe",
+    };
+    const deps = { cwd, exists: (path: string) => path === trustedNpm };
+    expect(npmInvocation(["--version"], "win32", env, deps)?.file).toBe(systemCmd);
+    expect(npmInvocation(["--version"], "win32", {
+      PATH: env.PATH, PATHEXT: env.PATHEXT, ComSpec: systemCmd, COMSPEC: "D:\\OtherWindows\\cmd.exe",
+    }, deps)?.file).toBe(systemCmd);
+  });
+
+  test("refuses missing, relative or ambiguous copied command-processor locations", () => {
+    for (const shell of [{}, { SYSTEMROOT: "relative" }, { COMSPEC: "cmd.exe" },
+      { SYSTEMROOT: "C:\\Windows", systemroot: "D:\\OtherWindows" }]) {
+      const env = { PATH: "C:\\Program Files\\nodejs", PATHEXT: ".CMD", ...shell };
+      const deps = { cwd, exists: (path: string) => path === trustedNpm };
+      expect(resolveNpmCommand("win32", env, deps)).toBe(trustedNpm);
+      expect(npmInvocation(["--version"], "win32", env, deps)).toBeNull();
+    }
+  });
+
   test("ignores current-directory candidates and resolves npm from an absolute PATH entry", () => {
     const existing = new Set([
       `${cwd}\\npm.cmd`,

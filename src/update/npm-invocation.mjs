@@ -95,12 +95,22 @@ export function resolveNpmCommand(
   return null;
 }
 
+function shellEnvValue(env, name) {
+  // Copying process.env loses Windows' case-insensitive property access. Keep
+  // the existing exact-key precedence; do not choose between conflicting aliases.
+  if (env[name] !== undefined) return env[name];
+  const values = new Set(Object.entries(env)
+    .filter(([key, value]) => key.toLowerCase() === name.toLowerCase() && value !== undefined)
+    .map(([, value]) => value));
+  return values.size === 1 ? values.values().next().value : undefined;
+}
+
 function systemCommandProcessor(env) {
-  const systemRoot = env.SystemRoot ?? env.windir;
+  const systemRoot = shellEnvValue(env, "SystemRoot") ?? shellEnvValue(env, "windir");
   if (systemRoot && win32.isAbsolute(systemRoot)) {
     return win32.join(systemRoot, "System32", "cmd.exe");
   }
-  const comSpec = env.ComSpec;
+  const comSpec = shellEnvValue(env, "ComSpec");
   return comSpec && win32.isAbsolute(comSpec) ? win32.resolve(comSpec) : null;
 }
 

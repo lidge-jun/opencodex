@@ -163,6 +163,16 @@
       ]
     },
     {
+      "path": "codex-cli-update.md",
+      "tier": 2,
+      "title": "Codex CLI Update Plan",
+      "scope": "Read-only update planning, isolated npm environment, and complete process observation.",
+      "documents": [
+        "src/codex/cli-update-plan.ts",
+        "src/codex/app-server-processes.ts"
+      ]
+    },
+    {
       "path": "catalog.md",
       "tier": 2,
       "title": "Model Catalog",

@@ -1103,9 +1103,9 @@ ocx system codex-cli-update check --json
 
 `check` makes no package-registry request and inspects bounded configured-candidate provenance evidence,
 including a redacted executable location and ownership evidence. Trusted published-launcher context authenticates
-the candidate snapshot, not successful Codex execution. Because this one-shot command never executes Codex,
-environment and persisted candidates remain report-only (`managed: false`, normally `selection_unattested`);
-`selectionAttested` remains `false`. The JSON report exposes `candidateAvailable`, `candidateVersion`, `candidateSource`,
+the candidate snapshot, not successful Codex execution. On POSIX, selection is attested only when the runtime
+resolver selects the same canonical environment candidate without executing it. A linked npm-global manifest
+can then establish `managed: true` when it proves ownership and, if a candidate version is reported, that version matches the manifest; persisted candidates remain unattested. The JSON report exposes `candidateAvailable`, `candidateVersion`, `candidateSource`,
 and `selectionAttested`. Inspecting the configured candidate requires a trusted published-launcher context;
 a direct Bun/source launch has no such proof, ignores ambient and persisted candidate state, and may report
 `candidate_unavailable` on POSIX. On Windows this first slice performs no candidate or configuration filesystem I/O:
@@ -1119,6 +1119,26 @@ version-manager, unverified standalone, and ambiguous shim states are reported a
 and are never classified as managed.
 
 On Windows, a captured bare command such as `CODEX_CLI_PATH=codex`, a remote path, or a device path reports `candidate_path_unavailable` instead. Those cases have a captured candidate; its path is not eligible for this inspection.
+
+#### Read-only Codex CLI update plan
+
+```bash
+ocx system codex-cli-update plan --channel latest --json
+```
+
+Run through the published Node launcher with the intended `CODEX_CLI_PATH` in the shell environment.
+The plan requires an attested POSIX npm-global installation and a linked package manifest version.
+It queries the official npm registry for an exact version, SHA-512 integrity and same-origin tarball,
+using the launcher's captured PATH and isolated temporary npm configuration, cache and logs. Proxy
+settings and `NODE_EXTRA_CA_CERTS` remain supported; cleanup is best-effort. No Codex command runs.
+
+An applicable plan reports `applicable: true` and a deterministic `planId` binding platform,
+installation-root digest, installed version, channel and target version/integrity. The plan is never
+persisted. It refuses downgrades, already-current versions, active Codex sessions and incomplete
+process observation. Windows returns `windows_inspection_deferred` before registry/process queries.
+A refusal exits 0: inspect `applicable` and `refusal`. The printed install argv is indicative; this
+command installs nothing, changes no application state and never signals a session. No apply command
+is exposed, and a plan ID is not installation authorization.
 
 #### Explicit installation observation on Windows x64
 
