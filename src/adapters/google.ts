@@ -467,15 +467,17 @@ function messagesToGeminiFormat(
         const aMsg = msg as OcxAssistantMessage;
         const parts: unknown[] = [];
         const toolCalls: Array<{ wireCallId: string; wireName: string }> = [];
-        // A Gemini tool-call turn replays only the lead sentence of its progress text, so planning
-        // the model leaked into visible text is not copied forward (google-progress-history.ts).
+        // Progress text before a Gemini tool call replays as its lead sentence, so planning the
+        // model leaked into visible text is not copied forward (google-progress-history.ts).
         const trimProgress = trimsGeminiProgressHistory(identityModelId)
+          && aMsg.phase !== "final_answer"
           && aMsg.content.some(part => part.type === "toolCall");
         let progressLeadKept = false;
+        let afterToolCall = false;
         for (const p of aMsg.content) {
           if (p.type === "text") {
             let text: unknown = (p as OcxTextContent).text;
-            if (trimProgress) {
+            if (trimProgress && !afterToolCall) {
               if (progressLeadKept || typeof text !== "string") continue;
               text = geminiProgressLead(text);
               if (text === undefined) continue;
@@ -484,6 +486,7 @@ function messagesToGeminiFormat(
             const textPart = geminiTextPart(text);
             if (textPart) parts.push(textPart);
           } else if (p.type === "toolCall") {
+            afterToolCall = true;
             const tc = p as OcxToolCall;
             // Preserve the thought signature on the function-call part so Antigravity/Gemini-3
             // reasoning continuity survives history-driven (stateless) turns, not just same-process

@@ -182,7 +182,7 @@ Gemini models, Argon in particular, sometimes skip thinking on a tool-calling tu
 planning into the visible progress text, for example a progress line followed by "Let's read
 google.ts next." Once that text is sent back as history, the model tends to repeat the pattern
 on every later turn. To stop it from spreading, OpenCodex sends Gemini only the first sentence of
-the text from earlier turns that ended in a tool call. Final answers are sent back in full, and
+the text that came before a tool call in earlier turns. Final answers are sent back in full, and
 what your client displays is not changed.
 
 The built-in `google-antigravity` model list is Gemini 3.8 Flash (`gemini-3.8-flash`), Gemini 4 Argon

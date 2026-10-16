@@ -9,21 +9,23 @@
  * through the rest of the session. Replaying the same 300K-token request with the leaked tails
  * removed from the history stopped the leak, while stronger system-prompt wording did not.
  *
- * The fix is on the history side only. A replayed model turn that ends in a tool call is
+ * The fix is on the history side only. Text that precedes the tool call of a replayed model turn is
  * intermediate progress, and the Google brevity instruction already asks for a single short line
- * there, so its text is replayed as its lead sentence. Visible output is never rewritten, final
+ * there, so it is replayed as its lead sentence. A turn Codex marks `final_answer` and text after a
+ * tool call are replayed whole. Visible output is never rewritten, final
  * answers (turns without tool calls) are replayed in full, and the split is punctuation-based so
  * it works the same in every language without matching any wording.
  */
 
 /**
- * Sentence end: ASCII terminal punctuation followed by whitespace or the end (so "google.ts" is
- * not a boundary), full-width CJK terminal punctuation anywhere, or a line break.
+ * Sentence end: ASCII terminal punctuation followed by whitespace or the end (so "google.ts" and
+ * "3.5" are not boundaries), full-width CJK terminal punctuation, or a line break. Closing quotes,
+ * brackets and Markdown emphasis right after the punctuation belong to the sentence.
  */
-const SENTENCE_END = /[.!?](?=\s|$)|[\u3002\uFF01\uFF1F]|\n/g;
+const SENTENCE_END = /[.!?]["'\u201D\u2019)\]*_`]*(?=\s|$)|[\u3002\uFF01\uFF1F]["'\u201D\u2019\u300D\u300F)\]*_`]*|\n/g;
 
-/** Ignore boundaries this early so list markers and short labels ("1.", "Done.") do not become the whole lead. */
-const MIN_LEAD_LENGTH = 8;
+/** A boundary that only closes a leading list marker ("1.", "a.") or a common abbreviation ("e.g."). */
+const NOT_A_SENTENCE = /^(?:\d{1,3}|[a-z])\.$|(?:^|\s)(?:e\.g|i\.e|etc|vs)\.$/i;
 
 /** Whether replayed progress text for this model is trimmed to its lead sentence. */
 export function trimsGeminiProgressHistory(modelId: string): boolean {
@@ -41,7 +43,7 @@ export function geminiProgressLead(text: string): string | undefined {
   let end = trimmed.length;
   for (let match = SENTENCE_END.exec(trimmed); match; match = SENTENCE_END.exec(trimmed)) {
     const boundary = match.index + match[0].length;
-    if (boundary >= MIN_LEAD_LENGTH) { end = boundary; break; }
+    if (!NOT_A_SENTENCE.test(trimmed.slice(0, boundary).trim())) { end = boundary; break; }
   }
   const lead = trimmed.slice(0, end).trim();
   // A code-fence opener is not a sentence; replaying it alone would leave an unclosed fence.
