@@ -92,16 +92,20 @@ export function declaredAnthropicServerTools(raw: unknown): Rec[] | undefined {
  * `web_fetch_tool_result`) in the caller's assistant history. The Responses body drops them, so
  * an Anthropic destination re-inserts them out of body, keyed by the block that follows each run
  * in its message: `call:<tool_use id>`, `text:<text>`, `thinking:<signature>` or
- * `redacted:<data>`, all of which survive translation, suffixed `#<n>` for that anchor's n-th
- * occurrence in the conversation so a repeated text keeps its own run. A run with none, an unpaired call, a
+ * `redacted:<data>`, all of which survive translation. An anchor that occurs more than once in the
+ * assistant history (string content included) cannot name one owner, so its run stays dropped,
+ * as it was before replay existed. A run with none, an unpaired call, a
  * non-Anthropic id, or a search hit without `encrypted_content` is not replayable and stays dropped.
  */
 export function replayedAnthropicServerBlocks(raw: unknown): Map<string, Rec[]> | undefined {
   if (!isRec(raw) || !Array.isArray(raw.messages)) return undefined;
   const out = new Map<string, Rec[]>();
   const seen = new Map<string, number>();
+  const count = (anchor: string) => seen.set(anchor, (seen.get(anchor) ?? 0) + 1);
   for (const message of raw.messages) {
-    if (!isRec(message) || message.role !== "assistant" || !Array.isArray(message.content)) continue;
+    if (!isRec(message) || message.role !== "assistant") continue;
+    if (typeof message.content === "string") count(`text:${message.content}`);
+    if (!Array.isArray(message.content)) continue;
     let run: Rec[] = [];
     for (const block of message.content.filter(isRec)) {
       if (block.type === "server_tool_use" || block.type === "web_search_tool_result" || block.type === "web_fetch_tool_result") {
@@ -113,18 +117,17 @@ export function replayedAnthropicServerBlocks(raw: unknown): Map<string, Rec[]> 
         : block.type === "text" ? `text:${String(block.text)}`
         : block.type === "thinking" ? `thinking:${String(block.signature)}`
         : block.type === "redacted_thinking" ? `redacted:${String(block.data)}` : undefined;
-      const n = anchor ? seen.get(anchor) ?? 0 : 0;
-      if (anchor) seen.set(anchor, n + 1);
-      const key = anchor && `${anchor}#${n}`;
+      if (anchor) count(anchor);
       const uses = run.filter(b => b.type === "server_tool_use");
       const results = run.filter(b => b.type !== "server_tool_use");
       const replayable = uses.length > 0 && uses.length === results.length
         && uses.every(u => typeof u.id === "string" && u.id.startsWith("srvtoolu_") && results.some(r => r.tool_use_id === u.id))
         && results.every(r => !Array.isArray(r.content) || r.content.every(h => isRec(h) && typeof h.encrypted_content === "string"));
-      if (key && replayable) out.set(key, run);
+      if (anchor && replayable) out.set(anchor, run);
       run = [];
     }
   }
+  for (const anchor of out.keys()) if ((seen.get(anchor) ?? 0) > 1) out.delete(anchor);
   return out.size > 0 ? out : undefined;
 }
 

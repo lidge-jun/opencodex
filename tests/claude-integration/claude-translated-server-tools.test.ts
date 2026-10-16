@@ -311,16 +311,28 @@ describe("a server-tool exchange the client replays reaches Anthropic in place",
     ]);
   });
 
-  test("an identical earlier text does not take a later turn's exchange", async () => {
-    const turn1 = clientContent((await claudeTurn("https://api.anthropic.com", SEARCH_TURN)).clientSse);
+  test("a repeated anchor drops its run instead of guessing an owner", async () => {
+    const [use, result] = clientContent((await claudeTurn("https://api.anthropic.com", SEARCH_TURN)).clientSse).slice(0, 2);
+    const thinking = (signature: string) => ({ type: "thinking", thinking: `t ${signature}`, signature });
+    const second = [{ ...use, id: "srvtoolu_2" }, { ...result, tool_use_id: "srvtoolu_2" }];
+    const third = [{ ...use, id: "srvtoolu_3" }, { ...result, tool_use_id: "srvtoolu_3" }];
+    const read = (id: string) => ({ type: "tool_use", id, name: "Read", input: {} });
+    // Shape of the maintainer's counterexample on #7236: an earlier string-content turn with the same text,
+    // then repeated text anchors around identical searches, identical calls and signed thinking.
     const { wire } = await claudeTurn("https://api.anthropic.com", OK_TURN, "anth", [
-      { role: "user", content: "Hi" }, { role: "assistant", content: [{ type: "text", text: "Bun shipped." }] },
-      { role: "user", content: "What did Bun release?" }, { role: "assistant", content: turn1 }, { role: "user", content: "More?" },
+      { role: "user", content: "Hi" }, { role: "assistant", content: "Bun shipped." },
+      { role: "user", content: "What did Bun release?" },
+      { role: "assistant", content: [
+        thinking("SigOne0123456789abcdef"), use, result, { type: "text", text: "Bun shipped." },
+        ...second, { type: "text", text: "Bun shipped." }, thinking("SigTwo0123456789abcdef"), ...third, read("toolu_a"), read("toolu_b"),
+      ] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_a", content: "ok" }, { type: "tool_result", tool_use_id: "toolu_b", content: "ok" }] },
     ]);
-    const types = (wire.messages as { content: unknown }[])
-      .map(m => Array.isArray(m.content) ? m.content.map(b => String((b as Record<string, unknown>).type)) : []);
-    expect(types[1]).toEqual(["text"]);
-    expect(types[3]).toEqual(["server_tool_use", "web_search_tool_result", "text"]);
+    const ids = (wire.messages as { content: unknown }[])
+      .map(m => Array.isArray(m.content) ? m.content.map(b => { const r = b as Record<string, unknown>; return String(r.id ?? r.tool_use_id ?? r.type); }) : []);
+    expect(ids[1]).toEqual(["text"]);
+    // Only srvtoolu_3, anchored on the unique call toolu_a, replays; the text-anchored runs are ambiguous.
+    expect(ids[3]).toEqual(["thinking", "text", "text", "thinking", "srvtoolu_3", "srvtoolu_3", "toolu_a", "toolu_b"]);
   });
 
   test("a pair between thinking blocks stays between them", async () => {
