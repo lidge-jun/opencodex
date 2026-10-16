@@ -302,6 +302,8 @@ provided, and the bridge infers the hosted backend family from the live row or t
 model discovery is not an allowlist. The Zed access token has no refresh endpoint, so when Zed
 revokes it, run `ocx login zed` again.
 
+For Zed-hosted OpenAI models, OpenCodex translates `developer` instructions to `system` messages and removes OpenAI-private fields and unsupported built-in tools such as `web_search`. Function and custom tools remain available through the delegate; a tool choice with no supported tools left becomes `none`.
+
 For the canonical Kimi Coding Plan presets (`kimi` account login and `kimi-code` API key),
 opencodex forwards only a caller-supplied stable `prompt_cache_key` to the Chat Completions request
 (the Responses wire accepts the same field, but opencodex does not send it there today);
@@ -776,7 +778,21 @@ MiniMax model list is still the previous default receives it on the next start; 
 is left as it is; register the preview by hand with
 `ocx models add minimax MiniMax-M3.1-Flash-Preview --context-window 1000000`.
 
-**OpenCode Go** requires a stable session identifier for routing. OpenCodex sends
+**OpenCode Go** routes `gemini-4-argon-contributor` through its Gemini API, including
+streaming and tool-result continuations. The existing `opencode-go` preset keeps its
+historical URL pinning: saved custom URLs, including `https://opencode.ai/inference/go/v1`,
+route through the canonical `https://opencode.ai/zen/go/v1` endpoint and inherit Go defaults.
+Gemini then uses Go's native model endpoint with key authentication. A differently named
+custom provider keeps its configured URL and does not receive this Gemini pin.
+Go selects protocols by exact model ID: GPT 6 Luna, GPT 5.6 Luna, Grok 4.6/4.7 and
+Muse Spark Contributor use Responses; Claude Haiku 5.5, MiniMax M2.7/M3 and
+Qwen3.7 Plus/3.8 Max/3.8 Flash use Anthropic Messages. Legacy MiniMax M2.5 and
+Union Alpha also retain Messages. Models without a listed wire retain Chat.
+New native pins apply to the pinned Go destination with key authentication.
+Responses models still accept an explicit `modelAdapters` override.
+Gemini uses `low`, `medium` and `high` thinking levels; higher requested efforts clamp to `high`.
+
+OpenCode Go requires a stable session identifier for routing. OpenCodex sends
 `claude-haiku-5-5`, like the MiniMax models, over the Anthropic Messages wire, matching
 [OpenCode Go's endpoint table](https://opencode.ai/docs/go/#endpoints). OpenCodex derives
 its Go session header from Codex thread/session headers, or from a client's
@@ -822,6 +838,8 @@ headers. That is separate from the keyless desktop quota OpenCode advertises
 `Retry-After` on such a 429, opencodex adds provider guidance to the client error and a
 synthetic `Retry-After`; an upstream `Retry-After` still takes precedence. Same-key
 wait-and-retry remains opt-in via [`retryOn429`](/reference/configuration/).
+
+Gemini models on `opencode-zen` use Google's native API automatically when the provider uses an API key, the default `googleMode` (`ai-studio`), and either `https://opencode.ai/zen/v1` or `https://opencode.ai/inference/v1`. Use the model IDs listed by Zen; OpenCodex preserves them, including Flash IDs without a `-tiered` suffix. Older Gemini Chat/Responses overrides and Responses-only hosted-tool preferences are ignored when reading saved configurations.
 
 **The keyless `opencode-free` tier is currently closed to third-party clients.** Zen refuses
 any request that arrives without an `x-opencode-session` header, answering with error type
@@ -1191,6 +1209,7 @@ OpenCodex provides official adapter support for Qoder through the `qoder` (Globa
   ([Global](https://qoder.com/account/integrations), [CN](https://qoder.cn/account/integrations)) and paste it as the provider's API key. The stored key reaches the CLI only as `QODER_PERSONAL_ACCESS_TOKEN` (Global) or `QODERCN_PERSONAL_ACCESS_TOKEN` (CN) in a scoped child environment.
 - **Region Isolation:** Each preset accepts only its canonical destination (`https://qoder.com` or `https://qoder.cn`) and resolves its own executable. Credentials, model cache, usage, and health are independent; neither region falls back to the other. An older custom provider named `qoder` with a different destination keeps its existing adapter and URL.
 - **Model Discovery:** `qoder --list-models` is the authoritative entitlement roster for the current PAT. The cache is bound to an irreversible fingerprint of the token, so switching accounts never reuses another account's roster. If discovery fails, the provider degrades to a stale cache and then the documented static seed.
+- **Token usage:** Qoder CLI reports zero token counts unless its usage switch is on, so each preset turns it on in its scoped CLI child environment: `QODER_EXPOSE_TOKEN_USAGE=true` for Global and `QODERCN_EXPOSE_TOKEN_USAGE=true` for CN, which reads only its own prefix.
 - **Tool Ownership:** The CLI runs single-turn `stream-json` with `--tools ""`, `--strict-mcp-config`, setting sources disabled, and session persistence disabled, so Codex keeps exclusive tool ownership. Client-declared tools are exposed through an isolated request-scoped MCP server.
 - **Image Input:** Qoder Global accepts image input through the Qoder CLI. OpenCodex forwards supported image inputs that reach the Global adapter to the CLI without maintaining a per-model vision capability allowlist there. Image compatibility and any model-specific preprocessing or routing are handled by Qoder. OpenCodex does not use the static discovery fallback roster to classify per-model vision capability. Qoder CN keeps its existing sidecar classification, and any residual raw-image request that reaches the CN adapter is rejected as `unsupported_input_modality`. OpenCodex serializes history before the current turn, but Qoder does not persist sessions, so prior images are replayed on later turns. In observed multi-turn image conversations, replayed images can become unreliably associated or effectively ordered relative to the historical text they originally accompanied.
 - **PAT recovery:** For both Qoder presets, a multi-key API-key pool can switch to another PAT on a supported authentication rejection or account-level quota exhaustion, but only before response content or an event that makes replay unsafe. Recovery requires Qoder-specific classification and respects credential-hop and send budgets; an HTTP 401/429 or quota message alone is not permission to replay. Single-key configurations do not rotate. Sharing the CLI runner does not enable this API-key recovery for CodeBuddy or self-authenticated Claude CLI.
