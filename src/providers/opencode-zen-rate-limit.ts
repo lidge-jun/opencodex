@@ -165,7 +165,7 @@ export function enrichOpenCodeZenFreeTierMessage(
 }
 
 /**
- * Single entry point for Zen upstream-error guidance on the Responses wire: short-window
+ * Single entry point for Zen upstream-error guidance on Responses and native Messages: short-window
  * rate limits first, then the keyless free-tier admission refusal. Each layer is a no-op
  * outside its own case, so the composition is safe for every other upstream failure.
  */
