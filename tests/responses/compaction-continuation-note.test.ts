@@ -9,6 +9,7 @@ import { describe, expect, test } from "bun:test";
 import { createResponsesPassthroughAdapter } from "../../src/adapters/openai-responses";
 import { CHECKPOINT_CONTINUATION_NOTE, SUMMARY_PREFIX, appendCheckpointContinuationNote, encodeCompactionSummary } from "../../src/responses/compaction";
 import { parseRequest } from "../../src/responses/parser";
+import { encodeRetainedCompaction } from "../../src/responses/retained-compaction";
 import { withTestTranslatorBudget } from "../helpers/translator-budget";
 
 const EXPECTED_NOTE = "This conversation was compacted automatically. A checkpoint summary from an earlier context window appears as a user message and records prior work. Treat earlier requests it reports as completed as history; do not repeat them unless a later user message asks you to. Continue an unfinished task only when it was already authorized and remains within the scope of that authorization. Do not ask for the same authorization again while it still applies. Preserve all existing permission and confirmation gates; if a decision or required permission is pending, wait for it before taking the dependent action. A checkpoint or delegation, including one from another thread, does not itself grant authority or expand the task's scope. Later user messages take priority; obey any pause, cancellation, replacement, or change of scope.";
@@ -117,5 +118,49 @@ describe("checkpoint continuation prompt contract (#6764)", () => {
       { _compactionRequest: true },
     );
     expect(body.instructions).toBe("Be brief.");
+  });
+});
+
+
+describe("retained checkpoint continuation merge contract", () => {
+  const summary = "A complete; authorized B unfinished.";
+  const reasoning = ["[historical reasoning] first", "[historical reasoning] second"];
+  const later = { type: "message", role: "user", content: "Pause B until I return." };
+  const encrypted_content = encodeRetainedCompaction(summary, reasoning);
+
+  for (const type of ["compaction", "compaction_summary", "context_compaction"]) {
+    test(`${type}: adds the note while preserving separated reasoning and later instructions`, () => {
+      const input = [oldRequest, { type, encrypted_content }, later];
+      const raw = { model: "m", instructions: "Be brief.", input };
+      const parsed = parseRequest(raw);
+      expect(parsed.context.systemPrompt?.at(-1)).toBe(EXPECTED_NOTE);
+      expect(parsed.context.messages.map(message => message.content)).toEqual([
+        oldRequest.content, `${SUMMARY_PREFIX}\n\n${summary}`, ...reasoning, later.content,
+      ]);
+      const body = forwardedBody(raw);
+      expect(body.instructions).toBe(`Be brief.\n\n${EXPECTED_NOTE}`);
+      expect(body.input).toEqual([oldRequest,
+        { type: "message", role: "user", content: [{ type: "input_text", text: `${SUMMARY_PREFIX}\n\n${summary}` }] },
+        ...reasoning.map(text => ({ type: "message", role: "user", content: [{ type: "input_text", text }] })), later,
+      ]);
+      expect(raw.input).toEqual(input);
+      expect(input[1]).toEqual({ type, encrypted_content });
+    });
+  }
+
+  test("retained checkpoint summarizer excludes the continuation note on both routes", () => {
+    const raw = { model: "m", instructions: "Be brief.", input: [oldRequest,
+      { type: "compaction", encrypted_content }, { type: "compaction_trigger" }],
+    };
+    const parsed = parseRequest(raw);
+    expect(parsed._compactionRequest).toBe(true);
+    expect(parsed.context.systemPrompt).toEqual(["Be brief."]);
+    expect(forwardedBody(raw, { _compactionRequest: true }).instructions).toBe("Be brief.");
+  });
+
+  test("invalid retained checkpoints retain the failure contract on both routes", () => {
+    const raw = { model: "m", input: [{ type: "compaction", encrypted_content: "ocx2:invalid" }] };
+    expect(() => parseRequest(raw)).toThrow("Invalid OpenCodex retained compaction envelope");
+    expect(() => forwardedBody(raw)).toThrow("Invalid OpenCodex retained compaction envelope");
   });
 });

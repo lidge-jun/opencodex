@@ -12,7 +12,7 @@ import { observeCodexLowQuota } from "../../src/codex/low-quota-observer";
 import { clearAccountNeedsReauth, markAccountNeedsReauth } from "../../src/codex/account-runtime-state";
 import { clearPoolRotationState } from "../../src/codex/pool-rotation";
 import { deleteCodexAccount } from "../../src/codex/account-lifecycle";
-import { handleCodexAuthAPI } from "../../src/codex/auth-api";
+import { handleCodexAuthAPI } from "../../src/codex/auth-api/routes";
 import { configSchema } from "../../src/config/schema/config-schema";
 import { validateConfigCandidate } from "../../src/config/diagnostics";
 import { requireManagementAuth, type ManagementAuthState } from "../../src/server/management-auth";

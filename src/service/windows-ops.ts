@@ -5,7 +5,7 @@ import { winswXmlPath } from "../lib/winsw";
 import { hardenSecretPath } from "../lib/windows-secret-acl";
 import { durableBunRuntime, type DurableBunRuntime } from "../lib/bun-runtime";
 import { assertSelectedRuntimeWritable, type RuntimePreflightDeps } from "../lib/bun-runtime-preflight";
-import { parseBakedListenPort } from "./health";
+import { parseBakedListenPort } from "./definition";
 import { windowsServiceScriptPath } from "./state";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmdirSync, unlinkSync } from "node:fs";

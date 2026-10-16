@@ -140,7 +140,7 @@ State-changing: yes. JSON mode: `none`.
 |---|---|
 | PUT | `/api/claude-desktop/picker` |
 
-- Needs a running proxy, first-party mode and macOS. The first time, macOS asks to trust a local certificate authority limited to claude.ai; when the server cannot show that prompt the command runs the trust step in this terminal.
+- Needs a running proxy, first-party mode and macOS or Windows. The first time, the OS asks to trust a local certificate authority limited to claude.ai; when the server cannot show that prompt the command runs the trust step in this terminal.
 - Claude Desktop then reaches the network through opencodex; fully quit and reopen Desktop afterwards.
 
 ### `ocx claude desktop picker off`
@@ -161,7 +161,7 @@ State-changing: yes. JSON mode: `none`.
 
 Usage: `ocx claude desktop picker trust`
 
-Run the macOS keychain step for picker mode in this terminal, then ask the server to finish enabling it.
+Run the OS certificate trust step for picker mode in this terminal, then ask the server to finish enabling it.
 
 State-changing: yes. JSON mode: `none`.
 
@@ -219,7 +219,7 @@ State-changing: yes. JSON mode: `payload`.
 
 | Flag | Value | Meaning |
 |---|---|---|
-| `--client` | string | File integration ID; aside selects profiles. |
+| `--client` | string | File integration ID, including gentle-shell; aside selects profiles. |
 | `--profile` | number | Aside nonnegative integer account ID; requires --client aside. |
 | `--json` | boolean | Emit the result as JSON. |
 | `--overwrite-conflict` | boolean | Explicitly permit replacing a conflicting block. |

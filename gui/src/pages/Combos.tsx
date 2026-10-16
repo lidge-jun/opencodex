@@ -92,7 +92,7 @@ export default function Combos({
   onCountChange?: (count: number) => void;
 }) {
   const t = useT();
-  const cacheKey = `ocx.combos.workspace.v1:${apiBase}`;
+  const cacheKey = `ocx.combos.workspace.v2:${apiBase}`;
   const cached = useMemo(() => seedCombos(cacheKey), [cacheKey]);
 
   /*
@@ -223,7 +223,7 @@ export default function Combos({
         visionSidecarConsumer: model.visionSidecarConsumer === true,
       };
       capabilityModels.push(option);
-      if (model.disabled !== true) models.push(option);
+      models.push(option); // Catalog visibility does not restrict internal Combo selection.
     }
 
     // Add a default placeholder only when the catalog has no row, including disabled rows.

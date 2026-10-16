@@ -154,7 +154,7 @@ does not set `modelResponsesUpstreamStreaming`: client `stream: true` remains re
 streaming until a current-runtime reproduction justifies a separate bounded-JSON compatibility
 policy.
 
-Go's non-forward Responses request path moves valid `additional_tools` wrappers into top-level
+Explicitly selected Codex Lite ordinary unreferenced hosted-history lowering follows [the hosted-search continuation boundary](../providers-and-adapters.md#hosted-search-continuation-binding); non-Lite/unknown requests, native compact and public API retain structural history; portable compaction keeps its existing trigger and default projection. Go's non-forward Responses request path moves valid `additional_tools` wrappers into top-level
 `tools` through `src/adapters/opencode-go-additional-tools.ts`. Placement runs after existing
 custom/search/namespace lowering and before code-mode, compaction and final hosted-tool pruning.
 It does not recalculate wire identities or response aliases. The matcher reads the constructed
@@ -397,7 +397,7 @@ Native passthrough SSE has TWO shapes, selected per request in
   The shared `createSseInspector` factory in `relay.ts` retains the complete inspection side effects,
   including the #44 late-terminal semantics.
 
-Both client readers retain a bounded, redacted message and the first structured refusal code from a bare upstream `error`. EOF synthesis also retains narrowly recognized rate-limit codes (`rate_limit_exceeded`, `rate_limit_error`) and overload codes (`server_is_overloaded`, `overloaded_error`); recognized types apply only without an explicit code.
+Both client readers retain a bounded, redacted message and the first structured refusal code from a bare upstream `error`. EOF synthesis also retains narrowly recognized rate-limit codes (`rate_limit_exceeded`, `rate_limit_error`) overload codes (`server_is_overloaded`, `overloaded_error`), and the client-refusal classes `invalid_request_error`, `authentication_error`, `permission_error`, `not_found_error` (400/401/403/404, the code repeating the class); recognized types apply only without an explicit code.
 At EOF without a real terminal they synthesize `response.failed` rather than `adapter_eof`; a code without a message still
 produces a terminal. Codex retries codes outside its fatal set, so code and message follow the same candidate precedence;
 recognized refusal copy is used only when the event has no code. A read failure after refusal reports that refusal (#5176).

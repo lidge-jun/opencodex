@@ -650,10 +650,22 @@ export function adapterFailureFromMessage(message: string): { httpStatus: number
   return { httpStatus, error };
 }
 
+/** A declared client refusal: retrying the identical request cannot change the verdict. */
+const CLIENT_ERROR_STATUS: Record<string, 400 | 401 | 403 | 404> = {
+  invalid_request_error: 400,
+  authentication_error: 401,
+  permission_error: 403,
+  not_found_error: 404,
+};
+
 /** Narrow structured classes carried through a synthesized bare-error terminal. */
 export function recognizedUpstreamError(error: { type?: unknown; code?: unknown }):
-  { type: string; code: string; httpStatus: 429 | 503 } | undefined {
+  { type: string; code: string; httpStatus: 400 | 401 | 403 | 404 | 429 | 503 } | undefined {
   const code = typeof error.code === "string" ? error.code : undefined;
+  const clientClass = code ?? (typeof error.type === "string" ? error.type : undefined);
+  if (clientClass !== undefined && Object.hasOwn(CLIENT_ERROR_STATUS, clientClass)) {
+    return { type: clientClass, code: clientClass, httpStatus: CLIENT_ERROR_STATUS[clientClass] };
+  }
   // An explicit unknown code must not gain a recognized class from its type or copy.
   if (code !== undefined && !["rate_limit_exceeded", "rate_limit_error", "server_is_overloaded", "overloaded_error"].includes(code)) return undefined;
   if (code === "rate_limit_exceeded" || code === "rate_limit_error"
@@ -680,8 +692,13 @@ export function httpStatusFromTerminalError(error: {
   if (isCyberPolicyCode(error.code) || (error.message ? isCyberPolicyMessage(error.message) : false)) {
     return 400;
   }
+  const message = error.message ?? "";
   const recognized = recognizedUpstreamError(error);
-  if (recognized) return recognized.httpStatus;
+  // Client-closed messages often arrive as invalid_request_error after classifyError, so a
+  // recognized 400 yields to the client-closed check below; every other class keeps its order.
+  if (recognized && !(recognized.httpStatus === 400 && message && isClientClosedMessage(message))) {
+    return recognized.httpStatus;
+  }
   if (error.type === "rate_limit_error" || error.code === "rate_limit_exceeded") return 429;
   if (error.type === "authentication_error" || error.code === "invalid_api_key") return 401;
   if (
@@ -693,7 +710,6 @@ export function httpStatusFromTerminalError(error: {
   if (error.type === "server_error" && error.code === "server_is_overloaded") return 503;
   // Client-closed messages often arrive as invalid_request_error after classifyError; check message
   // before treating every invalid_request_error as HTTP 400.
-  const message = error.message ?? "";
   if (message && isClientClosedMessage(message)) return 499;
   if (error.type === "invalid_request_error") return 400;
   if (error.type === "proxy_error") return 500;

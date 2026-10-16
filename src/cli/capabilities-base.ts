@@ -674,7 +674,7 @@ export const CAPABILITIES: readonly Capability[] = [
     flags: [],
     mutates: true,
     json: "none",
-    details: ["Needs a running proxy, first-party mode and macOS. The first time, macOS asks to trust a local certificate authority limited to claude.ai; when the server cannot show that prompt the command runs the trust step in this terminal.","Claude Desktop then reaches the network through opencodex; fully quit and reopen Desktop afterwards."],
+    details: ["Needs a running proxy, first-party mode and macOS or Windows. The first time, the OS asks to trust a local certificate authority limited to claude.ai; when the server cannot show that prompt the command runs the trust step in this terminal.","Claude Desktop then reaches the network through opencodex; fully quit and reopen Desktop afterwards."],
     usage: "ocx claude desktop picker on",
   },
   {
@@ -689,7 +689,7 @@ export const CAPABILITIES: readonly Capability[] = [
   },
   {
     command: ["claude","desktop","picker","trust"],
-    summary: "Run the macOS keychain step for picker mode in this terminal, then ask the server to finish enabling it.",
+    summary: "Run the OS certificate trust step for picker mode in this terminal, then ask the server to finish enabling it.",
     routes: [{"method":"GET","path":"/api/claude-desktop/picker"},{"method":"PUT","path":"/api/claude-desktop/picker"}],
     flags: [],
     mutates: true,
@@ -711,7 +711,7 @@ export const CAPABILITIES: readonly Capability[] = [
     command: ["integration","client"],
     summary: "Inspect and toggle file integrations and Aside profiles, read journals, and restore selected operations.",
     routes: [{"method":"GET","path":"/api/client-integrations"},{"method":"GET","path":"/api/client-integrations/{clientId}"},{"method":"GET","path":"/api/client-integrations/aside/profiles"},{"method":"GET","path":"/api/client-integrations/aside/profiles/{profileId}"},{"method":"GET","path":"/api/client-integrations/journal"},{"method":"GET","path":"/api/client-integrations/aside/profiles/journal"},{"method":"GET","path":"/api/client-integrations/aside/profiles/{profileId}/journal"},{"method":"PUT","path":"/api/client-integrations/{clientId}"},{"method":"PUT","path":"/api/client-integrations/aside/profiles"},{"method":"PUT","path":"/api/client-integrations/aside/profiles/{profileId}"},{"method":"POST","path":"/api/client-integrations/restore"},{"method":"POST","path":"/api/client-integrations/aside/profiles/{profileId}/restore"}],
-    flags: [{"name":"--client","value":"string","summary":"File integration ID; aside selects profiles."},{"name":"--profile","value":"number","summary":"Aside nonnegative integer account ID; requires --client aside."},{"name":"--json","value":"boolean","summary":"Emit the result as JSON."},{"name":"--overwrite-conflict","value":"boolean","summary":"Explicitly permit replacing a conflicting block."},{"name":"--op","value":"string","summary":"Operation ID; --op-id is an alias."},{"name":"--confirm-drift","value":"boolean","summary":"Explicitly allow replacing edits made after the snapshot."}],
+    flags: [{"name":"--client","value":"string","summary":"File integration ID, including gentle-shell; aside selects profiles."},{"name":"--profile","value":"number","summary":"Aside nonnegative integer account ID; requires --client aside."},{"name":"--json","value":"boolean","summary":"Emit the result as JSON."},{"name":"--overwrite-conflict","value":"boolean","summary":"Explicitly permit replacing a conflicting block."},{"name":"--op","value":"string","summary":"Operation ID; --op-id is an alias."},{"name":"--confirm-drift","value":"boolean","summary":"Explicitly allow replacing edits made after the snapshot."}],
     mutates: true,
     json: "payload",
     details: ["status/show/list reads all clients, one client or Aside profiles. history/journal reads rollback records; expired snapshots stay visible.","enable/disable requires --client; an omitted Aside --profile toggles all profiles. --overwrite-conflict applies only to enable.","restore requires --op (alias --op-id); --client requires --profile and only Aside supports that profile selector. --confirm-drift is an explicit user waiver, never auto-retried. Use client preview or restore --preview to inspect a change, history remove --op ID --yes to retire a journal row, and sync --client aside to refresh managed profiles."],

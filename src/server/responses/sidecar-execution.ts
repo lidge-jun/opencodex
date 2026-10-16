@@ -21,7 +21,7 @@ import {
   clampImageMaxRounds,
 } from "../../images";
 import type { ProviderAdapter } from "../../adapters/base";
-import type { OcxParsedRequest } from "../../types";
+import type { OcxParsedRequest, OcxUsage } from "../../types";
 import { rotateProviderTransportOn429, rateLimitRetryPolicyFor } from "../../providers/key-failover";
 import {
   isGenericOAuthFailoverEnabled,
@@ -50,6 +50,7 @@ import { providerFetch } from "./fetch-helpers";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import { recordAdapterReasoning, recordAdapterTier } from "../request-log";
 import { normalizeLogConversationId } from "../request-log-conversation";
+import { attemptAccountChanged } from "../request-log-account-rotation";
 import { rememberResponseState } from "../../responses/state";
 import { trackStreamLifetime } from "../lifecycle";
 import { isAntigravityRawValidationRefusal } from "./antigravity-validation-refusal";
@@ -418,7 +419,8 @@ export async function executeResponsesSidecars(
         hop.permit?.release();
         return null;
       }
-      recoveryKind = originalResponse?.status === 401 ? "oauth-401" : "anthropic-oauth-429";
+      recoveryKind = originalResponse?.status === 401 ? "oauth-401"
+        : originalResponse?.status === 403 ? "oauth-account-403" : "anthropic-oauth-429";
       sidecarBudget.ownCredentialHop(hop.permit);
     } else {
       // No key pool, no generic OAuth roster, no Anthropic pool could produce a replacement
@@ -451,6 +453,15 @@ export async function executeResponsesSidecars(
       ...(antigravityVerification ? { oauthCredentialSnapshot: transportState.replayOAuthCredentialSnapshot } : {}),
     });
     return { adapter: rotatedAdapter, recoveryKind };
+  };
+  // A loop's hidden rounds before a rotation were spent by the account it left. Bill them to that
+  // account's attempt while it is still open; the next send seals it. Declined when that send
+  // keeps the account (no new attempt), so the loop's final total still carries them.
+  const billRotatedUsage = (usage: OcxUsage): boolean => {
+    const attempt = logCtx.activeAttempt;
+    if (!attempt || !attemptAccountChanged(attempt.accountLogLabel, logCtx.accountLogLabel, attempt.provider, logCtx.provider)) return false;
+    transportState.bindKeyUsageFromBridge(usage);
+    return true;
   };
   if ((imgPlan || vidPlan) && wsPlan) {
     // Web search takes priority when both are active — the media bridge cannot run
@@ -551,6 +562,7 @@ export async function executeResponsesSidecars(
         transportState.bindKeyUsageFromBridge(usage);
       },
       on429: rotateSidecarProviderOn429,
+      onRotatedUsage: billRotatedUsage,
       retryOn429Policy: route.providerName === "kiro" && isGenericOAuthFailoverEnabled(config, "kiro")
         ? null : rateLimitRetryPolicyFor(route.provider),
       onFirstOutput: noteSidecarOutput,
@@ -656,6 +668,7 @@ export async function executeResponsesSidecars(
       stallTimeoutSec: wsPlan.stallTimeoutSec,
       streamRoutedModelOutput: wsPlan.streamRoutedModelOutput,
       on429: rotateSidecarProviderOn429,
+      onRotatedUsage: billRotatedUsage,
       ...(!options.comboInitialSend && route.providerName === "google-antigravity" ? { onIterationEnd: () => {
         // The next Antigravity adapter dispatch claims this permit. If request construction,
         // admission or cancellation stopped it first, return the unused send allowance.

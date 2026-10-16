@@ -3,6 +3,7 @@ import { validRemainingQuotaAccountIds } from "../../codex/account-use-remaining
 import * as z from "zod/v4";
 import { anthropicAccountPoolSchema } from "./anthropic-account-pool";
 import { compactionRecoverySchema } from "./compaction-recovery";
+import { nativeReasoningRetentionSchema } from "./native-reasoning-retention";
 import { desktopCompatibilitySchema } from "./desktop-compatibility";
 import { blockedModelRedirectsSchema } from "./blocked-model-redirects";
 import { mainAccountHardLockFallbackSchema } from "./main-account-hard-lock-fallback";
@@ -33,6 +34,7 @@ import {
   modelPinnedEffortsSchema,
   autoReviewOverrideSchema,
   compactionRoutingSchema,
+  reasoningRetentionSchema,
   memoryModelSettingSchema,
   memoryModelsSchema,
   modelPreferHostedToolsConfigError,
@@ -200,6 +202,9 @@ export const configSchema = z.object({
   modelPinnedEfforts: modelPinnedEffortsSchema.optional(),
   compactionRouting: compactionRoutingSchema.optional().catch(undefined),
   compactionRecovery: compactionRecoverySchema.optional().catch(undefined),
+  // A bad hand edit disables only this block; writes validate the catch-free leaf first.
+  reasoningRetention: reasoningRetentionSchema.optional().catch(undefined),
+  nativeReasoningRetention: nativeReasoningRetentionSchema.optional().catch(undefined),
   desktopCompatibility: desktopCompatibilitySchema.optional().catch(undefined),
   // A hand-edited malformed phase disables only that phase instead of rejecting
   // providers/apiKeys, matching the load-time degradation notice; the management write

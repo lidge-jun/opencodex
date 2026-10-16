@@ -1,12 +1,12 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { invalidateCodexModelsCache, syncCatalogModels } from "./catalog";
+import { invalidateCodexModelsCache, syncCatalogModels } from "./catalog/retained-sync";
 import type { ComboCatalogOmission } from "./catalog/aggregation";
 import { getCodexHome } from "./paths";
 import { withCatalogWriteSerialization, CatalogWritePermitRefusal } from "./catalog-write-serialization";
 import { replaceCodexModelsCache } from "./internal/catalog-writer";
 import type { OcxConfig } from "../types";
-import type { CodexCatalogSyncOptions } from "./catalog/sync";
+import type { CodexCatalogSyncOptions } from "./catalog/retained-sync";
 
 export interface CodexCatalogRefreshResult {
   added: number;

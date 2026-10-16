@@ -8,7 +8,7 @@ import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV, durableBunRuntime, type D
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { systemdProperty } from "../service-manager-probe";
 import { writeServiceApiTokenFile, sh } from "./guards";
-import { shellQuote, buildServiceShellCommand, buildServiceLauncherShellCommand, resolvedProxyEnv } from "./health";
+import { shellQuote, buildServiceShellCommand, buildServiceLauncherShellCommand, resolvedProxyEnv } from "./definition";
 import type { ServiceInstallCleanupOps } from "./orchestration";
 import { SERVICE_MANAGED_ENV, TASK, cliEntry, filterTransientServicePath, stableLauncherEntry, logPath, serviceStatePath, currentCodexSqliteHomeAbsolute, writeServiceInstallState } from "./state";
 import { writeServiceDefinitionFile } from "./windows-ops";

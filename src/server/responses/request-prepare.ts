@@ -17,7 +17,7 @@ import {
   unreadableEncryptedAgentTaskResponse,
 } from "./core-errors";
 import { parseSyntheticRowId } from "../fast-row";
-import { resolveComboId, comboIdFromRawBody, NoAvailableComboTargetsError, pickComboTarget } from "../../combos";
+import { resolveComboId, comboIdFromRawBody, comboExclusionReasons, NoAvailableComboTargetsError, pickComboTarget } from "../../combos";
 import { INTERCEPT_TARGET_UNAVAILABLE_CODE, interceptTargetUnavailableResponse, resolveChosenTarget, resolveShadowCallTarget } from "./shadow-target-availability";
 import {
   MEMORY_MODEL_TARGET_UNAVAILABLE_CODE,
@@ -84,6 +84,7 @@ import {
 } from "../../router";
 import { evidenceFromBody } from "../../routing/request-evidence";
 import { OPENAI_CODEX_PROVIDER_ID, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
+import { resolveNativeReasoningRetention } from "../../config/schema/native-reasoning-retention";
 import { isThreadSpawnRequest } from "../effort-policy";
 import {
   resolveSubagentFallbackChain,
@@ -458,6 +459,7 @@ export async function prepareResponsesRequest(
     // produced them with an empty conversation; the conversation itself comes straight from the
     // client body. Inside this try so a decode error answers exactly like a parse error.
     if (options.directRequest) parsed = options.directRequest.decode(parsed);
+    parsed._nativeReasoningRetention = resolveNativeReasoningRetention(config);
     // Capture before route rewrites or hosted sidecars can add tools; replayed catalogs are history.
     // The direct settings body omits tools, including current legacy Chat functions. Recover
     // their wire names only when this restriction needs a non-empty decoded catalog.
@@ -473,6 +475,7 @@ export async function prepareResponsesRequest(
     if (options.inboundWire === "anthropic") {
       parsed._nativeReasoningReplay = options.nativeReasoningReplay;
       parsed._nativeReasoningMint = options.nativeReasoningMint;
+      parsed._anthropicServerTools = options.anthropicServerTools;
     }
     parsed._promptCacheKeyIsSharedCohort = options.promptCacheKeyIsSharedCohort;
     // The body may have been rebuilt since the inbound observation (previous-response
@@ -645,7 +648,10 @@ export async function prepareResponsesRequest(
       config, options.admission, config.combos?.[candidate.combo.comboId],
     )) {
       const pick = pickComboTarget(config, candidate.combo.comboId, { eligible: target => !target.metered });
-      if (!pick) throw new NoAvailableComboTargetsError(candidate.combo.comboId);
+      if (!pick) {
+        throw new NoAvailableComboTargetsError(candidate.combo.comboId,
+          comboExclusionReasons(config, candidate.combo.comboId, target => !target.metered));
+      }
       const routed = routeConcreteModel(config, `${pick.target.provider}/${pick.target.model}`);
       candidate = { ...routed, combo: pick, routeKind: "combo", routeReason: routed.routeReason === "blocked-model-redirect" ? "blocked-model-redirect" : "combo-pick" };
     }
@@ -776,8 +782,14 @@ export async function prepareResponsesRequest(
       // This is the same condition an account change already reports (account-change-state.ts),
       // and the serializer turns a stored summary into readable text instead of dropping it.
       parsed._stripReasoningEncryptedContent = true;
+      parsed._stripNativeCompactionEncryptedContent = true;
       if (parsed._compactionRequest === true) parsed._portableCompaction = true;
     }
+    // A v1 fallback needs an ocx1 summary for replacement-history decoding, even when this
+    // custom destination separately accepts native v2 triggers. Legacy defaults stay intact.
+    if (options.compactionRecoveryKind === "compaction-v1" && parsed._compactionRequest === true
+      && route.provider.adapter === "openai-responses" && route.provider.supportsNativeCompactionTrigger === true
+      && !isCanonicalOpenAiForwardProvider(route.provider)) parsed._portableCompaction = true;
     logCtx.routeDecision = route.routeDecision;
     logCtx.policyEligibility = route.policyEligibility;
   } catch (err) {
@@ -788,7 +800,7 @@ export async function prepareResponsesRequest(
     if (policyRefusal) return policyRefusal;
     if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(err);
     if (err instanceof NoAvailableComboTargetsError) {
-      return comboUnavailable(err.comboId);
+      return comboUnavailable(err.comboId, undefined, err.reasons);
     }
     if (err instanceof NoEligiblePolicyCandidateError) {
       // Persist the evaluation trace (per-candidate exclusions + the
@@ -1006,7 +1018,7 @@ export async function prepareResponsesRequest(
         if (policyRefusal) return policyRefusal;
         if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(err);
         if (err instanceof NoAvailableComboTargetsError) {
-          return comboUnavailable(err.comboId);
+          return comboUnavailable(err.comboId, undefined, err.reasons);
         }
         if (err instanceof NoEligiblePolicyCandidateError) {
           logCtx.routeDecision = err.trace;
@@ -1078,6 +1090,7 @@ export async function prepareResponsesRequest(
             "_promptCacheKeyIsSharedCohort",
             "_cursorClientThreadId",
             "_reasoningReplayScope",
+            "_nativeReasoningRetention",
             "_cursorIsolateConversation",
           ];
           for (const key of kept) {
@@ -1223,7 +1236,7 @@ export async function prepareResponsesRequest(
               if (policyRefusal) return policyRefusal;
               if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(err);
               if (err instanceof NoAvailableComboTargetsError) {
-                return comboUnavailable(err.comboId);
+                return comboUnavailable(err.comboId, undefined, err.reasons);
               }
               if (err instanceof NoEligiblePolicyCandidateError) {
                 logCtx.routeDecision = err.trace;
@@ -1540,6 +1553,8 @@ export async function prepareResponsesRequest(
       applyAccountChangeConversationStateScrub({
         body: parsed._rawBody,
         parsed,
+        preserveReasoningEncryptedContent: isCanonicalOpenAiForwardProvider(route.provider)
+          && parsed._nativeReasoningRetention?.accountSwitch === true,
         bindingKey: binding.bindingKey,
         servingAccountId: binding.accountId,
         logCtx,

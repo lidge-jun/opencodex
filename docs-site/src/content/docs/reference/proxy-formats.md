@@ -32,6 +32,14 @@ the same serialized request and records the recovery in Logs. Other 400 errors,
 custom destinations, cancellations and repeated upload rejections remain failures.
 This does not retry filtered model responses or interrupted streams.
 
+## Codex-native ordinary Lite hosted-search history
+
+Ordinary requests retain structural hosted-search history by default, including Responses Lite requests. To opt in to lossy reference notes, set `providers.openai.projectResponsesLiteHostedSearchHistory: true` in `config.json` (an actual boolean, not the string `"true"`). The per-provider setting defaults to off; omission or `false` keeps structural history. Even when enabled, projection applies only to ordinary requests whose final destination is exact canonical ChatGPT Codex `/responses` and whose effective request intent explicitly selects Responses Lite. It converts unreferenced remaining `web_search_call` history into labeled assistant reference notes. The final `x-openai-internal-codex-responses-lite` header selects Lite only when its value is exactly `true`; an explicit `false` overrides frame metadata. Without a recognized header value, a valid string-map `client_metadata.ws_request_header_x_openai_internal_codex_responses_lite` value of `true` is used, matching the existing WS metadata handling. Non-Lite or unrecognized effective intent retains structural history; malformed metadata does not override an explicit HTTP `true`. Model names, subscription authentication, missing hosted declarations and `additional_tools` alone do not select this policy; no header or metadata is rewritten to make it apply. Once enabled, it applies to new threads/forks, cross-model continuations and cache misses/restarts, without diagnostic settings. Only a valid same-scope bridge memo proves an original function call/result that can be restored first; an ID prefix, model name or missing memo cannot determine the issuer. A hosted cell exactly referenced by a same-input `item_reference.id` is retained. `store:false` removes references earlier, and its remaining hosted history can be projected. Tool declarations/Lite `additional_tools`, choices, client call/result pairs, reasoning/native ciphertext, non-hosted order and caller raw history retain their existing contracts.
+
+Within that opted-in Lite boundary, this is an explicit **lossy history policy**, not a claim that hosted calls are invalid schema or that all upstream errors are fixed. Notes carry untrusted status/action metadata and allowlisted URL/title/type from both action and top-level sources, never instructions or fetched page bodies: 2,048 UTF-16 units per string, 20 entries per list, 65,536 serialized bytes for all projected notes, then an omission note. IDs and unknown fields are dropped from converted cells. HTTP/SSE and WS share the final ordinary builder.
+
+Public OpenAI API and other destinations do not gain ordinary or native-compact projection. Native `/responses/compact` remains its existing endpoint/account-scrub/official opaque-output path and retains structural hosted history. Portable/routed summaries reuse their existing projection trigger and default reference behavior; the shared renderer additionally retains allowlisted top-level sources there. No new retry, source classification or compaction summarizer is introduced.
+
 ## Empty search answers
 
 After hosted search, a clean but empty forced-answer pass receives one additional answer
@@ -732,7 +740,13 @@ conversation.
 | Route type | Behavior |
 | --- | --- |
 | Canonical ChatGPT or official OpenAI route | Tries the native `/responses/compact` endpoint with the resolved account and model authentication; HTTP 404 falls back to a regular Responses compaction turn |
+| Explicitly opted-in custom `openai-responses` gateway | `supportsNativeCompactEndpoint: true` tries the native v1 endpoint for key/local/forward auth using the provider's normal Responses transport; HTTP 404 uses portable fallback; OAuth retains routed compaction and credential resolution |
 | Other routed model | Runs an internal, non-streaming, no-tools compaction turn with a `compaction_trigger`; requires exactly one synthetic `compaction` item whose `encrypted_content` is an `ocx1:` envelope; decodes that summary into v1 replacement history |
+
+The custom v1 endpoint capability is independent of v2 `supportsNativeCompactionTrigger`
+and of `decodesNativeCompactionBlobs` for replay. None grants canonical OpenAI identity or
+caller credential forwarding. Cross-provider overrides remain portable; v2 success alone
+does not establish support for `/responses/compact`. See [provider configuration](/reference/configuration/providers/).
 
 If the native compact endpoint returns HTTP 404, OpenCodex retries compaction through a regular
 Responses turn with the same model selector and session headers. Canonical ChatGPT fallback

@@ -105,7 +105,7 @@ dahildir. Durumu yedekleyin ve yalnızca bu kapsamın tamamını istiyorsanız �
 
 ### `ocx recover-history --ocx-compaction <thread-id> --yes`
 
-Yönlendirilmiş bir sağlayıcı üzerinden sıkıştırılmış bir görevi yerel Codex ile sürdürmeden önce geçmişini onarın. Komut UUID ile yalnızca bir görevi seçer, önce özel ve bayt bayt bir yedek kaydeder, ardından yalnızca OpenCodeX'e ait `ocx1:` sıkıştırma durumunu yerel Codex'in yeniden oynatabileceği düz bir özete dönüştürür. Yerel şifreli içerik ve diğer görevler değişmeden kalır. Komutu çalıştırmadan önce seçili görevi kapatın; işlem sırasında rollout değişirse kurtarma dosyayı değiştirmeden durur.
+Yönlendirilmiş bir sağlayıcı üzerinden sıkıştırılmış bir görevi yerel Codex ile sürdürmeden önce geçmişini onarın. Komut UUID ile yalnızca bir görevi seçer, önce özel ve bayt bayt bir yedek kaydeder, ardından yalnızca OpenCodeX'e ait `ocx1:`/`ocx2:` sıkıştırma durumunu yerel Codex'in yeniden oynatabileceği düz bir özete dönüştürür. Yerel şifreli içerik ve diğer görevler değişmeden kalır. Komutu çalıştırmadan önce seçili görevi kapatın; işlem sırasında rollout değişirse kurtarma dosyayı değiştirmeden durur.
 
 ### `ocx uninstall` · `ocx remove`
 

@@ -603,6 +603,7 @@ describe("headless GUI parity CLI", () => {
       ["/api/codex/desktop-compatibility", "(none — local GUI confirmation; status CLI deferred in clients/codex-desktop.md)"],
       ["/api/protocols", "ocx api protocols/explain/policy"],
       ["/api/settings", "ocx system"],
+      ["/api/native-reasoning-retention", "(none — dedicated live CLI deferred; local policy via ocx config)"],
       // Routing Intelligence (RI-04..RI-10): profiles + dry-run are mirrored by
       // `ocx route policy`. Analytics is GUI-first for now; the same request
       // history remains available through observe/index tooling.

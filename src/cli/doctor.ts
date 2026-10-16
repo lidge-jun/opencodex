@@ -1472,7 +1472,7 @@ export async function runDoctor(args: string[] = []): Promise<void> {
 
   // Observe-only and warning-level: a bypassed Desktop first-party install still serves the
   // CLI and every non-Desktop client, so this never records a doctor failure.
-  const desktopSystemProxyLines = formatDesktopSystemProxyLines(collectDesktopSystemProxy(doctorConfig));
+  const desktopSystemProxyLines = formatDesktopSystemProxyLines(await collectDesktopSystemProxy(doctorConfig));
   if (desktopSystemProxyLines.length > 0) {
     console.log("\nClaude Desktop first-party vs Windows system proxy");
     for (const line of desktopSystemProxyLines) console.log(line);

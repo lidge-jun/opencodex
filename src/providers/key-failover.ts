@@ -13,7 +13,7 @@ export { clearKeyCooldowns, getKeyCooldownUntil, sweepExpiredApiKeyCooldowns } f
 import { commitProviderApiKeySelection, providerApiKeySelectionIsCurrent } from "./api-key-selection";
 import { RequestPacingQueueOverloadError } from "./request-pacing";
 import type { ProviderApiKeySelection } from "../types/provider";
-import { routedProviderConfig } from "../router";
+import { routedProviderConfig } from "./routed-config";
 import { getProviderRegistryEntry } from "./registry";
 import { isCanonicalCommandCodeBaseUrl, normalizedBaseUrl } from "./quota/vendor-probes-key";
 import type { OcxConfig, OcxProviderConfig, RateLimitRetryPolicy, ResetReplayPolicy, TransientRetryPolicy } from "../types";

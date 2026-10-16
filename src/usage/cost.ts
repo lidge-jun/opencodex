@@ -404,6 +404,15 @@ function vendorPrefixedCost(modelId: string): ReturnType<typeof findVendorCostBy
   return normalize(found.provider) === normalize(claimedVendor) ? found : undefined;
 }
 
+/**
+ * Only measured usage is priced. An `unreported` or `unsupported` row can still carry tokens — a
+ * combo whose first leg failed without usage keeps the second leg's — and pricing them reports an
+ * understated cost as if it were complete.
+ */
+export function isMeasuredStatus(usageStatus: UsageStatus): boolean {
+  return usageStatus === "reported" || usageStatus === "estimated";
+}
+
 function isEstimated(usage: OcxUsage, usageStatus: UsageStatus, priceStatus: ExpectedPriceStatus | "verified"): boolean {
   return usage.estimated === true || usageStatus === "estimated" || priceStatus === "verified-derived";
 }
@@ -592,7 +601,7 @@ export function estimateAttemptCost(
   serviceTier?: ServiceTierInput,
   userOverlays: readonly ExpectedPriceOverlay[] = activeUserCostOverlays(),
 ): AttemptCostEstimate | null {
-  if (!attempt.usage) return null;
+  if (!isMeasuredStatus(attempt.usageStatus) || !attempt.usage) return null;
   const tokens = normalizeCostTokens(attempt.usage);
   if (!tokens) return null;
   const price = resolveMatchedPrice(attempt.provider, attempt.model, overlays, userOverlays, attempt);
@@ -682,7 +691,7 @@ export function estimateRequestCost(
   overlays: readonly ExpectedPriceOverlay[] = EXPECTED_PRICE_OVERLAYS,
   userOverlays: readonly ExpectedPriceOverlay[] = activeUserCostOverlays(),
 ): CostEstimate | null {
-  if (!input.usage) return null;
+  if (!isMeasuredStatus(input.usageStatus) || !input.usage) return null;
   const tokens = normalizeCostTokens(input.usage);
   if (!tokens) return null;
   const price = resolveMatchedPrice(input.provider, input.model, overlays, userOverlays, input);

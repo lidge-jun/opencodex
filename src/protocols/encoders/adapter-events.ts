@@ -61,6 +61,7 @@ export interface ClientWebSearch {
   status: "completed" | "failed";
   queries: string[];
   sources: { url: string; title?: string }[];
+  fetch?: { url: string; result: unknown };
 }
 
 /**
@@ -411,9 +412,9 @@ export function encodeAdapterEventStream(
     budget.closeCall(call.callId);
     currentToolCall = null;
   };
-  const closeCurrentWebSearch = (status: "completed" | "failed", queries: string[], sources?: { url: string; title?: string }[]) => {
+  const closeCurrentWebSearch = (status: "completed" | "failed", queries: string[], sources?: { url: string; title?: string }[], fetch?: ClientWebSearch["fetch"]) => {
     if (!currentWebSearch) return;
-    writer.webSearchDone({ itemId: currentWebSearch.itemId, status, queries, sources: sources ?? [] });
+    writer.webSearchDone({ itemId: currentWebSearch.itemId, status, queries, sources: sources ?? [], ...(fetch ? { fetch } : {}) });
     currentWebSearch = null;
   };
   const appendToolArgs = (call: OpenToolCall, fragment: string) => {
@@ -688,7 +689,7 @@ export function encodeAdapterEventStream(
               if (currentWebSearch) closeCurrentWebSearch("completed", []);
               currentWebSearch = { itemId: `ws_${uuid()}`, eventId: event.id };
             }
-            closeCurrentWebSearch(event.status ?? "completed", event.queries, safeWebSearchSources(event.sources));
+            closeCurrentWebSearch(event.status ?? "completed", event.queries, safeWebSearchSources(event.sources), event.fetch);
             break;
           }
           case "done": {

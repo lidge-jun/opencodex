@@ -387,6 +387,39 @@ function canonicalJson(value: unknown): string {
 /** Provenance of the generated prompt_cache_key (never serialized into the wire body). */
 export type ClaudeCacheKeySource = "metadata" | "system" | null;
 
+/**
+ * The translated lane places its own prompt-cache breakpoints, so the caller's are dropped;
+ * their TTL is the one thing worth keeping. When every caller breakpoint asks for `ttl: "1h"`
+ * (Claude Code on a subscription marks them so) this maps to `cacheRetention: "long"`. A mixed
+ * caller (1h prefix, 5m tail) stays on the default: "long" also makes the moving per-turn
+ * breakpoint 1h, which bills writes the caller asked to keep at the 5m rate at the 1h rate.
+ * Read out of body: the Responses body has no field for it.
+ */
+export function callerCacheRetention(raw: unknown): "long" | undefined {
+  if (!isRec(raw)) return undefined;
+  // Top-level automatic caching is a breakpoint too, and content blocks nest (tool_result,
+  // search_result, document sources), so every block container is walked. Tool inputs and
+  // schemas are caller data, not blocks: a `cache_control` key there is not a breakpoint.
+  const ttls: unknown[] = [];
+  const visit = (node: unknown, depth: number): void => {
+    if (depth > 16) return;
+    if (Array.isArray(node)) { for (const item of node) visit(item, depth + 1); return; }
+    if (!isRec(node)) return;
+    if (isRec(node.cache_control)) ttls.push(node.cache_control.ttl);
+    for (const [key, value] of Object.entries(node)) {
+      if (key !== "cache_control" && key !== "input" && key !== "input_schema"
+        && (Array.isArray(value) || isRec(value))) visit(value, depth + 1);
+    }
+  };
+  if (isRec(raw.cache_control)) ttls.push(raw.cache_control.ttl);
+  visit(raw.system, 0);
+  visit(raw.tools, 0);
+  visit(raw.messages, 0);
+  return ttls.length > 0 && ttls.every(ttl => ttl === "1h")
+    ? "long"
+    : undefined;
+}
+
 export interface ClaudeInboundTranslation {
   body: Rec;
   cacheKeySource: ClaudeCacheKeySource;

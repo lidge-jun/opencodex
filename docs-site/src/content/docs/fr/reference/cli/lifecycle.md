@@ -68,7 +68,7 @@ Il s'agit d'un réétiquetage large et destructif : chaque fil contenant un mess
 
 ### `ocx recover-history --ocx-compaction <thread-id> --yes`
 
-Réparez l'historique d'une tâche compactée par un fournisseur routé avant de la reprendre avec Codex natif. La commande sélectionne exactement une tâche par UUID, enregistre d'abord une sauvegarde privée octet par octet, puis convertit uniquement l'état de compaction `ocx1:` propre à OpenCodeX en résumé ordinaire relisible par Codex natif. Le contenu chiffré natif et les autres tâches restent inchangés. Fermez la tâche sélectionnée avant d'exécuter la commande ; toute modification simultanée du rollout interrompt la récupération sans remplacer le fichier.
+Réparez l'historique d'une tâche compactée par un fournisseur routé avant de la reprendre avec Codex natif. La commande sélectionne exactement une tâche par UUID, enregistre d'abord une sauvegarde privée octet par octet, puis convertit uniquement l'état de compaction `ocx1:`/`ocx2:` propre à OpenCodeX en résumé ordinaire relisible par Codex natif. Le contenu chiffré natif et les autres tâches restent inchangés. Fermez la tâche sélectionnée avant d'exécuter la commande ; toute modification simultanée du rollout interrompt la récupération sans remplacer le fichier.
 
 ### `ocx uninstall` · `ocx remove`
 

@@ -16,6 +16,9 @@ replacement health proof: lifecycle decisions, attestation and exit codes stay a
 and a known supervised target never earns a competing CLI recovery start. Command guard
 continuity follows [runtime ownership](runtime.md#background-service-runtime-ownership).
 
+The export roster and full help include `gentle-shell`, with a persistent-home and
+Pi link/shared-home remedy; this adds a client identity, not a new command or flag.
+
 ## Head and help navigation
 
 `src/cli/root.ts`, `src/cli/help.ts`, `src/cli/help-navigation.ts`
@@ -126,7 +129,7 @@ Storage policy flags in `src/cli/storage.ts` preserve omitted enable/settings an
 
 `src/cli/account-api.ts` forwards explicit quota/refresh intent to the existing per-key owner; ordinary key listing omits both. Opt-in requests reject redirects. `src/cli/account-key-quota.ts` rebuilds the public ProviderQuota projection, including custom windows and credits, with finite-field validation and no credential or private publication fields. Missing mode evidence is unverified/nonzero. Human rendering separates probe/passive/unsupported, unavailable and unmeasured from actual zero; Codex/OAuth rendering remains separate. This read can invoke upstream quota work but does not change key selection or provider aggregate caches. Account list/current rows additionally project, through `src/cli/account-next-actions.ts`, only an allow-listed server health label, a locally generated recovery command built from shell-safe selectors (never server summary/action text), and the Codex boolean `creditsAfterLimit` as read-only consent readback; empty listings add a fixed next-action note to human output and JSON `notes`.
 
-The operating guide's eight-domain workflow table is navigation rather than parity measurement. Handwritten JSON, recipe, recovery and target docs qualify bounded windows, model-only search, partial/default results and human-only/session actions. Generated chapter counts still derive exclusively from capability declarations. Each chapter renders mutation and JSON mode together so additive declarations retain all metadata within the chapter line budget.
+The operating guide's eight-domain workflow table is navigation rather than parity measurement. Handwritten JSON, recipe, recovery and target docs qualify bounded windows, model-only search, partial/default results and human-only/session actions. Generated chapter counts still derive exclusively from capability declarations. Each chapter renders mutation and JSON mode together so additive declarations retain all metadata within the chapter line budget. File integration help includes Gentle Shell through the `gentle-shell` client target.
 
 ## ocx command selection
 

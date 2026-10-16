@@ -785,6 +785,8 @@ export function providerManagementConfigError(
     delete canonicalCandidate.pinnedReasoningEffort;
     delete canonicalCandidate.modelPinnedReasoningEfforts;
     delete canonicalCandidate.responsesSnapshotRepair;
+    // Explicit history-loss opt-in changes request content, never auth or transport identity.
+    delete canonicalCandidate.projectResponsesLiteHostedSearchHistory;
     // modelCosts is a user-owned display overlay, not part of the canonical
     // forward seed; it is validated separately below (providerModelCostsConfigError).
     delete canonicalCandidate.modelCosts;
@@ -922,6 +924,9 @@ export function providerManagementConfigError(
     typed,
   );
   if (preferHostedToolsError) return `provider ${name} ${preferHostedToolsError}`;
+  if (raw.projectResponsesLiteHostedSearchHistory !== undefined && typeof raw.projectResponsesLiteHostedSearchHistory !== "boolean") {
+    return `provider ${name} projectResponsesLiteHostedSearchHistory must be a boolean`;
+  }
   if (raw.responsesSnapshotRepair !== undefined && typeof raw.responsesSnapshotRepair !== "boolean") {
     return `provider ${name} responsesSnapshotRepair must be a boolean`;
   }
@@ -1056,9 +1061,12 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   preserveResponsesReasoningContent: "editor",
   preserveResponsesInputItemIds: "editor",
   preserveResponsesMessageMetadata: "editor",
+  projectResponsesLiteHostedSearchHistory: "editor",
   dropResponsesReasoningItems: "editor",
   modelReasoningEffortsAuthoritative: "editor",
   decodesNativeCompactionBlobs: "editor",
+  supportsNativeCompactionTrigger: "editor",
+  supportsNativeCompactEndpoint: "editor",
   allowEncryptedV2AgentTasks: "editor",
   allowPrivateNetwork: "editor",
   // A proxy URL routinely embeds `user:password@`, so it never reaches the dashboard DTO and

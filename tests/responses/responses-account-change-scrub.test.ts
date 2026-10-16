@@ -14,6 +14,8 @@ import {
   rememberConversationStateIssuer,
 } from "../../src/codex/routing";
 import type { RequestLogContext } from "../../src/server/request-log";
+import type { OcxParsedRequest } from "../../src/types";
+import { sanitizeReasoningInputContent } from "../../src/adapters/openai-responses/reasoning";
 
 const BINDING_KEY = "thread-account-change-scrub";
 const ENCRYPTED = "gAAAA" + "A".repeat(80);
@@ -136,6 +138,42 @@ function compactTurnBody(text = "keep this compact user turn") {
 describe("Codex pool account-change conversation-state scrub", () => {
   afterEach(() => {
     clearConversationStateIssuerMap();
+  });
+
+  test("reasoning retention still drops continuation ids and keeps compaction stripping armed", () => {
+    rememberConversationStateIssuer(BINDING_KEY, "account-a");
+    const body = turnBody();
+    const parsed: Pick<OcxParsedRequest, "previousResponseId" | "_stripReasoningEncryptedContent" | "_stripNativeCompactionEncryptedContent" | "_dropForeignReasoningItemIds"> = {
+      previousResponseId: "resp_account_a",
+    };
+    expect(applyAccountChangeConversationStateScrub({
+      body, parsed, bindingKey: BINDING_KEY, servingAccountId: "account-b",
+      preserveReasoningEncryptedContent: true,
+    })).toBe(true);
+    expect(body.previous_response_id).toBeUndefined();
+    expect(parsed.previousResponseId).toBeUndefined();
+    expect(parsed._stripReasoningEncryptedContent).toBeUndefined();
+    expect(parsed._stripNativeCompactionEncryptedContent).toBe(true);
+    expect(parsed._dropForeignReasoningItemIds).toBe(true);
+    expect(body.input[1]).toEqual(reasoningBlob());
+  });
+
+  test("issuer-only account evidence removes foreign reasoning ids on stored replay without losing retained ciphertext", () => {
+    rememberConversationStateIssuer(BINDING_KEY, "account-a");
+    const body = { model: "gpt-5.4", store: true, input: [reasoningBlob()] };
+    const parsed: Pick<OcxParsedRequest, "previousResponseId" | "_stripReasoningEncryptedContent" | "_stripNativeCompactionEncryptedContent" | "_dropForeignReasoningItemIds"> = {};
+    expect(applyAccountChangeConversationStateScrub({
+      body, parsed, bindingKey: BINDING_KEY, servingAccountId: "account-b",
+      preserveReasoningEncryptedContent: true,
+    })).toBe(false);
+    expect(parsed._dropForeignReasoningItemIds).toBe(true);
+    const outbound = sanitizeReasoningInputContent(body, {
+      dropForeignItemId: parsed._dropForeignReasoningItemIds,
+      stripEncryptedContent: parsed._stripReasoningEncryptedContent,
+    }) as typeof body;
+    expect(outbound.input[0]!.id).toBeUndefined();
+    expect(outbound.input[0]!.encrypted_content).toBe(ENCRYPTED);
+    expect(body.input[0]!.id).toBe("rs_account_change");
   });
 
   test("a turn served by the same account keeps previous_response_id and encrypted reasoning", () => {

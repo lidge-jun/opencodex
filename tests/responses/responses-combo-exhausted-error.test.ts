@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { clearComboSelectionState, clearComboTargetCooldowns, coolComboTarget, snapshotComboQuotaCooldowns } from "../../src/combos";
 import { clearKeyCooldowns } from "../../src/providers/key-failover";
+import { clearCachedProviderQuotas, setCachedProviderQuotaForTests } from "../../src/providers/quota-routing-cache";
+import type { ProviderQuota } from "../../src/providers/quota-types";
 import { handleComboResponses, handleResponses } from "../../src/server/responses/core";
 import { executeComboResponses } from "../../src/server/responses/core-combo";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
@@ -286,5 +288,45 @@ describe("combo exhaustion reports the primary's quota refusal", () => {
     upstream(502, "bad gateway");
     const response = await handleResponses(request(), config, { model: "", provider: "" } as RequestLogContext);
     expect(response.status).toBe(502);
+  });
+});
+
+describe("zero-attempt combo refusal names why each target was excluded", () => {
+  afterEach(() => clearCachedProviderQuotas());
+
+  test("missing, disabled, quota-spent, cooling and request-ineligible targets each carry a reason", async () => {
+    setCachedProviderQuotaForTests("spent", { updatedAt: Date.now(), weeklyPercent: 100 } as ProviderQuota);
+    coolComboTarget("all", { provider: "cooling", model: "model-cooling" }, { retryAfter: "42", status: 429 });
+    const cfg = {
+      defaultProvider: "spent",
+      providers: {
+        off: { ...provider("off"), disabled: true },
+        spent: provider("spent"),
+        cooling: provider("cooling"),
+        metered: provider("metered"),
+      },
+      combos: {
+        all: {
+          strategy: "failover",
+          targets: [
+            { provider: "gone", model: "model-gone" },
+            { provider: "off", model: "model-off" },
+            { provider: "spent", model: "model-spent" },
+            { provider: "cooling", model: "model-cooling" },
+            { provider: "metered", model: "model-metered", metered: true },
+          ],
+        },
+      },
+    } as unknown as OcxConfig;
+    globalThis.fetch = (async () => { throw new Error("no target may be dispatched"); }) as unknown as typeof fetch;
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "combo/all", stream: false, input: "hello" }),
+    }), cfg, { model: "", provider: "" } as RequestLogContext);
+    expect(response.status).toBe(503);
+    const { error } = await response.json() as { error: { code: string; message: string } };
+    expect(error.code).toBe("combo_unavailable");
+    expect(error.message).toMatch(/^No available targets for combo: all \(gone\/model-gone: provider missing; off\/model-off: provider disabled; spent\/model-spent: quota exhausted; cooling\/model-cooling: cooldown 4[12]s; metered\/model-metered: ineligible for this request\)$/);
   });
 });

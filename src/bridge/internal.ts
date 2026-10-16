@@ -186,7 +186,9 @@ export function adapterFailureFromEvent(event: Extract<AdapterEvent, { type: "er
  * This fixes items created from here on. History recorded before it is repaired at the
  * replay boundary by `backfillWebSearchQueries()` in the Responses adapter.
  */
-export function webSearchAction(queries: string[]): Record<string, unknown> {
+export function webSearchAction(queries: string[], fetch?: { url: string }): Record<string, unknown> {
+  // Anthropic's server-side web_fetch opens one page instead of searching.
+  if (fetch) return { type: "open_page", url: fetch.url };
   const first = queries[0] ?? "";
   return { type: "search", query: first, queries: queries.length > 0 ? queries : [first] };
 }

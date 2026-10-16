@@ -10,6 +10,7 @@ import { getAccountSet, saveAccountCredential, saveCredential, setActiveAccount 
 import { clearAccountQuotaCache, getCachedProviderAccountQuota, resetProviderQuotaReconcileStateForTests } from "../../../src/providers/quota";
 import { clearResponseStateForTests } from "../../../src/responses/state";
 import { handleResponses } from "../../../src/server/responses";
+import type { RequestLogContext } from "../../../src/server/request-log";
 import type { OcxConfig, OcxProviderConfig } from "../../../src/types";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
 
@@ -156,11 +157,11 @@ function configFor(reply: (body: Record<string, unknown>) => Response | Promise<
   };
 }
 
-function post(config: OcxConfig, body: Record<string, unknown> = {}) {
+function post(config: OcxConfig, body: Record<string, unknown> = {}, logCtx: RequestLogContext = { model: "", provider: "" }) {
   return handleResponses(new Request("http://localhost/v1/responses", {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ model: "anthropic/claude-sonnet-4-5", input: "Answer briefly", stream: false, ...body }),
-  }), config, { model: "", provider: "" });
+  }), config, logCtx);
 }
 
 function expectQuota(id: string, fiveHourPercent: number, weeklyPercent: number) {
@@ -406,7 +407,25 @@ test.each([
   expect(sent).toHaveLength(2);
 });
 
+const orgDisabled = "Your organization has disabled Claude subscription access for Claude Code. Use an Anthropic API key instead, or ask your admin to enable access.";
 test.each([
+  { type: "permission_error", message: orgDisabled },
+  { type: "oauth_org_not_allowed", message: orgDisabled },
+  { type: "permission_error", code: "oauth_org_not_allowed", message: "Access denied." },
+])("organization-disabled 403 rotates and cools the refused account (%#)", async error => {
+  const [a, b] = await seed();
+  const config = configFor(body => sent.length === 1
+    ? Response.json({ type: "error", error }, { status: 403 }) : answer(body.stream === true));
+  const response = await post(config);
+  expect(response.status).toBe(200);
+  expect(await response.text()).toContain("The answer is complete.");
+  expect(sent.map(row => row.authorization)).toEqual([`Bearer ${credential(0).access}`, `Bearer ${credential(1).access}`]);
+  expect(getEligibleAnthropicAccounts()).toEqual([b!]);
+  expect(getAnthropicAccountHealthSnapshot(a!)).not.toBeNull();
+});
+
+test.each([
+  [`Request denied: ${orgDisabled}`, "permission_error"],
   ["Request blocked by content policy", "permission_error"],
   ["You do not have permission to access this resource", "permission_error"],
   ["Your account does not have access to this model", "permission_error"],
@@ -445,6 +464,28 @@ test.each(["search", "image"])("real %s sidecar recovers account 403", async kin
   expect(sent).toHaveLength(2);
   expect(getEligibleAnthropicAccounts()).toEqual([b!]);
   expect(getAnthropicAccountHealthSnapshot(a!)).not.toBeNull();
+});
+
+// An account refusal is a credential denial, not a quota spend: it must not count as a rate limit.
+test.each(["main", "search", "image", "continuation"])("%s account 403 rotation records oauth-account-403", async path => {
+  await seed();
+  const refusalAt = path === "continuation" ? 2 : 1;
+  const config = configFor(body => sent.length === refusalAt ? accountRefusal()
+    : answer(body.stream === true, "0.1", "0.2", path === "continuation" && sent.length === 1 ? "" : "The answer is complete."));
+  if (path === "search") config.webSearchSidecar = { backend: "anthropic", enabled: true };
+  if (path === "image") {
+    config.images = { bridgeEnabled: true };
+    config.providers.xai = { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", authMode: "key", apiKey: "synthetic-image-key" };
+  }
+  if (path === "continuation") config.emptyCompletionRetry = true;
+  const tools = path === "search" ? [{ type: "web_search" }] : path === "image" ? [{ type: "image_generation" }] : undefined;
+  const logCtx: RequestLogContext = { model: "", provider: "" };
+  const response = await post(config, { stream: true, ...(tools ? { tools } : {}) }, logCtx);
+  expect(await response.text()).toContain("The answer is complete.");
+  expect(sent).toHaveLength(refusalAt + 1);
+  const kinds = [...(logCtx.attempts ?? []), logCtx.activeAttempt].flatMap(attempt => attempt?.recoveryKinds ?? []);
+  expect(kinds).toContain("oauth-account-403");
+  expect(kinds).not.toContain("anthropic-oauth-429");
 });
 
 test("empty pre-output continuation recovers account 403", async () => {

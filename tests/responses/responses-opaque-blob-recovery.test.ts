@@ -3,7 +3,9 @@ import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ADAPTER_REGISTRY } from "../../src/adapters/registry";
-import { clearReasoningReplayCacheForTests } from "../../src/responses/reasoning-replay-cache";
+import { clearReasoningReplayCacheForTests, commitReasoningReplayServingIdentity } from "../../src/responses/reasoning-replay-cache";
+import { parseRequest } from "../../src/responses/parser";
+import { bindRouteReasoningReplayScope } from "../../src/server/responses/core-replay";
 import { OPAQUE_COMPACTION_NOTE } from "../../src/responses/compaction";
 import { resetThoughtSignatureReplayForTests } from "../../src/responses/thought-signature-replay";
 import * as authContextModule from "../../src/codex/auth-context";
@@ -309,6 +311,23 @@ function nativeConfig(): OcxConfig {
   } as OcxConfig;
 }
 
+function nativeReplayAuth(): authContextModule.CodexAuthContext {
+  return {
+    kind: "pool", accountId: "pool-retention", generation: 1, writerGeneration: 1,
+    accessToken: "test-native-retention-token", chatgptAccountId: "workspace-retention",
+  };
+}
+
+function seedNativeReplayIdentity(threadId: string): void {
+  const parsed = parseRequest({ model: "gpt-5.6-sol", input: reasoningReplayInput() });
+  parsed._reasoningReplayScope = { clientThreadId: threadId };
+  bindRouteReasoningReplayScope({
+    parsed, providerName: "openai", provider: nativeConfig().providers.openai!,
+    adapterName: "openai-responses", codexAuthContext: nativeReplayAuth(),
+  });
+  commitReasoningReplayServingIdentity(parsed._reasoningReplayScope);
+}
+
 function nativeAgentMessageRequest(stream = false): Request {
   return new Request("http://localhost/v1/responses", {
     method: "POST",
@@ -558,6 +577,74 @@ describe("opaque blob recovery trigger", () => {
 });
 
 describe("opaque blob recovery through /v1/responses", () => {
+  test.each([
+    { label: "provider label", providerName: "another-openai" },
+    { label: "destination", baseUrl: "https://another.example.test/v1" },
+    { label: "adapter", adapterName: "openai-chat" },
+    { label: "noncanonical forward destination", baseUrl: "https://chatgpt.com.example.test/backend-api/codex" },
+    { label: "API-key authentication", authMode: "key" as const },
+  ])("native retention cannot bypass a $label change", ({ providerName, baseUrl, adapterName, authMode }) => {
+    const threadId = "thread-native-retention-boundary";
+    seedNativeReplayIdentity(threadId);
+    const parsed = parseRequest({ model: "gpt-6-astra", input: reasoningReplayInput() });
+    parsed._reasoningReplayScope = { clientThreadId: threadId };
+    parsed._nativeReasoningRetention = { modelSwitch: true, accountSwitch: true };
+    const provider = {
+      ...nativeConfig().providers.openai!,
+      ...(baseUrl ? { baseUrl } : {}),
+      ...(authMode ? { authMode, apiKey: "test-other-key" } : {}),
+    };
+    bindRouteReasoningReplayScope({
+      parsed, providerName: providerName ?? "openai", provider,
+      adapterName: adapterName ?? "openai-responses", codexAuthContext: nativeReplayAuth(),
+    });
+    expect(parsed._stripReasoningEncryptedContent).toBe(true);
+    expect(parsed._stripNativeCompactionEncryptedContent).toBe(true);
+  });
+
+  test("a foreign Combo candidate cannot clear reasoning for a later native candidate", async () => {
+    const threadId = "thread-native-retention-combo";
+    seedNativeReplayIdentity(threadId);
+    saveCodexAccountCredential("pool-retention", {
+      accessToken: "test-native-retention-token", refreshToken: "test-native-retention-refresh",
+      expiresAt: Date.now() + 300_000, chatgptAccountId: "workspace-retention",
+    });
+    const settings = nativeConfig();
+    settings.providers.openai!.codexAccountMode = "pool";
+    settings.nativeReasoningRetention = { modelSwitch: true, accountSwitch: true };
+    settings.codexAccounts = [{ id: "pool-retention", email: "retention@example.test", chatgptAccountId: "workspace-retention", isMain: false }];
+    settings.providers.foreign = {
+      adapter: "openai-responses", baseUrl: "https://foreign.example.test/v1", authMode: "key",
+      apiKey: "test-foreign-retention-key",
+    };
+    settings.combos = { "retention-fallback": {
+      strategy: "failover", targets: [{ provider: "foreign", model: "model-a" }, { provider: "openai", model: "gpt-6-astra" }],
+    } };
+    const outbound: Array<{ url: string; body: Record<string, unknown> }> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      outbound.push({ url, body: JSON.parse(String(init?.body)) });
+      return url.includes("foreign.example.test")
+        ? Response.json({ error: { type: "invalid_request_error", code: "model_not_found", message: "model not found" } }, { status: 404 })
+        : success("resp-native-combo-retention");
+    }) as typeof fetch;
+    const authSpy = spyOn(authContextModule, "resolveCodexAuthContext").mockResolvedValue(nativeReplayAuth());
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json", "x-codex-parent-thread-id": threadId },
+        body: JSON.stringify({ model: "combo/retention-fallback", stream: false, store: false, input: reasoningReplayInput() }),
+      }), settings, { model: "", provider: "" });
+      expect(response.status).toBe(200);
+      await response.text();
+    } finally { authSpy.mockRestore(); }
+    expect(outbound).toHaveLength(2);
+    expect(outbound[0]!.url).toContain("foreign.example.test");
+    expect(hasBlob(outbound[0]!.body)).toBe(false);
+    expect(outbound[1]!.url).toContain("chatgpt.com");
+    expect((outbound[1]!.body.input as Array<Record<string, unknown>>)[1]!.encrypted_content).toBe(BLOB);
+    expect((outbound[1]!.body.input as Array<Record<string, unknown>>)[2]!.type).toBe("message");
+  });
+
   test("lowers Fernet-shaped agent plaintext before native dispatch", async () => {
     const outbound: Array<Record<string, unknown>> = [];
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -1139,7 +1226,18 @@ data: ${JSON.stringify(created)}
     });
   }
 
-  test("#2247 strips reasoning and compaction ciphertext before a pooled thread moves accounts", async () => {
+  test.each([
+    { label: "default account switch", accountChanged: true, modelChanged: false, retention: undefined, retain: false },
+    { label: "opted-in account switch", accountChanged: true, modelChanged: false, retention: { accountSwitch: true }, retain: true },
+    { label: "default model switch", accountChanged: false, modelChanged: true, retention: undefined, retain: false },
+    { label: "opted-in model switch", accountChanged: false, modelChanged: true, retention: { modelSwitch: true }, retain: true },
+    { label: "account option does not allow model switch", accountChanged: false, modelChanged: true, retention: { accountSwitch: true }, retain: false },
+    { label: "model option does not allow account switch", accountChanged: true, modelChanged: false, retention: { modelSwitch: true }, retain: false },
+    { label: "both options allow simultaneous switch", accountChanged: true, modelChanged: true, retention: { modelSwitch: true, accountSwitch: true }, retain: true },
+    { label: "model option alone rejects simultaneous switch", accountChanged: true, modelChanged: true, retention: { modelSwitch: true }, retain: false },
+    { label: "account option alone rejects simultaneous switch", accountChanged: true, modelChanged: true, retention: { accountSwitch: true }, retain: false },
+    { label: "authoritative rejection overrides retention", accountChanged: false, modelChanged: true, retention: { modelSwitch: true }, retain: true, reject: true },
+  ])("native reasoning replay: $label", async ({ accountChanged, modelChanged, retention, retain, reject }) => {
     const outbound: Array<{ accountId: string | null; body: Record<string, unknown> }> = [];
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       const headers = new Headers(init?.headers);
@@ -1147,6 +1245,9 @@ data: ${JSON.stringify(created)}
         accountId: headers.get("chatgpt-account-id"),
         body: JSON.parse(String(init?.body)) as Record<string, unknown>,
       });
+      if (reject && outbound.length === 2) {
+        return new Response(CALLER_MISMATCH_BLOB_ERROR, { status: 400 });
+      }
       return success(`resp-${outbound.length}`);
     }) as typeof fetch;
     for (const account of [
@@ -1171,14 +1272,23 @@ data: ${JSON.stringify(created)}
       })
       .mockResolvedValueOnce({
         kind: "pool",
-        accountId: "pool-b",
-        writerGeneration: 12,
+        accountId: accountChanged ? "pool-b" : "pool-a",
+        writerGeneration: accountChanged ? 12 : 11,
         generation: 1,
-        accessToken: "shared-test-token-b",
-        chatgptAccountId: "workspace-b",
+        accessToken: accountChanged ? "shared-test-token-b" : "shared-test-token-a",
+        chatgptAccountId: accountChanged ? "workspace-b" : "workspace-a",
+      })
+      .mockResolvedValue({
+        kind: "pool",
+        accountId: accountChanged ? "pool-b" : "pool-a",
+        writerGeneration: accountChanged ? 12 : 11,
+        generation: 1,
+        accessToken: accountChanged ? "shared-test-token-b" : "shared-test-token-a",
+        chatgptAccountId: accountChanged ? "workspace-b" : "workspace-a",
       });
     const poolConfig = {
       defaultProvider: "openai",
+      ...(retention ? { nativeReasoningRetention: retention } : {}),
       providers: {
         openai: {
           adapter: "openai-responses",
@@ -1192,14 +1302,14 @@ data: ${JSON.stringify(created)}
         { id: "pool-b", email: "b@example.test", chatgptAccountId: "workspace-b", isMain: false },
       ],
     } as OcxConfig;
-    const poolRequest = () => new Request("http://localhost/v1/responses", {
+    const poolRequest = (turn: number) => new Request("http://localhost/v1/responses", {
       method: "POST",
       headers: {
         "content-type": "application/json",
         "x-codex-parent-thread-id": "thread-2247-pool-switch",
       },
       body: JSON.stringify({
-        model: "gpt-5.6-sol",
+        model: turn > 0 && modelChanged ? "gpt-6-astra" : "gpt-5.6-sol",
         stream: false,
         store: false,
         input: reasoningReplayInput(),
@@ -1207,34 +1317,43 @@ data: ${JSON.stringify(created)}
     });
 
     try {
-      for (let turn = 0; turn < 2; turn += 1) {
-        const response = await handleResponses(poolRequest(), poolConfig, { model: "", provider: "" });
+      for (let turn = 0; turn < (reject ? 3 : 2); turn += 1) {
+        const response = await handleResponses(poolRequest(turn), poolConfig, { model: "", provider: "" });
         expect(response.status).toBe(200);
         await response.text();
       }
-      expect(authSpy).toHaveBeenCalledTimes(2);
+      expect(authSpy).toHaveBeenCalledTimes(reject ? 3 : 2);
     } finally {
       authSpy.mockRestore();
     }
 
-    expect(outbound).toHaveLength(2);
-    expect(outbound.map(entry => entry.accountId)).toEqual(["workspace-a", "workspace-b"]);
+    expect(outbound).toHaveLength(reject ? 4 : 2);
+    expect(outbound[0]!.accountId).toBe("workspace-a");
+    expect(outbound.slice(1).map(entry => entry.accountId)).toEqual(
+      Array(reject ? 3 : 1).fill(accountChanged ? "workspace-b" : "workspace-a"),
+    );
     expect(hasBlob(outbound[0]!.body)).toBe(true);
     const firstInput = outbound[0]!.body.input as Array<Record<string, unknown>>;
     expect(firstInput[1]?.encrypted_content).toBe(BLOB);
     expect(firstInput[2]).toEqual({ type: "compaction", encrypted_content: BLOB });
-    expect(hasBlob(outbound[1]!.body)).toBe(false);
+    expect(hasBlob(outbound[1]!.body)).toBe(retain);
     const secondInput = outbound[1]!.body.input as Array<Record<string, unknown>>;
     expect(secondInput[1]).toEqual({
       type: "reasoning",
       content: [],
       summary: [{ type: "summary_text", text: "prior reasoning" }],
+      ...(retain ? { encrypted_content: BLOB } : {}),
     });
     expect(secondInput[2]).toEqual({
       type: "message",
       role: "user",
       content: [{ type: "input_text", text: OPAQUE_COMPACTION_NOTE }],
     });
+    if (reject) {
+      // The rejected request is rebuilt exactly once. The next turn obeys the successful
+      // recovery memo even though the operator's retention option is still enabled.
+      expect(outbound.slice(2).every(entry => !hasBlob(entry.body))).toBe(true);
+    }
   });
 
   test("#2247 retries the reported ChatGPT unverifiable-ciphertext rejection once", async () => {

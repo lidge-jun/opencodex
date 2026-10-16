@@ -16,7 +16,7 @@ import {
 } from "../../src/server/lifecycle";
 import { fallbackCodexAccountLogLabel } from "../../src/codex/account-label";
 import {
-  handleCodexAuthAPI, updateAccountQuota, getAccountQuota,
+  updateAccountQuota, getAccountQuota,
   checkAccountIdCollision, getMainChatgptAccountId,
   markAccountNeedsReauth, isAccountNeedsReauth, clearAccountNeedsReauth, clearAccountQuota,
   clearMainAccountInfoCache, maskEmail, fetchMainAccountInfo, fetchMainAccountInfoSnapshot,
@@ -25,6 +25,7 @@ import {
   listCodexAuthAccounts,
   setAccountQuotaFromParsed,
 } from "../../src/codex/auth-api";
+import { handleCodexAuthAPI } from "../../src/codex/auth-api/routes";
 import {
   getCodexAccountCredential,
   listCodexAccountIds,
