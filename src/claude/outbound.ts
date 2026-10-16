@@ -238,6 +238,11 @@ export function webSearchPairFromItem(item: Rec): {
     return { id: use.id, name: use.name, resultType: result.type, input: isRec(use.input) ? use.input : {}, resultContent: result.content, completed };
   }
   const id = typeof item.id === "string" && item.id.length > 0 ? item.id : `srvtoolu_${uuid()}`;
+  // An item emitted before `anthropic_blocks` carried a server web_fetch as `fetch_result`.
+  if (item.fetch_result !== undefined) {
+    const input = { url: typeof action.url === "string" ? action.url : "" };
+    return { id, name: "web_fetch", resultType: "web_fetch_tool_result", input, resultContent: item.fetch_result, completed };
+  }
   const queries = Array.isArray(action.queries)
     ? action.queries.filter((q): q is string => typeof q === "string" && q.length > 0)
     : [];

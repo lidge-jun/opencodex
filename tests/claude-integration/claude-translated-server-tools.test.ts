@@ -343,3 +343,11 @@ test("a malformed anthropic_blocks falls back to the rebuilt pair", () => {
     expect(pair).toMatchObject({ id: "ws_1", name: "web_search", resultType: "web_search_tool_result", input: { query: "q" } });
   }
 });
+
+test("an item emitted before anthropic_blocks still maps its fetch_result to a web_fetch pair", () => {
+  const pair = webSearchPairFromItem({
+    type: "web_search_call", id: "srvtoolu_old", action: { type: "open_page", url: "https://bun.sh/blog" },
+    fetch_result: FETCH_RESULT,
+  });
+  expect(pair).toMatchObject({ id: "srvtoolu_old", name: "web_fetch", resultType: "web_fetch_tool_result", input: { url: "https://bun.sh/blog" }, resultContent: FETCH_RESULT });
+});
