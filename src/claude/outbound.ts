@@ -234,8 +234,10 @@ export function webSearchPairFromItem(item: Rec): {
   const action = isRec(item.action) ? item.action : {};
   const completed = item.status !== "failed";
   const { use, result } = isRec(item.anthropic_blocks) ? item.anthropic_blocks : {};
-  if (isRec(use) && isRec(result) && typeof use.id === "string" && typeof use.name === "string" && typeof result.type === "string") {
-    return { id: use.id, name: use.name, resultType: result.type, input: isRec(use.input) ? use.input : {}, resultContent: result.content, completed };
+  if (isRec(use) && isRec(result) && typeof use.id === "string" && isRec(use.input)
+    && (use.name === "web_search" || use.name === "web_fetch")
+    && result.tool_use_id === use.id && result.type === `${use.name}_tool_result`) {
+    return { id: use.id, name: use.name, resultType: result.type, input: use.input, resultContent: result.content, completed };
   }
   const id = typeof item.id === "string" && item.id.length > 0 ? item.id : `srvtoolu_${uuid()}`;
   // An item emitted before `anthropic_blocks` carried a server web_fetch as `fetch_result`.

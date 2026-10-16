@@ -169,11 +169,28 @@ describe("server-side search across responses", () => {
     expect(blockStarts(clientSse).map(b => b.type)).toEqual(["tool_use"]);
   });
 
-  test("a result whose call came in an earlier response still reaches the client by its tool_use_id", async () => {
-    const { clientSse } = await claudeTurn("https://api.anthropic.com", [MESSAGE_START, ...SEARCH_TURN.slice(5, 10), ...MESSAGE_END]);
-    const starts = blockStarts(clientSse);
-    expect(starts.map(b => b.type)).toEqual(["server_tool_use", "web_search_tool_result", "text"]);
-    expect(starts[1]).toMatchObject({ tool_use_id: starts[0]!.id, content: [{ type: "web_search_result", url: "https://bun.sh/blog" }] });
+  test("an orphan result with a unique anchor never synthesizes or replays a server call", async () => {
+    const mismatched = SEARCH_TURN.map(f => f.type === "content_block_start" && f.index === 1
+      ? { ...f, content_block: { ...(f.content_block as Record<string, unknown>), tool_use_id: "srvtoolu_orphan" } } : f);
+    const truncated = SEARCH_TURN.map((f, i) => i === 2
+      ? { ...f, delta: { type: "input_json_delta", partial_json: `{"query":"${"x".repeat(4096)}` } } : f);
+    for (const frames of [
+      [MESSAGE_START, ...SEARCH_TURN.slice(5, 10), ...MESSAGE_END],
+      [MESSAGE_START, ...fetchTurn(FETCH_RESULT).slice(4)],
+      mismatched,
+      truncated,
+    ]) {
+      const turn = clientContent((await claudeTurn("https://api.anthropic.com", frames)).clientSse);
+      const { wire } = await claudeTurn("https://api.anthropic.com", OK_TURN, "anth", [
+        { role: "user", content: "Search" }, { role: "assistant", content: turn }, { role: "user", content: "More?" },
+      ]);
+      const messages = wire.messages as { content: Record<string, unknown>[] }[];
+      expect(messages[1]!.content).toEqual([{ type: "text", text: "Bun shipped." }]);
+      expect(JSON.stringify(messages)).not.toContain("server_tool_use");
+      expect(JSON.stringify(messages)).not.toContain("web_search_tool_result");
+      expect(JSON.stringify(messages)).not.toContain("web_fetch_tool_result");
+      expect(turn).toEqual([{ type: "text", text: "Bun shipped." }]);
+    }
   });
 
   test("a replayed search pair without encrypted_content never reaches Anthropic", async () => {
@@ -390,10 +407,24 @@ describe("a server-tool exchange the client replays reaches Anthropic in place",
       "thinking", "srvtoolu_1", "srvtoolu_1", "thinking", "srvtoolu_2", "srvtoolu_2", "redacted_thinking", "text",
     ]);
   });
+
+  test("duplicate or unmatched server-tool ids never replay an orphan result", async () => {
+    const [use, result, text] = clientContent((await claudeTurn("https://api.anthropic.com", SEARCH_TURN)).clientSse);
+    const orphan = { ...result, tool_use_id: "srvtoolu_orphan" };
+    for (const blocks of [[use, orphan], [use, use, result, orphan], [use, use, result, result]]) {
+      const { wire } = await claudeTurn("https://api.anthropic.com", OK_TURN, "anth", followUp([...blocks, text]));
+      expect((wire.messages as { content: unknown }[])[1]!.content).toEqual([{ type: "text", text: "Bun shipped." }]);
+    }
+  });
 });
 
 test("a malformed anthropic_blocks falls back to the rebuilt pair", () => {
-  for (const anthropic_blocks of [{}, { use: {}, result: {} }, { use: { id: 1, name: "web_search" }, result: { type: "web_search_tool_result" } }]) {
+  const use = { type: "server_tool_use", id: "srvtoolu_stored", name: "web_search", input: { query: "stored" } };
+  for (const anthropic_blocks of [{}, { use: {}, result: {} }, { use: { id: 1, name: "web_search" }, result: { type: "web_search_tool_result" } },
+    { use, result: { type: "web_search_tool_result", tool_use_id: "srvtoolu_other" } },
+    { use, result: { type: "web_fetch_tool_result", tool_use_id: use.id } },
+    { use: { ...use, input: undefined }, result: { type: "web_search_tool_result", tool_use_id: use.id } },
+  ]) {
     const pair = webSearchPairFromItem({ type: "web_search_call", id: "ws_1", action: { type: "search", query: "q" }, anthropic_blocks });
     expect(pair).toMatchObject({ id: "ws_1", name: "web_search", resultType: "web_search_tool_result", input: { query: "q" } });
   }

@@ -522,13 +522,13 @@ function streamedToolArgumentsParse(assembled: string): boolean {
   }
 }
 
-/** A server tool's streamed input (web_search `{query}`, web_fetch `{url}`); {} when it did not parse. */
-function serverToolInput(json: string): Record<string, unknown> {
+/** A server tool's complete streamed input; undefined when it cannot be recovered. */
+function serverToolInput(json: string): Record<string, unknown> | undefined {
   try {
     const input = JSON.parse(json) as unknown;
-    return isAnthropicRecord(input) ? input : {};
+    return isAnthropicRecord(input) ? input : undefined;
   } catch {
-    return {};
+    return undefined;
   }
 }
 
@@ -1354,9 +1354,11 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
                 }
                 if ((block.type === "web_search_tool_result" || block.type === "web_fetch_tool_result") && typeof block.tool_use_id === "string") {
                   // The begin/end pair the sidecar emits, plus both blocks verbatim so the Claude client holds a
-                  // replayable copy. A result whose call came in an earlier response has no streamed input here.
+                  // replayable copy. Without this response's matching call and complete input, drop the
+                  // exchange instead of inventing a call that could poison the client's next request.
                   const fetch = block.type === "web_fetch_tool_result";
-                  const input = serverSearch?.id === block.tool_use_id ? serverToolInput(serverSearch.json) : {};
+                  const input = serverSearch?.id === block.tool_use_id ? serverToolInput(serverSearch.json) : undefined;
+                  if (!input) break;
                   const hits = Array.isArray(block.content) ? block.content as Array<{ url?: unknown; title?: unknown }> : undefined;
                   yield { type: "web_search_call_begin", id: block.tool_use_id };
                   yield {

@@ -120,8 +120,11 @@ export function replayedAnthropicServerBlocks(raw: unknown): Map<string, Rec[]> 
       if (anchor) count(anchor);
       const uses = run.filter(b => b.type === "server_tool_use");
       const results = run.filter(b => b.type !== "server_tool_use");
+      const resultsById = new Map(results.map(r => [r.tool_use_id, r]));
+      const useIds = new Set(uses.map(u => u.id));
       const replayable = uses.length > 0 && uses.length === results.length
-        && uses.every(u => typeof u.id === "string" && u.id.startsWith("srvtoolu_") && results.some(r => r.tool_use_id === u.id))
+        && useIds.size === uses.length && resultsById.size === results.length
+        && uses.every(u => typeof u.id === "string" && u.id.startsWith("srvtoolu_") && resultsById.get(u.id)?.type === `${u.name}_tool_result`)
         && results.every(r => !Array.isArray(r.content) || r.content.every(h => isRec(h) && typeof h.encrypted_content === "string"));
       if (anchor && replayable) out.set(anchor, run);
       run = [];
