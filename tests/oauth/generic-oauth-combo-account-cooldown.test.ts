@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { clearComboSelectionState, clearComboTargetCooldowns, isComboTargetInCooldown } from "../../src/combos";
 import { clearGenericFailoverHealth, eligibleFailoverAccounts } from "../../src/oauth/generic-account-failover";
+import { genericPoolKey, peekRoundRobinAccount } from "../../src/oauth/pool-kernel";
 import { getAccountSet, saveCredential, setActiveAccount } from "../../src/oauth/store";
 import { clearAccountQuotaCache } from "../../src/providers/quota";
 import { clearResponseStateForTests, flushResponseState } from "../../src/responses/state";
@@ -128,4 +129,21 @@ test("every generic OAuth account spent still cools the combo target", async () 
   expect(await post()).toContain("fallback answer");
   expect(sends).toEqual(["1", "2", "B"]);
   expect(isComboTargetInCooldown("pooled", TARGET)).toBe(true);
+}, 20_000);
+
+test("the combo's sibling check does not advance a round-robin pool onto an unsent account", async () => {
+  await seed(5);
+  upstream(4);
+  const roundRobin: OcxConfig = { ...config, pool: { kernel: true }, providers: { ...config.providers,
+    xai: { ...config.providers.xai!, oauthAccountFailover: { strategy: "round-robin", stickyLimit: 3 } } } };
+  const ids = getAccountSet("xai")!.accounts.map(account => account.id);
+  const response = await handleResponses(new Request("http://localhost/v1/responses", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "combo/pooled", input: "Answer briefly", stream: false }),
+  }), roundRobin, { model: "", provider: "" });
+  expect(await response.text()).toContain("fallback answer");
+  expect(sends).not.toContain("5");
+  expect(isComboTargetInCooldown("pooled", TARGET)).toBe(false);
+  // Account 5 was only probed for eligibility, never sent; the ring must not stick to it.
+  expect(peekRoundRobinAccount(genericPoolKey("xai"), ids, 3)).not.toBe(ids[4]);
 }, 20_000);
