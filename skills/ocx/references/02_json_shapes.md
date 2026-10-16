@@ -40,7 +40,7 @@ One row per line. The fields worth branching on:
 
 | Field | Meaning |
 |---|---|
-| `requestId` | pass to `ocx logs explain` |
+| `requestId` | pass to `ocx logs get` or `ocx logs explain` |
 | `conversationId` | groups a conversation; also printed as `conv=<id>` in human output |
 | `accountLogLabel` | which account served it (`main`, `p<hex6>`, `o<hex6>`); also printed as `acct=<label>` in human output |
 | `provider` / `model` | what actually served it |
@@ -61,6 +61,16 @@ to `requestedModel` is how you get a wrong answer about which provider served it
 
 One configured provider per line. Each object has the same fields as an item in the
 `configured` array from `ocx provider list --json`; the `registryCount` summary is omitted.
+
+## `ocx logs history --json`
+
+The management page: `entries[]`, `hasMore`, optional `nextCursor`, and `index` (schema version,
+indexed row count, source size). Resume with `--cursor <nextCursor>`. `--jsonl` emits `entries`
+only; `nextCursor` is printed on stderr when `hasMore` is true.
+
+## `ocx logs get <request-id>`
+
+One canonical request-history row, the same DTO as a history `entries[]` item. Missing ids are 404.
 
 ## `ocx logs explain <request-id>`
 

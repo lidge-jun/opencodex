@@ -53,6 +53,7 @@
   "codex-use-remaining-quota.test.ts": "codex-integration",
   "cli-log-view-filter.test.ts": "cli",
   "cli-usage-compare.test.ts": "cli",
+  "cli-log-history.test.ts": "cli",
   "cli-usage-model-search.test.ts": "cli",
   "cli-usage-top.test.ts": "cli",
   "cli-companion-usage.test.ts": "cli",

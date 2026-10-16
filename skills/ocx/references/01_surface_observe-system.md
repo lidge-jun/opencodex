@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 93.
+Declared capabilities: 95.
 
 ### `ocx companion`
 
@@ -96,7 +96,7 @@ JSON mode: `payload`.
 - Follow uses the server cursor and a bounded ordered window, preserving same-ID amendments and repeated row occurrences. It never enables logging.
 - --events emits version1 snapshots/appends with cursor and limit for observed-window reconstruction. Legacy row JSONL cannot express removals or resets exactly; neither mode promises lossless history between polls.
 - Follow limit is1–2000, default200. Polling is serial and cancellable; SIGINT exits130 and SIGTERM143. Malformed/oversized/unavailable responses stop without a fabricated empty snapshot or retry.
-- Nested explain reads recorded decisions; rebuild-index and index-status touch the local derived index and retain separate declarations.
+- Nested history pages the derived index and get reads one canonical row; explain reads recorded decisions; rebuild-index and index-status touch the local derived index and retain separate declarations.
 
 ### `ocx storage report`
 
@@ -565,6 +565,63 @@ JSON mode: `payload`.
 - Follow uses the server cursor and a bounded ordered window, preserving same-ID amendments and repeated row occurrences. It never enables logging.
 - --events emits version1 snapshots/appends with cursor and limit for observed-window reconstruction. Legacy row JSONL cannot express removals or resets exactly; neither mode promises lossless history between polls.
 - Follow limit is1–2000, default200. Polling is serial and cancellable; SIGINT exits130 and SIGTERM143. Malformed/oversized/unavailable responses stop without a fabricated empty snapshot or retry.
+
+### `ocx logs history`
+
+Usage: `ocx logs history [--provider <name>] [--model <id>] [--requested-model <id>] [--status <code>] [--conversation <id>] [--surface <name>] [--protocol <responses|chat|messages>] [--api-key-id <id>] [--profile <id>] [--fallback <true|false>] [--from <epoch-ms|ISO-datetime>] [--to <epoch-ms|ISO-datetime>] [--cursor <token>] [--limit <1-100>] [--json|--jsonl]`
+
+Page the indexed request-history ledger with filters and a resumable cursor.
+
+State-changing: no.
+
+| Method | Route |
+|---|---|
+| GET | `/api/request-history` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--provider` | string | Filter provider, including failover attempts. |
+| `--model` | string | Filter served model, including failover attempts. |
+| `--requested-model` | string | Filter the model the client asked for. |
+| `--status` | number | HTTP status 100-599. |
+| `--conversation` | string | Conversation ID or stored hash. |
+| `--conversationId` | string | Alias of --conversation. |
+| `--surface` | string | Calling client surface recorded on the row. |
+| `--protocol` | string | Inbound wire: responses, chat or messages. |
+| `--api-key-id` | string | Exact management key id recorded on the row. |
+| `--profile` | string | Routing profile id. |
+| `--fallback` | string | true selects rows that failed over; false selects rows that did not. |
+| `--from` | string | Inclusive start as epoch milliseconds or ISO datetime with timezone. |
+| `--to` | string | Inclusive end as epoch milliseconds or ISO datetime with timezone. |
+| `--cursor` | string | Opaque nextCursor from a previous page. |
+| `--limit` | number | 1-100 rows; default 50. |
+| `--json` | boolean | Emit the management payload, including hasMore, nextCursor and index. |
+| `--jsonl` | boolean | Matching rows only; hasMore and nextCursor go to stderr. |
+
+JSON mode: `payload`.
+
+- Pages the derived request-history index, not the recent /api/logs ring. Empty matches succeed. Also accepted after observe logs.
+- JSON is the management payload. JSONL emits entries only; resume with --cursor from stderr when hasMore is true.
+
+### `ocx logs get`
+
+Usage: `ocx logs get <request-id> [--json]`
+
+Read one canonical request-history row by request ID.
+
+State-changing: no.
+
+| Method | Route |
+|---|---|
+| GET | `/api/request-history/{id}` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the canonical row as JSON. |
+
+JSON mode: `payload`.
+
+- The request ID is URI-encoded. This is the stored row, not the route-decision view from logs explain. A missing id is a 404. Also accepted after observe logs.
 
 ### `ocx logs explain`
 

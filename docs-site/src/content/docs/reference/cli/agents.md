@@ -416,4 +416,760 @@ Inspect proxy requests, usage, storage, memory, and debug data. The direct alias
 | Alias | Equivalent resource |
 | --- | --- |
 | `ocx logs [filters] [--follow] [--json|--jsonl|--events]` | `ocx observe logs` |
+| `ocx usage [--range <today|1d|7d|30d|all>] [--since <timestamp> --until <timestamp>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--api-key-id <id>] [--search <text>] [--top <1-1000>] [--json]` | `ocx observe usage` |
 | `ocx usage compare [--range <today|1d|7d|30d>] [--json]` | `ocx observe usage compare` |
+| `ocx storage [--json]` | `ocx observe storage` |
+| `ocx memory [--json]` | `ocx observe memory` |
+
+```bash
+ocx observe usage --range 30d --json
+ocx usage --since 2026-09-01T09:00:00Z --until 2026-09-01T10:59:59.999Z --json
+```
+
+`--since` and `--until` must be supplied together. They accept integer epoch milliseconds or
+full ISO datetimes with an explicit timezone, include both endpoints, and override `--range`.
+Invalid or reversed bounds fail before the request. Human output prints the requested interval;
+`--json` includes `customWindow`, `since`, and `until`. Existing surface/provider/model filters
+still apply. These commands query the running proxy; they do not provide offline reports.
+
+`--range today` (alias `1d`) reports the current local day. `--provider` and
+`--model` narrow the report to one upstream target — distinct from
+`--surface`, which selects the calling client (Codex, Claude Code, Grok)
+rather than the provider serving the request.
+
+The default view prints request, token and estimated-cost totals plus
+per-provider and per-model breakdowns. Costs are API list-price equivalents,
+not a billing receipt: subscription plans and provider credits are billed
+separately, and requests with no matching price row are counted as
+`unpriced`/`unmetered` rather than folded in as zero.
+
+```bash
+ocx usage --range today --provider xai
+```
+
+When some usage records cannot be included, human output warns, including when there are zero readable rows.
+Any displayed totals reflect readable records only. If a filter has no readable matches, the output shows
+the warning and guidance instead of total lines; skipped records may contain matches.
+`--json` preserves the response-level `usageIncomplete` diagnostic and reason.
+
+### Compare a range with the previous equal window
+
+```bash
+ocx usage compare --range today --json
+ocx usage compare --range 7d --provider xai
+```
+
+`ocx observe usage compare` is the equivalent family form. The command reads `GET /api/usage`
+twice: the named range ending now, then the same range evaluated one equal window earlier
+(one local day for `today`/`1d`, seven for `7d`, thirty for `30d`). Default range is `30d`.
+`--range all` is refused because open history has no previous equal window. `--since` and
+`--until` are not accepted; the windows are derived. Surface, provider, model, and API-key
+filters apply to both reads. Human output prints current, previous, signed delta, and percent
+change. `--json` is `{schemaVersion,range,current,previous,delta,change,incomplete}`. The two
+reads are sequential, not an atomic snapshot. Custom `since`/`until` on each response must
+match the requested window.
+
+### Filter a bounded log snapshot
+
+```bash
+ocx logs filter --surface claude --status errors --time-window 1h --scan-limit 2000 --limit 50 --json
+```
+
+`ocx observe logs filter` is the equivalent family form. This reads one recent
+window, filters locally, then keeps the newest matches in their original order.
+`--scan-limit` controls fetched rows (1–2000, default 2000); `--limit` controls
+returned rows (1–2000, default 200). JSON reports
+`{schemaVersion:1,logs,cursor,filters,window:{scanLimit,loaded,matched,returned,limit}}`.
+Counts describe this observed window, not all history. JSONL emits rows only;
+empty matches succeed. Cursor metadata is not a resumable search token.
+
+Selectors include `--surface all|codex|claude|grok`, `--status all|success|errors`,
+`--time-window all|15m|1h|24h`, `--model`, `--provider`, `--conversation`
+(alias `--conversationId`), `--intercepted-only`, `--min-tok-per-sec`,
+`--max-tok-per-sec`, and `--protocol-mode all|native|translated|legacy-bridge|blocked|none`.
+Model/provider equality is trimmed and case-insensitive, including
+resolved/served models and attempts. Claude includes Desktop; Codex means absent
+surface. Success is HTTP 200–299, errors 400–599. Time lower bounds are inclusive.
+Speed uses observed value-kind tok/s, with inclusive minimum and exclusive
+maximum; unavailable values fail active speed filters. Protocol none includes
+absent or invalid traces. Conversation matching uses the same hash-aware IDs as
+ordinary logs. Interception selects string-valued rewrite markers.
+
+Unknown/repeated/conflicting flags, invalid bounds, and follow/events fail before
+discovery. Malformed, oversized or failed reads are nonzero, not empty results.
+To reduce response size, reduce the scan limit; reducing output limit does not
+change the fetch. For streaming use the separate follow forms below.
+
+### Search usage model rows
+
+```bash
+ocx usage --range 7d --search 'model-a' --json
+```
+
+`--search` matches a trimmed case-insensitive substring in model, provider or
+resolved model after reading the report. It sorts model rows by descending total
+tokens with stable ties and keeps up to 100 by default. JSON adds
+`modelView:{query,matchedModelCount,returnedModelCount,limit:100,truncated}`;
+human output labels the view and shows its selected model rows. Report totals,
+provider/day/account rows, exact filters and incomplete/window metadata remain
+unchanged. No model match does not mean no report usage.
+
+An explicit blank query (`--search=`) selects the top-100 view; omitting search
+preserves the existing output. Exact `--provider`/`--model` still scope the
+underlying report. Search does not broaden selected-key or connected-client
+self scope and is never sent as a new Hub API query parameter.
+
+`ocx usage --top 25` (also `ocx observe usage --top 25`) sets the human model table limit to an integer from 1 to 1000. The default is 10, or 100 with `--search`; the limit applies after search filtering. It changes local display only: report totals, provider/account rows and API parameters stay unchanged. With `--json`, a valid `--top` is ignored; JSON retains its existing full report or 100-row search view. Invalid limits return exit 2 before fetching.
+
+### Saved companion usage totals
+
+```bash
+ocx companion show --json
+ocx companion usage --json
+```
+
+The second command reads saved companion settings, then today and 30d usage
+sequentially on the same management runtime. It applies the saved `models` and
+`hiddenProviders` preferences and preserves unknown/unmeasured costs and tokens.
+Null model selection means all; an empty selection means none. It does not
+change settings, operate native windows or relay through a connected client.
+
+JSON returns `schemaVersion:1`, `filters`, `settingsUpdatedAt`,
+`settingsCorrupt`, `settingsFallback`, `ranges` and `partial`. Each range has
+`status:"available"` with filtered `data`, or `status:"unavailable"`.
+An unavailable range sets partial and exit 1 while retaining the other range.
+Available incomplete data retains its own metadata; it is not measured zero.
+Valid server defaults retain a null settings timestamp and set fallback;
+corrupt-file defaults additionally set corrupt and warn in human output.
+Malformed settings stop before usage reads. These reads are not an atomic
+snapshot. Each GET has a 10-second fetch/body deadline after discovery and a
+32 MiB response cap; this is not a whole-command deadline. Signals exit 130/143
+without late results.
+
+### Follow request windows or injection sequences
+
+```bash
+ocx logs --help
+ocx logs --limit 200 --json
+ocx logs --follow --events --limit 200
+```
+
+`--events` requires follow and implies JSONL; redundant `--jsonl` is accepted.
+`--json` remains one-shot and conflicts with follow/events. Each events-v1 line
+is `{schemaVersion:1,type:"snapshot"|"append",rows,cursor,limit}`. Replace the
+consumer window on snapshot, append/trim on append, preserving order and repeated
+IDs. Initial empty and reset/removal snapshots are emitted; stable empty polls
+remain silent. Legacy arrays are snapshots with cursor null, not invented cursors.
+These are observed windows, not a lossless replay of traffic missed between polls
+or after ring eviction.
+
+`ocx logs --follow --jsonl --limit 200` retains row-shaped output. It re-emits changed
+occurrences, including same-ID status/token amendments and repeated IDs. Do not
+collapse everything by request ID. This legacy output cannot encode removals,
+resets or exact window order; choose events when those distinctions matter.
+Log follow limit is 1–2000, default 200.
+
+```bash
+ocx observe injection --limit 500 --json
+ocx observe injection --follow --jsonl --limit 500
+```
+
+Injection emits ordered `{seq,at,line}` rows, where `at` is epoch milliseconds;
+internal `after` advances with seq. Follow limit is 1–2000, default 500. JSON is
+one-shot and JSONL requires follow. Observation does not enable capture. Empty
+polls do not identify disabled capture or prove absence of gaps. Detectable runtime
+drift stops; undetectable restart/latest-N gaps cannot be excluded without an API
+epoch/gap marker.
+
+Both follow loops use serial one-second waits, 10-second fetch/body deadlines and
+32 MiB response limits. Malformed/oversized/transport errors stop with stderr and
+exit 1, without automatic retry/reconnect. Reduce limit for oversized windows.
+SIGINT/Ctrl-C exits 130, SIGTERM 143, with no later polls/output. Inspect exit state
+and retained rows instead of treating cancellation as complete history.
+
+### Companion timeline and key-scoped usage
+
+```bash
+ocx companion timeline --help
+ocx companion timeline --hours 24 --bucket-minutes 60 --metric total --aggregation sum --grouping model --model example/model-a --hide-provider excluded-provider --json
+```
+
+Replace fictional IDs with the selected filters. Repeat `--model` for individual
+provider/model IDs (nested slashes allowed; not CSV); repeat `--hide-provider` to
+exclude providers. Positive `--provider` is unsupported. Hours are 6/24/72/168,
+bucket minutes 1–1440 with at most 2000 buckets, metric total/input/output/cached,
+aggregation sum/average/max, grouping model/modelAccount. The API limits filter
+inputs to 100 items. This reads usage without changing companion settings.
+
+Check `appliedFilters.models/hiddenProviders`. Timeline bounds are epoch seconds,
+with exclusive end, unlike ordinary usage's millisecond custom window. The end must
+match the request-time bucket, or its immediate successor if the request crosses
+a bucket boundary; an older aligned window is refused. Empty
+series retains bucket/filter metadata. `missingMeasurements` and `truncated` must
+remain visible: zero-filled points do not prove complete zero usage.
+
+On a non-client management host:
+
+```bash
+ocx access key list --json
+ocx usage --api-key-id key-example --range 7d --json
+```
+
+Use a non-secret actual key ID. The CLI requires exact response acknowledgment in
+`filter.apiKeyId`; ignored filters fail rather than showing unscoped totals.
+An unknown acknowledged ID can return `matched:false` and empty traffic, not 404.
+Keep incomplete/custom-window facts. Connected clients reject `--api-key-id`
+before enrolled-key access or transport; omit it for existing self-only Hub usage
+or perform the selected-key view on the Hub. No data key grants management authority.
+
+### `ocx debug <provider|usage|injection|claude> <on|off|status|reset|logs [-f]>`
+
+Read or change runtime debug overrides through the running proxy's management API.
+
+```bash
+ocx debug provider on|off|status|reset
+ocx debug provider logs [-f|--follow]
+ocx debug usage on|off|status|reset
+ocx debug usage logs [-f|--follow]
+```
+
+With no scope, `ocx debug` prints usage and, when the proxy is stopped, the next-start environment
+defaults. Provider debug defaults from `OCX_DEBUG=1` (legacy `OCX_DEBUG_FRAMES=1` also works); usage
+debug defaults from `OPENCODEX_USAGE_DEBUG=1`.
+
+## API access
+
+### `ocx access <key|endpoints|models|test|audio> ...`
+
+Inspect admission keys, external endpoints and models with the access family.
+`ocx api-key` aliases the access-key family. Creation and rotation-start return a
+one-time plaintext credential in text and JSON output. Agents must leave those
+steps to a human-operated terminal outside the agent session; request only
+confirmation and non-secret key/rotation IDs, never the credential.
+
+```bash
+ocx access key list --json
+```
+
+After the human configures and verifies the replacement, committing its rotation
+or removing the old key requires separate explicit revocation authority. Safe
+non-secret follow-ups are `ocx access key rotate commit <id> <rotation-id> --json`
+and `ocx access key rotate abort <id> <rotation-id> --json`, with authority for
+the chosen action. Re-list afterward. Missing pending state alone does not prove
+commit: expiry or abort can also clear it. Do not route around consent by issuing
+the secret-returning management request directly.
+
+### Rename one key without changing its access policy
+
+```bash
+ocx access key rename key-example 'Research client' --json
+ocx access key list --json
+```
+
+Use an actual unique ID or unambiguous name. Rename sends only `{id,name}` and
+preserves provider/model scopes; it does not rotate/delete a key. The response
+contains id/name/createdAt and optional allowedProviders/allowedModels, never
+plaintext or a prefix. List remains masked. Names are control-free, trimmed,
+nonempty and at most 64 JavaScript string units. The read/rename sequence is not
+CAS; inspect the masked roster after an unknown outcome before retrying. The
+root `api-key rename` alias uses the same command.
+
+### Explicit-key model and audio checks
+
+Discover the installed syntax without contacting upstream:
+
+```bash
+ocx access test --help
+ocx access audio transcribe --help
+ocx access audio live-check --help
+```
+
+Model requests, audio uploads and live-session checks require explicit operator
+authorization for that particular upstream operation and possible quota/cost.
+The operator supplies the selected key from an approved private stdin source in
+a human-operated terminal outside the agent session. Agents must not capture it
+or ask for it in chat. Never put it in argv/environment. These are the ocx side
+of that private pipe, not direct interactive key prompts or an agent-run batch:
+
+```bash
+ocx access test example/model --protocol responses --api-key-stdin --json
+ocx access audio transcribe sample.wav --model gpt-4o-mini-transcribe --api-key-stdin --json
+ocx access audio live-check --model gpt-live-1-codex --api-key-stdin --json
+```
+
+Choose only the authorized task and real model/file. TTY input is refused. Input
+is bounded to 4096 bytes/30 seconds, valid UTF-8 printable ASCII, without outer
+whitespace, controls or extra lines; one final LF/CRLF is allowed. This deliberately
+covers currently issued keys, not every Unicode value the server configuration
+might accept. Exact supplied-key occurrences in permitted text become `[redacted]`;
+arbitrary encodings are not guaranteed detected. No encoded key carrier is printed.
+
+Targets are the checked local serving origin or existing normalized enrolled Hub
+origin, with identity checked around asynchronous work. There is no custom-origin,
+admin or enrolled-key fallback, redirect following, credential cache or automatic
+retry. The operator reports only the non-secret result to the agent.
+
+#### Model control and response limits
+
+Protocols are chat (default), responses or messages. Selected-key mode first
+sends one credentialless malformed-JSON control to that endpoint. Only the native
+key-required 401 advances to one fixed 16-token model request using the supplied
+key. The control has a 5-second/4096-byte response budget; the request has a
+60-second/2 MiB response budget including body reads. Authless/unrecognized
+controls stop before inference. Local logging/admission bookkeeping may still occur.
+
+JSON is `{schemaVersion:1,control:{outcome,status?},request:{outcome,status?},response?}`.
+Safe response contains protocol, ordered text, complete/limited completion and
+optional measured token counts. A usable length-limited reply is `limited`;
+refusal/content-filter/tool-only or malformed responses are unsupported, even
+with HTTP 2xx. Error metadata, IDs, tools and reasoning are not printed.
+Operational failure retains one versioned report plus fixed stderr/exit 1;
+invalid grammar/key input exits 2 without a fabricated report.
+
+Success says only: “Credentialless request was refused; the model request using
+the supplied key succeeded.” Listener/policy changes between calls remain possible;
+this does not certify key scope, atomic admission or billing identity. Without
+`--api-key-stdin`, legacy test JSON remains its original payload and says nothing
+about a newly selected key.
+
+#### Transcription and live readiness
+
+Transcription requires a nonempty regular file of at most 25,000,000 bytes with a
+30-second local read limit, and a multipart body capped at 32 MiB. Models are
+gpt-4o-transcribe, gpt-4o-mini-transcribe or whisper-1, subject to target support.
+Upload/response share 130 seconds; response is capped at 2 MiB. Success returns
+only `{text}`, including empty text, with exact-key redaction. Failure leaves
+stdout empty and prints fixed stderr/nonzero; no JSON error envelope or raw body.
+
+Audio uses explicit-key admission without the model control. Live-check sends
+fixed session.update and session.close only. Readiness requires session.started
+or session.updated with nonblank native session ID within 15 seconds; socket-open
+or session.created alone is insufficient. After readiness it waits at most 2
+seconds for normal code-1000 closure. Each UTF-8 frame is capped at 64 KiB, aggregate
+2 MiB; there is no retained frame history.
+
+Live JSON is `{schemaVersion:1,ready,close:"confirmed"|"unverified",check:"session-readiness",event?}`.
+Operational failure preserves that observation without raw frames. Partial readiness
+with unverified close exits 1; a later normal close cannot erase an earlier error.
+Signals exit 130/143. This checks readiness/closure only, not microphone, upload,
+tool execution, full voice roundtrip or server lease release. Opening the upstream
+session is not guaranteed free. No reconnect or retry is automatic.
+
+### `ocx api <protocols|explain|policy> ...`
+
+Inspect and set how requests travel between the client APIs and provider wires. See
+[Protocol paths](/guides/protocol-paths/) for the vocabulary.
+
+| Command | Route | Changes state |
+| --- | --- | --- |
+| `ocx api protocols [--provider <name>] [--json]` | `GET /api/protocols` | No |
+| `ocx api explain --model <id> --inbound <responses\|chat\|messages> [--feature <key>]... [--json]` | `POST /api/protocols/plan` | No |
+| `ocx api policy [--json]` | `GET /api/protocols` | No |
+| `ocx api policy [--messages <on\|off>] [--unrepresentable <legacy\|reject>] [--rollout <switch>=<on\|off>]... [--json]` | `PATCH /api/protocols/settings` | Yes |
+
+- `protocols` prints the contract version, whether each client API is served and why, the
+  unrepresentable policy, every rollout switch, and the policy revision. `--provider` adds the
+  upstream wire that provider receives, who decided it, and the models on another wire.
+- `explain` previews the path a model would take from one client API. `--feature` is repeatable
+  and accepts a comma-separated list; `ocx api protocols --json` lists the known feature keys. The
+  preview is computed from configuration: nothing is sent upstream, no combo rotation advances, and
+  the input is not logged.
+- `policy` without a setting flag only reads. With one it sends a single change to the running
+  proxy, which validates it, saves the configuration, and answers with the new policy.
+  `--messages off` also turns the Claude integration off, as the dashboard toggle does. Switch
+  names and combinations are validated by the proxy; for example
+  `--rollout managedMessagesNativeOAuth=on` is refused unless `managedMessagesNative` is
+  already on or turned on in the same command.
+
+```bash
+ocx api explain --model combo/main --inbound chat --feature request.seed,request.tools
+ocx api policy --rollout shadowPlan=on
+```
+
+Usage errors exit 2 before any request is sent. `--json` prints the management API body as is.
+
+## Client integrations
+
+### Basic integration commands
+
+| Command | Action |
+| --- | --- |
+| `ocx integration client status [--client <id>] [--profile <id>] [--json]` | Read all managed file integrations, one client, or Aside profiles. `show` and `list` alias `status`. |
+| `ocx integration client history [--client <id>] [--profile <id>] [--json]` | Read rollback operations and snapshot availability. `journal` aliases `history`. |
+| `ocx integration client enable --client <id> [--profile <id>] [--overwrite-conflict] [--json]` | Apply the managed file integration. Overwriting a conflicting block requires the explicit flag. |
+| `ocx integration client disable --client <id> [--profile <id>] [--json]` | Remove the selected managed integration through its runtime owner. |
+| `ocx integration client restore --op <opId> [--client aside --profile <id>] [--confirm-drift] [--json]` | Restore a recorded operation; replacing later edits requires explicit drift confirmation. |
+| `ocx integration native [list] [--json]` | Read native integration state. |
+| `ocx integration native <claude\|claude-desktop\|codex\|grok> <on\|off> [--json]` | Write the selected native client's configuration through its runtime owner. |
+
+These commands require a running proxy. `--profile` selects a nonnegative Aside account ID and
+requires `--client aside`; omitted profiles select the aggregate for reads and all profiles for
+unbound enable/disable. Native toggles change client configuration; Cursor has separate read-only
+inspection commands below. For preview and bound-write options, continue with the recipes below.
+
+### Preview and recover managed file integrations
+
+```bash
+ocx integration client preview --client hermes --operation apply --json
+ocx integration client restore --op op-example --preview --json
+```
+
+`op-example` is fictional; use an ID from history. Preview operations are apply,
+overwrite and disable; restore uses `--preview` on its existing command. Review
+structural changes and `canApply`/`willChange`; valid refusal/no-op exits 0 without
+applying. Enable/disable/restore accept optional `--plan-fingerprint` for an
+explicit bound commit. Direct legacy writes remain available. Aside preview or
+bound writes require `--client aside --profile N`. Drift confirmation and overwrite
+are never automatic; stale binding exits 5 with empty stdout and a re-preview
+instruction on stderr. Follow the [complete preview/commit and drift recipes](/guides/integrations/#preview-and-bind-a-terminal-write).
+
+Droid apply/overwrite supports repeated `--reasoning-default MODEL=EFFORT` for
+full map replacement, or exclusive `--clear-reasoning-defaults` for `{}`. Omission
+preserves the map. Repeat the exact map in preview and commit; see
+[Droid defaults](/guides/integrations/#factory-droid).
+
+History removal is irreversible and requires an exact opId plus `--yes`:
+`ocx integration client history remove --op op-example --yes --json` addresses the
+global journal. Only `--client aside` and optional `--profile N` provide narrower
+delete scopes. The newest row is protected. `snapshotRemoved:false` exits 1 after
+retirement with cleanup incomplete; do not retry deletion or claim rollback.
+
+`ocx integration client sync --client aside --json` refreshes eligible profiles
+through the attested owner, with no profile selector or local fallback. Empty
+`results` is successful observation of no eligible profiles; a failed row makes
+the aggregate nonzero while preserving other successes. Read status and recovery
+facts before retrying; [Aside controls](/guides/integrations/#aside-profile-controls)
+explain profile intent versus file state.
+
+### Inspect Cursor without installing it
+
+```bash
+ocx integration native cursor status --json
+ocx integration native cursor local-installer --json
+```
+
+Status can gather model inventory; installer lookup may fetch a public manifest.
+They do not download/install or toggle Cursor. Status distinguishes credential
+from placeholder gateway mode; the placeholder is not an access credential.
+Installer `{available:false,url:null,version:null,reason:null}` is valid, including
+when Private Inference is already installed. A valid unavailable read exits 0.
+
+### `ocx integration <claude|grok> ...`
+
+Manage supported Claude and Grok integrations. The direct command families below expose their
+client-specific controls.
+
+### `ocx claude [claude args...]`
+
+Ensure the proxy is running, then launch Claude Code with `ANTHROPIC_BASE_URL`,
+`ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`, and model slots from
+`config.claudeCode`. Routed models appear in the native `/model` picker through stable slot aliases
+with Claude Code 2.1.129 or newer. On older versions, select with `ANTHROPIC_MODEL` or `/model <id>`.
+User-exported `ANTHROPIC_*` variables always take precedence.
+
+Claude Desktop profile commands are:
+
+```text
+ocx claude desktop [apply]                         Save and apply the four-family profile
+ocx claude desktop show [--json]                   Show routes, families, and defaults
+ocx claude desktop status [--json]                 Show applied state, drift, and health
+ocx claude desktop move <route> <family> [--default]
+ocx claude desktop default <family> <route|none>
+ocx claude desktop export <path|->                 Export versioned JSON (`-` = stdout)
+ocx claude desktop import <path> [--apply]         Validate and import JSON
+```
+
+The families are `opus`, `fable`, `sonnet`, and `haiku`; new routes start in `opus`. `none` is valid
+only when that family is empty. Legacy apply flags `--static`, `--hybrid`, and `--discovery-only`
+remain supported. Use `ocx claude config <status|set> ...` for Claude Code settings.
+
+#### Read or save the selected runtime's Desktop profile
+
+The existing show/import commands above are local. The `profile` family targets
+the running management runtime and can gather model inventory:
+
+```bash
+ocx claude desktop profile show --json > desktop-observed.json
+jq '.profile' desktop-observed.json > desktop-profile.json
+```
+
+Edit/review the versioned profile, preserving server-owned applied markers. For
+an authorized save, then read-back:
+
+```bash
+ocx claude desktop profile import desktop-profile.json --json
+ocx claude desktop profile show --json
+```
+
+Import accepts the profile itself, not the outer `{profile,models,rendered,port}`
+response, using bounded regular JSON files or explicit stdin `-` (4 MiB/30 seconds).
+It returns those observed fields plus `ok:true`, meaning saved only. `--apply` and
+native-mode flags are rejected; failed runtime save has no local fallback. Apply
+is a separate existing Desktop action on its machine, so verify host/context
+before choosing it. Rendered models are not proof of native application.
+
+### `ocx opencode [opencode args...]`
+
+Ensure the proxy is running, then launch opencode with the generated `provider.opencodex` and
+`providers.opencodex` blocks in OpenCode's inline runtime layer (`OPENCODE_CONFIG_CONTENT`). The
+legacy block keeps V1 clients working with variant maps; the V2 block carries native arrays
+for the same reasoning-effort choices and defaults. Existing inline config is preserved and only those two keys are replaced
+for this launch. Global or project `opencode.json` files may be read to warn about an existing
+override, but on-disk files are never modified. Routed models appear as
+`opencodex/<provider>/<model>`. Launching plain `opencode` later behaves exactly as before.
+
+### `ocx grok <status|exclude|include|set|clear|apply> ...`
+
+Manage and apply the Grok Build model fence.
+
+## Client config export
+
+### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside|raycast|omo|cline|kilo|commandcode|droid>`
+
+Print a client config wired to the running proxy. The command serializes the
+`opencodex` provider block — base URL, model list, and the client's credential
+reference or loopback placeholder — in the selected client's native format.
+
+The proxy must be running; the command resolves its live port, reads `/api/models`, and emits only
+models Codex can currently see.
+
+OpenCode and Kilo exports preserve effective model limits, known capabilities, declared reasoning
+choices and defaults, including metadata inherited by custom rows. Explicit overrides still win;
+unknown capabilities and defaults are not invented. The OpenCode launcher uses the same metadata.
+See [client integrations](/guides/integrations/) for managed refresh and upgrade behavior.
+
+| Flag | Action |
+| --- | --- |
+| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae\|dsh\|mcode\|zcode\|prime\|aside\|raycast\|omo\|cline\|kilo\|commandcode\|droid>` | Required. Selects the client config dialect. |
+| `--json` | Print the generated document as JSON on stdout for scripts. This is JSON even when the selected client's native format is YAML, TOML, or JSON5. |
+| `--out <path>` | Write the client's native config format to `<path>`. Refuses to replace an existing file. |
+| `--force` | Allow `--out` to replace an existing file. |
+
+```bash
+ocx export --client opencode                     # config plus destination, merge warning, and counts
+ocx export --client pi --json > pi-models.json   # JSON document for a pipe or a diff
+ocx export --client omp --out ./omp-models.yml    # native OMP YAML
+ocx export --client opencode --out ~/opencodex-opencode.json
+```
+
+Without `--json` the generated config leads, then the canonical destination path, the merge warning, the env
+export line where the client has one, and a model count with how many rows omit context limits (the
+client applies its own defaults for those).
+
+| Client | Canonical destination | Download filename | Env var |
+| --- | --- | --- | --- |
+| `opencode` | `~/.config/opencode/opencode.json` (`XDG_CONFIG_HOME` wins when set) | `opencode.json` | `OPENCODEX_OPENCODE_API_KEY` |
+| `pi` | `~/.pi/agent/models.json` (`PI_CODING_AGENT_DIR` wins when set; a relative value is refused) | `pi-models.json` | none — the block carries the literal `opencodex-loopback` |
+| `omp` | `~/.omp/agent/models.yml` (`OMP_PROFILE` wins over `PI_PROFILE`, even when empty; named profiles use the home-relative `PI_CONFIG_DIR` directory name and ignore `PI_CODING_AGENT_DIR`, while the default profile lets `PI_CODING_AGENT_DIR` win) | `omp-models.yaml` | none — loopback placeholder |
+| `hermes` | `~/.hermes/config.yaml` | `hermes-config.yaml` | `OPENCODEX_HERMES_API_KEY` |
+| `openclaw` | `~/.openclaw/openclaw.json` | `openclaw.json5` | `OPENCODEX_OPENCLAW_API_KEY` |
+| `kimi` | `~/.kimi-code/config.toml` | `kimi-config.toml` | none — loopback placeholder |
+| `gajae` | `~/.gjc/agent/models.yml` | `gajae-models.yaml` | non-secret loopback placeholder |
+| `dsh` | `$DSH_HOME/settings.yaml` (default `~/.dsh/settings.yaml`) | `settings.yaml` | none — non-secret loopback bearer placeholder |
+| `mcode` | `~/.minimax/config.yaml` (`MINIMAX_DATA_DIR`, then the legacy `MAVIS_DATA_DIR`, win when set; a relative value is refused) | `mcode-config.yaml` | none — loopback placeholder |
+| `zcode` | `~/.zcode/v2/config.json` (`dataBaseDir` in the default-home `setting.json` relocates the root; `ZCODE_DATA_DIR` wins when set; relative values are refused) | `config.json` | none — loopback placeholder |
+| `prime` | `~/.prime/agent/models.json` (`PRIME_AGENT_CODING_AGENT_DIR` wins when set; a relative value is refused) | `prime-models.json` | none — loopback placeholder |
+| `aside` | `~/.aside/u/<account>/models.json` for the account Aside's own `accounts.json` names as current; an unreadable manifest is refused rather than defaulting to an account | `aside-models.json` | none — loopback placeholder |
+| `raycast` | `~/.config/raycast/ai/providers.yaml` on macOS and Windows alike (Raycast does not honor `XDG_CONFIG_HOME`) | `raycast-providers.yaml` | none — loopback only, no `api_keys` entry is written |
+| `omo` | `~/.omo/agent/models.json` (`OMO_CODING_AGENT_DIR`, then `SENPI_CODING_AGENT_DIR`, then `PI_CODING_AGENT_DIR` win in that order when set; a relative value is refused) | `omo-models.json` | none — loopback placeholder |
+| `kilo` | first existing `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json`, or `config.json` under `~/.config/kilo` (`XDG_CONFIG_HOME` relocates that directory); uses `kilo.jsonc` when none exists | `kilo.jsonc` | `OPENCODEX_KILO_API_KEY` |
+| `commandcode` | `~/.commandcode/providers.json` (on Windows with the default home: use `HOME ?? USERPROFILE` only if nonblank and Windows-absolute, otherwise `homedir()`; a separately supplied home is preserved; append `.commandcode\providers.json`) | `providers.json` | loopback only; `apiKey: false`; no environment variable |
+| `droid` | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` on Windows) | `factory-settings.json` | loopback only; no environment variable |
+
+The managed DSH export requires DSH 0.1.0-rc.6 or newer and owns only
+`llm-pi-ai.providers.opencodex`. DSH hot reloads that provider; the user's default model and
+`deepseek-official` remain untouched. This export is loopback-only and carries no real credential.
+DSH 0.1.7 and newer import `settings.yaml` once into the first profile that boots and then rename
+it, so the dashboard integration writes the same provider into the `llm-pi-ai` row of the Desktop
+profile's `$DSH_HOME/profiles/desktop/cordis.patch.yml` once that profile exists.
+
+opencode interpolates `{env:OPENCODEX_OPENCODE_API_KEY}`. The generated Pi and OMP exports do
+not require an environment variable: each carries the literal `opencodex-loopback` placeholder.
+This is load-bearing because both clients resolve `apiKey` while building their model lists and
+hide the whole provider when an existing config contains an unset env reference. The proxy never
+checks the generated placeholder on loopback. OMP supports provider-level headers, but this initial
+integration deliberately remains loopback-only; remote `x-opencodex-api-key` wiring is deferred.
+
+The Raycast export is a standalone `providers.yaml` document with one `id: opencodex` element
+in the `providers` sequence: `name: OpenCodex`, the proxy's `/v1` base URL, and every routed model
+with its `abilities` (`tools` and `system_message` always supported, `vision` from the catalog's
+input modalities, `reasoning_effort` when the model has an effort ladder, `temperature` off for
+reasoning models). Custom Providers is a Raycast Pro feature, and Raycast watches the file, so a
+saved change takes effect without a restart. The format is documented at
+[manual.raycast.com/ai/custom-providers](https://manual.raycast.com/ai/custom-providers). No
+`api_keys` entry is written, so this export is loopback-only and a non-loopback bind is refused.
+
+The MCode, ZCode and Prime exports are loopback-only for the same reason and likewise carry the
+`opencodex-loopback` placeholder rather than a real credential. Prime Agent reads the same
+`models.json` contract Pi does, so the two exports produce the same document; only the destination
+differs. A relative path in any of those three environment overrides is refused, because the proxy
+and the client can have different working directories and would otherwise disagree about which
+file is meant.
+
+ZCode 3.8.1 may save runtime-derived `reasoning`, `limit.output`, and default context metadata back
+into the generated `provider.opencodex.models` entries. Managed integration status treats only
+those documented additions as refreshable drift. Provider identity and connection settings,
+including `options.baseURL`, model membership, names, modalities, and any context limit OpenCodex
+emitted authoritatively remain protected; editing them reports `conflict / foreign-edit` instead of
+overwriting the file. An ownership record created by an older OpenCodex version can recover
+automatically when the generated catalog is otherwise unchanged. If both the catalog and the block
+changed, re-apply only after reviewing the file because the older record cannot prove which change
+was ZCode-derived.
+
+:::caution[Merge, never replace]
+`ocx export` never writes your real client config. The destination is printed for you to merge by
+hand, and `--out` refuses to overwrite an existing file without `--force`, because replacing a
+config destroys the other providers, agents, and MCP entries already in it.
+:::
+
+No key is ever serialized. Configs carry either a documented environment reference or a
+non-secret loopback placeholder. A loopback address (`127.0.0.1`) alone does not establish keyless
+admission: check the target policy and endpoint. Selected-key model/audio commands
+still require explicit key input on loopback. Set a referenced variable only when the client schema supports it and
+the proxy binds beyond loopback; see
+[Remote access](/reference/configuration/server/#remote-access) for how admission keys are issued. Keys for
+the upstream providers themselves are a separate thing entirely, configured per
+[Providers](/guides/providers/).
+The generated gjc integration uses a non-secret loopback placeholder and needs no environment variable. It remains loopback-only; it does not configure remote admission credentials.
+
+The same payload is served by `GET /api/client-config` and rendered on the dashboard's API tab, so
+the CLI, the API, and the GUI use the same bytes.
+
+## Runtime and configuration
+
+### `ocx system <status|settings|startup|diagnostics|sync|codex-app-server|codex-restart|update|codex-cli-update> ...`
+
+Manage headless runtime settings, startup, sync, diagnostics, and updates.
+
+`ocx system codex-restart --yes` restarts Codex app-servers through the same module as
+`ocx sync --restart-codex`. It quits and relaunches the Codex desktop app when the app launched before the current model catalog was written or this request changed
+its `model_catalog_json` binding, because the model picker is built at
+launch. Otherwise the app stays open, respawns its own app-server, and keeps unsaved drafts and
+pending approvals. If the app or catalog state cannot be read, it takes the full restart. When
+the proxy itself is running inside the Codex app, the desktop restart refuses with an actionable
+message instead of promising a handoff it cannot complete.
+
+A `model_catalog_json` binding changed by this request also forces the desktop restart, even when the shell started after the catalog file was written.
+
+```bash
+ocx system settings --stream-mode eager-relay
+```
+
+Additional system booleans take on/off: `--show-codex-credits`, `--account-picker`,
+`--main-account-hard-lock`, `--ultra-fast-tier`, and `--fast-rows`. They write only
+explicit fields and may combine with existing system options. Showing credits is
+a display preference, not paid-credit opt-in; system Ultra Fast is separate from
+provider Fast.
+
+Ultra Fast is an opt-in setting, default off. With `--ultra-fast-tier on`, the
+generated catalog adds the Ultrafast speed choice to native `gpt-6-astra` and
+`gpt-6.1-sol` (including account-bound rows), so the Codex picker offers it next to
+Fast. Ultrafast requires an eligible ChatGPT plan; the catalog cannot check that,
+so turn the setting on only if your plan includes it. Other models and the default
+speed are unchanged.
+
+For routed models, sync and catalog convergence retain an existing routed
+row's operator-supplied `ultrafast` entries in `service_tiers` and
+`additional_speed_tiers` alongside its current Fast capability. Declarations belong
+to the exact provider/model slug; they are not copied to other models. The setting
+does not create missing declarations or restore removed models. Turning it off
+removes Ultra Fast from ordinary routed rows and the generated native choice on the
+next catalog regeneration.
+
+The proxy's Fast mode decides what reaches the backend: when it is unset, a selected
+Ultrafast request is forwarded as `service_tier: "ultrafast"`; `fastMode: true`
+replaces any tier with Fast (`priority`), and `fastMode: false` removes the tier.
+Leave Fast mode unset to use Ultrafast.
+
+```bash
+ocx system settings --json
+ocx system settings --show-codex-credits on --json
+ocx system settings --json
+```
+
+New-option writes report `{ok:true, settings: observedFields, catalogRefreshPending}`.
+Ultra Fast performs same-target GET read-back because PUT omits that value. A
+missing/mismatched/read-failed observation stays `verification:"unverified"` with
+`unverifiedFields` and a nonzero exit after acceptance; requested values are never
+substituted for observations. Combined desktop switches retain stored/effective
+and apply facts. Pending catalog or deferred/refused native apply is distinct from
+a saved setting. False pending is not proof that every client has reloaded.
+
+`ocx system update` updates OpenCodex itself. The separate Codex CLI inspection surface is:
+
+```bash
+ocx system codex-cli-update check --json
+```
+
+`check` makes no package-registry request and inspects bounded configured-candidate provenance evidence,
+including a redacted executable location and ownership evidence. Trusted published-launcher context authenticates
+the candidate snapshot, not successful Codex execution. Because this one-shot command never executes Codex,
+environment and persisted candidates remain report-only (`managed: false`, normally `selection_unattested`);
+`selectionAttested` remains `false`. The JSON report exposes `candidateAvailable`, `candidateVersion`, `candidateSource`,
+and `selectionAttested`. Inspecting the configured candidate requires a trusted published-launcher context;
+a direct Bun/source launch has no such proof, ignores ambient and persisted candidate state, and may report
+`candidate_unavailable` on POSIX. On Windows this first slice performs no candidate or configuration filesystem I/O:
+only a proof-captured absolute environment candidate can receive lexical app-bundle or version-manager labels;
+every other Windows candidate fails closed. Because that slice never consults persisted state, a Windows run
+with no captured environment candidate reports `windows_inspection_deferred` rather than `candidate_unavailable`:
+the command cannot observe whether a Codex CLI is installed, so it reports the deferral instead of asserting
+that no candidate exists. The command does not execute Codex or a package manager, repair a shim,
+write configuration or cache state, stop a process, or install anything. App-bundled, recognized
+version-manager, unverified standalone, and ambiguous shim states are reported as unmanaged or unknown
+and are never classified as managed.
+
+On Windows, a captured bare command such as `CODEX_CLI_PATH=codex`, a remote path, or a device path reports `candidate_path_unavailable` instead. Those cases have a captured candidate; its path is not eligible for this inspection.
+
+#### Explicit installation observation on Windows x64
+
+```text
+ocx system codex-cli-update attest [--json]
+ocx system codex-cli-update attest --candidate <absolute-path> --npm-prefix <absolute-path> --npm-cli <absolute-path> --node <absolute-path> [--json]
+```
+
+`attest` is an opt-in, read-only observation of a Windows x64 npm installation. With no options it identifies the selected candidate from the proof-bound launcher snapshot — the configured `CODEX_CLI_PATH` or the first `codex` on the captured PATH, with an OpenCodex wrapper resolving to its renamed `codex.opencodex-real.cmd` npm backing. Supplying all four absolute paths overrides discovery; discovery only proposes paths and the held-handle observation remains the authority. `--candidate` must name the standard npm `<prefix>/codex.cmd` or `<prefix>/node_modules/@openai/codex/bin/codex.js`. `--npm-cli` must end in `node_modules/npm/bin/npm-cli.js`; `--node` names an explicit `node.exe`. App bundles, recognized version-manager layouts, opencodex-owned shims without their npm backing, and custom wrappers are refused.
+
+Native handles hold the ancestor directories and files during bounded reads. Unsupported platforms, reparse points/junctions, conflicting writers, unsafe paths, and oversized files are refused. The fixed report contains no paths: `status` is `observed` or `refused`, with `installationIdentityObserved`; `selectionAttested`, `managed`, and `applyAllowed` remain `false`. Check `status`, not just the process exit code: a reported refusal can exit 0.
+
+An observed identity or digest describes those files during this observation. It is not a durable update permit and does not prove the selected runtime, the past installer, effective npm configuration, or tool authenticity. The supplied Node is observed only, not proven to be the Node a launcher would select. No target is executed; no registry request, installation, configuration write, or process control occurs. The existing Windows `check` command still performs no candidate/configuration filesystem I/O.
+
+### `ocx config [show|get|set|unset|validate|export|import] ...`
+
+`ocx config [show] [--json] [--source]` displays the local configuration without a running proxy. Omitting `show` also works with either flag or both, in either order. `--source` includes diagnostic source, error, and warning fields and is only accepted for display. `--json` may precede an explicit action; it does not change which action runs. Repeated `--json` or `--source` flags and unknown arguments are rejected.
+
+Inspect and safely modify validated OpenCodex configuration. `show` and `get` mask secrets. Import
+validates before writing and requires `--yes`.
+
+Display and mutation output strip credentials from proxy URLs while retaining the host and port.
+`direct` and credential-free proxy values stay readable. `export` preserves credentials so the
+backup can restore the configuration; store exported files as secrets.
+
+### Usage from a connected client
+
+`ocx usage` reads the connected hub with this client's enrolled data key. Human output identifies the hub source and client-key scope; `--json` returns the same scoped data. Range, surface, provider/model filters and custom `--since`/`--until` bounds remain available. Account breakdowns and other clients' records are not shared. An old or unavailable hub produces an explicit error instead of substituting local usage; upgrade the hub if it does not support this read.
+
+The read-only data-plane endpoint is `GET /v1/usage`, using `x-opencodex-api-key` with a configured client key. Environment-wide and admin keys are refused. It accepts `range`, `surface`, `provider`, `model`, `since`, and `until`; unknown/repeated options and caller-selected key IDs are rejected. Oversized skipped rows retain the explicit incomplete-history warning.
+
+## Explain a listed request
+
+Human `ocx logs` output includes `id=<request-id>`. Pass that value to `ocx logs explain <request-id>` to inspect routing decisions. Rows without an ID or with control characters in their ID omit the field instead of displaying a different lookup key. JSON and JSONL output retain their existing schema.
+
+## Routing profile lookup status
+
+`ocx route policy show <id>` exits 4 when the profile does not exist. Missing or invalid command arguments exit 2. Scripts can distinguish a missing profile from incorrect usage.
+
+## Upstream error details
+
+When an upstream error envelope contains several message fields, OpenCodex uses the first nonblank string in its established priority order. Empty or malformed fields no longer hide a valid fallback diagnostic.
+
+### Forced Claude Code subagent model
+
+The Subagents page offers **Force all subagents onto one model**, off by default. Select an exposed roster-style id, such as `combo/tev-auto`, then enable the switch. The roster is offered first; unavailable saved roster entries cannot be force targets.
+
+`ocx agent subagents force combo/tev-auto` sets `claudeCode.subagentModelForce`; `ocx agent subagents force -` clears it. `ocx agent status` reports the setting. `GET /api/subagent-models` returns `force`, `forceAvailable`, and `forceStatus`; `PUT` accepts `{ "force": "combo/tev-auto" }` or `{ "force": null }` without changing the roster. Omitting `force` leaves it unchanged. Invalid or unexposed targets are rejected on write; stale targets are reported and skipped at launch.
+
+This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` only for an authoritative million-token window; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
+
+Claude Code **2.1.257 or newer** is required for FORCE. Plugin and built-in agents (including Explore/Plan) and per-call model arguments are overridden. Forks and subagent skills with `model: inherit` keep the main conversation model. The main loop and Haiku/small-fast sidecars are unaffected. Existing roster files remain available.
+
+The dashboard warns about old or unknown CLI versions, unavailable targets, and either variable already present in `settings.json` → `env` (which overrides launch env). Detection is read-only and server-local: it cannot inspect another launch shell, another machine, or project-local settings. An unknown result is not proof of force support.
