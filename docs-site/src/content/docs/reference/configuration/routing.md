@@ -13,6 +13,16 @@ Routing turns the model id sent by a client into one concrete provider and upstr
 | `combos?` | `Record<string, OcxComboConfig>` | `{}` | Virtual `combo/<id>` models built from ordered provider/model targets. |
 | `routingProfiles?` | `Record<string, OcxRoutingProfileConfig>` | `{}` | Virtual `policy/<id>` models that select among an explicit candidate allowlist using hard capability requirements and deterministic scoring. |
 
+### Model alias discovery
+
+Set `preferModelAliasIds: true` to publish configured or enabled built-in model aliases
+as the `id` in `GET /v1/models`. The default is `false`. Promoted rows retain their
+previous qualified ID in `native_id` and keep `alias_of`; both IDs remain routable.
+Models without aliases keep their existing IDs. If a short alias is ambiguous across
+providers or is shadowed by another route, the row keeps its qualified ID so selecting
+it still reaches the intended model. The qualified ID also stays when a built-in short
+alias would produce an unparseable synthetic Fast selector. Codex's own model catalog is unchanged.
+
 ### Codex Pool low-quota protection
 
 `codexPool.lowQuotaProtection` applies only to stored Codex Pool accounts. The Desktop/main

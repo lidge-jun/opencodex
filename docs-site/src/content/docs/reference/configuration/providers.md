@@ -357,7 +357,7 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `anthropicEofTolerance?` | `boolean` | Let an Anthropic-compatible gateway complete a stream that ends before `message_stop`, only when visible text or a complete JSON-object tool input was received. Off by default. |
 | `googleMode?` | `"ai-studio" \| "vertex" \| "cloud-code-assist"` | Google transport/auth mode. Default `ai-studio`. |
 | `googleToolSchemaPolicy?` | `"compatible" \| "reject-lossy"` | Google only. Omitted/`compatible` preserves the compatible tool schema and existing non-direct 400 repair. `reject-lossy` rejects initial schema loss or an indeterminate bounded comparison before dispatch and withholds a Vertex or Cloud Code Assist repair that would open constraints. Direct AI Studio never performs that repair. |
-| `directGeminiWireRenames?` | `boolean` | Google only. Applies only to direct AI Studio requests. Omitted or `true` keeps the `-tiered` wire rename for Gemini Flash ids (`gemini-3.7-flash` -> `gemini-3.7-flash-tiered`); `false` sends the requested bare ids to the wire unchanged. Vertex preserves the requested model ID, and Cloud Code Assist routing is unchanged. Set `false` when the configured upstream still serves the bare ids. |
+| `directGeminiWireRenames?` | `boolean` | Google only. Applies in AI Studio mode, including custom Google-compatible URLs. Omitted or `true` keeps the `-tiered` wire rename for Gemini Flash ids (`gemini-3.7-flash` -> `gemini-3.7-flash-tiered`); `false` sends the requested bare ids to the wire unchanged. Vertex and canonical keyed OpenCode Zen routes preserve the requested model ID regardless of this setting; Cloud Code Assist routing is unchanged. Set `false` when the configured upstream still serves the bare ids. |
 | `project?` | `string` | Vertex or Antigravity Cloud Code Assist project id. |
 | — | — | Antigravity account quota probes (`retrieveUserQuota` and `retrieveUserQuotaSummary`) always go to Google's own Cloud Code host through the pinned outbound transport, regardless of a configured `baseUrl`; the account bearer is never sent to an operator-configured endpoint and a redirect aborts the probe. Only the model-list fallback still honors `baseUrl`. |
 | — | — | If Antigravity quota summary returns 403 for a valid OAuth account, OpenCodex retries that endpoint once with the legacy `antigravity/1.0` User-Agent and the same token and project. A 401 is not retried. Inference and model discovery retain the IDE User-Agent. |
@@ -558,9 +558,17 @@ optional pin in a hand-edited file is ignored on load without discarding the res
 
 Codex reads `auto_review_model_override` from the catalog row of the current turn's model to
 choose the model that reviews approval requests. The root `auto_review_model` setting in
-`$CODEX_HOME/config.toml` applies one reviewer to task catalog rows; the provider-scoped fields
-below override it per provider. The [provider guide](/guides/providers/#approval-reviewer-per-provider)
-has the operator workflow and a worked example.
+`$CODEX_HOME/config.toml` supplies Codex's fallback. The dashboard's global **Auto-review override**
+in Model settings stores `autoReviewOverride` in `~/.opencodex/config.json` and takes precedence
+over that fallback; the provider-scoped fields below still win on their own rows. The global setting
+must be enabled and name a model. An enabled setting with no model stays unapplied and leaves the
+Codex fallback in effect. A catalog refresh is a separate state: after a save it can stay pending,
+and the Models page reports it so you can retry with `ocx sync`. CLI users can read the setting with
+`ocx models auto-review status` or change it with
+`ocx models auto-review set <model|-> [--enabled <on|off>]`; use `-` to clear the model. CLI output
+recommends `ocx sync` when a refresh can be retried. If a refresh fails, the setting remains saved
+and the command exits 1. Resolve the failure before syncing. The [provider
+guide](/guides/providers/#approval-reviewer-per-provider) has the operator workflow and a worked example.
 
 When native OpenAI rows are included and the final catalog has an ordinary bare native row
 other than Reserve (hidden rows count), OpenCodex keeps the hidden `codex-auto-review` row so
