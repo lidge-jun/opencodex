@@ -229,9 +229,10 @@ test("chat owned 401 rotates the rejected distributed credential before output",
   unchanged(config); noLeaks(config);
 });
 
-for (const statusCode of [401, 429]) for (const rewrite of ["credential", "destination", "none"] as const) {
-  test(`chat physical ${statusCode} ownership after ${rewrite} rewrite`, async () => {
+for (const statusCode of [401, 429]) for (const rewrite of ["credential", "destination", "none"] as const) for (const retry of [false, true]) {
+  test(`chat physical ${statusCode} ownership after ${rewrite} rewrite (retry=${retry})`, async () => {
     const config = fixture();
+    if (retry) config.providers[NAME]!.retryOn429 = { attempts: 1, intervalMs: 0, respectRetryAfter: false };
     const off = registerUpstreamRewriter("fixture-key-owner", target => {
       if (rewrite === "credential") target.headers.set("authorization", "Bearer fixture-plugin-key");
       if (rewrite === "destination") target.url = "https://replacement.example/v1/chat/completions";
@@ -246,8 +247,10 @@ for (const statusCode of [401, 429]) for (const rewrite of ["credential", "desti
       const result = await start(config, new AbortController());
       if (rewrite === "none") {
         expect(result.response.status).toBe(200);
-        expect(seen.map(row => row.key)).toEqual([`Bearer ${KEYS[0]}`, `Bearer ${KEYS[1]}`]);
-        expect(getKeyCooldownUntil(NAME, "k1")).not.toBeNull();
+        const sameKeyRetry = retry && statusCode === 429;
+        expect(seen.map(row => row.key)).toEqual([`Bearer ${KEYS[0]}`, `Bearer ${KEYS[sameKeyRetry ? 0 : 1]}`]);
+        if (sameKeyRetry) expect(getKeyCooldownUntil(NAME, "k1")).toBeNull();
+        else expect(getKeyCooldownUntil(NAME, "k1")).not.toBeNull();
       } else {
         expect(result.response.status).toBe(statusCode);
         expect(seen).toHaveLength(1);
