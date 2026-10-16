@@ -2,6 +2,7 @@ import type { KiroOAuthMetadata } from "../oauth/types";
 import type { NativeReasoningOwner } from "../responses/reasoning-replay-cache";
 import type { OcxTool, OcxToolChoice } from "./tools";
 import type { TierDecision, TierObservationContext } from "./provider";
+import type { TranslatorBudget } from "../lib/translator-budget";
 
 /** Exact provider/credential namespace for process-local reasoning replay. */
 export interface OcxReasoningReplayIdentity {
@@ -173,6 +174,7 @@ export interface OcxParsedRequest {
    */
   _advisorGuard?: (options: {
     parsed: OcxParsedRequest;
+    translatorBudget?: TranslatorBudget;
     firstEvents: AsyncIterable<AdapterEvent>;
     /** One bounded worker continuation re-dispatch (same machinery as the terminal guard). */
     continuation: (parsed: OcxParsedRequest) => AsyncIterable<AdapterEvent> | Promise<AsyncIterable<AdapterEvent>>;

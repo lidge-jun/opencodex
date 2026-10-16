@@ -54,6 +54,7 @@ import {
 } from "./request-log";
 import { createFinalRequestLog } from "./inference/final-log";
 import { clientWireLogOf, clientWireOf } from "./inference/client-wire";
+import { attachAdvisorReasoning } from "./inference/advisor-diagnostics";
 import { directEncodersApply } from "./inference/client-encoder-delivery";
 import { responseWithDeferredRequestLog } from "./relay";
 import { handleResponses } from "./responses";
@@ -114,8 +115,10 @@ export async function handleChatCompletions(
 ): Promise<Response> {
   const translatorBudget = createTranslatorBudget();
   try {
+    let response = await handleChatCompletionsWithBudget(req, config, logCtx, translatorBudget, logIds);
+    if (isInternalCallCapability(req.headers.get(ADVISOR_INTERNAL_CAPABILITY_HEADER))) response = attachAdvisorReasoning(response, logCtx);
     return finalizeTranslatorBudgetResponse(
-      await handleChatCompletionsWithBudget(req, config, logCtx, translatorBudget, logIds),
+      response,
       translatorBudget,
       req.signal,
     );

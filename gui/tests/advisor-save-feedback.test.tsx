@@ -6,6 +6,8 @@ import { LanguageProvider } from "../src/i18n/provider";
 import { AdvisorEditor, type AdvisorSettings } from "../src/pages/Advisor";
 import { clearClientResourceStoresForTests } from "../src/client-resource";
 import { advisorModelValues } from "../src/advisor-models";
+import { AdvisorActivityTable } from "../src/pages/advisor/AdvisorActivity";
+import { renderToStaticMarkup } from "react-dom/server";
 
 const globals = [
   "document",
@@ -99,6 +101,39 @@ async function clickSave(container: HTMLElement): Promise<void> {
     await new Promise(r => setTimeout(r, 0));
   });
 }
+
+test("adaptive policy exposes and saves the server-enforced task allowance", async () => {
+  let submitted: unknown;
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    submitted = JSON.parse(String(init?.body));
+    return Response.json({ settings: submitted, runnable: true });
+  }) as typeof fetch;
+  const { root, container } = await mountEditor({ ...initialSettings, policy: "adaptive", maxConsultationsPerTask: 3 });
+  const label = [...container.querySelectorAll("label")]
+    .find(item => item.textContent === "Consultations per task");
+  const limit = label?.control as HTMLSelectElement;
+  expect(limit).toBeTruthy();
+  expect(limit.tagName).toBe("SELECT");
+  await act(async () => { limit.value = "2"; limit.dispatchEvent(new testWindow.Event("change", { bubbles: true })); });
+  await clickSave(container);
+  expect(submitted).toMatchObject({ policy: "adaptive", maxConsultationsPerTask: 2, contextSharingConsent: "v1" });
+  await act(async () => root.unmount());
+});
+
+test("activity distinguishes requested, mapped, and unreported reasoning and usage", () => {
+  const html = renderToStaticMarkup(<LanguageProvider><AdvisorActivityTable entries={[
+    { id: "known", startedAt: 1000, trigger: "repair_failure", workerModel: "worker", advisorModel: "expert", requestedEffort: "max", effectiveEffort: "high", status: "ok", durationMs: 45, usage: { inputTokens: 10, outputTokens: 3 } },
+    { id: "unknown", startedAt: 1001, trigger: "manual", workerModel: "worker", advisorModel: "expert", requestedEffort: "max", effectiveEffort: null, status: "failed", durationMs: 20 },
+    { id: "capped", startedAt: 1002, trigger: "manual", workerModel: "worker", advisorModel: "expert", requestedEffort: "max", effectiveEffort: null, status: "blocked", durationMs: 0 },
+  ]} /></LanguageProvider>);
+  expect(html).toContain("Repair failed again");
+  expect(html).toContain("max → high");
+  expect(html).toContain("max → unreported");
+  expect(html).toContain("Advice returned");
+  expect(html).toContain("Failed");
+  expect(html).toContain("Blocked");
+  expect(html).not.toContain("Budget blocked");
+});
 
 test("Case 1: a new save clears previous success feedback and fails with only error notice visible", async () => {
   let saveCount = 0;

@@ -657,7 +657,7 @@ function buildResponseJSONWithBudget(
       : errorEvent?.retryable !== undefined ? { retryable: errorEvent.retryable } : {}),
     ...(incompleteEvent ? {
       incomplete_details: {
-        reason: incompleteEvent.reason,
+        reason: truncationReasonFor(incompleteEvent.reason) ?? incompleteEvent.reason,
         ...(incompleteEvent.message ? { message: incompleteEvent.message } : {}),
         ...(incompleteEvent.retryable !== undefined ? { retryable: incompleteEvent.retryable } : {}),
       },

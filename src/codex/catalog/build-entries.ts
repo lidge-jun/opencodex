@@ -48,7 +48,7 @@ import { NATIVE_RESERVE_MODEL } from "./native-models";
 import { isReserveCatalogProjection, type ReserveCatalogProjection } from "./reserve";
 import { deriveEntry, finishUpstreamNativeEntry, isExactComboCatalogEntry } from "./derive-entry";
 import { PICKER_ORDER_PRIORITY_BASE, SPAWN_PRIORITY_FIELD } from "./subagent-roster";
-import { applyConfiguredUltraFast } from "./configured-tiers";
+import { applyConfiguredUltraFast, configuredUltraFastSlugs } from "./configured-tiers";
 import { applyNativeUltraFastTier } from "./native-ultrafast";
 
 export interface ObservedCatalogEntryBuildInput {
@@ -111,6 +111,14 @@ export function buildCatalogEntries(
     accountNativeSlugs,
     accountNativeSlugsBySelector,
   });
+  // Live discovery does not run the disk merge; use the same captured declarations and row fences.
+  const configured = configuredUltraFastSlugs(goModels);
+  for (const entry of entries) {
+    if (typeof entry.slug !== "string" || !entry.slug.includes("/")
+      || isNativeAliasCatalogEntry(entry) || isExactComboCatalogEntry(entry, exactComboSlugs)
+      || trustedAccountBoundNativeCatalogSlug(entry) !== undefined) continue;
+    applyConfiguredUltraFast(entry, undefined, configured.has(entry.slug), false);
+  }
   applyFullModelPickerOrder(entries, modelPickerOrder);
   return entries;
 }

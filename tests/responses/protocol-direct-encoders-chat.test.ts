@@ -280,6 +280,22 @@ const SCENARIOS: Record<string, { events: AdapterEvent[]; options?: ToolOptions 
 };
 
 describe("direct Chat encoder matches bridge + converter (stream)", () => {
+  test.each([["length", "length"], ["refusal", "content_filter"]] as const)(
+    "explicit %s incomplete finishes with %s on both paths", async (reason, finishReason) => {
+      const events: AdapterEvent[] = [
+        { type: "text_delta", text: "partial" }, { type: "incomplete", reason, usage },
+      ];
+      const frames = await expectStreamParity(events);
+      expect(frames.at(-1)).toBe("[DONE]");
+      expect(frames.at(-2)).toMatchObject({
+        choices: [{ finish_reason: finishReason }], usage: { prompt_tokens: 120, completion_tokens: 30 },
+      });
+      const folded = await expectFoldParity(events);
+      expect(folded.status).toBe(200);
+      expect(folded.body).toMatchObject({ choices: [{ finish_reason: finishReason }] });
+    },
+  );
+
   for (const [name, scenario] of Object.entries(SCENARIOS)) {
     test(name, async () => {
       await expectStreamParity(scenario.events, scenario.options);

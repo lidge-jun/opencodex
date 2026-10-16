@@ -555,6 +555,7 @@ export async function executeResponsesSidecars(
         ? null : rateLimitRetryPolicyFor(route.provider),
       onFirstOutput: noteSidecarOutput,
       ...(options.forceEmptyResponseId ? { forceEmptyResponseId: true } : {}),
+      terminalRefusalAsFailed: inboundWire !== "chat" && inboundWire !== "anthropic",
       onCompletedResponse: (response, providerState) => {
         const served = transportState.replayOAuthCredentialSnapshot;
         if (route.providerName === "kiro" && response.status === "completed" && served
@@ -636,6 +637,7 @@ export async function executeResponsesSidecars(
       settings: wsPlan.settings,
       maxSearches: wsPlan.maxSearches,
       forceEmptyResponseId: true,
+      terminalRefusalAsFailed: inboundWire !== "chat" && inboundWire !== "anthropic",
       abortSignal: options.abortSignal,
       onFirstOutput: noteSidecarOutput,
       onRequestBuilt: request => {

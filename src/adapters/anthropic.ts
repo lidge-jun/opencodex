@@ -313,11 +313,12 @@ function isAnthropicContentFilterStopReason(
 }
 
 /**
- * Anthropic `refusal` / `content_filter` is a permanent sampling decision, not a disconnect.
- * Emitting `done` with that stopReason used to surface as `response.incomplete` without
- * `retryable`, which Codex treats as a dropped stream and retries five times (#4312).
- * The explicit incomplete event is what the bridge already forwards into
- * `incomplete_details.retryable`. Usage is preserved: a filtered turn still consumed tokens.
+ * Anthropic `refusal` / `content_filter` is a permanent sampling decision, not a disconnect
+ * (#4312). Codex does not read `incomplete_details.retryable`: it retries every
+ * `response.incomplete`. The explicit `retryable: false` verdict here is the marker the bridge
+ * uses to deliver the turn to a Responses client as a terminal `response.failed` instead
+ * (`src/bridge/terminal-refusal.ts`); a `done` with that stopReason carries no verdict and
+ * stays a plain incomplete. Usage is preserved: a filtered turn still consumed tokens.
  * `max_tokens` stays a `done` so the client can continue from a legitimate truncation.
  */
 function anthropicContentFilterIncomplete(
@@ -1237,8 +1238,8 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
           return;
         }
         // Refusal / content_filter must not look like a dropped stream. `done` with that
-        // stopReason becomes `response.incomplete` without `retryable`, and Codex retries
-        // the same refusal five times (#4312).
+        // stopReason carries no verdict, so the bridge could not tell it from a retryable
+        // incomplete and Codex would re-send the same refusal (#4312).
         if (isAnthropicContentFilterStopReason(pendingStopReason)) {
           yield anthropicContentFilterIncomplete(pendingStopReason, usageFromAnthropic(pendingUsage));
           return;
@@ -1433,7 +1434,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
           }
           // Same rule as emitDone: refusal / content_filter is a permanent decision, not a
           // disconnect. This branch bypasses emitDone, so the check has to be repeated here
-          // or the EOF route still emits `done` and Codex retries the refusal (#4312).
+          // or the EOF route emits a verdict-less `done` the bridge cannot make terminal (#4312).
           if (isAnthropicContentFilterStopReason(pendingStopReason)) {
             emittedDone = true;
             yield anthropicContentFilterIncomplete(pendingStopReason, usageFromAnthropic(pendingUsage));

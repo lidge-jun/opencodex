@@ -17,6 +17,8 @@ terminal on drift; see [continuation binding contract](../providers-and-adapters
 
 Shared parsing and streaming follow the [request-copy](byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](responses-wire-shapes.md#passthrough-sse-stream-shapes-314).
 
+Responses WebSocket terminal frames normalize known `incomplete_details.reason` aliases under the [incomplete reason contract](responses-wire-shapes.md#adapter-incomplete-reasons), including native control chains.
+
 ## Heartbeat and stall deadline
 
 RunTurn search interception forwards adapter heartbeats immediately and emits progress for buffered semantic events. Its bridge uses the search plan's stall deadline so a bounded sidecar search fits the watchdog budget.

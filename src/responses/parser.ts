@@ -69,9 +69,34 @@ function repairJsonObjectEnvelope(text: string): Record<string, unknown> | undef
 }
 
 /**
+ * Repair the observed MiMo tool-call corruption: the model emits its proprietary
+ * `</function></tool_call>` closing tags INSIDE the JSON string value of the
+ * function arguments, and drops the JSON object's closing brace. Strip the
+ * suffix, restore the brace, and only accept the repair when the result parses
+ * into an object.
+ */
+function repairMimoToolCallEnvelope(text: string): Record<string, unknown> | undefined {
+  const suffix = "</function></tool_call>";
+  if (!text.endsWith(suffix)) return undefined;
+  const stripped = text.slice(0, -suffix.length);
+  if (!stripped.startsWith("{")) return undefined;
+  // A trailing brace or quote can itself belong to the unterminated string.
+  // Try only the three observed envelope endings, accepting an object parse.
+  for (const candidate of [stripped, `${stripped}}`, `${stripped}"}`]) {
+    try {
+      const parsed: unknown = JSON.parse(candidate);
+      if (isObj(parsed)) return parsed;
+    } catch {
+      /* try the next bounded envelope ending */
+    }
+  }
+  return undefined;
+}
+
+/**
  * Decode a function call's serialized arguments the way history replay tolerates them: empty
- * or non-JSON text becomes `{}` instead of failing every later turn, and the one bounded
- * lost-brace corruption above is repaired. Shared with the direct Chat decoder
+ * or non-JSON text becomes `{}` instead of failing every later turn, and the bounded
+ * lost-brace and MiMo closing-tag corruptions above are repaired. Shared with the direct Chat decoder
  * (`src/protocols/codecs/chat-ir.ts`) so both decode the same call to the same object.
  */
 export function functionCallArgumentsFromText(callId: string, rawArguments: string | undefined): Record<string, unknown> {
@@ -82,6 +107,15 @@ export function functionCallArgumentsFromText(callId: string, rawArguments: stri
       const parsed: unknown = JSON.parse(rawArgs);
       if (isObj(parsed)) args = parsed;
     } catch {
+      // Corruptions observed on Xiaomi MiMo routed requests, each with a bounded
+      // repair so a serialized call the model can still see is restored instead
+      // of replaying {} forever.
+      const mimoRepaired = repairMimoToolCallEnvelope(rawArgs);
+      if (mimoRepaired !== undefined) {
+        args = mimoRepaired;
+        console.warn(`[parser] function_call ${callId} repaired MiMo tool-call envelope (tags inside string)`);
+        return args;
+      }
       // One observed serialization corruption loses exactly the JSON object's opening
       // brace; the closed envelope is tight enough to repair back into a call the
       // routed model can still see and retry, instead of replaying {} forever.

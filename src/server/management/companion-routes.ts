@@ -27,7 +27,7 @@ function response(): Response {
 }
 
 export async function handleCompanionRoutes(ctx: ManagementContext): Promise<Response | null> {
-  if (ctx.url.pathname === "/api/advisor/settings") {
+  if (ctx.url.pathname === "/api/advisor/settings" || ctx.url.pathname === "/api/advisor/activity") {
     const { handleAdvisorRoutes } = await import("./advisor-routes");
     return handleAdvisorRoutes(ctx);
   }

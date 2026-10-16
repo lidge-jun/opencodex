@@ -20,6 +20,7 @@ import { isMissingPathError } from "./atomic-write";
 import { getConfigDir, getConfigPath } from "./paths";
 import { getDefaultConfig } from "./proxy-env";
 import { salvageConfigCandidate } from "./salvage";
+import { sanitizeOpenCodeZenOverridesForLoad } from "./opencode-zen-upgrade";
 import {
   sanitizeReasoningPinsForLoad,
   sanitizeRetryOn429ForLoad,
@@ -754,6 +755,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
 export function configDiagnosticsFromRaw(raw: string): ConfigDiagnostics {
   try {
     const parsed = JSON.parse(raw.replace(/^\uFEFF/, ""));
+    sanitizeOpenCodeZenOverridesForLoad(parsed);
     sanitizeReasoningPinsForLoad(parsed);
     // Same degradation as loadConfig: a hand-edited invalid retryOn429 must not trip the
     // schema and send the caller a default-config fallback (the config command could then
