@@ -243,3 +243,32 @@ test("startup health recognizes only the exact managed URL of an approved provid
     if (getCodexRoutingKind() !== "custom-local") throw new Error("unrecorded URL was claimed");
   `);
 });
+
+
+test.each(["already-off", "late-off"])("approved routing respects integration OFF at publication (%s)", timing => {
+  run(`
+    const { readdirSync } = await import("node:fs");
+    const { getDefaultConfig, saveConfig } = await import("./src/config");
+    const { injectApprovedCodexProvider } = await import("./src/codex/provider-routing");
+    const { standaloneCodexRoutingTarget } = await import("./src/codex/inject/routing-target");
+    const config = getDefaultConfig();
+    saveConfig(config); allow();
+    const record = join(process.env.OPENCODEX_HOME, readdirSync(process.env.OPENCODEX_HOME).find(name => name.startsWith("codex-provider-routing-") && name.endsWith(".json")));
+    const evidence = readFileSync(record, "utf8");
+    const disable = () => {
+      config.clientIntegrations = { codex: false };
+      writeFileSync(join(process.env.OPENCODEX_HOME, "config.json"), JSON.stringify(config));
+    };
+    if (${JSON.stringify(timing)} === "already-off") disable();
+    let calls = 0;
+    const result = injectApprovedCodexProvider(id, standaloneCodexRoutingTarget(18281, {}), () => {
+      // The first guard belongs to stale-journal cleanup; the second is URL publication.
+      if (++calls === 2 && ${JSON.stringify(timing)} === "late-off") disable();
+    });
+    if (result !== false) throw new Error("integration OFF was not skipped");
+    if (readFileSync(record, "utf8") !== evidence) throw new Error("skipped injection changed recovery evidence");
+    if (!approvedCodexProviders().includes(id)) throw new Error("skip revoked consent");
+  `);
+  expect(readFileSync(join(codexHome, "config.toml"), "utf8")).toBe(original);
+  expect(readFileSync(join(codexHome, "history.jsonl"), "utf8")).toBe("history sentinel\n");
+});

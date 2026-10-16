@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
+import { loadConfig } from "../config";
+import { shouldSyncCodexOnStart } from "./desired-state";
 import { atomicWriteFile } from "../config/atomic-write";
 import { withConfigMutationLockSync } from "../config/mutation-lock";
 import { getConfigDir } from "../config/paths";
@@ -136,6 +138,7 @@ export function injectApprovedCodexProvider(id: string, target: CodexRoutingTarg
       if (!accepts(field.url, saved)) throw new Error("Approved provider base_url changed outside OpenCodex; revoke and approve it again.");
       if (validateOnly || field.url === target.baseUrl) return { configChanged: false };
       beforeWrite?.();
+      if (!shouldSyncCodexOnStart(loadConfig())) return false;
       if (readFileSync(CODEX_CONFIG_PATH, "utf8") !== content) throw new Error("Codex config changed before publication; retry sync.");
       // Write recovery evidence first. Both the previous and candidate URL remain restorable
       // if publication fails or the process exits between these two atomic renames.
@@ -145,7 +148,7 @@ export function injectApprovedCodexProvider(id: string, target: CodexRoutingTarg
       publish(CODEX_CONFIG_PATH, field.replace(`base_url = ${tomlString(target.baseUrl)}`), held);
       return { configChanged: true };
     };
-    return beforeWrite ? withConfigMutationLockSync(apply) : apply();
+    return withConfigMutationLockSync(apply);
   });
 }
 
