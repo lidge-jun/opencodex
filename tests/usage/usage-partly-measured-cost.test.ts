@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { computeEntryCost } from "../../src/usage/summary";
+import { computeEntryCost, summarizeUsage } from "../../src/usage/summary";
+import { aggregateAttemptUsage } from "../../src/server/request-log";
 import type { PersistedUsageEntry } from "../../src/usage/log";
 
 type Attempt = NonNullable<PersistedUsageEntry["attempts"]>[number];
@@ -30,4 +31,22 @@ test("an upstream refusal without usage remains a known zero alongside measured 
   const result = computeEntryCost(row([measured, { ...withoutUsage, ordinal: 2, status: 429, usageStatus: "unreported" }]));
   expect(result.isPriced).toBe(true);
   expect(result.costTotal).toBeGreaterThan(0);
+});
+
+test("a refused retry and a measured send total the measured cost on the summary", () => {
+  const { usage: _usage, ...withoutUsage } = measured;
+  const attempts: Attempt[] = [{ ...withoutUsage, status: 429, usageStatus: "unreported" }, { ...measured, ordinal: 2 }];
+  // The row request-log writes for a non-combo retry: status and usage aggregate its attempts.
+  const aggregate = aggregateAttemptUsage(attempts);
+  const entry = { ...row(attempts), timestamp: Date.UTC(2026, 5, 28), usageStatus: aggregate.status, usage: aggregate.usage };
+  const { costTotal } = computeEntryCost(entry);
+  expect(summarizeUsage([entry], "30d", Date.UTC(2026, 5, 28, 12)).summary).toMatchObject({
+    requests: 1, pricedRequests: 1, unpricedRequests: 0, unmeteredRequests: 0, estimatedCostUsd: costTotal,
+  });
+});
+
+test("a send the client cancelled before output is an unknown cost, not a known zero", () => {
+  const { usage: _usage, ...withoutUsage } = measured;
+  const result = computeEntryCost(row([measured, { ...withoutUsage, ordinal: 2, status: 499, usageStatus: "unreported" }]));
+  expect(result.isPriced).toBe(false);
 });
