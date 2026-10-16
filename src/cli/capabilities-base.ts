@@ -20,6 +20,15 @@ export const HEAD_CAPABILITIES: readonly HeadCapability[] = [
  */
 export const CAPABILITIES: readonly Capability[] = [
   {
+    command: ["codex-provider"],
+    bannerLines: ["ocx codex-provider <sub>    Confirm custom Codex provider routing: status|allow|revoke"],
+    summary: "Inspect, allow or revoke custom Codex provider routing consent.",
+    routes: [], flags: [{ name: "--yes", value: "boolean", summary: "Explicitly approve the named provider without an interactive prompt." }],
+    mutates: true, json: "none",
+    usage: "ocx codex-provider <status|allow <id> [--yes]|revoke <id>>",
+    details: ["Only local loopback routing for Responses providers using OpenAI authentication is supported. No custom credentials/headers, authless mode or client compaction. Unapproved providers are never changed."],
+  },
+  {
     command: ["chatgpt"],
     summary: "Experimental ChatGPT app-server shim: launch, restore or status (macOS only).",
     routes: [], flags: [], mutates: true, json: "none",

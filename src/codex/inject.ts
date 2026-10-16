@@ -1,3 +1,4 @@
+import { injectApprovedCodexProvider } from "./provider-routing";
 import { beginCodexWriteSection, cleanExternalProviderJournal, publishCodexArtifact } from "./inject/config-write-section";
 import { closeSync, existsSync, openSync, readFileSync, statSync } from "node:fs";
 import { dirname } from "node:path";
@@ -242,6 +243,9 @@ async function injectCodexConfigImpl(
   const rawContent = missingConfig ? "" : readFileSync(CODEX_CONFIG_PATH, "utf-8");
   const activeProvider = externalCodexModelProvider(rawContent);
   if (activeProvider) {
+    if (injectApprovedCodexProvider(activeProvider, routingTarget, options.beforeClientWrite ? () => runClientWriteGuard(options.beforeClientWrite) : undefined, options.validateOnly)) {
+      return { success: true, ...(options.validateOnly ? { configApplied: false as const } : {}), message: `Approved Codex provider ${tomlString(activeProvider)} routes through OpenCodex; provider identity and transport settings preserved.` };
+    }
     // A launcher may have journaled before the provider manager took ownership. Never let shutdown
     // replay that stale snapshot over externally managed config.
     if (!options.validateOnly) {
@@ -260,7 +264,7 @@ async function injectCodexConfigImpl(
         : {}),
       message:
         `⚠️ Codex routing NOT injected: config.toml selects the external model_provider ${tomlString(activeProvider)}.\n` +
-        `  OpenCodex preserves external provider configuration so existing ${tomlString(activeProvider)} session history stays visible.\n` +
+        `  OpenCodex preserves external provider configuration so existing ${tomlString(activeProvider)} session history stays visible.\n  To authorize URL-only management, run ocx codex-provider allow ${tomlString(activeProvider)} and confirm.\n` +
         `  Configure that provider for Responses passthrough at ${routingTarget.baseUrl}` +
         `${routingTarget.requiresAdmissionToken ? ` with x-opencodex-api-key from ${routingTarget.tokenEnv}` : ""}.\n` +
         `  For direct injection, switch to the built-in openai provider, remove any user-owned root openai_base_url, and rerun 'ocx start'.`,

@@ -19,7 +19,7 @@ Connected-client catalog diagnostics use the [terminal rendering contract](runti
 
 Hub management ingress also selects the [local dashboard address](runtime.md#hub-management-dashboard-address) using its configured port.
 
-Native main reauthentication follows the [CLI JSON output contract](runtime.md#native-main-reauth-json-output).
+Native main reauthentication follows the [CLI JSON output contract](runtime.md#native-main-reauth-json-output). Provider-ID consent and URL-only recovery follow the [custom routing contract](codex-provider-routing.md).
 
 The Codex restart command follows the [CLI restart scope contract](runtime.md#cli-codex-restart-scope).
 

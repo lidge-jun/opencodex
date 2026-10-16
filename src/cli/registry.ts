@@ -9,6 +9,12 @@ export interface CliCommandEntry {
 
 export const CLI_COMMANDS: CliCommandEntry[] = [
   {
+    name: "codex-provider",
+    usage: "ocx codex-provider <status|allow <id> [--yes]|revoke <id>>",
+    summary: "Explicitly allow or revoke local routing management for a custom Codex provider.",
+    details: ["Consent is bound to the selected CODEX_HOME and provider ID. Only base_url is managed; transport settings and history are preserved."],
+  },
+  {
     name: "message",
     usage: "ocx message <sessions|send> [options]",
     summary: "Discover loaded local Codex sessions and submit one queued peer message.",

@@ -1,3 +1,4 @@
+import { approvedCodexProviders } from "./provider-routing";
 import { currentExternalCodexModelProvider, injectCodexConfig } from "./inject";
 import { FOREIGN_CODEX_HOME_OWNER_MESSAGE, UNKNOWN_CODEX_HOME_OWNER_MESSAGE, unbackedRoutedRemovalMessage } from "./catalog/routed-removal";
 import { printProjectCodexConfigWarnings, groupProjectCodexConfigWarningsByPath, type ProjectCodexConfigWarning } from "./project-config-warnings";
@@ -190,7 +191,7 @@ export async function syncModelsToCodex(
     };
   }
 
-  if (externalProvider) {
+  if (externalProvider && !approvedCodexProviders().includes(externalProvider)) {
     if (catalogEvenWhenNotInjected) {
       // External providers own config.toml, and the injector removes the OpenCodex
       // journal for external providers (inject.ts). This explicit catalog-only sync

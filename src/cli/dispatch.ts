@@ -962,6 +962,10 @@ const commandRunners: Record<string, CommandRunner> = {
     const { handleLabCommand } = await import("./lab");
     return await handleLabCommand(deps.args.slice(1));
   },
+  "codex-provider": async deps => {
+    const { handleCodexProviderCommand } = await import("./codex-provider");
+    return await handleCodexProviderCommand(deps.args.slice(1));
+  },
   chatgpt: async deps => {
     const { handleChatgptCommand } = await import("./chatgpt-command");
     return await handleChatgptCommand(deps.args.slice(1));

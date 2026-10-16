@@ -183,7 +183,7 @@ their own files. `src/grok/inject.ts` holds the shared canonical config-write lo
 
 ## Lifecycle
 
-Startup catalog sync and native restore apply the [retired-native policy](catalog.md#shared-catalog). Guarded tests isolate the owner registry used by cross-home discovery beneath their selected home, including children without a registry override; production retains the shared locator. See [test state isolation](ops/test-sandbox-cleanup.md).
+Startup catalog sync and native restore apply the [retired-native policy](catalog.md#shared-catalog). Foreground exit cleanup in `src/cli/index.ts` delegates restoration through the existing sibling/recycle teardown gates; approved external URLs follow [custom-provider consent](codex-provider-routing.md), while unapproved provider configuration and history remain unchanged. Guarded tests isolate the owner registry used by cross-home discovery beneath their selected home, including children without a registry override; production retains the shared locator. See [test state isolation](ops/test-sandbox-cleanup.md).
 `src/server/background-lifecycle.ts` registers low-quota protection for each live server, flushes pending saves before releasing its owner, binds its own event ledger to management requests, and unregisters it on failed startup or stop; with no pending save, owner release remains synchronous. The protection writer loads config persistence only when a threshold schedules a save; see [configuration](config.md#codex-pool-low-quota-protection). Codex quota processing has shared and Reserve scopes; retired model evidence is suppressed as
 described in [OpenAI quota ownership](providers/openai-tiers.md#public-provider-contract).
 

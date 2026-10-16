@@ -3,6 +3,8 @@
   "codex-preserve-signed-in.test.ts": "codex-integration", "cli-account-preservation.test.ts": "cli",
   "catalog-native-max-context.test.ts": "codex-integration",
   "protocol-argon-thought-boundary.test.ts": "responses",
+
+  "codex-provider-routing.test.ts": "codex-integration",
   "messages-native-empty-inline.test.ts": "claude-integration",
   "explicit-empty-tool-catalog.test.ts": "responses",
   "explicit-empty-tool-catalog-history.test.ts": "responses",

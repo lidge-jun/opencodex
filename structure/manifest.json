@@ -127,6 +127,13 @@
       ]
     },
     {
+      "path": "codex-provider-routing.md",
+      "tier": 2,
+      "title": "Custom Codex Provider Routing",
+      "scope": "Explicit provider-ID routing consent, URL-only publication and recovery.",
+      "documents": ["src/codex/provider-routing.ts", "src/cli/codex-provider.ts"]
+    },
+    {
       "path": "codex-home.md",
       "tier": 2,
       "title": "Codex Home",

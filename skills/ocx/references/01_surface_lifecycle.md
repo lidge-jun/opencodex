@@ -8,7 +8,25 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 12.
+Declared capabilities: 13.
+
+### `ocx codex-provider`
+
+Usage: `ocx codex-provider <status|allow <id> [--yes]|revoke <id>>`
+
+Inspect, allow or revoke custom Codex provider routing consent.
+
+State-changing: yes.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--yes` | boolean | Explicitly approve the named provider without an interactive prompt. |
+
+JSON mode: `none`.
+
+- Only local loopback routing for Responses providers using OpenAI authentication is supported. No custom credentials/headers, authless mode or client compaction. Unapproved providers are never changed.
 
 ### `ocx chatgpt`
 

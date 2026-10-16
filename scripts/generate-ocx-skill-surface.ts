@@ -16,7 +16,7 @@ const PREAMBLE = `<!-- ${OWNER}. Do not edit by hand. -->\n<!-- Regenerate: bun 
 
 // Navigation groups, not command dispatch. New roots require an explicit assignment.
 const DOMAINS = [
-  { name: "lifecycle", roots: ["chatgpt", "status", "resolve", "capabilities", "sync", "start", "stop", "restart", "service", "gui"] },
+  { name: "lifecycle", roots: ["codex-provider", "chatgpt", "status", "resolve", "capabilities", "sync", "start", "stop", "restart", "service", "gui"] },
   { name: "providers-models", roots: ["provider", "models", "alias"] },
   { name: "accounts", roots: ["account", "auth", "login", "logout"] },
   { name: "agents-routing", roots: ["agent", "combo", "route", "v2", "effort", "memory", "message", "advisor"] },

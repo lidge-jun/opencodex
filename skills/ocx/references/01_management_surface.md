@@ -25,7 +25,7 @@ These answer in the CLI head and never reach the proxy, so they work with nothin
 
 | Chapter | Declared capabilities |
 |---|---|
-| [lifecycle](01_surface_lifecycle.md) | 12 |
+| [lifecycle](01_surface_lifecycle.md) | 13 |
 | [providers-models](01_surface_providers-models.md) | 47 |
 | [accounts](01_surface_accounts.md) | 42 |
 | [agents-routing](01_surface_agents-routing.md) | 51 |
@@ -46,6 +46,10 @@ Check the chapter's flags, the requested authority and the operating skill's con
 ## Canonical invocation index
 
 Original invocation order. These headings preserve links to the previous single-file reference.
+
+### `ocx codex-provider`
+
+[State-changing task](01_surface_lifecycle.md#ocx-codex-provider)
 
 ### `ocx chatgpt`
 
@@ -1413,6 +1417,6 @@ Original invocation order. These headings preserve links to the previous single-
 
 ## Counts
 
-- declared capabilities: 341
-- of those, state-changing: 207
+- declared capabilities: 342
+- of those, state-changing: 208
 - head-resolved invocations: 2

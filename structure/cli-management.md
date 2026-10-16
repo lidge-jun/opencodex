@@ -139,3 +139,12 @@ Remote Link enrollment is shared with the dashboard through `src/server/manageme
 `ocx account preserve-signed-in openai` reads or updates the runtime-owned [signed-in quota policy](providers/openai-accounts.md#preserve-signed-in-quota), with affected entries, next choice and explicit next-request binding release. It never reads a local account roster.
 
 An explicit `sync --restart-codex` (or app-server-only scope) also reloads after a committed configuration-byte change, even when no catalog/cache was written. Without an explicit restart scope, configuration-only changes do not restart clients. Existing catalog/cache-write restart behavior remains unchanged; success alone is not proof of changed configuration.
+
+## Custom Codex provider approval
+
+`src/cli/codex-provider.ts` exposes local status, per-ID allow and revoke operations.
+Allow previews the exact URL assignment before a default-No terminal confirmation and
+rechecks it under the config lock before saving. Noninteractive allow requires `--yes`;
+no prompt is issued during background start/sync. The
+[configuration contract](codex-provider-routing.md) owns scope,
+eligibility, drift refusal and recovery. No endpoint or credential is printed by this command.
