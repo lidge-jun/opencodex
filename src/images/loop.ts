@@ -20,6 +20,7 @@ import { isAnthropicInstanceId } from "../providers/anthropic-instance-id";
 import { cloneProviderOpaqueToolCallMetadata } from "../responses/provider-opaque-metadata";
 import type { AttemptRecoveryKind } from "../usage/log";
 import { bridgeToResponsesSSE } from "../bridge";
+import { isTerminalRefusalIncomplete } from "../bridge/terminal-refusal";
 import { clearableDeadline, idleDeadline } from "../lib/abort";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { applyUpstreamRecoveryInit, fetchWithResetRetry, prepareSameTarget429Wait } from "../lib/upstream-retry";
@@ -359,6 +360,8 @@ export interface ImageBridgeDeps {
   onCompletedResponse?: (response: Record<string, unknown>, providerState?: OcxProviderContinuationState) => void;
   /** WebSocket Responses path only — leave response id empty for protocol compatibility. */
   forceEmptyResponseId?: boolean;
+  /** Responses inbound only: deliver a non-retryable upstream refusal as `response.failed`. */
+  terminalRefusalAsFailed?: boolean;
 }
 
 /**
@@ -869,7 +872,10 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
           // Loop (fulfill + re-ask) ONLY when the model's actionable output is purely image_gen. A
           // real tool call means this turn is terminal for Codex — finalize so those calls reach
           // Codex. forceFinal also finalizes.
-          const shouldLoop = split.calls.length > 0 && !split.hasRealToolCall && !forceFinal;
+          // A refused iteration also finalizes: fulfilling its media call would re-ask the model
+          // with the refused context (#7148).
+          const shouldLoop = split.calls.length > 0 && !split.hasRealToolCall && !forceFinal
+            && !split.passthrough.some(isTerminalRefusalIncomplete);
           if (!shouldLoop) {
             if (hiddenUsage) {
               for (let i = split.passthrough.length - 1; i >= 0; i--) {
@@ -1097,6 +1103,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       replayCacheScope: parsed._reasoningReplayScope,
       ...(deps.clientToolCatalogRestriction ? { ...deps.clientToolCatalogRestriction, enforceDeclaredToolNames: false } : {}),
       ...(deps.forceEmptyResponseId ? { responseId: "" } : {}),
+      ...(deps.terminalRefusalAsFailed ? { terminalRefusalAsFailed: true } : {}),
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       hideRawReasoning: parsed.options.hideRawReasoning,
       stallTimeoutSec: deps.stallTimeoutSec,

@@ -170,7 +170,7 @@ provenance collapses onto four public sources in `protocolAdapterSource`: `hard-
 
 Model overrides are resolved for a Responses client. The candidates are the explicit
 `modelAdapters` keys, the registry's `modelWireDefaults` keys, the exact-id hard pins
-(`captureWireAdapterHardPins`), the default model and the listed models, at most 1024 of them; a
+(`captureWireAdapterHardPins`, using the historically pinned canonical destination for the Go preset), the default model and the listed models, at most 1024 of them; a
 model is listed when its source is not `provider-default` or its adapter differs from the
 provider's. The list is sorted, capped at `PROTOCOL_PROVIDER_OVERRIDE_LIMIT` (64) and marked
 `modelOverridesTruncated` past it. Prefix pins cannot be enumerated, so only a listed model they
@@ -229,7 +229,7 @@ converters' own helpers, exported from `src/chat/outbound.ts` and `src/claude/ou
 `chatCompletionsFailedResponse`, `chatCompletionsIncompleteOutcome`,
 `anthropicIncompleteOutcome`, `anthropicFailedStatus`, the message snapshot, the web-search pair),
 so the frames a client receives are the converters' frames. A fold is the encoded stream read by
-the existing collector.
+the existing collector. Explicit incomplete reasons use the [shared normalization contract](../transports/responses-wire-shapes.md#adapter-incomplete-reasons) before the writers classify the outcome.
 
 Deliberate equivalences, pinned by the parity tests: a Chat function call is delivered as one
 complete tool-call chunk when it completes, as the converter always did; Messages streams

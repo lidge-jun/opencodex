@@ -1,5 +1,5 @@
 import { spendLedgerStorageErrorResponse } from "./spend-storage-error";
-import { createPhysicalSendReporter } from "../../lib/request-execution-budget";
+import { createPhysicalSendReporter, rebindPhysicalSend } from "../../lib/request-execution-budget";
 import { createInferenceSendBudget } from "../inference/context";
 import { unboundPoolSpendRefusalResponse } from "../workflow-refusal";
 import { capturePoolQuotaWriter } from "../../codex/account-store";
@@ -152,7 +152,9 @@ import {
   UnsupportedContentEncodingError,
 } from "../request-decompress";
 import { resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve";
-import { hasKeyPoolFailover, rotateProviderTransportOn429, selectProactiveApiKeyTransport } from "../../providers/key-failover";
+import { hasKeyPoolFailover, recordDistributedKeyFailure, rotateProviderTransportOn429, selectProactiveApiKeyTransport } from "../../providers/key-failover";
+import { providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../../providers/api-key-selection";
+import { stampApiKeyAccountLabel } from "../../providers/label";
 import { shouldAttemptImageTierRetry } from "../image-retry";
 import { resolveProviderTransport } from "../../providers/xai-transport";
 import type { WsData } from "../ws-bridge";
@@ -169,6 +171,7 @@ import {
   catalogModelSupportsServiceTier,
   finishRequestAttempt,
   inspectResponseLogJson,
+  noteProviderAttemptSend,
   readConfiguredCodexServiceTier,
   requestLogSpeedLabel,
   sealRequestAttemptIdentity,
@@ -200,7 +203,8 @@ import {
   upstreamHostCircuitOpenResponse,
   usesCodexForwardPoolAuth,
 } from "./core";
-import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, safeOriginLabel } from "./fetch-helpers";
+import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, safeOriginLabel, sendWithConnectionPolicy } from "./fetch-helpers";
+import { requestPacingOverloadResponse } from "./pacing-overload";
 import { shouldRetryCodexPoolAccountQuota, shouldRetryCodexPoolAccountTransient } from "./core-codex-account";
 import { mapCodexAuthContextErrorToResponse, nativeMainRefreshFailureResponse } from "./codex-auth-error";
 import { linkRequestSessionLane, sessionLaneIdFromRequest } from "../request-log-conversation";
@@ -907,9 +911,16 @@ export async function handleResponsesCompact(
       // codexAccountMode cases, and the picker returns null for them anyway.
       // Transport variant, for the same reason as the Responses core: the persisted row has no
       // registry backfills, and compactProvider is read for its transport fields below.
-      const warmKeyProvider = selectProactiveApiKeyTransport(config, route.providerName, compactProvider);
+      let warmKeyProvider;
+      try { warmKeyProvider = selectProactiveApiKeyTransport(config, route.providerName, compactProvider); }
+      catch (error) {
+        const refusal = requestPacingOverloadResponse(error);
+        if (refusal) return refusal;
+        throw error;
+      }
       if (warmKeyProvider?.apiKey) compactProvider = warmKeyProvider;
       headers.set("authorization", `Bearer ${resolveProviderApiKey(compactProvider.apiKey)}`);
+      stampApiKeyAccountLabel(logCtx, route.providerName, compactProvider);
     }
     const { reasoning: _reasoning, ...compactBodyRaw } = raw as typeof raw & { reasoning?: unknown };
     // The regular /v1/responses path applies sanitizeReasoningInputContent via the adapter's
@@ -947,9 +958,9 @@ export async function handleResponsesCompact(
         });
       }
     }
-    const compactUrl = `${base}/responses/compact`;
+    let compactUrl = `${base}/responses/compact`;
     const compactTargetKey = `${route.providerName}|${route.modelId}|compact`;
-    const actualCompactHostKey = upstreamHostHealthKey(
+    let actualCompactHostKey = upstreamHostHealthKey(
       route.providerName,
       safeOriginLabel(compactUrl),
     );
@@ -1040,7 +1051,7 @@ export async function handleResponsesCompact(
         try {
           if (report.beforeSend?.() === false) throw new SendBudgetExhaustedError(safeHostLabel(compactUrl));
           started = true;
-          return await doFetch();
+          return await (report.execute ? report.execute(doFetch) : doFetch());
         } finally {
           try { if (started) report(1); }
           finally { report.close?.(); }
@@ -1051,12 +1062,14 @@ export async function handleResponsesCompact(
         targetKey: compactTargetKey,
       });
       if (!decision.allowed) return Promise.reject(new SendBudgetExhaustedError(safeHostLabel(compactUrl)));
-      if (!decision.permit.use()) {
-        // Nothing was sent, so the reservation goes back rather than holding a send against the request.
-        decision.permit.release();
-        return Promise.reject(new SendBudgetExhaustedError(safeHostLabel(compactUrl)));
-      }
-      return doFetch();
+      const dispatch = () => {
+        if (!decision.permit.use()) {
+          decision.permit.release();
+          throw new SendBudgetExhaustedError(safeHostLabel(compactUrl));
+        }
+        return doFetch();
+      };
+      return decision.permit.execute ? decision.permit.execute(dispatch) : dispatch();
     };
     const sendCompactAttempt = (
       sendProvider: OcxProviderConfig,
@@ -1080,6 +1093,41 @@ export async function handleResponsesCompact(
           modelId: route.modelId,
           beforeDispatch: isCanonicalOpenAiForwardProvider(sendProvider)
             ? createCodexAuthDispatchGuard(sendAuthCtx, config, selectedModelId, admission) : undefined,
+          dispatchOverride: sendProvider.authMode !== "forward" && sendProvider.apiKey
+            ? async (_input, init, execute, reacquirePacing) => {
+              for (let attempt = 0; !providerApiKeySelectionIsCurrent(config, route.providerName, sendProvider); attempt++) {
+                if (attempt >= 3) throw new Error("Provider key selection changed repeatedly before compact dispatch");
+                let current = resolveCurrentProviderApiKeyTransport(config, route.providerName, sendProvider);
+                if (!current && sendProvider.requestPacing?.enabled
+                  && (sendProvider.requestPacing.keys || sendProvider.requestPacing.keySelection === "round-robin")) {
+                  const fresh = resolveCurrentProviderApiKeyTransport(config, route.providerName, { ...sendProvider, _apiKeyAttempt: undefined });
+                  if (fresh) current = selectProactiveApiKeyTransport(config, route.providerName, fresh) ?? fresh;
+                }
+                if (!current?.apiKey || !supportsNativeResponsesCompactEndpoint(route.providerName, current)) {
+                  throw new Error("Provider key selection is no longer available for compact");
+                }
+                const rebuilt = new Headers(sendHeaders);
+                for (const name of Object.keys(sendProvider.headers ?? {})) rebuilt.delete(name);
+                for (const [name, value] of Object.entries(current.headers ?? {})) rebuilt.set(name, value);
+                rebuilt.set("authorization", `Bearer ${resolveProviderApiKey(current.apiKey)}`);
+                sendHeaders = headers = rebuilt;
+                sendProvider = compactProvider = current;
+                compactUrl = `${(current.baseUrl ?? "").replace(/\/+$/, "")}/responses/compact`;
+                actualCompactHostKey = upstreamHostHealthKey(route.providerName, safeOriginLabel(compactUrl));
+                if (current.requestPacing?.enabled
+                  && (current.requestPacing.keys || current.requestPacing.keySelection === "round-robin")) {
+                  if (!reacquirePacing) throw new Error("Refreshed compact dispatch requires pacing readmission");
+                  await reacquirePacing(current, route.modelId);
+                }
+              }
+              if (req.signal.aborted) throw req.signal.reason;
+              stampApiKeyAccountLabel(logCtx, route.providerName, sendProvider);
+              if (!rebindPhysicalSend(sendBudget, { poolId: logCtx.spendPoolId ?? route.providerName,
+                identityId: logCtx.accountLogLabel })) throw new SendBudgetExhaustedError(safeHostLabel(compactUrl));
+              noteProviderAttemptSend(logCtx, route.providerName, sendProvider, logCtx.usageLogInputTokens, upstreamRecovery);
+              return sendWithConnectionPolicy((sendProvider as { fetch?: typeof fetch }).fetch ?? execute, compactUrl,
+                { ...init, headers: sendHeaders }, { providerName: route.providerName, provider: sendProvider });
+            } : undefined,
           ...(onPhysicalDispatch ? { onPhysicalDispatch } : {}),
         }),
         // Every credential-bearing forward send gets manual redirects, not only
@@ -1109,7 +1157,7 @@ export async function handleResponsesCompact(
     let outcomeCtx = authCtx;
     const localDispatchRefusal = (error: unknown): Response | undefined => {
       const cause = unwrapUpstreamRetryEvidenceError(error);
-      const response = spendLedgerStorageErrorResponse(error, logCtx) ?? (cause instanceof SendBudgetExhaustedError
+      const response = requestPacingOverloadResponse(cause) ?? spendLedgerStorageErrorResponse(error, logCtx) ?? (cause instanceof SendBudgetExhaustedError
         ? unboundPoolSpendRefusalResponse(logCtx) ?? formatErrorResponse(429, "request_send_budget_exhausted", cause.message)
         : mapCodexAuthContextErrorToResponse(cause, {
           now: Date.now(), accountSelector: route.codexAccountNamespace,
@@ -1154,6 +1202,9 @@ export async function handleResponsesCompact(
       return formatErrorResponse(502, "upstream_error", "Failed to connect to compact upstream");
     }
 
+    if ((upstream.status === 401 || upstream.status === 429) && !isNonReplayableResponse(upstream)) {
+      recordDistributedKeyFailure(config, route.providerName, compactProvider._apiKeyAttempt, upstream.status, Date.now(), upstream.headers.get("retry-after"));
+    }
     if (
       upstream.status === 401
       && (authCtx.kind === "main-pool" || authCtx.kind === "pool")

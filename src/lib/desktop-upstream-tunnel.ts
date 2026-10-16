@@ -1,10 +1,10 @@
-import { connect as tcpConnect, isIP, type Socket } from "node:net";
-import { checkServerIdentity, connect as tlsConnect, type TLSSocket } from "node:tls";
+import { connect as tcpConnect, type Socket } from "node:net";
+import { connect as tlsConnect, type TLSSocket } from "node:tls";
 import { desktopProxyFor } from "./desktop-proxy-route";
-import { socks5Credentials, socks5Handshake } from "./socks5-handshake";
+import { dialTunnel, type OpaqueProxyRoute } from "./opaque-proxy-tunnel";
 
-// Shares the SOCKS exchange extracted by lcxhh521 in PR #5947 (efdccdbfac3f).
-// Lifecycle here additionally bounds the entire dial and handles close/abort/header limits.
+// The shared opaque dialer owns proxy framing; this caller owns fixed-target
+// TLS and bounds the entire connection, including the target TLS handshake.
 export interface DesktopTunnelOptions {
   proxy?: string | false;
   signal?: AbortSignal;
@@ -15,37 +15,6 @@ export interface DesktopTunnelOptions {
   proxyCa?: string;
 }
 const fail = () => new Error("desktop_upstream_connection_failed");
-class HandshakeReader {
-  private buffer: Buffer<ArrayBufferLike> = Buffer.alloc(0);
-  private failure: Error | null = null;
-  private waiting: { ready: () => boolean; resolve: () => void; reject: (error: Error) => void } | null = null;
-  private onData = (chunk: Buffer) => {
-    if (this.buffer.length + chunk.length > 65536) { this.onFailure(); return; }
-    this.buffer = Buffer.concat([this.buffer, chunk]);
-    if (this.waiting?.ready()) { const current = this.waiting; this.waiting = null; current.resolve(); }
-  };
-  private onFailure = () => { this.failure = fail(); const current = this.waiting; this.waiting = null; current?.reject(this.failure); };
-  constructor(private socket: Socket, private signal: AbortSignal) {
-    socket.on("data", this.onData); socket.once("error", this.onFailure); socket.once("end", this.onFailure); socket.once("close", this.onFailure);
-    signal.addEventListener("abort", this.onFailure, { once: true }); if (signal.aborted) this.onFailure(); socket.resume();
-  }
-  write(bytes: Uint8Array | string): void { if (this.failure) throw this.failure; this.socket.write(bytes); }
-  private async until(ready: () => boolean): Promise<void> {
-    if (this.failure) throw this.failure;
-    if (ready()) return;
-    if (this.waiting) throw fail();
-    await new Promise<void>((resolve, reject) => { this.waiting = { ready, resolve, reject }; });
-  }
-  private take(length: number): Buffer { const out = this.buffer.subarray(0, length); this.buffer = this.buffer.subarray(length); return out; }
-  async readExact(length: number): Promise<Buffer> { await this.until(() => this.buffer.length >= length); return this.take(length); }
-  async readHead(): Promise<string> { await this.until(() => this.buffer.indexOf("\r\n\r\n") >= 0); return this.take(this.buffer.indexOf("\r\n\r\n") + 4).toString("latin1"); }
-  dispose(): void {
-    this.socket.pause(); this.socket.removeListener("data", this.onData); this.socket.removeListener("error", this.onFailure);
-    this.socket.removeListener("end", this.onFailure); this.socket.removeListener("close", this.onFailure);
-    this.signal.removeEventListener("abort", this.onFailure);
-    if (this.buffer.length) this.socket.unshift(this.buffer); this.buffer = Buffer.alloc(0); this.onFailure();
-  }
-}
 function waitConnected(socket: Socket, event: "connect" | "secureConnect", signal: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     const dispose = () => { socket.off(event, done); socket.off("error", failure); socket.off("close", failure); signal.removeEventListener("abort", failure); };
@@ -76,25 +45,21 @@ export async function dialDesktopUpstream(options: DesktopTunnelOptions = {}): P
       const url = new URL(proxy), protocol = url.protocol;
       if (!["http:", "https:", "socks5:", "socks5h:"].includes(protocol) || !url.hostname || url.search || url.hash || url.pathname !== "" && url.pathname !== "/") throw fail();
       const host = url.hostname.replace(/^\[|\]$/g, ""), port = Number(url.port) || (protocol === "https:" ? 443 : protocol.startsWith("socks") ? 1080 : 80);
-      raw = own(tcpConnect({ host, port })); await waitConnected(raw, "connect", signal);
-      if (protocol === "https:") {
-        raw = own(tlsConnect({ socket: raw, servername: isIP(host) ? undefined : host, ca: options.proxyCa,
-          rejectUnauthorized: true, checkServerIdentity: (_name, certificate) => checkServerIdentity(host, certificate), ALPNProtocols: ["http/1.1"] }));
-        await waitConnected(raw, "secureConnect", signal);
-      }
-      const reader = new HandshakeReader(raw, signal);
-      try {
-        if (protocol.startsWith("socks")) await socks5Handshake(reader, target, socks5Credentials(url));
-        else {
-          const authority = `${target.host}:${target.port}`;
-          const lines = [`CONNECT ${authority} HTTP/1.1`, `Host: ${authority}`];
-          if (url.username || url.password) lines.push(`Proxy-Authorization: Basic ${Buffer.from(`${decodeURIComponent(url.username)}:${decodeURIComponent(url.password)}`).toString("base64")}`);
-          reader.write(lines.join("\r\n") + "\r\n\r\n");
-          if (!/^HTTP\/1\.[01] 2\d\d(?: |\r)/.test(await reader.readHead())) throw fail();
-        }
-      } finally { reader.dispose(); }
+      const credentials = url.username || url.password
+        ? { username: decodeURIComponent(url.username), password: decodeURIComponent(url.password) }
+        : {};
+      const endpoint = { host, port, ...credentials };
+      const route: OpaqueProxyRoute = protocol === "https:"
+        ? { ...endpoint, kind: "https", proxyCa: options.proxyCa }
+        : { ...endpoint, kind: protocol.slice(0, -1) as "http" | "socks5" | "socks5h" };
+      const authority = `${target.host.includes(":") ? `[${target.host}]` : target.host}:${target.port}`;
+      // The route resolver remains authoritative; a failed proxy never becomes DIRECT.
+      raw = own(await dialTunnel(authority, route, { signal, timeoutMs: timeout, maxHeaderBytes: 65536 }));
     }
     if (signal.aborted || raw.destroyed) throw fail();
+    // This consumer historically closes its writable side after peer EOF. The
+    // shared opaque transport preserves half-closes for callers that need them.
+    raw.allowHalfOpen = false;
     const secured = own(tlsConnect({ socket: raw, servername: "chatgpt.com", ca: options.ca, rejectUnauthorized: true, ALPNProtocols: ["http/1.1"] }));
     // The CONNECT reader paused its stream before handing buffered bytes back. Bun's
     // TLS-over-TLS path needs the outer TLS stream explicitly resumed for the new handshake.

@@ -419,6 +419,28 @@ for (const lane of ["native", "translated"] as const) describe(`${lane} Anthropi
     expect(seen).toHaveLength(statuses.length + 1);
   });
 
+  for (const statuses of [[401, 400], [400, 429], [429, 402]]) test(`distributed ${statuses.join("→")} preserves billing and key recovery`, async () => {
+    const { forgetApiKeyRotationCursor, ANTHROPIC_BILLING_COOLDOWN_MS } = await import("../../src/providers/key-failover");
+    forgetApiKeyRotationCursor("anth");
+    const config = fixture((index, stream) => index < statuses.length
+      ? refusal(statuses[index]!, [400, 402].includes(statuses[index]!) ? creditMessage : "fixture refusal",
+        statuses[index] === 401 ? "authentication_error" : statuses[index] === 429 ? "rate_limit_error" : "invalid_request_error")
+      : success(stream), 3);
+    config.providers.anth!.requestPacing = { enabled: true, keySelection: "round-robin", keys: { maxConcurrentRequests: 1 } };
+    saveConfig(config);
+    const startedAt = Date.now();
+    try {
+      const response = await send(lane, config);
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain("billing recovered");
+      expect(seen.map(entry => entry.key)).toEqual(["fixture-key-0", "fixture-key-1", "fixture-key-2"]);
+      expect(loadConfig().providers.anth!.apiKey).toBe("fixture-key-0");
+      const billingKey = `k${statuses.findIndex(status => status === 400 || status === 402)}`;
+      expect(getKeyCooldownUntil("anth", billingKey)).toBeGreaterThanOrEqual(startedAt + ANTHROPIC_BILLING_COOLDOWN_MS);
+      expect(providerRequestPacingStatus("anth", config.providers.anth!).inFlight).toBe(0);
+    } finally { forgetApiKeyRotationCursor("anth"); }
+  });
+
   if (lane === "translated") for (const status of [401, 429]) test(`mixed billing→${status} keeps B's terminal body at an exact two-send budget`, async () => {
     const terminalMessage = `fixture terminal ${status} from B`;
     const config = fixture((index, stream) => index === 0 ? refusal()

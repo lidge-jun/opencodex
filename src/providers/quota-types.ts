@@ -19,6 +19,8 @@ export interface ProviderQuotaWindow {
   label: string;
   percent: number;
   resetAt?: number;
+  /** Exact CCA wire model measured by this window; display evidence only, not eligibility. */
+  modelId?: string;
   /**
    * Set only when the PRODUCER proved this window covers one model family, structurally rather
    * than by reading its label: an Anthropic `seven_day_<family>` body key, or a limit with

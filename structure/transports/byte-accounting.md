@@ -15,6 +15,11 @@ the translator budget, which is why so many documents link here rather than rest
 
 ## Request-copy accounting
 
+The optional Advisor protocol guard follows the [Advisor retention contract](../advisor.md#optional-subsystem-boundary).
+Its raw leg, reconstruction and appended replay history use independent local counters, also
+charged to the request translator budget when supplied by delivery or empty-completion retry.
+These charges do not borrow the bridge's WeakMap event leases or the parser's call leases.
+
 Native Ollama late-output attribution uses `src/lib/json-byte-size.ts` to count the
 parts as one JSON string before constructing its caption. The exact count includes
 one pair of quotes, escaping, UTF-8 and surrogate pairs spanning parts, without a

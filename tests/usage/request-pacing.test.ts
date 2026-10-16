@@ -17,6 +17,53 @@ import type { OcxProviderConfig } from "../../src/types";
 
 afterEach(() => resetProviderRequestPacingForTest());
 
+test("dispatch readmission observes the refreshed key interval and releases its replacement lease", async () => {
+  const clock = fakePacingClock();
+  setProviderRequestPacingRuntimeForTest(clock.runtime);
+  const row = { ...provider({ enabled: true, keys: { minIntervalMs: 100, maxConcurrentRequests: 1 } }), apiKey: "first" };
+  const refreshed = { ...row, apiKey: "second" };
+  (await waitForProviderRequestSlot("readmission", refreshed)).release();
+  const sends: number[] = [];
+  const physical = Object.assign(async () => { sends.push(clock.now()); return new Response("fixture"); }, { preconnect() {} }) as typeof fetch;
+  const executor = providerFetch({ ...row, fetch: physical }, undefined, { providerName: "readmission",
+    dispatchOverride: async (input, init, execute, reacquire) => {
+      await reacquire!(refreshed);
+      return execute(input, init);
+    },
+  });
+  const pending = fetchWithHeaderTimeout("https://example.test/v1/chat/completions", {}, new AbortController().signal, 5000, false, executor);
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+  expect(sends).toEqual([]);
+  clock.advanceBy(100);
+  const response = await pending;
+  expect(sends).toEqual([100]);
+  await response.text();
+  const slot = await waitForProviderRequestSlot("readmission", row);
+  slot.release();
+});
+
+test("abort during refreshed-key admission releases the old lease without sending", async () => {
+  const row = { ...provider({ enabled: true, keys: { maxConcurrentRequests: 1 } }), apiKey: "first" };
+  const refreshed = { ...row, apiKey: "second" };
+  const held = await waitForProviderRequestSlot("readmission-abort", refreshed);
+  const controller = new AbortController();
+  let sends = 0;
+  const executor = providerFetch(row, undefined, { providerName: "readmission-abort",
+    dispatchOverride: async (_input, _init, _execute, reacquire) => {
+      await reacquire!(refreshed);
+      sends++;
+      return new Response("fixture");
+    },
+  });
+  const pending = executor("https://example.test/v1/chat/completions", { signal: controller.signal });
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+  controller.abort();
+  await expect(pending).rejects.toThrow();
+  expect(sends).toBe(0);
+  const slot = await waitForProviderRequestSlot("readmission-abort", row);
+  slot.release(); held.release();
+});
+
 function provider(requestPacing: OcxProviderConfig["requestPacing"]): OcxProviderConfig {
   return { adapter: "openai-chat", baseUrl: "https://example.test/v1", requestPacing };
 }
@@ -61,6 +108,70 @@ function fakePacingClock(): {
 }
 
 describe("requestPacingIntervalMs", () => {
+  test("per-key caps admit siblings while provider capacity remains an upper bound", async () => {
+    const clock = fakePacingClock();
+    setProviderRequestPacingRuntimeForTest(clock.runtime);
+    const configured = provider({ enabled: true, maxConcurrentRequests: 2, keys: { maxConcurrentRequests: 1, requestsPerMinute: 15 } });
+    configured.apiKeyPool = [{ id: "one", key: "fake-one" }, { id: "two", key: "fake-two" }];
+    const one = { ...configured, apiKey: "fake-one" };
+    const two = { ...configured, apiKey: "fake-two" };
+    const first = await waitForProviderRequestSlot("key-cap", one);
+    let repeatedStarted = false;
+    const repeated = waitForProviderRequestSlot("key-cap", one).then(slot => { repeatedStarted = true; return slot; });
+    const sibling = await waitForProviderRequestSlot("key-cap", two);
+    expect(repeatedStarted).toBe(false);
+    expect(providerRequestPacingStatus("key-cap", configured).keys?.map(row => row.inFlight)).toEqual([1, 1]);
+    first.release();
+    clock.advanceBy(3999);
+    expect(repeatedStarted).toBe(false);
+    clock.advanceBy(1);
+    const next = await repeated;
+    expect(repeatedStarted).toBe(true);
+    expect(providerRequestPacingStatus("key-cap", configured).keys?.map(row => row.starts)).toEqual([2, 1]);
+    next.release(); sibling.release();
+    expect(providerRequestPacingStatus("key-cap", configured).keys?.map(row => row.inFlight)).toEqual([0, 0]);
+    expect(JSON.stringify(providerRequestPacingStatus("key-cap", configured))).not.toContain("fake-");
+  });
+
+  test("key-only pacing obeys body cancellation and turn follow-up intervals without a second lease", async () => {
+    const clock = fakePacingClock();
+    setProviderRequestPacingRuntimeForTest(clock.runtime);
+    const configured = { ...provider({ enabled: true, keys: { maxConcurrentRequests: 1, minIntervalMs: 100 } }), apiKey: "fake", apiKeyPool: [{ id: "id", key: "fake" }] };
+    const first = await waitForProviderRequestSlot("key-only", configured);
+    const followUp = waitForProviderRequestSlot("key-only", configured, undefined, undefined, { concurrency: false });
+    clock.advanceBy(100);
+    const follow = await followUp;
+    expect(follow.leased).toBe(false);
+    expect(providerRequestPacingStatus("key-only", configured).keys?.[0]?.inFlight).toBe(1);
+    const controller = new AbortController();
+    const queued = waitForProviderRequestSlot("key-only", configured, undefined, controller.signal);
+    controller.abort();
+    await expect(queued).rejects.toThrow();
+    first.release();
+  });
+
+  test("provider cap also blocks an otherwise eligible different key", async () => {
+    const clock = fakePacingClock(); setProviderRequestPacingRuntimeForTest(clock.runtime);
+    const configured = provider({ enabled: true, maxConcurrentRequests: 1, keys: { maxConcurrentRequests: 1 } });
+    const first = await waitForProviderRequestSlot("global-key-cap", { ...configured, apiKey: "fake-one" });
+    let started = false;
+    const second = waitForProviderRequestSlot("global-key-cap", { ...configured, apiKey: "fake-two" }).then(slot => { started = true; return slot; });
+    await Promise.resolve(); expect(started).toBe(false);
+    first.release(); const slot = await second; expect(started).toBe(true); slot.release();
+  });
+
+  test("duplicate key references share capacity and diagnostics count key-only leases", async () => {
+    const configured = { ...provider({ enabled: true, keys: { maxConcurrentRequests: 1 } }), apiKey: "fake-one",
+      apiKeyPool: [{ id: "one", key: "fake-one" }, { id: "duplicate", key: "fake-one" }] };
+    const first = await waitForProviderRequestSlot("duplicate-key", configured);
+    expect(providerRequestPacingStatus("duplicate-key", configured).inFlight).toBe(1);
+    const abort = new AbortController();
+    const second = waitForProviderRequestSlot("duplicate-key", configured, undefined, abort.signal);
+    expect(providerRequestPacingStatus("duplicate-key", configured).keys?.map(row => row.queued)).toEqual([1, 1]);
+    abort.abort(); await expect(second).rejects.toThrow(); first.release();
+    expect(providerRequestPacingStatus("duplicate-key", configured).inFlight).toBe(0);
+  });
+
   test("uses the slower of provider RPM, provider delay, and model override", () => {
     const configured = provider({
       enabled: true,

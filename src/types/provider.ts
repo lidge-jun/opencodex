@@ -14,6 +14,8 @@ export interface ProviderApiKeySelection {
   entryId?: string;
   reference?: string;
   revision?: string;
+  /** Request-local allocation; does not replace the saved active key. */
+  distributed?: boolean;
 }
 
 export interface OpenRouterProviderRouting {
@@ -199,6 +201,10 @@ export interface ProviderRequestPacingConfig extends RequestPacingRule {
   enabled: boolean;
   /** Exact upstream model-id overrides; other models inherit the provider rule. */
   models?: Record<string, RequestPacingRule>;
+  /** Normal request allocation, separate from cooldown recovery ordering. */
+  keySelection?: "active" | "round-robin";
+  /** Additional uniform limits per pool credential, across all models. */
+  keys?: RequestPacingRule;
 }
 
 export interface FastWire {

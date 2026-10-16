@@ -312,12 +312,19 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
   let producer: { close(): void } | undefined;
   let permit: SingleUseDispatchPermit | undefined;
   try {
+  if (incoming.abortSignal?.aborted) {
+    emit({ type: "error", message: "Coding-agent turn was aborted before start.", retryable: false });
+    return;
+  }
   producer = incoming.sendBudget?.beginSpendProducer?.();
   const decision = incoming.sendBudget?.reserveDispatch({
     sendClass: "initial", targetKey: `${provider.adapter}|${profile.canonicalBaseUrl}|${parsed.modelId}`,
   });
   if (decision && !decision.allowed) throw new SendBudgetExhaustedError();
   permit = decision?.allowed ? decision.permit : undefined;
+  // Setup above awaits private catalog writes. Fence the actual CLI dispatch, outside
+  // spawn-error mapping so the selection owner can rebuild a refused turn.
+  incoming.beforePhysicalSend?.();
   if (permit && !permit.use()) throw new SendBudgetExhaustedError();
   incoming.onPhysicalSend?.({ ordinal: 1 });
   let child: ChildProcess;

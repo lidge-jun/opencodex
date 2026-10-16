@@ -51,11 +51,11 @@ performs the physical send, after a dispatch override has selected or rebuilt th
 matching follows the URL sent on the wire rather than the URL supplied before credential
 revalidation; prepaid initial-send receipts follow the [spend contract](responses-spend.md#prepaid-initial-sends). At this final HTTP boundary, native ChatGPT Responses and compact JSON strings of at least 1 MiB (UTF-8) become byte buffers to avoid Bun's large-string upload resets. Content, headers, abort signals and retry policy are preserved; WebSocket selection still receives the original string. Other destinations, small strings and existing byte/stream bodies retain their representation.
 
-The wrapped executor alone is not that boundary. An override that revalidates credentials re-reads
+Opt-in per-key pacing and round-robin use HTTP/SSE so their final dispatch override cannot be bypassed by a WebSocket upgrade. Transport-owned response markers and stage metadata survive owned pacing body rewraps. Replacement-key pacing admission retains client cancellation but pauses the header deadline; the full header interval restarts after admission. The wrapped executor alone is not that boundary. An override that revalidates credentials re-reads
 `route.provider.fetch` at send time, because reselection can install a different provider transport
 after the wrapper was built, and then calls that implementation instead of the executor. Both
-production overrides do this -- `oauthDispatch` in `request-transport.ts` and the native Chat
-key-revalidation override in `chat-native.ts` -- so both wrap the selected implementation rather
+production overrides do this -- `oauthDispatch` in `request-transport.ts`, native Chat in
+`chat-native.ts`, native Messages and keyed compact -- so they wrap the selected implementation rather
 than choosing between policy and provider transport. Reporting the executor as the boundary while
 the code let a provider-scoped transport past it is what #4992 recorded, and it is why a
 regression for this policy has to enter through `handleResponses` rather than through a
@@ -427,7 +427,7 @@ is composed from the following owners in `src/server/responses/`; none is a gene
 | `passthrough-delivery.ts`, `terminal-error-redaction.ts`, `non-replayable-error.ts` | Native HTTP/SSE/JSON delivery and terminal accounting. Marked real errors use bounded reads to retain only allowlisted error type and code, keep status and non-replayability plus `x-should-retry: false` when present, and withhold upstream body text and all other upstream headers; the client receives a fixed generic message and synthetic refusals stay distinct. SSE diagnostics and xAI tool-envelope filtering precede client delivery/continuation storage. |
 | `policy-refusal.ts` | Rewrites an allowlisted non-combo HTTP 403 model refusal (`isUpstreamPolicyRefusal` in `src/lib/errors.ts`) from an xAI destination only (`isXaiResponsesDestination`: api.x.ai or the Grok CLI proxy, on either wire) to an HTTP 200 Responses `incomplete` / `content_filter` payload, JSON or SSE, for both `adapter-dispatch.ts` and `passthrough-delivery.ts`. A streamed rewrite takes the turn admission lease and releases it when the body finishes, so the refusal stays inside active-turn accounting. Combo attempts keep the original 403 so failover classifies it as a hop. |
 | `sidecar-execution.ts`, `sidecar-send-budget.ts` | Image/video versus web-search execution, shared rotation, and adapter-aware prepaid inference/producer ownership under the [spend contract](responses-spend.md#prepaid-initial-sends). |
-| `completion-policy.ts`, `run-turn-execution.ts` | Empty-completion eligibility and adapter-owned event turns. |
+| `completion-policy.ts`, `run-turn-execution.ts` | Empty-completion eligibility and adapter-owned event turns; refreshed retries reject previously failed key bindings and revalidate after each queued admission; adapter-owned CLI spawns receive the post-setup `IncomingMeta.beforePhysicalSend` fence, with [replacement-key readmission](responses-failover.md#upstream-key-attempt-accounting). |
 | `adapter-dispatch.ts` | Translated initial dispatch, bounded recovery and the shared continuation retry counter. Initial and rebuilt adapter budget refusals retain the HTTP 413 [byte-accounting contract](byte-accounting.md#request-copy-accounting); ordinary build errors remain 400. |
 | `adapter-continuation.ts`, `adapter-delivery.ts` | Continuation event sources and final streaming/buffered bridging; a streamed turn with a `clientEncoder` option is handed to `src/server/inference/client-encoder-delivery.ts` instead of the bridge. |
 
@@ -585,16 +585,16 @@ machine for those encoders, so a change to item boundaries, tool naming or termi
 `sse.ts` has to be made there too; the parity tests fail when the two diverge. `src/bridge/errors.ts` (`formatErrorResponse`) formats error responses and
 keeps only allowlisted transport verdict codes and the explicit local `spend_ledger_storage_unavailable` identity ([storage refusal contract](responses-spend.md#durable-spend-reservations)). Adapter error events take a different path:
 `src/bridge/internal.ts` preserves explicit verdicts except cyber-policy and known rate-limit mappings
-([client retry advice](responses-wire-shapes.md#client-rate-limit-retry-advice)). The shared usage shaping's `input_tokens_details` and
-`output_tokens_details` are always emitted, with zero defaults, because strict Responses clients
-deserialize them as required fields.
+([client retry advice](responses-wire-shapes.md#client-rate-limit-retry-advice)). Explicit incomplete reasons follow the [reason contract](responses-wire-shapes.md#adapter-incomplete-reasons).
+The shared usage shaping's `input_tokens_details` and `output_tokens_details` are always emitted,
+with zero defaults, because strict Responses clients deserialize them as required fields.
 
-
-Active-turn admission owns workflow admission, so both remain held until a streaming body finishes or
-is cancelled.
+Active-turn admission owns workflow admission, so both remain held until a streaming body finishes or is cancelled.
 
 The shared endpoint path also preserves the cyber-policy stop when a malformed UTF-8 5xx body is
 replacement-decoded; other malformed-body usage, quota, reset evidence and classification retain the
 status-only fallback. Rebuilt failures remain non-replayable and cyber-policy failures carry neither
 `Retry-After` nor quota-reset metadata. The [Responses failover contract](responses-failover.md)
 owns the bounded recovery and replay decisions.
+
+On the `responses` inbound wire only (`terminalRefusalAsFailed`, set by the same test as `enforceDeclaredToolNames` in `src/server/responses/adapter-delivery.ts`, `src/server/responses/run-turn-execution.ts` and the sidecar loops started from `src/server/responses/sidecar-execution.ts`), an adapter `incomplete` with `reason: "content_filter"` and `retryable: false` is delivered as `response.failed` whose `error` and `last_error` carry `invalid_request_error` / `invalid_prompt` with `retryable: false` and the turn's usage, built by `src/bridge/terminal-refusal.ts`: Codex retries every `response.incomplete` without reading `incomplete_details.retryable` and ends a turn only on a terminal-refusal `error.code` (#4312). The Anthropic and Kiro adapters emit that event today. Inside a combo a refusal with no output never reaches the client as a stream: `src/server/responses/combo-stream-preflight.ts` converts the zero-output `response.failed` into an HTTP 400 JSON error with the same `invalid_prompt` code, and `comboFailureDecision` stops the chain on it instead of sending the refused prompt to the next target (`tests/routing/combo-terminal-refusal.test.ts`). The web-search and image sidecar loops (`src/web-search/loop.ts`, `src/images/loop.ts`) check `isTerminalRefusalIncomplete` before looping, on every inbound wire: a refused iteration that carried a sidecar call ends the turn instead of running the call and re-asking the model with the refused context (`tests/web-search/web-search-terminal-refusal.test.ts`, `tests/images/loop-terminal-refusal.test.ts`); `src/web-search/run-turn-loop.ts` already stops on any incomplete. Every other incomplete, the chat and Anthropic inbound wires, and `buildResponseJSON` keep the incomplete shape. A `response.failed` built from an adapter error carries `retryable: false` for every code in `isTerminalRefusalCode` (`src/lib/errors.ts`), not only cyber policy. `tests/adapters/bridge-terminal-refusal.test.ts` pins both, `tests/server/server-terminal-refusal-wiring.test.ts` pins which inbound wire opts in, and `tests/server/server-kiro-refusal-e2e.test.ts` pins the adapter, runTurn and both sidecar-loop deliveries.

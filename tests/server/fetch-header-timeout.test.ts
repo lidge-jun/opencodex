@@ -189,3 +189,110 @@ describe("#2567 the upstream fetch disables Bun's per-request idle timeout", () 
     expect(init.signal).toBeInstanceOf(AbortSignal);
   });
 });
+
+describe("replacement key admission excludes the response-header deadline", () => {
+  async function replacementFixture(physicalFetch: typeof fetch) {
+    const { providerFetch } = await import("../../src/server/responses/fetch-helpers");
+    const { waitForProviderRequestSlot, resetProviderRequestPacingForTest } = await import("../../src/providers/request-pacing");
+    resetProviderRequestPacingForTest();
+    const provider = { adapter: "openai-chat", baseUrl: "https://fixture.test/v1", authMode: "key", apiKey: "fixture-A",
+      apiKeyPool: [{ id: "a", key: "fixture-A", addedAt: 1 }, { id: "b", key: "fixture-B", addedAt: 2 }],
+      requestPacing: { enabled: true, keys: { maxConcurrentRequests: 1 } } } as import("../../src/types").OcxProviderConfig;
+    const replacement = { ...provider, apiKey: "fixture-B" };
+    const held = await waitForProviderRequestSlot("header-replacement", replacement);
+    let notify!: () => void;
+    const queued = new Promise<void>(resolve => { notify = resolve; });
+    const executor = providerFetch({ ...provider, fetch: physicalFetch } as typeof provider, undefined, { providerName: "header-replacement",
+      dispatchOverride: async (input, init, execute, reacquire) => {
+        notify();
+        await reacquire!(replacement);
+        return execute(input, init);
+      } });
+    return { executor, held, queued, resetProviderRequestPacingForTest };
+  }
+
+  test("a blocked replacement may wait beyond the header timeout and then send", async () => {
+    let sends = 0;
+    const fixture = await replacementFixture((async () => { sends++; return new Response("ok"); }) as typeof fetch);
+    const pending = fetchWithHeaderTimeout("https://fixture.test/v1/chat/completions", {}, new AbortController().signal, 25, false, fixture.executor);
+    void pending.catch(() => {});
+    try {
+      await fixture.queued;
+      await Bun.sleep(80);
+      expect(sends).toBe(0);
+      fixture.held.release();
+      expect(await (await pending).text()).toBe("ok");
+      expect(sends).toBe(1);
+    } finally { fixture.held.release(); fixture.resetProviderRequestPacingForTest(); }
+  });
+
+  test("the fresh header deadline still aborts a stalled physical send", async () => {
+    let sends = 0;
+    const fixture = await replacementFixture((async (_input, init) => {
+      sends++;
+      return new Promise<Response>((_resolve, reject) => {
+        if (init?.signal?.aborted) reject(init.signal.reason);
+        else init?.signal?.addEventListener("abort", () => reject(init.signal!.reason), { once: true });
+      });
+    }) as typeof fetch);
+    const pending = fetchWithHeaderTimeout("https://fixture.test/v1/chat/completions", {}, new AbortController().signal, 25, false, fixture.executor);
+    void pending.catch(() => {});
+    try {
+      await fixture.queued;
+      await Bun.sleep(80);
+      fixture.held.release();
+      await expect(pending).rejects.toMatchObject({ name: "TimeoutError" });
+      expect(sends).toBe(1);
+    } finally { fixture.held.release(); fixture.resetProviderRequestPacingForTest(); }
+  });
+
+  test("client abort remains active while replacement admission waits", async () => {
+    let sends = 0;
+    const fixture = await replacementFixture((async () => { sends++; return new Response("ok"); }) as typeof fetch);
+    const controller = new AbortController();
+    const pending = fetchWithHeaderTimeout("https://fixture.test/v1/chat/completions", {}, controller.signal, 25, false, fixture.executor);
+    void pending.catch(() => {});
+    try {
+      await fixture.queued;
+      controller.abort(new DOMException("client cancelled", "AbortError"));
+      await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+      expect(sends).toBe(0);
+    } finally { fixture.held.release(); fixture.resetProviderRequestPacingForTest(); }
+  });
+});
+
+for (const policy of [
+  { enabled: true, keySelection: "round-robin", minIntervalMs: 1 },
+  { enabled: true, keys: { minIntervalMs: 1 } },
+] as const) test(`key pacing keeps WebSocket requests on the guarded HTTP path: ${JSON.stringify(policy)}`, async () => {
+  const { providerFetch } = await import("../../src/server/responses/fetch-helpers");
+  const { resetProviderRequestPacingForTest } = await import("../../src/providers/request-pacing");
+  const { BOUNDED_WS_RUNTIME } = await import("../helpers/ws-upstream-fixtures");
+  const previousSocket = globalThis.WebSocket;
+  let sockets = 0; let overrides = 0; const sentKeys: (string | null)[] = [];
+  globalThis.WebSocket = class { constructor() { sockets++; throw new Error("unexpected WebSocket dispatch"); } } as unknown as typeof WebSocket;
+  const physical = (async (_input, init) => {
+    sentKeys.push(new Headers(init?.headers).get("authorization"));
+    return new Response("fixture reply");
+  }) as typeof fetch;
+  const provider = { adapter: "openai-responses", authMode: "key", baseUrl: "https://api.openai.com/v1",
+    upstreamWebsocket: true, apiKey: "fixture-A", requestPacing: policy, fetch: physical,
+  } as import("../../src/types").OcxProviderConfig;
+  try {
+    const executor = providerFetch(provider, BOUNDED_WS_RUNTIME, { providerName: "ws-key-pacing",
+      dispatchOverride: async (input, init, execute, reacquire) => {
+        overrides++;
+        await reacquire!({ ...provider, apiKey: "fixture-B" });
+        return execute(input, { ...init, headers: { authorization: "Bearer fixture-B" } });
+      },
+    });
+    const response = await executor("https://api.openai.com/v1/responses", { method: "POST",
+      headers: { authorization: "Bearer fixture-A", "content-type": "application/json" },
+      body: JSON.stringify({ model: "fixture-model", stream: true, input: [] }),
+    });
+    expect(await response.text()).toBe("fixture reply");
+    expect(overrides).toBe(1);
+    expect(sockets).toBe(0);
+    expect(sentKeys).toEqual(["Bearer fixture-B"]);
+  } finally { globalThis.WebSocket = previousSocket; resetProviderRequestPacingForTest(); }
+});

@@ -36,6 +36,7 @@ describe("provider management request pacing", () => {
           adapter: "openai-chat",
           baseUrl: "https://integrate.api.nvidia.com/v1",
           apiKey: "sk-nvidia",
+          apiKeyPool: [{ id: "fixture-1", key: "sk-nvidia" }, { id: "fixture-2", key: "fixture-secondary" }],
         },
       },
     };
@@ -52,6 +53,8 @@ describe("provider management request pacing", () => {
       requestsPerMinute: 38,
       minIntervalMs: 1_600,
       maxConcurrentRequests: 4,
+      keySelection: "round-robin",
+      keys: { requestsPerMinute: 15, maxConcurrentRequests: 1 },
       models: { "deepseek-ai/deepseek-v4-flash-0731": { requestsPerMinute: 10 } },
     };
 
@@ -68,7 +71,11 @@ describe("provider management request pacing", () => {
     const providers = await request("/api/providers");
     expect((await providers?.json()).find((row: { name: string }) => row.name === "nvidia").requestPacing).toEqual(policy);
     const status = await request("/api/provider-request-pacing?name=nvidia");
-    expect(await status?.json()).toMatchObject({ provider: "nvidia", enabled: true, queued: 0, nextSlotInMs: 0 });
+    const statusBody = await status?.json();
+    expect(statusBody).toMatchObject({ provider: "nvidia", enabled: true, queued: 0, nextSlotInMs: 0 });
+    expect(statusBody.keys.map((row: { id: string }) => row.id)).toEqual(["fixture-1", "fixture-2"]);
+    expect(JSON.stringify(statusBody)).not.toContain("sk-nvidia");
+    expect(JSON.stringify(statusBody)).not.toContain("fixture-secondary");
 
     const invalid = await request("/api/providers?name=nvidia", {
       method: "PATCH",
@@ -77,6 +84,16 @@ describe("provider management request pacing", () => {
     });
     expect(invalid?.status).toBe(400);
     expect(liveConfig.providers.nvidia?.requestPacing).toEqual(policy);
+
+    for (const rule of [{ keySelection: "random" }, { keys: {} }, { keys: { requestsPerMinute: 0 } },
+      { keys: { maxConcurrentRequests: 1.5 } }]) {
+      const rejected = await request("/api/providers?name=nvidia", {
+        method: "PATCH", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ requestPacing: { enabled: true, ...rule } }),
+      });
+      expect(rejected?.status).toBe(400);
+      expect(liveConfig.providers.nvidia?.requestPacing).toEqual(policy);
+    }
 
     const timerOverflow = await request("/api/providers?name=nvidia", {
       method: "PATCH",

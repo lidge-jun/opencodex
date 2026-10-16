@@ -50,6 +50,8 @@ export const RESPONSES_CORE_MODULES = [
   "passthrough-dispatch.ts",
   // Reached from passthrough/adapter dispatch, compact and runTurn: local spend-ledger refusal mapping.
   "spend-storage-error.ts",
+  // Reached from passthrough dispatch: local pacing refusals retain 429 and Retry-After.
+  "pacing-overload.ts",
   "reset-replay.ts",
   "passthrough-delivery.ts",
   "buffered-sse-json.ts",
@@ -64,6 +66,7 @@ export const RESPONSES_CORE_MODULES = [
   "adapter-continuation.ts",
   "adapter-delivery.ts",
   "advisor-slot.ts",
+  "advisor-retention.ts",
   "advisor-plan-slot.ts",
   "policy-refusal.ts",
 ] as const;

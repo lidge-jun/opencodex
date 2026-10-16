@@ -1655,3 +1655,14 @@ The original URL assignment is retained in private recovery metadata under
 Startup safety recognizes an approved provider's recorded managed URL as OpenCodex routing.
 This does not install restart protection: a manually started proxy still needs a viable
 background service to recover automatically after a restart.
+
+## Native Desktop relay CONNECT validation
+
+The Desktop relay's existing HTTP/HTTPS CONNECT transport now rejects malformed
+proxy response headers and ambiguous HTTP Basic usernames containing colons.
+Decoded credential pairs are limited to 4096 UTF-8 bytes. If your selected proxy
+is rejected, correct its configuration or response; the relay does not silently
+switch to a direct connection.
+
+Proxy selection, SOCKS5/SOCKS5h support, certificate verification, and connection
+lifecycle are unchanged. Both SOCKS spellings retain remote target DNS resolution.

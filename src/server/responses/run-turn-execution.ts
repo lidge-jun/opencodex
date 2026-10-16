@@ -229,12 +229,13 @@ export async function executeResponsesRunTurn(
     const queue = createAdapterEventQueue({
       onBacklogExceeded: () => runTurnAbort.abort(),
     });
-    const refreshRunTurnSelection = async (): Promise<void> => {
-      if (selectionIsCurrent(adapterBindings.get(transportState.runTurnAdapter))) return;
+    const refreshRunTurnSelection = async (): Promise<boolean> => {
+      if (selectionIsCurrent(adapterBindings.get(transportState.runTurnAdapter))) return false;
       await refreshRunTurnAdapter(parsed);
       bindRouteReasoningReplayScope({ parsed, providerName: route.providerName, provider: route.provider,
         adapterName: transportState.runTurnAdapter.name, oauthCredentialSnapshot: transportState.replayOAuthCredentialSnapshot });
       sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, transportState.runTurnAdapter.name, logCtx.accountLogLabel);
+      return true;
     };
     // Initial admission must settle before the streaming Response commits HTTP 200.
     // Let the outer Responses facade preserve the local retryable-429 contract.
@@ -288,12 +289,17 @@ export async function executeResponsesRunTurn(
         if (!pacingSlotAcquired) {
           pacingSlot = await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, runTurnAbort.signal);
         }
-        await refreshRunTurnSelection();
+        const selectionChanged = await refreshRunTurnSelection();
         const selectedBinding = adapterBindings.get(transportState.runTurnAdapter);
         if (lastKeyFailure && selectedBinding?.kind === "api-key"
           && failedKeys.has(selectedBinding.provider.apiKey ?? "")) {
           emit(lastKeyFailure);
           return;
+        }
+        if (selectionChanged) {
+          releaseProviderRequestSlot(pacingSlot);
+          pacingSlot = undefined;
+          pacingSlot = await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, runTurnAbort.signal);
         }
         // LOCAL PATCH (runturn-websearch): refreshRunTurnSelection binds route
         // state onto `parsed`; mirror it onto the iteration-local copy the
@@ -893,6 +899,8 @@ export async function executeResponsesRunTurn(
           declaredToolNames,
           bareCustomToolNames,
           enforceDeclaredToolNames,
+          // Same wire split: only a Responses client (Codex) needs the refusal as a failure.
+          terminalRefusalAsFailed: enforceDeclaredToolNames,
           toolParameterSchemas,
           ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
           ...(routedCompaction ? { compaction: true } : {}),

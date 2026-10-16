@@ -6,6 +6,7 @@ import {
   modelPinnedEffortsConfigError,
   pinnedReasoningEffortConfigError,
   modelDisplayNamesConfigError,
+  autoReviewOverrideConfigError,
   autoReviewModelOverridesConfigError,
   autoReviewModelTargetConfigError,
   normalizeNonBlankStringArray,
@@ -28,6 +29,7 @@ import {
   PROVIDER_WEB_SEARCH_BRIDGE_BACKENDS,
   UPSTREAM_HTTP_VERSION_VALUES,
   type OcxProviderConfig,
+  type OcxConfig,
   type FastWire,
   type ProviderCostOverlay,
 } from "../../types";
@@ -133,12 +135,15 @@ const requestPacingSchema = z.object({
   minIntervalMs: z.number().int().min(1).max(3_600_000).optional(),
   maxConcurrentRequests: z.number().int().min(1).optional(),
   models: z.record(z.string().trim().min(1), requestPacingRuleSchema).optional(),
+  keySelection: z.enum(["active", "round-robin"]).optional(),
+  keys: requestPacingRuleSchema.optional(),
 }).strict().refine(value => value.enabled === false
   || value.requestsPerMinute !== undefined
   || value.minIntervalMs !== undefined
   || value.maxConcurrentRequests !== undefined
+  || value.keys !== undefined || value.keySelection === "round-robin"
   || (value.models !== undefined && Object.keys(value.models).length > 0), {
-  message: "enabled request pacing needs a provider rule or model override",
+  message: "enabled request pacing needs a provider, model, or key rule, or round-robin selection",
 });
 
 export function requestPacingConfigError(value: unknown): string | null {
@@ -256,6 +261,12 @@ const autoReviewModelOverridesSchema = z.unknown().superRefine((value, ctx) => {
   const error = autoReviewModelOverridesConfigError(value, "autoReviewModelOverrides", true);
   if (error) ctx.addIssue({ code: "custom", message: error });
 }).transform(value => normalizeAutoReviewModelOverrides(value));
+
+/** Global auto-review override block; a malformed hand edit is stripped by load degradation. */
+export const autoReviewOverrideSchema = z.unknown().superRefine((value, ctx) => {
+  const error = autoReviewOverrideConfigError(value, "autoReviewOverride");
+  if (error) ctx.addIssue({ code: "custom", message: error });
+}).transform(value => value as NonNullable<OcxConfig["autoReviewOverride"]>);
 
 const modelCapabilitiesSchema = z.unknown().superRefine((value, ctx) => {
   const error = modelCapabilitiesConfigError(value);

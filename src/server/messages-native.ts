@@ -62,10 +62,12 @@ import {
   UPSTREAM_RESET_REPLAY_REFUSED_CODE,
 } from "../lib/upstream-retry";
 import { providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../providers/api-key-selection";
+import { RequestPacingQueueOverloadError } from "../providers/request-pacing";
 import {
   hasKeyPoolFailover,
   rateLimitRetryDelayMs,
   rateLimitRetryPolicyFor,
+  recordDistributedKeyFailure,
   rotateProviderTransportOn401,
   rotateProviderTransportOn429,
   selectProactiveApiKeyTransport,
@@ -440,8 +442,16 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     }
   } else {
     // Same pre-dispatch key preference every direct send path applies (see chat-native.ts).
-    const proactiveKeyProvider = selectProactiveApiKeyTransport(config, route.providerName, route.provider);
-    if (proactiveKeyProvider) route.provider = proactiveKeyProvider;
+    try {
+      const proactiveKeyProvider = selectProactiveApiKeyTransport(config, route.providerName, route.provider);
+      if (proactiveKeyProvider) route.provider = proactiveKeyProvider;
+    } catch (error) {
+      cleanupAbort(); upstream.abort();
+      if (!(error instanceof RequestPacingQueueOverloadError)) throw error;
+      const refusal = fail(429, error.message, "rate_limit_error");
+      refusal.headers.set("Retry-After", String(error.retryAfterSeconds));
+      return refusal;
+    }
   }
   let activeProvider: OcxProviderConfig = oauthBinding ? oauthProvider(oauthBinding) : route.provider;
   stampApiKeyAccountLabel(logCtx, route.providerName, activeProvider);
@@ -525,6 +535,15 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       && nativeMessagesDeclineReason({ ...route, provider: routed }, body, config, selector) === undefined;
   };
 
+  // Keep the actual failed wire identity if a later recovery is refused before sending.
+  // A 429 remains eligible for explicit same-key retries until that ladder is finished.
+  let pendingDistributedFailure: (() => void) | undefined;
+  let distributedResponseOwnsKey = true;
+  const settleDistributedFailure = () => {
+    const record = pendingDistributedFailure;
+    pendingDistributedFailure = undefined;
+    record?.();
+  };
   const send = async (recovery?: "rate-limit-429" | "oauth-401" | "oauth-account-403" | "key-429" | "key-401"): Promise<Response> => {
     const remaining = remainingTransientSends();
     if (requestTransientPolicy && remaining <= 0) {
@@ -542,7 +561,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
         providerFetch(activeProvider, undefined, {
           providerName: route.providerName,
           modelId: route.modelId,
-          dispatchOverride: async (_input, init, execute) => {
+          dispatchOverride: async (_input, init, execute, reacquirePacing) => {
             if (oauthBinding) {
               if (!nativeOAuthRouteIsCurrent(oauthBinding)) throw new NativeOAuthSelectionChangedError();
               // The OAuth twin of the key check below: re-resolve through the same selection
@@ -559,12 +578,25 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
                 rebuildFor(oauthProvider(oauthBinding));
                 logCtx.provider = formatAnthropicProviderForLog(route.providerName, oauthBinding.snapshot.accountId, config);
               }
-            } else if (!providerApiKeySelectionIsCurrent(config, route.providerName, activeProvider)) {
-              const current = resolveCurrentProviderApiKeyTransport(config, route.providerName, activeProvider);
-              if (!current || nativeMessagesDeclineReason({ ...route, provider: current }, body, config, selector) !== undefined) {
-                throw new Error("Provider key selection is no longer available for native Messages");
+            } else {
+              for (let attempt = 0; !providerApiKeySelectionIsCurrent(config, route.providerName, activeProvider); attempt++) {
+                if (attempt >= 3) throw new Error("Provider key selection changed repeatedly before native Messages dispatch");
+                let current = resolveCurrentProviderApiKeyTransport(config, route.providerName, activeProvider);
+                if (!current && activeProvider.requestPacing?.enabled
+                  && (activeProvider.requestPacing.keys || activeProvider.requestPacing.keySelection === "round-robin")) {
+                  const fresh = resolveCurrentProviderApiKeyTransport(config, route.providerName, { ...activeProvider, _apiKeyAttempt: undefined });
+                  if (fresh) current = selectProactiveApiKeyTransport(config, route.providerName, fresh) ?? fresh;
+                }
+                if (!current || nativeMessagesDeclineReason({ ...route, provider: current }, body, config, selector) !== undefined) {
+                  throw new Error("Provider key selection is no longer available for native Messages");
+                }
+                rebuildFor(current);
+                if (current.requestPacing?.enabled
+                  && (current.requestPacing.keys || current.requestPacing.keySelection === "round-robin")) {
+                  if (!reacquirePacing) throw new Error("Refreshed native Messages dispatch requires pacing readmission");
+                  await reacquirePacing(current, route.modelId);
+                }
               }
-              rebuildFor(current);
             }
             // The retry closure may hold a pre-reselection request: send the current one whole.
             const wire = activeRequest;
@@ -583,6 +615,11 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
             }
             const releaseFamily = snapshot && oauthBinding ? anthropicModelQuotaFor(oauthBinding.instance).claimAnthropicFamilyRevalidation(snapshot.accountId, route.modelId) : () => {};
             if (!releaseFamily) throw new AnthropicAccountCooldownError(1);
+            const selection = activeProvider._apiKeyAttempt;
+            const ownsDistributedKey = !selection?.distributed
+              || (activeProvider.apiKeyTransport === "bearer"
+                ? headers.get("authorization") === `Bearer ${activeProvider.apiKey}` && !headers.has("x-api-key")
+                : headers.get("x-api-key") === activeProvider.apiKey && !headers.has("authorization"));
             let dispatched: Response;
             const spendReport = createPhysicalSendReporter(physicalBudget, () => ({
               poolId: logCtx.spendPoolId ?? route.providerName, identityId: logCtx.accountLogLabel,
@@ -627,6 +664,13 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
                 }
               } catch { /* Passive observation must not fail the response. */ }
             }
+            distributedResponseOwnsKey = ownsDistributedKey;
+            const failureStatus = dispatched.status;
+            pendingDistributedFailure = selection?.distributed && ownsDistributedKey && (failureStatus === 401 || failureStatus === 429)
+              && !isNonReplayableResponse(dispatched)
+              ? () => { recordDistributedKeyFailure(config, route.providerName, selection, failureStatus,
+                Date.now(), dispatched.headers.get("retry-after")); }
+              : undefined;
             if (!dispatched.ok) await recordKeyAttemptFailure(logCtx, dispatched, init.signal ?? upstream.signal);
             return dispatched;
           },
@@ -651,25 +695,28 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
   let response: Response;
   try {
     response = await send();
-    const retryPolicy = oauthBinding ? undefined : rateLimitRetryPolicyFor(activeProvider);
+    let retryPolicy: ReturnType<typeof rateLimitRetryPolicyFor> | undefined;
     let retries = 0;
     let billingRecoveryActive = false;
     const keySendAvailable = () => transientSendAvailable()
       && (!billingRecoveryActive || Math.max(physicalSendsUsed, physicalBudget.used) < physicalBudget.policy.maxTotalModelSends);
-    for (;;) {
+    const recoveryPasses = activeProvider._apiKeyAttempt?.distributed ? activeProvider.apiKeyPool?.length ?? 1 : 1;
+    for (let pass = 0; ; pass++) {
       const priorResponse = response;
       // A credential-scoped 401 on a static key pool says nothing about the sibling keys.
-      while (response.status === 401 && hasKeyPoolFailover(activeProvider) && keySendAvailable()) {
+      while (response.status === 401 && distributedResponseOwnsKey && hasKeyPoolFailover(activeProvider) && keySendAvailable()) {
         const rotated = rotateProviderTransportOn401(config, route.providerName, activeProvider, {
           now: Date.now(),
           attemptedKey: activeProvider.apiKey,
+          attemptedSelection: activeProvider._apiKeyAttempt,
         });
+        pendingDistributedFailure = undefined; // Rotation already records this physical failure.
         if (!rotated) break;
         discard(response);
         rebuildFor(rotated);
         response = await send("key-401");
       }
-      while ((response.status === 400 || response.status === 402) && hasKeyPoolFailover(activeProvider)) {
+      while ((response.status === 400 || response.status === 402) && distributedResponseOwnsKey && hasKeyPoolFailover(activeProvider)) {
         const rotated = await rotateAnthropicBillingKeyOnResponse(response, config, route.providerName, activeProvider, { signal: upstream.signal });
         if (!rotated) break;
         billingRecoveryActive = true;
@@ -678,9 +725,11 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
         rebuildFor(rotated);
         response = await send("key-401");
       }
+      if (pass === 0) retryPolicy = oauthBinding ? undefined : rateLimitRetryPolicyFor(activeProvider);
       // A refusal this proxy synthesized for a reset replay is not a provider rate limit.
       while (
         response.status === 429
+        && distributedResponseOwnsKey
         && !isNonReplayableResponse(response)
         && retryPolicy
         && retries < retryPolicy.attempts
@@ -695,13 +744,14 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
         if (upstream.signal.aborted) throw upstream.signal.reason;
         response = await send("rate-limit-429");
       }
-      while (response.status === 429 && !isNonReplayableResponse(response) && hasKeyPoolFailover(activeProvider)) {
+      while (response.status === 429 && distributedResponseOwnsKey && !isNonReplayableResponse(response) && hasKeyPoolFailover(activeProvider)) {
         const rotated = rotateProviderTransportOn429(config, route.providerName, activeProvider, {
           retryAfter: response.headers.get("retry-after"),
           now: Date.now(),
           attemptedKey: activeProvider.apiKey,
           attemptedSelection: activeProvider._apiKeyAttempt,
         });
+        pendingDistributedFailure = undefined; // Rotation already records this physical failure.
         if (!rotated) break;
         // Rotation already recorded the cooldown; keep the terminal 429 when no send remains.
         if (!keySendAvailable()) break;
@@ -709,13 +759,17 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
         rebuildFor(rotated);
         response = await send("key-429");
       }
-      // A sibling's next refusal may change class; the same counters survive that transition.
-      if (response !== priorResponse && (
+      if (response === priorResponse || isNonReplayableResponse(response) || !keySendAvailable()) break;
+      // Billing class transitions share the physical-send ceiling; distributed-only
+      // transitions additionally retain their original bounded pool-pass allowance.
+      if (distributedResponseOwnsKey && (
         (billingRecoveryActive && [401, 429].includes(response.status))
         || (activeProvider.adapter === "anthropic" && hasKeyPoolFailover(activeProvider) && [400, 402].includes(response.status))
       )) continue;
-      break;
+      if (!activeProvider._apiKeyAttempt?.distributed || !distributedResponseOwnsKey
+        || (response.status !== 401 && response.status !== 429) || pass + 1 >= recoveryPasses) break;
     }
+    settleDistributedFailure();
     const oauthRetryKey = {};
     const triedAccountIds = new Set<string>();
     let oauthFailovers = 0;
@@ -753,7 +807,13 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     cleanupAbort();
     upstream.abort();
     if (req.signal.aborted) return fail(499, "Client cancelled request", "api_error");
+    settleDistributedFailure();
     const sendError = error instanceof UpstreamRetryEvidenceError ? error.cause : error;
+    if (sendError instanceof RequestPacingQueueOverloadError) {
+      const refusal = fail(429, sendError.message, "rate_limit_error");
+      refusal.headers.set("Retry-After", String(sendError.retryAfterSeconds));
+      return refusal;
+    }
     if (sendError instanceof SendBudgetExhaustedError) return fail(429, sendError.message, "send_budget_exhausted", "send_budget_exhausted");
     if (sendError instanceof NativeMessagesSpendRefusal) {
       const refusal = workflowRefusalResponse("workflow-spend-exhausted", logCtx);

@@ -739,6 +739,7 @@ export function createAdapterContinuations(
     return parsed._advisorGuard
       ? parsed._advisorGuard({
           parsed,
+          translatorBudget,
           firstEvents: terminalGuardedRetry,
           continuation: fetchTerminalGuardContinuation,
         })

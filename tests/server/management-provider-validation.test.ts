@@ -238,6 +238,17 @@ describe("provider quota routing state", () => {
     expect(dto.reports.find((row: { provider: string }) => row.provider === "zai").quota.monthlyPercent).toBe(100);
   });
 
+  test("model-specific diagnostic windows do not produce provider-wide routing evidence", async () => {
+    const cfg = quotaConfig();
+    globalThis.fetch = (async () => Response.json({ data: { limit: 20, limit_remaining: 8 } })) as typeof fetch;
+    await readQuota(cfg);
+    setCachedProviderQuotaForTests("openrouter", {
+      updatedAt: Date.now(),
+      customWindows: [{ label: "gemini-3.8-flash-high", modelId: "gemini-3.8-flash-high", percent: 100 }],
+    });
+    expect((await readQuota(cfg)).reports[0]?.routingQuota).toEqual({ state: "unknown" });
+  });
+
   test("an exhausted OAuth account report stays display-only", async () => {
     const cfg = quotaConfig("kimi", "https://api.kimi.com/coding/v1");
     cfg.providers.kimi!.authMode = "oauth";

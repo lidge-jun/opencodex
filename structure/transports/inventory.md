@@ -1,5 +1,8 @@
 # Transport Inventory
 
+OpenCode Go's Gemini model uses the [Go Gemini transport contract](../providers/google.md#opencode-go-gemini-transport)
+through the Google adapter and the default server fetch path.
+
 Meta Muse's registry-owned compatibility User-Agent takes precedence over an incoming client User-Agent; explicit provider headers still win. See the [Muse provider contract](../providers-and-adapters.md).
 
 Native result continuations and function-result injection follow [the mode-specific result and control contract](streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
@@ -424,11 +427,41 @@ refuses. A failed selected route never retries directly. Identity verification u
 HTTP path, while provider inference retains its separate existing provider-egress policy.
 
 `src/lib/desktop-upstream-tunnel.ts` dials fixed chatgpt.com TLS through HTTP/HTTPS CONNECT
-or authenticated SOCKS5. It bounds the whole connection setup, rejects proxy EOF, abort and
+or authenticated SOCKS5. Its selected-proxy branch delegates handshake framing to
+`src/lib/opaque-proxy-tunnel.ts` with one explicit route;
+its direct branch and final target TLS handshake remain locally owned. It bounds
+the whole connection setup, rejects proxy EOF, abort and
 oversized handshake heads, and verifies both proxy and upstream certificate identities.
 Only the proxy handshake carries proxy credentials. The raw upgraded socket remains opaque;
 the relay does not decode WebSocket payloads. After CONNECT the paused outer stream resumes
 before TLS-over-TLS negotiation. Test fixture CA trust is confined to child processes or
 injected test socket options, never the user's OS trust store.
+`tests/lib/optional-desktop-upstream.test.ts` exercises the production dialer; `tests/clients/desktop-compatibility-relay.test.ts`
+preserves the real relay’s fixed-target and opaque upgrade contracts.
+
+## Single-route opaque proxy transport
+
+`src/lib/opaque-proxy-tunnel.ts` establishes one HTTP/HTTPS CONNECT or SOCKS5/SOCKS5h
+route selected by `src/lib/desktop-upstream-tunnel.ts`. It returns a paused socket;
+the caller owns target selection and TLS, cancellation after establishment,
+backpressure, half-close and final destruction. The dialer has no proxy discovery,
+alternate-route list, direct fallback, listener, route version or session manager.
+The existing relay retains connection lifecycle ownership.
+
+The handshake is bounded by a timeout and optional caller signal. Proxy credentials
+are request-local and excluded from diagnostics. HTTPS proxy identity is verified
+against its configured host. HTTP Basic usernames with colons and malformed CONNECT
+response headers are rejected. Header size remains bounded even when a delimiter
+and early target bytes arrive together; remaining bytes are handed to the caller.
+
+`src/lib/socks5-handshake.ts` owns RFC 1928/1929 framing. Both SOCKS spellings use its
+remote-DNS behavior and existing zero-to-255-byte credential-field limits, including
+colon usernames. Bounded reads preserve coalesced opaque bytes after CONNECT.
+There is no retry or replay before or after establishment. The caller retains the
+fixed target, explicit DIRECT selection and whole-connection deadline described above.
+`tests/lib/opaque-proxy-tunnel.test.ts` and
+`tests/lib/opaque-proxy-tunnel-protocol.test.ts` cover framing, TLS, authentication,
+timeout, cancellation and half-close; `tests/lib/optional-desktop-upstream.test.ts`
+checks all four proxy schemes close cleanly when the production consumer sees EOF.
 
 Generic OAuth conversation ownership and request-local selection receipts follow [generic OAuth affinity](../providers/generic-account-pool.md#conversation-affinity).

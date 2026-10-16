@@ -1,3 +1,4 @@
+import { truncationReasonFor } from "../../responses/truncated-stop-reason";
 import { normalizeRoutedAgentMessages } from "../routed-agent-messages";
 import { frameCompactionHistory } from "../../responses/compaction-history-framing";
 import { nameRoutedIdentity, repairIdentityInResponsesBody, stripRoutedIdentity } from "../identity";
@@ -662,9 +663,11 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
             case "error":
               yield { type: "error", message: responsesErrorMessage(payload.response ?? payload) };
               return;
-            case "response.incomplete":
-              yield { type: "incomplete", reason: responsesErrorMessage(payload.response ?? payload) };
+            case "response.incomplete": {
+              const reason = responsesErrorMessage(payload.response ?? payload);
+              yield { type: "incomplete", reason: truncationReasonFor(reason) ?? reason };
               return;
+            }
             case "response.completed":
               {
                 completedSeen = true;
@@ -757,7 +760,8 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         return [{ type: "error", message: responsesErrorMessage(payload) }];
       }
       if (payload.status === "incomplete") {
-        return [{ type: "incomplete", reason: responsesErrorMessage(payload) }];
+        const reason = responsesErrorMessage(payload);
+        return [{ type: "incomplete", reason: truncationReasonFor(reason) ?? reason }];
       }
       const usage = usageFromResponsesPayload(payload);
       const output = Array.isArray(payload.output) ? payload.output : [];

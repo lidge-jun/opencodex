@@ -302,7 +302,26 @@ returns an error instead of partial JSON with HTTP 200. Streaming callers are un
 When a provider filters or truncates a response, an unfinished tool call remains `incomplete`
 in both JSON and SSE. Partial output is preserved, and the bridge does not emit an argument
 completion event for that open call. Calls already completed keep their status. This preserves
-the provider outcome; client retry behavior for incomplete responses is unchanged.
+the provider outcome.
+
+On the Responses streaming wire, an explicit non-retryable content-filter stop from
+Anthropic (`refusal` / `content_filter`) or Kiro (`CONTENT_FILTERED` /
+`GUARDRAIL_INTERVENED`) ends with `response.failed`, `error.code: "invalid_prompt"`,
+and `retryable: false`. This prevents clients that retry incomplete streams from
+resending the refused context. Usage and partial output are preserved. Web-search
+and image sidecars stop without executing calls from that refused iteration or
+asking the model again, on every inbound wire.
+
+Buffered Responses JSON retains `status: "incomplete"`; Chat Completions retains
+`finish_reason: "content_filter"`, and Messages retains `stop_reason: "refusal"`.
+A content filter without an explicit non-retryable verdict, token limits, stalls,
+and EOFs keep their existing incomplete behavior.
+
+Explicit incomplete reasons use the same vocabulary in adapter-backed responses and native
+Responses JSON, SSE, and WebSocket delivery:
+output-limit aliases such as `length` and `max_tokens` become `max_output_tokens`, and refusal/filter
+aliases such as `refusal` become `content_filter`. Other reasons remain unchanged, along with the
+provider's message, retryability, and usage. Direct Chat and Messages encoders apply the same mapping.
 
 On the pending `dev` implementation for #4112, a final upstream HTTP 413 on this surface
 is classified as `invalid_request_error` / `context_length_exceeded`. Non-streaming callers
@@ -859,3 +878,10 @@ An ordinary 400 and a 429 are never retried this way, and neither is a 5xx, with
 exception: a 502 whose body is the exact encrypted tool-output decrypt rejection, sent for a request
 that carries encrypted tool output, gets the same single resend. A second rejection reaches the
 client unchanged. If that happens, start a new conversation on the destination provider.
+
+### Malformed tool-call history
+
+Routed requests tolerate malformed serialized function arguments as an empty object.
+Two bounded history repairs preserve usable arguments: a missing JSON object prefix,
+and MiMo's trailing `</function></tool_call>` envelope with a missing closing quote or brace.
+A repair must decode to a JSON object. Valid JSON values containing those tags are preserved.

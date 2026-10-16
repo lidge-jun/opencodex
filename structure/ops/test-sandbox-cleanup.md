@@ -1,5 +1,17 @@
 # Test Sandbox Cleanup
 
+## Windows runtime namespace
+
+`src/codex/user-identity.ts` keys runtime namespaces on the effective SID and environment-independent
+LocalAppData. `src/codex/windows-local-appdata.ts` calls `SHGetKnownFolderPath` in-process on Windows
+x64, loading Shell32/Ole32 from the OS-resolved system directory. It uses `KF_FLAG_DEFAULT_PATH`
+and a null token, bounds UTF-16 decoding, and frees the allocation even when the API fails.
+Unsupported FFI retains the bounded trusted PowerShell helper; native API failures refuse.
+`USERPROFILE` and `LOCALAPPDATA` never choose this root. Runtime canonicalization/reparse checks
+and the Bun test lock's required ACL hardening remain separate admission checks.
+
+## Sandbox lifecycle
+
 The batch runner's per-process home isolation and live-home/service-manager guards remain active
 because the preload installs them before the lock boundary. `tests/preload.ts` resolves cleanup
 dependencies after home/lock admission and before test cases. Teardown awaits native-main startup

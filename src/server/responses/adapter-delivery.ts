@@ -127,6 +127,7 @@ export async function deliverAdapterResponse(
     const advisorStream = parsed._advisorGuard
       ? parsed._advisorGuard({
           parsed,
+          translatorBudget,
           firstEvents: eventStream,
           continuation: fetchTerminalGuardContinuation,
         })
@@ -205,6 +206,7 @@ export async function deliverAdapterResponse(
         declaredToolNames,
         bareCustomToolNames,
         enforceDeclaredToolNames: options.inboundWire !== "chat" && options.inboundWire !== "anthropic",
+        terminalRefusalAsFailed: options.inboundWire !== "chat" && options.inboundWire !== "anthropic",
         toolParameterSchemas,
         ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
         ...(routedCompaction ? { compaction: true } : {}),
@@ -266,6 +268,7 @@ export async function deliverAdapterResponse(
         const advisorEvents: AdapterEvent[] = [];
         for await (const event of parsed._advisorGuard({
           parsed,
+          translatorBudget,
           firstEvents: (async function* () { yield* guardedEvents; })(),
           continuation: fetchTerminalGuardContinuation,
         })) advisorEvents.push(event);

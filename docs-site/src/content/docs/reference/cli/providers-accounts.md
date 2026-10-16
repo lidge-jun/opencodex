@@ -697,7 +697,9 @@ from that account's own credential and Cloud Code Assist project id. The per-acc
 talks to Google's Cloud Code Assist host through the pinned outbound transport, regardless of a
 configured `baseUrl`: a custom base URL is a routing choice for requests, not a second source of
 Google's accounting for a stored credential. An account without a project id, or one whose probe
-is redirected or fails, shows `unavailable`.
+is redirected or fails, shows `unavailable`. When fallback model discovery supplies quota readings,
+detailed displays retain up to 256 model diagnostics with distinct bounded labels. These rows do not
+affect provider summary headlines, severity, account ranking, routing, or reset notifications.
 
 Devin rows come from Cognition's `GetUserStatus` for that account's own key, sent to its
 allowlisted api-server host. If an older credential has no host, the probe uses the configured

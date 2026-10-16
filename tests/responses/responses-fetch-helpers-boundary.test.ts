@@ -310,4 +310,19 @@ describe("storedPoolReplayDispatchNotifier", () => {
     const executor = pacedExecutor({ pacing: async () => {} });
     expect(storedPoolReplayDispatchNotifier(executor.wrapped, undefined)).toBe(executor.wrapped);
   });
+  test.each([false, true])("notification failure releases the slot (pre-acquired=%s)", async preAcquired => {
+    let releases = 0, sends = 0;
+    const slot = { leased: true, bodyTracked: false, released: false, release() { releases += 1; } };
+    const execute = Object.assign(async () => new Response("unexpected"), {
+      preconnect() {},
+      waitForPacing: async () => slot,
+      fetchWithPacingSlot: async () => { sends += 1; return new Response("unexpected"); },
+    });
+    const notifier = storedPoolReplayDispatchNotifier(execute, () => { throw new Error("notification failed"); });
+    await expect((async () => preAcquired
+      ? notifier.fetchWithPacingSlot!(slot, "https://example.test")
+      : notifier("https://example.test"))()).rejects.toThrow("notification failed");
+    expect(releases).toBe(1);
+    expect(sends).toBe(0);
+  });
 });

@@ -10,7 +10,7 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
-import { clearKeyCooldowns } from "../../src/providers/key-failover";
+import { clearKeyCooldowns, forgetApiKeyRotationCursor } from "../../src/providers/key-failover";
 import { estimateClaudeRequestTokens, handleClaudeCountTokens, handleClaudeMessages } from "../../src/server/claude-messages";
 import { getRequestLogEntries } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
@@ -361,6 +361,30 @@ describe("managed native Messages", () => {
     expect(response.status).toBe(200);
     expect(seen.map(entry => entry.headers.get("x-api-key"))).toEqual(["fixture-key-alpha", "fixture-key-beta"]);
     expect(seen[1]!.body).toEqual(seen[0]!.body);
+  });
+
+  test("round-robin native sends preserve per-request keys and the saved active key", async () => {
+    const config = fixtureConfig(startUpstream(), { pool: true });
+    config.providers.anth!.requestPacing = { enabled: true, keySelection: "round-robin", keys: { maxConcurrentRequests: 1 } };
+    forgetApiKeyRotationCursor("anth"); saveConfig(config);
+    const results = await Promise.all(Array.from({ length: 4 }, () => send(config, { ...SOURCE_BODY, stream: false })));
+    expect(results.map(result => result.response.status)).toEqual([200, 200, 200, 200]);
+    expect(seen.map(entry => entry.headers.get("x-api-key")).sort()).toEqual([
+      "fixture-key-alpha", "fixture-key-alpha", "fixture-key-beta", "fixture-key-beta",
+    ]);
+    expect(config.providers.anth!.apiKey).toBe("fixture-key-alpha");
+  });
+
+  test("an exhausted distributed pool refuses the next native request without an upstream send", async () => {
+    const config = fixtureConfig(startUpstream(() => Response.json({ type: "error", error: { type: "rate_limit_error", message: "fixture cooldown" } },
+      { status: 429, headers: { "retry-after": "30" } })), { pool: true });
+    config.providers.anth!.requestPacing = { enabled: true, keySelection: "round-robin" };
+    forgetApiKeyRotationCursor("anth"); saveConfig(config);
+    expect((await send(config, { ...SOURCE_BODY, stream: false })).response.status).toBe(429);
+    expect(seen).toHaveLength(2);
+    const next = await send(config, { ...SOURCE_BODY, stream: false });
+    expect(next.response.status).toBe(429); expect(seen).toHaveLength(2);
+    expect(Number(next.response.headers.get("retry-after"))).toBeGreaterThan(0);
   });
 
   test("a 429 on the first pooled key fails over to the next key", async () => {

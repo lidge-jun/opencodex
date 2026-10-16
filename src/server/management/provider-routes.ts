@@ -80,7 +80,7 @@ import { cachedProviderQuotaIsExhausted } from "../../combos/resolve";
 import { probeJevDecisionProvider } from "../../combos/jev";
 import { comboDependsOnProviderRoute } from "./decision-model-validation";
 import { clearKeyCooldowns, forgetApiKeyRotationCursor } from "../../providers/key-failover";
-import { providerRequestPacingStatus } from "../../providers/request-pacing";
+import { handleProviderKeyPacingRoutes } from "./provider-key-pacing-routes";
 import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { codexAccountNamespaceProviderCollisionError } from "../../codex/account-namespace-match";
 import { clearThreadAccountMap } from "../../codex/routing";
@@ -855,7 +855,7 @@ function providerRoutingQuota(config: OcxConfig, name: string, now: number): Pro
 
   // Removing search/MCP windows may leave only a timestamp. That is not inference evidence.
   const percentages = [quota.fiveHourPercent, quota.weeklyPercent, quota.monthlyPercent,
-    ...(quota.customWindows ?? []).map(window => window.percent)];
+    ...(quota.customWindows ?? []).filter(window => window.modelId === undefined).map(window => window.percent)];
   const hasPercentage = percentages.some(value => typeof value === "number" && Number.isFinite(value) && value >= 0);
   const credits = quota.creditsUsd;
   const hasCredits = credits !== undefined && Number.isFinite(credits.percent)
@@ -866,7 +866,7 @@ function providerRoutingQuota(config: OcxConfig, name: string, now: number): Pro
   let validUntil = quota.updatedAt + PROVIDER_QUOTA_MAX_AGE_MS;
   if (state === "exhausted") {
     const resets = [quota.fiveHourResetAt, quota.weeklyResetAt, quota.monthlyResetAt,
-      ...(quota.customWindows ?? []).map(window => window.resetAt)]
+      ...(quota.customWindows ?? []).filter(window => window.modelId === undefined).map(window => window.resetAt)]
       .filter((reset): reset is number => typeof reset === "number" && Number.isFinite(reset)
         && reset > now && reset < validUntil)
       .sort((left, right) => left - right);
@@ -897,21 +897,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     });
   }
 
-  if (url.pathname === "/api/provider-request-pacing" && req.method === "GET") {
-    const name = url.searchParams.get("name")?.trim();
-    if (name) {
-      if (!isValidProviderName(name) || !hasOwnProvider(config.providers, name)) {
-        return jsonResponse({ error: "unknown provider" }, 404);
-      }
-      return jsonResponse(providerRequestPacingStatus(name, config.providers[name]!));
-    }
-    return jsonResponse(Object.fromEntries(
-      Object.entries(config.providers).map(([providerName, provider]) => [
-        providerName,
-        providerRequestPacingStatus(providerName, provider),
-      ]),
-    ));
-  }
+  const keyPacingResponse = handleProviderKeyPacingRoutes(ctx);
+  if (keyPacingResponse) return keyPacingResponse;
 
   if (url.pathname === "/api/providers" && req.method === "GET") {
     return jsonResponse(Object.entries(config.providers).map(([name, p]) => ({

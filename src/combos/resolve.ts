@@ -100,6 +100,9 @@ function quotaWindowExhausted(percent: number | undefined, resetAt: number | und
 const MODEL_FAMILY_WINDOW_LABELS = new Set(["fable", "opus", "sonnet"]);
 
 function customWindowAppliesToModel(window: ProviderQuotaWindow, model: string | undefined): boolean {
+  // Exact Antigravity model readings are diagnostic only. They are not permission or
+  // provider-wide exhaustion evidence until a separate eligibility contract consumes them.
+  if (window.modelId !== undefined) return false;
   if (window.scope !== "model" || model === undefined) return true;
   const family = window.label.trim().toLowerCase();
   if (!MODEL_FAMILY_WINDOW_LABELS.has(family)) return true;
