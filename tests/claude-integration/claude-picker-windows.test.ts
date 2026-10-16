@@ -260,11 +260,13 @@ for (const disabledBy of ["preference", "desktop-integration", "gateway-mode"] a
     const trust = windowsTrust({ trusted: false });
     const fake = memoryPickerCaStore();
     const proxies: Array<Awaited<ReturnType<typeof startConnectProxy>>> = [];
+    let failBind = false;
     const handle = await startClaudeIntercept({
       config, configDir: root, publicPort: 10100,
       dispatch: async () => new Response(), loadPickerRoutes: routes,
       pickerPlatform: "win32", pickerCaStore: fake.store, pickerSecurity: trust.run,
       startProxy: async (_port, options) => {
+        if (failBind) throw Object.assign(new Error("test occupied port"), { code: "EADDRINUSE" });
         const proxy = await startConnectProxy(0, options);
         proxies.push(proxy);
         return proxy;
@@ -275,6 +277,10 @@ for (const disabledBy of ["preference", "desktop-integration", "gateway-mode"] a
     expect(handle?.pickerProxyPort).toBeNull();
     expect(trust.calls).toEqual([]);
     expect(existsSync(pickerCaCertPath(root))).toBe(false);
+    expect(await getClaudePickerController()!.status()).toMatchObject({ listenerReady: false, effective: false });
+    expect(await getClaudePickerController()!.enable({ persist: false, context: "server" })).toMatchObject({ effective: false });
+    expect(proxies).toHaveLength(1);
+    expect(trust.calls).toEqual([]);
 
     config.claudeCode!.desktopMode = "first-party";
     config.clientIntegrations = { "claude-desktop": true };
@@ -284,11 +290,21 @@ for (const disabledBy of ["preference", "desktop-integration", "gateway-mode"] a
       method: "PUT", headers: { Host: url.host, "Content-Type": "application/json" },
       body: JSON.stringify({ enabled: true, persist: true }),
     }), url, config, {}, "admin-token", undefined, { trustedLoopback: true });
-    const response = await enable();
+    if (disabledBy === "preference") {
+      failBind = true;
+      expect((await enable())?.status).toBe(409);
+      expect(handle?.pickerReason).toBe("port_in_use");
+      expect(handle?.pickerProxyPort).toBeNull();
+      expect(trust.calls).toEqual([]);
+      failBind = false;
+    }
+    const [response, repeated] = await Promise.all([enable(), enable()]);
     expect(response?.status).toBe(200);
+    expect(repeated?.status).toBe(200);
     expect(await response!.json()).toMatchObject({ ok: true, picker: { effective: true, profile: "applied", trust: "trusted" } });
     expect(proxies).toHaveLength(2);
     expect(handle?.pickerProxyPort).toBe(proxies[1]!.port);
+    expect(handle?.pickerReason).toBeNull();
     expect(inspectDesktopPickerProfile({ configDir: root, platform: "win32" })).toMatchObject({
       kind: "applied", proxyUrl: `http://127.0.0.1:${proxies[1]!.port}`,
     });

@@ -336,6 +336,12 @@ that controller when one exists. With no controller (intercept disabled, client 
 picker-proxy bind), its offline operations remove leftover picker artifacts without creating a
 terminator, and refuse enable with `proxy_unavailable`.
 
+Windows startup with picker intent off retains a dormant controller without binding the picker
+relay or starting its refresh timer. A later enable validates mode, integration and preference,
+then binds the relay under that controller's lock and starts the runtime. Concurrent enables
+share one relay; a failed lazy bind reports `proxy_unavailable` and can be retried. Live intercept
+state and its handle expose the bound port after activation, and shutdown closes that relay.
+
 The controller disarms the picker runtime before disable or cleanup. The disarm latch makes new
 `claude.ai` CONNECTs blind immediately and is cleared only by a completed, checked enable. If an
 enable attempt added trust and a later check or profile write fails, it removes that trust again;
