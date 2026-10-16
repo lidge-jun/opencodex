@@ -384,7 +384,7 @@ Usage consumers preserve positive incomplete-history metadata as specified in
 as a complete ledger. The same contract owns `src/usage/log.ts` append-path permission rechecks and
 their bounded cache.
 
-Connected `ocx usage` reads `/v1/usage` through `src/client/hub-client.ts`, using its enrolled data key and checking connection/token ownership before and after the read. It reports hub/client scope and never substitutes local totals on failure. Standalone commands retain their management endpoint.
+Connected `ocx usage` and `ocx usage compare` read `/v1/usage` through `src/client/hub-client.ts`, using the enrolled data key and checking connection/token ownership before and after each read. They report hub/client scope and never substitute local totals on failure. Standalone commands retain their management endpoint.
 
 The client usage read requires HTTPS or loopback HTTP before adding the enrolled credential, and sets request `cache: "no-store"`; the hub response also forbids caching.
 

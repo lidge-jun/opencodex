@@ -51,6 +51,25 @@ export const OBSERVE_SYSTEM_CAPABILITIES: readonly Capability[] = [
     details: ["Also available as ocx usage. Connected clients read only their enrolled-key Hub report through /v1/usage; caller --api-key-id is refused before key read/transport and never grants management authority.","Nonclient --api-key-id uses /api/usage and requires matching filter acknowledgment. An unknown acknowledged key is empty/matched:false, not404. Custom-window acknowledgment remains required.","--search filters only returned model rows after scope acknowledgment. Blank search selects the top100 model rows by default; modelView reports match/return counts without recomputing totals."],
   },
   {
+    command: ["usage", "compare"],
+    summary: "Compare a usage range with the previous equal window.",
+    usage: "ocx usage compare [--range <today|1d|7d|30d>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--api-key-id <id>] [--json]",
+    routes: [{"method": "GET", "path": "/api/usage"}],
+    flags: [
+      {"name": "--range", "value": "string", "summary": "today | 1d | 7d | 30d; default 30d. all is refused."},
+      {"name": "--surface", "value": "string", "summary": "all | codex | claude | grok; default all."},
+      {"name": "--provider", "value": "string", "summary": "Filter provider."},
+      {"name": "--model", "value": "string", "summary": "Filter model."},
+      {"name": "--api-key-id", "value": "string", "summary": "Exact nonblank management key scope; connected clients refuse this."},
+      {"name": "--json", "value": "boolean", "summary": "Emit current, previous, delta and change percentages."},
+    ],
+    mutates: false, json: "envelope",
+    details: [
+      "Two sequential GET /api/usage reads: the named range at now, then the same range shifted back one equal window. Custom since/until must be acknowledged on both. --range all is refused.",
+      "Also accepted after observe usage. Default range is 30d. This is not an atomic snapshot.",
+    ],
+  },
+  {
     command: ["observe", "storage"], summary: "Read storage diagnostics.",
     usage: "ocx observe storage [--limit <n>] [--json]",
     routes: [{"method": "GET", "path": "/api/storage"}],

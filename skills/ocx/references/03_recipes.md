@@ -88,7 +88,11 @@ actually served it, not only the one requested.
 
 ```bash
 ocx usage --range 7d --json
+ocx usage compare --range 7d --json
 ```
+
+`ocx usage compare` reads the named range and the previous equal window. `--range all` is refused.
+`--json` carries `delta` and `change` (percent). The two reads are sequential.
 
 Read `accounts[]`. Two things to respect:
 
