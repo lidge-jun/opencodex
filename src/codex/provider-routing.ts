@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
+import { loadConfig } from "../config";
+import { shouldSyncCodexOnStart } from "./desired-state";
 import { atomicWriteFile } from "../config/atomic-write";
 import { withConfigMutationLockSync } from "../config/mutation-lock";
 import { getConfigDir } from "../config/paths";
@@ -10,7 +12,7 @@ import { ConfigWriteLockRefusal, publishConfigWriteTarget, watchConfigWriteTarge
 import { providerTableStart } from "./injected-marker";
 import { CODEX_CONFIG_PATH, getCodexHome, tomlString } from "./paths";
 import { rootSourceLines, sourceAssignment, sourceText } from "./toml-source-lines";
-import { cleanExternalProviderJournal } from "./inject/config-write-section";
+import { JOURNAL_PATH, removeJournal } from "./journal";
 import { externalCodexModelProvider } from "./inject/config-toml";
 import { readBoundedCodexConfig } from "./inject/bounded-config-reader";
 import { isLoopbackHostname } from "./loopback-target";
@@ -75,7 +77,7 @@ function providerUrl(content: string, id: string, checkCredentials = true) {
 function inWriteSection<T>(run: (held: LockHandle, content: string, record: RoutingRecord) => T): T {
   assertCodexHomeOwner(getCodexHome());
   const result = withConfigWriteLockHeld(CODEX_CONFIG_PATH, undefined, held => {
-    watchConfigWriteTargets(held, [CODEX_CONFIG_PATH, recordPath()]);
+    watchConfigWriteTargets(held, [CODEX_CONFIG_PATH, recordPath(), JOURNAL_PATH]);
     const content = readFileSync(CODEX_CONFIG_PATH, "utf8");
     return run(held, content, readRecord());
   });
@@ -122,21 +124,22 @@ function accepts(fieldUrl: string, saved: Approval): boolean {
 
 /** Called by start/sync, never prompts and never broadens the approved provider set. */
 export function injectApprovedCodexProvider(id: string, target: CodexRoutingTarget, beforeWrite?: () => void, validateOnly = false): false | { configChanged: boolean } {
-  if (!Object.hasOwn(readRecord().providers, id)) return false;
-  target = validateCodexRoutingTarget(target);
-  if (target.requiresAdmissionToken || target.desktopAuthless || target.clientCompaction || !isLoopbackHostname(new URL(target.baseUrl).hostname)) {
-    throw new Error("Approved custom providers support only authenticated Codex on a local loopback proxy without client compaction.");
-  }
-  if (!validateOnly) cleanExternalProviderJournal(beforeWrite);
   return inWriteSection((held, content, record) => {
+    if (!Object.hasOwn(record.providers, id)) return false;
     const apply = () => {
-      if (!Object.hasOwn(record.providers, id)) return false;
+      target = validateCodexRoutingTarget(target);
+      if (target.requiresAdmissionToken || target.desktopAuthless || target.clientCompaction || !isLoopbackHostname(new URL(target.baseUrl).hostname)) {
+        throw new Error("Approved custom providers support only authenticated Codex on a local loopback proxy without client compaction.");
+      }
       if (externalCodexModelProvider(content) !== id) throw new Error("Active provider changed; routing was not applied.");
       const field = providerUrl(content, id), saved = record.providers[id]!;
       if (!accepts(field.url, saved)) throw new Error("Approved provider base_url changed outside OpenCodex; revoke and approve it again.");
-      if (validateOnly || field.url === target.baseUrl) return { configChanged: false };
+      if (validateOnly) return { configChanged: false };
       beforeWrite?.();
+      if (!shouldSyncCodexOnStart(loadConfig())) return false;
       if (readFileSync(CODEX_CONFIG_PATH, "utf8") !== content) throw new Error("Codex config changed before publication; retry sync.");
+      publishConfigWriteTarget(CODEX_CONFIG_PATH, held, JOURNAL_PATH, (_destination, hooks) => removeJournal(hooks));
+      if (field.url === target.baseUrl) return { configChanged: false };
       // Write recovery evidence first. Both the previous and candidate URL remain restorable
       // if publication fails or the process exits between these two atomic renames.
       saved.managedUrls = [...new Set([field.url, target.baseUrl])].filter(url => url !== saved.originalUrl);
@@ -145,7 +148,7 @@ export function injectApprovedCodexProvider(id: string, target: CodexRoutingTarg
       publish(CODEX_CONFIG_PATH, field.replace(`base_url = ${tomlString(target.baseUrl)}`), held);
       return { configChanged: true };
     };
-    return beforeWrite ? withConfigMutationLockSync(apply) : apply();
+    return validateOnly ? apply() : withConfigMutationLockSync(apply);
   });
 }
 

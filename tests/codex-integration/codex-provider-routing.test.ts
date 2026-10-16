@@ -106,8 +106,11 @@ test("validation is read-only, revocation restores managed URL and removes futur
   run(`
     allow();
     const before = readFileSync(path, "utf8");
+    const { readdirSync } = await import("node:fs");
+    const entries = JSON.stringify(readdirSync(process.env.OPENCODEX_HOME).sort());
     await injectCodexConfig(10100, {}, { validateOnly: true });
     if (readFileSync(path, "utf8") !== before) throw new Error("validation wrote config");
+    if (JSON.stringify(readdirSync(process.env.OPENCODEX_HOME).sort()) !== entries) throw new Error("validation created mutation metadata");
     await injectCodexConfig(10100, {});
     if (await handleCodexProviderCommand(["revoke", id]) !== 0) throw new Error("revoke failed");
     const result = await injectCodexConfig(10100, {});
@@ -175,13 +178,21 @@ test("reserved provider IDs cannot claim consent", () => {
 test("concurrent sync processes leave a complete restorable config", () => {
   run(`
     allow();
+    const before = readFileSync(path, "utf8");
     const jobs = [18273, 18274, 18275].map(port => Bun.spawn([process.execPath, "--eval",
-      'import { injectCodexConfig } from "./src/codex/inject"; const result = await injectCodexConfig(' + port + ', {}); if (!result.success && !result.retryable) process.exit(2);'
+      'import { injectCodexConfig } from "./src/codex/inject"; const result = await injectCodexConfig(' + port + ', {}); process.stdout.write(JSON.stringify(result)); if (!result.success && !result.retryable) process.exit(2);'
     ], { cwd: process.cwd(), env: process.env, stdout: "pipe", stderr: "pipe" }));
-    const exits = await Promise.all(jobs.map(job => job.exited));
-    if (exits.some(code => code !== 0)) throw new Error("concurrent sync failed: " + exits);
+    const outcomes = await Promise.all(jobs.map(async job => ({ code: await job.exited, error: await new Response(job.stderr).text(), output: await new Response(job.stdout).text() })));
+    if (outcomes.some(result => result.code !== 0)) throw new Error("concurrent sync failed: " + JSON.stringify(outcomes));
+    const results = outcomes.map(outcome => JSON.parse(outcome.output));
+    if (results.some(result => !result.success && result.retryable !== true)) throw new Error("non-retryable concurrent result");
+    if (results.every(result => !result.success)) {
+      if (readFileSync(path, "utf8") !== before) throw new Error("retry-only syncs mutated config");
+      const converged = await injectCodexConfig(18273, {});
+      if (!converged.success || converged.configChanged !== true) throw new Error("uncontended sync did not converge: " + JSON.stringify(converged));
+    }
     const config = Bun.TOML.parse(readFileSync(path, "utf8"));
-    if (![18273, 18274, 18275].some(port => config.model_providers[id].base_url === "http://127.0.0.1:" + port + "/v1")) throw new Error("no sync published");
+    if (![18273, 18274, 18275].some(port => config.model_providers[id].base_url === "http://127.0.0.1:" + port + "/v1")) throw new Error("no sync published: " + JSON.stringify(outcomes));
   `);
   run("restoreApprovedCodexProviders();");
   expect(readFileSync(join(codexHome, "config.toml"), "utf8")).toBe(original);
@@ -241,5 +252,56 @@ test("startup health recognizes only the exact managed URL of an approved provid
     if (getCodexRoutingKind() !== "opencodex-local") throw new Error("managed route was not recognized");
     writeFileSync(path, readFileSync(path, "utf8").replace("http://127.0.0.1:10100/v1", "http://127.0.0.1:19999/v1"));
     if (getCodexRoutingKind() !== "custom-local") throw new Error("unrecorded URL was claimed");
+  `);
+});
+
+
+test.each(["already-off", "late-off"])("approved routing respects integration OFF at publication (%s)", timing => {
+  run(`
+    const { readdirSync } = await import("node:fs");
+    const { getDefaultConfig, saveConfig } = await import("./src/config");
+    const { injectApprovedCodexProvider } = await import("./src/codex/provider-routing");
+    const { standaloneCodexRoutingTarget } = await import("./src/codex/inject/routing-target");
+    const config = getDefaultConfig();
+    saveConfig(config); allow();
+    const record = join(process.env.OPENCODEX_HOME, readdirSync(process.env.OPENCODEX_HOME).find(name => name.startsWith("codex-provider-routing-") && name.endsWith(".json")));
+    const evidence = readFileSync(record, "utf8");
+    const disable = () => {
+      config.clientIntegrations = { codex: false };
+      writeFileSync(join(process.env.OPENCODEX_HOME, "config.json"), JSON.stringify(config));
+    };
+    if (${JSON.stringify(timing)} === "already-off") disable();
+    const result = injectApprovedCodexProvider(id, standaloneCodexRoutingTarget(18281, {}), () => {
+      if (${JSON.stringify(timing)} === "late-off") disable();
+    });
+    if (result !== false) throw new Error("integration OFF was not skipped");
+    if (readFileSync(record, "utf8") !== evidence) throw new Error("skipped injection changed recovery evidence");
+    if (!approvedCodexProviders().includes(id)) throw new Error("skip revoked consent");
+  `);
+  expect(readFileSync(join(codexHome, "config.toml"), "utf8")).toBe(original);
+  expect(readFileSync(join(codexHome, "history.jsonl"), "utf8")).toBe("history sentinel\n");
+});
+
+
+test("concurrent approval replacement cannot escape injection as an unhandled read failure", () => {
+  run(`
+    const fs = await import("node:fs");
+    const { spyOn } = await import("bun:test");
+    allow();
+    const record = join(process.env.OPENCODEX_HOME, fs.readdirSync(process.env.OPENCODEX_HOME).find(name => name.startsWith("codex-provider-routing-") && name.endsWith(".json")));
+    const stat = fs.statSync;
+    // Reproduce a cooperating writer's atomic rename between the reader's stat and open.
+    const observation = spyOn(fs, "statSync").mockImplementation((file, ...options) => {
+      const result = stat(file, ...options);
+      if (file === record && !existsSync(path + ".ocx-write.lock")) {
+        writeFileSync(record + ".replacement", readFileSync(record));
+        fs.renameSync(record + ".replacement", record);
+      }
+      return result;
+    });
+    try {
+      const result = await injectCodexConfig(18282, {});
+      if (!result.success && !result.retryable) throw new Error("concurrent injection was not success-or-retryable");
+    } finally { observation.mockRestore(); }
   `);
 });

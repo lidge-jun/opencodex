@@ -189,6 +189,7 @@ export async function startClaudeIntercept<T>(options: StartClaudeInterceptOptio
   let pickerProxy = null as ConnectProxyHandle | null;
   let controller = null as DesktopPickerController | null;
   let pickerProxyLive = false;
+  let stopped = false;
   let pickerReason: ClaudeInterceptState["pickerReason"] = null;
   let pickerFailurePort: number | undefined;
   try {
@@ -212,7 +213,7 @@ export async function startClaudeIntercept<T>(options: StartClaudeInterceptOptio
         const fresh = options.config;
         const platform = options.pickerPlatform ?? process.platform;
         const pickerRequired = pickerProfileApplied || pickerDesired(fresh, resolveClaudeDesktopMode(fresh, observeClaudeDesktopMode(fresh)), platform);
-        // Preserve macOS's dormant wiring; Windows binds only for intent or selected-profile recovery.
+        // Preserve macOS's dormant relay; Windows defers binding until enable or profile recovery.
         pickerWired = platform !== "win32" || pickerRequired;
         if (pickerRequired) {
           await preparePersistentPickerAuthority({ configDir, store: options.pickerCaStore, security: options.pickerSecurity, platform });
@@ -245,7 +246,7 @@ export async function startClaudeIntercept<T>(options: StartClaudeInterceptOptio
           }
         }
       }
-      picker = pickerBlocked || !pickerWired ? null : (options.createPicker ?? createPickerRuntime)({
+      picker = pickerBlocked ? null : (options.createPicker ?? createPickerRuntime)({
         config: options.config,
         configDir,
         persistentAuthority: { store: options.pickerCaStore },
@@ -261,63 +262,76 @@ export async function startClaudeIntercept<T>(options: StartClaudeInterceptOptio
         const runtime = picker;
         const interceptPort = listener.port!;
         const pickerPort = claudePickerProxyPort(options.config, options.publicPort);
-        try {
-          pickerProxy = await startProxy(pickerPort, {
-            interceptPort,
-            // No authToken: Desktop's egressProxyUrl cannot present proxy credentials, so this
-            // listener stays an unauthenticated loopback relay until the profile format can carry
-            // one. The intercept proxy above is the credential-bearing hop.
-            // No host list here: the choice below depends on which client opened the tunnel.
-            interceptHosts: [],
-            selectTunnel: (host, port, request) => {
-              // Desktop hands its pinned egress proxy to the Claude Code processes it spawns, so their
-              // api.anthropic.com traffic arrives here too and gets the same intercept as on the Claude
-              // Code proxy. Those processes trust only the intercept CA, so the picker never terminates
-              // their claude.ai tunnels; only the app's own (browser) CONNECTs reach the picker.
-              if (!isBrowserConnect(request)) {
-                return port === 443 && (CLAUDE_INTERCEPT_HOSTS as readonly string[]).includes(host.toLowerCase())
-                  ? { kind: "intercept", port: interceptPort }
-                  : { kind: "blind" };
-              }
-              return runtime.selectTunnel(host, port);
-            },
-          });
-          pickerProxyLive = true;
-        } catch (error) {
-          // Picker mode is optional: a busy port leaves the intercept pair running without it.
-          // The selected profile row survives, so the next startup retries the restore once the
-          // port is free again.
-          pickerReason = error && typeof error === "object" && "code" in error && error.code === "EADDRINUSE" ? "port_in_use" : "failed";
-          if (pickerReason === "port_in_use") pickerFailurePort = pickerPort;
-          console.warn(`⚠ Claude Desktop picker proxy could not start: ${error instanceof Error ? error.message : String(error)}`);
-          await runtime.stop();
-          picker = null;
+        const bindPickerProxy = async (): Promise<void> => {
+          if (stopped || pickerProxyLive) return;
+          try {
+            pickerProxy = await startProxy(pickerPort, {
+              interceptPort,
+              // No authToken: Desktop's egressProxyUrl cannot present proxy credentials, so this
+              // listener stays an unauthenticated loopback relay until the profile format can carry
+              // one. The intercept proxy above is the credential-bearing hop.
+              // No host list here: the choice below depends on which client opened the tunnel.
+              interceptHosts: [],
+              selectTunnel: (host, port, request) => {
+                // Desktop hands its pinned egress proxy to the Claude Code processes it spawns, so their
+                // api.anthropic.com traffic arrives here too and gets the same intercept as on the Claude
+                // Code proxy. Those processes trust only the intercept CA, so the picker never terminates
+                // their claude.ai tunnels; only the app's own (browser) CONNECTs reach the picker.
+                if (!isBrowserConnect(request)) {
+                  return port === 443 && (CLAUDE_INTERCEPT_HOSTS as readonly string[]).includes(host.toLowerCase())
+                    ? { kind: "intercept", port: interceptPort }
+                    : { kind: "blind" };
+                }
+                return runtime.selectTunnel(host, port);
+              },
+            });
+            if (stopped) { await pickerProxy.close(); return; }
+            pickerProxyLive = true;
+            pickerReason = null;
+            pickerFailurePort = undefined;
+          } catch (error) {
+            // Picker mode is optional: a busy port leaves the intercept pair running without it.
+            // The selected profile row survives; a dormant enable can retry after the port is free.
+            pickerReason = error && typeof error === "object" && "code" in error && error.code === "EADDRINUSE" ? "port_in_use" : "failed";
+            if (pickerReason === "port_in_use") pickerFailurePort = pickerPort;
+            console.warn(`⚠ Claude Desktop picker proxy could not start: ${error instanceof Error ? error.message : String(error)}`);
+            throw error;
+          }
+        };
+        if (pickerWired) {
+          try { await bindPickerProxy(); }
+          catch { await runtime.stop(); picker = null; }
         }
-      }
-      if (picker) {
-        // Dynamic: the controller reaches desktop-first-party, which imports this module.
-        const [{ createDesktopPickerController }, { loadConfig }, persistPreference] = await Promise.all([
-          import("../desktop-picker"),
-          import("../../config"),
-          createPickerPreferenceWriter(options.config),
-        ]);
-        const boundProxy = pickerProxy;
-        controller = createDesktopPickerController({
-          runtime: picker,
-          readConfig: loadConfig,
-          persistPreference,
-          proxyPort: () => (pickerProxyLive && boundProxy ? boundProxy.port : null),
-          configDir,
-          persistentAuthority: { store: options.pickerCaStore },
-          ...(options.pickerSecurity ? { security: options.pickerSecurity } : {}),
-          ...(options.pickerPlatform ? { platform: options.pickerPlatform } : {}),
-        });
-        await picker.start();
-        // Restore inspects the retained identity without installing trust. Explicit enable/trust
-        // owns consent when trust was revoked or legacy migration introduced a new authority.
-        if (pickerProfileApplied && controller) {
-          void controller.enable({ persist: false, context: "server", allowTrustPrompt: false })
-            .catch(error => console.warn(`⚠ Claude Desktop picker restore failed: ${error instanceof Error ? error.message : String(error)}`));
+        if (picker) {
+          // Dynamic: the controller reaches desktop-first-party, which imports this module.
+          const [{ createDesktopPickerController }, { loadConfig }, persistPreference] = await Promise.all([
+            import("../desktop-picker"),
+            import("../../config"),
+            createPickerPreferenceWriter(options.config),
+          ]);
+          controller = createDesktopPickerController({
+            runtime: picker,
+            readConfig: loadConfig,
+            persistPreference,
+            proxyPort: () => (pickerProxyLive ? pickerProxy?.port ?? null : null),
+            ensureProxy: async () => {
+              await bindPickerProxy();
+              if (!pickerProxyLive) return;
+              await runtime.start();
+              if (!stopped && activeController === controller) activePicker = runtime;
+            },
+            configDir,
+            persistentAuthority: { store: options.pickerCaStore },
+            ...(options.pickerSecurity ? { security: options.pickerSecurity } : {}),
+            ...(options.pickerPlatform ? { platform: options.pickerPlatform } : {}),
+          });
+          if (pickerWired) await picker.start();
+          // Restore inspects the retained identity without installing trust. Explicit enable/trust
+          // owns consent when trust was revoked or legacy migration introduced a new authority.
+          if (pickerProfileApplied && controller) {
+            void controller.enable({ persist: false, context: "server", allowTrustPrompt: false })
+              .catch(error => console.warn(`⚠ Claude Desktop picker restore failed: ${error instanceof Error ? error.message : String(error)}`));
+          }
         }
       }
     }
@@ -333,21 +347,25 @@ export async function startClaudeIntercept<T>(options: StartClaudeInterceptOptio
     throw error;
   }
   const state: ClaudeInterceptState = {
-    pickerReason,
-    pickerFailurePort,
+    get pickerReason() { return pickerReason; },
+    get pickerFailurePort() { return pickerFailurePort; },
     proxyPort: proxy.port,
     caCertPath: claudeInterceptCaCertPath(configDir),
-    pickerProxyPort: pickerProxy?.port ?? null,
+    get pickerProxyPort() { return pickerProxyLive ? pickerProxy?.port ?? null : null; },
   };
   activeState = state;
-  activePicker = picker;
+  activePicker = pickerProxyLive ? picker : null;
   activeController = controller;
   const ownPicker = picker;
   const ownController = controller;
   return {
     ...state,
+    get pickerProxyPort() { return state.pickerProxyPort; },
+    get pickerReason() { return state.pickerReason; },
+    get pickerFailurePort() { return state.pickerFailurePort; },
     listener,
     stop: async () => {
+      stopped = true;
       if (activeState === state) activeState = null;
       if (activePicker === ownPicker) activePicker = null;
       if (activeController === ownController) activeController = null;
