@@ -321,6 +321,18 @@ describe("Responses account usage attribution", () => {
       expect(bearers).toEqual(["Bearer pool-a-access-token", "Bearer pool-b-access-token"]);
       expect(logCtx.accountLogLabel).toBe(fallbackCodexAccountLogLabel("pool-b"));
       expect(logCtx.activeAttempt?.accountLogLabel).toBe(fallbackCodexAccountLogLabel("pool-b"));
+      // The move is a named recovery: the first account's row keeps its real 429 rather than an
+      // inferred 502, and the second send says why it exists.
+      expect(logCtx.attempts?.map(attempt => ({
+        label: attempt.accountLogLabel,
+        status: attempt.status,
+        sendCount: attempt.sendCount,
+        recoveryKinds: attempt.recoveryKinds,
+        failureCause: attempt.failureCause,
+      }))).toEqual([
+        { label: fallbackCodexAccountLogLabel("pool-a"), status: 429, sendCount: 1, recoveryKinds: [], failureCause: "rate-limit" },
+        { label: fallbackCodexAccountLogLabel("pool-b"), status: 0, sendCount: 1, recoveryKinds: ["oauth-account-429"], failureCause: undefined },
+      ]);
     });
   });
 

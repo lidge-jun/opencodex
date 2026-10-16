@@ -678,7 +678,7 @@
   "gemini-inline.test.ts": "images", "gemini-web-search.test.ts": "adapters/google",
   "generic-session-affinity.test.ts": "oauth",
   "server-generic-oauth-affinity.test.ts": "server",
-  "generic-oauth-failover.test.ts": "oauth", "generic-oauth-refusal-composition.test.ts": "oauth",
+  "generic-oauth-combo-account-cooldown.test.ts": "oauth", "generic-oauth-failover.test.ts": "oauth", "generic-oauth-refusal-composition.test.ts": "oauth",
   "github-copilot-auto.test.ts": "providers/github-copilot",
   "github-copilot-auto-runtime.test.ts": "providers/github-copilot",
   "github-copilot-catalog-hints.test.ts": "providers/github-copilot",

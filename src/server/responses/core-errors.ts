@@ -8,7 +8,7 @@ import {
   DecompressedBodyTooLargeError,
   describeInboundBodyRefusal,
 } from "../request-decompress";
-import { comboCooldownRetryAfterSeconds } from "../../combos";
+import { comboCooldownRetryAfterSeconds, NoAvailableComboTargetsError } from "../../combos";
 import type { AgentTaskRecoveryFailureReason } from "./agent-task-recovery";
 
 /**
@@ -115,8 +115,8 @@ export function comboUnavailableResponse(
 }
 
 
-export function comboUnavailable(comboId: string, now = Date.now()): Response {
-  return comboUnavailableResponse(`No available targets for combo: ${comboId}`, {
+export function comboUnavailable(comboId: string, now = Date.now(), reasons = ""): Response {
+  return comboUnavailableResponse(new NoAvailableComboTargetsError(comboId, reasons).message, {
     retryAfter: comboCooldownRetryAfterSeconds(comboId, now),
   });
 }

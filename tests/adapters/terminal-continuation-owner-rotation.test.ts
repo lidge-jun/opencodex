@@ -5,7 +5,10 @@ import { join } from "node:path";
 import type { ProviderAdapter } from "../../src/adapters/base";
 import { saveConfig } from "../../src/config";
 import { clearKeyCooldowns } from "../../src/providers/key-failover";
-import { reasoningReplayKeyCredentialIdentity } from "../../src/responses/reasoning-replay-cache";
+import { clearAnthropicAccountPoolState } from "../../src/oauth/anthropic-routing";
+import { getValidAccessSnapshotForAccount } from "../../src/oauth";
+import { getAccountSet, saveCredential, setActiveAccount } from "../../src/oauth/store";
+import { reasoningReplayKeyCredentialIdentity, reasoningReplayOAuthCredentialIdentity } from "../../src/responses/reasoning-replay-cache";
 import {
   clearResponseStateForTests,
   previousResponseProviderState,
@@ -22,6 +25,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 interface BuildObservation {
   key: string;
   continuation?: string;
+  stripReasoning?: true;
 }
 
 let builds: BuildObservation[] = [];
@@ -76,7 +80,8 @@ const actualResolveAdapter = actualResolver.resolveAdapter;
 mock.module("../../src/server/adapter-resolve", () => ({
   ...actualResolver,
   resolveAdapter(provider: OcxProviderConfig, cacheRetention?: "none" | "short" | "long") {
-    if (provider.adapter !== "test-terminal-owned") {
+    // Match on the destination: the "anthropic" provider is wire-pinned to the anthropic adapter.
+    if (provider.baseUrl !== "https://owned-terminal.test/v1") {
       return actualResolveAdapter(provider, cacheRetention);
     }
     const key = provider.apiKey ?? "";
@@ -86,7 +91,11 @@ mock.module("../../src/server/adapter-resolve", () => ({
       name: "anthropic",
       buildRequest(parsed: OcxParsedRequest) {
         const continuation = parsed._providerContinuation?.kiro?.conversationId;
-        builds.push({ key, ...(continuation ? { continuation } : {}) });
+        builds.push({
+          key,
+          ...(continuation ? { continuation } : {}),
+          ...(parsed._stripReasoningEncryptedContent ? { stripReasoning: true as const } : {}),
+        });
         return {
           url: "https://owned-terminal.test/v1/messages",
           method: "POST",
@@ -121,6 +130,7 @@ describe("terminal continuation provider-owner rotation", () => {
     // Take the writer lease after this case installs its home so direct handler dispatch can open the spend journal.
     releaseSpendHome = acquireOwnedSpendHome();
     builds = [];
+    clearAnthropicAccountPoolState();
     clearKeyCooldowns();
     clearResponseStateForTests();
   });
@@ -130,6 +140,7 @@ describe("terminal continuation provider-owner rotation", () => {
     releaseSpendHome?.();
     releaseSpendHome = undefined;
     globalThis.fetch = originalFetch;
+    clearAnthropicAccountPoolState();
     if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousHome;
     clearKeyCooldowns();
@@ -247,6 +258,95 @@ describe("terminal continuation provider-owner rotation", () => {
       { key: keyA, continuation: "private-a" },
       { key: keyB },
       { key: keyB, continuation: "private-b" },
+    ]);
+    expect(phases).toEqual([]);
+  });
+
+  test.each([
+    ["initial send", false],
+    ["terminal continuation", true],
+  ] as const)("Anthropic pool rotation on the %s rebinds the replay owner to the rotated account", async (_label, continuation) => {
+    for (let index = 0; index < 2; index += 1) {
+      await saveCredential("anthropic", {
+        access: `anthropic-access-${index}`,
+        refresh: `anthropic-refresh-${index}`,
+        expires: Date.now() + 3_600_000,
+        accountId: `anthropic-account-${index}`,
+      }, { addAccount: true });
+    }
+    const [idB, idA] = getAccountSet("anthropic")?.accounts.map(account => account.id) ?? [];
+    expect(await setActiveAccount("anthropic", idA!)).toBe(true);
+    const ownerA = reasoningReplayOAuthCredentialIdentity(await getValidAccessSnapshotForAccount("anthropic", idA!));
+    const ownerB = reasoningReplayOAuthCredentialIdentity(await getValidAccessSnapshotForAccount("anthropic", idB!));
+    expect(ownerB).toBeDefined();
+    expect(ownerB).not.toBe(ownerA);
+    const config: OcxConfig = {
+      port: 0,
+      defaultProvider: "anthropic",
+      providers: {
+        anthropic: {
+          adapter: "test-terminal-owned",
+          baseUrl: "https://owned-terminal.test/v1",
+          authMode: "oauth",
+          models: ["model"],
+        },
+      },
+    } as OcxConfig;
+    saveConfig(config);
+
+    const phases = ["seed", ...(continuation ? ["plan"] : []), "rate-limit", "rotated", "follow"];
+    const seenAuthorization: string[] = [];
+    globalThis.fetch = (async (_input, init) => {
+      seenAuthorization.push(new Headers(init?.headers).get("authorization") ?? "");
+      const phase = phases.shift();
+      if (!phase) throw new Error("unexpected extra upstream request");
+      if (phase === "rate-limit") {
+        return Response.json({ error: { message: "rotate" } }, { status: 429, headers: { "retry-after": "30" } });
+      }
+      return new Response("", { headers: { "x-test-phase": phase } });
+    }) as typeof fetch;
+    // A stable thread binds the reasoning-replay serving identity across turns.
+    const post = (body: Record<string, unknown>) => handleResponses(
+      new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json", "thread-id": `thread-anthropic-rotation-${continuation}` },
+        body: JSON.stringify({ model: "anthropic/model", stream: false, store: true, ...body }),
+      }),
+      config,
+      { model: "", provider: "" },
+    );
+
+    const seed = await post({ input: "seed" });
+    expect(seed.status).toBe(200);
+    const seedJson = await seed.json() as { id: string };
+    expect(previousResponseProviderState(seedJson.id)).toMatchObject({ __ocxOwner: { credentialIdentity: ownerA } });
+
+    const rotated = await post({
+      previous_response_id: seedJson.id,
+      input: continuation ? "Please modify the file now" : "hello",
+      tools: [{ type: "function", name: "read_file", description: "read a file", parameters: { type: "object" } }],
+    });
+    expect(rotated.status).toBe(200);
+    const rotatedJson = await rotated.json() as { id: string };
+    // The turn was served by B, so B owns the state persisted for the next turn.
+    expect(previousResponseProviderState(rotatedJson.id)).toMatchObject({
+      __ocxOwner: { credentialIdentity: ownerB },
+      kiro: { conversationId: "private-b" },
+    });
+
+    const follow = await post({ previous_response_id: rotatedJson.id, input: "follow up" });
+    expect(follow.status).toBe(200);
+    const a = "anthropic-access-1";
+    const b = "anthropic-access-0";
+    expect(seenAuthorization).toEqual([a, ...(continuation ? [a] : []), a, b, b].map(key => `Bearer ${key}`));
+    // B never receives A's continuation or reasoning, and the follow-up on B keeps B's
+    // continuation and its reasoning replay instead of stripping it as foreign.
+    expect(builds).toEqual([
+      { key: a },
+      ...(continuation ? [{ key: a, continuation: "private-a" }] : []),
+      { key: a, continuation: "private-a" },
+      { key: b, stripReasoning: true },
+      { key: b, continuation: "private-b" },
     ]);
     expect(phases).toEqual([]);
   });
