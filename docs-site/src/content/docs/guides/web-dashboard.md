@@ -204,7 +204,11 @@ The **Usage** summary and Models/Providers tables show end-to-end output through
 
 The **Usage** Models and Providers tables show the estimated priced portion for each row. Requests
 without a matching price or usable usage are counted as excluded beside that amount when the proxy
-reports pricing coverage fields. A row with only excluded requests shows an em dash with that count
+reports pricing coverage fields. Usage that was only partly measured (`unreported` or `unsupported`)
+is not priced, and one excluded part excludes the whole request from that row's priced count. A
+leg that reached no upstream, or that upstream refused with an HTTP error before any output, spent
+nothing and does not; a leg whose response began (or ended without a status) but reported no usage
+may have been billed, so it does. A row with only excluded requests shows an em dash with that count
 instead of a zero-dollar estimate, and a displayed zero-dollar value is a confirmed priced estimate.
 An older proxy that reports no coverage fields keeps a bare em dash with no count, so missing
 coverage stays distinct from an all-excluded row and from a confirmed zero estimate.

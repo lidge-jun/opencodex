@@ -15,6 +15,11 @@ import {
   type WindowsProxyBypassValues,
 } from "../../src/lib/windows-system-proxy";
 import type { OcxConfig } from "../../src/types";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { inspectDesktopPickerProfile } from "../../src/claude/desktop-picker-profile";
+import { startConnectProxy } from "../../src/claude/intercept/connect-proxy";
 
 const CLASH = parseWindowsProxyServer("127.0.0.1:7897");
 const CLASH_BYPASS = "localhost;127.*;192.168.*;10.*;<local>";
@@ -191,27 +196,63 @@ describe("collectDesktopSystemProxy", () => {
     claudeCode: { desktopMode: "first-party" } } as Pick<OcxConfig, "claudeCode" | "clientIntegrations" | "port" | "runtimeRole">;
   const untouchable = () => { throw new Error("registry read off the applicable path"); };
 
-  test("never touches the registry off Windows", () => {
+  test("a selected Windows picker profile with a blind relay bypasses the system proxy without in-process runtime state", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-doctor-picker-"));
+    const library = join(root, "configLibrary");
+    const options = { platform: "win32" as const, env: { OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR: library }, homeDir: root };
+    const relay = await startConnectProxy(0, {
+      interceptPort: 1, interceptHosts: [], selectTunnel: () => ({ kind: "blind" }),
+      dialUpstream: () => { throw new Error("doctor must not dial an upstream"); },
+    });
+    try {
+      mkdirSync(library, { recursive: true });
+      writeFileSync(join(library, "_meta.json"), JSON.stringify({
+        appliedId: "picker", entries: [{ id: "picker", name: "opencodex-picker" }],
+      }));
+      writeFileSync(join(library, "picker.json"), JSON.stringify({ egressProxyUrl: `http://127.0.0.1:${relay.port}` }));
+      const result = await collectDesktopSystemProxy(config, {
+        platform: "win32", firstPartyState: () => "applied",
+        inspectPickerProfile: () => inspectDesktopPickerProfile(options),
+        readSystemProxy: () => CLASH, readBypass: () => NO_WPAD,
+      });
+      expect(result).toEqual({ kind: "not-applicable" });
+      expect(formatDesktopSystemProxyLines(result)).toEqual([]);
+      await relay.close();
+      expect(await collectDesktopSystemProxy(config, {
+        platform: "win32", firstPartyState: () => "applied",
+        inspectPickerProfile: () => inspectDesktopPickerProfile(options),
+        readSystemProxy: () => CLASH, readBypass: () => NO_WPAD,
+      })).toEqual(verdict("conflict"));
+    } finally {
+      await relay.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("never touches the registry off Windows", async () => {
     for (const platform of ["linux", "darwin"] as const) {
-      expect(collectDesktopSystemProxy(config, { platform, readSystemProxy: untouchable, readBypass: untouchable }))
+      expect(await collectDesktopSystemProxy(config, { platform, readSystemProxy: untouchable, readBypass: untouchable,
+        inspectPickerProfile: untouchable, pickerRelayAvailable: untouchable }))
         .toEqual({ kind: "not-applicable" });
     }
   });
 
-  test("never touches the registry on Windows without a Desktop first-party env", () => {
-    const deps: DesktopSystemProxyDeps = { platform: "win32", firstPartyState: () => "off", readSystemProxy: untouchable, readBypass: untouchable };
-    expect(collectDesktopSystemProxy(config, deps)).toEqual({ kind: "not-applicable" });
+  test("never touches the registry on Windows without a Desktop first-party env", async () => {
+    const deps: DesktopSystemProxyDeps = { platform: "win32", firstPartyState: () => "off", readSystemProxy: untouchable, readBypass: untouchable,
+      inspectPickerProfile: untouchable, pickerRelayAvailable: untouchable };
+    expect(await collectDesktopSystemProxy(config, deps)).toEqual({ kind: "not-applicable" });
   });
 
-  test("a stale first-party env on Windows never prints ok", () => {
+  test("a stale first-party env on Windows never prints ok", async () => {
     const stale = (systemProxy: DesktopSystemProxyInput["systemProxy"], bypass: WindowsProxyBypassValues): DesktopSystemProxyDeps =>
-      ({ platform: "win32", firstPartyState: () => "stale", readSystemProxy: () => systemProxy, readBypass: () => bypass });
+      ({ platform: "win32", firstPartyState: () => "stale", readSystemProxy: () => systemProxy, readBypass: () => bypass,
+        inspectPickerProfile: untouchable, pickerRelayAvailable: untouchable });
 
     for (const [systemProxy, bypass, kind] of [
       [{ kind: "disabled" }, NO_WPAD, "no-proxy"],
       [CLASH, BYPASSED, "bypassed"],
     ] as const) {
-      const result = collectDesktopSystemProxy(config, stale(systemProxy, bypass));
+      const result = await collectDesktopSystemProxy(config, stale(systemProxy, bypass));
       expect(result).toEqual(verdict(kind, { settingsStale: true }));
       const lines = formatDesktopSystemProxyLines(result);
       expect(lines.join("\n")).not.toContain("  ok");
@@ -219,15 +260,77 @@ describe("collectDesktopSystemProxy", () => {
       expect(lines.join("\n")).toContain("ocx ensure");
     }
 
-    const conflict = collectDesktopSystemProxy(config, stale(CLASH, NO_WPAD));
+    const conflict = await collectDesktopSystemProxy(config, stale(CLASH, NO_WPAD));
     expect(conflict).toEqual(verdict("conflict", { settingsStale: true }));
     const text = formatDesktopSystemProxyLines(conflict).join("\n");
     expect(text).toContain("!!");
     expect(text).toContain("ocx ensure");
   });
 
-  test("an applied env on Windows reads both registry surfaces", () => {
-    const deps: DesktopSystemProxyDeps = { platform: "win32", firstPartyState: () => "applied", readSystemProxy: () => CLASH, readBypass: () => BYPASSED };
-    expect(collectDesktopSystemProxy(config, deps)).toEqual(verdict("bypassed"));
+  test("an applied env on Windows reads both registry surfaces", async () => {
+    const deps: DesktopSystemProxyDeps = { platform: "win32", firstPartyState: () => "applied", readSystemProxy: () => CLASH, readBypass: () => BYPASSED,
+      inspectPickerProfile: () => ({ kind: "absent" }) };
+    expect(await collectDesktopSystemProxy(config, deps)).toEqual(verdict("bypassed"));
+  });
+
+  test("registry diagnostics remain for absent, unselected, unsafe or unavailable picker profiles", async () => {
+    let registryReads = 0;
+    const deps: DesktopSystemProxyDeps = {
+      platform: "win32", firstPartyState: () => "applied",
+      readSystemProxy: () => { registryReads++; return CLASH; },
+      readBypass: () => { registryReads++; return NO_WPAD; },
+      pickerRelayAvailable: untouchable,
+    };
+    for (const kind of ["absent", "not_selected", "unsafe"] as const) {
+      const inspectPickerProfile: NonNullable<DesktopSystemProxyDeps["inspectPickerProfile"]> = () => kind === "absent"
+        ? { kind } : kind === "not_selected" ? { kind, entryId: "picker" } : { kind, reason: "profile_missing" };
+      expect(await collectDesktopSystemProxy(config, { ...deps, inspectPickerProfile })).toEqual(verdict("conflict"));
+    }
+    const inspectPickerProfile: NonNullable<DesktopSystemProxyDeps["inspectPickerProfile"]> = () =>
+      ({ kind: "applied", entryId: "picker", proxyUrl: "http://127.0.0.1:10201" });
+    for (const pickerRelayAvailable of [() => false, async () => { throw new Error("relay unavailable"); }]) {
+      expect(await collectDesktopSystemProxy(config, { ...deps, inspectPickerProfile, pickerRelayAvailable })).toEqual(verdict("conflict"));
+    }
+    expect(await collectDesktopSystemProxy(config, { ...deps, inspectPickerProfile: untouchable })).toEqual(verdict("conflict"));
+    expect(registryReads).toBe(12);
+  });
+
+  test("picker off does not hide registry diagnostics behind a leftover selected profile", async () => {
+    expect(await collectDesktopSystemProxy({ ...config, claudeCode: { ...config.claudeCode, intercept: { picker: false } } }, {
+      platform: "win32", firstPartyState: () => "applied",
+      inspectPickerProfile: untouchable, pickerRelayAvailable: untouchable,
+      readSystemProxy: () => CLASH, readBypass: () => NO_WPAD,
+    })).toEqual(verdict("conflict"));
+  });
+
+  test("available picker relay skips both registry reads without checking picker trust or effectiveness", async () => {
+    const urls: string[] = [];
+    expect(await collectDesktopSystemProxy(config, {
+      platform: "win32", firstPartyState: () => "applied",
+      inspectPickerProfile: () => ({ kind: "applied", entryId: "picker", proxyUrl: "http://127.0.0.1:10201" }),
+      pickerRelayAvailable: async url => { urls.push(url); return true; },
+      readSystemProxy: untouchable, readBypass: untouchable,
+    })).toEqual({ kind: "not-applicable" });
+    expect(urls).toEqual(["http://127.0.0.1:10201"]);
+  });
+
+  test("a foreign HTTP listener or credential-bearing intercept proxy is not a Desktop picker relay", async () => {
+    const foreign = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("Only CONNECT", {
+      status: 405, headers: { Allow: "CONNECT" },
+    }) });
+    const intercept = await startConnectProxy(0, { interceptPort: 1, authToken: "synthetic-test-token",
+      dialUpstream: () => { throw new Error("doctor must not dial an upstream"); } });
+    try {
+      for (const port of [foreign.port, intercept.port]) {
+        expect(await collectDesktopSystemProxy(config, {
+          platform: "win32", firstPartyState: () => "applied",
+          inspectPickerProfile: () => ({ kind: "applied", entryId: "picker", proxyUrl: `http://127.0.0.1:${port}` }),
+          readSystemProxy: () => CLASH, readBypass: () => NO_WPAD,
+        })).toEqual(verdict("conflict"));
+      }
+    } finally {
+      foreign.stop(true);
+      await intercept.close();
+    }
   });
 });

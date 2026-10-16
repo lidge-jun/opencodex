@@ -23,6 +23,7 @@ import {
   type DesktopPickerProfileOptions,
 } from "./desktop-picker-profile";
 import { resolveClaudeDesktopMode, observeClaudeDesktopMode } from "./desktop-first-party";
+import { supportsDesktopPicker } from "./desktop-picker-platform";
 
 /** Desktop no longer selects the picker profile, so removing the CA's trust cannot strand it. */
 function profileReleased(profile: DesktopPickerProfileInspection): boolean {
@@ -91,7 +92,7 @@ function profileOptions(deps: DesktopPickerControllerDeps): DesktopPickerProfile
 }
 
 function statusReasonForConfig(config: OcxConfig, platform: NodeJS.Platform, proxyBound: boolean): DesktopPickerReason {
-  if (platform !== "darwin") return "unsupported_platform";
+  if (!supportsDesktopPicker(platform)) return "unsupported_platform";
   if (resolveClaudeDesktopMode(config, observeClaudeDesktopMode(config)) !== "first-party") return "not_first_party";
   if (!claudeDesktopIntegrationEnabled(config)) return "integration_off";
   if (config.claudeCode?.intercept?.picker === false) return "disabled";
@@ -101,11 +102,11 @@ function statusReasonForConfig(config: OcxConfig, platform: NodeJS.Platform, pro
 
 function emptyStatus(config: OcxConfig, platform: NodeJS.Platform, reason: DesktopPickerReason): DesktopPickerStatus {
   return {
-    desired: platform === "darwin"
+    desired: supportsDesktopPicker(platform)
       && claudeDesktopIntegrationEnabled(config)
       && resolveClaudeDesktopMode(config, observeClaudeDesktopMode(config)) === "first-party"
       && config.claudeCode?.intercept?.picker !== false,
-    supported: platform === "darwin",
+    supported: supportsDesktopPicker(platform),
     trust: "unknown",
     profile: "absent",
     listenerReady: false,
@@ -142,7 +143,7 @@ export function createDesktopPickerController(deps: DesktopPickerControllerDeps)
     const trust = trustOverride ?? runtime.trust;
     const effective = runtime.effective && profileCurrent && trust === "trusted";
     let reason: DesktopPickerReason;
-    if (platform !== "darwin") reason = "unsupported_platform";
+    if (!supportsDesktopPicker(platform)) reason = "unsupported_platform";
     else if (!runtime.desired) reason = statusReasonForConfig(deps.readConfig(), platform, deps.proxyPort() !== null);
     else if (deps.proxyPort() === null) reason = "proxy_unavailable";
     else if (trust !== "trusted") reason = "trust_pending";
@@ -178,7 +179,7 @@ export function createDesktopPickerController(deps: DesktopPickerControllerDeps)
 
   async function untrustCurrentCa(): Promise<boolean> {
     const caPath = pickerCaCertPath(deps.configDir);
-    if (platform !== "darwin" || !existsSync(caPath)) return true;
+    if (!supportsDesktopPicker(platform) || !existsSync(caPath)) return true;
     try {
       const sha1 = pickerCaFingerprints(readFileSync(caPath, "utf8")).sha1;
       return (await untrustPickerCa(caPath, sha1, deps.security, platform)).ok;
@@ -207,7 +208,7 @@ export function createDesktopPickerController(deps: DesktopPickerControllerDeps)
       return withTrustFailure({ ...runtimeStatus(observedTrust), reason }, trustFailed);
     };
     const check = (config: OcxConfig, includePreference: boolean): DesktopPickerReason | null => {
-      if (platform !== "darwin") return "unsupported_platform";
+      if (!supportsDesktopPicker(platform)) return "unsupported_platform";
       if (resolveClaudeDesktopMode(config, observeClaudeDesktopMode(config)) !== "first-party") return "mode_not_committed";
       if (!claudeDesktopIntegrationEnabled(config)) return "integration_off";
       if (includePreference && config.claudeCode?.intercept?.picker === false) return "disabled";
@@ -336,7 +337,7 @@ export async function removeDesktopPickerArtifacts(options: { configDir?: string
     return { ok: false, residual };
   }
   const caPath = pickerCaCertPath(configDir);
-  if (platform === "darwin" && existsSync(caPath)) {
+  if (supportsDesktopPicker(platform) && existsSync(caPath)) {
     try {
       const sha1 = pickerCaFingerprints(readFileSync(caPath, "utf8")).sha1;
       if (!(await untrustPickerCa(caPath, sha1, options.security, platform)).ok) residual.push("trust");

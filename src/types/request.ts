@@ -64,6 +64,11 @@ export interface OcxParsedRequest {
   _nativeReasoningBoundOwner?: NativeReasoningOwner;
   _nativeReasoningMint?: { owner?: NativeReasoningOwner };
   /**
+   * The Claude client's typed Anthropic web tools, as declared. Only the anthropic adapter reads
+   * them, and only for api.anthropic.com; every other destination never sees them.
+   */
+  _anthropicServerTools?: readonly Record<string, unknown>[];
+  /**
    * Boundary between replayed history and this turn's newly appended input. Usually the
    * items the proxy restored from local previous_response_id state; also set when the
    * CLIENT already carried that history verbatim and the proxy skipped the prepend.
@@ -436,7 +441,11 @@ export type AdapterEvent =
   // output_item.added(in_progress) and end → the matching output_item.done(completed|failed) under
   // the SAME output index, so the activity animates instead of flashing completed instantly.
   | { type: "web_search_call_begin"; id: string }
-  | { type: "web_search_call_end"; id: string; queries: string[]; status?: "completed" | "failed"; sources?: OcxUrlCitation[] }
+  | {
+      type: "web_search_call_end"; id: string; queries: string[]; status?: "completed" | "failed"; sources?: OcxUrlCitation[];
+      /** Anthropic's server-side web_fetch (adapters/anthropic.ts): the opened page and its `web_fetch_tool_result` content, verbatim. */
+      fetch?: { url: string; result: unknown };
+    }
   | {
       type: "done";
       usage?: OcxUsage;

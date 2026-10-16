@@ -175,7 +175,7 @@ describe("combo mandatory reasoning replay failover", () => {
     expect(response.status).toBe(503);
     expect(response.headers.get("content-type")).toBe("application/json");
     expect(await response.text()).toBe(
-      '{"error":{"message":"No available targets for combo: free","type":"server_error","code":"combo_unavailable"}}',
+      '{"error":{"message":"No available targets for combo: free (missing/bad-model: provider missing)","type":"server_error","code":"combo_unavailable"}}',
     );
   });
 

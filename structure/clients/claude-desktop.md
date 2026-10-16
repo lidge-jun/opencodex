@@ -121,7 +121,8 @@ and the auto-detect (WPAD) flag in `Connections\DefaultConnectionSettings`, and 
 a bypass, no covering proxy, or an undecidable PAC script or WPAD. A failed registry read is
 reported as unreadable, never as an absent value, and a stale settings env never earns an `ok`. It
 never prints the proxy value and never records a doctor failure, because the CLI and other clients
-still route.
+still route. An applied, selected picker profile uses Desktop's app-owned fixed egress proxy while that proxy is available, including when missing trust leaves the picker pending and `claude.ai` tunnels relay blindly. Missing trust preserves the profile and its selection. The system-proxy observation applies to picker-off installs and pending installs with no applied picker profile.
+Doctor verifies the selected profile's loopback CONNECT relay directly, independently of picker trust or effectiveness. Off, absent, unselected, unreadable, stale-settings and unavailable-relay cases retain the registry diagnostic; a credential-bearing main intercept proxy does not count as Desktop's egress relay.
 
 Surfaces: `ocx claude desktop apply [--first-party|--gateway]` in `src/cli/claude-desktop.ts`;
 `ocx claude config set --first-party on|off` and the Claude Code page switch control the CLI intent; `ocx ensure` refreshes a stale or absent env while it is on.
@@ -183,17 +184,20 @@ The shared CONNECT primitive accepts optional `allowedTargets` authorities. It s
 normalizes that list at startup; an empty list denies all, and other host/port pairs receive 403
 before tunnel selection or dialing. Authentication and loopback refusal remain in force.
 Existing Claude consumers omit this option and retain blind forwarding; it enables no new integration or certificate trust.
+Windows trust removal in `src/claude/intercept/picker-trust-windows.ts` requires the exact picker common name and fingerprint before deleting a current-user Root entry. Public recovery certificates are verified as self-signed picker roots before removal; legacy roots may be removed without matching the current installation extension profile.
 Windows local-CA publication in `src/claude/intercept/local-ca-files.ts` hardens legacy inherited DACLs only after verifying the current owner and exclusively current-user, SYSTEM or Administrators grants; already private directories skip hardening. Newly created exclusive files and directories are hardened before strict owner/ACL verification and before CA access. ACL verification, including inherited SQLite sidecar ACLs, is memoized by bigint device/inode/birthtime within one publication; birthtime distinguishes recycled file IDs while preserving same-volume rename identity. Path and descriptor identity checks remain active on every access, and removed or replaced entries retire their memo.
 The authority primitive accepts `validityDays` from 1 through 3650 for short-lived callers; omitted values preserve the existing 3650-day CA lifetime. This parameter does not install trust or rotate an existing authority.
 
-On macOS, when the lifecycle passes `loadPickerRoutes` (the server always does), `startClaudeIntercept` also
+Gateway remains the default Desktop mode. On macOS and Windows, picker intent defaults on only within the chosen first-party mode: either an explicit Desktop integration `false` or `claudeCode.intercept.picker: false` disables it. Default intent does not install certificate trust; startup and status only inspect trust, and explicit activation owns installation.
+
+When the lifecycle passes `loadPickerRoutes` (the server always does), `startClaudeIntercept` on macOS, or on Windows with picker intent or an applied profile requiring recovery,
 wires Claude Desktop picker mode: a second loopback CONNECT proxy on the dedicated picker proxy
 port (`getClaudeInterceptState()?.pickerProxyPort`), used as Desktop's pinned egress proxy. Desktop
 also hands that proxy to the Claude Code processes it spawns, and the two trust different CAs, so
 the tunnel is chosen per client from the CONNECT head: a tunnel without a browser User-Agent (Claude
 Code, trusting only the intercept CA) gets the `api.anthropic.com` intercept and every other target
 blind, never the picker; a tunnel with Chromium's `Mozilla/` User-Agent (the app, trusting only the
-login keychain) is asked of the picker runtime (`src/claude/intercept/picker-runtime.ts`), which
+login keychain on macOS or the current-user Root store on Windows) is asked of the picker runtime (`src/claude/intercept/picker-runtime.ts`), which
 blind-tunnels every target except `claude.ai:443`.
 Production always uses the configured adjacent ports. Lifecycle tests inject only the CONNECT
 factory and bind the real handlers on kernel-assigned ports; this preserves request handling while
@@ -204,9 +208,9 @@ any local process already reaches (the `api.anthropic.com` intercept is on the C
 too; the `claude.ai` relay verifies upstream and adds no credential) and breaks only its own TLS,
 because each terminator presents a certificate only its intended client trusts. `claude.ai:443` is
 intercepted only while the runtime's cached
-decision is armed: macOS, persisted resolved Desktop mode first-party, Desktop intent on,
+decision is armed: macOS or Windows, persisted resolved Desktop mode first-party, Desktop intent on,
 `claudeCode.intercept.picker !== false`, no disarm latch, listener up, and the current picker CA
-trusted in the login keychain (`picker-trust.ts`). A loopback TCP front in `picker-listener.ts`
+trusted in the OS store (`picker-trust.ts`): the login keychain on macOS, the current-user Root store on Windows by exact fingerprint with a verified leaf. A loopback TCP front in `picker-listener.ts`
 reads ClientHello ALPN through `src/claude/intercept/client-hello.ts`, reassembling across TCP
 splits and up to 16 TLS records within 64 KiB of wire bytes and a 10-second deadline. It splices
 the untouched connection to an HTTP/2 server when the client offers `h2`, or to the native
@@ -256,11 +260,10 @@ name constraints permitting only `claude.ai` and excluding every IPv4 and IPv6 a
 signing identity is protected by the OS credential store and scoped to the canonical config directory;
 normal restarts reuse the same validated certificate and key. No plaintext picker signing key is
 stored in that directory; public certificates and non-secret identity metadata remain under
-`<OPENCODEX_HOME>/claude-picker/`. Every unbound intercept startup attempt makes a best-effort cleanup of legacy `ca.key` before eligibility checks, including client role, disabled routing/interception, and ephemeral public ports; cleanup failures do not block startup. See the [runtime lifecycle contract](../runtime.md#claude-intercept-pair). Windows and Linux skip picker CA, credential-store and proxy construction entirely; the main intercept pair remains available.
+`<OPENCODEX_HOME>/claude-picker/`. Every unbound intercept startup attempt makes a best-effort cleanup of legacy `ca.key` before eligibility checks, including client role, disabled routing/interception, and ephemeral public ports; cleanup failures do not block startup. See the [runtime lifecycle contract](../runtime.md#claude-intercept-pair). Linux skips picker CA, credential-store and proxy construction entirely; the main intercept pair remains available.
 On restart the lifecycle keeps the applied profile and restores through the controller with
 `allowTrustPrompt: false`. An unchanged approved identity with an available credential store needs
-no Certificate Trust Settings add/remove operation. Missing, revoked or unknown trust leaves the
-picker pending; restore never installs trust. Explicit `on` or `trust` completes the trust step.
+no macOS Certificate Trust Settings add/remove operation. Missing, revoked or unknown trust leaves the picker pending; restart and status never install trust. Explicit `on`, `trust`, or first-party apply completes the trust step, including the Windows current-user Root confirmation when needed.
 Legacy predecessor cleanup may still require consent during migration. Native keychain unlock and
 application-access dialogs are controlled by macOS; restart or upgrade does not guarantee their absence.
 `picker-ca-store.ts` owns the versioned OS credential service, canonical-config identity namespace,
@@ -272,14 +275,12 @@ predecessor before writing the credential, verifies readback, then commits metad
 it removes the journal last. Recovery requires matching journal/store identity; missing initialized
 credentials, unavailable storage or inconsistent metadata fail closed without publishing a replacement.
 Gateway/off startup does not read or initialize an OS picker credential unless an applied picker
-profile needs recovery. Its dormant macOS runtime/controller remains available for later explicit
-activation, which uses the same persistent authority path.
-Trust is added without a policy string: Chromium
+profile needs recovery. macOS retains its dormant runtime/controller for later explicit activation;
+Windows without picker intent or an applied profile constructs neither picker runtime/controller nor relay. Activation uses the same persistent authority path.
+On macOS trust is added without a policy string: Chromium
 skips host-scoped trust settings, so `inspectPickerTrust` treats a current CA whose exported user
 trust settings carry `kSecTrustSettingsPolicyString` as untrusted and an explicit trust step replaces it; an
-export it cannot read makes trust `unknown`, which never arms. A rotated-out picker certificate is
-removed from the login keychain as its replacement is published, and a failed removal stops the
-picker arming. Publication of `ca.pem` and `ca-owner.json` happens only inside the
+export it cannot read makes trust `unknown`, which never arms. On Windows trust is the current-user Root store entry matching the exact fingerprint with a verified leaf. The PowerShell runner terminates its child on timeout or output-read failure and preserves the failure category. A rotated-out picker certificate is removed from the login keychain on macOS or the current-user Root store on Windows as its replacement is published, and a failed removal stops the picker arming. Publication of `ca.pem` and `ca-owner.json` happens only inside the
 `ca.lock.sqlite` lock (`picker-ca.ts`): lock acquisition is reported separately from the
 callback, so a busy lock publishes nothing, and a missing or mismatched owner record for our own
 certificate is rewritten under the lock so a second process cannot rotate out a live owner's
@@ -341,11 +342,9 @@ enable attempt added trust and a later check or profile write fails, it removes 
 an earlier successful picker profile keeps the trust it needs. The owned profile helpers in
 `src/claude/desktop-picker-profile.ts` use the standard row `opencodex-picker`, whose file contains
 only `egressProxyUrl`. The previous Desktop selection is stored in
-`<configDir>/claude-picker/profile-state.json`, never in Desktop's `_meta.json`.
+`<configDir>/claude-picker/profile-state.json`, never in Desktop's `_meta.json`. On Windows the same row is written through the existing `%LOCALAPPDATA%` configLibrary writer. Full `ocx uninstall` (`src/cli/uninstall-client-state.ts`) runs the same picker cleanup after Desktop disconnect and before config removal: profile release, current-root untrust, then the pending-predecessor drain. Any residual refuses removal, so `ca.pem` and the pending journal still name the root a retry must untrust.
 
-The local controls are `ocx claude desktop picker on|off|status|trust`. With a live server, `on`,
-`off`, and transition cleanup use the controller; `trust` performs the operator's local keychain
-step and then reports the result to the server. Before installing the root, the CLI independently
+The local controls are `ocx claude desktop picker on|off|status|trust`; CLI help, toggle messages and GUI trust states use OS-neutral certificate-trust wording. With a live server, `on`, `off`, and transition cleanup use the controller; `trust` performs the operator's local OS trust step (login keychain on macOS, current-user Root confirmation on Windows) and then reports the result to the server. Before installing the root, the CLI independently
 requires the picker common name on a self-signed CA and the exact critical `claude.ai`-only DNS
 and all-IP exclusion constraints, plus the full minted extension profile — critical `CA:TRUE`
 basicConstraints, a `keyCertSign|cRLSign`-only keyUsage, a non-critical subjectKeyIdentifier, and
@@ -569,7 +568,7 @@ Translated tool results in `src/claude/inbound.ts` retain nonempty string `tool_
 
 `src/claude/inbound.ts` bounds the text-carrier skill-directory probe to 4,096 UTF-16 code units, plus one character to recognize the terminating newline. A longer first line is preserved intact instead of being scanned or stubbed; normal POSIX, Windows, mixed and UNC separators retain their basename matching. The existing 10,000-character payload threshold and `claudeCode.blockedSkills` policy remain: `claude-api` is blocked by default, and an explicit empty list disables elision. Native Anthropic passthrough and tool-call/result pairing are unchanged. `tests/claude-integration/claude-inbound.test.ts` covers the exact 4,096/4,097 boundary and a long newline-free carrier.
 
-`src/claude/inbound-content-options.ts` strips Claude Code's leading `x-anthropic-billing-header:` line from a string system prompt or from the first text block of a system array before it becomes Responses `instructions`, dropping a block left empty. The line's `cch` value rotates per request, so keeping it made the translated prefix and the system-derived fallback `prompt_cache_key` change every turn (#6627). The match is anchored at the prompt start, like the Antigravity strip in `src/adapters/google.ts`; native Anthropic passthrough does not use this translation and keeps the client preamble. `tests/claude-integration/claude-inbound.test.ts` covers string and array systems, header-only blocks, later mentions and key stability.
+`src/claude/inbound-content-options.ts` strips Claude Code's leading `x-anthropic-billing-header:` line from a string system prompt or from the first text block of a system array before it becomes Responses `instructions`, dropping a block left empty. The line's `cch` value rotates per request, so keeping it made the translated prefix and the system-derived fallback `prompt_cache_key` change every turn (#6627). The match is anchored at the prompt start, like the Antigravity strip in `src/adapters/google.ts`; native Anthropic passthrough does not use this translation and keeps the client preamble. `tests/claude-integration/claude-inbound.test.ts` covers string and array systems, header-only blocks, later mentions and key stability. The same module's `declaredAnthropicServerTools` reads the caller's typed `web_search_*` / `web_fetch_*` declarations unchanged; `src/server/claude-messages.ts` hands them to the Responses core out of body, like the native reasoning replay, and the core keeps them on `parsed._anthropicServerTools` only for `inboundWire: "anthropic"`, so the translated body and every non-Anthropic leg stay as before. `tests/claude-integration/claude-translated-server-tools.test.ts` covers the Anthropic wire, a third-party Anthropic-compatible endpoint and a GPT leg. The translated Messages lane preserves the caller's output cap for non-canonical Responses gateways; canonical ChatGPT parameter stripping remains in its adapter. An explicit operator `cacheRetention` wins; otherwise `src/claude/inbound.ts` selects long retention only when every declared caller breakpoint requests one hour, including nested content and top-level automatic caching. Mixed TTLs retain the default.
 
 `src/claude/outbound.ts` carries a Responses provider's own `encrypted_content` in an `ocxr1:` `nat` envelope (`src/responses/reasoning-envelope.ts`) only when the serving attempt has committed and `src/server/responses/core-replay.ts` supplied a durable destination and credential owner. The `nat.tag` HMAC binds the exact blob to that owner and the installation's persisted salt. `src/claude/inbound.ts` restores the blob and item id only for the same client-facing model; each route binding verifies the tag against its effective endpoint, including `responsesPath`, and generation-bearing credential, then removes a mismatch from both the raw reasoning item and the parser's thinking-signature carrier before send. Missing owner or tag fails closed, including direct-forward credentials and OAuth generation changes. Native Anthropic ingress projects away every `nat` on both native branches, dropping blob-only blocks and leaving signed or visible-text fields intact. A thinking block that closes before serving commit has no `nat`. Translated bodies that reason request `include: ["reasoning.encrypted_content"]`; a body without reasoning does not. Anthropic `sig` and `red` envelopes keep their existing behavior. `tests/claude-integration/claude-native-reasoning-provenance.test.ts` covers route ownership and native projection.
 

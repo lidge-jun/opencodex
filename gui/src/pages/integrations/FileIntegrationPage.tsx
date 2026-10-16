@@ -72,6 +72,7 @@ const DISABLE_COPY: ConsequenceCopy = {
 const SEMANTICS_KEY: Record<FileIntegrationClientId, TKey> = {
   opencode: "integrations.semantics.opencode",
   pi: "integrations.semantics.pi",
+  "gentle-shell": "integrations.semantics.gentleShell",
   omp: "integrations.semantics.omp",
   hermes: "integrations.semantics.hermes",
   openclaw: "integrations.semantics.openclaw",
@@ -94,6 +95,7 @@ const SEMANTICS_KEY: Record<FileIntegrationClientId, TKey> = {
 const TAB_LABEL_KEY: Record<FileIntegrationClientId, TKey> = {
   opencode: "integrations.tab.opencode",
   pi: "integrations.tab.pi",
+  "gentle-shell": "integrations.tab.gentleShell",
   omp: "integrations.tab.omp",
   hermes: "integrations.tab.hermes",
   openclaw: "integrations.tab.openclaw",

@@ -53,6 +53,12 @@ const ephemeralIntercept = {
   startClaudeInterceptProxy: (_port: number, options: Parameters<typeof startConnectProxy>[1]) => startConnectProxy(0, options),
 };
 
+// These cases exercise local request routing. Installed service ownership is covered
+// separately; querying the real Windows service manager can outlast the server watchdog.
+function startInterceptServer(port: number, options?: Parameters<typeof startServer>[1]) {
+  return startServer(port, { ...options, inspectNativeCodexOwnership: () => ({ ownership: "owned", reason: "isolated test home" }) });
+}
+
 async function waitForIntercept(): Promise<NonNullable<ReturnType<typeof getClaudeInterceptState>>> {
   for (let i = 0; i < 100; i++) {
     const state = getClaudeInterceptState();
@@ -86,7 +92,7 @@ test("Messages through CONNECT reach the router; other paths relay to the config
       intercept: { port: interceptPort },
     },
   } as unknown as OcxConfig);
-  const server = startServer(0, ephemeralIntercept);
+  const server = startInterceptServer(0, ephemeralIntercept);
   try {
     const state = await waitForIntercept();
     expect(state.proxyPort).toBeGreaterThan(0);
@@ -164,7 +170,7 @@ test("a first-party binding routes a picker id on the intercept only; the public
       intercept: { port: interceptPort, modelMap: { "claude-sonnet-4-6": "bindtarget/fake-model" } },
     },
   } as unknown as OcxConfig);
-  const server = startServer(0, ephemeralIntercept);
+  const server = startInterceptServer(0, ephemeralIntercept);
   try {
     const state = await waitForIntercept();
     const ca = readFileSync(state.caCertPath, "utf8");
@@ -216,7 +222,7 @@ test("an occupied configured port cannot steal an ephemeral bind; migration publ
     },
     claudeCode: { intercept: { port: blocker.port } },
   } as unknown as OcxConfig);
-  const server = startServer(0, ephemeralIntercept);
+  const server = startInterceptServer(0, ephemeralIntercept);
   try {
     const state = await waitForIntercept();
     expect(state.proxyPort).toBeGreaterThan(0);
@@ -241,7 +247,7 @@ test("an ephemeral public port starts no proxy unless intercept.port is explicit
     },
   };
   saveConfig({ ...base, port: 10100 } as unknown as OcxConfig);
-  const implicit = startServer(0);
+  const implicit = startInterceptServer(0);
   try {
     await Bun.sleep(100);
     expect(getClaudeInterceptState()).toBeNull();
@@ -251,7 +257,7 @@ test("an ephemeral public port starts no proxy unless intercept.port is explicit
 
   const proxyPort = 10200;
   saveConfig({ ...base, port: 10100, claudeCode: { intercept: { port: proxyPort } } } as unknown as OcxConfig);
-  const explicit = startServer(0, ephemeralIntercept);
+  const explicit = startInterceptServer(0, ephemeralIntercept);
   try {
     const state = await waitForIntercept();
     expect(state.proxyPort).toBeGreaterThan(0);
@@ -270,7 +276,7 @@ test("intercept.enabled=false starts no proxy", async () => {
     },
     claudeCode: { intercept: { enabled: false } },
   } as unknown as OcxConfig);
-  const server = startServer(0, ephemeralIntercept);
+  const server = startInterceptServer(0, ephemeralIntercept);
   try {
     await Bun.sleep(100);
     expect(getClaudeInterceptState()).toBeNull();

@@ -16,6 +16,9 @@ replacement health proof: lifecycle decisions, attestation and exit codes stay a
 and a known supervised target never earns a competing CLI recovery start. Command guard
 continuity follows [runtime ownership](runtime.md#background-service-runtime-ownership).
 
+The export roster and full help include `gentle-shell`, with a persistent-home and
+Pi link/shared-home remedy; this adds a client identity, not a new command or flag.
+
 ## Head and help navigation
 
 `src/cli/root.ts`, `src/cli/help.ts`, `src/cli/help-navigation.ts`

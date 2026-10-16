@@ -382,8 +382,16 @@ export function probeLaunchdLoadState(deps: {
   return { state: "not-loaded" };
 }
 
-/** Up to ~5 × 200 ms, the launchd twin of the Windows scheduler settle delays. */
-const LAUNCHD_SETTLE_ATTEMPTS = 5;
+/**
+ * Up to 125 × 200 ms = 25 s: long enough for an evicted job to finish EXITING. Measured on
+ * macOS 26: `bootout` returns at once, the label stays registered (`state = SIGTERMed`) until
+ * the process exits, and `bootstrap` fails with 5 for that whole window. The proxy drains on
+ * SIGTERM (`shutdownTimeoutMs`, 5 s default) behind a launcher that waits for it, so a 1 s
+ * settle bootstrapped into that window, the retry and the rollback raced it too, and the old
+ * job then exited leaving nothing loaded. launchd SIGKILLs at its default `ExitTimeOut` of
+ * 20 s, which bounds this wait.
+ */
+const LAUNCHD_SETTLE_ATTEMPTS = 125;
 
 const LAUNCHD_SETTLE_DELAY_MS = 200;
 

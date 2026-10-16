@@ -27,6 +27,7 @@ export const FILE_INTEGRATION_CLIENTS = [
   "kilo",
   "droid",
   "qoder",
+  "gentle-shell",
 ] as const;
 
 export const INTEGRATION_REFUSAL_REASONS: ReadonlySet<string> = new Set<IntegrationRefusalReason>([

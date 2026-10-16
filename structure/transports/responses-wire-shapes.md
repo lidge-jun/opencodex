@@ -397,7 +397,7 @@ Native passthrough SSE has TWO shapes, selected per request in
   The shared `createSseInspector` factory in `relay.ts` retains the complete inspection side effects,
   including the #44 late-terminal semantics.
 
-Both client readers retain a bounded, redacted message and the first structured refusal code from a bare upstream `error`. EOF synthesis also retains narrowly recognized rate-limit codes (`rate_limit_exceeded`, `rate_limit_error`) and overload codes (`server_is_overloaded`, `overloaded_error`); recognized types apply only without an explicit code.
+Both client readers retain a bounded, redacted message and the first structured refusal code from a bare upstream `error`. EOF synthesis also retains narrowly recognized rate-limit codes (`rate_limit_exceeded`, `rate_limit_error`) overload codes (`server_is_overloaded`, `overloaded_error`), and the client-refusal classes `invalid_request_error`, `authentication_error`, `permission_error`, `not_found_error` (400/401/403/404, the code repeating the class); recognized types apply only without an explicit code.
 At EOF without a real terminal they synthesize `response.failed` rather than `adapter_eof`; a code without a message still
 produces a terminal. Codex retries codes outside its fatal set, so code and message follow the same candidate precedence;
 recognized refusal copy is used only when the event has no code. A read failure after refusal reports that refusal (#5176).

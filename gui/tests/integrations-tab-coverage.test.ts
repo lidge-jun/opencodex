@@ -33,6 +33,11 @@ test("every tab hash is routable, so a tab can actually be reached", () => {
   expect(unroutable.map(tab => tab.hash)).toEqual([]);
 });
 
+test("Gentle Shell has a separate routable Connect tab", () => {
+  expect(TABS.find(tab => (tab.id as string) === "gentle-shell")?.hash).toBe("integrations/gentle-shell");
+  expect(resolveAppHashChange("integrations/pi").replaceTo).toBeNull();
+});
+
 test("FILE_CLIENTS carries no id the API does not know", () => {
   const known = new Set<string>(FILE_INTEGRATION_CLIENTS);
   expect([...FILE_CLIENTS].filter(id => !known.has(id))).toEqual([]);

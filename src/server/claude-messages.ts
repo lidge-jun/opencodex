@@ -28,13 +28,14 @@ import {
   planMessagesAntigravityDirect,
   type MessagesDirectPlan,
 } from "./messages-antigravity-direct";
-import { AnthropicRequestError, DesktopModelMappingUnavailableError, extractOcxEffortDirective, extractOcxRouteDirective, nativeAnthropicProjection, resolveInboundModel, type ClaudeCacheKeySource } from "../claude/inbound";
+import { AnthropicRequestError, callerCacheRetention, DesktopModelMappingUnavailableError, extractOcxEffortDirective, extractOcxRouteDirective, nativeAnthropicProjection, resolveInboundModel, type ClaudeCacheKeySource } from "../claude/inbound";
 import { nativeReasoningTag, type NativeReasoningOwner } from "../responses/reasoning-replay-cache";
 import { isKnownDesktop3pModelId, resolveDesktop3pAlias } from "../claude/desktop-3p";
 import { resolveAlias, claudeCodeNativeAlias, legacyAliasForNative } from "../claude/alias";
 import { recordDesktopRequest } from "../claude/desktop-health";
 import { stripOneMillionMarker } from "../claude/context-windows";
 import { captureClaudeInbound } from "../claude/inbound-debug";
+import { declaredAnthropicServerTools } from "../claude/inbound-content-options";
 import { claudeCodeForIngress } from "../claude/intercept/model-bindings";
 import { classifyInterceptClient } from "../claude/intercept/client-class";
 import { analyzeClaudeCompatibility, isClaudeCompatibilityMode } from "../claude/compatibility";
@@ -47,7 +48,7 @@ import {
   REPLAY_REFUSED_STATUS,
   UPSTREAM_RESET_REPLAY_REFUSED_CODE,
 } from "../lib/upstream-retry";
-import { UNDECLARED_TOOL_CALL_ERROR_CODE } from "../lib/errors";
+import { isClientClosedMessage, recognizedUpstreamError, UNDECLARED_TOOL_CALL_ERROR_CODE } from "../lib/errors";
 import { resolveClientRetryAfter } from "../lib/retry-after";
 import { anthropicRateLimitHeaders } from "./anthropic-rate-limit-headers";
 import { upstreamMessagesRequestIdHeaders } from "./messages-response-headers";
@@ -1125,8 +1126,9 @@ async function handleClaudeMessagesWithBudget(
 
   let clientEncoder: ClientEncoderOption | undefined;
   // Native ChatGPT passthrough (openai-responses forward) accepts only Codex-shaped
-  // bodies: it 400s on sampling params ("Unsupported parameter: max_output_tokens",
-  // verified live 2026-07-11). Strip them for that route; routed providers keep them.
+  // bodies: it 400s on sampling params (verified live 2026-07-11). Every openai-responses
+  // route drops temperature/top_p/stop/user below; max_output_tokens is left to
+  // stripUnsupportedForwardParams (canonical-forward.ts), which drops it only for that backend.
   let settledRoute: RouteResult | undefined;
   /**
    * Which replayed thinking fields the send that actually happened will serialize.
@@ -1193,7 +1195,8 @@ async function handleClaudeMessagesWithBudget(
       clientEncoder = { protocol: "messages", stream, model: requestedModel, inputTokenFloor: claudeRequestTokenFloor() };
     }
     if (route.provider.adapter === "openai-responses") {
-      delete internalBody.max_output_tokens;
+      // max_output_tokens is the caller's spend cap: the adapter strips it only for the canonical
+      // ChatGPT backend that rejects it (#5753), so other Responses gateways keep the cap.
       delete internalBody.temperature;
       delete internalBody.top_p;
       delete internalBody.stop;
@@ -1409,7 +1412,11 @@ async function handleClaudeMessagesWithBudget(
   // BEFORE translation (the translated Anthropic stream has no response.completed
   // frame, so tapping it records a bogus 502 with no usage/cache detail).
   const finalizeNativeLog = createFinalRequestLog(logIds, logCtx).finish;
-  const upstream = await handleResponses(internalReq, buildClaudeReplayConfig(config), logCtx, {
+  const upstream = await handleResponses(internalReq, {
+    ...buildClaudeReplayConfig(config),
+    // Operator config wins; otherwise the caller's own 1h breakpoints keep 1h here.
+    cacheRetention: config.cacheRetention ?? callerCacheRetention(anthropicBody),
+  }, logCtx, {
     // Routing keeps Claude-only sidecar overrides; admission policy must follow the live owner.
     codexAuthPolicy: config,
     ...(logIds?.admission ? { admission: logIds.admission } : {}),
@@ -1428,6 +1435,8 @@ async function handleClaudeMessagesWithBudget(
       && anthropicBody.tools.length === 0,
     nativeReasoningReplay,
     nativeReasoningMint,
+    // Out of body like the replay above: the core hands these to an Anthropic destination only.
+    anthropicServerTools: declaredAnthropicServerTools(anthropicBody),
     claudeGoAffinity: { sessionLane: claudeGoSessionLane },
     claudeNativeSessionId,
     stripClaudeMainAuthForNoncanonicalForward: true,
@@ -1560,8 +1569,17 @@ async function handleClaudeMessagesWithBudget(
         "translation_buffer_limit",
       );
     }
+    // A declared client refusal keeps its 4xx: as a 502 Claude Code retries a verdict that cannot
+    // change. Server classes and rate limits keep the 502 this path has always answered. A 400
+    // worded as a client close answers the 499 httpStatusFromTerminalError logs for it.
+    const refusalStatus = recognizedUpstreamError(translatedError ?? {})?.httpStatus;
     return new Response(JSON.stringify(message), {
-      status: isError ? (translatedError?.code === "context_length_exceeded" ? 400 : 502) : 200,
+      status: isError
+        ? translatedError?.code === "context_length_exceeded" ? 400
+          : refusalStatus !== undefined && refusalStatus < 429
+            ? refusalStatus === 400 && isClientClosedMessage(String(translatedError?.message ?? "")) ? 499 : refusalStatus
+            : 502
+        : 200,
       headers: { "Content-Type": "application/json" },
     });
   }
