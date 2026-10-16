@@ -173,6 +173,17 @@ describe("server-side search across responses", () => {
     expect(starts[1]).toMatchObject({ tool_use_id: starts[0]!.id, content: [{ type: "web_search_result", url: "https://bun.sh/blog" }] });
   });
 
+  test("a single input fragment past 4 KiB is not retained beyond the cap", async () => {
+    const query = "q".repeat(5000);
+    const { clientSse } = await claudeTurn("https://api.anthropic.com", [
+      ...SEARCH_TURN.slice(0, 2),
+      { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify({ query }) } },
+      ...SEARCH_TURN.slice(4),
+    ]);
+    expect(blockStarts(clientSse).map(b => b.type)).toEqual(["server_tool_use", "web_search_tool_result", "text"]);
+    expect(clientSse).not.toContain(query);
+  });
+
   test("a replayed search pair without encrypted_content never reaches Anthropic", async () => {
     const { wire } = await claudeTurn("https://api.anthropic.com", OK_TURN, "anth", [
       { role: "user", content: "What did Bun release?" },
