@@ -341,10 +341,18 @@ Desktop if it still has the old list, select the routed model, then choose **Ult
 in its speed menu. Standard remains the default.
 
 Only an eligible `service-tier` wire with an explicit `ultrafast → ultrafast` mapping adds
-this choice. Ordinary Fast support, a GPT-like name, native/account rows and combo aliases
-do not enable it. Removing the mapping or disabling that model's service-tier support
-removes the generated choice from both the catalog and cache on the next successful sync.
-The separate `ultraFastTier` setting still only retains hand-supplied catalog tiers.
+this choice to routed rows; ordinary Fast support or a GPT-like name is insufficient.
+That routed mapping does not apply to native/account rows or combo aliases. Removing the
+mapping or disabling that model's service-tier support removes the generated routed choice
+from both the catalog and cache on the next successful sync.
+The active declaration also controls the Ultra Fast choice when Codex loads its model list over HTTP.
+
+For routed rows, `ultraFastTier` retains independently supplied Ultra Fast tiers from the
+same exact persisted row; generated routed tiers are not treated as operator-supplied.
+For bare native `gpt-6-astra` / `gpt-6.1-sol` rows and their trusted account-bound clones,
+enabling `ultraFastTier` also generates a missing Ultrafast choice without changing the
+native default tier. Disabling it withdraws only native tier metadata tracked as generated;
+independently supplied or edited native tier descriptors are preserved.
 
 [OpenAI's API guide](https://developers.openai.com/api/docs/guides/ultrafast-mode) documents
 Ultrafast for GPT-6 Astra and GPT-6.1 Sol. API access and

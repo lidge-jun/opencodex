@@ -1,3 +1,4 @@
+import { OPENCODE_GO_BASE_URL, OPENCODE_GO_RESPONSES_DEFAULTS } from "../../types/opencode-go";
 import { KIRO_MODELS, KIRO_MODEL_CONTEXT_WINDOWS, KIRO_MODEL_REASONING_EFFORTS } from "../kiro-models";
 import {
   DSH_ACCOUNT_MODELS,
@@ -854,7 +855,8 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     escapeBuiltinToolNames: true,
   },
   {
-    id: "opencode-go", label: "opencode go", adapter: "openai-chat", baseUrl: "https://opencode.ai/zen/go/v1",
+    id: "opencode-go", label: "opencode go", adapter: "openai-chat", baseUrl: OPENCODE_GO_BASE_URL,
+    destinationAliases: [{ adapter: "openai-chat", baseUrl: "https://opencode.ai/inference/go/v1" }],
     authKind: "key", featured: true, dashboardUrl: "https://opencode.ai/auth", defaultModel: "kimi-k2.7-code",
     jawcodeBundle: "opencode-go", note: "GLM, DeepSeek, Kimi, Qwen, MiMo…",
     // Zen Go can close a Chat stream after a fully assembled function call without sending
@@ -876,13 +878,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     - 다른 대안 대신 이 방식을 선택한 이유: OpenCode Go documents sibling models on Chat or Anthropic endpoints, and an exact registry default preserves both those routes and explicit opt-out precedence.
     - 장점, 단점 및 영향: Each listed model reaches `/responses` from every inbound surface without changing siblings; a future upstream endpoint change requires an evidence-backed registry update.
     */
-    modelWireDefaults: {
-      "gpt-5.6-luna": "openai-responses",
-      "grok-4.6": "openai-responses",
-      "grok-4.7": "openai-responses",
-      "muse-spark-1.3-contributor": "openai-responses",
-      "muse-spark-1.2-contributor": "openai-responses",
-    },
+    modelWireDefaults: OPENCODE_GO_RESPONSES_DEFAULTS,
     modelContextWindows: {
       "kimi-k3": KIMI_K3_STANDARD_CONTEXT_WINDOW,
       // Zen Go discovers only the gateway id, so carry DeepSeek's official 1M V4.1
@@ -939,6 +935,9 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     },
     modelReasoningEfforts: {
       "gpt-5.6-luna": OPENAI_API_GPT56_REASONING_EFFORTS,
+      // Gemini's native thinkingLevel ladder; higher Codex efforts clamp to high.
+      // https://ai.google.dev/gemini-api/docs/models/gemini-4-argon
+      "gemini-4-argon-contributor": ["low", "medium", "high"],
       "grok-4.6": ["low", "medium", "high", "xhigh"],
       "grok-4.7": ["low", "medium", "high", "xhigh"],
       "glm-5.3": ZAI_GLM_53_REASONING_EFFORTS,

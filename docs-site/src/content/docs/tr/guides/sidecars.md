@@ -107,9 +107,13 @@ Yönlendirilen model sağlayıcısının `noVisionModels` listesinde yer aldığ
 bu model için `modelInputModalities` ile salt metin olarak bildirildiğinde ve bir
 istek görsel taşıdığında, opencodex kullanılabilir bir vision sidecar planı varsa
 ana çağrıdan **önce** her görseli açıklar ve onu metinle değiştirir. Kullanılabilir
-bir plan yoksa ham görsel salt metin arka ucuna iletilmek yerine kaldırılır. Model
-kataloğu sidecar kapsamında olan her model için görsel girdisini bildirir. Kombolar,
-her üye görselleri yerel olarak veya bir sidecar üzerinden kabul ettiğinde ve kombonun
+bir plan yoksa ham görsel salt metin arka ucuna iletilmek yerine kaldırılır.
+`visionSidecar.enabled: false` olduğunda model kataloğu, özel kayıtlar ve kombo üyeleri
+dahil salt metin modellere sidecar destekli görsel girdisi eklemez. Yerel görsel desteği
+ve açıkça yapılandırılmış görsel modaliteleri korunur. `enabled` belirtilmezse sidecar
+destekli görsel girdisinin bildirilmesi açık kalır; katalogda görünmesi, sidecar kimlik
+bilgilerinin veya kapasitesinin kullanılabilir olduğunu doğrulamaz. Kombolar,
+her üye görselleri yerel olarak veya etkinleştirilmiş bir sidecar üzerinden kabul ettiğinde ve kombonun
 `imageInput` ayarı devre dışı olmadığında görsel girdisini bildirir; böylece Codex
 uygulaması gibi istemciler, sidecar çalışmadan önce ekleri engellemek yerine kabul eder.
 `visionSidecar.model` olmadığında veya boş
@@ -195,6 +199,8 @@ akıl yürütmeyi, zaman aşımını ve sınırı korur.
 `PUT /api/sidecar-settings` aynı alanları kabul eder. Kısmi güncellemeler
 atlanan anahtarları değiştirmeden bırakır. `timeoutMs` çalışma zamanı tamsayı
 sınırlarını kullanır (1–2147483647 ms).
+
+Vizyon'un geçerli açma/kapatma durumunu `PUT /api/sidecar-settings` üzerinden değiştirmek, kayıttan sonra yönetilen kataloğu ve önbelleği yeniler; `catalogRefreshPending=true`, yenilemenin tamamlanmadığını bildirir ve istemci onayı anlamına gelmez.
 
 Web arama sidecar kartı aynı denetim yapısını taşır: model seçicisinin ilk satırı **Kapalı (Off)**'dır.
 Kapatmak OpenCodex'in `web_search` yakalamasını durdurur ve Codex entegrasyonu

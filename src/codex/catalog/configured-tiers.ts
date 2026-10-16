@@ -12,7 +12,7 @@ export function supportsConfiguredUltraFast(policy: ResolvedFastPolicy | undefin
     && policy.fastWire.canonicalToWire.ultrafast === "ultrafast";
 }
 
-/** Carry captured capability to the pure merge without treating persisted metadata as authority. */
+/** Carry captured capability to catalog projection without treating persisted metadata as authority. */
 export function configuredUltraFastSlugs(models: readonly CatalogModel[]): ReadonlySet<string> {
   const declarations = new Map<string, boolean>();
   for (const model of models) {

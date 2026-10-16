@@ -82,3 +82,28 @@ export function InfoHint({ text }: { text: string }) {
     </Tooltip>
   );
 }
+
+/**
+ * One row of the folded settings panel: label on the left, controls pinned to the right
+ * edge. Six rows share this shape, so the wrapper lives here rather than being repeated
+ * in Models.tsx where each copy drifts independently.
+ */
+export function SettingsRow({ label, hint, busy, muted = true, caption, children }: {
+  label: ReactNode;
+  hint?: ReactNode;
+  busy?: boolean;
+  muted?: boolean;
+  caption?: boolean;
+  children: ReactNode;
+}) {
+  const labelClass = ["models-row-label", muted ? "muted" : "", caption ? "text-caption" : "text-control"].filter(Boolean).join(" ");
+  return (
+    <div className="models-control-row" aria-busy={busy || undefined}>
+      <span className={labelClass}>
+        {label}
+        {hint ? <> {hint}</> : null}
+      </span>
+      <div className="models-row-actions">{children}</div>
+    </div>
+  );
+}

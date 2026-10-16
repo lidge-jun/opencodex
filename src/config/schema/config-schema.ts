@@ -31,6 +31,7 @@ import {
   CODEX_ACCOUNT_NAMESPACE_ACCOUNT_ID_COLLISION_ERROR,
   codexAccountNamespacesSchema,
   modelPinnedEffortsSchema,
+  autoReviewOverrideSchema,
   compactionRoutingSchema,
   memoryModelSettingSchema,
   memoryModelsSchema,
@@ -193,6 +194,9 @@ export const configSchema = z.object({
     z.object({ enabled: z.literal(true), port: z.number().int().min(1).max(65535).optional() }),
   ]).optional().catch(undefined),
   providers: z.record(z.string(), providerConfigSchema),
+  // Models settings panel writes the global reviewer override; an invalid hand edit is
+  // stripped by load degradation so it cannot reject the providers that carry it.
+  autoReviewOverride: autoReviewOverrideSchema.optional(),
   modelPinnedEfforts: modelPinnedEffortsSchema.optional(),
   compactionRouting: compactionRoutingSchema.optional().catch(undefined),
   compactionRecovery: compactionRecoverySchema.optional().catch(undefined),
@@ -210,6 +214,7 @@ export const configSchema = z.object({
     .catch(undefined),
   defaultProvider: z.string().min(1).default("openai"),
   defaultModelAliases: z.boolean().optional(),
+  preferModelAliasIds: z.boolean().optional().catch(false),
   // Malformed hand edits disable this opt-in projection without rejecting providers.
   cursorEffortRows: z.boolean().optional().catch(false),
   // Fast selectors default on; malformed hand edits disable them without rejecting providers.

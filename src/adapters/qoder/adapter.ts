@@ -52,8 +52,10 @@ const QODER_MCP_SERVER_NAME = "opencodex";
 const QODER_MCP_SERVER_PATH = fileURLToPath(new URL("../coding-agent/mcp-server.ts", import.meta.url));
 
 export function buildQoderChildEnv(profile: QoderProfile, apiKey: string, systemPrompt?: string): Record<string, string> {
-  const promptEnv = profile.region === "cn" ? "QODERCN_APPEND_SYSTEM_PROMPT" : "QODER_APPEND_SYSTEM_PROMPT";
-  return { ...baseScopedEnv(), NO_COLOR: "1", [profile.tokenEnv]: apiKey,
+  // Each build reads its own brand prefix with no fallback: qodercn ignores QODER_EXPOSE_TOKEN_USAGE.
+  const envPrefix = profile.region === "cn" ? "QODERCN_" : "QODER_";
+  const promptEnv = `${envPrefix}APPEND_SYSTEM_PROMPT`;
+  return { ...baseScopedEnv(), NO_COLOR: "1", [`${envPrefix}EXPOSE_TOKEN_USAGE`]: "true", [profile.tokenEnv]: apiKey,
     ...(systemPrompt ? { [promptEnv]: systemPrompt } : {}) };
 }
 

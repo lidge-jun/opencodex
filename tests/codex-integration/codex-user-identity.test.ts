@@ -15,9 +15,103 @@ import {
 } from "../../src/codex/user-identity";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
+import {
+  readWindowsLocalAppData,
+  resolveWindowsLocalAppData,
+  type WindowsKnownFolderApi,
+} from "../../src/codex/windows-local-appdata";
 
 let codexHome = "";
 let previousHome: string | undefined;
+
+function knownFolderFixture(path = "C:\\Users\\한글😀\\AppData\\Local", hr = 0) {
+  const freed: number[] = [];
+  const api: WindowsKnownFolderApi = {
+    getPath(id, flags, token, output) {
+      expect(Buffer.from(id).toString("hex")).toBe("8527b3f1ba6fcf4f9d557b8e7f157091");
+      expect(flags).toBe(0x400);
+      expect(token).toBeNull();
+      expect(output[0]).toBe(0n);
+      output[0] = 4096n;
+      return hr;
+    },
+    readCodeUnit(address, offset) {
+      expect(address).toBe(4096);
+      return path.charCodeAt(offset / 2) || 0;
+    },
+    free(address) { freed.push(address); },
+  };
+  return { api, freed, path };
+}
+
+test("native known-folder resolution avoids a timed-out PowerShell identity probe", () => {
+  const fixture = knownFolderFixture();
+  let helperCalls = 0;
+  const timedOutHelper = (): never => {
+    helperCalls += 1;
+    throw new Error("Windows effective-account lookup timed out.");
+  };
+  // Toggle only native availability: the failing helper models the 30s Add-Type
+  // timeout without a wall-clock sleep, on every platform.
+  expect(() => resolveWindowsLocalAppData(timedOutHelper, null)).toThrow("timed out");
+  expect(helperCalls).toBe(1);
+  expect(resolveWindowsLocalAppData(timedOutHelper, () => readWindowsLocalAppData(fixture.api)))
+    .toBe(fixture.path);
+  expect(helperCalls).toBe(1);
+  expect(fixture.freed).toEqual([4096]);
+});
+
+test("native known-folder failures refuse and free the OS allocation without helper fallback", () => {
+  for (const fixture of [knownFolderFixture(undefined, -2147467259), knownFolderFixture("relative")]) {
+    let fallbackCalls = 0;
+    expect(() => resolveWindowsLocalAppData(
+      () => { fallbackCalls += 1; return "C:\\forged-environment"; },
+      () => readWindowsLocalAppData(fixture.api),
+    )).toThrow("known-folder lookup");
+    expect(fixture.freed).toEqual([4096]);
+    expect(fallbackCalls).toBe(0);
+  }
+});
+
+test("native known-folder resolution refuses a null result and frees on decoding failure", () => {
+  const fixture = knownFolderFixture();
+  fixture.api.getPath = () => 0;
+  expect(() => readWindowsLocalAppData(fixture.api)).toThrow("lookup failed");
+  expect(fixture.freed).toEqual([]);
+
+  const broken = knownFolderFixture();
+  broken.api.readCodeUnit = () => { throw new Error("read failed"); };
+  expect(() => readWindowsLocalAppData(broken.api)).toThrow("read failed");
+  expect(broken.freed).toEqual([4096]);
+});
+
+test("native known-folder resolution bounds an unterminated response and frees it", () => {
+  const fixture = knownFolderFixture();
+  let reads = 0;
+  fixture.api.readCodeUnit = () => { reads += 1; return 65; };
+  expect(() => readWindowsLocalAppData(fixture.api)).toThrow("unterminated path");
+  expect(reads).toBe(32_768);
+  expect(fixture.freed).toEqual([4096]);
+});
+
+test.if(process.platform === "win32" && process.arch === "x64")(
+  "Windows x64 obtains the real known folder in-process even when the helper cannot start",
+  () => {
+    const previous = { USERPROFILE: process.env.USERPROFILE, LOCALAPPDATA: process.env.LOCALAPPDATA };
+    try {
+      process.env.USERPROFILE = "C:\\forged-known-folder-profile";
+      process.env.LOCALAPPDATA = "C:\\forged-known-folder-appdata";
+      const path = resolveWindowsLocalAppData(() => { throw new Error("PowerShell must not start"); });
+      expect(isAbsolute(path)).toBe(true);
+      expect(path).not.toContain("forged-known-folder");
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  },
+);
 
 const CHILD_TIMEOUT_MS = 10_000;
 const userIdentityModuleUrl = pathToFileURL(

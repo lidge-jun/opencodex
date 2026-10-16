@@ -377,7 +377,7 @@ separate role. It is not a kernel lock, a cross-host lock, or protection against
 writer between byte verification and rename. A rolling mix of old writers that do not
 reserve takeover has the same cooperation limit.
 
-Windows secret-file hardening resolves the effective token SID through an absolute, trusted
+Effective-user roots use `src/codex/windows-local-appdata.ts` ([known-folder contract](ops/test-sandbox-cleanup.md#windows-runtime-namespace)). Windows secret-file hardening resolves the effective token SID through an absolute, trusted
 PowerShell path before granting the owner and removing inherited broad ACL entries. The normal
 path obtains System32 from `GetSystemDirectoryW`. Windows ARM64 Bun builds that cannot execute
 `bun:ffi` use a narrower ACL-only fallback to the fixed protected default installation path

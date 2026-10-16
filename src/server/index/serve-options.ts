@@ -1,4 +1,5 @@
 import type { Server, ServerWebSocket } from "bun";
+import { modelAliasIdPromoter } from "./model-alias-id";
 import type { StartServerDeps } from "./startup-warnings";
 import { isLinkManagementPath } from "../../link/management-routes";
 import {
@@ -1252,6 +1253,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             effortRowKnownIds,
           ));
         };
+        const promoteAliasId = modelAliasIdPromoter(config);
         const routedRows = await Promise.all(uniqueCatalogModelsForRawPublicList(goOrdered)
           .filter(m => listAllows(m.provider, m.id))
           .map(async m => {
@@ -1269,8 +1271,11 @@ export function createServeOptions(ctx: ServeOptionsContext) {
                 knownModelIdsForProvider(m.provider, provider, config),
               ).get(m.id)
             : undefined;
+          const effectiveId = !isCombo && !fastModelId && effective
+            ? promoteAliasId(m.provider, m.id, effective.alias, catalogRowFastEligible(m)) ?? publicId
+            : publicId;
           const row = {
-            id: publicId,
+            id: effectiveId,
             object: "model",
             created: 0,
             // This endpoint is an OpenAI-compatible inbound contract. Some clients use
@@ -1279,6 +1284,9 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             owned_by: isCombo ? "openai" : (m.owned_by ?? m.provider),
             ...(isCombo ? { is_combo: true } : {}),
             ...(effective ? { alias_of: `${provider?.alias || m.provider}/${effective.alias}` } : {}),
+            // When preferModelAliasIds promotes the alias to `id`, retain the original
+            // provider/nativeId so clients that need the upstream identity can read it.
+            ...(effectiveId !== publicId ? { native_id: publicId } : {}),
             ...grokEffortFields(m.reasoningEfforts ?? [], m.defaultReasoningEffort),
             ...modelCapabilityFields({
               reasoningEfforts: m.reasoningEfforts,
