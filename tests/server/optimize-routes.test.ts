@@ -88,4 +88,27 @@ describe("Management optimize routes (/api/optimize)", () => {
     expect(body.saved).toBeGreaterThan(0);
     expect(body.compressedLength).toBeLessThan(body.originalLength);
   });
+
+  test("POST /api/optimize/headroom/start rejects non-loopback url", async () => {
+    const config: OcxConfig = {
+      port: 3000,
+      optimize: { headroomUrl: "https://remote-headroom.example.com" },
+    };
+    const ctx = {
+      url: new URL("http://localhost:3000/api/optimize/headroom/start"),
+      req: new Request("http://localhost:3000/api/optimize/headroom/start", {
+        method: "POST",
+      }),
+      config,
+      deps: {},
+    } as unknown as ManagementContext;
+
+    const res = await handleOptimizeRoutes(ctx);
+    expect(res).not.toBeNull();
+    expect(res!.status).toBe(400);
+
+    const body = await res!.json() as { ok: boolean; message: string };
+    expect(body.ok).toBe(false);
+    expect(body.message).toContain("loopback");
+  });
 });

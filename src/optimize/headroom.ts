@@ -1,5 +1,7 @@
 import { DEFAULT_HEADROOM_TIMEOUT_MS, DEFAULT_HEADROOM_URL } from "./constants";
 import type { OcxParsedRequest } from "../types/request";
+import { isLoopbackHostname } from "../server/auth-cors";
+import { registerOptionalShutdownHook } from "../lib/optional-shutdown-hooks";
 
 export interface HeadroomStats {
   tokens_before?: number;
@@ -22,6 +24,88 @@ export async function checkHeadroomStatus(
   } catch (err) {
     return { reachable: false, url: normalized, error: (err as any)?.message || String(err) };
   }
+}
+
+let activeHeadroomProc: ReturnType<typeof Bun.spawn> | null = null;
+let startingPromise: Promise<{ ok: boolean; message?: string }> | null = null;
+
+// ponytail: process-lifetime child cleanup via optional shutdown hook
+registerOptionalShutdownHook("headroom-proxy", () => {
+  stopHeadroom();
+});
+
+export function stopHeadroom(): void {
+  if (activeHeadroomProc) {
+    try {
+      activeHeadroomProc.kill();
+    } catch {
+      // ignore best-effort kill error
+    }
+    activeHeadroomProc = null;
+  }
+}
+
+export async function startHeadroom(
+  targetUrl = DEFAULT_HEADROOM_URL,
+): Promise<{ ok: boolean; message?: string }> {
+  let parsed: URL;
+  try {
+    parsed = new URL(targetUrl);
+  } catch {
+    return { ok: false, message: "Invalid target URL" };
+  }
+
+  if (!isLoopbackHostname(parsed.hostname)) {
+    return { ok: false, message: "Headroom can only be started for local/loopback URLs" };
+  }
+
+  const port = parsed.port ? parseInt(parsed.port, 10) : 8787;
+  if (isNaN(port) || port <= 0 || port > 65535) {
+    return { ok: false, message: "Invalid port for Headroom" };
+  }
+
+  const status = await checkHeadroomStatus(targetUrl, 1000);
+  if (status.reachable) {
+    return { ok: true, message: "Headroom is already running and reachable" };
+  }
+
+  if (startingPromise) {
+    return startingPromise;
+  }
+
+  startingPromise = (async () => {
+    const binPath = Bun.which("headroom");
+    if (!binPath) {
+      return { ok: false, message: "Headroom CLI ('headroom') not found in PATH" };
+    }
+
+    try {
+      const proc = Bun.spawn([binPath, "proxy", "--port", String(port)], {
+        stdout: "ignore",
+        stderr: "ignore",
+      });
+      activeHeadroomProc = proc;
+
+      for (let i = 0; i < 20; i++) {
+        await Bun.sleep(500);
+        const check = await checkHeadroomStatus(targetUrl, 800);
+        if (check.reachable) {
+          return { ok: true, message: "Headroom started successfully" };
+        }
+        if (proc.exitCode !== null) {
+          activeHeadroomProc = null;
+          return { ok: false, message: "Headroom process exited prematurely" };
+        }
+      }
+      return { ok: false, message: "Headroom process started but health check timed out" };
+    } catch (err) {
+      return { ok: false, message: (err as any)?.message || String(err) };
+    } finally {
+      startingPromise = null;
+    }
+  })();
+
+  return startingPromise;
 }
 
 function updateRawItem(rawItem: Record<string, unknown> | null | undefined, compressedText: string): void {

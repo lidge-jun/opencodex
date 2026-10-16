@@ -51,6 +51,9 @@ const CKEY_INFERENCE_BASE_URL = "https://api.xah.io/v1";
 const CKEY_API_BASE = "https://ckey.vn";
 const CKEY_PROFILE_URL = `${CKEY_API_BASE}/api/profile`;
 const CKEY_USAGE_STATS_URL = `${CKEY_API_BASE}/api/llm/usage-stats`;
+const XPIKI_INFERENCE_BASE_URL = "https://api.xpiki.com/v1";
+const XPIKI_API_BASE = "https://api.xpiki.com";
+const XPIKI_KEY_STATUS_URL = `${XPIKI_API_BASE}/api/public/key-status`;
 /**
  * Approximate VND→USD exchange rate for display purposes only.
  * 1 USD ≈ 25,000 VND (rounded market-rate estimate; not for billing).
@@ -1162,6 +1165,73 @@ async function fetchCkeyQuota(provider: string, config: OcxProviderConfig): Prom
     : null;
 }
 
+/**
+ * Xpiki API key-status probe. Its credit balance is shared across all allowed
+ * models; each model's conversion price gives a token-equivalent capacity, not
+ * a separate reservation.
+ */
+async function fetchXpikiQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
+  if (normalizedBaseUrl(config.baseUrl) !== XPIKI_INFERENCE_BASE_URL) return null;
+  const apiKey = resolveProviderApiKey(config.apiKey)?.trim();
+  if (!apiKey) return null;
+
+  const res = await quotaFetch(provider, config, XPIKI_KEY_STATUS_URL, {
+    method: "POST",
+    headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
+    redirect: "error",
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  }).catch(() => null);
+  if (!res) return null;
+
+  if (!res.ok) {
+    return res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429
+      ? TERMINAL_QUOTA_FAILURE
+      : null;
+  }
+
+  const body = asRecord(await readQuotaJson(res));
+  const data = asRecord(asRecord(body)?.data);
+  const limit = toFiniteNumber(data?.quota_limit);
+  const used = toFiniteNumber(data?.quota_used);
+  const remaining = toFiniteNumber(data?.remaining);
+  if (limit === undefined || limit <= 0 || used === undefined || used < 0 || remaining === undefined || remaining < 0) {
+    return null;
+  }
+
+  const allowedModels = new Set(
+    (Array.isArray(data?.allowed_models) ? data.allowed_models : [])
+      .map(value => asRecord(value)?.slug)
+      .filter((slug): slug is string => typeof slug === "string" && slug.length > 0),
+  );
+  const conversion = asRecord(data?.conversion);
+  const models = Array.isArray(conversion?.models) ? conversion.models : [];
+  const fmt = (n: number): string => new Intl.NumberFormat("en", { maximumFractionDigits: 1 }).format(n);
+  const percent = Math.max(0, Math.min(100, (used / limit) * 100));
+  const customWindows: NonNullable<ProviderQuota["customWindows"]> = [];
+
+  for (const value of models) {
+    const model = asRecord(value);
+    const slug = model?.slug;
+    if (typeof slug !== "string" || !allowedModels.has(slug)) continue;
+    const inputPrice = toFiniteNumber(model?.input_price_per_1m);
+    const outputPrice = toFiniteNumber(model?.output_price_per_1m);
+    if (inputPrice === undefined || inputPrice <= 0 || outputPrice === undefined || outputPrice <= 0) continue;
+
+    const inputCapacity = limit / inputPrice * 1_000_000;
+    const outputCapacity = limit / outputPrice * 1_000_000;
+    const inputRemaining = remaining / inputPrice * 1_000_000;
+    const outputRemaining = remaining / outputPrice * 1_000_000;
+    customWindows.push({
+      label: `${slug} · shared balance · ${fmt(inputCapacity / 1_000_000)}M input / ${fmt(outputCapacity / 1_000_000)}M output tokens capacity (${fmt(inputRemaining / 1_000_000)}M / ${fmt(outputRemaining / 1_000_000)}M remaining)`,
+      percent,
+    });
+  }
+
+  return customWindows.length > 0
+    ? report(provider, "xpiki:key-status", { updatedAt: Date.now(), customWindows })
+    : null;
+}
+
 
 export function normalizedBaseUrl(value: string): string | null {
   try {
@@ -1491,6 +1561,7 @@ export function keyQuotaReaderForProvider(name: string, provider: OcxProviderCon
   if (name === "deepinfra" && isCanonicalDeepInfraBaseUrl(provider.baseUrl)) return fetchDeepInfraQuota;
   if (name === "neuralwatt" && isCanonicalNeuralwattBaseUrl(provider.baseUrl)) return fetchNeuralwattQuota;
   if (name === "ckey" && isCanonicalCkeyBaseUrl(provider.baseUrl)) return fetchCkeyQuota;
+  if (name === "xpiki" && normalizedBaseUrl(provider.baseUrl) === XPIKI_INFERENCE_BASE_URL) return fetchXpikiQuota;
   return null;
 }
 

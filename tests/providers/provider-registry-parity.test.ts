@@ -52,7 +52,8 @@ const EXPECTED_KEY_PROVIDER_IDS = [
   "cohere", "agnes", "v1m", "iflow", "perplexity", "perplexity-agent", "vertex-partner", "selfhosted-stt", "selfhosted-tts",
   "selfhosted-embedding", "brave-search", "tavily", "exa", "firecrawl", "jina-reader", "serper", "searchapi", "assemblyai",
   "deepgram", "cartesia", "elevenlabs", "fish-audio", "playht", "black-forest-labs", "fal-ai", "recraft", "stability-ai",
-  "runwayml", "voyage-ai", "jina-ai", "ckey",
+  "runwayml", "voyage-ai", "jina-ai", "ckey", "xpiki",
+  "aws-polly", "comfyui", "coqui", "edge-tts", "google-pse", "google-tts", "grok-web", "inworld", "linkup", "mmf", "ollama-search", "perplexity-web", "sdwebui", "searxng", "topaz", "tortoise", "xquik", "youcom",
 ];
 
 describe("provider registry parity", () => {

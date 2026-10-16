@@ -4,7 +4,7 @@ import type { ManagementContext } from "./context";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import { isPlainRecord } from "./shared";
 import { DEFAULT_HEADROOM_TIMEOUT_MS, DEFAULT_HEADROOM_URL } from "../../optimize/constants";
-import { checkHeadroomStatus } from "../../optimize/headroom";
+import { checkHeadroomStatus, startHeadroom } from "../../optimize/headroom";
 import { compressText } from "../../optimize/rtk";
 import type { RtkStats } from "../../optimize/types";
 
@@ -92,6 +92,12 @@ export async function handleOptimizeRoutes(ctx: ManagementContext): Promise<Resp
     const timeoutMs = config.optimize?.headroomTimeoutMs || DEFAULT_HEADROOM_TIMEOUT_MS;
     const status = await checkHeadroomStatus(targetUrl, timeoutMs);
     return jsonResponse(status, 200, req, config);
+  }
+
+  if (url.pathname === "/api/optimize/headroom/start" && req.method === "POST") {
+    const targetUrl = config.optimize?.headroomUrl || DEFAULT_HEADROOM_URL;
+    const result = await startHeadroom(targetUrl);
+    return jsonResponse(result, result.ok ? 200 : 400, req, config);
   }
 
   if (url.pathname === "/api/optimize/test" && req.method === "POST") {

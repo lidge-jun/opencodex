@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useT } from "../i18n/shared";
-import { IconZap, IconRefresh } from "../icons";
-import { Notice, Switch, Tooltip } from "../ui";
+import { IconRefresh, IconPlay } from "../icons";
+import { Notice, Switch } from "../ui";
 import { readJsonOrThrow, readJsonIfOk } from "../fetch-json";
 import "../styles-optimize-workspace.css";
 
@@ -45,6 +45,7 @@ export default function Optimize({ apiBase }: { apiBase: string }) {
     reachable: boolean | null;
     error?: string;
   }>({ checking: false, reachable: null });
+  const [startingHeadroom, setStartingHeadroom] = useState(false);
 
   // RTK live test sandbox state
   const [testInput, setTestInput] = useState("");
@@ -122,6 +123,29 @@ export default function Optimize({ apiBase }: { apiBase: string }) {
     }
   };
 
+  // Start Headroom service
+  const startHeadroomService = async () => {
+    setStartingHeadroom(true);
+    setErrorNotice(null);
+    try {
+      const res = await fetch(`${apiBase}/api/optimize/headroom/start`, {
+        method: "POST",
+      });
+      const data = await readJsonIfOk<{ ok: boolean; message?: string }>(res);
+      if (data?.ok) {
+        await checkHeadroom();
+      } else {
+        setErrorNotice(data?.message || t("optimize.headroom.startFailed"));
+        await checkHeadroom();
+      }
+    } catch (err) {
+      setErrorNotice(err instanceof Error ? err.message : String(err));
+      await checkHeadroom();
+    } finally {
+      setStartingHeadroom(false);
+    }
+  };
+
   // Run RTK live test
   const runTest = async (text: string) => {
     setTestInput(text);
@@ -151,11 +175,10 @@ export default function Optimize({ apiBase }: { apiBase: string }) {
     <div className="opt-root">
       <div className="page-head">
         <h2>
-          <IconZap style={{ display: "inline-block", verticalAlign: "middle", marginRight: 8, color: "var(--color-primary)" }} />
           {t("optimize.title")}
         </h2>
-        <p className="page-sub">{t("optimize.subtitle")}</p>
       </div>
+      <p className="page-sub">{t("optimize.subtitle")}</p>
 
       {savedNotice && (
         <Notice tone="ok">{t("optimize.saved")}</Notice>
@@ -165,14 +188,11 @@ export default function Optimize({ apiBase }: { apiBase: string }) {
       )}
 
       {/* RTK Section */}
-      <div className="opt-card">
+      <div className="panel opt-card">
         <div className="opt-card-header">
           <div className="opt-card-title-group">
             <h3 className="opt-card-title">
               {t("optimize.rtk.title")}
-              <Tooltip content={t("optimize.rtk.desc")} side="top" maxWidth={320}>
-                <span style={{ cursor: "help", fontSize: 13 }}>ⓘ</span>
-              </Tooltip>
             </h3>
             <p className="opt-card-subtitle">{t("optimize.rtk.desc")}</p>
           </div>
@@ -206,7 +226,8 @@ export default function Optimize({ apiBase }: { apiBase: string }) {
             {testing && <span style={{ fontSize: "var(--text-xs)", color: "var(--text-secondary)" }}>{t("optimize.test.analyzing")}</span>}
           </div>
           <textarea
-            className="opt-test-textarea"
+            className="input opt-test-textarea"
+            aria-label={t("optimize.test.title")}
             placeholder={t("optimize.test.inputPlaceholder")}
             value={testInput}
             onChange={e => void runTest(e.target.value)}
@@ -232,14 +253,11 @@ export default function Optimize({ apiBase }: { apiBase: string }) {
       </div>
 
       {/* Headroom Section */}
-      <div className="opt-card">
+      <div className="panel opt-card">
         <div className="opt-card-header">
           <div className="opt-card-title-group">
             <h3 className="opt-card-title">
               {t("optimize.headroom.title")}
-              <Tooltip content={t("optimize.headroom.desc")} side="top" maxWidth={320}>
-                <span style={{ cursor: "help", fontSize: 13 }}>ⓘ</span>
-              </Tooltip>
             </h3>
             <p className="opt-card-subtitle">{t("optimize.headroom.desc")}</p>
           </div>
@@ -256,7 +274,8 @@ export default function Optimize({ apiBase }: { apiBase: string }) {
             <span className="opt-row-label">{t("optimize.headroom.url")}</span>
             <input
               type="text"
-              className="input-text"
+              className="input"
+              aria-label={t("optimize.headroom.url")}
               style={{ width: "100%", maxWidth: 360, marginTop: 4, fontFamily: "monospace", fontSize: 12 }}
               placeholder={t("optimize.headroom.urlPlaceholder")}
               value={settings.headroomUrl}
@@ -272,7 +291,8 @@ export default function Optimize({ apiBase }: { apiBase: string }) {
             <span className="opt-row-desc">{t("optimize.headroom.timeoutHelp")}</span>
             <input
               type="number"
-              className="input-text"
+              className="input"
+              aria-label={t("optimize.headroom.timeout")}
               style={{ width: 140, marginTop: 4, fontFamily: "monospace", fontSize: 12 }}
               value={settings.headroomTimeoutMs}
               onChange={e => setSettings(s => ({ ...s, headroomTimeoutMs: Number(e.target.value) || 30000 }))}
@@ -296,17 +316,26 @@ export default function Optimize({ apiBase }: { apiBase: string }) {
               ) : (
                 <span className="opt-badge opt-badge-neutral">{t("optimize.headroom.unknown")}</span>
               )}
+             <button
+               type="button"
+               className="btn btn-ghost btn-sm"
+               onClick={() => void checkHeadroom()}
+               disabled={headroomStatus.checking || loading || saving}
+             >
+               <IconRefresh style={{ width: 12, height: 12, marginRight: 4 }} />
+               {t("optimize.headroom.check")}
+             </button>
               <button
                 type="button"
-                className="btn btn-ghost btn-sm"
-                onClick={() => void checkHeadroom()}
-                disabled={headroomStatus.checking || loading || saving}
+                className="btn btn-secondary btn-sm"
+                onClick={() => void startHeadroomService()}
+                disabled={startingHeadroom || headroomStatus.checking || loading || saving}
               >
-                <IconRefresh style={{ width: 12, height: 12, marginRight: 4 }} />
-                {t("optimize.headroom.check")}
+                <IconPlay style={{ width: 12, height: 12, marginRight: 4 }} />
+                {startingHeadroom ? t("optimize.headroom.starting") : t("optimize.headroom.start")}
               </button>
-            </div>
-            <span className="opt-row-desc" style={{ marginTop: 4 }}>
+           </div>
+           <span className="opt-row-desc" style={{ marginTop: 4 }}>
               {t("optimize.headroom.installHint")}
             </span>
           </div>
@@ -314,14 +343,11 @@ export default function Optimize({ apiBase }: { apiBase: string }) {
       </div>
 
       {/* Ponytail Section */}
-      <div className="opt-card">
+      <div className="panel opt-card">
         <div className="opt-card-header">
           <div className="opt-card-title-group">
             <h3 className="opt-card-title">
               {t("optimize.ponytail.title")}
-              <Tooltip content={t("optimize.ponytail.desc")} side="top" maxWidth={320}>
-                <span style={{ cursor: "help", fontSize: 13 }}>ⓘ</span>
-              </Tooltip>
             </h3>
             <p className="opt-card-subtitle">{t("optimize.ponytail.desc")}</p>
           </div>
@@ -336,10 +362,11 @@ export default function Optimize({ apiBase }: { apiBase: string }) {
         <div className="opt-row">
           <div className="opt-row-info">
             <span className="opt-row-label">{t("optimize.ponytail.level")}</span>
-            <div className="opt-level-group">
+            <div className="opt-level-group" role="group" aria-label={t("optimize.ponytail.level")}>
               {(["lite", "full", "ultra"] as const).map(lvl => (
                 <button
                   key={lvl}
+                  aria-pressed={settings.ponytailLevel === lvl}
                   type="button"
                   className={`opt-level-btn${settings.ponytailLevel === lvl ? " active" : ""}`}
                   onClick={() => setSettings(s => ({ ...s, ponytailLevel: lvl }))}

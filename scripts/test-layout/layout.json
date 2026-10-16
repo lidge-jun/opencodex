@@ -1895,6 +1895,7 @@
     "xai-video-client.test.ts": "videos",
     "xai-web-search-compat.test.ts": "providers/xai",
     "xai-web-search.test.ts": "providers/xai",
+    "xpiki-provider.test.ts": "providers",
     "yaml-fragment-source.test.ts": "config",
     "z-fulfill.test.ts": "images",
     "z-handler-activation.test.ts": "images",

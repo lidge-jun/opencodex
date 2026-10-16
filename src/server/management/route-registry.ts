@@ -376,6 +376,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/optimize", module: "server/management/optimize-routes", mutates: false },
   { method: "PATCH", path: "/api/optimize", module: "server/management/optimize-routes", mutates: true },
   { method: "GET", path: "/api/optimize/headroom/status", module: "server/management/optimize-routes", mutates: false },
+  { method: "POST", path: "/api/optimize/headroom/start", module: "server/management/optimize-routes", mutates: false },
   { method: "POST", path: "/api/optimize/test", module: "server/management/optimize-routes", mutates: false },
   { method: "GET", path: "/api/protocols", module: "server/management/protocol-routes", mutates: false },
   { method: "POST", path: "/api/protocols/plan", module: "server/management/protocol-routes", mutates: false },
