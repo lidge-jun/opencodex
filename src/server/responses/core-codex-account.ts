@@ -975,8 +975,8 @@ export async function retryCodexPoolOnAlternateAccount(
   const maxRetrySends = retrySameConfirmedAccount ? 7 : 1;
   let retrySendCount = 0;
   // The gated-model 400 has no roster kind; it stays unattributed as before.
-  const moveRecovery: AttemptRecoveryKind | undefined = outcomeStatus === 429 || outcomeStatus === 402
-    ? "oauth-account-429"
+  const moveRecovery: AttemptRecoveryKind | undefined = outcomeStatus === 429 ? "oauth-account-429"
+    : outcomeStatus === 402 ? "oauth-account-402"
     : isTransientUpstreamStatus(outcomeStatus) ? "transient-5xx" : undefined;
   let upstreamResponse: Response;
   try {

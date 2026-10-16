@@ -199,8 +199,10 @@ describe("recovery kinds speak the shared dictionary", () => {
    * the durable log were forbidden and unfunded.
    */
   test("no recorded recovery classifies as a resend that cannot help", () => {
+    // Except the Codex 402 account move: re-asking the exhausted account is futile, and the move
+    // to another account is a route decision this table explicitly does not make.
     const futile = ATTEMPT_RECOVERY_KIND_ROSTER
       .filter(kind => causeDisposition(causeForRecoveryKind(kind)) === "resend-is-futile");
-    expect(futile).toEqual([]);
+    expect(futile).toEqual(["oauth-account-402"]);
   });
 });

@@ -483,7 +483,8 @@ export function noteGenericPoolSelection(
  * Cool the account that actually 429'd and name the next eligible one, or null.
  *
  * Returns the id only; the caller mints the credential so a failed refresh does not leave the
- * cooldown applied to an account we then could not use.
+ * cooldown applied to an account we then could not use. `commit: false` still cools the failed
+ * account but only peeks the round-robin ring, for callers that will not dispatch the answer.
  */
 export function rotateGenericOAuthAccountOn429(
   config: OcxConfig,
@@ -492,9 +493,10 @@ export function rotateGenericOAuthAccountOn429(
   retryAfterHeader: string | null | undefined,
   now = Date.now(),
   requestedModelId?: string | null,
+  commit = true,
 ): string | null {
   return rotateGenericOAuthAccountOnRefusal(config, providerName, failedAccountId, "rate",
-    retryAfterHeader, now, requestedModelId);
+    retryAfterHeader, now, requestedModelId, undefined, commit);
 }
 
 /** Kiro adds account-scoped refusal classes; all other providers retain their 429 policy. */
@@ -507,6 +509,7 @@ export function rotateGenericOAuthAccountOnRefusal(
   now = Date.now(),
   requestedModelId?: string | null,
   monthlyCooldownMs?: number,
+  commit = true,
 ): string | null {
   if (kind === "other" || (providerName !== "kiro" && kind !== "rate")) return null;
   if (!isGenericOAuthFailoverEnabled(config, providerName)) return null;
@@ -566,8 +569,8 @@ export function rotateGenericOAuthAccountOnRefusal(
   }
   if (strategy === "round-robin") {
     // PICK here, not peek: the failure already happened and this answer is the one being used,
-    // so the ring genuinely advances.
-    return pickRoundRobinAccount(
+    // so the ring genuinely advances. A caller that only asks whether a sibling exists peeks.
+    return (commit ? pickRoundRobinAccount : peekRoundRobinAccount)(
       genericPoolKey(providerName),
       candidates,
       genericStickyLimit(config, providerName),

@@ -193,6 +193,18 @@ describe("server-side search across responses", () => {
     }
   });
 
+  test("a single input fragment past 4 KiB drops its unprovable exchange at the cap", async () => {
+    const query = "q".repeat(5000);
+    const { clientSse } = await claudeTurn("https://api.anthropic.com", [
+      ...SEARCH_TURN.slice(0, 2),
+      { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify({ query }) } },
+      ...SEARCH_TURN.slice(4),
+    ]);
+    expect(blockStarts(clientSse)).toEqual([{ type: "text", text: "" }]);
+    expect(clientContent(clientSse)).toEqual([{ type: "text", text: "Bun shipped." }]);
+    expect(clientSse).not.toContain(query);
+  });
+
   test("a replayed search pair without encrypted_content never reaches Anthropic", async () => {
     const { wire } = await claudeTurn("https://api.anthropic.com", OK_TURN, "anth", [
       { role: "user", content: "What did Bun release?" },

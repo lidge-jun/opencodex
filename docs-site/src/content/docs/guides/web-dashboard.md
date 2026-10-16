@@ -149,6 +149,9 @@ its request and attempt failure cause is `transport-ambiguous`, with resend perm
 `refused-ambiguous`: the upstream may already have processed the turn. A genuine provider
 429 remains `rate-limit` with resend permission `permitted`.
 
+A Codex move to another account after HTTP 402 appears as **Account quota exhausted (402)**
+in the attempt's recovery details and counts as a quota recovery in exported metrics.
+
 Logs filters combine surface, intercepted requests, provider, exact model, status, time,
 speed, and conversation ID over the currently loaded request ring. Provider and model
 choices also include fallback attempts; model matching ignores case and surrounding spaces
@@ -207,8 +210,10 @@ without a matching price or usable usage are counted as excluded beside that amo
 reports pricing coverage fields. Usage that was only partly measured (`unreported` or `unsupported`)
 is not priced, and one excluded part excludes the whole request from that row's priced count. A
 leg that reached no upstream, or that upstream refused with an HTTP error before any output, spent
-nothing and does not; a leg whose response began (or ended without a status) but reported no usage
-may have been billed, so it does. A row with only excluded requests shows an em dash with that count
+nothing and does not; a client cancellation (499), or a leg whose response began or ended without
+a status but reported no usage, may have been billed, so it does. A refusal followed by a measured
+successful send contributes that send's cost to the summary even when the aggregate usage status
+is `unreported`. A row with only excluded requests shows an em dash with that count
 instead of a zero-dollar estimate, and a displayed zero-dollar value is a confirmed priced estimate.
 An older proxy that reports no coverage fields keeps a bare em dash with no count, so missing
 coverage stays distinct from an all-excluded row and from a confirmed zero estimate.

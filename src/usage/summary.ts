@@ -665,8 +665,12 @@ function addEstimatedCost(
   entry: Pick<PersistedUsageEntry, "usageStatus" | "usage" | "attempts">,
   costInfo: EntryCostInfo,
 ): void {
-  if (entry.usageStatus === "unreported" || entry.usageStatus === "unsupported"
-    || (!entry.usage && !entry.attempts?.length)) {
+  // A row of attempts reads `unreported` when any leg lacks usage. Once one leg is measured the row
+  // is metered and the attempt-level pricing decides, matching the model and provider breakdowns.
+  const measuredAttempt = entry.attempts?.some(attempt => attempt.usage && isMeasuredStatus(attempt.usageStatus));
+  if (!measuredAttempt
+    && (entry.usageStatus === "unreported" || entry.usageStatus === "unsupported"
+      || (!entry.usage && !entry.attempts?.length))) {
     totals.unmeteredRequests += 1;
     return;
   }
@@ -822,7 +826,9 @@ function blankRequestCounts(): UsageRequestCounts {
 function spentNothing(attempt: NonNullable<PersistedUsageEntry["attempts"]>[number] | undefined): boolean {
   if (!attempt || attempt.usage) return false;
   if (attempt.sendCount === 0 || attempt.locallyAnswered === true) return true;
-  return attempt.status >= 400 && attempt.streamAborted !== true && attempt.firstOutputMs === undefined;
+  // A 499 is the client hanging up on a send upstream may already be generating for.
+  return attempt.status >= 400 && attempt.status !== 499
+    && attempt.streamAborted !== true && attempt.firstOutputMs === undefined;
 }
 
 function bumpRequestCounts(counts: UsageRequestCounts, facts: number, amount = 1): void {

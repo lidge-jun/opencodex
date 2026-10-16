@@ -1421,8 +1421,8 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
                   yield { type: "tool_call_delta", arguments: delta.partial_json };
                 } else if (delta.type === "input_json_delta" && typeof delta.partial_json === "string" && serverSearch?.streaming
                     && serverSearch.json.length < 4096) {
-                  // Capped: an input past 4 KiB loses its label (query / url), never the call.
-                  serverSearch.json += delta.partial_json;
+                  // Capped: input that cannot be recovered drops its exchange instead of inventing a call.
+                  serverSearch.json += delta.partial_json.slice(0, 4096 - serverSearch.json.length);
                 }
                 break;
               }
