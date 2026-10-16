@@ -2,6 +2,13 @@
  * `ocx usage compare` reads the named range, then the previous equal window.
  */
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { repoRoot } from "../helpers/repo-root";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 import { handleObserveCommand } from "../../src/cli/observe";
 import { compareUsageWindows } from "../../src/cli/usage-compare";
 
@@ -221,3 +228,87 @@ describe("ocx usage compare", () => {
     expect(JSON.parse(lines.join("\n")).filter.apiKeyId).toBe("Key-A");
   });
 });
+
+
+test.each(["stable-local", "stable-hub", "connect", "disconnect", "account", "credential", "admin", "transport"])(
+  "usage comparison keeps one owner across both windows (%s)", scenario => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-compare-owner-"));
+    try {
+      const child = spawnSync(process.execPath, ["--eval", `
+        import { spyOn } from "bun:test";
+        import { writeFileSync } from "node:fs";
+        import { join } from "node:path";
+        import * as state from "./src/client/state";
+        import { serviceApiTokenFingerprint } from "./src/lib/service-secrets";
+        import { handleObserveCommand } from "./src/cli/observe";
+        const scenario = ${JSON.stringify(scenario)};
+        const home = process.env.OPENCODEX_HOME;
+        const token = "compare-fixture-key-a", nextToken = "compare-fixture-key-b";
+        const client = { serverUrl: "https://hub.example.test", managementUrl: "https://manage.example.test",
+          managementTransport: "direct", selectedClients: ["claude"], tokenEnv: "OPENCODEX_API_AUTH_TOKEN",
+          apiKeyId: "account-a", tokenFingerprint: serviceApiTokenFingerprint(token), protocolVersion: 1,
+          connectedAt: "2026-09-01T00:00:00.000Z" };
+        const connected = !["stable-local", "connect", "admin"].includes(scenario);
+        const write = (isClient) => writeFileSync(join(home, "config.json"), JSON.stringify({
+          port: 9, providers: {}, defaultProvider: "openai", runtimeRole: isClient ? "client" : "standalone",
+          ...(isClient ? { client } : {}),
+        }));
+        write(connected);
+        writeFileSync(join(home, "service-api-token"), token);
+        process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "compare-fixture-admin-a";
+        const change = () => {
+          if (scenario === "account") client.apiKeyId = "account-b";
+          if (scenario === "credential") {
+            writeFileSync(join(home, "service-api-token"), nextToken);
+            client.tokenFingerprint = serviceApiTokenFingerprint(nextToken);
+          }
+          if (scenario === "transport") client.transport = "hub";
+          if (scenario === "admin") process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "compare-fixture-admin-b";
+          write(scenario !== "disconnect");
+        };
+        // On the old implementation these are the first read's before/after observations,
+        // followed by the second read's capture. Change only after that first owner was verified.
+        const read = state.readClientConnectionState;
+        let observations = 0;
+        spyOn(state, "readClientConnectionState").mockImplementation(() => {
+          if (++observations === 3 && connected && !scenario.startsWith("stable")) change();
+          return read();
+        });
+        const output = [], errors = [], requests = [];
+        console.log = (...args) => output.push(args.join(" "));
+        console.error = (...args) => errors.push(args.join(" "));
+        const code = await handleObserveCommand(["usage", "compare", "--json"], {
+          baseUrl: "http://local.test", now: () => ${NOW},
+          fetchImpl: async (input, init) => {
+            const url = new URL(String(input));
+            requests.push({ origin: url.origin, path: url.pathname,
+              originalCredential: new Headers(init?.headers).get("x-opencodex-api-key") === (connected ? token : "compare-fixture-admin-a") });
+            if (requests.length === 1 && ["connect", "admin"].includes(scenario)) change();
+            return Response.json({ schemaVersion: 1, source: "hub", scope: "client", range: "30d", surface: "all",
+              generatedAt: 1, customWindow: true, since: Number(url.searchParams.get("since")), until: Number(url.searchParams.get("until")),
+              summary: { requests: 1, totalTokens: 3, inputTokens: 2, outputTokens: 1, cachedInputTokens: 0, unpricedRequests: 1, unmeteredRequests: 0 },
+              providers: [], models: [], days: [], filter: { provider: null, model: null, matched: true, comboOverlap: false } });
+          },
+        });
+        process.stdout.write(JSON.stringify({ code, output, errors, requests }));
+      `], { cwd: repoRoot(), env: { ...process.env, OPENCODEX_HOME: home }, encoding: "utf8", timeout: SPAWN_BUDGET_MS - 5000 });
+      expect(child.status, child.stderr).toBe(0);
+      const result = JSON.parse(child.stdout);
+      if (scenario.startsWith("stable")) {
+        expect(result.code).toBe(0);
+        expect(result.requests).toHaveLength(2);
+        expect(result.requests.every((request: { originalCredential: boolean }) => request.originalCredential)).toBe(true);
+        expect(result.requests.map((request: { path: string }) => request.path)).toEqual(Array(2).fill(scenario === "stable-hub" ? "/v1/usage" : "/api/usage"));
+        expect(JSON.parse(result.output.join("\n")).delta.requests).toBe(0);
+      } else {
+        expect(result.code).toBe(1);
+        expect(result.output).toEqual([]);
+        expect(result.errors.join("\n")).toContain("Usage owner changed during comparison");
+        expect(result.requests).toHaveLength(1);
+      }
+      expect(child.stdout).not.toContain("compare-fixture");
+    } finally {
+      removeTreeWithRetry(home);
+    }
+  }, SPAWN_BUDGET_MS,
+);
