@@ -178,8 +178,8 @@ test("concurrent sync processes leave a complete restorable config", () => {
     const jobs = [18273, 18274, 18275].map(port => Bun.spawn([process.execPath, "--eval",
       'import { injectCodexConfig } from "./src/codex/inject"; const result = await injectCodexConfig(' + port + ', {}); if (!result.success && !result.retryable) process.exit(2);'
     ], { cwd: process.cwd(), env: process.env, stdout: "pipe", stderr: "pipe" }));
-    const exits = await Promise.all(jobs.map(job => job.exited));
-    if (exits.some(code => code !== 0)) throw new Error("concurrent sync failed: " + exits);
+    const outcomes = await Promise.all(jobs.map(async job => ({ code: await job.exited, error: await new Response(job.stderr).text() })));
+    if (outcomes.some(result => result.code !== 0)) throw new Error("concurrent sync failed: " + JSON.stringify(outcomes));
     const config = Bun.TOML.parse(readFileSync(path, "utf8"));
     if (![18273, 18274, 18275].some(port => config.model_providers[id].base_url === "http://127.0.0.1:" + port + "/v1")) throw new Error("no sync published");
   `);
@@ -260,10 +260,8 @@ test.each(["already-off", "late-off"])("approved routing respects integration OF
       writeFileSync(join(process.env.OPENCODEX_HOME, "config.json"), JSON.stringify(config));
     };
     if (${JSON.stringify(timing)} === "already-off") disable();
-    let calls = 0;
     const result = injectApprovedCodexProvider(id, standaloneCodexRoutingTarget(18281, {}), () => {
-      // The first guard belongs to stale-journal cleanup; the second is URL publication.
-      if (++calls === 2 && ${JSON.stringify(timing)} === "late-off") disable();
+      if (${JSON.stringify(timing)} === "late-off") disable();
     });
     if (result !== false) throw new Error("integration OFF was not skipped");
     if (readFileSync(record, "utf8") !== evidence) throw new Error("skipped injection changed recovery evidence");
@@ -271,4 +269,28 @@ test.each(["already-off", "late-off"])("approved routing respects integration OF
   `);
   expect(readFileSync(join(codexHome, "config.toml"), "utf8")).toBe(original);
   expect(readFileSync(join(codexHome, "history.jsonl"), "utf8")).toBe("history sentinel\n");
+});
+
+
+test("concurrent approval replacement cannot escape injection as an unhandled read failure", () => {
+  run(`
+    const fs = await import("node:fs");
+    const { spyOn } = await import("bun:test");
+    allow();
+    const record = join(process.env.OPENCODEX_HOME, fs.readdirSync(process.env.OPENCODEX_HOME).find(name => name.startsWith("codex-provider-routing-") && name.endsWith(".json")));
+    const stat = fs.statSync;
+    // Reproduce a cooperating writer's atomic rename between the reader's stat and open.
+    const observation = spyOn(fs, "statSync").mockImplementation((file, ...options) => {
+      const result = stat(file, ...options);
+      if (file === record && !existsSync(path + ".ocx-write.lock")) {
+        writeFileSync(record + ".replacement", readFileSync(record));
+        fs.renameSync(record + ".replacement", record);
+      }
+      return result;
+    });
+    try {
+      const result = await injectCodexConfig(18282, {});
+      if (!result.success && !result.retryable) throw new Error("concurrent injection was not success-or-retryable");
+    } finally { observation.mockRestore(); }
+  `);
 });
