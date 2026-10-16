@@ -243,8 +243,9 @@ async function injectCodexConfigImpl(
   const rawContent = missingConfig ? "" : readFileSync(CODEX_CONFIG_PATH, "utf-8");
   const activeProvider = externalCodexModelProvider(rawContent);
   if (activeProvider) {
-    if (injectApprovedCodexProvider(activeProvider, routingTarget, options.beforeClientWrite ? () => runClientWriteGuard(options.beforeClientWrite) : undefined, options.validateOnly)) {
-      return { success: true, ...(options.validateOnly ? { configApplied: false as const } : {}), message: `Approved Codex provider ${tomlString(activeProvider)} routes through OpenCodex; provider identity and transport settings preserved.` };
+    const approved = injectApprovedCodexProvider(activeProvider, routingTarget, options.beforeClientWrite ? () => runClientWriteGuard(options.beforeClientWrite) : undefined, options.validateOnly);
+    if (approved) {
+      return { success: true, configChanged: approved.configChanged, ...(options.validateOnly ? { configApplied: false as const } : {}), message: `Approved Codex provider ${tomlString(activeProvider)} routes through OpenCodex; provider identity and transport settings preserved.` };
     }
     // A launcher may have journaled before the provider manager took ownership. Never let shutdown
     // replay that stale snapshot over externally managed config.

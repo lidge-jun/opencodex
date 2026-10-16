@@ -121,7 +121,7 @@ function accepts(fieldUrl: string, saved: Approval): boolean {
 }
 
 /** Called by start/sync, never prompts and never broadens the approved provider set. */
-export function injectApprovedCodexProvider(id: string, target: CodexRoutingTarget, beforeWrite?: () => void, validateOnly = false): boolean {
+export function injectApprovedCodexProvider(id: string, target: CodexRoutingTarget, beforeWrite?: () => void, validateOnly = false): false | { configChanged: boolean } {
   if (!Object.hasOwn(readRecord().providers, id)) return false;
   target = validateCodexRoutingTarget(target);
   if (target.requiresAdmissionToken || target.desktopAuthless || target.clientCompaction || !isLoopbackHostname(new URL(target.baseUrl).hostname)) {
@@ -134,7 +134,7 @@ export function injectApprovedCodexProvider(id: string, target: CodexRoutingTarg
       if (externalCodexModelProvider(content) !== id) throw new Error("Active provider changed; routing was not applied.");
       const field = providerUrl(content, id), saved = record.providers[id]!;
       if (!accepts(field.url, saved)) throw new Error("Approved provider base_url changed outside OpenCodex; revoke and approve it again.");
-      if (validateOnly || field.url === target.baseUrl) return true;
+      if (validateOnly || field.url === target.baseUrl) return { configChanged: false };
       beforeWrite?.();
       if (readFileSync(CODEX_CONFIG_PATH, "utf8") !== content) throw new Error("Codex config changed before publication; retry sync.");
       // Write recovery evidence first. Both the previous and candidate URL remain restorable
@@ -143,7 +143,7 @@ export function injectApprovedCodexProvider(id: string, target: CodexRoutingTarg
       save(record, held);
       beforePublishForTests?.();
       publish(CODEX_CONFIG_PATH, field.replace(`base_url = ${tomlString(target.baseUrl)}`), held);
-      return true;
+      return { configChanged: true };
     };
     return beforeWrite ? withConfigMutationLockSync(apply) : apply();
   });

@@ -54,7 +54,9 @@ test.each(["sync", "async"])("approved provider follows port changes and restore
     writeFileSync(journal, JSON.stringify({ version: 1, originalConfig: Buffer.from('model_provider = "openai"\\n').toString("base64"), originalProfile: null, opencodexHome: process.env.OPENCODEX_HOME }));
     for (const port of [10100, 10101]) {
       const result = await injectCodexConfig(port, {});
-      if (!result.success || result.configApplied === false) throw new Error("approved routing skipped");
+      if (!result.success || result.configApplied === false || result.configChanged !== true) throw new Error("approved routing skipped or change receipt missing");
+      const noop = await injectCodexConfig(port, {});
+      if (noop.configChanged !== false) throw new Error("unchanged approved routing claimed a config write");
       const config = Bun.TOML.parse(readFileSync(path, "utf8"));
       if (config.model_provider !== id || config.model_providers[id].supports_websockets !== false
         || config.model_providers[id].base_url !== "http://127.0.0.1:" + port + "/v1") throw new Error("settings changed");

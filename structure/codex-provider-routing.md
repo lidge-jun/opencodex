@@ -7,7 +7,7 @@ provider identity, HTTP/WebSocket settings and history. It uses the shared confi
 lock and destination guards; recovery evidence precedes URL publication and retains the
 previous and candidate local URL across an interrupted write. Changed foreign URLs refuse
 injection and survive restore. Native restore completes its existing preflight before
-restoring approved URLs. Foreground signal/exit cleanup delegates to the same native restore, which restores approved URLs and preserves unapproved external configurations. Partial native outcomes remain partial, and recovery failures are reported in the config artifact. Consent survives stop/restore; explicit revocation removes it.
+restoring approved URLs. Foreground signal/exit cleanup delegates to the same native restore, which restores approved URLs and preserves unapproved external configurations. Partial native outcomes remain partial, and recovery failures are reported in the config artifact. Consent survives stop/restore; explicit revocation removes it. Successful URL publication returns a committed configuration-change receipt through injection/sync; validation-only and unchanged URL operations report no change, so explicit config-change restarts retain the same authority.
 Only Responses/OpenAI-auth provider tables without separate credentials or headers are
 eligible, and only ordinary loopback routing is admitted. Authless, client-compaction and
 admission-token targets are refused rather than silently changing authentication policy.
