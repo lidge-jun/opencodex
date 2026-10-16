@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleResponses, handleResponsesCompact } from "../../src/server/responses";
+import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { compactionRequest, completedPayload, drainCompactionResponseState,
@@ -18,6 +19,8 @@ let home: string;
 let releaseSpendHome: () => void;
 installCompactionRoutingAclFixture();
 beforeEach(() => {
+  clearComboSelectionState();
+  clearComboTargetCooldowns();
   home = mkdtempSync(join(tmpdir(), "ocx-retention-routing-"));
   process.env.OPENCODEX_HOME = home;
   process.env.CODEX_HOME = home;
@@ -25,6 +28,8 @@ beforeEach(() => {
 });
 afterEach(async () => {
   globalThis.fetch = originalFetch;
+  clearComboSelectionState();
+  clearComboTargetCooldowns();
   try { await drainCompactionResponseState(); } finally {
     releaseSpendHome();
     await removeCompactionFixture(home);

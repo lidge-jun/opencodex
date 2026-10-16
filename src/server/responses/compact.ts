@@ -1792,10 +1792,16 @@ export async function handleResponsesCompact(
     if (typeof compactionItems[0]!.encrypted_content === "string"
       && compactionItems[0]!.encrypted_content.trim().length > 0
       && !compactionItems[0]!.encrypted_content.startsWith("ocx1:")) {
-      const result = new Response(JSON.stringify({ output: compactionItems }), {
+      // Failover may reach native compaction after readable reasoning was withheld locally.
+      // The opaque item cannot contain that text, so publish it (or its archive notice) alongside.
+      const output = [...compactionItems, ...(retention.retainedReasoning ?? [])];
+      if (retention.archived) output.push({ type: "message", role: "user",
+        content: [{ type: "input_text", text: appendRetentionNotice("", retention.archived).trimStart() }] });
+      const result = new Response(JSON.stringify({ output }), {
         headers: { "Content-Type": "application/json" },
       });
       if (!options.compactionRoutingOverride) rememberCompactHandoffRoute(req, admission, raw.model);
+      keepArchive = true;
       return result;
     }
     const encrypted = compactionItems[0]!.encrypted_content;
@@ -1812,7 +1818,7 @@ export async function handleResponsesCompact(
     keepArchive = true;
     return result;
   } finally {
-    // Only a readable replacement summary publishes this request's archive path.
+    // Keep an archive only after successful replacement history publishes its path.
     if (!keepArchive && retention.archived) rmSync(retention.archived.path, { force: true });
   }
 }
