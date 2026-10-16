@@ -162,7 +162,7 @@ import { persistConfigUnlocked, readRawConfigJson } from "./config/persist-unloc
 import { withConfigMutationLockSync, bumpGenerationForCooperatingConfigWrite } from "./config/mutation-lock";
 import { getDefaultConfig } from "./config/proxy-env";
 import { configSchema } from "./config/schema/config-schema";
-import { sanitizeOpenCodeZenOverridesForLoad } from "./config/opencode-zen-upgrade";
+import { sanitizeOpenCodeOverridesForLoad } from "./config/opencode-wire-upgrade";
 import {
   hardenExistingSecret,
   normalizeApiKeyIds,
@@ -223,7 +223,7 @@ export function loadConfig(): OcxConfig {
   try {
     const raw = readFileSync(configPath, "utf-8").replace(/^\uFEFF/, "");
     const parsed = JSON.parse(raw);
-    sanitizeOpenCodeZenOverridesForLoad(parsed);
+    sanitizeOpenCodeOverridesForLoad(parsed);
     sanitizeAliasesForLoad(parsed);
     sanitizeReasoningPinsForLoad(parsed);
     sanitizeModelDisplayNamesForLoad(parsed);
