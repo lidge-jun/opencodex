@@ -960,7 +960,7 @@ The proxy translates every Anthropic Messages API request into the Codex Respons
 | User `tool_result` | `function_call_output` (`is_error` → `[tool error]` prefix) |
 | `tool_reference` in a tool result | Text `Tool loaded: <tool_name>` in the paired result; preserves loaded-tool names without adding declarations or enabling translated server-side deferral |
 | `thinking` / `redacted_thinking` replay | `reasoning` items with bounded `ocxr1` envelopes for signatures and redacted payloads |
-| Function tools | `{type: "function"}` (`web_search*` → `{type: "web_search"}`). On a route to `api.anthropic.com`, the typed `web_search_*` and `web_fetch_*` declarations are also sent to Anthropic as declared and run server-side, unless the web-search sidecar supplies `web_search` itself. Each search or fetch comes back to the client as its `server_tool_use` block and its `web_search_tool_result` or `web_fetch_tool_result` |
+| Function tools | `{type: "function"}` (`web_search*` → `{type: "web_search"}`). On a route to `api.anthropic.com`, the typed `web_search_*` and `web_fetch_*` declarations are also sent to Anthropic as declared and run server-side, unless the web-search sidecar supplies `web_search` itself. Each search or fetch comes back to the client as its `server_tool_use` block and its `web_search_tool_result` or `web_fetch_tool_result`, verbatim. When the client sends that pair back in its history, the next `api.anthropic.com` request carries it in place; other destinations never see it |
 | `tool_choice` | `auto`→`auto`, `none`→`none`, `any`→`required`, named function→`{type:"function",name}`, hosted WebSearch/web_search→`{type:"web_search"}` |
 | `max_tokens` | `max_output_tokens` |
 | `stop_sequences` | `stop` |

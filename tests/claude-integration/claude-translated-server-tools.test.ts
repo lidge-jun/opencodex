@@ -3,6 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createAnthropicAdapter } from "../../src/adapters/anthropic";
+import { webSearchPairFromItem } from "../../src/claude/outbound";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
 import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
@@ -248,4 +249,94 @@ describe("anthropic adapter: typed web tools beside function tools", () => {
     const tools = (JSON.parse(String(body)) as { tools: Record<string, unknown>[] }).tools;
     expect(tools.map(t => t.type ?? "function")).toEqual(["function", "web_fetch_20250910"]);
   });
+});
+
+/** The client's content blocks rebuilt from its SSE, as Claude Code stores them for the next turn. */
+function clientContent(clientSse: string): Record<string, unknown>[] {
+  const blocks: Record<string, unknown>[] = [];
+  const inputs: string[] = [];
+  for (const f of clientFrames(clientSse)) {
+    const i = f.index as number;
+    const delta = f.delta as Record<string, string> | undefined;
+    if (f.type === "content_block_start") blocks[i] = { ...(f.content_block as Record<string, unknown>) };
+    else if (delta?.type === "input_json_delta") inputs[i] = (inputs[i] ?? "") + delta.partial_json;
+    else if (delta?.type === "text_delta") blocks[i]!.text = String(blocks[i]!.text) + delta.text;
+  }
+  return blocks.map((b, i) => inputs[i] ? { ...b, input: JSON.parse(inputs[i]!) } : b);
+}
+
+describe("a server-tool exchange the client replays reaches Anthropic in place", () => {
+  const followUp = (assistant: unknown[], next: unknown = "More?") => [
+    { role: "user", content: "What did Bun release?" }, { role: "assistant", content: assistant }, { role: "user", content: next },
+  ];
+
+  test("web_search pair before text: original srvtoolu_ id and encrypted_content, only to api.anthropic.com", async () => {
+    const turn1 = clientContent((await claudeTurn("https://api.anthropic.com", SEARCH_TURN)).clientSse);
+    const { wire } = await claudeTurn("https://api.anthropic.com", OK_TURN, "anth", followUp(turn1));
+    const content = (wire.messages as { content: Record<string, unknown>[] }[])[1]!.content;
+    expect(content.slice(0, 2)).toEqual([
+      { type: "server_tool_use", id: "srvtoolu_1", name: "web_search", input: { query: "bun release" } },
+      SEARCH_TURN[5]!.content_block as Record<string, unknown>,
+    ]);
+    expect(content[2]).toMatchObject({ type: "text", text: "Bun shipped." });
+    expect(content).toHaveLength(3);
+    for (const [baseUrl, target] of [["https://compat.example.com", "anth"], ["https://api.anthropic.com", "gpt"]] as const) {
+      const other = JSON.stringify((await claudeTurn(baseUrl, OK_TURN, target, followUp(turn1))).wire);
+      expect(other).not.toContain("srvtoolu_1");
+      expect(other).toContain("Bun shipped.");
+    }
+  });
+
+  test("web_fetch pair before a client tool_use keeps its place ahead of the tool_use", async () => {
+    const turn1 = clientContent((await claudeTurn("https://api.anthropic.com", fetchTurn(FETCH_RESULT))).clientSse);
+    const toolUse = { type: "tool_use", id: "toolu_1", name: "Read", input: {} };
+    const { wire } = await claudeTurn("https://api.anthropic.com", OK_TURN, "anth",
+      followUp([...turn1.slice(0, 2), toolUse], [{ type: "tool_result", tool_use_id: "toolu_1", content: "ok" }]));
+    const content = (wire.messages as { content: Record<string, unknown>[] }[])[1]!.content;
+    expect(content).toEqual([
+      { type: "server_tool_use", id: "srvtoolu_f", name: "web_fetch", input: { url: "https://bun.sh/blog" } },
+      { type: "web_fetch_tool_result", tool_use_id: "srvtoolu_f", content: FETCH_RESULT },
+      toolUse,
+    ]);
+  });
+
+  test("an identical earlier text does not take a later turn's exchange", async () => {
+    const turn1 = clientContent((await claudeTurn("https://api.anthropic.com", SEARCH_TURN)).clientSse);
+    const { wire } = await claudeTurn("https://api.anthropic.com", OK_TURN, "anth", [
+      { role: "user", content: "Hi" }, { role: "assistant", content: [{ type: "text", text: "Bun shipped." }] },
+      { role: "user", content: "What did Bun release?" }, { role: "assistant", content: turn1 }, { role: "user", content: "More?" },
+    ]);
+    const types = (wire.messages as { content: unknown }[])
+      .map(m => Array.isArray(m.content) ? m.content.map(b => String((b as Record<string, unknown>).type)) : []);
+    expect(types[1]).toEqual(["text"]);
+    expect(types[3]).toEqual(["server_tool_use", "web_search_tool_result", "text"]);
+  });
+
+  test("a pair between thinking blocks stays between them", async () => {
+    const [use, result] = (await claudeTurn("https://api.anthropic.com", SEARCH_TURN).then(r => clientContent(r.clientSse))).slice(0, 2);
+    const thinking = (signature: string) => ({ type: "thinking", thinking: `t ${signature}`, signature });
+    const redacted = { type: "redacted_thinking", data: "RedactedPayload0123456789" };
+    const second = [{ ...use, id: "srvtoolu_2" }, { ...result, tool_use_id: "srvtoolu_2" }];
+    const assistant = [thinking("SigOne0123456789abcdef"), use, result, thinking("SigTwo0123456789abcdef"), ...second, redacted];
+    const { wire } = await claudeTurn("https://api.anthropic.com", OK_TURN, "anth", followUp([...assistant, { type: "text", text: "Bun shipped." }]));
+    const content = (wire.messages as { content: Record<string, unknown>[] }[])[1]!.content;
+    expect(content.map(b => b.id ?? b.tool_use_id ?? b.type)).toEqual([
+      "thinking", "srvtoolu_1", "srvtoolu_1", "thinking", "srvtoolu_2", "srvtoolu_2", "redacted_thinking", "text",
+    ]);
+  });
+});
+
+test("a malformed anthropic_blocks falls back to the rebuilt pair", () => {
+  for (const anthropic_blocks of [{}, { use: {}, result: {} }, { use: { id: 1, name: "web_search" }, result: { type: "web_search_tool_result" } }]) {
+    const pair = webSearchPairFromItem({ type: "web_search_call", id: "ws_1", action: { type: "search", query: "q" }, anthropic_blocks });
+    expect(pair).toMatchObject({ id: "ws_1", name: "web_search", resultType: "web_search_tool_result", input: { query: "q" } });
+  }
+});
+
+test("an item emitted before anthropic_blocks still maps its fetch_result to a web_fetch pair", () => {
+  const pair = webSearchPairFromItem({
+    type: "web_search_call", id: "srvtoolu_old", action: { type: "open_page", url: "https://bun.sh/blog" },
+    fetch_result: FETCH_RESULT,
+  });
+  expect(pair).toMatchObject({ id: "srvtoolu_old", name: "web_fetch", resultType: "web_fetch_tool_result", input: { url: "https://bun.sh/blog" }, resultContent: FETCH_RESULT });
 });
