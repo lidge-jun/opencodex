@@ -101,6 +101,7 @@ function acquire(configPath: string): ConfigWriteAcquireResult {
     // A preceding writer may atomically replace the file before releasing the lock.
     // Capture the inode only after acquisition, while retaining the canonical-path gate.
     const current = destination(configPath);
+    canonicalFileIdentity(current.canonical);
     if (current.canonical !== target.canonical || !stillHeld(acquired.handle)) {
       release(acquired.handle);
       return { ok: false, error: "unsafe", detail: acquired.handle.path };

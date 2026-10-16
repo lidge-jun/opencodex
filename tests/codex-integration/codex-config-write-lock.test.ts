@@ -1205,3 +1205,24 @@ test("acquisition refuses a canonical retarget before entering the write section
     expect(existsSync(lockPath)).toBe(false);
   } finally { spy.mockRestore(); }
 });
+
+
+test("acquisition does not admit a dangling symlink as a preceding writer's deletion", () => {
+  const path = fixtureConfig('model = "a"\n'), lockPath = configWriteLockPath(path);
+  const acquire = promptLock.tryAcquire;
+  let changed = false, entered = false;
+  const spy = spyOn(promptLock, "tryAcquire").mockImplementation((file, deps) => {
+    if (file === lockPath && !changed) {
+      changed = true;
+      renameSync(path, path + ".original");
+      symlinkSync(path + ".missing", path);
+    }
+    return acquire(file, deps);
+  });
+  try {
+    expect(() => withConfigWriteLock(path, () => { entered = true; })).toThrow("canonical configuration target is not the observed regular file");
+    expect(entered).toBe(false);
+    expect(readFileSync(path + ".original", "utf8")).toBe('model = "a"\n');
+    expect(existsSync(lockPath)).toBe(false);
+  } finally { spy.mockRestore(); }
+});
