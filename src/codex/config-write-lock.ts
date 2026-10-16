@@ -101,10 +101,17 @@ function acquire(configPath: string): ConfigWriteAcquireResult {
     // A preceding writer may atomically replace the file before releasing the lock.
     // Capture the inode only after acquisition, while retaining the canonical-path gate.
     const current = destination(configPath);
-    canonicalFileIdentity(current.canonical);
     if (current.canonical !== target.canonical || !stillHeld(acquired.handle)) {
       release(acquired.handle);
       return { ok: false, error: "unsafe", detail: acquired.handle.path };
+    }
+    // Preserve caller-owned unreadable/non-regular errors, but do not mistake a
+    // dangling link (realpath's fallback) or a fresh replacement for proven absence.
+    try {
+      const entry = lstatSync(current.canonical, { bigint: true });
+      if (entry.isSymbolicLink() || `${entry.dev}:${entry.ino}` !== current.inode) throw new ConfigWriteDestinationChanged();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT" || current.inode !== null) throw error;
     }
     destinations.set(acquired.handle, current);
     return acquired;

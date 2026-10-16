@@ -1220,7 +1220,7 @@ test("acquisition does not admit a dangling symlink as a preceding writer's dele
     return acquire(file, deps);
   });
   try {
-    expect(() => withConfigWriteLock(path, () => { entered = true; })).toThrow("canonical configuration target is not the observed regular file");
+    expect(() => withConfigWriteLock(path, () => { entered = true; })).toThrow("destination changed");
     expect(entered).toBe(false);
     expect(readFileSync(path + ".original", "utf8")).toBe('model = "a"\n');
     expect(existsSync(lockPath)).toBe(false);
