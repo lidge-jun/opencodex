@@ -665,9 +665,10 @@ function addEstimatedCost(
   entry: Pick<PersistedUsageEntry, "usageStatus" | "usage" | "attempts">,
   costInfo: EntryCostInfo,
 ): void {
-  // A row of attempts reads `unreported` when one leg refused without usage; that leg is a known
-  // zero, so a fully priced row is metered whatever its aggregate status says.
-  if (!(entry.attempts?.length && costInfo.isPriced)
+  // A row of attempts reads `unreported` when any leg lacks usage. Once one leg is measured the row
+  // is metered and the attempt-level pricing decides, matching the model and provider breakdowns.
+  const measuredAttempt = entry.attempts?.some(attempt => attempt.usage && isMeasuredStatus(attempt.usageStatus));
+  if (!measuredAttempt
     && (entry.usageStatus === "unreported" || entry.usageStatus === "unsupported"
       || (!entry.usage && !entry.attempts?.length))) {
     totals.unmeteredRequests += 1;

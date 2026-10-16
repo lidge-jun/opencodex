@@ -47,6 +47,19 @@ test("a refused retry and a measured send total the measured cost on the summary
 
 test("a send the client cancelled before output is an unknown cost, not a known zero", () => {
   const { usage: _usage, ...withoutUsage } = measured;
-  const result = computeEntryCost(row([measured, { ...withoutUsage, ordinal: 2, status: 499, usageStatus: "unreported" }]));
-  expect(result.isPriced).toBe(false);
+  const attempts: Attempt[] = [measured, { ...withoutUsage, ordinal: 2, status: 499, usageStatus: "unreported" }];
+  const aggregate = aggregateAttemptUsage(attempts);
+  const entry = { ...row(attempts), timestamp: Date.UTC(2026, 5, 28), usageStatus: aggregate.status, usage: aggregate.usage };
+  expect(computeEntryCost(entry).isPriced).toBe(false);
+  const { summary, models } = summarizeUsage([entry], "30d", Date.UTC(2026, 5, 28, 12));
+  expect(summary).toMatchObject({ requests: 1, pricedRequests: 0, unpricedRequests: 1, unmeteredRequests: 0 });
+  expect(models).toEqual([expect.objectContaining({ model: "gpt-5.5", pricedRequests: 0, unpricedRequests: 1 })]);
+});
+
+test("a row of known-zero refusals stays unmetered", () => {
+  const { usage: _usage, ...withoutUsage } = measured;
+  const attempts: Attempt[] = [{ ...withoutUsage, status: 429, usageStatus: "unreported" }];
+  const entry = { ...row(attempts), timestamp: Date.UTC(2026, 5, 28) };
+  expect(summarizeUsage([entry], "30d", Date.UTC(2026, 5, 28, 12)).summary)
+    .toMatchObject({ requests: 1, pricedRequests: 0, unpricedRequests: 0, unmeteredRequests: 1 });
 });
