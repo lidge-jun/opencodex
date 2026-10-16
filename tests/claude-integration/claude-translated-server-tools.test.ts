@@ -312,6 +312,56 @@ describe("a server-tool exchange the client replays reaches Anthropic in place",
     expect(types[3]).toEqual(["server_tool_use", "web_search_tool_result", "text"]);
   });
 
+  test("a string-form assistant cannot steal a later identical text anchor", async () => {
+    const turn = clientContent((await claudeTurn("https://api.anthropic.com", SEARCH_TURN)).clientSse);
+    const { wire } = await claudeTurn("https://api.anthropic.com", OK_TURN, "anth", [
+      { role: "user", content: "Hi" }, { role: "assistant", content: "Bun shipped." },
+      { role: "user", content: "Search" }, { role: "assistant", content: turn },
+      { role: "user", content: "More?" },
+    ]);
+    const messages = wire.messages as { content: Record<string, unknown>[] }[];
+    expect(messages[3]!.content).toEqual(turn);
+    expect(messages[1]!.content).toEqual([{ type: "text", text: "Bun shipped." }]);
+  });
+
+  test("repeated identical calls keep each server exchange in its own assistant turn", async () => {
+    const turn = clientContent((await claudeTurn("https://api.anthropic.com", SEARCH_TURN)).clientSse);
+    const call = { type: "tool_use", id: "toolu_repeat", name: "Read", input: {} };
+    const result = [{ type: "tool_result", tool_use_id: "toolu_repeat", content: "ok" }];
+    const first = [...turn, call];
+    const second = turn.map(b => b.id === "srvtoolu_1" ? { ...b, id: "srvtoolu_2" }
+      : b.tool_use_id === "srvtoolu_1" ? { ...b, tool_use_id: "srvtoolu_2" } : b);
+    const { wire } = await claudeTurn("https://api.anthropic.com", OK_TURN, "anth", [
+      { role: "user", content: "Hi" }, { role: "assistant", content: "Bun shipped." },
+      { role: "user", content: "Search" }, { role: "assistant", content: first },
+      { role: "user", content: result }, { role: "assistant", content: [...second, call] },
+      { role: "user", content: result },
+    ]);
+    const messages = wire.messages as { content: Record<string, unknown>[] }[];
+    expect(messages[3]!.content).toEqual(first);
+    expect(messages[5]!.content).toEqual([...second, call]);
+    expect(messages[1]!.content).toEqual([{ type: "text", text: "Bun shipped." }]);
+  });
+
+  test("string and array anchors keep repeated exchanges between interleaved thinking blocks", async () => {
+    const turn = clientContent((await claudeTurn("https://api.anthropic.com", SEARCH_TURN)).clientSse);
+    const [use, result, text] = turn;
+    const thinking = { type: "thinking", thinking: "checking", signature: "SigRepeat0123456789abcdef" };
+    const redacted = { type: "redacted_thinking", data: "RedactedRepeat0123456789" };
+    const pair = (id: string) => [{ ...use, id }, { ...result, tool_use_id: id }];
+    const assistant = [thinking, ...pair("srvtoolu_text"), text, redacted,
+      ...pair("srvtoolu_thinking"), thinking, ...pair("srvtoolu_redacted"), redacted,
+      ...pair("srvtoolu_text2"), text];
+    const { wire } = await claudeTurn("https://api.anthropic.com", OK_TURN, "anth", [
+      { role: "user", content: "Hi" }, { role: "assistant", content: "Bun shipped." },
+      { role: "user", content: "Search" }, { role: "assistant", content: assistant },
+      { role: "user", content: "More?" },
+    ]);
+    const messages = wire.messages as { content: Record<string, unknown>[] }[];
+    expect(messages[3]!.content).toEqual(assistant);
+    expect(messages[1]!.content).toEqual([{ type: "text", text: "Bun shipped." }]);
+  });
+
   test("a pair between thinking blocks stays between them", async () => {
     const [use, result] = (await claudeTurn("https://api.anthropic.com", SEARCH_TURN).then(r => clientContent(r.clientSse))).slice(0, 2);
     const thinking = (signature: string) => ({ type: "thinking", thinking: `t ${signature}`, signature });
