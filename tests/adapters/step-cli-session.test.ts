@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "bun:test";
 
+import { StepSessionPool } from "../../src/adapters/step-cli/session-pool";
 import {
   StepCliSession,
   StepSessionError,
@@ -237,14 +238,31 @@ describe("StepCode session", () => {
 
   test("reports a held tool result that arrived too late instead of continuing", async () => {
     const fake = new FakeStep();
-    const { session } = await openSession(fake);
+    // Injected timers: the old version slept 560ms of wall clock and went flaky on a slow runner.
+    const timers: Array<() => void> = [];
+    const setTimer = ((fn: () => void) => {
+      timers.push(fn);
+      return 0 as never;
+    }) as unknown as typeof setTimeout;
+    const { session, events } = await openSession(fake, {
+      setTimeout: setTimer,
+      clearTimeout: (() => undefined) as unknown as typeof clearTimeout,
+    });
     await session.handshake();
     fake.emit({ kind: "request", id: "req_tool", method: "sdk_tool.invoke", payload: { toolUseId: "t" } });
     await Bun.sleep(5);
     // StepCode's own window is two minutes; a result past it has to fail rather than resume a call the
     // model was already told was denied.
-    await Bun.sleep(560);
+    for (const fire of timers.splice(0)) fire();
+    await Bun.sleep(5);
     expect(session.resolveHeldToolResult({ id: "req_tool", method: "sdk_tool.invoke" } as StepFrame, { content: [] })).toBe(false);
+    // Regression: the expiry was surfaced with no answer, so the runtime waited out its own window.
+    const expiry = events.find(event => event.type === "reverse_request" && (event.frame.payload as { __expired?: boolean } | undefined)?.__expired === true);
+    expect(expiry, "the peer must be told the hold expired so it can answer the runtime").toBeDefined();
+    // `close()` also schedules through the injected timer, so release whatever it queued rather than
+    // waiting on a clock this test has taken away.
+    void session.close();
+    for (const fire of timers.splice(0)) fire();
     await session.close();
   });
 
@@ -283,6 +301,21 @@ describe("StepCode session", () => {
     await expect(handshake).rejects.toBeInstanceOf(StepSessionError);
   });
 
+  test("a spawn failure closes the session and announces the exit without leaving it writable", async () => {
+    const fake = new FakeStep();
+    fake.scripted = false;
+    const { session } = await openSession(fake);
+    let announced = 0;
+    session.onExit(() => {
+      announced += 1;
+    });
+    const failure = session.handshake();
+    fake.child.emit("error", new Error("spawn ENOENT"));
+    await expect(failure).rejects.toThrow();
+    expect(session.closed).toBe(true);
+    expect(announced).toBe(1);
+  });
+
   test("terminates with SIGTERM then escalates, and announces the exit", async () => {
     const fake = new FakeStep();
     const { session } = await openSession(fake);
@@ -294,5 +327,70 @@ describe("StepCode session", () => {
     expect(fake.child.killed[0]).toBe("SIGTERM");
     expect(announced).toBe(1);
     expect(session.closed).toBe(true);
+  });
+});
+
+describe("StepCode session pool", () => {
+  function fakeChild(): FakeStep["child"] {
+    return new FakeStep().child;
+  }
+
+  const options = () => ({
+    binary: "/bin/true",
+    args: ["--sdk-stdio"],
+    env: {},
+    cwd: "/tmp",
+    handshakeTimeoutMs: 500,
+    requestTimeoutMs: 500,
+    reverseRequestHoldMs: 500,
+    idleTimeoutMs: 60_000,
+    killGraceMs: 10,
+  });
+
+  test("two concurrent opens of one conversation share a single process", async () => {
+    // Regression: `open` was async with no in-flight coalescing, so a Codex retry (or two clients on one
+    // handle) spawned two processes, the second `#entries.set` orphaned the first, and the orphan's
+    // held tool call could never be released.
+    const child = fakeChild();
+    const pool = new StepSessionPool(
+      { openCodexHome: "/tmp", idleTimeoutMs: 60_000, buildOptions: options },
+      { onEvent: () => undefined },
+      { spawn: () => child, platform: "linux" as NodeJS.Platform },
+    );
+    const ref = { handle: "same", sessionId: "" };
+    const [a, b] = await Promise.all([pool.open(ref), pool.open(ref)]);
+    expect(a).toBe(b);
+    expect(pool.size).toBe(1);
+    await pool.closeAll();
+  });
+
+  test("sequential opens of one conversation reuse the same process", async () => {
+    const child = fakeChild();
+    const pool = new StepSessionPool(
+      { openCodexHome: "/tmp", idleTimeoutMs: 60_000, buildOptions: options },
+      { onEvent: () => undefined },
+      { spawn: () => child, platform: "linux" as NodeJS.Platform },
+    );
+    const ref = { handle: "same", sessionId: "" };
+    expect(await pool.open(ref)).toBe(await pool.open(ref));
+    expect(pool.size).toBe(1);
+    await pool.closeAll();
+  });
+
+  test("the held tool is remembered with the call it belongs to, and consumed once", async () => {
+    // Regression: only the frame id was stored, so a client that returned results for several calls
+    // had them matched by POSITION instead of by call id.
+    const child = fakeChild();
+    const pool = new StepSessionPool(
+      { openCodexHome: "/tmp", idleTimeoutMs: 60_000, buildOptions: options },
+      { onEvent: () => undefined },
+      { spawn: () => child, platform: "linux" as NodeJS.Platform },
+    );
+    const ref = { handle: "conv", sessionId: "" };
+    await pool.open(ref);
+    pool.rememberHeldTool(ref, { frameId: "frame-1", callId: "call-9" });
+    expect(pool.takeHeldTool(ref)).toEqual({ frameId: "frame-1", callId: "call-9" });
+    expect(pool.takeHeldTool(ref)).toBeUndefined();
+    await pool.closeAll();
   });
 });

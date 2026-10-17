@@ -105,7 +105,21 @@ function poolFor(home: string, deps: StepCliAdapterDeps): StepSessionPool {
  * the model inside the query the model is already running.
  */
 function handleReverseRequest(session: StepCliSession, frame: StepFrame): void {
+  const payload = asRecord(frame.payload);
+  const expired = payload.__expired === true;
   const turn = turnRuntimes.get(session);
+
+  if (expired) {
+    // The hold elapsed, so the client can never answer this call. Refuse it so StepCode stops waiting
+    // instead of burning its own window, and do NOT re-dispatch: the client already received this tool
+    // call, and a second `tool_call_start` for the same id would be a duplicate.
+    session.refuseToolCall(
+      frame,
+      "The client did not return a tool result inside the window this transport holds a call for.",
+    );
+    return;
+  }
+
   if (!turn) return;
 
   if (frame.method === "permission.request") {
@@ -138,7 +152,7 @@ function handleReverseRequest(session: StepCliSession, frame: StepFrame): void {
       typeof payload.toolUseId === "string" && payload.toolUseId.length > 0
         ? payload.toolUseId
         : `call_${frame.id}`;
-    turn.pool.rememberHeldTool(turn.ref, frame.id);
+    turn.pool.rememberHeldTool(turn.ref, { frameId: frame.id, callId });
     turn.emit({ type: "tool_call_start", id: callId, name: resolved });
     turn.emit({ type: "tool_call_delta", arguments: JSON.stringify(asRecord(payload.input)) });
     turn.emit({ type: "tool_call_end" });
@@ -260,7 +274,7 @@ function hasImageInput(parsed: OcxParsedRequest): boolean {
  * the proxy's continuation store are only fallbacks: depending on persisted provider state would mean
  * a conversation silently restarting whenever that store misses an entry.
  */
-function conversationHandle(parsed: OcxParsedRequest, incoming: IncomingMeta): string {
+export function conversationHandle(parsed: OcxParsedRequest, incoming: IncomingMeta): string | undefined {
   const own = incoming.headers.get("thread-id")?.trim() || parsed._codexOwnThreadId?.trim();
   if (own) return `own:${own}`;
   const affinity =
@@ -275,7 +289,11 @@ function conversationHandle(parsed: OcxParsedRequest, incoming: IncomingMeta): s
     if (client) return `client:${client}`;
   }
   if (parsed.previousResponseId) return `response:${parsed.previousResponseId}`;
-  return "default";
+  // Deliberately undefined rather than a shared "default": Claude Code, Grok Build and generic Chat
+  // clients all send requests with no identity, and collapsing them onto one handle would let one
+  // client read another's context and deliver its tool result into another's query. The caller mints
+  // a private ref instead, so an identity-less request gets its own process and forgets it.
+  return undefined;
 }
 
 function continuationFor(ref: StepConversationRef, sessionId: string | undefined): StepProviderState | undefined {
@@ -283,10 +301,10 @@ function continuationFor(ref: StepConversationRef, sessionId: string | undefined
   return { [STEP_CLI_CONTINUATION_KEY]: { handle: ref.handle, sessionId: sessionId ?? ref.sessionId } };
 }
 
-/** The newest tool result in the request, if this turn is the answer to a captured call. */
+/** The newest tool result in the request, with the call it answers. */
 export function latestToolResult(
   parsed: OcxParsedRequest,
-): { content: readonly unknown[]; isError?: boolean } | undefined {
+): { content: readonly unknown[]; isError?: boolean; toolCallId: string } | undefined {
   for (let index = parsed.context.messages.length - 1; index >= 0; index -= 1) {
     const message = parsed.context.messages[index];
     if (!message || message.role !== "toolResult") continue;
@@ -298,7 +316,11 @@ export function latestToolResult(
             .filter(part => part.type === "text")
             .map(part => (part as { text: string }).text)
             .join("");
-    return { content: [{ type: "text", text }], ...(message.isError ? { isError: true } : {}) };
+    return {
+      content: [{ type: "text", text }],
+      toolCallId: message.toolCallId,
+      ...(message.isError ? { isError: true } : {}),
+    };
   }
   return undefined;
 }
@@ -488,7 +510,12 @@ export function createStepCliAdapter(
       }
 
       const sessions = deps.openSession ?? poolFor(getConfigDir(), deps);
-      const ref: StepConversationRef = { handle: conversationHandle(parsed, incoming), sessionId: "" };
+      // No identity on the wire means this request cannot belong to any existing conversation, so it
+      // gets a private one. Sharing a handle would leak one client's context to another.
+      const identified = conversationHandle(parsed, incoming);
+      const ref: StepConversationRef = identified
+        ? { handle: identified, sessionId: "" }
+        : sessions.nextRef();
 
       let session: StepCliSession;
       try {
@@ -501,13 +528,17 @@ export function createStepCliAdapter(
 
       // A tool result the client computed on its previous request goes back first: it releases the
       // reverse request this session is holding, and the model continues inside the same query.
-      const heldFrameId = sessions.takeHeldTool(ref);
+      const held = sessions.takeHeldTool(ref);
       let continuedQuery = false;
-      if (heldFrameId) {
+      if (held) {
         const result = latestToolResult(parsed);
+        // Matched by CALL ID, never by position: a client may follow a tool call with a new user
+        // message instead of a result, in which case the newest result in the transcript belongs to an
+        // earlier call and delivering it would answer the wrong question.
+        const matches = result?.toolCallId === held.callId;
         const delivered = session.resolveHeldToolResult(
-          { id: heldFrameId, method: "sdk_tool.invoke" } as StepFrame,
-          result ?? { content: [{ type: "text", text: "" }], isError: true },
+          { id: held.frameId, method: "sdk_tool.invoke" } as StepFrame,
+          matches && result ? result : { content: [{ type: "text", text: "" }], isError: true },
         );
         if (!delivered) {
           emit(
@@ -551,14 +582,16 @@ export function createStepCliAdapter(
         emittedNames: tools.emittedNameMap,
       });
 
+      let queryId: string | undefined;
       try {
         if (!continuedQuery) {
-          const { queryId } = await session.startQuery({
+          const started = await session.startQuery({
             model: stepModelId(parsed.modelId),
             maxThinkingTokens: stepThinkingTokens(parsed),
             sdkTools: tools.sdkTools,
             streamingInput: true,
           });
+          queryId = started.queryId;
           await session.sendInput(queryId, composePrompt(parsed, userText ?? ""));
         }
       } catch (error) {
@@ -572,18 +605,27 @@ export function createStepCliAdapter(
       // The turn owns the response until it settles: text, a captured tool call, a completion, or a
       // client abort. Returning before that leaves the stream without a terminal event.
       await Promise.race([done, abortSignal(incoming)]);
-      if (turnRuntimes.has(session)) {
-        turnRuntimes.delete(session);
-        emit({
-          type: "error",
-          message: "The StepCode turn ended without a terminal event.",
-          status: 502,
-          errorType: "upstream_error",
-          code: "step_cli_turn_abandoned",
-          retryable: true,
-        });
-        settle();
+      if (!turnRuntimes.has(session)) return;
+
+      // The turn is still registered, so nothing terminated it: either the client aborted, or the CLI
+      // went quiet. Either way the query is still running inside StepCode, and since it serves one
+      // query at a time the NEXT request for this conversation would be rejected or blocked by it.
+      // Interrupt it, and close the session when the interrupt cannot be confirmed.
+      turnRuntimes.delete(session);
+      emit({
+        type: "error",
+        message: "The StepCode turn ended without a terminal event.",
+        status: 502,
+        errorType: "upstream_error",
+        code: "step_cli_turn_abandoned",
+        retryable: true,
+      });
+      settle();
+      if (queryId) {
+        await session.interrupt(queryId);
+        if (session.closed) return;
       }
+      await session.close();
     },
   };
 }

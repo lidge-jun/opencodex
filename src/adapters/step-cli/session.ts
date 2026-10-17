@@ -241,13 +241,21 @@ export class StepCliSession {
 
     // stderr must be drained continuously: an unread pipe fills and blocks the child mid-turn. Only a
     // bounded tail is retained, and it is never logged as content.
-    child.stderr?.on("data", (chunk: Buffer) => {
+    //
+    // `setEncoding("utf8")` rather than decoding each chunk: StepCode prints CJK diagnostics (未登录),
+    // and a multibyte character split across two chunks would decode to U+FFFD on both halves, so the
+    // not-signed-in detection that matches on that text would stop firing.
+    child.stderr?.setEncoding("utf8");
+    child.stderr?.on("data", (chunk: string) => {
       this.#touch();
-      this.#stderrTail = (this.#stderrTail + chunk.toString("utf8")).slice(-2000);
+      this.#stderrTail = (this.#stderrTail + chunk).slice(-2000);
     });
     child.stdout?.on("data", (chunk: Buffer) => this.#absorbStdout(chunk));
     child.on("error", error => {
       this.#closed = true;
+      // A spawn failure such as ENOENT can emit `error` without a following `close`, so the sweep has to
+      // be stopped here too or it lingers on a session that no longer exists.
+      this.#stopIdleSweep();
       this.#failAll(error instanceof Error ? error : new Error(String(error)));
       this.#announceExit();
     });
@@ -295,13 +303,15 @@ export class StepCliSession {
 
   #holdReverse(frame: StepFrame): void {
     const timer = this.#setTimer(() => {
-      if (this.#held.delete(frame.id)) {
-        this.#handlers.onEvent({
-          type: "reverse_request",
-          frame: { ...frame, payload: { ...(frame.payload as object ?? {}), __expired: true } } as StepFrame,
-          session: this,
-        });
-      }
+      if (!this.#held.delete(frame.id)) return;
+      // The expiry is surfaced so the peer can answer the runtime. Without an answer here StepCode
+      // waits out its own 120s window, and a later turn registered for this session would see the same
+      // frame again and re-emit the tool call the client already received.
+      this.#handlers.onEvent({
+        type: "reverse_request",
+        frame: { ...frame, payload: { ...(frame.payload as object ?? {}), __expired: true } } as StepFrame,
+        session: this,
+      });
     }, this.#options.reverseRequestHoldMs);
     this.#held.set(frame.id, {
       method: frame.method ?? "unknown",

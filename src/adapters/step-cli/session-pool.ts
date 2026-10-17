@@ -7,6 +7,17 @@ export interface StepConversationRef {
   handle: string;
 }
 
+/**
+ * The reverse request this conversation is holding, and the call it belongs to.
+ *
+ * The call id is kept beside the frame id because the client's next request may carry results for
+ * several calls; delivering the newest result by POSITION would answer the wrong call.
+ */
+export interface StepHeldTool {
+  readonly frameId: string;
+  readonly callId: string;
+}
+
 export interface StepSessionPoolOptions {
   openCodexHome: string;
   buildOptions: () => StepSessionOptions;
@@ -17,7 +28,7 @@ interface PoolEntry {
   readonly ref: StepConversationRef;
   readonly session: StepCliSession;
   /** Reverse request the pool is currently holding for the next client request. */
-  heldToolFrameId: string | undefined;
+  heldTool: StepHeldTool | undefined;
 }
 
 /**
@@ -32,6 +43,15 @@ interface PoolEntry {
  */
 export class StepSessionPool {
   readonly #entries = new Map<string, PoolEntry>();
+  /**
+   * In-flight opens, keyed by handle.
+   *
+   * `open` is async, so two requests for one conversation (a Codex retry, or two clients sharing a
+   * handle) both miss the map and both spawn a process; the second `#entries.set` then orphans the
+   * first session with a held tool call nobody can release. Coalescing on the promise makes one
+   * conversation exactly one process.
+   */
+  readonly #opening = new Map<string, Promise<StepCliSession>>();
   readonly #options: StepSessionPoolOptions;
   readonly #deps: StepSessionDeps;
   readonly #handlers: StepSessionHandlers;
@@ -57,17 +77,28 @@ export class StepSessionPool {
     return entry && !entry.session.closed ? entry.session : undefined;
   }
 
-  /** Open a session for a conversation. */
+  /** Open a session for a conversation, coalescing concurrent opens of the same handle. */
   async open(ref: StepConversationRef): Promise<StepCliSession> {
     const existing = this.get(ref);
     if (existing) return existing;
-    const session = await StepCliSession.open(this.#options.buildOptions(), this.#handlers, this.#deps);
-    session.onExit(() => {
-      if (this.#entries.get(ref.handle)?.session === session) this.#entries.delete(ref.handle);
-    });
-    this.#entries.set(ref.handle, { ref, session, heldToolFrameId: undefined });
-    this.#ensureSweep();
-    return session;
+    const inFlight = this.#opening.get(ref.handle);
+    if (inFlight) return inFlight;
+    const opening = (async () => {
+      const session = await StepCliSession.open(this.#options.buildOptions(), this.#handlers, this.#deps);
+      const entry: PoolEntry = { ref, session, heldTool: undefined };
+      this.#entries.set(ref.handle, entry);
+      session.onExit(() => {
+        if (this.#entries.get(ref.handle) === entry) this.#entries.delete(ref.handle);
+      });
+      this.#ensureSweep();
+      return session;
+    })();
+    this.#opening.set(ref.handle, opening);
+    try {
+      return await opening;
+    } finally {
+      if (this.#opening.get(ref.handle) === opening) this.#opening.delete(ref.handle);
+    }
   }
 
   /**
@@ -76,17 +107,17 @@ export class StepSessionPool {
    * The result arrives in a later HTTP request, so the frame has to outlive the turn that produced
    * it. Storing only its id keeps the session's own hold timer authoritative.
    */
-  rememberHeldTool(ref: StepConversationRef, frameId: string | undefined): void {
+  rememberHeldTool(ref: StepConversationRef, held: StepHeldTool): void {
     const entry = this.#entries.get(ref.handle);
-    if (entry) entry.heldToolFrameId = frameId;
+    if (entry) entry.heldTool = held;
   }
 
   /** Consume the remembered hold, so one tool result can never be delivered twice. */
-  takeHeldTool(ref: StepConversationRef): string | undefined {
+  takeHeldTool(ref: StepConversationRef): StepHeldTool | undefined {
     const entry = this.#entries.get(ref.handle);
     if (!entry) return undefined;
-    const held = entry.heldToolFrameId;
-    entry.heldToolFrameId = undefined;
+    const held = entry.heldTool;
+    entry.heldTool = undefined;
     return held;
   }
 
@@ -122,6 +153,7 @@ export class StepSessionPool {
 
   async closeAll(): Promise<void> {
     this.#stopSweep();
+    this.#opening.clear();
     const entries = [...this.#entries.values()];
     this.#entries.clear();
     await Promise.all(entries.map(entry => entry.session.close()));

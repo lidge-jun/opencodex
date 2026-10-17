@@ -44,6 +44,7 @@ export interface StepFrame {
 export type StepProtocolViolationCode =
   | "PROTOCOL_VIOLATION"
   | "FRAME_TOO_LARGE"
+  | "FRAME_TOO_SMALL"
   | "INCOMPLETE_FRAME"
   | "INVALID_UTF8"
   | "INVALID_JSON";
@@ -201,7 +202,16 @@ export class StepFrameDecoder {
         if (this.#prefixBytes < STEP_LENGTH_PREFIX_BYTES) break;
 
         const length = this.#prefix.readUInt32BE(0);
-        if (length < STEP_MIN_FRAME_BYTES || length > this.#maxFrameBytes) {
+        if (length < STEP_MIN_FRAME_BYTES) {
+          this.#resetCurrentFrame();
+          // Its own message and code: reporting an undersized prefix as "exceeds max frame size" sends
+          // the operator looking at the ceiling when the real fault is a truncated or unframed stream.
+          throw new StepProtocolViolation(
+            `incoming frame is shorter than the smallest encodable frame (${length} < ${STEP_MIN_FRAME_BYTES} bytes)`,
+            "FRAME_TOO_SMALL",
+          );
+        }
+        if (length > this.#maxFrameBytes) {
           this.#resetCurrentFrame();
           throw new StepProtocolViolation(
             `incoming frame exceeds max frame size (${length} > ${this.#maxFrameBytes} bytes)`,

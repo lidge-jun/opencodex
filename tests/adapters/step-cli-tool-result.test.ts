@@ -15,7 +15,9 @@ describe("StepCode tool-result extraction", () => {
         { role: "toolResult", toolCallId: "c1", toolName: "shell", content: "LIVE_BRIDGE_OK", isError: false, timestamp: 1 },
       ]),
     );
-    expect(result).toEqual({ content: [{ type: "text", text: "LIVE_BRIDGE_OK" }] });
+    // The call id travels with the result so the adapter can match it against the held call instead of
+    // trusting the result's position in the transcript.
+    expect(result).toEqual({ content: [{ type: "text", text: "LIVE_BRIDGE_OK" }], toolCallId: "c1" });
   });
 
   test("joins the text parts of a structured tool result", () => {
@@ -42,6 +44,7 @@ describe("StepCode tool-result extraction", () => {
       parsed([{ role: "toolResult", toolCallId: "c1", toolName: "shell", content: "boom", isError: true, timestamp: 1 }]),
     );
     expect(result?.isError).toBe(true);
+    expect(result?.toolCallId).toBe("c1");
   });
 
   test("takes the newest result when a turn carries several", () => {
@@ -53,6 +56,7 @@ describe("StepCode tool-result extraction", () => {
       ]),
     );
     expect(result?.content).toEqual([{ type: "text", text: "new" }]);
+    expect(result?.toolCallId).toBe("c2");
   });
 
   test("returns undefined when this turn is not the answer to a captured call", () => {

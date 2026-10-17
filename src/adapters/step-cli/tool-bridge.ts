@@ -1,14 +1,15 @@
 import { buildCodingAgentToolCatalog, CodingAgentToolCatalogError } from "../coding-agent/tool-catalog";
 import type { OcxParsedRequest } from "../../types";
+import { STEP_CLI_TOOL_SERVER } from "./constants";
 
 /**
  * Namespace StepCode registers this proxy's tools under.
  *
- * StepCode names a declared SDK tool `${serverName}__${toolName}` (`src/step/stdio-host.ts`), which
- * is the same convention Claude Code uses for `mcp__<server>__<tool>`. Keeping `ocx` as the
- * namespace is what makes a tool the client sent recoverable from the call StepCode reports back.
+ * Re-exported from `constants.ts` so the emitted wire names, the model-id projection and the tool
+ * bridge can never disagree about the prefix: two copies of "ocx" that drift apart would silently
+ * turn every captured call into an unresolvable name.
  */
-export const STEP_CLI_TOOL_SERVER = "ocx";
+export { STEP_CLI_TOOL_SERVER };
 
 /** One declared SDK tool, exactly the descriptor shape `query.start.options.sdkTools` accepts. */
 export interface StepSdkToolDescriptor {
