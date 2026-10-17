@@ -42,6 +42,40 @@ export function freeformToolsByWireName<T extends FreeformToolIdentity & { freef
   return new Map(tools?.filter(tool => tool.freeform).map(tool => [wireName(tool), { name: tool.name, namespace: tool.namespace }] as const) ?? []);
 }
 
+/** One bare block recovered as an executable call when MiMo sends no structured payload. */
+export interface RecoveredBareBlock {
+  name: string;
+  input: string;
+}
+
+/**
+ * Bare blocks a declared freeform tool can own, for the observed MiMo shape where the
+ * whole call lives only in the visible text and `delta.tool_calls` never arrives.
+ * A block qualifies only when its function name matches a declared freeform tool's
+ * wire name and its body survives the same safety rules as the empty-input recovery:
+ * non-empty, no nested parameter wrappers, no nested block headers. Fenced examples,
+ * prose-only text, and blocks naming undeclared tools return nothing, so ordinary
+ * commentary cannot lose bytes.
+ */
+export function recoverStandaloneBareBlocks(
+  text: string,
+  freeformTools: ReadonlyMap<string, FreeformToolIdentity>,
+  context: TextContext = { fence: null, lineStart: true },
+): RecoveredBareBlock[] {
+  if (freeformTools.size === 0) return [];
+  return callsIn(text, context).flatMap(call => {
+    if (!freeformTools.has(call.name)) return [];
+    const wrappedBody = freeformBody(call.body);
+    const hasParameterOpener = wrappedBody.startsWith("<parameter=");
+    const body = hasParameterOpener
+      ? freeformBody(wrappedBody.slice("<parameter=".length)) : wrappedBody;
+    if (body.trim() === ""
+        || (hasParameterOpener && /^<parameter=[A-Za-z_$][\w$.-]*>/.test(wrappedBody))
+        || body.includes("<parameter=") || body.includes("</parameter>")) return [];
+    return [{ name: call.name, input: body }];
+  });
+}
+
 export interface StructuredToolCallReference {
   names: ReadonlySet<string>;
   argumentsText: string;

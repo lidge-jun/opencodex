@@ -897,3 +897,65 @@ test("freeformToolsByWireName keys only freeform tools by their wire name and ke
   ]);
   expect(freeformToolsByWireName(undefined, () => "unused").size).toBe(0);
 });
+
+test.each([
+  { label: "prose before the block", content: "I will run the command now.\n<tool_call><function=exec>text(1)</parameter></function></tool_call>" },
+  { label: "prose after the block", content: "<tool_call><function=exec>text(1)</parameter></function></tool_call>\nDone." },
+  { label: "block only", content: "<tool_call><function=exec>text(1)</parameter></function></tool_call>" },
+] as const)("a standalone MiMo bare block with no structured call does not leak markup ($label)", async ({ content }) => {
+  const adapter = createOpenAIChatAdapter(provider);
+  adapter.buildRequest({ modelId: "mimo-v2.6-pro", stream: false, options: {}, context: {
+    messages: [{ role: "user", content: "run it", timestamp: 0 }], tools: [execTool],
+  } });
+  const events = await adapter.parseResponse!(Response.json({
+    choices: [{ message: { content }, finish_reason: "stop" }],
+  }), createTestTranslatorBudget());
+  const visibleText = events.filter(event => event.type === "text_delta").map(event => event.text).join("");
+  expect(visibleText).not.toContain("<tool_call>");
+  expect(visibleText).not.toContain("</function>");
+});
+
+test("a standalone MiMo bare block is recovered as an executable tool call", async () => {
+  const script = "const r = await tools.exec_command({cmd:'pwd'}); text(r.output);";
+  const adapter = createOpenAIChatAdapter(provider);
+  adapter.buildRequest({ modelId: "mimo-v2.6-pro", stream: false, options: {}, context: {
+    messages: [{ role: "user", content: "run it", timestamp: 0 }], tools: [execTool],
+  } });
+  const events = await adapter.parseResponse!(Response.json({
+    choices: [{ message: { content: `Starting.\n<tool_call><function=exec>${script}</parameter></function></tool_call>` }, finish_reason: "stop" }],
+  }), createTestTranslatorBudget());
+  expect(events.filter(event => event.type === "text_delta").map(event => event.text).join("")).toBe("Starting.\n");
+  expect(events.filter(event => event.type === "tool_call_delta")).toEqual([
+    { type: "tool_call_delta", arguments: JSON.stringify({ input: script }) },
+  ]);
+  expect(events.filter(event => event.type === "tool_call_end")).toHaveLength(1);
+});
+
+test.each([
+  { label: "another model", model: "other-model" },
+  { label: "a hyphenated MiMo ID", model: "mimo-v2-pro" },
+] as const)("standalone bare-block recovery stays disabled for $label", async ({ model }) => {
+  const block = "<tool_call><function=exec>text(1)</parameter></function></tool_call>";
+  const adapter = createOpenAIChatAdapter(provider);
+  adapter.buildRequest({ modelId: model, stream: false, options: {}, context: {
+    messages: [{ role: "user", content: "run it", timestamp: 0 }], tools: [execTool],
+  } });
+  const events = await adapter.parseResponse!(Response.json({
+    choices: [{ message: { content: block }, finish_reason: "stop" }],
+  }), createTestTranslatorBudget());
+  expect(events.filter(event => event.type === "text_delta").map(event => event.text).join("")).toBe(block);
+  expect(events.filter(event => event.type === "tool_call_start")).toEqual([]);
+});
+
+test("standalone bare-block recovery ignores blocks naming undeclared tools", async () => {
+  const block = "<tool_call><function=read_file>text(1)</parameter></function></tool_call>";
+  const adapter = createOpenAIChatAdapter(provider);
+  adapter.buildRequest({ modelId: "mimo-v2.6-pro", stream: false, options: {}, context: {
+    messages: [{ role: "user", content: "run it", timestamp: 0 }], tools: [execTool],
+  } });
+  const events = await adapter.parseResponse!(Response.json({
+    choices: [{ message: { content: block }, finish_reason: "stop" }],
+  }), createTestTranslatorBudget());
+  expect(events.filter(event => event.type === "text_delta").map(event => event.text).join("")).toBe(block);
+  expect(events.filter(event => event.type === "tool_call_start")).toEqual([]);
+});
