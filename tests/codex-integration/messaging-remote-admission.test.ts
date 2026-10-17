@@ -107,6 +107,52 @@ test.skipIf(process.platform === "win32")("pre-auth saturation leaves authentica
   } finally { for (const ws of silent) ws.terminate(); rpc?.close(); budget.dispose(); await owners.close(); await pair.close(); }
 });
 
+test.skipIf(process.platform === "win32")("authenticated peer saturation leaves owner control and renewal capacity available", async () => {
+  const concurrentSends = 3;
+  let unblock!: () => void;
+  const gate = new Promise<void>(resolve => { unblock = resolve; });
+  let blocking = false;
+  let entered = 0, allEntered!: () => void;
+  const busyReady = new Promise<void>(resolve => { allEntered = resolve; });
+  const pair = remoteMessagingPair(async call => {
+    if (call.method === "thread/loaded/list" && blocking) {
+      if (++entered === concurrentSends) allEntered();
+      await gate;
+    }
+    return undefined;
+  });
+  const owners = await pair.owners(), budget = new MessageBudget();
+  const held: Awaited<ReturnType<typeof authenticatedRemoteSocket>>[] = [], busy: LocalMessageRpc[] = [];
+  const pending: Promise<unknown>[] = [];
+  const peerSocket = () => authenticatedRemoteSocket(pair.aStore.requireEnabled(),
+    peerEndpoint(pair.aStore.peer("worker"), owners.bOwner.port), budget);
+  try {
+    // Several legitimate sends awaiting native work must not block the same peer's lease exchange,
+    // which also runs the receiving owner's authenticated return probe.
+    blocking = true;
+    for (let i = 0; i < concurrentSends; i++) {
+      const rpc = await LocalMessageRpc.attach(await peerSocket(), budget);
+      busy.push(rpc); pending.push(rpc.loadedPage().catch(() => null));
+    }
+    await busyReady;
+    await expect(remoteControl(pair.aStore.requireEnabled(), peerEndpoint(pair.aStore.peer("worker"), owners.bOwner.port),
+      "message/lease", { port: owners.aOwner.port, generation: owners.aGeneration }, budget)).resolves.toHaveProperty("leased", true);
+    // Fill the peer share; one more authenticated peer socket is refused, not queued.
+    const share = REMOTE_LIMITS.connections - REMOTE_LIMITS.ownerReservedConnections;
+    while (held.length + busy.length < share) held.push(await peerSocket());
+    await expect(peerSocket()).rejects.toThrow();
+    expect(owners.bOwner.capacity.snapshot().connections).toBe(share);
+    // Outgoing probes and lease renewal reserve from the same pool; the owner's reserved slots remain free.
+    const owned = Array.from({ length: REMOTE_LIMITS.ownerReservedConnections }, () => owners.bOwner.capacity.reserve("connections"));
+    for (const free of owned) free();
+    expect(await remoteControl(pair.bStore.requireEnabled(), ownerEndpoint(pair.bStore.requireEnabled()), "message/routes", {}, budget))
+      .toHaveProperty("routes");
+  } finally {
+    unblock(); for (const ws of held) ws.terminate(); for (const rpc of busy) rpc.close();
+    await Promise.allSettled(pending); budget.dispose(); await owners.close(); await pair.close();
+  }
+});
+
 test("inbound consent is explicit local grammar, not an enrollment flag or peer-supplied action", () => {
   for (const verb of ["allow-inbound", "deny-inbound"] as const) {
     expect(parseRemoteMessageArgs(["hosts", verb, "worker", "--json"]))

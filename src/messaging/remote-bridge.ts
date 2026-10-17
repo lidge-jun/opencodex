@@ -93,7 +93,8 @@ export function startRemoteBridge(store: RemoteMessageStore, codexHome: string, 
         throw new Error("Messaging authentication proof was refused.");
       }
       // Unverified sockets never consume outgoing/control capacity. Promote only after proof verification.
-      const release = capacity.reserve("connections");
+      // Peer sockets share the connections outside the owner's reserved control/probe/renewal slots.
+      const release = data.peer ? capacity.reservePeerConnection() : capacity.reserve("connections");
       data.release();
       data.release = release;
       data.stage = "authorized";

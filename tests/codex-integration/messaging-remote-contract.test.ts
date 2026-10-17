@@ -26,6 +26,23 @@ test("aggregate capacity is fixed across peers; refused reservations allocate no
   }
 });
 
+test("enrolled peers together never occupy the owner's reserved connections", () => {
+  const share = REMOTE_LIMITS.connections - REMOTE_LIMITS.ownerReservedConnections;
+  const capacity = new RemoteCapacity();
+  const peers = Array.from({ length: share }, () => capacity.reservePeerConnection());
+  expect(() => capacity.reservePeerConnection()).toThrow("connection share");
+  // The owner's reserved slots stay available while the peer share is full.
+  const owner = Array.from({ length: REMOTE_LIMITS.ownerReservedConnections }, () => capacity.reserve("connections"));
+  expect(capacity.snapshot().connections).toBe(REMOTE_LIMITS.connections);
+  // Owner usage does not shrink the peer share; a released peer slot is reusable and release is idempotent.
+  peers[0]!(); peers[0]!();
+  expect(capacity.snapshot().connections).toBe(REMOTE_LIMITS.connections - 1);
+  const again = capacity.reservePeerConnection();
+  expect(() => capacity.reservePeerConnection()).toThrow("connection share");
+  for (const free of [again, ...owner, ...peers]) free();
+  expect(capacity.snapshot().connections).toBe(0);
+});
+
 for (const method of ["thread/start", "thread/resume", "turn/start", "turn/steer", "config/write", "thread/list", "approval/respond"]) {
   test(`gateway does not admit ${method}`, () => expect(() => admitRemoteRpc(method, {})).toThrow());
 }

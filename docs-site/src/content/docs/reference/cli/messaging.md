@@ -239,7 +239,9 @@ schema does not block peer removal, but is retained for operator recovery; unsaf
 failure to invalidate a matching journal still refuse removal.
 
 The foreground owner shares finite connection/request/helper/buffer limits across
-all peers and rejects overload without an unbounded queue: at most eight tunnel
+all peers and rejects overload without an unbounded queue: enrolled peers together may
+hold twelve authenticated connections, four more stay reserved for the owner's own
+control, outgoing probes and renewal, and at most eight tunnel
 children and two transient control/inspection helpers, ten total. Setup is bounded by
 30 seconds across the whole selected peer batch. A final lease renewal precedes startup
 success; final and periodic renewal batches have five-second deadlines, within the setup

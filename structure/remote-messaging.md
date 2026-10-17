@@ -154,6 +154,12 @@ Authenticated connections alone consume the shared connection budget. A separate
 four-socket pre-authentication set retires its oldest unverified socket on overflow,
 so silent clients cannot reserve owner/renewal slots or hold all fresh proof admissions.
 Proof verification precedes promotion; unverified hello identities earn no privileged slots.
+Authenticated enrolled peers together hold at most twelve connections; the remaining four are
+kept for this node's own local control, outgoing probes and lease renewal, so peer sockets
+cannot starve those owner paths. There is no per-peer share: one enrolled peer can still occupy
+all twelve and refuse admission to another peer's probe or lease, and because lease-refresh
+failures retire the owner (below), an initiated peer can end the owner. That is the fail-fast
+owner contract between explicitly enrolled peers, not a capacity guarantee.
 This is bounded admission, not protection against unlimited same-host traffic/CPU flooding.
 
 The owner shares fixed total limits across peers and both route directions:
