@@ -610,7 +610,7 @@ describe("a sibling start leaves shared client routing to the live owner", () =>
     const cleanup = slice("const syncCleanup = () => {", "let shuttingDown = false;");
     expect(cleanup).toContain("decideStartExitTeardown({ sibling: siblingStart, recycling: isRecyclingForExit(), ocxService: process.env.OCX_SERVICE })");
     expect(cleanup).toContain("if (teardown.revertSystemEnv) {");
-    expect(cleanup).toContain("if (teardown.restoreNativeCodex && !currentExternalCodexModelProvider()) {");
+    expect(cleanup).toContain("if (teardown.restoreNativeCodex) {");
     expect(cleanup).toContain("if (teardown.stripGrokConfig && serviceEnvironmentOwnedHere()) {");
     expect(cleanup).not.toContain("preserveRouting");
   });
@@ -1363,4 +1363,41 @@ describe("CLI usage recovery contracts", () => {
       } finally { err.mockRestore(); }
     },
   );
+});
+
+
+describe("explicit sync restart after a committed configuration change", () => {
+  for (const scenario of [
+    { changed: true, ok: true, requested: true, expected: 1 },
+    { changed: false, ok: true, requested: true, expected: 0 },
+    { changed: true, ok: false, requested: true, expected: 0 },
+    { changed: true, ok: true, requested: false, expected: 0 },
+  ]) test(JSON.stringify(scenario), async () => {
+    const state = await import("../../src/client/state");
+    const sync = await import("../../src/codex/sync");
+    const restart = await import("../../src/cli/restart-scope");
+    const aside = await import("../../src/cli/aside-profiles");
+    const stateSpy = spyOn(state, "readClientConnectionState").mockReturnValue({ kind: "disconnected" });
+    const syncSpy = spyOn(sync, "syncModelsToCodex").mockResolvedValue({
+      status: "applied", ok: scenario.ok, configChanged: scenario.changed,
+      added: 0, catalogPath: null, catalogExists: false, catalogWritten: false, cacheSynced: false, message: "fixture",
+    });
+    const restartSpy = spyOn(restart, "handleRestartScopeAfterWrite").mockResolvedValue({});
+    const asideSpy = spyOn(aside, "refreshAsideProfilesThroughServer").mockResolvedValue([]);
+    const log = spyOn(console, "log").mockImplementation(() => {});
+    const error = spyOn(console, "error").mockImplementation(() => {});
+    const network = spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected network request"));
+    try {
+      const args = scenario.requested ? ["sync", "--restart-codex"] : ["sync"];
+      expect(await dispatchCommand({ kind: "command", command: "sync", args }, {
+        ...fakeDeps, args, findLiveProxy: async () => null,
+      })).toBe(scenario.ok ? 0 : 1);
+      expect(restartSpy).toHaveBeenCalledTimes(scenario.expected);
+      if (scenario.expected) expect(restartSpy.mock.calls[0]![0]).toEqual({ appServers: true, desktopApp: true });
+      expect(network).not.toHaveBeenCalled();
+    } finally {
+      stateSpy.mockRestore(); syncSpy.mockRestore(); restartSpy.mockRestore(); asideSpy.mockRestore();
+      log.mockRestore(); error.mockRestore(); network.mockRestore();
+    }
+  });
 });

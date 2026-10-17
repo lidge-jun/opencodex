@@ -437,6 +437,13 @@ it is on the wire.
 
 Responses rejected at authentication or origin admission never reach this wrapper and carry no id.
 
+Logged `POST /v1/chat/completions` replies also carry `x-opencodex-request-id`, exposed through
+CORS, for JSON, streaming, handler errors and logged pre-handler refusals. This is the gateway
+history id, independent of the response body's completion id. Caller and upstream values cannot
+replace it. Rejections without a request-log owner, including authentication, origin, drain and
+active-turn refusals, carry no id. Streaming headers identify the eventual history row before
+final usage is saved.
+
 Logged `POST /v1/messages` replies carry the same OCX request-history id in **both**
 `request-id` and `x-opencodex-request-id`. This applies to native and translated replies,
 streaming and JSON, and logged refusals. Claude Code can use its persisted `requestId`

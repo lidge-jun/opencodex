@@ -1,3 +1,5 @@
+import { bindAnthropicRejectionPolicy } from "../../adapters/anthropic-rejection-memo";
+import { getReasoningReplayOpaqueBlobRejection } from "../../responses/reasoning-replay-cache";
 import type {
   OcxProviderContinuationOwner,
   OcxProviderContinuationState,
@@ -177,8 +179,10 @@ export function bindRouteReasoningReplayScope(args: {
       parsed._dropForeignReasoningItemIds = true;
     }
   }
+  const rejectionMemo = getReasoningReplayOpaqueBlobRejection(parsed._reasoningReplayScope);
+  bindAnthropicRejectionPolicy(parsed, adapterName === "anthropic" ? rejectionMemo : undefined);
   if (reasoningReplayOpaqueBlobRejectionMemoized(parsed._reasoningReplayScope)) {
-    parsed._stripReasoningEncryptedContent = true;
+    if (adapterName !== "anthropic" || rejectionMemo?.mode !== "selective") parsed._stripReasoningEncryptedContent = true;
     parsed._stripNativeCompactionEncryptedContent = true;
     parsed._dropForeignReasoningItemIds = true;
   }

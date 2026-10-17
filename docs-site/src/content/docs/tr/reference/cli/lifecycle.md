@@ -238,6 +238,8 @@ Doctor asla kimlik bilgilerini değiştirmez veya onarımlar uygulamaz.
 
 ### `ocx sync [--restart-codex] [--restart-app-server-only]`
 
+Açıkça istenen yeniden başlatma, katalog ve önbellek baytları değişmese bile `config.toml` değişikliği başarıyla kaydedildikten sonra da çalışır. Yalnızca yapılandırmayı işleyen bir işlem değişiklik yapmadığında, reddedildiğinde, ön kontrolde kaldığında veya yazma geri alındığında yeniden başlatma tetiklenmez. Yeniden başlatma bayrağı olmadan sync, Codex’i otomatik olarak yeniden başlatmaz.
+
 Yapılandırılmış her sağlayıcıdan canlı model listesini alın ve birleştirilmiş
 kataloğu Codex'e yeniden enjekte edin. Bir sağlayıcı ekledikten sonra veya
 kullanılabilir modelleri yenilemek için çalıştırın.

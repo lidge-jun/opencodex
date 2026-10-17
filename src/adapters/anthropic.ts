@@ -1,3 +1,6 @@
+import { captureAnthropicRejectionPayloads, keepAnthropicReplayBlock } from "./anthropic-rejection-memo";
+import { anthropicDeclaredTools } from "./anthropic-tool-catalog";
+import { anthropicReplayContent, createAnthropicReplayCapture } from "./anthropic-replay";
 import { withAnthropicProgressUpdates } from "./anthropic-progress";
 import type { IncomingMeta, ProviderAdapter } from "./base";
 import { createAdapterTierMetadata, type AdapterTierMetadata } from "../providers/fastwire";
@@ -17,7 +20,7 @@ import type {
   OcxToolResultMessage,
   OcxUsage,
 } from "../types";
-import { isAllowedToolChoice, namespacedToolName, resolveToolChoiceWireName, toolChoiceToolPredicate } from "../types";
+import { isAllowedToolChoice, namespacedToolName, resolveToolChoiceWireName } from "../types";
 import { ANTHROPIC_OAUTH_BETA, CLAUDE_CODE_SYSTEM_INSTRUCTION, applyClaudeToolPrefix, stripClaudeToolPrefix } from "../oauth/anthropic";
 import { parseDataUrl } from "./image";
 import { enforceAnthropicImageLimits } from "./anthropic-image-guard";
@@ -283,7 +286,7 @@ function normalizeTtlOrdering(body: Record<string, unknown>): void {
   }
 }
 
-function isLikelyRealAnthropicThinkingSignature(signature: string | undefined): signature is string {
+export function isLikelyRealAnthropicThinkingSignature(signature: string | undefined): signature is string {
   if (typeof signature !== "string" || signature.length < 16) return false;
   if (/^(fc|call|msg|rs|resp|reasoning|item|ws|tool|func|function)[-_]/i.test(signature)) return false;
   return /^[A-Za-z0-9+/_=-]+$/.test(signature);
@@ -522,13 +525,13 @@ function streamedToolArgumentsParse(assembled: string): boolean {
   }
 }
 
-/** A string field of a server tool's streamed input (web_search `query`, web_fetch `url`); "" when it did not parse. */
-function serverToolInputField(json: string, key: "query" | "url"): string {
+/** A server tool's complete streamed input; undefined when it cannot be recovered. */
+function serverToolInput(json: string): Record<string, unknown> | undefined {
   try {
-    const value = (JSON.parse(json) as Record<string, unknown> | null)?.[key];
-    return typeof value === "string" ? value : "";
+    const input = JSON.parse(json) as unknown;
+    return isAnthropicRecord(input) ? input : undefined;
   } catch {
-    return "";
+    return undefined;
   }
 }
 
@@ -735,7 +738,16 @@ function orphanToolResultContent(msg: OcxToolResultMessage): string | unknown[] 
 function messagesToAnthropicFormat(
   parsed: OcxParsedRequest,
   toolNames: { toWire: (name: string) => string },
+  serverReplay?: ReadonlyMap<string, readonly Record<string, unknown>[]>,
 ): { system: string | undefined; messages: unknown[] } {
+  // The client's server-tool exchanges go back ahead of the block they preceded. Their anchors are
+  // unique in the caller's history (replayedAnthropicServerBlocks drops repeated ones); each is used once.
+  const pendingReplay = new Map(serverReplay);
+  const replayed = (anchor: string) => {
+    const blocks = pendingReplay.get(anchor) ?? [];
+    pendingReplay.delete(anchor);
+    return blocks;
+  };
   // One allocator for the whole request: a tool_result must resolve to the SAME wire id its
   // call got, and two distinct raw ids must never collapse into one. Conforming ids are claimed
   // first so a rewritten id can never squat on an id another call legitimately owns.
@@ -750,8 +762,8 @@ function messagesToAnthropicFormat(
     }
   }
   const toolCatalogNudge = buildNonOpenAIToolCatalogNudgeForTools(
-    parsed.context.tools,
-    parsed.options.toolChoice,
+    anthropicDeclaredTools(parsed),
+    undefined,
     tool => toolNames.toWire(namespacedToolName(tool.namespace, tool.name)),
   );
   const systemParts = [...(parsed.context.systemPrompt ?? []), ...(toolCatalogNudge ? [toolCatalogNudge] : [])];
@@ -781,6 +793,7 @@ function messagesToAnthropicFormat(
       case "assistant": {
         const aMsg = msg as OcxAssistantMessage;
         const preface: unknown[] = [];
+
         const toolUses: unknown[] = [];
         const originalOrder: unknown[] = [];
         const appendPreface = (block: unknown) => { preface.push(block); originalOrder.push(block); };
@@ -789,9 +802,13 @@ function messagesToAnthropicFormat(
         for (const part of aMsg.content) {
           if (part.type === "text") {
             const text = (part as OcxTextContent).text;
+            for (const b of replayed(`text:${text}`)) appendPreface(b);
             if (text) appendPreface({ type: "text", text });
           } else if (part.type === "thinking") {
             const t = part as OcxThinkingContent;
+            // Server blocks that preceded this reasoning keep their place, even when it is dropped below.
+            for (const data of t.redacted ?? []) for (const b of replayed(`redacted:${data}`)) appendPreface(b);
+            for (const b of replayed(`thinking:${t.signature}`)) appendPreface(b);
             // History minted under another serving identity (or already rejected as opaque) is not
             // this destination's to verify: drop its opaque blocks, as the Responses passthrough does.
             if (parsed._stripReasoningEncryptedContent === true) continue;
@@ -806,6 +823,7 @@ function messagesToAnthropicFormat(
             }
           } else if (part.type === "toolCall") {
             const tc = part as OcxToolCall;
+            for (const b of replayed(`call:${tc.id}`)) appendPreface(b);
             const flatName = namespacedToolName(tc.namespace, tc.name);
             // Normalized here, and identically for the matching tool_result above, so a history
             // replayed from another provider path keeps its call/result pairing (#1767).
@@ -824,9 +842,15 @@ function messagesToAnthropicFormat(
         }
         // Anthropic treats text/thinking after tool_use as ending the tool turn, which makes
         // earlier tool_use ids look unpaired (#620 / common multi-step history shape).
-        // Signed native blocks bind the source ordering, including updates between tool calls.
-        // Keep the legacy repair only for unsigned/cross-provider history.
-        const content = signed ? originalOrder : [...preface, ...toolUses];
+        const captured = anthropicReplayContent(aMsg);
+        if (captured) {
+          const expected = toolUses as Array<{ id: string; name: string }>;
+          const actual = captured.filter(block => block.type === "tool_use");
+          if (actual.length !== expected.length || actual.some((block, index) => block.id !== expected[index]?.id || block.name !== expected[index]?.name)) {
+            throw new Error("Anthropic search replay tool identity changed");
+          }
+        }
+        const content = (captured ?? (signed ? originalOrder : [...preface, ...toolUses])).filter(block => keepAnthropicReplayBlock(parsed, block as Record<string, unknown>));
         if (content.length === 0) break;
         messages.push({ role: "assistant", content });
         if (toolUseIds.length > 0) {
@@ -889,9 +913,7 @@ function messagesToAnthropicFormat(
 
 function toolsToAnthropicFormat(parsed: OcxParsedRequest, toolNames: { toWire: (name: string) => string }): unknown[] | undefined {
   if (!parsed.context.tools || parsed.context.tools.length === 0) return undefined;
-  const tools = isAllowedToolChoice(parsed.options.toolChoice)
-    ? parsed.context.tools.filter(toolChoiceToolPredicate(parsed.options.toolChoice, parsed.context.tools))
-    : parsed.context.tools;
+  const tools = anthropicDeclaredTools(parsed);
   if (tools.length === 0) return undefined;
   const converted = tools.map(t => ({
     name: toolNames.toWire(namespacedToolName(t.namespace, t.name)),
@@ -998,7 +1020,9 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         throw new Error("anthropic provider requires a non-empty apiKey (authMode: key)");
       }
 
-      const { system, messages } = messagesToAnthropicFormat(parsed, toolNames);
+      // Only api.anthropic.com runs Anthropic's server tools, so only it gets their history back.
+      const { system, messages } = messagesToAnthropicFormat(parsed, toolNames,
+        usesNativeAnthropicEndpoint(provider) ? parsed._anthropicServerReplay : undefined);
       // Before image normalization, so the framing block is present for every downstream pass.
       if (isAgentRouterEndpoint(provider.baseUrl)) applyAgentRouterLanguageFraming(messages);
       // Primary image layer: resize/re-encode to fit Anthropic limits without dropping
@@ -1210,7 +1234,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       enforceCacheControlLimit(body, explicitLimit);
       normalizeTtlOrdering(body);
 
-      return {
+      const request = {
         url,
         method: "POST",
         headers,
@@ -1224,6 +1248,8 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
           fastSpeed?.value ?? null,
         ),
       };
+      captureAnthropicRejectionPayloads(request, body, incoming?.translatorBudget);
+      return request;
     },
 
     async *parseStream(
@@ -1236,6 +1262,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         return;
       }
 
+      const replayCapture = createAnthropicReplayCapture(response, budget);
       const budgetEncoder = new TextEncoder();
       let currentBlockType = "";
       let currentToolCallId = "";
@@ -1270,11 +1297,13 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
           yield anthropicContentFilterIncomplete(pendingStopReason, usageFromAnthropic(pendingUsage));
           return;
         }
-        yield {
+        const done: AdapterEvent = {
           type: "done",
           usage: usageFromAnthropic(pendingUsage),
           ...(pendingStopReason ? { stopReason: pendingStopReason } : {}),
         };
+        replayCapture?.finish(done);
+        yield done;
       };
 
       try {
@@ -1294,6 +1323,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         try {
           parsed = JSON.parse(payload);
         } catch {
+          replayCapture?.invalidate();
           debugDroppedFrame("anthropic", payload);
           continue;
         }
@@ -1301,10 +1331,12 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         // it and the `data.type` read below crashed the stream. Drop a non-record frame the same
         // way an unparseable one is dropped, so the message_stop check still governs the outcome.
         if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+          replayCapture?.invalidate();
           debugDroppedFrame("anthropic", payload);
           continue;
         }
         const data = parsed as Record<string, unknown>;
+        replayCapture?.accept({ ...data, type: record.event || data.type });
 
         switch (record.event || data.type) {
               case "message_start": {
@@ -1317,6 +1349,9 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
               case "content_block_start": {
                 const block = data.content_block as { type: string; id?: string; name?: unknown; data?: string; thinking?: string; tool_use_id?: unknown; content?: unknown } | undefined;
                 if (!block) break;
+                // Even an unmodeled server tool or empty block is semantic progress.
+                // Fence replays before a later refusal; unknown blocks must not look like pings.
+                yield { type: "heartbeat", replayUnsafe: true };
                 currentBlockType = block.type;
                 if (block.type === "thinking") {
                   // Preserve even a display:omitted block boundary. The bridge can then
@@ -1336,36 +1371,26 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
                   // no result in this response and must not surface as a completed search.
                   serverSearch = { id: block.id, json: "", streaming: true };
                 }
-                if (block.type === "web_search_tool_result" && typeof block.tool_use_id === "string") {
+                if ((block.type === "web_search_tool_result" || block.type === "web_fetch_tool_result") && typeof block.tool_use_id === "string") {
+                  // The begin/end pair the sidecar emits, plus both blocks verbatim so the Claude client holds a
+                  // replayable copy. Without this response's matching call and complete input, drop the
+                  // exchange instead of inventing a call that could poison the client's next request.
+                  const fetch = block.type === "web_fetch_tool_result";
+                  const input = serverSearch?.id === block.tool_use_id ? serverToolInput(serverSearch.json) : undefined;
+                  if (!input) break;
                   const hits = Array.isArray(block.content) ? block.content as Array<{ url?: unknown; title?: unknown }> : undefined;
-                  // The begin/end pair the sidecar emits. A result whose call came in an earlier response has no query here.
-                  const query = serverSearch?.id === block.tool_use_id ? serverToolInputField(serverSearch.json, "query") : "";
                   yield { type: "web_search_call_begin", id: block.tool_use_id };
                   yield {
                     type: "web_search_call_end",
                     id: block.tool_use_id,
-                    queries: query ? [query] : [],
-                    // A failed search carries one error object instead of the hit list.
-                    status: hits ? "completed" : "failed",
+                    queries: typeof input.query === "string" && input.query.length > 0 ? [input.query] : [],
+                    // A failed call carries one error object instead of the hit list / fetched page.
+                    status: (fetch ? (block.content as { type?: unknown } | undefined)?.type === "web_fetch_result" : hits) ? "completed" : "failed",
                     sources: (hits ?? []).flatMap(h => typeof h.url === "string"
                       ? [{ url: h.url, ...(typeof h.title === "string" ? { title: h.title } : {}) }] : []),
-                  };
-                  serverSearch = undefined;
-                }
-                if (block.type === "web_fetch_tool_result" && typeof block.tool_use_id === "string") {
-                  // Relayed as the same cell, opened at the result for the same reason; the result is
-                  // carried verbatim (a web_fetch_result document or a web_fetch_tool_error).
-                  const result = block.content ?? { type: "web_fetch_tool_error", error_code: "unavailable" };
-                  const url = (result as { url?: unknown }).url;
-                  yield { type: "web_search_call_begin", id: block.tool_use_id };
-                  yield {
-                    type: "web_search_call_end",
-                    id: block.tool_use_id,
-                    queries: [],
-                    status: (result as { type?: unknown }).type === "web_fetch_result" ? "completed" : "failed",
-                    fetch: {
-                      url: typeof url === "string" ? url : serverSearch?.id === block.tool_use_id ? serverToolInputField(serverSearch.json, "url") : "",
-                      result,
+                    anthropic: {
+                      use: { type: "server_tool_use", id: block.tool_use_id, name: fetch ? "web_fetch" : "web_search", input },
+                      result: block as Record<string, unknown>,
                     },
                   };
                   serverSearch = undefined;
@@ -1415,8 +1440,8 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
                   yield { type: "tool_call_delta", arguments: delta.partial_json };
                 } else if (delta.type === "input_json_delta" && typeof delta.partial_json === "string" && serverSearch?.streaming
                     && serverSearch.json.length < 4096) {
-                  // Capped: an input past 4 KiB loses its label (query / url), never the call.
-                  serverSearch.json += delta.partial_json;
+                  // Capped: input that cannot be recovered drops its exchange instead of inventing a call.
+                  serverSearch.json += delta.partial_json.slice(0, 4096 - serverSearch.json.length);
                 }
                 break;
               }
@@ -1463,8 +1488,13 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
                 break;
               }
               case "error": {
-                const err = data.error as { message?: string } | undefined;
-                yield { type: "error", message: err?.message ?? "Anthropic error" };
+                const err = data.error as { message?: unknown; type?: unknown; code?: unknown; status?: unknown } | undefined;
+                yield { type: "error", message: typeof err?.message === "string" ? err.message : "Anthropic error",
+                  ...(typeof err?.type === "string" ? { errorType: err.type } : {}),
+                  ...(typeof err?.code === "string" ? { code: err.code } : {}),
+                  ...(typeof err?.status === "number" && Number.isInteger(err.status) && err.status >= 400 && err.status <= 599
+                    ? { status: err.status } : {}),
+                };
                 return;
               }
         }
@@ -1483,6 +1513,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         // one-terminal-event contract for consumers that keep draining the generator.
         return;
       } finally {
+        replayCapture?.discard();
         if (currentToolCallId) budget.closeCall(currentToolCallId);
       }
       if (!emittedDone) {

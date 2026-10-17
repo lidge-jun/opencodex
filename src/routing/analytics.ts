@@ -12,7 +12,7 @@
  */
 
 import type { PersistedUsageEntry } from "../usage/log";
-import { estimateRequestCost, serviceTierContext } from "../usage/cost";
+import { computeEntryCost } from "../usage/summary";
 import { openRequestHistoryIndex, requestHistoryDb } from "./history/indexer";
 
 export const ANALYTICS_MAX_ROWS = 50_000;
@@ -122,6 +122,7 @@ const COOLDOWN_RECOVERY_KINDS = new Set([
   "oauth-account-403",
   "anthropic-oauth-429",
   "oauth-account-429",
+  "oauth-account-402",
 ]);
 
 function percentile(sorted: number[], p: number): number | undefined {
@@ -158,19 +159,10 @@ function cooldownTriggering(entry: PersistedUsageEntry | null, status: number): 
   });
 }
 
-function successCostUsd(
-  row: Pick<ScannedRow, "provider" | "model">,
-  entry: PersistedUsageEntry,
-): number | null {
-  if (!entry.usage) return null;
-  const estimate = estimateRequestCost({
-    provider: row.provider,
-    model: row.model,
-    usage: entry.usage,
-    usageStatus: entry.usageStatus,
-    serviceTier: serviceTierContext(entry),
-  });
-  return estimate ? estimate.cost.total : null;
+/** Same attempt-aware pricing as /api/usage, so a refused retry before a measured send is priced. */
+function successCostUsd(entry: PersistedUsageEntry): number | null {
+  const { isPriced, costTotal } = computeEntryCost(entry);
+  return isPriced ? costTotal : null;
 }
 
 export async function computeRoutingAnalytics(
@@ -245,7 +237,7 @@ export async function computeRoutingAnalytics(
     if (kind === "success") {
       const entry = parseEntry(row.rowJson);
       if (entry) {
-        rowCostUsd = successCostUsd(row, entry);
+        rowCostUsd = successCostUsd(entry);
         if (rowCostUsd !== null) {
           costTotalUsd += rowCostUsd;
           costCount += 1;

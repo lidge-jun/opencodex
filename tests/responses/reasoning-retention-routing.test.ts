@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleResponses, handleResponsesCompact } from "../../src/server/responses";
+import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { compactionRequest, completedPayload, drainCompactionResponseState,
@@ -18,6 +19,8 @@ let home: string;
 let releaseSpendHome: () => void;
 installCompactionRoutingAclFixture();
 beforeEach(() => {
+  clearComboSelectionState();
+  clearComboTargetCooldowns();
   home = mkdtempSync(join(tmpdir(), "ocx-retention-routing-"));
   process.env.OPENCODEX_HOME = home;
   process.env.CODEX_HOME = home;
@@ -25,6 +28,8 @@ beforeEach(() => {
 });
 afterEach(async () => {
   globalThis.fetch = originalFetch;
+  clearComboSelectionState();
+  clearComboTargetCooldowns();
   try { await drainCompactionResponseState(); } finally {
     releaseSpendHome();
     await removeCompactionFixture(home);
@@ -43,6 +48,59 @@ const historical = (text: string) => ({ type: "message", role: "user",
     + text + "\n</assistant_reasoning>" }] });
 
 describe("retained reasoning public wire contracts", () => {
+  test.each([undefined, 1])("translated Combo failover to native compact preserves local reasoning (cap=%s)", async maxTokens => {
+    const config = keyProviderConfig({ retryOn429: { attempts: 0, intervalMs: 1, maxIntervalMs: 1 } });
+    config.reasoningRetention = { enabled: true, maxTokens };
+    config.providers.openai = { adapter: "openai-responses", authMode: "forward", codexAccountMode: "direct",
+      baseUrl: "https://chatgpt.com/backend-api/codex" };
+    config.combos = { retained: { targets: [
+      { provider: "gw", model: "some-model" }, { provider: "openai", model: "gpt-5.6-luna" },
+    ] } };
+    const original = "  withheld reasoning\n保留原文  ";
+    const item = { type: "compaction", id: "cmp_combo_retention", encrypted_content: "  native-opaque+/==\n" };
+    const calls: string[] = [];
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      const req = new Request(url, init);
+      // Ignore quota/metadata probes: only actual dispatches establish failover order.
+      if (!req.url.endsWith("/responses")) return new Response("probe", { status: 403 });
+      calls.push(req.url);
+      const sent = await req.text();
+      expect(sent).not.toContain("withheld reasoning");
+      expect(sent).not.toContain("opaque-provider-secret");
+      if (req.url.startsWith("https://gateway.example/")) {
+        return Response.json({ error: { message: "rate limit" } }, { status: 429 });
+      }
+      expect(JSON.parse(sent).stream).toBe(true);
+      return sseResponse([{ type: "response.completed", response: {
+        id: "resp_combo_retention", status: "completed", output: [item],
+      } }]);
+    }) as typeof fetch;
+    const input = [{ type: "message", role: "user", content: "retain history" }, reasoning(original)];
+    const snapshot = structuredClone(input);
+    const response = await handleResponsesCompact(compactionRequest({ model: "combo/retained", input }, undefined, {
+      authorization: "Bearer " + fakeChatGptJwt({ chatgpt_account_id: "retention-fixture" }),
+      "chatgpt-account-id": "retention-fixture",
+    }), config, { model: "", provider: "" });
+    expect(response.status).toBe(200);
+    const body = await response.json() as { output: unknown[] };
+    expect(body.output[0]).toEqual(item);
+    expect(calls).toEqual(["https://gateway.example/v1/responses", "https://chatgpt.com/backend-api/codex/responses"]);
+    expect(input).toEqual(snapshot);
+    const archiveDir = join(home, "reasoning-archive");
+    if (maxTokens === undefined) {
+      expect(body.output).toContainEqual(historical(original));
+      expect(existsSync(archiveDir)).toBe(false);
+    } else {
+      const files = readdirSync(archiveDir);
+      expect(files).toHaveLength(1);
+      const path = join(archiveDir, files[0]!);
+      expect(readFileSync(path, "utf-8")).toBe(original);
+      expect(JSON.stringify(body.output)).toContain(jsonText(path));
+      expect(JSON.stringify(body.output)).toContain("[reasoning retention notice]");
+      expect(JSON.stringify(body.output)).not.toContain("withheld reasoning");
+    }
+  });
+
   test.each([undefined, 1])("routed fallback preserves opaque compaction exactly (cap=%s)", async maxTokens => {
     const config = keyProviderConfig();
     config.reasoningRetention = { enabled: true };

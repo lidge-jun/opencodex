@@ -131,6 +131,29 @@ valid requests.
 
 > Decision record: [ADR-5008](../decisions/ADR-5008-google-opening-functioncall-repair.md)
 
+## Gemini progress-text history
+
+Gemini sometimes skips its thinking channel on a tool-calling turn and plans in visible text
+instead: a progress line followed by unmarked planning such as "Let's read google.ts next."
+Replayed whole, that tail is copied by every later turn of the session. When
+`messagesToGeminiFormat` serializes an assistant turn that contains a tool call for a model id
+containing `gemini`, the text before the turn's first tool call is replayed as the lead sentence
+of its first non-empty text part; the other text parts before the call are dropped. Text after a
+tool call and turns with Responses `phase: "final_answer"` are replayed whole.
+`src/adapters/google-progress-history.ts` owns the split: ASCII `.`, `!` or `?` followed by
+whitespace, a script's own sentence terminator (CJK, Devanagari, Arabic, Armenian, Ethiopic,
+Myanmar), or a line break, with trailing closing quotes,
+brackets and Markdown emphasis kept. Boundaries that only close a leading list marker or
+`e.g.`/`i.e.`/`etc.`/`vs.` are skipped. It never matches wording.
+
+Final answers (assistant turns without tool calls), non-Gemini models such as Claude on
+Antigravity, tool calls, their signatures and client-visible output are unchanged. A leak in the
+current response is still delivered as ordinary text; the trim keeps it from propagating.
+The trade-off is that facts a model states only in pre-call text, beyond its first sentence, are
+not replayed; the call, its result and any final answer still are.
+`tests/adapters/google/gemini-progress-history.test.ts` covers CCA and AI Studio Gemini, the
+`final_answer` and Claude exemptions, text after a call and the split.
+
 ## Structured output on generateContent
 
 A caller's Responses `text.format` reaches the Gemini wire as

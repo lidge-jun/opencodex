@@ -1618,11 +1618,17 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         // Promote a caller `x-session-id` before admission, as Responses and Messages do (#6520):
         // the ChatGPT bridge forwards only canonical session headers, so the raw marker is lost.
         const sessionReq = withCallerSessionIdentity(req, admission);
-        return runAdmittedHttpTurn(sessionReq, policy, async turnAdmissionLease => withCors(
-          await handleChatCompletions(sessionReq, config, logCtx, { requestId, start, turnAdmissionLease, admission }),
-          req,
-          policy,
-        ), { requestId, start, logCtx });
+        // Only expose an id when the handler or a logged refusal owns its history row.
+        let ownsRequestLog = false;
+        const response = await runAdmittedHttpTurn(sessionReq, policy, async turnAdmissionLease => {
+          ownsRequestLog = true;
+          return withCors(
+            await handleChatCompletions(sessionReq, config, logCtx, { requestId, start, turnAdmissionLease, admission }),
+            req,
+            policy,
+          );
+        }, { requestId, start, logCtx, onLogged: () => { ownsRequestLog = true; } });
+        return ownsRequestLog ? withRequestLogId(response, requestId) : response;
       }
 
       if (url.pathname === "/v1/audio/transcriptions" && req.method === "POST") {

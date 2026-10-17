@@ -19,7 +19,7 @@ Connected-client catalog diagnostics use the [terminal rendering contract](runti
 
 Hub management ingress also selects the [local dashboard address](runtime.md#hub-management-dashboard-address) using its configured port.
 
-Native main reauthentication follows the [CLI JSON output contract](runtime.md#native-main-reauth-json-output).
+Native main reauthentication follows the [CLI JSON output contract](runtime.md#native-main-reauth-json-output). Provider-ID consent and URL-only recovery follow the [custom routing contract](codex-provider-routing.md).
 
 The Codex restart command follows the [CLI restart scope contract](runtime.md#cli-codex-restart-scope).
 
@@ -126,7 +126,7 @@ The former `showCodexSparkQuota` key is inert passthrough data when loading an o
 
 ## Config injection
 
-An explicit desktop restart after injection uses the [runtime process-membership contract](runtime.md#codex-desktop-process-membership); mixed Windows path spelling does not change which installation the restart targets.
+Configuration injection exposes `configChanged` only after a successful configuration transaction, comparing admitted original bytes with final committed bytes including native feature reconciliation. Preflight, preserved external ownership, skipped writes and compensated failures never authorize a configuration-only restart. An explicit desktop restart after injection uses the [runtime process-membership contract](runtime.md#codex-desktop-process-membership); mixed Windows path spelling does not change which installation the restart targets.
 
 One further root key is conditional rather than part of either routing form. While the web-search
 sidecar is switched off (`webSearchSidecar.enabled: false`), the injection also owns Codex's own
@@ -434,7 +434,7 @@ capture/route time and explicit false or empty declarations retain their field-s
 `src/config/provider-validation.ts` owns the pure provider payload checks shared by persisted config,
 CLI writes, and management DTO validation. `src/config.ts` imports those checks for Zod refinement
 and re-exports them as a compatibility facade; it must not grow a second copy. Validation error text,
-ordering, and cross-field rules are part of the write/load contract: management requests and hand-edited `config.json` accept and reject the same provider shapes. Before validation, `src/config/opencode-zen-upgrade.ts` normalizes saved Gemini overrides and their Responses-only hosted-tool preferences on canonical keyed OpenCode Zen routes. Runtime and diagnostics-backed reads share this upgrade, preserving unrelated providers and accounts. Reads warn without rewriting the file; explicit edits persist the normalized configuration, and new writes still reject incompatible overrides and preferences. Other destinations, authentication modes and invalid override values retain normal validation.
+ordering, and cross-field rules are part of the write/load contract: management requests and hand-edited `config.json` accept and reject the same provider shapes. Before validation, `src/config/opencode-wire-upgrade.ts` shares the Zen Gemini and Claude upgrade in `src/config/opencode-zen-upgrade.ts` and normalizes saved Chat/Responses overrides for newly pinned Go Gemini and Qwen models, including previously valid Responses-only hosted-tool preferences. Go uses validation's historical fixed-destination and key-auth rules; its older Anthropic pins and overridable Responses defaults retain normal validation. Runtime and diagnostics-backed reads share this upgrade, preserving unrelated providers, accounts and routing. Reads warn without rewriting the file; explicit edits persist the normalized configuration, and new writes still reject incompatible overrides and preferences. Unsupported authentication modes and invalid override values retain normal validation.
 
 Provider `projectContext` accepts `"off"` or `"on"` only for native `command-code`; `src/config/schema/leaf-validators.ts` rejects other adapters on load, while `src/config/provider-validation.ts` and `src/server/auth-cors.ts` reject them on management writes. This editor-owned outbound-file field follows [provider and adapter selection](providers-and-adapters.md).
 The Google tool-schema policy uses a closed enum at this boundary. Unknown values fail config load,

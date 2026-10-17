@@ -31,6 +31,14 @@ plain-quota evidence: a cleared plain reached type or a usage window at 100% (`u
 RPC, `used_percent` in the web usage snapshot; every gate field is read in both spellings).
 Usage percentages, resets and window durations remain accurate. Unrelated messages
 and malformed lines remain byte-identical; changed lines are reserialized.
+This is a stdout-projection boundary, not a guarantee that every Desktop composer
+uses that transport. The post-closure reports in
+[#6196](https://github.com/lidge-jun/opencodex/issues/6196) describe an attached shim
+with no eligible rate-limit RPC messages and a still-locked composer on specific
+macOS builds. A launcher override or synthetic rewrite test does not establish
+original-app acceptance. The separate renderer usage transport is outside this
+module's scope; the reported remaining lock stays open without reviving the
+closed local-CA intercept design.
 A per-line rewrite exception preserves that line. A failure in the framing/rewrite
 machinery preserves buffered bytes and switches the rest of the stream to raw
 passthrough. Output-write failures propagate; they are not rewrite failures.

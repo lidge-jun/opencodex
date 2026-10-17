@@ -144,7 +144,8 @@ function cooledPoolAccountLabel(config: OcxConfig, providerName: string, modelId
  * through `accountLogLabel`, but the per-request account budget can end the pool's own rotation
  * before the last refused account is recorded. Hand that account to the pool's rotator, which
  * cools it under the pool's own Retry-After policy, and spare the target only when the pool still
- * has an eligible sibling. A lone account or an all-cooled pool returns null and cools the target.
+ * has an eligible sibling. The rotator only peeks round-robin here: nothing is sent to that sibling.
+ * A lone account or an all-cooled pool returns null and cools the target.
  */
 function cooledGenericOAuthAccountLabel(
   config: OcxConfig, providerName: string, modelId: string, label: string | undefined, retryAfter: string | undefined,
@@ -155,7 +156,7 @@ function cooledGenericOAuthAccountLabel(
   const matches = getAccountSet(providerName)?.accounts.filter(account =>
     oauthAccountLogLabel(account.id, base) === label) ?? [];
   return matches.length === 1
-    && rotateGenericOAuthAccountOn429(config, providerName, matches[0]!.id, retryAfter, Date.now(), modelId)
+    && rotateGenericOAuthAccountOn429(config, providerName, matches[0]!.id, retryAfter, Date.now(), modelId, false)
     ? label : undefined;
 }
 

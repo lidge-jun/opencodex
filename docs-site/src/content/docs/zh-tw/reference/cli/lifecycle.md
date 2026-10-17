@@ -146,6 +146,8 @@ ocx status --json
 
 ### `ocx sync [--restart-codex] [--restart-app-server-only]`
 
+明確指定重新啟動旗標後，即使目錄和快取的位元組未變，成功提交 `config.toml` 變更也會觸發重新啟動。僅處理設定的操作若沒有變更、遭拒、只做預先檢查或寫入已回復，則不會觸發重新啟動。未指定重新啟動旗標時，sync 不會自動重新啟動 Codex。
+
 從每個已設定的供應商擷取即時模型清單，並將合併後的目錄重新注入 Codex。在新增供應商後或要重新整理可用模型時執行它。
 
 若長壽的 Codex `app-server` 仍在執行，`ocx sync` 會警告它們可能繼續提供先前的記憶體內模型清單，即使 `opencodex-catalog.json` / `models_cache.json` 已更新。傳入 `--restart-codex` 會重啟相符的 `codex … app-server` 與 `codex-code-mode-host` 進程，並在 macOS、Linux 與 Windows 上完全結束再重新啟動 Codex 桌面應用程式，讓模型選擇器重新讀取目錄。進行中的對話會結束。刻意避免廣泛的 `pkill -f codex` 比對。

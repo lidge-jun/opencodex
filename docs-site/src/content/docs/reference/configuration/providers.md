@@ -672,7 +672,9 @@ The effective label order is operator `modelDisplayNames`, then provider catalog
 normal `provider/model` fallback. The routed selector remains `xai/grok-4.6`, while the upstream
 wire model remains `grok-4.6`. Labels are display only. They do not change authentication, adapter
 behavior, routing, billing, or upstream request construction. Removing a map entry resets only its
-label. A management client can set or reset one label with
+label. For built-in OpenAI API models, use
+`providers.openai-apikey.modelDisplayNames`; the label survives catalog refreshes.
+A management client can set or reset one label with
 `PUT /api/providers/:provider/model-display-names` and a body of
 `{ "modelId": "grok-4.6", "displayName": "Grok 4.6" }`; send `displayName: null` to reset it.
 Provider `PATCH` does not edit this map. Use this dedicated `PUT` endpoint to change or remove labels.

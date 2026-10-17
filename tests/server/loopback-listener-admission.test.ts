@@ -132,13 +132,13 @@ describe("local client inference wires on the loopback listener (#4236)", () => 
     // It is now served on the loopback listener, so the public config must not be the source
     // of its CORS headers — the same rule the Anthropic routes above already follow.
     const chatStart = source.indexOf('url.pathname === "/v1/chat/completions"');
-    const nextRoute = source.indexOf("url.pathname === \"/v1/live\"", chatStart);
+    const nextRoute = source.indexOf('url.pathname === "/v1/audio/transcriptions"', chatStart);
     expect(chatStart).toBeGreaterThan(-1);
     const branch = source.slice(chatStart, nextRoute);
     // The handler receives the caller-session-promoted request (#6520); CORS still uses req.
     expect(branch).toContain("handleChatCompletions(sessionReq, config, logCtx");
-    expect(branch).toContain("req,\n          policy,\n        )");
-    expect(branch).not.toContain("req,\n          config,\n        )");
+    expect(branch).toMatch(/return withCors\(\s*await handleChatCompletions\([^\n]+\),\s*req,\s*policy,\s*\)/);
+    expect(branch).not.toMatch(/,\s*req,\s*config,\s*\)/);
   });
 });
 

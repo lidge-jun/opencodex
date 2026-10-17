@@ -1192,6 +1192,7 @@ export const tr: Record<TKey, string> = {
   "logs.detail.attempt.recovery.key401": "API anahtarı yeniden doğrulandı",
   "logs.detail.attempt.recovery.oauthAccount403": "Hesap doğrulaması gerekli (403)",
   "logs.detail.attempt.recovery.oauthAccount429": "Hesap hız sınırına takıldı (429)",
+  "logs.detail.attempt.recovery.oauthAccount402": "Hesap kotası tükendi (402)",
   "logs.detail.attempt.recovery.opaqueBlobRejection": "Eski şifreli durum bırakıldı",
   "logs.detail.attempt.recovery.reasoningEffortDowngrade": "Akıl yürütme düzeyi düşürüldü",
   "logs.detail.attempt.recovery.anthropicFastDowngrade": "Hızlı mod reddedildi, standart hızda yeniden denendi",

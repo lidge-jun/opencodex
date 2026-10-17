@@ -12,6 +12,7 @@ import {
 } from "../../src/usage/log";
 import { closeRequestHistoryIndex } from "../../src/routing/history/indexer";
 import { computeRoutingAnalytics } from "../../src/routing/analytics";
+import { computeEntryCost } from "../../src/usage/summary";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -170,6 +171,24 @@ describe("routing analytics (RI-03)", () => {
     // Unknown price for provider "a": the estimate stays null, never zero.
     expect(result.estimatedCostUsdPerSuccessfulRequest).toBeNull();
     expect(result.priceCoverage).toBe(0);
+  });
+
+  test("a refused retry before a measured send is priced, matching /api/usage", async () => {
+    const send = { provider: "openai", model: "gpt-5.5", adapter: "openai-responses", durationMs: 10, sendCount: 1, recoveryKinds: [] };
+    const attempts = [
+      { ...send, ordinal: 1, status: 429, usageStatus: "unreported" as const },
+      { ...send, ordinal: 2, status: 200, usageStatus: "reported" as const, usage: { inputTokens: 100, outputTokens: 10 } },
+    ];
+    const row = entry("r1", {
+      timestamp: 1, status: 200, durationMs: 20, provider: "openai", model: "gpt-5.5",
+      usageStatus: "unreported", usage: { inputTokens: 100, outputTokens: 10 }, attempts,
+    });
+    appendUsageEntry(row);
+
+    const result = await computeRoutingAnalytics({});
+    expect(result.priceCoverage).toBe(1);
+    expect(result.estimatedCostUsdTotalSuccessful).toBe(computeEntryCost(row).costTotal);
+    expect(result.estimatedCostUsdTotalSuccessful).toBeGreaterThan(0);
   });
 
   test("filters scope the analysis", async () => {

@@ -1201,6 +1201,7 @@ export const pt: Record<TKey, string> = {
   "logs.detail.attempt.recovery.key401": "Reautenticação da chave de API",
   "logs.detail.attempt.recovery.oauthAccount403": "Validação da conta necessária (403)",
   "logs.detail.attempt.recovery.oauthAccount429": "Conta com limite de taxa (429)",
+  "logs.detail.attempt.recovery.oauthAccount402": "Cota da conta esgotada (402)",
   "logs.detail.attempt.recovery.opaqueBlobRejection": "Estado criptografado obsoleto descartado",
   "logs.detail.attempt.recovery.reasoningEffortDowngrade": "Esforço de raciocínio reduzido",
   "logs.detail.attempt.recovery.anthropicFastDowngrade": "Modo rápido recusado, repetido em velocidade padrão",

@@ -63,6 +63,7 @@ import {
 import { fastPolicyForModel } from "../providers/service-tier";
 import { RequestPacingQueueOverloadError } from "../providers/request-pacing";
 import { stampApiKeyAccountLabel } from "../providers/label";
+import { distributedKeyPhysicalFetch, distributedKeyResponseOwner } from "../providers/api-key-response-ownership";
 import { providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../providers/api-key-selection";
 import { enrichOpenCodeZenFreeTierMessage } from "../providers/opencode-zen-rate-limit";
 import type { OcxProviderTransport } from "../providers/xai-transport";
@@ -517,8 +518,6 @@ export async function runNativeChatAttempt(
                 poolId: logCtx.spendPoolId ?? route.providerName, identityId: logCtx.accountLogLabel,
               }), execution.comboDispatchPermit);
               const observeAutoPause = captureAccountAutoPauseAttempt(route.providerName, activeProvider, { config, oauth: undefined }, headers);
-              const ownsDistributedKey = !activeProvider._apiKeyAttempt?.distributed
-                || headers.get("authorization") === `Bearer ${activeProvider.apiKey}`;
               let dispatched: Response;
               try {
                 // Capture this request's spend policy at its first physical boundary, including
@@ -536,7 +535,8 @@ export async function runNativeChatAttempt(
                 // A reselected provider transport is still a physical send: the connection policy
                 // and manual-redirect ownership wrap the selected implementation (#4992).
                 dispatched = await sendWithConnectionPolicy(
-                  (activeProvider as OcxProviderTransport).fetch ?? execute,
+                  distributedKeyPhysicalFetch((activeProvider as OcxProviderTransport).fetch ?? execute,
+                    route.providerName, activeProvider, request.url),
                   request.url,
                   applyUpstreamRecoveryInit({
                     ...init, method: request.method, headers, body: request.body,
@@ -551,7 +551,8 @@ export async function runNativeChatAttempt(
                 try { if (physicalBudget.spendEnforced) spendReport(1); }
                 finally { spendReport.close?.(); }
               }
-              responseOwnsDistributedKey = ownsDistributedKey;
+              responseOwnsDistributedKey = !activeProvider._apiKeyAttempt?.distributed
+                || distributedKeyResponseOwner(dispatched, config, route.providerName) !== null;
               if (!dispatched.ok) await recordKeyAttemptFailure(logCtx, dispatched, init.signal ?? upstream.signal);
               return observeAutoPause ? observeAutoPause(dispatched) : dispatched;
             },

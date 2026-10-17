@@ -87,6 +87,72 @@ export function declaredAnthropicServerTools(raw: unknown): Rec[] | undefined {
   return tools.length > 0 ? tools : undefined;
 }
 
+/** Validate original call/result order without inventing inputs or pairing a later call backwards. */
+function replayableServerRun(run: readonly Rec[]): boolean {
+  const pending = new Map<string, Rec>();
+  const completed = new Set<string>();
+  for (const block of run) {
+    if (block.type === "server_tool_use") {
+      const { id, name, input } = block;
+      if (typeof id !== "string" || !id.startsWith("srvtoolu_") || pending.has(id) || completed.has(id)
+        || (name !== "web_search" && name !== "web_fetch") || !isRec(input)) return false;
+      const prototype = Object.getPrototypeOf(input);
+      const required = input[name === "web_search" ? "query" : "url"];
+      if ((prototype !== Object.prototype && prototype !== null)
+        || typeof required !== "string" || required.trim().length === 0) return false;
+      pending.set(id, block);
+    } else {
+      const id = block.tool_use_id;
+      if (typeof id !== "string") return false;
+      const call = pending.get(id);
+      if (!call || block.type !== `${call.name}_tool_result`
+        || (Array.isArray(block.content) && !block.content.every(h => isRec(h) && typeof h.encrypted_content === "string"))) return false;
+      pending.delete(id);
+      completed.add(id);
+    }
+  }
+  return completed.size > 0 && pending.size === 0;
+}
+
+/**
+ * Completed Anthropic server-tool exchanges (`server_tool_use` + `web_search_tool_result` /
+ * `web_fetch_tool_result`) in the caller's assistant history. The Responses body drops them, so
+ * an Anthropic destination re-inserts them out of body, keyed by the block that follows each run
+ * in its message: `call:<tool_use id>`, `text:<text>`, `thinking:<signature>` or
+ * `redacted:<data>`, all of which survive translation. An anchor that occurs more than once in the
+ * assistant history (string content included) cannot name one owner, so its run stays dropped,
+ * as it was before replay existed. A run with none, an unpaired call, a
+ * non-Anthropic id, or a search hit without `encrypted_content` is not replayable and stays dropped.
+ */
+export function replayedAnthropicServerBlocks(raw: unknown): Map<string, Rec[]> | undefined {
+  if (!isRec(raw) || !Array.isArray(raw.messages)) return undefined;
+  const out = new Map<string, Rec[]>();
+  const seen = new Map<string, number>();
+  const count = (anchor: string) => seen.set(anchor, (seen.get(anchor) ?? 0) + 1);
+  for (const message of raw.messages) {
+    if (!isRec(message) || message.role !== "assistant") continue;
+    if (typeof message.content === "string") count(`text:${message.content}`);
+    if (!Array.isArray(message.content)) continue;
+    let run: Rec[] = [];
+    for (const block of message.content.filter(isRec)) {
+      if (block.type === "server_tool_use" || block.type === "web_search_tool_result" || block.type === "web_fetch_tool_result") {
+        // The caller's breakpoints are dropped on this lane, as for the declared tools above.
+        run.push({ ...block, cache_control: undefined });
+        continue;
+      }
+      const anchor = block.type === "tool_use" ? `call:${String(block.id)}`
+        : block.type === "text" ? `text:${String(block.text)}`
+        : block.type === "thinking" ? `thinking:${String(block.signature)}`
+        : block.type === "redacted_thinking" ? `redacted:${String(block.data)}` : undefined;
+      if (anchor) count(anchor);
+      if (anchor && replayableServerRun(run)) out.set(anchor, run);
+      run = [];
+    }
+  }
+  for (const anchor of out.keys()) if ((seen.get(anchor) ?? 0) > 1) out.delete(anchor);
+  return out.size > 0 ? out : undefined;
+}
+
 export function toolChoiceToResponses(choice: unknown, body: Rec): void {
   if (!isRec(choice)) return;
   if (choice.disable_parallel_tool_use === true) body.parallel_tool_calls = false;

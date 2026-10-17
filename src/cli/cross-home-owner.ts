@@ -26,6 +26,7 @@ import {
 } from "../server/proxy-liveness";
 import { directLocalHttpFetch } from "../server/direct-local-http";
 import type { RuntimePortState } from "../config/process-state";
+import { loopbackFamilyAvailability } from "./loopback-family";
 
 const MAX_HINT_BYTES = 256 * 1024;
 // Far above any real Grok config; discovery must not stall startup when Grok sync is off.
@@ -128,13 +129,19 @@ function loopbackPort(raw: string | null): number | null {
   }
 }
 
+type CrossHomeOwnerOptions = {
+  homeDir?: string;
+  io?: LivenessIo;
+  loopbackAvailabilityFn?: typeof loopbackFamilyAvailability;
+};
+
 /** Returns only a different process with an identity-checked /healthz response. */
-export async function findCrossHomeOwner(options: { homeDir?: string; io?: LivenessIo } = {}): Promise<number | null> {
+export async function findCrossHomeOwner(options: CrossHomeOwnerOptions = {}): Promise<number | null> {
   const verdict = await findCrossHomeOwnerDetailed(options);
   return verdict.kind === "owner" ? verdict.port : null;
 }
 
-export async function findCrossHomeOwnerDetailed(options: { homeDir?: string; io?: LivenessIo } = {}): Promise<CrossHomeOwnerVerdict> {
+export async function findCrossHomeOwnerDetailed(options: CrossHomeOwnerOptions = {}): Promise<CrossHomeOwnerVerdict> {
   const io = options.io ?? {};
   const nowFn = io.nowFn ?? Date.now;
   const timeoutMs = io.timeoutMs ?? START_OWNERSHIP_LIVENESS.timeoutMs ?? 1_500;
@@ -205,6 +212,8 @@ export async function findCrossHomeOwnerDetailed(options: { homeDir?: string; io
   }
 
   const queue = [...candidates];
+  const availability = new Map<string, ReturnType<typeof loopbackFamilyAvailability>>();
+  const checkAvailability = options.loopbackAvailabilityFn ?? loopbackFamilyAvailability;
   const probed = new Set<number>();
   for (const port of queue) {
     if (probed.has(port)) continue;
@@ -225,6 +234,11 @@ export async function findCrossHomeOwnerDetailed(options: { homeDir?: string; io
         noteIndeterminate(port, "ownership discovery ran out of its shared time budget");
         break;
       }
+      // Disabled loopback IPv6 can route ::1 off-host and time out. An ephemeral
+      // local bind proves address absence without treating an available family's
+      // timeout as empty. Unknown bind failures retain the existing probes.
+      if (!availability.has(hostname)) availability.set(hostname, checkAvailability(hostname));
+      if (availability.get(hostname) === "unavailable") continue;
       const identity = await proxyIdentityAt(port, { hostname }, probeIo);
       if (identity === null) {
         // A null identity is not "free": distinguish a unanimous connect refusal

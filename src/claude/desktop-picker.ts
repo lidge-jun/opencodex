@@ -78,6 +78,8 @@ export interface DesktopPickerControllerDeps {
   persistPreference: (value: boolean) => boolean;
   /** Bound picker CONNECT proxy port (Desktop's egress), or null when it is not running. */
   proxyPort: () => number | null;
+  /** Bind a dormant relay on explicit enable, under the controller's mutation lock. */
+  ensureProxy?: () => Promise<void>;
   configDir: string;
   persistentAuthority?: { store?: PickerCaStore };
   security?: SecurityRunner;
@@ -212,7 +214,7 @@ export function createDesktopPickerController(deps: DesktopPickerControllerDeps)
       if (resolveClaudeDesktopMode(config, observeClaudeDesktopMode(config)) !== "first-party") return "mode_not_committed";
       if (!claudeDesktopIntegrationEnabled(config)) return "integration_off";
       if (includePreference && config.claudeCode?.intercept?.picker === false) return "disabled";
-      if (deps.proxyPort() === null) return "proxy_unavailable";
+      if (deps.proxyPort() === null && !deps.ensureProxy) return "proxy_unavailable";
       return null;
     };
 
@@ -225,6 +227,10 @@ export function createDesktopPickerController(deps: DesktopPickerControllerDeps)
     }
     const second = check(deps.readConfig(), true);
     if (second) return refuse(second);
+    if (deps.proxyPort() === null) {
+      try { await deps.ensureProxy?.(); } catch { return refuse("proxy_unavailable"); }
+    }
+    if (deps.proxyPort() === null) return refuse("proxy_unavailable");
 
     let caPath: string;
     let caSha1: string;

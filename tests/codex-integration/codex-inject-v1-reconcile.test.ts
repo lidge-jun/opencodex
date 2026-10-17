@@ -41,7 +41,7 @@ function runV1CoordinatorFailure(
   codexHome: string,
   ocxHome: string,
   failure: "commit" | "publish",
-): { threw: boolean; message: string; toggles: number; sawReconcile: boolean; sawArtifactsAtCommit: boolean } {
+): { threw: boolean; message: string; toggles: number; sawReconcile: boolean; sawArtifactsAtCommit: boolean; configChanged?: boolean } {
   const script = `
     const fs = require("node:fs");
     const { join } = require("node:path");
@@ -75,9 +75,10 @@ function runV1CoordinatorFailure(
     }
     let threw = false;
     let message = "";
-    try { await injectCodexConfig(10100, { multiAgentMode: "v1" }); }
+    let result;
+    try { result = await injectCodexConfig(10100, { multiAgentMode: "v1" }); }
     catch (error) { threw = true; message = String(error); }
-    console.log(JSON.stringify({ threw, message, toggles, sawReconcile, sawArtifactsAtCommit }));
+    console.log(JSON.stringify({ threw, message, toggles, sawReconcile, sawArtifactsAtCommit, configChanged: result?.configChanged }));
   `;
   const child = spawnSync(process.execPath, ["--eval", script], {
     cwd: repoRoot,
@@ -203,11 +204,49 @@ describe("injectCodexConfig v1-surface reconcile", () => {
 
     expect(child.status, child.stderr).toBe(0);
     const out = JSON.parse(child.stdout);
-    expect(out.result).toMatchObject({ success: true });
+    expect(out.result).toMatchObject({ success: true, configChanged: true });
     expect(out.expectedId).toMatch(/^[a-f0-9]{64}$/);
     expect(out.publishedId).toBe(out.expectedId);
     expect(out.committedConfig).toBe(out.expectedConfig);
     expect(out.committedConfig).toContain("multi_agent_v2 = false");
+  });
+
+  test("configChanged includes a v1-only reconciliation before an otherwise identical artifact plan", () => {
+    const configPath = join(codexHome, "config.toml");
+    writeFileSync(configPath, 'model = "gpt-5.5"\n\n[features]\nmulti_agent_v2 = false\n', "utf8");
+    const script = `
+      const fs = require("node:fs");
+      const { join } = require("node:path");
+      const { injectCodexConfig } = require("./src/codex/inject");
+      const { setCodexMultiAgentV2ToggleForTests } = require("./src/codex/inject/multi-agent-v2");
+      const path = join(process.env.CODEX_HOME, "config.toml");
+      const config = { multiAgentMode: "v1" };
+      setCodexMultiAgentV2ToggleForTests(enabled => {
+        const current = fs.readFileSync(path, "utf8");
+        fs.writeFileSync(path, current.replace("multi_agent_v2 = true", "multi_agent_v2 = " + enabled));
+      });
+      const first = await injectCodexConfig(10100, config);
+      const stable = fs.readFileSync(path, "utf8");
+      fs.writeFileSync(path, stable.replace("multi_agent_v2 = false", "multi_agent_v2 = true"));
+      const before = fs.readFileSync(path, "utf8");
+      const reconciled = await injectCodexConfig(10100, config);
+      const after = fs.readFileSync(path, "utf8");
+      const unchanged = await injectCodexConfig(10100, config);
+      console.log(JSON.stringify({ first, reconciled, unchanged, before, after, stable }));
+    `;
+    const child = spawnSync(process.execPath, ["--eval", script], {
+      cwd: repoRoot,
+      env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: ocxHome },
+      encoding: "utf8",
+      timeout: SPAWN_BUDGET_MS - 5_000,
+    });
+    expect(child.status, child.stderr).toBe(0);
+    const out = JSON.parse(child.stdout);
+    expect(out.first).toMatchObject({ success: true, configChanged: true });
+    expect(out.before).not.toBe(out.stable);
+    expect(out.after).toBe(out.stable);
+    expect(out.reconciled).toMatchObject({ success: true, configChanged: true });
+    expect(out.unchanged).toMatchObject({ success: true, configChanged: false });
   });
 
   test("a skipped v1 injection does not run the v2 reconcile or leave the file changed", () => {
@@ -236,6 +275,7 @@ describe("injectCodexConfig v1-surface reconcile", () => {
     expect(child.status, child.stderr).toBe(0);
     const out = JSON.parse(child.stdout);
     expect(out.result).toMatchObject({ success: true, status: "skipped", skippedReason: "desired_disabled" });
+    expect(out.result.configChanged).not.toBe(true);
     // The gate ran before the reconcile: no transition ran and nothing was written.
     expect(out.toggles).toBe(0);
     const config = readFileSync(configPath, "utf8");
@@ -276,7 +316,9 @@ describe("injectCodexConfig v1-surface reconcile", () => {
     });
 
     expect(child.status, child.stderr).toBe(0);
-    expect(JSON.parse(child.stdout)).toMatchObject({ threw: true });
+    const out = JSON.parse(child.stdout);
+    expect(out).toMatchObject({ threw: true });
+    expect(out.result?.configChanged).not.toBe(true);
     // Byte-exact restoration: the flag flip was rolled back with everything else.
     expect(readFileSync(configPath, "utf8")).toBe(original);
     expect(existsSync(join(codexHome, "opencodex.config.toml"))).toBe(false);
@@ -290,6 +332,7 @@ describe("injectCodexConfig v1-surface reconcile", () => {
     writeFileSync(configPath, originalConfig);
 
     const out = runV1CoordinatorFailure(codexHome, ocxHome, "commit");
+    expect(out.configChanged).not.toBe(true);
     expect(out).toMatchObject({ threw: true, toggles: 1, sawReconcile: true, sawArtifactsAtCommit: true });
     expect(out.message).toContain("fixture coordinator commit failed");
     expect(readFileSync(configPath, "utf8")).toBe(originalConfig);
@@ -304,6 +347,7 @@ describe("injectCodexConfig v1-surface reconcile", () => {
     writeFileSync(configPath, originalConfig);
 
     const out = runV1CoordinatorFailure(codexHome, ocxHome, "publish");
+    expect(out.configChanged).not.toBe(true);
     expect(out).toMatchObject({ threw: true, toggles: 1, sawReconcile: true, sawArtifactsAtCommit: false });
     expect(out.message).toContain("could not be published: conflict");
     expect(readFileSync(configPath, "utf8")).toBe(originalConfig);
@@ -359,7 +403,7 @@ describe("injectCodexConfig v1-surface reconcile", () => {
 
     expect(child.status, child.stderr).toBe(0);
     const out = JSON.parse(child.stdout);
-    expect(out.result).toMatchObject({ success: true });
+    expect(out.result).toMatchObject({ success: true, configChanged: true });
     expect(out.competitor.status).toBe(0);
     expect(JSON.parse(out.competitor.stdout).success).toBe(false);
     const config = readFileSync(configPath, "utf8");

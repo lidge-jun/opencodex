@@ -154,6 +154,10 @@ It stops before publishing a new runtime or changing those settings. Retry start
 local connectivity recovers; an installed background service retries through its service manager.
 A timeout does not permanently turn the new process into a secondary instance.
 
+IPv6 does not need to be enabled on loopback. Startup checks whether each loopback
+address can be bound locally and skips an unavailable family. Timeouts on an available
+family still stop startup until ownership can be verified.
+
 ## Next
 
 - [How It Works](/getting-started/how-it-works/) — what happens to each request.

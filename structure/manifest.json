@@ -127,6 +127,13 @@
       ]
     },
     {
+      "path": "codex-provider-routing.md",
+      "tier": 2,
+      "title": "Custom Codex Provider Routing",
+      "scope": "Explicit provider-ID routing consent, URL-only publication and recovery.",
+      "documents": ["src/codex/provider-routing.ts", "src/cli/codex-provider.ts"]
+    },
+    {
       "path": "codex-home.md",
       "tier": 2,
       "title": "Codex Home",
@@ -153,6 +160,16 @@
       "documents": [
         "src/messaging/",
         "src/cli/"
+      ]
+    },
+    {
+      "path": "codex-cli-update.md",
+      "tier": 2,
+      "title": "Codex CLI Update Plan",
+      "scope": "Read-only update planning, isolated npm environment, and complete process observation.",
+      "documents": [
+        "src/codex/cli-update-plan.ts",
+        "src/codex/app-server-processes.ts"
       ]
     },
     {
@@ -230,6 +247,19 @@
         "src/lib/",
         "src/server/",
         "src/responses/"
+      ]
+    },
+    {
+      "path": "transports/anthropic-thinking-recovery.md",
+      "tier": 3,
+      "title": "Anthropic Thinking-Signature Recovery",
+      "scope": "One-shot exact signature-binding recovery before output, and successful-retry memo boundaries.",
+      "documents": [
+        "src/server/responses/anthropic-thinking-recovery.ts",
+        "src/adapters/anthropic-rejection-memo.ts",
+        "src/adapters/anthropic-replay.ts",
+        "src/adapters/anthropic-tool-catalog.ts",
+        "src/responses/reasoning-replay-cache.ts"
       ]
     },
     {

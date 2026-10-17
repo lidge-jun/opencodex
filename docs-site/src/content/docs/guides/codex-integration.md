@@ -427,6 +427,14 @@ provider advertises `supports_websockets = true` only when `"websockets": true`;
 built-in provider may try WebSocket first, and a disabled proxy returns `426` so Codex falls back to
 HTTP/SSE.
 
+The proxy admits up to 128 client-facing Responses WebSocket connections. When a new connection
+finds all 128 slots occupied, it closes the least recently used idle connection to make room. Connections
+with an active response, pending client tool or approval results, a native steering/injection
+session, or buffered output are protected. If no idle connection can be released, the new
+connection receives the existing `503` capacity response. A reclaimed client can reconnect for
+later requests using the existing continuation handling. This happens only under connection
+pressure, needs no setting, and does not change voice connections or upstream connection reuse.
+
 If a canonical ChatGPT forward continuation references expired or missing local replay state,
 opencodex returns `previous_response_not_found` before sending anything upstream. Codex's
 WebSocket client recognizes this error and can reconnect with its full retained context,
@@ -1621,6 +1629,42 @@ The shared SSE decoder accepts LF, CRLF and standalone CR line endings, even whe
 Choosing an account-qualified model does not enable credit spending. Stored accounts obey **Use credits after limit** during authentication, when credentials are prepared, and before Responses HTTP or WebSocket dispatch after pacing or retry waits. A held request reports the credit policy, not an authentication failure; wait for the reset, choose another account, or explicitly enable that account’s credit spending.
 
 Stored-account vision and web-search helpers also recheck this policy before sending, including retries. If consent changes or a limit is reached after helper selection, the helper reports the policy refusal without sending that attempt. The standalone search relay returns a reset-bound 429. Caller-owned Direct credentials retain their existing behavior.
+
+## Opt in a custom provider to managed local routing
+
+A custom provider such as `chatgpt-http` may use `supports_websockets = false`
+to keep HTTP transport. OpenCodex leaves custom providers untouched by default.
+To delegate only that provider's URL to OpenCodex, run:
+
+```sh
+ocx codex-provider allow chatgpt-http
+ocx start
+```
+
+The first command explains the scope and asks for confirmation, defaulting to No.
+For an explicitly approved scripted operation, use `allow chatgpt-http --yes`.
+Consent applies to this provider ID in the selected `CODEX_HOME`; it does not
+approve other providers or other homes. Start and sync update only its `base_url`
+to the local proxy. Its identity, WebSocket setting, other TOML fields and history
+remain unchanged. Keep the proxy running while using this route.
+Turning the Codex integration OFF also prevents approved-provider URL updates on
+start or sync; the saved provider consent remains available when you turn it back on.
+
+This mode supports explicit Responses provider tables with `requires_openai_auth = true`
+and no custom credentials or headers. Non-loopback targets, authless Desktop mode
+and client compaction require the existing dedicated integration instead.
+
+`ocx stop` and `ocx restore` restore recorded URLs while keeping consent for a later
+start. Run `ocx codex-provider status` to list approvals, or
+`ocx codex-provider revoke chatgpt-http` to restore its managed URL and remove consent.
+A URL changed outside OpenCodex is preserved and requires revoke followed by a new
+approval; OpenCodex does not silently adopt the replacement as a new baseline.
+The original URL assignment is retained in private recovery metadata under
+`OPENCODEX_HOME`, separately from the native config journal.
+
+Startup safety recognizes an approved provider's recorded managed URL as OpenCodex routing.
+This does not install restart protection: a manually started proxy still needs a viable
+background service to recover automatically after a restart.
 
 ## Native Desktop relay CONNECT validation
 

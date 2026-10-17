@@ -247,6 +247,23 @@ test("a synthetic non-replayable compact 429 never cools a distributed key", asy
   unchanged(config); noLeaks(config);
 });
 
+for (const statusCode of [401, 429]) test(`compact static Authorization ${statusCode} retains pool availability`, async () => {
+  const config = fixture();
+  config.providers[NAME]!.supportsNativeCompactEndpoint = true;
+  config.providers[NAME]!.headers = { Authorization: "Bearer fixture-override" };
+  globalThis.fetch = (async (input, init) => {
+    seen.push({ key: new Headers(init?.headers).get("authorization"), url: String(input), body: JSON.parse(String(init?.body)), headers: new Headers(init?.headers) });
+    return Response.json({ error: { message: "fixture refusal" } }, { status: statusCode });
+  }) as typeof fetch;
+  for (let request = 0; request < 4; request++) {
+    expect((await start(config, new AbortController())).response.status).toBe(statusCode);
+    expect(seen).toHaveLength(request + 1);
+    for (const id of ["k1", "k2", "k3"]) expect(getKeyCooldownUntil(NAME, id)).toBeNull();
+  }
+  expect(seen.map(row => row.key)).toEqual(Array(4).fill("Bearer fixture-override"));
+  unchanged(config); noLeaks(config);
+});
+
 for (const cancel of [false, true]) test(`active manual key switch readmits the selected key (cancel=${cancel})`, async () => {
   const config = fixture();
   config.providers[NAME]!.requestPacing = { enabled: true, keys: { maxConcurrentRequests: 1 } };
