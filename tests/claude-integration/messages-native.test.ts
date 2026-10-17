@@ -397,11 +397,12 @@ describe("managed native Messages", () => {
     expect(seen.map(entry => entry.headers.get("x-api-key"))).toEqual(["fixture-key-alpha", "fixture-key-beta"]);
   });
 
-  for (const { providerName, upstreamRetryAfter, expectedRetryAfter } of [
+  for (const { providerName, upstreamRetryAfter, expectedRetryAfter, upstreamMessage = "Rate limit exceeded" } of [
     { providerName: "opencode-zen", upstreamRetryAfter: undefined, expectedRetryAfter: "15" },
     { providerName: "opencode-zen", upstreamRetryAfter: "37", expectedRetryAfter: "37" },
     { providerName: "anth", upstreamRetryAfter: undefined, expectedRetryAfter: "2" },
-  ]) test(`native ${providerName} 429 preserves pacing policy with Retry-After ${upstreamRetryAfter ?? "absent"}`, async () => {
+    { providerName: "opencode-zen", upstreamRetryAfter: undefined, expectedRetryAfter: "15", upstreamMessage: "Too Many Requests" },
+  ]) test(`native ${providerName} 429 preserves pacing policy with Retry-After ${upstreamRetryAfter ?? "absent"} and ${upstreamMessage}`, async () => {
     const config = fixtureConfig(1);
     if (providerName !== "anth") {
       config.providers[providerName] = config.providers.anth!;
@@ -414,7 +415,7 @@ describe("managed native Messages", () => {
     const fetchMock = spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       const request = new Request(input, init);
       seen.push({ path: new URL(request.url).pathname, headers: request.headers, body: await request.json() as Record<string, unknown> });
-      return Response.json({ type: "error", error: { type: "rate_limit_error", message: "Rate limit exceeded" } },
+      return Response.json({ type: "error", error: { type: "rate_limit_error", message: upstreamMessage } },
         { status: 429, headers: upstreamRetryAfter ? { "retry-after": upstreamRetryAfter } : {} });
     });
     let result: Awaited<ReturnType<typeof send>>;

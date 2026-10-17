@@ -78,6 +78,26 @@ describe("opencode-zen rate-limit guidance (#1145)", () => {
     })).toBe(String(OPENCODE_ZEN_SYNTHETIC_RETRY_AFTER_SEC));
   });
 
+  test("explicit rate-limit types receive guidance without matching message text", () => {
+    const enriched = enrichOpenCodeZenUpstreamMessage("Too Many Requests", {
+      status: 429, providerName: "opencode-zen", upstreamErrorType: "rate_limit_error",
+    });
+    expect(enriched).toContain("Try again in 15s");
+    expect(resolveClientRetryAfter({ status: 429, message: enriched })).toBe("15");
+  });
+
+  test("quota errors never receive short-window pacing guidance", () => {
+    for (const [upstreamErrorType, message] of [
+      ["insufficient_quota", "Rate limit exceeded"],
+      ["rate_limit_error", "Monthly quota exceeded; rate limit exceeded"],
+      ["insufficient_quota", "Too Many Requests"],
+    ]) {
+      expect(enrichOpenCodeZenUpstreamMessage(message!, {
+        status: 429, providerName: "opencode-zen", upstreamErrorType,
+      })).toBe(message!);
+    }
+  });
+
   test("enrichOpenCodeZenRateLimitMessage skips synthetic hint when upstream Retry-After is set", () => {
     const enriched = enrichOpenCodeZenRateLimitMessage(
       "Provider error 429: Rate limit exceeded.",

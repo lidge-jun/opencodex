@@ -436,6 +436,8 @@ ekler; bir yukarı akış `Retry-After`'ı yine de önceliklidir. Aynı anahtarl
 bekle ve yeniden dene özelliği [`retryOn429`](/tr/reference/configuration/)
 aracılığıyla isteğe bağlı kalır.
 
+Standart `opencode-zen` sağlayıcısının API anahtarıyla kimlik doğrulanan resmi `https://opencode.ai/zen/v1` ve `https://opencode.ai/inference/v1` yollarında Gemini, varsayılan `googleMode: ai-studio` modunda Google'ın yerel API'sini otomatik kullanır. Zen model kimlikleri, `-tiered` eki olmayan Flash kimlikleri dahil korunur. Claude, `googleMode` değerinden bağımsız olarak Anthropic Messages kullanır. Kaydedilmiş yapılandırmalar yüklenirken yalnızca bu yerel modellerin uygun eski Chat/Responses geçersiz kılmaları ve uygun, yalnızca Responses'a özgü `image_generation` barındırılan araç tercihleri yok sayılır. Özel sağlayıcılar, anahtar kimlik doğrulaması kullanmayan yollar ve diğer tercihler değişmez.
+
 **Anahtarsız `opencode-free` katmanı şu anda üçüncü taraf istemcilere kapalıdır.** Zen,
 `x-opencode-session` başlığı olmadan gelen her isteği reddeder ve `MissingSessionID` hata
 tipiyle "OpenCode's free tier can only be used in OpenCode" mesajını döndürür. Kapıda
