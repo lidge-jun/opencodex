@@ -17,6 +17,8 @@ import { clearResponseStateForTests, flushResponseState } from "../../src/respon
 import { handleChatCompletions } from "../../src/server/chat-completions";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
 import { providerFetch } from "../../src/server/responses/fetch-helpers";
+import { bindUpstreamRequestCompressionConfig } from "../../src/server/responses/request-compression";
+import { gunzipSync } from "node:zlib";
 import { handleResponses } from "../../src/server/responses/core";
 import type { OcxConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
@@ -420,3 +422,52 @@ for (const kind of ["pool", "main-pool"] as const) {
     });
   }
 }
+
+describe("auto-pause ownership on compressed native Responses sends", () => {
+  const codexUrl = "https://chatgpt.com/backend-api/codex/responses";
+  for (const rewritten of [false, true]) {
+    test(`${rewritten ? "rewritten credential under gzip does not pause" : "wire owner under gzip pauses"}; the report carries post-compression headers`, async () => {
+      bindUpstreamRequestCompressionConfig({ upstreamRequestCompression: "gzip" });
+      try {
+        const config = fixture("openai-responses");
+        const route = routedProviderConfig("fixture", config.providers.fixture!);
+        if (rewritten) rewrite(t => { t.headers.set("authorization", "Bearer synthetic-third"); });
+        const original = JSON.stringify({ input: "x".repeat(4096) });
+        const reported: Headers[] = [];
+        const sends: { headers: Headers; body: Uint8Array }[] = [];
+        const upstream = refusal();
+        const physical = (async (_input, init) => {
+          sends.push({ headers: new Headers(init?.headers), body: new Uint8Array(init?.body as ArrayBufferLike) });
+          return upstream;
+        }) as typeof fetch;
+        const send = providerFetch(Object.assign(route, { fetch: physical }), undefined, {
+          providerName: "fixture", httpOnly: true,
+          accountAutoPause: (name, provider, headers) => {
+            const observer = captureAccountAutoPauseAttempt(name, provider, { config }, headers)!;
+            expect(observer).toBeDefined();
+            const report = observer.physical;
+            observer.physical = (sameDestination, wire) => { reported.push(new Headers(wire)); report(sameDestination, wire); };
+            return observer;
+          },
+        });
+        const response = await send(codexUrl, { method: "POST",
+          headers: { authorization: "Bearer synthetic-A", "content-type": "application/json", "content-length": String(original.length) }, body: original });
+        // Consuming the body releases the per-key pacing slot for the next case.
+        expect(await response.json()).toEqual({ error: { type: "permission_error", message: "Your subscription has expired." } });
+        expect(sends).toHaveLength(1);
+        expect(reported).toHaveLength(1);
+        for (const headers of [reported[0]!, sends[0]!.headers]) {
+          expect(headers.get("content-encoding")).toBe("gzip");
+          expect(headers.get("content-length")).toBeNull();
+          expect(headers.get("authorization")).toBe(rewritten ? "Bearer synthetic-third" : "Bearer synthetic-A");
+        }
+        expect(new TextDecoder().decode(gunzipSync(sends[0]!.body))).toBe(original);
+        expect(wasAccountAutoPaused(response)).toBe(!rewritten);
+        if (rewritten) expectUnpaused(config); else expectPaused(config);
+      } finally {
+        bindUpstreamRequestCompressionConfig(null);
+      }
+    });
+  }
+});
+
