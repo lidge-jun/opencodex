@@ -118,11 +118,36 @@ function blockAt(text: string, offset: number): SerializedToolCall | undefined {
   const next = NEXT_BLOCK_HEADER.exec(text);
   const limit = next ? next.index + 1 : text.length;
   let unclosed: SerializedToolCall | undefined;
-  for (let close = text.indexOf(CLOSE_TAG, bodyStart); close >= 0 && (close < limit || !unclosed);
-    close = text.indexOf(CLOSE_TAG, close + CLOSE_TAG.length)) {
-    let bodyEnd = trimmedEnd(text, bodyStart, close);
+  for (
+    let close = nextBlockClose(text, bodyStart);
+    close.index >= 0 && (close.index < limit || !unclosed);
+    close = nextBlockClose(text, close.end)
+  ) {
+    const { index: closeIndex, end: closeEnd, tag: closeTag } = close;
+    let bodyEnd = trimmedEnd(text, bodyStart, closeIndex);
     const closed = endsWithAt(text, bodyStart, bodyEnd, FUNCTION_CLOSE);
     if (closed) bodyEnd = trimmedEnd(text, bodyStart, bodyEnd - FUNCTION_CLOSE.length);
+    // MiMo's echo can also end with the Command Code alternate closer
+    // ...</function></function_calls> or ...</invoke></function_calls> instead of
+    // </function></tool_call>. Treat the alternate close as a completed block only when
+    // a known function closer immediately precedes it, so prose containing the tag alone
+    // cannot terminate a block.
+    if (closeTag === FUNCTION_CALLS_CLOSE) {
+      const inner = trimmedEnd(text, bodyStart, closeIndex);
+      const hasFn = endsWithAt(text, bodyStart, inner, FUNCTION_CLOSE);
+      const hasInvoke = endsWithAt(text, bodyStart, inner, INVOKE_CLOSE);
+      if (!hasFn && !hasInvoke) continue;
+      let altEnd = inner;
+      if (hasFn) altEnd = trimmedEnd(text, bodyStart, altEnd - FUNCTION_CLOSE.length);
+      else if (hasInvoke) altEnd = trimmedEnd(text, bodyStart, altEnd - INVOKE_CLOSE.length);
+      if (endsWithAt(text, bodyStart, altEnd, PARAMETER_CLOSE)) altEnd -= PARAMETER_CLOSE.length;
+      return {
+        name: header[1]!.trim(),
+        body: text.slice(bodyStart, altEnd),
+        start: offset,
+        end: closeEnd,
+      };
+    }
     // MiMo's echo can also carry a stray `</invoke>` close (the Command Code grammar's
     // alternate function close) between `</parameter>` and `</function>`. Strip tail
     // closers from the end inward — </invoke> first, then </parameter> — so the body
@@ -135,12 +160,20 @@ function blockAt(text: string, offset: number): SerializedToolCall | undefined {
       name: header[1]!.trim(),
       body: text.slice(bodyStart, bodyEnd),
       start: offset,
-      end: close + CLOSE_TAG.length,
+      end: closeEnd,
     };
     if (closed) return call;
-    if (close < limit) unclosed ??= call;
+    if (closeIndex < limit) unclosed ??= call;
   }
   return unclosed;
+}
+
+/** The next candidate block close: `</tool_call>` or MiMo's alternate `</function_calls>`. */
+function nextBlockClose(text: string, from: number): { index: number; end: number; tag: string } {
+  const a = text.indexOf(CLOSE_TAG, from);
+  const b = text.indexOf(FUNCTION_CALLS_CLOSE, from);
+  if (b >= 0 && (a < 0 || b < a)) return { index: b, end: b + FUNCTION_CALLS_CLOSE.length, tag: FUNCTION_CALLS_CLOSE };
+  return { index: a, end: a >= 0 ? a + CLOSE_TAG.length : -1, tag: CLOSE_TAG };
 }
 
 /** Finds complete bare blocks outside literal Markdown; ambiguous outer blocks stop the scan. */

@@ -1013,3 +1013,39 @@ test("a raw-text call plus its bare echo with a stray </invoke> close suppresses
     { type: "tool_call_delta", arguments: script },
   ]);
 });
+
+test("a bare echo closed by </function_calls> with a raw-text call suppresses the markup", async () => {
+  const script = "const r = await tools.exec_command({cmd:'node --version'}); text(r.output);";
+  // The live shape: the block ends </parameter></invoke>\\n</function_calls> with no </tool_call>.
+  const block = `<tool_call><function=exec>${script}</parameter></invoke>\n</function_calls>`;
+  const adapter = createOpenAIChatAdapter(provider);
+  adapter.buildRequest({ modelId: "mimo-v2.6-pro", stream: false, options: {}, context: {
+    messages: [{ role: "user", content: "check node", timestamp: 0 }], tools: [execTool],
+  } });
+  const events = await adapter.parseResponse!(Response.json({
+    choices: [{ message: { content: `Running.\n${block}`, tool_calls: [
+      { id: "call_exec", function: { name: "exec", arguments: script } },
+    ] }, finish_reason: "tool_calls" }],
+  }), createTestTranslatorBudget());
+  expect(events.filter(event => event.type === "text_delta").map(event => event.text).join("")).toBe("Running.\n");
+  expect(events.filter(event => event.type === "tool_call_delta")).toEqual([
+    { type: "tool_call_delta", arguments: script },
+  ]);
+});
+
+test("prose containing </function_calls> alone does not close a block", async () => {
+  const script = "text('start');";
+  const content = `<tool_call><function=exec>${script}</function></tool_call>\nOrdinary text mentioning </function_calls> in prose.`;
+  const adapter = createOpenAIChatAdapter(provider);
+  adapter.buildRequest({ modelId: "mimo-v2.6-pro", stream: false, options: {}, context: {
+    messages: [{ role: "user", content: "ping", timestamp: 0 }], tools: [execTool],
+  } });
+  const events = await adapter.parseResponse!(Response.json({
+    choices: [{ message: { content }, finish_reason: "stop" }],
+  }), createTestTranslatorBudget());
+  // The standalone bare block is recovered as a synthetic exec call (declared freeform
+  // tool, dotted MiMo ID, empty body rules pass). The prose mentioning </function_calls>
+  // survives byte-exact: the alternate close cannot swallow text that follows a block.
+  expect(events.filter(event => event.type === "text_delta").map(event => event.text).join("")).toBe("\nOrdinary text mentioning </function_calls> in prose.");
+  expect(events.filter(event => event.type === "tool_call_start")).toHaveLength(1);
+});
