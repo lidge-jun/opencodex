@@ -102,10 +102,20 @@ describe("opencode-zen rate-limit guidance (#1145)", () => {
       ["rate_limit_error", "Rate limit exceeded: insufficient credit"],
       ["rate_limit_error", "Rate limit exceeded: balance exhausted"],
       ["billing_error", "Too Many Requests"],
+      ["rate_limit_error", "The usage limit has been reached"],
+      ["usage_limit_reached", "Too Many Requests"],
     ]) {
       expect(enrichOpenCodeZenUpstreamMessage(message!, {
         status: 429, providerName: "opencode-zen", upstreamErrorType,
       })).toBe(message!);
+    }
+  });
+
+  test("structured quota and billing codes suppress pacing guidance", () => {
+    for (const upstreamErrorCode of ["insufficient_quota", "billing_hard_limit_reached", "usage_limit_reached"]) {
+      expect(enrichOpenCodeZenUpstreamMessage("Rate limit exceeded", {
+        status: 429, providerName: "opencode-zen", upstreamErrorType: "rate_limit_error", upstreamErrorCode,
+      })).toBe("Rate limit exceeded");
     }
   });
 

@@ -1025,6 +1025,7 @@ function nativeMessagesErrorResponse(response: Response, bodyText: string, finis
     hasApiKey: Boolean(provider.apiKey?.trim()),
     upstreamRetryAfter: response.headers.get("retry-after"),
     upstreamErrorType: upstreamType,
+    upstreamErrorCode: upstreamCode,
     supportsHttpSameKeyRetry: true,
   });
   const classified = classifyError(

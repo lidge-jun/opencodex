@@ -181,6 +181,29 @@ describe("OpenCode Zen Gemini Responses translation", () => {
     globalThis.fetch = originalFetch;
   });
 
+  test("translated Claude uses parsed rate-limit types and preserves upstream retry hints", async () => {
+    releaseSpendHome = acquireOwnedSpendHome();
+    for (const retryAfter of [undefined, "37"]) {
+      let sends = 0;
+      globalThis.fetch = (async () => {
+        sends++;
+        return Response.json({ type: "error", error: { type: "rate_limit_error", message: "Too Many Requests" } },
+          { status: 429, headers: retryAfter ? { "retry-after": retryAfter } : {} });
+      }) as typeof fetch;
+      const config = { providers: { "opencode-zen": zen() } } as unknown as OcxConfig;
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "opencode-zen/claude-sonnet-5-5", input: "hello", stream: false }),
+      }), config, { model: "", provider: "" }, { inboundWire: "responses" });
+      const text = await response.text();
+      expect(response.status, text).toBe(429);
+      expect(response.headers.get("retry-after")).toBe(retryAfter ?? "15");
+      expect(text).toContain("15-20 requests per minute");
+      expect(text.includes("Try again in 15s")).toBe(!retryAfter);
+      expect(sends).toBe(1);
+    }
+  });
+
   // Routing canonicalizes the fixed Zen preset to /zen/v1; both accepted endpoint
   // spellings are exercised without that registry normalization in the adapter cases above.
   for (const baseUrl of [BASES[0]!]) for (const stream of [true, false]) {

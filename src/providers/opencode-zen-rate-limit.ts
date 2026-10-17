@@ -72,6 +72,7 @@ export function enrichOpenCodeZenRateLimitMessage(
     status: number;
     /** Parsed upstream error type, when available. */
     upstreamErrorType?: string | null;
+    upstreamErrorCode?: string | null;
     providerName?: string;
     baseUrl?: string;
     adapter?: string;
@@ -86,8 +87,8 @@ export function enrichOpenCodeZenRateLimitMessage(
 ): string {
   if (opts.status !== 429) return message;
   if (!isOpenCodeZenRateLimitProvider(opts)) return message;
-  const errorText = `${opts.upstreamErrorType ?? ""} ${message}`.replace(/[_-]/g, " ");
-  if (/\b(?:quota|billing)\b|\binsufficient\s+(?:credits?|balance|funds)\b|\b(?:credits?|balance)\s+(?:exhausted|depleted)\b/i.test(errorText)) return message;
+  const errorText = `${opts.upstreamErrorType ?? ""} ${opts.upstreamErrorCode ?? ""} ${message}`.replace(/[_-]/g, " ");
+  if (/\b(?:quota|billing)\b|\busage\s+limit\b|\binsufficient\s+(?:credits?|balance|funds)\b|\b(?:credits?|balance)\s+(?:exhausted|depleted)\b/i.test(errorText)) return message;
   if (opts.upstreamErrorType !== "rate_limit_error" && !/rate\s*limit/i.test(message)) return message;
   if (message.includes(ENRICHMENT_MARKER)) return message;
 
