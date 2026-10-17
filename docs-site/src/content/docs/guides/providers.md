@@ -178,6 +178,13 @@ this does not turn off the model's internal reasoning. A thought signature is co
 metadata and can accompany ordinary text, so its presence alone does not hide that text.
 OpenCodex preserves unmarked answer text even when its wording sounds like planning or analysis.
 
+Gemini models, Argon in particular, sometimes skip thinking on a tool-calling turn and write their
+planning into the visible progress text, for example a progress line followed by "Let's read
+google.ts next." Once that text is sent back as history, the model tends to repeat the pattern
+on every later turn. To stop it from spreading, OpenCodex sends Gemini only the first sentence of
+the text that came before a tool call in earlier turns. Final answers are sent back in full, and
+what your client displays is not changed.
+
 The built-in `google-antigravity` model list is Gemini 3.8 Flash (`gemini-3.8-flash`), Gemini 4 Argon
 (`gemini-4-argon`), Claude Opus 5.5 (`claude-opus-5-5`), and Claude Sonnet 5.5
 (`claude-sonnet-5-5`), each with low, medium, and high efforts. What you actually see is your

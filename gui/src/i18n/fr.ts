@@ -1182,6 +1182,7 @@ export const fr: Record<TKey, string> = {
   "logs.detail.attempt.recovery.key401": "Ré-authentification de la clé API",
   "logs.detail.attempt.recovery.oauthAccount403": "Validation du compte requise (403)",
   "logs.detail.attempt.recovery.oauthAccount429": "Compte limité (429)",
+  "logs.detail.attempt.recovery.oauthAccount402": "Quota du compte épuisé (402)",
   "logs.detail.attempt.recovery.opaqueBlobRejection": "État chiffré obsolète abandonné",
   "logs.detail.attempt.recovery.reasoningEffortDowngrade": "Effort de raisonnement réduit",
   "logs.detail.attempt.recovery.anthropicFastDowngrade": "Mode rapide refusé, nouvel essai à vitesse standard",

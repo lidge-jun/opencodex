@@ -44,6 +44,7 @@ import {
   type TranslatorBudget,
 } from "../lib/translator-budget";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
+import { geminiProgressLead, trimsGeminiProgressHistory } from "./google-progress-history";
 import { configuredReasoningEfforts, mapReasoningEffort } from "../reasoning-effort";
 
 // Google-family models (Gemini/Vertex/Antigravity) tend to emit long running commentary between
@@ -466,11 +467,26 @@ function messagesToGeminiFormat(
         const aMsg = msg as OcxAssistantMessage;
         const parts: unknown[] = [];
         const toolCalls: Array<{ wireCallId: string; wireName: string }> = [];
+        // Progress text before a Gemini tool call replays as its lead sentence, so planning the
+        // model leaked into visible text is not copied forward (google-progress-history.ts).
+        const trimProgress = trimsGeminiProgressHistory(identityModelId)
+          && aMsg.phase !== "final_answer"
+          && aMsg.content.some(part => part.type === "toolCall");
+        let progressLeadKept = false;
+        let afterToolCall = false;
         for (const p of aMsg.content) {
           if (p.type === "text") {
-            const textPart = geminiTextPart((p as OcxTextContent).text);
+            let text: unknown = (p as OcxTextContent).text;
+            if (trimProgress && !afterToolCall) {
+              if (progressLeadKept || typeof text !== "string") continue;
+              text = geminiProgressLead(text);
+              if (text === undefined) continue;
+              progressLeadKept = true;
+            }
+            const textPart = geminiTextPart(text);
             if (textPart) parts.push(textPart);
           } else if (p.type === "toolCall") {
+            afterToolCall = true;
             const tc = p as OcxToolCall;
             // Preserve the thought signature on the function-call part so Antigravity/Gemini-3
             // reasoning continuity survives history-driven (stateless) turns, not just same-process

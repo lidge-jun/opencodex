@@ -90,6 +90,7 @@ export function createResponsesEffects(
     delete parsed.context.tools;
     delete parsed._webSearch;
     delete parsed._anthropicServerTools;
+    delete parsed._anthropicServerReplay;
     delete parsed.options.toolChoice;
     delete parsed.options.parallelToolCalls;
     // The compaction turn is a plain prose summary; a surviving structured-output format

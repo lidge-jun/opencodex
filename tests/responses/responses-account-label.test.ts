@@ -11,7 +11,8 @@ import {
   clearThreadAccountMap,
   getCodexUpstreamHealth,
 } from "../../src/codex/routing";
-import type { RequestLogContext } from "../../src/server/request-log";
+import { addFinalRequestLog, type RequestLogContext } from "../../src/server/request-log";
+import { createRequestMetricsOwner } from "../../src/server/request-metrics";
 import { handleResponses } from "../../src/server/responses";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -333,6 +334,37 @@ describe("Responses account usage attribution", () => {
         { label: fallbackCodexAccountLogLabel("pool-a"), status: 429, sendCount: 1, recoveryKinds: [], failureCause: "rate-limit" },
         { label: fallbackCodexAccountLogLabel("pool-b"), status: 0, sendCount: 1, recoveryKinds: ["oauth-account-429"], failureCause: undefined },
       ]);
+    });
+  });
+
+  test("a pre-stream 402 move is recorded and counted as a quota recovery, not a rate limit", async () => {
+    await withPoolHome(async () => {
+      takeSpendHome();
+      const config = poolConfig(["pool-a", "pool-b"]);
+      for (const id of ["pool-a", "pool-b"]) {
+        savePoolCredential(id);
+        updateAccountQuota(id, id === "pool-a" ? 10 : 20);
+      }
+      let sends = 0;
+      globalThis.fetch = (async () => ++sends === 1
+        ? Response.json({ error: { message: "payment required" } }, { status: 402 })
+        : completedResponse("pool-b-response")) as typeof fetch;
+
+      const metrics = createRequestMetricsOwner(123);
+      const logCtx: RequestLogContext = { model: "", provider: "", inboundProtocol: "responses", requestMetricsRecorder: metrics };
+      const response = await handleResponses(request(), config, logCtx, {});
+      expect(response.status).toBe(200);
+      expect(logCtx.attempts?.map(attempt => [attempt.status, attempt.recoveryKinds])).toEqual([
+        [402, []],
+        [0, ["oauth-account-402"]],
+      ]);
+
+      addFinalRequestLog("codex-402-move", Date.now() - 1_000, logCtx, 200, {
+        terminalStatus: "completed", closeReason: "terminal",
+      }, () => {});
+      const recoveries = metrics.snapshot().split("\n").filter(line => line.startsWith("opencodex_recoveries_total{"));
+      expect(recoveries.find(line => line.includes('recovery="quota"'))?.endsWith(" 1")).toBe(true);
+      expect(recoveries.find(line => line.includes('recovery="rate_limit"'))?.endsWith(" 0") ?? true).toBe(true);
     });
   });
 
