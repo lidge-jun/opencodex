@@ -55,6 +55,9 @@ const REMOTE_IMAGE_TOKENS = 850;
 /** Decoded image bytes per token. Coarse tile-count proxy, not a provider formula. */
 const IMAGE_BYTES_PER_TOKEN = 750;
 
+/** Compressed-audio bytes per token. More conservative than the image proxy. */
+const AUDIO_BYTES_PER_TOKEN = 256;
+
 export interface InputAdmissionResult {
   admitted: boolean;
   estimatedTokens: number;
@@ -85,6 +88,7 @@ function imageTokens(imageUrl: string): number {
 function contentPartTokens(part: OcxContentPart, modelId: string): number {
   if (part.type === "image") return imageTokens(part.imageUrl);
   if (part.type === "video") return imageTokens(part.videoUrl);
+  if (part.type === "audio") return base64PayloadTokens(part.data, AUDIO_BYTES_PER_TOKEN);
   // An inline document is a base64 payload, not a sentence: estimating it from its marker would
   // admit a request whose real input is orders of magnitude larger. Counted arithmetically —
   // rebuilding the data URL here would materialize a second request-sized string just to measure it.
@@ -92,10 +96,10 @@ function contentPartTokens(part: OcxContentPart, modelId: string): number {
   return estimateTokens(part.text, modelId);
 }
 
-function base64PayloadTokens(base64: string): number {
+function base64PayloadTokens(base64: string, bytesPerToken = IMAGE_BYTES_PER_TOKEN): number {
   if (base64.length === 0) return 0;
   const decoded = Math.floor((base64.length * 3) / 4);
-  return Math.max(1, Math.ceil(decoded / IMAGE_BYTES_PER_TOKEN));
+  return Math.max(1, Math.ceil(decoded / bytesPerToken));
 }
 
 function contentTokens(content: string | readonly OcxContentPart[], modelId: string): number {
