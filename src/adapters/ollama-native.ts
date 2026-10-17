@@ -290,6 +290,7 @@ function contentToNative(
       text += part.text;
       continue;
     }
+    if (part.type === "audio") throw new Error(`ollama-native cannot send audio content in ${label}`);
     // Ollama's native /api/chat message shape carries `images: string[]` and has no video
     // counterpart, so a video part is refused rather than silently dropped or mis-sent as an image.
     if (part.type === "video") throw new Error(`ollama-native cannot send video content in ${label}`);
