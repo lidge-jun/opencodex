@@ -4,6 +4,7 @@ import type { OcxConfig } from "../../types";
 import { trustedAccountBoundNativeCatalogSlug } from "./account-models";
 import { isOcxAuthoredRoutedEntry } from "./build-entries";
 import { isNativeAliasCatalogEntry } from "./metadata";
+import { hasOcxRoutedAuthorship } from "./ownership";
 import type { RawCatalog, RawEntry } from "./parsing";
 
 /**
@@ -25,10 +26,9 @@ function routedNamespace(entry: RawEntry): string | null {
   if (trustedAccountBoundNativeCatalogSlug(entry) !== undefined) return null;
   if (isNativeAliasCatalogEntry(entry)) return COMBO_NAMESPACE;
   // Combo aliases may be bare or use an unrelated provider namespace. Ownership selects the
-  // combo namespace only with the same generated-description authorship signal as routed rows.
-  if (entry.owned_by === COMBO_NAMESPACE
-    && typeof entry.description === "string"
-    && entry.description.startsWith("Routed via opencodex → ")) return COMBO_NAMESPACE;
+  // combo namespace only with the same authorship signal as routed rows (generated description or
+  // the #7229 marker a custom combo description carries).
+  if (entry.owned_by === COMBO_NAMESPACE && hasOcxRoutedAuthorship(entry)) return COMBO_NAMESPACE;
   // Foreign rows (Cursor, user tooling) are never removed by the provider rule.
   if (!isOcxAuthoredRoutedEntry(entry)) return null;
   return entry.slug.slice(0, entry.slug.indexOf("/"));

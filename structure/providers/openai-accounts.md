@@ -585,3 +585,14 @@ replacement drops that window's warning. Main/all quota cleanup forgets the base
 expire at reset or six hours after detection. Main-card/settings DTOs and live CLI projections expose
 only window kind, previous/current percentage and observation time; the notice says possible usage
 outside opencodex because a long-running request can also explain the rise.
+
+## Permanent refusal auto-pause
+
+The opt-in `providers.openai.accountAutoPause` observer in
+`src/oauth/account-auto-pause.ts` uses the sent pool credential generation or main quota
+writer, not the active account at response time. It persists exclusions in
+`pausedCodexAccountIds` with revision/reason/time in `codexAccountPauseState`, clears
+affinities and reconciles selection. `src/codex/account-pause.ts` changes the revision
+on resume. The physical guard in `src/codex/auth-context.ts` also rejects newly paused
+queued sends. Confirmed permanent refusals preserve credentials instead of forcing token
+refresh; threshold-triggered retries retain fixed-selector, file and send-budget guards.

@@ -24,6 +24,7 @@ const USAGE = `Usage:
       [--effort <low|medium|high|xhigh|max|ultra|->] [--effort-mode <fallback|force|->]
       (force overrides valid client effort and can increase cost/latency) [--alias <name|->]
       [--native-alias [on|off]] [--allow-metered-targets <on|off>] [--display-name <label|->]
+      [--description <text|->]
       [--image-input <auto|disabled>] [--reasoning-effort-mode <strict|adaptive>]
       [--decision-provider <provider|-> | --decision-model <route|->] [--decision-timeout <ms|->]
       (jev only; the provider must be a configured jev-decision row)
@@ -118,6 +119,7 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<number> {
   const alias = takeOption(args, "--alias");
 
   const displayName = takeOption(args, "--display-name");
+  const description = takeOption(args, "--description");
   const decisionProvider = takeOption(args, "--decision-provider");
   const decisionModel = takeOption(args, "--decision-model");
   if (decisionModel !== undefined && decisionModel !== "-" && decisionProvider !== undefined && decisionProvider !== "-") {
@@ -164,6 +166,7 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<number> {
   if (additional.imageInput !== undefined) combo.imageInput = additional.imageInput;
   if (additional.reasoningEffortMode !== undefined) combo.reasoningEffortMode = additional.reasoningEffortMode;
   if (displayName !== undefined) combo.displayName = displayName === "-" ? "" : displayName;
+  if (description !== undefined) combo.description = description === "-" ? "" : description;
   if (decisionProvider !== undefined) combo.decisionProvider = decisionProvider === "-" ? null : decisionProvider;
   if (decisionModel !== undefined) combo.decisionModel = decisionModel === "-" ? null : decisionModel;
   if (decisionProvider !== undefined && decisionProvider !== "-") combo.decisionModel = null;

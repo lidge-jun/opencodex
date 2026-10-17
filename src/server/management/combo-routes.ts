@@ -244,6 +244,11 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
       ...(!Object.hasOwn(requestedCombo, "imageInput") && previous?.imageInput !== undefined
         ? { imageInput: previous.imageInput }
         : {}),
+      // #7229: the dashboard does not edit the row description, so a round trip that omits it
+      // (including a rename) keeps it. An explicit empty string still clears it.
+      ...(!Object.hasOwn(requestedCombo, "description") && previous?.description !== undefined
+        ? { description: previous.description }
+        : {}),
       // `lastResort` rides on each target, so a GUI that re-sends the target list without the
       // flag would strip it. Carry it over per target, matched on provider+model.
       ...(Array.isArray(requestedCombo.targets) && Array.isArray(previous?.targets)

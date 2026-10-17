@@ -68,6 +68,8 @@ export interface NormalizedComboConfig {
   nativeAlias: boolean;
   /** Display-only label for the catalog row, or null when unset. */
   displayName: string | null;
+  /** Display-only catalog row description; absent keeps the generated text (#7229). */
+  description?: string;
   /** JEV decision service provider id; absent means the canonical `jev` service. */
   decisionProvider?: string;
   /** Ordinary inference route used for JEV decisions. */
@@ -277,6 +279,16 @@ export function comboConfigIssues(
       });
     }
   }
+  if (body.description !== undefined) {
+    if (typeof body.description !== "string") {
+      issues.push({ path: ["description"], message: "description must be a string" });
+    } else if (body.description.trim().length > 128 || /\p{Cc}/u.test(body.description)) {
+      issues.push({
+        path: ["description"],
+        message: "description must be at most 128 characters and contain no control characters",
+      });
+    }
+  }
   const alias = typeof body.alias === "string" ? body.alias.trim() : "";
   const nativeAlias = body.nativeAlias === true;
   if (nativeAlias && !SUPPORTED_NATIVE_OPENAI_SLUGS.has(alias)) {
@@ -483,6 +495,7 @@ export function comboConfigError(
 export function normalizeComboConfig(raw: OcxComboConfig): NormalizedComboConfig {
   const alias = typeof raw.alias === "string" ? raw.alias.trim() : "";
   const displayName = typeof raw.displayName === "string" ? raw.displayName.trim() : "";
+  const description = typeof raw.description === "string" ? raw.description.trim() : "";
   const decisionProvider = typeof raw.decisionProvider === "string" ? raw.decisionProvider.trim() : "";
   const decisionModel = typeof raw.decisionModel === "string" ? raw.decisionModel.trim() : "";
   const defaultEffort = typeof raw.defaultEffort === "string" && isCodexReasoningEffort(raw.defaultEffort)
@@ -502,6 +515,7 @@ export function normalizeComboConfig(raw: OcxComboConfig): NormalizedComboConfig
     alias: alias || null,
     nativeAlias: raw.nativeAlias === true,
     displayName: displayName || null,
+    ...(description ? { description } : {}),
     // Explicit "jev" is the default and stays sparse.
     ...(decisionProvider && decisionProvider !== CANONICAL_JEV_DECISION_PROVIDER ? { decisionProvider } : {}),
     ...(decisionModel ? { decisionModel } : {}),

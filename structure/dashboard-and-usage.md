@@ -13,7 +13,7 @@ Codex quota cards consume the display cache from `src/codex/quota.ts`. Partial r
 omitted short tuples after their reset deadline; validated main-window absence also removes
 future-reset short tuples. Main-account hard-lock evidence and reset-notification history follow
 separate retention rules in
-[OpenAI account modes](providers/openai-tiers.md#quota-cache-and-short-window-history).
+[OpenAI account modes](providers/openai-tiers.md#quota-cache-and-short-window-history). See [permanent refusal auto-pause](account-auto-pause.md).
 Codex account panels expose no Spark quota toggle or setting and retain quota refresh, pause/resume, selection order, reset-credit confirmation and Advanced settings; account/provider quota DTOs suppress retired windows upstream of the generic quota renderer, under [OpenAI quota scopes](providers/openai-tiers.md#public-provider-contract).
 
 ## Dashboard surfaces

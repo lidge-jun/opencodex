@@ -56,6 +56,10 @@ The final native ChatGPT Responses HTTP send in `src/server/responses/fetch-help
 strings of at least 1 MiB as a UTF-8 buffer for Bun upload compatibility. This is a transport copy,
 not a counting allocation or retained continuation. Existing body admission limits still apply;
 the serialization observation keeps its existing lifetime, and nested dispatch reuses the buffer.
+With the opt-in `upstreamRequestCompression`, an eligible body (1 KiB–16 MiB) is instead encoded and
+compressed there by `src/server/responses/request-compression.ts`; the UTF-8 input and coded output
+overlap briefly for that one send and neither is retained. Admission limits and every byte observation
+still measure the uncompressed body.
 
 ## Raised HTTP body admission
 

@@ -24,7 +24,7 @@ Native main reauthentication follows the [CLI JSON output contract](runtime.md#n
 The Codex restart command follows the [CLI restart scope contract](runtime.md#cli-codex-restart-scope).
 
 `src/cli/account-orca-import.ts` exposes an explicit-source, preview-first local import command. Apply adds pool configuration under the shared mutation lock;
-the [source-owned credential contract](codex-home.md#orca-source-owned-account-import) governs deduplication and credential storage separately from Codex config injection.
+the [source-owned credential contract](codex-home.md#orca-source-owned-account-import) governs deduplication and credential storage separately from Codex config injection. See [permanent refusal auto-pause](account-auto-pause.md).
 
 ## Config surface
 Custom Responses providers may declare independent boolean `supportsNativeCompactionTrigger` and `supportsNativeCompactEndpoint` capabilities in `src/config/schema/leaf-validators.ts`; absence remains off. They do not imply `decodesNativeCompactionBlobs`, official identity, or credential authority; custom native v1 key/local/forward replay enforces the separate blob capability and known serving-identity changes, while OAuth retains routed credential resolution. The native gateway contract and regression are in [Responses transport](transports/responses.md) and `tests/responses/native-compaction-gateway.test.ts`.

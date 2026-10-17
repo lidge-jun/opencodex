@@ -4,7 +4,7 @@ Provider PUT, POST and DELETE in `src/server/management/provider-routes.ts` run 
 `autoSwitchThreshold` (pool default) and `effectiveAutoSwitchThreshold`. The dedicated
 `PUT /api/oauth/accounts/auto-switch` accepts `{ provider: "anthropic", accountId, threshold }`;
 explicit null restores inheritance and missing/invalid values fail. Other providers are rejected.
-`src/server/management/anthropic-account-threshold.ts` validates; the auth store serializes writes.
+`src/server/management/anthropic-account-threshold.ts` validates; the auth store serializes writes. See [permanent refusal auto-pause](account-auto-pause.md).
 CLI `ocx account auto-switch anthropic` requires `--account <id>` with status, inherit, on, off or
 threshold. The dashboard reuses `AccountAutoSwitchControl` below account actions, retaining
 focus/draft semantics and translated copy. The hook protects same-provider selection mutations

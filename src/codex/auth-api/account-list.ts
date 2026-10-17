@@ -141,6 +141,7 @@ export function poolAccountDto(
     logLabel: codexAccountLogLabel(account),
     isMain: false,
     paused,
+    ...(config.codexAccountPauseState?.[account.id]?.details ? { pauseDetails: config.codexAccountPauseState[account.id]!.details } : {}),
     priority,
     autoSwitchThresholdOverride: getCodexAccountAutoSwitchThresholdOverride(config, account.id),
     creditsAfterLimit: codexAccountUsesCreditsAfterLimit(config, account.id),
@@ -167,6 +168,7 @@ export interface CodexAuthAccountDto {
   logLabel?: string;
   isMain: boolean;
   paused: boolean;
+  pauseDetails?: import("../../types/account-auto-pause").AccountPauseDetails;
   /** Selection order; higher is used earlier. Always present, 0 when unset. */
   priority: number;
   /** Null inherits the global usage-switch threshold; 0 disables it for this account. */
@@ -403,6 +405,7 @@ export async function listCodexAuthAccountsSnapshot(
       logLabel: "main",
       isMain: true,
       paused: isCodexAccountPaused(runtimeConfig, MAIN_CODEX_ACCOUNT_ID),
+      ...(runtimeConfig.codexAccountPauseState?.[MAIN_CODEX_ACCOUNT_ID]?.details ? { pauseDetails: runtimeConfig.codexAccountPauseState[MAIN_CODEX_ACCOUNT_ID]!.details } : {}),
       mainAccountHardLock: { ...getMainAccountHardLockStatus(runtimeConfig),
         externalUsage: getMainAccountExternalUsageWarning(getObservedMainQuotaIdentityKey()) },
       priority: getCodexAccountPriority(runtimeConfig, MAIN_CODEX_ACCOUNT_ID),

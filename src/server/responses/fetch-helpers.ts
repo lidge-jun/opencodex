@@ -31,6 +31,7 @@ import {
 } from "../../lib/provider-egress";
 import { redactSecretString } from "../../lib/redact";
 import { outboundCredentials } from "../../lib/outbound-credential-registry";
+import { compressUpstreamRequestBody, isCanonicalCodexResponsesUrl } from "./request-compression";
 
 export { withUpstreamHttpVersion };
 
@@ -48,6 +49,17 @@ const EGRESS_DECIDED = Symbol.for("opencodex.provider-egress.decided");
 const UPSTREAM_REWRITTEN = Symbol.for("opencodex.plugins.upstream-rewritten");
 // Survives queued credential rebuilds and executor replacement without importing budget owners.
 const PHYSICAL_DISPATCH = Symbol.for("opencodex.physical-dispatch");
+// Final destination and headers after plugin rewrites and queued rebuilds, for observers that
+// must attribute a response to the credential that actually reached the wire.
+const PHYSICAL_SEND_OBSERVER = Symbol.for("opencodex.physical-send-observer");
+export type AccountAutoPauseObserver = ((response: Response) => Promise<Response>) & {
+  physical?: (sameDestination: boolean, headers: Headers) => void;
+};
+/** Init fragment that reports the final send of the observer's attempt; empty when nothing observes. */
+export function physicalSendObserverInit(observer: AccountAutoPauseObserver | undefined, target: string): Record<symbol, unknown> {
+  const physical = observer?.physical;
+  return physical ? { [PHYSICAL_SEND_OBSERVER]: (destination: string, headers: Headers) => physical(destination === target, headers) } : {};
+}
 // One WS attempt and its HTTP fallback are one logical physical-send receipt.
 const WS_FALLBACK_RECEIPT = Symbol.for("opencodex.ws-fallback-receipt");
 // Replacement admission waits on the client signal, outside the response-header deadline.
@@ -206,18 +218,27 @@ export function sendWithConnectionPolicy(
   // Bun can reset large native Codex string uploads before receiving headers while
   // the identical UTF-8 buffer succeeds. Convert only at the final HTTP send so
   // WebSocket selection still sees the serialized string and no retry is added.
+  // Opt-in compression (#7247) takes precedence at the same boundary and also yields bytes. Every
+  // retry and HTTP fallback re-enters here with the caller's original string, so each send derives
+  // its own coded bytes; `headers` is already this send's private copy.
   const target = input instanceof Request ? input.url : String(input);
   const body = init?.body;
-  const largeCodexBody = typeof body === "string"
-    && /^https:\/\/chatgpt\.com\/backend-api\/codex\/responses(?:\/compact)?$/.test(target)
+  const compressed = compressUpstreamRequestBody(target, body, headers);
+  if (compressed) {
+    headers.set("Content-Encoding", compressed.encoding);
+    headers.delete("Content-Length");
+  }
+  const largeCodexBody = !compressed && typeof body === "string"
+    && isCanonicalCodexResponsesUrl(target)
     && Buffer.byteLength(body, "utf8") >= 1024 * 1024;
   (init as Record<symbol, (() => void) | undefined> | undefined)?.[PHYSICAL_DISPATCH]?.();
+  (init as Record<symbol, ((destination: string, headers: Headers) => void) | undefined> | undefined)?.[PHYSICAL_SEND_OBSERVER]?.(target, headers);
   // Final headers, after plugin rewrites: an upstream can only echo what it received here, so the
   // request log refuses any diagnostic that repeats one of these values (see request-log-terminal-status).
   outboundCredentials().remember(headers);
   return physicalFetch(input, {
     ...init,
-    ...(largeCodexBody ? { body: Buffer.from(body, "utf8") } : {}),
+    ...(compressed ? { body: compressed.body } : largeCodexBody ? { body: Buffer.from(body, "utf8") } : {}),
     headers,
     redirect: "manual",
     ...(fresh ? { keepalive: false } : {}),
@@ -228,6 +249,7 @@ export function sendWithConnectionPolicy(
 }
 
 export interface ProviderFetchOptions {
+  accountAutoPause?: (name: string, provider: OcxProviderConfig, headers: Headers) => AccountAutoPauseObserver | undefined;
   /**
    * Keep this send on HTTP even where the WebSocket upstream would normally be selected.
    *
@@ -344,7 +366,7 @@ export function providerFetch(
   // ChatGPT Codex backend: streaming turns ride the responses_websockets
   // transport (measured ~3s faster TTFT than the SSE POST queue); everything
   // else keeps the provider's HTTP fetch. See ws-upstream.ts for the details.
-  const unpaced = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit,
+  const unobserved = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit,
     reacquirePacing?: (provider: OcxProviderConfig, modelId?: string) => Promise<void>) => {
     const upstreamWebsocket = provider.upstreamWebsocket;
     if (!options.httpOnly && typeof input === "string" && init
@@ -380,6 +402,15 @@ export function providerFetch(
         async () => { (await waitForPacing(init.signal ?? undefined))?.release(); }, notifyOnce, options.preOutputRefusalHold);
     }
     return httpFetch(input, init, reacquirePacing);
+  };
+  const unpaced = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit,
+    reacquirePacing?: (provider: OcxProviderConfig, modelId?: string) => Promise<void>) => {
+    const observe = options.accountAutoPause?.(providerName, provider,
+      new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)));
+    const observedInit = observe?.physical
+      ? { ...init, ...physicalSendObserverInit(observe, input instanceof Request ? input.url : String(input)) } : init;
+    const response = await unobserved(input, observedInit, reacquirePacing);
+    return observe ? observe(response) : response;
   };
   let pacingSlotAcquired = options.pacingSlotAcquired === true;
   const waitForPacing = async (signal?: AbortSignal): Promise<ProviderRequestSlot | undefined> => {

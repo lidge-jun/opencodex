@@ -267,6 +267,16 @@ function upstreamHostCircuitThresholdError(value: unknown): string | null {
   return `schema_invalid: upstreamHostCircuitThreshold: must be an integer from 0 to ${UPSTREAM_HOST_CIRCUIT_MAX_THRESHOLD}`;
 }
 
+// The schema degrades an unknown codec to identity so a hand edit cannot break startup; a live write
+// or import must instead be refused, or it would report success and then drop the value (#7247).
+function upstreamRequestCompressionError(value: unknown): string | null {
+  const raw = rawConfigRecord(value);
+  if (!raw || !Object.hasOwn(raw, "upstreamRequestCompression")) return null;
+  const mode = raw.upstreamRequestCompression;
+  if (mode === undefined || mode === "off" || mode === "gzip" || mode === "zstd") return null;
+  return "schema_invalid: upstreamRequestCompression: must be \"off\", \"gzip\" or \"zstd\"";
+}
+
 function plaintextV2AgentMessagesError(value: unknown): string | null {
   return malformedPlaintextV2AgentMessagesWarning(value)
     ? "schema_invalid: plaintextV2AgentMessages: must be a boolean or omitted"
@@ -726,6 +736,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? claudeSubagentEffortError(value)
     ?? appOwnedMemoryBudgetError(value)
     ?? upstreamHostCircuitThresholdError(value)
+    ?? upstreamRequestCompressionError(value)
     ?? plaintextV2AgentMessagesError(value)
     ?? agentTaskRecoveryError(value)
     ?? quotaResetNotifyError(value)

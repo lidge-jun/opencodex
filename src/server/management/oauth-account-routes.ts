@@ -510,7 +510,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
               reauthReason: summary.needsReauth === true ? "refresh_failed" : undefined,
             });
           return { ...summary, ...oauthAccountHealthFields(provider, summary.id, health), quotaMode,
-            ...(supportsPause ? { paused: full?.paused === true } : {}),
+            ...(supportsPause ? { paused: full?.paused === true, ...(full?.pauseDetails ? { pauseDetails: full.pauseDetails } : {}) } : {}),
             ...(isAnthropicOAuthInstance(provider) && supportsPause ? { autoSwitchThresholdOverride: full?.autoSwitchThresholdOverride ?? null,
               effectiveAutoSwitchThreshold: effectiveAnthropicAccountThresholdForInstance(provider as AnthropicInstanceId, config, full),
               autoSwitchThreshold: effectiveAnthropicAccountThresholdForInstance(provider as AnthropicInstanceId, config) } : {}),
@@ -1115,6 +1115,15 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const { clearProviderQuotaCache } = await import("../../providers/quota");
     clearProviderQuotaCache();
     return jsonResponse({ ...result, name, store: providerKeyStoreKind(config.providers[name]) });
+  }
+  if (url.pathname === "/api/providers/keys/pause" && req.method === "PUT") {
+    const body = await readManagementJsonBodyOr(req, {});
+    if (!isPlainRecord(body)) return jsonResponse({ error: "body must be an object" }, 400);
+    if (typeof body.name !== "string" || typeof body.id !== "string" || typeof body.paused !== "boolean") return jsonResponse({ error: "name, id and paused required" }, 400);
+    if (!isValidProviderName(body.name) || !hasOwnProvider(config.providers, body.name)) return jsonResponse({ error: "unknown provider" }, 404);
+    const { setProviderApiKeyPaused } = await import("../../providers/api-key-pause");
+    return setProviderApiKeyPaused(config, body.name, body.id, body.paused)
+      ? jsonResponse({ ok: true }) : jsonResponse({ error: "key not found" }, 404);
   }
   if (url.pathname === "/api/providers/keys/active" && req.method === "PUT") {
     const body = await readManagementJsonBodyOr(req, {}) as { name?: string; id?: string };
