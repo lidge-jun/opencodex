@@ -426,3 +426,22 @@ because a later deadline still produces the same message. The firing half needs 
 on real timers in the same file: silence after the first frame, the progress budget alone failing a
 turn when the silence budget is out of reach, and `turnEnded` cancelling the watchdog while the
 server holds the stream open.
+
+## Opt-in account pool
+
+`providers.<name>.cursorAccountPool` is off unless it is exactly `{ "enabled": true }` on a
+provider whose adapter is `cursor`. A malformed value is dropped at load and does not enable
+selection. `src/adapters/cursor.ts` keeps deriving `_cursorIdentityScope` from an already-set
+auth scope, or from the hash of the configured credential when that scope is absent, before any
+pool read. That scope is the pool owner. The client thread is the affinity key. Neither value
+is taken from a request header.
+
+When the flag is on, `selectCursorPoolToken` in `src/providers/cursor-pool.ts` may replace the
+outbound access token. The replacement is used for the live roster scope of that send. The
+identity scope itself stays on the pre-pool credential, so two tenants do not share a
+conversation because they rotated onto the same stored account. Selection returns no token
+unless the owner and thread are both non-empty and at least two accounts are usable, and the
+adapter then sends the configured credential. A rate-limit failure cools only that owner and
+thread's bound account. Authentication and context-overflow failures do not. The capability
+that mutates the pool is not exported. Injected `selectPoolToken` remains a test seam and does
+not record cooldown on the shared pool.

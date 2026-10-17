@@ -3,7 +3,7 @@ import type { AdapterEvent, OcxProviderConfig } from "../types";
 import type { ProviderAdapter } from "./base";
 import { isTranslatorBudgetExceededError } from "../lib/translator-budget";
 import { cursorExecDeniedMessage, cursorRequestDeclaresFullAccess } from "./cursor/exec-policy";
-import { isCursorBenignCancelError, isCursorIncompleteToolCallMessage, isCursorInvalidArgumentError, isCursorOverflowRemintCandidate, isCursorRootEnvelopeError, safeCursorErrorMessage, type CursorSizeContext } from "./cursor/cursor-errors";
+import { classifyCursorError, isCursorBenignCancelError, isCursorIncompleteToolCallMessage, isCursorInvalidArgumentError, isCursorOverflowRemintCandidate, isCursorRootEnvelopeError, safeCursorErrorMessage, type CursorSizeContext } from "./cursor/cursor-errors";
 import { cursorCheckpointModelAffinityId, cursorNeedsExternalToolContinuation, inferCursorContextWindow, isCursorExternalWireModel } from "./cursor/discovery";
 import { createCursorKvStore, type CursorKvStore } from "./cursor/kv-store";
 import { mapCursorServerMessage } from "./cursor/message-mapper";
@@ -66,6 +66,7 @@ import {
 } from "./cursor/transport";
 import { cursorLiveRosterScope } from "./cursor/catalog";
 import { cursorUsesPlainToolWording } from "./cursor/tool-wording";
+import { noteCursorPoolRateLimit, selectCursorPoolToken } from "../providers/cursor-pool";
 
 export const CURSOR_API_URL = "https://api2.cursor.sh";
 
@@ -85,6 +86,8 @@ export interface CursorAdapterDeps {
   kv?: CursorKvStore;
   /** Test seam: observe/replace context-usage rekeying on conversation-id rotation. */
   rekeyContextUsage?: (fromConversationId: string, toConversationId: string) => void;
+  /** Optional internal pool seam. Owner is supplied by trusted route parsing, never request headers. */
+  selectPoolToken?: (owner: string, thread: string) => string | undefined;
 }
 
 function safeCursorTransportError(err: unknown, sizeContext?: CursorSizeContext): string {
@@ -170,6 +173,10 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
       // Captured after createCursorRequest so the catch block can apply the bare-RE
       // size prior (devlog 260) even though `request` is scoped inside the try.
       let requestSizeContext: CursorSizeContext | undefined;
+      let usingSharedPool = false;
+      let pooledToken: string | undefined;
+      let poolOwner = "";
+      let poolThread = "";
       try {
         const makeTransport = deps.createTransport ?? createLiveCursorTransport;
         const kv = deps.kv ?? createCursorKvStore({}, incoming.translatorBudget);
@@ -177,6 +184,8 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
         // Namespace thread→conversation derivation by the authenticated Cursor credential so
         // shared-proxy tenants with different Cursor accounts cannot collide on a parent thread id.
         // Prefer an already-set auth scope (e.g. Codex pool account) when present.
+        // Opt-in pool selection uses that scope as the owner and does not replace it with the
+        // rotated account, so a pooled token cannot collapse two tenants onto one conversation.
         let liveRosterScope: string | undefined;
         if (!_parsed._cursorIdentityScope) {
           try {
@@ -188,7 +197,7 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
               .digest("hex")
               .slice(0, 16);
           } catch {
-            /* Missing credential is handled by the live transport path below. */
+            // Missing credentials fail closed in the live transport path.
           }
         } else {
           try {
@@ -197,6 +206,15 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
             /* Missing credential is handled by the live transport path below. */
           }
         }
+        usingSharedPool = provider.cursorAccountPool?.enabled === true && deps.selectPoolToken === undefined;
+        const poolTokenSelector = deps.selectPoolToken ?? (usingSharedPool ? selectCursorPoolToken : undefined);
+        poolOwner = _parsed._cursorIdentityScope ?? "";
+        poolThread = _parsed._clientThreadId ?? "";
+        pooledToken = poolTokenSelector?.(poolOwner, poolThread);
+        const activeProvider = pooledToken ? { ...provider, apiKey: pooledToken } : provider;
+        // Roster evidence follows the credential that will actually be sent. The identity
+        // scope above stays on the pre-pool credential so conversation isolation is unchanged.
+        if (pooledToken) liveRosterScope = cursorLiveRosterScope(provider.baseUrl, pooledToken);
         const inheritedCheckpointRef = _parsed._providerContinuation?.cursor?.checkpointRef;
         const previousConversationId = _parsed._cursorConversationId;
         let request = {
@@ -392,7 +410,7 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
           await runCursorTurnWithRetry(
             makeTransport,
             {
-              provider,
+              provider: activeProvider,
               headers: incoming.headers,
               translatorBudget: incoming.translatorBudget,
               requestDeclaresFullAccess: cursorRequestDeclaresFullAccess(activeRequest),
@@ -710,6 +728,16 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
           }
         }
       } catch (err) {
+        if (
+          usingSharedPool
+          && pooledToken
+          && classifyCursorError(
+            err instanceof Error ? err.message : typeof err === "string" ? err : "",
+            requestSizeContext,
+          ) === "Cursor rate limit exceeded"
+        ) {
+          noteCursorPoolRateLimit(poolOwner, poolThread);
+        }
         if (isCursorBenignCancelError(err)) return;
         const partialUsage = (err as { partialUsage?: import("../types").OcxUsage }).partialUsage;
         emit({

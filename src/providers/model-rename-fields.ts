@@ -149,6 +149,7 @@ export const PROVIDER_MODEL_RENAME_ROLES = {
   project: "none",
   location: "none",
   mcpServers: "none",
+  cursorAccountPool: "none",
   desktopExecutor: "none",
   unsafeAllowNativeLocalExec: "none",
   nativeLocalExec: "none",

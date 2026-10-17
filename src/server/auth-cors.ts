@@ -1184,6 +1184,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   project: "editor",
   location: "editor",
   mcpServers: "redacted",
+  cursorAccountPool: "editor",
   desktopExecutor: "redacted",
   unsafeAllowNativeLocalExec: "editor",
   nativeLocalExec: "editor",

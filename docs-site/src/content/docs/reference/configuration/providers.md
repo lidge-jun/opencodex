@@ -372,6 +372,7 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `desktopExecutor?` | `DesktopExecutorConfig` | Cursor only: external computer-use and record-screen commands. |
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor legacy boolean, equivalent to `nativeLocalExec: "on"` only when the newer field is unset. |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Cursor local-exec policy. `off` is default; `codex-sandbox` currently fails closed like `off`. |
+| `cursorAccountPool?` | `{ enabled: boolean }` | Cursor only. Off unless `enabled` is exactly `true`. Selects among two or more usable stored Cursor accounts for one credential identity scope and client thread. A single account, a missing client thread, or a malformed value keeps the configured credential. |
 
 Command Code's shipped per-model effort defaults include live API measurements. DeepSeek
 v4/v4.1 Flash (including v4 Flash Vision), GLM-5.3 and GLM-5.3-Flash, Qwen3.8-Flash,
@@ -1417,6 +1418,12 @@ Set `nativeLocalExec` on `providers.cursor`, not at the top level. In the dashbo
 → Cursor → Edit JSON**, save, then restart. Legacy `unsafeAllowNativeLocalExec: true` equals
 `nativeLocalExec: "on"` only when `nativeLocalExec` is unset. MCP, screen recording, and computer use
 are controlled separately by `mcpServers` and `desktopExecutor`.
+
+`cursorAccountPool: { "enabled": true }` is also set on the Cursor provider. It stays off for any
+other value. While on, a request with a client thread can send with another usable stored Cursor
+account. The owner is the request's existing identity scope, or the hash of the configured
+credential when that scope is absent. One stored account, or a request with no client thread,
+leaves the configured credential in place. Conversation ids stay namespaced by that owner.
 
 Foreground `shellArgs` and `shellStreamArgs` requests are rejected before process creation on
 Windows, macOS, and Linux, including with `nativeLocalExec: "on"`. They require a kernel-backed

@@ -432,9 +432,22 @@ export const providerConfigSchema = z.object({
   xaiResponsesXSearch: z.boolean().optional(),
   xaiResponsesDefaultVersion: z.number().int().positive().optional().catch(undefined),
   zaiResponsesDefaultVersion: z.number().int().positive().optional().catch(undefined),
+  // Opt-in and off by default. A malformed value degrades to absent so a hand edit cannot
+  // take the process through invalid-config recovery, and it cannot enable the pool either:
+  // only an exact `{ enabled: true }` object activates selection.
+  cursorAccountPool: z.object({
+    enabled: z.boolean(),
+  }).strict().optional().catch(undefined),
 }).passthrough().superRefine((provider, ctx) => {
   if (provider.projectContext !== undefined && provider.adapter !== "command-code") {
     ctx.addIssue({ code: "custom", path: ["projectContext"], message: "projectContext is supported only by the command-code adapter" });
+  }
+  if (provider.cursorAccountPool !== undefined && provider.adapter !== "cursor") {
+    ctx.addIssue({
+      code: "custom",
+      path: ["cursorAccountPool"],
+      message: "cursorAccountPool is supported only by the Cursor adapter",
+    });
   }
 });
 
