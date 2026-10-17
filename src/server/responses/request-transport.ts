@@ -71,7 +71,7 @@ import {
   resolveCurrentProviderApiKeyTransport,
 } from "../../providers/api-key-selection";
 import { resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve";
-import { providerFetch, sendWithConnectionPolicy } from "./fetch-helpers";
+import { physicalSendObserverInit, providerFetch, sendWithConnectionPolicy } from "./fetch-helpers";
 import type { ProviderFetchOptions } from "./fetch-helpers";
 import { captureConfigGeneration } from "../../lib/state-store-sweeper";
 import { recordAnthropicAccountQuotaFromHeadersForInstance, hasPassiveAccountQuota } from "../../providers/quota";
@@ -801,7 +801,8 @@ export async function prepareResponsesTransport(
             response = await sendWithConnectionPolicy(
               distributedKeyPhysicalFetch(anthropicBillingPhysicalFetch(fetchImpl, route.providerName, route.provider), route.providerName, route.provider, target),
               destination,
-              { ...dispatchInit, redirect: "manual" },
+              { ...dispatchInit, redirect: "manual",
+                ...physicalSendObserverInit(observeAutoPause, destination instanceof Request ? destination.url : String(destination)) },
               { providerName: route.providerName, provider: route.provider },
             );
           } finally { releaseFamily(); }

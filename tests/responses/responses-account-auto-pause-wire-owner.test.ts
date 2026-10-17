@@ -1,17 +1,20 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getDefaultConfig, loadConfig, saveConfig } from "../../src/config";
+import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { captureAccountAutoPauseAttempt, wasAccountAutoPaused } from "../../src/oauth/account-auto-pause";
 import { clearGenericFailoverHealth } from "../../src/oauth/generic-account-failover";
-import { registerUpstreamRewriter, type UpstreamRewriter } from "../../src/plugins/upstream-hooks";
+import { registerUpstreamRewriter, rewriteWebSocketDial, type UpstreamRewriter } from "../../src/plugins/upstream-hooks";
 import { clearKeyCooldowns, forgetApiKeyRotationCursor } from "../../src/providers/key-failover";
 import { routedProviderConfig } from "../../src/router";
+import { resetProviderRequestPacingForTest } from "../../src/providers/request-pacing";
 import { clearResponseStateForTests, flushResponseState } from "../../src/responses/state";
 import { handleChatCompletions } from "../../src/server/chat-completions";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
 import { providerFetch } from "../../src/server/responses/fetch-helpers";
+import { handleResponses } from "../../src/server/responses/core";
 import type { OcxConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -184,4 +187,111 @@ test("physical report with matching bearer and conflicting x-api-key grants no A
   expect(await observer(response)).toBe(response);
   expect(wasAccountAutoPaused(response)).toBe(false);
   expectUnpaused(config);
+});
+
+
+describe("Responses handler translated Chat physical send ownership", () => {
+  beforeEach(() => resetProviderRequestPacingForTest());
+  afterEach(() => resetProviderRequestPacingForTest());
+  for (const plugin of ["none", "identity", "credential replacement then unregister"] as const) {
+    test(`${plugin}: ${plugin === "credential replacement then unregister" ? "preserves refusal without pausing either key" : "pauses A and recovers with B"}`, async () => {
+      const config = fixture("openai-chat");
+      const rewrittenFrom: string[] = [];
+      let removeRewriter: (() => void) | undefined;
+      const replaced = plugin === "credential replacement then unregister";
+      if (plugin !== "none") {
+        removeRewriter = registerUpstreamRewriter("responses-chat-wire-owner-fixture", ({ headers, transport }) => {
+          expect(transport).toBe("http");
+          rewrittenFrom.push(headers.get("authorization")!);
+          if (replaced) headers.set("authorization", "Bearer synthetic-third");
+        });
+        unregister.push(removeRewriter);
+      }
+      const sends: { url: string; credential: string | null; response: Response }[] = [];
+      globalThis.fetch = (async (input, init) => {
+        const credential = new Headers(init?.headers).get("authorization");
+        // The plugin disappears while the rewritten physical send is in flight.
+        if (replaced) removeRewriter!();
+        const response = credential === "Bearer synthetic-B"
+          ? Response.json({ id: "synthetic-chat", object: "chat.completion", model: "fixture",
+            choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } })
+          : refusal();
+        sends.push({ url: String(input), credential, response });
+        return response;
+      }) as typeof fetch;
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "fixture/fixture", input: "synthetic", stream: false, store: false }),
+      }), config, { model: "fixture", provider: "fixture" });
+      const body = await response.text();
+      expect(response.status, body).toBe(replaced ? 403 : 200);
+      expect(sends.map(send => send.url)).toEqual(Array(replaced ? 1 : 2).fill("https://example.test/v1/chat/completions"));
+      expect(sends.map(send => send.credential)).toEqual(replaced
+        ? ["Bearer synthetic-third"] : ["Bearer synthetic-A", "Bearer synthetic-B"]);
+      expect(rewrittenFrom).toEqual(plugin === "none" ? []
+        : replaced ? ["Bearer synthetic-A"] : ["Bearer synthetic-A", "Bearer synthetic-B"]);
+      expect(wasAccountAutoPaused(sends[0]!.response)).toBe(!replaced);
+      if (replaced) {
+        expect(body).toContain("Your subscription has expired.");
+        expectUnpaused(config);
+      } else {
+        expect(body).toContain("ok");
+        expectPaused(config);
+      }
+    });
+  }
+});
+
+describe("Codex pool WebSocket observer without a physical report", () => {
+  for (const plugin of ["registered after capture then removed", "registered at capture then removed", "none"] as const) {
+    test(`${plugin}: ${plugin === "none" ? "counts the refusal and pauses the captured account" : "does not count the rewritten dial refusal"}`, async () => {
+      const config = getDefaultConfig();
+      config.defaultProvider = "openai"; config.defaultModel = "gpt-5.5";
+      config.providers = { openai: { adapter: "openai-responses", authMode: "forward", codexAccountMode: "pool",
+        baseUrl: "https://chatgpt.com/backend-api/codex", models: ["gpt-5.5"],
+        accountAutoPause: { enabled: true, consecutiveFailures: 1 } } };
+      config.codexAccounts = ["fixture-a", "fixture-b"].map(id => ({ id, email: "", isMain: false }));
+      config.activeCodexAccountId = "fixture-a";
+      const generation = saveCodexAccountCredential("fixture-a", { accessToken: "synthetic-access", refreshToken: "synthetic-refresh",
+        expiresAt: Date.now() + 3_600_000, chatgptAccountId: "synthetic-account" });
+      saveConfig(config);
+      let removeRewriter: (() => void) | undefined;
+      let rewrites = 0;
+      const install = () => {
+        removeRewriter = registerUpstreamRewriter("codex-ws-wire-owner-fixture", target => {
+          rewrites++;
+          expect(target.transport).toBe("websocket");
+          target.headers.set("authorization", "Bearer synthetic-third");
+        });
+        unregister.push(removeRewriter);
+      };
+      if (plugin === "registered at capture then removed") install();
+      const observer = captureAccountAutoPauseAttempt("openai", config.providers.openai!, { config,
+        codex: { kind: "pool", accountId: "fixture-a", generation, writerGeneration: 0,
+          accessToken: "synthetic-access", chatgptAccountId: "synthetic-account" },
+      }, new Headers({ authorization: "Bearer synthetic-access" }));
+      expect(observer).toBeDefined();
+      if (plugin === "registered after capture then removed") install();
+      const dial = rewriteWebSocketDial("wss://chatgpt.com/backend-api/codex/responses", {
+        authorization: "Bearer synthetic-access", "chatgpt-account-id": "synthetic-account",
+      }, undefined);
+      expect(rewrites).toBe(plugin === "none" ? 0 : 1);
+      expect(dial.headers.authorization).toBe(plugin === "none" ? "Bearer synthetic-access" : "Bearer synthetic-third");
+      removeRewriter?.();
+      // WebSocket has no HTTP physical report; observe only after the plugin is gone.
+      const response = refusal();
+      expect(await observer!(response)).toBe(response);
+      expect(response.status).toBe(403);
+      expect(await response.json()).toEqual({ error: { type: "permission_error", message: "Your subscription has expired." } });
+      const shouldPause = plugin === "none";
+      expect(wasAccountAutoPaused(response)).toBe(shouldPause);
+      for (const live of [config, loadConfig()]) {
+        expect(live.pausedCodexAccountIds?.includes("fixture-a") ?? false).toBe(shouldPause);
+        expect(live.pausedCodexAccountIds?.includes("fixture-b") ?? false).toBe(false);
+        if (shouldPause) expect(live.codexAccountPauseState?.["fixture-a"]?.details?.reason).toBe("subscription_expired");
+        else expect(live.codexAccountPauseState?.["fixture-a"]).toBeUndefined();
+      }
+    });
+  }
 });

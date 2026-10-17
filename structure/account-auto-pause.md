@@ -13,8 +13,9 @@ enables the policy, writes only fixed pause metadata, and preserves upstream res
 optional persistence fails. Counters and asynchronous decisions belong to the runtime
 config object; completed pauses belong to the existing durable account stores. A response is counted only when the final destination and credential
 headers, reported by `sendWithConnectionPolicy` after plugin rewrites and queued rebuilds, match the
-captured attempt; a Codex WebSocket send has no HTTP final-send report and counts only while no
-plugin upstream rewriter is registered. Regression coverage:
+captured attempt; a Codex WebSocket send has no HTTP final-send report and counts only when no
+plugin upstream rewriter was registered at capture and the registration epoch in
+`src/plugins/upstream-hooks.ts` is unchanged when the response arrives. Regression coverage:
 `tests/responses/responses-account-auto-pause-wire-owner.test.ts`.
 
 ## Permanent account refusal policy

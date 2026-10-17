@@ -15,7 +15,7 @@ import { setProviderApiKeyPaused } from "../providers/api-key-pause";
 import { AccountRefusalStreaks, autoPauseThreshold, permanentAccountRefusal } from "./account-auto-pause-policy";
 import { clearThreadAccountMapForAccount, reconcileCodexActiveAfterExclusion } from "../codex/routing";
 import { isNonReplayableResponse } from "../lib/upstream-retry";
-import { hasUpstreamRewriters } from "../plugins/upstream-hooks";
+import { hasUpstreamRewriters, upstreamRewriterEpoch } from "../plugins/upstream-hooks";
 
 const streaks = new WeakMap<OcxConfig, AccountRefusalStreaks>();
 export { wasAccountAutoPaused, wasPermanentAccountRefusal } from "../lib/account-auto-pause-response";
@@ -122,13 +122,15 @@ export function captureAccountAutoPauseAttempt(name: string, provider: OcxProvid
   let tracker = streaks.get(config);
   if (!tracker) { tracker = new AccountRefusalStreaks(); streaks.set(config, tracker); }
   const observed = new WeakSet<Response>();
-  // undefined: no HTTP final-send report (Codex WebSocket). Such a send is attributable only while
-  // no plugin can rewrite credentials or destination at the dial.
+  // undefined: no HTTP final-send report (Codex WebSocket). Such a send is attributable only when
+  // no rewriter was registered at capture and none was registered or removed before the response,
+  // so no plugin could have rewritten the dial in between.
+  const rewriterEpoch = hasUpstreamRewriters() ? undefined : upstreamRewriterEpoch();
   let wireOwned: boolean | undefined;
   const observer = (async (response: Response) => {
     if (observed.has(response) || isNonReplayableResponse(response)) return response;
     observed.add(response);
-    if (!(wireOwned ?? !hasUpstreamRewriters())) return response;
+    if (!(wireOwned ?? (rewriterEpoch !== undefined && upstreamRewriterEpoch() === rewriterEpoch))) return response;
     try {
       const verdict = permanentAccountRefusal(response).then(reason => {
         if (reason) markPermanentAccountRefusal(response);
