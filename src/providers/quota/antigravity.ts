@@ -1,4 +1,4 @@
-import { antigravityUserAgent } from "../../adapters/client-fingerprint";
+import { antigravityCliUserAgent, antigravityUserAgent } from "../../adapters/client-fingerprint";
 import { DestinationDnsResolutionError } from "../../lib/destination-policy";
 import { PinnedHttpError, type PinnedHttpErrorCode } from "../../lib/pinned-http";
 import { ProviderOutboundPolicyError, providerOutboundPost, providerRedirectError, type ProviderOutboundDependencies } from "../../lib/provider-outbound";
@@ -7,6 +7,7 @@ import { getAccountCredential, getCredential } from "../../oauth/store";
 import { asRecord, normalizePercent, normalizeResetAt, readQuotaJson, REQUEST_TIMEOUT_MS, toFiniteNumber } from "../quota-wire";
 import { report, type ProviderQuotaReport } from "./report-cache";
 import { quotaCredentialIdentity } from "./account-cache";
+import { canonicalAntigravityUsageModel } from "../antigravity-models";
 import type { ProviderQuota, ProviderQuotaWindow, QuotaFailureCode } from "../quota-types";
 
 export function antigravityQuotaDiagnosticIdentity(accountId: string, credential = getAccountCredential("google-antigravity", accountId)): string | undefined {
@@ -72,7 +73,17 @@ function antigravityWindowsFromModels(body: Record<string, unknown> | null): Pro
 
   const windows = new Map<string, ProviderQuotaWindow>();
   const modelWindows: ProviderQuotaWindow[] = [];
+  const argonReadings = new Map<string, Array<{ window: ProviderQuotaWindow; models: Set<string> }>>();
   const labels = new Set(["Gem", "Cla"]);
+  const uniqueLabel = (baseLabel: string): string => {
+    let label = baseLabel;
+    for (let ordinal = 2; labels.has(label); ordinal += 1) {
+      const suffix = ` #${ordinal}`;
+      label = `${baseLabel.slice(0, 128 - suffix.length)}${suffix}`;
+    }
+    labels.add(label);
+    return label;
+  };
   for (const [modelId, rawModelInfo] of Object.entries(models)) {
     const modelInfo = asRecord(rawModelInfo);
     if (!modelInfo) continue;
@@ -87,23 +98,49 @@ function antigravityWindowsFromModels(body: Record<string, unknown> | null): Pro
       // Keep model measurements as display/diagnostic evidence. They are deliberately
       // separate from the family summaries above; routing must not infer eligibility
       // from one model's counter or from a missing row.
-      if (modelId.trim() && modelId.length <= 128 && modelWindows.length < 256) {
+      if (modelId.trim() && modelId.length <= 128) {
         const tier = typeof quotaInfo.tier === "string" && quotaInfo.tier.length <= 64
           ? quotaInfo.tier.trim().slice(0, Math.max(0, 125 - modelId.length))
           : "";
-        const baseLabel = `${modelId}${tier ? ` · ${tier}` : ""}`;
-        let modelLabel = baseLabel;
-        for (let ordinal = 2; labels.has(modelLabel); ordinal += 1) {
-          const suffix = ` #${ordinal}`;
-          modelLabel = `${baseLabel.slice(0, 128 - suffix.length)}${suffix}`;
-        }
-        labels.add(modelLabel);
-        modelWindows.push({
-          label: modelLabel,
+        const measurement: ProviderQuotaWindow = {
+          label: uniqueLabel(`${modelId}${tier ? ` · ${tier}` : ""}`),
           modelId,
           percent,
           ...(resetAt !== undefined ? { resetAt } : {}),
-        });
+        };
+        if (canonicalAntigravityUsageModel(modelId) === "gemini-4-argon") {
+          // Match the full remaining window metadata, not just equal percentages.
+          const scope = Object.entries(quotaInfo)
+            .flatMap(([key, value]): Array<[string, unknown]> => {
+              if (["remainingFraction", "remainingPercentage", "resetTime"].includes(key)) return [];
+              const remaining = key === "remaining" ? asRecord(value) : null;
+              if (!remaining) return [[key, value]];
+              const metadata = Object.fromEntries(Object.entries(remaining).filter(([name]) => !["remainingFraction", "remainingPercentage"].includes(name)));
+              return Object.keys(metadata).length ? [[key, metadata]] : [];
+            })
+            .sort(([a], [b]) => a.localeCompare(b));
+          const key = JSON.stringify([scope, percent, resetAt ?? quotaInfo.resetTime ?? null], (_name, value: unknown) => {
+            const record = asRecord(value);
+            return record ? Object.fromEntries(Object.entries(record).sort(([a], [b]) => a.localeCompare(b))) : value;
+          });
+          const readings = argonReadings.get(key) ?? [];
+          const shared = readings.find(reading => !reading.models.has(modelId));
+          if (shared) {
+            labels.delete(measurement.label);
+            if (shared.models.size === 1) {
+              labels.delete(shared.window.label);
+              shared.window.label = uniqueLabel(`gemini-4-argon${tier ? ` · ${tier}` : ""}`);
+            }
+            shared.models.add(modelId);
+            continue;
+          }
+          if (modelWindows.length < 256) {
+            readings.push({ window: measurement, models: new Set([modelId]) });
+            argonReadings.set(key, readings);
+          }
+        }
+        if (modelWindows.length < 256) modelWindows.push(measurement);
+        else labels.delete(measurement.label);
       }
     }
   }
@@ -281,6 +318,31 @@ export async function probeAntigravityUsageQuota(accessToken: string, projectId:
     },
     body: JSON.stringify({ project: projectId }), signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   }, antigravityOutboundDependencies);
+  // Summary family bars lack model diagnostics; the IDE list omits CLI-only Argon. Add only
+  // exact model rows: they remain display evidence, never a new Gem routing counter.
+  const withArgonMeasurements = async (quota: ProviderQuota): Promise<ProviderQuota> => {
+    const isArgon = (modelId: string) => canonicalAntigravityUsageModel(modelId) === "gemini-4-argon";
+    if (quota.customWindows?.some(window => window.modelId !== undefined && isArgon(window.modelId))) return quota;
+    try {
+      const response = await fetchQuota(ANTIGRAVITY_QUOTA_MODELS_URL, antigravityCliUserAgent());
+      if (await providerRedirectError(response, ANTIGRAVITY_QUOTA_MODELS_URL)) return quota;
+      if (!response.ok) {
+        try { await response.body?.cancel(); } catch { /* Best-effort release of the optional response. */ }
+        return quota;
+      }
+      const models = asRecord(asRecord(await readQuotaJson(response))?.models);
+      if (!models) return quota;
+      const argonModels = Object.fromEntries(Object.entries(models).filter(([modelId]) => isArgon(modelId)));
+      const measurements = antigravityWindowsFromModels({ models: argonModels }).filter(window => window.modelId !== undefined);
+      if (!measurements.length) return quota;
+      let retainedModels = 0;
+      const previous = (quota.customWindows ?? []).filter(window => window.modelId === undefined || retainedModels++ < 256 - measurements.length);
+      return { ...quota, customWindows: [...previous, ...measurements] };
+    } catch {
+      // An optional display probe cannot invalidate a usable account quota reading.
+      return quota;
+    }
+  };
   let summaryFailure: QuotaFailureCode | undefined;
   try {
     let response = await fetchQuota(ANTIGRAVITY_QUOTA_SUMMARY_URL);
@@ -293,7 +355,7 @@ export async function probeAntigravityUsageQuota(accessToken: string, projectId:
     if (response.status === 401 || response.status === 403) return unavailableAntigravityQuota("access_denied");
     if (response.ok) {
       const quota = parseAntigravityQuotaSummary(asRecord(await readQuotaJson(response)));
-      if (quota) return { kind: "available", quota, source: "google-antigravity:retrieveUserQuotaSummary" };
+      if (quota) return { kind: "available", quota: await withArgonMeasurements(quota), source: "google-antigravity:retrieveUserQuotaSummary" };
     }
   } catch (error) {
     // Existing behavior: summary transport/parse failure may recover through the models probe.
@@ -311,7 +373,7 @@ export async function probeAntigravityUsageQuota(accessToken: string, projectId:
     if (!customWindows.length) {
       return unavailableAntigravityQuota(antigravityUnavailableFailure(summaryFailure, "response_unusable"));
     }
-    return { kind: "available", quota: { customWindows, updatedAt: Date.now() }, source: "google-antigravity:fetchAvailableModels" };
+    return { kind: "available", quota: await withArgonMeasurements({ customWindows, updatedAt: Date.now() }), source: "google-antigravity:fetchAvailableModels" };
   } catch (error) {
     // The public compatibility wrapper still rejects this exact fallback error; it never enters a DTO.
     return {

@@ -742,9 +742,9 @@ describe("google-antigravity per-account quota (#1082)", () => {
     expect(windows(idA)).toEqual(["Gem=14", "Gem (Weekly)=14", "Cla=62", "Cla (Weekly)=62"]);
     expect(windows(idB)).toEqual(["Gem=3", "Gem (Weekly)=3", "Cla=9", "Cla (Weekly)=9"]);
     expect(byId[idA]!.quota!.customWindows![0]!.resetAt).toBeDefined();
-    expect(seen.map(s => `${s.auth}|${s.project}`).sort()).toEqual(["Bearer agy-first|proj-first", "Bearer agy-second|proj-second"]);
+    expect(seen.map(s => `${s.auth}|${s.project}`).sort()).toEqual(["Bearer agy-first|proj-first", "Bearer agy-first|proj-first", "Bearer agy-second|proj-second", "Bearer agy-second|proj-second"]);
     for (const s of seen) {
-      expect(s.url).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary");
+      expect([summaryUrl, modelsUrl]).toContain(s.url);
       expect(s.address).toBe("142.250.0.1");
     }
   });
@@ -804,14 +804,14 @@ describe("google-antigravity per-account quota (#1082)", () => {
         },
       });
       const rows = await fetchProviderAccountQuotas("google-antigravity");
-      const urls = fallback ? [summaryUrl, modelsUrl] : [summaryUrl];
+      const urls = fallback ? [summaryUrl, modelsUrl, modelsUrl] : [summaryUrl, modelsUrl];
       expect(resolved).toHaveLength(urls.length * 2);
       expect(posted).toHaveLength(urls.length * 2);
-      for (const url of urls) {
-        expect(resolved.filter(row => row.url === url)).toEqual([
-          { url, benchmark: true, private: false, mihomo: true },
-          { url, benchmark: true, private: false, mihomo: true },
-        ]);
+      for (const url of new Set(urls)) {
+        expect(resolved.filter(row => row.url === url)).toEqual(Array.from(
+          { length: urls.filter(candidate => candidate === url).length * 2 },
+          () => ({ url, benchmark: true, private: false, mihomo: true }),
+        ));
       }
       for (const [auth, project] of [["Bearer agy-first", "proj-first"], ["Bearer agy-second", "proj-second"]]) {
         expect(posted.filter(row => row.auth === auth)).toEqual(urls.map(url => ({ url, auth, project, address: "198.18.56.214", tls: true, signal: true })));
@@ -944,7 +944,7 @@ describe("google-antigravity per-account quota (#1082)", () => {
     expect(seeded?.quota?.customWindows).toContainEqual({
       label: "gemini-paused-model", modelId: "gemini-paused-model", percent: 24,
     });
-    expect(posts).toBe(2);
+    expect(posts).toBe(3);
     if (replacement !== "unchanged") {
       await saveCredential("google-antigravity", { ...credential,
         ...(replacement !== "project" ? { access: "paused-model-second" } : {}),
@@ -956,7 +956,7 @@ describe("google-antigravity per-account quota (#1082)", () => {
     const expected = replacement === "unchanged" ? seeded!.quota : null;
     expect(getCachedProviderAccountQuota("google-antigravity", accountId)).toEqual(expected);
     const [paused] = await fetchProviderAccountQuotas("google-antigravity", true);
-    expect(posts).toBe(2);
+    expect(posts).toBe(3);
     expect(paused?.quota).toEqual(expected);
     if (replacement !== "unchanged") expect(paused?.unavailable).toBe(true);
     else {
@@ -967,7 +967,7 @@ describe("google-antigravity per-account quota (#1082)", () => {
       await saveCredential("google-antigravity", { ...credential, access: "paused-model-later" });
       expect(paused?.isCurrent?.()).toBe(false);
       expect(getCachedProviderAccountQuota("google-antigravity", accountId)).toBeNull();
-      expect(posts).toBe(2);
+      expect(posts).toBe(3);
     }
   });
 
@@ -1133,7 +1133,7 @@ describe("google-antigravity Fake-IP TUN quota probes without HTTP proxy (#3781)
         },
       });
       const rows = await fetchProviderAccountQuotas("google-antigravity");
-      const urls = fallback ? [summaryUrl, modelsUrl] : [summaryUrl];
+      const urls = fallback ? [summaryUrl, modelsUrl, modelsUrl] : [summaryUrl, modelsUrl];
       expect(resolved).toEqual(urls.map(url => ({ url, benchmark: true, private: false, mihomo: true })));
       expect(posted).toEqual(urls.map(url => ({ url, address: fakeIp, tls: true, auth: "Bearer agy-first", project: "proj-first" })));
       expect(rows).toHaveLength(1);
@@ -1228,14 +1228,14 @@ describe("paused generic OAuth accounts are never quota-probed", () => {
     });
 
     await fetchProviderAccountQuotas("google-antigravity", true);
-    expect(seen.sort()).toEqual(["Bearer agy-held", "Bearer agy-live"]);
+    expect(seen.sort()).toEqual(["Bearer agy-held", "Bearer agy-held", "Bearer agy-live", "Bearer agy-live"]);
     const heldBefore = getCachedProviderAccountQuota("google-antigravity", heldId);
     expect(heldBefore).not.toBeNull();
 
     await setAccountPaused("google-antigravity", heldId, true);
     seen.length = 0;
     const rows = await fetchProviderAccountQuotas("google-antigravity", true);
-    expect(seen).toEqual(["Bearer agy-live"]);
+    expect(seen).toEqual(["Bearer agy-live", "Bearer agy-live"]);
     expect(rows.find(row => row.accountId === heldId)?.quota).toEqual(heldBefore);
     await expect(getTokenForAccountQuotaProbe("google-antigravity", heldId)).rejects.toThrow("paused");
   });

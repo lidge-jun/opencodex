@@ -916,7 +916,7 @@ describe("fetchProviderQuotaReports", () => {
     setAntigravityAccountQuotaTransportForTests({
       resolveAddresses: async () => ({ hostname: "daily-cloudcode-pa.googleapis.com", addresses: [{ address: "142.250.0.1", family: 4 }], privateNetwork: false }),
       pinnedPost: async url => {
-        expect(url.endsWith("retrieveUserQuotaSummary")).toBe(true);
+        if (url.endsWith("fetchAvailableModels")) return Response.json({ models: {} });
         return Response.json({ groups: [
           { displayName: "Gemini Models", buckets: [{ window: "5h", remainingFraction: 0, resetTime }] },
           { displayName: "Claude and GPT models", buckets: [{ window: "5h", remainingFraction: 1, resetTime }] },
@@ -3363,7 +3363,7 @@ describe("fetchProviderQuotaReports", () => {
     expect(result.reports).toHaveLength(1);
     expect(result.reports[0]!.source).toBe("google-antigravity:retrieveUserQuotaSummary");
     // Every bearer-carrying request went to Google's own host, not the configured loopback base.
-    expect(seen.map(entry => entry.hostname)).toEqual(["daily-cloudcode-pa.googleapis.com", "daily-cloudcode-pa.googleapis.com"]);
+    expect(seen.map(entry => entry.hostname)).toEqual(Array(4).fill("daily-cloudcode-pa.googleapis.com"));
     expect(seen.find(entry => entry.auth)?.url).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary");
     expect(seen.find(entry => entry.auth)?.auth).toBe("Bearer agy-pinned-access");
     expect(plainFetchUrls).toEqual([]);
@@ -3472,7 +3472,7 @@ describe("fetchProviderQuotaReports", () => {
           },
         });
         const result = await fetchProviderQuotaReports(config(), true);
-        const urls = fallback ? [summaryUrl, modelsUrl] : [summaryUrl];
+        const urls = fallback ? [summaryUrl, modelsUrl, modelsUrl] : [summaryUrl, modelsUrl];
         expect(resolved).toEqual(urls.map(url => ({ url, benchmark: true, private: false, mihomo: true })));
         expect(posted).toEqual(urls.map(url => ({ url, address: "198.18.56.214", tls: true, auth: "Bearer agy-canonical-access", body: JSON.stringify({ project: "agy-canonical-project" }), signal: true })));
         expect(result.reports[0]?.source).toBe(fallback ? "google-antigravity:fetchAvailableModels" : "google-antigravity:retrieveUserQuotaSummary");
@@ -3503,8 +3503,8 @@ describe("fetchProviderQuotaReports", () => {
           { label: "Gem", percent: 25 },
           { label: "gemini", modelId: "gemini", percent: 25 },
         ]);
-        expect(resolved).toEqual([{ url: summaryUrl, private: false }, { url: modelsUrl, private: false }]);
-        expect(posted).toEqual([summaryUrl, modelsUrl]);
+        expect(resolved).toEqual([{ url: summaryUrl, private: false }, { url: modelsUrl, private: false }, { url: modelsUrl, private: false }]);
+        expect(posted).toEqual([summaryUrl, modelsUrl, modelsUrl]);
         expect(plainFetchCalls).toEqual([]);
       });
     }
@@ -3560,7 +3560,7 @@ describe("fetchProviderQuotaReports", () => {
           { label: "Gem", percent: 25 },
           { label: "gemini", modelId: "gemini", percent: 25 },
         ]);
-        expect(posted).toEqual([summaryUrl, modelsUrl]);
+        expect(posted).toEqual([summaryUrl, modelsUrl, modelsUrl]);
         expect(plainFetchCalls).toEqual([]);
       });
     }

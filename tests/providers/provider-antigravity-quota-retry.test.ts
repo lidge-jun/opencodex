@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { antigravityUserAgent } from "../../src/adapters/client-fingerprint";
+import { antigravityCliUserAgent, antigravityUserAgent } from "../../src/adapters/client-fingerprint";
 import { probeAntigravityUsageQuota, setAntigravityAccountQuotaTransportForTests } from "../../src/providers/quota/antigravity";
 
 import { PROXY_ENV_KEYS } from "../../src/lib/proxy-env";
@@ -49,18 +49,18 @@ describe("Antigravity quota summary 403 compatibility retry (#5940)", () => {
         cancelled = true;
         if (cancelFails) throw new Error("cancel failed");
       } }), { status: 403 });
-      const calls = transport([denied, Response.json(summary)]);
+      const calls = transport([denied, Response.json(summary), Response.json({ models: {} })]);
       const result = await probeAntigravityUsageQuota("test-access", "test-project");
       expect(cancelled).toBe(true);
-      expect(calls).toEqual([expectedCall(summaryUrl), expectedCall(summaryUrl, "antigravity/1.0")]);
+      expect(calls).toEqual([expectedCall(summaryUrl), expectedCall(summaryUrl, "antigravity/1.0"), expectedCall(modelsUrl, antigravityCliUserAgent())]);
       expect(result).toMatchObject({ kind: "available", source: "google-antigravity:retrieveUserQuotaSummary", quota: { customWindows: [{ label: "Gem", percent: 40 }] } });
     });
   }
 
   test("successful IDE summary needs no retry", async () => {
-    const calls = transport([Response.json(summary)]);
+    const calls = transport([Response.json(summary), Response.json({ models: {} })]);
     expect((await probeAntigravityUsageQuota("test-access", "test-project")).kind).toBe("available");
-    expect(calls).toEqual([expectedCall(summaryUrl)]);
+    expect(calls).toEqual([expectedCall(summaryUrl), expectedCall(modelsUrl, antigravityCliUserAgent())]);
   });
 
   test("401 is not retried", async () => {
@@ -79,9 +79,9 @@ describe("Antigravity quota summary 403 compatibility retry (#5940)", () => {
 
   for (const failure of [new Error("transport failed"), new Response(null, { status: 500 }), Response.json({})]) {
     test(`retry failure (${failure instanceof Error ? "transport" : failure.status}) recovers through IDE models probe`, async () => {
-      const calls = transport([new Response(null, { status: 403 }), failure, Response.json(models)]);
+      const calls = transport([new Response(null, { status: 403 }), failure, Response.json(models), Response.json({ models: {} })]);
       expect(await probeAntigravityUsageQuota("test-access", "test-project")).toMatchObject({ kind: "available", source: "google-antigravity:fetchAvailableModels", quota: { customWindows: [{ label: "Gem", percent: 25 }, { label: "gemini", modelId: "gemini", percent: 25 }] } });
-      expect(calls).toEqual([expectedCall(summaryUrl), expectedCall(summaryUrl, "antigravity/1.0"), expectedCall(modelsUrl)]);
+      expect(calls).toEqual([expectedCall(summaryUrl), expectedCall(summaryUrl, "antigravity/1.0"), expectedCall(modelsUrl), expectedCall(modelsUrl, antigravityCliUserAgent())]);
     });
   }
 });
