@@ -11,7 +11,9 @@ import { providerApiKeySelectionIsCurrent } from "../../providers/api-key-select
 import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { openAIChatTransport, stripBracketedModelSuffix } from "../../adapters/openai-chat/wire";
 import { buildResponsesTransport } from "../../adapters/openai-responses/transport";
-import { assertProviderDestinationAllowed } from "../../lib/destination-policy";
+import { openRouterProviderPayload, resolveOpenRouterRouting } from "../../providers/openrouter-routing";
+import { resolveVercelGatewayRouting, vercelGatewayProviderPayload } from "../../providers/vercel-gateway-routing";
+import { assertProviderDestinationAllowed, providerAllowsPrivateNetwork } from "../../lib/destination-policy";
 import { providerOutboundPost, ProviderOutboundPolicyError, ProviderOutboundSendCancelledError,
   type ProviderOutboundDependencies } from "../../lib/provider-outbound";
 import { redactSecretString } from "../../lib/redact";
@@ -84,13 +86,20 @@ function derive(config: OcxConfig, name: string, row: OcxProviderConfig, model: 
   const headers = new Headers(transport.headers);
   headers.set("Accept", "text/event-stream");
   const wireModel = routed.modelSuffixBracketStrip ? stripBracketedModelSuffix(native) : native;
+  const openRouterRouting = wire === "openai-chat" ? resolveOpenRouterRouting(routed, native) : undefined;
+  const vercelRouting = wire === "openai-chat" ? resolveVercelGatewayRouting(routed, native) : undefined;
+  const providerRouting = vercelRouting ? vercelGatewayProviderPayload(vercelRouting)
+    : openRouterRouting ? openRouterProviderPayload(openRouterRouting) : undefined;
+  // Normal inference admits registry-local defaults as well as the operator's explicit opt-in.
+  // Materialize that effective policy for the outbound wrapper's narrower local HTTP safeguard.
+  const allowLocalCleartextPost = providerAllowsPrivateNetwork(name, routed);
   // Capture primitive values now: rows and their nested header objects may mutate in place.
   const selection = routed._apiKeyAttempt;
-  const fingerprint = JSON.stringify({ wire, url: transport.url, wireModel, headers: [...headers].sort(([a], [b]) => a.localeCompare(b)),
+  const fingerprint = JSON.stringify({ wire, providerRouting, allowLocalCleartextPost, url: transport.url, wireModel, headers: [...headers].sort(([a], [b]) => a.localeCompare(b)),
     authMode: routed.authMode, apiKey: routed.apiKey,
     selection: selection && { entryId: selection.entryId, reference: selection.reference, revision: selection.revision },
     allowPrivateNetwork: routed.allowPrivateNetwork, proxy: routed.proxy, noProxy: routed.noProxy, disabled: row.disabled });
-  return { routed, wire: wire as Wire, wireModel, headers, url: transport.url, fingerprint };
+  return { routed, wire: wire as Wire, wireModel, providerRouting, allowLocalCleartextPost, headers, url: transport.url, fingerprint };
 }
 function maskedModel(raw: string, secrets: Array<string | undefined>): string {
   if (secrets.some(secret => typeof secret === "string" && secret.length > 0 && raw.includes(secret))) return "[redacted]";
@@ -167,10 +176,12 @@ export async function runProviderCompletionTest(
   try {
     signal.throwIfAborted();
     const body = JSON.stringify(authority.wire === "openai-chat"
-      ? { model: authority.wireModel, messages: [{ role: "user", content: COMPLETION_TEST_PROMPT }], stream: true, max_tokens: 32 }
+      ? { model: authority.wireModel, messages: [{ role: "user", content: COMPLETION_TEST_PROMPT }], stream: true, max_tokens: 32,
+        ...(authority.providerRouting ? { provider: authority.providerRouting } : {}) }
       : { model: authority.wireModel, input: COMPLETION_TEST_PROMPT, stream: true, max_output_tokens: 32, store: false });
-    const pending = providerOutboundPost(name, authority.routed, authority.url, { headers: authority.headers, body, signal }, {
+    const pending = providerOutboundPost(name, { ...authority.routed, allowPrivateNetwork: authority.allowLocalCleartextPost }, authority.url, { headers: authority.headers, body, signal }, {
       ...deps.outboundDependencies,
+      allowLocalCleartextPost: authority.allowLocalCleartextPost,
       beforeSend: () => {
         try {
           const current = config.providers[name];

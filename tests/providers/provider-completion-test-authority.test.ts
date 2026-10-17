@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { handleProviderCompletionTestRoute } from "../../src/server/management/provider-completion-test";
+import { runProviderCompletionTest, handleProviderCompletionTestRoute } from "../../src/server/management/provider-completion-test";
 import { fixture, chat } from "../helpers/provider-completion-fixture";
+import { PROVIDER_REGISTRY } from "../../src/providers/registry";
+import { createOpenAIChatAdapter } from "../../src/adapters/openai-chat";
+import type { OcxProviderConfig } from "../../src/types";
 import type { ProviderOutboundDependencies } from "../../src/lib/provider-outbound";
 import { setProviderKeychainEntryFactoryForTests } from "../../src/providers/key-store";
 import { PROXY_ENV_KEYS } from "../../src/lib/proxy-env";
@@ -166,4 +169,85 @@ test("diagnostics leave config file, route health and request history unchanged"
     clearHealthHistoryCacheForTests();
     expect(healthEvidenceForCandidate({ provider: "fixture", model: "test-model", now: 1_900_000_000_000 })).toEqual(beforeHealth);
   } finally { closeRequestHistoryIndex(); home.remove(); }
+});
+
+
+describe("local cleartext completion transport", () => {
+  for (const name of ["ollama", "vllm", "lm-studio", "litellm"]) test(`${name} registry HTTP default reaches the counted transport`, async () => {
+    const entry = PROVIDER_REGISTRY.find(row => row.id === name)!;
+    const f = fixture({ baseUrl: entry.baseUrl, authMode: entry.authKind === "local" ? "local" : "key", proxy: "direct" });
+    delete f.row.fetch;
+    f.config.providers[name] = f.row;
+    let sends = 0;
+    const result = await runProviderCompletionTest({ config: f.config, name, model: "test-model" }, { outboundDependencies: {
+      resolveAddresses: async () => ({ hostname: "localhost", addresses: [{ address: "127.0.0.1", family: 4 }], privateNetwork: true }),
+      pinnedPost: async url => { sends++; expect(url).toBe(`${entry.baseUrl}/chat/completions`); return new Response(chat()); },
+    } });
+    expect(result).toMatchObject({ ok: true, termination: "completed" });
+    expect(sends).toBe(1);
+    expect(f.row.allowPrivateNetwork).toBeUndefined();
+  });
+  test("operator opt-in admits a private literal through the executor safeguard", async () => {
+    const f = fixture({ baseUrl: "http://192.168.1.10:8000/v1", allowPrivateNetwork: true });
+    expect(await f.run()).toMatchObject({ ok: true });
+    expect(f.calls).toHaveLength(1);
+  });
+  for (const [baseUrl, allowPrivateNetwork] of [
+    ["http://provider.example/v1", true], ["http://93.184.216.34/v1", true],
+    ["http://192.168.1.10:8000/v1", false], ["http://169.254.169.254/v1", true],
+  ] as const) test(`refused ${baseUrl}, private opt-in ${allowPrivateNetwork}: zero sends`, async () => {
+    const f = fixture({ baseUrl, allowPrivateNetwork });
+    expect(await f.run()).toMatchObject({ error: { code: "destination_refused" } });
+    expect(f.calls).toHaveLength(0);
+  });
+  test("local HTTP still refuses DNS answers outside the local allowlist", async () => {
+    const f = fixture({ baseUrl: "http://localhost:8000/v1", allowPrivateNetwork: true, proxy: "direct" });
+    delete f.row.fetch;
+    let sends = 0;
+    expect(await f.run("test-model", { outboundDependencies: pinned(() => {}, () => sends++) }))
+      .toMatchObject({ error: { code: "destination_refused" } });
+    expect(sends).toBe(0);
+  });
+});
+
+const gatewayCases: { name: string; baseUrl: string; defaults: Partial<OcxProviderConfig>; models: Partial<OcxProviderConfig>; expectedDefault: unknown; expectedModel: unknown }[] = [
+  { name: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1",
+    defaults: { openRouterRouting: { order: ["default-backend"], allowFallbacks: false } },
+    models: { modelOpenRouterRouting: { "native[1m]": { only: ["locked-backend"], allowFallbacks: false } } },
+    expectedDefault: { order: ["default-backend"], allow_fallbacks: false }, expectedModel: { only: ["locked-backend"], allow_fallbacks: false } },
+  { name: "Vercel", baseUrl: "https://ai-gateway.vercel.sh/v1",
+    defaults: { vercelGatewayRouting: { order: ["default-backend"], sort: "cost" } },
+    models: { modelVercelGatewayRouting: { "native[1m]": { only: ["locked-backend"], sort: "ttft" } } },
+    expectedDefault: { order: ["default-backend"], sort: "cost" }, expectedModel: { only: ["locked-backend"], sort: "ttft" } },
+];
+describe("completion gateway routing matches the chat adapter", () => {
+  for (const gateway of gatewayCases) {
+    for (const mode of ["none", "default", "model"] as const) test(`${gateway.name} ${mode} routing uses the native model before suffix stripping`, async () => {
+      const f = fixture({ baseUrl: gateway.baseUrl, modelAliases: { "native[1m]": "friendly" }, modelSuffixBracketStrip: true,
+        ...(mode === "none" ? {} : gateway.defaults), ...(mode === "model" ? gateway.models : {}) });
+      expect(await f.run("friendly")).toMatchObject({ ok: true, wireModel: "native" });
+      const actual = JSON.parse(String(f.calls[0]!.init!.body));
+      const adapter = createOpenAIChatAdapter(f.row).buildRequest({ modelId: "native[1m]", stream: true,
+        context: { messages: [{ role: "user", content: "Reply exactly OK." }], tools: [] }, options: {} });
+      const expected = mode === "none" ? undefined : mode === "default" ? gateway.expectedDefault : gateway.expectedModel;
+      expect(actual.provider).toEqual(expected);
+      expect(actual.provider).toEqual(JSON.parse(String(adapter.body)).provider);
+      expect(Object.hasOwn(actual, "provider")).toBe(mode !== "none");
+    });
+    for (const kind of ["default", "model"] as const) test(`${gateway.name} ${kind} routing mutation during DNS cancels before transport`, async () => {
+      const f = fixture({ baseUrl: gateway.baseUrl, proxy: "direct", ...gateway.defaults, ...gateway.models });
+      delete f.row.fetch;
+      let sends = 0;
+      expect(await f.run(kind === "model" ? "native[1m]" : "other-model", { outboundDependencies: pinned(() => {
+        if (gateway.name === "OpenRouter") {
+          if (kind === "model") f.row.modelOpenRouterRouting!["native[1m]"]!.only!.push("changed");
+          else f.row.openRouterRouting!.allowFallbacks = true;
+        } else {
+          if (kind === "model") f.row.modelVercelGatewayRouting!["native[1m]"]!.only!.push("changed");
+          else f.row.vercelGatewayRouting!.sort = "tps";
+        }
+      }, () => sends++) })).toMatchObject({ error: { code: "credential_changed" } });
+      expect(sends).toBe(0);
+    });
+  }
 });
