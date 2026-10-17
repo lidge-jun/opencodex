@@ -62,6 +62,7 @@ describe("combo description contract (#7229)", () => {
   for (const [label, description] of [
     ["number", 42], ["null", null], ["129 characters", "x".repeat(129)],
     ["C0", "before\u0000after"], ["newline", "before\nafter"], ["DEL", "before\u007fafter"],
+    ["C1 NEL", "before\u0085after"], ["C1 CSI", "before\u009bafter"],
   ] as const) test(`rejects ${label} with the description path`, () => {
     const issues = comboConfigIssues("saved", { targets, description }, config().providers);
     expect(issues).toHaveLength(1);

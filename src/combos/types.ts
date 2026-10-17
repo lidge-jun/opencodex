@@ -282,7 +282,7 @@ export function comboConfigIssues(
   if (body.description !== undefined) {
     if (typeof body.description !== "string") {
       issues.push({ path: ["description"], message: "description must be a string" });
-    } else if (body.description.trim().length > 128 || /[\u0000-\u001f\u007f]/.test(body.description)) {
+    } else if (body.description.trim().length > 128 || /\p{Cc}/u.test(body.description)) {
       issues.push({
         path: ["description"],
         message: "description must be at most 128 characters and contain no control characters",
