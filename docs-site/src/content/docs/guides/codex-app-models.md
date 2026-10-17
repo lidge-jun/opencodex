@@ -383,6 +383,45 @@ them - but the Desktop renderer drops anything that is not on that native-only a
 rendering. opencodex has no hook into that list; the upstream bug is tracked at
 [openai/codex#19694](https://github.com/openai/codex/issues/19694).
 
+### Seamless model switching with native-alias slots
+
+To switch between third-party providers (Cursor, Claude, Gemini, DeepSeek, Grok) directly inside the Codex Desktop remote dropdown without editing files on the server every time, use the native-alias remote preset:
+
+```bash
+# Auto-discover and map available providers to allowlisted gpt-5.6-* slots:
+ocx combo desktop-remote apply
+
+# Or explicitly assign targets:
+ocx combo desktop-remote apply \
+  --sol cursor/auto \
+  --terra google/gemini-2.5-flash \
+  --luna cursor/claude-opus-5-5
+```
+
+This maps the hardcoded allowable slots (`gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`) to your chosen targets with `--native-alias` enabled, transparently passing Codex Desktop's renderer filter.
+
+#### Remote SSH tunnel setup
+
+1. In `~/.ssh/config` on your local client machine, add port forwarding for OpenCodex:
+   ```ssh
+   Host your-remote-server
+       RemoteForward 10100 127.0.0.1:10100
+   ```
+2. In `~/.codex/config.toml` on the remote server, point to the forwarded proxy:
+   ```toml
+   openai_base_url = "http://127.0.0.1:10100/v1"
+   ```
+3. Restart the remote `codex app-server` or reconnect via Codex Desktop / Cursor SSH. You can now select GPT-5.6 Sol, Terra, or Luna directly in the remote dropdown to route through your configured providers.
+
+Inspect current remote mappings at any time with:
+```bash
+ocx combo desktop-remote show
+```
+Or restore native OpenAI slots:
+```bash
+ocx combo desktop-remote clear --yes
+```
+
 Until Desktop exposes a control for the allowlist:
 
 - Set the model directly in `~/.codex/config.toml` on the remote machine, for example

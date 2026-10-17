@@ -148,6 +148,16 @@ is operationally equivalent and label the picker row honestly. Removing the comb
 native routing and catalog identity on the next sync.
 :::
 
+:::tip[One-click remote desktop setup]
+To configure the standard Codex Desktop remote allowlist slots (`gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`) in one command, use:
+
+```bash
+ocx combo desktop-remote apply [--sol <target>] [--terra <target>] [--luna <target>]
+```
+
+See [Desktop remote servers](/guides/codex-app-models/#desktop-remote-servers) for end-to-end SSH forwarding and remote setup instructions.
+:::
+
 ## Choose a strategy
 
 ### Failover: ordered primary and backups
