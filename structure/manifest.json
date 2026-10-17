@@ -153,6 +153,13 @@
       ]
     },
     {
+      "path": "remote-messaging.md",
+      "tier": 3,
+      "title": "Remote Codex Messaging",
+      "scope": "Explicit peer enrollment, connection-bound capabilities, bounded foreground SSH ownership and queued remote replies.",
+      "documents": ["src/messaging/", "src/cli/", "src/link/"]
+    },
+    {
       "path": "local-messaging.md",
       "tier": 3,
       "title": "Local Codex Messaging",
