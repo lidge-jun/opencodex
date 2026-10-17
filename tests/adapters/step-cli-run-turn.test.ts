@@ -4,6 +4,8 @@ import {
   createStepCliAdapter,
   handleReverseRequest,
   handleRuntimeEvent,
+  latestToolResult,
+  projectToolResultContent,
 } from "../../src/adapters/step-cli/adapter";
 import type {
   StepConversationHost,
@@ -586,5 +588,53 @@ describe("StepCode session teardown on proxy shutdown", () => {
     runOptionalShutdownHooks();
     expect(didRunOptionalShutdownHooks()).toBe(true);
     resetOptionalShutdownHooksForTests();
+  });
+});
+
+describe("StepCode tool-result content projection", () => {
+  const PNG =
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+  test("text passes through unchanged", () => {
+    expect(projectToolResultContent("hello")).toEqual([{ type: "text", text: "hello" }]);
+  });
+
+  test("an inline image is forwarded as base64 with its media type", () => {
+    // Codex's `view_image` returns an image part. StepCode's SDK tool takes
+    // `{type:"image", data, mimeType}`, so a `data:` URL has to be split rather than inlined as text.
+    expect(projectToolResultContent([{ type: "image", imageUrl: PNG }])).toEqual([
+      {
+        type: "image",
+        data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+        mimeType: "image/png",
+      },
+    ]);
+  });
+
+  test("text and an image travel together in order", () => {
+    expect(
+      projectToolResultContent([{ type: "text", text: "before" }, { type: "image", imageUrl: PNG }]),
+    ).toEqual([
+      { type: "text", text: "before" },
+      { type: "image", data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", mimeType: "image/png" },
+    ]);
+  });
+
+  test("a remote image becomes an actionable note instead of vanishing", () => {
+    // StepCode cannot fetch a URL, and dropping it would leave the model believing the tool returned
+    // nothing at all — the same misleading-empty-result failure as a mismatched call.
+    const blocks = projectToolResultContent([{ type: "image", imageUrl: "https://example.invalid/a.png" }]);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]?.type).toBe("text");
+    expect(String(blocks[0]?.text)).toMatch(/could not be inlined/);
+  });
+
+  test("a result with no readable part says so rather than looking empty", () => {
+    expect(projectToolResultContent([{ type: "video", videoUrl: "https://example.invalid/v" }])).toEqual([
+      { type: "text", text: "a video result part was dropped" },
+    ]);
+    expect(projectToolResultContent([])).toEqual([
+      { type: "text", text: "the tool returned no readable content" },
+    ]);
   });
 });

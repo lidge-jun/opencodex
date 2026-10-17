@@ -20,7 +20,7 @@ describe("StepCode tool-result extraction", () => {
     expect(result).toEqual({ content: [{ type: "text", text: "LIVE_BRIDGE_OK" }], toolCallId: "c1" });
   });
 
-  test("joins the text parts of a structured tool result", () => {
+  test("keeps the parts of a structured tool result separate", () => {
     const result = latestToolResult(
       parsed([
         {
@@ -36,7 +36,12 @@ describe("StepCode tool-result extraction", () => {
         },
       ]),
     );
-    expect(result?.content).toEqual([{ type: "text", text: "first second" }]);
+    // Block boundaries are PRESERVED, not joined: StepCode maps each block 1:1, so concatenating
+    // would erase the distinction between e.g. a tool's stdout and its stderr.
+    expect(result?.content).toEqual([
+      { type: "text", text: "first" },
+      { type: "text", text: " second" },
+    ]);
   });
 
   test("marks an errored tool result so the model is told the call failed", () => {

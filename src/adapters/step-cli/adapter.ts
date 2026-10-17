@@ -438,22 +438,61 @@ function continuationFor(ref: StepConversationRef, sessionId: string | undefined
 }
 
 /** The newest tool result in the request, with the call it answers. */
+
+/** A `data:` URL split into the base64 payload and media type StepCode's image block expects. */
+function parseInlineImageDataUrl(imageUrl: string): { data: string; mimeType: string } | undefined {
+  const match = /^data:([^;,]+);base64,(.+)$/s.exec(imageUrl);
+  if (!match) return undefined;
+  return { mimeType: match[1]!, data: match[2]! };
+}
+
+/**
+ * Project a client tool result into the content blocks StepCode's SDK tool accepts.
+ *
+ * A tool result is not necessarily text. Codex's `view_image` returns an image part, and collapsing
+ * that to an empty text block is the same misleading-empty-result failure the wrong-call path already
+ * had: the model reports a tool that "returned nothing" instead of saying it could not read the image.
+ * Inline `data:` images are forwarded; a remote URL cannot be, so it is replaced by a note the model can
+ * act on rather than dropped in silence.
+ */
+export function projectToolResultContent(
+  raw: string | readonly unknown[],
+): Array<Record<string, unknown>> {
+  if (typeof raw === "string") return raw.length > 0 ? [{ type: "text", text: raw }] : [];
+  const blocks: Array<Record<string, unknown>> = [];
+  const notes: string[] = [];
+  for (const part of raw) {
+    const block = asRecord(part);
+    if (block.type === "text" && typeof block.text === "string") {
+      blocks.push({ type: "text", text: block.text });
+      continue;
+    }
+    if (block.type === "image" && typeof block.imageUrl === "string") {
+      const inline = parseInlineImageDataUrl(block.imageUrl);
+      if (inline) {
+        blocks.push({ type: "image", data: inline.data, mimeType: inline.mimeType });
+        continue;
+      }
+      notes.push(`an image at ${block.imageUrl} could not be inlined; fetch it yourself if you need it`);
+      continue;
+    }
+    notes.push(`a ${typeof block.type === "string" ? block.type : "unknown"} result part was dropped`);
+  }
+  for (const note of notes) blocks.push({ type: "text", text: note });
+  if (blocks.length === 0) {
+    return [{ type: "text", text: "the tool returned no readable content" }];
+  }
+  return blocks;
+}
+
 export function latestToolResult(
   parsed: OcxParsedRequest,
 ): { content: readonly unknown[]; isError?: boolean; toolCallId: string } | undefined {
   for (let index = parsed.context.messages.length - 1; index >= 0; index -= 1) {
     const message = parsed.context.messages[index];
     if (!message || message.role !== "toolResult") continue;
-    const raw = message.content;
-    const text =
-      typeof raw === "string"
-        ? raw
-        : raw
-            .filter(part => part.type === "text")
-            .map(part => (part as { text: string }).text)
-            .join("");
     return {
-      content: [{ type: "text", text }],
+      content: projectToolResultContent(message.content),
       toolCallId: message.toolCallId,
       ...(message.isError ? { isError: true } : {}),
     };
