@@ -293,6 +293,7 @@
   "catalog-vision-sidecar-modalities.test.ts": "codex-integration",
   "catalog-zero-credit-picker.test.ts": "codex-integration", "chat-completions-deferred-tools.test.ts": "responses", "passthrough-deferred-tools.test.ts": "responses",
   "chat-completions-endpoint.test.ts": "responses", "chat-completions-pool-mode.test.ts": "responses",
+  "chat-request-id-endpoint.test.ts": "responses",
   "chat-conversation-affinity.test.ts": "responses", "chat-inbound-developer-position.test.ts": "responses",
   "protocol-contract.test.ts": "responses", "protocol-features.test.ts": "responses",
   "protocol-opaque-state.test.ts": "responses", "protocol-baseline.test.ts": "responses",

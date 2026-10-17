@@ -320,7 +320,14 @@ its defaults and exclusions are owned by [Responses transport](../transports/res
 
 The provider summary default applies at Responses ingress; native Chat and Anthropic inbound preferences keep their existing handling. Raw content is never renamed to a summary. See [bridge contract](../providers/chat-compat.md).
 
-## Messages request-log correlation
+## Chat and Messages request-log correlation
+
+The Chat Completions HTTP boundary in `src/server/index/serve-options.ts` publishes its generated
+request-history id as `x-opencodex-request-id`, exposed through CORS. JSON, SSE, handler errors
+and logged pre-handler refusals share the final history row's id; caller and upstream ids cannot
+replace it. Unlogged auth, origin, drain and active-turn refusals receive no correlation id.
+Stream headers identify the eventual row, not completed persistence.
+`tests/responses/chat-request-id-endpoint.test.ts` covers this boundary.
 
 The Messages HTTP boundary in `src/server/index/serve-options.ts` publishes its generated
 request-log id in both `request-id` and `x-opencodex-request-id`. Native, translated, streamed,
