@@ -593,10 +593,23 @@ function duplicatedSerializedToolCallRanges(
   }
   return [...lineStartCalls, ...midLineCalls].filter(call => {
     let body = freeformBody(call.body);
-    // MiMo can wrap the body in a stray <const input> opener (the same family as the
-    // malformed <parameter= opener); strip it before comparing with the structured input.
+    // Two wrapper families:
+    // A) <const input>script</parameter> — a complete tag; strip the whole tag.
+    // B) <const r=await tools... — the script itself is `const r=await...` and only the
+    //    leading `<` is stray markup. Strip just the bracket so the script stays intact.
     const constMatch = CONST_OPEN_RE.exec(body);
-    if (constMatch) body = freeformBody(body.slice(constMatch[0].length));
+    if (constMatch) {
+      const afterTag = freeformBody(body.slice(constMatch[0].length));
+      // Shape A (<const input>const r=await...): the script restarts with its own
+      // `const` declaration after the tag — the tag is a complete wrapper; strip it whole.
+      // Shape B (<const r=await tools...): the script IS `const r=await...` and the
+      // leading `<` is the only stray character — drop just the bracket.
+      if (afterTag.startsWith("const ")) {
+        body = afterTag;
+      } else {
+        body = body.slice(1);
+      }
+    }
     return structuredCalls.some(structured => {
       const input = structured.names.has(call.name) ? inputFromArguments(structured.argumentsText, structured.freeformTool) : undefined;
       // MiMo can send a function tool's arguments as raw JS text instead of JSON and echo
