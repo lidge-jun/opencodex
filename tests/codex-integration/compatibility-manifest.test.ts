@@ -1,21 +1,24 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { createRegisteredAdapter, effectiveAdapterContract } from "../../src/adapters/registry";
 import {
   COMPATIBILITY_MANIFESTS,
   OPENAI_CODEX_FORWARD_GPT56_SOL_MANIFEST,
+  OPENGATEWAY_KEY_GLM53_RESPONSES_MANIFEST,
   compatibilityManifestIssues,
 } from "../../src/compatibility";
+import type { CompatibilityManifestV1, CompatibilitySubjectV1 } from "../../src/compatibility";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import { listScenarioIds } from "../../src/lab/conformance/runner";
-import { providerConfigSeed } from "../../src/providers/derive";
-import { getProviderRegistryEntry } from "../../src/providers/registry";
+import { enrichProviderFromRegistry, providerConfigSeed } from "../../src/providers/derive";
+import { getProviderRegistryEntry, providerModelWireDefault } from "../../src/providers/registry";
 import { SUPPORTED_NATIVE_OPENAI_SLUGS } from "../../src/codex/catalog/native-models";
 import { parseRequest } from "../../src/responses/parser";
 import { resolveJsonPointer } from "../../src/lab/conformance/json-pointer";
-import fixtureJson from "../fixtures/compatibility/openai-codex-forward-gpt56-sol-v1.json";
+import type { OcxProviderConfig } from "../../src/types";
+import forwardFixtureJson from "../fixtures/compatibility/openai-codex-forward-gpt56-sol-v1.json";
+import openGatewayFixtureJson from "../fixtures/compatibility/opengateway-key-glm53-responses-v1.json";
 import { repoRoot as resolveRepoRoot } from "../helpers/repo-root";
 
 type FixtureAssertion = {
@@ -39,7 +42,12 @@ type CompatibilityFixture = {
   cases: FixtureCase[];
 };
 
-const fixture = fixtureJson as CompatibilityFixture;
+const FIXTURES = [forwardFixtureJson, openGatewayFixtureJson] as CompatibilityFixture[];
+const forwardFixture = forwardFixtureJson as CompatibilityFixture;
+const openGatewayFixture = openGatewayFixtureJson as CompatibilityFixture;
+/** Synthetic credential the runner selects; fixtures may assert it but never carry a real one. */
+const FIXTURE_RUNTIME_TOKEN = "fixture-runtime-token";
+const OPENAI_WIRES: ReadonlySet<string> = new Set(["openai-chat", "openai-responses"]);
 const repoRoot = resolveRepoRoot();
 const RUNTIME_IMPORT_RE = /^\s*import\s+(?!type\b)[^;]*?from\s+["']([^"']+)["']|^\s*import\s+["']([^"']+)["']|^\s*export\s+(?!type\b)[^;]*?from\s+["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']\s*\)/gm;
 
@@ -90,18 +98,57 @@ type OutboundFixtureRequest = {
   body: Record<string, unknown>;
 };
 
-async function outboundRequest(fixtureCase: FixtureCase): Promise<OutboundFixtureRequest> {
-  const registry = getProviderRegistryEntry("openai");
-  if (!registry) throw new Error("openai registry entry missing");
-  const provider = {
-    ...providerConfigSeed(registry),
-    _codexAccountRequired: true,
-    _codexAccountOverride: {
-      accessToken: "fixture-runtime-token",
-      chatgptAccountId: "fixture-account",
-    },
-  };
-  const adapter = createRegisteredAdapter(provider);
+function fixtureForManifest(manifest: CompatibilityManifestV1): CompatibilityFixture {
+  const matches = FIXTURES.filter(candidate => candidate.manifestId === manifest.id);
+  if (matches.length !== 1) throw new Error(`${manifest.id} needs exactly one fixture, found ${matches.length}`);
+  return matches[0]!;
+}
+
+/** Effective adapter for one subject model, resolved the way routing resolves mixed-wire presets. */
+function subjectModelAdapter(subject: CompatibilitySubjectV1, modelId: string): string | undefined {
+  const registry = getProviderRegistryEntry(subject.providerId);
+  if (!registry) return undefined;
+  const seed = providerConfigSeed(registry);
+  if (seed.adapter === subject.adapterId) return seed.adapter;
+  return providerModelWireDefault(
+    subject.providerId,
+    seed,
+    modelId,
+    OPENAI_WIRES,
+    subject.inboundProtocol === "messages" ? "anthropic" : subject.inboundProtocol,
+  );
+}
+
+function providerForSubject(subject: CompatibilitySubjectV1): OcxProviderConfig {
+  const registry = getProviderRegistryEntry(subject.providerId);
+  if (!registry) throw new Error(`${subject.providerId} registry entry missing`);
+  if (subject.authMode === "forward") {
+    return {
+      ...providerConfigSeed(registry),
+      _codexAccountRequired: true,
+      _codexAccountOverride: {
+        accessToken: FIXTURE_RUNTIME_TOKEN,
+        chatgptAccountId: "fixture-account",
+      },
+    } as OcxProviderConfig;
+  }
+  if (subject.authMode === "key") {
+    const adapter = subjectModelAdapter(subject, subject.modelIds[0]!);
+    if (adapter !== subject.adapterId) throw new Error(`${subject.providerId} does not resolve to ${subject.adapterId}`);
+    // Enrichment is what carries registry capability flags such as supportsResponsesCustomTools
+    // onto a configured provider; the bare seed would skip the lowering this fixture proves.
+    const provider = { ...providerConfigSeed(registry), apiKey: FIXTURE_RUNTIME_TOKEN };
+    enrichProviderFromRegistry(subject.providerId, provider);
+    return { ...provider, adapter };
+  }
+  throw new Error(`no fixture runner for auth mode ${subject.authMode}`);
+}
+
+async function outboundRequest(
+  subject: CompatibilitySubjectV1,
+  fixtureCase: FixtureCase,
+): Promise<OutboundFixtureRequest> {
+  const adapter = createRegisteredAdapter(providerForSubject(subject));
   const parsed = parseRequest(structuredClone(fixtureCase.request));
   const budget = createTranslatorBudget();
   try {
@@ -112,7 +159,9 @@ async function outboundRequest(fixtureCase: FixtureCase): Promise<OutboundFixtur
     try {
       return {
         url: request.url,
-        headers: request.headers,
+        headers: Object.fromEntries(
+          Object.entries(request.headers).map(([name, value]) => [name.toLowerCase(), value]),
+        ),
         body: JSON.parse(request.body) as Record<string, unknown>,
       };
     } finally {
@@ -123,14 +172,103 @@ async function outboundRequest(fixtureCase: FixtureCase): Promise<OutboundFixtur
   }
 }
 
-function expectAssertion(body: Record<string, unknown>, assertion: FixtureAssertion): void {
-  const resolved = resolveJsonPointer(body, assertion.path);
+function expectAssertion(outbound: OutboundFixtureRequest, assertion: FixtureAssertion): void {
+  const resolved = resolveJsonPointer(outbound, assertion.path);
   if (assertion.operator === "absent") {
     expect(resolved.ok, assertion.id).toBe(false);
     return;
   }
   expect(resolved.ok, assertion.id).toBe(true);
   if (resolved.ok) expect(resolved.value, assertion.id).toEqual(assertion.expected);
+}
+
+/** The caller-supplied value an outbound selector corresponds to, if the selector has one. */
+function callerInputAt(fixtureCase: FixtureCase, path: string): { ok: true; value: unknown } | { ok: false } {
+  if (path.startsWith("/body/")) {
+    const resolved = resolveJsonPointer(fixtureCase.request, path.slice("/body".length));
+    return resolved.ok ? { ok: true, value: resolved.value } : { ok: false };
+  }
+  if (path.startsWith("/headers/") && path.indexOf("/", "/headers/".length) === -1) {
+    const name = path.slice("/headers/".length).toLowerCase();
+    const entry = Object.entries(fixtureCase.incomingHeaders ?? {})
+      .find(([candidate]) => candidate.toLowerCase() === name);
+    return entry ? { ok: true, value: entry[1] } : { ok: false };
+  }
+  return { ok: false };
+}
+
+/**
+ * Passthrough means the caller's value reaches the upstream unchanged, so its evidence must be an
+ * equality whose expected value IS the caller's value at the same place. An absence check, or an
+ * equality against a rewritten value, proves a transformation and cannot back a lossless claim.
+ */
+function passthroughEvidenceIssues(claimId: string, fixtureCase: FixtureCase, assertion: FixtureAssertion): string[] {
+  if (assertion.operator !== "equals" || !Object.prototype.hasOwnProperty.call(assertion, "expected")) {
+    return [`${claimId}: passthrough evidence ${assertion.id} must be an equals assertion`];
+  }
+  const input = callerInputAt(fixtureCase, assertion.path);
+  if (!input.ok) {
+    return [`${claimId}: passthrough evidence ${assertion.id} selector ${assertion.path} has no caller input to compare`];
+  }
+  if (!Bun.deepEquals(input.value, assertion.expected, true)) {
+    return [`${claimId}: passthrough evidence ${assertion.id} expects a value that differs from the caller input`];
+  }
+  return [];
+}
+
+/**
+ * Catalog evidence gate. The schema validator only requires assertion ids to be listed; this
+ * resolves each one inside the manifest's own fixture and checks passthrough coherence.
+ */
+function manifestEvidenceIssues(manifest: CompatibilityManifestV1, fixture: CompatibilityFixture): string[] {
+  const issues: string[] = [];
+  const assertions = new Map<string, { fixtureCase: FixtureCase; assertion: FixtureAssertion }>();
+  for (const fixtureCase of fixture.cases) {
+    for (const assertion of fixtureCase.assertions) {
+      if (assertions.has(assertion.id)) issues.push(`${fixture.id}: assertion ${assertion.id} is not unique`);
+      assertions.set(assertion.id, { fixtureCase, assertion });
+    }
+  }
+  const labScenarios = new Set(listScenarioIds());
+  for (const claim of manifest.claims) {
+    let fixtureEvidence = 0;
+    for (const evidence of claim.evidence) {
+      if (evidence.kind !== "fixture") {
+        if (!labScenarios.has(evidence.id)) issues.push(`${claim.id}: lab scenario ${evidence.id} does not exist`);
+        continue;
+      }
+      fixtureEvidence += 1;
+      if (evidence.id !== fixture.id) issues.push(`${claim.id}: evidence fixture ${evidence.id} is not ${fixture.id}`);
+      for (const assertionId of evidence.assertionIds ?? []) {
+        const found = assertions.get(assertionId);
+        if (!found) {
+          issues.push(`${claim.id}: assertion ${assertionId} does not exist in fixture ${fixture.id}`);
+          continue;
+        }
+        if (claim.disposition === "passthrough") {
+          issues.push(...passthroughEvidenceIssues(claim.id, found.fixtureCase, found.assertion));
+        }
+      }
+    }
+    if (claim.disposition === "passthrough" && fixtureEvidence === 0) {
+      issues.push(`${claim.id}: passthrough claims need fixture evidence`);
+    }
+  }
+  return issues;
+}
+
+type MutableManifest = {
+  claims: Array<Record<string, unknown> & { evidence: Array<Record<string, unknown>> }>;
+};
+
+function mutableClone(manifest: CompatibilityManifestV1): CompatibilityManifestV1 & MutableManifest {
+  return structuredClone(manifest) as unknown as CompatibilityManifestV1 & MutableManifest;
+}
+
+function claimIndex(manifest: CompatibilityManifestV1, id: string): number {
+  const index = manifest.claims.findIndex(claim => claim.id === id);
+  if (index < 0) throw new Error(`${manifest.id} has no claim ${id}`);
+  return index;
 }
 
 describe("versioned compatibility manifests", () => {
@@ -152,7 +290,7 @@ describe("versioned compatibility manifests", () => {
     invalid.claims[1]!.id = invalid.claims[0]!.id;
     invalid.claims[1]!.feature = invalid.claims[0]!.feature;
     delete invalid.claims[2]!.limitation;
-    invalid.claims[3]!.evidence = [{ kind: "fixture", id: fixture.id }];
+    invalid.claims[3]!.evidence = [{ kind: "fixture", id: forwardFixture.id }];
     invalid.claims[4]!.unknownField = true;
     const issues = compatibilityManifestIssues(invalid);
     expect(issues.some(issue => issue.includes("duplicates"))).toBe(true);
@@ -163,19 +301,29 @@ describe("versioned compatibility manifests", () => {
     expect(issues.some(issue => issue.includes("unknownField"))).toBe(true);
   });
 
-  test("the first manifest is pinned to the canonical Codex forward route", () => {
-    const manifest = OPENAI_CODEX_FORWARD_GPT56_SOL_MANIFEST;
-    const provider = getProviderRegistryEntry(manifest.subject.providerId);
-    expect(provider).toBeDefined();
-    expect(provider?.baseUrl).toBe(manifest.subject.baseUrl);
-    expect(provider?.adapter).toBe(manifest.subject.adapterId);
-    expect(provider?.authKind).toBe(manifest.subject.authMode);
-    expect(effectiveAdapterContract(manifest.subject.adapterId).wire)
-      .toBe(manifest.subject.upstreamProtocol);
-    expect(manifest.subject.modelIds).toEqual(["gpt-5.6-sol"]);
-    expect(manifest.subject.modelIds.every(model => SUPPORTED_NATIVE_OPENAI_SLUGS.has(model))).toBe(true);
-    expect(Object.isFrozen(manifest.claims)).toBe(true);
-    expect(Object.isFrozen(manifest.claims[0]?.evidence)).toBe(true);
+  test("every manifest is pinned to the route its subject names", () => {
+    for (const manifest of COMPATIBILITY_MANIFESTS) {
+      const { subject } = manifest;
+      const provider = getProviderRegistryEntry(subject.providerId);
+      expect(provider, manifest.id).toBeDefined();
+      expect(provider?.baseUrl, manifest.id).toBe(subject.baseUrl);
+      expect(provider?.authKind, manifest.id).toBe(subject.authMode);
+      expect(effectiveAdapterContract(subject.adapterId).wire, manifest.id).toBe(subject.upstreamProtocol);
+      for (const modelId of subject.modelIds) {
+        expect(subjectModelAdapter(subject, modelId), `${manifest.id}:${modelId}`).toBe(subject.adapterId);
+      }
+      expect(Object.isFrozen(manifest.claims), manifest.id).toBe(true);
+      expect(Object.isFrozen(manifest.claims[0]?.evidence), manifest.id).toBe(true);
+    }
+
+    const forward = OPENAI_CODEX_FORWARD_GPT56_SOL_MANIFEST.subject;
+    expect(forward.modelIds).toEqual(["gpt-5.6-sol"]);
+    expect(forward.modelIds.every(model => SUPPORTED_NATIVE_OPENAI_SLUGS.has(model))).toBe(true);
+
+    const lowered = OPENGATEWAY_KEY_GLM53_RESPONSES_MANIFEST.subject;
+    const openGateway = getProviderRegistryEntry(lowered.providerId);
+    expect(openGateway?.supportsResponsesCustomTools).toBe(false);
+    expect(lowered.modelIds.every(model => openGateway?.models?.includes(model))).toBe(true);
   });
 
   test("ordinary request and startup graphs do not load the passive manifest catalog", () => {
@@ -193,36 +341,117 @@ describe("versioned compatibility manifests", () => {
   });
 });
 
-describe("OpenAI Codex forward compatibility fixture", () => {
+describe("compatibility fixtures", () => {
+  test("each fixture belongs to exactly one bundled manifest", () => {
+    expect(new Set(FIXTURES.map(fixture => fixture.id)).size).toBe(FIXTURES.length);
+    expect(new Set(FIXTURES.map(fixture => fixture.manifestId)).size).toBe(FIXTURES.length);
+    for (const fixture of FIXTURES) {
+      expect(fixture.schemaVersion, fixture.id).toBe(1);
+      expect(COMPATIBILITY_MANIFESTS.some(manifest => manifest.id === fixture.manifestId), fixture.id).toBe(true);
+      expect(new Set(fixture.cases.map(fixtureCase => fixtureCase.id)).size, fixture.id).toBe(fixture.cases.length);
+    }
+    for (const manifest of COMPATIBILITY_MANIFESTS) expect(fixtureForManifest(manifest).manifestId).toBe(manifest.id);
+  });
+
   test("executes every fixture assertion against the production adapter", async () => {
-    expect(fixture.schemaVersion).toBe(1);
-    expect(fixture.manifestId).toBe(OPENAI_CODEX_FORWARD_GPT56_SOL_MANIFEST.id);
-    expect(new Set(fixture.cases.map(fixtureCase => fixtureCase.id)).size).toBe(fixture.cases.length);
-    for (const fixtureCase of fixture.cases) {
-      const outbound = await outboundRequest(fixtureCase);
-      for (const assertion of fixtureCase.assertions) expectAssertion(outbound, assertion);
+    for (const manifest of COMPATIBILITY_MANIFESTS) {
+      const fixture = fixtureForManifest(manifest);
+      for (const fixtureCase of fixture.cases) {
+        const outbound = await outboundRequest(manifest.subject, fixtureCase);
+        for (const assertion of fixtureCase.assertions) expectAssertion(outbound, assertion);
+      }
     }
   });
 
-  test("every manifest claim names assertion-level evidence that exists", () => {
-    const allAssertionIds = new Set(fixture.cases.flatMap(fixtureCase =>
-      fixtureCase.assertions.map(assertion => assertion.id)));
-    expect(allAssertionIds.size).toBe(
-      fixture.cases.reduce((total, fixtureCase) => total + fixtureCase.assertions.length, 0),
-    );
-    const labScenarios = new Set(listScenarioIds());
-
-    for (const claim of OPENAI_CODEX_FORWARD_GPT56_SOL_MANIFEST.claims) {
-      for (const evidence of claim.evidence) {
-        if (evidence.kind === "fixture") {
-          expect(evidence.id, claim.id).toBe(fixture.id);
-          for (const assertionId of evidence.assertionIds ?? []) {
-            expect(allAssertionIds.has(assertionId), `${claim.id}:${assertionId}`).toBe(true);
-          }
-        } else {
-          expect(labScenarios.has(evidence.id), `${claim.id}:${evidence.id}`).toBe(true);
-        }
-      }
+  test("every manifest claim names assertion-level evidence that exists and supports it", () => {
+    for (const manifest of COMPATIBILITY_MANIFESTS) {
+      expect(manifestEvidenceIssues(manifest, fixtureForManifest(manifest)), manifest.id).toEqual([]);
     }
+  });
+});
+
+describe("custom-tool grammar evidence", () => {
+  const grammarFeature = "request.custom_tools.grammar";
+
+  test("native and lowered subjects record representation and grammar separately", () => {
+    const forwardGrammar = OPENAI_CODEX_FORWARD_GPT56_SOL_MANIFEST.claims.find(claim => claim.feature === grammarFeature);
+    const loweredGrammar = OPENGATEWAY_KEY_GLM53_RESPONSES_MANIFEST.claims.find(claim => claim.feature === grammarFeature);
+    const forwardTools = OPENAI_CODEX_FORWARD_GPT56_SOL_MANIFEST.claims.find(claim => claim.feature === "request.custom_tools");
+    const loweredTools = OPENGATEWAY_KEY_GLM53_RESPONSES_MANIFEST.claims.find(claim => claim.feature === "request.custom_tools");
+    expect([forwardTools?.disposition, forwardGrammar?.disposition]).toEqual(["passthrough", "passthrough"]);
+    expect([loweredTools?.disposition, loweredGrammar?.disposition]).toEqual(["translated", "degraded"]);
+
+    // Both fixtures send the same non-empty grammar, so the difference is the route, not the input.
+    const forwardFormat = resolveJsonPointer(forwardFixture.cases[0]!.request, "/tools/0/format");
+    const loweredFormat = resolveJsonPointer(openGatewayFixture.cases[0]!.request, "/tools/0/format");
+    expect(forwardFormat.ok && loweredFormat.ok).toBe(true);
+    if (forwardFormat.ok && loweredFormat.ok) {
+      expect(loweredFormat.value).toEqual(forwardFormat.value);
+      expect((forwardFormat.value as { definition?: string }).definition?.length ?? 0).toBeGreaterThan(0);
+    }
+  });
+
+  test("grammar loss cannot be labeled passthrough", () => {
+    const index = claimIndex(OPENGATEWAY_KEY_GLM53_RESPONSES_MANIFEST, "custom-tool-grammar");
+
+    const absenceAsLossless = mutableClone(OPENGATEWAY_KEY_GLM53_RESPONSES_MANIFEST);
+    absenceAsLossless.claims[index]!.disposition = "passthrough";
+    delete absenceAsLossless.claims[index]!.limitation;
+    absenceAsLossless.claims[index]!.evidence = [{
+      kind: "fixture",
+      id: openGatewayFixture.id,
+      assertionIds: ["custom-tool-grammar-removed"],
+    }];
+    // Schema-valid on purpose: only the evidence gate can see that the value did not survive.
+    expect(compatibilityManifestIssues(absenceAsLossless)).toEqual([]);
+    expect(manifestEvidenceIssues(absenceAsLossless, openGatewayFixture)).toContain(
+      "custom-tool-grammar: passthrough evidence custom-tool-grammar-removed must be an equals assertion",
+    );
+
+    const rewrittenAsLossless = mutableClone(OPENGATEWAY_KEY_GLM53_RESPONSES_MANIFEST);
+    rewrittenAsLossless.claims[index]!.disposition = "passthrough";
+    delete rewrittenAsLossless.claims[index]!.limitation;
+    rewrittenAsLossless.claims[index]!.evidence = [{
+      kind: "fixture",
+      id: openGatewayFixture.id,
+      assertionIds: ["custom-tool-lowered-to-function"],
+    }];
+    expect(compatibilityManifestIssues(rewrittenAsLossless)).toEqual([]);
+    expect(manifestEvidenceIssues(rewrittenAsLossless, openGatewayFixture)).toContain(
+      "custom-tool-grammar: passthrough evidence custom-tool-lowered-to-function expects a value that differs from the caller input",
+    );
+  });
+
+  test("passthrough evidence must point at a caller-supplied value", () => {
+    const unmappable = mutableClone(OPENAI_CODEX_FORWARD_GPT56_SOL_MANIFEST);
+    unmappable.claims[claimIndex(unmappable, "custom-tool-grammar")]!.evidence = [{
+      kind: "fixture",
+      id: forwardFixture.id,
+      assertionIds: ["canonical-url"],
+    }];
+    expect(manifestEvidenceIssues(unmappable, forwardFixture)).toContain(
+      "custom-tool-grammar: passthrough evidence canonical-url selector /url has no caller input to compare",
+    );
+  });
+
+  test("missing assertion evidence fails the catalog gate", () => {
+    const dangling = mutableClone(OPENAI_CODEX_FORWARD_GPT56_SOL_MANIFEST);
+    dangling.claims[claimIndex(dangling, "custom-tool-grammar")]!.evidence = [{
+      kind: "fixture",
+      id: forwardFixture.id,
+      assertionIds: ["no-such-assertion"],
+    }];
+    expect(compatibilityManifestIssues(dangling)).toEqual([]);
+    expect(manifestEvidenceIssues(dangling, forwardFixture)).toContain(
+      `custom-tool-grammar: assertion no-such-assertion does not exist in fixture ${forwardFixture.id}`,
+    );
+
+    const deleted = structuredClone(forwardFixture);
+    for (const fixtureCase of deleted.cases) {
+      fixtureCase.assertions = fixtureCase.assertions.filter(assertion => assertion.id !== "custom-tool-grammar-preserved");
+    }
+    expect(manifestEvidenceIssues(OPENAI_CODEX_FORWARD_GPT56_SOL_MANIFEST, deleted)).toContain(
+      `custom-tool-grammar: assertion custom-tool-grammar-preserved does not exist in fixture ${forwardFixture.id}`,
+    );
   });
 });
