@@ -171,8 +171,8 @@ alanlı seçilmiş kimlikleri yalın kimliklere yeniden yazar.
 | `anthropicEofTolerance?` | `boolean` | Yalnızca görünür metin veya eksiksiz bir JSON nesnesi araç girdisi alındığında, Anthropic uyumlu bir ağ geçidinin `message_stop` öncesinde biten bir akışı tamamlamasına izin verin. Varsayılan olarak kapalıdır. |
 | `googleMode?` | `"ai-studio" \| "vertex" \| "cloud-code-assist"` | Google aktarım/kimlik doğrulama modu. Varsayılan `ai-studio`. |
 | `googleToolSchemaPolicy?` | `"compatible" \| "reject-lossy"` | Yalnızca Google. Alanın atlanması veya `compatible`, uyumlu şemayı ve mevcut doğrudan olmayan 400 onarımını korur. `reject-lossy`, ilk kaybı veya sonucu belirsiz sınırlı bir karşılaştırmayı gönderimden önce reddeder ve kısıtları açacak Vertex ya da Cloud Code Assist onarımını engeller. Doğrudan AI Studio bu onarımı yapmaz. |
-| `project?` | `string` | Vertex veya Antigravity Cloud Code Assist proje kimliği. |
-| `location?` | `string` | Vertex konumu; ortam geri dönüşü `GOOGLE_CLOUD_LOCATION`'dır. |
+| `project?` | `string` | Vertex veya Antigravity Cloud Code Assist proje kimliği. Ayarlandığında Vertex API anahtarları proje uç noktasını kullanır; ayarlanmadığında `GOOGLE_CLOUD_PROJECT` tanımlı olsa bile express modunu kullanır. ADC, `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT` değerine geri döner. |
+| `location?` | `string` | Vertex konumu. API anahtarlı proje uç noktaları varsayılan olarak `global` kullanır ve `GOOGLE_CLOUD_LOCATION` değerini yok sayar; ADC bu alanı veya `GOOGLE_CLOUD_LOCATION` geri dönüşünü gerektirir. |
 | `mcpServers?` | `Record<string, CursorMcpServerConfig>` | Yalnızca Cursor: stdio veya Akışlanabilir HTTP MCP sunucuları. |
 | `desktopExecutor?` | `DesktopExecutorConfig` | Yalnızca Cursor: harici bilgisayar kullanımı ve ekran kaydetme komutları. |
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor eski boolean değeri, yalnızca daha yeni alan ayarlanmadığında `nativeLocalExec: "on"` değerine eşdeğerdir. |
