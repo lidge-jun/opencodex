@@ -249,7 +249,7 @@ describe("ollama-native — request shape", () => {
     expect(parsed.options ?? {}).not.toHaveProperty("verbosity");
   });
 
-  test("images travel in the native images[] array, and video is refused", async () => {
+  test("images travel in the native images[] array, and audio and video are refused", async () => {
     const adapter = createOllamaNativeAdapter(ollamaProvider());
     const png = "data:image/png;base64,iVBORw0KGgo=";
     const { body } = await adapter.buildRequest(parsedWith([
@@ -259,6 +259,10 @@ describe("ollama-native — request shape", () => {
     expect(Array.isArray(message.images)).toBe(true);
     expect(message.images[0]).toBe("iVBORw0KGgo=");
     expect(message.content).toContain("read it");
+
+    expect(() => adapter.buildRequest(parsedWith([
+      { role: "user", content: [{ type: "audio", data: "YWJj", format: "wav", text: "[audio: wav]" }] },
+    ]))).toThrow(/cannot send audio/);
 
     expect(() => adapter.buildRequest(parsedWith([
       { role: "user", content: [{ type: "video", videoUrl: "data:video/mp4;base64,AAAA" }] },
