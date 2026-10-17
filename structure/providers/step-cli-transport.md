@@ -66,6 +66,7 @@ question does not have to read the whole route:
 | `registry.ts` | state that must outlive a request, plus shutdown wiring |
 | `errors.ts` | failure text and the status a client can retry on |
 | `session.ts` / `session-pool.ts` / `stdio-frames.ts` | the framed transport itself |
+| `env.ts` / `profiles.ts` / `constants.ts` | the scoped child environment, binary discovery and shared identifiers |
 
 The graph is one-way: `adapter` → {`conversation`, `events`, `projection`, `registry`, `errors`},
 `events` → {`projection`, `registry`}, and nothing imports `adapter`. Two edges are cut to keep it that
