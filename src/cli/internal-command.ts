@@ -25,6 +25,17 @@ function optionValue(args: readonly string[], name: string): string | undefined 
 
 export async function handleInternalCommand(args: readonly string[]): Promise<number> {
   const sub = args[0];
+  if (sub === "chatgpt-cloud-network") {
+    if (args.length !== 2 || !["serve", "install", "uninstall"].includes(args[1]!)) return 64;
+    try {
+      if (args[1] === "serve") return await (await import("../chatgpt/cloud-network/helper-system")).runSystemCloudHelper();
+      return await (await import("../chatgpt/cloud-network/install")).manageSystemCloudHelper(args[1] as "install" | "uninstall");
+    } catch (error) {
+      const { CloudNetworkError } = await import("../chatgpt/cloud-network/contract");
+      console.error(`Cloud network helper failed (${error instanceof CloudNetworkError ? error.message : "system_operation_failed"}); inspect with: ocx chatgpt network status`);
+      return 1;
+    }
+  }
   if (sub === "chatgpt-app-server-filter") {
     if (args.length > 2 || (args[1] !== undefined && args[1] !== "--self-test")) {
       console.error(USAGE);

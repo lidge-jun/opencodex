@@ -1,3 +1,4 @@
+import { createChatgptCloudNetworkLifecycle, type CloudNetworkLifecycle } from "./chatgpt-cloud-network-lifecycle";
 import { serviceApiTokenFingerprint } from "../../lib/service-secrets";
 import type { Server } from "bun";
 import type { OcxConfig } from "../../types";
@@ -30,6 +31,7 @@ export interface OptionalListenerStartContext<T> {
 }
 
 export interface OptionalListenerSet<T> {
+  cloudNetwork(): CloudNetworkLifecycle;
   ensureClaudeIntercept(): ReturnType<ClaudeInterceptLifecycle<T>["ensure"]>;
   claudeInterceptOutcome(): ReturnType<ClaudeInterceptLifecycle<T>["lastOutcome"]>;
   ingressOf(server: Server<T>): ServerIngress | undefined;
@@ -47,8 +49,9 @@ export interface OptionalListenerSet<T> {
   stop(): Promise<void>;
 }
 
-export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): OptionalListenerSet<T> {
+export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}, cloudDeps: Parameters<typeof createChatgptCloudNetworkLifecycle>[0] = {}): OptionalListenerSet<T> {
   const claudeIntercept: ClaudeInterceptLifecycle<T> = createClaudeInterceptLifecycle<T>();
+  const cloudNetwork = createChatgptCloudNetworkLifecycle(cloudDeps);
   const linkListener: LinkListenerLifecycle<T> = createLinkListenerLifecycle<T>(linkDeps);
   let activeConfig: OcxConfig | undefined;
   const supervisor = createLinkSupervisor({
@@ -72,6 +75,7 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): O
   let supervisorStop: (() => Promise<void>) | undefined;
 
   return {
+    cloudNetwork: () => cloudNetwork,
     ensureClaudeIntercept: () => claudeIntercept.ensure(),
     claudeInterceptOutcome: () => claudeIntercept.lastOutcome(),
     ingressOf(server) {
@@ -114,6 +118,7 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): O
         maxRequestBodySize: ctx.maxRequestBodySize,
         dispatch: ctx.dispatch,
       });
+      cloudNetwork.start(ctx.config);
     },
     ensureStarted: () => linkListener.ensureStarted(),
     close: () => linkListener.close(),
@@ -125,6 +130,7 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): O
     },
     async stop() {
       let failure: unknown;
+      try { await cloudNetwork.stop(); } catch (error) { failure = error; }
       if (supervisorStop) {
         try { await supervisorStop(); } catch (error) { failure = error; }
       }

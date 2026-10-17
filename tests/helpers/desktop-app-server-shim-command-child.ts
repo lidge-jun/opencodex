@@ -3,6 +3,7 @@ import { mock } from "bun:test";
 import * as fs from "node:fs";
 import * as childProcess from "node:child_process";
 import { dirname, join } from "node:path";
+import { CLOUD_HELPER_ROOT } from "../../src/chatgpt/cloud-network/contract";
 
 const [dir, encoded] = process.argv.slice(2);
 if (!dir || !encoded) throw new Error("isolated fixture directory and scenario required");
@@ -12,17 +13,21 @@ const shell = join(root, "Contents", "MacOS", "ChatGPT");
 const binary = join(root, "Contents", "Resources", "codex");
 const launcher = join(dir, "launcher.sh");
 const realLstat = fs.lstatSync;
+const realExists = fs.existsSync;
 const ancestors = new Set<string>();
 for (let parent = dirname(root); ; parent = dirname(parent)) {
   ancestors.add(parent);
   if (dirname(parent) === parent) break;
 }
 const calls: Array<{ command: string; args: string[]; override?: string }> = [];
+const cloudCalls: string[] = [];
 let running = scenario.running === true;
 let pgrepCalls = 0;
 const uid = typeof process.getuid === "function" ? process.getuid() : -1;
 
-mock.module("node:fs", () => ({ ...fs, lstatSync(path: string, ...args: unknown[]) {
+mock.module("node:fs", () => ({ ...fs, existsSync(path: string) {
+  return path === CLOUD_HELPER_ROOT ? scenario.cloudInstalled === true : realExists(path);
+}, lstatSync(path: string, ...args: unknown[]) {
   if (path === dir && scenario.adminParent) return {
     uid: 0, gid: 80, mode: 0o775,
     isFile: () => false, isDirectory: () => true, isSymbolicLink: () => false,
@@ -62,7 +67,7 @@ mock.module("node:child_process", () => ({ ...childProcess, spawnSync(command: s
   if (command === "/usr/bin/open" && scenario.openFails) return { status: 1, stdout: "", stderr: "fixture open failed" };
   return { status: 0, stdout: "", stderr: "" };
 } }));
-mock.module("../../src/config", () => ({ loadConfig: () => ({ chatgptDesktop: { appServerShim: scenario.flag === true } }) }));
+mock.module("../../src/config", () => ({ loadConfig: () => ({ chatgptDesktop: { appServerShim: scenario.flag === true, cloudNetwork: scenario.cloud === true } }) }));
 // A refused launch explains a dropped chatgptDesktop block from the config file; never read this
 // machine's config here.
 mock.module("../../src/config/diagnostics", () => ({ readConfigFileSnapshot: () => ({ raw: scenario.configRaw }) }));
@@ -78,6 +83,11 @@ mock.module("../../src/chatgpt/app-server-shim/launcher", () => ({
   resolveChatgptCodexBinary: () => scenario.missingBinary ? null : binary,
   writeChatgptShimLauncher: () => { fs.writeFileSync(launcher, "new launcher"); },
 }));
+mock.module("../../src/cli/chatgpt-network-command", () => ({ handleChatgptNetworkCommand: async (args: string[]) => {
+  cloudCalls.push(args[0]!);
+  return scenario.cloudDisableFails && args[0] === "recover" ? 1 : 0;
+} }));
+mock.module("../../src/cli/runtime-api", () => ({ runtimeRequest: async () => ({ network: { state: scenario.cloudState ?? "active" } }) }));
 const { handleChatgptCommand } = await import("../../src/cli/chatgpt-command");
 const code = await handleChatgptCommand([scenario.sub ?? "restore"], "darwin");
-console.log(JSON.stringify({ code, calls, launcherExists: fs.existsSync(launcher), launcherContent: fs.existsSync(launcher) ? fs.readFileSync(launcher, "utf8") : null, root, shell, binary }));
+console.log(JSON.stringify({ code, calls, cloudCalls, launcherExists: fs.existsSync(launcher), launcherContent: fs.existsSync(launcher) ? fs.readFileSync(launcher, "utf8") : null, root, shell, binary }));

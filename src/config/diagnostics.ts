@@ -136,6 +136,9 @@ function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown): Conf
   if (normalized.chatgptDesktop?.appServerShim === true && process.platform !== "darwin") {
     warnings.push("chatgptDesktop.appServerShim is experimental and macOS only; ignored on this platform");
   }
+  if (normalized.chatgptDesktop?.cloudNetwork === true && process.platform !== "darwin") {
+    warnings.push("chatgptDesktop.cloudNetwork is macOS only; ignored on this platform");
+  }
   const chatgptDesktopIssue = chatgptDesktopConfigIssue(rawParsed);
   if (chatgptDesktopIssue) warnings.push(`${chatgptDesktopIssue}; the whole chatgptDesktop block is ignored, so the ChatGPT desktop integration reads as off`);
   warnings.push(...inheritedFastWireConflictProviderNames(normalized).map(inheritedFastWireConflictWarning));

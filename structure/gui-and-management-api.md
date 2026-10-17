@@ -119,7 +119,7 @@ OpenCodex uses three mutually exclusive reusable admission credential classes:
 
 The service token file remains a delivery mechanism for the data-plane environment token; it is not
 a fourth credential class. A management credential that equals any configured data-plane credential
-does not enable management access. The data plane may continue to start, but `/api/*` remains closed.
+does not enable management access. The data plane may continue to start, but `/api/*` remains closed. `src/server/management/chatgpt-network-routes.ts` further requires trusted loopback GUI/admin authority for status and enable/disable/recover; these routes cannot install or elevate a helper. Persistence and runtime state follow the [integrated cloud-network contract](clients/chatgpt-desktop.md#integrated-cloud-network).
 CLI health collection follows the same boundary without transporting the reusable management
 credential. Its local-read HMAC capability is an additional single-use, route-scoped admission
 mechanism, not a reusable credential class. `ocx doctor` and OAuth health derive these capabilities

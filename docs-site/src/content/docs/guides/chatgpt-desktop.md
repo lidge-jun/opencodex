@@ -1,7 +1,114 @@
 ---
-title: ChatGPT Desktop app-server shim (experimental)
-description: An opt-in macOS experiment that rewrites plain-quota gate fields on the bundled app-server stdout pipe.
+title: ChatGPT Desktop integrations (experimental)
+description: Opt-in macOS cloud networking, recovery and the app-server shim.
 ---
+
+These integrations are independent and default off. Cloud networking preserves TLS;
+the app-server shim filters selected fields in the local app-server's output.
+Enabling one never enables another.
+
+## Built-in cloud networking
+
+OpenCodex can forward the desktop's encrypted connection to
+`codex-cloud-backend.chatgpt.com:443` through its existing outbound proxy.
+The feature is macOS-only and opt-in through `chatgptDesktop.cloudNetwork`.
+It needs no Developer ID, separate application, Network Extension, local CA,
+or desktop bundle modification. It does require administrator-approved
+management of this one hostname's hosts mapping and resolver-cache invalidation.
+
+**This changes resolution for all OS-resolver clients of that hostname, not only
+the desktop app.** Preserve any working interim route until a separately authorized
+real-machine acceptance verifies port 443, DNS caching and authenticated desktop use.
+
+### Install, enable and inspect
+
+Use an updated OpenCodex installation. These are real system operations, not test commands:
+
+```bash
+ocx chatgpt network install
+ocx chatgpt network enable
+ocx chatgpt network status
+```
+
+Installation asks for confirmation and then administrator permission through sudo.
+`--yes` skips only the initial confirmation, not OS authorization.
+It installs an OpenCodex-owned recovery helper and leaves routing off. It does not
+restart the proxy or desktop. The helper is internal implementation, not a separately
+configured proxy: its launchd job owns only the fixed mapping and resolver recovery.
+The network relay, outbound proxy selection, configuration and lifecycle belong to OpenCodex.
+
+`enable` requires the running server and calls its authenticated local management
+API. It saves `chatgptDesktop.cloudNetwork: true`, leaving the other desktop flags
+unchanged, and starts the integration immediately. Subsequent proxy starts read that flag.
+An activation failure remains visible as configured-but-unavailable and returns failure;
+it does not stop the model proxy or silently report success.
+
+For configuration-file users:
+
+```json
+{
+  "proxy": "http://127.0.0.1:8123",
+  "chatgptDesktop": {
+    "cloudNetwork": true
+  }
+}
+```
+
+Use your existing proxy setting; there is no separate cloud proxy-port configuration.
+The same proxy/environment precedence as other OpenCodex transports applies, including
+HTTP(S) CONNECT and SOCKS5. A missing proxy, a matching NO_PROXY bypass or a local-443
+proxy loop refuses activation. There is no direct fallback through the mapped hostname.
+
+The runtime binds IPv4 and IPv6 loopback port 443 and verifies CONNECT acceptance before
+requesting the mapping. An occupied or unavailable listener port leaves the mapping off.
+Status distinguishes intent, active runtime and failures; `applicationHandshake`
+remains `unverified`. Active forwarding is not proof of a logged-in cloud session.
+`ocx chatgpt status` includes cloud status, and a cloud-only `ocx chatgpt launch`
+requires that runtime to be active.
+
+### Disable, recover and remove
+
+```bash
+ocx chatgpt network disable
+ocx chatgpt network recover
+ocx chatgpt network uninstall
+```
+
+Disable saves the flag as false and removes the owned mapping before closing listeners.
+Recovery also disables intent and retries any incomplete mapping/cache cleanup.
+If cleanup fails, the off flag is saved but status remains unavailable. Repeating disable
+retries recovery; it does not report success solely because the flag is already off.
+When the proxy is stopped, these commands can still save disabled intent and contact
+the helper; an unavailable helper reports unverified recovery, never successful cleanup.
+An active lease from another runtime is not revoked.
+
+The helper holds the mapping only while its connection to the OpenCodex runtime exists.
+Runtime death closes that connection and triggers recovery. The helper's launchd
+configuration requests restart and boot startup; each new helper process restores the
+journal before accepting a new lease. There can be a recovery interval after helper death
+or a reboot: no instantaneous recovery or authenticated reconnection guarantee is claimed.
+Recovery preserves unrelated hosts lines and refuses edited owned blocks for inspection.
+
+Uninstall requires disabled routing, restores any remaining owned mapping, stops only
+the cloud helper and removes its fixed files. It does not stop the model proxy.
+`ocx chatgpt restore` confirms cloud recovery before its desktop relaunch, even when
+the flag is already off but the recovery helper is still installed;
+use `network recover` for an abandoned mapping when no desktop is installed.
+A helper update is explicit: disable, run `network install` again, then enable.
+Ordinary proxy updates do not execute a hidden administrator operation.
+
+Source/npm installs bundle the small helper and copy their Bun runtime into the
+root-owned installation. Standalone builds copy their executable and use its hidden
+helper entry. launchd never runs code from a user-writable checkout or package tree.
+
+### Isolated development validation
+
+The cloud-network tests exercise the same runtime and recovery helper with temporary
+hosts files, Unix sockets and ephemeral listener ports. They cover TLS forwarding,
+process loss and journal recovery without installing a service or changing system routing.
+There is no separate sandbox command or native system-extension implementation to maintain.
+
+## App-server shim
 
 This experiment is **macOS only and off by default**. It filters the bundled ChatGPT
 app-server's JSON-RPC stdout to open known plain-quota gates. It does not increase

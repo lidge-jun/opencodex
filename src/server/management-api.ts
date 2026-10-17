@@ -132,6 +132,11 @@ async function handleRoutingProfileRoutesOnDemand(ctx: ManagementContext): Promi
   return handleRoutingProfileRoutes(ctx);
 }
 
+async function handleChatgptNetworkRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
+  if (!pathInManagementNamespace(ctx.url.pathname, "/api/chatgpt-network")) return null;
+  return (await import("./management/chatgpt-network-routes")).handleChatgptNetworkRoutes(ctx);
+}
+
 async function handleLabRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
   if (!pathInManagementNamespace(ctx.url.pathname, "/api/lab")) return null;
   // Automation is checked first so its narrower namespace keeps its own handler, matching
@@ -341,6 +346,7 @@ export async function handleManagementAPI(
   let routed: Response | null | undefined;
   try {
     routed = await handleClaudeInterceptRoutes(ctx)
+    ??     (await handleChatgptNetworkRoutesOnDemand(ctx))
     ??     handleSessionRoutes(ctx)
     ??     (await handleLinkRoutesOnDemand(ctx))
     ??     (await handleRemoteWorkspaceRoutesOnDemand(ctx))

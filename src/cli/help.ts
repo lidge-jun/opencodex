@@ -101,7 +101,7 @@ Usage:
   ocx companion <show|set|reset>  Menu-bar and widget companion usage settings
   ocx lab <sub>               Inspect Lab evidence and control local automation
   ocx codex-provider <sub>    Confirm custom Codex provider routing: status|allow|revoke
-  ocx chatgpt <sub>          Experimental app-server shim: launch|restore|status (macOS)
+  ocx chatgpt <sub>          Experimental desktop integration: launch|restore|status|network (macOS)
   ocx claude [args...]        Launch Claude Code wired to the proxy (model discovery on)
   ocx claude desktop [sub]    Manage and apply Claude Desktop's four-family profile
   ocx opencode [args...]      Launch opencode wired to the proxy (runtime provider config)

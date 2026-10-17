@@ -1,9 +1,94 @@
-# ChatGPT Desktop app-server shim
+# ChatGPT Desktop integrations
+
+## Integrated cloud network
+
+`src/chatgpt/cloud-network/` owns the opt-in `chatgptDesktop.cloudNetwork`
+integration. `src/config/schema/chatgpt-desktop.ts` validates this independent boolean;
+`src/types/config.ts` carries it independently of the app-server shim flag.
+The public `src/cli/chatgpt-network-command.ts` supplies status/install/enable/disable/
+recover/uninstall. This is the only cloud-network implementation and public entry.
+
+`src/server/index/chatgpt-cloud-network-lifecycle.ts` joins the existing
+`src/server/index/optional-listeners.ts` startup and awaited shutdown. Startup remains
+synchronous at the composition root. Disabled installations do not import the transport
+or contact the helper. Enabled startup runs asynchronously, only on macOS outside the
+client role; a failure records unavailable state without failing the model proxy.
+Stop joins pending activation and removes the mapping before releasing owned sockets.
+After a failed release, lost helper or startup reply requiring recovery, disable/shutdown
+retries helper recovery before reporting disabled/stopped, even when startup returned no
+runtime handle. The helper's recovery-required state survives independently of its reason
+code until recovery or acquisition succeeds; persisting the off flag alone never clears it.
+
+`runtime.ts` selects the existing outbound environment with `effectiveProxyFor`,
+after server startup's `applyProxyEnv`. It refuses matching NO_PROXY, missing proxy
+and obvious local-443 loops. `entry.ts` binds IPv4/IPv6 loopback 443 and preflights
+the fixed cloud target through HTTP(S) CONNECT or SOCKS5 before acquiring a mapping.
+It reuses `dialTunnel` in `src/lib/opaque-proxy-tunnel.ts`, whose handshake returns
+a paused raw socket. Entry shutdown aborts in-flight tunnel establishment as well as
+closing established sockets, so pending CONNECT/SOCKS handshakes cannot outlive teardown.
+All client TLS remains opaque; no CA, payload logging,
+account reads or direct fallback is added. The relay resumes the socket only after
+attaching the client pipes; existing WebSocket transports remain unchanged.
+
+`src/server/management/chatgpt-network-routes.ts` is lazy-loaded by namespace.
+GET status and POST enable/disable/recover require trusted local ingress and a GUI
+session or admin-token principal. Data-plane keys and remote ingress cannot mutate
+it. Enable/disable share the existing config transaction before runtime reconciliation;
+failed persistence does not start a listener. Failed activation retains configured
+intent and reports a non-success result, distinct from active state.
+The endpoint cannot install, elevate, choose a hosts path or supply an upstream proxy.
+`ocx chatgpt status` includes cloud state; cloud-only launch checks active state;
+restore recovers cloud routing before relaunching the trusted desktop, including when
+the config flag is already off but the recovery helper remains installed.
+
+`helper.ts` owns the mapping while one authorized Unix-socket connection remains.
+`helper-client.ts` sends only fixed protocol actions, never a path, command or secret.
+Disconnect releases the mapping; an active owner excludes another runtime/recover.
+Helper status derives from the live owner and any recovery error, not a second state machine.
+Acquisition delegates stale recovery to the same mapping implementation used at startup.
+`hosts.ts` records a durable journal before atomic replacement, preserves file mode/
+ownership and unrelated lines, and retains the journal until resolver invalidation
+succeeds. Conflicting or edited owned records require inspection instead of deletion.
+`helper-system.ts` fixes production paths, requires root on macOS, holds an OS-released
+SQLite lock and recovers before accepting clients. No public path/environment override
+redirects its privileged operations; tests inject temporary paths into the lower layers.
+
+`install.ts` requires explicit sudo authorization and separates installation from
+activation. launchd owns the small recovery helper, not a second traffic proxy.
+Its fixed job requests KeepAlive and RunAtLoad; recovery is after service restart,
+not instantaneous after SIGKILL or power loss. Source/npm installation bundles
+`helper-system.ts` and copies Bun; standalone installation copies the CLI and enters
+the hidden helper command. Installed code and its parents must be root-owned and
+not group/other-writable. The socket grants only the installing uid access.
+The helper reads no user config or proxy credentials. Updating/removing it requires
+idle routing and explicit authorization, never an ordinary proxy update side effect.
+Uninstall restores first and removes fixed owned files; unknown leftovers are retained.
+
+The entire network namespace, including its internal privileged entry, bypasses
+unrelated shim auto-repair in `src/cli/codex-shim-autorestore.ts`.
+`tests/clients/desktop-cloud-management.test.ts` drives the real server and public
+CLI against temporary resources; runtime/recovery/install regressions are in sibling
+desktop-cloud tests. Source/npm bundling and compiled command reachability are separate
+from real launchd, port-443, DNS-cache and authenticated desktop acceptance.
+Status always leaves applicationHandshake unverified.
+
+## Isolated validation of the integrated implementation
+
+`tests/helpers/cloud-network-fixture.ts` supplies temporary hosts/journal/socket paths;
+`tests/helpers/cloud-network-process.ts` runs the real helper and server lifecycle in
+separate test processes. No parallel sandbox mapping or worker implementation ships.
+`tests/clients/desktop-cloud-entry.test.ts` drives the integrated runtime on ephemeral
+ports to verify IPv4/IPv6 TLS hostname validation and byte forwarding without OS trust changes.
+`tests/clients/desktop-cloud-recovery.test.ts` verifies process-loss and journal recovery.
+The native system-extension candidate and old public sandbox command are not in the source tree.
+
+## App-server shim
 
 The experimental macOS integration is owned by `src/chatgpt/` and exposed through
-`src/cli/chatgpt-command.ts`. It is default off and requires
-`chatgptDesktop.appServerShim === true` for an explicit launch. Its config leaf
-accepts only an optional boolean; malformed reads disable the leaf, while live
+`src/cli/chatgpt-command.ts`. It is default off; an explicit launch requires
+`chatgptDesktop.appServerShim === true` or `chatgptDesktop.cloudNetwork === true`, and only the
+shim launcher requires `appServerShim`. The strict config leaf accepts optional boolean `appServerShim` and `cloudNetwork`
+flags; malformed reads disable the leaf, while live
 writes reject malformed values and unknown fields.
 
 The launcher under the config directory re-enters the current CLI using
@@ -77,7 +162,7 @@ atomically updated it; this is not a transaction spanning the launcher and app r
 Other platforms reject all three operations.
 
 The launcher and its executable paths are local code-execution inputs. This
-integration installs no network listener, CA, PAC or background watcher, and
+shim installs no network listener, CA, PAC or background watcher, and
 starts no proxy timer. Explicit launches are its only activation point.
 
 Tests cover rewriting, byte framing, passthrough degradation, source/compiled

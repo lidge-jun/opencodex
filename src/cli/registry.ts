@@ -22,9 +22,10 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "chatgpt",
-    usage: "ocx chatgpt <launch|restore|status>",
-    summary: "Experimental ChatGPT app-server shim (macOS only, default off).",
-    details: ["Experimental launch requires chatgptDesktop.appServerShim: true; restore removes its launcher."],
+    usage: "ocx chatgpt <launch|restore|status|network>",
+    summary: "Experimental ChatGPT app-server shim and built-in cloud networking (default off).",
+    details: ["Launch requires appServerShim or cloudNetwork; cloud-only launch checks the live cloud integration. Restore disables configured cloud routing and removes the shim launcher.",
+      "network status|install|enable|disable|recover|uninstall manages the built-in cloud integration; install needs administrator approval but does not enable routing. See ocx help chatgpt network."],
   },
   {
     name: "init",

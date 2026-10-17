@@ -165,6 +165,10 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "PUT", path: "/api/claude-desktop/first-party-bindings", module: "server/management/agent-settings-routes", mutates: true },
   // server/management/claude-intercept-routes
   { method: "POST", path: "/api/claude-intercept/start", module: "server/management/claude-intercept-routes", mutates: true },
+  { method: "GET", path: "/api/chatgpt-network/status", module: "server/management/chatgpt-network-routes", mutates: false },
+  { method: "POST", path: "/api/chatgpt-network/enable", module: "server/management/chatgpt-network-routes", mutates: true },
+  { method: "POST", path: "/api/chatgpt-network/disable", module: "server/management/chatgpt-network-routes", mutates: true },
+  { method: "POST", path: "/api/chatgpt-network/recover", module: "server/management/chatgpt-network-routes", mutates: true },
 
   // server/management/claude-desktop-picker-routes
   { method: "GET", path: "/api/claude-desktop/picker", module: "server/management/claude-desktop-picker-routes", mutates: false },

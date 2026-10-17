@@ -41,6 +41,11 @@ Treat it the way you treat `gui/`: it may consume what `src/` already exposes,
 and a change that requires a new endpoint is a change to the proxy first.
 Its persisted display contract is owned by `src/companion/`.
 
+The opt-in cloud-network integration uses the proxy's existing lifecycle and a small fixed-domain
+permission/recovery helper. Isolated tests exercise that same implementation; there is no separate
+native-extension or sandbox runtime. See the
+[ChatGPT Desktop contract](clients/chatgpt-desktop.md#integrated-cloud-network).
+
 The default install keeps native OpenAI/ChatGPT passthrough working through one option-aware
 `openai` provider. Pool is the default and selects across main plus added accounts; Direct uses only
 the current caller/main login. `openai-apikey` explicitly selects API-key transport, and the two

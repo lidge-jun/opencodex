@@ -626,7 +626,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
   let server: Server<WsData>;
   let loopbackServer: Server<WsData> | null = null;
   let managementIngressServer: Server<WsData> | null = null;
-  const optionalListeners = createOptionalListenerSet<WsData>();
+  const optionalListeners = createOptionalListenerSet<WsData>({}, deps.cloudNetwork);
   const inboundBodyLimitBytes = resolveInboundBodyLimitWithWarning(config);
 
   function ingressForServer(requestServer: Server<WsData>): ServerIngress {

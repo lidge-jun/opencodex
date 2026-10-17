@@ -684,11 +684,13 @@
       "path": "clients/chatgpt-desktop.md",
       "tier": 5,
       "title": "ChatGPT Desktop",
-      "scope": "Experimental macOS app-server stdout shim, opt-in launch, restore and failure boundaries.",
+      "scope": "Experimental macOS app-server shim and integrated cloud networking; configuration, lifecycle, privileged recovery and isolated validation.",
       "documents": [
         "src/chatgpt/",
         "src/cli/",
-        "src/codex/"
+        "src/codex/",
+        "src/server/index/chatgpt-cloud-network-lifecycle.ts",
+        "src/server/management/chatgpt-network-routes.ts"
       ]
     },
     {

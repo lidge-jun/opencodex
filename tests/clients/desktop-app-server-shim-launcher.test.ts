@@ -185,7 +185,7 @@ describe("restore validates the discovered app before any quit or open", () => {
       expect(result.error).toBeUndefined();
       expect(result.status).toBe(0);
       return { ...JSON.parse(result.stdout.trim().split("\n").at(-1)!), stdout: result.stdout, stderr: result.stderr } as {
-        code: number; calls: Array<{ command: string; args: string[]; override?: string }>;
+        code: number; calls: Array<{ command: string; args: string[]; override?: string }>; cloudCalls: string[];
         launcherExists: boolean; launcherContent: string | null; root: string; shell: string; binary: string; stdout: string; stderr: string;
       };
     } finally { removeTreeWithRetry(dir); }
@@ -267,6 +267,28 @@ describe("restore validates the discovered app before any quit or open", () => {
     expect(result.code).toBe(0);
     expect(result.launcherExists).toBe(true);
     expect(result.calls.map(call => call.command)).toEqual(["pgrep", "ps"]);
+    expect(result.cloudCalls).toEqual(["status"]);
+  });
+  test("cloud-only launch needs an active runtime but no shim binary", () => {
+    const active = run({ sub: "launch", cloud: true, missingBinary: true });
+    expect(active.code).toBe(0);
+    expect(active.calls.some(call => call.command === "/usr/bin/open")).toBe(true);
+    const unavailable = run({ sub: "launch", cloud: true, cloudState: "unavailable" });
+    expect(unavailable.code).toBe(1);
+    expect(unavailable.calls.some(call => call.command === "/usr/bin/open")).toBe(false);
+  });
+  test("restore disables cloud routing and refuses relaunch if recovery fails", () => {
+    const restored = run({ cloud: true });
+    expect(restored.code).toBe(0);
+    expect(restored.cloudCalls).toEqual(["recover"]);
+    const failed = run({ cloud: true, cloudDisableFails: true, running: true });
+    expect(failed.code).toBe(1);
+    expect(failed.calls.some(call => ["/usr/bin/osascript", "/usr/bin/open"].includes(call.command))).toBe(false);
+    expect(failed.launcherExists).toBe(true);
+    const retry = run({ cloud: false, cloudInstalled: true, cloudDisableFails: true, running: true });
+    expect(retry.code).toBe(1);
+    expect(retry.cloudCalls).toEqual(["recover"]);
+    expect(retry.calls.some(call => ["/usr/bin/osascript", "/usr/bin/open"].includes(call.command))).toBe(false);
   });
   test("a launch refused over a dropped chatgptDesktop block names the failing field", () => {
     const result = run({ sub: "launch", flag: false, configRaw: JSON.stringify({ chatgptDesktop: { appServerShim: "yes" } }) });
@@ -292,7 +314,7 @@ describe("restore validates the discovered app before any quit or open", () => {
   test("a launch refused with no dropped block keeps the ordinary opt-in message", () => {
     const result = run({ sub: "launch", flag: false, configRaw: "{}" });
     expect(result.code).toBe(1);
-    expect(result.stderr).toContain("set chatgptDesktop.appServerShim: true before launching");
+    expect(result.stderr).toContain("Enable chatgptDesktop.appServerShim or cloudNetwork before launching");
     expect(result.stderr).not.toContain("whole chatgptDesktop block is ignored");
   });
   test("launch still requires opt-in and an app-server binary", () => {

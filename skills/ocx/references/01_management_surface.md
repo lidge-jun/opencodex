@@ -25,7 +25,7 @@ These answer in the CLI head and never reach the proxy, so they work with nothin
 
 | Chapter | Declared capabilities |
 |---|---|
-| [lifecycle](01_surface_lifecycle.md) | 13 |
+| [lifecycle](01_surface_lifecycle.md) | 14 |
 | [providers-models](01_surface_providers-models.md) | 49 |
 | [accounts](01_surface_accounts.md) | 42 |
 | [agents-routing](01_surface_agents-routing.md) | 51 |
@@ -54,6 +54,10 @@ Original invocation order. These headings preserve links to the previous single-
 ### `ocx chatgpt`
 
 [State-changing task](01_surface_lifecycle.md#ocx-chatgpt)
+
+### `ocx chatgpt network`
+
+[State-changing task](01_surface_lifecycle.md#ocx-chatgpt-network)
 
 ### `ocx link probe`
 
@@ -1429,6 +1433,6 @@ Original invocation order. These headings preserve links to the previous single-
 
 ## Counts
 
-- declared capabilities: 345
-- of those, state-changing: 209
+- declared capabilities: 346
+- of those, state-changing: 210
 - head-resolved invocations: 2

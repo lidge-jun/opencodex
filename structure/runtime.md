@@ -221,7 +221,7 @@ The `hub-link` socket is HTTP-only and default-denies all but the fixed data rou
 usage, and `GET /readyz`; every `Upgrade` header, management, GUI, session, health, and unknown
 `/v1/*` route is rejected before dispatch. Its `opencodex-link.invalid` policy admits only configured
 key ids recorded by `links.json`, never the environment token. Context relays rebuild that policy for their post-body admission check, so key revocation stops an in-flight request before dispatch. `ensureStarted()` is single-flight,
-final deletion closes the listener, and `src/server/index/optional-listeners.ts` runs supervisor teardown before closing this listener and the Claude intercept pair.
+final deletion closes the listener, and `src/server/index/optional-listeners.ts` first restores the opt-in [cloud-network mapping](clients/chatgpt-desktop.md#integrated-cloud-network), then runs supervisor teardown before closing this listener and the Claude intercept pair. Cloud startup is asynchronous and failure-contained; default-off startup imports no cloud transport and contacts no helper.
 ### Claude intercept pair
 
 At the end of the startup transaction, `startServer` also starts the optional Claude intercept pair
@@ -340,7 +340,7 @@ The server exposes `POST /api/stop` which restores native Codex config (a siblin
 `src/cli/connect.ts` resolves only through the first valid local Codex runtime for catalog
 readiness, then reads that runtime's effort ladder without persisting its selection. Rejected
 preferred candidates still fall back in priority order. General `ocx status` retains full runtime
-discovery and passes its resolved command into readiness, avoiding a second version probe without adding cache state. `ocx connect` also prints a secret-free Codex shim readiness line from `src/cli/codex-shim-readiness.ts`: ready when the healthy shim is active on PATH, unhealthy when wrapper/native validation fails, missing/not active with the source command for a runnable inactive overlay, or unverified when the PATH scan throws. `ocx status`, `ocx codex-shim status`, and `ocx doctor` skip shim auto-repair; doctor retains unset-token warnings and recommends activation for inactive overlays rather than reinstalling them.
+discovery and passes its resolved command into readiness, avoiding a second version probe without adding cache state. `ocx connect` also prints a secret-free Codex shim readiness line from `src/cli/codex-shim-readiness.ts`: ready when the healthy shim is active on PATH, unhealthy when wrapper/native validation fails, missing/not active with the source command for a runnable inactive overlay, or unverified when the PATH scan throws. `ocx status`, `ocx codex-shim status`, `ocx doctor`, and the entire independent [`ocx chatgpt network` namespace](clients/chatgpt-desktop.md#integrated-cloud-network) skip shim auto-repair; doctor retains unset-token warnings and recommends activation for inactive overlays rather than reinstalling them.
 
 `ocx config [show]`, including flags-only display, stays outside that lifecycle path. Argument selection follows the [config reader contract](config.md). `src/cli/config-command.ts` reads the validated
 config snapshot and the bounded service-token observation needed for its `_remoteHub` annotation;

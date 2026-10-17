@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 13.
+Declared capabilities: 14.
 
 ### `ocx codex-provider`
 
@@ -28,13 +28,32 @@ Drives no management route.
 
 ### `ocx chatgpt`
 
-Experimental ChatGPT app-server shim: launch, restore or status (macOS only).
+Experimental ChatGPT app-server shim and integrated cloud-network routing (macOS only).
 
 State-changing: yes. JSON mode: `none`.
 
 Drives no management route.
 
-- Default off; launch requires chatgptDesktop.appServerShim: true. Restore removes the generated launcher.
+- Default off; launch requires chatgptDesktop.appServerShim or cloudNetwork. Cloud routing uses the running OpenCodex server and its outbound proxy. Restore disables configured cloud routing before relaunching; network recover handles abandoned mappings.
+
+### `ocx chatgpt network`
+
+Manage OpenCodex's built-in desktop cloud connection and recovery helper.
+
+State-changing: yes. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| GET | `/api/chatgpt-network/status` |
+| POST | `/api/chatgpt-network/enable` |
+| POST | `/api/chatgpt-network/disable` |
+| POST | `/api/chatgpt-network/recover` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--yes` | boolean | Confirm install/uninstall before the separate administrator prompt. |
+
+- Actions: status, install, enable, disable, recover, uninstall. Install prepares a fixed-domain recovery helper without enabling routing. Enable persists chatgptDesktop.cloudNetwork and starts the live runtime on loopback 443 using the existing outbound proxy. Disable restores the owned mapping before closing listeners. Status distinguishes configured intent from runtime state; a live tunnel does not prove an authenticated desktop session. Recover also works with the proxy stopped. Uninstall requires disabled routing. No arbitrary hosts path or separate proxy-port setting is accepted.
 
 ### `ocx status`
 

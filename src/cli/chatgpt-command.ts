@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { loadConfig } from "../config";
 import { readConfigFileSnapshot } from "../config/diagnostics";
 import { chatgptDesktopConfigIssue } from "../config/schema/chatgpt-desktop";
+import { CLOUD_HELPER_ROOT } from "../chatgpt/cloud-network/contract";
 import {
   chatgptShimLauncherPath,
   resolveChatgptCodexBinary,
@@ -14,9 +15,10 @@ import { darwinDefaultExec, darwinDesktopAppAdapter } from "../codex/desktop-app
 import type { DesktopAppInstall } from "../codex/desktop-app/types";
 
 const USAGE = `Usage (experimental, macOS only):
-  ocx chatgpt launch   Relaunch ChatGPT with the experimental app-server shim (requires appServerShim: true)
-  ocx chatgpt restore  Relaunch ChatGPT without the experimental shim and remove its launcher
-  ocx chatgpt status   Inspect experimental flag, launcher and running app environment`;
+  ocx chatgpt launch   Relaunch ChatGPT with the experimental app-server shim and/or cloud networking
+  ocx chatgpt restore  Relaunch ChatGPT with native networking and remove its launcher
+  ocx chatgpt status   Inspect experimental flags, launcher and running app environment
+  ocx chatgpt network <sub>  Built-in cloud connection: status|install|enable|disable|recover|uninstall`;
 
 function run(command: string, args: string[]) {
   const result = spawnSync(command, args, { encoding: "utf8", timeout: 5000 });
@@ -99,6 +101,7 @@ async function quitApp(install: DesktopAppInstall, launcher: string): Promise<bo
 
 export async function handleChatgptCommand(args: string[], platform: NodeJS.Platform = process.platform): Promise<number> {
   const sub = args[0];
+  if (sub === "network") return (await import("./chatgpt-network-command")).handleChatgptNetworkCommand(args.slice(1), platform);
   if (!sub || ["help", "--help", "-h"].includes(sub)) {
     console.log(USAGE);
     return sub ? 0 : 64;
@@ -108,23 +111,26 @@ export async function handleChatgptCommand(args: string[], platform: NodeJS.Plat
     return 64;
   }
   if (platform !== "darwin") {
-    console.error("ChatGPT app-server shim (experimental): macOS only.");
+    console.error("ChatGPT desktop integrations (experimental): macOS only.");
     return 1;
   }
   try {
     const config = loadConfig();
+    const shim = config.chatgptDesktop?.appServerShim === true;
+    const cloud = config.chatgptDesktop?.cloudNetwork === true;
     const launcher = chatgptShimLauncherPath();
     const install = discoverApp();
     if (sub === "status") {
       const app = install ? appState(install, launcher)
         : install === undefined ? { running: null, shim: null } : { running: false, shim: false };
-      const configIssue = config.chatgptDesktop?.appServerShim === true ? null : chatgptDesktopIssueInFile();
-      const flag = config.chatgptDesktop?.appServerShim === true ? "on"
+      const configIssue = shim ? null : chatgptDesktopIssueInFile();
+      const flag = shim ? "on"
         : configIssue ? `off (config.json ${configIssue}; the whole chatgptDesktop block is ignored)` : "off";
       console.log(`app-server shim (experimental): ${flag}
 launcher: ${existsSync(launcher) ? "present" : "absent"}
 app: ${install === undefined ? "unknown (app discovery failed)" : install ? (app.running === null ? "unknown (process inspection failed)" : app.running ? "running" : "not running") : "not installed"}
 CODEX_CLI_PATH launcher: ${app.shim === null ? "unknown" : app.shim ? "yes" : "no"}`);
+      await (await import("./chatgpt-network-command")).handleChatgptNetworkCommand(["status"], platform);
       return 0;
     }
     if (install === undefined) {
@@ -138,25 +144,35 @@ CODEX_CLI_PATH launcher: ${app.shim === null ? "unknown" : app.shim ? "yes" : "n
     }
     let binary: string | undefined;
     if (sub === "launch") {
-      if (config.chatgptDesktop?.appServerShim !== true) {
+      if (!shim && !cloud) {
         // Read the file only to explain a refusal; restore and a valid launch never touch it.
         const configIssue = chatgptDesktopIssueInFile();
         console.error(configIssue
-          ? `Experimental shim disabled: config.json ${configIssue}. The whole chatgptDesktop block is ignored until that is fixed.`
-          : "Experimental shim disabled; set chatgptDesktop.appServerShim: true before launching.");
+          ? `ChatGPT desktop launch disabled: config.json ${configIssue}. The whole chatgptDesktop block is ignored until that is fixed.`
+          : "Enable chatgptDesktop.appServerShim or cloudNetwork before launching.");
         return 1;
       }
-      binary = resolveChatgptCodexBinary(install.root) ?? undefined;
-      if (!binary) {
-        console.error(`No bundled app-server binary was found in ${install.root}; the shim cannot launch this build.`);
-        return 1;
+      if (cloud) {
+        const { runtimeRequest } = await import("./runtime-api");
+        const result = await runtimeRequest<{ network: { state: string } }>("/api/chatgpt-network/status");
+        if (result.network.state !== "active") {
+          console.error("Cloud network is not active; inspect with: ocx chatgpt network status");
+          return 1;
+        }
+      }
+      if (shim) {
+        binary = resolveChatgptCodexBinary(install.root) ?? undefined;
+        if (!binary) {
+          console.error(`No bundled app-server binary was found in ${install.root}; the shim cannot launch this build.`);
+          return 1;
+        }
       }
     }
     // Both relaunch paths execute the discovered bundle. Restore validates the app
     // shell without requiring an app-server binary or the experimental opt-in flag.
     const untrusted = untrustedChatgptBundleReason(install.root, binary);
     if (untrusted) {
-      console.error(`Refusing to ${sub === "launch" ? "launch the shim" : "restore ChatGPT"}: ${untrusted}.`);
+      console.error(`Refusing to ${sub === "launch" ? (shim ? "launch the shim" : "launch ChatGPT") : "restore ChatGPT"}: ${untrusted}.`);
       return 1;
     }
     // Preflight before changing the launcher. quitApp rechecks at the action boundary.
@@ -164,6 +180,9 @@ CODEX_CLI_PATH launcher: ${app.shim === null ? "unknown" : app.shim ? "yes" : "n
       console.error("ChatGPT process inspection failed; no launcher was changed and no app was opened. Retry after resolving inspection.");
       return 1;
     }
+    // An abandoned mapping would make the relaunched app resolve to a dead listener.
+    if (sub === "restore" && (cloud || existsSync(CLOUD_HELPER_ROOT))
+      && await (await import("./chatgpt-network-command")).handleChatgptNetworkCommand(["recover"], platform) !== 0) return 1;
     if (binary) writeChatgptShimLauncher(undefined, binary);
     if (!(await quitApp(install, launcher))) {
       console.error("ChatGPT exit could not be confirmed; no new app was opened. Check the running app and retry.");
@@ -173,15 +192,15 @@ CODEX_CLI_PATH launcher: ${app.shim === null ? "unknown" : app.shim ? "yes" : "n
     const env = { ...process.env };
     delete env.CODEX_CLI_PATH;
     // Open the verified bundle by path, so the relaunch is the same app that was quit.
-    const result = spawnSync("/usr/bin/open", ["-a", install.root, ...(sub === "launch" ? ["--env", `CODEX_CLI_PATH=${launcher}`] : [])], {
+    const result = spawnSync("/usr/bin/open", ["-a", install.root, ...(sub === "launch" && shim ? ["--env", `CODEX_CLI_PATH=${launcher}`] : [])], {
       encoding: "utf8", env, timeout: 10000,
     });
     if (result.status !== 0) throw new Error(result.error?.message ?? (result.stderr?.trim() || "open failed"));
     if (sub === "restore") rmSync(launcher, { force: true });
-    console.log(`ChatGPT relaunched ${sub === "launch" ? "with" : "without"} the experimental app-server shim.`);
+    console.log(`ChatGPT relaunched ${sub === "launch" ? "with" : "without"} the configured experimental integrations.`);
     return 0;
   } catch (error) {
-    console.error(`ChatGPT shim (experimental): ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`ChatGPT desktop (experimental): ${error instanceof Error ? error.message : String(error)}`);
     return 1;
   }
 }
