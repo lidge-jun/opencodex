@@ -44,6 +44,7 @@ import { classifyError } from "../lib/errors";
 import { relaySseWithPayloadRewrite } from "./sse-payload-rewrite";
 import { redactSecretString } from "../lib/redact";
 import { resolveClientRetryAfter } from "../lib/retry-after";
+import { enrichOpenCodeZenUpstreamMessage } from "../providers/opencode-zen-rate-limit";
 import { isTranslatorBudgetExceededError, type TranslatorBudget } from "../lib/translator-budget";
 import {
   applyReplayRefusalClientHeaders,
@@ -845,7 +846,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       upstream.abort();
       return fail(499, "Client cancelled request", "api_error");
     }
-    return retainUpstreamMessagesRequestId(nativeMessagesErrorResponse(response, bodyText, finishLog), response.headers);
+    return retainUpstreamMessagesRequestId(nativeMessagesErrorResponse(response, bodyText, finishLog, route.providerName, activeProvider), response.headers);
   }
 
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
@@ -999,7 +1000,7 @@ function isNativeOverflowError(error: Rec, message: string): boolean {
  * Messages path, so a client sees the same contract on either lane: transient 5xx become 529
  * with a retry hint, and a proxy-side replay refusal keeps its no-retry marking.
  */
-function nativeMessagesErrorResponse(response: Response, bodyText: string, finishLog: FinishLog): Response {
+function nativeMessagesErrorResponse(response: Response, bodyText: string, finishLog: FinishLog, providerName: string, provider: OcxProviderConfig): Response {
   let upstreamType: string | undefined;
   let upstreamCode: string | undefined;
   let upstreamMessage: string | undefined;
@@ -1013,8 +1014,20 @@ function nativeMessagesErrorResponse(response: Response, bodyText: string, finis
     }
   } catch { /* keep generic classification */ }
   const detail = formatAnthropicErrorBody(response.status, response.headers, bodyText);
-  const message = upstreamMessage
+  const rawMessage = upstreamMessage
     ?? (detail ? `Provider error ${response.status}: ${detail}` : `Provider error ${response.status}`);
+  const message = enrichOpenCodeZenUpstreamMessage(rawMessage, {
+    status: response.status,
+    providerName,
+    baseUrl: provider.baseUrl,
+    adapter: provider.adapter,
+    authMode: provider.authMode,
+    hasApiKey: Boolean(provider.apiKey?.trim()),
+    upstreamRetryAfter: response.headers.get("retry-after"),
+    upstreamErrorType: upstreamType,
+    upstreamErrorCode: upstreamCode,
+    supportsHttpSameKeyRetry: true,
+  });
   const classified = classifyError(
     response.status,
     upstreamType ?? (response.status === 401 ? "authentication_error"

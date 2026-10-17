@@ -94,6 +94,7 @@ describe("Anthropic message_stop termination (#6766)", () => {
     try {
       const events = await collect(stream(new Response(turn() + tail), budget, false));
       expect(events).toEqual([
+        { type: "heartbeat", replayUnsafe: true },
         { type: "text_delta", text: "ok" },
         { type: "done", usage, stopReason: "end_turn" },
       ]);
@@ -105,7 +106,8 @@ describe("Anthropic message_stop termination (#6766)", () => {
     const budget = createTranslatorBudget();
     try {
       const events = await collect(stream(new Response(turn() + tail), budget, true));
-      // Raw-byte progress may add heartbeats before the validated terminal.
+      // Raw-byte progress may add harmless heartbeats, but the semantic replay fence survives.
+      expect(events.filter(event => event.type === "heartbeat" && event.replayUnsafe)).toEqual([{ type: "heartbeat", replayUnsafe: true }]);
       expect(events.filter(event => event.type !== "heartbeat")).toEqual([
         { type: "text_delta", text: "ok" },
         { type: "done", usage, stopReason: "end_turn" },
@@ -122,6 +124,7 @@ describe("Anthropic message_stop termination (#6766)", () => {
       const events = await collect(stream(new Response(wire), budget, false));
       expect(events).toEqual([
         { type: "heartbeat" }, { type: "heartbeat" }, { type: "heartbeat" },
+        { type: "heartbeat", replayUnsafe: true },
         { type: "text_delta", text: "ok" },
         { type: "done", usage, stopReason: "end_turn" },
       ]);
@@ -141,7 +144,7 @@ describe("Anthropic message_stop termination (#6766)", () => {
           ? { type: "incomplete", reason: "content_filter", retryable: false,
               message: `upstream ended the turn with stop_reason "${stopReason}"`, usage }
           : { type: "done", stopReason, usage };
-        expect(events).toEqual([{ type: "text_delta", text: "ok" }, expected]);
+        expect(events).toEqual([{ type: "heartbeat", replayUnsafe: true }, { type: "text_delta", text: "ok" }, expected]);
         expectReleased(budget);
       } finally { budget.dispose(); }
     },
@@ -200,7 +203,8 @@ describe("Anthropic message_stop termination (#6766)", () => {
       + frame("message_stop") + frame("ping");
     try {
       const events = await collect(stream(new Response(wire), budget, false));
-      expect(events.map(event => event.type)).toEqual(["tool_call_start", "tool_call_delta", "done"]);
+      expect(events.map(event => event.type)).toEqual(["heartbeat", "tool_call_start", "tool_call_delta", "done"]);
+      expect(events[0]).toEqual({ type: "heartbeat", replayUnsafe: true });
       // Existing behavior does not invent tool_call_end for an unclosed block.
       expect(events.at(-1)).toEqual({ type: "done", usage: undefined, stopReason: "tool_use" });
       expectReleased(budget);
@@ -213,6 +217,7 @@ describe("Anthropic message_stop termination (#6766)", () => {
       content_block: { type: "tool_use", id: "call_cancel", name: "web_search" } }));
     const iterator = stream(upstream.response, budget, false);
     try {
+      expect((await iterator.next()).value).toEqual({ type: "heartbeat", replayUnsafe: true });
       expect((await iterator.next()).value?.type).toBe("tool_call_start");
       expect(budget.snapshot().activeCalls).toBe(1);
       await iterator.return(undefined);
@@ -231,7 +236,8 @@ describe("Anthropic message_stop termination (#6766)", () => {
       + frame("message_stop") + frame("ping");
     try {
       const events = await collect(stream(new Response(wire), budget, false));
-      expect(events.map(event => event.type)).toEqual(["tool_call_start", "error"]);
+      expect(events.map(event => event.type)).toEqual(["heartbeat", "tool_call_start", "error"]);
+      expect(events[0]).toEqual({ type: "heartbeat", replayUnsafe: true });
       expect(events.at(-1)).toMatchObject({ type: "error", status: 502,
         errorType: "upstream_error", code: "translation_buffer_limit" });
       expectReleased(budget, 1);

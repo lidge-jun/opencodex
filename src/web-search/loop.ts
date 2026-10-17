@@ -1,3 +1,8 @@
+import { bindAnthropicRejectionResponse } from "../adapters/anthropic-rejection-memo";
+import { anthropicDeclaredTools } from "../adapters/anthropic-tool-catalog";
+import { enableAnthropicReplayCapture, takeAnthropicReplay, bindAnthropicReplay, type AnthropicReplaySnapshot } from "../adapters/anthropic-replay";
+import { anthropicSearchAssistantContent } from "./anthropic-history";
+import type { createAnthropicThinkingRecovery } from "../server/responses/anthropic-thinking-recovery";
 import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "../adapters/base";
 import type { AdapterEvent, OcxConfig, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxProviderOpaqueToolCallMetadata, OcxThinkingContent, OcxUsage, RateLimitRetryPolicy } from "../types";
 import { namespacedToolName, toolChoiceToolPredicate } from "../types";
@@ -18,7 +23,7 @@ import type { WebSearchBackendId } from "./index";
 import { pacingHeaderDeadline } from "./header-deadline";
 import { redactSecretString } from "../lib/redact";
 import { readBoundedResponseBody } from "../lib/bounded-body";
-import { applyUpstreamRecoveryInit, fetchWithResetRetry, prepareSameTarget429Wait } from "../lib/upstream-retry";
+import { applyUpstreamRecoveryInit, fetchWithResetRetry, prepareSameTarget429Wait, isNonReplayableResponse, SendBudgetExhaustedError } from "../lib/upstream-retry";
 import { rateLimitRetryDelayMs } from "../providers/key-failover";
 import {
   isTranslatorBudgetExceededError,
@@ -26,7 +31,7 @@ import {
   TranslatorBudgetExceededError,
 } from "../lib/translator-budget";
 import { formatWebSearchResults } from "./format-result";
-import { parseStreamWithProgress, RoutedModelInactivityError, WebSearchStreamProtocolError } from "./progress-stream";
+import { parseStreamWithProgress, RoutedModelInactivityError, WebSearchStreamProtocolError, WebSearchAdapterEventError } from "./progress-stream";
 import { WEB_SEARCH_TOOL_NAME } from "./synthetic-tool";
 
 const SSE_HEADERS = {
@@ -204,6 +209,9 @@ function extractIterationThinking(events: AdapterEvent[]): OcxThinkingContent[] 
   };
 
   for (const e of events) {
+    // Match the bridge: consecutive signature snapshots update one block. The next
+    // semantic event (including an empty thinking-block start) closes that block.
+    if (signature !== undefined && e.type !== "thinking_signature" && e.type !== "heartbeat") flushVisible();
     if (e.type === "text_delta" && e.anthropicThinkingSignature) {
       flushVisible();
       flushRaw();
@@ -216,7 +224,6 @@ function extractIterationThinking(events: AdapterEvent[]): OcxThinkingContent[] 
       rawReasoning += e.text;
     } else if (e.type === "thinking_signature") {
       signature = e.signature;
-      flushVisible();
     } else if (e.type === "redacted_thinking") {
       flushVisible();
       flushRaw();
@@ -234,8 +241,8 @@ function normalizeQuery(q: string): string {
 }
 
 /**
- * Transient developer-role nudge appended ONLY to the forced-answer pass's request (never the
- * persisted `messages`). It tells the model to ground its final answer in the web results already
+ * Developer nudge for the forced-answer pass. Anthropic keeps its first sent position in the
+ * request-local history; other providers append it only for that iteration. It tells the model to ground its final answer in the web results already
  * gathered this turn. Citation wording is conditional — a failed/empty search still wants an answer,
  * just without fabricated sources.
  */
@@ -252,10 +259,8 @@ function forcedAnswerNudge(): OcxMessage {
 }
 
 /**
- * Transient developer-role nudge for the ONE recovery pass after a forced answer came back empty.
- * The recovery also removes every tool, so the model has nothing to call and can only return text;
- * this turn says so explicitly rather than relying on the removal alone. Like {@link forcedAnswerNudge}
- * it is iteration-local and never touches the persisted `messages`.
+ * Developer nudge for the ONE recovery pass after an empty forced answer. Tool calls are disabled;
+ * Anthropic retains its declared catalog and this nudge in request-local history for prefix fidelity.
  */
 function forcedAnswerRetryNudge(): OcxMessage {
   return {
@@ -269,17 +274,17 @@ function forcedAnswerRetryNudge(): OcxMessage {
   };
 }
 
-function jsonError(status: number, message: string): Response {
-  return new Response(JSON.stringify({ error: { message, type: "upstream_error", code: null } }), {
+function jsonError(status: number, message: string, event?: Extract<AdapterEvent, { type: "error" }>): Response {
+  return new Response(JSON.stringify({ error: { message, type: event?.errorType ?? "upstream_error", code: event?.code ?? null, ...(event?.retryable === false ? { retryable: false } : {}) } }), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...(event?.retryable === false ? { "x-should-retry": "false" } : {}) },
   });
 }
 
 /** Hard provider/parse failure inside an iteration. The eager first iteration converts it to a
  *  non-200 jsonError; later (already-streaming) iterations surface it as an in-stream error event. */
 class LoopError extends Error {
-  constructor(readonly status: number, message: string) {
+  constructor(readonly status: number, message: string, readonly event?: Extract<AdapterEvent, { type: "error" }>) {
     super(message);
     this.name = "LoopError";
   }
@@ -351,7 +356,8 @@ export interface WebSearchLoopDeps {
   /** Observe the exact adapter request selected for each routed-model iteration. */
   onRequestBuilt?: (request: AdapterRequest) => void;
   /** Request-scoped executor retains the core's selection binding across loop retries. */
-  fetchForRequest?: (request: AdapterRequest, parsed: OcxParsedRequest, adapter: ProviderAdapter) => typeof globalThis.fetch;
+  thinkingRecovery?: ReturnType<typeof createAnthropicThinkingRecovery>;
+  fetchForRequest?: (request: AdapterRequest, parsed: OcxParsedRequest, adapter: ProviderAdapter, recovery?: AttemptRecoveryKind) => typeof globalThis.fetch;
   /** Called before each routed-model dispatch in the loop, for attempt telemetry. Same-target 429 replays pass the `rate-limit-429` recovery kind. */
   onAttemptSend?: (recovery?: AttemptRecoveryKind) => void;
   /**
@@ -412,8 +418,11 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
     : 300_000;
 
   const messages: OcxMessage[] = [...parsed.context.messages];
+  const replaySnapshots = new Set<AnthropicReplaySnapshot>();
   const loopT0 = Date.now();
-  const allTools = parsed.context.tools ?? [];
+  const allTools = adapter.name === "anthropic" ? anthropicDeclaredTools(parsed) : parsed.context.tools ?? [];
+  let forcedNudgeAdded = false;
+  let emptyNudgeAdded = false;
   let searchesExecuted = 0;
   let executedSearchCount = 0;
   // Queries whose search already failed this turn — repeats are short-circuited so a model that keeps
@@ -448,8 +457,11 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   interface IterationResponse {
     response: Response;
     responseAdapter: ProviderAdapter;
+    recover?: (error: WebSearchAdapterEventError) => Promise<IterationResponse | undefined>;
   }
   type IterationSplit = ReturnType<typeof scanEventsForWebSearch> & {
+    events: AdapterEvent[];
+    anthropicReplay?: AnthropicReplaySnapshot;
     /**
      * How many leading passthrough events were already delivered live this iteration. They are
      * exactly the first N passthrough entries (live delivery stops before the first event that
@@ -464,6 +476,38 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   const rateLimitRetryPolicy = deps.retryOn429Policy ?? null;
   let rateLimitRetries = 0;
 
+  const requireSuccessfulHeaders = async (prepared: IterationResponse): Promise<void> => {
+    if (!prepared.response.ok) {
+      if (deps.thinkingRecovery && prepared.responseAdapter.name === "anthropic") {
+        const event = await deps.thinkingRecovery.projectHttpFailure(prepared.response, signal);
+        throw new LoopError(event.status ?? prepared.response.status, event.message, event);
+      }
+      let body: Awaited<ReturnType<typeof readBoundedResponseBody>>;
+      try {
+        body = await readBoundedResponseBody(prepared.response, { signal });
+      } catch {
+        // The response status is authoritative even when its untrusted error body fails while
+        // being read (including a synchronous getReader() failure). Never route that failure
+        // through the adapter formatter or the generic transport error, which could expose its
+        // raw message. A parent/client cancellation still owns the request lifecycle as 499.
+        if (signal.aborted) throw new LoopError(499, "client closed request during web-search");
+        throw new LoopError(prepared.response.status, `Provider error ${prepared.response.status}`);
+      }
+      let formatted = "";
+      if (body.displaySafe && !body.truncated && body.text.trim() && prepared.responseAdapter.formatErrorBody) {
+        try {
+          formatted = prepared.responseAdapter.formatErrorBody(
+            prepared.response.status,
+            prepared.response.headers,
+            body.text,
+          ).trim();
+        } catch { /* formatter hooks are best-effort; unsafe raw text is never the fallback */ }
+      }
+      const suffix = formatted ? `: ${formatted.slice(0, 400)}` : "";
+      throw new LoopError(prepared.response.status, `Provider error ${prepared.response.status}${suffix}`);
+    }
+  };
+
   // Acquire one iteration's final response headers. The first call is drained eagerly so an initial
   // connect/header/HTTP failure stays a non-2xx JSON response. Its successful BODY is deliberately
   // left unread until the downstream Responses SSE bridge exists.
@@ -473,24 +517,30 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
    * restart) before the `on429` key rotation.
    */
   const prepareIterationEvents = async function* (forceAnswer: boolean): AsyncGenerator<AdapterEvent, IterationResponse> {
-    // On the forced-answer pass the model is asked to answer from the results already in
-    // `messages`. A weak model can still produce a thin answer that
-    // ignores what the search found, which reads to the user as "the search did nothing". Nudge it
-    // (iteration-locally — never mutate the shared `messages`) to actually use the gathered results.
-    // Only when a REAL search ran (executedSearchCount, not empty-query/limit/repeat placeholders).
-    let iterMessages: OcxMessage[] = forceAnswer && executedSearchCount > 0
-      ? [...messages, forcedAnswerNudge()]
-      : messages;
-    // #1001 follow-up: the recovery pass for an empty forced answer. Removing every tool leaves the
-    // model nothing to call, and the extra developer turn asks it for the text it just failed to
-    // produce. `toolChoice: "none"` is what drops those definitions in the adapter, so the retry
-    // cannot repeat the same empty or tool-shaped response.
     const recoveringEmptyAnswer = forceAnswer && emptyAnswerRetries > 0;
-    if (recoveringEmptyAnswer) iterMessages = [...iterMessages, forcedAnswerRetryNudge()];
+    const preserveAnthropicPrefix = adapter.name === "anthropic";
+    let iterMessages = messages;
+    if (preserveAnthropicPrefix) {
+      // Once sent, each nudge is part of subsequent signatures' bound prefix. Keep its
+      // original position even when a forced-answer response makes another tool call.
+      if (forceAnswer && executedSearchCount > 0 && !forcedNudgeAdded) {
+        const nudge = forcedAnswerNudge();
+        if (nudge.role === "developer" && typeof nudge.content === "string") nudge.content = [{ type: "text", text: nudge.content }];
+        messages.push(nudge); forcedNudgeAdded = true;
+      }
+      if (recoveringEmptyAnswer && !emptyNudgeAdded) {
+        const nudge = forcedAnswerRetryNudge();
+        if (nudge.role === "developer" && typeof nudge.content === "string") nudge.content = [{ type: "text", text: nudge.content }];
+        messages.push(nudge); emptyNudgeAdded = true;
+      }
+    } else {
+      if (forceAnswer && executedSearchCount > 0) iterMessages = [...messages, forcedAnswerNudge()];
+      if (recoveringEmptyAnswer) iterMessages = [...iterMessages, forcedAnswerRetryNudge()];
+    }
     const iterParsed: OcxParsedRequest = {
       ...parsed, stream: true,
       ...(recoveringEmptyAnswer ? { options: { ...parsed.options, toolChoice: "none" as const } } : {}),
-      context: { ...parsed.context, messages: iterMessages, tools: recoveringEmptyAnswer ? [] : allTools },
+      context: { ...parsed.context, messages: iterMessages, tools: recoveringEmptyAnswer && !preserveAnthropicPrefix ? [] : allTools },
     };
     // One cumulative header deadline spans key rotations and reset sends, excluding local pacing.
     // clear() stops only its timer after final headers; the direct turn signal remains attached to
@@ -528,7 +578,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           cachedRequest = request;
           cachedAdapter = requestAdapter;
         }
-        const requestFetch = headerDeadline.pacedFetch(deps.fetchForRequest?.(request, iterParsed, requestAdapter) ?? routedProviderFetch);
+        const requestFetch = headerDeadline.pacedFetch(deps.fetchForRequest?.(request, iterParsed, requestAdapter, recovery) ?? routedProviderFetch);
         let response: Response;
         try {
           if (requestAdapter.fetchResponse) {
@@ -571,9 +621,33 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         } finally {
           request.releaseBodyObservation?.();
         }
+        bindAnthropicRejectionResponse(request, response);
         return { response, responseAdapter: requestAdapter };
       };
 
+      const recover = async (error: WebSearchAdapterEventError): Promise<IterationResponse | undefined> => {
+        if (signal.aborted || !error.replaySafe || isNonReplayableResponse(prepared.response)
+          || !deps.thinkingRecovery?.prepareEvent(error.event.message, prepared.responseAdapter.name, iterParsed, prepared.response)) return;
+        cachedRequest = undefined;
+        cachedAdapter = undefined;
+        // The successful headers ended the previous timer; the replacement owns a fresh deadline.
+        headerDeadline = pacingHeaderDeadline(connectTimeoutMs, signal);
+        try {
+          const replacement = await fetchOnce(prepared.responseAdapter, "opaque-blob-rejection");
+          headerDeadline.clear();
+          await requireSuccessfulHeaders(replacement);
+          return replacement;
+        } catch (error) {
+          if (signal.aborted) throw new LoopError(499, "client closed request during web-search");
+          if (headerDeadline.didExpire()) throw new LoopError(504,
+            `Provider response-header timeout after ${connectTimeoutMs}ms during web-search`);
+          if (error instanceof LoopError || error instanceof SendBudgetExhaustedError || isTranslatorBudgetExceededError(error)) throw error;
+          throw new LoopError(502, `Provider unreachable: ${error instanceof Error ? error.message : String(error)}`);
+        } finally {
+          headerDeadline.clear();
+          deps.onIterationEnd?.();
+        }
+      };
       let prepared = await fetchOnce(adapter);
       // Same-target 429 wait-and-retry (opt-in `retryOn429`) BEFORE key rotation: a primary-key
       // rate-limit blip replays on the SAME key; rotation only runs after attempts exhaust.
@@ -644,36 +718,20 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         prepared = replacement;
       }
 
+      if (await deps.thinkingRecovery?.prepareHttp(prepared.response, prepared.responseAdapter.name, iterParsed)) {
+        try { void prepared.response.body?.cancel().catch(() => {}); } catch { /* closed */ }
+        cachedRequest = undefined;
+        cachedAdapter = undefined;
+        prepared = await fetchOnce(adapter, "opaque-blob-rejection");
+      }
+
+
       // Final headers have arrived. Clear only the deadline timer before ANY body read.
       headerDeadline.clear();
-      if (!prepared.response.ok) {
-        let body: Awaited<ReturnType<typeof readBoundedResponseBody>>;
-        try {
-          body = await readBoundedResponseBody(prepared.response, { signal });
-        } catch {
-          // The response status is authoritative even when its untrusted error body fails while
-          // being read (including a synchronous getReader() failure). Never route that failure
-          // through the adapter formatter or the generic transport error, which could expose its
-          // raw message. A parent/client cancellation still owns the request lifecycle as 499.
-          if (signal.aborted) throw new LoopError(499, "client closed request during web-search");
-          throw new LoopError(prepared.response.status, `Provider error ${prepared.response.status}`);
-        }
-        let formatted = "";
-        if (body.displaySafe && !body.truncated && body.text.trim() && prepared.responseAdapter.formatErrorBody) {
-          try {
-            formatted = prepared.responseAdapter.formatErrorBody(
-              prepared.response.status,
-              prepared.response.headers,
-              body.text,
-            ).trim();
-          } catch { /* formatter hooks are best-effort; unsafe raw text is never the fallback */ }
-        }
-        const suffix = formatted ? `: ${formatted.slice(0, 400)}` : "";
-        throw new LoopError(prepared.response.status, `Provider error ${prepared.response.status}${suffix}`);
-      }
-      return prepared;
+      await requireSuccessfulHeaders(prepared);
+      return { ...prepared, recover };
     } catch (error) {
-      if (isTranslatorBudgetExceededError(error)) throw error;
+      if (isTranslatorBudgetExceededError(error) || error instanceof SendBudgetExhaustedError) throw error;
       if (headerDeadline.didExpire()) {
         throw new LoopError(504, `Provider response-header timeout after ${connectTimeoutMs}ms during web-search`);
       }
@@ -710,15 +768,25 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
     const events: AdapterEvent[] = [];
     let liveWindowOpen = deps.streamRoutedModelOutput === true;
     let streamedPassthroughCount = 0;
+    let anthropicReplay: AnthropicReplaySnapshot | undefined;
+    let releaseCapture = () => {};
     try {
-      const parse = prepared.responseAdapter.parseStream.bind(prepared.responseAdapter);
+      const parse: ProviderAdapter["parseStream"] = (response, budget) => {
+        if (prepared.responseAdapter.name === "anthropic") releaseCapture = enableAnthropicReplayCapture(response);
+        return prepared.responseAdapter.parseStream(response, budget);
+      };
       for await (const event of parseStreamWithProgress(prepared.response, parse, {
         signal,
         inactivityTimeoutMs: routedModelStallTimeoutMs,
         translatorBudget,
+        preserveAdapterError: deps.thinkingRecovery !== undefined,
         // A pass that fails was still billed; the error path reports it with the hidden passes.
         onErrorUsage: usage => { hiddenUsage = mergeUsage(hiddenUsage, usage); },
       })) {
+        if (event.type === "done") {
+          anthropicReplay = takeAnthropicReplay(event);
+          if (anthropicReplay) replaySnapshots.add(anthropicReplay);
+        }
         if (event.type === "heartbeat") yield event;
         // Kiro's explicit-completion protocol marks ordinary assistant text as commentary while
         // it performs a bounded final-answer retry. That text is safe to surface immediately and
@@ -740,12 +808,21 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         }
       }
     } catch (error) {
-      if (isTranslatorBudgetExceededError(error)) throw error;
+      if (isTranslatorBudgetExceededError(error) || error instanceof SendBudgetExhaustedError) throw error;
       if (signal.aborted) throw new LoopError(499, "client closed request during web-search");
+      if (error instanceof WebSearchAdapterEventError) {
+        const replacement = await prepared.recover?.(error);
+        if (replacement) return yield* consumeIterationEvents(replacement);
+        const event = isNonReplayableResponse(prepared.response)
+          ? { ...error.event, message: "Provider stream error: upstream diagnostic withheld for a non-replayable failure", retryable: false as const }
+          : error.event;
+        throw new LoopError(event.status ?? 502, event.message, event);
+      }
+      if (error instanceof LoopError) throw error;
       if (error instanceof RoutedModelInactivityError) throw new LoopError(504, error.message);
       if (error instanceof WebSearchStreamProtocolError) throw new LoopError(502, error.message);
       throw new LoopError(502, `Provider stream error: ${error instanceof Error ? error.message : String(error)}`);
-    }
+    } finally { releaseCapture(); }
 
     const terminalIndexes = events.flatMap((event, index) =>
       event.type === "done" || event.type === "incomplete" || event.type === "error" ? [index] : []);
@@ -759,7 +836,8 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       }
       throw new LoopError(502, terminal.message);
     }
-    return { ...scanEventsForWebSearch(events), streamedPassthroughCount };
+    deps.thinkingRecovery?.observeIteration(events);
+    return { ...scanEventsForWebSearch(events), streamedPassthroughCount, events, anthropicReplay };
   };
 
   // Execute one model-requested web_search call. The call may batch several queries (native
@@ -768,7 +846,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   // valid, and surface as ONE search cell carrying every attempted query. A real search (one that
   // hits the sidecar) shows the spinner WHILE the batch runs. Empty/limit/repeat placeholders never
   // emit a cell (matching the prior single-query behavior).
-  async function* runSearchCall(call: WebSearchCall, precedingThinking: OcxThinkingContent[] = []): AsyncGenerator<AdapterEvent> {
+  async function* runSearchCall(call: WebSearchCall, precedingThinking: OcxThinkingContent[] = [], appendAssistant = true): AsyncGenerator<AdapterEvent> {
     const results: { query: string; outcome: SidecarOutcome }[] = [];
     let beganCell = false;
     if (call.queries.length === 0) {
@@ -845,7 +923,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
     const callArgs: Record<string, unknown> = call.queries.length > 1
       ? { queries: call.queries }
       : { query: call.queries[0] ?? "" };
-    messages.push({
+    if (appendAssistant) messages.push({
       role: "assistant",
       content: [
         // Signed thinking must precede tool_use on replay (Anthropic extended thinking), and
@@ -904,7 +982,9 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
     firstPrepared = await prepareIterationDrained(false);
   } catch (e) {
     if (abortSignal) abortSignal.removeEventListener("abort", linkAbort);
-    if (e instanceof LoopError) return jsonError(e.status, e.message);
+    if (e instanceof LoopError) return jsonError(e.status, e.message, e.event);
+    if (e instanceof SendBudgetExhaustedError) return jsonError(429, e.message,
+      { type: "error", message: e.message, errorType: "rate_limit_error", code: e.code, retryable: false });
     throw e;
   }
 
@@ -987,7 +1067,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
                 hiddenUsage = mergeUsage(hiddenUsage, terminalEvent.usage);
                 if (!split.hasMalformedToolCall && !split.hasRealToolCall && emptyAnswerRetries === 0) {
                   emptyAnswerRetries++;
-                  console.warn("[web-search-loop] empty forced answer — retrying once without tools");
+                  console.warn("[web-search-loop] empty forced answer — retrying once with tool calls disabled");
                   yield { type: "heartbeat" };
                   continue;
                 }
@@ -1012,10 +1092,36 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           for (const event of split.passthrough.slice(split.streamedPassthroughCount)) {
             if (event.type === "text_delta" && event.anthropicThinkingSignature) yield event;
           }
-          const iterationThinking = extractIterationThinking(split.passthrough);
+          const preserveAnthropicHistory = prepared.responseAdapter.name === "anthropic";
+          if (preserveAnthropicHistory) {
+            if (!split.anthropicReplay) throw new LoopError(502, "Anthropic search history cannot be replayed losslessly");
+            const message = { role: "assistant" as const,
+              content: anthropicSearchAssistantContent(split.events), timestamp: Date.now() };
+            const originalCalls = split.anthropicReplay.content.filter(block => block.type === "tool_use");
+            const priorIds = new Set(messages.flatMap(message => message.role === "assistant"
+              ? message.content.filter(part => part.type === "toolCall").map(part => part.id)
+              : message.role === "toolResult" ? [message.toolCallId] : []));
+            if (originalCalls.some(block => priorIds.has(block.id as string))) {
+              throw new LoopError(502, "Anthropic search replay tool identity changed");
+            }
+            const calls = message.content.filter(part => part.type === "toolCall");
+            if (originalCalls.length !== calls.length || originalCalls.some((block, index) => block.id !== calls[index]?.id)) {
+              throw new LoopError(502, "Anthropic search replay tool identity changed");
+            }
+            // The raw input is authoritative, including non-empty content_block_start input.
+            for (const [index, call] of calls.entries()) call.arguments = originalCalls[index]!.input as Record<string, unknown>;
+            for (const call of split.calls) {
+              const original = originalCalls.find(block => block.id === call.id);
+              if (!original) throw new LoopError(502, "Anthropic search replay tool identity changed");
+              call.queries = parseQueries(JSON.stringify(original.input));
+            }
+            bindAnthropicReplay(message, split.anthropicReplay);
+            messages.push(message);
+          }
+          const iterationThinking = preserveAnthropicHistory ? [] : extractIterationThinking(split.passthrough);
           for (const [callIndex, call] of split.calls.entries()) {
             accountRefusalOutputStarted = true;
-            yield* runSearchCall(call, callIndex === 0 ? iterationThinking : []);
+            yield* runSearchCall(call, callIndex === 0 ? iterationThinking : [], !preserveAnthropicHistory);
           }
         } catch (e) {
           // The bridge reports no usage for either error; the iterations already sent still count.
@@ -1029,7 +1135,12 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
               message: "upstream translation buffer exceeded the safe limit",
             };
           } else {
-            yield { type: "error", message: e instanceof LoopError ? e.message : (e instanceof Error ? e.message : String(e)) };
+            if (e instanceof SendBudgetExhaustedError) yield { type: "error", status: 429,
+              errorType: "rate_limit_error", code: e.code, message: e.message, retryable: false };
+            else yield e instanceof LoopError && e.event ? e.event
+              : e instanceof LoopError && deps.thinkingRecovery
+                ? { type: "error", status: e.status, errorType: "upstream_error", message: e.message }
+                : { type: "error", message: e instanceof Error ? e.message : String(e) };
           }
           return;
         }
@@ -1037,6 +1148,8 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       if (hiddenUsage) deps.onUsage?.(hiddenUsage);
       yield { type: "error", message: "web-search loop exceeded its iteration cap" };
     } finally {
+      for (const snapshot of replaySnapshots) snapshot.release();
+      replaySnapshots.clear();
       if (abortSignal) abortSignal.removeEventListener("abort", linkAbort);
     }
   }

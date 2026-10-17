@@ -427,6 +427,14 @@ provider advertises `supports_websockets = true` only when `"websockets": true`;
 built-in provider may try WebSocket first, and a disabled proxy returns `426` so Codex falls back to
 HTTP/SSE.
 
+The proxy admits up to 128 client-facing Responses WebSocket connections. When a new connection
+finds all 128 slots occupied, it closes the least recently used idle connection to make room. Connections
+with an active response, pending client tool or approval results, a native steering/injection
+session, or buffered output are protected. If no idle connection can be released, the new
+connection receives the existing `503` capacity response. A reclaimed client can reconnect for
+later requests using the existing continuation handling. This happens only under connection
+pressure, needs no setting, and does not change voice connections or upstream connection reuse.
+
 If a canonical ChatGPT forward continuation references expired or missing local replay state,
 opencodex returns `previous_response_not_found` before sending anything upstream. Codex's
 WebSocket client recognizes this error and can reconnect with its full retained context,

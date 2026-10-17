@@ -22,8 +22,8 @@ export function createSidecarSendBudget(
   };
   return {
     /** Retain a Combo hop until dispatch; direct requests keep eager settlement. */
-    ownCredentialHop(permit?: SingleUseDispatchPermit): void {
-      if (!initial) { permit?.use(); return; } // Preserve direct callers' reporting contract.
+    ownCredentialHop(permit?: SingleUseDispatchPermit, retainUntilDispatch = false): void {
+      if (!initial && !retainUntilDispatch) { permit?.use(); return; } // Preserve direct callers' reporting contract.
       releaseHop();
       hopPermit = permit;
       budget.pendingHopPermit = permit;

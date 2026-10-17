@@ -46,6 +46,7 @@ The wire surfaces a client actually talks to.
 | [`remote-messaging.md`](remote-messaging.md) | Explicit peer enrollment, connection-bound capabilities, bounded foreground SSH ownership and queued remote replies. |
 | [`local-messaging.md`](local-messaging.md) | Command-local metadata discovery, Unix RPC queued submission, peer envelopes, receipts and owned lifecycle bounds. |
 | [`transports/byte-accounting.md`](transports/byte-accounting.md) | Request-copy and stream-buffer byte accounting shared by parsing, SSE rewriting, the adapters, and the translator budget, plus durable spill admission. |
+| [`transports/anthropic-thinking-recovery.md`](transports/anthropic-thinking-recovery.md) | One-shot exact signature-binding recovery before output, and successful-retry memo boundaries. |
 | [`transports/responses.md`](transports/responses.md) | The Responses HTTP/SSE endpoint, dispatch, credential and upload boundaries, and core module ownership. |
 | [`transports/native-reasoning-retention.md`](transports/native-reasoning-retention.md) | Optional native reasoning ciphertext forwarding on model/account switches, configuration and management controls. |
 | [`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md) | Mixed-wire model defaults, xAI agent-message continuation, declared-tool membership, and passthrough SSE stream shapes. |
@@ -156,6 +157,9 @@ A source area can be described by more than one doc, because these docs are orga
 | `scripts/generate-ocx-skill-surface.ts` | [`cli-management.md`](cli-management.md) |
 | `skills/ocx/` | [`cli-management.md`](cli-management.md) |
 | `src/adapters/` | [`runtime.md`](runtime.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/native-reasoning-retention.md`](transports/native-reasoning-retention.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`data-planes/inbound-compat.md`](data-planes/inbound-compat.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md)<br>[`providers/claude-cli-replay.md`](providers/claude-cli-replay.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/cursor.md`](providers/cursor.md)<br>[`providers/chat-compat.md`](providers/chat-compat.md)<br>[`adapters/registry.md`](adapters/registry.md) |
+| `src/adapters/anthropic-rejection-memo.ts` | [`transports/anthropic-thinking-recovery.md`](transports/anthropic-thinking-recovery.md) |
+| `src/adapters/anthropic-replay.ts` | [`transports/anthropic-thinking-recovery.md`](transports/anthropic-thinking-recovery.md) |
+| `src/adapters/anthropic-tool-catalog.ts` | [`transports/anthropic-thinking-recovery.md`](transports/anthropic-thinking-recovery.md) |
 | `src/adapters/dsh-account.ts` | [`providers/dsh-account.md`](providers/dsh-account.md) |
 | `src/advisor/` | [`advisor.md`](advisor.md) |
 | `src/bridge.ts` | [`transports/responses.md`](transports/responses.md) |
@@ -225,6 +229,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/remote-control/` | [`remote-workspace.md`](remote-workspace.md) |
 | `src/remote/` | [`runtime.md`](runtime.md) |
 | `src/responses/` | [`runtime.md`](runtime.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/responses.md`](transports/responses.md)<br>[`transports/native-reasoning-retention.md`](transports/native-reasoning-retention.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/kiro.md`](providers/kiro.md)<br>[`providers/xai-grok.md`](providers/xai-grok.md)<br>[`providers/chat-compat.md`](providers/chat-compat.md) |
+| `src/responses/reasoning-replay-cache.ts` | [`transports/anthropic-thinking-recovery.md`](transports/anthropic-thinking-recovery.md) |
 | `src/router.ts` | [`runtime.md`](runtime.md) |
 | `src/routing/` | [`catalog.md`](catalog.md) |
 | `src/routing/history/` | [`dashboard-and-usage.md`](dashboard-and-usage.md) |
@@ -238,6 +243,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/management/model-routes.ts` | [`pricing.md`](pricing.md) |
 | `src/server/responses/advisor-plan-slot.ts` | [`advisor.md`](advisor.md) |
 | `src/server/responses/advisor-slot.ts` | [`advisor.md`](advisor.md) |
+| `src/server/responses/anthropic-thinking-recovery.ts` | [`transports/anthropic-thinking-recovery.md`](transports/anthropic-thinking-recovery.md) |
 | `src/service-manager-probe.ts` | [`ops/service-and-sidecars.md`](ops/service-and-sidecars.md) |
 | `src/service.ts` | [`runtime.md`](runtime.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `src/service/` | [`runtime.md`](runtime.md) |

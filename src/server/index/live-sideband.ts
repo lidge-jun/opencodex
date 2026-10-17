@@ -40,8 +40,9 @@ export const MAX_WS_FRAME_BYTES = 50 * 1024 * 1024;
  *
  * What must never happen is neither: an immortal socket plus a destination that silently accepts
  * the orphaned delta. `tests/responses/ws-endpoint.test.ts` holds exactly that pair together.
- * Raising the timeout off 0 is still worth doing for its own reasons (a dead peer holds a socket
- * forever today), and Bun caps the value at 255 seconds, well inside the bound below.
+ * Responses admission separately reclaims its least recently used idle connection under
+ * capacity pressure. That is not a time limit, so expired-reference validation remains required.
+ * Keeping this shared timeout at 0 also preserves quiet live/voice sessions.
  */
 export const WEBSOCKET_IDLE_TIMEOUT_SECONDS = 0;
 /** Ceiling a finite websocket idle timeout must stay under, in seconds. See above. */

@@ -257,6 +257,19 @@
       ]
     },
     {
+      "path": "transports/anthropic-thinking-recovery.md",
+      "tier": 3,
+      "title": "Anthropic Thinking-Signature Recovery",
+      "scope": "One-shot exact signature-binding recovery before output, and successful-retry memo boundaries.",
+      "documents": [
+        "src/server/responses/anthropic-thinking-recovery.ts",
+        "src/adapters/anthropic-rejection-memo.ts",
+        "src/adapters/anthropic-replay.ts",
+        "src/adapters/anthropic-tool-catalog.ts",
+        "src/responses/reasoning-replay-cache.ts"
+      ]
+    },
+    {
       "path": "transports/responses.md",
       "tier": 3,
       "title": "Responses Transport",
