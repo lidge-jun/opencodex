@@ -96,7 +96,7 @@ test.skipIf(process.platform === "win32")("abandoned and overlapping enrollment 
   let entered!: () => void, release!: () => void;
   const ready = new Promise<void>(resolve => { entered = resolve; });
   const gate = new Promise<void>(resolve => { release = resolve; });
-  const paths: string[] = [], keys: string[] = [];
+  const paths: string[] = [], keys: string[] = [], firstKeyDuringSecond: (string | null)[] = [];
   let nextKey = "first";
   const runner: RemoteControlRunner = async (argv, _budget, _capacity, stdin) => {
     if (argv[0] === "ssh-keygen") return "256 SHA256:fixture fake (ED25519)\n";
@@ -104,10 +104,8 @@ test.skipIf(process.platform === "win32")("abandoned and overlapping enrollment 
     if (!stdin) { writeRemoteFile(path, `fixture ssh-ed25519 ${nextKey}\n`); return ""; }
     paths.push(path); keys.push(readRemoteFile(path)!);
     if (paths.length === 1) { entered(); await gate; }
-    else {
-      expect(paths[1]).not.toBe(paths[0]);
-      expect(readRemoteFile(paths[0]!)).toBe(keys[0]!);
-    }
+    // Record observations here; asserting inside the runner would be converted to enrollment_unknown.
+    else firstKeyDuringSecond.push(readRemoteFile(paths[0]!));
     return JSON.stringify(handleEnrollmentControl(pair.bStore, JSON.parse(stdin)));
   };
   const first = enrollRemoteHost(pair.aStore, "worker", "fixture", "SHA256:fixture", budget, capacity, runner);
@@ -118,6 +116,8 @@ test.skipIf(process.platform === "win32")("abandoned and overlapping enrollment 
     abandonRemoteEnrollment(pair.aStore, pendingRemoteEnrollment(pair.aStore)!.transaction);
     nextKey = "second";
     const second = await enrollRemoteHost(pair.aStore, "worker", "fixture", "SHA256:fixture", budget, capacity, runner);
+    expect(paths[1]).not.toBe(paths[0]);
+    expect(firstKeyDuringSecond).toEqual([keys[0]!]);
     expect(second.enrolled).toBe(true);
     expect(readRemoteFile(paths[0]!)).toBe(keys[0]!);
     expect(readRemoteFile(paths[1]!)).toBeNull();

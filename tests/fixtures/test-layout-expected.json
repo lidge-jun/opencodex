@@ -45,6 +45,8 @@
   "messaging-remote-admission.test.ts": "codex-integration",
   "messaging-remote-replies.test.ts": "codex-integration",
   "messaging-remote-scratch.test.ts": "codex-integration",
+  "messaging-remote-gaps.test.ts": "codex-integration",
+  "messaging-remote-enrollment-gaps.test.ts": "codex-integration",
     "messages-request-id-headers.test.ts": "claude-integration",
   "bounded-file-read.test.ts": "lib",
   "responses-undeclared-tool-guard-inbound.test.ts": "responses",
