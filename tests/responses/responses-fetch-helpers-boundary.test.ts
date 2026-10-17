@@ -182,6 +182,7 @@ describe("Responses fetch-helper import boundary", () => {
     expect(expectRuntimeImportBoundary(readFileSync(helperPath, "utf8"))).toEqual([
       // Import-free sent-header registry read by the request log (#6911).
       "../../lib/outbound-credential-registry",
+      "../../lib/provider-admission-wait",
       "../../lib/provider-egress",
       "../../lib/provider-tls-profile",
       "../../lib/proxy-env",

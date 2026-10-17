@@ -1454,6 +1454,7 @@
     "qwen38-preserve-reasoning.test.ts": "providers",
     "rate-limit-reset-credits.test.ts": "gui",
     "rate-limit-retry.test.ts": "providers",
+    "mistral-recovery.test.ts": "providers",
     "reasoning-effort-summary-default.test.ts": "responses",
     "reasoning-effort.test.ts": "codex-integration",
     "reasoning-envelope.test.ts": "responses",

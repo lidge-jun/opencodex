@@ -52,7 +52,9 @@ shipped v1 配置自动迁移到 marker 2 的单一选项行。原配置只保�
 
 [`retryOn429`](/zh-cn/reference/configuration/)（同 key 的 429 重试）仅适用于 API-key 提供商
 （`authMode: "key"`）。OAuth、forward 与本地预设均被排除——同一 token 绝不可重放，本地运行时
-也没有需要保留的远程 key。仅在配置后启用，默认关闭；配置了对象即启用，除非 `enabled: false`。
+也没有需要保留的远程 key。通常需要显式配置。对于标准 Mistral `openai-chat` 端点（`https://api.mistral.ai/v1`），
+未配置此选项时会使用同一 key 最多重放 6 次，默认等待间隔为 10 秒。
+显式配置优先；`enabled: false` 会禁用此默认重试。其他目标配置对象后即启用，除非 `enabled: false`。
 
 ## 1. ChatGPT 登录（forward / 透传）
 

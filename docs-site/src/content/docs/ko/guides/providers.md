@@ -55,8 +55,10 @@ shipped v1 config는 marker 2의 단일 옵션 행으로 자동 이관됩니다.
 
 [`retryOn429`](/ko/reference/configuration/)（동일 키 429 재시도）는 API 키 프로바이더
 （`authMode: "key"`）에만 적용됩니다. OAuth·forward·로컬 프리셋은 제외됩니다 — 같은 토큰을
-재전송해서는 안 되며, 로컬 런타임에는 보존할 원격 키가 없습니다. 옵트인입니다: 옵션이 없으면
-꺼져 있고, 객체가 있으면 `enabled: false`가 아닌 한 활성화됩니다.
+재전송해서는 안 되며, 로컬 런타임에는 보존할 원격 키가 없습니다. 일반적으로 명시적 설정이 필요합니다. 정식 Mistral `openai-chat` 엔드포인트
+(`https://api.mistral.ai/v1`)는 옵션이 없으면 동일 키로 최대 6회 재전송하며 기본 대기 간격은 10초입니다.
+명시적 설정이 우선하고, `enabled: false`는 이 기본 재시도를 끕니다.
+다른 대상은 객체가 있으면 `enabled: false`가 아닌 한 활성화됩니다.
 
 ## 1. ChatGPT 로그인 (forward / 패스스루)
 

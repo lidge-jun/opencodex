@@ -121,8 +121,26 @@ labels local presets separately; those normally omit both `authMode` and `apiKey
 The [`retryOn429`](/reference/configuration/) same-key 429 replay applies only to API-key
 providers (`authMode: "key"`). OAuth, forward, and local presets are excluded — their
 credentials must never be replayed on the same token, and local runtimes have no remote key to
-preserve. It is opt-in: when the option is absent the feature is off; object presence enables
-it unless `enabled: false`.
+preserve. It is opt-in except for documented destination-specific defaults. Canonical Mistral
+Chat uses a patient retry policy (6 replays, 10-second fallback interval), within the
+existing request-wide send allowance. Explicit `retryOn429` settings, including
+`enabled: false`, take precedence. The Mistral preset also forwards supplied prompt-cache
+keys by default; `promptCacheKey: false` disables forwarding. Cache affinity improves the
+chance of reuse, but does not guarantee a cache hit or remove token-throughput limits.
+
+Mistral uses one API-key provider for both Studio and Vibe keys. Key types and plan allowances
+are described in [Mistral's API-key documentation](https://docs.mistral.ai/admin/identity-access/api-keys);
+the proxy does not infer a subscription tier from the key. For every model, explicit upstream
+`Retry-After` deadlines are shared between calls on the same credential and model. A 429
+without a retry time can activate a conservative 60-second recovery wait when valid minute
+counters show exhausted capacity, or the refused query's measured cost exceeds the remaining
+tokens while fitting the full advertised allowance. This is a local recovery policy, not an
+exact server-reset prediction. Healthy traffic never predicts the next query's cache or cost.
+After the wait, one recovery probe runs; success restores ordinary traffic. Missing, malformed,
+zero-entitlement, exhausted-monthly, or above-full-allowance evidence does not invent a reset or compact history.
+`requestPacing: { "enabled": false }` disables shared pacing. If Mistral's
+retry time exceeds `retryOn429.maxIntervalMs`, the proxy returns the 429 and retry hint rather
+than replaying early. Context windows and per-model compaction preferences remain independent.
 
 When round-robin key selection is enabled, queued requests recheck key cooldowns before sending and acquire pacing capacity for any replacement key. This applies to native Chat, Messages, Responses and compact. Waiting for replacement-key capacity does not consume the upstream response-header timeout. Per-key pacing and round-robin use guarded HTTP/SSE even when upstream WebSockets are enabled; WebSocket-only steering and injection require a route without those key policies. This does not change the saved active key. An established upstream turn keeps its credential; later sends are refused if that key cools. Pre-output key rejection can recover to a healthy key within the existing request limit. Direct Images and compact requests record genuine 401/429 cooldowns without replaying that paid POST.
 

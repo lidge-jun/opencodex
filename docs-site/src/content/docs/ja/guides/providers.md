@@ -57,7 +57,10 @@ Codex login を Pool モードで使うと、Providers の概要には任意の 
 [`retryOn429`](/ja/reference/configuration/)（同一キーでの 429 リトライ）は API キー プロバイダー
 （`authMode: "key"`）のみに適用されます。OAuth・forward・ローカル プリセットは除外されます —
 同じトークンを再送すべきではなく、ローカルランタイムには保存すべきリモートキーがありません。
-オプトインです: オプションが無ければ無効、オブジェクトがあれば `enabled: false` でない限り有効です。
+通常はオプトインです。正規の Mistral `openai-chat`（`https://api.mistral.ai/v1`）では、
+オプションを省略すると同一キーで最大 6 回再送し、待機間隔の既定値は 10 秒です。
+明示的な設定が優先され、`enabled: false` でこの既定の再試行を無効にできます。
+他の対象では、オブジェクトを指定すると `enabled: false` でない限り有効になります。
 
 ## 1. ChatGPT ログイン(forward / パススルー)
 
