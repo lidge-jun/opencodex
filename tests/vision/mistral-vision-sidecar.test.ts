@@ -72,6 +72,7 @@ afterEach(() => {
   removeTreeWithRetry(home);
 });
 
+/** Build an isolated Mistral configuration with a caller-authenticated OpenAI vision helper. */
 function configuration(): OcxConfig {
   return {
     port: 0, hostname: "127.0.0.1", defaultProvider: "mistral", openaiProviderTierVersion: 2,
@@ -107,6 +108,7 @@ describe("Mistral GLM vision sidecar defaults", () => {
     const config = configuration();
     config.providers.mistral!.modelInputModalities = { [GLM]: ["text", "image"] };
     const models = await gatherRoutedModels(withStubbedProviderFetch(config));
+    expect(models.find(row => row.provider === "mistral" && row.id === GLM)?.inputModalities).toEqual(["text", "image"]);
     expect(models.find(row => row.provider === "mistral" && row.id === NATIVE)?.inputModalities).toEqual(["text", "image"]);
     for (const id of [GLM, NATIVE]) {
       const route = routeModel(config, `mistral/${id}`);
